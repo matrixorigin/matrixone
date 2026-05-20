@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -114,15 +115,15 @@ func extractRecordsFromSql(t *testing.T, sqls []string) []byte {
 // chunksFromSql converts the captured sync output into one EventChunk per
 // unhex literal. ChunkIds increment from startId so the test can drive them
 // through ReplayEventLog.
-func chunksFromSql(t *testing.T, sqls []string, startId int64) []vectorindex.EventChunk {
+func chunksFromSql(t *testing.T, sqls []string, startId int64) []cuvscdc.EventChunk {
 	t.Helper()
-	var chunks []vectorindex.EventChunk
+	var chunks []cuvscdc.EventChunk
 	id := startId
 	for _, s := range sqls {
 		for _, m := range unhexLitRe2.FindAllStringSubmatch(s, -1) {
 			b, err := hex.DecodeString(m[1])
 			require.NoError(t, err)
-			chunks = append(chunks, vectorindex.EventChunk{ChunkId: id, Data: b})
+			chunks = append(chunks, cuvscdc.EventChunk{ChunkId: id, Data: b})
 			id++
 		}
 	}
@@ -163,7 +164,7 @@ func TestCagraSync_Update_AllInsert(t *testing.T) {
 
 	// Round-trip: replay the persisted chunks and expect 2 overflow rows, no
 	// deletes.
-	state, err := vectorindex.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
 	require.NoError(t, err)
 	require.Empty(t, state.Deleted)
 	require.Len(t, state.Overflow, 2)
@@ -201,7 +202,7 @@ func TestCagraSync_Update_DeleteAndInsert(t *testing.T) {
 	// chunk_id == 7 (nextChunkId mock).
 	require.Contains(t, rec.statements[0], "'cdc_tail', 7,")
 
-	state, err := vectorindex.ReplayEventLog(chunksFromSql(t, rec.statements, 7), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 7), 4, 0)
 	require.NoError(t, err)
 	require.Equal(t, []int64{42}, state.Deleted)
 	require.Len(t, state.Overflow, 1)
@@ -238,7 +239,7 @@ func TestCagraSync_Update_DeleteInsertDelete(t *testing.T) {
 
 	require.NoError(t, s.Save(sqlproc))
 
-	state, err := vectorindex.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
 	require.NoError(t, err)
 	require.Equal(t, []int64{1}, state.Deleted,
 		"final state must have pkid=1 deleted (last event was DELETE)")
@@ -274,7 +275,7 @@ func TestCagraSync_Update_DeleteIdempotent(t *testing.T) {
 
 	require.NoError(t, s.Save(sqlproc))
 
-	state, err := vectorindex.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []int64{5, 7}, state.Deleted)
 }
@@ -305,7 +306,7 @@ func TestCagraSync_Update_Upsert(t *testing.T) {
 		"INSERT + UPSERT (= DELETE + INSERT) → 3 records")
 
 	require.NoError(t, s.Save(sqlproc))
-	state, err := vectorindex.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
 	require.NoError(t, err)
 	require.Empty(t, state.Deleted)
 	require.Len(t, state.Overflow, 1)
@@ -348,7 +349,7 @@ func TestCagraSync_Update_WithIncludeBytes(t *testing.T) {
 	defer rec.install(t)()
 
 	colMetaJSON := `[{"name":"tier","type":1}]`
-	expectedIBPR, err := vectorindex.CdcIncludeBytesPerRow(colMetaJSON)
+	expectedIBPR, err := cuvscdc.CdcIncludeBytesPerRow(colMetaJSON)
 	require.NoError(t, err)
 	require.Equal(t, 9, expectedIBPR)
 
@@ -367,7 +368,7 @@ func TestCagraSync_Update_WithIncludeBytes(t *testing.T) {
 	require.NoError(t, s.Update(sqlproc, cdc))
 	require.NoError(t, s.Save(sqlproc))
 
-	state, err := vectorindex.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 9)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 9)
 	require.NoError(t, err)
 	require.Len(t, state.Overflow, 1)
 	require.Equal(t, include, state.Overflow[0].Include)

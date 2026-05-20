@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -91,7 +92,7 @@ func NewIvfpqSync(
 	idxcfg.Type = vectorindex.IVFPQ
 	idxcfg.CuvsIvfpq.Dimensions = uint(dimension)
 
-	includeBytesPerRow, err := vectorindex.CdcIncludeBytesPerRow(colMetaJSON)
+	includeBytesPerRow, err := cuvscdc.CdcIncludeBytesPerRow(colMetaJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -128,20 +129,20 @@ func (s *IvfpqSync) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorI
 	for _, e := range cdc.Data {
 		switch e.Type {
 		case vectorindex.CDC_DELETE:
-			if err := s.appendRecord(vectorindex.CdcOpDelete, e.PKey, nil, nil); err != nil {
+			if err := s.appendRecord(cuvscdc.CdcOpDelete, e.PKey, nil, nil); err != nil {
 				return err
 			}
 			ndelete++
 		case vectorindex.CDC_INSERT:
-			if err := s.appendRecord(vectorindex.CdcOpInsert, e.PKey, e.Vec, e.IncludeBytes); err != nil {
+			if err := s.appendRecord(cuvscdc.CdcOpInsert, e.PKey, e.Vec, e.IncludeBytes); err != nil {
 				return err
 			}
 			ninsert++
 		case vectorindex.CDC_UPSERT:
-			if err := s.appendRecord(vectorindex.CdcOpDelete, e.PKey, nil, nil); err != nil {
+			if err := s.appendRecord(cuvscdc.CdcOpDelete, e.PKey, nil, nil); err != nil {
 				return err
 			}
-			if err := s.appendRecord(vectorindex.CdcOpInsert, e.PKey, e.Vec, e.IncludeBytes); err != nil {
+			if err := s.appendRecord(cuvscdc.CdcOpInsert, e.PKey, e.Vec, e.IncludeBytes); err != nil {
 				return err
 			}
 			nupdate++
@@ -159,8 +160,8 @@ func (s *IvfpqSync) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorI
 	return nil
 }
 
-func (s *IvfpqSync) appendRecord(op vectorindex.CdcOp, pkid int64, vec []float32, include []byte) error {
-	if op == vectorindex.CdcOpInsert {
+func (s *IvfpqSync) appendRecord(op cuvscdc.CdcOp, pkid int64, vec []float32, include []byte) error {
+	if op == cuvscdc.CdcOpInsert {
 		if len(vec) != s.dim {
 			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
 				"IvfpqSync.appendRecord: vec length %d != dim %d", len(vec), s.dim))
@@ -176,7 +177,7 @@ func (s *IvfpqSync) appendRecord(op vectorindex.CdcOp, pkid int64, vec []float32
 		}
 	}
 	before := len(s.pendingRecords)
-	out, err := vectorindex.EncodeEventRecord(s.pendingRecords, op, pkid, vec, include, s.dim, s.includeBytesPerRow)
+	out, err := cuvscdc.EncodeEventRecord(s.pendingRecords, op, pkid, vec, include, s.dim, s.includeBytesPerRow)
 	if err != nil {
 		return err
 	}
@@ -193,7 +194,7 @@ func (s *IvfpqSync) Save(sqlproc *sqlexec.SqlProcess) error {
 	if err != nil {
 		return err
 	}
-	sqls := vectorindex.CdcAppendEventsSql(s.tblcfg, s.activeIndexId, nextId, s.pendingRecords, s.pendingSizes)
+	sqls := cuvscdc.CdcAppendEventsSql(s.tblcfg, s.activeIndexId, nextId, s.pendingRecords, s.pendingSizes)
 	if len(sqls) == 0 {
 		return nil
 	}
@@ -207,7 +208,7 @@ func (s *IvfpqSync) Save(sqlproc *sqlexec.SqlProcess) error {
 }
 
 func (s *IvfpqSync) nextChunkId(sqlproc *sqlexec.SqlProcess, tag vectorindex.ChunkTag) (int64, error) {
-	sql := vectorindex.NextChunkIdSql(s.tblcfg, s.activeIndexId, tag)
+	sql := cuvscdc.NextChunkIdSql(s.tblcfg, s.activeIndexId, tag)
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return 0, err

@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -129,7 +130,7 @@ func addOverflowFilterChunks[T cuvs.VectorType](
 	nrows uint64,
 	includeBytesPerRow int,
 ) error {
-	colData, colNulls, err := vectorindex.SplitIncludeBytes(colMetaJSON, includeBytes, nrows, includeBytesPerRow)
+	colData, colNulls, err := cuvscdc.SplitIncludeBytes(colMetaJSON, includeBytes, nrows, includeBytesPerRow)
 	if err != nil {
 		return err
 	}

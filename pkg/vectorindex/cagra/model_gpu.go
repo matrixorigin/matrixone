@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -437,7 +438,7 @@ func (idx *CagraModel[T]) LoadIndex(
 		cdcWg     sync.WaitGroup
 		cdcErr    error
 		dim       = int(idxcfg.CuvsCagra.Dimensions)
-		eventChunks []vectorindex.EventChunk
+		eventChunks []cuvscdc.EventChunk
 	)
 
 	cdcWg.Add(1)
@@ -582,7 +583,7 @@ func (idx *CagraModel[T]) LoadIndex(
 	colMetaJSON := gi.GetFilterColMetaJSON()
 	includeBytesPerRow := 0
 	if colMetaJSON != "" {
-		ibpr, e := vectorindex.CdcIncludeBytesPerRow(colMetaJSON)
+		ibpr, e := cuvscdc.CdcIncludeBytesPerRow(colMetaJSON)
 		if e != nil {
 			gi.Destroy()
 			return e
@@ -655,15 +656,15 @@ func (idx *CagraModel[T]) Unload() error {
 func (idx *CagraModel[T]) loadCdcEventsFromDB(
 	sqlproc *sqlexec.SqlProcess,
 	tblcfg vectorindex.IndexTableConfig,
-) ([]vectorindex.EventChunk, error) {
-	sql := vectorindex.CdcLoadEventsSql(tblcfg, idx.Id)
+) ([]cuvscdc.EventChunk, error) {
+	sql := cuvscdc.CdcLoadEventsSql(tblcfg, idx.Id)
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return nil, err
 	}
 	defer res.Close()
 
-	var chunks []vectorindex.EventChunk
+	var chunks []cuvscdc.EventChunk
 	for _, bat := range res.Batches {
 		idVec := bat.Vecs[0]
 		dataVec := bat.Vecs[1]
@@ -671,7 +672,7 @@ func (idx *CagraModel[T]) loadCdcEventsFromDB(
 			raw := dataVec.GetRawBytesAt(i)
 			cp := make([]byte, len(raw))
 			copy(cp, raw)
-			chunks = append(chunks, vectorindex.EventChunk{
+			chunks = append(chunks, cuvscdc.EventChunk{
 				ChunkId: vector.GetFixedAtWithTypeCheck[int64](idVec, i),
 				Data:    cp,
 			})
@@ -685,15 +686,15 @@ func (idx *CagraModel[T]) loadCdcEventsFromDB(
 // CagraModel struct carries (pkids/vecs/include layout that buildOverflow
 // expects). Pass includeBytesPerRow=0 for indexes without INCLUDE columns.
 func replayEventChunks(
-	chunks []vectorindex.EventChunk,
+	chunks []cuvscdc.EventChunk,
 	dim int,
 	includeBytesPerRow int,
 ) ([]int64, []int64, []float32, []byte, error) {
 	if len(chunks) == 0 {
 		return nil, nil, nil, nil, nil
 	}
-	vectorindex.SortChunks(chunks)
-	state, err := vectorindex.ReplayEventLog(chunks, dim, includeBytesPerRow)
+	cuvscdc.SortChunks(chunks)
+	state, err := cuvscdc.ReplayEventLog(chunks, dim, includeBytesPerRow)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}

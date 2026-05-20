@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -37,7 +37,7 @@ import (
 // makeCdcChunkBatch wraps a sequence of (chunk_id, blob) pairs as a single
 // SELECT result batch with (chunk_id int64, data blob) columns — the shape
 // loadCdcEventsFromDB expects.
-func makeCdcChunkBatch(proc *process.Process, chunks []vectorindex.EventChunk) *batch.Batch {
+func makeCdcChunkBatch(proc *process.Process, chunks []cuvscdc.EventChunk) *batch.Batch {
 	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_blob, 65536, 0))
@@ -52,25 +52,25 @@ func makeCdcChunkBatch(proc *process.Process, chunks []vectorindex.EventChunk) *
 // encodeChunk encodes a slice of (op, pkid, vec, include) into one event-log
 // chunk's on-wire bytes (framed) — the helper test fixture for tag=1
 // round-trip tests.
-func encodeChunk(t *testing.T, dim, includeBytesPerRow int, ops []vectorindex.CdcOp, pkids []int64, vecs [][]float32, includes [][]byte) []byte {
+func encodeChunk(t *testing.T, dim, includeBytesPerRow int, ops []cuvscdc.CdcOp, pkids []int64, vecs [][]float32, includes [][]byte) []byte {
 	t.Helper()
 	var buf []byte
 	insIdx := 0
 	for i, op := range ops {
 		var v []float32
 		var inc []byte
-		if op == vectorindex.CdcOpInsert {
+		if op == cuvscdc.CdcOpInsert {
 			v = vecs[insIdx]
 			if includeBytesPerRow > 0 {
 				inc = includes[insIdx]
 			}
 			insIdx++
 		}
-		out, err := vectorindex.EncodeEventRecord(buf, op, pkids[i], v, inc, dim, includeBytesPerRow)
+		out, err := cuvscdc.EncodeEventRecord(buf, op, pkids[i], v, inc, dim, includeBytesPerRow)
 		require.NoError(t, err)
 		buf = out
 	}
-	return vectorindex.FrameCdcChunk(buf)
+	return cuvscdc.FrameCdcChunk(buf)
 }
 
 // TestLoadCdcEventsFromDB_RoundTrip: encode a batch of records, hand them
@@ -83,11 +83,11 @@ func TestLoadCdcEventsFromDB_RoundTrip(t *testing.T) {
 
 	tblcfg := testTblcfg()
 	dim := 4
-	ops := []vectorindex.CdcOp{vectorindex.CdcOpDelete, vectorindex.CdcOpInsert, vectorindex.CdcOpDelete}
+	ops := []cuvscdc.CdcOp{cuvscdc.CdcOpDelete, cuvscdc.CdcOpInsert, cuvscdc.CdcOpDelete}
 	pkids := []int64{42, 7, 9}
 	vecs := [][]float32{{1, 2, 3, 4}}
 	chunkBytes := encodeChunk(t, dim, 0, ops, pkids, vecs, nil)
-	chunks := []vectorindex.EventChunk{{ChunkId: 0, Data: chunkBytes}}
+	chunks := []cuvscdc.EventChunk{{ChunkId: 0, Data: chunkBytes}}
 
 	orig := runSql
 	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
@@ -127,12 +127,12 @@ func TestLoadCdcEventsFromDB_Empty(t *testing.T) {
 func TestReplayEventChunks_DeleteInsertDelete(t *testing.T) {
 	dim := 4
 	chunkBytes := encodeChunk(t, dim, 0,
-		[]vectorindex.CdcOp{vectorindex.CdcOpDelete, vectorindex.CdcOpInsert, vectorindex.CdcOpDelete},
+		[]cuvscdc.CdcOp{cuvscdc.CdcOpDelete, cuvscdc.CdcOpInsert, cuvscdc.CdcOpDelete},
 		[]int64{1, 1, 1},
 		[][]float32{{1, 2, 3, 4}},
 		nil,
 	)
-	chunks := []vectorindex.EventChunk{{ChunkId: 0, Data: chunkBytes}}
+	chunks := []cuvscdc.EventChunk{{ChunkId: 0, Data: chunkBytes}}
 
 	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks(chunks, dim, 0)
 	require.NoError(t, err)
@@ -147,12 +147,12 @@ func TestReplayEventChunks_DeleteInsertDelete(t *testing.T) {
 func TestReplayEventChunks_FlattenOverflow(t *testing.T) {
 	dim := 3
 	chunkBytes := encodeChunk(t, dim, 0,
-		[]vectorindex.CdcOp{vectorindex.CdcOpInsert, vectorindex.CdcOpInsert},
+		[]cuvscdc.CdcOp{cuvscdc.CdcOpInsert, cuvscdc.CdcOpInsert},
 		[]int64{10, 20},
 		[][]float32{{1, 2, 3}, {4, 5, 6}},
 		nil,
 	)
-	chunks := []vectorindex.EventChunk{{ChunkId: 0, Data: chunkBytes}}
+	chunks := []cuvscdc.EventChunk{{ChunkId: 0, Data: chunkBytes}}
 
 	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks(chunks, dim, 0)
 	require.NoError(t, err)
@@ -168,13 +168,13 @@ func TestReplayEventChunks_FlattenOverflow(t *testing.T) {
 func TestReplayEventChunks_MultiChunkOrder(t *testing.T) {
 	dim := 2
 	chunk0 := encodeChunk(t, dim, 0,
-		[]vectorindex.CdcOp{vectorindex.CdcOpInsert}, []int64{5},
+		[]cuvscdc.CdcOp{cuvscdc.CdcOpInsert}, []int64{5},
 		[][]float32{{1, 1}}, nil)
 	chunk1 := encodeChunk(t, dim, 0,
-		[]vectorindex.CdcOp{vectorindex.CdcOpDelete}, []int64{5},
+		[]cuvscdc.CdcOp{cuvscdc.CdcOpDelete}, []int64{5},
 		nil, nil)
 	// Hand them to replay in the wrong order.
-	chunks := []vectorindex.EventChunk{
+	chunks := []cuvscdc.EventChunk{
 		{ChunkId: 1, Data: chunk1},
 		{ChunkId: 0, Data: chunk0},
 	}
@@ -216,9 +216,9 @@ func TestLoadIndex_WithCdcDeltas(t *testing.T) {
 	for i := range overflowVecs {
 		overflowVecs[i] = float32(i + 1)
 	}
-	ops := []vectorindex.CdcOp{
-		vectorindex.CdcOpDelete, vectorindex.CdcOpDelete, vectorindex.CdcOpDelete,
-		vectorindex.CdcOpInsert, vectorindex.CdcOpInsert,
+	ops := []cuvscdc.CdcOp{
+		cuvscdc.CdcOpDelete, cuvscdc.CdcOpDelete, cuvscdc.CdcOpDelete,
+		cuvscdc.CdcOpInsert, cuvscdc.CdcOpInsert,
 	}
 	pkidsAll := append([]int64{}, deletedPkids...)
 	pkidsAll = append(pkidsAll, overflowPkids...)
@@ -227,7 +227,7 @@ func TestLoadIndex_WithCdcDeltas(t *testing.T) {
 			overflowVecs[:testDim],
 			overflowVecs[testDim:],
 		}, nil)
-	eventChunks := []vectorindex.EventChunk{{ChunkId: 0, Data: chunkBytes}}
+	eventChunks := []cuvscdc.EventChunk{{ChunkId: 0, Data: chunkBytes}}
 
 	// Inject mocks. Streaming returns the model tar; runSql dispatches on
 	// the SQL's tag.
