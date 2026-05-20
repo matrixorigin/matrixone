@@ -233,6 +233,63 @@ func TestBuildHashmapWithZeroInputKeepsCachesUntouched(t *testing.T) {
 	require.Nil(t, hb.cachedStrIterator)
 }
 
+func TestDedupBuildDuplicateKeyStillFailsByDefault(t *testing.T) {
+	var hb HashmapBuilder
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hb.IsDedup = true
+	hb.OnDuplicateAction = plan.Node_FAIL
+	hb.DedupColName = "id"
+	hb.DedupColTypes = []plan.Type{newExpr(0, types.T_int32.ToType()).Typ}
+	defer func() {
+		hb.Reset(proc, true)
+		hb.Free(proc)
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, proc))
+	bat := makeIntKeyValueBatch(proc, []int32{1, 1}, []int32{10, 20})
+	require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+	hb.InputBatchRowCount = bat.RowCount()
+	bat.Clean(proc.Mp())
+
+	err := hb.BuildHashmap(false, false, false, proc)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+}
+
+func TestDedupBuildKeepLastForReplace(t *testing.T) {
+	var hb HashmapBuilder
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hb.IsDedup = true
+	hb.DedupBuildKeepLast = true
+	hb.OnDuplicateAction = plan.Node_FAIL
+	hb.DedupColName = "id"
+	hb.DedupColTypes = []plan.Type{newExpr(0, types.T_int32.ToType()).Typ}
+	defer func() {
+		hb.Reset(proc, true)
+		hb.Free(proc)
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, proc))
+	bat := makeIntKeyValueBatch(proc, []int32{1, 1, 2}, []int32{10, 20, 30})
+	require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+	hb.InputBatchRowCount = bat.RowCount()
+	bat.Clean(proc.Mp())
+
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+	require.Equal(t, 2, hb.InputBatchRowCount)
+	require.Equal(t, 2, hb.Batches.RowCount())
+	require.Equal(t, uint64(2), hb.GetGroupCount())
+
+	out := hb.Batches.Buf[0]
+	require.Equal(t, 2, out.RowCount())
+	keys := vector.MustFixedColNoTypeCheck[int32](out.Vecs[0])[:out.RowCount()]
+	values := vector.MustFixedColNoTypeCheck[int32](out.Vecs[1])[:out.RowCount()]
+	require.Equal(t, []int32{1, 2}, keys)
+	require.Equal(t, []int32{20, 30}, values)
+}
+
 func TestBuildHashmapErrorDoesNotLeakIterators(t *testing.T) {
 	var hb HashmapBuilder
 	mp := mpool.MustNewZero()
@@ -501,6 +558,16 @@ func makeStrBatch(tb testing.TB, n int, proc *process.Process) *batch.Batch {
 	bat := batch.New([]string{"col"})
 	bat.SetVector(0, vec)
 	bat.SetRowCount(n)
+	return bat
+}
+
+func makeIntKeyValueBatch(proc *process.Process, keys []int32, values []int32) *batch.Batch {
+	keyVec := testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	valueVec := testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat := batch.New([]string{"id", "v"})
+	bat.SetVector(0, keyVec)
+	bat.SetVector(1, valueVec)
+	bat.SetRowCount(len(keys))
 	return bat
 }
 

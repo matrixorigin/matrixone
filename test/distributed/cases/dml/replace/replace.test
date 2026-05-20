@@ -86,6 +86,29 @@ replace into t_fake_pk values (2, 'foo');
 select * from t_fake_pk order by a;
 drop table t_fake_pk;
 
+-- test duplicate source keys within one REPLACE statement
+drop table if exists t_replace_dup_pk;
+create table t_replace_dup_pk(id int primary key, v int);
+replace into t_replace_dup_pk values (1, 10), (1, 20), (2, 30);
+select * from t_replace_dup_pk order by id;
+drop table t_replace_dup_pk;
+
+drop table if exists t_replace_dup_pk_src;
+create table t_replace_dup_pk_src(id int primary key, v int);
+drop table if exists s_replace_dup_pk;
+create table s_replace_dup_pk(id int, v int);
+insert into s_replace_dup_pk values (1, 10), (1, 20), (2, 30);
+replace into t_replace_dup_pk_src select * from s_replace_dup_pk order by v;
+select * from t_replace_dup_pk_src order by id;
+drop table s_replace_dup_pk;
+drop table t_replace_dup_pk_src;
+
+drop table if exists t_replace_dup_uk;
+create table t_replace_dup_uk(id int primary key, u int unique, v int);
+replace into t_replace_dup_uk values (1, 1, 10), (2, 1, 20), (3, 2, 30);
+select * from t_replace_dup_uk order by u;
+drop table t_replace_dup_uk;
+
 -- test INSERT ON DUPLICATE KEY UPDATE rewrite to REPLACE
 drop table if exists t_odku;
 create table t_odku(id int primary key, name varchar(64), val int);

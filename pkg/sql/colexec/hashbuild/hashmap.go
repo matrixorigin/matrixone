@@ -47,10 +47,11 @@ type HashmapBuilder struct {
 	cachedIntIterator  hashmap.Iterator
 	cachedStrIterator  hashmap.Iterator
 
-	IsDedup           bool
-	OnDuplicateAction plan.Node_OnDuplicateAction
-	DedupColName      string
-	DedupColTypes     []plan.Type
+	IsDedup            bool
+	DedupBuildKeepLast bool
+	OnDuplicateAction  plan.Node_OnDuplicateAction
+	DedupColName       string
+	DedupColTypes      []plan.Type
 
 	IgnoreRows *bitmap.Bitmap
 
@@ -235,9 +236,20 @@ func (hb *HashmapBuilder) evalBatch(batchIdx int, proc *process.Process) error {
 }
 
 func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) (retErr error) {
+	return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, hb.DedupBuildKeepLast, proc)
+}
+
+func (hb *HashmapBuilder) buildHashmap(
+	hashOnPK bool,
+	needAllocateSels bool,
+	needUniqueVec bool,
+	dedupBuildKeepLast bool,
+	proc *process.Process,
+) (retErr error) {
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
+	dedupBuildKeepLast = dedupBuildKeepLast && hb.IsDedup && hb.OnDuplicateAction == plan.Node_FAIL
 	defer func() {
 		if retErr != nil {
 			hb.cachedIntIterator = nil
@@ -300,7 +312,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		}
 	}
 
-	if hb.IsDedup && hb.OnDuplicateAction == plan.Node_IGNORE {
+	if hb.IsDedup && (hb.OnDuplicateAction == plan.Node_IGNORE || dedupBuildKeepLast) {
 		hb.IgnoreRows = &bitmap.Bitmap{}
 		hb.IgnoreRows.InitWithSize(int64(hb.InputBatchRowCount))
 	}
@@ -309,7 +321,14 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		vOld        uint64
 		cardinality uint64
 		lastBatch   = -1
+		lastRows    []int64
 	)
+	if dedupBuildKeepLast {
+		lastRows = make([]int64, hb.InputBatchRowCount+1)
+		for i := range lastRows {
+			lastRows[i] = -1
+		}
+	}
 
 	for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
 		if i%(hashmap.UnitLimit*32) == 0 {
@@ -372,6 +391,14 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 				if v <= cardinality {
 					switch hb.OnDuplicateAction {
 					case plan.Node_FAIL:
+						if dedupBuildKeepLast {
+							if lastRows[v] >= 0 {
+								hb.IgnoreRows.Add(uint64(lastRows[v]))
+							}
+							lastRows[v] = int64(i + k)
+							continue
+						}
+
 						var rowStr string
 						if len(hb.DedupColTypes) == 1 {
 							if hb.DedupColName == catalog.IndexTableIndexColName {
@@ -399,6 +426,9 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 					}
 				} else {
 					cardinality = v
+					if dedupBuildKeepLast {
+						lastRows[v] = int64(i + k)
+					}
 				}
 			} else if !hashOnPK && needAllocateSels {
 				hb.Sels.Insert(int32(v-1), int32(i+k))
@@ -443,6 +473,15 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		}
 	}
 
+	if dedupBuildKeepLast && hb.IgnoreRows.Count() > 0 {
+		if err := hb.Batches.Shrink(hb.IgnoreRows, proc); err != nil {
+			return err
+		}
+		hb.InputBatchRowCount = hb.Batches.RowCount()
+		hb.resetHashStateForRebuild(proc)
+		return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc)
+	}
+
 	if hb.delColIdx != -1 {
 		hb.DelRows = &bitmap.Bitmap{}
 		hb.DelRows.InitWithSize(int64(cardinality))
@@ -482,6 +521,38 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 	}
 
 	return hb.Sels.Finalize(int(hb.GetGroupCount()), hb.InputBatchRowCount, proc.Mp())
+}
+
+func (hb *HashmapBuilder) resetHashStateForRebuild(proc *process.Process) {
+	hb.detachAndPruneCachedIterators()
+	if hb.IntHashMap != nil {
+		hb.IntHashMap.Free()
+		hb.IntHashMap = nil
+	}
+	if hb.StrHashMap != nil {
+		hb.StrHashMap.Free()
+		hb.StrHashMap = nil
+	}
+	hb.Sels.Free(proc.Mp())
+	for i := range hb.UniqueJoinKeys {
+		if hb.UniqueJoinKeys[i] != nil {
+			hb.UniqueJoinKeys[i].Free(proc.Mp())
+		}
+	}
+	hb.UniqueJoinKeys = nil
+	if hb.needDupVec {
+		for i := range hb.curVecs {
+			if hb.curVecs[i] != nil {
+				hb.curVecs[i].Free(proc.Mp())
+			}
+		}
+	}
+	for i := range hb.curVecs {
+		hb.curVecs[i] = nil
+	}
+	hb.curVecs = nil
+	hb.IgnoreRows = nil
+	hb.DelRows = nil
 }
 
 // ExtractCachedIteratorsForReuse detaches and returns cached iterators so they

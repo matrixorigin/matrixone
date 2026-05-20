@@ -695,21 +695,22 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.UnionAll = &pipeline.UnionAll{}
 	case *hashbuild.HashBuild:
 		in.HashBuild = &pipeline.HashBuild{
-			NeedHashMap:       t.NeedHashMap,
-			HashOnPk:          t.HashOnPK,
-			NeedBatches:       t.NeedBatches,
-			NeedAllocateSels:  t.NeedAllocateSels,
-			IsShuffle:         t.IsShuffle,
-			Conditions:        t.Conditions,
-			JoinMapTag:        t.JoinMapTag,
-			JoinMapRefCnt:     t.JoinMapRefCnt,
-			ShuffleIdx:        t.ShuffleIdx,
-			RuntimeFilterSpec: t.RuntimeFilterSpec,
-			IsDedup:           t.IsDedup,
-			OnDuplicateAction: t.OnDuplicateAction,
-			DedupColName:      t.DedupColName,
-			DedupColTypes:     t.DedupColTypes,
-			DelColIdx:         t.DelColIdx,
+			NeedHashMap:        t.NeedHashMap,
+			HashOnPk:           t.HashOnPK,
+			NeedBatches:        t.NeedBatches,
+			NeedAllocateSels:   t.NeedAllocateSels,
+			IsShuffle:          t.IsShuffle,
+			Conditions:         t.Conditions,
+			JoinMapTag:         t.JoinMapTag,
+			JoinMapRefCnt:      t.JoinMapRefCnt,
+			ShuffleIdx:         t.ShuffleIdx,
+			RuntimeFilterSpec:  t.RuntimeFilterSpec,
+			IsDedup:            t.IsDedup,
+			DedupBuildKeepLast: t.DedupBuildKeepLast,
+			OnDuplicateAction:  t.OnDuplicateAction,
+			DedupColName:       t.DedupColName,
+			DedupColTypes:      t.DedupColTypes,
+			DelColIdx:          t.DelColIdx,
 		}
 	case *indexbuild.IndexBuild:
 		in.IndexBuild = &pipeline.Indexbuild{
@@ -1163,6 +1164,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		arg.IsDedup = t.IsDedup
+		arg.DedupBuildKeepLast = t.DedupBuildKeepLast
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes

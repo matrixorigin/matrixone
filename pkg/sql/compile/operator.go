@@ -146,6 +146,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.RuntimeFilterSpec = t.RuntimeFilterSpec
 		op.SpillThreshold = t.SpillThreshold
 		op.IsDedup = t.IsDedup
+		op.DedupBuildKeepLast = t.DedupBuildKeepLast
 		op.OnDuplicateAction = t.OnDuplicateAction
 		op.DedupColTypes = t.DedupColTypes
 		op.DedupColName = t.DedupColName
@@ -1648,6 +1649,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
 		ret.IsDedup = true
+		ret.DedupBuildKeepLast = shouldDedupBuildKeepLastForReplace(arg)
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
@@ -1722,6 +1724,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
 		ret.IsDedup = true
+		ret.DedupBuildKeepLast = shouldDedupBuildKeepLastForReplace(arg)
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
@@ -1753,6 +1756,11 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		panic(moerr.NewInternalErrorf(proc.Ctx, "unsupported type for shuffle join: '%v'", op.OpType()))
 	}
 	return ret
+}
+
+func shouldDedupBuildKeepLastForReplace(arg *dedupjoin.DedupJoin) bool {
+	return arg.OnDuplicateAction == plan.Node_FAIL &&
+		(arg.DelColIdx >= 0 || len(arg.OldColCapturePlaceholderIdxList) > 0)
 }
 
 func constructJoinResult(expr *plan.Expr, proc *process.Process) (int32, int32) {

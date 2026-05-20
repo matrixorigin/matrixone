@@ -398,6 +398,7 @@ message HashBuild {
   string dedup_col_name = 13;
   repeated plan.Type dedup_col_types = 14 [(gogoproto.nullable) = false];
   int32 del_col_idx = 15;
+  bool dedup_build_keep_last = 16;
 }
 
 message Indexbuild {
