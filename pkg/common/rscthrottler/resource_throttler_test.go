@@ -17,6 +17,7 @@ package rscthrottler
 import (
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -168,6 +169,47 @@ func TestAcquirePolicyForDataBranch(t *testing.T) {
 		require.Equal(t, int64(70), left)
 		require.Equal(t, int64(10), throttler.reserved.Load())
 	})
+}
+
+func TestMemThrottlerRSSScavenging(t *testing.T) {
+	oldFreeOSMemory := freeOSMemory
+	defer func() { freeOSMemory = oldFreeOSMemory }()
+
+	var calls atomic.Int32
+	freeOSMemory = func() {
+		calls.Add(1)
+	}
+
+	now := time.Now().UnixNano()
+	throttler := &memThrottler{limitRate: 0.90}
+	throttler.options.enableRSSScavenging = true
+	throttler.actualTotalMemory.Store(1000 * mpool.GB)
+	throttler.limit.Store(900 * mpool.GB)
+	throttler.rss.Store(900 * mpool.GB)
+	throttler.lastRSSScavenge.Store(now - int64(rssScavengeInterval) - int64(time.Second))
+
+	throttler.tryScavengeRSS(now, 900*mpool.GB)
+	require.Equal(t, int32(1), calls.Load())
+
+	throttler.tryScavengeRSS(now+int64(time.Second), 900*mpool.GB)
+	require.Equal(t, int32(1), calls.Load())
+}
+
+func TestMemThrottlerRSSScavengingDisabled(t *testing.T) {
+	oldFreeOSMemory := freeOSMemory
+	defer func() { freeOSMemory = oldFreeOSMemory }()
+
+	var calls atomic.Int32
+	freeOSMemory = func() {
+		calls.Add(1)
+	}
+
+	throttler := &memThrottler{limitRate: 0.90}
+	throttler.actualTotalMemory.Store(1000 * mpool.GB)
+	throttler.limit.Store(900 * mpool.GB)
+
+	throttler.tryScavengeRSS(time.Now().UnixNano(), 900*mpool.GB)
+	require.Equal(t, int32(0), calls.Load())
 }
 
 func TestAcquirePolicyForCNFlushS3(t *testing.T) {
