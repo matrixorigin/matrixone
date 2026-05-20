@@ -319,6 +319,41 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		require.Nil(t, leaf)
 		require.Nil(t, mp)
 	})
+
+	t.Run("fixed width optional list elements without nulls", func(t *testing.T) {
+		f, page := writeListNodeAndGetPage(t, parquet.List(parquet.Optional(parquet.Leaf(parquet.FloatType))), []parquet.Row{
+			{
+				parquet.FloatValue(1).Level(0, 2, 0),
+				parquet.FloatValue(2).Level(1, 2, 0),
+				parquet.FloatValue(3).Level(1, 2, 0),
+			},
+		})
+
+		var h ParquetHandler
+		_, mp := h.getNestedMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3})
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, [][]float32{{1, 2, 3}}, vector.MustArrayCol[float32](vec))
+	})
+
+	t.Run("fixed width optional list null element rejected", func(t *testing.T) {
+		f, page := writeListNodeAndGetPage(t, parquet.List(parquet.Optional(parquet.Leaf(parquet.FloatType))), []parquet.Row{
+			{
+				parquet.NullValue().Level(0, 1, 0),
+				parquet.FloatValue(2).Level(1, 2, 0),
+				parquet.FloatValue(3).Level(1, 2, 0),
+			},
+		})
+
+		var h ParquetHandler
+		_, mp := h.getNestedMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3})
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "parquet list NULL elements are not supported")
+	})
 }
 
 func TestParquetCrossTypeMappings(t *testing.T) {

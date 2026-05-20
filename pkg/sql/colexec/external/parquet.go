@@ -278,8 +278,13 @@ func (*ParquetHandler) getNestedMapper(sc *parquet.Column, dt plan.Type) (*parqu
 	if !ok {
 		return nil, nil
 	}
-	if leaf.Optional() {
-		// MO array vectors cannot represent NULL elements inside one array row yet.
+	width := int(dt.Width)
+	if width <= 0 {
+		width = types.MaxArrayDimension
+	}
+	elemCanBeNull := leaf.Optional()
+	if elemCanBeNull && width == types.MaxArrayDimension {
+		// MO array vectors cannot represent NULL elements inside variable-length array rows yet.
 		return nil, nil
 	}
 	if sc.Optional() && dt.NotNullable {
@@ -289,6 +294,13 @@ func (*ParquetHandler) getNestedMapper(sc *parquet.Column, dt plan.Type) (*parqu
 	if maxDefinitionLevel == 0 {
 		return nil, nil
 	}
+	listEmptyLevel := maxDefinitionLevel - 1
+	if elemCanBeNull {
+		if maxDefinitionLevel < 2 {
+			return nil, nil
+		}
+		listEmptyLevel = maxDefinitionLevel - 2
+	}
 
 	mp := &columnMapper{
 		srcNull:            true,
@@ -296,18 +308,18 @@ func (*ParquetHandler) getNestedMapper(sc *parquet.Column, dt plan.Type) (*parqu
 		maxDefinitionLevel: maxDefinitionLevel,
 		allowRepetition:    true,
 		listCanBeNull:      sc.Optional(),
-		// For required elements, maxDL means "element present" and maxDL-1 means "empty list".
-		listEmptyLevel: maxDefinitionLevel - 1,
+		listElemCanBeNull:  elemCanBeNull,
+		// maxDL means "element present"; empty-list rows use the level before element presence.
+		listEmptyLevel: listEmptyLevel,
+	}
+	if mp.listElemCanBeNull {
+		mp.listElemNullLevel = maxDefinitionLevel - 1
 	}
 	if mp.listCanBeNull {
 		if mp.listEmptyLevel == 0 {
 			return nil, nil
 		}
 		mp.listNullLevel = mp.listEmptyLevel - 1
-	}
-	width := int(dt.Width)
-	if width <= 0 {
-		width = types.MaxArrayDimension
 	}
 
 	switch types.T(dt.Id) {
@@ -1350,6 +1362,9 @@ func processParquetListToArray[T types.RealNumbers](
 			}
 			rowNull = true
 			continue
+		}
+		if mp.listElemCanBeNull && definitionLevel == mp.listElemNullLevel {
+			return moerr.NewInvalidInput(ctx, "parquet list NULL elements are not supported for vector columns")
 		}
 		if definitionLevel == mp.listEmptyLevel {
 			if len(row) != 0 || rowNull || v.RepetitionLevel() != 0 {
