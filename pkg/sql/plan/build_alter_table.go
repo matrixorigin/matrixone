@@ -579,7 +579,7 @@ func ResolveAlterTableAlgorithm(
 				algorithm = plan.AlterTable_DEFAULT
 			}
 		case *tree.AlterOptionLock:
-			// lock type doesn't affect algorithm selection
+			algorithm = plan.AlterTable_INPLACE
 		default:
 			algorithm = plan.AlterTable_INPLACE
 		}
