@@ -86,40 +86,50 @@ func NewDiskCache(
 		return capacity()
 	}
 
+	var cache *fifocache.Cache[string, struct{}]
 	ret = &DiskCache{
 		path:               path,
 		cacheDataAllocator: cacheDataAllocator,
 		perfCounterSets:    perfCounterSets,
 
 		capacityFunc: capacityFunc,
-		cache: fifocache.New(
-
-			capacityFunc,
-
-			func(key string) uint64 {
-				return maphash.String(seed, key)
-			},
-
-			func(_ context.Context, _ string, _ struct{}, size int64) { // postSet
-				inuseBytes.Add(float64(size))
-				capacityBytes.Set(float64(capacityFunc()))
-			},
-
-			nil,
-			func(ctx context.Context, path string, _ struct{}, size int64) {
-				inuseBytes.Add(float64(-size))
-				capacityBytes.Set(float64(capacityFunc()))
-				err := os.Remove(path)
-				if err == nil {
-					metric.FSDiskCacheEvictCounter.Add(1)
-				} else if !os.IsNotExist(err) {
-					logutil.Error("delete disk cache file",
-						zap.Any("error", err),
-					)
-				}
-			},
-		),
 	}
+	cache = fifocache.New(
+
+		capacityFunc,
+
+		func(key string) uint64 {
+			return maphash.String(seed, key)
+		},
+
+		func(_ context.Context, _ string, _ struct{}, size int64) { // postSet
+			inuseBytes.Add(float64(size))
+			capacityBytes.Set(float64(capacityFunc()))
+		},
+
+		nil,
+		func(ctx context.Context, path string, _ struct{}, size int64) {
+			inuseBytes.Add(float64(-size))
+			capacityBytes.Set(float64(capacityFunc()))
+			doneUpdate, ok := ret.tryStartUpdate(path)
+			if !ok {
+				return
+			}
+			defer doneUpdate()
+			if ret.cache.Contains(path) {
+				return
+			}
+			err := os.Remove(path)
+			if err == nil {
+				metric.FSDiskCacheEvictCounter.Add(1)
+			} else if !os.IsNotExist(err) {
+				logutil.Error("delete disk cache file",
+					zap.Any("error", err),
+				)
+			}
+		},
+	)
+	ret.cache = cache
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))
 	ret.updatingPaths.m = make(map[string]bool)
 
@@ -499,8 +509,14 @@ func (d *DiskCache) writeFile(
 	defer doneUpdate()
 
 	if _, ok := d.cache.Get(ctx, diskPath); ok {
-		// already exists
-		return false, nil
+		if _, err := os.Stat(diskPath); err == nil {
+			// already exists
+			return false, nil
+		} else if os.IsNotExist(err) {
+			d.cache.Delete(ctx, diskPath)
+		} else {
+			return false, err
+		}
 	}
 	stat, err := os.Stat(diskPath)
 	if err == nil {
@@ -641,6 +657,22 @@ func (d *DiskCache) startUpdate(path string) (done func()) {
 		d.updatingPaths.L.Unlock()
 	}
 	return
+}
+
+func (d *DiskCache) tryStartUpdate(path string) (done func(), ok bool) {
+	d.updatingPaths.L.Lock()
+	if d.updatingPaths.m[path] {
+		d.updatingPaths.L.Unlock()
+		return nil, false
+	}
+	d.updatingPaths.m[path] = true
+	d.updatingPaths.L.Unlock()
+	return func() {
+		d.updatingPaths.L.Lock()
+		delete(d.updatingPaths.m, path)
+		d.updatingPaths.Broadcast()
+		d.updatingPaths.L.Unlock()
+	}, true
 }
 
 var _ FileCache = new(DiskCache)

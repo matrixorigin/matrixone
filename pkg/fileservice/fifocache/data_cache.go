@@ -78,12 +78,19 @@ func (d *DataCache) DeletePaths(ctx context.Context, paths []string) {
 func (d *DataCache) deletePath(ctx context.Context, shardIndex int, path string) {
 	shard := &d.fifo.shards[shardIndex]
 	shard.Lock()
-	defer shard.Unlock()
+	var pending []_PendingPostEvict[fscache.CacheKey, fscache.Data]
 	for key, item := range shard.values {
 		if key.Path == path {
 			delete(shard.values, key)
-			d.fifo.purgeItemValue(ctx, item)
+			pe, evicted := purgeItemValue(item)
+			if evicted {
+				pending = append(pending, pe)
+			}
 		}
+	}
+	shard.Unlock()
+	for _, pe := range pending {
+		d.fifo.postEvictItem(ctx, pe, true)
 	}
 }
 
