@@ -77,7 +77,7 @@ func TestNewKeywordsHaveExplicitIdentifierPolicy(t *testing.T) {
 		remainingLegacy[word] = struct{}{}
 	}
 
-	var violations []string
+	violations := make([]string, 0, len(keywords))
 	for word, token := range keywords {
 		tokenName, ok := tokenNames[token]
 		if !ok {
@@ -102,7 +102,7 @@ func TestNewKeywordsHaveExplicitIdentifierPolicy(t *testing.T) {
 	}
 
 	if len(remainingLegacy) > 0 {
-		var stale []string
+		stale := make([]string, 0, len(remainingLegacy))
 		for word := range remainingLegacy {
 			stale = append(stale, word)
 		}
