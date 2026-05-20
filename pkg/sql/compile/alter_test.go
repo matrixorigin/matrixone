@@ -126,7 +126,8 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			proc.Base.LockService = lockSvc
 			require.Equal(t, serviceID, proc.GetService())
 
-			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			const accountID = catalog.System_Account
+			ctx := defines.AttachAccountId(context.Background(), accountID)
 			proc.Ctx = ctx
 			proc.ReplaceTopCtx(ctx)
 
@@ -207,12 +208,22 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			require.NotNil(t, spyExec.insertCtx)
 			assert.Equal(t, tc.wantPipelineFlush, spyExec.insertCtx.Value(ioutil.PipelineFlushKey) == true)
 
+			insertAccountID, err := defines.GetAccountId(spyExec.insertCtx)
+			require.NoError(t, err)
+			assert.Equal(t, accountID, insertAccountID)
+
 			if tc.nilCtxBeforeInsert {
-				require.Same(t, spyExec.insertCtx, proc.Ctx)
 				require.NotNil(t, proc.Ctx)
+				require.NotSame(t, spyExec.insertCtx, proc.Ctx)
+				require.Same(t, proc.GetTopContext(), proc.Ctx)
+
+				restoredAccountID, err := defines.GetAccountId(proc.Ctx)
+				require.NoError(t, err)
+				assert.Equal(t, accountID, restoredAccountID)
 			} else {
 				require.Same(t, origCtx, proc.Ctx)
 			}
+			assert.NotEqual(t, true, proc.Ctx.Value(ioutil.PipelineFlushKey))
 
 			if tc.skipPkDedup {
 				require.Same(t, alterTable.Options, spyExec.insertOption.AlterCopyDedupOpt())
