@@ -772,6 +772,10 @@ func (node *AlterTable) reset() {
 				opt.Free()
 			case *TableOptionEncryption:
 				opt.Free()
+			case *AlterOptionAlgorithm:
+				opt.Free()
+			case *AlterOptionLock:
+				opt.Free()
 			default:
 				if opt != nil {
 					panic(fmt.Sprintf("miss Free for %v", option))

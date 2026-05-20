@@ -568,7 +568,7 @@ func ResolveAlterTableAlgorithm(
 		case *tree.TableOptionAutoIncrement:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterOptionAlgorithm:
-			switch option.Type {
+			switch strings.ToUpper(option.Type) {
 			case "INSTANT":
 				algorithm = plan.AlterTable_INSTANT
 			case "INPLACE":
