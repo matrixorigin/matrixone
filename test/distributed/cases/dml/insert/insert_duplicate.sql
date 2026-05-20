@@ -763,6 +763,18 @@ SET @value = 1000;
 EXECUTE stmt1 USING @id, @name, @value, @name;
 SELECT * FROM indup_06;
 
+-- 测试 10.3: 预处理语句重复执行相同冲突键（验证多次冲突处理）
+PREPARE stmt2 FROM "INSERT INTO indup_06 VALUES(?, ?, ?) ON DUPLICATE KEY UPDATE value = 888";
+SET @dup_id = 1;
+SET @dup_name = 'repeated';
+SET @dup_value = 999;
+EXECUTE stmt2 USING @dup_id, @dup_name, @dup_value;
+EXECUTE stmt2 USING @dup_id, @dup_name, @dup_value;
+EXECUTE stmt2 USING @dup_id, @dup_name, @dup_value;
+EXECUTE stmt2 USING @dup_id, @dup_name, @dup_value;
+SELECT * FROM indup_06;
+DEALLOCATE PREPARE stmt2;
+
 DEALLOCATE PREPARE stmt1;
 
 
