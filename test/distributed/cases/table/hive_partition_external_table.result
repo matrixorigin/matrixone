@@ -49,9 +49,15 @@ emb vecf32(3)
 invalid configuration: partition column 'emb' cannot be a VECTOR type
 show create table hive_single;
 Table    Create Table
-hive_single    CREATE EXTERNAL TABLE `hive_single` (\n  `id` int DEFAULT NULL,\n  `amount` double DEFAULT NULL,\n  `year` int DEFAULT NULL\n) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='parquet','JSONDATA'='','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='year'}
+hive_single    CREATE EXTERNAL TABLE `hive_single` (\n  `id` int DEFAULT NULL,\n  `amount` double DEFAULT NULL,\n  `year` int DEFAULT NULL\n) INFILE{'FILEPATH'='$resources/hive_partition/single_level/','COMPRESSION'='','FORMAT'='parquet','JSONDATA'='','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='year'}
 load data infile '$resources/hive_partition/single_level/year=2024/data.parquet' into table hive_single;
 invalid input: cannot insert/update/delete from external table
+create index idx_hive_single_id on hive_single(id);
+invalid input: cannot create index on external table
+create unique index uidx_hive_single_id on hive_single(id);
+invalid input: cannot create index on external table
+alter table hive_single add unique (amount);
+invalid input: cannot create index on external table
 drop table if exists hive_disabled;
 create external table hive_disabled (
 id int,
@@ -108,6 +114,9 @@ year    total
 2024    105.0
 select count(distinct year) as distinct_years from hive_single;
 distinct_years
+5
+select count(distinct id) as distinct_ids_2024 from hive_single where year = 2024;
+distinct_ids_2024
 5
 select count(*) from hive_single where year + 1 = 2025;
 count(*)
@@ -377,7 +386,8 @@ y    cnt
 2025    0
 select 'single' as src, count(*) as cnt from hive_single where year = 2024
 union all
-select 'multi' as src, count(*) as cnt from hive_multi where year = 2024;
+select 'multi' as src, count(*) as cnt from hive_multi where year = 2024
+order by src desc;
 src    cnt
 single    5
 multi    9
@@ -440,6 +450,8 @@ amount double,
 year int
 ) infile{'filepath'='$resources/hive_partition/invalid_type/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='year'};
 select * from hive_invalid_type;
+internal error: partition value type conversion failed: col=year, value='abc', path=year=abc/data.parquet: strconv.ParseInt: parsing "abc": invalid syntax
+select count(*) from hive_invalid_type;
 internal error: partition value type conversion failed: col=year, value='abc', path=year=abc/data.parquet: strconv.ParseInt: parsing "abc": invalid syntax
 drop table if exists hive_url_encoded;
 create external table hive_url_encoded (
