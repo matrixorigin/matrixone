@@ -4115,3 +4115,33 @@ func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestAlterTableAutoIncrement(t *testing.T) {
+	ctx := context.TODO()
+	testCases := []struct {
+		sql    string
+		expect string
+	}{
+		{
+			sql:    "ALTER TABLE t AUTO_INCREMENT = 1000",
+			expect: "alter table t auto_increment = 1000",
+		},
+		{
+			sql:    "ALTER TABLE t AUTO_INCREMENT = 1",
+			expect: "alter table t auto_increment = 1",
+		},
+		{
+			sql:    "ALTER TABLE t AUTO_INCREMENT = 0",
+			expect: "alter table t auto_increment = 0",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.sql, func(t *testing.T) {
+			ast, err := ParseOne(ctx, tc.sql, 1)
+			require.NoError(t, err, "Failed to parse: %s", tc.sql)
+			got := tree.String(ast, dialect.MYSQL)
+			require.Equal(t, tc.expect, got, "tree.String output mismatch for input: %s", tc.sql)
+		})
+	}
+}
