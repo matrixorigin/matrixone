@@ -1,0 +1,30 @@
+drop database if exists show_create_hive_ext_db;
+create database show_create_hive_ext_db;
+use show_create_hive_ext_db;
+create external table local_hive_show (
+id int,
+part_id int
+) infile{'filepath'='/data/test/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'}
+fields terminated by ',' enclosed by '"' lines terminated by '\n';
+show create table local_hive_show;
+Table    Create Table
+local_hive_show    CREATE EXTERNAL TABLE `local_hive_show` (\n  `id` int DEFAULT NULL,\n  `part_id` int DEFAULT NULL\n) INFILE{'FILEPATH'='/data/test/','COMPRESSION'='','FORMAT'='parquet','JSONDATA'='','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='part_id'} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n'
+create external table s3_hive_show (
+id int,
+part_id int
+) url s3option {
+'endpoint'='http://minio.local',
+'access_key_id'='AK',
+'secret_access_key'='SK',
+'bucket'='my-bucket',
+'filepath'='data/test/',
+'region'='us-east-1',
+'provider'='minio',
+'format'='parquet',
+'hive_partitioning'='true',
+'hive_partition_columns'='part_id'
+};
+show create table s3_hive_show;
+Table    Create Table
+s3_hive_show    CREATE EXTERNAL TABLE `s3_hive_show` (\n  `id` int DEFAULT NULL,\n  `part_id` int DEFAULT NULL\n) URL s3option{'endpoint'='http://minio.local','region'='us-east-1','access_key_id'='******','secret_access_key'='******','bucket'='my-bucket','filepath'='data/test/','provider'='minio','format'='parquet','hive_partitioning'='true','hive_partition_columns'='part_id'}
+drop database if exists show_create_hive_ext_db;
