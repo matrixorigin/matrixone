@@ -3067,16 +3067,16 @@ var (
 			output: "create database if not exists ucl360_demo_v3 default character set utf8mb4 collate utf8mb4_0900_ai_ci encryption N",
 		}, {
 			input:  "alter table t1 algorithm = DEFAULT",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = DEFAULT",
 		}, {
 			input:  "alter table t1 algorithm = INSTANT",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = INSTANT",
 		}, {
 			input:  "alter table t1 algorithm = INPLACE",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = INPLACE",
 		}, {
 			input:  "alter table t1 algorithm = COPY",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = COPY",
 		}, {
 			input:  "alter table t1 default CHARACTER SET = a COLLATE = b",
 			output: "alter table t1 charset = a",
@@ -3100,16 +3100,16 @@ var (
 			output: "alter table t1 charset = FORCE",
 		}, {
 			input:  "alter table t1 LOCK = DEFAULT",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = DEFAULT",
 		}, {
 			input:  "alter table t1 LOCK = NONE",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = NONE",
 		}, {
 			input:  "alter table t1 LOCK = SHARED",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = SHARED",
 		}, {
 			input:  "alter table t1 LOCK = EXCLUSIVE",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = EXCLUSIVE",
 		}, {
 			input:  "alter table t1 WITHOUT VALIDATION",
 			output: "alter table t1 charset = WITHOUT",
