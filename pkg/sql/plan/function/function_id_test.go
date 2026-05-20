@@ -410,8 +410,9 @@ var predefinedFunids = map[int]int{
 
 	CAST_GEOMETRY_TO_SUBTYPE: 358,
 	JSON_ARRAY:               359,
+	JSON_OBJECT:              360,
 
-	FUNCTION_END_NUMBER: 360,
+	FUNCTION_END_NUMBER: 361,
 }
 
 func Test_funids(t *testing.T) {

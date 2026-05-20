@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -805,4 +806,60 @@ func (op *opBuiltInJsonArray) convertToAny(ctx context.Context, v *vector.Vector
 		}
 		return nil, moerr.NewInvalidInputf(ctx, "unsupported type for json_array: %v", fromType.String())
 	}
+}
+
+type opBuiltInJsonObject struct{}
+
+func newOpBuiltInJsonObject() *opBuiltInJsonObject {
+	return &opBuiltInJsonObject{}
+}
+
+func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector.FunctionResultWrapper,
+	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	arrayOp := &opBuiltInJsonArray{}
+
+	for j := 0; j < length; j++ {
+		obj := make(map[string]any, len(params)/2)
+
+		for i := 0; i < len(params); i += 2 {
+			// key must not be NULL
+			if params[i].IsNull(uint64(j)) {
+				return moerr.NewInvalidInputf(proc.Ctx, "JSON documents may not contain NULL member names")
+			}
+			// key may be any type, convert to string representation.
+			keyAny, err := arrayOp.convertToAny(proc.Ctx, params[i], j)
+			if err != nil {
+				return err
+			}
+			var key string
+			if bj, ok := keyAny.(bytejson.ByteJson); ok {
+				dt, _ := bj.Marshal()
+				key = string(dt)
+			} else {
+				key = fmt.Sprint(keyAny)
+			}
+
+			elem, err := arrayOp.convertToAny(proc.Ctx, params[i+1], j)
+			if err != nil {
+				return err
+			}
+			obj[key] = elem
+		}
+
+		bj, err := bytejson.CreateByteJSON(obj)
+		if err != nil {
+			return err
+		}
+		dt, err := bj.Marshal()
+		if err != nil {
+			return err
+		}
+		if selectList.Contains(uint64(j)) {
+			rs.AppendBytes(nil, true)
+		} else {
+			rs.AppendBytes(dt, false)
+		}
+	}
+	return nil
 }
