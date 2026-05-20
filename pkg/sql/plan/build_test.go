@@ -814,6 +814,41 @@ func TestReplacePlanStructure(t *testing.T) {
 	assert.True(t, hasDedupJoin, "REPLACE plan should contain DEDUP JOIN node")
 }
 
+func findDedupBuildKeepLastFlags(query *plan.Query) []bool {
+	var flags []bool
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_DEDUP {
+			continue
+		}
+		flags = append(flags, node.GetDedupJoinCtx().GetDedupBuildKeepLast())
+	}
+	return flags
+}
+
+func TestDedupBuildKeepLastOnlyForReplace(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	replacePlan, err := runOneStmt(mock, t, "REPLACE INTO dept VALUES (1, 'Sales', 'NY')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	replaceFlags := findDedupBuildKeepLastFlags(replacePlan.GetQuery())
+	assert.NotEmpty(t, replaceFlags, "REPLACE plan should contain DEDUP JOIN nodes")
+	for _, flag := range replaceFlags {
+		assert.True(t, flag, "REPLACE DEDUP JOIN should keep the last duplicate build row")
+	}
+
+	updatePlan, err := runOneStmt(mock, t, "update dept set deptno = '50' where loc = 'NEW YORK'")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	updateFlags := findDedupBuildKeepLastFlags(updatePlan.GetQuery())
+	assert.NotEmpty(t, updateFlags, "UPDATE plan should contain DEDUP JOIN nodes")
+	for _, flag := range updateFlags {
+		assert.False(t, flag, "UPDATE DEDUP JOIN must preserve duplicate-key failure")
+	}
+}
+
 func TestReplaceSelfRefPlanStructure(t *testing.T) {
 	mock := NewMockOptimizer(true)
 

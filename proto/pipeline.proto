@@ -291,6 +291,7 @@ message DedupJoin {
   // it in finalize() into right (build) column old_col_capture_placeholder_idx_list[i].
   repeated int32 old_col_capture_placeholder_idx_list = 17;
   repeated int32 old_col_capture_probe_idx_list = 18;
+  bool dedup_build_keep_last = 19;
 }
 
 message RightDedupJoin {

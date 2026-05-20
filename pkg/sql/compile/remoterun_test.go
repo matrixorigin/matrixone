@@ -371,6 +371,20 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.True(t, restoredOp.IsRemote)
 	})
 
+	t.Run("DedupJoin_DedupBuildKeepLast", func(t *testing.T) {
+		op := &dedupjoin.DedupJoin{
+			Conditions:         [][]*plan.Expr{nil, nil},
+			DedupBuildKeepLast: true,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.DedupJoin.DedupBuildKeepLast)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		require.True(t, restored.(*dedupjoin.DedupJoin).DedupBuildKeepLast)
+	})
+
 	t.Run("Deletion_Engine", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()

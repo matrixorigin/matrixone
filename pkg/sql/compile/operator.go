@@ -567,6 +567,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
 		op.OnDuplicateAction = t.OnDuplicateAction
+		op.DedupBuildKeepLast = t.DedupBuildKeepLast
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
 		op.UpdateColIdxList = t.UpdateColIdxList
@@ -1007,6 +1008,7 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 	arg.DedupColTypes = node.DedupColTypes
 	arg.DelColIdx = -1
 	if node.DedupJoinCtx != nil {
+		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
 		if node.OnDuplicateAction == plan.Node_FAIL && len(node.DedupJoinCtx.OldColList) > 0 {
@@ -1649,7 +1651,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
 		ret.IsDedup = true
-		ret.DedupBuildKeepLast = shouldDedupBuildKeepLastForReplace(arg)
+		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
@@ -1724,7 +1726,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
 		ret.IsDedup = true
-		ret.DedupBuildKeepLast = shouldDedupBuildKeepLastForReplace(arg)
+		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
@@ -1756,11 +1758,6 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		panic(moerr.NewInternalErrorf(proc.Ctx, "unsupported type for shuffle join: '%v'", op.OpType()))
 	}
 	return ret
-}
-
-func shouldDedupBuildKeepLastForReplace(arg *dedupjoin.DedupJoin) bool {
-	return arg.OnDuplicateAction == plan.Node_FAIL &&
-		(arg.DelColIdx >= 0 || len(arg.OldColCapturePlaceholderIdxList) > 0)
 }
 
 func constructJoinResult(expr *plan.Expr, proc *process.Process) (int32, int32) {

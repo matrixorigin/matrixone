@@ -109,6 +109,20 @@ replace into t_replace_dup_uk values (1, 1, 10), (2, 1, 20), (3, 2, 30);
 select * from t_replace_dup_uk order by u;
 drop table t_replace_dup_uk;
 
+drop table if exists t_replace_dup_pk_existing;
+create table t_replace_dup_pk_existing(id int primary key, v int);
+insert into t_replace_dup_pk_existing values (1, 5);
+replace into t_replace_dup_pk_existing values (1, 10), (1, 20), (2, 30);
+select * from t_replace_dup_pk_existing order by id;
+drop table t_replace_dup_pk_existing;
+
+drop table if exists t_replace_dup_uk_existing;
+create table t_replace_dup_uk_existing(id int primary key, u int unique, v int);
+insert into t_replace_dup_uk_existing values (9, 1, 5);
+replace into t_replace_dup_uk_existing values (1, 1, 10), (2, 1, 20), (3, 2, 30);
+select * from t_replace_dup_uk_existing order by u;
+drop table t_replace_dup_uk_existing;
+
 -- test INSERT ON DUPLICATE KEY UPDATE rewrite to REPLACE
 drop table if exists t_odku;
 create table t_odku(id int primary key, name varchar(64), val int);

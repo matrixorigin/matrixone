@@ -190,10 +190,11 @@ func DeepCopyDedupJoinCtx(ctx *plan.DedupJoinCtx) *plan.DedupJoinCtx {
 		return nil
 	}
 	newCtx := &plan.DedupJoinCtx{
-		OldColList:        slices.Clone(ctx.OldColList),
-		UpdateColIdxList:  slices.Clone(ctx.UpdateColIdxList),
-		UpdateColExprList: DeepCopyExprList(ctx.UpdateColExprList),
-		OldColCaptureList: slices.Clone(ctx.OldColCaptureList),
+		OldColList:         slices.Clone(ctx.OldColList),
+		UpdateColIdxList:   slices.Clone(ctx.UpdateColIdxList),
+		UpdateColExprList:  DeepCopyExprList(ctx.UpdateColExprList),
+		OldColCaptureList:  slices.Clone(ctx.OldColCaptureList),
+		DedupBuildKeepLast: ctx.DedupBuildKeepLast,
 	}
 
 	return newCtx

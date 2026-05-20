@@ -438,7 +438,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		oldPkPos := oldColName2Idx[tableDef.Name+"."+pkName]
 
-		dedupJoinCtx := &plan.DedupJoinCtx{}
+		dedupJoinCtx := &plan.DedupJoinCtx{
+			DedupBuildKeepLast: true,
+		}
 		if useMergedMainScan {
 			// Merged-scan mode: only capture the old columns that downstream
 			// actually needs (RowID, PK, and index-key columns), not every
@@ -573,6 +575,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			DedupColName:      dedupColName,
 			DedupColTypes:     dedupColTypes,
 			DedupJoinCtx: &plan.DedupJoinCtx{
+				DedupBuildKeepLast: true,
 				OldColList: []plan.ColRef{
 					{
 						RelPos: oldPkPos[0],

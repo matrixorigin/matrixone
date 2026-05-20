@@ -614,6 +614,9 @@ message DedupJoinCtx {
   // and emits them in finalize() into the build-side placeholder slots,
   // eliminating the need for a preceding LEFT JOIN to fetch old row data.
   repeated OldColCapture old_col_capture_list = 4 [(gogoproto.nullable) = false];
+  // dedup_build_keep_last is set only by REPLACE INTO. It allows duplicate
+  // keys on the DEDUP JOIN build side and keeps the last source row.
+  bool dedup_build_keep_last = 5;
 }
 
 message UpdateCtx {
