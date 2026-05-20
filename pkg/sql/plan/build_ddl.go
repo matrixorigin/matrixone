@@ -1042,6 +1042,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
 	dedupFkName := make(UnorderedSet[string])
 
+	if stmt.Param != nil {
+		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
+			return err
+		}
+	}
+
 	// Pre-scan all column definitions so that generated columns can reference
 	// base columns defined later in the CREATE TABLE statement (forward reference).
 	var allColDefs []*ColDef
@@ -3500,6 +3506,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
 	}
+	if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	}
 	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create index in subscription database")
 	}
@@ -3599,6 +3608,30 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			},
 		},
 	}, nil
+}
+
+func checkCreateIndexTableType(ctx context.Context, tableDef *TableDef) error {
+	if tableDef.TableType == catalog.SystemExternalRel {
+		return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+	}
+	return nil
+}
+
+func rejectExternalTableInlineIndexes(ctx context.Context, stmt *tree.CreateTable) error {
+	for _, item := range stmt.Defs {
+		switch def := item.(type) {
+		case *tree.ColumnTableDef:
+			for _, attr := range def.Attributes {
+				switch attr.(type) {
+				case *tree.AttributePrimaryKey, *tree.AttributeKey, *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+				}
+			}
+		case *tree.PrimaryKeyIndex, *tree.Index, *tree.UniqueIndex, *tree.FullTextIndex:
+			return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+		}
+	}
+	return nil
 }
 
 func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
@@ -3725,16 +3758,34 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 
 func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error) {
 
+	type renamedInfo struct {
+		objRef   *ObjectRef
+		tableDef *TableDef
+	}
 	alterTables := stmt.AlterTables
 	renameTables := make([]*plan.AlterTable, 0)
+	removed := make(map[string]bool)
+	nameMapping := make(map[string]*renamedInfo)
 	for _, alterTable := range alterTables {
 		schemaName, tableName := string(alterTable.Table.Schema()), string(alterTable.Table.Name())
 		if schemaName == "" {
 			schemaName = ctx.DefaultDatabase()
 		}
-		objRef, tableDef, err := ctx.Resolve(schemaName, tableName, nil)
-		if err != nil {
-			return nil, err
+		srcKey := schemaName + "." + tableName
+		var objRef *ObjectRef
+		var tableDef *TableDef
+		var err error
+		if info, ok := nameMapping[srcKey]; ok {
+			objRef = info.objRef
+			tableDef = DeepCopyTableDef(info.tableDef, true)
+			tableDef.Name = tableName
+		} else if removed[srcKey] {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
+		} else {
+			objRef, tableDef, err = ctx.Resolve(schemaName, tableName, nil)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
@@ -3771,15 +3822,21 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		for i, option := range alterTable.Options {
 			switch opt := option.(type) {
 			case *tree.AlterOptionTableName:
-				oldName := tableDef.Name
+				oldName := tableName
 				newName := string(opt.Name.ToTableName().ObjectName)
+				dstKey := schemaName + "." + newName
 				if oldName != newName {
-					_, tableDef, err := ctx.Resolve(schemaName, newName, nil)
-					if err != nil {
-						return nil, err
-					}
-					if tableDef != nil {
+					if _, ok := nameMapping[dstKey]; ok {
 						return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
+					}
+					if !removed[dstKey] {
+						_, existDef, err := ctx.Resolve(schemaName, newName, nil)
+						if err != nil {
+							return nil, err
+						}
+						if existDef != nil {
+							return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
+						}
 					}
 				}
 				alterTablePlan.Actions[i] = &plan.AlterTable_Action{
@@ -3791,9 +3848,12 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 					},
 				}
 				updateSqls = append(updateSqls, getSqlForRenameTable(schemaName, oldName, newName)...)
+				delete(nameMapping, srcKey)
+				removed[srcKey] = true
+				nameMapping[dstKey] = &renamedInfo{objRef: objRef, tableDef: tableDef}
+				delete(removed, dstKey)
 
 			default:
-				// return err
 				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 			}
 			alterTablePlan.UpdateFkSqls = updateSqls
@@ -4010,6 +4070,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 				updateSqls = append(updateSqls, fkData.UpdateSql)
 			case *tree.UniqueIndex:
+				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+					return nil, err
+				}
 				if err := checkIndexKeypartSupportability(
 					ctx.GetContext(),
 					def.KeyParts,
@@ -4062,6 +4125,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				}
 			case *tree.FullTextIndex:
+				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+					return nil, err
+				}
 				if err := checkIndexKeypartSupportability(
 					ctx.GetContext(),
 					def.KeyParts,
@@ -4116,6 +4182,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				}
 			case *tree.Index:
+				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+					return nil, err
+				}
 				if err := checkIndexKeypartSupportability(
 					ctx.GetContext(),
 					def.KeyParts,
