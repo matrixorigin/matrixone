@@ -121,7 +121,7 @@ func TestCacheEvict3(t *testing.T) {
 
 func TestDoubleFree(t *testing.T) {
 	evicts := make(map[int]int)
-	cache := New(
+	cache := New[int, int](
 		fscache.ConstCapacity(1),
 		ShardInt,
 		nil, nil,
@@ -185,6 +185,25 @@ func TestEvictWithWaitReturnsWhenContextCanceled(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("EvictWithWait did not return after context cancellation")
 	}
+}
+
+func TestReplaceUpdatesUsedBytes(t *testing.T) {
+	cache := New[int, int](
+		fscache.ConstCapacity(20),
+		ShardInt[int],
+		nil, nil, nil,
+	)
+	ctx := t.Context()
+	cache.Set(ctx, 1, 1, 4)
+	assert.Equal(t, int64(4), cache.used())
+
+	assert.True(t, cache.Replace(ctx, 1, 10, 8))
+	assert.Equal(t, int64(8), cache.used())
+
+	cache.Set(ctx, 2, 2, 12)
+	assert.Equal(t, int64(20), cache.used())
+	assert.True(t, cache.Contains(1))
+	assert.True(t, cache.Contains(2))
 }
 
 // TestPostEvictRunsOutsideQueueLock verifies that postEvict callbacks execute
