@@ -1013,6 +1013,11 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				did, tid,
 				act.AlterComment.NewComment,
 			))
+		case *plan.AlterTable_Action_AlterAutoIncrement:
+			reqs = append(reqs, api.NewUpdateAutoIncrementReq(
+				did, tid,
+				act.AlterAutoIncrement.NewOffset,
+			))
 		case *plan.AlterTable_Action_AlterName:
 			reqs = append(reqs, api.NewRenameTableReq(
 				did, tid,
