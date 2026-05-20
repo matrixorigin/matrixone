@@ -201,6 +201,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			for _, order := range option.AlterOrderByList {
 				affectedCols = append(affectedCols, order.Column.ColName())
 			}
+		case *tree.AlterOptionAlgorithm:
+			// algorithm hint parsed for compatibility; the actual algorithm
+			// is resolved by ResolveAlterTableAlgorithm via the full options list
+		case *tree.AlterOptionLock:
+			// lock hint parsed for compatibility; MO ignores lock level
 		default:
 			return nil, moerr.NewInvalidInputf(ctx,
 				unsupportedErrorFmt, formatTreeNode(option))
@@ -562,6 +567,19 @@ func ResolveAlterTableAlgorithm(
 			algorithm = plan.AlterTable_COPY
 		case *tree.TableOptionAutoIncrement:
 			algorithm = plan.AlterTable_INPLACE
+		case *tree.AlterOptionAlgorithm:
+			switch option.Type {
+			case "INSTANT":
+				algorithm = plan.AlterTable_INSTANT
+			case "INPLACE":
+				algorithm = plan.AlterTable_INPLACE
+			case "COPY":
+				algorithm = plan.AlterTable_COPY
+			default:
+				algorithm = plan.AlterTable_DEFAULT
+			}
+		case *tree.AlterOptionLock:
+			// lock type doesn't affect algorithm selection
 		default:
 			algorithm = plan.AlterTable_INPLACE
 		}
