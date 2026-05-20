@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -102,6 +103,10 @@ func (l *localLockTable) doLock(
 	var oldOffset int
 	var err error
 	table := l.bind.Table
+	// Session-level SET lock_wait_timeout takes highest priority (passed via
+	// pb.LockOptions)
+	leftTimeout := time.Duration(c.opts.LockWaitTimeout) * time.Second
+	beginTime := time.Now()
 	for {
 		// blocked used for async callback, waiter is created, and added to wait list.
 		// So only need wait notify.
@@ -165,10 +170,8 @@ func (l *localLockTable) doLock(
 
 		waitCtx := c.ctx
 		var cancel context.CancelFunc
-		// Session-level SET lock_wait_timeout takes highest priority (passed via
-		// pb.LockOptions)
-		if d := time.Duration(c.opts.LockWaitTimeout) * time.Second; d > 0 {
-			waitCtx, cancel = context.WithTimeout(c.ctx, d)
+		if leftTimeout > 0 {
+			waitCtx, cancel = context.WithTimeoutCause(c.ctx, leftTimeout, ErrLockTimeout)
 		}
 		v := c.w.wait(waitCtx, l.logger)
 		if cancel != nil {
@@ -177,6 +180,19 @@ func (l *localLockTable) doLock(
 
 		if l.options.afterWait != nil {
 			l.options.afterWait(c)()
+		}
+
+		//update leftTime
+		if leftTimeout > 0 {
+			ticks := time.Since(beginTime)
+			beginTime = time.Now()
+			if ticks < leftTimeout {
+				leftTimeout -= ticks
+			} else {
+				leftTimeout = 0
+				//only append timeout error if leftTimeout is set
+				v.err = errors.Join(v.err, ErrLockTimeout)
+			}
 		}
 
 		c.txn.Lock()
