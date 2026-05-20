@@ -3575,6 +3575,20 @@ func TestSQLStringFmt(t *testing.T) {
 	}
 }
 
+func TestTaskKeywordIsNonReservedForIdentifiers(t *testing.T) {
+	for _, sql := range []string{
+		"create table task (task int, id int)",
+		"create table tasks (tasks int, id int)",
+	} {
+		stmt, err := ParseOne(context.TODO(), sql, 1)
+		require.NoError(t, err, sql)
+
+		createStmt, ok := stmt.(*tree.CreateTable)
+		require.True(t, ok, sql)
+		require.Len(t, createStmt.Defs, 2, sql)
+	}
+}
+
 var (
 	multiSQL = []struct {
 		input  string
