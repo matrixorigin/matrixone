@@ -79,7 +79,6 @@ func TestIvfpqSyncDescriptor(t *testing.T) {
 	require.True(t, d.AlwaysAsync)
 	require.Equal(t, catalogplugin.SinkerType_IndexSync, d.SinkerType)
 	require.Equal(t, "ivfpq_reindex", d.IdxcronAction)
-	require.Equal(t, "ivfpq_threads_search", d.IdxcronFrontendProbeVar)
 	require.Equal(t, "IVFPQ", d.IdxcronAlgoToken)
 	require.False(t, d.IdxcronListsAware)
 }

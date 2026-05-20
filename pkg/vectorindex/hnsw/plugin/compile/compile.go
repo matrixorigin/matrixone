@@ -55,10 +55,17 @@ type Hooks struct{}
 // HandleCreateIndex is lifted from Scope.handleVectorHnswIndex
 // (pkg/sql/compile/ddl_index_algo.go:627).
 func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
-	if ok, err := ctx.IsExperimentalEnabled(hnswruntime.HnswIndexFlag); err != nil {
-		return err
-	} else if !ok {
-		return moerr.NewInternalErrorNoCtx("experimental_hnsw_index is not enabled")
+	// Frontend-only: re-entry from background (idxcron ALTER REINDEX,
+	// ProcessInitSQL) must not re-check the flag, since (a) it may
+	// have been toggled off since the original CREATE INDEX, and (b)
+	// the background context's resolver may not surface the user's
+	// value.
+	if ctx.IsFrontend() {
+		if ok, err := ctx.IsExperimentalEnabled(hnswruntime.HnswIndexFlag); err != nil {
+			return err
+		} else if !ok {
+			return moerr.NewInternalErrorNoCtx("experimental_hnsw_index is not enabled")
+		}
 	}
 
 	if len(indexDefs) != 2 {

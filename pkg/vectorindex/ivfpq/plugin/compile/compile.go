@@ -104,11 +104,17 @@ func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[str
 // the current txn (true — background reindex) or is deferred to the
 // CDC pipeline via InitSQL (false — the always-async default path).
 func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
-	// 0. experimental flag gate (mirrors HNSW's check at ddl_index_algo.go:627)
-	if ok, err := ctx.IsExperimentalEnabled(ivfpqruntime.IvfpqIndexFlag); err != nil {
-		return err
-	} else if !ok {
-		return moerr.NewInternalErrorNoCtx("experimental_ivfpq_index is not enabled")
+	// 0. experimental flag gate (mirrors HNSW's check at ddl_index_algo.go:627).
+	// Frontend-only: re-entry from background (idxcron ALTER REINDEX,
+	// ProcessInitSQL) must not re-check the flag, since (a) it may have
+	// been toggled off since the original CREATE INDEX, and (b) the
+	// background context's resolver may not surface the user's value.
+	if ctx.IsFrontend() {
+		if ok, err := ctx.IsExperimentalEnabled(ivfpqruntime.IvfpqIndexFlag); err != nil {
+			return err
+		} else if !ok {
+			return moerr.NewInternalErrorNoCtx("experimental_ivfpq_index is not enabled")
+		}
 	}
 
 	// 1. static check
@@ -216,7 +222,6 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.
 // metadata blob — see CAGRA's compile.go for the rationale.
 func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 	return compileplugin.BuildIdxcronMetadata(ctx, compileplugin.IdxcronVarSpec{
-		FrontendProbeVar: "ivfpq_threads_search",
 		Capture: []string{
 			"ivfpq_threads_build",
 			"ivfpq_max_index_capacity",

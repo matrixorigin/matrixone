@@ -24,27 +24,19 @@ import (
 // BuildIdxcronMetadata.
 //
 // Why declarative: every algorithm's IdxcronMetadata otherwise reduces
-// to the same "optionally probe a frontend var, resolve N session
-// variables, write them via sqlexec.MetadataWriter, marshal" sequence.
-// Centralising that loop in BuildIdxcronMetadata lets each algo's
-// hook shrink to a 3-line spec declaration.
+// to the same "if background, defer; else resolve N session variables,
+// write them via sqlexec.MetadataWriter, marshal" sequence. Centralising
+// that loop in BuildIdxcronMetadata lets each algo's hook shrink to a
+// 2-line spec declaration.
 type IdxcronVarSpec struct {
-	// FrontendProbeVar is checked first. If its ResolveVariable
-	// fails, BuildIdxcronMetadata returns (nil, nil) — signalling
-	// the caller that this invocation came from background re-entry
-	// (the cron executor's running ALTER REINDEX path, which can't
-	// see frontend-only variables) and should not re-register the
-	// task. Empty string disables the probe.
-	FrontendProbeVar string
-
 	// Capture is the list of session/system variable names to resolve
 	// and write into the metadata blob, in declaration order.
 	Capture []string
 }
 
 // BuildIdxcronMetadata is the shared implementation each algorithm's
-// compile.Hooks.IdxcronMetadata delegates to. It applies the frontend
-// probe (if any), resolves each captured variable through the
+// compile.Hooks.IdxcronMetadata delegates to. It checks the explicit
+// IsFrontend signal, resolves each captured variable through the
 // CompileContext, and serialises the result via
 // sqlexec.MetadataWriter — producing the typed JSON shape that the
 // idxcron executor's task.Metadata.ResolveVariableFunc reads back at
@@ -52,17 +44,18 @@ type IdxcronVarSpec struct {
 // user picked at CREATE INDEX, not current system-var state).
 //
 // Returns (nil, nil) when:
-//   - FrontendProbeVar is set and resolution fails (background re-entry), or
+//   - ctx.IsFrontend() is false (caller is the cron executor's running
+//     ALTER REINDEX path or another internal-SQL flow — the captured
+//     metadata from the original frontend CREATE INDEX is authoritative,
+//     don't overwrite with defaults), or
 //   - Capture is empty (algorithm wants no pinned config).
 //
 // The implementation type-switches on ResolveVariable's runtime value
 // to call the right MetadataWriter.AddInt / AddFloat / AddString /
 // AddInt8 method.
 func BuildIdxcronMetadata(ctx CompileContext, spec IdxcronVarSpec) ([]byte, error) {
-	if spec.FrontendProbeVar != "" {
-		if _, err := ctx.ResolveVariable(spec.FrontendProbeVar, true, false); err != nil {
-			return nil, nil
-		}
+	if !ctx.IsFrontend() {
+		return nil, nil
 	}
 	if len(spec.Capture) == 0 {
 		return nil, nil

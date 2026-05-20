@@ -130,11 +130,6 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 		SinkerType:    catalogplugin.SinkerType_IndexSync,
 		AlwaysAsync:   false,
 		IdxcronAction: actionIvfflatReindex,
-		// ivf_threads_search is present in the frontend system-variable
-		// table but is NOT added to IdxcronMetadata, so it serves as
-		// the frontend-vs-background probe at the AlterTableInplace
-		// idxcron re-registration site.
-		IdxcronFrontendProbeVar: "ivf_threads_search",
 		// IdxcronAlgoToken is the keyword the cron executor splices into
 		// the ALTER ... REINDEX SQL. IdxcronListsAware=true keeps the
 		// IVF-FLAT nlist / kmeans-train-percent heuristic in

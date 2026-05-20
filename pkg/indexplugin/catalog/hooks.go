@@ -139,21 +139,6 @@ type SyncDescriptor struct {
 	AlwaysAsync   bool
 	IdxcronAction string
 
-	// IdxcronFrontendProbeVar is a system-variable name used by the
-	// SQL layer to distinguish a frontend (user-session) invocation
-	// from a background idxcron re-entry when re-registering the
-	// scheduled task. The variable must exist in the frontend's
-	// system-variable table AND be absent from this plugin's
-	// IdxcronMetadata blob, so that:
-	//
-	//   - frontend session:   ResolveVariable(probe) succeeds
-	//   - idxcron background: ResolveVariable(probe) fails (key not
-	//                         in Metadata JSON)
-	//
-	// Empty string disables the gate (the caller always proceeds).
-	// Only meaningful when IdxcronAction != "".
-	IdxcronFrontendProbeVar string
-
 	// IdxcronAlgoToken is the algorithm keyword the idxcron executor
 	// uses when constructing the cron-triggered ALTER REINDEX SQL —
 	// e.g. "IVFFLAT", "CAGRA", "IVFPQ". Empty when IdxcronAction == ""

@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -34,6 +33,7 @@ type stubCompileContext struct {
 	originalTableDef *plan.TableDef
 	qryDatabase      string
 	vars             map[string]any
+	isFrontend       bool
 }
 
 func (s *stubCompileContext) Ctx() compileplugin.Context       { return nil }
@@ -54,6 +54,7 @@ func (s *stubCompileContext) ResolveVariable(name string, _, _ bool) (any, error
 	return int64(0), nil
 }
 func (s *stubCompileContext) IsExperimentalEnabled(_ string) (bool, error) { return true, nil }
+func (s *stubCompileContext) IsFrontend() bool                             { return s.isFrontend }
 func (s *stubCompileContext) IsCCPRTaskTransaction() bool                  { return false }
 func (s *stubCompileContext) IsTableFromPublication(_ *plan.TableDef) bool { return false }
 func (s *stubCompileContext) SinkerTypeFromAlgo(_ string) int8             { return 0 }
@@ -186,9 +187,9 @@ func TestIvfpqHandleDropIndex(t *testing.T) {
 }
 
 func TestIvfpqIdxcronMetadata_Frontend(t *testing.T) {
-	// Frontend probe succeeds (ivfpq_threads_search resolves) → metadata
-	// is captured.
+	// Frontend context → metadata is captured.
 	ctx := &stubCompileContext{
+		isFrontend: true,
 		vars: map[string]any{
 			"ivfpq_threads_search":     int64(4),
 			"ivfpq_threads_build":      int64(8),
@@ -205,21 +206,12 @@ func TestIvfpqIdxcronMetadata_Frontend(t *testing.T) {
 }
 
 func TestIvfpqIdxcronMetadata_Background(t *testing.T) {
-	// Frontend probe fails (ivfpq_threads_search is unknown to the
-	// stub's resolver) → metadata is nil, signalling background re-entry.
-	ctx := &stubCompileContextProbeFail{}
+	// ctx.IsFrontend() reports false → BuildIdxcronMetadata bails out
+	// without resolving any variables.
+	ctx := &stubCompileContext{}
 	got, err := Hooks{}.IdxcronMetadata(ctx)
 	require.NoError(t, err)
 	require.Nil(t, got, "background invocation should yield nil metadata")
-}
-
-// stubCompileContextProbeFail mirrors stubCompileContext but its
-// ResolveVariable returns an error for any var (simulating the
-// idxcron background context where frontend vars aren't available).
-type stubCompileContextProbeFail struct{ stubCompileContext }
-
-func (s *stubCompileContextProbeFail) ResolveVariable(name string, _, _ bool) (any, error) {
-	return nil, moerr.NewInternalErrorNoCtxf("var %q not available in background context", name)
 }
 
 func TestIvfpqIndexFlagConst(t *testing.T) {
@@ -242,6 +234,9 @@ func (e *experimentalFlagCtx) IsExperimentalEnabled(_ string) (bool, error) {
 func newHandleCtx(enabled bool) *experimentalFlagCtx {
 	return &experimentalFlagCtx{
 		stubCompileContext: &stubCompileContext{
+			// Frontend context — the experimental-flag gate is
+			// skipped when !IsFrontend (background re-entry).
+			isFrontend:  true,
 			qryDatabase: "db1",
 			originalTableDef: &plan.TableDef{
 				Name: "t",

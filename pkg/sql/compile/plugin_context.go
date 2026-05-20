@@ -90,7 +90,16 @@ func (p *pluginCompileCtx) BuildIndexTable(def *plan.TableDef) error {
 }
 
 func (p *pluginCompileCtx) ResolveVariable(name string, isSystemVar, isGlobalVar bool) (any, error) {
-	return p.c.proc.GetResolveVariableFunc()(name, isSystemVar, isGlobalVar)
+	// Routed through resolveVariableOrDefault for nil-safety: when no
+	// resolver is attached fall back to gSysVarsDefs defaults rather
+	// than panicking. Background detection no longer rides on whether
+	// this errors — callers that need to distinguish frontend from
+	// background should call IsFrontend() instead.
+	return resolveVariableOrDefault(p.c.proc, name, isSystemVar, isGlobalVar)
+}
+
+func (p *pluginCompileCtx) IsFrontend() bool {
+	return p.c.proc.Base.IsFrontend
 }
 
 func (p *pluginCompileCtx) IsExperimentalEnabled(flag string) (bool, error) {

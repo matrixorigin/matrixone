@@ -70,7 +70,7 @@ func encodeChunk(t *testing.T, dim, includeBytesPerRow int, ops []cuvscdc.CdcOp,
 		require.NoError(t, err)
 		buf = out
 	}
-	return cuvscdc.FrameCdcChunk(buf)
+	return cuvscdc.FrameCdcChunk(buf, nil)
 }
 
 // TestLoadCdcEventsFromDB_RoundTrip: encode a batch of records, hand them

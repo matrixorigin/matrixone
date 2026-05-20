@@ -64,6 +64,19 @@ type CompileContext interface {
 	// ResolveVariable forwards to process.GetResolveVariableFunc().
 	ResolveVariable(name string, isSystemVar, isGlobalVar bool) (any, error)
 
+	// IsFrontend reports whether the Compile is running attached to a
+	// frontend client session (mysql client query or in-frontend
+	// backSession). Returns false for every other caller (internal
+	// SQL executor invocations from idxcron ALTER REINDEX,
+	// ProcessInitSQL, bootstrap, cron jobs, …). Plugins that need to
+	// distinguish "have a session" from "don't" — for example,
+	// IdxcronMetadata's "defer capture until frontend re-entry"
+	// pattern — should branch on this rather than on whether
+	// ResolveVariable errors, since background paths set resolvers
+	// too (idxcron's task.Metadata, ProcessInitSQL's
+	// iscp.DefaultResolveVariable).
+	IsFrontend() bool
+
 	// IsExperimentalEnabled checks whether an experimental-feature flag is
 	// set in the current session/system variables. Used by HNSW today
 	// (flag "experimental_hnsw_index"). Plugins gating on a flag should

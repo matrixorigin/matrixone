@@ -95,13 +95,12 @@ func (CatalogHooks) SupportedOpTypes() map[string]string {
 // heuristic and just enforces "lastUpdateAt + interval < now".
 func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	return catalogplugin.SyncDescriptor{
-		UsesCDC:                 true,
-		SinkerType:              catalogplugin.SinkerType_IndexSync,
-		AlwaysAsync:             true,
-		IdxcronAction:           actionCagraReindex,
-		IdxcronFrontendProbeVar: "cagra_threads_search",
-		IdxcronAlgoToken:        "CAGRA",
-		IdxcronListsAware:       false,
+		UsesCDC:           true,
+		SinkerType:        catalogplugin.SinkerType_IndexSync,
+		AlwaysAsync:       true,
+		IdxcronAction:     actionCagraReindex,
+		IdxcronAlgoToken:  "CAGRA",
+		IdxcronListsAware: false,
 	}
 }
 

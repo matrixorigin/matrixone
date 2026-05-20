@@ -68,10 +68,18 @@ func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[str
 // the current txn (true — background reindex) or is deferred to the
 // CDC pipeline via InitSQL (false — the always-async default path).
 func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
-	if ok, err := ctx.IsExperimentalEnabled(cagraruntime.CagraIndexFlag); err != nil {
-		return err
-	} else if !ok {
-		return moerr.NewInternalErrorNoCtx("experimental_cagra_index is not enabled")
+	// Gate the experimental flag check on frontend context only. The
+	// flag was enforced at the original CREATE INDEX time; re-entry
+	// from background (idxcron ALTER REINDEX, ProcessInitSQL) must
+	// not re-check it, since (a) the flag may have been toggled off
+	// since the index was created, and (b) the background context's
+	// resolver may not be able to surface the user's original value.
+	if ctx.IsFrontend() {
+		if ok, err := ctx.IsExperimentalEnabled(cagraruntime.CagraIndexFlag); err != nil {
+			return err
+		} else if !ok {
+			return moerr.NewInternalErrorNoCtx("experimental_cagra_index is not enabled")
+		}
 	}
 
 	if len(indexDefs) != 2 {
@@ -164,14 +172,10 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.
 // IdxcronMetadata pins CAGRA's build-time params into the cron task's
 // metadata blob so the periodic rebuild uses the values the user
 // picked at CREATE INDEX (not whatever the system vars happen to be
-// when the cron fires hours/days later).
-//
-// FrontendProbeVar gates background re-entry — if cagra_threads_search
-// can't be resolved we're being called from the cron executor's own
-// ALTER REINDEX context and the existing task metadata is authoritative.
+// when the cron fires hours/days later). Background re-entry is gated
+// by BuildIdxcronMetadata's ctx.IsFrontend() check.
 func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 	return compileplugin.BuildIdxcronMetadata(ctx, compileplugin.IdxcronVarSpec{
-		FrontendProbeVar: "cagra_threads_search",
 		Capture: []string{
 			"cagra_threads_build",
 			"cagra_max_index_capacity",

@@ -134,7 +134,7 @@ func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
 		return true, nil
 	}
 
-	val, err := c.proc.GetResolveVariableFunc()(flag, true, false)
+	val, err := resolveVariableOrDefault(c.proc, flag, true, false)
 	if err != nil {
 		return false, err
 	}

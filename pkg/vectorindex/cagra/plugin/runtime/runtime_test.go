@@ -76,7 +76,6 @@ func TestCagraSyncDescriptor(t *testing.T) {
 	require.True(t, d.AlwaysAsync)
 	require.Equal(t, catalogplugin.SinkerType_IndexSync, d.SinkerType)
 	require.Equal(t, "cagra_reindex", d.IdxcronAction)
-	require.Equal(t, "cagra_threads_search", d.IdxcronFrontendProbeVar)
 	require.Equal(t, "CAGRA", d.IdxcronAlgoToken)
 	require.False(t, d.IdxcronListsAware, "cuvs has no nlist heuristic")
 }

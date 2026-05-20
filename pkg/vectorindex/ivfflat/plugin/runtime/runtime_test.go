@@ -85,7 +85,6 @@ func TestIvfflatSyncDescriptor(t *testing.T) {
 	require.True(t, d.UsesCDC)
 	require.False(t, d.AlwaysAsync)
 	require.Equal(t, actionIvfflatReindex, d.IdxcronAction)
-	require.Equal(t, "ivf_threads_search", d.IdxcronFrontendProbeVar)
 }
 
 func TestIvfflatParamsFromTree_DefaultsListsOmitted(t *testing.T) {

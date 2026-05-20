@@ -158,6 +158,7 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
+			WithFrontend(proc.Base.IsFrontend).
 			WithStatementOption(executor.StatementOption{}.WithDisableLog())
 		return exec.Exec(topContext, sql, opts)
 	} else {
@@ -171,6 +172,8 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 		accountId := sqlctx.AccountId
 
 		exec := v.(executor.SQLExecutor)
+		// SqlCtx is the background entry point (no frontend session) —
+		// inherits the default IsBackground=true.
 		opts := executor.Options{}.
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
@@ -224,6 +227,7 @@ func RunStreamingSql(
 			WithAccountID(accountId).
 			WithStreaming(stream_chan, error_chan).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
+			WithFrontend(proc.Base.IsFrontend).
 			WithStatementOption(executor.StatementOption{}.WithDisableLog())
 		return exec.Exec(ctx, sql, opts)
 	} else {
@@ -238,6 +242,8 @@ func RunStreamingSql(
 		accountId := sqlctx.AccountId
 
 		exec := v.(executor.SQLExecutor)
+		// SqlCtx is the background entry point (no frontend session) —
+		// inherits the default IsBackground=true.
 		opts := executor.Options{}.
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
@@ -280,7 +286,8 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 			WithDatabase(proc.GetSessionInfo().Database).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
-			WithResolveVariableFunc(proc.GetResolveVariableFunc())
+			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
+			WithFrontend(proc.Base.IsFrontend)
 		return exec.ExecTxn(topContext, execFunc, opts)
 	} else {
 
@@ -293,6 +300,8 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 		accountId := sqlctx.AccountId
 
 		exec := v.(executor.SQLExecutor)
+		// SqlCtx is the background entry point (no frontend session) —
+		// inherits the default IsBackground=true.
 		opts := executor.Options{}.
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode

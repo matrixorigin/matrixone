@@ -900,24 +900,18 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					// 3. Re-register the idxcron update with the
 					// refreshed metadata. The plugin's IdxcronMetadata
 					// hook owns metadata composition; SyncDescriptor
-					// supplies the action key (already gated above) and
-					// the optional frontend probe variable.
+					// supplies the action key (already gated above).
+					// Skip re-registration entirely when invoked from a
+					// background idxcron job — the existing task's
+					// captured metadata is authoritative.
 					desc := p.Catalog().SyncDescriptor()
 					cctx := newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
+					if !cctx.IsFrontend() {
+						continue
+					}
 					metadata, err := p.Compile().IdxcronMetadata(cctx)
 					if err != nil {
 						return err
-					}
-					// Plugin-declared frontend gate: skip re-registration
-					// when invoked from a background idxcron job. The
-					// Metadata-based resolver only knows keys this plugin
-					// put into IdxcronMetadata; a probe var that lives in
-					// the frontend table but NOT in Metadata fails to
-					// resolve from background context.
-					if probe := desc.IdxcronFrontendProbeVar; probe != "" {
-						if _, ferr := cctx.ResolveVariable(probe, true, false); ferr != nil {
-							continue
-						}
 					}
 					if err = cctx.RegisterIdxcronUpdate(
 						oTableDef.TblId, qry.Database, oTableDef.Name,

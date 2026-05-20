@@ -116,13 +116,12 @@ func (CatalogHooks) SupportedOpTypes() map[string]string {
 // SyncDescriptor for the full rationale.
 func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	return catalogplugin.SyncDescriptor{
-		UsesCDC:                 true,
-		SinkerType:              catalogplugin.SinkerType_IndexSync,
-		AlwaysAsync:             true,
-		IdxcronAction:           actionIvfpqReindex,
-		IdxcronFrontendProbeVar: "ivfpq_threads_search",
-		IdxcronAlgoToken:        "IVFPQ",
-		IdxcronListsAware:       false,
+		UsesCDC:           true,
+		SinkerType:        catalogplugin.SinkerType_IndexSync,
+		AlwaysAsync:       true,
+		IdxcronAction:     actionIvfpqReindex,
+		IdxcronAlgoToken:  "IVFPQ",
+		IdxcronListsAware: false,
 	}
 }
 

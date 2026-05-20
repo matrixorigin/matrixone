@@ -98,10 +98,9 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.
 // ivfflatIdxcronSpec captures every system / session var the cron-
 // triggered ALTER REINDEX needs to mirror the user's CREATE INDEX
 // configuration: kmeans tuning, capacity, and the experimental flag.
-// FrontendProbeVar gates background re-entry (returns (nil, nil)
-// from BuildIdxcronMetadata when the cron executor is the caller).
+// Background re-entry is gated by BuildIdxcronMetadata's
+// ctx.IsFrontend() check.
 var ivfflatIdxcronSpec = compileplugin.IdxcronVarSpec{
-	FrontendProbeVar: "ivf_threads_search",
 	Capture: []string{
 		"ivf_threads_build",
 		"kmeans_train_percent",

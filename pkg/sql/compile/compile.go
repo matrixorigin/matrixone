@@ -1537,7 +1537,7 @@ func calculatePartitions(start, end, n int64) [][2]int64 {
 }
 
 func StrictSqlMode(proc *process.Process) (error, bool) {
-	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	mode, err := resolveVariableOrDefault(proc, "sql_mode", true, false)
 	if err != nil {
 		return err, false
 	}
