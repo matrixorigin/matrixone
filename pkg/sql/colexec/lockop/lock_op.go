@@ -798,7 +798,6 @@ func lockWithRetry(
 			return result, getLockRetryExitError(ctx, err)
 		}
 	}
-	return result, err
 }
 
 func LockWithMayUpgrade(
