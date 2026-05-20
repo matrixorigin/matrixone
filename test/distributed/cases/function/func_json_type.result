@@ -23,7 +23,8 @@ select json_type('null');
 json_type(null)
 NULL
 select json_type(null);
-invalid argument function json_type, bad value [ANY]
+json_type(null)
+null
 select json_type(json_array(1, 2, 3));
 json_type(json_array(1, 2, 3))
 OPAQUE
@@ -69,63 +70,89 @@ cast('hello' as binary(10)), cast('world' as varbinary),
 2021,
 '550e8400-e29b-41d4-a716-446655440000',
 '{"a": 1, "b": [1, 2, 3], "c": {"d": "hello"}}',
-cast('[1.0,2.0,3.0]' as vecf32(3)), 'a', cast(1 as bit)),
+cast('[1.0,2.0,3.0]' as vecf32(3)), 'a', b'0'),
 (2, false, null, null, null, null, null,
 null, null, null, null,
 null, null,
 null, null, null, null,
-null, null, null, null, null, null, null)
+null, null, null, null, null, null)
 ;
-Column count doesn't match value count at row 2
 select count(*) from jtt;
 count(*)
-0
+2
 select id, json_type(js) from jtt;
 id    json_type(js)
+1    OBJECT
+2    null
 select id, json_type(null) from jtt;
-invalid argument function json_type, bad value [ANY]
+id    json_type(null)
+1    null
+2    null
 select json_type(json_extract(json_array(b), '$[0]')) from jtt where b is not null;
 json_type(json_extract(json_array(b), $[0]))
+null
+null
 select json_type(json_extract(json_array(bi), '$[0]')) from jtt where bi is not null;
 json_type(json_extract(json_array(bi), $[0]))
+null
 select json_type(json_extract(json_array(f), '$[0]')) from jtt where f is not null;
 json_type(json_extract(json_array(f), $[0]))
+null
 select json_type(json_extract(json_array(d), '$[0]')) from jtt where d is not null;
 json_type(json_extract(json_array(d), $[0]))
+null
 select json_type(json_extract(json_array(d64), '$[0]')) from jtt where d64 is not null;
 json_type(json_extract(json_array(d64), $[0]))
+null
 select json_type(json_extract(json_array(d128), '$[0]')) from jtt where d128 is not null;
 json_type(json_extract(json_array(d128), $[0]))
+null
 select json_type(json_extract(json_array(c1), '$[0]')) from jtt where c1 is not null;
 json_type(json_extract(json_array(c1), $[0]))
+null
 select json_type(json_extract(json_array(td), '$[0]')) from jtt where td is not null;
 json_type(json_extract(json_array(td), $[0]))
+null
 select json_type(json_extract(json_array(tt), '$[0]')) from jtt where tt is not null;
 json_type(json_extract(json_array(tt), $[0]))
+null
 select json_type(json_extract(json_array(tdt), '$[0]')) from jtt where tdt is not null;
 json_type(json_extract(json_array(tdt), $[0]))
+null
 select json_type(json_extract(json_array(ts), '$[0]')) from jtt where ts is not null;
 json_type(json_extract(json_array(ts), $[0]))
+null
 select json_type(json_extract(json_array(uid), '$[0]')) from jtt where uid is not null;
 json_type(json_extract(json_array(uid), $[0]))
+null
 select json_type(json_extract(json_array(yr), '$[0]')) from jtt where yr is not null;
 json_type(json_extract(json_array(yr), $[0]))
+null
 select json_type(json_extract(json_array(bin), '$[0]')) from jtt where bin is not null;
 json_type(json_extract(json_array(bin), $[0]))
+null
 select json_type(json_extract(json_array(vbin), '$[0]')) from jtt where vbin is not null;
 json_type(json_extract(json_array(vbin), $[0]))
+null
 select json_type(json_extract(json_array(vf32), '$[0]')) from jtt where vf32 is not null;
 json_type(json_extract(json_array(vf32), $[0]))
+null
 select json_type(json_extract(json_array(e), '$[0]')) from jtt where e is not null;
 json_type(json_extract(json_array(e), $[0]))
+null
 select json_type(json_extract(json_array(bitcol), '$[0]')) from jtt where bitcol is not null;
 json_type(json_extract(json_array(bitcol), $[0]))
+null
 select json_type(json_extract(json_object('id', id, 'name', vc), '$.id')) from jtt where vc is not null;
 json_type(json_extract(json_object(id, id, name, vc), $.id))
+null
 select json_type(json_extract(json_object('date', td, 'time', tt), '$.date')) from jtt where td is not null;
 json_type(json_extract(json_object(date, td, time, tt), $.date))
+null
 select json_type(json_extract(json_object('ts', ts), '$.ts')) from jtt where ts is not null;
 json_type(json_extract(json_object(ts, ts), $.ts))
+null
 select json_type(json_extract(json_object('uid', uid), '$.uid')) from jtt where uid is not null;
 json_type(json_extract(json_object(uid, uid), $.uid))
+null
 drop table jtt;

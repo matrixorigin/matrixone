@@ -830,7 +830,7 @@ var supportedStringBuiltIns = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(_ []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 1 {
-				if inputs[0].Oid == types.T_json || inputs[0].Oid.IsMySQLString() {
+				if inputs[0].Oid == types.T_json || inputs[0].Oid.IsMySQLString() || inputs[0].Oid == types.T_any {
 					return newCheckResultWithSuccess(0)
 				}
 			}

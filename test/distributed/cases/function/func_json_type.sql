@@ -46,13 +46,14 @@ insert into jtt values
  2021,
  '550e8400-e29b-41d4-a716-446655440000',
  '{"a": 1, "b": [1, 2, 3], "c": {"d": "hello"}}',
- cast('[1.0,2.0,3.0]' as vecf32(3)), 'a', cast(1 as bit)),
+ cast('[1.0,2.0,3.0]' as vecf32(3)), 'a', b'0'),
 (2, false, null, null, null, null, null,
  null, null, null, null,
  null, null,
  null, null, null, null,
- null, null, null, null, null, null, null)
+ null, null, null, null, null, null)
 ;
+
 select count(*) from jtt;
 
 -- json_type on json column directly
