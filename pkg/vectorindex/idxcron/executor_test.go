@@ -23,14 +23,19 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -257,6 +262,44 @@ func runIvfflatReindex(ctx context.Context,
 
 */
 
+// mockReindexAlgoPlugin is a minimal indexplugin.AlgoPlugin that
+// exposes a caller-supplied SyncDescriptor. It satisfies the
+// interface for runReindex tests — only Catalog() and Idxcron() are
+// consulted in that code path, and Idxcron always says "go ahead".
+type mockReindexAlgoPlugin struct {
+	algo string
+	desc catalogplugin.SyncDescriptor
+}
+
+func (m *mockReindexAlgoPlugin) Algo() string                   { return m.algo }
+func (m *mockReindexAlgoPlugin) Catalog() catalogplugin.Hooks   { return mockCatalogHooks{d: m.desc} }
+func (m *mockReindexAlgoPlugin) Compile() compileplugin.Hooks   { return nil }
+func (m *mockReindexAlgoPlugin) Plan() planplugin.Hooks         { return nil }
+func (m *mockReindexAlgoPlugin) Idxcron() idxcronplugin.Hooks   { return alwaysUpdatable{} }
+
+var _ indexplugin.AlgoPlugin = (*mockReindexAlgoPlugin)(nil)
+
+// mockCatalogHooks returns a constant SyncDescriptor; the other hook
+// methods panic so tests catch unintended calls.
+type mockCatalogHooks struct{ d catalogplugin.SyncDescriptor }
+
+func (m mockCatalogHooks) HiddenTableTypes() []string                                       { return nil }
+func (m mockCatalogHooks) ParamsFromTree(_ *tree.Index) (map[string]string, error)          { return nil, nil }
+func (m mockCatalogHooks) DefaultOptions() map[string]string                                { return nil }
+func (m mockCatalogHooks) SupportedOpTypes() map[string]string                              { return nil }
+func (m mockCatalogHooks) ExperimentalFlag() string                                         { return "" }
+func (m mockCatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior   { return catalogplugin.AlterTableCloneBehavior{} }
+func (m mockCatalogHooks) ShouldTruncateHiddenTable(_ string) bool                          { return false }
+func (m mockCatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor                     { return m.d }
+
+// alwaysUpdatable is the trivial idxcron hook the mock uses — runReindex
+// callers in tests don't exercise the CDC-delta gate.
+type alwaysUpdatable struct{}
+
+func (alwaysUpdatable) Updatable(_ *sqlexec.SqlProcess, _ *plan.TableDef, _ string) (bool, string, error) {
+	return true, "", nil
+}
+
 func newTestIvfTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32) *plan.TableDef {
 	return &plan.TableDef{
 		Name:  "test_orig_tbl",
@@ -390,7 +433,10 @@ func TestIvfflatReindex(t *testing.T) {
 			defer stub3.Reset()
 
 			updated, reason, err := runReindex(ctx, cnEngine, cnClient, cnUUID, &info, ta.hour,
-				catalogplugin.SyncDescriptor{IdxcronAlgoToken: "IVFFLAT", IdxcronListsAware: true})
+				&mockReindexAlgoPlugin{
+					algo: "ivfflat",
+					desc: catalogplugin.SyncDescriptor{IdxcronAlgoToken: "IVFFLAT", IdxcronListsAware: true},
+				})
 			fmt.Printf("updated = %v, reason = %s\n", updated, reason)
 			require.NoError(t, err)
 			require.Equal(t, ta.expected && !ta.skipped, updated)
@@ -466,7 +512,10 @@ func TestIvfflatReindexAutoUpdateOff(t *testing.T) {
 			defer stub3.Reset()
 
 			updated, reason, err := runReindex(ctx, cnEngine, cnClient, cnUUID, &info, ta.hour,
-				catalogplugin.SyncDescriptor{IdxcronAlgoToken: "IVFFLAT", IdxcronListsAware: true})
+				&mockReindexAlgoPlugin{
+					algo: "ivfflat",
+					desc: catalogplugin.SyncDescriptor{IdxcronAlgoToken: "IVFFLAT", IdxcronListsAware: true},
+				})
 			fmt.Printf("updated = %v, reason = %s\n", updated, reason)
 			require.NoError(t, err)
 			require.Equal(t, false, updated)

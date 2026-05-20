@@ -45,9 +45,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 
 	ivfflatcompile "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/compile"
+	ivfflatidxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/idxcron"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	ivfflatruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
 )
@@ -57,6 +59,7 @@ type Plugin struct {
 	catalogHooks catalogplugin.Hooks
 	compileHooks compileplugin.Hooks
 	planHooks    planplugin.Hooks
+	idxcronHooks idxcronplugin.Hooks
 }
 
 func New() *Plugin {
@@ -64,6 +67,7 @@ func New() *Plugin {
 		catalogHooks: ivfflatruntime.CatalogHooks{},
 		compileHooks: ivfflatcompile.Hooks{},
 		planHooks:    ivfflatplan.Hooks{},
+		idxcronHooks: ivfflatidxcron.Hooks{},
 	}
 }
 
@@ -71,6 +75,7 @@ func (*Plugin) Algo() string                   { return catalog.MoIndexIvfFlatAl
 func (p *Plugin) Catalog() catalogplugin.Hooks { return p.catalogHooks }
 func (p *Plugin) Compile() compileplugin.Hooks { return p.compileHooks }
 func (p *Plugin) Plan() planplugin.Hooks       { return p.planHooks }
+func (p *Plugin) Idxcron() idxcronplugin.Hooks { return p.idxcronHooks }
 
 // Compile-time check that *Plugin satisfies the AlgoPlugin interface.
 // If a new method is added to AlgoPlugin and this plugin hasn't been

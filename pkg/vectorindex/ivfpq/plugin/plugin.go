@@ -108,9 +108,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 
 	ivfpqcompile "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/compile"
+	ivfpqidxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/idxcron"
 	ivfpqplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/plan"
 	ivfpqruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
 )
@@ -124,6 +126,7 @@ type Plugin struct {
 	catalogHooks catalogplugin.Hooks
 	compileHooks compileplugin.Hooks
 	planHooks    planplugin.Hooks
+	idxcronHooks idxcronplugin.Hooks
 }
 
 func New() *Plugin {
@@ -131,6 +134,7 @@ func New() *Plugin {
 		catalogHooks: ivfpqruntime.CatalogHooks{},
 		compileHooks: ivfpqcompile.Hooks{},
 		planHooks:    ivfpqplan.Hooks{},
+		idxcronHooks: ivfpqidxcron.Hooks{},
 	}
 }
 
@@ -141,6 +145,7 @@ func (*Plugin) Algo() string                   { return catalog.MoIndexIvfpqAlgo
 func (p *Plugin) Catalog() catalogplugin.Hooks { return p.catalogHooks }
 func (p *Plugin) Compile() compileplugin.Hooks { return p.compileHooks }
 func (p *Plugin) Plan() planplugin.Hooks       { return p.planHooks }
+func (p *Plugin) Idxcron() idxcronplugin.Hooks { return p.idxcronHooks }
 
 // Compile-time enforcement that *Plugin satisfies plugin.AlgoPlugin. If a
 // new method is added to AlgoPlugin and this plugin hasn't been updated,

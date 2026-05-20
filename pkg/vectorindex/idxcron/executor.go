@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
-	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -39,19 +38,20 @@ import (
 )
 
 // findReindexAlgo locates the plugin whose SyncDescriptor.IdxcronAction
-// matches the cron task's action string. Returns (descriptor, true)
-// on a hit; the caller reads IdxcronAlgoToken / IdxcronListsAware off
-// the descriptor. Replaces the hardcoded action switch — new
-// algorithms participate in idxcron by setting their SyncDescriptor
-// fields, no edits needed here.
-func findReindexAlgo(action string) (catalogplugin.SyncDescriptor, bool) {
+// matches the cron task's action string. Returns (plugin, true) on a
+// hit; the caller reads IdxcronAlgoToken / IdxcronListsAware off
+// plugin.Catalog().SyncDescriptor() and dispatches the per-algo
+// rebuild gate via plugin.Idxcron().Updatable(). Replaces the
+// hardcoded action switch — new algorithms participate in idxcron by
+// setting their SyncDescriptor fields and providing an Idxcron hook,
+// no edits needed here.
+func findReindexAlgo(action string) (indexplugin.AlgoPlugin, bool) {
 	for _, p := range indexplugin.All() {
-		d := p.Catalog().SyncDescriptor()
-		if d.IdxcronAction == action {
-			return d, true
+		if p.Catalog().SyncDescriptor().IdxcronAction == action {
+			return p, true
 		}
 	}
-	return catalogplugin.SyncDescriptor{}, false
+	return nil, false
 }
 
 /*
@@ -430,7 +430,9 @@ func runReindex(ctx context.Context,
 	cnUUID string,
 	task *IndexUpdateTaskInfo,
 	currentHour int,
-	d catalogplugin.SyncDescriptor) (updated bool, reason string, err error) {
+	p indexplugin.AlgoPlugin) (updated bool, reason string, err error) {
+
+	d := p.Catalog().SyncDescriptor()
 
 	if len(task.IndexName) == 0 {
 		err = moerr.NewInternalErrorNoCtx("table index name is empty string. skip reindex.")
@@ -554,6 +556,18 @@ func runReindex(ctx context.Context,
 				return
 			}
 
+			// Per-algo additional gate (CDC delta-size check for cuvs,
+			// trivial true for HNSW / fulltext / IVF-FLAT). Lets each
+			// algorithm enforce its own minimum-data invariant without
+			// touching executor internals.
+			ok, reason, err2 = p.Idxcron().Updatable(sqlproc, tableDef, task.IndexName)
+			if err2 != nil {
+				return
+			}
+			if !ok {
+				return
+			}
+
 			// run alter table alter reindex in force synchronous mode to make sure to build index in single transaction
 			sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` %s FORCE_SYNC",
 				task.DbName, task.TableName, task.IndexName, d.IdxcronAlgoToken)
@@ -599,11 +613,11 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 		default:
 		}
 
-		d, ok := findReindexAlgo(t.Action)
+		p, ok := findReindexAlgo(t.Action)
 		if !ok {
 			err2 = moerr.NewInternalErrorNoCtxf("idxcron: no plugin registered for action %q (task=%v)", t.Action, t)
 		} else {
-			updated, reason, err2 = runReindex(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t, currentHour, d)
+			updated, reason, err2 = runReindex(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t, currentHour, p)
 		}
 
 		if !updated && reason == Reason_Skipped {

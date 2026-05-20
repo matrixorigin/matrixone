@@ -22,9 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 
 	cagracompile "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/compile"
+	cagraidxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/idxcron"
 	cagraplan "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/plan"
 	cagraruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
 )
@@ -33,6 +35,7 @@ type Plugin struct {
 	catalogHooks catalogplugin.Hooks
 	compileHooks compileplugin.Hooks
 	planHooks    planplugin.Hooks
+	idxcronHooks idxcronplugin.Hooks
 }
 
 func New() *Plugin {
@@ -40,6 +43,7 @@ func New() *Plugin {
 		catalogHooks: cagraruntime.CatalogHooks{},
 		compileHooks: cagracompile.Hooks{},
 		planHooks:    cagraplan.Hooks{},
+		idxcronHooks: cagraidxcron.Hooks{},
 	}
 }
 
@@ -47,6 +51,7 @@ func (*Plugin) Algo() string                   { return catalog.MoIndexCagraAlgo
 func (p *Plugin) Catalog() catalogplugin.Hooks { return p.catalogHooks }
 func (p *Plugin) Compile() compileplugin.Hooks { return p.compileHooks }
 func (p *Plugin) Plan() planplugin.Hooks       { return p.planHooks }
+func (p *Plugin) Idxcron() idxcronplugin.Hooks { return p.idxcronHooks }
 
 var _ plugin.AlgoPlugin = (*Plugin)(nil)
 

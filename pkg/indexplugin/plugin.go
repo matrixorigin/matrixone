@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 )
 
@@ -45,6 +46,15 @@ type AlgoPlugin interface {
 	Catalog() catalogplugin.Hooks
 	Compile() compileplugin.Hooks
 	Plan() planplugin.Hooks
+
+	// Idxcron returns the cron-side hooks used by
+	// pkg/vectorindex/idxcron/executor.go to decide whether a
+	// scheduled rebuild should fire for a given (table, index).
+	// Algorithms with no minimum-size constraint (HNSW, fulltext)
+	// return a trivial Hooks impl whose Updatable always says yes;
+	// IVF-FLAT / CAGRA / IVF-PQ implementations consult the storage
+	// table to enforce their respective minimums.
+	Idxcron() idxcronplugin.Hooks
 }
 
 var (

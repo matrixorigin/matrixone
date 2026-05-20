@@ -53,9 +53,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 
 	fulltextcompile "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/compile"
+	fulltextidxcron "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/idxcron"
 	fulltextplan "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/plan"
 	fulltextruntime "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/runtime"
 )
@@ -65,6 +67,7 @@ type Plugin struct {
 	catalogHooks catalogplugin.Hooks
 	compileHooks compileplugin.Hooks
 	planHooks    planplugin.Hooks
+	idxcronHooks idxcronplugin.Hooks
 }
 
 func New() *Plugin {
@@ -72,6 +75,7 @@ func New() *Plugin {
 		catalogHooks: fulltextruntime.CatalogHooks{},
 		compileHooks: fulltextcompile.Hooks{},
 		planHooks:    fulltextplan.Hooks{},
+		idxcronHooks: fulltextidxcron.Hooks{},
 	}
 }
 
@@ -79,6 +83,7 @@ func (*Plugin) Algo() string                   { return catalog.MOIndexFullTextA
 func (p *Plugin) Catalog() catalogplugin.Hooks { return p.catalogHooks }
 func (p *Plugin) Compile() compileplugin.Hooks { return p.compileHooks }
 func (p *Plugin) Plan() planplugin.Hooks       { return p.planHooks }
+func (p *Plugin) Idxcron() idxcronplugin.Hooks { return p.idxcronHooks }
 
 // Compile-time check that *Plugin satisfies the AlgoPlugin interface.
 var _ plugin.AlgoPlugin = (*Plugin)(nil)
