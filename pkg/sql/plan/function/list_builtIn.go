@@ -775,6 +775,29 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_array`
+	{
+		functionId: JSON_ARRAY,
+		class:      plan.Function_PRODUCE_NO_NULL,
+		layout:     STANDARD_FUNCTION,
+		// typechecking: always success (variadic)
+		checkFn: func(_ []overload, inputs []types.Type) checkResult {
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonArray().jsonArray
+				},
+			},
+		},
+	},
+
 	// function `jq`
 	{
 		functionId: JQ,

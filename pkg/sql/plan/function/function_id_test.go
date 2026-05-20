@@ -409,8 +409,9 @@ var predefinedFunids = map[int]int{
 	CAST_SET_INDEX_VALUE_TO_INDEX: 357,
 
 	CAST_GEOMETRY_TO_SUBTYPE: 358,
+	JSON_ARRAY:               359,
 
-	FUNCTION_END_NUMBER: 359,
+	FUNCTION_END_NUMBER: 360,
 }
 
 func Test_funids(t *testing.T) {

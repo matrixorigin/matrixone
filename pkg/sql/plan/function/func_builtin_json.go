@@ -15,6 +15,8 @@
 package function
 
 import (
+	"context"
+	"encoding/base64"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -591,4 +593,216 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 		}
 	}
 	return nil
+}
+
+type opBuiltInJsonArray struct{}
+
+func newOpBuiltInJsonArray() *opBuiltInJsonArray {
+	return &opBuiltInJsonArray{}
+}
+
+func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.FunctionResultWrapper,
+	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for j := 0; j < length; j++ {
+		elems := make([]any, 0, len(params))
+		for i := 0; i < len(params); i++ {
+			elem, err := op.convertToAny(proc.Ctx, params[i], j)
+			if err != nil {
+				return err
+			}
+			elems = append(elems, elem)
+		}
+
+		bj, err := bytejson.CreateByteJSON(elems)
+		if err != nil {
+			return err
+		}
+		dt, err := bj.Marshal()
+		if err != nil {
+			return err
+		}
+		if selectList.Contains(uint64(j)) {
+			rs.AppendBytes(nil, true)
+		} else {
+			rs.AppendBytes(dt, false)
+		}
+	}
+	return nil
+}
+
+func (op *opBuiltInJsonArray) convertToAny(ctx context.Context, v *vector.Vector, row int) (any, error) {
+	fromType := v.GetType()
+	switch fromType.Oid {
+	case types.T_bool:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return vector.GetFixedAtNoTypeCheck[bool](v, row), nil
+	case types.T_int8:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return int64(vector.GetFixedAtNoTypeCheck[int8](v, row)), nil
+	case types.T_int16:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return int64(vector.GetFixedAtNoTypeCheck[int16](v, row)), nil
+	case types.T_int32:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return int64(vector.GetFixedAtNoTypeCheck[int32](v, row)), nil
+	case types.T_int64:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return vector.GetFixedAtNoTypeCheck[int64](v, row), nil
+	case types.T_uint8:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return uint64(vector.GetFixedAtNoTypeCheck[uint8](v, row)), nil
+	case types.T_uint16:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return uint64(vector.GetFixedAtNoTypeCheck[uint16](v, row)), nil
+	case types.T_uint32:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return uint64(vector.GetFixedAtNoTypeCheck[uint32](v, row)), nil
+	case types.T_uint64:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return vector.GetFixedAtNoTypeCheck[uint64](v, row), nil
+	case types.T_float32:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return float64(vector.GetFixedAtNoTypeCheck[float32](v, row)), nil
+	case types.T_float64:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return vector.GetFixedAtNoTypeCheck[float64](v, row), nil
+	case types.T_char, types.T_varchar, types.T_text:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return string(v.GetBytesAt(row)), nil
+	case types.T_json:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		data := v.GetBytesAt(row)
+		if len(data) == 0 {
+			return nil, nil
+		}
+		bj := types.DecodeJson(data)
+		return bj, nil
+	case types.T_date:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return vector.GetFixedAtNoTypeCheck[types.Date](v, row).String(), nil
+	case types.T_time:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return vector.GetFixedAtNoTypeCheck[types.Time](v, row).String(), nil
+	case types.T_datetime:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return vector.GetFixedAtNoTypeCheck[types.Datetime](v, row).String(), nil
+	case types.T_timestamp:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return vector.GetFixedAtNoTypeCheck[types.Timestamp](v, row).String(), nil
+	case types.T_decimal64:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](v, row)
+		return string(val.Format(fromType.Scale)), nil
+	case types.T_decimal128:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		val := vector.GetFixedAtNoTypeCheck[types.Decimal128](v, row)
+		return string(val.Format(fromType.Scale)), nil
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		data := v.GetBytesAt(row)
+		dst := make([]byte, base64.StdEncoding.EncodedLen(len(data)))
+		base64.StdEncoding.Encode(dst, data)
+		return string(dst), nil
+	case types.T_decimal256:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		val := vector.GetFixedAtNoTypeCheck[types.Decimal256](v, row)
+		return string(val.Format(fromType.Scale)), nil
+	case types.T_year:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		val := vector.GetFixedAtNoTypeCheck[int16](v, row)
+		return strconv.FormatInt(int64(val), 10), nil
+	case types.T_bit:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return vector.GetFixedAtNoTypeCheck[uint64](v, row), nil
+	case types.T_enum:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		val := vector.GetFixedAtNoTypeCheck[types.Enum](v, row)
+		return val.String(), nil
+	case types.T_geometry:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		data := v.GetBytesAt(row)
+		return string(data), nil
+	case types.T_uuid:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return vector.GetFixedAtNoTypeCheck[types.Uuid](v, row).String(), nil
+	case types.T_array_float32:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		arr := types.BytesToArray[float32](v.GetBytesAt(row))
+		out := make([]any, len(arr))
+		for i, x := range arr {
+			out[i] = float64(x)
+		}
+		return out, nil
+	case types.T_array_float64:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		arr := types.BytesToArray[float64](v.GetBytesAt(row))
+		out := make([]any, len(arr))
+		for i, x := range arr {
+			out[i] = x
+		}
+		return out, nil
+	default:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		return nil, moerr.NewInvalidInputf(ctx, "unsupported type for json_array: %v", fromType.String())
+	}
 }
