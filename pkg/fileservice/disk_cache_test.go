@@ -381,6 +381,24 @@ func TestDiskCacheStaleRepairReplacesCacheEntrySize(t *testing.T) {
 	require.True(t, cache.cache.Contains(cache.pathForFile("bar")))
 }
 
+func TestDiskCacheRemovesFileEvictedDuringWrite(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(4096), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+
+	err = cache.SetFile(ctx, "foo", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(bytes.Repeat([]byte("x"), 8192))), nil
+	})
+	require.NoError(t, err)
+
+	fooPath := cache.pathForFile("foo")
+	require.False(t, cache.cache.Contains(fooPath))
+	_, err = os.Stat(fooPath)
+	require.True(t, os.IsNotExist(err))
+}
+
 func TestDiskCacheDirSize(t *testing.T) {
 	ctx := context.Background()
 	var counter perfcounter.CounterSet
