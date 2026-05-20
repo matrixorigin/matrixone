@@ -4421,7 +4421,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			// algorithm hint already consumed by ResolveAlterTableAlgorithm
 			alterTable.Actions[i] = nil
 		case *tree.AlterOptionLock:
-			// lock hint is a no-op; MO ignores lock level
+			// lock already validated by resolveAndValidateLock
 			alterTable.Actions[i] = nil
 
 		case *tree.AlterOptionAlterCheck, *tree.TableOptionCharset:

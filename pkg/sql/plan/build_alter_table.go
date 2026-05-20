@@ -205,7 +205,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			// algorithm hint parsed for compatibility; the actual algorithm
 			// is resolved by ResolveAlterTableAlgorithm via the full options list
 		case *tree.AlterOptionLock:
-			// lock hint parsed for compatibility; MO ignores lock level
+			// lock already validated by resolveAndValidateLock; no-op here
 		default:
 			return nil, moerr.NewInvalidInputf(ctx,
 				unsupportedErrorFmt, formatTreeNode(option))
@@ -462,6 +462,11 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if err != nil {
 		return nil, err
 	}
+
+	if err := resolveAndValidateLock(ctx.GetContext(), stmt.Options, algorithm); err != nil {
+		return nil, err
+	}
+
 	if algorithm == plan.AlterTable_COPY {
 		return buildAlterTableCopy(stmt, ctx)
 	} else {
@@ -505,8 +510,12 @@ func ResolveAlterTableAlgorithm(
 	tableDef *TableDef,
 ) (algorithm plan.AlterTable_AlgorithmType, err error) {
 	algorithm = plan.AlterTable_COPY
+
+	// First pass: resolve algorithm based on operations, skipping ALGORITHM/LOCK hints.
 	for _, spec := range validAlterSpecs {
 		switch option := spec.(type) {
+		case *tree.AlterOptionAlgorithm, *tree.AlterOptionLock:
+			continue
 		case *tree.AlterOptionAdd:
 			switch option.Def.(type) {
 			case *tree.PrimaryKeyIndex:
@@ -567,19 +576,6 @@ func ResolveAlterTableAlgorithm(
 			algorithm = plan.AlterTable_COPY
 		case *tree.TableOptionAutoIncrement:
 			algorithm = plan.AlterTable_INPLACE
-		case *tree.AlterOptionAlgorithm:
-			switch strings.ToUpper(option.Type) {
-			case "INSTANT":
-				algorithm = plan.AlterTable_INSTANT
-			case "INPLACE":
-				algorithm = plan.AlterTable_INPLACE
-			case "COPY":
-				algorithm = plan.AlterTable_COPY
-			default:
-				algorithm = plan.AlterTable_DEFAULT
-			}
-		case *tree.AlterOptionLock:
-			algorithm = plan.AlterTable_INPLACE
 		default:
 			algorithm = plan.AlterTable_INPLACE
 		}
@@ -587,7 +583,58 @@ func ResolveAlterTableAlgorithm(
 			return
 		}
 	}
+
+	// Second pass: apply ALGORITHM hint (takes precedence over operation-based resolution).
+	for _, spec := range validAlterSpecs {
+		alg, ok := spec.(*tree.AlterOptionAlgorithm)
+		if !ok {
+			continue
+		}
+		userAlg := resolveAlgorithmHint(alg.Type)
+		if userAlg == plan.AlterTable_DEFAULT {
+			continue
+		}
+		if algorithm == plan.AlterTable_COPY && userAlg != plan.AlterTable_COPY {
+			return algorithm, moerr.NewInvalidInputf(ctx,
+				"ALGORITHM=%s is not supported. Reason: this operation requires ALGORITHM=COPY. Try ALGORITHM=COPY.",
+				strings.ToUpper(alg.Type))
+		}
+		algorithm = userAlg
+	}
+
 	return
+}
+
+func resolveAlgorithmHint(algType string) plan.AlterTable_AlgorithmType {
+	switch strings.ToUpper(algType) {
+	case "INSTANT":
+		return plan.AlterTable_INSTANT
+	case "INPLACE":
+		return plan.AlterTable_INPLACE
+	case "COPY":
+		return plan.AlterTable_COPY
+	default:
+		return plan.AlterTable_DEFAULT
+	}
+}
+
+func resolveAndValidateLock(
+	ctx context.Context,
+	options []tree.AlterTableOption,
+	algorithm plan.AlterTable_AlgorithmType,
+) error {
+	// MySQL uses the last LOCK clause if multiple are specified.
+	lockType := ""
+	for _, opt := range options {
+		if lock, ok := opt.(*tree.AlterOptionLock); ok {
+			lockType = strings.ToUpper(lock.Type)
+		}
+	}
+	if lockType == "NONE" && algorithm == plan.AlterTable_COPY {
+		return moerr.NewInvalidInputf(ctx,
+			"LOCK=NONE is not supported. Reason: COPY algorithm requires an exclusive lock. Try LOCK=SHARED.")
+	}
+	return nil
 }
 
 func isInplaceModifyColumn(
