@@ -244,7 +244,6 @@ drop database if exists snapshot_read;
 drop account if exists test_account;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-
 create database if not exists snapshot_read;
 use snapshot_read;
 create table test_snapshot_read (a int);
