@@ -3868,6 +3868,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			// lock already validated by resolveAndValidateLock
 			alterTable.Actions[i] = nil
 
+		case *tree.TableOptionAutoIncrement:
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterAutoIncrement{
+					AlterAutoIncrement: &plan.AlterTableAutoIncrement{
+						NewOffset: opt.Value,
+					},
+				},
+			}
+
 		case *tree.AlterOptionAlterCheck, *tree.TableOptionCharset:
 			continue
 
