@@ -16,11 +16,13 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -238,6 +240,86 @@ func buildTestShowCreateTable(sql string) (string, error) {
 		return "", err
 	}
 	return showSQL, nil
+}
+
+func buildTestShowCreateExternalTable(t *testing.T, tableName string, param *tree.ExternParam) string {
+	t.Helper()
+	mock := NewMockOptimizer(false)
+	jsonBytes, err := json.Marshal(param)
+	require.NoError(t, err)
+
+	tableDef := &plan.TableDef{
+		Name:      tableName,
+		TableType: catalog.SystemExternalRel,
+		Createsql: string(jsonBytes),
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				Typ:     plan.Type{Id: int32(types.T_int32)},
+				Default: &plan.Default{NullAbility: true},
+			},
+			{
+				Name:    "part_id",
+				Typ:     plan.Type{Id: int32(types.T_int32)},
+				Default: &plan.Default{NullAbility: true},
+			},
+		},
+	}
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	return showSQL
+}
+
+func TestShowCreateHiveExternalTableKeepsFilepath(t *testing.T) {
+	got := buildTestShowCreateExternalTable(t, "test_show_ddl", &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Option: []string{
+				"filepath", "/data/test/",
+				"format", "parquet",
+				"hive_partitioning", "true",
+				"hive_partition_columns", "part_id",
+			},
+		},
+	})
+	require.Contains(t, got, "CREATE EXTERNAL TABLE `test_show_ddl`")
+	require.Contains(t, got, "'FILEPATH'='/data/test/'")
+	require.Contains(t, got, "'FORMAT'='parquet'")
+	require.Contains(t, got, "'HIVE_PARTITIONING'='true'")
+	require.Contains(t, got, "'HIVE_PARTITION_COLUMNS'='part_id'")
+}
+
+func TestShowCreateS3HiveExternalTableUsesS3Options(t *testing.T) {
+	got := buildTestShowCreateExternalTable(t, "test_show_ddl_s3", &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Option: []string{
+				"endpoint", "http://minio.local",
+				"access_key_id", "AK",
+				"secret_access_key", "SK",
+				"bucket", "my-bucket",
+				"filepath", "data/test/",
+				"region", "us-east-1",
+				"provider", "minio",
+				"format", "parquet",
+				"hive_partitioning", "true",
+				"hive_partition_columns", "part_id",
+			},
+		},
+	})
+	require.Contains(t, got, " URL s3option{")
+	require.Contains(t, got, "'endpoint'='http://minio.local'")
+	require.Contains(t, got, "'access_key_id'='******'")
+	require.Contains(t, got, "'secret_access_key'='******'")
+	require.Contains(t, got, "'bucket'='my-bucket'")
+	require.Contains(t, got, "'filepath'='data/test/'")
+	require.Contains(t, got, "'region'='us-east-1'")
+	require.Contains(t, got, "'provider'='minio'")
+	require.Contains(t, got, "'format'='parquet'")
+	require.Contains(t, got, "'hive_partitioning'='true'")
+	require.Contains(t, got, "'hive_partition_columns'='part_id'")
+	require.NotContains(t, got, " INFILE{")
 }
 
 // formatIdent and formatStrLit split the old formatStr responsibilities.
