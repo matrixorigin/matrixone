@@ -124,11 +124,21 @@ func UnframeCdcChunk(framed []byte) ([]byte, error) {
 // state automatically — INSERT-then-DELETE collapses to "deleted", and
 // DELETE-then-INSERT collapses to "in overflow".
 //
-// Record layout (variable size by op, fixed size *per* op):
+// Record layout (variable size by op, fixed size *per* op except Header):
 //
-//	op:byte | pkid:int64 | (if op==CdcOpInsert) vec:4*dim | (if op==CdcOpInsert) include:K
+//	DELETE: op:byte | pkid:int64                                                  // 9 bytes
+//	INSERT: op:byte | pkid:int64 | vec:4*dim | include:K                          // 9 + 4*dim + ibpr
+//	HEADER: op:byte | payload_len:uint32 LE | payload:[]byte                      // 5 + N bytes
 //
-// DELETE = 9 bytes; INSERT = 9 + 4*dim + includeBytesPerRow.
+// HEADER carries the index's INCLUDE-column metadata JSON (matching
+// cuvscdc.ResolveIncludeColumns output) so the search-side can decode
+// subsequent INSERT records when no tag=0 sub-index exists for the index
+// slice (small-data-only indexes). Emitted exactly once: as the first
+// record of chunk_id=0 by SaveSmallTailAsCdc. Ongoing CagraSync.Save /
+// IvfpqSync.Save iterations don't re-emit it.
+//
+// The HEADER record is self-describing via its own payload_len, so the
+// decoder doesn't need ibpr to skip past it.
 //
 // UPSERT decomposes to DELETE+INSERT at write time (cuvs has no in-place
 // mutate; emitting DELETE first preserves last-event-wins semantics if a
@@ -140,6 +150,7 @@ type CdcOp byte
 const (
 	CdcOpDelete CdcOp = 0
 	CdcOpInsert CdcOp = 1
+	CdcOpHeader CdcOp = 2
 )
 
 // CdcEventRecord is the decoded form of one tag=1 record.
@@ -148,11 +159,35 @@ type CdcEventRecord struct {
 	Pkid    int64
 	Vec     []float32 // populated only for CdcOpInsert
 	Include []byte    // populated only for CdcOpInsert (and only when includeBytesPerRow > 0)
+	Header  []byte    // populated only for CdcOpHeader — the colMetaJSON bytes
+}
+
+// EncodeHeaderRecord appends a CdcOpHeader record carrying payload bytes
+// (typically the index's INCLUDE-column metadata JSON) to dst. Used by
+// SaveSmallTailAsCdc as the first record of chunk_id=0 so the search-side
+// can decode subsequent INSERT records when no tag=0 sub-index exists.
+//
+// Layout: op(1) | payload_len(uint32 LE) | payload(payload_len bytes).
+// The self-describing length lets the decoder skip past the header without
+// knowing the index's includeBytesPerRow.
+func EncodeHeaderRecord(dst, payload []byte) ([]byte, error) {
+	if len(payload) > math.MaxUint32 {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"EncodeHeaderRecord: payload too large (%d > %d)", len(payload), math.MaxUint32)
+	}
+	dst = append(dst, byte(CdcOpHeader))
+	var n [4]byte
+	binary.LittleEndian.PutUint32(n[:], uint32(len(payload)))
+	dst = append(dst, n[:]...)
+	dst = append(dst, payload...)
+	return dst, nil
 }
 
 // EncodeEventRecord appends one record to dst and returns the new slice.
 // vec is required iff op==CdcOpInsert; include is required iff op==CdcOpInsert
 // AND includeBytesPerRow > 0. dim must be the index's dimensionality.
+//
+// CdcOpHeader is not handled here — call EncodeHeaderRecord for headers.
 func EncodeEventRecord(
 	dst []byte,
 	op CdcOp,
@@ -216,12 +251,30 @@ func DecodeEventRecord(
 	dim int,
 	includeBytesPerRow int,
 ) (rec CdcEventRecord, n int, ok bool) {
-	if len(src) < 9 {
+	if len(src) < 1 {
 		return rec, 0, false
 	}
 	op := CdcOp(src[0])
 	switch op {
+	case CdcOpHeader:
+		// HEADER: op(1) | payload_len(4) | payload(payload_len).
+		// Self-describing length so we don't need ibpr to skip past it.
+		if len(src) < 5 {
+			return rec, 0, false
+		}
+		payloadLen := int(binary.LittleEndian.Uint32(src[1:5]))
+		need := 5 + payloadLen
+		if len(src) < need {
+			return rec, 0, false
+		}
+		rec.Op = CdcOpHeader
+		rec.Header = make([]byte, payloadLen)
+		copy(rec.Header, src[5:need])
+		return rec, need, true
 	case CdcOpDelete:
+		if len(src) < 9 {
+			return rec, 0, false
+		}
 		rec.Op = CdcOpDelete
 		rec.Pkid = int64(binary.LittleEndian.Uint64(src[1:9]))
 		return rec, 9, true
@@ -336,6 +389,13 @@ func SortChunks(chunks []EventChunk) {
 type ReplayState struct {
 	Deleted  []int64
 	Overflow []OverflowEntry
+
+	// ColMetaJSON is the payload of a CdcOpHeader record observed during
+	// replay, when one was present (small-tail emit path writes it as
+	// the first record of chunk_id=0). Empty otherwise. Callers that
+	// need the INCLUDE-column layout but have no tag=0 sub-index read
+	// this back here.
+	ColMetaJSON string
 }
 
 // OverflowEntry is one row in the brute-force overflow.
@@ -343,6 +403,40 @@ type OverflowEntry struct {
 	Pkid    int64
 	Vec     []float32
 	Include []byte
+}
+
+// PeekColMetaJSON returns the colMetaJSON payload of the CdcOpHeader
+// record if it is the first record of chunks[0] (the small-tail writer
+// guarantees this placement). Returns "" when no header is present —
+// either the index has no INCLUDE columns or no small-tail emit ever ran.
+//
+// Used by the search side when no tag=0 sub-index has loaded: peek the
+// header to compute includeBytesPerRow BEFORE calling ReplayEventLog
+// (which itself needs ibpr to decode INSERT records). The header record
+// is self-describing via its own payload_len, so the decode here doesn't
+// depend on ibpr.
+//
+// Callers must SortChunks first; an empty chunks slice returns "" / nil.
+func PeekColMetaJSON(chunks []EventChunk) (string, error) {
+	if len(chunks) == 0 {
+		return "", nil
+	}
+	first := chunks[0]
+	if first.ChunkId != 0 {
+		return "", nil
+	}
+	data, err := UnframeCdcChunk(first.Data)
+	if err != nil {
+		return "", err
+	}
+	if len(data) == 0 {
+		return "", nil
+	}
+	rec, _, ok := DecodeEventRecord(data, /*dim=*/ 1, /*ibpr=*/ 0)
+	if !ok || rec.Op != CdcOpHeader {
+		return "", nil
+	}
+	return string(rec.Header), nil
 }
 
 // ReplayEventLog walks the chunks (assumed sorted by chunk_id) and applies
@@ -363,6 +457,7 @@ func ReplayEventLog(
 
 	deleted := map[int64]struct{}{}
 	overflow := map[int64]OverflowEntry{}
+	var colMetaJSON string
 
 	for _, ch := range chunks {
 		data, err := UnframeCdcChunk(ch.Data)
@@ -380,6 +475,13 @@ func ReplayEventLog(
 					ch.ChunkId, len(ch.Data)-cdcFooterSize-len(data), dim, includeBytesPerRow)
 			}
 			switch rec.Op {
+			case CdcOpHeader:
+				// First-record-of-chunk_id=0 header carries the INCLUDE-
+				// column layout. Capture, don't add to delete/overflow.
+				// A later header (shouldn't happen — emitted once at
+				// small-tail write time) overwrites the previous capture
+				// so the last write wins, matching event-order semantics.
+				colMetaJSON = string(rec.Header)
 			case CdcOpDelete:
 				delete(overflow, rec.Pkid)
 				deleted[rec.Pkid] = struct{}{}
@@ -396,8 +498,9 @@ func ReplayEventLog(
 	}
 
 	out := ReplayState{
-		Deleted:  make([]int64, 0, len(deleted)),
-		Overflow: make([]OverflowEntry, 0, len(overflow)),
+		Deleted:     make([]int64, 0, len(deleted)),
+		Overflow:    make([]OverflowEntry, 0, len(overflow)),
+		ColMetaJSON: colMetaJSON,
 	}
 	for p := range deleted {
 		out.Deleted = append(out.Deleted, p)

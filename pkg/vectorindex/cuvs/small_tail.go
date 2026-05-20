@@ -47,21 +47,44 @@ type PendingRecord struct {
 // When rows is empty, returns nil. When the index has no INCLUDE
 // columns (includeBytesPerRow == 0), each row's Include must be
 // nil / empty; the encoder rejects mismatches.
+// colMetaJSON is the INCLUDE-column metadata
+// (cuvscdc.ResolveIncludeColumns output, e.g.
+// `[{"name":"a","type":1},...]`). When non-empty it is emitted as a
+// CdcOpHeader record at the very start of chunk_id=0 so the search
+// side can decode subsequent INSERT records when no tag=0 sub-index
+// exists. Empty colMetaJSON skips the header (the index has no
+// INCLUDE columns — includeBytesPerRow is 0 either way).
+//
+// rows can be empty: when colMetaJSON is non-empty the writer still
+// emits the header chunk (useful for CREATE INDEX on an empty source
+// where future CDC iterations will append events under the same
+// layout); when rows is empty AND colMetaJSON is empty nothing is
+// emitted.
 func SaveSmallTailAsCdc(
 	tblcfg vectorindex.IndexTableConfig,
 	rows []PendingRecord,
 	dim int,
 	includeBytesPerRow int,
+	colMetaJSON string,
 ) ([]string, error) {
-	if len(rows) == 0 {
+	if len(rows) == 0 && colMetaJSON == "" {
 		return nil, nil
 	}
 
-	// Pre-size the buffer: 9 (op + pkid) + 4*dim + ibpr bytes per
-	// INSERT record. Avoids ~len(rows) reallocs in EncodeEventRecord.
+	// Pre-size the buffer: header (5 + len(JSON)) + per-row records.
 	perRow := 9 + 4*dim + includeBytesPerRow
-	records := make([]byte, 0, perRow*len(rows))
-	sizes := make([]int, 0, len(rows))
+	records := make([]byte, 0, 5+len(colMetaJSON)+perRow*len(rows))
+	sizes := make([]int, 0, 1+len(rows))
+
+	if colMetaJSON != "" {
+		before := len(records)
+		out, err := EncodeHeaderRecord(records, []byte(colMetaJSON))
+		if err != nil {
+			return nil, err
+		}
+		records = out
+		sizes = append(sizes, len(records)-before)
+	}
 
 	for _, r := range rows {
 		before := len(records)

@@ -110,9 +110,13 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 	// them up alongside (or in place of) the cuvs sub-indexes.
 	if len(u.cdcTail) > 0 {
 		ibpr := includeBytesPerRowFromCols(u.filterCols)
+		// colMetaJSON rides as a CdcOpHeader record at chunk_id=0,
+		// record 0. Search-side can recover the INCLUDE-column layout
+		// for tag=1 replay even when no tag=0 sub-index exists.
+		colMetaJSON := colMetaJSONFromCols(u.filterCols)
 		tailSqls, err := cuvscdc.SaveSmallTailAsCdc(
 			u.tblcfg, u.cdcTail,
-			int(u.idxcfg.CuvsCagra.Dimensions), ibpr)
+			int(u.idxcfg.CuvsCagra.Dimensions), ibpr, colMetaJSON)
 		if err != nil {
 			return err
 		}

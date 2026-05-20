@@ -152,17 +152,17 @@ func (s *IvfpqSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 func (s *IvfpqSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 	var (
 		includeBytesPerRow int
-		hasSubIndex        bool
+		colMetaJSON        string
 	)
+	// Prefer a loaded sub-index's IncludeBytesPerRow + colMetaJSON.
+	// Falls back to the CdcOpHeader record persisted by the small-tail
+	// emit path when no sub-index exists for this index slice.
 	for _, m := range s.Indexes {
 		if m.Index != nil {
 			includeBytesPerRow = m.IncludeBytesPerRow
-			hasSubIndex = true
+			colMetaJSON = m.Index.GetFilterColMetaJSON()
 			break
 		}
-	}
-	if !hasSubIndex {
-		return nil
 	}
 
 	stub := &IvfpqModel[T]{Id: vectorindex.CdcTailId}
@@ -172,6 +172,20 @@ func (s *IvfpqSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 	}
 	if len(chunks) == 0 {
 		return nil
+	}
+	cuvscdc.SortChunks(chunks)
+
+	if colMetaJSON == "" {
+		colMetaJSON, err = cuvscdc.PeekColMetaJSON(chunks)
+		if err != nil {
+			return err
+		}
+		if colMetaJSON != "" {
+			includeBytesPerRow, err = cuvscdc.CdcIncludeBytesPerRow(colMetaJSON)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	dim := int(s.Idxcfg.CuvsIvfpq.Dimensions)
@@ -198,6 +212,7 @@ func (s *IvfpqSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 		OverflowVecs:         ovVecs,
 		OverflowIncludeBytes: ovInc,
 		IncludeBytesPerRow:   includeBytesPerRow,
+		OverflowColMetaJSON:  colMetaJSON,
 	})
 	return nil
 }
@@ -257,6 +272,10 @@ func (s *IvfpqSearch[T]) buildOverflow() error {
 		return err
 	}
 
+	// INCLUDE-column wiring — pull the col-meta JSON from the first loaded
+	// model (every shard agrees by construction). For small-data-only
+	// indexes (no tag=0 sub-index ever built) the synthetic CDC-tail model
+	// carries the colMetaJSON recovered from the CdcOpHeader record.
 	var (
 		colMetaJSON        string
 		includeBytesPerRow int
@@ -266,6 +285,15 @@ func (s *IvfpqSearch[T]) buildOverflow() error {
 			colMetaJSON = m.Index.GetFilterColMetaJSON()
 			includeBytesPerRow = m.IncludeBytesPerRow
 			break
+		}
+	}
+	if colMetaJSON == "" {
+		for _, m := range s.Indexes {
+			if m.OverflowColMetaJSON != "" {
+				colMetaJSON = m.OverflowColMetaJSON
+				includeBytesPerRow = m.IncludeBytesPerRow
+				break
+			}
 		}
 	}
 	if colMetaJSON != "" && includeBytesPerRow > 0 {
@@ -300,6 +328,12 @@ func (s *IvfpqSearch[T]) buildOverflow() error {
 }
 
 // buildMultiIndex assembles a MultiGpuIvfPq from the loaded indexes.
+// Returns nil when there is nothing to search — either no sub-indexes
+// loaded AND no brute-force overflow built. The empty-MultiIndex case
+// feeds into Search, which returns []int64{}, []float64{} on
+// s.MultiIndex == nil — that's the load-bearing path for "no main
+// index + no brute-force → empty result". Any future regression here
+// will fail TestIvfpqSearchEmpty.
 func (s *IvfpqSearch[T]) buildMultiIndex() *cuvs.MultiGpuIvfPq[T] {
 	cuvsMetric, ok := metric.MetricTypeToCuvsMetric[metric.MetricType(s.Idxcfg.CuvsIvfpq.Metric)]
 	if !ok {
@@ -312,6 +346,8 @@ func (s *IvfpqSearch[T]) buildMultiIndex() *cuvs.MultiGpuIvfPq[T] {
 		}
 	}
 	if len(gpuIndices) == 0 && s.Overflow == nil {
+		// Empty index: no sub-indexes AND no brute-force overflow.
+		// Search returns an empty result via its nil-MultiIndex guard.
 		return nil
 	}
 	dim := uint32(s.Idxcfg.CuvsIvfpq.Dimensions)

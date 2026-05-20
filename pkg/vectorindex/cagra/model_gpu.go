@@ -84,6 +84,15 @@ type CagraModel[T cuvs.VectorType] struct {
 	// row for the null mask. Empty when the index has no INCLUDE columns.
 	OverflowIncludeBytes []byte
 	IncludeBytesPerRow   int
+
+	// OverflowColMetaJSON carries the persisted INCLUDE-column layout
+	// recovered from the CdcOpHeader record in tag=1 chunk_id=0 when
+	// this synthetic CDC-tail model is the only one in s.Indexes
+	// (small-data-only index, no tag=0 sub-index was ever built).
+	// buildOverflow consults this when GetFilterColMetaJSON() can't be
+	// asked of a main-index. Empty for the normal "tag=1 alongside
+	// tag=0" case.
+	OverflowColMetaJSON string
 }
 
 // NewCagraModelForBuild creates a CagraModel ready for bulk-build.

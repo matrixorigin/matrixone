@@ -135,6 +135,38 @@ func appendFilterRow(
 	return nil
 }
 
+// colMetaJSONFromCols builds the canonical INCLUDE-column metadata
+// JSON (matching cuvscdc.ResolveIncludeColumns output) directly from
+// the FilterStore-side []cuvsfilter.ColumnMeta. Used by the small-tail
+// CDC emit path to persist the column layout as a CdcOpHeader record
+// at chunk_id=0 so search-side decode works even when no tag=0
+// sub-index exists.
+//
+// Returns "" when cols is empty so callers can skip emitting the
+// header record.
+func colMetaJSONFromCols(cols []cuvsfilter.ColumnMeta) string {
+	if len(cols) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteByte('[')
+	for i, c := range cols {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(`{"name":"`)
+		sb.WriteString(c.Name)
+		sb.WriteString(`","type":`)
+		// cuvsfilter.ColType numeric values match the cuvscdc type
+		// codes (0=int32, 1=int64, 2=float32, 3=float64, 4=uint64) by
+		// design — see pkg/cuvs/filter/filter.go's docstring.
+		fmt.Fprintf(&sb, "%d", int(c.TypeOid))
+		sb.WriteByte('}')
+	}
+	sb.WriteByte(']')
+	return sb.String()
+}
+
 // includeBytesPerRowFromCols mirrors cuvscdc.CdcIncludeBytesPerRow but
 // computes from the FilterStore-side []cuvsfilter.ColumnMeta directly,
 // so the build-time table function doesn't need to round-trip through
