@@ -21,6 +21,7 @@ package idxcron
 
 import (
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type Hooks struct{}
@@ -30,6 +31,7 @@ var _ idxcronplugin.Hooks = Hooks{}
 // Updatable — HNSW has no minimum-size constraint and no idxcron
 // action wired today. Returns true unconditionally so the (unreached)
 // cron path doesn't surprise-skip if anyone wires HNSW into idxcron.
-func (Hooks) Updatable(_ idxcronplugin.UpdatableInput) (bool, string, error) {
+func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (bool, string, error) {
+	logutil.Infof("[plugin] hnsw Updatable: index=%s", in.IndexName)
 	return true, "", nil
 }

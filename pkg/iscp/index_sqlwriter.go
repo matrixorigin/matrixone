@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
@@ -107,6 +108,7 @@ var _ IndexSqlWriter = new(HnswSqlWriter[float32])
 // hnsw switch — new algorithms register a Hooks impl (see
 // pkg/sql/compile/iscp_register.go) and slot in automatically.
 func NewIndexSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
+	logutil.Infof("[plugin] iscp NewIndexSqlWriter: algo=%s db=%s table=%s index=%s", algo, info.DBName, info.TableName, info.IndexName)
 	h, ok := GetHooks(algo)
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("IndexSqlWriter: no iscp.Hooks registered for algo %s", algo))

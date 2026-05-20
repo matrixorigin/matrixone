@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -104,6 +105,7 @@ func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[str
 // the current txn (true — background reindex) or is deferred to the
 // CDC pipeline via InitSQL (false — the always-async default path).
 func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+	logutil.Infof("[plugin] ivfpq handleCreate: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
 	// 0. experimental flag gate (mirrors HNSW's check at ddl_index_algo.go:627).
 	// Frontend-only: re-entry from background (idxcron ALTER REINDEX,
 	// ProcessInitSQL) must not re-check the flag, since (a) it may have
@@ -214,13 +216,15 @@ func (Hooks) ValidateReindexParams(old map[string]string, _ compileplugin.Reinde
 //
 // IVF-PQ does none of those — generic hidden-table deletion is enough —
 // so this is a no-op. Compare HNSW, which does maintain CDC tasks.
-func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) error {
+func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
+	logutil.Infof("[plugin] ivfpq HandleDropIndex: defs=%d", len(defs))
 	return nil
 }
 
 // IdxcronMetadata pins IVF-PQ's build-time params into the cron task's
 // metadata blob — see CAGRA's compile.go for the rationale.
 func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
+	logutil.Infof("[plugin] ivfpq IdxcronMetadata: isFrontend=%v", ctx.IsFrontend())
 	return compileplugin.BuildIdxcronMetadata(ctx, compileplugin.IdxcronVarSpec{
 		Capture: []string{
 			"ivfpq_threads_build",

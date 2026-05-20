@@ -16,6 +16,7 @@ package compile
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -54,12 +55,18 @@ type IdxcronVarSpec struct {
 // to call the right MetadataWriter.AddInt / AddFloat / AddString /
 // AddInt8 method.
 func BuildIdxcronMetadata(ctx CompileContext, spec IdxcronVarSpec) ([]byte, error) {
+	tblName := ""
+	if def := ctx.OriginalTableDef(); def != nil {
+		tblName = def.Name
+	}
 	if !ctx.IsFrontend() {
+		logutil.Infof("[isfrontend] BuildIdxcronMetadata skip: table=%s isFrontend=false (background re-entry)", tblName)
 		return nil, nil
 	}
 	if len(spec.Capture) == 0 {
 		return nil, nil
 	}
+	logutil.Infof("[isfrontend] BuildIdxcronMetadata capture: table=%s isFrontend=true capture=%v", tblName, spec.Capture)
 
 	w := sqlexec.NewMetadataWriter()
 	for _, name := range spec.Capture {

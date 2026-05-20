@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -68,6 +69,7 @@ func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[str
 // the current txn (true — background reindex) or is deferred to the
 // CDC pipeline via InitSQL (false — the always-async default path).
 func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+	logutil.Infof("[plugin] cagra handleCreate: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
 	// Gate the experimental flag check on frontend context only. The
 	// flag was enforced at the original CREATE INDEX time; re-entry
 	// from background (idxcron ALTER REINDEX, ProcessInitSQL) must
@@ -165,7 +167,8 @@ func (Hooks) ValidateReindexParams(old map[string]string, _ compileplugin.Reinde
 }
 
 // HandleDropIndex is a no-op: generic hidden-table cleanup is sufficient.
-func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) error {
+func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
+	logutil.Infof("[plugin] cagra HandleDropIndex: defs=%d", len(defs))
 	return nil
 }
 
@@ -175,6 +178,7 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.
 // when the cron fires hours/days later). Background re-entry is gated
 // by BuildIdxcronMetadata's ctx.IsFrontend() check.
 func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
+	logutil.Infof("[plugin] cagra IdxcronMetadata: isFrontend=%v", ctx.IsFrontend())
 	return compileplugin.BuildIdxcronMetadata(ctx, compileplugin.IdxcronVarSpec{
 		Capture: []string{
 			"cagra_threads_build",

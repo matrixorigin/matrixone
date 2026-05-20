@@ -91,7 +91,8 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 // by the SQL layer; CDC tasks and idxcron registrations are torn down
 // via DropAllIndexCdcTasks / DropAllIndexUpdateTasks at the same seam
 // (pkg/sql/compile/ddl.go DropIndex path). No additional cleanup here.
-func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) error {
+func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
+	logutil.Infof("[plugin] ivfflat HandleDropIndex: defs=%d", len(defs))
 	return nil
 }
 
@@ -114,6 +115,7 @@ var ivfflatIdxcronSpec = compileplugin.IdxcronVarSpec{
 // previous getIvfflatMetadata function (with its bespoke
 // resolve+marshal loop) is replaced by this 3-line spec declaration.
 func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
+	logutil.Infof("[plugin] ivfflat IdxcronMetadata: isFrontend=%v", ctx.IsFrontend())
 	return compileplugin.BuildIdxcronMetadata(ctx, ivfflatIdxcronSpec)
 }
 
@@ -125,6 +127,7 @@ func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 // checked one. The `experimental_ivf_index` variable still flows
 // through IdxcronMetadata below for downstream consumers.
 func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+	logutil.Infof("[plugin] ivfflat runCreateOrReindex: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
 	// 1. static check
 	if len(indexDefs) != 3 {
 		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")

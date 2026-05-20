@@ -164,6 +164,7 @@ func (s *IvfpqSync) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorI
 // EncodeEventRecord byte chunks from the CDC writer to the pending
 // buffer. See pkg/vectorindex/cagra/sync.go for the rationale.
 func (s *IvfpqSync) AppendRecords(_ *sqlexec.SqlProcess, recordBytes []byte) error {
+	before := len(s.pendingSizes)
 	pos := 0
 	for pos < len(recordBytes) {
 		op := cuvscdc.CdcOp(recordBytes[pos])
@@ -186,6 +187,8 @@ func (s *IvfpqSync) AppendRecords(_ *sqlexec.SqlProcess, recordBytes []byte) err
 		pos += n
 	}
 	s.pendingRecords = append(s.pendingRecords, recordBytes...)
+	logutil.Infof("[plugin] ivfpq Sync.AppendRecords IN: index=%s records=%d bytes=%d pending=%d",
+		s.idxname, len(s.pendingSizes)-before, len(recordBytes), len(s.pendingSizes))
 	return nil
 }
 
@@ -219,6 +222,8 @@ func (s *IvfpqSync) Save(sqlproc *sqlexec.SqlProcess) error {
 	if len(s.pendingSizes) == 0 {
 		return nil
 	}
+	nRecords := len(s.pendingSizes)
+	nBytes := len(s.pendingRecords)
 	nextId, err := s.nextChunkId(sqlproc, vectorindex.Tag_CdcEvents)
 	if err != nil {
 		return err
@@ -235,6 +240,8 @@ func (s *IvfpqSync) Save(sqlproc *sqlexec.SqlProcess) error {
 	if err = s.runSqls(sqlproc, sqls); err != nil {
 		return err
 	}
+	logutil.Infof("[plugin] ivfpq Sync.Save OUT: index=%s records=%d bytes=%d chunks=%d startChunkId=%d",
+		s.idxname, nRecords, nBytes, len(sqls), nextId)
 	s.pendingRecords = s.pendingRecords[:0]
 	s.pendingSizes = s.pendingSizes[:0]
 	veccache.Cache.Remove(s.tblcfg.IndexTable)

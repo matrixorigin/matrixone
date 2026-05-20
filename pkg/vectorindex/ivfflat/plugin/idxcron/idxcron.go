@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -65,6 +66,7 @@ var _ idxcronplugin.Hooks = Hooks{}
 // already enforced auto_update on, currentHour matches, and
 // createdAt + interval elapsed; everything below is IVF-FLAT-owned.
 func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (ok bool, reason string, err error) {
+	logutil.Infof("[plugin] ivfflat Updatable: db=%s table=%s index=%s", in.TableDef.DbName, in.TableDef.Name, in.IndexName)
 	nlist, err := lookupNlist(in.TableDef.Indexes, in.IndexName)
 	if err != nil {
 		return false, "", err

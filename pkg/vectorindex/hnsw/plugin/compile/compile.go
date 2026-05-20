@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -55,6 +56,7 @@ type Hooks struct{}
 // HandleCreateIndex is lifted from Scope.handleVectorHnswIndex
 // (pkg/sql/compile/ddl_index_algo.go:627).
 func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	logutil.Infof("[plugin] hnsw HandleCreateIndex: isFrontend=%v defs=%d", ctx.IsFrontend(), len(indexDefs))
 	// Frontend-only: re-entry from background (idxcron ALTER REINDEX,
 	// ProcessInitSQL) must not re-check the flag, since (a) it may
 	// have been toggled off since the original CREATE INDEX, and (b)
@@ -152,7 +154,8 @@ func (Hooks) ValidateReindexParams(old map[string]string, _ compileplugin.Reinde
 // pkg/sql/compile/ddl.go already calls DropIndexCdcTask during DROP INDEX
 // (ddl.go:2511). This hook is the seam for any algorithm-specific cleanup
 // not covered there.
-func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) error {
+func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
+	logutil.Infof("[plugin] hnsw HandleDropIndex: defs=%d", len(defs))
 	return nil
 }
 

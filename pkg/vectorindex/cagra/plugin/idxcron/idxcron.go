@@ -21,6 +21,7 @@ package idxcron
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	cuvsidxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs/idxcron"
 )
 
@@ -34,6 +35,7 @@ var _ idxcronplugin.Hooks = Hooks{}
 // search is the natural fallback and a rebuild would either fail or
 // produce a graph too small to be useful.
 func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (bool, string, error) {
+	logutil.Infof("[plugin] cagra Updatable: db=%s table=%s index=%s", in.TableDef.DbName, in.TableDef.Name, in.IndexName)
 	return cuvsidxcron.CuvsUpdatable(in, cuvsidxcron.CuvsUpdatableSpec{
 		StorageTableType: catalog.Cagra_TblType_Storage,
 		ThresholdParam:   catalog.IntermediateGraphDegree,

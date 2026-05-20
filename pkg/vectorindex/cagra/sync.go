@@ -210,6 +210,7 @@ func (s *CagraSync) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorI
 // pendingSizes (cheap: each record's size is determined by its op
 // byte + the index's dim + includeBytesPerRow).
 func (s *CagraSync) AppendRecords(_ *sqlexec.SqlProcess, recordBytes []byte) error {
+	before := len(s.pendingSizes)
 	pos := 0
 	for pos < len(recordBytes) {
 		op := cuvscdc.CdcOp(recordBytes[pos])
@@ -232,6 +233,8 @@ func (s *CagraSync) AppendRecords(_ *sqlexec.SqlProcess, recordBytes []byte) err
 		pos += n
 	}
 	s.pendingRecords = append(s.pendingRecords, recordBytes...)
+	logutil.Infof("[plugin] cagra Sync.AppendRecords IN: index=%s records=%d bytes=%d pending=%d",
+		s.idxname, len(s.pendingSizes)-before, len(recordBytes), len(s.pendingSizes))
 	return nil
 }
 
@@ -269,6 +272,8 @@ func (s *CagraSync) Save(sqlproc *sqlexec.SqlProcess) error {
 	if len(s.pendingSizes) == 0 {
 		return nil
 	}
+	nRecords := len(s.pendingSizes)
+	nBytes := len(s.pendingRecords)
 	nextId, err := s.nextChunkId(sqlproc, vectorindex.Tag_CdcEvents)
 	if err != nil {
 		return err
@@ -285,6 +290,8 @@ func (s *CagraSync) Save(sqlproc *sqlexec.SqlProcess) error {
 	if err = s.runSqls(sqlproc, sqls); err != nil {
 		return err
 	}
+	logutil.Infof("[plugin] cagra Sync.Save OUT: index=%s records=%d bytes=%d chunks=%d startChunkId=%d",
+		s.idxname, nRecords, nBytes, len(sqls), nextId)
 	// Reset pending buffer; subsequent Update + Save cycles re-grow it.
 	s.pendingRecords = s.pendingRecords[:0]
 	s.pendingSizes = s.pendingSizes[:0]

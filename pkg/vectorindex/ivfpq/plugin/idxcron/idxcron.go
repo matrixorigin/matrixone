@@ -20,6 +20,7 @@ package idxcron
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	cuvsidxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs/idxcron"
 )
 
@@ -33,6 +34,7 @@ var _ idxcronplugin.Hooks = Hooks{}
 // Brute-force search handles small-scale queries until the dataset
 // crosses the threshold.
 func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (bool, string, error) {
+	logutil.Infof("[plugin] ivfpq Updatable: db=%s table=%s index=%s", in.TableDef.DbName, in.TableDef.Name, in.IndexName)
 	return cuvsidxcron.CuvsUpdatable(in, cuvsidxcron.CuvsUpdatableSpec{
 		StorageTableType: catalog.Ivfpq_TblType_Storage,
 		ThresholdParam:   catalog.IndexAlgoParamLists,
