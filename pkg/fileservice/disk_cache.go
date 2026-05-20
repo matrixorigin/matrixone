@@ -512,7 +512,8 @@ func (d *DiskCache) writeFile(
 			// already exists
 			return false, nil
 		} else if os.IsNotExist(err) {
-			d.cache.Delete(ctx, diskPath)
+			// Repair the missing physical file and replace the existing index
+			// after the rewrite so FIFO accounting uses the repaired file size.
 		} else {
 			return false, err
 		}
@@ -588,7 +589,9 @@ func (d *DiskCache) writeFile(
 		zap.Any("path", diskPath),
 	)
 
-	d.cache.Set(ctx, diskPath, struct{}{}, size)
+	if !d.cache.Replace(ctx, diskPath, struct{}{}, size) {
+		d.cache.Set(ctx, diskPath, struct{}{}, size)
+	}
 
 	numWrite++
 

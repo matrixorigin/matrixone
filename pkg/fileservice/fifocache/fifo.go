@@ -63,7 +63,15 @@ type _CacheItem[K comparable, V any] struct {
 	valueOK bool
 	size    int64
 	count   atomic.Int32
+	queue   uint8
 }
+
+const (
+	cacheItemNoQueue uint8 = iota
+	cacheItemQueue1
+	cacheItemQueue2
+	cacheItemGhost
+)
 
 func (c *_CacheItem[K, V]) inc() {
 	for {
@@ -185,6 +193,7 @@ func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V]) {
 	}
 
 	// enqueue
+	item.queue = cacheItemQueue1
 	c.queue1.enqueue(item)
 	c.used1 += item.size
 
@@ -192,6 +201,7 @@ func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V]) {
 	for {
 		select {
 		case item := <-c.itemQueue:
+			item.queue = cacheItemQueue1
 			c.queue1.enqueue(item)
 			c.used1 += item.size
 		default:
@@ -254,6 +264,39 @@ func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 	c.postEvictItem(ctx, pe, evicted)
 	// we do not update queues here, to reduce cost
 	// deleted item in queue will be evicted eventually.
+}
+
+func (c *Cache[K, V]) Replace(ctx context.Context, key K, value V, size int64) bool {
+	var pe _PendingPostEvict[K, V]
+	c.queueLock.Lock()
+	shard := &c.shards[c.keyShardFunc(key)%numShards]
+	shard.Lock()
+	item, ok := shard.values[key]
+	if !ok || !item.valueOK {
+		shard.Unlock()
+		c.queueLock.Unlock()
+		return false
+	}
+	pe.key = item.key
+	pe.value = item.value
+	pe.size = item.size
+	oldSize := item.size
+	item.value = value
+	item.size = size
+	switch item.queue {
+	case cacheItemQueue1:
+		c.used1 += size - oldSize
+	case cacheItemQueue2:
+		c.used2 += size - oldSize
+	}
+	shard.Unlock()
+	c.queueLock.Unlock()
+	c.postEvictItem(ctx, pe, true)
+	if c.postSet != nil {
+		c.postSet(ctx, key, value, size)
+	}
+	c.Evict(ctx, nil, 0)
+	return true
 }
 
 // _PendingPostEvict holds evicted item data for calling postEvict outside the queueLock.
@@ -350,6 +393,7 @@ func (c *Cache[K, V]) evict1() (pe _PendingPostEvict[K, V], evicted bool) {
 		}
 		if item.count.Load() > 1 {
 			// put queue2
+			item.queue = cacheItemQueue2
 			c.queue2.enqueue(item)
 			c.used1 -= item.size
 			c.used2 += item.size
@@ -392,6 +436,7 @@ func (c *Cache[K, V]) evict2() (pe _PendingPostEvict[K, V], evicted bool) {
 func (c *Cache[K, V]) enqueueGhost(item *_CacheItem[K, V]) (pe _PendingPostEvict[K, V], evicted bool) {
 	c.ghost.enqueue(item)
 	c.ghostSize += item.size
+	item.queue = cacheItemGhost
 
 	shard := &c.shards[c.keyShardFunc(item.key)%numShards]
 	shard.Lock()
@@ -431,7 +476,11 @@ func (c *Cache[K, V]) evictGhost() {
 		if !ok {
 			break
 		}
+		if item.queue != cacheItemGhost {
+			continue
+		}
 		c.ghostSize -= item.size
+		item.queue = cacheItemNoQueue
 		c.deleteItem(item)
 	}
 }
