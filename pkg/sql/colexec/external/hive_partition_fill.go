@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -42,8 +43,8 @@ func (param *ExternalParam) isHivePartitionCol(colName string) bool {
 	return false
 }
 
-// refreshPartitionValues extracts partition values from the current file path.
-func (param *ExternalParam) refreshPartitionValues() error {
+// refreshPartitionValues extracts and validates partition values from the current file path.
+func (param *ExternalParam) refreshPartitionValues(proc *process.Process) error {
 	if param.Extern == nil || !param.Extern.HivePartitioning {
 		return nil
 	}
@@ -56,7 +57,67 @@ func (param *ExternalParam) refreshPartitionValues() error {
 		return err
 	}
 	param.currentPartValues = values
+	return param.validatePartitionValues(proc)
+}
+
+func (param *ExternalParam) validatePartitionValues(proc *process.Process) error {
+	partCols := param.Extern.HivePartitionCols
+	colTypes := param.Extern.HivePartitionColTypes
+	if len(colTypes) == 0 {
+		return nil
+	}
+	if len(colTypes) != len(partCols) {
+		return moerr.NewInternalErrorf(proc.Ctx,
+			"hive partition column/type mismatch: cols=%d types=%d", len(partCols), len(colTypes))
+	}
+
+	relPath := param.Fileparam.Filepath
+	if param.Extern.Filepath != "" {
+		relPath = relPartitionPath(param.Fileparam.Filepath, param.Extern.Filepath)
+	}
+
+	for i, colName := range partCols {
+		colName = strings.ToLower(colName)
+		strVal, present := param.currentPartValues[colName]
+		if !present {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"partition column '%s' not found in path '%s'", colName, relPath)
+		}
+		if strVal == HiveDefaultPartition {
+			if !colTypes[i].NullAbility {
+				return moerr.NewConstraintViolationf(proc.Ctx,
+					"partition column '%s' is NOT NULL but directory has __HIVE_DEFAULT_PARTITION__ in path '%s'; allow NULL on the partition column or remove/rename the default partition directory",
+					colName, relPath)
+			}
+			continue
+		}
+		if err := validatePartitionValue(strVal, colName, colTypes[i], proc, relPath); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func validatePartitionValue(strVal, colName string, colType tree.HivePartColType, proc *process.Process, filePath string) error {
+	typ := types.T(colType.Id)
+	if typ == types.T_any {
+		return nil
+	}
+	vec := vector.NewVec(types.New(typ, colType.Width, colType.Scale))
+	col := &plan.ColDef{
+		Name: colName,
+		Typ: plan.Type{
+			Id:          colType.Id,
+			Width:       colType.Width,
+			Scale:       colType.Scale,
+			Enumvalues:  colType.Enumvalues,
+			NotNullable: !colType.NullAbility,
+		},
+		Default: &plan.Default{NullAbility: colType.NullAbility},
+	}
+	err := fillConstantVector(vec, strVal, col, 1, proc, filePath)
+	vec.Free(proc.Mp())
+	return err
 }
 
 // fillVirtualColumns fills partition columns and __mo_filepath for a batch.

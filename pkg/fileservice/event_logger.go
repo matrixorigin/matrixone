@@ -91,7 +91,14 @@ func LogSlowEvent(ctx context.Context, threshold time.Duration) {
 
 	logger.mu.Lock()
 	defer func() {
-		*logger.events = (*logger.events)[:0]
+		events := *logger.events
+		for i := range events {
+			events[i].args = nil
+			for j := range events[i]._args {
+				events[i]._args[j] = nil
+			}
+		}
+		*logger.events = events[:0]
 		eventsPool.Put(logger.events)
 		logger.events = nil
 		logger.closed = true
