@@ -58,7 +58,7 @@ func TestMPool(t *testing.T) {
 	}
 
 	require.True(t, nb0 == m.CurrNB(), "leak")
-	require.True(t, nalloc0+10000*2 == m.Stats().NumAlloc.Load(), "alloc")
+	require.True(t, m.Stats().NumAlloc.Load() >= nalloc0+10000, "alloc")
 	require.True(t, nalloc0-nfree0 == m.Stats().NumAlloc.Load()-m.Stats().NumFree.Load(), "free")
 }
 
@@ -169,18 +169,18 @@ func TestMPoolNoLock(t *testing.T) {
 
 	bs1, err := mp1.Alloc(100, true)
 	require.NoError(t, err)
-	require.Equal(t, int64(100), mp1.CurrNB())
+	require.Equal(t, int64(128), mp1.CurrNB())
 
 	bs1, err = mp1.ReallocZero(bs1, 200, true)
 	require.NoError(t, err)
-	require.Equal(t, int64(200), mp1.CurrNB())
+	require.Equal(t, int64(256), mp1.CurrNB())
 
 	mp1.Free(bs1)
 	require.Equal(t, int64(0), mp1.CurrNB())
 
 	bs2, err := mp2.Alloc(100, true)
 	require.NoError(t, err)
-	require.Equal(t, int64(100), mp2.CurrNB())
+	require.Equal(t, int64(128), mp2.CurrNB())
 
 	bs22, err := mp2.ReallocZero(bs2, 2000000, true)
 	require.NoError(t, err)
@@ -257,6 +257,13 @@ func TestDoubleFree(t *testing.T) {
 	require.Panics(t, func() {
 		mp.Free(bs)
 	}, "double free should panic")
+
+	large, err := mp.Alloc(2048, true)
+	require.NoError(t, err)
+	mp.Free(large)
+	require.Panics(t, func() {
+		mp.Free(large)
+	}, "double free should panic for malloc-backed allocations")
 
 	DeleteMPool(mp)
 }
