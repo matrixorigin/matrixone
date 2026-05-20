@@ -157,6 +157,103 @@ func TestHighConcurrency(t *testing.T) {
 	wg.Wait()
 }
 
+type blockingReleaseData struct {
+	bytes   []byte
+	started chan struct{}
+	unblock chan struct{}
+}
+
+var _ fscache.Data = (*blockingReleaseData)(nil)
+
+func (d *blockingReleaseData) Bytes() []byte {
+	return d.bytes
+}
+
+func (d *blockingReleaseData) Slice(length int) fscache.Data {
+	return &blockingReleaseData{
+		bytes:   d.bytes[:length],
+		started: d.started,
+		unblock: d.unblock,
+	}
+}
+
+func (d *blockingReleaseData) Retain() {}
+
+func (d *blockingReleaseData) Release() {
+	select {
+	case <-d.started:
+	default:
+		close(d.started)
+	}
+	<-d.unblock
+}
+
+type staticTestData []byte
+
+var _ fscache.Data = staticTestData{}
+
+func (d staticTestData) Bytes() []byte {
+	return d
+}
+
+func (d staticTestData) Slice(length int) fscache.Data {
+	return d[:length]
+}
+
+func (d staticTestData) Retain() {}
+
+func (d staticTestData) Release() {}
+
+func TestMemCacheSkipsStalePostEvictAfterReinsert(t *testing.T) {
+	ctx := context.Background()
+	releaseStarted := make(chan struct{})
+	releaseUnblock := make(chan struct{})
+
+	var mu sync.Mutex
+	evicted := make(map[fscache.CacheKey]int)
+	cache := NewMemCache(
+		fscache.ConstCapacity(1),
+		&CacheCallbacks{
+			PostEvict: []CacheCallbackFunc{
+				func(key fscache.CacheKey, _ fscache.Data) {
+					mu.Lock()
+					evicted[key]++
+					mu.Unlock()
+				},
+			},
+		},
+		nil,
+		"",
+	)
+	defer cache.Close(ctx)
+
+	key1 := fscache.CacheKey{Path: "foo", Offset: 0, Sz: 1}
+	key2 := fscache.CacheKey{Path: "bar", Offset: 0, Sz: 1}
+	assert.NoError(t, cache.cache.Set(ctx, key1, &blockingReleaseData{
+		bytes:   []byte("a"),
+		started: releaseStarted,
+		unblock: releaseUnblock,
+	}))
+
+	setDone := make(chan error, 1)
+	go func() {
+		setDone <- cache.cache.Set(ctx, key2, staticTestData([]byte("b")))
+	}()
+
+	<-releaseStarted
+	assert.NoError(t, cache.cache.Set(ctx, key1, staticTestData([]byte("c"))))
+	close(releaseUnblock)
+	assert.NoError(t, <-setDone)
+
+	_, ok := cache.cache.Get(ctx, key1)
+	assert.True(t, ok)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Zero(t, evicted[key1])
+	assert.Equal(t, 1, evicted[key2])
+}
+
 func BenchmarkMemoryCacheUpdate(b *testing.B) {
 	ctx := context.Background()
 

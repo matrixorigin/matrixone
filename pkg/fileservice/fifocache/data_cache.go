@@ -110,6 +110,10 @@ func (d *DataCache) Get(ctx context.Context, key query.CacheKey) (fscache.Data, 
 	return d.fifo.Get(ctx, key)
 }
 
+func (d *DataCache) Contains(key query.CacheKey) bool {
+	return d.fifo.Contains(key)
+}
+
 func (d *DataCache) Set(ctx context.Context, key query.CacheKey, value fscache.Data) error {
 	d.fifo.Set(ctx, key, value, int64(len(value.Bytes())))
 	return nil
