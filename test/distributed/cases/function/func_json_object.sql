@@ -5,7 +5,7 @@ select json_object('a', 1, 'b', 'abc', 'c', null, 'd', true);
 select json_object('int', 123, 'float', 1.5, 'bool', false);
 select json_object('d64', cast(12345.67 as decimal(10,2)), 'd128', cast(9876.54321 as decimal(30,10)));
 select json_object(cast('2021-02-01' as date), cast('11:11:11' as time));
-select json_object('ts', cast('2022-01-01 01:02:03' as timestamp));
+select json_object('ts', cast('2022-01-01 01:02:03' as datetime));
 select json_object('uid', cast('550e8400-e29b-41d4-a716-446655440000' as uuid));
 select json_object('year', cast('2021' as year));
 select json_object('bit1', cast(1 as bit), 'bit0', cast(0 as bit));

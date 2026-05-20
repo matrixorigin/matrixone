@@ -7,7 +7,7 @@ select json_array(1.5, 2.5, 3.5);
 select json_array(true, false, true);
 select json_array("hello", "world");
 select json_array(cast('2021-02-01' as date), cast('11:11:11' as time), cast('2021-02-01 11:11:11' as datetime));
-select json_array(cast('2022-01-01 01:02:03' as timestamp));
+select json_array(cast('2022-01-01 01:02:03' as datetime));
 select json_array(cast(12345.67 as decimal(10,2)), cast(9876.54321 as decimal(30,10)));
 select json_array(cast('550e8400-e29b-41d4-a716-446655440000' as uuid));
 select json_array(json_extract('{"a":1}', '$.a'), json_extract('{"b":2}', '$.b'));

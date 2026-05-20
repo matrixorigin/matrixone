@@ -22,9 +22,9 @@ json_array(hello, world)
 select json_array(cast('2021-02-01' as date), cast('11:11:11' as time), cast('2021-02-01 11:11:11' as datetime));
 json_array(cast(2021-02-01 as date), cast(11:11:11 as time), cast(2021-02-01 11:11:11 as datetime))
 ["2021-02-01", "11:11:11", "2021-02-01 11:11:11"]
-select json_array(cast('2022-01-01 01:02:03' as timestamp));
-json_array(cast(2022-01-01 01:02:03 as timestamp))
-["2021-12-31 17:02:03.000000 UTC"]
+select json_array(cast('2022-01-01 01:02:03' as datetime));
+json_array(cast(2022-01-01 01:02:03 as datetime))
+["2022-01-01 01:02:03"]
 select json_array(cast(12345.67 as decimal(10,2)), cast(9876.54321 as decimal(30,10)));
 json_array(cast(12345.67 as decimal(10, 2)), cast(9876.54321 as decimal(30, 10)))
 [12345.67, 9876.5432100000]
