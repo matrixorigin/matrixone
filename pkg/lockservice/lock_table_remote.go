@@ -102,7 +102,13 @@ func (l *remoteLockTable) lock(
 
 	// Apply a timeout to the RPC call to prevent goroutines from blocking
 	// indefinitely when the remote lock service is unresponsive.
-	rpcCtx, cancel := context.WithTimeout(ctx, defaultLockRPCTimeout)
+	// Session-level SET lock_wait_timeout takes highest priority (passed via
+	// pb.LockOptions)
+	lockRpcTimeout := defaultLockRPCTimeout
+	if d := time.Duration(opts.LockWaitTimeout) * time.Second; d > 0 {
+		lockRpcTimeout = d
+	}
+	rpcCtx, cancel := context.WithTimeout(ctx, lockRpcTimeout)
 	defer cancel()
 	resp, err := l.client.Send(rpcCtx, req)
 

@@ -114,7 +114,7 @@ do
   fi
 	dir=$(basename $file .proto)
 	mkdir -p $PB_DIR/$dir
-	${GOPATH}/bin/protoc -I=.:$PROTOC_DIR:$VENDOR_DIR:/usr/include --$outArgName=paths=source_relative:./pkg/pb/$dir  $file
+	${GOPATH}/bin/protoc -I=.:$PROTOC_DIR:$VENDOR_DIR --$outArgName=paths=source_relative:./pkg/pb/$dir  $file
     goimports -w $PB_DIR/$dir/*pb.go
 done
 
