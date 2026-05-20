@@ -173,7 +173,7 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 
 		exec := v.(executor.SQLExecutor)
 		// SqlCtx is the background entry point (no frontend session) —
-		// inherits the default IsBackground=true.
+		// inherits the default IsFrontend=false (i.e. background).
 		opts := executor.Options{}.
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
@@ -243,7 +243,7 @@ func RunStreamingSql(
 
 		exec := v.(executor.SQLExecutor)
 		// SqlCtx is the background entry point (no frontend session) —
-		// inherits the default IsBackground=true.
+		// inherits the default IsFrontend=false (i.e. background).
 		opts := executor.Options{}.
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
@@ -301,7 +301,7 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 
 		exec := v.(executor.SQLExecutor)
 		// SqlCtx is the background entry point (no frontend session) —
-		// inherits the default IsBackground=true.
+		// inherits the default IsFrontend=false (i.e. background).
 		opts := executor.Options{}.
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode

@@ -71,14 +71,14 @@ type Options struct {
 	resolveVariableFunc     func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	adjustTableExtraFunc    func(*api.SchemaExtra) error
 	keepTxnAlive            bool
-	// isFrontend is the inverted storage for the "is this a background
-	// invocation" signal. Stored inverted so the Go zero value (false)
-	// makes IsBackground() return true: every caller of the internal
-	// SQL executor is treated as background by default. Only the
-	// frontend opts out (via WithIsBackground(false)) at the two proc-
-	// construction sites that bind a session's resolver — mysql client
-	// query handler and the in-frontend back_exec. See
-	// pkg/util/executor/options.go::WithIsBackground.
+	// isFrontend records whether the caller is a frontend
+	// session-bound invocation. Go zero value (false) means
+	// background: every caller of the internal SQL executor is
+	// treated as background by default. Frontend opts in via
+	// WithFrontend(true) at the two proc-construction sites that
+	// bind a session's resolver — mysql client query handler and
+	// the in-frontend back_exec. See
+	// pkg/util/executor/options.go::WithFrontend.
 	isFrontend bool
 }
 
