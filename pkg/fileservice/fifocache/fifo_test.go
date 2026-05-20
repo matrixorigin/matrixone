@@ -88,13 +88,13 @@ func TestCacheEvict3(t *testing.T) {
 	cache := New(
 		fscache.ConstCapacity(1024),
 		ShardInt[int],
-		func(_ context.Context, _ int, _ bool, _ int64) {
+		func(_ context.Context, _ int, _ bool, _ int64, _ uint64) {
 			nSet++
 		},
 		func(_ context.Context, _ int, _ bool, _ int64) {
 			nGet++
 		},
-		func(_ context.Context, _ int, _ bool, _ int64) {
+		func(_ context.Context, _ int, _ bool, _ int64, _ uint64) {
 			nEvict++
 		},
 	)
@@ -125,7 +125,7 @@ func TestDoubleFree(t *testing.T) {
 		fscache.ConstCapacity(1),
 		ShardInt,
 		nil, nil,
-		func(ctx context.Context, key int, value int, size int64) {
+		func(ctx context.Context, key int, value int, size int64, _ uint64) {
 			evicts[key]++
 		},
 	)
@@ -145,11 +145,11 @@ func TestGhostQueue(t *testing.T) {
 	cache := New(
 		fscache.ConstCapacity(1),
 		ShardInt,
-		func(ctx context.Context, key int, value int, size int64) {
+		func(ctx context.Context, key int, value int, size int64, _ uint64) {
 			numSet[key]++
 		},
 		nil,
-		func(ctx context.Context, key int, value int, size int64) {
+		func(ctx context.Context, key int, value int, size int64, _ uint64) {
 			numEvict[key]++
 		},
 	)
@@ -217,7 +217,7 @@ func TestPostEvictRunsOutsideQueueLock(t *testing.T) {
 		fscache.ConstCapacity(1),
 		ShardInt[int],
 		nil, nil,
-		func(_ context.Context, _ int, _ int, _ int64) {
+		func(_ context.Context, _ int, _ int, _ int64, _ uint64) {
 			// Only the first eviction blocks; subsequent ones skip immediately.
 			// Cannot use sync.Once because it blocks callers until f() returns.
 			if evictCount.Add(1) == 1 {
@@ -257,7 +257,7 @@ func TestSetLatencyUnderSlowPostEvict(t *testing.T) {
 		fscache.ConstCapacity(2),
 		ShardInt[int],
 		nil, nil,
-		func(_ context.Context, _ int, _ int, _ int64) {
+		func(_ context.Context, _ int, _ int, _ int64, _ uint64) {
 			select {
 			case evictStarted <- struct{}{}:
 			default:
@@ -292,7 +292,7 @@ func TestPostEvictPanicDoesNotBlockDone(t *testing.T) {
 		fscache.ConstCapacity(1),
 		ShardInt[int],
 		nil, nil,
-		func(_ context.Context, _ int, _ int, _ int64) {
+		func(_ context.Context, _ int, _ int, _ int64, _ uint64) {
 			panic("boom")
 		},
 	)

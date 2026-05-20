@@ -30,9 +30,9 @@ type DataCache struct {
 
 func NewDataCache(
 	capacity fscache.CapacityFunc,
-	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
+	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
 	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
-	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
+	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
 ) *DataCache {
 	return &DataCache{
 		fifo: New(capacity, shardCacheKey, postSet, postGet, postEvict),
@@ -118,6 +118,10 @@ func (d *DataCache) Get(ctx context.Context, key query.CacheKey) (fscache.Data, 
 
 func (d *DataCache) Contains(key query.CacheKey) bool {
 	return d.fifo.Contains(key)
+}
+
+func (d *DataCache) CurrentSeq(key query.CacheKey) (uint64, bool) {
+	return d.fifo.CurrentSeq(key)
 }
 
 func (d *DataCache) Set(ctx context.Context, key query.CacheKey, value fscache.Data) error {
