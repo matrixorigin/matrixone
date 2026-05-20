@@ -29,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -71,11 +71,11 @@ func chunkBytesWithRecords(t *testing.T, n int) []byte {
 	t.Helper()
 	var records []byte
 	for i := 0; i < n; i++ {
-		rec, err := vectorindex.EncodeEventRecord(nil, vectorindex.CdcOpDelete, int64(i+1), nil, nil, testDim, 0)
+		rec, err := cuvscdc.EncodeEventRecord(nil, cuvscdc.CdcOpDelete, int64(i+1), nil, nil, testDim, 0)
 		require.NoError(t, err)
 		records = append(records, rec...)
 	}
-	return vectorindex.FrameCdcChunk(records)
+	return cuvscdc.FrameCdcChunk(records)
 }
 
 // stubSelect returns a runSelectChunkSql replacement that yields a

@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -185,7 +185,7 @@ func TestCuvsCdcWriter_InsertEncodesAsInsertRecord(t *testing.T) {
 
 	// One INSERT record: 1 op + 8 pkid + 4*dim = 21 bytes.
 	require.Len(t, out, 1+8+4*3)
-	require.Equal(t, byte(vectorindex.CdcOpInsert), out[0])
+	require.Equal(t, byte(cuvscdc.CdcOpInsert), out[0])
 	require.Equal(t, int64(42), int64(binary.LittleEndian.Uint64(out[1:9])))
 	require.Equal(t, float32(1.5), math.Float32frombits(binary.LittleEndian.Uint32(out[9:13])))
 }
@@ -201,7 +201,7 @@ func TestCuvsCdcWriter_UpsertEncodesAsInsertRecord(t *testing.T) {
 
 	out, err := w.ToSql()
 	require.NoError(t, err)
-	require.Equal(t, byte(vectorindex.CdcOpInsert), out[0],
+	require.Equal(t, byte(cuvscdc.CdcOpInsert), out[0],
 		"Upsert must encode as INSERT (last-write-wins via replay)")
 }
 
@@ -217,7 +217,7 @@ func TestCuvsCdcWriter_DeleteEncodesAsDeleteRecord(t *testing.T) {
 	require.NoError(t, err)
 	// One DELETE record: 1 op + 8 pkid = 9 bytes.
 	require.Len(t, out, 9)
-	require.Equal(t, byte(vectorindex.CdcOpDelete), out[0])
+	require.Equal(t, byte(cuvscdc.CdcOpDelete), out[0])
 	require.Equal(t, int64(99), int64(binary.LittleEndian.Uint64(out[1:9])))
 }
 
@@ -230,7 +230,7 @@ func TestCuvsCdcWriter_InsertWithNilVectorEncodesAsDelete(t *testing.T) {
 	require.NoError(t, w.Insert(context.Background(), []any{int64(7), nil}))
 	out, err := w.ToSql()
 	require.NoError(t, err)
-	require.Equal(t, byte(vectorindex.CdcOpDelete), out[0])
+	require.Equal(t, byte(cuvscdc.CdcOpDelete), out[0])
 }
 
 func TestCuvsCdcWriter_MultipleEventsConcatenate(t *testing.T) {
@@ -248,9 +248,9 @@ func TestCuvsCdcWriter_MultipleEventsConcatenate(t *testing.T) {
 	// 2 INSERT (1+8+4*2 each) + 1 DELETE (9) = 2*17 + 9 = 43
 	require.Len(t, out, 2*(1+8+4*2)+9)
 	// Sanity-check record boundaries: parse forward.
-	require.Equal(t, byte(vectorindex.CdcOpInsert), out[0])
-	require.Equal(t, byte(vectorindex.CdcOpInsert), out[17])
-	require.Equal(t, byte(vectorindex.CdcOpDelete), out[34])
+	require.Equal(t, byte(cuvscdc.CdcOpInsert), out[0])
+	require.Equal(t, byte(cuvscdc.CdcOpInsert), out[17])
+	require.Equal(t, byte(cuvscdc.CdcOpDelete), out[34])
 }
 
 func TestCuvsCdcWriter_InvalidPKTypePanics(t *testing.T) {
@@ -288,7 +288,7 @@ func TestCuvsCdcWriter_WithIncludeColumns(t *testing.T) {
 	// Record: 1 op + 8 pkid + 4*dim + (8 + 4 + 1 mask) include = 30 bytes.
 	expectedLen := 1 + 8 + 4*2 + 8 + 4 + 1
 	require.Len(t, out, expectedLen)
-	require.Equal(t, byte(vectorindex.CdcOpInsert), out[0])
+	require.Equal(t, byte(cuvscdc.CdcOpInsert), out[0])
 
 	// Include bytes start after op(1) + pk(8) + vec(8) = 17.
 	incOff := 1 + 8 + 4*2

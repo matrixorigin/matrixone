@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package vectorindex
+// Package cuvs carries shared cuvs-specific helpers — currently the
+// CDC wire format used by CAGRA and IVF-PQ for tag=1 event chunks.
+//
+// Lives one directory below pkg/vectorindex so callers can reach
+// these helpers without dragging in the entire pkg/vectorindex
+// surface, and so future cuvs-only utilities have a natural home.
+package cuvs
 
 import (
 	"encoding/binary"
@@ -26,6 +32,7 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
 // CDC chunk framing.
@@ -252,7 +259,7 @@ func DecodeEventRecord(
 //
 // chunkId starts at startChunkId and increments per emitted chunk.
 func CdcAppendEventsSql(
-	tblcfg IndexTableConfig,
+	tblcfg vectorindex.IndexTableConfig,
 	indexId string,
 	startChunkId int64,
 	records []byte,
@@ -261,7 +268,7 @@ func CdcAppendEventsSql(
 	if len(records) == 0 || len(recordSizes) == 0 {
 		return nil
 	}
-	maxPayload := MaxChunkSize - cdcFrameOverhead
+	maxPayload := vectorindex.MaxChunkSize - cdcFrameOverhead
 	sqlPrefix := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tblcfg.DbName, tblcfg.IndexTable)
 	var sqls []string
 	var values []string
@@ -285,7 +292,7 @@ func CdcAppendEventsSql(
 		}
 		framed := FrameCdcChunk(records[off : off+used])
 		values = append(values, fmt.Sprintf("('%s', %d, unhex('%s'), %d)",
-			indexId, chunkId, hex.EncodeToString(framed), Tag_CdcEvents))
+			indexId, chunkId, hex.EncodeToString(framed), vectorindex.Tag_CdcEvents))
 		chunkId++
 		off += used
 		i = j
@@ -304,10 +311,10 @@ func CdcAppendEventsSql(
 // given index_id. No ORDER BY (per repo convention); the caller must sort
 // chunks by chunk_id in Go before replay since record ordering across chunks
 // matters for last-event-wins semantics.
-func CdcLoadEventsSql(tblcfg IndexTableConfig, indexId string) string {
+func CdcLoadEventsSql(tblcfg vectorindex.IndexTableConfig, indexId string) string {
 	return fmt.Sprintf(
 		"SELECT chunk_id, data FROM `%s`.`%s` WHERE index_id = '%s' AND tag = %d",
-		tblcfg.DbName, tblcfg.IndexTable, indexId, Tag_CdcEvents)
+		tblcfg.DbName, tblcfg.IndexTable, indexId, vectorindex.Tag_CdcEvents)
 }
 
 // EventChunk is one row from CdcLoadEventsSql, wired up so the caller can
@@ -735,7 +742,7 @@ func SplitIncludeBytes(
 //	res, _ := runSql(sqlproc, NextChunkIdSql(...))
 //	defer res.Close()
 //	next := ParseNextChunkId(res)  // 0 if empty
-func NextChunkIdSql(tblcfg IndexTableConfig, indexId string, tag ChunkTag) string {
+func NextChunkIdSql(tblcfg vectorindex.IndexTableConfig, indexId string, tag vectorindex.ChunkTag) string {
 	// COALESCE(MAX(chunk_id) + 1, 0): no ORDER BY (per repo convention).
 	return fmt.Sprintf(
 		"SELECT COALESCE(MAX(chunk_id) + 1, 0) FROM `%s`.`%s` WHERE index_id = '%s' AND tag = %d",

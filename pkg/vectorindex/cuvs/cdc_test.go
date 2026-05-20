@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package vectorindex
+package cuvs
 
 import (
 	"encoding/binary"
@@ -22,10 +22,12 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
-func testTblcfg() IndexTableConfig {
-	return IndexTableConfig{
+func testTblcfg() vectorindex.IndexTableConfig {
+	return vectorindex.IndexTableConfig{
 		DbName:     "db",
 		IndexTable: "__cuvs_index",
 	}
@@ -240,8 +242,8 @@ func TestCdcAppendEventsSql_DeleteOnly(t *testing.T) {
 	if !strings.HasPrefix(sqls[0], "INSERT INTO `db`.`__cuvs_index` VALUES ") {
 		t.Fatalf("unexpected prefix")
 	}
-	if !strings.Contains(sqls[0], fmt.Sprintf(", %d)", Tag_CdcEvents)) {
-		t.Fatalf("missing tag=%d trailer", Tag_CdcEvents)
+	if !strings.Contains(sqls[0], fmt.Sprintf(", %d)", vectorindex.Tag_CdcEvents)) {
+		t.Fatalf("missing tag=%d trailer", vectorindex.Tag_CdcEvents)
 	}
 	blobs := extractUnhexBlobs(t, sqls[0])
 	if len(blobs) != 1 || len(blobs[0]) != cdcFrameOverhead+9*len(pkids) {
@@ -332,7 +334,7 @@ func TestCdcAppendEventsSql_ChunkPacking(t *testing.T) {
 	dim := 4
 	insertSize := 9 + 4*dim // 25 bytes
 	// Force just over one chunk.
-	n := MaxChunkSize/insertSize + 3
+	n := vectorindex.MaxChunkSize/insertSize + 3
 	ops := make([]CdcOp, n)
 	pkids := make([]int64, n)
 	vecs := make([][]float32, n)
@@ -636,10 +638,10 @@ func TestSplitIncludeBytes_NoNulls(t *testing.T) {
 }
 
 func TestNextChunkIdSql(t *testing.T) {
-	got := NextChunkIdSql(testTblcfg(), "idx-1", Tag_CdcEvents)
+	got := NextChunkIdSql(testTblcfg(), "idx-1", vectorindex.Tag_CdcEvents)
 	want := fmt.Sprintf(
 		"SELECT COALESCE(MAX(chunk_id) + 1, 0) FROM `db`.`__cuvs_index` WHERE index_id = 'idx-1' AND tag = %d",
-		Tag_CdcEvents)
+		vectorindex.Tag_CdcEvents)
 	if got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}
@@ -649,7 +651,7 @@ func TestCdcLoadEventsSql(t *testing.T) {
 	got := CdcLoadEventsSql(testTblcfg(), "idx-1")
 	want := fmt.Sprintf(
 		"SELECT chunk_id, data FROM `db`.`__cuvs_index` WHERE index_id = 'idx-1' AND tag = %d",
-		Tag_CdcEvents)
+		vectorindex.Tag_CdcEvents)
 	if got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}

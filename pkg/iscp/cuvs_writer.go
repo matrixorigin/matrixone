@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -61,7 +61,7 @@ type CuvsCdcWriter struct {
 	dbName          string
 	tblName         string
 	indexName       string
-	includeBindings []vectorindex.IncludeBinding
+	includeBindings []cuvscdc.IncludeBinding
 	colMetaJSON     string
 	includeBytesPer int
 	pendingRecords  []byte
@@ -123,7 +123,7 @@ func NewCuvsCdcWriter(algoName, dbName, tblName, indexName string,
 
 	// Resolve INCLUDE columns from indexAlgoParams. Returns zero
 	// values when no INCLUDE columns are configured.
-	bindings, colMetaJSON, ibpr, err := vectorindex.ResolveIncludeColumns(
+	bindings, colMetaJSON, ibpr, err := cuvscdc.ResolveIncludeColumns(
 		includedColumnsFromAlgoParams(idxdef.IndexAlgoParams),
 		tabledef.Name2ColIndex,
 		func(pos int32) int32 { return tabledef.Cols[pos].Typ.Id },
@@ -209,7 +209,7 @@ func (w *CuvsCdcWriter) ToSql() ([]byte, error) {
 }
 
 func (w *CuvsCdcWriter) appendDelete(key int64) error {
-	out, err := vectorindex.EncodeEventRecord(w.pendingRecords, vectorindex.CdcOpDelete,
+	out, err := cuvscdc.EncodeEventRecord(w.pendingRecords, cuvscdc.CdcOpDelete,
 		key, nil, nil, int(w.dimension), w.includeBytesPer)
 	if err != nil {
 		return err
@@ -235,11 +235,11 @@ func (w *CuvsCdcWriter) encodeInsertOrUpsert(ctx context.Context, row []any) err
 		return w.appendDelete(key)
 	}
 
-	includeBytes, err := vectorindex.EncodeIncludeRow(w.includeBindings, row, w.includeBytesPer)
+	includeBytes, err := cuvscdc.EncodeIncludeRow(w.includeBindings, row, w.includeBytesPer)
 	if err != nil {
 		return err
 	}
-	out, err := vectorindex.EncodeEventRecord(w.pendingRecords, vectorindex.CdcOpInsert,
+	out, err := cuvscdc.EncodeEventRecord(w.pendingRecords, cuvscdc.CdcOpInsert,
 		key, v, includeBytes, int(w.dimension), w.includeBytesPer)
 	if err != nil {
 		return err

@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -86,15 +87,15 @@ func installNextChunkIdMock(t *testing.T, proc *process.Process, nextId int64) f
 
 var unhexLitRe2 = regexp.MustCompile(`unhex\('([0-9a-fA-F]*)'\)`)
 
-func chunksFromSql(t *testing.T, sqls []string, startId int64) []vectorindex.EventChunk {
+func chunksFromSql(t *testing.T, sqls []string, startId int64) []cuvscdc.EventChunk {
 	t.Helper()
-	var chunks []vectorindex.EventChunk
+	var chunks []cuvscdc.EventChunk
 	id := startId
 	for _, s := range sqls {
 		for _, m := range unhexLitRe2.FindAllStringSubmatch(s, -1) {
 			b, err := hex.DecodeString(m[1])
 			require.NoError(t, err)
-			chunks = append(chunks, vectorindex.EventChunk{ChunkId: id, Data: b})
+			chunks = append(chunks, cuvscdc.EventChunk{ChunkId: id, Data: b})
 			id++
 		}
 	}
@@ -128,7 +129,7 @@ func TestIvfpqSync_Update_AllInsert(t *testing.T) {
 	require.Len(t, rec.statements, 1)
 	require.Contains(t, rec.statements[0], "'cdc_tail', 0,")
 
-	state, err := vectorindex.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
 	require.NoError(t, err)
 	require.Empty(t, state.Deleted)
 	require.Len(t, state.Overflow, 2)
@@ -158,7 +159,7 @@ func TestIvfpqSync_Update_DeleteAndInsert(t *testing.T) {
 	require.Len(t, rec.statements, 1)
 	require.Contains(t, rec.statements[0], "'cdc_tail', 7,")
 
-	state, err := vectorindex.ReplayEventLog(chunksFromSql(t, rec.statements, 7), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 7), 4, 0)
 	require.NoError(t, err)
 	require.Equal(t, []int64{42}, state.Deleted)
 	require.Len(t, state.Overflow, 1)
@@ -190,7 +191,7 @@ func TestIvfpqSync_Update_DeleteInsertDelete(t *testing.T) {
 
 	require.NoError(t, s.Save(sqlproc))
 
-	state, err := vectorindex.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
 	require.NoError(t, err)
 	require.Equal(t, []int64{1}, state.Deleted)
 	require.Empty(t, state.Overflow)
@@ -219,7 +220,7 @@ func TestIvfpqSync_Update_DeleteIdempotent(t *testing.T) {
 	require.NoError(t, s.Update(sqlproc, cdc))
 	require.NoError(t, s.Save(sqlproc))
 
-	state, err := vectorindex.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []int64{5, 7}, state.Deleted)
 }
@@ -247,7 +248,7 @@ func TestIvfpqSync_Update_Upsert(t *testing.T) {
 	require.Len(t, s.pendingSizes, 3)
 	require.NoError(t, s.Save(sqlproc))
 
-	state, err := vectorindex.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
 	require.NoError(t, err)
 	require.Empty(t, state.Deleted)
 	require.Len(t, state.Overflow, 1)
@@ -283,7 +284,7 @@ func TestIvfpqSync_Update_WithIncludeBytes(t *testing.T) {
 	defer rec.install(t)()
 
 	colMetaJSON := `[{"name":"tier","type":1}]`
-	expectedIBPR, err := vectorindex.CdcIncludeBytesPerRow(colMetaJSON)
+	expectedIBPR, err := cuvscdc.CdcIncludeBytesPerRow(colMetaJSON)
 	require.NoError(t, err)
 	require.Equal(t, 9, expectedIBPR)
 
@@ -302,7 +303,7 @@ func TestIvfpqSync_Update_WithIncludeBytes(t *testing.T) {
 	require.NoError(t, s.Update(sqlproc, cdc))
 	require.NoError(t, s.Save(sqlproc))
 
-	state, err := vectorindex.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 9)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 9)
 	require.NoError(t, err)
 	require.Len(t, state.Overflow, 1)
 	require.Equal(t, include, state.Overflow[0].Include)

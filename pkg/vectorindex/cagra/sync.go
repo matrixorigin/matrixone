@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -88,7 +89,7 @@ type CagraSync struct {
 }
 
 // NewCagraSync constructs a sync object. colMetaJSON describes the INCLUDE
-// column layout (parsed by vectorindex.CdcIncludeBytesPerRow); pass "" for
+// column layout (parsed by cuvscdc.CdcIncludeBytesPerRow); pass "" for
 // indexes without INCLUDE columns.
 func NewCagraSync(
 	sqlproc *sqlexec.SqlProcess,
@@ -123,7 +124,7 @@ func NewCagraSync(
 	idxcfg.Type = vectorindex.CAGRA
 	idxcfg.CuvsCagra.Dimensions = uint(dimension)
 
-	includeBytesPerRow, err := vectorindex.CdcIncludeBytesPerRow(colMetaJSON)
+	includeBytesPerRow, err := cuvscdc.CdcIncludeBytesPerRow(colMetaJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -167,20 +168,20 @@ func (s *CagraSync) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorI
 	for _, e := range cdc.Data {
 		switch e.Type {
 		case vectorindex.CDC_DELETE:
-			if err := s.appendRecord(vectorindex.CdcOpDelete, e.PKey, nil, nil); err != nil {
+			if err := s.appendRecord(cuvscdc.CdcOpDelete, e.PKey, nil, nil); err != nil {
 				return err
 			}
 			ndelete++
 		case vectorindex.CDC_INSERT:
-			if err := s.appendRecord(vectorindex.CdcOpInsert, e.PKey, e.Vec, e.IncludeBytes); err != nil {
+			if err := s.appendRecord(cuvscdc.CdcOpInsert, e.PKey, e.Vec, e.IncludeBytes); err != nil {
 				return err
 			}
 			ninsert++
 		case vectorindex.CDC_UPSERT:
-			if err := s.appendRecord(vectorindex.CdcOpDelete, e.PKey, nil, nil); err != nil {
+			if err := s.appendRecord(cuvscdc.CdcOpDelete, e.PKey, nil, nil); err != nil {
 				return err
 			}
-			if err := s.appendRecord(vectorindex.CdcOpInsert, e.PKey, e.Vec, e.IncludeBytes); err != nil {
+			if err := s.appendRecord(cuvscdc.CdcOpInsert, e.PKey, e.Vec, e.IncludeBytes); err != nil {
 				return err
 			}
 			nupdate++
@@ -211,12 +212,12 @@ func (s *CagraSync) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorI
 func (s *CagraSync) AppendRecords(_ *sqlexec.SqlProcess, recordBytes []byte) error {
 	pos := 0
 	for pos < len(recordBytes) {
-		op := vectorindex.CdcOp(recordBytes[pos])
+		op := cuvscdc.CdcOp(recordBytes[pos])
 		var n int
 		switch op {
-		case vectorindex.CdcOpDelete:
+		case cuvscdc.CdcOpDelete:
 			n = 9 // op (1) + pkid (8)
-		case vectorindex.CdcOpInsert:
+		case cuvscdc.CdcOpInsert:
 			n = 9 + 4*s.dim + s.includeBytesPerRow
 		default:
 			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
@@ -235,8 +236,8 @@ func (s *CagraSync) AppendRecords(_ *sqlexec.SqlProcess, recordBytes []byte) err
 }
 
 // appendRecord encodes a single record onto the pending buffer.
-func (s *CagraSync) appendRecord(op vectorindex.CdcOp, pkid int64, vec []float32, include []byte) error {
-	if op == vectorindex.CdcOpInsert {
+func (s *CagraSync) appendRecord(op cuvscdc.CdcOp, pkid int64, vec []float32, include []byte) error {
+	if op == cuvscdc.CdcOpInsert {
 		if len(vec) != s.dim {
 			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
 				"CagraSync.appendRecord: vec length %d != dim %d", len(vec), s.dim))
@@ -252,7 +253,7 @@ func (s *CagraSync) appendRecord(op vectorindex.CdcOp, pkid int64, vec []float32
 		}
 	}
 	before := len(s.pendingRecords)
-	out, err := vectorindex.EncodeEventRecord(s.pendingRecords, op, pkid, vec, include, s.dim, s.includeBytesPerRow)
+	out, err := cuvscdc.EncodeEventRecord(s.pendingRecords, op, pkid, vec, include, s.dim, s.includeBytesPerRow)
 	if err != nil {
 		return err
 	}
@@ -272,7 +273,7 @@ func (s *CagraSync) Save(sqlproc *sqlexec.SqlProcess) error {
 	if err != nil {
 		return err
 	}
-	sqls := vectorindex.CdcAppendEventsSql(s.tblcfg, s.activeIndexId, nextId, s.pendingRecords, s.pendingSizes)
+	sqls := cuvscdc.CdcAppendEventsSql(s.tblcfg, s.activeIndexId, nextId, s.pendingRecords, s.pendingSizes)
 	if len(sqls) == 0 {
 		return nil
 	}
@@ -292,7 +293,7 @@ func (s *CagraSync) Save(sqlproc *sqlexec.SqlProcess) error {
 // nextChunkId returns the chunk_id one past the current MAX(chunk_id) for
 // (activeIndexId, tag), or 0 if no rows exist for that tag.
 func (s *CagraSync) nextChunkId(sqlproc *sqlexec.SqlProcess, tag vectorindex.ChunkTag) (int64, error) {
-	sql := vectorindex.NextChunkIdSql(s.tblcfg, s.activeIndexId, tag)
+	sql := cuvscdc.NextChunkIdSql(s.tblcfg, s.activeIndexId, tag)
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return 0, err

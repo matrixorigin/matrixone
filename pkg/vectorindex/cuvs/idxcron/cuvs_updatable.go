@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -187,7 +188,7 @@ func deriveCuvsRecordShape(
 
 	// Resolve INCLUDE columns from algoParams (may be empty → ibpr=0).
 	includedColumns := includedColumnsFromAlgoParams(algoParams)
-	_, _, includeBytesPerRow, err = vectorindex.ResolveIncludeColumns(
+	_, _, includeBytesPerRow, err = cuvscdc.ResolveIncludeColumns(
 		includedColumns,
 		tableDef.Name2ColIndex,
 		func(p int32) int32 { return tableDef.Cols[p].Typ.Id },
@@ -245,14 +246,14 @@ func countTag1Records(
 			if len(framed) == 0 {
 				continue
 			}
-			records, err := vectorindex.UnframeCdcChunk(framed)
+			records, err := cuvscdc.UnframeCdcChunk(framed)
 			if err != nil {
 				return 0, moerr.NewInternalErrorNoCtxf(
 					"countTag1Records: unframe chunk: %v", err)
 			}
 			pos := 0
 			for pos < len(records) {
-				_, n, ok := vectorindex.DecodeEventRecord(records[pos:], dim, includeBytesPerRow)
+				_, n, ok := cuvscdc.DecodeEventRecord(records[pos:], dim, includeBytesPerRow)
 				if !ok {
 					return 0, moerr.NewInternalErrorNoCtxf(
 						"countTag1Records: malformed record at offset %d", pos)
