@@ -145,9 +145,6 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) (item
 			}
 			// replacing the oldItem. oldItem will be evicted from ghost queue eventually.
 			shard.values[key] = item
-			if c.postSet != nil {
-				c.postSet(ctx, key, value, size)
-			}
 			return item, true
 		}
 
@@ -162,15 +159,15 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) (item
 		size:    size,
 	}
 	shard.values[key] = item
-	if c.postSet != nil {
-		c.postSet(ctx, key, value, size)
-	}
 
 	return item, false
 }
 
 func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 	if item, ghostItemSet := c.set(ctx, key, value, size); item != nil {
+		if c.postSet != nil {
+			c.postSet(ctx, key, value, size)
+		}
 		// item inserted, enqueue
 		c.enqueue(item, ghostItemSet)
 		c.Evict(ctx, nil, 0)
