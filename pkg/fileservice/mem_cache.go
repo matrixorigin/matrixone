@@ -47,6 +47,8 @@ func NewMemCache(
 		return capacity()
 	}
 
+	var dataCache *fifocache.DataCache
+
 	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
 		// events
 		LogEvent(ctx, str_memory_cache_post_set_begin)
@@ -105,6 +107,9 @@ func NewMemCache(
 
 		// callbacks
 		if callbacks != nil {
+			if dataCache != nil && dataCache.Contains(key) {
+				return
+			}
 			LogEvent(ctx, str_memory_cache_callbacks_begin)
 			for _, fn := range callbacks.PostEvict {
 				fn(key, value)
@@ -113,7 +118,7 @@ func NewMemCache(
 		}
 	}
 
-	dataCache := fifocache.NewDataCache(capacityFunc, postSetFn, postGetFn, postEvictFn)
+	dataCache = fifocache.NewDataCache(capacityFunc, postSetFn, postGetFn, postEvictFn)
 
 	ret := &MemCache{
 		cache:       dataCache,
