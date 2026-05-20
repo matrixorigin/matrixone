@@ -406,7 +406,16 @@ func (c *Cache[K, V]) ForceEvict(ctx context.Context, n int64) {
 // TryLock-based Evict would skip eviction entirely.
 func (c *Cache[K, V]) EvictWithWait(ctx context.Context, capacityCut int64) {
 	c.queueLock.Lock()
-	defer c.queueLock.Unlock()
+	var pendingPostEvicts []_PendingPostEvict[K, V]
+	defer func() {
+		c.queueLock.Unlock()
+		if c.postEvict != nil {
+			for i := range pendingPostEvicts {
+				c.postEvictItem(ctx, pendingPostEvicts[i], true)
+				pendingPostEvicts[i] = _PendingPostEvict[K, V]{}
+			}
+		}
+	}()
 
 	for {
 		select {
@@ -427,9 +436,13 @@ func (c *Cache[K, V]) EvictWithWait(ctx context.Context, capacityCut int64) {
 			target1 = 0
 		}
 		if c.used1 > target1 {
-			c.evict1(ctx)
+			if pe, ok := c.evict1(); ok {
+				pendingPostEvicts = append(pendingPostEvicts, pe)
+			}
 		} else {
-			c.evict2(ctx)
+			if pe, ok := c.evict2(); ok {
+				pendingPostEvicts = append(pendingPostEvicts, pe)
+			}
 		}
 	}
 }
