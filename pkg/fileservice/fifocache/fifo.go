@@ -325,6 +325,11 @@ func (c *Cache[K, V]) EvictWithWait(ctx context.Context, capacityCut int64) {
 	defer c.queueLock.Unlock()
 
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		globalCapacityCut := c.capacityCut.Swap(0)
 		target := c.capacity() - capacityCut - globalCapacityCut
 		if target < 0 {
