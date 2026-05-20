@@ -19,14 +19,12 @@ package idxcron
 
 import (
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 type Hooks struct{}
 
 var _ idxcronplugin.Hooks = Hooks{}
 
-func (Hooks) Updatable(_ *sqlexec.SqlProcess, _ *plan.TableDef, _ string) (bool, string, error) {
+func (Hooks) Updatable(_ idxcronplugin.UpdatableInput) (bool, string, error) {
 	return true, "", nil
 }

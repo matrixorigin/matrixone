@@ -55,8 +55,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 

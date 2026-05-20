@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
@@ -95,14 +96,14 @@ func stubSelect(t *testing.T, mp *mpool.MPool, framed [][]byte) func(*sqlexec.Sq
 
 func TestCuvsUpdatable_EmptySpec(t *testing.T) {
 	tableDef := buildTestTableDef(catalog.Cagra_TblType_Storage, `{}`, testDim)
-	_, _, err := CuvsUpdatable(nil, tableDef, testIndexName, CuvsUpdatableSpec{})
+	_, _, err := CuvsUpdatable(idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName, Sqlproc: nil}, CuvsUpdatableSpec{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "must set StorageTableType and ThresholdParam")
 }
 
 func TestCuvsUpdatable_IndexDefMissing(t *testing.T) {
 	tableDef := buildTestTableDef("__some_other_type", `{}`, testDim)
-	_, _, err := CuvsUpdatable(nil, tableDef, testIndexName, CuvsUpdatableSpec{
+	_, _, err := CuvsUpdatable(idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName, Sqlproc: nil}, CuvsUpdatableSpec{
 		StorageTableType: catalog.Cagra_TblType_Storage,
 		ThresholdParam:   catalog.IntermediateGraphDegree,
 	})
@@ -113,7 +114,7 @@ func TestCuvsUpdatable_IndexDefMissing(t *testing.T) {
 func TestCuvsUpdatable_ThresholdMissing(t *testing.T) {
 	// algoParams has no IntermediateGraphDegree key → threshold reads as 0.
 	tableDef := buildTestTableDef(catalog.Cagra_TblType_Storage, `{}`, testDim)
-	ok, reason, err := CuvsUpdatable(nil, tableDef, testIndexName, CuvsUpdatableSpec{
+	ok, reason, err := CuvsUpdatable(idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName, Sqlproc: nil}, CuvsUpdatableSpec{
 		StorageTableType: catalog.Cagra_TblType_Storage,
 		ThresholdParam:   catalog.IntermediateGraphDegree,
 	})
@@ -126,7 +127,7 @@ func TestCuvsUpdatable_ThresholdNonInt(t *testing.T) {
 	// Threshold is the wrong type — surfaces as an error.
 	algoParams := fmt.Sprintf(`{"%s":"not-an-int"}`, catalog.IntermediateGraphDegree)
 	tableDef := buildTestTableDef(catalog.Cagra_TblType_Storage, algoParams, testDim)
-	_, _, err := CuvsUpdatable(nil, tableDef, testIndexName, CuvsUpdatableSpec{
+	_, _, err := CuvsUpdatable(idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName, Sqlproc: nil}, CuvsUpdatableSpec{
 		StorageTableType: catalog.Cagra_TblType_Storage,
 		ThresholdParam:   catalog.IntermediateGraphDegree,
 	})
@@ -145,7 +146,7 @@ func TestCuvsUpdatable_BelowThreshold(t *testing.T) {
 	stub := gostub.Stub(&runSelectChunkSql, stubSelect(t, mp, [][]byte{chunkBytesWithRecords(t, 5)}))
 	defer stub.Reset()
 
-	ok, reason, err := CuvsUpdatable(nil, tableDef, testIndexName, CuvsUpdatableSpec{
+	ok, reason, err := CuvsUpdatable(idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName, Sqlproc: nil}, CuvsUpdatableSpec{
 		StorageTableType: catalog.Cagra_TblType_Storage,
 		ThresholdParam:   catalog.IntermediateGraphDegree,
 	})
@@ -168,7 +169,7 @@ func TestCuvsUpdatable_AtOrAboveThreshold(t *testing.T) {
 	}))
 	defer stub.Reset()
 
-	ok, reason, err := CuvsUpdatable(nil, tableDef, testIndexName, CuvsUpdatableSpec{
+	ok, reason, err := CuvsUpdatable(idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName, Sqlproc: nil}, CuvsUpdatableSpec{
 		StorageTableType: catalog.Cagra_TblType_Storage,
 		ThresholdParam:   catalog.IntermediateGraphDegree,
 	})
@@ -188,7 +189,7 @@ func TestCuvsUpdatable_EmptyTag1(t *testing.T) {
 	stub := gostub.Stub(&runSelectChunkSql, stubSelect(t, mp, nil))
 	defer stub.Reset()
 
-	ok, reason, err := CuvsUpdatable(nil, tableDef, testIndexName, CuvsUpdatableSpec{
+	ok, reason, err := CuvsUpdatable(idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName, Sqlproc: nil}, CuvsUpdatableSpec{
 		StorageTableType: catalog.Cagra_TblType_Storage,
 		ThresholdParam:   catalog.IntermediateGraphDegree,
 	})
@@ -208,7 +209,7 @@ func TestCuvsUpdatable_IvfpqShape(t *testing.T) {
 	stub := gostub.Stub(&runSelectChunkSql, stubSelect(t, mp, [][]byte{chunkBytesWithRecords(t, 3)}))
 	defer stub.Reset()
 
-	ok, _, err := CuvsUpdatable(nil, tableDef, testIndexName, CuvsUpdatableSpec{
+	ok, _, err := CuvsUpdatable(idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName, Sqlproc: nil}, CuvsUpdatableSpec{
 		StorageTableType: catalog.Ivfpq_TblType_Storage,
 		ThresholdParam:   catalog.IndexAlgoParamLists,
 	})

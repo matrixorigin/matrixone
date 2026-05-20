@@ -20,9 +20,7 @@ package idxcron
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	cuvsidxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs/idxcron"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 type Hooks struct{}
@@ -34,8 +32,8 @@ var _ idxcronplugin.Hooks = Hooks{}
 // the cluster centroids, so the rebuild has nothing to train on.
 // Brute-force search handles small-scale queries until the dataset
 // crosses the threshold.
-func (Hooks) Updatable(sqlproc *sqlexec.SqlProcess, tableDef *plan.TableDef, indexName string) (bool, string, error) {
-	return cuvsidxcron.CuvsUpdatable(sqlproc, tableDef, indexName, cuvsidxcron.CuvsUpdatableSpec{
+func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (bool, string, error) {
+	return cuvsidxcron.CuvsUpdatable(in, cuvsidxcron.CuvsUpdatableSpec{
 		StorageTableType: catalog.Ivfpq_TblType_Storage,
 		ThresholdParam:   catalog.IndexAlgoParamLists,
 	})

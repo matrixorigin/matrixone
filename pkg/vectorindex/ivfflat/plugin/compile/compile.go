@@ -514,4 +514,3 @@ func ivfIndexDeleteOldEntries(
 	}
 	return logTimestamp(ctx, qryDatabase, metadataTableName, "pruning_end")
 }
-

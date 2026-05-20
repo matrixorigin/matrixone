@@ -25,9 +25,11 @@ package idxcron
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
@@ -72,9 +74,7 @@ var runSelectChunkSql = sqlexec.RunSql
 // non-positive in indexAlgoParams — the rebuild is deferred until the
 // user supplies a sensible threshold.
 func CuvsUpdatable(
-	sqlproc *sqlexec.SqlProcess,
-	tableDef *plan.TableDef,
-	indexName string,
+	in idxcronplugin.UpdatableInput,
 	spec CuvsUpdatableSpec,
 ) (ok bool, reason string, err error) {
 	if spec.StorageTableType == "" || spec.ThresholdParam == "" {
@@ -82,11 +82,25 @@ func CuvsUpdatable(
 			"CuvsUpdatable: spec must set StorageTableType and ThresholdParam")
 	}
 
+	// Cadence: skip when the last rebuild is still within the
+	// configured interval. The executor enforces createdAt+interval
+	// universally; this is the per-run cadence that used to live in
+	// the executor's listsAware=false branch.
+	if in.LastUpdateAt != nil {
+		last := time.Unix(in.LastUpdateAt.Unix(), 0)
+		now := time.Now()
+		if last.Add(in.Interval).After(now) {
+			return false, fmt.Sprintf(
+				"current time < interval after lastUpdateAt (%v + %v > %v)",
+				last.Format("2006-01-02 15:04:05"), in.Interval, now.Format("2006-01-02 15:04:05")), nil
+		}
+	}
+
 	// Locate the storage IndexDef + read threshold from its
 	// indexAlgoParams.
 	var storageTbl, algoParams string
-	for _, idx := range tableDef.Indexes {
-		if idx.IndexName == indexName && idx.IndexAlgoTableType == spec.StorageTableType {
+	for _, idx := range in.TableDef.Indexes {
+		if idx.IndexName == in.IndexName && idx.IndexAlgoTableType == spec.StorageTableType {
 			storageTbl = idx.IndexTableName
 			algoParams = idx.IndexAlgoParams
 			break
@@ -95,7 +109,7 @@ func CuvsUpdatable(
 	if storageTbl == "" {
 		return false, "", moerr.NewInternalErrorNoCtxf(
 			"CuvsUpdatable: no IndexDef found for index %q with table-type %q",
-			indexName, spec.StorageTableType)
+			in.IndexName, spec.StorageTableType)
 	}
 
 	threshold, err := readInt64Param(algoParams, spec.ThresholdParam)
@@ -109,12 +123,12 @@ func CuvsUpdatable(
 
 	// Derive dim + includeBytesPerRow for DecodeEventRecord. The
 	// values must match the writer side so records frame correctly.
-	dim, ibpr, err := deriveCuvsRecordShape(tableDef, indexName, spec.StorageTableType, algoParams)
+	dim, ibpr, err := deriveCuvsRecordShape(in.TableDef, in.IndexName, spec.StorageTableType, algoParams)
 	if err != nil {
 		return false, "", err
 	}
 
-	count, err := countTag1Records(sqlproc, tableDef.DbName, storageTbl, dim, ibpr)
+	count, err := countTag1Records(in.Sqlproc, in.TableDef.DbName, storageTbl, dim, ibpr)
 	if err != nil {
 		return false, "", err
 	}

@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	ivfflatidxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/prashantv/gostub"
@@ -220,38 +221,6 @@ func getTestCases(t *testing.T) []TestTask {
 	return tasks
 }
 
-func TestCheckIndexUpdatable(t *testing.T) {
-
-	var err error
-	tasks := getTestCases(t)
-	for _, ta := range tasks {
-
-		m := (*sqlexec.Metadata)(nil)
-		if len(ta.jstr) > 0 {
-			m, err = sqlexec.NewMetadataFromJson(ta.jstr)
-			require.Nil(t, err)
-		}
-
-		info := IndexUpdateTaskInfo{
-			DbName:       "db",
-			TableName:    "table",
-			IndexName:    "index",
-			Action:       Action_Ivfflat_Reindex,
-			AccountId:    uint32(0),
-			TableId:      uint64(100),
-			Metadata:     m,
-			LastUpdateAt: &ta.ts,
-			CreatedAt:    ta.createdAt,
-		}
-
-		ok, _, err := info.checkIndexUpdatable(context.Background(), ta.dsize, ta.nlists, OneWeek, true)
-		require.NoError(t, err)
-		require.Equal(t, ta.expected, ok)
-
-	}
-
-}
-
 /*
 // return status as SQL to update mo_index_update
 func runIvfflatReindex(ctx context.Context,
@@ -263,19 +232,25 @@ func runIvfflatReindex(ctx context.Context,
 */
 
 // mockReindexAlgoPlugin is a minimal indexplugin.AlgoPlugin that
-// exposes a caller-supplied SyncDescriptor. It satisfies the
-// interface for runReindex tests — only Catalog() and Idxcron() are
-// consulted in that code path, and Idxcron always says "go ahead".
+// exposes a caller-supplied SyncDescriptor + idxcron hook. The
+// runReindex tests only consult Catalog() and Idxcron(); the rest
+// can stay nil.
 type mockReindexAlgoPlugin struct {
-	algo string
-	desc catalogplugin.SyncDescriptor
+	algo    string
+	desc    catalogplugin.SyncDescriptor
+	idxcron idxcronplugin.Hooks
 }
 
-func (m *mockReindexAlgoPlugin) Algo() string                   { return m.algo }
-func (m *mockReindexAlgoPlugin) Catalog() catalogplugin.Hooks   { return mockCatalogHooks{d: m.desc} }
-func (m *mockReindexAlgoPlugin) Compile() compileplugin.Hooks   { return nil }
-func (m *mockReindexAlgoPlugin) Plan() planplugin.Hooks         { return nil }
-func (m *mockReindexAlgoPlugin) Idxcron() idxcronplugin.Hooks   { return alwaysUpdatable{} }
+func (m *mockReindexAlgoPlugin) Algo() string                 { return m.algo }
+func (m *mockReindexAlgoPlugin) Catalog() catalogplugin.Hooks { return mockCatalogHooks{d: m.desc} }
+func (m *mockReindexAlgoPlugin) Compile() compileplugin.Hooks { return nil }
+func (m *mockReindexAlgoPlugin) Plan() planplugin.Hooks       { return nil }
+func (m *mockReindexAlgoPlugin) Idxcron() idxcronplugin.Hooks {
+	if m.idxcron != nil {
+		return m.idxcron
+	}
+	return alwaysUpdatable{}
+}
 
 var _ indexplugin.AlgoPlugin = (*mockReindexAlgoPlugin)(nil)
 
@@ -283,20 +258,22 @@ var _ indexplugin.AlgoPlugin = (*mockReindexAlgoPlugin)(nil)
 // methods panic so tests catch unintended calls.
 type mockCatalogHooks struct{ d catalogplugin.SyncDescriptor }
 
-func (m mockCatalogHooks) HiddenTableTypes() []string                                       { return nil }
-func (m mockCatalogHooks) ParamsFromTree(_ *tree.Index) (map[string]string, error)          { return nil, nil }
-func (m mockCatalogHooks) DefaultOptions() map[string]string                                { return nil }
-func (m mockCatalogHooks) SupportedOpTypes() map[string]string                              { return nil }
-func (m mockCatalogHooks) ExperimentalFlag() string                                         { return "" }
-func (m mockCatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior   { return catalogplugin.AlterTableCloneBehavior{} }
-func (m mockCatalogHooks) ShouldTruncateHiddenTable(_ string) bool                          { return false }
-func (m mockCatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor                     { return m.d }
+func (m mockCatalogHooks) HiddenTableTypes() []string                              { return nil }
+func (m mockCatalogHooks) ParamsFromTree(_ *tree.Index) (map[string]string, error) { return nil, nil }
+func (m mockCatalogHooks) DefaultOptions() map[string]string                       { return nil }
+func (m mockCatalogHooks) SupportedOpTypes() map[string]string                     { return nil }
+func (m mockCatalogHooks) ExperimentalFlag() string                                { return "" }
+func (m mockCatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
+	return catalogplugin.AlterTableCloneBehavior{}
+}
+func (m mockCatalogHooks) ShouldTruncateHiddenTable(_ string) bool      { return false }
+func (m mockCatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor { return m.d }
 
 // alwaysUpdatable is the trivial idxcron hook the mock uses — runReindex
 // callers in tests don't exercise the CDC-delta gate.
 type alwaysUpdatable struct{}
 
-func (alwaysUpdatable) Updatable(_ *sqlexec.SqlProcess, _ *plan.TableDef, _ string) (bool, string, error) {
+func (alwaysUpdatable) Updatable(_ idxcronplugin.UpdatableInput) (bool, string, error) {
 	return true, "", nil
 }
 
@@ -417,7 +394,7 @@ func TestIvfflatReindex(t *testing.T) {
 				CreatedAt:    ta.createdAt,
 			}
 
-			stub2 := gostub.Stub(&runGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+			stub2 := gostub.Stub(&ivfflatidxcron.RunGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 				bat := batch.NewWithSize(1)
 				bat.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 8, 0))
 				vector.AppendFixed[uint64](bat.Vecs[0], ta.dsize, false, mp)
@@ -434,8 +411,9 @@ func TestIvfflatReindex(t *testing.T) {
 
 			updated, reason, err := runReindex(ctx, cnEngine, cnClient, cnUUID, &info, ta.hour,
 				&mockReindexAlgoPlugin{
-					algo: "ivfflat",
-					desc: catalogplugin.SyncDescriptor{IdxcronAlgoToken: "IVFFLAT", IdxcronListsAware: true},
+					algo:    "ivfflat",
+					desc:    catalogplugin.SyncDescriptor{IdxcronAlgoToken: "IVFFLAT", IdxcronListsAware: true},
+					idxcron: ivfflatidxcron.Hooks{},
 				})
 			fmt.Printf("updated = %v, reason = %s\n", updated, reason)
 			require.NoError(t, err)
@@ -496,7 +474,7 @@ func TestIvfflatReindexAutoUpdateOff(t *testing.T) {
 				CreatedAt:    ta.createdAt,
 			}
 
-			stub2 := gostub.Stub(&runGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+			stub2 := gostub.Stub(&ivfflatidxcron.RunGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 				bat := batch.NewWithSize(1)
 				bat.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 8, 0))
 				vector.AppendFixed[uint64](bat.Vecs[0], ta.dsize, false, mp)
@@ -513,8 +491,9 @@ func TestIvfflatReindexAutoUpdateOff(t *testing.T) {
 
 			updated, reason, err := runReindex(ctx, cnEngine, cnClient, cnUUID, &info, ta.hour,
 				&mockReindexAlgoPlugin{
-					algo: "ivfflat",
-					desc: catalogplugin.SyncDescriptor{IdxcronAlgoToken: "IVFFLAT", IdxcronListsAware: true},
+					algo:    "ivfflat",
+					desc:    catalogplugin.SyncDescriptor{IdxcronAlgoToken: "IVFFLAT", IdxcronListsAware: true},
+					idxcron: ivfflatidxcron.Hooks{},
 				})
 			fmt.Printf("updated = %v, reason = %s\n", updated, reason)
 			require.NoError(t, err)
@@ -548,7 +527,7 @@ func TestExecutorRunFakeTasks(t *testing.T) {
 	defer stub1.Reset()
 
 	// runGetCountSql
-	stub2 := gostub.Stub(&runGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	stub2 := gostub.Stub(&ivfflatidxcron.RunGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 8, 0))
 		vector.AppendFixed[uint64](bat.Vecs[0], uint64(1000000), false, mp)
@@ -633,7 +612,7 @@ func TestExecutorRunFull(t *testing.T) {
 	defer stub1.Reset()
 
 	// runGetCountSql
-	stub2 := gostub.Stub(&runGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	stub2 := gostub.Stub(&ivfflatidxcron.RunGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 8, 0))
 		vector.AppendFixed[uint64](bat.Vecs[0], uint64(1000000), false, mp)

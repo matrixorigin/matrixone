@@ -21,9 +21,7 @@ package idxcron
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	cuvsidxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs/idxcron"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 type Hooks struct{}
@@ -35,8 +33,8 @@ var _ idxcronplugin.Hooks = Hooks{}
 // requires for a non-degenerate graph. Below that, brute-force
 // search is the natural fallback and a rebuild would either fail or
 // produce a graph too small to be useful.
-func (Hooks) Updatable(sqlproc *sqlexec.SqlProcess, tableDef *plan.TableDef, indexName string) (bool, string, error) {
-	return cuvsidxcron.CuvsUpdatable(sqlproc, tableDef, indexName, cuvsidxcron.CuvsUpdatableSpec{
+func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (bool, string, error) {
+	return cuvsidxcron.CuvsUpdatable(in, cuvsidxcron.CuvsUpdatableSpec{
 		StorageTableType: catalog.Cagra_TblType_Storage,
 		ThresholdParam:   catalog.IntermediateGraphDegree,
 	})

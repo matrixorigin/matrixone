@@ -21,8 +21,6 @@ package idxcron
 
 import (
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 type Hooks struct{}
@@ -32,6 +30,6 @@ var _ idxcronplugin.Hooks = Hooks{}
 // Updatable — HNSW has no minimum-size constraint and no idxcron
 // action wired today. Returns true unconditionally so the (unreached)
 // cron path doesn't surprise-skip if anyone wires HNSW into idxcron.
-func (Hooks) Updatable(_ *sqlexec.SqlProcess, _ *plan.TableDef, _ string) (bool, string, error) {
+func (Hooks) Updatable(_ idxcronplugin.UpdatableInput) (bool, string, error) {
 	return true, "", nil
 }
