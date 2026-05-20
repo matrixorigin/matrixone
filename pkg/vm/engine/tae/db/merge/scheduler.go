@@ -1041,6 +1041,16 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 	}
 
 	supp := a.supps[todo.table.ID()]
+	if supp == nil {
+		// Table metadata commits such as ALTER can enqueue more than one todo
+		// for the same table. If the table is later dropped, another todo may
+		// already have removed its supporter from supps; drop this stale todo
+		// as well so the queue does not keep peeking it.
+		if todo.index >= 0 && todo.index < a.pq.Len() {
+			heap.Remove(&a.pq, todo.index)
+		}
+		return
+	}
 
 	now := a.clock.Now()
 
