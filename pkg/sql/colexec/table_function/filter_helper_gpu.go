@@ -135,6 +135,82 @@ func appendFilterRow(
 	return nil
 }
 
+// includeBytesPerRowFromCols mirrors cuvscdc.CdcIncludeBytesPerRow but
+// computes from the FilterStore-side []cuvsfilter.ColumnMeta directly,
+// so the build-time table function doesn't need to round-trip through
+// the colMetaJSON serialization. Layout is per-col elem bytes
+// concatenated, followed by a trailing ceil(N/8) null-mask — matching
+// the CDC tag=1 record layout the search-side replay decodes.
+func includeBytesPerRowFromCols(cols []cuvsfilter.ColumnMeta) int {
+	if len(cols) == 0 {
+		return 0
+	}
+	total := 0
+	for _, c := range cols {
+		total += int(c.TypeOid.ElemSize())
+	}
+	total += (len(cols) + 7) / 8 // null-mask byte(s), packed LSB-first
+	return total
+}
+
+// encodeIncludeRowFromArgVecs serialises one source-table row's INCLUDE
+// column values into a flat []byte matching cuvscdc.EncodeIncludeRow's
+// on-wire layout (so search-side replay decodes them identically). Used
+// by cagra_create / ivfpq_create when buffering trailing rows for CDC
+// tag=1 emission below the cuvs threshold.
+//
+// argOffset is the index of the first INCLUDE-column arg in argVecs
+// (3 for both cuvs creates — tblcfg, pk, vec, then filter cols).
+func encodeIncludeRowFromArgVecs(
+	cols []cuvsfilter.ColumnMeta,
+	argVecs []*vector.Vector,
+	argOffset int,
+	nthRow int,
+) ([]byte, error) {
+	if len(cols) == 0 {
+		return nil, nil
+	}
+	ibpr := includeBytesPerRowFromCols(cols)
+	buf := make([]byte, ibpr)
+	maskStart := ibpr - (len(cols)+7)/8
+	off := 0
+	for i, meta := range cols {
+		v := argVecs[argOffset+i]
+		if v.IsNull(uint64(nthRow)) {
+			buf[maskStart+i/8] |= 1 << (i % 8)
+			off += int(meta.TypeOid.ElemSize())
+			continue
+		}
+		switch meta.TypeOid {
+		case cuvsfilter.ColTypeInt32:
+			val := vector.GetFixedAtNoTypeCheck[int32](v, nthRow)
+			src := (*[4]byte)(unsafe.Pointer(&val))[:]
+			copy(buf[off:off+4], src)
+		case cuvsfilter.ColTypeInt64:
+			val := vector.GetFixedAtNoTypeCheck[int64](v, nthRow)
+			src := (*[8]byte)(unsafe.Pointer(&val))[:]
+			copy(buf[off:off+8], src)
+		case cuvsfilter.ColTypeFloat32:
+			val := vector.GetFixedAtNoTypeCheck[float32](v, nthRow)
+			src := (*[4]byte)(unsafe.Pointer(&val))[:]
+			copy(buf[off:off+4], src)
+		case cuvsfilter.ColTypeFloat64:
+			val := vector.GetFixedAtNoTypeCheck[float64](v, nthRow)
+			src := (*[8]byte)(unsafe.Pointer(&val))[:]
+			copy(buf[off:off+8], src)
+		case cuvsfilter.ColTypeUint64:
+			val := vector.GetFixedAtNoTypeCheck[uint64](v, nthRow)
+			src := (*[8]byte)(unsafe.Pointer(&val))[:]
+			copy(buf[off:off+8], src)
+		default:
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"encodeIncludeRowFromArgVecs: unsupported column type %d", meta.TypeOid))
+		}
+		off += int(meta.TypeOid.ElemSize())
+	}
+	return buf, nil
+}
+
 // validateFilterArgCount checks that tf.ctr.argVecs has enough entries for
 // the base args + declared filter columns. Deeper type matching is left to
 // appendFilterRow (the DDL layer is authoritative).

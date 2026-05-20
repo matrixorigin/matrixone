@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	ivfpqPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -56,11 +57,29 @@ type ivfpqCreateState struct {
 	// index has no INCLUDE columns.
 	filterCols []cuvsfilter.ColumnMeta
 
+	// Small-tail CDC fallback. cuvs IVF-PQ k-means needs at least
+	// `lists` rows per sub-index. When the source has a partial
+	// trailing chunk smaller than that — or the whole dataset is too
+	// small — those rows can't go through cuvs. rowsSeen >= cdcCutoff
+	// routes them into cdcTail, which end() emits as tag=1 CDC
+	// records under vectorindex.CdcTailId.
+	cdcCutoff int64
+	rowsSeen  int64
+	cdcTail   []cuvscdc.PendingRecord
+
+	// srcEmpty short-circuits the per-row code when SELECT COUNT(*)
+	// at init time returned zero — nothing to build, nothing to CDC.
+	srcEmpty bool
+
 	// holding one call batch, ivfpqCreateState owns it.
 	batch *batch.Batch
 }
 
 func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
+	if u.srcEmpty {
+		return nil
+	}
+
 	var (
 		sqls []string
 		err  error
@@ -77,10 +96,27 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 	case u.buildui8 != nil:
 		sqls, err = u.buildui8.ToInsertSql(ts)
 	default:
-		return nil
+		// No builder selected → init didn't set one. Nothing to do for
+		// the cuvs side; the CDC tail (if any) below still emits.
 	}
 	if err != nil {
 		return err
+	}
+
+	// Emit any buffered CDC tail records as tag=1 INSERTs under
+	// vectorindex.CdcTailId. Search-side brute-force replay picks
+	// them up alongside (or in place of) the cuvs sub-indexes.
+	if len(u.cdcTail) > 0 {
+		ibpr := includeBytesPerRowFromCols(u.filterCols)
+		tailSqls, err := cuvscdc.SaveSmallTailAsCdc(
+			u.tblcfg, u.cdcTail,
+			int(u.idxcfg.CuvsIvfpq.Dimensions), ibpr)
+		if err != nil {
+			return err
+		}
+		sqls = append(sqls, tailSqls...)
+		logutil.Infof("IVFPQ create: emitted %d CDC tail records for `%s`.`%s` index `%s`",
+			len(u.cdcTail), u.tblcfg.DbName, u.tblcfg.SrcTable, u.tblcfg.IndexTable)
 	}
 
 	for _, s := range sqls {
@@ -219,17 +255,50 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		if err = sonic.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
 			return err
 		}
+
+		// Pre-count source rows; needed both for IndexCapacity auto-
+		// detection (when 0) and for the small-tail CDC cutoff
+		// computation below. One round trip per build.
+		srcRowCount, err := fetchSrcTableRowCount(proc, ivfpq_runSql, u.tblcfg.DbName, u.tblcfg.SrcTable)
+		if err != nil {
+			return err
+		}
+		if srcRowCount == 0 {
+			// Empty source: nothing to build, nothing to CDC. Mark
+			// inited so subsequent (unexpected) per-row calls
+			// short-circuit cleanly via srcEmpty.
+			u.inited = true
+			u.srcEmpty = true
+			logutil.Infof("IVFPQ create: source `%s`.`%s` is empty; nothing to build",
+				u.tblcfg.DbName, u.tblcfg.SrcTable)
+			return nil
+		}
 		if u.tblcfg.IndexCapacity <= 0 {
-			cnt, err := fetchSrcTableRowCount(proc, ivfpq_runSql, u.tblcfg.DbName, u.tblcfg.SrcTable)
-			if err != nil {
-				return err
-			}
-			if cnt <= 0 {
-				return moerr.NewInvalidInput(proc.Ctx, "source table is empty; cannot determine index capacity")
-			}
-			u.tblcfg.IndexCapacity = cnt
+			u.tblcfg.IndexCapacity = srcRowCount
 			logutil.Infof("IVFPQ create: auto-detected index capacity = %d from `%s`.`%s`",
 				u.tblcfg.IndexCapacity, u.tblcfg.DbName, u.tblcfg.SrcTable)
+		}
+
+		// Small-tail cutoff. Threshold = the cuvs IVF-PQ k-means
+		// minimum (lists). When the trailing partial chunk is smaller
+		// than lists — or every chunk would be too small because
+		// IndexCapacity itself is below lists — the tail rows route to
+		// CDC instead of cuvs k-means.
+		threshold := int64(u.idxcfg.CuvsIvfpq.Lists)
+		u.cdcCutoff = srcRowCount
+		if threshold > 0 {
+			if u.tblcfg.IndexCapacity < threshold {
+				u.cdcCutoff = 0
+				logutil.Infof("IVFPQ create: IndexCapacity %d < lists %d; all %d rows route to CDC tail",
+					u.tblcfg.IndexCapacity, threshold, srcRowCount)
+			} else {
+				lastChunkSize := srcRowCount % u.tblcfg.IndexCapacity
+				if lastChunkSize > 0 && lastChunkSize < threshold {
+					u.cdcCutoff = srcRowCount - lastChunkSize
+					logutil.Infof("IVFPQ create: trailing %d rows < lists %d; routing them to CDC tail (cutoff=%d, total=%d)",
+						lastChunkSize, threshold, u.cdcCutoff, srcRowCount)
+				}
+			}
 		}
 
 		// kmeans training fraction: read from session variable (0-100 percent → 0-1 fraction)
@@ -294,9 +363,20 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		u.inited = true
 	}
 
+	// Empty source: nothing to do.
+	if u.srcEmpty {
+		return nil
+	}
+
 	// ---- per-row: append one vector ----
 	u.offset = 0
 	u.batch.CleanOnlyData()
+
+	// Source-stream position (counts every row delivered, including
+	// rows that turn out to have a null vector — matches the
+	// SELECT COUNT(*) basis cdcCutoff was derived from).
+	srcPos := u.rowsSeen
+	u.rowsSeen++
 
 	faVec := tf.ctr.argVecs[2]
 	if faVec.IsNull(uint64(nthRow)) {
@@ -308,6 +388,26 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 
 	if uint(len(fa)) != u.idxcfg.CuvsIvfpq.Dimensions {
 		return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
+	}
+
+	// Trailing rows below the cuvs k-means threshold (lists) route to
+	// the CDC tail (search-side brute-force replay) instead of the
+	// cuvs builder.
+	if srcPos >= u.cdcCutoff {
+		vecCopy := append([]float32(nil), fa...)
+		var incBytes []byte
+		if len(u.filterCols) > 0 {
+			incBytes, err = encodeIncludeRowFromArgVecs(u.filterCols, tf.ctr.argVecs, 3, nthRow)
+			if err != nil {
+				return err
+			}
+		}
+		u.cdcTail = append(u.cdcTail, cuvscdc.PendingRecord{
+			Pkid:    id,
+			Vec:     vecCopy,
+			Include: incBytes,
+		})
+		return nil
 	}
 
 	switch {

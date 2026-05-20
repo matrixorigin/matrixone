@@ -19,6 +19,7 @@ package table_function
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -83,8 +84,25 @@ func newIvfpqCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param 
 	}
 }
 
+// mockIvfpqSrcRowCount is what mock_ivfpq_runSql returns for the
+// SELECT count(*) pre-count ivfpq_create now issues unconditionally.
+// Tests can override per-case before invoking start(). 1000 keeps the
+// existing single-chunk happy-path (smaller than the configured
+// index_capacity of 100? — wait, set to 1000 so the trailing partial
+// chunk math doesn't redirect rows to CDC under default tests).
+var mockIvfpqSrcRowCount int64 = 1000
+
 func mock_ivfpq_runSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 	proc := sqlproc.Proc
+	if strings.HasPrefix(sql, "SELECT count(*)") {
+		// fetchSrcTableRowCount expects exactly one row with a single
+		// int64 column carrying the count.
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+		vector.AppendFixed(bat.Vecs[0], mockIvfpqSrcRowCount, false, proc.Mp())
+		bat.SetRowCount(1)
+		return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{bat}}, nil
+	}
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{}}, nil
 }
 
