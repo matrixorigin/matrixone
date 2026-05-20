@@ -620,7 +620,7 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 		if err != nil {
 			return err
 		}
-		dt, err := bj.Marshal()
+		dt, err := bj.MarshalJSON()
 		if err != nil {
 			return err
 		}
@@ -834,7 +834,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 			}
 			var key string
 			if bj, ok := keyAny.(bytejson.ByteJson); ok {
-				dt, _ := bj.Marshal()
+				dt, _ := bj.MarshalJSON()
 				key = string(dt)
 			} else {
 				key = fmt.Sprint(keyAny)
@@ -851,7 +851,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 		if err != nil {
 			return err
 		}
-		dt, err := bj.Marshal()
+		dt, err := bj.MarshalJSON()
 		if err != nil {
 			return err
 		}
