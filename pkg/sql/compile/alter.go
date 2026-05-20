@@ -213,7 +213,9 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		}
 		c.proc.Ctx = context.WithValue(pipelineCtx, ioutil.PipelineFlushKey, true)
 		defer func() {
-			c.proc.Ctx = origCtx
+			if origCtx != nil {
+				c.proc.Ctx = origCtx
+			}
 		}()
 		return c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
 	}()
