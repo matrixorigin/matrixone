@@ -823,6 +823,33 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_type`
+	{
+		functionId: JSON_TYPE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(_ []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 {
+				if inputs[0].Oid == types.T_json || inputs[0].Oid.IsMySQLString() {
+					return newCheckResultWithSuccess(0)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonType().jsonType
+				},
+			},
+		},
+	},
+
 	// function `jq`
 	{
 		functionId: JQ,

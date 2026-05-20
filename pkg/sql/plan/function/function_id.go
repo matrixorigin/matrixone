@@ -439,10 +439,11 @@ const (
 	CAST_GEOMETRY_TO_SUBTYPE = 358
 	JSON_ARRAY               = 359
 	JSON_OBJECT              = 360
+	JSON_TYPE                = 361
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 361
+	FUNCTION_END_NUMBER = 362
 )
 
 // functionIdRegister is what function we have registered already.
@@ -668,6 +669,7 @@ var functionIdRegister = map[string]int32{
 	"json_replace":                   JSON_REPLACE,
 	"json_array":                     JSON_ARRAY,
 	"json_object":                    JSON_OBJECT,
+	"json_type":                      JSON_TYPE,
 	"jq":                             JQ,
 	"try_jq":                         TRY_JQ,
 	"moplugin":                       WASM,

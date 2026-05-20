@@ -127,13 +127,18 @@ var (
 type TpCode = byte
 
 const (
-	TpCodeObject  TpCode = 0x01
-	TpCodeArray   TpCode = 0x03
-	TpCodeLiteral TpCode = 0x04
-	TpCodeInt64   TpCode = 0x09
-	TpCodeUint64  TpCode = 0x0a
-	TpCodeFloat64 TpCode = 0x0b
-	TpCodeString  TpCode = 0x0c
+	TpCodeObject   TpCode = 0x01
+	TpCodeArray    TpCode = 0x03
+	TpCodeLiteral  TpCode = 0x04
+	TpCodeInt64    TpCode = 0x09
+	TpCodeUint64   TpCode = 0x0a
+	TpCodeFloat64  TpCode = 0x0b
+	TpCodeString   TpCode = 0x0c
+	TpCodeDecimal  TpCode = 0x0d
+	TpCodeDate     TpCode = 0x0e
+	TpCodeTime     TpCode = 0x0f
+	TpCodeDatetime TpCode = 0x10
+	TpCodeBlob     TpCode = 0x11
 )
 
 func (bj ByteJson) TYPE() string {
@@ -147,24 +152,38 @@ func (bj ByteJson) TYPE() string {
 	case TpCodeInt64:
 		return "INTEGER"
 	case TpCodeUint64:
-		return "UNSIGNED INTEGER"
+		return "INTEGER"
 	case TpCodeFloat64:
 		return "DOUBLE"
 	case TpCodeString:
 		return "STRING"
+	case TpCodeDecimal:
+		return "DECIMAL"
+	case TpCodeDate:
+		return "DATE"
+	case TpCodeTime:
+		return "TIME"
+	case TpCodeDatetime:
+		return "DATETIME"
+	case TpCodeBlob:
+		return "BLOB"
 	default:
-		return "UNKNOWN"
+		return "OPAQUE"
 	}
 }
 
 var jsonTpOrder = map[string]int{
-	"ARRAY":            -1,
-	"OBJECT":           -2,
-	"STRING":           -3,
-	"INTEGER":          -4,
-	"UNSIGNED INTEGER": -5,
-	"DOUBLE":           -6,
-	"LITERAL":          -7,
+	"ARRAY":    -1,
+	"OBJECT":   -2,
+	"STRING":   -3,
+	"INTEGER":  -4,
+	"DOUBLE":   -5,
+	"DECIMAL":  -6,
+	"DATE":     -7,
+	"TIME":     -8,
+	"DATETIME": -9,
+	"BLOB":     -10,
+	"LITERAL":  -11,
 }
 
 type JsonModifyType byte
@@ -199,7 +218,7 @@ func CompareByteJson(left, right ByteJson) int {
 			cmp = compareUint64(left.GetUint64(), right.GetUint64())
 		case TpCodeFloat64:
 			cmp = compareFloat64(left.GetFloat64(), right.GetFloat64())
-		case TpCodeString:
+		case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
 			cmp = bytes.Compare(left.GetString(), right.GetString())
 		case TpCodeArray:
 			leftCnt := left.GetElemCnt()

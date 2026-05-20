@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"strconv"
 
@@ -710,34 +711,34 @@ func (op *opBuiltInJsonArray) convertToAny(ctx context.Context, v *vector.Vector
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		return vector.GetFixedAtNoTypeCheck[types.Date](v, row).String(), nil
+		return newTypedByteJson(bytejson.TpCodeDate, vector.GetFixedAtNoTypeCheck[types.Date](v, row).String()), nil
 	case types.T_time:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		return vector.GetFixedAtNoTypeCheck[types.Time](v, row).String(), nil
+		return newTypedByteJson(bytejson.TpCodeTime, vector.GetFixedAtNoTypeCheck[types.Time](v, row).String()), nil
 	case types.T_datetime:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		return vector.GetFixedAtNoTypeCheck[types.Datetime](v, row).String(), nil
+		return newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Datetime](v, row).String()), nil
 	case types.T_timestamp:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		return vector.GetFixedAtNoTypeCheck[types.Timestamp](v, row).String(), nil
+		return newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Timestamp](v, row).String()), nil
 	case types.T_decimal64:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](v, row)
-		return string(val.Format(fromType.Scale)), nil
+		return newTypedByteJson(bytejson.TpCodeDecimal, string(val.Format(fromType.Scale))), nil
 	case types.T_decimal128:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal128](v, row)
-		return string(val.Format(fromType.Scale)), nil
+		return newTypedByteJson(bytejson.TpCodeDecimal, string(val.Format(fromType.Scale))), nil
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
@@ -745,13 +746,13 @@ func (op *opBuiltInJsonArray) convertToAny(ctx context.Context, v *vector.Vector
 		data := v.GetBytesAt(row)
 		dst := make([]byte, base64.StdEncoding.EncodedLen(len(data)))
 		base64.StdEncoding.Encode(dst, data)
-		return string(dst), nil
+		return newTypedByteJson(bytejson.TpCodeBlob, string(dst)), nil
 	case types.T_decimal256:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal256](v, row)
-		return string(val.Format(fromType.Scale)), nil
+		return newTypedByteJson(bytejson.TpCodeDecimal, string(val.Format(fromType.Scale))), nil
 	case types.T_year:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
@@ -762,7 +763,7 @@ func (op *opBuiltInJsonArray) convertToAny(ctx context.Context, v *vector.Vector
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		return vector.GetFixedAtNoTypeCheck[uint64](v, row), nil
+		return newTypedByteJson(bytejson.TpCodeBlob, strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](v, row), 10)), nil
 	case types.T_enum:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
@@ -833,11 +834,13 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 				return err
 			}
 			var key string
-			if bj, ok := keyAny.(bytejson.ByteJson); ok {
-				dt, _ := bj.MarshalJSON()
-				key = string(dt)
-			} else {
-				key = fmt.Sprint(keyAny)
+			switch v := keyAny.(type) {
+			case bytejson.ByteJson:
+				key = string(v.GetString())
+			case nil:
+				return moerr.NewInvalidInputf(proc.Ctx, "JSON documents may not contain NULL member names")
+			default:
+				key = fmt.Sprint(v)
 			}
 
 			elem, err := arrayOp.convertToAny(proc.Ctx, params[i+1], j)
@@ -862,4 +865,54 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 		}
 	}
 	return nil
+}
+
+type opBuiltInJsonType struct{}
+
+func newOpBuiltInJsonType() *opBuiltInJsonType {
+	return &opBuiltInJsonType{}
+}
+
+func (op *opBuiltInJsonType) jsonType(params []*vector.Vector, result vector.FunctionResultWrapper,
+	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	jsonVec := params[0]
+	isBinary := jsonVec.GetType().Oid == types.T_json
+	p := vector.GenerateFunctionStrParameter(jsonVec)
+
+	for j := uint64(0); j < uint64(length); j++ {
+		val, null := p.GetStrValue(j)
+		if null || selectList.Contains(j) {
+			rs.AppendBytes(nil, true)
+			continue
+		}
+		var bj bytejson.ByteJson
+		var err error
+		if isBinary {
+			bj = types.DecodeJson(val)
+		} else {
+			bj, err = types.ParseStringToByteJson(string(val))
+			if err != nil {
+				return err
+			}
+		}
+		tn := bj.TYPE()
+		if tn == "LITERAL" {
+			if bj.Data[0] == bytejson.LiteralNull {
+				tn = "NULL"
+			} else {
+				tn = "BOOLEAN"
+			}
+		}
+		rs.AppendBytes([]byte(tn), false)
+	}
+	return nil
+}
+
+func newTypedByteJson(tp bytejson.TpCode, s string) bytejson.ByteJson {
+	l := len(s)
+	data := make([]byte, binary.MaxVarintLen64+l)
+	n := binary.PutUvarint(data, uint64(l))
+	copy(data[n:], s)
+	return bytejson.ByteJson{Type: tp, Data: data[:n+l]}
 }

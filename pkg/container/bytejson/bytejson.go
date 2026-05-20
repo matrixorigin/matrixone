@@ -151,6 +151,14 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 		buf, err = bj.toFloat64(buf)
 	case TpCodeString:
 		buf, err = bj.toString(buf)
+	case TpCodeDecimal:
+		data := bj.GetString()
+		buf = append(buf, data...)
+	case TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
+		buf = append(buf, '"')
+		data := bj.GetString()
+		buf = append(buf, data...)
+		buf = append(buf, '"')
 	default:
 		err = moerr.NewInvalidInputNoCtxf("invalid json type '%v'", bj.Type)
 	}
@@ -264,7 +272,7 @@ func (bj ByteJson) getValEntry(off int) ByteJson {
 		return ByteJson{Type: TpCodeLiteral, Data: bj.Data[off+valTypeSize : off+valTypeSize+1]}
 	case TpCodeUint64, TpCodeInt64, TpCodeFloat64:
 		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+numberSize]}
-	case TpCodeString:
+	case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
 		num, length := calStrLen(bj.Data[valOff:])
 		totalLen := uint32(num) + uint32(length)
 		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+totalLen]}

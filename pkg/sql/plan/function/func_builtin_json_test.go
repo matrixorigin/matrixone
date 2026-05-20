@@ -211,3 +211,79 @@ func check(t *testing.T, proc *process.Process, inputs []FunctionTestInput, expe
 	s, info := tc.Run()
 	require.True(t, s, info)
 }
+
+func TestJsonType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	check(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(),
+				[]string{`{"a": 1}`}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"OBJECT"}, nil),
+		newOpBuiltInJsonType().jsonType)
+
+	check(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(),
+				[]string{`[1, 2]`}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"ARRAY"}, nil),
+		newOpBuiltInJsonType().jsonType)
+
+	check(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(),
+				[]string{`42`, `-7`}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"INTEGER", "INTEGER"}, nil),
+		newOpBuiltInJsonType().jsonType)
+
+	check(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(),
+				[]string{`3.14`}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"DOUBLE"}, nil),
+		newOpBuiltInJsonType().jsonType)
+
+	check(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(),
+				[]string{`"hello"`}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"STRING"}, nil),
+		newOpBuiltInJsonType().jsonType)
+
+	check(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(),
+				[]string{`true`, `false`}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"BOOLEAN", "BOOLEAN"}, nil),
+		newOpBuiltInJsonType().jsonType)
+
+	check(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(),
+				[]string{`null`}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"NULL"}, nil),
+		newOpBuiltInJsonType().jsonType)
+
+	check(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(),
+				[]string{""}, []bool{true}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{""}, []bool{true}),
+		newOpBuiltInJsonType().jsonType)
+}

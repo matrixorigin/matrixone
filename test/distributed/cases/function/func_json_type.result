@@ -1,0 +1,131 @@
+select json_type('{"a": 1}');
+json_type({"a": 1})
+OBJECT
+select json_type('[1, 2, 3]');
+json_type([1, 2, 3])
+ARRAY
+select json_type('42');
+json_type(42)
+INTEGER
+select json_type('3.14');
+json_type(3.14)
+DOUBLE
+select json_type('"hello"');
+json_type("hello")
+STRING
+select json_type('true');
+json_type(true)
+BOOLEAN
+select json_type('false');
+json_type(false)
+BOOLEAN
+select json_type('null');
+json_type(null)
+NULL
+select json_type(null);
+invalid argument function json_type, bad value [ANY]
+select json_type(json_array(1, 2, 3));
+json_type(json_array(1, 2, 3))
+OPAQUE
+select json_type(json_object('id', 1, 'name', 'carrot'));
+json_type(json_object(id, 1, name, carrot))
+OPAQUE
+select json_type(json_extract(json_array(cast(3.14 as decimal(10,2))), '$[0]'));
+json_type(json_extract(json_array(cast(3.14 as decimal(10, 2))), $[0]))
+null
+select json_type(json_extract(json_array(cast('2021-02-01' as date)), '$[0]'));
+json_type(json_extract(json_array(cast(2021-02-01 as date)), $[0]))
+null
+select json_type(json_extract(json_array(cast('11:11:11' as time)), '$[0]'));
+json_type(json_extract(json_array(cast(11:11:11 as time)), $[0]))
+null
+select json_type(json_extract(json_array(cast('2021-02-01 11:11:11' as datetime)), '$[0]'));
+json_type(json_extract(json_array(cast(2021-02-01 11:11:11 as datetime)), $[0]))
+null
+select json_type(json_extract(json_array(cast('hello' as binary(10))), '$[0]'));
+json_type(json_extract(json_array(cast(hello as binary(10))), $[0]))
+null
+drop table if exists jtt;
+create table jtt (
+id int,
+b bool, bi bigint, f float, d double,
+d64 decimal(10, 3), d128 decimal(30, 10),
+c1 char(1), c2 char(10), vc varchar(100), t text,
+bin binary(10), vbin varbinary,
+td date, tt time, tdt datetime,
+ts timestamp,
+yr year,
+uid uuid,
+js json,
+vf32 vecf32(3),
+e enum('a', 'b', 'c'),
+bitcol bit
+);
+insert into jtt values
+(1, true, 11111111111111, 0.1, 0.2222222, 3.14, 3.14159265359,
+'a', 'aaa', 'vvvv', 'tttttttt',
+cast('hello' as binary(10)), cast('world' as varbinary),
+'2021-02-01', '11:11:11', '2021-02-01 11:11:11', '2022-01-01 01:02:03',
+2021,
+'550e8400-e29b-41d4-a716-446655440000',
+'{"a": 1, "b": [1, 2, 3], "c": {"d": "hello"}}',
+cast('[1.0,2.0,3.0]' as vecf32(3)), 'a', cast(1 as bit)),
+(2, false, null, null, null, null, null,
+null, null, null, null,
+null, null,
+null, null, null, null,
+null, null, null, null, null, null, null)
+;
+Column count doesn't match value count at row 2
+select count(*) from jtt;
+count(*)
+0
+select id, json_type(js) from jtt;
+id    json_type(js)
+select id, json_type(null) from jtt;
+invalid argument function json_type, bad value [ANY]
+select json_type(json_extract(json_array(b), '$[0]')) from jtt where b is not null;
+json_type(json_extract(json_array(b), $[0]))
+select json_type(json_extract(json_array(bi), '$[0]')) from jtt where bi is not null;
+json_type(json_extract(json_array(bi), $[0]))
+select json_type(json_extract(json_array(f), '$[0]')) from jtt where f is not null;
+json_type(json_extract(json_array(f), $[0]))
+select json_type(json_extract(json_array(d), '$[0]')) from jtt where d is not null;
+json_type(json_extract(json_array(d), $[0]))
+select json_type(json_extract(json_array(d64), '$[0]')) from jtt where d64 is not null;
+json_type(json_extract(json_array(d64), $[0]))
+select json_type(json_extract(json_array(d128), '$[0]')) from jtt where d128 is not null;
+json_type(json_extract(json_array(d128), $[0]))
+select json_type(json_extract(json_array(c1), '$[0]')) from jtt where c1 is not null;
+json_type(json_extract(json_array(c1), $[0]))
+select json_type(json_extract(json_array(td), '$[0]')) from jtt where td is not null;
+json_type(json_extract(json_array(td), $[0]))
+select json_type(json_extract(json_array(tt), '$[0]')) from jtt where tt is not null;
+json_type(json_extract(json_array(tt), $[0]))
+select json_type(json_extract(json_array(tdt), '$[0]')) from jtt where tdt is not null;
+json_type(json_extract(json_array(tdt), $[0]))
+select json_type(json_extract(json_array(ts), '$[0]')) from jtt where ts is not null;
+json_type(json_extract(json_array(ts), $[0]))
+select json_type(json_extract(json_array(uid), '$[0]')) from jtt where uid is not null;
+json_type(json_extract(json_array(uid), $[0]))
+select json_type(json_extract(json_array(yr), '$[0]')) from jtt where yr is not null;
+json_type(json_extract(json_array(yr), $[0]))
+select json_type(json_extract(json_array(bin), '$[0]')) from jtt where bin is not null;
+json_type(json_extract(json_array(bin), $[0]))
+select json_type(json_extract(json_array(vbin), '$[0]')) from jtt where vbin is not null;
+json_type(json_extract(json_array(vbin), $[0]))
+select json_type(json_extract(json_array(vf32), '$[0]')) from jtt where vf32 is not null;
+json_type(json_extract(json_array(vf32), $[0]))
+select json_type(json_extract(json_array(e), '$[0]')) from jtt where e is not null;
+json_type(json_extract(json_array(e), $[0]))
+select json_type(json_extract(json_array(bitcol), '$[0]')) from jtt where bitcol is not null;
+json_type(json_extract(json_array(bitcol), $[0]))
+select json_type(json_extract(json_object('id', id, 'name', vc), '$.id')) from jtt where vc is not null;
+json_type(json_extract(json_object(id, id, name, vc), $.id))
+select json_type(json_extract(json_object('date', td, 'time', tt), '$.date')) from jtt where td is not null;
+json_type(json_extract(json_object(date, td, time, tt), $.date))
+select json_type(json_extract(json_object('ts', ts), '$.ts')) from jtt where ts is not null;
+json_type(json_extract(json_object(ts, ts), $.ts))
+select json_type(json_extract(json_object('uid', uid), '$.uid')) from jtt where uid is not null;
+json_type(json_extract(json_object(uid, uid), $.uid))
+drop table jtt;
