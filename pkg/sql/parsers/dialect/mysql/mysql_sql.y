@@ -13747,6 +13747,7 @@ non_reserved_keyword:
 |   LAST_VALUE
 |   NTH_VALUE
 |   TASK
+|   TASKS
 
 func_not_keyword:
     DATE_ADD
