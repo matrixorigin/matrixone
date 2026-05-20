@@ -32,8 +32,10 @@ type Cache[K comparable, V any] struct {
 	capacity1    fscache.CapacityFunc
 	keyShardFunc func(K) uint64
 
-	postSet   func(ctx context.Context, key K, value V, size int64)
-	postGet   func(ctx context.Context, key K, value V, size int64)
+	postSet func(ctx context.Context, key K, value V, size int64)
+	postGet func(ctx context.Context, key K, value V, size int64)
+	// postEvict is called after an item is evicted from the cache.
+	// It must be safe for concurrent invocation from multiple goroutines.
 	postEvict func(ctx context.Context, key K, value V, size int64)
 
 	shards [numShards]struct {
@@ -250,42 +252,78 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 	return item.value, true
 }
 
-func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
+func (c *Cache[K, V]) Contains(key K) bool {
 	shard := &c.shards[c.keyShardFunc(key)%numShards]
 	shard.Lock()
 	defer shard.Unlock()
+
+	item, ok := shard.values[key]
+	return ok && item.valueOK
+}
+
+func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
+	shard := &c.shards[c.keyShardFunc(key)%numShards]
+	shard.Lock()
 	item, ok := shard.values[key]
 	if !ok {
+		shard.Unlock()
 		return
 	}
 	delete(shard.values, key)
-	c.purgeItemValue(ctx, item)
+	pe, evicted := purgeItemValue(item)
+	shard.Unlock()
+	c.postEvictItem(ctx, pe, evicted)
 	// we do not update queues here, to reduce cost
 	// deleted item in queue will be evicted eventually.
+}
+
+// _PendingPostEvict holds evicted item data for calling postEvict outside the queueLock.
+type _PendingPostEvict[K comparable, V any] struct {
+	key   K
+	value V
+	size  int64
 }
 
 func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut int64) {
 	if done == nil {
 		// can be async
-		if c.queueLock.TryLock() {
-			defer c.queueLock.Unlock()
-		} else {
+		if !c.queueLock.TryLock() {
 			if capacityCut > 0 {
 				// let the holder do more evict
 				c.capacityCut.Add(capacityCut)
 			}
 			return
 		}
-
 	} else {
 		if cap(done) < 1 {
 			panic("should be buffered chan")
 		}
 		c.queueLock.Lock()
-		defer c.queueLock.Unlock()
 	}
 
+	// Eviction loop under queueLock. Collect items whose postEvict callbacks
+	// will be executed after the lock is released, so that slow callbacks
+	// (e.g., value.Release under GC pressure) don't block other Set() callers.
+	var pendingPostEvicts []_PendingPostEvict[K, V]
 	var target int64
+	defer func() {
+		// Unlock first so other Set() callers can proceed while callbacks run.
+		c.queueLock.Unlock()
+		// Nested defer guarantees done is always signaled, even if a
+		// postEvict callback panics. The panic itself propagates to the
+		// caller's recover (e.g., query handler).
+		if done != nil {
+			defer func() { done <- target }()
+		}
+		// Execute postEvict callbacks outside the queueLock.
+		if c.postEvict != nil {
+			for i := range pendingPostEvicts {
+				c.postEvictItem(ctx, pendingPostEvicts[i], true)
+				// Release reference so GC can reclaim memory incrementally.
+				pendingPostEvicts[i] = _PendingPostEvict[K, V]{}
+			}
+		}
+	}()
 	for {
 		globalCapacityCut := c.capacityCut.Swap(0)
 		target = c.capacity() - capacityCut - globalCapacityCut
@@ -300,13 +338,14 @@ func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut in
 			target1 = 0
 		}
 		if c.used1 > target1 {
-			c.evict1(ctx)
+			if pe, ok := c.evict1(); ok {
+				pendingPostEvicts = append(pendingPostEvicts, pe)
+			}
 		} else {
-			c.evict2(ctx)
+			if pe, ok := c.evict2(); ok {
+				pendingPostEvicts = append(pendingPostEvicts, pe)
+			}
 		}
-	}
-	if done != nil {
-		done <- target
 	}
 }
 
@@ -322,7 +361,7 @@ func (c *Cache[K, V]) used() int64 {
 	return c.used1 + c.used2
 }
 
-func (c *Cache[K, V]) evict1(ctx context.Context) {
+func (c *Cache[K, V]) evict1() (pe _PendingPostEvict[K, V], evicted bool) {
 	// queue 1
 	for {
 		item, ok := c.queue1.dequeue()
@@ -337,7 +376,7 @@ func (c *Cache[K, V]) evict1(ctx context.Context) {
 			c.used2 += item.size
 		} else {
 			// put ghost
-			c.enqueueGhost(ctx, item)
+			pe, evicted = c.enqueueGhost(item)
 			c.evictGhost()
 			c.used1 -= item.size
 			return
@@ -345,7 +384,7 @@ func (c *Cache[K, V]) evict1(ctx context.Context) {
 	}
 }
 
-func (c *Cache[K, V]) evict2(ctx context.Context) {
+func (c *Cache[K, V]) evict2() (pe _PendingPostEvict[K, V], evicted bool) {
 	// queue 2
 	for {
 		item, ok := c.queue2.dequeue()
@@ -358,34 +397,52 @@ func (c *Cache[K, V]) evict2(ctx context.Context) {
 			c.queue2.enqueue(item)
 			item.dec()
 		} else {
-			// delete
-			c.Delete(ctx, item.key)
+			// put ghost
+			pe, evicted = c.enqueueGhost(item)
+			c.evictGhost()
 			c.used2 -= item.size
 			return
 		}
 	}
+	return
 }
 
-func (c *Cache[K, V]) enqueueGhost(ctx context.Context, item *_CacheItem[K, V]) {
+// enqueueGhost moves an item to the ghost queue and clears its value under
+// the shard lock. It returns the evicted item's data so the caller can invoke
+// postEvict outside the queueLock.
+func (c *Cache[K, V]) enqueueGhost(item *_CacheItem[K, V]) (pe _PendingPostEvict[K, V], evicted bool) {
 	c.ghost.enqueue(item)
 	c.ghostSize += item.size
 
 	shard := &c.shards[c.keyShardFunc(item.key)%numShards]
 	shard.Lock()
-	defer shard.Unlock()
-	c.purgeItemValue(ctx, item)
+	pe, evicted = purgeItemValue(item)
+	shard.Unlock()
+	return
 }
 
-func (c *Cache[K, V]) purgeItemValue(ctx context.Context, item *_CacheItem[K, V]) {
+func purgeItemValue[K comparable, V any](item *_CacheItem[K, V]) (pe _PendingPostEvict[K, V], evicted bool) {
 	if !item.valueOK {
 		return
 	}
-	if c.postEvict != nil {
-		c.postEvict(ctx, item.key, item.value, item.size)
-	}
+	pe.key = item.key
+	pe.value = item.value
+	pe.size = item.size
+	evicted = true
 	item.valueOK = false
+	// Clear item.value while the caller holds the shard lock so future Get
+	// calls cannot observe a dangling value and GC can reclaim the backing data
+	// once postEvict releases the captured value.
 	var zero V
 	item.value = zero
+	return
+}
+
+func (c *Cache[K, V]) postEvictItem(ctx context.Context, pe _PendingPostEvict[K, V], evicted bool) {
+	if !evicted || c.postEvict == nil {
+		return
+	}
+	c.postEvict(ctx, pe.key, pe.value, pe.size)
 }
 
 func (c *Cache[K, V]) evictGhost() {
