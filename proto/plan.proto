@@ -1434,6 +1434,10 @@ message AlterTableComment {
   string new_comment = 1;
 }
 
+message AlterTableAutoIncrement {
+  uint64 new_offset = 1;
+}
+
 message AlterTableName {
   string old_name = 1;
   string new_name = 2;
@@ -1501,6 +1505,7 @@ message AlterTable {
       AlterReplaceDef alter_replace_def = 11;
       AlterRenameColumn alter_rename_column = 12;
       AlterTableAlterAutoUpdate alter_auto_update = 13;
+      AlterTableAutoIncrement alter_auto_increment = 14;
     }
   }
   string database = 1;
