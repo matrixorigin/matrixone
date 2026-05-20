@@ -254,6 +254,75 @@ func TestMemCacheSkipsStalePostEvictAfterReinsert(t *testing.T) {
 	assert.Equal(t, 1, evicted[key2])
 }
 
+func TestMemCacheSerializesSameKeyCallbacks(t *testing.T) {
+	ctx := context.Background()
+	evictStarted := make(chan struct{})
+	evictUnblock := make(chan struct{})
+	events := make(chan string, 4)
+	var evictOnce sync.Once
+	cache := NewMemCache(
+		fscache.ConstCapacity(1),
+		&CacheCallbacks{
+			PostSet: []CacheCallbackFunc{
+				func(key fscache.CacheKey, _ fscache.Data) {
+					if key.Path == "foo" {
+						events <- "set"
+					}
+				},
+			},
+			PostEvict: []CacheCallbackFunc{
+				func(key fscache.CacheKey, _ fscache.Data) {
+					if key.Path != "foo" {
+						return
+					}
+					triggered := false
+					evictOnce.Do(func() {
+						triggered = true
+						close(evictStarted)
+						<-evictUnblock
+						events <- "evict"
+					})
+					if !triggered {
+						return
+					}
+				},
+			},
+		},
+		nil,
+		"",
+	)
+	defer cache.Close(ctx)
+
+	key1 := fscache.CacheKey{Path: "foo", Offset: 0, Sz: 1}
+	key2 := fscache.CacheKey{Path: "bar", Offset: 0, Sz: 1}
+	assert.NoError(t, cache.cache.Set(ctx, key1, staticTestData([]byte("a"))))
+	assert.Equal(t, "set", <-events)
+
+	firstSetDone := make(chan error, 1)
+	go func() {
+		firstSetDone <- cache.cache.Set(ctx, key2, staticTestData([]byte("b")))
+	}()
+
+	<-evictStarted
+	secondSetDone := make(chan error, 1)
+	go func() {
+		secondSetDone <- cache.cache.Set(ctx, key1, staticTestData([]byte("c")))
+	}()
+
+	select {
+	case err := <-secondSetDone:
+		assert.NoError(t, err)
+		t.Fatal("same-key post-set callback was not serialized behind post-evict")
+	default:
+	}
+
+	close(evictUnblock)
+	assert.NoError(t, <-firstSetDone)
+	assert.NoError(t, <-secondSetDone)
+	assert.Equal(t, "evict", <-events)
+	assert.Equal(t, "set", <-events)
+}
+
 func BenchmarkMemoryCacheUpdate(b *testing.B) {
 	ctx := context.Background()
 
