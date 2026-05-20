@@ -592,6 +592,11 @@ func (d *DiskCache) writeFile(
 	if !d.cache.Replace(ctx, diskPath, struct{}{}, size) {
 		d.cache.Set(ctx, diskPath, struct{}{}, size)
 	}
+	if !d.cache.Contains(diskPath) {
+		if err := os.Remove(diskPath); err != nil && !os.IsNotExist(err) {
+			return false, err
+		}
+	}
 
 	numWrite++
 
