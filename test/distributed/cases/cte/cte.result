@@ -24,7 +24,10 @@ LIMIT 3
 SELECT id
 FROM temp_txn_nested_2372
 WHERE id IN (SELECT id FROM ordered) FOR UPDATE;
-internal error: not support subquery for update
+id
+1
+2
+3
 ROLLBACK;
 START TRANSACTION;
 SELECT id
