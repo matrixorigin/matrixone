@@ -23,11 +23,11 @@ package cuvs
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"hash/crc32"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/bytedance/sonic"
@@ -586,27 +586,52 @@ func ResolveIncludeColumns(
 		return nil, "", 0, nil
 	}
 
-	// Build colMetaJSON: [{"name":"foo","type":1},...]
-	var sb strings.Builder
-	sb.WriteByte('[')
+	// Build colMetaJSON via the shared producer so column names
+	// containing `"` or `\` escape correctly and every producer
+	// emits the identical wire shape.
+	entries := make([]ColMetaEntry, len(bindings))
 	for i, b := range bindings {
-		if i > 0 {
-			sb.WriteByte(',')
-		}
-		sb.WriteString(`{"name":"`)
-		sb.WriteString(b.Name)
-		sb.WriteString(`","type":`)
-		sb.WriteString(strconv.Itoa(b.TypeCode))
-		sb.WriteByte('}')
+		entries[i] = ColMetaEntry{Name: b.Name, Type: b.TypeCode}
 	}
-	sb.WriteByte(']')
-	colMetaJSON := sb.String()
+	colMetaJSON, err := MarshalColMetaJSON(entries)
+	if err != nil {
+		return nil, "", 0, err
+	}
 
 	includeBytesPerRow, err := CdcIncludeBytesPerRow(colMetaJSON)
 	if err != nil {
 		return nil, "", 0, err
 	}
 	return bindings, colMetaJSON, includeBytesPerRow, nil
+}
+
+// ColMetaEntry is the canonical on-wire shape of one INCLUDE-column
+// descriptor in colMetaJSON. The JSON shape is
+// `[{"name":"foo","type":1},...]` — the C++ FilterStore + Go decoders
+// expect exactly that. Producers Marshal a []ColMetaEntry via
+// MarshalColMetaJSON.
+type ColMetaEntry struct {
+	Name string `json:"name"`
+	Type int    `json:"type"`
+}
+
+// MarshalColMetaJSON encodes the canonical colMetaJSON for a list of
+// INCLUDE-column descriptors. Single producer used by both the iscp
+// writer (via ResolveIncludeColumns) and the build-time table
+// function (via colMetaJSONFromCols) so the wire shape is identical
+// and column names containing `"` or `\` escape correctly.
+//
+// Returns "" when entries is empty so callers can skip embedding a
+// header without a special case.
+func MarshalColMetaJSON(entries []ColMetaEntry) (string, error) {
+	if len(entries) == 0 {
+		return "", nil
+	}
+	out, err := json.Marshal(entries)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 func includeTypeFromSrcID(name string, srcTypeID int32) (typeCode, sizeBytes int, err error) {

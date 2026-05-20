@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	cuvsfilter "github.com/matrixorigin/matrixone/pkg/cuvs/filter"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 )
 
 // filterColumnBuilder is satisfied by the index builders in
@@ -138,33 +139,33 @@ func appendFilterRow(
 // colMetaJSONFromCols builds the canonical INCLUDE-column metadata
 // JSON (matching cuvscdc.ResolveIncludeColumns output) directly from
 // the FilterStore-side []cuvsfilter.ColumnMeta. Used by the small-tail
-// CDC emit path to persist the column layout as a CdcOpHeader record
-// at chunk_id=0 so search-side decode works even when no tag=0
-// sub-index exists.
+// CDC emit path to persist the column layout in every chunk's frame
+// header so search-side decode works even when no tag=0 sub-index
+// exists.
 //
-// Returns "" when cols is empty so callers can skip emitting the
-// header record.
+// Returns "" when cols is empty so callers can pass through without
+// embedding a header.
+//
+// Delegates to cuvscdc.MarshalColMetaJSON for a single, encoding/json-
+// based producer — column names containing `"` or `\` escape
+// correctly. cuvsfilter.ColType numeric values match the cuvscdc type
+// codes (0=int32, 1=int64, 2=float32, 3=float64, 4=uint64) by design
+// — see pkg/cuvs/filter/filter.go's docstring.
 func colMetaJSONFromCols(cols []cuvsfilter.ColumnMeta) string {
 	if len(cols) == 0 {
 		return ""
 	}
-	var sb strings.Builder
-	sb.WriteByte('[')
+	entries := make([]cuvscdc.ColMetaEntry, len(cols))
 	for i, c := range cols {
-		if i > 0 {
-			sb.WriteByte(',')
-		}
-		sb.WriteString(`{"name":"`)
-		sb.WriteString(c.Name)
-		sb.WriteString(`","type":`)
-		// cuvsfilter.ColType numeric values match the cuvscdc type
-		// codes (0=int32, 1=int64, 2=float32, 3=float64, 4=uint64) by
-		// design — see pkg/cuvs/filter/filter.go's docstring.
-		fmt.Fprintf(&sb, "%d", int(c.TypeOid))
-		sb.WriteByte('}')
+		entries[i] = cuvscdc.ColMetaEntry{Name: c.Name, Type: int(c.TypeOid)}
 	}
-	sb.WriteByte(']')
-	return sb.String()
+	out, err := cuvscdc.MarshalColMetaJSON(entries)
+	if err != nil {
+		// json.Marshal of a slice of simple structs cannot realistically
+		// fail; fall through to empty rather than embed garbage.
+		return ""
+	}
+	return out
 }
 
 // includeBytesPerRowFromCols mirrors cuvscdc.CdcIncludeBytesPerRow but

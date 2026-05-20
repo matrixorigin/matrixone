@@ -17,6 +17,7 @@ package cuvs
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
@@ -717,6 +718,42 @@ func constTypes(typeIDs ...int32) func(int32) int32 {
 			return -1
 		}
 		return typeIDs[int(pos)]
+	}
+}
+
+// TestMarshalColMetaJSON_EscapesNames asserts the shared producer
+// handles column names containing JSON special characters (`"`, `\`,
+// newline) without producing invalid JSON. The previous strings.Builder
+// implementation would have emitted malformed JSON for such names.
+func TestMarshalColMetaJSON_EscapesNames(t *testing.T) {
+	got, err := MarshalColMetaJSON([]ColMetaEntry{
+		{Name: `weird"name`, Type: 1},
+		{Name: `back\slash`, Type: 2},
+		{Name: "new\nline", Type: 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Round-trip through encoding/json to confirm the producer's
+	// output is valid JSON.
+	var back []ColMetaEntry
+	if err := json.Unmarshal([]byte(got), &back); err != nil {
+		t.Fatalf("Marshal produced invalid JSON: %q (err %v)", got, err)
+	}
+	if back[0].Name != `weird"name` || back[1].Name != `back\slash` || back[2].Name != "new\nline" {
+		t.Fatalf("escaped names didn't round-trip: %+v", back)
+	}
+}
+
+// TestMarshalColMetaJSON_Empty returns "" without error for an empty
+// slice, matching the "no INCLUDE columns → empty header" convention.
+func TestMarshalColMetaJSON_Empty(t *testing.T) {
+	got, err := MarshalColMetaJSON(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("expected empty string, got %q", got)
 	}
 }
 
