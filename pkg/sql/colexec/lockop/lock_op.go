@@ -53,9 +53,6 @@ var (
 	// Keep backend/CN-restart retries bounded so abnormal txns fail instead of
 	// holding CN resources for hours while the outer statement context is still alive.
 	defaultMaxWaitTimeOnRetryBackendLock = 30 * time.Second
-	// maxLockRetryAttempts limits the number of lock retry attempts to prevent
-	// infinite retry loops when the lock service is congested.
-	maxLockRetryAttempts = 10
 )
 
 const opName = "lock_op"
@@ -795,24 +792,7 @@ func lockWithRetry(
 		return result, getLockRetryExitError(ctx, err)
 	}
 
-	for attempt := 0; attempt < maxLockRetryAttempts; attempt++ {
-		if attempt > 0 {
-			// Exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms, 3200ms, capped at 5s
-			shift := attempt - 1
-			if shift > 6 {
-				shift = 6
-			}
-			wait := time.Duration(1<<shift) * 100 * time.Millisecond
-			if wait > defaultWaitTimeOnRetryLock {
-				wait = defaultWaitTimeOnRetryLock
-			}
-			select {
-			case <-ctx.Done():
-				return result, getLockRetryExitError(ctx, ctx.Err())
-			case <-time.After(wait):
-			}
-		}
-
+	for {
 		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
 		if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
 			return result, getLockRetryExitError(ctx, err)
