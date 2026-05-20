@@ -231,16 +231,27 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 	return item.value, true
 }
 
-func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
+func (c *Cache[K, V]) Contains(key K) bool {
 	shard := &c.shards[c.keyShardFunc(key)%numShards]
 	shard.Lock()
 	defer shard.Unlock()
+
+	item, ok := shard.values[key]
+	return ok && item.valueOK
+}
+
+func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
+	shard := &c.shards[c.keyShardFunc(key)%numShards]
+	shard.Lock()
 	item, ok := shard.values[key]
 	if !ok {
+		shard.Unlock()
 		return
 	}
 	delete(shard.values, key)
-	c.purgeItemValue(ctx, item)
+	pe, evicted := purgeItemValue(item)
+	shard.Unlock()
+	c.postEvictItem(ctx, pe, evicted)
 	// we do not update queues here, to reduce cost
 	// deleted item in queue will be evicted eventually.
 }
@@ -286,7 +297,7 @@ func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut in
 		// Execute postEvict callbacks outside the queueLock.
 		if c.postEvict != nil {
 			for i := range pendingPostEvicts {
-				c.postEvict(ctx, pendingPostEvicts[i].key, pendingPostEvicts[i].value, pendingPostEvicts[i].size)
+				c.postEvictItem(ctx, pendingPostEvicts[i], true)
 				// Release reference so GC can reclaim memory incrementally.
 				pendingPostEvicts[i] = _PendingPostEvict[K, V]{}
 			}
@@ -384,36 +395,33 @@ func (c *Cache[K, V]) enqueueGhost(item *_CacheItem[K, V]) (pe _PendingPostEvict
 
 	shard := &c.shards[c.keyShardFunc(item.key)%numShards]
 	shard.Lock()
-	if item.valueOK {
-		pe.key = item.key
-		pe.value = item.value
-		pe.size = item.size
-		evicted = true
-		item.valueOK = false
-		// Clear item.value to:
-		// 1. Break the reference from item to backing buffer, allowing GC to
-		//    reclaim it as soon as postEvict calls Release (not waiting for
-		//    the ghost item itself to be GC'd).
-		// 2. Ensure the ghost state (valueOK=false + zero value) is atomically
-		//    visible under the shard lock, so concurrent Get() never reads a
-		//    dangling value reference.
-		var zero V
-		item.value = zero
-	}
+	pe, evicted = purgeItemValue(item)
 	shard.Unlock()
 	return
 }
 
-func (c *Cache[K, V]) purgeItemValue(ctx context.Context, item *_CacheItem[K, V]) {
+func purgeItemValue[K comparable, V any](item *_CacheItem[K, V]) (pe _PendingPostEvict[K, V], evicted bool) {
 	if !item.valueOK {
 		return
 	}
-	if c.postEvict != nil {
-		c.postEvict(ctx, item.key, item.value, item.size)
-	}
+	pe.key = item.key
+	pe.value = item.value
+	pe.size = item.size
+	evicted = true
 	item.valueOK = false
+	// Clear item.value while the caller holds the shard lock so future Get
+	// calls cannot observe a dangling value and GC can reclaim the backing data
+	// once postEvict releases the captured value.
 	var zero V
 	item.value = zero
+	return
+}
+
+func (c *Cache[K, V]) postEvictItem(ctx context.Context, pe _PendingPostEvict[K, V], evicted bool) {
+	if !evicted || c.postEvict == nil {
+		return
+	}
+	c.postEvict(ctx, pe.key, pe.value, pe.size)
 }
 
 func (c *Cache[K, V]) evictGhost() {
