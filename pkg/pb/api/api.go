@@ -101,6 +101,17 @@ func NewUpdateCommentReq(did, tid uint64, comment string) *AlterTableReq {
 	}
 }
 
+func NewUpdateAutoIncrementReq(did, tid uint64, offset uint64) *AlterTableReq {
+	return &AlterTableReq{
+		DbId:    did,
+		TableId: tid,
+		Kind:    AlterKind_UpdateAutoIncrement,
+		Operation: &AlterTableReq_UpdateAutoIncrement{
+			&AlterTableAutoIncrement{Offset: offset},
+		},
+	}
+}
+
 func NewRenameTableReq(did, tid uint64, old, new string) *AlterTableReq {
 	return &AlterTableReq{
 		DbId:    did,
