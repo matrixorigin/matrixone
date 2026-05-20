@@ -474,6 +474,26 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.ErrorContains(t, mp.mapping(page, proc, vec), "overflows BIGINT")
 	})
 
+	t.Run("unsigned int64 above int64 max to floats", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Uint(64), []parquet.Value{
+			parquet.ValueOf(uint64(1 << 63)),
+		})
+		col := f.Root().Column("c")
+
+		var h ParquetHandler
+		vecFloat32 := vector.NewVec(types.T_float32.ToType())
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_float32), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecFloat32))
+		require.InDeltaSlice(t, []float32{float32(uint64(1 << 63))}, vector.MustFixedColWithTypeCheck[float32](vecFloat32), 1)
+
+		vecFloat64 := vector.NewVec(types.T_float64.ToType())
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_float64), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecFloat64))
+		require.InDeltaSlice(t, []float64{float64(uint64(1 << 63))}, vector.MustFixedColWithTypeCheck[float64](vecFloat64), 1)
+	})
+
 	t.Run("double to float", func(t *testing.T) {
 		f, page := writeDictAndGetPage(t, parquet.Leaf(parquet.DoubleType), []parquet.Value{
 			parquet.DoubleValue(1.5),
