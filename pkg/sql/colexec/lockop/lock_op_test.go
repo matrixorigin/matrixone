@@ -65,6 +65,16 @@ var (
 	sid = ""
 )
 
+func forceLockRetryMemoryPressure(t *testing.T, level lockRetryMemoryPressureLevel) {
+	oldPressure := getLockRetryMemoryPressureLevel
+	getLockRetryMemoryPressureLevel = func() lockRetryMemoryPressureLevel {
+		return level
+	}
+	t.Cleanup(func() {
+		getLockRetryMemoryPressureLevel = oldPressure
+	})
+}
+
 func TestLockWithRetryReturnsBackendErrorWhenDeadlineExceededStopsBoundedRetry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -172,6 +182,8 @@ func TestLockWithRetryReturnsBackendErrorWhenContextCanceledDuringRetryWait(t *t
 }
 
 func TestLockWithRetryStopsWhenBackendRetryBudgetExceeded(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -224,6 +236,8 @@ func TestLockWithRetryStopsWhenBackendRetryBudgetExceeded(t *testing.T) {
 }
 
 func TestLockWithRetryDoesNotResetBackendRetryBudgetAfterBindChange(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -271,6 +285,8 @@ func TestLockWithRetryDoesNotResetBackendRetryBudgetAfterBindChange(t *testing.T
 }
 
 func TestLockWithRetryStopsWhenRollingRestartRetryBudgetExceeded(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -362,6 +378,8 @@ func TestLockWithRetryDoesNotRetryBackendErrorWhenLockTableAlreadyHeld(t *testin
 }
 
 func TestLockWithRetryRetriesBindChangedInExplicitUserTxnBeforeLockHeld(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -405,6 +423,8 @@ func TestLockWithRetryRetriesBindChangedInExplicitUserTxnBeforeLockHeld(t *testi
 }
 
 func TestLockWithRetryRetriesBindChangedInBeginTxnBeforeLockHeld(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -448,6 +468,8 @@ func TestLockWithRetryRetriesBindChangedInBeginTxnBeforeLockHeld(t *testing.T) {
 }
 
 func TestLockWithRetryRetriesBindChangedInAutocommitTxn(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -532,6 +554,8 @@ func TestLockWithRetryDoesNotRetryBindChangedWhenLockTableAlreadyHeld(t *testing
 }
 
 func TestLockWithRetryStopsWhenBindChangedRetryBudgetExceeded(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
