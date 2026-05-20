@@ -204,18 +204,16 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		// Enable pipeline flush only when PK dedup can be skipped. Add/change PK
 		// still needs the normal insert-copy path to avoid excessive conflict checks.
 		origCtx := c.proc.Ctx
-		pipelineCtx := origCtx
-		if pipelineCtx == nil {
-			pipelineCtx = c.proc.GetTopContext()
-			if pipelineCtx == nil {
-				pipelineCtx = context.Background()
+		restoreCtx := origCtx
+		if restoreCtx == nil {
+			restoreCtx = c.proc.GetTopContext()
+			if restoreCtx == nil {
+				restoreCtx = context.Background()
 			}
 		}
-		c.proc.Ctx = context.WithValue(pipelineCtx, ioutil.PipelineFlushKey, true)
+		c.proc.Ctx = context.WithValue(restoreCtx, ioutil.PipelineFlushKey, true)
 		defer func() {
-			if origCtx != nil {
-				c.proc.Ctx = origCtx
-			}
+			c.proc.Ctx = restoreCtx
 		}()
 		return c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
 	}()
