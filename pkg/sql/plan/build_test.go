@@ -815,7 +815,7 @@ func TestReplacePlanStructure(t *testing.T) {
 }
 
 func findDedupBuildKeepLastFlags(query *plan.Query) []bool {
-	var flags []bool
+	flags := make([]bool, 0, len(query.Nodes))
 	for _, node := range query.Nodes {
 		if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_DEDUP {
 			continue
