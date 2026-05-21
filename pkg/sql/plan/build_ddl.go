@@ -895,7 +895,7 @@ func buildCreateTable(
 
 		// these table options is not support in plan
 		// case *tree.TableOptionEngine, *tree.TableOptionSecondaryEngine, *tree.TableOptionCharset,
-		// 	*tree.TableOptionCollate, *tree.TableOptionAutoIncrement, *tree.TableOptionComment,
+		// 	*tree.TableOptionCollate, *tree.TableOptionComment,
 		// 	*tree.TableOptionAvgRowLength, *tree.TableOptionChecksum, *tree.TableOptionCompression,
 		// 	*tree.TableOptionConnection, *tree.TableOptionPassword, *tree.TableOptionKeyBlockSize,
 		// 	*tree.TableOptionMaxRows, *tree.TableOptionMinRows, *tree.TableOptionDelayKeyWrite,
@@ -5104,16 +5104,19 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					ctx.GetContext(),
 					"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
 			}
-			newOffset := uint64(0)
-			if opt.Value != 0 {
-				newOffset = opt.Value - 1
+			if opt.Value == 0 {
+				continue
 			}
+			newOffset := opt.Value - 1
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterAutoIncrement{
 					AlterAutoIncrement: &plan.AlterTableAutoIncrement{
 						NewOffset: newOffset,
 					},
 				},
+			}
+			if alterTable.CopyTableDef != nil {
+				alterTable.CopyTableDef.AutoIncrOffset = newOffset
 			}
 
 		case *tree.AlterOptionAlterCheck, *tree.TableOptionCharset:

@@ -1131,6 +1131,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			autoCols := incrservice.GetAutoColumnFromDef(qry.GetTableDef())
 			sid := c.proc.GetService()
 			s := incrservice.GetAutoIncrementService(sid)
+			if s == nil {
+				return moerr.NewInternalErrorf(c.proc.Ctx, "failed to get auto-increment service")
+			}
 			for _, col := range autoCols {
 				err = s.SetOffset(
 					c.proc.Ctx,

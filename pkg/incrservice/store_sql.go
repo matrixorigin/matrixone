@@ -17,6 +17,7 @@ package incrservice
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -301,6 +302,10 @@ func (s *sqlStore) SetOffset(
 	offset uint64,
 	txnOp client.TxnOperator,
 ) error {
+	if strings.ContainsAny(colName, "'\"\\;`") {
+		return moerr.NewInternalErrorf(ctx,
+			"incrservice: invalid column name: %s", colName)
+	}
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithTxn(txnOp)
@@ -313,6 +318,9 @@ func (s *sqlStore) SetOffset(
 	} else {
 		opts = opts.WithDisableIncrStatement()
 	}
+	// The WHERE clause includes "and offset < %d" so that the UPDATE only raises
+	// the offset — it never lowers it. If no row matches (affectedRows==0), the
+	// current offset is already >= the target and the no-op is correct.
 	res, err := s.exec.Exec(
 		ctx,
 		fmt.Sprintf(

@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -186,11 +187,16 @@ func (s *memStore) SetOffset(
 	defer s.Unlock()
 	m := s.caches
 	if txnOp != nil {
-		m = s.uncommitted[string(txnOp.Txn().ID)]
+		key := string(txnOp.Txn().ID)
+		um, ok := s.uncommitted[key]
+		if !ok {
+			return fmt.Errorf("incrservice: no uncommitted data for txn %s", key)
+		}
+		m = um
 	}
 	cols, ok := m[tableID]
 	if !ok {
-		panic("missing incr column record")
+		return fmt.Errorf("incrservice: table %d not found in memStore", tableID)
 	}
 	for i := range cols {
 		if cols[i].ColName == colName {
@@ -200,7 +206,7 @@ func (s *memStore) SetOffset(
 			return nil
 		}
 	}
-	panic("missing incr column record")
+	return fmt.Errorf("incrservice: column %s not found for table %d in memStore", colName, tableID)
 }
 
 func (s *memStore) Delete(
