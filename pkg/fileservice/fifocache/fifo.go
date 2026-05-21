@@ -238,15 +238,10 @@ func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V], ghostItemSet bool) {
 		defer c.queueLock.Unlock()
 	}
 
-	// enqueue
 	if ghostItemSet {
-		item.queue = cacheItemQueue2
-		c.queue2.enqueue(item)
-		c.used2 += item.size
+		c.enqueuePendingItem(item, cacheItemQueue2)
 	} else {
-		item.queue = cacheItemQueue1
-		c.queue1.enqueue(item)
-		c.used1 += item.size
+		c.enqueuePendingItem(item, cacheItemQueue1)
 	}
 
 	c.helpEnqueue()
