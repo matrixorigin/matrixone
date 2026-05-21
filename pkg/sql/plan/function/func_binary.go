@@ -891,6 +891,19 @@ type NormalType interface {
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 0 {
+		if retType, ok := mixedStringNumericToVarchar(inputs); ok {
+			castType := make([]types.Type, len(inputs))
+			for i := range castType {
+				castType[i] = retType
+			}
+			for i, over := range overloads {
+				if len(over.args) == 1 && over.args[0] == retType.Oid {
+					return newCheckResultWithCast(i, castType)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+
 		minIndex := -1
 		minOid := types.T(0)
 		minCost := math.MaxInt
