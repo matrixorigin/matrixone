@@ -58,7 +58,7 @@ func TestMPool(t *testing.T) {
 	}
 
 	require.True(t, nb0 == m.CurrNB(), "leak")
-	require.True(t, m.Stats().NumAlloc.Load() >= nalloc0+10000, "alloc")
+	require.True(t, nalloc0+10000*2 == m.Stats().NumAlloc.Load(), "alloc")
 	require.True(t, nalloc0-nfree0 == m.Stats().NumAlloc.Load()-m.Stats().NumFree.Load(), "free")
 }
 
@@ -258,13 +258,6 @@ func TestDoubleFree(t *testing.T) {
 		mp.Free(bs)
 	}, "double free should panic")
 
-	large, err := mp.Alloc(2048, true)
-	require.NoError(t, err)
-	mp.Free(large)
-	require.Panics(t, func() {
-		mp.Free(large)
-	}, "double free should panic for malloc-backed allocations")
-
 	DeleteMPool(mp)
 }
 
@@ -377,30 +370,6 @@ func TestShardDistribution(t *testing.T) {
 		mp.Free(bs)
 	}
 
-	require.Equal(t, int64(0), mp.CurrNB())
-	DeleteMPool(mp)
-}
-
-func TestFixedPoolGloballyDisabled(t *testing.T) {
-	mp, err := NewMPool("fixed-pool-disabled-global-test", 0, 0)
-	require.NoError(t, err)
-
-	bs, err := mp.Alloc(64, true)
-	require.NoError(t, err)
-	require.Len(t, mp.pools[0].slabs, 0)
-	require.Equal(t, int64(64), mp.CurrNB())
-	mp.Free(bs)
-	require.Equal(t, int64(0), mp.CurrNB())
-	DeleteMPool(mp)
-}
-
-func TestNoFixedDisablesFixedPool(t *testing.T) {
-	mp := MustNew("fixed-pool-disabled-test")
-	bs, err := mp.Alloc(64, true)
-	require.NoError(t, err)
-	require.Len(t, mp.pools[0].slabs, 0)
-	require.Equal(t, int64(64), mp.CurrNB())
-	mp.Free(bs)
 	require.Equal(t, int64(0), mp.CurrNB())
 	DeleteMPool(mp)
 }

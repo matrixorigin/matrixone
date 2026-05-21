@@ -242,13 +242,13 @@ func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 			wantErr: nil,
 		},
 		{
-			name:   "memory cache size also caps mpool",
+			name:   "normal",
 			fields: fields{},
 			args: args{
 				ctx: ctx,
 				req: &query.Request{FileServiceCacheRequest: query.FileServiceCacheRequest{
 					Type:      query.FileServiceCacheType_Memory,
-					CacheSize: 2 * mpool.GB,
+					CacheSize: 0,
 				}},
 				resp: &query.Response{},
 			},
@@ -276,7 +276,7 @@ func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 			if tt.args.req.FileServiceCacheRequest.Type == query.FileServiceCacheType_Memory &&
 				tt.args.req.FileServiceCacheRequest.CacheSize > 0 {
 				require.Equal(t, tt.args.req.FileServiceCacheRequest.CacheSize, fileservice.GlobalMemoryCacheSizeHint.Load())
-				require.Equal(t, tt.args.req.FileServiceCacheRequest.CacheSize, mpool.GlobalCap())
+				require.Equal(t, oldMPoolCap, mpool.GlobalCap())
 			}
 		})
 	}

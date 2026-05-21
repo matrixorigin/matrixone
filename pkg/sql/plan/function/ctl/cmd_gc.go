@@ -18,12 +18,10 @@ import (
 	"runtime/debug"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func handleCNGC(proc *process.Process, _ serviceType, _ string, _ requestSender) (Result, error) {
-	objectio.DrainArenaPools()
 	debug.FreeOSMemory()
 	runtime.ServiceRuntime(proc.GetService()).Logger().Info("force free memory completed")
 	return Result{

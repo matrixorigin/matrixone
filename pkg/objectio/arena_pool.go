@@ -127,11 +127,11 @@ func PutArena(a *WriteArena) {
 	}
 }
 
-// arenaDrainDelay is how long to wait after the last arena return before
-// draining the arena pools.  Keep this short enough that off-heap memory
-// returns quickly once write bursts finish, while still debouncing active
-// checkpoint/merge/sinker workloads.
-const arenaDrainDelay = 30 * time.Second
+// arenaDrainDelay is how long to wait after the last checkpoint before
+// draining the arena pools.  Using 2× the default incremental checkpoint
+// interval ensures the timer is always reset during active operation,
+// so pools stay warm.  Draining only happens during genuine idle periods.
+const arenaDrainDelay = 2 * time.Minute
 
 var (
 	arenaDrainMu    sync.Mutex
@@ -148,14 +148,13 @@ func ScheduleArenaDrain() {
 	if arenaDrainTimer != nil {
 		arenaDrainTimer.Stop()
 	}
-	arenaDrainTimer = time.AfterFunc(arenaDrainDelay, DrainArenaPools)
+	arenaDrainTimer = time.AfterFunc(arenaDrainDelay, drainArenaPools)
 }
 
-// DrainArenaPools empties both arena free lists, freeing the off-heap
+// drainArenaPools empties both arena free lists, freeing the off-heap
 // backing buffers.  Called by the debounce timer when merge and flush
-// have been idle for arenaDrainDelay, and by force-GC paths that need
-// immediate off-heap reclamation.
-func DrainArenaPools() {
+// have been idle for arenaDrainDelay.
+func drainArenaPools() {
 	for i := range arenaPools {
 		pool := &arenaPools[i]
 		for {
