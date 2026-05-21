@@ -9,7 +9,7 @@ json_valid("hello")
 1
 select json_valid('null');
 json_valid(null)
-0
+1
 select json_valid('true');
 json_valid(true)
 1
