@@ -619,6 +619,13 @@ func (w *IvfflatSqlWriter) ToSql() ([]byte, error) {
 		return nil, nil
 	}
 
+	// Per-batch OUT marker — analogous to the cuvs Sync.Save OUT
+	// line in pkg/vectorindex/{cagra,ivfpq}/sync.go. IN-side is the
+	// existing [plugin] iscp NewIndexSqlWriter marker fired once per
+	// consumer construction (pkg/iscp/index_sqlwriter.go:111).
+	logutil.Infof("[plugin] ivfflat IvfflatSqlWriter.ToSql OUT: index=%s op=%s events=%d",
+		w.info.IndexName, w.lastCdcOp, w.ndata)
+
 	switch w.lastCdcOp {
 	case vectorindex.CDC_DELETE:
 		return w.toIvfflatDelete()
