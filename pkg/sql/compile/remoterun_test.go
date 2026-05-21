@@ -349,11 +349,12 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
 				{
-					ObjRef:        &plan.ObjectRef{ObjName: "t1"},
-					TableDef:      &plan.TableDef{Name: "t1"},
-					InsertCols:    []int{0, 1, 2},
-					DeleteCols:    []int{3, 4},
-					PartitionCols: []int{5, 6},
+					ObjRef:         &plan.ObjectRef{ObjName: "t1"},
+					TableDef:       &plan.TableDef{Name: "t1"},
+					InsertCols:     []int{0, 1, 2},
+					DeleteCols:     []int{3, 4},
+					PartitionCols:  []int{5, 6},
+					InsertPkColIdx: 1,
 				},
 			},
 			Action: multi_update.UpdateWriteTable,
@@ -368,6 +369,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, []int{5, 6}, restoredOp.MultiUpdateCtx[0].PartitionCols)
 		require.Equal(t, []int{0, 1, 2}, restoredOp.MultiUpdateCtx[0].InsertCols)
 		require.Equal(t, []int{3, 4}, restoredOp.MultiUpdateCtx[0].DeleteCols)
+		require.Equal(t, 1, restoredOp.MultiUpdateCtx[0].InsertPkColIdx)
 		require.True(t, restoredOp.IsRemote)
 	})
 

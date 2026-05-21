@@ -430,6 +430,7 @@ func (ctx *MultiUpdateCtx) clone() *MultiUpdateCtx {
 		DeleteCols:         ctx.DeleteCols,
 		PartitionCols:      ctx.PartitionCols,
 		SkipInsertOnNullPk: ctx.SkipInsertOnNullPk,
+		InsertPkColIdx:     ctx.InsertPkColIdx,
 	}
 	objRef := *ctx.ObjRef
 	def := *ctx.TableDef

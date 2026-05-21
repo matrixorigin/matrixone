@@ -833,6 +833,7 @@ func constructMultiUpdate(
 			DeleteCols:         deleteCols,
 			PartitionCols:      partitionCols,
 			SkipInsertOnNullPk: updateCtx.SkipInsertOnNullPk,
+			InsertPkColIdx:     int(updateCtx.InsertPkColIdx),
 		}
 	}
 	arg.Action = action

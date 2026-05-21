@@ -270,10 +270,15 @@ func (writer *s3WriterDelegate) append(
 
 		tableType := writer.updateCtxInfos[updateCtx.TableDef.Name].tableType
 
-		mainTableNullPkFilter := tableType == UpdateMainTable &&
-			updateCtx.SkipInsertOnNullPk &&
-			writer.sortIndexes[i] > -1 &&
-			inBatch.Vecs[updateCtx.InsertCols[0]].HasNull()
+		mainTablePkProjectIdx := -1
+		mainTableNullPkFilter := false
+		if tableType == UpdateMainTable && updateCtx.SkipInsertOnNullPk {
+			mainTablePkProjectIdx = updateCtx.InsertPkColIdx
+			if mainTablePkProjectIdx < 0 || mainTablePkProjectIdx >= len(projBat.Vecs) {
+				return moerr.NewInternalError(proc.Ctx, "invalid main table insert pk column index")
+			}
+			mainTableNullPkFilter = projBat.Vecs[mainTablePkProjectIdx].HasNull()
+		}
 
 		// Check NOT NULL constraints for main table columns (mirrors insert_main_table).
 		if tableType == UpdateMainTable {
@@ -282,7 +287,7 @@ func (writer *s3WriterDelegate) append(
 				if checked, err = projBat.Clone(mp, false); err != nil {
 					return
 				}
-				nulls := checked.Vecs[0].GetNulls().GetBitmap().Clone()
+				nulls := checked.Vecs[mainTablePkProjectIdx].GetNulls().GetBitmap().Clone()
 				checked.ShrinkByMask(nulls, true, 0)
 				if err = checkMainTableNotNull(proc, updateCtx, checked); err != nil {
 					checked.Clean(mp)
@@ -310,7 +315,7 @@ func (writer *s3WriterDelegate) append(
 			needNullFilter = mainTableNullPkFilter
 		}
 
-		if needNullFilter && projBat.Vecs[writer.sortIndexes[i]].HasNull() {
+		if needNullFilter && (tableType == UpdateMainTable || projBat.Vecs[writer.sortIndexes[i]].HasNull()) {
 			// Clone because SelectColumns shares vectors, and ShrinkByMask
 			// modifies in-place.
 			var filtered *batch.Batch
@@ -319,7 +324,7 @@ func (writer *s3WriterDelegate) append(
 			}
 			nullIdx := writer.sortIndexes[i]
 			if tableType == UpdateMainTable {
-				nullIdx = 0
+				nullIdx = mainTablePkProjectIdx
 			}
 			nulls := filtered.Vecs[nullIdx].GetNulls().GetBitmap().Clone()
 			filtered.ShrinkByMask(nulls, true, 0)

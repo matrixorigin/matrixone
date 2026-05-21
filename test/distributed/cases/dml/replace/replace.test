@@ -178,3 +178,10 @@ insert into t_replace_cross_key_keep_last values (1, 100, 0);
 replace into t_replace_cross_key_keep_last values (1, 200, 10), (2, 200, 20);
 select * from t_replace_cross_key_keep_last order by id;
 drop table t_replace_cross_key_keep_last;
+
+-- test REPLACE NULL-PK filtering uses the actual primary key column
+drop table if exists t_replace_pk_not_first;
+create table t_replace_pk_not_first(a int null, id int primary key, u int unique);
+replace into t_replace_pk_not_first values (null, 1, 10);
+select * from t_replace_pk_not_first order by id;
+drop table t_replace_pk_not_first;

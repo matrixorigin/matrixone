@@ -228,3 +228,10 @@ select * from t_replace_cross_key_keep_last order by id;
 id    u    v
 2    200    20
 drop table t_replace_cross_key_keep_last;
+drop table if exists t_replace_pk_not_first;
+create table t_replace_pk_not_first(a int null, id int primary key, u int unique);
+replace into t_replace_pk_not_first values (null, 1, 10);
+select * from t_replace_pk_not_first order by id;
+a    id    u
+null    1    10
+drop table t_replace_pk_not_first;

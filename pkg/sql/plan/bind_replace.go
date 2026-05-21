@@ -703,6 +703,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			PrimaryColRelPos:   finalProjTag,
 			PrimaryColTyp:      finalProjList[newPkIdx].Typ,
 		})
+		insertPkColIdx := int32(-1)
+		for i, col := range insertCols {
+			if col.ColPos == newPkIdx {
+				insertPkColIdx = int32(i)
+				break
+			}
+		}
+		if insertPkColIdx < 0 {
+			panic("replace main table primary key column not found in insert columns")
+		}
 
 		oldRowIdPos := oldColName2Idx[tableDef.Name+"."+catalog.Row_ID]
 		deleteCols[0].RelPos = finalProjTag
@@ -743,6 +753,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			InsertCols:         insertCols,
 			DeleteCols:         deleteCols,
 			SkipInsertOnNullPk: true,
+			InsertPkColIdx:     insertPkColIdx,
 		})
 	}
 

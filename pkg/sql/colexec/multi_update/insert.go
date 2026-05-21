@@ -52,9 +52,14 @@ func (update *MultiUpdate) insert_main_table(
 		ctr.insertBuf[tableIndex] = bat
 	}
 
-	pkColIdx := updateCtx.InsertCols[0]
-	if updateCtx.SkipInsertOnNullPk && inputBatch.Vecs[pkColIdx].HasNull() {
-		return update.check_null_and_insert_main_table(proc, analyzer, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+	if updateCtx.SkipInsertOnNullPk {
+		pkColIdx, ok := mainTableInsertPkInputIdx(updateCtx)
+		if !ok || pkColIdx >= len(inputBatch.Vecs) {
+			return moerr.NewInternalError(proc.Ctx, "invalid main table insert pk column index")
+		}
+		if inputBatch.Vecs[pkColIdx].HasNull() {
+			return update.check_null_and_insert_main_table(proc, analyzer, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+		}
 	}
 
 	// preinsert: check not null column
@@ -105,7 +110,10 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 	inputBatch *batch.Batch,
 	insertBatch *batch.Batch,
 ) (err error) {
-	pkPos := updateCtx.InsertCols[0]
+	pkPos, ok := mainTableInsertPkInputIdx(updateCtx)
+	if !ok || pkPos >= len(inputBatch.Vecs) {
+		return moerr.NewInternalError(proc.Ctx, "invalid main table insert pk column index")
+	}
 	pkNulls := inputBatch.Vecs[pkPos].GetNulls()
 
 	insertBatch.CleanOnlyData()
@@ -126,6 +134,9 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 		return nil
 	}
 	insertBatch.SetRowCount(newRowCount)
+	if err = checkMainTableNotNull(proc, updateCtx, insertBatch); err != nil {
+		return err
+	}
 	tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 	update.addInsertAffectRows(tableType, uint64(newRowCount))
 	source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
@@ -235,6 +246,13 @@ func isContiguousMapping(cols []int) bool {
 		}
 	}
 	return true
+}
+
+func mainTableInsertPkInputIdx(updateCtx *MultiUpdateCtx) (int, bool) {
+	if updateCtx.InsertPkColIdx < 0 || updateCtx.InsertPkColIdx >= len(updateCtx.InsertCols) {
+		return 0, false
+	}
+	return updateCtx.InsertCols[updateCtx.InsertPkColIdx], true
 }
 
 func (update *MultiUpdate) check_null_and_insert_table(
