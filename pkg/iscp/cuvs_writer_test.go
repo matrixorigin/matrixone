@@ -92,15 +92,6 @@ type includeColSpec struct {
 	typ  types.T
 }
 
-func newTestCuvsConsumerInfo() *ConsumerInfo {
-	return &ConsumerInfo{
-		ConsumerType: 0,
-		DBName:       "test_db",
-		TableName:    "test_tbl",
-		IndexName:    "cuvs_idx",
-	}
-}
-
 func newTestCuvsIndexDefs(td *plan.TableDef) []*plan.IndexDef {
 	// Pass both hidden-table indexdefs (writer requires exactly 2).
 	out := make([]*plan.IndexDef, 0, 2)
