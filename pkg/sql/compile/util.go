@@ -25,32 +25,51 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
-	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // resolveVariableOrDefault wraps proc.GetResolveVariableFunc() with a
-// nil-safe fallback to iscp.DefaultResolveVariable (populated from
+// nil-safe fallback to executor.DefaultResolveVariable (populated from
 // gSysVarsDefs by pkg/frontend's init). When proc has a session-bound
 // resolver (normal frontend path) that resolver is used; when
 // proc.ResolveVariableFunc is nil (background paths that came in
 // without a frontend session) the fallback returns the variable's
 // compile-time default rather than panicking on a nil function call.
 //
-// Last-resort: when neither the proc resolver nor the iscp fallback
-// is available (tests that construct a bare Process and don't blank-
-// import pkg/frontend) returns an error rather than panic.
+// Per-call nil fallback: the session resolver's per-session sysvar
+// map (ses.sesSysVars) is a clone of the per-account snapshot from
+// mo_mysql_compatibility_mode; sysvars that were never explicitly SET
+// at the global/account level are absent from the map and Get returns
+// nil (interface{} zero value) — NOT the gSysVarsDefs Default.
+// Encountered most visibly in sub-Compiles spawned by CREATE TABLE
+// CLONE that inherit a partial session resolver. Falling back to
+// executor.DefaultResolveVariable in this case mirrors gpu_async_search's
+// per-var hardcoded defaults: idxcron metadata capture lands with
+// compile-time defaults instead of nils or a hard error.
+//
+// Last-resort: when neither the proc resolver nor the executor
+// fallback is available (tests that construct a bare Process and
+// don't blank-import pkg/frontend) returns an error rather than panic.
 func resolveVariableOrDefault(proc *process.Process, name string, isSystemVar, isGlobalVar bool) (any, error) {
 	if resolver := proc.GetResolveVariableFunc(); resolver != nil {
-		return resolver(name, isSystemVar, isGlobalVar)
+		v, err := resolver(name, isSystemVar, isGlobalVar)
+		if err != nil {
+			return nil, err
+		}
+		if v != nil {
+			return v, nil
+		}
+		// proc resolver returned (nil, nil) — fall through to the
+		// executor default below to surface the gSysVarsDefs default.
 	}
-	if iscp.DefaultResolveVariable != nil {
-		return iscp.DefaultResolveVariable(name, isSystemVar, isGlobalVar)
+	if executor.DefaultResolveVariable != nil {
+		return executor.DefaultResolveVariable(name, isSystemVar, isGlobalVar)
 	}
 	return nil, moerr.NewInternalErrorNoCtxf(
-		"resolveVariableOrDefault: no resolver available for %q (proc resolver and iscp.DefaultResolveVariable both nil)", name)
+		"resolveVariableOrDefault: no resolver available for %q (proc resolver and executor.DefaultResolveVariable both nil)", name)
 }
 
 const (

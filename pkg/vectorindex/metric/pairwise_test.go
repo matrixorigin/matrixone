@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
 
 func TestPairWiseDistance(t *testing.T) {
@@ -43,7 +45,7 @@ func TestPairWiseDistance(t *testing.T) {
 
 	for _, m := range metrics {
 		t.Run(MetricTypeToDistFuncName[m], func(t *testing.T) {
-			dist, err := PairWiseDistance(x, y, m)
+			dist, err := PairWiseDistance(x, y, m, gpumode.GpuMode)
 			require.NoError(t, err)
 			require.Equal(t, nX*nY, len(dist))
 

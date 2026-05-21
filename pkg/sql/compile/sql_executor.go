@@ -389,7 +389,7 @@ func (exec *txnExecutor) Exec(
 	// IdxcronMetadata) consult proc.Base.IsFrontend rather than
 	// inferring from resolver behaviour, which is unreliable because
 	// background paths set resolvers too (idxcron's task.Metadata,
-	// ProcessInitSQL's iscp.DefaultResolveVariable).
+	// ProcessInitSQL's executor.DefaultResolveVariable).
 	proc.Base.IsFrontend = exec.opts.IsFrontend()
 
 	prepared := false

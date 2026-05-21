@@ -49,11 +49,22 @@ type Hooks struct{}
 // HandleCreateIndex is lifted from Scope.handleVectorCagraIndex
 // (pkg/sql/compile/ddl_index_algo.go:732).
 //
-// CREATE INDEX uses the always-async path (forceSync=false): the
-// cagra_create build is stashed as InitSQL and runs inside the CDC
-// pipeline's first iteration.
+// The sync-vs-async branch is driven by the index's `async`
+// IndexAlgoParam (catalog.IsIndexAsync). Default (key missing or
+// "false"): forceSync=true — cagra_create runs inline in the user's
+// CREATE INDEX txn before the CDC task is registered. Explicit
+// async="true": forceSync=false — the build SQL is stashed as
+// ConsumerInfo.InitSQL and runs at the first CDC iteration.
 func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
-	return h.handleCreate(ctx, indexDefs, false)
+	metaDef, ok := indexDefs[catalog.Cagra_TblType_Metadata]
+	if !ok || metaDef == nil {
+		return h.handleCreate(ctx, indexDefs, true)
+	}
+	async, err := catalog.IsIndexAsync(metaDef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	return h.handleCreate(ctx, indexDefs, !async)
 }
 
 // HandleReindex runs the same code path as create, but honors
@@ -180,6 +191,10 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*pl
 func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 	logutil.Infof("[plugin] cagra IdxcronMetadata: isFrontend=%v", ctx.IsFrontend())
 	return compileplugin.BuildIdxcronMetadata(ctx, compileplugin.IdxcronVarSpec{
+		// Second-level gate after ctx.IsFrontend(): a sub-Compile
+		// inheriting a partial frontend resolver returns nil here →
+		// defer to background semantics.
+		FrontendProbeVar: "cagra_threads_search",
 		Capture: []string{
 			"cagra_threads_build",
 			"cagra_max_index_capacity",

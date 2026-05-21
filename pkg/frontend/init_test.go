@@ -19,37 +19,37 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/iscp"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-// TestIscpDefaultResolveVariableWired asserts that pkg/frontend's
-// init() populated iscp.DefaultResolveVariable, that it returns
+// TestDefaultResolveVariableWired asserts that pkg/frontend's init()
+// populated executor.DefaultResolveVariable, that it returns
 // gSysVarsDefs[name].Default for a known system variable, and that
 // it errors on user variables and unknown names — mirroring the
 // nil-resolver-replacement contract that ProcessInitSQL relies on.
-func TestIscpDefaultResolveVariableWired(t *testing.T) {
-	require.NotNil(t, iscp.DefaultResolveVariable,
-		"pkg/frontend/init.go must wire iscp.DefaultResolveVariable")
+func TestDefaultResolveVariableWired(t *testing.T) {
+	require.NotNil(t, executor.DefaultResolveVariable,
+		"pkg/frontend/init.go must wire executor.DefaultResolveVariable")
 
 	// Known system var → default value.
-	v, err := iscp.DefaultResolveVariable("kmeans_train_percent", true, false)
+	v, err := executor.DefaultResolveVariable("kmeans_train_percent", true, false)
 	require.NoError(t, err)
 	require.Equal(t, float64(10), v)
 
-	v, err = iscp.DefaultResolveVariable("kmeans_max_iteration", true, false)
+	v, err = executor.DefaultResolveVariable("kmeans_max_iteration", true, false)
 	require.NoError(t, err)
 	require.Equal(t, int64(20), v)
 
 	// Case-insensitive (Mixed-case input must still resolve).
-	v, err = iscp.DefaultResolveVariable("Kmeans_Train_Percent", true, false)
+	v, err = executor.DefaultResolveVariable("Kmeans_Train_Percent", true, false)
 	require.NoError(t, err)
 	require.Equal(t, float64(10), v)
 
 	// Unknown system var → error.
-	_, err = iscp.DefaultResolveVariable("definitely_not_a_real_var", true, false)
+	_, err = executor.DefaultResolveVariable("definitely_not_a_real_var", true, false)
 	require.Error(t, err)
 
 	// User variables are not supported by the background resolver.
-	_, err = iscp.DefaultResolveVariable("kmeans_train_percent", false, false)
+	_, err = executor.DefaultResolveVariable("kmeans_train_percent", false, false)
 	require.Error(t, err)
 }

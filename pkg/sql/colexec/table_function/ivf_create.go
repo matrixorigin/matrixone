@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
@@ -84,6 +85,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	logutil.Infof("IVFFLAT START: Kmeans clustering CREATE")
 	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
 	var centers [][]T
+	gpuMode := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
 	if clusterer, err = device.NewKMeans(
 		data, int(u.idxcfg.Ivfflat.Lists),
 		int(u.tblcfg.KmeansMaxIteration),
@@ -91,7 +93,8 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 		metric.MetricType(u.idxcfg.Ivfflat.Metric),
 		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
 		u.idxcfg.Ivfflat.Spherical, // For dense vector, spherical kmeans is false.
-		int(nworker)); err != nil {
+		int(nworker),
+		gpuMode); err != nil {
 		return err
 	}
 	logutil.Infof("IVFFLAT END: Kmeans clustering CREATE")

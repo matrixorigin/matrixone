@@ -32,6 +32,16 @@ type stubCompileContext struct {
 	qryDatabase      string
 	vars             map[string]any
 	isFrontend       bool
+
+	// lastCdcTask records the args of the most recent
+	// CreateIndexCdcTask call. Used by HandleCreateIndex_Async{True,
+	// False} to assert the right branch (startFromNow / sql InitSQL)
+	// fired.
+	lastCdcTask struct {
+		called       bool
+		startFromNow bool
+		sql          string
+	}
 }
 
 func (s *stubCompileContext) Ctx() compileplugin.Context             { return nil }
@@ -54,7 +64,10 @@ func (s *stubCompileContext) IsFrontend() bool                             { ret
 func (s *stubCompileContext) IsCCPRTaskTransaction() bool                  { return false }
 func (s *stubCompileContext) IsTableFromPublication(_ *plan.TableDef) bool { return false }
 func (s *stubCompileContext) SinkerTypeFromAlgo(_ string) int8             { return 0 }
-func (s *stubCompileContext) CreateIndexCdcTask(_, _ string, _ uint64, _ string, _ int8, _ bool, _ string, _ *plan.TableDef) error {
+func (s *stubCompileContext) CreateIndexCdcTask(_, _ string, _ uint64, _ string, _ int8, startFromNow bool, sql string, _ *plan.TableDef) error {
+	s.lastCdcTask.called = true
+	s.lastCdcTask.startFromNow = startFromNow
+	s.lastCdcTask.sql = sql
 	return nil
 }
 func (s *stubCompileContext) DropIndexCdcTask(_ *plan.TableDef, _, _, _ string) error {
@@ -209,6 +222,30 @@ func TestCagraIdxcronMetadata_Background(t *testing.T) {
 	require.Nil(t, got, "background invocation should yield nil metadata")
 }
 
+// TestCagraIdxcronMetadata_ProbeFail: a sub-Compile context where the
+// frontend probe sysvar resolves to nil (the CREATE TABLE CLONE
+// scenario — IsFrontend=true but the inherited session resolver is
+// partial) must defer to background semantics. The whole metadata
+// blob is nil, not partially captured. Reproduces the BVT regression
+// seen on `create table db1.t9_copy clone db1.t9;`.
+func TestCagraIdxcronMetadata_ProbeFail(t *testing.T) {
+	ctx := &stubCompileContext{
+		isFrontend: true,
+		vars: map[string]any{
+			// FrontendProbeVar ("cagra_threads_search") set to nil
+			// simulates the sub-Compile resolver returning (nil, nil).
+			"cagra_threads_search":     nil,
+			"cagra_threads_build":      int64(8),
+			"cagra_max_index_capacity": int64(1000000),
+			"lower_case_table_names":   int64(1),
+			"experimental_cagra_index": int8(1),
+		},
+	}
+	got, err := Hooks{}.IdxcronMetadata(ctx)
+	require.NoError(t, err)
+	require.Nil(t, got, "probe-fail should defer to background, not partial capture")
+}
+
 // experimentalFlagCtx wraps the stub to toggle IsExperimentalEnabled.
 type experimentalFlagCtx struct {
 	*stubCompileContext
@@ -255,12 +292,46 @@ func TestCagraHandleCreateIndex_InvalidDefCount(t *testing.T) {
 }
 
 func TestCagraHandleCreateIndex_OK(t *testing.T) {
-	err := Hooks{}.HandleCreateIndex(newHandleCtx(true), cagraIndexDefs())
+	// Default (no async key in metadata IndexAlgoParams) takes the
+	// sync branch: ctx.CreateIndexCdcTask called with
+	// startFromNow=true and empty InitSQL.
+	ctx := newHandleCtx(true)
+	err := Hooks{}.HandleCreateIndex(ctx, cagraIndexDefs())
 	require.NoError(t, err)
+	require.True(t, ctx.stubCompileContext.lastCdcTask.called)
+	require.True(t, ctx.stubCompileContext.lastCdcTask.startFromNow, "sync default → startFromNow=true")
+	require.Empty(t, ctx.stubCompileContext.lastCdcTask.sql, "sync default → no InitSQL")
+}
+
+func TestCagraHandleCreateIndex_AsyncTrue(t *testing.T) {
+	// Explicit async="true" on metadata params takes the async-via-
+	// InitSQL branch: startFromNow=false, sql carries the build SQL.
+	defs := cagraIndexDefs()
+	defs[catalog.Cagra_TblType_Metadata].IndexAlgoParams = `{"async":"true"}`
+	ctx := newHandleCtx(true)
+	err := Hooks{}.HandleCreateIndex(ctx, defs)
+	require.NoError(t, err)
+	require.True(t, ctx.stubCompileContext.lastCdcTask.called)
+	require.False(t, ctx.stubCompileContext.lastCdcTask.startFromNow, "async=true → startFromNow=false")
+	require.NotEmpty(t, ctx.stubCompileContext.lastCdcTask.sql, "async=true → InitSQL carries the build")
+}
+
+func TestCagraHandleCreateIndex_AsyncFalseExplicit(t *testing.T) {
+	// Explicit async="false" behaves identically to the default.
+	defs := cagraIndexDefs()
+	defs[catalog.Cagra_TblType_Metadata].IndexAlgoParams = `{"async":"false"}`
+	ctx := newHandleCtx(true)
+	err := Hooks{}.HandleCreateIndex(ctx, defs)
+	require.NoError(t, err)
+	require.True(t, ctx.stubCompileContext.lastCdcTask.called)
+	require.True(t, ctx.stubCompileContext.lastCdcTask.startFromNow)
+	require.Empty(t, ctx.stubCompileContext.lastCdcTask.sql)
 }
 
 func TestCagraHandleReindex_DelegatesToCreate(t *testing.T) {
-	// HandleReindex is a thin pass-through to HandleCreateIndex.
+	// HandleReindex is a thin pass-through to handleCreate; honors
+	// the forceSync arg directly (unlike HandleCreateIndex, which
+	// now reads catalog.IsIndexAsync).
 	err := Hooks{}.HandleReindex(newHandleCtx(true), cagraIndexDefs(), false)
 	require.NoError(t, err)
 }

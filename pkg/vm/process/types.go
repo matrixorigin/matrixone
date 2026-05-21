@@ -360,7 +360,7 @@ type BaseProcess struct {
 	// distinguish "have a session" from "don't" — relying on
 	// proc.resolveVariableFunc being nil is unreliable because
 	// background paths also attach resolvers (idxcron via the task's
-	// captured Metadata, ProcessInitSQL via iscp.DefaultResolveVariable).
+	// captured Metadata, ProcessInitSQL via executor.DefaultResolveVariable).
 	IsFrontend bool
 }
 

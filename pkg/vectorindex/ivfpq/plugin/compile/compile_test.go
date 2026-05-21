@@ -34,6 +34,16 @@ type stubCompileContext struct {
 	qryDatabase      string
 	vars             map[string]any
 	isFrontend       bool
+
+	// lastCdcTask records the args of the most recent
+	// CreateIndexCdcTask call. Used by HandleCreateIndex_Async{True,
+	// False} to assert the right branch (startFromNow / sql InitSQL)
+	// fired.
+	lastCdcTask struct {
+		called       bool
+		startFromNow bool
+		sql          string
+	}
 }
 
 func (s *stubCompileContext) Ctx() compileplugin.Context       { return nil }
@@ -58,7 +68,10 @@ func (s *stubCompileContext) IsFrontend() bool                             { ret
 func (s *stubCompileContext) IsCCPRTaskTransaction() bool                  { return false }
 func (s *stubCompileContext) IsTableFromPublication(_ *plan.TableDef) bool { return false }
 func (s *stubCompileContext) SinkerTypeFromAlgo(_ string) int8             { return 0 }
-func (s *stubCompileContext) CreateIndexCdcTask(_, _ string, _ uint64, _ string, _ int8, _ bool, _ string, _ *plan.TableDef) error {
+func (s *stubCompileContext) CreateIndexCdcTask(_, _ string, _ uint64, _ string, _ int8, startFromNow bool, sql string, _ *plan.TableDef) error {
+	s.lastCdcTask.called = true
+	s.lastCdcTask.startFromNow = startFromNow
+	s.lastCdcTask.sql = sql
 	return nil
 }
 func (s *stubCompileContext) DropIndexCdcTask(_ *plan.TableDef, _, _, _ string) error {
@@ -266,11 +279,46 @@ func TestIvfpqHandleCreateIndex_InvalidDefCount(t *testing.T) {
 }
 
 func TestIvfpqHandleCreateIndex_OK(t *testing.T) {
-	err := Hooks{}.HandleCreateIndex(newHandleCtx(true), ivfpqIndexDefs())
+	// Default (no async key in metadata IndexAlgoParams) takes the
+	// sync branch: ctx.CreateIndexCdcTask called with
+	// startFromNow=true and empty InitSQL.
+	ctx := newHandleCtx(true)
+	err := Hooks{}.HandleCreateIndex(ctx, ivfpqIndexDefs())
 	require.NoError(t, err)
+	require.True(t, ctx.stubCompileContext.lastCdcTask.called)
+	require.True(t, ctx.stubCompileContext.lastCdcTask.startFromNow, "sync default → startFromNow=true")
+	require.Empty(t, ctx.stubCompileContext.lastCdcTask.sql, "sync default → no InitSQL")
+}
+
+func TestIvfpqHandleCreateIndex_AsyncTrue(t *testing.T) {
+	// Explicit async="true" on metadata params takes the async-via-
+	// InitSQL branch: startFromNow=false, sql carries the build SQL.
+	defs := ivfpqIndexDefs()
+	defs[catalog.Ivfpq_TblType_Metadata].IndexAlgoParams = `{"async":"true"}`
+	ctx := newHandleCtx(true)
+	err := Hooks{}.HandleCreateIndex(ctx, defs)
+	require.NoError(t, err)
+	require.True(t, ctx.stubCompileContext.lastCdcTask.called)
+	require.False(t, ctx.stubCompileContext.lastCdcTask.startFromNow, "async=true → startFromNow=false")
+	require.NotEmpty(t, ctx.stubCompileContext.lastCdcTask.sql, "async=true → InitSQL carries the build")
+}
+
+func TestIvfpqHandleCreateIndex_AsyncFalseExplicit(t *testing.T) {
+	// Explicit async="false" behaves identically to the default.
+	defs := ivfpqIndexDefs()
+	defs[catalog.Ivfpq_TblType_Metadata].IndexAlgoParams = `{"async":"false"}`
+	ctx := newHandleCtx(true)
+	err := Hooks{}.HandleCreateIndex(ctx, defs)
+	require.NoError(t, err)
+	require.True(t, ctx.stubCompileContext.lastCdcTask.called)
+	require.True(t, ctx.stubCompileContext.lastCdcTask.startFromNow)
+	require.Empty(t, ctx.stubCompileContext.lastCdcTask.sql)
 }
 
 func TestIvfpqHandleReindex_DelegatesToCreate(t *testing.T) {
+	// HandleReindex is a thin pass-through to handleCreate; honors
+	// the forceSync arg directly (unlike HandleCreateIndex, which
+	// now reads catalog.IsIndexAsync).
 	err := Hooks{}.HandleReindex(newHandleCtx(true), ivfpqIndexDefs(), false)
 	require.NoError(t, err)
 }

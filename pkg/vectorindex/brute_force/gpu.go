@@ -46,7 +46,14 @@ var _ cache.VectorIndexSearchIf = &GpuAdhocBruteForceIndex[float32]{}
 func NewAdhocBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
-	elemsz uint) (cache.VectorIndexSearchIf, error) {
+	elemsz uint,
+	gpuMode bool) (cache.VectorIndexSearchIf, error) {
+
+	// gpuMode=false (operator opted out via `SET gpu_mode = 0`) goes
+	// straight to Usearch regardless of dataset size.
+	if !gpuMode {
+		return NewUsearchBruteForceIndex[T](dataset, dimension, m, elemsz)
+	}
 
 	// Threshold for switching between CPU and GPU for adhoc search.
 	// For small datasets, CPU (usearch) is much faster due to lower overhead.
@@ -74,7 +81,12 @@ func NewAdhocBruteForceIndexFlattened[T types.RealNumbers](dataset []T,
 	count uint,
 	dimension uint,
 	m metric.MetricType,
-	elemsz uint) (cache.VectorIndexSearchIf, error) {
+	elemsz uint,
+	gpuMode bool) (cache.VectorIndexSearchIf, error) {
+
+	if !gpuMode {
+		return NewUsearchBruteForceIndexFlattened[T](dataset, count, dimension, m, elemsz)
+	}
 
 	const cpuThreshold = 5000
 	if count < cpuThreshold {
@@ -240,7 +252,14 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
 	elemsz uint,
-	nthread uint) (cache.VectorIndexSearchIf, error) {
+	nthread uint,
+	gpuMode bool) (cache.VectorIndexSearchIf, error) {
+
+	// Operator opted out of GPU dispatch for this session/process —
+	// fall through to the existing CPU body.
+	if !gpuMode {
+		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
+	}
 
 	switch dset := any(dataset).(type) {
 	case [][]float64:

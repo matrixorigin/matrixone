@@ -26,10 +26,14 @@ const GPUThresholdSync = uint64(4 * 1024 * 1024)
 const GPUThresholdOverlapped = uint64(0)
 const GPUThresholdSQL = GPUThresholdSync / 4
 
+// gpuMode is accepted-but-ignored in non-gpu builds — CPU is the only
+// option here. The signature matches the gpu.go variant so callers
+// pass the flag uniformly.
 func PairWiseDistance[T types.RealNumbers](
 	x [][]T,
 	y [][]T,
 	metric MetricType,
+	_ bool,
 ) ([]float32, error) {
 	return GoPairWiseDistance(x, y, metric)
 }
@@ -40,6 +44,7 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 	metric MetricType,
 	dist []float32,
 	_ uint64, // minWorkSize: ignored, CPU is always used in non-gpu builds
+	_ bool, // gpuMode: ignored, CPU is always used in non-gpu builds
 ) (PairwiseJobHandle, error) {
 	return PairwiseDistanceLaunchCPU(x, y, metric, dist)
 }

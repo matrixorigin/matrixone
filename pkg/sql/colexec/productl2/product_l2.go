@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -159,7 +160,8 @@ func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyze
 		centers[i] = c
 	}
 
-	algo, err := brute_force.NewBruteForceIndex[T](centers, uint(dim), ctr.metrictype, elemSize, 1)
+	gpuMode := gpumode.EffectiveGpuMode(ctr.sqlproc.GetResolveVariableFunc())
+	algo, err := brute_force.NewBruteForceIndex[T](centers, uint(dim), ctr.metrictype, elemSize, 1, gpuMode)
 	if err != nil {
 		return nil, err
 	}

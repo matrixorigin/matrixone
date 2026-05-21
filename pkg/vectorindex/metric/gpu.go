@@ -57,7 +57,14 @@ func PairWiseDistance[T types.RealNumbers](
 	x [][]T,
 	y [][]T,
 	metric MetricType,
+	gpuMode bool,
 ) ([]float32, error) {
+	// Operator opted out of GPU dispatch — fall through to the
+	// existing CPU body unconditionally.
+	if !gpuMode {
+		return GoPairWiseDistance(x, y, metric)
+	}
+
 	nX := len(x)
 	nY := len(y)
 	if nX == 0 || nY == 0 {
@@ -74,7 +81,7 @@ func PairWiseDistance[T types.RealNumbers](
 	var zero T
 	if _, isF32 := any(zero).(float32); isF32 {
 		res := make([]float32, nX*nY)
-		handle, err := PairwiseDistanceLaunch(x, y, metric, res, GPUThresholdSync)
+		handle, err := PairwiseDistanceLaunch(x, y, metric, res, GPUThresholdSync, gpuMode)
 		if err != nil {
 			return nil, err
 		}
@@ -144,7 +151,15 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 	metric MetricType,
 	dist []float32,
 	minWorkSize uint64,
+	gpuMode bool,
 ) (PairwiseJobHandle, error) {
+	// Operator opted out of GPU dispatch — use the CPU launch path,
+	// the same fallback the existing threshold/type-check failures
+	// would take.
+	if !gpuMode {
+		return PairwiseDistanceLaunchCPU(x, y, metric, dist)
+	}
+
 	nX := len(x)
 	nY := len(y)
 	if nX == 0 || nY == 0 {

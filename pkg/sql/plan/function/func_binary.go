@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	fj "github.com/matrixorigin/matrixone/pkg/sql/plan/function/fault"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
@@ -7770,6 +7771,7 @@ func batchArrayDistanceSync[T types.RealNumbers](
 	ivecs []*vector.Vector,
 	length int,
 	m metric.MetricType,
+	proc *process.Process,
 ) ([]float32, bool, error) {
 	c0, c1 := ivecs[0].IsConst(), ivecs[1].IsConst()
 	if c0 == c1 {
@@ -7802,7 +7804,15 @@ func batchArrayDistanceSync[T types.RealNumbers](
 	}
 
 	dist := make([]float32, length)
-	handle, err := metric.PairwiseDistanceLaunch(x, y, m, dist, metric.GPUThresholdSQL)
+	// proc is non-nil under SQL execution; the nil branch keeps unit
+	// tests (which don't synthesize a process) compiling and lets
+	// EffectiveGpuMode fall back to the build-tag default.
+	var resolver func(string, bool, bool) (any, error)
+	if proc != nil {
+		resolver = proc.GetResolveVariableFunc()
+	}
+	gpuMode := gpumode.EffectiveGpuMode(resolver)
+	handle, err := metric.PairwiseDistanceLaunch(x, y, m, dist, metric.GPUThresholdSQL, gpuMode)
 	if err != nil {
 		return nil, false, err
 	}
@@ -7814,7 +7824,7 @@ func batchArrayDistanceSync[T types.RealNumbers](
 }
 
 func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_InnerProduct); err != nil {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_InnerProduct, proc); err != nil {
 		return err
 	} else if ok {
 		rs := vector.MustFunctionResult[float64](result)
@@ -7833,7 +7843,7 @@ func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vecto
 
 func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// Use Metric_CosineDistance and convert: similarity = 1 - distance.
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_CosineDistance); err != nil {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_CosineDistance, proc); err != nil {
 		return err
 	} else if ok {
 		rs := vector.MustFunctionResult[float64](result)
@@ -7851,7 +7861,7 @@ func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result v
 }
 
 func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_L2Distance); err != nil {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_L2Distance, proc); err != nil {
 		return err
 	} else if ok {
 		rs := vector.MustFunctionResult[float64](result)
@@ -10621,7 +10631,7 @@ func sameGeometryPoint(a, b geometryPoint2D) bool {
 }
 
 func L2DistanceSqArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_L2sqDistance); err != nil {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_L2sqDistance, proc); err != nil {
 		return err
 	} else if ok {
 		rs := vector.MustFunctionResult[float64](result)
@@ -10639,7 +10649,7 @@ func L2DistanceSqArray[T types.RealNumbers](ivecs []*vector.Vector, result vecto
 }
 
 func CosineDistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_CosineDistance); err != nil {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_CosineDistance, proc); err != nil {
 		return err
 	} else if ok {
 		rs := vector.MustFunctionResult[float64](result)

@@ -82,7 +82,7 @@ func TestBatchArrayDistanceSync_L2Sq(t *testing.T) {
 	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
 	dist, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2sqDistance)
+		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2sqDistance, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, N, len(dist))
@@ -106,7 +106,7 @@ func TestBatchArrayDistanceSync_L2(t *testing.T) {
 	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
 	dist, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2Distance)
+		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2Distance, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, N, len(dist))
@@ -131,7 +131,7 @@ func TestBatchArrayDistanceSync_InnerProduct(t *testing.T) {
 	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
 	dist, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, N, metric.Metric_InnerProduct)
+		[]*vector.Vector{constVec, colVec}, N, metric.Metric_InnerProduct, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, N, len(dist))
@@ -156,7 +156,7 @@ func TestBatchArrayDistanceSync_CosineDistance(t *testing.T) {
 	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
 	dist, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, N, metric.Metric_CosineDistance)
+		[]*vector.Vector{constVec, colVec}, N, metric.Metric_CosineDistance, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, N, len(dist))
@@ -181,7 +181,7 @@ func TestBatchArrayDistanceSync_QueryAsSecondArg(t *testing.T) {
 
 	// Note: const is ivecs[1], column is ivecs[0]
 	dist, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{colVec, constVec}, N, metric.Metric_L2sqDistance)
+		[]*vector.Vector{colVec, constVec}, N, metric.Metric_L2sqDistance, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, N, len(dist))
@@ -204,7 +204,7 @@ func TestBatchArrayDistanceSync_Float64(t *testing.T) {
 	colVec := makeColArrayVec[float64](t, mp, types.T_array_float64.ToType(), rows)
 
 	dist, ok, err := batchArrayDistanceSync[float64](
-		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2sqDistance)
+		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2sqDistance, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, N, len(dist))
@@ -225,7 +225,7 @@ func TestBatchArrayDistanceSync_BothConst(t *testing.T) {
 	require.NoError(t, err)
 
 	_, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{v0, v1}, 4, metric.Metric_L2sqDistance)
+		[]*vector.Vector{v0, v1}, 4, metric.Metric_L2sqDistance, nil)
 	require.NoError(t, err)
 	require.False(t, ok, "both-const should return ok=false")
 }
@@ -240,7 +240,7 @@ func TestBatchArrayDistanceSync_BothCol(t *testing.T) {
 	v1 := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
 	_, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{v0, v1}, 2, metric.Metric_L2sqDistance)
+		[]*vector.Vector{v0, v1}, 2, metric.Metric_L2sqDistance, nil)
 	require.NoError(t, err)
 	require.False(t, ok, "col-vs-col should return ok=false")
 }
@@ -255,7 +255,7 @@ func TestBatchArrayDistanceSync_NullConst(t *testing.T) {
 	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
 	_, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, 4, metric.Metric_L2sqDistance)
+		[]*vector.Vector{constVec, colVec}, 4, metric.Metric_L2sqDistance, nil)
 	require.NoError(t, err)
 	require.False(t, ok, "null const should return ok=false")
 }
@@ -275,7 +275,7 @@ func TestBatchArrayDistanceSync_NullInColumn(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(colVec, types.ArrayToBytes[float32]([]float32{0, 1, 0}), false, mp))
 
 	_, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, 3, metric.Metric_L2sqDistance)
+		[]*vector.Vector{constVec, colVec}, 3, metric.Metric_L2sqDistance, nil)
 	require.NoError(t, err)
 	require.False(t, ok, "column with nulls should return ok=false")
 }

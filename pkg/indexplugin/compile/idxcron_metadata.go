@@ -30,6 +30,30 @@ import (
 // that loop in BuildIdxcronMetadata lets each algo's hook shrink to a
 // 2-line spec declaration.
 type IdxcronVarSpec struct {
+	// FrontendProbeVar is a known vector-index session sysvar (e.g.
+	// "ivf_threads_search" for IVF-FLAT, "cagra_threads_search" for
+	// CAGRA) used as a second-level gate AFTER ctx.IsFrontend().
+	//
+	// Rationale: a sub-Compile spawned via runSqlWithOptions (for
+	// example, the CREATE TABLE CLONE flow) inherits IsFrontend=true
+	// from the outer frontend Compile AND inherits the frontend
+	// session's resolver — but the session-sysvar lookup in that
+	// sub-Compile may legitimately return (nil, nil) for specific
+	// vars. Capturing partial metadata in that state would write a
+	// blob missing fields the idxcron executor expects; instead we
+	// short-circuit to background semantics (the consumer's read
+	// path falls back to compile-time defaults).
+	//
+	// The probe var must:
+	//   - Be a known sysvar this algorithm cares about.
+	//   - Resolve to a non-nil value in a true frontend session.
+	//   - Be allowed to resolve to nil in a partial-context
+	//     sub-Compile (no specific contract on the value itself).
+	//
+	// Empty FrontendProbeVar means "no probe" — Capture is always
+	// resolved. Used by plugins whose Capture list is empty.
+	FrontendProbeVar string
+
 	// Capture is the list of session/system variable names to resolve
 	// and write into the metadata blob, in declaration order.
 	Capture []string
@@ -67,6 +91,18 @@ func BuildIdxcronMetadata(ctx CompileContext, spec IdxcronVarSpec) ([]byte, erro
 		return nil, nil
 	}
 	logutil.Infof("[isfrontend] BuildIdxcronMetadata capture: table=%s isFrontend=true capture=%v", tblName, spec.Capture)
+
+	// FrontendProbeVar gates the whole Capture pass: if a known
+	// vector-index sysvar can't be resolved in this context (typical
+	// of sub-Compiles inheriting a partial frontend resolver — e.g.
+	// CREATE TABLE CLONE), defer to background semantics and let the
+	// consumer-side fallback handle it.
+	if spec.FrontendProbeVar != "" {
+		probe, err := ctx.ResolveVariable(spec.FrontendProbeVar, true, false)
+		if err != nil || probe == nil {
+			return nil, nil
+		}
+	}
 
 	w := sqlexec.NewMetadataWriter()
 	for _, name := range spec.Capture {
