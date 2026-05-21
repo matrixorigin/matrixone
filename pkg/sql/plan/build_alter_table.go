@@ -79,6 +79,15 @@ func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 	return skip
 }
 
+func tableHasAutoIncrementColumn(tableDef *TableDef) bool {
+	for _, col := range tableDef.Cols {
+		if col.Typ.GetAutoIncrement() {
+			return true
+		}
+	}
+	return false
+}
+
 func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, error) {
 	ctx := cctx.GetContext()
 	// 1. get origin table name and Schema name
@@ -197,7 +206,13 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			pkAffected, err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.ColumnName.String())
 		case *tree.TableOptionAutoIncrement:
-			copyTableDef.AutoIncrOffset = option.Value
+			if !tableHasAutoIncrementColumn(tableDef) {
+				return nil, moerr.NewInvalidInputf(ctx,
+					"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
+			}
+			if option.Value != 0 {
+				copyTableDef.AutoIncrOffset = option.Value - 1
+			}
 		case *tree.AlterTableOrderByColumnClause:
 			err = OrderByColumn(cctx, alterTablePlan, option, alterTableCtx)
 			for _, order := range option.AlterOrderByList {
