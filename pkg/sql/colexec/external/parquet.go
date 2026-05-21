@@ -2345,6 +2345,7 @@ type fsReaderAt struct {
 func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 	vec := fileservice.IOVector{
 		FilePath: r.readPath,
+		Policy:   fileservice.SkipFullFilePreloads,
 		Entries: []fileservice.IOEntry{
 			0: {
 				Offset: off,
