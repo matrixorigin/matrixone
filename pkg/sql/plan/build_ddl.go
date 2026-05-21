@@ -5099,10 +5099,19 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			)
 
 		case *tree.TableOptionAutoIncrement:
+			if !tableHasAutoIncrementColumn(tableDef) {
+				return nil, moerr.NewInvalidInputf(
+					ctx.GetContext(),
+					"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
+			}
+			newOffset := uint64(0)
+			if opt.Value != 0 {
+				newOffset = opt.Value - 1
+			}
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterAutoIncrement{
 					AlterAutoIncrement: &plan.AlterTableAutoIncrement{
-						NewOffset: opt.Value - 1,
+						NewOffset: newOffset,
 					},
 				},
 			}
