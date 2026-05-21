@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -635,4 +636,59 @@ func TestAlterTableVarcharLengthBumped(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAlterTableAlgorithmValidation(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	t.Run("COPY with matching ALGORITHM", func(t *testing.T) {
+		sqls := []string{
+			`ALTER TABLE t1 ALGORITHM=COPY, ADD COLUMN x INT;`,
+			`ALTER TABLE t1 ALGORITHM=DEFAULT, ADD COLUMN x INT;`,
+		}
+		runTestShouldPass(mock, t, sqls, false, false)
+	})
+
+	t.Run("COPY with conflicting ALGORITHM", func(t *testing.T) {
+		sqls := []string{
+			`ALTER TABLE t1 ALGORITHM=INPLACE, ADD COLUMN x INT;`,
+			`ALTER TABLE t1 ALGORITHM=INSTANT, DROP COLUMN b;`,
+		}
+		runTestShouldError(mock, t, sqls)
+	})
+
+	t.Run("INPLACE with ALGORITHM hints", func(t *testing.T) {
+		sqls := []string{
+			`ALTER TABLE t1 ALGORITHM=INPLACE, ADD INDEX idx_a(a);`,
+			`ALTER TABLE t1 ALGORITHM=INSTANT, ADD INDEX idx_a(a);`,
+			`ALTER TABLE t1 ALGORITHM=COPY, ADD INDEX idx_a(a);`,
+		}
+		runTestShouldPass(mock, t, sqls, false, false)
+	})
+
+	t.Run("COPY with LOCK=NONE", func(t *testing.T) {
+		sqls := []string{
+			`ALTER TABLE t1 LOCK=NONE, ADD COLUMN x INT;`,
+		}
+		runTestShouldError(mock, t, sqls)
+	})
+
+	t.Run("COPY with LOCK=SHARED/EXCLUSIVE", func(t *testing.T) {
+		sqls := []string{
+			`ALTER TABLE t1 LOCK=SHARED, ADD COLUMN x INT;`,
+			`ALTER TABLE t1 LOCK=EXCLUSIVE, ADD COLUMN x INT;`,
+		}
+		runTestShouldPass(mock, t, sqls, false, false)
+	})
+
+	t.Run("ALGORITHM conflict takes priority over LOCK", func(t *testing.T) {
+		_, err := buildSingleStmt(mock, t,
+			`ALTER TABLE t1 ALGORITHM=INPLACE, LOCK=NONE, ADD COLUMN x INT;`)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "ALGORITHM") {
+			t.Fatalf("expected ALGORITHM error, got: %v", err)
+		}
+	})
 }
