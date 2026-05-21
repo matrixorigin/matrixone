@@ -381,13 +381,22 @@ func TestShardDistribution(t *testing.T) {
 	DeleteMPool(mp)
 }
 
-func TestFixedPoolHeaderFromPtrSkipsEmptySlabs(t *testing.T) {
-	mp := MustNew("fixed-pool-empty-slab-test")
-	mp.pools[0].buf = append(mp.pools[0].buf, nil)
+func TestFixedPoolReleasesEmptySlabs(t *testing.T) {
+	mp := MustNew("fixed-pool-release-slab-test")
+	ptrs := make([][]byte, kStripeSize)
 
-	bs, err := mp.Alloc(64, true)
-	require.NoError(t, err)
-	mp.Free(bs)
+	for i := range ptrs {
+		bs, err := mp.Alloc(64, true)
+		require.NoError(t, err)
+		ptrs[i] = bs
+	}
+	require.Len(t, mp.pools[0].slabs, 1)
+
+	for _, bs := range ptrs {
+		mp.Free(bs)
+	}
+	require.Len(t, mp.pools[0].slabs, 0)
+	require.Equal(t, int64(0), mp.CurrNB())
 
 	DeleteMPool(mp)
 }

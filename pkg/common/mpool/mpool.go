@@ -207,8 +207,13 @@ type fixedPool struct {
 	fpIdx  int8
 	poolId int64
 	eleSz  int32
-	buf    [][]byte
+	slabs  []fixedSlab
 	flist  unsafe.Pointer
+}
+
+type fixedSlab struct {
+	buf  []byte
+	free int32
 }
 
 func (fp *fixedPool) initPool(poolid int64, idx int, noLock bool) {
@@ -238,7 +243,10 @@ func (fp *fixedPool) alloc() *memHdr {
 		if err != nil {
 			panic(err)
 		}
-		fp.buf = append(fp.buf, buf)
+		fp.slabs = append(fp.slabs, fixedSlab{
+			buf:  buf,
+			free: kStripeSize - 1,
+		})
 		ret := unsafe.Pointer(&buf[0])
 		pHdr := (*memHdr)(ret)
 		pHdr.poolId = fp.poolId
@@ -265,6 +273,11 @@ func (fp *fixedPool) alloc() *memHdr {
 
 	ret := fp.flist
 	fp.flist = fp.nextPtr(fp.flist)
+	idx := fp.findSlabIdx(ret)
+	if idx < 0 || fp.slabs[idx].free <= 0 {
+		panic(moerr.NewInternalErrorNoCtx("mpool fixed pool slab corruption"))
+	}
+	fp.slabs[idx].free--
 	pHdr := (*memHdr)(ret)
 	pHdr.allocSz = fp.eleSz
 	pHdr.offHeap = true
@@ -285,7 +298,16 @@ func (fp *fixedPool) free(hdr *memHdr) {
 		defer fp.m.Unlock()
 	}
 	ptr := unsafe.Pointer(hdr)
+	idx := fp.findSlabIdx(ptr)
+	if idx < 0 {
+		panic(moerr.NewInternalErrorNoCtx("mpool fixed pool slab not found"))
+	}
 	hdr.allocSz = -1
+	fp.slabs[idx].free++
+	if fp.slabs[idx].free == kStripeSize {
+		fp.releaseSlab(idx)
+		return
+	}
 	fp.setNextPtr(ptr, fp.flist)
 	fp.flist = ptr
 }
@@ -295,14 +317,54 @@ func (fp *fixedPool) destroy() {
 		fp.m.Lock()
 		defer fp.m.Unlock()
 	}
-	for _, buf := range fp.buf {
-		if len(buf) == 0 {
+	for _, slab := range fp.slabs {
+		if len(slab.buf) == 0 {
 			continue
 		}
-		simpleCAllocator().Deallocate(buf, uint64(cap(buf)))
+		simpleCAllocator().Deallocate(slab.buf, uint64(cap(slab.buf)))
 	}
-	fp.buf = nil
+	fp.slabs = nil
 	fp.flist = nil
+}
+
+func (fp *fixedPool) releaseSlab(idx int) {
+	slab := fp.slabs[idx]
+	fp.rebuildFreelistWithout(slab)
+	simpleCAllocator().Deallocate(slab.buf, uint64(cap(slab.buf)))
+	last := len(fp.slabs) - 1
+	fp.slabs[idx] = fp.slabs[last]
+	fp.slabs = fp.slabs[:last]
+}
+
+func (fp *fixedPool) rebuildFreelistWithout(slab fixedSlab) {
+	var newHead unsafe.Pointer
+	for ptr := fp.flist; ptr != nil; {
+		next := fp.nextPtr(ptr)
+		if !slab.contains(ptr) {
+			fp.setNextPtr(ptr, newHead)
+			newHead = ptr
+		}
+		ptr = next
+	}
+	fp.flist = newHead
+}
+
+func (fp *fixedPool) findSlabIdx(ptr unsafe.Pointer) int {
+	for i := range fp.slabs {
+		if fp.slabs[i].contains(ptr) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (s fixedSlab) contains(ptr unsafe.Pointer) bool {
+	if len(s.buf) == 0 {
+		return false
+	}
+	uptr := uintptr(ptr)
+	base := uintptr(unsafe.Pointer(&s.buf[0]))
+	return uptr >= base && uptr < base+uintptr(len(s.buf))
 }
 
 type detailInfo struct {
