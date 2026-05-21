@@ -169,18 +169,18 @@ func TestMPoolNoLock(t *testing.T) {
 
 	bs1, err := mp1.Alloc(100, true)
 	require.NoError(t, err)
-	require.Equal(t, int64(128), mp1.CurrNB())
+	require.Equal(t, int64(100), mp1.CurrNB())
 
 	bs1, err = mp1.ReallocZero(bs1, 200, true)
 	require.NoError(t, err)
-	require.Equal(t, int64(256), mp1.CurrNB())
+	require.Equal(t, int64(200), mp1.CurrNB())
 
 	mp1.Free(bs1)
 	require.Equal(t, int64(0), mp1.CurrNB())
 
 	bs2, err := mp2.Alloc(100, true)
 	require.NoError(t, err)
-	require.Equal(t, int64(128), mp2.CurrNB())
+	require.Equal(t, int64(100), mp2.CurrNB())
 
 	bs22, err := mp2.ReallocZero(bs2, 2000000, true)
 	require.NoError(t, err)
@@ -381,24 +381,16 @@ func TestShardDistribution(t *testing.T) {
 	DeleteMPool(mp)
 }
 
-func TestFixedPoolReleasesEmptySlabs(t *testing.T) {
-	mp, err := NewMPool("fixed-pool-release-slab-test", 0, 0)
+func TestFixedPoolGloballyDisabled(t *testing.T) {
+	mp, err := NewMPool("fixed-pool-disabled-global-test", 0, 0)
 	require.NoError(t, err)
-	ptrs := make([][]byte, kStripeSize)
 
-	for i := range ptrs {
-		bs, err := mp.Alloc(64, true)
-		require.NoError(t, err)
-		ptrs[i] = bs
-	}
-	require.Len(t, mp.pools[0].slabs, 1)
-
-	for _, bs := range ptrs {
-		mp.Free(bs)
-	}
+	bs, err := mp.Alloc(64, true)
+	require.NoError(t, err)
 	require.Len(t, mp.pools[0].slabs, 0)
+	require.Equal(t, int64(64), mp.CurrNB())
+	mp.Free(bs)
 	require.Equal(t, int64(0), mp.CurrNB())
-
 	DeleteMPool(mp)
 }
 

@@ -168,7 +168,7 @@ const (
 
 var PoolElemSize = [NumFixedPool]int32{64, 128, 256, 512, 1024}
 
-const enableFixedPool = true
+const enableFixedPool = false
 
 // Memory header, kMemHdrSz bytes.
 type memHdr struct {
