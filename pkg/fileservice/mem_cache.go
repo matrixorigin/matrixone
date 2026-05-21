@@ -67,13 +67,19 @@ func NewMemCache(
 		counterSets: counterSets,
 	}
 
+	prepareSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) func(inserted bool) {
+		value.Retain()
+		return func(inserted bool) {
+			if !inserted {
+				value.Release()
+			}
+		}
+	}
+
 	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) {
 		// events
 		LogEvent(ctx, str_memory_cache_post_set_begin)
 		defer LogEvent(ctx, str_memory_cache_post_set_end)
-
-		// retain
-		value.Retain()
 
 		// metrics
 		LogEvent(ctx, str_update_metrics_begin)
@@ -144,7 +150,7 @@ func NewMemCache(
 		}
 	}
 
-	dataCache = fifocache.NewDataCache(capacityFunc, postSetFn, postGetFn, postEvictFn)
+	dataCache = fifocache.NewDataCacheWithPrepareSet(capacityFunc, prepareSetFn, postSetFn, postGetFn, postEvictFn)
 
 	ret.cache = dataCache
 

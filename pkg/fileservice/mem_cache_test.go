@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -203,6 +204,80 @@ func (d staticTestData) Slice(length int) fscache.Data {
 func (d staticTestData) Retain() {}
 
 func (d staticTestData) Release() {}
+
+type blockingRetainData struct {
+	bytes               []byte
+	retainStarted       chan struct{}
+	unblockRetain       chan struct{}
+	releaseCalled       chan struct{}
+	retainDone          atomic.Bool
+	releaseBeforeRetain atomic.Bool
+}
+
+var _ fscache.Data = (*blockingRetainData)(nil)
+
+func (d *blockingRetainData) Bytes() []byte {
+	return d.bytes
+}
+
+func (d *blockingRetainData) Slice(length int) fscache.Data {
+	return &blockingRetainData{
+		bytes:         d.bytes[:length],
+		retainStarted: d.retainStarted,
+		unblockRetain: d.unblockRetain,
+		releaseCalled: d.releaseCalled,
+	}
+}
+
+func (d *blockingRetainData) Retain() {
+	select {
+	case <-d.retainStarted:
+	default:
+		close(d.retainStarted)
+	}
+	<-d.unblockRetain
+	d.retainDone.Store(true)
+}
+
+func (d *blockingRetainData) Release() {
+	if !d.retainDone.Load() {
+		d.releaseBeforeRetain.Store(true)
+	}
+	select {
+	case <-d.releaseCalled:
+	default:
+		close(d.releaseCalled)
+	}
+}
+
+func TestMemCacheRetainsBeforeSetVisible(t *testing.T) {
+	ctx := context.Background()
+	cache := NewMemCache(fscache.ConstCapacity(1), nil, nil, "")
+	defer cache.Close(ctx)
+
+	data := &blockingRetainData{
+		bytes:         []byte("a"),
+		retainStarted: make(chan struct{}),
+		unblockRetain: make(chan struct{}),
+		releaseCalled: make(chan struct{}),
+	}
+	key := fscache.CacheKey{Path: "foo", Offset: 0, Sz: 1}
+	setDone := make(chan error, 1)
+	go func() {
+		setDone <- cache.cache.Set(ctx, key, data)
+	}()
+
+	<-data.retainStarted
+	cache.DeletePaths(ctx, []string{"foo"})
+	select {
+	case <-data.releaseCalled:
+		t.Fatal("cache value was released before cache ownership was retained")
+	default:
+	}
+	close(data.unblockRetain)
+	assert.NoError(t, <-setDone)
+	assert.False(t, data.releaseBeforeRetain.Load())
+}
 
 func TestMemCacheSkipsStalePostEvictAfterReinsert(t *testing.T) {
 	ctx := context.Background()
