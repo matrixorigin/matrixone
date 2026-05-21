@@ -274,6 +274,90 @@ func TestJsonSchemaValid(t *testing.T) {
 	})
 }
 
+func TestJsonValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("string value", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_value string",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"fname":"Joe","lname":"Palmer"}`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$.fname`},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"Joe"},
+				[]bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("number value", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_value number",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"item":"shoes","price":"49.95"}`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$.price`},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"49.95"},
+				[]bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("missing path", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_value missing",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1}`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$.missing`},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{true}), // NULL
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("null input", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_value null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1}`, ``},
+					[]bool{false, true}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$.a`, `$.a`},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"1", ""},
+				[]bool{false, true}), // null → NULL
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
 func TestJsonValid(t *testing.T) {
 	testCases := initJsonValidTestCase()
 

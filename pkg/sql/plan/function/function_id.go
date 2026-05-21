@@ -446,10 +446,11 @@ const (
 	JSON_PRETTY              = 365
 	JSON_SCHEMA_VALID        = 366
 	JSON_SCHEMA_VALID_REPORT = 367
+	JSON_VALUE              = 368
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 368
+	FUNCTION_END_NUMBER = 369
 )
 
 // functionIdRegister is what function we have registered already.
@@ -682,6 +683,7 @@ var functionIdRegister = map[string]int32{
 	"json_pretty":                    JSON_PRETTY,
 	"json_schema_valid":              JSON_SCHEMA_VALID,
 	"json_schema_validation_report":  JSON_SCHEMA_VALID_REPORT,
+	"json_value":                     JSON_VALUE,
 	"jq":                             JQ,
 	"try_jq":                         TRY_JQ,
 	"moplugin":                       WASM,

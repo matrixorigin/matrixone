@@ -1096,6 +1096,37 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_value`
+	{
+		functionId: JSON_VALUE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonValue
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_json, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonValue
+				},
+			},
+		},
+	},
+
 	// function `jq`
 	{
 		functionId: JQ,

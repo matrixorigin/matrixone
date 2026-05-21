@@ -1,0 +1,62 @@
+select json_value('{"fname": "Joe", "lname": "Palmer"}', '$.fname');
+json_value({"fname": "Joe", "lname": "Palmer"}, $.fname)
+Joe
+select json_value('{"fname": "Joe", "lname": "Palmer"}', '$.lname');
+json_value({"fname": "Joe", "lname": "Palmer"}, $.lname)
+Palmer
+select json_value('{"item": "shoes", "price": "49.95"}', '$.price');
+json_value({"item": "shoes", "price": "49.95"}, $.price)
+49.95
+select json_value('{"a": {"b": [1,2,3]}}', '$.a.b[1]');
+json_value({"a": {"b": [1,2,3]}}, $.a.b[1])
+2
+select json_value('{"active": true}', '$.active');
+json_value({"active": true}, $.active)
+true
+select json_value('{"x": null}', '$.x');
+json_value({"x": null}, $.x)
+null
+select json_value('{"a": 1}', '$.missing');
+json_value({"a": 1}, $.missing)
+null
+select json_value(null, '$.a');
+json_value(null, $.a)
+null
+select json_value('{"a": 1}', null);
+json_value({"a": 1}, null)
+null
+drop table if exists t1;
+create table t1 (a varchar(200));
+insert into t1 values ('{"name":"Alice","age":30}'), ('{"name":"Bob","age":25}'), (null);
+select json_value(a, '$.name') from t1;
+json_value(a, $.name)
+Alice
+Bob
+null
+select json_value(a, '$.age') from t1;
+json_value(a, $.age)
+30
+25
+null
+drop table t1;
+select json_value(cast('{"a": 1, "b": 2}' as json), '$.a');
+json_value(cast({"a": 1, "b": 2} as json), $.a)
+1
+select json_value(cast('{"a": 1, "b": 2}' as json), '$.b');
+json_value(cast({"a": 1, "b": 2} as json), $.b)
+2
+select json_value(cast('[1,2,{"x":3}]' as json), '$[2].x');
+json_value(cast([1,2,{"x":3}] as json), $[2].x)
+3
+select json_value(json_object('k1', 'v1', 'k2', 42), '$.k1');
+json_value(json_object(k1, v1, k2, 42), $.k1)
+v1
+select json_value(json_object('k1', 'v1', 'k2', 42), '$.k2');
+json_value(json_object(k1, v1, k2, 42), $.k2)
+42
+select json_value(json_array(1, 2, 3), '$[0]');
+json_value(json_array(1, 2, 3), $[0])
+1
+select json_value(json_array(1, 2, 3), '$[2]');
+json_value(json_array(1, 2, 3), $[2])
+3

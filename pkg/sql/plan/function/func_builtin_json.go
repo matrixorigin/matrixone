@@ -1393,3 +1393,51 @@ func buildSchemaValidationReport(result *gojsonschema.Result) []byte {
 	buf.WriteString("]}")
 	return buf.Bytes()
 }
+
+// JSON_VALUE(json_doc, path) → VARCHAR
+// Equivalent to JSON_UNQUOTE(JSON_EXTRACT(json_doc, path)).
+func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, ivecs[1])
+
+	isStr := ivecs[0].GetType().Oid.IsMySQLString()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		jsonBytes, null1 := p1.GetStrValue(i)
+		pathBytes, null2 := p2.GetStrValue(i)
+		if null1 || null2 {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		// Parse path.
+		pathStr := string(pathBytes)
+		path, err := types.ParseStringToPath(pathStr)
+		if err != nil {
+			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid path expression")
+		}
+		// Extract value at path.
+		var bj bytejson.ByteJson
+		if isStr {
+			bj, err = types.ParseSliceToByteJson(jsonBytes)
+		} else {
+			bj = types.DecodeJson(jsonBytes)
+		}
+		if err != nil {
+			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid JSON document")
+		}
+		val := bj.Query([]*bytejson.Path{&path})
+		if val.IsNull() {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		// Unquote → extract text value (strip JSON string quotes).
+		s, err := val.Unquote()
+		if err != nil {
+			return err
+		}
+		rs.AppendMustBytesValue([]byte(s))
+	}
+	return nil
+}

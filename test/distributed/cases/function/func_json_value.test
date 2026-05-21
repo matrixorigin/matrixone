@@ -1,0 +1,42 @@
+-- basic string extraction
+select json_value('{"fname": "Joe", "lname": "Palmer"}', '$.fname');
+select json_value('{"fname": "Joe", "lname": "Palmer"}', '$.lname');
+
+-- number extraction (returns string)
+select json_value('{"item": "shoes", "price": "49.95"}', '$.price');
+
+-- nested path
+select json_value('{"a": {"b": [1,2,3]}}', '$.a.b[1]');
+
+-- boolean
+select json_value('{"active": true}', '$.active');
+
+-- null JSON value → SQL NULL
+select json_value('{"x": null}', '$.x');
+
+-- missing path
+select json_value('{"a": 1}', '$.missing');
+
+-- null input
+select json_value(null, '$.a');
+select json_value('{"a": 1}', null);
+
+-- from json column
+drop table if exists t1;
+create table t1 (a varchar(200));
+insert into t1 values ('{"name":"Alice","age":30}'), ('{"name":"Bob","age":25}'), (null);
+select json_value(a, '$.name') from t1;
+select json_value(a, '$.age') from t1;
+
+drop table t1;
+
+-- T_json input via cast
+select json_value(cast('{"a": 1, "b": 2}' as json), '$.a');
+select json_value(cast('{"a": 1, "b": 2}' as json), '$.b');
+select json_value(cast('[1,2,{"x":3}]' as json), '$[2].x');
+
+-- T_json input via json_object/json_array
+select json_value(json_object('k1', 'v1', 'k2', 42), '$.k1');
+select json_value(json_object('k1', 'v1', 'k2', 42), '$.k2');
+select json_value(json_array(1, 2, 3), '$[0]');
+select json_value(json_array(1, 2, 3), '$[2]');
