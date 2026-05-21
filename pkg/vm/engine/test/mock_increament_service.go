@@ -212,7 +212,9 @@ func (m *MockAutoIncrementService) SetOffset(
 	if !ok {
 		return fmt.Errorf("table %d not found in mock auto-increment counters", tableID)
 	}
-	counters[colName] = offset
+	if current, ok := counters[colName]; !ok || current < offset {
+		counters[colName] = offset
+	}
 	return nil
 }
 
