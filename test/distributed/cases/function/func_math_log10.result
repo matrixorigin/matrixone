@@ -5,9 +5,11 @@ SELECT log10(1000);
 log10(1000)
 3.0
 SELECT log10(-10);
-invalid argument log10, bad value -10
+log10(-10)
+null
 SELECT log10(0);
-invalid argument log10, bad value 0
+log10(0)
+null
 select log10(0.00000000000000001);
 log10(0.00000000000000001)
 -17.0
@@ -18,7 +20,8 @@ select log10(0.141241241241313);
 log10(0.141241241241313)
 -0.8500384744714139
 select log10(-124314124124.12412341);
-invalid argument log10, bad value -1.2431412412412413e+11
+log10(-124314124124.12412341)
+null
 select log10(null);
 log10(null)
 null
