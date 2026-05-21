@@ -39,7 +39,6 @@ import (
 const flushConcurrencyLimit = 4
 
 var flushSemaphore = make(chan struct{}, flushConcurrencyLimit)
-var flushBypassSemaphore = make(chan struct{}, 1)
 var flushSemaphoreAcquireTimeout = 200 * time.Millisecond
 var flushBypassRetryInterval = 20 * time.Millisecond
 
@@ -338,10 +337,8 @@ func acquireFlushSlot(ctx context.Context) (func(), error) {
 		select {
 		case flushSemaphore <- struct{}{}:
 			return func() { <-flushSemaphore }, nil
-		case flushBypassSemaphore <- struct{}{}:
-			v2.TxnStatementInsertS3FlushBypassCounter.Add(1)
-			return func() { <-flushBypassSemaphore }, nil
 		case <-ticker.C:
+			v2.TxnStatementInsertS3FlushBypassCounter.Add(1)
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}

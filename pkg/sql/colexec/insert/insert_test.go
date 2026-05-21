@@ -394,29 +394,44 @@ func TestInsertFlushS3WriterOnMemoryPressureAppendsBlockInfo(t *testing.T) {
 	require.Greater(t, insert.ctr.buf.RowCount(), 0)
 }
 
-func TestAcquireFlushSlotUsesBoundedBypassAfterTimeout(t *testing.T) {
+func TestAcquireFlushSlotWaitsForFlushSlotAfterTimeout(t *testing.T) {
 	oldFlushSemaphore := flushSemaphore
-	oldBypassSemaphore := flushBypassSemaphore
 	oldAcquireTimeout := flushSemaphoreAcquireTimeout
 	oldRetryInterval := flushBypassRetryInterval
 	defer func() {
 		flushSemaphore = oldFlushSemaphore
-		flushBypassSemaphore = oldBypassSemaphore
 		flushSemaphoreAcquireTimeout = oldAcquireTimeout
 		flushBypassRetryInterval = oldRetryInterval
 	}()
 
 	flushSemaphore = make(chan struct{}, 1)
-	flushBypassSemaphore = make(chan struct{}, 1)
 	flushSemaphoreAcquireTimeout = time.Millisecond
 	flushBypassRetryInterval = time.Millisecond
 	flushSemaphore <- struct{}{}
 
-	release, err := acquireFlushSlot(context.Background())
-	require.NoError(t, err)
-	require.Len(t, flushBypassSemaphore, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	releaseCh := make(chan func(), 1)
+	go func() {
+		release, err := acquireFlushSlot(ctx)
+		if release != nil {
+			releaseCh <- release
+		}
+		errCh <- err
+	}()
+
+	require.Never(t, func() bool {
+		return len(releaseCh) > 0
+	}, 5*time.Millisecond, time.Millisecond)
+	require.Len(t, flushSemaphore, 1)
+	<-flushSemaphore
+
+	release := <-releaseCh
+	require.NoError(t, <-errCh)
+	require.Len(t, flushSemaphore, 1)
 	release()
-	require.Len(t, flushBypassSemaphore, 0)
+	require.Len(t, flushSemaphore, 0)
 }
 
 func TestFlushConcurrencyLimitIsStable(t *testing.T) {
@@ -426,22 +441,18 @@ func TestFlushConcurrencyLimitIsStable(t *testing.T) {
 
 func TestAcquireFlushSlotWaitsWhenNormalAndBypassAreFull(t *testing.T) {
 	oldFlushSemaphore := flushSemaphore
-	oldBypassSemaphore := flushBypassSemaphore
 	oldAcquireTimeout := flushSemaphoreAcquireTimeout
 	oldRetryInterval := flushBypassRetryInterval
 	defer func() {
 		flushSemaphore = oldFlushSemaphore
-		flushBypassSemaphore = oldBypassSemaphore
 		flushSemaphoreAcquireTimeout = oldAcquireTimeout
 		flushBypassRetryInterval = oldRetryInterval
 	}()
 
 	flushSemaphore = make(chan struct{}, 1)
-	flushBypassSemaphore = make(chan struct{}, 1)
 	flushSemaphoreAcquireTimeout = time.Millisecond
 	flushBypassRetryInterval = time.Millisecond
 	flushSemaphore <- struct{}{}
-	flushBypassSemaphore <- struct{}{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -457,7 +468,6 @@ func TestAcquireFlushSlotWaitsWhenNormalAndBypassAreFull(t *testing.T) {
 	cancel()
 	require.ErrorIs(t, <-errCh, context.Canceled)
 	require.Len(t, flushSemaphore, 1)
-	require.Len(t, flushBypassSemaphore, 1)
 }
 
 func testInsertS3TableDef() *plan.TableDef {
