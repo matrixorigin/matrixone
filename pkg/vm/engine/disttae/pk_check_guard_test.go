@@ -26,15 +26,15 @@ import (
 
 func TestShouldBailoutOnChangedObjects(t *testing.T) {
 	assert.False(t, shouldBailoutOnChangedObjects(0))
-	assert.False(t, shouldBailoutOnChangedObjects(64))
-	assert.True(t, shouldBailoutOnChangedObjects(65))
+	assert.False(t, shouldBailoutOnChangedObjects(maxChangedObjectsForIO))
+	assert.True(t, shouldBailoutOnChangedObjects(maxChangedObjectsForIO+1))
 	assert.True(t, shouldBailoutOnChangedObjects(1000))
 }
 
 func TestShouldBailoutOnCandidateBlocks(t *testing.T) {
 	assert.False(t, shouldBailoutOnCandidateBlocks(0))
-	assert.False(t, shouldBailoutOnCandidateBlocks(32))
-	assert.True(t, shouldBailoutOnCandidateBlocks(33))
+	assert.False(t, shouldBailoutOnCandidateBlocks(maxCandidateBlksForIO))
+	assert.True(t, shouldBailoutOnCandidateBlocks(maxCandidateBlksForIO+1))
 	assert.True(t, shouldBailoutOnCandidateBlocks(1000))
 }
 
