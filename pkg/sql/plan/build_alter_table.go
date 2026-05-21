@@ -512,6 +512,7 @@ func ResolveAlterTableAlgorithm(
 	algorithm = plan.AlterTable_COPY
 
 	// First pass: resolve algorithm based on operations, skipping ALGORITHM/LOCK hints.
+Loop:
 	for _, spec := range validAlterSpecs {
 		switch option := spec.(type) {
 		case *tree.AlterOptionAlgorithm, *tree.AlterOptionLock:
@@ -580,7 +581,7 @@ func ResolveAlterTableAlgorithm(
 			algorithm = plan.AlterTable_INPLACE
 		}
 		if algorithm == plan.AlterTable_COPY {
-			return
+			break Loop
 		}
 	}
 
