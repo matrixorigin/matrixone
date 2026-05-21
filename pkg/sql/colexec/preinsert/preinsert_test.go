@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -100,6 +101,46 @@ func TestPreInsertNormal(t *testing.T) {
 	argument1.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func TestPreInsertExpandsConstVectorToBatchRowCount(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	arg := &PreInsert{
+		ctr: container{
+			canFreeVecIdx: make(map[int]bool),
+		},
+		TableDef: &plan.TableDef{
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: i64typ},
+				{Name: "payload", Typ: varchartyp},
+			},
+			Pkey: &plan.PrimaryKeyDef{},
+		},
+		Attrs: []string{"id", "payload"},
+	}
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.MakeInt64Vector([]int64{1, 2}, nil, proc.Mp())
+	constVec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("{}"), 1, proc.Mp())
+	require.NoError(t, err)
+	bat.Vecs[1] = constVec
+	bat.SetRowCount(2)
+
+	require.NoError(t, arg.constructColBuf(proc, bat, true))
+	require.Equal(t, 2, arg.ctr.buf.Vecs[1].Length())
+
+	bat2 := batch.NewWithSize(2)
+	bat2.Vecs[0] = testutil.MakeInt64Vector([]int64{3, 4, 5}, nil, proc.Mp())
+	constVec2, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("[]"), 1, proc.Mp())
+	require.NoError(t, err)
+	bat2.Vecs[1] = constVec2
+	bat2.SetRowCount(3)
+
+	require.NoError(t, arg.constructColBuf(proc, bat2, false))
+	require.Equal(t, 3, arg.ctr.buf.Vecs[1].Length())
+	arg.Free(proc, false, nil)
 }
 
 func TestPreInsertNullCheck(t *testing.T) {
