@@ -187,6 +187,83 @@ func TestReplaceUpdatesUsedBytes(t *testing.T) {
 	assert.True(t, cache.Contains(2))
 }
 
+func TestReplaceAccountsPendingEnqueueJob(t *testing.T) {
+	cache := New[int, int](
+		fscache.ConstCapacity(20),
+		ShardInt[int],
+		nil, nil, nil,
+	)
+	ctx := t.Context()
+
+	cache.queueLock.Lock()
+	done := make(chan struct{})
+	go func() {
+		cache.Set(ctx, 1, 1, 4)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pending enqueue job")
+	}
+	cache.queueLock.Unlock()
+
+	assert.True(t, cache.Replace(ctx, 1, 10, 8))
+	assert.Equal(t, int64(8), cache.used())
+}
+
+func TestEvictAccountsPendingEnqueueJob(t *testing.T) {
+	cache := New[int, int](
+		fscache.ConstCapacity(4),
+		ShardInt[int],
+		nil, nil, nil,
+	)
+	ctx := t.Context()
+
+	cache.queueLock.Lock()
+	done := make(chan struct{})
+	go func() {
+		cache.Set(ctx, 1, 1, 4)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pending enqueue job")
+	}
+	cache.queueLock.Unlock()
+
+	cache.Evict(ctx, nil, 0)
+	assert.Equal(t, int64(4), cache.used())
+}
+
+func TestEvictSkipsDeletedPendingEnqueueJob(t *testing.T) {
+	cache := New[int, int](
+		fscache.ConstCapacity(4),
+		ShardInt[int],
+		nil, nil, nil,
+	)
+	ctx := t.Context()
+
+	cache.queueLock.Lock()
+	done := make(chan struct{})
+	go func() {
+		cache.Set(ctx, 1, 1, 4)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pending enqueue job")
+	}
+	cache.Delete(ctx, 1)
+	cache.queueLock.Unlock()
+
+	cache.Evict(ctx, nil, 0)
+	assert.Equal(t, int64(0), cache.used())
+	assert.False(t, cache.Contains(1))
+}
+
 // TestPostEvictRunsOutsideQueueLock verifies that postEvict callbacks execute
 // outside the queueLock by attempting a concurrent Set() while a postEvict is
 // blocked. If postEvict ran under the lock, the concurrent Set would deadlock.
