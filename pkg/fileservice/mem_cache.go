@@ -16,7 +16,10 @@ package fileservice
 
 import (
 	"context"
+	"hash/maphash"
+	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -26,6 +29,18 @@ import (
 type MemCache struct {
 	cache       fscache.DataCache
 	counterSets []*perfcounter.CounterSet
+	callbacksMu [256]sync.Mutex
+}
+
+var memCacheCallbackSeed = maphash.MakeSeed()
+
+func (m *MemCache) callbacksLock(key fscache.CacheKey) *sync.Mutex {
+	var hasher maphash.Hash
+	hasher.SetSeed(memCacheCallbackSeed)
+	hasher.Write(util.UnsafeToBytes(&key.Offset))
+	hasher.Write(util.UnsafeToBytes(&key.Sz))
+	hasher.WriteString(key.Path)
+	return &m.callbacksMu[hasher.Sum64()%uint64(len(m.callbacksMu))]
 }
 
 func NewMemCache(
@@ -47,13 +62,24 @@ func NewMemCache(
 		return capacity()
 	}
 
-	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
+	var dataCache *fifocache.DataCache
+	ret := &MemCache{
+		counterSets: counterSets,
+	}
+
+	prepareSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) func(inserted bool) {
+		value.Retain()
+		return func(inserted bool) {
+			if !inserted {
+				value.Release()
+			}
+		}
+	}
+
+	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) {
 		// events
 		LogEvent(ctx, str_memory_cache_post_set_begin)
 		defer LogEvent(ctx, str_memory_cache_post_set_end)
-
-		// retain
-		value.Retain()
 
 		// metrics
 		LogEvent(ctx, str_update_metrics_begin)
@@ -63,6 +89,9 @@ func NewMemCache(
 
 		// callbacks
 		if callbacks != nil {
+			callbackLock := ret.callbacksLock(key)
+			callbackLock.Lock()
+			defer callbackLock.Unlock()
 			LogEvent(ctx, str_memory_cache_callbacks_begin)
 			for _, fn := range callbacks.PostSet {
 				fn(key, value)
@@ -89,7 +118,7 @@ func NewMemCache(
 		}
 	}
 
-	postEvictFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
+	postEvictFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) {
 		// events
 		LogEvent(ctx, str_memory_cache_post_evict_begin)
 		defer LogEvent(ctx, str_memory_cache_post_evict_end)
@@ -105,6 +134,14 @@ func NewMemCache(
 
 		// callbacks
 		if callbacks != nil {
+			callbackLock := ret.callbacksLock(key)
+			callbackLock.Lock()
+			defer callbackLock.Unlock()
+			if dataCache != nil {
+				if currentSeq, ok := dataCache.CurrentSeq(key); ok && currentSeq != seq {
+					return
+				}
+			}
 			LogEvent(ctx, str_memory_cache_callbacks_begin)
 			for _, fn := range callbacks.PostEvict {
 				fn(key, value)
@@ -113,12 +150,9 @@ func NewMemCache(
 		}
 	}
 
-	dataCache := fifocache.NewDataCache(capacityFunc, postSetFn, postGetFn, postEvictFn)
+	dataCache = fifocache.NewDataCacheWithPrepareSet(capacityFunc, prepareSetFn, postSetFn, postGetFn, postEvictFn)
 
-	ret := &MemCache{
-		cache:       dataCache,
-		counterSets: counterSets,
-	}
+	ret.cache = dataCache
 
 	if name != "" {
 		allMemoryCaches.Store(ret, name)
