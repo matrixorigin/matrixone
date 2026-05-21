@@ -16,6 +16,8 @@ package insert
 
 import (
 	"bytes"
+	"context"
+	goruntime "runtime"
 	"sync/atomic"
 	"time"
 
@@ -35,7 +37,21 @@ import (
 // flushSemaphore limits concurrent flushS3WriterOnMemoryPressure calls to
 // prevent thundering-herd mpool explosion when many workers are denied memory
 // simultaneously and all try to flush + read objectio metadata at once.
-var flushSemaphore = make(chan struct{}, 4)
+var flushSemaphore = make(chan struct{}, flushConcurrency())
+var flushBypassSemaphore = make(chan struct{}, 1)
+var flushSemaphoreAcquireTimeout = 200 * time.Millisecond
+var flushBypassRetryInterval = 20 * time.Millisecond
+
+func flushConcurrency() int {
+	n := goruntime.GOMAXPROCS(0) / 2
+	if n < 4 {
+		n = 4
+	}
+	if n > 16 {
+		n = 16
+	}
+	return n
+}
 
 const opName = "insert"
 
@@ -280,14 +296,11 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 		}
 	}()
 
-	// Limit concurrent flushes to avoid thundering-herd OOM when many
-	// workers are denied memory and all flush simultaneously.
-	select {
-	case flushSemaphore <- struct{}{}:
-	case <-proc.Ctx.Done():
-		return proc.Ctx.Err()
+	releaseFlushSlot, err := acquireFlushSlot(proc.Ctx)
+	if err != nil {
+		return err
 	}
-	defer func() { <-flushSemaphore }()
+	defer releaseFlushSlot()
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
@@ -315,6 +328,34 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 	// acquires by this or other workers see the freed capacity immediately.
 	forcedRefresh(insert.ctr.s3MemThrottler)
 	return nil
+}
+
+func acquireFlushSlot(ctx context.Context) (func(), error) {
+	timer := time.NewTimer(flushSemaphoreAcquireTimeout)
+	defer timer.Stop()
+
+	select {
+	case flushSemaphore <- struct{}{}:
+		return func() { <-flushSemaphore }, nil
+	case <-timer.C:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	ticker := time.NewTicker(flushBypassRetryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case flushSemaphore <- struct{}{}:
+			return func() { <-flushSemaphore }, nil
+		case flushBypassSemaphore <- struct{}{}:
+			v2.TxnStatementInsertS3FlushBypassCounter.Add(1)
+			return func() { <-flushBypassSemaphore }, nil
+		case <-ticker.C:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
 
 func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
