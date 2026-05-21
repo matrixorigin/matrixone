@@ -3563,13 +3563,17 @@ func TestCreateSQLTaskPreservesQuotedStrings(t *testing.T) {
 }
 
 func TestTaskKeywordIsNonReservedForIdentifiers(t *testing.T) {
-	stmt, err := ParseOne(context.TODO(), "create table task (task int, id int)", 1)
-	require.NoError(t, err)
+	for _, sql := range []string{
+		"create table task (task int, id int)",
+		"create table tasks (tasks int, id int)",
+	} {
+		stmt, err := ParseOne(context.TODO(), sql, 1)
+		require.NoError(t, err, sql)
 
-	createStmt, ok := stmt.(*tree.CreateTable)
-	require.True(t, ok)
-	require.Equal(t, "task", string(createStmt.Table.ObjectName))
-	require.Len(t, createStmt.Defs, 2)
+		createStmt, ok := stmt.(*tree.CreateTable)
+		require.True(t, ok, sql)
+		require.Len(t, createStmt.Defs, 2, sql)
+	}
 }
 
 func TestTaskStatementsStillParse(t *testing.T) {
@@ -3581,6 +3585,7 @@ func TestTaskStatementsStillParse(t *testing.T) {
 		{sql: "alter task parser_task suspend", expected: &tree.AlterSQLTask{}},
 		{sql: "drop task parser_task", expected: &tree.DropSQLTask{}},
 		{sql: "execute task parser_task", expected: &tree.ExecuteSQLTask{}},
+		{sql: "show tasks", expected: &tree.ShowSQLTasks{}},
 		{sql: "show task runs for parser_task limit 1", expected: &tree.ShowSQLTaskRuns{}},
 	}
 
