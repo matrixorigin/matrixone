@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
@@ -256,6 +257,57 @@ func TestCuvsUpdatable_EmptyTag1(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok)
 	require.True(t, strings.HasPrefix(reason, "CDC delta records 0 < threshold 1"))
+}
+
+func TestCuvsUpdatable_MaxOverflowSizeOverridesThreshold(t *testing.T) {
+	// algoParams claims an impossibly-high threshold so the per-algo
+	// gate would never fire on its own. But the chunk header reports a
+	// count >= MaxOverflowSize, so the safety cap should fire instead.
+	// Cadence: LastUpdateAt is nil → cadence check passes trivially.
+	mp := mpool.MustNewZero()
+	algoParams := fmt.Sprintf(`{"%s":%d}`, catalog.IntermediateGraphDegree, 10_000_000)
+	tableDef := buildTestTableDef(catalog.Cagra_TblType_Storage, algoParams, testDim)
+
+	// chunkBytesWithRecords advertises 100_000 inserts in the chunk
+	// header without actually encoding that many records (the gate
+	// reads counts from the header, not by walking records).
+	stub := gostub.Stub(&runSelectChunkSql, stubSelect(t, mp, [][]byte{chunkBytesWithRecords(t, MaxOverflowSize, 0)}))
+	defer stub.Reset()
+
+	ok, reason, err := CuvsUpdatable(idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName, Sqlproc: nil}, CuvsUpdatableSpec{
+		StorageTableType: catalog.Cagra_TblType_Storage,
+		ThresholdParam:   catalog.IntermediateGraphDegree,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Contains(t, reason, fmt.Sprintf("brute-force overflow %d >= MaxOverflowSize %d", MaxOverflowSize, MaxOverflowSize))
+}
+
+func TestCuvsUpdatable_CadenceBlocksMaxOverflowSize(t *testing.T) {
+	// Cadence active and not elapsed: even a runaway overflow size
+	// must not override — operators set the interval for a reason.
+	mp := mpool.MustNewZero()
+	algoParams := fmt.Sprintf(`{"%s":%d}`, catalog.IntermediateGraphDegree, 4)
+	tableDef := buildTestTableDef(catalog.Cagra_TblType_Storage, algoParams, testDim)
+
+	stub := gostub.Stub(&runSelectChunkSql, stubSelect(t, mp, [][]byte{chunkBytesWithRecords(t, MaxOverflowSize*2, 0)}))
+	defer stub.Reset()
+
+	// LastUpdateAt = now, Interval = 1h → cadence still active → skip.
+	nowTs := types.CurrentTimestamp()
+	ok, reason, err := CuvsUpdatable(idxcronplugin.UpdatableInput{
+		TableDef:     tableDef,
+		IndexName:    testIndexName,
+		Sqlproc:      nil,
+		LastUpdateAt: &nowTs,
+		Interval:     time.Hour,
+	}, CuvsUpdatableSpec{
+		StorageTableType: catalog.Cagra_TblType_Storage,
+		ThresholdParam:   catalog.IntermediateGraphDegree,
+	})
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Contains(t, reason, "current time < interval after lastUpdateAt")
 }
 
 func TestCuvsUpdatable_IvfpqShape(t *testing.T) {

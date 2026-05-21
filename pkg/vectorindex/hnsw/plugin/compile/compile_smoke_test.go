@@ -44,11 +44,11 @@ func (s *stubCtx) BuildIndexTable(_ *plan.TableDef) error { return nil }
 func (s *stubCtx) ResolveVariable(_ string, _, _ bool) (any, error) {
 	return int64(0), nil
 }
-func (s *stubCtx) IsFrontend() bool                                 { return s.isFrontend }
-func (s *stubCtx) IsExperimentalEnabled(_ string) (bool, error)     { return true, nil }
-func (s *stubCtx) IsCCPRTaskTransaction() bool                      { return false }
-func (s *stubCtx) IsTableFromPublication(_ *plan.TableDef) bool     { return false }
-func (s *stubCtx) SinkerTypeFromAlgo(_ string) int8                 { return 0 }
+func (s *stubCtx) IsFrontend() bool                             { return s.isFrontend }
+func (s *stubCtx) IsExperimentalEnabled(_ string) (bool, error) { return true, nil }
+func (s *stubCtx) IsCCPRTaskTransaction() bool                  { return false }
+func (s *stubCtx) IsTableFromPublication(_ *plan.TableDef) bool { return false }
+func (s *stubCtx) SinkerTypeFromAlgo(_ string) int8             { return 0 }
 func (s *stubCtx) CreateIndexCdcTask(_, _ string, _ uint64, _ string, _ int8, _ bool, _ string, _ *plan.TableDef) error {
 	return nil
 }

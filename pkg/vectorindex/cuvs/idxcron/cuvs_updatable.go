@@ -83,6 +83,26 @@ var runSelectChunkSql = sqlexec.RunSql
 // zero and the gate skips. Likewise when the threshold is missing or
 // non-positive in indexAlgoParams — the rebuild is deferred until the
 // user supplies a sensible threshold.
+
+// MaxOverflowSize is the brute-force overflow ceiling. Once the
+// per-cron-tick count exceeds this, the gate fires regardless of the
+// per-algo minimum threshold (lists / intermediate_graph_degree).
+//
+// Sizing rationale: GPU brute-force (cuvs.GpuBruteForce, fp32, D≈768
+// on A100/L40S) stays comfortably under 5ms per query at 200K
+// vectors, then grows roughly linearly with overflow size. 200K
+// keeps brute-force latency well inside typical search SLAs while
+// still letting the GPU absorb a meaningful amount of CDC traffic
+// between rebuilds. Safe across all reasonable GPU targets including
+// older cards (T4/V100) and higher embedding dimensions.
+//
+// Note: the cadence gate (createdAt+interval check above) is the
+// operator's contract and is still honored — the safety cap only
+// overrides the per-algo threshold, not the cadence. Hardcoded
+// because there's no algo-specific reason to differ today; lift to a
+// spec field if that changes.
+const MaxOverflowSize = 200_000
+
 func CuvsUpdatable(
 	in idxcronplugin.UpdatableInput,
 	spec CuvsUpdatableSpec,
@@ -95,7 +115,9 @@ func CuvsUpdatable(
 	// Cadence: skip when the last rebuild is still within the
 	// configured interval. The executor enforces createdAt+interval
 	// universally; this is the per-run cadence that used to live in
-	// the executor's listsAware=false branch.
+	// the executor's listsAware=false branch. This gate is operator-
+	// configurable and is the user's contract for "don't rebuild too
+	// often" — even the MaxOverflowSize safety cap below respects it.
 	if in.LastUpdateAt != nil {
 		last := time.Unix(in.LastUpdateAt.Unix(), 0)
 		now := time.Now()
@@ -122,6 +144,8 @@ func CuvsUpdatable(
 			in.IndexName, spec.StorageTableType)
 	}
 
+	// Read and validate threshold up front — cheap, lets us fail fast
+	// on a malformed indexAlgoParams without doing the SQL count.
 	threshold, err := readInt64Param(algoParams, spec.ThresholdParam)
 	if err != nil {
 		return false, "", err
@@ -150,6 +174,17 @@ func CuvsUpdatable(
 	count, err := countTag1Records(in.Sqlproc, in.TableDef.DbName, storageTbl, dim, ibpr)
 	if err != nil {
 		return false, "", err
+	}
+
+	// Safety cap: when brute-force overflow exceeds MaxOverflowSize,
+	// GPU brute-force search starts to noticeably degrade query
+	// latency — fire rebuild now (cadence already passed above).
+	// This overrides the per-algo minimum threshold, but NOT the
+	// cadence: operators set the interval intentionally and the
+	// cap is just a tighter override on top of the min threshold.
+	if count >= MaxOverflowSize {
+		return true, fmt.Sprintf(
+			"brute-force overflow %d >= MaxOverflowSize %d", count, MaxOverflowSize), nil
 	}
 
 	if count < threshold {
@@ -306,4 +341,3 @@ func countTag1Records(
 	_ = totalDeletes
 	return totalInserts + totalUpserts, nil
 }
-
