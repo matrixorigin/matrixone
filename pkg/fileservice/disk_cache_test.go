@@ -355,6 +355,30 @@ func TestDiskCacheEvictSkipsPathBeingUpdated(t *testing.T) {
 	require.False(t, cache.cache.Contains(diskPath))
 }
 
+func TestDiskCacheUpdateCleanupRemovesUnindexedFile(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+
+	err = cache.SetFile(ctx, "foo", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("foo"))), nil
+	})
+	require.NoError(t, err)
+
+	diskPath := cache.pathForFile("foo")
+	doneUpdate := cache.startUpdateWithCleanup(diskPath, func() error {
+		return cache.removeUnindexedFile(diskPath)
+	})
+	cache.cache.Delete(ctx, diskPath)
+	require.NoError(t, doneUpdate())
+
+	_, err = os.Stat(diskPath)
+	require.True(t, os.IsNotExist(err))
+	require.False(t, cache.cache.Contains(diskPath))
+}
+
 func TestDiskCacheStaleRepairReplacesCacheEntrySize(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
