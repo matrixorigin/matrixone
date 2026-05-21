@@ -175,6 +175,34 @@ func (s *memStore) UpdateMinValue(
 	return nil
 }
 
+func (s *memStore) SetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	s.Lock()
+	defer s.Unlock()
+	m := s.caches
+	if txnOp != nil {
+		m = s.uncommitted[string(txnOp.Txn().ID)]
+	}
+	cols, ok := m[tableID]
+	if !ok {
+		panic("missing incr column record")
+	}
+	for i := range cols {
+		if cols[i].ColName == colName {
+			if cols[i].Offset < offset {
+				cols[i].Offset = offset
+			}
+			return nil
+		}
+	}
+	panic("missing incr column record")
+}
+
 func (s *memStore) Delete(
 	ctx context.Context,
 	tableID uint64) error {
