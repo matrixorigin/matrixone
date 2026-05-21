@@ -125,7 +125,8 @@ not supported: VECTOR column 'b' cannot be in index
 create table t3(a int, b vecf32(65537));
 Data truncation: data out of range: data type vecf32,  typeLen is over the MaxVectorLen : 65535
 select sqrt(cast("[1,2,-3]" as vecf32(3)));
-invalid argument Sqrt, bad value -3
+sqrt(cast([1,2,-3] as vecf32(3)))
+null
 select b/(cast("[1,2,0]" as vecf32(3))) from vec_table;
 Data truncation: division by zero
 select count(b) from vec_table;

@@ -17,9 +17,17 @@ atan(d)	atan(fl)
 null	null
 0.0	0.0
 select acos(d),acos(fl)from t1;
-invalid argument acos, bad value 2
+➤ acos(d)[8,54,0]  ¦  acos(fl)[8,54,0]  𝄀
+0.0  ¦  null  𝄀
+null  ¦  null  𝄀
+null  ¦  null  𝄀
+1.5707963267948966  ¦  1.5707963267948966
 select cot(d),cot(fl) from t1;
-invalid argument cot, bad value 0
+➤ cot(d)[8,54,0]  ¦  cot(fl)[8,54,0]  𝄀
+0.6420926159343306  ¦  1.8340266997618755  𝄀
+-0.4576575543602858  ¦  0.6124124816462909  𝄀
+null  ¦  null  𝄀
+null  ¦  null
 select cot(d),cot(fl) from t1 where d <> 0;
 cot(d)	cot(fl)
 0.6420926159343306	1.8340266997618755

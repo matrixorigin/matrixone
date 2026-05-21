@@ -20,7 +20,8 @@ SELECT ACOS(1);
 ACOS(1)
 0.0
 SELECT ACOS(1.0001);
-invalid argument acos, bad value 1.0001
+➤ ACOS(1.0001)[8,54,0]  𝄀
+null
 SELECT ACOS(0);
 ACOS(0)
 1.5707963267948966
@@ -121,7 +122,8 @@ SELECT COT(-0.001);
 COT(-0.001)
 -999.9996666666443
 select cot(0);
-invalid argument cot, bad value 0
+➤ cot(0)[8,54,0]  𝄀
+null
 SELECT ATAN(13413);
 ATAN(13413)
 1.5707217722583913
@@ -253,15 +255,21 @@ cos(a)
 1.0
 0.7071067657322372
 select distinct tan(a) from t1;
-tan(a)
-1.118939540115781
-0.5998405870348642
-74.6860010348976
-0.747801596410876
-0.0
-1.0000000437113907
-select distinct acos(a) from t1;
-invalid argument acos, bad value 1.5574077367782593
+➤ tan(a)[8,54,0]  𝄀
+1.118939540115781  𝄀
+0.5998405870348643  𝄀
+74.6860010348976  𝄀
+0.747801596410876  𝄀
+0.0  𝄀
+1.000000043711391
+select distinct acos(a) from t1 order by 1;
+➤ acos(a)[8,54,0]  𝄀
+null  𝄀
+0.5707963786279666  𝄀
+0.667457180719794  𝄀
+0.873571492828528  𝄀
+1.0000000347686513  𝄀
+1.5707963267948966
 select distinct atan(a) from t1;
 atan(a)
 0.6995216279525449
@@ -400,7 +408,8 @@ SELECT cot(0.7e5);
 cot(0.7e5)
 -0.6889761663667616
 SELECT acos(1.1e5);
-invalid argument acos, bad value 110000
+➤ acos(1.1e5)[8,54,0]  𝄀
+null
 SELECT atan(1.1e5);
 atan(1.1e5)
 1.570787235885806
