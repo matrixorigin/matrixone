@@ -794,7 +794,7 @@ _wstart    _wend    sum(col3)    count(col4)
 2023-11-01 00:13:12    2023-11-01 00:13:17    392432.4324    1
 drop table temporary02;
 drop table if exists external01;
-create external table external01(ts timestamp primary key,col1 tinyint default null,col2 smallint default null,col3 int default null,col4 bigint default null,col5 tinyint unsigned default null,col6 smallint unsigned default null,col7 int unsigned default null,col8 bigint unsigned default null,col9 float default null,col10 double default null)infile{"filepath"='$resources/external_table_file/time_window.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+create external table external01(ts timestamp,col1 tinyint default null,col2 smallint default null,col3 int default null,col4 bigint default null,col5 tinyint unsigned default null,col6 smallint unsigned default null,col7 int unsigned default null,col8 bigint unsigned default null,col9 float default null,col10 double default null)infile{"filepath"='$resources/external_table_file/time_window.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select _wstart, _wend, max(col2), min(col3), avg(col4) from external01 where ts >= '2014-01-01 00:01:17' and ts <= '2014-01-01 00:14:58' interval(ts, 3, minute);
 _wstart    _wend    max(col2)    min(col3)    avg(col4)
 2014-01-01 00:00:00    2014-01-01 00:03:00    20830    -563708311    7.5995421344092E17

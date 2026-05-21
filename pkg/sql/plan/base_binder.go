@@ -1934,6 +1934,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(argsCastType) > 0 {
 			argsCastType = argsCastType[:size+1]
 		}
+
+	case "lead", "lag":
+		// For lead/lag window functions, cast the default value (3rd arg)
+		// to match the value type (1st arg).
+		if len(args) >= 3 && !argsType[2].Eq(argsType[0]) {
+			argsCastType = []types.Type{argsType[0], argsType[1], argsType[0]}
+		}
 	}
 
 	if len(argsCastType) != 0 {
