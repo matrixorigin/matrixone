@@ -41,6 +41,7 @@ import (
 type DiskCache struct {
 	path               string
 	cacheDataAllocator CacheDataAllocator
+	memoryCache        fscache.DataCache
 	perfCounterSets    []*perfcounter.CounterSet
 
 	updatingPaths struct {
@@ -367,9 +368,21 @@ func (d *DiskCache) Read(
 		}
 		LogEvent(ctx, str_disk_cache_update_states_end)
 
-		if err := entry.ReadFromOSFile(ctx, file, d.cacheDataAllocator); err != nil {
+		allocator := d.cacheDataAllocator
+		if entry.ToCacheData != nil && d.memoryCache != nil {
+			allocator = cacheCapacityGuardedAllocator{
+				cache:     d.memoryCache,
+				allocator: allocator,
+			}
+		}
+		readOffset, readSize := int64(0), entry.Size
+		if diskPath == d.pathForFile(path.File) {
+			readOffset = entry.Offset
+		}
+		if err := entry.ReadFromOSFile(ctx, file, allocator); err != nil {
 			return err
 		}
+		fadviseDontNeed(file, readOffset, readSize)
 
 		entry.done = true
 		entry.fromCache = d
@@ -541,6 +554,7 @@ func (d *DiskCache) writeFile(
 	if err := f.Sync(); err != nil {
 		return false, err
 	}
+	fadviseDontNeed(f, 0, 0)
 
 	stat, err = f.Stat()
 	if err != nil {

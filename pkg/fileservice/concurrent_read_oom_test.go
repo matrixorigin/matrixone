@@ -18,6 +18,9 @@ import (
 	"context"
 	"os"
 	"runtime"
+	"runtime/debug"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -224,7 +227,7 @@ func TestLockOpHoldingCacheDataOOM(t *testing.T) {
 				}
 
 				// === Phase 1: TableScan (allocate cache data for each block) ===
-				// Models: readBlockData → LoadColumnsWithMeta → ReadOneBlock → S3FS.Read
+				// Models: readBlockData → LoadColumnsData → ReadOneBlock → S3FS.Read
 				//   → DiskCache.Read → setCachedData → constructorFactory
 				//   → AllocateCacheDataWithHint (THIS is the 225 GiB allocation in crash)
 				decs := make([]malloc.Deallocator, 0, blocksPerScan)
@@ -428,4 +431,141 @@ func TestMultiBlockScanOOMReproduction(t *testing.T) {
 	t.Logf("  Memory growth: Sys=%dMB HeapInuse=%dMB",
 		(memAfter.Sys-memBefore.Sys)/1024/1024,
 		(memAfter.HeapInuse-memBefore.HeapInuse)/1024/1024)
+}
+
+// TestTPCCRssPressureSimplifiedRepro is a small, single-process reproduction
+// for the TPCC failure shape: many concurrent sessions hold Go heap and
+// off-heap buffers at the same time, then GC leaves a large HeapIdle/RSS gap.
+//
+// It is skipped by default. Scale the env vars up to intentionally hit a small
+// container limit, or keep them small to observe the RSS behavior safely.
+//
+// Example:
+//
+//	MO_TEST_RSS_REPRO=1 \
+//	MO_TEST_RSS_WORKERS=64 \
+//	MO_TEST_RSS_HEAP_MB=16 \
+//	MO_TEST_RSS_OFFHEAP_MB=8 \
+//	go test ./pkg/fileservice -run TestTPCCRssPressureSimplifiedRepro -v -count=1
+func TestTPCCRssPressureSimplifiedRepro(t *testing.T) {
+	if os.Getenv("MO_TEST_RSS_REPRO") == "" {
+		t.Skip("Set MO_TEST_RSS_REPRO=1 to run simplified RSS/OOM reproduction")
+	}
+
+	workers := envInt("MO_TEST_RSS_WORKERS", 64)
+	heapMB := envInt("MO_TEST_RSS_HEAP_MB", 16)
+	offheapMB := envInt("MO_TEST_RSS_OFFHEAP_MB", 8)
+	hold := time.Duration(envInt("MO_TEST_RSS_HOLD_MS", 3000)) * time.Millisecond
+	if limitMB := envInt("MO_TEST_RSS_GOMEMLIMIT_MB", 0); limitMB > 0 {
+		old := debug.SetMemoryLimit(int64(limitMB) << 20)
+		defer debug.SetMemoryLimit(old)
+	}
+
+	t.Logf("params: workers=%d heap=%dMiB/worker offheap=%dMiB/worker hold=%v",
+		workers, heapMB, offheapMB, hold)
+	logRSSAndHeap(t, "before")
+
+	alloc := memoryCacheAllocator()
+	var (
+		ready sync.WaitGroup
+		done  sync.WaitGroup
+		stop  = make(chan struct{})
+		sink  atomic.Uint64
+	)
+	ready.Add(workers)
+	done.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func(worker int) {
+			defer done.Done()
+
+			heap := make([]byte, heapMB<<20)
+			touchBytes(heap, byte(worker), &sink)
+
+			offheap, dec, err := alloc.Allocate(uint64(offheapMB<<20), malloc.NoClear)
+			if err != nil {
+				t.Errorf("offheap allocate failed: %v", err)
+				ready.Done()
+				return
+			}
+			touchBytes(offheap, byte(worker+1), &sink)
+
+			ready.Done()
+			<-stop
+
+			runtime.KeepAlive(heap)
+			runtime.KeepAlive(offheap)
+			dec.Deallocate()
+		}(i)
+	}
+	ready.Wait()
+	logRSSAndHeap(t, "all workers allocated")
+
+	time.Sleep(hold)
+	close(stop)
+	done.Wait()
+	t.Logf("touch checksum=%d", sink.Load())
+
+	runtime.GC()
+	logRSSAndHeap(t, "after runtime.GC")
+
+	debug.FreeOSMemory()
+	logRSSAndHeap(t, "after FreeOSMemory")
+}
+
+func envInt(name string, fallback int) int {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 0 {
+		return fallback
+	}
+	return n
+}
+
+func touchBytes(bs []byte, seed byte, sink *atomic.Uint64) {
+	var sum uint64
+	for i := 0; i < len(bs); i += 4096 {
+		bs[i] = seed + byte(i)
+		sum += uint64(bs[i])
+	}
+	if len(bs) > 0 {
+		bs[len(bs)-1] = seed
+		sum += uint64(bs[len(bs)-1])
+	}
+	sink.Add(sum)
+}
+
+func logRSSAndHeap(t *testing.T, label string) {
+	t.Helper()
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	rss := currentRSSBytes()
+	t.Logf("%s: rss=%dMiB heapAlloc=%dMiB heapSys=%dMiB heapIdle=%dMiB heapReleased=%dMiB heapInuse=%dMiB numGC=%d",
+		label,
+		rss>>20,
+		stats.HeapAlloc>>20,
+		stats.HeapSys>>20,
+		stats.HeapIdle>>20,
+		stats.HeapReleased>>20,
+		stats.HeapInuse>>20,
+		stats.NumGC,
+	)
+}
+
+func currentRSSBytes() uint64 {
+	data, err := os.ReadFile("/proc/self/statm")
+	if err != nil {
+		return 0
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) < 2 {
+		return 0
+	}
+	pages, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return pages * uint64(os.Getpagesize())
 }

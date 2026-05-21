@@ -51,7 +51,7 @@ func (b *BranchChangeHandle) Next(
 	if b.retainRowID {
 		ctx = engine.WithRetainRowID(ctx, true)
 	}
-	if b.pkFilter != nil && len(b.pkFilter.Segments) > 0 {
+	if b.pkFilter != nil && b.pkFilter.Valid() {
 		ctx = engine.WithPKFilter(ctx, b.pkFilter)
 	}
 
@@ -114,7 +114,7 @@ var CollectChangesWithPKFilter = func(
 		}
 		ctx = engine.WithSnapshotReadPolicy(ctx, engine.SnapshotReadPolicyVisibleState)
 		ctx = engine.WithRetainRowID(ctx, true)
-		if pkFilter != nil && len(pkFilter.Segments) > 0 {
+		if pkFilter != nil && pkFilter.Valid() {
 			ctx = engine.WithPKFilter(ctx, pkFilter)
 		}
 		var err error

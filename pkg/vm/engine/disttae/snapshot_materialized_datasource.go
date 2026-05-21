@@ -211,7 +211,9 @@ func (ds *materializedSnapshotDataSource) buildCommittedInMemBatches(
 	}
 
 	var iter logtailreplay.RowsIter
+	iterKind := "rows"
 	if ds.memPKFilter != nil && ds.memPKFilter.Valid() {
+		iterKind = "primary-key"
 		iter = ds.pState.NewPrimaryKeyIter(
 			ds.snapshotTS,
 			ds.memPKFilter.Op(),
@@ -224,9 +226,14 @@ func (ds *materializedSnapshotDataSource) buildCommittedInMemBatches(
 
 	out := newMaterializedInMemBatch(attrs, colTypes)
 	totalRows := 0
+	scan := 0
+	bfSkipped := 0
+	deletedSkipped := 0
 	for iter.Next() {
+		scan++
 		entry := iter.Entry()
 		if ds.shouldSkipCommittedInMemEntry(entry) {
+			bfSkipped++
 			continue
 		}
 		deleted, err := ds.isDeletedByCommittedTombstones(ctx, entry.RowID)
@@ -235,6 +242,7 @@ func (ds *materializedSnapshotDataSource) buildCommittedInMemBatches(
 			return err
 		}
 		if deleted {
+			deletedSkipped++
 			continue
 		}
 		if out.RowCount() >= int(objectio.BlockMaxRows) {
@@ -257,6 +265,17 @@ func (ds *materializedSnapshotDataSource) buildCommittedInMemBatches(
 	if ds.memPKFilter != nil && totalRows == 1 {
 		ds.memPKFilter.RecordExactHit()
 	}
+	logPKFilterInMemSummary(
+		ctx,
+		"materialized-committed-inmem",
+		ds.memPKFilter,
+		iterKind,
+		scan,
+		totalRows,
+		bfSkipped,
+		deletedSkipped,
+		totalRows,
+	)
 	return nil
 }
 
