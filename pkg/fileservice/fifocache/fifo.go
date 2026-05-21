@@ -216,14 +216,23 @@ func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V], ghostItemSet bool) {
 		c.used1 += item.size
 	}
 
-	// help enqueue
+	c.helpEnqueue()
+}
+
+func (c *Cache[K, V]) helpEnqueue() {
 	for {
 		select {
 		case item := <-c.enqueueJobs1:
+			if item.queue != cacheItemNoQueue || !item.valueOK {
+				continue
+			}
 			item.queue = cacheItemQueue1
 			c.queue1.enqueue(item)
 			c.used1 += item.size
 		case item := <-c.enqueueJobs2:
+			if item.queue != cacheItemNoQueue || !item.valueOK {
+				continue
+			}
 			item.queue = cacheItemQueue2
 			c.queue2.enqueue(item)
 			c.used2 += item.size
@@ -231,7 +240,6 @@ func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V], ghostItemSet bool) {
 			return
 		}
 	}
-
 }
 
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
@@ -305,6 +313,7 @@ func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 func (c *Cache[K, V]) Replace(ctx context.Context, key K, value V, size int64) bool {
 	var pe _PendingPostEvict[K, V]
 	c.queueLock.Lock()
+	c.helpEnqueue()
 	shard := &c.shards[c.keyShardFunc(key)%numShards]
 	shard.Lock()
 	item, ok := shard.values[key]
@@ -386,6 +395,7 @@ func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut in
 		}
 	}()
 	for {
+		c.helpEnqueue()
 		globalCapacityCut := c.capacityCut.Swap(0)
 		target = c.capacity() - capacityCut - globalCapacityCut
 		if target < 0 {
@@ -439,6 +449,7 @@ func (c *Cache[K, V]) EvictWithWait(ctx context.Context, capacityCut int64) {
 			return
 		default:
 		}
+		c.helpEnqueue()
 		globalCapacityCut := c.capacityCut.Swap(0)
 		target := c.capacity() - capacityCut - globalCapacityCut
 		if target < 0 {
