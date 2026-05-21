@@ -2462,6 +2462,10 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		orderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 
 		for _, order := range astOrderBy {
+			if isNullAstExpr(unwrapParenExpr(order.Expr)) {
+				continue
+			}
+
 			expr, err := orderBinder.BindExpr(order.Expr)
 			if err != nil {
 				return 0, err
@@ -2518,14 +2522,15 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	if astLimit != nil {
 		node := builder.qry.Nodes[lastNodeID]
 
-		limitBinder := NewLimitBinder(builder, ctx)
 		if astLimit.Offset != nil {
-			node.Offset, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
+			offsetBinder := NewLimitBinder(builder, ctx, true)
+			node.Offset, err = offsetBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {
 				return 0, err
 			}
 		}
 		if astLimit.Count != nil {
+			limitBinder := NewLimitBinder(builder, ctx, false)
 			node.Limit, err = limitBinder.BindExpr(astLimit.Count, 0, true)
 			if err != nil {
 				return 0, err
@@ -2600,7 +2605,15 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 
 	oldSnapshot := builder.compCtx.GetSnapshot()
 	builder.compCtx.SetSnapshot(subCtx.snapshot)
+	// A CTE body is a nested SELECT and must not inherit the outer FOR UPDATE
+	// state. Otherwise the CTE would emit its own LOCK_OP (e.g. above its
+	// LIMIT) on top of the outer LOCK_OP that collectLockTargets injects
+	// after the outer query's FROM, locking rows that fall outside the final
+	// result set.
+	savedIsForUpdate := builder.isForUpdate
+	builder.isForUpdate = false
 	nodeID, err = builder.bindSelect(s, subCtx, false)
+	builder.isForUpdate = savedIsForUpdate
 	builder.compCtx.SetSnapshot(oldSnapshot)
 	if err != nil {
 		return
@@ -2634,6 +2647,14 @@ func (builder *QueryBuilder) bindRecursiveCte(
 ) (nodeID int32, err error) {
 	if len(s.OrderBy) > 0 {
 		return 0, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
+	}
+	if builder.isForUpdate {
+		// The outer SELECT is FOR UPDATE but the recursive CTE body emits a
+		// SINK_SCAN to the outer query. collectLockTargets does not follow
+		// SourceStep, so the outer LOCK_OP would never reach the underlying
+		// base tables -- the query would silently take no lock. Reject this
+		// up front instead of letting the user think rows are locked.
+		return 0, moerr.NewNotSupported(builder.GetContext(), "SELECT ... FOR UPDATE on a recursive CTE")
 	}
 	//1. bind initial statement
 	initCtx := NewBindContext(builder, ctx)
@@ -2728,14 +2749,15 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	var limitExpr *Expr
 	var offsetExpr *Expr
 	if s.Limit != nil {
-		limitBinder := NewLimitBinder(builder, ctx)
 		if s.Limit.Offset != nil {
-			offsetExpr, err = limitBinder.BindExpr(s.Limit.Offset, 0, true)
+			offsetBinder := NewLimitBinder(builder, ctx, true)
+			offsetExpr, err = offsetBinder.BindExpr(s.Limit.Offset, 0, true)
 			if err != nil {
 				return 0, err
 			}
 		}
 		if s.Limit.Count != nil {
+			limitBinder := NewLimitBinder(builder, ctx, false)
 			limitExpr, err = limitBinder.BindExpr(s.Limit.Count, 0, true)
 			if err != nil {
 				return 0, err
@@ -3278,7 +3300,7 @@ func (builder *QueryBuilder) bindSelectClause(
 		case tree.UnqualifiedStar:
 			if astLimit != nil && astLimit.Count != nil {
 				var limitExpr *plan.Expr
-				limitBinder := NewLimitBinder(builder, ctx)
+				limitBinder := NewLimitBinder(builder, ctx, false)
 				if limitExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
 					return
 				}
@@ -3309,6 +3331,21 @@ func (builder *QueryBuilder) bindSelectClause(
 		return
 	}
 
+	// rewrite right join to left join
+	builder.rewriteRightJoinToLeftJoin(nodeID)
+	if clause.Where != nil {
+		var boundFilterList []*plan.Expr
+		if nodeID, boundFilterList, notCacheable, err = builder.bindWhere(ctx, clause.Where, nodeID); err != nil {
+			return
+		}
+
+		nodeID = builder.appendWhereNode(ctx, nodeID, boundFilterList, notCacheable)
+	}
+
+	// Lock_OP must sit above WHERE/subquery rewrites so that EXISTS/IN/scalar
+	// subqueries (which get flattened into SEMI/ANTI joins on top of the FROM
+	// tree) restrict the row set the lock observes -- otherwise rows that the
+	// final result set filters out would still get locked.
 	if builder.isForUpdate {
 		lockTargets := builder.collectLockTargets(nodeID)
 		if len(lockTargets) > 0 {
@@ -3324,17 +3361,6 @@ func (builder *QueryBuilder) bindSelectClause(
 				nodeID = builder.appendNode(lockNode, ctx)
 			}
 		}
-	}
-
-	// rewrite right join to left join
-	builder.rewriteRightJoinToLeftJoin(nodeID)
-	if clause.Where != nil {
-		var boundFilterList []*plan.Expr
-		if nodeID, boundFilterList, notCacheable, err = builder.bindWhere(ctx, clause.Where, nodeID); err != nil {
-			return
-		}
-
-		nodeID = builder.appendWhereNode(ctx, nodeID, boundFilterList, notCacheable)
 	}
 
 	// Preprocess aliases
@@ -3767,6 +3793,10 @@ func (builder *QueryBuilder) bindOrderBy(
 	orderBinder := NewOrderBinder(projectionBinder, selectList)
 	boundOrderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 	for _, order := range astOrderBy {
+		if isNullAstExpr(unwrapParenExpr(order.Expr)) {
+			continue
+		}
+
 		var expr *plan.Expr
 		if expr, err = orderBinder.BindExpr(order.Expr); err != nil {
 			return
@@ -3856,13 +3886,14 @@ func (builder *QueryBuilder) bindLimit(
 	astRankOption *tree.RankOption,
 ) (boundOffsetExpr, boundCountExpr *Expr, rankOption *plan.RankOption, err error) {
 	if astLimit != nil {
-		limitBinder := NewLimitBinder(builder, ctx)
 		if astLimit.Offset != nil {
-			if boundOffsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true); err != nil {
+			offsetBinder := NewLimitBinder(builder, ctx, true)
+			if boundOffsetExpr, err = offsetBinder.BindExpr(astLimit.Offset, 0, true); err != nil {
 				return
 			}
 		}
 		if astLimit.Count != nil {
+			limitBinder := NewLimitBinder(builder, ctx, false)
 			if boundCountExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
 				return
 			}
@@ -4012,10 +4043,6 @@ func (builder *QueryBuilder) appendAggNode(
 ) (newNodeID int32, err error) {
 	if ctx.bindingRecurStmt() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
-		return
-	}
-	if builder.isForUpdate {
-		err = moerr.NewInternalError(builder.GetContext(), "not support select aggregate function for update")
 		return
 	}
 
@@ -4714,6 +4741,16 @@ func (builder *QueryBuilder) bindView(
 	}
 	viewCtx.cteName = table
 
+	// A view body is a nested SELECT and must not inherit the outer FOR UPDATE
+	// state. Otherwise the view body could emit its own LOCK_OP (e.g. above an
+	// ORDER BY/LIMIT inside the view) on top of the outer LOCK_OP, locking
+	// rows that fall outside the final result set.
+	savedIsForUpdate := builder.isForUpdate
+	builder.isForUpdate = false
+	defer func() {
+		builder.isForUpdate = savedIsForUpdate
+	}()
+
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return
@@ -4726,11 +4763,14 @@ func (builder *QueryBuilder) bindView(
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
-		if builder.isForUpdate {
-			return 0, moerr.NewInternalError(builder.GetContext(), "not support select from derived table for update")
-		}
 		subCtx := NewBindContext(builder, ctx)
+		// Nested SELECT must not inherit FOR UPDATE: the outer collectLockTargets
+		// recurses into all TABLE_SCAN nodes (including ones inside derived tables),
+		// so the derived subplan itself should be built without lock injection.
+		savedIsForUpdate := builder.isForUpdate
+		builder.isForUpdate = false
 		nodeID, err = builder.bindSelect(tbl, subCtx, false)
+		builder.isForUpdate = savedIsForUpdate
 		if subCtx.isCorrelated {
 			return 0, moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
 		}
@@ -5700,9 +5740,24 @@ func getPartitionColNameFromExpr(expr *plan.Expr) string {
 // collectLockTargets traverses the plan tree rooted at nodeID and collects
 // LockTarget entries for all TABLE_SCAN nodes found. This supports SELECT ... FOR UPDATE
 // with JOIN tables by locking rows from every table involved in the query.
+//
+// For SEMI / ANTI / SINGLE joins we only walk the left child: the right side
+// (typically the flattened body of an EXISTS / IN / scalar subquery) does not
+// contribute to the outer result rows and must not be locked, matching MySQL's
+// rule that an outer FOR UPDATE does not lock subquery tables.
 func (builder *QueryBuilder) collectLockTargets(nodeID int32) []*plan.LockTarget {
 	node := builder.qry.Nodes[nodeID]
 	var targets []*plan.LockTarget
+
+	if node.NodeType == plan.Node_JOIN {
+		switch node.JoinType {
+		case plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE, plan.Node_MARK:
+			if len(node.Children) > 0 {
+				targets = append(targets, builder.collectLockTargets(node.Children[0])...)
+			}
+			return targets
+		}
+	}
 
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		tableDef := node.GetTableDef()
