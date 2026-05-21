@@ -290,7 +290,13 @@ func (fp *fixedPool) headerFromPtr(ptr unsafe.Pointer) (*memHdr, bool) {
 	}
 	uptr := uintptr(ptr)
 	elemSize := uintptr(fp.eleSz + kMemHdrSz)
+	if elemSize == 0 {
+		return nil, false
+	}
 	for _, buf := range fp.buf {
+		if len(buf) == 0 {
+			continue
+		}
 		base := uintptr(unsafe.Pointer(&buf[0]))
 		dataStart := base + kMemHdrSz
 		end := base + uintptr(len(buf))

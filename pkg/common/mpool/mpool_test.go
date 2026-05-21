@@ -381,6 +381,17 @@ func TestShardDistribution(t *testing.T) {
 	DeleteMPool(mp)
 }
 
+func TestFixedPoolHeaderFromPtrSkipsEmptySlabs(t *testing.T) {
+	mp := MustNew("fixed-pool-empty-slab-test")
+	mp.pools[0].buf = append(mp.pools[0].buf, nil)
+
+	bs, err := mp.Alloc(64, true)
+	require.NoError(t, err)
+	mp.Free(bs)
+
+	DeleteMPool(mp)
+}
+
 func TestPtrLenReplace(t *testing.T) {
 	mp := MustNewZero()
 	p := &PtrLen{}
