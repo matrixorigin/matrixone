@@ -381,6 +381,35 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}, bindCtx)
 	}
 
+	oldMainRowIDPos := oldColName2Idx[tableDef.Name+"."+catalog.Row_ID]
+	oldMainPKPos := oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+	replaceDedupOldColList := func(first [2]int32) []plan.ColRef {
+		oldCols := make([]plan.ColRef, 0, 3+len(tableDef.Indexes))
+		seen := make(map[[2]int32]struct{}, 3+len(tableDef.Indexes))
+		appendOldCol := func(pos [2]int32) {
+			if _, ok := seen[pos]; ok {
+				return
+			}
+			seen[pos] = struct{}{}
+			oldCols = append(oldCols, plan.ColRef{
+				RelPos: pos[0],
+				ColPos: pos[1],
+			})
+		}
+		appendOldCol(first)
+		appendOldCol(oldMainRowIDPos)
+		appendOldCol(oldMainPKPos)
+		for i, idxDef := range tableDef.Indexes {
+			if idxTableDefs[i] == nil {
+				continue
+			}
+			if pos, ok := oldColName2Idx[idxTableDefs[i].Name+"."+indexLookupColumnName(idxDef)]; ok {
+				appendOldCol(pos)
+			}
+		}
+		return oldCols
+	}
+
 	// detect primary key confliction (skip for fake PK tables)
 	if !isFakePK {
 		scanTag := builder.genNewBindTag()
@@ -475,12 +504,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		} else {
 			// Legacy DelRows path: used when merged-scan is disabled (e.g.
 			// tables with multi-part indexes).
-			dedupJoinCtx.OldColList = []plan.ColRef{
-				{
-					RelPos: oldPkPos[0],
-					ColPos: oldPkPos[1],
-				},
-			}
+			dedupJoinCtx.OldColList = replaceDedupOldColList(oldPkPos)
 		}
 
 		dedupJoinNode := &plan.Node{
@@ -576,12 +600,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			DedupColTypes:     dedupColTypes,
 			DedupJoinCtx: &plan.DedupJoinCtx{
 				DedupBuildKeepLast: true,
-				OldColList: []plan.ColRef{
-					{
-						RelPos: oldPkPos[0],
-						ColPos: oldPkPos[1],
-					},
-				},
+				OldColList:         replaceDedupOldColList(oldPkPos),
 			},
 		}, bindCtx)
 	}
@@ -719,10 +738,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		})
 
 		updateCtxList = append(updateCtxList, &plan.UpdateCtx{
-			ObjRef:     objRef,
-			TableDef:   tableDef,
-			InsertCols: insertCols,
-			DeleteCols: deleteCols,
+			ObjRef:             objRef,
+			TableDef:           tableDef,
+			InsertCols:         insertCols,
+			DeleteCols:         deleteCols,
+			SkipInsertOnNullPk: true,
 		})
 	}
 

@@ -270,13 +270,32 @@ func (writer *s3WriterDelegate) append(
 
 		tableType := writer.updateCtxInfos[updateCtx.TableDef.Name].tableType
 
+		mainTableNullPkFilter := tableType == UpdateMainTable &&
+			updateCtx.SkipInsertOnNullPk &&
+			writer.sortIndexes[i] > -1 &&
+			inBatch.Vecs[updateCtx.InsertCols[0]].HasNull()
+
 		// Check NOT NULL constraints for main table columns (mirrors insert_main_table).
 		if tableType == UpdateMainTable {
-			for insertIdx, inputIdx := range updateCtx.InsertCols {
-				col := updateCtx.TableDef.Cols[insertIdx]
-				if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
-					if inBatch.Vecs[inputIdx].HasNull() {
-						return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+			if mainTableNullPkFilter {
+				var checked *batch.Batch
+				if checked, err = projBat.Clone(mp, false); err != nil {
+					return
+				}
+				nulls := checked.Vecs[0].GetNulls().GetBitmap().Clone()
+				checked.ShrinkByMask(nulls, true, 0)
+				if err = checkMainTableNotNull(proc, updateCtx, checked); err != nil {
+					checked.Clean(mp)
+					return
+				}
+				checked.Clean(mp)
+			} else {
+				for insertIdx, inputIdx := range updateCtx.InsertCols {
+					col := updateCtx.TableDef.Cols[insertIdx]
+					if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
+						if inBatch.Vecs[inputIdx].HasNull() {
+							return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+						}
 					}
 				}
 			}
@@ -287,6 +306,9 @@ func (writer *s3WriterDelegate) append(
 		needNullFilter := tableType != UpdateMainTable &&
 			!writer.isClusterBys[i] &&
 			writer.sortIndexes[i] > -1
+		if tableType == UpdateMainTable {
+			needNullFilter = mainTableNullPkFilter
+		}
 
 		if needNullFilter && projBat.Vecs[writer.sortIndexes[i]].HasNull() {
 			// Clone because SelectColumns shares vectors, and ShrinkByMask
@@ -295,7 +317,11 @@ func (writer *s3WriterDelegate) append(
 			if filtered, err = projBat.Clone(mp, false); err != nil {
 				return
 			}
-			nulls := filtered.Vecs[writer.sortIndexes[i]].GetNulls().GetBitmap().Clone()
+			nullIdx := writer.sortIndexes[i]
+			if tableType == UpdateMainTable {
+				nullIdx = 0
+			}
+			nulls := filtered.Vecs[nullIdx].GetNulls().GetBitmap().Clone()
 			filtered.ShrinkByMask(nulls, true, 0)
 			if filtered.RowCount() > 0 {
 				err = writer.insertSinkers[i].Write(proc.Ctx, filtered)
@@ -351,6 +377,18 @@ func (writer *s3WriterDelegate) append(
 	writer.memController.grantedSize += int64(increment)
 
 	return
+}
+
+func checkMainTableNotNull(proc *process.Process, updateCtx *MultiUpdateCtx, bat *batch.Batch) error {
+	for insertIdx := range updateCtx.InsertCols {
+		col := updateCtx.TableDef.Cols[insertIdx]
+		if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
+			if bat.Vecs[insertIdx].HasNull() {
+				return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+			}
+		}
+	}
+	return nil
 }
 
 func (writer *s3WriterDelegate) prepareDeleteBatches(

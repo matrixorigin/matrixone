@@ -63,7 +63,13 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
 	hashBuild.ctr.hashmapBuilder.DedupColTypes = hashBuild.DedupColTypes
 
-	return hashBuild.ctr.hashmapBuilder.Prepare(hashBuild.Conditions, hashBuild.DelColIdx, proc)
+	return hashBuild.ctr.hashmapBuilder.Prepare(
+		hashBuild.Conditions,
+		hashBuild.DelColIdx,
+		hashBuild.DedupDeleteMarkerColIdx,
+		hashBuild.DedupDeleteKeepColIdxList,
+		proc,
+	)
 }
 
 func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {

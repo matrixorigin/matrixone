@@ -220,3 +220,11 @@ id    name    email    value
 3    n1    n1_new@a.com    300
 4    n_new    n2@a.com    400
 drop table ai_multi_uk;
+drop table if exists t_replace_cross_key_keep_last;
+create table t_replace_cross_key_keep_last(id int primary key, u int unique, v int);
+insert into t_replace_cross_key_keep_last values (1, 100, 0);
+replace into t_replace_cross_key_keep_last values (1, 200, 10), (2, 200, 20);
+select * from t_replace_cross_key_keep_last order by id;
+id    u    v
+2    200    20
+drop table t_replace_cross_key_keep_last;

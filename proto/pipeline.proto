@@ -292,6 +292,8 @@ message DedupJoin {
   repeated int32 old_col_capture_placeholder_idx_list = 17;
   repeated int32 old_col_capture_probe_idx_list = 18;
   bool dedup_build_keep_last = 19;
+  repeated int32 dedup_delete_keep_col_idx_list = 20;
+  int32 dedup_delete_marker_col_idx = 21;
 }
 
 message RightDedupJoin {
@@ -400,6 +402,8 @@ message HashBuild {
   repeated plan.Type dedup_col_types = 14 [(gogoproto.nullable) = false];
   int32 del_col_idx = 15;
   bool dedup_build_keep_last = 16;
+  int32 dedup_delete_marker_col_idx = 17;
+  repeated int32 dedup_delete_keep_col_idx_list = 18;
 }
 
 message Indexbuild {

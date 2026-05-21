@@ -76,12 +76,14 @@ type HashBuild struct {
 	RuntimeFilterSpec *plan.RuntimeFilterSpec
 	SpillThreshold    int64
 
-	IsDedup            bool
-	DedupBuildKeepLast bool
-	DelColIdx          int32
-	OnDuplicateAction  plan.Node_OnDuplicateAction
-	DedupColName       string
-	DedupColTypes      []plan.Type
+	IsDedup                   bool
+	DedupBuildKeepLast        bool
+	DelColIdx                 int32
+	OnDuplicateAction         plan.Node_OnDuplicateAction
+	DedupColName              string
+	DedupColTypes             []plan.Type
+	DedupDeleteMarkerColIdx   int32
+	DedupDeleteKeepColIdxList []int32
 
 	vm.OperatorBase
 }

@@ -170,3 +170,11 @@ select * from ai_multi_uk order by id;
 replace into ai_multi_uk (name, email, value) values ('n_new', 'n2@a.com', 400);
 select * from ai_multi_uk order by id;
 drop table ai_multi_uk;
+
+-- test cross-key REPLACE keeps old-row delete side effects
+drop table if exists t_replace_cross_key_keep_last;
+create table t_replace_cross_key_keep_last(id int primary key, u int unique, v int);
+insert into t_replace_cross_key_keep_last values (1, 100, 0);
+replace into t_replace_cross_key_keep_last values (1, 200, 10), (2, 200, 20);
+select * from t_replace_cross_key_keep_last order by id;
+drop table t_replace_cross_key_keep_last;
