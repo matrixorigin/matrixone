@@ -916,3 +916,21 @@ func newTypedByteJson(tp bytejson.TpCode, s string) bytejson.ByteJson {
 	copy(data[n:], s)
 	return bytejson.ByteJson{Type: tp, Data: data[:n+l]}
 }
+
+// JSON_VALID
+func JsonValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// T_json input: internal representation is always valid JSON.
+	jsonValid := func(v []byte) (bool, error) {
+		return true, nil
+	}
+	// String input: try to parse as JSON.
+	strValid := func(v []byte) (bool, error) {
+		_, err := types.ParseSliceToByteJson(v)
+		return err == nil, nil
+	}
+	fn := jsonValid
+	if ivecs[0].GetType().Oid.IsMySQLString() {
+		fn = strValid
+	}
+	return opUnaryBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, fn, selectList)
+}
