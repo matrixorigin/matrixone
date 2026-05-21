@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -166,6 +165,25 @@ func (m *branchMetaInfo) baseLCASnapshot(tarSP types.TS) types.TS {
 	return tarSP
 }
 
+// tarLCAVisibleSnapshot returns the LCA snapshot that contributes rows to the
+// target endpoint state. Unlike tarLCASnapshot, this is not a tombstone probe
+// timestamp: when target itself is the LCA, its visible LCA state is bounded by
+// target's own endpoint snapshot.
+func (m *branchMetaInfo) tarLCAVisibleSnapshot(tarSP types.TS) types.TS {
+	if len(m.pathFromLCAToTar) > 1 {
+		return m.pathFromLCAToTarTS[1]
+	}
+	return tarSP
+}
+
+// baseLCAVisibleSnapshot is the base-side mirror of tarLCAVisibleSnapshot.
+func (m *branchMetaInfo) baseLCAVisibleSnapshot(baseSP types.TS) types.TS {
+	if len(m.pathFromLCAToBase) > 1 {
+		return m.pathFromLCAToBaseTS[1]
+	}
+	return baseSP
+}
+
 // lcaProbeSnapshot is the snapshot used by diffOnBase to fetch the
 // LCA relation handle when the LCA is a third-party node (neither
 // tar nor base). It is the earlier of the two per-side snapshots so
@@ -200,10 +218,6 @@ type tableStuff struct {
 	worker               *ants.Pool
 	hashmapAllocator     *branchHashmapAllocator
 	maxTombstoneBatchCnt int
-	// lcaReaderProbeMode is shared across copies of tableStuff in a single diff
-	// request. When enabled, LCA probing skips SQL and directly uses reader
-	// fallback.
-	lcaReaderProbeMode *atomic.Bool
 
 	retPool *retBatchList
 
@@ -250,6 +264,8 @@ type retBatchList struct {
 	tombVecCnt    int
 	dataTypes     []types.Type
 	tombstoneType types.Type
+	tombRowIDType types.Type
+	tombKeyType   types.Type
 }
 
 type compositeOption struct {
