@@ -34,8 +34,18 @@ func NewDataCache(
 	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
 	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
 ) *DataCache {
+	return NewDataCacheWithPrepareSet(capacity, nil, postSet, postGet, postEvict)
+}
+
+func NewDataCacheWithPrepareSet(
+	capacity fscache.CapacityFunc,
+	prepareSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) func(inserted bool),
+	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
+	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+) *DataCache {
 	return &DataCache{
-		fifo: New(capacity, shardCacheKey, postSet, postGet, postEvict),
+		fifo: NewWithPrepareSet(capacity, shardCacheKey, prepareSet, postSet, postGet, postEvict),
 	}
 }
 
