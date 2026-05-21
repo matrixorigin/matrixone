@@ -893,6 +893,19 @@ type NormalType interface {
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 0 {
+		if retType, ok := mixedStringNumericToVarchar(inputs); ok {
+			castType := make([]types.Type, len(inputs))
+			for i := range castType {
+				castType[i] = retType
+			}
+			for i, over := range overloads {
+				if len(over.args) == 1 && over.args[0] == retType.Oid {
+					return newCheckResultWithCast(i, castType)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+
 		minIndex := -1
 		minOid := types.T(0)
 		minCost := math.MaxInt
@@ -4122,6 +4135,109 @@ func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	return opBinaryFixedFixedToFixedWithErrorCheck[types.Date, int64, types.Date](ivecs, result, proc, length, func(v1 types.Date, v2 int64) (types.Date, error) {
 		return doDateSub(v1, v2, iTyp)
 	}, selectList)
+}
+
+func intToDate(v int32) (types.Date, error) {
+	year := v / 10000
+	month := uint8((v % 10000) / 100)
+	day := uint8(v % 100)
+	if !types.ValidDate(year, month, day) {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+	}
+	return types.DateFromCalendar(year, month, day), nil
+}
+
+func dateToInt(d types.Date) int32 {
+	year, month, day, _ := d.Calendar(true)
+	return year*10000 + int32(month)*100 + int32(day)
+}
+
+func DateIntSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
+	iTyp := types.IntervalType(unit)
+	if !types.UnitIsDayOrLarger(iTyp) {
+		return moerr.NewInvalidInputNoCtx("INT date does not support sub-day interval (HOUR/MINUTE/SECOND); cast to DATETIME first")
+	}
+
+	rs := vector.MustFunctionResult[int32](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int32](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	p1 := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			rsNull.Add(i)
+		} else {
+			if v2 == math.MaxInt64 {
+				rsNull.Add(i)
+				continue
+			}
+			d, err := intToDate(v1)
+			if err != nil {
+				rsNull.Add(i)
+				continue
+			}
+			resultDt, err := doDateSub(d, v2, iTyp)
+			if err != nil {
+				if isDatetimeOverflowMaxError(err) {
+					rsNull.Add(i)
+					continue
+				}
+				return err
+			}
+			rss[i] = dateToInt(resultDt)
+		}
+	}
+	return nil
+}
+
+func DateIntAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
+	iTyp := types.IntervalType(unit)
+	if !types.UnitIsDayOrLarger(iTyp) {
+		return moerr.NewInvalidInputNoCtx("INT date does not support sub-day interval (HOUR/MINUTE/SECOND); cast to DATETIME first")
+	}
+
+	rs := vector.MustFunctionResult[int32](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int32](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	p1 := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			rsNull.Add(i)
+		} else {
+			if v2 == math.MaxInt64 {
+				rsNull.Add(i)
+				continue
+			}
+			d, err := intToDate(v1)
+			if err != nil {
+				rsNull.Add(i)
+				continue
+			}
+			resultDt, err := doDateAdd(d, v2, iTyp)
+			if err != nil {
+				if isDatetimeOverflowMaxError(err) {
+					rsNull.Add(i)
+					continue
+				}
+				return err
+			}
+			rss[i] = dateToInt(resultDt)
+		}
+	}
+	return nil
 }
 
 func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {

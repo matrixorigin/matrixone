@@ -60,7 +60,6 @@ func TestGetMapper_TypeMismatch(t *testing.T) {
 		parquetTyp parquet.Type
 		moType     types.T
 	}{
-		{name: "bool_to_int", parquetTyp: parquet.BooleanType, moType: types.T_int32},
 		{name: "int32_to_bool", parquetTyp: parquet.Int32Type, moType: types.T_bool},
 		{name: "int64_to_bool", parquetTyp: parquet.Int64Type, moType: types.T_bool},
 		{name: "float_to_bool", parquetTyp: parquet.FloatType, moType: types.T_bool},

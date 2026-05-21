@@ -228,6 +228,9 @@ null
 SELECT COALESCE(NULL, NULL, NULL, 'W3Schools.com', NULL, 'Example.com');
 COALESCE(NULL, NULL, NULL, 'W3Schools.com', NULL, 'Example.com')
 W3Schools.com
+SELECT COALESCE(NULL, 1, 'string', 1.5);
+COALESCE(NULL, 1, 'string', 1.5)
+1
 SELECT COALESCE(1)+COALESCE(1);
 COALESCE(1)+COALESCE(1)
 2

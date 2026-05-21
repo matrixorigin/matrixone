@@ -98,3 +98,25 @@ func (b *bytesAllocator) CopyToCacheData(ctx context.Context, data []byte) fscac
 	copy(ret.Bytes(), data)
 	return ret
 }
+
+type cacheCapacityGuardedAllocator struct {
+	cache     fscache.DataCache
+	allocator CacheDataAllocator
+}
+
+var _ CacheDataAllocator = cacheCapacityGuardedAllocator{}
+
+func (c cacheCapacityGuardedAllocator) AllocateCacheData(ctx context.Context, size int) fscache.Data {
+	c.cache.EnsureNBytes(ctx, size)
+	return c.allocator.AllocateCacheData(ctx, size)
+}
+
+func (c cacheCapacityGuardedAllocator) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
+	c.cache.EnsureNBytes(ctx, size)
+	return c.allocator.AllocateCacheDataWithHint(ctx, size, hints)
+}
+
+func (c cacheCapacityGuardedAllocator) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
+	c.cache.EnsureNBytes(ctx, len(data))
+	return c.allocator.CopyToCacheData(ctx, data)
+}

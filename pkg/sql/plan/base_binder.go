@@ -512,6 +512,16 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
 
+	// A subquery is a nested SELECT and must not inherit the outer FOR UPDATE
+	// state. MySQL only locks rows in the outer query; rows reached through
+	// EXISTS/IN/scalar subqueries are not locked unless the subquery itself
+	// also specifies FOR UPDATE.
+	savedIsForUpdate := b.builder.isForUpdate
+	b.builder.isForUpdate = false
+	defer func() {
+		b.builder.isForUpdate = savedIsForUpdate
+	}()
+
 	var nodeID int32
 	var err error
 	switch subquery := astExpr.Select.(type) {
@@ -1682,6 +1692,18 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
+		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_int64) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int32) && intervalUnitIsDayOrLarger(args[0]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
+		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int64) && intervalUnitIsDayOrLarger(args[0]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
 		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "concat"
 		}
@@ -1709,6 +1731,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
+			name = "date_sub"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
+			name = "date_sub"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_int64) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		}
@@ -2777,6 +2805,19 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 		numberExpr,
 		makePlan2Int64ConstExprWithType(int64(intervalType)),
 	}, nil
+}
+
+func intervalUnitIsDayOrLarger(intervalExpr *Expr) bool {
+	list := intervalExpr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return false
+	}
+	unitStr := list.List[1].GetLit().GetSval()
+	iTyp, err := types.IntervalTypeOf(unitStr)
+	if err != nil {
+		return false
+	}
+	return types.UnitIsDayOrLarger(iTyp)
 }
 
 func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, rightList *plan.ExprList) (*plan.Expr, error) {
