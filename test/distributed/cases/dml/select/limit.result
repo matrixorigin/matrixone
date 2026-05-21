@@ -14,9 +14,9 @@ a
 select * from t1 limit 18446744073709551615,0;
 a
 select * from t1 limit -1,18446744073709551615;
-SQL syntax error: only uint64 support in limit/offset clause
+SQL syntax error: OFFSET must be a non-negative integer
 select * from t1 limit 0,-1;
-SQL syntax error: only uint64 support in limit/offset clause
+SQL syntax error: LIMIT must be a non-negative integer
 select * from t1 limit 0,0;
 a
 select * from t1 limit 0,3;
@@ -46,9 +46,9 @@ a
 select * from t1 order by a limit 18446744073709551615,0;
 a
 select * from t1 order by a limit -1,18446744073709551615;
-SQL syntax error: only uint64 support in limit/offset clause
+SQL syntax error: OFFSET must be a non-negative integer
 select * from t1 order by a limit 0,-1;
-SQL syntax error: only uint64 support in limit/offset clause
+SQL syntax error: LIMIT must be a non-negative integer
 select * from t1 order by a limit 0,0;
 a
 drop table if exists t1;
