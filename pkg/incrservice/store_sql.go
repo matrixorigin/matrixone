@@ -294,6 +294,40 @@ func (s *sqlStore) UpdateMinValue(
 	return nil
 }
 
+func (s *sqlStore) SetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp)
+	if txnOp == nil {
+		opts = opts.
+			WithWaitCommittedLogApplied().
+			WithEnableTrace().
+			WithDisableWaitPaused().
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	} else {
+		opts = opts.WithDisableIncrStatement()
+	}
+	res, err := s.exec.Exec(
+		ctx,
+		fmt.Sprintf(
+			"update %s set offset = %d where table_id = %d and col_name = '%s' and offset < %d",
+			incrTableName, offset, tableID, colName, offset,
+		),
+		opts,
+	)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	return nil
+}
+
 func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
 	opts := executor.Options{}.
 		WithDatabase(database).
