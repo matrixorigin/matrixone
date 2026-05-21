@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -209,6 +210,12 @@ func Test_service_handleGoGCPercent(t *testing.T) {
 
 func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 	ctx := context.Background()
+	oldMPoolCap := mpool.GlobalCap()
+	oldMemoryCacheSize := fileservice.GlobalMemoryCacheSizeHint.Load()
+	defer func() {
+		mpool.InitCap(oldMPoolCap)
+		fileservice.GlobalMemoryCacheSizeHint.Store(oldMemoryCacheSize)
+	}()
 	type fields struct{}
 	type args struct {
 		ctx  context.Context
@@ -235,13 +242,13 @@ func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 			wantErr: nil,
 		},
 		{
-			name:   "normal",
+			name:   "memory cache size also caps mpool",
 			fields: fields{},
 			args: args{
 				ctx: ctx,
 				req: &query.Request{FileServiceCacheRequest: query.FileServiceCacheRequest{
 					Type:      query.FileServiceCacheType_Memory,
-					CacheSize: 0,
+					CacheSize: 2 * mpool.GB,
 				}},
 				resp: &query.Response{},
 			},
@@ -253,6 +260,11 @@ func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 			s := &service{}
 			err := s.handleFileServiceCacheRequest(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
+			if tt.args.req.FileServiceCacheRequest.Type == query.FileServiceCacheType_Memory &&
+				tt.args.req.FileServiceCacheRequest.CacheSize > 0 {
+				require.Equal(t, tt.args.req.FileServiceCacheRequest.CacheSize, fileservice.GlobalMemoryCacheSizeHint.Load())
+				require.Equal(t, tt.args.req.FileServiceCacheRequest.CacheSize, mpool.GlobalCap())
+			}
 		})
 	}
 }

@@ -168,6 +168,8 @@ const (
 
 var PoolElemSize = [NumFixedPool]int32{64, 128, 256, 512, 1024}
 
+const enableFixedPool = true
+
 // Memory header, kMemHdrSz bytes.
 type memHdr struct {
 	poolId       int64
@@ -231,7 +233,11 @@ func (fp *fixedPool) alloc() *memHdr {
 	}
 
 	if fp.flist == nil {
-		buf := make([]byte, kStripeSize*(fp.eleSz+kMemHdrSz))
+		slabSize := uint64(kStripeSize * (fp.eleSz + kMemHdrSz))
+		buf, err := simpleCAllocator().Malloc(slabSize)
+		if err != nil {
+			panic(err)
+		}
 		fp.buf = append(fp.buf, buf)
 		ret := unsafe.Pointer(&buf[0])
 		pHdr := (*memHdr)(ret)
@@ -240,6 +246,7 @@ func (fp *fixedPool) alloc() *memHdr {
 		pHdr.fixedPoolIdx = fp.fpIdx
 		pHdr.offHeap = true
 		pHdr.SetGuard()
+		clear(unsafe.Slice((*byte)(unsafe.Add(ret, kMemHdrSz)), fp.eleSz))
 
 		ptr := unsafe.Add(ret, fp.eleSz+kMemHdrSz)
 		for i := 1; i < kStripeSize; i++ {
@@ -281,6 +288,21 @@ func (fp *fixedPool) free(hdr *memHdr) {
 	hdr.allocSz = -1
 	fp.setNextPtr(ptr, fp.flist)
 	fp.flist = ptr
+}
+
+func (fp *fixedPool) destroy() {
+	if !fp.noLock {
+		fp.m.Lock()
+		defer fp.m.Unlock()
+	}
+	for _, buf := range fp.buf {
+		if len(buf) == 0 {
+			continue
+		}
+		simpleCAllocator().Deallocate(buf, uint64(cap(buf)))
+	}
+	fp.buf = nil
+	fp.flist = nil
 }
 
 type detailInfo struct {
@@ -393,7 +415,9 @@ func (mp *MPool) deallocateAllPtrs() {
 		if hdr.offHeap {
 			sz := int(hdr.allocSz)
 			profileRecordFree(uintptr(ptr), int64(sz))
-			simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
+			if hdr.fixedPoolIdx >= NumFixedPool {
+				simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
+			}
 		}
 	}
 	mp.ptrs = nil
@@ -465,6 +489,9 @@ func (mp *MPool) destroy() {
 	globalStats.RecordManyFrees(mp.tag,
 		mp.stats.NumAlloc.Load()-mp.stats.NumFree.Load(),
 		mp.stats.NumCurrBytes.Load())
+	for i := range mp.pools {
+		mp.pools[i].destroy()
+	}
 }
 
 // New a MPool.   Tag is user supplied, used for debugging/diagnostics.
@@ -632,7 +659,7 @@ func (mp *MPool) alloc(detailk string, sz int64, offHeap bool) ([]byte, error) {
 	var bs []byte
 	var err error
 
-	if offHeap {
+	if offHeap && enableFixedPool {
 		idx := sizeToFixedPoolIdx(sz)
 		if idx < NumFixedPool {
 			capacity := int64(mp.pools[idx].eleSz)
@@ -1025,8 +1052,7 @@ func calculateNewCap(oldCap int64, requiredSize int64) int64 {
 	if requiredSize > doublecap {
 		newcap = requiredSize
 	} else {
-		// performance: use a larger threshold (256 -> 4096)
-		const threshold = 4096
+		const threshold = 256
 		if newcap < threshold {
 			newcap = doublecap
 		} else {
