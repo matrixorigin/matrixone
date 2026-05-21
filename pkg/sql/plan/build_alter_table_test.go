@@ -656,13 +656,19 @@ func TestAlterTableAlgorithmValidation(t *testing.T) {
 		runTestShouldError(mock, t, sqls)
 	})
 
-	t.Run("ADD INDEX accepts any ALGORITHM hint", func(t *testing.T) {
+	t.Run("INPLACE-eligible operations accept ALGORITHM=INPLACE and ALGORITHM=INSTANT", func(t *testing.T) {
 		sqls := []string{
 			`ALTER TABLE t1 ALGORITHM=INPLACE, ADD INDEX idx_a(a);`,
 			`ALTER TABLE t1 ALGORITHM=INSTANT, ADD INDEX idx_a(a);`,
-			`ALTER TABLE t1 ALGORITHM=COPY, ADD INDEX idx_a(a);`,
+			`ALTER TABLE t1 ALGORITHM=DEFAULT, ADD INDEX idx_a(a);`,
 		}
 		runTestShouldPass(mock, t, sqls, false, false)
+	})
+
+	t.Run("INPLACE-eligible operations reject ALGORITHM=COPY", func(t *testing.T) {
+		_, err := buildSingleStmt(mock, t,
+			`ALTER TABLE t1 ALGORITHM=COPY, ADD INDEX idx_a(a);`)
+		assert.ErrorContains(t, err, "unsupported alter option in copy mode")
 	})
 
 	t.Run("COPY with LOCK=NONE", func(t *testing.T) {
