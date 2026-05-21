@@ -343,6 +343,34 @@ select count(*) as cnt from hive_single where year = 2024 and __mo_filepath like
 select count(*) as cnt from hive_single where year = 2024 and __mo_filepath like '%year=2020%';
 ➤ cnt[-5,64,0]  𝄀
 0
+drop table if exists hive_fanout_small;
+create external table hive_fanout_small (
+id int,
+amount double,
+part_id int
+) infile{'filepath'='$resources/hive_partition/fanout_small/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select count(*) as cnt from hive_fanout_small;
+➤ cnt[-5,64,0]  𝄀
+100
+select count(distinct __mo_filepath) as paths from hive_fanout_small;
+➤ paths[-5,64,0]  𝄀
+20
+select part_id, count(*) as rows_per_part, count(distinct __mo_filepath) as files_per_part
+from hive_fanout_small group by part_id order by part_id;
+➤ part_id[4,32,0]  ¦  rows_per_part[-5,64,0]  ¦  files_per_part[-5,64,0]  𝄀
+0  ¦  10  ¦  2  𝄀
+1  ¦  10  ¦  2  𝄀
+2  ¦  10  ¦  2  𝄀
+3  ¦  10  ¦  2  𝄀
+4  ¦  10  ¦  2  𝄀
+5  ¦  10  ¦  2  𝄀
+6  ¦  10  ¦  2  𝄀
+7  ¦  10  ¦  2  𝄀
+8  ¦  10  ¦  2  𝄀
+9  ¦  10  ¦  2
+select count(*) as cnt from hive_fanout_small where part_id in (1, 3, 9);
+➤ cnt[-5,64,0]  𝄀
+30
 explain (check '["External Scan", "Filter Cond"]') select * from hive_single where year = 2024;
 ➤ AP QUERY PLAN ON MULTICN(10 core)[12,0,0]  𝄀
 Project  𝄀
