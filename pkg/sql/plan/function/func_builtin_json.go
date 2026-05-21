@@ -15,12 +15,14 @@
 package function
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -1155,4 +1157,118 @@ func buildJsonKeysArray(bj bytejson.ByteJson) ([]byte, error) {
 		return nil, err
 	}
 	return raw, nil
+}
+
+// JSON_PRETTY
+func JsonPretty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	isString := ivecs[0].GetType().Oid.IsMySQLString()
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetStrValue(i)
+		if null {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		var bj bytejson.ByteJson
+		var err error
+		if isString {
+			bj, err = types.ParseSliceToByteJson(v)
+		} else {
+			bj = types.DecodeJson(v)
+		}
+		if err != nil {
+			return moerr.NewInvalidArg(proc.Ctx, "json_pretty", "invalid JSON document")
+		}
+		out, err := jsonPrettyPrint(bj, 0)
+		if err != nil {
+			return err
+		}
+		rs.AppendMustBytesValue(out)
+	}
+	return nil
+}
+
+func jsonPrettyPrint(bj bytejson.ByteJson, depth int) ([]byte, error) {
+	var buf bytes.Buffer
+	err := jsonPrettyPrintTo(&buf, bj, depth)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func jsonPrettyPrintTo(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
+	switch bj.Type {
+	case bytejson.TpCodeObject:
+		return prettyPrintObject(w, bj, depth)
+	case bytejson.TpCodeArray:
+		return prettyPrintArray(w, bj, depth)
+	default:
+		return prettyPrintScalar(w, bj)
+	}
+}
+
+func prettyPrintObject(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
+	cnt := bj.GetElemCnt()
+	if cnt == 0 {
+		w.WriteString("{}")
+		return nil
+	}
+	indent := strings.Repeat("  ", depth+1)
+	w.WriteString("{\n")
+	for i := 0; i < cnt; i++ {
+		key := bj.GetObjectKey(i)
+		// Escape key the same way JSON_QUOTE would.
+		keyJSON, _ := json.Marshal(string(key))
+		w.WriteString(indent)
+		w.Write(keyJSON)
+		w.WriteString(": ")
+		val := bj.GetObjectVal(i)
+		if err := jsonPrettyPrintTo(w, val, depth+1); err != nil {
+			return err
+		}
+		if i < cnt-1 {
+			w.WriteString(",")
+		}
+		w.WriteString("\n")
+	}
+	w.WriteString(strings.Repeat("  ", depth))
+	w.WriteString("}")
+	return nil
+}
+
+func prettyPrintArray(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
+	cnt := bj.GetElemCnt()
+	if cnt == 0 {
+		w.WriteString("[]")
+		return nil
+	}
+	indent := strings.Repeat("  ", depth+1)
+	w.WriteString("[\n")
+	for i := 0; i < cnt; i++ {
+		w.WriteString(indent)
+		elem := bj.GetArrayElem(i)
+		if err := jsonPrettyPrintTo(w, elem, depth+1); err != nil {
+			return err
+		}
+		if i < cnt-1 {
+			w.WriteString(",")
+		}
+		w.WriteString("\n")
+	}
+	w.WriteString(strings.Repeat("  ", depth))
+	w.WriteString("]")
+	return nil
+}
+
+func prettyPrintScalar(w *bytes.Buffer, bj bytejson.ByteJson) error {
+	// Use MarshalJSON to get properly formatted/escaped scalar value.
+	text, err := bj.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	w.Write(text)
+	return nil
 }

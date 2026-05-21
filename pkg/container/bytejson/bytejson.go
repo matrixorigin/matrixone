@@ -261,6 +261,16 @@ func (bj ByteJson) GetObjectKey(i int) []byte {
 	return bj.getObjectKey(i)
 }
 
+// GetObjectVal returns the value at index i of a JSON object.
+func (bj ByteJson) GetObjectVal(i int) ByteJson {
+	return bj.getObjectVal(i)
+}
+
+// GetArrayElem returns the element at index i of a JSON array.
+func (bj ByteJson) GetArrayElem(i int) ByteJson {
+	return bj.getArrayElem(i)
+}
+
 func (bj ByteJson) getArrayElem(i int) ByteJson {
 	return bj.getValEntry(headerSize + i*valEntrySize)
 }

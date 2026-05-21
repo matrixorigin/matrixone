@@ -138,6 +138,78 @@ func TestJsonKeys(t *testing.T) {
 	})
 }
 
+func TestJsonPretty(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("scalar", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_pretty scalar",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"123", `"hello"`, "true", "null"},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"123", `"hello"`, "true", "null"},
+				[]bool{false, false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonPretty)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("empty_array", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_pretty empty array",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"[]"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"[]"},
+				[]bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonPretty)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("empty_object", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_pretty empty object",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"{}"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"{}"},
+				[]bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonPretty)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("null_input", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_pretty null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1}`, ""},
+					[]bool{false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"{\n  \"a\": 1\n}", ""},
+				[]bool{false, true}), // null → NULL
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonPretty)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
 func TestJsonValid(t *testing.T) {
 	testCases := initJsonValidTestCase()
 

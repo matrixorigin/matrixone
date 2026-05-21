@@ -1,0 +1,52 @@
+select json_pretty('123');
+json_pretty(123)
+123
+select json_pretty('"hello"');
+json_pretty("hello")
+"hello"
+select json_pretty('true');
+json_pretty(true)
+true
+select json_pretty('null');
+json_pretty(null)
+null
+select json_pretty('[1,3,5]');
+json_pretty([1,3,5])
+[\n  1,\n  3,\n  5\n]
+select json_pretty('[]');
+json_pretty([])
+[]
+select json_pretty('[1]');
+json_pretty([1])
+[\n  1\n]
+select json_pretty('{"a":"10","b":"15","x":"25"}');
+json_pretty({"a":"10","b":"15","x":"25"})
+{\n  "a": "10",\n  "b": "15",\n  "x": "25"\n}
+select json_pretty('{}');
+json_pretty({})
+{}
+select json_pretty('{"key":"value"}');
+json_pretty({"key":"value"})
+{\n  "key": "value"\n}
+select json_pretty('{"a":1,"b":[2,3],"c":{"d":4}}');
+json_pretty({"a":1,"b":[2,3],"c":{"d":4}})
+{\n  "a": 1,\n  "b": [\n    2,\n    3\n  ],\n  "c": {\n    "d": 4\n  }\n}
+select json_pretty(null);
+json_pretty(null)
+null
+select json_pretty(json_array(1, 2, 3));
+json_pretty(json_array(1, 2, 3))
+[\n  1,\n  2,\n  3\n]
+select json_pretty(json_object('a', 1, 'b', 2));
+json_pretty(json_object(a, 1, b, 2))
+{\n  "a": 1,\n  "b": 2\n}
+drop table if exists t1;
+create table t1 (a varchar(200));
+insert into t1 values ('[1,2,3]'), ('{"a":1}'), ('"hello"'), (null);
+select json_pretty(a) from t1;
+json_pretty(a)
+[\n  1,\n  2,\n  3\n]
+{\n  "a": 1\n}
+"hello"
+null
+drop table t1;
