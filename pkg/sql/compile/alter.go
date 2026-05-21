@@ -54,6 +54,10 @@ func convertDBEOBToNoSuchTable(ctx context.Context, e error, dbName, tblName str
 	return e
 }
 
+func shouldEnableAlterCopyPipelineFlush(qry *plan.AlterTable) bool {
+	return qry != nil && qry.Options != nil && qry.Options.SkipPkDedup
+}
+
 func (s *Scope) AlterTableCopy(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := qry.Database
@@ -192,13 +196,27 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 
 	// 6. copy the original table data to the temporary replica table
-	// Enable pipeline flush for the INSERT to parallelize serialization
-	origCtx := c.proc.Ctx
-	c.proc.Ctx = context.WithValue(origCtx, ioutil.PipelineFlushKey, true)
-	defer func() {
-		c.proc.Ctx = origCtx
+	err = func() error {
+		if !shouldEnableAlterCopyPipelineFlush(qry) {
+			return c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
+		}
+
+		// Enable pipeline flush only when PK dedup can be skipped. Add/change PK
+		// still needs the normal insert-copy path to avoid excessive conflict checks.
+		origCtx := c.proc.Ctx
+		restoreCtx := origCtx
+		if restoreCtx == nil {
+			restoreCtx = c.proc.GetTopContext()
+			if restoreCtx == nil {
+				restoreCtx = context.Background()
+			}
+		}
+		c.proc.Ctx = context.WithValue(restoreCtx, ioutil.PipelineFlushKey, true)
+		defer func() {
+			c.proc.Ctx = restoreCtx
+		}()
+		return c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
 	}()
-	err = c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "insert data to copy table for alter table",
 			zap.String("databaseName", dbName),
