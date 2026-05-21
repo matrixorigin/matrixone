@@ -844,29 +844,15 @@ func (h *Handle) HandleWrite(
 			return
 		}
 		//check the input batch passed by cn is valid.
-		for i, vec := range req.Batch.Vecs {
-			if vec == nil {
-				logutil.Fatal(
-					"INVALID-INSERT-BATCH-NIL-VEC",
-					zap.Int("idx", i),
-					zap.Uint64("table-id", req.TableID),
-					zap.String("table-name", req.TableName),
-					zap.String("txn", txn.String()),
-				)
-			}
-			if i == 0 {
-				inMemoryInsertRows = vec.Length()
-			}
-			if vec.Length() != inMemoryInsertRows {
-				logutil.Fatal(
-					"INVALID-INSERT-BATCH-DIFF-LENGTH",
-					zap.Int("idx", i),
-					zap.Uint64("table-id", req.TableID),
-					zap.String("table-name", req.TableName),
-					zap.String("rows", fmt.Sprintf("%d/%d", vec.Length(), inMemoryInsertRows)),
-					zap.String("txn", txn.String()),
-				)
-			}
+		if inMemoryInsertRows, err = validateInsertBatch(ctx, req); err != nil {
+			logutil.Error(
+				"invalid insert batch",
+				zap.Error(err),
+				zap.Uint64("table-id", req.TableID),
+				zap.String("table-name", req.TableName),
+				zap.String("txn", txn.String()),
+			)
+			return
 		}
 
 		// TODO: debug for #13342, remove me later
@@ -1003,6 +989,43 @@ func (h *Handle) HandleWrite(
 	//	}
 	//}
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
+	return
+}
+
+func validateInsertBatch(ctx context.Context, req *cmd_util.WriteReq) (rows int, err error) {
+	if req.Batch == nil {
+		return 0, moerr.NewInternalErrorf(
+			ctx,
+			"INVALID-INSERT-BATCH-NIL-BATCH table-id=%d table-name=%s",
+			req.TableID,
+			req.TableName,
+		)
+	}
+	for i, vec := range req.Batch.Vecs {
+		if vec == nil {
+			return 0, moerr.NewInternalErrorf(
+				ctx,
+				"INVALID-INSERT-BATCH-NIL-VEC idx=%d table-id=%d table-name=%s",
+				i,
+				req.TableID,
+				req.TableName,
+			)
+		}
+		if i == 0 {
+			rows = vec.Length()
+		}
+		if vec.Length() != rows {
+			return 0, moerr.NewInternalErrorf(
+				ctx,
+				"INVALID-INSERT-BATCH-DIFF-LENGTH idx=%d table-id=%d table-name=%s rows=%d/%d",
+				i,
+				req.TableID,
+				req.TableName,
+				vec.Length(),
+				rows,
+			)
+		}
+	}
 	return
 }
 
