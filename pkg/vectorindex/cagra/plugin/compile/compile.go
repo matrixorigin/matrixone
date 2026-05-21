@@ -187,6 +187,10 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.
 // by BuildIdxcronMetadata's ctx.IsFrontend() check.
 func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 	return compileplugin.BuildIdxcronMetadata(ctx, compileplugin.IdxcronVarSpec{
+		// Second-level gate after ctx.IsFrontend(): a sub-Compile
+		// inheriting a partial frontend resolver returns nil here →
+		// defer to background semantics.
+		FrontendProbeVar: "cagra_threads_search",
 		Capture: []string{
 			"cagra_threads_build",
 			"cagra_max_index_capacity",

@@ -237,6 +237,7 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.
 // metadata blob — see CAGRA's compile.go for the rationale.
 func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 	return compileplugin.BuildIdxcronMetadata(ctx, compileplugin.IdxcronVarSpec{
+		FrontendProbeVar: "ivfpq_threads_search",
 		Capture: []string{
 			"ivfpq_threads_build",
 			"ivfpq_max_index_capacity",

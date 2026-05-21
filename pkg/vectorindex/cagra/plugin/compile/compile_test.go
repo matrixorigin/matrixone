@@ -222,16 +222,20 @@ func TestCagraIdxcronMetadata_Background(t *testing.T) {
 	require.Nil(t, got, "background invocation should yield nil metadata")
 }
 
-// TestCagraIdxcronMetadata_NilValueSkipped: a sysvar that resolves to
-// (nil, nil) — the CREATE TABLE CLONE scenario where a session lookup
-// returns nil for a registered-but-not-session-set var — must be
-// skipped, not error. Reproduces the BVT regression seen on
-// `create table db1.t9_copy clone db1.t9;`.
-func TestCagraIdxcronMetadata_NilValueSkipped(t *testing.T) {
+// TestCagraIdxcronMetadata_ProbeFail: a sub-Compile context where the
+// frontend probe sysvar resolves to nil (the CREATE TABLE CLONE
+// scenario — IsFrontend=true but the inherited session resolver is
+// partial) must defer to background semantics. The whole metadata
+// blob is nil, not partially captured. Reproduces the BVT regression
+// seen on `create table db1.t9_copy clone db1.t9;`.
+func TestCagraIdxcronMetadata_ProbeFail(t *testing.T) {
 	ctx := &stubCompileContext{
 		isFrontend: true,
 		vars: map[string]any{
-			"cagra_threads_build":      nil, // simulates session returning (nil, nil)
+			// FrontendProbeVar ("cagra_threads_search") set to nil
+			// simulates the sub-Compile resolver returning (nil, nil).
+			"cagra_threads_search":     nil,
+			"cagra_threads_build":      int64(8),
 			"cagra_max_index_capacity": int64(1000000),
 			"lower_case_table_names":   int64(1),
 			"experimental_cagra_index": int8(1),
@@ -239,9 +243,7 @@ func TestCagraIdxcronMetadata_NilValueSkipped(t *testing.T) {
 	}
 	got, err := Hooks{}.IdxcronMetadata(ctx)
 	require.NoError(t, err)
-	require.NotEmpty(t, got, "nil value should be skipped, not abort")
-	// The captured blob still contains the other (non-nil) vars.
-	require.Contains(t, string(got), "cagra_max_index_capacity")
+	require.Nil(t, got, "probe-fail should defer to background, not partial capture")
 }
 
 // experimentalFlagCtx wraps the stub to toggle IsExperimentalEnabled.
