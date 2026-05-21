@@ -1125,6 +1125,27 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		return err
 	}
 
+	// post alter table auto_increment -- update incrservice offset
+	for _, req := range reqs {
+		if req.Kind == api.AlterKind_UpdateAutoIncrement {
+			autoCols := incrservice.GetAutoColumnFromDef(qry.GetTableDef())
+			sid := c.proc.GetService()
+			s := incrservice.GetAutoIncrementService(sid)
+			for _, col := range autoCols {
+				err = s.SetOffset(
+					c.proc.Ctx,
+					req.TableId,
+					col.ColName,
+					req.GetUpdateAutoIncrement().Offset,
+					c.proc.GetTxnOperator(),
+				)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	// post alter table rename -- AlterKind_RenameTable to update iscp job
 	for _, req := range reqs {
 		if req.Kind == api.AlterKind_RenameTable {

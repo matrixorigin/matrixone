@@ -284,6 +284,8 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		}
 		logutil.Infof("[Alter] rename table %s -> %s", s.Name, rename.NewName)
 		s.Name = rename.NewName
+	case apipb.AlterKind_UpdateAutoIncrement:
+		// offset update handled by incrservice; schema side is no-op
 	default:
 		return moerr.NewNYINoCtxf("unsupported alter kind: %v", req.Kind)
 	}

@@ -1690,6 +1690,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			hasReplaceDef = true
 			re := req.GetRenameCol()
 			renameColMap[re.OldName] = re.NewName
+		case api.AlterKind_UpdateAutoIncrement:
+			// handled by incrservice in compile step; engine side is no-op
 		default:
 			panic("not supported")
 		}

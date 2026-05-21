@@ -68,6 +68,8 @@ type AutoIncrementService interface {
 	CurrentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
 	// Reload reload auto increment cache.
 	Reload(ctx context.Context, tableID uint64) error
+	// SetOffset sets the offset of an auto-increment column and refreshes local cache.
+	SetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txn client.TxnOperator) error
 	// Close close the auto increment service
 	Close()
 	// GetLastAllocateTS get last allocate timestamp for columnCache
@@ -133,6 +135,8 @@ type IncrValueStore interface {
 	Allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error)
 	// UpdateMinValue update auto column min value to specified value.
 	UpdateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
+	// SetOffset updates the offset of an auto-increment column. If the current offset is already >= the new offset, this is a no-op.
+	SetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txnOp client.TxnOperator) error
 	// Delete remove metadata records from catalog.AutoIncrTableName.
 	Delete(ctx context.Context, tableID uint64) error
 	// Close the store

@@ -280,6 +280,19 @@ func (s *service) Reload(
 	return nil
 }
 
+func (s *service) SetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	if err := s.store.SetOffset(ctx, tableID, colName, offset, txnOp); err != nil {
+		return err
+	}
+	return s.Reload(ctx, tableID)
+}
+
 func (s *service) Close() {
 	s.stopper.Stop()
 
