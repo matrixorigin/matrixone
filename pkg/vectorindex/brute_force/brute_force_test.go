@@ -242,19 +242,20 @@ func TestNewBruteForceIndexHelpers(t *testing.T) {
 	dimension := uint(3)
 	elemsz := uint(4)
 
-	// CPU helper -> Go index
-	idx, err := NewBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz, 1)
+	// CPU helper -> Go index. gpuMode=false forces the CPU path on
+	// gpu builds, matching the behavior the test names imply.
+	idx, err := NewBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz, 1, false)
 	require.NoError(t, err)
 	require.NotNil(t, idx)
 
 	// Adhoc -> Usearch
-	idx2, err := NewAdhocBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz)
+	idx2, err := NewAdhocBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz, false)
 	require.NoError(t, err)
 	require.NotNil(t, idx2)
 
 	// Adhoc flattened
 	flat := []float32{1, 2, 3, 3, 4, 5}
-	idx3, err := NewAdhocBruteForceIndexFlattened[float32](flat, 2, dimension, metric.Metric_L2sqDistance, elemsz)
+	idx3, err := NewAdhocBruteForceIndexFlattened[float32](flat, 2, dimension, metric.Metric_L2sqDistance, elemsz, false)
 	require.NoError(t, err)
 	require.NotNil(t, idx3)
 

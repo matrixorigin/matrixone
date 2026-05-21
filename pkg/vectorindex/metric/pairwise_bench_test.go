@@ -17,6 +17,8 @@ package metric
 import (
 	"math/rand"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
 
 func BenchmarkPairWiseDistance(b *testing.B) {
@@ -38,7 +40,7 @@ func BenchmarkPairWiseDistance(b *testing.B) {
 
 	b.Run("PairWiseDistance", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_, _ = PairWiseDistance(x, y, Metric_L2sqDistance)
+			_, _ = PairWiseDistance(x, y, Metric_L2sqDistance, gpumode.GpuMode)
 		}
 	})
 
@@ -68,7 +70,7 @@ func BenchmarkPairWiseDistanceLarge(b *testing.B) {
 
 	b.Run("PairWiseDistance-Large", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_, _ = PairWiseDistance(x, y, Metric_L2sqDistance)
+			_, _ = PairWiseDistance(x, y, Metric_L2sqDistance, gpumode.GpuMode)
 		}
 	})
 
@@ -98,7 +100,7 @@ func BenchmarkPairwiseDistanceAsync(b *testing.B) {
 
 	b.Run("Sync", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_, _ = PairWiseDistance(x, y, Metric_L2sqDistance)
+			_, _ = PairWiseDistance(x, y, Metric_L2sqDistance, gpumode.GpuMode)
 		}
 	})
 
@@ -106,7 +108,7 @@ func BenchmarkPairwiseDistanceAsync(b *testing.B) {
 		dist := make([]float32, nX*nY)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			handle, err := PairwiseDistanceLaunch(x, y, Metric_L2sqDistance, dist, GPUThresholdSync)
+			handle, err := PairwiseDistanceLaunch(x, y, Metric_L2sqDistance, dist, GPUThresholdSync, gpumode.GpuMode)
 			if err != nil {
 				b.Fatal(err)
 			}

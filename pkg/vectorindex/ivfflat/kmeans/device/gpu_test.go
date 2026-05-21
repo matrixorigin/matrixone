@@ -45,7 +45,7 @@ func TestGpu(t *testing.T) {
 		}
 	}
 
-	c, err := NewKMeans[float32](vecs, nlist, 10, 0, metric.Metric_L2Distance, 0, false, 0)
+	c, err := NewKMeans[float32](vecs, nlist, 10, 0, metric.Metric_L2Distance, 0, false, 0, true)
 	require.NoError(t, err)
 
 	defer c.Close()
@@ -86,7 +86,7 @@ func TestIVFAndBruteForce(t *testing.T) {
 		}
 	}
 
-	c, err := NewKMeans[float32](vecs, nlist, 10, 0, metric.Metric_L2Distance, 0, false, 0)
+	c, err := NewKMeans[float32](vecs, nlist, 10, 0, metric.Metric_L2Distance, 0, false, 0, true)
 	require.NoError(t, err)
 	defer c.Close()
 
@@ -104,7 +104,7 @@ func TestIVFAndBruteForce(t *testing.T) {
 	*/
 
 	queries := vecs[:8192]
-	idx, err := mobf.NewBruteForceIndex[float32](centroids, dimension, metric.Metric_L2sqDistance, elemsz, ncpu)
+	idx, err := mobf.NewBruteForceIndex[float32](centroids, dimension, metric.Metric_L2sqDistance, elemsz, ncpu, true)
 	require.NoError(t, err)
 	defer idx.Destroy()
 

@@ -96,7 +96,14 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	maxIterations int, deltaThreshold float64,
 	distanceType metric.MetricType, _ kmeans.InitType,
 	spherical bool,
-	nworker int) (kmeans.Clusterer, error) {
+	nworker int,
+	gpuMode bool) (kmeans.Clusterer, error) {
+
+	// Operator opted out of GPU kmeans for this session/process —
+	// fall through to the balanced CPU implementation.
+	if !gpuMode {
+		return balanced.NewKMeans(vectors, clusterCnt, maxIterations, deltaThreshold, distanceType, spherical, nworker)
+	}
 
 	switch vecs := any(vectors).(type) {
 	case [][]float32:

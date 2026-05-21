@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
 
 var (
@@ -3958,6 +3959,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("agg_spill_mem", 0, common.TiB, false),
 		Default:           int64(0),
+	},
+	"gpu_mode": {
+		// gpu_mode toggles vector-index dispatch (brute force,
+		// kmeans, adhoc brute force, pairwise distance) between
+		// the cuvs GPU path and the CPU fallback. The Default
+		// reads gpumode.GpuMode, which is flipped to true at
+		// init() in -tags gpu builds and stays false otherwise —
+		// so the sysvar default matches the binary's build tag.
+		// Per-session `SET gpu_mode = 0/1` overrides the default;
+		// dispatch sites consult gpumode.EffectiveGpuMode.
+		Name:              "gpu_mode",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("gpu_mode"),
+		Default:           gpumode.GpuModeDefaultInt8(),
 	},
 	"join_spill_mem": {
 		Name:              "join_spill_mem",
