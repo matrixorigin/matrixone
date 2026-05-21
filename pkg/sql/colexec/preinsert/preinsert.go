@@ -149,7 +149,11 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 			} else {
 				preInsert.ctr.buf.Vecs[idx] = vector.NewVec(*typ)
 			}
-			if err = vector.GetUnionAllFunction(*typ, proc.Mp())(preInsert.ctr.buf.Vecs[idx], bat.Vecs[idx]); err != nil {
+			cnt := bat.Vecs[idx].Length()
+			if bat.Vecs[idx].IsConst() {
+				cnt = bat.RowCount()
+			}
+			if err = preInsert.ctr.buf.Vecs[idx].UnionBatch(bat.Vecs[idx], 0, cnt, nil, proc.Mp()); err != nil {
 				return err
 			}
 		} else {
@@ -158,7 +162,8 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 				//expland const vector
 				typ := bat.Vecs[idx].GetType()
 				tmpVec := vector.NewVec(*typ)
-				if err = vector.GetUnionAllFunction(*typ, proc.Mp())(tmpVec, bat.Vecs[idx]); err != nil {
+				if err = tmpVec.UnionBatch(bat.Vecs[idx], 0, bat.RowCount(), nil, proc.Mp()); err != nil {
+					tmpVec.Free(proc.Mp())
 					return err
 				}
 				preInsert.ctr.buf.Vecs[idx] = tmpVec
