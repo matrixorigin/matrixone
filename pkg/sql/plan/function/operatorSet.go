@@ -39,6 +39,25 @@ var (
 	}
 )
 
+func mixedStringNumericToVarchar(source []types.Type) (types.Type, bool) {
+	hasString := false
+	hasNumeric := false
+	for _, t := range source {
+		if t.Oid.IsMySQLString() {
+			hasString = true
+		}
+		if t.Oid.IsInteger() || t.Oid.IsFloat() || t.Oid.IsDecimal() {
+			hasNumeric = true
+		}
+		if hasString && hasNumeric {
+			retType := types.T_varchar.ToType()
+			retType.Width = types.MaxVarBinaryLen
+			return retType, true
+		}
+	}
+	return types.Type{}, false
+}
+
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
 func caseCheck(_ []overload, inputs []types.Type) checkResult {
 	l := len(inputs)
@@ -96,6 +115,21 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 		if l%2 == 1 {
 			source = append(source, inputs[l-1])
+		}
+
+		if retType, ok := mixedStringNumericToVarchar(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			for i := range finalTypes {
+				if i%2 == 0 {
+					finalTypes[i] = types.T_bool.ToType()
+				} else {
+					finalTypes[i] = retType
+				}
+			}
+			if len(inputs)%2 == 1 {
+				finalTypes[len(finalTypes)-1] = retType
+			}
+			return newCheckResultWithCast(0, finalTypes)
 		}
 
 		target := make([]types.T, len(source))
@@ -340,16 +374,8 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 			needCast = true
 		}
 
-		// Special handling for mixed string/numeric types (issue #19998)
-		// If one is string and the other is numeric, prefer string type
-		// This avoids runtime errors when casting 'All years' to int
 		source := []types.Type{inputs[1], inputs[2]}
-		isNumeric0 := source[0].Oid.IsInteger() || source[0].Oid.IsFloat() || source[0].Oid.IsDecimal()
-		isNumeric1 := source[1].Oid.IsInteger() || source[1].Oid.IsFloat() || source[1].Oid.IsDecimal()
-		if (source[0].Oid.IsMySQLString() && isNumeric1) ||
-			(isNumeric0 && source[1].Oid.IsMySQLString()) {
-			retType := types.T_varchar.ToType()
-			setMaxWidthFromSource(&retType, source)
+		if retType, ok := mixedStringNumericToVarchar(source); ok {
 			return newCheckResultWithCast(0, []types.Type{types.T_bool.ToType(), retType, retType})
 		}
 
