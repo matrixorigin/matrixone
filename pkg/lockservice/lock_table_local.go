@@ -17,7 +17,6 @@ package lockservice
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -190,8 +189,10 @@ func (l *localLockTable) doLock(
 				leftTimeout -= ticks
 			} else {
 				leftTimeout = 0
-				//only append timeout error if leftTimeout is set
-				v.err = errors.Join(v.err, ErrLockTimeout)
+				// lock_wait_timeout expired: return ErrLockTimeout directly
+				// (not errors.Join) so upper layers can recognize it via
+				// moerr.IsMoErrCode(err, moerr.ErrInvalidState).
+				v.err = ErrLockTimeout
 			}
 		}
 
