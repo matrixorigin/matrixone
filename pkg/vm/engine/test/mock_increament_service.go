@@ -16,6 +16,7 @@ package test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -194,6 +195,24 @@ func (m *MockAutoIncrementService) CurrentValue(
 // Reload reloads auto-increment cache
 func (m *MockAutoIncrementService) Reload(ctx context.Context, tableID uint64) error {
 	// No-op for mock
+	return nil
+}
+
+// SetOffset sets the offset of an auto-increment column
+func (m *MockAutoIncrementService) SetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txn client.TxnOperator,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	counters, ok := m.counters[tableID]
+	if !ok {
+		return fmt.Errorf("table %d not found in mock auto-increment counters", tableID)
+	}
+	counters[colName] = offset
 	return nil
 }
 
