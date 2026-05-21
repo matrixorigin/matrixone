@@ -412,8 +412,10 @@ var predefinedFunids = map[int]int{
 	JSON_ARRAY:               359,
 	JSON_OBJECT:              360,
 	JSON_TYPE:                361,
-
-	FUNCTION_END_NUMBER: 362,
+	JSON_VALID:               362,
+	JSON_LENGTH:              363,
+	JSON_KEYS:                364,
+	FUNCTION_END_NUMBER:      365,
 }
 
 func Test_funids(t *testing.T) {

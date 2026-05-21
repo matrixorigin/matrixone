@@ -255,6 +255,12 @@ func (bj ByteJson) getObjectKey(i int) []byte {
 	return bj.Data[keyOff : keyOff+keyLen]
 }
 
+// GetObjectKey returns the key at index i of a JSON object.
+// The keys are in the original insertion order.
+func (bj ByteJson) GetObjectKey(i int) []byte {
+	return bj.getObjectKey(i)
+}
+
 func (bj ByteJson) getArrayElem(i int) ByteJson {
 	return bj.getValEntry(headerSize + i*valEntrySize)
 }

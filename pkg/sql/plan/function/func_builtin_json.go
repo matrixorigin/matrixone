@@ -838,7 +838,18 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 			var key string
 			switch v := keyAny.(type) {
 			case bytejson.ByteJson:
-				key = string(v.GetString())
+				// Use JSON text form, not internal binary, for key display.
+				// GetString() assumes a string-encoded binary layout and panics
+				// on numeric/object/array JSON values.
+				if bj, err := v.MarshalJSON(); err == nil {
+					key = string(bj)
+					// Strip surrounding quotes for JSON string values.
+					if len(key) >= 2 && key[0] == '"' && key[len(key)-1] == '"' {
+						key = key[1 : len(key)-1]
+					}
+				} else {
+					key = fmt.Sprint(v)
+				}
 			case nil:
 				return moerr.NewInvalidInputf(proc.Ctx, "JSON documents may not contain NULL member names")
 			default:
@@ -1134,22 +1145,14 @@ func buildJsonKeysArray(bj bytejson.ByteJson) ([]byte, error) {
 	if bj.Type != bytejson.TpCodeObject {
 		return nil, nil // not an object → return nil (will be NULL)
 	}
-	// MarshalJSON gives JSON text format.
-	jsonText, err := bj.MarshalJSON()
-	if err != nil {
-		return nil, err
-	}
-	var m map[string]interface{}
-	if err := json.Unmarshal(jsonText, &m); err != nil {
-		return nil, err
-	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+	cnt := bj.GetElemCnt()
+	keys := make([]string, cnt)
+	for i := 0; i < cnt; i++ {
+		keys[i] = string(bj.GetObjectKey(i))
 	}
 	raw, err := json.Marshal(keys)
 	if err != nil {
 		return nil, err
 	}
-	return raw, nil // return JSON text bytes directly
+	return raw, nil
 }

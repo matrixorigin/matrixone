@@ -17,6 +17,7 @@ package bytejson
 import (
 	"bytes"
 	"encoding/binary"
+	"strconv"
 )
 
 type subPathType byte
@@ -263,6 +264,9 @@ func CompareByteJson(left, right ByteJson) int {
 					cmp = compareInt64Uint64((left.GetInt64()), right.GetUint64())
 				case TpCodeFloat64:
 					cmp = -compareFloat64Int64(right.GetFloat64(), left.GetInt64())
+				case TpCodeDecimal:
+					rightF, _ := strconv.ParseFloat(string(right.GetString()), 64)
+					cmp = compareFloat64PrecisionLoss(float64(left.GetInt64()), rightF)
 				}
 			case TpCodeUint64:
 				switch right.Type {
@@ -272,6 +276,9 @@ func CompareByteJson(left, right ByteJson) int {
 					cmp = compareUint64(left.GetUint64(), right.GetUint64())
 				case TpCodeFloat64:
 					cmp = -compareFloat64Uint64(right.GetFloat64(), left.GetUint64())
+				case TpCodeDecimal:
+					rightF, _ := strconv.ParseFloat(string(right.GetString()), 64)
+					cmp = compareFloat64PrecisionLoss(float64(left.GetUint64()), rightF)
 				}
 			case TpCodeFloat64:
 				switch right.Type {
@@ -281,6 +288,22 @@ func CompareByteJson(left, right ByteJson) int {
 					cmp = compareFloat64Uint64(left.GetFloat64(), right.GetUint64())
 				case TpCodeFloat64:
 					cmp = compareFloat64(left.GetFloat64(), right.GetFloat64())
+				case TpCodeDecimal:
+					rightF, _ := strconv.ParseFloat(string(right.GetString()), 64)
+					cmp = compareFloat64PrecisionLoss(left.GetFloat64(), rightF)
+				}
+			case TpCodeDecimal:
+				leftF, _ := strconv.ParseFloat(string(left.GetString()), 64)
+				switch right.Type {
+				case TpCodeInt64:
+					cmp = compareFloat64PrecisionLoss(leftF, float64(right.GetInt64()))
+				case TpCodeUint64:
+					cmp = compareFloat64PrecisionLoss(leftF, float64(right.GetUint64()))
+				case TpCodeFloat64:
+					cmp = compareFloat64PrecisionLoss(leftF, right.GetFloat64())
+				case TpCodeDecimal:
+					rightF, _ := strconv.ParseFloat(string(right.GetString()), 64)
+					cmp = compareFloat64PrecisionLoss(leftF, rightF)
 				}
 			}
 			return cmp
