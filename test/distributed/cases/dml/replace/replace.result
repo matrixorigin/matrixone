@@ -230,8 +230,18 @@ id    u    v
 drop table t_replace_cross_key_keep_last;
 drop table if exists t_replace_pk_not_first;
 create table t_replace_pk_not_first(a int null, id int primary key, u int unique);
-replace into t_replace_pk_not_first values (null, 1, 10);
+insert into t_replace_pk_not_first values (0, 1, 100);
+replace into t_replace_pk_not_first values (null, 1, 200), (null, 2, 200);
 select * from t_replace_pk_not_first order by id;
 a    id    u
-null    1    10
+null    2    200
 drop table t_replace_pk_not_first;
+drop table if exists t_replace_not_null_after_filter;
+create table t_replace_not_null_after_filter(a int null, id int primary key, u int unique, b int not null);
+insert into t_replace_not_null_after_filter values (0, 1, 100, 1);
+replace into t_replace_not_null_after_filter values (null, 1, 200, 10), (5, 2, 200, null);
+constraint violation: Column 'b' cannot be null
+select * from t_replace_not_null_after_filter order by id;
+a    id    u    b
+0    1    100    1
+drop table t_replace_not_null_after_filter;
