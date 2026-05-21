@@ -636,3 +636,23 @@ func TestAlterTableVarcharLengthBumped(t *testing.T) {
 		})
 	}
 }
+
+func TestAlterTableAutoIncrement(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	sqls := []string{
+		`ALTER TABLE constraint_test.dept AUTO_INCREMENT = 1000;`,
+		`ALTER TABLE constraint_test.dept AUTO_INCREMENT = 0;`,
+		`ALTER TABLE constraint_test.dept AUTO_INCREMENT = 5;`,
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestAlterTableAutoIncrementRejectNoAutoColumn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	sqls := []string{
+		`ALTER TABLE constraint_test.t1 AUTO_INCREMENT = 100;`,
+	}
+	runTestShouldError(mock, t, sqls)
+}
