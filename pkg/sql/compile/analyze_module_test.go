@@ -733,6 +733,29 @@ func Test_UpdatePreparePhyScope(t *testing.T) {
 	require.Equal(t, false, res)
 }
 
+func Test_UpdatePreparePhyScopePreScopeShapeMismatch(t *testing.T) {
+	scope := &Scope{
+		PreScopes: []*Scope{{}},
+	}
+	phyScope := models.PhyScope{}
+
+	require.False(t, UpdatePreparePhyScope(scope, phyScope))
+}
+
+func Test_UpdatePreparePhyPlanLocalScopeShapeMismatch(t *testing.T) {
+	c := &Compile{
+		anal: &AnalyzeModule{
+			phyPlan: models.NewPhyPlan(),
+		},
+	}
+	runC := &Compile{
+		anal:   &AnalyzeModule{},
+		scopes: []*Scope{{}},
+	}
+
+	require.False(t, c.UpdatePreparePhyPlan(runC))
+}
+
 func TestHandleTailNodeReceiver(t *testing.T) {
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	mp := make(map[*process.WaitRegister]int)
