@@ -171,6 +171,11 @@ func (mw *waiterEvents) add(c *lockContext) {
 			c:      c,
 		}
 	}
+	// Propagate session-level lock_wait_timeout to the waiter so the async
+	// check loop can enforce it.  The sync path enforces LockWaitTimeout via
+	// context.WithTimeoutCause in doLock; this gives the async (remote) path
+	// equivalent timeout enforcement.
+	c.w.lockWaitTimeout = time.Duration(c.opts.LockWaitTimeout) * time.Second
 	c.w.startWait()
 	mw.addToLazyCheckDeadlockC(c.w)
 }
@@ -224,6 +229,21 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 
 		wait := now.Sub(w.waitAt.Load().(time.Time))
 		mw.addToOrphanCheck(w, wait)
+
+		// enforce session-level lock_wait_timeout on the async (remote) path.
+		// The sync path enforces this via context.WithTimeoutCause in doLock;
+		// this gives the async path equivalent timeout enforcement.
+		if w.lockWaitTimeout > 0 && wait >= w.lockWaitTimeout {
+			mw.logger.Debug("lock wait timeout elapsed, notifying waiter",
+				zap.String("txn", w.String()),
+				zap.Duration("wait", wait),
+				zap.Duration("timeout", w.lockWaitTimeout))
+			w.notify(notifyValue{err: ErrLockTimeout}, mw.logger)
+			w.close("waiterEvents check timeout", mw.logger)
+			mw.mu.blockedWaiters[i] = nil
+			continue
+		}
+
 		if wait >= timeout {
 			mw.addToDeadlockCheck(w)
 		}

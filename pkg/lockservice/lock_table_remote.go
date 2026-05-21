@@ -38,6 +38,15 @@ const (
 	// long enough to accommodate reasonable lock waits but short enough to avoid
 	// indefinite goroutine blocking when the remote lock service is unhealthy.
 	defaultLockRPCTimeout = 5 * time.Minute
+
+	// lockRpcSlack is the extra budget added to the RPC deadline beyond
+	// LockWaitTimeout.  The lock-table owner starts its own wait budget only
+	// after receiving the RPC, so the client-side RPC deadline must outlive the
+	// server-side wait timer for the owner to observe and return ErrLockTimeout.
+	// Without this slack, the client deadline can fire before the owner returns
+	// ErrLockTimeout, causing the client to see a retryable connectivity error
+	// instead of a lock-timeout result.
+	lockRpcSlack = 30 * time.Second
 )
 
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
@@ -103,10 +112,12 @@ func (l *remoteLockTable) lock(
 	// Apply a timeout to the RPC call to prevent goroutines from blocking
 	// indefinitely when the remote lock service is unresponsive.
 	// Session-level SET lock_wait_timeout takes highest priority (passed via
-	// pb.LockOptions)
+	// pb.LockOptions).
+	// Add lockRpcSlack to give the lock-table owner enough time to observe and
+	// return ErrLockTimeout before the client-side RPC deadline fires.
 	lockRpcTimeout := defaultLockRPCTimeout
 	if d := time.Duration(opts.LockWaitTimeout) * time.Second; d > 0 {
-		lockRpcTimeout = d
+		lockRpcTimeout = d + lockRpcSlack
 	}
 	rpcCtx, cancel := context.WithTimeout(ctx, lockRpcTimeout)
 	defer cancel()
@@ -131,6 +142,21 @@ func (l *remoteLockTable) lock(
 		err = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
 		logRemoteLockAdded(l.logger, txn, rows, opts, l.bind)
 		cb(resp.Lock.Result, err)
+		return
+	}
+
+	// If the RPC deadline expired but the caller context is still alive, the
+	// lock-table owner was likely in the middle of waiting and we never
+	// received ErrLockTimeout.  Translate this into lock-timeout semantics
+	// instead of letting it be treated as a retryable connectivity error.
+	// The error may be wrapped by the RPC layer, so check both errors.Is and
+	// the error string.
+	if isDeadlineExceeded(err) &&
+		ctx.Err() == nil &&
+		opts.LockWaitTimeout > 0 {
+		_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
+		cb(pb.Result{}, ErrLockTimeout)
 		return
 	}
 
@@ -328,6 +354,23 @@ func retryRemoteLockError(err error) bool {
 		errors.Is(err, os.ErrDeadlineExceeded) ||
 		errors.Is(err, context.DeadlineExceeded) ||
 		moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF) {
+		return true
+	}
+	return false
+}
+
+// isDeadlineExceeded returns true if err is or wraps a deadline-exceeded error.
+// The RPC layer may wrap context.DeadlineExceeded as a net.Error with
+// Timeout()==true, so we check multiple paths.
+func isDeadlineExceeded(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	if e, ok := err.(net.Error); ok && e.Timeout() {
 		return true
 	}
 	return false

@@ -97,6 +97,12 @@ type waiter struct {
 	waitAt        atomic.Value
 	enableChecker bool
 
+	// lockWaitTimeout is the session-level SET lock_wait_timeout value,
+	// zero means use the default.  Set in waiterEvents.add() from the
+	// lockContext and checked in waiterEvents.check() to enforce
+	// timeouts on the async (remote) lock path.
+	lockWaitTimeout time.Duration
+
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
 }
@@ -297,6 +303,7 @@ func (w *waiter) reset() {
 	w.conflictKey.Store(nil)
 	w.lt.Store(nil)
 	w.setStatus(ready)
+	w.lockWaitTimeout = 0
 }
 
 type notifyValue struct {
