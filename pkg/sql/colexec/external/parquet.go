@@ -293,19 +293,48 @@ func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*p
 	if !ok {
 		return nil, nil
 	}
-	if leaf.Optional() && dt.NotNullable {
+	width := int(dt.Width)
+	if width <= 0 {
+		width = types.MaxArrayDimension
+	}
+	elemCanBeNull := leaf.Optional()
+	if elemCanBeNull && width == types.MaxArrayDimension {
+		// MO array vectors cannot represent NULL elements inside variable-length array rows yet.
 		return nil, nil
+	}
+	if sc.Optional() && dt.NotNullable {
+		return nil, nil
+	}
+	maxDefinitionLevel := byte(leaf.MaxDefinitionLevel())
+	if maxDefinitionLevel == 0 {
+		return nil, nil
+	}
+	listEmptyLevel := maxDefinitionLevel - 1
+	if elemCanBeNull {
+		if maxDefinitionLevel < 2 {
+			return nil, nil
+		}
+		listEmptyLevel = maxDefinitionLevel - 2
 	}
 
 	mp := &columnMapper{
 		srcNull:            true,
 		dstNull:            !dt.NotNullable,
-		maxDefinitionLevel: byte(leaf.MaxDefinitionLevel()),
+		maxDefinitionLevel: maxDefinitionLevel,
 		allowRepetition:    true,
+		listCanBeNull:      sc.Optional(),
+		listElemCanBeNull:  elemCanBeNull,
+		// maxDL means "element present"; empty-list rows use the level before element presence.
+		listEmptyLevel: listEmptyLevel,
 	}
-	width := int(dt.Width)
-	if width <= 0 {
-		width = types.MaxArrayDimension
+	if mp.listElemCanBeNull {
+		mp.listElemNullLevel = maxDefinitionLevel - 1
+	}
+	if mp.listCanBeNull {
+		if mp.listEmptyLevel == 0 {
+			return nil, nil
+		}
+		mp.listNullLevel = mp.listEmptyLevel - 1
 	}
 
 	switch types.T(dt.Id) {
@@ -1638,6 +1667,7 @@ func processParquetListToArray[T types.RealNumbers](
 	}
 	row := make([]T, 0, capHint)
 	rowNull := false
+	rowEmpty := false
 	rowCount := 0
 	flushRow := func() error {
 		if rowNull {
@@ -1658,21 +1688,36 @@ func processParquetListToArray[T types.RealNumbers](
 			}
 			row = row[:0]
 			rowNull = false
+			rowEmpty = false
 		}
 
-		if v.DefinitionLevel() != int(mp.maxDefinitionLevel) {
-			if v.DefinitionLevel() == 0 && len(row) == 0 {
-				if !mp.dstNull {
-					return moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
-				}
-				rowNull = true
-				continue
+		definitionLevel := byte(v.DefinitionLevel())
+		if mp.listCanBeNull && definitionLevel == mp.listNullLevel {
+			if len(row) != 0 || rowEmpty || v.RepetitionLevel() != 0 {
+				return moerr.NewInvalidInput(ctx, "malformed parquet list page: NULL row has repeated values")
 			}
+			if !mp.dstNull {
+				return moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
+			}
+			rowNull = true
+			continue
+		}
+		if mp.listElemCanBeNull && definitionLevel == mp.listElemNullLevel {
+			return moerr.NewInvalidInput(ctx, "parquet list NULL elements are not supported for vector columns")
+		}
+		if definitionLevel == mp.listEmptyLevel {
+			if len(row) != 0 || rowNull || v.RepetitionLevel() != 0 {
+				return moerr.NewInvalidInput(ctx, "malformed parquet list page: empty row has repeated values")
+			}
+			rowEmpty = true
+			continue
+		}
+		if definitionLevel != mp.maxDefinitionLevel {
 			return moerr.NewInvalidInputf(ctx,
 				"parquet list value cannot map to vector: definition level %d, expected %d",
-				v.DefinitionLevel(), mp.maxDefinitionLevel)
+				definitionLevel, mp.maxDefinitionLevel)
 		}
-		if rowNull {
+		if rowNull || rowEmpty {
 			return moerr.NewInvalidInput(ctx, "malformed parquet list page: NULL row has repeated values")
 		}
 
@@ -1882,6 +1927,13 @@ func parquetValueToFloat64(ctx context.Context, st parquet.Type, v parquet.Value
 	}
 	switch st.Kind() {
 	case parquet.Int32, parquet.Int64:
+		if lt := st.LogicalType(); lt != nil && lt.Integer != nil && !lt.Integer.IsSigned {
+			val, err := parquetValueToUint64(ctx, st, v)
+			if err != nil {
+				return 0, err
+			}
+			return float64(val), nil
+		}
 		val, err := parquetValueToInt64(ctx, st, v)
 		if err != nil {
 			return 0, err
@@ -2525,6 +2577,7 @@ type fsReaderAt struct {
 func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 	vec := fileservice.IOVector{
 		FilePath: r.readPath,
+		Policy:   fileservice.SkipFullFilePreloads,
 		Entries: []fileservice.IOEntry{
 			0: {
 				Offset: off,
