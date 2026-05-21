@@ -95,7 +95,13 @@ func (d *DataCache) deletePath(ctx context.Context, shardIndex int, path string)
 }
 
 func (d *DataCache) EnsureNBytes(ctx context.Context, want int) {
-	d.fifo.Evict(ctx, nil, int64(want))
+	used := d.Used()
+	capacity := d.Capacity()
+	if used+int64(want) > capacity {
+		d.fifo.EvictWithWait(ctx, int64(want))
+	} else {
+		d.fifo.Evict(ctx, nil, int64(want))
+	}
 }
 
 func (d *DataCache) Evict(ctx context.Context, ch chan int64) {

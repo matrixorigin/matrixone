@@ -237,6 +237,25 @@ func TestEvictAccountsPendingEnqueueJob(t *testing.T) {
 	assert.Equal(t, int64(4), cache.used())
 }
 
+func TestEvictWithWaitReturnsWhenContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cache := New[int, int](fscache.ConstCapacity(0), ShardInt[int], nil, nil, nil)
+	cache.used1 = 1
+
+	done := make(chan struct{})
+	go func() {
+		cache.EvictWithWait(ctx, 0)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("EvictWithWait did not return after context cancellation")
+	}
+}
+
 // TestPostEvictRunsOutsideQueueLock verifies that postEvict callbacks execute
 // outside the queueLock by attempting a concurrent Set() while a postEvict is
 // blocked. If postEvict ran under the lock, the concurrent Set would deadlock.

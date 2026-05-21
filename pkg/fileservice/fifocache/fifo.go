@@ -426,6 +426,54 @@ func (c *Cache[K, V]) ForceEvict(ctx context.Context, n int64) {
 	c.Evict(ctx, nil, capacityCut)
 }
 
+// EvictWithWait is like Evict but blocks until the eviction lock is acquired,
+// guaranteeing that eviction actually runs before returning. This is used by
+// EnsureNBytes to prevent unbounded memory growth under high concurrency where
+// TryLock-based Evict would skip eviction entirely.
+func (c *Cache[K, V]) EvictWithWait(ctx context.Context, capacityCut int64) {
+	c.queueLock.Lock()
+	var pendingPostEvicts []_PendingPostEvict[K, V]
+	defer func() {
+		c.queueLock.Unlock()
+		if c.postEvict != nil {
+			for i := range pendingPostEvicts {
+				c.postEvictItem(ctx, pendingPostEvicts[i], true)
+				pendingPostEvicts[i] = _PendingPostEvict[K, V]{}
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		c.helpEnqueue()
+		globalCapacityCut := c.capacityCut.Swap(0)
+		target := c.capacity() - capacityCut - globalCapacityCut
+		if target < 0 {
+			target = 0
+		}
+		if c.used1+c.used2 <= target {
+			break
+		}
+		target1 := c.capacity1() - capacityCut - globalCapacityCut
+		if target1 < 0 {
+			target1 = 0
+		}
+		if c.used1 > target1 {
+			if pe, ok := c.evict1(); ok {
+				pendingPostEvicts = append(pendingPostEvicts, pe)
+			}
+		} else {
+			if pe, ok := c.evict2(); ok {
+				pendingPostEvicts = append(pendingPostEvicts, pe)
+			}
+		}
+	}
+}
+
 func (c *Cache[K, V]) used() int64 {
 	c.queueLock.RLock()
 	defer c.queueLock.RUnlock()
