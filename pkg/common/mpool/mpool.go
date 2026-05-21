@@ -440,9 +440,10 @@ type MPool struct {
 	stats   MPoolStats // stats
 	details *mpoolDetails
 
-	noLock bool
-	ptrs   map[unsafe.Pointer]memHdr
-	pools  [NumFixedPool]fixedPool
+	noLock  bool
+	noFixed bool
+	ptrs    map[unsafe.Pointer]memHdr
+	pools   [NumFixedPool]fixedPool
 }
 
 const (
@@ -574,6 +575,7 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 	}
 
 	noLock := flag&NoLock != 0
+	noFixed := flag&NoFixed != 0
 
 	id := atomic.AddInt64(&nextPool, 1)
 	var mp MPool
@@ -581,6 +583,7 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 	mp.tag = tag
 	mp.cap = cap
 	mp.noLock = noLock
+	mp.noFixed = noFixed
 
 	mp.stats.Init()
 	mp.ptrs = make(map[unsafe.Pointer]memHdr)
@@ -721,7 +724,7 @@ func (mp *MPool) alloc(detailk string, sz int64, offHeap bool) ([]byte, error) {
 	var bs []byte
 	var err error
 
-	if offHeap && enableFixedPool {
+	if offHeap && enableFixedPool && !mp.noFixed {
 		idx := sizeToFixedPoolIdx(sz)
 		if idx < NumFixedPool {
 			capacity := int64(mp.pools[idx].eleSz)

@@ -254,6 +254,19 @@ func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 			},
 			wantErr: nil,
 		},
+		{
+			name:   "memory cache size does not change global mpool cap",
+			fields: fields{},
+			args: args{
+				ctx: ctx,
+				req: &query.Request{FileServiceCacheRequest: query.FileServiceCacheRequest{
+					Type:      query.FileServiceCacheType_Memory,
+					CacheSize: 2 * mpool.GB,
+				}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
