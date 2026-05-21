@@ -126,12 +126,12 @@ func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, 
 	return fifocache.New[mataCacheKey, []byte](
 		capacity,
 		shardMetaCacheKey,
-		func(_ context.Context, _ mataCacheKey, _ []byte, size int64) { // postSet
+		func(_ context.Context, _ mataCacheKey, _ []byte, size int64, _ uint64) { // postSet
 			inuseBytes.Add(float64(size))
 			capacityBytes.Set(float64(capacity()))
 		},
 		nil,
-		func(_ context.Context, _ mataCacheKey, _ []byte, size int64) { // postEvict
+		func(_ context.Context, _ mataCacheKey, _ []byte, size int64, _ uint64) { // postEvict
 			inuseBytes.Add(float64(-size))
 			capacityBytes.Set(float64(capacity()))
 		})
