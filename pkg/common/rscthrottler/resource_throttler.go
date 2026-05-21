@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime/debug"
 	"sync/atomic"
 	"time"
 
@@ -31,10 +32,15 @@ import (
 )
 
 const (
-	refreshMaxInterval = time.Second * 10
+	refreshMaxInterval     = time.Second * 10
+	rssScavengeInterval    = time.Minute
+	rssScavengeTriggerRate = 0.85
+	rssScavengeVisibleRate = 0.70
 
 	MemoryThrottlerLogHeader = "MemoryThrottler"
 )
+
+var freeOSMemory = debug.FreeOSMemory
 
 type RSCThrottler interface {
 	Refresh()
@@ -58,7 +64,8 @@ type memThrottler struct {
 	name      string
 	limitRate float64
 
-	lastRefresh atomic.Int64
+	lastRefresh     atomic.Int64
+	lastRSSScavenge atomic.Int64
 
 	mergeAvailDebounce atomic.Int64
 
@@ -72,6 +79,8 @@ type memThrottler struct {
 		allowOutOfMemoryAcquire bool
 
 		specializedForMerge bool
+
+		enableRSSScavenging bool
 	}
 }
 
@@ -158,10 +167,46 @@ func (m *memThrottler) refresh(force bool) {
 
 	if info, err = m.proc.MemoryInfo(); err == nil {
 		m.rss.Store(int64(info.RSS))
+		m.tryScavengeRSS(now, int64(info.RSS))
 	}
 
 	m.cgroup.Store(cgroup)
 	m.total.Store(total)
+}
+
+func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
+	if !m.options.enableRSSScavenging {
+		return
+	}
+	actualMaxMemory := int64(m.actualTotalMemory.Load())
+	if actualMaxMemory <= 0 || actualMaxMemory == math.MaxInt64 {
+		return
+	}
+	if float64(rss) < float64(actualMaxMemory)*rssScavengeTriggerRate {
+		return
+	}
+	visible := m.reserved.Load() + mpool.GlobalStats().NumCurrBytes.Load()
+	if visible < 0 {
+		visible = 0
+	}
+	if float64(visible) >= float64(rss)*rssScavengeVisibleRate {
+		return
+	}
+	last := m.lastRSSScavenge.Load()
+	if time.Duration(now-last) <= rssScavengeInterval {
+		return
+	}
+	if !m.lastRSSScavenge.CompareAndSwap(last, now) {
+		return
+	}
+	logutil.Info(
+		fmt.Sprintf("%s-RSSScavenge", MemoryThrottlerLogHeader),
+		zap.String("rss", common.HumanReadableBytes(int(rss))),
+		zap.String("visible", common.HumanReadableBytes(int(visible))),
+		zap.String("actual-total-memory", common.HumanReadableBytes(int(actualMaxMemory))),
+		zap.String("detail", m.String()),
+	)
+	freeOSMemory()
 }
 
 /*
@@ -319,6 +364,12 @@ func WithConstLimit(constLimit int64) MemThrottlerOption {
 func WithSpecializedForMerge() MemThrottlerOption {
 	return func(throttler *memThrottler) {
 		throttler.options.specializedForMerge = true
+	}
+}
+
+func WithRSSScavenging() MemThrottlerOption {
+	return func(throttler *memThrottler) {
+		throttler.options.enableRSSScavenging = true
 	}
 }
 
