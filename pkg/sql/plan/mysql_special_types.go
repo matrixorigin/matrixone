@@ -46,6 +46,17 @@ func isGeometryPlanType(typ *plan.Type) bool {
 	return typ != nil && typ.Id == int32(types.T_geometry)
 }
 
+func arrayPlanTypeString(typ *plan.Type) string {
+	if typ == nil {
+		return ""
+	}
+	metadata := strings.TrimSpace(typ.GetEnumvalues())
+	if strings.HasPrefix(strings.ToLower(metadata), "array(") {
+		return metadata
+	}
+	return ""
+}
+
 func geometrySubtypeName(typ *plan.Type) string {
 	if !isGeometryPlanType(typ) {
 		return ""
