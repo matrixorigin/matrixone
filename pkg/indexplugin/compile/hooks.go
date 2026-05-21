@@ -74,7 +74,7 @@ type CompileContext interface {
 	// pattern — should branch on this rather than on whether
 	// ResolveVariable errors, since background paths set resolvers
 	// too (idxcron's task.Metadata, ProcessInitSQL's
-	// iscp.DefaultResolveVariable).
+	// executor.DefaultResolveVariable).
 	IsFrontend() bool
 
 	// IsExperimentalEnabled checks whether an experimental-feature flag is

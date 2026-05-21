@@ -736,10 +736,10 @@ func ProcessInitSQL(
 	// resolver, table functions like cagra_create / ivfpq_create
 	// silently skip their session-variable reads (e.g.
 	// kmeans_train_percent) and build with degenerate config.
-	// DefaultResolveVariable is wired by pkg/frontend's init() from
-	// gSysVarsDefs; tests that don't blank-import pkg/frontend see
-	// it as nil and the InitSQL runs with today's nil-resolver
-	// behaviour.
+	// executor.DefaultResolveVariable is wired by pkg/frontend's
+	// init() from gSysVarsDefs; tests that don't blank-import
+	// pkg/frontend see it as nil and the InitSQL runs with today's
+	// nil-resolver behaviour.
 	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		err = moerr.NewInternalErrorNoCtx("ProcessInitSQL: internal SQL executor unavailable")
@@ -749,8 +749,8 @@ func ProcessInitSQL(
 	opts := executor.Options{}.
 		WithDisableIncrStatement().
 		WithTxn(txnOp)
-	if DefaultResolveVariable != nil {
-		opts = opts.WithResolveVariableFunc(DefaultResolveVariable)
+	if executor.DefaultResolveVariable != nil {
+		opts = opts.WithResolveVariableFunc(executor.DefaultResolveVariable)
 	}
 	result, err := exec.Exec(ctx, sql, opts)
 	if err != nil {

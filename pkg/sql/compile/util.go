@@ -25,32 +25,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
-	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // resolveVariableOrDefault wraps proc.GetResolveVariableFunc() with a
-// nil-safe fallback to iscp.DefaultResolveVariable (populated from
+// nil-safe fallback to executor.DefaultResolveVariable (populated from
 // gSysVarsDefs by pkg/frontend's init). When proc has a session-bound
 // resolver (normal frontend path) that resolver is used; when
 // proc.ResolveVariableFunc is nil (background paths that came in
 // without a frontend session) the fallback returns the variable's
 // compile-time default rather than panicking on a nil function call.
 //
-// Last-resort: when neither the proc resolver nor the iscp fallback
-// is available (tests that construct a bare Process and don't blank-
-// import pkg/frontend) returns an error rather than panic.
+// Last-resort: when neither the proc resolver nor the executor
+// fallback is available (tests that construct a bare Process and
+// don't blank-import pkg/frontend) returns an error rather than panic.
 func resolveVariableOrDefault(proc *process.Process, name string, isSystemVar, isGlobalVar bool) (any, error) {
 	if resolver := proc.GetResolveVariableFunc(); resolver != nil {
 		return resolver(name, isSystemVar, isGlobalVar)
 	}
-	if iscp.DefaultResolveVariable != nil {
-		return iscp.DefaultResolveVariable(name, isSystemVar, isGlobalVar)
+	if executor.DefaultResolveVariable != nil {
+		return executor.DefaultResolveVariable(name, isSystemVar, isGlobalVar)
 	}
 	return nil, moerr.NewInternalErrorNoCtxf(
-		"resolveVariableOrDefault: no resolver available for %q (proc resolver and iscp.DefaultResolveVariable both nil)", name)
+		"resolveVariableOrDefault: no resolver available for %q (proc resolver and executor.DefaultResolveVariable both nil)", name)
 }
 
 const (

@@ -18,21 +18,21 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/iscp"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-// init wires iscp.DefaultResolveVariable so background InitSQL
-// execution (which has no frontend session attached to its
-// *process.Process) can still resolve system variables to their
-// defaults. Mirrors the function-variable wiring used by
-// pkg/sql/plan/plugin_builder.go.
+// init wires executor.DefaultResolveVariable so background internal-
+// SQL execution (which has no frontend session attached to its
+// *process.Process — ProcessInitSQL, idxcron, etc.) can still resolve
+// system variables to their defaults. Mirrors the function-variable
+// wiring used by pkg/sql/plan/plugin_builder.go.
 //
 // gSysVarsDefs (the in-memory defaults map) is the single source of
 // truth here — no per-tenant catalog read, no SET GLOBAL fidelity.
 // Per-index admin overrides are expected to ride along in the
 // captured-vars sqlexec.Metadata that the idxcron task carries.
 func init() {
-	iscp.DefaultResolveVariable = func(
+	executor.DefaultResolveVariable = func(
 		varName string, isSystemVar, _ bool,
 	) (any, error) {
 		if !isSystemVar {
