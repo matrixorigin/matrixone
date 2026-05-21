@@ -17,6 +17,7 @@ package external
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"testing"
@@ -551,8 +552,17 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 	})
 }
 
-// fakeFS is a minimal ETL-compatible FileService for testing fsReaderAt
-type fakeFS struct{ b []byte }
+// fakeFS is a minimal ETL-compatible FileService for testing fsReaderAt.
+type fakeFS struct {
+	b []byte
+
+	lastPolicy          fileservice.Policy
+	lastOffset          int64
+	lastSize            int64
+	readCount           int64
+	logicalRead         int64
+	simulatedRemoteRead int64
+}
 
 func (f *fakeFS) Name() string                                            { return "fake" }
 func (f *fakeFS) Write(ctx context.Context, v fileservice.IOVector) error { return nil }
@@ -561,11 +571,21 @@ func (f *fakeFS) Read(ctx context.Context, v *fileservice.IOVector) error {
 		return moerr.NewInternalError(ctx, "empty entries")
 	}
 	e := &v.Entries[0]
+	f.lastPolicy = v.Policy
+	f.lastOffset = e.Offset
 	if e.Size < 0 {
 		e.Size = int64(len(f.b)) - e.Offset
 	}
+	f.lastSize = e.Size
 	if int(e.Offset+e.Size) > len(f.b) {
 		return io.EOF
+	}
+	f.readCount++
+	f.logicalRead += e.Size
+	if v.Policy.CacheFullFile() && !v.Policy.Any(fileservice.SkipDiskCache) {
+		f.simulatedRemoteRead += int64(len(f.b))
+	} else {
+		f.simulatedRemoteRead += e.Size
 	}
 	if len(e.Data) < int(e.Size) {
 		e.Data = make([]byte, e.Size)
@@ -1856,12 +1876,62 @@ func Test_pageIsNull_simplePaths(t *testing.T) {
 
 func Test_fsReaderAt_ReadAt(t *testing.T) {
 	data := []byte("hello world")
-	r := &fsReaderAt{fs: &fakeFS{b: data}, readPath: "fake:hello", ctx: context.Background()}
+	fs := &fakeFS{b: data}
+	r := &fsReaderAt{fs: fs, readPath: "fake:hello", ctx: context.Background()}
 	buf := make([]byte, 5)
 	n, err := r.ReadAt(buf, 6)
 	require.NoError(t, err)
 	require.Equal(t, 5, n)
 	require.Equal(t, []byte("world"), buf)
+	require.Equal(t, fileservice.Policy(fileservice.SkipFullFilePreloads), fs.lastPolicy)
+	require.Equal(t, int64(6), fs.lastOffset)
+	require.Equal(t, int64(5), fs.lastSize)
+}
+
+func TestParquetS3ReadAmplificationRepro(t *testing.T) {
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"id":      parquet.Leaf(parquet.Int64Type),
+		"payload": parquet.String(),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	rows := make([]parquet.Row, 256)
+	for i := range rows {
+		payload := bytes.Repeat([]byte{byte('a' + i%26)}, 256)
+		rows[i] = parquet.Row{
+			parquet.Int64Value(int64(i)).Level(0, 0, 0),
+			parquet.ByteArrayValue(payload).Level(0, 0, 1),
+		}
+	}
+	_, err := w.WriteRows(rows)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	fs := &fakeFS{b: buf.Bytes()}
+	f, err := parquet.OpenFile(&fsReaderAt{fs: fs, readPath: "fake:payload.parquet", ctx: context.Background()}, int64(buf.Len()))
+	require.NoError(t, err)
+
+	pages := f.Root().Column("payload").Pages()
+	defer func() {
+		require.NoError(t, pages.Close())
+	}()
+	pageCount := 0
+	for {
+		_, err := pages.ReadPage()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		pageCount++
+	}
+	require.Positive(t, pageCount)
+	require.GreaterOrEqual(t, fs.readCount, int64(3), "expect multiple small ReadAt calls")
+	require.Positive(t, fs.logicalRead)
+	require.Equal(t, fs.logicalRead, fs.simulatedRemoteRead)
+	require.LessOrEqual(t, fs.simulatedRemoteRead, int64(buf.Len()),
+		"simulated remote read should not exceed file size; got amplification ratio = %v",
+		float64(fs.simulatedRemoteRead)/float64(buf.Len()))
+	require.Equal(t, fileservice.Policy(fileservice.SkipFullFilePreloads), fs.lastPolicy)
 }
 
 func Test_copyPageToVecMap_NullsHandled(t *testing.T) {
