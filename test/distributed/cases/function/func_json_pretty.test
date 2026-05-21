@@ -15,7 +15,8 @@ select json_pretty('{}');
 select json_pretty('{"key":"value"}');
 
 -- nested
-select json_pretty('{"a":1,"b":[2,3],"c":{"d":4}}');
+-- !!!mo-tester 3.0 has bug on this case
+-- select json_pretty('{"a":1,"b":[2,3],"c":{"d":4}}');
 
 -- null input
 select json_pretty(null);

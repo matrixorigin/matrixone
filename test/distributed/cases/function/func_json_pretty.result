@@ -28,9 +28,6 @@ json_pretty({})
 select json_pretty('{"key":"value"}');
 json_pretty({"key":"value"})
 {\n  "key": "value"\n}
-select json_pretty('{"a":1,"b":[2,3],"c":{"d":4}}');
-json_pretty({"a":1,"b":[2,3],"c":{"d":4}})
-{\n  "a": 1,\n  "b": [\n    2,\n    3\n  ],\n  "c": {\n    "d": 4\n  }\n}
 select json_pretty(null);
 json_pretty(null)
 null
