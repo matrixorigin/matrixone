@@ -226,10 +226,7 @@ func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V]) {
 		defer c.queueLock.Unlock()
 	}
 
-	// enqueue
-	item.queue = cacheItemQueue1
-	c.queue1.enqueue(item)
-	c.used1 += item.size
+	c.enqueuePendingItem(item)
 
 	c.helpEnqueue()
 }

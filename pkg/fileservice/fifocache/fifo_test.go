@@ -264,6 +264,39 @@ func TestEvictSkipsDeletedPendingEnqueueJob(t *testing.T) {
 	assert.False(t, cache.Contains(1))
 }
 
+func TestDirectEnqueueSkipsDeletedItem(t *testing.T) {
+	postSetStarted := make(chan struct{})
+	unblockPostSet := make(chan struct{})
+	cache := New[int, int](
+		fscache.ConstCapacity(4),
+		ShardInt[int],
+		func(_ context.Context, _ int, _ int, _ int64, _ uint64) {
+			close(postSetStarted)
+			<-unblockPostSet
+		},
+		nil,
+		nil,
+	)
+	ctx := t.Context()
+
+	done := make(chan struct{})
+	go func() {
+		cache.Set(ctx, 1, 1, 4)
+		close(done)
+	}()
+	<-postSetStarted
+	cache.Delete(ctx, 1)
+	close(unblockPostSet)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Set")
+	}
+
+	assert.Equal(t, int64(0), cache.used())
+	assert.False(t, cache.Contains(1))
+}
+
 // TestPostEvictRunsOutsideQueueLock verifies that postEvict callbacks execute
 // outside the queueLock by attempting a concurrent Set() while a postEvict is
 // blocked. If postEvict ran under the lock, the concurrent Set would deadlock.
