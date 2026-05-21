@@ -17,7 +17,6 @@ package plan
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -657,7 +656,7 @@ func TestAlterTableAlgorithmValidation(t *testing.T) {
 		runTestShouldError(mock, t, sqls)
 	})
 
-	t.Run("INPLACE with ALGORITHM hints", func(t *testing.T) {
+	t.Run("ADD INDEX accepts any ALGORITHM hint", func(t *testing.T) {
 		sqls := []string{
 			`ALTER TABLE t1 ALGORITHM=INPLACE, ADD INDEX idx_a(a);`,
 			`ALTER TABLE t1 ALGORITHM=INSTANT, ADD INDEX idx_a(a);`,
@@ -684,11 +683,6 @@ func TestAlterTableAlgorithmValidation(t *testing.T) {
 	t.Run("ALGORITHM conflict takes priority over LOCK", func(t *testing.T) {
 		_, err := buildSingleStmt(mock, t,
 			`ALTER TABLE t1 ALGORITHM=INPLACE, LOCK=NONE, ADD COLUMN x INT;`)
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
-		if !strings.Contains(err.Error(), "ALGORITHM") {
-			t.Fatalf("expected ALGORITHM error, got: %v", err)
-		}
+		assert.ErrorContains(t, err, "ALGORITHM")
 	})
 }
