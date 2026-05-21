@@ -67,6 +67,16 @@ func BuildIdxcronMetadata(ctx CompileContext, spec IdxcronVarSpec) ([]byte, erro
 		if err != nil {
 			return nil, err
 		}
+		// nil happens when a sysvar is registered but has no
+		// session-level value set (e.g. inside a sub-Compile spawned
+		// by CREATE TABLE CLONE or other internal-SQL paths whose
+		// session lookup may return (nil, nil) instead of the
+		// compile-time default). Skip — the idxcron consumer's
+		// task.Metadata.ResolveVariableFunc falls back to its own
+		// default when the var isn't in the captured blob.
+		if v == nil {
+			continue
+		}
 		switch tv := v.(type) {
 		case int8:
 			w.AddInt8(name, tv)
