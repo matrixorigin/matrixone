@@ -100,6 +100,44 @@ func TestJsonLength(t *testing.T) {
 	})
 }
 
+func TestJsonKeys(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("object root", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_keys with object",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1,"b":2}`, `{}`},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{`["a","b"]`, `[]`},
+				[]bool{false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonKeys)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("not an object", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_keys with array/scalar",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`[1,2]`, `"hello"`, `42`},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{``, ``, ``},
+				[]bool{true, true, true}), // all NULL
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonKeys)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
 func TestJsonValid(t *testing.T) {
 	testCases := initJsonValidTestCase()
 

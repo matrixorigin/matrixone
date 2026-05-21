@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -1034,4 +1035,121 @@ func jsonValueLength(bj bytejson.ByteJson) int64 {
 	default:
 		return 1
 	}
+}
+
+// JSON_KEYS
+func JsonKeys(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if len(ivecs) == 2 {
+		return jsonKeysWithPath(ivecs, result, proc, length, selectList)
+	}
+	return jsonKeysRoot(ivecs, result, proc, length, selectList)
+}
+
+func jsonKeysRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	isString := ivecs[0].GetType().Oid.IsMySQLString()
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetStrValue(i)
+		if null {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		var bj bytejson.ByteJson
+		var err error
+		if isString {
+			bj, err = types.ParseSliceToByteJson(v)
+		} else {
+			bj = types.DecodeJson(v)
+		}
+		if err != nil {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		keysArray, err := buildJsonKeysArray(bj)
+		if err != nil || keysArray == nil {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		rs.AppendMustBytesValue(keysArray)
+	}
+	return nil
+}
+
+func jsonKeysWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, ivecs[1])
+
+	isJson := !ivecs[0].GetType().Oid.IsMySQLString()
+	c1, c2 := ivecs[0].IsConst(), ivecs[1].IsConst()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		jsonBytes, null1 := p1.GetStrValue(i)
+		pathBytes, null2 := p2.GetStrValue(i)
+		if null1 || null2 {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		var bj bytejson.ByteJson
+		var err error
+		if isJson {
+			bj = types.DecodeJson(jsonBytes)
+		} else {
+			bj, err = types.ParseSliceToByteJson(jsonBytes)
+		}
+		if err != nil {
+			if c1 && c2 {
+				return moerr.NewInvalidArg(proc.Ctx, "json_keys", "invalid JSON document")
+			}
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		path, err := types.ParseStringToPath(string(pathBytes))
+		if err != nil {
+			if c1 && c2 {
+				return moerr.NewInvalidArg(proc.Ctx, "json_keys", "invalid path expression")
+			}
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		val := bj.Query([]*bytejson.Path{&path})
+		if val.IsNull() || val.Type != bytejson.TpCodeObject {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		keysArray, err := buildJsonKeysArray(val)
+		if err != nil {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		rs.AppendMustBytesValue(keysArray)
+	}
+	return nil
+}
+
+func buildJsonKeysArray(bj bytejson.ByteJson) ([]byte, error) {
+	if bj.Type != bytejson.TpCodeObject {
+		return nil, nil // not an object → return nil (will be NULL)
+	}
+	// MarshalJSON gives JSON text format.
+	jsonText, err := bj.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(jsonText, &m); err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	raw, err := json.Marshal(keys)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil // return JSON text bytes directly
 }

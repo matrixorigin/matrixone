@@ -1,0 +1,39 @@
+-- basic scalar tests
+select json_keys('{"a": 1, "b": {"c": 30}}');
+select json_keys('{"a": 1, "b": {"c": 30}}', '$.b');
+select json_keys('{}');
+select json_keys('{"a":1}');
+select json_keys('{"a":1,"b":2,"c":3}');
+
+-- not an object → null
+select json_keys('[1,2,3]');
+select json_keys('"hello"');
+select json_keys('42');
+
+-- path to non-object → null
+select json_keys('{"a": [1,2,3]}', '$.a');
+
+-- path not matching → null
+select json_keys('{"a": 1}', '$.b');
+
+-- null arguments
+select json_keys(null);
+select json_keys('{"a":1}', null);
+
+-- via json functions
+select json_keys(json_object('a', 1, 'b', 2));
+
+-- varchar column
+drop table if exists t1;
+create table t1 (a varchar(100));
+insert into t1 values ('{"a":1,"b":2}'), ('[1,2]'), ('{}'), ('"hello"'), (null);
+select a, json_keys(a) from t1;
+
+-- json column
+drop table if exists t2;
+create table t2 (a json);
+insert into t2 values ('{"a":1,"b":2}'), ('[1,2]'), ('{}'), ('"hello"'), ('null');
+select a, json_keys(a) from t2;
+
+drop table t1;
+drop table t2;
