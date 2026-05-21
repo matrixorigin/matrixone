@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/xeipuuv/gojsonschema"
 )
 
 type opBuiltInJsonExtract struct {
@@ -1271,4 +1272,124 @@ func prettyPrintScalar(w *bytes.Buffer, bj bytejson.ByteJson) error {
 	}
 	w.Write(text)
 	return nil
+}
+
+// JSON_SCHEMA_VALID
+func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[bool](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, ivecs[1])
+
+	schemaIsStr := ivecs[0].GetType().Oid.IsMySQLString()
+	docIsStr := ivecs[1].GetType().Oid.IsMySQLString()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		schemaBytes, null1 := p1.GetStrValue(i)
+		docBytes, null2 := p2.GetStrValue(i)
+		if null1 || null2 {
+			rs.AppendMustNull()
+			continue
+		}
+		v, err := doJsonSchemaValidate(schemaBytes, docBytes, schemaIsStr, docIsStr, true, proc)
+		if err != nil {
+			return err
+		}
+		rs.AppendMustValue(v.(bool))
+	}
+	return nil
+}
+
+// JSON_SCHEMA_VALIDATION_REPORT
+func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, ivecs[1])
+
+	schemaIsStr := ivecs[0].GetType().Oid.IsMySQLString()
+	docIsStr := ivecs[1].GetType().Oid.IsMySQLString()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		schemaBytes, null1 := p1.GetStrValue(i)
+		docBytes, null2 := p2.GetStrValue(i)
+		if null1 || null2 {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		v, err := doJsonSchemaValidate(schemaBytes, docBytes, schemaIsStr, docIsStr, false, proc)
+		if err != nil {
+			return err
+		}
+		rs.AppendMustBytesValue(v.([]byte))
+	}
+	return nil
+}
+
+func doJsonSchemaValidate(schemaBytes, docBytes []byte, schemaIsStr, docIsStr bool, boolResult bool, proc *process.Process) (interface{}, error) {
+	var schemaBJ, docBJ bytejson.ByteJson
+	var err error
+	if schemaIsStr {
+		schemaBJ, err = types.ParseSliceToByteJson(schemaBytes)
+	} else {
+		schemaBJ = types.DecodeJson(schemaBytes)
+	}
+	if err != nil {
+		return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid schema JSON")
+	}
+	if schemaBJ.Type != bytejson.TpCodeObject {
+		return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "schema must be a JSON object")
+	}
+	if schemaBJ.HasRef() {
+		return nil, moerr.NewNotSupportedf(proc.Ctx, "json_schema_valid: $ref is not supported")
+	}
+	if docIsStr {
+		docBJ, err = types.ParseSliceToByteJson(docBytes)
+	} else {
+		docBJ = types.DecodeJson(docBytes)
+	}
+	if err != nil {
+		return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid document JSON")
+	}
+	schemaJSON, err := schemaBJ.MarshalJSON()
+	if err != nil {
+		return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid schema JSON")
+	}
+	docJSON, err := docBJ.MarshalJSON()
+	if err != nil {
+		return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid document JSON")
+	}
+	sl := gojsonschema.NewBytesLoader(schemaJSON)
+	dl := gojsonschema.NewBytesLoader(docJSON)
+	validationResult, err := gojsonschema.Validate(sl, dl)
+	if err != nil {
+		if boolResult {
+			return true, nil // invalid schema → MySQL returns true
+		}
+		return []byte(`{"valid": true}`), nil
+	}
+	if boolResult {
+		return validationResult.Valid(), nil
+	}
+	return buildSchemaValidationReport(validationResult), nil
+}
+
+func buildSchemaValidationReport(result *gojsonschema.Result) []byte {
+	if result.Valid() {
+		return []byte(`{"valid": true}`)
+	}
+	var buf bytes.Buffer
+	buf.WriteString(`{"valid": false, "errors": [`)
+	for i, e := range result.Errors() {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		errObj, _ := json.Marshal(map[string]string{
+			"property": e.Field(),
+			"message":  e.Description(),
+		})
+		buf.Write(errObj)
+	}
+	buf.WriteString("]}")
+	return buf.Bytes()
 }

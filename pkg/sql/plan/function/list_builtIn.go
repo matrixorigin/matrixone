@@ -1034,6 +1034,68 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_schema_valid`
+	{
+		functionId: JSON_SCHEMA_VALID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonSchemaValid
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_json, types.T_json},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonSchemaValid
+				},
+			},
+		},
+	},
+
+	// function `json_schema_validation_report`
+	{
+		functionId: JSON_SCHEMA_VALID_REPORT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonSchemaValidationReport
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_json, types.T_json},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonSchemaValidationReport
+				},
+			},
+		},
+	},
+
 	// function `jq`
 	{
 		functionId: JQ,

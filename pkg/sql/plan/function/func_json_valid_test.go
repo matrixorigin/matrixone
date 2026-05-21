@@ -210,6 +210,70 @@ func TestJsonPretty(t *testing.T) {
 	})
 }
 
+func TestJsonSchemaValid(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("valid document", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid valid",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"type":"object","properties":{"lat":{"type":"number","minimum":-90,"maximum":90}},"required":["lat"]}`, `{"type":"object","properties":{"lat":{"type":"number","minimum":-90,"maximum":90}},"required":["lat"]}`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"lat":60}`, `{"lat":60}`},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, true},
+				[]bool{false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("invalid document", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid invalid",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"type":"object","properties":{"lat":{"type":"number","minimum":-90,"maximum":90}},"required":["lat"]}`, `{"type":"object","properties":{"lat":{"type":"number","minimum":-90,"maximum":90}},"required":["lat"]}`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{}`, `{"lat":100}`},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, false}, // missing required lat; lat > max
+				[]bool{false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("null inputs", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"type":"object"}`, ``, `{"type":"object"}`},
+					[]bool{false, true, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{}`, `{}`, ``},
+					[]bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false},
+				[]bool{false, true, true}), // null → null
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
 func TestJsonValid(t *testing.T) {
 	testCases := initJsonValidTestCase()
 
