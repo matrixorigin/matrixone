@@ -335,6 +335,21 @@ select count(*) as cnt from hive_single where year = 2024 and __mo_filepath like
 -- 7.7 Contradictory partition + filepath (empty result, but evaluates correctly)
 select count(*) as cnt from hive_single where year = 2024 and __mo_filepath like '%year=2020%';
 
+-- 7.8 Multiple parquet files under each hive partition.
+-- This keeps BVT small while covering the runtime path that fanouts more than
+-- one file per partition, plus partition-value fill and __mo_filepath fill.
+drop table if exists hive_fanout_small;
+create external table hive_fanout_small (
+    id int,
+    amount double,
+    part_id int
+) infile{'filepath'='$resources/hive_partition/fanout_small/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select count(*) as cnt from hive_fanout_small;
+select count(distinct __mo_filepath) as paths from hive_fanout_small;
+select part_id, count(*) as rows_per_part, count(distinct __mo_filepath) as files_per_part
+from hive_fanout_small group by part_id order by part_id;
+select count(*) as cnt from hive_fanout_small where part_id in (1, 3, 9);
+
 -- ============================================================================
 -- 8. EXPLAIN Verification
 -- ============================================================================
