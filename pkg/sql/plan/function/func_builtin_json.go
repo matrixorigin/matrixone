@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -933,4 +934,104 @@ func JsonValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		fn = strValid
 	}
 	return opUnaryBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, fn, selectList)
+}
+
+// JSON_LENGTH
+func JsonLength(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if len(ivecs) == 2 {
+		return jsonLengthWithPath(ivecs, result, proc, length, selectList)
+	}
+	return jsonLengthRoot(ivecs, result, proc, length, selectList)
+}
+
+func jsonLengthRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	jsonFn := func(v []byte) (int64, error) {
+		bj := types.DecodeJson(v)
+		return jsonValueLength(bj), nil
+	}
+	strFn := func(v []byte) (int64, error) {
+		bj, err := types.ParseSliceToByteJson(v)
+		if err != nil {
+			return 0, moerr.NewInvalidArg(proc.Ctx, "json_length", "invalid JSON document")
+		}
+		return jsonValueLength(bj), nil
+	}
+	fn := jsonFn
+	if ivecs[0].GetType().Oid.IsMySQLString() {
+		fn = strFn
+	}
+	return opUnaryBytesToFixedWithErrorCheck[int64](ivecs, result, proc, length, fn, selectList)
+}
+
+func jsonLengthWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[int64](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, ivecs[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	isJson := !ivecs[0].GetType().Oid.IsMySQLString()
+	c1, c2 := ivecs[0].IsConst(), ivecs[1].IsConst()
+
+	// selectList: ignore all rows
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(rsNull, 0, uint64(length))
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		// selectList: skip non-selected rows
+		if selectList != nil && !selectList.ShouldEvalAllRow() && !selectList.Contains(i) {
+			rsNull.Add(i)
+			continue
+		}
+		jsonBytes, null1 := p1.GetStrValue(i)
+		pathBytes, null2 := p2.GetStrValue(i)
+		if null1 || null2 {
+			rsNull.Add(i)
+			continue
+		}
+		var bj bytejson.ByteJson
+		var err error
+		if isJson {
+			bj = types.DecodeJson(jsonBytes)
+		} else {
+			bj, err = types.ParseSliceToByteJson(jsonBytes)
+		}
+		if err != nil {
+			if c1 && c2 {
+				return moerr.NewInvalidArg(proc.Ctx, "json_length", "invalid JSON document")
+			}
+			rsNull.Add(i)
+			continue
+		}
+		path, err := types.ParseStringToPath(string(pathBytes))
+		if err != nil {
+			if c1 && c2 {
+				return moerr.NewInvalidArg(proc.Ctx, "json_length", "invalid path expression")
+			}
+			rsNull.Add(i)
+			continue
+		}
+		val := bj.Query([]*bytejson.Path{&path})
+		if val.IsNull() {
+			rsNull.Add(i)
+			continue
+		}
+		rss[int(i)] = jsonValueLength(val)
+	}
+	return nil
+}
+
+func jsonValueLength(bj bytejson.ByteJson) int64 {
+	switch bj.Type {
+	case bytejson.TpCodeObject:
+		return int64(bj.GetElemCnt())
+	case bytejson.TpCodeArray:
+		return int64(bj.GetElemCnt())
+	default:
+		return 1
+	}
 }

@@ -39,6 +39,67 @@ func initJsonValidTestCase() []tcTemp {
 	}
 }
 
+func TestJsonLength(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test 1 arg: array, object, scalar
+	t.Run("root level", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_length with varchar input",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`[1,2,3]`, `{"a":1,"b":2}`, `"hello"`, `{}`, `[]`},
+					[]bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{3, 2, 1, 0, 0},
+				[]bool{false, false, false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonLength)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	// Test 2 args: with path (missing path returns NULL)
+	t.Run("with path", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_length with path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":[1,2,3]}`, `{"a":[1,2,3]}`, `{"a":1}`, `[1,2,3]`},
+					[]bool{false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$.a`, `$.b`, `$.b`, `$[0]`},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{3, 0, 0, 1},
+				[]bool{false, true, true, false}), // missing path → NULL
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonLength)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	// Test null input
+	t.Run("null input", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_length with null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`[1]`, `[1]`, ``},
+					[]bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 1, 0},
+				[]bool{false, false, true}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonLength)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
 func TestJsonValid(t *testing.T) {
 	testCases := initJsonValidTestCase()
 
