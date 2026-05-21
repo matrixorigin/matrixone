@@ -84,10 +84,25 @@ type Hooks struct{}
 //     CROSS APPLY ivfpq_create(...) which the engine routes to the
 //     ivfpq_create table-function builder in pkg/sql/plan/ivfpq.go.
 //
+// The sync-vs-async branch is driven by the index's `async`
+// IndexAlgoParam (catalog.IsIndexAsync). Default (key missing or
+// "false"): forceSync=true — ivfpq_create runs inline before the CDC
+// task is registered. Explicit async="true": forceSync=false — the
+// build SQL is stashed as ConsumerInfo.InitSQL and runs at the first
+// CDC iteration.
+//
 // Lifted from Scope.handleVectorIvfpqIndex
 // (pkg/sql/compile/ddl_index_algo.go:802).
 func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
-	return h.handleCreate(ctx, indexDefs, false)
+	metaDef, ok := indexDefs[catalog.Ivfpq_TblType_Metadata]
+	if !ok || metaDef == nil {
+		return h.handleCreate(ctx, indexDefs, true)
+	}
+	async, err := catalog.IsIndexAsync(metaDef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	return h.handleCreate(ctx, indexDefs, !async)
 }
 
 // HandleReindex runs during ALTER … REINDEX (foreground forceSync=false)
