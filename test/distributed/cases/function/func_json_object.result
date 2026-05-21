@@ -48,6 +48,7 @@ json_object(id, 1, id, 2)
 select json_object('a', 1, 'a', 'replaced', 'a', null);
 json_object(a, 1, a, replaced, a, null)
 {"a": null}
+set time_zone = '+08:00';
 drop table if exists jot;
 create table jot (
 id int,
@@ -167,3 +168,4 @@ select json_object();
 json_object()
 {}
 drop table jot;
+set time_zone = 'SYSTEM';

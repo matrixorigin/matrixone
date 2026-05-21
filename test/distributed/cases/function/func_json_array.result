@@ -66,6 +66,7 @@ json_array(cast(null as binary), cast(null as varbinary))
 select json_array(cast('\0\x01\x02\xFF' as varbinary));
 json_array(cast(\0x01x02xFF as varbinary))
 ["AHgwMXgwMnhGRg=="]
+set time_zone = '+08:00';
 drop table if exists jat;
 create table jat (
 id int,
@@ -217,3 +218,4 @@ select json_array();
 json_array()
 []
 drop table jat;
+set time_zone = 'SYSTEM';

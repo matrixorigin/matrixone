@@ -21,6 +21,7 @@ select json_type(json_extract(json_array(cast('2021-02-01 11:11:11' as datetime)
 select json_type(json_extract(json_array(cast('hello' as binary(10))), '$[0]'));
 
 -- test with table, all types
+set time_zone = '+08:00';
 drop table if exists jtt;
 create table jtt (
     id int,
@@ -87,6 +88,7 @@ select json_type(json_extract(json_object('ts', ts), '$.ts')) from jtt where ts 
 select json_type(json_extract(json_object('uid', uid), '$.uid')) from jtt where uid is not null;
 
 drop table jtt;
+set time_zone = 'SYSTEM';
 
 -- error: non-JSON argument should fail
 -- select json_type(1);

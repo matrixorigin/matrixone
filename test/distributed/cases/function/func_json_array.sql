@@ -34,6 +34,7 @@ select json_array(cast(null as binary), cast(null as varbinary));
 select json_array(cast('\0\x01\x02\xFF' as varbinary));
 
 -- test with full table
+set time_zone = '+08:00';
 drop table if exists jat;
 create table jat (
     id int,
@@ -138,3 +139,4 @@ select id, json_array(id, b, bi, f, d, d64, d128, d256, c1, vc, t, bin, vbin, bi
 select json_array();
 
 drop table jat;
+set time_zone = 'SYSTEM';

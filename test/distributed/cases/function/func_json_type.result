@@ -46,6 +46,7 @@ DATETIME
 select json_type(json_extract(json_array(cast('hello' as binary(10))), '$[0]'));
 json_type(json_extract(json_array(cast(hello as binary(10))), $[0]))
 BLOB
+set time_zone = '+08:00';
 drop table if exists jtt;
 create table jtt (
 id int,
@@ -156,3 +157,4 @@ select json_type(json_extract(json_object('uid', uid), '$.uid')) from jtt where 
 json_type(json_extract(json_object(uid, uid), $.uid))
 STRING
 drop table jtt;
+set time_zone = 'SYSTEM';
