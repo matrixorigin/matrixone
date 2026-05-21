@@ -254,6 +254,108 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
 		require.ErrorContains(t, mp.mapping(page, proc, vec), "expected vector dimension 3 != actual dimension 2")
 	})
+
+	t.Run("empty lists", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+			{
+				parquet.NullValue().Level(0, 0, 0),
+			},
+			{
+				parquet.FloatValue(1).Level(0, 1, 0),
+				parquet.FloatValue(2).Level(1, 1, 0),
+			},
+			{
+				parquet.NullValue().Level(0, 0, 0),
+			},
+		})
+
+		var h ParquetHandler
+		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32)})
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.T_array_float32.ToType())
+		require.NoError(t, mp.mapping(page, proc, vec))
+		rows := vector.MustArrayCol[float32](vec)
+		require.Empty(t, rows[0])
+		require.Equal(t, []float32{1, 2}, rows[1])
+		require.Empty(t, rows[2])
+	})
+
+	t.Run("nullable list with empty row", func(t *testing.T) {
+		f, page := writeListNodeAndGetPage(t, parquet.Optional(parquet.List(parquet.Leaf(parquet.FloatType))), []parquet.Row{
+			{
+				parquet.NullValue().Level(0, 0, 0),
+			},
+			{
+				parquet.NullValue().Level(0, 1, 0),
+			},
+			{
+				parquet.FloatValue(7).Level(0, 2, 0),
+			},
+		})
+
+		var h ParquetHandler
+		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32)})
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.T_array_float32.ToType())
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, 3, vec.Length())
+		require.True(t, vec.GetNulls().Contains(0))
+		require.False(t, vec.GetNulls().Contains(1))
+		require.False(t, vec.GetNulls().Contains(2))
+		rows := vector.MustArrayCol[float32](vec)
+		require.Empty(t, rows[1])
+		require.Equal(t, []float32{7}, rows[2])
+	})
+
+	t.Run("optional list elements rejected", func(t *testing.T) {
+		f, _ := writeListNodeAndGetPage(t, parquet.List(parquet.Optional(parquet.Leaf(parquet.FloatType))), []parquet.Row{
+			{
+				parquet.NullValue().Level(0, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32)})
+		require.Nil(t, leaf)
+		require.Nil(t, mp)
+	})
+
+	t.Run("fixed width optional list elements without nulls", func(t *testing.T) {
+		f, page := writeListNodeAndGetPage(t, parquet.List(parquet.Optional(parquet.Leaf(parquet.FloatType))), []parquet.Row{
+			{
+				parquet.FloatValue(1).Level(0, 2, 0),
+				parquet.FloatValue(2).Level(1, 2, 0),
+				parquet.FloatValue(3).Level(1, 2, 0),
+			},
+		})
+
+		var h ParquetHandler
+		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3})
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, [][]float32{{1, 2, 3}}, vector.MustArrayCol[float32](vec))
+	})
+
+	t.Run("fixed width optional list null element rejected", func(t *testing.T) {
+		f, page := writeListNodeAndGetPage(t, parquet.List(parquet.Optional(parquet.Leaf(parquet.FloatType))), []parquet.Row{
+			{
+				parquet.NullValue().Level(0, 1, 0),
+				parquet.FloatValue(2).Level(1, 2, 0),
+				parquet.FloatValue(3).Level(1, 2, 0),
+			},
+		})
+
+		var h ParquetHandler
+		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3})
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "parquet list NULL elements are not supported")
+	})
 }
 
 func TestParquetCrossTypeMappings(t *testing.T) {
@@ -374,6 +476,26 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.ErrorContains(t, mp.mapping(page, proc, vec), "overflows BIGINT")
 	})
 
+	t.Run("unsigned int64 above int64 max to floats", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Uint(64), []parquet.Value{
+			parquet.ValueOf(uint64(1 << 63)),
+		})
+		col := f.Root().Column("c")
+
+		var h ParquetHandler
+		vecFloat32 := vector.NewVec(types.T_float32.ToType())
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_float32), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecFloat32))
+		require.InDeltaSlice(t, []float32{float32(uint64(1 << 63))}, vector.MustFixedColWithTypeCheck[float32](vecFloat32), 1)
+
+		vecFloat64 := vector.NewVec(types.T_float64.ToType())
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_float64), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecFloat64))
+		require.InDeltaSlice(t, []float64{float64(uint64(1 << 63))}, vector.MustFixedColWithTypeCheck[float64](vecFloat64), 1)
+	})
+
 	t.Run("double to float", func(t *testing.T) {
 		f, page := writeDictAndGetPage(t, parquet.Leaf(parquet.DoubleType), []parquet.Value{
 			parquet.DoubleValue(1.5),
@@ -431,8 +553,17 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 	})
 }
 
-// fakeFS is a minimal ETL-compatible FileService for testing fsReaderAt
-type fakeFS struct{ b []byte }
+// fakeFS is a minimal ETL-compatible FileService for testing fsReaderAt.
+type fakeFS struct {
+	b []byte
+
+	lastPolicy          fileservice.Policy
+	lastOffset          int64
+	lastSize            int64
+	readCount           int64
+	logicalRead         int64
+	simulatedRemoteRead int64
+}
 
 func (f *fakeFS) Name() string                                            { return "fake" }
 func (f *fakeFS) Write(ctx context.Context, v fileservice.IOVector) error { return nil }
@@ -441,11 +572,21 @@ func (f *fakeFS) Read(ctx context.Context, v *fileservice.IOVector) error {
 		return moerr.NewInternalError(ctx, "empty entries")
 	}
 	e := &v.Entries[0]
+	f.lastPolicy = v.Policy
+	f.lastOffset = e.Offset
 	if e.Size < 0 {
 		e.Size = int64(len(f.b)) - e.Offset
 	}
+	f.lastSize = e.Size
 	if int(e.Offset+e.Size) > len(f.b) {
 		return io.EOF
+	}
+	f.readCount++
+	f.logicalRead += e.Size
+	if v.Policy.CacheFullFile() && !v.Policy.Any(fileservice.SkipDiskCache) {
+		f.simulatedRemoteRead += int64(len(f.b))
+	} else {
+		f.simulatedRemoteRead += e.Size
 	}
 	if len(e.Data) < int(e.Size) {
 		e.Data = make([]byte, e.Size)
@@ -571,9 +712,14 @@ func TestParquetPrepareAllocatesByColumnIndex(t *testing.T) {
 
 func writeListAndGetPage(t *testing.T, elem parquet.Node, rows []parquet.Row) (file *parquet.File, page parquet.Page) {
 	t.Helper()
+	return writeListNodeAndGetPage(t, parquet.List(elem), rows)
+}
+
+func writeListNodeAndGetPage(t *testing.T, listNode parquet.Node, rows []parquet.Row) (file *parquet.File, page parquet.Page) {
+	t.Helper()
 	var buf bytes.Buffer
 	schema := parquet.NewSchema("x", parquet.Group{
-		"c": parquet.List(elem),
+		"c": listNode,
 	})
 	w := parquet.NewWriter(&buf, schema)
 	_, err := w.WriteRows(rows)
@@ -1724,12 +1870,62 @@ func Test_wrapParseError(t *testing.T) {
 
 func Test_fsReaderAt_ReadAt(t *testing.T) {
 	data := []byte("hello world")
-	r := &fsReaderAt{fs: &fakeFS{b: data}, readPath: "fake:hello", ctx: context.Background()}
+	fs := &fakeFS{b: data}
+	r := &fsReaderAt{fs: fs, readPath: "fake:hello", ctx: context.Background()}
 	buf := make([]byte, 5)
 	n, err := r.ReadAt(buf, 6)
 	require.NoError(t, err)
 	require.Equal(t, 5, n)
 	require.Equal(t, []byte("world"), buf)
+	require.Equal(t, fileservice.Policy(fileservice.SkipFullFilePreloads), fs.lastPolicy)
+	require.Equal(t, int64(6), fs.lastOffset)
+	require.Equal(t, int64(5), fs.lastSize)
+}
+
+func TestParquetS3ReadAmplificationRepro(t *testing.T) {
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"id":      parquet.Leaf(parquet.Int64Type),
+		"payload": parquet.String(),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	rows := make([]parquet.Row, 256)
+	for i := range rows {
+		payload := bytes.Repeat([]byte{byte('a' + i%26)}, 256)
+		rows[i] = parquet.Row{
+			parquet.Int64Value(int64(i)).Level(0, 0, 0),
+			parquet.ByteArrayValue(payload).Level(0, 0, 1),
+		}
+	}
+	_, err := w.WriteRows(rows)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	fs := &fakeFS{b: buf.Bytes()}
+	f, err := parquet.OpenFile(&fsReaderAt{fs: fs, readPath: "fake:payload.parquet", ctx: context.Background()}, int64(buf.Len()))
+	require.NoError(t, err)
+
+	pages := f.Root().Column("payload").Pages()
+	defer func() {
+		require.NoError(t, pages.Close())
+	}()
+	pageCount := 0
+	for {
+		_, err := pages.ReadPage()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		pageCount++
+	}
+	require.Positive(t, pageCount)
+	require.GreaterOrEqual(t, fs.readCount, int64(3), "expect multiple small ReadAt calls")
+	require.Positive(t, fs.logicalRead)
+	require.Equal(t, fs.logicalRead, fs.simulatedRemoteRead)
+	require.LessOrEqual(t, fs.simulatedRemoteRead, int64(buf.Len()),
+		"simulated remote read should not exceed file size; got amplification ratio = %v",
+		float64(fs.simulatedRemoteRead)/float64(buf.Len()))
+	require.Equal(t, fileservice.Policy(fileservice.SkipFullFilePreloads), fs.lastPolicy)
 }
 
 func Test_copyPageToVecMap_NullsHandled(t *testing.T) {
