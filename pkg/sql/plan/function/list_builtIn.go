@@ -1589,6 +1589,26 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_length`
+	{
+		functionId: JSON_LENGTH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonLengthCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return jsonLength
+				},
+			},
+		},
+	},
+
 	// function `least`
 	{
 		functionId: LEAST,

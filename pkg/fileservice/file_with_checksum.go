@@ -261,3 +261,28 @@ func (f *FileWithChecksum[T]) readBlock(offset int64) (data []byte, putback PutB
 
 	return
 }
+
+func (f *FileWithChecksum[T]) dontNeedContentRange(contentOffset int64, contentSize int64) {
+	file, ok := any(f.underlying).(*os.File)
+	if !ok {
+		return
+	}
+
+	blockOffset, _ := f.contentOffsetToBlockOffset(contentOffset)
+	if contentSize < 0 {
+		fadviseDontNeed(file, blockOffset, 0)
+		return
+	}
+	if contentSize == 0 {
+		return
+	}
+
+	endBlockOffset, endOffsetInBlock := f.contentOffsetToBlockOffset(contentOffset + contentSize)
+	if endOffsetInBlock > 0 {
+		endBlockOffset += int64(f.blockSize)
+	}
+	if endBlockOffset <= blockOffset {
+		return
+	}
+	fadviseDontNeed(file, blockOffset, endBlockOffset-blockOffset)
+}
