@@ -119,6 +119,11 @@ type waiterEvents struct {
 	unlock            func(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation) error
 	stopper           *stopper.Stopper
 
+	// checkC wakes the handle loop to run check() at a waiter's
+	// lockWaitTimeout boundary, giving sub-defaultLazyCheckDuration
+	// precision to the async (remote) timeout path.
+	checkC chan struct{}
+
 	mu struct {
 		sync.RWMutex
 		blockedWaiters []*waiter
@@ -142,6 +147,7 @@ func newWaiterEvents(
 		unlock:            unlock,
 		eventC:            make(chan *lockContext, 10000),
 		checkOrphanC:      make(chan checkOrphan, 64),
+		checkC:            make(chan struct{}, 64),
 		stopper:           stopper.NewStopper("waiter-events", stopper.WithLogger(logger.RawLogger())),
 	}
 }
@@ -178,6 +184,20 @@ func (mw *waiterEvents) add(c *lockContext) {
 	c.w.lockWaitTimeout = time.Duration(c.opts.LockWaitTimeout) * time.Second
 	c.w.startWait()
 	mw.addToLazyCheckDeadlockC(c.w)
+
+	// Schedule a precise timer to wake the check loop at the waiter's
+	// LockWaitTimeout boundary.  Without this, the async path only checks
+	// on the coarse defaultLazyCheckDuration tick (5s in production), so
+	// a 1s lock_wait_timeout would wait up to 5s before enforcement.
+	if c.w.lockWaitTimeout > 0 {
+		d := c.w.lockWaitTimeout
+		time.AfterFunc(d, func() {
+			select {
+			case mw.checkC <- struct{}{}:
+			default:
+			}
+		})
+	}
 }
 
 func (mw *waiterEvents) addToLazyCheckDeadlockC(w *waiter) {
@@ -203,6 +223,11 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 			txn.Unlock()
 		case v := <-mw.checkOrphanC:
 			mw.checkOrphan(v)
+		case <-mw.checkC:
+			// Precise timer fired for a waiter's lockWaitTimeout.
+			// Run check() immediately instead of waiting for the
+			// next coarse lazy-check tick.
+			mw.check(timeout)
 		case <-timer.C:
 			mw.check(timeout)
 			timer.Reset(timeout)

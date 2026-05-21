@@ -115,12 +115,24 @@ func (l *remoteLockTable) lock(
 	// pb.LockOptions).
 	// Add lockRpcSlack to give the lock-table owner enough time to observe and
 	// return ErrLockTimeout before the client-side RPC deadline fires.
-	lockRpcTimeout := defaultLockRPCTimeout
+	var rpcCtx context.Context
+	var rpcCancel context.CancelFunc
 	if d := time.Duration(opts.LockWaitTimeout) * time.Second; d > 0 {
-		lockRpcTimeout = d + lockRpcSlack
+		lockRpcTimeout := d + lockRpcSlack
+		rpcCtx, rpcCancel = context.WithTimeout(context.Background(), lockRpcTimeout)
+		// Propagate cancellation from the caller's context.
+		if ctx != nil {
+			stop := context.AfterFunc(ctx, rpcCancel)
+			defer stop()
+		}
+	} else {
+		rpcCtx = ctx
 	}
-	rpcCtx, cancel := context.WithTimeout(ctx, lockRpcTimeout)
-	defer cancel()
+	defer func() {
+		if rpcCancel != nil {
+			rpcCancel()
+		}
+	}()
 	resp, err := l.client.Send(rpcCtx, req)
 
 	txn.Lock()

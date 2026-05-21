@@ -718,6 +718,59 @@ func checkBind(
 	assert.Equal(t, bind, l.getBind())
 }
 
+// TestRemoteLockWaitTimeout_PrecisionIndependentOfLazyCheck verifies that
+// the async lock_wait_timeout fires at the waiter's own deadline, NOT on
+// the coarse defaultLazyCheckDuration tick.  It temporarily sets the
+// global lazy-check interval to 10s, so without the precise AfterFunc
+// timer the test would timeout or take >10s.
+func TestRemoteLockWaitTimeout_PrecisionIndependentOfLazyCheck(t *testing.T) {
+	// Force the lazy-check interval to 10s so any enforcement that relies
+	// only on the periodic check() tick would take ≥10s.
+	orig := defaultLazyCheckDuration.Load().(time.Duration)
+	defaultLazyCheckDuration.Store(10 * time.Second)
+	defer defaultLazyCheckDuration.Store(orig)
+
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			l1 := s[0] // lock-table owner
+			l2 := s[1] // remote CN
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+
+			// txn1 holds the lock.
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+
+			// txn2 on remote CN requests with 1-second timeout.
+			// With the check tick at 10s, a coarse-tick-only approach
+			// would need >10s.  The precise AfterFunc timer must fire at ~1s.
+			start := time.Now()
+			_, err := l2.Lock(
+				ctx, tableID, [][]byte{row1}, txn2,
+				pb.LockOptions{
+					Granularity:     pb.Granularity_Row,
+					Mode:            pb.LockMode_Exclusive,
+					Policy:          pb.WaitPolicy_Wait,
+					LockWaitTimeout: 1,
+				})
+			elapsed := time.Since(start)
+
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
+				"expected lock-timeout, got %v", err)
+			// Must fire well before the 10s coarse tick.
+			require.Less(t, elapsed, 3*time.Second,
+				"precise timer should fire at ~1s, elapsed=%v", elapsed)
+		},
+	)
+}
+
 // TestRemoteLockWaitTimeout_ReturnsLockTimeout ensures that in a multi-CN
 // deployment, when txn2 on a remote CN waits on a lock held by txn1 on the
 // lock-table owner CN, txn2 receives ErrLockTimeout (lock timeout) after
