@@ -130,9 +130,10 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	res := make(map[string]string)
 
-	if idx.IndexOption.AlgoParamList > 0 {
-		res[catalog.IndexAlgoParamLists] = strconv.FormatInt(idx.IndexOption.AlgoParamList, 10)
+	if idx.IndexOption.AlgoParamList <= 0 {
+		return nil, moerr.NewInternalErrorNoCtx("invalid lists. lists must be > 0 for IVFPQ")
 	}
+	res[catalog.IndexAlgoParamLists] = strconv.FormatInt(idx.IndexOption.AlgoParamList, 10)
 	if idx.IndexOption.AlgoParamM > 0 {
 		res[catalog.HnswM] = strconv.FormatInt(idx.IndexOption.AlgoParamM, 10)
 	}

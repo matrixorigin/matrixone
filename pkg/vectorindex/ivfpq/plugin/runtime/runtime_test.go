@@ -84,16 +84,25 @@ func TestIvfpqSyncDescriptor(t *testing.T) {
 }
 
 func TestIvfpqParamsFromTree_Defaults(t *testing.T) {
-	idx := &tree.Index{IndexOption: &tree.IndexOption{}}
+	// IVF-PQ requires lists>0 explicitly. Supply a value so the rest of
+	// the defaults can be asserted.
+	idx := &tree.Index{IndexOption: &tree.IndexOption{AlgoParamList: 128}}
 	got, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.NoError(t, err)
-	// No list/m/bits, defaults applied for op_type/quantization/distribution_mode.
-	require.NotContains(t, got, catalog.IndexAlgoParamLists)
+	require.Equal(t, "128", got[catalog.IndexAlgoParamLists])
 	require.NotContains(t, got, catalog.HnswM)
 	require.NotContains(t, got, catalog.BitsPerCode)
 	require.Equal(t, metric.OpType_L2Distance, got[catalog.IndexAlgoParamOpType])
 	require.Equal(t, metric.Quantization_F32_Str, got[catalog.Quantization])
 	require.Equal(t, vectorindex.DistributionMode_SINGLE_GPU_Str, got[catalog.DistributionMode])
+}
+
+func TestIvfpqParamsFromTree_RequiresLists(t *testing.T) {
+	// lists omitted (AlgoParamList==0) → ParamsFromTree must error.
+	idx := &tree.Index{IndexOption: &tree.IndexOption{}}
+	_, err := CatalogHooks{}.ParamsFromTree(idx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "lists must be > 0")
 }
 
 func TestIvfpqParamsFromTree_AllOptions(t *testing.T) {
@@ -116,6 +125,7 @@ func TestIvfpqParamsFromTree_AllOptions(t *testing.T) {
 
 func TestIvfpqParamsFromTree_InvalidOpType(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{
+		AlgoParamList:         128,
 		AlgoParamVectorOpType: "not_a_real_op_type",
 	}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
@@ -125,7 +135,8 @@ func TestIvfpqParamsFromTree_InvalidOpType(t *testing.T) {
 
 func TestIvfpqParamsFromTree_InvalidQuantization(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{
-		Quantization: "not_real",
+		AlgoParamList: 128,
+		Quantization:  "not_real",
 	}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
@@ -134,6 +145,7 @@ func TestIvfpqParamsFromTree_InvalidQuantization(t *testing.T) {
 
 func TestIvfpqParamsFromTree_InvalidDistributionMode(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{
+		AlgoParamList:    128,
 		DistributionMode: "not_real",
 	}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
@@ -146,6 +158,7 @@ func TestIvfpqParamsFromTree_IncludeColumns(t *testing.T) {
 	col2 := tree.NewUnresolvedColName("name")
 	empty := tree.NewUnresolvedColName("")
 	idx := &tree.Index{IndexOption: &tree.IndexOption{
+		AlgoParamList:  128,
 		IncludeColumns: []*tree.UnresolvedName{col1, empty, col2},
 	}}
 	got, err := CatalogHooks{}.ParamsFromTree(idx)

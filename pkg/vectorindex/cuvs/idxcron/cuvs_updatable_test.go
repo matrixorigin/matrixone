@@ -65,18 +65,20 @@ func buildTestTableDef(tblType, algoParams string, dim int32) *plan.TableDef {
 	}
 }
 
-// chunkBytesWithRecords builds a single tag=1 chunk frame carrying n
-// DELETE records (the smallest, 9 bytes each — sufficient to test
-// counting without committing to a vec/include encoding).
-func chunkBytesWithRecords(t *testing.T, n int) []byte {
+// chunkBytesWithRecords builds a single tag=1 chunk frame carrying
+// nIns+nDel DELETE records (the smallest encoding, 9 bytes each),
+// with the chunk header advertising the per-op counts as (nIns, nDel).
+// Gate logic reads counts from the header (not by walking records),
+// so the chosen record opcode doesn't affect the unit under test.
+func chunkBytesWithRecords(t *testing.T, nIns, nDel int) []byte {
 	t.Helper()
 	var records []byte
-	for i := 0; i < n; i++ {
+	for i := 0; i < nIns+nDel; i++ {
 		rec, err := cuvscdc.EncodeEventRecord(nil, cuvscdc.CdcOpDelete, int64(i+1), nil, nil, testDim, 0)
 		require.NoError(t, err)
 		records = append(records, rec...)
 	}
-	return cuvscdc.FrameCdcChunk(records, nil)
+	return cuvscdc.FrameCdcChunk(records, nil, uint32(nIns), uint32(nDel), 0)
 }
 
 // stubSelect returns a runSelectChunkSql replacement that yields a
@@ -111,16 +113,74 @@ func TestCuvsUpdatable_IndexDefMissing(t *testing.T) {
 	require.Contains(t, err.Error(), "no IndexDef found")
 }
 
-func TestCuvsUpdatable_ThresholdMissing(t *testing.T) {
+func TestCuvsUpdatable_ThresholdMissingNoDefault(t *testing.T) {
 	// algoParams has no IntermediateGraphDegree key → threshold reads as 0.
+	// Spec.MinSizeDefault is also 0 (unset) → effective threshold stays 0.
+	// Fall through to count; count < 0 is never true so any count fires.
+	mp := mpool.MustNewZero()
 	tableDef := buildTestTableDef(catalog.Cagra_TblType_Storage, `{}`, testDim)
+	stub := gostub.Stub(&runSelectChunkSql, stubSelect(t, mp, nil))
+	defer stub.Reset()
+
 	ok, reason, err := CuvsUpdatable(idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName, Sqlproc: nil}, CuvsUpdatableSpec{
 		StorageTableType: catalog.Cagra_TblType_Storage,
 		ThresholdParam:   catalog.IntermediateGraphDegree,
+		// MinSizeDefault deliberately unset (0).
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Empty(t, reason)
+}
+
+func TestCuvsUpdatable_ThresholdMissingFallsBackToMinSize(t *testing.T) {
+	// algoParams missing IntermediateGraphDegree → threshold reads as 0
+	// → falls back to spec.MinSizeDefault=128 (the cuvs CAGRA default).
+	// With only 5 delta records, gate still skips (5 < 128).
+	const minSizeDefault = 128
+	mp := mpool.MustNewZero()
+	tableDef := buildTestTableDef(catalog.Cagra_TblType_Storage, `{}`, testDim)
+	stub := gostub.Stub(&runSelectChunkSql, stubSelect(t, mp, [][]byte{chunkBytesWithRecords(t, 5, 0)}))
+	defer stub.Reset()
+
+	ok, reason, err := CuvsUpdatable(idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName, Sqlproc: nil}, CuvsUpdatableSpec{
+		StorageTableType: catalog.Cagra_TblType_Storage,
+		ThresholdParam:   catalog.IntermediateGraphDegree,
+		MinSizeDefault:   minSizeDefault,
 	})
 	require.NoError(t, err)
 	require.False(t, ok)
-	require.Contains(t, reason, "missing or non-positive")
+	require.Contains(t, reason, fmt.Sprintf("CDC delta records 5 < threshold %d", minSizeDefault))
+}
+
+func TestCuvsUpdatable_ExplicitThresholdOverridesMinSize(t *testing.T) {
+	// algoParams CARRIES IntermediateGraphDegree=2 → threshold=2.
+	// MinSizeDefault=128 should NOT kick in because the explicit value
+	// wins. With 3 delta records, gate fires (3 >= 2).
+	mp := mpool.MustNewZero()
+	algoParams := fmt.Sprintf(`{"%s":2}`, catalog.IntermediateGraphDegree)
+	tableDef := buildTestTableDef(catalog.Cagra_TblType_Storage, algoParams, testDim)
+	stub := gostub.Stub(&runSelectChunkSql, stubSelect(t, mp, [][]byte{chunkBytesWithRecords(t, 3, 0)}))
+	defer stub.Reset()
+
+	ok, _, err := CuvsUpdatable(idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName, Sqlproc: nil}, CuvsUpdatableSpec{
+		StorageTableType: catalog.Cagra_TblType_Storage,
+		ThresholdParam:   catalog.IntermediateGraphDegree,
+		MinSizeDefault:   128,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+}
+
+func TestCuvsUpdatable_ThresholdNegative(t *testing.T) {
+	// Negative threshold is invalid and surfaces as an error.
+	algoParams := fmt.Sprintf(`{"%s":-1}`, catalog.IntermediateGraphDegree)
+	tableDef := buildTestTableDef(catalog.Cagra_TblType_Storage, algoParams, testDim)
+	_, _, err := CuvsUpdatable(idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName, Sqlproc: nil}, CuvsUpdatableSpec{
+		StorageTableType: catalog.Cagra_TblType_Storage,
+		ThresholdParam:   catalog.IntermediateGraphDegree,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "negative threshold")
 }
 
 func TestCuvsUpdatable_ThresholdNonInt(t *testing.T) {
@@ -143,7 +203,7 @@ func TestCuvsUpdatable_BelowThreshold(t *testing.T) {
 	tableDef := buildTestTableDef(catalog.Cagra_TblType_Storage, algoParams, testDim)
 
 	// 5 records, threshold 128 → not enough delta to rebuild.
-	stub := gostub.Stub(&runSelectChunkSql, stubSelect(t, mp, [][]byte{chunkBytesWithRecords(t, 5)}))
+	stub := gostub.Stub(&runSelectChunkSql, stubSelect(t, mp, [][]byte{chunkBytesWithRecords(t, 5, 0)}))
 	defer stub.Reset()
 
 	ok, reason, err := CuvsUpdatable(idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName, Sqlproc: nil}, CuvsUpdatableSpec{
@@ -164,8 +224,8 @@ func TestCuvsUpdatable_AtOrAboveThreshold(t *testing.T) {
 
 	// 6 records across 2 chunks → comfortably above threshold 4.
 	stub := gostub.Stub(&runSelectChunkSql, stubSelect(t, mp, [][]byte{
-		chunkBytesWithRecords(t, 4),
-		chunkBytesWithRecords(t, 2),
+		chunkBytesWithRecords(t, 4, 0),
+		chunkBytesWithRecords(t, 2, 0),
 	}))
 	defer stub.Reset()
 
@@ -206,7 +266,7 @@ func TestCuvsUpdatable_IvfpqShape(t *testing.T) {
 	algoParams := fmt.Sprintf(`{"%s":%d}`, catalog.IndexAlgoParamLists, threshold)
 	tableDef := buildTestTableDef(catalog.Ivfpq_TblType_Storage, algoParams, testDim)
 
-	stub := gostub.Stub(&runSelectChunkSql, stubSelect(t, mp, [][]byte{chunkBytesWithRecords(t, 3)}))
+	stub := gostub.Stub(&runSelectChunkSql, stubSelect(t, mp, [][]byte{chunkBytesWithRecords(t, 3, 0)}))
 	defer stub.Reset()
 
 	ok, _, err := CuvsUpdatable(idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName, Sqlproc: nil}, CuvsUpdatableSpec{

@@ -74,14 +74,14 @@ func encodeBatch(
 	for i, op := range ops {
 		var v []float32
 		var inc []byte
-		if op == CdcOpInsert {
+		if op == CdcOpInsert || op == CdcOpUpsert {
 			if insertIdx >= len(vecs) {
-				t.Fatalf("encodeBatch: ran out of INSERT vecs at i=%d", i)
+				t.Fatalf("encodeBatch: ran out of INSERT/UPSERT vecs at i=%d", i)
 			}
 			v = vecs[insertIdx]
 			if includeBytesPerRow > 0 {
 				if insertIdx >= len(includes) {
-					t.Fatalf("encodeBatch: ran out of INSERT includes at i=%d", i)
+					t.Fatalf("encodeBatch: ran out of INSERT/UPSERT includes at i=%d", i)
 				}
 				inc = includes[insertIdx]
 			}
@@ -391,7 +391,7 @@ func TestReplayEventLog_DeleteInsertDelete(t *testing.T) {
 	vecs := [][]float32{{1, 2, 3, 4}}
 	buf, _ := encodeBatch(t, dim, 0, ops, pkids, vecs, nil)
 
-	chunks := []EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil)}}
+	chunks := []EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}
 	state, err := ReplayEventLog(chunks, dim, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -404,8 +404,19 @@ func TestReplayEventLog_DeleteInsertDelete(t *testing.T) {
 	}
 }
 
-// TestReplayEventLog_InsertDeleteInsert: opposite collapse — a final INSERT
-// after a DELETE wins. Common case: re-INSERT of a previously-deleted pkid.
+// TestReplayEventLog_InsertDeleteInsert: a final INSERT after a DELETE
+// wins for the OVERFLOW vec, but the pkid STAYS in the deleted set —
+// INSERT must not un-filter a possible pre-rebuild main-index entry.
+//
+// Walk-through:
+//
+//	INSERT 7 (V=[1,1])  → overflow[7] = [1,1]
+//	DELETE 7            → drop from overflow; deleted += 7
+//	INSERT 7 (V=[9,9])  → overflow[7] = [9,9]; deleted retains 7
+//
+// At search time, any pre-rebuild main-index entry for pkid=7 is
+// filtered out (deleted contains 7), and the overflow returns V=[9,9].
+// Net result: single live entry pkid=7 with the latest vec.
 func TestReplayEventLog_InsertDeleteInsert(t *testing.T) {
 	dim := 2
 	ops := []CdcOp{CdcOpInsert, CdcOpDelete, CdcOpInsert}
@@ -413,17 +424,113 @@ func TestReplayEventLog_InsertDeleteInsert(t *testing.T) {
 	vecs := [][]float32{{1, 1}, {9, 9}}
 	buf, _ := encodeBatch(t, dim, 0, ops, pkids, vecs, nil)
 
-	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil)}}, dim, 0)
+	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Deleted) != 0 {
-		t.Fatalf("deleted should be empty, got %v", state.Deleted)
+	if len(state.Deleted) != 1 || state.Deleted[0] != 7 {
+		t.Fatalf("deleted should be {7} after DELETE→INSERT (INSERT must not clear deleted set), got %v", state.Deleted)
 	}
 	if len(state.Overflow) != 1 || state.Overflow[0].Pkid != 7 {
 		t.Fatalf("overflow: got %v want one entry pkid=7", state.Overflow)
 	}
-	// Last INSERT's vec wins.
+	// Last INSERT's vec wins for the overflow entry.
+	if state.Overflow[0].Vec[0] != 9 || state.Overflow[0].Vec[1] != 9 {
+		t.Fatalf("vec: got %v want [9 9]", state.Overflow[0].Vec)
+	}
+}
+
+// TestReplayEventLog_UpsertSingle: a single UPSERT must populate BOTH
+// the deleted set (so any pre-rebuild main-index entry for pkid is
+// filtered) AND the overflow (with the new vec). This pins the
+// "UPSERT = DELETE + INSERT at the replay-state level" contract.
+func TestReplayEventLog_UpsertSingle(t *testing.T) {
+	dim := 2
+	buf, _ := encodeBatch(t, dim, 0,
+		[]CdcOp{CdcOpUpsert}, []int64{7}, [][]float32{{1, 1}}, nil)
+
+	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, dim, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Deleted) != 1 || state.Deleted[0] != 7 {
+		t.Fatalf("deleted should be {7} (UPSERT marks pkid for main-index filtering), got %v", state.Deleted)
+	}
+	if len(state.Overflow) != 1 || state.Overflow[0].Pkid != 7 {
+		t.Fatalf("overflow: got %v want one entry pkid=7 (UPSERT writes new vec to brute-force overflow)", state.Overflow)
+	}
+	if state.Overflow[0].Vec[0] != 1 || state.Overflow[0].Vec[1] != 1 {
+		t.Fatalf("vec: got %v want [1 1]", state.Overflow[0].Vec)
+	}
+}
+
+// TestReplayEventLog_UpsertThenDelete: UPSERT followed by DELETE for
+// the same pkid drops the overflow entry; the deleted set still has
+// the pkid (it was marked by the UPSERT and not cleared by the
+// DELETE — DELETE only re-asserts it).
+func TestReplayEventLog_UpsertThenDelete(t *testing.T) {
+	dim := 2
+	buf, _ := encodeBatch(t, dim, 0,
+		[]CdcOp{CdcOpUpsert, CdcOpDelete}, []int64{7, 7}, [][]float32{{1, 1}}, nil)
+
+	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, dim, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Deleted) != 1 || state.Deleted[0] != 7 {
+		t.Fatalf("deleted should be {7}, got %v", state.Deleted)
+	}
+	if len(state.Overflow) != 0 {
+		t.Fatalf("overflow should be empty after final DELETE, got %v", state.Overflow)
+	}
+}
+
+// TestReplayEventLog_UpsertReplayIdempotent: the same UPSERT replayed
+// multiple times (the user's "stream corruption replay" concern) must
+// produce the same final state as a single UPSERT — idempotent replay
+// via overflow-map last-write-wins.
+func TestReplayEventLog_UpsertReplayIdempotent(t *testing.T) {
+	dim := 2
+	buf, _ := encodeBatch(t, dim, 0,
+		[]CdcOp{CdcOpUpsert, CdcOpUpsert, CdcOpUpsert},
+		[]int64{7, 7, 7},
+		[][]float32{{1, 1}, {1, 1}, {1, 1}}, nil)
+
+	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, dim, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Deleted) != 1 || state.Deleted[0] != 7 {
+		t.Fatalf("deleted should be {7} (idempotent UPSERT replay), got %v", state.Deleted)
+	}
+	if len(state.Overflow) != 1 || state.Overflow[0].Pkid != 7 {
+		t.Fatalf("overflow: got %v want one entry pkid=7", state.Overflow)
+	}
+	if state.Overflow[0].Vec[0] != 1 || state.Overflow[0].Vec[1] != 1 {
+		t.Fatalf("vec: got %v want [1 1]", state.Overflow[0].Vec)
+	}
+}
+
+// TestReplayEventLog_InsertAfterDeleteDoesNotUnfilter: regression test
+// for the load-bearing INSERT semantic. INSERT must NOT clear the pkid
+// from the deleted set — doing so would re-expose a pre-rebuild
+// main-index entry, causing a duplicate (V_old from main + V_new from
+// overflow) at search time.
+func TestReplayEventLog_InsertAfterDeleteDoesNotUnfilter(t *testing.T) {
+	dim := 2
+	buf, _ := encodeBatch(t, dim, 0,
+		[]CdcOp{CdcOpDelete, CdcOpInsert}, []int64{7, 7}, [][]float32{{9, 9}}, nil)
+
+	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, dim, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Deleted) != 1 || state.Deleted[0] != 7 {
+		t.Fatalf("deleted MUST retain {7} after INSERT — clearing it would re-expose a pre-rebuild main-index entry. Got %v", state.Deleted)
+	}
+	if len(state.Overflow) != 1 || state.Overflow[0].Pkid != 7 {
+		t.Fatalf("overflow: got %v want one entry pkid=7", state.Overflow)
+	}
 	if state.Overflow[0].Vec[0] != 9 || state.Overflow[0].Vec[1] != 9 {
 		t.Fatalf("vec: got %v want [9 9]", state.Overflow[0].Vec)
 	}
@@ -443,8 +550,8 @@ func TestReplayEventLog_MultiChunk(t *testing.T) {
 
 	// Hand them to ReplayEventLog reversed; SortChunks should normalize.
 	chunks := []EventChunk{
-		{ChunkId: 1, Data: FrameCdcChunk(buf1, nil)},
-		{ChunkId: 0, Data: FrameCdcChunk(buf0, nil)},
+		{ChunkId: 1, Data: FrameCdcChunk(buf1, nil, 0, 0, 0)},
+		{ChunkId: 0, Data: FrameCdcChunk(buf0, nil, 0, 0, 0)},
 	}
 	SortChunks(chunks)
 	state, err := ReplayEventLog(chunks, dim, 0)
@@ -473,7 +580,7 @@ func TestReplayEventLog_WithInclude(t *testing.T) {
 		[][]float32{{1, 2}},
 		[][]byte{include},
 	)
-	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil)}}, dim, includeBytesPerRow)
+	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, dim, includeBytesPerRow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +601,7 @@ func TestReplayEventLog_CapturesColMetaJSON(t *testing.T) {
 	colMetaJSON := `[{"name":"a","type":1}]`
 	buf, _ := encodeBatch(t, dim, 0,
 		[]CdcOp{CdcOpInsert}, []int64{1}, [][]float32{{1, 2}}, nil)
-	chunks := []EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, []byte(colMetaJSON))}}
+	chunks := []EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, []byte(colMetaJSON), 0, 0, 0)}}
 	state, err := ReplayEventLog(chunks, dim, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -513,7 +620,7 @@ func TestReplayEventLog_NoColMetaJSON(t *testing.T) {
 	dim := 2
 	buf, _ := encodeBatch(t, dim, 0,
 		[]CdcOp{CdcOpInsert}, []int64{1}, [][]float32{{1, 2}}, nil)
-	chunks := []EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil)}}
+	chunks := []EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}
 	state, err := ReplayEventLog(chunks, dim, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -531,7 +638,7 @@ func TestReplayEventLog_RejectsCorruptFrame(t *testing.T) {
 	dim := 4
 	buf, _ := encodeBatch(t, dim, 0,
 		[]CdcOp{CdcOpDelete}, []int64{1}, nil, nil)
-	good := FrameCdcChunk(buf, nil)
+	good := FrameCdcChunk(buf, nil, 0, 0, 0)
 
 	type corruption struct {
 		name string

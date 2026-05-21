@@ -65,7 +65,7 @@ func TestSaveSmallTailAsCdc_NoInclude(t *testing.T) {
 	for _, m := range matches {
 		framed, err := hex.DecodeString(m[1])
 		require.NoError(t, err)
-		records, _, err := UnframeCdcChunk(framed)
+		records, _, _, _, _, err := UnframeCdcChunk(framed)
 		require.NoError(t, err)
 		pos := 0
 		for pos < len(records) {
@@ -112,7 +112,7 @@ func TestSaveSmallTailAsCdc_WithInclude(t *testing.T) {
 	for _, m := range matches {
 		framed, err := hex.DecodeString(m[1])
 		require.NoError(t, err)
-		records, _, err := UnframeCdcChunk(framed)
+		records, _, _, _, _, err := UnframeCdcChunk(framed)
 		require.NoError(t, err)
 		pos := 0
 		for pos < len(records) {
@@ -177,7 +177,7 @@ func TestSaveSmallTailAsCdc_EmbedsColMetaInEveryChunk(t *testing.T) {
 	for _, m := range matches {
 		framed, err := hex.DecodeString(m[1])
 		require.NoError(t, err)
-		records, header, err := UnframeCdcChunk(framed)
+		records, header, _, _, _, err := UnframeCdcChunk(framed)
 		require.NoError(t, err)
 		require.Equal(t, colMetaJSON, string(header),
 			"every chunk's frame header section must carry colMetaJSON")

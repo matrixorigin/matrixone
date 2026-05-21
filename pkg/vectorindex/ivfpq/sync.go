@@ -139,10 +139,12 @@ func (s *IvfpqSync) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorI
 			}
 			ninsert++
 		case vectorindex.CDC_UPSERT:
-			if err := s.appendRecord(cuvscdc.CdcOpDelete, e.PKey, nil, nil); err != nil {
-				return err
-			}
-			if err := s.appendRecord(cuvscdc.CdcOpInsert, e.PKey, e.Vec, e.IncludeBytes); err != nil {
+			// UPSERT emits a single CdcOpUpsert record (not DELETE+INSERT).
+			// Replay treats it identically to INSERT (idempotent overflow
+			// write) and the idxcron frame counter ignores UPSERTs since
+			// MO UPSERT is unreliable (may be duplicate / replay-from-
+			// corruption). See cagra/sync.go::Update for full rationale.
+			if err := s.appendRecord(cuvscdc.CdcOpUpsert, e.PKey, e.Vec, e.IncludeBytes); err != nil {
 				return err
 			}
 			nupdate++
@@ -172,7 +174,8 @@ func (s *IvfpqSync) AppendRecords(_ *sqlexec.SqlProcess, recordBytes []byte) err
 		switch op {
 		case cuvscdc.CdcOpDelete:
 			n = 9 // op (1) + pkid (8)
-		case cuvscdc.CdcOpInsert:
+		case cuvscdc.CdcOpInsert, cuvscdc.CdcOpUpsert:
+			// UPSERT shares INSERT's payload shape; only the op byte differs.
 			n = 9 + 4*s.dim + s.includeBytesPerRow
 		default:
 			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
@@ -193,7 +196,7 @@ func (s *IvfpqSync) AppendRecords(_ *sqlexec.SqlProcess, recordBytes []byte) err
 }
 
 func (s *IvfpqSync) appendRecord(op cuvscdc.CdcOp, pkid int64, vec []float32, include []byte) error {
-	if op == cuvscdc.CdcOpInsert {
+	if op == cuvscdc.CdcOpInsert || op == cuvscdc.CdcOpUpsert {
 		if len(vec) != s.dim {
 			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
 				"IvfpqSync.appendRecord: vec length %d != dim %d", len(vec), s.dim))

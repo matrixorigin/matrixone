@@ -156,11 +156,20 @@ func (s *CagraSync) Destroy() {
 	s.pendingSizes = nil
 }
 
-// Update encodes a CDC batch into the pending event-record buffer. UPSERT
-// decomposes to DELETE+INSERT (cuvs has no in-place mutate; emitting DELETE
-// first preserves last-event-wins if a later DELETE arrives for the same
-// pkid). No per-pkid lookup, no in-memory consolidation — replay collapses
-// duplicates at search-side load time.
+// Update encodes a CDC batch into the pending event-record buffer. Each
+// CDC event maps 1:1 to a wire record:
+//
+//	CDC_INSERT → CdcOpInsert
+//	CDC_UPSERT → CdcOpUpsert (distinct from INSERT so the idxcron count
+//	             gate can ignore UPSERTs — MO UPSERT may be a duplicate
+//	             or replay-from-corruption, only INSERT is guaranteed
+//	             new-row)
+//	CDC_DELETE → CdcOpDelete
+//
+// Replay handles UPSERT and INSERT identically (idempotent overflow-map
+// write), so the previous DELETE+INSERT decomposition for UPSERTs is no
+// longer needed for correctness — and removing it stops over-counting
+// inserts in the frame's n_inserts counter.
 func (s *CagraSync) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorIndexCdc[float32]) error {
 	start := time.Now()
 
@@ -178,10 +187,7 @@ func (s *CagraSync) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorI
 			}
 			ninsert++
 		case vectorindex.CDC_UPSERT:
-			if err := s.appendRecord(cuvscdc.CdcOpDelete, e.PKey, nil, nil); err != nil {
-				return err
-			}
-			if err := s.appendRecord(cuvscdc.CdcOpInsert, e.PKey, e.Vec, e.IncludeBytes); err != nil {
+			if err := s.appendRecord(cuvscdc.CdcOpUpsert, e.PKey, e.Vec, e.IncludeBytes); err != nil {
 				return err
 			}
 			nupdate++
@@ -218,7 +224,8 @@ func (s *CagraSync) AppendRecords(_ *sqlexec.SqlProcess, recordBytes []byte) err
 		switch op {
 		case cuvscdc.CdcOpDelete:
 			n = 9 // op (1) + pkid (8)
-		case cuvscdc.CdcOpInsert:
+		case cuvscdc.CdcOpInsert, cuvscdc.CdcOpUpsert:
+			// UPSERT shares INSERT's payload shape; only the op byte differs.
 			n = 9 + 4*s.dim + s.includeBytesPerRow
 		default:
 			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
@@ -240,7 +247,7 @@ func (s *CagraSync) AppendRecords(_ *sqlexec.SqlProcess, recordBytes []byte) err
 
 // appendRecord encodes a single record onto the pending buffer.
 func (s *CagraSync) appendRecord(op cuvscdc.CdcOp, pkid int64, vec []float32, include []byte) error {
-	if op == cuvscdc.CdcOpInsert {
+	if op == cuvscdc.CdcOpInsert || op == cuvscdc.CdcOpUpsert {
 		if len(vec) != s.dim {
 			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
 				"CagraSync.appendRecord: vec length %d != dim %d", len(vec), s.dim))

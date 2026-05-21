@@ -181,7 +181,7 @@ func TestCuvsCdcWriter_InsertEncodesAsInsertRecord(t *testing.T) {
 	require.Equal(t, float32(1.5), math.Float32frombits(binary.LittleEndian.Uint32(out[9:13])))
 }
 
-func TestCuvsCdcWriter_UpsertEncodesAsInsertRecord(t *testing.T) {
+func TestCuvsCdcWriter_UpsertEncodesAsUpsertRecord(t *testing.T) {
 	td := newTestCuvsTableDef("pk", "v", 2)
 	w, err := NewCuvsCdcWriter("cagra", "db", "tbl", "idx", td, newTestCuvsIndexDefs(td))
 	require.NoError(t, err)
@@ -192,8 +192,8 @@ func TestCuvsCdcWriter_UpsertEncodesAsInsertRecord(t *testing.T) {
 
 	out, err := w.ToSql()
 	require.NoError(t, err)
-	require.Equal(t, byte(cuvscdc.CdcOpInsert), out[0],
-		"Upsert must encode as INSERT (last-write-wins via replay)")
+	require.Equal(t, byte(cuvscdc.CdcOpUpsert), out[0],
+		"Upsert must encode with CdcOpUpsert so idxcron gate can ignore it (only INSERT is guaranteed new-row)")
 }
 
 func TestCuvsCdcWriter_DeleteEncodesAsDeleteRecord(t *testing.T) {
@@ -236,11 +236,12 @@ func TestCuvsCdcWriter_MultipleEventsConcatenate(t *testing.T) {
 
 	out, err := w.ToSql()
 	require.NoError(t, err)
-	// 2 INSERT (1+8+4*2 each) + 1 DELETE (9) = 2*17 + 9 = 43
+	// 1 INSERT (1+8+4*2=17) + 1 UPSERT (same shape=17) + 1 DELETE (9) = 43
 	require.Len(t, out, 2*(1+8+4*2)+9)
-	// Sanity-check record boundaries: parse forward.
+	// Sanity-check record boundaries: parse forward — distinct op bytes
+	// confirm Insert and Upsert no longer share an op code.
 	require.Equal(t, byte(cuvscdc.CdcOpInsert), out[0])
-	require.Equal(t, byte(cuvscdc.CdcOpInsert), out[17])
+	require.Equal(t, byte(cuvscdc.CdcOpUpsert), out[17])
 	require.Equal(t, byte(cuvscdc.CdcOpDelete), out[34])
 }
 

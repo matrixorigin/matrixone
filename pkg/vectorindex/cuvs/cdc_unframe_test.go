@@ -32,18 +32,18 @@ import (
 // TestUnframeCdcChunk_RoundTripEmpty: zero-length payload still
 // produces a valid frame of exactly cdcFrameOverhead bytes.
 func TestUnframeCdcChunk_RoundTripEmpty(t *testing.T) {
-	framed := FrameCdcChunk(nil, nil)
+	framed := FrameCdcChunk(nil, nil, 0, 0, 0)
 	require.Len(t, framed, cdcFrameOverhead)
-	got, _, err := UnframeCdcChunk(framed)
+	got, _, _, _, _, err := UnframeCdcChunk(framed)
 	require.NoError(t, err)
 	require.Len(t, got, 0)
 }
 
 func TestUnframeCdcChunk_RoundTrip(t *testing.T) {
 	payload := []byte("the quick brown fox jumps over the lazy dog")
-	framed := FrameCdcChunk(payload, nil)
+	framed := FrameCdcChunk(payload, nil, 0, 0, 0)
 	require.Len(t, framed, cdcFrameOverhead+len(payload))
-	got, _, err := UnframeCdcChunk(framed)
+	got, _, _, _, _, err := UnframeCdcChunk(framed)
 	require.NoError(t, err)
 	require.Equal(t, payload, got)
 }
@@ -52,24 +52,24 @@ func TestUnframeCdcChunk_TooShort(t *testing.T) {
 	// Every length from 0 .. cdcFrameOverhead-1 is rejected before
 	// any field-level parse — the bounds check must come first.
 	for n := 0; n < cdcFrameOverhead; n++ {
-		_, _, err := UnframeCdcChunk(make([]byte, n))
+		_, _, _, _, _, err := UnframeCdcChunk(make([]byte, n))
 		require.Error(t, err, "len=%d", n)
 		require.Contains(t, err.Error(), "too short")
 	}
 }
 
 func TestUnframeCdcChunk_BadStartMagic(t *testing.T) {
-	framed := FrameCdcChunk([]byte("payload"), nil)
+	framed := FrameCdcChunk([]byte("payload"), nil, 0, 0, 0)
 	framed[0] ^= 0xFF
-	_, _, err := UnframeCdcChunk(framed)
+	_, _, _, _, _, err := UnframeCdcChunk(framed)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bad start magic")
 }
 
 func TestUnframeCdcChunk_UnknownVersion(t *testing.T) {
-	framed := FrameCdcChunk([]byte("payload"), nil)
+	framed := FrameCdcChunk([]byte("payload"), nil, 0, 0, 0)
 	binary.LittleEndian.PutUint32(framed[4:8], cdcChunkVersion+1)
-	_, _, err := UnframeCdcChunk(framed)
+	_, _, _, _, _, err := UnframeCdcChunk(framed)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown version")
 }
@@ -80,9 +80,9 @@ func TestUnframeCdcChunk_UnknownVersion(t *testing.T) {
 // back to uint32 (where 0xFFFFFFFF + 32 wraps to 31) doesn't sneak
 // past as "frame size matches len(framed)".
 func TestUnframeCdcChunk_PlenOverflow(t *testing.T) {
-	framed := FrameCdcChunk([]byte("payload"), nil)
-	binary.LittleEndian.PutUint32(framed[8:12], math.MaxUint32)
-	_, _, err := UnframeCdcChunk(framed)
+	framed := FrameCdcChunk([]byte("payload"), nil, 0, 0, 0)
+	binary.LittleEndian.PutUint32(framed[20:24], math.MaxUint32)
+	_, _, _, _, _, err := UnframeCdcChunk(framed)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "payload_len")
 }
@@ -91,9 +91,9 @@ func TestUnframeCdcChunk_PlenOverflow(t *testing.T) {
 // payload bytes the producer wrote. The size check catches this
 // regardless of where the CRC would land.
 func TestUnframeCdcChunk_PlenUnderreports(t *testing.T) {
-	framed := FrameCdcChunk([]byte("12345678"), nil)
-	binary.LittleEndian.PutUint32(framed[8:12], 4) // claim 4, frame has 8
-	_, _, err := UnframeCdcChunk(framed)
+	framed := FrameCdcChunk([]byte("12345678"), nil, 0, 0, 0)
+	binary.LittleEndian.PutUint32(framed[20:24], 4) // claim 4, frame has 8
+	_, _, _, _, _, err := UnframeCdcChunk(framed)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "payload_len")
 }
@@ -102,9 +102,9 @@ func TestUnframeCdcChunk_PlenUnderreports(t *testing.T) {
 // frame can hold (and bigger than the payload bytes). Same size
 // check catches this from the other side.
 func TestUnframeCdcChunk_PlenOverreports(t *testing.T) {
-	framed := FrameCdcChunk([]byte("12345678"), nil)
-	binary.LittleEndian.PutUint32(framed[8:12], 16) // claim 16, frame has 8
-	_, _, err := UnframeCdcChunk(framed)
+	framed := FrameCdcChunk([]byte("12345678"), nil, 0, 0, 0)
+	binary.LittleEndian.PutUint32(framed[20:24], 16) // claim 16, frame has 8
+	_, _, _, _, _, err := UnframeCdcChunk(framed)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "payload_len")
 }
@@ -114,10 +114,10 @@ func TestUnframeCdcChunk_PlenOverreports(t *testing.T) {
 // footer) actually made it onto disk. The total frame is smaller
 // than declared.
 func TestUnframeCdcChunk_TruncatedAfterHeader(t *testing.T) {
-	framed := FrameCdcChunk(make([]byte, 64), nil)
+	framed := FrameCdcChunk(make([]byte, 64), nil, 0, 0, 0)
 	for cut := 1; cut <= 32 && len(framed)-cut >= cdcFrameOverhead; cut++ {
 		truncated := framed[:len(framed)-cut]
-		_, _, err := UnframeCdcChunk(truncated)
+		_, _, _, _, _, err := UnframeCdcChunk(truncated)
 		require.Error(t, err, "truncated by %d", cut)
 		// plen says 64 but len(framed)=96-cut → size mismatch
 		require.Contains(t, err.Error(), "payload_len")
@@ -128,9 +128,9 @@ func TestUnframeCdcChunk_TruncatedAfterHeader(t *testing.T) {
 // bytes themselves are truncated — caught by the length check
 // before any field parse.
 func TestUnframeCdcChunk_TruncatedHeader(t *testing.T) {
-	framed := FrameCdcChunk(make([]byte, 64), nil)
+	framed := FrameCdcChunk(make([]byte, 64), nil, 0, 0, 0)
 	for n := cdcHeaderSize; n < cdcFrameOverhead; n++ {
-		_, _, err := UnframeCdcChunk(framed[:n])
+		_, _, _, _, _, err := UnframeCdcChunk(framed[:n])
 		require.Error(t, err, "truncated to %d (< overhead %d)", n, cdcFrameOverhead)
 		require.Contains(t, err.Error(), "too short")
 	}
@@ -147,11 +147,11 @@ func TestUnframeCdcChunk_PlenTamperReCrc(t *testing.T) {
 	const origPayload = 64
 	const tamperShrink = 16 // reduce declared payload by this many bytes
 
-	framed := FrameCdcChunk(make([]byte, origPayload), nil)
+	framed := FrameCdcChunk(make([]byte, origPayload), nil, 0, 0, 0)
 	tampered := make([]byte, cdcHeaderSize+origPayload-tamperShrink+cdcFooterSize)
 	copy(tampered, framed)
 	newPlen := uint32(origPayload - tamperShrink)
-	binary.LittleEndian.PutUint32(tampered[8:12], newPlen)
+	binary.LittleEndian.PutUint32(tampered[20:24], newPlen)
 	// Recompute CRC over the new range so the integrity check itself
 	// passes — leaving only the end-magic check to catch the forgery.
 	newFooterOff := cdcHeaderSize + int(newPlen)
@@ -160,7 +160,7 @@ func TestUnframeCdcChunk_PlenTamperReCrc(t *testing.T) {
 	// End magic at newFooterOff+12 is whatever was at offset
 	// (cdcHeaderSize+newPlen+12) of the original frame — i.e. 4 bytes
 	// of zero-initialised payload — which is NOT cdcChunkMagic.
-	_, _, err := UnframeCdcChunk(tampered)
+	_, _, _, _, _, err := UnframeCdcChunk(tampered)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bad end magic")
 }
@@ -183,28 +183,28 @@ func TestUnframeCdcChunk_PlenTamperFullForgery(t *testing.T) {
 	const origPayload = 64
 	const tamperShrink = 16
 
-	framed := FrameCdcChunk(make([]byte, origPayload), nil)
+	framed := FrameCdcChunk(make([]byte, origPayload), nil, 0, 0, 0)
 	// Forge by writing a NEW well-formed smaller frame in-place,
 	// then keep the original suffix to make total bytes mismatch.
-	smaller := FrameCdcChunk(make([]byte, origPayload-tamperShrink), nil)
+	smaller := FrameCdcChunk(make([]byte, origPayload-tamperShrink), nil, 0, 0, 0)
 	tampered := append(append([]byte(nil), smaller...), framed[len(smaller):]...)
-	_, _, err := UnframeCdcChunk(tampered)
+	_, _, _, _, _, err := UnframeCdcChunk(tampered)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "payload_len")
 }
 
 func TestUnframeCdcChunk_PayloadBitFlip(t *testing.T) {
-	framed := FrameCdcChunk([]byte("important records"), nil)
+	framed := FrameCdcChunk([]byte("important records"), nil, 0, 0, 0)
 	framed[cdcHeaderSize+5] ^= 0x80 // flip a bit in the payload
-	_, _, err := UnframeCdcChunk(framed)
+	_, _, _, _, _, err := UnframeCdcChunk(framed)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "crc32 mismatch")
 }
 
 func TestUnframeCdcChunk_BadEndMagic(t *testing.T) {
-	framed := FrameCdcChunk([]byte("payload"), nil)
+	framed := FrameCdcChunk([]byte("payload"), nil, 0, 0, 0)
 	framed[len(framed)-1] ^= 0xFF
-	_, _, err := UnframeCdcChunk(framed)
+	_, _, _, _, _, err := UnframeCdcChunk(framed)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bad end magic")
 }
@@ -219,12 +219,12 @@ func TestUnframeCdcChunk_BadEndMagic(t *testing.T) {
 //
 // Run with: go test -run=. -fuzz=FuzzUnframeCdcChunk -fuzztime=30s
 func FuzzUnframeCdcChunk(f *testing.F) {
-	f.Add(FrameCdcChunk(nil, nil))
-	f.Add(FrameCdcChunk([]byte("seed"), nil))
-	f.Add(FrameCdcChunk(make([]byte, 4096), nil))
+	f.Add(FrameCdcChunk(nil, nil, 0, 0, 0))
+	f.Add(FrameCdcChunk([]byte("seed"), nil, 0, 0, 0))
+	f.Add(FrameCdcChunk(make([]byte, 4096), nil, 0, 0, 0))
 	// Hand-crafted corruption seeds, so the fuzzer doesn't have to
 	// rediscover the basic shapes.
-	flipped := FrameCdcChunk([]byte("seed"), nil)
+	flipped := FrameCdcChunk([]byte("seed"), nil, 0, 0, 0)
 	flipped[0] ^= 0xFF
 	f.Add(flipped)
 	f.Add(make([]byte, cdcFrameOverhead)) // all-zero, no valid magic
@@ -235,6 +235,6 @@ func FuzzUnframeCdcChunk(f *testing.F) {
 		// — corrupt inputs return an error, valid ones return the
 		// payload slice; the round-trip property is covered by the
 		// explicit tests above.
-		_, _, _ = UnframeCdcChunk(framed)
+		_, _, _, _, _, _ = UnframeCdcChunk(framed)
 	})
 }

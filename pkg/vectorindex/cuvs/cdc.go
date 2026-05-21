@@ -42,52 +42,69 @@ import (
 // rather than silently producing wrong replay state.
 //
 // Layout (all integers little-endian, all fields uint32-aligned, header
-// section starts at a 16-aligned offset):
+// section starts at a 28-aligned offset):
 //
 //	off       size  field
 //	  0       4     magic_start  = 0xCDC51A11
-//	  4       4     version      = 2
-//	  8       4     payload_len  = N (size of records section)
-//	 12       4     header_len   = H (size of header section, 0 when no INCLUDE)
-//	 16       H     header bytes (typically colMetaJSON; aligned, no padding)
-//	 16+H     N     records
-//	 16+H+N   4     crc32        IEEE over bytes [4 .. 16+H+N)
-//	 20+H+N   4     reserved     = 0
-//	 24+H+N   4     reserved     = 0
-//	 28+H+N   4     magic_end    = 0xCDC51A11
+//	  4       4     version      = 1
+//	  8       4     n_inserts    (count of CdcOpInsert records in this chunk)
+//	 12       4     n_deletes    (count of CdcOpDelete records in this chunk)
+//	 16       4     n_upserts    (count of CdcOpUpsert records in this chunk)
+//	 20       4     payload_len  = N (size of records section)
+//	 24       4     header_len   = H (size of header section, 0 when no INCLUDE)
+//	 28       H     header bytes (typically colMetaJSON; aligned, no padding)
+//	 28+H     N     records
+//	 28+H+N   4     crc32        IEEE over bytes [4 .. 28+H+N)
+//	 32+H+N   4     reserved     = 0
+//	 36+H+N   4     reserved     = 0
+//	 40+H+N   4     magic_end    = 0xCDC51A11
+//
+// n_inserts, n_deletes, and n_upserts let idxcron compute net change
+// without walking every record (DecodeEventRecord), and let logging /
+// observability surface the insert-vs-upsert breakdown — useful given
+// MO UPSERTs that "are mostly first-time inserts." The CRC covers all
+// three counters, so a flipped count byte is detected.
 //
 // The header section carries the INCLUDE-column metadata JSON when present
 // so each chunk is self-describing: search-side decode of the records can
 // recover includeBytesPerRow without needing a tag=0 sub-index (the
 // small-data-only path), and any chunk read in isolation knows its own
 // layout. Empty header (H=0) is the common case for indexes with no
-// INCLUDE columns; the frame degrades to the original 32-byte overhead.
+// INCLUDE columns; the frame degrades to a 44-byte overhead.
 //
 // CRC covers the full header+records section so a flipped header bit or
 // drifted header_len is detected. Both magics are the same constant;
 // mismatch on either signals truncation or wrong-row corruption.
 const (
 	cdcChunkMagic    uint32 = 0xCDC51A11
-	cdcChunkVersion  uint32 = 2
-	cdcHeaderSize           = 16
+	cdcChunkVersion  uint32 = 1
+	cdcHeaderSize           = 28
 	cdcFooterSize           = 16
-	cdcFrameOverhead        = cdcHeaderSize + cdcFooterSize // 32 bytes, ex. header section
+	cdcFrameOverhead        = cdcHeaderSize + cdcFooterSize // 44 bytes, ex. header section
 )
 
 // FrameCdcChunk wraps the given record bytes (plus an optional header,
 // typically colMetaJSON) into the on-wire chunk frame described above.
+// nInserts / nDeletes / nUpserts are the per-op record counts contained
+// in `records`, written into the frame header so downstream consumers
+// (idxcron Updatable, replay) can read counts without walking every
+// record.
+//
 // The returned slice is exactly cdcFrameOverhead + len(header) + len(records)
 // bytes. Exposed so tests can construct framed chunks directly.
 //
 // Pass header=nil when the chunk has no INCLUDE-column metadata.
-func FrameCdcChunk(records, header []byte) []byte {
+func FrameCdcChunk(records, header []byte, nInserts, nDeletes, nUpserts uint32) []byte {
 	hlen := len(header)
 	rlen := len(records)
 	out := make([]byte, cdcFrameOverhead+hlen+rlen)
 	binary.LittleEndian.PutUint32(out[0:4], cdcChunkMagic)
 	binary.LittleEndian.PutUint32(out[4:8], cdcChunkVersion)
-	binary.LittleEndian.PutUint32(out[8:12], uint32(rlen))
-	binary.LittleEndian.PutUint32(out[12:16], uint32(hlen))
+	binary.LittleEndian.PutUint32(out[8:12], nInserts)
+	binary.LittleEndian.PutUint32(out[12:16], nDeletes)
+	binary.LittleEndian.PutUint32(out[16:20], nUpserts)
+	binary.LittleEndian.PutUint32(out[20:24], uint32(rlen))
+	binary.LittleEndian.PutUint32(out[24:28], uint32(hlen))
 	copy(out[cdcHeaderSize:cdcHeaderSize+hlen], header)
 	copy(out[cdcHeaderSize+hlen:cdcHeaderSize+hlen+rlen], records)
 	footerOff := cdcHeaderSize + hlen + rlen
@@ -99,41 +116,45 @@ func FrameCdcChunk(records, header []byte) []byte {
 }
 
 // UnframeCdcChunk validates the frame and returns the record bytes plus
-// the header bytes (both aliased into framed). Returns an error on any
-// framing inconsistency: short input, wrong magic, unknown version,
-// length overrun, or CRC mismatch.
+// the header bytes (both aliased into framed) and the per-op counts
+// (inserts, deletes, upserts) recorded at frame time. Returns an error
+// on any framing inconsistency: short input, wrong magic, unknown
+// version, length overrun, or CRC mismatch.
 //
 // header is nil when the chunk has no INCLUDE-column metadata (H=0).
-func UnframeCdcChunk(framed []byte) (records, header []byte, err error) {
+func UnframeCdcChunk(framed []byte) (records, header []byte, nInserts, nDeletes, nUpserts uint32, err error) {
 	if len(framed) < cdcFrameOverhead {
-		return nil, nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: chunk too short (%d bytes < %d)", len(framed), cdcFrameOverhead)
+		return nil, nil, 0, 0, 0, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: chunk too short (%d bytes < %d)", len(framed), cdcFrameOverhead)
 	}
 	if got := binary.LittleEndian.Uint32(framed[0:4]); got != cdcChunkMagic {
-		return nil, nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: bad start magic 0x%08x (want 0x%08x)", got, cdcChunkMagic)
+		return nil, nil, 0, 0, 0, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: bad start magic 0x%08x (want 0x%08x)", got, cdcChunkMagic)
 	}
 	if v := binary.LittleEndian.Uint32(framed[4:8]); v != cdcChunkVersion {
-		return nil, nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: unknown version %d (want %d)", v, cdcChunkVersion)
+		return nil, nil, 0, 0, 0, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: unknown version %d (want %d)", v, cdcChunkVersion)
 	}
-	plen := binary.LittleEndian.Uint32(framed[8:12])
-	hlen := binary.LittleEndian.Uint32(framed[12:16])
+	nInserts = binary.LittleEndian.Uint32(framed[8:12])
+	nDeletes = binary.LittleEndian.Uint32(framed[12:16])
+	nUpserts = binary.LittleEndian.Uint32(framed[16:20])
+	plen := binary.LittleEndian.Uint32(framed[20:24])
+	hlen := binary.LittleEndian.Uint32(framed[24:28])
 	if uint64(plen)+uint64(hlen)+uint64(cdcFrameOverhead) != uint64(len(framed)) {
-		return nil, nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: payload_len %d + header_len %d + overhead %d != chunk size %d",
+		return nil, nil, 0, 0, 0, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: payload_len %d + header_len %d + overhead %d != chunk size %d",
 			plen, hlen, cdcFrameOverhead, len(framed))
 	}
 	footerOff := cdcHeaderSize + int(hlen) + int(plen)
 	gotCrc := binary.LittleEndian.Uint32(framed[footerOff : footerOff+4])
 	wantCrc := crc32.ChecksumIEEE(framed[4:footerOff])
 	if gotCrc != wantCrc {
-		return nil, nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: crc32 mismatch got=0x%08x want=0x%08x", gotCrc, wantCrc)
+		return nil, nil, 0, 0, 0, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: crc32 mismatch got=0x%08x want=0x%08x", gotCrc, wantCrc)
 	}
 	if got := binary.LittleEndian.Uint32(framed[footerOff+12 : footerOff+16]); got != cdcChunkMagic {
-		return nil, nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: bad end magic 0x%08x (want 0x%08x)", got, cdcChunkMagic)
+		return nil, nil, 0, 0, 0, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: bad end magic 0x%08x (want 0x%08x)", got, cdcChunkMagic)
 	}
 	if hlen > 0 {
 		header = framed[cdcHeaderSize : cdcHeaderSize+int(hlen)]
 	}
 	records = framed[cdcHeaderSize+int(hlen) : cdcHeaderSize+int(hlen)+int(plen)]
-	return records, header, nil
+	return records, header, nInserts, nDeletes, nUpserts, nil
 }
 
 // CDC event log helpers shared by CAGRA and IVF-PQ.
@@ -148,14 +169,30 @@ func UnframeCdcChunk(framed []byte) (records, header []byte, err error) {
 //
 //	DELETE: op:byte | pkid:int64                                                  // 9 bytes
 //	INSERT: op:byte | pkid:int64 | vec:4*dim | include:K                          // 9 + 4*dim + ibpr
+//	UPSERT: op:byte | pkid:int64 | vec:4*dim | include:K                          // same payload as INSERT
 //
 // INCLUDE-column metadata (colMetaJSON) is NOT a record — it lives in the
 // chunk frame's header section (see FrameCdcChunk). Records are pure
 // event payloads.
 //
-// UPSERT decomposes to DELETE+INSERT at write time (cuvs has no in-place
-// mutate; emitting DELETE first preserves last-event-wins semantics if a
-// later DELETE arrives for the same pkid).
+// UPSERT and INSERT have identical payload shapes but distinct op codes
+// and distinct replay semantics:
+//
+//	INSERT — guaranteed-new row → goes only into the brute-force overflow.
+//	UPSERT — may replace an existing main-index entry → acts as
+//	         DELETE + INSERT at the replay-state level: marks pkid in the
+//	         deleted set (so any old main-index entry is filtered at
+//	         search time) AND writes the new vec/include into the
+//	         brute-force overflow.
+//
+// They're kept distinct because MO UPSERT is ambiguous: it may be a real
+// row replacement, a retry of an already-applied event, or a replay from
+// the start after stream corruption. Only true INSERT is guaranteed to
+// be a brand-new row, so INSERT can skip the deleted-set entry while
+// UPSERT cannot. The idxcron frame counter (n_inserts in FrameCdcChunk)
+// only counts CdcOpInsert so the cron gate sees a strict lower bound on
+// growth. DELETE for an unknown pkid is silent — overflow-map delete is
+// a Go no-op and the deleted set is idempotent.
 
 // CdcOp is the op code stored in the leading byte of each event record.
 type CdcOp byte
@@ -163,6 +200,10 @@ type CdcOp byte
 const (
 	CdcOpDelete CdcOp = 0
 	CdcOpInsert CdcOp = 1
+	// CdcOpUpsert has the same payload as CdcOpInsert (op|pkid|vec|include)
+	// but is encoded distinctly so downstream consumers can ignore UPSERTs
+	// when computing reliable new-row counts (see package comment).
+	CdcOpUpsert CdcOp = 2
 )
 
 // CdcEventRecord is the decoded form of one tag=1 record.
@@ -195,21 +236,26 @@ func EncodeEventRecord(
 		binary.LittleEndian.PutUint64(pk[:], uint64(pkid))
 		dst = append(dst, pk[:]...)
 		return dst, nil
-	case CdcOpInsert:
+	case CdcOpInsert, CdcOpUpsert:
+		// UPSERT shares INSERT's payload layout — only the op byte differs.
+		opName := "INSERT"
+		if op == CdcOpUpsert {
+			opName = "UPSERT"
+		}
 		if dim <= 0 {
-			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: INSERT requires positive dim, got %d", dim)
+			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: %s requires positive dim, got %d", opName, dim)
 		}
 		if len(vec) != dim {
-			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: INSERT vec length %d != dim %d", len(vec), dim)
+			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: %s vec length %d != dim %d", opName, len(vec), dim)
 		}
 		if includeBytesPerRow > 0 && len(include) != includeBytesPerRow {
-			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: INSERT include length %d != includeBytesPerRow %d",
-				len(include), includeBytesPerRow)
+			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: %s include length %d != includeBytesPerRow %d",
+				opName, len(include), includeBytesPerRow)
 		}
 		if includeBytesPerRow == 0 && len(include) != 0 {
 			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: includeBytesPerRow=0 but include bytes supplied")
 		}
-		dst = append(dst, byte(CdcOpInsert))
+		dst = append(dst, byte(op))
 		var pk [8]byte
 		binary.LittleEndian.PutUint64(pk[:], uint64(pkid))
 		dst = append(dst, pk[:]...)
@@ -248,12 +294,12 @@ func DecodeEventRecord(
 		rec.Op = CdcOpDelete
 		rec.Pkid = int64(binary.LittleEndian.Uint64(src[1:9]))
 		return rec, 9, true
-	case CdcOpInsert:
+	case CdcOpInsert, CdcOpUpsert:
 		need := 9 + 4*dim + includeBytesPerRow
 		if dim <= 0 || includeBytesPerRow < 0 || len(src) < need {
 			return rec, 0, false
 		}
-		rec.Op = CdcOpInsert
+		rec.Op = op
 		rec.Pkid = int64(binary.LittleEndian.Uint64(src[1:9]))
 		rec.Vec = make([]float32, dim)
 		for k := 0; k < dim; k++ {
@@ -330,7 +376,22 @@ func CdcAppendEventsSql(
 			// caller bug.
 			return nil
 		}
-		framed := FrameCdcChunk(records[off:off+used], headerBytes)
+		// Count per-op records in this chunk by peeking at byte 0 of each
+		// record (the op code) using recordSizes to step through.
+		var nInserts, nDeletes, nUpserts uint32
+		recOff := off
+		for k := i; k < j; k++ {
+			switch CdcOp(records[recOff]) {
+			case CdcOpInsert:
+				nInserts++
+			case CdcOpDelete:
+				nDeletes++
+			case CdcOpUpsert:
+				nUpserts++
+			}
+			recOff += recordSizes[k]
+		}
+		framed := FrameCdcChunk(records[off:off+used], headerBytes, nInserts, nDeletes, nUpserts)
 		values = append(values, fmt.Sprintf("('%s', %d, unhex('%s'), %d)",
 			indexId, chunkId, hex.EncodeToString(framed), vectorindex.Tag_CdcEvents))
 		chunkId++
@@ -405,7 +466,7 @@ func PeekColMetaJSON(chunks []EventChunk) (string, error) {
 	if len(chunks) == 0 {
 		return "", nil
 	}
-	_, header, err := UnframeCdcChunk(chunks[0].Data)
+	_, header, _, _, _, err := UnframeCdcChunk(chunks[0].Data)
 	if err != nil {
 		return "", err
 	}
@@ -433,7 +494,7 @@ func ReplayEventLog(
 	var colMetaJSON string
 
 	for _, ch := range chunks {
-		data, header, err := UnframeCdcChunk(ch.Data)
+		data, header, _, _, _, err := UnframeCdcChunk(ch.Data)
 		if err != nil {
 			return ReplayState{}, moerr.NewInternalErrorNoCtxf("ReplayEventLog: chunk_id=%d: %v", ch.ChunkId, err)
 		}
@@ -456,10 +517,37 @@ func ReplayEventLog(
 			}
 			switch rec.Op {
 			case CdcOpDelete:
+				// DELETE: drop from overflow if present (silent no-op when
+				// absent — Go map delete is idempotent), mark in the
+				// deleted set so any existing main-index entry is filtered
+				// out at search time.
 				delete(overflow, rec.Pkid)
 				deleted[rec.Pkid] = struct{}{}
 			case CdcOpInsert:
-				delete(deleted, rec.Pkid)
+				// INSERT: guaranteed-new row → goes ONLY into the
+				// brute-force overflow. We deliberately do NOT clear
+				// the pkid from the deleted set: any prior DELETE was
+				// against the pre-rebuild main-index entry for this
+				// pkid, and that filter must persist (un-filtering it
+				// would re-expose the stale main-index version,
+				// producing a duplicate result alongside the new
+				// overflow version). The deleted set governs the
+				// main cuvs index; the overflow map governs the
+				// brute-force index; they're independent.
+				overflow[rec.Pkid] = OverflowEntry{
+					Pkid:    rec.Pkid,
+					Vec:     rec.Vec,
+					Include: rec.Include,
+				}
+			case CdcOpUpsert:
+				// UPSERT is semantically DELETE + INSERT at the replay-
+				// state level: mark in the deleted set (so any pre-rebuild
+				// main-index entry for this pkid is filtered out at search
+				// time) AND write the new version into the brute-force
+				// overflow. Idempotent — replaying the same UPSERT or a
+				// stream-corruption re-emission just re-writes the same
+				// (pkid, vec, include).
+				deleted[rec.Pkid] = struct{}{}
 				overflow[rec.Pkid] = OverflowEntry{
 					Pkid:    rec.Pkid,
 					Vec:     rec.Vec,

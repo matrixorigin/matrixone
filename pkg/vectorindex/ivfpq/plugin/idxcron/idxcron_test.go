@@ -21,7 +21,6 @@
 package idxcron
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -50,37 +49,6 @@ func TestIVFPQUpdatable_IndexDefMissing(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), catalog.Ivfpq_TblType_Storage)
-}
-
-// TestIVFPQUpdatable_ThresholdMissing: with an IVF-PQ storage IndexDef
-// but no "lists" key in algoParams, the shared body returns
-// (false, reason) where reason names the lists param.
-func TestIVFPQUpdatable_ThresholdMissing(t *testing.T) {
-	td := &plan.TableDef{
-		DbName: "db",
-		Name:   "src",
-		Indexes: []*plan.IndexDef{
-			{
-				IndexName:          ivfpqTestIndexName,
-				IndexAlgoTableType: catalog.Ivfpq_TblType_Storage,
-				IndexTableName:     "__ivfpq_storage",
-				IndexAlgoParams:    `{}`,
-				Parts:              []string{"v"},
-			},
-		},
-		Cols: []*plan.ColDef{
-			{Name: "v", Typ: plan.Type{Width: 4}},
-		},
-		Name2ColIndex: map[string]int32{"v": 0},
-	}
-	ok, reason, err := Hooks{}.Updatable(idxcronplugin.UpdatableInput{
-		TableDef:  td,
-		IndexName: ivfpqTestIndexName,
-	})
-	require.NoError(t, err)
-	require.False(t, ok)
-	require.Contains(t, reason,
-		fmt.Sprintf("threshold param %q missing or non-positive", catalog.IndexAlgoParamLists))
 }
 
 // TestIVFPQUpdatable_SatisfiesInterface: compile-time interface check.

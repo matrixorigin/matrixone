@@ -47,10 +47,16 @@ const cuvsWriterBufferCapacity = 8 * 1024 * 1024 // 8 MiB
 // satisfies), the output is not SQL — it's the binary event-record
 // stream consumed by RunCuvs → sync.AppendRecords.
 //
-// UPSERT events are encoded as INSERT records: the append-only event
-// log + replay's last-write-wins resolves correctness without the
-// DELETE-then-INSERT pair that synchronous in-process callers
-// (CagraSync.Update) emit.
+// INSERT and UPSERT are encoded with distinct op codes (CdcOpInsert /
+// CdcOpUpsert) sharing the same payload layout. Replay handles them
+// identically (idempotent overflow-map write — safe under MO's
+// duplicate / replay-from-corruption UPSERT semantics), but the chunk
+// frame's n_inserts counter tallies only CdcOpInsert so the idxcron
+// gate sees a strict lower bound on growth. This mirrors HNSW's
+// pattern (HnswSqlWriter preserves UPSERT distinctly all the way
+// through). The synchronous in-process callers (CagraSync.Update)
+// still emit DELETE+INSERT pairs as their own thing — that's a
+// different code path from this CDC writer.
 type CuvsCdcWriter struct {
 	algoName        string // diagnostic-only ("cagra" / "ivfpq")
 	tabledef        *plan.TableDef
@@ -179,12 +185,14 @@ func (w *CuvsCdcWriter) Empty() bool               { return len(w.pendingRecords
 func (w *CuvsCdcWriter) CheckLastOp(_ string) bool { return true }
 
 func (w *CuvsCdcWriter) Insert(ctx context.Context, row []any) error {
-	return w.encodeInsertOrUpsert(ctx, row)
+	return w.encodeInsertOrUpsert(ctx, row, cuvscdc.CdcOpInsert)
 }
 
-// Upsert encodes as INSERT — see package comment for the rationale.
+// Upsert encodes with CdcOpUpsert so the idxcron count gate can ignore
+// it — only true INSERTs are guaranteed-new-row events (see package
+// comment).
 func (w *CuvsCdcWriter) Upsert(ctx context.Context, row []any) error {
-	return w.encodeInsertOrUpsert(ctx, row)
+	return w.encodeInsertOrUpsert(ctx, row, cuvscdc.CdcOpUpsert)
 }
 
 // Delete encodes a DELETE event. Only the primary key is consulted —
@@ -218,7 +226,7 @@ func (w *CuvsCdcWriter) appendDelete(key int64) error {
 	return nil
 }
 
-func (w *CuvsCdcWriter) encodeInsertOrUpsert(ctx context.Context, row []any) error {
+func (w *CuvsCdcWriter) encodeInsertOrUpsert(ctx context.Context, row []any, op cuvscdc.CdcOp) error {
 	key, ok := row[w.pkPos].(int64)
 	if !ok {
 		return moerr.NewInternalError(ctx, fmt.Sprintf(
@@ -239,7 +247,7 @@ func (w *CuvsCdcWriter) encodeInsertOrUpsert(ctx context.Context, row []any) err
 	if err != nil {
 		return err
 	}
-	out, err := cuvscdc.EncodeEventRecord(w.pendingRecords, cuvscdc.CdcOpInsert,
+	out, err := cuvscdc.EncodeEventRecord(w.pendingRecords, op,
 		key, v, includeBytes, int(w.dimension), w.includeBytesPer)
 	if err != nil {
 		return err

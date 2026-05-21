@@ -64,7 +64,7 @@ func encodeChunk(t *testing.T, dim, includeBytesPerRow int, ops []cuvscdc.CdcOp,
 		require.NoError(t, err)
 		buf = out
 	}
-	return cuvscdc.FrameCdcChunk(buf, nil)
+	return cuvscdc.FrameCdcChunk(buf, nil, 0, 0, 0)
 }
 
 func TestLoadCdcEventsFromDB_RoundTrip(t *testing.T) {

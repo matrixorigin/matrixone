@@ -39,5 +39,9 @@ func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (bool, string, error) {
 	return cuvsidxcron.CuvsUpdatable(in, cuvsidxcron.CuvsUpdatableSpec{
 		StorageTableType: catalog.Cagra_TblType_Storage,
 		ThresholdParam:   catalog.IntermediateGraphDegree,
+		// cuvs.DefaultCagraBuildParams().IntermediateGraphDegree
+		// fallback for algoParams["intermediate_graph_degree"] when
+		// 0/missing.
+		MinSizeDefault: 128,
 	})
 }

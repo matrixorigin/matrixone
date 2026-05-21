@@ -38,5 +38,8 @@ func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (bool, string, error) {
 	return cuvsidxcron.CuvsUpdatable(in, cuvsidxcron.CuvsUpdatableSpec{
 		StorageTableType: catalog.Ivfpq_TblType_Storage,
 		ThresholdParam:   catalog.IndexAlgoParamLists,
+		// cuvs.DefaultIvfPqBuildParams().NLists fallback for
+		// algoParams["lists"] when 0/missing.
+		MinSizeDefault: 1024,
 	})
 }

@@ -22,7 +22,6 @@
 package idxcron
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -55,69 +54,6 @@ func TestCAGRAUpdatable_IndexDefMissing(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), catalog.Cagra_TblType_Storage)
-}
-
-// TestCAGRAUpdatable_ThresholdMissing: when the CAGRA storage IndexDef
-// exists but its algoParams omits intermediate_graph_degree, the
-// shared body returns (false, reason) where the reason names the
-// threshold param the spec asked about.
-func TestCAGRAUpdatable_ThresholdMissing(t *testing.T) {
-	td := &plan.TableDef{
-		DbName: "db",
-		Name:   "src",
-		Indexes: []*plan.IndexDef{
-			{
-				IndexName:          cagraTestIndexName,
-				IndexAlgoTableType: catalog.Cagra_TblType_Storage,
-				IndexTableName:     "__cagra_storage",
-				IndexAlgoParams:    `{}`,
-				Parts:              []string{"v"},
-			},
-		},
-		Cols: []*plan.ColDef{
-			{Name: "v", Typ: plan.Type{Width: 4}},
-		},
-		Name2ColIndex: map[string]int32{"v": 0},
-	}
-	ok, reason, err := Hooks{}.Updatable(idxcronplugin.UpdatableInput{
-		TableDef:  td,
-		IndexName: cagraTestIndexName,
-	})
-	require.NoError(t, err)
-	require.False(t, ok)
-	require.Contains(t, reason, catalog.IntermediateGraphDegree)
-}
-
-// TestCAGRAUpdatable_ThresholdMissingMessageIncludesParam asserts the
-// reason wires through the spec field so a future regression to the
-// wrong constant would surface here too.
-func TestCAGRAUpdatable_ThresholdMissingMessageIncludesParam(t *testing.T) {
-	td := &plan.TableDef{
-		DbName: "db",
-		Name:   "src",
-		Indexes: []*plan.IndexDef{
-			{
-				IndexName:          cagraTestIndexName,
-				IndexAlgoTableType: catalog.Cagra_TblType_Storage,
-				IndexTableName:     "__cagra_storage",
-				IndexAlgoParams:    `{}`,
-				Parts:              []string{"v"},
-			},
-		},
-		Cols: []*plan.ColDef{
-			{Name: "v", Typ: plan.Type{Width: 4}},
-		},
-		Name2ColIndex: map[string]int32{"v": 0},
-	}
-	_, reason, err := Hooks{}.Updatable(idxcronplugin.UpdatableInput{
-		TableDef:  td,
-		IndexName: cagraTestIndexName,
-	})
-	require.NoError(t, err)
-	// IntermediateGraphDegree is what the CAGRA wrapper hands to
-	// CuvsUpdatable; the reason format embeds the param name verbatim.
-	require.Contains(t, reason,
-		fmt.Sprintf("threshold param %q missing or non-positive", catalog.IntermediateGraphDegree))
 }
 
 // TestCAGRAUpdatable_SatisfiesInterface: belt-and-braces compile-time

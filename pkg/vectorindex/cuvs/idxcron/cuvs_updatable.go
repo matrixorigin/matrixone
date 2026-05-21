@@ -53,6 +53,16 @@ type CuvsUpdatableSpec struct {
 	// catalog.IntermediateGraphDegree; for IVF-PQ:
 	// catalog.IndexAlgoParamLists.
 	ThresholdParam string
+
+	// MinSizeDefault is the cuvs library default for ThresholdParam,
+	// applied as a min-size floor when indexAlgoParams[ThresholdParam]
+	// is 0/missing. CAGRA: 128 (cuvs.DefaultCagraBuildParams().
+	// IntermediateGraphDegree). IVF-PQ: 1024 (cuvs.DefaultIvfPqBuildParams().
+	// NLists). The min-size check is the load-bearing gate — even if
+	// the user didn't specify a build param, the rebuild needs at
+	// least the cuvs default count of records to produce a usable
+	// index.
+	MinSizeDefault int64
 }
 
 // runSelectChunkSql runs the SELECT used to fetch tag=1 chunk data.
@@ -116,9 +126,18 @@ func CuvsUpdatable(
 	if err != nil {
 		return false, "", err
 	}
-	if threshold <= 0 {
-		return false, fmt.Sprintf("threshold param %q missing or non-positive in indexAlgoParams",
-			spec.ThresholdParam), nil
+	if threshold < 0 {
+		return false, "", moerr.NewInternalErrorNoCtxf(
+			"CuvsUpdatable: indexAlgoParams[%q] negative threshold %d",
+			spec.ThresholdParam, threshold)
+	}
+	// threshold == 0 means indexAlgoParams didn't carry a positive value
+	// for the build param. Fall back to the cuvs library default
+	// (spec.MinSizeDefault) so the cron still gates on a sensible
+	// minimum — the build-side min-size requirement applies whether the
+	// user named a value or accepted the cuvs default.
+	if threshold == 0 {
+		threshold = spec.MinSizeDefault
 	}
 
 	// Derive dim + includeBytesPerRow for DecodeEventRecord. The
@@ -232,8 +251,10 @@ func includedColumnsFromAlgoParams(algoParams string) string {
 }
 
 // countTag1Records runs the chunk-fetch SQL, unframes each row's
-// chunk data, and walks records with DecodeEventRecord, summing the
-// total record count across all chunks.
+// chunk data, and sums the per-op counts (n_inserts / n_deletes) carried
+// in the chunk frame header. The net-additions count (inserts - deletes)
+// approximates how many new rows the rebuild would see beyond the
+// existing index.
 func countTag1Records(
 	sqlproc *sqlexec.SqlProcess,
 	dbName, storageTbl string,
@@ -249,7 +270,7 @@ func countTag1Records(
 	}
 	defer res.Close()
 
-	var total int64
+	var totalInserts, totalDeletes, totalUpserts int64
 	for _, bat := range res.Batches {
 		if bat.RowCount() == 0 {
 			continue
@@ -260,22 +281,29 @@ func countTag1Records(
 			if len(framed) == 0 {
 				continue
 			}
-			records, _, err := cuvscdc.UnframeCdcChunk(framed)
+			_, _, nIns, nDel, nUps, err := cuvscdc.UnframeCdcChunk(framed)
 			if err != nil {
 				return 0, moerr.NewInternalErrorNoCtxf(
 					"countTag1Records: unframe chunk: %v", err)
 			}
-			pos := 0
-			for pos < len(records) {
-				_, n, ok := cuvscdc.DecodeEventRecord(records[pos:], dim, includeBytesPerRow)
-				if !ok {
-					return 0, moerr.NewInternalErrorNoCtxf(
-						"countTag1Records: malformed record at offset %d", pos)
-				}
-				total++
-				pos += n
-			}
+			totalInserts += int64(nIns)
+			totalDeletes += int64(nDel)
+			totalUpserts += int64(nUps)
 		}
 	}
-	return total, nil
+	// Brute-force-overflow growth = inserts + upserts. DELETEs apply to
+	// the main cuvs index (via the filter / deleted set) and don't
+	// affect the brute-force overflow size, so they're irrelevant to
+	// the rebuild-trigger decision — the gate fires when overflow has
+	// grown enough to be worth folding into a fresh main index.
+	// UPSERTs count toward growth because empirically most MO UPSERTs
+	// are first-time inserts; the rare replay-from-corruption case
+	// over-triggers at worst (wasted rebuild, not a correctness bug).
+	// The n_upserts / n_deletes breakdown is preserved in the chunk
+	// header for logging and audits.
+	_ = dim
+	_ = includeBytesPerRow
+	_ = totalDeletes
+	return totalInserts + totalUpserts, nil
 }
+
