@@ -505,8 +505,14 @@ func (d *DiskCache) writeFile(
 		}
 	}()
 
-	doneUpdate := d.startUpdate(diskPath)
-	defer doneUpdate()
+	doneUpdate := d.startUpdateWithCleanup(diskPath, func() error {
+		return d.removeUnindexedFile(diskPath)
+	})
+	defer func() {
+		if cleanupErr := doneUpdate(); cleanupErr != nil && err == nil {
+			err = cleanupErr
+		}
+	}()
 
 	if _, ok := d.cache.Get(ctx, diskPath); ok {
 		if _, err := os.Stat(diskPath); err == nil {
@@ -652,17 +658,29 @@ func (d *DiskCache) waitUpdateComplete(ctx context.Context, path string) {
 }
 
 func (d *DiskCache) startUpdate(path string) (done func()) {
+	doneWithError := d.startUpdateWithCleanup(path, nil)
+	return func() {
+		_ = doneWithError()
+	}
+}
+
+func (d *DiskCache) startUpdateWithCleanup(path string, cleanup func() error) (done func() error) {
 	d.updatingPaths.L.Lock()
 	for d.updatingPaths.m[path] {
 		d.updatingPaths.Wait()
 	}
 	d.updatingPaths.m[path] = true
 	d.updatingPaths.L.Unlock()
-	done = func() {
+	done = func() error {
 		d.updatingPaths.L.Lock()
+		defer d.updatingPaths.L.Unlock()
+		var err error
+		if cleanup != nil {
+			err = cleanup()
+		}
 		delete(d.updatingPaths.m, path)
 		d.updatingPaths.Broadcast()
-		d.updatingPaths.L.Unlock()
+		return err
 	}
 	return
 }
@@ -681,6 +699,16 @@ func (d *DiskCache) tryStartUpdate(path string) (done func(), ok bool) {
 		d.updatingPaths.Broadcast()
 		d.updatingPaths.L.Unlock()
 	}, true
+}
+
+func (d *DiskCache) removeUnindexedFile(path string) error {
+	if d.cache.Contains(path) {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 var _ FileCache = new(DiskCache)

@@ -223,22 +223,35 @@ func (c *Cache[K, V]) helpEnqueue() {
 	for {
 		select {
 		case item := <-c.enqueueJobs1:
-			if item.queue != cacheItemNoQueue || !item.valueOK {
-				continue
-			}
-			item.queue = cacheItemQueue1
-			c.queue1.enqueue(item)
-			c.used1 += item.size
+			c.enqueuePendingItem(item, cacheItemQueue1)
 		case item := <-c.enqueueJobs2:
-			if item.queue != cacheItemNoQueue || !item.valueOK {
-				continue
-			}
-			item.queue = cacheItemQueue2
-			c.queue2.enqueue(item)
-			c.used2 += item.size
+			c.enqueuePendingItem(item, cacheItemQueue2)
 		default:
 			return
 		}
+	}
+}
+
+func (c *Cache[K, V]) enqueuePendingItem(item *_CacheItem[K, V], queue uint8) {
+	if item.queue != cacheItemNoQueue {
+		return
+	}
+	shard := &c.shards[c.keyShardFunc(item.key)%numShards]
+	shard.Lock()
+	defer shard.Unlock()
+	if !item.valueOK || item.queue != cacheItemNoQueue {
+		return
+	}
+	item.queue = queue
+	switch queue {
+	case cacheItemQueue1:
+		c.queue1.enqueue(item)
+		c.used1 += item.size
+	case cacheItemQueue2:
+		c.queue2.enqueue(item)
+		c.used2 += item.size
+	default:
+		panic("invalid queue")
 	}
 }
 
