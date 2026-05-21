@@ -18,6 +18,13 @@ cast(20260515 as int) - interval 7 day
 select interval 7 day + cast(20260515 as int);
 interval 7 day + cast(20260515 as int)
 20260522
+select interval 7 day + date_id from readings where site_id = 1;
+interval 7 day + date_id
+20260521
+20260522
+select interval 7 day + max(date_id) from readings;
+interval 7 day + max(date_id)
+20260522
 select cast(20260515 as int) + interval 2 week;
 cast(20260515 as int) + interval 2 week
 20260529
@@ -33,6 +40,12 @@ select cast(20260515 as int) - interval 30 minute;
 invalid argument operator -, bad value [INT INTERVAL]
 select cast(20260515 as int) + interval 1 second;
 invalid argument operator +, bad value [INT INTERVAL]
+select interval 1 hour + cast(20260515 as int);
+invalid argument operator +, bad value [INTERVAL INT]
+select interval 30 minute + cast(20260515 as int);
+invalid argument operator +, bad value [INTERVAL INT]
+select interval 1 second + cast(20260515 as int);
+invalid argument operator +, bad value [INTERVAL INT]
 insert into readings values (4, null, 0.0);
 select date_id + interval 7 day from readings where site_id = 4;
 date_id + interval 7 day

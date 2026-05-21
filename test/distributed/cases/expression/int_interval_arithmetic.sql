@@ -19,16 +19,23 @@ select cast(20260515 as int) - interval 7 day;
 
 -- INTERVAL DAY + INT (symmetric)
 select interval 7 day + cast(20260515 as int);
+select interval 7 day + date_id from readings where site_id = 1;
+select interval 7 day + max(date_id) from readings;
 
 -- WEEK / MONTH / YEAR
 select cast(20260515 as int) + interval 2 week;
 select cast(20260515 as int) + interval 1 month;
 select cast(20260515 as int) - interval 1 year;
 
--- Sub-day intervals should fall through with original error
+-- Sub-day intervals should fall through with original error (INT-left)
 select cast(20260515 as int) + interval 1 hour;
 select cast(20260515 as int) - interval 30 minute;
 select cast(20260515 as int) + interval 1 second;
+
+-- Reversed sub-day rejection
+select interval 1 hour + cast(20260515 as int);
+select interval 30 minute + cast(20260515 as int);
+select interval 1 second + cast(20260515 as int);
 
 -- NULL handling
 insert into readings values (4, null, 0.0);
