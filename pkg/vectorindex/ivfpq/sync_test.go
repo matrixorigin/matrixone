@@ -245,12 +245,12 @@ func TestIvfpqSync_Update_Upsert(t *testing.T) {
 		},
 	}
 	require.NoError(t, s.Update(sqlproc, cdc))
-	require.Len(t, s.pendingSizes, 3)
+	require.Len(t, s.pendingSizes, 2)
 	require.NoError(t, s.Save(sqlproc))
 
 	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
 	require.NoError(t, err)
-	require.Empty(t, state.Deleted)
+	require.ElementsMatch(t, []int64{100}, state.Deleted)
 	require.Len(t, state.Overflow, 1)
 	require.Equal(t, []float32{9, 9, 9, 9}, state.Overflow[0].Vec)
 }

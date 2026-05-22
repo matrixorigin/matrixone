@@ -302,17 +302,18 @@ func TestCagraSync_Update_Upsert(t *testing.T) {
 		},
 	}
 	require.NoError(t, s.Update(sqlproc, cdc))
-	require.Len(t, s.pendingSizes, 3,
-		"INSERT + UPSERT (= DELETE + INSERT) → 3 records")
+	require.Len(t, s.pendingSizes, 2,
+		"INSERT + UPSERT → 2 records (UPSERT is a single op, not DELETE+INSERT)")
 
 	require.NoError(t, s.Save(sqlproc))
 	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
 	require.NoError(t, err)
-	require.Empty(t, state.Deleted)
+	require.ElementsMatch(t, []int64{100}, state.Deleted,
+		"UPSERT marks pkid in deleted (filters any pre-rebuild main-index entry)")
 	require.Len(t, state.Overflow, 1)
 	require.Equal(t, int64(100), state.Overflow[0].Pkid)
 	require.Equal(t, []float32{9, 9, 9, 9}, state.Overflow[0].Vec,
-		"UPSERT's INSERT leg wrote the latest vec; replay surfaces it")
+		"UPSERT wrote the latest vec; replay surfaces it")
 }
 
 // TestCagraSync_Update_DimMismatch: a vector with the wrong length surfaces

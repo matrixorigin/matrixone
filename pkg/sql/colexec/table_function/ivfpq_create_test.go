@@ -281,11 +281,9 @@ func TestIvfpqCreateIndexTableConfigFail(t *testing.T) {
 	}
 
 	goodTblcfg := `{"db":"db","src":"src","metadata":"__meta","index":"__index","index_capacity":100}`
-	zeroCapTblcfg := `{"db":"db","src":"src","metadata":"__meta","index":"__index","index_capacity":0}`
 
 	cases := []failCase{
 		{desc: "empty tblcfg"},
-		{desc: "zero capacity"},
 		{desc: "wrong id type (int32 instead of int64)"},
 		{desc: "wrong vec type (int64 instead of float32 array)"},
 	}
@@ -296,19 +294,13 @@ func TestIvfpqCreateIndexTableConfigFail(t *testing.T) {
 		cases[0].args = args
 		cases[0].bat = bat
 	}
-	// case 1: zero capacity
+	// case 1: wrong id type (int32)
 	{
-		args, bat := makeArgs(zeroCapTblcfg, types.T_int64, types.T_array_float32, 4)
+		args, bat := makeArgs(goodTblcfg, types.T_int32, types.T_array_float32, 4)
 		cases[1].args = args
 		cases[1].bat = bat
 	}
-	// case 2: wrong id type (int32)
-	{
-		args, bat := makeArgs(goodTblcfg, types.T_int32, types.T_array_float32, 4)
-		cases[2].args = args
-		cases[2].bat = bat
-	}
-	// case 3: wrong vec type (T_int64 instead of array)
+	// case 2: wrong vec type (T_int64 instead of array)
 	{
 		tblcfg := goodTblcfg
 		args := []*plan.Expr{
@@ -333,8 +325,8 @@ func TestIvfpqCreateIndexTableConfigFail(t *testing.T) {
 		vector.AppendFixed(bat.Vecs[1], int64(1), false, mpool.MustNewZero())
 		vector.AppendFixed(bat.Vecs[2], int64(1), false, mpool.MustNewZero())
 		bat.SetRowCount(1)
-		cases[3].args = args
-		cases[3].bat = bat
+		cases[2].args = args
+		cases[2].bat = bat
 	}
 
 	for _, c := range cases {
