@@ -397,16 +397,13 @@ func TestInsertFlushS3WriterOnMemoryPressureAppendsBlockInfo(t *testing.T) {
 func TestAcquireFlushSlotWaitsForFlushSlotAfterTimeout(t *testing.T) {
 	oldFlushSemaphore := flushSemaphore
 	oldAcquireTimeout := flushSemaphoreAcquireTimeout
-	oldRetryInterval := flushBypassRetryInterval
 	defer func() {
 		flushSemaphore = oldFlushSemaphore
 		flushSemaphoreAcquireTimeout = oldAcquireTimeout
-		flushBypassRetryInterval = oldRetryInterval
 	}()
 
 	flushSemaphore = make(chan struct{}, 1)
 	flushSemaphoreAcquireTimeout = time.Millisecond
-	flushBypassRetryInterval = time.Millisecond
 	flushSemaphore <- struct{}{}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -442,19 +439,16 @@ func TestFlushConcurrencyLimitScalesWithGOMAXPROCS(t *testing.T) {
 	require.Equal(t, flushConcurrency(), cap(flushSemaphore))
 }
 
-func TestAcquireFlushSlotWaitsWhenNormalAndBypassAreFull(t *testing.T) {
+func TestAcquireFlushSlotWaitsWhenNormalSlotsAreFull(t *testing.T) {
 	oldFlushSemaphore := flushSemaphore
 	oldAcquireTimeout := flushSemaphoreAcquireTimeout
-	oldRetryInterval := flushBypassRetryInterval
 	defer func() {
 		flushSemaphore = oldFlushSemaphore
 		flushSemaphoreAcquireTimeout = oldAcquireTimeout
-		flushBypassRetryInterval = oldRetryInterval
 	}()
 
 	flushSemaphore = make(chan struct{}, 1)
 	flushSemaphoreAcquireTimeout = time.Millisecond
-	flushBypassRetryInterval = time.Millisecond
 	flushSemaphore <- struct{}{}
 
 	ctx, cancel := context.WithCancel(context.Background())
