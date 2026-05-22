@@ -92,6 +92,12 @@ const (
 	FPPauseDaemonTask
 	FPCancelDaemonTask
 	FPResumeDaemonTask
+	FPCreateSQLTask
+	FPAlterSQLTask
+	FPDropSQLTask
+	FPExecuteSQLTask
+	FPShowSQLTasks
+	FPShowSQLTaskRuns
 	FPDropConnector
 	FPShowConnectors
 	FPDeallocate

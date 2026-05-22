@@ -6260,6 +6260,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions, *tree.ShowCcprSubscriptions, *tree.ShowPublicationCoverage,
 		*tree.ShowBackendServers, *tree.ShowStages, *tree.ShowConnectors, *tree.DropConnector,
 		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
+		*tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask,
+		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
 		*tree.ShowRules:
 		objType = objectTypeNone
 		kind = privilegeKindNone

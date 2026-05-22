@@ -68,6 +68,8 @@ var (
 		frontend.MoTaskSysAsyncTaskDDL,
 		frontend.MoTaskSysCronTaskDDL,
 		frontend.MoTaskSysDaemonTaskDDL,
+		frontend.MoTaskSQLTaskDDL,
+		frontend.MoTaskSQLTaskRunDDL,
 
 		fmt.Sprintf(`create index idx_account_id on %s.sys_daemon_task(account_id)`,
 			catalog.MOTaskDB),
