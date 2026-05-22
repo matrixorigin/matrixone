@@ -17,7 +17,6 @@ package insert
 import (
 	"bytes"
 	"context"
-	goruntime "runtime"
 	"sync/atomic"
 	"time"
 
@@ -37,21 +36,11 @@ import (
 // flushSemaphore limits concurrent flushS3WriterOnMemoryPressure calls to
 // prevent thundering-herd mpool explosion when many workers are denied memory
 // simultaneously and all try to flush + read objectio metadata at once.
-var flushSemaphore = make(chan struct{}, flushConcurrency())
-var flushBypassSemaphore = make(chan struct{}, 1)
+const flushConcurrencyLimit = 4
+
+var flushSemaphore = make(chan struct{}, flushConcurrencyLimit)
 var flushSemaphoreAcquireTimeout = 200 * time.Millisecond
 var flushBypassRetryInterval = 20 * time.Millisecond
-
-func flushConcurrency() int {
-	n := goruntime.GOMAXPROCS(0) / 2
-	if n < 4 {
-		n = 4
-	}
-	if n > 16 {
-		n = 16
-	}
-	return n
-}
 
 const opName = "insert"
 
@@ -348,10 +337,8 @@ func acquireFlushSlot(ctx context.Context) (func(), error) {
 		select {
 		case flushSemaphore <- struct{}{}:
 			return func() { <-flushSemaphore }, nil
-		case flushBypassSemaphore <- struct{}{}:
-			v2.TxnStatementInsertS3FlushBypassCounter.Add(1)
-			return func() { <-flushBypassSemaphore }, nil
 		case <-ticker.C:
+			v2.TxnStatementInsertS3FlushBypassCounter.Add(1)
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
