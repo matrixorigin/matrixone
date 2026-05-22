@@ -636,13 +636,12 @@ func (tc *txnOperator) GetWaitActiveCost() time.Duration {
 }
 
 // LockWaitTimeoutFromTxn returns the lock wait timeout from a txn operator, or 0.
-// This avoids exposing LockWaitTimeout on the TxnOperator interface while still
-// allowing lock_op to read the session-level timeout.
+// The timeout is stored in TxnOptions as a time.Duration in nanoseconds.
 func LockWaitTimeoutFromTxn(op TxnOperator) time.Duration {
-	if tc, ok := op.(*txnOperator); ok {
-		return time.Duration(tc.opts.options.LockWaitTimeout)
+	if op == nil {
+		return 0
 	}
-	return 0
+	return time.Duration(op.TxnOptions().LockWaitTimeout)
 }
 
 func (tc *txnOperator) notifyActive() {
