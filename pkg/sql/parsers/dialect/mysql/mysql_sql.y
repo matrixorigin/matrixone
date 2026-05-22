@@ -3988,11 +3988,16 @@ alter_table_alter:
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
-| REINDEX ident CAGRA
+| REINDEX ident CAGRA index_option_list
     {
         var io *tree.IndexOption = nil
-        io = tree.NewIndexOption()
-        io.IType = tree.INDEX_TYPE_CAGRA
+        if $4 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_CAGRA
+        } else {
+            io = $4
+            io.IType = tree.INDEX_TYPE_CAGRA
+        }
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
@@ -13623,6 +13628,7 @@ non_reserved_keyword:
 |   BIT
 |   BLOB
 |   BOOL
+|   BITS_PER_CODE
 |   BRANCH
 |   CLONE
 |   CANCEL
@@ -13663,6 +13669,7 @@ non_reserved_keyword:
 |   DO
 |   DOUBLE
 |   DIRECTORY
+|   DISTRIBUTION_MODE
 |   DUPLICATE
 |   DELAY_KEY_WRITE
 |   EF_CONSTRUCTION
@@ -13684,15 +13691,19 @@ non_reserved_keyword:
 |   GEOMETRY
 |   GEOMETRYCOLLECTION
 |   GLOBAL
+|   GRAPH_DEGREE
 |   HNSW
 |   CAGRA
 |   IVFPQ
 |   PERSIST
 |   GRANT
+|   INCLUDE
 |   INT
 |   INTEGER
 |   INDEXES
+|   INTERMEDIATE_GRAPH_DEGREE
 |   ISOLATION
+|   ITOPK_SIZE
 |   JSON
 |   VECF32
 |   VECF64
@@ -13747,6 +13758,7 @@ non_reserved_keyword:
 |   PROCEDURE
 |   PROXY
 |	PERIOD
+|   QUANTIZATION
 |   QUERY
 |   PAUSE
 |   PROFILES

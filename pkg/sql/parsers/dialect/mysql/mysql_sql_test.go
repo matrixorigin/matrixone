@@ -291,6 +291,24 @@ var (
 		input:  "alter table t1 alter reindex idx1 IVFFLAT force_sync",
 		output: "alter table t1 alter reindex idx1 ivfflat force_sync",
 	}, {
+		input:  "alter table t1 alter reindex idx1 IVFPQ force_sync",
+		output: "alter table t1 alter reindex idx1 ivfpq force_sync",
+	}, {
+		input:  "alter table t1 alter reindex idx1 IVFPQ lists = 4 force_sync",
+		output: "alter table t1 alter reindex idx1 ivfpq lists = 4 force_sync",
+	}, {
+		input:  "alter table t1 alter reindex idx1 CAGRA",
+		output: "alter table t1 alter reindex idx1 cagra",
+	}, {
+		input:  "alter table t1 alter reindex idx1 CAGRA force_sync",
+		output: "alter table t1 alter reindex idx1 cagra force_sync",
+	}, {
+		// intermediate_graph_degree/graph_degree parse but the AST only
+		// retains force_sync (AlterOptionAlterReIndex has no fields for
+		// graph degrees — the cron emits CAGRA FORCE_SYNC only).
+		input:  "alter table t1 alter reindex idx1 CAGRA intermediate_graph_degree = 8 graph_degree = 4 force_sync",
+		output: "alter table t1 alter reindex idx1 cagra force_sync",
+	}, {
 		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = true day = 33 hour = 12",
 		output: "alter table t1 alter index idx1 ivfflat auto_update = true day = 33 hour = 12",
 	}, {
