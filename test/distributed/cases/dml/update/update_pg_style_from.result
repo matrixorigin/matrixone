@@ -61,6 +61,63 @@ SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
 10  ¦  101  ¦  BJ  𝄀
 20  ¦  102  ¦  SH  𝄀
 30  ¦  103  ¦  GZ
+UPDATE vec_join_case SET remark = 'init';
+UPDATE vec_join_case t
+SET remark = COALESCE(r.name, 'no-region')
+FROM company c LEFT JOIN region r ON c.region_id = r.id
+WHERE c.id = t.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+➤ id[4,32,0]  ¦  company_id[4,32,0]  ¦  remark[12,-1,0]  𝄀
+10  ¦  101  ¦  east  𝄀
+20  ¦  102  ¦  east  𝄀
+30  ¦  103  ¦  south
+DROP VIEW IF EXISTS v_company;
+CREATE VIEW v_company AS SELECT id, province FROM company;
+UPDATE vec_join_case SET remark = 'init';
+UPDATE vec_join_case t
+SET remark = v.province
+FROM v_company v
+WHERE v.id = t.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+➤ id[4,32,0]  ¦  company_id[4,32,0]  ¦  remark[12,-1,0]  𝄀
+10  ¦  101  ¦  BJ  𝄀
+20  ¦  102  ¦  SH  𝄀
+30  ¦  103  ¦  GZ
+DROP VIEW v_company;
+DROP TABLE IF EXISTS src_overlap;
+CREATE TABLE src_overlap (company_id INT, remark VARCHAR(100));
+INSERT INTO src_overlap VALUES (101, 'src-BJ'), (102, 'src-SH'), (103, 'src-GZ');
+UPDATE vec_join_case SET remark = 'init';
+UPDATE vec_join_case
+SET remark = src_overlap.remark
+FROM src_overlap
+WHERE src_overlap.company_id = vec_join_case.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+➤ id[4,32,0]  ¦  company_id[4,32,0]  ¦  remark[12,-1,0]  𝄀
+10  ¦  101  ¦  src-BJ  𝄀
+20  ¦  102  ¦  src-SH  𝄀
+30  ¦  103  ¦  src-GZ
+DROP TABLE src_overlap;
+DROP TABLE IF EXISTS gen_t;
+CREATE TABLE gen_t (
+id INT PRIMARY KEY,
+base INT,
+gen_col INT AS (base * 2) STORED
+);
+INSERT INTO gen_t (id, base) VALUES (1, 10), (2, 20), (3, 30);
+DROP TABLE IF EXISTS gen_src;
+CREATE TABLE gen_src (id INT PRIMARY KEY, new_base INT);
+INSERT INTO gen_src VALUES (1, 100), (2, 200);
+UPDATE gen_t SET gen_col = 999 FROM gen_src WHERE gen_src.id = gen_t.id;
+invalid input: the value specified for generated column 'gen_col' in table 'gen_t' is not allowed
+UPDATE gen_t SET base = gen_src.new_base FROM gen_src WHERE gen_src.id = gen_t.id;
+SELECT id, base, gen_col FROM gen_t ORDER BY id;
+➤ id[4,32,0]  ¦  base[4,32,0]  ¦  gen_col[4,32,0]  𝄀
+1  ¦  100  ¦  200  𝄀
+2  ¦  200  ¦  400  𝄀
+3  ¦  30  ¦  60
+DROP TABLE gen_t;
+DROP TABLE gen_src;
 DROP TABLE IF EXISTS company;
 DROP TABLE IF EXISTS vec_join_case;
 DROP TABLE IF EXISTS region;

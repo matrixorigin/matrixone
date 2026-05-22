@@ -26,8 +26,12 @@ import (
 // update statement
 type Update struct {
 	statementImpl
-	Tables  TableExprs
-	Exprs   UpdateExprs
+	Tables TableExprs
+	Exprs  UpdateExprs
+	// From is the optional PostgreSQL-style FROM clause that introduces
+	// additional read-only join sources. It is nil for the classic
+	// single-table and multi-table (comma) UPDATE syntaxes.
+	From    *From
 	Where   *Where
 	OrderBy OrderBy
 	Limit   *Limit
@@ -48,6 +52,10 @@ func (node *Update) Format(ctx *FmtCtx) {
 	if node.Exprs != nil {
 		ctx.WriteByte(' ')
 		node.Exprs.Format(ctx)
+	}
+	if node.From != nil {
+		ctx.WriteByte(' ')
+		node.From.Format(ctx)
 	}
 	if node.Where != nil {
 		ctx.WriteByte(' ')
