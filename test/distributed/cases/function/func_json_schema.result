@@ -100,3 +100,17 @@ null
 select json_schema_validation_report('{"type":"object"}', null);
 json_schema_validation_report({"type":"object"}, null)
 null
+drop table if exists t1;
+create table t1 (j json);
+insert into t1 values ('{"a":1}'), ('{"a":"not_number"}'), ('{"b":2}');
+select json_schema_valid(json_object('type', 'object', 'properties', json_object('a', json_object('type', 'number')), 'required', json_array('a')), j) from t1;
+json_schema_valid(json_object(type, object, properties, json_object(a, json_object(type, number)), required, json_array(a)), j)
+1
+0
+0
+select json_schema_validation_report(json_object('type', 'object', 'properties', json_object('a', json_object('type', 'number')), 'required', json_array('a')), j) from t1;
+json_schema_validation_report(json_object(type, object, properties, json_object(a, json_object(type, number)), required, json_array(a)), j)
+{"valid": true}
+{"valid": false, "errors": [{"message":"Invalid type. Expected: number, given: string","property":"a"}]}
+{"valid": false, "errors": [{"message":"a is required","property":"(root)"}]}
+drop table t1;

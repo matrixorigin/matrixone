@@ -17,7 +17,7 @@ package bytejson
 import (
 	"bytes"
 	"encoding/binary"
-	"strconv"
+	"math/big"
 )
 
 type subPathType byte
@@ -204,6 +204,11 @@ func CompareByteJson(left, right ByteJson) int {
 	order1 := jsonTpOrder[left.TYPE()]
 	order2 := jsonTpOrder[right.TYPE()]
 
+	if (left.Type == TpCodeDecimal || right.Type == TpCodeDecimal) &&
+		isByteJsonNumeric(left.Type) && isByteJsonNumeric(right.Type) {
+		return compareByteJsonNumericExact(left, right)
+	}
+
 	var cmp int
 	if order1 == order2 {
 		if order1 == jsonTpOrder["LITERAL"] {
@@ -228,11 +233,7 @@ func CompareByteJson(left, right ByteJson) int {
 		case TpCodeFloat64:
 			cmp = compareFloat64(left.GetFloat64(), right.GetFloat64())
 		case TpCodeDecimal:
-			// DECIMAL-vs-DECIMAL: compare as numbers, not strings.
-			// String comparison would sort "10" < "2".
-			leftF, _ := strconv.ParseFloat(string(left.GetString()), 64)
-			rightF, _ := strconv.ParseFloat(string(right.GetString()), 64)
-			cmp = compareFloat64PrecisionLoss(leftF, rightF)
+			cmp = compareByteJsonNumericExact(left, right)
 		case TpCodeString, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
 			cmp = bytes.Compare(left.GetString(), right.GetString())
 		case TpCodeArray:
@@ -278,9 +279,6 @@ func CompareByteJson(left, right ByteJson) int {
 					cmp = compareInt64Uint64((left.GetInt64()), right.GetUint64())
 				case TpCodeFloat64:
 					cmp = -compareFloat64Int64(right.GetFloat64(), left.GetInt64())
-				case TpCodeDecimal:
-					rightF, _ := strconv.ParseFloat(string(right.GetString()), 64)
-					cmp = compareFloat64PrecisionLoss(float64(left.GetInt64()), rightF)
 				}
 			case TpCodeUint64:
 				switch right.Type {
@@ -290,9 +288,6 @@ func CompareByteJson(left, right ByteJson) int {
 					cmp = compareUint64(left.GetUint64(), right.GetUint64())
 				case TpCodeFloat64:
 					cmp = -compareFloat64Uint64(right.GetFloat64(), left.GetUint64())
-				case TpCodeDecimal:
-					rightF, _ := strconv.ParseFloat(string(right.GetString()), 64)
-					cmp = compareFloat64PrecisionLoss(float64(left.GetUint64()), rightF)
 				}
 			case TpCodeFloat64:
 				switch right.Type {
@@ -302,22 +297,6 @@ func CompareByteJson(left, right ByteJson) int {
 					cmp = compareFloat64Uint64(left.GetFloat64(), right.GetUint64())
 				case TpCodeFloat64:
 					cmp = compareFloat64(left.GetFloat64(), right.GetFloat64())
-				case TpCodeDecimal:
-					rightF, _ := strconv.ParseFloat(string(right.GetString()), 64)
-					cmp = compareFloat64PrecisionLoss(left.GetFloat64(), rightF)
-				}
-			case TpCodeDecimal:
-				leftF, _ := strconv.ParseFloat(string(left.GetString()), 64)
-				switch right.Type {
-				case TpCodeInt64:
-					cmp = compareFloat64PrecisionLoss(leftF, float64(right.GetInt64()))
-				case TpCodeUint64:
-					cmp = compareFloat64PrecisionLoss(leftF, float64(right.GetUint64()))
-				case TpCodeFloat64:
-					cmp = compareFloat64PrecisionLoss(leftF, right.GetFloat64())
-				case TpCodeDecimal:
-					rightF, _ := strconv.ParseFloat(string(right.GetString()), 64)
-					cmp = compareFloat64PrecisionLoss(leftF, rightF)
 				}
 			}
 			return cmp
@@ -332,6 +311,49 @@ func CompareByteJson(left, right ByteJson) int {
 		}
 	}
 	return cmp
+}
+
+func isByteJsonNumeric(tp TpCode) bool {
+	switch tp {
+	case TpCodeInt64, TpCodeUint64, TpCodeFloat64, TpCodeDecimal:
+		return true
+	default:
+		return false
+	}
+}
+
+func compareByteJsonNumericExact(left, right ByteJson) int {
+	leftRat, ok1 := byteJsonNumericRat(left)
+	rightRat, ok2 := byteJsonNumericRat(right)
+	if ok1 && ok2 {
+		return leftRat.Cmp(rightRat)
+	}
+	leftJSON, _ := left.MarshalJSON()
+	rightJSON, _ := right.MarshalJSON()
+	return bytes.Compare(leftJSON, rightJSON)
+}
+
+func byteJsonNumericRat(bj ByteJson) (*big.Rat, bool) {
+	switch bj.Type {
+	case TpCodeInt64:
+		return big.NewRat(bj.GetInt64(), 1), true
+	case TpCodeUint64:
+		return new(big.Rat).SetInt(new(big.Int).SetUint64(bj.GetUint64())), true
+	case TpCodeFloat64:
+		r := new(big.Rat)
+		if r.SetFloat64(bj.GetFloat64()) == nil {
+			return nil, false
+		}
+		return r, true
+	case TpCodeDecimal:
+		r := new(big.Rat)
+		if _, ok := r.SetString(string(bj.GetString())); !ok {
+			return nil, false
+		}
+		return r, true
+	default:
+		return nil, false
+	}
 }
 
 const floatEpsilon = 1.e-8

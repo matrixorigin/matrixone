@@ -167,5 +167,14 @@ id    json_object(id, id, b, b, bi, bi, f, f, d, d, d64, d64, d128, d128, d256, 
 select json_object();
 json_object()
 {}
+select json_object(cast('2021-02-01' as date), 'date_val');
+json_object(cast(2021-02-01 as date), date_val)
+{"2021-02-01": "date_val"}
+select json_object(cast('11:11:11' as time), 'time_val');
+json_object(cast(11:11:11 as time), time_val)
+{"11:11:11": "time_val"}
+select json_object(cast('2021-02-01 11:11:11' as datetime), 'dt_val');
+json_object(cast(2021-02-01 11:11:11 as datetime), dt_val)
+{"2021-02-01 11:11:11": "dt_val"}
 drop table jot;
 set time_zone = 'SYSTEM';

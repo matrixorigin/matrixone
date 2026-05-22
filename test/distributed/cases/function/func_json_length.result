@@ -82,4 +82,16 @@ a    json_length(a)
 "hello"    1
 null    1
 drop table t1;
+select json_length(json_array(1, 2, 3));
+json_length(json_array(1, 2, 3))
+3
+select json_length(json_object('a', json_array(1, 2, 3), 'b', json_object('x', 1)));
+json_length(json_object(a, json_array(1, 2, 3), b, json_object(x, 1)))
+2
+select json_length(json_object('a', json_array(1, 2, 3), 'b', json_object('x', 1)), '$.a');
+json_length(json_object(a, json_array(1, 2, 3), b, json_object(x, 1)), $.a)
+3
+select json_length(json_object('a', json_array(1, 2, 3), 'b', json_object('x', 1)), '$.b');
+json_length(json_object(a, json_array(1, 2, 3), b, json_object(x, 1)), $.b)
+1
 drop table t2;

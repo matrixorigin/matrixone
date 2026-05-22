@@ -89,5 +89,10 @@ select id, json_object('id', id, 'b', b, 'bi', bi, 'f', f, 'd', d, 'd64', d64, '
 -- empty
 select json_object();
 
+-- keys from typed scalars (DATE/TIME/DATETIME/BLOB)
+select json_object(cast('2021-02-01' as date), 'date_val');
+select json_object(cast('11:11:11' as time), 'time_val');
+select json_object(cast('2021-02-01 11:11:11' as datetime), 'dt_val');
+
 drop table jot;
 set time_zone = 'SYSTEM';

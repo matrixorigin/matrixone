@@ -77,3 +77,11 @@ select json_schema_validation_report('{"type":"number","minimum":0,"maximum":100
 -- validation report: null input
 select json_schema_validation_report(null, '{}');
 select json_schema_validation_report('{"type":"object"}', null);
+
+-- const schema (json_object) validates multiple rows
+drop table if exists t1;
+create table t1 (j json);
+insert into t1 values ('{"a":1}'), ('{"a":"not_number"}'), ('{"b":2}');
+select json_schema_valid(json_object('type', 'object', 'properties', json_object('a', json_object('type', 'number')), 'required', json_array('a')), j) from t1;
+select json_schema_validation_report(json_object('type', 'object', 'properties', json_object('a', json_object('type', 'number')), 'required', json_array('a')), j) from t1;
+drop table t1;

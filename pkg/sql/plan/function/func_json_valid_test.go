@@ -19,7 +19,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -272,6 +274,78 @@ func TestJsonSchemaValid(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, info)
 	})
+
+	t.Run("constant schema must be object", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid constant boolean schema",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(),
+					[]string{`true`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`42`},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, []bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("invalid schema compile error", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid invalid pattern",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(),
+					[]string{`{"type":"string","pattern":"["}`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`"abc"`},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, []bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("constant invalid schema with null document", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid invalid const schema null document",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(),
+					[]string{`{"type":"string","pattern":"["}`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{``},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("constant invalid schema report with null document", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_validation_report invalid const schema null document",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(),
+					[]string{`{"type":"string","pattern":"["}`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{``},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{``}, []bool{true}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValidationReport)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
 }
 
 func TestJsonValue(t *testing.T) {
@@ -368,4 +442,151 @@ func TestJsonValid(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestJsonFunctionsRespectSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	selectList := &FunctionSelectList{
+		AnyNull:    true,
+		SelectList: []bool{false, true},
+	}
+
+	t.Run("json_keys", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `{"a":1}`},
+					[]bool{false, false}),
+			},
+			types.T_varchar.ToType(), JsonKeys, selectList)
+
+		require.True(t, vec.IsNull(0))
+		v, null := vector.GenerateFunctionStrParameter(vec).GetStrValue(1)
+		require.False(t, null)
+		require.Equal(t, `["a"]`, string(v))
+	})
+
+	t.Run("json_keys_with_path", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `{"a":{"b":1}}`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`bad path`, `$.a`},
+					[]bool{false, false}),
+			},
+			types.T_varchar.ToType(), JsonKeys, selectList)
+
+		require.True(t, vec.IsNull(0))
+		v, null := vector.GenerateFunctionStrParameter(vec).GetStrValue(1)
+		require.False(t, null)
+		require.Equal(t, `["b"]`, string(v))
+	})
+
+	t.Run("json_pretty", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `{"a":1}`},
+					[]bool{false, false}),
+			},
+			types.T_varchar.ToType(), JsonPretty, selectList)
+
+		require.True(t, vec.IsNull(0))
+		v, null := vector.GenerateFunctionStrParameter(vec).GetStrValue(1)
+		require.False(t, null)
+		require.Equal(t, "{\n  \"a\": 1\n}", string(v))
+	})
+
+	t.Run("json_value", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `{"a":1}`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`bad path`, `$.a`},
+					[]bool{false, false}),
+			},
+			types.T_varchar.ToType(), JsonValue, selectList)
+
+		require.True(t, vec.IsNull(0))
+		v, null := vector.GenerateFunctionStrParameter(vec).GetStrValue(1)
+		require.False(t, null)
+		require.Equal(t, "1", string(v))
+	})
+
+	t.Run("json_schema_valid", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `{"type":"number"}`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `42`},
+					[]bool{false, false}),
+			},
+			types.T_bool.ToType(), JsonSchemaValid, selectList)
+
+		require.True(t, vec.IsNull(0))
+		v, null := vector.GenerateFunctionFixedTypeParameter[bool](vec).GetValue(1)
+		require.False(t, null)
+		require.True(t, v)
+	})
+
+	t.Run("json_schema_validation_report", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `{"type":"number"}`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `42`},
+					[]bool{false, false}),
+			},
+			types.T_varchar.ToType(), JsonSchemaValidationReport, selectList)
+
+		require.True(t, vec.IsNull(0))
+		v, null := vector.GenerateFunctionStrParameter(vec).GetStrValue(1)
+		require.False(t, null)
+		require.Equal(t, `{"valid": true}`, string(v))
+	})
+
+	t.Run("json_array", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1, 2},
+					[]bool{false, false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonArray().jsonArray, selectList)
+
+		require.True(t, vec.IsNull(0))
+		require.False(t, vec.IsNull(1))
+	})
+
+	t.Run("json_object", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{``, `a`},
+					[]bool{true, false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1, 2},
+					[]bool{false, false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonObject().jsonObject, selectList)
+
+		require.True(t, vec.IsNull(0))
+		require.False(t, vec.IsNull(1))
+	})
+}
+
+func runJsonFunctionWithSelectList(t *testing.T, proc *process.Process, inputs []FunctionTestInput, retType types.Type, fn fEvalFn, selectList *FunctionSelectList) *vector.Vector {
+	t.Helper()
+	fcTC := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(retType, false, nil, nil), fn)
+	require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
+	require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, selectList))
+	return fcTC.result.GetResultVector()
 }

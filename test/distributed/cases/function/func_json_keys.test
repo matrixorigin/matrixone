@@ -36,4 +36,8 @@ insert into t2 values ('{"a":1,"b":2}'), ('[1,2]'), ('{}'), ('"hello"'), ('null'
 select a, json_keys(a) from t2;
 
 drop table t1;
+
+-- T_json input via json_object
+select json_keys(json_object('a', json_object('x', 1), 'b', 2));
+select json_keys(json_object('a', json_object('x', 1), 'b', 2), '$.a');
 drop table t2;

@@ -58,4 +58,10 @@ a    json_keys(a)
 "hello"    null
 null    null
 drop table t1;
+select json_keys(json_object('a', json_object('x', 1), 'b', 2));
+json_keys(json_object(a, json_object(x, 1), b, 2))
+["a","b"]
+select json_keys(json_object('a', json_object('x', 1), 'b', 2), '$.a');
+json_keys(json_object(a, json_object(x, 1), b, 2), $.a)
+["x"]
 drop table t2;

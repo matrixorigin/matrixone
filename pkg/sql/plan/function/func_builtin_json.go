@@ -613,6 +613,12 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	for j := 0; j < length; j++ {
+		if selectList.Contains(uint64(j)) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		elems := make([]any, 0, len(params))
 		for i := 0; i < len(params); i++ {
 			elem, err := op.convertToAny(proc.Ctx, params[i], j)
@@ -630,10 +636,8 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 		if err != nil {
 			return err
 		}
-		if selectList.Contains(uint64(j)) {
-			rs.AppendBytes(nil, true)
-		} else {
-			rs.AppendBytes(dt, false)
+		if err := rs.AppendBytes(dt, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -826,6 +830,12 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 	arrayOp := &opBuiltInJsonArray{}
 
 	for j := 0; j < length; j++ {
+		if selectList.Contains(uint64(j)) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		obj := make(map[string]any, len(params)/2)
 
 		for i := 0; i < len(params); i += 2 {
@@ -888,10 +898,8 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 		if err != nil {
 			return err
 		}
-		if selectList.Contains(uint64(j)) {
-			rs.AppendBytes(nil, true)
-		} else {
-			rs.AppendBytes(dt, false)
+		if err := rs.AppendBytes(dt, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -1070,6 +1078,10 @@ func jsonKeysRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
 		v, null := p1.GetStrValue(i)
 		if null {
 			rs.AppendMustNullForBytesResult()
@@ -1104,6 +1116,10 @@ func jsonKeysWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	isJson := !ivecs[0].GetType().Oid.IsMySQLString()
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
 		jsonBytes, null1 := p1.GetStrValue(i)
 		pathBytes, null2 := p2.GetStrValue(i)
 		if null1 || null2 {
@@ -1162,6 +1178,10 @@ func JsonPretty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
 		v, null := p1.GetStrValue(i)
 		if null {
 			rs.AppendMustNullForBytesResult()
@@ -1280,12 +1300,25 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	docIsStr := ivecs[1].GetType().Oid.IsMySQLString()
 	schemaIsConst := ivecs[0].IsConst()
 
+	if selectList.IgnoreAllRow() {
+		for i := uint64(0); i < uint64(length); i++ {
+			rs.AppendMustNull()
+		}
+		return nil
+	}
+
 	// When the schema is constant, compile it once and reuse across all rows.
 	var compiled *gojsonschema.Schema
 	if schemaIsConst {
 		schemaBytes, null := p1.GetStrValue(0)
 		if null {
-			// All rows have NULL schema → all results NULL.
+			// All rows have NULL schema -> all results NULL.
+			for i := uint64(0); i < uint64(length); i++ {
+				rs.AppendMustNull()
+			}
+			return nil
+		}
+		if !hasEvaluableJsonSchemaDoc(p2, length, selectList) {
 			for i := uint64(0); i < uint64(length); i++ {
 				rs.AppendMustNull()
 			}
@@ -1295,21 +1328,24 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid schema JSON")
 		}
+		if err := validateSchemaObject(proc.Ctx, "json_schema_valid", schemaBJ); err != nil {
+			return err
+		}
 		if schemaBJ.HasRef() {
 			return moerr.NewNotSupportedf(proc.Ctx, "json_schema_valid: $ref is not supported")
 		}
 		schemaJSON, _ := schemaBJ.MarshalJSON()
 		compiled, err = gojsonschema.NewSchema(gojsonschema.NewBytesLoader(schemaJSON))
 		if err != nil {
-			// Invalid schema → MySQL returns true.
-			for i := uint64(0); i < uint64(length); i++ {
-				rs.AppendMustValue(true)
-			}
-			return nil
+			return moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", err.Error())
 		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			rs.AppendMustNull()
+			continue
+		}
 		if schemaIsConst {
 			_, null2 := p2.GetStrValue(i)
 			if null2 {
@@ -1324,7 +1360,7 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 				continue
 			}
 		}
-		v, err := doJsonSchemaValidateCached(p1, p2, i, schemaIsStr, docIsStr, true, proc, compiled)
+		v, err := doJsonSchemaValidateCached(p1, p2, i, schemaIsStr, docIsStr, true, proc, compiled, "json_schema_valid")
 		if err != nil {
 			return err
 		}
@@ -1344,6 +1380,13 @@ func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionRe
 	docIsStr := ivecs[1].GetType().Oid.IsMySQLString()
 	schemaIsConst := ivecs[0].IsConst()
 
+	if selectList.IgnoreAllRow() {
+		for i := uint64(0); i < uint64(length); i++ {
+			rs.AppendMustNullForBytesResult()
+		}
+		return nil
+	}
+
 	var compiled *gojsonschema.Schema
 	if schemaIsConst {
 		schemaBytes, null := p1.GetStrValue(0)
@@ -1353,24 +1396,34 @@ func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionRe
 			}
 			return nil
 		}
+		if !hasEvaluableJsonSchemaDoc(p2, length, selectList) {
+			for i := uint64(0); i < uint64(length); i++ {
+				rs.AppendMustNullForBytesResult()
+			}
+			return nil
+		}
 		schemaBJ, err := parseSchemaJSON(schemaBytes, schemaIsStr)
 		if err != nil {
-			return moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid schema JSON")
+			return moerr.NewInvalidArg(proc.Ctx, "json_schema_validation_report", "invalid schema JSON")
+		}
+		if err := validateSchemaObject(proc.Ctx, "json_schema_validation_report", schemaBJ); err != nil {
+			return err
 		}
 		if schemaBJ.HasRef() {
-			return moerr.NewNotSupportedf(proc.Ctx, "json_schema_valid: $ref is not supported")
+			return moerr.NewNotSupportedf(proc.Ctx, "json_schema_validation_report: $ref is not supported")
 		}
 		schemaJSON, _ := schemaBJ.MarshalJSON()
 		compiled, err = gojsonschema.NewSchema(gojsonschema.NewBytesLoader(schemaJSON))
 		if err != nil {
-			for i := uint64(0); i < uint64(length); i++ {
-				rs.AppendMustBytesValue([]byte(`{"valid": true}`))
-			}
-			return nil
+			return moerr.NewInvalidArg(proc.Ctx, "json_schema_validation_report", err.Error())
 		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
 		if !schemaIsConst {
 			_, null1 := p1.GetStrValue(i)
 			_, null2 := p2.GetStrValue(i)
@@ -1385,7 +1438,7 @@ func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionRe
 				continue
 			}
 		}
-		v, err := doJsonSchemaValidateCached(p1, p2, i, schemaIsStr, docIsStr, false, proc, compiled)
+		v, err := doJsonSchemaValidateCached(p1, p2, i, schemaIsStr, docIsStr, false, proc, compiled, "json_schema_validation_report")
 		if err != nil {
 			return err
 		}
@@ -1414,7 +1467,7 @@ func buildSchemaValidationReport(result *gojsonschema.Result) []byte {
 	return buf.Bytes()
 }
 
-// parseSchemaJSON parses the schema bytes into a ByteJson, checking it's an object.
+// parseSchemaJSON parses the schema bytes into a ByteJson.
 func parseSchemaJSON(raw []byte, isStr bool) (bytejson.ByteJson, error) {
 	if isStr {
 		return types.ParseSliceToByteJson(raw)
@@ -1422,17 +1475,37 @@ func parseSchemaJSON(raw []byte, isStr bool) (bytejson.ByteJson, error) {
 	return types.DecodeJson(raw), nil
 }
 
+func validateSchemaObject(ctx context.Context, fnName string, schemaBJ bytejson.ByteJson) error {
+	if schemaBJ.Type != bytejson.TpCodeObject {
+		return moerr.NewInvalidArg(ctx, fnName, "schema must be a JSON object")
+	}
+	return nil
+}
+
+func hasEvaluableJsonSchemaDoc(p vector.FunctionParameterWrapper[types.Varlena], length int, selectList *FunctionSelectList) bool {
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			continue
+		}
+		_, null := p.GetStrValue(i)
+		if !null {
+			return true
+		}
+	}
+	return false
+}
+
 // doJsonSchemaValidateCached validates a single document row against the schema.
 // If compiled is non-nil, the pre-compiled schema is reused; otherwise the
 // schema is parsed and validated per-row.
-func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Varlena], row uint64, schemaIsStr, docIsStr bool, boolResult bool, proc *process.Process, compiled *gojsonschema.Schema) (interface{}, error) {
+func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Varlena], row uint64, schemaIsStr, docIsStr bool, boolResult bool, proc *process.Process, compiled *gojsonschema.Schema, fnName string) (interface{}, error) {
 	docBytes, _ := p2.GetStrValue(row)
 
 	var docJSON []byte
 	if docIsStr {
 		docBJ, err := types.ParseSliceToByteJson(docBytes)
 		if err != nil {
-			return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid document JSON")
+			return nil, moerr.NewInvalidArg(proc.Ctx, fnName, "invalid document JSON")
 		}
 		docJSON, _ = docBJ.MarshalJSON()
 	} else {
@@ -1443,10 +1516,7 @@ func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Var
 	if compiled != nil {
 		result, err := compiled.Validate(gojsonschema.NewBytesLoader(docJSON))
 		if err != nil {
-			if boolResult {
-				return true, nil
-			}
-			return []byte(`{"valid": true}`), nil
+			return nil, moerr.NewInvalidArg(proc.Ctx, fnName, err.Error())
 		}
 		if boolResult {
 			return result.Valid(), nil
@@ -1457,13 +1527,13 @@ func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Var
 	schemaBytes, _ := p1.GetStrValue(row)
 	schemaBJ, err := parseSchemaJSON(schemaBytes, schemaIsStr)
 	if err != nil {
-		return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid schema JSON")
+		return nil, moerr.NewInvalidArg(proc.Ctx, fnName, "invalid schema JSON")
 	}
-	if schemaBJ.Type != bytejson.TpCodeObject {
-		return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "schema must be a JSON object")
+	if err := validateSchemaObject(proc.Ctx, fnName, schemaBJ); err != nil {
+		return nil, err
 	}
 	if schemaBJ.HasRef() {
-		return nil, moerr.NewNotSupportedf(proc.Ctx, "json_schema_valid: $ref is not supported")
+		return nil, moerr.NewNotSupportedf(proc.Ctx, "%s: $ref is not supported", fnName)
 	}
 	schemaJSON, _ := schemaBJ.MarshalJSON()
 
@@ -1471,10 +1541,7 @@ func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Var
 	dl := gojsonschema.NewBytesLoader(docJSON)
 	validationResult, err := gojsonschema.Validate(sl, dl)
 	if err != nil {
-		if boolResult {
-			return true, nil
-		}
-		return []byte(`{"valid": true}`), nil
+		return nil, moerr.NewInvalidArg(proc.Ctx, fnName, err.Error())
 	}
 	if boolResult {
 		return validationResult.Valid(), nil
@@ -1493,6 +1560,10 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	isStr := ivecs[0].GetType().Oid.IsMySQLString()
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
 		jsonBytes, null1 := p1.GetStrValue(i)
 		pathBytes, null2 := p2.GetStrValue(i)
 		if null1 || null2 {

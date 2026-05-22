@@ -77,6 +77,17 @@ func TestCompareByteJson_DecimalCrossType(t *testing.T) {
 	// DECIMAL-vs-DECIMAL numeric order: "10" > "2"
 	require.Greater(t, CompareByteJson(makeDecimalJson("10"), makeDecimalJson("2")), 0, "10 > 2 numerically")
 	require.Less(t, CompareByteJson(makeDecimalJson("2"), makeDecimalJson("10")), 0, "2 < 10 numerically")
+
+	// Large/high-precision DECIMAL values must not collapse through float64.
+	require.Greater(t,
+		CompareByteJson(makeDecimalJson("9007199254740993"), makeDecimalJson("9007199254740992")),
+		0, "values beyond exact float64 integer precision must compare exactly")
+	require.Greater(t,
+		CompareByteJson(makeDecimalJson("0.123456789123456789"), makeDecimalJson("0.123456789123456788")),
+		0, "high-precision fractional digits must compare exactly")
+	require.Greater(t,
+		CompareByteJson(makeDecimalJson("18446744073709551615.1"), makeJson(t, "18446744073709551615")),
+		0, "decimal just above max uint64 must compare greater")
 }
 
 // TestCompareByteJson_Int64Uint64CrossType verifies that INT64-vs-UINT64

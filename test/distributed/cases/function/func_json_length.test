@@ -49,4 +49,10 @@ insert into t2 values ('[1,2,3]'), ('{"a":1,"b":2}'), ('"hello"'), ('null');
 select a, json_length(a) from t2;
 
 drop table t1;
+
+-- T_json input via json_array
+select json_length(json_array(1, 2, 3));
+select json_length(json_object('a', json_array(1, 2, 3), 'b', json_object('x', 1)));
+select json_length(json_object('a', json_array(1, 2, 3), 'b', json_object('x', 1)), '$.a');
+select json_length(json_object('a', json_array(1, 2, 3), 'b', json_object('x', 1)), '$.b');
 drop table t2;
