@@ -97,11 +97,11 @@ type waiter struct {
 	waitAt        atomic.Value
 	enableChecker bool
 
- 	// lockWaitTimeout is the session-level SET lock_wait_timeout value.
- 	// A zero value means no session-level timeout is enforced here; in that
- 	// case waiting relies on the context or other external cancellation.
- 	// Set in waiterEvents.add() from the lockContext and checked in
- 	// waiterEvents.check() to enforce timeouts on the async (remote) lock path.
+	// lockWaitTimeout is the session-level SET lock_wait_timeout value.
+	// A zero value means no session-level timeout is enforced here; in that
+	// case waiting relies on the context or other external cancellation.
+	// Set in waiterEvents.add() from the lockContext and checked in
+	// waiterEvents.check() to enforce timeouts on the async (remote) lock path.
 	lockWaitTimeout time.Duration
 	lockWaitTimer   atomic.Pointer[time.Timer]
 

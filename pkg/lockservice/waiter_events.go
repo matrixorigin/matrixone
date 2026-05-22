@@ -247,7 +247,6 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 	for i, w := range mw.mu.blockedWaiters {
 		// remove if not in blocking state
 		if w.getStatus() != blocking {
-			w.stopLockWaitTimer()
 			w.close("waiterEvents check", mw.logger)
 			mw.mu.blockedWaiters[i] = nil
 			continue
