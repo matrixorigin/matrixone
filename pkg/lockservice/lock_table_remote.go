@@ -34,11 +34,6 @@ import (
 )
 
 const (
-	// defaultLockRPCTimeout is the timeout for lock RPC calls. This should be
-	// long enough to accommodate reasonable lock waits but short enough to avoid
-	// indefinite goroutine blocking when the remote lock service is unhealthy.
-	defaultLockRPCTimeout = 5 * time.Minute
-
 	// lockRpcSlack is the extra budget added to the RPC deadline beyond
 	// LockWaitTimeout.  The lock-table owner starts its own wait budget only
 	// after receiving the RPC, so the client-side RPC deadline must outlive the
