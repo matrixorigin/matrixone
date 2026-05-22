@@ -236,4 +236,12 @@ if(c = 0, if(b = 0, a, a / b), if(b = 0, a / c, a / b / c))
 0.3333333333333333
 0.16666666666666666
 DROP TABLE t1;
+CREATE TABLE t1(id INT);
+INSERT INTO t1 VALUES(1),(2),(3);
+SELECT CASE WHEN id = 1 THEN 'string' WHEN id = 2 THEN 123 ELSE 'mixed' END AS mixed_case FROM t1 ORDER BY id;
+➤ mixed_case[12,6,0]  𝄀
+string  𝄀
+123  𝄀
+mixed
+DROP TABLE t1;
 SET TIME_ZONE = "SYSTEM";
