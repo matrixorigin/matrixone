@@ -137,7 +137,7 @@ func (w *waiter) close(
 	info string,
 	logger *log.MOLogger,
 ) {
-	defer w.stopLockWaitTimer()
+	w.stopLockWaitTimer()
 	if w.enableChecker {
 		logCloseWaiter(logger, info, w.txn.TxnID, w)
 	}

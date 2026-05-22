@@ -114,12 +114,7 @@ func (l *remoteLockTable) lock(
 	var rpcCancel context.CancelFunc
 	if d := time.Duration(opts.LockWaitTimeout) * time.Second; d > 0 {
 		lockRpcTimeout := d + lockRpcSlack
-		rpcCtx, rpcCancel = context.WithTimeout(context.Background(), lockRpcTimeout)
-		// Propagate cancellation from the caller's context.
-		if ctx != nil {
-			stop := context.AfterFunc(ctx, rpcCancel)
-			defer stop()
-		}
+		rpcCtx, rpcCancel = context.WithTimeout(ctx, lockRpcTimeout)
 	} else {
 		rpcCtx = ctx
 	}
