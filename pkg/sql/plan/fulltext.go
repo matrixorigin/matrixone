@@ -145,7 +145,7 @@ func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (s
 		return "", moerr.NewInvalidInput(builder.GetContext(), "mode is not an integer")
 	}
 
-	ps, err := fulltext.ParsePattern(pattern, mode)
+	ps, err := fulltext.ParsePattern(pattern, mode, param.Parser)
 	if err != nil {
 		return "", err
 	}

@@ -242,6 +242,68 @@ func TestShouldSkipObjByShuffle(t *testing.T) {
 	ShouldSkipObjByShuffle(rsp, stats)
 }
 
+func TestDetermineShuffleForDedupJoin(t *testing.T) {
+	cases := []struct {
+		name        string
+		dedupCtx    *plan.DedupJoinCtx
+		wantShuffle bool
+	}{
+		{
+			name:        "plain_dedup_join_large_build_side_can_shuffle",
+			dedupCtx:    &plan.DedupJoinCtx{},
+			wantShuffle: true,
+		},
+		{
+			name: "old_col_list_disables_shuffle",
+			dedupCtx: &plan.DedupJoinCtx{
+				OldColList: []plan.ColRef{{RelPos: 1, ColPos: 0}},
+			},
+		},
+		{
+			name: "old_col_capture_list_disables_shuffle",
+			dedupCtx: &plan.DedupJoinCtx{
+				OldColCaptureList: []plan.OldColCapture{
+					{
+						BuildPlaceholder: plan.ColRef{RelPos: 1, ColPos: 0},
+						ProbeSource:      plan.ColRef{RelPos: 2, ColPos: 0},
+					},
+				},
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			builder := &QueryBuilder{
+				qry: &plan.Query{
+					Nodes: []*plan.Node{
+						{Stats: DefaultStats()},
+						{Stats: &plan.Stats{Outcnt: 320001, HashmapStats: &plan.HashMapStats{}}},
+					},
+				},
+			}
+			node := &plan.Node{
+				NodeType:          plan.Node_JOIN,
+				JoinType:          plan.Node_DEDUP,
+				Children:          []int32{0, 1},
+				OnDuplicateAction: plan.Node_FAIL,
+				DedupJoinCtx:      c.dedupCtx,
+				Stats:             DefaultStats(),
+			}
+
+			determineShuffleForJoin(node, builder)
+
+			require.Equal(t, c.wantShuffle, node.Stats.HashmapStats.Shuffle)
+			if c.wantShuffle {
+				require.Equal(t, int32(0), node.Stats.HashmapStats.ShuffleColIdx)
+				require.Equal(t, plan.ShuffleType_Hash, node.Stats.HashmapStats.ShuffleType)
+			} else {
+				require.Equal(t, int32(-1), node.Stats.HashmapStats.ShuffleColIdx)
+			}
+		})
+	}
+}
+
 func TestGetRangeShuffleIndexForZM(t *testing.T) {
 	zm := index2.NewZM(types.T_datetime, 0)
 	defer func() {

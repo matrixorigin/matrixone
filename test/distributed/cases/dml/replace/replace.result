@@ -135,3 +135,42 @@ id    a    b
 1    30    updated
 2    20    second
 drop table t_pk_uk;
+drop table if exists ai_replace_test;
+create table ai_replace_test (id int auto_increment primary key, name varchar(50) unique, value int);
+insert into ai_replace_test (name, value) values ('key1', 100), ('key2', 200);
+replace into ai_replace_test (name, value) values ('key1', 300);
+select * from ai_replace_test order by id;
+id    name    value
+2    key2    200
+3    key1    300
+insert into ai_replace_test (name, value) values ('key3', 400);
+select * from ai_replace_test order by id;
+id    name    value
+2    key2    200
+3    key1    300
+4    key3    400
+drop table ai_replace_test;
+drop table if exists ai_composite_uk;
+create table ai_composite_uk (id int auto_increment primary key, a int, b int, value int, unique key uk_ab(a, b));
+insert into ai_composite_uk (a, b, value) values (1, 1, 100), (1, 2, 150), (2, 2, 200);
+replace into ai_composite_uk (a, b, value) values (1, 1, 300);
+select * from ai_composite_uk order by id;
+id    a    b    value
+2    1    2    150
+3    2    2    200
+4    1    1    300
+drop table ai_composite_uk;
+drop table if exists ai_multi_uk;
+create table ai_multi_uk (id int auto_increment primary key, name varchar(50) unique, email varchar(100) unique, value int);
+insert into ai_multi_uk (name, email, value) values ('n1', 'n1@a.com', 100), ('n2', 'n2@a.com', 200);
+replace into ai_multi_uk (name, email, value) values ('n1', 'n1_new@a.com', 300);
+select * from ai_multi_uk order by id;
+id    name    email    value
+2    n2    n2@a.com    200
+3    n1    n1_new@a.com    300
+replace into ai_multi_uk (name, email, value) values ('n_new', 'n2@a.com', 400);
+select * from ai_multi_uk order by id;
+id    name    email    value
+3    n1    n1_new@a.com    300
+4    n_new    n2@a.com    400
+drop table ai_multi_uk;
