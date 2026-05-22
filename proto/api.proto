@@ -296,7 +296,6 @@ enum AlterKind {
     AddPartition     = 7;
     RenameColumn     = 8;
     ReplaceDef       = 9;
-    UpdateAutoIncrement = 10;
 }
 
 message AlterTablePolicy {
@@ -336,10 +335,6 @@ message AlterTableReplaceDef {
     plan.TableDef def    = 1;
 }
 
-message AlterTableAutoIncrement {
-    uint64 offset = 1;
-}
-
 message AlterTableDropColumn {
     uint32 logical_idx  = 1;
     uint32 sequence_num = 2;  // used to double check
@@ -359,7 +354,6 @@ message AlterTableReq {
         AlterTablePolicy update_policy       = 9;
         AlterTableRenameCol rename_col       = 11;
         AlterTableReplaceDef replace_def     = 12;
-        AlterTableAutoIncrement update_auto_increment = 13;
     }
 }
 

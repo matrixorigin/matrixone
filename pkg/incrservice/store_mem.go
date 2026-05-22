@@ -188,11 +188,11 @@ func (s *memStore) SetOffset(
 	m := s.caches
 	if txnOp != nil {
 		key := string(txnOp.Txn().ID)
-		um, ok := s.uncommitted[key]
-		if !ok {
-			return moerr.NewInternalErrorf(ctx, "incrservice: no uncommitted data for txn %s", key)
+		if um, ok := s.uncommitted[key]; ok {
+			if _, exists := um[tableID]; exists {
+				m = um
+			}
 		}
-		m = um
 	}
 	cols, ok := m[tableID]
 	if !ok {
