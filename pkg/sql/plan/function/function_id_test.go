@@ -416,9 +416,9 @@ var predefinedFunids = map[int]int{
 	JSON_LENGTH:              363,
 	JSON_KEYS:                364,
 	JSON_PRETTY:              365,
-	JSON_SCHEMA_VALID        : 366,
-	JSON_SCHEMA_VALID_REPORT : 367,
-	JSON_VALUE              : 368,
+	JSON_SCHEMA_VALID:        366,
+	JSON_SCHEMA_VALID_REPORT: 367,
+	JSON_VALUE:               368,
 	FUNCTION_END_NUMBER:      369,
 }
 
