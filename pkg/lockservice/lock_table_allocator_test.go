@@ -205,6 +205,29 @@ func TestKeepaliveBind(t *testing.T) {
 		})
 }
 
+func TestGetTimeoutBindsRequiresGracePeriod(t *testing.T) {
+	interval := time.Millisecond * 100
+	runLockTableAllocatorTest(
+		t,
+		interval,
+		func(a *lockTableAllocator) {
+			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			binds := a.getServiceBinds("s1")
+			require.NotNil(t, binds)
+
+			now := time.Now()
+			binds.Lock()
+			binds.lastKeepaliveTime = now.Add(-interval - time.Millisecond)
+			binds.Unlock()
+			require.Empty(t, a.getTimeoutBinds(now))
+
+			binds.Lock()
+			binds.lastKeepaliveTime = now.Add(-2*interval - time.Millisecond)
+			binds.Unlock()
+			require.Len(t, a.getTimeoutBinds(now), 1)
+		})
+}
+
 func TestValid(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,

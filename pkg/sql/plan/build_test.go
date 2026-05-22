@@ -492,6 +492,11 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"SELECT '2024-01-01' - INTERVAL n_nationkey HOUR FROM nation",
 		"SELECT '2024-01-01' + INTERVAL n_nationkey % 365 DAY FROM nation",
 		"SELECT '2024-01-01' + INTERVAL (n_nationkey % 365) DAY FROM nation",
+		"SELECT 20260515 + INTERVAL 7 DAY",
+		"SELECT 20260515 - INTERVAL 7 DAY",
+		"SELECT INTERVAL 7 DAY + 20260515",
+		"SELECT MAX(n_nationkey) + INTERVAL 7 DAY FROM nation",
+		"SELECT MAX(n_nationkey) - INTERVAL 7 DAY FROM nation",
 		"select 2222332222222223333333333333333333, 0x616263,-10, bit_and(2), bit_or(2), 'aaa' like '%a',str_to_date('04/31/2004', '%m/%d/%Y'),unix_timestamp(from_unixtime(2147483647))",
 		"select max(n_nationkey) over  (partition by N_REGIONKEY) from nation",
 		"select * from generate_series(1, 5) g",
@@ -1669,4 +1674,37 @@ func TestReplaceCaptureList_NotEmittedWhenMergedScanDisabled(t *testing.T) {
 				"%s: %s, no DEDUP JOIN should carry a capture list", c.name, c.why)
 		})
 	}
+}
+
+func TestReplaceCaptureDedupJoinDoesNotShuffle(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO self_ref VALUES (1, NULL, 'root')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_DEDUP {
+			continue
+		}
+		if node.DedupJoinCtx == nil || len(node.DedupJoinCtx.OldColCaptureList) == 0 {
+			continue
+		}
+
+		rightChild := query.Nodes[node.Children[1]]
+		rightChild.Stats.Outcnt = 320001
+		node.Stats = DefaultStats()
+
+		builder := &QueryBuilder{qry: query}
+		determineShuffleForJoin(node, builder)
+
+		assert.False(t, node.Stats.HashmapStats.Shuffle)
+		assert.Equal(t, int32(-1), node.Stats.HashmapStats.ShuffleColIdx)
+		return
+	}
+
+	t.Fatal("expected REPLACE plan to contain a DEDUP JOIN with OldColCaptureList")
 }

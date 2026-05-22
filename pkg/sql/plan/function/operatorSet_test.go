@@ -432,6 +432,43 @@ func Test_IffCheck_MixedTypes(t *testing.T) {
 	}
 }
 
+func Test_CaseCheck_MixedStringNumeric(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_varchar, 11, 0),
+		types.T_int32.ToType(),
+	}
+	result := caseCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, 3)
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.True(t, result.finalType[1].Oid.IsMySQLString())
+	require.True(t, result.finalType[2].Oid.IsMySQLString())
+	require.Equal(t, int32(types.MaxVarBinaryLen), result.finalType[1].Width)
+	require.Equal(t, int32(types.MaxVarBinaryLen), result.finalType[2].Width)
+}
+
+func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_varchar}},
+		{args: []types.T{types.T_char}},
+	}
+	inputs := []types.Type{
+		types.New(types.T_varchar, 7, 0),
+		types.T_int32.ToType(),
+		types.New(types.T_char, 13, 0),
+		types.T_float64.ToType(),
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, 0, result.idx)
+	require.Len(t, result.finalType, len(inputs))
+	for _, typ := range result.finalType {
+		require.True(t, typ.Oid.IsMySQLString())
+		require.Equal(t, int32(types.MaxVarBinaryLen), typ.Width)
+	}
+}
+
 func Test_CaseWhen_WithNullAndStringComparison(t *testing.T) {
 	// Test CASE WHEN with NULL value compared to string
 	// This should not error, matching MySQL behavior
