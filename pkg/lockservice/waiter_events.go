@@ -189,14 +189,15 @@ func (mw *waiterEvents) add(c *lockContext) {
 	// LockWaitTimeout boundary.  Without this, the async path only checks
 	// on the coarse defaultLazyCheckDuration tick (5s in production), so
 	// a 1s lock_wait_timeout would wait up to 5s before enforcement.
+	c.w.stopLockWaitTimer()
 	if c.w.lockWaitTimeout > 0 {
 		d := c.w.lockWaitTimeout
-		time.AfterFunc(d, func() {
+		c.w.lockWaitTimer.Store(time.AfterFunc(d, func() {
 			select {
 			case mw.checkC <- struct{}{}:
 			default:
 			}
-		})
+		}))
 	}
 }
 
@@ -247,6 +248,7 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 	for i, w := range mw.mu.blockedWaiters {
 		// remove if not in blocking state
 		if w.getStatus() != blocking {
+			w.stopLockWaitTimer()
 			w.close("waiterEvents check", mw.logger)
 			mw.mu.blockedWaiters[i] = nil
 			continue

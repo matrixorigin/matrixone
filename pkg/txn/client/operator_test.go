@@ -816,6 +816,8 @@ func TestWithTxnLockWaitTimeout(t *testing.T) {
 		t,
 		func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 			require.Equal(t, 60*time.Second, LockWaitTimeoutFromTxn(tc))
+			wrapped := struct{ TxnOperator }{TxnOperator: tc}
+			require.Equal(t, 60*time.Second, LockWaitTimeoutFromTxn(wrapped))
 		},
 		WithTxnLockWaitTimeout(60*time.Second),
 	)
