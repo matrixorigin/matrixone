@@ -213,10 +213,18 @@ func CompareByteJson(left, right ByteJson) int {
 		case TpCodeLiteral:
 			cmp = int(left.Data[0]) - int(right.Data[0])
 		case TpCodeInt64:
-			cmp = compareInt64(left.GetInt64(), right.GetInt64())
+			if right.Type == TpCodeUint64 {
+				cmp = compareInt64Uint64(left.GetInt64(), right.GetUint64())
+			} else if right.Type == TpCodeInt64 {
+				cmp = compareInt64(left.GetInt64(), right.GetInt64())
+			}
 
 		case TpCodeUint64:
-			cmp = compareUint64(left.GetUint64(), right.GetUint64())
+			if right.Type == TpCodeInt64 {
+				cmp = -compareInt64Uint64(right.GetInt64(), left.GetUint64())
+			} else if right.Type == TpCodeUint64 {
+				cmp = compareUint64(left.GetUint64(), right.GetUint64())
+			}
 		case TpCodeFloat64:
 			cmp = compareFloat64(left.GetFloat64(), right.GetFloat64())
 		case TpCodeDecimal:

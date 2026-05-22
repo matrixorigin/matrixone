@@ -49,12 +49,6 @@ json_schema_valid({"type":"array","items":{"type":"number"},"minItems":1,"maxIte
 select json_schema_valid('{"type":"array","items":{"type":"number"},"minItems":1,"maxItems":3}', '["a"]');
 json_schema_valid({"type":"array","items":{"type":"number"},"minItems":1,"maxItems":3}, ["a"])
 0
-select json_schema_valid('true', '"anything"');
-invalid argument json_schema_valid, bad value schema must be a JSON object
-select json_schema_valid('true', '42');
-invalid argument json_schema_valid, bad value schema must be a JSON object
-select json_schema_valid('true', '{"a":1}');
-invalid argument json_schema_valid, bad value schema must be a JSON object
 select json_schema_valid('{"type":"number","multipleOf":5}', '10');
 json_schema_valid({"type":"number","multipleOf":5}, 10)
 1

@@ -841,20 +841,31 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 			var key string
 			switch v := keyAny.(type) {
 			case bytejson.ByteJson:
-				// Use JSON text form for non-string JSON types (number,
-				// object, array).  For JSON strings, unquote to get the
-				// raw key with escapes properly resolved.
-				if v.Type == bytejson.TpCodeString {
+				// For JSON strings, unquote to get the raw key.
+				// For typed scalars (DATE/TIME/DATETIME/BLOB),
+				// MarshalJSON wraps values in quotes; strip them.
+				// For numbers/objects/arrays, MarshalJSON gives the
+				// correct text form.
+				switch v.Type {
+				case bytejson.TpCodeString:
 					s, err := v.Unquote()
 					if err == nil {
 						key = s
 					} else {
 						key = fmt.Sprint(v)
 					}
-				} else if bj, err := v.MarshalJSON(); err == nil {
-					key = string(bj)
-				} else {
-					key = fmt.Sprint(v)
+				case bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob:
+					if bj, err := v.MarshalJSON(); err == nil && len(bj) >= 2 && bj[0] == '"' {
+						key = string(bj[1 : len(bj)-1])
+					} else {
+						key = fmt.Sprint(v)
+					}
+				default:
+					if bj, err := v.MarshalJSON(); err == nil {
+						key = string(bj)
+					} else {
+						key = fmt.Sprint(v)
+					}
 				}
 			case nil:
 				return moerr.NewInvalidInputf(proc.Ctx, "JSON documents may not contain NULL member names")
@@ -991,7 +1002,6 @@ func jsonLengthWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	rsNull := rsVec.GetNulls()
 
 	isJson := !ivecs[0].GetType().Oid.IsMySQLString()
-	c1, c2 := ivecs[0].IsConst(), ivecs[1].IsConst()
 
 	// selectList: ignore all rows
 	if selectList != nil && selectList.IgnoreAllRow() {
@@ -1019,19 +1029,11 @@ func jsonLengthWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			bj, err = types.ParseSliceToByteJson(jsonBytes)
 		}
 		if err != nil {
-			if c1 && c2 {
-				return moerr.NewInvalidArg(proc.Ctx, "json_length", "invalid JSON document")
-			}
-			rsNull.Add(i)
-			continue
+			return moerr.NewInvalidArg(proc.Ctx, "json_length", "invalid JSON document")
 		}
 		path, err := types.ParseStringToPath(string(pathBytes))
 		if err != nil {
-			if c1 && c2 {
-				return moerr.NewInvalidArg(proc.Ctx, "json_length", "invalid path expression")
-			}
-			rsNull.Add(i)
-			continue
+			return moerr.NewInvalidArg(proc.Ctx, "json_length", "invalid path expression")
 		}
 		val := bj.Query([]*bytejson.Path{&path})
 		if val.IsNull() {
@@ -1081,8 +1083,7 @@ func jsonKeysRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 			bj = types.DecodeJson(v)
 		}
 		if err != nil {
-			rs.AppendMustNullForBytesResult()
-			continue
+			return moerr.NewInvalidArg(proc.Ctx, "json_keys", "invalid JSON document")
 		}
 		keysArray, err := buildJsonKeysArray(bj)
 		if err != nil || keysArray == nil {
@@ -1101,7 +1102,6 @@ func jsonKeysWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, ivecs[1])
 
 	isJson := !ivecs[0].GetType().Oid.IsMySQLString()
-	c1, c2 := ivecs[0].IsConst(), ivecs[1].IsConst()
 
 	for i := uint64(0); i < uint64(length); i++ {
 		jsonBytes, null1 := p1.GetStrValue(i)
@@ -1118,19 +1118,11 @@ func jsonKeysWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			bj, err = types.ParseSliceToByteJson(jsonBytes)
 		}
 		if err != nil {
-			if c1 && c2 {
-				return moerr.NewInvalidArg(proc.Ctx, "json_keys", "invalid JSON document")
-			}
-			rs.AppendMustNullForBytesResult()
-			continue
+			return moerr.NewInvalidArg(proc.Ctx, "json_keys", "invalid JSON document")
 		}
 		path, err := types.ParseStringToPath(string(pathBytes))
 		if err != nil {
-			if c1 && c2 {
-				return moerr.NewInvalidArg(proc.Ctx, "json_keys", "invalid path expression")
-			}
-			rs.AppendMustNullForBytesResult()
-			continue
+			return moerr.NewInvalidArg(proc.Ctx, "json_keys", "invalid path expression")
 		}
 		val := bj.Query([]*bytejson.Path{&path})
 		if val.IsNull() || val.Type != bytejson.TpCodeObject {

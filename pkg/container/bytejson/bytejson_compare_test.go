@@ -78,3 +78,31 @@ func TestCompareByteJson_DecimalCrossType(t *testing.T) {
 	require.Greater(t, CompareByteJson(makeDecimalJson("10"), makeDecimalJson("2")), 0, "10 > 2 numerically")
 	require.Less(t, CompareByteJson(makeDecimalJson("2"), makeDecimalJson("10")), 0, "2 < 10 numerically")
 }
+
+// TestCompareByteJson_Int64Uint64CrossType verifies that INT64-vs-UINT64
+// comparisons are handled correctly even though both report TYPE()="INTEGER"
+// (same jsonTpOrder).  Without the cross-type check, the same-type branch
+// would use the wrong accessor.
+func TestCompareByteJson_Int64Uint64CrossType(t *testing.T) {
+	// INT64 == small UINT64
+	require.Equal(t, 0, CompareByteJson(makeJson(t, "42"), makeJson(t, "42")))
+
+	// INT64 < UINT64
+	require.Less(t, CompareByteJson(makeJson(t, "-1"), makeJson(t, "1")), 0,
+		"-1 < 1")
+
+	// Large UINT64 (above max int64) > INT64
+	bigUint := makeJson(t, "18446744073709551615") // max uint64
+	require.Greater(t, CompareByteJson(bigUint, makeJson(t, "1")), 0,
+		"max uint64 > 1")
+
+	// Large UINT64 > negative INT64
+	require.Greater(t, CompareByteJson(bigUint, makeJson(t, "-1")), 0,
+		"max uint64 > -1")
+
+	// Both UINT64
+	require.Equal(t, 0, CompareByteJson(makeJson(t, "100"), makeJson(t, "100")))
+
+	// UINT64 > smaller UINT64
+	require.Greater(t, CompareByteJson(makeJson(t, "100"), makeJson(t, "99")), 0)
+}
