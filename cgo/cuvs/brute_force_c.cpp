@@ -223,7 +223,7 @@ uint64_t gpu_brute_force_search_async(gpu_brute_force_c index_c, const void* que
     }
 }
 
-uint64_t gpu_brute_force_search_float_async(gpu_brute_force_c index_c, const float* queries_data, uint64_t num_queries, 
+uint64_t gpu_brute_force_search_float_async(gpu_brute_force_c index_c, const float* queries_data, uint64_t num_queries,
                                               uint32_t query_dimension, uint32_t limit, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {

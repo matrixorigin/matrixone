@@ -946,45 +946,18 @@ public:
         search_res.neighbors.resize(num_queries * limit, -1LL);
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            int64_t offset = 0;
+            int64_t data_size = static_cast<int64_t>(this->count);
             if (this->dist_mode == DistributionMode_SHARDED) {
-                uint64_t offset = 0;
-                for (int r = 0; r < handle.get_rank(); ++r) offset += this->shard_sizes_[r];
-                
-                // std::cout << "[DEBUG] CAGRA search_internal SHARDED: rank=" << handle.get_rank() 
-                //           << " offset=" << offset << " host_ids.size=" << this->host_ids.size() 
-                //           << " count=" << this->count << " num_queries=" << num_queries << std::endl;
-
-                for (size_t i = 0; i < raw_neighbors.size(); ++i) {
-                    if (raw_neighbors[i] != (uint32_t)-1) {
-                        uint64_t global_pos = (uint64_t)raw_neighbors[i] + offset;
-                        if (this->host_ids.empty()) {
-                            search_res.neighbors[i] = (int64_t)global_pos;
-                        } else if (global_pos < this->host_ids.size()) {
-                            search_res.neighbors[i] = (int64_t)this->host_ids[global_pos];
-                        } else {
-                            std::cout << "[ERROR] CAGRA sharded: global_pos " << global_pos 
-                                      << " out of range (raw=" << raw_neighbors[i] 
-                                      << " offset=" << offset 
-                                      << " host_ids.size=" << this->host_ids.size() << ")" << std::endl;
-                        }
-                    }
-                }
-                
-                // if (num_queries > 0) {
-                //     std::cout << "[DEBUG] Shard " << handle.get_rank() << " query 0 first 5 results: ";
-                //     for (uint32_t k = 0; k < std::min(limit, 5U); ++k) {
-                //         std::cout << "raw=" << raw_neighbors[k] << "->id=" << search_res.neighbors[k] << " ";
-                //     }
-                //     std::cout << std::endl;
-                // }
-            } else {
-                for (size_t i = 0; i < raw_neighbors.size(); ++i) {
-                    if (raw_neighbors[i] != (uint32_t)-1) {
-                        search_res.neighbors[i] = this->host_ids.empty()
-                            ? (int64_t)raw_neighbors[i]
-                            : (int64_t)this->host_ids[raw_neighbors[i]];
-                    }
-                }
+                for (int r = 0; r < handle.get_rank(); ++r) offset += (int64_t)this->shard_sizes_[r];
+                data_size = static_cast<int64_t>(this->shard_sizes_[handle.get_rank()]);
+            }
+            for (size_t i = 0; i < raw_neighbors.size(); ++i) {
+                // raw_neighbors[i] is uint32_t; cuvs sentinel (uint32_t)-1
+                // becomes UINT32_MAX as int64, which the data_size bound
+                // catches without an explicit check.
+                search_res.neighbors[i] = map_neighbor_id(
+                    static_cast<int64_t>(raw_neighbors[i]), offset, data_size, this->host_ids);
             }
         }
 
@@ -1235,45 +1208,15 @@ public:
         search_res.neighbors.resize(num_queries * limit, -1LL);
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            int64_t offset = 0;
+            int64_t data_size = static_cast<int64_t>(this->count);
             if (this->dist_mode == DistributionMode_SHARDED) {
-                uint64_t offset = 0;
-                for (int r = 0; r < handle.get_rank(); ++r) offset += this->shard_sizes_[r];
-                
-                // std::cout << "[DEBUG] CAGRA search_float_internal SHARDED: rank=" << handle.get_rank() 
-                //           << " offset=" << offset << " host_ids.size=" << this->host_ids.size() 
-                //           << " count=" << this->count << " num_queries=" << num_queries << std::endl;
-
-                for (size_t i = 0; i < raw_neighbors_f.size(); ++i) {
-                    if (raw_neighbors_f[i] != (uint32_t)-1) {
-                        uint64_t global_pos = (uint64_t)raw_neighbors_f[i] + offset;
-                        if (this->host_ids.empty()) {
-                            search_res.neighbors[i] = (int64_t)global_pos;
-                        } else if (global_pos < this->host_ids.size()) {
-                            search_res.neighbors[i] = (int64_t)this->host_ids[global_pos];
-                        } else {
-                            std::cout << "[ERROR] CAGRA sharded: global_pos " << global_pos 
-                                      << " out of range (raw=" << raw_neighbors_f[i] 
-                                      << " offset=" << offset 
-                                      << " host_ids.size=" << this->host_ids.size() << ")" << std::endl;
-                        }
-                    }
-                }
-                
-                // if (num_queries > 0) {
-                //     std::cout << "[DEBUG] Shard " << handle.get_rank() << " query 0 first 5 results: ";
-                //     for (uint32_t k = 0; k < std::min(limit, 5U); ++k) {
-                //         std::cout << "raw=" << raw_neighbors_f[k] << "->id=" << search_res.neighbors[k] << " ";
-                //     }
-                //     std::cout << std::endl;
-                // }
-            } else {
-                for (size_t i = 0; i < raw_neighbors_f.size(); ++i) {
-                    if (raw_neighbors_f[i] != (uint32_t)-1) {
-                        search_res.neighbors[i] = this->host_ids.empty()
-                            ? (int64_t)raw_neighbors_f[i]
-                            : (int64_t)this->host_ids[raw_neighbors_f[i]];
-                    }
-                }
+                for (int r = 0; r < handle.get_rank(); ++r) offset += (int64_t)this->shard_sizes_[r];
+                data_size = static_cast<int64_t>(this->shard_sizes_[handle.get_rank()]);
+            }
+            for (size_t i = 0; i < raw_neighbors_f.size(); ++i) {
+                search_res.neighbors[i] = map_neighbor_id(
+                    static_cast<int64_t>(raw_neighbors_f[i]), offset, data_size, this->host_ids);
             }
         }
 

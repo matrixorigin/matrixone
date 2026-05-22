@@ -230,6 +230,46 @@ using ::distribution_mode_t;
 // =============================================================================
 
 /**
+ * Map a cuvs-returned raw neighbor index to its external pkid (or -1 sentinel).
+ *
+ * cuvs::neighbors::*::search may return junk values (e.g. UINT32_MAX cast to
+ * int64) in unfilled neighbor slots when `limit` exceeds the available count,
+ * or when a filter excludes everything. Result rows beyond the available
+ * neighbors are undefined — unguarded `host_ids[raw]` walks past the vector
+ * and segfaults.
+ *
+ * Use this helper for every post-search host_ids subscript:
+ *   - returns -1 when `raw` is outside `[0, data_size)` — this is the
+ *     primary guard against cuvs sentinel/junk values;
+ *   - returns `raw + offset` directly when `host_ids` is empty (implicit-id
+ *     mode, used in SHARDED-without-custom-IDs);
+ *   - otherwise returns `host_ids[raw + offset]`, with a defensive
+ *     out-of-range fallback to -1.
+ *
+ * `raw`       — value from `search_res.neighbors[i]` (cuvs's local index).
+ * `offset`    — 0 for non-SHARDED; in SHARDED mode the prefix sum of
+ *               preceding shard sizes (`sum(shard_sizes_[0..rank-1])`).
+ * `data_size` — count of vectors backing `raw`'s local index space:
+ *               `this->count` for non-SHARDED, `this->shard_sizes_[rank]`
+ *               for SHARDED. The `raw < data_size` check catches cuvs
+ *               junk (UINT32_MAX etc.) without depending on host_ids.
+ * `host_ids`  — local-id → pkid table; empty for implicit-id indexes.
+ */
+template <typename IdT>
+inline int64_t map_neighbor_id(int64_t raw, int64_t offset,
+                               int64_t data_size,
+                               const std::vector<IdT>& host_ids) {
+    if (raw < 0 || raw >= data_size) return -1;
+    const int64_t global_pos = raw + offset;
+    if (host_ids.empty()) return global_pos;
+    // Defensive: host_ids.size() should equal sum of all shard sizes when
+    // populated, so global_pos is in range by construction once raw passed
+    // the data_size guard. Keep the check explicit to fail-safe.
+    if (global_pos >= static_cast<int64_t>(host_ids.size())) return -1;
+    return static_cast<int64_t>(host_ids[global_pos]);
+}
+
+/**
  * @brief Base class for GPU-based vector indices (IVF-Flat, IVF-PQ, CAGRA).
  *
  * See the Developer Guide block above for full details on lifecycle, locking,
