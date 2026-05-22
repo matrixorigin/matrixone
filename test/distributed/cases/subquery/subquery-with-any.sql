@@ -335,6 +335,37 @@ DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t1s;
 DROP TABLE IF EXISTS t2s;
 
+-- @case
+-- @desc:test for nested correlated ANY and ALL subquery
+-- @label:bvt
+DROP TABLE IF EXISTS corr_any_t1;
+DROP TABLE IF EXISTS corr_any_t2;
+DROP TABLE IF EXISTS corr_any_t3;
+create table corr_any_t1(id int);
+create table corr_any_t2(id int);
+create table corr_any_t3(id int);
+insert into corr_any_t1 values (1), (2), (3);
+insert into corr_any_t2 values (1), (2);
+insert into corr_any_t3 values (1);
+select c1.id from corr_any_t1 c1 where c1.id = any (
+    select c2.id from corr_any_t2 c2 where c2.id = any (
+        select c3.id from corr_any_t3 c3 where c3.id = c2.id and c2.id = c1.id
+    )
+) order by c1.id;
+select c1.id from corr_any_t1 c1 where c1.id > any (
+    select c2.id from corr_any_t2 c2 where c2.id = any (
+        select c3.id from corr_any_t3 c3 where c3.id = c2.id and c2.id < c1.id
+    )
+) order by c1.id;
+select c1.id from corr_any_t1 c1 where c1.id > all (
+    select c2.id from corr_any_t2 c2 where c2.id = any (
+        select c3.id from corr_any_t3 c3 where c3.id = c2.id and c2.id < c1.id
+    )
+) order by c1.id;
+DROP TABLE IF EXISTS corr_any_t1;
+DROP TABLE IF EXISTS corr_any_t2;
+DROP TABLE IF EXISTS corr_any_t3;
+
 
 
 
