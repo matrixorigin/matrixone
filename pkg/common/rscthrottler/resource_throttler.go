@@ -69,8 +69,10 @@ type memThrottler struct {
 	name      string
 	limitRate float64
 
-	lastRefresh     atomic.Int64
-	lastRSSScavenge atomic.Int64
+	lastRefresh        atomic.Int64
+	lastRSSScavenge    atomic.Int64
+	lastRSSCacheEvict  atomic.Int64
+	lastRSSCacheTarget atomic.Int64
 
 	mergeAvailDebounce atomic.Int64
 
@@ -195,22 +197,37 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 	if visible < 0 {
 		visible = 0
 	}
-	shouldFreeOSMemory := float64(visible) < float64(rss)*rssScavengeVisibleRate
+	needFreeOSMemory := float64(visible) < float64(rss)*rssScavengeVisibleRate
 	cacheTargetPercent := int64(0)
 	if float64(rss) >= float64(actualMaxMemory)*rssCacheEvictHardRate {
 		cacheTargetPercent = rssCacheHardTarget
 	} else if float64(rss) >= float64(actualMaxMemory)*rssCacheEvictSoftRate {
 		cacheTargetPercent = rssCacheSoftTarget
 	}
-	shouldEvictCache := cacheTargetPercent > 0 && m.options.rssCacheEvictor != nil
+
+	shouldEvictCache := false
+	if cacheTargetPercent > 0 && m.options.rssCacheEvictor != nil {
+		lastCacheEvict := m.lastRSSCacheEvict.Load()
+		lastTarget := m.lastRSSCacheTarget.Load()
+		cacheEvictExpired := time.Duration(now-lastCacheEvict) > rssScavengeInterval
+		cacheEvictEscalated := lastTarget == 0 || cacheTargetPercent < lastTarget
+		if cacheEvictExpired || cacheEvictEscalated {
+			if m.lastRSSCacheEvict.CompareAndSwap(lastCacheEvict, now) {
+				m.lastRSSCacheTarget.Store(cacheTargetPercent)
+				shouldEvictCache = true
+			}
+		}
+	}
+
+	shouldFreeOSMemory := false
+	if needFreeOSMemory {
+		last := m.lastRSSScavenge.Load()
+		if time.Duration(now-last) > rssScavengeInterval &&
+			m.lastRSSScavenge.CompareAndSwap(last, now) {
+			shouldFreeOSMemory = true
+		}
+	}
 	if !shouldFreeOSMemory && !shouldEvictCache {
-		return
-	}
-	last := m.lastRSSScavenge.Load()
-	if time.Duration(now-last) <= rssScavengeInterval {
-		return
-	}
-	if !m.lastRSSScavenge.CompareAndSwap(last, now) {
 		return
 	}
 	logutil.Info(
@@ -224,6 +241,7 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 	)
 	if shouldEvictCache {
 		m.options.rssCacheEvictor(context.Background(), cacheTargetPercent)
+		m.lastRSSScavenge.Store(now)
 	}
 	if shouldFreeOSMemory || shouldEvictCache {
 		freeOSMemory()

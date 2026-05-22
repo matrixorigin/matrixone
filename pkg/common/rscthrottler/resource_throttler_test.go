@@ -222,8 +222,11 @@ func TestMemThrottlerRSSCacheEvictionByRSSRate(t *testing.T) {
 	require.Equal(t, int32(1), freeCalls.Load())
 	require.Equal(t, rssCacheSoftTarget, target.Load())
 
-	throttler.lastRSSScavenge.Store(now - int64(rssScavengeInterval) - int64(time.Second))
-	throttler.tryScavengeRSS(now, 960*mpool.GB)
+	throttler.tryScavengeRSS(now+int64(time.Second), 960*mpool.GB)
+	require.Equal(t, int32(2), freeCalls.Load())
+	require.Equal(t, rssCacheHardTarget, target.Load())
+
+	throttler.tryScavengeRSS(now+2*int64(time.Second), 960*mpool.GB)
 	require.Equal(t, int32(2), freeCalls.Load())
 	require.Equal(t, rssCacheHardTarget, target.Load())
 }
