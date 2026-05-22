@@ -88,7 +88,7 @@ type memThrottler struct {
 		specializedForMerge bool
 
 		enableRSSScavenging bool
-		rssCacheEvictor     func(context.Context, int64)
+		rssCacheEvictor     func(ctx context.Context, targetPercent int64)
 	}
 }
 
@@ -412,7 +412,7 @@ func WithRSSScavenging() MemThrottlerOption {
 	}
 }
 
-func WithRSSCacheEvictor(evictor func(context.Context, int64)) MemThrottlerOption {
+func WithRSSCacheEvictor(evictor func(ctx context.Context, targetPercent int64)) MemThrottlerOption {
 	return func(throttler *memThrottler) {
 		throttler.options.rssCacheEvictor = evictor
 	}

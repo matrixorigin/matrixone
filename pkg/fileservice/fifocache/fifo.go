@@ -480,7 +480,9 @@ func (c *Cache[K, V]) ForceEvictWithWait(ctx context.Context, n int64) int64 {
 	return c.EvictToTargetWithWait(ctx, target)
 }
 
-// EvictToTargetWithWait evicts until used bytes are no greater than target.
+// EvictToTargetWithWait best-effort evicts until used bytes are no greater
+// than target. If ctx is canceled, it may return with used bytes still above
+// target.
 func (c *Cache[K, V]) EvictToTargetWithWait(ctx context.Context, target int64) int64 {
 	if target < 0 {
 		target = 0
