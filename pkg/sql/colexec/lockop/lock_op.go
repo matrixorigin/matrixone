@@ -545,6 +545,11 @@ func doLock(
 		table = lockservice.ShardingByRow(rows[0])
 	}
 
+	// Attach the current statement/session lock_wait_timeout to the lock options.
+	if d := lockWaitTimeout(proc, txnOp); d > 0 {
+		options = options.WithLockWaitTimeout(int64(d.Seconds()))
+	}
+
 	result, err := lockWithRetry(
 		ctx,
 		lockService,
@@ -763,6 +768,28 @@ func doLock(
 
 type lockRetryState struct {
 	backendRetryDeadline time.Time
+}
+
+func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Duration {
+	if proc != nil && proc.GetResolveVariableFunc() != nil {
+		if v, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false); err == nil {
+			switch n := v.(type) {
+			case int64:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			case int:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			case uint64:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			}
+		}
+	}
+	return client.LockWaitTimeoutFromTxn(txnOp)
 }
 
 func lockWithRetry(

@@ -60,6 +60,7 @@ message LockOptions {
   uint32              Group             = 7;
   Sharding            Sharding          = 8;
   timestamp.Timestamp SnapShotTs        = 9 [(gogoproto.nullable) = false];
+  int64               LockWaitTimeout   = 10;
 }
 
 // LockTable describes which CN manages a Table's Locks.
