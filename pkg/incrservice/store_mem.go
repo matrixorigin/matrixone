@@ -16,11 +16,11 @@ package incrservice
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -190,13 +190,13 @@ func (s *memStore) SetOffset(
 		key := string(txnOp.Txn().ID)
 		um, ok := s.uncommitted[key]
 		if !ok {
-			return fmt.Errorf("incrservice: no uncommitted data for txn %s", key)
+			return moerr.NewInternalErrorf(ctx, "incrservice: no uncommitted data for txn %s", key)
 		}
 		m = um
 	}
 	cols, ok := m[tableID]
 	if !ok {
-		return fmt.Errorf("incrservice: table %d not found in memStore", tableID)
+		return moerr.NewInternalErrorf(ctx, "incrservice: table %d not found in memStore", tableID)
 	}
 	for i := range cols {
 		if cols[i].ColName == colName {
@@ -206,7 +206,7 @@ func (s *memStore) SetOffset(
 			return nil
 		}
 	}
-	return fmt.Errorf("incrservice: column %s not found for table %d in memStore", colName, tableID)
+	return moerr.NewInternalErrorf(ctx, "incrservice: column %s not found for table %d in memStore", colName, tableID)
 }
 
 func (s *memStore) Delete(
