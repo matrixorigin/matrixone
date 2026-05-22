@@ -46,6 +46,7 @@ package compile
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/bytedance/sonic"
@@ -62,6 +63,11 @@ import (
 // insertIntoIvfpqIndexTableFormat is the SQL template used to populate the
 // IVF-PQ index storage table. Lifted from pkg/sql/compile/util.go:126.
 const insertIntoIvfpqIndexTableFormat = "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY ivfpq_create('%s', '%s', %s, %s) AS f;"
+
+// actionIvfpqReindex mirrors idxcron.Action_*. Inlined to avoid an
+// import cycle through pkg/vectorindex/idxcron. Stays in lock-step with
+// pkg/vectorindex/ivfpq/plugin/runtime/runtime.go:48.
+const actionIvfpqReindex = "ivfpq_reindex"
 
 // Hooks implements plugin/compile.Hooks for IVF-PQ.
 //
@@ -197,8 +203,11 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 			originalTableDef.Name, indexName); err != nil {
 			return err
 		}
-		return ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
-			indexName, sinkerType, true, "", originalTableDef)
+		if err = ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
+			indexName, sinkerType, true, "", originalTableDef); err != nil {
+			return err
+		}
+		return registerIdxcronUpdate(ctx, indexDefs[catalog.Ivfpq_TblType_Metadata], ctx.QryDatabase(), originalTableDef)
 	}
 
 	// Always-async path: defer ivfpq_create to the CDC pipeline's
@@ -207,8 +216,38 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		originalTableDef.Name, indexName); err != nil {
 		return err
 	}
-	return ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
-		indexName, sinkerType, false, strings.Join(buildSqls, ";"), originalTableDef)
+	if err = ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
+		indexName, sinkerType, false, strings.Join(buildSqls, ";"), originalTableDef); err != nil {
+		return err
+	}
+	return registerIdxcronUpdate(ctx, indexDefs[catalog.Ivfpq_TblType_Metadata], ctx.QryDatabase(), originalTableDef)
+}
+
+// registerIdxcronUpdate writes the cron task's frozen-metadata row into
+// mo_index_update via the BuildIdxcronMetadata + RegisterIdxcronUpdate
+// pattern shared with IVF-FLAT (see ivfflat/plugin/compile/compile.go:452).
+// BuildIdxcronMetadata returns (nil, nil) for background re-entry — the
+// existing row is authoritative, so we skip the write.
+func registerIdxcronUpdate(
+	ctx compileplugin.CompileContext, indexDef *plan.IndexDef,
+	qryDatabase string, originalTableDef *plan.TableDef,
+) error {
+	metadata, err := Hooks{}.IdxcronMetadata(ctx)
+	if err != nil {
+		return err
+	}
+	if len(metadata) == 0 {
+		logutil.Infof("[plugin] ivfpq registerIdxcronUpdate: background re-entry, skip")
+		return nil
+	}
+	return ctx.RegisterIdxcronUpdate(
+		originalTableDef.TblId,
+		qryDatabase,
+		originalTableDef.Name,
+		indexDef.IndexName,
+		actionIvfpqReindex,
+		metadata,
+	)
 }
 
 // ValidateReindexParams is the per-algo arm of the ALTER … REINDEX
@@ -217,9 +256,17 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 // ReindexParamUpdate carrying the user's new values; return the merged
 // params or an error.
 //
-// IVF-PQ has no online parameter updates today, so this is a no-op
-// passthrough — matching the legacy ddl.go:961 fall-through.
-func (Hooks) ValidateReindexParams(old map[string]string, _ compileplugin.ReindexParamUpdate) (map[string]string, error) {
+// IVF-PQ supports updating `lists` at REINDEX time — mirrors IVF-FLAT
+// since both algorithms key on the inverted-list count for their build.
+func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	if alter.IndexAlgoParamList > 0 {
+		out := make(map[string]string, len(old)+1)
+		for k, v := range old {
+			out[k] = v
+		}
+		out[catalog.IndexAlgoParamLists] = strconv.FormatInt(alter.IndexAlgoParamList, 10)
+		return out, nil
+	}
 	return old, nil
 }
 

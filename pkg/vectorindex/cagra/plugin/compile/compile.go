@@ -40,6 +40,11 @@ import (
 // CAGRA index storage table. Lifted from pkg/sql/compile/util.go:122.
 const insertIntoCagraIndexTableFormat = "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY cagra_create('%s', '%s', %s, %s) AS f;"
 
+// actionCagraReindex mirrors idxcron.Action_*. Inlined to avoid an
+// import cycle through pkg/vectorindex/idxcron. Stays in lock-step with
+// pkg/vectorindex/cagra/plugin/runtime/runtime.go:35.
+const actionCagraReindex = "cagra_reindex"
+
 // Compile-time interface check.
 var _ compileplugin.Hooks = Hooks{}
 
@@ -153,8 +158,11 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 			originalTableDef.Name, indexName); err != nil {
 			return err
 		}
-		return ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
-			indexName, sinkerType, true, "", originalTableDef)
+		if err = ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
+			indexName, sinkerType, true, "", originalTableDef); err != nil {
+			return err
+		}
+		return registerIdxcronUpdate(ctx, indexDefs[catalog.Cagra_TblType_Metadata], ctx.QryDatabase(), originalTableDef)
 	}
 
 	// Always-async path (CREATE INDEX, foreground reindex): defer the
@@ -167,8 +175,38 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		originalTableDef.Name, indexName); err != nil {
 		return err
 	}
-	return ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
-		indexName, sinkerType, false, strings.Join(buildSqls, ";"), originalTableDef)
+	if err = ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
+		indexName, sinkerType, false, strings.Join(buildSqls, ";"), originalTableDef); err != nil {
+		return err
+	}
+	return registerIdxcronUpdate(ctx, indexDefs[catalog.Cagra_TblType_Metadata], ctx.QryDatabase(), originalTableDef)
+}
+
+// registerIdxcronUpdate writes the cron task's frozen-metadata row into
+// mo_index_update via the BuildIdxcronMetadata + RegisterIdxcronUpdate
+// pattern shared with IVF-FLAT (see ivfflat/plugin/compile/compile.go:452).
+// BuildIdxcronMetadata returns (nil, nil) for background re-entry — the
+// existing row is authoritative, so we skip the write.
+func registerIdxcronUpdate(
+	ctx compileplugin.CompileContext, indexDef *plan.IndexDef,
+	qryDatabase string, originalTableDef *plan.TableDef,
+) error {
+	metadata, err := Hooks{}.IdxcronMetadata(ctx)
+	if err != nil {
+		return err
+	}
+	if len(metadata) == 0 {
+		logutil.Infof("[plugin] cagra registerIdxcronUpdate: background re-entry, skip")
+		return nil
+	}
+	return ctx.RegisterIdxcronUpdate(
+		originalTableDef.TblId,
+		qryDatabase,
+		originalTableDef.Name,
+		indexDef.IndexName,
+		actionCagraReindex,
+		metadata,
+	)
 }
 
 // ValidateReindexParams is a no-op for CAGRA (matches ddl.go:960

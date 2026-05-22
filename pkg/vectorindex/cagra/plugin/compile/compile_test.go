@@ -42,6 +42,20 @@ type stubCompileContext struct {
 		startFromNow bool
 		sql          string
 	}
+
+	// lastIdxcronUpdate records the args of the most recent
+	// RegisterIdxcronUpdate call — pins that handleCreate writes the
+	// cron metadata row after CreateIndexCdcTask succeeds, and that
+	// background re-entry skips the call.
+	lastIdxcronUpdate struct {
+		called      bool
+		tableID     uint64
+		dbName      string
+		tableName   string
+		indexName   string
+		action      string
+		metadataLen int
+	}
 }
 
 func (s *stubCompileContext) Ctx() compileplugin.Context             { return nil }
@@ -76,7 +90,14 @@ func (s *stubCompileContext) DropIndexCdcTask(_ *plan.TableDef, _, _, _ string) 
 func (s *stubCompileContext) RunSqlWithResult(_ string) (executor.Result, error) {
 	return executor.Result{}, nil
 }
-func (s *stubCompileContext) RegisterIdxcronUpdate(_ uint64, _, _, _, _ string, _ []byte) error {
+func (s *stubCompileContext) RegisterIdxcronUpdate(tableID uint64, dbName, tableName, indexName, action string, metadata []byte) error {
+	s.lastIdxcronUpdate.called = true
+	s.lastIdxcronUpdate.tableID = tableID
+	s.lastIdxcronUpdate.dbName = dbName
+	s.lastIdxcronUpdate.tableName = tableName
+	s.lastIdxcronUpdate.indexName = indexName
+	s.lastIdxcronUpdate.action = action
+	s.lastIdxcronUpdate.metadataLen = len(metadata)
 	return nil
 }
 
@@ -301,6 +322,10 @@ func TestCagraHandleCreateIndex_OK(t *testing.T) {
 	require.True(t, ctx.stubCompileContext.lastCdcTask.called)
 	require.True(t, ctx.stubCompileContext.lastCdcTask.startFromNow, "sync default → startFromNow=true")
 	require.Empty(t, ctx.stubCompileContext.lastCdcTask.sql, "sync default → no InitSQL")
+	require.True(t, ctx.stubCompileContext.lastIdxcronUpdate.called, "frontend create must register cron metadata row")
+	require.Equal(t, actionCagraReindex, ctx.stubCompileContext.lastIdxcronUpdate.action)
+	require.Equal(t, "ix", ctx.stubCompileContext.lastIdxcronUpdate.indexName)
+	require.Greater(t, ctx.stubCompileContext.lastIdxcronUpdate.metadataLen, 0)
 }
 
 func TestCagraHandleCreateIndex_AsyncTrue(t *testing.T) {
@@ -314,6 +339,8 @@ func TestCagraHandleCreateIndex_AsyncTrue(t *testing.T) {
 	require.True(t, ctx.stubCompileContext.lastCdcTask.called)
 	require.False(t, ctx.stubCompileContext.lastCdcTask.startFromNow, "async=true → startFromNow=false")
 	require.NotEmpty(t, ctx.stubCompileContext.lastCdcTask.sql, "async=true → InitSQL carries the build")
+	require.True(t, ctx.stubCompileContext.lastIdxcronUpdate.called, "async branch must also register cron metadata row")
+	require.Equal(t, actionCagraReindex, ctx.stubCompileContext.lastIdxcronUpdate.action)
 }
 
 func TestCagraHandleCreateIndex_AsyncFalseExplicit(t *testing.T) {
@@ -326,6 +353,20 @@ func TestCagraHandleCreateIndex_AsyncFalseExplicit(t *testing.T) {
 	require.True(t, ctx.stubCompileContext.lastCdcTask.called)
 	require.True(t, ctx.stubCompileContext.lastCdcTask.startFromNow)
 	require.Empty(t, ctx.stubCompileContext.lastCdcTask.sql)
+	require.True(t, ctx.stubCompileContext.lastIdxcronUpdate.called)
+}
+
+// TestCagraHandleCreateIndex_BackgroundReentry: HandleReindex invoked
+// from a non-frontend (background cron) context must NOT re-write the
+// mo_index_update row — IdxcronMetadata returns nil for non-frontend,
+// so registerIdxcronUpdate takes the skip branch.
+func TestCagraHandleCreateIndex_BackgroundReentry(t *testing.T) {
+	ctx := newHandleCtx(true)
+	ctx.stubCompileContext.isFrontend = false
+	err := Hooks{}.HandleReindex(ctx, cagraIndexDefs(), true)
+	require.NoError(t, err)
+	require.True(t, ctx.stubCompileContext.lastCdcTask.called, "background re-entry still drives the CDC task")
+	require.False(t, ctx.stubCompileContext.lastIdxcronUpdate.called, "background re-entry must NOT rewrite mo_index_update")
 }
 
 func TestCagraHandleReindex_DelegatesToCreate(t *testing.T) {
@@ -334,4 +375,18 @@ func TestCagraHandleReindex_DelegatesToCreate(t *testing.T) {
 	// now reads catalog.IsIndexAsync).
 	err := Hooks{}.HandleReindex(newHandleCtx(true), cagraIndexDefs(), false)
 	require.NoError(t, err)
+}
+
+// TestCagraValidateReindexParams_IgnoresLists: CAGRA has no `lists`
+// param — a non-zero IndexAlgoParamList from the parser must be
+// dropped, not merged into the algo params.
+func TestCagraValidateReindexParams_IgnoresLists(t *testing.T) {
+	old := map[string]string{
+		catalog.IndexAlgoParamOpType: "vector_l2_ops",
+	}
+	got, err := Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{IndexAlgoParamList: 16})
+	require.NoError(t, err)
+	require.Equal(t, old, got, "CAGRA must ignore IndexAlgoParamList")
+	_, hasLists := got[catalog.IndexAlgoParamLists]
+	require.False(t, hasLists, "CAGRA params must not gain a lists key")
 }
