@@ -546,6 +546,9 @@ func (l *localLockTable) handleLockConflictLocked(
 	if c.opts.Policy == pb.WaitPolicy_FastFail {
 		return ErrLockConflict
 	}
+	if c.opts.async && !c.lockWaitDeadline.IsZero() && !time.Now().Before(c.lockWaitDeadline) {
+		return ErrLockTimeout
+	}
 
 	c.w.conflictKey.Store(&key)
 	c.w.lt.Store(l)
@@ -564,11 +567,11 @@ func (l *localLockTable) handleLockConflictLocked(
 	})
 
 	conflictWith.addWaiter(l.logger, c.w)
-	l.events.add(c)
 
 	// find conflict, and wait prev txn completed, and a new
 	// waiter added, we need to active deadlock check.
 	c.txn.setBlocked(c.w, l.logger)
+	l.events.add(c)
 	logLocalLockWaitOn(l.logger, c.txn, l.bind.Table, c.w, key, conflictWith)
 
 	if c.opts.Granularity != pb.Granularity_Range {

@@ -54,6 +54,7 @@ type lockContext struct {
 	createAt         time.Time
 	closed           bool
 	rangeLastWaitKey []byte
+	lockWaitDeadline time.Time
 }
 
 func (l *localLockTable) newLockContext(
@@ -72,6 +73,9 @@ func (l *localLockTable) newLockContext(
 	c.cb = cb
 	c.result = pb.Result{LockedOn: bind}
 	c.createAt = time.Now()
+	if opts.async && opts.LockWaitTimeout > 0 {
+		c.lockWaitDeadline = c.createAt.Add(time.Duration(opts.LockWaitTimeout) * time.Second)
+	}
 	return c
 }
 
@@ -93,6 +97,13 @@ func (c *lockContext) doLock() {
 		panic("missing lock")
 	}
 	c.lockFunc(c, true)
+}
+
+func (c *lockContext) getLockWaitTimeout() time.Duration {
+	if c.lockWaitDeadline.IsZero() {
+		return time.Duration(c.opts.LockWaitTimeout) * time.Second
+	}
+	return time.Until(c.lockWaitDeadline)
 }
 
 type event struct {
@@ -120,9 +131,11 @@ type waiterEvents struct {
 	stopper           *stopper.Stopper
 
 	// checkC wakes the handle loop to run check() at a waiter's
-	// lockWaitTimeout boundary, giving sub-defaultLazyCheckDuration
-	// precision to the async (remote) timeout path.
-	checkC chan struct{}
+	// lockWaitTimeout boundary. checkPending coalesces concurrent timer
+	// callbacks so at least one prompt check runs without queueing one
+	// signal per waiter.
+	checkC       chan struct{}
+	checkPending atomic.Bool
 
 	mu struct {
 		sync.RWMutex
@@ -147,7 +160,7 @@ func newWaiterEvents(
 		unlock:            unlock,
 		eventC:            make(chan *lockContext, 10000),
 		checkOrphanC:      make(chan checkOrphan, 64),
-		checkC:            make(chan struct{}, 64),
+		checkC:            make(chan struct{}, 1),
 		stopper:           stopper.NewStopper("waiter-events", stopper.WithLogger(logger.RawLogger())),
 	}
 }
@@ -177,11 +190,13 @@ func (mw *waiterEvents) add(c *lockContext) {
 			c:      c,
 		}
 	}
-	// Propagate session-level lock_wait_timeout to the waiter so the async
-	// check loop can enforce it.  The sync path enforces LockWaitTimeout via
-	// context.WithTimeoutCause in doLock; this gives the async (remote) path
-	// equivalent timeout enforcement.
-	c.w.lockWaitTimeout = time.Duration(c.opts.LockWaitTimeout) * time.Second
+	// Propagate the remaining session-level lock_wait_timeout to the waiter so
+	// the check loop enforces one budget across async re-queue cycles. The sync
+	// path enforces LockWaitTimeout via context.WithTimeoutCause in doLock.
+	c.w.lockWaitTimeout = c.getLockWaitTimeout()
+	if c.w.lockWaitTimeout <= 0 && !c.lockWaitDeadline.IsZero() {
+		c.w.lockWaitTimeout = time.Nanosecond
+	}
 	c.w.startWait()
 	mw.addToLazyCheckDeadlockC(c.w)
 
@@ -191,12 +206,7 @@ func (mw *waiterEvents) add(c *lockContext) {
 	c.w.stopLockWaitTimer()
 	if c.w.lockWaitTimeout > 0 && c.w.lockWaitTimeout <= defaultLazyCheckDuration.Load().(time.Duration) {
 		d := c.w.lockWaitTimeout
-		c.w.lockWaitTimer.Store(time.AfterFunc(d, func() {
-			select {
-			case mw.checkC <- struct{}{}:
-			default:
-			}
-		}))
+		c.w.lockWaitTimer.Store(time.AfterFunc(d, mw.wakeCheck))
 	}
 }
 
@@ -205,6 +215,18 @@ func (mw *waiterEvents) addToLazyCheckDeadlockC(w *waiter) {
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 	mw.mu.blockedWaiters = append(mw.mu.blockedWaiters, w)
+}
+
+func (mw *waiterEvents) wakeCheck() {
+	if !mw.checkPending.CompareAndSwap(false, true) {
+		return
+	}
+	select {
+	case mw.checkC <- struct{}{}:
+	default:
+		// A wake-up is already queued; keep checkPending set so later timers
+		// coalesce until the handle loop consumes the signal and runs check().
+	}
 }
 
 func (mw *waiterEvents) handle(ctx context.Context) {
@@ -224,7 +246,8 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 		case v := <-mw.checkOrphanC:
 			mw.checkOrphan(v)
 		case <-mw.checkC:
-			// Precise timer fired for a waiter's lockWaitTimeout.
+			mw.checkPending.Store(false)
+			// Precise timer fired for at least one waiter's lockWaitTimeout.
 			// Run check() immediately instead of waiting for the
 			// next coarse lazy-check tick.
 			mw.check(timeout)
