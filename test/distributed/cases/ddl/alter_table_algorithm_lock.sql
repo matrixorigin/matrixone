@@ -46,6 +46,7 @@ SHOW COLUMNS FROM t_alg_lock;
 -- Failure cases
 -- ============================================================
 
+-- @bvt:issue#23120
 -- F1: ALGORITHM=INPLACE rejected for COPY-required operation (ADD COLUMN)
 ALTER TABLE t_alg_lock ALGORITHM=INPLACE, ADD COLUMN cf1 INT;
 
@@ -60,6 +61,7 @@ ALTER TABLE t_alg_lock LOCK=NONE, ADD COLUMN cf3 INT;
 
 -- F5: ALGORITHM=INPLACE + LOCK=NONE rejected for DROP COLUMN (algorithm check fires first)
 ALTER TABLE t_alg_lock ALGORITHM=INPLACE, LOCK=NONE, DROP COLUMN c1;
+-- @bvt:issue
 
 -- Verify table is unchanged after all failures (c1 still exists, no cf* columns)
 SHOW COLUMNS FROM t_alg_lock;
