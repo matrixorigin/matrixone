@@ -1053,6 +1053,19 @@ func TestSubQuery(t *testing.T) {
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) + 1 from REGION where R_REGIONKEY < N_REGIONKEY)",                         // non-eq agg scalar subquery with computed projection
 	}
 	runTestShouldError(mock, t, sqls)
+
+	sql := `SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY > ANY (
+		SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY = ANY (
+			SELECT n3.N_NATIONKEY FROM NATION n3
+			WHERE (n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_REGIONKEY = n1.N_REGIONKEY)
+				OR n3.N_REGIONKEY = 1
+		)
+	)`
+	_, err := runOneStmt(mock, t, sql)
+	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "deep correlated predicate containing inner columns cannot be pulled above mark join")
+	}
 }
 
 func TestMysqlCompatibilityMode(t *testing.T) {

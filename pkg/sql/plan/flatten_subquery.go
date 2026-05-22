@@ -137,8 +137,13 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
 
-	if len(filterPreds) > 0 && !canPullupDeepCorrelatedPredicates(subquery.Typ) {
-		return 0, nil, moerr.NewNYIf(builder.GetContext(), "correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String())
+	if len(filterPreds) > 0 {
+		if !canPullupDeepCorrelatedPredicates(subquery.Typ) {
+			return 0, nil, moerr.NewNYIf(builder.GetContext(), "correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String())
+		}
+		if builder.hasInnerColumnInDeepCorrelatedFilters(subID, filterPreds) {
+			return 0, nil, moerr.NewNYIf(builder.GetContext(), "deep correlated predicate containing inner columns cannot be pulled above mark join")
+		}
 	}
 
 	switch subquery.Typ {
@@ -368,6 +373,22 @@ func canPullupDeepCorrelatedPredicates(typ plan.SubqueryRef_Type) bool {
 	default:
 		return false
 	}
+}
+
+func (builder *QueryBuilder) hasInnerColumnInDeepCorrelatedFilters(subID int32, filterPreds []*plan.Expr) bool {
+	if len(filterPreds) == 0 {
+		return false
+	}
+
+	innerTags := builder.collectBindingTags(builder.qry.Nodes[subID])
+	for _, pred := range filterPreds {
+		for tag := range innerTags {
+			if containsTag(pred, tag) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (builder *QueryBuilder) appendDeepCorrelatedFilters(nodeID int32, filterPreds []*plan.Expr, ctx *BindContext) int32 {
