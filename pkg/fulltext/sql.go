@@ -246,7 +246,7 @@ func GenTextSql(p *Pattern, mode int64, idxtbl string, parser string) (string, e
 		return sql, nil
 	}
 
-	ps, err := ParsePatternInNLMode(p.Text)
+	ps, err := ParsePatternInNLMode(p.Text, parser)
 	if err != nil {
 		return "", err
 	}
