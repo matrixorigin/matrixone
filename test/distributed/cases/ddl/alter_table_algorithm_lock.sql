@@ -37,7 +37,7 @@ ALTER TABLE t_alg_lock LOCK=DEFAULT, ADD COLUMN c5 INT;
 ALTER TABLE t_alg_lock ALGORITHM=INSTANT, LOCK=DEFAULT, RENAME COLUMN c5 TO c5_new;
 
 -- S9: ALGORITHM=COPY with INPLACE-capable operation (COPY stricter than needed, allowed)
-ALTER TABLE t_alg_lock ALGORITHM=COPY, ADD INDEX idx_s9(c4);
+ALTER TABLE t_alg_lock ALGORITHM=COPY, RENAME COLUMN c4 TO c4_new;
 
 -- Verify table structure after all success operations
 SHOW COLUMNS FROM t_alg_lock;
