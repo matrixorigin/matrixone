@@ -52,6 +52,16 @@ func (update *MultiUpdate) insert_main_table(
 		ctr.insertBuf[tableIndex] = bat
 	}
 
+	if updateCtx.SkipInsertOnNullPk {
+		pkColIdx, ok := mainTableInsertPkInputIdx(updateCtx)
+		if !ok || pkColIdx >= len(inputBatch.Vecs) {
+			return moerr.NewInternalError(proc.Ctx, "invalid main table insert pk column index")
+		}
+		if inputBatch.Vecs[pkColIdx].HasNull() {
+			return update.check_null_and_insert_main_table(proc, analyzer, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+		}
+	}
+
 	// preinsert: check not null column
 	for insertIdx, inputIdx := range updateCtx.InsertCols {
 		col := updateCtx.TableDef.Cols[insertIdx]
@@ -91,6 +101,56 @@ func (update *MultiUpdate) insert_unique_index_table(
 		err = update.insert_table(proc, analyzer, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
 	}
 	return
+}
+
+func (update *MultiUpdate) check_null_and_insert_main_table(
+	proc *process.Process,
+	analyzer process.Analyzer,
+	updateCtx *MultiUpdateCtx,
+	inputBatch *batch.Batch,
+	insertBatch *batch.Batch,
+) (err error) {
+	pkPos, ok := mainTableInsertPkInputIdx(updateCtx)
+	if !ok || pkPos >= len(inputBatch.Vecs) {
+		return moerr.NewInternalError(proc.Ctx, "invalid main table insert pk column index")
+	}
+	pkNulls := inputBatch.Vecs[pkPos].GetNulls()
+
+	insertBatch.CleanOnlyData()
+	rowCount := uint64(inputBatch.RowCount())
+	for i := uint64(0); i < rowCount; i++ {
+		if pkNulls.Contains(i) {
+			continue
+		}
+		for insertIdx, inputIdx := range updateCtx.InsertCols {
+			if err = insertBatch.Vecs[insertIdx].UnionOne(inputBatch.Vecs[inputIdx], int64(i), proc.Mp()); err != nil {
+				return err
+			}
+		}
+	}
+
+	newRowCount := insertBatch.Vecs[0].Length()
+	if newRowCount == 0 {
+		return nil
+	}
+	insertBatch.SetRowCount(newRowCount)
+	if err = checkMainTableNotNull(proc, updateCtx, insertBatch); err != nil {
+		return err
+	}
+	tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+	update.addInsertAffectRows(tableType, uint64(newRowCount))
+	source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
+
+	crs := analyzer.GetOpCounterSet()
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+	if err = source.Write(newCtx, insertBatch); err != nil {
+		return err
+	}
+	analyzer.AddWrittenRows(int64(newRowCount))
+	analyzer.AddS3RequestCount(crs)
+	analyzer.AddFileServiceCacheInfo(crs)
+	analyzer.AddDiskIO(crs)
+	return nil
 }
 
 func (update *MultiUpdate) insert_secondary_index_table(
@@ -186,6 +246,13 @@ func isContiguousMapping(cols []int) bool {
 		}
 	}
 	return true
+}
+
+func mainTableInsertPkInputIdx(updateCtx *MultiUpdateCtx) (int, bool) {
+	if updateCtx.InsertPkColIdx < 0 || updateCtx.InsertPkColIdx >= len(updateCtx.InsertCols) {
+		return 0, false
+	}
+	return updateCtx.InsertCols[updateCtx.InsertPkColIdx], true
 }
 
 func (update *MultiUpdate) check_null_and_insert_table(

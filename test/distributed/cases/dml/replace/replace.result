@@ -118,6 +118,52 @@ a    b
 1    world
 2    foo
 drop table t_fake_pk;
+drop table if exists t_replace_dup_pk;
+create table t_replace_dup_pk(id int primary key, v int);
+replace into t_replace_dup_pk values (1, 10), (1, 20), (2, 30);
+select * from t_replace_dup_pk order by id;
+id    v
+1    20
+2    30
+drop table t_replace_dup_pk;
+drop table if exists t_replace_dup_pk_src;
+create table t_replace_dup_pk_src(id int primary key, v int);
+drop table if exists s_replace_dup_pk;
+create table s_replace_dup_pk(id int, v int);
+insert into s_replace_dup_pk values (1, 10), (1, 20), (2, 30);
+replace into t_replace_dup_pk_src select * from s_replace_dup_pk order by v;
+select * from t_replace_dup_pk_src order by id;
+id    v
+1    20
+2    30
+drop table s_replace_dup_pk;
+drop table t_replace_dup_pk_src;
+drop table if exists t_replace_dup_uk;
+create table t_replace_dup_uk(id int primary key, u int unique, v int);
+replace into t_replace_dup_uk values (1, 1, 10), (2, 1, 20), (3, 2, 30);
+select * from t_replace_dup_uk order by u;
+id    u    v
+2    1    20
+3    2    30
+drop table t_replace_dup_uk;
+drop table if exists t_replace_dup_pk_existing;
+create table t_replace_dup_pk_existing(id int primary key, v int);
+insert into t_replace_dup_pk_existing values (1, 5);
+replace into t_replace_dup_pk_existing values (1, 10), (1, 20), (2, 30);
+select * from t_replace_dup_pk_existing order by id;
+id    v
+1    20
+2    30
+drop table t_replace_dup_pk_existing;
+drop table if exists t_replace_dup_uk_existing;
+create table t_replace_dup_uk_existing(id int primary key, u int unique, v int);
+insert into t_replace_dup_uk_existing values (9, 1, 5);
+replace into t_replace_dup_uk_existing values (1, 1, 10), (2, 1, 20), (3, 2, 30);
+select * from t_replace_dup_uk_existing order by u;
+id    u    v
+2    1    20
+3    2    30
+drop table t_replace_dup_uk_existing;
 drop table if exists t_odku;
 create table t_odku(id int primary key, name varchar(64), val int);
 insert into t_odku values (1, 'a', 10);
@@ -174,3 +220,28 @@ id    name    email    value
 3    n1    n1_new@a.com    300
 4    n_new    n2@a.com    400
 drop table ai_multi_uk;
+drop table if exists t_replace_cross_key_keep_last;
+create table t_replace_cross_key_keep_last(id int primary key, u int unique, v int);
+insert into t_replace_cross_key_keep_last values (1, 100, 0);
+replace into t_replace_cross_key_keep_last values (1, 200, 10), (2, 200, 20);
+select * from t_replace_cross_key_keep_last order by id;
+id    u    v
+2    200    20
+drop table t_replace_cross_key_keep_last;
+drop table if exists t_replace_pk_not_first;
+create table t_replace_pk_not_first(a int null, id int primary key, u int unique);
+insert into t_replace_pk_not_first values (0, 1, 100);
+replace into t_replace_pk_not_first values (null, 1, 200), (null, 2, 200);
+select * from t_replace_pk_not_first order by id;
+a    id    u
+null    2    200
+drop table t_replace_pk_not_first;
+drop table if exists t_replace_not_null_after_filter;
+create table t_replace_not_null_after_filter(a int null, id int primary key, u int unique, b int not null);
+insert into t_replace_not_null_after_filter values (0, 1, 100, 1);
+replace into t_replace_not_null_after_filter values (null, 1, 200, 10), (5, 2, 200, null);
+constraint violation: Column 'b' cannot be null
+select * from t_replace_not_null_after_filter order by id;
+a    id    u    b
+0    1    100    1
+drop table t_replace_not_null_after_filter;
