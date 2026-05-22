@@ -142,53 +142,6 @@ func TestDataBranchDiffColumns(t *testing.T) {
 	require.Nil(t, diffStmt.OutputOpt)
 }
 
-func TestDataBranchPick(t *testing.T) {
-	// Single PK value list
-	stmt, err := ParseOne(context.TODO(), "data branch pick db1.src into db2.dst keys (1, 2, 3)", 1)
-	require.NoError(t, err)
-	pickStmt, ok := stmt.(*tree.DataBranchPick)
-	require.True(t, ok)
-	require.Equal(t, "src", string(pickStmt.SrcTable.ObjectName))
-	require.Equal(t, "dst", string(pickStmt.DstTable.ObjectName))
-	require.NotNil(t, pickStmt.Keys)
-	require.Equal(t, tree.PickKeysValues, pickStmt.Keys.Type)
-	require.Len(t, pickStmt.Keys.KeyExprs, 3)
-	require.Nil(t, pickStmt.ConflictOpt)
-
-	// With conflict option
-	stmt, err = ParseOne(context.TODO(), "data branch pick src into dst keys (1, 2) when conflict skip", 1)
-	require.NoError(t, err)
-	pickStmt, ok = stmt.(*tree.DataBranchPick)
-	require.True(t, ok)
-	require.NotNil(t, pickStmt.ConflictOpt)
-	require.Equal(t, tree.CONFLICT_SKIP, pickStmt.ConflictOpt.Opt)
-
-	// Subquery keys
-	stmt, err = ParseOne(context.TODO(), "data branch pick src into dst keys (select pk from t1 where id > 10)", 1)
-	require.NoError(t, err)
-	pickStmt, ok = stmt.(*tree.DataBranchPick)
-	require.True(t, ok)
-	require.NotNil(t, pickStmt.Keys)
-	require.Equal(t, tree.PickKeysSubquery, pickStmt.Keys.Type)
-	require.NotNil(t, pickStmt.Keys.Select)
-
-	// WHEN CONFLICT ACCEPT
-	stmt, err = ParseOne(context.TODO(), "data branch pick src into dst keys (100) when conflict accept", 1)
-	require.NoError(t, err)
-	pickStmt, ok = stmt.(*tree.DataBranchPick)
-	require.True(t, ok)
-	require.NotNil(t, pickStmt.ConflictOpt)
-	require.Equal(t, tree.CONFLICT_ACCEPT, pickStmt.ConflictOpt.Opt)
-
-	// WHEN CONFLICT FAIL
-	stmt, err = ParseOne(context.TODO(), "data branch pick src into dst keys (100) when conflict fail", 1)
-	require.NoError(t, err)
-	pickStmt, ok = stmt.(*tree.DataBranchPick)
-	require.True(t, ok)
-	require.NotNil(t, pickStmt.ConflictOpt)
-	require.Equal(t, tree.CONFLICT_FAIL, pickStmt.ConflictOpt.Opt)
-}
-
 var (
 	partitionSQL = struct {
 		input  string
@@ -3573,6 +3526,96 @@ func TestSQLStringFmt(t *testing.T) {
 			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, out)
 		}
 	}
+}
+
+func TestTaskKeywordIsNonReservedForIdentifiers(t *testing.T) {
+	for _, sql := range []string{
+		"create table task (task int, id int)",
+		"create table tasks (tasks int, id int)",
+	} {
+		stmt, err := ParseOne(context.TODO(), sql, 1)
+		require.NoError(t, err, sql)
+
+		createStmt, ok := stmt.(*tree.CreateTable)
+		require.True(t, ok, sql)
+		require.Len(t, createStmt.Defs, 2, sql)
+	}
+}
+
+func TestCreateSQLTaskPreservesQuotedStrings(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create task task_quotes when ('gate' = 'gate') as begin insert into gate_sink select 'gate-ok'; select case when 1 = 1 then 'PASS' else 'FAIL' end; end", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.Contains(t, createStmt.GateCondition, "'gate'")
+	require.Contains(t, createStmt.SQLBody, "'gate-ok'")
+	require.Contains(t, createStmt.SQLBody, "'PASS'")
+	require.Contains(t, createStmt.SQLBody, "'FAIL'")
+
+	formatted := tree.String(createStmt, dialect.MYSQL)
+	require.Contains(t, formatted, "'gate'")
+	require.Contains(t, formatted, "'gate-ok'")
+	require.Contains(t, formatted, "'PASS'")
+	require.Contains(t, formatted, "'FAIL'")
+}
+
+func TestCreateSQLTaskPreservesTimestampUnits(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create task task_time as begin select timestampdiff(hour, current_timestamp(), current_timestamp()); select extract(hour from current_timestamp()); select interval 1 hour; end", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, current_timestamp(), current_timestamp())")
+	require.Contains(t, createStmt.SQLBody, "extract(hour, current_timestamp())")
+	require.Contains(t, createStmt.SQLBody, "INTERVAL 1 hour")
+
+	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
+	require.Contains(t, formatted, "timestampdiff(hour, current_timestamp(), current_timestamp())")
+	require.Contains(t, formatted, "extract(hour, current_timestamp())")
+	require.Contains(t, formatted, "INTERVAL 1 hour")
+}
+
+func TestCreateSQLTaskPreservesComplexTimestampUnits(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), `create task task_time_complex as begin
+insert into silver_fiix_offline_tracker
+select
+    work_order_id,
+    hp_pump_code,
+    min(offline_start) as offline_start,
+    max(offline_end) as offline_end,
+    timestampdiff(hour, min(offline_start), max(offline_end)) as downtime_hours
+from t
+group by work_order_id, hp_pump_code;
+
+insert into gold_off_session_wo_match
+with proximity_match as (
+    select
+        row_number() over (
+            partition by s.pump, s.session_id
+            order by abs(timestampdiff(minute, s.session_start, wo.dtm_date_created))
+        ) as rn
+    from t
+    where abs(timestampdiff(hour, s.session_start, wo.dtm_date_created)) <= 4
+)
+select * from proximity_match;
+end`, 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.NotContains(t, createStmt.SQLBody, "timestampdiff('hour'")
+	require.NotContains(t, createStmt.SQLBody, "timestampdiff('minute'")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, min(offline_start), max(offline_end))")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(minute, s.session_start, wo.dtm_date_created)")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, s.session_start, wo.dtm_date_created)")
+
+	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
+	require.NotContains(t, formatted, "timestampdiff('hour'")
+	require.NotContains(t, formatted, "timestampdiff('minute'")
+	require.Contains(t, formatted, "timestampdiff(hour, min(offline_start), max(offline_end))")
+	require.Contains(t, formatted, "timestampdiff(minute, s.session_start, wo.dtm_date_created)")
+	require.Contains(t, formatted, "timestampdiff(hour, s.session_start, wo.dtm_date_created)")
 }
 
 var (

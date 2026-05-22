@@ -368,4 +368,9 @@ func (s *service) registerExecutorsLocked() {
 			common.ISCPAllocator,
 		),
 	)
+
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_SQLTask,
+		taskservice.NewSQLTaskExecutor(ieFactory, ts, s.cfg.UUID).TaskExecutor(),
+	)
 }

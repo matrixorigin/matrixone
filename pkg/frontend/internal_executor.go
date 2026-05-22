@@ -137,21 +137,26 @@ func (res *internalExecResult) GetFloat64(ctx context.Context, ridx uint64, cidx
 	return res.resultSet.GetFloat64(ctx, ridx, cidx)
 }
 
-func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
-	ie.Lock()
-	defer ie.Unlock()
+func (e *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
+	_, err = e.ExecWithStatus(ctx, sql, opts)
+	return err
+}
+
+func (e *internalExecutor) ExecWithStatus(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (_ ie.InternalExecStatus, err error) {
+	e.Lock()
+	defer e.Unlock()
 	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeoutCause(ctx, getPu(ie.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorExec)
+	ctx, cancel = context.WithTimeoutCause(ctx, getPu(e.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorExec)
 	defer cancel()
-	sess := ie.newCmdSession(ctx, opts)
+	sess := e.newCmdSession(ctx, opts)
 	defer func() {
 		sess.Close()
 	}()
 	sess.EnterFPrint(FPInternalExecutorExec)
 	defer sess.ExitFPrint(FPInternalExecutorExec)
-	ie.proto.stashResult = false
+	e.proto.stashResult = false
 	if sql == "" {
-		return
+		return ie.InternalExecStatus{}, nil
 	}
 	tempExecCtx := ExecCtx{
 		reqCtx: ctx,
@@ -159,10 +164,11 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	}
 	defer tempExecCtx.Close()
 	err = doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
+	res := e.proto.swapOutResult()
 	if err != nil {
-		return moerr.AttachCause(ctx, err)
+		return ie.InternalExecStatus{AffectedRows: res.affectedRows}, moerr.AttachCause(ctx, err)
 	}
-	return
+	return ie.InternalExecStatus{AffectedRows: res.affectedRows}, nil
 }
 
 func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
