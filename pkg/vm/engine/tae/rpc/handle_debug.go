@@ -493,12 +493,18 @@ func (h *Handle) HandleGetChangedTableList(
 	}()
 
 	if len(req.TableIds) == 0 && len(req.TS) == 0 {
-		to = types.BuildTS(time.Now().UnixNano(), 0)
+		// Use the engine's HLC clock, not wall-clock. HLC can be ahead of
+		// wall clock (e.g. on startup after replaying logtail entries with
+		// future-dated timestamps); wall-clock-derived `to` would produce
+		// an inverted (from, to] window and the dirty-tree query returns
+		// nothing. Same issue HandleForceCheckpoint already avoids by using
+		// h.db.TxnMgr.Now(). See pkg/iscp post-REINDEX CDC stall.
+		to = h.db.TxnMgr.Now()
 		return nil, nil
 	}
 
 	if req.Type == cmd_util.CheckChanged {
-		to = types.BuildTS(time.Now().UnixNano(), 0)
+		to = h.db.TxnMgr.Now()
 		minFrom := slices.MinFunc(req.TS, func(a, b *timestamp.Timestamp) int {
 			return a.Compare(*b)
 		})
