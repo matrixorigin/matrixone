@@ -539,3 +539,64 @@ id
 DROP TABLE IF EXISTS corr_any_t1;
 DROP TABLE IF EXISTS corr_any_t2;
 DROP TABLE IF EXISTS corr_any_t3;
+DROP TABLE IF EXISTS corr_quant_outer;
+DROP TABLE IF EXISTS corr_quant_mid;
+DROP TABLE IF EXISTS corr_quant_inner;
+create table corr_quant_outer(id int, grp int);
+create table corr_quant_mid(grp int, val int);
+create table corr_quant_inner(grp int, val int);
+insert into corr_quant_outer values (1, 1), (2, 1), (4, 1), (5, 9), (7, 3);
+insert into corr_quant_mid values (1, 1), (1, 3), (3, null);
+insert into corr_quant_inner values (1, 1), (1, 3), (3, null);
+select o.id from corr_quant_outer o where o.grp = 1 and o.id > any (
+select m.val from corr_quant_mid m where m.val = any (
+select i.val from corr_quant_inner i where i.grp = m.grp and m.grp = o.grp
+)
+) order by o.id;
+id
+2
+4
+select o.id from corr_quant_outer o where o.grp = 1 and o.id > all (
+select m.val from corr_quant_mid m where m.val = any (
+select i.val from corr_quant_inner i where i.grp = m.grp and m.grp = o.grp
+)
+) order by o.id;
+id
+4
+select o.id from corr_quant_outer o where o.grp = 9 and o.id > any (
+select m.val from corr_quant_mid m where m.val = any (
+select i.val from corr_quant_inner i where i.grp = m.grp and m.grp = o.grp
+)
+) order by o.id;
+id
+select o.id from corr_quant_outer o where o.grp = 9 and o.id > all (
+select m.val from corr_quant_mid m where m.val = any (
+select i.val from corr_quant_inner i where i.grp = m.grp and m.grp = o.grp
+)
+) order by o.id;
+id
+5
+select o.id from corr_quant_outer o where o.grp = 3 and (o.id = any (
+select m.val from corr_quant_mid m where m.grp = any (
+select i.grp from corr_quant_inner i where i.grp = m.grp and m.grp = o.grp
+)
+)) is null order by o.id;
+id
+7
+select o.id from corr_quant_outer o where o.grp = 3 and (o.id > all (
+select m.val from corr_quant_mid m where m.grp = any (
+select i.grp from corr_quant_inner i where i.grp = m.grp and m.grp = o.grp
+)
+)) is null order by o.id;
+id
+7
+select o.id from corr_quant_outer o where o.grp = 3 and (o.id not in (
+select m.val from corr_quant_mid m where m.grp = any (
+select i.grp from corr_quant_inner i where i.grp = m.grp and m.grp = o.grp
+)
+)) is null order by o.id;
+id
+7
+DROP TABLE IF EXISTS corr_quant_outer;
+DROP TABLE IF EXISTS corr_quant_mid;
+DROP TABLE IF EXISTS corr_quant_inner;
