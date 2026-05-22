@@ -17,7 +17,6 @@ package incrservice
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -302,7 +301,7 @@ func (s *sqlStore) SetOffset(
 	offset uint64,
 	txnOp client.TxnOperator,
 ) error {
-	if strings.ContainsAny(colName, "'\"\\;`") {
+	if !isValidColumnName(colName) {
 		return moerr.NewInternalErrorf(ctx,
 			"incrservice: invalid column name: %s", colName)
 	}
@@ -429,4 +428,21 @@ func (s *sqlStore) GetColumns(
 
 func (s *sqlStore) Close() {
 
+}
+
+// isValidColumnName checks that colName contains only alphanumeric characters
+// and underscores, preventing SQL injection in formatted queries.
+func isValidColumnName(name string) bool {
+	if len(name) == 0 {
+		return false
+	}
+	for i, r := range name {
+		if i == 0 && !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_') {
+			return false
+		}
+		if i > 0 && !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_') {
+			return false
+		}
+	}
+	return true
 }

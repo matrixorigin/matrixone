@@ -1014,10 +1014,23 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				act.AlterComment.NewComment,
 			))
 		case *plan.AlterTable_Action_AlterAutoIncrement:
-			reqs = append(reqs, api.NewUpdateAutoIncrementReq(
-				did, tid,
-				act.AlterAutoIncrement.NewOffset,
-			))
+			autoCols := incrservice.GetAutoColumnFromDef(qry.GetTableDef())
+			sid := c.proc.GetService()
+			svc := incrservice.GetAutoIncrementService(sid)
+			if svc == nil {
+				return moerr.NewInternalErrorf(c.proc.Ctx, "failed to get auto-increment service")
+			}
+			for _, col := range autoCols {
+				if err = svc.SetOffset(
+					c.proc.Ctx,
+					tid,
+					col.ColName,
+					act.AlterAutoIncrement.NewOffset,
+					c.proc.GetTxnOperator(),
+				); err != nil {
+					return err
+				}
+			}
 		case *plan.AlterTable_Action_AlterName:
 			reqs = append(reqs, api.NewRenameTableReq(
 				did, tid,
@@ -1123,30 +1136,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	err = rel.AlterTable(c.proc.Ctx, newCt, reqs)
 	if err != nil {
 		return err
-	}
-
-	// post alter table auto_increment -- update incrservice offset
-	for _, req := range reqs {
-		if req.Kind == api.AlterKind_UpdateAutoIncrement {
-			autoCols := incrservice.GetAutoColumnFromDef(qry.GetTableDef())
-			sid := c.proc.GetService()
-			s := incrservice.GetAutoIncrementService(sid)
-			if s == nil {
-				return moerr.NewInternalErrorf(c.proc.Ctx, "failed to get auto-increment service")
-			}
-			for _, col := range autoCols {
-				err = s.SetOffset(
-					c.proc.Ctx,
-					req.TableId,
-					col.ColName,
-					req.GetUpdateAutoIncrement().Offset,
-					c.proc.GetTxnOperator(),
-				)
-				if err != nil {
-					return err
-				}
-			}
-		}
 	}
 
 	// post alter table rename -- AlterKind_RenameTable to update iscp job
