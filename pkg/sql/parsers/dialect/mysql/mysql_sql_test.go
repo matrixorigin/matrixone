@@ -539,6 +539,21 @@ var (
 			input:  "UPDATE items,(SELECT id FROM items WHERE id IN (SELECT id FROM items WHERE retail / wholesale >= 1.3 AND quantity < 100)) AS discounted SET items.retail = items.retail * 0.9 WHERE items.id = discounted.id",
 			output: "update items cross join (select id from items where id in (select id from items where retail / wholesale >= 1.3 and quantity < 100)) as discounted set items.retail = items.retail * 0.9 where items.id = discounted.id",
 		}, {
+			input:  "UPDATE t SET remark = c.province FROM company c WHERE c.id = t.company_id",
+			output: "update t cross join company as c set remark = c.province where c.id = t.company_id",
+		}, {
+			input:  "UPDATE vec_join_case t SET remark = CONCAT('hot-', c.province) FROM company c WHERE c.id = t.company_id AND l2_distance(embedding, \"[0.2,0.2,0.3,0.3]\") < 0.35",
+			output: "update vec_join_case as t cross join company as c set remark = CONCAT(hot-, c.province) where c.id = t.company_id and l2_distance(embedding, [0.2,0.2,0.3,0.3]) < 0.35",
+		}, {
+			input:  "UPDATE t SET a = b.x FROM b, c WHERE t.id = b.id AND b.k = c.k",
+			output: "update t cross join b cross join c set a = b.x where t.id = b.id and b.k = c.k",
+		}, {
+			input:  "WITH cc AS (SELECT * FROM company) UPDATE t SET remark = c.province FROM cc c WHERE c.id = t.company_id",
+			output: "with cc as (select * from company) update t cross join cc as c set remark = c.province where c.id = t.company_id",
+		}, {
+			input:  "UPDATE t1 JOIN t2 ON t1.k = t2.k SET t1.v = t2.v FROM t3 WHERE t3.id = t1.id",
+			output: "update t1 inner join t2 on t1.k = t2.k cross join t3 set t1.v = t2.v where t3.id = t1.id",
+		}, {
 			input:  "with t2 as (select * from t1) DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
 			output: "with t2 as (select * from t1) delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
 		}, {

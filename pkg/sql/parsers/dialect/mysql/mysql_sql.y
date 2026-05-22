@@ -3111,6 +3111,18 @@ update_no_with_stmt:
             Where: $7,
         }
     }
+|    UPDATE priority_opt ignore_opt table_reference SET update_list FROM table_references where_expression_opt
+    {
+        // PostgreSQL-style UPDATE target SET ... FROM other_tables WHERE ...
+        // Cross-join the target with the FROM-clause tables so downstream
+        // planner reuses the existing multi-table UPDATE path.
+        joined := &tree.JoinTableExpr{Left: $4, Right: $8, JoinType: tree.JOIN_TYPE_CROSS}
+        $$ = &tree.Update{
+            Tables: tree.TableExprs{joined},
+            Exprs: $6,
+            Where: $9,
+        }
+    }
 
 update_list:
     update_value
