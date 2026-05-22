@@ -86,6 +86,24 @@ func (sels *GroupSels) Finalize(groupCount int, inputRowCount int, mp *mpool.MPo
 		sels.tmp = nil
 		return nil
 	}
+	if groupCount < inputRowCount {
+		allUnique := n == groupCount
+		if allUnique {
+			for i := 0; i < len(sels.tmp); i += 2 {
+				if sels.tmp[i] != sels.tmp[i+1]+1 {
+					allUnique = false
+					break
+				}
+			}
+		}
+		if allUnique {
+			sels.vals = nil
+			sels.offsets = nil
+			freeSlice(mp, sels.tmp)
+			sels.tmp = nil
+			return nil
+		}
+	}
 	// groupCount+2: +1 for sentinel, +1 for 1-based callers (dedup UPDATE uses keys 1..groupCount)
 	var err error
 	sels.offsets, err = mpool.MakeSlice[int32](groupCount+2, mp, false)
