@@ -21,8 +21,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -183,6 +186,13 @@ func TestPitrCases(t *testing.T) {
 }
 
 func TestCDCCases(t *testing.T) {
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_, _, _ string, _ int, _ string) (*sql.DB, error) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		return db, nil
+	})
+	defer stubOpenDbConn.Reset()
+
 	embed.RunBaseClusterTests(
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
