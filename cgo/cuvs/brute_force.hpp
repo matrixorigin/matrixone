@@ -468,12 +468,13 @@ public:
 
         handle.sync();
 
-        if (!this->host_ids.empty()) {
-            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                if (search_res.neighbors[i] != -1) {
-                    search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
-                }
-            }
+        // Always run map_neighbor_id: even with empty host_ids (implicit
+        // IDs), the helper bounds-checks raw against local_count and
+        // sentinels OOB junk (e.g. UINT32_MAX) to -1 before it leaks
+        // through as a "valid" neighbor id.
+        for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+            search_res.neighbors[i] = map_neighbor_id(search_res.neighbors[i], 0,
+                static_cast<int64_t>(local_count), this->host_ids);
         }
 
         this->transform_distance(this->metric, search_res.distances);
@@ -611,12 +612,13 @@ public:
 
         handle.sync();
 
-        if (!this->host_ids.empty()) {
-            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                if (search_res.neighbors[i] != -1) {
-                    search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
-                }
-            }
+        // Always run map_neighbor_id: even with empty host_ids (implicit
+        // IDs), the helper bounds-checks raw against local_count and
+        // sentinels OOB junk (e.g. UINT32_MAX) to -1 before it leaks
+        // through as a "valid" neighbor id.
+        for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+            search_res.neighbors[i] = map_neighbor_id(search_res.neighbors[i], 0,
+                static_cast<int64_t>(local_count), this->host_ids);
         }
 
         this->transform_distance(this->metric, search_res.distances);

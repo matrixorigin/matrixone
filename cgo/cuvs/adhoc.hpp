@@ -175,10 +175,13 @@ void adhoc_brute_force_search(const raft::resources& res,
         }
     }
 
-    // Handle invalid neighbor indices (consistent with existing brute_force.hpp)
+    // Sentinel-out invalid neighbor indices. cuvs may return junk values
+    // (INT64_MAX, UINT32_MAX, INT32_MAX, etc.) in unfilled slots when limit
+    // exceeds the dataset size or a filter excludes everything. A single
+    // bounds check against n_rows catches all of them — mirrors the
+    // map_neighbor_id helper used in the persistent-index path.
     for (size_t i = 0; i < n_queries * limit; ++i) {
-        if (neighbors[i] == std::numeric_limits<int64_t>::max() || 
-            neighbors[i] == 4294967295LL || neighbors[i] < 0) {
+        if (neighbors[i] < 0 || neighbors[i] >= static_cast<int64_t>(n_rows)) {
             neighbors[i] = -1;
         }
     }

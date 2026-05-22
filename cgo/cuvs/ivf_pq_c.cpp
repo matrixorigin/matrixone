@@ -518,8 +518,8 @@ uint64_t gpu_ivf_pq_search_async(gpu_ivf_pq_c index_c, const void* queries_data,
     }
 }
 
-uint64_t gpu_ivf_pq_search_float_async(gpu_ivf_pq_c index_c, const float* queries_data, uint64_t num_queries, 
-                                          uint32_t query_dimension, uint32_t limit, 
+uint64_t gpu_ivf_pq_search_float_async(gpu_ivf_pq_c index_c, const float* queries_data, uint64_t num_queries,
+                                          uint32_t query_dimension, uint32_t limit,
                                           ivf_pq_search_params_t search_params, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {

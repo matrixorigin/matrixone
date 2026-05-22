@@ -889,27 +889,18 @@ public:
         // so that concurrent extend() calls (which write host_ids under unique_lock) are safe.
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            int64_t offset = 0;
+            int64_t data_size = static_cast<int64_t>(this->count);
             if (this->dist_mode == DistributionMode_SHARDED) {
-                int64_t offset = 0;
                 for (int r = 0; r < handle.get_rank(); ++r) offset += (int64_t)this->shard_sizes_[r];
-                for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                    if (search_res.neighbors[i] != -1) {
-                        int64_t global_pos = search_res.neighbors[i] + offset;
-                        if (!this->host_ids.empty()) {
-                            search_res.neighbors[i] = (int64_t)this->host_ids[global_pos];
-                        } else {
-                            search_res.neighbors[i] = global_pos;
-                        }
-                    }
-                }
-            } else {
-                if (!this->host_ids.empty()) {
-                    for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                        if (search_res.neighbors[i] != -1) {
-                            search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
-                        }
-                    }
-                }
+                data_size = static_cast<int64_t>(this->shard_sizes_[handle.get_rank()]);
+            }
+            // Always run map_neighbor_id — the helper bounds-checks raw
+            // against data_size regardless of host_ids being empty, so
+            // junk cuvs sentinels (UINT32_MAX, INT32_MAX, etc.) get
+            // normalized to -1 even on the implicit-id path.
+            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                search_res.neighbors[i] = map_neighbor_id(search_res.neighbors[i], offset, data_size, this->host_ids);
             }
         }
 
@@ -1067,27 +1058,18 @@ public:
         // so that concurrent extend() calls (which write host_ids under unique_lock) are safe.
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            int64_t offset = 0;
+            int64_t data_size = static_cast<int64_t>(this->count);
             if (this->dist_mode == DistributionMode_SHARDED) {
-                int64_t offset = 0;
                 for (int r = 0; r < handle.get_rank(); ++r) offset += (int64_t)this->shard_sizes_[r];
-                for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                    if (search_res.neighbors[i] != -1) {
-                        int64_t global_pos = search_res.neighbors[i] + offset;
-                        if (!this->host_ids.empty()) {
-                            search_res.neighbors[i] = (int64_t)this->host_ids[global_pos];
-                        } else {
-                            search_res.neighbors[i] = global_pos;
-                        }
-                    }
-                }
-            } else {
-                if (!this->host_ids.empty()) {
-                    for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                        if (search_res.neighbors[i] != -1) {
-                            search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
-                        }
-                    }
-                }
+                data_size = static_cast<int64_t>(this->shard_sizes_[handle.get_rank()]);
+            }
+            // Always run map_neighbor_id — the helper bounds-checks raw
+            // against data_size regardless of host_ids being empty, so
+            // junk cuvs sentinels (UINT32_MAX, INT32_MAX, etc.) get
+            // normalized to -1 even on the implicit-id path.
+            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                search_res.neighbors[i] = map_neighbor_id(search_res.neighbors[i], offset, data_size, this->host_ids);
             }
         }
 
