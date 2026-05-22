@@ -121,6 +121,8 @@ func initLogtailMetrics() {
 	registry.MustRegister(logTailQueueSizeGauge)
 
 	registry.MustRegister(LogTailBytesHistogram)
+	registry.MustRegister(logtailReplayRetainedBatchRowsHistogram)
+	registry.MustRegister(logtailReplayRetainedBatchBytesHistogram)
 	registry.MustRegister(logTailApplyDurationHistogram)
 	registry.MustRegister(logtailUpdatePartitionDurationHistogram)
 	registry.MustRegister(LogTailAppendDurationHistogram)
@@ -152,6 +154,9 @@ func initTxnMetrics() {
 	registry.MustRegister(txnCreateDurationHistogram)
 	registry.MustRegister(txnStatementDurationHistogram)
 	registry.MustRegister(txnLockDurationHistogram)
+	registry.MustRegister(TxnLockOpBatchRowsHistogram)
+	registry.MustRegister(TxnLockOpBatchBytesHistogram)
+	registry.MustRegister(TxnLockOpBatchHoldDurationHistogram)
 	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
 	registry.MustRegister(TxnCheckPKDupDurationHistogram)
