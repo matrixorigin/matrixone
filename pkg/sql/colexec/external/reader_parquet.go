@@ -34,7 +34,7 @@ func NewParquetReader(param *ExternalParam, proc *process.Process) *ParquetReade
 
 func (r *ParquetReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty bool, err error) {
 	r.param = param
-	if err := param.refreshPartitionValues(); err != nil {
+	if err := param.refreshPartitionValues(proc); err != nil {
 		return false, err
 	}
 	r.h, err = newParquetHandler(param)
