@@ -708,6 +708,8 @@ func TestUpdate(t *testing.T) {
 		// FROM-clause join tree (JOIN ... ON ...) must round-trip without
 		// changing associativity.
 		"UPDATE NATION a SET a.N_NAME = 'dd' FROM NATION2 b JOIN REGION c ON b.R_REGIONKEY = c.R_REGIONKEY WHERE a.N_REGIONKEY = b.R_REGIONKEY",
+		// Self-join: target and source are the same table.
+		"UPDATE NATION a SET a.N_NAME = b.N_NAME FROM NATION b WHERE a.N_REGIONKEY = b.N_REGIONKEY",
 		"prepare stmt1 from 'update nation set n_name = ? where n_nationkey > ?'",
 		"drop index idx1 on test_idx",
 	}

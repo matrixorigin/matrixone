@@ -564,6 +564,17 @@ var (
 			input:  "UPDATE t SET v = c.v FROM b LEFT JOIN c ON b.k = c.k WHERE t.id = b.id",
 			output: "update t set v = c.v from b left join c on b.k = c.k where t.id = b.id",
 		}, {
+			// FROM "b, c JOIN d ON ..." parses to b CROSS (c INNER d). Without
+			// the right-operand paren the round-trip would re-parse as
+			// (b CROSS c) INNER d, changing the ON's binding.
+			input:  "UPDATE t SET v = d.v FROM b, c JOIN d ON c.k = d.k WHERE t.id = b.id AND b.k = c.k",
+			output: "update t set v = d.v from b cross join (c inner join d on c.k = d.k) where t.id = b.id and b.k = c.k",
+		}, {
+			// Same shape but the inner join is LEFT, where the associativity
+			// change is also a semantic change (which side is preserved).
+			input:  "UPDATE t SET v = d.v FROM b, c LEFT JOIN d ON c.k = d.k WHERE t.id = b.id AND b.k = c.k",
+			output: "update t set v = d.v from b cross join (c left join d on c.k = d.k) where t.id = b.id and b.k = c.k",
+		}, {
 			input:  "with t2 as (select * from t1) DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
 			output: "with t2 as (select * from t1) delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
 		}, {

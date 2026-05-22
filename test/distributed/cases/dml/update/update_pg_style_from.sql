@@ -120,6 +120,82 @@ SELECT id, base, gen_col FROM gen_t ORDER BY id;
 
 DROP TABLE gen_t;
 DROP TABLE gen_src;
+
+-- FK target with a generated column: the FK forces the fallback planner
+-- (buildTableUpdate). Generated column protection must still apply there.
+DROP TABLE IF EXISTS fk_parent;
+DROP TABLE IF EXISTS fk_child;
+DROP TABLE IF EXISTS fk_src;
+CREATE TABLE fk_parent (id INT PRIMARY KEY);
+INSERT INTO fk_parent VALUES (1), (2), (3);
+CREATE TABLE fk_child (
+    id INT PRIMARY KEY,
+    parent_id INT,
+    base INT,
+    gen_col INT AS (base * 10) STORED,
+    FOREIGN KEY (parent_id) REFERENCES fk_parent(id)
+);
+INSERT INTO fk_child (id, parent_id, base) VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
+CREATE TABLE fk_src (id INT PRIMARY KEY, new_base INT);
+INSERT INTO fk_src VALUES (1, 11), (2, 22), (3, 33);
+
+-- Direct write to a generated column must error even on the fallback path.
+UPDATE fk_child SET gen_col = 999 FROM fk_src WHERE fk_src.id = fk_child.id;
+
+-- Base-column update must recompute the stored generated column on the
+-- fallback path too.
+UPDATE fk_child SET base = fk_src.new_base FROM fk_src WHERE fk_src.id = fk_child.id;
+SELECT id, parent_id, base, gen_col FROM fk_child ORDER BY id;
+DROP TABLE fk_child;
+DROP TABLE fk_parent;
+DROP TABLE fk_src;
+
+-- Self-join: target and source share the same table.
+DROP TABLE IF EXISTS sj;
+CREATE TABLE sj (id INT PRIMARY KEY, parent_id INT, v VARCHAR(20));
+INSERT INTO sj VALUES (1, NULL, 'root'), (2, 1, 'child2'), (3, 1, 'child3'), (4, 2, 'leaf');
+UPDATE sj t SET v = p.v FROM sj p WHERE t.parent_id = p.id;
+SELECT id, parent_id, v FROM sj ORDER BY id;
+DROP TABLE sj;
+
+-- ORDER BY / LIMIT are not part of the PG-style UPDATE ... FROM grammar; both
+-- should be rejected at parse time.
+DROP TABLE IF EXISTS ob_t;
+DROP TABLE IF EXISTS ob_s;
+CREATE TABLE ob_t (id INT PRIMARY KEY, v INT);
+CREATE TABLE ob_s (id INT PRIMARY KEY, v INT);
+INSERT INTO ob_t VALUES (1, 0), (2, 0);
+INSERT INTO ob_s VALUES (1, 9), (2, 9);
+UPDATE ob_t SET v = ob_s.v FROM ob_s WHERE ob_t.id = ob_s.id ORDER BY ob_t.id;
+UPDATE ob_t SET v = ob_s.v FROM ob_s WHERE ob_t.id = ob_s.id LIMIT 1;
+DROP TABLE ob_t;
+DROP TABLE ob_s;
+
+-- Duplicate-match on the fallback path: target row 1 is matched by both
+-- (10,1,...) and (11,1,...) source rows. Because dup_t has a FK the fallback
+-- planner (buildTableUpdate) handles this, and needAggFilter must be set so
+-- the AGG any_value() dedup runs. Without v3's needAggFilter wiring for
+-- stmt.From, this would silently double-write target row 1.
+DROP TABLE IF EXISTS dup_t;
+DROP TABLE IF EXISTS dup_p;
+DROP TABLE IF EXISTS dup_s;
+CREATE TABLE dup_p (id INT PRIMARY KEY);
+INSERT INTO dup_p VALUES (1), (2);
+CREATE TABLE dup_t (
+    id INT PRIMARY KEY,
+    p_id INT,
+    v VARCHAR(20),
+    FOREIGN KEY (p_id) REFERENCES dup_p(id)
+);
+INSERT INTO dup_t VALUES (1, 1, 'a'), (2, 2, 'b');
+CREATE TABLE dup_s (id INT PRIMARY KEY, t_id INT, v VARCHAR(20));
+INSERT INTO dup_s VALUES (10, 1, 's1-first'), (11, 1, 's1-second'), (20, 2, 's2');
+UPDATE dup_t SET v = s.v FROM dup_s s WHERE s.t_id = dup_t.id;
+SELECT id, p_id, v FROM dup_t ORDER BY id;
+DROP TABLE dup_t;
+DROP TABLE dup_p;
+DROP TABLE dup_s;
+
 DROP TABLE IF EXISTS company;
 DROP TABLE IF EXISTS vec_join_case;
 DROP TABLE IF EXISTS region;
