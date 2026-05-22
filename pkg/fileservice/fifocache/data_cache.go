@@ -118,6 +118,14 @@ func (d *DataCache) Evict(ctx context.Context, ch chan int64) {
 	d.fifo.Evict(ctx, ch, 0)
 }
 
+func (d *DataCache) EvictToTargetWithWait(ctx context.Context, target int64) int64 {
+	return d.fifo.EvictToTargetWithWait(ctx, target)
+}
+
+func (d *DataCache) ForceEvictWithWait(ctx context.Context, n int64) int64 {
+	return d.fifo.ForceEvictWithWait(ctx, n)
+}
+
 func (d *DataCache) Flush(ctx context.Context) {
 	d.fifo.Evict(ctx, nil, math.MaxInt64)
 }

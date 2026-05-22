@@ -467,6 +467,32 @@ func (c *Cache[K, V]) ForceEvict(ctx context.Context, n int64) {
 	c.Evict(ctx, nil, capacityCut)
 }
 
+// ForceEvictWithWait evicts n bytes despite capacity and waits for the
+// eviction callbacks to finish before returning.
+func (c *Cache[K, V]) ForceEvictWithWait(ctx context.Context, n int64) int64 {
+	if n <= 0 {
+		return c.used()
+	}
+	target := c.used() - n
+	if target < 0 {
+		target = 0
+	}
+	return c.EvictToTargetWithWait(ctx, target)
+}
+
+// EvictToTargetWithWait evicts until used bytes are no greater than target.
+func (c *Cache[K, V]) EvictToTargetWithWait(ctx context.Context, target int64) int64 {
+	if target < 0 {
+		target = 0
+	}
+	capacity := c.capacity()
+	if target > capacity {
+		target = capacity
+	}
+	c.EvictWithWait(ctx, capacity-target)
+	return target
+}
+
 // EvictWithWait is like Evict but blocks until the eviction lock is acquired,
 // guaranteeing that eviction actually runs before returning. This is used by
 // EnsureNBytes to prevent unbounded memory growth under high concurrency where
@@ -519,6 +545,14 @@ func (c *Cache[K, V]) used() int64 {
 	c.queueLock.RLock()
 	defer c.queueLock.RUnlock()
 	return c.used1 + c.used2
+}
+
+func (c *Cache[K, V]) Used() int64 {
+	return c.used()
+}
+
+func (c *Cache[K, V]) Capacity() int64 {
+	return c.capacity()
 }
 
 func (c *Cache[K, V]) evict1() (pe _PendingPostEvict[K, V], evicted bool) {

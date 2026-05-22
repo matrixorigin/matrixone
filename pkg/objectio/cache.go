@@ -160,6 +160,22 @@ func EvictCache(ctx context.Context) (target int64) {
 	return
 }
 
+func EvictCacheToCapacityPercent(ctx context.Context, percent int64) (target int64) {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	target = metaCache.Capacity() * percent / 100
+	target = metaCache.EvictToTargetWithWait(ctx, target)
+	logutil.Info("metadata cache pressure evicted",
+		zap.Any("target", target),
+		zap.Int64("target-percent", percent),
+	)
+	return
+}
+
 func encodeCacheKey(name ObjectNameShort, cacheKeyType uint16) mataCacheKey {
 	var key mataCacheKey
 	copy(key[:], name[:])

@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -204,6 +205,10 @@ func NewService(
 		90.0/100.0,
 		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
 		rscthrottler.WithRSSScavenging(),
+		rscthrottler.WithRSSCacheEvictor(func(ctx context.Context, targetPercent int64) {
+			fileservice.EvictMemoryCachesToCapacityPercent(ctx, targetPercent)
+			objectio.EvictCacheToCapacityPercent(ctx, targetPercent)
+		}),
 	)
 
 	srv.pu.LockService = srv.lockService

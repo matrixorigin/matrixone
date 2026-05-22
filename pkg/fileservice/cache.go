@@ -210,6 +210,26 @@ func EvictMemoryCaches(ctx context.Context) map[string]int64 {
 	return ret
 }
 
+func EvictMemoryCachesToCapacityPercent(ctx context.Context, percent int64) map[string]int64 {
+	ret := make(map[string]int64)
+
+	allMemoryCaches.Range(func(k, v any) bool {
+		cache := k.(*MemCache)
+		name := v.(string)
+		target := cache.EvictToCapacityPercent(ctx, percent)
+		ret[name] = target
+		logutil.Info("memory cache pressure evicted",
+			zap.Any("name", name),
+			zap.Int64("target", target),
+			zap.Int64("target-percent", percent),
+		)
+
+		return true
+	})
+
+	return ret
+}
+
 func EvictDiskCaches(ctx context.Context) map[string]int64 {
 	ret := make(map[string]int64)
 	ch := make(chan int64, 1)

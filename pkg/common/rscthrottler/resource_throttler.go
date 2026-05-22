@@ -15,6 +15,7 @@
 package rscthrottler
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -36,6 +37,10 @@ const (
 	rssScavengeInterval    = time.Minute
 	rssScavengeTriggerRate = 0.85
 	rssScavengeVisibleRate = 0.70
+	rssCacheEvictSoftRate  = 0.90
+	rssCacheEvictHardRate  = 0.95
+	rssCacheSoftTarget     = int64(70)
+	rssCacheHardTarget     = int64(50)
 
 	MemoryThrottlerLogHeader = "MemoryThrottler"
 )
@@ -81,6 +86,7 @@ type memThrottler struct {
 		specializedForMerge bool
 
 		enableRSSScavenging bool
+		rssCacheEvictor     func(context.Context, int64)
 	}
 }
 
@@ -189,7 +195,15 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 	if visible < 0 {
 		visible = 0
 	}
-	if float64(visible) >= float64(rss)*rssScavengeVisibleRate {
+	shouldFreeOSMemory := float64(visible) < float64(rss)*rssScavengeVisibleRate
+	cacheTargetPercent := int64(0)
+	if float64(rss) >= float64(actualMaxMemory)*rssCacheEvictHardRate {
+		cacheTargetPercent = rssCacheHardTarget
+	} else if float64(rss) >= float64(actualMaxMemory)*rssCacheEvictSoftRate {
+		cacheTargetPercent = rssCacheSoftTarget
+	}
+	shouldEvictCache := cacheTargetPercent > 0 && m.options.rssCacheEvictor != nil
+	if !shouldFreeOSMemory && !shouldEvictCache {
 		return
 	}
 	last := m.lastRSSScavenge.Load()
@@ -204,9 +218,16 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 		zap.String("rss", common.HumanReadableBytes(int(rss))),
 		zap.String("visible", common.HumanReadableBytes(int(visible))),
 		zap.String("actual-total-memory", common.HumanReadableBytes(int(actualMaxMemory))),
+		zap.Bool("free-os-memory", shouldFreeOSMemory),
+		zap.Int64("cache-target-percent", cacheTargetPercent),
 		zap.String("detail", m.String()),
 	)
-	freeOSMemory()
+	if shouldEvictCache {
+		m.options.rssCacheEvictor(context.Background(), cacheTargetPercent)
+	}
+	if shouldFreeOSMemory || shouldEvictCache {
+		freeOSMemory()
+	}
 }
 
 /*
@@ -370,6 +391,12 @@ func WithSpecializedForMerge() MemThrottlerOption {
 func WithRSSScavenging() MemThrottlerOption {
 	return func(throttler *memThrottler) {
 		throttler.options.enableRSSScavenging = true
+	}
+}
+
+func WithRSSCacheEvictor(evictor func(context.Context, int64)) MemThrottlerOption {
+	return func(throttler *memThrottler) {
+		throttler.options.rssCacheEvictor = evictor
 	}
 }
 
