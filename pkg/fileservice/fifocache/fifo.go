@@ -24,7 +24,11 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
-const numShards = 256
+const (
+	numShards               = 256
+	pressureEvictBatchItems = 64
+	pressureEvictBatchBytes = 64 << 20
+)
 
 // Cache implements an in-memory cache with FIFO-based eviction
 type Cache[K comparable, V any] struct {
@@ -481,8 +485,8 @@ func (c *Cache[K, V]) ForceEvictWithWait(ctx context.Context, n int64) int64 {
 }
 
 // EvictToTargetWithWait best-effort evicts until used bytes are no greater
-// than target. If ctx is canceled, it may return with used bytes still above
-// target.
+// than target and returns the actual used bytes after eviction stops. If ctx
+// is canceled, it may return with used bytes still above target.
 func (c *Cache[K, V]) EvictToTargetWithWait(ctx context.Context, target int64) int64 {
 	if target < 0 {
 		target = 0
@@ -491,55 +495,91 @@ func (c *Cache[K, V]) EvictToTargetWithWait(ctx context.Context, target int64) i
 	if target > capacity {
 		target = capacity
 	}
-	c.EvictWithWait(ctx, capacity-target)
-	return target
+	return c.EvictWithWait(ctx, capacity-target)
 }
 
 // EvictWithWait is like Evict but blocks until the eviction lock is acquired,
 // guaranteeing that eviction actually runs before returning. This is used by
 // EnsureNBytes to prevent unbounded memory growth under high concurrency where
-// TryLock-based Evict would skip eviction entirely.
-func (c *Cache[K, V]) EvictWithWait(ctx context.Context, capacityCut int64) {
-	c.queueLock.Lock()
-	var pendingPostEvicts []_PendingPostEvict[K, V]
-	defer func() {
-		c.queueLock.Unlock()
-		if c.postEvict != nil {
-			for i := range pendingPostEvicts {
-				c.postEvictItem(ctx, pendingPostEvicts[i], true)
-				pendingPostEvicts[i] = _PendingPostEvict[K, V]{}
-			}
-		}
-	}()
-
+// TryLock-based Evict would skip eviction entirely. It returns the actual used
+// bytes after eviction stops.
+func (c *Cache[K, V]) EvictWithWait(ctx context.Context, capacityCut int64) int64 {
+	if capacityCut < 0 {
+		capacityCut = 0
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return c.used()
 		default:
 		}
-		c.helpEnqueue()
-		globalCapacityCut := c.capacityCut.Swap(0)
-		target := c.capacity() - capacityCut - globalCapacityCut
+		pendingPostEvicts, used, evicted := c.evictBatch(&capacityCut)
+		c.runPendingPostEvicts(ctx, pendingPostEvicts)
+		target := c.capacity() - capacityCut
 		if target < 0 {
 			target = 0
 		}
-		if c.used1+c.used2 <= target {
-			break
+		if used <= target || !evicted {
+			return used
 		}
-		target1 := c.capacity1() - capacityCut - globalCapacityCut
+	}
+}
+
+func (c *Cache[K, V]) evictBatch(capacityCut *int64) (pending []_PendingPostEvict[K, V], used int64, evicted bool) {
+	c.queueLock.Lock()
+	defer c.queueLock.Unlock()
+
+	var (
+		pendingBytes int64
+		pendingCount int
+	)
+
+	for {
+		c.helpEnqueue()
+		*capacityCut += c.capacityCut.Swap(0)
+		target := c.capacity() - *capacityCut
+		if target < 0 {
+			target = 0
+		}
+		used = c.used1 + c.used2
+		if used <= target {
+			return pending, used, evicted
+		}
+		target1 := c.capacity1() - *capacityCut
 		if target1 < 0 {
 			target1 = 0
 		}
+		var (
+			pe _PendingPostEvict[K, V]
+			ok bool
+		)
 		if c.used1 > target1 {
-			if pe, ok := c.evict1(); ok {
-				pendingPostEvicts = append(pendingPostEvicts, pe)
-			}
+			pe, ok = c.evict1()
 		} else {
-			if pe, ok := c.evict2(); ok {
-				pendingPostEvicts = append(pendingPostEvicts, pe)
-			}
+			pe, ok = c.evict2()
 		}
+		if !ok {
+			return pending, c.used1 + c.used2, evicted
+		}
+		evicted = true
+		pendingCount++
+		pendingBytes += pe.size
+		if c.postEvict != nil {
+			pending = append(pending, pe)
+		}
+		if pendingCount >= pressureEvictBatchItems || pendingBytes >= pressureEvictBatchBytes {
+			return pending, c.used1 + c.used2, evicted
+		}
+	}
+}
+
+func (c *Cache[K, V]) runPendingPostEvicts(ctx context.Context, pendingPostEvicts []_PendingPostEvict[K, V]) {
+	if c.postEvict == nil {
+		return
+	}
+	for i := range pendingPostEvicts {
+		c.postEvictItem(ctx, pendingPostEvicts[i], true)
+		pendingPostEvicts[i] = _PendingPostEvict[K, V]{}
 	}
 }
 

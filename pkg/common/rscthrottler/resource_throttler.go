@@ -20,6 +20,7 @@ import (
 	"math"
 	"os"
 	"runtime/debug"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -73,6 +74,7 @@ type memThrottler struct {
 	lastRSSScavenge    atomic.Int64
 	lastRSSCacheEvict  atomic.Int64
 	lastRSSCacheTarget atomic.Int64
+	rssScavengeMu      sync.Mutex
 
 	mergeAvailDebounce atomic.Int64
 
@@ -207,16 +209,17 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 
 	shouldEvictCache := false
 	if cacheTargetPercent > 0 && m.options.rssCacheEvictor != nil {
+		m.rssScavengeMu.Lock()
 		lastCacheEvict := m.lastRSSCacheEvict.Load()
 		lastTarget := m.lastRSSCacheTarget.Load()
 		cacheEvictExpired := time.Duration(now-lastCacheEvict) > rssScavengeInterval
 		cacheEvictEscalated := lastTarget == 0 || cacheTargetPercent < lastTarget
 		if cacheEvictExpired || cacheEvictEscalated {
-			if m.lastRSSCacheEvict.CompareAndSwap(lastCacheEvict, now) {
-				m.lastRSSCacheTarget.Store(cacheTargetPercent)
-				shouldEvictCache = true
-			}
+			m.lastRSSCacheEvict.Store(now)
+			m.lastRSSCacheTarget.Store(cacheTargetPercent)
+			shouldEvictCache = true
 		}
+		m.rssScavengeMu.Unlock()
 	}
 
 	shouldFreeOSMemory := false

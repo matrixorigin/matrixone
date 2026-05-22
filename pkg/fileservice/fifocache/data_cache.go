@@ -108,7 +108,7 @@ func (d *DataCache) EnsureNBytes(ctx context.Context, want int) {
 	used := d.Used()
 	capacity := d.Capacity()
 	if used+int64(want) > capacity {
-		d.fifo.EvictWithWait(ctx, int64(want))
+		_ = d.fifo.EvictWithWait(ctx, int64(want))
 	} else {
 		d.fifo.Evict(ctx, nil, int64(want))
 	}

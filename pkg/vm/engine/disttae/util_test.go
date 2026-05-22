@@ -169,6 +169,26 @@ func TestTombstonePKExistsInRange(t *testing.T) {
 	require.False(t, changed)
 }
 
+func TestTombstonePKExistsInRangeEmptyFastPathSkipsSemaphore(t *testing.T) {
+	for i := 0; i < cap(pkCheckSemaphore); i++ {
+		pkCheckSemaphore <- struct{}{}
+	}
+	defer func() {
+		for i := 0; i < cap(pkCheckSemaphore); i++ {
+			<-pkCheckSemaphore
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	pState := logtailreplay.NewPartitionState("", true, 0, false)
+	keys := vector.NewVec(types.T_int32.ToType())
+	changed, err := tombstonePKExistsInRange(ctx, pState, types.BuildTS(10, 0), keys, types.T_int32.ToType(), nil)
+	require.NoError(t, err)
+	require.False(t, changed)
+}
+
 func TestBlockMetaMarshal(t *testing.T) {
 	location := []byte("test")
 	var info objectio.BlockInfo

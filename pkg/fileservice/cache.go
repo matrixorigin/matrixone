@@ -216,11 +216,11 @@ func EvictMemoryCachesToCapacityPercent(ctx context.Context, percent int64) map[
 	allMemoryCaches.Range(func(k, v any) bool {
 		cache := k.(*MemCache)
 		name := v.(string)
-		target := cache.EvictToCapacityPercent(ctx, percent)
-		ret[name] = target
+		used := cache.EvictToCapacityPercent(ctx, percent)
+		ret[name] = used
 		logutil.Info("memory cache pressure evicted",
 			zap.Any("name", name),
-			zap.Int64("target", target),
+			zap.Int64("used", used),
 			zap.Int64("target-percent", percent),
 		)
 
