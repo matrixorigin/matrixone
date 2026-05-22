@@ -434,9 +434,12 @@ func TestAcquireFlushSlotWaitsForFlushSlotAfterTimeout(t *testing.T) {
 	require.Len(t, flushSemaphore, 0)
 }
 
-func TestFlushConcurrencyLimitIsStable(t *testing.T) {
-	require.Equal(t, 4, flushConcurrencyLimit)
-	require.Equal(t, flushConcurrencyLimit, cap(flushSemaphore))
+func TestFlushConcurrencyLimitScalesWithGOMAXPROCS(t *testing.T) {
+	require.Equal(t, minFlushConcurrencyLimit, flushConcurrencyForGOMAXPROCS(1))
+	require.Equal(t, minFlushConcurrencyLimit, flushConcurrencyForGOMAXPROCS(8))
+	require.Equal(t, 8, flushConcurrencyForGOMAXPROCS(16))
+	require.Equal(t, maxFlushConcurrencyLimit, flushConcurrencyForGOMAXPROCS(64))
+	require.Equal(t, flushConcurrency(), cap(flushSemaphore))
 }
 
 func TestAcquireFlushSlotWaitsWhenNormalAndBypassAreFull(t *testing.T) {

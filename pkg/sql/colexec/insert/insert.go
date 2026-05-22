@@ -17,6 +17,7 @@ package insert
 import (
 	"bytes"
 	"context"
+	goruntime "runtime"
 	"sync/atomic"
 	"time"
 
@@ -36,11 +37,29 @@ import (
 // flushSemaphore limits concurrent flushS3WriterOnMemoryPressure calls to
 // prevent thundering-herd mpool explosion when many workers are denied memory
 // simultaneously and all try to flush + read objectio metadata at once.
-const flushConcurrencyLimit = 4
+const (
+	minFlushConcurrencyLimit = 4
+	maxFlushConcurrencyLimit = 16
+)
 
-var flushSemaphore = make(chan struct{}, flushConcurrencyLimit)
+var flushSemaphore = make(chan struct{}, flushConcurrency())
 var flushSemaphoreAcquireTimeout = 200 * time.Millisecond
 var flushBypassRetryInterval = 20 * time.Millisecond
+
+func flushConcurrency() int {
+	return flushConcurrencyForGOMAXPROCS(goruntime.GOMAXPROCS(0))
+}
+
+func flushConcurrencyForGOMAXPROCS(gomaxprocs int) int {
+	n := gomaxprocs / 2
+	if n < minFlushConcurrencyLimit {
+		n = minFlushConcurrencyLimit
+	}
+	if n > maxFlushConcurrencyLimit {
+		n = maxFlushConcurrencyLimit
+	}
+	return n
+}
 
 const opName = "insert"
 
