@@ -185,12 +185,11 @@ func (mw *waiterEvents) add(c *lockContext) {
 	c.w.startWait()
 	mw.addToLazyCheckDeadlockC(c.w)
 
-	// Schedule a precise timer to wake the check loop at the waiter's
-	// LockWaitTimeout boundary.  Without this, the async path only checks
-	// on the coarse defaultLazyCheckDuration tick (5s in production), so
-	// a 1s lock_wait_timeout would wait up to 5s before enforcement.
+	// Schedule a precise timer only for timeouts at or below the lazy-check
+	// interval. Larger timeouts can rely on the periodic check and avoid
+	// long-lived timers.
 	c.w.stopLockWaitTimer()
-	if c.w.lockWaitTimeout > 0 {
+	if c.w.lockWaitTimeout > 0 && c.w.lockWaitTimeout <= defaultLazyCheckDuration.Load().(time.Duration) {
 		d := c.w.lockWaitTimeout
 		c.w.lockWaitTimer.Store(time.AfterFunc(d, func() {
 			select {

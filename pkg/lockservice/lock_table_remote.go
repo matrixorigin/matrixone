@@ -152,7 +152,7 @@ func (l *remoteLockTable) lock(
 	// received ErrLockTimeout.  Translate this into lock-timeout semantics
 	// instead of letting it be treated as a retryable connectivity error.
 	// The error may be wrapped by the RPC layer, so check both errors.Is and
-	// the error string.
+	// wrapped net.Error values.
 	if isDeadlineExceeded(err) &&
 		ctx.Err() == nil &&
 		opts.LockWaitTimeout > 0 {
@@ -348,7 +348,8 @@ func (l *remoteLockTable) handleError(
 }
 
 func retryRemoteLockError(err error) bool {
-	if e, ok := err.(net.Error); ok && e.Timeout() {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
 	if errors.Is(err, io.EOF) ||
@@ -372,7 +373,8 @@ func isDeadlineExceeded(err error) bool {
 		errors.Is(err, os.ErrDeadlineExceeded) {
 		return true
 	}
-	if e, ok := err.(net.Error); ok && e.Timeout() {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
 	return false
