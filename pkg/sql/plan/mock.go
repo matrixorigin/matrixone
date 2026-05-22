@@ -134,7 +134,6 @@ type col struct {
 	Nullable bool
 	Width    int32
 	Scale    int32
-	AutoIncr bool
 }
 
 type index struct {
@@ -164,6 +163,7 @@ type Schema struct {
 	outcnt    float64
 	tblId     int64
 	isView    bool
+	autoIncrColName string
 	viewCfg   ViewCfg
 	// tableType overrides TableType when non-empty; used to mock index tables
 	// carrying an algo-specific type (e.g. ivfflat "metadata").
@@ -694,8 +694,9 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	*/
 	constraintTestSchema["dept"] = &Schema{
 		tblId: 88888,
+		autoIncrColName: "deptno",
 		cols: []col{
-			{"deptno", types.T_uint32, true, 32, 0, true},
+			{"deptno", types.T_uint32, true, 32, 0},
 			{"dname", types.T_varchar, true, 15, 0},
 			{"loc", types.T_varchar, true, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
@@ -757,8 +758,9 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	*/
 	constraintTestSchema["dept_composite_uk"] = &Schema{
 		tblId: 88889,
+		autoIncrColName: "deptno",
 		cols: []col{
-			{"deptno", types.T_uint32, true, 32, 0, true},
+			{"deptno", types.T_uint32, true, 32, 0},
 			{"dname", types.T_varchar, true, 15, 0},
 			{"loc", types.T_varchar, true, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
@@ -1408,7 +1410,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 						NotNullable: !col.Nullable,
 						Width:       col.Width,
 						Scale:       col.Scale,
-						AutoIncr:    col.AutoIncr || isFakePK,
+						AutoIncr:    isFakePK || (table.autoIncrColName != "" && col.Name == table.autoIncrColName),
 					},
 					Name:       strings.ToLower(col.Name),
 					OriginName: col.Name,
