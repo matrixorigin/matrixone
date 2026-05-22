@@ -44,7 +44,6 @@ const (
 
 var flushSemaphore = make(chan struct{}, flushConcurrency())
 var flushSemaphoreAcquireTimeout = 200 * time.Millisecond
-var flushBypassRetryInterval = 20 * time.Millisecond
 
 func flushConcurrency() int {
 	return flushConcurrencyForGOMAXPROCS(goruntime.GOMAXPROCS(0))
@@ -350,14 +349,10 @@ func acquireFlushSlot(ctx context.Context) (func(), error) {
 		return nil, ctx.Err()
 	}
 
-	ticker := time.NewTicker(flushBypassRetryInterval)
-	defer ticker.Stop()
 	for {
 		select {
 		case flushSemaphore <- struct{}{}:
 			return func() { <-flushSemaphore }, nil
-		case <-ticker.C:
-			v2.TxnStatementInsertS3FlushBypassCounter.Add(1)
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
