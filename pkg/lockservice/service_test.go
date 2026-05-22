@@ -4394,9 +4394,9 @@ func TestLockWaitTimeoutDefaultNoTimeout(t *testing.T) {
 			require.NoError(t, err)
 
 			// txn2 tries to lock the same row WITHOUT LockWaitTimeout.
-			// Should be blocked until ctx expires (no default timeout interception).
+ 			// Should be blocked until ctx expires (no internal/default timeout interception).
 			option2 := option
-			option2.LockWaitTimeout = 0 // no session timeout; fall back to config default
+			option2.LockWaitTimeout = 0 // no session/internal timeout; rely on caller context deadline
 			start := time.Now()
 			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
 			elapsed := time.Since(start)
