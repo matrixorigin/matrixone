@@ -15,7 +15,7 @@ json_object(d64, cast(12345.67 as decimal(10, 2)), d128, cast(9876.54321 as deci
 {"d128": 9876.5432100000, "d64": 12345.67}
 select json_object(cast('2021-02-01' as date), cast('11:11:11' as time));
 json_object(cast(2021-02-01 as date), cast(11:11:11 as time))
-{"2021-02-01": "11:11:11"}
+{"\"2021-02-01\"": "11:11:11"}
 select json_object('ts', cast('2022-01-01 01:02:03' as datetime));
 json_object(ts, cast(2022-01-01 01:02:03 as datetime))
 {"ts": "2022-01-01 01:02:03"}

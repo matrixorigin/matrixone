@@ -219,7 +219,13 @@ func CompareByteJson(left, right ByteJson) int {
 			cmp = compareUint64(left.GetUint64(), right.GetUint64())
 		case TpCodeFloat64:
 			cmp = compareFloat64(left.GetFloat64(), right.GetFloat64())
-		case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
+		case TpCodeDecimal:
+			// DECIMAL-vs-DECIMAL: compare as numbers, not strings.
+			// String comparison would sort "10" < "2".
+			leftF, _ := strconv.ParseFloat(string(left.GetString()), 64)
+			rightF, _ := strconv.ParseFloat(string(right.GetString()), 64)
+			cmp = compareFloat64PrecisionLoss(leftF, rightF)
+		case TpCodeString, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
 			cmp = bytes.Compare(left.GetString(), right.GetString())
 		case TpCodeArray:
 			leftCnt := left.GetElemCnt()

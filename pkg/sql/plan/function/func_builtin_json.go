@@ -841,15 +841,18 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 			var key string
 			switch v := keyAny.(type) {
 			case bytejson.ByteJson:
-				// Use JSON text form, not internal binary, for key display.
-				// GetString() assumes a string-encoded binary layout and panics
-				// on numeric/object/array JSON values.
-				if bj, err := v.MarshalJSON(); err == nil {
-					key = string(bj)
-					// Strip surrounding quotes for JSON string values.
-					if len(key) >= 2 && key[0] == '"' && key[len(key)-1] == '"' {
-						key = key[1 : len(key)-1]
+				// Use JSON text form for non-string JSON types (number,
+				// object, array).  For JSON strings, unquote to get the
+				// raw key with escapes properly resolved.
+				if v.Type == bytejson.TpCodeString {
+					s, err := v.Unquote()
+					if err == nil {
+						key = s
+					} else {
+						key = fmt.Sprint(v)
 					}
+				} else if bj, err := v.MarshalJSON(); err == nil {
+					key = string(bj)
 				} else {
 					key = fmt.Sprint(v)
 				}
@@ -1363,8 +1366,11 @@ func doJsonSchemaValidate(schemaBytes, docBytes []byte, schemaIsStr, docIsStr bo
 	dl := gojsonschema.NewBytesLoader(docJSON)
 	validationResult, err := gojsonschema.Validate(sl, dl)
 	if err != nil {
+		// MySQL silently ignores invalid schema constructs (e.g., bad
+		// regex patterns) and returns true.  We follow that behavior here
+		// because gojsonschema returns an error for those.
 		if boolResult {
-			return true, nil // invalid schema → MySQL returns true
+			return true, nil
 		}
 		return []byte(`{"valid": true}`), nil
 	}

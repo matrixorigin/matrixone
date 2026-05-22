@@ -73,4 +73,8 @@ func TestCompareByteJson_DecimalCrossType(t *testing.T) {
 	d1 := makeDecimalJson("123.456")
 	d2 := makeDecimalJson("123.456")
 	require.Equal(t, 0, CompareByteJson(d1, d2), "same DECIMAL values should be equal")
+
+	// DECIMAL-vs-DECIMAL numeric order: "10" > "2"
+	require.Greater(t, CompareByteJson(makeDecimalJson("10"), makeDecimalJson("2")), 0, "10 > 2 numerically")
+	require.Less(t, CompareByteJson(makeDecimalJson("2"), makeDecimalJson("10")), 0, "2 < 10 numerically")
 }
