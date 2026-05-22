@@ -147,13 +147,11 @@ func (l *remoteLockTable) lock(
 		return
 	}
 
-	// If the RPC deadline expired but the caller context is still alive, the
-	// lock-table owner was likely in the middle of waiting and we never
-	// received ErrLockTimeout.  Translate this into lock-timeout semantics
+	// If this RPC's own deadline expired but the caller context is still alive,
+	// the lock-table owner was likely in the middle of waiting and we never
+	// received ErrLockTimeout. Translate this into lock-timeout semantics
 	// instead of letting it be treated as a retryable connectivity error.
-	// The error may be wrapped by the RPC layer, so check both errors.Is and
-	// wrapped net.Error values.
-	if isDeadlineExceeded(err) &&
+	if errors.Is(rpcCtx.Err(), context.DeadlineExceeded) &&
 		ctx.Err() == nil &&
 		opts.LockWaitTimeout > 0 {
 		_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
@@ -357,24 +355,6 @@ func retryRemoteLockError(err error) bool {
 		errors.Is(err, os.ErrDeadlineExceeded) ||
 		errors.Is(err, context.DeadlineExceeded) ||
 		moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF) {
-		return true
-	}
-	return false
-}
-
-// isDeadlineExceeded returns true if err is or wraps a deadline-exceeded error.
-// The RPC layer may wrap context.DeadlineExceeded as a net.Error with
-// Timeout()==true, so we check multiple paths.
-func isDeadlineExceeded(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, os.ErrDeadlineExceeded) {
-		return true
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
 	return false
