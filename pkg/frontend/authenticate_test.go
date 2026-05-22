@@ -6747,6 +6747,44 @@ func TestGetSessionSysVar(t *testing.T) {
 	})
 }
 
+// TestGetSessionSysVar_MapMissFallsBackToDefault: a sysvar that's
+// registered in gSysVarsDefs but absent from ses.sesSysVars (the
+// per-account snapshot doesn't contain it — typical of sysvars added
+// to gSysVarsDefs without a backing mo_mysql_compatibility_mode row,
+// or in a brand-new account whose snapshot pre-dates the sysvar
+// registration) must resolve to the registered Default rather than
+// surfacing interface{}(nil). Reproduces the CREATE TABLE CLONE
+// regression that ate "ivf_threads_build" as nil.
+func TestGetSessionSysVar_MapMissFallsBackToDefault(t *testing.T) {
+	convey.Convey("session sysvar map miss falls back to gSysVarsDefs default", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		ses := newSes(nil, ctrl)
+
+		// Force the map-miss scenario: empty per-session map. The
+		// var IS registered in gSysVarsDefs (default int64(0)) but
+		// absent from this empty map.
+		ses.sesSysVars = &SystemVariables{mp: make(map[string]interface{})}
+
+		v, err := ses.GetSessionSysVar("ivf_threads_build")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v, convey.ShouldEqual, int64(0))
+
+		v, err = ses.GetSessionSysVar("kmeans_train_percent")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v, convey.ShouldEqual, float64(10))
+	})
+}
+
 func TestSetSessionSysVar(t *testing.T) {
 	convey.Convey("set session system variable succ", t, func() {
 		ctrl := gomock.NewController(t)

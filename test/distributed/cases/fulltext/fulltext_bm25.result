@@ -14,7 +14,7 @@ not supported: Fulltext index are not allowed to use the same column
 select * from src where match(body) against('red');
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 select * from src where match(body,title) against('+]]]');
-internal error: Invalid input search string.  search string onverted to empty pattern
+internal error: Invalid input search string.  search string converted to empty pattern
 select match(body) against('red') from src;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 alter table src add fulltext index ftidx2 (body);

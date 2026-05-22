@@ -727,6 +727,163 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 	return nil
 }
 
+func opBinaryFixedFixedToFixedWithNullOnError[
+	T1 types.FixedSizeTExceptStrType,
+	T2 types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v1 T1, v2 T2) (Tr, error), selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[Tr](result)
+	p1 := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
+	p2 := vector.OptGetParamFromWrapper[T2](rs, 1, parameters[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
+
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+	rsNull := rsVec.GetNulls()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+	if c1 && c2 {
+		v1, null1 := p1.GetValue(0)
+		v2, null2 := p2.GetValue(0)
+		ifNull := null1 || null2
+		if ifNull {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			r, err := resultFn(v1, v2)
+			if err != nil {
+				nulls.AddRange(rsNull, 0, uint64(length))
+			} else {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					rss[i] = r
+				}
+			}
+		}
+		return nil
+	}
+
+	if c1 {
+		v1, null1 := p1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			if p2.WithAnyNullValue() || rsAnyNull {
+				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					if rsNull.Contains(i) {
+						continue
+					}
+					v2, _ := p2.GetValue(i)
+					r, err := resultFn(v1, v2)
+					if err != nil {
+						rsNull.Add(i)
+						continue
+					}
+					rss[i] = r
+				}
+			} else {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					v2, _ := p2.GetValue(i)
+					r, err := resultFn(v1, v2)
+					if err != nil {
+						rsNull.Add(i)
+						continue
+					}
+					rss[i] = r
+				}
+			}
+		}
+		return nil
+	}
+
+	if c2 {
+		v2, null2 := p2.GetValue(0)
+		if null2 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			if p1.WithAnyNullValue() || rsAnyNull {
+				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					if rsNull.Contains(i) {
+						continue
+					}
+					v1, _ := p1.GetValue(i)
+					r, err := resultFn(v1, v2)
+					if err != nil {
+						rsNull.Add(i)
+						continue
+					}
+					rss[i] = r
+				}
+			} else {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					v1, _ := p1.GetValue(i)
+					r, err := resultFn(v1, v2)
+					if err != nil {
+						rsNull.Add(i)
+						continue
+					}
+					rss[i] = r
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetValue(i)
+			v2, _ := p2.GetValue(i)
+			r, err := resultFn(v1, v2)
+			if err != nil {
+				rsNull.Add(i)
+				continue
+			}
+			rss[i] = r
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetValue(i)
+		v2, _ := p2.GetValue(i)
+		r, err := resultFn(v1, v2)
+		if err != nil {
+			rsNull.Add(i)
+			continue
+		}
+		rss[i] = r
+	}
+	return nil
+}
+
 func opBinaryStrFixedToFixedWithErrorCheck[
 	T2 types.FixedSizeTExceptStrType,
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
@@ -3099,6 +3256,95 @@ func opUnaryBytesToBytesWithErrorCheck(
 	return nil
 }
 
+func opUnaryBytesToBytesWithNullOnError(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v []byte) ([]byte, error), selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
+	rsVec := rs.GetResultVector()
+
+	c1 := parameters[0].IsConst()
+	rsNull := rsVec.GetNulls()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			r, err := resultFn(v1)
+			if err != nil {
+				nulls.AddRange(rsNull, 0, uint64(length))
+			} else {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					if err = rs.AppendMustBytesValue(r); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			r, err := resultFn(v1)
+			if err != nil {
+				if err = rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+				continue
+			}
+			if err = rs.AppendMustBytesValue(r); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		r, err := resultFn(v1)
+		if err != nil {
+			if err = rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = rs.AppendMustBytesValue(r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func opUnaryBytesToStrWithErrorCheck(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) (string, error), selectList *FunctionSelectList) error {
@@ -3254,6 +3500,83 @@ func opUnaryFixedToFixedWithErrorCheck[
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func opUnaryFixedToFixedWithNullOnError[
+	T types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v T) (Tr, error), selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[Tr](result)
+	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
+
+	c1 := parameters[0].IsConst()
+	rsNull := rsVec.GetNulls()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+	if c1 {
+		v1, null1 := p1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			r, err := resultFn(v1)
+			if err != nil {
+				nulls.AddRange(rsNull, 0, uint64(length))
+			} else {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					rss[i] = r
+				}
+			}
+		}
+		return nil
+	}
+
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetValue(i)
+			r, err := resultFn(v1)
+			if err != nil {
+				rsNull.Add(i)
+				continue
+			}
+			rss[i] = r
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetValue(i)
+		r, err := resultFn(v1)
+		if err != nil {
+			rsNull.Add(i)
+			continue
+		}
+		rss[i] = r
 	}
 	return nil
 }
