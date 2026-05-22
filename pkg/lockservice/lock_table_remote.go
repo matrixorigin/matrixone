@@ -145,19 +145,6 @@ func (l *remoteLockTable) lock(
 		return
 	}
 
-	// If this RPC's own deadline expired but the caller context is still alive,
-	// the lock-table owner was likely in the middle of waiting and we never
-	// received ErrLockTimeout. Translate this into lock-timeout semantics
-	// instead of letting it be treated as a retryable connectivity error.
-	if errors.Is(rpcCtx.Err(), context.DeadlineExceeded) &&
-		ctx.Err() == nil &&
-		opts.LockWaitTimeout > 0 {
-		_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
-		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
-		cb(pb.Result{}, ErrLockTimeout)
-		return
-	}
-
 	// encounter any error, we also added lock to txn, because we need unlock on remote
 	_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)

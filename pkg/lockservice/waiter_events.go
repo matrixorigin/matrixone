@@ -200,11 +200,10 @@ func (mw *waiterEvents) add(c *lockContext) {
 	c.w.startWait()
 	mw.addToLazyCheckDeadlockC(c.w)
 
-	// Schedule a precise timer only for timeouts at or below the lazy-check
-	// interval. Larger timeouts can rely on the periodic check and avoid
-	// long-lived timers.
+	// Schedule a precise timer for every positive timeout so async lock waits
+	// do not overshoot the configured deadline by a lazy-check interval.
 	c.w.stopLockWaitTimer()
-	if c.w.lockWaitTimeout > 0 && c.w.lockWaitTimeout <= defaultLazyCheckDuration.Load().(time.Duration) {
+	if c.w.lockWaitTimeout > 0 {
 		d := c.w.lockWaitTimeout
 		c.w.lockWaitTimer.Store(time.AfterFunc(d, mw.wakeCheck))
 	}
