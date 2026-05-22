@@ -75,6 +75,39 @@ func forceLockRetryMemoryPressure(t *testing.T, level lockRetryMemoryPressureLev
 	})
 }
 
+func TestLockWaitTimeoutUsesCurrentSessionValue(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txnpb.TxnOptions{
+		LockWaitTimeout: int64(60 * time.Second),
+	}).AnyTimes()
+
+	proc := process.NewTopProcess(
+		context.Background(),
+		mpool.MustNewZero(),
+		nil,
+		txnOp,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil)
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		require.Equal(t, "lock_wait_timeout", varName)
+		require.True(t, isSystemVar)
+		require.False(t, isGlobalVar)
+		return int64(2), nil
+	})
+	require.Equal(t, 2*time.Second, lockWaitTimeout(proc, txnOp))
+
+	proc.SetResolveVariableFunc(nil)
+	require.Equal(t, 60*time.Second, lockWaitTimeout(proc, txnOp))
+}
+
 func TestLockWithRetryReturnsBackendErrorWhenDeadlineExceededStopsBoundedRetry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

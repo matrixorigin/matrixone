@@ -42,6 +42,8 @@ var (
 	ErrLockTableNotFound = moerr.NewLockTableNotFoundNoCtx()
 	// ErrLockConflict lock option conflict
 	ErrLockConflict = moerr.NewLockConflictNoCtx()
+	// ErrLockTimeout lock table timeout
+	ErrLockTimeout = moerr.NewInvalidStateNoCtx("lock timeout")
 )
 
 // Option lockservice option
