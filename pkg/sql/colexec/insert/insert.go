@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	goruntime "runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -42,8 +43,49 @@ const (
 	maxFlushConcurrencyLimit = 16
 )
 
-var flushSemaphore = make(chan struct{}, flushConcurrency())
+type flushLimiter struct {
+	mu     sync.Mutex
+	inUse  int
+	notify chan struct{}
+}
+
+var flushLimiterState = newFlushLimiter()
+var flushConcurrencyForAcquire = flushConcurrency
 var flushSemaphoreAcquireTimeout = 200 * time.Millisecond
+var flushBypassRetryInterval = 20 * time.Millisecond
+
+func newFlushLimiter() *flushLimiter {
+	return &flushLimiter{notify: make(chan struct{})}
+}
+
+func (l *flushLimiter) tryAcquire() (func(), <-chan struct{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.inUse < flushConcurrencyForAcquire() {
+		l.inUse++
+		return l.release, nil
+	}
+	return nil, l.notify
+}
+
+func (l *flushLimiter) release() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.inUse <= 0 {
+		panic("flush limiter released without acquire")
+	}
+	l.inUse--
+	close(l.notify)
+	l.notify = make(chan struct{})
+}
+
+func (l *flushLimiter) inUseCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.inUse
+}
 
 func flushConcurrency() int {
 	return flushConcurrencyForGOMAXPROCS(goruntime.GOMAXPROCS(0))
@@ -341,18 +383,32 @@ func acquireFlushSlot(ctx context.Context) (func(), error) {
 	timer := time.NewTimer(flushSemaphoreAcquireTimeout)
 	defer timer.Stop()
 
-	select {
-	case flushSemaphore <- struct{}{}:
-		return func() { <-flushSemaphore }, nil
-	case <-timer.C:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	for {
+		release, waitCh := flushLimiterState.tryAcquire()
+		if release != nil {
+			return release, nil
+		}
+		select {
+		case <-waitCh:
+		case <-timer.C:
+			goto retry
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 
+retry:
+	ticker := time.NewTicker(flushBypassRetryInterval)
+	defer ticker.Stop()
 	for {
+		release, waitCh := flushLimiterState.tryAcquire()
+		if release != nil {
+			return release, nil
+		}
 		select {
-		case flushSemaphore <- struct{}{}:
-			return func() { <-flushSemaphore }, nil
+		case <-waitCh:
+		case <-ticker.C:
+			v2.TxnStatementInsertS3FlushBypassCounter.Add(1)
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
