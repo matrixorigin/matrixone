@@ -5,6 +5,8 @@ use sql_task_case;
 drop task if exists sql_task_cron;
 drop task if exists sql_task_manual;
 drop task if exists sql_task_gate;
+drop task if exists sql_task_literal_strings;
+drop task if exists sql_task_rows_success;
 drop task if exists sql_task_multistmt;
 drop task if exists sql_task_timeout;
 drop task if exists sql_task_retry;
@@ -20,6 +22,11 @@ create table scheduled_events(
 create table manual_events(id int primary key);
 create table gate_source(id int primary key);
 create table gate_sink(tag varchar(32) primary key);
+create table literal_readings(pump int, engine_rpm int, pump_rate int, label varchar(32));
+create table literal_classified(pump int, state varchar(32));
+create table literal_matched(label varchar(32));
+create table rows_success_target(v int);
+create table rows_success_heartbeat(tag varchar(16));
 create table ms_target(v int);
 create table timeout_sink(v int);
 create table retry_target(v int);
@@ -101,6 +108,56 @@ where task_name = 'sql_task_gate'
 order by run_id desc
 limit 2;
 
+insert into literal_readings values
+    (1, null, 0, 'UNKNOWN'),
+    (2, 900, 10, 'PUMPING'),
+    (3, 700, 0, 'IDLE'),
+    (4, 500, 0, 'OFF'),
+    (5, 900, 0, 'OTHER');
+
+-- @delimiter $$
+create task sql_task_literal_strings
+as begin
+    insert into literal_classified
+    select pump,
+        case
+            when engine_rpm is null then 'UNKNOWN'
+            when engine_rpm >= 800 and pump_rate > 0 then 'PUMPING'
+            when engine_rpm >= 600 and engine_rpm < 800 then 'IDLE'
+            when engine_rpm < 600 then 'OFF'
+            else 'UNKNOWN'
+        end as state
+    from literal_readings;
+
+    insert into literal_matched
+    select label
+    from literal_readings
+    where label in ('PUMPING', 'IDLE', 'OFF') and label <> 'UNKNOWN';
+end
+$$
+-- @delimiter ;
+
+execute task sql_task_literal_strings;
+select sleep(1);
+select state, count(*), hex(state) from literal_classified group by state order by state;
+select label, hex(label) from literal_matched order by label;
+select status, rows_affected from mo_task.sql_task_run where task_name = 'sql_task_literal_strings' order by run_id desc limit 1;
+
+-- @delimiter $$
+create task sql_task_rows_success
+as begin
+    insert into rows_success_target values (1), (2), (3);
+    insert into rows_success_heartbeat values ('done');
+end
+$$
+-- @delimiter ;
+
+execute task sql_task_rows_success;
+select sleep(1);
+select count(*) from rows_success_target;
+select count(*) from rows_success_heartbeat;
+select status, rows_affected from mo_task.sql_task_run where task_name = 'sql_task_rows_success' order by run_id desc limit 1;
+
 -- @delimiter $$
 create task sql_task_multistmt
 as begin
@@ -115,7 +172,7 @@ $$
 execute task sql_task_multistmt;
 select sleep(1);
 select count(*), min(v), max(v) from ms_target;
-select status from mo_task.sql_task_run where task_name = 'sql_task_multistmt' order by run_id desc limit 1;
+select status, rows_affected, error_message from mo_task.sql_task_run where task_name = 'sql_task_multistmt' order by run_id desc limit 1;
 
 -- @delimiter $$
 create task sql_task_timeout
@@ -272,6 +329,8 @@ drop task if exists sql_task_overlap;
 drop task if exists sql_task_retry;
 drop task if exists sql_task_timeout;
 drop task if exists sql_task_multistmt;
+drop task if exists sql_task_rows_success;
+drop task if exists sql_task_literal_strings;
 drop task if exists sql_task_gate;
 drop task if exists sql_task_manual;
 drop task if exists sql_task_cron;
