@@ -118,6 +118,77 @@ SELECT id, base, gen_col FROM gen_t ORDER BY id;
 3  ¦  30  ¦  60
 DROP TABLE gen_t;
 DROP TABLE gen_src;
+DROP TABLE IF EXISTS fk_parent;
+DROP TABLE IF EXISTS fk_child;
+DROP TABLE IF EXISTS fk_src;
+CREATE TABLE fk_parent (id INT PRIMARY KEY);
+INSERT INTO fk_parent VALUES (1), (2), (3);
+CREATE TABLE fk_child (
+id INT PRIMARY KEY,
+parent_id INT,
+base INT,
+gen_col INT AS (base * 10) STORED,
+FOREIGN KEY (parent_id) REFERENCES fk_parent(id)
+);
+INSERT INTO fk_child (id, parent_id, base) VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
+CREATE TABLE fk_src (id INT PRIMARY KEY, new_base INT);
+INSERT INTO fk_src VALUES (1, 11), (2, 22), (3, 33);
+UPDATE fk_child SET gen_col = 999 FROM fk_src WHERE fk_src.id = fk_child.id;
+invalid input: the value specified for generated column 'gen_col' in table 'fk_child' is not allowed
+UPDATE fk_child SET base = fk_src.new_base FROM fk_src WHERE fk_src.id = fk_child.id;
+SELECT id, parent_id, base, gen_col FROM fk_child ORDER BY id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  base[4,32,0]  ¦  gen_col[4,32,0]  𝄀
+1  ¦  1  ¦  11  ¦  110  𝄀
+2  ¦  2  ¦  22  ¦  220  𝄀
+3  ¦  3  ¦  33  ¦  330
+DROP TABLE fk_child;
+DROP TABLE fk_parent;
+DROP TABLE fk_src;
+DROP TABLE IF EXISTS sj;
+CREATE TABLE sj (id INT PRIMARY KEY, parent_id INT, v VARCHAR(20));
+INSERT INTO sj VALUES (1, NULL, 'root'), (2, 1, 'child2'), (3, 1, 'child3'), (4, 2, 'leaf');
+UPDATE sj t SET v = p.v FROM sj p WHERE t.parent_id = p.id;
+SELECT id, parent_id, v FROM sj ORDER BY id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  null  ¦  root  𝄀
+2  ¦  1  ¦  root  𝄀
+3  ¦  1  ¦  root  𝄀
+4  ¦  2  ¦  child2
+DROP TABLE sj;
+DROP TABLE IF EXISTS ob_t;
+DROP TABLE IF EXISTS ob_s;
+CREATE TABLE ob_t (id INT PRIMARY KEY, v INT);
+CREATE TABLE ob_s (id INT PRIMARY KEY, v INT);
+INSERT INTO ob_t VALUES (1, 0), (2, 0);
+INSERT INTO ob_s VALUES (1, 9), (2, 9);
+UPDATE ob_t SET v = ob_s.v FROM ob_s WHERE ob_t.id = ob_s.id ORDER BY ob_t.id;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 66 near " ORDER BY ob_t.id;";
+UPDATE ob_t SET v = ob_s.v FROM ob_s WHERE ob_t.id = ob_s.id LIMIT 1;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 66 near " LIMIT 1;";
+DROP TABLE ob_t;
+DROP TABLE ob_s;
+DROP TABLE IF EXISTS dup_t;
+DROP TABLE IF EXISTS dup_p;
+DROP TABLE IF EXISTS dup_s;
+CREATE TABLE dup_p (id INT PRIMARY KEY);
+INSERT INTO dup_p VALUES (1), (2);
+CREATE TABLE dup_t (
+id INT PRIMARY KEY,
+p_id INT,
+v VARCHAR(20),
+FOREIGN KEY (p_id) REFERENCES dup_p(id)
+);
+INSERT INTO dup_t VALUES (1, 1, 'a'), (2, 2, 'b');
+CREATE TABLE dup_s (id INT PRIMARY KEY, t_id INT, v VARCHAR(20));
+INSERT INTO dup_s VALUES (10, 1, 's1-first'), (11, 1, 's1-second'), (20, 2, 's2');
+UPDATE dup_t SET v = s.v FROM dup_s s WHERE s.t_id = dup_t.id;
+SELECT id, p_id, v FROM dup_t ORDER BY id;
+➤ id[4,32,0]  ¦  p_id[4,32,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  1  ¦  s1-first  𝄀
+2  ¦  2  ¦  s2
+DROP TABLE dup_t;
+DROP TABLE dup_p;
+DROP TABLE dup_s;
 DROP TABLE IF EXISTS company;
 DROP TABLE IF EXISTS vec_join_case;
 DROP TABLE IF EXISTS region;
