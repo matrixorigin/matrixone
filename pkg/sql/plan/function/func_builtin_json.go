@@ -1278,15 +1278,53 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 
 	schemaIsStr := ivecs[0].GetType().Oid.IsMySQLString()
 	docIsStr := ivecs[1].GetType().Oid.IsMySQLString()
+	schemaIsConst := ivecs[0].IsConst()
+
+	// When the schema is constant, compile it once and reuse across all rows.
+	var compiled *gojsonschema.Schema
+	if schemaIsConst {
+		schemaBytes, null := p1.GetStrValue(0)
+		if null {
+			// All rows have NULL schema → all results NULL.
+			for i := uint64(0); i < uint64(length); i++ {
+				rs.AppendMustNull()
+			}
+			return nil
+		}
+		schemaBJ, err := parseSchemaJSON(schemaBytes, schemaIsStr)
+		if err != nil {
+			return moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid schema JSON")
+		}
+		if schemaBJ.HasRef() {
+			return moerr.NewNotSupportedf(proc.Ctx, "json_schema_valid: $ref is not supported")
+		}
+		schemaJSON, _ := schemaBJ.MarshalJSON()
+		compiled, err = gojsonschema.NewSchema(gojsonschema.NewBytesLoader(schemaJSON))
+		if err != nil {
+			// Invalid schema → MySQL returns true.
+			for i := uint64(0); i < uint64(length); i++ {
+				rs.AppendMustValue(true)
+			}
+			return nil
+		}
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		schemaBytes, null1 := p1.GetStrValue(i)
-		docBytes, null2 := p2.GetStrValue(i)
-		if null1 || null2 {
-			rs.AppendMustNull()
-			continue
+		if schemaIsConst {
+			_, null2 := p2.GetStrValue(i)
+			if null2 {
+				rs.AppendMustNull()
+				continue
+			}
+		} else {
+			_, null1 := p1.GetStrValue(i)
+			_, null2 := p2.GetStrValue(i)
+			if null1 || null2 {
+				rs.AppendMustNull()
+				continue
+			}
 		}
-		v, err := doJsonSchemaValidate(schemaBytes, docBytes, schemaIsStr, docIsStr, true, proc)
+		v, err := doJsonSchemaValidateCached(p1, p2, i, schemaIsStr, docIsStr, true, proc, compiled)
 		if err != nil {
 			return err
 		}
@@ -1304,72 +1342,56 @@ func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionRe
 
 	schemaIsStr := ivecs[0].GetType().Oid.IsMySQLString()
 	docIsStr := ivecs[1].GetType().Oid.IsMySQLString()
+	schemaIsConst := ivecs[0].IsConst()
+
+	var compiled *gojsonschema.Schema
+	if schemaIsConst {
+		schemaBytes, null := p1.GetStrValue(0)
+		if null {
+			for i := uint64(0); i < uint64(length); i++ {
+				rs.AppendMustNullForBytesResult()
+			}
+			return nil
+		}
+		schemaBJ, err := parseSchemaJSON(schemaBytes, schemaIsStr)
+		if err != nil {
+			return moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid schema JSON")
+		}
+		if schemaBJ.HasRef() {
+			return moerr.NewNotSupportedf(proc.Ctx, "json_schema_valid: $ref is not supported")
+		}
+		schemaJSON, _ := schemaBJ.MarshalJSON()
+		compiled, err = gojsonschema.NewSchema(gojsonschema.NewBytesLoader(schemaJSON))
+		if err != nil {
+			for i := uint64(0); i < uint64(length); i++ {
+				rs.AppendMustBytesValue([]byte(`{"valid": true}`))
+			}
+			return nil
+		}
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		schemaBytes, null1 := p1.GetStrValue(i)
-		docBytes, null2 := p2.GetStrValue(i)
-		if null1 || null2 {
-			rs.AppendMustNullForBytesResult()
-			continue
+		if !schemaIsConst {
+			_, null1 := p1.GetStrValue(i)
+			_, null2 := p2.GetStrValue(i)
+			if null1 || null2 {
+				rs.AppendMustNullForBytesResult()
+				continue
+			}
+		} else {
+			_, null2 := p2.GetStrValue(i)
+			if null2 {
+				rs.AppendMustNullForBytesResult()
+				continue
+			}
 		}
-		v, err := doJsonSchemaValidate(schemaBytes, docBytes, schemaIsStr, docIsStr, false, proc)
+		v, err := doJsonSchemaValidateCached(p1, p2, i, schemaIsStr, docIsStr, false, proc, compiled)
 		if err != nil {
 			return err
 		}
 		rs.AppendMustBytesValue(v.([]byte))
 	}
 	return nil
-}
-
-func doJsonSchemaValidate(schemaBytes, docBytes []byte, schemaIsStr, docIsStr bool, boolResult bool, proc *process.Process) (interface{}, error) {
-	var schemaBJ, docBJ bytejson.ByteJson
-	var err error
-	if schemaIsStr {
-		schemaBJ, err = types.ParseSliceToByteJson(schemaBytes)
-	} else {
-		schemaBJ = types.DecodeJson(schemaBytes)
-	}
-	if err != nil {
-		return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid schema JSON")
-	}
-	if schemaBJ.Type != bytejson.TpCodeObject {
-		return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "schema must be a JSON object")
-	}
-	if schemaBJ.HasRef() {
-		return nil, moerr.NewNotSupportedf(proc.Ctx, "json_schema_valid: $ref is not supported")
-	}
-	if docIsStr {
-		docBJ, err = types.ParseSliceToByteJson(docBytes)
-	} else {
-		docBJ = types.DecodeJson(docBytes)
-	}
-	if err != nil {
-		return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid document JSON")
-	}
-	schemaJSON, err := schemaBJ.MarshalJSON()
-	if err != nil {
-		return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid schema JSON")
-	}
-	docJSON, err := docBJ.MarshalJSON()
-	if err != nil {
-		return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid document JSON")
-	}
-	sl := gojsonschema.NewBytesLoader(schemaJSON)
-	dl := gojsonschema.NewBytesLoader(docJSON)
-	validationResult, err := gojsonschema.Validate(sl, dl)
-	if err != nil {
-		// MySQL silently ignores invalid schema constructs (e.g., bad
-		// regex patterns) and returns true.  We follow that behavior here
-		// because gojsonschema returns an error for those.
-		if boolResult {
-			return true, nil
-		}
-		return []byte(`{"valid": true}`), nil
-	}
-	if boolResult {
-		return validationResult.Valid(), nil
-	}
-	return buildSchemaValidationReport(validationResult), nil
 }
 
 func buildSchemaValidationReport(result *gojsonschema.Result) []byte {
@@ -1390,6 +1412,74 @@ func buildSchemaValidationReport(result *gojsonschema.Result) []byte {
 	}
 	buf.WriteString("]}")
 	return buf.Bytes()
+}
+
+// parseSchemaJSON parses the schema bytes into a ByteJson, checking it's an object.
+func parseSchemaJSON(raw []byte, isStr bool) (bytejson.ByteJson, error) {
+	if isStr {
+		return types.ParseSliceToByteJson(raw)
+	}
+	return types.DecodeJson(raw), nil
+}
+
+// doJsonSchemaValidateCached validates a single document row against the schema.
+// If compiled is non-nil, the pre-compiled schema is reused; otherwise the
+// schema is parsed and validated per-row.
+func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Varlena], row uint64, schemaIsStr, docIsStr bool, boolResult bool, proc *process.Process, compiled *gojsonschema.Schema) (interface{}, error) {
+	docBytes, _ := p2.GetStrValue(row)
+
+	var docJSON []byte
+	if docIsStr {
+		docBJ, err := types.ParseSliceToByteJson(docBytes)
+		if err != nil {
+			return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid document JSON")
+		}
+		docJSON, _ = docBJ.MarshalJSON()
+	} else {
+		docBJ := types.DecodeJson(docBytes)
+		docJSON, _ = docBJ.MarshalJSON()
+	}
+
+	if compiled != nil {
+		result, err := compiled.Validate(gojsonschema.NewBytesLoader(docJSON))
+		if err != nil {
+			if boolResult {
+				return true, nil
+			}
+			return []byte(`{"valid": true}`), nil
+		}
+		if boolResult {
+			return result.Valid(), nil
+		}
+		return buildSchemaValidationReport(result), nil
+	}
+
+	schemaBytes, _ := p1.GetStrValue(row)
+	schemaBJ, err := parseSchemaJSON(schemaBytes, schemaIsStr)
+	if err != nil {
+		return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "invalid schema JSON")
+	}
+	if schemaBJ.Type != bytejson.TpCodeObject {
+		return nil, moerr.NewInvalidArg(proc.Ctx, "json_schema_valid", "schema must be a JSON object")
+	}
+	if schemaBJ.HasRef() {
+		return nil, moerr.NewNotSupportedf(proc.Ctx, "json_schema_valid: $ref is not supported")
+	}
+	schemaJSON, _ := schemaBJ.MarshalJSON()
+
+	sl := gojsonschema.NewBytesLoader(schemaJSON)
+	dl := gojsonschema.NewBytesLoader(docJSON)
+	validationResult, err := gojsonschema.Validate(sl, dl)
+	if err != nil {
+		if boolResult {
+			return true, nil
+		}
+		return []byte(`{"valid": true}`), nil
+	}
+	if boolResult {
+		return validationResult.Valid(), nil
+	}
+	return buildSchemaValidationReport(validationResult), nil
 }
 
 // JSON_VALUE(json_doc, path) → VARCHAR

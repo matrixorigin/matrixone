@@ -38,7 +38,11 @@ func (bj ByteJson) String() string {
 }
 
 func (bj ByteJson) Unquote() (string, error) {
-	if bj.Type != TpCodeString {
+	if bj.Type != TpCodeString &&
+		bj.Type != TpCodeDate &&
+		bj.Type != TpCodeTime &&
+		bj.Type != TpCodeDatetime &&
+		bj.Type != TpCodeBlob {
 		return bj.String(), nil
 	}
 	str := bj.GetString()
