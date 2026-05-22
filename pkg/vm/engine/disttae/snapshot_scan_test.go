@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"testing"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -353,19 +355,19 @@ func TestScanSnapshotShardsParallel_ContextCanceled(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-func TestScanSnapshotShardLocal_EmptyRange(t *testing.T) {
+func TestScanSnapshotShardWithCommittedInMem_EmptyRange(t *testing.T) {
 	tbl, fs := newSnapshotScanTxnTable(t)
 	mp := tbl.proc.Load().Mp()
 
 	pState := tbl.eng.(*Engine).GetOrCreateLatestPart(context.Background(), uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId).Snapshot()
-	err := scanSnapshotShardLocal(
+	err := scanSnapshotShardWithCommittedInMem(
 		context.Background(),
 		fs,
-		tbl,
 		pState,
-		readutil.NewEmptyTombstoneData(),
+		types.TimestampToTS(tbl.db.op.SnapshotTS()),
 		types.BuildTS(30, 0),
 		nil,
+		readutil.NewEmptyTombstoneData(),
 		snapshotScanReaderConfig{
 			attrs:    []string{"id"},
 			seqnums:  []uint16{1},
@@ -378,6 +380,297 @@ func TestScanSnapshotShardLocal_EmptyRange(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
+}
+
+func TestScanSnapshotCommittedInMem_EmptyState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	err := scanSnapshotCommittedInMem(
+		context.Background(),
+		nil,
+		nil,
+		types.BuildTS(30, 0),
+		types.BuildTS(20, 0),
+		nil,
+		snapshotScanReaderConfig{
+			attrs:    []string{"id"},
+			seqnums:  []uint16{1},
+			colTypes: []types.Type{types.T_int64.ToType()},
+		},
+		mp,
+		func(*batch.Batch) error {
+			t.Fatal("empty committed in-memory scan should not emit batches")
+			return nil
+		},
+	)
+	require.NoError(t, err)
+}
+
+func TestMaterializedSnapshotDataSource_NoPartitionState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	source := newMaterializedSnapshotDataSource(
+		context.Background(),
+		nil,
+		nil,
+		types.BuildTS(30, 0),
+		types.BuildTS(20, 0),
+		nil,
+		nil,
+	)
+	ds := source.(*materializedSnapshotDataSource)
+	require.Contains(t, ds.String(), "MaterializedSnapshotDataSource")
+
+	out := batch.NewWithSize(1)
+	out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	defer out.Clean(mp)
+
+	_, state, err := source.Next(
+		context.Background(),
+		[]string{"id"},
+		[]types.Type{types.T_int64.ToType()},
+		[]uint16{1},
+		0,
+		nil,
+		mp,
+		out,
+	)
+	require.NoError(t, err)
+	require.Equal(t, engine.End, state)
+
+	rows, err := source.ApplyTombstones(
+		context.Background(),
+		nil,
+		[]int64{2, 1},
+		engine.Policy_CheckAll,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{2, 1}, rows)
+
+	bm, err := source.GetTombstones(context.Background(), nil)
+	require.NoError(t, err)
+	bm.Release()
+
+	orderBy := []*plan.OrderBySpec{{}}
+	source.SetOrderBy(orderBy)
+	require.Equal(t, orderBy, source.GetOrderBy())
+	source.SetFilterZM(objectio.ZoneMap{})
+	source.Close()
+	require.Nil(t, ds.inMemBatches)
+}
+
+func TestMaterializedSnapshotDataSource_BuildsCommittedRows(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	state := logtailreplay.NewPartitionState("svc", false, 42, false)
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	var blk types.Blockid
+	copy(blk[:], []byte("materialized-row"))
+	rowID := types.NewRowid(&blk, 0)
+	commitTS := types.BuildTS(10, 0)
+
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	tsVec := vector.NewVec(types.T_TS.ToType())
+	idVec := vector.NewVec(types.T_int64.ToType())
+	defer rowIDVec.Free(mp)
+	defer tsVec.Free(mp)
+	defer idVec.Free(mp)
+	require.NoError(t, vector.AppendFixed(rowIDVec, rowID, false, mp))
+	require.NoError(t, vector.AppendFixed(tsVec, commitTS, false, mp))
+	require.NoError(t, vector.AppendFixed(idVec, int64(42), false, mp))
+	state.HandleRowsInsert(ctx, &api.Batch{
+		Attrs: []string{"rowid", "time", "id"},
+		Vecs: []api.Vector{
+			mustProtoVectorForSnapshotTest(t, rowIDVec),
+			mustProtoVectorForSnapshotTest(t, tsVec),
+			mustProtoVectorForSnapshotTest(t, idVec),
+		},
+	}, 0, packer, mp)
+
+	source := newMaterializedSnapshotDataSource(
+		ctx,
+		nil,
+		state,
+		types.BuildTS(30, 0),
+		types.BuildTS(20, 0),
+		nil,
+		nil,
+	)
+	defer source.Close()
+
+	out := batch.NewWithSize(3)
+	out.SetAttributes([]string{"rowid", "id", objectio.DefaultCommitTS_Attr})
+	out.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	out.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	out.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	defer out.Clean(mp)
+
+	attrs := []string{"rowid", "id", objectio.DefaultCommitTS_Attr}
+	colTypes := []types.Type{types.T_Rowid.ToType(), types.T_int64.ToType(), types.T_TS.ToType()}
+	seqnums := []uint16{objectio.SEQNUM_ROWID, 0, objectio.SEQNUM_COMMITTS}
+
+	_, stateKind, err := source.Next(ctx, attrs, colTypes, seqnums, 0, nil, mp, out)
+	require.NoError(t, err)
+	require.Equal(t, engine.InMem, stateKind)
+	require.Equal(t, 1, out.RowCount())
+	require.Equal(t, rowID, vector.MustFixedColWithTypeCheck[types.Rowid](out.Vecs[0])[0])
+	require.Equal(t, int64(42), vector.MustFixedColWithTypeCheck[int64](out.Vecs[1])[0])
+	require.Equal(t, commitTS, vector.MustFixedColWithTypeCheck[types.TS](out.Vecs[2])[0])
+
+	_, stateKind, err = source.Next(ctx, attrs, colTypes, seqnums, 0, nil, mp, out)
+	require.NoError(t, err)
+	require.Equal(t, engine.End, stateKind)
+}
+
+func TestMaterializedSnapshotDataSource_DelegatesToRemote(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	remote := &stubSnapshotDataSource{
+		steps: []snapshotDataSourceStep{
+			{state: engine.Persisted, values: []int64{3, 4}},
+		},
+	}
+	ds := &materializedSnapshotDataSource{
+		currentTS:        types.BuildTS(30, 0),
+		snapshotTS:       types.BuildTS(20, 0),
+		remote:           remote,
+		deletedRowsCache: make(map[objectio.Blockid]*objectio.Bitmap),
+	}
+
+	out := batch.NewWithSize(1)
+	out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	defer out.Clean(mp)
+
+	_, state, err := ds.Next(
+		context.Background(),
+		[]string{"id"},
+		[]types.Type{types.T_int64.ToType()},
+		[]uint16{1},
+		0,
+		nil,
+		mp,
+		out,
+	)
+	require.NoError(t, err)
+	require.Equal(t, engine.Persisted, state)
+
+	rows, err := ds.ApplyTombstones(context.Background(), nil, []int64{1}, engine.Policy_CheckCommittedOnly)
+	require.NoError(t, err)
+	require.Nil(t, rows)
+
+	_, err = ds.GetTombstones(context.Background(), nil)
+	require.NoError(t, err)
+
+	orderBy := []*plan.OrderBySpec{{}}
+	ds.SetOrderBy(orderBy)
+	require.Equal(t, orderBy, ds.GetOrderBy())
+	ds.SetFilterZM(objectio.ZoneMap{})
+	ds.Close()
+	require.True(t, remote.closed)
+}
+
+func TestAppendCommittedInMemEntry(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	var blk types.Blockid
+	copy(blk[:], []byte("snapshot-materialized"))
+	rowID := types.NewRowid(&blk, 7)
+	commitTS := types.BuildTS(42, 0)
+
+	src := batch.NewWithSize(3)
+	src.SetAttributes([]string{"rowid", "commit_ts", "id"})
+	src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	src.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	src.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(src.Vecs[0], rowID, false, mp))
+	require.NoError(t, vector.AppendFixed(src.Vecs[1], commitTS, false, mp))
+	require.NoError(t, vector.AppendFixed(src.Vecs[2], int64(99), false, mp))
+	src.SetRowCount(1)
+	defer src.Clean(mp)
+
+	out := newMaterializedInMemBatch(
+		[]string{"rowid", "commit_ts", "id", "missing"},
+		[]types.Type{
+			types.T_Rowid.ToType(),
+			types.T_TS.ToType(),
+			types.T_int64.ToType(),
+			types.T_varchar.ToType(),
+		},
+	)
+	defer out.Clean(mp)
+
+	err := appendCommittedInMemEntry(
+		out,
+		&logtailreplay.RowEntry{
+			RowID:  rowID,
+			Time:   commitTS,
+			Batch:  src,
+			Offset: 0,
+		},
+		[]uint16{
+			objectio.SEQNUM_ROWID,
+			objectio.SEQNUM_COMMITTS,
+			0,
+			1,
+		},
+		mp,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, out.RowCount())
+	require.Equal(t, rowID, vector.MustFixedColWithTypeCheck[types.Rowid](out.Vecs[0])[0])
+	require.Equal(t, commitTS, vector.MustFixedColWithTypeCheck[types.TS](out.Vecs[1])[0])
+	require.Equal(t, int64(99), vector.MustFixedColWithTypeCheck[int64](out.Vecs[2])[0])
+	require.True(t, out.Vecs[3].IsNull(0))
+}
+
+func TestMaterializedSnapshotDataSource_TombstoneCache(t *testing.T) {
+	var blk types.Blockid
+	copy(blk[:], []byte("materialized-tomb"))
+	tombstones := &stubMaterializedTombstoner{
+		deletedOffsets: map[uint64]struct{}{
+			2: {},
+		},
+	}
+	ds := &materializedSnapshotDataSource{
+		fs:               nil,
+		snapshotTS:       types.BuildTS(20, 0),
+		tombstone:        tombstones,
+		deletedRowsCache: make(map[objectio.Blockid]*objectio.Bitmap),
+	}
+	defer ds.Close()
+
+	rowID := types.NewRowid(&blk, 2)
+	deleted, err := ds.isDeletedByCommittedTombstones(context.Background(), rowID)
+	require.NoError(t, err)
+	require.True(t, deleted)
+	require.Equal(t, 1, tombstones.persistedCalls)
+
+	deleted, err = ds.isDeletedByCommittedTombstones(context.Background(), rowID)
+	require.NoError(t, err)
+	require.True(t, deleted)
+	require.Equal(t, 1, tombstones.persistedCalls)
+
+	left, err := ds.ApplyTombstones(
+		context.Background(),
+		&blk,
+		[]int64{3, 2, 1},
+		engine.Policy_CheckAll,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 3}, left)
+
+	bm, err := ds.GetTombstones(context.Background(), &blk)
+	require.NoError(t, err)
+	require.True(t, bm.Contains(2))
+	bm.Release()
 }
 
 func TestScanSnapshotWithCurrentRanges_EmptyRange(t *testing.T) {
@@ -679,3 +972,107 @@ func releaseSnapshotScanSubmitPoolForTest() {
 	snapshotScanSubmitPoolOnce = sync.Once{}
 	snapshotScanSubmitPoolErr = nil
 }
+
+func mustProtoVectorForSnapshotTest(t *testing.T, vec *vector.Vector) api.Vector {
+	t.Helper()
+
+	protoVec, err := vector.VectorToProtoVector(vec)
+	require.NoError(t, err)
+	return protoVec
+}
+
+type stubMaterializedTombstoner struct {
+	deletedOffsets map[uint64]struct{}
+	persistedCalls int
+}
+
+func (s *stubMaterializedTombstoner) Type() engine.TombstoneType {
+	return engine.TombstoneData
+}
+
+func (s *stubMaterializedTombstoner) HasAnyInMemoryTombstone() bool {
+	return len(s.deletedOffsets) > 0
+}
+
+func (s *stubMaterializedTombstoner) HasAnyTombstoneFile() bool {
+	return len(s.deletedOffsets) > 0
+}
+
+func (s *stubMaterializedTombstoner) String() string {
+	return "stubMaterializedTombstoner"
+}
+
+func (s *stubMaterializedTombstoner) StringWithPrefix(prefix string) string {
+	return prefix + s.String()
+}
+
+func (s *stubMaterializedTombstoner) HasBlockTombstone(
+	context.Context,
+	*objectio.Blockid,
+	fileservice.FileService,
+) (bool, error) {
+	return len(s.deletedOffsets) > 0, nil
+}
+
+func (s *stubMaterializedTombstoner) MarshalBinaryWithBuffer(*bytes.Buffer) error {
+	return nil
+}
+
+func (s *stubMaterializedTombstoner) UnmarshalBinary([]byte) error {
+	return nil
+}
+
+func (s *stubMaterializedTombstoner) PrefetchTombstones(
+	string,
+	fileservice.FileService,
+	[]objectio.Blockid,
+) {
+}
+
+func (s *stubMaterializedTombstoner) ApplyInMemTombstones(
+	_ *types.Blockid,
+	rowsOffset []int64,
+	deleted *objectio.Bitmap,
+) (left []int64) {
+	if deleted != nil {
+		for row := range s.deletedOffsets {
+			deleted.Add(row)
+		}
+	}
+	if rowsOffset == nil {
+		return nil
+	}
+	left = make([]int64, 0, len(rowsOffset))
+	for _, row := range rowsOffset {
+		if _, ok := s.deletedOffsets[uint64(row)]; !ok {
+			left = append(left, row)
+		}
+	}
+	return left
+}
+
+func (s *stubMaterializedTombstoner) ApplyPersistedTombstones(
+	_ context.Context,
+	_ fileservice.FileService,
+	_ *types.TS,
+	_ *types.Blockid,
+	rowsOffset []int64,
+	deleted *objectio.Bitmap,
+) ([]int64, error) {
+	s.persistedCalls++
+	if deleted != nil {
+		for row := range s.deletedOffsets {
+			deleted.Add(row)
+		}
+	}
+	if rowsOffset == nil {
+		return nil, nil
+	}
+	return rowsOffset, nil
+}
+
+func (s *stubMaterializedTombstoner) Merge(engine.Tombstoner) error {
+	return nil
+}
+
+func (s *stubMaterializedTombstoner) SortInMemory() {}

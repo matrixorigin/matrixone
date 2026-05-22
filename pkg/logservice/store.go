@@ -147,6 +147,13 @@ type store struct {
 	mu struct {
 		sync.Mutex
 		metadata metadata.LogStore
+		// skippedZombies is the set of (shardID, replicaID) pairs that
+		// startReplicas decided not to start because the cluster membership
+		// no longer listed them. Persisted here so later bootstrap paths
+		// (BootstrapHAKeeper in particular) can honor the same decision
+		// and do not re-start a replica we have already classified as
+		// removed.
+		skippedZombies map[zombieKey]struct{}
 	}
 	shardSnapshotInfo shardSnapshotInfo
 	snapshotMgr       *snapshotManager
@@ -230,13 +237,185 @@ func (l *store) id() string {
 	return l.nh.ID()
 }
 
-func (l *store) startReplicas() error {
+// zombieKey identifies a locally-persisted (shardID, replicaID) tuple
+// that may no longer be a member of the cluster.
+type zombieKey struct {
+	shardID   uint64
+	replicaID uint64
+}
+
+// getShardMembershipFn is overridable in tests. Production code uses the real
+// getShardMembership RPC defined in shardinfo.go.
+//
+// Unlike GetShardInfo, getShardMembership does not require the queried peer
+// to know the current leader — a crucial property for the zombie self-check,
+// since the failure mode that produces zombies is exactly the one where
+// HAKeeper has no elected leader.
+var getShardMembershipFn = getShardMembership
+
+var zombieSelfCheckTimeout = 2 * time.Second
+
+// checkZombieReplicas queries live shard membership for each locally-known
+// voting (shardID, replicaID) pair and returns the set of pairs whose
+// replicaID is no longer present in the cluster's membership map.
+//
+// Non-voting replicas are deliberately not checked. The gossip-backed
+// registry that feeds the membership RPC only carries voting nodes
+// (dragonboat's ShardView.Nodes is populated from Membership.Addresses and
+// omits NonVotings and Witnesses), so a zombie check driven by that view
+// cannot distinguish a removed non-voting replica from a legitimate one
+// that simply does not appear in ShardView.Nodes. Skipping non-voting
+// replicas here is safe because a non-voting zombie cannot block raft
+// quorum — the cascading "no HAKeeper leader -> no L/Kill" failure that
+// motivated this fix is specific to voting members. Non-voting zombies
+// remain subject to HAKeeper's existing checkZombie cleanup path.
+//
+// For each voting record the probe iterates every configured concrete service
+// address, skipping addresses that resolve to this store's own logservice
+// listener — probing self is useless because startReplicas runs before the RPC
+// server has started. DiscoveryAddress-only deployments skip this check because
+// a reverse proxy address cannot establish unanimity across concrete peers.
+//
+// Every peer's gossip-backed membership view is eventually consistent, so a
+// single authoritative reply is not enough: a stale peer could either hide a
+// real zombie (it still lists the removed replica) or falsely flag a
+// freshly-added replica (it has not yet learned of the ADD). To be robust
+// against both, the classification rule is unanimous-absence: probe every
+// reachable peer, and mark the replica as a zombie only when at least one
+// peer answered authoritatively AND every authoritative reply reports the
+// replicaID as absent. If any reachable peer still lists the replica, we
+// defer to that peer and treat the replica as legitimate — HAKeeper's
+// existing L/Kill path is still free to clean it up later via the normal
+// recovery flow.
+//
+// The check is best-effort: if no peer answers authoritatively (RPC
+// failure, address is self, or every peer reports "shard unknown"), the
+// shard is treated as "not a zombie" so legitimate cold-start scenarios
+// are not blocked. The whole sweep is bounded by zombieSelfCheckTimeout;
+// if the budget expires, any replicas not already classified are treated as
+// not-a-zombie and normal startup continues.
+func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogShard) map[zombieKey]struct{} {
+	zombies := make(map[zombieKey]struct{})
+	if len(shards) == 0 {
+		return zombies
+	}
+
+	addresses := l.zombieCheckAddresses()
+	if len(addresses) == 0 {
+		return zombies
+	}
+
+	logger := l.runtime.Logger()
+	ctx, cancel := context.WithTimeout(ctx, zombieSelfCheckTimeout)
+	defer cancel()
+	for _, rec := range shards {
+		if ctx.Err() != nil {
+			return zombies
+		}
+		if rec.NonVoting {
+			continue
+		}
+		var authoritative, presentReplies int
+		for _, address := range addresses {
+			if ctx.Err() != nil {
+				return zombies
+			}
+			members, ok, err := getShardMembershipFn(ctx, l.cfg.UUID, address, rec.ShardID)
+			if err != nil {
+				logger.Warn("zombie self-check: getShardMembership failed",
+					zap.String("address", address),
+					zap.Uint64("shardID", rec.ShardID),
+					zap.Uint64("replicaID", rec.ReplicaID),
+					zap.Error(err))
+				continue
+			}
+			if !ok {
+				continue
+			}
+			authoritative++
+			if _, present := members[rec.ReplicaID]; present {
+				presentReplies++
+			}
+		}
+		if authoritative > 0 && presentReplies == 0 {
+			zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}] = struct{}{}
+		}
+	}
+	return zombies
+}
+
+// zombieCheckAddresses returns the ordered list of concrete peer addresses to
+// probe during the zombie self-check. DiscoveryAddress is deliberately not
+// used here: it may be a reverse proxy that randomly selects one backend, and
+// a single backend's gossip view cannot satisfy the unanimous-absence rule.
+// Entries that resolve to the local logservice listener are filtered out —
+// probing self cannot produce a useful answer because the RPC server has not
+// been started yet at this point.
+func (l *store) zombieCheckAddresses() []string {
+	selfAddrs := map[string]struct{}{
+		l.cfg.LogServiceListenAddr():  {},
+		l.cfg.LogServiceServiceAddr(): {},
+	}
+	delete(selfAddrs, "")
+
+	var addresses []string
+	seen := make(map[string]struct{})
+	add := func(a string) {
+		if a == "" {
+			return
+		}
+		if _, isSelf := selfAddrs[a]; isSelf {
+			return
+		}
+		if _, dup := seen[a]; dup {
+			return
+		}
+		seen[a] = struct{}{}
+		addresses = append(addresses, a)
+	}
+
+	for _, a := range l.cfg.HAKeeperClientConfig.ServiceAddresses {
+		add(a)
+	}
+	return addresses
+}
+
+// isSkippedZombie reports whether startReplicas's membership self-check
+// already classified (shardID, replicaID) as a zombie and chose not to
+// start it. Used by bootstrap paths to honor the same decision rather
+// than re-starting a replica we have deemed removed.
+func (l *store) isSkippedZombie(shardID, replicaID uint64) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.mu.skippedZombies == nil {
+		return false
+	}
+	_, ok := l.mu.skippedZombies[zombieKey{shardID: shardID, replicaID: replicaID}]
+	return ok
+}
+
+func (l *store) startReplicas(ctx context.Context) error {
 	l.mu.Lock()
 	shards := make([]metadata.LogShard, 0)
 	shards = append(shards, l.mu.metadata.Shards...)
 	l.mu.Unlock()
 
+	zombies := l.checkZombieReplicas(ctx, shards)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	l.mu.skippedZombies = zombies
+	l.mu.Unlock()
+
 	for _, rec := range shards {
+		if _, isZombie := zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}]; isZombie {
+			l.runtime.Logger().Warn(
+				"skip starting zombie replica, waiting for HAKeeper to re-add",
+				zap.Uint64("shardID", rec.ShardID),
+				zap.Uint64("replicaID", rec.ReplicaID))
+			continue
+		}
 		if rec.ShardID == hakeeper.DefaultHAKeeperShardID {
 			if !rec.NonVoting {
 				if err := l.startHAKeeperReplica(rec.ReplicaID, nil, false); err != nil {

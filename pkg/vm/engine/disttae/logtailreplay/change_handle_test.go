@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/tidwall/btree"
 )
@@ -66,19 +66,18 @@ func TestUpdateCNDataBatch_RemoveTSVector(t *testing.T) {
 
 	// Call updateCNDataBatch
 	newCommitTS := types.BuildTS(100, 0)
-	updateCNDataBatch(bat, newCommitTS, mp)
+	require.NoError(t, updateCNDataBatch(bat, newCommitTS, nil, false, mp))
 
-	// Verify new commitTS vector is appended at the end (original vectors preserved)
-	require.Equal(t, 4, len(bat.Vecs))
+	// Verify the old commitTS vector is replaced with the normalized commitTS.
+	require.Equal(t, 3, len(bat.Vecs))
 	require.Equal(t, types.T_int64, bat.Vecs[0].GetType().Oid)
-	require.Equal(t, types.T_TS, bat.Vecs[1].GetType().Oid)
-	require.Equal(t, types.T_int64, bat.Vecs[2].GetType().Oid)
-	require.Equal(t, types.T_TS, bat.Vecs[3].GetType().Oid)
+	require.Equal(t, types.T_int64, bat.Vecs[1].GetType().Oid)
+	require.Equal(t, types.T_TS, bat.Vecs[2].GetType().Oid)
 
 	// Verify the new commitTS vector has the correct value
-	require.True(t, bat.Vecs[3].IsConst())
-	tsVal := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[3])[0]
-	require.Equal(t, newCommitTS, tsVal)
+	require.False(t, bat.Vecs[2].IsConst())
+	tsVals := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[2])
+	require.Equal(t, []types.TS{newCommitTS, newCommitTS}, tsVals)
 
 	bat.Clean(mp)
 }
@@ -106,7 +105,7 @@ func TestUpdateCNDataBatch_NoTSVector(t *testing.T) {
 
 	// Call updateCNDataBatch
 	newCommitTS := types.BuildTS(100, 0)
-	updateCNDataBatch(bat, newCommitTS, mp)
+	require.NoError(t, updateCNDataBatch(bat, newCommitTS, nil, false, mp))
 
 	// Verify commitTS vector is added at the end
 	require.Equal(t, 3, len(bat.Vecs))
@@ -146,7 +145,7 @@ func TestUpdateDataBatch_PreservesTrailingColumnsWithoutRowid(t *testing.T) {
 	bat.Vecs[3] = commitTS
 	bat.SetRowCount(1)
 
-	updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), mp)
+	require.NoError(t, updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, false, mp))
 
 	require.Equal(t, 4, len(bat.Vecs))
 	require.Equal(t, []string{"id", "created_at", "updated_at", objectio.DefaultCommitTS_Attr}, bat.Attrs)
@@ -157,6 +156,146 @@ func TestUpdateDataBatch_PreservesTrailingColumnsWithoutRowid(t *testing.T) {
 	require.Equal(t, updatedAtVal, vector.MustFixedColNoTypeCheck[types.Datetime](bat.Vecs[2])[0])
 
 	bat.Clean(mp)
+}
+
+func TestUpdateDataBatch_RetainsOrSynthesizesRowID(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	var blk types.Blockid
+	copy(blk[:], []byte("retain-rowid-data"))
+	rowID := types.NewRowid(&blk, 3)
+	commitTS := types.BuildTS(100, 0)
+
+	t.Run("synthesizes leading rowid", func(t *testing.T) {
+		bat := batch.NewWithSize(2)
+		bat.SetAttributes([]string{"id", objectio.DefaultCommitTS_Attr})
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(7), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], commitTS, false, mp))
+		bat.SetRowCount(1)
+		defer bat.Clean(mp)
+
+		require.NoError(t, updateDataBatch(bat, types.BuildTS(1, 0), types.BuildTS(200, 0), &blk, true, mp))
+		require.Equal(t, []string{catalog.Row_ID, "id", objectio.DefaultCommitTS_Attr}, bat.Attrs)
+		require.Equal(t, types.T_Rowid, bat.Vecs[0].GetType().Oid)
+		require.Equal(t, types.NewRowid(&blk, 0), vector.MustFixedColWithTypeCheck[types.Rowid](bat.Vecs[0])[0])
+	})
+
+	t.Run("moves existing rowid to the front", func(t *testing.T) {
+		bat := batch.NewWithSize(3)
+		bat.SetAttributes([]string{"id", catalog.Row_ID, objectio.DefaultCommitTS_Attr})
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(8), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], rowID, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[2], commitTS, false, mp))
+		bat.SetRowCount(1)
+		defer bat.Clean(mp)
+
+		require.NoError(t, updateDataBatch(bat, types.BuildTS(1, 0), types.BuildTS(200, 0), &blk, true, mp))
+		require.Equal(t, []string{catalog.Row_ID, "id", objectio.DefaultCommitTS_Attr}, bat.Attrs)
+		require.Equal(t, rowID, vector.MustFixedColWithTypeCheck[types.Rowid](bat.Vecs[0])[0])
+		require.Equal(t, int64(8), vector.MustFixedColWithTypeCheck[int64](bat.Vecs[1])[0])
+	})
+}
+
+func TestUpdateTombstoneAndCNBatches_RetainRowID(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	var blk types.Blockid
+	copy(blk[:], []byte("retain-rowid-tomb"))
+	commitTS := types.BuildTS(50, 0)
+
+	t.Run("tombstone adds rowid and filters by ts", func(t *testing.T) {
+		bat := batch.NewWithSize(2)
+		bat.SetAttributes([]string{"pk", objectio.DefaultCommitTS_Attr})
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], commitTS, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(2), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.BuildTS(500, 0), false, mp))
+		bat.SetRowCount(2)
+		defer bat.Clean(mp)
+
+		require.NoError(t, updateTombstoneBatch(
+			bat,
+			types.BuildTS(1, 0),
+			types.BuildTS(100, 0),
+			nil,
+			false,
+			&blk,
+			true,
+			mp,
+		))
+		require.Equal(t, []string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}, bat.Attrs)
+		require.Equal(t, 1, bat.Vecs[0].Length())
+		require.Equal(t, types.NewRowid(&blk, 0), vector.MustFixedColWithTypeCheck[types.Rowid](bat.Vecs[0])[0])
+		require.Equal(t, int64(1), vector.MustFixedColWithTypeCheck[int64](bat.Vecs[1])[0])
+	})
+
+	t.Run("cn tombstone strips old ts and appends constant ts", func(t *testing.T) {
+		bat := batch.NewWithSize(2)
+		bat.SetAttributes([]string{"pk", objectio.DefaultCommitTS_Attr})
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(3), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.BuildTS(1, 0), false, mp))
+		bat.SetRowCount(1)
+		defer bat.Clean(mp)
+
+		require.NoError(t, updateCNTombstoneBatch(bat, commitTS, &blk, true, mp))
+		require.Equal(t, []string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}, bat.Attrs)
+		require.Equal(t, types.NewRowid(&blk, 0), vector.MustFixedColWithTypeCheck[types.Rowid](bat.Vecs[0])[0])
+		require.Equal(t, int64(3), vector.MustFixedColWithTypeCheck[int64](bat.Vecs[1])[0])
+		require.Equal(t, commitTS, vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[2])[0])
+	})
+}
+
+func TestFillInInsertAndDeleteBatch_RetainRowID(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	var blk types.Blockid
+	copy(blk[:], []byte("fill-rowid-batch"))
+	rowID := types.NewRowid(&blk, 4)
+	commitTS := types.BuildTS(60, 0)
+
+	src := batch.NewWithSize(4)
+	src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "id", "payload"})
+	src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	src.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	src.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	src.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixed(src.Vecs[0], rowID, false, mp))
+	require.NoError(t, vector.AppendFixed(src.Vecs[1], commitTS, false, mp))
+	require.NoError(t, vector.AppendFixed(src.Vecs[2], int64(10), false, mp))
+	require.NoError(t, vector.AppendBytes(src.Vecs[3], []byte("v1"), false, mp))
+	src.SetRowCount(1)
+	defer src.Clean(mp)
+
+	entry := &RowEntry{RowID: rowID, Time: commitTS, Batch: src, Offset: 0}
+
+	var insertBat *batch.Batch
+	fillInInsertBatch(&insertBat, entry, true, mp)
+	defer insertBat.Clean(mp)
+	require.Equal(t, []string{catalog.Row_ID, "id", "payload", objectio.DefaultCommitTS_Attr}, insertBat.Attrs)
+	require.Equal(t, rowID, vector.MustFixedColWithTypeCheck[types.Rowid](insertBat.Vecs[0])[0])
+	require.Equal(t, int64(10), vector.MustFixedColWithTypeCheck[int64](insertBat.Vecs[1])[0])
+	require.Equal(t, "v1", string(insertBat.Vecs[2].GetBytesAt(0)))
+	require.Equal(t, commitTS, vector.MustFixedColWithTypeCheck[types.TS](insertBat.Vecs[3])[0])
+
+	var deleteBat *batch.Batch
+	fillInDeleteBatch(&deleteBat, entry, true, mp)
+	defer deleteBat.Clean(mp)
+	require.Equal(t, []string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}, deleteBat.Attrs)
+	require.Equal(t, rowID, vector.MustFixedColWithTypeCheck[types.Rowid](deleteBat.Vecs[0])[0])
+	require.Equal(t, int64(10), vector.MustFixedColWithTypeCheck[int64](deleteBat.Vecs[1])[0])
+	require.Equal(t, commitTS, vector.MustFixedColWithTypeCheck[types.TS](deleteBat.Vecs[2])[0])
 }
 
 func TestAObjectHandleShouldReadBlock_UsesCachedPlan(t *testing.T) {
@@ -263,7 +402,7 @@ func TestAObjectHandleNextPrefetchTarget_SkipsPrunedBlocks(t *testing.T) {
 	require.Equal(t, 0, handle.blkOffsetCursor)
 }
 
-func TestAObjectHandleGetNextAObject_ReturnsNoCommitTSColumn(t *testing.T) {
+func TestAObjectHandleGetNextAObject_SynthesizesCommitTSColumn(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
@@ -281,8 +420,12 @@ func TestAObjectHandleGetNextAObject_ReturnsNoCommitTSColumn(t *testing.T) {
 	}
 
 	err := handle.getNextAObject(context.Background())
-	require.True(t, engine.IsErrNoCommitTSColumn(err))
+	require.NoError(t, err)
 	require.Same(t, bat, handle.currentBatch)
+	require.Equal(t, 2, len(handle.currentBatch.Vecs))
+	require.Equal(t, types.T_TS, handle.currentBatch.Vecs[1].GetType().Oid)
+	tsVals := vector.MustFixedColWithTypeCheck[types.TS](handle.currentBatch.Vecs[1])
+	require.Equal(t, []types.TS{types.BuildTS(10, 0)}, tsVals)
 }
 
 func TestAObjectHandleShouldReadBlock_ShortCircuits(t *testing.T) {

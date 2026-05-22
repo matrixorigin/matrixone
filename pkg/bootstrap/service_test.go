@@ -501,6 +501,58 @@ func TestDoUpgrade(t *testing.T) {
 	)
 }
 
+func TestPerformUpgradeReturnsWhenTenantUpgradeInProgress(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			b := newServiceForTest(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+					return executor.Result{}, nil
+				}),
+				func(s *service) {
+					s.handles = append(s.handles, newTestVersionHandler("3.0.1", "3.0.0", versions.Yes, versions.Yes, 2))
+				},
+			)
+
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			txnExecutor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				switch {
+				case strings.Contains(sql, "select state from mo_version") &&
+					strings.Contains(sql, "version = '3.0.1'") &&
+					strings.Contains(sql, "version_offset = 2") &&
+					strings.Contains(sql, "for update"):
+					memRes := executor.NewMemResult(
+						[]types.Type{types.New(types.T_int32, 32, 0)},
+						mpool.MustNewZero(),
+					)
+					memRes.NewBatchWithRowCount(1)
+					executor.AppendFixedRows(memRes, 0, []int32{versions.StateCreated})
+					return memRes.GetResult(), nil
+				case strings.Contains(sql, "from mo_upgrade") &&
+					strings.Contains(sql, "final_version = '3.0.1'") &&
+					strings.Contains(sql, "final_version_offset = 2") &&
+					strings.Contains(sql, "order by upgrade_order asc") &&
+					strings.Contains(sql, "for update"):
+					return buildUpgradeVersionResult(100, versions.StateUpgradingTenant, "3.0.0", "3.0.1", 2, 0, versions.Yes, versions.Yes, 3, 1), nil
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+				}
+			}, txnOperator)
+
+			completed, err := b.performUpgrade(context.Background(), txnExecutor)
+			require.NoError(t, err)
+			require.False(t, completed)
+		},
+	)
+}
+
 // tolerance test
 func TestUpgradeTenant(t *testing.T) {
 	sid := ""
