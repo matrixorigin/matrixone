@@ -169,11 +169,12 @@ func callNonBlocking(
 	lockStart := time.Now()
 	metricv2.TxnLockOpBatchRowsHistogram.Observe(float64(result.Batch.RowCount()))
 	metricv2.TxnLockOpBatchBytesHistogram.Observe(float64(result.Batch.Size()))
-	if err = performLock(result.Batch, proc, lockOp, analyzer, -1); err != nil {
+	defer func() {
 		metricv2.TxnLockOpBatchHoldDurationHistogram.Observe(time.Since(lockStart).Seconds())
+	}()
+	if err = performLock(result.Batch, proc, lockOp, analyzer, -1); err != nil {
 		return result, err
 	}
-	metricv2.TxnLockOpBatchHoldDurationHistogram.Observe(time.Since(lockStart).Seconds())
 
 	return result, nil
 }
