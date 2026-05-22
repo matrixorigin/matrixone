@@ -63,6 +63,63 @@ FROM cc c
 WHERE c.id = t.company_id;
 SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
 
+-- FROM-clause join tree must keep its associativity (b LEFT JOIN c on ...).
+UPDATE vec_join_case SET remark = 'init';
+UPDATE vec_join_case t
+SET remark = COALESCE(r.name, 'no-region')
+FROM company c LEFT JOIN region r ON c.region_id = r.id
+WHERE c.id = t.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+
+-- Source is a view: read-only references in FROM must not be rejected as
+-- "cannot update from view".
+DROP VIEW IF EXISTS v_company;
+CREATE VIEW v_company AS SELECT id, province FROM company;
+UPDATE vec_join_case SET remark = 'init';
+UPDATE vec_join_case t
+SET remark = v.province
+FROM v_company v
+WHERE v.id = t.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+DROP VIEW v_company;
+
+-- Unqualified SET LHS must bind to the target only. Both vec_join_case
+-- and src_overlap expose a `remark` column; this used to be flagged as
+-- ambiguous before the fix.
+DROP TABLE IF EXISTS src_overlap;
+CREATE TABLE src_overlap (company_id INT, remark VARCHAR(100));
+INSERT INTO src_overlap VALUES (101, 'src-BJ'), (102, 'src-SH'), (103, 'src-GZ');
+UPDATE vec_join_case SET remark = 'init';
+UPDATE vec_join_case
+SET remark = src_overlap.remark
+FROM src_overlap
+WHERE src_overlap.company_id = vec_join_case.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+DROP TABLE src_overlap;
+
+-- Generated-column protection must still apply: SET on a stored generated
+-- column should be rejected. Base-column update through UPDATE ... FROM
+-- should recompute the generated column.
+DROP TABLE IF EXISTS gen_t;
+CREATE TABLE gen_t (
+    id INT PRIMARY KEY,
+    base INT,
+    gen_col INT AS (base * 2) STORED
+);
+INSERT INTO gen_t (id, base) VALUES (1, 10), (2, 20), (3, 30);
+DROP TABLE IF EXISTS gen_src;
+CREATE TABLE gen_src (id INT PRIMARY KEY, new_base INT);
+INSERT INTO gen_src VALUES (1, 100), (2, 200);
+
+-- Direct write to a generated column must error (captured in result file).
+UPDATE gen_t SET gen_col = 999 FROM gen_src WHERE gen_src.id = gen_t.id;
+
+-- Update of the base column must recompute the stored generated column.
+UPDATE gen_t SET base = gen_src.new_base FROM gen_src WHERE gen_src.id = gen_t.id;
+SELECT id, base, gen_col FROM gen_t ORDER BY id;
+
+DROP TABLE gen_t;
+DROP TABLE gen_src;
 DROP TABLE IF EXISTS company;
 DROP TABLE IF EXISTS vec_join_case;
 DROP TABLE IF EXISTS region;
