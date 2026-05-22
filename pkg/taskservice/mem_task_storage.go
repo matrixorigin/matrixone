@@ -212,7 +212,7 @@ func (s *memTaskStorage) AddDaemonTask(ctx context.Context, tasks ...task.Daemon
 			continue
 		}
 
-		s.daemonTasks[v.ID] = v
+		s.daemonTasks[v.ID] = cloneDaemonTask(v)
 		s.daemonTaskIndexes[v.Metadata.ID] = v.ID
 		n++
 	}
@@ -455,7 +455,7 @@ func (s *memTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Daem
 	for _, t := range tasks {
 		if v, ok := s.daemonTasks[t.ID]; ok && s.filterDaemonTask(c, v) {
 			n++
-			s.daemonTasks[t.ID] = t
+			s.daemonTasks[t.ID] = cloneDaemonTask(t)
 		}
 	}
 	return n, nil
@@ -489,7 +489,7 @@ func (s *memTaskStorage) QueryDaemonTask(ctx context.Context, conds ...Condition
 
 	sortedTasks := make([]task.DaemonTask, 0, len(s.daemonTasks))
 	for _, t := range s.daemonTasks {
-		sortedTasks = append(sortedTasks, deepcopy.Copy(t).(task.DaemonTask))
+		sortedTasks = append(sortedTasks, cloneDaemonTask(t))
 	}
 	sort.Slice(sortedTasks, func(i, j int) bool { return sortedTasks[i].ID < sortedTasks[j].ID })
 
@@ -517,10 +517,14 @@ func (s *memTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task.D
 	for _, t := range tasks {
 		if _, ok := s.daemonTasks[t.ID]; ok {
 			n++
-			s.daemonTasks[t.ID] = t
+			s.daemonTasks[t.ID] = cloneDaemonTask(t)
 		}
 	}
 	return n, nil
+}
+
+func cloneDaemonTask(t task.DaemonTask) task.DaemonTask {
+	return deepcopy.Copy(t).(task.DaemonTask)
 }
 
 func (s *memTaskStorage) nextIDLocked() uint64 {
