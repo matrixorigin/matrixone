@@ -76,10 +76,18 @@ null
 select json_schema_valid('{"type":"object"}', null);
 json_schema_valid({"type":"object"}, null)
 null
-select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), cast(42 as json));
-invalid argument operator cast, bad value [BIGINT JSON]
-select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), cast(200 as json));
-invalid argument operator cast, bad value [BIGINT JSON]
+select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), json_object('val', 42));
+json_schema_valid(json_object(type, number, minimum, 0, maximum, 100), json_object(val, 42))
+0
+select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), json_object('val', 200));
+json_schema_valid(json_object(type, number, minimum, 0, maximum, 100), json_object(val, 200))
+0
+select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), json_array(42));
+json_schema_valid(json_object(type, number, minimum, 0, maximum, 100), json_array(42))
+0
+select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), json_array(200));
+json_schema_valid(json_object(type, number, minimum, 0, maximum, 100), json_array(200))
+0
 select json_schema_validation_report('{"type":"object","required":["name"]}', '{"name":"test"}');
 json_schema_validation_report({"type":"object","required":["name"]}, {"name":"test"})
 {"valid": true}

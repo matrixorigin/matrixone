@@ -56,8 +56,10 @@ select json_schema_valid(null, '{"a":1}');
 select json_schema_valid('{"type":"object"}', null);
 
 -- T_json input via json_object
-select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), cast(42 as json));
-select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), cast(200 as json));
+select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), json_object('val', 42));
+select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), json_object('val', 200));
+select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), json_array(42));
+select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), json_array(200));
 
 -- validation report: valid
 select json_schema_validation_report('{"type":"object","required":["name"]}', '{"name":"test"}');

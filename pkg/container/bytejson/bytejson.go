@@ -256,7 +256,7 @@ func (bj ByteJson) getObjectKey(i int) []byte {
 }
 
 // GetObjectKey returns the key at index i of a JSON object.
-// The keys are in the original insertion order.
+// Keys are stored in sorted order (binary search is used for lookups).
 func (bj ByteJson) GetObjectKey(i int) []byte {
 	return bj.getObjectKey(i)
 }

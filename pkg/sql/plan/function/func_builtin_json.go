@@ -997,8 +997,8 @@ func jsonLengthWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		// selectList: skip non-selected rows
-		if selectList != nil && !selectList.ShouldEvalAllRow() && !selectList.Contains(i) {
+		// selectList: skip rows that were already evaluated
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
 			rsNull.Add(i)
 			continue
 		}
