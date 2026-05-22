@@ -134,6 +134,7 @@ type col struct {
 	Nullable bool
 	Width    int32
 	Scale    int32
+	AutoIncr bool
 }
 
 type index struct {
@@ -683,7 +684,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	constraintTestSchema["dept"] = &Schema{
 		tblId: 88888,
 		cols: []col{
-			{"deptno", types.T_uint32, true, 32, 0},
+			{"deptno", types.T_uint32, true, 32, 0, true},
 			{"dname", types.T_varchar, true, 15, 0},
 			{"loc", types.T_varchar, true, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
@@ -746,7 +747,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	constraintTestSchema["dept_composite_uk"] = &Schema{
 		tblId: 88889,
 		cols: []col{
-			{"deptno", types.T_uint32, true, 32, 0},
+			{"deptno", types.T_uint32, true, 32, 0, true},
 			{"dname", types.T_varchar, true, 15, 0},
 			{"loc", types.T_varchar, true, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
@@ -1204,7 +1205,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 						NotNullable: !col.Nullable,
 						Width:       col.Width,
 						Scale:       col.Scale,
-						AutoIncr:    isFakePK,
+						AutoIncr:    col.AutoIncr || isFakePK,
 					},
 					Name:       strings.ToLower(col.Name),
 					OriginName: col.Name,

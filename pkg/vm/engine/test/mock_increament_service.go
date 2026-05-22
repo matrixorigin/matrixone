@@ -16,9 +16,9 @@ package test
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
@@ -210,7 +210,7 @@ func (m *MockAutoIncrementService) SetOffset(
 	defer m.mu.Unlock()
 	counters, ok := m.counters[tableID]
 	if !ok {
-		return fmt.Errorf("table %d not found in mock auto-increment counters", tableID)
+		return moerr.NewInternalErrorf(ctx, "table %d not found in mock auto-increment counters", tableID)
 	}
 	if current, ok := counters[colName]; !ok || current < offset {
 		counters[colName] = offset
