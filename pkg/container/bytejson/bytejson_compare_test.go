@@ -68,6 +68,8 @@ func TestCompareByteJson_DecimalCrossType(t *testing.T) {
 
 	// FLOAT64 vs DECIMAL
 	require.Greater(t, CompareByteJson(makeJson(t, "5.5"), decimal), 0, "5.5 > 3.14")
+	require.Equal(t, 0, CompareByteJson(makeDecimalJson("0.1"), makeJson(t, "0.1")),
+		"decimal should compare against the JSON-visible float value")
 
 	// Exact same DECIMAL values
 	d1 := makeDecimalJson("123.456")

@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -643,6 +644,38 @@ func TestJsonValue(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, info)
 	})
+}
+
+func TestJsonExtractFloat64UnsignedInteger(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimalArray, err := bytejson.CreateByteJSON([]any{newTypedByteJson(bytejson.TpCodeDecimal, "123.45")})
+	require.NoError(t, err)
+	decimalArrayData, err := decimalArray.Marshal()
+	require.NoError(t, err)
+
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(),
+				[]string{
+					mustJsonBinaryString(t, `[18446744073709551615]`),
+					mustJsonBinaryString(t, `[9223372036854775808]`),
+					string(decimalArrayData),
+				},
+				[]bool{false, false, false}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{`$[0]`}, []bool{false}),
+		},
+		types.T_float64.ToType(), newOpBuiltInJsonExtract().jsonExtractFloat64, nil)
+
+	p := vector.GenerateFunctionFixedTypeParameter[float64](vec)
+	v, null := p.GetValue(0)
+	require.False(t, null)
+	require.Equal(t, float64(^uint64(0)), v)
+	v, null = p.GetValue(1)
+	require.False(t, null)
+	require.Equal(t, float64(uint64(1)<<63), v)
+	v, null = p.GetValue(2)
+	require.False(t, null)
+	require.Equal(t, 123.45, v)
 }
 
 func TestJsonValid(t *testing.T) {

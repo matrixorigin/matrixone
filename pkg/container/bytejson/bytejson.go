@@ -275,35 +275,6 @@ func (bj ByteJson) GetArrayElem(i int) ByteJson {
 	return bj.getArrayElem(i)
 }
 
-// HasRef returns true if the JSON object or any nested object/array
-// contains a "$ref" key.
-func (bj ByteJson) HasRef() bool {
-	return byteJsonHasRef(bj)
-}
-
-func byteJsonHasRef(bj ByteJson) bool {
-	switch bj.Type {
-	case TpCodeObject:
-		cnt := bj.GetElemCnt()
-		for i := 0; i < cnt; i++ {
-			if string(bj.getObjectKey(i)) == "$ref" {
-				return true
-			}
-			if byteJsonHasRef(bj.getObjectVal(i)) {
-				return true
-			}
-		}
-	case TpCodeArray:
-		cnt := bj.GetElemCnt()
-		for i := 0; i < cnt; i++ {
-			if byteJsonHasRef(bj.getArrayElem(i)) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (bj ByteJson) getArrayElem(i int) ByteJson {
 	return bj.getValEntry(headerSize + i*valEntrySize)
 }

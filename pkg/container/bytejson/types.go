@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math/big"
+	"strconv"
 )
 
 type subPathType byte
@@ -341,7 +342,7 @@ func byteJsonNumericRat(bj ByteJson) (*big.Rat, bool) {
 		return new(big.Rat).SetInt(new(big.Int).SetUint64(bj.GetUint64())), true
 	case TpCodeFloat64:
 		r := new(big.Rat)
-		if r.SetFloat64(bj.GetFloat64()) == nil {
+		if _, ok := r.SetString(strconv.FormatFloat(bj.GetFloat64(), 'g', -1, 64)); !ok {
 			return nil, false
 		}
 		return r, true

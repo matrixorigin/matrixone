@@ -425,12 +425,19 @@ func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, 
 				// it to the target type. No error checking for overflow etc.  Seems this is what
 				// customer wants.  If this is not true, we should do a strict, type, range checked
 				// version and a try_json_extract_value version for the current behavior.
-				if out.TYPE() == "INTEGER" {
-					i64 := out.GetInt64()
-					fv = float64(i64)
-				} else if out.TYPE() == "DOUBLE" {
+				switch out.Type {
+				case bytejson.TpCodeInt64:
+					fv = float64(out.GetInt64())
+				case bytejson.TpCodeUint64:
+					fv = float64(out.GetUint64())
+				case bytejson.TpCodeFloat64:
 					fv = out.GetFloat64()
-				} else {
+				case bytejson.TpCodeDecimal:
+					fv, err = strconv.ParseFloat(string(out.GetString()), 64)
+					if err != nil {
+						return err
+					}
+				default:
 					// append null
 					if err = rs.Append(0, true); err != nil {
 						return err
