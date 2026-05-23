@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -437,6 +438,109 @@ func TestJsonSchemaMixedOverloads(t *testing.T) {
 	})
 }
 
+func TestJsonSchemaRefKeywordDetection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("property named ref is allowed", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid property named ref",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"type":"object","properties":{"$ref":{"type":"string"}},"required":["$ref"]}`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"$ref":"ok"}`},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("enum value with ref key is allowed", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid enum ref value",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"enum":[{"$ref":"literal"}]}`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"$ref":"literal"}`},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("schema ref keyword is rejected", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid ref keyword",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"properties":{"a":{"$ref":"#/$defs/a"}},"$defs":{"a":{"type":"string"}}}`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":"ok"}`},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, []bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
+func TestJsonConstructorTypeChecking(t *testing.T) {
+	ctx := context.Background()
+	_, err := GetFunctionByName(ctx, "json_array", []types.Type{types.T_datalink.ToType()})
+	require.Error(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_object", []types.Type{types.T_varchar.ToType(), types.T_datalink.ToType()})
+	require.Error(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_array", []types.Type{types.T_timestamp.ToType()})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_object", []types.Type{types.T_varchar.ToType(), types.T_timestamp.ToType()})
+	require.NoError(t, err)
+}
+
+func TestJsonConstructorsTimestampUseSessionTimeZone(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	loc := time.FixedZone("UTC+8", 8*60*60)
+	proc.GetSessionInfo().TimeZone = loc
+
+	ts, err := types.ParseTimestamp(loc, "2022-01-01 01:02:03.123456", 6)
+	require.NoError(t, err)
+	tsType := types.T_timestamp.ToType()
+	tsType.Scale = 6
+
+	t.Run("json_array", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(tsType, []types.Timestamp{ts}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonArray().jsonArray, nil)
+		require.Equal(t, `["2022-01-01 01:02:03.123456"]`, jsonVectorRowString(t, vec, 0))
+	})
+
+	t.Run("json_object", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"ts"}, []bool{false}),
+				NewFunctionTestInput(tsType, []types.Timestamp{ts}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonObject().jsonObject, nil)
+		require.Equal(t, `{"ts": "2022-01-01 01:02:03.123456"}`, jsonVectorRowString(t, vec, 0))
+	})
+}
+
 func TestJsonValue(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -707,4 +811,14 @@ func mustJsonBinaryString(t *testing.T, raw string) string {
 	data, err := bj.Marshal()
 	require.NoError(t, err)
 	return string(data)
+}
+
+func jsonVectorRowString(t *testing.T, vec *vector.Vector, row uint64) string {
+	t.Helper()
+	data, null := vector.GenerateFunctionStrParameter(vec).GetStrValue(row)
+	require.False(t, null)
+	bj := types.DecodeJson(data)
+	out, err := bj.MarshalJSON()
+	require.NoError(t, err)
+	return string(out)
 }

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -621,7 +622,7 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 		}
 		elems := make([]any, 0, len(params))
 		for i := 0; i < len(params); i++ {
-			elem, err := op.convertToAny(proc.Ctx, params[i], j)
+			elem, err := op.convertToAny(proc, params[i], j)
 			if err != nil {
 				return err
 			}
@@ -643,7 +644,11 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 	return nil
 }
 
-func (op *opBuiltInJsonArray) convertToAny(ctx context.Context, v *vector.Vector, row int) (any, error) {
+func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vector, row int) (any, error) {
+	ctx := context.Background()
+	if proc != nil {
+		ctx = proc.Ctx
+	}
 	fromType := v.GetType()
 	switch fromType.Oid {
 	case types.T_bool:
@@ -725,17 +730,17 @@ func (op *opBuiltInJsonArray) convertToAny(ctx context.Context, v *vector.Vector
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		return newTypedByteJson(bytejson.TpCodeTime, vector.GetFixedAtNoTypeCheck[types.Time](v, row).String()), nil
+		return newTypedByteJson(bytejson.TpCodeTime, vector.GetFixedAtNoTypeCheck[types.Time](v, row).String2(fromType.Scale)), nil
 	case types.T_datetime:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		return newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Datetime](v, row).String()), nil
+		return newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Datetime](v, row).String2(fromType.Scale)), nil
 	case types.T_timestamp:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		return newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Timestamp](v, row).String()), nil
+		return newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Timestamp](v, row).String2(jsonSessionTimeZone(proc), fromType.Scale)), nil
 	case types.T_decimal64:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
@@ -818,6 +823,13 @@ func (op *opBuiltInJsonArray) convertToAny(ctx context.Context, v *vector.Vector
 	}
 }
 
+func jsonSessionTimeZone(proc *process.Process) *time.Location {
+	if proc == nil || proc.GetSessionInfo() == nil || proc.GetSessionInfo().TimeZone == nil {
+		return time.Local
+	}
+	return proc.GetSessionInfo().TimeZone
+}
+
 type opBuiltInJsonObject struct{}
 
 func newOpBuiltInJsonObject() *opBuiltInJsonObject {
@@ -844,7 +856,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 				return moerr.NewInvalidInputf(proc.Ctx, "JSON documents may not contain NULL member names")
 			}
 			// key may be any type, convert to string representation.
-			keyAny, err := arrayOp.convertToAny(proc.Ctx, params[i], j)
+			keyAny, err := arrayOp.convertToAny(proc, params[i], j)
 			if err != nil {
 				return err
 			}
@@ -883,7 +895,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 				key = fmt.Sprint(v)
 			}
 
-			elem, err := arrayOp.convertToAny(proc.Ctx, params[i+1], j)
+			elem, err := arrayOp.convertToAny(proc, params[i+1], j)
 			if err != nil {
 				return err
 			}
@@ -1331,7 +1343,7 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		if err := validateSchemaObject(proc.Ctx, "json_schema_valid", schemaBJ); err != nil {
 			return err
 		}
-		if schemaBJ.HasRef() {
+		if schemaHasRefKeyword(schemaBJ) {
 			return moerr.NewNotSupportedf(proc.Ctx, "json_schema_valid: $ref is not supported")
 		}
 		schemaJSON, _ := schemaBJ.MarshalJSON()
@@ -1409,7 +1421,7 @@ func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionRe
 		if err := validateSchemaObject(proc.Ctx, "json_schema_validation_report", schemaBJ); err != nil {
 			return err
 		}
-		if schemaBJ.HasRef() {
+		if schemaHasRefKeyword(schemaBJ) {
 			return moerr.NewNotSupportedf(proc.Ctx, "json_schema_validation_report: $ref is not supported")
 		}
 		schemaJSON, _ := schemaBJ.MarshalJSON()
@@ -1532,7 +1544,7 @@ func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Var
 	if err := validateSchemaObject(proc.Ctx, fnName, schemaBJ); err != nil {
 		return nil, err
 	}
-	if schemaBJ.HasRef() {
+	if schemaHasRefKeyword(schemaBJ) {
 		return nil, moerr.NewNotSupportedf(proc.Ctx, "%s: $ref is not supported", fnName)
 	}
 	schemaJSON, _ := schemaBJ.MarshalJSON()
@@ -1547,6 +1559,97 @@ func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Var
 		return validationResult.Valid(), nil
 	}
 	return buildSchemaValidationReport(validationResult), nil
+}
+
+func schemaHasRefKeyword(bj bytejson.ByteJson) bool {
+	return schemaHasRefKeywordInSchema(bj)
+}
+
+func schemaHasRefKeywordInSchema(bj bytejson.ByteJson) bool {
+	if bj.Type != bytejson.TpCodeObject {
+		return false
+	}
+	cnt := bj.GetElemCnt()
+	for i := 0; i < cnt; i++ {
+		key := string(bj.GetObjectKey(i))
+		val := bj.GetObjectVal(i)
+		if key == "$ref" {
+			return true
+		}
+		if schemaKeywordContainsNamedSchemas(key) {
+			if schemaHasRefKeywordInNamedSchemas(val) {
+				return true
+			}
+			continue
+		}
+		if schemaKeywordContainsSchema(key) {
+			if schemaHasRefKeywordInSchema(val) {
+				return true
+			}
+			continue
+		}
+		if schemaKeywordContainsSchemaOrSchemaArray(key) {
+			if schemaHasRefKeywordInSchemaOrSchemaArray(val) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func schemaKeywordContainsNamedSchemas(key string) bool {
+	switch key {
+	case "properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies":
+		return true
+	default:
+		return false
+	}
+}
+
+func schemaKeywordContainsSchema(key string) bool {
+	switch key {
+	case "additionalItems", "additionalProperties", "contains", "else", "if", "not", "propertyNames", "then", "unevaluatedItems", "unevaluatedProperties":
+		return true
+	default:
+		return false
+	}
+}
+
+func schemaKeywordContainsSchemaOrSchemaArray(key string) bool {
+	switch key {
+	case "allOf", "anyOf", "items", "oneOf", "prefixItems":
+		return true
+	default:
+		return false
+	}
+}
+
+func schemaHasRefKeywordInNamedSchemas(bj bytejson.ByteJson) bool {
+	if bj.Type != bytejson.TpCodeObject {
+		return false
+	}
+	cnt := bj.GetElemCnt()
+	for i := 0; i < cnt; i++ {
+		if schemaHasRefKeywordInSchema(bj.GetObjectVal(i)) {
+			return true
+		}
+	}
+	return false
+}
+
+func schemaHasRefKeywordInSchemaOrSchemaArray(bj bytejson.ByteJson) bool {
+	switch bj.Type {
+	case bytejson.TpCodeObject:
+		return schemaHasRefKeywordInSchema(bj)
+	case bytejson.TpCodeArray:
+		cnt := bj.GetElemCnt()
+		for i := 0; i < cnt; i++ {
+			if schemaHasRefKeywordInSchema(bj.GetArrayElem(i)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // JSON_VALUE(json_doc, path) → VARCHAR

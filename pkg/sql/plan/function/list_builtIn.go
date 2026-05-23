@@ -28,6 +28,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func jsonConstructorSupportsType(oid types.T) bool {
+	switch oid {
+	case types.T_any,
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_char, types.T_varchar, types.T_text,
+		types.T_json,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_binary, types.T_varbinary, types.T_blob,
+		types.T_year, types.T_bit, types.T_enum, types.T_geometry, types.T_uuid,
+		types.T_array_float32, types.T_array_float64:
+		return true
+	default:
+		return false
+	}
+}
+
 var supportedStringBuiltIns = []FuncNew{
 	// function `ascii`
 	{
@@ -782,6 +802,11 @@ var supportedStringBuiltIns = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		// typechecking: always success (variadic)
 		checkFn: func(_ []overload, inputs []types.Type) checkResult {
+			for _, input := range inputs {
+				if !jsonConstructorSupportsType(input.Oid) {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+			}
 			return newCheckResultWithSuccess(0)
 		},
 
@@ -806,6 +831,11 @@ var supportedStringBuiltIns = []FuncNew{
 		checkFn: func(_ []overload, inputs []types.Type) checkResult {
 			if len(inputs)%2 != 0 {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			for _, input := range inputs {
+				if !jsonConstructorSupportsType(input.Oid) {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
 			}
 			return newCheckResultWithSuccess(0)
 		},
