@@ -277,6 +277,15 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
+	if selectList.IgnoreAllRow() {
+		for i := 0; i < length; i++ {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	// build all paths
 	if err = op.buildPath(parameters, length, selectList); err != nil {
 		return err
@@ -344,6 +353,15 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 	jsonVec := parameters[0]
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
 	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	if selectList.IgnoreAllRow() {
+		for i := 0; i < length; i++ {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 
 	// build all paths
 	if err = op.buildPath(parameters, length, selectList); err != nil {
