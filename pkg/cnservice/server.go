@@ -75,6 +75,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const rssCacheFamilyEvictTimeout = 10 * time.Second
+
+var (
+	evictMemoryCachesToCapacityPercent = fileservice.EvictMemoryCachesToCapacityPercent
+	evictMetaCacheToCapacityPercent    = objectio.EvictCacheToCapacityPercent
+)
+
+func makeRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
+	return func(_ context.Context, targetPercent int64) {
+		// Use independent bounded contexts so one cache family timing out
+		// does not prevent the other family from being pressure-evicted.
+		memoryCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		evictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
+		cancel()
+
+		metaCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		evictMetaCacheToCapacityPercent(metaCtx, targetPercent)
+		cancel()
+	}
+}
+
 func NewService(
 	cfg *Config,
 	ctx context.Context,
@@ -205,17 +226,7 @@ func NewService(
 		90.0/100.0,
 		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
 		rscthrottler.WithRSSScavenging(),
-		rscthrottler.WithRSSCacheEvictor(func(ctx context.Context, targetPercent int64) {
-			// Use independent bounded contexts so one cache family timing out
-			// does not prevent the other family from being pressure-evicted.
-			memoryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			fileservice.EvictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
-			cancel()
-
-			metaCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			objectio.EvictCacheToCapacityPercent(metaCtx, targetPercent)
-			cancel()
-		}),
+		rscthrottler.WithRSSCacheEvictor(makeRSSCacheEvictor(rssCacheFamilyEvictTimeout)),
 	)
 
 	srv.pu.LockService = srv.lockService
