@@ -2666,8 +2666,8 @@ func (tbl *txnTable) PKPersistedBetween(
 				tbl.proc.Load().GetMPool(),
 				pkConflictReadPolicy,
 			)
-			semRelease()
 			if err != nil {
+				semRelease()
 				return true, err
 			}
 
@@ -2678,6 +2678,7 @@ func (tbl *txnTable) PKPersistedBetween(
 
 			sels := searchFunc(cacheVectors)
 			dataRelease()
+			semRelease()
 			if len(sels) > 0 {
 				return true, nil
 			}
@@ -2729,13 +2730,14 @@ func tombstonePKExistsInRange(
 				return false, err
 			}
 			_, dataRelease, err := ioutil.ReadDeletes(ctx, loc, fs, isCNCreated, tombVectors, &pkType, pkConflictReadPolicy)
-			semRelease()
 			if err != nil {
+				semRelease()
 				return true, nil
 			}
 			pkVec := tombVectors[1]
 			hits := searchKeys(&pkVec)
 			dataRelease()
+			semRelease()
 			if len(hits) > 0 {
 				return true, nil
 			}

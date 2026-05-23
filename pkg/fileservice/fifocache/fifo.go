@@ -550,15 +550,20 @@ func (c *Cache[K, V]) evictBatch(capacityCut *int64) (pending []_PendingPostEvic
 			target1 = 0
 		}
 		var (
-			pe _PendingPostEvict[K, V]
-			ok bool
+			used1Before int64
+			pe          _PendingPostEvict[K, V]
+			ok          bool
 		)
 		if c.used1 > target1 {
+			used1Before = c.used1
 			pe, ok = c.evict1()
 		} else {
 			pe, ok = c.evict2()
 		}
 		if !ok {
+			if used1Before > 0 && c.used1 != used1Before {
+				continue
+			}
 			return pending, c.used1 + c.used2, evicted
 		}
 		evicted = true

@@ -206,8 +206,15 @@ func NewService(
 		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
 		rscthrottler.WithRSSScavenging(),
 		rscthrottler.WithRSSCacheEvictor(func(ctx context.Context, targetPercent int64) {
-			fileservice.EvictMemoryCachesToCapacityPercent(ctx, targetPercent)
-			objectio.EvictCacheToCapacityPercent(ctx, targetPercent)
+			// Use independent bounded contexts so one cache family timing out
+			// does not prevent the other family from being pressure-evicted.
+			memoryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			fileservice.EvictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
+			cancel()
+
+			metaCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			objectio.EvictCacheToCapacityPercent(metaCtx, targetPercent)
+			cancel()
 		}),
 	)
 
