@@ -196,6 +196,9 @@ func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int) e
 		}
 		op.simple = true
 		for _, p := range op.paths {
+			if p == nil {
+				continue
+			}
 			op.simple = op.simple && p.IsSimple()
 		}
 		return nil
@@ -532,13 +535,14 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 		return moerr.NewInvalidInput(proc.Ctx, "invalid json function type")
 	}
 
+rowLoop:
 	for i := uint64(0); i < uint64(length); i++ {
 		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
 		if jIsNull {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-			return err
+			continue
 		}
 
 		// build all paths
@@ -549,7 +553,7 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 				if err = rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
-				return err
+				continue rowLoop
 			}
 
 			pathStr := string(pathBytes)

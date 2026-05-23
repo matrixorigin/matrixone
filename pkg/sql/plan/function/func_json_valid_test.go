@@ -678,6 +678,72 @@ func TestJsonExtractFloat64UnsignedInteger(t *testing.T) {
 	require.Equal(t, 123.45, v)
 }
 
+func TestJsonExtractConstNullPath(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("json_extract", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract, nil)
+		require.True(t, vec.IsNull(0))
+	})
+
+	t.Run("json_extract_string", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":"x"}`}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+			},
+			types.T_varchar.ToType(), newOpBuiltInJsonExtract().jsonExtractString, nil)
+		require.True(t, vec.IsNull(0))
+	})
+
+	t.Run("json_extract_float64", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+			},
+			types.T_float64.ToType(), newOpBuiltInJsonExtract().jsonExtractFloat64, nil)
+		require.True(t, vec.IsNull(0))
+	})
+}
+
+func TestJsonModifyContinuesAfterNullRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("null document", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"", `{"a":1}`},
+					[]bool{true, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.a"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"2"}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonSet, nil)
+		require.True(t, vec.IsNull(0))
+		require.Equal(t, `{"a": 2}`, jsonVectorRowString(t, vec, 1))
+	})
+
+	t.Run("null path", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1}`, `{"a":1}`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "$.a"}, []bool{true, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"2"}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonSet, nil)
+		require.True(t, vec.IsNull(0))
+		require.Equal(t, `{"a": 2}`, jsonVectorRowString(t, vec, 1))
+	})
+}
+
 func TestJsonValid(t *testing.T) {
 	testCases := initJsonValidTestCase()
 
