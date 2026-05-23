@@ -36,11 +36,12 @@ import (
 const (
 	refreshMaxInterval     = time.Second * 10
 	rssScavengeInterval    = time.Minute
+	rssCacheEvictTimeout   = time.Second * 10
 	rssScavengeTriggerRate = 0.85
 	rssScavengeVisibleRate = 0.70
-	rssCacheEvictSoftRate  = 0.90
-	rssCacheEvictHardRate  = 0.95
-	rssCacheSoftTarget     = int64(70)
+	rssCacheEvictSoftRate  = 0.85
+	rssCacheEvictHardRate  = 0.92
+	rssCacheSoftTarget     = int64(80)
 	rssCacheHardTarget     = int64(50)
 
 	MemoryThrottlerLogHeader = "MemoryThrottler"
@@ -243,7 +244,9 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 		zap.String("detail", m.String()),
 	)
 	if shouldEvictCache {
-		m.options.rssCacheEvictor(context.Background(), cacheTargetPercent)
+		evictCtx, cancel := context.WithTimeout(context.Background(), rssCacheEvictTimeout)
+		m.options.rssCacheEvictor(evictCtx, cacheTargetPercent)
+		cancel()
 		m.lastRSSScavenge.Store(now)
 	}
 	if shouldFreeOSMemory || shouldEvictCache {
