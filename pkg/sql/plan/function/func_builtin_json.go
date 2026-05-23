@@ -408,12 +408,16 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 					return err
 				}
 			} else {
-				if out.TYPE() == "STRING" {
-					outstr := out.GetString()
+				switch out.Type {
+				case bytejson.TpCodeString, bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob:
+					outstr, err := out.Unquote()
+					if err != nil {
+						return err
+					}
 					if err = rs.AppendBytes([]byte(outstr), false); err != nil {
 						return err
 					}
-				} else {
+				default:
 					// append null
 					if err = rs.AppendBytes(nil, true); err != nil {
 						return err

@@ -734,6 +734,47 @@ func TestJsonExtractConstNullPathAfterNonSimplePath(t *testing.T) {
 	require.True(t, vec.IsNull(0))
 }
 
+func TestJsonExtractStringTypedScalars(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tests := []struct {
+		name string
+		tp   bytejson.TpCode
+		val  string
+	}{
+		{"date", bytejson.TpCodeDate, "2024-01-02"},
+		{"time", bytejson.TpCodeTime, "03:04:05.123"},
+		{"datetime", bytejson.TpCodeDatetime, "2024-01-02 03:04:05"},
+		{"blob", bytejson.TpCodeBlob, "aGVsbG8="},
+	}
+
+	jsonInputs := make([]string, len(tests))
+	paths := make([]string, len(tests))
+	want := make([]string, len(tests))
+	nulls := make([]bool, len(tests))
+	for i, tt := range tests {
+		bj, err := bytejson.CreateByteJSON([]any{newTypedByteJson(tt.tp, tt.val)})
+		require.NoError(t, err, tt.name)
+		data, err := bj.Marshal()
+		require.NoError(t, err, tt.name)
+		jsonInputs[i] = string(data)
+		paths[i] = "$[0]"
+		want[i] = tt.val
+	}
+
+	tc := tcTemp{
+		info: "json_extract_string typed JSON scalars",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), jsonInputs, nulls),
+			NewFunctionTestInput(types.T_varchar.ToType(), paths, nulls),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, want, nulls),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonExtract().jsonExtractString)
+	s, info := fcTC.Run()
+	require.True(t, s, info)
+}
+
 func TestJsonModifyContinuesAfterNullRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
