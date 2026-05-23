@@ -125,12 +125,15 @@ type DedupJoin struct {
 	NumCPU   uint64
 	IsMerger bool
 
-	OnDuplicateAction plan.Node_OnDuplicateAction
-	DedupColName      string
-	DedupColTypes     []plan.Type
-	DelColIdx         int32
-	UpdateColIdxList  []int32
-	UpdateColExprList []*plan.Expr
+	OnDuplicateAction         plan.Node_OnDuplicateAction
+	DedupBuildKeepLast        bool
+	DedupColName              string
+	DedupColTypes             []plan.Type
+	DelColIdx                 int32
+	DedupDeleteMarkerColIdx   int32
+	DedupDeleteKeepColIdxList []int32
+	UpdateColIdxList          []int32
+	UpdateColExprList         []*plan.Expr
 
 	// OldColCapturePlaceholderIdxList / OldColCaptureProbeIdxList are parallel
 	// arrays. For each i, when probe hits a build bucket the probe-side column
