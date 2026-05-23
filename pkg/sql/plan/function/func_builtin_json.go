@@ -1591,6 +1591,10 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			rs.AppendMustNullForBytesResult()
 			continue
 		}
+		if val.Type == bytejson.TpCodeObject || val.Type == bytejson.TpCodeArray {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
 		// Unquote → extract text value (strip JSON string quotes).
 		s, err := val.Unquote()
 		if err != nil {

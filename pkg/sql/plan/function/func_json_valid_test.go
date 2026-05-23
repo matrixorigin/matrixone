@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -348,6 +349,94 @@ func TestJsonSchemaValid(t *testing.T) {
 	})
 }
 
+func TestJsonSchemaMixedOverloads(t *testing.T) {
+	ctx := context.Background()
+	for _, fn := range []string{"json_schema_valid", "json_schema_validation_report"} {
+		for _, args := range [][]types.Type{
+			{types.T_varchar.ToType(), types.T_json.ToType()},
+			{types.T_json.ToType(), types.T_varchar.ToType()},
+		} {
+			res, err := GetFunctionByName(ctx, fn, args)
+			require.NoError(t, err)
+			_, shouldCast := res.ShouldDoImplicitTypeCast()
+			require.False(t, shouldCast)
+		}
+	}
+
+	proc := testutil.NewProcess(t)
+	t.Run("valid varchar schema json document", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid varchar json",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"type":"number"}`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(),
+					[]string{mustJsonBinaryString(t, `42`)},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("valid json schema varchar document", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_valid json varchar",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(),
+					[]string{mustJsonBinaryString(t, `{"type":"object","required":["a"]}`)},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{}`},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("report varchar schema json document", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_validation_report varchar json",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"type":"number"}`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(),
+					[]string{mustJsonBinaryString(t, `42`)},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{`{"valid": true}`}, []bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValidationReport)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("report json schema varchar document", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_schema_validation_report json varchar",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(),
+					[]string{mustJsonBinaryString(t, `{"type":"object","required":["a"]}`)},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1}`},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{`{"valid": true}`}, []bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValidationReport)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
 func TestJsonValue(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -405,6 +494,26 @@ func TestJsonValue(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{""},
 				[]bool{true}), // NULL
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("object and array matches return null", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_value non scalar",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":[1]}`, `{"a":{"b":1}}`, `{"a":true}`},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$.a`, `$.a`, `$.a`},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"", "", "true"},
+				[]bool{true, true, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
 		s, info := fcTC.Run()
@@ -589,4 +698,13 @@ func runJsonFunctionWithSelectList(t *testing.T, proc *process.Process, inputs [
 	require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
 	require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, selectList))
 	return fcTC.result.GetResultVector()
+}
+
+func mustJsonBinaryString(t *testing.T, raw string) string {
+	t.Helper()
+	bj, err := types.ParseStringToByteJson(raw)
+	require.NoError(t, err)
+	data, err := bj.Marshal()
+	require.NoError(t, err)
+	return string(data)
 }

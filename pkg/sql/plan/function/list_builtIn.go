@@ -1062,6 +1062,26 @@ var supportedStringBuiltIns = []FuncNew{
 					return JsonSchemaValid
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varchar, types.T_json},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonSchemaValid
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_json, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonSchemaValid
+				},
+			},
 		},
 	},
 
@@ -1086,6 +1106,26 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_json, types.T_json},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonSchemaValidationReport
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varchar, types.T_json},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonSchemaValidationReport
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_json, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
