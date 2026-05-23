@@ -712,6 +712,28 @@ func TestJsonExtractConstNullPath(t *testing.T) {
 	})
 }
 
+func TestJsonExtractConstNullPathAfterNonSimplePath(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	op := newOpBuiltInJsonExtract()
+
+	errTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`[1,2]`}, []bool{false}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{`$[*]`}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil), op.jsonExtractString)
+	s, info := errTC.Run()
+	require.True(t, s, info)
+
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":"x"}`}, []bool{false}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+		},
+		types.T_varchar.ToType(), op.jsonExtractString, nil)
+	require.True(t, vec.IsNull(0))
+}
+
 func TestJsonModifyContinuesAfterNullRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

@@ -169,14 +169,15 @@ func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int, s
 			// check if the paths are the same
 			match := true
 			for i := 0; i < op.npath; i++ {
-				// if the path is null, we treat it as empty string
 				if params[i+1].IsNull(0) {
-					op.pathStrs[i] = ""
-					op.paths[i] = nil
+					if op.pathStrs[i] != "" || op.paths[i] != nil {
+						match = false
+						break
+					}
 					continue
 				}
 				// check if the path is the same
-				if op.pathStrs[i] != string(params[i+1].UnsafeGetStringAt(0)) {
+				if op.paths[i] == nil || op.pathStrs[i] != string(params[i+1].UnsafeGetStringAt(0)) {
 					match = false
 					break
 				}
