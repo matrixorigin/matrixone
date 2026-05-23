@@ -140,9 +140,15 @@ func computeStringJsonReplace(json []byte, paths []*bytejson.Path, newVal []byte
 	return bj.Modify(paths, newVal, bytejson.JsonModifyReplace)
 }
 
-func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int) error {
+func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int, selectList *FunctionSelectList) error {
 	op.npath = len(params) - 1
 	if op.npath == 0 {
+		return nil
+	}
+	if selectList.IgnoreAllRow() {
+		op.pathStrs = nil
+		op.paths = nil
+		op.simple = true
 		return nil
 	}
 
@@ -203,12 +209,25 @@ func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int) e
 		}
 		return nil
 	} else {
-		op.simple = false
+		op.simple = true
 		for i := 0; i < length; i++ {
 			strs := op.pathStrs[i*op.npath : (i+1)*op.npath]
 			paths := op.paths[i*op.npath : (i+1)*op.npath]
+			if selectList.Contains(uint64(i)) {
+				for j := 0; j < op.npath; j++ {
+					strs[j] = ""
+					paths[j] = nil
+				}
+				continue
+			}
 			if err := op.buildOnePath(pathWrapers, i, strs, paths); err != nil {
 				return err
+			}
+			for _, p := range paths {
+				if p == nil {
+					continue
+				}
+				op.simple = op.simple && p.IsSimple()
 			}
 		}
 	}
@@ -258,7 +277,7 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	// build all paths
-	if err = op.buildPath(parameters, length); err != nil {
+	if err = op.buildPath(parameters, length, selectList); err != nil {
 		return err
 	}
 
@@ -277,6 +296,12 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
 		if jIsNull {
 			if err = rs.AppendBytes(nil, true); err != nil {
@@ -320,11 +345,11 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	// build all paths
-	if err = op.buildPath(parameters, length); err != nil {
+	if err = op.buildPath(parameters, length, selectList); err != nil {
 		return err
 	}
 
-	if !op.simple || (op.simple && len(op.paths) > 1) {
+	if !op.simple || op.npath > 1 {
 		return moerr.NewInvalidInput(proc.Ctx, "json_extract_string should use a path that retrives a single value")
 	}
 	if jsonVec.GetType().Oid == types.T_json {
@@ -334,6 +359,12 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
 		if jIsNull {
 			if err = rs.AppendBytes(nil, true); err != nil {
@@ -385,10 +416,10 @@ func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, 
 	rs := vector.MustFunctionResult[float64](result)
 
 	// build all paths
-	if err = op.buildPath(parameters, length); err != nil {
+	if err = op.buildPath(parameters, length, selectList); err != nil {
 		return err
 	}
-	if !op.simple || (op.simple && len(op.paths) > 1) {
+	if !op.simple || op.npath > 1 {
 		return moerr.NewInvalidInput(proc.Ctx, "json_extract_float64 should use a path that retrives a single value")
 	}
 
@@ -399,6 +430,12 @@ func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, 
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
 		if jIsNull {
 			if err = rs.Append(0, true); err != nil {
@@ -537,6 +574,12 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 
 rowLoop:
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
 		if jIsNull {
 			if err = rs.AppendBytes(nil, true); err != nil {
