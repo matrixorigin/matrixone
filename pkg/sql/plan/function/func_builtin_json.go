@@ -534,19 +534,35 @@ func newOpBuiltInJsonSet() *opBuiltInJsonSet {
 
 // JSON_SET
 func jsonSetCheckFn(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) > 2 {
-		ts := make([]types.Type, 0, len(inputs))
+	if len(inputs) >= 3 && len(inputs)%2 == 1 {
+		ts := make([]types.Type, len(inputs))
 		allMatch := true
-		for _, input := range inputs {
-			if input.Oid == types.T_json || input.Oid.IsMySQLString() {
-				ts = append(ts, input)
-			} else {
-				if canCast, _ := fixedImplicitTypeCast(input, types.T_varchar); canCast {
-					ts = append(ts, types.T_varchar.ToType())
+		for i, input := range inputs {
+			switch {
+			case i == 0:
+				if input.Oid == types.T_json || input.Oid.IsMySQLString() {
+					ts[i] = input
+				} else if canCast, _ := fixedImplicitTypeCast(input, types.T_varchar); canCast {
+					ts[i] = types.T_varchar.ToType()
 					allMatch = false
 				} else {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
+			case i%2 == 1:
+				if input.Oid == types.T_json {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				} else if input.Oid.IsMySQLString() {
+					ts[i] = input
+				} else if canCast, _ := fixedImplicitTypeCast(input, types.T_varchar); canCast {
+					ts[i] = types.T_varchar.ToType()
+					allMatch = false
+				} else {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+			case jsonConstructorSupportsType(input.Oid):
+				ts[i] = input
+			default:
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 		}
 		if allMatch {
@@ -580,6 +596,15 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 	jsonVec := parameters[0]
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
 	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	if selectList.IgnoreAllRow() {
+		for i := 0; i < length; i++ {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 
 	switch jsonFuncType {
 	case bytejson.JsonModifySet:
@@ -643,31 +668,9 @@ rowLoop:
 		// build all values
 		valExprs := make([]bytejson.ByteJson, 0, (len(parameters)-1)/2+1)
 		for j := 2; j < len(parameters); j += 2 {
-			valBytes, vIsNull := vector.GenerateFunctionStrParameter(parameters[j]).GetStrValue(uint64(i))
-			if vIsNull {
-				var expr bytejson.ByteJson
-				expr, err = bytejson.CreateByteJSON(nil)
-				if err != nil {
-					return err
-				}
-				valExprs = append(valExprs, expr)
-				continue
-			}
-			valString := string(valBytes)
-
-			_, parserErr := strconv.ParseInt(valString, 10, 64)
-			var val bytejson.ByteJson
-			if len(valString) > 0 && (valString[0] == '{' || valString[0] == '[' || parserErr == nil) {
-				val, err = types.ParseStringToByteJson(valString)
-				if err != nil {
-					return err
-				}
-
-			} else {
-				val, err = bytejson.CreateByteJSON(valString)
-				if err != nil {
-					return err
-				}
+			val, err := op.buildJsonModifyValue(proc, parameters[j], int(i))
+			if err != nil {
+				return err
 			}
 			valExprs = append(valExprs, val)
 		}
@@ -687,6 +690,14 @@ rowLoop:
 		}
 	}
 	return nil
+}
+
+func (op *opBuiltInJsonSet) buildJsonModifyValue(proc *process.Process, v *vector.Vector, row int) (bytejson.ByteJson, error) {
+	elem, err := (&opBuiltInJsonArray{}).convertToAny(proc, v, row)
+	if err != nil {
+		return bytejson.Null, err
+	}
+	return bytejson.CreateByteJSON(elem)
 }
 
 type opBuiltInJsonArray struct{}

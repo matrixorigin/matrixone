@@ -803,7 +803,7 @@ func TestJsonModifyContinuesAfterNullRows(t *testing.T) {
 					[]string{"", `{"a":1}`},
 					[]bool{true, false}),
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.a"}, []bool{false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"2"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
 			},
 			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonSet, nil)
 		require.True(t, vec.IsNull(0))
@@ -817,12 +817,130 @@ func TestJsonModifyContinuesAfterNullRows(t *testing.T) {
 					[]string{`{"a":1}`, `{"a":1}`},
 					[]bool{false, false}),
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "$.a"}, []bool{true, false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"2"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
 			},
 			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonSet, nil)
 		require.True(t, vec.IsNull(0))
 		require.Equal(t, `{"a": 2}`, jsonVectorRowString(t, vec, 1))
 	})
+}
+
+func TestJsonSetCheckFn(t *testing.T) {
+	ctx := context.Background()
+	_, err := GetFunctionByName(ctx, "json_set", []types.Type{
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+		types.T_json.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_set", []types.Type{
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.Error(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_set", []types.Type{
+		types.T_json.ToType(),
+		types.T_json.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.Error(t, err)
+}
+
+func TestJsonSetValueTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("json value is embedded", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":0}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.a"}, []bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(), []string{mustJsonBinaryString(t, `{"b":[true,2]}`)}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonSet, nil)
+		require.Equal(t, `{"a": {"b": [true, 2]}}`, jsonVectorRowString(t, vec, 0))
+	})
+
+	t.Run("json-looking varchar remains string", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":0}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.a"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"b":1}`}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonSet, nil)
+		require.Equal(t, `{"a": "{\"b\":1}"}`, jsonVectorRowString(t, vec, 0))
+	})
+
+	t.Run("typed scalar values", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":0}`, `{"a":0}`, `{"a":0}`},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"$.a", "$.a", "$.a"},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, true},
+					[]bool{false, false, true}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonSet, nil)
+		require.Equal(t, `{"a": true}`, jsonVectorRowString(t, vec, 0))
+		require.Equal(t, `{"a": false}`, jsonVectorRowString(t, vec, 1))
+		require.Equal(t, `{"a": null}`, jsonVectorRowString(t, vec, 2))
+	})
+
+	t.Run("typed numeric values", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":0}`, `{"a":0}`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"$.a", "$.a"},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_uint64.ToType(),
+					[]uint64{^uint64(0), 1},
+					[]bool{false, false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonSet, nil)
+		require.Equal(t, `{"a": 18446744073709551615}`, jsonVectorRowString(t, vec, 0))
+		require.Equal(t, `{"a": 1}`, jsonVectorRowString(t, vec, 1))
+
+		vec = runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":0}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.a"}, []bool{false}),
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{1.5}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonSet, nil)
+		require.Equal(t, `{"a": 1.5}`, jsonVectorRowString(t, vec, 0))
+	})
+}
+
+func TestJsonSetIgnoreAllRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	selectList := &FunctionSelectList{AllNull: true}
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`not json`, `still not json`},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`bad path`, `also bad path`},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`bad value`, `also bad value`},
+				[]bool{false, false}),
+		},
+		types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonSet, selectList)
+
+	require.True(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
 }
 
 func TestJsonValid(t *testing.T) {
@@ -971,7 +1089,7 @@ func TestJsonFunctionsRespectSelectList(t *testing.T) {
 				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{`bad path`, `$.a`},
 					[]bool{false, false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"2"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
 			},
 			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonSet, selectList)
 
