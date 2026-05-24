@@ -1076,6 +1076,21 @@ func TestJsonInsertIgnoreAllRows(t *testing.T) {
 	require.True(t, vec.IsNull(1))
 }
 
+func TestJsonTypeIgnoreAllRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	selectList := &FunctionSelectList{AllNull: true}
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`not json`, `still not json`},
+				[]bool{false, false}),
+		},
+		types.T_varchar.ToType(), newOpBuiltInJsonType().jsonType, selectList)
+
+	require.True(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
+}
+
 func TestJsonValid(t *testing.T) {
 	testCases := initJsonValidTestCase()
 
@@ -1159,6 +1174,21 @@ func TestJsonFunctionsRespectSelectList(t *testing.T) {
 		v, null := vector.GenerateFunctionStrParameter(vec).GetStrValue(1)
 		require.False(t, null)
 		require.Equal(t, "1", string(v))
+	})
+
+	t.Run("json_type", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `{"a":1}`},
+					[]bool{false, false}),
+			},
+			types.T_varchar.ToType(), newOpBuiltInJsonType().jsonType, selectList)
+
+		require.True(t, vec.IsNull(0))
+		v, null := vector.GenerateFunctionStrParameter(vec).GetStrValue(1)
+		require.False(t, null)
+		require.Equal(t, "OBJECT", string(v))
 	})
 
 	t.Run("json_extract", func(t *testing.T) {

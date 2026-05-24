@@ -1043,10 +1043,21 @@ func (op *opBuiltInJsonType) jsonType(params []*vector.Vector, result vector.Fun
 	isBinary := jsonVec.GetType().Oid == types.T_json
 	p := vector.GenerateFunctionStrParameter(jsonVec)
 
+	if selectList.IgnoreAllRow() {
+		for j := 0; j < length; j++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	for j := uint64(0); j < uint64(length); j++ {
 		val, null := p.GetStrValue(j)
 		if null || selectList.Contains(j) {
-			rs.AppendBytes(nil, true)
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
 			continue
 		}
 		var bj bytejson.ByteJson
@@ -1067,7 +1078,9 @@ func (op *opBuiltInJsonType) jsonType(params []*vector.Vector, result vector.Fun
 				tn = "BOOLEAN"
 			}
 		}
-		rs.AppendBytes([]byte(tn), false)
+		if err := rs.AppendBytes([]byte(tn), false); err != nil {
+			return err
+		}
 	}
 	return nil
 }
