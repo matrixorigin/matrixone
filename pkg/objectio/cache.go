@@ -188,18 +188,10 @@ func metaCachePressureTarget(capacity int64) (int64, bool) {
 	return capacity * percent / 100, true
 }
 
-func shouldSkipMetaCacheAdmission(size int64) bool {
-	target, ok := metaCachePressureTarget(metaCache.Capacity())
-	if !ok {
-		return false
-	}
-	return metaCache.Used()+size > target
-}
-
 func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, []byte] {
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge("", "meta")
 	capacityBytes.Set(float64(capacity()))
-	return fifocache.New[mataCacheKey, []byte](
+	ret := fifocache.New[mataCacheKey, []byte](
 		capacity,
 		shardMetaCacheKey,
 		func(_ context.Context, _ mataCacheKey, _ []byte, size int64, _ uint64) { // postSet
@@ -211,6 +203,8 @@ func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, 
 			inuseBytes.Add(float64(-size))
 			capacityBytes.Set(float64(capacity()))
 		})
+	ret.SetAdmissionTarget(metaCachePressureTarget)
+	return ret
 }
 
 func EvictCache(ctx context.Context) (target int64) {
@@ -370,7 +364,7 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 	}()
 
 	call.val, call.err = load()
-	if call.err == nil && !shouldSkipMetaCacheAdmission(int64(len(call.val))) {
+	if call.err == nil {
 		metaCache.Set(ctx, key, call.val, int64(len(call.val)))
 	}
 	return call.val, call.err

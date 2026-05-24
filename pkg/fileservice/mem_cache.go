@@ -207,6 +207,7 @@ func NewMemCache(
 	}
 
 	dataCache = fifocache.NewDataCacheWithPrepareSet(capacityFunc, prepareSetFn, postSetFn, postGetFn, postEvictFn)
+	dataCache.SetAdmissionTarget(memoryCachePressureTarget)
 
 	ret.cache = dataCache
 
@@ -298,27 +299,11 @@ func (m *MemCache) Update(
 			Sz:     entry.Size,
 		}
 
-		size := entry.Size
-		if size <= 0 {
-			size = int64(len(entry.CachedData.Bytes()))
-		}
-		if m.shouldSkipPressureAdmission(size) {
-			continue
-		}
-
 		LogEvent(ctx, str_set_memory_cache_entry_begin)
 		m.cache.Set(ctx, key, entry.CachedData)
 		LogEvent(ctx, str_set_memory_cache_entry_end)
 	}
 	return nil
-}
-
-func (m *MemCache) shouldSkipPressureAdmission(size int64) bool {
-	target, ok := memoryCachePressureTarget(m.cache.Capacity())
-	if !ok {
-		return false
-	}
-	return m.cache.Used()+size > target
 }
 
 func (m *MemCache) Flush(ctx context.Context) {
