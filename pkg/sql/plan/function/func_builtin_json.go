@@ -661,6 +661,9 @@ rowLoop:
 			if err != nil {
 				return err
 			}
+			if !p.IsSimple() {
+				return moerr.NewInvalidArg(proc.Ctx, jsonModifyFunctionName(jsonFuncType), "invalid path expression")
+			}
 
 			pathExprs = append(pathExprs, &p)
 		}
@@ -690,6 +693,19 @@ rowLoop:
 		}
 	}
 	return nil
+}
+
+func jsonModifyFunctionName(jsonFuncType bytejson.JsonModifyType) string {
+	switch jsonFuncType {
+	case bytejson.JsonModifySet:
+		return "json_set"
+	case bytejson.JsonModifyInsert:
+		return "json_insert"
+	case bytejson.JsonModifyReplace:
+		return "json_replace"
+	default:
+		return "json_modify"
+	}
 }
 
 func (op *opBuiltInJsonSet) buildJsonModifyValue(proc *process.Process, v *vector.Vector, row int) (bytejson.ByteJson, error) {

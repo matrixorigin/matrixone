@@ -943,6 +943,139 @@ func TestJsonSetIgnoreAllRows(t *testing.T) {
 	require.True(t, vec.IsNull(1))
 }
 
+func TestJsonInsertCheckFn(t *testing.T) {
+	ctx := context.Background()
+	_, err := GetFunctionByName(ctx, "json_insert", []types.Type{
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+		types.T_json.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_insert", []types.Type{
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.Error(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_insert", []types.Type{
+		types.T_json.ToType(),
+		types.T_json.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.Error(t, err)
+}
+
+func TestJsonInsertValueTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("json value is embedded", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":0}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.b"}, []bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(), []string{mustJsonBinaryString(t, `{"c":[true,2]}`)}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonInsert, nil)
+		require.Equal(t, `{"a": 0, "b": {"c": [true, 2]}}`, jsonVectorRowString(t, vec, 0))
+	})
+
+	t.Run("json-looking varchar remains string", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":0}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.b"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"c":1}`}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonInsert, nil)
+		require.Equal(t, `{"a": 0, "b": "{\"c\":1}"}`, jsonVectorRowString(t, vec, 0))
+	})
+
+	t.Run("typed scalar values", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":0}`, `{"a":0}`, `{"a":0}`},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"$.b", "$.b", "$.b"},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, true},
+					[]bool{false, false, true}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonInsert, nil)
+		require.Equal(t, `{"a": 0, "b": true}`, jsonVectorRowString(t, vec, 0))
+		require.Equal(t, `{"a": 0, "b": false}`, jsonVectorRowString(t, vec, 1))
+		require.Equal(t, `{"a": 0, "b": null}`, jsonVectorRowString(t, vec, 2))
+	})
+}
+
+func TestJsonInsertExistingJsonNullNoop(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("object field", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":null}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.a"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonInsert, nil)
+		require.Equal(t, `{"a": null}`, jsonVectorRowString(t, vec, 0))
+	})
+
+	t.Run("array element", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`[null]`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"$[0]"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonInsert, nil)
+		require.Equal(t, `[null]`, jsonVectorRowString(t, vec, 0))
+	})
+}
+
+func TestJsonInsertRejectsNonSimplePath(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := tcTemp{
+		info: "json_insert rejects wildcard path",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.*"}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonSet().buildJsonInsert)
+	s, info := fcTC.Run()
+	require.True(t, s, info)
+}
+
+func TestJsonInsertIgnoreAllRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	selectList := &FunctionSelectList{AllNull: true}
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`not json`, `still not json`},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`bad path`, `also bad path`},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`bad value`, `also bad value`},
+				[]bool{false, false}),
+		},
+		types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonInsert, selectList)
+
+	require.True(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
+}
+
 func TestJsonValid(t *testing.T) {
 	testCases := initJsonValidTestCase()
 

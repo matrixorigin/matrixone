@@ -302,6 +302,14 @@ func (bj ByteJson) getValEntry(off int) ByteJson {
 }
 
 func (bj ByteJson) queryValByKey(key []byte) ByteJson {
+	val, ok := bj.queryValByKeyExists(key)
+	if !ok {
+		return Null
+	}
+	return val
+}
+
+func (bj ByteJson) queryValByKeyExists(key []byte) (ByteJson, bool) {
 	cnt := bj.GetElemCnt()
 	var idx int
 	if cnt < binarySearchCutoff {
@@ -320,9 +328,9 @@ func (bj ByteJson) queryValByKey(key []byte) ByteJson {
 	}
 
 	if idx >= cnt || !bytes.Equal(bj.getObjectKey(idx), key) {
-		return Null
+		return Null, false
 	}
-	return bj.getObjectVal(idx)
+	return bj.getObjectVal(idx), true
 }
 
 func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
@@ -431,6 +439,14 @@ func (bj ByteJson) Query(paths []*Path) ByteJson {
 }
 
 func (bj ByteJson) querySimple(path *Path) ByteJson {
+	val, ok := bj.querySimpleExist(path)
+	if !ok {
+		return Null
+	}
+	return val
+}
+
+func (bj ByteJson) querySimpleExist(path *Path) (ByteJson, bool) {
 	cur := bj
 	// don't go through th step(), recursive call route.  We know
 	// we have a simple path, each step will bring us to ONE SINGLE next value.
@@ -441,21 +457,25 @@ func (bj ByteJson) querySimple(path *Path) ByteJson {
 			case subPathIdx:
 				start, _, _ := sub.idx.genIndex(1)
 				if start != 0 {
-					return Null
+					return Null, false
 				}
 				// obj[0] is itself, continue
 			case subPathKey:
 				if sub.key == "*" {
 					panic("bytejson simple path should not contain *")
 				} else {
-					cur = cur.queryValByKey(util.UnsafeStringToBytes(sub.key))
+					var ok bool
+					cur, ok = cur.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
+					if !ok {
+						return Null, false
+					}
 				}
 			default:
-				return Null
+				return Null, false
 			}
 		} else if cur.Type == TpCodeArray {
 			if sub.tp != subPathIdx {
-				return Null
+				return Null, false
 			}
 			cnt := cur.GetElemCnt()
 			idx, _, _ := sub.idx.genIndex(cnt)
@@ -464,15 +484,15 @@ func (bj ByteJson) querySimple(path *Path) ByteJson {
 			// if (last && idx < 0) || cnt <= idx {
 			if idx < 0 || cnt <= idx {
 				// out of range
-				return Null
+				return Null, false
 			} else {
 				cur = cur.getArrayElem(idx)
 			}
 		} else {
-			return Null
+			return Null, false
 		}
 	}
-	return cur
+	return cur, true
 }
 
 func (bj ByteJson) QuerySimple(paths []*Path) ByteJson {
@@ -511,6 +531,12 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 
 	if len(pathList) == 0 {
 		return bj, nil
+	}
+
+	for _, path := range pathList {
+		if path == nil || !path.IsSimple() {
+			return Null, moerr.NewInvalidInputNoCtx("path expression is not simple")
+		}
 	}
 
 	for i := 0; i < len(pathList); i++ {
