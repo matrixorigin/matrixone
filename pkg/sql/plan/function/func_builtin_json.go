@@ -438,6 +438,15 @@ func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, 
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
 	rs := vector.MustFunctionResult[float64](result)
 
+	if selectList.IgnoreAllRow() {
+		for i := 0; i < length; i++ {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	// build all paths
 	if err = op.buildPath(parameters, length, selectList); err != nil {
 		return err

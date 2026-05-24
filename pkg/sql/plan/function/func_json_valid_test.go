@@ -678,6 +678,24 @@ func TestJsonExtractFloat64UnsignedInteger(t *testing.T) {
 	require.Equal(t, 123.45, v)
 }
 
+func TestJsonExtractFloat64IgnoreAllRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	selectList := &FunctionSelectList{AllNull: true}
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`not json`, `still not json`},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`bad path`, `also bad path`},
+				[]bool{false, false}),
+		},
+		types.T_float64.ToType(), newOpBuiltInJsonExtract().jsonExtractFloat64, selectList)
+
+	require.True(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
+}
+
 func TestJsonExtractConstNullPath(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
