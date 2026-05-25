@@ -75,7 +75,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const rssCacheFamilyEvictTimeout = 10 * time.Second
+const (
+	rssCacheFamilyEvictTimeout   = 10 * time.Second
+	rssCacheAdmissionPressureTTL = 2 * time.Minute
+)
 
 var (
 	evictMemoryCachesToCapacityPercent = fileservice.EvictMemoryCachesToCapacityPercent
@@ -83,16 +86,31 @@ var (
 )
 
 func makeRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
-	return func(_ context.Context, targetPercent int64) {
+	return func(ctx context.Context, targetPercent int64) {
+		// Keep admission throttled after eviction; otherwise high-concurrency
+		// reads can refill SHARED/meta caches before the next RSS sample.
+		pressureUntil := time.Now().Add(rssCacheAdmissionPressureTTL)
+		fileservice.SetMemoryCachePressureTargetPercent(targetPercent, pressureUntil)
+		objectio.SetMetaCachePressureTargetPercent(targetPercent, pressureUntil)
+
 		// Use independent bounded contexts so one cache family timing out
 		// does not prevent the other family from being pressure-evicted.
-		memoryCtx, cancel := context.WithTimeout(context.Background(), timeout)
-		evictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
-		cancel()
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			memoryCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			evictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
+		}()
 
-		metaCtx, cancel := context.WithTimeout(context.Background(), timeout)
-		evictMetaCacheToCapacityPercent(metaCtx, targetPercent)
-		cancel()
+		go func() {
+			defer wg.Done()
+			metaCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			evictMetaCacheToCapacityPercent(metaCtx, targetPercent)
+		}()
+		wg.Wait()
 	}
 }
 
