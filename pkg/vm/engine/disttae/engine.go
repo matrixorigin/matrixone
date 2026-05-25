@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -58,6 +59,38 @@ import (
 )
 
 var _ engine.Engine = new(Engine)
+
+const (
+	workspaceRSSCacheFamilyEvictTimeout   = 10 * time.Second
+	workspaceRSSCacheAdmissionPressureTTL = 2 * time.Minute
+)
+
+func makeWorkspaceRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
+	return func(ctx context.Context, targetPercent int64) {
+		// Workspace traffic is often the first path to observe hard RSS
+		// pressure, so apply the same sticky cache target used by CNFlushS3.
+		pressureUntil := time.Now().Add(workspaceRSSCacheAdmissionPressureTTL)
+		fileservice.SetMemoryCachePressureTargetPercent(targetPercent, pressureUntil)
+		objectio.SetMetaCachePressureTargetPercent(targetPercent, pressureUntil)
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			memoryCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			fileservice.EvictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
+		}()
+
+		go func() {
+			defer wg.Done()
+			metaCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			objectio.EvictCacheToCapacityPercent(metaCtx, targetPercent)
+		}()
+		wg.Wait()
+	}
+}
 
 func New(
 	ctx context.Context,
@@ -141,18 +174,23 @@ func New(
 	}
 
 	if e.config.memThrottler == nil {
+		throttlerOptions := []rscthrottler.MemThrottlerOption{
+			rscthrottler.WithRSSScavenging(),
+			rscthrottler.WithRSSCacheEvictor(
+				makeWorkspaceRSSCacheEvictor(workspaceRSSCacheFamilyEvictTimeout),
+			),
+		}
 		if e.config.quota.Load() != 0 {
-			e.config.memThrottler = rscthrottler.NewMemThrottler(
-				"Workspace",
-				5.0/100.0,
+			throttlerOptions = append(
+				throttlerOptions,
 				rscthrottler.WithConstLimit(int64(e.config.quota.Load())),
 			)
-		} else {
-			e.config.memThrottler = rscthrottler.NewMemThrottler(
-				"Workspace",
-				5.0/100.0,
-			)
 		}
+		e.config.memThrottler = rscthrottler.NewMemThrottler(
+			"Workspace",
+			5.0/100.0,
+			throttlerOptions...,
+		)
 
 		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(e.config.memThrottler.Available()))
 	}

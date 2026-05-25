@@ -267,7 +267,17 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 
 	keyPart := idxDef.Parts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
-	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	var vecLitArg *plan.Expr
+	var found bool
+	if vecCtx.vecArgExpr != nil {
+		_, vecLitArg, found = builder.getArgsFromDistFnForJoin(
+			vecCtx.distFnExpr,
+			partPos,
+			vecCtx.scanNode.BindingTags[0],
+		)
+	} else {
+		_, vecLitArg, found = builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	}
 	if !found {
 		return nil, nil
 	}
@@ -357,6 +367,9 @@ func (builder *QueryBuilder) getDistRangeFromFilters(filters []*plan.Expr, ivfCt
 			goto NO_RANGE
 		}
 
+		if fdist.Args[1].GetLit() == nil || ivfCtx.vecLitArg.GetLit() == nil {
+			goto NO_RANGE
+		}
 		vecLit = fdist.Args[1].GetLit().GetVecVal()
 		if vecLit == "" || vecLit != ivfCtx.vecLitArg.GetLit().GetVecVal() {
 			goto NO_RANGE
@@ -474,6 +487,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			Cols: DeepCopyColDefList(kIVFSearchColDefs),
 		},
 		BindingTags: []int32{tableFuncTag},
+		Children:    vectorSearchProviderChildren(vecCtx),
 		TblFuncExprList: []*plan.Expr{
 			{
 				Typ: plan.Type{
