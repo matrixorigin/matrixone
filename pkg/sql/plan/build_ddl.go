@@ -919,11 +919,16 @@ func buildCreateTable(
 	if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
-			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id":
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns":
 			default:
 				return nil, moerr.NewBadConfigf(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
 			}
 		}
+
+		if err := validateAndSetHivePartitionOptions(ctx.GetContext(), stmt, createTable); err != nil {
+			return nil, err
+		}
+
 		if err := InitNullMap(stmt.Param, ctx); err != nil {
 			return nil, err
 		}
@@ -1036,6 +1041,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
 	dedupFkName := make(UnorderedSet[string])
+
+	if stmt.Param != nil {
+		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
+			return err
+		}
+	}
 
 	// Pre-scan all column definitions so that generated columns can reference
 	// base columns defined later in the CREATE TABLE statement (forward reference).
@@ -1770,7 +1781,7 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		if indexInfo.IndexOption != nil && indexInfo.IndexOption.ParserName != "" {
 			// set parser ngram
 			parsername = strings.ToLower(indexInfo.IndexOption.ParserName)
-			if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" {
+			if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" && parsername != "gojieba" {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("Fulltext parser %s not supported", parsername))
 			}
 		}
@@ -3495,6 +3506,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
 	}
+	if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	}
 	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create index in subscription database")
 	}
@@ -3594,6 +3608,30 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			},
 		},
 	}, nil
+}
+
+func checkCreateIndexTableType(ctx context.Context, tableDef *TableDef) error {
+	if tableDef.TableType == catalog.SystemExternalRel {
+		return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+	}
+	return nil
+}
+
+func rejectExternalTableInlineIndexes(ctx context.Context, stmt *tree.CreateTable) error {
+	for _, item := range stmt.Defs {
+		switch def := item.(type) {
+		case *tree.ColumnTableDef:
+			for _, attr := range def.Attributes {
+				switch attr.(type) {
+				case *tree.AttributePrimaryKey, *tree.AttributeKey, *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+				}
+			}
+		case *tree.PrimaryKeyIndex, *tree.Index, *tree.UniqueIndex, *tree.FullTextIndex:
+			return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+		}
+	}
+	return nil
 }
 
 func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
@@ -3720,16 +3758,34 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 
 func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error) {
 
+	type renamedInfo struct {
+		objRef   *ObjectRef
+		tableDef *TableDef
+	}
 	alterTables := stmt.AlterTables
 	renameTables := make([]*plan.AlterTable, 0)
+	removed := make(map[string]bool)
+	nameMapping := make(map[string]*renamedInfo)
 	for _, alterTable := range alterTables {
 		schemaName, tableName := string(alterTable.Table.Schema()), string(alterTable.Table.Name())
 		if schemaName == "" {
 			schemaName = ctx.DefaultDatabase()
 		}
-		objRef, tableDef, err := ctx.Resolve(schemaName, tableName, nil)
-		if err != nil {
-			return nil, err
+		srcKey := schemaName + "." + tableName
+		var objRef *ObjectRef
+		var tableDef *TableDef
+		var err error
+		if info, ok := nameMapping[srcKey]; ok {
+			objRef = info.objRef
+			tableDef = DeepCopyTableDef(info.tableDef, true)
+			tableDef.Name = tableName
+		} else if removed[srcKey] {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
+		} else {
+			objRef, tableDef, err = ctx.Resolve(schemaName, tableName, nil)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
@@ -3766,15 +3822,21 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		for i, option := range alterTable.Options {
 			switch opt := option.(type) {
 			case *tree.AlterOptionTableName:
-				oldName := tableDef.Name
+				oldName := tableName
 				newName := string(opt.Name.ToTableName().ObjectName)
+				dstKey := schemaName + "." + newName
 				if oldName != newName {
-					_, tableDef, err := ctx.Resolve(schemaName, newName, nil)
-					if err != nil {
-						return nil, err
-					}
-					if tableDef != nil {
+					if _, ok := nameMapping[dstKey]; ok {
 						return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
+					}
+					if !removed[dstKey] {
+						_, existDef, err := ctx.Resolve(schemaName, newName, nil)
+						if err != nil {
+							return nil, err
+						}
+						if existDef != nil {
+							return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
+						}
 					}
 				}
 				alterTablePlan.Actions[i] = &plan.AlterTable_Action{
@@ -3786,9 +3848,12 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 					},
 				}
 				updateSqls = append(updateSqls, getSqlForRenameTable(schemaName, oldName, newName)...)
+				delete(nameMapping, srcKey)
+				removed[srcKey] = true
+				nameMapping[dstKey] = &renamedInfo{objRef: objRef, tableDef: tableDef}
+				delete(removed, dstKey)
 
 			default:
-				// return err
 				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 			}
 			alterTablePlan.UpdateFkSqls = updateSqls
@@ -4005,6 +4070,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 				updateSqls = append(updateSqls, fkData.UpdateSql)
 			case *tree.UniqueIndex:
+				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+					return nil, err
+				}
 				if err := checkIndexKeypartSupportability(
 					ctx.GetContext(),
 					def.KeyParts,
@@ -4057,6 +4125,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				}
 			case *tree.FullTextIndex:
+				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+					return nil, err
+				}
 				if err := checkIndexKeypartSupportability(
 					ctx.GetContext(),
 					def.KeyParts,
@@ -4111,6 +4182,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				}
 			case *tree.Index:
+				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+					return nil, err
+				}
 				if err := checkIndexKeypartSupportability(
 					ctx.GetContext(),
 					def.KeyParts,
@@ -5165,4 +5239,175 @@ func constructAddedPartitionDefs(
 	default:
 		return nil, moerr.NewNotSupportedNoCtx("unsupported partition method in ADD PARTITION")
 	}
+}
+
+// validateAndSetHivePartitionOptions parses and validates hive_partitioning options from the DDL,
+// normalizes partition column names, extracts column types, and strips hive keys from Option[].
+func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTable, createTable *plan.CreateTable) error {
+	raw := stmt.Param.Option
+
+	if err := rejectDuplicateKeys(ctx, raw, []string{"hive_partitioning", "hive_partition_columns"}); err != nil {
+		return err
+	}
+
+	hiveEnabled, hiveCols, err := parseHiveOptionsFromRawOptions(ctx, raw)
+	if err != nil {
+		return err
+	}
+	if !hiveEnabled {
+		return nil
+	}
+
+	if len(hiveCols) == 0 {
+		return moerr.NewBadConfig(ctx, "hive_partition_columns is required when hive_partitioning is enabled")
+	}
+
+	if err := rejectDuplicateKeys(ctx, raw, []string{"format", "filepath"}); err != nil {
+		return err
+	}
+
+	rawFormat := strings.ToLower(getRawOption(raw, "format"))
+	if rawFormat != "parquet" {
+		return moerr.NewBadConfigf(ctx, "hive_partitioning currently only supports format='parquet', got '%s'", rawFormat)
+	}
+
+	rawFilepath := getRawOption(raw, "filepath")
+	if len(stmt.Param.StageName) != 0 || strings.HasPrefix(rawFilepath, "stage://") {
+		return moerr.NewBadConfig(ctx, "hive_partitioning does not support stage external tables")
+	}
+
+	normalized := make([]string, 0, len(hiveCols))
+	colTypes := make([]tree.HivePartColType, 0, len(hiveCols))
+	seen := make(map[string]bool)
+	for _, pc := range hiveCols {
+		col := findColInTableDefCaseInsensitive(createTable.TableDef.Cols, pc)
+		if col == nil {
+			return moerr.NewBadConfigf(ctx, "partition column '%s' not found in table columns", pc)
+		}
+		if col.Hidden {
+			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a hidden column", pc)
+		}
+		if col.GeneratedCol != nil {
+			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a generated column", pc)
+		}
+		typId := types.T(col.Typ.Id)
+		if typId == types.T_array_float32 || typId == types.T_array_float64 {
+			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a VECTOR type", pc)
+		}
+		canonical := strings.ToLower(col.Name)
+		if seen[canonical] {
+			return moerr.NewBadConfigf(ctx, "duplicate partition column '%s'", pc)
+		}
+		seen[canonical] = true
+		normalized = append(normalized, canonical)
+
+		nullable := true
+		if col.Default != nil {
+			nullable = col.Default.NullAbility
+		}
+		colTypes = append(colTypes, tree.HivePartColType{
+			Id:          col.Typ.Id,
+			Width:       col.Typ.Width,
+			Scale:       col.Typ.Scale,
+			Enumvalues:  col.Typ.Enumvalues,
+			NullAbility: nullable,
+		})
+	}
+
+	stmt.Param.HivePartitioning = true
+	stmt.Param.HivePartitionCols = normalized
+	stmt.Param.HivePartitionColTypes = colTypes
+	stmt.Param.Option = stripHiveOptionKeys(stmt.Param.Option)
+	return nil
+}
+
+func parseHiveOptionsFromRawOptions(ctx context.Context, options []string) (enabled bool, cols []string, err error) {
+	var hiveVal string
+	var colsVal string
+	for i := 0; i < len(options); i += 2 {
+		key := strings.ToLower(options[i])
+		switch key {
+		case "hive_partitioning":
+			hiveVal = strings.ToLower(options[i+1])
+		case "hive_partition_columns":
+			colsVal = options[i+1]
+		}
+	}
+	if hiveVal == "" {
+		if strings.TrimSpace(colsVal) != "" {
+			return false, nil, moerr.NewBadConfig(ctx, "hive_partition_columns requires hive_partitioning='true'")
+		}
+		return false, nil, nil
+	}
+	if hiveVal != "true" && hiveVal != "false" {
+		return false, nil, moerr.NewBadConfigf(ctx, "hive_partitioning must be 'true' or 'false', got '%s'", hiveVal)
+	}
+	if hiveVal == "false" {
+		if strings.TrimSpace(colsVal) != "" {
+			return false, nil, moerr.NewBadConfig(ctx, "hive_partition_columns requires hive_partitioning='true'")
+		}
+		return false, nil, nil
+	}
+	if colsVal == "" {
+		return true, nil, nil
+	}
+	parts := strings.Split(colsVal, ",")
+	cols = make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			cols = append(cols, p)
+		}
+	}
+	return true, cols, nil
+}
+
+func rejectDuplicateKeys(ctx context.Context, options []string, keys []string) error {
+	keySet := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		keySet[k] = true
+	}
+	seen := make(map[string]bool)
+	for i := 0; i < len(options); i += 2 {
+		key := strings.ToLower(options[i])
+		if !keySet[key] {
+			continue
+		}
+		if seen[key] {
+			return moerr.NewBadConfigf(ctx, "duplicate option key '%s'", key)
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+func getRawOption(options []string, key string) string {
+	for i := 0; i < len(options); i += 2 {
+		if strings.ToLower(options[i]) == key {
+			return options[i+1]
+		}
+	}
+	return ""
+}
+
+func stripHiveOptionKeys(opt []string) []string {
+	out := make([]string, 0, len(opt))
+	for i := 0; i < len(opt); i += 2 {
+		key := strings.ToLower(opt[i])
+		if key == "hive_partitioning" || key == "hive_partition_columns" {
+			continue
+		}
+		out = append(out, opt[i], opt[i+1])
+	}
+	return out
+}
+
+func findColInTableDefCaseInsensitive(cols []*plan.ColDef, name string) *plan.ColDef {
+	lower := strings.ToLower(name)
+	for _, col := range cols {
+		if strings.ToLower(col.Name) == lower {
+			return col
+		}
+	}
+	return nil
 }

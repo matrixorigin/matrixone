@@ -50,13 +50,14 @@ type ExternalParam struct {
 }
 
 type ExParamConst struct {
-	ParallelLoad  bool
-	StrictSqlMode bool
-	Close         byte
-	maxBatchSize  uint64
-	Idx           int
-	ColumnListLen int32 // load ...  (col1, col2 , col3), ColumnListLen is 3
-	CreateSql     string
+	ParallelLoad           bool
+	LoadEmptyNumericAsZero bool
+	StrictSqlMode          bool
+	Close                  byte
+	maxBatchSize           uint64
+	Idx                    int
+	ColumnListLen          int32 // load ...  (col1, col2 , col3), ColumnListLen is 3
+	CreateSql              string
 
 	// letter case: origin
 	Attrs           []plan.ExternAttr
@@ -71,8 +72,9 @@ type ExParamConst struct {
 }
 
 type ExParam struct {
-	Fileparam *ExFileparam
-	Filter    *FilterParam
+	Fileparam         *ExFileparam
+	Filter            *FilterParam
+	currentPartValues map[string]string
 }
 
 type ExFileparam struct {
@@ -284,11 +286,25 @@ type ParquetHandler struct {
 	// for nested types support
 	hasNestedCols bool
 	rowReader     *parquet.Reader
+
+	// virtual column support (hive partitions + __mo_filepath)
+	partitionColIndices []int
+	filepathColIndex    int // -1 = not projected
+	hasPhysicalCol      bool
+	rowCountOnly        bool
+	currentRowGroup     int
+	rowCountRemaining   int
 }
 
 type columnMapper struct {
 	srcNull, dstNull   bool
 	maxDefinitionLevel byte
+	allowRepetition    bool
+	listCanBeNull      bool
+	listNullLevel      byte
+	listEmptyLevel     byte
+	listElemCanBeNull  bool
+	listElemNullLevel  byte
 
 	mapper func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
 }

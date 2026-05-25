@@ -23,8 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
@@ -222,7 +220,7 @@ func TestHandleOrderByLimitOnSelectRows(t *testing.T) {
 		DistHeap:   make(objectio.Float64Heap, 0, 2),
 	}
 
-	resSels, resDists, err := handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, -1, cacheVectors)
+	resSels, resDists, err := handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, nil, -1, cacheVectors)
 	require.NoError(t, err)
 	require.Equal(t, 2, len(resSels))
 	require.Equal(t, 2, len(resDists))
@@ -356,257 +354,31 @@ func TestBuildTopInputRows(t *testing.T) {
 		defer mask.Release()
 		mask.Add(0)
 		rows := buildTopInputRows(0, mask)
-		require.NotNil(t, rows)
-		require.Equal(t, 0, len(rows))
+		require.Nil(t, rows)
 	})
 }
 
-func TestReadBlockDataFiltersNonAppendableByCommitTS(t *testing.T) {
-	ctx := context.Background()
-	fs := testutil.NewSharedFS()
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
+func TestShouldFallbackOrderedLimitToFullBlockRead(t *testing.T) {
+	sortedInfo := &objectio.BlockInfo{ObjectFlags: objectio.ObjectFlag_Sorted}
+	unsortedInfo := &objectio.BlockInfo{}
 
-	writer := ioutil.ConstructWriter(
-		0,
-		[]uint16{0, objectio.SEQNUM_COMMITTS},
-		-1,
-		false,
-		false,
-		fs,
-	)
-
-	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-	for _, row := range []struct {
-		val int32
-		ts  types.TS
-	}{
-		{val: 11, ts: types.BuildTS(20, 0)},
-		{val: 22, ts: types.BuildTS(10, 0)},
-		{val: 33, ts: types.BuildTS(30, 0)},
-	} {
-		require.NoError(t, vector.AppendFixed(input.Vecs[0], row.val, false, mp))
-		require.NoError(t, vector.AppendFixed(input.Vecs[1], row.ts, false, mp))
-	}
-	input.SetRowCount(3)
-
-	_, err := writer.WriteBatch(input)
-	require.NoError(t, err)
-	blocks, _, err := writer.Sync(ctx)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-
-	info := blocks[0].GenerateBlockInfo(writer.GetName(), false)
-	require.False(t, info.IsAppendable())
-
-	cacheVectors := containers.NewVectors(1)
-	deleteMask, release, err := readBlockData(
-		ctx,
-		[]uint16{0},
-		[]types.Type{types.T_int32.ToType()},
-		-1,
-		&info,
+	require.False(t, shouldFallbackOrderedLimitToFullBlockRead(nil, sortedInfo))
+	require.False(t, shouldFallbackOrderedLimitToFullBlockRead(
+		&objectio.IndexReaderTopOp{Limit: 2},
+		unsortedInfo,
+	))
+	require.False(t, shouldFallbackOrderedLimitToFullBlockRead(
+		&objectio.IndexReaderTopOp{Limit: 2, OrderedLimit: true},
+		sortedInfo,
+	))
+	require.True(t, shouldFallbackOrderedLimitToFullBlockRead(
+		&objectio.IndexReaderTopOp{Limit: 2, OrderedLimit: true},
+		unsortedInfo,
+	))
+	require.True(t, shouldFallbackOrderedLimitToFullBlockRead(
+		&objectio.IndexReaderTopOp{Limit: 2, OrderedLimit: true},
 		nil,
-		types.BuildTS(15, 0),
-		0,
-		cacheVectors,
-		mp,
-		fs,
-	)
-	require.NoError(t, err)
-	defer deleteMask.Release()
-	defer release()
-
-	require.Equal(t, 2, deleteMask.Count())
-	require.True(t, deleteMask.Contains(0))
-	require.False(t, deleteMask.Contains(1))
-	require.True(t, deleteMask.Contains(2))
-
-	vals := vector.MustFixedColWithTypeCheck[int32](&cacheVectors[0])
-	require.Equal(t, []int32{11, 22, 33}, vals)
-}
-
-func TestReadBlockDataSkipsCommitTSFilterWhenSnapshotCoversBlock(t *testing.T) {
-	ctx := context.Background()
-	fs := testutil.NewSharedFS()
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	writer := ioutil.ConstructWriter(
-		0,
-		[]uint16{0, objectio.SEQNUM_COMMITTS},
-		-1,
-		false,
-		false,
-		fs,
-	)
-
-	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-	for _, row := range []struct {
-		val int32
-		ts  types.TS
-	}{
-		{val: 11, ts: types.BuildTS(10, 0)},
-		{val: 22, ts: types.BuildTS(11, 0)},
-		{val: 33, ts: types.BuildTS(12, 0)},
-	} {
-		require.NoError(t, vector.AppendFixed(input.Vecs[0], row.val, false, mp))
-		require.NoError(t, vector.AppendFixed(input.Vecs[1], row.ts, false, mp))
-	}
-	input.SetRowCount(3)
-
-	_, err := writer.WriteBatch(input)
-	require.NoError(t, err)
-	blocks, _, err := writer.Sync(ctx)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-
-	info := blocks[0].GenerateBlockInfo(writer.GetName(), false)
-	require.False(t, info.IsAppendable())
-
-	cacheVectors := containers.NewVectors(1)
-	deleteMask, release, err := readBlockData(
-		ctx,
-		[]uint16{0},
-		[]types.Type{types.T_int32.ToType()},
-		-1,
-		&info,
-		nil,
-		types.BuildTS(20, 0),
-		0,
-		cacheVectors,
-		mp,
-		fs,
-	)
-	require.NoError(t, err)
-	defer deleteMask.Release()
-	defer release()
-
-	require.False(t, deleteMask.IsValid())
-	vals := vector.MustFixedColWithTypeCheck[int32](&cacheVectors[0])
-	require.Equal(t, []int32{11, 22, 33}, vals)
-}
-
-func TestReadBlockDataDoesNotTreatVisibleTSColumnAsCommitTS(t *testing.T) {
-	ctx := context.Background()
-	fs := testutil.NewSharedFS()
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	writer := ioutil.ConstructWriter(
-		0,
-		[]uint16{0, 1},
-		-1,
-		false,
-		false,
-		fs,
-	)
-
-	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-	for _, row := range []struct {
-		val int32
-		ts  types.TS
-	}{
-		{val: 11, ts: types.BuildTS(20, 0)},
-		{val: 22, ts: types.BuildTS(10, 0)},
-		{val: 33, ts: types.BuildTS(30, 0)},
-	} {
-		require.NoError(t, vector.AppendFixed(input.Vecs[0], row.val, false, mp))
-		require.NoError(t, vector.AppendFixed(input.Vecs[1], row.ts, false, mp))
-	}
-	input.SetRowCount(3)
-
-	_, err := writer.WriteBatch(input)
-	require.NoError(t, err)
-	blocks, _, err := writer.Sync(ctx)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-
-	info := blocks[0].GenerateBlockInfo(writer.GetName(), false)
-	require.False(t, info.IsAppendable())
-
-	cacheVectors := containers.NewVectors(1)
-	deleteMask, release, err := readBlockData(
-		ctx,
-		[]uint16{0},
-		[]types.Type{types.T_int32.ToType()},
-		-1,
-		&info,
-		nil,
-		types.BuildTS(15, 0),
-		0,
-		cacheVectors,
-		mp,
-		fs,
-	)
-	require.NoError(t, err)
-	defer deleteMask.Release()
-	defer release()
-
-	require.False(t, deleteMask.IsValid())
-	vals := vector.MustFixedColWithTypeCheck[int32](&cacheVectors[0])
-	require.Equal(t, []int32{11, 22, 33}, vals)
-}
-
-func TestReadBlockDataNonAppendableWithoutCommitTS(t *testing.T) {
-	ctx := context.Background()
-	fs := testutil.NewSharedFS()
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	writer := ioutil.ConstructWriter(
-		0,
-		[]uint16{0},
-		-1,
-		false,
-		false,
-		fs,
-	)
-
-	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	for _, row := range []int32{11, 22, 33} {
-		require.NoError(t, vector.AppendFixed(input.Vecs[0], row, false, mp))
-	}
-	input.SetRowCount(3)
-
-	_, err := writer.WriteBatch(input)
-	require.NoError(t, err)
-	blocks, _, err := writer.Sync(ctx)
-	require.NoError(t, err)
-	require.Len(t, blocks, 1)
-
-	info := blocks[0].GenerateBlockInfo(writer.GetName(), false)
-	require.False(t, info.IsAppendable())
-
-	cacheVectors := containers.NewVectors(1)
-	deleteMask, release, err := readBlockData(
-		ctx,
-		[]uint16{0},
-		[]types.Type{types.T_int32.ToType()},
-		-1,
-		&info,
-		nil,
-		types.BuildTS(15, 0),
-		0,
-		cacheVectors,
-		mp,
-		fs,
-	)
-	require.NoError(t, err)
-	defer deleteMask.Release()
-	defer release()
-
-	require.Zero(t, deleteMask.Count())
-
-	vals := vector.MustFixedColWithTypeCheck[int32](&cacheVectors[0])
-	require.Equal(t, []int32{11, 22, 33}, vals)
+	))
 }
 
 // TestHandleOrderByLimitAllNullVectors verifies that HandleOrderByLimitOnIVFFlatIndex
@@ -676,7 +448,82 @@ func TestHandleOrderByLimitOnSelectRowsRejectsOverflowLimit(t *testing.T) {
 		MetricType: metric.Metric_L2Distance,
 	}
 
-	_, _, err := handleOrderByLimitOnSelectRows(context.Background(), []int64{0}, orderByLimit, -1, cacheVectors)
+	_, _, err := handleOrderByLimitOnSelectRows(context.Background(), []int64{0}, orderByLimit, nil, -1, cacheVectors)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "overflows int")
+}
+
+func TestHandleOrderByLimitOnSelectRowsForOrderedLimit(t *testing.T) {
+	ctx := context.Background()
+	selectRows := []int64{2, 4, 6, 8}
+	info := &objectio.BlockInfo{ObjectFlags: objectio.ObjectFlag_Sorted}
+
+	descLimit := &objectio.IndexReaderTopOp{Limit: 2, OrderedLimit: true, Desc: true}
+	descRows, descDists, err := handleOrderByLimitOnSelectRows(ctx, selectRows, descLimit, info, -1, nil)
+	require.NoError(t, err)
+	require.Nil(t, descDists)
+	require.Equal(t, []int64{6, 8}, descRows)
+
+	ascLimit := &objectio.IndexReaderTopOp{Limit: 2, OrderedLimit: true}
+	ascRows, ascDists, err := handleOrderByLimitOnSelectRows(ctx, selectRows, ascLimit, info, -1, nil)
+	require.NoError(t, err)
+	require.Nil(t, ascDists)
+	require.Equal(t, []int64{2, 4}, ascRows)
+}
+
+func TestHandleOrderByLimitOnLiveRowsForOrderedLimit(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	vec0 := vector.NewVec(types.T_int32.ToType())
+	for i := 0; i < 6; i++ {
+		vector.AppendFixed(vec0, int32(i), false, mp)
+	}
+	cacheVectors := make(containers.Vectors, 1)
+	cacheVectors[0] = *vec0
+
+	descLimit := &objectio.IndexReaderTopOp{
+		Typ:          types.T_int32,
+		ColPos:       0,
+		Limit:        2,
+		OrderedLimit: true,
+		Desc:         true,
+	}
+	info := &objectio.BlockInfo{ObjectFlags: objectio.ObjectFlag_Sorted}
+
+	rows, dists, err := handleOrderByLimitOnLiveRows(context.Background(), descLimit, info, -1, objectio.Bitmap{}, cacheVectors)
+	require.NoError(t, err)
+	require.Nil(t, dists)
+	require.Equal(t, []int64{4, 5}, rows)
+
+	ascLimit := &objectio.IndexReaderTopOp{
+		Typ:          types.T_int32,
+		ColPos:       0,
+		Limit:        2,
+		OrderedLimit: true,
+	}
+	rows, dists, err = handleOrderByLimitOnLiveRows(context.Background(), ascLimit, info, -1, objectio.Bitmap{}, cacheVectors)
+	require.NoError(t, err)
+	require.Nil(t, dists)
+	require.Equal(t, []int64{0, 1}, rows)
+
+	deleteMask := objectio.GetReusableBitmap()
+	defer deleteMask.Release()
+	deleteMask.Add(4)
+	rows, dists, err = handleOrderByLimitOnLiveRows(context.Background(), descLimit, info, -1, deleteMask, cacheVectors)
+	require.NoError(t, err)
+	require.Nil(t, dists)
+	require.Equal(t, []int64{3, 5}, rows)
+
+	deleteMask.Add(0)
+	rows, dists, err = handleOrderByLimitOnLiveRows(context.Background(), ascLimit, info, -1, deleteMask, cacheVectors)
+	require.NoError(t, err)
+	require.Nil(t, dists)
+	require.Equal(t, []int64{1, 2}, rows)
+
+	unsortedInfo := &objectio.BlockInfo{}
+	rows, dists, err = handleOrderByLimitOnLiveRows(context.Background(), ascLimit, unsortedInfo, -1, deleteMask, cacheVectors)
+	require.NoError(t, err)
+	require.Nil(t, dists)
+	require.Equal(t, []int64{1, 2, 3, 5}, rows)
 }

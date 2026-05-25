@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"runtime"
 	"time"
 
 	"github.com/google/uuid"
@@ -129,7 +128,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
-		dispatchProc, dispatchNotifyCh, err := receiver.GetProcByUuid(receiver.messageUuid, HandleNotifyTimeout)
+		dispatchProc, dispatchNotifyCh, err := receiver.GetProcByUuid(receiver.messageUuid)
 		if err != nil || dispatchProc == nil {
 			return err
 		}
@@ -143,30 +142,22 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}
 		colexec.Get().RecordDispatchPipeline(receiver.clientSession, receiver.messageId, infoToDispatchOperator)
 
-		// todo : the timeout should be removed.
-		//		but I keep it here because I don't know whether it will cause hung sometimes.
-		timeLimit, cancel := context.WithTimeoutCause(context.TODO(), HandleNotifyTimeout, moerr.CauseHandlePipelineMessage)
-
 		succeed := false
 		select {
-		case <-timeLimit.Done():
-			err = moerr.NewInternalError(receiver.messageCtx, "send notify msg to dispatch operator timeout")
-			err = moerr.AttachCause(timeLimit, err)
 		case dispatchNotifyCh <- infoToDispatchOperator:
 			succeed = true
 		case <-receiver.connectionCtx.Done():
+			dispatchProc.Cancel(moerr.NewInternalError(receiver.messageCtx, "remote receiver connection closed"))
 		case <-dispatchProc.Ctx.Done():
 		}
-		cancel()
 
-		if err != nil || !succeed {
-			dispatchProc.Cancel(err)
-			return err
+		if !succeed {
+			return nil
 		}
 
 		select {
 		case <-receiver.connectionCtx.Done():
-			dispatchProc.Cancel(err)
+			dispatchProc.Cancel(moerr.NewInternalError(receiver.messageCtx, "remote receiver connection closed"))
 
 		// there is no need to check the dispatchProc.Ctx.Done() here.
 		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
@@ -234,21 +225,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
-
-	// HandleNotifyTimeout
-	// todo: this is a bad design here.
-	//  we should do the waiting work in the prepare stage of the dispatch operator but not in the exec stage.
-	//      do the waiting work in the exec stage can save some execution time, but it will cause an unstable waiting time.
-	//		(because we cannot control the execution time of the running sql,
-	//		and the coming time of the first batch of the result is not a constant time.)
-	// 		see the codes in pkg/sql/colexec/dispatch/dispatch.go:waitRemoteRegsReady()
-	//
-	// need to fix this in the future. for now, increase it to make tpch1T can run on 3 CN
-	//
-	// This is completely wrong.  We must remove this timeout value.
-	// #23277
-
-	HandleNotifyTimeout = 3600 * time.Second
 )
 
 // message receiver's cn information.
@@ -543,32 +519,32 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	return result, nil
 }
 
-func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID, timeout time.Duration) (*process.Process, process.RemotePipelineInformationChannel, error) {
-	tout, tcancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseGetProcByUuid)
+// waitRegistrationTimeout bounds how long we wait for the dispatch operator
+// to register itself via PutProcIntoUuidMap. Under normal operation this
+// happens within seconds. A 5-minute timeout detects a fundamentally broken
+// remote CN (crash, network partition) without the false positives of a short
+// timeout, while avoiding the 24h hang of the unbounded RPC stream lifetime.
+const waitRegistrationTimeout = 30 * time.Second
+
+func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
+	deadline := time.NewTimer(waitRegistrationTimeout)
+	defer deadline.Stop()
 
 	for {
-		select {
-		case <-tout.Done():
-			colexec.Get().GetProcByUuid(uid, true)
-			err := moerr.AttachCause(tout, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout"))
-			tcancel()
-			return nil, nil, err
+		dispatchProc, notifyChannel, ok, changed := colexec.Get().GetProcByUuidOrWait(uid)
+		if ok {
+			return dispatchProc, notifyChannel, nil
+		}
 
+		select {
 		case <-receiver.connectionCtx.Done():
 			colexec.Get().GetProcByUuid(uid, true)
-			tcancel()
 			return nil, nil, nil
-
-		default:
-			dispatchProc, notifyChannel, ok := colexec.Get().GetProcByUuid(uid, false)
-			if ok {
-				tcancel()
-				return dispatchProc, notifyChannel, nil
-			}
-
-			// it's very bad to call the runtime.Gosched() here.
-			// get a process receive channel first, and listen to it may be a better way.
-			runtime.Gosched()
+		case <-deadline.C:
+			colexec.Get().GetProcByUuid(uid, true)
+			return nil, nil, moerr.NewInternalErrorf(receiver.messageCtx,
+				"dispatch process not registered within %s, remote CN may have failed", waitRegistrationTimeout)
+		case <-changed:
 		}
 	}
 }

@@ -94,7 +94,6 @@ func ReadDataByFilter(
 		colTypes,
 		-1,
 		info,
-		ds,
 		ts,
 		fileservice.Policy(0),
 		cacheVectors,
@@ -162,7 +161,7 @@ func BlockDataReadNoCopy(
 
 	// read block data from storage specified by meta location
 	if deleteMask, release, err = readBlockData(
-		ctx, columns, colTypes, phyAddrColumnPos, info, ds, ts, policy, cacheVectors, mp, fs,
+		ctx, columns, colTypes, phyAddrColumnPos, info, ts, policy, cacheVectors, mp, fs,
 	); err != nil {
 		return nil, nil, nil, err
 	}
@@ -562,7 +561,7 @@ func fillOutputBatchBySelectedRows(
 		if outputColPos == phyAddrColumnPos {
 			continue
 		}
-		if orderByLimit != nil && loadedColumnPos == int(orderByLimit.ColPos) {
+		if orderByLimit != nil && !orderByLimit.OrderedLimit && loadedColumnPos == int(orderByLimit.ColPos) {
 			loadedColumnPos++
 			continue
 		}
@@ -579,7 +578,7 @@ func fillOutputBatchBySelectedRows(
 		loadedColumnPos++
 	}
 
-	if orderByLimit != nil {
+	if orderByLimit != nil && !orderByLimit.OrderedLimit {
 		if len(outputBat.Vecs) == len(columns) {
 			distVec := vector.NewVec(types.T_float64.ToType())
 			if err = vector.AppendFixedList(distVec, dists, nil, mp); err != nil {
@@ -626,7 +625,6 @@ func BlockDataReadInner(
 		colTypes,
 		phyAddrColumnPos,
 		info,
-		ds,
 		ts,
 		policy,
 		cacheVectors,
@@ -643,7 +641,7 @@ func BlockDataReadInner(
 		var dists []float64
 
 		if orderByLimit != nil {
-			selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors)
+			selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, info, phyAddrColumnPos, cacheVectors)
 			if err != nil {
 				return err
 			}
@@ -688,13 +686,18 @@ func BlockDataReadInner(
 		deletedRows = deleteMask.ToI64Array(&arr)
 	}
 
+	if shouldFallbackOrderedLimitToFullBlockRead(orderByLimit, info) {
+		// Ordered-limit pushdown can only prune sorted blocks. Fall back to the
+		// normal UnionBatch+Shrink path on unsorted blocks to avoid building
+		// full row-index slices that do not eliminate any rows.
+		orderByLimit = nil
+	}
+
 	// No pre-filter rows, but vector TopN pushdown is requested:
 	// apply TopN on live rows (exclude tombstones first), then materialize selected rows.
 	if orderByLimit != nil {
-		topInputRows := buildTopInputRows(int(info.MetaLocation().Rows()), deleteMask)
-
 		var dists []float64
-		selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, topInputRows, orderByLimit, phyAddrColumnPos, cacheVectors)
+		selectRows, dists, err = handleOrderByLimitOnLiveRows(ctx, orderByLimit, info, phyAddrColumnPos, deleteMask, cacheVectors)
 		if err != nil {
 			return err
 		}
@@ -744,9 +747,9 @@ func BlockDataReadInner(
 }
 
 // buildTopInputRows constructs a slice of live row indices by excluding rows
-// present in the deleteMask. Returns nil if deleteMask is empty.
+// present in the deleteMask. Returns nil when there is nothing to filter.
 func buildTopInputRows(length int, deleteMask objectio.Bitmap) []int64 {
-	if deleteMask.IsEmpty() {
+	if length <= 0 || deleteMask.IsEmpty() {
 		return nil
 	}
 	capHint := length - deleteMask.Count()
@@ -802,87 +805,6 @@ func buildRowidColumn(
 	return
 }
 
-type commitTSFilterAction uint8
-
-const (
-	commitTSFilterNone commitTSFilterAction = iota
-	commitTSFilterAllRows
-	commitTSFilterByRow
-)
-
-func hiddenCommitTSColumn(blkMeta objectio.BlockObject) (objectio.ColumnMeta, bool) {
-	metaColCnt := blkMeta.GetMetaColumnCount()
-	if metaColCnt == 0 {
-		return nil, false
-	}
-	// CommitTS is a trailing special column; a visible user TS column must not
-	// be treated as row visibility metadata.
-	if int(metaColCnt) <= int(blkMeta.GetMaxSeqnum())+1 {
-		return nil, false
-	}
-	commitTSCol := blkMeta.ColumnMeta(metaColCnt - 1)
-	if commitTSCol.DataType() != uint8(types.T_TS) {
-		return nil, false
-	}
-	return commitTSCol, true
-}
-
-func planCommitTSFilter(blkMeta objectio.BlockObject, snapshotTS types.TS) commitTSFilterAction {
-	commitTSCol, ok := hiddenCommitTSColumn(blkMeta)
-	if !ok {
-		return commitTSFilterNone
-	}
-
-	zm := commitTSCol.ZoneMap()
-	if !zm.IsInited() || zm.GetType() != types.T_TS {
-		return commitTSFilterByRow
-	}
-	minTS := types.DecodeFixed[types.TS](zm.GetMinBuf())
-	maxTS := types.DecodeFixed[types.TS](zm.GetMaxBuf())
-	if !maxTS.GT(&snapshotTS) {
-		return commitTSFilterNone
-	}
-	if minTS.GT(&snapshotTS) {
-		return commitTSFilterAllRows
-	}
-	return commitTSFilterByRow
-}
-
-func buildFullDeleteMask(rowCount uint32) objectio.Bitmap {
-	if rowCount == 0 {
-		return objectio.NullBitmap
-	}
-	deletes := objectio.GetNoReuseBitmap()
-	deletes.Bitmap().AddRange(0, uint64(rowCount))
-	return deletes
-}
-
-func buildCommitTSDeleteMask(commits []types.TS, snapshotTS types.TS) objectio.Bitmap {
-	var deletes objectio.Bitmap
-	for i := range commits {
-		if !commits[i].GT(&snapshotTS) {
-			continue
-		}
-		if !deletes.IsValid() {
-			deletes = objectio.GetNoReuseBitmap()
-		}
-		deletes.Add(uint64(i))
-	}
-	return deletes
-}
-
-func loadObjectDataMeta(
-	ctx context.Context,
-	location objectio.Location,
-	fs fileservice.FileService,
-) (objectio.ObjectDataMeta, error) {
-	meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
-	if err != nil {
-		return nil, err
-	}
-	return meta.MustGetMeta(objectio.SchemaData), nil
-}
-
 // This func load columns from storage of specified column indexes
 // No memory copy, the loaded data is directly stored in the cacheVectors
 // if `phyAddrColumnPos` >= 0, it means one of the columns is the physical address column,
@@ -901,7 +823,6 @@ func readBlockData(
 	colTypes []types.Type,
 	phyAddrColumnPos int,
 	info *objectio.BlockInfo,
-	_ engine.DataSource,
 	ts types.TS,
 	policy fileservice.Policy,
 	cacheVectors containers.Vectors,
@@ -916,92 +837,50 @@ func readBlockData(
 
 	idxes, typs := excludePhyAddrColumn(colIndexes, colTypes, phyAddrColumnPos)
 
-	location := info.MetaLocation()
-	dataMeta, err := loadObjectDataMeta(ctx, location, fs)
-	if err != nil {
-		return
-	}
-	commitTSAction := planCommitTSFilter(dataMeta.GetBlockMeta(uint32(location.ID())), ts)
-
 	readColumns := func(
 		cols []uint16,
-		typs2 []types.Type,
 		cacheVectors2 containers.Vectors,
-	) (release2 func(), err2 error) {
+	) (err2 error) {
 		if len(cols) == 0 && phyAddrColumnPos >= 0 {
 			// only read rowid column on non appendable block, return early
-			release2 = func() {}
+			release = func() {}
 			return
 		}
 
-		release2, err2 = ioutil.LoadColumnsWithMeta(
-			ctx, cols, typs2, fs, location, dataMeta, cacheVectors2, m, policy,
+		release, err2 = ioutil.LoadColumns(
+			ctx, cols, typs, fs, info.MetaLocation(), cacheVectors2, m, policy,
 		)
-		if err2 != nil {
-			return
-		}
 		return
 	}
 
-	readColumnsWithCommitTSFilter := func(
+	readABlkColumns := func(
 		cols []uint16,
-		typs2 []types.Type,
 		cacheVectors2 containers.Vectors,
 	) (
 		deletes objectio.Bitmap,
 		err2 error,
 	) {
-		dataRelease, err2 := readColumns(cols, typs2, cacheVectors2)
-		if err2 != nil {
-			return
-		}
-		if dataRelease == nil {
-			dataRelease = func() {}
-		}
+		// appendable block should be filtered by committs
+		//cols = append(cols, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT) // committs, aborted
+		cols = append(cols, objectio.SEQNUM_COMMITTS) // committs, aborted
 
-		switch commitTSAction {
-		case commitTSFilterNone:
-			release = dataRelease
-			return
-		case commitTSFilterAllRows:
-			release = dataRelease
-			deletes = buildFullDeleteMask(info.MetaLocation().Rows())
-			return
-		case commitTSFilterByRow:
-		default:
-			if dataRelease != nil {
-				dataRelease()
-			}
-			err2 = moerr.NewInternalErrorNoCtxf("unknown commit ts filter action %d", commitTSAction)
+		// no need to add typs, the two columns won't be generated
+		if err2 = readColumns(
+			cols, cacheVectors2,
+		); err2 != nil {
 			return
 		}
 
-		commitTSVectors := containers.NewVectors(1)
-		releaseCommitTS, err2 := ioutil.LoadColumnsWithMeta(
-			ctx,
-			[]uint16{objectio.SEQNUM_COMMITTS},
-			[]types.Type{types.T_TS.ToType()},
-			fs,
-			location,
-			dataMeta,
-			commitTSVectors,
-			m,
-			policy,
-		)
-		if err2 != nil {
-			if dataRelease != nil {
-				dataRelease()
-			}
-			return
-		}
-		if releaseCommitTS != nil {
-			defer releaseCommitTS()
-		}
-		release = dataRelease
+		deletes = objectio.GetReusableBitmap()
 
 		t0 := time.Now()
-		commits := vector.MustFixedColWithTypeCheck[types.TS](&commitTSVectors[0])
-		deletes = buildCommitTSDeleteMask(commits, ts)
+		//aborts := vector.MustFixedColWithTypeCheck[bool](loaded.Vecs[len(loaded.Vecs)-1])
+		commits := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors2[len(cols)-1])
+		for i := 0; i < len(commits); i++ {
+			if commits[i].GT(&ts) {
+				deletes.Add(uint64(i))
+			}
+		}
 		logutil.Debugf(
 			"blockread %s scan filter cost %v: base %s filter out %v\n ",
 			info.BlockID.String(),
@@ -1012,7 +891,11 @@ func readBlockData(
 		return
 	}
 
-	deleteMask, err = readColumnsWithCommitTSFilter(idxes, typs, cacheVectors)
+	if info.IsAppendable() {
+		deleteMask, err = readABlkColumns(idxes, cacheVectors)
+	} else {
+		err = readColumns(idxes, cacheVectors)
+	}
 
 	return
 }
@@ -1021,9 +904,21 @@ func handleOrderByLimitOnSelectRows(
 	ctx context.Context,
 	selectRows []int64,
 	orderByLimit *objectio.IndexReaderTopOp,
+	info *objectio.BlockInfo,
 	phyAddrColumnPos int,
 	cacheVectors containers.Vectors,
 ) ([]int64, []float64, error) {
+	if orderByLimit.OrderedLimit {
+		if info == nil || !info.IsSorted() || uint64(len(selectRows)) <= orderByLimit.Limit {
+			return selectRows, nil, nil
+		}
+		limit := int(orderByLimit.Limit)
+		if orderByLimit.Desc {
+			return selectRows[len(selectRows)-limit:], nil, nil
+		}
+		return selectRows[:limit], nil, nil
+	}
+
 	vecColPos := orderByLimit.ColPos
 	if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
 		vecColPos--
@@ -1031,4 +926,101 @@ func handleOrderByLimitOnSelectRows(
 	vecCol := &cacheVectors[vecColPos]
 
 	return HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
+}
+
+func handleOrderByLimitOnLiveRows(
+	ctx context.Context,
+	orderByLimit *objectio.IndexReaderTopOp,
+	info *objectio.BlockInfo,
+	phyAddrColumnPos int,
+	deleteMask objectio.Bitmap,
+	cacheVectors containers.Vectors,
+) ([]int64, []float64, error) {
+	vecColPos := orderByLimit.ColPos
+	if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
+		vecColPos--
+	}
+	if orderByLimit.OrderedLimit {
+		rowCount := 0
+		if int(vecColPos) < len(cacheVectors) {
+			rowCount = cacheVectors[vecColPos].Length()
+		} else if info != nil {
+			rowCount = int(info.MetaLocation().Rows())
+		}
+		return buildOrderedLiveRows(rowCount, deleteMask, orderByLimit, info != nil && info.IsSorted()), nil, nil
+	}
+
+	vecCol := &cacheVectors[vecColPos]
+	selectRows := buildTopInputRows(vecCol.Length(), deleteMask)
+	return HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
+}
+
+func shouldFallbackOrderedLimitToFullBlockRead(
+	orderByLimit *objectio.IndexReaderTopOp,
+	info *objectio.BlockInfo,
+) bool {
+	return orderByLimit != nil && orderByLimit.OrderedLimit && (info == nil || !info.IsSorted())
+}
+
+func buildOrderedLiveRows(
+	rowCount int,
+	deleteMask objectio.Bitmap,
+	orderByLimit *objectio.IndexReaderTopOp,
+	isSorted bool,
+) []int64 {
+	if rowCount <= 0 {
+		return nil
+	}
+	if !isSorted {
+		if deleteMask.IsEmpty() {
+			return buildContiguousRows(0, rowCount)
+		}
+		return buildTopInputRows(rowCount, deleteMask)
+	}
+	limit := rowCount
+	if orderByLimit.Limit > 0 && orderByLimit.Limit < uint64(rowCount) {
+		limit = int(orderByLimit.Limit)
+	}
+	if orderByLimit.Desc {
+		return buildOrderedLiveRowsDesc(rowCount, deleteMask, limit)
+	}
+	return buildOrderedLiveRowsAsc(rowCount, deleteMask, limit)
+}
+
+func buildOrderedLiveRowsAsc(rowCount int, deleteMask objectio.Bitmap, limit int) []int64 {
+	if deleteMask.IsEmpty() {
+		return buildContiguousRows(0, limit)
+	}
+	rows := make([]int64, 0, limit)
+	for i := 0; i < rowCount && len(rows) < limit; i++ {
+		if !deleteMask.Contains(uint64(i)) {
+			rows = append(rows, int64(i))
+		}
+	}
+	return rows
+}
+
+func buildOrderedLiveRowsDesc(rowCount int, deleteMask objectio.Bitmap, limit int) []int64 {
+	if deleteMask.IsEmpty() {
+		return buildContiguousRows(rowCount-limit, rowCount)
+	}
+	rows := make([]int64, 0, limit)
+	for i := rowCount - 1; i >= 0 && len(rows) < limit; i-- {
+		if !deleteMask.Contains(uint64(i)) {
+			rows = append(rows, int64(i))
+		}
+	}
+	slices.Reverse(rows)
+	return rows
+}
+
+func buildContiguousRows(start, end int) []int64 {
+	if end <= start {
+		return nil
+	}
+	rows := make([]int64, end-start)
+	for i := range rows {
+		rows[i] = int64(start + i)
+	}
+	return rows
 }

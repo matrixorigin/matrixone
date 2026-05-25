@@ -720,9 +720,9 @@ drop table if exists time04;
 create table time04 as select date_add(col2, interval 45 day), date_sub(col2, interval 5 day) from time01;
 show create table time04;
 Table    Create Table
-time04    CREATE TABLE `time04` (\n  `date_add(col2, interval(45, day))` datetime DEFAULT NULL,\n  `date_sub(col2, interval(5, day))` datetime DEFAULT NULL\n)
+time04    CREATE TABLE `time04` (\n  `date_add(col2, interval 45 day)` datetime DEFAULT NULL,\n  `date_sub(col2, interval 5 day)` datetime DEFAULT NULL\n)
 select * from time04;
-date_add(col2, interval(45, day))    date_sub(col2, interval(5, day))
+date_add(col2, interval 45 day)    date_sub(col2, interval 5 day)
 2023-12-26 10:00:01    2023-11-06 10:00:01
 1990-11-24 01:01:01    1990-10-05 01:01:01
 null    null

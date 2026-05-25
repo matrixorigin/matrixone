@@ -524,6 +524,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"database_name", types.T_varchar, false, 50, 0},
 			{"table_name", types.T_varchar, false, 50, 0},
 			{"obj_id", types.T_uint64, false, 100, 0},
+			{"kind", types.T_varchar, false, 32, 0},
 		},
 		pks: []int{0},
 	}
@@ -726,6 +727,48 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		cols: []col{
 			{catalog.IndexTableIndexColName, types.T_varchar, false, 255, 0},
 			{catalog.IndexTablePrimaryColName, types.T_uint32, false, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
+		create table dept_composite_uk(
+			deptno int unsigned auto_increment,
+			dname varchar(15),
+			loc varchar(50),
+			primary key(deptno),
+			unique key uk_dname_loc(dname, loc)
+		);
+	*/
+	constraintTestSchema["dept_composite_uk"] = &Schema{
+		tblId: 88889,
+		cols: []col{
+			{"deptno", types.T_uint32, true, 32, 0},
+			{"dname", types.T_varchar, true, 15, 0},
+			{"loc", types.T_varchar, true, 50, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks: []int{0},
+		idxs: []index{
+			{
+				indexName: "uk_dname_loc",
+				tableName: catalog.UniqueIndexTableNamePrefix + "dept-composite-uk-idx",
+				parts:     []string{"dname", "loc"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+				},
+				tableExist: true,
+				unique:     true,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"dept-composite-uk-idx"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint32, true, 32, 0},
 			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
 		},
 		pks:    []int{0},

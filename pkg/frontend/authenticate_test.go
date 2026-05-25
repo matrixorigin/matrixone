@@ -6608,6 +6608,116 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 	})
 }
 
+func TestDoSwitchRoleSecondaryRoleAllInvalidatesRuleCache(t *testing.T) {
+	convey.Convey("set secondary role all invalidates rule cache", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ses := newSes(&privilege{}, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "role1",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
+
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+		bh.sql2result[getSqlForgetUserRolesExpectPublicRole(publicRoleID, tenant.UserID)] = newMrsForPasswordOfUser([][]interface{}{
+			{"6", "role5"},
+		})
+
+		err := doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
+			SecondaryRole:     true,
+			SecondaryRoleType: tree.SecondaryRoleTypeAll,
+		})
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeTrue)
+
+		ses.ruleCacheMu.RLock()
+		cacheIsNil := ses.ruleCache == nil
+		ses.ruleCacheMu.RUnlock()
+		convey.So(cacheIsNil, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("set secondary role all returns setup error", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ses := newSes(&privilege{}, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "role1",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		ses.SetTenantInfo(tenant)
+
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+		bh.sql2err[getSqlForgetUserRolesExpectPublicRole(publicRoleID, tenant.UserID)] = fmt.Errorf("load roles failed")
+
+		err := doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
+			SecondaryRole:     true,
+			SecondaryRoleType: tree.SecondaryRoleTypeAll,
+		})
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeFalse)
+	})
+}
+
+func TestDoSwitchRoleSecondaryRoleNoneInvalidatesRuleCache(t *testing.T) {
+	convey.Convey("set secondary role none invalidates rule cache", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(&privilege{}, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "role1",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		tenant.SetUseSecondaryRole(true)
+		ses.SetTenantInfo(tenant)
+		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
+
+		err := doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
+			SecondaryRole:     true,
+			SecondaryRoleType: tree.SecondaryRoleTypeNone,
+		})
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeFalse)
+
+		ses.ruleCacheMu.RLock()
+		cacheIsNil := ses.ruleCache == nil
+		ses.ruleCacheMu.RUnlock()
+		convey.So(cacheIsNil, convey.ShouldBeTrue)
+	})
+}
+
 func TestGetSessionSysVar(t *testing.T) {
 	convey.Convey("get session system variable succ", t, func() {
 		ctrl := gomock.NewController(t)
@@ -6634,6 +6744,44 @@ func TestGetSessionSysVar(t *testing.T) {
 		convey.So(value, convey.ShouldEqual, "0.0.0.0")
 		_, err = ses.GetSessionSysVar("not exists sys var")
 		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+// TestGetSessionSysVar_MapMissFallsBackToDefault: a sysvar that's
+// registered in gSysVarsDefs but absent from ses.sesSysVars (the
+// per-account snapshot doesn't contain it — typical of sysvars added
+// to gSysVarsDefs without a backing mo_mysql_compatibility_mode row,
+// or in a brand-new account whose snapshot pre-dates the sysvar
+// registration) must resolve to the registered Default rather than
+// surfacing interface{}(nil). Reproduces the CREATE TABLE CLONE
+// regression that ate "ivf_threads_build" as nil.
+func TestGetSessionSysVar_MapMissFallsBackToDefault(t *testing.T) {
+	convey.Convey("session sysvar map miss falls back to gSysVarsDefs default", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		ses := newSes(nil, ctrl)
+
+		// Force the map-miss scenario: empty per-session map. The
+		// var IS registered in gSysVarsDefs (default int64(0)) but
+		// absent from this empty map.
+		ses.sesSysVars = &SystemVariables{mp: make(map[string]interface{})}
+
+		v, err := ses.GetSessionSysVar("ivf_threads_build")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v, convey.ShouldEqual, int64(0))
+
+		v, err = ses.GetSessionSysVar("kmeans_train_percent")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v, convey.ShouldEqual, float64(10))
 	})
 }
 
@@ -11189,6 +11337,12 @@ func TestDoDropSnapshot(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
+		sql = fmt.Sprintf(
+			"select kind from mo_catalog.mo_snapshots where sname = '%s' order by snapshot_id limit 1",
+			string(ds.Name),
+		)
+		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{})
+
 		sql = getSqlForDropSnapshot(string(ds.Name))
 		mrs = newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
@@ -11243,6 +11397,12 @@ func TestDoDropSnapshot(t *testing.T) {
 			{0, 0},
 		})
 		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf(
+			"select kind from mo_catalog.mo_snapshots where sname = '%s' order by snapshot_id limit 1",
+			string(ds.Name),
+		)
+		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{})
 
 		sql = getSqlForDropSnapshot(string(ds.Name))
 		mrs = newMrsForPasswordOfUser([][]interface{}{})

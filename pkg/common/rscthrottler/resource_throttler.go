@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime/debug"
 	"sync/atomic"
 	"time"
 
@@ -31,10 +32,15 @@ import (
 )
 
 const (
-	refreshMaxInterval = time.Second * 10
+	refreshMaxInterval     = time.Second * 10
+	rssScavengeInterval    = time.Minute
+	rssScavengeTriggerRate = 0.85
+	rssScavengeVisibleRate = 0.70
 
 	MemoryThrottlerLogHeader = "MemoryThrottler"
 )
+
+var freeOSMemory = debug.FreeOSMemory
 
 type RSCThrottler interface {
 	Refresh()
@@ -58,7 +64,8 @@ type memThrottler struct {
 	name      string
 	limitRate float64
 
-	lastRefresh atomic.Int64
+	lastRefresh     atomic.Int64
+	lastRSSScavenge atomic.Int64
 
 	mergeAvailDebounce atomic.Int64
 
@@ -72,6 +79,8 @@ type memThrottler struct {
 		allowOutOfMemoryAcquire bool
 
 		specializedForMerge bool
+
+		enableRSSScavenging bool
 	}
 }
 
@@ -99,10 +108,18 @@ func (m *memThrottler) pinnedRate() float64 {
 }
 
 func (m *memThrottler) Refresh() {
+	m.refresh(false)
+}
+
+func (m *memThrottler) ForceRefresh() {
+	m.refresh(true)
+}
+
+func (m *memThrottler) refresh(force bool) {
 	last := m.lastRefresh.Load()
 	now := time.Now().UnixNano()
 
-	if time.Duration(now-last) <= refreshMaxInterval {
+	if !force && time.Duration(now-last) <= refreshMaxInterval {
 		return
 	}
 
@@ -150,10 +167,46 @@ func (m *memThrottler) Refresh() {
 
 	if info, err = m.proc.MemoryInfo(); err == nil {
 		m.rss.Store(int64(info.RSS))
+		m.tryScavengeRSS(now, int64(info.RSS))
 	}
 
 	m.cgroup.Store(cgroup)
 	m.total.Store(total)
+}
+
+func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
+	if !m.options.enableRSSScavenging {
+		return
+	}
+	actualMaxMemory := int64(m.actualTotalMemory.Load())
+	if actualMaxMemory <= 0 || actualMaxMemory == math.MaxInt64 {
+		return
+	}
+	if float64(rss) < float64(actualMaxMemory)*rssScavengeTriggerRate {
+		return
+	}
+	visible := m.reserved.Load() + mpool.GlobalStats().NumCurrBytes.Load()
+	if visible < 0 {
+		visible = 0
+	}
+	if float64(visible) >= float64(rss)*rssScavengeVisibleRate {
+		return
+	}
+	last := m.lastRSSScavenge.Load()
+	if time.Duration(now-last) <= rssScavengeInterval {
+		return
+	}
+	if !m.lastRSSScavenge.CompareAndSwap(last, now) {
+		return
+	}
+	logutil.Info(
+		fmt.Sprintf("%s-RSSScavenge", MemoryThrottlerLogHeader),
+		zap.String("rss", common.HumanReadableBytes(int(rss))),
+		zap.String("visible", common.HumanReadableBytes(int(visible))),
+		zap.String("actual-total-memory", common.HumanReadableBytes(int(actualMaxMemory))),
+		zap.String("detail", m.String()),
+	)
+	freeOSMemory()
 }
 
 /*
@@ -314,6 +367,12 @@ func WithSpecializedForMerge() MemThrottlerOption {
 	}
 }
 
+func WithRSSScavenging() MemThrottlerOption {
+	return func(throttler *memThrottler) {
+		throttler.options.enableRSSScavenging = true
+	}
+}
+
 func WithAcquirePolicy(
 	policy func(*memThrottler, int64) (int64, bool),
 ) MemThrottlerOption {
@@ -344,7 +403,6 @@ func AcquirePolicyForCNFlushS3(
 	throttler *memThrottler,
 	ask int64,
 ) (int64, bool) {
-
 	rate := throttler.pinnedRate()
 
 	if rate >= 0.80 {
@@ -358,10 +416,37 @@ func AcquirePolicyForCNFlushS3(
 		if ask >= mpool.MB*10 {
 			return 0, false
 		}
-		return defaultAcquirePolicy(throttler, ask)
+		return acquireWithinRSSLimit(throttler, ask)
 	}
 
-	return defaultAcquirePolicy(throttler, ask)
+	return acquireWithinRSSLimit(throttler, ask)
+}
+
+func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
+	for {
+		avail := throttler.Available()
+		if !throttler.options.allowOutOfMemoryAcquire && avail < ask {
+			return avail, false
+		}
+
+		currReserved := throttler.reserved.Load()
+		if currReserved < 0 {
+			currReserved = 0
+		}
+
+		total := int64(throttler.actualTotalMemory.Load())
+		if total > 0 && throttler.limitRate > 0 {
+			used := throttler.rss.Load() + currReserved + ask
+			if float64(used) > float64(total)*throttler.limitRate {
+				return 0, false
+			}
+		}
+
+		newReserved := currReserved + ask
+		if throttler.reserved.CompareAndSwap(currReserved, newReserved) {
+			return avail - ask, true
+		}
+	}
 }
 
 func AcquirePolicyForDataBranch(

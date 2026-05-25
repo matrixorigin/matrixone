@@ -386,7 +386,7 @@ select date(mo_log_date('hienrvkew/&*?/1970/01/01/uf893I'));
 date(mo_log_date(hienrvkew/&*?/1970/01/01/uf893I))
 1970-01-01
 select date_add(mo_log_date('数据库/2021/01/01/guanli系统'),interval 45 day);
-date_add(mo_log_date(数据库/2021/01/01/guanli系统), interval(45, day))
+date_add(mo_log_date(数据库/2021/01/01/guanli系统), interval 45 day)
 2021-02-15
 select date_format(mo_log_date('dhiuwnjdksnfv/2023/2025/2029/04/05/hiuewhrijvewoke&**'), '%W %M %Y');
 date_format(mo_log_date(dhiuwnjdksnfv/2023/2025/2029/04/05/hiuewhrijvewoke&**), %W %M %Y)
@@ -395,7 +395,7 @@ select date_format(mo_log_date('数据库Database/table/2022/03/04/^&(*)('), '%D
 date_format(mo_log_date(数据库Database/table/2022/03/04/^&(*)(), %D %y %a %d %m %b %j)
 4th 22 Fri 04 03 Mar 063
 select date_sub(mo_log_date('2021/01/01'), interval 2 year);
-date_sub(mo_log_date(2021/01/01), interval(2, year))
+date_sub(mo_log_date(2021/01/01), interval 2 year)
 2019-01-01
 select datediff(mo_log_date('2023/04/25'),mo_log_date('2024/04/25'));
 datediff(mo_log_date(2023/04/25), mo_log_date(2024/04/25))

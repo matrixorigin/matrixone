@@ -291,6 +291,9 @@ message DedupJoin {
   // it in finalize() into right (build) column old_col_capture_placeholder_idx_list[i].
   repeated int32 old_col_capture_placeholder_idx_list = 17;
   repeated int32 old_col_capture_probe_idx_list = 18;
+  bool dedup_build_keep_last = 19;
+  repeated int32 dedup_delete_keep_col_idx_list = 20;
+  int32 dedup_delete_marker_col_idx = 21;
 }
 
 message RightDedupJoin {
@@ -361,6 +364,8 @@ message ExternalScan {
   plan.Expr filter = 8;
   bool strict_sql_mode = 9;
   int32 column_list_len = 10;
+  bool parallel_load = 11;
+  bool load_empty_numeric_as_zero = 12;
 }
 
 message StreamScan {
@@ -396,6 +401,9 @@ message HashBuild {
   string dedup_col_name = 13;
   repeated plan.Type dedup_col_types = 14 [(gogoproto.nullable) = false];
   int32 del_col_idx = 15;
+  bool dedup_build_keep_last = 16;
+  int32 dedup_delete_marker_col_idx = 17;
+  repeated int32 dedup_delete_keep_col_idx_list = 18;
 }
 
 message Indexbuild {

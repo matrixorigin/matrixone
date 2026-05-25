@@ -475,6 +475,63 @@ func TestZM(t *testing.T) {
 	}
 }
 
+func TestPrefixInRange(t *testing.T) {
+	zm := BuildZM(types.T_varchar, []byte("bbb"))
+	UpdateZM(zm, []byte("ddd"))
+
+	// hint=0: [lb, ub] — same as PrefixBetween
+	require.True(t, zm.PrefixInRange([]byte("aaa"), []byte("eee"), 0))
+	require.True(t, zm.PrefixInRange([]byte("bbb"), []byte("ddd"), 0))
+	require.False(t, zm.PrefixInRange([]byte("eee"), []byte("fff"), 0))
+
+	// hint=1: (lb, ub] — max must be strictly > lb
+	require.True(t, zm.PrefixInRange([]byte("aaa"), []byte("ccc"), 1))
+	require.True(t, zm.PrefixInRange([]byte("bbb"), []byte("ddd"), 1))
+	require.False(t, zm.PrefixInRange([]byte("ddd"), []byte("fff"), 1))
+
+	// hint=2: [lb, ub) — min must be strictly < ub
+	require.True(t, zm.PrefixInRange([]byte("aaa"), []byte("eee"), 2))
+	require.True(t, zm.PrefixInRange([]byte("bbb"), []byte("ddd"), 2))
+	require.False(t, zm.PrefixInRange([]byte("aaa"), []byte("bbb"), 2))
+
+	// hint=3: (lb, ub) — both strict
+	require.True(t, zm.PrefixInRange([]byte("aaa"), []byte("eee"), 3))
+	require.False(t, zm.PrefixInRange([]byte("ddd"), []byte("fff"), 3))
+	require.False(t, zm.PrefixInRange([]byte("aaa"), []byte("bbb"), 3))
+}
+
+func TestInRangeZM(t *testing.T) {
+	v10 := int64(10)
+	v20 := int64(20)
+	zm := BuildZM(types.T_int64, types.EncodeInt64(&v10))
+	UpdateZMAny(zm, v20)
+
+	lb5 := types.EncodeInt64(&[]int64{5}[0])
+	ub25 := types.EncodeInt64(&[]int64{25}[0])
+	lb10 := types.EncodeInt64(&v10)
+	ub20 := types.EncodeInt64(&v20)
+
+	// hint=0: [lb, ub]
+	require.True(t, zm.InRange(lb5, ub25, 0))
+	require.True(t, zm.InRange(lb10, ub20, 0))
+
+	// hint=1: (lb, ub] — must have values > lb
+	require.True(t, zm.InRange(lb5, ub25, 1))
+	require.True(t, zm.InRange(lb10, ub20, 1))
+	ub10 := types.EncodeInt64(&v10)
+	lb20 := types.EncodeInt64(&v20)
+	require.False(t, zm.InRange(lb20, ub25, 1))
+
+	// hint=2: [lb, ub) — must have values < ub
+	require.True(t, zm.InRange(lb5, ub25, 2))
+	require.False(t, zm.InRange(lb5, ub10, 2))
+
+	// hint=3: (lb, ub) — both strict
+	require.True(t, zm.InRange(lb5, ub25, 3))
+	require.False(t, zm.InRange(lb20, ub25, 3))
+	require.False(t, zm.InRange(lb5, ub10, 3))
+}
+
 func TestZMSum(t *testing.T) {
 	testIntSum(t, types.T_int8)
 	testIntSum(t, types.T_int16)

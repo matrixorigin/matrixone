@@ -785,6 +785,166 @@ func TestSerialExtract(t *testing.T) {
 	}
 }
 
+func TestSerialExtractConstIndex(t *testing.T) {
+	ps := types.NewPacker()
+	defer ps.Close()
+	ps.EncodeInt8(10)
+	ps.EncodeStringType([]byte("adam"))
+	serialized := convertByteSliceToString(ps.Bytes())
+
+	proc := testutil.NewProcess(t)
+
+	{
+		tc := tcTemp{
+			info: "test serial_extract with const index 0 as Int8",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{serialized},
+					[]bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int8.ToType(),
+					[]int8{0},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
+				[]int8{10},
+				[]bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSerialExtract)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+
+	{
+		tc := tcTemp{
+			info: "test serial_extract with const index 1 as varchar",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{serialized},
+					[]bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(),
+					[]int64{1},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"adam"},
+				[]bool{false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSerialExtract)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+
+	{
+		tc := tcTemp{
+			info: "test serial_extract with const index and null p1",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{serialized},
+					[]bool{true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int8.ToType(),
+					[]int8{0},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
+				[]int8{0},
+				[]bool{true}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSerialExtract)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+
+	{
+		ps2 := types.NewPacker()
+		defer ps2.Close()
+		ps2.EncodeNull()
+		ps2.EncodeStringType([]byte("val"))
+		serialized2 := convertByteSliceToString(ps2.Bytes())
+
+		tc := tcTemp{
+			info: "test serial_extract with const index on nil element as varchar",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{serialized2},
+					[]bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSerialExtract)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+
+	{
+		ps3 := types.NewPacker()
+		defer ps3.Close()
+		ps3.EncodeNull()
+		ps3.EncodeInt8(5)
+		serialized3 := convertByteSliceToString(ps3.Bytes())
+
+		tc := tcTemp{
+			info: "test serial_extract with const index on nil element as int8",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{serialized3},
+					[]bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int8.ToType(),
+					[]int8{0},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
+				[]int8{0},
+				[]bool{true}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSerialExtract)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+
+	{
+		tc := tcTemp{
+			info: "test serial_extract with const index, null p1, varchar result",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{serialized},
+					[]bool{true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(),
+					[]int64{1},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSerialExtract)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func Test_BuiltIn_Math(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	{
@@ -799,6 +959,24 @@ func Test_BuiltIn_Math(t *testing.T) {
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{0, 0, 1, 10, 100, 99, -1}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test ln with err",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						-1,
+					},
+					nil),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLn)
 		succeed, info := tcc.Run()
@@ -915,6 +1093,24 @@ func Test_BuiltIn_Math(t *testing.T) {
 
 	{
 		tc := tcTemp{
+			info: "test acos with err",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						1.0001,
+					},
+					nil),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInACos)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
 			info: "test asin",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
@@ -931,6 +1127,42 @@ func Test_BuiltIn_Math(t *testing.T) {
 				[]float64{0, 0.5235987755982989, 1.5707963267948966, -0.5235987755982989, -1.5707963267948966}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInASin)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test asin with err",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						1.1,
+					},
+					nil),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInASin)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test cot with err",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						0,
+					},
+					nil),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInCot)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -1062,8 +1294,8 @@ func Test_BuiltIn_Math(t *testing.T) {
 					},
 					nil),
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), true,
-				nil, nil),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog)
 		succeed, info := tcc.Run()
@@ -1098,8 +1330,8 @@ func Test_BuiltIn_Math(t *testing.T) {
 					},
 					nil),
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), true,
-				nil, nil),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog2)
 		succeed, info := tcc.Run()
@@ -1134,8 +1366,8 @@ func Test_BuiltIn_Math(t *testing.T) {
 					},
 					nil),
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), true,
-				nil, nil),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog10)
 		succeed, info := tcc.Run()

@@ -220,11 +220,14 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			fscache.ConstCapacity(int64(*config.DiskCapacity)),
 			s.perfCounterSets,
 			true,
-			s,
+			nil,
 			s.name,
 		)
 		if err != nil {
 			return err
+		}
+		if s.memCache != nil {
+			s.diskCache.memoryCache = s.memCache.cache
 		}
 		logutil.Info("fileservice: disk cache initialized",
 			zap.Any("fs-name", s.name),

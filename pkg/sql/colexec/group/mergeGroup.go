@@ -28,6 +28,9 @@ import (
 
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.state = vm.Build
+	if mergeGroup.ctr.mp != nil {
+		mergeGroup.ctr.free()
+	}
 	mergeGroup.ctr.mp = mpool.MustNew("merge_group_mpool")
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
@@ -132,16 +135,17 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
 	var err error
 
-	defer func() {
-		if err != nil {
-			mergeGroup.ctr.freeSpillAggList()
-		}
-	}()
-
+	mergeGroup.ctr.freeSpillAggList()
 	mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs)
 	if err != nil {
 		return false, err
 	}
+	needCleanupSpillAggList := true
+	defer func() {
+		if needCleanupSpillAggList {
+			mergeGroup.ctr.freeSpillAggList()
+		}
+	}()
 
 	// deserialize extra buf2.
 	if len(bat.ExtraBuf) != 0 {
@@ -243,5 +247,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		}
 	}
 
+	mergeGroup.ctr.freeSpillAggList()
+	needCleanupSpillAggList = false
 	return mergeGroup.ctr.needSpill(mergeGroup.OpAnalyzer), nil
 }

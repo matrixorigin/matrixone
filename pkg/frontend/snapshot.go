@@ -142,6 +142,7 @@ type snapshotRecord struct {
 	databaseName string
 	tableName    string
 	objId        uint64
+	kind         string
 }
 
 type tableInfo struct {
@@ -543,6 +544,20 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 			return err
 		}
 	} else {
+		// Reject DROP SNAPSHOT on rows that are managed by the data-branch
+		// protect-snapshot mechanism. Matching on `kind` (not the sname
+		// prefix) keeps the sname format internal and lets future renames
+		// remain invisible to users (§7.2).
+		var kind string
+		if kind, err = getSnapshotKindByName(ctx, bh, string(stmt.Name)); err != nil {
+			return err
+		}
+		if kind == branchSnapshotKind {
+			return moerr.NewInternalErrorf(ctx,
+				"snapshot %q is managed by data branch and cannot be dropped directly",
+				string(stmt.Name),
+			)
+		}
 		sql = getSqlForDropSnapshot(string(stmt.Name))
 		err = bh.Exec(ctx, sql)
 		if err != nil {
@@ -1598,6 +1613,38 @@ func checkSnapShotExistOrNot(ctx context.Context, bh BackgroundExec, snapshotNam
 	return false, nil
 }
 
+// getSnapshotKindByName fetches the `kind` column for a snapshot row looked
+// up by sname. It returns the empty string if no row matches; callers are
+// expected to have confirmed existence beforehand via
+// checkSnapShotExistOrNot. Used by doDropSnapshot to surface a clear error
+// when a caller tries to drop a snapshot that is managed by data branch
+// (§7.2).
+func getSnapshotKindByName(ctx context.Context, bh BackgroundExec, snapshotName string) (string, error) {
+	if err := inputNameIsInvalid(ctx, snapshotName); err != nil {
+		return "", err
+	}
+	sql := fmt.Sprintf(
+		"select kind from mo_catalog.mo_snapshots where sname = '%s' order by snapshot_id limit 1",
+		snapshotName,
+	)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return "", err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return "", err
+	}
+	if !execResultArrayHasData(erArray) {
+		return "", nil
+	}
+	kind, err := erArray[0].GetString(ctx, 0, 0)
+	if err != nil {
+		return "", err
+	}
+	return kind, nil
+}
+
 func getSnapshotRecords(ctx context.Context, bh BackgroundExec, sql string) ([]*snapshotRecord, error) {
 	var erArray []ExecResult
 	var err error
@@ -1640,6 +1687,14 @@ func getSnapshotRecords(ctx context.Context, bh BackgroundExec, sql string) ([]*
 				if record.objId, err = er.GetUint64(ctx, row, 7); err != nil {
 					return nil, err
 				}
+				// kind column (index 8) is optional: older rows/DDLs may
+				// not have it; fall back to empty string which is treated
+				// as "user".
+				if er.GetColumnCount() > 8 {
+					if record.kind, err = er.GetString(ctx, row, 8); err != nil {
+						return nil, err
+					}
+				}
 			}
 			records = append(records, &record)
 		}
@@ -1654,13 +1709,24 @@ func getSnapshotByName(ctx context.Context, bh BackgroundExec, snapshotName stri
 	}
 
 	sql := fmt.Sprintf("%s where sname = '%s'", getSnapshotFormat, snapshotName)
-	if records, err := getSnapshotRecords(ctx, bh, sql); err != nil {
+	records, err := getSnapshotRecords(ctx, bh, sql)
+	if err != nil {
 		return nil, err
-	} else if len(records) != 1 {
-		return nil, moerr.NewInternalErrorf(ctx, "find %v snapshot records by name(%v), expect only 1", len(records), snapshotName)
-	} else {
-		return records[0], nil
 	}
+	if len(records) != 1 {
+		return nil, moerr.NewInternalErrorf(ctx, "find %v snapshot records by name(%v), expect only 1", len(records), snapshotName)
+	}
+	// Branch-managed snapshots are implementation detail — every caller
+	// that resolves a snapshot by name (DROP, RESTORE, SELECT {snapshot=},
+	// SHOW RECOVERY WINDOW, etc.) must treat them as non-existent so the
+	// user-facing surface stays clean (design §7 / review PR#24313
+	// blocking issue #4).
+	if records[0].kind == branchSnapshotKind {
+		return nil, moerr.NewInternalErrorf(ctx,
+			"snapshot %q is managed by data branch and cannot be used from user commands",
+			snapshotName)
+	}
+	return records[0], nil
 }
 
 func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snapshotName string) (snapshot *pbplan.Snapshot, err error) {

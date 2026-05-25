@@ -331,7 +331,7 @@ var (
 		output: "select day_key, day_date, day, month, quarter, year, week, day_of_week from bi_date where 1 = 2",
 	}, {
 		input:  "select sum(a) over(partition by a range between interval 1 day preceding and interval 2 day following) from t1",
-		output: "select sum(a) over (partition by a range between interval(1, day) preceding and interval(2, day) following) from t1",
+		output: "select sum(a) over (partition by a range between INTERVAL 1 day preceding and INTERVAL 2 day following) from t1",
 	}, {
 		input:  "select rank() over(partition by a range between 1 preceding and current row) from t1",
 		output: "select rank() over (partition by a range between 1 preceding and current row) from t1",
@@ -539,6 +539,42 @@ var (
 			input:  "UPDATE items,(SELECT id FROM items WHERE id IN (SELECT id FROM items WHERE retail / wholesale >= 1.3 AND quantity < 100)) AS discounted SET items.retail = items.retail * 0.9 WHERE items.id = discounted.id",
 			output: "update items cross join (select id from items where id in (select id from items where retail / wholesale >= 1.3 and quantity < 100)) as discounted set items.retail = items.retail * 0.9 where items.id = discounted.id",
 		}, {
+			input:  "UPDATE t SET remark = c.province FROM company c WHERE c.id = t.company_id",
+			output: "update t set remark = c.province from company as c where c.id = t.company_id",
+		}, {
+			input:  "UPDATE vec_join_case t SET remark = CONCAT('hot-', c.province) FROM company c WHERE c.id = t.company_id AND l2_distance(embedding, \"[0.2,0.2,0.3,0.3]\") < 0.35",
+			output: "update vec_join_case as t set remark = CONCAT(hot-, c.province) from company as c where c.id = t.company_id and l2_distance(embedding, [0.2,0.2,0.3,0.3]) < 0.35",
+		}, {
+			input:  "UPDATE t SET a = b.x FROM b, c WHERE t.id = b.id AND b.k = c.k",
+			output: "update t set a = b.x from b cross join c where t.id = b.id and b.k = c.k",
+		}, {
+			input:  "WITH cc AS (SELECT * FROM company) UPDATE t SET remark = c.province FROM cc c WHERE c.id = t.company_id",
+			output: "with cc as (select * from company) update t set remark = c.province from cc as c where c.id = t.company_id",
+		}, {
+			input:  "UPDATE t1 JOIN t2 ON t1.k = t2.k SET t1.v = t2.v FROM t3 WHERE t3.id = t1.id",
+			output: "update t1 inner join t2 on t1.k = t2.k set t1.v = t2.v from t3 where t3.id = t1.id",
+		}, {
+			// FROM b JOIN c ON ... — the FROM-clause join tree must keep its
+			// grouping after Format so round-tripping does not change the
+			// associativity. (Cross-joining target+source previously dropped
+			// the parens and re-parsed as (t CROSS b) JOIN c.)
+			input:  "UPDATE t SET v = c.v FROM b JOIN c ON b.k = c.k WHERE t.id = b.id",
+			output: "update t set v = c.v from b inner join c on b.k = c.k where t.id = b.id",
+		}, {
+			input:  "UPDATE t SET v = c.v FROM b LEFT JOIN c ON b.k = c.k WHERE t.id = b.id",
+			output: "update t set v = c.v from b left join c on b.k = c.k where t.id = b.id",
+		}, {
+			// FROM "b, c JOIN d ON ..." parses to b CROSS (c INNER d). Without
+			// the right-operand paren the round-trip would re-parse as
+			// (b CROSS c) INNER d, changing the ON's binding.
+			input:  "UPDATE t SET v = d.v FROM b, c JOIN d ON c.k = d.k WHERE t.id = b.id AND b.k = c.k",
+			output: "update t set v = d.v from b cross join (c inner join d on c.k = d.k) where t.id = b.id and b.k = c.k",
+		}, {
+			// Same shape but the inner join is LEFT, where the associativity
+			// change is also a semantic change (which side is preserved).
+			input:  "UPDATE t SET v = d.v FROM b, c LEFT JOIN d ON c.k = d.k WHERE t.id = b.id AND b.k = c.k",
+			output: "update t set v = d.v from b cross join (c left join d on c.k = d.k) where t.id = b.id and b.k = c.k",
+		}, {
 			input:  "with t2 as (select * from t1) DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
 			output: "with t2 as (select * from t1) delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
 		}, {
@@ -730,13 +766,13 @@ var (
 			output: "select FROM_UNIXTIME(2147483647) as c1, FROM_UNIXTIME(2147483648) as c2, FROM_UNIXTIME(2147483647.9999999) as c3, FROM_UNIXTIME(32536771199) as c4, FROM_UNIXTIME(32536771199.9999999) as c5",
 		}, {
 			input:  "select date_add(\"1997-12-31 23:59:59\",INTERVAL -100000 YEAR);",
-			output: "select date_add(1997-12-31 23:59:59, INTERVAL(-100000, year))",
+			output: "select date_add(1997-12-31 23:59:59, INTERVAL -100000 year)",
 		}, {
 			input:  "SELECT ADDDATE(DATE'2021-01-01', INTERVAL 1 DAY);",
-			output: "select ADDDATE(DATE(2021-01-01), INTERVAL(1, day))",
+			output: "select ADDDATE(DATE(2021-01-01), INTERVAL 1 day)",
 		}, {
 			input:  "select '2007-01-01' + interval a day from t1;",
-			output: "select 2007-01-01 + interval(a, day) from t1",
+			output: "select 2007-01-01 + INTERVAL a day from t1",
 		}, {
 			input:  "SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;",
 			output: "select cast(COALESCE(t0.c0, -1) as unsigned) is true from t0",
@@ -797,13 +833,13 @@ var (
 			output: "select sum(all a), count(all a), avg(all a), std(all a), variance(all a), bit_or(all a), bit_and(all a), min(all a), max(all a), min(all c), max(all c) from t",
 		}, {
 			input:  "insert into t1 values (date_add(NULL, INTERVAL 1 DAY));",
-			output: "insert into t1 values (date_add(null, INTERVAL(1, day)))",
+			output: "insert into t1 values (date_add(null, INTERVAL 1 day))",
 		}, {
 			input:  "replace into t1 values (date_add(NULL, INTERVAL 1 DAY));",
-			output: "replace into t1 values (date_add(null, INTERVAL(1, day)))",
+			output: "replace into t1 values (date_add(null, INTERVAL 1 day))",
 		}, {
 			input:  "SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';",
-			output: "select DATE_ADD(2022-02-28 23:59:59.9999, INTERVAL(1, second)) as 1 second later",
+			output: "select DATE_ADD(2022-02-28 23:59:59.9999, INTERVAL 1 second) as 1 second later",
 		}, {
 			input:  "SELECT sum(a) as 'hello' from t1;",
 			output: "select sum(a) as hello from t1",
@@ -812,7 +848,7 @@ var (
 			output: "select stream from t1",
 		}, {
 			input:  "SELECT DATE_ADD(\"2017-06-15\", INTERVAL -10 MONTH);",
-			output: "select DATE_ADD(2017-06-15, INTERVAL(-10, month))",
+			output: "select DATE_ADD(2017-06-15, INTERVAL -10 month)",
 		}, {
 			input:  "create table t1 (a varchar)",
 			output: "create table t1 (a varchar)",
@@ -827,13 +863,13 @@ var (
 			output: "select cast(19999999999999999999 as signed)",
 		}, {
 			input:  "select date_sub(now(), interval 1 day) from t1;",
-			output: "select date_sub(now(), interval(1, day)) from t1",
+			output: "select date_sub(now(), INTERVAL 1 day) from t1",
 		}, {
 			input:  "select date_sub(now(), interval '1' day) from t1;",
-			output: "select date_sub(now(), interval(1, day)) from t1",
+			output: "select date_sub(now(), INTERVAL 1 day) from t1",
 		}, {
 			input:  "select date_add(now(), interval '1' day) from t1;",
-			output: "select date_add(now(), interval(1, day)) from t1",
+			output: "select date_add(now(), INTERVAL 1 day) from t1",
 		}, {
 			input:  "SELECT md.datname as `Database` FROM TT md",
 			output: "select md.datname as Database from tt as md",
@@ -879,7 +915,7 @@ var (
 			output: "select extract(year, l_shipdate) as l_year from t",
 		}, {
 			input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112' day",
-			output: "select * from r inner join s on R.uid = S.uid where l_shipdate <= date(1998-12-01) - interval(112, day)",
+			output: "select * from r inner join s on R.uid = S.uid where l_shipdate <= date(1998-12-01) - INTERVAL 112 day",
 		}, {
 			input: "create table deci_table (a decimal(10, 5))",
 		}, {
@@ -1303,7 +1339,7 @@ var (
 			input: "select sum(distinct s) from tbl where 1",
 		}, {
 			input:  "select u.a, interval 1 second from t",
-			output: "select u.a, interval(1, second) from t",
+			output: "select u.a, INTERVAL 1 second from t",
 		}, {
 			input:  "select u.a, (select t.a from sa.t, u) from t where (u.a, u.b, u.c) in (select * from t)",
 			output: "select u.a, (select t.a from sa.t cross join u) from t where (u.a, u.b, u.c) in (select * from t)",
@@ -3572,6 +3608,20 @@ func TestSQLStringFmt(t *testing.T) {
 		if tcase.output != out {
 			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, out)
 		}
+	}
+}
+
+func TestTaskKeywordIsNonReservedForIdentifiers(t *testing.T) {
+	for _, sql := range []string{
+		"create table task (task int, id int)",
+		"create table tasks (tasks int, id int)",
+	} {
+		stmt, err := ParseOne(context.TODO(), sql, 1)
+		require.NoError(t, err, sql)
+
+		createStmt, ok := stmt.(*tree.CreateTable)
+		require.True(t, ok, sql)
+		require.Len(t, createStmt.Defs, 2, sql)
 	}
 }
 
