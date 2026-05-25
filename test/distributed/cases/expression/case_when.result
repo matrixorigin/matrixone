@@ -238,3 +238,11 @@ select a, case when a="a" then 1 when upper(a)="b" then 2 end from t1;
 ➤ a[12,-1,0]  ¦  case when a = a then 1 when upper(a) = b then 2 end[-5,64,0]  𝄀
 a  ¦  1
 drop table if exists t1;
+SELECT
+7.01970 * CAST(-58140.00 AS DECIMAL(23,2)) AS direct_mul,
+CASE WHEN 'USD' = 'RMB'
+THEN CAST(-58140.00 AS DECIMAL(23,2))
+ELSE 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
+END AS bug_case;
+➤ direct_mul[3,38,7]  ¦  bug_case[3,38,7]  𝄀
+-408125.3580000  ¦  -408125.3580000
