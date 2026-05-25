@@ -34,6 +34,7 @@ func TestBindFuncExprImplByPlanExpr_CaseDifferentDecimalScale(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, int32(types.T_decimal128), result.Typ.Id)
+	require.Equal(t, int32(38), result.Typ.Width)
 	require.Equal(t, int32(7), result.Typ.Scale)
 
 	funcExpr := result.GetF()
@@ -43,6 +44,7 @@ func TestBindFuncExprImplByPlanExpr_CaseDifferentDecimalScale(t *testing.T) {
 	arg1 := funcExpr.Args[1]
 	require.True(t, isCastExpr(arg1), "THEN value should be cast when CASE decimal branch scales differ")
 	require.Equal(t, int32(types.T_decimal128), arg1.Typ.Id)
+	require.Equal(t, int32(38), arg1.Typ.Width)
 	require.Equal(t, int32(7), arg1.Typ.Scale)
 	require.False(t, isCastExpr(funcExpr.Args[2]), "ELSE value already has the common decimal scale")
 }
