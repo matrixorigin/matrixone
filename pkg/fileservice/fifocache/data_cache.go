@@ -49,6 +49,10 @@ func NewDataCacheWithPrepareSet(
 	}
 }
 
+func (d *DataCache) SetAdmissionTarget(admissionTarget func(capacity int64) (int64, bool)) {
+	d.fifo.SetAdmissionTarget(admissionTarget)
+}
+
 var seed = maphash.MakeSeed()
 
 func shardCacheKey(key fscache.CacheKey) uint64 {
