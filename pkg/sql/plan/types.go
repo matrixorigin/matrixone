@@ -441,6 +441,7 @@ type OrderBinder struct {
 
 type LimitBinder struct {
 	baseBinder
+	isOffset bool // true when binding OFFSET value, false when binding LIMIT count
 }
 
 type PartitionBinder struct {
