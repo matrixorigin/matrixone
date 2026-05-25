@@ -802,3 +802,23 @@ func TestCancelAndWaitRunningSQL_Timeout(t *testing.T) {
 		},
 	)
 }
+
+func TestWithTxnLockWaitTimeout(t *testing.T) {
+	runOperatorTests(
+		t,
+		func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+			require.Equal(t, time.Duration(0), LockWaitTimeoutFromTxn(tc))
+		},
+		WithTxnLockWaitTimeout(0),
+	)
+
+	runOperatorTests(
+		t,
+		func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+			require.Equal(t, 60*time.Second, LockWaitTimeoutFromTxn(tc))
+			wrapped := struct{ TxnOperator }{TxnOperator: tc}
+			require.Equal(t, 60*time.Second, LockWaitTimeoutFromTxn(wrapped))
+		},
+		WithTxnLockWaitTimeout(60*time.Second),
+	)
+}

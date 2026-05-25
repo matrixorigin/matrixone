@@ -33,6 +33,17 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// lockRpcSlack is the extra budget added to the RPC deadline beyond
+	// LockWaitTimeout.  The lock-table owner starts its own wait budget only
+	// after receiving the RPC, so the client-side RPC deadline must outlive the
+	// server-side wait timer for the owner to observe and return ErrLockTimeout.
+	// Without this slack, the client deadline can fire before the owner returns
+	// ErrLockTimeout, causing the client to see a retryable connectivity error
+	// instead of a lock-timeout result.
+	lockRpcSlack = 30 * time.Second
+)
+
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
 // And the remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
@@ -92,7 +103,26 @@ func (l *remoteLockTable) lock(
 	// rpc maybe wait too long, to avoid deadlock, we need unlock txn, and lock again
 	// after rpc completed
 	txn.Unlock()
-	resp, err := l.client.Send(ctx, req)
+
+	// When session-level lock_wait_timeout is set, bound the RPC by that
+	// timeout plus slack so the lock-table owner has enough time to observe
+	// and return ErrLockTimeout before the client-side RPC deadline fires.
+	// Without a session timeout, use the caller context as-is.
+	var rpcCtx context.Context
+	var rpcCancel context.CancelFunc
+	if d := time.Duration(opts.LockWaitTimeout) * time.Second; d > 0 {
+		lockRpcTimeout := d + lockRpcSlack
+		rpcCtx, rpcCancel = context.WithTimeout(ctx, lockRpcTimeout)
+	} else {
+		rpcCtx = ctx
+	}
+	defer func() {
+		if rpcCancel != nil {
+			rpcCancel()
+		}
+	}()
+	resp, err := l.client.Send(rpcCtx, req)
+
 	txn.Lock()
 
 	// txn closed
@@ -301,7 +331,8 @@ func (l *remoteLockTable) handleError(
 }
 
 func retryRemoteLockError(err error) bool {
-	if e, ok := err.(net.Error); ok && e.Timeout() {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
 	if errors.Is(err, io.EOF) ||
