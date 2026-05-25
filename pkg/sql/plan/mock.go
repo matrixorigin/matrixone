@@ -631,6 +631,45 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	/*
+		create table single_idx_t(
+			id int primary key,
+			val int,
+			index idx_val(val)
+		);
+	*/
+	constraintTestSchema["single_idx_t"] = &Schema{
+		tblId: 88900,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"val", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks: []int{0},
+		idxs: []index{
+			{
+				indexName: "idx_val",
+				tableName: catalog.SecondaryIndexTableNamePrefix + "single-idx-t-idx-val",
+				parts:     []string{"val"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+				},
+				tableExist: true,
+				unique:     false,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.SecondaryIndexTableNamePrefix+"single-idx-t-idx-val"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+			{catalog.IndexTablePrimaryColName, types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
 		create table dept(
 			deptno int unsigned auto_increment,
 			dname varchar(15),
