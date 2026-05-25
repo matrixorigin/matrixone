@@ -61,4 +61,4 @@ select json_value(json_array(1, 2, 3), '$[2]');
 json_value(json_array(1, 2, 3), $[2])
 3
 select json_value('{"a":1,"b":2}', '$.*');
-invalid argument json_value, invalid path expression
+invalid argument json_value, bad value invalid path expression
