@@ -239,7 +239,7 @@ func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 					return newBootstrapStringResult(bootstrappedCheckerDB), nil
 				}
 				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
-					return newBootstrapStringResult(bootstrappedCheckerTables...), nil
+					return newBootstrapStringResult(allBootstrappedCheckerTables()...), nil
 				}
 				return executor.Result{}, nil
 			})
@@ -274,7 +274,7 @@ func TestBootstrapWithWait(t *testing.T) {
 					return executor.Result{}, nil
 				}
 				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
-					return newBootstrapStringResult(bootstrappedCheckerTables...), nil
+					return newBootstrapStringResult(allBootstrappedCheckerTables()...), nil
 				}
 				return executor.Result{}, nil
 			})
@@ -313,6 +313,9 @@ func TestBootstrapMissingSQLTaskTablesIsNotBootstrapped(t *testing.T) {
 						catalog.MOSysDaemonTask,
 					), nil
 				}
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedVersionCheckerDB) {
+					return newBootstrapStringResult(), nil
+				}
 				return executor.Result{}, nil
 			})
 
@@ -332,6 +335,53 @@ func TestBootstrapMissingSQLTaskTablesIsNotBootstrapped(t *testing.T) {
 			require.False(t, ok)
 		},
 	)
+}
+
+func TestBootstrapMissingSQLTaskTablesWithUpgradeFrameworkIsBootstrapped(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				if sql == "show databases" {
+					return newBootstrapStringResult(bootstrappedCheckerDB), nil
+				}
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
+					return newBootstrapStringResult(
+						catalog.MOSysAsyncTask,
+						"sys_cron_task",
+						catalog.MOSysDaemonTask,
+					), nil
+				}
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedVersionCheckerDB) {
+					return newBootstrapStringResult(catalog.MOVersionTable), nil
+				}
+				return executor.Result{}, nil
+			})
+
+			b := NewService(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				exec,
+			).(*service)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			ok, err := b.checkAlreadyBootstrapped(ctx)
+			require.NoError(t, err)
+			require.True(t, ok)
+		},
+	)
+}
+
+func allBootstrappedCheckerTables() []string {
+	tables := make([]string, 0, len(bootstrappedCheckerTables)+len(upgradeManagedBootstrapTables))
+	tables = append(tables, bootstrappedCheckerTables...)
+	tables = append(tables, upgradeManagedBootstrapTables...)
+	return tables
 }
 
 func newBootstrapStringResult(values ...string) executor.Result {
