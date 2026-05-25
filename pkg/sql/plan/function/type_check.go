@@ -352,21 +352,24 @@ func setMaxScaleFromSource(t *types.Type, source []types.Type) {
 }
 
 func setSafeDecimalWidthAndScaleFromSource(t *types.Type, source []types.Type) {
-	hasSameType := false
+	if !t.Oid.IsDecimal() {
+		return
+	}
+	hasDecimal := false
 	maxScale := t.Scale
 	maxIntegralWidth := int32(0)
 
 	for i := range source {
-		if source[i].Oid != t.Oid {
+		if !source[i].Oid.IsDecimal() {
 			continue
 		}
-		if !hasSameType {
+		if !hasDecimal {
 			maxScale = source[i].Scale
 			maxIntegralWidth = source[i].Width - source[i].Scale
 			if maxIntegralWidth < 0 {
 				maxIntegralWidth = 0
 			}
-			hasSameType = true
+			hasDecimal = true
 		}
 		if source[i].Scale > maxScale {
 			maxScale = source[i].Scale
@@ -376,12 +379,15 @@ func setSafeDecimalWidthAndScaleFromSource(t *types.Type, source []types.Type) {
 			maxIntegralWidth = integralWidth
 		}
 	}
-	if !hasSameType {
+	if !hasDecimal {
 		return
 	}
 
 	t.Scale = maxScale
 	t.Width = maxIntegralWidth + maxScale
+	if maxWidth := t.Oid.ToType().Width; t.Width > maxWidth {
+		t.Width = maxWidth
+	}
 }
 
 func setMaxWidthFromSource(t *types.Type, source []types.Type) {
