@@ -39,6 +39,40 @@ var (
 	}
 )
 
+func mixedStringNumericToVarchar(source []types.Type) (types.Type, bool) {
+	hasString := false
+	hasNumeric := false
+	for _, t := range source {
+		if t.Oid.IsMySQLString() {
+			hasString = true
+		}
+		if t.Oid.IsInteger() || t.Oid.IsFloat() || t.Oid.IsDecimal() {
+			hasNumeric = true
+		}
+		if hasString && hasNumeric {
+			retType := types.T_varchar.ToType()
+			retType.Width = types.MaxVarBinaryLen
+			return retType, true
+		}
+	}
+	return types.Type{}, false
+}
+
+func needDecimalMetadataCast(source []types.Type, target types.Type) bool {
+	if !target.Oid.IsDecimal() {
+		return false
+	}
+	for i := range source {
+		if source[i].Oid != target.Oid {
+			return true
+		}
+		if source[i].Scale != target.Scale || source[i].Width != target.Width {
+			return true
+		}
+	}
+	return false
+}
+
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
 func caseCheck(_ []overload, inputs []types.Type) checkResult {
 	l := len(inputs)
@@ -112,7 +146,7 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 				minCost = cost
 				retType = rett.ToType()
 				if retType.Oid.IsDecimal() {
-					setMaxScaleFromSource(&retType, source)
+					setSafeDecimalWidthAndScaleFromSource(&retType, source)
 				} else if retType.Oid.IsMySQLString() {
 					setMaxWidthFromSource(&retType, source)
 				}
@@ -122,14 +156,14 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
 		finalTypes := make([]types.Type, len(inputs))
-		shouldCast := needCast || retType.Oid.IsMySQLString()
+		shouldCast := needCast || retType.Oid.IsMySQLString() || needDecimalMetadataCast(source, retType)
 		for i := range finalTypes {
 			if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
 				finalTypes[i] = types.T_bool.ToType()
 			} else {
 				finalTypes[i] = retType
 			}
-			if !inputs[i].Eq(finalTypes[i]) {
+			if finalTypes[i].Oid != inputs[i].Oid {
 				shouldCast = true
 			}
 		}
@@ -369,7 +403,7 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 				minCost = cost
 				retType = rett.ToType()
 				if retType.Oid.IsDecimal() {
-					setMaxScaleFromSource(&retType, source)
+					setSafeDecimalWidthAndScaleFromSource(&retType, source)
 				} else if retType.Oid.IsMySQLString() {
 					setMaxWidthFromSource(&retType, source)
 				}
@@ -380,9 +414,9 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
 		finalTypes := []types.Type{types.T_bool.ToType(), retType, retType}
-		shouldCast := needCast || retType.Oid.IsMySQLString()
+		shouldCast := needCast || retType.Oid.IsMySQLString() || needDecimalMetadataCast(source, retType)
 		for i := range inputs {
-			if !inputs[i].Eq(finalTypes[i]) {
+			if inputs[i].Oid != finalTypes[i].Oid {
 				shouldCast = true
 			}
 		}

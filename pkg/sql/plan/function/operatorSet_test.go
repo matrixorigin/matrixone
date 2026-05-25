@@ -460,8 +460,10 @@ func Test_CaseCheck_DifferentDecimalScale(t *testing.T) {
 	require.Len(t, result.finalType, len(inputs))
 	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
 	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
+	require.Equal(t, int32(38), result.finalType[1].Width)
 	require.Equal(t, int32(7), result.finalType[1].Scale)
 	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
+	require.Equal(t, int32(38), result.finalType[2].Width)
 	require.Equal(t, int32(7), result.finalType[2].Scale)
 }
 
@@ -477,8 +479,10 @@ func Test_IffCheck_DifferentDecimalScale(t *testing.T) {
 	require.Len(t, result.finalType, len(inputs))
 	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
 	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
+	require.Equal(t, int32(38), result.finalType[1].Width)
 	require.Equal(t, int32(7), result.finalType[1].Scale)
 	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
+	require.Equal(t, int32(38), result.finalType[2].Width)
 	require.Equal(t, int32(7), result.finalType[2].Scale)
 }
 
