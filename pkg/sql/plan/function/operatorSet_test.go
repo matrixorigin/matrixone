@@ -467,6 +467,44 @@ func Test_CaseCheck_DifferentDecimalScale(t *testing.T) {
 	require.Equal(t, int32(7), result.finalType[2].Scale)
 }
 
+func Test_CaseCheck_MixedDecimalFamilyScale(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal64, 18, 6),
+		types.New(types.T_decimal128, 20, 0),
+	}
+
+	result := caseCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
+	require.Equal(t, int32(26), result.finalType[1].Width)
+	require.Equal(t, int32(6), result.finalType[1].Scale)
+	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
+	require.Equal(t, int32(26), result.finalType[2].Width)
+	require.Equal(t, int32(6), result.finalType[2].Scale)
+}
+
+func Test_CaseCheck_Decimal64WidthCap(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal64, 18, 0),
+		types.New(types.T_decimal64, 18, 2),
+	}
+
+	result := caseCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.Equal(t, types.T_decimal64, result.finalType[1].Oid)
+	require.Equal(t, int32(18), result.finalType[1].Width)
+	require.Equal(t, int32(2), result.finalType[1].Scale)
+	require.Equal(t, types.T_decimal64, result.finalType[2].Oid)
+	require.Equal(t, int32(18), result.finalType[2].Width)
+	require.Equal(t, int32(2), result.finalType[2].Scale)
+}
+
 func Test_IffCheck_DifferentDecimalScale(t *testing.T) {
 	inputs := []types.Type{
 		types.T_bool.ToType(),
@@ -484,6 +522,25 @@ func Test_IffCheck_DifferentDecimalScale(t *testing.T) {
 	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
 	require.Equal(t, int32(38), result.finalType[2].Width)
 	require.Equal(t, int32(7), result.finalType[2].Scale)
+}
+
+func Test_IffCheck_MixedDecimalFamilyScale(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal64, 18, 6),
+		types.New(types.T_decimal128, 20, 0),
+	}
+
+	result := iffCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
+	require.Equal(t, int32(26), result.finalType[1].Width)
+	require.Equal(t, int32(6), result.finalType[1].Scale)
+	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
+	require.Equal(t, int32(26), result.finalType[2].Width)
+	require.Equal(t, int32(6), result.finalType[2].Scale)
 }
 
 func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {
