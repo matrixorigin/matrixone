@@ -342,12 +342,28 @@ func SetTargetScaleFromSource(source, target *types.Type) {
 }
 
 func setMaxScaleFromSource(t *types.Type, source []types.Type) {
+	hasSameType := false
+	maxScale := t.Scale
+	maxWidth := t.Width
 	for i := range source {
 		if source[i].Oid == t.Oid {
-			if source[i].Scale > t.Scale {
-				t.Scale = source[i].Scale
+			if !hasSameType {
+				maxScale = source[i].Scale
+				maxWidth = source[i].Width
+				hasSameType = true
+			} else {
+				if source[i].Scale > maxScale {
+					maxScale = source[i].Scale
+				}
+				if source[i].Width > maxWidth {
+					maxWidth = source[i].Width
+				}
 			}
 		}
+	}
+	if hasSameType {
+		t.Scale = maxScale
+		t.Width = maxWidth
 	}
 }
 

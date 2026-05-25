@@ -455,6 +455,40 @@ func Test_IffCheck_MixedTypes(t *testing.T) {
 	}
 }
 
+func Test_CaseCheck_DifferentDecimalScale(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal128, 23, 2),
+		types.New(types.T_decimal128, 38, 7),
+	}
+
+	result := caseCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
+	require.Equal(t, int32(7), result.finalType[1].Scale)
+	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
+	require.Equal(t, int32(7), result.finalType[2].Scale)
+}
+
+func Test_IffCheck_DifferentDecimalScale(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal128, 23, 2),
+		types.New(types.T_decimal128, 38, 7),
+	}
+
+	result := iffCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
+	require.Equal(t, int32(7), result.finalType[1].Scale)
+	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
+	require.Equal(t, int32(7), result.finalType[2].Scale)
+}
+
 func Test_CastSetFunctions(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

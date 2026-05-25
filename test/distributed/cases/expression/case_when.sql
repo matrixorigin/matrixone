@@ -170,3 +170,13 @@ create table t1(a varchar(100));
 insert into t1 values ("a");
 select a, case when a="a" then 1 when upper(a)="b" then 2 end from t1;
 drop table if exists t1;
+
+-- @case
+-- @desc:test for case_when expression with mixed decimal scales
+-- @label:bvt
+SELECT
+  7.01970 * CAST(-58140.00 AS DECIMAL(23,2)) AS direct_mul,
+  CASE WHEN 'USD' = 'RMB'
+       THEN CAST(-58140.00 AS DECIMAL(23,2))
+       ELSE 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
+  END AS bug_case;

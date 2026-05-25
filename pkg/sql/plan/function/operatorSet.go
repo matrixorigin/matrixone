@@ -121,21 +121,22 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 		if minCost == math.MaxInt32 {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
-		if minCost == 0 && !needCast && !retType.Oid.IsMySQLString() {
-			return newCheckResultWithSuccess(0)
-		}
-
 		finalTypes := make([]types.Type, len(inputs))
+		shouldCast := needCast || retType.Oid.IsMySQLString()
 		for i := range finalTypes {
-			if i%2 == 0 {
+			if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
 				finalTypes[i] = types.T_bool.ToType()
 			} else {
 				finalTypes[i] = retType
 			}
+			if !inputs[i].Eq(finalTypes[i]) {
+				shouldCast = true
+			}
 		}
-		if len(inputs)%2 == 1 {
-			finalTypes[len(finalTypes)-1] = retType
+		if !shouldCast {
+			return newCheckResultWithSuccess(0)
 		}
+
 		return newCheckResultWithCast(0, finalTypes)
 	}
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -376,10 +377,17 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 		if minCost == math.MaxInt32 {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
-		if minCost == 0 && !needCast && !retType.Oid.IsMySQLString() {
+		finalTypes := []types.Type{types.T_bool.ToType(), retType, retType}
+		shouldCast := needCast || retType.Oid.IsMySQLString()
+		for i := range inputs {
+			if !inputs[i].Eq(finalTypes[i]) {
+				shouldCast = true
+			}
+		}
+		if !shouldCast {
 			return newCheckResultWithSuccess(0)
 		}
-		return newCheckResultWithCast(0, []types.Type{types.T_bool.ToType(), retType, retType})
+		return newCheckResultWithCast(0, finalTypes)
 	}
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
