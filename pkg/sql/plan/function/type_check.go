@@ -342,29 +342,46 @@ func SetTargetScaleFromSource(source, target *types.Type) {
 }
 
 func setMaxScaleFromSource(t *types.Type, source []types.Type) {
-	hasSameType := false
-	maxScale := t.Scale
-	maxWidth := t.Width
 	for i := range source {
 		if source[i].Oid == t.Oid {
-			if !hasSameType {
-				maxScale = source[i].Scale
-				maxWidth = source[i].Width
-				hasSameType = true
-			} else {
-				if source[i].Scale > maxScale {
-					maxScale = source[i].Scale
-				}
-				if source[i].Width > maxWidth {
-					maxWidth = source[i].Width
-				}
+			if source[i].Scale > t.Scale {
+				t.Scale = source[i].Scale
 			}
 		}
 	}
-	if hasSameType {
-		t.Scale = maxScale
-		t.Width = maxWidth
+}
+
+func setSafeDecimalWidthAndScaleFromSource(t *types.Type, source []types.Type) {
+	hasSameType := false
+	maxScale := t.Scale
+	maxIntegralWidth := int32(0)
+
+	for i := range source {
+		if source[i].Oid != t.Oid {
+			continue
+		}
+		if !hasSameType {
+			maxScale = source[i].Scale
+			maxIntegralWidth = source[i].Width - source[i].Scale
+			if maxIntegralWidth < 0 {
+				maxIntegralWidth = 0
+			}
+			hasSameType = true
+		}
+		if source[i].Scale > maxScale {
+			maxScale = source[i].Scale
+		}
+		integralWidth := source[i].Width - source[i].Scale
+		if integralWidth > maxIntegralWidth {
+			maxIntegralWidth = integralWidth
+		}
 	}
+	if !hasSameType {
+		return
+	}
+
+	t.Scale = maxScale
+	t.Width = maxIntegralWidth + maxScale
 }
 
 func setMaxWidthFromSource(t *types.Type, source []types.Type) {

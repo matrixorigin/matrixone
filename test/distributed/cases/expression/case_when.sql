@@ -180,3 +180,20 @@ SELECT
        THEN CAST(-58140.00 AS DECIMAL(23,2))
        ELSE 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
   END AS bug_case;
+
+-- @case
+-- @desc:test for case_when expression with then branch decimal cast
+-- @label:bvt
+SELECT
+  CASE WHEN 'USD' = 'USD'
+       THEN CAST(-58140.00 AS DECIMAL(23,2))
+       ELSE 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
+  END AS bug_case_then;
+
+-- @case
+-- @desc:test for iff expression with mixed decimal scales
+-- @label:bvt
+SELECT
+  IFF('USD' = 'USD',
+      CAST(-58140.00 AS DECIMAL(23,2)),
+      7.01970 * CAST(-58140.00 AS DECIMAL(23,2))) AS bug_iff;
