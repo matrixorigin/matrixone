@@ -1060,7 +1060,13 @@ func (m *mysqlTaskStorage) AcquireSQLTaskRun(ctx context.Context, sqlTask SQLTas
 		return 0, err
 	}
 	if running > 0 {
-		return 0, ErrSQLTaskOverlap
+		blocked, err := m.reapStaleSQLTaskRunsTx(ctx, tx, sqlTask, time.Now())
+		if err != nil {
+			return 0, err
+		}
+		if blocked {
+			return 0, ErrSQLTaskOverlap
+		}
 	}
 
 	inserted, err := tx.ExecContext(
@@ -1096,11 +1102,57 @@ func (m *mysqlTaskStorage) AcquireSQLTaskRun(ctx context.Context, sqlTask SQLTas
 	return uint64(runID), nil
 }
 
+func (m *mysqlTaskStorage) reapStaleSQLTaskRunsTx(ctx context.Context, tx *sql.Tx, sqlTask SQLTask, now time.Time) (bool, error) {
+	rows, err := tx.QueryContext(
+		ctx,
+		"select "+sqlTaskRunSelectColumns+" from sql_task_run where task_id=? and status=? for update",
+		sqlTask.TaskID,
+		SQLTaskStatusRunning,
+	)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	runs, err := scanSQLTaskRuns(rows)
+	if err != nil {
+		return false, err
+	}
+
+	for _, run := range runs {
+		if !isStaleSQLTaskRun(sqlTask, run, now) {
+			return true, nil
+		}
+		markStaleSQLTaskRun(sqlTask, &run, now)
+		if _, err := execUpdateSQLTaskRun(ctx, tx, run); err != nil {
+			return false, err
+		}
+	}
+	return false, nil
+}
+
 func (m *mysqlTaskStorage) CompleteSQLTaskRun(ctx context.Context, run SQLTaskRun) (int, error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
-	exec, err := m.db.ExecContext(
+	exec, err := execUpdateSQLTaskRun(ctx, m.db, run)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := exec.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(affected), nil
+}
+
+type sqlTaskRunExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func execUpdateSQLTaskRun(ctx context.Context, exec sqlTaskRunExecer, run SQLTaskRun) (sql.Result, error) {
+	return exec.ExecContext(
 		ctx,
 		updateSQLTaskRun,
 		run.TaskID,
@@ -1120,14 +1172,6 @@ func (m *mysqlTaskStorage) CompleteSQLTaskRun(ctx context.Context, run SQLTaskRu
 		run.RunnerCN,
 		run.RunID,
 	)
-	if err != nil {
-		return 0, err
-	}
-	affected, err := exec.RowsAffected()
-	if err != nil {
-		return 0, err
-	}
-	return int(affected), nil
 }
 
 func (m *mysqlTaskStorage) TriggerSQLTask(ctx context.Context, sqlTask SQLTask, asyncTask task.AsyncTask) (int, error) {
