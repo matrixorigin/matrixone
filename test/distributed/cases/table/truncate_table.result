@@ -75,13 +75,13 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
 create table t2(a int,b int);
 show tables;
-Tables_in_truncate_table_3
+Tables_in_truncate_table
 t2
 t1
 insert into t2 values (1,2),(2,3);
 rollback;
 show tables;
-Tables_in_truncate_table_3
+Tables_in_truncate_table
 t1
 select count(*) from t1;
 count(*)
@@ -96,13 +96,13 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
 create table t2(a int,b int);
 show tables;
-Tables_in_truncate_table_3
+Tables_in_truncate_table
 t2
 t1
 insert into t2 values (1,2),(2,3);
 rollback;
 show tables;
-Tables_in_truncate_table_3
+Tables_in_truncate_table
 t1
 select count(*) from t1;
 count(*)
@@ -117,7 +117,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
 create table t2(a int,b int);
 show tables;
-Tables_in_truncate_table_3
+Tables_in_truncate_table
 t2
 t1
 insert into t2 values (1,2),(2,3);
@@ -125,7 +125,7 @@ truncate t1;
 truncate t1;
 commit;
 show tables;
-Tables_in_truncate_table_3
+Tables_in_truncate_table
 t1
 t2
 select count(*) from t1;
@@ -148,11 +148,11 @@ truncate t1;
 truncate t1;
 truncate t1;
 show tables;
-Tables_in_truncate_table_4
+Tables_in_truncate_table
 t1
 commit;
 show tables;
-Tables_in_truncate_table_4
+Tables_in_truncate_table
 t1
 select count(*) from t1;
 count(*)
@@ -169,7 +169,7 @@ create table t1(a int);
 drop table t1;
 commit;
 show tables;
-Tables_in_truncate_table_4
+Tables_in_truncate_table
 drop table if exists t1;
 begin;
 create table t1(a int);
@@ -182,4 +182,4 @@ drop table t3;
 drop table t4;
 commit;
 show tables;
-Tables_in_truncate_table_4
+Tables_in_truncate_table
