@@ -60,6 +60,10 @@ func TestSQLTaskExecutorExecuteContext(t *testing.T) {
 	require.Equal(t, sqlTask.CreatorUserID, *fakeIE.queryOpts[0].UserId)
 	require.NotNil(t, fakeIE.queryOpts[0].DefaultRoleId)
 	require.Equal(t, sqlTask.CreatorRoleID, *fakeIE.queryOpts[0].DefaultRoleId)
+	require.Nil(t, fakeIE.queryOpts[0].IsInternal)
+	for _, opts := range fakeIE.execOpts {
+		require.Nil(t, opts.IsInternal)
+	}
 
 	runs := mustGetTestSQLTaskRun(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))
 	require.Equal(t, SQLTaskStatusSuccess, runs[0].Status)
@@ -323,7 +327,9 @@ func TestSQLTaskExecutorOverlap(t *testing.T) {
 		task.GateCondition = "1"
 		task.SQLBody = "select 1"
 	})
-	mustAddTestSQLTaskRun(t, store, 1, newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning))
+	run := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
+	run.StartedAt = time.Now()
+	mustAddTestSQLTaskRun(t, store, 1, run)
 
 	fakeIE := &fakeInternalExecutor{}
 	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fakeIE }, ts, "cn-test")

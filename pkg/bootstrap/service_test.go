@@ -236,12 +236,10 @@ func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 				if sql == "show databases" {
 					n++
-					memRes := executor.NewMemResult(
-						[]types.Type{types.New(types.T_varchar, 2, 0)},
-						mpool.MustNewZero())
-					memRes.NewBatch()
-					executor.AppendStringRows(memRes, 0, []string{bootstrappedCheckerDB})
-					return memRes.GetResult(), nil
+					return newBootstrapStringResult(bootstrappedCheckerDB), nil
+				}
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
+					return newBootstrapStringResult(bootstrappedCheckerTables...), nil
 				}
 				return executor.Result{}, nil
 			})
@@ -269,15 +267,15 @@ func TestBootstrapWithWait(t *testing.T) {
 		func(rt runtime.Runtime) {
 			var n atomic.Uint32
 			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-				if sql == "show databases" && n.Load() == 1 {
-					memRes := executor.NewMemResult(
-						[]types.Type{types.New(types.T_varchar, 2, 0)},
-						mpool.MustNewZero())
-					memRes.NewBatch()
-					executor.AppendStringRows(memRes, 0, []string{bootstrappedCheckerDB})
-					return memRes.GetResult(), nil
+				if sql == "show databases" {
+					if n.Add(1) >= 2 {
+						return newBootstrapStringResult(bootstrappedCheckerDB), nil
+					}
+					return executor.Result{}, nil
 				}
-				n.Add(1)
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
+					return newBootstrapStringResult(bootstrappedCheckerTables...), nil
+				}
 				return executor.Result{}, nil
 			})
 
@@ -297,6 +295,52 @@ func TestBootstrapWithWait(t *testing.T) {
 			assert.True(t, n.Load() > 0)
 		},
 	)
+}
+
+func TestBootstrapMissingSQLTaskTablesIsNotBootstrapped(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				if sql == "show databases" {
+					return newBootstrapStringResult(bootstrappedCheckerDB), nil
+				}
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
+					return newBootstrapStringResult(
+						catalog.MOSysAsyncTask,
+						"sys_cron_task",
+						catalog.MOSysDaemonTask,
+					), nil
+				}
+				return executor.Result{}, nil
+			})
+
+			b := NewService(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				exec,
+			).(*service)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			ok, err := b.checkAlreadyBootstrapped(ctx)
+			require.NoError(t, err)
+			require.False(t, ok)
+		},
+	)
+}
+
+func newBootstrapStringResult(values ...string) executor.Result {
+	memRes := executor.NewMemResult(
+		[]types.Type{types.New(types.T_varchar, 2, 0)},
+		mpool.MustNewZero())
+	memRes.NewBatch()
+	executor.AppendStringRows(memRes, 0, values)
+	return memRes.GetResult()
 }
 
 type memLocker struct {
