@@ -16,6 +16,7 @@ package fifocache
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -166,6 +167,39 @@ func TestGhostQueue(t *testing.T) {
 	// 2 is in the ghost queue now
 	cache.Set(t.Context(), 3, 3, 1)
 	// 2 was evicted from ghost queue
+}
+
+func TestCachePressureAdmissionIsAtomic(t *testing.T) {
+	cache := New[int, int](
+		fscache.ConstCapacity(100),
+		ShardInt[int],
+		nil, nil, nil,
+	)
+	cache.SetAdmissionTarget(func(capacity int64) (int64, bool) {
+		return 50, true
+	})
+
+	ctx := t.Context()
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			cache.Set(ctx, i, i, 1)
+		}(i)
+	}
+	wg.Wait()
+
+	assert.Equal(t, int64(50), cache.used())
+
+	live := 0
+	for i := 0; i < 100; i++ {
+		_, ok := cache.Get(ctx, i)
+		if ok {
+			live++
+		}
+	}
+	assert.Equal(t, 50, live)
 }
 
 func TestReplaceUpdatesUsedBytes(t *testing.T) {
