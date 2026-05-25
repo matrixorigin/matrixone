@@ -1374,3 +1374,73 @@ func TestLockTableIfLockCountIsZeroWithLockRows(t *testing.T) {
 		arg.Free(proc, false, nil)
 	})
 }
+
+func TestDedupLockRows(t *testing.T) {
+	cases := []struct {
+		name string
+		in   [][]byte
+		want [][]byte
+	}{
+		{
+			name: "nil",
+			in:   nil,
+			want: nil,
+		},
+		{
+			name: "empty",
+			in:   [][]byte{},
+			want: [][]byte{},
+		},
+		{
+			name: "single",
+			in:   [][]byte{{0x01}},
+			want: [][]byte{{0x01}},
+		},
+		{
+			name: "no-dup-already-sorted",
+			in:   [][]byte{{0x01}, {0x02}, {0x03}},
+			want: [][]byte{{0x01}, {0x02}, {0x03}},
+		},
+		{
+			name: "no-dup-unsorted-output-sorted",
+			in:   [][]byte{{0x03}, {0x01}, {0x02}},
+			want: [][]byte{{0x01}, {0x02}, {0x03}},
+		},
+		{
+			name: "with-dup-mixed",
+			in:   [][]byte{{0x02}, {0x01}, {0x02}, {0x03}, {0x01}},
+			want: [][]byte{{0x01}, {0x02}, {0x03}},
+		},
+		{
+			name: "all-dup",
+			in:   [][]byte{{0x05}, {0x05}, {0x05}},
+			want: [][]byte{{0x05}},
+		},
+		{
+			name: "multibyte-keys",
+			in:   [][]byte{{0x01, 0x02}, {0x01, 0x01}, {0x01, 0x02}},
+			want: [][]byte{{0x01, 0x01}, {0x01, 0x02}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := dedupLockRows(c.in)
+			require.Equal(t, c.want, got)
+		})
+	}
+}
+
+func TestDedupLockRows_PreservesSetSemantics(t *testing.T) {
+	a := [][]byte{{0x03}, {0x01}, {0x02}, {0x01}, {0x03}}
+	b := [][]byte{{0x01}, {0x02}, {0x03}, {0x02}, {0x01}}
+
+	require.Equal(t, dedupLockRows(a), dedupLockRows(b),
+		"different orderings of the same multiset must dedupe to the same slice")
+}
+
+func TestDedupLockRows_Idempotent(t *testing.T) {
+	in := [][]byte{{0x01}, {0x02}, {0x03}, {0x04}}
+	once := dedupLockRows(in)
+	twice := dedupLockRows(append([][]byte(nil), once...))
+	require.Equal(t, once, twice)
+}
