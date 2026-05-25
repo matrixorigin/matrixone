@@ -130,3 +130,21 @@ func TestDedupLoadCleansUpAfterLoadCancel(t *testing.T) {
 	metaLoadMu.Unlock()
 	assert.False(t, ok)
 }
+
+func TestEvictCacheToCapacityPercent(t *testing.T) {
+	oldMetaCache := metaCache
+	metaCache = newMetaCache(fscache.ConstCapacity(10))
+	defer func() {
+		metaCache = oldMetaCache
+	}()
+
+	ctx := context.Background()
+	var key mataCacheKey
+	key[0] = 3
+	metaCache.Set(ctx, key, []byte("1234567890"), 10)
+
+	used := EvictCacheToCapacityPercent(ctx, 50)
+
+	assert.LessOrEqual(t, used, int64(5))
+	assert.Equal(t, used, metaCache.Used())
+}
