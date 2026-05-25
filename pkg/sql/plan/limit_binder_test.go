@@ -153,3 +153,77 @@ func TestLimitBinder_StarInLimit(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "unsupported expr in limit clause"))
 }
+
+func TestLimitBinder_BindColRefRejected(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	binder := NewLimitBinder(builder, bindCtx, false)
+
+	_, err := binder.BindColRef(tree.NewUnresolvedName(tree.NewCStr("a", 1)), 0, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "column not allowed in limit clause")
+}
+
+func TestLimitBinder_BindAggFuncRejected(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	binder := NewLimitBinder(builder, bindCtx, false)
+
+	fn := &tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedName(tree.NewCStr("count", 1))),
+		Exprs: tree.Exprs{
+			tree.NewNumVal("1", "1", false, tree.P_int64),
+		},
+	}
+	_, err := binder.BindAggFunc("count", fn, 0, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "aggregate function not allowed in limit clause")
+}
+
+func TestLimitBinder_BindWinFuncRejected(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	binder := NewLimitBinder(builder, bindCtx, false)
+
+	fn := &tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedName(tree.NewCStr("row_number", 1))),
+	}
+	_, err := binder.BindWinFunc("row_number", fn, 0, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "window function not allowed in limit clause")
+}
+
+func TestLimitBinder_BindSubqueryRejected(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	binder := NewLimitBinder(builder, bindCtx, false)
+
+	subquery := &tree.Subquery{Select: &tree.Select{}}
+	_, err := binder.BindSubquery(subquery, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "subquery not allowed in limit clause")
+}
+
+func TestLimitBinder_BindTimeWindowFuncRejected(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	binder := NewLimitBinder(builder, bindCtx, false)
+
+	fn := &tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedName(tree.NewCStr("hop", 1))),
+	}
+	_, err := binder.BindTimeWindowFunc("hop", fn, 0, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot bind time window functions 'hop'")
+}
+
+func TestLimitBinder_VarExprWrapsCase(t *testing.T) {
+	expr, err := bindLimitExpr(t, tree.NewVarExpr("v1", false, false, nil), false)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_uint64), expr.Typ.Id)
+	require.NotNil(t, expr.GetF())
+}
+
+func TestLimitBinder_UnsupportedTypeRejected(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	binder := NewLimitBinder(builder, bindCtx, false)
+
+	_, err := binder.BindExpr(tree.NewNumVal("1.5", "1.5", false, tree.P_decimal), 0, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "only uint64 support in LIMIT clause")
+}
