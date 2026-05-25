@@ -34,6 +34,7 @@ create table validate_results(result_id int primary key, status varchar(16) not 
 create table literal_source(pump int primary key, engine_rpm int, pump_rate int, label varchar(32));
 create table literal_classified(pump int primary key, state_label varchar(32));
 create table literal_matched(label varchar(32));
+create table literal_quotes(label varchar(32));
 
 create task sql_task_cron schedule '0 0 0 1 1 *' timezone 'UTC' as begin insert into scheduled_events(marker) values ('cron'); end;
 
@@ -151,11 +152,12 @@ insert into literal_source values
     (4, 500, 0, 'OFF'),
     (5, 900, 0, 'OTHER');
 
-create task sql_task_literal as begin insert into literal_classified select pump, case when engine_rpm is null then 'UNKNOWN' when engine_rpm >= 800 and pump_rate > 0 then 'PUMPING' when engine_rpm >= 600 and engine_rpm < 800 then 'IDLE' when engine_rpm < 600 then 'OFF' else 'UNKNOWN' end as state_label from literal_source; insert into literal_matched select label from literal_source where label in ('PUMPING', 'IDLE', 'OFF') and label <> 'UNKNOWN'; end;
+create task sql_task_literal as begin insert into literal_classified select pump, case when engine_rpm is null then 'UNKNOWN' when engine_rpm >= 800 and pump_rate > 0 then 'PUMPING' when engine_rpm >= 600 and engine_rpm < 800 then 'IDLE' when engine_rpm < 600 then 'OFF' else 'UNKNOWN' end as state_label from literal_source; insert into literal_matched select label from literal_source where label in ('PUMPING', 'IDLE', 'OFF') and label <> 'UNKNOWN'; insert into literal_quotes values ('O''Brien'); end;
 
 execute task sql_task_literal;
 select state_label, count(*), hex(state_label) from literal_classified group by state_label order by state_label;
 select label, hex(label) from literal_matched order by label;
+select label, hex(label) from literal_quotes;
 select status from mo_task.sql_task_run where task_name = 'sql_task_literal' and trigger_type = 'MANUAL' order by run_id desc limit 1;
 select rows_affected from mo_task.sql_task_run where task_name = 'sql_task_literal' and trigger_type = 'MANUAL' order by run_id desc limit 1;
 
