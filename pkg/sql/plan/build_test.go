@@ -1580,3 +1580,36 @@ func Test_bind_delete(t *testing.T) {
 	_, err := canDeleteRewriteToTruncate(compileCtx, dmlCtx)
 	assert.Error(t, err)
 }
+
+func TestReplaceCaptureDedupJoinDoesNotShuffle(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO self_ref VALUES (1, NULL, 'root')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_DEDUP {
+			continue
+		}
+		if node.DedupJoinCtx == nil || len(node.DedupJoinCtx.OldColCaptureList) == 0 {
+			continue
+		}
+
+		rightChild := query.Nodes[node.Children[1]]
+		rightChild.Stats.Outcnt = 320001
+		node.Stats = DefaultStats()
+
+		builder := &QueryBuilder{qry: query}
+		determineShuffleForJoin(node, builder)
+
+		assert.False(t, node.Stats.HashmapStats.Shuffle)
+		assert.Equal(t, int32(-1), node.Stats.HashmapStats.ShuffleColIdx)
+		return
+	}
+
+	t.Fatal("expected REPLACE plan to contain a DEDUP JOIN with OldColCaptureList")
+}

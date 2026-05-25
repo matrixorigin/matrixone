@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -536,4 +537,74 @@ func TestMemoryCacheEvictToCapacityPercent(t *testing.T) {
 	ret := EvictMemoryCachesToCapacityPercent(ctx, 50)
 	assert.Equal(t, int64(5), ret["test-target-evict"])
 	assert.LessOrEqual(t, cache.cache.Used(), int64(5))
+}
+
+func TestMemoryCachePressureAdmissionSkipsWritesAboveTarget(t *testing.T) {
+	ctx := context.Background()
+	clearMemoryCachePressureTargetForTest()
+	defer clearMemoryCachePressureTargetForTest()
+
+	cache := NewMemCache(
+		fscache.ConstCapacity(10),
+		nil,
+		nil,
+		"",
+	)
+	defer cache.Close(ctx)
+
+	SetMemoryCachePressureTargetPercent(50, time.Now().Add(time.Minute))
+
+	for i := 0; i < 5; i++ {
+		vec := &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{{
+				Offset:     int64(i),
+				Size:       1,
+				CachedData: staticTestData([]byte{byte(i)}),
+			}},
+		}
+		assert.NoError(t, cache.Update(ctx, vec, false))
+	}
+	assert.Equal(t, int64(5), cache.cache.Used())
+
+	vec := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Offset:     5,
+			Size:       1,
+			CachedData: staticTestData([]byte{5}),
+		}},
+	}
+	assert.NoError(t, cache.Update(ctx, vec, false))
+	assert.Equal(t, int64(5), cache.cache.Used())
+
+	_, ok := cache.cache.Get(ctx, fscache.CacheKey{Path: "foo", Offset: 5, Sz: 1})
+	assert.False(t, ok)
+}
+
+func TestMemoryCachePressureAdmissionExpires(t *testing.T) {
+	ctx := context.Background()
+	clearMemoryCachePressureTargetForTest()
+	defer clearMemoryCachePressureTargetForTest()
+
+	cache := NewMemCache(
+		fscache.ConstCapacity(10),
+		nil,
+		nil,
+		"",
+	)
+	defer cache.Close(ctx)
+
+	SetMemoryCachePressureTargetPercent(50, time.Now().Add(-time.Second))
+
+	vec := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Offset:     0,
+			Size:       1,
+			CachedData: staticTestData([]byte{1}),
+		}},
+	}
+	assert.NoError(t, cache.Update(ctx, vec, false))
+	assert.Equal(t, int64(1), cache.cache.Used())
 }
