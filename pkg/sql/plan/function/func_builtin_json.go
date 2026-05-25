@@ -1262,11 +1262,13 @@ func jsonKeysRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 			return moerr.NewInvalidArg(proc.Ctx, "json_keys", "invalid JSON document")
 		}
 		keysArray, err := buildJsonKeysArray(bj)
-		if err != nil || keysArray == nil {
+		if err != nil || keysArray.IsNull() {
 			rs.AppendMustNullForBytesResult()
 			continue
 		}
-		rs.AppendMustBytesValue(keysArray)
+		if err := rs.AppendByteJson(keysArray, false); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1317,29 +1319,27 @@ func jsonKeysWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 		keysArray, err := buildJsonKeysArray(val)
-		if err != nil {
+		if err != nil || keysArray.IsNull() {
 			rs.AppendMustNullForBytesResult()
 			continue
 		}
-		rs.AppendMustBytesValue(keysArray)
+		if err := rs.AppendByteJson(keysArray, false); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func buildJsonKeysArray(bj bytejson.ByteJson) ([]byte, error) {
+func buildJsonKeysArray(bj bytejson.ByteJson) (bytejson.ByteJson, error) {
 	if bj.Type != bytejson.TpCodeObject {
-		return nil, nil // not an object → return nil (will be NULL)
+		return bytejson.Null, nil
 	}
 	cnt := bj.GetElemCnt()
-	keys := make([]string, cnt)
+	keys := make([]any, cnt)
 	for i := 0; i < cnt; i++ {
 		keys[i] = string(bj.GetObjectKey(i))
 	}
-	raw, err := json.Marshal(keys)
-	if err != nil {
-		return nil, err
-	}
-	return raw, nil
+	return bytejson.CreateByteJSON(keys)
 }
 
 // JSON_PRETTY
@@ -1621,29 +1621,27 @@ func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionRe
 		if err != nil {
 			return err
 		}
-		rs.AppendMustBytesValue(v.([]byte))
+		if err := rs.AppendByteJson(v.(bytejson.ByteJson), false); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func buildSchemaValidationReport(result *gojsonschema.Result) []byte {
+func buildSchemaValidationReport(result *gojsonschema.Result) (bytejson.ByteJson, error) {
 	if result.Valid() {
-		return []byte(`{"valid": true}`)
-	}
-	var buf bytes.Buffer
-	buf.WriteString(`{"valid": false, "errors": [`)
-	for i, e := range result.Errors() {
-		if i > 0 {
-			buf.WriteString(", ")
-		}
-		errObj, _ := json.Marshal(map[string]string{
-			"property": e.Field(),
-			"message":  e.Description(),
+		return bytejson.CreateByteJSON(map[string]any{
+			"valid": true,
 		})
-		buf.Write(errObj)
 	}
-	buf.WriteString("]}")
-	return buf.Bytes()
+	err := result.Errors()[0]
+	return bytejson.CreateByteJSON(map[string]any{
+		"valid":                 false,
+		"reason":                err.Description(),
+		"schema-location":       bestEffortSchemaLocation(err),
+		"document-location":     bestEffortDocumentLocation(err),
+		"schema-failed-keyword": bestEffortSchemaFailedKeyword(err),
+	})
 }
 
 // parseSchemaJSON parses the schema bytes into a ByteJson.
@@ -1700,7 +1698,11 @@ func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Var
 		if boolResult {
 			return result.Valid(), nil
 		}
-		return buildSchemaValidationReport(result), nil
+		report, err := buildSchemaValidationReport(result)
+		if err != nil {
+			return nil, err
+		}
+		return report, nil
 	}
 
 	schemaBytes, _ := p1.GetStrValue(row)
@@ -1725,7 +1727,62 @@ func doJsonSchemaValidateCached(p1, p2 vector.FunctionParameterWrapper[types.Var
 	if boolResult {
 		return validationResult.Valid(), nil
 	}
-	return buildSchemaValidationReport(validationResult), nil
+	report, err := buildSchemaValidationReport(validationResult)
+	if err != nil {
+		return nil, err
+	}
+	return report, nil
+}
+
+func bestEffortDocumentLocation(err gojsonschema.ResultError) string {
+	if err == nil || err.Context() == nil {
+		return "$"
+	}
+	ctx := err.Context().String(".")
+	if ctx == "" || ctx == "(root)" {
+		return "$"
+	}
+	return "$." + strings.TrimPrefix(ctx, "(root).")
+}
+
+func bestEffortSchemaFailedKeyword(err gojsonschema.ResultError) string {
+	if err == nil {
+		return ""
+	}
+	switch err.Type() {
+	case "required":
+		return "required"
+	case "invalid_type":
+		return "type"
+	case "number_gte":
+		return "minimum"
+	case "number_lte":
+		return "maximum"
+	case "multiple_of":
+		return "multipleOf"
+	case "string_gte":
+		return "minLength"
+	case "string_lte":
+		return "maxLength"
+	case "pattern":
+		return "pattern"
+	case "enum":
+		return "enum"
+	case "array_gte":
+		return "minItems"
+	case "array_lte":
+		return "maxItems"
+	default:
+		return err.Type()
+	}
+}
+
+func bestEffortSchemaLocation(err gojsonschema.ResultError) string {
+	keyword := bestEffortSchemaFailedKeyword(err)
+	if keyword == "" {
+		return "#"
+	}
+	return "#/" + keyword
 }
 
 func schemaHasRefKeyword(bj bytejson.ByteJson) bool {
@@ -1851,6 +1908,9 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		pathStr := string(pathBytes)
 		path, err := types.ParseStringToPath(pathStr)
 		if err != nil {
+			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid path expression")
+		}
+		if !path.IsSimple() {
 			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid path expression")
 		}
 		// Extract value at path.

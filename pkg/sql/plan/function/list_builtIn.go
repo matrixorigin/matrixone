@@ -994,7 +994,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_json},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_json.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return JsonKeys
@@ -1004,7 +1004,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_json.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return JsonKeys
@@ -1014,7 +1014,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_json, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_json.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return JsonKeys
@@ -1024,7 +1024,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_json.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return JsonKeys
@@ -1127,7 +1127,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_json.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return JsonSchemaValidationReport
@@ -1137,7 +1137,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_json, types.T_json},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_json.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return JsonSchemaValidationReport
@@ -1147,7 +1147,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_json},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_json.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return JsonSchemaValidationReport
@@ -1157,7 +1157,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_json, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_json.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return JsonSchemaValidationReport
