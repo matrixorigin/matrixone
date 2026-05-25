@@ -336,8 +336,11 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 					continue
 				}
 				genExpr := substituteColRefsInExpr(col.GeneratedCol.Expr, baseLookup, 0)
-				newOffset := int32(len(selectNode.ProjectList)) - tableBase
-				selectNode.ProjectList = append(selectNode.ProjectList, genExpr)
+				insertPos := int(tableBase) + len(tableDef.Cols) + upPlanCtx.updateColLength
+				selectNode.ProjectList = append(selectNode.ProjectList, nil)
+				copy(selectNode.ProjectList[insertPos+1:], selectNode.ProjectList[insertPos:])
+				selectNode.ProjectList[insertPos] = genExpr
+				newOffset := int32(insertPos) - tableBase
 				upPlanCtx.updateColPosMap[col.Name] = int(newOffset)
 				upPlanCtx.updateColLength++
 			}
