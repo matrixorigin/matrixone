@@ -53,7 +53,14 @@ var (
 )
 
 var (
-	bootstrappedCheckerDB = catalog.MOTaskDB
+	bootstrappedCheckerDB     = catalog.MOTaskDB
+	bootstrappedCheckerTables = []string{
+		catalog.MOSysAsyncTask,
+		"sys_cron_task",
+		catalog.MOSysDaemonTask,
+		catalog.MOSQLTask,
+		catalog.MOSQLTaskRun,
+	}
 	// Note: The following tables belong to data dictionary table, and system tables's creation will depend on
 	// the following system tables. Therefore, when creating tenants, they must be created first
 	step1InitSQLs = []string{
@@ -218,12 +225,34 @@ func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
 	})
 	for _, db := range dbs {
 		if strings.EqualFold(db, bootstrappedCheckerDB) {
-			return true, nil
+			return s.checkBootstrapTables(ctx)
 		}
 	}
 	// todo: these should do a log here to indicate that the system is not bootstrapped like the following
 	//  "show databases cannot find the bootstrappedCheckerDB."
 	return false, nil
+}
+
+func (s *service) checkBootstrapTables(ctx context.Context) (bool, error) {
+	res, err := s.exec.Exec(ctx, fmt.Sprintf("show tables from %s", bootstrappedCheckerDB), executor.Options{}.WithMinCommittedTS(s.now()))
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+
+	tables := make(map[string]struct{})
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		for _, table := range executor.GetStringRows(cols[0]) {
+			tables[strings.ToLower(table)] = struct{}{}
+		}
+		return true
+	})
+	for _, table := range bootstrappedCheckerTables {
+		if _, ok := tables[strings.ToLower(table)]; !ok {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (s *service) execBootstrap(ctx context.Context) error {

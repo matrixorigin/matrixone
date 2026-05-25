@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/mohae/deepcopy"
 
@@ -400,8 +401,14 @@ func (s *memTaskStorage) AcquireSQLTaskRun(ctx context.Context, sqlTask SQLTask,
 	if _, ok := s.sqlTasks[sqlTask.TaskID]; !ok {
 		return 0, ErrSQLTaskNotFound
 	}
+	now := time.Now()
 	for _, existing := range s.sqlTaskRuns {
 		if existing.TaskID == sqlTask.TaskID && existing.Status == SQLTaskStatusRunning {
+			if isStaleSQLTaskRun(sqlTask, existing, now) {
+				markStaleSQLTaskRun(sqlTask, &existing, now)
+				s.sqlTaskRuns[existing.RunID] = existing
+				continue
+			}
 			return 0, ErrSQLTaskOverlap
 		}
 	}
