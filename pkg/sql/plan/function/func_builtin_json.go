@@ -726,6 +726,15 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 	proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for j := 0; j < length; j++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	for j := 0; j < length; j++ {
 		if selectList.Contains(uint64(j)) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -953,6 +962,15 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 	proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	arrayOp := &opBuiltInJsonArray{}
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for j := 0; j < length; j++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 
 	for j := 0; j < length; j++ {
 		if selectList.Contains(uint64(j)) {
@@ -1215,6 +1233,14 @@ func jsonKeysRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := 0; i < length; i++ {
+			rs.AppendMustNullForBytesResult()
+		}
+		return nil
+	}
+
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList.Contains(i) {
 			rs.AppendMustNullForBytesResult()
@@ -1252,6 +1278,13 @@ func jsonKeysWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, ivecs[1])
 
 	isJson := !ivecs[0].GetType().Oid.IsMySQLString()
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := 0; i < length; i++ {
+			rs.AppendMustNullForBytesResult()
+		}
+		return nil
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList.Contains(i) {
@@ -1315,6 +1348,14 @@ func JsonPretty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := 0; i < length; i++ {
+			rs.AppendMustNullForBytesResult()
+		}
+		return nil
+	}
+
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList.Contains(i) {
 			rs.AppendMustNullForBytesResult()
@@ -1787,6 +1828,13 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, ivecs[1])
 
 	isStr := ivecs[0].GetType().Oid.IsMySQLString()
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := 0; i < length; i++ {
+			rs.AppendMustNullForBytesResult()
+		}
+		return nil
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList.Contains(i) {

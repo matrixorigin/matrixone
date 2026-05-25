@@ -1091,6 +1091,106 @@ func TestJsonTypeIgnoreAllRows(t *testing.T) {
 	require.True(t, vec.IsNull(1))
 }
 
+func TestJsonArrayIgnoreAllRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	selectList := &FunctionSelectList{AllNull: true}
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(),
+				[]string{``, ``},
+				[]bool{false, false}),
+		},
+		types.T_json.ToType(), newOpBuiltInJsonArray().jsonArray, selectList)
+
+	require.True(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
+}
+
+func TestJsonObjectIgnoreAllRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	selectList := &FunctionSelectList{AllNull: true}
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(),
+				[]string{``, ``},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{1, 2},
+				[]bool{false, false}),
+		},
+		types.T_json.ToType(), newOpBuiltInJsonObject().jsonObject, selectList)
+
+	require.True(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
+}
+
+func TestJsonKeysIgnoreAllRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	selectList := &FunctionSelectList{AllNull: true}
+
+	t.Run("root", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `still not json`},
+					[]bool{false, false}),
+			},
+			types.T_varchar.ToType(), JsonKeys, selectList)
+
+		require.True(t, vec.IsNull(0))
+		require.True(t, vec.IsNull(1))
+	})
+
+	t.Run("with path", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `still not json`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`bad path`, `still bad path`},
+					[]bool{false, false}),
+			},
+			types.T_varchar.ToType(), JsonKeys, selectList)
+
+		require.True(t, vec.IsNull(0))
+		require.True(t, vec.IsNull(1))
+	})
+}
+
+func TestJsonPrettyIgnoreAllRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	selectList := &FunctionSelectList{AllNull: true}
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`not json`, `still not json`},
+				[]bool{false, false}),
+		},
+		types.T_varchar.ToType(), JsonPretty, selectList)
+
+	require.True(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
+}
+
+func TestJsonValueIgnoreAllRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	selectList := &FunctionSelectList{AllNull: true}
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`not json`, `still not json`},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`bad path`, `still bad path`},
+				[]bool{false, false}),
+		},
+		types.T_varchar.ToType(), JsonValue, selectList)
+
+	require.True(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
+}
+
 func TestJsonValid(t *testing.T) {
 	testCases := initJsonValidTestCase()
 
