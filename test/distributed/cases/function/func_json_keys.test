@@ -22,6 +22,7 @@ select json_keys('{"a":1}', null);
 
 -- via json functions
 select json_keys(json_object('a', 1, 'b', 2));
+select json_array(json_keys('{"a":1,"b":2}'));
 
 -- varchar column
 drop table if exists t1;

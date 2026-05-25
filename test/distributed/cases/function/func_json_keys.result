@@ -37,6 +37,9 @@ null
 select json_keys(json_object('a', 1, 'b', 2));
 json_keys(json_object(a, 1, b, 2))
 ["a","b"]
+select json_array(json_keys('{"a":1,"b":2}'));
+json_array(json_keys({"a":1,"b":2}))
+[["a", "b"]]
 drop table if exists t1;
 create table t1 (a varchar(100));
 insert into t1 values ('{"a":1,"b":2}'), ('[1,2]'), ('{}'), ('"hello"'), (null);
