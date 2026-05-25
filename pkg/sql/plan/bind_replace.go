@@ -162,6 +162,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			if err != nil {
 				return 0, err
 			}
+			ensureName2ColIndexForReplace(idxTableDefs[i])
 
 			// Spatial indexes look up the old index-table row via the primary
 			// column (indexLookupColumnName returns IndexTablePrimaryColName).
@@ -216,6 +217,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			if err != nil {
 				return 0, err
 			}
+			ensureName2ColIndexForReplace(idxTableDefs[i])
 			oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTablePrimaryColName] = oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
 
 			if !indexTableStoresSerializedKey(idxDef) {
@@ -743,7 +745,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}
 
 		oldRowIdPos := int32(len(finalProjList))
-		oldColRef := oldColName2Idx[idxDef.IndexTableName+"."+catalog.Row_ID]
+		oldRowIDKey := idxTableDefs[i].Name + "." + catalog.Row_ID
+		oldColRef, ok := oldColName2Idx[oldRowIDKey]
+		if !ok {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"bind replace err, can not find old index rowid colName = %s", oldRowIDKey)
+		}
 		rowIdExpr := &plan.Expr{
 			Typ: idxTableDefs[i].Cols[idxTableDefs[i].Name2ColIndex[catalog.Row_ID]].Typ,
 			Expr: &plan.Expr_Col{
@@ -758,7 +765,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		oldIdxPos := int32(len(finalProjList))
 		lookupColName := indexLookupColumnName(idxDef)
 		lookupColIdx := idxTableDefs[i].Name2ColIndex[lookupColName]
-		oldColRef = oldColName2Idx[idxDef.IndexTableName+"."+lookupColName]
+		oldLookupKey := idxTableDefs[i].Name + "." + lookupColName
+		oldColRef, ok = oldColName2Idx[oldLookupKey]
+		if !ok {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"bind replace err, can not find old index lookup colName = %s", oldLookupKey)
+		}
 		idxExpr := &plan.Expr{
 			Typ: idxTableDefs[i].Cols[lookupColIdx].Typ,
 			Expr: &plan.Expr_Col{
@@ -834,6 +846,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	}, bindCtx)
 
 	return lastNodeID, nil
+}
+
+func ensureName2ColIndexForReplace(tableDef *TableDef) {
+	if len(tableDef.Name2ColIndex) > 0 {
+		return
+	}
+	tableDef.Name2ColIndex = make(map[string]int32, len(tableDef.Cols))
+	for colIdx, col := range tableDef.Cols {
+		tableDef.Name2ColIndex[col.Name] = int32(colIdx)
+	}
 }
 
 func (builder *QueryBuilder) appendNodesForReplaceStmt(

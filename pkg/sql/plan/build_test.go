@@ -814,6 +814,74 @@ func TestReplacePlanStructure(t *testing.T) {
 	assert.True(t, hasDedupJoin, "REPLACE plan should contain DEDUP JOIN node")
 }
 
+func TestReplaceNonUniqueSingleIndexDeleteUsesIndexRowID(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO single_idx_t VALUES (1, 100)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var multiUpdate *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdate = node
+			break
+		}
+	}
+	if multiUpdate == nil {
+		t.Fatal("REPLACE plan should contain MULTI_UPDATE node")
+	}
+
+	var idxUpdateCtx *plan.UpdateCtx
+	for _, updateCtx := range multiUpdate.UpdateCtxList {
+		if updateCtx.TableDef == nil {
+			continue
+		}
+		if strings.HasPrefix(updateCtx.TableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
+			idxUpdateCtx = updateCtx
+			break
+		}
+	}
+	if idxUpdateCtx == nil {
+		t.Fatal("REPLACE plan should contain UpdateCtx for the secondary index table")
+	}
+	if len(idxUpdateCtx.DeleteCols) < 2 {
+		t.Fatal("secondary index UpdateCtx should contain delete columns")
+	}
+	if len(multiUpdate.Children) != 1 {
+		t.Fatalf("MULTI_UPDATE should have one child, got %d", len(multiUpdate.Children))
+	}
+
+	oldRowIDDeleteCol := idxUpdateCtx.DeleteCols[0]
+	oldIdxDeleteCol := idxUpdateCtx.DeleteCols[1]
+	child := query.Nodes[multiUpdate.Children[0]]
+	if oldRowIDDeleteCol.ColPos < 0 || int(oldRowIDDeleteCol.ColPos) >= len(child.ProjectList) {
+		t.Fatalf("DeleteCols[0] ColPos %d out of child project range %d",
+			oldRowIDDeleteCol.ColPos, len(child.ProjectList))
+	}
+	if oldIdxDeleteCol.ColPos < 0 || int(oldIdxDeleteCol.ColPos) >= len(child.ProjectList) {
+		t.Fatalf("DeleteCols[1] ColPos %d out of child project range %d",
+			oldIdxDeleteCol.ColPos, len(child.ProjectList))
+	}
+	wantRowIDName := idxUpdateCtx.TableDef.Name + "." + catalog.Row_ID
+	wantIdxName := idxUpdateCtx.TableDef.Name + "." + catalog.IndexTableIndexColName
+	assert.Equal(t, wantRowIDName, oldRowIDDeleteCol.Name,
+		"DeleteCols[0] should read Row_ID from the secondary index table")
+	assert.Equal(t, wantIdxName, oldIdxDeleteCol.Name,
+		"DeleteCols[1] should read the secondary index key column")
+	assert.Equal(t, int32(types.T_Rowid), child.ProjectList[oldRowIDDeleteCol.ColPos].Typ.Id,
+		"DeleteCols[0] should point at a Row_ID vector in the MULTI_UPDATE input")
+	assert.NotEqual(t, oldRowIDDeleteCol.ColPos, oldIdxDeleteCol.ColPos,
+		"Row_ID and index key delete columns must not collapse to the same input column")
+	assert.False(t, oldRowIDDeleteCol.RelPos == 0 && oldRowIDDeleteCol.ColPos == 0 &&
+		oldRowIDDeleteCol.Name != wantRowIDName,
+		"DeleteCols[0] must not fall back to a zero-value ColRef")
+}
+
 func TestReplaceSelfRefPlanStructure(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
