@@ -35,3 +35,94 @@ INSERT INTO emp VALUES (9,'KING','PRESIDENT',NULL,'1981-11-17',5000,NULL,10);
 INSERT INTO emp VALUES (10,'TURNER','SALESMAN',7698,'1981-09-08',1500,0,30);
 SELECT * FROM EMP;
 DROP TABLE emp;
+
+-- merged from truncate_table_3.sql
+
+drop table if exists t1;
+create table t1(a int);
+insert into t1 values(1),(2),(3),(4);
+select count(*) from t1;
+
+begin;
+select count(*) from t1;
+truncate t1;
+select count(*) from t1;
+show columns from t1;
+create table t2(a int,b int);
+--t1 t2
+show tables;
+insert into t2 values (1,2),(2,3);
+rollback;
+show tables;
+select count(*) from t1;
+
+begin;
+truncate t1;
+select count(*) from t1;
+show columns from t1;
+create table t2(a int,b int);
+-- t1,t2
+show tables;
+insert into t2 values (1,2),(2,3);
+rollback;
+show tables;
+select count(*) from t1;
+
+begin;
+truncate t1;
+select count(*) from t1;
+show columns from t1;
+create table t2(a int,b int);
+--t1,t2
+show tables;
+insert into t2 values (1,2),(2,3);
+truncate t1;
+truncate t1;
+commit;
+show tables;
+select count(*) from t1;
+select count(*) from t2;
+
+-- merged from truncate_table_4.sql
+
+drop table if exists t1;
+create table t1(a int);
+insert into t1 values(1),(2),(3),(4);
+select count(*) from t1;
+begin;
+truncate t1;
+truncate t1;
+truncate t1;
+truncate t1;
+truncate t1;
+truncate t1;
+show tables;
+commit;
+show tables;
+select count(*) from t1;
+-----------------------
+drop table if exists t1;
+begin;
+create table t1(a int);
+drop table t1;
+create table t1(a int);
+drop table t1;
+create table t1(a int);
+drop table t1;
+create table t1(a int);
+drop table t1;
+commit;
+show tables;
+-----------------------
+drop table if exists t1;
+begin;
+create table t1(a int);
+create table t2(a int);
+create table t3(a int);
+create table t4(a int);
+drop table t1;
+drop table t2;
+drop table t3;
+drop table t4;
+commit;
+show tables;
