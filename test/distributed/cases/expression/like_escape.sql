@@ -47,5 +47,37 @@ select * from t_like_escape where a like 'a_b' escape null;
 -- 13. NOT LIKE ESCAPE NULL also returns no rows
 select * from t_like_escape where a not like 'a_b' escape null;
 
+-- 14. ILIKE ESCAPE NULL returns no rows
+select * from t_like_escape where a ilike 'a_b' escape null;
+
+-- 15. NOT ILIKE ESCAPE NULL also returns no rows
+select * from t_like_escape where a not ilike 'a_b' escape null;
+
+-- 16. ILIKE row-dependent ESCAPE from column (case insensitive)
+select * from t_like_esc_col where val ilike 'a\_b' escape esc;
+
+-- 17. ILIKE row-dependent ESCAPE: different escape per row
+select * from t_like_esc_col where val ilike 'a#_b' escape esc;
+
+-- 18. LIKE row-dependent ESCAPE: NULL escape in a row returns NULL for that row
+drop table if exists t_esc_null;
+create table t_esc_null (val varchar(100), esc varchar(10));
+insert into t_esc_null values ('a_b', '\\'), ('a_b', null);
+select * from t_esc_null where val like 'a\_b' escape esc;
+
+-- 19. ILIKE row-dependent ESCAPE: NULL escape in a row
+select * from t_esc_null where val ilike 'a\_b' escape esc;
+
+-- 20. LIKE row-dependent ESCAPE: multi-char escape in a row reports error
+drop table if exists t_esc_multi;
+create table t_esc_multi (val varchar(100), esc varchar(10));
+insert into t_esc_multi values ('a_b', '\\'), ('a_b', 'ab');
+select * from t_esc_multi where val like 'a\_b' escape esc;
+
+-- 21. ILIKE row-dependent ESCAPE: multi-char escape in a row reports error
+select * from t_esc_multi where val ilike 'a\_b' escape esc;
+
+drop table t_esc_null;
+drop table t_esc_multi;
 drop table t_like_esc_col;
 drop table t_like_escape;

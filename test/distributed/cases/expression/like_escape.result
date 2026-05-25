@@ -47,5 +47,34 @@ select * from t_like_escape where a like 'a_b' escape null;
 a
 select * from t_like_escape where a not like 'a_b' escape null;
 a
+select * from t_like_escape where a ilike 'a_b' escape null;
+a
+select * from t_like_escape where a not ilike 'a_b' escape null;
+a
+select * from t_like_esc_col where val ilike 'a\_b' escape esc;
+val	esc
+a_b	\
+A_B	\
+select * from t_like_esc_col where val ilike 'a#_b' escape esc;
+val	esc
+a_b	#
+drop table if exists t_esc_null;
+create table t_esc_null (val varchar(100), esc varchar(10));
+insert into t_esc_null values ('a_b', '\\'), ('a_b', null);
+select * from t_esc_null where val like 'a\_b' escape esc;
+val	esc
+a_b	\
+select * from t_esc_null where val ilike 'a\_b' escape esc;
+val	esc
+a_b	\
+drop table if exists t_esc_multi;
+create table t_esc_multi (val varchar(100), esc varchar(10));
+insert into t_esc_multi values ('a_b', '\\'), ('a_b', 'ab');
+select * from t_esc_multi where val like 'a\_b' escape esc;
+invalid input: Incorrect arguments: escape character must be a single character
+select * from t_esc_multi where val ilike 'a\_b' escape esc;
+invalid input: Incorrect arguments: escape character must be a single character
+drop table t_esc_null;
+drop table t_esc_multi;
 drop table t_like_esc_col;
 drop table t_like_escape;
