@@ -25,6 +25,7 @@ create table gate_sink(tag varchar(32) primary key);
 create table literal_readings(pump int, engine_rpm int, pump_rate int, label varchar(32));
 create table literal_classified(pump int, state varchar(32));
 create table literal_matched(label varchar(32));
+create table literal_quotes(label varchar(32));
 create table rows_success_target(v int);
 create table rows_success_heartbeat(tag varchar(16));
 create table ms_target(v int);
@@ -133,6 +134,8 @@ as begin
     select label
     from literal_readings
     where label in ('PUMPING', 'IDLE', 'OFF') and label <> 'UNKNOWN';
+
+    insert into literal_quotes values ('O''Brien');
 end
 $$
 -- @delimiter ;
@@ -141,6 +144,7 @@ execute task sql_task_literal_strings;
 select sleep(1);
 select state, count(*), hex(state) from literal_classified group by state order by state;
 select label, hex(label) from literal_matched order by label;
+select label, hex(label) from literal_quotes;
 select status, rows_affected from mo_task.sql_task_run where task_name = 'sql_task_literal_strings' order by run_id desc limit 1;
 
 -- @delimiter $$

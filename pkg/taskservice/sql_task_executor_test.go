@@ -75,7 +75,7 @@ func TestSQLTaskExecutorPreservesQuotedStrings(t *testing.T) {
 
 	sqlTask := mustAddSQLTaskForExecutorTest(t, store, func(task *SQLTask) {
 		task.GateCondition = "1"
-		task.SQLBody = "insert into gate_sink select 'gate-ok'; select case when 1 = 1 then 'PASS' else 'FAIL' end"
+		task.SQLBody = "insert into gate_sink select 'gate-ok'; insert into gate_sink values ('O''Brien'); select case when 1 = 1 then 'PASS' else 'FAIL' end"
 	})
 
 	fakeIE := &fakeInternalExecutor{
@@ -87,6 +87,7 @@ func TestSQLTaskExecutorPreservesQuotedStrings(t *testing.T) {
 
 	require.Equal(t, []string{
 		"insert into gate_sink select 'gate-ok'",
+		"insert into gate_sink values ('O''Brien')",
 		"select case when 1 = 1 then 'PASS' else 'FAIL' end",
 	}, fakeIE.execSQLs)
 }
