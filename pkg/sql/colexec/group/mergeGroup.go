@@ -140,7 +140,12 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 	if err != nil {
 		return false, err
 	}
-	defer mergeGroup.ctr.freeSpillAggList()
+	needCleanupSpillAggList := true
+	defer func() {
+		if needCleanupSpillAggList {
+			mergeGroup.ctr.freeSpillAggList()
+		}
+	}()
 
 	// deserialize extra buf2.
 	if len(bat.ExtraBuf) != 0 {
@@ -243,5 +248,6 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 	}
 
 	mergeGroup.ctr.freeSpillAggList()
+	needCleanupSpillAggList = false
 	return mergeGroup.ctr.needSpill(mergeGroup.OpAnalyzer), nil
 }
