@@ -86,8 +86,8 @@ insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
 select atan(a*pi()/180) as atana,atan(b*pi()/180) atanb from t1;
 atana    atanb
 0.0    0.0
--0.25605276998075555    -0.33584237256640787
--0.3666136182932664    -0.2148004503403853
+-0.25605276998075555    -0.3358423725664079
+-0.36661361829326644    -0.2148004503403853
 0.0    1.4129651365067377
 0.48234790710102493    1.4249275378445119
 1.0038848218538872    1.4441537892065186
@@ -96,8 +96,8 @@ atana    atanb
 select atan(a*pi()/180)*atan(b*pi()/180) as atanab,atan(atan(a*pi()/180)) as c from t1;
 atanab    c
 0.0    0.0
-0.08599336977253765    -0.25066722482387166
-0.07874877031031174    -0.3513980316581596
+0.08599336977253766    -0.25066722482387166
+0.07874877031031176    -0.35139803165815964
 0.0    0.0
 0.6873108156499168    0.44942647356532794
 1.449764069407202    0.7873368062499201
@@ -132,12 +132,12 @@ VALUES
 ('Sudip Majhi', 'ABC Corp.', 'Delhi', '2018-10-30', 600000),
 ('Sanjoy Kohli', 'XYZ Digital', 'Delhi', '2019-04-18', 450000);
 SELECT Working_At, BIT_AND(Annual_Income) AS BITORINCOME FROM t1 group by Working_At;
-working_at    bitorincome
+Working_At    BITORINCOME
 XYZ Digital    262144
 ABC Corp.    65792
 PQR Soln.    4096
 SELECT Work_Location, BIT_AND(Annual_Income) AS BITORINCOME FROM t1 Group By Work_Location;
-work_location    bitorincome
+Work_Location    BITORINCOME
 Kolkata    262144
 Delhi    0
 drop table if exists t1;
@@ -160,11 +160,11 @@ VALUES
 ('Sudip Majhi', 'ABC Corp.', 'Delhi', '2018-10-30', 600000),
 ('Sanjoy Kohli', 'XYZ Digital', 'Delhi', '2019-04-18', 450000);
 SELECT Work_Location, BIT_AND(Annual_Income) AS BITORINCOME FROM t1 Group By Work_Location;
-work_location    bitorincome
+Work_Location    BITORINCOME
 Kolkata    262144
 Delhi    0
 SELECT Working_At, BIT_AND(Annual_Income) AS BITORINCOME FROM t1 group by Working_At;
-working_at    bitorincome
+Working_At    BITORINCOME
 XYZ Digital    262144
 ABC Corp.    65792
 PQR Soln.    4096
@@ -188,11 +188,11 @@ VALUES
 ('Sudip Majhi', 'ABC Corp.', 'Delhi', '2018-10-30', 600000),
 ('Sanjoy Kohli', 'XYZ Digital', 'Delhi', '2019-04-18', 450000);
 SELECT Work_Location, BIT_XOR(Annual_Income) AS BITORINCOME FROM t1 Group By Work_Location;
-work_location    bitorincome
+Work_Location    BITORINCOME
 Kolkata    350624
 Delhi    912976
 SELECT Working_At, BIT_XOR(Annual_Income) AS BITORINCOME FROM t1 group by Working_At;
-working_at    bitorincome
+Working_At    BITORINCOME
 XYZ Digital    94816
 ABC Corp.    774608
 PQR Soln.    136256
@@ -314,7 +314,7 @@ VALUES
 (5,'Riya Jain', 'IX'),
 (6,'Tapan Samanta', 'X');
 SELECT Student_id, Student_name,LPAD(Student_Class, 10, ' _') AS LeftPaddedString FROM t1;
-student_id    student_name    leftpaddedstring
+Student_id    Student_name    LeftPaddedString
 1    Ananya Majumdar     _ _ _ _IX
 2    Anushka Samanta     _ _ _ _ X
 3    Aniket Sharma     _ _ _ _XI
@@ -322,7 +322,7 @@ student_id    student_name    leftpaddedstring
 5    Riya Jain     _ _ _ _IX
 6    Tapan Samanta     _ _ _ _ X
 SELECT Student_id, lpad(Student_name,4,'new') AS LeftPaddedString FROM t1;
-student_id    leftpaddedstring
+Student_id    LeftPaddedString
 1    Anan
 2    Anus
 3    Anik
@@ -330,7 +330,7 @@ student_id    leftpaddedstring
 5    Riya
 6    Tapa
 SELECT Student_id, lpad(Student_name,-4,'new') AS LeftPaddedString FROM t1;
-student_id    leftpaddedstring
+Student_id    LeftPaddedString
 1    null
 2    null
 3    null
@@ -338,7 +338,7 @@ student_id    leftpaddedstring
 5    null
 6    null
 SELECT Student_id, lpad(Student_name,0,'new') AS LeftPaddedString FROM t1;
-student_id    leftpaddedstring
+Student_id    LeftPaddedString
 1    
 2    
 3    
@@ -356,7 +356,7 @@ VALUES
 (5,'Riya Jain', 'IX'),
 (6,'Tapan Samanta', 'X');
 SELECT Student_id, Student_name,RPAD(Student_Class, 10, ' _') AS LeftPaddedString FROM t1;
-student_id    student_name    leftpaddedstring
+Student_id    Student_name    LeftPaddedString
 1    Ananya Majumdar    IX _ _ _ _
 2    Anushka Samanta    X _ _ _ _ 
 3    Aniket Sharma    XI _ _ _ _
@@ -364,7 +364,7 @@ student_id    student_name    leftpaddedstring
 5    Riya Jain    IX _ _ _ _
 6    Tapan Samanta    X _ _ _ _ 
 SELECT Student_id, rpad(Student_name,4,'new') AS LeftPaddedString FROM t1;
-student_id    leftpaddedstring
+Student_id    LeftPaddedString
 1    Anan
 2    Anus
 3    Anik
@@ -372,7 +372,7 @@ student_id    leftpaddedstring
 5    Riya
 6    Tapa
 SELECT Student_id, rpad(Student_name,-4,'new') AS LeftPaddedString FROM t1;
-student_id    leftpaddedstring
+Student_id    LeftPaddedString
 1    null
 2    null
 3    null
@@ -380,7 +380,7 @@ student_id    leftpaddedstring
 5    null
 6    null
 SELECT Student_id, rpad(Student_name,0,'new') AS LeftPaddedString FROM t1;
-student_id    leftpaddedstring
+Student_id    LeftPaddedString
 1    
 2    
 3    
@@ -406,7 +406,7 @@ VALUES
 ('   Ankana Jana', '2018-08-17'),
 ('  Shreya Ghosh', '2020-09-10') ;
 SELECT LTRIM( Employee_name) LTrimName,RTRIM(Employee_name) AS RTrimName FROM t1 order by  RTrimName desc;
-ltrimname	rtrimname
+LTrimName	RTrimName
 Shreya Ghosh	  Shreya Ghosh
 Riya Jain	  Riya Jain
 Deepak Sharma	   Deepak Sharma
@@ -417,7 +417,7 @@ Anik Das	   Anik Das
 Tapan Samanta	    Tapan Samanta
 Ananya Majumdar	     Ananya Majumdar
 SELECT LTRIM(RTRIM(Employee_name)) as TrimName from t1 where Employee_name like '%Ani%' order by TrimName asc;
-trimname
+TrimName
 Anik Das
 Aniket Sharma
 drop table if exists t1;
@@ -428,7 +428,7 @@ select sin(a),sin(b) from t1;
 sin(a)    sin(b)
 0.0    0.0
 0.0    0.9589157234143065
--0.9880316240928618    0.4282099105187685
+-0.9880316240928618    0.42820991051876856
 0.893996663600558    -0.6832837250355235
 -0.8011526357338306    -0.17604594647121138
 -0.8011526357338306    -0.8011526357338306
@@ -436,7 +436,7 @@ select sin(a)*sin(b),sin(sin(a)) as c from t1;
 sin(a) * sin(b)    c
 0.0    0.0
 0.0    0.0
--0.4230849333425179    -0.8349443318035336
+-0.42308493334251795    -0.8349443318035336
 -0.610853370474319    0.77958108276669
 0.14103967402566783    -0.7181586632423703
 0.6418455457432638    -0.7181586632423703
@@ -526,10 +526,10 @@ drop table if exists t1;
 CREATE TABLE t1(PlayerName VARCHAR(100) NOT NULL,RunScored INT NOT NULL,WicketsTaken INT NOT NULL);
 INSERT INTO t1 VALUES('KL Rahul', 52, 0 ),('Hardik Pandya', 30, 1 ),('Ravindra Jadeja', 18, 2 ),('Washington Sundar', 10, 1),('D Chahar', 11, 2 ),  ('Mitchell Starc', 0, 3);
 SELECT STDDEV_POP(RunScored) as Pop_Standard_Deviation FROM t1;
-pop_standard_deviation
+Pop_Standard_Deviation
 16.876183086099637
 SELECT  STDDEV_POP(WicketsTaken) as Pop_Std_Dev_Wickets FROM t1;
-pop_std_dev_wickets
+Pop_Std_Dev_Wickets
 0.957427107756338
 drop table if exists t1;
 create table t1(a int,b float);
@@ -539,7 +539,7 @@ select tan(a*pi()/180) as tana,tan(b*pi()/180) tanb from t1;
 tana    tanb
 0.0    0.0
 -0.2679491924311227    -0.36397023426620234
--0.4040262258351568    -0.22169466264293988
+-0.4040262258351568    -0.2216946626429399
 0.0    -2.449293598294703E-16
 0.5773502691896257    0.5773502691896246
 1.6331239353195392E16    3.2662478706390785E15

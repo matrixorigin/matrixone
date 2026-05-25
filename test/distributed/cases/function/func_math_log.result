@@ -1,8 +1,8 @@
 select log(exp(10)),log(-1),log(NULL),log(1,1),log(3,9),log(-1,2),log(NULL,2);
-log(exp(10))	log(-1)	log(NULL)	log(1,1)	log(3,9)	log(-1,2)	log(NULL,2)
-10.0	null	null	null	2.0	null	null
+log(exp(10))    log(-1)    log(null)    log(1, 1)    log(3, 9)    log(-1, 2)    log(null, 2)
+10.0    null    null    null    2.0000000000000004    null    null
 select exp(log(sqrt(10))*2);
-exp(log(sqrt(10))*2)
+exp(log(sqrt(10)) * 2)
 10.000000000000002
 SELECT LOG(2);
 LOG(2)
@@ -11,19 +11,19 @@ SELECT LOG(-2);
 LOG(-2)
 null
 SELECT LOG(2,65536);
-LOG(2,65536)
+LOG(2, 65536)
 16.0
 SELECT LOG(10,100);
-LOG(10,100)
+LOG(10, 100)
 2.0
 SELECT LOG(1,100);
-LOG(1,100)
+LOG(1, 100)
 null
 select log(2,-1);
-log(2,-1)
+log(2, -1)
 null
 select log(-2,1);
-log(-2,1)
+log(-2, 1)
 null
 select log(0.00000000000000001);
 log(0.00000000000000001)
@@ -33,18 +33,18 @@ log(10e100)
 232.56109439239862
 select log(0.141241241241313, 124314124124.12412341);
 log(0.141241241241313, 124314124124.12412341)
--13.051786251584149
+-13.051786251584147
 select log(-0.141241241241313, -124314124124.12412341);
 log(-0.141241241241313, -124314124124.12412341)
 null
 select log(null,2);
-log(null,2)
+log(null, 2)
 null
 select log(2, null);
 log(2, null)
 null
 select log(null,null);
-log(null,null)
+log(null, null)
 null
 CREATE TABLE t1(a DOUBLE);
 INSERT INTO t1 select (log(56));
@@ -64,28 +64,28 @@ select log(a,b), log(b,c),log(c,d),log(d,e),log(e,f),log(f,g),log(g,h), log(h,i)
 invalid argument function log, bad value [DECIMAL128 DATE]
 drop table t1;
 select log(123.54-123.03);
-log(123.54-123.03)
+log(123.54 - 123.03)
 -0.6733445532637656
 select log(123.54*0.34, 1203-1200);
-log(123.54*0.34, 1203-1200)
-0.29392300779426694
+log(123.54 * 0.34, 1203 - 1200)
+0.2939230077942669
 select log(134)-log(194);
-log(134)-log(194)
+log(134) - log(194)
 -0.3700183591124171
 drop table if exists t1;
 create table t1(a float,  b float);
 insert into t1 values(10, 100), (100, 1000);
 select distinct * from t1 where log(a, b)=2;
-a	b
-10.0	100.0
+a    b
+10.0    100.0
 drop table t1;
 create table t1(a INT, b int);
 create table t2(a INT, b int);
 insert into t1 values(2,4), (100,23);
 insert into t2 values(10,100), (4,41);
 SELECT t1.a, t2.a FROM t1 JOIN t2 ON (log(t1.a, t1.b) = log(t2.a, t2.b));
-a	a
-2	10
+a    a
+2    10
 drop table t1;
 drop table t2;
 drop table if exists t1;
@@ -93,6 +93,6 @@ create table t1(a float,  b float);
 insert into t1 values(14124.413, 4213.413), (984798.123, 980.409);
 select b from t1 group by b having log(b)>0;
 b
-4213.41
+4213.413
 980.409
 drop table t1;

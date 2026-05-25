@@ -163,8 +163,8 @@ SELECT SIN(median(d1)), COS(median(d2)), TAN(median(d2)) FROM median_01;
 SIN(median(d1))    COS(median(d2))    TAN(median(d2))
 -0.4871745124605095    0.8881213562994406    -0.5175070078184374
 SELECT TAN(median(d2)), cot(median(d2) * 2), ACOS(median(d1)) FROM median_01;
-➤ TAN(median(d2))[8,54,0]  ¦  cot(median(d2) * 2)[8,54,0]  ¦  ACOS(median(d1))[8,54,0]  𝄀
--0.5175070078184374  ¦  -0.707416987399939  ¦  null
+TAN(median(d2))    cot(median(d2) * 2)    ACOS(median(d1))
+-0.5175070078184374    -0.707416987399939    null
 SELECT ATAN(median(d2)), SINH(median(id)) FROM median_01;
 ATAN(median(d2))    SINH(median(id))
 1.5705319164361722    10.017874927409903
@@ -213,7 +213,7 @@ SELECT median(d1) from median_02 WHERE id = (SELECT id from median_02 where d2 =
 median(d1)
 645545.125
 SELECT ACOS(median(d2)) from median_02;
-➤ ACOS(median(d2))[8,54,0]  𝄀
+ACOS(median(d2))
 null
 SELECT CEIL(median(d2)), FLOOR(median(d2)) from median_02;
 CEIL(median(d2))    FLOOR(median(d2))
