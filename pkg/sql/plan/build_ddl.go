@@ -3741,16 +3741,34 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 
 func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error) {
 
+	type renamedInfo struct {
+		objRef   *ObjectRef
+		tableDef *TableDef
+	}
 	alterTables := stmt.AlterTables
 	renameTables := make([]*plan.AlterTable, 0)
+	removed := make(map[string]bool)
+	nameMapping := make(map[string]*renamedInfo)
 	for _, alterTable := range alterTables {
 		schemaName, tableName := string(alterTable.Table.Schema()), string(alterTable.Table.Name())
 		if schemaName == "" {
 			schemaName = ctx.DefaultDatabase()
 		}
-		objRef, tableDef, err := ctx.Resolve(schemaName, tableName, nil)
-		if err != nil {
-			return nil, err
+		srcKey := schemaName + "." + tableName
+		var objRef *ObjectRef
+		var tableDef *TableDef
+		var err error
+		if info, ok := nameMapping[srcKey]; ok {
+			objRef = info.objRef
+			tableDef = DeepCopyTableDef(info.tableDef, true)
+			tableDef.Name = tableName
+		} else if removed[srcKey] {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
+		} else {
+			objRef, tableDef, err = ctx.Resolve(schemaName, tableName, nil)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
@@ -3787,15 +3805,21 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		for i, option := range alterTable.Options {
 			switch opt := option.(type) {
 			case *tree.AlterOptionTableName:
-				oldName := tableDef.Name
+				oldName := tableName
 				newName := string(opt.Name.ToTableName().ObjectName)
+				dstKey := schemaName + "." + newName
 				if oldName != newName {
-					_, tableDef, err := ctx.Resolve(schemaName, newName, nil)
-					if err != nil {
-						return nil, err
-					}
-					if tableDef != nil {
+					if _, ok := nameMapping[dstKey]; ok {
 						return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
+					}
+					if !removed[dstKey] {
+						_, existDef, err := ctx.Resolve(schemaName, newName, nil)
+						if err != nil {
+							return nil, err
+						}
+						if existDef != nil {
+							return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
+						}
 					}
 				}
 				alterTablePlan.Actions[i] = &plan.AlterTable_Action{
@@ -3807,9 +3831,12 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 					},
 				}
 				updateSqls = append(updateSqls, getSqlForRenameTable(schemaName, oldName, newName)...)
+				delete(nameMapping, srcKey)
+				removed[srcKey] = true
+				nameMapping[dstKey] = &renamedInfo{objRef: objRef, tableDef: tableDef}
+				delete(removed, dstKey)
 
 			default:
-				// return err
 				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 			}
 			alterTablePlan.UpdateFkSqls = updateSqls
