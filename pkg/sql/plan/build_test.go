@@ -720,6 +720,76 @@ func TestUpdate(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestUpdateFallbackMultiTargetGeneratedColumnsKeepProjectLayout(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
+	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.job = dept.loc, dept.loc = emp.job WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback multi-target update with generated columns: %v", err)
+	}
+	query := logicPlan.GetQuery()
+
+	assertFallbackUpdateProjectLength(t, query, len(mock.ctxt.tables["emp"].Cols)+2)
+	assertFallbackUpdateProjectLength(t, query, len(mock.ctxt.tables["dept"].Cols)+2)
+}
+
+func setMockGeneratedColumn(t *testing.T, mock *MockOptimizer, tableName, generatedName, sourceName string) {
+	tableDef := mock.ctxt.tables[tableName]
+	if tableDef == nil {
+		t.Fatalf("missing mock table %s", tableName)
+	}
+
+	var generatedCol *ColDef
+	var sourceCol *ColDef
+	var sourcePos int32
+	for idx, col := range tableDef.Cols {
+		switch col.Name {
+		case generatedName:
+			generatedCol = col
+		case sourceName:
+			sourceCol = col
+			sourcePos = int32(idx)
+		}
+	}
+	if generatedCol == nil {
+		t.Fatalf("missing generated column %s.%s", tableName, generatedName)
+	}
+	if sourceCol == nil {
+		t.Fatalf("missing generated source column %s.%s", tableName, sourceName)
+	}
+
+	generatedCol.GeneratedCol = &plan.GeneratedCol{
+		Expr: &plan.Expr{
+			Typ: sourceCol.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: sourcePos,
+					Name:   sourceName,
+				},
+			},
+		},
+		IsStored: true,
+	}
+}
+
+func assertFallbackUpdateProjectLength(t *testing.T, query *Query, projectLen int) {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen || len(node.Children) != 1 {
+			continue
+		}
+		child := query.Nodes[node.Children[0]]
+		if child.NodeType != plan.Node_SINK_SCAN {
+			continue
+		}
+		return
+	}
+	t.Fatalf("missing fallback update project with length %d", projectLen)
+}
+
 func TestDelete(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// should pass
