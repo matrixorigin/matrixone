@@ -492,9 +492,11 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		defer ses.ExitFPrint(FPSetTransaction)
 		//TODO: handle set transaction
 	case *tree.LockTableStmt:
-
+		ses.hasLockedTables.Store(true)
 	case *tree.UnLockTableStmt:
-
+		if ses.hasLockedTables.Swap(false) {
+			execCtx.txnOpt.byCommit = true
+		}
 	case *tree.BackupStart:
 		ses.EnterFPrint(FPBackupStart)
 		defer ses.ExitFPrint(FPBackupStart)

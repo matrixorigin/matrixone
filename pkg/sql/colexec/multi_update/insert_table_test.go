@@ -19,11 +19,13 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	pbPlan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -289,6 +291,51 @@ func TestInsertTable_PathEquivalence(t *testing.T) {
 	}
 }
 
+func TestInsertMainTableSkipNullPkUsesActualPkColumn(t *testing.T) {
+	_, ctrl, proc := prepareTestCtx(t, false)
+	defer ctrl.Finish()
+	mp := proc.GetMPool()
+
+	op, _, written := newMainTablePkSecondHarness(t, ctrl)
+	input := makePkSecondInputBatch(mp, []int32{0, 7}, []uint64{0}, []int64{1, 0}, []uint64{1}, []int32{10, 20}, nil)
+
+	analyzer := process.NewTempAnalyzer()
+	require.NoError(t, op.insert_main_table(proc, analyzer, 0, input))
+	require.Len(t, *written, 1)
+
+	got := (*written)[0]
+	require.Equal(t, 1, got.RowCount())
+	require.True(t, got.Vecs[0].IsNull(0))
+	ids := vector.MustFixedColNoTypeCheck[int64](got.Vecs[1])
+	require.Equal(t, int64(1), ids[0])
+	bs := vector.MustFixedColNoTypeCheck[int32](got.Vecs[2])
+	require.Equal(t, int32(10), bs[0])
+
+	input.Clean(mp)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestInsertMainTableSkipNullPkChecksNotNullAfterFilter(t *testing.T) {
+	_, ctrl, proc := prepareTestCtx(t, false)
+	defer ctrl.Finish()
+	mp := proc.GetMPool()
+
+	op, _, written := newMainTablePkSecondHarness(t, ctrl)
+	input := makePkSecondInputBatch(mp, []int32{5, 6}, nil, []int64{0, 2}, []uint64{0}, []int32{0, 0}, []uint64{0, 1})
+
+	analyzer := process.NewTempAnalyzer()
+	err := op.insert_main_table(proc, analyzer, 0, input)
+	require.ErrorContains(t, err, "Column 'b' cannot be null")
+	require.Empty(t, *written)
+
+	input.Clean(mp)
+	op.Free(proc, true, err)
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestMultiUpdate_Free_RefBatchNoDoubleFree(t *testing.T) {
 	_, ctrl, proc := prepareTestCtx(t, false)
 	defer ctrl.Finish()
@@ -324,4 +371,75 @@ func TestMultiUpdate_Free_RefBatchNoDoubleFree(t *testing.T) {
 	input.Clean(mp)
 	h.insertBuf.Clean(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func newMainTablePkSecondHarness(t *testing.T, ctrl *gomock.Controller) (*MultiUpdate, *MultiUpdateCtx, *[]*batch.Batch) {
+	t.Helper()
+
+	tableDef := &plan.TableDef{
+		Name: "t_pk_second",
+		Cols: []*plan.ColDef{
+			{ColId: 0, Name: "a", Typ: i32typ, Default: &pbPlan.Default{NullAbility: true}},
+			{ColId: 1, Name: "id", Typ: i64typ, NotNull: true, Primary: true, Default: &pbPlan.Default{NullAbility: false}},
+			{ColId: 2, Name: "b", Typ: i32typ, NotNull: true, Default: &pbPlan.Default{NullAbility: false}},
+			{ColId: 3, Name: catalog.Row_ID, Typ: rowIdTyp},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Cols:        []uint64{1},
+			PkeyColId:   1,
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+	}
+	updateCtx := &MultiUpdateCtx{
+		TableDef:           tableDef,
+		InsertCols:         []int{0, 1, 2},
+		SkipInsertOnNullPk: true,
+		InsertPkColIdx:     1,
+	}
+
+	written := make([]*batch.Batch, 0, 1)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().
+		Write(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, b *batch.Batch) error {
+			written = append(written, b)
+			return nil
+		}).AnyTimes()
+
+	op := &MultiUpdate{
+		MultiUpdateCtx: []*MultiUpdateCtx{updateCtx},
+		ctr: container{
+			updateCtxInfos: map[string]*updateCtxInfo{
+				tableDef.Name: {
+					Source:       rel,
+					tableType:    UpdateMainTable,
+					isContiguous: isContiguousMapping(updateCtx.InsertCols),
+				},
+			},
+			insertBuf: make([]*batch.Batch, 1),
+		},
+	}
+	op.addAffectedRowsFunc = op.doAddAffectedRows
+	return op, updateCtx, &written
+}
+
+func makePkSecondInputBatch(
+	mp *mpool.MPool,
+	aValues []int32,
+	aNulls []uint64,
+	idValues []int64,
+	idNulls []uint64,
+	bValues []int32,
+	bNulls []uint64,
+) *batch.Batch {
+	aVec := testutil.MakeInt32Vector(aValues, aNulls, mp)
+	idVec := testutil.MakeInt64Vector(idValues, idNulls, mp)
+	bVec := testutil.MakeInt32Vector(bValues, bNulls, mp)
+	bat := batch.New([]string{"a", "id", "b"})
+	bat.SetVector(0, aVec)
+	bat.SetVector(1, idVec)
+	bat.SetVector(2, bVec)
+	bat.SetRowCount(len(aValues))
+	return bat
 }

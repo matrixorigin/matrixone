@@ -16,6 +16,7 @@ package insert
 
 import (
 	"context"
+	goruntime "runtime"
 	"testing"
 	"time"
 
@@ -392,6 +393,102 @@ func TestInsertFlushS3WriterOnMemoryPressureAppendsBlockInfo(t *testing.T) {
 	require.Equal(t, int64(1024), throttler.released)
 	require.NotNil(t, insert.ctr.buf)
 	require.Greater(t, insert.ctr.buf.RowCount(), 0)
+}
+
+func TestAcquireFlushSlotWaitsForFlushSlotAfterTimeout(t *testing.T) {
+	oldFlushLimiterState := flushLimiterState
+	oldFlushConcurrencyForAcquire := flushConcurrencyForAcquire
+	oldAcquireTimeout := flushSemaphoreAcquireTimeout
+	oldRefreshInterval := flushConcurrencyRefreshInterval
+	defer func() {
+		flushLimiterState = oldFlushLimiterState
+		flushConcurrencyForAcquire = oldFlushConcurrencyForAcquire
+		flushSemaphoreAcquireTimeout = oldAcquireTimeout
+		flushConcurrencyRefreshInterval = oldRefreshInterval
+	}()
+
+	flushLimiterState = newFlushLimiter()
+	flushConcurrencyForAcquire = func() int { return 1 }
+	flushSemaphoreAcquireTimeout = time.Millisecond
+	flushConcurrencyRefreshInterval = time.Millisecond
+	heldRelease, waitCh := flushLimiterState.tryAcquire()
+	require.NotNil(t, heldRelease)
+	require.Nil(t, waitCh)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	releaseCh := make(chan func(), 1)
+	go func() {
+		release, err := acquireFlushSlot(ctx)
+		if release != nil {
+			releaseCh <- release
+		}
+		errCh <- err
+	}()
+
+	require.Never(t, func() bool {
+		return len(releaseCh) > 0
+	}, 5*time.Millisecond, time.Millisecond)
+	require.Equal(t, 1, flushLimiterState.inUseCount())
+	heldRelease()
+
+	release := <-releaseCh
+	require.NoError(t, <-errCh)
+	require.Equal(t, 1, flushLimiterState.inUseCount())
+	release()
+	require.Equal(t, 0, flushLimiterState.inUseCount())
+}
+
+func TestFlushConcurrencyLimitScalesWithGOMAXPROCS(t *testing.T) {
+	require.Equal(t, minFlushConcurrencyLimit, flushConcurrencyForGOMAXPROCS(1))
+	require.Equal(t, minFlushConcurrencyLimit, flushConcurrencyForGOMAXPROCS(8))
+	require.Equal(t, 8, flushConcurrencyForGOMAXPROCS(16))
+	require.Equal(t, maxFlushConcurrencyLimit, flushConcurrencyForGOMAXPROCS(64))
+
+	oldGOMAXPROCS := goruntime.GOMAXPROCS(0)
+	defer goruntime.GOMAXPROCS(oldGOMAXPROCS)
+	goruntime.GOMAXPROCS(16)
+	require.Equal(t, 8, flushConcurrencyForAcquire())
+	goruntime.GOMAXPROCS(64)
+	require.Equal(t, maxFlushConcurrencyLimit, flushConcurrencyForAcquire())
+}
+
+func TestAcquireFlushSlotWaitsWhenNormalSlotsAreFull(t *testing.T) {
+	oldFlushLimiterState := flushLimiterState
+	oldFlushConcurrencyForAcquire := flushConcurrencyForAcquire
+	oldAcquireTimeout := flushSemaphoreAcquireTimeout
+	oldRefreshInterval := flushConcurrencyRefreshInterval
+	defer func() {
+		flushLimiterState = oldFlushLimiterState
+		flushConcurrencyForAcquire = oldFlushConcurrencyForAcquire
+		flushSemaphoreAcquireTimeout = oldAcquireTimeout
+		flushConcurrencyRefreshInterval = oldRefreshInterval
+	}()
+
+	flushLimiterState = newFlushLimiter()
+	flushConcurrencyForAcquire = func() int { return 1 }
+	flushSemaphoreAcquireTimeout = time.Millisecond
+	flushConcurrencyRefreshInterval = time.Millisecond
+	heldRelease, waitCh := flushLimiterState.tryAcquire()
+	require.NotNil(t, heldRelease)
+	require.Nil(t, waitCh)
+	defer heldRelease()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		release, err := acquireFlushSlot(ctx)
+		if release != nil {
+			release()
+		}
+		errCh <- err
+	}()
+
+	time.Sleep(5 * time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-errCh, context.Canceled)
+	require.Equal(t, 1, flushLimiterState.inUseCount())
 }
 
 func testInsertS3TableDef() *plan.TableDef {

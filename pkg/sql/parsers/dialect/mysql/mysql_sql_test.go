@@ -539,6 +539,42 @@ var (
 			input:  "UPDATE items,(SELECT id FROM items WHERE id IN (SELECT id FROM items WHERE retail / wholesale >= 1.3 AND quantity < 100)) AS discounted SET items.retail = items.retail * 0.9 WHERE items.id = discounted.id",
 			output: "update items cross join (select id from items where id in (select id from items where retail / wholesale >= 1.3 and quantity < 100)) as discounted set items.retail = items.retail * 0.9 where items.id = discounted.id",
 		}, {
+			input:  "UPDATE t SET remark = c.province FROM company c WHERE c.id = t.company_id",
+			output: "update t set remark = c.province from company as c where c.id = t.company_id",
+		}, {
+			input:  "UPDATE vec_join_case t SET remark = CONCAT('hot-', c.province) FROM company c WHERE c.id = t.company_id AND l2_distance(embedding, \"[0.2,0.2,0.3,0.3]\") < 0.35",
+			output: "update vec_join_case as t set remark = CONCAT(hot-, c.province) from company as c where c.id = t.company_id and l2_distance(embedding, [0.2,0.2,0.3,0.3]) < 0.35",
+		}, {
+			input:  "UPDATE t SET a = b.x FROM b, c WHERE t.id = b.id AND b.k = c.k",
+			output: "update t set a = b.x from b cross join c where t.id = b.id and b.k = c.k",
+		}, {
+			input:  "WITH cc AS (SELECT * FROM company) UPDATE t SET remark = c.province FROM cc c WHERE c.id = t.company_id",
+			output: "with cc as (select * from company) update t set remark = c.province from cc as c where c.id = t.company_id",
+		}, {
+			input:  "UPDATE t1 JOIN t2 ON t1.k = t2.k SET t1.v = t2.v FROM t3 WHERE t3.id = t1.id",
+			output: "update t1 inner join t2 on t1.k = t2.k set t1.v = t2.v from t3 where t3.id = t1.id",
+		}, {
+			// FROM b JOIN c ON ... — the FROM-clause join tree must keep its
+			// grouping after Format so round-tripping does not change the
+			// associativity. (Cross-joining target+source previously dropped
+			// the parens and re-parsed as (t CROSS b) JOIN c.)
+			input:  "UPDATE t SET v = c.v FROM b JOIN c ON b.k = c.k WHERE t.id = b.id",
+			output: "update t set v = c.v from b inner join c on b.k = c.k where t.id = b.id",
+		}, {
+			input:  "UPDATE t SET v = c.v FROM b LEFT JOIN c ON b.k = c.k WHERE t.id = b.id",
+			output: "update t set v = c.v from b left join c on b.k = c.k where t.id = b.id",
+		}, {
+			// FROM "b, c JOIN d ON ..." parses to b CROSS (c INNER d). Without
+			// the right-operand paren the round-trip would re-parse as
+			// (b CROSS c) INNER d, changing the ON's binding.
+			input:  "UPDATE t SET v = d.v FROM b, c JOIN d ON c.k = d.k WHERE t.id = b.id AND b.k = c.k",
+			output: "update t set v = d.v from b cross join (c inner join d on c.k = d.k) where t.id = b.id and b.k = c.k",
+		}, {
+			// Same shape but the inner join is LEFT, where the associativity
+			// change is also a semantic change (which side is preserved).
+			input:  "UPDATE t SET v = d.v FROM b, c LEFT JOIN d ON c.k = d.k WHERE t.id = b.id AND b.k = c.k",
+			output: "update t set v = d.v from b cross join (c left join d on c.k = d.k) where t.id = b.id and b.k = c.k",
+		}, {
 			input:  "with t2 as (select * from t1) DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
 			output: "with t2 as (select * from t1) delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
 		}, {
@@ -3572,6 +3608,20 @@ func TestSQLStringFmt(t *testing.T) {
 		if tcase.output != out {
 			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, out)
 		}
+	}
+}
+
+func TestTaskKeywordIsNonReservedForIdentifiers(t *testing.T) {
+	for _, sql := range []string{
+		"create table task (task int, id int)",
+		"create table tasks (tasks int, id int)",
+	} {
+		stmt, err := ParseOne(context.TODO(), sql, 1)
+		require.NoError(t, err, sql)
+
+		createStmt, ok := stmt.(*tree.CreateTable)
+		require.True(t, ok, sql)
+		require.Len(t, createStmt.Defs, 2, sql)
 	}
 }
 

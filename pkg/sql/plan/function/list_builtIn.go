@@ -1602,6 +1602,26 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_length`
+	{
+		functionId: JSON_LENGTH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonLengthCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return jsonLength
+				},
+			},
+		},
+	},
+
 	// function `least`
 	{
 		functionId: LEAST,
@@ -6786,6 +6806,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateStringAdd
 				},
 			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_int32, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateIntAdd
+				},
+			},
 		},
 	},
 
@@ -7027,6 +7057,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeSub
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_int32, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateIntSub
 				},
 			},
 		},

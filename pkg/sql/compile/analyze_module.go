@@ -327,6 +327,9 @@ func UpdatePreparePhyScope(scope *Scope, phyScope models.PhyScope) bool {
 		phyScope.PrepareTimeConsumed = scope.ScopeAnalyzer.TimeConsumed
 	}
 
+	if len(scope.PreScopes) != len(phyScope.PreScopes) {
+		return false
+	}
 	for i, preScope := range scope.PreScopes {
 		res = UpdatePreparePhyScope(preScope, phyScope.PreScopes[i])
 		if !res {
@@ -438,6 +441,9 @@ func UpdatePreparePhyOperator(op vm.Operator, phyOp *models.PhyOperator) bool {
 	if op == nil {
 		return true
 	}
+	if phyOp == nil {
+		return false
+	}
 
 	if op.GetOperatorBase().OpAnalyzer != nil {
 		phyOp.OpStats = op.GetOperatorBase().OpAnalyzer.GetOpStats()
@@ -504,6 +510,9 @@ func (c *Compile) UpdatePreparePhyPlan(runC *Compile) bool {
 	c.anal.phyPlan.RetryTime = runC.anal.retryTimes
 	c.anal.curNodeIdx = runC.anal.curNodeIdx
 
+	if len(runC.scopes) != len(c.anal.phyPlan.LocalScope) {
+		return false
+	}
 	if len(runC.scopes) > 0 {
 		for i := range runC.scopes {
 			res := UpdatePreparePhyScope(runC.scopes[i], c.anal.phyPlan.LocalScope[i])
