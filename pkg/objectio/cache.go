@@ -140,9 +140,6 @@ func InitMetaCache(size int64) {
 	})
 }
 
-// SetMetaCachePressureTargetPercent keeps metadata cache admission below a
-// capacity percentage until the deadline. A stricter active target is not
-// loosened by a softer target.
 func SetMetaCachePressureTargetPercent(percent int64, until time.Time) {
 	now := time.Now()
 	if percent <= 0 || !until.After(now) {
@@ -235,6 +232,8 @@ func EvictCacheToCapacityPercent(ctx context.Context, percent int64) (used int64
 		zap.Int64("target-percent", percent),
 	)
 	used = metaCache.EvictToTargetWithWait(ctx, target)
+	metric.FSCachePressureMetaEvictCounter.Inc()
+	metric.FSCachePressureMetaEvictDuration.Observe(time.Since(start).Seconds())
 	logutil.Info("metadata cache pressure evicted",
 		zap.Int64("used-before", beforeUsed),
 		zap.Int64("used-after", used),
@@ -365,6 +364,11 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 
 	call.val, call.err = load()
 	if call.err == nil {
+		if target, ok := metaCachePressureTarget(metaCache.Capacity()); ok &&
+			metaCache.Used()+int64(len(call.val)) > target {
+			metric.FSCachePressureMetaSkipCounter.Inc()
+			return call.val, call.err
+		}
 		metaCache.Set(ctx, key, call.val, int64(len(call.val)))
 	}
 	return call.val, call.err
