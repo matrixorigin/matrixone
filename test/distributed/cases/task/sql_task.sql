@@ -5,6 +5,8 @@ use sql_task_case;
 drop task if exists sql_task_cron;
 drop task if exists sql_task_manual;
 drop task if exists sql_task_gate;
+drop task if exists sql_task_literal_strings;
+drop task if exists sql_task_rows_success;
 drop task if exists sql_task_multistmt;
 drop task if exists sql_task_timeout;
 drop task if exists sql_task_retry;
@@ -20,6 +22,12 @@ create table scheduled_events(
 create table manual_events(id int primary key);
 create table gate_source(id int primary key);
 create table gate_sink(tag varchar(32) primary key);
+create table literal_readings(pump int, engine_rpm int, pump_rate int, label varchar(32));
+create table literal_classified(pump int, state varchar(32));
+create table literal_matched(label varchar(32));
+create table literal_quotes(label varchar(32));
+create table rows_success_target(v int);
+create table rows_success_heartbeat(tag varchar(16));
 create table ms_target(v int);
 create table timeout_sink(v int);
 create table retry_target(v int);
@@ -31,25 +39,9 @@ create table silver_orders(order_id int primary key, amount int not null);
 create table gold_summary(summary_id int primary key, total_orders int not null, total_amount int not null);
 create table validate_results(result_id int primary key, status varchar(16) not null);
 
--- @delimiter $$
-create task sql_task_cron
-    schedule '0 0 0 1 1 *'
-    timezone 'UTC'
-as begin
-    insert into scheduled_events(marker) values ('cron');
-end
-$$
--- @delimiter ;
+create task sql_task_cron schedule '0 0 0 1 1 *' timezone 'UTC' as begin insert into scheduled_events(marker) values ('cron'); end;
 
--- @delimiter $$
-create task sql_task_manual
-as begin
-    insert into manual_events
-    select 1
-    where not exists (select 1 from manual_events where id = 1);
-end
-$$
--- @delimiter ;
+create task sql_task_manual as begin insert into manual_events select 1 where not exists (select 1 from manual_events where id = 1); end;
 
 select sleep(2);
 select count(*) from scheduled_events;
@@ -77,16 +69,7 @@ select sleep(1);
 select count(*) from scheduled_events;
 select status from mo_task.sql_task_run where task_name = 'sql_task_cron' order by run_id desc limit 2;
 
--- @delimiter $$
-create task sql_task_gate
-    when (exists(select 1 from gate_source where id = 1))
-as begin
-    insert into gate_sink
-    select 'gate-ok'
-    where not exists (select 1 from gate_sink where tag = 'gate-ok');
-end
-$$
--- @delimiter ;
+create task sql_task_gate when (exists(select 1 from gate_source where id = 1)) as begin insert into gate_sink select 'gate-ok' where not exists (select 1 from gate_sink where tag = 'gate-ok'); end;
 
 execute task sql_task_gate;
 select sleep(1);
@@ -101,30 +84,39 @@ where task_name = 'sql_task_gate'
 order by run_id desc
 limit 2;
 
--- @delimiter $$
-create task sql_task_multistmt
-as begin
-    insert into ms_target values (1);
-    insert into no_such_table values (1);
-    insert into ms_target values (2);
-end
-$$
--- @delimiter ;
+insert into literal_readings values
+    (1, null, 0, 'UNKNOWN'),
+    (2, 900, 10, 'PUMPING'),
+    (3, 700, 0, 'IDLE'),
+    (4, 500, 0, 'OFF'),
+    (5, 900, 0, 'OTHER');
+
+create task sql_task_literal_strings as begin insert into literal_classified select pump, case when engine_rpm is null then 'UNKNOWN' when engine_rpm >= 800 and pump_rate > 0 then 'PUMPING' when engine_rpm >= 600 and engine_rpm < 800 then 'IDLE' when engine_rpm < 600 then 'OFF' else 'UNKNOWN' end as state from literal_readings; insert into literal_matched select label from literal_readings where label in ('PUMPING', 'IDLE', 'OFF') and label <> 'UNKNOWN'; insert into literal_quotes values ('O''Brien'); end;
+
+execute task sql_task_literal_strings;
+select sleep(1);
+select state, count(*), hex(state) from literal_classified group by state order by state;
+select label, hex(label) from literal_matched order by label;
+select label, hex(label) from literal_quotes;
+select status, rows_affected from mo_task.sql_task_run where task_name = 'sql_task_literal_strings' order by run_id desc limit 1;
+
+create task sql_task_rows_success as begin insert into rows_success_target values (1), (2), (3); insert into rows_success_heartbeat values ('done'); end;
+
+execute task sql_task_rows_success;
+select sleep(1);
+select count(*) from rows_success_target;
+select count(*) from rows_success_heartbeat;
+select status, rows_affected from mo_task.sql_task_run where task_name = 'sql_task_rows_success' order by run_id desc limit 1;
+
+create task sql_task_multistmt as begin insert into ms_target values (1); insert into no_such_table values (1); insert into ms_target values (2); end;
 
 -- @pattern
 execute task sql_task_multistmt;
 select sleep(1);
 select count(*), min(v), max(v) from ms_target;
-select status from mo_task.sql_task_run where task_name = 'sql_task_multistmt' order by run_id desc limit 1;
+select status, rows_affected, error_message from mo_task.sql_task_run where task_name = 'sql_task_multistmt' order by run_id desc limit 1;
 
--- @delimiter $$
-create task sql_task_timeout
-    timeout '1s'
-as begin
-    insert into timeout_sink select sleep(2);
-end
-$$
--- @delimiter ;
+create task sql_task_timeout timeout '1s' as begin insert into timeout_sink select sleep(2); end;
 
 -- @pattern
 execute task sql_task_timeout;
@@ -132,15 +124,7 @@ select sleep(2);
 select count(*) from timeout_sink;
 select status from mo_task.sql_task_run where task_name = 'sql_task_timeout' order by run_id desc limit 1;
 
--- @delimiter $$
-create task sql_task_retry
-    retry 1
-as begin
-    insert into retry_target values (1);
-    insert into no_such_retry_table values (1);
-end
-$$
--- @delimiter ;
+create task sql_task_retry retry 1 as begin insert into retry_target values (1); insert into no_such_retry_table values (1); end;
 
 -- @pattern
 execute task sql_task_retry;
@@ -148,13 +132,7 @@ select sleep(1);
 select count(*) from retry_target;
 select status from mo_task.sql_task_run where task_name = 'sql_task_retry' order by run_id desc limit 2;
 
--- @delimiter $$
-create task sql_task_overlap
-as begin
-    insert into overlap_sink select sleep(4);
-end
-$$
--- @delimiter ;
+create task sql_task_overlap as begin insert into overlap_sink select sleep(4); end;
 
 -- @session:id=1{
 use sql_task_case;
@@ -173,43 +151,11 @@ drop task if exists sql_task_build_gold;
 drop task if exists sql_task_validate;
 insert into raw_orders values (1, 10), (2, 20);
 
--- @delimiter $$
-create task sql_task_build_silver
-    when (exists(select 1 from ingest_meta where batch_id = 1 and ready = 1))
-as begin
-    insert into silver_orders
-    select r.order_id, r.amount
-    from raw_orders r
-    where not exists (
-        select 1 from silver_orders s where s.order_id = r.order_id
-    );
-end
-$$
--- @delimiter ;
+create task sql_task_build_silver when (exists(select 1 from ingest_meta where batch_id = 1 and ready = 1)) as begin insert into silver_orders select r.order_id, r.amount from raw_orders r where not exists ( select 1 from silver_orders s where s.order_id = r.order_id ); end;
 
--- @delimiter $$
-create task sql_task_build_gold
-    when (exists(select 1 from silver_orders))
-as begin
-    delete from gold_summary where summary_id = 1;
-    insert into gold_summary
-    select 1, count(*), sum(amount) from silver_orders;
-end
-$$
--- @delimiter ;
+create task sql_task_build_gold when (exists(select 1 from silver_orders)) as begin delete from gold_summary where summary_id = 1; insert into gold_summary select 1, count(*), sum(amount) from silver_orders; end;
 
--- @delimiter $$
-create task sql_task_validate
-    when (exists(select 1 from gold_summary where summary_id = 1))
-as begin
-    delete from validate_results where result_id = 1;
-    insert into validate_results
-    select 1, case when total_orders = 2 and total_amount = 30 then 'PASS' else 'FAIL' end
-    from gold_summary
-    where summary_id = 1;
-end
-$$
--- @delimiter ;
+create task sql_task_validate when (exists(select 1 from gold_summary where summary_id = 1)) as begin delete from validate_results where result_id = 1; insert into validate_results select 1, case when total_orders = 2 and total_amount = 30 then 'PASS' else 'FAIL' end from gold_summary where summary_id = 1; end;
 
 execute task sql_task_validate;
 execute task sql_task_build_gold;
@@ -238,19 +184,7 @@ create account sql_task_tenant admin_name 'admin' identified by '111';
 create database if not exists tenant_task_case;
 use tenant_task_case;
 create table tenant_sink(v int primary key);
--- @delimiter $$
-create task tenant_task_show
-schedule '0 0 0 1 1 *'
-timezone 'UTC'
-when (1)
-timeout '30s'
-as begin
-insert into tenant_sink
-select 1
-where not exists (select 1 from tenant_sink where v = 1);
-end
-$$
--- @delimiter ;
+create task tenant_task_show schedule '0 0 0 1 1 *' timezone 'UTC' when (1) timeout '30s' as begin insert into tenant_sink select 1 where not exists (select 1 from tenant_sink where v = 1); end;
 execute task tenant_task_show;
 select sleep(1);
 alter task tenant_task_show set when (0);
@@ -272,6 +206,8 @@ drop task if exists sql_task_overlap;
 drop task if exists sql_task_retry;
 drop task if exists sql_task_timeout;
 drop task if exists sql_task_multistmt;
+drop task if exists sql_task_rows_success;
+drop task if exists sql_task_literal_strings;
 drop task if exists sql_task_gate;
 drop task if exists sql_task_manual;
 drop task if exists sql_task_cron;
