@@ -187,8 +187,7 @@ func (s *memStore) SetOffset(
 	defer s.Unlock()
 	m := s.caches
 	if txnOp != nil {
-		key := string(txnOp.Txn().ID)
-		if um, ok := s.uncommitted[key]; ok {
+		if um, ok := s.uncommitted[string(txnOp.Txn().ID)]; ok {
 			if _, exists := um[tableID]; exists {
 				m = um
 			}

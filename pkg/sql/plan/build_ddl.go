@@ -5104,10 +5104,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					ctx.GetContext(),
 					"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
 			}
-			if opt.Value == 0 {
-				continue
+			// MySQL 8.0: AUTO_INCREMENT = 0 means start from 1 (offset = 0)
+			newOffset := uint64(0)
+			if opt.Value > 0 {
+				newOffset = uint64(opt.Value) - 1
 			}
-			newOffset := opt.Value - 1
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterAutoIncrement{
 					AlterAutoIncrement: &plan.AlterTableAutoIncrement{
