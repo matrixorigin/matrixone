@@ -60,6 +60,10 @@ func TestSQLTaskExecutorExecuteContext(t *testing.T) {
 	require.Equal(t, sqlTask.CreatorUserID, *fakeIE.queryOpts[0].UserId)
 	require.NotNil(t, fakeIE.queryOpts[0].DefaultRoleId)
 	require.Equal(t, sqlTask.CreatorRoleID, *fakeIE.queryOpts[0].DefaultRoleId)
+	require.Nil(t, fakeIE.queryOpts[0].IsInternal)
+	for _, opts := range fakeIE.execOpts {
+		require.Nil(t, opts.IsInternal)
+	}
 
 	runs := mustGetTestSQLTaskRun(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))
 	require.Equal(t, SQLTaskStatusSuccess, runs[0].Status)
@@ -75,7 +79,7 @@ func TestSQLTaskExecutorPreservesQuotedStrings(t *testing.T) {
 
 	sqlTask := mustAddSQLTaskForExecutorTest(t, store, func(task *SQLTask) {
 		task.GateCondition = "1"
-		task.SQLBody = "insert into gate_sink select 'gate-ok'; select case when 1 = 1 then 'PASS' else 'FAIL' end"
+		task.SQLBody = "insert into gate_sink select 'gate-ok'; insert into gate_sink values ('O''Brien'); select case when 1 = 1 then 'PASS' else 'FAIL' end"
 	})
 
 	fakeIE := &fakeInternalExecutor{
@@ -87,6 +91,7 @@ func TestSQLTaskExecutorPreservesQuotedStrings(t *testing.T) {
 
 	require.Equal(t, []string{
 		"insert into gate_sink select 'gate-ok'",
+		"insert into gate_sink values ('O''Brien')",
 		"select case when 1 = 1 then 'PASS' else 'FAIL' end",
 	}, fakeIE.execSQLs)
 }
@@ -244,6 +249,44 @@ func TestSQLTaskExecutorRetryOnFailure(t *testing.T) {
 	require.Equal(t, 1, runs[1].AttemptNumber)
 }
 
+func TestSQLTaskExecutorRecordsRowsAffected(t *testing.T) {
+	store := NewMemTaskStorage().(*memTaskStorage)
+	ts := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		require.NoError(t, ts.Close())
+	}()
+
+	sqlTask := mustAddSQLTaskForExecutorTest(t, store, func(task *SQLTask) {
+		task.GateCondition = "1"
+		task.SQLBody = "insert into t values (1), (2); insert into t values (3); insert into missing values (4)"
+		task.RetryLimit = 0
+	})
+
+	fakeIE := &fakeInternalExecutor{
+		queryValues:      []any{true},
+		execAffectedRows: []uint64{2, 1, 0},
+		execHook: func(_ context.Context, sql string, _ ie.SessionOverrideOptions) error {
+			if strings.Contains(sql, "missing") {
+				return moerr.NewInternalErrorNoCtx("boom")
+			}
+			return nil
+		},
+	}
+	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fakeIE }, ts, "cn-test")
+	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual), true)
+	require.EqualError(t, err, "internal error: boom")
+
+	require.Equal(t, []string{
+		"insert into t values (1), (2)",
+		"insert into t values (3)",
+		"insert into missing values (4)",
+	}, fakeIE.execSQLs)
+	runs := mustGetTestSQLTaskRun(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))
+	require.Equal(t, SQLTaskStatusFailed, runs[0].Status)
+	require.Equal(t, int64(3), runs[0].RowsAffected)
+	require.Contains(t, runs[0].ErrorMessage, "boom")
+}
+
 func TestSQLTaskExecutorTimeout(t *testing.T) {
 	store := NewMemTaskStorage().(*memTaskStorage)
 	ts := NewTaskService(runtime.DefaultRuntime(), store)
@@ -284,7 +327,9 @@ func TestSQLTaskExecutorOverlap(t *testing.T) {
 		task.GateCondition = "1"
 		task.SQLBody = "select 1"
 	})
-	mustAddTestSQLTaskRun(t, store, 1, newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning))
+	run := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
+	run.StartedAt = time.Now()
+	mustAddTestSQLTaskRun(t, store, 1, run)
 
 	fakeIE := &fakeInternalExecutor{}
 	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fakeIE }, ts, "cn-test")
@@ -458,10 +503,11 @@ type fakeInternalExecutor struct {
 	queryErrs   []error
 	queryHook   func(context.Context, string, ie.SessionOverrideOptions)
 
-	execSQLs []string
-	execOpts []ie.SessionOverrideOptions
-	execErrs []error
-	execHook func(context.Context, string, ie.SessionOverrideOptions) error
+	execSQLs         []string
+	execOpts         []ie.SessionOverrideOptions
+	execErrs         []error
+	execAffectedRows []uint64
+	execHook         func(context.Context, string, ie.SessionOverrideOptions) error
 }
 
 type finishRunFailingTaskStorage struct {
@@ -486,6 +532,16 @@ func (f *fakeInternalExecutor) Exec(ctx context.Context, sql string, opts ie.Ses
 	err := f.execErrs[0]
 	f.execErrs = f.execErrs[1:]
 	return err
+}
+
+func (f *fakeInternalExecutor) ExecWithStatus(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (ie.InternalExecStatus, error) {
+	err := f.Exec(ctx, sql, opts)
+	status := ie.InternalExecStatus{}
+	if len(f.execAffectedRows) > 0 {
+		status.RowsAffected = f.execAffectedRows[0]
+		f.execAffectedRows = f.execAffectedRows[1:]
+	}
+	return status, err
 }
 
 func (f *fakeInternalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
