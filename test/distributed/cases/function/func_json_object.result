@@ -1,0 +1,180 @@
+select json_object();
+json_object()
+{}
+select json_object('id', 87, 'name', 'carrot');
+json_object(id, 87, name, carrot)
+{"id": 87, "name": "carrot"}
+select json_object('a', 1, 'b', 'abc', 'c', null, 'd', true);
+json_object(a, 1, b, abc, c, null, d, true)
+{"a": 1, "b": "abc", "c": null, "d": true}
+select json_object('int', 123, 'float', 1.5, 'bool', false);
+json_object(int, 123, float, 1.5, bool, false)
+{"bool": false, "float": 1.5, "int": 123}
+select json_object('d64', cast(12345.67 as decimal(10,2)), 'd128', cast(9876.54321 as decimal(30,10)));
+json_object(d64, cast(12345.67 as decimal(10, 2)), d128, cast(9876.54321 as decimal(30, 10)))
+{"d128": 9876.5432100000, "d64": 12345.67}
+select json_object(cast('2021-02-01' as date), cast('11:11:11' as time));
+json_object(cast(2021-02-01 as date), cast(11:11:11 as time))
+{"2021-02-01": "11:11:11"}
+select json_object('ts', cast('2022-01-01 01:02:03' as datetime));
+json_object(ts, cast(2022-01-01 01:02:03 as datetime))
+{"ts": "2022-01-01 01:02:03"}
+select json_object('uid', cast('550e8400-e29b-41d4-a716-446655440000' as uuid));
+json_object(uid, cast(550e8400-e29b-41d4-a716-446655440000 as uuid))
+{"uid": "550e8400-e29b-41d4-a716-446655440000"}
+select json_object('year', cast('2021' as year));
+json_object(year, cast(2021 as year))
+{"year": "2021"}
+select json_object('bit1', cast(1 as bit), 'bit0', cast(0 as bit));
+Data truncation: data out of range: data type int0, value 1
+select json_object('binary', cast('hello' as binary(10)), 'varbin', cast('world' as varbinary));
+json_object(binary, cast(hello as binary(10)), varbin, cast(world as varbinary))
+{"binary": "aGVsbG8AAAAAAA==", "varbin": "d29ybGQ="}
+select json_object('vec32', cast('[1.0,2.0,3.0]' as vecf32(3)), 'vec64', cast('[1.5,2.5,3.5]' as vecf64(3)));
+json_object(vec32, cast([1.0,2.0,3.0] as vecf32(3)), vec64, cast([1.5,2.5,3.5] as vecf64(3)))
+{"vec32": [1, 2, 3], "vec64": [1.5, 2.5, 3.5]}
+select json_object('arr', json_array(1, 2, 3), 'obj', json_object('x', 1, 'y', 2));
+json_object(arr, json_array(1, 2, 3), obj, json_object(x, 1, y, 2))
+{"arr": [1, 2, 3], "obj": {"x": 1, "y": 2}}
+select json_object('extracted', json_extract('{"a":1}', '$.a'));
+json_object(extracted, json_extract({"a":1}, $.a))
+{"extracted": 1}
+select json_object('escaped', 'a\"b', 'slash', 'c\\d');
+json_object(escaped, a"b, slash, c\\d)
+{"escaped": "a\"b", "slash": "c\\d"}
+select json_object('id', 1, 'id', 2);
+json_object(id, 1, id, 2)
+{"id": 2}
+select json_object('a', 1, 'a', 'replaced', 'a', null);
+json_object(a, 1, a, replaced, a, null)
+{"a": null}
+set time_zone = '+08:00';
+drop table if exists jot;
+create table jot (
+id int,
+b bool, bi bigint, f float, d double,
+d64 decimal(10, 3), d128 decimal(30, 10), d256 decimal(50, 20),
+c1 char(1), c2 char(10), vc varchar(100), t text,
+bin binary(10), vbin varbinary,
+bitcol bit(4),
+td date, tt time, tdt datetime,
+ts timestamp,
+yr year,
+uid uuid,
+js json,
+vf32 vecf32(3),
+vf64 vecf64(3)
+);
+insert into jot values
+(1, true, 11111111111111, 0.1, 0.2222222, 3.14, 3.14159265359, 3.14159265358979323846,
+'a', 'aaa', 'vvvv', 'tttttttt',
+cast('hello' as binary(10)), cast('world' as varbinary), cast(b'0001' as bit(4)),
+'2021-02-01', '11:11:11', '2021-02-01 11:11:11', '2022-01-01 01:02:03',
+2021,
+'550e8400-e29b-41d4-a716-446655440000',
+'{"a": 1, "b": [1, 2, 3], "c": {"d": "hello"}}',
+cast('[1.0,2.0,3.0]' as vecf32(3)), cast('[1.5,2.5,3.5]' as vecf64(3))),
+(2, false, null, null, null, null, null, null,
+null, null, null, null,
+null, null, null,
+null, null, null, null,
+null,
+null,
+null,
+null, null),
+(3, true, 2, 1.5, 2.5, 99.999, 0.1234567890, 1.23456789012345678901,
+'z', 'zzz', null, 'txt',
+cast('\x00\xFF' as varbinary), cast(null as binary), cast(b'0000' as bit(4)),
+'2021-12-31', '23:59:59', '2021-12-31 23:59:59', '2022-12-31 23:59:59',
+1999,
+'660e8400-e29b-41d4-a716-446655440001',
+'{"foo": "bar", "nested": {"x": null}, "zoo": [1, 2, 3]}',
+cast('[4.0,5.0,6.0]' as vecf32(3)), cast('[3.0,2.0,1.0]' as vecf64(3)))
+;
+select count(*) from jot;
+count(*)
+3
+select id, json_object('id', id, 'bool', b) from jot;
+id    json_object(id, id, bool, b)
+1    {"bool": true, "id": 1}
+2    {"bool": false, "id": 2}
+3    {"bool": true, "id": 3}
+select id, json_object('bi', bi, 'd', d, 'f', f) from jot;
+id    json_object(bi, bi, d, d, f, f)
+1    {"bi": 11111111111111, "d": 0.2222222, "f": 0.10000000149011612}
+2    {"bi": null, "d": null, "f": null}
+3    {"bi": 2, "d": 2.5, "f": 1.5}
+select id, json_object('d64', d64, 'd128', d128, 'd256', d256) from jot;
+id    json_object(d64, d64, d128, d128, d256, d256)
+1    {"d128": 3.1415926536, "d256": 3.14159265358979323846, "d64": 3.140}
+2    {"d128": null, "d256": null, "d64": null}
+3    {"d128": 0.1234567890, "d256": 1.23456789012345678901, "d64": 99.999}
+select id, json_object('c1', c1, 'vc', vc, 't', t) from jot;
+id    json_object(c1, c1, vc, vc, t, t)
+1    {"c1": "a", "t": "tttttttt", "vc": "vvvv"}
+2    {"c1": null, "t": null, "vc": null}
+3    {"c1": "z", "t": "txt", "vc": null}
+select id, json_object('bin', bin, 'vbin', vbin) from jot;
+id    json_object(bin, bin, vbin, vbin)
+1    {"bin": "aGVsbG8AAAAAAA==", "vbin": "d29ybGQ="}
+2    {"bin": null, "vbin": null}
+3    {"bin": "eDAweEZGAAAAAA==", "vbin": null}
+select id, json_object('bit', bitcol) from jot;
+id    json_object(bit, bitcol)
+1    {"bit": "1"}
+2    {"bit": null}
+3    {"bit": "0"}
+select id, json_object('date', td, 'time', tt, 'dt', tdt) from jot;
+id    json_object(date, td, time, tt, dt, tdt)
+1    {"date": "2021-02-01", "dt": "2021-02-01 11:11:11", "time": "11:11:11"}
+2    {"date": null, "dt": null, "time": null}
+3    {"date": "2021-12-31", "dt": "2021-12-31 23:59:59", "time": "23:59:59"}
+select id, json_object('ts', ts) from jot;
+id    json_object(ts, ts)
+1    {"ts": "2022-01-01 01:02:03"}
+2    {"ts": null}
+3    {"ts": "2022-12-31 23:59:59"}
+select id, json_object('yr', yr) from jot;
+id    json_object(yr, yr)
+1    {"yr": "2021"}
+2    {"yr": null}
+3    {"yr": "1999"}
+select id, json_object('uid', uid) from jot;
+id    json_object(uid, uid)
+1    {"uid": "550e8400-e29b-41d4-a716-446655440000"}
+2    {"uid": null}
+3    {"uid": "660e8400-e29b-41d4-a716-446655440001"}
+select id, json_object('js', js) from jot;
+id    json_object(js, js)
+1    {"js": {"a": 1, "b": [1, 2, 3], "c": {"d": "hello"}}}
+2    {"js": null}
+3    {"js": {"foo": "bar", "nested": {"x": null}, "zoo": [1, 2, 3]}}
+select id, json_object('nullval', null) from jot;
+id    json_object(nullval, null)
+1    {"nullval": null}
+2    {"nullval": null}
+3    {"nullval": null}
+select id, json_object('vf32', vf32, 'vf64', vf64) from jot;
+id    json_object(vf32, vf32, vf64, vf64)
+1    {"vf32": [1, 2, 3], "vf64": [1.5, 2.5, 3.5]}
+2    {"vf32": null, "vf64": null}
+3    {"vf32": [4, 5, 6], "vf64": [3, 2, 1]}
+select id, json_object('id', id, 'b', b, 'bi', bi, 'f', f, 'd', d, 'd64', d64, 'd128', d128, 'd256', d256, 'c1', c1, 'vc', vc, 't', t, 'bin', bin, 'vbin', vbin, 'bit', bitcol, 'date', td, 'time', tt, 'dt', tdt, 'ts', ts, 'yr', yr, 'uid', uid, 'js', js, 'vf32', vf32, 'vf64', vf64) from jot;
+id    json_object(id, id, b, b, bi, bi, f, f, d, d, d64, d64, d128, d128, d256, d256, c1, c1, vc, vc, t, t, bin, bin, vbin, vbin, bit, bitcol, date, td, time, tt, dt, tdt, ts, ts, yr, yr, uid, uid, js, js, vf32, vf32, vf64, vf64)
+1    {"b": true, "bi": 11111111111111, "bin": "aGVsbG8AAAAAAA==", "bit": "1", "c1": "a", "d": 0.2222222, "d128": 3.1415926536, "d256": 3.14159265358979323846, "d64": 3.140, "date": "2021-02-01", "dt": "2021-02-01 11:11:11", "f": 0.10000000149011612, "id": 1, "js": {"a": 1, "b": [1, 2, 3], "c": {"d": "hello"}}, "t": "tttttttt", "time": "11:11:11", "ts": "2022-01-01 01:02:03", "uid": "550e8400-e29b-41d4-a716-446655440000", "vbin": "d29ybGQ=", "vc": "vvvv", "vf32": [1, 2, 3], "vf64": [1.5, 2.5, 3.5], "yr": "2021"}
+2    {"b": false, "bi": null, "bin": null, "bit": null, "c1": null, "d": null, "d128": null, "d256": null, "d64": null, "date": null, "dt": null, "f": null, "id": 2, "js": null, "t": null, "time": null, "ts": null, "uid": null, "vbin": null, "vc": null, "vf32": null, "vf64": null, "yr": null}
+3    {"b": true, "bi": 2, "bin": "eDAweEZGAAAAAA==", "bit": "0", "c1": "z", "d": 2.5, "d128": 0.1234567890, "d256": 1.23456789012345678901, "d64": 99.999, "date": "2021-12-31", "dt": "2021-12-31 23:59:59", "f": 1.5, "id": 3, "js": {"foo": "bar", "nested": {"x": null}, "zoo": [1, 2, 3]}, "t": "txt", "time": "23:59:59", "ts": "2022-12-31 23:59:59", "uid": "660e8400-e29b-41d4-a716-446655440001", "vbin": null, "vc": null, "vf32": [4, 5, 6], "vf64": [3, 2, 1], "yr": "1999"}
+select json_object();
+json_object()
+{}
+select json_object(cast('2021-02-01' as date), 'date_val');
+json_object(cast(2021-02-01 as date), date_val)
+{"2021-02-01": "date_val"}
+select json_object(cast('11:11:11' as time), 'time_val');
+json_object(cast(11:11:11 as time), time_val)
+{"11:11:11": "time_val"}
+select json_object(cast('2021-02-01 11:11:11' as datetime), 'dt_val');
+json_object(cast(2021-02-01 11:11:11 as datetime), dt_val)
+{"2021-02-01 11:11:11": "dt_val"}
+drop table jot;
+set time_zone = 'SYSTEM';
