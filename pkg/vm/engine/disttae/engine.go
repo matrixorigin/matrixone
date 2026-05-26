@@ -67,8 +67,6 @@ const (
 
 func makeWorkspaceRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
 	return func(ctx context.Context, targetPercent int64) {
-		// Workspace traffic is often the first path to observe hard RSS
-		// pressure, so apply the same sticky cache target used by CNFlushS3.
 		pressureUntil := time.Now().Add(workspaceRSSCacheAdmissionPressureTTL)
 		fileservice.SetMemoryCachePressureTargetPercent(targetPercent, pressureUntil)
 		objectio.SetMetaCachePressureTargetPercent(targetPercent, pressureUntil)
@@ -81,7 +79,6 @@ func makeWorkspaceRSSCacheEvictor(timeout time.Duration) func(context.Context, i
 			defer cancel()
 			fileservice.EvictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
 		}()
-
 		go func() {
 			defer wg.Done()
 			metaCtx, cancel := context.WithTimeout(ctx, timeout)
