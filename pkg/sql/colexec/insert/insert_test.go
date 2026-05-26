@@ -399,18 +399,15 @@ func TestAcquireFlushSlotWaitsForFlushSlotAfterTimeout(t *testing.T) {
 	oldFlushLimiterState := flushLimiterState
 	oldFlushConcurrencyForAcquire := flushConcurrencyForAcquire
 	oldAcquireTimeout := flushSemaphoreAcquireTimeout
-	oldRetryInterval := flushBypassRetryInterval
 	defer func() {
 		flushLimiterState = oldFlushLimiterState
 		flushConcurrencyForAcquire = oldFlushConcurrencyForAcquire
 		flushSemaphoreAcquireTimeout = oldAcquireTimeout
-		flushBypassRetryInterval = oldRetryInterval
 	}()
 
 	flushLimiterState = newFlushLimiter()
 	flushConcurrencyForAcquire = func() int { return 1 }
 	flushSemaphoreAcquireTimeout = time.Millisecond
-	flushBypassRetryInterval = time.Millisecond
 	heldRelease, waitCh := flushLimiterState.tryAcquire()
 	require.NotNil(t, heldRelease)
 	require.Nil(t, waitCh)
@@ -458,18 +455,15 @@ func TestAcquireFlushSlotWaitsWhenNormalAndBypassAreFull(t *testing.T) {
 	oldFlushLimiterState := flushLimiterState
 	oldFlushConcurrencyForAcquire := flushConcurrencyForAcquire
 	oldAcquireTimeout := flushSemaphoreAcquireTimeout
-	oldRetryInterval := flushBypassRetryInterval
 	defer func() {
 		flushLimiterState = oldFlushLimiterState
 		flushConcurrencyForAcquire = oldFlushConcurrencyForAcquire
 		flushSemaphoreAcquireTimeout = oldAcquireTimeout
-		flushBypassRetryInterval = oldRetryInterval
 	}()
 
 	flushLimiterState = newFlushLimiter()
 	flushConcurrencyForAcquire = func() int { return 1 }
 	flushSemaphoreAcquireTimeout = time.Millisecond
-	flushBypassRetryInterval = time.Millisecond
 	heldRelease, waitCh := flushLimiterState.tryAcquire()
 	require.NotNil(t, heldRelease)
 	require.Nil(t, waitCh)
