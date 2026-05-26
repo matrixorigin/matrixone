@@ -1305,6 +1305,7 @@ func buildSQLTaskRunWhereClause(c *conditions) string {
 		CondAccountID,
 		CondSQLTaskRunStatus,
 		CondSQLTaskTriggerType,
+		CondSQLTaskRunner,
 	})
 }
 
