@@ -46,7 +46,9 @@ select * from trun_table_02;
 truncate table trun_table_02;
 select * from trun_table_02;
 delete from trun_table_02 where clo1=1;
+-- @regex("Duplicate entry '\(100,2021-01-21\)' for key '(__mo_cpkey_col|\(clo3,col12\))'",true)
 insert into trun_table_02 values (3,-2,100,56,9,8,10,50,99.0,82.99,'yellllow','2021-01-21','1999-11-11 12:00:00','2010-11-11 11:00:00.00',false,23.98430943,'tttext','{"a": "3","b": [0,1,2]}');
+-- @regex("Duplicate entry '\(102,2022-10-11\)' for key '(__mo_cpkey_col|\(clo3,col12\))'",true)
 insert into trun_table_02 values (4,-2,102,56,9,8,10,50,99.0,82.99,'yellllow','2022-10-11','1999-11-11 12:00:00','2010-11-11 11:00:00.00',false,2.43,'tttext','{"a": "3","b": [0,1,2]}');
 select * from trun_table_02;
 
@@ -106,7 +108,5 @@ use truncate_table_2;
 drop table if exists trun_table_01;
 drop table if exists trun_table_02;
 drop table if exists trun_table_03;
-
-
 
 
