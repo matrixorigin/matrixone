@@ -71,6 +71,7 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
       - base=main
+      - approved-reviews-by=XuPeng-SH
     actions:
       queue:
         name: main
