@@ -299,8 +299,7 @@ col7 int unsigned,
 col9 float,
 col11 varchar(255),
 col13 DateTime,
-col15 bool,
-primary key(col1)
+col15 bool
 )infile 'stage://substage01/sub_stage001.csv' fields terminated by ',' ignore 1 lines;;
 select * from ex_table_1;
 drop table ex_table_1;

@@ -82,7 +82,17 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 
 	keyPart := idxDef.Parts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
-	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	var vecLitArg *plan.Expr
+	var found bool
+	if vecCtx.vecArgExpr != nil {
+		_, vecLitArg, found = builder.getArgsFromDistFnForJoin(
+			vecCtx.distFnExpr,
+			partPos,
+			vecCtx.scanNode.BindingTags[0],
+		)
+	} else {
+		_, vecLitArg, found = builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	}
 	if !found {
 		return nil, nil
 	}
@@ -151,6 +161,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 			Cols: DeepCopyColDefList(kHNSWSearchColDefs),
 		},
 		BindingTags: []int32{tableFuncTag},
+		Children:    vectorSearchProviderChildren(vecCtx),
 		TblFuncExprList: []*plan.Expr{
 			{
 				Typ: plan.Type{
@@ -327,4 +338,30 @@ func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPo
 	}
 
 	return vecColArg, vecLitArg, true
+}
+
+func (builder *QueryBuilder) getArgsFromDistFnForJoin(
+	distFnExpr *plan.Function,
+	partPos int32,
+	scanTag int32,
+) (key *plan.Expr, value *plan.Expr, found bool) {
+	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
+		return
+	}
+
+	distFnArgs := distFnExpr.Args
+	if distFnArgs[0].Typ.GetId() != int32(types.T_array_float32) &&
+		distFnArgs[0].Typ.GetId() != int32(types.T_array_float64) {
+		return
+	}
+
+	if col := distFnArgs[0].GetCol(); col != nil && col.RelPos == scanTag && col.ColPos == partPos {
+		distFnArgs[1].Typ = distFnArgs[0].Typ
+		return distFnArgs[0], distFnArgs[1], true
+	}
+	if col := distFnArgs[1].GetCol(); col != nil && col.RelPos == scanTag && col.ColPos == partPos {
+		distFnArgs[0].Typ = distFnArgs[1].Typ
+		return distFnArgs[1], distFnArgs[0], true
+	}
+	return
 }

@@ -65,9 +65,6 @@ func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ct
 		}
 
 	case *plan.Expr_Sub:
-		if builder.isForUpdate {
-			return 0, nil, moerr.NewInternalError(builder.GetContext(), "not support subquery for update")
-		}
 		nodeID, expr, err = builder.flattenSubquery(nodeID, exprImpl.Sub, ctx)
 	}
 
@@ -140,8 +137,13 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
 
-	if len(filterPreds) > 0 && subquery.Typ >= plan.SubqueryRef_SCALAR {
-		return 0, nil, moerr.NewNYIf(builder.GetContext(), "correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String())
+	if len(filterPreds) > 0 {
+		if !canPullupDeepCorrelatedPredicates(subquery.Typ) {
+			return 0, nil, moerr.NewNYIf(builder.GetContext(), "correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String())
+		}
+		if builder.hasInnerColumnInDeepCorrelatedFilters(subID, filterPreds) {
+			return 0, nil, moerr.NewNYIf(builder.GetContext(), "deep correlated predicate containing inner columns cannot be pulled above mark join")
+		}
 	}
 
 	switch subquery.Typ {
@@ -227,7 +229,13 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			joinPreds = append(joinPreds, constTrue)
 		}
 
-		return builder.insertMarkJoin(nodeID, subID, joinPreds, nil, false, ctx)
+		var markExpr *plan.Expr
+		nodeID, markExpr, err = builder.insertMarkJoin(nodeID, subID, joinPreds, nil, false, ctx)
+		if err != nil {
+			return 0, nil, err
+		}
+		nodeID = builder.appendDeepCorrelatedFilters(nodeID, filterPreds, ctx)
+		return nodeID, markExpr, nil
 
 	case plan.SubqueryRef_NOT_EXISTS:
 		// Uncorrelated subquery
@@ -235,7 +243,13 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			joinPreds = append(joinPreds, constTrue)
 		}
 
-		return builder.insertMarkJoin(nodeID, subID, joinPreds, nil, true, ctx)
+		var markExpr *plan.Expr
+		nodeID, markExpr, err = builder.insertMarkJoin(nodeID, subID, joinPreds, nil, true, ctx)
+		if err != nil {
+			return 0, nil, err
+		}
+		nodeID = builder.appendDeepCorrelatedFilters(nodeID, filterPreds, ctx)
+		return nodeID, markExpr, nil
 
 	case plan.SubqueryRef_IN:
 		outerPred, err := builder.generateRowComparison("=", subquery.Child, subCtx, false)
@@ -243,7 +257,13 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			return 0, nil, err
 		}
 
-		return builder.insertMarkJoin(nodeID, subID, joinPreds, outerPred, false, ctx)
+		var markExpr *plan.Expr
+		nodeID, markExpr, err = builder.insertMarkJoin(nodeID, subID, joinPreds, outerPred, false, ctx)
+		if err != nil {
+			return 0, nil, err
+		}
+		nodeID = builder.appendDeepCorrelatedFilters(nodeID, filterPreds, ctx)
+		return nodeID, markExpr, nil
 
 	case plan.SubqueryRef_NOT_IN:
 		outerPred, err := builder.generateRowComparison("=", subquery.Child, subCtx, false)
@@ -251,7 +271,13 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			return 0, nil, err
 		}
 
-		return builder.insertMarkJoin(nodeID, subID, joinPreds, outerPred, true, ctx)
+		var markExpr *plan.Expr
+		nodeID, markExpr, err = builder.insertMarkJoin(nodeID, subID, joinPreds, outerPred, true, ctx)
+		if err != nil {
+			return 0, nil, err
+		}
+		nodeID = builder.appendDeepCorrelatedFilters(nodeID, filterPreds, ctx)
+		return nodeID, markExpr, nil
 
 	case plan.SubqueryRef_ANY:
 		outerPred, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, false)
@@ -259,7 +285,13 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			return 0, nil, err
 		}
 
-		return builder.insertMarkJoin(nodeID, subID, joinPreds, outerPred, false, ctx)
+		var markExpr *plan.Expr
+		nodeID, markExpr, err = builder.insertMarkJoin(nodeID, subID, joinPreds, outerPred, false, ctx)
+		if err != nil {
+			return 0, nil, err
+		}
+		nodeID = builder.appendDeepCorrelatedFilters(nodeID, filterPreds, ctx)
+		return nodeID, markExpr, nil
 
 	case plan.SubqueryRef_ALL:
 		outerPred, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, false)
@@ -272,7 +304,13 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			return 0, nil, err
 		}
 
-		return builder.insertMarkJoin(nodeID, subID, joinPreds, outerPred, true, ctx)
+		var markExpr *plan.Expr
+		nodeID, markExpr, err = builder.insertMarkJoin(nodeID, subID, joinPreds, outerPred, true, ctx)
+		if err != nil {
+			return 0, nil, err
+		}
+		nodeID = builder.appendDeepCorrelatedFilters(nodeID, filterPreds, ctx)
+		return nodeID, markExpr, nil
 
 	default:
 		return 0, nil, moerr.NewNotSupportedf(builder.GetContext(), "%s subquery not supported", subquery.Typ.String())
@@ -325,6 +363,44 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 	}
 
 	return
+}
+
+func canPullupDeepCorrelatedPredicates(typ plan.SubqueryRef_Type) bool {
+	switch typ {
+	case plan.SubqueryRef_EXISTS, plan.SubqueryRef_NOT_EXISTS, plan.SubqueryRef_IN, plan.SubqueryRef_NOT_IN,
+		plan.SubqueryRef_ANY, plan.SubqueryRef_ALL:
+		return true
+	default:
+		return false
+	}
+}
+
+func (builder *QueryBuilder) hasInnerColumnInDeepCorrelatedFilters(subID int32, filterPreds []*plan.Expr) bool {
+	if len(filterPreds) == 0 {
+		return false
+	}
+
+	innerTags := builder.collectBindingTags(builder.qry.Nodes[subID])
+	for _, pred := range filterPreds {
+		for tag := range innerTags {
+			if containsTag(pred, tag) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (builder *QueryBuilder) appendDeepCorrelatedFilters(nodeID int32, filterPreds []*plan.Expr, ctx *BindContext) int32 {
+	if len(filterPreds) == 0 {
+		return nodeID
+	}
+
+	return builder.appendNode(&plan.Node{
+		NodeType:   plan.Node_FILTER,
+		Children:   []int32{nodeID},
+		FilterList: filterPreds,
+	}, ctx)
 }
 
 func getProjectExpr(idx int, ctx *BindContext, strip bool) *plan.Expr {
