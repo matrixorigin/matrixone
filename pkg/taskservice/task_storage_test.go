@@ -365,6 +365,7 @@ func TestAddUpdateQuerySQLTaskRun(t *testing.T) {
 			run2 := newTestSQLTaskRun(1, "task-1", SQLTaskStatusFailed)
 			run2.TriggerType = SQLTaskTriggerManual
 			run2.AccountID = 2
+			run2.RunnerCN = "cn2"
 			mustAddTestSQLTaskRun(t, s, 2, run1, run2)
 
 			runs := mustGetTestSQLTaskRun(t, s, 2)
@@ -372,6 +373,7 @@ func TestAddUpdateQuerySQLTaskRun(t *testing.T) {
 			require.Equal(t, runs[0].RunID, latest[0].RunID)
 			mustGetTestSQLTaskRun(t, s, 1, WithTaskIDCond(EQ, 1), WithSQLTaskRunStatus(EQ, SQLTaskStatusRunning))
 			mustGetTestSQLTaskRun(t, s, 1, WithSQLTaskTriggerType(EQ, SQLTaskTriggerManual))
+			mustGetTestSQLTaskRun(t, s, 1, WithSQLTaskRunnerCond(EQ, "cn2"))
 			mustGetTestSQLTaskRun(t, s, 1, WithAccountID(EQ, 1))
 			mustGetTestSQLTaskRun(t, s, 1, WithAccountID(EQ, 2))
 
@@ -453,6 +455,7 @@ func TestAcquireAndCompleteSQLTaskRun(t *testing.T) {
 			sqlTask = mustGetTestSQLTask(t, s, 1)[0]
 
 			run := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
+			run.StartedAt = time.Now()
 			runID, err := s.AcquireSQLTaskRun(context.Background(), sqlTask, run)
 			require.NoError(t, err)
 			require.NotZero(t, runID)
@@ -472,9 +475,40 @@ func TestAcquireAndCompleteSQLTaskRun(t *testing.T) {
 			require.Equal(t, SQLTaskStatusSuccess, runs[0].Status)
 
 			run2 := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
+			run2.StartedAt = time.Now()
 			runID2, err := s.AcquireSQLTaskRun(context.Background(), sqlTask, run2)
 			require.NoError(t, err)
 			require.NotEqual(t, runID, runID2)
+		})
+	}
+}
+
+func TestAcquireSQLTaskRunReapsStaleRunningRun(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			sqlTask := newTestSQLTask("task-stale", 1)
+			sqlTask.TimeoutSeconds = 1
+			mustAddTestSQLTask(t, s, 1, sqlTask)
+			sqlTask = mustGetTestSQLTask(t, s, 1)[0]
+
+			stale := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
+			stale.StartedAt = time.Now().Add(-10 * time.Minute)
+			mustAddTestSQLTaskRun(t, s, 1, stale)
+
+			run := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
+			runID, err := s.AcquireSQLTaskRun(context.Background(), sqlTask, run)
+			require.NoError(t, err)
+			require.NotZero(t, runID)
+
+			runs := mustGetTestSQLTaskRun(t, s, 2, WithTaskIDCond(EQ, sqlTask.TaskID))
+			require.Equal(t, SQLTaskStatusRunning, runs[0].Status)
+			require.Equal(t, SQLTaskStatusTimeout, runs[1].Status)
+			require.Contains(t, runs[1].ErrorMessage, "exceeding timeout")
 		})
 	}
 }

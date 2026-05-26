@@ -38,6 +38,12 @@ type SQLTaskExecutor struct {
 	runnerCN    string
 }
 
+type internalExecutorWithStatus interface {
+	ExecWithStatus(context.Context, string, ie.SessionOverrideOptions) (ie.InternalExecStatus, error)
+}
+
+const maxRowsAffected = int64(1<<63 - 1)
+
 func NewSQLTaskExecutor(
 	ieFactory func() ie.InternalExecutor,
 	taskService TaskService,
@@ -128,7 +134,8 @@ func (e *SQLTaskExecutor) ExecuteContext(ctx context.Context, spec *task.SQLTask
 			}
 			return nil
 		} else {
-			err = e.executeStatements(ctx, sqlTask)
+			rowsAffected, err := e.executeStatements(ctx, sqlTask)
+			run.RowsAffected = rowsAffected
 			if err == nil {
 				run.Status = SQLTaskStatusSuccess
 				if _, completeErr := e.finishRun(ctx, &run, nil, false); completeErr != nil {
@@ -183,10 +190,10 @@ func (e *SQLTaskExecutor) evaluateGate(ctx context.Context, sqlTask SQLTask) (bo
 	return toBool(value)
 }
 
-func (e *SQLTaskExecutor) executeStatements(ctx context.Context, sqlTask SQLTask) error {
+func (e *SQLTaskExecutor) executeStatements(ctx context.Context, sqlTask SQLTask) (int64, error) {
 	body := strings.TrimSpace(sqlTask.SQLBody)
 	if body == "" {
-		return nil
+		return 0, nil
 	}
 
 	runCtx := ctx
@@ -198,17 +205,47 @@ func (e *SQLTaskExecutor) executeStatements(ctx context.Context, sqlTask SQLTask
 
 	stmts, err := mysqlparser.Parse(runCtx, body, 1)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	exec := e.ieFactory()
 	opts := DefinerOpts(sqlTask)
+	var rowsAffected int64
 	for _, stmt := range stmts {
 		sql := tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
-		if err := exec.Exec(runCtx, sql, opts); err != nil {
-			return err
+		affected, err := execWithRowsAffected(runCtx, exec, sql, opts)
+		rowsAffected = addRowsAffected(rowsAffected, affected)
+		if err != nil {
+			return rowsAffected, err
 		}
 	}
-	return nil
+	return rowsAffected, nil
+}
+
+func execWithRowsAffected(
+	ctx context.Context,
+	exec ie.InternalExecutor,
+	sql string,
+	opts ie.SessionOverrideOptions,
+) (int64, error) {
+	if execWithStatus, ok := exec.(internalExecutorWithStatus); ok {
+		status, err := execWithStatus.ExecWithStatus(ctx, sql, opts)
+		return toInt64RowsAffected(status.RowsAffected), err
+	}
+	return 0, exec.Exec(ctx, sql, opts)
+}
+
+func toInt64RowsAffected(rows uint64) int64 {
+	if rows > uint64(maxRowsAffected) {
+		return maxRowsAffected
+	}
+	return int64(rows)
+}
+
+func addRowsAffected(total, delta int64) int64 {
+	if total > maxRowsAffected-delta {
+		return maxRowsAffected
+	}
+	return total + delta
 }
 
 func (e *SQLTaskExecutor) finishRun(ctx context.Context, run *SQLTaskRun, execErr error, timedOut bool) (int, error) {
