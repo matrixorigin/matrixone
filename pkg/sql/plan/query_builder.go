@@ -3656,6 +3656,30 @@ func (builder *QueryBuilder) bindOrderBy(
 	return
 }
 
+func projectExprKey(expr *plan.Expr) (string, error) {
+	exprBytes := make([]byte, expr.ProtoSize())
+	if _, err := expr.MarshalToSizedBuffer(exprBytes); err != nil {
+		return "", err
+	}
+	return string(exprBytes), nil
+}
+
+func appendOrderByProjectExpr(ctx *BindContext, expr *plan.Expr) (int32, error) {
+	exprKey, err := projectExprKey(expr)
+	if err != nil {
+		return 0, err
+	}
+
+	if colPos, ok := ctx.projectByExpr[exprKey]; ok {
+		return colPos, nil
+	}
+
+	colPos := int32(len(ctx.projects))
+	ctx.projectByExpr[exprKey] = colPos
+	ctx.projects = append(ctx.projects, expr)
+	return colPos, nil
+}
+
 func (builder *QueryBuilder) bindLimit(
 	ctx *BindContext,
 	astLimit *tree.Limit,

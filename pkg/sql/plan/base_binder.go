@@ -258,6 +258,16 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	return
 }
 
+func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
+	for {
+		paren, ok := astExpr.(*tree.ParenExpr)
+		if !ok {
+			return astExpr
+		}
+		astExpr = paren.Expr
+	}
+}
+
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	typ := types.T_text.ToType()
 	return &Expr{
