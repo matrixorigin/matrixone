@@ -20,7 +20,11 @@ coalesce(a, 1)
 1
 1
 select coalesce(b, 1) from t1;
-invalid argument cast to int, bad value a
+coalesce(b, 1)
+a
+1
+1
+b
 select coalesce(b, '1') from t1;
 coalesce(b, 1)
 a

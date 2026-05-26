@@ -203,6 +203,7 @@ func NewService(
 		"CNFlushS3",
 		90.0/100.0,
 		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
+		rscthrottler.WithRSSScavenging(),
 	)
 
 	srv.pu.LockService = srv.lockService

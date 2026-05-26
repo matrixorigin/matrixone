@@ -695,21 +695,24 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.UnionAll = &pipeline.UnionAll{}
 	case *hashbuild.HashBuild:
 		in.HashBuild = &pipeline.HashBuild{
-			NeedHashMap:       t.NeedHashMap,
-			HashOnPk:          t.HashOnPK,
-			NeedBatches:       t.NeedBatches,
-			NeedAllocateSels:  t.NeedAllocateSels,
-			IsShuffle:         t.IsShuffle,
-			Conditions:        t.Conditions,
-			JoinMapTag:        t.JoinMapTag,
-			JoinMapRefCnt:     t.JoinMapRefCnt,
-			ShuffleIdx:        t.ShuffleIdx,
-			RuntimeFilterSpec: t.RuntimeFilterSpec,
-			IsDedup:           t.IsDedup,
-			OnDuplicateAction: t.OnDuplicateAction,
-			DedupColName:      t.DedupColName,
-			DedupColTypes:     t.DedupColTypes,
-			DelColIdx:         t.DelColIdx,
+			NeedHashMap:               t.NeedHashMap,
+			HashOnPk:                  t.HashOnPK,
+			NeedBatches:               t.NeedBatches,
+			NeedAllocateSels:          t.NeedAllocateSels,
+			IsShuffle:                 t.IsShuffle,
+			Conditions:                t.Conditions,
+			JoinMapTag:                t.JoinMapTag,
+			JoinMapRefCnt:             t.JoinMapRefCnt,
+			ShuffleIdx:                t.ShuffleIdx,
+			RuntimeFilterSpec:         t.RuntimeFilterSpec,
+			IsDedup:                   t.IsDedup,
+			DedupBuildKeepLast:        t.DedupBuildKeepLast,
+			OnDuplicateAction:         t.OnDuplicateAction,
+			DedupColName:              t.DedupColName,
+			DedupColTypes:             t.DedupColTypes,
+			DelColIdx:                 t.DelColIdx,
+			DedupDeleteMarkerColIdx:   t.DedupDeleteMarkerColIdx,
+			DedupDeleteKeepColIdxList: t.DedupDeleteKeepColIdxList,
 		}
 	case *indexbuild.IndexBuild:
 		in.IndexBuild = &pipeline.Indexbuild{
@@ -727,9 +730,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			JoinMapTag:                      t.JoinMapTag,
 			ShuffleIdx:                      t.ShuffleIdx,
 			OnDuplicateAction:               t.OnDuplicateAction,
+			DedupBuildKeepLast:              t.DedupBuildKeepLast,
 			DedupColName:                    t.DedupColName,
 			DedupColTypes:                   t.DedupColTypes,
 			DelColIdx:                       t.DelColIdx,
+			DedupDeleteMarkerColIdx:         t.DedupDeleteMarkerColIdx,
+			DedupDeleteKeepColIdxList:       t.DedupDeleteKeepColIdxList,
 			LeftTypes:                       convertToPlanTypes(t.LeftTypes),
 			RightTypes:                      convertToPlanTypes(t.RightTypes),
 			UpdateColIdxList:                t.UpdateColIdxList,
@@ -777,8 +783,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
 		for i, muCtx := range t.MultiUpdateCtx {
 			updateCtxList[i] = &plan.UpdateCtx{
-				ObjRef:   muCtx.ObjRef,
-				TableDef: muCtx.TableDef,
+				ObjRef:             muCtx.ObjRef,
+				TableDef:           muCtx.TableDef,
+				SkipInsertOnNullPk: muCtx.SkipInsertOnNullPk,
+				InsertPkColIdx:     int32(muCtx.InsertPkColIdx),
 			}
 
 			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
@@ -1163,11 +1171,14 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		arg.IsDedup = t.IsDedup
+		arg.DedupBuildKeepLast = t.DedupBuildKeepLast
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DelColIdx = t.DelColIdx
 		arg.CanSpill = t.IsShuffle && t.NeedHashMap
+		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
+		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
 		op = arg
 	case vm.IndexBuild:
 		arg := indexbuild.NewArgument()
@@ -1185,9 +1196,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.OnDuplicateAction = t.OnDuplicateAction
+		arg.DedupBuildKeepLast = t.DedupBuildKeepLast
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DelColIdx = t.DelColIdx
+		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
+		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
 		arg.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
@@ -1237,8 +1251,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		for i, muCtx := range t.UpdateCtxList {
 
 			arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
-				ObjRef:   muCtx.ObjRef,
-				TableDef: muCtx.TableDef,
+				ObjRef:             muCtx.ObjRef,
+				TableDef:           muCtx.TableDef,
+				SkipInsertOnNullPk: muCtx.SkipInsertOnNullPk,
+				InsertPkColIdx:     int(muCtx.InsertPkColIdx),
 			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))

@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"go.uber.org/zap"
@@ -202,9 +201,21 @@ func (d *diskObjectStorage) Read(ctx context.Context, key string, min *int64, ma
 		reader = io.LimitReader(reader, limit)
 	}
 
+	adviseOffset := int64(0)
+	adviseLength := int64(0)
+	if min != nil {
+		adviseOffset = *min
+	}
+	if max != nil {
+		adviseLength = *max - adviseOffset
+	}
+
 	return &readCloser{
-		r:         reader,
-		closeFunc: f.Close,
+		r: reader,
+		closeFunc: func() error {
+			fadviseDontNeed(f, adviseOffset, adviseLength)
+			return f.Close()
+		},
 	}, nil
 }
 
@@ -257,7 +268,10 @@ func (d *diskObjectStorage) Write(ctx context.Context, key string, r io.Reader, 
 		return moerr.NewSizeNotMatchNoCtx(key)
 	}
 
-	system.FadviseDontNeed(int(tempFile.Fd()))
+	if err := tempFile.Sync(); err != nil {
+		return err
+	}
+	fadviseDontNeed(tempFile, 0, 0)
 	if err := tempFile.Close(); err != nil {
 		return err
 	}

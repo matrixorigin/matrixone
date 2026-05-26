@@ -251,12 +251,10 @@ func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 				if sql == "show databases" {
 					n++
-					memRes := executor.NewMemResult(
-						[]types.Type{types.New(types.T_varchar, 2, 0)},
-						mpool.MustNewZero())
-					memRes.NewBatch()
-					executor.AppendStringRows(memRes, 0, []string{bootstrappedCheckerDB})
-					return memRes.GetResult(), nil
+					return newBootstrapStringResult(bootstrappedCheckerDB), nil
+				}
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
+					return newBootstrapStringResult(allBootstrappedCheckerTables()...), nil
 				}
 				return executor.Result{}, nil
 			})
@@ -284,15 +282,15 @@ func TestBootstrapWithWait(t *testing.T) {
 		func(rt runtime.Runtime) {
 			var n atomic.Uint32
 			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-				if sql == "show databases" && n.Load() == 1 {
-					memRes := executor.NewMemResult(
-						[]types.Type{types.New(types.T_varchar, 2, 0)},
-						mpool.MustNewZero())
-					memRes.NewBatch()
-					executor.AppendStringRows(memRes, 0, []string{bootstrappedCheckerDB})
-					return memRes.GetResult(), nil
+				if sql == "show databases" {
+					if n.Add(1) >= 2 {
+						return newBootstrapStringResult(bootstrappedCheckerDB), nil
+					}
+					return executor.Result{}, nil
 				}
-				n.Add(1)
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
+					return newBootstrapStringResult(allBootstrappedCheckerTables()...), nil
+				}
 				return executor.Result{}, nil
 			})
 
@@ -312,6 +310,102 @@ func TestBootstrapWithWait(t *testing.T) {
 			assert.True(t, n.Load() > 0)
 		},
 	)
+}
+
+func TestBootstrapMissingSQLTaskTablesIsNotBootstrapped(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				if sql == "show databases" {
+					return newBootstrapStringResult(bootstrappedCheckerDB), nil
+				}
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
+					return newBootstrapStringResult(
+						catalog.MOSysAsyncTask,
+						"sys_cron_task",
+						catalog.MOSysDaemonTask,
+					), nil
+				}
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedVersionCheckerDB) {
+					return newBootstrapStringResult(), nil
+				}
+				return executor.Result{}, nil
+			})
+
+			b := NewService(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				exec,
+			).(*service)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			ok, err := b.checkAlreadyBootstrapped(ctx)
+			require.NoError(t, err)
+			require.False(t, ok)
+		},
+	)
+}
+
+func TestBootstrapMissingSQLTaskTablesWithUpgradeFrameworkIsBootstrapped(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				if sql == "show databases" {
+					return newBootstrapStringResult(bootstrappedCheckerDB), nil
+				}
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
+					return newBootstrapStringResult(
+						catalog.MOSysAsyncTask,
+						"sys_cron_task",
+						catalog.MOSysDaemonTask,
+					), nil
+				}
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedVersionCheckerDB) {
+					return newBootstrapStringResult(catalog.MOVersionTable), nil
+				}
+				return executor.Result{}, nil
+			})
+
+			b := NewService(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				exec,
+			).(*service)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			ok, err := b.checkAlreadyBootstrapped(ctx)
+			require.NoError(t, err)
+			require.True(t, ok)
+		},
+	)
+}
+
+func allBootstrappedCheckerTables() []string {
+	tables := make([]string, 0, len(bootstrappedCheckerTables)+len(upgradeManagedBootstrapTables))
+	tables = append(tables, bootstrappedCheckerTables...)
+	tables = append(tables, upgradeManagedBootstrapTables...)
+	return tables
+}
+
+func newBootstrapStringResult(values ...string) executor.Result {
+	memRes := executor.NewMemResult(
+		[]types.Type{types.New(types.T_varchar, 2, 0)},
+		mpool.MustNewZero())
+	memRes.NewBatch()
+	executor.AppendStringRows(memRes, 0, values)
+	return memRes.GetResult()
 }
 
 type memLocker struct {
@@ -512,6 +606,58 @@ func TestDoUpgrade(t *testing.T) {
 
 			_, err := b.doUpgrade(ctx, versionUpg, txnExecutor)
 			assert.NoError(t, err)
+		},
+	)
+}
+
+func TestPerformUpgradeReturnsWhenTenantUpgradeInProgress(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			b := newServiceForTest(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+					return executor.Result{}, nil
+				}),
+				func(s *service) {
+					s.handles = append(s.handles, newTestVersionHandler("3.0.1", "3.0.0", versions.Yes, versions.Yes, 2))
+				},
+			)
+
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			txnExecutor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				switch {
+				case strings.Contains(sql, "select state from mo_version") &&
+					strings.Contains(sql, "version = '3.0.1'") &&
+					strings.Contains(sql, "version_offset = 2") &&
+					strings.Contains(sql, "for update"):
+					memRes := executor.NewMemResult(
+						[]types.Type{types.New(types.T_int32, 32, 0)},
+						mpool.MustNewZero(),
+					)
+					memRes.NewBatchWithRowCount(1)
+					executor.AppendFixedRows(memRes, 0, []int32{versions.StateCreated})
+					return memRes.GetResult(), nil
+				case strings.Contains(sql, "from mo_upgrade") &&
+					strings.Contains(sql, "final_version = '3.0.1'") &&
+					strings.Contains(sql, "final_version_offset = 2") &&
+					strings.Contains(sql, "order by upgrade_order asc") &&
+					strings.Contains(sql, "for update"):
+					return buildUpgradeVersionResult(100, versions.StateUpgradingTenant, "3.0.0", "3.0.1", 2, 0, versions.Yes, versions.Yes, 3, 1), nil
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+				}
+			}, txnOperator)
+
+			completed, err := b.performUpgrade(context.Background(), txnExecutor)
+			require.NoError(t, err)
+			require.False(t, completed)
 		},
 	)
 }

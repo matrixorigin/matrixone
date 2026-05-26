@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	plan0 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -60,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -73,6 +75,126 @@ func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
 		return ctx, nil
 	})
 	return ctx, stubs
+}
+
+func TestRecordStatementResetsDivByZeroErrorMode(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+	cw := InitTxnComputationWrapper(ses, &tree.Insert{}, proc)
+	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "insert into t values (1, 10 / 0)", constant.ExternSql, true)
+	require.NoError(t, err)
+
+	require.Equal(t, int32(-1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
+	require.Equal(t, "Insert", ses.GetStmtType())
+	require.Equal(t, tree.QueryTypeDML, ses.GetQueryType())
+}
+
+func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+
+	insertIgnore := &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{nil}}
+	cw := InitTxnComputationWrapper(ses, insertIgnore, proc)
+	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "insert ignore into t values (1, 10 / 0)", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.True(t, ses.GetStmtProfile().GetDivByZeroIgnore())
+
+	insert := &tree.Insert{}
+	cw = InitTxnComputationWrapper(ses, insert, proc)
+	_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "insert into t values (1, 10 / 0)", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.False(t, ses.GetStmtProfile().GetDivByZeroIgnore())
+}
+
+func TestRefreshProcessStmtProfileForPreparedStmtUsesInnerInsert(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+
+	cw := InitTxnComputationWrapper(ses, &tree.Execute{}, proc)
+	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "execute stmt1", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.Equal(t, "Execute", ses.GetStmtType())
+	require.Equal(t, tree.QueryTypeOth, ses.GetQueryType())
+
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+	insertIgnore := &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{nil}}
+	refreshProcessDivByZeroProfileForPreparedStmt(proc, insertIgnore)
+
+	stmtType, queryType, ignore := proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	require.Equal(t, "Insert", stmtType)
+	require.Equal(t, tree.QueryTypeDML, queryType)
+	require.True(t, ignore)
+
+	refreshProcessDivByZeroProfileForPreparedStmt(proc, &tree.Insert{})
+	_, _, ignore = proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	require.False(t, ignore)
+
+	refreshProcessDivByZeroProfileForPreparedStmt(proc, nil)
+	// nil statement should be a no-op; previous runtime profile remains.
+	_, _, ignore = proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	require.False(t, ignore)
+}
+
+func TestTxnComputationWrapperCompileRefreshesProfileForBinaryExecute(t *testing.T) {
+	ctx := context.Background()
+	ctx = statistic.ContextWithStatsInfo(ctx, statistic.NewStatsInfo())
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+	proc.Base.SessionInfo.StorageEngine = &disttae.Engine{}
+
+	stmtName := getPrepareStmtName(1)
+	prepareString := tree.NewPrepareString(tree.Identifier(stmtName), "select 1")
+	stmts, err := mysql.Parse(ctx, prepareString.Sql, 1)
+	require.NoError(t, err)
+	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), prepareString)
+	require.NoError(t, err)
+
+	prepareStmt := &PrepareStmt{
+		Name:                stmtName,
+		Sql:                 prepareString.Sql,
+		PreparePlan:         preparePlan,
+		PrepareStmt:         stmts[0],
+		compile:             compile.NewCompile("", "", prepareString.Sql, "", "", nil, proc, stmts[0], false, nil, time.Now()),
+		getFromSendLongData: make(map[int]struct{}),
+	}
+	defer prepareStmt.Close()
+	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
+
+	cw := InitTxnComputationWrapper(ses, stmts[0], proc)
+	cw.plan = preparePlan.GetDcl().GetPrepare().Plan
+	execCtx := &ExecCtx{
+		reqCtx: ctx,
+		input: &UserInput{
+			stmtName:            stmtName,
+			isBinaryProtExecute: true,
+		},
+	}
+
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+	ret, err := cw.Compile(execCtx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, ret)
+	stmtType, queryType, ignore := proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	require.Equal(t, "Select", stmtType)
+	require.Equal(t, tree.QueryTypeDQL, queryType)
+	require.False(t, ignore)
 }
 
 func Test_mce(t *testing.T) {
@@ -1252,6 +1374,8 @@ func Test_statement_type(t *testing.T) {
 			{&tree.Insert{}},
 			{&tree.BeginTransaction{}},
 			{&tree.ShowTables{}},
+			{&tree.LockTableStmt{}},
+			{&tree.UnLockTableStmt{}},
 			{&tree.Use{}},
 		}
 		ctrl := gomock.NewController(t)
@@ -1267,10 +1391,43 @@ func Test_statement_type(t *testing.T) {
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(IsParameterModificationStatement(&tree.SetVar{}), convey.ShouldBeTrue)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeTrue)
+		convey.So(NeedToBeCommittedInActiveTransaction(&tree.LockTableStmt{}), convey.ShouldBeTrue)
+		convey.So(NeedToBeCommittedInActiveTransaction(&tree.UnLockTableStmt{}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.DropTable{}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(NeedToBeCommittedInActiveTransaction(nil), convey.ShouldBeFalse)
 	})
+}
+
+func TestLockTablesSessionState(t *testing.T) {
+	ses := &Session{}
+
+	lockCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		stmt:   &tree.LockTableStmt{},
+	}
+	_, err := execInFrontend(ses, lockCtx)
+	require.NoError(t, err)
+	require.True(t, ses.hasLockedTables.Load())
+	require.False(t, lockCtx.txnOpt.byCommit)
+
+	unlockCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		stmt:   &tree.UnLockTableStmt{},
+	}
+	_, err = execInFrontend(ses, unlockCtx)
+	require.NoError(t, err)
+	require.True(t, unlockCtx.txnOpt.byCommit)
+	require.False(t, ses.hasLockedTables.Load())
+
+	unlockAgainCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		stmt:   &tree.UnLockTableStmt{},
+	}
+	_, err = execInFrontend(ses, unlockAgainCtx)
+	require.NoError(t, err)
+	require.False(t, unlockAgainCtx.txnOpt.byCommit)
+	require.False(t, ses.hasLockedTables.Load())
 }
 
 func Test_convert_type(t *testing.T) {

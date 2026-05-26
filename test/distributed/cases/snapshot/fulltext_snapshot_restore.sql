@@ -116,4 +116,47 @@ select id from ft_restore where match(doc) against('different' in boolean mode);
 drop snapshot if exists ft_snap3;
 drop table if exists ft_restore;
 
+-- ============================================================
+-- Part 4: WITH PARSER gojieba — Chinese word segmentation survives restore
+-- ============================================================
+-- The ngram parser used in Parts 1-3 leaves the index dependent only on the
+-- raw text. Gojieba is dictionary-backed, so this verifies that the index
+-- rebuild on restore picks up the same parser configuration as the source.
+drop table if exists ft_jieba;
+create table ft_jieba (
+    id int primary key,
+    content text,
+    fulltext index ft_content (content) with parser gojieba
+);
+
+insert into ft_jieba values (1, '我来到北京清华大学');
+insert into ft_jieba values (2, '我来到上海');
+insert into ft_jieba values (3, '清华大学很有名');
+
+-- Pre-snapshot sanity: 我来到 phrase matches docs 1 and 2.
+-- @sortkey:0
+select id from ft_jieba where match(content) against('"我来到"' in boolean mode);
+
+create snapshot ft_snap4 for account sys;
+
+-- Mutate after snapshot.
+insert into ft_jieba values (4, '崇文门');
+update ft_jieba set content = 'modified' where id = 1;
+
+-- Restore from snapshot.
+delete from ft_jieba;
+insert into ft_jieba select * from db_ft_snap.ft_jieba {snapshot = 'ft_snap4'};
+
+-- Post-restore: index must once again be jieba-segmented. 我来到 phrase
+-- should match docs 1 and 2; doc 4 must be gone; doc 1's content must
+-- match its pre-snapshot value (not 'modified').
+-- @sortkey:0
+select id from ft_jieba where match(content) against('"我来到"' in boolean mode);
+-- @sortkey:0
+select id from ft_jieba where match(content) against('"清华大学"' in boolean mode);
+select id from ft_jieba where match(content) against('modified' in boolean mode);
+
+drop snapshot if exists ft_snap4;
+drop table if exists ft_jieba;
+
 drop database if exists db_ft_snap;

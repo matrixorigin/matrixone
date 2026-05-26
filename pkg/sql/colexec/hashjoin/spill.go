@@ -506,7 +506,7 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 		builder.FreeHashMapAndBatches(proc)
 		builder.Free(proc)
 	}
-	if prepErr := builder.Prepare(hashJoin.EqConds[1], -1, proc); prepErr != nil {
+	if prepErr := builder.Prepare(hashJoin.EqConds[1], -1, -1, nil, proc); prepErr != nil {
 		return nil, false, prepErr
 	}
 

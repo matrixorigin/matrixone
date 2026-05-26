@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
@@ -78,7 +79,9 @@ var onceInit sync.Once
 
 // metaLoadGroup deduplicates concurrent loads for the same cache key,
 // preventing cache stampede when many goroutines miss the same entry simultaneously.
-var metaLoadGroup sync.Map // mataCacheKey -> *loadCall
+// Uses mutex+map instead of sync.Map so entries are fully reclaimed after deletion.
+var metaLoadMu sync.Mutex
+var metaLoadCalls = make(map[mataCacheKey]*loadCall)
 
 type loadCall struct {
 	done chan struct{}
@@ -134,12 +137,12 @@ func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, 
 	return fifocache.New[mataCacheKey, []byte](
 		capacity,
 		shardMetaCacheKey,
-		func(_ context.Context, _ mataCacheKey, _ []byte, size int64) { // postSet
+		func(_ context.Context, _ mataCacheKey, _ []byte, size int64, _ uint64) { // postSet
 			inuseBytes.Add(float64(size))
 			capacityBytes.Set(float64(capacity()))
 		},
 		nil,
-		func(_ context.Context, _ mataCacheKey, _ []byte, size int64) { // postEvict
+		func(_ context.Context, _ mataCacheKey, _ []byte, size int64, _ uint64) { // postEvict
 			inuseBytes.Add(float64(-size))
 			capacityBytes.Set(float64(capacity()))
 		})
@@ -238,23 +241,43 @@ func LoadBFWithMeta(
 // dedupLoad ensures that for a given cache key, only one goroutine performs
 // the actual I/O load. Other concurrent callers for the same key wait and
 // share the result. This prevents cache stampede under high concurrency.
+//
+// Uses mutex+map (not sync.Map) so the map shrinks naturally when keys are
+// deleted. Waiters read through metaCache after the load finishes so they do
+// not keep per-call copies of large metadata buffers.
 func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error)) ([]byte, error) {
-	call := &loadCall{done: make(chan struct{})}
-	if actual, loaded := metaLoadGroup.LoadOrStore(key, call); loaded {
-		existing := actual.(*loadCall)
+	metaLoadMu.Lock()
+	if call, ok := metaLoadCalls[key]; ok {
+		metaLoadMu.Unlock()
 		select {
-		case <-existing.done:
-			return existing.val, existing.err
+		case <-call.done:
+			if v, ok := metaCache.Get(ctx, key); ok {
+				return v, nil
+			}
+			if call.err != nil {
+				return nil, call.err
+			}
+			return call.val, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 	}
-	defer metaLoadGroup.Delete(key)
+	call := &loadCall{done: make(chan struct{})}
+	call.err = moerr.NewInternalErrorNoCtx("dedup load did not complete")
+	metaLoadCalls[key] = call
+	metaLoadMu.Unlock()
+
+	defer func() {
+		metaLoadMu.Lock()
+		close(call.done)
+		delete(metaLoadCalls, key)
+		metaLoadMu.Unlock()
+	}()
+
 	call.val, call.err = load()
 	if call.err == nil {
 		metaCache.Set(ctx, key, call.val, int64(len(call.val)))
 	}
-	close(call.done)
 	return call.val, call.err
 }
 

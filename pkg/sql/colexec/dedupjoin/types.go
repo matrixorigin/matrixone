@@ -16,6 +16,7 @@ package dedupjoin
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -86,7 +87,8 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *message.JoinMap
+	mp        *message.JoinMap
+	cachedItr hashmap.Iterator
 
 	matched     *bitmap.Bitmap
 	handledLast bool
@@ -123,12 +125,15 @@ type DedupJoin struct {
 	NumCPU   uint64
 	IsMerger bool
 
-	OnDuplicateAction plan.Node_OnDuplicateAction
-	DedupColName      string
-	DedupColTypes     []plan.Type
-	DelColIdx         int32
-	UpdateColIdxList  []int32
-	UpdateColExprList []*plan.Expr
+	OnDuplicateAction         plan.Node_OnDuplicateAction
+	DedupBuildKeepLast        bool
+	DedupColName              string
+	DedupColTypes             []plan.Type
+	DelColIdx                 int32
+	DedupDeleteMarkerColIdx   int32
+	DedupDeleteKeepColIdxList []int32
+	UpdateColIdxList          []int32
+	UpdateColExprList         []*plan.Expr
 
 	// OldColCapturePlaceholderIdxList / OldColCaptureProbeIdxList are parallel
 	// arrays. For each i, when probe hits a build bucket the probe-side column
@@ -258,6 +263,7 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 }
 
 func (ctr *container) cleanHashMap() {
+	ctr.cachedItr = nil
 	if ctr.mp != nil {
 		ctr.mp.Free()
 		ctr.mp = nil

@@ -103,7 +103,15 @@ func NeedToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
 	if stmt == nil {
 		return false
 	}
-	return IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt)
+	return IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt) || isLockTableStatement(stmt)
+}
+
+func isLockTableStatement(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.LockTableStmt:
+		return true
+	}
+	return false
 }
 
 /*
@@ -218,6 +226,8 @@ func statementCanBeExecutedInUncommittedTransaction(
 		}
 		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, preStmt.PrepareStmt)
 	case *tree.Deallocate, *tree.Reset:
+		return true, nil
+	case *tree.LockTableStmt, *tree.UnLockTableStmt:
 		return true, nil
 	case *tree.Use:
 		/*

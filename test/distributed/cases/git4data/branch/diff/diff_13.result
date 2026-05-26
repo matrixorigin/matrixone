@@ -1,0 +1,351 @@
+drop database if exists test_tree_diff;
+create database test_tree_diff;
+use test_tree_diff;
+create table t0(a int primary key, b int);
+insert into t0 select *, * from generate_series(1, 20) g;
+data branch create table t1 from t0;
+insert into t1 values (101, 101);
+update t1 set b = 10000 where a = 1;
+delete from t1 where a = 19;
+data branch create table t2 from t0;
+insert into t2 values (102, 102);
+update t2 set b = 20000 where a = 2;
+delete from t2 where a = 18;
+data branch create table t3 from t0;
+insert into t3 values (103, 103);
+update t3 set b = 30000 where a = 3;
+delete from t3 where a = 17;
+data branch create table t4 from t1;
+insert into t4 values (104, 104);
+update t4 set b = 40000 where a = 4;
+delete from t4 where a = 16;
+data branch create table t5 from t1;
+insert into t5 values (105, 105);
+update t5 set b = 50000 where a = 5;
+delete from t5 where a = 15;
+data branch create table t6 from t2;
+insert into t6 values (106, 106);
+update t6 set b = 60000 where a = 6;
+delete from t6 where a = 14;
+data branch create table t7 from t3;
+insert into t7 values (107, 107);
+update t7 set b = 70000 where a = 7;
+delete from t7 where a = 13;
+data branch create table t8 from t3;
+insert into t8 values (108, 108);
+update t8 set b = 80000 where a = 8;
+delete from t8 where a = 12;
+data branch create table t9 from t4;
+insert into t9 values (109, 109);
+update t9 set b = 90000 where a = 9;
+delete from t9 where a = 11;
+data branch create table t10 from t4;
+insert into t10 values (110, 110);
+update t10 set b = 100000 where a = 10;
+delete from t10 where a = 20;
+data branch create table t11 from t5;
+insert into t11 values (111, 111);
+update t11 set b = 110000 where a = 1;
+delete from t11 where a = 11;
+data branch create table t12 from t5;
+insert into t12 values (112, 112);
+update t12 set b = 120000 where a = 2;
+delete from t12 where a = 12;
+data branch create table t13 from t6;
+insert into t13 values (113, 113);
+update t13 set b = 130000 where a = 3;
+delete from t13 where a = 13;
+data branch create table t14 from t6;
+insert into t14 values (114, 114);
+update t14 set b = 140000 where a = 4;
+delete from t14 where a = 14;
+data branch create table t15 from t7;
+insert into t15 values (115, 115);
+update t15 set b = 150000 where a = 5;
+delete from t15 where a = 15;
+data branch create table t16 from t7;
+insert into t16 values (116, 116);
+update t16 set b = 160000 where a = 6;
+delete from t16 where a = 16;
+data branch create table t17 from t8;
+insert into t17 values (117, 117);
+update t17 set b = 170000 where a = 7;
+delete from t17 where a = 17;
+data branch create table t18 from t8;
+insert into t18 values (118, 118);
+update t18 set b = 180000 where a = 8;
+delete from t18 where a = 18;
+insert into t0 values (200, 200);
+update t0 set b = 99999 where a = 1;
+delete from t0 where a = 19;
+select count(*) as tree_nodes from mo_catalog.mo_branch_metadata m
+join mo_catalog.mo_tables t
+on t.rel_id = m.table_id
+where t.reldatabase = 'test_tree_diff' and t.relname like 't%';
+➤ tree_nodes[-5,64,0]  𝄀
+18
+data branch diff t9 against t0 output summary;
+➤ metric[12,0,0]  ¦  t9[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  3  ¦  1  𝄀
+DELETED  ¦  2  ¦  0  𝄀
+UPDATED  ¦  3  ¦  1
+data branch diff t9 against t0 output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+10
+data branch diff t9 against t0;
+➤ diff t9 against t0[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t9  ¦  UPDATE  ¦  1  ¦  10000  𝄀
+t0  ¦  UPDATE  ¦  1  ¦  99999  𝄀
+t9  ¦  UPDATE  ¦  4  ¦  40000  𝄀
+t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
+t9  ¦  DELETE  ¦  11  ¦  11  𝄀
+t9  ¦  DELETE  ¦  16  ¦  16  𝄀
+t9  ¦  INSERT  ¦  101  ¦  101  𝄀
+t9  ¦  INSERT  ¦  104  ¦  104  𝄀
+t9  ¦  INSERT  ¦  109  ¦  109  𝄀
+t0  ¦  INSERT  ¦  200  ¦  200
+data branch diff t9 against t10 output summary;
+➤ metric[12,0,0]  ¦  t9[-5,0,0]  ¦  t10[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  1  𝄀
+DELETED  ¦  1  ¦  1  𝄀
+UPDATED  ¦  1  ¦  1
+data branch diff t9 against t10 output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+6
+data branch diff t9 against t10;
+➤ diff t9 against t10[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
+t10  ¦  UPDATE  ¦  10  ¦  100000  𝄀
+t9  ¦  DELETE  ¦  11  ¦  11  𝄀
+t10  ¦  DELETE  ¦  20  ¦  20  𝄀
+t9  ¦  INSERT  ¦  109  ¦  109  𝄀
+t10  ¦  INSERT  ¦  110  ¦  110
+data branch diff t9 against t11 output summary;
+➤ metric[12,0,0]  ¦  t9[-5,0,0]  ¦  t11[-5,0,0]  𝄀
+INSERTED  ¦  2  ¦  2  𝄀
+DELETED  ¦  1  ¦  1  𝄀
+UPDATED  ¦  2  ¦  2
+data branch diff t9 against t11 output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+10
+data branch diff t9 against t11;
+➤ diff t9 against t11[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t11  ¦  UPDATE  ¦  1  ¦  110000  𝄀
+t9  ¦  UPDATE  ¦  4  ¦  40000  𝄀
+t11  ¦  UPDATE  ¦  5  ¦  50000  𝄀
+t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
+t11  ¦  DELETE  ¦  15  ¦  15  𝄀
+t9  ¦  DELETE  ¦  16  ¦  16  𝄀
+t9  ¦  INSERT  ¦  104  ¦  104  𝄀
+t11  ¦  INSERT  ¦  105  ¦  105  𝄀
+t9  ¦  INSERT  ¦  109  ¦  109  𝄀
+t11  ¦  INSERT  ¦  111  ¦  111
+data branch diff t9 against t13 output summary;
+➤ metric[12,0,0]  ¦  t9[-5,0,0]  ¦  t13[-5,0,0]  𝄀
+INSERTED  ¦  3  ¦  3  𝄀
+DELETED  ¦  3  ¦  3  𝄀
+UPDATED  ¦  3  ¦  3
+data branch diff t9 against t13 output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+18
+data branch diff t9 against t13;
+➤ diff t9 against t13[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t9  ¦  UPDATE  ¦  1  ¦  10000  𝄀
+t13  ¦  UPDATE  ¦  2  ¦  20000  𝄀
+t13  ¦  UPDATE  ¦  3  ¦  130000  𝄀
+t9  ¦  UPDATE  ¦  4  ¦  40000  𝄀
+t13  ¦  UPDATE  ¦  6  ¦  60000  𝄀
+t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
+t9  ¦  DELETE  ¦  11  ¦  11  𝄀
+t13  ¦  DELETE  ¦  13  ¦  13  𝄀
+t13  ¦  DELETE  ¦  14  ¦  14  𝄀
+t9  ¦  DELETE  ¦  16  ¦  16  𝄀
+t13  ¦  DELETE  ¦  18  ¦  18  𝄀
+t9  ¦  DELETE  ¦  19  ¦  19  𝄀
+t9  ¦  INSERT  ¦  101  ¦  101  𝄀
+t13  ¦  INSERT  ¦  102  ¦  102  𝄀
+t9  ¦  INSERT  ¦  104  ¦  104  𝄀
+t13  ¦  INSERT  ¦  106  ¦  106  𝄀
+t9  ¦  INSERT  ¦  109  ¦  109  𝄀
+t13  ¦  INSERT  ¦  113  ¦  113
+data branch diff t4 against t0 output summary;
+➤ metric[12,0,0]  ¦  t4[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  2  ¦  1  𝄀
+DELETED  ¦  1  ¦  0  𝄀
+UPDATED  ¦  2  ¦  1
+data branch diff t4 against t0 output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+7
+data branch diff t4 against t0;
+➤ diff t4 against t0[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t4  ¦  UPDATE  ¦  1  ¦  10000  𝄀
+t0  ¦  UPDATE  ¦  1  ¦  99999  𝄀
+t4  ¦  UPDATE  ¦  4  ¦  40000  𝄀
+t4  ¦  DELETE  ¦  16  ¦  16  𝄀
+t4  ¦  INSERT  ¦  101  ¦  101  𝄀
+t4  ¦  INSERT  ¦  104  ¦  104  𝄀
+t0  ¦  INSERT  ¦  200  ¦  200
+data branch diff t9 against t4 output summary;
+➤ metric[12,0,0]  ¦  t9[-5,0,0]  ¦  t4[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  0  𝄀
+DELETED  ¦  1  ¦  0  𝄀
+UPDATED  ¦  1  ¦  0
+data branch diff t9 against t4 output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+3
+data branch diff t9 against t4;
+➤ diff t9 against t4[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
+t9  ¦  DELETE  ¦  11  ¦  11  𝄀
+t9  ¦  INSERT  ¦  109  ¦  109
+data branch diff t9 against t1 output summary;
+➤ metric[12,0,0]  ¦  t9[-5,0,0]  ¦  t1[-5,0,0]  𝄀
+INSERTED  ¦  2  ¦  0  𝄀
+DELETED  ¦  2  ¦  0  𝄀
+UPDATED  ¦  2  ¦  0
+data branch diff t9 against t1 output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+6
+data branch diff t9 against t1;
+➤ diff t9 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t9  ¦  UPDATE  ¦  4  ¦  40000  𝄀
+t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
+t9  ¦  DELETE  ¦  11  ¦  11  𝄀
+t9  ¦  DELETE  ¦  16  ¦  16  𝄀
+t9  ¦  INSERT  ¦  104  ¦  104  𝄀
+t9  ¦  INSERT  ¦  109  ¦  109
+data branch diff t9 against t6 output summary;
+➤ metric[12,0,0]  ¦  t9[-5,0,0]  ¦  t6[-5,0,0]  𝄀
+INSERTED  ¦  3  ¦  2  𝄀
+DELETED  ¦  3  ¦  2  𝄀
+UPDATED  ¦  3  ¦  2
+data branch diff t9 against t6 output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+15
+data branch diff t9 against t6;
+➤ diff t9 against t6[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t9  ¦  UPDATE  ¦  1  ¦  10000  𝄀
+t6  ¦  UPDATE  ¦  2  ¦  20000  𝄀
+t9  ¦  UPDATE  ¦  4  ¦  40000  𝄀
+t6  ¦  UPDATE  ¦  6  ¦  60000  𝄀
+t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
+t9  ¦  DELETE  ¦  11  ¦  11  𝄀
+t6  ¦  DELETE  ¦  14  ¦  14  𝄀
+t9  ¦  DELETE  ¦  16  ¦  16  𝄀
+t6  ¦  DELETE  ¦  18  ¦  18  𝄀
+t9  ¦  DELETE  ¦  19  ¦  19  𝄀
+t9  ¦  INSERT  ¦  101  ¦  101  𝄀
+t6  ¦  INSERT  ¦  102  ¦  102  𝄀
+t9  ¦  INSERT  ¦  104  ¦  104  𝄀
+t6  ¦  INSERT  ¦  106  ¦  106  𝄀
+t9  ¦  INSERT  ¦  109  ¦  109
+data branch diff t4 against t3 output summary;
+➤ metric[12,0,0]  ¦  t4[-5,0,0]  ¦  t3[-5,0,0]  𝄀
+INSERTED  ¦  2  ¦  1  𝄀
+DELETED  ¦  2  ¦  1  𝄀
+UPDATED  ¦  2  ¦  1
+data branch diff t4 against t3 output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+9
+data branch diff t4 against t3;
+➤ diff t4 against t3[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t4  ¦  UPDATE  ¦  1  ¦  10000  𝄀
+t3  ¦  UPDATE  ¦  3  ¦  30000  𝄀
+t4  ¦  UPDATE  ¦  4  ¦  40000  𝄀
+t4  ¦  DELETE  ¦  16  ¦  16  𝄀
+t3  ¦  DELETE  ¦  17  ¦  17  𝄀
+t4  ¦  DELETE  ¦  19  ¦  19  𝄀
+t4  ¦  INSERT  ¦  101  ¦  101  𝄀
+t3  ¦  INSERT  ¦  103  ¦  103  𝄀
+t4  ¦  INSERT  ¦  104  ¦  104
+data branch diff t18 against t9 output summary;
+➤ metric[12,0,0]  ¦  t18[-5,0,0]  ¦  t9[-5,0,0]  𝄀
+INSERTED  ¦  3  ¦  3  𝄀
+DELETED  ¦  3  ¦  3  𝄀
+UPDATED  ¦  2  ¦  3
+data branch diff t18 against t9 output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+17
+data branch diff t18 against t9;
+➤ diff t18 against t9[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t9  ¦  UPDATE  ¦  1  ¦  10000  𝄀
+t18  ¦  UPDATE  ¦  3  ¦  30000  𝄀
+t9  ¦  UPDATE  ¦  4  ¦  40000  𝄀
+t18  ¦  UPDATE  ¦  8  ¦  180000  𝄀
+t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
+t9  ¦  DELETE  ¦  11  ¦  11  𝄀
+t18  ¦  DELETE  ¦  12  ¦  12  𝄀
+t9  ¦  DELETE  ¦  16  ¦  16  𝄀
+t18  ¦  DELETE  ¦  17  ¦  17  𝄀
+t18  ¦  DELETE  ¦  18  ¦  18  𝄀
+t9  ¦  DELETE  ¦  19  ¦  19  𝄀
+t9  ¦  INSERT  ¦  101  ¦  101  𝄀
+t18  ¦  INSERT  ¦  103  ¦  103  𝄀
+t9  ¦  INSERT  ¦  104  ¦  104  𝄀
+t18  ¦  INSERT  ¦  108  ¦  108  𝄀
+t9  ¦  INSERT  ¦  109  ¦  109  𝄀
+t18  ¦  INSERT  ¦  118  ¦  118
+data branch diff t13 against t9 output summary;
+➤ metric[12,0,0]  ¦  t13[-5,0,0]  ¦  t9[-5,0,0]  𝄀
+INSERTED  ¦  3  ¦  3  𝄀
+DELETED  ¦  3  ¦  3  𝄀
+UPDATED  ¦  3  ¦  3
+data branch diff t10 against t9 output summary;
+➤ metric[12,0,0]  ¦  t10[-5,0,0]  ¦  t9[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  1  𝄀
+DELETED  ¦  1  ¦  1  𝄀
+UPDATED  ¦  1  ¦  1
+data branch diff t12 against t11 output summary;
+➤ metric[12,0,0]  ¦  t12[-5,0,0]  ¦  t11[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  1  𝄀
+DELETED  ¦  1  ¦  1  𝄀
+UPDATED  ¦  1  ¦  1
+data branch diff t14 against t13 output summary;
+➤ metric[12,0,0]  ¦  t14[-5,0,0]  ¦  t13[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  1  𝄀
+DELETED  ¦  0  ¦  1  𝄀
+UPDATED  ¦  1  ¦  1
+data branch diff t9 against t0 columns (a);
+➤ diff t9 against t0[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  𝄀
+t9  ¦  UPDATE  ¦  1  𝄀
+t0  ¦  UPDATE  ¦  1  𝄀
+t9  ¦  UPDATE  ¦  4  𝄀
+t9  ¦  UPDATE  ¦  9  𝄀
+t9  ¦  DELETE  ¦  11  𝄀
+t9  ¦  DELETE  ¦  16  𝄀
+t9  ¦  INSERT  ¦  101  𝄀
+t9  ¦  INSERT  ¦  104  𝄀
+t9  ¦  INSERT  ¦  109  𝄀
+t0  ¦  INSERT  ¦  200
+data branch diff t9 against t0 columns (b);
+➤ diff t9 against t0[12,0,0]  ¦  flag[12,0,0]  ¦  b[4,0,0]  𝄀
+t9  ¦  UPDATE  ¦  10000  𝄀
+t0  ¦  UPDATE  ¦  99999  𝄀
+t9  ¦  UPDATE  ¦  40000  𝄀
+t9  ¦  UPDATE  ¦  90000  𝄀
+t9  ¦  DELETE  ¦  11  𝄀
+t9  ¦  DELETE  ¦  16  𝄀
+t9  ¦  INSERT  ¦  101  𝄀
+t9  ¦  INSERT  ¦  104  𝄀
+t9  ¦  INSERT  ¦  109  𝄀
+t0  ¦  INSERT  ¦  200
+drop table t9;
+drop table t10;
+drop table t11;
+drop table t12;
+drop table t13;
+drop table t14;
+drop table t15;
+drop table t16;
+drop table t17;
+drop table t18;
+drop table t4;
+drop table t5;
+drop table t6;
+drop table t7;
+drop table t8;
+drop table t1;
+drop table t2;
+drop table t3;
+drop table t0;
+drop database test_tree_diff;

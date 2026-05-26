@@ -84,12 +84,18 @@ create external table hive_err8 (
 ) infile{'filepath'='$resources/hive_partition/single_level/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='emb'};
 
 -- 1.10 SHOW CREATE TABLE
+-- @ignore:1
 show create table hive_single;
 
 -- 1.11 LOAD DATA into hive table should be rejected (external table generic rejection)
 load data infile '$resources/hive_partition/single_level/year=2024/data.parquet' into table hive_single;
 
--- 1.12 hive_partitioning='false' treated as disabled (existing external table path)
+-- 1.12 Creating indexes on hive-partitioned external tables should be rejected
+create index idx_hive_single_id on hive_single(id);
+create unique index uidx_hive_single_id on hive_single(id);
+alter table hive_single add unique (amount);
+
+-- 1.13 hive_partitioning='false' treated as disabled (existing external table path)
 drop table if exists hive_disabled;
 create external table hive_disabled (
     id int,
@@ -136,6 +142,9 @@ select year, sum(amount) as total from hive_single group by year having sum(amou
 
 -- 2.12 COUNT DISTINCT on partition column
 select count(distinct year) as distinct_years from hive_single;
+
+-- 2.12.1 COUNT DISTINCT on physical column with partition pruning (issue #24360)
+select count(distinct id) as distinct_ids_2024 from hive_single where year = 2024;
 
 -- 2.13 Partition column in arithmetic expression (rowFilter evaluates)
 select count(*) from hive_single where year + 1 = 2025;
@@ -326,6 +335,21 @@ select count(*) as cnt from hive_single where year = 2024 and __mo_filepath like
 -- 7.7 Contradictory partition + filepath (empty result, but evaluates correctly)
 select count(*) as cnt from hive_single where year = 2024 and __mo_filepath like '%year=2020%';
 
+-- 7.8 Multiple parquet files under each hive partition.
+-- This keeps BVT small while covering the runtime path that fanouts more than
+-- one file per partition, plus partition-value fill and __mo_filepath fill.
+drop table if exists hive_fanout_small;
+create external table hive_fanout_small (
+    id int,
+    amount double,
+    part_id int
+) infile{'filepath'='$resources/hive_partition/fanout_small/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select count(*) as cnt from hive_fanout_small;
+select count(distinct __mo_filepath) as paths from hive_fanout_small;
+select part_id, count(*) as rows_per_part, count(distinct __mo_filepath) as files_per_part
+from hive_fanout_small group by part_id order by part_id;
+select count(*) as cnt from hive_fanout_small where part_id in (1, 3, 9);
+
 -- ============================================================================
 -- 8. EXPLAIN Verification
 -- ============================================================================
@@ -371,7 +395,8 @@ group by d.y order by d.y;
 -- 9.4 UNION ALL merges partitions from two tables
 select 'single' as src, count(*) as cnt from hive_single where year = 2024
 union all
-select 'multi' as src, count(*) as cnt from hive_multi where year = 2024;
+select 'multi' as src, count(*) as cnt from hive_multi where year = 2024
+order by src desc;
 
 -- 9.5 Scalar subquery with partition predicate
 select id, year from hive_single
@@ -426,6 +451,7 @@ create external table hive_invalid_type (
     year int
 ) infile{'filepath'='$resources/hive_partition/invalid_type/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='year'};
 select * from hive_invalid_type;
+select count(*) from hive_invalid_type;
 
 -- 10.2 URL-encoded directory name containing '%' should report error (P0 known limitation)
 drop table if exists hive_url_encoded;

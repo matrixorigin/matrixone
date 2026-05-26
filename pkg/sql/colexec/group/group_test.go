@@ -270,6 +270,33 @@ func TestMergeGroupPreservesLateNullableGroupKeys(t *testing.T) {
 	merge.Free(proc, false, nil)
 }
 
+func TestMergeGroupFreesSpillAggListAfterBatchMerge(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	first := batch.NewWithSize(2)
+	first.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil, proc.Mp())
+	first.Vecs[1] = testutil.MakeInt32Vector([]int32{10, 10}, nil, proc.Mp())
+	first.SetRowCount(2)
+
+	second := batch.NewWithSize(2)
+	second.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 2}, nil, proc.Mp())
+	second.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 20}, nil, proc.Mp())
+	second.SetRowCount(2)
+
+	partialBatches := buildPartialGroupBatches(t, proc, []*batch.Batch{first, second}, false)
+
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
+	require.NoError(t, merge.Prepare(proc))
+	defer merge.Free(proc, false, nil)
+
+	for _, partial := range partialBatches {
+		_, err := merge.buildOneBatch(proc, partial)
+		require.NoError(t, err)
+		require.Nil(t, merge.ctr.spillAggList)
+	}
+}
+
 func TestFreeAggListPartial(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
