@@ -652,13 +652,15 @@ func (ts *testTaskService) HeartbeatDaemonTask(ctx context.Context, task task.Da
 }
 
 func (ts *testTaskService) StartScheduleCronTask() {
-	//TODO implement me
-	panic("implement me")
+}
+
+func (ts *testTaskService) StartScheduleSQLTask() {
 }
 
 func (ts *testTaskService) StopScheduleCronTask() {
-	//TODO implement me
-	panic("implement me")
+}
+
+func (ts *testTaskService) StopScheduleSQLTask() {
 }
 
 func (ts *testTaskService) GetStorage() taskservice.TaskStorage {
