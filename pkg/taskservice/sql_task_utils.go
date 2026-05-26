@@ -72,8 +72,7 @@ func ParseSQLTaskTimeout(value string) (int, error) {
 
 func DefinerOpts(sqlTask SQLTask) ie.SessionOverrideOptions {
 	builder := ie.NewOptsBuilder().
-		AccountId(sqlTask.AccountID).
-		Internal(true)
+		AccountId(sqlTask.AccountID)
 
 	if sqlTask.DatabaseName != "" {
 		builder.Database(sqlTask.DatabaseName)

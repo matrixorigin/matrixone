@@ -154,7 +154,7 @@ func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
 		}
 	}
 	if ctx.singleQuoteString && t == P_char {
-		return ctx.WriteString(fmt.Sprintf("'%s'", v))
+		return ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
 	}
 	if ctx.escapeSingleQuoteString && t == P_char {
 		return ctx.WriteString(fmt.Sprintf("\\'%s\\'", v))
