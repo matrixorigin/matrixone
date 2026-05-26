@@ -112,6 +112,66 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 	})
 }
 
+func Test_checkPitrValidOrNot_AllowsExplicitCurrentAccountForScopedRestore(t *testing.T) {
+	tenant := &TenantInfo{
+		Tenant:   "acc01",
+		TenantID: 101,
+	}
+	pitr := &pitrRecord{
+		pitrName:     "pitr01",
+		level:        tree.PITRLEVELACCOUNT.String(),
+		accountId:    101,
+		accountName:  "acc01",
+		databaseName: "db01",
+		tableName:    "t01",
+	}
+
+	err := checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELDATABASE,
+		AccountName:  "acc01",
+		DatabaseName: "db01",
+	}, tenant)
+	require.NoError(t, err)
+
+	err = checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELTABLE,
+		AccountName:  "acc01",
+		DatabaseName: "db01",
+		TableName:    "t01",
+	}, tenant)
+	require.NoError(t, err)
+}
+
+func Test_checkPitrValidOrNot_RejectsOtherAccountForScopedRestore(t *testing.T) {
+	tenant := &TenantInfo{
+		Tenant:   "acc01",
+		TenantID: 101,
+	}
+	pitr := &pitrRecord{
+		pitrName:     "pitr01",
+		level:        tree.PITRLEVELACCOUNT.String(),
+		accountId:    101,
+		accountName:  "acc01",
+		databaseName: "db01",
+		tableName:    "t01",
+	}
+
+	err := checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELDATABASE,
+		AccountName:  "acc02",
+		DatabaseName: "db01",
+	}, tenant)
+	require.Error(t, err)
+
+	err = checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELTABLE,
+		AccountName:  "acc02",
+		DatabaseName: "db01",
+		TableName:    "t01",
+	}, tenant)
+	require.Error(t, err)
+}
+
 func Test_createPubByPitr(t *testing.T) {
 	convey.Convey("createPubByPitr success", t, func() {
 		ctrl := gomock.NewController(t)

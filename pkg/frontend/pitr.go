@@ -982,7 +982,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return stats, err
 	}
 
-	if len(accountName) > 0 {
+	if stmt.Level == tree.RESTORELEVELACCOUNT && len(accountName) > 0 {
 		restoreOtherAccount := func() (rtnErr error) {
 			fromAccount := string(stmt.SrcAccountName)
 			var (
@@ -2076,6 +2076,9 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 		if pitrRecord.level == tree.PITRLEVELTABLE.String() {
 			return moerr.NewInternalErrorNoCtxf("restore level %v is not allowed for database restore", pitrRecord.level)
 		}
+		if len(stmt.AccountName) > 0 && string(stmt.AccountName) != tenantInfo.GetTenant() {
+			return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore database %v", string(stmt.AccountName), string(stmt.DatabaseName))
+		}
 		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v database %v", pitrRecord.pitrName, tenantInfo.GetTenant(), string(stmt.DatabaseName))
 		}
@@ -2086,6 +2089,9 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 		// check the level
 		if pitrRecord.level == tree.PITRLEVELCLUSTER.String() {
 			return moerr.NewInternalErrorNoCtxf("cluster level pitr `%v` is not allowed for table restore", pitrRecord.level)
+		}
+		if len(stmt.AccountName) > 0 && string(stmt.AccountName) != tenantInfo.GetTenant() {
+			return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore table %v.%v", string(stmt.AccountName), string(stmt.DatabaseName), string(stmt.TableName))
 		}
 		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v database %v table %v", pitrRecord.pitrName, tenantInfo.GetTenant(), string(stmt.DatabaseName), string(stmt.TableName))
