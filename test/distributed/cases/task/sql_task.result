@@ -4,6 +4,8 @@ use sql_task_case;
 drop task if exists sql_task_cron;
 drop task if exists sql_task_manual;
 drop task if exists sql_task_gate;
+drop task if exists sql_task_literal_strings;
+drop task if exists sql_task_rows_success;
 drop task if exists sql_task_multistmt;
 drop task if exists sql_task_timeout;
 drop task if exists sql_task_retry;
@@ -18,6 +20,12 @@ created_at timestamp default current_timestamp
 create table manual_events(id int primary key);
 create table gate_source(id int primary key);
 create table gate_sink(tag varchar(32) primary key);
+create table literal_readings(pump int, engine_rpm int, pump_rate int, label varchar(32));
+create table literal_classified(pump int, state varchar(32));
+create table literal_matched(label varchar(32));
+create table literal_quotes(label varchar(32));
+create table rows_success_target(v int);
+create table rows_success_heartbeat(tag varchar(16));
 create table ms_target(v int);
 create table timeout_sink(v int);
 create table retry_target(v int);
@@ -68,10 +76,10 @@ count(*)
 1
 show task runs for sql_task_cron limit 1;
 run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
-180087    sql_task_cron    MANUAL    SUCCESS    2026-04-13 18:03:27 +0800 CST    2026-04-13 18:03:27 +0800 CST    0.018038208    1    0    
+180087    sql_task_cron    MANUAL    SUCCESS    2026-04-13 18:03:27 +0800 CST    2026-04-13 18:03:27 +0800 CST    0.018038208    1    1
 show task runs for sql_task_manual limit 1;
 run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
-180088    sql_task_manual    MANUAL    SUCCESS    2026-04-13 18:03:27 +0800 CST    2026-04-13 18:03:27 +0800 CST    0.019812833    1    0    
+180088    sql_task_manual    MANUAL    SUCCESS    2026-04-13 18:03:27 +0800 CST    2026-04-13 18:03:27 +0800 CST    0.019812833    1    1
 alter task sql_task_cron suspend;
 alter task sql_task_cron resume;
 execute task sql_task_cron;
@@ -115,6 +123,69 @@ limit 2;
 status
 SUCCESS
 SKIPPED
+insert into literal_readings values
+(1, null, 0, 'UNKNOWN'),
+(2, 900, 10, 'PUMPING'),
+(3, 700, 0, 'IDLE'),
+(4, 500, 0, 'OFF'),
+(5, 900, 0, 'OTHER');
+create task sql_task_literal_strings
+as begin
+insert into literal_classified
+select pump,
+case
+when engine_rpm is null then 'UNKNOWN'
+when engine_rpm >= 800 and pump_rate > 0 then 'PUMPING'
+when engine_rpm >= 600 and engine_rpm < 800 then 'IDLE'
+when engine_rpm < 600 then 'OFF'
+else 'UNKNOWN'
+end as state
+from literal_readings;
+insert into literal_matched
+select label
+from literal_readings
+where label in ('PUMPING', 'IDLE', 'OFF') and label <> 'UNKNOWN';
+insert into literal_quotes values ('O''Brien');
+end
+execute task sql_task_literal_strings;
+select sleep(1);
+sleep(1)
+0
+select state, count(*), hex(state) from literal_classified group by state order by state;
+state    count(*)    hex(state)
+IDLE    1    49444C45
+OFF    1    4F4646
+PUMPING    1    50554D50494E47
+UNKNOWN    2    554E4B4E4F574E
+select label, hex(label) from literal_matched order by label;
+label    hex(label)
+IDLE    49444C45
+OFF    4F4646
+PUMPING    50554D50494E47
+select label, hex(label) from literal_quotes;
+label    hex(label)
+O'Brien    4F27427269656E
+select status, rows_affected from mo_task.sql_task_run where task_name = 'sql_task_literal_strings' order by run_id desc limit 1;
+status    rows_affected
+SUCCESS    9
+create task sql_task_rows_success
+as begin
+insert into rows_success_target values (1), (2), (3);
+insert into rows_success_heartbeat values ('done');
+end
+execute task sql_task_rows_success;
+select sleep(1);
+sleep(1)
+0
+select count(*) from rows_success_target;
+count(*)
+3
+select count(*) from rows_success_heartbeat;
+count(*)
+1
+select status, rows_affected from mo_task.sql_task_run where task_name = 'sql_task_rows_success' order by run_id desc limit 1;
+status    rows_affected
+SUCCESS    4
 create task sql_task_multistmt
 as begin
 insert into ms_target values (1);
@@ -129,9 +200,9 @@ sleep(1)
 select count(*), min(v), max(v) from ms_target;
 count(*)    min(v)    max(v)
 1    1    1
-select status from mo_task.sql_task_run where task_name = 'sql_task_multistmt' order by run_id desc limit 1;
-status
-FAILED
+select status, rows_affected, error_message from mo_task.sql_task_run where task_name = 'sql_task_multistmt' order by run_id desc limit 1;
+status    rows_affected    error_message
+FAILED    1    no such table sql_task_case.no_such_table
 create task sql_task_timeout
 timeout '1s'
 as begin
@@ -252,8 +323,8 @@ count(*)
 1
 show task runs for sql_task_validate limit 3;
 run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
-180105    sql_task_validate    MANUAL    SUCCESS    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.027703042    1    0    
-180104    sql_task_validate    MANUAL    SUCCESS    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.0283525    1    0    
+180105    sql_task_validate    MANUAL    SUCCESS    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.027703042    1    2
+180104    sql_task_validate    MANUAL    SUCCESS    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.0283525    1    1
 180099    sql_task_validate    MANUAL    SKIPPED    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.012571208    1    0    
 drop account if exists sql_task_tenant;
 create account sql_task_tenant admin_name 'admin' identified by '111';
@@ -285,7 +356,7 @@ tenant_task_show    CRON_TZ=UTC 0 0 0 1 1 *    1    0    0    30s    2026-04-13 
 show task runs for tenant_task_show limit 2;
 run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
 180107    tenant_task_show    MANUAL    SKIPPED    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.00989425    1    0    
-180106    tenant_task_show    MANUAL    SUCCESS    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.0225825    1    0    
+180106    tenant_task_show    MANUAL    SUCCESS    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.0225825    1    1
 select count(*) from tenant_sink;
 count(*)
 1
@@ -298,6 +369,8 @@ drop task if exists sql_task_overlap;
 drop task if exists sql_task_retry;
 drop task if exists sql_task_timeout;
 drop task if exists sql_task_multistmt;
+drop task if exists sql_task_rows_success;
+drop task if exists sql_task_literal_strings;
 drop task if exists sql_task_gate;
 drop task if exists sql_task_manual;
 drop task if exists sql_task_cron;

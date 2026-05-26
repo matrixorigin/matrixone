@@ -87,6 +87,10 @@ type InternalExecResult interface {
 	GetString(context.Context, uint64, uint64) (string, error)
 }
 
+type InternalExecStatus struct {
+	RowsAffected uint64
+}
+
 type InternalExecutor interface {
 	// exec sql without returning results set
 	Exec(context.Context, string, SessionOverrideOptions) error

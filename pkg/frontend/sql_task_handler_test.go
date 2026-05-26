@@ -413,6 +413,43 @@ func TestExecInFrontendSQLTaskStatements(t *testing.T) {
 	require.NoError(t, run(&tree.DropSQLTask{Name: tree.Identifier("task_frontend")}))
 }
 
+func TestSQLTaskStatementsRequireAdminPrivilege(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ctx := context.Background()
+	stmts := []tree.Statement{
+		&tree.CreateSQLTask{Name: tree.Identifier("task_auth"), SQLBody: "select 1"},
+		&tree.AlterSQLTask{Name: tree.Identifier("task_auth"), Action: tree.AlterTaskSuspend},
+		&tree.DropSQLTask{Name: tree.Identifier("task_auth")},
+		&tree.ExecuteSQLTask{Name: tree.Identifier("task_auth")},
+	}
+
+	for _, stmt := range stmts {
+		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		require.NoError(t, err)
+		require.True(t, ok)
+	}
+
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        "tenant1",
+		User:          "u1",
+		DefaultRole:   "developer",
+		TenantID:      2,
+		UserID:        20,
+		DefaultRoleID: 30,
+	})
+	for _, stmt := range stmts {
+		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		require.NoError(t, err)
+		require.False(t, ok)
+	}
+}
+
 func TestDetachSQLTaskExecuteContext(t *testing.T) {
 	parent, cancel := context.WithTimeout(context.WithValue(context.Background(), sqlTaskContextKey{}, "value"), time.Millisecond)
 	defer cancel()

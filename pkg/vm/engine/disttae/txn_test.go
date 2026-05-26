@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"bytes"
+	"context"
 	"math"
 	"math/rand"
 	"sync"
@@ -397,6 +398,80 @@ func TestResolvePKCheckPosForWriteEarlyExit(t *testing.T) {
 	pos, err = txn.resolvePKCheckPosForWrite(INSERT, 0, "db", "tbl", 1, bat)
 	require.NoError(t, err)
 	require.Equal(t, -1, pos)
+}
+
+func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
+	proc := testutil.NewProc(t)
+	txn := &Transaction{
+		op:          newTxnOperatorForTest(t),
+		proc:        proc,
+		tableOps:    newTableOps(),
+		databaseOps: newDbOps(),
+	}
+
+	const (
+		dbID            = uint64(7)
+		criticalTableID = uint64(5768603)
+	)
+
+	defer func() {
+		for i := range txn.writes {
+			if txn.writes[i].bat != nil {
+				txn.writes[i].bat.Clean(proc.Mp())
+			}
+		}
+	}()
+
+	// Two entries on the same table are enough to create a nil hole during merge.
+	// The remaining distinct-table inserts push the merge count over the threshold
+	// used by mergeTxnWorkspaceLocked.
+	for i := 0; i < 30; i++ {
+		tableID := uint64(1000 + i)
+		if i == 1 {
+			tableID = 1000
+		}
+		txn.writes = append(txn.writes, Entry{
+			typ:          INSERT,
+			tableId:      tableID,
+			databaseId:   dbID,
+			tableName:    "t",
+			databaseName: "db",
+			bat:          newInsertBatchWithRowIDForTest(t, proc, []int64{int64(i)}),
+		})
+	}
+
+	txn.writes = append(txn.writes, Entry{
+		typ:          INSERT,
+		tableId:      catalog.MO_TABLES_ID,
+		databaseId:   catalog.MO_CATALOG_ID,
+		tableName:    catalog.MO_TABLES,
+		databaseName: catalog.MO_CATALOG,
+		note:         noteForCreate(criticalTableID, "critical"),
+		bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1}),
+	})
+	txn.writes = append(txn.writes, Entry{
+		typ:          INSERT,
+		tableId:      criticalTableID,
+		databaseId:   dbID,
+		tableName:    "critical",
+		databaseName: "db",
+		bat:          newInsertBatchWithRowIDForTest(t, proc, []int64{100}),
+	})
+
+	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+
+	createIdx, dataIdx := -1, -1
+	for i, e := range txn.writes {
+		if e.tableId == catalog.MO_TABLES_ID && e.note == noteForCreate(criticalTableID, "critical") {
+			createIdx = i
+		}
+		if e.tableId == criticalTableID {
+			dataIdx = i
+		}
+	}
+	require.NotEqual(t, -1, createIdx)
+	require.NotEqual(t, -1, dataIdx)
+	require.Less(t, createIdx, dataIdx)
 }
 
 func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
