@@ -25,6 +25,7 @@ import (
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -215,22 +216,19 @@ func TestTombstonePKExistsInRangeSkipsFullFilePreloads(t *testing.T) {
 	require.Equal(t, fileservice.Policy(fileservice.SkipFullFilePreloads), recordingFS.policies[1])
 }
 
-func TestTombstonePKExistsInRangeEmptyFastPathSkipsSemaphore(t *testing.T) {
-	for i := 0; i < cap(pkCheckSemaphore); i++ {
-		pkCheckSemaphore <- struct{}{}
-	}
-	defer func() {
-		for i := 0; i < cap(pkCheckSemaphore); i++ {
-			<-pkCheckSemaphore
-		}
-	}()
-
+func TestTombstonePKExistsInRangeEmptyFastPathSkipsGuard(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	pState := logtailreplay.NewPartitionState("", true, 0, false)
 	keys := vector.NewVec(types.T_int32.ToType())
-	changed, err := tombstonePKExistsInRange(ctx, pState, types.BuildTS(10, 0), keys, types.T_int32.ToType(), nil)
+	guard := newPKCheckGuard(PKCheckGuardConfig{
+		Mode:        PKCheckGuardModePressure,
+		Concurrency: 1,
+	}, &testPressureProvider{level: rscthrottler.MemoryPressureSoft})
+	guard.sem <- struct{}{}
+
+	changed, err := tombstonePKExistsInRange(ctx, pState, types.BuildTS(10, 0), keys, types.T_int32.ToType(), nil, guard)
 	require.NoError(t, err)
 	require.False(t, changed)
 }

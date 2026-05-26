@@ -16,13 +16,20 @@ package disttae
 
 import (
 	"context"
-	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+type testPressureProvider struct {
+	level rscthrottler.MemoryPressureLevel
+}
+
+func (p *testPressureProvider) MemoryPressure() rscthrottler.MemoryPressureLevel {
+	return p.level
+}
 
 func TestShouldBailoutOnChangedObjects(t *testing.T) {
 	assert.False(t, shouldBailoutOnChangedObjects(0))
@@ -38,68 +45,79 @@ func TestShouldBailoutOnCandidateBlocks(t *testing.T) {
 	assert.True(t, shouldBailoutOnCandidateBlocks(1000))
 }
 
-func TestPkCheckSemaphore_LimitsConcurrency(t *testing.T) {
-	// Verify the semaphore actually limits concurrent goroutines.
-	const workers = 100
-	semCap := cap(pkCheckSemaphore) // should be 16
+func TestPKCheckGuardConfigHardening(t *testing.T) {
+	cfg := normalizePKCheckGuardConfig(PKCheckGuardConfig{
+		Mode:        "bad",
+		Concurrency: -1,
+	})
+	assert.Equal(t, PKCheckGuardModePressure, cfg.Mode)
+	assert.GreaterOrEqual(t, cfg.Concurrency, minPKCheckGuardAutoConcurrency)
+	assert.LessOrEqual(t, cfg.Concurrency, maxPKCheckGuardAutoConcurrency)
 
-	var maxConcurrent atomic.Int32
-	var current atomic.Int32
-	var wg sync.WaitGroup
-
-	ctx := context.Background()
-
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case pkCheckSemaphore <- struct{}{}:
-			case <-ctx.Done():
-				return
-			}
-			defer func() { <-pkCheckSemaphore }()
-
-			c := current.Add(1)
-			for {
-				old := maxConcurrent.Load()
-				if c <= old || maxConcurrent.CompareAndSwap(old, c) {
-					break
-				}
-			}
-			time.Sleep(time.Millisecond)
-			current.Add(-1)
-		}()
-	}
-
-	wg.Wait()
-
-	assert.LessOrEqual(t, int(maxConcurrent.Load()), semCap,
-		"concurrent goroutines should not exceed semaphore capacity %d", semCap)
-	assert.Greater(t, int(maxConcurrent.Load()), 1,
-		"should have some concurrency")
+	cfg = normalizePKCheckGuardConfig(PKCheckGuardConfig{
+		Mode:        " OFF ",
+		Concurrency: maxPKCheckGuardConfiguredConcurrency + 1,
+	})
+	assert.Equal(t, PKCheckGuardModeOff, cfg.Mode)
+	assert.Equal(t, maxPKCheckGuardConfiguredConcurrency, cfg.Concurrency)
 }
 
-func TestPkCheckSemaphore_RespectsContextCancellation(t *testing.T) {
-	// Fill the semaphore completely.
-	for i := 0; i < cap(pkCheckSemaphore); i++ {
-		pkCheckSemaphore <- struct{}{}
-	}
-	defer func() {
-		for i := 0; i < cap(pkCheckSemaphore); i++ {
-			<-pkCheckSemaphore
-		}
-	}()
+func TestPKCheckGuardPressureModeSkipsAcquireWithoutPressure(t *testing.T) {
+	provider := &testPressureProvider{level: rscthrottler.MemoryPressureNormal}
+	guard := newPKCheckGuard(PKCheckGuardConfig{
+		Mode:        PKCheckGuardModePressure,
+		Concurrency: 1,
+	}, provider)
+
+	guard.sem <- struct{}{}
+	release, ok, err := acquirePKCheckGuard(context.Background(), guard)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Nil(t, release)
+}
+
+func TestPKCheckGuardPressureModeSaturatedBailsOut(t *testing.T) {
+	provider := &testPressureProvider{level: rscthrottler.MemoryPressureSoft}
+	guard := newPKCheckGuard(PKCheckGuardConfig{
+		Mode:        PKCheckGuardModePressure,
+		Concurrency: 1,
+	}, provider)
+
+	guard.sem <- struct{}{}
+	release, ok, err := acquirePKCheckGuard(context.Background(), guard)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Nil(t, release)
+}
+
+func TestPKCheckGuardPressureModeAcquiresUnderPressure(t *testing.T) {
+	provider := &testPressureProvider{level: rscthrottler.MemoryPressureHard}
+	guard := newPKCheckGuard(PKCheckGuardConfig{
+		Mode:        PKCheckGuardModePressure,
+		Concurrency: 1,
+	}, provider)
+
+	release, ok, err := acquirePKCheckGuard(context.Background(), guard)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, release)
+	assert.Len(t, guard.sem, 1)
+	release()
+	assert.Len(t, guard.sem, 0)
+}
+
+func TestPKCheckGuardRespectsContextCancellation(t *testing.T) {
+	provider := &testPressureProvider{level: rscthrottler.MemoryPressureSoft}
+	guard := newPKCheckGuard(PKCheckGuardConfig{
+		Mode:        PKCheckGuardModePressure,
+		Concurrency: 1,
+	}, provider)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// Should not block — context is already cancelled.
-	select {
-	case pkCheckSemaphore <- struct{}{}:
-		t.Fatal("should not have acquired semaphore")
-		<-pkCheckSemaphore
-	case <-ctx.Done():
-		// expected
-	}
+	release, ok, err := acquirePKCheckGuard(ctx, guard)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, ok)
+	require.Nil(t, release)
 }

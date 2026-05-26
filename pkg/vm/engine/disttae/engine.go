@@ -194,6 +194,15 @@ func New(
 
 		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(e.config.memThrottler.Available()))
 	}
+	if e.config.pkCheckPressureProvider == nil {
+		if provider, ok := e.config.memThrottler.(rscthrottler.MemoryPressureProvider); ok {
+			e.config.pkCheckPressureProvider = provider
+		}
+	}
+	e.config.pkCheckGuard = newPKCheckGuard(
+		e.config.pkCheckGuardConfig,
+		e.config.pkCheckPressureProvider,
+	)
 
 	e.cloneTxnCache = newCloneTxnCache()
 	e.ccprTxnCache = NewCCPRTxnCache(e.gcPool, e.fs)
@@ -205,6 +214,8 @@ func New(
 		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
 		zap.Int64("ExtraWorkspaceThresholdQuota", e.config.memThrottler.Available()),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
+		zap.String("PKCheckGuardMode", e.config.pkCheckGuard.mode),
+		zap.Int("PKCheckGuardConcurrency", e.config.pkCheckGuard.capacity()),
 	)
 
 	return e

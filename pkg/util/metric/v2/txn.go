@@ -99,10 +99,13 @@ var (
 			Name:      "pk_change_check_total",
 			Help:      "Total number of pk change check.",
 		}, []string{"type"})
-	TxnPKChangeCheckTotalCounter   = txnPKChangeCheckCounter.WithLabelValues("total")
-	TxnPKChangeCheckChangedCounter = txnPKChangeCheckCounter.WithLabelValues("changed")
-	TxnPKChangeCheckIOCounter      = txnPKChangeCheckCounter.WithLabelValues("io")
-	TxnPKChangeCheckBailoutCounter = txnPKChangeCheckCounter.WithLabelValues("bailout")
+	TxnPKChangeCheckTotalCounter                = txnPKChangeCheckCounter.WithLabelValues("total")
+	TxnPKChangeCheckChangedCounter              = txnPKChangeCheckCounter.WithLabelValues("changed")
+	TxnPKChangeCheckIOCounter                   = txnPKChangeCheckCounter.WithLabelValues("io")
+	TxnPKChangeCheckBailoutCounter              = txnPKChangeCheckCounter.WithLabelValues("bailout")
+	TxnPKChangeCheckGuardAcquireCounter         = txnPKChangeCheckCounter.WithLabelValues("guard_acquire")
+	TxnPKChangeCheckGuardSaturatedCounter       = txnPKChangeCheckCounter.WithLabelValues("guard_saturated")
+	TxnPKChangeCheckGuardPressureBailoutCounter = txnPKChangeCheckCounter.WithLabelValues("guard_pressure_bailout")
 
 	txnPKMayBeChangedCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{

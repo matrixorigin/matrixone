@@ -140,6 +140,8 @@ type Config struct {
 		MoTableStatsUseOldImpl         bool          `toml:"mo-table-stats-use-old-impl"`
 		CNTransferTxnLifespanThreshold time.Duration `toml:"cn-transfer-txn-lifespan-threshold"`
 
+		PKCheckGuard disttae.PKCheckGuardConfig `toml:"pk-check-guard"`
+
 		Stats disttae.MoTableStatsConfig `toml:"stats"`
 	}
 

@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -68,6 +69,23 @@ func (s *service) initDistributedTAE(
 		return err
 	}
 	s.distributeTaeMp = distributeTaeMp
+	engineOptions := []disttae.EngineOptions{
+		disttae.WithCNTransferTxnLifespanThreshold(
+			s.cfg.Engine.CNTransferTxnLifespanThreshold,
+		),
+		disttae.WithPrefetchOnSubscribed(
+			s.cfg.Engine.PrefetchOnSubscribed,
+		),
+		disttae.WithMoTableStatsConf(s.cfg.Engine.Stats),
+		disttae.WithPKCheckGuardConfig(s.cfg.Engine.PKCheckGuard),
+		disttae.WithSQLExecFunc(internalExecutorFactory),
+		disttae.WithMoServerStateChecker(func() bool {
+			return frontend.MoServerIsStarted(s.cfg.UUID)
+		}),
+	}
+	if provider, ok := s.CNMemoryThrottler.(rscthrottler.MemoryPressureProvider); ok {
+		engineOptions = append(engineOptions, disttae.WithPKCheckPressureProvider(provider))
+	}
 	s.storeEngine = disttae.New(
 		ctx,
 		s.cfg.UUID,
@@ -77,18 +95,7 @@ func (s *service) initDistributedTAE(
 		hakeeper,
 		s.gossipNode.StatsKeyRouter(),
 		s.cfg.LogtailUpdateWorkerFactor,
-
-		disttae.WithCNTransferTxnLifespanThreshold(
-			s.cfg.Engine.CNTransferTxnLifespanThreshold,
-		),
-		disttae.WithPrefetchOnSubscribed(
-			s.cfg.Engine.PrefetchOnSubscribed,
-		),
-		disttae.WithMoTableStatsConf(s.cfg.Engine.Stats),
-		disttae.WithSQLExecFunc(internalExecutorFactory),
-		disttae.WithMoServerStateChecker(func() bool {
-			return frontend.MoServerIsStarted(s.cfg.UUID)
-		}),
+		engineOptions...,
 	)
 	pu.StorageEngine = s.storeEngine
 
