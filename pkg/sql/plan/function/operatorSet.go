@@ -143,13 +143,15 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 				continue
 			}
 			if cost < minCost {
-				minCost = cost
 				retType = rett.ToType()
 				if retType.Oid.IsDecimal() {
-					setSafeDecimalWidthAndScaleFromSource(&retType, source)
+					if !setSafeDecimalWidthAndScaleFromSource(&retType, source) {
+						continue
+					}
 				} else if retType.Oid.IsMySQLString() {
 					setMaxWidthFromSource(&retType, source)
 				}
+				minCost = cost
 			}
 		}
 		if minCost == math.MaxInt32 {
@@ -400,13 +402,15 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 				continue
 			}
 			if cost < minCost {
-				minCost = cost
 				retType = rett.ToType()
 				if retType.Oid.IsDecimal() {
-					setSafeDecimalWidthAndScaleFromSource(&retType, source)
+					if !setSafeDecimalWidthAndScaleFromSource(&retType, source) {
+						continue
+					}
 				} else if retType.Oid.IsMySQLString() {
 					setMaxWidthFromSource(&retType, source)
 				}
+				minCost = cost
 			}
 		}
 

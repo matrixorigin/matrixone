@@ -398,65 +398,103 @@ func setMaxScaleFromSource(t *types.Type, source []types.Type) {
 	}
 }
 
-func setSafeDecimalWidthAndScaleFromSource(t *types.Type, source []types.Type) {
+func setSafeDecimalWidthAndScaleFromSource(t *types.Type, source []types.Type) bool {
 	if !t.Oid.IsDecimal() {
-		return
+		return true
 	}
-	hasDecimal := false
-	maxScale := t.Scale
+	hasDecimalOrInteger := false
+	maxScale := int32(0)
 	maxIntegralWidth := int32(0)
 
 	for i := range source {
-		if !source[i].Oid.IsDecimal() {
+		if source[i].Oid.IsDecimal() {
+			if !hasDecimalOrInteger {
+				maxScale = source[i].Scale
+				maxIntegralWidth = source[i].Width - source[i].Scale
+				if maxIntegralWidth < 0 {
+					maxIntegralWidth = 0
+				}
+				hasDecimalOrInteger = true
+			}
+			if source[i].Scale > maxScale {
+				maxScale = source[i].Scale
+			}
+			integralWidth := source[i].Width - source[i].Scale
+			if integralWidth > maxIntegralWidth {
+				maxIntegralWidth = integralWidth
+			}
 			continue
 		}
-		if !hasDecimal {
-			maxScale = source[i].Scale
-			maxIntegralWidth = source[i].Width - source[i].Scale
-			if maxIntegralWidth < 0 {
-				maxIntegralWidth = 0
+
+		if source[i].IsIntOrUint() {
+			hasDecimalOrInteger = true
+			if integralWidth := integerIntegralWidth(source[i].Oid); integralWidth > maxIntegralWidth {
+				maxIntegralWidth = integralWidth
 			}
-			hasDecimal = true
-		}
-		if source[i].Scale > maxScale {
-			maxScale = source[i].Scale
-		}
-		integralWidth := source[i].Width - source[i].Scale
-		if integralWidth > maxIntegralWidth {
-			maxIntegralWidth = integralWidth
 		}
 	}
-	if !hasDecimal {
-		return
+	if !hasDecimalOrInteger {
+		return true
 	}
 
 	requiredWidth := maxIntegralWidth + maxScale
-	t.Oid = decimalTypeForRequiredWidth(t.Oid, requiredWidth)
+	oid, ok := decimalTypeForRequiredWidth(t.Oid, requiredWidth)
+	if !ok {
+		return false
+	}
+	t.Oid = oid
 	t.Size = int32(t.Oid.TypeLen())
 	t.Scale = maxScale
 	t.Width = requiredWidth
-	if maxWidth := t.Oid.ToType().Width; t.Width > maxWidth {
-		t.Width = maxWidth
-	}
+	return true
 }
 
-func decimalTypeForRequiredWidth(oid types.T, requiredWidth int32) types.T {
+func decimalTypeForRequiredWidth(oid types.T, requiredWidth int32) (types.T, bool) {
 	switch oid {
 	case types.T_decimal64:
 		if requiredWidth <= types.T_decimal64.ToType().Width {
-			return types.T_decimal64
+			return types.T_decimal64, true
 		}
 		if requiredWidth <= types.T_decimal128.ToType().Width {
-			return types.T_decimal128
+			return types.T_decimal128, true
 		}
-		return types.T_decimal256
+		if requiredWidth <= types.T_decimal256.ToType().Width {
+			return types.T_decimal256, true
+		}
+		return oid, false
 	case types.T_decimal128:
 		if requiredWidth <= types.T_decimal128.ToType().Width {
-			return types.T_decimal128
+			return types.T_decimal128, true
 		}
-		return types.T_decimal256
+		if requiredWidth <= types.T_decimal256.ToType().Width {
+			return types.T_decimal256, true
+		}
+		return oid, false
+	case types.T_decimal256:
+		return types.T_decimal256, requiredWidth <= types.T_decimal256.ToType().Width
 	default:
-		return oid
+		return oid, true
+	}
+}
+
+func integerIntegralWidth(oid types.T) int32 {
+	switch oid {
+	case types.T_int8:
+		return 4
+	case types.T_uint8:
+		return 3
+	case types.T_int16:
+		return 6
+	case types.T_uint16:
+		return 5
+	case types.T_int32:
+		return 11
+	case types.T_uint32:
+		return 10
+	case types.T_int64, types.T_uint64:
+		return 20
+	default:
+		return 0
 	}
 }
 
