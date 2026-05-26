@@ -32,13 +32,9 @@ const (
 
 // Cache implements an in-memory cache with FIFO-based eviction
 type Cache[K comparable, V any] struct {
-	capacity     fscache.CapacityFunc
-	capacity1    fscache.CapacityFunc
-	keyShardFunc func(K) uint64
-	// admissionTarget, when active, applies an additional pressure target to
-	// new insertions. The actual check is performed under queueLock in the
-	// insertion/accounting path so concurrent Set callers do not all admit
-	// against the same stale Used() snapshot.
+	capacity        fscache.CapacityFunc
+	capacity1       fscache.CapacityFunc
+	keyShardFunc    func(K) uint64
 	admissionTarget func(capacity int64) (int64, bool)
 
 	prepareSet func(ctx context.Context, key K, value V, size int64, seq uint64) func(inserted bool)
@@ -289,9 +285,6 @@ func (c *Cache[K, V]) rollbackRejectedSet(item, replacedGhost *_CacheItem[K, V])
 	defer shard.Unlock()
 
 	if !item.valueOK {
-		// Another path already purged and released the item value (for example
-		// Delete racing with Set). Preserve inserted=true when finishing so
-		// prepareSet does not release the value a second time.
 		return true
 	}
 
@@ -564,8 +557,7 @@ func (c *Cache[K, V]) ForceEvict(ctx context.Context, n int64) {
 	c.Evict(ctx, nil, capacityCut)
 }
 
-// ForceEvictWithWait evicts n bytes despite capacity and waits for the
-// eviction callbacks to finish before returning.
+// ForceEvictWithWait evicts n bytes despite capacity and waits for callbacks.
 func (c *Cache[K, V]) ForceEvictWithWait(ctx context.Context, n int64) int64 {
 	if n <= 0 {
 		return c.used()
@@ -577,9 +569,6 @@ func (c *Cache[K, V]) ForceEvictWithWait(ctx context.Context, n int64) int64 {
 	return c.EvictToTargetWithWait(ctx, target)
 }
 
-// EvictToTargetWithWait best-effort evicts until used bytes are no greater
-// than target and returns the actual used bytes after eviction stops. If ctx
-// is canceled, it may return with used bytes still above target.
 func (c *Cache[K, V]) EvictToTargetWithWait(ctx context.Context, target int64) int64 {
 	if target < 0 {
 		target = 0
@@ -588,15 +577,19 @@ func (c *Cache[K, V]) EvictToTargetWithWait(ctx context.Context, target int64) i
 	if target > capacity {
 		target = capacity
 	}
-	return c.EvictWithWait(ctx, capacity-target)
+	return c.evictWithWait(ctx, capacity-target, false)
 }
 
 // EvictWithWait is like Evict but blocks until the eviction lock is acquired,
 // guaranteeing that eviction actually runs before returning. This is used by
 // EnsureNBytes to prevent unbounded memory growth under high concurrency where
-// TryLock-based Evict would skip eviction entirely. It returns the actual used
+// TryLock-based Evict would skip eviction entirely. It returns actual used
 // bytes after eviction stops.
 func (c *Cache[K, V]) EvictWithWait(ctx context.Context, capacityCut int64) int64 {
+	return c.evictWithWait(ctx, capacityCut, false)
+}
+
+func (c *Cache[K, V]) evictWithWait(ctx context.Context, capacityCut int64, includeAsyncDebt bool) int64 {
 	if capacityCut < 0 {
 		capacityCut = 0
 	}
@@ -606,7 +599,7 @@ func (c *Cache[K, V]) EvictWithWait(ctx context.Context, capacityCut int64) int6
 			return c.used()
 		default:
 		}
-		pendingPostEvicts, used, evicted := c.evictBatch(&capacityCut)
+		pendingPostEvicts, used, evicted := c.evictBatch(&capacityCut, includeAsyncDebt)
 		c.runPendingPostEvicts(ctx, pendingPostEvicts)
 		target := c.capacity() - capacityCut
 		if target < 0 {
@@ -618,7 +611,7 @@ func (c *Cache[K, V]) EvictWithWait(ctx context.Context, capacityCut int64) int6
 	}
 }
 
-func (c *Cache[K, V]) evictBatch(capacityCut *int64) (pending []_PendingPostEvict[K, V], used int64, evicted bool) {
+func (c *Cache[K, V]) evictBatch(capacityCut *int64, includeAsyncDebt bool) (pending []_PendingPostEvict[K, V], used int64, evicted bool) {
 	c.queueLock.Lock()
 	defer c.queueLock.Unlock()
 
@@ -629,7 +622,9 @@ func (c *Cache[K, V]) evictBatch(capacityCut *int64) (pending []_PendingPostEvic
 
 	for {
 		c.helpEnqueue()
-		*capacityCut += c.capacityCut.Swap(0)
+		if includeAsyncDebt {
+			*capacityCut += c.capacityCut.Swap(0)
+		}
 		target := c.capacity() - *capacityCut
 		if target < 0 {
 			target = 0
