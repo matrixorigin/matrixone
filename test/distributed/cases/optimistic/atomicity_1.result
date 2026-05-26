@@ -128,6 +128,7 @@ begin;
 insert into atomic_temp values (5);
 rollback ;
 select * from atomic_temp;
+a
 drop table atomic_temp;
 start transaction ;
 create TEMPORARY TABLE atomic_temp(a int);
