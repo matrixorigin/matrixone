@@ -332,6 +332,69 @@ func TestDedupBuildKeepLastPreservesDeleteOnlyRows(t *testing.T) {
 	require.Equal(t, int32(100), markers[2])
 }
 
+// TestDedupBuildKeepLastDeleteOnlyRowsWithDelColIdx covers the keep-last rebuild
+// when BOTH delColIdx>=0 and dedupDeleteMarkerColIdx>=0 are set (the real
+// REPLACE/FAIL path when OldColList has 2+ entries, see operator.go). This is
+// the combination that exercises the rebuild's delColIdx Find loop against a
+// DelRows bitmap pre-sized by keepDiscardedRowsForDelete: the bitmap is sized
+// for the full post-append row set, and group ids from Find never exceed
+// activeCount, so Add stays in bounds (no index-out-of-range panic).
+func TestDedupBuildKeepLastDeleteOnlyRowsWithDelColIdx(t *testing.T) {
+	var hb HashmapBuilder
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hb.IsDedup = true
+	hb.DedupBuildKeepLast = true
+	hb.OnDuplicateAction = plan.Node_FAIL
+	hb.DedupColName = "id"
+	hb.DedupColTypes = []plan.Type{newExpr(0, types.T_int32.ToType()).Typ}
+	defer func() {
+		hb.Reset(proc, true)
+		hb.Free(proc)
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	// delColIdx=0 (probe the id column against the build hashmap), markerColIdx=2,
+	// keep col 2. Key 1 is duplicated; the discarded earlier row (idx 0) carries
+	// a non-null delete marker, so it becomes a delete-only appended row.
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, 0, 2, []int32{2}, proc))
+	bat := makeIntKeyValueBatchWithMarker(
+		proc,
+		[]int32{1, 1, 2},
+		[]int32{10, 20, 30},
+		[]int32{100, 0, 0},
+		[]uint64{1, 2}, // marker null for rows 1,2; non-null for row 0
+	)
+	require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+	hb.InputBatchRowCount = bat.RowCount()
+	bat.Clean(proc.Mp())
+
+	require.NotPanics(t, func() {
+		require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+	})
+
+	require.Equal(t, 3, hb.InputBatchRowCount)
+	require.Equal(t, 3, hb.Batches.RowCount())
+	require.Equal(t, uint64(2), hb.GetGroupCount())
+
+	// DelRows must be sized for the full post-append row set and contain both the
+	// two active group ids (0,1) deleted via the delColIdx Find loop and the
+	// appended delete-only row position (2).
+	require.NotNil(t, hb.DelRows)
+	require.Equal(t, int64(3), hb.DelRows.Len())
+	require.True(t, hb.DelRows.Contains(0))
+	require.True(t, hb.DelRows.Contains(1))
+	require.True(t, hb.DelRows.Contains(2))
+
+	// The appended row keeps only the marker column.
+	out := hb.Batches.Buf[0]
+	require.Equal(t, 3, out.RowCount())
+	require.True(t, out.Vecs[0].IsNull(2))
+	require.True(t, out.Vecs[1].IsNull(2))
+	require.False(t, out.Vecs[2].IsNull(2))
+	markers2 := vector.MustFixedColNoTypeCheck[int32](out.Vecs[2])[:out.RowCount()]
+	require.Equal(t, int32(100), markers2[2])
+}
+
 func TestBuildHashmapErrorDoesNotLeakIterators(t *testing.T) {
 	var hb HashmapBuilder
 	mp := mpool.MustNewZero()

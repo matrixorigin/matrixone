@@ -619,8 +619,13 @@ func (hb *HashmapBuilder) keepDiscardedRowsForDelete(proc *process.Process) erro
 		return err
 	}
 
+	// Size DelRows for the full post-append row set: the active rows kept after
+	// Shrink plus the appended delete-only rows. After Shrink+CopyIntoBatches
+	// this equals activeCount+len(discardedWithDeletes). The bitmap must cover
+	// both the delete-only row positions set below and the group ids written by
+	// the rebuild's delColIdx Find loop (group ids never exceed activeCount).
 	hb.DelRows = &bitmap.Bitmap{}
-	hb.DelRows.InitWithSize(int64(activeCount + len(discardedWithDeletes)))
+	hb.DelRows.InitWithSize(int64(hb.Batches.RowCount()))
 	for i := range discardedWithDeletes {
 		hb.DelRows.Add(uint64(activeCount + i))
 	}
