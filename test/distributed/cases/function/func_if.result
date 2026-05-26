@@ -191,7 +191,9 @@ CREATE TABLE t1 (a int, b DOUBLE);
 INSERT INTO t1 VALUES (NULL, 0), (NULL, 1);
 
 SELECT IF(b, (SELECT a FROM t1 LIMIT 1), b) c FROM t1 GROUP BY c;
-subquery in GROUP BY clause is not yet implemented
+c
+0.0
+null
 DROP TABLE t1;
 
 SELECT if(0, (SELECT min('hello')), NULL);
