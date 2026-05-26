@@ -15,10 +15,12 @@
 package rscthrottler
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
 	"runtime/debug"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -34,8 +36,13 @@ import (
 const (
 	refreshMaxInterval     = time.Second * 10
 	rssScavengeInterval    = time.Minute
+	rssCacheEvictTimeout   = time.Second * 10
 	rssScavengeTriggerRate = 0.85
 	rssScavengeVisibleRate = 0.70
+	rssCacheEvictSoftRate  = 0.85
+	rssCacheEvictHardRate  = 0.92
+	rssCacheSoftTarget     = int64(80)
+	rssCacheHardTarget     = int64(50)
 
 	MemoryThrottlerLogHeader = "MemoryThrottler"
 )
@@ -64,8 +71,11 @@ type memThrottler struct {
 	name      string
 	limitRate float64
 
-	lastRefresh     atomic.Int64
-	lastRSSScavenge atomic.Int64
+	lastRefresh        atomic.Int64
+	lastRSSScavenge    atomic.Int64
+	lastRSSCacheEvict  atomic.Int64
+	lastRSSCacheTarget atomic.Int64
+	rssScavengeMu      sync.Mutex
 
 	mergeAvailDebounce atomic.Int64
 
@@ -81,6 +91,7 @@ type memThrottler struct {
 		specializedForMerge bool
 
 		enableRSSScavenging bool
+		rssCacheEvictor     func(ctx context.Context, targetPercent int64)
 	}
 }
 
@@ -189,14 +200,38 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 	if visible < 0 {
 		visible = 0
 	}
-	if float64(visible) >= float64(rss)*rssScavengeVisibleRate {
-		return
+	needFreeOSMemory := float64(visible) < float64(rss)*rssScavengeVisibleRate
+	cacheTargetPercent := int64(0)
+	if float64(rss) >= float64(actualMaxMemory)*rssCacheEvictHardRate {
+		cacheTargetPercent = rssCacheHardTarget
+	} else if float64(rss) >= float64(actualMaxMemory)*rssCacheEvictSoftRate {
+		cacheTargetPercent = rssCacheSoftTarget
 	}
-	last := m.lastRSSScavenge.Load()
-	if time.Duration(now-last) <= rssScavengeInterval {
-		return
+
+	shouldEvictCache := false
+	if cacheTargetPercent > 0 && m.options.rssCacheEvictor != nil {
+		m.rssScavengeMu.Lock()
+		lastCacheEvict := m.lastRSSCacheEvict.Load()
+		lastTarget := m.lastRSSCacheTarget.Load()
+		cacheEvictExpired := time.Duration(now-lastCacheEvict) > rssScavengeInterval
+		cacheEvictEscalated := lastTarget == 0 || cacheTargetPercent < lastTarget
+		if cacheEvictExpired || cacheEvictEscalated {
+			m.lastRSSCacheEvict.Store(now)
+			m.lastRSSCacheTarget.Store(cacheTargetPercent)
+			shouldEvictCache = true
+		}
+		m.rssScavengeMu.Unlock()
 	}
-	if !m.lastRSSScavenge.CompareAndSwap(last, now) {
+
+	shouldFreeOSMemory := false
+	if needFreeOSMemory {
+		last := m.lastRSSScavenge.Load()
+		if time.Duration(now-last) > rssScavengeInterval &&
+			m.lastRSSScavenge.CompareAndSwap(last, now) {
+			shouldFreeOSMemory = true
+		}
+	}
+	if !shouldFreeOSMemory && !shouldEvictCache {
 		return
 	}
 	logutil.Info(
@@ -204,9 +239,19 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 		zap.String("rss", common.HumanReadableBytes(int(rss))),
 		zap.String("visible", common.HumanReadableBytes(int(visible))),
 		zap.String("actual-total-memory", common.HumanReadableBytes(int(actualMaxMemory))),
+		zap.Bool("free-os-memory", shouldFreeOSMemory),
+		zap.Int64("cache-target-percent", cacheTargetPercent),
 		zap.String("detail", m.String()),
 	)
-	freeOSMemory()
+	if shouldEvictCache {
+		evictCtx, cancel := context.WithTimeout(context.Background(), rssCacheEvictTimeout)
+		m.options.rssCacheEvictor(evictCtx, cacheTargetPercent)
+		cancel()
+		m.lastRSSScavenge.Store(now)
+	}
+	if shouldFreeOSMemory || shouldEvictCache {
+		freeOSMemory()
+	}
 }
 
 /*
@@ -370,6 +415,12 @@ func WithSpecializedForMerge() MemThrottlerOption {
 func WithRSSScavenging() MemThrottlerOption {
 	return func(throttler *memThrottler) {
 		throttler.options.enableRSSScavenging = true
+	}
+}
+
+func WithRSSCacheEvictor(evictor func(ctx context.Context, targetPercent int64)) MemThrottlerOption {
+	return func(throttler *memThrottler) {
+		throttler.options.rssCacheEvictor = evictor
 	}
 }
 

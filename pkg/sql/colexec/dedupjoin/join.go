@@ -311,6 +311,24 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 
 	if ap.OnDuplicateAction != plan.Node_UPDATE || ctr.mp.HashOnUnique() {
 		if ctr.matched.Count() == 0 {
+			// constructDedupJoin copies node.ProjectList into ap.Result without
+			// dedup, and the REPLACE planner can alias multiple projections onto
+			// the same build column, so a non-capture build position may be
+			// referenced more than once. Ownership transfer (steal the build
+			// vector and nil it out) is only safe when a position is referenced
+			// exactly once; duplicates must copy, otherwise the second reference
+			// reads a nil vector. Count references first.
+			buildPosRefCount := make(map[int32]int, len(ap.Result))
+			for j, rp := range ap.Result {
+				if rp.Rel != 1 {
+					continue
+				}
+				if len(ctr.captureResultIdx) > 0 && ctr.captureResultIdx[j] >= 0 {
+					continue
+				}
+				buildPosRefCount[rp.Pos]++
+			}
+
 			ap.ctr.buf = make([]*batch.Batch, len(ctr.batches))
 			for i := range ap.ctr.buf {
 				ap.ctr.buf[i] = batch.NewOffHeapWithSize(len(ap.Result))
@@ -322,14 +340,36 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				capOffset := int64(i) * int64(colexec.DefaultBatchSize)
 				for j, rp := range ap.Result {
 					if rp.Rel == 1 {
-						typ := ap.RightTypes[rp.Pos]
-						ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(typ)
 						if len(ctr.captureResultIdx) > 0 && ctr.captureResultIdx[j] >= 0 {
+							// Capture column: when matched==0, no probe hit any
+							// bucket, so capturedVecs are still all-NULL. Emit a
+							// pre-filled NULL vector directly instead of copying.
 							cIdx := ctr.captureResultIdx[j]
-							if err := ap.ctr.buf[i].Vecs[j].UnionBatch(ctr.capturedVecs[cIdx], capOffset, batSize, nil, proc.Mp()); err != nil {
-								return err
+							if ctr.captured != nil && ctr.captured.Count() > 0 {
+								typ := ap.RightTypes[rp.Pos]
+								ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(typ)
+								if err := ap.ctr.buf[i].Vecs[j].UnionBatch(ctr.capturedVecs[cIdx], capOffset, batSize, nil, proc.Mp()); err != nil {
+									return err
+								}
+							} else {
+								ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(ap.RightTypes[rp.Pos])
+								if err := vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, batSize, proc.Mp()); err != nil {
+									return err
+								}
 							}
+						} else if buildPosRefCount[rp.Pos] == 1 {
+							// Non-capture build column referenced exactly once:
+							// transfer ownership from the build batch to avoid a
+							// full copy.
+							ap.ctr.buf[i].Vecs[j] = bat.Vecs[rp.Pos]
+							bat.Vecs[rp.Pos] = nil
 						} else {
+							// Non-capture build column referenced more than once
+							// (aliased projections). Copy so every reference gets
+							// its own valid vector; ownership transfer here would
+							// leave later references reading a nil vector.
+							typ := ap.RightTypes[rp.Pos]
+							ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(typ)
 							if err := vector.GetUnionAllFunction(typ, proc.Mp())(ap.ctr.buf[i].Vecs[j], bat.Vecs[rp.Pos]); err != nil {
 								return err
 							}
@@ -375,11 +415,8 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			for j, rp := range ap.Result {
 				if rp.Rel == 1 {
 					ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(ap.RightTypes[rp.Pos])
-					for _, sel := range newSels {
-						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-						if err := ap.ctr.buf[i].Vecs[j].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
-							return err
-						}
+					if err := unionSelsByBatch(ap.ctr.buf[i].Vecs[j], ctr.batches, rp.Pos, newSels, proc); err != nil {
+						return err
 					}
 				} else {
 					ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(ap.LeftTypes[rp.Pos])
@@ -560,7 +597,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 
 	rowCntInc := 0
 	count := bat.RowCount()
-	itr := ctr.mp.NewIterator()
+	if ctr.cachedItr == nil {
+		ctr.cachedItr = ctr.mp.NewIterator()
+	}
+	itr := ctr.cachedItr
 	isPessimistic := proc.GetTxnOperator().Txn().IsPessimistic()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
@@ -727,6 +767,40 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 		}
 		ctr.vecs[i] = vec
 		ctr.evecs[i].vec = vec
+	}
+	return nil
+}
+
+func unionSelsByBatch(dst *vector.Vector, batches []*batch.Batch, colPos int32, sels []int32, proc *process.Process) error {
+	if len(sels) <= 16 {
+		for _, sel := range sels {
+			idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+			if err := dst.UnionOne(batches[idx1].Vecs[colPos], int64(idx2), proc.Mp()); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	offsets := make([]int64, 0, len(sels))
+	prevIdx := int32(-1)
+	for _, sel := range sels {
+		idx1 := sel / colexec.DefaultBatchSize
+		idx2 := int64(sel % colexec.DefaultBatchSize)
+		if idx1 != prevIdx {
+			if prevIdx >= 0 && len(offsets) > 0 {
+				if err := dst.Union(batches[prevIdx].Vecs[colPos], offsets, proc.Mp()); err != nil {
+					return err
+				}
+				offsets = offsets[:0]
+			}
+			prevIdx = idx1
+		}
+		offsets = append(offsets, idx2)
+	}
+	if len(offsets) > 0 {
+		if err := dst.Union(batches[prevIdx].Vecs[colPos], offsets, proc.Mp()); err != nil {
+			return err
+		}
 	}
 	return nil
 }

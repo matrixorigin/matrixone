@@ -913,3 +913,7 @@ func (*countingDataCache) DeletePaths(context.Context, []string) {}
 func (*countingDataCache) Flush(context.Context) {}
 
 func (*countingDataCache) Evict(context.Context, chan int64) {}
+
+func (*countingDataCache) EvictToTargetWithWait(context.Context, int64) int64 { return 0 }
+
+func (*countingDataCache) ForceEvictWithWait(context.Context, int64) int64 { return 0 }

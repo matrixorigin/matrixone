@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -73,6 +74,45 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+const (
+	rssCacheFamilyEvictTimeout   = 10 * time.Second
+	rssCacheAdmissionPressureTTL = 2 * time.Minute
+)
+
+var (
+	evictMemoryCachesToCapacityPercent = fileservice.EvictMemoryCachesToCapacityPercent
+	evictMetaCacheToCapacityPercent    = objectio.EvictCacheToCapacityPercent
+)
+
+func makeRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
+	return func(ctx context.Context, targetPercent int64) {
+		// Keep admission throttled after eviction; otherwise high-concurrency
+		// reads can refill SHARED/meta caches before the next RSS sample.
+		pressureUntil := time.Now().Add(rssCacheAdmissionPressureTTL)
+		fileservice.SetMemoryCachePressureTargetPercent(targetPercent, pressureUntil)
+		objectio.SetMetaCachePressureTargetPercent(targetPercent, pressureUntil)
+
+		// Use independent bounded contexts so one cache family timing out
+		// does not prevent the other family from being pressure-evicted.
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			memoryCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			evictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
+		}()
+
+		go func() {
+			defer wg.Done()
+			metaCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			evictMetaCacheToCapacityPercent(metaCtx, targetPercent)
+		}()
+		wg.Wait()
+	}
+}
 
 func NewService(
 	cfg *Config,
@@ -204,6 +244,7 @@ func NewService(
 		90.0/100.0,
 		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
 		rscthrottler.WithRSSScavenging(),
+		rscthrottler.WithRSSCacheEvictor(makeRSSCacheEvictor(rssCacheFamilyEvictTimeout)),
 	)
 
 	srv.pu.LockService = srv.lockService
