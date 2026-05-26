@@ -155,16 +155,16 @@ func NewEmptyCompilerContext() *MockCompilerContext {
 }
 
 type Schema struct {
-	cols      []col
-	pks       []int
-	idxs      []index
-	fks       []*ForeignKeyDef
-	clusterby *ClusterByDef
-	outcnt    float64
-	tblId     int64
-	isView    bool
+	cols            []col
+	pks             []int
+	idxs            []index
+	fks             []*ForeignKeyDef
+	clusterby       *ClusterByDef
+	outcnt          float64
+	tblId           int64
+	isView          bool
 	autoIncrColName string
-	viewCfg   ViewCfg
+	viewCfg         ViewCfg
 	// tableType overrides TableType when non-empty; used to mock index tables
 	// carrying an algo-specific type (e.g. ivfflat "metadata").
 	tableType string
@@ -693,7 +693,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		);
 	*/
 	constraintTestSchema["dept"] = &Schema{
-		tblId: 88888,
+		tblId:           88888,
 		autoIncrColName: "deptno",
 		cols: []col{
 			{"deptno", types.T_uint32, true, 32, 0},
@@ -757,7 +757,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		);
 	*/
 	constraintTestSchema["dept_composite_uk"] = &Schema{
-		tblId: 88889,
+		tblId:           88889,
 		autoIncrColName: "deptno",
 		cols: []col{
 			{"deptno", types.T_uint32, true, 32, 0},
