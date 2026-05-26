@@ -25,6 +25,8 @@ import (
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{
+	upg_create_mo_task_sql_task,
+	upg_create_mo_task_sql_task_run,
 	upg_mo_iscp_log_new,
 	upg_mo_iscp_task,
 	upg_mo_publication_task,
@@ -43,6 +45,26 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_init_mo_feature_registry,
 	upg_mo_columns_add_attr_has_generated,
 	upg_mo_columns_add_attr_generated,
+}
+
+var upg_create_mo_task_sql_task = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSQLTask,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoTaskSQLTaskDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSQLTask)
+	},
+}
+
+var upg_create_mo_task_sql_task_run = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSQLTaskRun,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoTaskSQLTaskRunDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSQLTaskRun)
+	},
 }
 
 var upg_mo_iscp_log_new = versions.UpgradeEntry{
