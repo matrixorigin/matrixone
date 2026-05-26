@@ -64,6 +64,28 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 30),
 		})
 
+	logtailReplayRetainedBatchRowsHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "logtail",
+			Name:      "replay_retained_batch_rows",
+			Help:      "Rows retained by logtail replay row entries.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 16),
+		}, []string{"type"})
+	LogtailReplayRetainedInsertBatchRowsHistogram = logtailReplayRetainedBatchRowsHistogram.WithLabelValues("insert")
+	LogtailReplayRetainedDeleteBatchRowsHistogram = logtailReplayRetainedBatchRowsHistogram.WithLabelValues("delete")
+
+	logtailReplayRetainedBatchBytesHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "logtail",
+			Name:      "replay_retained_batch_bytes",
+			Help:      "Bytes retained by logtail replay row entry batches.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 30),
+		}, []string{"type"})
+	LogtailReplayRetainedInsertBatchBytesHistogram = logtailReplayRetainedBatchBytesHistogram.WithLabelValues("insert")
+	LogtailReplayRetainedDeleteBatchBytesHistogram = logtailReplayRetainedBatchBytesHistogram.WithLabelValues("delete")
+
 	logTailApplyDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
