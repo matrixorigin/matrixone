@@ -81,7 +81,7 @@ func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 
 func tableHasAutoIncrementColumn(tableDef *TableDef) bool {
 	for _, col := range tableDef.Cols {
-		if col.Typ.AutoIncr {
+		if col.Typ.AutoIncr && !col.Hidden {
 			return true
 		}
 	}
