@@ -814,6 +814,74 @@ func TestReplacePlanStructure(t *testing.T) {
 	assert.True(t, hasDedupJoin, "REPLACE plan should contain DEDUP JOIN node")
 }
 
+func TestReplaceNonUniqueSingleIndexDeleteUsesIndexRowID(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO single_idx_t VALUES (1, 100)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var multiUpdate *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdate = node
+			break
+		}
+	}
+	if multiUpdate == nil {
+		t.Fatal("REPLACE plan should contain MULTI_UPDATE node")
+	}
+
+	var idxUpdateCtx *plan.UpdateCtx
+	for _, updateCtx := range multiUpdate.UpdateCtxList {
+		if updateCtx.TableDef == nil {
+			continue
+		}
+		if strings.HasPrefix(updateCtx.TableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
+			idxUpdateCtx = updateCtx
+			break
+		}
+	}
+	if idxUpdateCtx == nil {
+		t.Fatal("REPLACE plan should contain UpdateCtx for the secondary index table")
+	}
+	if len(idxUpdateCtx.DeleteCols) < 2 {
+		t.Fatal("secondary index UpdateCtx should contain delete columns")
+	}
+	if len(multiUpdate.Children) != 1 {
+		t.Fatalf("MULTI_UPDATE should have one child, got %d", len(multiUpdate.Children))
+	}
+
+	oldRowIDDeleteCol := idxUpdateCtx.DeleteCols[0]
+	oldIdxDeleteCol := idxUpdateCtx.DeleteCols[1]
+	child := query.Nodes[multiUpdate.Children[0]]
+	if oldRowIDDeleteCol.ColPos < 0 || int(oldRowIDDeleteCol.ColPos) >= len(child.ProjectList) {
+		t.Fatalf("DeleteCols[0] ColPos %d out of child project range %d",
+			oldRowIDDeleteCol.ColPos, len(child.ProjectList))
+	}
+	if oldIdxDeleteCol.ColPos < 0 || int(oldIdxDeleteCol.ColPos) >= len(child.ProjectList) {
+		t.Fatalf("DeleteCols[1] ColPos %d out of child project range %d",
+			oldIdxDeleteCol.ColPos, len(child.ProjectList))
+	}
+	wantRowIDName := idxUpdateCtx.TableDef.Name + "." + catalog.Row_ID
+	wantIdxName := idxUpdateCtx.TableDef.Name + "." + catalog.IndexTableIndexColName
+	assert.Equal(t, wantRowIDName, oldRowIDDeleteCol.Name,
+		"DeleteCols[0] should read Row_ID from the secondary index table")
+	assert.Equal(t, wantIdxName, oldIdxDeleteCol.Name,
+		"DeleteCols[1] should read the secondary index key column")
+	assert.Equal(t, int32(types.T_Rowid), child.ProjectList[oldRowIDDeleteCol.ColPos].Typ.Id,
+		"DeleteCols[0] should point at a Row_ID vector in the MULTI_UPDATE input")
+	assert.NotEqual(t, oldRowIDDeleteCol.ColPos, oldIdxDeleteCol.ColPos,
+		"Row_ID and index key delete columns must not collapse to the same input column")
+	assert.False(t, oldRowIDDeleteCol.RelPos == 0 && oldRowIDDeleteCol.ColPos == 0 &&
+		oldRowIDDeleteCol.Name != wantRowIDName,
+		"DeleteCols[0] must not fall back to a zero-value ColRef")
+}
+
 func TestReplaceSelfRefPlanStructure(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
@@ -1005,6 +1073,42 @@ func TestSubQuery(t *testing.T) {
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where N_NAME = R_NAME and R_REGIONKEY < N_REGIONKEY)", // mixed eq + non-eq predicates -> two pullup-added GroupBy entries
 		"SELECT * FROM NATION where (select count(*) from REGION where N_NAME = R_NAME and R_REGIONKEY < N_REGIONKEY) = 1",                   // count(*) with mixed eq + non-eq predicates
 		"SELECT * FROM NATION where (select avg(R_REGIONKEY) from REGION where N_NAME = R_NAME and R_REGIONKEY < N_REGIONKEY) = 1",           // avg with mixed eq + non-eq predicates
+		`SELECT * FROM NATION n1 WHERE EXISTS (
+			SELECT 1 FROM NATION n2 WHERE EXISTS (
+				SELECT 1 FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated EXISTS subquery
+		`SELECT * FROM NATION n1 WHERE NOT EXISTS (
+			SELECT 1 FROM NATION n2 WHERE EXISTS (
+				SELECT 1 FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated NOT EXISTS subquery
+		`SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY IN (
+			SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY IN (
+				SELECT n3.N_NATIONKEY FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated IN subquery
+		`SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY NOT IN (
+			SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY IN (
+				SELECT n3.N_NATIONKEY FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated NOT IN subquery
+		`SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY = ANY (
+			SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY = ANY (
+				SELECT n3.N_NATIONKEY FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated ANY subquery
+		`SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY > ALL (
+			SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY = ANY (
+				SELECT n3.N_NATIONKEY FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY < n1.N_NATIONKEY
+			)
+		)`, // two-level correlated ALL subquery
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -1017,6 +1121,19 @@ func TestSubQuery(t *testing.T) {
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) + 1 from REGION where R_REGIONKEY < N_REGIONKEY)",                         // non-eq agg scalar subquery with computed projection
 	}
 	runTestShouldError(mock, t, sqls)
+
+	sql := `SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY > ANY (
+		SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY = ANY (
+			SELECT n3.N_NATIONKEY FROM NATION n3
+			WHERE (n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_REGIONKEY = n1.N_REGIONKEY)
+				OR n3.N_REGIONKEY = 1
+		)
+	)`
+	_, err := runOneStmt(mock, t, sql)
+	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "deep correlated predicate containing inner columns cannot be pulled above mark join")
+	}
 }
 
 func TestMysqlCompatibilityMode(t *testing.T) {
@@ -1530,6 +1647,110 @@ func Test_bind_delete(t *testing.T) {
 	dmlCtx := &DMLContext{}
 	_, err := canDeleteRewriteToTruncate(compileCtx, dmlCtx)
 	assert.Error(t, err)
+}
+
+// findDedupJoinCaptureList walks the plan looking for the DEDUP JOIN whose
+// build side carries the OldColCaptureList — there is at most one in a
+// REPLACE plan that took the merged-main-scan path.
+func findDedupJoinCaptureList(t *testing.T, query *plan.Query) []plan.OldColCapture {
+	t.Helper()
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_DEDUP {
+			continue
+		}
+		if node.DedupJoinCtx == nil {
+			continue
+		}
+		if len(node.DedupJoinCtx.OldColCaptureList) > 0 {
+			return node.DedupJoinCtx.OldColCaptureList
+		}
+	}
+	return nil
+}
+
+// TestReplaceCaptureListNarrowed pins the merged-main-scan capture list to
+// exactly the columns MULTI_UPDATE actually consumes — Row_ID + PK + (per
+// non-serialized index, the leading part column). If the narrowing in
+// appendDedupAndMultiUpdateNodesForBindReplace regresses to "capture every
+// main-table column", this test will catch it.
+//
+// We assert by total count rather than by exact ColPos, because the build-side
+// projection list may have leading slots prepended before main-table cols
+// (cluster keys, etc.) — so absolute positions are layout-sensitive but the
+// count formula is not.
+func TestReplaceCaptureListNarrowed(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// self_ref: id PK + parent_id + name + Row_ID; zero indexes.
+	// requiredOldCols = {Row_ID, id} ⇒ capture list length == 2.
+	// Pre-narrowing the planner emitted one capture per main-table column
+	// (length == 4), which is the regression this test guards against.
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO self_ref VALUES (1, NULL, 'root')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	captureList := findDedupJoinCaptureList(t, query)
+	assert.NotNil(t, captureList,
+		"self_ref REPLACE should take the merged-main-scan capture path")
+
+	const totalCols = 4 // 3 user cols + Row_ID
+	assert.Less(t, len(captureList), totalCols,
+		"capture list must be narrower than the full main-table col set")
+	assert.Len(t, captureList, 2,
+		"expected Row_ID + PK only; if this changes the formula 1+1+#single_part_idx is wrong")
+
+	relPos := captureList[0].BuildPlaceholder.RelPos
+	seen := map[int32]bool{}
+	for _, c := range captureList {
+		assert.Equal(t, relPos, c.BuildPlaceholder.RelPos,
+			"all captures must share one build-side bind tag")
+		assert.False(t, seen[c.BuildPlaceholder.ColPos],
+			"capture positions must be distinct, got duplicate ColPos=%d",
+			c.BuildPlaceholder.ColPos)
+		seen[c.BuildPlaceholder.ColPos] = true
+	}
+}
+
+// TestReplaceCaptureList_NotEmittedWhenMergedScanDisabled documents the
+// negative side: tables that fail the useMergedMainScan guard
+// (fake PK or any multi-part index) must produce an empty capture list. This
+// guards against accidentally enabling capture on a path the optimizer
+// can't yet feed correctly.
+func TestReplaceCaptureList_NotEmittedWhenMergedScanDisabled(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	cases := []struct {
+		name string
+		sql  string
+		why  string
+	}{
+		{
+			name: "dept_has_multi_part_idx",
+			sql:  "REPLACE INTO dept VALUES (1, 'Sales', 'NY')",
+			why:  "dept has a (loc, dname) index → hasMultiPartIdx=true",
+		},
+		{
+			name: "fake_pk_t",
+			sql:  "REPLACE INTO fake_pk_t VALUES (1, 'hello')",
+			why:  "fake_pk_t has no real PK → isFakePK=true",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, c.sql)
+			if err != nil {
+				t.Fatalf("%+v", err)
+			}
+			query := logicPlan.GetQuery()
+			assert.NotNil(t, query)
+			assert.Nil(t, findDedupJoinCaptureList(t, query),
+				"%s: %s, no DEDUP JOIN should carry a capture list", c.name, c.why)
+		})
+	}
 }
 
 func TestReplaceCaptureDedupJoinDoesNotShuffle(t *testing.T) {
