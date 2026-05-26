@@ -18,8 +18,6 @@ import (
 	"context"
 	"hash/maphash"
 	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
@@ -35,60 +33,6 @@ type MemCache struct {
 }
 
 var memCacheCallbackSeed = maphash.MakeSeed()
-
-var (
-	memCachePressureMu            sync.Mutex
-	memCachePressureTargetPercent atomic.Int64
-	memCachePressureDeadline      atomic.Int64
-)
-
-// SetMemoryCachePressureTargetPercent keeps memory cache admission below a
-// capacity percentage until the deadline. A stricter active target is not
-// loosened by a softer target.
-func SetMemoryCachePressureTargetPercent(percent int64, until time.Time) {
-	now := time.Now()
-	if percent <= 0 || !until.After(now) {
-		memCachePressureMu.Lock()
-		memCachePressureTargetPercent.Store(0)
-		memCachePressureDeadline.Store(0)
-		memCachePressureMu.Unlock()
-		return
-	}
-	if percent > 100 {
-		percent = 100
-	}
-
-	memCachePressureMu.Lock()
-	defer memCachePressureMu.Unlock()
-
-	oldDeadline := memCachePressureDeadline.Load()
-	oldPercent := memCachePressureTargetPercent.Load()
-	if oldDeadline > now.UnixNano() && oldPercent > 0 && oldPercent < percent {
-		return
-	}
-	memCachePressureTargetPercent.Store(percent)
-	memCachePressureDeadline.Store(until.UnixNano())
-}
-
-func clearMemoryCachePressureTargetForTest() {
-	memCachePressureTargetPercent.Store(0)
-	memCachePressureDeadline.Store(0)
-}
-
-func memoryCachePressureTarget(capacity int64) (int64, bool) {
-	deadline := memCachePressureDeadline.Load()
-	if deadline == 0 || time.Now().UnixNano() > deadline {
-		return 0, false
-	}
-	percent := memCachePressureTargetPercent.Load()
-	if percent <= 0 {
-		return 0, false
-	}
-	if percent > 100 {
-		percent = 100
-	}
-	return capacity * percent / 100, true
-}
 
 func (m *MemCache) callbacksLock(key fscache.CacheKey) *sync.Mutex {
 	var hasher maphash.Hash
@@ -207,7 +151,6 @@ func NewMemCache(
 	}
 
 	dataCache = fifocache.NewDataCacheWithPrepareSet(capacityFunc, prepareSetFn, postSetFn, postGetFn, postEvictFn)
-	dataCache.SetAdmissionTarget(memoryCachePressureTarget)
 
 	ret.cache = dataCache
 

@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -220,9 +219,6 @@ func Test_tenant(t *testing.T) {
 }
 
 func TestMakeRSSCacheEvictorUsesIndependentTimeouts(t *testing.T) {
-	defer fileservice.SetMemoryCachePressureTargetPercent(0, time.Time{})
-	defer objectio.SetMetaCachePressureTargetPercent(0, time.Time{})
-
 	oldMem := evictMemoryCachesToCapacityPercent
 	oldMeta := evictMetaCacheToCapacityPercent
 	defer func() {

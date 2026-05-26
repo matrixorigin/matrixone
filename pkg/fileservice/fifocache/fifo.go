@@ -35,11 +35,6 @@ type Cache[K comparable, V any] struct {
 	capacity     fscache.CapacityFunc
 	capacity1    fscache.CapacityFunc
 	keyShardFunc func(K) uint64
-	// admissionTarget, when active, applies an additional pressure target to
-	// new insertions. The actual check is performed under queueLock in the
-	// insertion/accounting path so concurrent Set callers do not all admit
-	// against the same stale Used() snapshot.
-	admissionTarget func(capacity int64) (int64, bool)
 
 	prepareSet func(ctx context.Context, key K, value V, size int64, seq uint64) func(inserted bool)
 	postSet    func(ctx context.Context, key K, value V, size int64, seq uint64)
@@ -150,11 +145,7 @@ func NewWithPrepareSet[K comparable, V any](
 	return ret
 }
 
-func (c *Cache[K, V]) SetAdmissionTarget(admissionTarget func(capacity int64) (int64, bool)) {
-	c.admissionTarget = admissionTarget
-}
-
-func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, seq uint64) (item *_CacheItem[K, V], replacedGhost *_CacheItem[K, V]) {
+func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, seq uint64) (item *_CacheItem[K, V], ghostItemSet bool) {
 	shard := &c.shards[c.keyShardFunc(key)%numShards]
 	shard.Lock()
 	defer shard.Unlock()
@@ -174,11 +165,11 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, seq u
 			}
 			// replacing the oldItem. oldItem will be evicted from ghost queue eventually.
 			shard.values[key] = item
-			return item, oldItem
+			return item, true
 		}
 
 		// existed and value ok, skip set
-		return nil, nil
+		return nil, false
 	}
 
 	item = &_CacheItem[K, V]{
@@ -190,7 +181,7 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, seq u
 	}
 	shard.values[key] = item
 
-	return item, nil
+	return item, false
 }
 
 func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
@@ -206,28 +197,7 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 			finishSet(inserted)
 		}
 	}()
-	if item, replacedGhost := c.set(ctx, key, value, size, seq); item != nil {
-		ghostItemSet := replacedGhost != nil
-		if c.shouldApplyAdmissionTarget() {
-			if !c.enqueueWithAdmission(item, ghostItemSet) {
-				inserted = c.rollbackRejectedSet(item, replacedGhost)
-				if finishSet != nil {
-					finishSet(inserted)
-					finished = true
-				}
-				return
-			}
-			inserted = true
-			if c.postSet != nil {
-				c.postSet(ctx, key, value, size, item.seq)
-			}
-			if finishSet != nil {
-				finishSet(true)
-				finished = true
-			}
-			c.Evict(ctx, nil, 0)
-			return
-		}
+	if item, ghostItemSet := c.set(ctx, key, value, size, seq); item != nil {
 		inserted = true
 		if c.postSet != nil {
 			c.postSet(ctx, key, value, size, item.seq)
@@ -243,69 +213,6 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 		finishSet(false)
 		finished = true
 	}
-}
-
-func (c *Cache[K, V]) shouldApplyAdmissionTarget() bool {
-	_, ok := c.currentAdmissionTarget()
-	return ok
-}
-
-func (c *Cache[K, V]) currentAdmissionTarget() (int64, bool) {
-	if c.admissionTarget == nil {
-		return 0, false
-	}
-	return c.admissionTarget(c.capacity())
-}
-
-func (c *Cache[K, V]) enqueueWithAdmission(item *_CacheItem[K, V], ghostItemSet bool) bool {
-	c.queueLock.Lock()
-	defer c.queueLock.Unlock()
-
-	c.helpEnqueue()
-
-	queue := cacheItemQueue1
-	if ghostItemSet {
-		queue = cacheItemQueue2
-	}
-
-	target, ok := c.currentAdmissionTarget()
-	if !ok {
-		c.enqueuePendingItem(item, queue)
-		c.helpEnqueue()
-		return item.queue == queue
-	}
-	if c.used1+c.used2+item.size > target {
-		return false
-	}
-
-	c.enqueuePendingItem(item, queue)
-	c.helpEnqueue()
-	return item.queue == queue
-}
-
-func (c *Cache[K, V]) rollbackRejectedSet(item, replacedGhost *_CacheItem[K, V]) (finishInserted bool) {
-	shard := &c.shards[c.keyShardFunc(item.key)%numShards]
-	shard.Lock()
-	defer shard.Unlock()
-
-	if !item.valueOK {
-		// Another path already purged and released the item value (for example
-		// Delete racing with Set). Preserve inserted=true when finishing so
-		// prepareSet does not release the value a second time.
-		return true
-	}
-
-	if shard.values[item.key] == item {
-		if replacedGhost != nil && replacedGhost.queue == cacheItemGhost {
-			shard.values[item.key] = replacedGhost
-		} else {
-			delete(shard.values, item.key)
-		}
-	}
-	item.valueOK = false
-	var zero V
-	item.value = zero
-	return false
 }
 
 func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V], ghostItemSet bool) {

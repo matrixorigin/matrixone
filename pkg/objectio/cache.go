@@ -78,12 +78,6 @@ type mataCacheKey [cacheKeyLen]byte
 var metaCache *fifocache.Cache[mataCacheKey, []byte]
 var onceInit sync.Once
 
-var (
-	metaCachePressureMu            sync.Mutex
-	metaCachePressureTargetPercent atomic.Int64
-	metaCachePressureDeadline      atomic.Int64
-)
-
 // metaLoadGroup deduplicates concurrent loads for the same cache key,
 // preventing cache stampede when many goroutines miss the same entry simultaneously.
 // Uses mutex+map instead of sync.Map so entries are fully reclaimed after deletion.
@@ -140,58 +134,10 @@ func InitMetaCache(size int64) {
 	})
 }
 
-// SetMetaCachePressureTargetPercent keeps metadata cache admission below a
-// capacity percentage until the deadline. A stricter active target is not
-// loosened by a softer target.
-func SetMetaCachePressureTargetPercent(percent int64, until time.Time) {
-	now := time.Now()
-	if percent <= 0 || !until.After(now) {
-		metaCachePressureMu.Lock()
-		metaCachePressureTargetPercent.Store(0)
-		metaCachePressureDeadline.Store(0)
-		metaCachePressureMu.Unlock()
-		return
-	}
-	if percent > 100 {
-		percent = 100
-	}
-
-	metaCachePressureMu.Lock()
-	defer metaCachePressureMu.Unlock()
-
-	oldDeadline := metaCachePressureDeadline.Load()
-	oldPercent := metaCachePressureTargetPercent.Load()
-	if oldDeadline > now.UnixNano() && oldPercent > 0 && oldPercent < percent {
-		return
-	}
-	metaCachePressureTargetPercent.Store(percent)
-	metaCachePressureDeadline.Store(until.UnixNano())
-}
-
-func clearMetaCachePressureTargetForTest() {
-	metaCachePressureTargetPercent.Store(0)
-	metaCachePressureDeadline.Store(0)
-}
-
-func metaCachePressureTarget(capacity int64) (int64, bool) {
-	deadline := metaCachePressureDeadline.Load()
-	if deadline == 0 || time.Now().UnixNano() > deadline {
-		return 0, false
-	}
-	percent := metaCachePressureTargetPercent.Load()
-	if percent <= 0 {
-		return 0, false
-	}
-	if percent > 100 {
-		percent = 100
-	}
-	return capacity * percent / 100, true
-}
-
 func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, []byte] {
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge("", "meta")
 	capacityBytes.Set(float64(capacity()))
-	ret := fifocache.New[mataCacheKey, []byte](
+	return fifocache.New[mataCacheKey, []byte](
 		capacity,
 		shardMetaCacheKey,
 		func(_ context.Context, _ mataCacheKey, _ []byte, size int64, _ uint64) { // postSet
@@ -203,8 +149,6 @@ func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, 
 			inuseBytes.Add(float64(-size))
 			capacityBytes.Set(float64(capacity()))
 		})
-	ret.SetAdmissionTarget(metaCachePressureTarget)
-	return ret
 }
 
 func EvictCache(ctx context.Context) (target int64) {
