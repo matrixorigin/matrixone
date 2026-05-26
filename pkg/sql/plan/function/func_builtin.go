@@ -2454,6 +2454,24 @@ func builtInACos(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
+func builtInDegrees(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(v*180/math.Pi, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func builtInATan(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
