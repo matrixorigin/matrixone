@@ -430,10 +430,33 @@ func setSafeDecimalWidthAndScaleFromSource(t *types.Type, source []types.Type) {
 		return
 	}
 
+	requiredWidth := maxIntegralWidth + maxScale
+	t.Oid = decimalTypeForRequiredWidth(t.Oid, requiredWidth)
+	t.Size = int32(t.Oid.TypeLen())
 	t.Scale = maxScale
-	t.Width = maxIntegralWidth + maxScale
+	t.Width = requiredWidth
 	if maxWidth := t.Oid.ToType().Width; t.Width > maxWidth {
 		t.Width = maxWidth
+	}
+}
+
+func decimalTypeForRequiredWidth(oid types.T, requiredWidth int32) types.T {
+	switch oid {
+	case types.T_decimal64:
+		if requiredWidth <= types.T_decimal64.ToType().Width {
+			return types.T_decimal64
+		}
+		if requiredWidth <= types.T_decimal128.ToType().Width {
+			return types.T_decimal128
+		}
+		return types.T_decimal256
+	case types.T_decimal128:
+		if requiredWidth <= types.T_decimal128.ToType().Width {
+			return types.T_decimal128
+		}
+		return types.T_decimal256
+	default:
+		return oid
 	}
 }
 
