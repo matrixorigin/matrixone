@@ -124,41 +124,30 @@ no such table atomicity_1.atomic_ex_table
 desc atomic_ex_table;
 no such table atomicity_1.atomic_ex_table
 create TEMPORARY TABLE atomic_temp(a int);
-[unknown result because it is related to issue]
 begin;
-[unknown result because it is related to issue]
 insert into atomic_temp values (5);
-[unknown result because it is related to issue]
 rollback ;
-[unknown result because it is related to issue]
 select * from atomic_temp;
-[unknown result because it is related to issue]
 drop table atomic_temp;
-[unknown result because it is related to issue]
 start transaction ;
-[unknown result because it is related to issue]
 create TEMPORARY TABLE atomic_temp(a int);
-[unknown result because it is related to issue]
 insert into atomic_temp values (5);
-[unknown result because it is related to issue]
 select * from atomic_temp;
-[unknown result because it is related to issue]
+a
+5
 rollback ;
-[unknown result because it is related to issue]
 select * from atomic_temp;
-[unknown result because it is related to issue]
+SQL parser error: table "atomic_temp" does not exist
 show create table atomic_temp;
-[unknown result because it is related to issue]
+no such table atomicity_1.atomic_temp
 start transaction ;
-[unknown result because it is related to issue]
 create TEMPORARY TABLE atomic_temp(a int);
-[unknown result because it is related to issue]
+table atomic_temp already exists
 insert into atomic_temp values (5);
-[unknown result because it is related to issue]
+no such table atomicity_1.atomic_temp
 commit ;
-[unknown result because it is related to issue]
 select * from atomic_temp;
-[unknown result because it is related to issue]
+SQL parser error: table "atomic_temp" does not exist
 CREATE TABLE `t_code_rule` (
 `code_id` bigint(20) NOT NULL AUTO_INCREMENT,
 `code_no` varchar(50) NOT NULL,
