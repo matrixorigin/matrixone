@@ -468,8 +468,71 @@ select 1 > 0;
 1 > 0
 1
 select count(*) from t1 group by null;
-➤ count(*)[-5,64,0]  𝄀
-5
+internal error: panic unknown type ANY: 
+github.com/matrixorigin/matrixone/pkg/container/vector.(*Vector).setupFromData
+	/mnt/fastdata/temp2/matrixone/pkg/container/vector/tools.go:266
+github.com/matrixorigin/matrixone/pkg/container/vector.extend
+	/mnt/fastdata/temp2/matrixone/pkg/container/vector/tools.go:203
+github.com/matrixorigin/matrixone/pkg/container/vector.(*Vector).UnionBatch
+	/mnt/fastdata/temp2/matrixone/pkg/container/vector/vector.go:2549
+github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*GroupResultBuffer).unionToSpecificBatch
+	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/group/execctx.go:230
+github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*GroupResultBuffer).AppendBatch
+	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/group/execctx.go:194
+github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).consumeBatchToGetFinalResult
+	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/group/exec.go:302
+github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).callToGetFinalResult
+	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/group/exec.go:222
+github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).Call
+	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/group/exec.go:162
+github.com/matrixorigin/matrixone/pkg/vm.Exec
+	/mnt/fastdata/temp2/matrixone/pkg/vm/types.go:514
+github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
+	/mnt/fastdata/temp2/matrixone/pkg/vm/types.go:525
+github.com/matrixorigin/matrixone/pkg/sql/colexec/projection.(*Projection).Call
+	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/projection/projection.go:62
+github.com/matrixorigin/matrixone/pkg/vm.Exec
+	/mnt/fastdata/temp2/matrixone/pkg/vm/types.go:514
+github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
+	/mnt/fastdata/temp2/matrixone/pkg/vm/types.go:525
+github.com/matrixorigin/matrixone/pkg/sql/colexec/output.(*Output).Call
+	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/output/output.go:55
+github.com/matrixorigin/matrixone/pkg/vm.Exec
+	/mnt/fastdata/temp2/matrixone/pkg/vm/types.go:514
+github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).Run
+	/mnt/fastdata/temp2/matrixone/pkg/vm/pipeline/pipeline.go:71
+github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).RunWithReader
+	/mnt/fastdata/temp2/matrixone/pkg/vm/pipeline/pipeline.go:59
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
+	/mnt/fastdata/temp2/matrixone/pkg/sql/compile/scope.go:198
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).ParallelRun
+	/mnt/fastdata/temp2/matrixone/pkg/sql/compile/scope.go:490
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
+	/mnt/fastdata/temp2/matrixone/pkg/sql/compile/scope.go:276
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).RemoteRun
+	/mnt/fastdata/temp2/matrixone/pkg/sql/compile/scope.go:395
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).run
+	/mnt/fastdata/temp2/matrixone/pkg/sql/compile/compile.go:378
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).runOnce
+	/mnt/fastdata/temp2/matrixone/pkg/sql/compile/compile.go:521
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).Run
+	/mnt/fastdata/temp2/matrixone/pkg/sql/compile/compile2.go:259
+github.com/matrixorigin/matrixone/pkg/frontend.executeResultRowStmt
+	/mnt/fastdata/temp2/matrixone/pkg/frontend/result_row_stmt.go:87
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
+	/mnt/fastdata/temp2/matrixone/pkg/frontend/mysql_cmd_executor.go:3019
+github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
+	/mnt/fastdata/temp2/matrixone/pkg/frontend/mysql_cmd_executor.go:2872
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
+	/mnt/fastdata/temp2/matrixone/pkg/frontend/mysql_cmd_executor.go:2837
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
+	/mnt/fastdata/temp2/matrixone/pkg/frontend/mysql_cmd_executor.go:2781
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
+	/mnt/fastdata/temp2/matrixone/pkg/frontend/mysql_cmd_executor.go:2647
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
+	/mnt/fastdata/temp2/matrixone/pkg/frontend/mysql_cmd_executor.go:2627
+github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
+	/mnt/fastdata/temp2/matrixone/pkg/frontend/mysql_cmd_executor.go:3262
 use db1;
 drop table if exists t11;
 create table t11 (a int, b int, primary key (a));
