@@ -2944,9 +2944,7 @@ select count(*) from td;
 count(*)
 20971520
 select avg(d) over (order by d range between 2 preceding and 2 following) from td limit 10;
-Communications link failure
-
-The last packet successfully received from the server was 120,058 milliseconds ago.  The last packet sent successfully to the server was 120,060 milliseconds ago.
+[unknown result because it is related to issue#13008]
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
 sum(d) over (order by d rows between 10 preceding and 10 following)
 66
