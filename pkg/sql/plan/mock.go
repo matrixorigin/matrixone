@@ -155,16 +155,16 @@ func NewEmptyCompilerContext() *MockCompilerContext {
 }
 
 type Schema struct {
-	cols      []col
-	pks       []int
-	idxs      []index
-	fks       []*ForeignKeyDef
-	clusterby *ClusterByDef
-	outcnt    float64
-	tblId     int64
-	isView    bool
+	cols            []col
+	pks             []int
+	idxs            []index
+	fks             []*ForeignKeyDef
+	clusterby       *ClusterByDef
+	outcnt          float64
+	tblId           int64
+	isView          bool
 	autoIncrColName string
-	viewCfg   ViewCfg
+	viewCfg         ViewCfg
 }
 
 type ViewCfg struct {
@@ -682,7 +682,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		);
 	*/
 	constraintTestSchema["dept"] = &Schema{
-		tblId: 88888,
+		tblId:           88888,
 		autoIncrColName: "deptno",
 		cols: []col{
 			{"deptno", types.T_uint32, true, 32, 0},
@@ -746,7 +746,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		);
 	*/
 	constraintTestSchema["dept_composite_uk"] = &Schema{
-		tblId: 88889,
+		tblId:           88889,
 		autoIncrColName: "deptno",
 		cols: []col{
 			{"deptno", types.T_uint32, true, 32, 0},
