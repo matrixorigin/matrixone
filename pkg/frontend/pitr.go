@@ -98,6 +98,25 @@ const (
 	SYSMOCATALOGPITR = "sys_mo_catalog_pitr"
 )
 
+type restorePitrAccounts struct {
+	sourceName string
+	targetName string
+	sourceID   uint32
+	targetID   uint32
+}
+
+func normalizeRestorePitrStmt(stmt *tree.RestorePitr) {
+	if len(stmt.SrcAccountName) == 0 || len(stmt.ToAccountName) > 0 {
+		return
+	}
+
+	if len(stmt.AccountName) > 0 {
+		stmt.ToAccountName = stmt.AccountName
+	}
+	stmt.AccountName = stmt.SrcAccountName
+	stmt.SrcAccountName = ""
+}
+
 func getSqlForCreatePitr(
 	ctx context.Context,
 	pitrId, pitrName string,
@@ -911,6 +930,8 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 }
 
 func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (stats statistic.StatsArray, err error) {
+	normalizeRestorePitrStmt(stmt)
+
 	bh := ses.GetBackgroundExec(ctx)
 	bh.SetRestore(true)
 	defer func() {
@@ -935,7 +956,6 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 
 	// get pitr name
 	pitrName := string(stmt.Name)
-	accountName := string(stmt.AccountName)
 	dbName := string(stmt.DatabaseName)
 	tblName := string(stmt.TableName)
 
@@ -982,128 +1002,89 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return stats, err
 	}
 
-	if len(accountName) > 0 {
-		restoreOtherAccount := func() (rtnErr error) {
-			fromAccount := string(stmt.SrcAccountName)
-			var (
-				toAccountId uint32
-			)
-
-			if len(fromAccount) == 0 {
-				// using account level pitr
-				fromAccount = pitr.accountName
-				accountRecord, rtnErr = getAccountRecordByTs(ctx, ses, bh, pitrName, ts, fromAccount)
-				if rtnErr != nil {
-					return
-				}
-				if fromAccount == accountName {
-					// restore to the same account
-					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", accountName), zap.String("toAccount", accountName))
-					toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
-					if rtnErr != nil {
-						// need create a new account
-						if rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *accountRecord); rtnErr != nil {
-							return
-						}
-
-						if toAccountId, rtnErr = getAccountId(ctx, bh, accountRecord.accountName); rtnErr != nil {
-							return
-						}
-					}
-				} else {
-					// restore to new account
-					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", fromAccount), zap.String("toAccount", accountName))
-					toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
-					if rtnErr != nil {
-						return
-					}
-				}
-			} else {
-				// using cluster level pitr
-				accountRecord, rtnErr = getAccountRecordByTs(ctx, ses, bh, pitrName, ts, fromAccount)
-				if rtnErr != nil {
-					return
-				}
-				if fromAccount == accountName {
-					// restore to the same account
-					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", accountName), zap.String("toAccount", accountName))
-					toAccountId, rtnErr = getAccountId(ctx, bh, fromAccount)
-					if rtnErr != nil {
-						// need create a new account
-						if rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *accountRecord); rtnErr != nil {
-							return
-						}
-
-						if toAccountId, rtnErr = getAccountId(ctx, bh, accountRecord.accountName); rtnErr != nil {
-							return
-						}
-					}
-				} else {
-					// restore to new account
-					getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", fromAccount), zap.String("toAccount", accountName))
-					toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
-					if rtnErr != nil {
-						return rtnErr
-					}
-				}
-			}
-
-			// check account exists or not
-			ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelAccount)
-			rtnErr = restoreAccountUsingClusterSnapshotToNew(
-				ctx,
-				ses,
-				bh,
-				pitrName,
-				ts,
-				*accountRecord,
-				uint64(toAccountId),
-				nil,
-				isClusterRestore,
-				isNeedToCleanToDatabase,
-			)
-			if rtnErr != nil {
-				return rtnErr
-			}
-
-			if rtnErr = CancelCheck(ctx); rtnErr != nil {
-				return
-			}
-			return rtnErr
-		}
-
-		err = restoreOtherAccount()
+	if stmt.Level == tree.RESTORELEVELACCOUNT {
+		var accounts restorePitrAccounts
+		accounts, err = resolveRestorePitrAccounts(ctx, ses, bh, pitr, stmt, ts)
 		if err != nil {
 			return stats, err
 		}
-		return stats, err
+
+		accountRecord, err = getAccountRecordByTs(ctx, ses, bh, pitrName, ts, accounts.sourceName)
+		if err != nil {
+			return stats, err
+		}
+
+		getLogger(ses.GetService()).Info(
+			"restore account with pitr",
+			zap.String("fromAccount", accounts.sourceName),
+			zap.String("toAccount", accounts.targetName),
+		)
+
+		if accounts.sourceName == accounts.targetName {
+			if _, err = getAccountId(ctx, bh, accounts.targetName); err != nil {
+				if err = createDroppedAccount(ctx, ses, bh, pitrName, *accountRecord); err != nil {
+					return stats, err
+				}
+				accounts.targetID, err = getAccountId(ctx, bh, accountRecord.accountName)
+				if err != nil {
+					return stats, err
+				}
+				isNeedToCleanToDatabase = false
+			}
+		}
+
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelAccount)
+		err = restoreAccountUsingClusterSnapshotToNew(
+			ctx,
+			ses,
+			bh,
+			pitrName,
+			ts,
+			*accountRecord,
+			uint64(accounts.targetID),
+			nil,
+			isClusterRestore,
+			isNeedToCleanToDatabase,
+		)
+		if err != nil {
+			return stats, err
+		}
+		if err = CancelCheck(ctx); err != nil {
+			return stats, err
+		}
+		return stats, nil
 	}
 
 	restoreLevel = stmt.Level
 
+	accounts, err := resolveRestorePitrAccounts(ctx, ses, bh, pitr, stmt, ts)
+	if err != nil {
+		return stats, err
+	}
+
 	// restore self account
 	// check account exists or not
 	var accountExist bool
-	if accountExist, err = doCheckAccountExistsInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, tenantInfo.GetTenant(), tenantInfo.GetTenantID()); err != nil {
+	if accountExist, err = doCheckAccountExistsInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, accounts.sourceName, accounts.sourceID); err != nil {
 		return stats, err
 	}
 	if !accountExist {
-		return stats, moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
+		return stats, moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", accounts.sourceName, nanoTimeFormat(ts))
 	}
 
 	//drop foreign key related tables first
-	if err = deleteCurFkTableInPitrRestore(ctx, ses.GetService(), bh, pitrName, dbName, tblName); err != nil {
+	if err = deleteCurFkTables(ctx, ses.GetService(), bh, dbName, tblName, accounts.targetID); err != nil {
 		return
 	}
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, ts, dbName, tblName)
+	sortedFkTbls, err = fkTablesTopoSortWithTS(ctx, bh, dbName, tblName, ts, accounts.sourceID, accounts.targetID)
 	if err != nil {
 		return
 	}
 
 	// get foreign key table infos
-	fkTableMap, err = getTableInfoMapInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, dbName, tblName, sortedFkTbls)
+	fkTableMap, err = getTableInfoMapFromTS(ctx, ses.GetService(), bh, dbName, tblName, sortedFkTbls, ts, accounts.sourceID, accounts.targetID)
 	if err != nil {
 		return
 	}
@@ -1130,18 +1111,14 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		}
 		return
 	case tree.RESTORELEVELACCOUNT:
-		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelAccount)
-		if err = restoreToAccountWithPitr(ctx, ses.GetService(), bh, pitrName, ts, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
-			return
-		}
 	case tree.RESTORELEVELDATABASE:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
-		if err = restoreToDatabaseWithPitr(ctx, ses.GetService(), bh, pitrName, ts, dbName, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
+		if err = restoreDatabaseFromTS(ctx, ses.GetService(), bh, dbName, ts, accounts.sourceID, accounts.targetID, fkTableMap, viewMap, false, nil); err != nil {
 			return
 		}
 	case tree.RESTORELEVELTABLE:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelTable)
-		if err = restoreToTableWithPitr(ctx, ses.service, bh, pitrName, ts, dbName, tblName, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
+		if err = restoreTableFromTS(ctx, ses.GetService(), bh, dbName, tblName, ts, accounts.sourceID, accounts.targetID, fkTableMap, viewMap); err != nil {
 			return
 		}
 
@@ -1150,13 +1127,13 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}
 
 	if len(fkTableMap) > 0 {
-		if err = restoreTablesWithFkByPitr(ctx, ses.GetService(), bh, pitrName, ts, sortedFkTbls, fkTableMap); err != nil {
+		if err = restoreTablesWithFkFromTS(ctx, ses.GetService(), bh, ts, accounts.sourceID, accounts.targetID, sortedFkTbls, fkTableMap); err != nil {
 			return
 		}
 	}
 
 	if len(viewMap) > 0 {
-		if err = restoreViewsWithPitr(ctx, ses, bh, pitrName, ts, viewMap, tenantInfo.GetTenant(), tenantInfo.GetTenantID()); err != nil {
+		if err = restoreViewsFromTS(ctx, ses, bh, ts, accounts.sourceID, accounts.targetID, viewMap, accounts.sourceName); err != nil {
 			return
 		}
 	}
@@ -2007,6 +1984,18 @@ func addTimeSpan(pivot time.Time, length int, unit string) (time.Time, error) {
 }
 
 func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantInfo *TenantInfo) (err error) {
+	normalizeRestorePitrStmt(stmt)
+
+	sourceAccount := string(stmt.AccountName)
+	if len(sourceAccount) == 0 && stmt.Level != tree.RESTORELEVELCLUSTER {
+		sourceAccount = tenantInfo.GetTenant()
+	}
+
+	targetAccount := string(stmt.ToAccountName)
+	if len(targetAccount) == 0 {
+		targetAccount = sourceAccount
+	}
+
 	restoreLevel := stmt.Level
 	switch restoreLevel {
 	case tree.RESTORELEVELCLUSTER:
@@ -2020,53 +2009,20 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 			return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore cluster level pitr %s", tenantInfo.GetTenant(), pitrRecord.pitrName)
 		}
 	case tree.RESTORELEVELACCOUNT:
-		// restore self account
-		if len(stmt.AccountName) == 0 {
-			// check the level
-			if pitrRecord.level == tree.PITRLEVELDATABASE.String() || pitrRecord.level == tree.PITRLEVELTABLE.String() || pitrRecord.level == tree.PITRLEVELCLUSTER.String() {
-				return moerr.NewInternalErrorNoCtxf("restore level %v is not allowed for account restore", pitrRecord.level)
-			}
-			if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
-				return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v", pitrRecord.pitrName, tenantInfo.GetTenant())
-			}
-		} else {
-			// sys restore other account's pitr
-			// if the accout not sys account, return err
-			if tenantInfo.GetTenantID() != sysAccountID {
-				return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore other account %s", tenantInfo.GetTenant(), string(stmt.AccountName))
-			}
-
-			// if the pitr level is database or table, return err
-			if pitrRecord.level == tree.PITRLEVELDATABASE.String() || pitrRecord.level == tree.PITRLEVELTABLE.String() {
-				return moerr.NewInternalErrorNoCtxf("can not restore account %s by pitr %s", string(stmt.AccountName), pitrRecord.pitrName)
-			}
-
-			if len(stmt.SrcAccountName) == 0 {
-				if stmt.AccountName == sysAccountName {
-					return moerr.NewInternalErrorNoCtxf("can not restore sys account to new account %s by pitr %s", string(stmt.AccountName), pitrRecord.pitrName)
-				}
-				// if the pitr level is cluster and src account is empty, return err
-				if pitrRecord.level == tree.PITRLEVELCLUSTER.String() {
-					return moerr.NewInternalErrorNoCtxf("can not restore account %s by pitr %s, source account is empty", string(stmt.AccountName), pitrRecord.pitrName)
-				}
-				// if the pitr level is account, can not restore sys account
-				if pitrRecord.level == tree.PITRLEVELACCOUNT.String() {
-					if pitrRecord.accountName == sysAccountName {
-						return moerr.NewInternalErrorNoCtxf("can not restore sys account to new account %s by pitr %s", string(stmt.AccountName), pitrRecord.pitrName)
-					}
-				}
-			} else {
-				// if src account is not empty, and the pitr level is not cluster, return err
-				if pitrRecord.level != tree.PITRLEVELCLUSTER.String() {
-					return moerr.NewInternalErrorNoCtxf("can not restore account %s by pitr %s, the pitr level is not cluster", string(stmt.SrcAccountName), pitrRecord.pitrName)
-				}
-				if stmt.SrcAccountName == sysAccountName && stmt.AccountName != sysAccountName {
-					return moerr.NewInternalErrorNoCtxf("can not restore sys account to new account %s by pitr %s", string(stmt.AccountName), pitrRecord.pitrName)
-				}
-				if stmt.SrcAccountName != sysAccountName && stmt.AccountName == sysAccountName {
-					return moerr.NewInternalErrorNoCtxf("can not restore account %s to sys account by pitr %s", string(stmt.SrcAccountName), pitrRecord.pitrName)
-				}
-			}
+		if pitrRecord.level == tree.PITRLEVELDATABASE.String() || pitrRecord.level == tree.PITRLEVELTABLE.String() {
+			return moerr.NewInternalErrorNoCtxf("can not restore account %s by pitr %s", sourceAccount, pitrRecord.pitrName)
+		}
+		if tenantInfo.GetTenantID() != sysAccountID && (sourceAccount != tenantInfo.GetTenant() || targetAccount != tenantInfo.GetTenant()) {
+			return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore account %s", tenantInfo.GetTenant(), sourceAccount)
+		}
+		if sourceAccount == sysAccountName && targetAccount != sysAccountName {
+			return moerr.NewInternalErrorNoCtxf("can not restore sys account to new account %s by pitr %s", targetAccount, pitrRecord.pitrName)
+		}
+		if sourceAccount != sysAccountName && targetAccount == sysAccountName {
+			return moerr.NewInternalErrorNoCtxf("can not restore account %s to sys account by pitr %s", sourceAccount, pitrRecord.pitrName)
+		}
+		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountName != sourceAccount {
+			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %s", pitrRecord.pitrName, sourceAccount)
 		}
 	case tree.RESTORELEVELDATABASE:
 		// check the level
@@ -2076,10 +2032,16 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 		if pitrRecord.level == tree.PITRLEVELTABLE.String() {
 			return moerr.NewInternalErrorNoCtxf("restore level %v is not allowed for database restore", pitrRecord.level)
 		}
-		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
-			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v database %v", pitrRecord.pitrName, tenantInfo.GetTenant(), string(stmt.DatabaseName))
+		if tenantInfo.GetTenantID() != sysAccountID && (sourceAccount != tenantInfo.GetTenant() || targetAccount != tenantInfo.GetTenant()) {
+			return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore database %s", tenantInfo.GetTenant(), string(stmt.DatabaseName))
 		}
-		if pitrRecord.level == tree.PITRLEVELDATABASE.String() && (pitrRecord.accountId != uint64(tenantInfo.TenantID) || pitrRecord.databaseName != string(stmt.DatabaseName)) {
+		if sourceAccount == sysAccountName && targetAccount != sysAccountName {
+			return moerr.NewInternalErrorNoCtxf("can not restore sys database %s to account %s by pitr %s", string(stmt.DatabaseName), targetAccount, pitrRecord.pitrName)
+		}
+		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountName != sourceAccount {
+			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %s database %v", pitrRecord.pitrName, sourceAccount, string(stmt.DatabaseName))
+		}
+		if pitrRecord.level == tree.PITRLEVELDATABASE.String() && (pitrRecord.accountName != sourceAccount || pitrRecord.databaseName != string(stmt.DatabaseName)) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore database %v", pitrRecord.pitrName, string(stmt.DatabaseName))
 		}
 	case tree.RESTORELEVELTABLE:
@@ -2087,13 +2049,19 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 		if pitrRecord.level == tree.PITRLEVELCLUSTER.String() {
 			return moerr.NewInternalErrorNoCtxf("cluster level pitr `%v` is not allowed for table restore", pitrRecord.level)
 		}
-		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
-			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v database %v table %v", pitrRecord.pitrName, tenantInfo.GetTenant(), string(stmt.DatabaseName), string(stmt.TableName))
+		if tenantInfo.GetTenantID() != sysAccountID && (sourceAccount != tenantInfo.GetTenant() || targetAccount != tenantInfo.GetTenant()) {
+			return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore table %s.%s", tenantInfo.GetTenant(), string(stmt.DatabaseName), string(stmt.TableName))
 		}
-		if pitrRecord.level == tree.PITRLEVELDATABASE.String() && (pitrRecord.accountId != uint64(tenantInfo.TenantID) || pitrRecord.databaseName != string(stmt.DatabaseName)) {
+		if sourceAccount == sysAccountName && targetAccount != sysAccountName {
+			return moerr.NewInternalErrorNoCtxf("can not restore sys table %s.%s to account %s by pitr %s", string(stmt.DatabaseName), string(stmt.TableName), targetAccount, pitrRecord.pitrName)
+		}
+		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountName != sourceAccount {
+			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %s database %v table %v", pitrRecord.pitrName, sourceAccount, string(stmt.DatabaseName), string(stmt.TableName))
+		}
+		if pitrRecord.level == tree.PITRLEVELDATABASE.String() && (pitrRecord.accountName != sourceAccount || pitrRecord.databaseName != string(stmt.DatabaseName)) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore database %v table %v", pitrRecord.pitrName, string(stmt.DatabaseName), string(stmt.TableName))
 		}
-		if pitrRecord.level == tree.PITRLEVELTABLE.String() && (pitrRecord.accountId != uint64(tenantInfo.TenantID) || pitrRecord.databaseName != string(stmt.DatabaseName) || pitrRecord.tableName != string(stmt.TableName)) {
+		if pitrRecord.level == tree.PITRLEVELTABLE.String() && (pitrRecord.accountName != sourceAccount || pitrRecord.databaseName != string(stmt.DatabaseName) || pitrRecord.tableName != string(stmt.TableName)) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore table %v.%v", pitrRecord.pitrName, string(stmt.DatabaseName), string(stmt.TableName))
 		}
 	default:
@@ -2102,6 +2070,112 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 	return nil
 
 }
+
+func resolveRestorePitrAccounts(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	pitr *pitrRecord,
+	stmt *tree.RestorePitr,
+	ts int64,
+) (accounts restorePitrAccounts, err error) {
+	tenantInfo := ses.GetTenantInfo()
+
+	if stmt.Level == tree.RESTORELEVELCLUSTER {
+		return accounts, nil
+	}
+
+	accounts.sourceName = string(stmt.AccountName)
+	if len(accounts.sourceName) == 0 {
+		accounts.sourceName = tenantInfo.GetTenant()
+	}
+
+	accounts.targetName = string(stmt.ToAccountName)
+	if len(accounts.targetName) == 0 {
+		accounts.targetName = accounts.sourceName
+	}
+
+	resolveAccountID := func(name string) (uint32, error) {
+		if name == sysAccountName {
+			return sysAccountID, nil
+		}
+		if name == tenantInfo.GetTenant() {
+			return tenantInfo.GetTenantID(), nil
+		}
+		if pitr != nil && pitr.accountName == name && pitr.accountId <= math.MaxUint32 {
+			return uint32(pitr.accountId), nil
+		}
+
+		accountID, accountErr := getAccountId(ctx, bh, name)
+		if accountErr == nil {
+			return accountID, nil
+		}
+
+		accountRecord, recordErr := getAccountRecordByTs(ctx, ses, bh, string(stmt.Name), ts, name)
+		if recordErr != nil {
+			return 0, accountErr
+		}
+		return uint32(accountRecord.accountId), nil
+	}
+
+	if accounts.sourceID, err = resolveAccountID(accounts.sourceName); err != nil {
+		return accounts, err
+	}
+
+	if accounts.targetID, err = resolveAccountID(accounts.targetName); err != nil {
+		return accounts, err
+	}
+
+	return accounts, nil
+}
+
+func restoreTableFromTS(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	dbName string,
+	tblName string,
+	ts int64,
+	from uint32,
+	to uint32,
+	fkTableMap map[string]*tableInfo,
+	viewMap map[string]*tableInfo,
+) (err error) {
+	var tableInfos []*tableInfo
+
+	tableInfos, err = getTableInfosFromTS(ctx, sid, bh, dbName, tblName, ts, from, to)
+	if err != nil {
+		return err
+	}
+	if len(tableInfos) == 0 {
+		return moerr.NewInternalErrorNoCtxf("table '%s' not exists at pitr timestamp '%s'", tblName, nanoTimeFormat(ts))
+	}
+	if len(tableInfos) != 1 {
+		return moerr.NewInternalErrorNoCtxf("find %v tableInfos by name '%s' at timestamp '%s', expect only 1", len(tableInfos), tblName, nanoTimeFormat(ts))
+	}
+
+	if _, err = getCreateDatabaseSqlFromTS(ctx, sid, bh, dbName, ts, from, to); err != nil {
+		return err
+	}
+
+	toCtx := defines.AttachAccountId(ctx, to)
+	if err = bh.Exec(toCtx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbName)); err != nil {
+		return err
+	}
+
+	tblInfo := tableInfos[0]
+	key := genKey(dbName, tblInfo.tblName)
+	if _, ok := fkTableMap[key]; ok {
+		return nil
+	}
+	if tblInfo.typ == view {
+		viewMap[key] = tblInfo
+		return nil
+	}
+
+	return recreateTableFromTS(ctx, sid, bh, tblInfo, ts, from, to)
+}
+
 func getFkDepsInPitrRestore(
 	ctx context.Context,
 	bh BackgroundExec,

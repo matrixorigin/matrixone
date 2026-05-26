@@ -214,6 +214,7 @@ type RestorePitr struct {
 	DatabaseName Identifier // database name
 	TableName    Identifier // table name
 
+	ToAccountName  Identifier // target account name
 	SrcAccountName Identifier // source account name
 
 	TimeStamp string
@@ -234,11 +235,19 @@ func (node *RestorePitr) Format(ctx *FmtCtx) {
 		}
 	case RESTORELEVELDATABASE:
 		ctx.WriteString("database ")
+		if len(node.AccountName) > 0 {
+			node.AccountName.Format(ctx)
+			ctx.WriteByte('.')
+		}
 		node.DatabaseName.Format(ctx)
 	case RESTORELEVELTABLE:
-		ctx.WriteString("database ")
+		ctx.WriteString("table ")
+		if len(node.AccountName) > 0 {
+			node.AccountName.Format(ctx)
+			ctx.WriteByte('.')
+		}
 		node.DatabaseName.Format(ctx)
-		ctx.WriteString(" table ")
+		ctx.WriteByte('.')
 		node.TableName.Format(ctx)
 	}
 
@@ -246,9 +255,9 @@ func (node *RestorePitr) Format(ctx *FmtCtx) {
 	node.Name.Format(ctx)
 	ctx.WriteString(" timestamp = ")
 	ctx.WriteString(node.TimeStamp)
-	if len(node.SrcAccountName) != 0 {
-		ctx.WriteString(" from account ")
-		node.SrcAccountName.Format(ctx)
+	if len(node.ToAccountName) != 0 {
+		ctx.WriteString(" to account ")
+		node.ToAccountName.Format(ctx)
 	}
 }
 

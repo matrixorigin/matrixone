@@ -3297,16 +3297,24 @@ var (
 			output: "restore database db01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
 		},
 		{
-			input:  "restore database db01 table t01 from pitr pitr01 '2021-01-01 00:00:00'",
-			output: "restore database db01 table t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+			input:  "restore database acc01.db01 from pitr pitr01 '2021-01-01 00:00:00' to account acc02",
+			output: "restore database acc01.db01 from pitr pitr01 timestamp = 2021-01-01 00:00:00 to account acc02",
+		},
+		{
+			input:  "restore table db01.t01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore table db01.t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore table acc01.db01.t01 from pitr pitr01 '2021-01-01 00:00:00' to account acc02",
+			output: "restore table acc01.db01.t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00 to account acc02",
 		},
 		{
 			input:  "restore account acc01 from pitr pitr01 '2021-01-01 00:00:00'",
 			output: "restore account acc01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
 		},
 		{
-			input:  "restore account acc01 from pitr pitr01 '2021-01-01 00:00:00' acc02",
-			output: "restore account acc01 from pitr pitr01 timestamp = 2021-01-01 00:00:00 from account acc02",
+			input:  "restore account acc01 from pitr pitr01 '2021-01-01 00:00:00' to account acc02",
+			output: "restore account acc01 from pitr pitr01 timestamp = 2021-01-01 00:00:00 to account acc02",
 		},
 		{
 			input:  "restore cluster from pitr pitr01 '2021-01-01 00:00:00'",

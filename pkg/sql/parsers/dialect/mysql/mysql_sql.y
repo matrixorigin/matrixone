@@ -1495,33 +1495,84 @@ restore_pitr_stmt:
            TimeStamp: $5,
        }
    }
-|  RESTORE DATABASE ident FROM PITR ident STRING
+|  RESTORE DATABASE restore_db_scope FROM PITR ident STRING restore_to_account_name_opt
    {
-       $$ = &tree.RestorePitr{
+       var account tree.Identifier
+       var database tree.Identifier
+
+       switch len($3) {
+       case 1:
+           database = $3[0]
+       case 2:
+           account = $3[0]
+           database = $3[1]
+       default:
+           yylex.Error("invalid restore database target")
+           goto ret1
+       }
+
+       result := &tree.RestorePitr{
             Level: tree.RESTORELEVELDATABASE,
-            DatabaseName: tree.Identifier($3.Compare()),
+            DatabaseName: database,
             Name: tree.Identifier($6.Compare()),
             TimeStamp: $7,
        }
-   }
-|   RESTORE DATABASE ident TABLE ident FROM PITR ident STRING
-   {
-      $$ = &tree.RestorePitr{
-            Level: tree.RESTORELEVELTABLE,
-            DatabaseName: tree.Identifier($3.Compare()),
-            TableName: tree.Identifier($5.Compare()),
-            Name: tree.Identifier($8.Compare()),
-            TimeStamp: $9,
+
+       if len(account) > 0 {
+            result.AccountName = account
        }
+
+       if len($8) > 0 {
+            result.ToAccountName = tree.Identifier($8)
+       }
+
+       $$ = result
    }
-|  RESTORE ACCOUNT ident FROM PITR ident STRING as_name_opt
+|   RESTORE TABLE restore_table_scope FROM PITR ident STRING restore_to_account_name_opt
+   {
+      var account tree.Identifier
+      var database tree.Identifier
+      var table tree.Identifier
+
+      switch len($3) {
+      case 2:
+            database = $3[0]
+            table = $3[1]
+      case 3:
+            account = $3[0]
+            database = $3[1]
+            table = $3[2]
+      default:
+            yylex.Error("invalid restore table target")
+            goto ret1
+      }
+
+      result := &tree.RestorePitr{
+            Level: tree.RESTORELEVELTABLE,
+            DatabaseName: database,
+            TableName: table,
+            Name: tree.Identifier($6.Compare()),
+            TimeStamp: $7,
+       }
+
+      if len(account) > 0 {
+            result.AccountName = account
+      }
+
+      if len($8) > 0 {
+            result.ToAccountName = tree.Identifier($8)
+      }
+
+      $$ = result
+   }
+|  RESTORE ACCOUNT ident FROM PITR ident STRING restore_to_account_name_opt
     {
         $$ = &tree.RestorePitr{
            Level: tree.RESTORELEVELACCOUNT,
            AccountName: tree.Identifier($3.Compare()),
            Name: tree.Identifier($6.Compare()),
            TimeStamp: $7,
-           SrcAccountName: tree.Identifier($8.Compare()),
+           ToAccountName: tree.Identifier($8),
        }
     }
 |  RESTORE CLUSTER FROM PITR ident STRING
