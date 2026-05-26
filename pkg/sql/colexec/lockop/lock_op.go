@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -170,6 +171,12 @@ func callNonBlocking(
 	}
 
 	lockOp.ctr.lockCount += int64(result.Batch.RowCount())
+	lockStart := time.Now()
+	metricv2.TxnLockOpBatchRowsHistogram.Observe(float64(result.Batch.RowCount()))
+	metricv2.TxnLockOpBatchBytesHistogram.Observe(float64(result.Batch.Size()))
+	defer func() {
+		metricv2.TxnLockOpBatchHoldDurationHistogram.Observe(time.Since(lockStart).Seconds())
+	}()
 	if err = performLock(result.Batch, proc, lockOp, analyzer, -1); err != nil {
 		return result, err
 	}
