@@ -790,6 +790,7 @@ func diffMergeAgency(
 	}
 
 	wg.Add(2)
+	outputCh := retBatCh
 
 	go func() {
 		defer wg.Done()
@@ -801,19 +802,19 @@ func diffMergeAgency(
 			// 5. as file
 
 			if err2 := satisfyDiffOutputOpt(
-				ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, retBatCh,
+				ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, outputCh,
 			); err2 != nil {
 				outputErr.Store(err2)
 			}
 		} else if pickStmt != nil {
 			if err2 := pickMergeDiffs(
-				ctx, cancel, ses, bh, pickStmt, dagInfo, tblStuff, retBatCh,
+				ctx, cancel, ses, bh, pickStmt, dagInfo, tblStuff, outputCh,
 			); err2 != nil {
 				outputErr.Store(err2)
 			}
 		} else {
 			if err2 := mergeDiffs(
-				ctx, cancel, ses, bh, mergeStmt, dagInfo, tblStuff, retBatCh,
+				ctx, cancel, ses, bh, mergeStmt, dagInfo, tblStuff, outputCh,
 			); err2 != nil {
 				outputErr.Store(err2)
 			}
