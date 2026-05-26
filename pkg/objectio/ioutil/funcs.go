@@ -333,7 +333,7 @@ func IsRowDeletedByLocation(
 
 	attrs := objectio.GetTombstoneAttrs(hidden)
 	data := containers.NewVectors(len(attrs))
-	_, release, err := ReadDeletes(ctx, location, fs, createdByCN, data, nil)
+	_, release, err := ReadDeletes(ctx, location, fs, createdByCN, data, nil, fileservice.GetFileServicePolicy(ctx))
 	if err != nil {
 		return
 	}
@@ -388,7 +388,7 @@ func FillBlockDeleteMask(
 	persistedDeletes := containers.NewVectors(len(attrs))
 
 	if meta, release, err = ReadDeletes(
-		ctx, location, fs, createdByCN, persistedDeletes, nil,
+		ctx, location, fs, createdByCN, persistedDeletes, nil, fileservice.GetFileServicePolicy(ctx),
 	); err != nil {
 		return
 	}
@@ -409,7 +409,7 @@ func FillBlockDeleteMask(
 	return
 }
 
-// ReadDeletes will read the pk column if pk type not nil
+// ReadDeletes will read the pk column if pk type not nil.
 func ReadDeletes(
 	ctx context.Context,
 	deltaLoc objectio.Location,
@@ -417,6 +417,7 @@ func ReadDeletes(
 	isPersistedByCN bool,
 	cacheVectors containers.Vectors,
 	pkType *types.Type,
+	policy fileservice.Policy,
 ) (objectio.ObjectDataMeta, func(), error) {
 
 	var cols []uint16
@@ -436,7 +437,7 @@ func ReadDeletes(
 	}
 
 	return LoadTombstoneColumns(
-		ctx, cols, typs, fs, deltaLoc, cacheVectors, nil, fileservice.Policy(0),
+		ctx, cols, typs, fs, deltaLoc, cacheVectors, nil, policy,
 	)
 }
 

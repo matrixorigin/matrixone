@@ -161,21 +161,21 @@ func NewS3FS(
 
 func (s *S3FS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(ctx, size)
+		s.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
 func (s *S3FS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(ctx, size)
+		s.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
 }
 
 func (s *S3FS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(ctx, len(data))
+		s.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), len(data))
 	}
 	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
 }
@@ -220,11 +220,14 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			fscache.ConstCapacity(int64(*config.DiskCapacity)),
 			s.perfCounterSets,
 			true,
-			s,
+			nil,
 			s.name,
 		)
 		if err != nil {
 			return err
+		}
+		if s.memCache != nil {
+			s.diskCache.memoryCache = s.memCache.cache
 		}
 		logutil.Info("fileservice: disk cache initialized",
 			zap.Any("fs-name", s.name),

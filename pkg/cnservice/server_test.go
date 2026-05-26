@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -215,4 +217,43 @@ func Test_tenant(t *testing.T) {
 
 	err = sv.UpgradeTenant(ctx, "acc3", 1, true)
 	assert.Error(t, err)
+}
+
+func TestMakeRSSCacheEvictorUsesIndependentTimeouts(t *testing.T) {
+	defer fileservice.SetMemoryCachePressureTargetPercent(0, time.Time{})
+	defer objectio.SetMetaCachePressureTargetPercent(0, time.Time{})
+
+	oldMem := evictMemoryCachesToCapacityPercent
+	oldMeta := evictMetaCacheToCapacityPercent
+	defer func() {
+		evictMemoryCachesToCapacityPercent = oldMem
+		evictMetaCacheToCapacityPercent = oldMeta
+	}()
+
+	var (
+		memCalled  bool
+		metaCalled bool
+	)
+	evictMemoryCachesToCapacityPercent = func(ctx context.Context, targetPercent int64) map[string]int64 {
+		memCalled = true
+		assert.Equal(t, int64(80), targetPercent)
+		_, ok := ctx.Deadline()
+		assert.True(t, ok)
+		<-ctx.Done()
+		assert.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+		return nil
+	}
+	evictMetaCacheToCapacityPercent = func(ctx context.Context, targetPercent int64) int64 {
+		metaCalled = true
+		assert.Equal(t, int64(80), targetPercent)
+		_, ok := ctx.Deadline()
+		assert.True(t, ok)
+		assert.NoError(t, ctx.Err())
+		return 0
+	}
+
+	makeRSSCacheEvictor(10*time.Millisecond)(context.Background(), 80)
+
+	assert.True(t, memCalled)
+	assert.True(t, metaCalled)
 }
