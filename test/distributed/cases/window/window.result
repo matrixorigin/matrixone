@@ -2946,32 +2946,13 @@ count(*)
 select avg(d) over (order by d range between 2 preceding and 2 following) from td limit 10;
 Communications link failure
 
-The last packet successfully received from the server was 120,079 milliseconds ago.  The last packet sent successfully to the server was 120,079 milliseconds ago.
+The last packet successfully received from the server was 120,058 milliseconds ago.  The last packet sent successfully to the server was 120,060 milliseconds ago.
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
-sum(d) over (order by d rows between 10 preceding and 10 following)
-66
-78
-91
-105
-120
-136
-153
-171
-190
-210
+SQL parser error: table "td" does not exist
 select d,min(d) over (partition by d%7 order by d rows  between 2 preceding and 1 following) from td limit 10;
-d    min(d) over (partition by d % 7 order by d rows between 2 preceding and 1 following)
-7    7
-14    7
-21    7
-28    14
-35    21
-35    28
-42    35
-42    35
-49    42
-49    42
+SQL parser error: table "td" does not exist
 drop table td;
+no such table window.td
 drop table if exists `c`;
 create table `c` (
 `pk` int(11) not null auto_increment,

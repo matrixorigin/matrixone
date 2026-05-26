@@ -94,11 +94,11 @@ null
 invalid input: column col2 does not exist
 select a from t1 union select col2 from t2;
 a
-null
-2022-01-01 00:00:00
 30
 20
 10
+null
+2022-01-01 00:00:00
 (select a from t1 order by a) union select col2 from t2;
 a
 null
@@ -116,10 +116,10 @@ null
 (select a from t1 order by a) union (select col2 from t2 order by col2);
 a
 null
+2022-01-01 00:00:00
 10
 20
 30
-2022-01-01 00:00:00
 (select a from t1 union select col2 from t2) order by col2;
 invalid input: column col2 does not exist
 drop table t1;
@@ -143,24 +143,24 @@ insert into t4 values(200, 35, 127.0, 1);
 insert into t4 values(200, 35, 127.44, 1);
 select a from t3 union select col1 from t4;
 a
-20
-10
-30
--10
 100
 300
 500
 200
+20
+10
+30
+-10
 (select a from t3) union (select col2 from t4 order by col2);
 a
-20.0
-10.0
-30.0
--10.0
 0.0
 35.0
 100.0
 65535.0
+20.0
+10.0
+30.0
+-10.0
 select a from t3 union select col2 from t4;
 a
 65535.0
@@ -233,12 +233,12 @@ cc
 dd
 select b from t5 union select col2 from t6;
 b
+aa
+bb
 11
 22
 33
 44
-aa
-bb
 drop table t5;
 drop table t6;
 drop table if exists t7;
@@ -281,10 +281,10 @@ a    b
 3    c
 select * from (select * from t7 union all select * from t7 where a > 1) a;
 a    b
-1    a
 2    b
 3    c
 3    c
+1    a
 2    b
 3    c
 3    c
@@ -316,10 +316,10 @@ a    b
 select * from (select * from t7 where a >=1 union all select * from t7 where a <= 1) a;
 a    b
 1    a
+1    a
 2    b
 3    c
 3    c
-1    a
 select * from (select * from t7 where a between 1 and 3 union select * from t7 where a <= 1) a;
 a    b
 1    a
@@ -355,13 +355,13 @@ select * from t8 union distinct select * from t9 union all select * from t10;
 a
 3
 3
-1
 2
+1
 select * from t8 union distinct select * from t9 union distinct select * from t10;
 a
 3
-2
 1
+2
 select * from (select * from t8 union distinct select * from t9 union all select * from t10) X;
 a
 3
@@ -373,22 +373,22 @@ a
 1
 select * from t8 union select * from t9 minus select * from t10;
 a
-1
 2
+1
 (select * from t8 union select * from t9) intersect select * from t10;
 a
 (select * from t8 union select * from t9) minus select * from t10;
 a
-1
 2
+1
 drop table t8;
 drop table t9;
 drop table t10;
 SELECT 'case+union+test' UNION
 SELECT CASE '1' WHEN '2' THEN 'BUG' ELSE 'nobug' END;
 case+union+test
-case+union+test
 nobug
+case+union+test
 select 'case+union+tet' union
 SELECT CASE '1' WHEN '1' THEN 'BUG' ELSE 'nobug' END;
 case+union+tet
@@ -404,8 +404,8 @@ a-4
 a
 select 'a' union select concat('a', -4.5);
 a
-a-4.5
 a
+a-4.5
 select 'a' union select concat('a', -(4 + 1));
 a
 a-5
@@ -461,8 +461,8 @@ Mic-6
 Mic-5
 SELECT LOCATION FROM t12 WHERE EVENT_ID=2 UNION ALL  SELECT LOCATION FROM t12 WHERE EVENT_ID=3;
 LOCATION
-Mic-6
 Mic-5
+Mic-6
 drop table t12;
 drop table if exists t13;
 create table t13 (a int primary key);
@@ -500,13 +500,13 @@ INSERT INTO t14 (pseudo,pseudo1,same) VALUES
 ('joce', 'testtt', 1),('joce', 'tsestset', 1),('dekad', 'joce', 1);
 SELECT pseudo FROM t14 WHERE pseudo1='joce' UNION SELECT pseudo FROM t14 WHERE pseudo='joce';
 pseudo
-dekad
 joce
+dekad
 SELECT pseudo1 FROM t14 WHERE pseudo1='joce' UNION SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 pseudo1
+joce
 testtt
 tsestset
-joce
 SELECT * FROM t14 WHERE pseudo1='joce' UNION SELECT * FROM t14 WHERE pseudo='joce' order by pseudo desc,pseudo1 desc;
 pseudo    pseudo1    same
 joce    tsestset    1
@@ -519,9 +519,9 @@ testtt
 tsestset
 SELECT pseudo1 FROM t14 WHERE pseudo='joce' UNION ALL SELECT pseudo FROM t14 WHERE pseudo1='joce';
 pseudo1
+dekad
 testtt
 tsestset
-dekad
 drop table t14;
 drop table if exists t15;
 CREATE TABLE t15 (
@@ -648,12 +648,12 @@ union all
 select A.NAME, A.PHONE, B.NAME, B.PHONE from t17 B left join t17 A on B.NAME = A.NAME and A.IID = 1
 where B.IID = 2 and (A.PHONE <> B.PHONE or A.NAME is null);
 NAME    PHONE    NAME    PHONE
-d    444    d    454
-null    null    f    666
-null    null    g    777
 a    111    null    null
 b    222    null    null
 d    444    d    454
+d    444    d    454
+null    null    f    666
+null    null    g    777
 drop table t17;
 select * from (select 'tb1' as name, 1 as count union all select 'tb3' as name, 3 as count union all select 'tb2' as name, 2 as count) order by count;
 name    count
