@@ -21,10 +21,12 @@ select count(*) from base_t;
 select count(*) from hive_ext;
 ➤ count(*)[-5,64,0]  𝄀
 25
-show full tables from restore_hive_pitr_24559;
-➤ Tables_in_restore_hive_pitr_24559[12,-1,0]  ¦  Table_type[12,-1,0]  𝄀
-base_t  ¦  BASE TABLE  𝄀
-hive_ext  ¦  BASE TABLE
+select count(*) from mo_catalog.mo_tables where reldatabase = 'restore_hive_pitr_24559' and relname = 'base_t' and relkind = 'r';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_tables where reldatabase = 'restore_hive_pitr_24559' and relname = 'hive_ext' and relkind = 'e';
+➤ count(*)[-5,64,0]  𝄀
+1
 create table hive_ext_clone clone hive_ext;
 internal error: restore_hive_pitr_24559.hive_ext is not BASE TABLE
 drop pitr if exists pitr_24559;

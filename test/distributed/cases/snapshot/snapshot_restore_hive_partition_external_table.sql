@@ -20,16 +20,18 @@ create external table hive_ext (
 
 select count(*) from base_t;
 select count(*) from hive_ext;
-show full tables from restore_hive_24559;
+select count(*) from mo_catalog.mo_tables where reldatabase = 'restore_hive_24559' and relname = 'base_t' and relkind = 'r';
+select count(*) from mo_catalog.mo_tables where reldatabase = 'restore_hive_24559' and relname = 'hive_ext' and relkind = 'e';
 
 create snapshot sp_24559 for account;
 insert into base_t values (3);
 
-restore table restore_hive_24559.hive_ext{snapshot="sp_24559"};
-restore database restore_hive_24559{snapshot="sp_24559"};
+restore account sys database restore_hive_24559 table hive_ext from snapshot sp_24559;
+restore account sys database restore_hive_24559 from snapshot sp_24559;
 
 select count(*) from restore_hive_24559.base_t;
-show full tables from restore_hive_24559;
+select count(*) from mo_catalog.mo_tables where reldatabase = 'restore_hive_24559' and relname = 'base_t' and relkind = 'r';
+select count(*) from mo_catalog.mo_tables where reldatabase = 'restore_hive_24559' and relname = 'hive_ext';
 
 drop snapshot if exists sp_24559;
 drop database if exists restore_hive_24559;

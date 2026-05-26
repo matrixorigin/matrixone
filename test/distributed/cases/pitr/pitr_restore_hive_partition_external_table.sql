@@ -21,7 +21,8 @@ create external table hive_ext (
 
 select count(*) from base_t;
 select count(*) from hive_ext;
-show full tables from restore_hive_pitr_24559;
+select count(*) from mo_catalog.mo_tables where reldatabase = 'restore_hive_pitr_24559' and relname = 'base_t' and relkind = 'r';
+select count(*) from mo_catalog.mo_tables where reldatabase = 'restore_hive_pitr_24559' and relname = 'hive_ext' and relkind = 'e';
 
 create table hive_ext_clone clone hive_ext;
 
