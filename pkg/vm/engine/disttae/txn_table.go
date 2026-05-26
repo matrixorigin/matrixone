@@ -77,6 +77,15 @@ var pkCheckSemaphore = make(chan struct{}, 16)
 const maxChangedObjectsForIO = 64
 const maxCandidateBlksForIO = 32
 
+func acquirePKCheckSemaphore(ctx context.Context) (func(), error) {
+	select {
+	case pkCheckSemaphore <- struct{}{}:
+		return func() { <-pkCheckSemaphore }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 func shouldBailoutOnChangedObjects(cnt int) bool {
 	return cnt > maxChangedObjectsForIO
 }
@@ -2631,19 +2640,13 @@ func (tbl *txnTable) PKPersistedBetween(
 	pkSeq := pkDef.Seqnum
 	pkType := plan2.ExprType2Type(&pkDef.Typ)
 	if len(candidateBlks) > 0 {
-		// Acquire semaphore to limit concurrent block I/O across all transactions.
-		// This prevents 1000 goroutines from simultaneously reading blocks and
-		// exhausting mpool capacity. Scoped to the block loop only -- tombstone
-		// checking below is not rate-limited by this semaphore.
-		select {
-		case pkCheckSemaphore <- struct{}{}:
-		case <-ctx.Done():
-			return false, ctx.Err()
-		}
-
 		v2.TxnPKChangeCheckIOCounter.Inc()
 
 		for _, blk := range candidateBlks {
+			semRelease, err := acquirePKCheckSemaphore(ctx)
+			if err != nil {
+				return false, err
+			}
 			release, err := ioutil.LoadColumns(
 				ctx,
 				[]uint16{uint16(pkSeq)},
@@ -2654,8 +2657,8 @@ func (tbl *txnTable) PKPersistedBetween(
 				tbl.proc.Load().GetMPool(),
 				fileservice.Policy(0),
 			)
+			semRelease()
 			if err != nil {
-				<-pkCheckSemaphore
 				return true, err
 			}
 
@@ -2667,11 +2670,9 @@ func (tbl *txnTable) PKPersistedBetween(
 			sels := searchFunc(cacheVectors)
 			release()
 			if len(sels) > 0 {
-				<-pkCheckSemaphore
 				return true, nil
 			}
 		}
-		<-pkCheckSemaphore
 	}
 	if checkTombstone {
 		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]

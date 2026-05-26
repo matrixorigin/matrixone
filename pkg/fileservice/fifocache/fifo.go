@@ -629,7 +629,10 @@ func (c *Cache[K, V]) evictBatch(capacityCut *int64) (pending []_PendingPostEvic
 
 	for {
 		c.helpEnqueue()
-		*capacityCut += c.capacityCut.Swap(0)
+		// EvictWithWait is used on foreground read paths to reserve space for
+		// the current I/O. Do not drain the global async eviction debt here, or
+		// one unlucky reader can inherit all skipped TryLock evictions and block
+		// IO merger waiters for seconds.
 		target := c.capacity() - *capacityCut
 		if target < 0 {
 			target = 0

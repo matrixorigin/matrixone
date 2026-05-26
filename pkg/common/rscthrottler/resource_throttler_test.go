@@ -223,12 +223,20 @@ func TestMemThrottlerRSSCacheEvictionByRSSRate(t *testing.T) {
 	require.Equal(t, int64(0), target.Load())
 
 	throttler.tryScavengeRSS(now+int64(time.Second), 850*mpool.GB)
-	require.Equal(t, int32(1), freeCalls.Load())
-	require.Equal(t, rssCacheSoftTarget, target.Load())
+	require.Eventually(t, func() bool {
+		return target.Load() == rssCacheSoftTarget
+	}, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool {
+		return freeCalls.Load() == 1
+	}, time.Second, time.Millisecond)
 
 	throttler.tryScavengeRSS(now+2*int64(time.Second), 920*mpool.GB)
-	require.Equal(t, int32(2), freeCalls.Load())
-	require.Equal(t, rssCacheHardTarget, target.Load())
+	require.Eventually(t, func() bool {
+		return target.Load() == rssCacheHardTarget
+	}, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool {
+		return freeCalls.Load() == 2
+	}, time.Second, time.Millisecond)
 
 	throttler.tryScavengeRSS(now+3*int64(time.Second), 920*mpool.GB)
 	require.Equal(t, int32(2), freeCalls.Load())
@@ -280,8 +288,12 @@ func TestMemThrottlerRSSCacheEvictionConcurrentEscalation(t *testing.T) {
 	close(start)
 	wg.Wait()
 
-	require.GreaterOrEqual(t, freeCalls.Load(), int32(1))
-	require.Equal(t, int64(rssCacheHardTarget), minTarget.Load())
+	require.Eventually(t, func() bool {
+		return minTarget.Load() == int64(rssCacheHardTarget)
+	}, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool {
+		return freeCalls.Load() >= 1
+	}, time.Second, time.Millisecond)
 	require.Equal(t, int64(rssCacheHardTarget), throttler.lastRSSCacheTarget.Load())
 }
 

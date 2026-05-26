@@ -244,12 +244,15 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 		zap.String("detail", m.String()),
 	)
 	if shouldEvictCache {
-		evictCtx, cancel := context.WithTimeout(context.Background(), rssCacheEvictTimeout)
-		m.options.rssCacheEvictor(evictCtx, cacheTargetPercent)
-		cancel()
+		go func(targetPercent int64) {
+			evictCtx, cancel := context.WithTimeout(context.Background(), rssCacheEvictTimeout)
+			defer cancel()
+			m.options.rssCacheEvictor(evictCtx, targetPercent)
+			freeOSMemory()
+		}(cacheTargetPercent)
 		m.lastRSSScavenge.Store(now)
 	}
-	if shouldFreeOSMemory || shouldEvictCache {
+	if shouldFreeOSMemory {
 		freeOSMemory()
 	}
 }

@@ -1431,7 +1431,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
 			if _, release, err = ioutil.ReadDeletes(
-				ls.ctx, location, ls.fs, obj.GetCNCreated(), cacheVectors, nil, fileservice.GetFileServicePolicy(ls.ctx),
+				ls.ctx, location, ls.fs, obj.GetCNCreated(), cacheVectors, nil, fileservice.Policy(0),
 			); err != nil {
 				return err
 			}

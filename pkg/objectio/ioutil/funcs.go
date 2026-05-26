@@ -333,7 +333,7 @@ func IsRowDeletedByLocation(
 
 	attrs := objectio.GetTombstoneAttrs(hidden)
 	data := containers.NewVectors(len(attrs))
-	_, release, err := ReadDeletes(ctx, location, fs, createdByCN, data, nil, fileservice.GetFileServicePolicy(ctx))
+	_, release, err := ReadDeletes(ctx, location, fs, createdByCN, data, nil, fileservice.Policy(0))
 	if err != nil {
 		return
 	}
@@ -388,7 +388,7 @@ func FillBlockDeleteMask(
 	persistedDeletes := containers.NewVectors(len(attrs))
 
 	if meta, release, err = ReadDeletes(
-		ctx, location, fs, createdByCN, persistedDeletes, nil, fileservice.GetFileServicePolicy(ctx),
+		ctx, location, fs, createdByCN, persistedDeletes, nil, fileservice.Policy(0),
 	); err != nil {
 		return
 	}
