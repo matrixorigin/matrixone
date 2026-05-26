@@ -82,6 +82,7 @@ commit;
 show tables;
 select count(*) from t1;
 select count(*) from t2;
+drop table if exists t2;
 
 -- merged from truncate_table_4.sql
 
