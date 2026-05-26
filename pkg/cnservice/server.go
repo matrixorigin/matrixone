@@ -91,13 +91,21 @@ func makeRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
 		fileservice.SetMemoryCachePressureTargetPercent(targetPercent, pressureUntil)
 		objectio.SetMetaCachePressureTargetPercent(targetPercent, pressureUntil)
 
-		memoryCtx, cancel := context.WithTimeout(ctx, timeout)
-		evictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
-		cancel()
-
-		metaCtx, cancel := context.WithTimeout(ctx, timeout)
-		evictMetaCacheToCapacityPercent(metaCtx, targetPercent)
-		cancel()
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			memoryCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			evictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
+		}()
+		go func() {
+			defer wg.Done()
+			metaCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			evictMetaCacheToCapacityPercent(metaCtx, targetPercent)
+		}()
+		wg.Wait()
 	}
 }
 
