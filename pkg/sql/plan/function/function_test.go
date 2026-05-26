@@ -141,6 +141,17 @@ func Test_fixedTypeCastRule2(t *testing.T) {
 	}
 }
 
+func Test_fixedImplicitTypeCast_Decimal256MirrorsDecimal128(t *testing.T) {
+	for _, target := range []types.T{types.T_bool, types.T_timestamp} {
+		can128, cost128 := fixedImplicitTypeCast(types.T_decimal128.ToType(), target)
+		require.True(t, can128)
+
+		can256, cost256 := fixedImplicitTypeCast(types.T_decimal256.ToType(), target)
+		require.Equal(t, can128, can256, target.String())
+		require.Equal(t, cost128, cost256, target.String())
+	}
+}
+
 func Test_GetFunctionByName(t *testing.T) {
 	type fInput struct {
 		name string

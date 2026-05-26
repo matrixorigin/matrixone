@@ -498,10 +498,10 @@ func Test_CaseCheck_DecimalWithIntegerPromotesForIntegralWidth(t *testing.T) {
 	require.Len(t, result.finalType, len(inputs))
 	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
 	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
-	require.Equal(t, int32(20), result.finalType[1].Width)
+	require.Equal(t, int32(19), result.finalType[1].Width)
 	require.Equal(t, int32(0), result.finalType[1].Scale)
 	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
-	require.Equal(t, int32(20), result.finalType[2].Width)
+	require.Equal(t, int32(19), result.finalType[2].Width)
 	require.Equal(t, int32(0), result.finalType[2].Scale)
 }
 
@@ -623,10 +623,10 @@ func Test_IffCheck_DecimalWithIntegerPromotesForIntegralWidth(t *testing.T) {
 	require.Len(t, result.finalType, len(inputs))
 	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
 	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
-	require.Equal(t, int32(20), result.finalType[1].Width)
+	require.Equal(t, int32(19), result.finalType[1].Width)
 	require.Equal(t, int32(0), result.finalType[1].Scale)
 	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
-	require.Equal(t, int32(20), result.finalType[2].Width)
+	require.Equal(t, int32(19), result.finalType[2].Width)
 	require.Equal(t, int32(0), result.finalType[2].Scale)
 }
 
@@ -647,6 +647,17 @@ func Test_IffCheck_Decimal64PromotesForLargeScale(t *testing.T) {
 	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
 	require.Equal(t, int32(36), result.finalType[2].Width)
 	require.Equal(t, int32(18), result.finalType[2].Scale)
+}
+
+func Test_IffCheck_Decimal256OverflowFails(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal256, 76, 0),
+		types.New(types.T_decimal256, 76, 76),
+	}
+
+	result := iffCheck(nil, inputs)
+	require.Equal(t, failedFunctionParametersWrong, result.status)
 }
 
 func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {
