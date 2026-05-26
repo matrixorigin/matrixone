@@ -70,8 +70,9 @@ const (
 var traceFilterExprInterval atomic.Uint64
 var traceFilterExprInterval2 atomic.Uint64
 
-// pkCheckSemaphore limits concurrent PK conflict I/O in PKPersistedBetween to prevent
-// mpool explosion when many transactions simultaneously check primary key conflicts.
+// pkCheckSemaphore limits concurrent PK conflict block reads in PKPersistedBetween
+// to prevent mpool explosion when many transactions simultaneously check primary
+// key conflicts.
 var pkCheckSemaphore = make(chan struct{}, 16)
 var pkConflictReadPolicy fileservice.Policy = fileservice.SkipFullFilePreloads
 
@@ -2536,15 +2537,10 @@ func (tbl *txnTable) PKPersistedBetween(
 			var objMeta objectio.ObjectMeta
 			location := obj.Location()
 
-			semRelease, err := acquirePKCheckSemaphore(ctx)
-			if err != nil {
-				return err
-			}
 			// load object metadata
 			if objMeta, err2 = objectio.FastLoadObjectMeta(
 				ctx, &location, false, fs,
 			); err2 != nil {
-				semRelease()
 				return
 			}
 
@@ -2555,7 +2551,6 @@ func (tbl *txnTable) PKPersistedBetween(
 			// If object zone map doesn't contains the pk value, we need to check bloom filter
 			if !zmCkecked {
 				if !meta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
-					semRelease()
 					return
 				}
 			}
@@ -2566,11 +2561,9 @@ func (tbl *txnTable) PKPersistedBetween(
 				if bf, err2 = objectio.LoadBFWithMeta(
 					ctx, meta, location, fs,
 				); err2 != nil {
-					semRelease()
 					return
 				}
 			}
-			semRelease()
 
 			objectio.ForeachBlkInObjStatsList(false, meta,
 				func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
@@ -2651,11 +2644,11 @@ func (tbl *txnTable) PKPersistedBetween(
 	if len(candidateBlks) > 0 {
 		v2.TxnPKChangeCheckIOCounter.Inc()
 
+		semRelease, err := acquirePKCheckSemaphore(ctx)
+		if err != nil {
+			return false, err
+		}
 		for _, blk := range candidateBlks {
-			semRelease, err := acquirePKCheckSemaphore(ctx)
-			if err != nil {
-				return false, err
-			}
 			dataRelease, err := ioutil.LoadColumns(
 				ctx,
 				[]uint16{uint16(pkSeq)},
@@ -2678,11 +2671,12 @@ func (tbl *txnTable) PKPersistedBetween(
 
 			sels := searchFunc(cacheVectors)
 			dataRelease()
-			semRelease()
 			if len(sels) > 0 {
+				semRelease()
 				return true, nil
 			}
 		}
+		semRelease()
 	}
 	if checkTombstone {
 		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
@@ -2725,19 +2719,13 @@ func tombstonePKExistsInRange(
 				vecCount = 2
 			}
 			tombVectors := containers.NewVectors(vecCount)
-			semRelease, err := acquirePKCheckSemaphore(ctx)
-			if err != nil {
-				return false, err
-			}
 			_, dataRelease, err := ioutil.ReadDeletes(ctx, loc, fs, isCNCreated, tombVectors, &pkType, pkConflictReadPolicy)
 			if err != nil {
-				semRelease()
 				return true, nil
 			}
 			pkVec := tombVectors[1]
 			hits := searchKeys(&pkVec)
 			dataRelease()
-			semRelease()
 			if len(hits) > 0 {
 				return true, nil
 			}

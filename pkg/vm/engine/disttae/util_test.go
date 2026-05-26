@@ -208,7 +208,17 @@ func TestTombstonePKExistsInRangeSkipsFullFilePreloads(t *testing.T) {
 	require.NoError(t, vector.AppendFixed[int32](keys, 100, false, proc.GetMPool()))
 
 	recordingFS := &policyCaptureFS{FileService: baseFS}
-	changed, err := tombstonePKExistsInRange(ctx, pState, types.BuildTS(10, 0), keys, int32Type, recordingFS)
+	for i := 0; i < cap(pkCheckSemaphore); i++ {
+		pkCheckSemaphore <- struct{}{}
+	}
+	defer func() {
+		for i := 0; i < cap(pkCheckSemaphore); i++ {
+			<-pkCheckSemaphore
+		}
+	}()
+	readCtx, readCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer readCancel()
+	changed, err := tombstonePKExistsInRange(readCtx, pState, types.BuildTS(10, 0), keys, int32Type, recordingFS)
 	require.NoError(t, err)
 	require.True(t, changed)
 	require.GreaterOrEqual(t, len(recordingFS.policies), 2)
