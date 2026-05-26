@@ -47,13 +47,6 @@ func mustConstFixedVector[T any](t *testing.T, typ types.Type, val T, length int
 	return vec
 }
 
-func mustConstBytesVector(t *testing.T, typ types.Type, val string, length int, proc *process.Process) *vector.Vector {
-	t.Helper()
-	vec, err := vector.NewConstBytes(typ, []byte(val), length, proc.Mp())
-	require.NoError(t, err)
-	return vec
-}
-
 func TestOpUnaryFixedToFixedWithNullOnError(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
