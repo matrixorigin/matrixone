@@ -869,9 +869,9 @@ func (h *Handle) HandleWrite(
 
 	tb, err := dbase.GetRelationByID(req.TableID)
 	if err != nil {
-		err = errors.Join(err, moerr.NewBadDB(ctx, fmt.Sprintf("%d-%s",
-			req.TableID,
-			req.TableName)))
+		err = errors.Join(err, moerr.NewNoSuchTable(ctx,
+			fmt.Sprintf("%d-%s", req.DatabaseId, req.DatabaseName),
+			fmt.Sprintf("%d-%s", req.TableID, req.TableName)))
 		return
 	}
 
