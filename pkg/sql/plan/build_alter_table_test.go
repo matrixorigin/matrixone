@@ -691,4 +691,43 @@ func TestAlterTableAlgorithmValidation(t *testing.T) {
 			`ALTER TABLE t1 ALGORITHM=INPLACE, LOCK=NONE, ADD COLUMN x INT;`)
 		assert.ErrorContains(t, err, "ALGORITHM")
 	})
+
+	t.Run("repeated ALGORITHM hints on INPLACE operation, last hint wins", func(t *testing.T) {
+		// Multiple ALGORITHM clauses on an INPLACE-capable ADD INDEX:
+		// the last hint determines the final algorithm.
+		sqls := []string{
+			`ALTER TABLE t1 ALGORITHM=COPY, ALGORITHM=INPLACE, ADD INDEX idx_a(a);`,
+			`ALTER TABLE t1 ALGORITHM=INSTANT, ALGORITHM=INPLACE, ADD INDEX idx_a(a);`,
+			`ALTER TABLE t1 ALGORITHM=INPLACE, ALGORITHM=DEFAULT, ADD INDEX idx_a(a);`,
+		}
+		runTestShouldPass(mock, t, sqls, false, false)
+	})
+
+	t.Run("repeated ALGORITHM hints on INPLACE operation, last hint COPY rejected", func(t *testing.T) {
+		// ALGORITHM=INPLACE then ALGORITHM=COPY on ADD INDEX: last hint (COPY)
+		// routes through buildAlterTableCopy which does not support ADD INDEX.
+		_, err := buildSingleStmt(mock, t,
+			`ALTER TABLE t1 ALGORITHM=INPLACE, ALGORITHM=COPY, ADD INDEX idx_a(a);`)
+		assert.ErrorContains(t, err, "unsupported alter option in copy mode")
+	})
+
+	t.Run("repeated ALGORITHM hints on COPY-required operation, non-COPY rejected", func(t *testing.T) {
+		// ADD COLUMN requires COPY. All non-COPY hints are rejected against
+		// the stable requiredAlgorithm, regardless of what prior hints set.
+		sqls := []string{
+			`ALTER TABLE t1 ALGORITHM=INSTANT, ALGORITHM=INPLACE, ADD COLUMN x INT;`,
+			`ALTER TABLE t1 ALGORITHM=INPLACE, ALGORITHM=COPY, ADD COLUMN x INT;`,
+			`ALTER TABLE t1 ALGORITHM=COPY, ALGORITHM=INSTANT, ADD COLUMN x INT;`,
+		}
+		runTestShouldError(mock, t, sqls)
+	})
+
+	t.Run("repeated ALGORITHM hints on COPY-required operation, all COPY passes", func(t *testing.T) {
+		sqls := []string{
+			`ALTER TABLE t1 ALGORITHM=COPY, ALGORITHM=COPY, ADD COLUMN x INT;`,
+			`ALTER TABLE t1 ALGORITHM=DEFAULT, ALGORITHM=COPY, ADD COLUMN x INT;`,
+			`ALTER TABLE t1 ALGORITHM=COPY, ALGORITHM=DEFAULT, ADD COLUMN x INT;`,
+		}
+		runTestShouldPass(mock, t, sqls, false, false)
+	})
 }

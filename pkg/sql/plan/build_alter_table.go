@@ -585,6 +585,8 @@ Loop:
 		}
 	}
 
+	requiredAlgorithm := algorithm // stable baseline for hint validation; algorithm is mutated below
+
 	// Second pass: apply ALGORITHM hint (takes precedence over operation-based resolution).
 	for _, spec := range validAlterSpecs {
 		alg, ok := spec.(*tree.AlterOptionAlgorithm)
@@ -595,7 +597,7 @@ Loop:
 		if userAlg == plan.AlterTable_DEFAULT {
 			continue
 		}
-		if algorithm == plan.AlterTable_COPY && userAlg != plan.AlterTable_COPY {
+		if requiredAlgorithm == plan.AlterTable_COPY && userAlg != plan.AlterTable_COPY {
 			return algorithm, moerr.NewInvalidInputf(ctx,
 				"ALGORITHM=%s is not supported. Reason: this operation requires ALGORITHM=COPY. Try ALGORITHM=COPY.",
 				strings.ToUpper(alg.Type))
