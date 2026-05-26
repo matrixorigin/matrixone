@@ -249,6 +249,14 @@ select count(*) from t1 where a = null;
 select 1 > 0;
 
 select count(*) from t1 group by null;
+select count(*), sum(a) from t1 group by (null);
+select count(*) from t1 group by null having count(*) = 5;
+select count(*) from t1 order by null;
+select a from t1 order by null, a desc;
+select distinct a from t1 order by null, a desc;
+select * from (select 1 as a union select 2 order by null) u order by a;
+select * from (select 1 as a intersect select 1 order by null) u order by a;
+select * from (select 1 as a except select 2 order by null) u order by a;
 
 use db1;
 drop table if exists t11;

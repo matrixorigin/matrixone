@@ -16,6 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -30,6 +31,20 @@ func NewGroupBinder(builder *QueryBuilder, ctx *BindContext, selectList tree.Sel
 	b.selectList = selectList
 
 	return b
+}
+
+func makeExecutableGroupByNullExpr() *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: true,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_bool),
+			NotNullable: false,
+		},
+	}
 }
 
 func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
@@ -58,6 +73,9 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	expr, err := b.baseBindExpr(astExpr, depth, isRoot)
 	if err != nil {
 		return nil, err
+	}
+	if isNullExpr(expr) {
+		expr = makeExecutableGroupByNullExpr()
 	}
 
 	if isRoot && !b.ctx.isGroupingSet {

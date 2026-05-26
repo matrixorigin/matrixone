@@ -316,7 +316,9 @@ func TestQueryBuilder_bindGroupByNull(t *testing.T) {
 	_, err = builder.bindGroupBy(bindCtx, selectClause.GroupBy, selectClause.Exprs, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(bindCtx.groups))
-	require.True(t, isNullExpr(bindCtx.groups[0]))
+	require.NotNil(t, bindCtx.groups[0].GetLit())
+	require.True(t, bindCtx.groups[0].GetLit().Isnull)
+	require.Equal(t, int32(types.T_bool), bindCtx.groups[0].Typ.Id)
 
 	require.Equal(t, 1, len(bindCtx.groupingFlag))
 	require.True(t, bindCtx.groupingFlag[0])
