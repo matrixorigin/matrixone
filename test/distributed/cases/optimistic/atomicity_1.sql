@@ -87,7 +87,7 @@ select num_col1  from  atomic_ex_table;
 show create table atomic_ex_table;
 desc atomic_ex_table;
 
--- @bvt:issue#9124
+-- @bvt:issue
 create TEMPORARY TABLE atomic_temp(a int);
 begin;
 insert into atomic_temp values (5);

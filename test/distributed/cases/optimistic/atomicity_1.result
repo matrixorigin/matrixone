@@ -124,41 +124,41 @@ no such table atomicity_1.atomic_ex_table
 desc atomic_ex_table;
 no such table atomicity_1.atomic_ex_table
 create TEMPORARY TABLE atomic_temp(a int);
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 begin;
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 insert into atomic_temp values (5);
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 rollback ;
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 select * from atomic_temp;
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 drop table atomic_temp;
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 start transaction ;
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 create TEMPORARY TABLE atomic_temp(a int);
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 insert into atomic_temp values (5);
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 select * from atomic_temp;
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 rollback ;
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 select * from atomic_temp;
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 show create table atomic_temp;
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 start transaction ;
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 create TEMPORARY TABLE atomic_temp(a int);
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 insert into atomic_temp values (5);
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 commit ;
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 select * from atomic_temp;
-[unknown result because it is related to issue#9124]
+[unknown result because it is related to issue]
 CREATE TABLE `t_code_rule` (
 `code_id` bigint(20) NOT NULL AUTO_INCREMENT,
 `code_no` varchar(50) NOT NULL,
