@@ -57,6 +57,18 @@ type RSCThrottler interface {
 	Available() int64
 }
 
+type MemoryPressureLevel int
+
+const (
+	MemoryPressureNormal MemoryPressureLevel = iota
+	MemoryPressureSoft
+	MemoryPressureHard
+)
+
+type MemoryPressureProvider interface {
+	MemoryPressure() MemoryPressureLevel
+}
+
 type memThrottler struct {
 	limit    atomic.Int64
 	rss      atomic.Int64
@@ -116,6 +128,21 @@ func (m *memThrottler) pinnedRate() float64 {
 	pinned := float64(m.reserved.Load())
 
 	return pinned / limit
+}
+
+func (m *memThrottler) MemoryPressure() MemoryPressureLevel {
+	actualMaxMemory := int64(m.actualTotalMemory.Load())
+	if actualMaxMemory <= 0 || actualMaxMemory == math.MaxInt64 {
+		return MemoryPressureNormal
+	}
+	rss := m.rss.Load()
+	if float64(rss) >= float64(actualMaxMemory)*rssCacheEvictHardRate {
+		return MemoryPressureHard
+	}
+	if float64(rss) >= float64(actualMaxMemory)*rssCacheEvictSoftRate {
+		return MemoryPressureSoft
+	}
+	return MemoryPressureNormal
 }
 
 func (m *memThrottler) Refresh() {

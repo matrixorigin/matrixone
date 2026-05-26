@@ -253,6 +253,18 @@ func WithMoServerStateChecker(checker func() bool) EngineOptions {
 	}
 }
 
+func WithPKCheckGuardConfig(cfg PKCheckGuardConfig) EngineOptions {
+	return func(e *Engine) {
+		e.config.pkCheckGuardConfig = cfg
+	}
+}
+
+func WithPKCheckPressureProvider(provider rscthrottler.MemoryPressureProvider) EngineOptions {
+	return func(e *Engine) {
+		e.config.pkCheckPressureProvider = provider
+	}
+}
+
 type Engine struct {
 	sync.RWMutex
 	service  string
@@ -281,6 +293,10 @@ type Engine struct {
 		ieFactory            func() ie.InternalExecutor
 		statsConf            MoTableStatsConfig
 		moServerStateChecker func() bool
+
+		pkCheckGuardConfig      PKCheckGuardConfig
+		pkCheckPressureProvider rscthrottler.MemoryPressureProvider
+		pkCheckGuard            *pkCheckGuard
 	}
 
 	//latest catalog will be loaded from TN when engine is initialized.
