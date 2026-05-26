@@ -433,18 +433,20 @@ func decimalTypeForRequiredWidth(oid types.T, requiredWidth int32) (types.T, boo
 func integerIntegralWidth(oid types.T) int32 {
 	switch oid {
 	case types.T_int8:
-		return 4
+		return 3
 	case types.T_uint8:
 		return 3
 	case types.T_int16:
-		return 6
+		return 5
 	case types.T_uint16:
 		return 5
 	case types.T_int32:
-		return 11
+		return 10
 	case types.T_uint32:
 		return 10
-	case types.T_int64, types.T_uint64:
+	case types.T_int64:
+		return 19
+	case types.T_uint64:
 		return 20
 	default:
 		return 0
@@ -1673,6 +1675,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1698,6 +1701,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1723,6 +1727,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1748,6 +1753,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1773,6 +1779,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1798,6 +1805,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1823,6 +1831,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1848,6 +1857,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1917,6 +1927,7 @@ func initFixed3() {
 				{toType: types.T_float32, preferLevel: 2},
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1942,6 +1953,33 @@ func initFixed3() {
 				{toType: types.T_float32, preferLevel: 2},
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 2},
+				{toType: types.T_decimal256, preferLevel: 1},
+				{toType: types.T_timestamp, preferLevel: 2},
+				{toType: types.T_char, preferLevel: 2},
+				{toType: types.T_varchar, preferLevel: 2},
+				{toType: types.T_binary, preferLevel: 2},
+				{toType: types.T_varbinary, preferLevel: 2},
+				{toType: types.T_blob, preferLevel: 2},
+				{toType: types.T_text, preferLevel: 2},
+			},
+		},
+
+		{
+			from: types.T_decimal256,
+			toList: []toRule{
+				{toType: types.T_bool, preferLevel: 2},
+				{toType: types.T_int8, preferLevel: 2},
+				{toType: types.T_int16, preferLevel: 2},
+				{toType: types.T_int32, preferLevel: 2},
+				{toType: types.T_int64, preferLevel: 2},
+				{toType: types.T_uint8, preferLevel: 2},
+				{toType: types.T_uint16, preferLevel: 2},
+				{toType: types.T_uint32, preferLevel: 2},
+				{toType: types.T_uint64, preferLevel: 2},
+				{toType: types.T_float32, preferLevel: 2},
+				{toType: types.T_float64, preferLevel: 1},
+				{toType: types.T_decimal64, preferLevel: 2},
+				{toType: types.T_decimal128, preferLevel: 2},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},

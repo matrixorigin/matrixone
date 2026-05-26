@@ -73,6 +73,21 @@ func needDecimalMetadataCast(source []types.Type, target types.Type) bool {
 	return false
 }
 
+func requireDecimalReturn(source []types.Type) bool {
+	hasDecimal := false
+	for i := range source {
+		if source[i].Oid.IsDecimal() {
+			hasDecimal = true
+			continue
+		}
+		if source[i].IsIntOrUint() {
+			continue
+		}
+		return false
+	}
+	return hasDecimal
+}
+
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
 func caseCheck(_ []overload, inputs []types.Type) checkResult {
 	l := len(inputs)
@@ -148,8 +163,12 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 
 		target := make([]types.T, len(source))
+		decimalReturnRequired := requireDecimalReturn(source)
 
 		for _, rett := range retOperatorCaseSupports {
+			if decimalReturnRequired && !rett.IsDecimal() {
+				continue
+			}
 			for i := range target {
 				target[i] = rett
 			}
@@ -401,7 +420,11 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 		retType := types.Type{}
 
 		target := make([]types.T, 2)
+		decimalReturnRequired := requireDecimalReturn(source)
 		for _, rett := range retOperatorIffSupports {
+			if decimalReturnRequired && !rett.IsDecimal() {
+				continue
+			}
 			target[0], target[1] = rett, rett
 
 			c, cost := tryToMatch(source, target)
