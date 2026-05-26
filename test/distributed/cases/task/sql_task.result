@@ -6,6 +6,9 @@ drop task if exists sql_task_manual;
 drop task if exists sql_task_gate;
 drop task if exists sql_task_literal_strings;
 drop task if exists sql_task_rows_success;
+drop task if exists sql_task_failfast_heartbeat;
+drop task if exists sql_task_zero_row_insert;
+drop task if exists sql_task_mini_pipeline;
 drop task if exists sql_task_multistmt;
 drop task if exists sql_task_timeout;
 drop task if exists sql_task_retry;
@@ -27,6 +30,14 @@ create table literal_quotes(label varchar(32));
 create table rows_success_target(v int);
 create table rows_success_heartbeat(tag varchar(16));
 create table ms_target(v int);
+create table failfast_target(v int);
+create table failfast_heartbeat(tag varchar(16));
+create table zero_row_src(id int primary key);
+create table zero_row_sink(id int primary key);
+create table zero_row_heartbeat(tag varchar(16));
+create table pipeline_readings(pump int, engine_rpm int, pump_rate int);
+create table pipeline_classified(pump int, state varchar(32));
+create table pipeline_run_log(task_name varchar(64), status varchar(16));
 create table timeout_sink(v int);
 create table retry_target(v int);
 create table overlap_sink(v int);
@@ -66,10 +77,10 @@ count(*)
 1
 show task runs for sql_task_cron limit 1;
 run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
-180087    sql_task_cron    MANUAL    SUCCESS    2026-04-13 18:03:27 +0800 CST    2026-04-13 18:03:27 +0800 CST    0.018038208    1    1
+7    sql_task_cron    MANUAL    SUCCESS    2026-05-26 15:06:11 +0800 CST    2026-05-26 15:06:11 +0800 CST    0.022465    1    1    
 show task runs for sql_task_manual limit 1;
 run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
-180088    sql_task_manual    MANUAL    SUCCESS    2026-04-13 18:03:27 +0800 CST    2026-04-13 18:03:27 +0800 CST    0.019812833    1    1
+8    sql_task_manual    MANUAL    SUCCESS    2026-05-26 15:06:12 +0800 CST    2026-05-26 15:06:12 +0800 CST    0.0264925    1    1    
 alter task sql_task_cron suspend;
 alter task sql_task_cron resume;
 execute task sql_task_cron;
@@ -149,7 +160,86 @@ count(*)
 select status, rows_affected from mo_task.sql_task_run where task_name = 'sql_task_rows_success' order by run_id desc limit 1;
 status    rows_affected
 SUCCESS    4
-create task sql_task_multistmt as begin insert into ms_target values (1); insert into no_such_table values (1); insert into ms_target values (2); end;
+create task sql_task_failfast_heartbeat
+as begin
+insert into failfast_target values (1);
+insert into no_such_failfast_table values (1);
+insert into failfast_target values (2);
+insert into failfast_heartbeat values ('done');
+end
+execute task sql_task_failfast_heartbeat;
+no such table sql_task_case.no_such_failfast_table
+select sleep(1);
+sleep(1)
+0
+select count(*), min(v), max(v) from failfast_target;
+count(*)    min(v)    max(v)
+1    1    1
+select count(*) from failfast_heartbeat;
+count(*)
+0
+select status, rows_affected, error_message from mo_task.sql_task_run where task_name = 'sql_task_failfast_heartbeat' order by run_id desc limit 1;
+status    rows_affected    error_message
+FAILED    1    no such table sql_task_case.no_such_failfast_table
+insert into zero_row_src values (1);
+create task sql_task_zero_row_insert
+as begin
+insert into zero_row_sink
+select id from zero_row_src where id = 999;
+insert into zero_row_heartbeat values ('done');
+end
+execute task sql_task_zero_row_insert;
+select sleep(1);
+sleep(1)
+0
+select count(*) from zero_row_sink;
+count(*)
+0
+select count(*) from zero_row_heartbeat;
+count(*)
+1
+select status, rows_affected from mo_task.sql_task_run where task_name = 'sql_task_zero_row_insert' order by run_id desc limit 1;
+status    rows_affected
+SUCCESS    1
+insert into pipeline_readings values
+(1, null, 0),
+(2, 900, 10),
+(3, 700, 0);
+create task sql_task_mini_pipeline
+as begin
+delete from pipeline_classified;
+insert into pipeline_classified
+select pump,
+case
+when engine_rpm is null then 'UNKNOWN'
+when engine_rpm >= 800 and pump_rate > 0 then 'PUMPING'
+else 'IDLE'
+end as state
+from pipeline_readings;
+delete from pipeline_run_log where task_name = 'sql_task_mini_pipeline';
+insert into pipeline_run_log values ('sql_task_mini_pipeline', 'SUCCESS');
+end
+execute task sql_task_mini_pipeline;
+select sleep(1);
+sleep(1)
+0
+select state, count(*), hex(state) from pipeline_classified group by state order by state;
+state    count(*)    hex(state)
+IDLE    1    49444C45
+PUMPING    1    50554D50494E47
+UNKNOWN    1    554E4B4E4F574E
+select task_name, status, hex(status) from pipeline_run_log;
+task_name    status    hex(status)
+sql_task_mini_pipeline    SUCCESS    53554343455353
+select status, rows_affected from mo_task.sql_task_run where task_name = 'sql_task_mini_pipeline' order by run_id desc limit 1;
+status    rows_affected
+SUCCESS    4
+create task sql_task_multistmt
+as begin
+insert into ms_target values (1);
+insert into no_such_table values (1);
+insert into ms_target values (2);
+end
 execute task sql_task_multistmt;
 no such table sql_task_case.no_such_table
 select sleep(1);
@@ -246,9 +336,9 @@ count(*)
 1
 show task runs for sql_task_validate limit 3;
 run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
-180105    sql_task_validate    MANUAL    SUCCESS    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.027703042    1    2
-180104    sql_task_validate    MANUAL    SUCCESS    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.0283525    1    1
-180099    sql_task_validate    MANUAL    SKIPPED    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.012571208    1    0    
+29    sql_task_validate    MANUAL    SUCCESS    2026-05-26 15:06:42 +0800 CST    2026-05-26 15:06:42 +0800 CST    0.027591917    1    2    
+28    sql_task_validate    MANUAL    SUCCESS    2026-05-26 15:06:41 +0800 CST    2026-05-26 15:06:41 +0800 CST    0.027222625    1    1    
+23    sql_task_validate    MANUAL    SKIPPED    2026-05-26 15:06:41 +0800 CST    2026-05-26 15:06:41 +0800 CST    0.015653958    1    0    
 drop account if exists sql_task_tenant;
 create account sql_task_tenant admin_name 'admin' identified by '111';
 create database if not exists tenant_task_case;
@@ -266,11 +356,11 @@ sleep(1)
 0
 show tasks;
 task_name    schedule    enabled    gate_condition    retry_limit    timeout    created_at    last_run_status    last_run_time
-tenant_task_show    CRON_TZ=UTC 0 0 0 1 1 *    1    0    0    30s    2026-04-13 18:03:43 +0800 CST    SKIPPED    2026-04-13 18:03:43 +0800 CST
+tenant_task_show    CRON_TZ=UTC 0 0 0 1 1 *    1    0    0    30s    2026-05-26 15:06:44 +0800 CST    SKIPPED    2026-05-26 15:06:45 +0800 CST
 show task runs for tenant_task_show limit 2;
 run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
-180107    tenant_task_show    MANUAL    SKIPPED    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.00989425    1    0    
-180106    tenant_task_show    MANUAL    SUCCESS    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.0225825    1    1
+31    tenant_task_show    MANUAL    SKIPPED    2026-05-26 15:06:45 +0800 CST    2026-05-26 15:06:45 +0800 CST    0.0163025    1    0    
+30    tenant_task_show    MANUAL    SUCCESS    2026-05-26 15:06:44 +0800 CST    2026-05-26 15:06:44 +0800 CST    0.022766792    1    1    
 select count(*) from tenant_sink;
 count(*)
 1
@@ -282,6 +372,9 @@ drop task if exists sql_task_build_silver;
 drop task if exists sql_task_overlap;
 drop task if exists sql_task_retry;
 drop task if exists sql_task_timeout;
+drop task if exists sql_task_mini_pipeline;
+drop task if exists sql_task_zero_row_insert;
+drop task if exists sql_task_failfast_heartbeat;
 drop task if exists sql_task_multistmt;
 drop task if exists sql_task_rows_success;
 drop task if exists sql_task_literal_strings;
