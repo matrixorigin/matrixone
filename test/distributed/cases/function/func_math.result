@@ -79,17 +79,29 @@ abs(tan(d)) * 2
 null
 0.0
 drop table if exists ceil;
+
 create table ceil(id int,d int,dl double,fl float,de decimal);
+
 insert into ceil values(1,5,5,-5.5,-5.5);
+
 insert into ceil values(2,-2,18446744073709551614,-2.5,-5.2);
+
 insert into ceil values(2,-1,18446744073709551614,1.23,-1.23);
+
 insert into ceil values(2,-1,1844674407370955161,1.23,-1.23);
+
 insert into ceil values(2,-1,-9223372036854775808,1.23,-1.23);
+
 insert into ceil values(2,-1,-184467440737095516,1.23,-1.23);
+
 insert into ceil values(2,-1,-922337203685477580,1.23,-1.23);
+
 insert into ceil values(2,-1,-922337203685477580,1.23,-1.23);
+
 insert into ceil values(2,-1,-99999999999999999.9,1.23,-1.23);
+
 insert into ceil values(2,-1,-99999999999999999.9,1.23,-1.23);
+
 select ceil(d),ceil(dl),ceil(fl) from ceil;
 ceil(d)    ceil(dl)    ceil(fl)
 5    5.0    -5.0
@@ -103,5 +115,8 @@ ceil(d)    ceil(dl)    ceil(fl)
 -1    -1.0E17    2.0
 -1    -1.0E17    2.0
 drop table t1;
+
 drop table ceil;
+
 drop table abs;
+

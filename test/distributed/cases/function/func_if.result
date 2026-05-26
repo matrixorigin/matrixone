@@ -100,7 +100,9 @@ DROP TABLE t1;
 select IF(0,"ERROR","this"),IF(1,"is","ERROR"),IF(NULL,"ERROR","a"),IF(1,2,3)|0,IF(1,2.0,3.0)+0 ;
 invalid argument function if, bad value [ANY VARCHAR VARCHAR]
 CREATE TABLE t1 (st varchar(255) NOT NULL, u int(11) NOT NULL);
+
 INSERT INTO t1 VALUES ('a',1),('A',1),('aa',1),('AA',1),('a',1),('aaa',0),('BBB',0);
+
 select if(1,st,st) s from t1 order by s;
 s
 A
@@ -126,6 +128,7 @@ a
 aa
 aaa
 drop table t1;
+
 create table t1 (num  double(12,2));
 insert into t1 values (144.54);
 select sum(if(num is null,0.00,num)) from t1;
@@ -184,10 +187,13 @@ SELECT * FROM (SELECT MAX(IF(1, CAST(c AS UNSIGNED), 0)) FROM t1) AS te;
 Data truncation: data out of range: data type int64, value '12345678901234567890'
 DROP TABLE t1;
 CREATE TABLE t1 (a int, b DOUBLE);
+
 INSERT INTO t1 VALUES (NULL, 0), (NULL, 1);
+
 SELECT IF(b, (SELECT a FROM t1 LIMIT 1), b) c FROM t1 GROUP BY c;
 subquery in GROUP BY clause is not yet implemented
 DROP TABLE t1;
+
 SELECT if(0, (SELECT min('hello')), NULL);
 if(0, (select min(hello)), null)
 null

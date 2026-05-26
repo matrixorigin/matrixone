@@ -63,24 +63,24 @@ null
 30
 (select a from t1) union all (select col1 from t2 order by col1);
 a
+null
+2022-01-01
+2022-01-01
+2022-01-01
 30
 20
 10
 null
-null
-2022-01-01
-2022-01-01
-2022-01-01
 (select a from t1 order by a) union all (select col1 from t2 order by col1);
 a
 null
+2022-01-01
+2022-01-01
+2022-01-01
+null
 10
 20
 30
-null
-2022-01-01
-2022-01-01
-2022-01-01
 (select a from t1 union all select col1 from t2) order by col1;
 invalid input: column col1 does not exist
 (select a from t1 union select col2 from t2) order by a;
@@ -94,32 +94,32 @@ null
 invalid input: column col2 does not exist
 select a from t1 union select col2 from t2;
 a
+null
+2022-01-01 00:00:00
 30
 20
 10
-null
-2022-01-01 00:00:00
 (select a from t1 order by a) union select col2 from t2;
 a
 null
-2022-01-01 00:00:00
 10
 20
 30
+2022-01-01 00:00:00
 (select a from t1) union (select col2 from t2 order by col2);
 a
+null
+2022-01-01 00:00:00
 30
 20
 10
-null
-2022-01-01 00:00:00
 (select a from t1 order by a) union (select col2 from t2 order by col2);
 a
 null
-2022-01-01 00:00:00
 10
 20
 30
+2022-01-01 00:00:00
 (select a from t1 union select col2 from t2) order by col2;
 invalid input: column col2 does not exist
 drop table t1;
@@ -163,24 +163,24 @@ a
 -10.0
 select a from t3 union select col2 from t4;
 a
+20.0
+10.0
+30.0
+-10.0
 65535.0
 0.0
 100.0
 35.0
+select a from t3 union select col3 from t4;
+a
 20.0
 10.0
 30.0
 -10.0
-select a from t3 union select col3 from t4;
-a
 127.0
 1.0
 0.0
 127.44
-20.0
-10.0
-30.0
--10.0
 select a from t3 union select col4 from t4;
 a
 1
@@ -217,14 +217,14 @@ dd
 15
 select a from t5 union select col2 from t6;
 a
-11
-22
-33
-44
 12
 20
 18
 15
+11
+22
+33
+44
 select b from t5 union select col1 from t6;
 b
 aa
@@ -276,9 +276,9 @@ a    b
 2    b
 select * from (select * from t7 union select * from t7 where a > 1) a;
 a    b
-1    a
 2    b
 3    c
+1    a
 select * from (select * from t7 union all select * from t7 where a > 1) a;
 a    b
 2    b
@@ -355,8 +355,8 @@ select * from t8 union distinct select * from t9 union all select * from t10;
 a
 3
 3
-2
 1
+2
 select * from t8 union distinct select * from t9 union distinct select * from t10;
 a
 3
@@ -373,14 +373,14 @@ a
 1
 select * from t8 union select * from t9 minus select * from t10;
 a
-2
 1
+2
 (select * from t8 union select * from t9) intersect select * from t10;
 a
 (select * from t8 union select * from t9) minus select * from t10;
 a
-2
 1
+2
 drop table t8;
 drop table t9;
 drop table t10;
@@ -404,8 +404,8 @@ a-4
 a
 select 'a' union select concat('a', -4.5);
 a
-a
 a-4.5
+a
 select 'a' union select concat('a', -(4 + 1));
 a
 a-5
@@ -461,8 +461,8 @@ Mic-6
 Mic-5
 SELECT LOCATION FROM t12 WHERE EVENT_ID=2 UNION ALL  SELECT LOCATION FROM t12 WHERE EVENT_ID=3;
 LOCATION
-Mic-5
 Mic-6
+Mic-5
 drop table t12;
 drop table if exists t13;
 create table t13 (a int primary key);
@@ -500,8 +500,8 @@ INSERT INTO t14 (pseudo,pseudo1,same) VALUES
 ('joce', 'testtt', 1),('joce', 'tsestset', 1),('dekad', 'joce', 1);
 SELECT pseudo FROM t14 WHERE pseudo1='joce' UNION SELECT pseudo FROM t14 WHERE pseudo='joce';
 pseudo
-joce
 dekad
+joce
 SELECT pseudo1 FROM t14 WHERE pseudo1='joce' UNION SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 pseudo1
 joce
