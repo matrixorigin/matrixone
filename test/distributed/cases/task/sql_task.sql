@@ -47,6 +47,7 @@ select count(*) from manual_events;
 alter task sql_task_cron set schedule '0 0 0 1 1 *' timezone 'UTC';
 execute task sql_task_cron;
 select count(*) from scheduled_events;
+select sleep(1);
 select status from mo_task.sql_task_run where task_name = 'sql_task_cron' and trigger_type = 'MANUAL' order by run_id desc limit 1;
 
 execute task sql_task_manual;
@@ -61,6 +62,7 @@ alter task sql_task_cron suspend;
 alter task sql_task_cron resume;
 execute task sql_task_cron;
 select count(*) from scheduled_events;
+select sleep(1);
 select status from mo_task.sql_task_run where task_name = 'sql_task_cron' order by run_id desc limit 2;
 
 create task sql_task_gate when (exists(select 1 from gate_source where id = 1)) as begin insert into gate_sink select 'gate-ok' where not exists (select 1 from gate_sink where tag = 'gate-ok'); end;
