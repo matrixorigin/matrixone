@@ -365,6 +365,7 @@ func TestAddUpdateQuerySQLTaskRun(t *testing.T) {
 			run2 := newTestSQLTaskRun(1, "task-1", SQLTaskStatusFailed)
 			run2.TriggerType = SQLTaskTriggerManual
 			run2.AccountID = 2
+			run2.RunnerCN = "cn2"
 			mustAddTestSQLTaskRun(t, s, 2, run1, run2)
 
 			runs := mustGetTestSQLTaskRun(t, s, 2)
@@ -372,6 +373,7 @@ func TestAddUpdateQuerySQLTaskRun(t *testing.T) {
 			require.Equal(t, runs[0].RunID, latest[0].RunID)
 			mustGetTestSQLTaskRun(t, s, 1, WithTaskIDCond(EQ, 1), WithSQLTaskRunStatus(EQ, SQLTaskStatusRunning))
 			mustGetTestSQLTaskRun(t, s, 1, WithSQLTaskTriggerType(EQ, SQLTaskTriggerManual))
+			mustGetTestSQLTaskRun(t, s, 1, WithSQLTaskRunnerCond(EQ, "cn2"))
 			mustGetTestSQLTaskRun(t, s, 1, WithAccountID(EQ, 1))
 			mustGetTestSQLTaskRun(t, s, 1, WithAccountID(EQ, 2))
 

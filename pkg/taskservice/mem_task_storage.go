@@ -674,6 +674,10 @@ func (s *memTaskStorage) filterSQLTaskRun(c *conditions, run SQLTaskRun) bool {
 			if !cond.eval(run.TriggerType) {
 				return false
 			}
+		case CondSQLTaskRunner:
+			if !cond.eval(run.RunnerCN) {
+				return false
+			}
 		}
 	}
 	return true

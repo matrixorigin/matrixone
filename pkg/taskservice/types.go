@@ -399,6 +399,23 @@ func (c *sqlTaskTriggerTypeCond) sql() string {
 	return fmt.Sprintf("trigger_type %s '%s'", OpName[c.op], c.triggerType)
 }
 
+type sqlTaskRunnerCond struct {
+	op     Op
+	runner string
+}
+
+func (c *sqlTaskRunnerCond) eval(v any) bool {
+	runner, ok := v.(string)
+	if !ok {
+		return false
+	}
+	return compare(c.op, runner, c.runner)
+}
+
+func (c *sqlTaskRunnerCond) sql() string {
+	return fmt.Sprintf("runner_cn%s'%s'", OpName[c.op], c.runner)
+}
+
 func compare[T constraints.Ordered](op Op, a T, b T) bool {
 	switch op {
 	case EQ:
@@ -439,6 +456,7 @@ const (
 	CondSQLTaskRunID
 	CondSQLTaskRunStatus
 	CondSQLTaskTriggerType
+	CondSQLTaskRunner
 )
 
 var (
@@ -603,6 +621,12 @@ func WithSQLTaskRunStatus(op Op, value string) Condition {
 func WithSQLTaskTriggerType(op Op, value string) Condition {
 	return func(c *conditions) {
 		(*c)[CondSQLTaskTriggerType] = &sqlTaskTriggerTypeCond{op: op, triggerType: value}
+	}
+}
+
+func WithSQLTaskRunnerCond(op Op, value string) Condition {
+	return func(c *conditions) {
+		(*c)[CondSQLTaskRunner] = &sqlTaskRunnerCond{op: op, runner: value}
 	}
 }
 

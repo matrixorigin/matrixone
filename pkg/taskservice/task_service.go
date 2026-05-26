@@ -183,9 +183,8 @@ func (s *taskService) Complete(
 	taskRunner string,
 	value task.AsyncTask,
 	result task.ExecuteResult) error {
-	if err := s.completeFailedSQLTaskRun(ctx, taskRunner, value, result); err != nil {
-		return err
-	}
+	completeSQLTaskRun := value.Metadata.Executor == task.TaskCode_SQLTask &&
+		result.Code != task.ResultCode_Success
 
 	value.CompletedAt = time.Now().UnixMilli()
 	value.Status = task.TaskStatus_Completed
@@ -199,6 +198,9 @@ func (s *taskService) Complete(
 	}
 	if n == 0 {
 		return moerr.NewInvalidTask(ctx, value.TaskRunner, value.ID)
+	}
+	if completeSQLTaskRun {
+		return s.completeFailedSQLTaskRun(ctx, taskRunner, value, result)
 	}
 	return nil
 }
@@ -222,6 +224,7 @@ func (s *taskService) completeFailedSQLTaskRun(
 		WithTaskIDCond(EQ, spec.TaskId),
 		WithAccountID(EQ, spec.AccountId),
 		WithSQLTaskRunStatus(EQ, SQLTaskStatusRunning),
+		WithSQLTaskRunnerCond(EQ, taskRunner),
 	)
 	if err != nil {
 		return err
@@ -240,10 +243,11 @@ func (s *taskService) completeFailedSQLTaskRun(
 		}
 		run.ErrorCode = int(result.Code)
 		run.ErrorMessage = errMsg
-		if run.RunnerCN == "" {
-			run.RunnerCN = taskRunner
-		}
-		if _, err := s.store.CompleteSQLTaskRun(ctx, run); err != nil {
+		if _, err := s.store.UpdateSQLTaskRun(ctx,
+			[]SQLTaskRun{run},
+			WithSQLTaskRunIDCond(EQ, run.RunID),
+			WithSQLTaskRunStatus(EQ, SQLTaskStatusRunning),
+			WithSQLTaskRunnerCond(EQ, taskRunner)); err != nil {
 			return err
 		}
 	}
