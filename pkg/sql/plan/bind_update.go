@@ -163,11 +163,24 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 
+	// Merge target table list with PostgreSQL-style FROM sources so that the
+	// inner SELECT can resolve column references against both, while dmlCtx
+	// still tracks only the target tables. buildFrom requires a single
+	// TableExpr, so cross-join target and the FROM-clause join tree here.
+	selectFromTables := stmt.Tables
+	if stmt.From != nil && len(stmt.From.Tables) > 0 {
+		joined := tree.TableExpr(stmt.Tables[0])
+		for _, src := range stmt.From.Tables {
+			joined = &tree.JoinTableExpr{Left: joined, Right: src, JoinType: tree.JOIN_TYPE_CROSS}
+		}
+		selectFromTables = tree.TableExprs{joined}
+	}
+
 	selectAst := &tree.Select{
 		Select: &tree.SelectClause{
 			Exprs: selectList,
 			From: &tree.From{
-				Tables: stmt.Tables,
+				Tables: selectFromTables,
 			},
 			Where: stmt.Where,
 		},

@@ -92,6 +92,12 @@ const (
 	FPPauseDaemonTask
 	FPCancelDaemonTask
 	FPResumeDaemonTask
+	FPCreateSQLTask
+	FPAlterSQLTask
+	FPDropSQLTask
+	FPExecuteSQLTask
+	FPShowSQLTasks
+	FPShowSQLTaskRuns
 	FPDropConnector
 	FPShowConnectors
 	FPDeallocate
@@ -1387,7 +1393,21 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	if ses.sesSysVars == nil {
 		return gSysVarsDefs[name].Default, nil
 	}
-	return ses.sesSysVars.Get(name), nil
+	// sesSysVars is a clone of gSysVars (the per-account catalog
+	// snapshot from mo_mysql_compatibility_mode). Sysvars added to
+	// gSysVarsDefs after that snapshot — or never explicitly SET
+	// GLOBAL — are absent from the per-session map; SystemVariables.Get
+	// returns interface{}(nil) on map miss. Falling back to the
+	// registered Default matches MySQL `SELECT @@name` semantics
+	// (session value > global default, never nil for a registered
+	// name) and fixes downstream consumers like sub-Compiles spawned
+	// by CREATE TABLE CLONE that would otherwise see nil for
+	// vector-index sysvars (ivf_threads_build, kmeans_train_percent,
+	// …) and trip BuildIdxcronMetadata or similar nil-rejecting paths.
+	if v := ses.sesSysVars.Get(name); v != nil {
+		return v, nil
+	}
+	return gSysVarsDefs[name].Default, nil
 }
 
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {

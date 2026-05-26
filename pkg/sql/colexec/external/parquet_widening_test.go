@@ -123,13 +123,14 @@ func TestParquet_WideningConversion_UInt32ToUInt64(t *testing.T) {
 
 	// Test 1: Plain encoding UINT32 → UINT64
 	{
-		st := parquet.Int32Type
+		node := parquet.Uint(32)
+		st := node.Type()
 		// Test with various uint32 values including max
 		values := []uint32{0, 1, 100, 1000, math.MaxUint32, math.MaxUint32 - 1}
 		page := st.NewPage(0, len(values), encoding.Uint32Values(values))
 
 		var buf bytes.Buffer
-		schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Leaf(st)})
+		schema := parquet.NewSchema("x", parquet.Group{"c": node})
 		w := parquet.NewWriter(&buf, schema)
 		vals := make([]parquet.Value, page.NumRows())
 		_, _ = page.Values().ReadValues(vals)
@@ -156,13 +157,13 @@ func TestParquet_WideningConversion_UInt32ToUInt64(t *testing.T) {
 
 	// Test 2: Dictionary encoding UINT32 → UINT64
 	{
-		node := parquet.Encoded(parquet.Leaf(parquet.Int32Type), &parquet.RLEDictionary)
+		node := parquet.Encoded(parquet.Uint(32), &parquet.RLEDictionary)
 		vals := []parquet.Value{
-			parquet.Int32Value(100),
-			parquet.Int32Value(200),
-			parquet.Int32Value(100),
-			parquet.Int32Value(-1), // Will be interpreted as MaxUint32 (4294967295) when read as uint32
-			parquet.Int32Value(200),
+			parquet.ValueOf(uint32(100)),
+			parquet.ValueOf(uint32(200)),
+			parquet.ValueOf(uint32(100)),
+			parquet.ValueOf(uint32(math.MaxUint32)),
+			parquet.ValueOf(uint32(200)),
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
@@ -178,12 +179,13 @@ func TestParquet_WideningConversion_UInt32ToUInt64(t *testing.T) {
 
 	// Test 3: Direct mapping UINT64 → UINT64 still works (backward compatibility)
 	{
-		st := parquet.Int64Type
+		node := parquet.Uint(64)
+		st := node.Type()
 		values := []uint64{0, 1000, 10000, math.MaxUint32 + 1, math.MaxUint64 - 1}
 		page := st.NewPage(0, len(values), encoding.Uint64Values(values))
 
 		var buf bytes.Buffer
-		schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Leaf(st)})
+		schema := parquet.NewSchema("x", parquet.Group{"c": node})
 		w := parquet.NewWriter(&buf, schema)
 		vals := make([]parquet.Value, page.NumRows())
 		_, _ = page.Values().ReadValues(vals)
@@ -292,7 +294,8 @@ func TestParquet_WideningConversion_ExtremeValues(t *testing.T) {
 
 	// UINT32 extreme values → UINT64
 	{
-		st := parquet.Int32Type
+		node := parquet.Uint(32)
+		st := node.Type()
 		values := []uint32{
 			math.MaxUint32,
 			math.MaxUint32 - 1,
@@ -303,7 +306,7 @@ func TestParquet_WideningConversion_ExtremeValues(t *testing.T) {
 		page := st.NewPage(0, len(values), encoding.Uint32Values(values))
 
 		var buf bytes.Buffer
-		schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Leaf(st)})
+		schema := parquet.NewSchema("x", parquet.Group{"c": node})
 		w := parquet.NewWriter(&buf, schema)
 		vals := make([]parquet.Value, page.NumRows())
 		_, _ = page.Values().ReadValues(vals)
@@ -366,12 +369,13 @@ func TestParquet_WideningConversion_BackwardCompatibility(t *testing.T) {
 
 	// UINT32 → UINT32 still works
 	{
-		st := parquet.Int32Type
+		node := parquet.Uint(32)
+		st := node.Type()
 		values := []uint32{1, 2, 3}
 		page := st.NewPage(0, len(values), encoding.Uint32Values(values))
 
 		var buf bytes.Buffer
-		schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Leaf(st)})
+		schema := parquet.NewSchema("x", parquet.Group{"c": node})
 		w := parquet.NewWriter(&buf, schema)
 		vals := make([]parquet.Value, page.NumRows())
 		_, _ = page.Values().ReadValues(vals)
