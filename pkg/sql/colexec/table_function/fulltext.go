@@ -784,7 +784,7 @@ func fulltextIndexMatch(
 
 	if u.sacc == nil {
 		// parse the search string to []Pattern and create SearchAccum
-		s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, "", scoreAlgo)
+		s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, string(tableFunction.Params), scoreAlgo)
 		if err != nil {
 			return err
 		}

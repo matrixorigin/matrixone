@@ -396,3 +396,76 @@ func TestUnionSelsByBatch(t *testing.T) {
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
+
+// TestDedupJoinFinalizeMatchedZero_DuplicateBuildPos guards the matched==0
+// fast path against aliased projections. constructDedupJoin copies
+// node.ProjectList into ap.Result without dedup, and the REPLACE planner can
+// alias multiple projections onto the same build column, so a non-capture
+// build position may appear in ap.Result more than once. Ownership transfer
+// (steal the build vector, nil it out) is only valid for positions referenced
+// exactly once; a naive transfer leaves the second reference reading a nil
+// vector, corrupting the output / panicking downstream. Here build payload
+// pos 1 is projected twice and must yield identical, fully-populated columns.
+func TestDedupJoinFinalizeMatchedZero_DuplicateBuildPos(t *testing.T) {
+	proc, ctrl := newCaptureTestProc(t)
+	defer ctrl.Finish()
+
+	int32Typ := types.T_int32.ToType()
+	tag++
+	curTag := tag
+
+	// Build keys [10,20,30] with payload col [100,200,300].
+	buildBat := makeInt32Batch(proc.Mp(), [][]int32{{10, 20, 30}, {100, 200, 300}}, nil)
+	// Probe key [99] misses every build bucket → matched stays at 0.
+	probeBat := makeInt32Batch(proc.Mp(), [][]int32{{99}, {0}}, nil)
+
+	conditions := [][]*plan.Expr{
+		{newExpr(0, int32Typ)},
+		{newExpr(0, int32Typ)},
+	}
+
+	dedupArg := &DedupJoin{
+		LeftTypes:  []types.Type{int32Typ, int32Typ},
+		RightTypes: []types.Type{int32Typ, int32Typ},
+		Conditions: conditions,
+		Result: []colexec.ResultPos{
+			colexec.NewResultPos(1, 0), // build key
+			colexec.NewResultPos(1, 1), // build payload
+			colexec.NewResultPos(1, 1), // SAME build payload — aliased projection
+		},
+		OnDuplicateAction: plan.Node_FAIL, // no capture, no matched marking
+		JoinMapTag:        curTag,
+		OperatorBase:      vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	buildArg := &hashbuild.HashBuild{
+		NeedHashMap:   true,
+		NeedBatches:   true,
+		Conditions:    conditions[1],
+		IsDedup:       true,
+		DelColIdx:     -1,
+		JoinMapTag:    curTag,
+		JoinMapRefCnt: 1,
+		OperatorBase:  vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+
+	out := runFinalizeFixture(t, dedupArg, buildArg, proc, buildBat, probeBat)
+	require.Len(t, out, 1)
+	require.Equal(t, 3, out[0].RowCount())
+	require.Equal(t, 3, len(out[0].Vecs))
+
+	col0 := vector.MustFixedColNoTypeCheck[int32](out[0].Vecs[0])
+	col1 := vector.MustFixedColNoTypeCheck[int32](out[0].Vecs[1])
+	col2 := vector.MustFixedColNoTypeCheck[int32](out[0].Vecs[2])
+	require.Equal(t, []int32{10, 20, 30}, col0)
+	// Both projections of build pos 1 must be fully populated and identical;
+	// before the fix col2 would be nil (the vector was stolen by col1).
+	require.Equal(t, []int32{100, 200, 300}, col1)
+	require.Equal(t, []int32{100, 200, 300}, col2)
+
+	dedupArg.Reset(proc, false, nil)
+	buildArg.Reset(proc, false, nil)
+	dedupArg.Free(proc, false, nil)
+	buildArg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}

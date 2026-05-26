@@ -117,6 +117,42 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
+	case *tree.CreateSQLTask:
+		ses.EnterFPrint(FPCreateSQLTask)
+		defer ses.ExitFPrint(FPCreateSQLTask)
+		if err = handleCreateSQLTask(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.AlterSQLTask:
+		ses.EnterFPrint(FPAlterSQLTask)
+		defer ses.ExitFPrint(FPAlterSQLTask)
+		if err = handleAlterSQLTask(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.DropSQLTask:
+		ses.EnterFPrint(FPDropSQLTask)
+		defer ses.ExitFPrint(FPDropSQLTask)
+		if err = handleDropSQLTask(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ExecuteSQLTask:
+		ses.EnterFPrint(FPExecuteSQLTask)
+		defer ses.ExitFPrint(FPExecuteSQLTask)
+		if err = handleExecuteSQLTask(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowSQLTasks:
+		ses.EnterFPrint(FPShowSQLTasks)
+		defer ses.ExitFPrint(FPShowSQLTasks)
+		if err = handleShowSQLTasks(execCtx.reqCtx, ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.ShowSQLTaskRuns:
+		ses.EnterFPrint(FPShowSQLTaskRuns)
+		defer ses.ExitFPrint(FPShowSQLTaskRuns)
+		if err = handleShowSQLTaskRuns(execCtx.reqCtx, ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.DropConnector:
 		ses.EnterFPrint(FPDropConnector)
 		defer ses.ExitFPrint(FPDropConnector)
@@ -492,9 +528,11 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		defer ses.ExitFPrint(FPSetTransaction)
 		//TODO: handle set transaction
 	case *tree.LockTableStmt:
-
+		ses.hasLockedTables.Store(true)
 	case *tree.UnLockTableStmt:
-
+		if ses.hasLockedTables.Swap(false) {
+			execCtx.txnOpt.byCommit = true
+		}
 	case *tree.BackupStart:
 		ses.EnterFPrint(FPBackupStart)
 		defer ses.ExitFPrint(FPBackupStart)

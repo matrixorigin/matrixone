@@ -146,10 +146,13 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.RuntimeFilterSpec = t.RuntimeFilterSpec
 		op.SpillThreshold = t.SpillThreshold
 		op.IsDedup = t.IsDedup
+		op.DedupBuildKeepLast = t.DedupBuildKeepLast
 		op.OnDuplicateAction = t.OnDuplicateAction
 		op.DedupColTypes = t.DedupColTypes
 		op.DedupColName = t.DedupColName
 		op.DelColIdx = t.DelColIdx
+		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
+		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
 		return op
 
 	case vm.Group:
@@ -566,11 +569,14 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
 		op.OnDuplicateAction = t.OnDuplicateAction
+		op.DedupBuildKeepLast = t.DedupBuildKeepLast
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.DelColIdx = t.DelColIdx
+		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
+		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
 		op.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
 		op.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
 		return op
@@ -821,11 +827,13 @@ func constructMultiUpdate(
 		}
 
 		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
-			ObjRef:        updateCtx.ObjRef,
-			TableDef:      updateCtx.TableDef,
-			InsertCols:    insertCols,
-			DeleteCols:    deleteCols,
-			PartitionCols: partitionCols,
+			ObjRef:             updateCtx.ObjRef,
+			TableDef:           updateCtx.TableDef,
+			InsertCols:         insertCols,
+			DeleteCols:         deleteCols,
+			PartitionCols:      partitionCols,
+			SkipInsertOnNullPk: updateCtx.SkipInsertOnNullPk,
+			InsertPkColIdx:     int(updateCtx.InsertPkColIdx),
 		}
 	}
 	arg.Action = action
@@ -1005,11 +1013,17 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 	arg.DedupColName = node.DedupColName
 	arg.DedupColTypes = node.DedupColTypes
 	arg.DelColIdx = -1
+	arg.DedupDeleteMarkerColIdx = -1
 	if node.DedupJoinCtx != nil {
+		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
 		if node.OnDuplicateAction == plan.Node_FAIL && len(node.DedupJoinCtx.OldColList) > 0 {
 			arg.DelColIdx = node.DedupJoinCtx.OldColList[0].ColPos
+			if len(node.DedupJoinCtx.OldColList) > 1 {
+				arg.DedupDeleteMarkerColIdx = node.DedupJoinCtx.OldColList[1].ColPos
+				arg.DedupDeleteKeepColIdxList = dedupDeleteKeepColIdxList(node)
+			}
 		}
 		if len(node.DedupJoinCtx.OldColCaptureList) > 0 {
 			arg.OldColCapturePlaceholderIdxList = make([]int32, len(node.DedupJoinCtx.OldColCaptureList))
@@ -1030,6 +1044,23 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		panic("wrong joinmap tag!")
 	}
 	return arg
+}
+
+func dedupDeleteKeepColIdxList(node *plan.Node) []int32 {
+	if node.DedupJoinCtx == nil {
+		return nil
+	}
+
+	seen := make(map[int32]struct{}, len(node.DedupJoinCtx.OldColList))
+	keepCols := make([]int32, 0, len(node.DedupJoinCtx.OldColList))
+	for _, col := range node.DedupJoinCtx.OldColList {
+		if _, ok := seen[col.ColPos]; ok {
+			continue
+		}
+		seen[col.ColPos] = struct{}{}
+		keepCols = append(keepCols, col.ColPos)
+	}
+	return keepCols
 }
 
 func constructRightDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, proc *process.Process) *rightdedupjoin.RightDedupJoin {
@@ -1648,10 +1679,13 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
 		ret.IsDedup = true
+		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
 		ret.DelColIdx = arg.DelColIdx
+		ret.DedupDeleteMarkerColIdx = arg.DedupDeleteMarkerColIdx
+		ret.DedupDeleteKeepColIdxList = arg.DedupDeleteKeepColIdxList
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
@@ -1722,10 +1756,13 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
 		ret.IsDedup = true
+		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
 		ret.DelColIdx = arg.DelColIdx
+		ret.DedupDeleteMarkerColIdx = arg.DedupDeleteMarkerColIdx
+		ret.DedupDeleteKeepColIdxList = arg.DedupDeleteKeepColIdxList
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}

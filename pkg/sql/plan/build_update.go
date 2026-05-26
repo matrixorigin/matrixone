@@ -191,8 +191,19 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 }
 
 func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableInfo *dmlTableInfo) (int32, []*dmlPlanCtx, error) {
+	// Merge target table list with PostgreSQL-style FROM sources so that the
+	// inner SELECT can resolve column references against both. tableInfo only
+	// tracks targets, so FROM-clause tables remain read-only join sources.
+	selectFromTables := stmt.Tables
+	if stmt.From != nil && len(stmt.From.Tables) > 0 {
+		joined := tree.TableExpr(stmt.Tables[0])
+		for _, src := range stmt.From.Tables {
+			joined = &tree.JoinTableExpr{Left: joined, Right: src, JoinType: tree.JOIN_TYPE_CROSS}
+		}
+		selectFromTables = tree.TableExprs{joined}
+	}
 	fromTables := &tree.From{
-		Tables: stmt.Tables,
+		Tables: selectFromTables,
 	}
 	var err error
 	var selectList []tree.SelectExpr
@@ -267,18 +278,6 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		upPlanCtx.checkInsertPkDup = true
 		upPlanCtx.updatePkCol = updatePkCol
 
-		for idx, col := range tableDef.Cols {
-			// row_id、compPrimaryKey、clusterByKey will not inserted from old data
-			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
-				continue
-			}
-			if offset, ok := updateColPosMap[col.Name]; ok {
-				upPlanCtx.insertColPos = append(upPlanCtx.insertColPos, offset)
-			} else {
-				upPlanCtx.insertColPos = append(upPlanCtx.insertColPos, idx)
-			}
-		}
-
 		updatePlanCtxs[i] = upPlanCtx
 	}
 
@@ -294,14 +293,76 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		With:    stmt.With,
 	}
 
-	//ftCtx := tree.NewFmtCtx(dialect.MYSQL)
-	//selectAst.Format(ftCtx)
-	//sql := ftCtx.String()
-	//fmt.Print(sql)
 	lastNodeId, err := builder.bindSelect(selectAst, bindCtx, false)
 	if err != nil {
 		return -1, nil, err
 	}
+
+	// Recompute generated columns after binding so the values are based on the
+	// post-update base columns. Mirrors the main bind_update.go path; without
+	// this, fallback (FK targets etc.) would leave stored generated columns
+	// holding stale values. Must run BEFORE insertColPos is constructed so the
+	// new ProjectList positions are reflected.
+	selectNode := builder.qry.Nodes[lastNodeId]
+	tableBase := int32(0)
+	for i := range aliasList {
+		tableDef := tableInfo.tableDefs[i]
+		upPlanCtx := updatePlanCtxs[i]
+		hasGenerated := false
+		for _, col := range tableDef.Cols {
+			if col.GeneratedCol != nil {
+				hasGenerated = true
+				break
+			}
+		}
+		if hasGenerated {
+			// Per-target lookup: colIdx → ProjectList Expr that holds the
+			// post-update value of that base column.
+			baseLookup := make([]*plan.Expr, len(tableDef.Cols))
+			for ci, col := range tableDef.Cols {
+				if newOff, ok := upPlanCtx.updateColPosMap[col.Name]; ok {
+					baseLookup[ci] = selectNode.ProjectList[tableBase+int32(newOff)]
+				} else {
+					baseLookup[ci] = selectNode.ProjectList[tableBase+int32(ci)]
+				}
+			}
+			for _, col := range tableDef.Cols {
+				if col.GeneratedCol == nil {
+					continue
+				}
+				if _, alreadySet := upPlanCtx.updateColPosMap[col.Name]; alreadySet {
+					// SET on a stored generated column was rejected earlier
+					// (or dropped for SET = DEFAULT); should not happen here.
+					continue
+				}
+				genExpr := substituteColRefsInExpr(col.GeneratedCol.Expr, baseLookup, 0)
+				newOffset := int32(len(selectNode.ProjectList)) - tableBase
+				selectNode.ProjectList = append(selectNode.ProjectList, genExpr)
+				upPlanCtx.updateColPosMap[col.Name] = int(newOffset)
+				upPlanCtx.updateColLength++
+			}
+		}
+		tableBase += int32(len(tableDef.Cols) + upPlanCtx.updateColLength)
+	}
+
+	// insertColPos may reference positions added by generated-column rewrite
+	// above, so build it now that updateColPosMap is final.
+	for i := range aliasList {
+		tableDef := tableInfo.tableDefs[i]
+		upPlanCtx := updatePlanCtxs[i]
+		for idx, col := range tableDef.Cols {
+			// row_id, compPrimaryKey, clusterByKey are not inserted from old data.
+			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+				continue
+			}
+			if offset, ok := upPlanCtx.updateColPosMap[col.Name]; ok {
+				upPlanCtx.insertColPos = append(upPlanCtx.insertColPos, offset)
+			} else {
+				upPlanCtx.insertColPos = append(upPlanCtx.insertColPos, idx)
+			}
+		}
+	}
+
 	return lastNodeId, updatePlanCtxs, nil
 }
 
