@@ -210,8 +210,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 				return nil, moerr.NewInvalidInputf(ctx,
 					"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
 			}
-			if option.Value != 0 {
-				copyTableDef.AutoIncrOffset = option.Value - 1
+			copyTableDef.AutoIncrOffset = uint64(0)
+			if option.Value > 0 {
+				copyTableDef.AutoIncrOffset = uint64(option.Value) - 1
 			}
 		case *tree.AlterTableOrderByColumnClause:
 			err = OrderByColumn(cctx, alterTablePlan, option, alterTableCtx)
