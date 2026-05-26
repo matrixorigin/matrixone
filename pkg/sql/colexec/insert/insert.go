@@ -52,7 +52,6 @@ type flushLimiter struct {
 var flushLimiterState = newFlushLimiter()
 var flushConcurrencyForAcquire = flushConcurrency
 var flushSemaphoreAcquireTimeout = 200 * time.Millisecond
-var flushBypassRetryInterval = 20 * time.Millisecond
 
 func newFlushLimiter() *flushLimiter {
 	return &flushLimiter{notify: make(chan struct{})}
@@ -398,8 +397,6 @@ func acquireFlushSlot(ctx context.Context) (func(), error) {
 	}
 
 retry:
-	ticker := time.NewTicker(flushBypassRetryInterval)
-	defer ticker.Stop()
 	for {
 		release, waitCh := flushLimiterState.tryAcquire()
 		if release != nil {
@@ -407,8 +404,6 @@ retry:
 		}
 		select {
 		case <-waitCh:
-		case <-ticker.C:
-			v2.TxnStatementInsertS3FlushBypassCounter.Add(1)
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
