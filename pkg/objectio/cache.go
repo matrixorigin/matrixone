@@ -18,7 +18,6 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -157,36 +156,6 @@ func EvictCache(ctx context.Context) (target int64) {
 	target = <-ch
 	logutil.Info("metadata cache forced evicted",
 		zap.Any("target", target),
-	)
-	return
-}
-
-func EvictCacheToCapacityPercent(ctx context.Context, percent int64) (used int64) {
-	if percent < 0 {
-		percent = 0
-	}
-	if percent > 100 {
-		percent = 100
-	}
-	capacity := metaCache.Capacity()
-	target := capacity * percent / 100
-	beforeUsed := metaCache.Used()
-	start := time.Now()
-	logutil.Info("metadata cache pressure evict begin",
-		zap.Int64("used-before", beforeUsed),
-		zap.Int64("capacity", capacity),
-		zap.Int64("target", target),
-		zap.Int64("target-percent", percent),
-	)
-	used = metaCache.EvictToTargetWithWait(ctx, target)
-	logutil.Info("metadata cache pressure evicted",
-		zap.Int64("used-before", beforeUsed),
-		zap.Int64("used-after", used),
-		zap.Int64("capacity", capacity),
-		zap.Int64("target", target),
-		zap.Int64("target-percent", percent),
-		zap.Duration("duration", time.Since(start)),
-		zap.Error(ctx.Err()),
 	)
 	return
 }

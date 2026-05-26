@@ -265,21 +265,6 @@ func (m *MemCache) Evict(ctx context.Context, done chan int64) {
 	m.cache.Evict(ctx, done)
 }
 
-func (m *MemCache) EvictToTarget(ctx context.Context, target int64) int64 {
-	return m.cache.EvictToTargetWithWait(ctx, target)
-}
-
-func (m *MemCache) EvictToCapacityPercent(ctx context.Context, percent int64) int64 {
-	if percent < 0 {
-		percent = 0
-	}
-	if percent > 100 {
-		percent = 100
-	}
-	target := m.cache.Capacity() * percent / 100
-	return m.EvictToTarget(ctx, target)
-}
-
 func (m *MemCache) Close(ctx context.Context) {
 	m.Flush(ctx)
 	allMemoryCaches.Delete(m)

@@ -1618,7 +1618,7 @@ func (p *PartitionState) countTombstoneStatsLinear(
 		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 			var release func()
 			if _, release, readErr = ioutil.ReadDeletes(
-				ctx, blk.MetaLoc[:], fs, cnCreated, persistedDeletes, nil, fileservice.GetFileServicePolicy(ctx),
+				ctx, blk.MetaLoc[:], fs, cnCreated, persistedDeletes, nil,
 			); readErr != nil {
 				return false
 			}
@@ -1717,7 +1717,7 @@ func (p *PartitionState) countTombstoneStatsWithMap(
 			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 				var release func()
 				if _, release, readErr = ioutil.ReadDeletes(
-					ctx, blk.MetaLoc[:], fs, cnCreated, persistedDeletes, nil, fileservice.GetFileServicePolicy(ctx),
+					ctx, blk.MetaLoc[:], fs, cnCreated, persistedDeletes, nil,
 				); readErr != nil {
 					return false
 				}
@@ -1850,7 +1850,7 @@ func (it *tombstoneBlockIterator) loadNextBlock() bool {
 
 	cnCreated := it.obj.GetCNCreated()
 	if _, it.release, it.err = ioutil.ReadDeletes(
-		it.ctx, blk.MetaLoc[:], it.fs, cnCreated, it.persistedDel, nil, fileservice.GetFileServicePolicy(it.ctx),
+		it.ctx, blk.MetaLoc[:], it.fs, cnCreated, it.persistedDel, nil,
 	); it.err != nil {
 		return false
 	}

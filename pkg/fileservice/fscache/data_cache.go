@@ -31,6 +31,4 @@ type DataCache interface {
 	DeletePaths(context.Context, []string)
 	Flush(ctx context.Context)
 	Evict(ctx context.Context, done chan int64)
-	EvictToTargetWithWait(ctx context.Context, target int64) int64
-	ForceEvictWithWait(ctx context.Context, n int64) int64
 }

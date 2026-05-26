@@ -108,7 +108,7 @@ func (d *DataCache) EnsureNBytes(ctx context.Context, want int) {
 	used := d.Used()
 	capacity := d.Capacity()
 	if used+int64(want) > capacity {
-		_ = d.fifo.EvictWithWait(ctx, int64(want))
+		d.fifo.EvictWithWait(ctx, int64(want))
 	} else {
 		d.fifo.Evict(ctx, nil, int64(want))
 	}
@@ -116,14 +116,6 @@ func (d *DataCache) EnsureNBytes(ctx context.Context, want int) {
 
 func (d *DataCache) Evict(ctx context.Context, ch chan int64) {
 	d.fifo.Evict(ctx, ch, 0)
-}
-
-func (d *DataCache) EvictToTargetWithWait(ctx context.Context, target int64) int64 {
-	return d.fifo.EvictToTargetWithWait(ctx, target)
-}
-
-func (d *DataCache) ForceEvictWithWait(ctx context.Context, n int64) int64 {
-	return d.fifo.ForceEvictWithWait(ctx, n)
 }
 
 func (d *DataCache) Flush(ctx context.Context) {

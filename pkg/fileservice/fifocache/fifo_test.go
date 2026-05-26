@@ -316,64 +316,6 @@ func TestEvictWithWaitReturnsWhenContextCanceled(t *testing.T) {
 	}
 }
 
-func TestEvictToTargetWithWaitReturnsActualUsedOnContextCancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	itemSize := int64(pressureEvictBatchBytes + 1)
-	var evicted atomic.Int32
-	cache := New(
-		fscache.ConstCapacity(3*itemSize),
-		ShardInt[int],
-		nil,
-		nil,
-		func(context.Context, int, int, int64, uint64) {
-			if evicted.Add(1) == 1 {
-				cancel()
-			}
-		},
-	)
-	cache.Set(context.Background(), 1, 1, itemSize)
-	cache.Set(context.Background(), 2, 2, itemSize)
-	cache.Set(context.Background(), 3, 3, itemSize)
-
-	used := cache.EvictToTargetWithWait(ctx, 0)
-
-	assert.Equal(t, int64(2*itemSize), used)
-	assert.Equal(t, used, cache.used())
-	assert.Equal(t, int32(1), evicted.Load())
-}
-
-func TestEvictToTargetWithWaitEvictsHotItemsAfterPromotion(t *testing.T) {
-	ctx := context.Background()
-	cache := New[int, int](fscache.ConstCapacity(3), ShardInt[int], nil, nil, nil)
-
-	cache.Set(ctx, 1, 1, 1)
-	cache.Set(ctx, 2, 2, 1)
-	cache.Set(ctx, 3, 3, 1)
-
-	_, ok := cache.Get(ctx, 1)
-	assert.True(t, ok)
-	_, ok = cache.Get(ctx, 1)
-	assert.True(t, ok)
-	_, ok = cache.Get(ctx, 2)
-	assert.True(t, ok)
-	_, ok = cache.Get(ctx, 2)
-	assert.True(t, ok)
-	_, ok = cache.Get(ctx, 3)
-	assert.True(t, ok)
-	_, ok = cache.Get(ctx, 3)
-	assert.True(t, ok)
-
-	used := cache.EvictToTargetWithWait(ctx, 0)
-
-	assert.Equal(t, int64(0), used)
-	assert.Equal(t, int64(0), cache.used())
-	assert.False(t, cache.Contains(1))
-	assert.False(t, cache.Contains(2))
-	assert.False(t, cache.Contains(3))
-}
-
 // TestPostEvictRunsOutsideQueueLock verifies that postEvict callbacks execute
 // outside the queueLock by attempting a concurrent Set() while a postEvict is
 // blocked. If postEvict ran under the lock, the concurrent Set would deadlock.

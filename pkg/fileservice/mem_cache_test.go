@@ -516,24 +516,3 @@ func TestMemoryCacheGlobalSizeHint(t *testing.T) {
 	}
 
 }
-
-func TestMemoryCacheEvictToCapacityPercent(t *testing.T) {
-	ctx := context.Background()
-	cache := NewMemCache(
-		fscache.ConstCapacity(10),
-		nil,
-		nil,
-		"test-target-evict",
-	)
-	defer cache.Close(ctx)
-
-	for i := 0; i < 10; i++ {
-		key := fscache.CacheKey{Path: fmt.Sprintf("key-%d", i), Offset: int64(i), Sz: 1}
-		assert.NoError(t, cache.cache.Set(ctx, key, staticTestData([]byte{byte(i)})))
-	}
-	assert.Equal(t, int64(10), cache.cache.Used())
-
-	ret := EvictMemoryCachesToCapacityPercent(ctx, 50)
-	assert.Equal(t, int64(5), ret["test-target-evict"])
-	assert.LessOrEqual(t, cache.cache.Used(), int64(5))
-}
