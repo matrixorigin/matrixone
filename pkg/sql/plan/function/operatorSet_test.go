@@ -724,6 +724,52 @@ func Test_CastSetFunctions(t *testing.T) {
 	}
 }
 
+func Test_CaseFn_Decimal256Execution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	d1, err := types.ParseDecimal256("111111111111111111111111111111111111111", 76, 0)
+	require.NoError(t, err)
+	d2, err := types.ParseDecimal256("999999999999999999999999999999999999999", 76, 0)
+	require.NoError(t, err)
+	retType := types.New(types.T_decimal256, 76, 0)
+	// CASE WHEN TRUE THEN d1 ELSE d2 → row0=d1; CASE WHEN FALSE THEN d1 ELSE d2 → row1=d2
+	tc := tcTemp{
+		info: "caseFn decimal256: CASE WHEN c THEN d1 ELSE d2",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
+			NewFunctionTestInput(retType, []types.Decimal256{d1, d1}, nil),
+			NewFunctionTestInput(retType, []types.Decimal256{d2, d2}, nil),
+		},
+		expect: NewFunctionTestResult(retType, false,
+			[]types.Decimal256{d1, d2}, nil),
+	}
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, caseFn)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, tc.info, info)
+}
+
+func Test_IffFn_Decimal256Execution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	d1, err := types.ParseDecimal256("123456789012345678901234567890123456789", 76, 0)
+	require.NoError(t, err)
+	d2, err := types.ParseDecimal256("987654321098765432109876543210987654321", 76, 0)
+	require.NoError(t, err)
+	retType := types.New(types.T_decimal256, 76, 0)
+	// IFF(TRUE, d1, d2) → d1; IFF(FALSE, d1, d2) → d2
+	tc := tcTemp{
+		info: "iffFn decimal256: IFF(c, d1, d2)",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
+			NewFunctionTestInput(retType, []types.Decimal256{d1, d1}, nil),
+			NewFunctionTestInput(retType, []types.Decimal256{d2, d2}, nil),
+		},
+		expect: NewFunctionTestResult(retType, false,
+			[]types.Decimal256{d1, d2}, nil),
+	}
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, iffFn)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, tc.info, info)
+}
+
 func Test_YearAndDecimal256_FuncTestcaseCompare(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

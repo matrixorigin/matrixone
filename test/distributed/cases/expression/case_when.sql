@@ -197,3 +197,29 @@ SELECT
   IFF('USD' = 'USD',
       CAST(-58140.00 AS DECIMAL(23,2)),
       7.01970 * CAST(-58140.00 AS DECIMAL(23,2))) AS bug_iff;
+
+-- @case
+-- @desc:test for case_when expression with decimal128 branches promoting to decimal256 result type
+-- @label:bvt
+SELECT
+  CASE WHEN 1 = 1
+       THEN CAST(1 AS DECIMAL(38,0))
+       ELSE CAST(0 AS DECIMAL(38,20))
+  END AS case_decimal256_then;
+SELECT
+  CASE WHEN 1 = 2
+       THEN CAST(1 AS DECIMAL(38,0))
+       ELSE CAST(0 AS DECIMAL(38,20))
+  END AS case_decimal256_else;
+
+-- @case
+-- @desc:test for iff expression with decimal128 branches promoting to decimal256 result type
+-- @label:bvt
+SELECT
+  IFF(1 = 1,
+      CAST(1 AS DECIMAL(38,0)),
+      CAST(0 AS DECIMAL(38,20))) AS iff_decimal256_true;
+SELECT
+  IFF(1 = 2,
+      CAST(1 AS DECIMAL(38,0)),
+      CAST(0 AS DECIMAL(38,20))) AS iff_decimal256_false;

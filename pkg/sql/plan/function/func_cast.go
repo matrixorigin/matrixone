@@ -265,7 +265,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_float32, types.T_float64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_datalink,
@@ -1642,6 +1642,9 @@ func decimal128ToOthers(ctx context.Context,
 			return nil
 		}
 		return decimal128ToDecimal128(source, rs, length, selectList)
+	case types.T_decimal256:
+		rs := vector.MustFunctionResult[types.Decimal256](result)
+		return decimal128ToDecimal256(source, rs, length)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		return decimal128ToFloat(ctx, source, rs, length, 32)
@@ -4515,6 +4518,32 @@ func decimal128ToDecimal128(
 					return err
 				}
 			}
+		}
+	}
+	return nil
+}
+
+func decimal128ToDecimal256(
+	from vector.FunctionParameterWrapper[types.Decimal128],
+	to *vector.FunctionResult[types.Decimal256], length int) error {
+	var dft types.Decimal256
+	fromType := from.GetType()
+	toType := to.GetType()
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v256 := types.Decimal256FromDecimal128(v)
+		result, err := v256.Scale(toType.Scale - fromType.Scale)
+		if err != nil {
+			return err
+		}
+		if err = to.Append(result, false); err != nil {
+			return err
 		}
 	}
 	return nil
