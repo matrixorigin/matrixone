@@ -1510,6 +1510,9 @@ select avg(score) over (order by name range between unbounded preceding and curr
 
 drop database test_issue_23940;
 -- test cume_dist
+drop database if exists test_cume_dist;
+create database test_cume_dist;
+use test_cume_dist;
 drop table if exists t1;
 create table t1 (a int, b int);
 insert into t1 values(1, 1), (1, 2), (2, 1), (2, 2), (2, 3);
@@ -1608,3 +1611,4 @@ select a, b, cume_dist() over (order by b) from t10;
 select a, b, cume_dist() over (partition by a order by b) from t10;
 drop table t10;
 
+drop database if exists test_cume_dist;
