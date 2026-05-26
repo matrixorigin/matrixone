@@ -257,13 +257,15 @@ func (testTS *testTaskService) HeartbeatDaemonTask(ctx context.Context, task tas
 }
 
 func (testTS *testTaskService) StartScheduleCronTask() {
-	//TODO implement me
-	panic("implement me")
+}
+
+func (testTS *testTaskService) StartScheduleSQLTask() {
 }
 
 func (testTS *testTaskService) StopScheduleCronTask() {
-	//TODO implement me
-	panic("implement me")
+}
+
+func (testTS *testTaskService) StopScheduleSQLTask() {
 }
 
 func (testTS *testTaskService) TruncateCompletedTasks(ctx context.Context) error {
