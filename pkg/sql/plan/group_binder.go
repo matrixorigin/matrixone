@@ -16,6 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -32,6 +33,20 @@ func NewGroupBinder(builder *QueryBuilder, ctx *BindContext, selectList tree.Sel
 	return b
 }
 
+func makeExecutableGroupByNullExpr() *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: true,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_bool),
+			NotNullable: false,
+		},
+	}
+}
+
 func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if isRoot {
 		if numVal, ok := astExpr.(*tree.NumVal); ok {
@@ -44,6 +59,11 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 
 				astExpr = b.selectList[colPos-1].Expr
 
+			case tree.Unknown:
+				if numVal.ValType != tree.P_null {
+					return nil, moerr.NewSyntaxError(b.GetContext(), "non-integer constant in GROUP BY")
+				}
+
 			default:
 				return nil, moerr.NewSyntaxError(b.GetContext(), "non-integer constant in GROUP BY")
 			}
@@ -54,9 +74,8 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	if err != nil {
 		return nil, err
 	}
-
 	if isNullExpr(expr) {
-		return nil, moerr.NewInternalErrorNoCtx("Invalid GROUP BY NULL")
+		expr = makeExecutableGroupByNullExpr()
 	}
 
 	if isRoot && !b.ctx.isGroupingSet {
