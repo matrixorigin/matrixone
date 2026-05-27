@@ -1,0 +1,171 @@
+-- @suit
+
+-- @case
+-- @desc:test for PostgreSQL-style UPDATE ... SET ... FROM ... WHERE ...
+-- @label:bvt
+
+DROP TABLE IF EXISTS company;
+DROP TABLE IF EXISTS vec_join_case;
+
+CREATE TABLE company (
+    id INT PRIMARY KEY,
+    province VARCHAR(50)
+);
+INSERT INTO company VALUES (101, 'BJ'), (102, 'SH'), (103, 'GZ');
+
+CREATE TABLE vec_join_case (
+    id INT PRIMARY KEY,
+    embedding VECF32(4),
+    company_id INT,
+    remark VARCHAR(100)
+);
+INSERT INTO vec_join_case VALUES
+(10, '[0.1,0.2,0.3,0.4]', 101, 'init'),
+(20, '[0.3,0.1,0.4,0.2]', 102, 'init'),
+(30, '[0.5,0.6,0.4,0.3]', 103, 'init');
+
+-- Basic PostgreSQL-style UPDATE ... FROM with vector distance predicate.
+UPDATE vec_join_case t
+SET remark = CONCAT('hot-', c.province)
+FROM company c
+WHERE c.id = t.company_id
+  AND l2_distance(embedding, '[0.2,0.2,0.3,0.3]') < 0.35;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+
+-- Reset and try without aliases.
+UPDATE vec_join_case SET remark = 'init';
+UPDATE vec_join_case
+SET remark = company.province
+FROM company
+WHERE company.id = vec_join_case.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+
+-- Multiple tables in the FROM clause.
+DROP TABLE IF EXISTS region;
+CREATE TABLE region (id INT PRIMARY KEY, name VARCHAR(20));
+INSERT INTO region VALUES (1, 'east'), (2, 'south');
+ALTER TABLE company ADD COLUMN region_id INT;
+UPDATE company SET region_id = 1 WHERE id = 101;
+UPDATE company SET region_id = 1 WHERE id = 102;
+UPDATE company SET region_id = 2 WHERE id = 103;
+
+UPDATE vec_join_case t
+SET remark = r.name
+FROM company c, region r
+WHERE c.id = t.company_id AND c.region_id = r.id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+
+-- WITH ... UPDATE ... FROM (CTE referenced in FROM).
+WITH cc AS (SELECT id, province FROM company)
+UPDATE vec_join_case t
+SET remark = c.province
+FROM cc c
+WHERE c.id = t.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+
+-- FROM-clause join tree must keep its associativity (b LEFT JOIN c on ...).
+UPDATE vec_join_case SET remark = 'init';
+UPDATE vec_join_case t
+SET remark = COALESCE(r.name, 'no-region')
+FROM company c LEFT JOIN region r ON c.region_id = r.id
+WHERE c.id = t.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+
+-- Source is a view: read-only references in FROM must not be rejected as
+-- "cannot update from view".
+DROP VIEW IF EXISTS v_company;
+CREATE VIEW v_company AS SELECT id, province FROM company;
+UPDATE vec_join_case SET remark = 'init';
+UPDATE vec_join_case t
+SET remark = v.province
+FROM v_company v
+WHERE v.id = t.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+DROP VIEW v_company;
+
+-- Unqualified SET LHS must bind to the target only. Both vec_join_case
+-- and src_overlap expose a `remark` column; this used to be flagged as
+-- ambiguous before the fix.
+DROP TABLE IF EXISTS src_overlap;
+CREATE TABLE src_overlap (company_id INT, remark VARCHAR(100));
+INSERT INTO src_overlap VALUES (101, 'src-BJ'), (102, 'src-SH'), (103, 'src-GZ');
+UPDATE vec_join_case SET remark = 'init';
+UPDATE vec_join_case
+SET remark = src_overlap.remark
+FROM src_overlap
+WHERE src_overlap.company_id = vec_join_case.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+DROP TABLE src_overlap;
+
+-- FK target forces the fallback planner (buildTableUpdate).
+DROP TABLE IF EXISTS fk_parent;
+DROP TABLE IF EXISTS fk_child;
+DROP TABLE IF EXISTS fk_src;
+CREATE TABLE fk_parent (id INT PRIMARY KEY);
+INSERT INTO fk_parent VALUES (1), (2), (3);
+CREATE TABLE fk_child (
+    id INT PRIMARY KEY,
+    parent_id INT,
+    base INT,
+    FOREIGN KEY (parent_id) REFERENCES fk_parent(id)
+);
+INSERT INTO fk_child (id, parent_id, base) VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
+CREATE TABLE fk_src (id INT PRIMARY KEY, new_base INT);
+INSERT INTO fk_src VALUES (1, 11), (2, 22), (3, 33);
+
+-- Base-column update must work on the fallback path.
+UPDATE fk_child SET base = fk_src.new_base FROM fk_src WHERE fk_src.id = fk_child.id;
+SELECT id, parent_id, base FROM fk_child ORDER BY id;
+DROP TABLE fk_child;
+DROP TABLE fk_parent;
+DROP TABLE fk_src;
+
+-- Self-join: target and source share the same table.
+DROP TABLE IF EXISTS sj;
+CREATE TABLE sj (id INT PRIMARY KEY, parent_id INT, v VARCHAR(20));
+INSERT INTO sj VALUES (1, NULL, 'root'), (2, 1, 'child2'), (3, 1, 'child3'), (4, 2, 'leaf');
+UPDATE sj t SET v = p.v FROM sj p WHERE t.parent_id = p.id;
+SELECT id, parent_id, v FROM sj ORDER BY id;
+DROP TABLE sj;
+
+-- ORDER BY / LIMIT are not part of the PG-style UPDATE ... FROM grammar; both
+-- should be rejected at parse time.
+DROP TABLE IF EXISTS ob_t;
+DROP TABLE IF EXISTS ob_s;
+CREATE TABLE ob_t (id INT PRIMARY KEY, v INT);
+CREATE TABLE ob_s (id INT PRIMARY KEY, v INT);
+INSERT INTO ob_t VALUES (1, 0), (2, 0);
+INSERT INTO ob_s VALUES (1, 9), (2, 9);
+UPDATE ob_t SET v = ob_s.v FROM ob_s WHERE ob_t.id = ob_s.id ORDER BY ob_t.id;
+UPDATE ob_t SET v = ob_s.v FROM ob_s WHERE ob_t.id = ob_s.id LIMIT 1;
+DROP TABLE ob_t;
+DROP TABLE ob_s;
+
+-- Duplicate-match on the fallback path: target row 1 is matched by both
+-- (10,1,...) and (11,1,...) source rows. Because dup_t has a FK the fallback
+-- planner (buildTableUpdate) handles this, and needAggFilter must be set so
+-- the AGG any_value() dedup runs. Without v3's needAggFilter wiring for
+-- stmt.From, this would silently double-write target row 1.
+DROP TABLE IF EXISTS dup_t;
+DROP TABLE IF EXISTS dup_p;
+DROP TABLE IF EXISTS dup_s;
+CREATE TABLE dup_p (id INT PRIMARY KEY);
+INSERT INTO dup_p VALUES (1), (2);
+CREATE TABLE dup_t (
+    id INT PRIMARY KEY,
+    p_id INT,
+    v VARCHAR(20),
+    FOREIGN KEY (p_id) REFERENCES dup_p(id)
+);
+INSERT INTO dup_t VALUES (1, 1, 'a'), (2, 2, 'b');
+CREATE TABLE dup_s (id INT PRIMARY KEY, t_id INT, v VARCHAR(20));
+INSERT INTO dup_s VALUES (10, 1, 's1-first'), (11, 1, 's1-second'), (20, 2, 's2');
+UPDATE dup_t SET v = s.v FROM dup_s s WHERE s.t_id = dup_t.id;
+SELECT id, p_id, v FROM dup_t ORDER BY id;
+DROP TABLE dup_t;
+DROP TABLE dup_p;
+DROP TABLE dup_s;
+
+DROP TABLE IF EXISTS company;
+DROP TABLE IF EXISTS vec_join_case;
+DROP TABLE IF EXISTS region;
