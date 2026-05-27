@@ -61,6 +61,24 @@ const LargeBlockThresholdForMultiCN = 32
 // for test
 var ForceScanOnMultiCN atomic.Bool
 
+func finiteOr(value float64, fallback float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return fallback
+	}
+	return value
+}
+
+func safeRatio(numerator float64, denominator float64, fallback float64) float64 {
+	if denominator == 0 || math.IsNaN(denominator) || math.IsInf(denominator, 0) {
+		return fallback
+	}
+	return finiteOr(numerator/denominator, fallback)
+}
+
+func safeSelectivityRatio(numerator float64, denominator float64) float64 {
+	return safeRatio(numerator, denominator, 1)
+}
+
 func SetForceScanOnMultiCN(v bool) {
 	ForceScanOnMultiCN.Store(v)
 }
@@ -426,7 +444,7 @@ func (builder *QueryBuilder) getColNDVRatio(cols []int32, tableDef *TableDef) fl
 	for i := range cols {
 		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
 	}
-	result := totalNDV / s.TableCnt
+	result := safeRatio(totalNDV, s.TableCnt, 0)
 	if result > 1 {
 		result = 1
 	}
@@ -498,9 +516,9 @@ func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) floa
 		s := w.GetStats()
 		nullCnt := float64(s.NullCntMap[col.Name])
 		if isnull {
-			return nullCnt / s.TableCnt
+			return safeRatio(nullCnt, s.TableCnt, 0.1)
 		} else {
-			return 1 - (nullCnt / s.TableCnt)
+			return 1 - safeRatio(nullCnt, s.TableCnt, 0.1)
 		}
 	}
 
@@ -601,7 +619,7 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.S
 	}
 	if col.Name == catalog.CPrimaryKeyColName {
 		if s != nil {
-			return 1 / s.TableCnt
+			return safeRatio(1, s.TableCnt, 0.0000001)
 		} else {
 			return 0.0000001
 		}
@@ -914,7 +932,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 		case "prefix_eq":
 			if containsDynamicParam(expr) {
 				if s != nil {
-					return 100 / s.TableCnt
+					return safeRatio(100, s.TableCnt, 0.0000001)
 				} else {
 					return 0.0000001
 				}
@@ -1362,7 +1380,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
 			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 				node.Stats.Outcnt = float64(c.U64Val)
-				node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
+				node.Stats.Selectivity = safeSelectivityRatio(node.Stats.Outcnt, node.Stats.Cost)
 			}
 		} else {
 			// Slow path: need to fold the expression
@@ -1375,7 +1393,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
 				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 					node.Stats.Outcnt = float64(c.U64Val)
-					node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
+					node.Stats.Selectivity = safeSelectivityRatio(node.Stats.Outcnt, node.Stats.Cost)
 				}
 			}
 		}
@@ -1385,7 +1403,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			if cExpr, ok := node.IndexReaderParam.Limit.Expr.(*plan.Expr_Lit); ok {
 				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 					node.Stats.Outcnt = float64(c.U64Val)
-					node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
+					node.Stats.Selectivity = safeSelectivityRatio(node.Stats.Outcnt, node.Stats.Cost)
 				}
 			} else {
 				// Slow path: need to fold the expression
@@ -1398,7 +1416,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
 					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 						node.Stats.Outcnt = float64(c.U64Val)
-						node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
+						node.Stats.Selectivity = safeSelectivityRatio(node.Stats.Outcnt, node.Stats.Cost)
 					}
 				}
 			}
@@ -1557,10 +1575,10 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 		if scanNode.Stats.Cost > scanNode.Stats.TableCnt {
 			scanNode.Stats.Cost = scanNode.Stats.TableCnt
 		}
-		scanNode.Stats.Selectivity = scanNode.Stats.Outcnt / scanNode.Stats.TableCnt
+		scanNode.Stats.Selectivity = safeSelectivityRatio(scanNode.Stats.Outcnt, scanNode.Stats.TableCnt)
 		return
 	}
-	runtimeFilterSel := builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity
+	runtimeFilterSel := finiteOr(builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity, 1)
 	scanNode.Stats.Cost *= runtimeFilterSel
 	scanNode.Stats.Outcnt *= runtimeFilterSel
 	if scanNode.Stats.Cost < 1 {
@@ -1677,7 +1695,7 @@ func forceScanNodeStatsTP(nodeID int32, builder *QueryBuilder) {
 	if stats.BlockNum > 16 {
 		stats.BlockNum = 16
 	}
-	stats.Selectivity = stats.Outcnt / stats.TableCnt
+	stats.Selectivity = safeSelectivityRatio(stats.Outcnt, stats.TableCnt)
 }
 
 func shouldReturnMinimalStats(node *plan.Node) bool {
@@ -1856,6 +1874,8 @@ func compareStats(stats1, stats2 *Stats) bool {
 }
 
 func andSelectivity(s1, s2 float64) float64 {
+	s1 = finiteOr(s1, 1)
+	s2 = finiteOr(s2, 1)
 	if s1 < s2 {
 		s1, s2 = s2, s1
 	}
@@ -1867,6 +1887,8 @@ func andSelectivity(s1, s2 float64) float64 {
 
 func orSelectivity(s1, s2 float64) float64 {
 	var s float64
+	s1 = finiteOr(s1, 1)
+	s2 = finiteOr(s2, 1)
 	if s1 < s2 {
 		s1, s2 = s2, s1
 	}

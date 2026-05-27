@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1473,6 +1474,37 @@ func TestSerializePlanToJson(t *testing.T) {
 		require.Equal(t, int64(0), stats.BytesScan)
 		t.Logf("SQL plan to json : %s\n", string(json))
 	}
+}
+
+func TestMarshalPlanHandlerSanitizesNonFinitePlanStats(t *testing.T) {
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	stmt := &motrace.StatementInfo{
+		StatementID: uid,
+		Statement:   []byte("select 1"),
+		RequestAt:   time.Now().Add(-2 * time.Second),
+	}
+	logicPlan := &plan0.Plan{
+		Plan: &plan0.Plan_Query{
+			Query: &plan0.Query{
+				Nodes: []*plan0.Node{
+					{
+						NodeId:   0,
+						NodeType: plan0.Node_VALUE_SCAN,
+						Stats: &plan0.Stats{
+							Cost: math.Inf(1),
+						},
+					},
+				},
+				Steps: []int32{0},
+			},
+		},
+	}
+
+	h := NewMarshalPlanHandler(context.Background(), stmt, logicPlan, nil)
+	jsonBytes := h.Marshal(context.Background())
+
+	require.NotContains(t, string(jsonBytes), "serialize plan to json error")
 }
 
 func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
