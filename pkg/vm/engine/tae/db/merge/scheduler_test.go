@@ -15,6 +15,7 @@
 package merge
 
 import (
+	"container/heap"
 	"context"
 	"iter"
 	"testing"
@@ -120,6 +121,29 @@ func TestHandleTaskTriggerNilPointerFixed(t *testing.T) {
 	require.NotPanics(t, func() {
 		scheduler.handleTaskTrigger(msg)
 	}, "Should not panic after moving nil check before vacuum check")
+}
+
+func TestDoSchedNilSupporter(t *testing.T) {
+	scheduler := &MergeScheduler{
+		supps: make(map[uint64]*todoSupporter),
+		clock: NewStdClock(),
+	}
+
+	db := catalog.MockDBEntryWithAccInfo(1, 999)
+	table := catalog.MockTableEntryWithDB(db, 1000)
+	mockTable := catalog.ToMergeTable(table)
+
+	require.NotPanics(t, func() {
+		scheduler.doSched(&todoItem{table: mockTable})
+	})
+
+	todo := &todoItem{table: mockTable, readyAt: scheduler.clock.Now()}
+	heap.Push(&scheduler.pq, todo)
+
+	require.NotPanics(t, func() {
+		scheduler.doSched(todo)
+	})
+	require.Equal(t, 0, scheduler.pq.Len())
 }
 
 func TestScheduler(t *testing.T) {
