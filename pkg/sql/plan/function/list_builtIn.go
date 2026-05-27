@@ -2600,7 +2600,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_blob.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return FromBase64
@@ -3164,7 +3164,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_blob, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_blob.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AESDecrypt
@@ -3174,7 +3174,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_blob.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AESDecrypt
@@ -3184,7 +3184,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_char, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_blob.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AESDecrypt
@@ -3194,7 +3194,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_text, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_blob.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AESDecrypt
@@ -3204,7 +3204,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_blob, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_blob.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AESDecrypt
@@ -3214,7 +3214,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_blob.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AESDecrypt
@@ -3224,7 +3224,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 6,
 				args:       []types.T{types.T_char, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_blob.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AESDecrypt
@@ -3234,7 +3234,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 7,
 				args:       []types.T{types.T_text, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_blob.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AESDecrypt
@@ -5710,7 +5710,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_blob.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return Unhex
