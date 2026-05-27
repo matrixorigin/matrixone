@@ -202,7 +202,6 @@ SELECT acos(1.1e5);
 SELECT atan(1.1e5);
 #SELECT atan2(1.1e5,0.5e4);
 
-<<<<<<< 0526-add-degrees
 SELECT
 DEGREES(1.25),
 DEGREES(0.75),
@@ -215,6 +214,3 @@ DEGREES(PI() * 2),
 DEGREES(PI() * 3),
 DEGREES(PI() * -1),
 DEGREES(NULL);
-
-=======
->>>>>>> 3.0-dev
