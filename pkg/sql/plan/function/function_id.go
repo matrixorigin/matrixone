@@ -620,6 +620,7 @@ var functionIdRegister = map[string]int32{
 	"month":                          MONTH,
 	"not_in_rows":                    NOT_IN_ROWS,
 	"oct":                            OCT,
+	"radians":                        RADIAN,
 	"rand":                           RANDOM,
 	"reverse":                        REVERSE,
 	"rtrim":                          RTRIM,
