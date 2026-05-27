@@ -551,6 +551,9 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	case types.T_datetime:
 		val := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, rowIndex)
 		return val.String2(vec.GetType().Scale), nil
+	case types.T_year:
+		val := vector.GetFixedAtNoTypeCheck[types.MoYear](vec, rowIndex)
+		return val.String(), nil
 	case types.T_enum:
 		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[types.Enum](vec, rowIndex)), nil
 	default:
