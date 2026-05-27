@@ -6408,13 +6408,28 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		writeDatabaseAndTableDirectly = true
 	case *tree.CloneDatabase,
 		*tree.DataBranchCreateDatabase,
-		*tree.DataBranchDeleteDatabase,
-		*tree.DataBranchDiffDatabase,
-		*tree.DataBranchMergeDatabase,
-		*tree.DataBranchPickDatabase:
+		*tree.DataBranchDeleteDatabase:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeAccountAll)
 		writeDatabaseAndTableDirectly = true
+	case *tree.DataBranchDiffDatabase:
+		objType = objectTypeDatabase
+		writeDatabaseAndTableDirectly = true
+		extraEntries = append(extraEntries, dataBranchDatabasePrivilegeEntries(
+			st.TargetDatabase, st.BaseDatabase,
+		)...)
+	case *tree.DataBranchMergeDatabase:
+		objType = objectTypeDatabase
+		writeDatabaseAndTableDirectly = true
+		extraEntries = append(extraEntries, dataBranchDatabasePrivilegeEntries(
+			st.SrcDatabase, st.DstDatabase,
+		)...)
+	case *tree.DataBranchPickDatabase:
+		objType = objectTypeDatabase
+		writeDatabaseAndTableDirectly = true
+		extraEntries = append(extraEntries, dataBranchDatabasePrivilegeEntries(
+			st.SrcDatabase, st.DstDatabase,
+		)...)
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
@@ -6435,6 +6450,24 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		clusterTableOperation:         clusterTableOperation,
 		canExecInRestricted:           canExecInRestricted,
 		canExecInPasswordExpired:      canExecInPasswordExpired,
+	}
+}
+
+func dataBranchDatabasePrivilegeEntries(dbs ...tree.Identifier) []privilegeEntry {
+	items := make([]privilegeItem, 0, len(dbs))
+	for _, db := range dbs {
+		items = append(items, privilegeItem{
+			privilegeTyp: PrivilegeTypeDatabaseAll,
+			objType:      objectTypeDatabase,
+			dbName:       string(db),
+		})
+	}
+	return []privilegeEntry{
+		{
+			privilegeEntryTyp: privilegeEntryTypeCompound,
+			compound:          &compoundEntry{items: items},
+		},
+		privilegeEntriesMap[PrivilegeTypeAccountAll],
 	}
 }
 
@@ -7677,16 +7710,24 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 			}
 			tbName := string(st.Names[0].ObjectName)
 			return checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
-		case *tree.CloneTable, *tree.CloneDatabase,
-			*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
-			*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
-			*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,
-			*tree.DataBranchDiffDatabase, *tree.DataBranchMergeDatabase,
-			*tree.DataBranchPickDatabase:
+		}
+		if canBypassFailedDatabasePrivilegeCheckForStatement(stmt) {
 			return true, stats, nil
 		}
 	}
 	return ok, stats, nil
+}
+
+func canBypassFailedDatabasePrivilegeCheckForStatement(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.CloneTable, *tree.CloneDatabase,
+		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
+		*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
+		*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
+		return true
+	default:
+		return false
+	}
 }
 
 func checkRoleWhetherTableOwner(ctx context.Context, ses *Session, dbName, tbName string, ok bool) (bool, statistic.StatsArray, error) {

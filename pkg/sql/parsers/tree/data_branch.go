@@ -431,8 +431,7 @@ type DataBranchDiffDatabase struct {
 }
 
 func (s *DataBranchDiffDatabase) TypeName() string {
-	//TODO implement me
-	panic("implement me")
+	return "DataBranchDiffDatabase"
 }
 
 func (s *DataBranchDiffDatabase) reset() {
@@ -448,8 +447,18 @@ func (s *DataBranchDiffDatabase) StmtKind() StmtKind {
 }
 
 func (s *DataBranchDiffDatabase) Format(ctx *FmtCtx) {
-	//TODO implement me
-	panic("implement me")
+	ctx.WriteString("data branch diff database ")
+	ctx.WriteString(string(s.TargetDatabase))
+	ctx.WriteString(" against database ")
+	ctx.WriteString(string(s.BaseDatabase))
+	if s.OutputOpt != nil {
+		switch {
+		case s.OutputOpt.Count:
+			ctx.WriteString(" output count")
+		case s.OutputOpt.Summary:
+			ctx.WriteString(" output summary")
+		}
+	}
 }
 
 func (s *DataBranchDiffDatabase) String() string {
@@ -470,6 +479,21 @@ func (s *DataBranchDiffDatabase) Free() {
 
 type ConflictOpt struct {
 	Opt int
+}
+
+func formatConflictOpt(ctx *FmtCtx, opt *ConflictOpt) {
+	if opt == nil {
+		return
+	}
+	ctx.WriteString(" when conflict ")
+	switch opt.Opt {
+	case CONFLICT_FAIL:
+		ctx.WriteString("fail")
+	case CONFLICT_SKIP:
+		ctx.WriteString("skip")
+	case CONFLICT_ACCEPT:
+		ctx.WriteString("accept")
+	}
 }
 
 type DataBranchMerge struct {
@@ -525,8 +549,7 @@ type DataBranchMergeDatabase struct {
 }
 
 func (s *DataBranchMergeDatabase) TypeName() string {
-	//TODO implement me
-	panic("implement me")
+	return "DataBranchMergeDatabase"
 }
 
 func (s *DataBranchMergeDatabase) reset() {
@@ -542,8 +565,11 @@ func (s *DataBranchMergeDatabase) StmtKind() StmtKind {
 }
 
 func (s *DataBranchMergeDatabase) Format(ctx *FmtCtx) {
-	//TODO implement me
-	panic("implement me")
+	ctx.WriteString("data branch merge database ")
+	ctx.WriteString(string(s.SrcDatabase))
+	ctx.WriteString(" into database ")
+	ctx.WriteString(string(s.DstDatabase))
+	formatConflictOpt(ctx, s.ConflictOpt)
 }
 
 func (s *DataBranchMergeDatabase) String() string {
@@ -820,17 +846,7 @@ func (s *DataBranchPick) Format(ctx *FmtCtx) {
 		}
 		ctx.WriteByte(')')
 	}
-	if s.ConflictOpt != nil {
-		ctx.WriteString(" when conflict ")
-		switch s.ConflictOpt.Opt {
-		case CONFLICT_FAIL:
-			ctx.WriteString("fail")
-		case CONFLICT_SKIP:
-			ctx.WriteString("skip")
-		case CONFLICT_ACCEPT:
-			ctx.WriteString("accept")
-		}
-	}
+	formatConflictOpt(ctx, s.ConflictOpt)
 }
 
 func (s *DataBranchPick) String() string {
@@ -885,17 +901,7 @@ func (s *DataBranchPickDatabase) Format(ctx *FmtCtx) {
 		ctx.WriteString(" and ")
 		ctx.WriteString(s.BetweenTo)
 	}
-	if s.ConflictOpt != nil {
-		ctx.WriteString(" when conflict ")
-		switch s.ConflictOpt.Opt {
-		case CONFLICT_FAIL:
-			ctx.WriteString("fail")
-		case CONFLICT_SKIP:
-			ctx.WriteString("skip")
-		case CONFLICT_ACCEPT:
-			ctx.WriteString("accept")
-		}
-	}
+	formatConflictOpt(ctx, s.ConflictOpt)
 }
 
 func (s *DataBranchPickDatabase) String() string {
