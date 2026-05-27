@@ -534,6 +534,84 @@ func TestComputeDrainChunkVarlen(t *testing.T) {
 	require.LessOrEqual(t, chunk, maxVarlenDrainChunkRows)
 }
 
+func TestComputeWinnerChunkDominant(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	rootVec := testutil.NewVector(4, types.T_int8.ToType(), proc.Mp(), false, []int8{1, 2, 3, 10})
+	secondVec := testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{5})
+	defer rootVec.Free(proc.Mp())
+	defer secondVec.Free(proc.Mp())
+
+	ctr := &container{
+		compares: []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+	}
+	rootBatch := batch.NewWithSize(1)
+	rootBatch.Vecs[0] = rootVec
+	rootBatch.SetRowCount(4)
+	secondBatch := batch.NewWithSize(1)
+	secondBatch.Vecs[0] = secondVec
+	secondBatch.SetRowCount(1)
+	root := &spillRunReader{batch: rootBatch, orderCols: []*vector.Vector{rootVec}, rowIdx: 0}
+	second := &spillRunReader{batch: secondBatch, orderCols: []*vector.Vector{secondVec}, rowIdx: 0}
+	require.Equal(t, 3, ctr.computeWinnerChunk(root, second, 4))
+}
+
+func TestComputeWinnerChunkBudgetLimited(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	rootVec := testutil.NewVector(4, types.T_int8.ToType(), proc.Mp(), false, []int8{1, 2, 3, 4})
+	secondVec := testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{9})
+	defer rootVec.Free(proc.Mp())
+	defer secondVec.Free(proc.Mp())
+
+	ctr := &container{
+		compares: []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+	}
+	rootBatch := batch.NewWithSize(1)
+	rootBatch.Vecs[0] = rootVec
+	rootBatch.SetRowCount(4)
+	secondBatch := batch.NewWithSize(1)
+	secondBatch.Vecs[0] = secondVec
+	secondBatch.SetRowCount(1)
+	root := &spillRunReader{batch: rootBatch, orderCols: []*vector.Vector{rootVec}, rowIdx: 0}
+	second := &spillRunReader{batch: secondBatch, orderCols: []*vector.Vector{secondVec}, rowIdx: 0}
+	require.Equal(t, 2, ctr.computeWinnerChunk(root, second, 2))
+}
+
+func TestComputeWinnerChunkFallbackToOne(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	rootVec := testutil.NewVector(3, types.T_int8.ToType(), proc.Mp(), false, []int8{1, 6, 7})
+	secondVec := testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{5})
+	defer rootVec.Free(proc.Mp())
+	defer secondVec.Free(proc.Mp())
+
+	ctr := &container{
+		compares: []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+	}
+	rootBatch := batch.NewWithSize(1)
+	rootBatch.Vecs[0] = rootVec
+	rootBatch.SetRowCount(3)
+	secondBatch := batch.NewWithSize(1)
+	secondBatch.Vecs[0] = secondVec
+	secondBatch.SetRowCount(1)
+	root := &spillRunReader{batch: rootBatch, orderCols: []*vector.Vector{rootVec}, rowIdx: 0}
+	second := &spillRunReader{batch: secondBatch, orderCols: []*vector.Vector{secondVec}, rowIdx: 0}
+	require.Equal(t, 1, ctr.computeWinnerChunk(root, second, 3))
+}
+
 func BenchmarkOrder(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs := []orderTestCase{
