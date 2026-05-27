@@ -185,6 +185,21 @@ func (external *External) Prepare(proc *process.Process) error {
 	return nil
 }
 
+func (external *External) checkLoadLockTableBinds(proc *process.Process) error {
+	param := external.Es
+	if param == nil ||
+		param.Extern == nil ||
+		param.Extern.ExternType != int32(plan.ExternType_LOAD) {
+		return nil
+	}
+
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return nil
+	}
+	return txnOp.CheckLockTableBinds(proc.Ctx)
+}
+
 func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	t := time.Now()
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
@@ -239,6 +254,10 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	if param.Fileparam.End && !external.fileOpened {
 		result.Status = vm.ExecStop
 		return result, nil
+	}
+
+	if err := external.checkLoadLockTableBinds(proc); err != nil {
+		return result, err
 	}
 
 	if external.ctr.buf != nil {

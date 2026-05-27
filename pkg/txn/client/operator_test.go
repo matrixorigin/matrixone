@@ -232,6 +232,38 @@ func TestCommitWithLockTablesChanged(t *testing.T) {
 	})
 }
 
+func TestCheckLockTableBindsChanged(t *testing.T) {
+	tableID := uint64(10)
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		lockservice.RunLockServicesForTest(
+			zap.DebugLevel,
+			[]string{"s1"},
+			time.Second,
+			func(lta lockservice.LockTableAllocator, ls []lockservice.LockService) {
+				s := ls[0]
+
+				_, err := s.Lock(ctx, tableID, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
+				require.NoError(t, err)
+
+				tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+				tc.lockService = s
+				require.NoError(t, tc.AddLockTable(lock.LockTable{
+					Table:     tableID,
+					ServiceID: s.GetServiceID(),
+					Version:   lta.GetVersion() - 1,
+					Valid:     true,
+				}))
+
+				err = tc.CheckLockTableBinds(ctx)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+
+				err = tc.CheckLockTableBinds(ctx)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			},
+			nil)
+	})
+}
+
 func TestContextWithoutDeadlineWillPanic(t *testing.T) {
 	runOperatorTests(t, func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
 		defer func() {
@@ -656,6 +688,29 @@ func TestBase(t *testing.T) {
 			require.Equal(t, newSnapshotTS, tc.SnapshotTS())
 			require.NotEqual(t, timestamp.Timestamp{}, tc.CreateTS())
 			require.Equal(t, txn.TxnStatus_Active, tc.Status())
+		},
+	)
+}
+
+func TestInitResetsLockTableBindCheckThrottle(t *testing.T) {
+	runOperatorTests(
+		t,
+		func(
+			ctx context.Context,
+			tc *txnOperator,
+			_ *testTxnSender,
+		) {
+			tc.mu.Lock()
+			tc.mu.lastLockTableBindCheck = time.Now()
+			tc.mu.lockTableBindChanged = true
+			tc.mu.Unlock()
+
+			tc.init(txn.TxnMeta{ID: []byte("reused-txn")})
+
+			tc.mu.RLock()
+			defer tc.mu.RUnlock()
+			require.True(t, tc.mu.lastLockTableBindCheck.IsZero())
+			require.False(t, tc.mu.lockTableBindChanged)
 		},
 	)
 }

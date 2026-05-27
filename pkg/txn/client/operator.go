@@ -77,6 +77,8 @@ var (
 	runningSQLWaitTimeout = 30 * time.Second
 )
 
+const lockTableBindCheckInterval = 3 * time.Minute
+
 type runSQLSkipTokenKey struct{}
 
 func WithRunSQLSkipToken(ctx context.Context, token uint64) context.Context {
@@ -264,15 +266,17 @@ type txnOperator struct {
 
 	mu struct {
 		sync.RWMutex
-		waitActive   bool
-		closed       bool
-		txn          txn.TxnMeta
-		cachedWrites map[uint64][]txn.TxnRequest
-		lockTables   []lock.LockTable
-		callbacks    map[EventType][]TxnEventCallback
-		retry        bool
-		lockSeq      uint64
-		waitLocks    map[uint64]Lock
+		waitActive             bool
+		closed                 bool
+		txn                    txn.TxnMeta
+		cachedWrites           map[uint64][]txn.TxnRequest
+		lockTables             []lock.LockTable
+		callbacks              map[EventType][]TxnEventCallback
+		retry                  bool
+		lockSeq                uint64
+		waitLocks              map[uint64]Lock
+		lastLockTableBindCheck time.Time
+		lockTableBindChanged   bool
 		//read-only txn operators for supporting snapshot read feature.
 		children []*txnOperator
 		flag     uint32
@@ -546,6 +550,8 @@ func (tc *txnOperator) initProtectedFields() {
 	tc.mu.retry = false
 	tc.mu.lockSeq = 0
 	tc.mu.txn = txn.TxnMeta{}
+	tc.mu.lastLockTableBindCheck = time.Time{}
+	tc.mu.lockTableBindChanged = false
 	tc.mu.lockTables = tc.mu.lockTables[:0]
 	tc.mu.children = tc.mu.children[:0]
 	if tc.mu.cachedWrites != nil {
@@ -967,6 +973,75 @@ func (tc *txnOperator) HasLockTable(table uint64) bool {
 	}
 
 	return tc.hasLockTableLocked(table)
+}
+
+func (tc *txnOperator) CheckLockTableBinds(ctx context.Context) error {
+	tc.mu.Lock()
+	if tc.mu.txn.Mode != txn.TxnMode_Pessimistic ||
+		tc.lockService == nil ||
+		len(tc.mu.lockTables) == 0 {
+		tc.mu.Unlock()
+		return nil
+	}
+	if !tc.mu.txn.Mirror {
+		if err := tc.checkStatus(true); err != nil {
+			tc.mu.Unlock()
+			return err
+		}
+	}
+	if tc.mu.lockTableBindChanged {
+		tc.mu.Unlock()
+		return moerr.NewLockTableBindChangedNoCtx()
+	}
+	if !tc.mu.lastLockTableBindCheck.IsZero() &&
+		time.Since(tc.mu.lastLockTableBindCheck) < lockTableBindCheckInterval {
+		tc.mu.Unlock()
+		return nil
+	}
+	tc.mu.lastLockTableBindCheck = time.Now()
+	lockTables := append([]lock.LockTable(nil), tc.mu.lockTables...)
+	tc.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		tc.mu.Lock()
+		tc.mu.lastLockTableBindCheck = time.Time{}
+		tc.mu.Unlock()
+		return err
+	}
+
+	var invalid []uint64
+	for _, hold := range lockTables {
+		current, err := tc.lockService.GetLockTableBind(hold.Group, hold.Table)
+		if err != nil {
+			tc.mu.Lock()
+			tc.mu.lastLockTableBindCheck = time.Time{}
+			tc.mu.Unlock()
+			return err
+		}
+		if current.Changed(hold) {
+			invalid = append(invalid, hold.Table)
+		}
+	}
+
+	if len(invalid) == 0 {
+		return nil
+	}
+
+	tc.mu.Lock()
+	tc.mu.lockTableBindChanged = true
+	tc.mu.Unlock()
+
+	tc.lockService.ForceRefreshLockTableBinds(
+		invalid,
+		func(bind lock.LockTable) bool {
+			for _, hold := range lockTables {
+				if hold.Table == bind.Table && !hold.Changed(bind) {
+					return true
+				}
+			}
+			return false
+		})
+	return moerr.NewLockTableBindChangedNoCtx()
 }
 
 func (tc *txnOperator) ResetRetry(retry bool) {

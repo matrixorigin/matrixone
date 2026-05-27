@@ -268,6 +268,10 @@ func (tTxnOp *testTxnOperator) HasLockTable(table uint64) bool {
 	panic("implement me")
 }
 
+func (tTxnOp *testTxnOperator) CheckLockTableBinds(ctx context.Context) error {
+	return nil
+}
+
 func (tTxnOp *testTxnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
 	//TODO implement me
 	panic("implement me")

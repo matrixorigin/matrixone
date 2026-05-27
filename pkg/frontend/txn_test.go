@@ -899,6 +899,10 @@ func (txnop *testTxnOp) HasLockTable(table uint64) bool {
 	panic("implement me")
 }
 
+func (txnop *testTxnOp) CheckLockTableBinds(ctx context.Context) error {
+	return nil
+}
+
 func (txnop *testTxnOp) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
 	//TODO implement me
 	panic("implement me")
