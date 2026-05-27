@@ -10963,3 +10963,193 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 	return nil
 }
+// DateTrunc truncates a datetime value to the specified precision.
+// Supported units: year, quarter, month, week, day, hour, minute, second.
+func DateTrunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[1])
+	rs := vector.MustFunctionResult[types.Datetime](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		unit, null1 := p1.GetStrValue(i)
+		dt, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+		} else {
+			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(unit))
+			truncated, err := dateTruncCore(unitStr, dt)
+			if err != nil {
+				return err
+			}
+			if err := rs.Append(truncated, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// DateTruncDate truncates a date value to the specified precision.
+func DateTruncDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[1])
+	rs := vector.MustFunctionResult[types.Date](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		unit, null1 := p1.GetStrValue(i)
+		d, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			if err := rs.Append(types.Date(0), true); err != nil {
+				return err
+			}
+		} else {
+			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(unit))
+			dt := d.ToDatetime()
+			truncated, err := dateTruncCore(unitStr, dt)
+			if err != nil {
+				return err
+			}
+			if err := rs.Append(truncated.ToDate(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// DateTruncTimestamp truncates a timestamp value to the specified precision.
+func DateTruncTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[1])
+	rs := vector.MustFunctionResult[types.Datetime](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		unit, null1 := p1.GetStrValue(i)
+		ts, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+		} else {
+			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(unit))
+			loc := proc.GetSessionInfo().TimeZone
+			if loc == nil {
+				loc = time.Local
+			}
+			dt := ts.ToDatetime(loc)
+			truncated, err := dateTruncCore(unitStr, dt)
+			if err != nil {
+				return err
+			}
+			if err := rs.Append(truncated, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// DateTruncString truncates a string datetime value to the specified precision.
+func DateTruncString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		unit, null1 := p1.GetStrValue(i)
+		val, null2 := p2.GetStrValue(i)
+		if null1 || null2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(unit))
+			valStr := functionUtil.QuickBytesToStr(val)
+			dt, err := types.ParseDatetime(valStr, 6)
+			if err != nil {
+				if err2 := rs.AppendBytes(nil, true); err2 != nil {
+					return err2
+				}
+				continue
+			}
+			truncated, err := dateTruncCore(unitStr, dt)
+			if err != nil {
+				return err
+			}
+			resultStr := truncated.String2(6)
+			if err := rs.AppendBytes([]byte(resultStr), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// dateTruncCore performs the core truncation logic on a Datetime value.
+func dateTruncCore(unit string, dt types.Datetime) (types.Datetime, error) {
+	year := int32(dt.Year())
+	month := dt.Month()
+	day := dt.Day()
+	hour := dt.Hour()
+	minute := dt.Minute()
+	sec := dt.Sec()
+	msec := uint32(dt.MicroSec())
+
+	switch unit {
+	case "year":
+		month = 1
+		day = 1
+		hour = 0
+		minute = 0
+		sec = 0
+		msec = 0
+	case "quarter":
+		quarter := (int32(month) - 1) / 3
+		month = uint8(quarter*3 + 1)
+		day = 1
+		hour = 0
+		minute = 0
+		sec = 0
+		msec = 0
+	case "month":
+		day = 1
+		hour = 0
+		minute = 0
+		sec = 0
+		msec = 0
+	case "week":
+		// Move back to Monday of the current ISO week.
+		// DayOfWeek2 returns 0=Monday through 6=Sunday.
+		dow := dt.DayOfWeek2()
+		dateDays := dt.ToDate()
+		monDate := dateDays - types.Date(dow)
+		y, m, d, _ := monDate.Calendar(true)
+		year = y
+		month = m
+		day = d
+		hour = 0
+		minute = 0
+		sec = 0
+		msec = 0
+	case "day":
+		hour = 0
+		minute = 0
+		sec = 0
+		msec = 0
+	case "hour":
+		minute = 0
+		sec = 0
+		msec = 0
+	case "minute":
+		sec = 0
+		msec = 0
+	case "second":
+		msec = 0
+	default:
+		return types.Datetime(0), moerr.NewInternalErrorNoCtxf("unsupported unit '%s' for date_trunc", unit)
+	}
+
+	return types.DatetimeFromClock(year, month, day, uint8(hour), uint8(minute), uint8(sec), msec), nil
+}
