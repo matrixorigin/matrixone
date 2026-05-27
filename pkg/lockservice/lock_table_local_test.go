@@ -1726,6 +1726,17 @@ func TestHandleLockConflictLockedLogOnMissingRangeKey(t *testing.T) {
 					waiters:  staleWaiters,
 				})
 
+				recreatedKey := []byte{99}
+				recreatedHolders := newHolders()
+				recreatedHolders.add(pb.WaitTxn{TxnID: []byte("recreated-holder"), CreatedOn: "test"})
+				recreatedWaiters := newWaiterQueue()
+				recreatedWaiters.init(logger)
+				lt.mu.store.Add(recreatedKey, Lock{
+					createAt: time.Now(),
+					holders:  recreatedHolders,
+					waiters:  recreatedWaiters,
+				})
+
 				nextConflictKey := []byte{1}
 				holderTxnID := []byte("holder1")
 				holderWaitTxn := pb.WaitTxn{TxnID: holderTxnID, CreatedOn: "test"}
@@ -1752,18 +1763,20 @@ func TestHandleLockConflictLockedLogOnMissingRangeKey(t *testing.T) {
 						},
 					},
 					w:                w,
-					rangeLastWaitKey: []byte{99},
+					rangeLastWaitKey: recreatedKey,
 					result:           pb.Result{},
 				}
 
-				// rangeLastWaitKey {99} is not in the store, but the same waiter
-				// may have been moved to another queue by a range merge. Leaving it
-				// in that stale no-holder lock would block later lockers forever.
+				// rangeLastWaitKey was removed by a range merge and recreated by
+				// another txn without this waiter, but the waiter may still exist
+				// in another stale no-holder lock queue.
 				err := lt.handleLockConflictLocked(c, nextConflictKey, conflictWith)
 				assert.NoError(t, err)
 				assert.Equal(t, nextConflictKey, c.rangeLastWaitKey)
 				_, ok := lt.mu.store.Get(staleKey)
 				assert.False(t, ok)
+				_, ok = lt.mu.store.Get(recreatedKey)
+				assert.True(t, ok)
 
 				nextLock, ok := lt.mu.store.Get(nextConflictKey)
 				require.True(t, ok)
