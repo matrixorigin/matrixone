@@ -369,6 +369,8 @@ func TestConstructFuzzyFilterCompositeParentUniqueCols(t *testing.T) {
 	op := constructFuzzyFilter(n, tableScan, sinkScan)
 	require.NotNil(t, op)
 	require.Equal(t, "(col1,col2)", op.PkName)
+}
+
 func TestVectorToStringNullHandling(t *testing.T) {
 	mp, err := mpool.NewMPool("test_vectorToString", 0, mpool.NoFixed)
 	require.NoError(t, err)
