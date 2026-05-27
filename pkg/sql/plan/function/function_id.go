@@ -844,9 +844,11 @@ const (
 	INTERNAL_JSON_COMPARISON_PARAM = 577
 	INTERNAL_JSON_MEMBER_OF        = 578
 
+	DATALINK_PIN = 579
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 579
+	FUNCTION_END_NUMBER = 580
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1184,6 +1186,7 @@ var functionIdRegister = map[string]int32{
 	"load_file":                      LOAD_FILE,
 	"load_text":                      LOAD_TEXT,
 	"save_file":                      SAVE_FILE,
+	"datalink_pin":                   DATALINK_PIN,
 	"hex":                            HEX,
 	"unhex":                          UNHEX,
 	"md5":                            MD5,
