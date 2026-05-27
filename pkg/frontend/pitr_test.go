@@ -3575,3 +3575,103 @@ func Test_getPitrLengthAndUnit(t *testing.T) {
 	_, _, _, err = getPitrLengthAndUnit(ctx, bh, "table", "", "", "tbl")
 	assert.Error(t, err)
 }
+
+func Test_normalizeRestorePitrStmt(t *testing.T) {
+	stmt := &tree.RestorePitr{
+		Level:          tree.RESTORELEVELACCOUNT,
+		AccountName:    "acc02",
+		SrcAccountName: "acc01",
+	}
+
+	normalizeRestorePitrStmt(stmt)
+
+	assert.Equal(t, tree.Identifier("acc01"), stmt.AccountName)
+	assert.Equal(t, tree.Identifier("acc02"), stmt.ToAccountName)
+	assert.Empty(t, stmt.SrcAccountName)
+}
+
+func Test_checkPitrValidOrNot_ExplicitToAccount(t *testing.T) {
+	t.Run("non-sys cannot restore database to another account", func(t *testing.T) {
+		pitr := &pitrRecord{
+			pitrName:     "pitr01",
+			level:        tree.PITRLEVELDATABASE.String(),
+			accountId:    1,
+			accountName:  "acc01",
+			databaseName: "db01",
+		}
+		stmt := &tree.RestorePitr{
+			Level:         tree.RESTORELEVELDATABASE,
+			AccountName:   "acc01",
+			DatabaseName:  "db01",
+			ToAccountName: "acc02",
+		}
+		tenant := &TenantInfo{Tenant: "acc01", TenantID: 1}
+
+		err := checkPitrValidOrNot(pitr, stmt, tenant)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not allowed to restore database")
+	})
+
+	t.Run("sys cannot restore sys account to another account", func(t *testing.T) {
+		pitr := &pitrRecord{
+			pitrName:    "pitr01",
+			level:       tree.PITRLEVELACCOUNT.String(),
+			accountId:   0,
+			accountName: sysAccountName,
+		}
+		stmt := &tree.RestorePitr{
+			Level:         tree.RESTORELEVELACCOUNT,
+			AccountName:   sysAccountName,
+			ToAccountName: "acc02",
+		}
+		tenant := &TenantInfo{Tenant: sysAccountName, TenantID: sysAccountID}
+
+		err := checkPitrValidOrNot(pitr, stmt, tenant)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "can not restore sys account to new account")
+	})
+}
+
+func Test_resolveRestorePitrAccounts(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	})
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	ctx := context.Background()
+	stmt := &tree.RestorePitr{
+		Name:          "pitr01",
+		Level:         tree.RESTORELEVELDATABASE,
+		AccountName:   "acc01",
+		DatabaseName:  "db01",
+		ToAccountName: "acc02",
+	}
+	pitr := &pitrRecord{
+		pitrName:    "pitr01",
+		accountId:   1,
+		accountName: "acc01",
+	}
+
+	bh.sql2result[getAccountIdNamesSql+" and account_name = 'acc02'"] = newMrsForPitrRecord([][]interface{}{
+		{uint64(2), "acc02", "open", uint64(1), nil},
+	})
+
+	accounts, err := resolveRestorePitrAccounts(ctx, ses, bh, pitr, stmt, time.Now().UnixNano())
+	require.NoError(t, err)
+	assert.Equal(t, "acc01", accounts.sourceName)
+	assert.Equal(t, "acc02", accounts.targetName)
+	assert.Equal(t, uint32(1), accounts.sourceID)
+	assert.Equal(t, uint32(2), accounts.targetID)
+}
