@@ -487,6 +487,47 @@ func TestCanAppendToActiveRun(t *testing.T) {
 	require.False(t, ctr.canAppendToActiveRun([]*vector.Vector{incomingLess}))
 }
 
+func TestComputeDrainChunkFixedWidth(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	src := batch.NewWithSize(1)
+	values := make([]int64, 100)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	src.Vecs[0] = testutil.NewVector(100, types.T_int64.ToType(), proc.Mp(), false, values)
+	src.SetRowCount(100)
+	defer src.Clean(proc.Mp())
+
+	require.Equal(t, 100, computeDrainChunk(src, 0, 0))
+	require.Equal(t, 1, computeDrainChunk(src, 0, maxBatchSizeToSend-1))
+}
+
+func TestComputeDrainChunkVarlen(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	src := batch.NewWithSize(1)
+	values := make([]string, 100)
+	for i := range values {
+		values[i] = fmt.Sprintf("row-%d", i)
+	}
+	src.Vecs[0] = testutil.NewVector(100, types.T_varchar.ToType(), proc.Mp(), false, values)
+	src.SetRowCount(100)
+	defer src.Clean(proc.Mp())
+
+	chunk := computeDrainChunk(src, 0, 0)
+	require.Greater(t, chunk, 0)
+	require.LessOrEqual(t, chunk, maxVarlenDrainChunkRows)
+}
+
 func BenchmarkOrder(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs := []orderTestCase{

@@ -293,6 +293,76 @@ func (ctr *container) updateActiveRunTail(proc *process.Process, incomingOrderCo
 	return nil
 }
 
+func computeDrainChunk(src *batch.Batch, start int64, currentSize int) int {
+	remaining := src.RowCount() - int(start)
+	if remaining <= 0 {
+		return 0
+	}
+	budget := maxBatchSizeToSend - currentSize
+	if budget <= 0 {
+		return 0
+	}
+
+	rowBytes := 0
+	fixedWidth := true
+	for _, vec := range src.Vecs {
+		typ := vec.GetType()
+		if typ.IsVarlen() {
+			fixedWidth = false
+			break
+		}
+		rowBytes += typ.TypeSize()
+	}
+
+	if fixedWidth && rowBytes > 0 {
+		maxByBudget := budget / rowBytes
+		if maxByBudget < 1 {
+			maxByBudget = 1
+		}
+		if maxByBudget > maxDrainChunkRows {
+			maxByBudget = maxDrainChunkRows
+		}
+		if maxByBudget < remaining {
+			return maxByBudget
+		}
+		return remaining
+	}
+
+	avgRowBytes := src.Size() / max(1, src.RowCount())
+	if avgRowBytes < 1 {
+		avgRowBytes = 1
+	}
+	maxByBudget := budget / avgRowBytes
+	if maxByBudget < 1 {
+		maxByBudget = 1
+	}
+	if maxByBudget > maxVarlenDrainChunkRows {
+		maxByBudget = maxVarlenDrainChunkRows
+	}
+	if maxByBudget < remaining {
+		return maxByBudget
+	}
+	return remaining
+}
+
+func appendContiguousRows(dst *batch.Batch, src *batch.Batch, start int64, cnt int, proc *process.Process) error {
+	for col := range dst.Vecs {
+		if err := dst.Vecs[col].UnionBatch(src.Vecs[col], start, cnt, nil, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendContiguousOrderRows(dstOrder *batch.Batch, srcOrderCols []*vector.Vector, keyIdxes []int, start int64, cnt int, proc *process.Process) error {
+	for col, keyIdx := range keyIdxes {
+		if err := dstOrder.Vecs[col].UnionBatch(srcOrderCols[keyIdx], start, cnt, nil, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (ctr *container) ensureActiveSpillRun(proc *process.Process) error {
 	if ctr.spillActiveRun != nil {
 		return nil
@@ -573,6 +643,53 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 		rows := 0
 		nextSizeCheck := batchSizeCheckInterval
 		for len(ctr.spillReaders) > 0 {
+			if len(ctr.spillReaders) == 1 {
+				src := ctr.spillReaders[0]
+				chunk := computeDrainChunk(src.batch, src.rowIdx, out.Size())
+				if chunk > 1 {
+					if err := appendContiguousRows(out, src.batch, src.rowIdx, chunk, proc); err != nil {
+						out.Clean(proc.Mp())
+						if outOrder != nil {
+							outOrder.Clean(proc.Mp())
+						}
+						run.file.Close()
+						return nil, err
+					}
+					if outOrder != nil {
+						if err := appendContiguousOrderRows(outOrder, src.orderCols, ctr.spillKeyIndexes, src.rowIdx, chunk, proc); err != nil {
+							out.Clean(proc.Mp())
+							outOrder.Clean(proc.Mp())
+							run.file.Close()
+							return nil, err
+						}
+					}
+					rows += chunk
+					src.rowIdx += int64(chunk)
+					if src.rowIdx >= int64(src.batch.RowCount()) {
+						ok, err := src.readNextBatch(proc, ctr)
+						if err != nil {
+							out.Clean(proc.Mp())
+							if outOrder != nil {
+								outOrder.Clean(proc.Mp())
+							}
+							run.file.Close()
+							return nil, err
+						}
+						if !ok {
+							removed := heap.Remove(ctr, 0).(*spillRunReader)
+							removed.close(proc)
+						}
+					}
+					if rows >= nextSizeCheck {
+						if out.Size() >= maxBatchSizeToSend {
+							break
+						}
+						nextSizeCheck = rows + batchSizeCheckInterval
+					}
+					continue
+				}
+			}
+
 			choice := ctr.pickFirstSpillReader()
 			src := ctr.spillReaders[choice]
 			for col := range out.Vecs {
@@ -703,6 +820,35 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 	rows := 0
 	nextSizeCheck := batchSizeCheckInterval
 	for len(ctr.spillReaders) > 0 {
+		if len(ctr.spillReaders) == 1 {
+			src := ctr.spillReaders[0]
+			chunk := computeDrainChunk(src.batch, src.rowIdx, ctr.buf.Size())
+			if chunk > 1 {
+				if err := appendContiguousRows(ctr.buf, src.batch, src.rowIdx, chunk, proc); err != nil {
+					return false, err
+				}
+				rows += chunk
+				src.rowIdx += int64(chunk)
+				if src.rowIdx >= int64(src.batch.RowCount()) {
+					ok, err := src.readNextBatch(proc, ctr)
+					if err != nil {
+						return false, err
+					}
+					if !ok {
+						removed := heap.Remove(ctr, 0).(*spillRunReader)
+						removed.close(proc)
+					}
+				}
+				if rows >= nextSizeCheck {
+					if ctr.buf.Size() >= maxBatchSizeToSend {
+						break
+					}
+					nextSizeCheck = rows + batchSizeCheckInterval
+				}
+				continue
+			}
+		}
+
 		choice := ctr.pickFirstSpillReader()
 		src := ctr.spillReaders[choice]
 		for col := range ctr.buf.Vecs {

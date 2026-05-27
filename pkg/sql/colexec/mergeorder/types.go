@@ -44,6 +44,8 @@ const spillAppendTargetMin = int64(32 * common.MiB)
 const spillAppendTargetMax = int64(128 * common.MiB)
 const spillAppendHardCapMax = int64(256 * common.MiB)
 const batchSizeCheckInterval = 64
+const maxDrainChunkRows = 256
+const maxVarlenDrainChunkRows = 32
 
 var _ vm.Operator = new(MergeOrder)
 
