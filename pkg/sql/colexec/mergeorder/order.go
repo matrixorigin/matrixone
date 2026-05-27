@@ -142,10 +142,18 @@ func computeBatchDrainChunk(src *batch.Batch, start int64, currentSize int, fixe
 }
 
 func (ctr *container) compareInMemoryRows(left int, leftRow int64, right int, rightRow int64) int {
-	for k := 0; k < len(ctr.compares); k++ {
-		ctr.compares[k].Set(0, ctr.orderCols[left][k])
-		ctr.compares[k].Set(1, ctr.orderCols[right][k])
-		if r := ctr.compares[k].Compare(0, 1, leftRow, rightRow); r != 0 {
+	compares := ctr.compares
+	leftCols := ctr.orderCols[left]
+	rightCols := ctr.orderCols[right]
+	if len(compares) == 1 {
+		compares[0].Set(0, leftCols[0])
+		compares[0].Set(1, rightCols[0])
+		return compares[0].Compare(0, 1, leftRow, rightRow)
+	}
+	for k := 0; k < len(compares); k++ {
+		compares[k].Set(0, leftCols[k])
+		compares[k].Set(1, rightCols[k])
+		if r := compares[k].Compare(0, 1, leftRow, rightRow); r != 0 {
 			return r
 		}
 	}
@@ -153,9 +161,15 @@ func (ctr *container) compareInMemoryRows(left int, leftRow int64, right int, ri
 }
 
 func (ctr *container) compareInMemoryRowsWithBoundLeft(leftRow int64, right int, rightRow int64) int {
-	for k := 0; k < len(ctr.compares); k++ {
-		ctr.compares[k].Set(1, ctr.orderCols[right][k])
-		if r := ctr.compares[k].Compare(0, 1, leftRow, rightRow); r != 0 {
+	compares := ctr.compares
+	rightCols := ctr.orderCols[right]
+	if len(compares) == 1 {
+		compares[0].Set(1, rightCols[0])
+		return compares[0].Compare(0, 1, leftRow, rightRow)
+	}
+	for k := 0; k < len(compares); k++ {
+		compares[k].Set(1, rightCols[k])
+		if r := compares[k].Compare(0, 1, leftRow, rightRow); r != 0 {
 			return r
 		}
 	}
@@ -180,17 +194,30 @@ func (ctr *container) computeInMemoryWinnerChunk(winner int, loser int, budgetCh
 		limit = maxWinnerChunkRows
 	}
 
-	for k := 0; k < len(ctr.compares); k++ {
-		ctr.compares[k].Set(0, ctr.orderCols[winner][k])
-		ctr.compares[k].Set(1, ctr.orderCols[loser][k])
+	compares := ctr.compares
+	for k := 0; k < len(compares); k++ {
+		compares[k].Set(0, ctr.orderCols[winner][k])
+		compares[k].Set(1, ctr.orderCols[loser][k])
 	}
 
 	chunk := 1
+	if len(compares) == 1 {
+		cmp := compares[0]
+		for chunk < limit {
+			nextRow := start + int64(chunk)
+			if cmp.Compare(0, 1, nextRow, loserRow) <= 0 {
+				chunk++
+			} else {
+				break
+			}
+		}
+		return chunk
+	}
 	for chunk < limit {
 		nextRow := start + int64(chunk)
 		ordered := true
-		for k := 0; k < len(ctr.compares); k++ {
-			if r := ctr.compares[k].Compare(0, 1, nextRow, loserRow); r != 0 {
+		for k := 0; k < len(compares); k++ {
+			if r := compares[k].Compare(0, 1, nextRow, loserRow); r != 0 {
 				ordered = r < 0
 				break
 			}
@@ -209,21 +236,48 @@ func (ctr *container) pickFirstSecondRows() (first int, second int) {
 	if l < 2 {
 		return 0, -1
 	}
+	compares := ctr.compares
+	indexList := ctr.indexList
+	orderCols := ctr.orderCols
+	if len(compares) == 1 {
+		cmp := compares[0]
+		first, second = 0, 1
+		cmp.Set(0, orderCols[second][0])
+		cmp.Set(1, orderCols[first][0])
+		if cmp.Compare(0, 1, indexList[second], indexList[first]) < 0 {
+			first, second = second, first
+		}
+		for i := 2; i < l; i++ {
+			row := indexList[i]
+			cmp.Set(0, orderCols[i][0])
+			cmp.Set(1, orderCols[first][0])
+			if cmp.Compare(0, 1, row, indexList[first]) < 0 {
+				second = first
+				first = i
+				continue
+			}
+			cmp.Set(1, orderCols[second][0])
+			if cmp.Compare(0, 1, row, indexList[second]) < 0 {
+				second = i
+			}
+		}
+		return first, second
+	}
 	first, second = 0, 1
-	if ctr.compareInMemoryRows(second, ctr.indexList[second], first, ctr.indexList[first]) < 0 {
+	if ctr.compareInMemoryRows(second, indexList[second], first, indexList[first]) < 0 {
 		first, second = second, first
 	}
 	for i := 2; i < l; i++ {
-		row := ctr.indexList[i]
-		for k := 0; k < len(ctr.compares); k++ {
-			ctr.compares[k].Set(0, ctr.orderCols[i][k])
+		row := indexList[i]
+		for k := 0; k < len(compares); k++ {
+			compares[k].Set(0, orderCols[i][k])
 		}
-		if ctr.compareInMemoryRowsWithBoundLeft(row, first, ctr.indexList[first]) < 0 {
+		if ctr.compareInMemoryRowsWithBoundLeft(row, first, indexList[first]) < 0 {
 			second = first
 			first = i
 			continue
 		}
-		if ctr.compareInMemoryRowsWithBoundLeft(row, second, ctr.indexList[second]) < 0 {
+		if ctr.compareInMemoryRowsWithBoundLeft(row, second, indexList[second]) < 0 {
 			second = i
 		}
 	}
@@ -383,6 +437,20 @@ func (ctr *container) pickFirstRow() (batIndex int) {
 		indexList := ctr.indexList
 		i := 0
 		leftRow := indexList[i]
+		if len(compares) == 1 {
+			cmp := compares[0]
+			cmp.Set(0, orderCols[i][0])
+			for j := 1; j < l; j++ {
+				rightRow := indexList[j]
+				cmp.Set(1, orderCols[j][0])
+				if cmp.Compare(0, 1, leftRow, rightRow) > 0 {
+					i = j
+					leftRow = rightRow
+					cmp.Set(0, orderCols[i][0])
+				}
+			}
+			return i
+		}
 		for k := 0; k < len(compares); k++ {
 			compares[k].Set(0, orderCols[i][k])
 		}
