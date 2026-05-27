@@ -88,7 +88,7 @@ func makeRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
 		pressureUntil := time.Now().Add(rssCacheAdmissionPressureTTL)
 		fileservice.SetMemoryCachePressureTargetPercent(targetPercent, pressureUntil)
 
-		memoryCtx, cancel := context.WithTimeout(ctx, timeout)
+		memoryCtx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseRSSCacheEvict)
 		defer cancel()
 		evictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
 	}
