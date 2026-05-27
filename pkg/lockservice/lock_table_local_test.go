@@ -1754,6 +1754,7 @@ func TestHandleLockConflictLockedLogOnMissingRangeKey(t *testing.T) {
 
 				waitTxn := pb.WaitTxn{TxnID: txnID, CreatedOn: "test"}
 				w := acquireWaiter(waitTxn, "test", logger)
+				defer w.close("test", logger)
 
 				staleKey := []byte{2}
 				staleWaiters := newWaiterQueue()
@@ -1820,6 +1821,90 @@ func TestHandleLockConflictLockedLogOnMissingRangeKey(t *testing.T) {
 				nextLock, ok := lt.mu.store.Get(nextConflictKey)
 				require.True(t, ok)
 				assert.Equal(t, 1, nextLock.waiters.size())
+			})
+		},
+	)
+}
+
+func TestHandleLockConflictLockedCleansRangeWaiterOnAsyncTimeout(t *testing.T) {
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			reuse.RunReuseTests(func() {
+				logger := getLogger("")
+				events := newWaiterEvents(1, nil, nil, time.Second, nil, logger)
+				defer events.close()
+
+				lt := newLocalLockTable(
+					pb.LockTable{Table: 1, ServiceID: "test"},
+					nil,
+					events,
+					rt.Clock(),
+					nil,
+					logger,
+				).(*localLockTable)
+
+				txnID := []byte("txn1")
+				fsp := newFixedSlicePool(2)
+				txn := newActiveTxn(txnID, string(txnID), fsp, "")
+				defer reuse.Free(txn, nil)
+
+				waitTxn := pb.WaitTxn{TxnID: txnID, CreatedOn: "test"}
+				w := acquireWaiter(waitTxn, "test", logger)
+				defer w.close("test", logger)
+
+				staleKey := []byte{2}
+				staleWaiters := newWaiterQueue()
+				staleWaiters.init(logger)
+				staleWaiters.put(w)
+				lt.mu.store.Add(staleKey, Lock{
+					createAt: time.Now(),
+					holders:  newHolders(),
+					waiters:  staleWaiters,
+				})
+
+				nextConflictKey := []byte{1}
+				holderTxnID := []byte("holder1")
+				holderWaitTxn := pb.WaitTxn{TxnID: holderTxnID, CreatedOn: "test"}
+				h := newHolders()
+				h.add(holderWaitTxn)
+				wq := newWaiterQueue()
+				wq.init(logger)
+				conflictWith := Lock{
+					createAt: time.Now(),
+					holders:  h,
+					waiters:  wq,
+				}
+				lt.mu.store.Add(nextConflictKey, conflictWith)
+
+				c := &lockContext{
+					ctx:     context.Background(),
+					txn:     txn,
+					waitTxn: waitTxn,
+					opts: LockOptions{
+						LockOptions: pb.LockOptions{
+							Granularity: pb.Granularity_Range,
+							Mode:        pb.LockMode_Exclusive,
+							Policy:      pb.WaitPolicy_Wait,
+						},
+						async: true,
+					},
+					w:                w,
+					rangeLastWaitKey: staleKey,
+					lockWaitDeadline: time.Now().Add(-time.Second),
+					result:           pb.Result{},
+				}
+
+				err := lt.handleLockConflictLocked(c, nextConflictKey, conflictWith)
+				assert.ErrorIs(t, err, ErrLockTimeout)
+				assert.Nil(t, c.rangeLastWaitKey)
+
+				_, ok := lt.mu.store.Get(staleKey)
+				assert.False(t, ok)
+
+				nextLock, ok := lt.mu.store.Get(nextConflictKey)
+				require.True(t, ok)
+				assert.Equal(t, 0, nextLock.waiters.size())
 			})
 		},
 	)

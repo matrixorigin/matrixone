@@ -546,12 +546,12 @@ func (l *localLockTable) handleLockConflictLocked(
 	if c.opts.Policy == pb.WaitPolicy_FastFail {
 		return ErrLockConflict
 	}
-	if c.opts.async && !c.lockWaitDeadline.IsZero() && !time.Now().Before(c.lockWaitDeadline) {
-		return ErrLockTimeout
-	}
 
 	if c.opts.Granularity == pb.Granularity_Range {
 		l.closeRangeLastWaiterLocked(c)
+	}
+	if c.opts.async && !c.lockWaitDeadline.IsZero() && !time.Now().Before(c.lockWaitDeadline) {
+		return ErrLockTimeout
 	}
 
 	c.w.conflictKey.Store(&key)
