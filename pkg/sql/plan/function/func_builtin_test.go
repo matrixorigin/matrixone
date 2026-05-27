@@ -955,17 +955,28 @@ func Test_BuiltIn_Math(t *testing.T) {
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
 					[]float64{
-						-1, 1, 1, 1, 1.0, 1.0,
+						-1, 1, 1, 1, 1, 0, -1, 0, 0,
 					},
-					nil),
+					[]bool{false, false, false, false, false, false, false, false, true}),
 				NewFunctionTestInput(types.T_float64.ToType(),
 					[]float64{
-						1, 0, -1, 1, -1.0, 1.0,
+						1, 0, -1, 1, -1, -1, 0, 0, 1,
 					},
-					nil),
+					[]bool{false, false, false, false, false, false, false, true, false}),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{-0.7853981633974483, 0, -0.7853981633974483, 0.7853981633974483, -0.7853981633974483, 0.7853981633974483}, nil),
+				[]float64{
+					-0.7853981633974483,
+					1.5707963267948966,
+					2.356194490192345,
+					0.7853981633974483,
+					2.356194490192345,
+					3.141592653589793,
+					-1.5707963267948966,
+					0,
+					0,
+				},
+				[]bool{false, false, false, false, false, false, false, true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInATan2)
 		succeed, info := tcc.Run()
