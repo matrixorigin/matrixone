@@ -455,6 +455,218 @@ func Test_IffCheck_MixedTypes(t *testing.T) {
 	}
 }
 
+func Test_CaseCheck_DifferentDecimalScale(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal128, 23, 2),
+		types.New(types.T_decimal128, 38, 7),
+	}
+
+	result := caseCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
+	require.Equal(t, int32(38), result.finalType[1].Width)
+	require.Equal(t, int32(7), result.finalType[1].Scale)
+	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
+	require.Equal(t, int32(38), result.finalType[2].Width)
+	require.Equal(t, int32(7), result.finalType[2].Scale)
+}
+
+func Test_CaseCheck_MixedDecimalFamilyScale(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal64, 18, 6),
+		types.New(types.T_decimal128, 20, 0),
+	}
+
+	result := caseCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
+	require.Equal(t, int32(26), result.finalType[1].Width)
+	require.Equal(t, int32(6), result.finalType[1].Scale)
+	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
+	require.Equal(t, int32(26), result.finalType[2].Width)
+	require.Equal(t, int32(6), result.finalType[2].Scale)
+}
+
+func Test_CaseCheck_DecimalWithIntegerPromotesForIntegralWidth(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal64, 18, 0),
+		types.T_int64.ToType(),
+	}
+
+	result := caseCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
+	require.Equal(t, int32(19), result.finalType[1].Width)
+	require.Equal(t, int32(0), result.finalType[1].Scale)
+	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
+	require.Equal(t, int32(19), result.finalType[2].Width)
+	require.Equal(t, int32(0), result.finalType[2].Scale)
+}
+
+func Test_CaseCheck_Decimal64PromotesForRequiredWidth(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal64, 18, 0),
+		types.New(types.T_decimal64, 18, 2),
+	}
+
+	result := caseCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
+	require.Equal(t, int32(20), result.finalType[1].Width)
+	require.Equal(t, int32(2), result.finalType[1].Scale)
+	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
+	require.Equal(t, int32(20), result.finalType[2].Width)
+	require.Equal(t, int32(2), result.finalType[2].Scale)
+}
+
+func Test_CaseCheck_Decimal64PromotesForLargeScale(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal64, 18, 0),
+		types.New(types.T_decimal64, 18, 18),
+	}
+
+	result := caseCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
+	require.Equal(t, int32(36), result.finalType[1].Width)
+	require.Equal(t, int32(18), result.finalType[1].Scale)
+	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
+	require.Equal(t, int32(36), result.finalType[2].Width)
+	require.Equal(t, int32(18), result.finalType[2].Scale)
+}
+
+func Test_CaseCheck_Decimal128PromotesToDecimal256(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal128, 38, 0),
+		types.New(types.T_decimal128, 38, 38),
+	}
+
+	result := caseCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.Equal(t, types.T_decimal256, result.finalType[1].Oid)
+	require.Equal(t, int32(76), result.finalType[1].Width)
+	require.Equal(t, int32(38), result.finalType[1].Scale)
+	require.Equal(t, types.T_decimal256, result.finalType[2].Oid)
+	require.Equal(t, int32(76), result.finalType[2].Width)
+	require.Equal(t, int32(38), result.finalType[2].Scale)
+}
+
+func Test_CaseCheck_Decimal256OverflowFails(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal256, 76, 0),
+		types.New(types.T_decimal256, 76, 76),
+	}
+
+	result := caseCheck(nil, inputs)
+	require.Equal(t, failedFunctionParametersWrong, result.status)
+}
+
+func Test_IffCheck_DifferentDecimalScale(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal128, 23, 2),
+		types.New(types.T_decimal128, 38, 7),
+	}
+
+	result := iffCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
+	require.Equal(t, int32(38), result.finalType[1].Width)
+	require.Equal(t, int32(7), result.finalType[1].Scale)
+	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
+	require.Equal(t, int32(38), result.finalType[2].Width)
+	require.Equal(t, int32(7), result.finalType[2].Scale)
+}
+
+func Test_IffCheck_MixedDecimalFamilyScale(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal64, 18, 6),
+		types.New(types.T_decimal128, 20, 0),
+	}
+
+	result := iffCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
+	require.Equal(t, int32(26), result.finalType[1].Width)
+	require.Equal(t, int32(6), result.finalType[1].Scale)
+	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
+	require.Equal(t, int32(26), result.finalType[2].Width)
+	require.Equal(t, int32(6), result.finalType[2].Scale)
+}
+
+func Test_IffCheck_DecimalWithIntegerPromotesForIntegralWidth(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal64, 18, 0),
+		types.T_int64.ToType(),
+	}
+
+	result := iffCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
+	require.Equal(t, int32(19), result.finalType[1].Width)
+	require.Equal(t, int32(0), result.finalType[1].Scale)
+	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
+	require.Equal(t, int32(19), result.finalType[2].Width)
+	require.Equal(t, int32(0), result.finalType[2].Scale)
+}
+
+func Test_IffCheck_Decimal64PromotesForLargeScale(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal64, 18, 0),
+		types.New(types.T_decimal64, 18, 18),
+	}
+
+	result := iffCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+	require.Equal(t, types.T_decimal128, result.finalType[1].Oid)
+	require.Equal(t, int32(36), result.finalType[1].Width)
+	require.Equal(t, int32(18), result.finalType[1].Scale)
+	require.Equal(t, types.T_decimal128, result.finalType[2].Oid)
+	require.Equal(t, int32(36), result.finalType[2].Width)
+	require.Equal(t, int32(18), result.finalType[2].Scale)
+}
+
+func Test_IffCheck_Decimal256OverflowFails(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal256, 76, 0),
+		types.New(types.T_decimal256, 76, 76),
+	}
+
+	result := iffCheck(nil, inputs)
+	require.Equal(t, failedFunctionParametersWrong, result.status)
+}
+
 func Test_CaseCheck_MixedStringNumeric(t *testing.T) {
 	inputs := []types.Type{
 		types.T_bool.ToType(),
@@ -521,7 +733,6 @@ func Test_CaseWhen_WithNullAndStringComparison(t *testing.T) {
 	succeed, info := tcc.Run()
 	require.True(t, succeed, tc.info, info)
 }
-
 func Test_CastSetFunctions(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -588,6 +799,52 @@ func Test_CastSetFunctions(t *testing.T) {
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
+}
+
+func Test_CaseFn_Decimal256Execution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	d1, err := types.ParseDecimal256("111111111111111111111111111111111111111", 76, 0)
+	require.NoError(t, err)
+	d2, err := types.ParseDecimal256("999999999999999999999999999999999999999", 76, 0)
+	require.NoError(t, err)
+	retType := types.New(types.T_decimal256, 76, 0)
+	// CASE WHEN TRUE THEN d1 ELSE d2 → row0=d1; CASE WHEN FALSE THEN d1 ELSE d2 → row1=d2
+	tc := tcTemp{
+		info: "caseFn decimal256: CASE WHEN c THEN d1 ELSE d2",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
+			NewFunctionTestInput(retType, []types.Decimal256{d1, d1}, nil),
+			NewFunctionTestInput(retType, []types.Decimal256{d2, d2}, nil),
+		},
+		expect: NewFunctionTestResult(retType, false,
+			[]types.Decimal256{d1, d2}, nil),
+	}
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, caseFn)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, tc.info, info)
+}
+
+func Test_IffFn_Decimal256Execution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	d1, err := types.ParseDecimal256("123456789012345678901234567890123456789", 76, 0)
+	require.NoError(t, err)
+	d2, err := types.ParseDecimal256("987654321098765432109876543210987654321", 76, 0)
+	require.NoError(t, err)
+	retType := types.New(types.T_decimal256, 76, 0)
+	// IFF(TRUE, d1, d2) → d1; IFF(FALSE, d1, d2) → d2
+	tc := tcTemp{
+		info: "iffFn decimal256: IFF(c, d1, d2)",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
+			NewFunctionTestInput(retType, []types.Decimal256{d1, d1}, nil),
+			NewFunctionTestInput(retType, []types.Decimal256{d2, d2}, nil),
+		},
+		expect: NewFunctionTestResult(retType, false,
+			[]types.Decimal256{d1, d2}, nil),
+	}
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, iffFn)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, tc.info, info)
 }
 
 func Test_YearAndDecimal256_FuncTestcaseCompare(t *testing.T) {
