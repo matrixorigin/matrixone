@@ -56,11 +56,11 @@ func NewDatalink(aurl string, proc *process.Process) (Datalink, error) {
 	}
 
 	dl := Datalink{Url: u, Offset: offsetSize[0], Size: offsetSize[1], MoPath: moUrl}
-	for k, v := range u.Query() {
-		if strings.EqualFold(k, ContentHashKey) {
-			dl.ContentHash = strings.ToLower(v[0])
-			break
-		}
+	// Derive ContentHash from the parsed MoPath so it always addresses the same
+	// CAS object that ParseDatalink resolved (no split-brain on duplicate or
+	// mixed-case contenthash params).
+	if hash, ok := casHashFromKey(moUrl); ok {
+		dl.ContentHash = hash
 	}
 	return dl, nil
 }

@@ -61,6 +61,21 @@ func TestNewDatalinkContentHash(t *testing.T) {
 	require.Empty(t, live.ContentHash)
 }
 
+// ContentHash always addresses the same CAS object as MoPath, regardless of the
+// case used in the contenthash query key or value.
+func TestNewDatalinkContentHashConsistentWithMoPath(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	for _, raw := range []string{
+		"file:///x.txt?contenthash=" + hash,
+		"file:///x.txt?ContentHash=" + strings.ToUpper(hash),
+	} {
+		dl, err := NewDatalink(raw, nil)
+		require.NoError(t, err, raw)
+		require.Equal(t, hash, dl.ContentHash, raw)
+		require.Equal(t, CASKey(dl.ContentHash), dl.MoPath, raw)
+	}
+}
+
 // A pinned datalink reads its bytes from the CAS, decoupled from the original
 // path. NewProc(t) backs SHARED with LocalFS (no ETLFileService), matching
 // standalone, so this exercises the direct-Read path rather than GetForETL.

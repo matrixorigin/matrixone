@@ -3518,6 +3518,24 @@ func pinDatalink(rawURL string, casFS fileservice.FileService, proc *process.Pro
 	if err != nil {
 		return "", err
 	}
+
+	// Size guard, mirroring load_file: refuse to pin more than one blob's worth of
+	// bytes. Pinning copies the whole (sliced) object into memory, so without this
+	// a huge object would OOM the CN. The effective size accounts for offset/size,
+	// so a small slice of a large file is still allowed. Streaming hash/copy of
+	// arbitrarily large objects is a follow-up (see issue #24555).
+	size := dl.Size
+	if size < 0 {
+		fileSize, err := dl.StatSize(proc)
+		if err != nil {
+			return "", err
+		}
+		size = fileSize - dl.Offset
+	}
+	if size > int64(types.MaxBlobLen) {
+		return "", moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+	}
+
 	fileBytes, err := dl.GetBytes(proc)
 	if err != nil {
 		return "", err
@@ -3528,10 +3546,14 @@ func pinDatalink(rawURL string, casFS fileservice.FileService, proc *process.Pro
 		return "", err
 	}
 
-	// rewrite the URL to address the immutable copy. offset/size are already baked
-	// into the stored bytes, so drop them to avoid double slicing on read.
-	q.Del("offset")
-	q.Del("size")
+	// Rewrite the URL to address the immutable copy. The sliced bytes are already
+	// baked into the CAS object, so drop offset/size (case-insensitively, matching
+	// ParseDatalink which lower-cases query keys) to avoid re-slicing on read.
+	for k := range q {
+		if strings.EqualFold(k, "offset") || strings.EqualFold(k, "size") {
+			q.Del(k)
+		}
+	}
 	q.Set(datalink.ContentHashKey, hash)
 	u.RawQuery = q.Encode()
 	return u.String(), nil

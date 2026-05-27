@@ -33,3 +33,22 @@ select datalink_pin(cast(null as datalink)) as pin_null;
 ➤ pin_null[12,0,0]  𝄀
 null
 drop table pin_t;
+create stage pin_ow_st URL='file://$resources/into_outfile/pin_ow_a/';
+select save_file(cast('stage://pin_ow_st/f.txt' as datalink), 'version-ONE') as ow_setup_v1;
+➤ ow_setup_v1[-5,64,0]  𝄀
+11
+create table pin_ow(id int, dl datalink);
+insert into pin_ow values(1, datalink_pin(cast('stage://pin_ow_st/f.txt' as datalink)));
+drop stage pin_ow_st;
+create stage pin_ow_st URL='file://$resources/into_outfile/pin_ow_b/';
+select save_file(cast('stage://pin_ow_st/f.txt' as datalink), 'version-TWO') as ow_setup_v2;
+➤ ow_setup_v2[-5,64,0]  𝄀
+11
+select load_file(cast('stage://pin_ow_st/f.txt' as datalink)) as ow_live_read;
+➤ ow_live_read[12,0,0]  𝄀
+version-TWO
+select id, load_file(dl) as ow_pinned_read from pin_ow where id = 1;
+➤ id[4,32,0]  ¦  ow_pinned_read[12,0,0]  𝄀
+1  ¦  version-ONE
+drop table pin_ow;
+drop stage pin_ow_st;

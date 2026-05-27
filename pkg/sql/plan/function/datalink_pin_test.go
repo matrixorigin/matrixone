@@ -145,6 +145,54 @@ func TestDatalinkPinMissingLiveFileErrors(t *testing.T) {
 	require.True(t, s, info)
 }
 
+// Mixed-case offset/size params must be stripped after the sliced bytes are
+// frozen, so the pinned URL carries only the contenthash. Otherwise a later read
+// would slice the (already-sliced) CAS object again and return wrong bytes.
+func TestDatalinkPinStripsMixedCaseSlice(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "doc.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("Hello world!"), 0o600))
+
+	proc := testutil.NewProc(t)
+	liveURL := "file://" + filePath
+	// ?Offset=6&Size=5 selects "world"; the pinned URL must address only that
+	// content by hash, with no residual Offset/Size.
+	input := liveURL + "?Offset=6&Size=5"
+	expected := pinnedURLOf(liveURL, []byte("world"))
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_datalink.ToType(),
+			[]string{input}, []bool{false})},
+		NewFunctionTestResult(types.T_datalink.ToType(), false,
+			[]string{expected}, []bool{false}),
+		DatalinkPin)
+	s, info := tc.Run()
+	require.True(t, s, info)
+}
+
+// pin refuses to copy more than one blob's worth of bytes into memory, mirroring
+// load_file's MaxBlobLen guard, rather than risking OOM on a huge object.
+func TestDatalinkPinRejectsOversizedFile(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "big.bin")
+	f, err := os.Create(filePath)
+	require.NoError(t, err)
+	// sparse file just over MaxBlobLen: StatFile reports the full size without
+	// allocating it, so the guard must reject before reading anything.
+	require.NoError(t, f.Truncate(int64(types.MaxBlobLen)+1))
+	require.NoError(t, f.Close())
+
+	proc := testutil.NewProc(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_datalink.ToType(),
+			[]string{"file://" + filePath}, []bool{false})},
+		NewFunctionTestResult(types.T_datalink.ToType(), true,
+			[]string{""}, []bool{false}),
+		DatalinkPin)
+	s, info := tc.Run()
+	require.True(t, s, info)
+}
+
 // pin accepts a plain varchar URL too (implicitly treated as a datalink).
 func TestDatalinkPinAcceptsVarchar(t *testing.T) {
 	dir := t.TempDir()
