@@ -199,9 +199,7 @@ func (s *memStore) SetOffset(
 	}
 	for i := range cols {
 		if cols[i].ColName == colName {
-			if cols[i].Offset < offset {
-				cols[i].Offset = offset
-			}
+			cols[i].Offset = offset
 			return nil
 		}
 	}
