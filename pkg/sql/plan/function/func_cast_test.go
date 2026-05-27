@@ -2469,6 +2469,109 @@ func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
 	require.Contains(t, err.Error(), "max_points_in_geometry=3")
 }
 
+func TestCastNumericToDecimal256Dispatcher(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	toType := types.New(types.T_decimal256, 65, 4)
+	var zero types.Decimal256
+	toDecimal256 := func(s string) types.Decimal256 {
+		v, err := types.ParseDecimal256(s, 65, 4)
+		require.NoError(t, err)
+		return v
+	}
+	run := func(name string, input FunctionTestInput, expected types.Decimal256) {
+		t.Run(name, func(t *testing.T) {
+			tc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					input,
+					NewFunctionTestInput(toType, []types.Decimal256{}, nil),
+				},
+				NewFunctionTestResult(toType, false, []types.Decimal256{expected, zero}, []bool{false, true}),
+				NewCast,
+			)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	run("bit", NewFunctionTestInput(types.T_bit.ToType(), []uint64{42, 0}, []bool{false, true}),
+		toDecimal256("42.0000"))
+	run("int8", NewFunctionTestInput(types.T_int8.ToType(), []int8{-12, 0}, []bool{false, true}),
+		toDecimal256("-12.0000"))
+	run("int16", NewFunctionTestInput(types.T_int16.ToType(), []int16{-1234, 0}, []bool{false, true}),
+		toDecimal256("-1234.0000"))
+	run("int32", NewFunctionTestInput(types.T_int32.ToType(), []int32{-123456, 0}, []bool{false, true}),
+		toDecimal256("-123456.0000"))
+	run("int64", NewFunctionTestInput(types.T_int64.ToType(), []int64{-1234567890123, 0}, []bool{false, true}),
+		toDecimal256("-1234567890123.0000"))
+	run("uint8", NewFunctionTestInput(types.T_uint8.ToType(), []uint8{12, 0}, []bool{false, true}),
+		toDecimal256("12.0000"))
+	run("uint16", NewFunctionTestInput(types.T_uint16.ToType(), []uint16{1234, 0}, []bool{false, true}),
+		toDecimal256("1234.0000"))
+	run("uint32", NewFunctionTestInput(types.T_uint32.ToType(), []uint32{123456, 0}, []bool{false, true}),
+		toDecimal256("123456.0000"))
+	run("uint64", NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1234567890123, 0}, []bool{false, true}),
+		toDecimal256("1234567890123.0000"))
+}
+
+func TestCastDecimalToDecimal256Dispatcher(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	var zero types.Decimal256
+
+	decimal64Type := types.New(types.T_decimal64, 18, 2)
+	decimal64ToType := types.New(types.T_decimal256, 65, 4)
+	d64Positive, err := types.ParseDecimal64("12.34", 18, 2)
+	require.NoError(t, err)
+	d64Negative, err := types.ParseDecimal64("-56.78", 18, 2)
+	require.NoError(t, err)
+	d64ExpectedPositive, err := types.ParseDecimal256("12.3400", 65, 4)
+	require.NoError(t, err)
+	d64ExpectedNegative, err := types.ParseDecimal256("-56.7800", 65, 4)
+	require.NoError(t, err)
+
+	t.Run("decimal64", func(t *testing.T) {
+		tc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(decimal64Type, []types.Decimal64{d64Positive, d64Negative, 0}, []bool{false, false, true}),
+				NewFunctionTestInput(decimal64ToType, []types.Decimal256{}, nil),
+			},
+			NewFunctionTestResult(decimal64ToType, false,
+				[]types.Decimal256{d64ExpectedPositive, d64ExpectedNegative, zero}, []bool{false, false, true}),
+			NewCast,
+		)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	decimal128Type := types.New(types.T_decimal128, 38, 3)
+	decimal128ToType := types.New(types.T_decimal256, 65, 6)
+	d128Positive, err := types.ParseDecimal128("123456789.123", 38, 3)
+	require.NoError(t, err)
+	d128Negative, err := types.ParseDecimal128("-987654321.500", 38, 3)
+	require.NoError(t, err)
+	d128ExpectedPositive, err := types.ParseDecimal256("123456789.123000", 65, 6)
+	require.NoError(t, err)
+	d128ExpectedNegative, err := types.ParseDecimal256("-987654321.500000", 65, 6)
+	require.NoError(t, err)
+
+	t.Run("decimal128", func(t *testing.T) {
+		tc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(decimal128Type,
+					[]types.Decimal128{d128Positive, d128Negative, types.Decimal128{}}, []bool{false, false, true}),
+				NewFunctionTestInput(decimal128ToType, []types.Decimal256{}, nil),
+			},
+			NewFunctionTestResult(decimal128ToType, false,
+				[]types.Decimal256{d128ExpectedPositive, d128ExpectedNegative, zero}, []bool{false, false, true}),
+			NewCast,
+		)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+}
+
 // makeJSONEncodedFromText parses JSON text strings and returns their bytejson-encoded form as []string for vector.
 func makeJSONEncodedFromText(t *testing.T, jsonTexts []string, nulls []bool) []string {
 	t.Helper()
@@ -2486,6 +2589,285 @@ func makeJSONEncodedFromText(t *testing.T, jsonTexts []string, nulls []bool) []s
 	}
 	return out
 }
+
+func TestYearCastHelpers(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	inputVec := testutil.MakeVarcharVector([]string{"69", "1901", "0"}, nil)
+	defer inputVec.Free(mp)
+	from := vector.GenerateFunctionStrParameter(inputVec)
+	to := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer to.Free()
+
+	require.NoError(t, to.PreExtendAndReset(3))
+	require.NoError(t, strToYear(ctx, from, to, 3, nil, types.T_varchar.ToType()))
+
+	yearVec := to.GetResultVector()
+	years := vector.MustFixedColNoTypeCheck[types.MoYear](yearVec)
+	require.Equal(t, types.MoYear(2069), years[0])
+	require.Equal(t, types.MoYear(1901), years[1])
+	require.Equal(t, types.MoYear(0), years[2])
+
+	strResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp).(*vector.FunctionResult[types.Varlena])
+	defer strResult.Free()
+	require.NoError(t, strResult.PreExtendAndReset(3))
+	require.NoError(t, yearToStr(ctx, vector.GenerateFunctionFixedTypeParameter[types.MoYear](yearVec), strResult, 3, types.T_varchar.ToType()))
+	strParam := vector.GenerateFunctionStrParameter(strResult.GetResultVector())
+	got, null := strParam.GetStrValue(0)
+	require.False(t, null)
+	require.Equal(t, "2069", string(got))
+}
+
+func TestYearCastRejectsInvalidValues(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	inputVec := testutil.MakeVarcharVector([]string{"2156", "abcd"}, nil)
+	defer inputVec.Free(mp)
+	strResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer strResult.Free()
+	require.NoError(t, strResult.PreExtendAndReset(2))
+	require.Error(t, strToYear(ctx, vector.GenerateFunctionStrParameter(inputVec), strResult, 2, nil, types.T_varchar.ToType()))
+
+	// VARBINARY / BLOB payloads must not be NUL-trimmed: ['0', 0x00] must not
+	// be silently accepted as YEAR 0.
+	varBinPayload := []byte{'0', 0x00}
+	varBinVec := testutil.MakeVarcharVector([]string{string(varBinPayload)}, nil)
+	defer varBinVec.Free(mp)
+	varBinResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer varBinResult.Free()
+	require.NoError(t, varBinResult.PreExtendAndReset(1))
+	require.Error(t, strToYear(ctx, vector.GenerateFunctionStrParameter(varBinVec), varBinResult, 1, nil, types.T_varbinary.ToType()))
+
+	// Fixed-length BINARY right-pads with NUL; keep that behavior and still
+	// parse the logical value. '0' padded with NUL should become YEAR 0.
+	binVec := testutil.MakeVarcharVector([]string{string(varBinPayload)}, nil)
+	defer binVec.Free(mp)
+	binResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer binResult.Free()
+	require.NoError(t, binResult.PreExtendAndReset(1))
+	require.NoError(t, strToYear(ctx, vector.GenerateFunctionStrParameter(binVec), binResult, 1, nil, types.T_binary.ToType()))
+
+	intVec := vector.NewVec(types.T_int64.ToType())
+	defer intVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(intVec, []int64{2156}, nil, mp))
+	intResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer intResult.Free()
+	require.NoError(t, intResult.PreExtendAndReset(1))
+	require.Error(t, integerToYear(ctx, vector.GenerateFunctionFixedTypeParameter[int64](intVec), intResult, 1, nil))
+}
+
+func TestFloatToYearRoundsBeforeRangeCheck(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	// 2155.6 should round to 2156 and be rejected as out-of-range (not silently
+	// truncated to 2155 as the old int64(v) cast did).
+	floatVec := vector.NewVec(types.T_float64.ToType())
+	defer floatVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(floatVec, []float64{2155.6}, nil, mp))
+	floatResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer floatResult.Free()
+	require.NoError(t, floatResult.PreExtendAndReset(1))
+	require.Error(t, floatToYear(ctx, vector.GenerateFunctionFixedTypeParameter[float64](floatVec), floatResult, 1, nil))
+
+	// 2069.4 rounds to 2069, which maps to year 2069 via the century window.
+	okVec := vector.NewVec(types.T_float64.ToType())
+	defer okVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(okVec, []float64{69.4}, nil, mp))
+	okResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer okResult.Free()
+	require.NoError(t, okResult.PreExtendAndReset(1))
+	require.NoError(t, floatToYear(ctx, vector.GenerateFunctionFixedTypeParameter[float64](okVec), okResult, 1, nil))
+	years := vector.MustFixedColNoTypeCheck[types.MoYear](okResult.GetResultVector())
+	require.Equal(t, types.MoYear(2069), years[0])
+
+	// NaN / Inf are rejected up front.
+	nanVec := vector.NewVec(types.T_float64.ToType())
+	defer nanVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(nanVec, []float64{math.NaN()}, nil, mp))
+	nanResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer nanResult.Free()
+	require.NoError(t, nanResult.PreExtendAndReset(1))
+	require.Error(t, floatToYear(ctx, vector.GenerateFunctionFixedTypeParameter[float64](nanVec), nanResult, 1, nil))
+
+	// Null float propagates as null-year without error.
+	nullVec := vector.NewVec(types.T_float64.ToType())
+	defer nullVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(nullVec, []float64{0}, []bool{true}, mp))
+	nullResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer nullResult.Free()
+	require.NoError(t, nullResult.PreExtendAndReset(1))
+	require.NoError(t, floatToYear(ctx, vector.GenerateFunctionFixedTypeParameter[float64](nullVec), nullResult, 1, nil))
+	nullYears := vector.MustFixedColNoTypeCheck[types.MoYear](nullResult.GetResultVector())
+	require.Equal(t, types.MoYear(0), nullYears[0])
+}
+
+// TestDecimalToFloatRangeCheckUsesFullPrecision exercises the boundary case
+// where a decimal literal rounds to a float(W,S) range violation only when
+// compared at full precision. 999.995 stored in decimal(30,3) must be
+// rejected when cast to float(5,2) — but if the fixed-range check sees the
+// float32-quantized value (~999.9949951) it will truncate to 999.99 and let
+// it through. This guards the intentional re-parse-at-64 that
+// decimal128ToFloat / decimal256ToFloat do when bitSize==32.
+func TestDecimalToFloatRangeCheckUsesFullPrecision(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	// Custom-Width/Scale float types can't be used at vector allocation time
+	// (PreExtend trips a div-by-zero), so we create the result wrapper with
+	// the default float32 type and override with SetType before the cast.
+	floatTyp := types.Type{Oid: types.T_float32, Width: 5, Scale: 2}
+
+	// decimal128 -> float32(5,2): 999.995 must raise out-of-range
+	d128Vec := vector.NewVec(types.T_decimal128.ToType())
+	defer d128Vec.Free(mp)
+	d128, err := types.ParseDecimal128("999.995", 30, 3)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixedList(d128Vec, []types.Decimal128{d128}, nil, mp))
+	d128Vec.SetType(types.Type{Oid: types.T_decimal128, Width: 30, Scale: 3})
+
+	f32Res := vector.NewFunctionResultWrapper(types.T_float32.ToType(), mp).(*vector.FunctionResult[float32])
+	defer f32Res.Free()
+	require.NoError(t, f32Res.PreExtendAndReset(1))
+	f32Res.GetResultVector().SetType(floatTyp)
+	err = decimal128ToFloat[float32](
+		ctx,
+		vector.GenerateFunctionFixedTypeParameter[types.Decimal128](d128Vec),
+		f32Res, 1, 32)
+	require.Error(t, err, "decimal128(30,3)=999.995 must overflow float(5,2)")
+	require.Contains(t, err.Error(), "999.995",
+		"range-check error should reference the original decimal literal")
+
+	// decimal256 -> float32(5,2): same guard
+	d256Vec := vector.NewVec(types.T_decimal256.ToType())
+	defer d256Vec.Free(mp)
+	d256, err := types.ParseDecimal256("999.995", 65, 3)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixedList(d256Vec, []types.Decimal256{d256}, nil, mp))
+	d256Vec.SetType(types.Type{Oid: types.T_decimal256, Width: 65, Scale: 3})
+
+	f32Res2 := vector.NewFunctionResultWrapper(types.T_float32.ToType(), mp).(*vector.FunctionResult[float32])
+	defer f32Res2.Free()
+	require.NoError(t, f32Res2.PreExtendAndReset(1))
+	f32Res2.GetResultVector().SetType(floatTyp)
+	err = decimal256ToFloat[float32](
+		ctx,
+		vector.GenerateFunctionFixedTypeParameter[types.Decimal256](d256Vec),
+		f32Res2, 1, 32)
+	require.Error(t, err, "decimal256(65,3)=999.995 must overflow float(5,2)")
+	require.Contains(t, err.Error(), "999.995",
+		"range-check error should reference the original decimal literal")
+}
+
+// TestDecimal256ToOthersRouting sanity-checks the cast-target matrix wired
+// through decimal256ToOthers by invoking each helper with a small input.
+// Having these helpers in place means CAST(decimal256_col AS VARCHAR) and
+// similar statements no longer hit "unsupported cast".
+func TestDecimal256ToOthersRouting(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	d256Typ := types.T_decimal256.ToType()
+	d256, err := types.ParseDecimal256("42", 65, 0)
+	require.NoError(t, err)
+	srcVec := vector.NewVec(d256Typ)
+	defer srcVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(srcVec, []types.Decimal256{d256}, nil, mp))
+	src := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](srcVec)
+
+	// int64
+	intRes := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp).(*vector.FunctionResult[int64])
+	defer intRes.Free()
+	require.NoError(t, intRes.PreExtendAndReset(1))
+	require.NoError(t, decimal256ToSigned[int64](ctx, src, intRes, 64, 1))
+	require.Equal(t, int64(42), vector.MustFixedColNoTypeCheck[int64](intRes.GetResultVector())[0])
+
+	// uint32
+	uRes := vector.NewFunctionResultWrapper(types.T_uint32.ToType(), mp).(*vector.FunctionResult[uint32])
+	defer uRes.Free()
+	require.NoError(t, uRes.PreExtendAndReset(1))
+	require.NoError(t, decimal256ToUnsigned[uint32](ctx, src, uRes, 32, 1))
+	require.Equal(t, uint32(42), vector.MustFixedColNoTypeCheck[uint32](uRes.GetResultVector())[0])
+
+	// bit
+	bitRes := vector.NewFunctionResultWrapper(types.T_bit.ToType(), mp).(*vector.FunctionResult[uint64])
+	defer bitRes.Free()
+	require.NoError(t, bitRes.PreExtendAndReset(1))
+	require.NoError(t, decimal256ToBit(ctx, src, bitRes, 64, 1))
+	require.Equal(t, uint64(42), vector.MustFixedColNoTypeCheck[uint64](bitRes.GetResultVector())[0])
+
+	// decimal64
+	d64Res := vector.NewFunctionResultWrapper(types.T_decimal64.ToType(), mp).(*vector.FunctionResult[types.Decimal64])
+	defer d64Res.Free()
+	require.NoError(t, d64Res.PreExtendAndReset(1))
+	require.NoError(t, decimal256ToDecimal64(ctx, src, d64Res, 1))
+
+	// decimal128
+	d128Res := vector.NewFunctionResultWrapper(types.T_decimal128.ToType(), mp).(*vector.FunctionResult[types.Decimal128])
+	defer d128Res.Free()
+	require.NoError(t, d128Res.PreExtendAndReset(1))
+	require.NoError(t, decimal256ToDecimal128(ctx, src, d128Res, 1))
+
+	// decimal256 -> decimal256 narrow
+	d256bRes := vector.NewFunctionResultWrapper(types.T_decimal256.ToType(), mp).(*vector.FunctionResult[types.Decimal256])
+	defer d256bRes.Free()
+	require.NoError(t, d256bRes.PreExtendAndReset(1))
+	require.NoError(t, decimal256ToDecimal256(src, d256bRes, 1))
+
+	// varchar
+	vcTyp := types.T_varchar.ToType()
+	vcTyp.Width = 64
+	vcRes := vector.NewFunctionResultWrapper(vcTyp, mp).(*vector.FunctionResult[types.Varlena])
+	defer vcRes.Free()
+	require.NoError(t, vcRes.PreExtendAndReset(1))
+	require.NoError(t, decimal256ToStr(ctx, src, vcRes, 1, vcTyp))
+	strParam := vector.GenerateFunctionStrParameter(vcRes.GetResultVector())
+	got, null := strParam.GetStrValue(0)
+	require.False(t, null)
+	require.Equal(t, "42", string(got))
+}
+
+// TestDecimal256ToOthersDispatcher drives every arm of decimal256ToOthers,
+// including the null/error branches inside each helper and the unsupported
+// target-type fallback. This is what lights up the routing table's
+// coverage the most — calling the helpers directly (as the routing test
+// above does) skips the dispatcher case rows.
+func TestDecimal256ToOthersDispatcher(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	d256Typ := types.T_decimal256.ToType()
+	buildSrc := func(values []types.Decimal256, nulls []bool) vector.FunctionParameterWrapper[types.Decimal256] {
+		srcVec := vector.NewVec(d256Typ)
+		t.Cleanup(func() { srcVec.Free(mp) })
+		require.NoError(t, vector.AppendFixedList(srcVec, values, nulls, mp))
+		return vector.GenerateFunctionFixedTypeParameter[types.Decimal256](srcVec)
+	}
+
+	d42, err := types.ParseDecimal256("42", 65, 0)
+	require.NoError(t, err)
+	src := buildSrc([]types.Decimal256{d42}, nil)
+
+	// Feed every supported Oid. We're not asserting numeric correctness here
+	// (that belongs in per-helper tests); the point is to execute each case
+	// branch of the switch so the dispatcher table is covered.
+	targets := []types.T{
+		types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_float32, types.T_float64,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_datalink,
+	}
+	for _, oid := range targets {
+		toType := oid.ToType()
+		if oid == types.T_char || oid == types.T_varchar || oid == types.T_binary ||
+			oid == types.T_varbinary {
+			toType.Width = 64
+		}
 
 func TestCastJsonToNumeric(t *testing.T) {
 	proc := testutil.NewProcess(t)
