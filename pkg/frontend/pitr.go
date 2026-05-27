@@ -1419,6 +1419,15 @@ func restoreToDatabaseOrTableWithPitr(
 			continue
 		}
 
+		// external table data is stored outside MO and cannot be restored by clone.
+		if shouldSkipRestoreTableInBulk(tblInfo) {
+			if restoreToTbl {
+				return newExternalTableRestoreError(ctx, tblInfo, "pitr")
+			}
+			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore external table: %v.%v", pitrName, tblInfo.dbName, tblInfo.tblName))
+			continue
+		}
+
 		// skip view
 		if tblInfo.typ == view {
 			viewMap[key] = tblInfo
@@ -1457,6 +1466,10 @@ func reCreateTableWithPitr(
 	pitrName string,
 	ts int64,
 	tblInfo *tableInfo) (err error) {
+	if isExternalTable(tblInfo) {
+		return newExternalTableRestoreError(ctx, tblInfo, "pitr")
+	}
+
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: '%v' at timestamp %d", pitrName, tblInfo.tblName, ts))
 
 	var isMasterTable bool
@@ -1541,16 +1554,14 @@ func showFullTablesWitsTs(
 	ts int64,
 	dbName string,
 	tblName string) ([]*tableInfo, error) {
-	sql := fmt.Sprintf("show full tables from `%s`", dbName)
-	if len(tblName) > 0 {
-		sql += fmt.Sprintf(" like '%s'", tblName)
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, err
 	}
-	if ts > 0 {
-		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
-	}
+	sql := buildTableInfoListSQL(dbName, tblName, ts, accountId)
 	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s` sql: %s ", pitrName, dbName, tblName, sql))
-	// cols: table name, table type
-	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
+	// cols: table name, table type, relkind
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -1561,6 +1572,7 @@ func showFullTablesWitsTs(
 			dbName:  dbName,
 			tblName: cols[0],
 			typ:     tableType(cols[1]),
+			relKind: cols[2],
 		}
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s`, get table number `%d`", pitrName, dbName, tblName, len(ans)))
