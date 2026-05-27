@@ -173,6 +173,9 @@ func (s *taskService) Complete(
 	taskRunner string,
 	value task.AsyncTask,
 	result task.ExecuteResult) error {
+	completeSQLTaskRun := value.Metadata.Executor == task.TaskCode_SQLTask &&
+		result.Code != task.ResultCode_Success
+
 	value.CompletedAt = time.Now().UnixMilli()
 	value.Status = task.TaskStatus_Completed
 	value.ExecuteResult = &result
@@ -185,6 +188,58 @@ func (s *taskService) Complete(
 	}
 	if n == 0 {
 		return moerr.NewInvalidTask(ctx, value.TaskRunner, value.ID)
+	}
+	if completeSQLTaskRun {
+		return s.completeFailedSQLTaskRun(ctx, taskRunner, value, result)
+	}
+	return nil
+}
+
+func (s *taskService) completeFailedSQLTaskRun(
+	ctx context.Context,
+	taskRunner string,
+	value task.AsyncTask,
+	result task.ExecuteResult,
+) error {
+	if value.Metadata.Executor != task.TaskCode_SQLTask || result.Code == task.ResultCode_Success {
+		return nil
+	}
+
+	spec := new(task.SQLTaskContext)
+	if err := spec.Unmarshal(value.Metadata.Context); err != nil {
+		return err
+	}
+
+	runs, err := s.store.QuerySQLTaskRun(ctx,
+		WithTaskIDCond(EQ, spec.TaskId),
+		WithAccountID(EQ, spec.AccountId),
+		WithSQLTaskRunStatus(EQ, SQLTaskStatusRunning),
+		WithSQLTaskRunnerCond(EQ, taskRunner),
+	)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	errMsg := result.Error
+	if errMsg == "" {
+		errMsg = "sql task async execution failed"
+	}
+	for _, run := range runs {
+		run.Status = SQLTaskStatusFailed
+		run.FinishedAt = now
+		if !run.StartedAt.IsZero() {
+			run.DurationSeconds = now.Sub(run.StartedAt).Seconds()
+		}
+		run.ErrorCode = int(result.Code)
+		run.ErrorMessage = errMsg
+		if _, err := s.store.UpdateSQLTaskRun(ctx,
+			[]SQLTaskRun{run},
+			WithSQLTaskRunIDCond(EQ, run.RunID),
+			WithSQLTaskRunStatus(EQ, SQLTaskStatusRunning),
+			WithSQLTaskRunnerCond(EQ, taskRunner)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -1134,9 +1134,89 @@ func TestSQLTaskMySQLStorageErrorBranches(t *testing.T) {
 		mock.ExpectQuery("select count(*) from sql_task_run where task_id=? and status=?").
 			WithArgs(run.TaskID, SQLTaskStatusRunning).
 			WillReturnRows(sqlmock.NewRows([]string{"count(*)"}).AddRow(1))
+		mock.ExpectQuery("select "+sqlTaskRunSelectColumns+" from sql_task_run where task_id=? and status=? for update").
+			WithArgs(run.TaskID, SQLTaskStatusRunning).
+			WillReturnRows(sqlmock.NewRows(sqlTaskRunRows).AddRow(
+				uint64(1),
+				run.TaskID,
+				run.TaskName,
+				run.AccountID,
+				nil,
+				time.Now(),
+				nil,
+				run.DurationSeconds,
+				run.Status,
+				run.TriggerType,
+				run.AttemptNumber,
+				run.RowsAffected,
+				run.ErrorCode,
+				nil,
+				uint8(1),
+				run.RunnerCN,
+			))
 		mock.ExpectRollback()
 		_, err = storage.AcquireSQLTaskRun(context.Background(), SQLTask{TaskID: run.TaskID}, run)
 		require.ErrorIs(t, err, ErrSQLTaskOverlap)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+
+		storage, mock = newMockStorage(t)
+		stale := run
+		stale.RunID = 1
+		stale.StartedAt = time.Now().Add(-10 * time.Minute)
+		sqlTask := SQLTask{TaskID: run.TaskID, TimeoutSeconds: 1}
+		mock.ExpectBegin()
+		mock.ExpectQuery("select task_id from sql_task where task_id=? for update").
+			WithArgs(run.TaskID).
+			WillReturnRows(sqlmock.NewRows([]string{"task_id"}).AddRow(run.TaskID))
+		mock.ExpectQuery("select count(*) from sql_task_run where task_id=? and status=?").
+			WithArgs(run.TaskID, SQLTaskStatusRunning).
+			WillReturnRows(sqlmock.NewRows([]string{"count(*)"}).AddRow(1))
+		mock.ExpectQuery("select "+sqlTaskRunSelectColumns+" from sql_task_run where task_id=? and status=? for update").
+			WithArgs(run.TaskID, SQLTaskStatusRunning).
+			WillReturnRows(sqlmock.NewRows(sqlTaskRunRows).AddRow(
+				stale.RunID,
+				stale.TaskID,
+				stale.TaskName,
+				stale.AccountID,
+				nil,
+				stale.StartedAt,
+				nil,
+				stale.DurationSeconds,
+				stale.Status,
+				stale.TriggerType,
+				stale.AttemptNumber,
+				stale.RowsAffected,
+				stale.ErrorCode,
+				nil,
+				uint8(1),
+				stale.RunnerCN,
+			))
+		mock.ExpectExec(updateSQLTaskRun).
+			WithArgs(
+				stale.TaskID,
+				stale.TaskName,
+				stale.AccountID,
+				nil,
+				stale.StartedAt,
+				sqlmock.AnyArg(),
+				sqlmock.AnyArg(),
+				SQLTaskStatusTimeout,
+				stale.TriggerType,
+				stale.AttemptNumber,
+				stale.RowsAffected,
+				stale.ErrorCode,
+				"sql task run recovered after exceeding timeout",
+				1,
+				stale.RunnerCN,
+				stale.RunID,
+			).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(insertSQLTaskRun).WillReturnResult(sqlmock.NewResult(8, 1))
+		mock.ExpectCommit()
+		runID, err := storage.AcquireSQLTaskRun(context.Background(), sqlTask, run)
+		require.NoError(t, err)
+		require.Equal(t, uint64(8), runID)
 		mock.ExpectClose()
 		require.NoError(t, storage.Close())
 

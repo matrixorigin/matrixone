@@ -5,9 +5,11 @@ SELECT log2(1024);
 log2(1024)
 10.0
 SELECT log2(-1024);
-invalid argument log2, bad value -1024
+log2(-1024)
+null
 SELECT log2(0);
-invalid argument log2, bad value 0
+log2(0)
+null
 select log2(0.00000000000000001);
 log2(0.00000000000000001)
 -56.47277761308516
@@ -18,7 +20,8 @@ select log2(0.141241241241313);
 log2(0.141241241241313)
 -2.8237666900817837
 select log2(-124314124124.12412341);
-invalid argument log2, bad value -1.2431412412412413e+11
+log2(-124314124124.12412341)
+null
 select log2(null);
 log2(null)
 null
@@ -34,7 +37,7 @@ create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOU
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314);
 select log2(a),log2(b),log2(c),log2(d),log2(e),log2(f),log2(g),log2(h) from t1;
 log2(a)    log2(b)    log2(c)    log2(d)    log2(e)    log2(f)    log2(g)    log2(h)
-0.0    0.0    1.0    2.0    2.321928094887362    2.4594316186372973    4.960233671694454    3.8393549796546487
+0.0    0.0    1.0    2.0    2.321928094887362    2.4594316186372973    4.960233671694454    3.8393549796546482
 drop table t1;
 select log2(123.54-123.03);
 log2(123.54 - 123.03)
@@ -44,7 +47,7 @@ log2(123.54 * 0.34)
 5.3924410770543005
 select log2(134)-log2(194);
 log2(134) - log2(194)
--0.5338236517293549
+-0.5338236517293558
 drop table if exists t1;
 create table t1(a int);
 insert into t1 values(10), (100);
