@@ -231,6 +231,7 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 	nextSizeCheck := batchSizeCheckInterval
 	fixedRowBytes := calcFixedRowBytes(ctr.buf.Vecs)
 	for {
+		choice := -1
 		if len(ctr.indexList) == 1 {
 			src := ctr.batchList[0]
 			start := ctr.indexList[0]
@@ -266,6 +267,7 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 			if ctr.compareInMemoryRows(1, ctr.indexList[1], 0, ctr.indexList[0]) < 0 {
 				winner = 1
 			}
+			choice = winner
 			loser := 1 - winner
 			budgetChunk := computeBatchDrainChunk(ctr.batchList[winner], ctr.indexList[winner], ctr.buf.Size(), fixedRowBytes)
 			if budgetChunk > 1 {
@@ -298,6 +300,7 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 		}
 		if len(ctr.indexList) > 2 {
 			first, second := ctr.pickFirstSecondRows()
+			choice = first
 			budgetChunk := computeBatchDrainChunk(ctr.batchList[first], ctr.indexList[first], ctr.buf.Size(), fixedRowBytes)
 			if budgetChunk > 1 {
 				chunk := ctr.computeInMemoryWinnerChunk(first, second, budgetChunk)
@@ -328,7 +331,9 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 			}
 		}
 
-		choice := ctr.pickFirstRow()
+		if choice < 0 {
+			choice = ctr.pickFirstRow()
+		}
 		for j := range ctr.buf.Vecs {
 			err = ctr.buf.Vecs[j].UnionOne(ctr.batchList[choice].Vecs[j], ctr.indexList[choice], mp)
 			if err != nil {
