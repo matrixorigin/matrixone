@@ -33,26 +33,33 @@ const opName = "merge_order"
 func (ctr *container) mergeAndEvaluateOrderColumn(proc *process.Process, bat *batch.Batch) error {
 	ctr.batchList = append(ctr.batchList, bat)
 	ctr.orderCols = append(ctr.orderCols, nil)
-	// if only one batch, no need to evaluate the order column.
-	if len(ctr.batchList) == 1 {
-		return nil
-	}
-
-	index := len(ctr.orderCols) - 1
-	return ctr.evaluateOrderColumn(proc, index)
+	ctr.spillMemUsage += int64(bat.Size())
+	return nil
 }
 
 func (ctr *container) evaluateOrderColumn(proc *process.Process, index int) error {
-	inputs := []*batch.Batch{ctr.batchList[index]}
+	cols, err := ctr.evaluateOrderColumns(proc, ctr.batchList[index])
+	if err != nil {
+		return err
+	}
+	ctr.orderCols[index] = cols
+	return nil
+}
 
-	ctr.orderCols[index] = make([]*vector.Vector, len(ctr.executors))
-	for i := 0; i < len(ctr.executors); i++ {
-		vec, err := ctr.executors[i].EvalWithoutResultReusing(proc, inputs, nil)
-		if err != nil {
+func (ctr *container) prepareInMemoryMerge(proc *process.Process, fs []*plan.OrderBySpec) error {
+	if len(ctr.batchList) <= 1 {
+		return nil
+	}
+	for i := range ctr.batchList {
+		if ctr.orderCols[i] != nil {
+			continue
+		}
+		if err := ctr.evaluateOrderColumn(proc, i); err != nil {
 			return err
 		}
-		ctr.orderCols[index][i] = vec
 	}
+	ctr.generateCompares(fs)
+	ctr.indexList = make([]int64, len(ctr.batchList))
 	return nil
 }
 
@@ -147,22 +154,15 @@ func (ctr *container) pickFirstRow() (batIndex int) {
 func (ctr *container) removeBatch(proc *process.Process, index int) {
 	bat := ctr.batchList[index]
 	cols := ctr.orderCols[index]
-
-	alreadyPut := make(map[*vector.Vector]bool, len(bat.Vecs))
-	for i := range bat.Vecs {
-		alreadyPut[bat.Vecs[i]] = true
-	}
+	ctr.spillMemUsage -= int64(bat.Size())
 	ctr.batchList = append(ctr.batchList[:index], ctr.batchList[index+1:]...)
 	ctr.indexList = append(ctr.indexList[:index], ctr.indexList[index+1:]...)
 
 	for i := range cols {
-		if _, ok := alreadyPut[cols[i]]; ok {
+		if batchContainsVector(bat, cols[i]) {
 			continue
 		}
 		cols[i].Free(proc.GetMPool())
-	}
-	for v := range alreadyPut {
-		v.Free(proc.GetMPool())
 	}
 	ctr.orderCols = append(ctr.orderCols[:index], ctr.orderCols[index+1:]...)
 }
@@ -192,6 +192,7 @@ func (mergeOrder *MergeOrder) Prepare(proc *process.Process) (err error) {
 	}
 
 	ctr := &mergeOrder.ctr
+	ctr.setSpillThreshold(mergeOrder.SpillThreshold)
 	if len(mergeOrder.ctr.executors) == 0 {
 		ctr.batchList = make([]*batch.Batch, 0, defaultCacheBatchSize)
 		ctr.orderCols = make([][]*vector.Vector, 0, defaultCacheBatchSize)
@@ -204,7 +205,24 @@ func (mergeOrder *MergeOrder) Prepare(proc *process.Process) (err error) {
 			}
 		}
 	}
+	ctr.initSpillKeyMetadata(mergeOrder.OrderBySpecs)
 	return nil
+}
+
+func (ctr *container) initSpillKeyMetadata(fs []*plan.OrderBySpec) {
+	if len(ctr.executors) == 0 {
+		return
+	}
+	ctr.spillKeyIndexes = ctr.spillKeyIndexes[:0]
+	ctr.spillColPos = make([]int32, len(ctr.executors))
+	for i := range ctr.executors {
+		if ctr.executors[i].IsColumnExpr() {
+			ctr.spillColPos[i] = fs[i].Expr.Expr.(*plan2.Expr_Col).Col.ColPos
+			continue
+		}
+		ctr.spillColPos[i] = -1
+		ctr.spillKeyIndexes = append(ctr.spillKeyIndexes, i)
+	}
 }
 
 func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error) {
@@ -220,23 +238,52 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 			}
 
 			if input.Batch == nil {
-				// if number of block is less than 2, no need to do merge sort.
-				ctr.status = normalSending
-
-				if len(ctr.batchList) > 1 {
-					ctr.status = pickUpSending
-
-					// evaluate the first batch's order column.
-					if err = ctr.evaluateOrderColumn(proc, 0); err != nil {
+				if ctr.spilling {
+					if err = ctr.prepareSpillFinalMerge(proc, mergeOrder.OrderBySpecs, analyzer); err != nil {
 						return input, err
 					}
-					ctr.generateCompares(mergeOrder.OrderBySpecs)
-					ctr.indexList = make([]int64, len(ctr.batchList))
+					if len(ctr.spillReaders) == 0 {
+						ctr.status = finish
+					} else {
+						ctr.status = spillSending
+					}
+					continue
+				}
+
+				// if number of block is less than 2, no need to do merge sort.
+				ctr.status = normalSending
+				if len(ctr.batchList) > 1 {
+					if err = ctr.prepareInMemoryMerge(proc, mergeOrder.OrderBySpecs); err != nil {
+						return input, err
+					}
+					ctr.status = pickUpSending
 				}
 				continue
 			}
 
 			if input.Batch.IsEmpty() {
+				continue
+			}
+
+			if ctr.spilling || (ctr.spillThreshold > 0 && ctr.currentMemoryUsage()+int64(input.Batch.Size()) > ctr.spillThreshold) {
+				if !ctr.spilling {
+					if err = ctr.spillCachedRuns(proc, analyzer); err != nil {
+						input.Batch.Clean(proc.Mp())
+						return vm.CancelResult, err
+					}
+				}
+				keyCols, evalErr := ctr.buildSpillKeyColumns(proc, input.Batch)
+				if evalErr != nil {
+					input.Batch.Clean(proc.Mp())
+					return vm.CancelResult, evalErr
+				}
+				if err = ctr.spillBatchAsRun(proc, input.Batch, keyCols, analyzer); err != nil {
+					freeOrderColumns(proc.Mp(), input.Batch, keyCols)
+					input.Batch.Clean(proc.Mp())
+					return vm.CancelResult, err
+				}
+				freeOrderColumns(proc.Mp(), input.Batch, keyCols)
+				input.Batch.Clean(proc.Mp())
 				continue
 			}
 
@@ -246,7 +293,13 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 			}
 			analyzer.Alloc(int64(bat.Size()))
 			if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
+				bat.Clean(proc.Mp())
 				return vm.CancelResult, err
+			}
+			if ctr.spillThreshold > 0 && ctr.currentMemoryUsage() > ctr.spillThreshold {
+				if err = ctr.spillCachedRuns(proc, analyzer); err != nil {
+					return vm.CancelResult, err
+				}
 			}
 
 		case normalSending:
@@ -276,6 +329,16 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 				return result, err
 			}
 			result.Status = vm.ExecHasMore
+			return result, err
+
+		case spillSending:
+			result := vm.NewCallResult()
+			sendOver, err := ctr.sendSpillResult(proc, &result)
+			if sendOver {
+				ctr.status = finish
+			} else {
+				result.Status = vm.ExecHasMore
+			}
 			return result, err
 
 		case finish:

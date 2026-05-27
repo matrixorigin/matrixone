@@ -634,6 +634,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.OrderBy = t.Fs
 	case *mergeorder.MergeOrder:
 		in.OrderBy = t.OrderBySpecs
+		in.SpillMem = t.SpillThreshold
 	case *connector.Connector:
 		idx, ctx0 := ctx.root.findRegister(t.Reg)
 		in.Connect = &pipeline.Connector{
@@ -1097,6 +1098,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.MergeOrder:
 		arg := mergeorder.NewArgument()
 		arg.OrderBySpecs = opr.OrderBy
+		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.TableFunction:
 		arg := table_function.NewArgument()

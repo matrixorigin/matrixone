@@ -15,11 +15,19 @@
 package mergeorder
 
 import (
+	"bufio"
+	"bytes"
+	"io"
+	"os"
+
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -28,6 +36,9 @@ import (
 
 const maxBatchSizeToSend = 64 * mpool.MB
 const defaultCacheBatchSize = 16
+const spillMergeFanIn = 32
+const spillIOBufferSize = 4 * 1024 * 1024
+const spillMagic = 0x12345678DEADBEEF
 
 var _ vm.Operator = new(MergeOrder)
 
@@ -35,13 +46,15 @@ const (
 	receiving = iota
 	normalSending
 	pickUpSending
+	spillSending
 	finish
 )
 
 type MergeOrder struct {
 	ctr container
 
-	OrderBySpecs []*plan.OrderBySpec
+	OrderBySpecs   []*plan.OrderBySpec
+	SpillThreshold int64
 
 	vm.OperatorBase
 }
@@ -92,6 +105,34 @@ type container struct {
 	compares  []compare.Compare
 
 	buf *batch.Batch
+
+	// spill support
+	spilling        bool
+	spillThreshold  int64
+	spillMemUsage   int64
+	spillFS         fileservice.MutableFileService
+	spillKeyIndexes []int
+	spillKeyCols    []*vector.Vector
+	spillColPos     []int32
+	spillRuns       []*spillRun
+	spillReaders    []*spillRunReader
+	spillWriteBuf   bytes.Buffer
+}
+
+type spillRun struct {
+	file       *os.File
+	rowCount   int64
+	batchCount int
+}
+
+type spillRunReader struct {
+	file      *os.File
+	reader    *bufio.Reader
+	batch     *batch.Batch
+	keyBatch  *batch.Batch
+	orderCols []*vector.Vector
+	rowIdx    int64
+	heapIdx   int
 }
 
 func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -101,6 +142,7 @@ func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, 
 	ctr.orderCols = ctr.orderCols[:0]
 	ctr.indexList = nil
 	ctr.status = receiving
+	ctr.cleanupSpill(proc)
 
 	for i := range ctr.executors {
 		if ctr.executors[i] != nil {
@@ -117,6 +159,7 @@ func (mergeOrder *MergeOrder) Free(proc *process.Process, pipelineFailed bool, e
 	ctr := &mergeOrder.ctr
 	ctr.batchList = nil
 	ctr.orderCols = nil
+	ctr.cleanupSpill(proc)
 	for i := range ctr.executors {
 		if ctr.executors[i] != nil {
 			ctr.executors[i].Free()
@@ -145,11 +188,124 @@ func (mergeOrder *MergeOrder) cleanBatchAndCol(proc *process.Process) {
 	}
 	for i := range ctr.orderCols {
 		if ctr.orderCols[i] != nil {
-			for j := range ctr.orderCols[i] {
-				if ctr.orderCols[i][j] != nil {
-					ctr.orderCols[i][j].Free(mp)
-				}
-			}
+			freeOrderColumns(mp, ctr.batchList[i], ctr.orderCols[i])
 		}
 	}
+}
+
+func (ctr *container) cleanupSpill(proc *process.Process) {
+	for i := range ctr.spillReaders {
+		ctr.spillReaders[i].close(proc)
+	}
+	ctr.spillReaders = nil
+	for i := range ctr.spillRuns {
+		if ctr.spillRuns[i] != nil && ctr.spillRuns[i].file != nil {
+			ctr.spillRuns[i].file.Close()
+			ctr.spillRuns[i].file = nil
+		}
+	}
+	ctr.spillRuns = nil
+	ctr.spilling = false
+	ctr.spillMemUsage = 0
+	ctr.spillWriteBuf.Reset()
+}
+
+func (ctr *container) setSpillThreshold(threshold int64) {
+	if threshold == 0 {
+		fileCacheMem := fileservice.GlobalMemoryCacheSizeHint.Load()
+		mem := (int64(system.MemoryTotal()) - fileCacheMem) / int64(system.GoMaxProcs()) / 8
+		if mem < common.MiB*128 {
+			mem = common.MiB * 128
+		}
+		ctr.spillThreshold = mem
+	} else {
+		ctr.spillThreshold = threshold
+	}
+}
+
+func freeOrderColumns(mp *mpool.MPool, bat *batch.Batch, cols []*vector.Vector) {
+	if len(cols) == 0 {
+		return
+	}
+	for _, vec := range cols {
+		if vec == nil {
+			continue
+		}
+		if batchContainsVector(bat, vec) {
+			continue
+		}
+		vec.Free(mp)
+	}
+}
+
+func batchContainsVector(bat *batch.Batch, vec *vector.Vector) bool {
+	for _, batVec := range bat.Vecs {
+		if batVec == vec {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *spillRunReader) close(proc *process.Process) {
+	if r == nil {
+		return
+	}
+	if r.batch != nil {
+		r.batch.Clean(proc.Mp())
+		r.batch = nil
+	}
+	if r.keyBatch != nil {
+		r.keyBatch.Clean(proc.Mp())
+		r.keyBatch = nil
+	}
+	r.orderCols = nil
+	if r.file != nil {
+		r.file.Close()
+		r.file = nil
+	}
+	r.reader = nil
+	r.rowIdx = 0
+	r.heapIdx = -1
+}
+
+func (r *spillRunReader) reset(file *os.File) {
+	r.file = file
+	r.rowIdx = 0
+	if r.reader == nil {
+		r.reader = bufio.NewReaderSize(file, spillIOBufferSize)
+	} else {
+		r.reader.Reset(file)
+	}
+}
+
+func (r *spillRunReader) readNextBatch(proc *process.Process, ctr *container) (bool, error) {
+	if r.batch != nil {
+		r.batch.CleanOnlyData()
+	}
+	if r.keyBatch != nil {
+		r.keyBatch.CleanOnlyData()
+	}
+	if r.batch == nil {
+		r.batch = batch.NewOffHeapWithSize(0)
+	}
+	if r.keyBatch == nil {
+		r.keyBatch = batch.NewOffHeapWithSize(0)
+	}
+
+	bat, keyBatch, err := readSpillBatches(proc, r.reader, r.batch, r.keyBatch)
+	if err != nil {
+		if err == io.EOF {
+			return false, nil
+		}
+		return false, err
+	}
+	r.batch = bat
+	r.keyBatch = keyBatch
+	r.orderCols, err = ctr.restoreSpillOrderColumns(proc, r.batch, r.keyBatch, r.orderCols)
+	if err != nil {
+		return false, err
+	}
+	r.rowIdx = 0
+	return true, nil
 }

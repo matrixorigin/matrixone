@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,6 +44,63 @@ type orderTestCase struct {
 	types []types.Type
 	proc  *process.Process
 }
+
+type int8Row struct {
+	value  int8
+	isNull bool
+}
+
+type pairRow struct {
+	first  int8
+	second int64
+}
+
+type countingColumnExecutor struct {
+	col      int
+	maxCalls int
+	calls    int
+}
+
+func (e *countingColumnExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	return e.EvalWithoutResultReusing(nil, batches, nil)
+}
+
+func (e *countingColumnExecutor) EvalWithoutResultReusing(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	e.calls++
+	if e.calls > e.maxCalls {
+		return nil, moerr.NewInternalErrorNoCtx("order executor reevaluated spilled keys")
+	}
+	return batches[0].Vecs[e.col], nil
+}
+
+func (e *countingColumnExecutor) ResetForNextQuery() {}
+func (e *countingColumnExecutor) Free()              {}
+func (e *countingColumnExecutor) IsColumnExpr() bool { return true }
+func (e *countingColumnExecutor) TypeName() string   { return "countingColumnExecutor" }
+
+type negatingInt8Executor struct {
+	col   int
+	calls int
+}
+
+func (e *negatingInt8Executor) Eval(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	return e.EvalWithoutResultReusing(proc, batches, nil)
+}
+
+func (e *negatingInt8Executor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	e.calls++
+	src := vector.MustFixedColWithTypeCheck[int8](batches[0].Vecs[e.col])
+	values := make([]int8, len(src))
+	for i := range src {
+		values[i] = -src[i]
+	}
+	return testutil.NewVector(len(values), types.T_int8.ToType(), proc.Mp(), false, values), nil
+}
+
+func (e *negatingInt8Executor) ResetForNextQuery() {}
+func (e *negatingInt8Executor) Free()              {}
+func (e *negatingInt8Executor) IsColumnExpr() bool { return false }
+func (e *negatingInt8Executor) TypeName() string   { return "negatingInt8Executor" }
 
 func makeTestCases(t *testing.T) []orderTestCase {
 	return []orderTestCase{
@@ -127,6 +185,257 @@ func TestOrder(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestOrderSpill(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &MergeOrder{
+		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
+		SpillThreshold: 1,
+		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	bats := []*batch.Batch{
+		newValuesBatch(proc, []int8{1, 4, 7}),
+		newValuesBatch(proc, []int8{2, 5, 8}),
+		batch.EmptyBatch,
+		newValuesBatch(proc, []int8{3, 6, 9}),
+	}
+	resetChildren(arg, bats)
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+
+	values := collectInt8Results(t, arg, proc, 0)
+	require.Equal(t, []int8{1, 2, 3, 4, 5, 6, 7, 8, 9}, values)
+
+	arg.Children[0].Free(proc, false, nil)
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestOrderSpillMultiPass(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &MergeOrder{
+		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
+		SpillThreshold: 1,
+		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	bats := make([]*batch.Batch, 0, spillMergeFanIn+8)
+	for i := spillMergeFanIn + 8; i >= 1; i-- {
+		bats = append(bats, newValuesBatch(proc, []int8{int8(i)}))
+	}
+	resetChildren(arg, bats)
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+
+	values := collectInt8Results(t, arg, proc, 0)
+	expected := make([]int8, 0, spillMergeFanIn+8)
+	for i := 1; i <= spillMergeFanIn+8; i++ {
+		expected = append(expected, int8(i))
+	}
+	require.Equal(t, expected, values)
+
+	arg.Children[0].Free(proc, false, nil)
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestOrderSpillSkipsColumnKeys(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	exec := &countingColumnExecutor{col: 0}
+	arg := &MergeOrder{
+		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
+		SpillThreshold: 1,
+		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	arg.ctr.executors = []colexec.ExpressionExecutor{exec}
+
+	bats := make([]*batch.Batch, 0, spillMergeFanIn+8)
+	for i := spillMergeFanIn + 8; i >= 1; i-- {
+		bats = append(bats, newValuesBatch(proc, []int8{int8(i)}))
+	}
+	resetChildren(arg, bats)
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+
+	values := collectInt8Results(t, arg, proc, 0)
+	expected := make([]int8, 0, spillMergeFanIn+8)
+	for i := 1; i <= spillMergeFanIn+8; i++ {
+		expected = append(expected, int8(i))
+	}
+	require.Equal(t, expected, values)
+	require.Equal(t, 0, exec.calls)
+
+	arg.Children[0].Free(proc, false, nil)
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestOrderSpillPersistsComputedKeys(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	exec := &negatingInt8Executor{col: 0}
+	arg := &MergeOrder{
+		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
+		SpillThreshold: 1,
+		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	arg.ctr.executors = []colexec.ExpressionExecutor{exec}
+
+	bats := []*batch.Batch{
+		newValuesBatch(proc, []int8{3}),
+		newValuesBatch(proc, []int8{1}),
+		newValuesBatch(proc, []int8{2}),
+	}
+	resetChildren(arg, bats)
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+
+	values := collectInt8Results(t, arg, proc, 0)
+	require.Equal(t, []int8{3, 2, 1}, values)
+	require.Equal(t, 3, exec.calls)
+
+	arg.Children[0].Free(proc, false, nil)
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestOrderSpillDesc(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &MergeOrder{
+		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: plan.OrderBySpec_DESC}},
+		SpillThreshold: 1,
+		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	bats := []*batch.Batch{
+		newValuesBatch(proc, []int8{9, 6, 3}),
+		newValuesBatch(proc, []int8{8, 5, 2}),
+		newValuesBatch(proc, []int8{7, 4, 1}),
+	}
+	resetChildren(arg, bats)
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+
+	values := collectInt8Results(t, arg, proc, 0)
+	require.Equal(t, []int8{9, 8, 7, 6, 5, 4, 3, 2, 1}, values)
+
+	arg.Children[0].Free(proc, false, nil)
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestOrderSpillMultiKey(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &MergeOrder{
+		OrderBySpecs: []*plan.OrderBySpec{
+			{Expr: newExpression(0, types.T_int8), Flag: 0},
+			{Expr: newExpression(1, types.T_int64), Flag: plan.OrderBySpec_DESC},
+		},
+		SpillThreshold: 1,
+		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	bats := []*batch.Batch{
+		newPairBatch(proc, []int8{1, 2, 3}, []int64{10, 9, 8}),
+		newPairBatch(proc, []int8{1, 2, 3}, []int64{7, 6, 5}),
+		newPairBatch(proc, []int8{1, 2, 3}, []int64{4, 3, 2}),
+	}
+	resetChildren(arg, bats)
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+
+	rows := collectPairResults(t, arg, proc)
+	require.Equal(t, []pairRow{
+		{first: 1, second: 10},
+		{first: 1, second: 7},
+		{first: 1, second: 4},
+		{first: 2, second: 9},
+		{first: 2, second: 6},
+		{first: 2, second: 3},
+		{first: 3, second: 8},
+		{first: 3, second: 5},
+		{first: 3, second: 2},
+	}, rows)
+
+	arg.Children[0].Free(proc, false, nil)
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestOrderSpillNullsLast(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &MergeOrder{
+		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: plan.OrderBySpec_NULLS_LAST}},
+		SpillThreshold: 1,
+		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	bats := []*batch.Batch{
+		newNullableValuesBatch(proc, []int8{1, 4, 0}, []uint64{2}),
+		newNullableValuesBatch(proc, []int8{2, 5, 0}, []uint64{2}),
+		newNullableValuesBatch(proc, []int8{3, 6, 0}, []uint64{2}),
+	}
+	resetChildren(arg, bats)
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+
+	rows := collectNullableInt8Results(t, arg, proc, 0)
+	require.Equal(t, []int8Row{
+		{value: 1},
+		{value: 2},
+		{value: 3},
+		{value: 4},
+		{value: 5},
+		{value: 6},
+		{isNull: true},
+		{isNull: true},
+		{isNull: true},
+	}, rows)
+
+	arg.Children[0].Free(proc, false, nil)
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestOrderSpillDescNullsFirst(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &MergeOrder{
+		OrderBySpecs: []*plan.OrderBySpec{{
+			Expr: newExpression(0, types.T_int8),
+			Flag: plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_FIRST,
+		}},
+		SpillThreshold: 1,
+		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	bats := []*batch.Batch{
+		newNullableValuesBatch(proc, []int8{0, 9, 6}, []uint64{0}),
+		newNullableValuesBatch(proc, []int8{0, 8, 5}, []uint64{0}),
+		newNullableValuesBatch(proc, []int8{0, 7, 4}, []uint64{0}),
+	}
+	resetChildren(arg, bats)
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+
+	rows := collectNullableInt8Results(t, arg, proc, 0)
+	require.Equal(t, []int8Row{
+		{isNull: true},
+		{isNull: true},
+		{isNull: true},
+		{value: 9},
+		{value: 8},
+		{value: 7},
+		{value: 6},
+		{value: 5},
+		{value: 4},
+	}, rows)
+
+	arg.Children[0].Free(proc, false, nil)
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 func BenchmarkOrder(b *testing.B) {
@@ -230,6 +539,91 @@ func newIntBatch(ts []types.Type, proc *process.Process, rows int64, fs []*plan.
 
 func newRandomBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+}
+
+func newValuesBatch(proc *process.Process, values []int8) *batch.Batch {
+	vec := testutil.NewVector(len(values), types.T_int8.ToType(), proc.Mp(), false, values)
+	zs := make([]int64, len(values))
+	for i := range zs {
+		zs[i] = 1
+	}
+	return testutil.NewBatchWithVectors([]*vector.Vector{vec}, zs)
+}
+
+func newNullableValuesBatch(proc *process.Process, values []int8, nulls []uint64) *batch.Batch {
+	vec := testutil.MakeInt8Vector(values, nulls, proc.Mp())
+	zs := make([]int64, len(values))
+	for i := range zs {
+		zs[i] = 1
+	}
+	return testutil.NewBatchWithVectors([]*vector.Vector{vec}, zs)
+}
+
+func newPairBatch(proc *process.Process, first []int8, second []int64) *batch.Batch {
+	zs := make([]int64, len(first))
+	for i := range zs {
+		zs[i] = 1
+	}
+	return testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.MakeInt8Vector(first, nil, proc.Mp()),
+		testutil.MakeInt64Vector(second, nil, proc.Mp()),
+	}, zs)
+}
+
+func collectInt8Results(t *testing.T, arg *MergeOrder, proc *process.Process, col int) []int8 {
+	var values []int8
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch != nil {
+			values = append(values, vector.MustFixedColWithTypeCheck[int8](result.Batch.Vecs[col])...)
+		}
+		if result.Status == vm.ExecStop {
+			break
+		}
+	}
+	return values
+}
+
+func collectNullableInt8Results(t *testing.T, arg *MergeOrder, proc *process.Process, col int) []int8Row {
+	var rows []int8Row
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch != nil {
+			vec := result.Batch.Vecs[col]
+			values := vector.MustFixedColWithTypeCheck[int8](vec)
+			for i := range values {
+				rows = append(rows, int8Row{
+					value:  values[i],
+					isNull: vec.GetNulls().Contains(uint64(i)),
+				})
+			}
+		}
+		if result.Status == vm.ExecStop {
+			break
+		}
+	}
+	return rows
+}
+
+func collectPairResults(t *testing.T, arg *MergeOrder, proc *process.Process) []pairRow {
+	var rows []pairRow
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch != nil {
+			first := vector.MustFixedColWithTypeCheck[int8](result.Batch.Vecs[0])
+			second := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1])
+			for i := range first {
+				rows = append(rows, pairRow{first: first[i], second: second[i]})
+			}
+		}
+		if result.Status == vm.ExecStop {
+			break
+		}
+	}
+	return rows
 }
 
 func resetChildren(arg *MergeOrder, bats []*batch.Batch) {
