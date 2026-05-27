@@ -75,11 +75,13 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 	result := make([]*plan.UpdateCtx, len(updateCtxList))
 	for i, ctx := range updateCtxList {
 		result[i] = &plan.UpdateCtx{
-			ObjRef:        DeepCopyObjectRef(ctx.ObjRef),
-			TableDef:      DeepCopyTableDef(ctx.TableDef, true),
-			InsertCols:    slices.Clone(ctx.InsertCols),
-			DeleteCols:    slices.Clone(ctx.DeleteCols),
-			PartitionCols: slices.Clone(ctx.PartitionCols),
+			ObjRef:             DeepCopyObjectRef(ctx.ObjRef),
+			TableDef:           DeepCopyTableDef(ctx.TableDef, true),
+			InsertCols:         slices.Clone(ctx.InsertCols),
+			DeleteCols:         slices.Clone(ctx.DeleteCols),
+			PartitionCols:      slices.Clone(ctx.PartitionCols),
+			SkipInsertOnNullPk: ctx.SkipInsertOnNullPk,
+			InsertPkColIdx:     ctx.InsertPkColIdx,
 		}
 	}
 
@@ -190,10 +192,11 @@ func DeepCopyDedupJoinCtx(ctx *plan.DedupJoinCtx) *plan.DedupJoinCtx {
 		return nil
 	}
 	newCtx := &plan.DedupJoinCtx{
-		OldColList:        slices.Clone(ctx.OldColList),
-		UpdateColIdxList:  slices.Clone(ctx.UpdateColIdxList),
-		UpdateColExprList: DeepCopyExprList(ctx.UpdateColExprList),
-		OldColCaptureList: slices.Clone(ctx.OldColCaptureList),
+		OldColList:         slices.Clone(ctx.OldColList),
+		UpdateColIdxList:   slices.Clone(ctx.UpdateColIdxList),
+		UpdateColExprList:  DeepCopyExprList(ctx.UpdateColExprList),
+		OldColCaptureList:  slices.Clone(ctx.OldColCaptureList),
+		DedupBuildKeepLast: ctx.DedupBuildKeepLast,
 	}
 
 	return newCtx
