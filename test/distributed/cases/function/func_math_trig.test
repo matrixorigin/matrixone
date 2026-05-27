@@ -146,7 +146,7 @@ select distinct sin(a) from t1;
 select distinct cos(a) from t1;
 select distinct tan(a) from t1;
 #select distinct asin(a) from t1;
-select distinct acos(a) from t1;
+select distinct acos(a) from t1 order by 1;
 select distinct atan(a) from t1;
 #select distinct atan2(a) from t1;
 drop table t1;
