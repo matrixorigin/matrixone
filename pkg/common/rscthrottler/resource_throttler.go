@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/shirou/gopsutil/v3/process"
 	"go.uber.org/zap"
@@ -234,22 +235,26 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 	if !shouldFreeOSMemory && !shouldEvictCache {
 		return
 	}
+	metric.FSCachePressureTriggerCounter.Inc()
 	logutil.Info(
 		fmt.Sprintf("%s-RSSScavenge", MemoryThrottlerLogHeader),
 		zap.String("rss", common.HumanReadableBytes(int(rss))),
 		zap.String("visible", common.HumanReadableBytes(int(visible))),
 		zap.String("actual-total-memory", common.HumanReadableBytes(int(actualMaxMemory))),
 		zap.Bool("free-os-memory", shouldFreeOSMemory),
+		zap.Bool("evict-cache", shouldEvictCache),
 		zap.Int64("cache-target-percent", cacheTargetPercent),
 		zap.String("detail", m.String()),
 	)
 	if shouldEvictCache {
-		evictCtx, cancel := context.WithTimeout(context.Background(), rssCacheEvictTimeout)
-		m.options.rssCacheEvictor(evictCtx, cacheTargetPercent)
-		cancel()
-		m.lastRSSScavenge.Store(now)
+		go func(targetPercent int64) {
+			evictCtx, cancel := context.WithTimeout(context.Background(), rssCacheEvictTimeout)
+			defer cancel()
+			m.options.rssCacheEvictor(evictCtx, targetPercent)
+			freeOSMemory()
+		}(cacheTargetPercent)
 	}
-	if shouldFreeOSMemory || shouldEvictCache {
+	if shouldFreeOSMemory {
 		freeOSMemory()
 	}
 }

@@ -42,9 +42,6 @@ var (
 	memCachePressureDeadline      atomic.Int64
 )
 
-// SetMemoryCachePressureTargetPercent keeps memory cache admission below a
-// capacity percentage until the deadline. A stricter active target is not
-// loosened by a softer target.
 func SetMemoryCachePressureTargetPercent(percent int64, until time.Time) {
 	now := time.Now()
 	if percent <= 0 || !until.After(now) {
@@ -297,6 +294,11 @@ func (m *MemCache) Update(
 			Path:   path.File,
 			Offset: entry.Offset,
 			Sz:     entry.Size,
+		}
+		if target, ok := memoryCachePressureTarget(m.cache.Capacity()); ok &&
+			m.cache.Used()+int64(len(entry.CachedData.Bytes())) > target {
+			metric.FSCachePressureMemorySkipCounter.Inc()
+			continue
 		}
 
 		LogEvent(ctx, str_set_memory_cache_entry_begin)

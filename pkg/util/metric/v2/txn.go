@@ -242,6 +242,33 @@ var (
 	TxnAcquireLockWaitDurationHistogram = txnLockDurationHistogram.WithLabelValues("acquire-wait")
 	TxnHoldLockDurationHistogram        = txnLockDurationHistogram.WithLabelValues("hold")
 
+	TxnLockOpBatchRowsHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "lock_op_batch_rows",
+			Help:      "Rows in batches held by lock op during lock acquisition.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 16),
+		})
+
+	TxnLockOpBatchBytesHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "lock_op_batch_bytes",
+			Help:      "Bytes in batches held by lock op during lock acquisition.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 30),
+		})
+
+	TxnLockOpBatchHoldDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "lock_op_batch_hold_duration_seconds",
+			Help:      "Duration lock op holds a batch while acquiring locks.",
+			Buckets:   getDurationBuckets(),
+		})
+
 	txnUnlockDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",

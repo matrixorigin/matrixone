@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
@@ -213,6 +214,13 @@ func EvictMemoryCaches(ctx context.Context) map[string]int64 {
 func EvictMemoryCachesToCapacityPercent(ctx context.Context, percent int64) map[string]int64 {
 	ret := make(map[string]int64)
 
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+
 	allMemoryCaches.Range(func(k, v any) bool {
 		cache := k.(*MemCache)
 		name := v.(string)
@@ -228,6 +236,8 @@ func EvictMemoryCachesToCapacityPercent(ctx context.Context, percent int64) map[
 			zap.Int64("target-percent", percent),
 		)
 		used := cache.EvictToCapacityPercent(ctx, percent)
+		metric.FSCachePressureMemoryEvictCounter.Inc()
+		metric.FSCachePressureMemoryEvictDuration.Observe(time.Since(start).Seconds())
 		ret[name] = used
 		logutil.Info("memory cache pressure evicted",
 			zap.Any("name", name),
