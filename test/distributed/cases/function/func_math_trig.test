@@ -90,6 +90,7 @@ SELECT TAN(NULL);
 SELECT COT(NULL);
 # SELECT ASIN(NULL);
 SELECT ACOS(NULL);
+SELECT DEGREES(NULL);
 SELECT ATAN(NULL);
 SELECT ATAN2(NULL, 1);
 SELECT ATAN2(1, NULL);
@@ -145,7 +146,7 @@ select distinct sin(a) from t1;
 select distinct cos(a) from t1;
 select distinct tan(a) from t1;
 #select distinct asin(a) from t1;
-select distinct acos(a) from t1;
+select distinct acos(a) from t1 order by 1;
 select distinct atan(a) from t1;
 #select distinct atan2(a) from t1;
 drop table t1;
@@ -201,3 +202,15 @@ SELECT acos(1.1e5);
 SELECT atan(1.1e5);
 #SELECT atan2(1.1e5,0.5e4);
 
+SELECT
+DEGREES(1.25),
+DEGREES(0.75),
+DEGREES(-1.25),
+DEGREES(-0.75),
+DEGREES(0),
+DEGREES(PI()),
+DEGREES(PI() / 2),
+DEGREES(PI() * 2),
+DEGREES(PI() * 3),
+DEGREES(PI() * -1),
+DEGREES(NULL);

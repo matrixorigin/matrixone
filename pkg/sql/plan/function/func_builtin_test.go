@@ -731,6 +731,24 @@ func Test_BuiltIn_Math(t *testing.T) {
 
 	{
 		tc := tcTemp{
+			info: "test ln with err",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						-1,
+					},
+					nil),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
 			info: "test exp",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
@@ -839,6 +857,100 @@ func Test_BuiltIn_Math(t *testing.T) {
 
 	{
 		tc := tcTemp{
+			info: "test acos with err",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						1.0001,
+					},
+					nil),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInACos)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test degrees",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						-math.Pi, 0, math.Pi / 2, math.Pi,
+					},
+					nil),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{-180, 0, 90, 180}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInDegrees)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test asin",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						0,
+						0.5,
+						1,
+						-0.5,
+						-1,
+					},
+					nil),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 0.5235987755982989, 1.5707963267948966, -0.5235987755982989, -1.5707963267948966}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInASin)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test asin with err",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						1.1,
+					},
+					nil),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInASin)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test cot with err",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						0,
+					},
+					nil),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInCot)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
 			info: "test atan",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
@@ -927,8 +1039,8 @@ func Test_BuiltIn_Math(t *testing.T) {
 					},
 					nil),
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), true,
-				nil, nil),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog)
 		succeed, info := tcc.Run()
@@ -963,8 +1075,8 @@ func Test_BuiltIn_Math(t *testing.T) {
 					},
 					nil),
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), true,
-				nil, nil),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog2)
 		succeed, info := tcc.Run()
@@ -999,8 +1111,8 @@ func Test_BuiltIn_Math(t *testing.T) {
 					},
 					nil),
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), true,
-				nil, nil),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog10)
 		succeed, info := tcc.Run()
