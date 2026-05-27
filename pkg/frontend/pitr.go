@@ -1152,6 +1152,10 @@ func reCreateTableWithPitr(
 	pitrName string,
 	ts int64,
 	tblInfo *tableInfo) (err error) {
+	if isExternalTable(tblInfo) {
+		return newExternalTableRestoreError(ctx, tblInfo, "pitr")
+	}
+
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: '%v' at timestamp %d", pitrName, tblInfo.tblName, ts))
 
 	var isMasterTable bool
@@ -1203,16 +1207,14 @@ func showFullTablesWitsTs(
 	ts int64,
 	dbName string,
 	tblName string) ([]*tableInfo, error) {
-	sql := fmt.Sprintf("show full tables from `%s`", dbName)
-	if len(tblName) > 0 {
-		sql += fmt.Sprintf(" like '%s'", tblName)
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, err
 	}
-	if ts > 0 {
-		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
-	}
+	sql := buildTableInfoListSQL(dbName, tblName, ts, accountId)
 	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s` sql: %s ", pitrName, dbName, tblName, sql))
-	// cols: table name, table type
-	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
+	// cols: table name, table type, relkind
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -1223,6 +1225,7 @@ func showFullTablesWitsTs(
 			dbName:  dbName,
 			tblName: cols[0],
 			typ:     tableType(cols[1]),
+			relKind: cols[2],
 		}
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s`, get table number `%d`", pitrName, dbName, tblName, len(ans)))
@@ -1774,33 +1777,6 @@ func doCheckAccountExistsInPitrRestore(
 		return false, nil
 	}
 	return true, nil
-}
-
-func getCreateDatabaseSqlInPitr(ctx context.Context,
-	sid string,
-	bh BackgroundExec,
-	pitrName string,
-	dbName string,
-	accountId uint32,
-	ts int64,
-) (string, error) {
-
-	sql := "select datname, dat_createsql from mo_catalog.mo_database"
-	if ts > 0 {
-		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
-	}
-	sql += fmt.Sprintf(" where datname = '%s' and account_id = %d", dbName, accountId)
-	getLogger(sid).Info(fmt.Sprintf("[%s] get create database `%s` sql: %s", pitrName, dbName, sql))
-
-	// cols: database_name, create_sql
-	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
-	if err != nil {
-		return "", err
-	}
-	if len(colsList) == 0 || len(colsList[0]) == 0 {
-		return "", moerr.NewBadDB(ctx, dbName)
-	}
-	return colsList[0][1], nil
 }
 
 // createPubByPitr create pub after the database is created by pitr
