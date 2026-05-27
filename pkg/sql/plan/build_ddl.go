@@ -889,9 +889,7 @@ func buildCreateTable(
 				},
 			})
 		case *tree.TableOptionAutoIncrement:
-			if opt.Value != 0 {
-				createTable.TableDef.AutoIncrOffset = opt.Value - 1
-			}
+			createTable.TableDef.AutoIncrOffset = autoIncrementValueToOffset(uint64(opt.Value))
 
 		// these table options is not support in plan
 		// case *tree.TableOptionEngine, *tree.TableOptionSecondaryEngine, *tree.TableOptionCharset,
@@ -5104,11 +5102,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					ctx.GetContext(),
 					"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
 			}
-			// MySQL 8.0: AUTO_INCREMENT = 0 means start from 1 (offset = 0)
-			newOffset := uint64(0)
-			if opt.Value > 0 {
-				newOffset = uint64(opt.Value) - 1
-			}
+			newOffset := autoIncrementValueToOffset(uint64(opt.Value))
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterAutoIncrement{
 					AlterAutoIncrement: &plan.AlterTableAutoIncrement{
@@ -5116,7 +5110,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				},
 			}
-			if alterTable.CopyTableDef != nil {
+			if alterTable.CopyTableDef != nil &&
+				newOffset > alterTable.CopyTableDef.AutoIncrOffset {
 				alterTable.CopyTableDef.AutoIncrOffset = newOffset
 			}
 

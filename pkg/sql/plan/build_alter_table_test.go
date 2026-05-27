@@ -656,3 +656,10 @@ func TestAlterTableAutoIncrementRejectNoAutoColumn(t *testing.T) {
 	}
 	runTestShouldError(mock, t, sqls)
 }
+
+func TestAlterTableAutoIncrementOffsetValue(t *testing.T) {
+	assert.Equal(t, uint64(999), autoIncrementValueToOffset(1000))
+	assert.Equal(t, uint64(0), autoIncrementValueToOffset(0))
+	assert.Equal(t, uint64(0), autoIncrementValueToOffset(1))
+	assert.Equal(t, uint64(4), autoIncrementValueToOffset(5))
+}

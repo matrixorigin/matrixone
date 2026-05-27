@@ -156,7 +156,7 @@ type AutoColumn struct {
 func GetAutoColumnFromDef(def *plan.TableDef) []AutoColumn {
 	var cols []AutoColumn
 	for i, col := range def.Cols {
-		if col.Typ.AutoIncr {
+		if col.Typ.AutoIncr && !col.Hidden {
 			cols = append(cols, AutoColumn{
 				ColName:  col.Name,
 				TableID:  def.TblId,
