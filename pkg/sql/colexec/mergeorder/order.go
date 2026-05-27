@@ -152,6 +152,16 @@ func (ctr *container) compareInMemoryRows(left int, leftRow int64, right int, ri
 	return 0
 }
 
+func (ctr *container) compareInMemoryRowsWithBoundLeft(leftRow int64, right int, rightRow int64) int {
+	for k := 0; k < len(ctr.compares); k++ {
+		ctr.compares[k].Set(1, ctr.orderCols[right][k])
+		if r := ctr.compares[k].Compare(0, 1, leftRow, rightRow); r != 0 {
+			return r
+		}
+	}
+	return 0
+}
+
 func (ctr *container) computeInMemoryWinnerChunk(winner int, loser int, budgetChunk int) int {
 	if budgetChunk <= 1 {
 		return budgetChunk
@@ -204,12 +214,16 @@ func (ctr *container) pickFirstSecondRows() (first int, second int) {
 		first, second = second, first
 	}
 	for i := 2; i < l; i++ {
-		if ctr.compareInMemoryRows(i, ctr.indexList[i], first, ctr.indexList[first]) < 0 {
+		row := ctr.indexList[i]
+		for k := 0; k < len(ctr.compares); k++ {
+			ctr.compares[k].Set(0, ctr.orderCols[i][k])
+		}
+		if ctr.compareInMemoryRowsWithBoundLeft(row, first, ctr.indexList[first]) < 0 {
 			second = first
 			first = i
 			continue
 		}
-		if ctr.compareInMemoryRows(i, ctr.indexList[i], second, ctr.indexList[second]) < 0 {
+		if ctr.compareInMemoryRowsWithBoundLeft(row, second, ctr.indexList[second]) < 0 {
 			second = i
 		}
 	}
