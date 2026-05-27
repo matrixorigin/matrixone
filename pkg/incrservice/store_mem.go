@@ -170,7 +170,7 @@ func (s *memStore) UpdateMinValue(
 		panic("missing incr column record")
 	}
 
-	if c != nil && c.Offset < minValue {
+	if c.Offset < minValue {
 		c.Offset = minValue
 	}
 	return nil
