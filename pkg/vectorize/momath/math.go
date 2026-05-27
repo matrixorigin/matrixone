@@ -91,6 +91,10 @@ func Sin(v float64) (float64, error) {
 	return math.Sin(v), nil
 }
 
+func Radians(v float64) float64 {
+	return v * math.Pi / 180
+}
+
 func Sinh(v float64) (float64, error) {
 	r := math.Sinh(v)
 	if math.IsInf(r, 0) {
