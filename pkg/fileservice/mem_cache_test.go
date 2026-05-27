@@ -582,6 +582,75 @@ func TestMemoryCachePressureAdmissionSkipsWritesAboveTarget(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestMemoryCachePressureAdmissionAdmitsGhostEntry(t *testing.T) {
+	ctx := context.Background()
+	clearMemoryCachePressureTargetForTest()
+	defer clearMemoryCachePressureTargetForTest()
+
+	cache := NewMemCache(
+		fscache.ConstCapacity(4),
+		nil,
+		nil,
+		"",
+	)
+	defer cache.Close(ctx)
+
+	for i := 0; i < 3; i++ {
+		vec := &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{{
+				Offset:     int64(i),
+				Size:       1,
+				CachedData: staticTestData([]byte{byte(i)}),
+			}},
+		}
+		assert.NoError(t, cache.Update(ctx, vec, false))
+	}
+
+	assert.Equal(t, int64(2), cache.cache.EvictToTargetWithWait(ctx, 2))
+	assert.Equal(t, int64(2), cache.cache.Used())
+	key0 := fscache.CacheKey{Path: "foo", Offset: 0, Sz: 1}
+	key1 := fscache.CacheKey{Path: "foo", Offset: 1, Sz: 1}
+	key2 := fscache.CacheKey{Path: "foo", Offset: 2, Sz: 1}
+	key3 := fscache.CacheKey{Path: "foo", Offset: 3, Sz: 1}
+	_, ok := cache.cache.Get(ctx, key0)
+	assert.False(t, ok)
+	_, ok = cache.cache.Get(ctx, key1)
+	assert.True(t, ok)
+	_, ok = cache.cache.Get(ctx, key2)
+	assert.True(t, ok)
+
+	SetMemoryCachePressureTargetPercent(50, time.Now().Add(time.Minute))
+
+	coldVec := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Offset:     3,
+			Size:       1,
+			CachedData: staticTestData([]byte{3}),
+		}},
+	}
+	assert.NoError(t, cache.Update(ctx, coldVec, false))
+	assert.Equal(t, int64(2), cache.cache.Used())
+	_, ok = cache.cache.Get(ctx, key3)
+	assert.False(t, ok)
+
+	ghostVec := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Offset:     0,
+			Size:       1,
+			CachedData: staticTestData([]byte{0}),
+		}},
+	}
+	assert.NoError(t, cache.Update(ctx, ghostVec, false))
+	assert.Equal(t, int64(2), cache.cache.Used())
+	_, ok = cache.cache.Get(ctx, key0)
+	assert.True(t, ok)
+	_, ok = cache.cache.Get(ctx, key1)
+	assert.False(t, ok)
+}
+
 func TestMemoryCachePressureAdmissionExpires(t *testing.T) {
 	ctx := context.Background()
 	clearMemoryCachePressureTargetForTest()

@@ -47,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -82,30 +81,16 @@ const (
 
 var (
 	evictMemoryCachesToCapacityPercent = fileservice.EvictMemoryCachesToCapacityPercent
-	evictMetaCacheToCapacityPercent    = objectio.EvictCacheToCapacityPercent
 )
 
 func makeRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
 	return func(ctx context.Context, targetPercent int64) {
 		pressureUntil := time.Now().Add(rssCacheAdmissionPressureTTL)
 		fileservice.SetMemoryCachePressureTargetPercent(targetPercent, pressureUntil)
-		objectio.SetMetaCachePressureTargetPercent(targetPercent, pressureUntil)
 
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			memoryCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-			evictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
-		}()
-		go func() {
-			defer wg.Done()
-			metaCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-			evictMetaCacheToCapacityPercent(metaCtx, targetPercent)
-		}()
-		wg.Wait()
+		memoryCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		evictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
 	}
 }
 
