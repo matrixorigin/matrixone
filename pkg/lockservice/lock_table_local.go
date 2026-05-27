@@ -515,6 +515,10 @@ func (l *localLockTable) handleLockConflictLocked(
 		return ErrLockConflict
 	}
 
+	if c.opts.Granularity == pb.Granularity_Range {
+		l.closeRangeLastWaiterLocked(c)
+	}
+
 	c.w.conflictKey.Store(&key)
 	c.w.lt.Store(l)
 	c.w.waitFor = c.w.waitFor[:0]
@@ -541,25 +545,40 @@ func (l *localLockTable) handleLockConflictLocked(
 	// waiter added, we need to active deadlock check.
 	logLocalLockWaitOn(l.logger, c.txn, l.bind.Table, c.w, key, conflictWith)
 
-	if c.opts.Granularity != pb.Granularity_Range {
-		return nil
-	}
-
-	if len(c.rangeLastWaitKey) > 0 {
-		v, ok := l.mu.store.Get(c.rangeLastWaitKey)
-		if !ok {
-			l.logger.Error("missing range last wait key when moving waiter to next conflict",
-				zap.Uint64("table", l.bind.Table),
-				zap.String("txn", c.txn.txnKey),
-				zap.Binary("last-wait-key", c.rangeLastWaitKey),
-				zap.Binary("next-conflict-key", key))
-		}
-		if ok && v.closeWaiter(c.w, l.logger) {
-			l.mu.store.Delete(c.rangeLastWaitKey)
-		}
-	}
 	c.rangeLastWaitKey = key
 	return nil
+}
+
+func (l *localLockTable) closeRangeLastWaiterLocked(c *lockContext) {
+	if len(c.rangeLastWaitKey) == 0 {
+		return
+	}
+
+	v, ok := l.mu.store.Get(c.rangeLastWaitKey)
+	if ok {
+		if v.removeWaiter(c.w, l.logger) {
+			l.mu.store.Delete(c.rangeLastWaitKey)
+		}
+		c.rangeLastWaitKey = nil
+		return
+	}
+
+	l.logger.Error("missing range last wait key when moving waiter to next conflict",
+		zap.Uint64("table", l.bind.Table),
+		zap.String("txn", c.txn.txnKey),
+		zap.Binary("last-wait-key", c.rangeLastWaitKey))
+
+	var deleteKeys [][]byte
+	l.mu.store.Iter(func(key []byte, lock Lock) bool {
+		if lock.removeWaiter(c.w, l.logger) {
+			deleteKeys = append(deleteKeys, append([]byte(nil), key...))
+		}
+		return true
+	})
+	for _, key := range deleteKeys {
+		l.mu.store.Delete(key)
+	}
+	c.rangeLastWaitKey = nil
 }
 
 func (l *localLockTable) addRangeLockLocked(

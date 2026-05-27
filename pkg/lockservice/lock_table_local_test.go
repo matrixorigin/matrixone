@@ -1716,6 +1716,17 @@ func TestHandleLockConflictLockedLogOnMissingRangeKey(t *testing.T) {
 				waitTxn := pb.WaitTxn{TxnID: txnID, CreatedOn: "test"}
 				w := acquireWaiter(waitTxn, "test", logger)
 
+				staleKey := []byte{2}
+				staleWaiters := newWaiterQueue()
+				staleWaiters.init(logger)
+				staleWaiters.put(w)
+				lt.mu.store.Add(staleKey, Lock{
+					createAt: time.Now(),
+					holders:  newHolders(),
+					waiters:  staleWaiters,
+				})
+
+				nextConflictKey := []byte{1}
 				holderTxnID := []byte("holder1")
 				holderWaitTxn := pb.WaitTxn{TxnID: holderTxnID, CreatedOn: "test"}
 				h := newHolders()
@@ -1727,6 +1738,7 @@ func TestHandleLockConflictLockedLogOnMissingRangeKey(t *testing.T) {
 					holders:  h,
 					waiters:  wq,
 				}
+				lt.mu.store.Add(nextConflictKey, conflictWith)
 
 				c := &lockContext{
 					ctx:     context.Background(),
@@ -1744,11 +1756,18 @@ func TestHandleLockConflictLockedLogOnMissingRangeKey(t *testing.T) {
 					result:           pb.Result{},
 				}
 
-				// rangeLastWaitKey {99} is not in the store, so the error log
-				// branch (previously a panic) should execute without crashing.
-				err := lt.handleLockConflictLocked(c, []byte{1}, conflictWith)
+				// rangeLastWaitKey {99} is not in the store, but the same waiter
+				// may have been moved to another queue by a range merge. Leaving it
+				// in that stale no-holder lock would block later lockers forever.
+				err := lt.handleLockConflictLocked(c, nextConflictKey, conflictWith)
 				assert.NoError(t, err)
-				assert.Equal(t, []byte{1}, c.rangeLastWaitKey)
+				assert.Equal(t, nextConflictKey, c.rangeLastWaitKey)
+				_, ok := lt.mu.store.Get(staleKey)
+				assert.False(t, ok)
+
+				nextLock, ok := lt.mu.store.Get(nextConflictKey)
+				require.True(t, ok)
+				assert.Equal(t, 1, nextLock.waiters.size())
 			})
 		},
 	)
