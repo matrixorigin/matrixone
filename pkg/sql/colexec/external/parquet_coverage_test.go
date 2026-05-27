@@ -242,20 +242,25 @@ func TestParquetProcessHelpersCoverageHack(t *testing.T) {
 	require.NoError(t, processParquetListToArray[float32](ctx, &columnMapper{}, emptyListPage, proc,
 		vector.NewVec(types.New(types.T_array_float32, 1, 0)), 1, func(v parquet.Value) (float32, error) { return v.Float(), nil }))
 
-	nullListPage := parquet.FloatType.NewPage(0, 1, encoding.FloatValues([]float32{1}))
+	_, nullListPage := writeListNodeAndGetPage(t, parquet.Optional(parquet.List(parquet.Leaf(parquet.FloatType))), []parquet.Row{
+		{parquet.NullValue().Level(0, 0, 0)},
+	})
 	arrayVec := vector.NewVec(types.New(types.T_array_float32, 1, 0))
 	require.NoError(t, processParquetListToArray[float32](ctx,
-		&columnMapper{dstNull: true, maxDefinitionLevel: 1},
+		&columnMapper{dstNull: true, maxDefinitionLevel: 2, listCanBeNull: true, listEmptyLevel: 1},
 		nullListPage, proc, arrayVec, 1, func(v parquet.Value) (float32, error) { return v.Float(), nil }))
 	require.Equal(t, 1, arrayVec.Length())
 
 	err = processParquetListToArray[float32](ctx,
-		&columnMapper{dstNull: false, maxDefinitionLevel: 1},
+		&columnMapper{dstNull: false, maxDefinitionLevel: 2, listCanBeNull: true, listEmptyLevel: 1},
 		nullListPage, proc, vector.NewVec(types.New(types.T_array_float32, 1, 0)), 1,
 		func(v parquet.Value) (float32, error) { return v.Float(), nil })
 	require.Error(t, err)
 
-	err = processParquetListToArray[float32](ctx, &columnMapper{}, nullListPage, proc,
+	_, valueListPage := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+		{parquet.FloatValue(1).Level(0, 1, 0)},
+	})
+	err = processParquetListToArray[float32](ctx, &columnMapper{maxDefinitionLevel: 1}, valueListPage, proc,
 		vector.NewVec(types.New(types.T_array_float32, 1, 0)), 1,
 		func(v parquet.Value) (float32, error) { return 0, moerr.NewInvalidInputNoCtx("coverage") })
 	require.Error(t, err)

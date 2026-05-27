@@ -60,6 +60,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		} else {
 			expr, err = b.bindNumVal(exprImpl, plan.Type{})
 		}
+	case *tree.TimeUnitExpr:
+		numVal := tree.NewNumVal(exprImpl.Unit, exprImpl.Unit, false, tree.P_char)
+		if d, ok := b.impl.(*DefaultBinder); ok {
+			expr, err = b.bindNumVal(numVal, d.typ)
+		} else {
+			expr, err = b.bindNumVal(numVal, plan.Type{})
+		}
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
 
@@ -1692,6 +1699,18 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
+		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_int64) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int32) && intervalUnitIsDayOrLarger(args[0]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
+		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int64) && intervalUnitIsDayOrLarger(args[0]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
 		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "concat"
 		}
@@ -1719,6 +1738,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
+			name = "date_sub"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
+			name = "date_sub"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_int64) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		}
@@ -2787,6 +2812,19 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 		numberExpr,
 		makePlan2Int64ConstExprWithType(int64(intervalType)),
 	}, nil
+}
+
+func intervalUnitIsDayOrLarger(intervalExpr *Expr) bool {
+	list := intervalExpr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return false
+	}
+	unitStr := list.List[1].GetLit().GetSval()
+	iTyp, err := types.IntervalTypeOf(unitStr)
+	if err != nil {
+		return false
+	}
+	return types.UnitIsDayOrLarger(iTyp)
 }
 
 func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, rightList *plan.ExprList) (*plan.Expr, error) {

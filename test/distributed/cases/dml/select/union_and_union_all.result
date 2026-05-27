@@ -206,7 +206,15 @@ insert into t6 values ('bb', '22');
 insert into t6 values ('cc', '33');
 insert into t6 values ('dd', '44');
 select a from t5 union select col1 from t6;
-invalid argument cast to int, bad value aa
+a
+aa
+bb
+cc
+dd
+12
+20
+18
+15
 select a from t5 union select col2 from t6;
 a
 12
@@ -386,8 +394,10 @@ SELECT CASE '1' WHEN '1' THEN 'BUG' ELSE 'nobug' END;
 case+union+tet
 case+union+tet
 BUG
-SELECT 1, 2 UNION SELECT 'a', 'b';
-invalid argument cast to int, bad value a
+SELECT 1, 2 UNION SELECT 'a', 'b' ORDER BY 1;
+1    2
+1    2
+a    b
 select 'a' union select concat('a', -4);
 a
 a

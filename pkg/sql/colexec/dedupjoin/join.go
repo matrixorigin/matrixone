@@ -311,6 +311,24 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 
 	if ap.OnDuplicateAction != plan.Node_UPDATE || ctr.mp.HashOnUnique() {
 		if ctr.matched.Count() == 0 {
+			// constructDedupJoin copies node.ProjectList into ap.Result without
+			// dedup, and the REPLACE planner can alias multiple projections onto
+			// the same build column, so a non-capture build position may be
+			// referenced more than once. Ownership transfer (steal the build
+			// vector and nil it out) is only safe when a position is referenced
+			// exactly once; duplicates must copy, otherwise the second reference
+			// reads a nil vector. Count references first.
+			buildPosRefCount := make(map[int32]int, len(ap.Result))
+			for j, rp := range ap.Result {
+				if rp.Rel != 1 {
+					continue
+				}
+				if len(ctr.captureResultIdx) > 0 && ctr.captureResultIdx[j] >= 0 {
+					continue
+				}
+				buildPosRefCount[rp.Pos]++
+			}
+
 			ap.ctr.buf = make([]*batch.Batch, len(ctr.batches))
 			for i := range ap.ctr.buf {
 				ap.ctr.buf[i] = batch.NewOffHeapWithSize(len(ap.Result))
@@ -339,11 +357,22 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 									return err
 								}
 							}
-						} else {
-							// Non-capture build column: transfer ownership from
-							// the build batch to avoid a full copy.
+						} else if buildPosRefCount[rp.Pos] == 1 {
+							// Non-capture build column referenced exactly once:
+							// transfer ownership from the build batch to avoid a
+							// full copy.
 							ap.ctr.buf[i].Vecs[j] = bat.Vecs[rp.Pos]
 							bat.Vecs[rp.Pos] = nil
+						} else {
+							// Non-capture build column referenced more than once
+							// (aliased projections). Copy so every reference gets
+							// its own valid vector; ownership transfer here would
+							// leave later references reading a nil vector.
+							typ := ap.RightTypes[rp.Pos]
+							ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(typ)
+							if err := vector.GetUnionAllFunction(typ, proc.Mp())(ap.ctr.buf[i].Vecs[j], bat.Vecs[rp.Pos]); err != nil {
+								return err
+							}
 						}
 					} else {
 						ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(ap.LeftTypes[rp.Pos])

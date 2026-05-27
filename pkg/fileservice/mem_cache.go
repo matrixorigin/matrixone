@@ -16,7 +16,12 @@ package fileservice
 
 import (
 	"context"
+	"hash/maphash"
+	"sync"
+	"sync/atomic"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -26,6 +31,69 @@ import (
 type MemCache struct {
 	cache       fscache.DataCache
 	counterSets []*perfcounter.CounterSet
+	callbacksMu [256]sync.Mutex
+}
+
+var memCacheCallbackSeed = maphash.MakeSeed()
+
+var (
+	memCachePressureMu            sync.Mutex
+	memCachePressureTargetPercent atomic.Int64
+	memCachePressureDeadline      atomic.Int64
+)
+
+func SetMemoryCachePressureTargetPercent(percent int64, until time.Time) {
+	now := time.Now()
+	if percent <= 0 || !until.After(now) {
+		memCachePressureMu.Lock()
+		memCachePressureTargetPercent.Store(0)
+		memCachePressureDeadline.Store(0)
+		memCachePressureMu.Unlock()
+		return
+	}
+	if percent > 100 {
+		percent = 100
+	}
+
+	memCachePressureMu.Lock()
+	defer memCachePressureMu.Unlock()
+
+	oldDeadline := memCachePressureDeadline.Load()
+	oldPercent := memCachePressureTargetPercent.Load()
+	if oldDeadline > now.UnixNano() && oldPercent > 0 && oldPercent < percent {
+		return
+	}
+	memCachePressureTargetPercent.Store(percent)
+	memCachePressureDeadline.Store(until.UnixNano())
+}
+
+func clearMemoryCachePressureTargetForTest() {
+	memCachePressureTargetPercent.Store(0)
+	memCachePressureDeadline.Store(0)
+}
+
+func memoryCachePressureTarget(capacity int64) (int64, bool) {
+	deadline := memCachePressureDeadline.Load()
+	if deadline == 0 || time.Now().UnixNano() > deadline {
+		return 0, false
+	}
+	percent := memCachePressureTargetPercent.Load()
+	if percent <= 0 {
+		return 0, false
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	return capacity * percent / 100, true
+}
+
+func (m *MemCache) callbacksLock(key fscache.CacheKey) *sync.Mutex {
+	var hasher maphash.Hash
+	hasher.SetSeed(memCacheCallbackSeed)
+	hasher.Write(util.UnsafeToBytes(&key.Offset))
+	hasher.Write(util.UnsafeToBytes(&key.Sz))
+	hasher.WriteString(key.Path)
+	return &m.callbacksMu[hasher.Sum64()%uint64(len(m.callbacksMu))]
 }
 
 func NewMemCache(
@@ -47,13 +115,24 @@ func NewMemCache(
 		return capacity()
 	}
 
-	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
+	var dataCache *fifocache.DataCache
+	ret := &MemCache{
+		counterSets: counterSets,
+	}
+
+	prepareSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) func(inserted bool) {
+		value.Retain()
+		return func(inserted bool) {
+			if !inserted {
+				value.Release()
+			}
+		}
+	}
+
+	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) {
 		// events
 		LogEvent(ctx, str_memory_cache_post_set_begin)
 		defer LogEvent(ctx, str_memory_cache_post_set_end)
-
-		// retain
-		value.Retain()
 
 		// metrics
 		LogEvent(ctx, str_update_metrics_begin)
@@ -63,6 +142,9 @@ func NewMemCache(
 
 		// callbacks
 		if callbacks != nil {
+			callbackLock := ret.callbacksLock(key)
+			callbackLock.Lock()
+			defer callbackLock.Unlock()
 			LogEvent(ctx, str_memory_cache_callbacks_begin)
 			for _, fn := range callbacks.PostSet {
 				fn(key, value)
@@ -89,7 +171,7 @@ func NewMemCache(
 		}
 	}
 
-	postEvictFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
+	postEvictFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) {
 		// events
 		LogEvent(ctx, str_memory_cache_post_evict_begin)
 		defer LogEvent(ctx, str_memory_cache_post_evict_end)
@@ -105,6 +187,14 @@ func NewMemCache(
 
 		// callbacks
 		if callbacks != nil {
+			callbackLock := ret.callbacksLock(key)
+			callbackLock.Lock()
+			defer callbackLock.Unlock()
+			if dataCache != nil {
+				if currentSeq, ok := dataCache.CurrentSeq(key); ok && currentSeq != seq {
+					return
+				}
+			}
 			LogEvent(ctx, str_memory_cache_callbacks_begin)
 			for _, fn := range callbacks.PostEvict {
 				fn(key, value)
@@ -113,12 +203,10 @@ func NewMemCache(
 		}
 	}
 
-	dataCache := fifocache.NewDataCache(capacityFunc, postSetFn, postGetFn, postEvictFn)
+	dataCache = fifocache.NewDataCacheWithPrepareSet(capacityFunc, prepareSetFn, postSetFn, postGetFn, postEvictFn)
+	dataCache.SetAdmissionTarget(memoryCachePressureTarget)
 
-	ret := &MemCache{
-		cache:       dataCache,
-		counterSets: counterSets,
-	}
+	ret.cache = dataCache
 
 	if name != "" {
 		allMemoryCaches.Store(ret, name)
@@ -207,6 +295,11 @@ func (m *MemCache) Update(
 			Offset: entry.Offset,
 			Sz:     entry.Size,
 		}
+		if target, ok := memoryCachePressureTarget(m.cache.Capacity()); ok &&
+			m.cache.Used()+int64(len(entry.CachedData.Bytes())) > target {
+			metric.FSCachePressureMemorySkipCounter.Inc()
+			continue
+		}
 
 		LogEvent(ctx, str_set_memory_cache_entry_begin)
 		m.cache.Set(ctx, key, entry.CachedData)
@@ -229,6 +322,21 @@ func (m *MemCache) DeletePaths(
 
 func (m *MemCache) Evict(ctx context.Context, done chan int64) {
 	m.cache.Evict(ctx, done)
+}
+
+func (m *MemCache) EvictToTarget(ctx context.Context, target int64) int64 {
+	return m.cache.EvictToTargetWithWait(ctx, target)
+}
+
+func (m *MemCache) EvictToCapacityPercent(ctx context.Context, percent int64) int64 {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	target := m.cache.Capacity() * percent / 100
+	return m.EvictToTarget(ctx, target)
 }
 
 func (m *MemCache) Close(ctx context.Context) {
