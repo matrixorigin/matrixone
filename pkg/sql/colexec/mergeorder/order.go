@@ -381,23 +381,27 @@ func (ctr *container) pickFirstRow() (batIndex int) {
 	l := len(ctr.indexList)
 
 	if l > 1 {
+		compares := ctr.compares
+		orderCols := ctr.orderCols
+		indexList := ctr.indexList
 		i := 0
-		for k := 0; k < len(ctr.compares); k++ {
-			ctr.compares[k].Set(0, ctr.orderCols[i][k])
+		leftRow := indexList[i]
+		for k := 0; k < len(compares); k++ {
+			compares[k].Set(0, orderCols[i][k])
 		}
 		for j := 1; j < l; j++ {
-			for k := 0; k < len(ctr.compares); k++ {
-				ctr.compares[k].Set(1, ctr.orderCols[j][k])
-				result := ctr.compares[k].Compare(0, 1, ctr.indexList[i], ctr.indexList[j])
+			rightRow := indexList[j]
+			for k := 0; k < len(compares); k++ {
+				compares[k].Set(1, orderCols[j][k])
+				result := compares[k].Compare(0, 1, leftRow, rightRow)
 				if result < 0 {
 					break
 				} else if result > 0 {
 					i = j
-					for kk := 0; kk < len(ctr.compares); kk++ {
-						ctr.compares[kk].Set(0, ctr.orderCols[i][kk])
+					leftRow = rightRow
+					for kk := 0; kk < len(compares); kk++ {
+						compares[kk].Set(0, orderCols[i][kk])
 					}
-					break
-				} else if k == len(ctr.compares)-1 {
 					break
 				}
 			}
