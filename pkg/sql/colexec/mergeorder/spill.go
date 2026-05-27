@@ -582,10 +582,6 @@ func (ctr *container) Pop() any {
 	return reader
 }
 
-func (ctr *container) pickFirstSpillReader() int {
-	return 0
-}
-
 func (ctr *container) fixSpillHeapAfterAdvance(idx int) {
 	switch len(ctr.spillReaders) {
 	case 0, 1:
@@ -789,6 +785,58 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 				}
 				continue
 			}
+			if len(ctr.spillReaders) == 2 {
+				src := ctr.spillReaders[0]
+				chunk := computeDrainChunk(src, getOutSize())
+				if chunk < 1 {
+					chunk = 1
+				} else if chunk > 1 {
+					if c := ctr.computeWinnerChunk(src, ctr.spillReaders[1], chunk); c > 1 {
+						chunk = c
+					} else {
+						chunk = 1
+					}
+				}
+				if err := appendContiguousRows(out, src.batch, src.rowIdx, chunk, proc); err != nil {
+					if out != nil {
+						out.Clean(proc.Mp())
+					}
+					if outOrder != nil {
+						outOrder.Clean(proc.Mp())
+					}
+					run.file.Close()
+					return nil, err
+				}
+				if outOrder != nil {
+					if err := appendContiguousOrderRows(outOrder, src.orderCols, ctr.spillKeyIndexes, src.rowIdx, chunk, proc); err != nil {
+						if out != nil {
+							out.Clean(proc.Mp())
+						}
+						outOrder.Clean(proc.Mp())
+						run.file.Close()
+						return nil, err
+					}
+				}
+				rows += chunk
+				updateOutSize(src, chunk)
+				if err := ctr.advanceSpillReaderByChunk(proc, 0, chunk); err != nil {
+					if out != nil {
+						out.Clean(proc.Mp())
+					}
+					if outOrder != nil {
+						outOrder.Clean(proc.Mp())
+					}
+					run.file.Close()
+					return nil, err
+				}
+				if getOutSize() >= maxBatchSizeToSend {
+					break
+				}
+				if rows >= nextSizeCheck {
+					nextSizeCheck = rows + batchSizeCheckInterval
+				}
+				continue
+			}
 
 			src := ctr.spillReaders[0]
 			budgetChunk := computeDrainChunk(src, getOutSize())
@@ -840,8 +888,7 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 				}
 			}
 
-			choice := ctr.pickFirstSpillReader()
-			reader := ctr.spillReaders[choice]
+			reader := ctr.spillReaders[0]
 			if err := appendContiguousRows(out, reader.batch, reader.rowIdx, 1, proc); err != nil {
 				if out != nil {
 					out.Clean(proc.Mp())
@@ -861,7 +908,7 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 			}
 			rows++
 			updateOutSize(reader, 1)
-			if err := ctr.advanceSpillReader(proc, choice); err != nil {
+			if err := ctr.advanceSpillReader(proc, 0); err != nil {
 				if out != nil {
 					out.Clean(proc.Mp())
 				}
@@ -1003,6 +1050,34 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 			}
 			continue
 		}
+		if len(ctr.spillReaders) == 2 {
+			src := ctr.spillReaders[0]
+			chunk := computeDrainChunk(src, getBufSize())
+			if chunk < 1 {
+				chunk = 1
+			} else if chunk > 1 {
+				if c := ctr.computeWinnerChunk(src, ctr.spillReaders[1], chunk); c > 1 {
+					chunk = c
+				} else {
+					chunk = 1
+				}
+			}
+			if err := appendContiguousRows(ctr.buf, src.batch, src.rowIdx, chunk, proc); err != nil {
+				return false, err
+			}
+			rows += chunk
+			updateBufSize(src, chunk)
+			if err := ctr.advanceSpillReaderByChunk(proc, 0, chunk); err != nil {
+				return false, err
+			}
+			if getBufSize() >= maxBatchSizeToSend {
+				break
+			}
+			if rows >= nextSizeCheck {
+				nextSizeCheck = rows + batchSizeCheckInterval
+			}
+			continue
+		}
 
 		src := ctr.spillReaders[0]
 		budgetChunk := computeDrainChunk(src, getBufSize())
@@ -1030,14 +1105,13 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 			}
 		}
 
-		choice := ctr.pickFirstSpillReader()
-		reader := ctr.spillReaders[choice]
+		reader := ctr.spillReaders[0]
 		if err := appendContiguousRows(ctr.buf, reader.batch, reader.rowIdx, 1, proc); err != nil {
 			return false, err
 		}
 		rows++
 		updateBufSize(reader, 1)
-		if err := ctr.advanceSpillReader(proc, choice); err != nil {
+		if err := ctr.advanceSpillReader(proc, 0); err != nil {
 			return false, err
 		}
 		if rows >= nextSizeCheck {
