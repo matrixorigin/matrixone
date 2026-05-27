@@ -612,6 +612,98 @@ func TestComputeWinnerChunkFallbackToOne(t *testing.T) {
 	require.Equal(t, 1, ctr.computeWinnerChunk(root, second, 3))
 }
 
+func TestComputeBatchDrainChunkFixedWidth(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	src := batch.NewWithSize(1)
+	values := make([]int64, 100)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	src.Vecs[0] = testutil.NewVector(100, types.T_int64.ToType(), proc.Mp(), false, values)
+	src.SetRowCount(100)
+	defer src.Clean(proc.Mp())
+
+	require.Equal(t, 100, computeBatchDrainChunk(src, 0, 0))
+	require.Equal(t, 1, computeBatchDrainChunk(src, 0, maxBatchSizeToSend-1))
+}
+
+func TestComputeBatchDrainChunkVarlen(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	src := batch.NewWithSize(1)
+	values := make([]string, 100)
+	for i := range values {
+		values[i] = fmt.Sprintf("v-%d", i)
+	}
+	src.Vecs[0] = testutil.NewVector(100, types.T_varchar.ToType(), proc.Mp(), false, values)
+	src.SetRowCount(100)
+	defer src.Clean(proc.Mp())
+
+	chunk := computeBatchDrainChunk(src, 0, 0)
+	require.Greater(t, chunk, 0)
+	require.LessOrEqual(t, chunk, maxVarlenDrainChunkRows)
+}
+
+func TestComputeInMemoryWinnerChunkDominant(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	left := batch.NewWithSize(1)
+	left.Vecs[0] = testutil.NewVector(4, types.T_int8.ToType(), proc.Mp(), false, []int8{1, 2, 3, 10})
+	left.SetRowCount(4)
+	right := batch.NewWithSize(1)
+	right.Vecs[0] = testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{5})
+	right.SetRowCount(1)
+	defer left.Clean(proc.Mp())
+	defer right.Clean(proc.Mp())
+
+	ctr := &container{
+		compares:  []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+		batchList: []*batch.Batch{left, right},
+		orderCols: [][]*vector.Vector{{left.Vecs[0]}, {right.Vecs[0]}},
+		indexList: []int64{0, 0},
+	}
+	require.Equal(t, 3, ctr.computeInMemoryWinnerChunk(0, 1, 4))
+	require.Equal(t, 2, ctr.computeInMemoryWinnerChunk(0, 1, 2))
+}
+
+func TestComputeInMemoryWinnerChunkFallbackToOne(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	left := batch.NewWithSize(1)
+	left.Vecs[0] = testutil.NewVector(3, types.T_int8.ToType(), proc.Mp(), false, []int8{1, 6, 7})
+	left.SetRowCount(3)
+	right := batch.NewWithSize(1)
+	right.Vecs[0] = testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{5})
+	right.SetRowCount(1)
+	defer left.Clean(proc.Mp())
+	defer right.Clean(proc.Mp())
+
+	ctr := &container{
+		compares:  []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+		batchList: []*batch.Batch{left, right},
+		orderCols: [][]*vector.Vector{{left.Vecs[0]}, {right.Vecs[0]}},
+		indexList: []int64{0, 0},
+	}
+	require.Equal(t, 1, ctr.computeInMemoryWinnerChunk(0, 1, 3))
+}
+
 func BenchmarkOrder(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs := []orderTestCase{

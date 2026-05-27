@@ -85,6 +85,98 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 	}
 }
 
+func computeBatchDrainChunk(src *batch.Batch, start int64, currentSize int) int {
+	remaining := src.RowCount() - int(start)
+	if remaining <= 0 {
+		return 0
+	}
+	budget := maxBatchSizeToSend - currentSize
+	if budget <= 0 {
+		return 0
+	}
+
+	rowBytes := 0
+	fixedWidth := true
+	for _, vec := range src.Vecs {
+		typ := vec.GetType()
+		if typ.IsVarlen() {
+			fixedWidth = false
+			break
+		}
+		rowBytes += typ.TypeSize()
+	}
+
+	if fixedWidth && rowBytes > 0 {
+		maxByBudget := budget / rowBytes
+		if maxByBudget < 1 {
+			maxByBudget = 1
+		}
+		if maxByBudget > maxDrainChunkRows {
+			maxByBudget = maxDrainChunkRows
+		}
+		if maxByBudget < remaining {
+			return maxByBudget
+		}
+		return remaining
+	}
+
+	avgRowBytes := src.Size() / max(1, src.RowCount())
+	if avgRowBytes < 1 {
+		avgRowBytes = 1
+	}
+	maxByBudget := budget / avgRowBytes
+	if maxByBudget < 1 {
+		maxByBudget = 1
+	}
+	if maxByBudget > maxVarlenDrainChunkRows {
+		maxByBudget = maxVarlenDrainChunkRows
+	}
+	if maxByBudget < remaining {
+		return maxByBudget
+	}
+	return remaining
+}
+
+func (ctr *container) compareInMemoryRows(left int, leftRow int64, right int, rightRow int64) int {
+	for k := 0; k < len(ctr.compares); k++ {
+		ctr.compares[k].Set(0, ctr.orderCols[left][k])
+		ctr.compares[k].Set(1, ctr.orderCols[right][k])
+		if r := ctr.compares[k].Compare(0, 1, leftRow, rightRow); r != 0 {
+			return r
+		}
+	}
+	return 0
+}
+
+func (ctr *container) computeInMemoryWinnerChunk(winner int, loser int, budgetChunk int) int {
+	if budgetChunk <= 1 {
+		return budgetChunk
+	}
+	start := ctr.indexList[winner]
+	loserRow := ctr.indexList[loser]
+	remaining := ctr.batchList[winner].RowCount() - int(start)
+	if remaining <= 1 {
+		return remaining
+	}
+	limit := budgetChunk
+	if limit > remaining {
+		limit = remaining
+	}
+	if limit > maxWinnerChunkRows {
+		limit = maxWinnerChunkRows
+	}
+
+	chunk := 1
+	for chunk < limit {
+		if ctr.compareInMemoryRows(winner, start+int64(chunk), loser, loserRow) <= 0 {
+			chunk++
+			continue
+		}
+		break
+	}
+	return chunk
+}
+
 func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) (sendOver bool, err error) {
 	mp := proc.Mp()
 	if ctr.buf == nil {
@@ -99,6 +191,72 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 	wholeLength := 0
 	nextSizeCheck := batchSizeCheckInterval
 	for {
+		if len(ctr.indexList) == 1 {
+			src := ctr.batchList[0]
+			start := ctr.indexList[0]
+			chunk := computeBatchDrainChunk(src, start, ctr.buf.Size())
+			if chunk < 1 {
+				chunk = 1
+			}
+			for j := range ctr.buf.Vecs {
+				err = ctr.buf.Vecs[j].UnionBatch(src.Vecs[j], start, chunk, nil, mp)
+				if err != nil {
+					return false, err
+				}
+			}
+			wholeLength += chunk
+			ctr.indexList[0] += int64(chunk)
+			if ctr.indexList[0] == int64(src.RowCount()) {
+				ctr.removeBatch(proc, 0)
+			}
+			if len(ctr.indexList) == 0 {
+				sendOver = true
+				break
+			}
+			if ctr.buf.Size() >= maxBatchSizeToSend {
+				break
+			}
+			if wholeLength >= nextSizeCheck {
+				nextSizeCheck = wholeLength + batchSizeCheckInterval
+			}
+			continue
+		}
+		if len(ctr.indexList) == 2 {
+			winner := 0
+			if ctr.compareInMemoryRows(1, ctr.indexList[1], 0, ctr.indexList[0]) < 0 {
+				winner = 1
+			}
+			loser := 1 - winner
+			budgetChunk := computeBatchDrainChunk(ctr.batchList[winner], ctr.indexList[winner], ctr.buf.Size())
+			if budgetChunk > 1 {
+				chunk := ctr.computeInMemoryWinnerChunk(winner, loser, budgetChunk)
+				if chunk > 1 {
+					for j := range ctr.buf.Vecs {
+						err = ctr.buf.Vecs[j].UnionBatch(ctr.batchList[winner].Vecs[j], ctr.indexList[winner], chunk, nil, mp)
+						if err != nil {
+							return false, err
+						}
+					}
+					wholeLength += chunk
+					ctr.indexList[winner] += int64(chunk)
+					if ctr.indexList[winner] == int64(ctr.batchList[winner].RowCount()) {
+						ctr.removeBatch(proc, winner)
+					}
+					if len(ctr.indexList) == 0 {
+						sendOver = true
+						break
+					}
+					if ctr.buf.Size() >= maxBatchSizeToSend {
+						break
+					}
+					if wholeLength >= nextSizeCheck {
+						nextSizeCheck = wholeLength + batchSizeCheckInterval
+					}
+					continue
+				}
+			}
+		}
+
 		choice := ctr.pickFirstRow()
 		for j := range ctr.buf.Vecs {
 			err = ctr.buf.Vecs[j].UnionOne(ctr.batchList[choice].Vecs[j], ctr.indexList[choice], mp)
