@@ -1964,6 +1964,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
+	case "pow":
+		name = "power"
+	case "atan2":
+		name = "atan"
 	}
 
 	// get args(exprs) & types
