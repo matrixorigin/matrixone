@@ -170,13 +170,26 @@ func (ctr *container) computeInMemoryWinnerChunk(winner int, loser int, budgetCh
 		limit = maxWinnerChunkRows
 	}
 
+	for k := 0; k < len(ctr.compares); k++ {
+		ctr.compares[k].Set(0, ctr.orderCols[winner][k])
+		ctr.compares[k].Set(1, ctr.orderCols[loser][k])
+	}
+
 	chunk := 1
 	for chunk < limit {
-		if ctr.compareInMemoryRows(winner, start+int64(chunk), loser, loserRow) <= 0 {
-			chunk++
-			continue
+		nextRow := start + int64(chunk)
+		ordered := true
+		for k := 0; k < len(ctr.compares); k++ {
+			if r := ctr.compares[k].Compare(0, 1, nextRow, loserRow); r != 0 {
+				ordered = r < 0
+				break
+			}
 		}
-		break
+		if ordered {
+			chunk++
+		} else {
+			break
+		}
 	}
 	return chunk
 }
