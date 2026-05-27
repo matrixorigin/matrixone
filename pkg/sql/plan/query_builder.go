@@ -2388,6 +2388,10 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		orderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 
 		for _, order := range astOrderBy {
+			if isNullAstExpr(unwrapParenExpr(order.Expr)) {
+				continue
+			}
+
 			expr, err := orderBinder.BindExpr(order.Expr)
 			if err != nil {
 				return 0, err
@@ -3618,6 +3622,10 @@ func (builder *QueryBuilder) bindOrderBy(
 	orderBinder := NewOrderBinder(projectionBinder, selectList)
 	boundOrderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 	for _, order := range astOrderBy {
+		if isNullAstExpr(unwrapParenExpr(order.Expr)) {
+			continue
+		}
+
 		var expr *plan.Expr
 		if expr, err = orderBinder.BindExpr(order.Expr); err != nil {
 			return
@@ -3646,6 +3654,30 @@ func (builder *QueryBuilder) bindOrderBy(
 	}
 
 	return
+}
+
+func projectExprKey(expr *plan.Expr) (string, error) {
+	exprBytes := make([]byte, expr.ProtoSize())
+	if _, err := expr.MarshalToSizedBuffer(exprBytes); err != nil {
+		return "", err
+	}
+	return string(exprBytes), nil
+}
+
+func appendOrderByProjectExpr(ctx *BindContext, expr *plan.Expr) (int32, error) {
+	exprKey, err := projectExprKey(expr)
+	if err != nil {
+		return 0, err
+	}
+
+	if colPos, ok := ctx.projectByExpr[exprKey]; ok {
+		return colPos, nil
+	}
+
+	colPos := int32(len(ctx.projects))
+	ctx.projectByExpr[exprKey] = colPos
+	ctx.projects = append(ctx.projects, expr)
+	return colPos, nil
 }
 
 func (builder *QueryBuilder) bindLimit(
