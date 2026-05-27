@@ -174,10 +174,10 @@ func leastGreatestFnVarlen(
 func leastGreatestParamType(parameters []*vector.Vector) types.Type {
 	for _, p := range parameters {
 		if p.GetType().Oid != types.T_any {
-			return p.GetType()
+			return *p.GetType()
 		}
 	}
-	return parameters[0].GetType()
+	return *parameters[0].GetType()
 }
 
 func leastFn(parameters []*vector.Vector,
