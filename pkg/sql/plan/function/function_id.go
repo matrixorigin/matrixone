@@ -593,6 +593,7 @@ var functionIdRegister = map[string]int32{
 	"abs":                            ABS,
 	"acos":                           ACOS,
 	"addtime":                        ADDTIME,
+	"asin":                           ASIN,
 	"assert":                         ASSERT,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
