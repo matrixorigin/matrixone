@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -436,6 +438,53 @@ func TestOrderSpillDescNullsFirst(t *testing.T) {
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestSpillAppendPolicy(t *testing.T) {
+	var ctr container
+
+	ctr.setSpillThreshold(8 * common.MiB)
+	require.False(t, ctr.spillAppendEnabled)
+	require.Equal(t, int64(0), ctr.spillAppendTarget)
+
+	ctr.setSpillThreshold(64 * common.MiB)
+	require.True(t, ctr.spillAppendEnabled)
+	require.Equal(t, int64(32*common.MiB), ctr.spillAppendTarget)
+
+	ctr.setSpillThreshold(2 * common.GiB)
+	require.True(t, ctr.spillAppendEnabled)
+	require.Equal(t, int64(128*common.MiB), ctr.spillAppendTarget)
+}
+
+func TestCanAppendToActiveRun(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	ctr := &container{
+		compares:  []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+		executors: make([]colexec.ExpressionExecutor, 1),
+	}
+	defer func() {
+		for i := range ctr.spillTailCols {
+			if ctr.spillTailCols[i] != nil {
+				ctr.spillTailCols[i].Free(proc.Mp())
+			}
+		}
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	tail := testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{5})
+	incomingEqual := testutil.NewVector(2, types.T_int8.ToType(), proc.Mp(), false, []int8{5, 6})
+	incomingLess := testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{4})
+	defer tail.Free(proc.Mp())
+	defer incomingEqual.Free(proc.Mp())
+	defer incomingLess.Free(proc.Mp())
+
+	ctr.spillTailCols = []*vector.Vector{vector.NewOffHeapVecWithType(types.T_int8.ToType())}
+	ctr.spillTailReady = false
+	require.NoError(t, ctr.updateActiveRunTail(proc, []*vector.Vector{tail}, 0))
+
+	require.True(t, ctr.canAppendToActiveRun([]*vector.Vector{incomingEqual}))
+	require.False(t, ctr.canAppendToActiveRun([]*vector.Vector{incomingLess}))
 }
 
 func BenchmarkOrder(b *testing.B) {

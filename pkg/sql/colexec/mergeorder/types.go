@@ -39,6 +39,10 @@ const defaultCacheBatchSize = 16
 const spillMergeFanIn = 32
 const spillIOBufferSize = 4 * 1024 * 1024
 const spillMagic = 0x12345678DEADBEEF
+const spillAppendDisableThreshold = int64(16 * common.MiB)
+const spillAppendTargetMin = int64(32 * common.MiB)
+const spillAppendTargetMax = int64(128 * common.MiB)
+const spillAppendHardCapMax = int64(256 * common.MiB)
 
 var _ vm.Operator = new(MergeOrder)
 
@@ -107,16 +111,24 @@ type container struct {
 	buf *batch.Batch
 
 	// spill support
-	spilling        bool
-	spillThreshold  int64
-	spillMemUsage   int64
-	spillFS         fileservice.MutableFileService
-	spillKeyIndexes []int
-	spillKeyCols    []*vector.Vector
-	spillColPos     []int32
-	spillRuns       []*spillRun
-	spillReaders    []*spillRunReader
-	spillWriteBuf   bytes.Buffer
+	spilling           bool
+	spillThreshold     int64
+	spillMemUsage      int64
+	spillFS            fileservice.MutableFileService
+	spillKeyIndexes    []int
+	spillKeyCols       []*vector.Vector
+	spillColPos        []int32
+	spillRuns          []*spillRun
+	spillReaders       []*spillRunReader
+	spillWriteBuf      bytes.Buffer
+	spillActiveRun     *spillRun
+	spillActiveWriter  *bufio.Writer
+	spillActiveBytes   int64
+	spillAppendEnabled bool
+	spillAppendTarget  int64
+	spillTailCols      []*vector.Vector
+	spillTailReady     bool
+	spillIncomingCols  []*vector.Vector
 }
 
 type spillRun struct {
@@ -194,6 +206,24 @@ func (mergeOrder *MergeOrder) cleanBatchAndCol(proc *process.Process) {
 }
 
 func (ctr *container) cleanupSpill(proc *process.Process) {
+	if ctr.spillActiveWriter != nil {
+		_ = ctr.spillActiveWriter.Flush()
+		ctr.spillActiveWriter = nil
+	}
+	if ctr.spillActiveRun != nil && ctr.spillActiveRun.file != nil {
+		ctr.spillActiveRun.file.Close()
+		ctr.spillActiveRun.file = nil
+	}
+	ctr.spillActiveRun = nil
+	ctr.spillActiveBytes = 0
+	ctr.spillTailReady = false
+	for i := range ctr.spillTailCols {
+		if ctr.spillTailCols[i] != nil {
+			ctr.spillTailCols[i].Free(proc.Mp())
+		}
+	}
+	ctr.spillTailCols = nil
+	ctr.spillIncomingCols = nil
 	for i := range ctr.spillReaders {
 		ctr.spillReaders[i].close(proc)
 	}
@@ -221,6 +251,32 @@ func (ctr *container) setSpillThreshold(threshold int64) {
 	} else {
 		ctr.spillThreshold = threshold
 	}
+	ctr.setSpillAppendPolicy()
+}
+
+func (ctr *container) setSpillAppendPolicy() {
+	ctr.spillAppendEnabled = false
+	ctr.spillAppendTarget = 0
+	if ctr.spillThreshold <= spillAppendDisableThreshold {
+		return
+	}
+
+	hardCap := ctr.spillThreshold
+	if hardCap > spillAppendHardCapMax {
+		hardCap = spillAppendHardCapMax
+	}
+	target := ctr.spillThreshold / 4
+	if target < spillAppendTargetMin {
+		target = spillAppendTargetMin
+	}
+	if target > spillAppendTargetMax {
+		target = spillAppendTargetMax
+	}
+	if target > hardCap {
+		target = hardCap
+	}
+	ctr.spillAppendEnabled = true
+	ctr.spillAppendTarget = target
 }
 
 func freeOrderColumns(mp *mpool.MPool, bat *batch.Batch, cols []*vector.Vector) {

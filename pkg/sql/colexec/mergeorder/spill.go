@@ -109,30 +109,30 @@ func makeSpillOrderBatch(orderCols []*vector.Vector, rowCount int) batch.Batch {
 	return keyBatch
 }
 
-func writeSpillBatch(proc *process.Process, bat *batch.Batch, keyCols []*vector.Vector, writer io.Writer, buf *bytes.Buffer, analyzer process.Analyzer) (int64, error) {
+func writeSpillBatch(proc *process.Process, bat *batch.Batch, keyCols []*vector.Vector, writer io.Writer, buf *bytes.Buffer, analyzer process.Analyzer) (int64, int64, error) {
 	cnt := int64(bat.RowCount())
 	buf.Reset()
 	buf.Write(types.EncodeInt64(&cnt))
 	if err := appendSpillPayload(buf, bat); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	keyCount := int64(len(keyCols))
 	buf.Write(types.EncodeInt64(&keyCount))
 	if keyCount > 0 {
 		keyBatch := makeSpillOrderBatch(keyCols, bat.RowCount())
 		if err := appendSpillPayload(buf, &keyBatch); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 	}
 	magic := uint64(spillMagic)
 	buf.Write(types.EncodeUint64(&magic))
 	written, err := writer.Write(buf.Bytes())
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	analyzer.Spill(int64(written))
 	analyzer.SpillRows(cnt)
-	return cnt, nil
+	return cnt, int64(written), nil
 }
 
 func readSpillPayload(proc *process.Process, reader *bufio.Reader, reuseBat *batch.Batch) (*batch.Batch, error) {
@@ -207,7 +207,7 @@ func (ctr *container) spillBatchAsRun(proc *process.Process, bat *batch.Batch, k
 	if err != nil {
 		return err
 	}
-	if _, err = writeSpillBatch(proc, bat, keyCols, run.file, &ctr.spillWriteBuf, analyzer); err != nil {
+	if _, _, err = writeSpillBatch(proc, bat, keyCols, run.file, &ctr.spillWriteBuf, analyzer); err != nil {
 		run.file.Close()
 		return err
 	}
@@ -221,20 +221,170 @@ func (ctr *container) spillBatchAsRun(proc *process.Process, bat *batch.Batch, k
 	return nil
 }
 
+func (ctr *container) fillSpillIncomingOrderColumns(proc *process.Process, dataBatch *batch.Batch, keyCols []*vector.Vector) ([]*vector.Vector, error) {
+	if cap(ctr.spillIncomingCols) < len(ctr.executors) {
+		ctr.spillIncomingCols = make([]*vector.Vector, len(ctr.executors))
+	} else {
+		ctr.spillIncomingCols = ctr.spillIncomingCols[:len(ctr.executors)]
+	}
+	keyIdx := 0
+	for i := range ctr.executors {
+		if ctr.spillColPos[i] >= 0 {
+			colPos := ctr.spillColPos[i]
+			if int(colPos) >= len(dataBatch.Vecs) {
+				return nil, moerr.NewInternalErrorf(proc.Ctx, "merge-order spill column index out of range: %d", colPos)
+			}
+			ctr.spillIncomingCols[i] = dataBatch.Vecs[colPos]
+			continue
+		}
+		if keyIdx >= len(keyCols) {
+			return nil, moerr.NewInternalError(proc.Ctx, "merge-order spill key batch missing")
+		}
+		ctr.spillIncomingCols[i] = keyCols[keyIdx]
+		keyIdx++
+	}
+	if keyIdx != len(keyCols) {
+		return nil, moerr.NewInternalError(proc.Ctx, "merge-order spill key batch mismatch")
+	}
+	return ctr.spillIncomingCols, nil
+}
+
+func (ctr *container) ensureSpillTailColumns() {
+	if cap(ctr.spillTailCols) < len(ctr.executors) {
+		ctr.spillTailCols = make([]*vector.Vector, len(ctr.executors))
+		return
+	}
+	ctr.spillTailCols = ctr.spillTailCols[:len(ctr.executors)]
+}
+
+func (ctr *container) canAppendToActiveRun(incomingOrderCols []*vector.Vector) bool {
+	if !ctr.spillTailReady {
+		return true
+	}
+	for k := 0; k < len(ctr.compares); k++ {
+		ctr.compares[k].Set(0, ctr.spillTailCols[k])
+		ctr.compares[k].Set(1, incomingOrderCols[k])
+		if r := ctr.compares[k].Compare(0, 1, 0, 0); r != 0 {
+			return r < 0
+		}
+	}
+	return true
+}
+
+func (ctr *container) updateActiveRunTail(proc *process.Process, incomingOrderCols []*vector.Vector, rowIdx int64) error {
+	ctr.ensureSpillTailColumns()
+	for i := range incomingOrderCols {
+		if ctr.spillTailCols[i] == nil {
+			ctr.spillTailCols[i] = vector.NewOffHeapVecWithType(*incomingOrderCols[i].GetType())
+		} else {
+			ctr.spillTailCols[i].CleanOnlyData()
+		}
+		if err := ctr.spillTailCols[i].UnionOne(incomingOrderCols[i], rowIdx, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	ctr.spillTailReady = true
+	return nil
+}
+
+func (ctr *container) ensureActiveSpillRun(proc *process.Process) error {
+	if ctr.spillActiveRun != nil {
+		return nil
+	}
+	run, err := ctr.createSpillRun(proc)
+	if err != nil {
+		return err
+	}
+	ctr.spillActiveRun = run
+	ctr.spillActiveWriter = bufio.NewWriterSize(run.file, spillIOBufferSize)
+	ctr.spillActiveBytes = 0
+	ctr.spillTailReady = false
+	return nil
+}
+
+func (ctr *container) finalizeActiveSpillRun(proc *process.Process, keepRun bool) error {
+	if ctr.spillActiveRun == nil {
+		return nil
+	}
+	run := ctr.spillActiveRun
+	writer := ctr.spillActiveWriter
+	ctr.spillActiveRun = nil
+	ctr.spillActiveWriter = nil
+	ctr.spillActiveBytes = 0
+	ctr.spillTailReady = false
+
+	if writer != nil {
+		if err := writer.Flush(); err != nil {
+			run.file.Close()
+			run.file = nil
+			return err
+		}
+	}
+	if _, err := run.file.Seek(0, io.SeekStart); err != nil {
+		run.file.Close()
+		run.file = nil
+		return err
+	}
+	if keepRun {
+		ctr.spillRuns = append(ctr.spillRuns, run)
+		return nil
+	}
+	run.file.Close()
+	run.file = nil
+	return nil
+}
+
+func (ctr *container) spillBatchWithAppend(
+	proc *process.Process,
+	bat *batch.Batch,
+	keyCols []*vector.Vector,
+	incomingOrderCols []*vector.Vector,
+	analyzer process.Analyzer,
+) error {
+	if ctr.spillActiveRun != nil && ((ctr.spillAppendTarget > 0 && ctr.spillActiveBytes >= ctr.spillAppendTarget) || !ctr.canAppendToActiveRun(incomingOrderCols)) {
+		if err := ctr.finalizeActiveSpillRun(proc, true); err != nil {
+			return err
+		}
+	}
+	if err := ctr.ensureActiveSpillRun(proc); err != nil {
+		return err
+	}
+	rows, written, err := writeSpillBatch(proc, bat, keyCols, ctr.spillActiveWriter, &ctr.spillWriteBuf, analyzer)
+	if err != nil {
+		return err
+	}
+	ctr.spillActiveRun.batchCount++
+	ctr.spillActiveRun.rowCount += rows
+	ctr.spillActiveBytes += written
+	return ctr.updateActiveRunTail(proc, incomingOrderCols, int64(bat.RowCount()-1))
+}
+
+func (ctr *container) spillInputBatch(proc *process.Process, bat *batch.Batch, analyzer process.Analyzer) error {
+	keyCols, err := ctr.buildSpillKeyColumns(proc, bat)
+	if err != nil {
+		return err
+	}
+	defer freeOrderColumns(proc.Mp(), bat, keyCols)
+
+	if !ctr.spillAppendEnabled {
+		return ctr.spillBatchAsRun(proc, bat, keyCols, analyzer)
+	}
+
+	incomingOrderCols, err := ctr.fillSpillIncomingOrderColumns(proc, bat, keyCols)
+	if err != nil {
+		return err
+	}
+	return ctr.spillBatchWithAppend(proc, bat, keyCols, incomingOrderCols, analyzer)
+}
+
 func (ctr *container) spillCachedRuns(proc *process.Process, analyzer process.Analyzer) error {
 	for i := range ctr.batchList {
 		if ctr.batchList[i] == nil {
 			continue
 		}
-		keyCols, err := ctr.buildSpillKeyColumns(proc, ctr.batchList[i])
-		if err != nil {
+		if err := ctr.spillInputBatch(proc, ctr.batchList[i], analyzer); err != nil {
 			return err
 		}
-		if err := ctr.spillBatchAsRun(proc, ctr.batchList[i], keyCols, analyzer); err != nil {
-			freeOrderColumns(proc.Mp(), ctr.batchList[i], keyCols)
-			return err
-		}
-		freeOrderColumns(proc.Mp(), ctr.batchList[i], keyCols)
 		ctr.batchList[i].Clean(proc.Mp())
 		ctr.batchList[i] = nil
 		ctr.orderCols[i] = nil
@@ -464,7 +614,7 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 		if outOrder != nil {
 			keyCols = outOrder.Vecs
 		}
-		if _, err := writeSpillBatch(proc, out, keyCols, writer, &ctr.spillWriteBuf, analyzer); err != nil {
+		if _, _, err := writeSpillBatch(proc, out, keyCols, writer, &ctr.spillWriteBuf, analyzer); err != nil {
 			out.Clean(proc.Mp())
 			if outOrder != nil {
 				outOrder.Clean(proc.Mp())
@@ -512,6 +662,9 @@ func (ctr *container) reduceSpillRuns(proc *process.Process, analyzer process.An
 }
 
 func (ctr *container) prepareSpillFinalMerge(proc *process.Process, fs []*plan.OrderBySpec, analyzer process.Analyzer) error {
+	if err := ctr.finalizeActiveSpillRun(proc, true); err != nil {
+		return err
+	}
 	if len(ctr.spillRuns) == 0 {
 		return nil
 	}

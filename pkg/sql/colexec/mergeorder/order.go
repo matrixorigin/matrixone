@@ -267,22 +267,16 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 
 			if ctr.spilling || (ctr.spillThreshold > 0 && ctr.currentMemoryUsage()+int64(input.Batch.Size()) > ctr.spillThreshold) {
 				if !ctr.spilling {
+					ctr.generateCompares(mergeOrder.OrderBySpecs)
 					if err = ctr.spillCachedRuns(proc, analyzer); err != nil {
 						input.Batch.Clean(proc.Mp())
 						return vm.CancelResult, err
 					}
 				}
-				keyCols, evalErr := ctr.buildSpillKeyColumns(proc, input.Batch)
-				if evalErr != nil {
-					input.Batch.Clean(proc.Mp())
-					return vm.CancelResult, evalErr
-				}
-				if err = ctr.spillBatchAsRun(proc, input.Batch, keyCols, analyzer); err != nil {
-					freeOrderColumns(proc.Mp(), input.Batch, keyCols)
+				if err = ctr.spillInputBatch(proc, input.Batch, analyzer); err != nil {
 					input.Batch.Clean(proc.Mp())
 					return vm.CancelResult, err
 				}
-				freeOrderColumns(proc.Mp(), input.Batch, keyCols)
 				input.Batch.Clean(proc.Mp())
 				continue
 			}
