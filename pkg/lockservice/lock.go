@@ -210,15 +210,15 @@ func (l Lock) closeWaiter(w *waiter, logger *log.MOLogger) bool {
 	return canRemove
 }
 
-func (l Lock) removeWaiter(w *waiter, logger *log.MOLogger) bool {
+func (l Lock) removeWaiter(w *waiter, logger *log.MOLogger) (bool, bool) {
 	removed, wasFirst := l.waiters.remove(w)
 	if !removed {
-		return l.isEmpty()
+		return false, l.isEmpty()
 	}
 	if l.holders.size() == 0 && wasFirst && l.waiters.size() > 0 {
 		l.waiters.notify(notifyValue{defChanged: l.isLockTableDefChanged()})
 	}
-	return l.isEmpty()
+	return true, l.isEmpty()
 }
 
 func (l Lock) closeTxn(
