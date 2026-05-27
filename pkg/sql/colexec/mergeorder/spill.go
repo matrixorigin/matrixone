@@ -462,21 +462,19 @@ func (ctr *container) spillCachedRuns(proc *process.Process, analyzer process.An
 }
 
 func (ctr *container) compareSpillReaders(i, j int) int {
-	for k := 0; k < len(ctr.compares); k++ {
-		ctr.compares[k].Set(0, ctr.spillReaders[i].orderCols[k])
-		ctr.compares[k].Set(1, ctr.spillReaders[j].orderCols[k])
-		if r := ctr.compares[k].Compare(0, 1, ctr.spillReaders[i].rowIdx, ctr.spillReaders[j].rowIdx); r != 0 {
-			return r
-		}
-	}
-	return 0
+	left := ctr.spillReaders[i]
+	right := ctr.spillReaders[j]
+	return ctr.compareSpillReaderRows(left, left.rowIdx, right, right.rowIdx)
 }
 
 func (ctr *container) compareSpillReaderRows(left *spillRunReader, leftRow int64, right *spillRunReader, rightRow int64) int {
-	for k := 0; k < len(ctr.compares); k++ {
-		ctr.compares[k].Set(0, left.orderCols[k])
-		ctr.compares[k].Set(1, right.orderCols[k])
-		if r := ctr.compares[k].Compare(0, 1, leftRow, rightRow); r != 0 {
+	leftCols := left.orderCols
+	rightCols := right.orderCols
+	compares := ctr.compares
+	for k := 0; k < len(compares); k++ {
+		compares[k].Set(0, leftCols[k])
+		compares[k].Set(1, rightCols[k])
+		if r := compares[k].Compare(0, 1, leftRow, rightRow); r != 0 {
 			return r
 		}
 	}
