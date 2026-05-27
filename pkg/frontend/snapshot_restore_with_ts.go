@@ -199,19 +199,11 @@ func showFullTablesFromTS(ctx context.Context,
 	to uint32) ([]*tableInfo, error) {
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to show full table `%s.%s`", from, ts, dbName, tblName))
 	newCtx := defines.AttachAccountId(ctx, from)
-	sql := fmt.Sprintf("show full tables from `%s`", dbName)
-
-	if len(tblName) > 0 {
-		sql += fmt.Sprintf(" like '%s'", tblName)
-	}
-
-	if ts > 0 {
-		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
-	}
+	sql := buildTableInfoListSQL(dbName, tblName, ts, from)
 
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] show full table `%s.%s` sql: %s", from, ts, dbName, tblName, sql))
-	// cols: table name, table type
-	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 0, 1)
+	// cols: table name, table type, relkind
+	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 0, 1, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -222,6 +214,7 @@ func showFullTablesFromTS(ctx context.Context,
 			dbName:  dbName,
 			tblName: cols[0],
 			typ:     tableType(cols[1]),
+			relKind: cols[2],
 		}
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] show full table `%s.%s`, get table number `%d`", from, ts, dbName, tblName, len(ans)))
@@ -465,6 +458,12 @@ func restoreDatabaseFromTS(
 			continue
 		}
 
+		// external table data is stored outside MO and cannot be restored by clone.
+		if shouldSkipRestoreTableInBulk(tblInfo) {
+			getLogger(sid).Info(fmt.Sprintf("[%d:%d] skip restore external table: %v.%v", restoreAccount, snapshotTs, tblInfo.dbName, tblInfo.tblName))
+			continue
+		}
+
 		// skip view
 		if tblInfo.typ == view {
 			viewMap[key] = tblInfo
@@ -525,6 +524,10 @@ func recreateTableFromTS(
 	restoreAccount uint32,
 	toAccountId uint32,
 ) (err error) {
+	if isExternalTable(tblInfo) {
+		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
+	}
+
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore table: %v, restore timestamp: %d", restoreAccount, snapshotTs, tblInfo.tblName, snapshotTs))
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
