@@ -1,0 +1,23 @@
+select truncate(1.223, 1), truncate(1.999, 1), truncate(1.999, 0), truncate(-1.999, 1);
+select truncate(1.999, 0), truncate(cast(1.999 as double), 0), truncate(1.999e0, 0), truncate(cast(1.999 as decimal(10,3)), 0);
+select truncate(122, -2), truncate(10.28 * 100, 0);
+select truncate(123.179, 1), truncate(123.179, 2), truncate(123.179, 4), truncate(123.179, 0), truncate(123.179, -1), truncate(123.179, -2), truncate(123.179, null);
+select truncate(null, 1), truncate(null, null);
+select truncate(cast(123 as signed), -2), truncate(cast(-123 as signed), -2), truncate(cast(123 as unsigned), -2);
+
+create table truncate_t1(
+    a int,
+    b bigint unsigned,
+    c double,
+    d decimal(10,3),
+    e decimal(30,6),
+    f int
+);
+insert into truncate_t1 values
+    (123, 123, 123.179, 123.179, 123456789012.179999, 1),
+    (-123, 9, -123.179, -123.179, -123456789012.179999, -1),
+    (9, 0, 1.999, 1.999, 1.999999, 0),
+    (null, null, null, null, null, null);
+select truncate(a, -2), truncate(b, -2), truncate(c, 1), truncate(d, 1), truncate(e, 2), truncate(c, f) from truncate_t1 order by f;
+select truncate(a, f), truncate(d, f), truncate(e, f) from truncate_t1 order by f;
+drop table truncate_t1;

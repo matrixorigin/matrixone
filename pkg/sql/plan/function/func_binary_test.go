@@ -5153,11 +5153,19 @@ func initTruncateTestCase() []tcTemp {
 		right int64
 		want  float64
 	}{
-		// Basic cases from user requirements
-		{4.567, 2, 4.56},   // TRUNCATE(4.567, 2) = 4.56
-		{4.567, 0, 4.0},    // TRUNCATE(4.567, 0) = 4
-		{-4.567, 2, -4.56}, // TRUNCATE(-4.567, 2) = -4.56
-		// Additional test cases
+		{1.223, 1, 1.2},
+		{1.999, 1, 1.9},
+		{1.999, 0, 1},
+		{-1.999, 1, -1.9},
+		{122, -2, 100},
+		{1028, 0, 1028},
+		{123.179, 1, 123.1},
+		{123.179, 2, 123.17},
+		{123.179, 4, 123.179},
+		{123.179, 0, 123},
+		{123.179, -1, 120},
+		{123.179, -2, 100},
+		{4.567, 2, 4.56},
 		{4.567, 1, 4.5},
 		{4.567, 3, 4.567},
 		{-4.567, 0, -4.0},
@@ -5192,14 +5200,13 @@ func initTruncateTestCase() []tcTemp {
 		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
 	})
 
-	// truncate with NULL second argument should expect error, we want a const.
 	testInputs = append(testInputs, tcTemp{
 		info: "test truncate with NULL second argument",
 		inputs: []FunctionTestInput{
 			NewFunctionTestInput(types.T_float64.ToType(), []float64{4.567}, []bool{false}),
 			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
 		},
-		expect: NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, []bool{true}),
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
 	})
 
 	return testInputs
@@ -5214,6 +5221,142 @@ func TestTruncate(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestTruncateIntegerAndDecimal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	cases := []struct {
+		info   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			info: "test truncate int64 with negative digits",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{123, -123, 9, -9}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-2}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{100, -100, 0, 0}, nil),
+			fn:     TruncateInt64,
+		},
+		{
+			info: "test truncate uint64 with negative digits",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{123, 9}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-2}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{100, 0}, nil),
+			fn:     TruncateUint64,
+		},
+		{
+			info: "test truncate int64 with NULL second argument",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{123, -123}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, []bool{true, true}),
+			fn:     TruncateInt64,
+		},
+		{
+			info: "test truncate int64 with non-constant second argument",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1234, -1234, 1234}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-2, -3, 0}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1200, -1000, 1234}, nil),
+			fn:     TruncateInt64,
+		},
+	}
+
+	for _, tc := range cases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, tc.fn)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+
+	decimal64Type := types.New(types.T_decimal64, 10, 3)
+	decimal64Inputs := mustParseDecimal64s(t, decimal64Type, "123.179", "-123.179", "1.999")
+	decimal64Expected := mustParseDecimal64s(t, decimal64Type, "123.100", "-123.100", "1.900")
+	fcTC := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(decimal64Type, decimal64Inputs, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, nil),
+	}, NewFunctionTestResult(decimal64Type, false, decimal64Expected, nil), TruncateDecimal64)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is 'test truncate decimal64', err info is '%s'", info))
+
+	decimal64NegativeDigitsExpected := mustParseDecimal64s(t, decimal64Type, "120.000", "-120.000", "0.000")
+	fcTC = NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(decimal64Type, decimal64Inputs, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, nil),
+	}, NewFunctionTestResult(decimal64Type, false, decimal64NegativeDigitsExpected, nil), TruncateDecimal64)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is 'test truncate decimal64 with negative digits', err info is '%s'", info))
+
+	decimal128Type := types.New(types.T_decimal128, 30, 6)
+	decimal128Inputs := mustParseDecimal128s(t, decimal128Type, "123456789012.179999", "-123456789012.179999")
+	decimal128Expected := mustParseDecimal128s(t, decimal128Type, "123456789012.170000", "-123456789012.170000")
+	fcTC = NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(decimal128Type, decimal128Inputs, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{2}, nil),
+	}, NewFunctionTestResult(decimal128Type, false, decimal128Expected, nil), TruncateDecimal128)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is 'test truncate decimal128', err info is '%s'", info))
+
+	decimal128NegativeDigitsExpected := mustParseDecimal128s(t, decimal128Type, "123456789000.000000", "-123456789000.000000")
+	fcTC = NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(decimal128Type, decimal128Inputs, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-3}, nil),
+	}, NewFunctionTestResult(decimal128Type, false, decimal128NegativeDigitsExpected, nil), TruncateDecimal128)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is 'test truncate decimal128 with negative digits', err info is '%s'", info))
+}
+
+func TestTruncateFunctionRegistration(t *testing.T) {
+	ctx := context.Background()
+
+	cases := []struct {
+		args []types.Type
+		ret  types.T
+	}{
+		{[]types.Type{types.T_uint64.ToType(), types.T_int64.ToType()}, types.T_uint64},
+		{[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, types.T_int64},
+		{[]types.Type{types.T_float64.ToType(), types.T_int64.ToType()}, types.T_float64},
+		{[]types.Type{types.New(types.T_decimal64, 10, 3), types.T_int64.ToType()}, types.T_decimal64},
+		{[]types.Type{types.New(types.T_decimal128, 30, 6), types.T_int64.ToType()}, types.T_decimal128},
+	}
+
+	for _, c := range cases {
+		fn, err := GetFunctionByName(ctx, "truncate", c.args)
+		require.NoError(t, err)
+		require.Equal(t, c.ret, fn.retType.Oid)
+	}
+
+	_, err := GetFunctionByName(ctx, "truncate", []types.Type{types.T_float64.ToType()})
+	require.Error(t, err)
+}
+
+func mustParseDecimal64s(t *testing.T, typ types.Type, values ...string) []types.Decimal64 {
+	t.Helper()
+	ret := make([]types.Decimal64, 0, len(values))
+	for _, value := range values {
+		decimal, err := types.ParseDecimal64(value, typ.Width, typ.Scale)
+		require.NoError(t, err)
+		ret = append(ret, decimal)
+	}
+	return ret
+}
+
+func mustParseDecimal128s(t *testing.T, typ types.Type, values ...string) []types.Decimal128 {
+	t.Helper()
+	ret := make([]types.Decimal128, 0, len(values))
+	for _, value := range values {
+		decimal, err := types.ParseDecimal128(value, typ.Width, typ.Scale)
+		require.NoError(t, err)
+		ret = append(ret, decimal)
+	}
+	return ret
 }
 
 // SQRT
