@@ -212,6 +212,27 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldCast: false,
 			requireRet: types.T_varchar.ToType(),
 		},
+		{
+			name: "sign", args: []types.Type{types.T_varchar.ToType()},
+			shouldErr:  false,
+			requireFid: SIGN, requireOid: 2,
+			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToType()},
+			requireRet: types.T_int64.ToType(),
+		},
+		{
+			name: "sign", args: []types.Type{types.T_char.ToType()},
+			shouldErr:  false,
+			requireFid: SIGN, requireOid: 2,
+			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToType()},
+			requireRet: types.T_int64.ToType(),
+		},
+		{
+			name: "sign", args: []types.Type{types.T_text.ToType()},
+			shouldErr:  false,
+			requireFid: SIGN, requireOid: 2,
+			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToType()},
+			requireRet: types.T_int64.ToType(),
+		},
 	}
 
 	proc := testutil.NewProcess(t)

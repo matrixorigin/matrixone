@@ -68,3 +68,19 @@ drop table sign_decimal_types;
 select sign(abs(-2) - 2), sign(abs(-2) - 3), sign(abs(-2) - 1);
 select sign(cast(18446744073709551615 as unsigned)), sign(cast(0 as unsigned));
 select sign(cast(123.123 as decimal(10, 3))), sign(cast(-123.123 as decimal(10, 3))), sign(cast(0.000 as decimal(10, 3)));
+
+-- string numeric inputs should use floating point numeric conversion
+select sign('0.5'), sign('-0.3'), sign('123.123'), sign('-123.123'), sign('0'), sign(NULL);
+
+drop table if exists sign_string_types;
+create table sign_string_types (
+    c_char char(16),
+    c_varchar varchar(16),
+    c_text text
+);
+insert into sign_string_types values
+    ('0.5', '-0.3', '123.123'),
+    ('-0.5', '0', '-123.123'),
+    (null, null, null);
+select sign(c_char), sign(c_varchar), sign(c_text) from sign_string_types order by c_text;
+drop table sign_string_types;
