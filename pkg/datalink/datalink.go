@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/datalink/docx"
 	"github.com/matrixorigin/matrixone/pkg/datalink/pdf"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
@@ -36,6 +37,10 @@ type Datalink struct {
 	Offset int64
 	Size   int64
 	MoPath string
+
+	// ContentHash is non-empty when the datalink is pinned (carries ?contenthash=).
+	// In that case MoPath addresses an immutable CAS object in the SHARED service.
+	ContentHash string
 }
 
 func NewDatalink(aurl string, proc *process.Process) (Datalink, error) {
@@ -49,7 +54,15 @@ func NewDatalink(aurl string, proc *process.Process) (Datalink, error) {
 	if err != nil {
 		return Datalink{}, err
 	}
-	return Datalink{Url: u, Offset: int64(offsetSize[0]), Size: int64(offsetSize[1]), MoPath: moUrl}, nil
+
+	dl := Datalink{Url: u, Offset: offsetSize[0], Size: offsetSize[1], MoPath: moUrl}
+	for k, v := range u.Query() {
+		if strings.EqualFold(k, ContentHashKey) {
+			dl.ContentHash = strings.ToLower(v[0])
+			break
+		}
+	}
+	return dl, nil
 }
 
 func (d Datalink) GetBytes(proc *process.Process) ([]byte, error) {
@@ -100,8 +113,45 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int64, error
 		return "", nil, err
 	}
 
+	// 1. collect query params. Values are lower-cased; a sha256 hex digest is
+	// already lower-case so the contenthash value is unaffected.
+	urlParams := make(map[string]string)
+	for k, v := range u.Query() {
+		urlParams[strings.ToLower(k)] = strings.ToLower(v[0])
+	}
+
+	// 2. get size and offset from the query (apply to both live and pinned values)
+	offsetSize := []int64{0, -1}
+	if _, ok := urlParams["offset"]; ok {
+		if offsetSize[0], err = strconv.ParseInt(urlParams["offset"], 10, 64); err != nil {
+			return "", nil, err
+		}
+	}
+	if _, ok := urlParams["size"]; ok {
+		if offsetSize[1], err = strconv.ParseInt(urlParams["size"], 10, 64); err != nil {
+			return "", nil, err
+		}
+	}
+	if offsetSize[0] < 0 {
+		return "", nil, moerr.NewInternalErrorNoCtx("offset cannot be negative")
+	}
+	if offsetSize[1] < -1 {
+		return "", nil, moerr.NewInternalErrorNoCtx("size cannot be less than -1")
+	}
+
+	// 3. a pinned datalink (?contenthash=) addresses an immutable CAS object and
+	// never resolves to the live external path, so historical snapshot bytes stay
+	// reproducible. A missing CAS object surfaces as a read error rather than a
+	// silent fall back to the live (possibly overwritten) file.
+	if hash, ok := urlParams[ContentHashKey]; ok {
+		if err = ValidateContentHash(hash); err != nil {
+			return "", nil, err
+		}
+		return CASKey(hash), offsetSize, nil
+	}
+
+	// 4. live reference: resolve to the external file's current location
 	var moUrl string
-	// 1. get moUrl from the path
 	switch u.Scheme {
 	case stage.FILE_PROTOCOL:
 		moUrl = strings.Join([]string{u.Host, u.Path}, "")
@@ -124,35 +174,37 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int64, error
 		return "", nil, moerr.NewNYINoCtxf("unsupported url scheme %s", u.Scheme)
 	}
 
-	// 2. get size and offset from the query
-	urlParams := make(map[string]string)
-	for k, v := range u.Query() {
-		urlParams[strings.ToLower(k)] = strings.ToLower(v[0])
-	}
-	offsetSize := []int64{0, -1}
-	if _, ok := urlParams["offset"]; ok {
-		if offsetSize[0], err = strconv.ParseInt(urlParams["offset"], 10, 64); err != nil {
-			return "", nil, err
-		}
-	}
-	if _, ok := urlParams["size"]; ok {
-		if offsetSize[1], err = strconv.ParseInt(urlParams["size"], 10, 64); err != nil {
-			return "", nil, err
-		}
-	}
-
-	if offsetSize[0] < 0 {
-		return "", nil, moerr.NewInternalErrorNoCtx("offset cannot be negative")
-	}
-
-	if offsetSize[1] < -1 {
-		return "", nil, moerr.NewInternalErrorNoCtx("size cannot be less than -1")
-	}
-
 	return moUrl, offsetSize, nil
 }
 
 func (d Datalink) NewReadCloser(proc *process.Process) (io.ReadCloser, error) {
+	if d.ContentHash != "" {
+		// pinned value: read the immutable CAS object directly from the SHARED
+		// service. SHARED may be a plain FileService (e.g. LocalFS in standalone)
+		// that does not implement ETLFileService, so we must not route through
+		// GetForETL here. A missing object surfaces as a read error rather than a
+		// silent fall back to the live (possibly overwritten) file.
+		fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+		if err != nil {
+			return nil, err
+		}
+		var r io.ReadCloser
+		vec := fileservice.IOVector{
+			FilePath: d.MoPath,
+			Entries: []fileservice.IOEntry{
+				0: {
+					Offset:            d.Offset,
+					Size:              d.Size,
+					ReadCloserForRead: &r,
+				},
+			},
+		}
+		if err = fs.Read(proc.Ctx, &vec); err != nil {
+			return nil, err
+		}
+		return r, nil
+	}
+
 	fs := proc.GetFileService()
 	fs, readPath, err := fileservice.GetForETL(proc.Ctx, fs, d.MoPath)
 	if fs == nil || err != nil {
@@ -174,4 +226,30 @@ func (d Datalink) NewReadCloser(proc *process.Process) (io.ReadCloser, error) {
 		return nil, err
 	}
 	return r, nil
+}
+
+// StatSize returns the byte size of the referenced object, transparently
+// handling both live references and pinned (content-addressed) values.
+func (d Datalink) StatSize(proc *process.Process) (int64, error) {
+	if d.ContentHash != "" {
+		fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+		if err != nil {
+			return 0, err
+		}
+		entry, err := fs.StatFile(proc.Ctx, d.MoPath)
+		if err != nil {
+			return 0, err
+		}
+		return entry.Size, nil
+	}
+
+	etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), d.MoPath)
+	if err != nil {
+		return 0, err
+	}
+	entry, err := etlFS.StatFile(proc.Ctx, readPath)
+	if err != nil {
+		return 0, err
+	}
+	return entry.Size, nil
 }

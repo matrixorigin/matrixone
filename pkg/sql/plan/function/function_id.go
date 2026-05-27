@@ -635,9 +635,11 @@ const (
 
 	JSON_LENGTH = 452
 
+	DATALINK_PIN = 453
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 453
+	FUNCTION_END_NUMBER = 454
 )
 
 // functionIdRegister is what function we have registered already.
@@ -925,6 +927,7 @@ var functionIdRegister = map[string]int32{
 	"uuid":                           UUID,
 	"load_file":                      LOAD_FILE,
 	"save_file":                      SAVE_FILE,
+	"datalink_pin":                   DATALINK_PIN,
 	"hex":                            HEX,
 	"unhex":                          UNHEX,
 	"md5":                            MD5,

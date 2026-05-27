@@ -506,7 +506,8 @@ var predefinedFunids = map[int]int{
 	ST_COVERS:                     450,
 	ST_COVEREDBY:                  451,
 	JSON_LENGTH:                   452,
-	FUNCTION_END_NUMBER:           453,
+	DATALINK_PIN:                  453,
+	FUNCTION_END_NUMBER:           454,
 }
 
 func Test_funids(t *testing.T) {

@@ -33,6 +33,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"net/url"
 	"runtime"
 	"sort"
 	"strconv"
@@ -51,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/datalink"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
@@ -3363,18 +3365,14 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		}
 		size := dl.Size
 		if size < 0 {
-			etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), dl.MoPath)
+			fileSize, err := dl.StatSize(proc)
 			if err != nil {
 				return err
 			}
-			entry, err := etlFS.StatFile(proc.Ctx, readPath)
-			if err != nil {
-				return err
-			}
-			if dl.Offset > entry.Size {
+			if dl.Offset > fileSize {
 				return moerr.NewInternalError(proc.Ctx, "offset exceeds file size")
 			}
-			size = entry.Size - dl.Offset
+			size = fileSize - dl.Offset
 		}
 		if size > int64(types.MaxBlobLen) {
 			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
@@ -3454,6 +3452,89 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 
 	}
 	return nil
+}
+
+// DatalinkPin freezes the bytes currently referenced by a datalink into the
+// immutable content-addressed store (CAS) and returns a datalink carrying
+// ?contenthash=<sha256> of those bytes. Reading the pinned datalink later always
+// returns the frozen bytes, so historical snapshots stay reproducible even if
+// the external object is overwritten out of band.
+//
+//   - Inputs that already carry a contenthash are returned unchanged (idempotent):
+//     no live read and no second CAS write.
+//   - If the external file cannot be read, pin errors out (never silently falls
+//     back to an un-pinned value).
+//   - The default, un-pinned datalink behavior is unaffected: only values passed
+//     through datalink_pin participate in content freezing.
+func DatalinkPin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	urlVec := vector.GenerateFunctionStrParameter(ivecs[0])
+
+	casFS, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return err
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		_url, null := urlVec.GetStrValue(i)
+		if null {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		pinned, err := pinDatalink(util.UnsafeBytesToString(_url), casFS, proc)
+		if err != nil {
+			return err
+		}
+		if err = rs.AppendBytes([]byte(pinned), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// pinDatalink reads the live bytes of rawURL, stores them in the CAS, and returns
+// rawURL rewritten to address that immutable copy via ?contenthash=. Already
+// pinned URLs are returned unchanged.
+func pinDatalink(rawURL string, casFS fileservice.FileService, proc *process.Process) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+
+	q := u.Query()
+	// already pinned -> idempotent. Match case-insensitively, consistent with
+	// ParseDatalink which lower-cases query keys.
+	for k := range q {
+		if strings.EqualFold(k, datalink.ContentHashKey) {
+			return rawURL, nil
+		}
+	}
+
+	// read the live bytes this datalink currently references
+	dl, err := datalink.NewDatalink(rawURL, proc)
+	if err != nil {
+		return "", err
+	}
+	fileBytes, err := dl.GetBytes(proc)
+	if err != nil {
+		return "", err
+	}
+
+	hash, err := datalink.CASPut(proc.Ctx, casFS, fileBytes)
+	if err != nil {
+		return "", err
+	}
+
+	// rewrite the URL to address the immutable copy. offset/size are already baked
+	// into the stored bytes, so drop them to avoid double slicing on read.
+	q.Del("offset")
+	q.Del("size")
+	q.Set(datalink.ContentHashKey, hash)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
 func MoMemUsage(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
