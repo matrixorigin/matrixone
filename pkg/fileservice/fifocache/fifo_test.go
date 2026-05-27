@@ -16,6 +16,7 @@ package fifocache
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -187,6 +188,39 @@ func TestEvictWithWaitReturnsWhenContextCanceled(t *testing.T) {
 	}
 }
 
+func TestCachePressureAdmissionIsAtomic(t *testing.T) {
+	cache := New[int, int](
+		fscache.ConstCapacity(100),
+		ShardInt[int],
+		nil, nil, nil,
+	)
+	cache.SetAdmissionTarget(func(capacity int64) (int64, bool) {
+		return 50, true
+	})
+
+	ctx := t.Context()
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			cache.Set(ctx, i, i, 1)
+		}(i)
+	}
+	wg.Wait()
+
+	assert.Equal(t, int64(50), cache.used())
+
+	live := 0
+	for i := 0; i < 100; i++ {
+		_, ok := cache.Get(ctx, i)
+		if ok {
+			live++
+		}
+	}
+	assert.Equal(t, 50, live)
+}
+
 func TestReplaceUpdatesUsedBytes(t *testing.T) {
 	cache := New[int, int](
 		fscache.ConstCapacity(20),
@@ -314,6 +348,64 @@ func TestDirectEnqueueSkipsDeletedItem(t *testing.T) {
 
 	assert.Equal(t, int64(0), cache.used())
 	assert.False(t, cache.Contains(1))
+}
+
+func TestEvictToTargetWithWaitReturnsActualUsedOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	itemSize := int64(pressureEvictBatchBytes + 1)
+	var evicted atomic.Int32
+	cache := New(
+		fscache.ConstCapacity(3*itemSize),
+		ShardInt[int],
+		nil,
+		nil,
+		func(context.Context, int, int, int64, uint64) {
+			if evicted.Add(1) == 1 {
+				cancel()
+			}
+		},
+	)
+	cache.Set(context.Background(), 1, 1, itemSize)
+	cache.Set(context.Background(), 2, 2, itemSize)
+	cache.Set(context.Background(), 3, 3, itemSize)
+
+	used := cache.EvictToTargetWithWait(ctx, 0)
+
+	assert.Equal(t, int64(2*itemSize), used)
+	assert.Equal(t, used, cache.used())
+	assert.Equal(t, int32(1), evicted.Load())
+}
+
+func TestEvictToTargetWithWaitEvictsHotItemsAfterPromotion(t *testing.T) {
+	ctx := context.Background()
+	cache := New[int, int](fscache.ConstCapacity(3), ShardInt[int], nil, nil, nil)
+
+	cache.Set(ctx, 1, 1, 1)
+	cache.Set(ctx, 2, 2, 1)
+	cache.Set(ctx, 3, 3, 1)
+
+	_, ok := cache.Get(ctx, 1)
+	assert.True(t, ok)
+	_, ok = cache.Get(ctx, 1)
+	assert.True(t, ok)
+	_, ok = cache.Get(ctx, 2)
+	assert.True(t, ok)
+	_, ok = cache.Get(ctx, 2)
+	assert.True(t, ok)
+	_, ok = cache.Get(ctx, 3)
+	assert.True(t, ok)
+	_, ok = cache.Get(ctx, 3)
+	assert.True(t, ok)
+
+	used := cache.EvictToTargetWithWait(ctx, 0)
+
+	assert.Equal(t, int64(0), used)
+	assert.Equal(t, int64(0), cache.used())
+	assert.False(t, cache.Contains(1))
+	assert.False(t, cache.Contains(2))
+	assert.False(t, cache.Contains(3))
 }
 
 // TestPostEvictRunsOutsideQueueLock verifies that postEvict callbacks execute
