@@ -44,6 +44,7 @@ import (
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -6413,6 +6414,16 @@ func BitmapCount(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return 0
 		}
 		return bmp.GetCardinality()
+	}, selectList)
+}
+
+func HllCardinality(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[uint64](parameters, result, proc, length, func(v []byte) (uint64, error) {
+		sketch := hll.NewNoSparse()
+		if err := sketch.UnmarshalBinary(v); err != nil {
+			return 0, moerr.NewInvalidInputf(proc.Ctx, "invalid HLL sketch: %v", err)
+		}
+		return sketch.Estimate(), nil
 	}, selectList)
 }
 

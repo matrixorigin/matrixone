@@ -635,11 +635,16 @@ const (
 
 	JSON_LENGTH = 452
 
-	DATALINK_PIN = 453
+	// hll function
+	HLL_ADD_AGG     = 453
+	HLL_MERGE_AGG   = 454
+	HLL_CARDINALITY = 455
+
+	DATALINK_PIN = 456
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 454
+	FUNCTION_END_NUMBER = 457
 )
 
 // functionIdRegister is what function we have registered already.
@@ -728,6 +733,8 @@ var functionIdRegister = map[string]int32{
 	"var_samp":              VAR_SAMPLE,
 	"approx_count":          APPROX_COUNT,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
+	"hll_add_agg":           HLL_ADD_AGG,
+	"hll_merge_agg":         HLL_MERGE_AGG,
 	"any_value":             ANY_VALUE,
 	"median":                MEDIAN,
 	// count window
@@ -913,6 +920,7 @@ var functionIdRegister = map[string]int32{
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
 	"json_length":                    JSON_LENGTH,
+	"hll_cardinality":                HLL_CARDINALITY,
 	"jq":                             JQ,
 	"try_jq":                         TRY_JQ,
 	"moplugin":                       WASM,
