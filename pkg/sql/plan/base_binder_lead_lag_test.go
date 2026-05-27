@@ -333,6 +333,21 @@ func TestBindFuncExprImplByPlanExpr_PowAlias(t *testing.T) {
 	})
 }
 
+func TestBindFuncExprImplByPlanExpr_Atan2Alias(t *testing.T) {
+	ctx := context.Background()
+	y := makeInt64ConstPlanExpr(-2)
+	x := makeInt64ConstPlanExpr(2)
+
+	result, err := BindFuncExprImplByPlanExpr(ctx, "atan2", []*plan.Expr{y, x})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	f := result.GetF()
+	require.NotNil(t, f)
+	require.Equal(t, "atan", f.Func.GetObjName())
+	require.Len(t, f.Args, 2)
+}
+
 // TestBindFuncExprImplByPlanExpr_JsonValid tests that json_valid binds
 // correctly with string and json inputs.
 func TestBindFuncExprImplByPlanExpr_JsonValid(t *testing.T) {

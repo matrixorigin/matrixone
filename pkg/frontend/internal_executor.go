@@ -138,6 +138,11 @@ func (res *internalExecResult) GetFloat64(ctx context.Context, ridx uint64, cidx
 }
 
 func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
+	_, err = ie.ExecWithStatus(ctx, sql, opts)
+	return err
+}
+
+func (ie *internalExecutor) ExecWithStatus(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (status ie.InternalExecStatus, err error) {
 	ie.Lock()
 	defer ie.Unlock()
 	var cancel context.CancelFunc
@@ -150,8 +155,9 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	sess.EnterFPrint(FPInternalExecutorExec)
 	defer sess.ExitFPrint(FPInternalExecutorExec)
 	ie.proto.stashResult = false
+	ie.proto.ResetStatistics()
 	if sql == "" {
-		return
+		return status, nil
 	}
 	tempExecCtx := ExecCtx{
 		reqCtx: ctx,
@@ -159,10 +165,12 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	}
 	defer tempExecCtx.Close()
 	err = doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
+	res := ie.proto.swapOutResult()
+	status.RowsAffected = res.affectedRows
 	if err != nil {
-		return moerr.AttachCause(ctx, err)
+		return status, moerr.AttachCause(ctx, err)
 	}
-	return
+	return status, nil
 }
 
 func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
@@ -328,6 +336,7 @@ func (ip *internalProtocol) WriteOK(affectedRows, lastInsertId uint64, status, w
 }
 
 func (ip *internalProtocol) WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
+	ip.result.affectedRows = affectedRows
 	return nil
 }
 

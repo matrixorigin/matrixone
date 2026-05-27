@@ -3522,6 +3522,10 @@ var (
 			input:  "create table pt2 (id int, date_column date, value int) partition by range(year(date_column)) (partition p1 values less than (2010) comment 'Before 2010', partition p2 values less than (2020) comment '2010 - 2019', partition p3 values less than (MAXVALUE) comment '2020 and Beyond')",
 			output: "create table pt2 (id int, date_column date, value int) partition by range(year(date_column)) (partition p1 values less than (2010) comment = 'Before 2010', partition p2 values less than (2020) comment = '2010 - 2019', partition p3 values less than (MAXVALUE) comment = '2020 and Beyond')",
 		},
+		{
+			input:  "select 'O''Brien'",
+			output: "select 'O''Brien'",
+		},
 	}
 )
 
