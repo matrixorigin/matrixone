@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -39,6 +40,65 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+func TestMakeRSSCacheEvictorRunsCacheFamiliesConcurrently(t *testing.T) {
+	oldMemoryEvictor := evictMemoryCachesToCapacityPercent
+	oldMetaEvictor := evictMetaCacheToCapacityPercent
+	defer func() {
+		evictMemoryCachesToCapacityPercent = oldMemoryEvictor
+		evictMetaCacheToCapacityPercent = oldMetaEvictor
+	}()
+
+	memoryStarted := make(chan struct{})
+	releaseMemory := make(chan struct{})
+	metaStarted := make(chan struct{})
+
+	evictMemoryCachesToCapacityPercent = func(ctx context.Context, targetPercent int64) map[string]int64 {
+		close(memoryStarted)
+		select {
+		case <-releaseMemory:
+		case <-ctx.Done():
+		}
+		return nil
+	}
+	evictMetaCacheToCapacityPercent = func(ctx context.Context, targetPercent int64) int64 {
+		close(metaStarted)
+		return 0
+	}
+
+	done := make(chan struct{})
+	go func() {
+		makeRSSCacheEvictor(time.Second)(context.Background(), 50)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-memoryStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool {
+		select {
+		case <-metaStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+
+	close(releaseMemory)
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+}
 
 func Test_InitServer(t *testing.T) {
 	ctrl := gomock.NewController(t)
