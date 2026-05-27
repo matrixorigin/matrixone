@@ -810,25 +810,21 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 
 			choice := ctr.pickFirstSpillReader()
 			reader := ctr.spillReaders[choice]
-			for col := range out.Vecs {
-				if err := out.Vecs[col].UnionOne(reader.batch.Vecs[col], reader.rowIdx, proc.Mp()); err != nil {
+			if err := appendContiguousRows(out, reader.batch, reader.rowIdx, 1, proc); err != nil {
+				if out != nil {
+					out.Clean(proc.Mp())
+				}
+				run.file.Close()
+				return nil, err
+			}
+			if outOrder != nil {
+				if err := appendContiguousOrderRows(outOrder, reader.orderCols, ctr.spillKeyIndexes, reader.rowIdx, 1, proc); err != nil {
 					if out != nil {
 						out.Clean(proc.Mp())
 					}
+					outOrder.Clean(proc.Mp())
 					run.file.Close()
 					return nil, err
-				}
-			}
-			if outOrder != nil {
-				for col, keyIdx := range ctr.spillKeyIndexes {
-					if err := outOrder.Vecs[col].UnionOne(reader.orderCols[keyIdx], reader.rowIdx, proc.Mp()); err != nil {
-						if out != nil {
-							out.Clean(proc.Mp())
-						}
-						outOrder.Clean(proc.Mp())
-						run.file.Close()
-						return nil, err
-					}
 				}
 			}
 			rows++
@@ -1004,10 +1000,8 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 
 		choice := ctr.pickFirstSpillReader()
 		reader := ctr.spillReaders[choice]
-		for col := range ctr.buf.Vecs {
-			if err := ctr.buf.Vecs[col].UnionOne(reader.batch.Vecs[col], reader.rowIdx, proc.Mp()); err != nil {
-				return false, err
-			}
+		if err := appendContiguousRows(ctr.buf, reader.batch, reader.rowIdx, 1, proc); err != nil {
+			return false, err
 		}
 		rows++
 		updateBufSize(reader, 1)

@@ -348,11 +348,8 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 		if choice < 0 {
 			choice = ctr.pickFirstRow()
 		}
-		for j := range ctr.buf.Vecs {
-			err = ctr.buf.Vecs[j].UnionOne(ctr.batchList[choice].Vecs[j], ctr.indexList[choice], mp)
-			if err != nil {
-				return false, err
-			}
+		if err = appendContiguousRows(ctr.buf, ctr.batchList[choice], ctr.indexList[choice], 1, proc); err != nil {
+			return false, err
 		}
 
 		wholeLength++
