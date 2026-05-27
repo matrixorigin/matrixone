@@ -571,6 +571,7 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 		}
 
 		rows := 0
+		nextSizeCheck := batchSizeCheckInterval
 		for len(ctr.spillReaders) > 0 {
 			choice := ctr.pickFirstSpillReader()
 			src := ctr.spillReaders[choice]
@@ -606,8 +607,11 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 				run.file.Close()
 				return nil, err
 			}
-			if out.Size() >= maxBatchSizeToSend {
-				break
+			if rows >= nextSizeCheck {
+				if out.Size() >= maxBatchSizeToSend {
+					break
+				}
+				nextSizeCheck = rows + batchSizeCheckInterval
 			}
 		}
 		out.SetRowCount(rows)
@@ -697,6 +701,7 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 	}
 
 	rows := 0
+	nextSizeCheck := batchSizeCheckInterval
 	for len(ctr.spillReaders) > 0 {
 		choice := ctr.pickFirstSpillReader()
 		src := ctr.spillReaders[choice]
@@ -709,8 +714,11 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 		if err := ctr.advanceSpillReader(proc, choice); err != nil {
 			return false, err
 		}
-		if ctr.buf.Size() >= maxBatchSizeToSend {
-			break
+		if rows >= nextSizeCheck {
+			if ctr.buf.Size() >= maxBatchSizeToSend {
+				break
+			}
+			nextSizeCheck = rows + batchSizeCheckInterval
 		}
 	}
 

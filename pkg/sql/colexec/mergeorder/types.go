@@ -43,6 +43,7 @@ const spillAppendDisableThreshold = int64(16 * common.MiB)
 const spillAppendTargetMin = int64(32 * common.MiB)
 const spillAppendTargetMax = int64(128 * common.MiB)
 const spillAppendHardCapMax = int64(256 * common.MiB)
+const batchSizeCheckInterval = 64
 
 var _ vm.Operator = new(MergeOrder)
 

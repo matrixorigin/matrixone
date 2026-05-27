@@ -97,6 +97,7 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 	}
 
 	wholeLength := 0
+	nextSizeCheck := batchSizeCheckInterval
 	for {
 		choice := ctr.pickFirstRow()
 		for j := range ctr.buf.Vecs {
@@ -116,8 +117,11 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 			sendOver = true
 			break
 		}
-		if ctr.buf.Size() >= maxBatchSizeToSend {
-			break
+		if wholeLength >= nextSizeCheck {
+			if ctr.buf.Size() >= maxBatchSizeToSend {
+				break
+			}
+			nextSizeCheck = wholeLength + batchSizeCheckInterval
 		}
 	}
 	ctr.buf.SetRowCount(wholeLength)
