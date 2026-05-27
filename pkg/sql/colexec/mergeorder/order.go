@@ -85,7 +85,22 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 	}
 }
 
-func computeBatchDrainChunk(src *batch.Batch, start int64, currentSize int) int {
+func calcFixedRowBytes(vecs []*vector.Vector) int {
+	rowBytes := 0
+	for _, vec := range vecs {
+		typ := vec.GetType()
+		if typ.IsVarlen() {
+			return 0
+		}
+		rowBytes += typ.TypeSize()
+	}
+	if rowBytes < 1 {
+		return 0
+	}
+	return rowBytes
+}
+
+func computeBatchDrainChunk(src *batch.Batch, start int64, currentSize int, fixedRowBytes int) int {
 	remaining := src.RowCount() - int(start)
 	if remaining <= 0 {
 		return 0
@@ -95,19 +110,8 @@ func computeBatchDrainChunk(src *batch.Batch, start int64, currentSize int) int 
 		return 0
 	}
 
-	rowBytes := 0
-	fixedWidth := true
-	for _, vec := range src.Vecs {
-		typ := vec.GetType()
-		if typ.IsVarlen() {
-			fixedWidth = false
-			break
-		}
-		rowBytes += typ.TypeSize()
-	}
-
-	if fixedWidth && rowBytes > 0 {
-		maxByBudget := budget / rowBytes
+	if fixedRowBytes > 0 {
+		maxByBudget := budget / fixedRowBytes
 		if maxByBudget < 1 {
 			maxByBudget = 1
 		}
@@ -177,6 +181,28 @@ func (ctr *container) computeInMemoryWinnerChunk(winner int, loser int, budgetCh
 	return chunk
 }
 
+func (ctr *container) pickFirstSecondRows() (first int, second int) {
+	l := len(ctr.indexList)
+	if l < 2 {
+		return 0, -1
+	}
+	first, second = 0, 1
+	if ctr.compareInMemoryRows(second, ctr.indexList[second], first, ctr.indexList[first]) < 0 {
+		first, second = second, first
+	}
+	for i := 2; i < l; i++ {
+		if ctr.compareInMemoryRows(i, ctr.indexList[i], first, ctr.indexList[first]) < 0 {
+			second = first
+			first = i
+			continue
+		}
+		if ctr.compareInMemoryRows(i, ctr.indexList[i], second, ctr.indexList[second]) < 0 {
+			second = i
+		}
+	}
+	return first, second
+}
+
 func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) (sendOver bool, err error) {
 	mp := proc.Mp()
 	if ctr.buf == nil {
@@ -190,11 +216,12 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 
 	wholeLength := 0
 	nextSizeCheck := batchSizeCheckInterval
+	fixedRowBytes := calcFixedRowBytes(ctr.buf.Vecs)
 	for {
 		if len(ctr.indexList) == 1 {
 			src := ctr.batchList[0]
 			start := ctr.indexList[0]
-			chunk := computeBatchDrainChunk(src, start, ctr.buf.Size())
+			chunk := computeBatchDrainChunk(src, start, ctr.buf.Size(), fixedRowBytes)
 			if chunk < 1 {
 				chunk = 1
 			}
@@ -227,7 +254,7 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 				winner = 1
 			}
 			loser := 1 - winner
-			budgetChunk := computeBatchDrainChunk(ctr.batchList[winner], ctr.indexList[winner], ctr.buf.Size())
+			budgetChunk := computeBatchDrainChunk(ctr.batchList[winner], ctr.indexList[winner], ctr.buf.Size(), fixedRowBytes)
 			if budgetChunk > 1 {
 				chunk := ctr.computeInMemoryWinnerChunk(winner, loser, budgetChunk)
 				if chunk > 1 {
@@ -241,6 +268,37 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 					ctr.indexList[winner] += int64(chunk)
 					if ctr.indexList[winner] == int64(ctr.batchList[winner].RowCount()) {
 						ctr.removeBatch(proc, winner)
+					}
+					if len(ctr.indexList) == 0 {
+						sendOver = true
+						break
+					}
+					if ctr.buf.Size() >= maxBatchSizeToSend {
+						break
+					}
+					if wholeLength >= nextSizeCheck {
+						nextSizeCheck = wholeLength + batchSizeCheckInterval
+					}
+					continue
+				}
+			}
+		}
+		if len(ctr.indexList) > 2 {
+			first, second := ctr.pickFirstSecondRows()
+			budgetChunk := computeBatchDrainChunk(ctr.batchList[first], ctr.indexList[first], ctr.buf.Size(), fixedRowBytes)
+			if budgetChunk > 1 {
+				chunk := ctr.computeInMemoryWinnerChunk(first, second, budgetChunk)
+				if chunk > 1 {
+					for j := range ctr.buf.Vecs {
+						err = ctr.buf.Vecs[j].UnionBatch(ctr.batchList[first].Vecs[j], ctr.indexList[first], chunk, nil, mp)
+						if err != nil {
+							return false, err
+						}
+					}
+					wholeLength += chunk
+					ctr.indexList[first] += int64(chunk)
+					if ctr.indexList[first] == int64(ctr.batchList[first].RowCount()) {
+						ctr.removeBatch(proc, first)
 					}
 					if len(ctr.indexList) == 0 {
 						sendOver = true
