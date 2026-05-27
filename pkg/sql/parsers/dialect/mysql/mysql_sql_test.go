@@ -142,6 +142,93 @@ func TestDataBranchDiffColumns(t *testing.T) {
 	require.Nil(t, diffStmt.OutputOpt)
 }
 
+func TestDataBranchDatabaseStatementsParse(t *testing.T) {
+	tests := []struct {
+		sql   string
+		check func(*testing.T, tree.Statement)
+	}{
+		{
+			sql: "data branch diff database d2 against database d1",
+			check: func(t *testing.T, stmt tree.Statement) {
+				diffStmt, ok := stmt.(*tree.DataBranchDiffDatabase)
+				require.True(t, ok)
+				require.Equal(t, tree.Identifier("d2"), diffStmt.TargetDatabase)
+				require.Equal(t, tree.Identifier("d1"), diffStmt.BaseDatabase)
+				require.Nil(t, diffStmt.OutputOpt)
+			},
+		},
+		{
+			sql: "data branch diff database d2 against database d1 output summary",
+			check: func(t *testing.T, stmt tree.Statement) {
+				diffStmt, ok := stmt.(*tree.DataBranchDiffDatabase)
+				require.True(t, ok)
+				require.NotNil(t, diffStmt.OutputOpt)
+				require.True(t, diffStmt.OutputOpt.Summary)
+			},
+		},
+		{
+			sql: "data branch diff database d2 against database d1 output count",
+			check: func(t *testing.T, stmt tree.Statement) {
+				diffStmt, ok := stmt.(*tree.DataBranchDiffDatabase)
+				require.True(t, ok)
+				require.NotNil(t, diffStmt.OutputOpt)
+				require.True(t, diffStmt.OutputOpt.Count)
+			},
+		},
+		{
+			sql: "data branch merge database d2 into database d1",
+			check: func(t *testing.T, stmt tree.Statement) {
+				mergeStmt, ok := stmt.(*tree.DataBranchMergeDatabase)
+				require.True(t, ok)
+				require.Equal(t, tree.Identifier("d2"), mergeStmt.SrcDatabase)
+				require.Equal(t, tree.Identifier("d1"), mergeStmt.DstDatabase)
+				require.Nil(t, mergeStmt.ConflictOpt)
+			},
+		},
+		{
+			sql: "data branch merge database d2 into database d1 when conflict accept",
+			check: func(t *testing.T, stmt tree.Statement) {
+				mergeStmt, ok := stmt.(*tree.DataBranchMergeDatabase)
+				require.True(t, ok)
+				require.NotNil(t, mergeStmt.ConflictOpt)
+				require.Equal(t, tree.CONFLICT_ACCEPT, mergeStmt.ConflictOpt.Opt)
+			},
+		},
+		{
+			sql: "data branch pick database d2 into database d1 between snapshot sp1 and sp2",
+			check: func(t *testing.T, stmt tree.Statement) {
+				pickStmt, ok := stmt.(*tree.DataBranchPickDatabase)
+				require.True(t, ok)
+				require.Equal(t, tree.Identifier("d2"), pickStmt.SrcDatabase)
+				require.Equal(t, tree.Identifier("d1"), pickStmt.DstDatabase)
+				require.Equal(t, "sp1", pickStmt.BetweenFrom)
+				require.Equal(t, "sp2", pickStmt.BetweenTo)
+				require.Nil(t, pickStmt.ConflictOpt)
+			},
+		},
+		{
+			sql: "data branch pick database d2 into database d1 between snapshot 'sp1' and 'sp2' when conflict skip",
+			check: func(t *testing.T, stmt tree.Statement) {
+				pickStmt, ok := stmt.(*tree.DataBranchPickDatabase)
+				require.True(t, ok)
+				require.Equal(t, "sp1", pickStmt.BetweenFrom)
+				require.Equal(t, "sp2", pickStmt.BetweenTo)
+				require.NotNil(t, pickStmt.ConflictOpt)
+				require.Equal(t, tree.CONFLICT_SKIP, pickStmt.ConflictOpt.Opt)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.TODO(), tt.sql, 1)
+			require.NoError(t, err)
+			require.NotNil(t, stmt)
+			tt.check(t, stmt)
+		})
+	}
+}
+
 var (
 	partitionSQL = struct {
 		input  string

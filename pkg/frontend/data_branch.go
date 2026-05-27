@@ -282,10 +282,16 @@ func handleDataBranch(
 		return dataBranchDeleteDatabase(execCtx, ses, st)
 	case *tree.DataBranchDiff:
 		return handleBranchDiff(execCtx, ses, st)
+	case *tree.DataBranchDiffDatabase:
+		return handleBranchDiffDatabase(execCtx, ses, st)
 	case *tree.DataBranchMerge:
 		return handleBranchMerge(execCtx, ses, st)
+	case *tree.DataBranchMergeDatabase:
+		return handleBranchMergeDatabase(execCtx, ses, st)
 	case *tree.DataBranchPick:
 		return handleBranchPick(execCtx, ses, st)
+	case *tree.DataBranchPickDatabase:
+		return handleBranchPickDatabase(execCtx, ses, st)
 	default:
 		return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
 	}
@@ -610,7 +616,6 @@ func diffMergeAgency(
 	execCtx *ExecCtx,
 	stmt tree.Statement,
 ) (err error) {
-
 	var (
 		bh       BackgroundExec
 		deferred func(error) error
@@ -632,6 +637,15 @@ func diffMergeAgency(
 		}
 	}()
 
+	return diffMergeAgencyWithExecutor(ses, execCtx, bh, stmt)
+}
+
+func diffMergeAgencyWithExecutor(
+	ses *Session,
+	execCtx *ExecCtx,
+	bh BackgroundExec,
+	stmt tree.Statement,
+) (err error) {
 	var (
 		ctx    context.Context
 		cancel context.CancelFunc

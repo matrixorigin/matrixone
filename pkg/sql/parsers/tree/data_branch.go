@@ -65,6 +65,16 @@ func init() {
 		reuse.DefaultOptions[DataBranchDiff](),
 	)
 
+	reuse.CreatePool[DataBranchDiffDatabase](
+		func() *DataBranchDiffDatabase {
+			return &DataBranchDiffDatabase{}
+		},
+		func(c *DataBranchDiffDatabase) {
+			c.reset()
+		},
+		reuse.DefaultOptions[DataBranchDiffDatabase](),
+	)
+
 	reuse.CreatePool[DataBranchMerge](
 		func() *DataBranchMerge {
 			return &DataBranchMerge{}
@@ -73,6 +83,16 @@ func init() {
 			c.reset()
 		},
 		reuse.DefaultOptions[DataBranchMerge](),
+	)
+
+	reuse.CreatePool[DataBranchMergeDatabase](
+		func() *DataBranchMergeDatabase {
+			return &DataBranchMergeDatabase{}
+		},
+		func(c *DataBranchMergeDatabase) {
+			c.reset()
+		},
+		reuse.DefaultOptions[DataBranchMergeDatabase](),
 	)
 
 	reuse.CreatePool[ObjectList](
@@ -113,6 +133,16 @@ func init() {
 			c.reset()
 		},
 		reuse.DefaultOptions[DataBranchPick](),
+	)
+
+	reuse.CreatePool[DataBranchPickDatabase](
+		func() *DataBranchPickDatabase {
+			return &DataBranchPickDatabase{}
+		},
+		func(c *DataBranchPickDatabase) {
+			c.reset()
+		},
+		reuse.DefaultOptions[DataBranchPickDatabase](),
 	)
 
 }
@@ -392,6 +422,52 @@ func (s *DataBranchDiff) Free() {
 	reuse.Free[DataBranchDiff](s, nil)
 }
 
+type DataBranchDiffDatabase struct {
+	statementImpl
+
+	TargetDatabase Identifier
+	BaseDatabase   Identifier
+	OutputOpt      *DiffOutputOpt
+}
+
+func (s *DataBranchDiffDatabase) TypeName() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *DataBranchDiffDatabase) reset() {
+	*s = DataBranchDiffDatabase{}
+}
+
+func NewDataBranchDiffDatabase() *DataBranchDiffDatabase {
+	return reuse.Alloc[DataBranchDiffDatabase](nil)
+}
+
+func (s *DataBranchDiffDatabase) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (s *DataBranchDiffDatabase) Format(ctx *FmtCtx) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *DataBranchDiffDatabase) String() string {
+	return s.GetStatementType()
+}
+
+func (s *DataBranchDiffDatabase) GetStatementType() string {
+	return "branch diff database"
+}
+
+func (s *DataBranchDiffDatabase) GetQueryType() string {
+	return QueryTypeOth
+}
+
+func (s *DataBranchDiffDatabase) Free() {
+	reuse.Free[DataBranchDiffDatabase](s, nil)
+}
+
 type ConflictOpt struct {
 	Opt int
 }
@@ -439,6 +515,51 @@ func (s *DataBranchMerge) GetQueryType() string {
 
 func (s *DataBranchMerge) Free() {
 	reuse.Free[DataBranchMerge](s, nil)
+}
+
+type DataBranchMergeDatabase struct {
+	statementImpl
+	SrcDatabase Identifier
+	DstDatabase Identifier
+	ConflictOpt *ConflictOpt
+}
+
+func (s *DataBranchMergeDatabase) TypeName() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *DataBranchMergeDatabase) reset() {
+	*s = DataBranchMergeDatabase{}
+}
+
+func NewDataBranchMergeDatabase() *DataBranchMergeDatabase {
+	return reuse.Alloc[DataBranchMergeDatabase](nil)
+}
+
+func (s *DataBranchMergeDatabase) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (s *DataBranchMergeDatabase) Format(ctx *FmtCtx) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *DataBranchMergeDatabase) String() string {
+	return s.GetStatementType()
+}
+
+func (s *DataBranchMergeDatabase) GetStatementType() string {
+	return "branch merge database"
+}
+
+func (s *DataBranchMergeDatabase) GetQueryType() string {
+	return QueryTypeOth
+}
+
+func (s *DataBranchMergeDatabase) Free() {
+	reuse.Free[DataBranchMergeDatabase](s, nil)
 }
 
 type ObjectList struct {
@@ -726,4 +847,69 @@ func (s *DataBranchPick) GetQueryType() string {
 
 func (s *DataBranchPick) Free() {
 	reuse.Free[DataBranchPick](s, nil)
+}
+
+type DataBranchPickDatabase struct {
+	statementImpl
+	SrcDatabase Identifier
+	DstDatabase Identifier
+	BetweenFrom string
+	BetweenTo   string
+	ConflictOpt *ConflictOpt
+}
+
+func (s *DataBranchPickDatabase) TypeName() string {
+	return "DataBranchPickDatabase"
+}
+
+func (s *DataBranchPickDatabase) reset() {
+	*s = DataBranchPickDatabase{}
+}
+
+func NewDataBranchPickDatabase() *DataBranchPickDatabase {
+	return reuse.Alloc[DataBranchPickDatabase](nil)
+}
+
+func (s *DataBranchPickDatabase) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (s *DataBranchPickDatabase) Format(ctx *FmtCtx) {
+	ctx.WriteString("data branch pick database ")
+	ctx.WriteString(string(s.SrcDatabase))
+	ctx.WriteString(" into database ")
+	ctx.WriteString(string(s.DstDatabase))
+	if s.BetweenFrom != "" && s.BetweenTo != "" {
+		ctx.WriteString(" between snapshot ")
+		ctx.WriteString(s.BetweenFrom)
+		ctx.WriteString(" and ")
+		ctx.WriteString(s.BetweenTo)
+	}
+	if s.ConflictOpt != nil {
+		ctx.WriteString(" when conflict ")
+		switch s.ConflictOpt.Opt {
+		case CONFLICT_FAIL:
+			ctx.WriteString("fail")
+		case CONFLICT_SKIP:
+			ctx.WriteString("skip")
+		case CONFLICT_ACCEPT:
+			ctx.WriteString("accept")
+		}
+	}
+}
+
+func (s *DataBranchPickDatabase) String() string {
+	return s.GetStatementType()
+}
+
+func (s *DataBranchPickDatabase) GetStatementType() string {
+	return "branch pick database"
+}
+
+func (s *DataBranchPickDatabase) GetQueryType() string {
+	return QueryTypeOth
+}
+
+func (s *DataBranchPickDatabase) Free() {
+	reuse.Free[DataBranchPickDatabase](s, nil)
 }
