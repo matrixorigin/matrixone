@@ -2259,7 +2259,7 @@ func TestCastDecimalToDecimal256Dispatcher(t *testing.T) {
 			proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(decimal128Type,
-					[]types.Decimal128{d128Positive, d128Negative, types.Decimal128{}}, []bool{false, false, true}),
+					[]types.Decimal128{d128Positive, d128Negative, {}}, []bool{false, false, true}),
 				NewFunctionTestInput(decimal128ToType, []types.Decimal256{}, nil),
 			},
 			NewFunctionTestResult(decimal128ToType, false,
