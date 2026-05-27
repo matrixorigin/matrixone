@@ -2168,6 +2168,109 @@ func TestDecimal256ToFloat64Cast(t *testing.T) {
 	require.InDelta(t, 1.2421512141241241e40, resultValues[0], 1e27)
 }
 
+func TestCastNumericToDecimal256Dispatcher(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	toType := types.New(types.T_decimal256, 65, 4)
+	var zero types.Decimal256
+	toDecimal256 := func(s string) types.Decimal256 {
+		v, err := types.ParseDecimal256(s, 65, 4)
+		require.NoError(t, err)
+		return v
+	}
+	run := func(name string, input FunctionTestInput, expected types.Decimal256) {
+		t.Run(name, func(t *testing.T) {
+			tc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					input,
+					NewFunctionTestInput(toType, []types.Decimal256{}, nil),
+				},
+				NewFunctionTestResult(toType, false, []types.Decimal256{expected, zero}, []bool{false, true}),
+				NewCast,
+			)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	run("bit", NewFunctionTestInput(types.T_bit.ToType(), []uint64{42, 0}, []bool{false, true}),
+		toDecimal256("42.0000"))
+	run("int8", NewFunctionTestInput(types.T_int8.ToType(), []int8{-12, 0}, []bool{false, true}),
+		toDecimal256("-12.0000"))
+	run("int16", NewFunctionTestInput(types.T_int16.ToType(), []int16{-1234, 0}, []bool{false, true}),
+		toDecimal256("-1234.0000"))
+	run("int32", NewFunctionTestInput(types.T_int32.ToType(), []int32{-123456, 0}, []bool{false, true}),
+		toDecimal256("-123456.0000"))
+	run("int64", NewFunctionTestInput(types.T_int64.ToType(), []int64{-1234567890123, 0}, []bool{false, true}),
+		toDecimal256("-1234567890123.0000"))
+	run("uint8", NewFunctionTestInput(types.T_uint8.ToType(), []uint8{12, 0}, []bool{false, true}),
+		toDecimal256("12.0000"))
+	run("uint16", NewFunctionTestInput(types.T_uint16.ToType(), []uint16{1234, 0}, []bool{false, true}),
+		toDecimal256("1234.0000"))
+	run("uint32", NewFunctionTestInput(types.T_uint32.ToType(), []uint32{123456, 0}, []bool{false, true}),
+		toDecimal256("123456.0000"))
+	run("uint64", NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1234567890123, 0}, []bool{false, true}),
+		toDecimal256("1234567890123.0000"))
+}
+
+func TestCastDecimalToDecimal256Dispatcher(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	var zero types.Decimal256
+
+	decimal64Type := types.New(types.T_decimal64, 18, 2)
+	decimal64ToType := types.New(types.T_decimal256, 65, 4)
+	d64Positive, err := types.ParseDecimal64("12.34", 18, 2)
+	require.NoError(t, err)
+	d64Negative, err := types.ParseDecimal64("-56.78", 18, 2)
+	require.NoError(t, err)
+	d64ExpectedPositive, err := types.ParseDecimal256("12.3400", 65, 4)
+	require.NoError(t, err)
+	d64ExpectedNegative, err := types.ParseDecimal256("-56.7800", 65, 4)
+	require.NoError(t, err)
+
+	t.Run("decimal64", func(t *testing.T) {
+		tc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(decimal64Type, []types.Decimal64{d64Positive, d64Negative, 0}, []bool{false, false, true}),
+				NewFunctionTestInput(decimal64ToType, []types.Decimal256{}, nil),
+			},
+			NewFunctionTestResult(decimal64ToType, false,
+				[]types.Decimal256{d64ExpectedPositive, d64ExpectedNegative, zero}, []bool{false, false, true}),
+			NewCast,
+		)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	decimal128Type := types.New(types.T_decimal128, 38, 3)
+	decimal128ToType := types.New(types.T_decimal256, 65, 6)
+	d128Positive, err := types.ParseDecimal128("123456789.123", 38, 3)
+	require.NoError(t, err)
+	d128Negative, err := types.ParseDecimal128("-987654321.500", 38, 3)
+	require.NoError(t, err)
+	d128ExpectedPositive, err := types.ParseDecimal256("123456789.123000", 65, 6)
+	require.NoError(t, err)
+	d128ExpectedNegative, err := types.ParseDecimal256("-987654321.500000", 65, 6)
+	require.NoError(t, err)
+
+	t.Run("decimal128", func(t *testing.T) {
+		tc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(decimal128Type,
+					[]types.Decimal128{d128Positive, d128Negative, types.Decimal128{}}, []bool{false, false, true}),
+				NewFunctionTestInput(decimal128ToType, []types.Decimal256{}, nil),
+			},
+			NewFunctionTestResult(decimal128ToType, false,
+				[]types.Decimal256{d128ExpectedPositive, d128ExpectedNegative, zero}, []bool{false, false, true}),
+			NewCast,
+		)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+}
+
 func TestYearCastHelpers(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
