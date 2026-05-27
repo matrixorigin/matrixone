@@ -135,7 +135,7 @@ func TestRestorePitrExternalTable(t *testing.T) {
 			ts       = int64(100)
 		)
 
-		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", ts, dbName)] =
+		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d } where datname = '%s' and account_id = 0", ts, dbName)] =
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
 		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, dbName, dbName)] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, uint32(sysAccountID))+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
@@ -151,7 +151,7 @@ func TestRestorePitrExternalTable(t *testing.T) {
 		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, dbName, "base_t")] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[getPubInfoWithPitr(ts, uint32(sysAccountID), dbName)] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 
-		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, "", map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID))
+		err := restoreDatabaseFromTS(ctx, "", bh, dbName, ts, uint32(sysAccountID), uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, false, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(restoreTestExecutedSQLContains(bh, fmt.Sprintf(restoreTableDataByTsFmt, dbName, "base_t", dbName, "base_t", ts)), convey.ShouldBeTrue)
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
@@ -168,16 +168,16 @@ func TestRestorePitrExternalTable(t *testing.T) {
 			ts       = int64(100)
 		)
 
-		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", ts, dbName)] =
+		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d } where datname = '%s' and account_id = 0", ts, dbName)] =
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
 		bh.sql2result[buildTableInfoListSQL(dbName, tblName, ts, uint32(sysAccountID))] =
 			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{{tblName, "BASE TABLE", catalog.SystemExternalRel}})
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`%s` {MO_TS = %d}", dbName, tblName, ts)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{tblName, "create external table hive_ext (id int)"}})
 
-		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, tblName, map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID))
+		err := restoreTableFromTS(ctx, "", bh, dbName, tblName, ts, uint32(sysAccountID), uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{})
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err.Error(), convey.ShouldContainSubstring, "external table db1.hive_ext cannot be restored from pitr")
+		convey.So(err.Error(), convey.ShouldContainSubstring, "external table db1.hive_ext cannot be restored from snapshot")
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
 	})
 }

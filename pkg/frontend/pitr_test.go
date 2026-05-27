@@ -3675,3 +3675,155 @@ func Test_resolveRestorePitrAccounts(t *testing.T) {
 	assert.Equal(t, uint32(1), accounts.sourceID)
 	assert.Equal(t, uint32(2), accounts.targetID)
 }
+
+func Test_normalizeRestorePitrStmt_NoOp(t *testing.T) {
+	t.Run("SrcAccountName empty", func(t *testing.T) {
+		stmt := &tree.RestorePitr{
+			Level:       tree.RESTORELEVELACCOUNT,
+			AccountName: "acc01",
+		}
+		normalizeRestorePitrStmt(stmt)
+		assert.Equal(t, tree.Identifier("acc01"), stmt.AccountName)
+		assert.Empty(t, stmt.SrcAccountName)
+		assert.Empty(t, stmt.ToAccountName)
+	})
+
+	t.Run("ToAccountName already set", func(t *testing.T) {
+		stmt := &tree.RestorePitr{
+			Level:          tree.RESTORELEVELACCOUNT,
+			AccountName:    "acc01",
+			SrcAccountName: "acc02",
+			ToAccountName:  "acc03",
+		}
+		normalizeRestorePitrStmt(stmt)
+		assert.Equal(t, tree.Identifier("acc01"), stmt.AccountName)
+		assert.Equal(t, tree.Identifier("acc02"), stmt.SrcAccountName)
+		assert.Equal(t, tree.Identifier("acc03"), stmt.ToAccountName)
+	})
+}
+
+func Test_resolveRestorePitrAccounts_Cluster(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	stmt := &tree.RestorePitr{
+		Name:  "pitr01",
+		Level: tree.RESTORELEVELCLUSTER,
+	}
+	accounts, err := resolveRestorePitrAccounts(context.Background(), ses, bh, nil, stmt, 0)
+	require.NoError(t, err)
+	assert.Empty(t, accounts.sourceName)
+	assert.Empty(t, accounts.targetName)
+	assert.Equal(t, uint32(0), accounts.sourceID)
+	assert.Equal(t, uint32(0), accounts.targetID)
+}
+
+func Test_resolveRestorePitrAccounts_SameAccount(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        "acc01",
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      1,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	})
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bh.sql2result[getAccountIdNamesSql+" and account_name = 'acc01'"] = newMrsForPitrRecord([][]interface{}{
+		{uint64(1), "acc01", "open", uint64(1), nil},
+	})
+
+	stmt := &tree.RestorePitr{
+		Name:        "pitr01",
+		Level:       tree.RESTORELEVELDATABASE,
+		AccountName: "acc01",
+		DatabaseName: "db01",
+	}
+	accounts, err := resolveRestorePitrAccounts(context.Background(), ses, bh, nil, stmt, 0)
+	require.NoError(t, err)
+	assert.Equal(t, "acc01", accounts.sourceName)
+	assert.Equal(t, accounts.sourceName, accounts.targetName)
+	assert.Equal(t, uint32(1), accounts.sourceID)
+	assert.Equal(t, accounts.sourceID, accounts.targetID)
+}
+
+func Test_resolveRestorePitrAccounts_SysAccount(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	})
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	stmt := &tree.RestorePitr{
+		Name:        "pitr01",
+		Level:       tree.RESTORELEVELDATABASE,
+		AccountName: sysAccountName,
+		DatabaseName: "db01",
+	}
+	accounts, err := resolveRestorePitrAccounts(context.Background(), ses, bh, nil, stmt, 0)
+	require.NoError(t, err)
+	assert.Equal(t, sysAccountName, accounts.sourceName)
+	assert.Equal(t, uint32(sysAccountID), accounts.sourceID)
+	assert.Equal(t, accounts.sourceID, accounts.targetID)
+}
+
+func Test_resolveRestorePitrAccounts_ViaPitrRecord(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	})
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	// No getAccountId match; resolve via pitr record
+	pitr := &pitrRecord{
+		pitrName:    "pitr01",
+		accountId:   5,
+		accountName: "acc05",
+	}
+	stmt := &tree.RestorePitr{
+		Name:        "pitr01",
+		Level:       tree.RESTORELEVELDATABASE,
+		AccountName: "acc05",
+		DatabaseName: "db01",
+	}
+	accounts, err := resolveRestorePitrAccounts(context.Background(), ses, bh, pitr, stmt, 0)
+	require.NoError(t, err)
+	assert.Equal(t, "acc05", accounts.sourceName)
+	assert.Equal(t, uint32(5), accounts.sourceID)
+	assert.Equal(t, accounts.sourceID, accounts.targetID)
+}
