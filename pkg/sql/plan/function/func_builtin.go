@@ -2506,10 +2506,7 @@ func builtInATan2(parameters []*vector.Vector, result vector.FunctionResultWrapp
 				return err
 			}
 		} else {
-			if v1 == 0 {
-				return moerr.NewInvalidArg(proc.Ctx, "Atan first input", 0)
-			}
-			if err := rs.Append(math.Atan(v2/v1), false); err != nil {
+			if err := rs.Append(math.Atan2(v1, v2), false); err != nil {
 				return err
 			}
 		}
