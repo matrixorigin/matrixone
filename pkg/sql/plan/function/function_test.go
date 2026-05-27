@@ -195,6 +195,14 @@ func Test_GetFunctionByName(t *testing.T) {
 		},
 
 		{
+			name: "from_unixtime", args: []types.Type{types.New(types.T_decimal256, 65, 0)},
+			shouldErr:  false,
+			requireFid: FROM_UNIXTIME, requireOid: 2,
+			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToTypeWithScale(0)},
+			requireRet: types.T_datetime.ToType(),
+		},
+
+		{
 			name: "internal_numeric_scale", args: []types.Type{types.T_char.ToType()},
 			shouldErr:  false,
 			requireFid: INTERNAL_NUMERIC_SCALE, requireOid: 0,
