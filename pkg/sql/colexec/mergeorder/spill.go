@@ -690,10 +690,24 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 
 		rows := 0
 		nextSizeCheck := batchSizeCheckInterval
+		currentOutSize := 0
+		getOutSize := func() int {
+			if currentOutSize < 0 {
+				currentOutSize = out.Size()
+			}
+			return currentOutSize
+		}
+		updateOutSize := func(reader *spillRunReader, cnt int) {
+			if currentOutSize >= 0 && reader.fixedWidth {
+				currentOutSize += cnt * reader.rowBytes
+				return
+			}
+			currentOutSize = -1
+		}
 		for len(ctr.spillReaders) > 0 {
 			if len(ctr.spillReaders) == 1 {
 				src := ctr.spillReaders[0]
-				chunk := computeDrainChunk(src, out.Size())
+				chunk := computeDrainChunk(src, getOutSize())
 				if chunk < 1 {
 					chunk = 1
 				}
@@ -714,6 +728,7 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 					}
 				}
 				rows += chunk
+				updateOutSize(src, chunk)
 				if err := ctr.advanceSpillReaderByChunk(proc, 0, chunk); err != nil {
 					out.Clean(proc.Mp())
 					if outOrder != nil {
@@ -722,7 +737,7 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 					run.file.Close()
 					return nil, err
 				}
-				if out.Size() >= maxBatchSizeToSend {
+				if getOutSize() >= maxBatchSizeToSend {
 					break
 				}
 				if rows >= nextSizeCheck {
@@ -732,7 +747,7 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 			}
 
 			src := ctr.spillReaders[0]
-			budgetChunk := computeDrainChunk(src, out.Size())
+			budgetChunk := computeDrainChunk(src, getOutSize())
 			if budgetChunk > 1 {
 				secondIdx := ctr.secondBestReaderIndex()
 				if secondIdx > 0 {
@@ -759,6 +774,7 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 							}
 						}
 						rows += chunk
+						updateOutSize(src, chunk)
 						if err := ctr.advanceSpillReaderByChunk(proc, 0, chunk); err != nil {
 							if out != nil {
 								out.Clean(proc.Mp())
@@ -769,7 +785,7 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 							run.file.Close()
 							return nil, err
 						}
-						if out.Size() >= maxBatchSizeToSend {
+						if getOutSize() >= maxBatchSizeToSend {
 							break
 						}
 						if rows >= nextSizeCheck {
@@ -804,6 +820,7 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 				}
 			}
 			rows++
+			updateOutSize(reader, 1)
 			if err := ctr.advanceSpillReader(proc, choice); err != nil {
 				if out != nil {
 					out.Clean(proc.Mp())
@@ -815,7 +832,7 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 				return nil, err
 			}
 			if rows >= nextSizeCheck {
-				if out.Size() >= maxBatchSizeToSend {
+				if getOutSize() >= maxBatchSizeToSend {
 					break
 				}
 				nextSizeCheck = rows + batchSizeCheckInterval
@@ -909,10 +926,24 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 
 	rows := 0
 	nextSizeCheck := batchSizeCheckInterval
+	currentBufSize := 0
+	getBufSize := func() int {
+		if currentBufSize < 0 {
+			currentBufSize = ctr.buf.Size()
+		}
+		return currentBufSize
+	}
+	updateBufSize := func(reader *spillRunReader, cnt int) {
+		if currentBufSize >= 0 && reader.fixedWidth {
+			currentBufSize += cnt * reader.rowBytes
+			return
+		}
+		currentBufSize = -1
+	}
 	for len(ctr.spillReaders) > 0 {
 		if len(ctr.spillReaders) == 1 {
 			src := ctr.spillReaders[0]
-			chunk := computeDrainChunk(src, ctr.buf.Size())
+			chunk := computeDrainChunk(src, getBufSize())
 			if chunk < 1 {
 				chunk = 1
 			}
@@ -920,10 +951,11 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 				return false, err
 			}
 			rows += chunk
+			updateBufSize(src, chunk)
 			if err := ctr.advanceSpillReaderByChunk(proc, 0, chunk); err != nil {
 				return false, err
 			}
-			if ctr.buf.Size() >= maxBatchSizeToSend {
+			if getBufSize() >= maxBatchSizeToSend {
 				break
 			}
 			if rows >= nextSizeCheck {
@@ -933,7 +965,7 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 		}
 
 		src := ctr.spillReaders[0]
-		budgetChunk := computeDrainChunk(src, ctr.buf.Size())
+		budgetChunk := computeDrainChunk(src, getBufSize())
 		if budgetChunk > 1 {
 			secondIdx := ctr.secondBestReaderIndex()
 			if secondIdx > 0 {
@@ -943,10 +975,11 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 						return false, err
 					}
 					rows += chunk
+					updateBufSize(src, chunk)
 					if err := ctr.advanceSpillReaderByChunk(proc, 0, chunk); err != nil {
 						return false, err
 					}
-					if ctr.buf.Size() >= maxBatchSizeToSend {
+					if getBufSize() >= maxBatchSizeToSend {
 						break
 					}
 					if rows >= nextSizeCheck {
@@ -965,11 +998,12 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 			}
 		}
 		rows++
+		updateBufSize(reader, 1)
 		if err := ctr.advanceSpillReader(proc, choice); err != nil {
 			return false, err
 		}
 		if rows >= nextSizeCheck {
-			if ctr.buf.Size() >= maxBatchSizeToSend {
+			if getBufSize() >= maxBatchSizeToSend {
 				break
 			}
 			nextSizeCheck = rows + batchSizeCheckInterval
