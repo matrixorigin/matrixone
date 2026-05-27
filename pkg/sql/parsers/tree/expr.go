@@ -963,11 +963,7 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.WriteString("INTERVAL ")
 		node.Exprs[0].Format(ctx)
 		ctx.WriteByte(' ')
-		if nv, ok := node.Exprs[1].(*NumVal); ok {
-			ctx.WriteString(nv.String())
-		} else {
-			node.Exprs[1].Format(ctx)
-		}
+		node.Exprs[1].Format(ctx)
 		return
 	}
 
