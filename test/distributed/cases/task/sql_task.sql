@@ -7,6 +7,9 @@ drop task if exists sql_task_manual;
 drop task if exists sql_task_gate;
 drop task if exists sql_task_literal_strings;
 drop task if exists sql_task_rows_success;
+drop task if exists sql_task_failfast_heartbeat;
+drop task if exists sql_task_zero_row_insert;
+drop task if exists sql_task_mini_pipeline;
 drop task if exists sql_task_multistmt;
 drop task if exists sql_task_timeout;
 drop task if exists sql_task_retry;
@@ -29,6 +32,14 @@ create table literal_quotes(label varchar(32));
 create table rows_success_target(v int);
 create table rows_success_heartbeat(tag varchar(16));
 create table ms_target(v int);
+create table failfast_target(v int);
+create table failfast_heartbeat(tag varchar(16));
+create table zero_row_src(id int primary key);
+create table zero_row_sink(id int primary key);
+create table zero_row_heartbeat(tag varchar(16));
+create table pipeline_readings(pump int, engine_rpm int, pump_rate int);
+create table pipeline_classified(pump int, state varchar(32));
+create table pipeline_run_log(task_name varchar(64), status varchar(16));
 create table timeout_sink(v int);
 create table retry_target(v int);
 create table overlap_sink(v int);
@@ -108,7 +119,83 @@ select count(*) from rows_success_target;
 select count(*) from rows_success_heartbeat;
 select status, rows_affected from mo_task.sql_task_run where task_name = 'sql_task_rows_success' order by run_id desc limit 1;
 
-create task sql_task_multistmt as begin insert into ms_target values (1); insert into no_such_table values (1); insert into ms_target values (2); end;
+-- Issue #24406: fail-fast must abort before trailing heartbeat (customer POC pattern).
+-- @delimiter $$
+create task sql_task_failfast_heartbeat
+as begin
+    insert into failfast_target values (1);
+    insert into no_such_failfast_table values (1);
+    insert into failfast_target values (2);
+    insert into failfast_heartbeat values ('done');
+end
+$$
+-- @delimiter ;
+
+-- @pattern
+execute task sql_task_failfast_heartbeat;
+select sleep(1);
+select count(*), min(v), max(v) from failfast_target;
+select count(*) from failfast_heartbeat;
+select status, rows_affected, error_message from mo_task.sql_task_run where task_name = 'sql_task_failfast_heartbeat' order by run_id desc limit 1;
+
+-- Issue #24406: zero-row INSERT is not a SQL error; task may still SUCCESS (rows_affected reflects heartbeat only).
+insert into zero_row_src values (1);
+
+-- @delimiter $$
+create task sql_task_zero_row_insert
+as begin
+    insert into zero_row_sink
+    select id from zero_row_src where id = 999;
+    insert into zero_row_heartbeat values ('done');
+end
+$$
+-- @delimiter ;
+
+execute task sql_task_zero_row_insert;
+select sleep(1);
+select count(*) from zero_row_sink;
+select count(*) from zero_row_heartbeat;
+select status, rows_affected from mo_task.sql_task_run where task_name = 'sql_task_zero_row_insert' order by run_id desc limit 1;
+
+-- Issue #24407: mini pipeline with truncate-like delete, CASE string literals, and trailing run log.
+insert into pipeline_readings values
+    (1, null, 0),
+    (2, 900, 10),
+    (3, 700, 0);
+
+-- @delimiter $$
+create task sql_task_mini_pipeline
+as begin
+    delete from pipeline_classified;
+    insert into pipeline_classified
+    select pump,
+        case
+            when engine_rpm is null then 'UNKNOWN'
+            when engine_rpm >= 800 and pump_rate > 0 then 'PUMPING'
+            else 'IDLE'
+        end as state
+    from pipeline_readings;
+    delete from pipeline_run_log where task_name = 'sql_task_mini_pipeline';
+    insert into pipeline_run_log values ('sql_task_mini_pipeline', 'SUCCESS');
+end
+$$
+-- @delimiter ;
+
+execute task sql_task_mini_pipeline;
+select sleep(1);
+select state, count(*), hex(state) from pipeline_classified group by state order by state;
+select task_name, status, hex(status) from pipeline_run_log;
+select status, rows_affected from mo_task.sql_task_run where task_name = 'sql_task_mini_pipeline' order by run_id desc limit 1;
+
+-- @delimiter $$
+create task sql_task_multistmt
+as begin
+    insert into ms_target values (1);
+    insert into no_such_table values (1);
+    insert into ms_target values (2);
+end
+$$
+-- @delimiter ;
 
 -- @pattern
 execute task sql_task_multistmt;
@@ -205,6 +292,9 @@ drop task if exists sql_task_build_silver;
 drop task if exists sql_task_overlap;
 drop task if exists sql_task_retry;
 drop task if exists sql_task_timeout;
+drop task if exists sql_task_mini_pipeline;
+drop task if exists sql_task_zero_row_insert;
+drop task if exists sql_task_failfast_heartbeat;
 drop task if exists sql_task_multistmt;
 drop task if exists sql_task_rows_success;
 drop task if exists sql_task_literal_strings;
