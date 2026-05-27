@@ -440,3 +440,16 @@ select * from auto_increment17;
 drop table auto_increment17;
 # reset to 1
 set auto_increment_offset = 1;
+
+-- alter table auto_increment
+drop table if exists auto_increment_alter;
+create table auto_increment_alter(col1 int auto_increment primary key, col2 int);
+insert into auto_increment_alter values();
+insert into auto_increment_alter values();
+select * from auto_increment_alter order by col1;
+alter table auto_increment_alter AUTO_INCREMENT = 100;
+insert into auto_increment_alter values();
+select * from auto_increment_alter order by col1;
+insert into auto_increment_alter values();
+select * from auto_increment_alter order by col1;
+drop table auto_increment_alter;
