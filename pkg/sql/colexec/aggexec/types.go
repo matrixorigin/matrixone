@@ -190,6 +190,10 @@ func makeSpecialAggExec(
 			return makeGroupConcat(mp, id, isDistinct, params, getGroupConcatRet(params...), groupConcatSep), true, nil
 		case AggIdOfApproxCount:
 			return makeApproxCount(mp, id, params[0]), true, nil
+		case AggIdOfHllAdd:
+			return makeHllAdd(mp, id, params[0]), true, nil
+		case AggIdOfHllMerge:
+			return makeHllMerge(mp, id, params[0]), true, nil
 		case AggIdOfJsonArrayAgg:
 			exec, err := makeJsonArrayAgg(mp, id, isDistinct, params)
 			return exec, true, err
