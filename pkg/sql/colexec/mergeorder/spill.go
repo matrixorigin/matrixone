@@ -512,13 +512,27 @@ func (ctr *container) computeWinnerChunk(root *spillRunReader, second *spillRunR
 		limit = maxWinnerChunkRows
 	}
 
+	for k := 0; k < len(ctr.compares); k++ {
+		ctr.compares[k].Set(0, root.orderCols[k])
+		ctr.compares[k].Set(1, second.orderCols[k])
+	}
+
 	chunk := 1
 	for chunk < limit {
-		if ctr.compareSpillReaderRows(root, root.rowIdx+int64(chunk), second, second.rowIdx) <= 0 {
-			chunk++
-			continue
+		nextRow := root.rowIdx + int64(chunk)
+		secondRow := second.rowIdx
+		ordered := true
+		for k := 0; k < len(ctr.compares); k++ {
+			if r := ctr.compares[k].Compare(0, 1, nextRow, secondRow); r != 0 {
+				ordered = r < 0
+				break
+			}
 		}
-		break
+		if ordered {
+			chunk++
+		} else {
+			break
+		}
 	}
 	return chunk
 }
