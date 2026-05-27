@@ -121,21 +121,21 @@ func NewLocalFS(
 
 func (l *LocalFS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(ctx, size)
+		l.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
 func (l *LocalFS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(ctx, size)
+		l.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
 }
 
 func (l *LocalFS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(ctx, len(data))
+		l.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), len(data))
 	}
 	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
 }
