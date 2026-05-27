@@ -293,8 +293,8 @@ func (ctr *container) updateActiveRunTail(proc *process.Process, incomingOrderCo
 	return nil
 }
 
-func computeDrainChunk(src *batch.Batch, start int64, currentSize int) int {
-	remaining := src.RowCount() - int(start)
+func computeDrainChunk(src *spillRunReader, currentSize int) int {
+	remaining := src.batch.RowCount() - int(src.rowIdx)
 	if remaining <= 0 {
 		return 0
 	}
@@ -303,19 +303,8 @@ func computeDrainChunk(src *batch.Batch, start int64, currentSize int) int {
 		return 0
 	}
 
-	rowBytes := 0
-	fixedWidth := true
-	for _, vec := range src.Vecs {
-		typ := vec.GetType()
-		if typ.IsVarlen() {
-			fixedWidth = false
-			break
-		}
-		rowBytes += typ.TypeSize()
-	}
-
-	if fixedWidth && rowBytes > 0 {
-		maxByBudget := budget / rowBytes
+	if src.fixedWidth && src.rowBytes > 0 {
+		maxByBudget := budget / src.rowBytes
 		if maxByBudget < 1 {
 			maxByBudget = 1
 		}
@@ -328,7 +317,7 @@ func computeDrainChunk(src *batch.Batch, start int64, currentSize int) int {
 		return remaining
 	}
 
-	avgRowBytes := src.Size() / max(1, src.RowCount())
+	avgRowBytes := src.avgRowBytes
 	if avgRowBytes < 1 {
 		avgRowBytes = 1
 	}
@@ -645,7 +634,7 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 		for len(ctr.spillReaders) > 0 {
 			if len(ctr.spillReaders) == 1 {
 				src := ctr.spillReaders[0]
-				chunk := computeDrainChunk(src.batch, src.rowIdx, out.Size())
+				chunk := computeDrainChunk(src, out.Size())
 				if chunk > 1 {
 					if err := appendContiguousRows(out, src.batch, src.rowIdx, chunk, proc); err != nil {
 						out.Clean(proc.Mp())
@@ -822,7 +811,7 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 	for len(ctr.spillReaders) > 0 {
 		if len(ctr.spillReaders) == 1 {
 			src := ctr.spillReaders[0]
-			chunk := computeDrainChunk(src.batch, src.rowIdx, ctr.buf.Size())
+			chunk := computeDrainChunk(src, ctr.buf.Size())
 			if chunk > 1 {
 				if err := appendContiguousRows(ctr.buf, src.batch, src.rowIdx, chunk, proc); err != nil {
 					return false, err

@@ -503,8 +503,11 @@ func TestComputeDrainChunkFixedWidth(t *testing.T) {
 	src.SetRowCount(100)
 	defer src.Clean(proc.Mp())
 
-	require.Equal(t, 100, computeDrainChunk(src, 0, 0))
-	require.Equal(t, 1, computeDrainChunk(src, 0, maxBatchSizeToSend-1))
+	reader := &spillRunReader{batch: src}
+	reader.refreshDrainProfile()
+
+	require.Equal(t, 100, computeDrainChunk(reader, 0))
+	require.Equal(t, 1, computeDrainChunk(reader, maxBatchSizeToSend-1))
 }
 
 func TestComputeDrainChunkVarlen(t *testing.T) {
@@ -523,7 +526,10 @@ func TestComputeDrainChunkVarlen(t *testing.T) {
 	src.SetRowCount(100)
 	defer src.Clean(proc.Mp())
 
-	chunk := computeDrainChunk(src, 0, 0)
+	reader := &spillRunReader{batch: src}
+	reader.refreshDrainProfile()
+
+	chunk := computeDrainChunk(reader, 0)
 	require.Greater(t, chunk, 0)
 	require.LessOrEqual(t, chunk, maxVarlenDrainChunkRows)
 }

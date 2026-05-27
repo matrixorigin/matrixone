@@ -141,13 +141,16 @@ type spillRun struct {
 }
 
 type spillRunReader struct {
-	file      *os.File
-	reader    *bufio.Reader
-	batch     *batch.Batch
-	keyBatch  *batch.Batch
-	orderCols []*vector.Vector
-	rowIdx    int64
-	heapIdx   int
+	file        *os.File
+	reader      *bufio.Reader
+	batch       *batch.Batch
+	keyBatch    *batch.Batch
+	orderCols   []*vector.Vector
+	rowIdx      int64
+	heapIdx     int
+	fixedWidth  bool
+	rowBytes    int
+	avgRowBytes int
 }
 
 func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -326,6 +329,9 @@ func (r *spillRunReader) close(proc *process.Process) {
 	r.reader = nil
 	r.rowIdx = 0
 	r.heapIdx = -1
+	r.fixedWidth = false
+	r.rowBytes = 0
+	r.avgRowBytes = 0
 }
 
 func (r *spillRunReader) reset(file *os.File) {
@@ -336,6 +342,33 @@ func (r *spillRunReader) reset(file *os.File) {
 	} else {
 		r.reader.Reset(file)
 	}
+}
+
+func (r *spillRunReader) refreshDrainProfile() {
+	r.fixedWidth = true
+	r.rowBytes = 0
+	for _, vec := range r.batch.Vecs {
+		typ := vec.GetType()
+		if typ.IsVarlen() {
+			r.fixedWidth = false
+			r.rowBytes = 0
+			break
+		}
+		r.rowBytes += typ.TypeSize()
+	}
+	if r.fixedWidth {
+		if r.rowBytes < 1 {
+			r.rowBytes = 1
+		}
+		r.avgRowBytes = r.rowBytes
+		return
+	}
+
+	avg := r.batch.Size() / max(1, r.batch.RowCount())
+	if avg < 1 {
+		avg = 1
+	}
+	r.avgRowBytes = avg
 }
 
 func (r *spillRunReader) readNextBatch(proc *process.Process, ctr *container) (bool, error) {
@@ -365,6 +398,7 @@ func (r *spillRunReader) readNextBatch(proc *process.Process, ctr *container) (b
 	if err != nil {
 		return false, err
 	}
+	r.refreshDrainProfile()
 	r.rowIdx = 0
 	return true, nil
 }
