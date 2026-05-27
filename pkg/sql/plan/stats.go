@@ -75,8 +75,19 @@ func safeRatio(numerator float64, denominator float64, fallback float64) float64
 	return finiteOr(numerator/denominator, fallback)
 }
 
+func clampSelectivity(value float64, fallback float64) float64 {
+	value = finiteOr(value, fallback)
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
+}
+
 func safeSelectivityRatio(numerator float64, denominator float64) float64 {
-	return safeRatio(numerator, denominator, 1)
+	return clampSelectivity(safeRatio(numerator, denominator, 1), 1)
 }
 
 func SetForceScanOnMultiCN(v bool) {
@@ -626,7 +637,7 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.S
 	}
 	ndv := getExprNdv(expr, builder)
 	if ndv > 0 {
-		return 1 / ndv
+		return safeSelectivityRatio(1, ndv)
 	}
 	return 0.01
 }
@@ -926,7 +937,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 				ret = orSelectivity(ret, sel2)
 			}
 		case "not":
-			ret = 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder, s)
+			ret = clampSelectivity(1-estimateExprSelectivity(exprImpl.F.Args[0], builder, s), 1)
 		case "like":
 			ret = 0.2
 		case "prefix_eq":
@@ -968,6 +979,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 	case *plan.Expr_Lit:
 		ret = 1.0
 	}
+	ret = clampSelectivity(ret, 1)
 	expr.Selectivity = ret
 	return ret
 }
@@ -1107,8 +1119,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		//will fix this in the future
 		//isCrossJoin := (len(node.OnList) == 0)
 		isCrossJoin := false
-		selectivity := math.Pow(rightStats.Selectivity, math.Pow(leftStats.Selectivity, 0.2))
-		selectivity_out := andSelectivity(leftStats.Selectivity, rightStats.Selectivity)
+		leftSelectivity := clampSelectivity(leftStats.Selectivity, 1)
+		rightSelectivity := clampSelectivity(rightStats.Selectivity, 1)
+		selectivity := clampSelectivity(math.Pow(rightSelectivity, math.Pow(leftSelectivity, 0.2)), 1)
+		selectivity_out := andSelectivity(leftSelectivity, rightSelectivity)
 
 		for _, pred := range node.OnList {
 			if node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
@@ -1874,21 +1888,21 @@ func compareStats(stats1, stats2 *Stats) bool {
 }
 
 func andSelectivity(s1, s2 float64) float64 {
-	s1 = finiteOr(s1, 1)
-	s2 = finiteOr(s2, 1)
+	s1 = clampSelectivity(s1, 1)
+	s2 = clampSelectivity(s2, 1)
 	if s1 < s2 {
 		s1, s2 = s2, s1
 	}
 	if s1 > 0.02 && s2 > 0.02 {
-		return s1 * s2
+		return clampSelectivity(s1*s2, 1)
 	}
-	return math.Min(s1, s2) * math.Max(math.Pow(s1, s2), math.Pow(s2, s1))
+	return clampSelectivity(math.Min(s1, s2)*math.Max(math.Pow(s1, s2), math.Pow(s2, s1)), 1)
 }
 
 func orSelectivity(s1, s2 float64) float64 {
 	var s float64
-	s1 = finiteOr(s1, 1)
-	s2 = finiteOr(s2, 1)
+	s1 = clampSelectivity(s1, 1)
+	s2 = clampSelectivity(s2, 1)
 	if s1 < s2 {
 		s1, s2 = s2, s1
 	}
@@ -1900,7 +1914,7 @@ func orSelectivity(s1, s2 float64) float64 {
 	if s > 1 {
 		return 1
 	} else {
-		return s
+		return clampSelectivity(s, 1)
 	}
 }
 

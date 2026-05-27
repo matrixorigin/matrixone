@@ -114,6 +114,122 @@ func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
 	})
 }
 
+func TestStatsSelectivityClampAvoidsNonFiniteJoin(t *testing.T) {
+	t.Run("not over year equality stays in range", func(t *testing.T) {
+		builder := newStatsTestBuilderWithNDV("d", 1)
+		col := &planpb.Expr{
+			Expr: &planpb.Expr_Col{
+				Col: &planpb.ColRef{RelPos: 0, ColPos: 0, Name: "d"},
+			},
+		}
+		yearExpr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "year"},
+					Args: []*planpb.Expr{col},
+				},
+			},
+		}
+		eqExpr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "="},
+					Args: []*planpb.Expr{
+						yearExpr,
+						{
+							Expr: &planpb.Expr_P{
+								P: &planpb.ParamRef{Pos: 0},
+							},
+						},
+					},
+				},
+			},
+		}
+		notExpr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "not"},
+					Args: []*planpb.Expr{eqExpr},
+				},
+			},
+		}
+
+		selectivity := estimateExprSelectivity(notExpr, builder, nil)
+
+		require.True(t, isFinite(selectivity), "selectivity = %v", selectivity)
+		require.GreaterOrEqual(t, selectivity, 0.0)
+		require.LessOrEqual(t, selectivity, 1.0)
+	})
+
+	t.Run("join clamps invalid child selectivity before pow", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		left := &planpb.Node{
+			NodeType: planpb.Node_VALUE_SCAN,
+			Stats: &planpb.Stats{
+				Outcnt:      10,
+				Cost:        10,
+				Selectivity: -364,
+				BlockNum:    1,
+			},
+		}
+		right := &planpb.Node{
+			NodeType: planpb.Node_VALUE_SCAN,
+			Stats: &planpb.Stats{
+				Outcnt:      10,
+				Cost:        10,
+				Selectivity: 0.5,
+				BlockNum:    1,
+			},
+		}
+		join := &planpb.Node{
+			NodeType: planpb.Node_JOIN,
+			JoinType: planpb.Node_INNER,
+			Children: []int32{0, 1},
+			Stats:    DefaultStats(),
+		}
+		builder.qry.Nodes = []*planpb.Node{left, right, join}
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.True(t, isFinite(join.Stats.Selectivity), "selectivity = %v", join.Stats.Selectivity)
+		require.GreaterOrEqual(t, join.Stats.Selectivity, 0.0)
+		require.LessOrEqual(t, join.Stats.Selectivity, 1.0)
+		require.True(t, isFinite(join.Stats.Outcnt), "outcnt = %v", join.Stats.Outcnt)
+	})
+}
+
+func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.TableCnt = 1000
+	stats.NdvMap[colName] = ndv
+	statsCache.Set(1, stats)
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	builder.tag2Table[0] = &planpb.TableDef{
+		TblId: 1,
+		Cols: []*planpb.ColDef{
+			{
+				Name: colName,
+				Typ:  planpb.Type{Id: int32(types.T_date)},
+			},
+		},
+	}
+	return builder
+}
+
+type statsCacheCompilerContext struct {
+	*MockCompilerContext
+	statsCache *StatsCache
+}
+
+func (ctx *statsCacheCompilerContext) GetStatsCache() *StatsCache {
+	return ctx.statsCache
+}
+
 func isFinite(v float64) bool {
 	return !math.IsNaN(v) && !math.IsInf(v, 0)
 }
