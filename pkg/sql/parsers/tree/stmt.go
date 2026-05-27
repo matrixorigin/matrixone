@@ -570,6 +570,14 @@ func (node *AnalyzeStmt) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
+func (node *CheckTableStmt) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *ShowProfileStmt) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
 func (node *SetRole) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
@@ -624,30 +632,6 @@ func (node *CancelDaemonTask) StmtKind() StmtKind {
 
 func (node *PauseDaemonTask) StmtKind() StmtKind {
 	return frontendStatusTyp
-}
-
-func (node *CreateSQLTask) StmtKind() StmtKind {
-	return frontendStatusTyp
-}
-
-func (node *AlterSQLTask) StmtKind() StmtKind {
-	return frontendStatusTyp
-}
-
-func (node *DropSQLTask) StmtKind() StmtKind {
-	return frontendStatusTyp
-}
-
-func (node *ExecuteSQLTask) StmtKind() StmtKind {
-	return frontendStatusTyp
-}
-
-func (node *ShowSQLTasks) StmtKind() StmtKind {
-	return compositeResRowType
-}
-
-func (node *ShowSQLTaskRuns) StmtKind() StmtKind {
-	return compositeResRowType
 }
 
 func (node *PrepareString) StmtKind() StmtKind {

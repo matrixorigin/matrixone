@@ -6260,15 +6260,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions, *tree.ShowCcprSubscriptions, *tree.ShowPublicationCoverage,
 		*tree.ShowBackendServers, *tree.ShowStages, *tree.ShowConnectors, *tree.DropConnector,
 		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
-		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
-		*tree.ShowRules:
+		*tree.ShowRules, *tree.CheckTableStmt, *tree.ShowProfileStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-		canExecInRestricted = true
-	case *tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask:
-		objType = objectTypeNone
-		kind = privilegeKindSpecial
-		special = specialTagAdmin
 		canExecInRestricted = true
 	case *tree.AlterRoleAddRule, *tree.AlterRoleDropRule:
 		typs = append(typs, PrivilegeTypeAlterRole, PrivilegeTypeAccountAll)
@@ -8394,10 +8388,6 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			// only the moAdmin or accountAdmin can execute the Cdc statement
 			return tenant.IsAdminRole(), nil
 		}
-		checkSQLTaskPrivilege := func() (bool, error) {
-			// SQL tasks execute later as a stored definer, so V1 task management is admin only.
-			return tenant.IsAdminRole(), nil
-		}
 
 		switch gp := stmt.(type) {
 		case *tree.Grant:
@@ -8444,9 +8434,6 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return yes, stats, err
 		case *tree.CreateCDC, *tree.ShowCDC, *tree.PauseCDC, *tree.DropCDC, *tree.ResumeCDC, *tree.RestartCDC:
 			yes, err := checkCdcTaskPrivilege()
-			return yes, stats, err
-		case *tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask:
-			yes, err := checkSQLTaskPrivilege()
 			return yes, stats, err
 		}
 	}

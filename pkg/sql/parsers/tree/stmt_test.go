@@ -79,9 +79,6 @@ func TestQueryType(t *testing.T) {
 					&DropPublication{}:      QueryTypeDCL,
 					&AlterPublication{}:     QueryTypeDCL,
 					&DropCcprSubscription{}: QueryTypeDCL,
-					&CreateSQLTask{}:        QueryTypeDDL,
-					&AlterSQLTask{}:         QueryTypeDDL,
-					&DropSQLTask{}:          QueryTypeDDL,
 
 					// TCL
 					&BeginTransaction{}:    QueryTypeTCL,
@@ -116,9 +113,6 @@ func TestQueryType(t *testing.T) {
 					&ShowAccounts{}:                  QueryTypeOth,
 					&ShowCollation{}:                 QueryTypeOth,
 					&ShowDatabases{}:                 QueryTypeOth,
-					&ExecuteSQLTask{}:                QueryTypeOth,
-					&ShowSQLTasks{}:                  QueryTypeOth,
-					&ShowSQLTaskRuns{}:               QueryTypeOth,
 					&ShowErrors{}:                    QueryTypeOth,
 					&ShowFunctionOrProcedureStatus{}: QueryTypeOth,
 					&ShowGrants{}:                    QueryTypeOth,
@@ -137,6 +131,8 @@ func TestQueryType(t *testing.T) {
 					&ShowSubscriptions{}:             QueryTypeOth,
 					&ShowCcprSubscriptions{}:         QueryTypeOth,
 					&ShowBackendServers{}:            QueryTypeOth,
+					&CheckTableStmt{}:                QueryTypeOth,
+					&ShowProfileStmt{}:               QueryTypeOth,
 				},
 			},
 		},

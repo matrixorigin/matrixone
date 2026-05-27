@@ -198,7 +198,9 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.ShowLogserviceReplicas,
 		*tree.ShowLogserviceStores,
 		*tree.ShowLogserviceSettings,
-		*tree.SetLogserviceSettings:
+		*tree.SetLogserviceSettings,
+		*tree.CheckTableStmt,
+		*tree.ShowProfileStmt:
 		return true, nil
 		//others
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList, *InternalCmdGetSnapshotTs, *InternalCmdGetDatabases, *InternalCmdGetMoIndexes, *InternalCmdGetDdl, *InternalCmdGetObject, *InternalCmdObjectList, *InternalCmdCheckSnapshotFlushed:

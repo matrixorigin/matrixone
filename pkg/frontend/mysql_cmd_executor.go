@@ -1162,31 +1162,48 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 	// IMO, this approach is simple and future-proof
 	// Although this rewriting processing could have been handled in rewrite module,
 	// `handleAnalyzeStmt` can be easily managed by cron jobs in the future
-	ctx := tree.NewFmtCtx(dialect.MYSQL)
-	ctx.WriteString("select ")
-	for i, ident := range stmt.Cols {
-		if i > 0 {
-			ctx.WriteByte(',')
-		}
-		ctx.WriteString("approx_count_distinct(")
-		ctx.WriteString(string(ident))
-		ctx.WriteByte(')')
-	}
-	ctx.WriteString(" from ")
-	stmt.Table.Format(ctx)
-	sql := ctx.String()
+
 	//backup the inside statement
 	prevInsideStmt := ses.ReplaceDerivedStmt(true)
 	defer func() {
 		//restore the inside statement
 		ses.ReplaceDerivedStmt(prevInsideStmt)
 	}()
-	tempExecCtx := ExecCtx{
-		ses:    ses,
-		reqCtx: execCtx.reqCtx,
+
+	var lastErr error
+	for _, entry := range stmt.Entries {
+		ctx := tree.NewFmtCtx(dialect.MYSQL)
+		ctx.WriteString("select ")
+		for i, ident := range entry.Cols {
+			if i > 0 {
+				ctx.WriteByte(',')
+			}
+			ctx.WriteString("approx_count_distinct(")
+			ctx.WriteString(string(ident))
+			ctx.WriteByte(')')
+		}
+		ctx.WriteString(" from ")
+		entry.Table.Format(ctx)
+		sql := ctx.String()
+		tempExecCtx := ExecCtx{
+			ses:    ses,
+			reqCtx: execCtx.reqCtx,
+		}
+		err := doComQuery(ses, &tempExecCtx, &UserInput{sql: sql})
+		tempExecCtx.Close()
+		if err != nil {
+			lastErr = err
+		}
 	}
-	defer tempExecCtx.Close()
-	return doComQuery(ses, &tempExecCtx, &UserInput{sql: sql})
+	return lastErr
+}
+
+func handleCheckTableStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.CheckTableStmt) error {
+	return moerr.NewNotSupported(execCtx.reqCtx, "CHECK TABLE is not supported in MatrixOne")
+}
+
+func handleShowProfileStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ShowProfileStmt) error {
+	return moerr.NewNotSupported(execCtx.reqCtx, "SHOW PROFILE is not supported in MatrixOne")
 }
 
 func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt) error {

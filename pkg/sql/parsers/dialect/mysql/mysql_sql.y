@@ -19,45 +19,10 @@ import (
     "fmt"
     "strings"
 
-    "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/util"
     "github.com/matrixorigin/matrixone/pkg/defines"
 )
-
-func sqlTaskNodeString(node tree.NodeFormatter) string {
-    if node == nil {
-        return ""
-    }
-    return tree.StringWithOpts(node, dialect.MYSQL, tree.WithSingleQuoteString())
-}
-
-func sqlTaskBodyString(stmt tree.Statement) string {
-    compound, ok := stmt.(*tree.CompoundStmt)
-    if !ok || compound == nil {
-        return ""
-    }
-    parts := make([]string, 0, len(compound.Stmts))
-    for _, s := range compound.Stmts {
-        if s != nil {
-            parts = append(parts, tree.StringWithOpts(s, dialect.MYSQL, tree.WithSingleQuoteString()))
-        }
-    }
-    return strings.Join(parts, "; ")
-}
-
-func sqlTaskInt64(v any) int64 {
-    switch value := v.(type) {
-    case int:
-        return int64(value)
-    case int64:
-        return value
-    case uint64:
-        return int64(value)
-    default:
-        panic(fmt.Sprintf("unexpected integral type %T", v))
-    }
-}
 %}
 
 %struct {
@@ -144,8 +109,6 @@ func sqlTaskInt64(v any) int64 {
     comparisonOp tree.ComparisonOp
     referenceOptionType tree.ReferenceOptionType
     referenceOnRecord *tree.ReferenceOnRecord
-    sqlTaskSchedule *tree.SQLTaskSchedule
-    int64Val int64
 
     select *tree.Select
     selectStatement tree.SelectStatement
@@ -259,6 +222,8 @@ func sqlTaskInt64(v any) int64 {
     userIdentified *tree.AccountIdentified
     accountRole *tree.Role
     showType tree.ShowType
+    checkTableOption tree.CheckTableOption
+    analyzeTableEntries []*tree.AnalyzeTableEntry
     joinTableExpr *tree.JoinTableExpr
     applyTableExpr *tree.ApplyTableExpr
 
@@ -440,7 +405,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> MAX_QUERIES_PER_HOUR MAX_UPDATES_PER_HOUR MAX_CONNECTIONS_PER_HOUR MAX_USER_CONNECTIONS
 
 // Explain
-%token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
+%token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES PROFILE
 
 // Load
 %token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD JSONTYPE
@@ -454,7 +419,7 @@ func sqlTaskInt64(v any) int64 {
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES SEQUENCES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS ROLES RULE RULES
-%token <str> TABLE_NUMBER COLUMN_NUMBER TABLE_VALUES TABLE_SIZE TASKS RUNS
+%token <str> TABLE_NUMBER COLUMN_NUMBER TABLE_VALUES TABLE_SIZE
 
 // SET tokens
 %token <str> NAMES GLOBAL PERSIST SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
@@ -478,7 +443,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> RECURSIVE CONFIG DRAINER
 
 // Source
-%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL TASK RESUME SCHEDULE TIMEZONE TIMEOUT
+%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL TASK RESUME
 
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
@@ -560,7 +525,7 @@ func sqlTaskInt64(v any) int64 {
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
-%type <statement> create_source_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt create_sql_task_stmt drop_sql_task_stmt alter_sql_task_stmt show_sql_tasks_stmt show_sql_task_runs_stmt
+%type <statement> create_source_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt show_rules_on_role_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
@@ -574,7 +539,7 @@ func sqlTaskInt64(v any) int64 {
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt
-%type <statement> analyze_stmt
+%type <statement> analyze_stmt check_table_stmt show_profile_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt
 %type <statement> replace_stmt
 %type <statement> do_stmt
@@ -584,10 +549,6 @@ func sqlTaskInt64(v any) int64 {
 %type <statement> mo_dump_stmt
 %type <statement> load_extension_stmt
 %type <statement> kill_stmt
-%type <sqlTaskSchedule> sql_task_schedule_opt
-%type <expr> sql_task_when_opt sql_task_when_expr
-%type <str> sql_task_timezone_opt sql_task_timeout_opt sql_task_runs_for_opt
-%type <int64Val> sql_task_retry_opt sql_task_runs_limit_opt
 %type <statement> backup_stmt snapshot_restore_stmt
 %type <statement> create_cdc_stmt show_cdc_stmt pause_cdc_stmt drop_cdc_stmt resume_cdc_stmt restart_cdc_stmt
 %type <rowsExprs> row_constructor_list grouping_sets 
@@ -647,6 +608,9 @@ func sqlTaskInt64(v any) int64 {
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 %type <selectLockInfo> select_lock_opt
 %type <upgrade_target> target
+%type <analyzeTableEntries> analyze_table_list
+%type <checkTableOption> check_table_option_opt
+%type <int64Val> for_query_opt
 
 %type <functionName> func_name
 %type <funcArgs> func_args_list_opt func_args_list
@@ -1001,6 +965,8 @@ normal_stmt:
 |   show_stmt
 |   alter_stmt
 |   analyze_stmt
+|   check_table_stmt
+|   show_profile_stmt
 |   update_stmt
 |   use_stmt
 |   set_stmt
@@ -3152,19 +3118,6 @@ update_no_with_stmt:
             Where: $7,
         }
     }
-|    UPDATE priority_opt ignore_opt table_reference SET update_list FROM table_references where_expression_opt
-    {
-        // PostgreSQL-style UPDATE target SET ... FROM source_tables WHERE ...
-        // The target table is kept in Tables; FROM-clause sources are stored
-        // separately in From so the binder/planner can treat them as read-only
-        // join sources rather than DML targets.
-        $$ = &tree.Update{
-            Tables: tree.TableExprs{$4},
-            Exprs:  $6,
-            From:   &tree.From{Tables: tree.TableExprs{$8}},
-            Where:  $9,
-        }
-    }
 
 update_list:
     update_value
@@ -3260,13 +3213,7 @@ prepare_stmt:
     }
 
 execute_stmt:
-    execute_sym TASK ident
-    {
-        $$ = &tree.ExecuteSQLTask{
-            Name: tree.Identifier($3.Compare()),
-        }
-    }
-|   execute_sym stmt_name
+    execute_sym stmt_name
     {
         $$ = tree.NewExecute(tree.Identifier($2))
     }
@@ -3452,9 +3399,55 @@ utility_option_arg:
 |   STRING                      { $$ = $1 }
 
 analyze_stmt:
-    ANALYZE TABLE table_name '(' column_list ')'
+    ANALYZE TABLE analyze_table_list
     {
-        $$ = tree.NewAnalyzeStmt($3, $5)
+        $$ = tree.NewAnalyzeStmt($3)
+    }
+
+analyze_table_list:
+    table_name '(' column_list ')'
+    {
+        $$ = []*tree.AnalyzeTableEntry{{Table: $1, Cols: $3}}
+    }
+|   analyze_table_list ',' table_name '(' column_list ')'
+    {
+        $$ = append($1, &tree.AnalyzeTableEntry{Table: $3, Cols: $5})
+    }
+
+check_table_stmt:
+    CHECK TABLE table_name_list check_table_option_opt
+    {
+        $$ = tree.NewCheckTableStmt($3, $4)
+    }
+
+check_table_option_opt:
+    /* empty */
+    {
+        $$ = tree.CheckTableOptionNone
+    }
+|   EXTENDED
+    {
+        $$ = tree.CheckTableOptionExtended
+    }
+|   FOR UPGRADE
+    {
+        $$ = tree.CheckTableOptionForUpgrade
+    }
+
+show_profile_stmt:
+    SHOW PROFILE for_query_opt limit_opt
+    {
+        $$ = tree.NewShowProfileStmt($3, $4)
+    }
+
+for_query_opt:
+    /* empty */
+    {
+        $$ = 0
+    }
+|   FOR QUERY INTEGRAL
+    {
+        $$ = $3.(int64)
     }
 
 upgrade_stmt:
@@ -3507,7 +3500,6 @@ alter_stmt:
 |   alter_sequence_stmt
 |   alter_pitr_stmt
 |   alter_role_stmt
-|   alter_sql_task_stmt
 |   rename_stmt
 // |    alter_ddl_stmt
 
@@ -3634,55 +3626,6 @@ alter_pitr_stmt:
        var pitrValue = $6
        var pitrUnit = $7
        $$ = tree.NewAlterPitr(ifExists, name, pitrValue, pitrUnit)
-    }
-
-alter_sql_task_stmt:
-    ALTER TASK ident SUSPEND
-    {
-        $$ = &tree.AlterSQLTask{
-            Name: tree.Identifier($3.Compare()),
-            Action: tree.AlterTaskSuspend,
-        }
-    }
-|   ALTER TASK ident RESUME
-    {
-        $$ = &tree.AlterSQLTask{
-            Name: tree.Identifier($3.Compare()),
-            Action: tree.AlterTaskResume,
-        }
-    }
-|   ALTER TASK ident SET SCHEDULE STRING sql_task_timezone_opt
-    {
-        $$ = &tree.AlterSQLTask{
-            Name: tree.Identifier($3.Compare()),
-            Action: tree.AlterTaskSetSchedule,
-            CronExpr: $6,
-            Timezone: $7,
-        }
-    }
-|   ALTER TASK ident SET WHEN '(' sql_task_when_expr ')'
-    {
-        $$ = &tree.AlterSQLTask{
-            Name: tree.Identifier($3.Compare()),
-            Action: tree.AlterTaskSetWhen,
-            GateCondition: sqlTaskNodeString($7),
-        }
-    }
-|   ALTER TASK ident SET RETRY INTEGRAL
-    {
-        $$ = &tree.AlterSQLTask{
-            Name: tree.Identifier($3.Compare()),
-            Action: tree.AlterTaskSetRetry,
-            RetryLimit: sqlTaskInt64($6),
-        }
-    }
-|   ALTER TASK ident SET TIMEOUT STRING
-    {
-        $$ = &tree.AlterSQLTask{
-            Name: tree.Identifier($3.Compare()),
-            Action: tree.AlterTaskSetTimeout,
-            Timeout: $6,
-        }
     }
 
 alter_role_stmt:
@@ -4424,47 +4367,6 @@ show_stmt:
 |   show_logservice_stores_stmt
 |   show_logservice_settings_stmt
 |   show_rules_on_role_stmt
-|   show_sql_tasks_stmt
-|   show_sql_task_runs_stmt
-
-show_sql_tasks_stmt:
-    SHOW TASKS
-    {
-        $$ = &tree.ShowSQLTasks{}
-    }
-
-show_sql_task_runs_stmt:
-    SHOW TASK RUNS sql_task_runs_for_opt sql_task_runs_limit_opt
-    {
-        stmt := &tree.ShowSQLTaskRuns{}
-        if $4 != "" {
-            stmt.TaskName = tree.Identifier($4)
-            stmt.HasTask = true
-        }
-        if $5 >= 0 {
-            stmt.Limit = $5
-            stmt.HasLimit = true
-        }
-        $$ = stmt
-    }
-
-sql_task_runs_for_opt:
-    {
-        $$ = ""
-    }
-|   FOR ident
-    {
-        $$ = $2.Compare()
-    }
-
-sql_task_runs_limit_opt:
-    {
-        $$ = -1
-    }
-|   LIMIT INTEGRAL
-    {
-        $$ = sqlTaskInt64($2)
-    }
 
 show_logservice_replicas_stmt:
     SHOW LOGSERVICE REPLICAS
@@ -5040,16 +4942,6 @@ drop_ddl_stmt:
 |   drop_snapshot_stmt
 |   drop_pitr_stmt
 |   drop_cdc_stmt
-|   drop_sql_task_stmt
-
-drop_sql_task_stmt:
-    DROP TASK exists_opt ident
-    {
-        $$ = &tree.DropSQLTask{
-            IfExists: $3,
-            Name: tree.Identifier($4.Compare()),
-        }
-    }
 
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
@@ -6906,7 +6798,6 @@ create_stmt:
 |   create_snapshot_stmt
 |   create_pitr_stmt
 |   create_cdc_stmt
-|   create_sql_task_stmt
 
 create_ddl_stmt:
     create_table_stmt
@@ -6922,85 +6813,6 @@ create_ddl_stmt:
 |   pause_daemon_task_stmt
 |   cancel_daemon_task_stmt
 |   resume_daemon_task_stmt
-
-create_sql_task_stmt:
-    CREATE TASK not_exists_opt ident sql_task_schedule_opt sql_task_when_opt sql_task_retry_opt sql_task_timeout_opt AS block_stmt
-    {
-        cronExpr := ""
-        timezone := ""
-        if $5 != nil {
-            cronExpr = $5.CronExpr
-            timezone = $5.Timezone
-        }
-        $$ = &tree.CreateSQLTask{
-            IfNotExists: $3,
-            Name: tree.Identifier($4.Compare()),
-            CronExpr: cronExpr,
-            Timezone: timezone,
-            GateCondition: sqlTaskNodeString($6),
-            RetryLimit: $7,
-            Timeout: $8,
-            SQLBody: sqlTaskBodyString($10),
-        }
-    }
-
-sql_task_schedule_opt:
-    {
-        $$ = nil
-    }
-|   SCHEDULE STRING sql_task_timezone_opt
-    {
-        $$ = &tree.SQLTaskSchedule{
-            CronExpr: $2,
-            Timezone: $3,
-        }
-    }
-
-sql_task_timezone_opt:
-    {
-        $$ = ""
-    }
-|   TIMEZONE STRING
-    {
-        $$ = $2
-    }
-
-sql_task_when_opt:
-    {
-        $$ = tree.Expr(nil)
-    }
-|   WHEN '(' sql_task_when_expr ')'
-    {
-        $$ = $3
-    }
-
-sql_task_when_expr:
-    expression
-    {
-        $$ = $1
-    }
-	|   select_no_parens
-	    {
-	        $$ = tree.NewSubquery($1, false)
-	    }
-
-sql_task_retry_opt:
-    {
-        $$ = 0
-    }
-|   RETRY INTEGRAL
-    {
-        $$ = sqlTaskInt64($2)
-    }
-
-sql_task_timeout_opt:
-    {
-        $$ = ""
-    }
-|   TIMEOUT STRING
-    {
-        $$ = $2
-    }
 
 create_extension_stmt:
     CREATE EXTENSION extension_lang AS extension_name FILE STRING
@@ -9911,6 +9723,7 @@ table_name:
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(dbName), ExplicitSchema: true}
         $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $4)
     }
+
 table_snapshot_opt:
     {
         $$ = nil
@@ -11804,7 +11617,7 @@ function_call_generic:
     {
         name := tree.NewUnresolvedColName($1)
         str := strings.ToLower($3)
-        timeUinit := tree.NewTimeUnitExpr(str)
+        timeUinit := tree.NewNumVal(str, str, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -12008,7 +11821,7 @@ function_call_nonkeyword:
 	{
         name := tree.NewUnresolvedColName($1)
         str := strings.ToLower($3)
-        arg1 := tree.NewTimeUnitExpr(str)
+        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
 		$$ =  &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -12295,7 +12108,7 @@ interval_expr:
     {
         name := tree.NewUnresolvedColName($1)
         str := strings.ToLower($3)
-        arg2 := tree.NewTimeUnitExpr(str)
+        arg2 := tree.NewNumVal(str, str, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -13871,6 +13684,7 @@ non_reserved_keyword:
 |   QUERY
 |   PAUSE
 |   PROFILES
+|   PROFILE
 |   ROLE
 |   RULE
 |   RULES
@@ -13913,6 +13727,7 @@ non_reserved_keyword:
 |   SUBPARTITION
 |   SIMPLE
 |   SAVEPOINT
+|   TASK
 |   TEXT
 |   THAN
 |   TINYBLOB
@@ -14091,8 +13906,6 @@ non_reserved_keyword:
 |	TABLE_NUMBER
 |	TABLE_VALUES
 |	TABLE_SIZE
-|   TASK
-|   TASKS
 |	COLUMN_NUMBER
 |	RETURNS
 |	QUERY_RESULT
@@ -14112,11 +13925,7 @@ non_reserved_keyword:
 |   SETS
 |   CUBE
 |   RETRY
-|   RUNS
-|   SCHEDULE
 |	INTERNAL
-|   TIMEOUT
-|   TIMEZONE
 |   LAG
 |   LEAD
 |   FIRST_VALUE
