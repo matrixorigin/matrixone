@@ -10963,6 +10963,7 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 	return nil
 }
+
 // DateTrunc truncates a datetime value to the specified precision.
 // Supported units: year, quarter, month, week, day, hour, minute, second.
 func DateTrunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -11095,7 +11096,7 @@ func dateTruncCore(unit string, dt types.Datetime) (types.Datetime, error) {
 	hour := dt.Hour()
 	minute := dt.Minute()
 	sec := dt.Sec()
-	msec := uint32(dt.MicroSec())
+	var msec uint32
 
 	switch unit {
 	case "year":
