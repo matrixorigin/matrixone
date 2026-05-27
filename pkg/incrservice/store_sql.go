@@ -317,14 +317,11 @@ func (s *sqlStore) SetOffset(
 	} else {
 		opts = opts.WithDisableIncrStatement()
 	}
-	// The WHERE clause includes "and offset < %d" so that the UPDATE only raises
-	// the offset — it never lowers it. If no row matches (affectedRows==0), the
-	// current offset is already >= the target and the no-op is correct.
 	res, err := s.exec.Exec(
 		ctx,
 		fmt.Sprintf(
-			"update %s set offset = %d where table_id = %d and col_name = '%s' and offset < %d",
-			incrTableName, offset, tableID, colName, offset,
+			"update %s set offset = %d where table_id = %d and col_name = '%s'",
+			incrTableName, offset, tableID, colName,
 		),
 		opts,
 	)
