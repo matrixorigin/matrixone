@@ -680,10 +680,10 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 							removed.close(proc)
 						}
 					}
+					if out.Size() >= maxBatchSizeToSend {
+						break
+					}
 					if rows >= nextSizeCheck {
-						if out.Size() >= maxBatchSizeToSend {
-							break
-						}
 						nextSizeCheck = rows + batchSizeCheckInterval
 					}
 					continue
@@ -839,10 +839,10 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 						removed.close(proc)
 					}
 				}
+				if ctr.buf.Size() >= maxBatchSizeToSend {
+					break
+				}
 				if rows >= nextSizeCheck {
-					if ctr.buf.Size() >= maxBatchSizeToSend {
-						break
-					}
 					nextSizeCheck = rows + batchSizeCheckInterval
 				}
 				continue
