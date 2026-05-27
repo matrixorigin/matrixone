@@ -130,7 +130,7 @@ func (s *memStore) Allocate(
 			c = &cols[i]
 		}
 	}
-	if !ok {
+	if c == nil {
 		panic("missing incr column record")
 	}
 
@@ -166,7 +166,7 @@ func (s *memStore) UpdateMinValue(
 			c = &cols[i]
 		}
 	}
-	if !ok {
+	if c == nil {
 		panic("missing incr column record")
 	}
 

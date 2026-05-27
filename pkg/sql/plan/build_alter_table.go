@@ -88,6 +88,13 @@ func tableHasAutoIncrementColumn(tableDef *TableDef) bool {
 	return false
 }
 
+func autoIncrementValueToOffset(value uint64) uint64 {
+	if value > 0 {
+		return value - 1
+	}
+	return 0
+}
+
 func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, error) {
 	ctx := cctx.GetContext()
 	// 1. get origin table name and Schema name
@@ -210,9 +217,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 				return nil, moerr.NewInvalidInputf(ctx,
 					"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
 			}
-			copyTableDef.AutoIncrOffset = uint64(0)
-			if option.Value > 0 {
-				copyTableDef.AutoIncrOffset = uint64(option.Value) - 1
+			desired := autoIncrementValueToOffset(uint64(option.Value))
+			if desired > copyTableDef.AutoIncrOffset {
+				copyTableDef.AutoIncrOffset = desired
 			}
 		case *tree.AlterTableOrderByColumnClause:
 			err = OrderByColumn(cctx, alterTablePlan, option, alterTableCtx)

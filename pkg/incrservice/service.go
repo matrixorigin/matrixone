@@ -287,10 +287,10 @@ func (s *service) SetOffset(
 	offset uint64,
 	txnOp client.TxnOperator,
 ) error {
-	if err := s.store.SetOffset(ctx, tableID, colName, offset, txnOp); err != nil {
+	if err := s.Reload(ctx, tableID); err != nil {
 		return err
 	}
-	return s.Reload(ctx, tableID)
+	return s.store.SetOffset(ctx, tableID, colName, offset, txnOp)
 }
 
 func (s *service) Close() {
