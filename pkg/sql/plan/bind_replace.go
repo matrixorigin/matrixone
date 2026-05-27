@@ -162,6 +162,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			if err != nil {
 				return 0, err
 			}
+			ensureName2ColIndexForReplace(idxTableDefs[i])
 
 			// Spatial indexes look up the old index-table row via the primary
 			// column (indexLookupColumnName returns IndexTablePrimaryColName).
@@ -216,6 +217,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			if err != nil {
 				return 0, err
 			}
+			ensureName2ColIndexForReplace(idxTableDefs[i])
 			oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTablePrimaryColName] = oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
 
 			if !indexTableStoresSerializedKey(idxDef) {
@@ -381,6 +383,35 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}, bindCtx)
 	}
 
+	oldMainRowIDPos := oldColName2Idx[tableDef.Name+"."+catalog.Row_ID]
+	oldMainPKPos := oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+	replaceDedupOldColList := func(first [2]int32) []plan.ColRef {
+		oldCols := make([]plan.ColRef, 0, 3+len(tableDef.Indexes))
+		seen := make(map[[2]int32]struct{}, 3+len(tableDef.Indexes))
+		appendOldCol := func(pos [2]int32) {
+			if _, ok := seen[pos]; ok {
+				return
+			}
+			seen[pos] = struct{}{}
+			oldCols = append(oldCols, plan.ColRef{
+				RelPos: pos[0],
+				ColPos: pos[1],
+			})
+		}
+		appendOldCol(first)
+		appendOldCol(oldMainRowIDPos)
+		appendOldCol(oldMainPKPos)
+		for i, idxDef := range tableDef.Indexes {
+			if idxTableDefs[i] == nil {
+				continue
+			}
+			if pos, ok := oldColName2Idx[idxTableDefs[i].Name+"."+indexLookupColumnName(idxDef)]; ok {
+				appendOldCol(pos)
+			}
+		}
+		return oldCols
+	}
+
 	// detect primary key confliction (skip for fake PK tables)
 	if !isFakePK {
 		scanTag := builder.genNewBindTag()
@@ -438,7 +469,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		oldPkPos := oldColName2Idx[tableDef.Name+"."+pkName]
 
-		dedupJoinCtx := &plan.DedupJoinCtx{}
+		dedupJoinCtx := &plan.DedupJoinCtx{
+			DedupBuildKeepLast: true,
+		}
 		if useMergedMainScan {
 			// Merged-scan mode: only capture the old columns that downstream
 			// actually needs (RowID, PK, and index-key columns), not every
@@ -473,12 +506,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		} else {
 			// Legacy DelRows path: used when merged-scan is disabled (e.g.
 			// tables with multi-part indexes).
-			dedupJoinCtx.OldColList = []plan.ColRef{
-				{
-					RelPos: oldPkPos[0],
-					ColPos: oldPkPos[1],
-				},
-			}
+			dedupJoinCtx.OldColList = replaceDedupOldColList(oldPkPos)
 		}
 
 		dedupJoinNode := &plan.Node{
@@ -573,12 +601,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			DedupColName:      dedupColName,
 			DedupColTypes:     dedupColTypes,
 			DedupJoinCtx: &plan.DedupJoinCtx{
-				OldColList: []plan.ColRef{
-					{
-						RelPos: oldPkPos[0],
-						ColPos: oldPkPos[1],
-					},
-				},
+				DedupBuildKeepLast: true,
+				OldColList:         replaceDedupOldColList(oldPkPos),
 			},
 		}, bindCtx)
 	}
@@ -681,6 +705,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			PrimaryColRelPos:   finalProjTag,
 			PrimaryColTyp:      finalProjList[newPkIdx].Typ,
 		})
+		insertPkColIdx := int32(-1)
+		for i, col := range insertCols {
+			if col.ColPos == newPkIdx {
+				insertPkColIdx = int32(i)
+				break
+			}
+		}
+		if insertPkColIdx < 0 {
+			panic("replace main table primary key column not found in insert columns")
+		}
 
 		oldRowIdPos := oldColName2Idx[tableDef.Name+"."+catalog.Row_ID]
 		deleteCols[0].RelPos = finalProjTag
@@ -716,10 +750,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		})
 
 		updateCtxList = append(updateCtxList, &plan.UpdateCtx{
-			ObjRef:     objRef,
-			TableDef:   tableDef,
-			InsertCols: insertCols,
-			DeleteCols: deleteCols,
+			ObjRef:             objRef,
+			TableDef:           tableDef,
+			InsertCols:         insertCols,
+			DeleteCols:         deleteCols,
+			SkipInsertOnNullPk: true,
+			InsertPkColIdx:     insertPkColIdx,
 		})
 	}
 
@@ -743,7 +779,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}
 
 		oldRowIdPos := int32(len(finalProjList))
-		oldColRef := oldColName2Idx[idxDef.IndexTableName+"."+catalog.Row_ID]
+		oldRowIDKey := idxTableDefs[i].Name + "." + catalog.Row_ID
+		oldColRef, ok := oldColName2Idx[oldRowIDKey]
+		if !ok {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"bind replace err, can not find old index rowid colName = %s", oldRowIDKey)
+		}
 		rowIdExpr := &plan.Expr{
 			Typ: idxTableDefs[i].Cols[idxTableDefs[i].Name2ColIndex[catalog.Row_ID]].Typ,
 			Expr: &plan.Expr_Col{
@@ -758,7 +799,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		oldIdxPos := int32(len(finalProjList))
 		lookupColName := indexLookupColumnName(idxDef)
 		lookupColIdx := idxTableDefs[i].Name2ColIndex[lookupColName]
-		oldColRef = oldColName2Idx[idxDef.IndexTableName+"."+lookupColName]
+		oldLookupKey := idxTableDefs[i].Name + "." + lookupColName
+		oldColRef, ok = oldColName2Idx[oldLookupKey]
+		if !ok {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"bind replace err, can not find old index lookup colName = %s", oldLookupKey)
+		}
 		idxExpr := &plan.Expr{
 			Typ: idxTableDefs[i].Cols[lookupColIdx].Typ,
 			Expr: &plan.Expr_Col{
@@ -834,6 +880,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	}, bindCtx)
 
 	return lastNodeID, nil
+}
+
+func ensureName2ColIndexForReplace(tableDef *TableDef) {
+	if len(tableDef.Name2ColIndex) > 0 {
+		return
+	}
+	tableDef.Name2ColIndex = make(map[string]int32, len(tableDef.Cols))
+	for colIdx, col := range tableDef.Cols {
+		tableDef.Name2ColIndex[col.Name] = int32(colIdx)
+	}
 }
 
 func (builder *QueryBuilder) appendNodesForReplaceStmt(
