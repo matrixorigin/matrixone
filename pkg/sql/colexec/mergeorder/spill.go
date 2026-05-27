@@ -48,10 +48,6 @@ func (ctr *container) currentMemoryUsage() int64 {
 	return ctr.spillMemUsage
 }
 
-func (ctr *container) shouldSpill() bool {
-	return ctr.spillThreshold > 0 && ctr.currentMemoryUsage() > ctr.spillThreshold
-}
-
 func (ctr *container) evaluateOrderColumns(proc *process.Process, bat *batch.Batch) ([]*vector.Vector, error) {
 	var inputs [1]*batch.Batch
 	inputs[0] = bat
@@ -583,9 +579,7 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 						if out != nil {
 							out.Clean(proc.Mp())
 						}
-						if outOrder != nil {
-							outOrder.Clean(proc.Mp())
-						}
+						outOrder.Clean(proc.Mp())
 						run.file.Close()
 						return nil, err
 					}
