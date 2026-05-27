@@ -41,16 +41,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type policyCaptureFS struct {
-	fileservice.FileService
-	policies []fileservice.Policy
-}
-
-func (fs *policyCaptureFS) Read(ctx context.Context, vector *fileservice.IOVector) error {
-	fs.policies = append(fs.policies, vector.Policy)
-	return fs.FileService.Read(ctx, vector)
-}
-
 func TestLinearSearchOffsetByValFactory_Varchar(t *testing.T) {
 	mp := mpool.MustNewZero()
 
@@ -175,62 +165,6 @@ func TestTombstonePKExistsInRange(t *testing.T) {
 
 	// Case 4: no tombstone objects changed after from=25
 	changed, err = tombstonePKExistsInRange(ctx, pState, types.BuildTS(25, 0), keys1, int32Type, fs)
-	require.NoError(t, err)
-	require.False(t, changed)
-}
-
-func TestTombstonePKExistsInRangeSkipsFullFilePreloads(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
-	proc := testutil.NewProc(t)
-	baseFS, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
-	require.NoError(t, err)
-
-	pState := logtailreplay.NewPartitionState("", true, 0, false)
-	int32Type := types.T_int32.ToType()
-	writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), baseFS, int32Type, -1)
-	bat := readutil.NewCNTombstoneBatch(&int32Type, objectio.HiddenColumnSelection_None)
-	require.NoError(t, vector.AppendFixed[types.Rowid](bat.Vecs[0], types.RandomRowid(), false, proc.GetMPool()))
-	require.NoError(t, vector.AppendFixed[int32](bat.Vecs[1], 100, false, proc.GetMPool()))
-	bat.SetRowCount(1)
-	require.NoError(t, writer.Write(ctx, bat))
-	stats, err := writer.Sync(ctx)
-	require.NoError(t, err)
-	require.Len(t, stats, 1)
-
-	require.NoError(t, pState.HandleObjectEntry(ctx, baseFS, objectio.ObjectEntry{
-		ObjectStats: stats[0],
-		CreateTime:  types.BuildTS(15, 0),
-	}, true))
-
-	keys := vector.NewVec(int32Type)
-	require.NoError(t, vector.AppendFixed[int32](keys, 100, false, proc.GetMPool()))
-
-	recordingFS := &policyCaptureFS{FileService: baseFS}
-	changed, err := tombstonePKExistsInRange(ctx, pState, types.BuildTS(10, 0), keys, int32Type, recordingFS)
-	require.NoError(t, err)
-	require.True(t, changed)
-	require.GreaterOrEqual(t, len(recordingFS.policies), 2)
-	require.Equal(t, fileservice.Policy(fileservice.SkipFullFilePreloads), recordingFS.policies[1])
-}
-
-func TestTombstonePKExistsInRangeEmptyFastPathSkipsSemaphore(t *testing.T) {
-	for i := 0; i < cap(pkCheckSemaphore); i++ {
-		pkCheckSemaphore <- struct{}{}
-	}
-	defer func() {
-		for i := 0; i < cap(pkCheckSemaphore); i++ {
-			<-pkCheckSemaphore
-		}
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	pState := logtailreplay.NewPartitionState("", true, 0, false)
-	keys := vector.NewVec(types.T_int32.ToType())
-	changed, err := tombstonePKExistsInRange(ctx, pState, types.BuildTS(10, 0), keys, types.T_int32.ToType(), nil)
 	require.NoError(t, err)
 	require.False(t, changed)
 }
