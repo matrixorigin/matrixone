@@ -48,6 +48,16 @@ func (ctr *container) currentMemoryUsage() int64 {
 	return ctr.spillMemUsage
 }
 
+func (ctr *container) shouldSpill(incomingBatchSize int64) bool {
+	if ctr.spilling {
+		return true
+	}
+	if ctr.spillThreshold <= 0 {
+		return false
+	}
+	return ctr.currentMemoryUsage()+incomingBatchSize > ctr.spillThreshold
+}
+
 func (ctr *container) evaluateOrderColumns(proc *process.Process, bat *batch.Batch) ([]*vector.Vector, error) {
 	var inputs [1]*batch.Batch
 	inputs[0] = bat

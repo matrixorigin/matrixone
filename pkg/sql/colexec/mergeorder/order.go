@@ -265,7 +265,7 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 				continue
 			}
 
-			if ctr.spilling || (ctr.spillThreshold > 0 && ctr.currentMemoryUsage()+int64(input.Batch.Size()) > ctr.spillThreshold) {
+			if ctr.shouldSpill(int64(input.Batch.Size())) {
 				if !ctr.spilling {
 					ctr.generateCompares(mergeOrder.OrderBySpecs)
 					if err = ctr.spillCachedRuns(proc, analyzer); err != nil {
@@ -290,7 +290,7 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 				bat.Clean(proc.Mp())
 				return vm.CancelResult, err
 			}
-			if ctr.spillThreshold > 0 && ctr.currentMemoryUsage() > ctr.spillThreshold {
+			if ctr.shouldSpill(0) {
 				if err = ctr.spillCachedRuns(proc, analyzer); err != nil {
 					return vm.CancelResult, err
 				}
