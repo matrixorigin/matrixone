@@ -164,6 +164,9 @@ null
 SELECT ACOS(NULL);
 ➤ ACOS(null)[8,54,0]  𝄀
 null
+SELECT DEGREES(NULL);
+➤ DEGREES(null)[8,54,0]  𝄀
+null
 SELECT ATAN(NULL);
 ➤ ATAN(null)[8,54,0]  𝄀
 null
@@ -408,3 +411,17 @@ invalid argument acos, bad value 110000
 SELECT atan(1.1e5);
 ➤ atan(1.1e5)[8,54,0]  𝄀
 1.570787235885806
+SELECT
+DEGREES(1.25),
+DEGREES(0.75),
+DEGREES(-1.25),
+DEGREES(-0.75),
+DEGREES(0),
+DEGREES(PI()),
+DEGREES(PI() / 2),
+DEGREES(PI() * 2),
+DEGREES(PI() * 3),
+DEGREES(PI() * -1),
+DEGREES(NULL);
+➤ DEGREES(1.25)[8,54,0]  ¦  DEGREES(0.75)[8,54,0]  ¦  DEGREES(-1.25)[8,54,0]  ¦  DEGREES(-0.75)[8,54,0]  ¦  DEGREES(0)[8,54,0]  ¦  DEGREES(PI())[8,54,0]  ¦  DEGREES(PI() / 2)[8,54,0]  ¦  DEGREES(PI() * 2)[8,54,0]  ¦  DEGREES(PI() * 3)[8,54,0]  ¦  DEGREES(PI() * -1)[8,54,0]  ¦  DEGREES(null)[8,54,0]  𝄀
+71.6197243913529  ¦  42.97183463481174  ¦  -71.6197243913529  ¦  -42.97183463481174  ¦  0.0  ¦  180.0  ¦  90.0  ¦  360.0  ¦  540.0  ¦  -180.0  ¦  null
