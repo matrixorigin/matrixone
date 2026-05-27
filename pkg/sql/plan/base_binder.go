@@ -1790,6 +1790,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 	case "pow":
 		name = "power"
+	case "atan2":
+		name = "atan"
 	}
 
 	// get args(exprs) & types
