@@ -568,13 +568,29 @@ func (ctr *container) pickFirstSpillReader() int {
 	return 0
 }
 
+func (ctr *container) fixSpillHeapAfterAdvance(idx int) {
+	switch len(ctr.spillReaders) {
+	case 0, 1:
+		return
+	case 2:
+		other := 1 - idx
+		if other < 0 || other >= len(ctr.spillReaders) {
+			other = 1
+		}
+		if ctr.compareSpillReaders(idx, other) > 0 {
+			ctr.Swap(idx, other)
+		}
+		return
+	default:
+		heap.Fix(ctr, idx)
+	}
+}
+
 func (ctr *container) advanceSpillReaderByChunk(proc *process.Process, idx int, chunk int) error {
 	reader := ctr.spillReaders[idx]
 	reader.rowIdx += int64(chunk)
 	if reader.rowIdx < int64(reader.batch.RowCount()) {
-		if len(ctr.spillReaders) > 1 {
-			heap.Fix(ctr, idx)
-		}
+		ctr.fixSpillHeapAfterAdvance(idx)
 		return nil
 	}
 	ok, err := reader.readNextBatch(proc, ctr)
@@ -586,9 +602,7 @@ func (ctr *container) advanceSpillReaderByChunk(proc *process.Process, idx int, 
 		removed.close(proc)
 		return nil
 	}
-	if len(ctr.spillReaders) > 1 {
-		heap.Fix(ctr, idx)
-	}
+	ctr.fixSpillHeapAfterAdvance(idx)
 	return nil
 }
 
