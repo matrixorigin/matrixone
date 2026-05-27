@@ -170,3 +170,56 @@ create table t1(a varchar(100));
 insert into t1 values ("a");
 select a, case when a="a" then 1 when upper(a)="b" then 2 end from t1;
 drop table if exists t1;
+
+-- @case
+-- @desc:test for case_when expression with mixed decimal scales
+-- @label:bvt
+SELECT
+  7.01970 * CAST(-58140.00 AS DECIMAL(23,2)) AS direct_mul,
+  CASE WHEN 'USD' = 'RMB'
+       THEN CAST(-58140.00 AS DECIMAL(23,2))
+       ELSE 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
+  END AS bug_case;
+
+-- @case
+-- @desc:test for case_when expression with then branch decimal cast
+-- @label:bvt
+SELECT
+  CASE WHEN 'USD' = 'USD'
+       THEN CAST(-58140.00 AS DECIMAL(23,2))
+       ELSE 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
+  END AS bug_case_then;
+
+-- @case
+-- @desc:test for iff expression with mixed decimal scales
+-- @label:bvt
+SELECT
+  IFF('USD' = 'USD',
+      CAST(-58140.00 AS DECIMAL(23,2)),
+      7.01970 * CAST(-58140.00 AS DECIMAL(23,2))) AS bug_iff;
+
+-- @case
+-- @desc:test for case_when expression with decimal128 branches promoting to decimal256 result type
+-- @label:bvt
+SELECT
+  CASE WHEN 1 = 1
+       THEN CAST(1 AS DECIMAL(38,0))
+       ELSE CAST(0 AS DECIMAL(38,20))
+  END AS case_decimal256_then;
+SELECT
+  CASE WHEN 1 = 2
+       THEN CAST(1 AS DECIMAL(38,0))
+       ELSE CAST(0 AS DECIMAL(38,20))
+  END AS case_decimal256_else;
+
+-- @case
+-- @desc:test for iff expression with decimal128 branches promoting to decimal256 result type
+-- @label:bvt
+SELECT
+  IFF(1 = 1,
+      CAST(1 AS DECIMAL(38,0)),
+      CAST(0 AS DECIMAL(38,20))) AS iff_decimal256_true;
+SELECT
+  IFF(1 = 2,
+      CAST(1 AS DECIMAL(38,0)),
+      CAST(0 AS DECIMAL(38,20))) AS iff_decimal256_false;

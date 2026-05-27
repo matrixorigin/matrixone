@@ -1525,19 +1525,18 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			return err
 		}
 
-		i, j := 0, len(txn.writes)-1
-		for i <= j {
+		n := 0
+		for i := range txn.writes {
 			if txn.writes[i].bat == nil {
-				txn.writes[i], txn.writes[j] = txn.writes[j], txn.writes[i]
-				j--
-			} else {
-				i++
+				continue
 			}
+			txn.writes[n] = txn.writes[i]
+			n++
 		}
 
-		txn.writes = txn.writes[:i]
+		txn.writes = txn.writes[:n]
 
-		for i = range txn.writes {
+		for i := range txn.writes {
 			if txn.writes[i].typ == DELETE && txn.writes[i].bat.RowCount() > 1 {
 				if err := mergeutil.SortColumnsByIndex(
 					txn.writes[i].bat.Vecs, 0, txn.proc.Mp()); err != nil {
