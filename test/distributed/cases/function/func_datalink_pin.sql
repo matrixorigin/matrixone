@@ -36,3 +36,20 @@ select datalink_pin(cast('unknownscheme://x/y' as datalink)) as pin_bad_scheme;
 select datalink_pin(cast(null as datalink)) as pin_null;
 
 drop table pin_t;
+
+-- 10. core regression: pin, then change what the reference resolves to, and
+--     verify the pinned value still reads the original bytes while the live
+--     reference reads the new bytes. The external object is "overwritten" out of
+--     band by repointing the stage to a different directory (the file service is
+--     write-once, so the same path cannot be overwritten in place).
+create stage pin_ow_st URL='file://$resources/into_outfile/pin_ow_a/';
+select save_file(cast('stage://pin_ow_st/f.txt' as datalink), 'version-ONE') as ow_setup_v1;
+create table pin_ow(id int, dl datalink);
+insert into pin_ow values(1, datalink_pin(cast('stage://pin_ow_st/f.txt' as datalink)));
+drop stage pin_ow_st;
+create stage pin_ow_st URL='file://$resources/into_outfile/pin_ow_b/';
+select save_file(cast('stage://pin_ow_st/f.txt' as datalink), 'version-TWO') as ow_setup_v2;
+select load_file(cast('stage://pin_ow_st/f.txt' as datalink)) as ow_live_read;
+select id, load_file(dl) as ow_pinned_read from pin_ow where id = 1;
+drop table pin_ow;
+drop stage pin_ow_st;

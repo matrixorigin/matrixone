@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -55,6 +56,22 @@ func ValidateContentHash(hash string) error {
 // LocalFS in standalone) that does not implement ETLFileService.
 func CASKey(hash string) string {
 	return casPrefix + "/" + hash[:2] + "/" + hash
+}
+
+// casHashFromKey extracts the hash from a CAS key produced by CASKey, reporting
+// whether p is such a key. Deriving ContentHash from an already-parsed MoPath
+// (rather than re-parsing the URL) keeps ContentHash and MoPath consistent even
+// for malformed input with duplicate/mixed-case contenthash params.
+func casHashFromKey(p string) (string, bool) {
+	prefix := casPrefix + "/"
+	if !strings.HasPrefix(p, prefix) {
+		return "", false
+	}
+	rest := p[len(prefix):] // "<h2>/<hash>"
+	if idx := strings.LastIndex(rest, "/"); idx >= 0 {
+		return rest[idx+1:], true
+	}
+	return "", false
 }
 
 // CASPut writes data into the content-addressed store and returns its sha256
