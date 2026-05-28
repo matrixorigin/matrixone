@@ -32,7 +32,8 @@ import (
 var _ logservice.CNHAKeeperClient = new(testHAKClient)
 
 type testHAKClient struct {
-	cfg *Config
+	cfg             *Config
+	lastCNHeartbeat pb.CNStoreHeartbeat
 }
 
 func (client *testHAKClient) Close() error {
@@ -80,6 +81,7 @@ func (client *testHAKClient) GetBackupData(ctx context.Context) ([]byte, error) 
 }
 
 func (client *testHAKClient) SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
+	client.lastCNHeartbeat = hb
 	return pb.CommandBatch{}, moerr.NewInternalErrorNoCtx("return_err")
 }
 
