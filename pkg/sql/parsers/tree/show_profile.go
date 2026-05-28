@@ -40,5 +40,7 @@ func (node *ShowProfileStmt) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *ShowProfileStmt) StmtKind() StmtKind { return frontendStatusTyp }
+
 func (node *ShowProfileStmt) GetStatementType() string { return "Show Profile" }
 func (node *ShowProfileStmt) GetQueryType() string     { return QueryTypeOth }

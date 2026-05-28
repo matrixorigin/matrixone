@@ -52,5 +52,7 @@ func (node *CheckTableStmt) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *CheckTableStmt) StmtKind() StmtKind { return frontendStatusTyp }
+
 func (node *CheckTableStmt) GetStatementType() string { return "Check Table" }
 func (node *CheckTableStmt) GetQueryType() string     { return QueryTypeOth }

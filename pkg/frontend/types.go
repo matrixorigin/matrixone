@@ -106,6 +106,8 @@ const (
 	FPShowVariables
 	FPShowErrors
 	FPAnalyzeStmt
+	FPCheckTableStmt
+	FPShowProfileStmt
 	FPExplainStmt
 	FPInternalCmdFieldList
 	FPInternalCmdGetSnapshotTs
@@ -200,6 +202,8 @@ const (
 	FPInternalExecutorExec
 	FPInternalExecutorQuery
 	FPHandleAnalyzeStmt
+	FPHandleCheckTableStmt
+	FPHandleShowProfileStmt
 	FPShowPublications
 	FPCreateCDC
 	FPPauseCDC

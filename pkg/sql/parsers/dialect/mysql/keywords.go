@@ -557,6 +557,7 @@ func init() {
 		"now":                        NOW,
 		"position":                   POSITION,
 		"pump":                       PUMP,
+		"profile":                    PROFILE,
 		"profiles":                   PROFILES,
 		"session_user":               SESSION_USER,
 		"std":                        STD,
