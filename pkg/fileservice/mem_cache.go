@@ -46,10 +46,7 @@ var (
 func SetMemoryCachePressureTargetPercent(percent int64, until time.Time) {
 	now := time.Now()
 	if percent <= 0 || !until.After(now) {
-		memCachePressureMu.Lock()
-		memCachePressureTargetPercent.Store(0)
-		memCachePressureDeadline.Store(0)
-		memCachePressureMu.Unlock()
+		ClearMemoryCachePressureTarget()
 		return
 	}
 	if percent > 100 {
@@ -68,9 +65,15 @@ func SetMemoryCachePressureTargetPercent(percent int64, until time.Time) {
 	memCachePressureDeadline.Store(until.UnixNano())
 }
 
-func clearMemoryCachePressureTargetForTest() {
+func ClearMemoryCachePressureTarget() {
+	memCachePressureMu.Lock()
 	memCachePressureTargetPercent.Store(0)
 	memCachePressureDeadline.Store(0)
+	memCachePressureMu.Unlock()
+}
+
+func clearMemoryCachePressureTargetForTest() {
+	ClearMemoryCachePressureTarget()
 }
 
 func memoryCachePressureTarget(capacity int64) (int64, bool) {

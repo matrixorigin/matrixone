@@ -582,6 +582,20 @@ func TestMemoryCachePressureAdmissionSkipsWritesAboveTarget(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestClearMemoryCachePressureTarget(t *testing.T) {
+	clearMemoryCachePressureTargetForTest()
+	defer clearMemoryCachePressureTargetForTest()
+
+	SetMemoryCachePressureTargetPercent(50, time.Now().Add(time.Minute))
+	target, ok := memoryCachePressureTarget(10)
+	assert.True(t, ok)
+	assert.Equal(t, int64(5), target)
+
+	ClearMemoryCachePressureTarget()
+	_, ok = memoryCachePressureTarget(10)
+	assert.False(t, ok)
+}
+
 func TestMemoryCachePressureAdmissionAdmitsGhostEntry(t *testing.T) {
 	ctx := context.Background()
 	clearMemoryCachePressureTargetForTest()
