@@ -138,6 +138,7 @@ func (l *store) getCheckerStateFromLeader() (*pb.CheckerState, uint64) {
 
 	if !isLeader {
 		l.taskScheduler.StopScheduleCronTask()
+		l.taskScheduler.StopScheduleSQLTask()
 		return nil, term
 	}
 	state, err := l.getCheckerState()
@@ -229,8 +230,11 @@ func (l *store) taskSchedule(state *pb.CheckerState) {
 		l.registerTaskUser()
 	case pb.TaskSchedulerRunning:
 		l.taskScheduler.StartScheduleCronTask()
+		l.taskScheduler.StartScheduleSQLTask()
 		l.taskScheduler.Schedule(state.CNState, state.Tick)
 	case pb.TaskSchedulerStopped:
+		l.taskScheduler.StopScheduleCronTask()
+		l.taskScheduler.StopScheduleSQLTask()
 	default:
 		panic("unknown TaskScheduler state")
 	}

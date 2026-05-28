@@ -16,6 +16,8 @@ package fifocache
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -87,13 +89,13 @@ func TestCacheEvict3(t *testing.T) {
 	cache := New(
 		fscache.ConstCapacity(1024),
 		ShardInt[int],
-		func(_ context.Context, _ int, _ bool, _ int64) {
+		func(_ context.Context, _ int, _ bool, _ int64, _ uint64) {
 			nSet++
 		},
 		func(_ context.Context, _ int, _ bool, _ int64) {
 			nGet++
 		},
-		func(_ context.Context, _ int, _ bool, _ int64) {
+		func(_ context.Context, _ int, _ bool, _ int64, _ uint64) {
 			nEvict++
 		},
 	)
@@ -120,11 +122,11 @@ func TestCacheEvict3(t *testing.T) {
 
 func TestDoubleFree(t *testing.T) {
 	evicts := make(map[int]int)
-	cache := New(
+	cache := New[int, int](
 		fscache.ConstCapacity(1),
 		ShardInt,
 		nil, nil,
-		func(ctx context.Context, key int, value int, size int64) {
+		func(ctx context.Context, key int, value int, size int64, _ uint64) {
 			evicts[key]++
 		},
 	)
@@ -144,11 +146,11 @@ func TestGhostQueue(t *testing.T) {
 	cache := New(
 		fscache.ConstCapacity(1),
 		ShardInt,
-		func(ctx context.Context, key int, value int, size int64) {
+		func(ctx context.Context, key int, value int, size int64, _ uint64) {
 			numSet[key]++
 		},
 		nil,
-		func(ctx context.Context, key int, value int, size int64) {
+		func(ctx context.Context, key int, value int, size int64, _ uint64) {
 			numEvict[key]++
 		},
 	)
@@ -183,5 +185,363 @@ func TestEvictWithWaitReturnsWhenContextCanceled(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("EvictWithWait did not return after context cancellation")
+	}
+}
+
+func TestCachePressureAdmissionIsAtomic(t *testing.T) {
+	cache := New[int, int](
+		fscache.ConstCapacity(100),
+		ShardInt[int],
+		nil, nil, nil,
+	)
+	cache.SetAdmissionTarget(func(capacity int64) (int64, bool) {
+		return 50, true
+	})
+
+	ctx := t.Context()
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			cache.Set(ctx, i, i, 1)
+		}(i)
+	}
+	wg.Wait()
+
+	assert.Equal(t, int64(50), cache.used())
+
+	live := 0
+	for i := 0; i < 100; i++ {
+		_, ok := cache.Get(ctx, i)
+		if ok {
+			live++
+		}
+	}
+	assert.Equal(t, 50, live)
+}
+
+func TestCachePressureAdmissionAdmitsGhostByEvictingCold(t *testing.T) {
+	ctx := t.Context()
+	cache := New[int, int](
+		fscache.ConstCapacity(3),
+		ShardInt[int],
+		nil, nil, nil,
+	)
+
+	cache.Set(ctx, 1, 1, 1)
+	cache.Set(ctx, 2, 2, 1)
+	cache.Set(ctx, 3, 3, 1)
+
+	assert.Equal(t, int64(2), cache.EvictToTargetWithWait(ctx, 2))
+	assert.False(t, cache.Contains(1))
+	assert.True(t, cache.Contains(2))
+	assert.True(t, cache.Contains(3))
+
+	cache.SetAdmissionTarget(func(capacity int64) (int64, bool) {
+		return 2, true
+	})
+
+	cache.Set(ctx, 4, 4, 1)
+	assert.False(t, cache.Contains(4))
+	assert.Equal(t, int64(2), cache.used())
+
+	cache.Set(ctx, 1, 1, 1)
+	assert.True(t, cache.Contains(1))
+	assert.False(t, cache.Contains(2))
+	assert.True(t, cache.Contains(3))
+	assert.Equal(t, int64(2), cache.used())
+}
+
+func TestReplaceUpdatesUsedBytes(t *testing.T) {
+	cache := New[int, int](
+		fscache.ConstCapacity(20),
+		ShardInt[int],
+		nil, nil, nil,
+	)
+	ctx := t.Context()
+	cache.Set(ctx, 1, 1, 4)
+	assert.Equal(t, int64(4), cache.used())
+
+	assert.True(t, cache.Replace(ctx, 1, 10, 8))
+	assert.Equal(t, int64(8), cache.used())
+
+	cache.Set(ctx, 2, 2, 12)
+	assert.Equal(t, int64(20), cache.used())
+	assert.True(t, cache.Contains(1))
+	assert.True(t, cache.Contains(2))
+}
+
+func TestReplaceAccountsPendingEnqueueJob(t *testing.T) {
+	cache := New[int, int](
+		fscache.ConstCapacity(20),
+		ShardInt[int],
+		nil, nil, nil,
+	)
+	ctx := t.Context()
+
+	cache.queueLock.Lock()
+	done := make(chan struct{})
+	go func() {
+		cache.Set(ctx, 1, 1, 4)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pending enqueue job")
+	}
+	cache.queueLock.Unlock()
+
+	assert.True(t, cache.Replace(ctx, 1, 10, 8))
+	assert.Equal(t, int64(8), cache.used())
+}
+
+func TestEvictAccountsPendingEnqueueJob(t *testing.T) {
+	cache := New[int, int](
+		fscache.ConstCapacity(4),
+		ShardInt[int],
+		nil, nil, nil,
+	)
+	ctx := t.Context()
+
+	cache.queueLock.Lock()
+	done := make(chan struct{})
+	go func() {
+		cache.Set(ctx, 1, 1, 4)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pending enqueue job")
+	}
+	cache.queueLock.Unlock()
+
+	cache.Evict(ctx, nil, 0)
+	assert.Equal(t, int64(4), cache.used())
+}
+
+func TestEvictSkipsDeletedPendingEnqueueJob(t *testing.T) {
+	cache := New[int, int](
+		fscache.ConstCapacity(4),
+		ShardInt[int],
+		nil, nil, nil,
+	)
+	ctx := t.Context()
+
+	cache.queueLock.Lock()
+	done := make(chan struct{})
+	go func() {
+		cache.Set(ctx, 1, 1, 4)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pending enqueue job")
+	}
+	cache.Delete(ctx, 1)
+	cache.queueLock.Unlock()
+
+	cache.Evict(ctx, nil, 0)
+	assert.Equal(t, int64(0), cache.used())
+	assert.False(t, cache.Contains(1))
+}
+
+func TestDirectEnqueueSkipsDeletedItem(t *testing.T) {
+	postSetStarted := make(chan struct{})
+	unblockPostSet := make(chan struct{})
+	cache := New[int, int](
+		fscache.ConstCapacity(4),
+		ShardInt[int],
+		func(_ context.Context, _ int, _ int, _ int64, _ uint64) {
+			close(postSetStarted)
+			<-unblockPostSet
+		},
+		nil,
+		nil,
+	)
+	ctx := t.Context()
+
+	done := make(chan struct{})
+	go func() {
+		cache.Set(ctx, 1, 1, 4)
+		close(done)
+	}()
+	<-postSetStarted
+	cache.Delete(ctx, 1)
+	close(unblockPostSet)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Set")
+	}
+
+	assert.Equal(t, int64(0), cache.used())
+	assert.False(t, cache.Contains(1))
+}
+
+func TestEvictToTargetWithWaitReturnsActualUsedOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	itemSize := int64(pressureEvictBatchBytes + 1)
+	var evicted atomic.Int32
+	cache := New(
+		fscache.ConstCapacity(3*itemSize),
+		ShardInt[int],
+		nil,
+		nil,
+		func(context.Context, int, int, int64, uint64) {
+			if evicted.Add(1) == 1 {
+				cancel()
+			}
+		},
+	)
+	cache.Set(context.Background(), 1, 1, itemSize)
+	cache.Set(context.Background(), 2, 2, itemSize)
+	cache.Set(context.Background(), 3, 3, itemSize)
+
+	used := cache.EvictToTargetWithWait(ctx, 0)
+
+	assert.Equal(t, int64(2*itemSize), used)
+	assert.Equal(t, used, cache.used())
+	assert.Equal(t, int32(1), evicted.Load())
+}
+
+func TestEvictToTargetWithWaitEvictsHotItemsAfterPromotion(t *testing.T) {
+	ctx := context.Background()
+	cache := New[int, int](fscache.ConstCapacity(3), ShardInt[int], nil, nil, nil)
+
+	cache.Set(ctx, 1, 1, 1)
+	cache.Set(ctx, 2, 2, 1)
+	cache.Set(ctx, 3, 3, 1)
+
+	_, ok := cache.Get(ctx, 1)
+	assert.True(t, ok)
+	_, ok = cache.Get(ctx, 1)
+	assert.True(t, ok)
+	_, ok = cache.Get(ctx, 2)
+	assert.True(t, ok)
+	_, ok = cache.Get(ctx, 2)
+	assert.True(t, ok)
+	_, ok = cache.Get(ctx, 3)
+	assert.True(t, ok)
+	_, ok = cache.Get(ctx, 3)
+	assert.True(t, ok)
+
+	used := cache.EvictToTargetWithWait(ctx, 0)
+
+	assert.Equal(t, int64(0), used)
+	assert.Equal(t, int64(0), cache.used())
+	assert.False(t, cache.Contains(1))
+	assert.False(t, cache.Contains(2))
+	assert.False(t, cache.Contains(3))
+}
+
+// TestPostEvictRunsOutsideQueueLock verifies that postEvict callbacks execute
+// outside the queueLock by attempting a concurrent Set() while a postEvict is
+// blocked. If postEvict ran under the lock, the concurrent Set would deadlock.
+func TestPostEvictRunsOutsideQueueLock(t *testing.T) {
+	evictStarted := make(chan struct{})
+	evictContinue := make(chan struct{})
+	var evictCount atomic.Int32
+	cache := New(
+		fscache.ConstCapacity(1),
+		ShardInt[int],
+		nil, nil,
+		func(_ context.Context, _ int, _ int, _ int64, _ uint64) {
+			// Only the first eviction blocks; subsequent ones skip immediately.
+			// Cannot use sync.Once because it blocks callers until f() returns.
+			if evictCount.Add(1) == 1 {
+				close(evictStarted)
+				<-evictContinue
+			}
+		},
+	)
+	ctx := t.Context()
+	cache.Set(ctx, 1, 1, 1)
+	// Trigger eviction: inserting key=2 exceeds capacity, evicts key=1.
+	// postEvict for key=1 will block in the callback above.
+	go cache.Set(ctx, 2, 2, 1)
+	<-evictStarted
+	// postEvict is running outside queueLock. If the queueLock were still
+	// held, this concurrent Set would deadlock trying to enqueue.
+	done := make(chan struct{})
+	go func() {
+		cache.Set(ctx, 3, 3, 1)
+		close(done)
+	}()
+	select {
+	case <-done:
+		// success — concurrent Set() completed, queueLock was not held
+	case <-time.After(2 * time.Second):
+		t.Fatal("deadlock: concurrent Set blocked, postEvict likely holds queueLock")
+	}
+	close(evictContinue)
+}
+
+// TestSetLatencyUnderSlowPostEvict checks that the queueLock is released before
+// postEvict runs, so concurrent callers don't inherit slow callback latency.
+func TestSetLatencyUnderSlowPostEvict(t *testing.T) {
+	slowDuration := 200 * time.Millisecond
+	evictStarted := make(chan struct{}, 1)
+	cache := New(
+		fscache.ConstCapacity(2),
+		ShardInt[int],
+		nil, nil,
+		func(_ context.Context, _ int, _ int, _ int64, _ uint64) {
+			select {
+			case evictStarted <- struct{}{}:
+			default:
+			}
+			time.Sleep(slowDuration)
+		},
+	)
+	ctx := t.Context()
+	cache.Set(ctx, 1, 1, 1)
+	cache.Set(ctx, 2, 2, 1)
+	// Trigger slow eviction in background
+	go cache.Set(ctx, 3, 3, 1) // evicts key=1, postEvict sleeps 200ms
+	select {
+	case <-evictStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for postEvict to start")
+	}
+	// queueLock should be released now; used() only needs RLock.
+	start := time.Now()
+	_ = cache.used()
+	elapsed := time.Since(start)
+	if elapsed > 50*time.Millisecond {
+		t.Fatalf("used() took %v during slow postEvict; queueLock appears blocked", elapsed)
+	}
+}
+
+// TestPostEvictPanicDoesNotBlockDone verifies that if a postEvict callback
+// panics, the done channel still receives a value (via nested defer) and
+// doesn't deadlock. The panic itself propagates to the caller.
+func TestPostEvictPanicDoesNotBlockDone(t *testing.T) {
+	cache := New(
+		fscache.ConstCapacity(1),
+		ShardInt[int],
+		nil, nil,
+		func(_ context.Context, _ int, _ int, _ int64, _ uint64) {
+			panic("boom")
+		},
+	)
+	ctx := t.Context()
+	cache.Set(ctx, 1, 1, 1)
+	done := make(chan int64, 1)
+	// Synchronous Evict with capacityCut=1 forces eviction + postEvict panic.
+	// The panic propagates but the nested defer guarantees done is signaled.
+	assert.Panics(t, func() {
+		cache.Evict(ctx, done, 1)
+	})
+	select {
+	case <-done:
+		// success — done received despite panic
+	case <-time.After(2 * time.Second):
+		t.Fatal("deadlock: done channel not signaled after postEvict panic")
 	}
 }

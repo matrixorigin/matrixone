@@ -59,6 +59,32 @@ import (
 
 var _ engine.Engine = new(Engine)
 
+const (
+	workspaceRSSCacheFamilyEvictTimeout   = 10 * time.Second
+	workspaceRSSCacheAdmissionPressureTTL = 2 * time.Minute
+	workspaceRSSCachePressureTargetOwner  = "workspace-rss"
+)
+
+func makeWorkspaceRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
+	return func(ctx context.Context, targetPercent int64) {
+		memoryCtx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseWorkspaceRSSCacheEvict)
+		defer cancel()
+		fileservice.EvictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
+	}
+}
+
+func setWorkspaceRSSCachePressureTarget(targetPercent int64) {
+	fileservice.SetMemoryCachePressureTargetPercentByOwner(
+		workspaceRSSCachePressureTargetOwner,
+		targetPercent,
+		time.Now().Add(workspaceRSSCacheAdmissionPressureTTL),
+	)
+}
+
+func clearWorkspaceRSSCachePressureTarget() {
+	fileservice.ClearMemoryCachePressureTargetByOwner(workspaceRSSCachePressureTargetOwner)
+}
+
 func New(
 	ctx context.Context,
 	service string,
@@ -141,18 +167,27 @@ func New(
 	}
 
 	if e.config.memThrottler == nil {
+		throttlerOptions := []rscthrottler.MemThrottlerOption{
+			rscthrottler.WithRSSScavenging(),
+			rscthrottler.WithRSSCachePressureTarget(
+				setWorkspaceRSSCachePressureTarget,
+				clearWorkspaceRSSCachePressureTarget,
+			),
+			rscthrottler.WithRSSCacheEvictor(
+				makeWorkspaceRSSCacheEvictor(workspaceRSSCacheFamilyEvictTimeout),
+			),
+		}
 		if e.config.quota.Load() != 0 {
-			e.config.memThrottler = rscthrottler.NewMemThrottler(
-				"Workspace",
-				5.0/100.0,
+			throttlerOptions = append(
+				throttlerOptions,
 				rscthrottler.WithConstLimit(int64(e.config.quota.Load())),
 			)
-		} else {
-			e.config.memThrottler = rscthrottler.NewMemThrottler(
-				"Workspace",
-				5.0/100.0,
-			)
 		}
+		e.config.memThrottler = rscthrottler.NewMemThrottler(
+			"Workspace",
+			5.0/100.0,
+			throttlerOptions...,
+		)
 
 		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(e.config.memThrottler.Available()))
 	}

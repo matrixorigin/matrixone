@@ -492,6 +492,11 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"SELECT '2024-01-01' - INTERVAL n_nationkey HOUR FROM nation",
 		"SELECT '2024-01-01' + INTERVAL n_nationkey % 365 DAY FROM nation",
 		"SELECT '2024-01-01' + INTERVAL (n_nationkey % 365) DAY FROM nation",
+		"SELECT 20260515 + INTERVAL 7 DAY",
+		"SELECT 20260515 - INTERVAL 7 DAY",
+		"SELECT INTERVAL 7 DAY + 20260515",
+		"SELECT MAX(n_nationkey) + INTERVAL 7 DAY FROM nation",
+		"SELECT MAX(n_nationkey) - INTERVAL 7 DAY FROM nation",
 		"select 2222332222222223333333333333333333, 0x616263,-10, bit_and(2), bit_or(2), 'aaa' like '%a',str_to_date('04/31/2004', '%m/%d/%Y'),unix_timestamp(from_unixtime(2147483647))",
 		"select max(n_nationkey) over  (partition by N_REGIONKEY) from nation",
 		"select * from generate_series(1, 5) g",
@@ -693,6 +698,18 @@ func TestUpdate(t *testing.T) {
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"update NATION a join NATION2 b on a.N_REGIONKEY = b.R_REGIONKEY set a.N_NAME = 'aa'",
+		// PostgreSQL-style UPDATE ... FROM
+		"UPDATE NATION a SET a.N_NAME = 'aa' FROM NATION2 b WHERE a.N_REGIONKEY = b.R_REGIONKEY",
+		"UPDATE NATION SET N_NAME = 'bb' FROM REGION WHERE NATION.N_REGIONKEY = REGION.R_REGIONKEY",
+		"UPDATE NATION a SET a.N_NAME = 'cc' FROM NATION2 b, REGION c WHERE a.N_REGIONKEY = b.R_REGIONKEY AND b.R_REGIONKEY = c.R_REGIONKEY",
+		// Unqualified SET LHS must bind to the target only; both NATION and
+		// NATION2 expose N_NAME but this should NOT be reported as ambiguous.
+		"UPDATE NATION SET N_NAME = NATION2.N_NAME FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY",
+		// FROM-clause join tree (JOIN ... ON ...) must round-trip without
+		// changing associativity.
+		"UPDATE NATION a SET a.N_NAME = 'dd' FROM NATION2 b JOIN REGION c ON b.R_REGIONKEY = c.R_REGIONKEY WHERE a.N_REGIONKEY = b.R_REGIONKEY",
+		// Self-join: target and source are the same table.
+		"UPDATE NATION a SET a.N_NAME = b.N_NAME FROM NATION b WHERE a.N_REGIONKEY = b.N_REGIONKEY",
 		"prepare stmt1 from 'update nation set n_name = ? where n_nationkey > ?'",
 		"drop index idx1 on test_idx",
 	}
@@ -700,10 +717,244 @@ func TestUpdate(t *testing.T) {
 
 	// should error
 	sqls = []string{
-		"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2",    // column not exist
-		"UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2", // table not exist
+		"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2",                                         // column not exist
+		"UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2",                                      // table not exist
+		"UPDATE NATION a SET a.N_NAME = 'x' FROM NOTEXIST b WHERE a.N_REGIONKEY = b.R_REGIONKEY", // FROM table not exist
+		"UPDATE NATION a SET a.N_NAME = 'x' FROM NATION2 b WHERE a.N_REGIONKEY = b.NOT_A_COL",    // FROM column not exist
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func TestUpdateFallbackMultiTargetGeneratedColumnsKeepProjectLayout(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
+	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.job = dept.loc, dept.loc = emp.job WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback multi-target update with generated columns: %v", err)
+	}
+	query := logicPlan.GetQuery()
+
+	assertFallbackUpdateProjectLength(t, query, len(mock.ctxt.tables["emp"].Cols)+2)
+	assertFallbackUpdateProjectLength(t, query, len(mock.ctxt.tables["dept"].Cols)+2)
+}
+
+func TestUpdateFallbackGeneratedColumnsUseDefaultAfterRewrite(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockDefaultExpr(t, mock, "emp", "job", "job-default")
+	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.job = DEFAULT, dept.loc = 'default-marker' WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback update with generated column over DEFAULT: %v", err)
+	}
+
+	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
+		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1,
+		len(mock.ctxt.tables["emp"].Cols)+1, "default-marker")
+	if !exprContainsStringLiteral(generatedExpr, "job-default") {
+		t.Fatalf("generated column should use expanded DEFAULT expression, got %s", generatedExpr.String())
+	}
+}
+
+func TestUpdateFallbackGeneratedColumnsUseOnUpdateAfterRewrite(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockOnUpdateExpr(t, mock, "emp", "job", "job-on-update")
+	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'on-update-marker' WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback update with generated column over ON UPDATE: %v", err)
+	}
+
+	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
+		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1,
+		len(mock.ctxt.tables["emp"].Cols)+1, "on-update-marker")
+	if !exprContainsStringLiteral(generatedExpr, "job-on-update") {
+		t.Fatalf("generated column should use ON UPDATE expression, got %s", generatedExpr.String())
+	}
+}
+
+func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "emp", "mgr", "empno")
+	setMockGeneratedColumn(t, mock, "emp", "deptno", "mgr")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'chain-marker' WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback update with generated column chain: %v", err)
+	}
+
+	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
+		len(mock.ctxt.tables["emp"].Cols)+3+len(mock.ctxt.tables["dept"].Cols)+1,
+		len(mock.ctxt.tables["emp"].Cols)+2, "chain-marker")
+	if !exprContainsColName(generatedExpr, "empno") || exprContainsColName(generatedExpr, "mgr") {
+		t.Fatalf("generated column chain should use freshly recomputed earlier generated column, got %s", generatedExpr.String())
+	}
+}
+
+func setMockGeneratedColumn(t *testing.T, mock *MockOptimizer, tableName, generatedName, sourceName string) {
+	tableDef := mock.ctxt.tables[tableName]
+	if tableDef == nil {
+		t.Fatalf("missing mock table %s", tableName)
+	}
+
+	var generatedCol *ColDef
+	var sourceCol *ColDef
+	var sourcePos int32
+	for idx, col := range tableDef.Cols {
+		switch col.Name {
+		case generatedName:
+			generatedCol = col
+		case sourceName:
+			sourceCol = col
+			sourcePos = int32(idx)
+		}
+	}
+	if generatedCol == nil {
+		t.Fatalf("missing generated column %s.%s", tableName, generatedName)
+	}
+	if sourceCol == nil {
+		t.Fatalf("missing generated source column %s.%s", tableName, sourceName)
+	}
+
+	generatedCol.GeneratedCol = &plan.GeneratedCol{
+		Expr: &plan.Expr{
+			Typ: sourceCol.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: sourcePos,
+					Name:   sourceName,
+				},
+			},
+		},
+		IsStored: true,
+	}
+}
+
+func setMockDefaultExpr(t *testing.T, mock *MockOptimizer, tableName, colName, value string) {
+	col := requireMockColumn(t, mock, tableName, colName)
+	col.Default = &plan.Default{
+		Expr:         makeStringConstExpr(col.Typ, value),
+		OriginString: value,
+		NullAbility:  true,
+	}
+}
+
+func setMockOnUpdateExpr(t *testing.T, mock *MockOptimizer, tableName, colName, value string) {
+	col := requireMockColumn(t, mock, tableName, colName)
+	col.OnUpdate = &plan.OnUpdate{
+		Expr:         makeStringConstExpr(col.Typ, value),
+		OriginString: value,
+	}
+}
+
+func requireMockColumn(t *testing.T, mock *MockOptimizer, tableName, colName string) *ColDef {
+	tableDef := mock.ctxt.tables[tableName]
+	if tableDef == nil {
+		t.Fatalf("missing mock table %s", tableName)
+	}
+	for _, col := range tableDef.Cols {
+		if col.Name == colName {
+			return col
+		}
+	}
+	t.Fatalf("missing mock column %s.%s", tableName, colName)
+	return nil
+}
+
+func makeStringConstExpr(typ plan.Type, value string) *plan.Expr {
+	return &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Sval{Sval: value},
+			},
+		},
+	}
+}
+
+func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int, pos int, marker string) *plan.Expr {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen || pos >= len(node.ProjectList) {
+			continue
+		}
+		hasMarker := false
+		for _, expr := range node.ProjectList {
+			if exprContainsStringLiteral(expr, marker) {
+				hasMarker = true
+				break
+			}
+		}
+		if !hasMarker {
+			continue
+		}
+		return node.ProjectList[pos]
+	}
+	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
+	return nil
+}
+
+func assertFallbackUpdateProjectLength(t *testing.T, query *Query, projectLen int) {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen || len(node.Children) != 1 {
+			continue
+		}
+		child := query.Nodes[node.Children[0]]
+		if child.NodeType != plan.Node_SINK_SCAN {
+			continue
+		}
+		return
+	}
+	t.Fatalf("missing fallback update project with length %d", projectLen)
+}
+
+func exprContainsStringLiteral(expr *plan.Expr, value string) bool {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		if sval, ok := e.Lit.Value.(*plan.Literal_Sval); ok {
+			return sval.Sval == value
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if exprContainsStringLiteral(arg, value) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprContainsStringLiteral(item, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func exprContainsColName(expr *plan.Expr, name string) bool {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return e.Col.Name == name || strings.HasSuffix(e.Col.Name, "."+name)
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if exprContainsColName(arg, name) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprContainsColName(item, name) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestDelete(t *testing.T) {
@@ -812,6 +1063,109 @@ func TestReplacePlanStructure(t *testing.T) {
 	}
 	assert.True(t, hasMultiUpdate, "REPLACE plan should contain MULTI_UPDATE node")
 	assert.True(t, hasDedupJoin, "REPLACE plan should contain DEDUP JOIN node")
+}
+
+func TestReplaceNonUniqueSingleIndexDeleteUsesIndexRowID(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO single_idx_t VALUES (1, 100)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var multiUpdate *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdate = node
+			break
+		}
+	}
+	if multiUpdate == nil {
+		t.Fatal("REPLACE plan should contain MULTI_UPDATE node")
+	}
+
+	var idxUpdateCtx *plan.UpdateCtx
+	for _, updateCtx := range multiUpdate.UpdateCtxList {
+		if updateCtx.TableDef == nil {
+			continue
+		}
+		if strings.HasPrefix(updateCtx.TableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
+			idxUpdateCtx = updateCtx
+			break
+		}
+	}
+	if idxUpdateCtx == nil {
+		t.Fatal("REPLACE plan should contain UpdateCtx for the secondary index table")
+	}
+	if len(idxUpdateCtx.DeleteCols) < 2 {
+		t.Fatal("secondary index UpdateCtx should contain delete columns")
+	}
+	if len(multiUpdate.Children) != 1 {
+		t.Fatalf("MULTI_UPDATE should have one child, got %d", len(multiUpdate.Children))
+	}
+
+	oldRowIDDeleteCol := idxUpdateCtx.DeleteCols[0]
+	oldIdxDeleteCol := idxUpdateCtx.DeleteCols[1]
+	child := query.Nodes[multiUpdate.Children[0]]
+	if oldRowIDDeleteCol.ColPos < 0 || int(oldRowIDDeleteCol.ColPos) >= len(child.ProjectList) {
+		t.Fatalf("DeleteCols[0] ColPos %d out of child project range %d",
+			oldRowIDDeleteCol.ColPos, len(child.ProjectList))
+	}
+	if oldIdxDeleteCol.ColPos < 0 || int(oldIdxDeleteCol.ColPos) >= len(child.ProjectList) {
+		t.Fatalf("DeleteCols[1] ColPos %d out of child project range %d",
+			oldIdxDeleteCol.ColPos, len(child.ProjectList))
+	}
+	wantRowIDName := idxUpdateCtx.TableDef.Name + "." + catalog.Row_ID
+	wantIdxName := idxUpdateCtx.TableDef.Name + "." + catalog.IndexTableIndexColName
+	assert.Equal(t, wantRowIDName, oldRowIDDeleteCol.Name,
+		"DeleteCols[0] should read Row_ID from the secondary index table")
+	assert.Equal(t, wantIdxName, oldIdxDeleteCol.Name,
+		"DeleteCols[1] should read the secondary index key column")
+	assert.Equal(t, int32(types.T_Rowid), child.ProjectList[oldRowIDDeleteCol.ColPos].Typ.Id,
+		"DeleteCols[0] should point at a Row_ID vector in the MULTI_UPDATE input")
+	assert.NotEqual(t, oldRowIDDeleteCol.ColPos, oldIdxDeleteCol.ColPos,
+		"Row_ID and index key delete columns must not collapse to the same input column")
+	assert.False(t, oldRowIDDeleteCol.RelPos == 0 && oldRowIDDeleteCol.ColPos == 0 &&
+		oldRowIDDeleteCol.Name != wantRowIDName,
+		"DeleteCols[0] must not fall back to a zero-value ColRef")
+}
+
+func findDedupBuildKeepLastFlags(query *plan.Query) []bool {
+	flags := make([]bool, 0, len(query.Nodes))
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_DEDUP {
+			continue
+		}
+		flags = append(flags, node.GetDedupJoinCtx().GetDedupBuildKeepLast())
+	}
+	return flags
+}
+
+func TestDedupBuildKeepLastOnlyForReplace(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	replacePlan, err := runOneStmt(mock, t, "REPLACE INTO dept VALUES (1, 'Sales', 'NY')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	replaceFlags := findDedupBuildKeepLastFlags(replacePlan.GetQuery())
+	assert.NotEmpty(t, replaceFlags, "REPLACE plan should contain DEDUP JOIN nodes")
+	for _, flag := range replaceFlags {
+		assert.True(t, flag, "REPLACE DEDUP JOIN should keep the last duplicate build row")
+	}
+
+	updatePlan, err := runOneStmt(mock, t, "update dept set deptno = '50' where loc = 'NEW YORK'")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	updateFlags := findDedupBuildKeepLastFlags(updatePlan.GetQuery())
+	assert.NotEmpty(t, updateFlags, "UPDATE plan should contain DEDUP JOIN nodes")
+	for _, flag := range updateFlags {
+		assert.False(t, flag, "UPDATE DEDUP JOIN must preserve duplicate-key failure")
+	}
 }
 
 func TestReplaceSelfRefPlanStructure(t *testing.T) {
@@ -1005,6 +1359,42 @@ func TestSubQuery(t *testing.T) {
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where N_NAME = R_NAME and R_REGIONKEY < N_REGIONKEY)", // mixed eq + non-eq predicates -> two pullup-added GroupBy entries
 		"SELECT * FROM NATION where (select count(*) from REGION where N_NAME = R_NAME and R_REGIONKEY < N_REGIONKEY) = 1",                   // count(*) with mixed eq + non-eq predicates
 		"SELECT * FROM NATION where (select avg(R_REGIONKEY) from REGION where N_NAME = R_NAME and R_REGIONKEY < N_REGIONKEY) = 1",           // avg with mixed eq + non-eq predicates
+		`SELECT * FROM NATION n1 WHERE EXISTS (
+			SELECT 1 FROM NATION n2 WHERE EXISTS (
+				SELECT 1 FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated EXISTS subquery
+		`SELECT * FROM NATION n1 WHERE NOT EXISTS (
+			SELECT 1 FROM NATION n2 WHERE EXISTS (
+				SELECT 1 FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated NOT EXISTS subquery
+		`SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY IN (
+			SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY IN (
+				SELECT n3.N_NATIONKEY FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated IN subquery
+		`SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY NOT IN (
+			SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY IN (
+				SELECT n3.N_NATIONKEY FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated NOT IN subquery
+		`SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY = ANY (
+			SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY = ANY (
+				SELECT n3.N_NATIONKEY FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated ANY subquery
+		`SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY > ALL (
+			SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY = ANY (
+				SELECT n3.N_NATIONKEY FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY < n1.N_NATIONKEY
+			)
+		)`, // two-level correlated ALL subquery
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -1017,6 +1407,19 @@ func TestSubQuery(t *testing.T) {
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) + 1 from REGION where R_REGIONKEY < N_REGIONKEY)",                         // non-eq agg scalar subquery with computed projection
 	}
 	runTestShouldError(mock, t, sqls)
+
+	sql := `SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY > ANY (
+		SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY = ANY (
+			SELECT n3.N_NATIONKEY FROM NATION n3
+			WHERE (n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_REGIONKEY = n1.N_REGIONKEY)
+				OR n3.N_REGIONKEY = 1
+		)
+	)`
+	_, err := runOneStmt(mock, t, sql)
+	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "deep correlated predicate containing inner columns cannot be pulled above mark join")
+	}
 }
 
 func TestMysqlCompatibilityMode(t *testing.T) {

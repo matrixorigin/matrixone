@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	goruntime "runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -37,18 +38,66 @@ import (
 // flushSemaphore limits concurrent flushS3WriterOnMemoryPressure calls to
 // prevent thundering-herd mpool explosion when many workers are denied memory
 // simultaneously and all try to flush + read objectio metadata at once.
-var flushSemaphore = make(chan struct{}, flushConcurrency())
-var flushBypassSemaphore = make(chan struct{}, 1)
+const (
+	minFlushConcurrencyLimit = 4
+	maxFlushConcurrencyLimit = 16
+)
+
+type flushLimiter struct {
+	mu     sync.Mutex
+	inUse  int
+	notify chan struct{}
+}
+
+var flushLimiterState = newFlushLimiter()
+var flushConcurrencyForAcquire = flushConcurrency
 var flushSemaphoreAcquireTimeout = 200 * time.Millisecond
-var flushBypassRetryInterval = 20 * time.Millisecond
+var flushConcurrencyRefreshInterval = 20 * time.Millisecond
+
+func newFlushLimiter() *flushLimiter {
+	return &flushLimiter{notify: make(chan struct{})}
+}
+
+func (l *flushLimiter) tryAcquire() (func(), <-chan struct{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.inUse < flushConcurrencyForAcquire() {
+		l.inUse++
+		return l.release, nil
+	}
+	return nil, l.notify
+}
+
+func (l *flushLimiter) release() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.inUse <= 0 {
+		panic("flush limiter released without acquire")
+	}
+	l.inUse--
+	close(l.notify)
+	l.notify = make(chan struct{})
+}
+
+func (l *flushLimiter) inUseCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.inUse
+}
 
 func flushConcurrency() int {
-	n := goruntime.GOMAXPROCS(0) / 2
-	if n < 4 {
-		n = 4
+	return flushConcurrencyForGOMAXPROCS(goruntime.GOMAXPROCS(0))
+}
+
+func flushConcurrencyForGOMAXPROCS(gomaxprocs int) int {
+	n := gomaxprocs / 2
+	if n < minFlushConcurrencyLimit {
+		n = minFlushConcurrencyLimit
 	}
-	if n > 16 {
-		n = 16
+	if n > maxFlushConcurrencyLimit {
+		n = maxFlushConcurrencyLimit
 	}
 	return n
 }
@@ -334,23 +383,30 @@ func acquireFlushSlot(ctx context.Context) (func(), error) {
 	timer := time.NewTimer(flushSemaphoreAcquireTimeout)
 	defer timer.Stop()
 
-	select {
-	case flushSemaphore <- struct{}{}:
-		return func() { <-flushSemaphore }, nil
-	case <-timer.C:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	for {
+		release, waitCh := flushLimiterState.tryAcquire()
+		if release != nil {
+			return release, nil
+		}
+		select {
+		case <-waitCh:
+		case <-timer.C:
+			goto retry
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 
-	ticker := time.NewTicker(flushBypassRetryInterval)
+retry:
+	ticker := time.NewTicker(flushConcurrencyRefreshInterval)
 	defer ticker.Stop()
 	for {
+		release, waitCh := flushLimiterState.tryAcquire()
+		if release != nil {
+			return release, nil
+		}
 		select {
-		case flushSemaphore <- struct{}{}:
-			return func() { <-flushSemaphore }, nil
-		case flushBypassSemaphore <- struct{}{}:
-			v2.TxnStatementInsertS3FlushBypassCounter.Add(1)
-			return func() { <-flushBypassSemaphore }, nil
+		case <-waitCh:
 		case <-ticker.C:
 		case <-ctx.Done():
 			return nil, ctx.Err()

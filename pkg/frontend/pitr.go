@@ -982,7 +982,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return stats, err
 	}
 
-	if len(accountName) > 0 {
+	if stmt.Level == tree.RESTORELEVELACCOUNT && len(accountName) > 0 {
 		restoreOtherAccount := func() (rtnErr error) {
 			fromAccount := string(stmt.SrcAccountName)
 			var (
@@ -1419,6 +1419,15 @@ func restoreToDatabaseOrTableWithPitr(
 			continue
 		}
 
+		// external table data is stored outside MO and cannot be restored by clone.
+		if shouldSkipRestoreTableInBulk(tblInfo) {
+			if restoreToTbl {
+				return newExternalTableRestoreError(ctx, tblInfo, "pitr")
+			}
+			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore external table: %v.%v", pitrName, tblInfo.dbName, tblInfo.tblName))
+			continue
+		}
+
 		// skip view
 		if tblInfo.typ == view {
 			viewMap[key] = tblInfo
@@ -1457,6 +1466,10 @@ func reCreateTableWithPitr(
 	pitrName string,
 	ts int64,
 	tblInfo *tableInfo) (err error) {
+	if isExternalTable(tblInfo) {
+		return newExternalTableRestoreError(ctx, tblInfo, "pitr")
+	}
+
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: '%v' at timestamp %d", pitrName, tblInfo.tblName, ts))
 
 	var isMasterTable bool
@@ -1524,13 +1537,14 @@ func getTableInfoWithPitr(
 		return nil, err
 	}
 
-	for _, tblInfo := range tableInfos {
-		if tblInfo.createSql, err = getCreateTableSqlWithTs(ctx, bh, ts, dbName, tblInfo.tblName); err != nil {
-			return nil, err
-		}
-	}
-
-	return tableInfos, nil
+	return fillTableCreateSQLsForRestore(
+		sid,
+		pitrName,
+		tableInfos,
+		func(tblInfo *tableInfo) (string, error) {
+			return getCreateTableSqlWithTs(ctx, bh, ts, tblInfo.dbName, tblInfo.tblName)
+		},
+	)
 }
 
 func showFullTablesWitsTs(
@@ -1541,16 +1555,14 @@ func showFullTablesWitsTs(
 	ts int64,
 	dbName string,
 	tblName string) ([]*tableInfo, error) {
-	sql := fmt.Sprintf("show full tables from `%s`", dbName)
-	if len(tblName) > 0 {
-		sql += fmt.Sprintf(" like '%s'", tblName)
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, err
 	}
-	if ts > 0 {
-		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
-	}
+	sql := buildTableInfoListSQL(dbName, tblName, ts, accountId)
 	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s` sql: %s ", pitrName, dbName, tblName, sql))
-	// cols: table name, table type
-	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
+	// cols: table name, table type, relkind
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -1561,6 +1573,7 @@ func showFullTablesWitsTs(
 			dbName:  dbName,
 			tblName: cols[0],
 			typ:     tableType(cols[1]),
+			relKind: cols[2],
 		}
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s`, get table number `%d`", pitrName, dbName, tblName, len(ans)))
@@ -2076,6 +2089,9 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 		if pitrRecord.level == tree.PITRLEVELTABLE.String() {
 			return moerr.NewInternalErrorNoCtxf("restore level %v is not allowed for database restore", pitrRecord.level)
 		}
+		if len(stmt.AccountName) > 0 && string(stmt.AccountName) != tenantInfo.GetTenant() {
+			return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore database %v", string(stmt.AccountName), string(stmt.DatabaseName))
+		}
 		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v database %v", pitrRecord.pitrName, tenantInfo.GetTenant(), string(stmt.DatabaseName))
 		}
@@ -2086,6 +2102,9 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 		// check the level
 		if pitrRecord.level == tree.PITRLEVELCLUSTER.String() {
 			return moerr.NewInternalErrorNoCtxf("cluster level pitr `%v` is not allowed for table restore", pitrRecord.level)
+		}
+		if len(stmt.AccountName) > 0 && string(stmt.AccountName) != tenantInfo.GetTenant() {
+			return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore table %v.%v", string(stmt.AccountName), string(stmt.DatabaseName), string(stmt.TableName))
 		}
 		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v database %v table %v", pitrRecord.pitrName, tenantInfo.GetTenant(), string(stmt.DatabaseName), string(stmt.TableName))

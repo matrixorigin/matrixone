@@ -26,8 +26,12 @@ import (
 // update statement
 type Update struct {
 	statementImpl
-	Tables  TableExprs
-	Exprs   UpdateExprs
+	Tables TableExprs
+	Exprs  UpdateExprs
+	// From is the optional PostgreSQL-style FROM clause that introduces
+	// additional read-only join sources. It is nil for the classic
+	// single-table and multi-table (comma) UPDATE syntaxes.
+	From    *From
 	Where   *Where
 	OrderBy OrderBy
 	Limit   *Limit
@@ -49,6 +53,32 @@ func (node *Update) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Exprs.Format(ctx)
 	}
+	if node.From != nil {
+		ctx.WriteByte(' ')
+		// JoinTableExpr.Format does not parenthesize nested join trees in the
+		// right operand, so "FROM b, c JOIN d ON ..." (AST: b CROSS (c INNER
+		// d)) would emit "b cross join c inner join d on ..." and re-parse
+		// left-associatively as "(b CROSS c) INNER d", changing semantics.
+		// Walk the FROM tree and rebuild it with a ParenTableExpr wrapping
+		// each JoinTableExpr that appears as a right operand, leaving the
+		// original AST untouched.
+		fromOut := node.From
+		needRebuild := false
+		for _, t := range node.From.Tables {
+			if joinTreeHasRightJoin(t) {
+				needRebuild = true
+				break
+			}
+		}
+		if needRebuild {
+			rebuilt := make(TableExprs, len(node.From.Tables))
+			for i, t := range node.From.Tables {
+				rebuilt[i] = parenthesizeRightJoins(t)
+			}
+			fromOut = &From{Tables: rebuilt}
+		}
+		fromOut.Format(ctx)
+	}
 	if node.Where != nil {
 		ctx.WriteByte(' ')
 		node.Where.Format(ctx)
@@ -65,6 +95,45 @@ func (node *Update) Format(ctx *FmtCtx) {
 
 func (node *Update) GetStatementType() string { return "Update" }
 func (node *Update) GetQueryType() string     { return QueryTypeDML }
+
+// joinTreeHasRightJoin reports whether t contains a JoinTableExpr that appears
+// as a right operand of another JoinTableExpr — the shape that re-parses with
+// different associativity if printed without parentheses.
+func joinTreeHasRightJoin(t TableExpr) bool {
+	j, ok := t.(*JoinTableExpr)
+	if !ok {
+		return false
+	}
+	if _, rightIsJoin := j.Right.(*JoinTableExpr); rightIsJoin {
+		return true
+	}
+	return joinTreeHasRightJoin(j.Left) || joinTreeHasRightJoin(j.Right)
+}
+
+// parenthesizeRightJoins returns a copy of t in which any JoinTableExpr that
+// occupies a right-operand position is wrapped in ParenTableExpr. The original
+// AST is left untouched so this rewrite is safe to perform during Format only.
+func parenthesizeRightJoins(t TableExpr) TableExpr {
+	j, ok := t.(*JoinTableExpr)
+	if !ok {
+		return t
+	}
+	left := parenthesizeRightJoins(j.Left)
+	right := j.Right
+	if right != nil {
+		right = parenthesizeRightJoins(right)
+		if _, rightIsJoin := j.Right.(*JoinTableExpr); rightIsJoin {
+			right = NewParenTableExpr(right)
+		}
+	}
+	if left == j.Left && right == j.Right {
+		return t
+	}
+	clone := *j
+	clone.Left = left
+	clone.Right = right
+	return &clone
+}
 
 type UpdateExprs []*UpdateExpr
 
