@@ -60,6 +60,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		} else {
 			expr, err = b.bindNumVal(exprImpl, plan.Type{})
 		}
+	case *tree.TimeUnitExpr:
+		numVal := tree.NewNumVal(exprImpl.Unit, exprImpl.Unit, false, tree.P_char)
+		if d, ok := b.impl.(*DefaultBinder); ok {
+			expr, err = b.bindNumVal(numVal, d.typ)
+		} else {
+			expr, err = b.bindNumVal(numVal, plan.Type{})
+		}
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
 
@@ -511,6 +518,16 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+
+	// A subquery is a nested SELECT and must not inherit the outer FOR UPDATE
+	// state. MySQL only locks rows in the outer query; rows reached through
+	// EXISTS/IN/scalar subqueries are not locked unless the subquery itself
+	// also specifies FOR UPDATE.
+	savedIsForUpdate := b.builder.isForUpdate
+	b.builder.isForUpdate = false
+	defer func() {
+		b.builder.isForUpdate = savedIsForUpdate
+	}()
 
 	var nodeID int32
 	var err error
@@ -2190,6 +2207,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		argsType = argsType[:size+1]
 		if len(argsCastType) > 0 {
 			argsCastType = argsCastType[:size+1]
+		}
+
+	case "lead", "lag":
+		// For lead/lag window functions, cast the default value (3rd arg)
+		// to match the value type (1st arg).
+		if len(args) >= 3 && !argsType[2].Eq(argsType[0]) {
+			argsCastType = []types.Type{argsType[0], argsType[1], argsType[0]}
 		}
 	}
 

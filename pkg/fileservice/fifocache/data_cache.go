@@ -30,13 +30,27 @@ type DataCache struct {
 
 func NewDataCache(
 	capacity fscache.CapacityFunc,
-	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
+	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
 	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
-	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
+	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+) *DataCache {
+	return NewDataCacheWithPrepareSet(capacity, nil, postSet, postGet, postEvict)
+}
+
+func NewDataCacheWithPrepareSet(
+	capacity fscache.CapacityFunc,
+	prepareSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) func(inserted bool),
+	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
+	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
 ) *DataCache {
 	return &DataCache{
-		fifo: New(capacity, shardCacheKey, postSet, postGet, postEvict),
+		fifo: NewWithPrepareSet(capacity, shardCacheKey, prepareSet, postSet, postGet, postEvict),
 	}
+}
+
+func (d *DataCache) SetAdmissionTarget(admissionTarget func(capacity int64) (int64, bool)) {
+	d.fifo.SetAdmissionTarget(admissionTarget)
 }
 
 var seed = maphash.MakeSeed()
@@ -78,21 +92,42 @@ func (d *DataCache) DeletePaths(ctx context.Context, paths []string) {
 func (d *DataCache) deletePath(ctx context.Context, shardIndex int, path string) {
 	shard := &d.fifo.shards[shardIndex]
 	shard.Lock()
-	defer shard.Unlock()
+	var pending []_PendingPostEvict[fscache.CacheKey, fscache.Data]
 	for key, item := range shard.values {
 		if key.Path == path {
 			delete(shard.values, key)
-			d.fifo.purgeItemValue(ctx, item)
+			pe, evicted := purgeItemValue(item)
+			if evicted {
+				pending = append(pending, pe)
+			}
 		}
+	}
+	shard.Unlock()
+	for _, pe := range pending {
+		d.fifo.postEvictItem(ctx, pe, true)
 	}
 }
 
 func (d *DataCache) EnsureNBytes(ctx context.Context, want int) {
-	d.fifo.Evict(ctx, nil, int64(want))
+	used := d.Used()
+	capacity := d.Capacity()
+	if used+int64(want) > capacity {
+		_ = d.fifo.EvictWithWait(ctx, int64(want))
+	} else {
+		d.fifo.Evict(ctx, nil, int64(want))
+	}
 }
 
 func (d *DataCache) Evict(ctx context.Context, ch chan int64) {
 	d.fifo.Evict(ctx, ch, 0)
+}
+
+func (d *DataCache) EvictToTargetWithWait(ctx context.Context, target int64) int64 {
+	return d.fifo.EvictToTargetWithWait(ctx, target)
+}
+
+func (d *DataCache) ForceEvictWithWait(ctx context.Context, n int64) int64 {
+	return d.fifo.ForceEvictWithWait(ctx, n)
 }
 
 func (d *DataCache) Flush(ctx context.Context) {
@@ -103,8 +138,19 @@ func (d *DataCache) Get(ctx context.Context, key query.CacheKey) (fscache.Data, 
 	return d.fifo.Get(ctx, key)
 }
 
+func (d *DataCache) Contains(key query.CacheKey) bool {
+	return d.fifo.Contains(key)
+}
+
+func (d *DataCache) CurrentSeq(key query.CacheKey) (uint64, bool) {
+	return d.fifo.CurrentSeq(key)
+}
+
 func (d *DataCache) Set(ctx context.Context, key query.CacheKey, value fscache.Data) error {
-	d.fifo.Set(ctx, key, value, int64(len(value.Bytes())))
+	_, rejected := d.fifo.Set(ctx, key, value, int64(len(value.Bytes())))
+	if rejected {
+		return fscache.ErrCacheAdmissionRejected
+	}
 	return nil
 }
 

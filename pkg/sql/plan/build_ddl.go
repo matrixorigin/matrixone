@@ -1042,6 +1042,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
 	dedupFkName := make(UnorderedSet[string])
 
+	if stmt.Param != nil {
+		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
+			return err
+		}
+	}
+
 	// Pre-scan all column definitions so that generated columns can reference
 	// base columns defined later in the CREATE TABLE statement (forward reference).
 	var allColDefs []*ColDef
@@ -1413,7 +1419,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		// from
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		stmt.AsSource.Format(fmtCtx)
-		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", fmtCtx.String()))
+		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
 
 		createTable.CreateAsSelectSql = insertSqlBuilder.String()
 	}
@@ -1694,6 +1700,86 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	return nil
+}
+
+func restoreIntervalSyntaxForCTAS(sql string) string {
+	var out strings.Builder
+	for i := 0; i < len(sql); {
+		if !strings.HasPrefix(strings.ToLower(sql[i:]), "interval(") {
+			out.WriteByte(sql[i])
+			i++
+			continue
+		}
+
+		expr, unit, next, ok := parseIntervalCall(sql, i)
+		if !ok || !isIntervalUnitToken(unit) {
+			out.WriteByte(sql[i])
+			i++
+			continue
+		}
+
+		out.WriteString("interval ")
+		out.WriteString(strings.TrimSpace(expr))
+		out.WriteByte(' ')
+		out.WriteString(strings.TrimSpace(unit))
+		i = next
+	}
+	return out.String()
+}
+
+func parseIntervalCall(sql string, start int) (expr string, unit string, next int, ok bool) {
+	const prefix = "interval("
+	pos := start + len(prefix)
+	depth := 1
+	comma := -1
+	inSingleQuote := false
+	inDoubleQuote := false
+
+	for pos < len(sql) {
+		ch := sql[pos]
+		switch ch {
+		case '\'':
+			if !inDoubleQuote {
+				inSingleQuote = !inSingleQuote
+			}
+		case '"':
+			if !inSingleQuote {
+				inDoubleQuote = !inDoubleQuote
+			}
+		case '(':
+			if !inSingleQuote && !inDoubleQuote {
+				depth++
+			}
+		case ')':
+			if !inSingleQuote && !inDoubleQuote {
+				depth--
+				if depth == 0 {
+					if comma == -1 {
+						return "", "", 0, false
+					}
+					return sql[start+len(prefix) : comma], sql[comma+1 : pos], pos + 1, true
+				}
+			}
+		case ',':
+			if !inSingleQuote && !inDoubleQuote && depth == 1 && comma == -1 {
+				comma = pos
+			}
+		}
+		pos++
+	}
+	return "", "", 0, false
+}
+
+func isIntervalUnitToken(unit string) bool {
+	switch strings.ToLower(strings.Trim(strings.TrimSpace(unit), "`'\"")) {
+	case "microsecond", "second", "minute", "hour", "day", "week", "month", "quarter", "year",
+		"second_microsecond", "minute_microsecond", "minute_second", "hour_microsecond",
+		"hour_second", "hour_minute", "day_microsecond", "day_second", "day_minute",
+		"day_hour", "year_month":
+		return true
+	default:
+		return false
+	}
 }
 
 func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
@@ -3500,6 +3586,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
 	}
+	if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	}
 	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create index in subscription database")
 	}
@@ -3599,6 +3688,30 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			},
 		},
 	}, nil
+}
+
+func checkCreateIndexTableType(ctx context.Context, tableDef *TableDef) error {
+	if tableDef.TableType == catalog.SystemExternalRel {
+		return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+	}
+	return nil
+}
+
+func rejectExternalTableInlineIndexes(ctx context.Context, stmt *tree.CreateTable) error {
+	for _, item := range stmt.Defs {
+		switch def := item.(type) {
+		case *tree.ColumnTableDef:
+			for _, attr := range def.Attributes {
+				switch attr.(type) {
+				case *tree.AttributePrimaryKey, *tree.AttributeKey, *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+				}
+			}
+		case *tree.PrimaryKeyIndex, *tree.Index, *tree.UniqueIndex, *tree.FullTextIndex:
+			return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+		}
+	}
+	return nil
 }
 
 func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
@@ -4010,6 +4123,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 				updateSqls = append(updateSqls, fkData.UpdateSql)
 			case *tree.UniqueIndex:
+				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+					return nil, err
+				}
 				if err := checkIndexKeypartSupportability(
 					ctx.GetContext(),
 					def.KeyParts,
@@ -4062,6 +4178,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				}
 			case *tree.FullTextIndex:
+				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+					return nil, err
+				}
 				if err := checkIndexKeypartSupportability(
 					ctx.GetContext(),
 					def.KeyParts,
@@ -4116,6 +4235,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				}
 			case *tree.Index:
+				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+					return nil, err
+				}
 				if err := checkIndexKeypartSupportability(
 					ctx.GetContext(),
 					def.KeyParts,

@@ -42,8 +42,9 @@ var (
 			Name:      "statement_total",
 			Help:      "Total number of txn statement executed.",
 		}, []string{"type"})
-	TxnStatementTotalCounter = txnStatementCounter.WithLabelValues("total")
-	TxnStatementRetryCounter = txnStatementCounter.WithLabelValues("retry")
+	TxnStatementTotalCounter               = txnStatementCounter.WithLabelValues("total")
+	TxnStatementRetryCounter               = txnStatementCounter.WithLabelValues("retry")
+	TxnStatementInsertS3FlushBypassCounter = txnStatementCounter.WithLabelValues("insert-s3-flush-bypass")
 
 	txnCommitCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -240,6 +241,33 @@ var (
 	TxnAcquireLockDurationHistogram     = txnLockDurationHistogram.WithLabelValues("acquire")
 	TxnAcquireLockWaitDurationHistogram = txnLockDurationHistogram.WithLabelValues("acquire-wait")
 	TxnHoldLockDurationHistogram        = txnLockDurationHistogram.WithLabelValues("hold")
+
+	TxnLockOpBatchRowsHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "lock_op_batch_rows",
+			Help:      "Rows in batches held by lock op during lock acquisition.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 16),
+		})
+
+	TxnLockOpBatchBytesHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "lock_op_batch_bytes",
+			Help:      "Bytes in batches held by lock op during lock acquisition.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 30),
+		})
+
+	TxnLockOpBatchHoldDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "lock_op_batch_hold_duration_seconds",
+			Help:      "Duration lock op holds a batch while acquiring locks.",
+			Buckets:   getDurationBuckets(),
+		})
 
 	txnUnlockDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{

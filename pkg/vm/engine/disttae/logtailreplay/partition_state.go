@@ -704,6 +704,10 @@ func (p *PartitionState) HandleRowsDelete(
 	if err != nil {
 		panic(err)
 	}
+	if !p.noData {
+		metricv2.LogtailReplayRetainedDeleteBatchRowsHistogram.Observe(float64(batch.RowCount()))
+		metricv2.LogtailReplayRetainedDeleteBatchBytesHistogram.Observe(float64(batch.Size()))
+	}
 
 	var primaryKeys [][]byte
 	if len(input.Vecs) > 2 {
@@ -795,6 +799,10 @@ func (p *PartitionState) HandleRowsInsert(
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
+	}
+	if !p.noData {
+		metricv2.LogtailReplayRetainedInsertBatchRowsHistogram.Observe(float64(batch.RowCount()))
+		metricv2.LogtailReplayRetainedInsertBatchBytesHistogram.Observe(float64(batch.Size()))
 	}
 	primaryKeys = readutil.EncodePrimaryKeyVector(
 		batch.Vecs[2+primarySeqnum],
