@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,6 +27,249 @@ import (
 	index2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
+	t.Run("limit over zero cost", func(t *testing.T) {
+		builder := NewQueryBuilder(plan.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		node := &plan.Node{
+			NodeType: plan.Node_VALUE_SCAN,
+			Stats:    &plan.Stats{},
+			Limit: &plan.Expr{
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Value: &plan.Literal_U64Val{U64Val: 10},
+					},
+				},
+			},
+		}
+		builder.qry.Nodes = []*plan.Node{node}
+
+		ReCalcNodeStats(0, builder, false, false, false)
+
+		require.True(t, isFinite(node.Stats.Selectivity), "selectivity = %v", node.Stats.Selectivity)
+	})
+
+	t.Run("runtime filter over zero table count", func(t *testing.T) {
+		builder := NewQueryBuilder(plan.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		scanNode := &plan.Node{
+			NodeType: plan.Node_TABLE_SCAN,
+			Stats: &plan.Stats{
+				TableCnt: 0,
+				Outcnt:   5,
+				BlockNum: 1,
+			},
+		}
+		buildNode := &plan.Node{
+			NodeType: plan.Node_VALUE_SCAN,
+			Stats: &plan.Stats{
+				Outcnt: 10,
+			},
+		}
+		joinNode := &plan.Node{
+			NodeType: plan.Node_JOIN,
+			JoinType: plan.Node_INDEX,
+			Children: []int32{0, 1},
+		}
+		builder.qry.Nodes = []*plan.Node{scanNode, buildNode, joinNode}
+
+		recalcStatsByRuntimeFilter(scanNode, joinNode, builder)
+
+		require.True(t, isFinite(scanNode.Stats.Selectivity), "selectivity = %v", scanNode.Stats.Selectivity)
+	})
+
+	t.Run("prefix equality over zero table count", func(t *testing.T) {
+		builder := NewQueryBuilder(plan.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		expr := &plan.Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "prefix_eq"},
+					Args: []*plan.Expr{
+						{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+					},
+				},
+			},
+		}
+		stats := &pb.StatsInfo{TableCnt: 0}
+
+		selectivity := estimateExprSelectivity(expr, builder, stats)
+
+		require.True(t, isFinite(selectivity), "selectivity = %v", selectivity)
+	})
+
+	t.Run("tp force over zero table count", func(t *testing.T) {
+		builder := NewQueryBuilder(plan.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		node := &plan.Node{
+			NodeType: plan.Node_TABLE_SCAN,
+			Stats: &plan.Stats{
+				TableCnt: 0,
+				Outcnt:   10,
+				Cost:     10,
+			},
+		}
+		builder.qry.Nodes = []*plan.Node{node}
+
+		forceScanNodeStatsTP(0, builder)
+
+		require.True(t, isFinite(node.Stats.Selectivity), "selectivity = %v", node.Stats.Selectivity)
+	})
+}
+
+func TestStatsSelectivityClampAvoidsNonFiniteJoin(t *testing.T) {
+	t.Run("not over year equality stays in range", func(t *testing.T) {
+		builder := newStatsTestBuilderWithNDV("d", 1)
+		col := &plan.Expr{
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "d"},
+			},
+		}
+		yearExpr := &plan.Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "year"},
+					Args: []*plan.Expr{col},
+				},
+			},
+		}
+		eqExpr := &plan.Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "="},
+					Args: []*plan.Expr{
+						yearExpr,
+						{
+							Expr: &plan.Expr_P{
+								P: &plan.ParamRef{Pos: 0},
+							},
+						},
+					},
+				},
+			},
+		}
+		notExpr := &plan.Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "not"},
+					Args: []*plan.Expr{eqExpr},
+				},
+			},
+		}
+
+		selectivity := estimateExprSelectivity(notExpr, builder, nil)
+
+		require.True(t, isFinite(selectivity), "selectivity = %v", selectivity)
+		require.GreaterOrEqual(t, selectivity, 0.0)
+		require.LessOrEqual(t, selectivity, 1.0)
+	})
+
+	t.Run("join clamps invalid child selectivity before pow", func(t *testing.T) {
+		builder := NewQueryBuilder(plan.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		left := &plan.Node{
+			NodeType: plan.Node_VALUE_SCAN,
+			Stats: &plan.Stats{
+				Outcnt:      10,
+				Cost:        10,
+				Selectivity: -364,
+				BlockNum:    1,
+			},
+		}
+		right := &plan.Node{
+			NodeType: plan.Node_VALUE_SCAN,
+			Stats: &plan.Stats{
+				Outcnt:      10,
+				Cost:        10,
+				Selectivity: 0.5,
+				BlockNum:    1,
+			},
+		}
+		join := &plan.Node{
+			NodeType: plan.Node_JOIN,
+			JoinType: plan.Node_INNER,
+			Children: []int32{0, 1},
+			Stats:    DefaultStats(),
+		}
+		builder.qry.Nodes = []*plan.Node{left, right, join}
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.True(t, isFinite(join.Stats.Selectivity), "selectivity = %v", join.Stats.Selectivity)
+		require.GreaterOrEqual(t, join.Stats.Selectivity, 0.0)
+		require.LessOrEqual(t, join.Stats.Selectivity, 1.0)
+		require.True(t, isFinite(join.Stats.Outcnt), "outcnt = %v", join.Stats.Outcnt)
+	})
+
+	t.Run("anti join clamps invalid right selectivity for outcnt", func(t *testing.T) {
+		builder := NewQueryBuilder(plan.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		left := &plan.Node{
+			NodeType: plan.Node_VALUE_SCAN,
+			Stats: &plan.Stats{
+				Outcnt:      100,
+				Cost:        100,
+				Selectivity: 0.5,
+				BlockNum:    1,
+			},
+		}
+		right := &plan.Node{
+			NodeType: plan.Node_VALUE_SCAN,
+			Stats: &plan.Stats{
+				Outcnt:      10,
+				Cost:        10,
+				Selectivity: math.Inf(1),
+				BlockNum:    1,
+			},
+		}
+		join := &plan.Node{
+			NodeType: plan.Node_JOIN,
+			JoinType: plan.Node_ANTI,
+			Children: []int32{0, 1},
+			Stats:    DefaultStats(),
+		}
+		builder.qry.Nodes = []*plan.Node{left, right, join}
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.True(t, isFinite(join.Stats.Outcnt), "outcnt = %v", join.Stats.Outcnt)
+		require.GreaterOrEqual(t, join.Stats.Outcnt, 0.0)
+		require.True(t, isFinite(join.Stats.Selectivity), "selectivity = %v", join.Stats.Selectivity)
+		require.GreaterOrEqual(t, join.Stats.Selectivity, 0.0)
+		require.LessOrEqual(t, join.Stats.Selectivity, 1.0)
+	})
+}
+
+func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.TableCnt = 1000
+	stats.NdvMap[colName] = ndv
+	statsCache.SetStatsInfo(1, stats)
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	builder.tag2Table[0] = &plan.TableDef{
+		TblId: 1,
+		Cols: []*plan.ColDef{
+			{
+				Name: colName,
+				Typ:  plan.Type{Id: int32(types.T_date)},
+			},
+		},
+	}
+	return builder
+}
+
+type statsCacheCompilerContext struct {
+	*MockCompilerContext
+	statsCache *StatsCache
+}
+
+func (ctx *statsCacheCompilerContext) GetStatsCache() *StatsCache {
+	return ctx.statsCache
+}
+
+func isFinite(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
+}
 
 // TestUpdateStatsInfo_Decimal64_NegativeValues tests that negative decimal64 values
 // are correctly converted to float64 for statistics
