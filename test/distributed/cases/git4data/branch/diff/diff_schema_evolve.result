@@ -10,8 +10,8 @@ update t1 set c=10 where a=1;
 insert into t1 values(4,4,40);
 create snapshot sp1 for table test t1;
 data branch diff t1{snapshot="sp1"} against t0{snapshot="sp0"};
-diff t1 against t0    flag    a    b
-t1    INSERT    4    4
+diff t1 against t0    flag    a    b    c
+t1    INSERT    4    4    40
 drop snapshot sp1;
 drop snapshot sp0;
 drop table t0;

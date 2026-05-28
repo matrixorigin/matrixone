@@ -412,7 +412,7 @@ func TestDataBranchOutputWriteRowValues(t *testing.T) {
 	row := []any{int64(7), "alice"}
 
 	insertBuf := &bytes.Buffer{}
-	require.NoError(t, writeInsertRowValues(nil, tblStuff, row, insertBuf))
+	require.NoError(t, writeInsertRowValues(nil, tblStuff, row, insertBuf, tblStuff.def.visibleIdxes))
 	require.Equal(t, "(7,'alice')", insertBuf.String())
 
 	deleteBuf := &bytes.Buffer{}
