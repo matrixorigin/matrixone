@@ -346,6 +346,10 @@ func (tm *TransactionManager) EnsureCleanup(ctx context.Context) error {
 
 	// Layer 1: Check explicit transaction state
 	if tm.tracker.NeedsRollback() {
+		// Skip rollback on context cancellation - it's a control signal, not an error
+		if ctx.Err() != nil {
+			return nil
+		}
 		logutil.Warn(
 			"cdc.txn_manager.ensure_cleanup_tracker_needs_rollback",
 			zap.String("task-id", tm.taskId),
@@ -372,6 +376,10 @@ func (tm *TransactionManager) EnsureCleanup(ctx context.Context) error {
 		)
 		// Fallback to tracker state
 		if tm.tracker.hasBegin && !tm.tracker.hasCommitted {
+			// Skip rollback on context cancellation - it's a control signal, not an error
+			if ctx.Err() != nil {
+				return nil
+			}
 			return tm.rollbackLocked(ctx)
 		}
 		return nil
@@ -379,6 +387,10 @@ func (tm *TransactionManager) EnsureCleanup(ctx context.Context) error {
 
 	// Final guard: Even if tracker says committed, but watermark not updated
 	if !current.Equal(&toTs) && tm.tracker.hasBegin {
+		// Skip rollback on context cancellation - it's a control signal, not an error
+		if ctx.Err() != nil {
+			return nil
+		}
 		logutil.Error(
 			"cdc.txn_manager.ensure_cleanup_watermark_mismatch",
 			zap.String("task-id", tm.taskId),
