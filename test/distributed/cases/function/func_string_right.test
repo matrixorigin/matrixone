@@ -1,0 +1,44 @@
+-- @suit
+-- @case
+-- @test function RIGHT
+-- @label:bvt
+
+-- constant test
+select right('Hello', 1) from dual;
+select right('Hello', 2) from dual;
+select right('Hello', 3) from dual;
+select right('Hello', 0) from dual;
+select right('Hello', -1) from dual;
+select right('Hello', null) from dual;
+select right(null, null) from dual;
+select right('foobarbar', 4) from dual;
+select right('abcde', 10) from dual;
+select right('abcde', 2 + 1) from dual;
+select right('abcde', abs(-2)) from dual;
+select right('abcde', cos(0)) from dual;
+select right('abcde', length('king')) from dual;
+select right('qwerty', '1') from dual;
+select right('qwerty', '1' + 2) from dual;
+select right('是都方式快递费', 3) from dual;
+select right('あいうえお', 3) from dual;
+select right('龔龖龗龞龡', 3) from dual;
+
+-- @suite
+-- @setup
+drop table if exists t_right;
+create table t_right(str varchar(100), ch char(20), len int);
+insert into t_right values('abcdefghijklmn', 'HELLOWORLD', 3);
+insert into t_right values('  ABCDEFGH123456', 'ABCDE     ', 5);
+insert into t_right values('ABCDEF  GHIJKLMN', 'XYZ', 20);
+insert into t_right values('ABCDEFGHijklmn   ', 'short', -1);
+insert into t_right values('', '', 3);
+insert into t_right values(null, null, 2);
+insert into t_right values('nullable length', 'nullable', null);
+
+-- @case
+select right(str, len), right(ch, len) from t_right;
+select right(str, 3) from t_right;
+select right(str, null) from t_right;
+select right(null, len) from t_right;
+select str from t_right where right(str, 3) = 'lmn';
+drop table t_right;

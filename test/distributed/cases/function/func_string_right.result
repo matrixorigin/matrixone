@@ -1,0 +1,103 @@
+select right('Hello', 1) from dual;
+➤ right(Hello, 1)[12,-1,0]  𝄀
+o
+select right('Hello', 2) from dual;
+➤ right(Hello, 2)[12,-1,0]  𝄀
+lo
+select right('Hello', 3) from dual;
+➤ right(Hello, 3)[12,-1,0]  𝄀
+llo
+select right('Hello', 0) from dual;
+➤ right(Hello, 0)[12,-1,0]  𝄀
+
+select right('Hello', -1) from dual;
+➤ right(Hello, -1)[12,-1,0]  𝄀
+
+select right('Hello', null) from dual;
+➤ right(Hello, null)[12,-1,0]  𝄀
+null
+select right(null, null) from dual;
+➤ right(null, null)[12,-1,0]  𝄀
+null
+select right('foobarbar', 4) from dual;
+➤ right(foobarbar, 4)[12,-1,0]  𝄀
+rbar
+select right('abcde', 10) from dual;
+➤ right(abcde, 10)[12,-1,0]  𝄀
+abcde
+select right('abcde', 2 + 1) from dual;
+➤ right(abcde, 2 + 1)[12,-1,0]  𝄀
+cde
+select right('abcde', abs(-2)) from dual;
+➤ right(abcde, abs(-2))[12,-1,0]  𝄀
+de
+select right('abcde', cos(0)) from dual;
+➤ right(abcde, cos(0))[12,-1,0]  𝄀
+e
+select right('abcde', length('king')) from dual;
+➤ right(abcde, length(king))[12,-1,0]  𝄀
+bcde
+select right('qwerty', '1') from dual;
+➤ right(qwerty, 1)[12,-1,0]  𝄀
+y
+select right('qwerty', '1' + 2) from dual;
+➤ right(qwerty, 1 + 2)[12,-1,0]  𝄀
+rty
+select right('是都方式快递费', 3) from dual;
+➤ right(是都方式快递费, 3)[12,-1,0]  𝄀
+快递费
+select right('あいうえお', 3) from dual;
+➤ right(あいうえお, 3)[12,-1,0]  𝄀
+うえお
+select right('龔龖龗龞龡', 3) from dual;
+➤ right(龔龖龗龞龡, 3)[12,-1,0]  𝄀
+龗龞龡
+drop table if exists t_right;
+create table t_right(str varchar(100), ch char(20), len int);
+insert into t_right values('abcdefghijklmn', 'HELLOWORLD', 3);
+insert into t_right values('  ABCDEFGH123456', 'ABCDE     ', 5);
+insert into t_right values('ABCDEF  GHIJKLMN', 'XYZ', 20);
+insert into t_right values('ABCDEFGHijklmn   ', 'short', -1);
+insert into t_right values('', '', 3);
+insert into t_right values(null, null, 2);
+insert into t_right values('nullable length', 'nullable', null);
+select right(str, len), right(ch, len) from t_right;
+➤ right(str, len)[12,-1,0]  ¦  right(ch, len)[1,255,0]  𝄀
+lmn  ¦  RLD  𝄀
+23456  ¦         𝄀
+ABCDEF  GHIJKLMN  ¦  XYZ  𝄀
+  ¦    𝄀
+  ¦    𝄀
+null  ¦  null  𝄀
+null  ¦  null
+select right(str, 3) from t_right;
+➤ right(str, 3)[12,-1,0]  𝄀
+lmn  𝄀
+456  𝄀
+LMN  𝄀
+     𝄀
+  𝄀
+null  𝄀
+gth
+select right(str, null) from t_right;
+➤ right(str, null)[12,-1,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
+select right(null, len) from t_right;
+➤ right(null, len)[12,-1,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
+select str from t_right where right(str, 3) = 'lmn';
+➤ str[12,-1,0]  𝄀
+abcdefghijklmn
+drop table t_right;
