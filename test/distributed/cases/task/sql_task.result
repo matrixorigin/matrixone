@@ -51,6 +51,9 @@ execute task sql_task_cron;
 select count(*) from scheduled_events;
 count(*)
 1
+select sleep(1);
+sleep(1)
+0
 select status from mo_task.sql_task_run where task_name = 'sql_task_cron' and trigger_type = 'MANUAL' order by run_id desc limit 1;
 status
 SUCCESS
@@ -70,6 +73,9 @@ execute task sql_task_cron;
 select count(*) from scheduled_events;
 count(*)
 2
+select sleep(1);
+sleep(1)
+0
 select status from mo_task.sql_task_run where task_name = 'sql_task_cron' order by run_id desc limit 2;
 status
 SUCCESS
