@@ -13,7 +13,7 @@ create snapshot issue21685_user_lock_acc_sp for account issue21685_restore_acc;
 alter user issue21685_restore_user unlock;
 select user_name,status from mo_catalog.mo_user where user_name='issue21685_restore_user';
 -- @session
-restore account issue21685_restore_acc {snapshot = "issue21685_user_lock_acc_sp"};
+restore account issue21685_restore_acc from snapshot issue21685_user_lock_acc_sp;
 -- @session:id=1&user=issue21685_restore_acc:admin&password=111
 select user_name,status from mo_catalog.mo_user where user_name='issue21685_restore_user';
 alter user issue21685_restore_user unlock;
@@ -27,7 +27,7 @@ create snapshot issue21685_admin_lock_acc_sp for account issue21685_restore_acc;
 alter user admin unlock;
 select user_name,status from mo_catalog.mo_user where user_name='admin';
 -- @session
-restore account issue21685_restore_acc {snapshot = "issue21685_admin_lock_acc_sp"};
+restore account issue21685_restore_acc from snapshot issue21685_admin_lock_acc_sp;
 -- @session:id=1&user=issue21685_restore_acc:admin&password=111
 select user_name,status from mo_catalog.mo_user where user_name='admin';
 alter user admin unlock;
