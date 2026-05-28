@@ -15,13 +15,18 @@
 package mergeorder
 
 import (
+	"bufio"
 	"bytes"
+	"container/heap"
 	"fmt"
+	"io"
+	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -103,6 +108,44 @@ func (e *negatingInt8Executor) ResetForNextQuery() {}
 func (e *negatingInt8Executor) Free()              {}
 func (e *negatingInt8Executor) IsColumnExpr() bool { return false }
 func (e *negatingInt8Executor) TypeName() string   { return "negatingInt8Executor" }
+
+type resetTrackingExecutor struct {
+	resetCalls int
+}
+
+func (e *resetTrackingExecutor) Eval(_ *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	return nil, nil
+}
+
+func (e *resetTrackingExecutor) EvalWithoutResultReusing(_ *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	return nil, nil
+}
+
+func (e *resetTrackingExecutor) ResetForNextQuery() { e.resetCalls++ }
+func (e *resetTrackingExecutor) Free()              {}
+func (e *resetTrackingExecutor) IsColumnExpr() bool { return true }
+func (e *resetTrackingExecutor) TypeName() string   { return "resetTrackingExecutor" }
+
+type failingExecutor struct{}
+
+func (e *failingExecutor) Eval(_ *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	return nil, moerr.NewInternalErrorNoCtx("test executor failure")
+}
+
+func (e *failingExecutor) EvalWithoutResultReusing(_ *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	return nil, moerr.NewInternalErrorNoCtx("test executor failure")
+}
+
+func (e *failingExecutor) ResetForNextQuery() {}
+func (e *failingExecutor) Free()              {}
+func (e *failingExecutor) IsColumnExpr() bool { return false }
+func (e *failingExecutor) TypeName() string   { return "failingExecutor" }
+
+type failWriter struct{}
+
+func (failWriter) Write(_ []byte) (int, error) {
+	return 0, io.ErrClosedPipe
+}
 
 func makeTestCases(t *testing.T) []orderTestCase {
 	return []orderTestCase{
@@ -766,6 +809,539 @@ func TestInMemoryHeapAdvance(t *testing.T) {
 	require.NoError(t, ctr.advanceInMemoryBatchByChunk(proc, 1, 1))
 	require.Equal(t, 2, ctr.inMemoryHeap.Len())
 	require.Equal(t, 2, ctr.inMemoryHeap.items[0])
+}
+
+func TestFillSpillIncomingOrderColumns(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	data := newPairBatch(proc, []int8{1, 2}, []int64{10, 20})
+	defer data.Clean(proc.Mp())
+	key := testutil.NewVector(2, types.T_int8.ToType(), proc.Mp(), false, []int8{9, 8})
+	defer key.Free(proc.Mp())
+
+	ctr := &container{
+		executors: make([]colexec.ExpressionExecutor, 2),
+		spillColPos: []int32{
+			0,
+			-1,
+		},
+	}
+	cols, err := ctr.fillSpillIncomingOrderColumns(proc, data, []*vector.Vector{key})
+	require.NoError(t, err)
+	require.Len(t, cols, 2)
+	require.Same(t, data.Vecs[0], cols[0])
+	require.Same(t, key, cols[1])
+
+	ctr.spillColPos = []int32{2}
+	ctr.executors = make([]colexec.ExpressionExecutor, 1)
+	_, err = ctr.fillSpillIncomingOrderColumns(proc, data, nil)
+	require.Error(t, err)
+
+	ctr.spillColPos = []int32{-1}
+	_, err = ctr.fillSpillIncomingOrderColumns(proc, data, nil)
+	require.Error(t, err)
+
+	ctr.spillColPos = []int32{0}
+	_, err = ctr.fillSpillIncomingOrderColumns(proc, data, []*vector.Vector{key})
+	require.Error(t, err)
+}
+
+func TestAppendContiguousOrderRows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	src0 := testutil.NewVector(3, types.T_int8.ToType(), proc.Mp(), false, []int8{1, 2, 3})
+	src1 := testutil.NewVector(3, types.T_int8.ToType(), proc.Mp(), false, []int8{4, 5, 6})
+	defer src0.Free(proc.Mp())
+	defer src1.Free(proc.Mp())
+
+	dst := batch.NewOffHeapWithSize(2)
+	dst.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
+	dst.Vecs[1] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
+	defer dst.Clean(proc.Mp())
+
+	err := appendContiguousOrderRows(dst, []*vector.Vector{src0, src1}, []int{1, 0}, 1, 2, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int8{5, 6}, vector.MustFixedColWithTypeCheck[int8](dst.Vecs[0]))
+	require.Equal(t, []int8{2, 3}, vector.MustFixedColWithTypeCheck[int8](dst.Vecs[1]))
+}
+
+func TestSpillAppendPathAndSendResult(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	ctr := &container{
+		compares:           []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+		executors:          make([]colexec.ExpressionExecutor, 1),
+		spillColPos:        []int32{0},
+		spillAppendEnabled: true,
+		spillAppendTarget:  1 << 30,
+		batchList: []*batch.Batch{
+			newValuesBatch(proc, []int8{10, 11}),
+			newValuesBatch(proc, []int8{5, 6}),
+		},
+		orderCols: make([][]*vector.Vector, 2),
+	}
+	defer func() {
+		ctr.cleanupSpill(proc)
+		if ctr.buf != nil {
+			ctr.buf.Clean(proc.Mp())
+			ctr.buf = nil
+		}
+	}()
+
+	analyzer := process.NewAnalyzer(0, false, false, "mergeorder-test")
+	require.NoError(t, ctr.spillCachedRuns(proc, analyzer))
+	require.True(t, ctr.spilling)
+	require.Len(t, ctr.spillRuns, 1)
+	require.NotNil(t, ctr.spillActiveRun)
+
+	require.NoError(t, ctr.prepareSpillFinalMerge(proc, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}}, analyzer))
+	require.Greater(t, len(ctr.spillReaders), 0)
+
+	var got []int8
+	for {
+		var result vm.CallResult
+		sendOver, err := ctr.sendSpillResult(proc, &result)
+		require.NoError(t, err)
+		if result.Batch != nil {
+			got = append(got, vector.MustFixedColWithTypeCheck[int8](result.Batch.Vecs[0])...)
+		}
+		if sendOver {
+			break
+		}
+	}
+	require.Equal(t, []int8{5, 6, 10, 11}, got)
+}
+
+func TestMergeRunsToSpillWithStoredKeys(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	ctr := &container{
+		compares:        []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+		executors:       make([]colexec.ExpressionExecutor, 1),
+		spillColPos:     []int32{-1},
+		spillKeyIndexes: []int{0},
+	}
+	defer func() {
+		ctr.cleanupSpill(proc)
+		if ctr.buf != nil {
+			ctr.buf.Clean(proc.Mp())
+			ctr.buf = nil
+		}
+	}()
+
+	analyzer := process.NewAnalyzer(0, false, false, "mergeorder-merge-runs")
+	mkRun := func(values []int8) *spillRun {
+		bat := newValuesBatch(proc, values)
+		run, err := ctr.createSpillRun(proc)
+		require.NoError(t, err)
+
+		writer := bufio.NewWriterSize(run.file, spillIOBufferSize)
+		_, _, err = writeSpillBatch(proc, bat, []*vector.Vector{bat.Vecs[0]}, writer, &ctr.spillWriteBuf, analyzer)
+		require.NoError(t, err)
+		require.NoError(t, writer.Flush())
+		_, err = run.file.Seek(0, 0)
+		require.NoError(t, err)
+
+		run.batchCount = 1
+		run.rowCount = int64(bat.RowCount())
+		bat.Clean(proc.Mp())
+		return run
+	}
+
+	runs := []*spillRun{
+		mkRun([]int8{1, 4}),
+		mkRun([]int8{2, 5}),
+		mkRun([]int8{3, 6}),
+	}
+	defer func() {
+		for _, run := range runs {
+			if run != nil && run.file != nil {
+				_ = run.file.Close()
+				run.file = nil
+			}
+		}
+	}()
+
+	merged, err := ctr.mergeRunsToSpill(proc, runs, analyzer)
+	require.NoError(t, err)
+	require.NotNil(t, merged)
+
+	require.NoError(t, ctr.openSpillReaders(proc, []*spillRun{merged}))
+	var got []int8
+	for {
+		var result vm.CallResult
+		sendOver, err := ctr.sendSpillResult(proc, &result)
+		require.NoError(t, err)
+		if result.Batch != nil {
+			got = append(got, vector.MustFixedColWithTypeCheck[int8](result.Batch.Vecs[0])...)
+		}
+		if sendOver {
+			break
+		}
+	}
+	require.Equal(t, []int8{1, 2, 3, 4, 5, 6}, got)
+}
+
+func TestFinalizeActiveSpillRunError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	ctr := &container{}
+	require.NoError(t, ctr.ensureActiveSpillRun(proc))
+	require.NotNil(t, ctr.spillActiveRun)
+	require.NoError(t, ctr.spillActiveRun.file.Close())
+
+	err := ctr.finalizeActiveSpillRun(proc, true)
+	require.Error(t, err)
+	ctr.cleanupSpill(proc)
+}
+
+func TestFixSpillHeapAfterAdvanceTwoReaders(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	left := newValuesBatch(proc, []int8{5})
+	right := newValuesBatch(proc, []int8{1})
+	defer left.Clean(proc.Mp())
+	defer right.Clean(proc.Mp())
+
+	leftReader := &spillRunReader{batch: left, orderCols: []*vector.Vector{left.Vecs[0]}, heapIdx: 0}
+	rightReader := &spillRunReader{batch: right, orderCols: []*vector.Vector{right.Vecs[0]}, heapIdx: 1}
+	ctr := &container{
+		compares:     []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+		spillReaders: []*spillRunReader{leftReader, rightReader},
+	}
+
+	ctr.fixSpillHeapAfterAdvance(0)
+	require.Same(t, rightReader, ctr.spillReaders[0])
+	require.Equal(t, 0, rightReader.heapIdx)
+	require.Equal(t, 1, leftReader.heapIdx)
+
+	ctr.spillReaders = ctr.spillReaders[:1]
+	ctr.fixSpillHeapAfterAdvance(0)
+	ctr.spillReaders = nil
+	ctr.fixSpillHeapAfterAdvance(0)
+}
+
+func TestSpillHeapPush(t *testing.T) {
+	ctr := &container{}
+	reader := &spillRunReader{}
+	heap.Push(ctr, reader)
+	require.Len(t, ctr.spillReaders, 1)
+	require.Equal(t, 0, reader.heapIdx)
+}
+
+func TestMergeOrderResetAndOpType(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	exec := &resetTrackingExecutor{}
+	arg := &MergeOrder{}
+	arg.ctr.executors = []colexec.ExpressionExecutor{exec}
+	arg.ctr.batchList = []*batch.Batch{newValuesBatch(proc, []int8{1, 2})}
+	arg.ctr.orderCols = [][]*vector.Vector{{arg.ctr.batchList[0].Vecs[0]}}
+	arg.ctr.buf = batch.NewOffHeapWithSize(1)
+	arg.ctr.buf.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
+	arg.ctr.spillTailCols = []*vector.Vector{testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{9})}
+	require.NoError(t, arg.ctr.ensureActiveSpillRun(proc))
+	require.Equal(t, vm.MergeOrder, arg.OpType())
+
+	arg.Reset(proc, false, nil)
+	require.Equal(t, 1, exec.resetCalls)
+	require.Equal(t, receiving, arg.ctr.status)
+	require.Len(t, arg.ctr.batchList, 0)
+	require.Nil(t, arg.ctr.spillActiveRun)
+
+	arg.Free(proc, false, nil)
+}
+
+func TestSpillHelperBranches(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	ctr := &container{}
+	require.False(t, ctr.shouldSpill(1))
+	ctr.spillThreshold = 10
+	require.False(t, ctr.shouldSpill(1))
+	ctr.spilling = true
+	require.True(t, ctr.shouldSpill(0))
+
+	emptyBatch := batch.NewWithSize(1)
+	emptyBatch.Vecs[0] = testutil.NewVector(0, types.T_int8.ToType(), proc.Mp(), false, []int8{})
+	emptyBatch.SetRowCount(0)
+	defer emptyBatch.Clean(proc.Mp())
+	reader := &spillRunReader{batch: emptyBatch, rowIdx: 0}
+	require.Equal(t, 0, computeDrainChunk(reader, 0))
+
+	bat := newValuesBatch(proc, []int8{1, 2, 3})
+	defer bat.Clean(proc.Mp())
+	ctrErr := &container{
+		executors: []colexec.ExpressionExecutor{&failingExecutor{}},
+	}
+	_, err := ctrErr.evaluateOrderColumns(proc, bat)
+	require.Error(t, err)
+	ctrErr.spillKeyIndexes = []int{0}
+	_, err = ctrErr.buildSpillKeyColumns(proc, bat)
+	require.Error(t, err)
+
+	var writeBuf bytes.Buffer
+	analyzer := process.NewAnalyzer(0, false, false, "mergeorder-helper-branches")
+	_, _, err = writeSpillBatch(proc, bat, nil, failWriter{}, &writeBuf, analyzer)
+	require.Error(t, err)
+
+	reuse := batch.NewOffHeapWithSize(1)
+	reuse.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
+	defer reuse.Clean(proc.Mp())
+	reuseKey := batch.NewOffHeapWithSize(1)
+	reuseKey.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
+	defer reuseKey.Clean(proc.Mp())
+
+	_, err = readSpillPayload(proc, bufio.NewReader(bytes.NewReader(nil)), reuse)
+	require.Error(t, err)
+	_, _, err = readSpillBatches(proc, bufio.NewReader(bytes.NewReader(nil)), reuse, reuseKey)
+	require.ErrorIs(t, err, io.EOF)
+
+	var partial bytes.Buffer
+	cnt := int64(bat.RowCount())
+	partial.Write(types.EncodeInt64(&cnt))
+	require.NoError(t, appendSpillPayload(&partial, bat))
+	keyCount := int64(1)
+	partial.Write(types.EncodeInt64(&keyCount))
+	_, _, err = readSpillBatches(proc, bufio.NewReader(bytes.NewReader(partial.Bytes())), reuse, reuseKey)
+	require.Error(t, err)
+
+	ctrRestore := &container{
+		executors:   make([]colexec.ExpressionExecutor, 1),
+		spillColPos: []int32{1},
+	}
+	_, err = ctrRestore.restoreSpillOrderColumns(proc, bat, nil, nil)
+	require.Error(t, err)
+	ctrRestore.spillColPos = []int32{-1}
+	_, err = ctrRestore.restoreSpillOrderColumns(proc, bat, nil, nil)
+	require.Error(t, err)
+	keyMismatch := batch.NewOffHeapWithSize(2)
+	keyMismatch.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
+	keyMismatch.Vecs[1] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
+	defer keyMismatch.Clean(proc.Mp())
+	_, err = ctrRestore.restoreSpillOrderColumns(proc, bat, keyMismatch, nil)
+	require.Error(t, err)
+
+	oneRunCtr := &container{}
+	run := &spillRun{file: nil}
+	mergedRun, err := oneRunCtr.mergeRunsToSpill(proc, []*spillRun{run}, analyzer)
+	require.NoError(t, err)
+	require.Same(t, run, mergedRun)
+
+	noRunCtr := &container{}
+	require.NoError(t, noRunCtr.prepareSpillFinalMerge(proc, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}}, analyzer))
+	var result vm.CallResult
+	sendOver, err := noRunCtr.sendSpillResult(proc, &result)
+	require.NoError(t, err)
+	require.True(t, sendOver)
+
+	file, err := os.CreateTemp("", "mergeorder-openerr-*")
+	require.NoError(t, err)
+	defer os.Remove(file.Name())
+	require.NoError(t, file.Close())
+	openErrCtr := &container{}
+	err = openErrCtr.openSpillReaders(proc, []*spillRun{{file: file}})
+	require.Error(t, err)
+}
+
+func TestInMemoryHeapPushAndSingleInit(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	ctr := &container{
+		batchList: []*batch.Batch{newValuesBatch(proc, []int8{1})},
+	}
+	defer ctr.batchList[0].Clean(proc.Mp())
+
+	ctr.initInMemoryHeap()
+	require.Nil(t, ctr.inMemoryHeap)
+	require.Nil(t, ctr.inMemoryHeapPos)
+
+	ctr.inMemoryHeapPos = make([]int, 3)
+	h := &inMemoryMergeHeap{ctr: ctr}
+	heap.Push(h, 2)
+	require.Equal(t, 0, ctr.inMemoryHeapPos[2])
+	heap.Pop(h)
+	require.Equal(t, -1, ctr.inMemoryHeapPos[2])
+}
+
+func TestSpillReaderLifecycleAndCleanup(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	file, err := os.CreateTemp("", "mergeorder-reader-*")
+	require.NoError(t, err)
+	defer os.Remove(file.Name())
+
+	reader := &spillRunReader{}
+	reader.reset(file)
+	reader.reset(file)
+
+	emptyFixed := batch.NewWithSize(0)
+	emptyFixed.SetRowCount(5)
+	reader.batch = emptyFixed
+	reader.refreshDrainProfile()
+	require.True(t, reader.fixedWidth)
+	require.Equal(t, 1, reader.rowBytes)
+
+	varlen := batch.NewWithSize(1)
+	varlen.Vecs[0] = testutil.NewVector(1, types.T_varchar.ToType(), proc.Mp(), false, []string{""})
+	varlen.SetRowCount(1000)
+	reader.batch = varlen
+	reader.refreshDrainProfile()
+	require.False(t, reader.fixedWidth)
+	require.Equal(t, 1, reader.avgRowBytes)
+	varlen.Clean(proc.Mp())
+
+	reader.reader = bufio.NewReader(bytes.NewReader([]byte{1, 2, 3}))
+	ok, err := reader.readNextBatch(proc, &container{})
+	require.False(t, ok)
+	require.Error(t, err)
+
+	valid := newValuesBatch(proc, []int8{1})
+	defer valid.Clean(proc.Mp())
+	var payload bytes.Buffer
+	var wb bytes.Buffer
+	analyzer := process.NewAnalyzer(0, false, false, "mergeorder-reader-lifecycle")
+	_, _, err = writeSpillBatch(proc, valid, nil, &payload, &wb, analyzer)
+	require.NoError(t, err)
+	reader.reader = bufio.NewReader(bytes.NewReader(payload.Bytes()))
+	ctrBad := &container{
+		executors:   make([]colexec.ExpressionExecutor, 1),
+		spillColPos: []int32{1},
+	}
+	ok, err = reader.readNextBatch(proc, ctrBad)
+	require.False(t, ok)
+	require.Error(t, err)
+	reader.close(proc)
+
+	spillReaderFile, err := os.CreateTemp("", "mergeorder-spill-reader-*")
+	require.NoError(t, err)
+	defer os.Remove(spillReaderFile.Name())
+	spillRunFile, err := os.CreateTemp("", "mergeorder-spill-run-*")
+	require.NoError(t, err)
+	defer os.Remove(spillRunFile.Name())
+
+	ctrCleanup := &container{
+		spillReaders: []*spillRunReader{{
+			file:     spillReaderFile,
+			batch:    newValuesBatch(proc, []int8{1}),
+			keyBatch: newValuesBatch(proc, []int8{1}),
+		}},
+		spillRuns: []*spillRun{{
+			file: spillRunFile,
+		}},
+	}
+	ctrCleanup.cleanupSpill(proc)
+	require.Nil(t, ctrCleanup.spillReaders)
+	require.Nil(t, ctrCleanup.spillRuns)
+}
+
+func TestAdditionalCoverageBranches(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	// prepareInMemoryMerge early return (len <= 1) and pickAndSend empty-heap branch.
+	ctr := &container{
+		batchList: []*batch.Batch{newValuesBatch(proc, []int8{1})},
+	}
+	defer ctr.batchList[0].Clean(proc.Mp())
+	require.NoError(t, ctr.prepareInMemoryMerge(proc, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}}))
+	var result vm.CallResult
+	sendOver, err := ctr.pickAndSend(proc, &result)
+	require.NoError(t, err)
+	require.True(t, sendOver)
+	if ctr.buf != nil {
+		ctr.buf.Clean(proc.Mp())
+		ctr.buf = nil
+	}
+
+	// setSpillThreshold branch for low computed memory and setSpillAppendPolicy target > hardCap branch.
+	oldCache := fileservice.GlobalMemoryCacheSizeHint.Load()
+	fileservice.GlobalMemoryCacheSizeHint.Store(int64(^uint64(0) >> 1))
+	defer fileservice.GlobalMemoryCacheSizeHint.Store(oldCache)
+	var spillCtr container
+	spillCtr.setSpillThreshold(0)
+	require.Equal(t, int64(128*common.MiB), spillCtr.spillThreshold)
+	spillCtr.spillThreshold = 24 * common.MiB
+	spillCtr.setSpillAppendPolicy()
+	require.True(t, spillCtr.spillAppendEnabled)
+	require.Equal(t, int64(24*common.MiB), spillCtr.spillAppendTarget)
+
+	// freeOrderColumns skip branch when vector belongs to the batch.
+	bat := newValuesBatch(proc, []int8{1, 2})
+	defer bat.Clean(proc.Mp())
+	freeOrderColumns(proc.Mp(), bat, []*vector.Vector{bat.Vecs[0]})
+
+	// spillRunReader.close nil receiver branch.
+	var nilReader *spillRunReader
+	nilReader.close(proc)
+}
+
+func TestPrepareInMemoryMergeAndHeapEdgeBranches(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	b1 := newValuesBatch(proc, []int8{1})
+	b2 := newValuesBatch(proc, []int8{2})
+	defer b1.Clean(proc.Mp())
+	defer b2.Clean(proc.Mp())
+
+	ctr := &container{
+		batchList: []*batch.Batch{b1, b2},
+		orderCols: [][]*vector.Vector{{b1.Vecs[0]}, {b2.Vecs[0]}},
+	}
+	require.NoError(t, ctr.prepareInMemoryMerge(proc, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}}))
+
+	ctr2 := &container{
+		batchList: []*batch.Batch{b1, nil},
+	}
+	ctr2.initInMemoryHeap()
+	require.NotNil(t, ctr2.inMemoryHeap)
 }
 
 func BenchmarkOrder(b *testing.B) {
