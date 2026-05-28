@@ -5378,7 +5378,7 @@ func initSqrtTestCase() []tcTemp {
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(), []float64{-2}, nil),
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
 		},
 	}
 }
@@ -5420,6 +5420,18 @@ func initSqrtArrayTestCase() []tcTemp {
 			expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
 				[][]float64{{2, 3, 4}, {0, 5, 7}},
 				[]bool{false, false}),
+		},
+		{
+			info: "test sqrt array with err",
+			typ:  types.T_array_float32,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(),
+					[][]float32{{4, -9, 16}},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
+				[][]float64{{0, 0, 0}},
+				[]bool{true}),
 		},
 	}
 }

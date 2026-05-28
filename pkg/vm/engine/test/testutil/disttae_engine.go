@@ -670,10 +670,10 @@ func (ha *testHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
 	return ha.id.Add(1), nil
 }
 func (ha *testHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
-	return 0, nil
+	return ha.AllocateID(ctx)
 }
 func (ha *testHAKeeperClient) AllocateIDByKeyWithBatch(ctx context.Context, key string, batch uint64) (uint64, error) {
-	return 0, nil
+	return ha.id.Add(batch) - batch + 1, nil
 }
 func (ha *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logservice2.ClusterDetails, error) {
 	return logservice2.ClusterDetails{}, nil

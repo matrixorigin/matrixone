@@ -27,6 +27,11 @@ const (
 	SQLTaskTriggerManual    = "MANUAL"
 )
 
+const (
+	sqlTaskRunDefaultStaleTimeout = 24 * time.Hour
+	sqlTaskRunStaleGrace          = time.Minute
+)
+
 type SQLTask struct {
 	TaskID         uint64
 	TaskName       string
@@ -65,4 +70,33 @@ type SQLTaskRun struct {
 	ErrorMessage    string
 	GateResult      bool
 	RunnerCN        string
+}
+
+func isStaleSQLTaskRun(sqlTask SQLTask, run SQLTaskRun, now time.Time) bool {
+	if run.Status != SQLTaskStatusRunning {
+		return false
+	}
+	if run.StartedAt.IsZero() {
+		return true
+	}
+
+	timeout := sqlTaskRunDefaultStaleTimeout
+	if sqlTask.TimeoutSeconds > 0 {
+		timeout = time.Duration(sqlTask.TimeoutSeconds)*time.Second + sqlTaskRunStaleGrace
+	}
+	return !run.StartedAt.Add(timeout).After(now)
+}
+
+func markStaleSQLTaskRun(sqlTask SQLTask, run *SQLTaskRun, now time.Time) {
+	run.FinishedAt = now
+	if !run.StartedAt.IsZero() {
+		run.DurationSeconds = now.Sub(run.StartedAt).Seconds()
+	}
+	if sqlTask.TimeoutSeconds > 0 {
+		run.Status = SQLTaskStatusTimeout
+		run.ErrorMessage = "sql task run recovered after exceeding timeout"
+		return
+	}
+	run.Status = SQLTaskStatusFailed
+	run.ErrorMessage = "sql task run recovered from stale RUNNING state"
 }
