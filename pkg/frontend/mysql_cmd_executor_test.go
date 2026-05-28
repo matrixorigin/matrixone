@@ -1430,6 +1430,30 @@ func TestLockTablesSessionState(t *testing.T) {
 	require.False(t, ses.hasLockedTables.Load())
 }
 
+func TestUnsupportedFrontendParserStatements(t *testing.T) {
+	ctx := context.Background()
+	ses := &Session{}
+
+	run := func(stmt tree.Statement) error {
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			stmt:   stmt,
+			ses:    ses,
+		}
+		defer execCtx.Close()
+		_, err := execInFrontend(ses, execCtx)
+		return err
+	}
+
+	err := run(&tree.CheckTableStmt{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "CHECK TABLE is not supported in MatrixOne")
+
+	err = run(&tree.ShowProfileStmt{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "SHOW PROFILE is not supported in MatrixOne")
+}
+
 func Test_convert_type(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("type conversion", t, func() {
