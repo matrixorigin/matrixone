@@ -636,14 +636,6 @@ func predicateListToPruneExpr(predicates []PartitionPredicate) PartitionPruneExp
 	return &PartitionAnd{Children: children}
 }
 
-func buildPredicateMap(predicates []PartitionPredicate) map[string]*PartitionPredicate {
-	m := make(map[string]*PartitionPredicate, len(predicates))
-	for i := range predicates {
-		m[predicates[i].ColName] = &predicates[i]
-	}
-	return m
-}
-
 func discoverRecursive(
 	ctx context.Context,
 	listDir ListDirFunc,
