@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -648,6 +649,48 @@ func TestAlterTableAutoIncrement(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestAlterTableAutoIncrementCopyPath(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["simple_auto"] = &ObjectRef{
+		SchemaName: "constraint_test",
+		ObjName:    "simple_auto",
+	}
+	mock.ctxt.tables["simple_auto"] = &TableDef{
+		TableType:      catalog.SystemOrdinaryRel,
+		TblId:          24531,
+		Name:           "simple_auto",
+		AutoIncrOffset: 2,
+		Cols: []*ColDef{
+			{
+				ColId:   0,
+				Name:    "id",
+				Primary: true,
+				Typ: plan.Type{
+					Id:       int32(types.T_uint64),
+					AutoIncr: true,
+				},
+				Default: &plan.Default{},
+			},
+			{
+				ColId:   1,
+				Name:    "v",
+				Typ:     plan.Type{Id: int32(types.T_int32)},
+				Default: &plan.Default{},
+			},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Cols:        []uint64{0},
+			Names:       []string{"id"},
+		},
+	}
+
+	sqls := []string{
+		`ALTER TABLE simple_auto ADD COLUMN c int, AUTO_INCREMENT = 5;`,
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
 func TestAlterTableAutoIncrementRejectNoAutoColumn(t *testing.T) {
 	mock := NewMockOptimizer(false)
 
@@ -662,4 +705,46 @@ func TestAlterTableAutoIncrementOffsetValue(t *testing.T) {
 	assert.Equal(t, uint64(0), autoIncrementValueToOffset(0))
 	assert.Equal(t, uint64(0), autoIncrementValueToOffset(1))
 	assert.Equal(t, uint64(4), autoIncrementValueToOffset(5))
+}
+
+func TestTableHasAutoIncrementColumn(t *testing.T) {
+	tests := []struct {
+		name     string
+		tableDef *plan.TableDef
+		want     bool
+	}{
+		{
+			name: "visible auto increment column",
+			tableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{
+					{Typ: plan.Type{AutoIncr: true}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "hidden auto increment column",
+			tableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{
+					{Typ: plan.Type{AutoIncr: true}, Hidden: true},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "no auto increment column",
+			tableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{
+					{Typ: plan.Type{}},
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tableHasAutoIncrementColumn(tt.tableDef))
+		})
+	}
 }
