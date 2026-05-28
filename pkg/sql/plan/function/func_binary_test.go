@@ -5333,6 +5333,15 @@ func TestTruncateFunctionRegistration(t *testing.T) {
 		require.Equal(t, c.ret, fn.retType.Oid)
 	}
 
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		fn, err := GetFunctionByName(ctx, "truncate", []types.Type{typ.ToType(), types.T_int64.ToType()})
+		require.NoError(t, err)
+		require.Equal(t, types.T_float64, fn.retType.Oid)
+		require.Equal(t, int32(2), fn.overloadId)
+		require.True(t, fn.needCast)
+		require.Equal(t, []types.Type{types.T_float64.ToType(), types.T_int64.ToType()}, fn.targetTypes)
+	}
+
 	_, err := GetFunctionByName(ctx, "truncate", []types.Type{types.T_float64.ToType()})
 	require.Error(t, err)
 }

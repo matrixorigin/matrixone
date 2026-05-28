@@ -4,6 +4,7 @@ select truncate(122, -2), truncate(10.28 * 100, 0);
 select truncate(123.179, 1), truncate(123.179, 2), truncate(123.179, 4), truncate(123.179, 0), truncate(123.179, -1), truncate(123.179, -2), truncate(123.179, null);
 select truncate(null, 1), truncate(null, null);
 select truncate(cast(123 as signed), -2), truncate(cast(-123 as signed), -2), truncate(cast(123 as unsigned), -2);
+select truncate('1.999', 1), truncate('-1.999', 1), truncate('123.179', 2), truncate('0.999', 0);
 
 create table truncate_t1(
     a int,
@@ -21,3 +22,16 @@ insert into truncate_t1 values
 select truncate(a, -2), truncate(b, -2), truncate(c, 1), truncate(d, 1), truncate(e, 2), truncate(c, f) from truncate_t1 order by f;
 select truncate(a, f), truncate(d, f), truncate(e, f) from truncate_t1 order by f;
 drop table truncate_t1;
+
+drop table if exists truncate_string_types;
+create table truncate_string_types(
+    c_char char(16),
+    c_varchar varchar(16),
+    c_text text
+);
+insert into truncate_string_types values
+    ('1.999', '-1.999', '123.179'),
+    ('-1.999', '0.999', '-123.179'),
+    (null, null, null);
+select truncate(c_char, 1), truncate(c_varchar, 1), truncate(c_text, 2) from truncate_string_types order by c_text;
+drop table truncate_string_types;

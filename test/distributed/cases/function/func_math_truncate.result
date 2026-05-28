@@ -16,6 +16,9 @@ null    null
 select truncate(cast(123 as signed), -2), truncate(cast(-123 as signed), -2), truncate(cast(123 as unsigned), -2);
 truncate(cast(123 as signed), -2)    truncate(cast(-123 as signed), -2)    truncate(cast(123 as unsigned), -2)
 100    -100    100
+select truncate('1.999', 1), truncate('-1.999', 1), truncate('123.179', 2), truncate('0.999', 0);
+truncate(1.999, 1)    truncate(-1.999, 1)    truncate(123.179, 2)    truncate(0.999, 0)
+1.9    -1.9    123.17    0.0
 create table truncate_t1(
 a int,
 b bigint unsigned,
@@ -42,3 +45,19 @@ null    null    null
 9    1.000    1.000000
 123    123.100    123456789012.100000
 drop table truncate_t1;
+drop table if exists truncate_string_types;
+create table truncate_string_types(
+c_char char(16),
+c_varchar varchar(16),
+c_text text
+);
+insert into truncate_string_types values
+('1.999', '-1.999', '123.179'),
+('-1.999', '0.999', '-123.179'),
+(null, null, null);
+select truncate(c_char, 1), truncate(c_varchar, 1), truncate(c_text, 2) from truncate_string_types order by c_text;
+truncate(c_char, 1)    truncate(c_varchar, 1)    truncate(c_text, 2)
+null    null    null
+-1.9    0.9    -123.17
+1.9    -1.9    123.17
+drop table truncate_string_types;
