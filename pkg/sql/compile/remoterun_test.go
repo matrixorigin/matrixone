@@ -111,14 +111,14 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	proc.Base.Lim = process.Limitation{}
 	proc.Base.UnixTime = 1000000
 	proc.Base.SessionInfo = process.SessionInfo{
-		Account:        "",
-		User:           "",
-		Host:           "",
-		Role:           "",
-		ConnectionID:   0,
-		LastInsertID:   0,
-		Database:       "",
-		Version:        "",
+		Account:      "",
+		User:         "",
+		Host:         "",
+		Role:         "",
+		ConnectionID: 0,
+		LastInsertID: 0,
+		Database:     "",
+		Version:      "",
 		// Pin to UTC: time.Time{}.In(time.Local).MarshalBinary() can fail
 		// on hosts whose historical zone data for year 1 has an offset
 		// outside the int16 minute range MarshalBinary accepts.
