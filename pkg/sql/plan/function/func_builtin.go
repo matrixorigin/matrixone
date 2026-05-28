@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/exp/constraints"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -2301,6 +2302,65 @@ func builtInSin(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		}
 	}
 	return nil
+}
+
+func builtInSignSigned[T constraints.Signed](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[T, int64](parameters, result, proc, length, func(v T) int64 {
+		switch {
+		case v < 0:
+			return -1
+		case v > 0:
+			return 1
+		default:
+			return 0
+		}
+	}, selectList)
+}
+
+func builtInSignUnsigned[T constraints.Unsigned](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[T, int64](parameters, result, proc, length, func(v T) int64 {
+		if v == 0 {
+			return 0
+		}
+		return 1
+	}, selectList)
+}
+
+func builtInSignFloat[T constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[T, int64](parameters, result, proc, length, func(v T) int64 {
+		switch {
+		case v < 0:
+			return -1
+		case v > 0:
+			return 1
+		default:
+			return 0
+		}
+	}, selectList)
+}
+
+func builtInSignDecimal64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Decimal64, int64](parameters, result, proc, length, func(v types.Decimal64) int64 {
+		if v == 0 {
+			return 0
+		}
+		if v.Sign() {
+			return -1
+		}
+		return 1
+	}, selectList)
+}
+
+func builtInSignDecimal128(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Decimal128, int64](parameters, result, proc, length, func(v types.Decimal128) int64 {
+		if v == (types.Decimal128{}) {
+			return 0
+		}
+		if v.Sign() {
+			return -1
+		}
+		return 1
+	}, selectList)
 }
 
 func builtInRadians(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
