@@ -270,7 +270,6 @@ func (s *service) parallelSendWithRetry(
 				}
 			}
 			if !hasError {
-				backoff = initialBackoff
 				return result
 			}
 			result.Release()
