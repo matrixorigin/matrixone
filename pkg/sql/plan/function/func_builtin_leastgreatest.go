@@ -170,14 +170,14 @@ func leastGreatestFnVarlen(
 }
 
 // leastGreatestParamType finds the first non-T_any parameter type.
-// If all parameters are T_any (all NULL constants), returns the first parameter type.
+// If all parameters are T_any (all NULL constants), returns T_varchar.
 func leastGreatestParamType(parameters []*vector.Vector) types.Type {
 	for _, p := range parameters {
 		if p.GetType().Oid != types.T_any {
 			return *p.GetType()
 		}
 	}
-	return *parameters[0].GetType()
+	return types.T_varchar.ToType()
 }
 
 func leastFn(parameters []*vector.Vector,
