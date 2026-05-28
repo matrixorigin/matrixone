@@ -1240,6 +1240,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		if !hasRowId {
 			rowIdCol := plan2.MakeRowIdColDef()
 			cols = append(cols, rowIdCol)
+			name2index[catalog.Row_ID] = int32(len(cols) - 1)
 		}
 
 		tbl.tableDef = &plan.TableDef{
