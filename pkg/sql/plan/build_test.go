@@ -698,6 +698,18 @@ func TestUpdate(t *testing.T) {
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"update NATION a join NATION2 b on a.N_REGIONKEY = b.R_REGIONKEY set a.N_NAME = 'aa'",
+		// PostgreSQL-style UPDATE ... FROM
+		"UPDATE NATION a SET a.N_NAME = 'aa' FROM NATION2 b WHERE a.N_REGIONKEY = b.R_REGIONKEY",
+		"UPDATE NATION SET N_NAME = 'bb' FROM REGION WHERE NATION.N_REGIONKEY = REGION.R_REGIONKEY",
+		"UPDATE NATION a SET a.N_NAME = 'cc' FROM NATION2 b, REGION c WHERE a.N_REGIONKEY = b.R_REGIONKEY AND b.R_REGIONKEY = c.R_REGIONKEY",
+		// Unqualified SET LHS must bind to the target only; both NATION and
+		// NATION2 expose N_NAME but this should NOT be reported as ambiguous.
+		"UPDATE NATION SET N_NAME = NATION2.N_NAME FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY",
+		// FROM-clause join tree (JOIN ... ON ...) must round-trip without
+		// changing associativity.
+		"UPDATE NATION a SET a.N_NAME = 'dd' FROM NATION2 b JOIN REGION c ON b.R_REGIONKEY = c.R_REGIONKEY WHERE a.N_REGIONKEY = b.R_REGIONKEY",
+		// Self-join: target and source are the same table.
+		"UPDATE NATION a SET a.N_NAME = b.N_NAME FROM NATION b WHERE a.N_REGIONKEY = b.N_REGIONKEY",
 		"prepare stmt1 from 'update nation set n_name = ? where n_nationkey > ?'",
 		"drop index idx1 on test_idx",
 	}
@@ -705,8 +717,10 @@ func TestUpdate(t *testing.T) {
 
 	// should error
 	sqls = []string{
-		"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2",    // column not exist
-		"UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2", // table not exist
+		"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2",                                         // column not exist
+		"UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2",                                      // table not exist
+		"UPDATE NATION a SET a.N_NAME = 'x' FROM NOTEXIST b WHERE a.N_REGIONKEY = b.R_REGIONKEY", // FROM table not exist
+		"UPDATE NATION a SET a.N_NAME = 'x' FROM NATION2 b WHERE a.N_REGIONKEY = b.NOT_A_COL",    // FROM column not exist
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -817,6 +831,109 @@ func TestReplacePlanStructure(t *testing.T) {
 	}
 	assert.True(t, hasMultiUpdate, "REPLACE plan should contain MULTI_UPDATE node")
 	assert.True(t, hasDedupJoin, "REPLACE plan should contain DEDUP JOIN node")
+}
+
+func TestReplaceNonUniqueSingleIndexDeleteUsesIndexRowID(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO single_idx_t VALUES (1, 100)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var multiUpdate *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdate = node
+			break
+		}
+	}
+	if multiUpdate == nil {
+		t.Fatal("REPLACE plan should contain MULTI_UPDATE node")
+	}
+
+	var idxUpdateCtx *plan.UpdateCtx
+	for _, updateCtx := range multiUpdate.UpdateCtxList {
+		if updateCtx.TableDef == nil {
+			continue
+		}
+		if strings.HasPrefix(updateCtx.TableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
+			idxUpdateCtx = updateCtx
+			break
+		}
+	}
+	if idxUpdateCtx == nil {
+		t.Fatal("REPLACE plan should contain UpdateCtx for the secondary index table")
+	}
+	if len(idxUpdateCtx.DeleteCols) < 2 {
+		t.Fatal("secondary index UpdateCtx should contain delete columns")
+	}
+	if len(multiUpdate.Children) != 1 {
+		t.Fatalf("MULTI_UPDATE should have one child, got %d", len(multiUpdate.Children))
+	}
+
+	oldRowIDDeleteCol := idxUpdateCtx.DeleteCols[0]
+	oldIdxDeleteCol := idxUpdateCtx.DeleteCols[1]
+	child := query.Nodes[multiUpdate.Children[0]]
+	if oldRowIDDeleteCol.ColPos < 0 || int(oldRowIDDeleteCol.ColPos) >= len(child.ProjectList) {
+		t.Fatalf("DeleteCols[0] ColPos %d out of child project range %d",
+			oldRowIDDeleteCol.ColPos, len(child.ProjectList))
+	}
+	if oldIdxDeleteCol.ColPos < 0 || int(oldIdxDeleteCol.ColPos) >= len(child.ProjectList) {
+		t.Fatalf("DeleteCols[1] ColPos %d out of child project range %d",
+			oldIdxDeleteCol.ColPos, len(child.ProjectList))
+	}
+	wantRowIDName := idxUpdateCtx.TableDef.Name + "." + catalog.Row_ID
+	wantIdxName := idxUpdateCtx.TableDef.Name + "." + catalog.IndexTableIndexColName
+	assert.Equal(t, wantRowIDName, oldRowIDDeleteCol.Name,
+		"DeleteCols[0] should read Row_ID from the secondary index table")
+	assert.Equal(t, wantIdxName, oldIdxDeleteCol.Name,
+		"DeleteCols[1] should read the secondary index key column")
+	assert.Equal(t, int32(types.T_Rowid), child.ProjectList[oldRowIDDeleteCol.ColPos].Typ.Id,
+		"DeleteCols[0] should point at a Row_ID vector in the MULTI_UPDATE input")
+	assert.NotEqual(t, oldRowIDDeleteCol.ColPos, oldIdxDeleteCol.ColPos,
+		"Row_ID and index key delete columns must not collapse to the same input column")
+	assert.False(t, oldRowIDDeleteCol.RelPos == 0 && oldRowIDDeleteCol.ColPos == 0 &&
+		oldRowIDDeleteCol.Name != wantRowIDName,
+		"DeleteCols[0] must not fall back to a zero-value ColRef")
+}
+
+func findDedupBuildKeepLastFlags(query *plan.Query) []bool {
+	flags := make([]bool, 0, len(query.Nodes))
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_DEDUP {
+			continue
+		}
+		flags = append(flags, node.GetDedupJoinCtx().GetDedupBuildKeepLast())
+	}
+	return flags
+}
+
+func TestDedupBuildKeepLastOnlyForReplace(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	replacePlan, err := runOneStmt(mock, t, "REPLACE INTO dept VALUES (1, 'Sales', 'NY')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	replaceFlags := findDedupBuildKeepLastFlags(replacePlan.GetQuery())
+	assert.NotEmpty(t, replaceFlags, "REPLACE plan should contain DEDUP JOIN nodes")
+	for _, flag := range replaceFlags {
+		assert.True(t, flag, "REPLACE DEDUP JOIN should keep the last duplicate build row")
+	}
+
+	updatePlan, err := runOneStmt(mock, t, "update dept set deptno = '50' where loc = 'NEW YORK'")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	updateFlags := findDedupBuildKeepLastFlags(updatePlan.GetQuery())
+	assert.NotEmpty(t, updateFlags, "UPDATE plan should contain DEDUP JOIN nodes")
+	for _, flag := range updateFlags {
+		assert.False(t, flag, "UPDATE DEDUP JOIN must preserve duplicate-key failure")
+	}
 }
 
 func TestReplaceSelfRefPlanStructure(t *testing.T) {
@@ -1010,6 +1127,42 @@ func TestSubQuery(t *testing.T) {
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where N_NAME = R_NAME and R_REGIONKEY < N_REGIONKEY)", // mixed eq + non-eq predicates -> two pullup-added GroupBy entries
 		"SELECT * FROM NATION where (select count(*) from REGION where N_NAME = R_NAME and R_REGIONKEY < N_REGIONKEY) = 1",                   // count(*) with mixed eq + non-eq predicates
 		"SELECT * FROM NATION where (select avg(R_REGIONKEY) from REGION where N_NAME = R_NAME and R_REGIONKEY < N_REGIONKEY) = 1",           // avg with mixed eq + non-eq predicates
+		`SELECT * FROM NATION n1 WHERE EXISTS (
+			SELECT 1 FROM NATION n2 WHERE EXISTS (
+				SELECT 1 FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated EXISTS subquery
+		`SELECT * FROM NATION n1 WHERE NOT EXISTS (
+			SELECT 1 FROM NATION n2 WHERE EXISTS (
+				SELECT 1 FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated NOT EXISTS subquery
+		`SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY IN (
+			SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY IN (
+				SELECT n3.N_NATIONKEY FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated IN subquery
+		`SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY NOT IN (
+			SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY IN (
+				SELECT n3.N_NATIONKEY FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated NOT IN subquery
+		`SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY = ANY (
+			SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY = ANY (
+				SELECT n3.N_NATIONKEY FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated ANY subquery
+		`SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY > ALL (
+			SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY = ANY (
+				SELECT n3.N_NATIONKEY FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY < n1.N_NATIONKEY
+			)
+		)`, // two-level correlated ALL subquery
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -1022,6 +1175,19 @@ func TestSubQuery(t *testing.T) {
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) + 1 from REGION where R_REGIONKEY < N_REGIONKEY)",                         // non-eq agg scalar subquery with computed projection
 	}
 	runTestShouldError(mock, t, sqls)
+
+	sql := `SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY > ANY (
+		SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY = ANY (
+			SELECT n3.N_NATIONKEY FROM NATION n3
+			WHERE (n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_REGIONKEY = n1.N_REGIONKEY)
+				OR n3.N_REGIONKEY = 1
+		)
+	)`
+	_, err := runOneStmt(mock, t, sql)
+	assert.Error(t, err)
+	if err != nil {
+		assert.Contains(t, err.Error(), "deep correlated predicate containing inner columns cannot be pulled above mark join")
+	}
 }
 
 func TestMysqlCompatibilityMode(t *testing.T) {
