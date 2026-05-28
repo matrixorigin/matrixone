@@ -38,10 +38,11 @@ const (
 	refreshMaxInterval     = time.Second * 10
 	rssScavengeInterval    = time.Minute
 	rssCacheEvictTimeout   = time.Second * 10
-	rssScavengeTriggerRate = 0.85
 	rssScavengeVisibleRate = 0.70
-	rssCacheEvictSoftRate  = 0.85
-	rssCacheEvictHardRate  = 0.92
+	rssPressureSoftEnter   = 0.85
+	rssPressureHardEnter   = 0.92
+	rssPressureHardExit    = 0.88
+	rssPressureSoftExit    = 0.80
 	rssCacheSoftTarget     = int64(80)
 	rssCacheHardTarget     = int64(50)
 
@@ -49,6 +50,25 @@ const (
 )
 
 var freeOSMemory = debug.FreeOSMemory
+
+type rssPressureState int64
+
+const (
+	rssPressureNone rssPressureState = iota
+	rssPressureSoft
+	rssPressureHard
+)
+
+func (s rssPressureState) String() string {
+	switch s {
+	case rssPressureSoft:
+		return "soft"
+	case rssPressureHard:
+		return "hard"
+	default:
+		return "none"
+	}
+}
 
 type RSCThrottler interface {
 	Refresh()
@@ -76,6 +96,8 @@ type memThrottler struct {
 	lastRSSScavenge    atomic.Int64
 	lastRSSCacheEvict  atomic.Int64
 	lastRSSCacheTarget atomic.Int64
+	rssPressureState   atomic.Int64
+	rssPressureGen     atomic.Int64
 	rssScavengeMu      sync.Mutex
 
 	mergeAvailDebounce atomic.Int64
@@ -91,8 +113,10 @@ type memThrottler struct {
 
 		specializedForMerge bool
 
-		enableRSSScavenging bool
-		rssCacheEvictor     func(ctx context.Context, targetPercent int64)
+		enableRSSScavenging   bool
+		rssCacheEvictor       func(ctx context.Context, targetPercent int64)
+		rssCacheTargetSetter  func(targetPercent int64)
+		rssCacheTargetClearer func()
 	}
 }
 
@@ -194,37 +218,75 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 	if actualMaxMemory <= 0 || actualMaxMemory == math.MaxInt64 {
 		return
 	}
-	if float64(rss) < float64(actualMaxMemory)*rssScavengeTriggerRate {
-		return
-	}
 	visible := m.reserved.Load() + mpool.GlobalStats().NumCurrBytes.Load()
 	if visible < 0 {
 		visible = 0
 	}
-	needFreeOSMemory := float64(visible) < float64(rss)*rssScavengeVisibleRate
-	cacheTargetPercent := int64(0)
-	if float64(rss) >= float64(actualMaxMemory)*rssCacheEvictHardRate {
-		cacheTargetPercent = rssCacheHardTarget
-	} else if float64(rss) >= float64(actualMaxMemory)*rssCacheEvictSoftRate {
-		cacheTargetPercent = rssCacheSoftTarget
+	rssRate := float64(rss) / float64(actualMaxMemory)
+
+	var (
+		prevState              rssPressureState
+		nextState              rssPressureState
+		cacheTargetPercent     int64
+		shouldEvictCache       bool
+		shouldFreeOSMemory     bool
+		shouldSetCacheTarget   bool
+		resetCacheTargetFirst  bool
+		shouldClearCacheTarget bool
+		generation             int64
+	)
+
+	m.rssScavengeMu.Lock()
+	prevState = rssPressureState(m.rssPressureState.Load())
+	nextState = nextRSSPressureState(prevState, rssRate)
+	cacheTargetPercent = rssPressureCacheTarget(nextState)
+
+	if nextState != prevState {
+		generation = m.rssPressureGen.Add(1)
+		m.rssPressureState.Store(int64(nextState))
+	} else {
+		generation = m.rssPressureGen.Load()
 	}
 
-	shouldEvictCache := false
+	if cacheTargetPercent > 0 && m.options.rssCacheTargetSetter != nil {
+		shouldSetCacheTarget = true
+		resetCacheTargetFirst = prevState == rssPressureHard && nextState == rssPressureSoft
+	}
+	if nextState == rssPressureNone && prevState != rssPressureNone {
+		m.lastRSSCacheTarget.Store(0)
+		shouldClearCacheTarget = true
+	}
+
 	if cacheTargetPercent > 0 && m.options.rssCacheEvictor != nil {
-		m.rssScavengeMu.Lock()
 		lastCacheEvict := m.lastRSSCacheEvict.Load()
 		lastTarget := m.lastRSSCacheTarget.Load()
 		cacheEvictExpired := time.Duration(now-lastCacheEvict) > rssScavengeInterval
 		cacheEvictEscalated := lastTarget == 0 || cacheTargetPercent < lastTarget
-		if cacheEvictExpired || cacheEvictEscalated {
+		cachePressureEntered := prevState == rssPressureNone && nextState != rssPressureNone
+		cachePressureDowngraded := prevState == rssPressureHard && nextState == rssPressureSoft
+		if cachePressureDowngraded {
+			m.lastRSSCacheTarget.Store(cacheTargetPercent)
+		}
+		if !cachePressureDowngraded && (cachePressureEntered || cacheEvictExpired || cacheEvictEscalated) {
 			m.lastRSSCacheEvict.Store(now)
 			m.lastRSSCacheTarget.Store(cacheTargetPercent)
 			shouldEvictCache = true
 		}
-		m.rssScavengeMu.Unlock()
 	}
 
-	shouldFreeOSMemory := false
+	if shouldClearCacheTarget && m.options.rssCacheTargetClearer != nil {
+		m.options.rssCacheTargetClearer()
+	}
+	if shouldSetCacheTarget {
+		if resetCacheTargetFirst && m.options.rssCacheTargetClearer != nil {
+			m.options.rssCacheTargetClearer()
+		}
+		m.options.rssCacheTargetSetter(cacheTargetPercent)
+	}
+	m.rssScavengeMu.Unlock()
+
+	needFreeOSMemory := nextState != rssPressureNone &&
+		float64(visible) < float64(rss)*rssScavengeVisibleRate
 	if needFreeOSMemory {
 		last := m.lastRSSScavenge.Load()
 		if time.Duration(now-last) > rssScavengeInterval &&
@@ -232,7 +294,7 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 			shouldFreeOSMemory = true
 		}
 	}
-	if !shouldFreeOSMemory && !shouldEvictCache {
+	if !shouldFreeOSMemory && !shouldEvictCache && !shouldClearCacheTarget && nextState == prevState {
 		return
 	}
 	metric.FSCachePressureTriggerCounter.Inc()
@@ -243,21 +305,67 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 		zap.String("actual-total-memory", common.HumanReadableBytes(int(actualMaxMemory))),
 		zap.Bool("free-os-memory", shouldFreeOSMemory),
 		zap.Bool("evict-cache", shouldEvictCache),
+		zap.Bool("clear-cache-target", shouldClearCacheTarget),
 		zap.Int64("cache-target-percent", cacheTargetPercent),
+		zap.String("pressure-state", nextState.String()),
+		zap.String("previous-pressure-state", prevState.String()),
 		zap.String("detail", m.String()),
 	)
 	if shouldEvictCache {
 		evictor := m.options.rssCacheEvictor
 		free := freeOSMemory
-		go func(targetPercent int64) {
+		go func(targetPercent int64, gen int64) {
+			if m.rssPressureGen.Load() != gen {
+				return
+			}
 			evictCtx, cancel := context.WithTimeout(context.Background(), rssCacheEvictTimeout)
 			defer cancel()
 			evictor(evictCtx, targetPercent)
 			free()
-		}(cacheTargetPercent)
+		}(cacheTargetPercent, generation)
 	}
 	if shouldFreeOSMemory {
 		freeOSMemory()
+	}
+}
+
+func nextRSSPressureState(prev rssPressureState, rssRate float64) rssPressureState {
+	switch prev {
+	case rssPressureHard:
+		if rssRate <= rssPressureSoftExit {
+			return rssPressureNone
+		}
+		if rssRate <= rssPressureHardExit {
+			return rssPressureSoft
+		}
+		return rssPressureHard
+	case rssPressureSoft:
+		if rssRate >= rssPressureHardEnter {
+			return rssPressureHard
+		}
+		if rssRate <= rssPressureSoftExit {
+			return rssPressureNone
+		}
+		return rssPressureSoft
+	default:
+		if rssRate >= rssPressureHardEnter {
+			return rssPressureHard
+		}
+		if rssRate >= rssPressureSoftEnter {
+			return rssPressureSoft
+		}
+		return rssPressureNone
+	}
+}
+
+func rssPressureCacheTarget(state rssPressureState) int64 {
+	switch state {
+	case rssPressureSoft:
+		return rssCacheSoftTarget
+	case rssPressureHard:
+		return rssCacheHardTarget
+	default:
+		return 0
 	}
 }
 
@@ -428,6 +536,16 @@ func WithRSSScavenging() MemThrottlerOption {
 func WithRSSCacheEvictor(evictor func(ctx context.Context, targetPercent int64)) MemThrottlerOption {
 	return func(throttler *memThrottler) {
 		throttler.options.rssCacheEvictor = evictor
+	}
+}
+
+func WithRSSCachePressureTarget(
+	setter func(targetPercent int64),
+	clearer func(),
+) MemThrottlerOption {
+	return func(throttler *memThrottler) {
+		throttler.options.rssCacheTargetSetter = setter
+		throttler.options.rssCacheTargetClearer = clearer
 	}
 }
 
