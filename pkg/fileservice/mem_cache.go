@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"errors"
 	"hash/maphash"
 	"sync"
 	"sync/atomic"
@@ -295,15 +296,16 @@ func (m *MemCache) Update(
 			Offset: entry.Offset,
 			Sz:     entry.Size,
 		}
-		if target, ok := memoryCachePressureTarget(m.cache.Capacity()); ok &&
-			m.cache.Used()+int64(len(entry.CachedData.Bytes())) > target {
+		LogEvent(ctx, str_set_memory_cache_entry_begin)
+		err := m.cache.Set(ctx, key, entry.CachedData)
+		LogEvent(ctx, str_set_memory_cache_entry_end)
+		if errors.Is(err, fscache.ErrCacheAdmissionRejected) {
 			metric.FSCachePressureMemorySkipCounter.Inc()
 			continue
 		}
-
-		LogEvent(ctx, str_set_memory_cache_entry_begin)
-		m.cache.Set(ctx, key, entry.CachedData)
-		LogEvent(ctx, str_set_memory_cache_entry_end)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
