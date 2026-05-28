@@ -1504,6 +1504,16 @@ restore_pitr_stmt:
             TimeStamp: $7,
        }
    }
+|  RESTORE ACCOUNT ident DATABASE ident FROM PITR ident STRING
+   {
+       $$ = &tree.RestorePitr{
+            Level: tree.RESTORELEVELDATABASE,
+            AccountName: tree.Identifier($3.Compare()),
+            DatabaseName: tree.Identifier($5.Compare()),
+            Name: tree.Identifier($8.Compare()),
+            TimeStamp: $9,
+       }
+   }
 |   RESTORE DATABASE ident TABLE ident FROM PITR ident STRING
    {
       $$ = &tree.RestorePitr{
@@ -1514,6 +1524,17 @@ restore_pitr_stmt:
             TimeStamp: $9,
        }
    }
+|   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM PITR ident STRING
+    {
+      $$ = &tree.RestorePitr{
+            Level: tree.RESTORELEVELTABLE,
+            AccountName: tree.Identifier($3.Compare()),
+            DatabaseName: tree.Identifier($5.Compare()),
+            TableName: tree.Identifier($7.Compare()),
+            Name: tree.Identifier($10.Compare()),
+            TimeStamp: $11,
+       }
+    }
 |  RESTORE ACCOUNT ident FROM PITR ident STRING as_name_opt
     {
         $$ = &tree.RestorePitr{

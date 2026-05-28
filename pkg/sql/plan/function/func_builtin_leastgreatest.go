@@ -24,13 +24,25 @@ import (
 )
 
 // check input types for least and greatest function
-// it should be at least 1 input, and all inputs should be the same type.
+// it should be at least 1 input, and all non-NULL inputs should share the same type.
+// NULL arguments (T_any) are allowed and produce NULL results per MySQL behavior.
 func leastGreatestCheck(_ []overload, inputs []types.Type) checkResult {
 	if len(inputs) < 1 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
-	for i := 1; i < len(inputs); i++ {
-		if inputs[i].Oid != inputs[0].Oid {
+	// find the base type: first non-T_any type, or first type if all are T_any
+	baseOid := inputs[0].Oid
+	for i := 0; i < len(inputs); i++ {
+		if inputs[i].Oid != types.T_any {
+			baseOid = inputs[i].Oid
+			break
+		}
+	}
+	for i := 0; i < len(inputs); i++ {
+		if inputs[i].Oid == types.T_any {
+			continue // skip NULL arguments
+		}
+		if inputs[i].Oid != baseOid {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
 	}
@@ -157,12 +169,23 @@ func leastGreatestFnVarlen(
 	return nil
 }
 
+// leastGreatestParamType finds the first non-T_any parameter type.
+// If all parameters are T_any (all NULL constants), returns T_varchar.
+func leastGreatestParamType(parameters []*vector.Vector) types.Type {
+	for _, p := range parameters {
+		if p.GetType().Oid != types.T_any {
+			return *p.GetType()
+		}
+	}
+	return types.T_varchar.ToType()
+}
+
 func leastFn(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
 	selectList *FunctionSelectList) error {
-	paramType := parameters[0].GetType()
+	paramType := leastGreatestParamType(parameters)
 	switch paramType.Oid {
 	case types.T_bool:
 		return leastGreatestFnFixed(
@@ -445,7 +468,7 @@ func greatestFn(parameters []*vector.Vector,
 	proc *process.Process,
 	length int,
 	selectList *FunctionSelectList) error {
-	paramType := parameters[0].GetType()
+	paramType := leastGreatestParamType(parameters)
 	switch paramType.Oid {
 	case types.T_bool:
 		return leastGreatestFnFixed(
