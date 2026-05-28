@@ -96,6 +96,28 @@ func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
 		require.True(t, isFinite(selectivity), "selectivity = %v", selectivity)
 	})
 
+	t.Run("prefix equality on small table stays within range", func(t *testing.T) {
+		builder := NewQueryBuilder(plan.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		expr := &plan.Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "prefix_eq"},
+					Args: []*plan.Expr{
+						{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+					},
+				},
+			},
+		}
+		// TableCnt < 100 would make the raw 100/TableCnt ratio exceed 1.
+		stats := &pb.StatsInfo{TableCnt: 10}
+
+		selectivity := estimateExprSelectivity(expr, builder, stats)
+
+		require.True(t, isFinite(selectivity), "selectivity = %v", selectivity)
+		require.GreaterOrEqual(t, selectivity, 0.0)
+		require.LessOrEqual(t, selectivity, 1.0)
+	})
+
 	t.Run("tp force over zero table count", func(t *testing.T) {
 		builder := NewQueryBuilder(plan.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
 		node := &plan.Node{
@@ -229,9 +251,31 @@ func TestStatsSelectivityClampAvoidsNonFiniteJoin(t *testing.T) {
 
 		require.True(t, isFinite(join.Stats.Outcnt), "outcnt = %v", join.Stats.Outcnt)
 		require.GreaterOrEqual(t, join.Stats.Outcnt, 0.0)
+		// ANTI outcnt = leftOutcnt * (1 - clamp(rightSel)) * 0.5; clamp(+Inf)=1,
+		// so the (1 - 1) factor forces outcnt to exactly 0.
+		require.Equal(t, 0.0, join.Stats.Outcnt)
 		require.True(t, isFinite(join.Stats.Selectivity), "selectivity = %v", join.Stats.Selectivity)
 		require.GreaterOrEqual(t, join.Stats.Selectivity, 0.0)
 		require.LessOrEqual(t, join.Stats.Selectivity, 1.0)
+	})
+}
+
+func TestCalcSelectivityByMinMaxZeroWidthRange(t *testing.T) {
+	// max == min with a non-matching bound divides 0/0 -> NaN. The helpers must
+	// not leak NaN (which the caller would clamp to full-table selectivity 1);
+	// an impossible predicate must get the low selectivity instead.
+	t.Run("int64 min==max non-matching bound", func(t *testing.T) {
+		// col is always 5; "col > 6" matches nothing. numerator (5-6+1)=0, denom 0.
+		sel := calcSelectivityByMinMax(">", 5, 5, types.T_int64,
+			[]*plan.Literal{{Value: &plan.Literal_I64Val{I64Val: 6}}})
+		require.True(t, isFinite(sel), "selectivity = %v", sel)
+		require.Less(t, sel, 0.001)
+	})
+
+	t.Run("decimal min==max non-matching bound", func(t *testing.T) {
+		sel := calcSelectivityByMinMaxForDecimal(">", 5, 5, makeDecimalComparisonExpr(">", 6.0, 2))
+		require.True(t, isFinite(sel), "selectivity = %v", sel)
+		require.Less(t, sel, 0.001)
 	})
 }
 

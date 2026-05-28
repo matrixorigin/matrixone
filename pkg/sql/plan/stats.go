@@ -701,6 +701,11 @@ func calcSelectivityByMinMaxForDecimal(funcName string, min, max float64, expr *
 		return 0.1
 	}
 
+	if math.IsNaN(ret) {
+		// max == min with a non-matching bound divides 0/0; the predicate
+		// cannot match, so return the low selectivity instead of leaking NaN.
+		return 0.00000001
+	}
 	if ret < 0 {
 		// Value out of range, return low selectivity
 		return 0.00000001
@@ -753,6 +758,11 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 		ret = 0.1
 	}
 
+	if math.IsNaN(ret) {
+		// max == min with a non-matching bound divides 0/0; the predicate
+		// cannot match, so return the low selectivity instead of leaking NaN.
+		return 0.00000001
+	}
 	if ret < 0 {
 		// val out of range, return low sel
 		return 0.00000001
@@ -893,7 +903,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 		return 1.0
 	}
 	if expr.Selectivity != 0 {
-		return expr.Selectivity // already calculated
+		return clampSelectivity(expr.Selectivity, 1) // already calculated
 	}
 
 	ret := 1.0
@@ -935,7 +945,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 		case "prefix_eq":
 			if containsDynamicParam(expr) {
 				if s != nil {
-					return safeRatio(100, s.TableCnt, 0.0000001)
+					return clampSelectivity(safeRatio(100, s.TableCnt, 0.0000001), 1)
 				} else {
 					return 0.0000001
 				}
