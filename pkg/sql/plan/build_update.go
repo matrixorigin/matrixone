@@ -274,10 +274,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	var err error
 	var selectList []tree.SelectExpr
 
-	var aliasList = make([]string, len(tableInfo.alias))
-	for alias, i := range tableInfo.alias {
-		aliasList[i] = alias
-	}
+	aliasList := orderedDmlAliases(tableInfo.alias)
 
 	updatePlanCtxs := make([]*dmlPlanCtx, len(aliasList))
 	for i, alias := range aliasList {

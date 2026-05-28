@@ -74,6 +74,7 @@ func (s *service) heartbeat(ctx context.Context) {
 	ctx2, cancel := context.WithTimeoutCause(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration, moerr.CauseHeartbeat)
 	defer cancel()
 
+	s.adjustSQLAddress()
 	hb := logservicepb.CNStoreHeartbeat{
 		UUID:                s.cfg.UUID,
 		ServiceAddress:      s.pipelineServiceServiceAddr(),
