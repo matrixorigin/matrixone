@@ -1420,7 +1420,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		// from
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		stmt.AsSource.Format(fmtCtx)
-		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
+		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", fmtCtx.String()))
 
 		createTable.CreateAsSelectSql = insertSqlBuilder.String()
 	}
@@ -1703,86 +1703,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	return nil
 }
 
-func restoreIntervalSyntaxForCTAS(sql string) string {
-	var out strings.Builder
-	for i := 0; i < len(sql); {
-		if !strings.HasPrefix(strings.ToLower(sql[i:]), "interval(") {
-			out.WriteByte(sql[i])
-			i++
-			continue
-		}
-
-		expr, unit, next, ok := parseIntervalCall(sql, i)
-		if !ok || !isIntervalUnitToken(unit) {
-			out.WriteByte(sql[i])
-			i++
-			continue
-		}
-
-		out.WriteString("interval ")
-		out.WriteString(strings.TrimSpace(expr))
-		out.WriteByte(' ')
-		out.WriteString(strings.TrimSpace(unit))
-		i = next
-	}
-	return out.String()
-}
-
-func parseIntervalCall(sql string, start int) (expr string, unit string, next int, ok bool) {
-	const prefix = "interval("
-	pos := start + len(prefix)
-	depth := 1
-	comma := -1
-	inSingleQuote := false
-	inDoubleQuote := false
-
-	for pos < len(sql) {
-		ch := sql[pos]
-		switch ch {
-		case '\'':
-			if !inDoubleQuote {
-				inSingleQuote = !inSingleQuote
-			}
-		case '"':
-			if !inSingleQuote {
-				inDoubleQuote = !inDoubleQuote
-			}
-		case '(':
-			if !inSingleQuote && !inDoubleQuote {
-				depth++
-			}
-		case ')':
-			if !inSingleQuote && !inDoubleQuote {
-				depth--
-				if depth == 0 {
-					if comma == -1 {
-						return "", "", 0, false
-					}
-					return sql[start+len(prefix) : comma], sql[comma+1 : pos], pos + 1, true
-				}
-			}
-		case ',':
-			if !inSingleQuote && !inDoubleQuote && depth == 1 && comma == -1 {
-				comma = pos
-			}
-		}
-		pos++
-	}
-	return "", "", 0, false
-}
-
-func isIntervalUnitToken(unit string) bool {
-	switch strings.ToLower(strings.Trim(strings.TrimSpace(unit), "`'\"")) {
-	case "microsecond", "second", "minute", "hour", "day", "week", "month", "quarter", "year",
-		"second_microsecond", "minute_microsecond", "minute_second", "hour_microsecond",
-		"hour_second", "hour_minute", "day_microsecond", "day_second", "day_minute",
-		"day_hour", "year_month":
-		return true
-	default:
-		return false
-	}
-}
-
 func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 	switch typ {
 	case tree.REFERENCE_OPTION_CASCADE:
@@ -1810,43 +1730,9 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		return moerr.NewInternalErrorNoCtx("fulltext plugin not registered")
 	}
 	for _, indexInfo := range indexInfos {
-<<<<<<< HEAD
 		idxDefs, tblDefs, err := p.Plan().BuildFullTextIndexDefs(
 			ctx, indexInfo, colMap, existedIndexes, pkeyName,
 		)
-=======
-		// fulltext only support char, varchar and text
-		for _, keyPart := range indexInfo.KeyParts {
-			nameOrigin := keyPart.ColName.ColNameOrigin()
-			name := keyPart.ColName.ColName()
-			if _, ok := colMap[name]; !ok {
-				return moerr.NewInvalidInput(ctx.GetContext(), fmt.Sprintf("column '%s' does not exist", nameOrigin))
-			}
-			typid := colMap[name].Typ.Id
-			if !(typid == int32(types.T_text) || typid == int32(types.T_char) ||
-				typid == int32(types.T_varchar) || typid == int32(types.T_json) || typid == int32(types.T_datalink)) {
-				return moerr.NewNotSupported(ctx.GetContext(), "fulltext index only support char, varchar, text, datalink and json")
-			}
-		}
-
-		// check parser
-		var parsername string
-		if indexInfo.IndexOption != nil && indexInfo.IndexOption.ParserName != "" {
-			// set parser ngram
-			parsername = strings.ToLower(indexInfo.IndexOption.ParserName)
-			if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" && parsername != "gojieba" {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("Fulltext parser %s not supported", parsername))
-			}
-		}
-	}
-
-	for _, indexInfo := range indexInfos {
-
-		// create index definition
-		indexDef := &plan.IndexDef{}
-
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
->>>>>>> gpu_async_search
 		if err != nil {
 			return err
 		}
