@@ -3481,6 +3481,49 @@ var (
 			input:  "select get_format(timestamp, 'ISO')",
 			output: "select get_format(TIMESTAMP, ISO)",
 		},
+		// Issue #23122: ANALYZE TABLE multi-table
+		{
+			input:  "analyze table t1 (a, b), t2 (c, d)",
+			output: "analyze table t1(a, b), t2(c, d)",
+		},
+		// Issue #23122: CHECK TABLE
+		{
+			input:  "check table t1",
+			output: "check table t1",
+		},
+		{
+			input:  "check table t1 extended",
+			output: "check table t1 extended",
+		},
+		{
+			input:  "check table t1, t2",
+			output: "check table t1, t2",
+		},
+		{
+			input:  "check table t1 for upgrade",
+			output: "check table t1 for upgrade",
+		},
+		// Issue #23122: SHOW PROFILE
+		{
+			input:  "show profile",
+			output: "show profile",
+		},
+		{
+			input:  "show profile for query 2",
+			output: "show profile for query 2",
+		},
+		{
+			input:  "show profile limit 10",
+			output: "show profile limit 10",
+		},
+		{
+			input:  "show profile for query 2 limit 10",
+			output: "show profile for query 2 limit 10",
+		},
+		{
+			input:  "show profile for query 2 limit 10 offset 5",
+			output: "show profile for query 2 limit 10 offset 5",
+		},
 	}
 )
 
@@ -3804,6 +3847,13 @@ var (
 		},
 		{
 			input: "ALTER TABLE t1 ADD PARTITION (PARTITION p5 VALUES IN (15, 17)",
+		},
+		// Issue #23122: Invalid syntax that should still fail
+		{
+			input: "check table", // no table name
+		},
+		{
+			input: "analyze table t1, t2(a)", // first table has no column list
 		},
 	}
 )
