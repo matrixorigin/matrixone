@@ -2318,9 +2318,12 @@ func projectBaseBatchToTarget(
 		out.Vecs[i+1] = vector.NewConstNull(tblStuff.def.colTypes[i], baseBat.RowCount(), mp)
 	}
 	baseColCount := baseBat.VectorCount() - 1 // subtract RowID
+	if baseColCount > len(tblStuff.def.baseColToTarIdx) {
+		baseColCount = len(tblStuff.def.baseColToTarIdx)
+	}
 	for baseColIdx := 0; baseColIdx < baseColCount; baseColIdx++ {
 		tarColIdx := tblStuff.def.baseColToTarIdx[baseColIdx]
-		if tarColIdx >= 0 {
+		if tarColIdx >= 0 && tarColIdx < len(tblStuff.def.colNames) {
 			out.Vecs[tarColIdx+1] = baseBat.Vecs[baseColIdx+1]
 		}
 	}
