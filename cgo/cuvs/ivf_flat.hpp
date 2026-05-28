@@ -536,6 +536,12 @@ public:
             [&](raft_handle_wrapper_t& handle, const int64_t* seq_ids, uint64_t n) {
                 this->extend_internal(handle, new_data, n, seq_ids);
             });
+        // Invalidate dynamic-batching cache: IVF-Flat extend mutates the cuVS
+        // index in place, so dynb_cache_t entries keyed on the raw upstream
+        // pointer survive with pre-extend state and serve stale search
+        // results. dynb_cache_ has its own mutex; in-flight searches keep
+        // their wrapper alive via shared_ptr, so clearing is race-safe.
+        this->dynb_cache_.clear();
     }
 
     void extend_float(const float* new_data, uint64_t n_rows, const int64_t* new_ids) {
@@ -544,6 +550,8 @@ public:
             [&](raft_handle_wrapper_t& handle, const int64_t* seq_ids, uint64_t n) {
                 this->extend_internal_float(handle, new_data, n, seq_ids);
             });
+        // See extend() above — same staleness, same fix.
+        this->dynb_cache_.clear();
     }
 
     // Sync T-typed entry — wraps search_async + search_wait. SHARDED inline
@@ -577,7 +585,13 @@ public:
             if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("search_async: index not loaded");
         }
         if (!this->worker) throw std::runtime_error("Worker not initialized");
-        (void)query_dimension;  // search_internal uses this->dimension; param kept for signature parity.
+        // search_internal uses this->dimension internally; reject any
+        // mismatched caller dim instead of silently coercing.
+        if (query_dimension != this->dimension) {
+            throw std::invalid_argument(
+                "search_with_filter_async: query_dimension (" + std::to_string(query_dimension) +
+                ") does not match index dimension (" + std::to_string(this->dimension) + ")");
+        }
 
         auto queries_copy = std::make_shared<std::vector<T>>(queries_data, queries_data + num_queries * this->dimension);
 
@@ -1133,9 +1147,14 @@ public:
             this->worker->submit_all_devices(task);
         }
 
-        try {
-            this->load_ids(filename + ".ids");
-        } catch (...) {}
+        // .ids sidecar is optional — see cagra.hpp's load() for the rationale.
+        {
+            std::ifstream probe(filename + ".ids", std::ios::binary);
+            if (probe.good()) {
+                probe.close();
+                this->load_ids(filename + ".ids");
+            }
+        }
 
         this->is_loaded_ = true;
         this->train_quantizer_if_needed();

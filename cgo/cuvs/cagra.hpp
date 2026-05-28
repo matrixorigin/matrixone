@@ -392,11 +392,11 @@ public:
             merged_ids.reserve(new_idx->count);
             int64_t offset = 0;
             for (auto* bi : base_indices) {
-                uint32_t n = bi->count;
+                uint64_t n = bi->count;
                 if (!bi->host_ids.empty()) {
                     merged_ids.insert(merged_ids.end(), bi->host_ids.begin(), bi->host_ids.end());
                 } else {
-                    for (uint32_t i = 0; i < n; ++i) merged_ids.push_back(offset + i);
+                    for (uint64_t i = 0; i < n; ++i) merged_ids.push_back(offset + i);
                 }
                 offset += n;
             }
@@ -687,6 +687,13 @@ public:
                 [&](raft_handle_wrapper_t& handle, const int64_t* /*seq_ids*/, uint64_t n) {
                     this->extend_internal(handle, additional_data, n);
                 });
+            // Invalidate dynamic-batching cache: CAGRA extend mutates the
+            // cuVS graph in place, so dynb_cache_t entries keyed on the raw
+            // upstream pointer survive with pre-extend state and serve stale
+            // search results. dynb_cache_ has its own mutex; in-flight
+            // searches keep their wrapper alive via shared_ptr, so clearing
+            // is race-safe.
+            this->dynb_cache_.clear();
         }
     }
 
@@ -726,7 +733,13 @@ public:
             if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("search_async: index not loaded");
         }
         if (!this->worker) throw std::runtime_error("Worker not initialized");
-        (void)query_dimension;  // search_internal uses this->dimension; param kept for signature parity.
+        // search_internal uses this->dimension internally; reject any
+        // mismatched caller dim instead of silently coercing.
+        if (query_dimension != this->dimension) {
+            throw std::invalid_argument(
+                "search_with_filter_async: query_dimension (" + std::to_string(query_dimension) +
+                ") does not match index dimension (" + std::to_string(this->dimension) + ")");
+        }
 
         auto queries_copy = std::make_shared<std::vector<T>>(queries_data, queries_data + num_queries * this->dimension);
 
@@ -1287,9 +1300,17 @@ public:
             this->worker->submit_all_devices(task);
         }
 
-        try {
-            this->load_ids(filename + ".ids");
-        } catch (...) {}
+        // .ids sidecar is optional — only written by save() when host_ids is
+        // non-empty. Probe-first matches the manifest-based load_common_components
+        // pattern (index_base.hpp): no exception machinery, and any failure
+        // inside load_ids (truncated read, etc.) propagates as a real error.
+        {
+            std::ifstream probe(filename + ".ids", std::ios::binary);
+            if (probe.good()) {
+                probe.close();
+                this->load_ids(filename + ".ids");
+            }
+        }
 
         this->is_loaded_ = true;
         this->train_quantizer_if_needed();
@@ -1459,8 +1480,9 @@ public:
                     return std::any();
                 }
             );
-            // Restore total count from manifest (per-shard size() would be smaller)
-            this->count           = static_cast<uint32_t>(json_int(m.raw, "capacity"));
+            // Restore total count from manifest (per-shard size() would be smaller).
+            // this->count is uint64_t; casting through uint32_t would truncate at 4B rows.
+            this->count           = static_cast<uint64_t>(json_int(m.raw, "capacity"));
             this->current_offset_ = static_cast<uint64_t>(json_int(m.raw, "length"));
 
         } else {
