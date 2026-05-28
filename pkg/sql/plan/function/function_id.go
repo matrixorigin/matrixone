@@ -448,10 +448,11 @@ const (
 	JSON_SCHEMA_VALID_REPORT = 367
 	JSON_VALUE               = 368
 	DEGREES                  = 369
+	TRUNCATE                 = 370
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 370
+	FUNCTION_END_NUMBER = 371
 )
 
 // functionIdRegister is what function we have registered already.
@@ -577,6 +578,7 @@ var functionIdRegister = map[string]int32{
 	"lpad":              LPAD,
 	"pi":                PI,
 	"round":             ROUND,
+	"truncate":          TRUNCATE,
 	"rpad":              RPAD,
 	"strcmp":            STRCMP,
 	"substr":            SUBSTRING,
