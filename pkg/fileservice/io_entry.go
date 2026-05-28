@@ -85,6 +85,17 @@ func (i *IOEntry) ReadFromOSFile(ctx context.Context, file *os.File, allocator C
 		return err
 	}
 
+	// Release the IO buffer early when CachedData holds the decompressed/copied result.
+	// After setCachedData, i.Data (compressed/raw IO buffer) is only needed by
+	// diskCache.Update (which skips entries with fromCache == diskCache) and
+	// ReadCloserForRead (which we guard above). Releasing early avoids holding
+	// both compressed and decompressed data simultaneously under high concurrency.
+	if i.CachedData != nil && i.ReadCloserForRead == nil && i.releaseData != nil {
+		i.releaseData()
+		i.releaseData = nil
+		i.Data = nil
+	}
+
 	i.done = true
 
 	return nil

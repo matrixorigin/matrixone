@@ -632,6 +632,45 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	/*
+		create table single_idx_t(
+			id int primary key,
+			val int,
+			index idx_val(val)
+		);
+	*/
+	constraintTestSchema["single_idx_t"] = &Schema{
+		tblId: 88900,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"val", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks: []int{0},
+		idxs: []index{
+			{
+				indexName: "idx_val",
+				tableName: catalog.SecondaryIndexTableNamePrefix + "single-idx-t-idx-val",
+				parts:     []string{"val"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+				},
+				tableExist: true,
+				unique:     false,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.SecondaryIndexTableNamePrefix+"single-idx-t-idx-val"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+			{catalog.IndexTablePrimaryColName, types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
 		create table dept(
 			deptno int unsigned auto_increment,
 			dname varchar(15),
@@ -688,6 +727,48 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		cols: []col{
 			{catalog.IndexTableIndexColName, types.T_varchar, false, 255, 0},
 			{catalog.IndexTablePrimaryColName, types.T_uint32, false, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
+		create table dept_composite_uk(
+			deptno int unsigned auto_increment,
+			dname varchar(15),
+			loc varchar(50),
+			primary key(deptno),
+			unique key uk_dname_loc(dname, loc)
+		);
+	*/
+	constraintTestSchema["dept_composite_uk"] = &Schema{
+		tblId: 88889,
+		cols: []col{
+			{"deptno", types.T_uint32, true, 32, 0},
+			{"dname", types.T_varchar, true, 15, 0},
+			{"loc", types.T_varchar, true, 50, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks: []int{0},
+		idxs: []index{
+			{
+				indexName: "uk_dname_loc",
+				tableName: catalog.UniqueIndexTableNamePrefix + "dept-composite-uk-idx",
+				parts:     []string{"dname", "loc"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+				},
+				tableExist: true,
+				unique:     true,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"dept-composite-uk-idx"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint32, true, 32, 0},
 			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
 		},
 		pks:    []int{0},

@@ -33,6 +33,11 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	remoteRetryInitialBackoff = 100 * time.Millisecond
+	remoteRetryMaxBackoff     = 5 * time.Second
+)
+
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
 // And the remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
@@ -100,10 +105,25 @@ func (l *remoteLockTable) lock(
 		cb(pb.Result{}, ErrTxnNotFound)
 		return
 	}
+	if txn.bindChanged {
+		cb(pb.Result{}, ErrLockTableBindChanged)
+		return
+	}
 
 	if err == nil {
 		defer releaseResponse(resp)
-		if err := l.maybeHandleBindChanged(resp); err != nil {
+		if resp.NewBind != nil {
+			txn.Unlock()
+			err = l.maybeHandleBindChanged(resp)
+			txn.Lock()
+			if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
+				cb(pb.Result{}, ErrTxnNotFound)
+				return
+			}
+			if txn.bindChanged {
+				cb(pb.Result{}, ErrLockTableBindChanged)
+				return
+			}
 			logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 			cb(pb.Result{}, err)
 			return
@@ -126,7 +146,18 @@ func (l *remoteLockTable) lock(
 	// And use origin error to return, because once handlerError
 	// swallows the error, the transaction will not be abort.
 	originalErr := err
-	if e := l.handleError(err, true); e != nil {
+	txn.Unlock()
+	e := l.handleError(err, true)
+	txn.Lock()
+	if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
+		cb(pb.Result{}, ErrTxnNotFound)
+		return
+	}
+	if txn.bindChanged {
+		cb(pb.Result{}, ErrLockTableBindChanged)
+		return
+	}
+	if e != nil {
 		err = e
 	} else {
 		// handleError returned nil, meaning bind changed and error was swallowed
@@ -155,6 +186,7 @@ func (l *remoteLockTable) unlock(
 		l.bind,
 	)
 	retryCount := 0
+	backoff := remoteRetryInitialBackoff
 	for {
 		err := l.doUnlock(txn, commitTS, mutations...)
 		if err == nil {
@@ -181,6 +213,8 @@ func (l *remoteLockTable) unlock(
 		if err := l.handleError(err, false); err == nil {
 			return
 		}
+		waitRemoteRetryBackoff(backoff)
+		backoff = nextRemoteRetryBackoff(backoff)
 	}
 }
 
@@ -188,6 +222,7 @@ func (l *remoteLockTable) getLock(
 	key []byte,
 	txn pb.WaitTxn,
 	fn func(Lock)) {
+	backoff := remoteRetryInitialBackoff
 	for {
 		lock, ok, err := l.doGetLock(key, txn)
 		if err == nil {
@@ -202,7 +237,26 @@ func (l *remoteLockTable) getLock(
 		if err = l.handleError(err, false); err == nil {
 			return
 		}
+		waitRemoteRetryBackoff(backoff)
+		backoff = nextRemoteRetryBackoff(backoff)
 	}
+}
+
+func waitRemoteRetryBackoff(backoff time.Duration) {
+	if backoff > 0 {
+		time.Sleep(backoff)
+	}
+}
+
+func nextRemoteRetryBackoff(backoff time.Duration) time.Duration {
+	if backoff <= 0 {
+		return remoteRetryInitialBackoff
+	}
+	backoff *= 2
+	if backoff > remoteRetryMaxBackoff {
+		return remoteRetryMaxBackoff
+	}
+	return backoff
 }
 
 func (l *remoteLockTable) doUnlock(

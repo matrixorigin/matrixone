@@ -74,6 +74,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	rssCacheFamilyEvictTimeout   = 10 * time.Second
+	rssCacheAdmissionPressureTTL = 2 * time.Minute
+	rssCachePressureTargetOwner  = "cn-rss"
+)
+
+var (
+	evictMemoryCachesToCapacityPercent = fileservice.EvictMemoryCachesToCapacityPercent
+)
+
+func makeRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
+	return func(ctx context.Context, targetPercent int64) {
+		memoryCtx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseRSSCacheEvict)
+		defer cancel()
+		evictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
+	}
+}
+
+func setRSSCachePressureTarget(targetPercent int64) {
+	fileservice.SetMemoryCachePressureTargetPercentByOwner(
+		rssCachePressureTargetOwner,
+		targetPercent,
+		time.Now().Add(rssCacheAdmissionPressureTTL),
+	)
+}
+
+func clearRSSCachePressureTarget() {
+	fileservice.ClearMemoryCachePressureTargetByOwner(rssCachePressureTargetOwner)
+}
+
 func NewService(
 	cfg *Config,
 	ctx context.Context,
@@ -203,6 +233,12 @@ func NewService(
 		"CNFlushS3",
 		90.0/100.0,
 		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
+		rscthrottler.WithRSSScavenging(),
+		rscthrottler.WithRSSCachePressureTarget(
+			setRSSCachePressureTarget,
+			clearRSSCachePressureTarget,
+		),
+		rscthrottler.WithRSSCacheEvictor(makeRSSCacheEvictor(rssCacheFamilyEvictTimeout)),
 	)
 
 	srv.pu.LockService = srv.lockService
