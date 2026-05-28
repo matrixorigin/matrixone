@@ -99,6 +99,15 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		return nil, err
 	}
 
+	// A PostgreSQL-style UPDATE ... FROM may match a single target row from
+	// multiple source rows. Force the agg-based dedup path (any_value over
+	// the target's primary key) just like the classic multi-table syntax
+	// would; without this flag the fallback planner would silently produce
+	// duplicate-row writes.
+	if stmt.From != nil && len(stmt.From.Tables) > 0 {
+		tblInfo.needAggFilter = true
+	}
+
 	// check update field and set updateKeys
 	usedTbl := make(map[string]map[string]tree.Expr)
 	allColumns := make(map[string]map[string]struct{})
@@ -107,6 +116,30 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		for _, col := range tblInfo.tableDefs[idx].Cols {
 			allColumns[alias][col.Name] = struct{}{}
 		}
+	}
+
+	// checkSetGeneratedCol returns skip=true when the SET assigns DEFAULT to a
+	// stored generated column (which should be silently dropped so the base
+	// column's recomputation fills it), or an error when a non-DEFAULT value
+	// is assigned to any generated column. Mirrors bind_update.go's behaviour.
+	checkSetGeneratedCol := func(alias, column string, expr tree.Expr) (bool, error) {
+		idx, ok := tblInfo.alias[alias]
+		if !ok {
+			return false, nil
+		}
+		tableDef := tblInfo.tableDefs[idx]
+		for _, col := range tableDef.Cols {
+			if col.Name != column || col.GeneratedCol == nil {
+				continue
+			}
+			if _, ok := expr.(*tree.DefaultVal); ok {
+				return true, nil
+			}
+			return false, moerr.NewInvalidInputf(ctx.GetContext(),
+				"the value specified for generated column '%s' in table '%s' is not allowed",
+				column, tableDef.Name)
+		}
+		return false, nil
 	}
 
 	appendToTbl := func(table, column string, expr tree.Expr) {
@@ -127,7 +160,13 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 			tblName := parts.TblName()
 			if _, tblExists := tblInfo.alias[tblName]; tblExists {
 				if _, colExists := allColumns[tblName][colName]; colExists {
-					appendToTbl(tblName, colName, expr)
+					skip, err := checkSetGeneratedCol(tblName, colName, expr)
+					if err != nil {
+						return nil, err
+					}
+					if !skip {
+						appendToTbl(tblName, colName, expr)
+					}
 				} else {
 					return nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), parts.TblNameOrigin())
 				}
@@ -144,7 +183,13 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 						return nil, moerr.NewInternalErrorf(ctx.GetContext(), "Column '%v' in field list is ambiguous", parts.ColNameOrigin())
 					}
 					found = true
-					appendToTbl(alias, colName, expr)
+					skip, err := checkSetGeneratedCol(alias, colName, expr)
+					if err != nil {
+						return nil, err
+					}
+					if !skip {
+						appendToTbl(alias, colName, expr)
+					}
 				}
 			}
 			if !found && stmt.With != nil {
@@ -170,7 +215,11 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		isMulti:       tblInfo.isMulti,
 		needAggFilter: tblInfo.needAggFilter,
 	}
-	for alias, columns := range usedTbl {
+	for _, alias := range orderedDmlAliases(tblInfo.alias) {
+		columns, ok := usedTbl[alias]
+		if !ok {
+			continue
+		}
 		idx := tblInfo.alias[alias]
 		tblDef := tblInfo.tableDefs[idx]
 		newTblInfo.objRef = append(newTblInfo.objRef, tblInfo.objRef[idx])
@@ -201,6 +250,14 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 	}
 
 	return newTblInfo, nil
+}
+
+func orderedDmlAliases(aliasToIdx map[string]int) []string {
+	aliases := make([]string, len(aliasToIdx))
+	for alias, idx := range aliasToIdx {
+		aliases[idx] = alias
+	}
+	return aliases
 }
 
 func checkTableType(ctx context.Context, tableDef *TableDef) error {

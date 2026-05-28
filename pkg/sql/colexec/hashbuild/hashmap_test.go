@@ -395,6 +395,65 @@ func TestDedupBuildKeepLastDeleteOnlyRowsWithDelColIdx(t *testing.T) {
 	require.Equal(t, int32(100), markers2[2])
 }
 
+// TestDedupBuildKeepLastMarksConflictBucketForDiscardedFanout reproduces the
+// REPLACE multi-UK fan-out case (issue #24428) at the hashbuild layer: one new
+// row (same new PK) fans out to several build rows that carry DIFFERENT old
+// PKs. keep-last keeps one and turns the others into delete-only rows. The
+// surviving bucket must still be marked deleted (DelRows) when a discarded
+// row's old PK equals the surviving row's new key, otherwise the dedup-join
+// probe side raises a false DuplicateEntry for the existing row REPLACE removes.
+func TestDedupBuildKeepLastMarksConflictBucketForDiscardedFanout(t *testing.T) {
+	var hb HashmapBuilder
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hb.IsDedup = true
+	hb.DedupBuildKeepLast = true
+	hb.OnDuplicateAction = plan.Node_FAIL
+	hb.DedupColName = "id"
+	hb.DedupColTypes = []plan.Type{newExpr(0, types.T_int32.ToType()).Typ}
+	defer func() {
+		hb.Reset(proc, true)
+		hb.Free(proc)
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	// keyCols = col0 (new PK); delColIdx = col1 (old PK); marker = col2 (old
+	// row id). Empty keep-col list so BuildHashmap also preserves the old-PK
+	// column on the delete-only rows.
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, 1, 2, nil, proc))
+	// Three fan-out copies of new PK=1 that matched old rows with PK 1, 2, 3.
+	bat := makeIntKeyValueBatchWithMarker(
+		proc,
+		[]int32{1, 1, 1},
+		[]int32{1, 2, 3},
+		[]int32{100, 200, 300},
+		nil,
+	)
+	require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+	hb.InputBatchRowCount = bat.RowCount()
+	bat.Clean(proc.Mp())
+
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+
+	// One surviving row (index 0) plus two delete-only rows (index 1, 2).
+	require.Equal(t, 3, hb.Batches.RowCount())
+	require.NotNil(t, hb.DelRows)
+	require.True(t, hb.DelRows.Contains(1), "delete-only row should be marked")
+	require.True(t, hb.DelRows.Contains(2), "delete-only row should be marked")
+	// The fix: the surviving bucket (index 0, new key = 1) is marked deleted
+	// because a discarded fan-out row carried old PK = 1.
+	require.True(t, hb.DelRows.Contains(0),
+		"surviving bucket must be marked deleted via a discarded row's old PK")
+
+	// Delete-only rows keep the old-PK column (col1) that drives that marking,
+	// while their new-PK column (col0) is nulled so they only delete.
+	out := hb.Batches.Buf[0]
+	require.True(t, out.Vecs[0].IsNull(1))
+	require.True(t, out.Vecs[0].IsNull(2))
+	require.False(t, out.Vecs[1].IsNull(1))
+	require.False(t, out.Vecs[1].IsNull(2))
+	oldPks := vector.MustFixedColNoTypeCheck[int32](out.Vecs[1])[:out.RowCount()]
+	require.ElementsMatch(t, []int32{1, 2}, []int32{oldPks[1], oldPks[2]})
+}
 func TestBuildHashmapErrorDoesNotLeakIterators(t *testing.T) {
 	var hb HashmapBuilder
 	mp := mpool.MustNewZero()
