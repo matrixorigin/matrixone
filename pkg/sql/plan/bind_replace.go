@@ -162,6 +162,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			if err != nil {
 				return 0, err
 			}
+			ensureName2ColIndexForReplace(idxTableDefs[i])
 
 			// Spatial indexes look up the old index-table row via the primary
 			// column (indexLookupColumnName returns IndexTablePrimaryColName).
@@ -216,6 +217,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			if err != nil {
 				return 0, err
 			}
+			ensureName2ColIndexForReplace(idxTableDefs[i])
 			oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTablePrimaryColName] = oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
 
 			if !indexTableStoresSerializedKey(idxDef) {
@@ -249,19 +251,27 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			}
 		}
 
-		// For fake PK tables, use the first unique key for the LEFT JOIN instead of PK
+		// Build the LEFT JOIN ON list: for real-PK tables the PK equality OR'd
+		// with one (AND-of-parts) condition per unique key; for fake-PK tables
+		// (no real PK) the OR of one condition per unique key. An old row
+		// conflicting on the PK or ANY unique key is fetched in a single join.
+		// A single new row may match several old rows (fan-out); the conflicting
+		// old rows are all deleted and the new row inserted once, handled by the
+		// keep-last / delete-marker logic in hashbuild downstream.
 		var joinConds []*plan.Expr
 		if isFakePK {
-			// find first unique index to join on
+			// Fake-PK tables previously joined on only the first unique key,
+			// missing conflicts on the others; OR one condition per unique key.
 			for _, idxDef := range tableDef.Indexes {
 				if !idxDef.Unique {
 					continue
 				}
+				var ukPartConds []*plan.Expr
 				for _, part := range idxDef.Parts {
 					colName := catalog.ResolveAlias(part)
 					colIdx := tableDef.Name2ColIndex[colName]
 					colTyp := tableDef.Cols[colIdx].Typ
-					leftExpr := &plan.Expr{
+					lExpr := &plan.Expr{
 						Typ: colTyp,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
@@ -270,7 +280,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 							},
 						},
 					}
-					rightExpr := &plan.Expr{
+					rExpr := &plan.Expr{
 						Typ: colTyp,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
@@ -279,10 +289,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 							},
 						},
 					}
-					cond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{leftExpr, rightExpr})
-					joinConds = append(joinConds, cond)
+					partCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{lExpr, rExpr})
+					ukPartConds = append(ukPartConds, partCond)
 				}
-				break
+				if len(ukPartConds) == 0 {
+					continue
+				}
+				ukCond := ukPartConds[0]
+				for _, c := range ukPartConds[1:] {
+					ukCond, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{ukCond, c})
+				}
+				joinConds = append(joinConds, ukCond)
 			}
 		} else {
 			pkPos := tableDef.Name2ColIndex[pkName]
@@ -356,12 +373,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			joinOnList = joinConds
 		} else if len(joinConds) > 1 {
 			combined := joinConds[0]
-			combineOp := "and"
-			if !isFakePK {
-				combineOp = "or"
-			}
 			for _, c := range joinConds[1:] {
-				combined, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), combineOp, []*plan.Expr{combined, c})
+				combined, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{combined, c})
 			}
 			joinOnList = []*plan.Expr{combined}
 		}
@@ -777,7 +790,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}
 
 		oldRowIdPos := int32(len(finalProjList))
-		oldColRef := oldColName2Idx[idxDef.IndexTableName+"."+catalog.Row_ID]
+		oldRowIDKey := idxTableDefs[i].Name + "." + catalog.Row_ID
+		oldColRef, ok := oldColName2Idx[oldRowIDKey]
+		if !ok {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"bind replace err, can not find old index rowid colName = %s", oldRowIDKey)
+		}
 		rowIdExpr := &plan.Expr{
 			Typ: idxTableDefs[i].Cols[idxTableDefs[i].Name2ColIndex[catalog.Row_ID]].Typ,
 			Expr: &plan.Expr_Col{
@@ -792,7 +810,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		oldIdxPos := int32(len(finalProjList))
 		lookupColName := indexLookupColumnName(idxDef)
 		lookupColIdx := idxTableDefs[i].Name2ColIndex[lookupColName]
-		oldColRef = oldColName2Idx[idxDef.IndexTableName+"."+lookupColName]
+		oldLookupKey := idxTableDefs[i].Name + "." + lookupColName
+		oldColRef, ok = oldColName2Idx[oldLookupKey]
+		if !ok {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"bind replace err, can not find old index lookup colName = %s", oldLookupKey)
+		}
 		idxExpr := &plan.Expr{
 			Typ: idxTableDefs[i].Cols[lookupColIdx].Typ,
 			Expr: &plan.Expr_Col{
@@ -868,6 +891,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	}, bindCtx)
 
 	return lastNodeID, nil
+}
+
+func ensureName2ColIndexForReplace(tableDef *TableDef) {
+	if len(tableDef.Name2ColIndex) > 0 {
+		return
+	}
+	tableDef.Name2ColIndex = make(map[string]int32, len(tableDef.Cols))
+	for colIdx, col := range tableDef.Cols {
+		tableDef.Name2ColIndex[col.Name] = int32(colIdx)
+	}
 }
 
 func (builder *QueryBuilder) appendNodesForReplaceStmt(

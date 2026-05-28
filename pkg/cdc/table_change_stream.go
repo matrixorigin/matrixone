@@ -497,8 +497,11 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 			if !retryable || retryCount > s.maxRetryCount {
 				// Ensure cleanup is called before stopping (processWithTxn's defer should have already called it,
 				// but we call it again here to be safe, especially for the case where retryCount > maxRetryCount)
-				// This ensures sinker errors are cleared even if we stop due to exceeding max retry count
-				_ = s.txnManager.EnsureCleanup(streamCtx)
+				// This ensures sinker errors are cleared even if we stop due to exceeding max retry count.
+				// Skip cleanup for control signals (pause/cancel) — the stream is shutting down intentionally.
+				if !IsPauseOrCancelError(err.Error()) {
+					_ = s.txnManager.EnsureCleanup(streamCtx)
+				}
 
 				// Preserve original error for deterministic error reporting
 				// This ensures the error that triggered retry is preserved in lastError,
@@ -1232,6 +1235,9 @@ func (s *TableChangeStream) processWithTxn(
 	// Ensure cleanup on any error
 	defer func() {
 		if err != nil || ctx.Err() != nil {
+			if err != nil && IsPauseOrCancelError(err.Error()) {
+				return // Skip cleanup for control signals; caller handles shutdown
+			}
 			if cleanupErr := s.txnManager.EnsureCleanup(ctx); cleanupErr != nil {
 				logutil.Error(
 					"cdc.table_stream.ensure_cleanup_failed",
