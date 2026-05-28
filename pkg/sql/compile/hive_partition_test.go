@@ -16,9 +16,13 @@ package compile
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/assert"
@@ -106,4 +110,55 @@ func TestRunFilePathFilters_NoFilters(t *testing.T) {
 	assert.Equal(t, fileList, out)
 	assert.Equal(t, fileSize, outSz)
 	assert.Empty(t, leftover)
+}
+
+func TestUpdateHivePartitionScanStats(t *testing.T) {
+	node := &plan.Node{Stats: &plan.Stats{Outcnt: 99, TableCnt: 99}}
+	result := &external.PartitionDiscoveryResult{
+		PartitionCount:    3,
+		PrunedCount:       2,
+		ListCalls:         4,
+		DiscoveryDuration: 1,
+	}
+
+	updateHivePartitionScanStats(node, "/data", result, []int64{100, 200})
+
+	require.NotNil(t, node.Stats)
+	assert.Equal(t, int32(2), node.Stats.BlockNum)
+	assert.Equal(t, float64(300), node.Stats.Cost)
+	assert.Equal(t, float64(99), node.Stats.Outcnt, "compile-time physical stats must not rewrite logical row estimate")
+	assert.Equal(t, float64(99), node.Stats.TableCnt)
+}
+
+func TestGetHivePartitionDiscoverOptionsFromSessionVars(t *testing.T) {
+	proc := testutil.NewProc(t)
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, 42)
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		switch varName {
+		case hivePartitionCacheTTLVar:
+			return int64(5), nil
+		case hivePartitionCacheMaxEntriesVar:
+			return int64(77), nil
+		case hivePartitionCacheMaxBytesVar:
+			return int64(4096), nil
+		case hivePartitionListConcurrencyVar:
+			return int64(3), nil
+		default:
+			return int64(0), nil
+		}
+	})
+	c := &Compile{proc: proc}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{Filepath: "/data", ScanType: tree.INFILE},
+	}
+
+	opts, err := c.getHivePartitionDiscoverOptions(param)
+	require.NoError(t, err)
+	require.NotNil(t, opts)
+	assert.Equal(t, 5*time.Second, opts.CacheTTL)
+	assert.Equal(t, 77, opts.CacheMaxEntries)
+	assert.Equal(t, int64(4096), opts.CacheMaxBytes)
+	assert.Equal(t, 3, opts.ListConcurrency)
+	assert.Contains(t, opts.CacheKeyPrefix, "account=42")
+	assert.Contains(t, opts.CacheKeyPrefix, "base=/data")
 }
