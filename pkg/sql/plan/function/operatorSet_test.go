@@ -573,6 +573,52 @@ func Test_CaseCheck_Decimal256OverflowFails(t *testing.T) {
 	require.Equal(t, failedFunctionParametersWrong, result.status)
 }
 
+func Test_SetSafeDecimalWidthAndScaleFromSourceBranches(t *testing.T) {
+	nonDecimal := types.T_varchar.ToType()
+	originalNonDecimal := nonDecimal
+	require.True(t, setSafeDecimalWidthAndScaleFromSource(&nonDecimal, []types.Type{
+		types.New(types.T_decimal64, 18, 2),
+	}))
+	require.Equal(t, originalNonDecimal, nonDecimal)
+
+	noDecimalOrInteger := types.New(types.T_decimal64, 18, 0)
+	originalNoDecimalOrInteger := noDecimalOrInteger
+	require.True(t, setSafeDecimalWidthAndScaleFromSource(&noDecimalOrInteger, []types.Type{
+		types.T_bool.ToType(),
+		types.T_varchar.ToType(),
+	}))
+	require.Equal(t, originalNoDecimalOrInteger, noDecimalOrInteger)
+
+	decimalScaleLargerThanWidth := types.New(types.T_decimal64, 18, 0)
+	require.True(t, setSafeDecimalWidthAndScaleFromSource(&decimalScaleLargerThanWidth, []types.Type{
+		types.New(types.T_decimal64, 2, 5),
+	}))
+	require.Equal(t, types.T_decimal64, decimalScaleLargerThanWidth.Oid)
+	require.Equal(t, int32(5), decimalScaleLargerThanWidth.Width)
+	require.Equal(t, int32(5), decimalScaleLargerThanWidth.Scale)
+}
+
+func Test_IntegerIntegralWidth(t *testing.T) {
+	tests := []struct {
+		oid  types.T
+		want int32
+	}{
+		{types.T_int8, 3},
+		{types.T_uint8, 3},
+		{types.T_int16, 5},
+		{types.T_uint16, 5},
+		{types.T_int32, 10},
+		{types.T_uint32, 10},
+		{types.T_int64, 19},
+		{types.T_uint64, 20},
+		{types.T_varchar, 0},
+	}
+
+	for _, tt := range tests {
+		require.Equal(t, tt.want, integerIntegralWidth(tt.oid))
+	}
+}
+
 func Test_IffCheck_DifferentDecimalScale(t *testing.T) {
 	inputs := []types.Type{
 		types.T_bool.ToType(),

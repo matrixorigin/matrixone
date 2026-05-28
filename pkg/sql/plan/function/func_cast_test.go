@@ -2514,6 +2514,66 @@ func TestCastNumericToDecimal256Dispatcher(t *testing.T) {
 		toDecimal256("1234567890123.0000"))
 }
 
+func TestCastFloatToDecimal256Dispatcher(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	toType := types.New(types.T_decimal256, 65, 4)
+	var zero types.Decimal256
+	toDecimal256 := func(s string) types.Decimal256 {
+		v, err := types.ParseDecimal256(s, 65, 4)
+		require.NoError(t, err)
+		return v
+	}
+	run := func(name string, input FunctionTestInput, expected types.Decimal256) {
+		t.Run(name, func(t *testing.T) {
+			tc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					input,
+					NewFunctionTestInput(toType, []types.Decimal256{}, nil),
+				},
+				NewFunctionTestResult(toType, false, []types.Decimal256{expected, zero}, []bool{false, true}),
+				NewCast,
+			)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	run("float32", NewFunctionTestInput(types.T_float32.ToType(), []float32{1.25, 0}, []bool{false, true}),
+		toDecimal256("1.2500"))
+	run("float64", NewFunctionTestInput(types.T_float64.ToType(), []float64{-2.5, 0}, []bool{false, true}),
+		toDecimal256("-2.5000"))
+}
+
+func TestDecimal64ToDecimal256Scalar(t *testing.T) {
+	mp := mpool.MustNewZero()
+	fromType := types.New(types.T_decimal64, 18, 2)
+	toType := types.New(types.T_decimal256, 65, 4)
+	positive, err := types.ParseDecimal64("12.34", 18, 2)
+	require.NoError(t, err)
+	negative, err := types.ParseDecimal64("-56.78", 18, 2)
+	require.NoError(t, err)
+	expectedPositive, err := types.ParseDecimal256("12.3400", 65, 4)
+	require.NoError(t, err)
+	expectedNegative, err := types.ParseDecimal256("-56.7800", 65, 4)
+	require.NoError(t, err)
+
+	srcVec := vector.NewVec(fromType)
+	defer srcVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(srcVec, []types.Decimal64{positive, negative, 0},
+		[]bool{false, false, true}, mp))
+	src := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](srcVec)
+
+	to := vector.NewFunctionResultWrapper(toType, mp).(*vector.FunctionResult[types.Decimal256])
+	defer to.Free()
+	require.NoError(t, to.PreExtendAndReset(3))
+	require.NoError(t, decimal64ToDecimal256(src, to, 3))
+
+	got := vector.MustFixedColNoTypeCheck[types.Decimal256](to.GetResultVector())
+	require.Equal(t, []types.Decimal256{expectedPositive, expectedNegative, {}}, got)
+	require.Equal(t, []uint64{2}, to.GetResultVector().GetNulls().ToArray())
+}
+
 func TestCastDecimalToDecimal256Dispatcher(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	var zero types.Decimal256
