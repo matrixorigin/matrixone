@@ -136,6 +136,17 @@ func Test_fixedTypeCastRule2(t *testing.T) {
 	}
 }
 
+func Test_fixedImplicitTypeCast_Decimal256MirrorsDecimal128(t *testing.T) {
+	for _, target := range []types.T{types.T_bool, types.T_timestamp} {
+		can128, cost128 := fixedImplicitTypeCast(types.T_decimal128.ToType(), target)
+		require.True(t, can128)
+
+		can256, cost256 := fixedImplicitTypeCast(types.T_decimal256.ToType(), target)
+		require.Equal(t, can128, can256, target.String())
+		require.Equal(t, cost128, cost256, target.String())
+	}
+}
+
 func Test_GetFunctionByName(t *testing.T) {
 	type fInput struct {
 		name string
@@ -176,6 +187,14 @@ func Test_GetFunctionByName(t *testing.T) {
 			requireFid: DIV, requireOid: 0,
 			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToType(), types.T_float64.ToType()},
 			requireRet: types.T_float64.ToType(),
+		},
+
+		{
+			name: "from_unixtime", args: []types.Type{types.New(types.T_decimal256, 65, 0)},
+			shouldErr:  false,
+			requireFid: FROM_UNIXTIME, requireOid: 2,
+			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToTypeWithScale(0)},
+			requireRet: types.T_datetime.ToType(),
 		},
 
 		{
@@ -232,6 +251,20 @@ func Test_GetFunctionByName(t *testing.T) {
 			requireFid: SIGN, requireOid: 2,
 			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToType()},
 			requireRet: types.T_int64.ToType(),
+		},
+		{
+			name: "asin", args: []types.Type{types.T_float64.ToType()},
+			shouldErr:  false,
+			requireFid: ASIN, requireOid: 0,
+			shouldCast: false,
+			requireRet: types.T_float64.ToType(),
+		},
+		{
+			name: "asin", args: []types.Type{types.T_int64.ToType()},
+			shouldErr:  false,
+			requireFid: ASIN, requireOid: 0,
+			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToType()},
+			requireRet: types.T_float64.ToType(),
 		},
 	}
 
