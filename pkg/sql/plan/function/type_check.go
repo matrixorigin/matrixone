@@ -185,6 +185,22 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithCast(minIndex, castType)
 }
 
+func truncateTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 2 && inputs[0].Oid.IsMySQLString() {
+		can, _ := fixedImplicitTypeCast(inputs[1], types.T_int64)
+		if inputs[1].Oid != types.T_int64 && !can {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		for i, ov := range overloads {
+			if len(ov.args) == 2 && ov.args[0] == types.T_float64 && ov.args[1] == types.T_int64 {
+				return newCheckResultWithCast(i, []types.Type{types.T_float64.ToType(), types.T_int64.ToType()})
+			}
+		}
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
 // a fixed type match method without any type convert. (const null exception)
 // if all parameters were `constant null`, match the first one whose number of parameters was same.
 func fixedDirectlyTypeMatch(overload []overload, inputs []types.Type) checkResult {
