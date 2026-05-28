@@ -44,6 +44,11 @@ const (
 	lockRpcSlack = 30 * time.Second
 )
 
+var (
+	remoteRetryInitialBackoff = 100 * time.Millisecond
+	remoteRetryMaxBackoff     = 5 * time.Second
+)
+
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
 // And the remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
@@ -180,6 +185,7 @@ func (l *remoteLockTable) unlock(
 		txn,
 		l.bind,
 	)
+	backoff := remoteRetryInitialBackoff
 	for {
 		err := l.doUnlock(txn, commitTS, mutations...)
 		if err == nil {
@@ -201,6 +207,8 @@ func (l *remoteLockTable) unlock(
 		if err := l.handleError(err, false); err == nil {
 			return
 		}
+		waitRemoteRetryBackoff(backoff)
+		backoff = nextRemoteRetryBackoff(backoff)
 	}
 }
 
@@ -208,6 +216,7 @@ func (l *remoteLockTable) getLock(
 	key []byte,
 	txn pb.WaitTxn,
 	fn func(Lock)) {
+	backoff := remoteRetryInitialBackoff
 	for {
 		lock, ok, err := l.doGetLock(key, txn)
 		if err == nil {
@@ -222,7 +231,26 @@ func (l *remoteLockTable) getLock(
 		if err = l.handleError(err, false); err == nil {
 			return
 		}
+		waitRemoteRetryBackoff(backoff)
+		backoff = nextRemoteRetryBackoff(backoff)
 	}
+}
+
+func waitRemoteRetryBackoff(backoff time.Duration) {
+	if backoff > 0 {
+		time.Sleep(backoff)
+	}
+}
+
+func nextRemoteRetryBackoff(backoff time.Duration) time.Duration {
+	if backoff <= 0 {
+		return remoteRetryInitialBackoff
+	}
+	backoff *= 2
+	if backoff > remoteRetryMaxBackoff {
+		return remoteRetryMaxBackoff
+	}
+	return backoff
 }
 
 func (l *remoteLockTable) doUnlock(

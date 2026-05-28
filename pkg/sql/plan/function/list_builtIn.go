@@ -4664,6 +4664,67 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `truncate`
+	{
+		functionId: TRUNCATE,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    truncateTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_uint64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateUint64
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateInt64
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_float64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateFloat64
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_decimal64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateDecimal64
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_decimal128, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateDecimal128
+				},
+			},
+		},
+	},
+
 	// function `radians`
 	{
 		functionId: RADIAN,
