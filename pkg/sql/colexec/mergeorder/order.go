@@ -17,6 +17,7 @@ package mergeorder
 import (
 	"bytes"
 	"container/heap"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -538,10 +539,49 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 						return vm.CancelResult, err
 					}
 				}
-				if err = ctr.spillInputBatch(proc, input.Batch, analyzer); err != nil {
+				keyCols, err := ctr.buildSpillKeyColumns(proc, input.Batch)
+				if err != nil {
 					input.Batch.Clean(proc.Mp())
 					return vm.CancelResult, err
 				}
+				if !ctr.spillAppendEnabled {
+					run, err := ctr.createSpillRun(proc)
+					if err != nil {
+						freeOrderColumns(proc.Mp(), input.Batch, keyCols)
+						input.Batch.Clean(proc.Mp())
+						return vm.CancelResult, err
+					}
+					if _, _, err = writeSpillBatch(proc, input.Batch, keyCols, run.file, &ctr.spillWriteBuf, analyzer); err != nil {
+						run.file.Close()
+						freeOrderColumns(proc.Mp(), input.Batch, keyCols)
+						input.Batch.Clean(proc.Mp())
+						return vm.CancelResult, err
+					}
+					run.batchCount = 1
+					run.rowCount = int64(input.Batch.RowCount())
+					if _, err = run.file.Seek(0, io.SeekStart); err != nil {
+						run.file.Close()
+						freeOrderColumns(proc.Mp(), input.Batch, keyCols)
+						input.Batch.Clean(proc.Mp())
+						return vm.CancelResult, err
+					}
+					ctr.spillRuns = append(ctr.spillRuns, run)
+					freeOrderColumns(proc.Mp(), input.Batch, keyCols)
+					input.Batch.Clean(proc.Mp())
+					continue
+				}
+				incomingOrderCols, err := ctr.fillSpillIncomingOrderColumns(proc, input.Batch, keyCols)
+				if err != nil {
+					freeOrderColumns(proc.Mp(), input.Batch, keyCols)
+					input.Batch.Clean(proc.Mp())
+					return vm.CancelResult, err
+				}
+				if err = ctr.spillBatchWithAppend(proc, input.Batch, keyCols, incomingOrderCols, analyzer); err != nil {
+					freeOrderColumns(proc.Mp(), input.Batch, keyCols)
+					input.Batch.Clean(proc.Mp())
+					return vm.CancelResult, err
+				}
+				freeOrderColumns(proc.Mp(), input.Batch, keyCols)
 				input.Batch.Clean(proc.Mp())
 				continue
 			}
