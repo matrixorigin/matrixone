@@ -221,6 +221,38 @@ func TestCachePressureAdmissionIsAtomic(t *testing.T) {
 	assert.Equal(t, 50, live)
 }
 
+func TestCachePressureAdmissionAdmitsGhostByEvictingCold(t *testing.T) {
+	ctx := t.Context()
+	cache := New[int, int](
+		fscache.ConstCapacity(3),
+		ShardInt[int],
+		nil, nil, nil,
+	)
+
+	cache.Set(ctx, 1, 1, 1)
+	cache.Set(ctx, 2, 2, 1)
+	cache.Set(ctx, 3, 3, 1)
+
+	assert.Equal(t, int64(2), cache.EvictToTargetWithWait(ctx, 2))
+	assert.False(t, cache.Contains(1))
+	assert.True(t, cache.Contains(2))
+	assert.True(t, cache.Contains(3))
+
+	cache.SetAdmissionTarget(func(capacity int64) (int64, bool) {
+		return 2, true
+	})
+
+	cache.Set(ctx, 4, 4, 1)
+	assert.False(t, cache.Contains(4))
+	assert.Equal(t, int64(2), cache.used())
+
+	cache.Set(ctx, 1, 1, 1)
+	assert.True(t, cache.Contains(1))
+	assert.False(t, cache.Contains(2))
+	assert.True(t, cache.Contains(3))
+	assert.Equal(t, int64(2), cache.used())
+}
+
 func TestReplaceUpdatesUsedBytes(t *testing.T) {
 	cache := New[int, int](
 		fscache.ConstCapacity(20),

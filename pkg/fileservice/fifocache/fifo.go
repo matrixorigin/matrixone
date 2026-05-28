@@ -189,13 +189,12 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, seq u
 	return item, nil
 }
 
-func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
+func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) (inserted bool, rejected bool) {
 	seq := c.nextSeq.Add(1)
 	var finishSet func(inserted bool)
 	if c.prepareSet != nil {
 		finishSet = c.prepareSet(ctx, key, value, size, seq)
 	}
-	inserted := false
 	finished := false
 	defer func() {
 		if finishSet != nil && !finished {
@@ -205,13 +204,13 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 	if item, replacedGhost := c.set(ctx, key, value, size, seq); item != nil {
 		ghostItemSet := replacedGhost != nil
 		if c.shouldApplyAdmissionTarget() {
-			if !c.enqueueWithAdmission(item, ghostItemSet) {
+			if !c.enqueueWithAdmission(ctx, item, ghostItemSet) {
 				inserted = c.rollbackRejectedSet(item, replacedGhost)
 				if finishSet != nil {
 					finishSet(inserted)
 					finished = true
 				}
-				return
+				return inserted, !inserted
 			}
 			inserted = true
 			if c.postSet != nil {
@@ -222,7 +221,7 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 				finished = true
 			}
 			c.Evict(ctx, nil, 0)
-			return
+			return true, false
 		}
 		inserted = true
 		if c.postSet != nil {
@@ -235,10 +234,12 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 		// item inserted, enqueue
 		c.enqueue(item, ghostItemSet)
 		c.Evict(ctx, nil, 0)
+		return true, false
 	} else if finishSet != nil {
 		finishSet(false)
 		finished = true
 	}
+	return false, false
 }
 
 func (c *Cache[K, V]) shouldApplyAdmissionTarget() bool {
@@ -253,10 +254,14 @@ func (c *Cache[K, V]) currentAdmissionTarget() (int64, bool) {
 	return c.admissionTarget(c.capacity())
 }
 
-func (c *Cache[K, V]) enqueueWithAdmission(item *_CacheItem[K, V], ghostItemSet bool) bool {
+func (c *Cache[K, V]) enqueueWithAdmission(ctx context.Context, item *_CacheItem[K, V], ghostItemSet bool) bool {
 	c.queueLock.Lock()
-	defer c.queueLock.Unlock()
 
+	var pendingPostEvicts []_PendingPostEvict[K, V]
+	defer func() {
+		c.queueLock.Unlock()
+		c.runPendingPostEvicts(ctx, pendingPostEvicts)
+	}()
 	c.helpEnqueue()
 
 	queue := cacheItemQueue1
@@ -271,12 +276,54 @@ func (c *Cache[K, V]) enqueueWithAdmission(item *_CacheItem[K, V], ghostItemSet 
 		return item.queue == queue
 	}
 	if c.used1+c.used2+item.size > target {
-		return false
+		if !ghostItemSet || item.size > target {
+			return false
+		}
+		if !c.evictForAdmissionLocked(target-item.size, &pendingPostEvicts) {
+			return false
+		}
 	}
 
 	c.enqueuePendingItem(item, queue)
 	c.helpEnqueue()
 	return item.queue == queue
+}
+
+func (c *Cache[K, V]) evictForAdmissionLocked(target int64, pending *[]_PendingPostEvict[K, V]) bool {
+	if target < 0 {
+		target = 0
+	}
+	capacityCut := c.capacity() - target
+	if capacityCut < 0 {
+		capacityCut = 0
+	}
+	target1 := c.capacity1() - capacityCut
+	if target1 < 0 {
+		target1 = 0
+	}
+	for c.used1+c.used2 > target {
+		var (
+			used1Before int64
+			pe          _PendingPostEvict[K, V]
+			ok          bool
+		)
+		if c.used1 > target1 {
+			used1Before = c.used1
+			pe, ok = c.evict1()
+		} else {
+			pe, ok = c.evict2()
+		}
+		if !ok {
+			if used1Before > 0 && c.used1 != used1Before {
+				continue
+			}
+			return false
+		}
+		if c.postEvict != nil {
+			*pending = append(*pending, pe)
+		}
+	}
+	return true
 }
 
 func (c *Cache[K, V]) rollbackRejectedSet(item, replacedGhost *_CacheItem[K, V]) (finishInserted bool) {
