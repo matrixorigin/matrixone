@@ -196,6 +196,43 @@ func TestStatsSelectivityClampAvoidsNonFiniteJoin(t *testing.T) {
 		require.LessOrEqual(t, join.Stats.Selectivity, 1.0)
 		require.True(t, isFinite(join.Stats.Outcnt), "outcnt = %v", join.Stats.Outcnt)
 	})
+
+	t.Run("anti join clamps invalid right selectivity for outcnt", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		left := &planpb.Node{
+			NodeType: planpb.Node_VALUE_SCAN,
+			Stats: &planpb.Stats{
+				Outcnt:      100,
+				Cost:        100,
+				Selectivity: 0.5,
+				BlockNum:    1,
+			},
+		}
+		right := &planpb.Node{
+			NodeType: planpb.Node_VALUE_SCAN,
+			Stats: &planpb.Stats{
+				Outcnt:      10,
+				Cost:        10,
+				Selectivity: math.Inf(1),
+				BlockNum:    1,
+			},
+		}
+		join := &planpb.Node{
+			NodeType: planpb.Node_JOIN,
+			JoinType: planpb.Node_ANTI,
+			Children: []int32{0, 1},
+			Stats:    DefaultStats(),
+		}
+		builder.qry.Nodes = []*planpb.Node{left, right, join}
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.True(t, isFinite(join.Stats.Outcnt), "outcnt = %v", join.Stats.Outcnt)
+		require.GreaterOrEqual(t, join.Stats.Outcnt, 0.0)
+		require.True(t, isFinite(join.Stats.Selectivity), "selectivity = %v", join.Stats.Selectivity)
+		require.GreaterOrEqual(t, join.Stats.Selectivity, 0.0)
+		require.LessOrEqual(t, join.Stats.Selectivity, 1.0)
+	})
 }
 
 func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {
