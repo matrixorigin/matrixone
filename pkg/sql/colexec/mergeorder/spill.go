@@ -486,19 +486,6 @@ func (ctr *container) compareSpillReaderRows(left *spillRunReader, leftRow int64
 	return 0
 }
 
-func (ctr *container) secondBestReaderIndex() int {
-	if len(ctr.spillReaders) < 2 {
-		return -1
-	}
-	if len(ctr.spillReaders) == 2 {
-		return 1
-	}
-	if ctr.compareSpillReaders(1, 2) <= 0 {
-		return 1
-	}
-	return 2
-}
-
 func (ctr *container) computeWinnerChunk(root *spillRunReader, second *spillRunReader, budgetChunk int) int {
 	if budgetChunk <= 1 {
 		return budgetChunk
@@ -618,10 +605,6 @@ func (ctr *container) advanceSpillReaderByChunk(proc *process.Process, idx int, 
 	}
 	ctr.fixSpillHeapAfterAdvance(idx)
 	return nil
-}
-
-func (ctr *container) advanceSpillReader(proc *process.Process, idx int) error {
-	return ctr.advanceSpillReaderByChunk(proc, idx, 1)
 }
 
 func (ctr *container) openSpillReaders(proc *process.Process, runs []*spillRun) error {
@@ -841,7 +824,10 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 			src := ctr.spillReaders[0]
 			budgetChunk := computeDrainChunk(src, getOutSize())
 			if budgetChunk > 1 {
-				secondIdx := ctr.secondBestReaderIndex()
+				secondIdx := 1
+				if len(ctr.spillReaders) > 2 && ctr.compareSpillReaders(2, secondIdx) < 0 {
+					secondIdx = 2
+				}
 				if secondIdx > 0 {
 					chunk := ctr.computeWinnerChunk(src, ctr.spillReaders[secondIdx], budgetChunk)
 					if chunk > 1 {
@@ -908,7 +894,7 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 			}
 			rows++
 			updateOutSize(reader, 1)
-			if err := ctr.advanceSpillReader(proc, 0); err != nil {
+			if err := ctr.advanceSpillReaderByChunk(proc, 0, 1); err != nil {
 				if out != nil {
 					out.Clean(proc.Mp())
 				}
@@ -1082,7 +1068,10 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 		src := ctr.spillReaders[0]
 		budgetChunk := computeDrainChunk(src, getBufSize())
 		if budgetChunk > 1 {
-			secondIdx := ctr.secondBestReaderIndex()
+			secondIdx := 1
+			if len(ctr.spillReaders) > 2 && ctr.compareSpillReaders(2, secondIdx) < 0 {
+				secondIdx = 2
+			}
 			if secondIdx > 0 {
 				chunk := ctr.computeWinnerChunk(src, ctr.spillReaders[secondIdx], budgetChunk)
 				if chunk > 1 {
@@ -1111,7 +1100,7 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 		}
 		rows++
 		updateBufSize(reader, 1)
-		if err := ctr.advanceSpillReader(proc, 0); err != nil {
+		if err := ctr.advanceSpillReaderByChunk(proc, 0, 1); err != nil {
 			return false, err
 		}
 		if rows >= nextSizeCheck {

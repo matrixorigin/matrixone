@@ -653,30 +653,6 @@ func TestComputeBatchDrainChunkVarlen(t *testing.T) {
 	require.LessOrEqual(t, chunk, maxVarlenDrainChunkRows)
 }
 
-func TestPickFirstSecondRows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer func() {
-		proc.Free()
-		require.Equal(t, int64(0), proc.Mp().CurrNB())
-	}()
-
-	b0 := testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{5})
-	b1 := testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{1})
-	b2 := testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{3})
-	defer b0.Free(proc.Mp())
-	defer b1.Free(proc.Mp())
-	defer b2.Free(proc.Mp())
-
-	ctr := &container{
-		compares:  []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
-		orderCols: [][]*vector.Vector{{b0}, {b1}, {b2}},
-		indexList: []int64{0, 0, 0},
-	}
-	first, second := ctr.pickFirstSecondRows()
-	require.Equal(t, 1, first)
-	require.Equal(t, 2, second)
-}
-
 func TestComputeInMemoryWinnerChunkThreeRuns(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer func() {
@@ -703,10 +679,7 @@ func TestComputeInMemoryWinnerChunkThreeRuns(t *testing.T) {
 		orderCols: [][]*vector.Vector{{left.Vecs[0]}, {mid.Vecs[0]}, {right.Vecs[0]}},
 		indexList: []int64{0, 0, 0},
 	}
-	first, second := ctr.pickFirstSecondRows()
-	require.Equal(t, 0, first)
-	require.Equal(t, 1, second)
-	require.Equal(t, 2, ctr.computeInMemoryWinnerChunk(first, second, 3))
+	require.Equal(t, 2, ctr.computeInMemoryWinnerChunk(0, 1, 3))
 }
 
 func TestComputeInMemoryWinnerChunkDominant(t *testing.T) {
@@ -789,7 +762,6 @@ func TestInMemoryHeapAdvance(t *testing.T) {
 	ctr.initInMemoryHeap()
 	require.NotNil(t, ctr.inMemoryHeap)
 	require.Equal(t, 1, ctr.inMemoryHeap.items[0])
-	require.Equal(t, 2, ctr.inMemorySecondBestIndex())
 
 	require.NoError(t, ctr.advanceInMemoryBatchByChunk(proc, 1, 1))
 	require.Equal(t, 2, ctr.inMemoryHeap.Len())

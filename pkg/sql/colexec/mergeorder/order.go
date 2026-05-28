@@ -198,22 +198,6 @@ func (ctr *container) compareInMemoryRows(left int, leftRow int64, right int, ri
 	return 0
 }
 
-func (ctr *container) compareInMemoryRowsWithBoundLeft(leftRow int64, right int, rightRow int64) int {
-	compares := ctr.compares
-	rightCols := ctr.orderCols[right]
-	if len(compares) == 1 {
-		compares[0].Set(1, rightCols[0])
-		return compares[0].Compare(0, 1, leftRow, rightRow)
-	}
-	for k := 0; k < len(compares); k++ {
-		compares[k].Set(1, rightCols[k])
-		if r := compares[k].Compare(0, 1, leftRow, rightRow); r != 0 {
-			return r
-		}
-	}
-	return 0
-}
-
 func (ctr *container) computeInMemoryWinnerChunk(winner int, loser int, budgetChunk int) int {
 	if budgetChunk <= 1 {
 		return budgetChunk
@@ -269,59 +253,6 @@ func (ctr *container) computeInMemoryWinnerChunk(winner int, loser int, budgetCh
 	return chunk
 }
 
-func (ctr *container) pickFirstSecondRows() (first int, second int) {
-	l := len(ctr.indexList)
-	if l < 2 {
-		return 0, -1
-	}
-	compares := ctr.compares
-	indexList := ctr.indexList
-	orderCols := ctr.orderCols
-	if len(compares) == 1 {
-		cmp := compares[0]
-		first, second = 0, 1
-		cmp.Set(0, orderCols[second][0])
-		cmp.Set(1, orderCols[first][0])
-		if cmp.Compare(0, 1, indexList[second], indexList[first]) < 0 {
-			first, second = second, first
-		}
-		for i := 2; i < l; i++ {
-			row := indexList[i]
-			cmp.Set(0, orderCols[i][0])
-			cmp.Set(1, orderCols[first][0])
-			if cmp.Compare(0, 1, row, indexList[first]) < 0 {
-				second = first
-				first = i
-				continue
-			}
-			cmp.Set(1, orderCols[second][0])
-			if cmp.Compare(0, 1, row, indexList[second]) < 0 {
-				second = i
-			}
-		}
-		return first, second
-	}
-	first, second = 0, 1
-	if ctr.compareInMemoryRows(second, indexList[second], first, indexList[first]) < 0 {
-		first, second = second, first
-	}
-	for i := 2; i < l; i++ {
-		row := indexList[i]
-		for k := 0; k < len(compares); k++ {
-			compares[k].Set(0, orderCols[i][k])
-		}
-		if ctr.compareInMemoryRowsWithBoundLeft(row, first, indexList[first]) < 0 {
-			second = first
-			first = i
-			continue
-		}
-		if ctr.compareInMemoryRowsWithBoundLeft(row, second, indexList[second]) < 0 {
-			second = i
-		}
-	}
-	return first, second
-}
-
 func (ctr *container) initInMemoryHeap() {
 	if len(ctr.batchList) <= 1 {
 		ctr.inMemoryHeap = nil
@@ -342,20 +273,6 @@ func (ctr *container) initInMemoryHeap() {
 	}
 	ctr.inMemoryHeap = &inMemoryMergeHeap{ctr: ctr, items: items}
 	heap.Init(ctr.inMemoryHeap)
-}
-
-func (ctr *container) inMemorySecondBestIndex() int {
-	if ctr.inMemoryHeap == nil || ctr.inMemoryHeap.Len() < 2 {
-		return -1
-	}
-	items := ctr.inMemoryHeap.items
-	if len(items) == 2 {
-		return items[1]
-	}
-	if ctr.compareInMemoryRows(items[1], ctr.indexList[items[1]], items[2], ctr.indexList[items[2]]) < 0 {
-		return items[1]
-	}
-	return items[2]
 }
 
 func (ctr *container) advanceInMemoryBatchByChunk(proc *process.Process, index int, chunk int) error {
@@ -471,7 +388,11 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 				}
 			}
 		} else {
-			second := ctr.inMemorySecondBestIndex()
+			items := ctr.inMemoryHeap.items
+			second := items[1]
+			if len(items) > 2 && ctr.compareInMemoryRows(items[2], ctr.indexList[items[2]], second, ctr.indexList[second]) < 0 {
+				second = items[2]
+			}
 			budgetChunk := computeBatchDrainChunk(ctr.batchList[choice], ctr.indexList[choice], ctr.buf.Size(), fixedRowBytes)
 			if budgetChunk > 1 {
 				chunk := ctr.computeInMemoryWinnerChunk(choice, second, budgetChunk)
@@ -523,70 +444,6 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 	ctr.buf.SetRowCount(wholeLength)
 	result.Batch = ctr.buf
 	return sendOver, nil
-}
-
-func (ctr *container) pickFirstRow() (batIndex int) {
-	l := len(ctr.indexList)
-
-	if l > 1 {
-		compares := ctr.compares
-		orderCols := ctr.orderCols
-		indexList := ctr.indexList
-		i := 0
-		leftRow := indexList[i]
-		if len(compares) == 1 {
-			cmp := compares[0]
-			cmp.Set(0, orderCols[i][0])
-			for j := 1; j < l; j++ {
-				rightRow := indexList[j]
-				cmp.Set(1, orderCols[j][0])
-				if cmp.Compare(0, 1, leftRow, rightRow) > 0 {
-					i = j
-					leftRow = rightRow
-					cmp.Set(0, orderCols[i][0])
-				}
-			}
-			return i
-		}
-		for k := 0; k < len(compares); k++ {
-			compares[k].Set(0, orderCols[i][k])
-		}
-		for j := 1; j < l; j++ {
-			rightRow := indexList[j]
-			for k := 0; k < len(compares); k++ {
-				compares[k].Set(1, orderCols[j][k])
-				result := compares[k].Compare(0, 1, leftRow, rightRow)
-				if result < 0 {
-					break
-				} else if result > 0 {
-					i = j
-					leftRow = rightRow
-					for kk := 0; kk < len(compares); kk++ {
-						compares[kk].Set(0, orderCols[i][kk])
-					}
-					break
-				}
-			}
-		}
-		return i
-	}
-	return 0
-}
-
-func (ctr *container) removeBatch(proc *process.Process, index int) {
-	bat := ctr.batchList[index]
-	cols := ctr.orderCols[index]
-	ctr.spillMemUsage -= int64(bat.Size())
-	ctr.batchList = append(ctr.batchList[:index], ctr.batchList[index+1:]...)
-	ctr.indexList = append(ctr.indexList[:index], ctr.indexList[index+1:]...)
-
-	for i := range cols {
-		if batchContainsVector(bat, cols[i]) {
-			continue
-		}
-		cols[i].Free(proc.GetMPool())
-	}
-	ctr.orderCols = append(ctr.orderCols[:index], ctr.orderCols[index+1:]...)
 }
 
 func (mergeOrder *MergeOrder) String(buf *bytes.Buffer) {
