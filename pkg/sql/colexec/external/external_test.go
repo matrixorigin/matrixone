@@ -508,8 +508,8 @@ func Test_getUnCompressReader(t *testing.T) {
 func TestReadDirSymlink(t *testing.T) {
 	ctx := context.Background()
 
-	root, err := os.MkdirTemp("", "*")
-	assert.Nil(t, err)
+	root, err := os.MkdirTemp("", "TestReadDirSymlink-*")
+	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = os.RemoveAll(root)
 	})
@@ -582,9 +582,9 @@ func TestReadDirSymlink(t *testing.T) {
 			Ctx: ctx,
 		},
 	})
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(files))
-	assert.Equal(t, fooPathInB, files[0])
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, fooPathInB, files[0])
 
 	path1 := filepath.Join(root, "a", "b", "..", "b", "c", "foo")
 	files1, _, err := plan2.ReadDir(&tree.ExternParam{
@@ -595,10 +595,10 @@ func TestReadDirSymlink(t *testing.T) {
 			Ctx: ctx,
 		},
 	})
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	pathWant1 := filepath.Join(root, "a", "b", "c", "foo")
-	assert.Equal(t, 1, len(files1))
-	assert.Equal(t, pathWant1, files1[0])
+	require.Len(t, files1, 1)
+	require.Equal(t, pathWant1, files1[0])
 
 	err = os.Remove(filepath.Join(root, "a", "b", "c", "foo"))
 	assert.Nil(t, err)
