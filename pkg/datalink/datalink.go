@@ -200,6 +200,9 @@ func (d Datalink) NewReadCloser(proc *process.Process) (io.ReadCloser, error) {
 			},
 		}
 		if err = fs.Read(proc.Ctx, &vec); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				return nil, moerr.NewFileNotFound(proc.Ctx, d.MoPath)
+			}
 			return nil, err
 		}
 		return r, nil
@@ -238,6 +241,9 @@ func (d Datalink) StatSize(proc *process.Process) (int64, error) {
 		}
 		entry, err := fs.StatFile(proc.Ctx, d.MoPath)
 		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				return 0, moerr.NewFileNotFound(proc.Ctx, d.MoPath)
+			}
 			return 0, err
 		}
 		return entry.Size, nil
