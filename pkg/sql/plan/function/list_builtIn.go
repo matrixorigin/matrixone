@@ -11508,6 +11508,37 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `HLL_CARDINALITY`
+	{
+		functionId: HLL_CARDINALITY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 1 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			switch inputs[0].Oid {
+			case types.T_any:
+				return newCheckResultWithCast(0, []types.Type{types.T_varbinary.ToType()})
+			case types.T_binary, types.T_varbinary, types.T_blob:
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HllCardinality
+				},
+			},
+		},
+	},
+
 	// function `SHA1`
 	{
 		functionId: SHA1,
