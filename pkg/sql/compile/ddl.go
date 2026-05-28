@@ -168,7 +168,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	defer func() {
 		// Restore SnapshotTS so that tombstone transfer in subsequent
 		// statements is not affected by the temporary advancement.
-		txnOp.TxnRef().SnapshotTS = origSnapshotTS
+		txnOp.SetSnapshotTS(origSnapshotTS)
 	}()
 
 	// handle sub
@@ -193,11 +193,16 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 	var ignoreTables []string
+	existingRelations := make([]string, 0, len(relations))
 	for _, r := range relations {
 		t, err := database.Relation(c.proc.Ctx, r, nil)
 		if err != nil {
+			if logAndSkipMissingRelationByNameForDropDatabase(c, dbName, r, "cannot open relation when collecting tables for drop database", err) {
+				continue
+			}
 			return err
 		}
+		existingRelations = append(existingRelations, r)
 
 		if features.IsPartition(t.GetExtraInfo().FeatureFlag) ||
 			features.IsIndexTable(t.GetExtraInfo().FeatureFlag) {
@@ -220,8 +225,8 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
-	deleteTables := make([]string, 0, len(relations))
-	for _, r := range relations {
+	deleteTables := make([]string, 0, len(existingRelations))
+	for _, r := range existingRelations {
 		isIndexTable := false
 		for _, d := range ignoreTables {
 			if d == r {
@@ -305,6 +310,19 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	return err
 }
 
+func logAndSkipMissingRelationByNameForDropDatabase(c *Compile, dbName, rel, msg string, err error) bool {
+	if !isMissingTableByNameForDropDatabase(err) {
+		return false
+	}
+	logutil.Warn(
+		msg,
+		zap.String("table", fmt.Sprintf("%s-%s", dbName, rel)),
+		zap.String("txn info", c.proc.GetTxnOperator().Txn().DebugString()),
+		zap.Error(err),
+	)
+	return true
+}
+
 func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 	database, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
@@ -318,13 +336,7 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 	for _, rel := range relations {
 		relation, err := database.Relation(c.proc.Ctx, rel, nil)
 		if err != nil {
-			if isMissingTableForFkCleanup(err) {
-				logutil.Warn(
-					"cannot open relation when drop database fk cleanup",
-					zap.String("table", fmt.Sprintf("%s-%s", dbName, rel)),
-					zap.String("txn info", c.proc.GetTxnOperator().Txn().DebugString()),
-					zap.Error(err),
-				)
+			if logAndSkipMissingRelationByNameForDropDatabase(c, dbName, rel, "cannot open relation when drop database fk cleanup", err) {
 				continue
 			}
 			return err
@@ -352,7 +364,7 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 				// a table refer to it?
 				// the FOREIGN_KEY_CHECKS disabled !!!
 				// so this inexistence is expected, no need to return an error.
-				if isMissingTableForFkCleanup(err) {
+				if isMissingTableByIdForFkCleanup(err) {
 					logutil.Warn(
 						"cannot find the referred table when drop database",
 						zap.String("table", fmt.Sprintf("%s-%s", dbName, rel)),
@@ -377,7 +389,7 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 			}
 			_, _, childTable, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childId)
 			if err != nil {
-				if isMissingTableForFkCleanup(err) {
+				if isMissingTableByIdForFkCleanup(err) {
 					logutil.Warn(
 						"cannot find child table when drop database fk cleanup",
 						zap.String("table", fmt.Sprintf("%s-%s", dbName, rel)),
@@ -398,7 +410,11 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 	return nil
 }
 
-func isMissingTableForFkCleanup(err error) bool {
+func isMissingTableByNameForDropDatabase(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable)
+}
+
+func isMissingTableByIdForFkCleanup(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
 		(moerr.IsMoErrCode(err, moerr.ErrInternal) &&
 			strings.Contains(err.Error(), "can not find table by id"))
@@ -2999,7 +3015,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			// a table refer to it?
 			// the FOREIGN_KEY_CHECKS disabled !!!
 			// so this inexistence is expected, no need to return an error.
-			if isMissingTableForFkCleanup(err) {
+			if isMissingTableByIdForFkCleanup(err) {
 				logutil.Warn(
 					"cannot find the referred table when drop table",
 					zap.String("table", fmt.Sprintf("%s-%s", dbName, tblName)),
@@ -3027,7 +3043,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		}
 		_, _, childRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childTblId)
 		if err != nil {
-			if isMissingTableForFkCleanup(err) {
+			if isMissingTableByIdForFkCleanup(err) {
 				logutil.Warn(
 					"cannot find child table when drop table fk cleanup",
 					zap.String("table", fmt.Sprintf("%s-%s", dbName, tblName)),

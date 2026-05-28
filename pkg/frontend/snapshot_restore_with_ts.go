@@ -178,15 +178,18 @@ func getTableInfosFromTS(ctx context.Context,
 		return nil, err
 	}
 
-	// only recreate snapshoted table need create sql
-	if ts > 0 {
-		for _, tblInfo := range tableInfos {
-			if tblInfo.createSql, err = getCreateTableSqlFromTS(newCtx, bh, dbName, tblInfo.tblName, ts, from, to); err != nil {
-				return nil, err
-			}
-		}
+	// only recreated snapshot tables need create sql
+	if ts <= 0 {
+		return tableInfos, nil
 	}
-	return tableInfos, nil
+	return fillTableCreateSQLsForRestore(
+		sid,
+		fmt.Sprintf("%d:%d", from, ts),
+		tableInfos,
+		func(tblInfo *tableInfo) (string, error) {
+			return getCreateTableSqlFromTS(newCtx, bh, tblInfo.dbName, tblInfo.tblName, ts, from, to)
+		},
+	)
 }
 
 func showFullTablesFromTS(ctx context.Context,
