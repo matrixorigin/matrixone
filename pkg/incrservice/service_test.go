@@ -139,6 +139,91 @@ func TestReloadIncrCache(t *testing.T) {
 		})
 }
 
+func TestSetOffset(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			s := ss[0]
+			op := ops[0]
+			def := newTestTableDef(1)
+			require.NoError(t, s.Create(ctx, 0, def, op))
+			require.NoError(t, op.Commit(ctx))
+
+			require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 42, nil))
+
+			store := s.store.(*memStore)
+			store.Lock()
+			require.Equal(t, uint64(42), store.caches[0][0].Offset)
+			store.Unlock()
+		})
+}
+
+func TestSetOffsetReturnsStoreError(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			s := ss[0]
+			err := s.SetOffset(ctx, 42, "auto_0", 42, ops[0])
+			require.Error(t, err)
+		})
+}
+
+func TestMemStoreSetOffset(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			store := ss[0].store.(*memStore)
+			op := ops[0]
+			def := newTestTableDef(1)
+			require.NoError(t, store.Create(ctx, 0, def, op))
+
+			require.NoError(t, store.SetOffset(ctx, 0, def[0].ColName, 77, op))
+
+			store.Lock()
+			require.Equal(t, uint64(77), store.uncommitted[string(op.Txn().ID)][0][0].Offset)
+			store.Unlock()
+		})
+}
+
+func TestMemStoreSetOffsetReturnsError(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			store := ss[0].store.(*memStore)
+			def := newTestTableDef(1)
+			require.NoError(t, store.Create(ctx, 0, def, nil))
+
+			require.Error(t, store.SetOffset(ctx, 1, def[0].ColName, 77, nil))
+			require.Error(t, store.SetOffset(ctx, 0, "missing_col", 77, nil))
+
+			op := ops[0]
+			require.NoError(t, store.SetOffset(ctx, 0, def[0].ColName, 88, op))
+			store.Lock()
+			require.Equal(t, uint64(88), store.caches[0][0].Offset)
+			store.Unlock()
+		})
+}
+
 func TestCreateWithTxnAborted(t *testing.T) {
 	runServiceTests(
 		t,
