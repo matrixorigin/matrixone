@@ -114,6 +114,9 @@ type container struct {
 
 	buf *batch.Batch
 
+	inMemoryHeap    *inMemoryMergeHeap
+	inMemoryHeapPos []int
+
 	// spill support
 	spilling           bool
 	spillThreshold     int64
@@ -160,6 +163,8 @@ func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, 
 	ctr.batchList = ctr.batchList[:0]
 	ctr.orderCols = ctr.orderCols[:0]
 	ctr.indexList = nil
+	ctr.inMemoryHeap = nil
+	ctr.inMemoryHeapPos = nil
 	ctr.status = receiving
 	ctr.cleanupSpill(proc)
 
@@ -178,6 +183,8 @@ func (mergeOrder *MergeOrder) Free(proc *process.Process, pipelineFailed bool, e
 	ctr := &mergeOrder.ctr
 	ctr.batchList = nil
 	ctr.orderCols = nil
+	ctr.inMemoryHeap = nil
+	ctr.inMemoryHeapPos = nil
 	ctr.cleanupSpill(proc)
 	for i := range ctr.executors {
 		if ctr.executors[i] != nil {

@@ -760,6 +760,42 @@ func TestComputeInMemoryWinnerChunkFallbackToOne(t *testing.T) {
 	require.Equal(t, 1, ctr.computeInMemoryWinnerChunk(0, 1, 3))
 }
 
+func TestInMemoryHeapAdvance(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	left := batch.NewWithSize(1)
+	left.Vecs[0] = testutil.NewVector(2, types.T_int8.ToType(), proc.Mp(), false, []int8{5, 7})
+	left.SetRowCount(2)
+	mid := batch.NewWithSize(1)
+	mid.Vecs[0] = testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{1})
+	mid.SetRowCount(1)
+	right := batch.NewWithSize(1)
+	right.Vecs[0] = testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{3})
+	right.SetRowCount(1)
+	defer left.Clean(proc.Mp())
+	defer mid.Clean(proc.Mp())
+	defer right.Clean(proc.Mp())
+
+	ctr := &container{
+		compares:  []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+		batchList: []*batch.Batch{left, mid, right},
+		orderCols: [][]*vector.Vector{{left.Vecs[0]}, {mid.Vecs[0]}, {right.Vecs[0]}},
+		indexList: []int64{0, 0, 0},
+	}
+	ctr.initInMemoryHeap()
+	require.NotNil(t, ctr.inMemoryHeap)
+	require.Equal(t, 1, ctr.inMemoryHeap.items[0])
+	require.Equal(t, 2, ctr.inMemorySecondBestIndex())
+
+	require.NoError(t, ctr.advanceInMemoryBatchByChunk(proc, 1, 1))
+	require.Equal(t, 2, ctr.inMemoryHeap.Len())
+	require.Equal(t, 2, ctr.inMemoryHeap.items[0])
+}
+
 func BenchmarkOrder(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs := []orderTestCase{

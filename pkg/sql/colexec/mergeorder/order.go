@@ -16,6 +16,7 @@ package mergeorder
 
 import (
 	"bytes"
+	"container/heap"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -60,6 +61,7 @@ func (ctr *container) prepareInMemoryMerge(proc *process.Process, fs []*plan.Ord
 	}
 	ctr.generateCompares(fs)
 	ctr.indexList = make([]int64, len(ctr.batchList))
+	ctr.initInMemoryHeap()
 	return nil
 }
 
@@ -139,6 +141,42 @@ func computeBatchDrainChunk(src *batch.Batch, start int64, currentSize int, fixe
 		return maxByBudget
 	}
 	return remaining
+}
+
+type inMemoryMergeHeap struct {
+	ctr   *container
+	items []int
+}
+
+func (h *inMemoryMergeHeap) Len() int {
+	return len(h.items)
+}
+
+func (h *inMemoryMergeHeap) Less(i, j int) bool {
+	left := h.items[i]
+	right := h.items[j]
+	return h.ctr.compareInMemoryRows(left, h.ctr.indexList[left], right, h.ctr.indexList[right]) < 0
+}
+
+func (h *inMemoryMergeHeap) Swap(i, j int) {
+	h.items[i], h.items[j] = h.items[j], h.items[i]
+	h.ctr.inMemoryHeapPos[h.items[i]] = i
+	h.ctr.inMemoryHeapPos[h.items[j]] = j
+}
+
+func (h *inMemoryMergeHeap) Push(x any) {
+	idx := x.(int)
+	h.ctr.inMemoryHeapPos[idx] = len(h.items)
+	h.items = append(h.items, idx)
+}
+
+func (h *inMemoryMergeHeap) Pop() any {
+	old := h.items
+	n := len(old)
+	idx := old[n-1]
+	h.items = old[:n-1]
+	h.ctr.inMemoryHeapPos[idx] = -1
+	return idx
 }
 
 func (ctr *container) compareInMemoryRows(left int, leftRow int64, right int, rightRow int64) int {
@@ -284,6 +322,70 @@ func (ctr *container) pickFirstSecondRows() (first int, second int) {
 	return first, second
 }
 
+func (ctr *container) initInMemoryHeap() {
+	if len(ctr.batchList) <= 1 {
+		ctr.inMemoryHeap = nil
+		ctr.inMemoryHeapPos = nil
+		return
+	}
+	ctr.inMemoryHeapPos = make([]int, len(ctr.batchList))
+	for i := range ctr.inMemoryHeapPos {
+		ctr.inMemoryHeapPos[i] = -1
+	}
+	items := make([]int, 0, len(ctr.batchList))
+	for i := range ctr.batchList {
+		if ctr.batchList[i] == nil {
+			continue
+		}
+		ctr.inMemoryHeapPos[i] = len(items)
+		items = append(items, i)
+	}
+	ctr.inMemoryHeap = &inMemoryMergeHeap{ctr: ctr, items: items}
+	heap.Init(ctr.inMemoryHeap)
+}
+
+func (ctr *container) inMemorySecondBestIndex() int {
+	if ctr.inMemoryHeap == nil || ctr.inMemoryHeap.Len() < 2 {
+		return -1
+	}
+	items := ctr.inMemoryHeap.items
+	if len(items) == 2 {
+		return items[1]
+	}
+	if ctr.compareInMemoryRows(items[1], ctr.indexList[items[1]], items[2], ctr.indexList[items[2]]) < 0 {
+		return items[1]
+	}
+	return items[2]
+}
+
+func (ctr *container) advanceInMemoryBatchByChunk(proc *process.Process, index int, chunk int) error {
+	ctr.indexList[index] += int64(chunk)
+	if ctr.indexList[index] < int64(ctr.batchList[index].RowCount()) {
+		heap.Fix(ctr.inMemoryHeap, ctr.inMemoryHeapPos[index])
+		return nil
+	}
+	return ctr.removeInMemoryBatch(proc, index)
+}
+
+func (ctr *container) removeInMemoryBatch(proc *process.Process, index int) error {
+	bat := ctr.batchList[index]
+	cols := ctr.orderCols[index]
+	ctr.spillMemUsage -= int64(bat.Size())
+	if ctr.inMemoryHeap != nil {
+		heap.Remove(ctr.inMemoryHeap, ctr.inMemoryHeapPos[index])
+	}
+	for i := range cols {
+		if batchContainsVector(bat, cols[i]) {
+			continue
+		}
+		cols[i].Free(proc.GetMPool())
+	}
+	ctr.batchList[index] = nil
+	ctr.orderCols[index] = nil
+	ctr.indexList[index] = -1
+	return nil
+}
+
 func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) (sendOver bool, err error) {
 	mp := proc.Mp()
 	if ctr.buf == nil {
@@ -299,10 +401,14 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 	nextSizeCheck := batchSizeCheckInterval
 	fixedRowBytes := calcFixedRowBytes(ctr.buf.Vecs)
 	for {
-		choice := -1
-		if len(ctr.indexList) == 1 {
-			src := ctr.batchList[0]
-			start := ctr.indexList[0]
+		if ctr.inMemoryHeap == nil || ctr.inMemoryHeap.Len() == 0 {
+			sendOver = true
+			break
+		}
+		if ctr.inMemoryHeap.Len() == 1 {
+			choice := ctr.inMemoryHeap.items[0]
+			src := ctr.batchList[choice]
+			start := ctr.indexList[choice]
 			chunk := computeBatchDrainChunk(src, start, ctr.buf.Size(), fixedRowBytes)
 			if chunk < 1 {
 				chunk = 1
@@ -314,11 +420,10 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 				}
 			}
 			wholeLength += chunk
-			ctr.indexList[0] += int64(chunk)
-			if ctr.indexList[0] == int64(src.RowCount()) {
-				ctr.removeBatch(proc, 0)
+			if err = ctr.advanceInMemoryBatchByChunk(proc, choice, chunk); err != nil {
+				return false, err
 			}
-			if len(ctr.indexList) == 0 {
+			if ctr.inMemoryHeap.Len() == 0 {
 				sendOver = true
 				break
 			}
@@ -330,13 +435,14 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 			}
 			continue
 		}
-		if len(ctr.indexList) == 2 {
-			winner := 0
-			if ctr.compareInMemoryRows(1, ctr.indexList[1], 0, ctr.indexList[0]) < 0 {
-				winner = 1
+		choice := ctr.inMemoryHeap.items[0]
+		if ctr.inMemoryHeap.Len() == 2 {
+			winner := choice
+			loser := ctr.inMemoryHeap.items[1]
+			if ctr.compareInMemoryRows(loser, ctr.indexList[loser], winner, ctr.indexList[winner]) < 0 {
+				winner, loser = loser, winner
 			}
 			choice = winner
-			loser := 1 - winner
 			budgetChunk := computeBatchDrainChunk(ctr.batchList[winner], ctr.indexList[winner], ctr.buf.Size(), fixedRowBytes)
 			if budgetChunk > 1 {
 				chunk := ctr.computeInMemoryWinnerChunk(winner, loser, budgetChunk)
@@ -348,11 +454,10 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 						}
 					}
 					wholeLength += chunk
-					ctr.indexList[winner] += int64(chunk)
-					if ctr.indexList[winner] == int64(ctr.batchList[winner].RowCount()) {
-						ctr.removeBatch(proc, winner)
+					if err = ctr.advanceInMemoryBatchByChunk(proc, winner, chunk); err != nil {
+						return false, err
 					}
-					if len(ctr.indexList) == 0 {
+					if ctr.inMemoryHeap.Len() == 0 {
 						sendOver = true
 						break
 					}
@@ -365,26 +470,23 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 					continue
 				}
 			}
-		}
-		if len(ctr.indexList) > 2 {
-			first, second := ctr.pickFirstSecondRows()
-			choice = first
-			budgetChunk := computeBatchDrainChunk(ctr.batchList[first], ctr.indexList[first], ctr.buf.Size(), fixedRowBytes)
+		} else {
+			second := ctr.inMemorySecondBestIndex()
+			budgetChunk := computeBatchDrainChunk(ctr.batchList[choice], ctr.indexList[choice], ctr.buf.Size(), fixedRowBytes)
 			if budgetChunk > 1 {
-				chunk := ctr.computeInMemoryWinnerChunk(first, second, budgetChunk)
+				chunk := ctr.computeInMemoryWinnerChunk(choice, second, budgetChunk)
 				if chunk > 1 {
 					for j := range ctr.buf.Vecs {
-						err = ctr.buf.Vecs[j].UnionBatch(ctr.batchList[first].Vecs[j], ctr.indexList[first], chunk, nil, mp)
+						err = ctr.buf.Vecs[j].UnionBatch(ctr.batchList[choice].Vecs[j], ctr.indexList[choice], chunk, nil, mp)
 						if err != nil {
 							return false, err
 						}
 					}
 					wholeLength += chunk
-					ctr.indexList[first] += int64(chunk)
-					if ctr.indexList[first] == int64(ctr.batchList[first].RowCount()) {
-						ctr.removeBatch(proc, first)
+					if err = ctr.advanceInMemoryBatchByChunk(proc, choice, chunk); err != nil {
+						return false, err
 					}
-					if len(ctr.indexList) == 0 {
+					if ctr.inMemoryHeap.Len() == 0 {
 						sendOver = true
 						break
 					}
@@ -399,20 +501,15 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 			}
 		}
 
-		if choice < 0 {
-			choice = ctr.pickFirstRow()
-		}
 		if err = appendContiguousRows(ctr.buf, ctr.batchList[choice], ctr.indexList[choice], 1, proc); err != nil {
 			return false, err
 		}
 
 		wholeLength++
-		ctr.indexList[choice]++
-		if ctr.indexList[choice] == int64(ctr.batchList[choice].RowCount()) {
-			ctr.removeBatch(proc, choice)
+		if err = ctr.advanceInMemoryBatchByChunk(proc, choice, 1); err != nil {
+			return false, err
 		}
-
-		if len(ctr.indexList) == 0 {
+		if ctr.inMemoryHeap.Len() == 0 {
 			sendOver = true
 			break
 		}
