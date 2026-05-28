@@ -159,7 +159,7 @@ CREATE TABLE dup_t (
 );
 INSERT INTO dup_t VALUES (1, 1, 'a'), (2, 2, 'b');
 CREATE TABLE dup_s (id INT PRIMARY KEY, t_id INT, v VARCHAR(20));
-INSERT INTO dup_s VALUES (10, 1, 's1-first'), (11, 1, 's1-second'), (20, 2, 's2');
+INSERT INTO dup_s VALUES (10, 1, 's1'), (11, 1, 's1'), (20, 2, 's2');
 UPDATE dup_t SET v = s.v FROM dup_s s WHERE s.t_id = dup_t.id;
 SELECT id, p_id, v FROM dup_t ORDER BY id;
 DROP TABLE dup_t;
