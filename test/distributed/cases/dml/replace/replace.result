@@ -2,73 +2,73 @@ drop table if exists names;
 create table names(id int PRIMARY KEY,name VARCHAR(255),age int);
 replace into names(id, name, age) values(1,"Abby", 24);
 select name, age from names where id = 1;
-➤ name[12,-1,0]  ¦  age[4,32,0]  𝄀
-Abby  ¦  24
+name    age
+Abby    24
 replace into names(id, name, age) values(1,"Bobby", 25);
 select name, age from names where id = 1;
-➤ name[12,-1,0]  ¦  age[4,32,0]  𝄀
-Bobby  ¦  25
+name    age
+Bobby    25
 replace into names set id = 2, name = "Ciro";
 select name, age from names where id = 2;
-➤ name[12,-1,0]  ¦  age[4,32,0]  𝄀
-Ciro  ¦  null
+name    age
+Ciro    null
 replace into names set id = 2, name = "Ciro", age = 17;
 select name, age from names where id = 2;
-➤ name[12,-1,0]  ¦  age[4,32,0]  𝄀
-Ciro  ¦  17
+name    age
+Ciro    17
 REPLACE INTO names values (2, "Bob", 19);
 select name, age from names where id = 2;
-➤ name[12,-1,0]  ¦  age[4,32,0]  𝄀
-Bob  ¦  19
+name    age
+Bob    19
 /* comment */ replace into names set id = 2, name = "Dylan";
 select name, age from names where id = 2;
-➤ name[12,-1,0]  ¦  age[4,32,0]  𝄀
-Dylan  ¦  null
+name    age
+Dylan    null
 drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values (1,1,1), (2,2,2), (3,3,3);
 replace t1 values (1,2,3), (2,3,4);
 select a, b, c from t1;
-➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
-1  ¦  1  ¦  1  𝄀
-2  ¦  2  ¦  2  𝄀
-3  ¦  3  ¦  3  𝄀
-1  ¦  2  ¦  3  𝄀
-2  ¦  3  ¦  4
+a    b    c
+1    1    1
+2    2    2
+3    3    3
+1    2    3
+2    3    4
 create table t4 (a int unique key, b varchar(64));
 replace into t4 values (1, 'a');
 select * from t4;
-➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
-1  ¦  a
+a    b
+1    a
 replace into t4 values (1, 'b');
 select * from t4;
-➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
-1  ¦  b
+a    b
+1    b
 drop table if exists t1;
 create table t1(a int primary key, b int unique, c varchar(255), key(c));
 insert into t1 values (1,1,"1"), (2,2,"2");
 select * from t1;
-➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[12,-1,0]  𝄀
-1  ¦  1  ¦  1  𝄀
-2  ¦  2  ¦  2
+a    b    c
+1    1    1
+2    2    2
 replace into t1 values (1,4,"4"), (3,3,"3");
 select * from t1;
-➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[12,-1,0]  𝄀
-2  ¦  2  ¦  2  𝄀
-1  ¦  4  ¦  4  𝄀
-3  ¦  3  ¦  3
+a    b    c
+2    2    2
+1    4    4
+3    3    3
 create database replace_db;
 use replace_db;
 replace into `replace`.`names` values (2, "Dylan", 20);
 select name, age from `replace`.`names` where id = 2;
-➤ name[12,-1,0]  ¦  age[4,32,0]  𝄀
-Dylan  ¦  20
+name    age
+Dylan    20
 drop table if exists c;
 create table c(a int primary key , b int, v vecf32(3));
 replace into c values(1,1,'[1,2,3]');
 select * from c;
-➤ a[4,32,0]  ¦  b[4,32,0]  ¦  v[12,3,0]  𝄀
-1  ¦  1  ¦  [1, 2, 3]
+a    b    v
+1    1    [1, 2, 3]
 drop table c;
 drop table if exists c;
 create table c(a int primary key , b int, v vecf32(3));
@@ -81,16 +81,8 @@ drop table c;
 create table bug_22340 (a int not null auto_increment, a1 int default null, b vecf64(3) DEFAULT NULL COMMENT 'document向量化信息', PRIMARY KEY (`a`), KEY `idx_vec` USING ivfflat (`b`) lists = 1 op_type 'vector_l2_ops');
 REPLACE INTO bug_22340 VALUES (1,100,'[1, 2, 3]'),(2,100,'[1, 2, 3]'),(3,100,'[1, 2, 3]'),(4,100,'[1, 2, 3]'),(5,100,'[1, 2, 3]'),(6,100,'[1, 2, 3]'),(7,100,'[1, 2, 3]'),(8,100,'[1, 2, 3]'),(9,100,'[1, 2, 3]'),(10,100,'[1, 2, 3]');
 select mo_ctl('dn','flush','replace_db.bug_22340');
-➤ mo_ctl(dn, flush, replace_db.bug_22340)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+mo_ctl(dn, flush, replace_db.bug_22340)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 REPLACE INTO bug_22340 VALUES (1,100,'[1, 2, 3]'),(2,100,'[1, 2, 3]'),(3,100,'[1, 2, 3]'),(4,100,'[1, 2, 3]'),(5,100,'[1, 2, 3]'),(6,100,'[1, 2, 3]'),(7,100,'[1, 2, 3]'),(8,100,'[1, 2, 3]'),(9,100,'[1, 2, 3]'),(10,100,'[1, 2, 3]');
 drop table bug_22340;
 drop database replace_db;
@@ -100,15 +92,15 @@ create table multi_uk (pk int primary key, uk1 int unique, uk2 int unique, v var
 insert into multi_uk values (1, 10, 100, 'old1'), (2, 20, 200, 'old2');
 replace into multi_uk values (1, 20, 300, 'new');
 select * from multi_uk order by pk;
-➤ pk[4,32,0]  ¦  uk1[4,32,0]  ¦  uk2[4,32,0]  ¦  v[12,-1,0]  𝄀
-1  ¦  20  ¦  300  ¦  new
+pk	uk1	uk2	v
+1	20	300	new
 drop table multi_uk;
 drop table if exists multi_uk2;
 create table multi_uk2 (pk int primary key, uk1 int unique, v varchar(10));
 insert into multi_uk2 values (1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c');
 replace into multi_uk2 values (1, 20, 'new');
 select * from multi_uk2 order by pk;
-➤ pk[4,32,0]  ¦  uk1[4,32,0]  ¦  v[12,-1,0]  𝄀
-1  ¦  20  ¦  new  𝄀
-3  ¦  30  ¦  c
+pk	uk1	v
+1	20	new
+3	30	c
 drop table multi_uk2;
