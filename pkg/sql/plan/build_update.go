@@ -43,6 +43,10 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
+	err = rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId)
+	if err != nil {
+		return nil, err
+	}
 
 	sourceStep := builder.appendStep(lastNodeId)
 	query, err := builder.createQuery()
@@ -190,9 +194,82 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 	return nil
 }
 
+func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlanCtx, lastNodeId int32) error {
+	selectNode := builder.qry.Nodes[lastNodeId]
+	tableBase := int32(0)
+	for _, upPlanCtx := range planCtxs {
+		tableDef := upPlanCtx.tableDef
+		hasGenerated := false
+		for _, col := range tableDef.Cols {
+			if col.GeneratedCol != nil {
+				hasGenerated = true
+				break
+			}
+		}
+		if hasGenerated {
+			baseLookup := make([]*plan.Expr, len(tableDef.Cols))
+			for ci, col := range tableDef.Cols {
+				if newOff, ok := upPlanCtx.updateColPosMap[col.Name]; ok {
+					baseLookup[ci] = selectNode.ProjectList[tableBase+int32(newOff)]
+				} else {
+					baseLookup[ci] = selectNode.ProjectList[tableBase+int32(ci)]
+				}
+			}
+			for ci, col := range tableDef.Cols {
+				if col.GeneratedCol == nil {
+					continue
+				}
+				if _, alreadySet := upPlanCtx.updateColPosMap[col.Name]; alreadySet {
+					// SET on a stored generated column was rejected earlier
+					// (or dropped for SET = DEFAULT); should not happen here.
+					continue
+				}
+				genExpr := substituteColRefsInExpr(col.GeneratedCol.Expr, baseLookup, 0)
+				insertPos := int(tableBase) + len(tableDef.Cols) + upPlanCtx.updateColLength
+				selectNode.ProjectList = append(selectNode.ProjectList, nil)
+				copy(selectNode.ProjectList[insertPos+1:], selectNode.ProjectList[insertPos:])
+				selectNode.ProjectList[insertPos] = genExpr
+				newOffset := int32(insertPos) - tableBase
+				upPlanCtx.updateColPosMap[col.Name] = int(newOffset)
+				upPlanCtx.updateColLength++
+				baseLookup[ci] = genExpr
+			}
+		}
+		tableBase += int32(len(tableDef.Cols) + upPlanCtx.updateColLength)
+	}
+
+	for _, upPlanCtx := range planCtxs {
+		tableDef := upPlanCtx.tableDef
+		for idx, col := range tableDef.Cols {
+			// row_id, compPrimaryKey, clusterByKey are not inserted from old data.
+			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+				continue
+			}
+			if offset, ok := upPlanCtx.updateColPosMap[col.Name]; ok {
+				upPlanCtx.insertColPos = append(upPlanCtx.insertColPos, offset)
+			} else {
+				upPlanCtx.insertColPos = append(upPlanCtx.insertColPos, idx)
+			}
+		}
+	}
+
+	return nil
+}
+
 func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableInfo *dmlTableInfo) (int32, []*dmlPlanCtx, error) {
+	// Merge target table list with PostgreSQL-style FROM sources so that the
+	// inner SELECT can resolve column references against both. tableInfo only
+	// tracks targets, so FROM-clause tables remain read-only join sources.
+	selectFromTables := stmt.Tables
+	if stmt.From != nil && len(stmt.From.Tables) > 0 {
+		joined := tree.TableExpr(stmt.Tables[0])
+		for _, src := range stmt.From.Tables {
+			joined = &tree.JoinTableExpr{Left: joined, Right: src, JoinType: tree.JOIN_TYPE_CROSS}
+		}
+		selectFromTables = tree.TableExprs{joined}
+	}
 	fromTables := &tree.From{
-		Tables: stmt.Tables,
+		Tables: selectFromTables,
 	}
 	var err error
 	var selectList []tree.SelectExpr
@@ -267,18 +344,6 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		upPlanCtx.checkInsertPkDup = true
 		upPlanCtx.updatePkCol = updatePkCol
 
-		for idx, col := range tableDef.Cols {
-			// row_id、compPrimaryKey、clusterByKey will not inserted from old data
-			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
-				continue
-			}
-			if offset, ok := updateColPosMap[col.Name]; ok {
-				upPlanCtx.insertColPos = append(upPlanCtx.insertColPos, offset)
-			} else {
-				upPlanCtx.insertColPos = append(upPlanCtx.insertColPos, idx)
-			}
-		}
-
 		updatePlanCtxs[i] = upPlanCtx
 	}
 
@@ -294,14 +359,11 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		With:    stmt.With,
 	}
 
-	//ftCtx := tree.NewFmtCtx(dialect.MYSQL)
-	//selectAst.Format(ftCtx)
-	//sql := ftCtx.String()
-	//fmt.Print(sql)
 	lastNodeId, err := builder.bindSelect(selectAst, bindCtx, false)
 	if err != nil {
 		return -1, nil, err
 	}
+
 	return lastNodeId, updatePlanCtxs, nil
 }
 
