@@ -121,21 +121,21 @@ func NewLocalFS(
 
 func (l *LocalFS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(ctx, size)
+		l.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
 func (l *LocalFS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(ctx, size)
+		l.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
 }
 
 func (l *LocalFS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(ctx, len(data))
+		l.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), len(data))
 	}
 	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
 }
@@ -181,11 +181,14 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 			fscache.ConstCapacity(int64(*config.DiskCapacity)),
 			l.perfCounterSets,
 			true,
-			l,
+			nil,
 			l.name,
 		)
 		if err != nil {
 			return err
+		}
+		if l.memCache != nil {
+			l.diskCache.memoryCache = l.memCache.cache
 		}
 		logutil.Info("fileservice: disk cache initialized",
 			zap.Any("fs-name", l.name),
@@ -600,6 +603,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				if entry.Size > 0 && counter.Load() != entry.Size {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
+				fileWithChecksum.dontNeedContentRange(entry.Offset, entry.Size)
 
 			} else {
 				var buf []byte
@@ -612,6 +616,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				if entry.Size > 0 && n != int64(entry.Size) {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
+				fileWithChecksum.dontNeedContentRange(entry.Offset, entry.Size)
 			}
 
 		} else if entry.ReadCloserForRead != nil {
@@ -670,6 +675,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 			if err = entry.setCachedData(ctx, l); err != nil {
 				return err
 			}
+			fileWithChecksum.dontNeedContentRange(entry.Offset, entry.Size)
 
 			vector.Entries[i] = entry
 
@@ -725,8 +731,11 @@ func (l *LocalFS) handleReadCloserForRead(
 
 	if entry.ToCacheData == nil {
 		*entry.ReadCloserForRead = &readCloser{
-			r:         r,
-			closeFunc: file.Close,
+			r: r,
+			closeFunc: func() error {
+				fileWithChecksum.dontNeedContentRange(entry.Offset, entry.Size)
+				return file.Close()
+			},
 		}
 
 	} else {
@@ -735,6 +744,7 @@ func (l *LocalFS) handleReadCloserForRead(
 			r: io.TeeReader(r, buf),
 			closeFunc: func() error {
 				defer file.Close()
+				defer fileWithChecksum.dontNeedContentRange(entry.Offset, entry.Size)
 				var cacheData fscache.Data
 				cacheData, err = entry.ToCacheData(ctx, buf, buf.Bytes(), l)
 				if err != nil {
@@ -960,8 +970,11 @@ func (l *LocalFS) NewReader(ctx context.Context, filePath string) (io.ReadCloser
 	fileWithChecksum := NewFileWithChecksum(ctx, file, _BlockContentSize, l.perfCounterSets)
 
 	return &readCloser{
-		r:         fileWithChecksum,
-		closeFunc: file.Close,
+		r: fileWithChecksum,
+		closeFunc: func() error {
+			fadviseDontNeed(file, 0, 0)
+			return file.Close()
+		},
 	}, nil
 }
 
@@ -1008,6 +1021,7 @@ func (l *LocalFS) NewWriter(ctx context.Context, filePath string) (io.WriteClose
 			if err := f.Sync(); err != nil {
 				return err
 			}
+			fadviseDontNeed(f, 0, 0)
 			// close
 			if err := f.Close(); err != nil {
 				return err
@@ -1189,6 +1203,7 @@ func (l *LocalFSMutator) Close() error {
 	if err := l.osFile.Sync(); err != nil {
 		return err
 	}
+	fadviseDontNeed(l.osFile, 0, 0)
 
 	// close
 	if err := l.osFile.Close(); err != nil {

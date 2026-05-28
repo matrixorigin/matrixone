@@ -56,11 +56,29 @@ create table t1(a int,b float);
 insert into t1 values(0,0),(-15,-20),(-22,-12.5);
 insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
 select acos(a*pi()/180) as acosa,acos(b*pi()/180) acosb from t1;
-invalid argument acos, bad value 1.5707963267948966
+acosa    acosb
+1.5707963267948966    1.5707963267948966
+1.8356824738191324    1.927370391646567
+1.9648910192076245    1.7907312931992256
+1.5707963267948966    null
+1.0197267436954502    null
+null    null
+null    null
+null    null
 select acos(a*pi()/180)*acos(b*pi()/180) as acosab,acos(acos(a*pi()/180)) as c from t1;
-invalid argument acos, bad value 1.5707963267948966
+acosab    c
+2.4674011002723395    null
+3.5380400485035204    null
+3.518591835821214    null
+null    null
+null    null
+null    null
+null    null
+null    null
 select b from t1 where acos(a*pi()/180)<=acos(b*pi()/180)  order by a;
-invalid argument acos, bad value 1.5707963267948966
+b
+-20.0
+0.0
 drop table if exists t1;
 create table t1(a int,b float);
 insert into t1 values(0,0),(-15,-20),(-22,-12.5);
@@ -208,11 +226,32 @@ create table t1(a int,b float);
 insert into t1 values(0,0),(-15,-20),(-22,-12.5);
 insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
 select cot(a*pi()/180) as cota,cot(b*pi()/180) cotb from t1;
-invalid argument cot, bad value 0
+cota    cotb
+null    null
+-3.732050807568879    -2.7474774194546225
+-2.4750868534162955    -4.510708503662059
+null    -5.443746451065131E15
+1.7320508075688774    1.7320508075688807
+0.0    2.449293598294703E-16
+-1.6331239353195392E16    1.2246467991473515E-16
+-1.6331239353195392E16    -1.6331239353195392E16
 select cot(a*pi()/180)*cot(b*pi()/180) as cotab,cot(cot(a*pi()/180)) as c from t1;
-invalid argument cot, bad value 0
+cotab    c
+null    null
+10.253725322052883    -1.492048732224759
+11.164395317007052    1.2713225260580656
+null    null
+3.000000000000006    -0.1626668736751883
+0.0    null
+-2.0    0.1507701967970538
+2.6670937881135786E32    0.1507701967970538
 select b from t1 where cot(a*pi()/180)<=cot(b*pi()/180) order by a;
-invalid argument cot, bad value 0
+b
+-20.0
+390.0
+450.0
+270.0
+180.0
 drop table if exists t1;
 create table t1(a date, b datetime,c varchar(30));
 insert into t1 values('20220101','2022-01-01 01:01:01','2022-13-13 01:01:01');
@@ -791,5 +830,28 @@ max(greatest(d1, d2))    max(least(d1, d2))
 103.14    102.72
 select count(*) from testt where greatest(ts1, ts2) = least(ts1, ts3);
 invalid input: column ts3 does not exist
+select greatest(null, 1);
+greatest(null, 1)
+null
+select greatest(1, null);
+greatest(1, null)
+null
+select least(null, 1);
+least(null, 1)
+null
+select least(1, null);
+least(1, null)
+null
+select greatest(null, null);
+greatest(null, null)
+null
+select greatest(i, null) from testt limit 2;
+greatest(i, null)
+null
+null
+select least(null, i) from testt limit 2;
+least(null, i)
+null
+null
 drop table testt;
 drop database test01;

@@ -53,9 +53,15 @@ hive_single  ¦  CREATE EXTERNAL TABLE `hive_single` (
   `id` int DEFAULT NULL,
   `amount` double DEFAULT NULL,
   `year` int DEFAULT NULL
-) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='parquet','JSONDATA'='','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='year'}
+) INFILE{'FILEPATH'='$resources/hive_partition/single_level/','COMPRESSION'='','FORMAT'='parquet','JSONDATA'='','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='year'}
 load data infile '$resources/hive_partition/single_level/year=2024/data.parquet' into table hive_single;
 invalid input: cannot insert/update/delete from external table
+create index idx_hive_single_id on hive_single(id);
+invalid input: cannot create index on external table
+create unique index uidx_hive_single_id on hive_single(id);
+invalid input: cannot create index on external table
+alter table hive_single add unique (amount);
+invalid input: cannot create index on external table
 drop table if exists hive_disabled;
 create external table hive_disabled (
 id int,
@@ -112,6 +118,9 @@ select year, sum(amount) as total from hive_single group by year having sum(amou
 2024  ¦  105.0
 select count(distinct year) as distinct_years from hive_single;
 ➤ distinct_years[-5,64,0]  𝄀
+5
+select count(distinct id) as distinct_ids_2024 from hive_single where year = 2024;
+distinct_ids_2024
 5
 select count(*) from hive_single where year + 1 = 2025;
 ➤ count(*)[-5,64,0]  𝄀
@@ -334,6 +343,34 @@ select count(*) as cnt from hive_single where year = 2024 and __mo_filepath like
 select count(*) as cnt from hive_single where year = 2024 and __mo_filepath like '%year=2020%';
 ➤ cnt[-5,64,0]  𝄀
 0
+drop table if exists hive_fanout_small;
+create external table hive_fanout_small (
+id int,
+amount double,
+part_id int
+) infile{'filepath'='$resources/hive_partition/fanout_small/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select count(*) as cnt from hive_fanout_small;
+➤ cnt[-5,64,0]  𝄀
+100
+select count(distinct __mo_filepath) as paths from hive_fanout_small;
+➤ paths[-5,64,0]  𝄀
+20
+select part_id, count(*) as rows_per_part, count(distinct __mo_filepath) as files_per_part
+from hive_fanout_small group by part_id order by part_id;
+➤ part_id[4,32,0]  ¦  rows_per_part[-5,64,0]  ¦  files_per_part[-5,64,0]  𝄀
+0  ¦  10  ¦  2  𝄀
+1  ¦  10  ¦  2  𝄀
+2  ¦  10  ¦  2  𝄀
+3  ¦  10  ¦  2  𝄀
+4  ¦  10  ¦  2  𝄀
+5  ¦  10  ¦  2  𝄀
+6  ¦  10  ¦  2  𝄀
+7  ¦  10  ¦  2  𝄀
+8  ¦  10  ¦  2  𝄀
+9  ¦  10  ¦  2
+select count(*) as cnt from hive_fanout_small where part_id in (1, 3, 9);
+➤ cnt[-5,64,0]  𝄀
+30
 explain (check '["External Scan", "Filter Cond"]') select * from hive_single where year = 2024;
 ➤ AP QUERY PLAN ON MULTICN(10 core)[12,0,0]  𝄀
 Project  𝄀
@@ -382,7 +419,8 @@ group by d.y order by d.y;
 2025  ¦  0
 select 'single' as src, count(*) as cnt from hive_single where year = 2024
 union all
-select 'multi' as src, count(*) as cnt from hive_multi where year = 2024;
+select 'multi' as src, count(*) as cnt from hive_multi where year = 2024
+order by src desc;
 ➤ src[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
 single  ¦  5  𝄀
 multi  ¦  9
@@ -445,6 +483,8 @@ amount double,
 year int
 ) infile{'filepath'='$resources/hive_partition/invalid_type/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='year'};
 select * from hive_invalid_type;
+internal error: partition value type conversion failed: col=year, value='abc', path=year=abc/data.parquet: strconv.ParseInt: parsing "abc": invalid syntax
+select count(*) from hive_invalid_type;
 internal error: partition value type conversion failed: col=year, value='abc', path=year=abc/data.parquet: strconv.ParseInt: parsing "abc": invalid syntax
 drop table if exists hive_url_encoded;
 create external table hive_url_encoded (

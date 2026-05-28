@@ -15,7 +15,6 @@
 package tokenizer
 
 import (
-	"bytes"
 	"iter"
 	"strings"
 	"unicode"
@@ -34,24 +33,31 @@ type Token struct {
 	BytePos    int32
 }
 
-type SimpleTokenizer struct {
-	// input and output
-	input []byte
-
-	// the buffer to store the _token
-	begin        int
-	currTokenPos int
-	latinBuf     bytes.Buffer
-
-	Done bool
-	Err  error
+// Tokenizer yields a sequence of (Token, error) pairs. Implementations may
+// report errors before any token is emitted (e.g. input validation), or
+// mid-stream for tokenizers that can fail partway through the input. Callers
+// must check err on each iteration and stop on the first non-nil err.
+type Tokenizer interface {
+	Tokenize(input []byte) iter.Seq2[Token, error]
 }
 
-func NewSimpleTokenizer(input []byte) (*SimpleTokenizer, error) {
-	if len(input) > 1024*1024*1024 {
-		return nil, moerr.NewInternalErrorNoCtx("input too large")
-	}
-	return &SimpleTokenizer{input: input}, nil
+// SimpleTokenizer holds no per-call state; concurrent Tokenize calls on the
+// same instance are safe.
+type SimpleTokenizer struct{}
+
+const simpleMaxInputSize = 1024 * 1024 * 1024
+
+func NewSimpleTokenizer() *SimpleTokenizer {
+	return &SimpleTokenizer{}
+}
+
+// simpleState carries the per-call tokenization state. Allocated once per
+// Tokenize invocation and threaded through the handler chain.
+type simpleState struct {
+	input        []byte
+	begin        int
+	currTokenPos int32
+	done         bool
 }
 
 func isBreakerRune(rune rune) bool {
@@ -73,88 +79,87 @@ func isLatin(rune rune) bool {
 	return rune < 0x7FF
 }
 
-type handler func(t *SimpleTokenizer, pos int, rune rune, yield func(Token) bool) handler
+type handler func(st *simpleState, pos int, rune rune, yield func(Token, error) bool) handler
 
-func beginToken(t *SimpleTokenizer, pos int, rune rune, yield func(Token) bool) handler {
+func beginToken(st *simpleState, pos int, rune rune, yield func(Token, error) bool) handler {
 	if isBreakerRune(rune) {
-		t.begin = pos
+		st.begin = pos
 		return breakerToken
 	} else if isLatin(rune) {
-		t.begin = pos
+		st.begin = pos
 		return latinToken
 	} else {
-		t.begin = pos
+		st.begin = pos
 		return cjkToken
 	}
 }
 
-func breakerToken(t *SimpleTokenizer, pos int, rune rune, yield func(Token) bool) handler {
+func breakerToken(st *simpleState, pos int, rune rune, yield func(Token, error) bool) handler {
 	if isBreakerRune(rune) {
 		return breakerToken
 	} else {
 		// if the breaker is not a single byte we increase token count.
-		if pos > t.begin+1 {
-			t.currTokenPos += 1
+		if pos > st.begin+1 {
+			st.currTokenPos += 1
 		}
 		if isLatin(rune) {
-			t.begin = pos
+			st.begin = pos
 			return latinToken
 		} else {
-			t.begin = pos
+			st.begin = pos
 			return cjkToken
 		}
 	}
 }
 
-func latinToken(t *SimpleTokenizer, pos int, rune rune, yield func(Token) bool) handler {
+func latinToken(st *simpleState, pos int, rune rune, yield func(Token, error) bool) handler {
 	if isBreakerRune(rune) {
-		t.outputLatin(pos, yield)
-		t.begin = pos
+		outputLatin(st, pos, yield)
+		st.begin = pos
 		return breakerToken
 	} else if isLatin(rune) {
 		// noop
 		return latinToken
 	} else {
-		t.outputLatin(pos, yield)
-		t.begin = pos
+		outputLatin(st, pos, yield)
+		st.begin = pos
 		return cjkToken
 	}
 }
 
-func cjkToken(t *SimpleTokenizer, pos int, rune rune, yield func(Token) bool) handler {
+func cjkToken(st *simpleState, pos int, rune rune, yield func(Token, error) bool) handler {
 	if isBreakerRune(rune) {
-		t.outputCJK(pos, yield)
-		t.begin = pos
+		outputCJK(st, pos, yield)
+		st.begin = pos
 		return breakerToken
 	} else if isLatin(rune) {
-		t.outputCJK(pos, yield)
-		t.begin = pos
+		outputCJK(st, pos, yield)
+		st.begin = pos
 		return latinToken
 	} else {
 		return cjkToken
 	}
 }
 
-func (t *SimpleTokenizer) outputLatin(pos int, yield func(Token) bool) {
-	t.latinBuf.Reset()
+func outputLatin(st *simpleState, pos int, yield func(Token, error) bool) {
 	var bs []byte
-	if pos <= t.begin+MAX_TOKEN_SIZE {
-		bs = t.input[t.begin:pos]
+	if pos <= st.begin+MAX_TOKEN_SIZE {
+		bs = st.input[st.begin:pos]
 	} else {
-		if t.input[t.begin+MAX_TOKEN_SIZE-1] <= 127 {
+		if st.input[st.begin+MAX_TOKEN_SIZE-1] <= 127 {
 			// last character is ascii
-			bs = t.input[t.begin : t.begin+MAX_TOKEN_SIZE]
+			bs = st.input[st.begin : st.begin+MAX_TOKEN_SIZE]
 		} else {
 			// find the leading byte
 			n := 1
-			for i := 0; i < 4; i++ {
+			for i := range 4 {
 				// leading byte must have value at least 192 (binary 11000000)
-				if t.input[t.begin+MAX_TOKEN_SIZE-i-1] >= 192 {
+				if st.input[st.begin+MAX_TOKEN_SIZE-i-1] >= 192 {
 					break
 				}
 				n++
 			}
-			bs = t.input[t.begin : t.begin+MAX_TOKEN_SIZE-n]
+			bs = st.input[st.begin : st.begin+MAX_TOKEN_SIZE-n]
 		}
 	}
 
@@ -162,19 +167,19 @@ func (t *SimpleTokenizer) outputLatin(pos int, yield func(Token) bool) {
 	token := Token{}
 	token.TokenBytes[0] = byte(len(ls))
 	copy(token.TokenBytes[1:], []byte(ls))
-	token.TokenPos = int32(t.currTokenPos)
-	token.BytePos = int32(t.begin)
-	if !yield(token) {
-		t.Done = true
+	token.TokenPos = st.currTokenPos
+	token.BytePos = int32(st.begin)
+	if !yield(token, nil) {
+		st.done = true
 		return
 	}
-	t.currTokenPos += 1
+	st.currTokenPos += 1
 }
 
-// outputCJK outputs the CJK token from t.begin to pos
+// outputCJK outputs the CJK token from st.begin to pos
 // if token contains latin letter, we do not normalize like outputLatin
-func (t *SimpleTokenizer) outputCJK(pos int, yield func(Token) bool) {
-	ibuf := t.input[t.begin:pos]
+func outputCJK(st *simpleState, pos int, yield func(Token, error) bool) {
+	ibuf := st.input[st.begin:pos]
 	ia := 0
 	_, ib := utf8.DecodeRune(ibuf)
 	_, sz := utf8.DecodeRune(ibuf[ib:])
@@ -186,13 +191,13 @@ func (t *SimpleTokenizer) outputCJK(pos int, yield func(Token) bool) {
 		token := Token{}
 		token.TokenBytes[0] = byte(id - ia)
 		copy(token.TokenBytes[1:], ibuf[ia:id])
-		token.TokenPos = int32(t.currTokenPos)
-		token.BytePos = int32(t.begin + ia)
-		if !yield(token) {
-			t.Done = true
+		token.TokenPos = st.currTokenPos
+		token.BytePos = int32(st.begin + ia)
+		if !yield(token, nil) {
+			st.done = true
 			return
 		}
-		t.currTokenPos += 1
+		st.currTokenPos += 1
 		ia = ib
 		ib = ic
 		ic = id
@@ -201,26 +206,33 @@ func (t *SimpleTokenizer) outputCJK(pos int, yield func(Token) bool) {
 	}
 }
 
-func (t *SimpleTokenizer) Tokenize() iter.Seq[Token] {
-	return func(yield func(Token) bool) {
-		if len(t.input) == 0 {
+func (SimpleTokenizer) Tokenize(input []byte) iter.Seq2[Token, error] {
+	return func(yield func(Token, error) bool) {
+		if len(input) > simpleMaxInputSize {
+			yield(Token{}, moerr.NewInternalErrorNoCtx("input too large"))
+			return
+		}
+		if len(input) == 0 {
 			return
 		}
 
-		h := beginToken
+		st := &simpleState{input: input}
+		h := handler(beginToken)
 
-		for pos, rune := range string(t.input) {
-			if t.Done {
+		for pos, rune := range string(input) {
+			if st.done {
 				return
 			}
 
-			h = h(t, pos, rune, yield)
+			h = h(st, pos, rune, yield)
 			if h == nil {
 				break
 			}
 		}
 
 		// send a space to output last token
-		h(t, len(t.input), ' ', yield)
+		if !st.done {
+			h(st, len(input), ' ', yield)
+		}
 	}
 }

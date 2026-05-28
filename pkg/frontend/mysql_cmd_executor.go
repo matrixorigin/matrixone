@@ -24,7 +24,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
+	"reflect"
 	gotrace "runtime/trace"
 	"slices"
 	"sort"
@@ -177,10 +179,18 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	}
 	ses.SetStmtId(stmID)
-	ses.SetStmtType(getStatementType(statement).GetStatementType())
-	ses.SetQueryType(getStatementType(statement).GetQueryType())
+	stmtTyp := getStatementType(statement).GetStatementType()
+	queryTyp := getStatementType(statement).GetQueryType()
+	ses.SetStmtType(stmtTyp)
+	ses.SetQueryType(queryTyp)
 	ses.SetSqlSourceType(sqlType)
 	ses.SetSqlOfStmt(text)
+	if proc != nil {
+		// RecordStatement mutates the session profile in place; refresh the
+		// process view so statement-dependent cached decisions are recomputed.
+		proc.SetStmtProfile(&ses.stmtProfile)
+	}
+	ses.stmtProfile.SetDivByZeroRuntimeProfile(stmtTyp, queryTyp, isIgnoreStatement(statement))
 
 	//note: txn id here may be empty
 	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
@@ -254,6 +264,27 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	ses.SetTStmt(stm)
 
 	return ctx, nil
+}
+
+func isIgnoreStatement(statement tree.Statement) bool {
+	insertStmt, ok := statement.(*tree.Insert)
+	if !ok {
+		return false
+	}
+	return len(insertStmt.OnDuplicateUpdate) == 1 && insertStmt.OnDuplicateUpdate[0] == nil
+}
+
+func refreshProcessDivByZeroProfileForPreparedStmt(proc *process.Process, statement tree.Statement) {
+	if proc == nil || statement == nil {
+		return
+	}
+
+	stmtProfile := proc.GetStmtProfile()
+	stmtProfile.SetDivByZeroRuntimeProfile(
+		getStatementType(statement).GetStatementType(),
+		getStatementType(statement).GetQueryType(),
+		isIgnoreStatement(statement),
+	)
 }
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time,
@@ -3556,7 +3587,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}
 		// Inject rewrite rules hint before building UserInput (only if enabled)
 		if ses.rewriteEnabled.Load() {
-			query, _ = rewriteSQL(execCtx.reqCtx, ses, query)
+			var rewriteErr error
+			query, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, query)
+			if rewriteErr != nil {
+				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
+				return resp, nil
+			}
 		}
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
 		input := &UserInput{sql: query}
@@ -3599,7 +3635,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		// Inject rewrite rules hint before prepare wrapping (only if enabled)
 		if ses.rewriteEnabled.Load() {
-			sql, _ = rewriteSQL(execCtx.reqCtx, ses, sql)
+			var rewriteErr error
+			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
+			if rewriteErr != nil {
+				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
+				return resp, nil
+			}
 		}
 		ses.addSqlCount(1)
 
@@ -4047,6 +4088,7 @@ func (h *marshalPlanHandler) allocBufferIfNeeded() {
 func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 	var err error
 	if h.marshalPlan != nil {
+		sanitizeNonFiniteFloatValues(h.marshalPlan)
 		h.allocBufferIfNeeded()
 		h.buffer.Reset()
 		var jsonBytesLen = 0
@@ -4076,6 +4118,62 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 		return sqlQueryNoRecordExecPlan
 	}
 	return
+}
+
+func sanitizeNonFiniteFloatValues(v any) {
+	sanitizeNonFiniteFloatValue(reflect.ValueOf(v), make(map[uintptr]struct{}))
+}
+
+func sanitizeNonFiniteFloatValue(v reflect.Value, seen map[uintptr]struct{}) {
+	if !v.IsValid() {
+		return
+	}
+	switch v.Kind() {
+	case reflect.Interface:
+		if !v.IsNil() {
+			sanitizeNonFiniteFloatValue(v.Elem(), seen)
+		}
+	case reflect.Ptr:
+		if v.IsNil() {
+			return
+		}
+		ptr := v.Pointer()
+		if _, ok := seen[ptr]; ok {
+			return
+		}
+		seen[ptr] = struct{}{}
+		sanitizeNonFiniteFloatValue(v.Elem(), seen)
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			sanitizeNonFiniteFloatValue(v.Field(i), seen)
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			sanitizeNonFiniteFloatValue(v.Index(i), seen)
+		}
+	case reflect.Map:
+		if v.IsNil() {
+			return
+		}
+		for _, key := range v.MapKeys() {
+			value := v.MapIndex(key)
+			if !value.IsValid() {
+				continue
+			}
+			copied := reflect.New(value.Type()).Elem()
+			copied.Set(value)
+			sanitizeNonFiniteFloatValue(copied, seen)
+			v.SetMapIndex(key, copied)
+		}
+	case reflect.Float32, reflect.Float64:
+		if !v.CanSet() {
+			return
+		}
+		f := v.Float()
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			v.SetFloat(0)
+		}
+	}
 }
 
 var sqlQueryIgnoreExecPlan = []byte(`{}`)
