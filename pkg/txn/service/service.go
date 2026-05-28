@@ -259,7 +259,6 @@ func (s *service) parallelSendWithRetry(
 				backoff = nextParallelSendRetryBackoff(backoff, maxBackoff)
 				continue
 			}
-			backoff = initialBackoff
 			util.LogTxnReceivedResponses(s.logger, result.Responses)
 			hasError := false
 			for _, resp := range result.Responses {
@@ -271,9 +270,14 @@ func (s *service) parallelSendWithRetry(
 				}
 			}
 			if !hasError {
+				backoff = initialBackoff
 				return result
 			}
 			result.Release()
+			if !waitParallelSendRetryBackoff(ctx, backoff) {
+				return nil
+			}
+			backoff = nextParallelSendRetryBackoff(backoff, maxBackoff)
 		}
 	}
 }
