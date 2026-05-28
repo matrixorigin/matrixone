@@ -1537,13 +1537,14 @@ func getTableInfoWithPitr(
 		return nil, err
 	}
 
-	for _, tblInfo := range tableInfos {
-		if tblInfo.createSql, err = getCreateTableSqlWithTs(ctx, bh, ts, dbName, tblInfo.tblName); err != nil {
-			return nil, err
-		}
-	}
-
-	return tableInfos, nil
+	return fillTableCreateSQLsForRestore(
+		sid,
+		pitrName,
+		tableInfos,
+		func(tblInfo *tableInfo) (string, error) {
+			return getCreateTableSqlWithTs(ctx, bh, ts, tblInfo.dbName, tblInfo.tblName)
+		},
+	)
 }
 
 func showFullTablesWitsTs(
