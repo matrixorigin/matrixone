@@ -31,22 +31,6 @@ import (
 
 const opName = "merge_order"
 
-func (ctr *container) mergeAndEvaluateOrderColumn(proc *process.Process, bat *batch.Batch) error {
-	ctr.batchList = append(ctr.batchList, bat)
-	ctr.orderCols = append(ctr.orderCols, nil)
-	ctr.spillMemUsage += int64(bat.Size())
-	return nil
-}
-
-func (ctr *container) evaluateOrderColumn(proc *process.Process, index int) error {
-	cols, err := ctr.evaluateOrderColumns(proc, ctr.batchList[index])
-	if err != nil {
-		return err
-	}
-	ctr.orderCols[index] = cols
-	return nil
-}
-
 func (ctr *container) prepareInMemoryMerge(proc *process.Process, fs []*plan.OrderBySpec) error {
 	if len(ctr.batchList) <= 1 {
 		return nil
@@ -55,9 +39,11 @@ func (ctr *container) prepareInMemoryMerge(proc *process.Process, fs []*plan.Ord
 		if ctr.orderCols[i] != nil {
 			continue
 		}
-		if err := ctr.evaluateOrderColumn(proc, i); err != nil {
+		cols, err := ctr.evaluateOrderColumns(proc, ctr.batchList[i])
+		if err != nil {
 			return err
 		}
+		ctr.orderCols[i] = cols
 	}
 	ctr.generateCompares(fs)
 	ctr.indexList = make([]int64, len(ctr.batchList))
@@ -565,10 +551,9 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 				return vm.CancelResult, err
 			}
 			analyzer.Alloc(int64(bat.Size()))
-			if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
-				bat.Clean(proc.Mp())
-				return vm.CancelResult, err
-			}
+			ctr.batchList = append(ctr.batchList, bat)
+			ctr.orderCols = append(ctr.orderCols, nil)
+			ctr.spillMemUsage += int64(bat.Size())
 			if ctr.shouldSpill(0) {
 				if err = ctr.spillCachedRuns(proc, analyzer); err != nil {
 					return vm.CancelResult, err

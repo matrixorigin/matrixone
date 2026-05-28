@@ -44,10 +44,6 @@ func (ctr *container) getSpillFS(proc *process.Process) (fileservice.MutableFile
 	return fs, nil
 }
 
-func (ctr *container) currentMemoryUsage() int64 {
-	return ctr.spillMemUsage
-}
-
 func (ctr *container) shouldSpill(incomingBatchSize int64) bool {
 	if ctr.spilling {
 		return true
@@ -55,7 +51,7 @@ func (ctr *container) shouldSpill(incomingBatchSize int64) bool {
 	if ctr.spillThreshold <= 0 {
 		return false
 	}
-	return ctr.currentMemoryUsage()+incomingBatchSize > ctr.spillThreshold
+	return ctr.spillMemUsage+incomingBatchSize > ctr.spillThreshold
 }
 
 func (ctr *container) evaluateOrderColumns(proc *process.Process, bat *batch.Batch) ([]*vector.Vector, error) {
