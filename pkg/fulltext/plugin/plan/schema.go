@@ -88,7 +88,7 @@ func (Hooks) BuildFullTextIndexDefs(
 	// 3. Validate parser name (if explicitly set).
 	if indexInfo.IndexOption != nil && indexInfo.IndexOption.ParserName != "" {
 		parsername := strings.ToLower(indexInfo.IndexOption.ParserName)
-		if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" {
+		if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" && parsername != "gojieba" {
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("Fulltext parser %s not supported", parsername))
 		}
 	}
