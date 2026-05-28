@@ -50,13 +50,14 @@ func TestNewReadCloserLive(t *testing.T) {
 // NewDatalink populates ContentHash and MoPath for a pinned URL, and leaves
 // ContentHash empty for a live one.
 func TestNewDatalinkContentHash(t *testing.T) {
+	proc, accountID := procWithAccount(t)
 	hash := strings.Repeat("a", 64)
-	dl, err := NewDatalink("file:///x.txt?contenthash="+hash, nil)
+	dl, err := NewDatalink("file:///x.txt?contenthash="+hash, proc)
 	require.NoError(t, err)
 	require.Equal(t, hash, dl.ContentHash)
-	require.Equal(t, CASKey(hash), dl.MoPath)
+	require.Equal(t, CASKey(accountID, hash), dl.MoPath)
 
-	live, err := NewDatalink("file:///x.txt", nil)
+	live, err := NewDatalink("file:///x.txt", proc)
 	require.NoError(t, err)
 	require.Empty(t, live.ContentHash)
 }
@@ -64,28 +65,36 @@ func TestNewDatalinkContentHash(t *testing.T) {
 // ContentHash always addresses the same CAS object as MoPath, regardless of the
 // case used in the contenthash query key or value.
 func TestNewDatalinkContentHashConsistentWithMoPath(t *testing.T) {
+	proc, accountID := procWithAccount(t)
 	hash := strings.Repeat("a", 64)
 	for _, raw := range []string{
 		"file:///x.txt?contenthash=" + hash,
 		"file:///x.txt?ContentHash=" + strings.ToUpper(hash),
 	} {
-		dl, err := NewDatalink(raw, nil)
+		dl, err := NewDatalink(raw, proc)
 		require.NoError(t, err, raw)
 		require.Equal(t, hash, dl.ContentHash, raw)
-		require.Equal(t, CASKey(dl.ContentHash), dl.MoPath, raw)
+		require.Equal(t, CASKey(accountID, dl.ContentHash), dl.MoPath, raw)
 	}
+}
+
+// A pinned datalink requires an execution context to resolve its account
+// namespace; a nil process is rejected rather than silently using a global key.
+func TestNewDatalinkContentHashRequiresAccount(t *testing.T) {
+	_, err := NewDatalink("file:///x.txt?contenthash="+strings.Repeat("a", 64), nil)
+	require.Error(t, err)
 }
 
 // A pinned datalink reads its bytes from the CAS, decoupled from the original
 // path. NewProc(t) backs SHARED with LocalFS (no ETLFileService), matching
 // standalone, so this exercises the direct-Read path rather than GetForETL.
 func TestNewReadCloserPinned(t *testing.T) {
-	proc := testutil.NewProc(t)
+	proc, accountID := procWithAccount(t)
 
 	casFS, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
 	require.NoError(t, err)
 	content := []byte("frozen-bytes")
-	hash, err := CASPut(proc.Ctx, casFS, content)
+	hash, err := CASPut(proc.Ctx, casFS, accountID, content)
 	require.NoError(t, err)
 
 	// a bogus original path with a valid contenthash is still served from the CAS
@@ -99,6 +108,27 @@ func TestNewReadCloserPinned(t *testing.T) {
 	sz, err := dl.StatSize(proc)
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), sz)
+}
+
+// A pinned datalink read in a different account than the one that pinned it does
+// not see the bytes: the CAS object is namespaced per account, so a contenthash
+// is not a cross-account bearer capability. It errors (no live fallback).
+func TestNewReadCloserPinnedCrossAccountIsolated(t *testing.T) {
+	proc, accountID := procWithAccount(t)
+
+	casFS, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
+	require.NoError(t, err)
+	content := []byte("tenant-A-only")
+	hash, err := CASPut(proc.Ctx, casFS, accountID, content)
+	require.NoError(t, err)
+
+	// switch the execution context to a different account
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, accountID+1)
+	dl, err := NewDatalink("file:///bogus/path.txt?contenthash="+hash, proc)
+	require.NoError(t, err)
+
+	_, err = dl.GetBytes(proc)
+	require.Error(t, err)
 }
 
 // Reading a pinned datalink whose CAS object is missing errors out: it never

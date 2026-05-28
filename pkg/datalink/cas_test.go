@@ -31,12 +31,14 @@ func newTestCASFS(t *testing.T) fileservice.FileService {
 	return fs
 }
 
+const testAccountID = uint32(7)
+
 func TestCASPutStoresAndReturnsSha256(t *testing.T) {
 	ctx := context.Background()
 	fs := newTestCASFS(t)
 	data := []byte("hello datalink")
 
-	hash, err := CASPut(ctx, fs, data)
+	hash, err := CASPut(ctx, fs, testAccountID, data)
 	require.NoError(t, err)
 
 	sum := sha256.Sum256(data)
@@ -44,7 +46,7 @@ func TestCASPutStoresAndReturnsSha256(t *testing.T) {
 
 	// the stored CAS object must be byte-identical to the input
 	vec := &fileservice.IOVector{
-		FilePath: CASKey(hash),
+		FilePath: CASKey(testAccountID, hash),
 		Entries:  []fileservice.IOEntry{{Offset: 0, Size: -1}},
 	}
 	require.NoError(t, fs.Read(ctx, vec))
@@ -56,10 +58,10 @@ func TestCASPutIsIdempotent(t *testing.T) {
 	fs := newTestCASFS(t)
 	data := []byte("same content")
 
-	h1, err := CASPut(ctx, fs, data)
+	h1, err := CASPut(ctx, fs, testAccountID, data)
 	require.NoError(t, err)
 	// write-once: a second Put of identical bytes must not fail with ErrFileAlreadyExists
-	h2, err := CASPut(ctx, fs, data)
+	h2, err := CASPut(ctx, fs, testAccountID, data)
 	require.NoError(t, err)
 	require.Equal(t, h1, h2)
 }
@@ -68,9 +70,9 @@ func TestCASPutDifferentBytesDifferentHash(t *testing.T) {
 	ctx := context.Background()
 	fs := newTestCASFS(t)
 
-	h1, err := CASPut(ctx, fs, []byte("alpha"))
+	h1, err := CASPut(ctx, fs, testAccountID, []byte("alpha"))
 	require.NoError(t, err)
-	h2, err := CASPut(ctx, fs, []byte("beta"))
+	h2, err := CASPut(ctx, fs, testAccountID, []byte("beta"))
 	require.NoError(t, err)
 	require.NotEqual(t, h1, h2)
 }
@@ -82,18 +84,46 @@ func TestCASExists(t *testing.T) {
 	sum := sha256.Sum256(data)
 	hash := hex.EncodeToString(sum[:])
 
-	ok, err := CASExists(ctx, fs, hash)
+	ok, err := CASExists(ctx, fs, testAccountID, hash)
 	require.NoError(t, err)
 	require.False(t, ok)
 
-	_, err = CASPut(ctx, fs, data)
+	_, err = CASPut(ctx, fs, testAccountID, data)
 	require.NoError(t, err)
 
-	ok, err = CASExists(ctx, fs, hash)
+	ok, err = CASExists(ctx, fs, testAccountID, hash)
 	require.NoError(t, err)
 	require.True(t, ok)
 }
 
 func TestCASKey(t *testing.T) {
-	require.Equal(t, "datalink_cas/ab/abcd1234ef", CASKey("abcd1234ef"))
+	require.Equal(t, "datalink_cas/7/ab/abcd1234ef", CASKey(7, "abcd1234ef"))
+}
+
+// CAS objects are namespaced per account: bytes pinned by one account are not
+// visible to another account by hash alone. This is the core fix for the bearer
+// capability concern — a contenthash is no longer a cross-account read token.
+func TestCASAccountIsolation(t *testing.T) {
+	ctx := context.Background()
+	fs := newTestCASFS(t)
+	data := []byte("tenant private bytes")
+
+	const accountA = uint32(100)
+	const accountB = uint32(200)
+
+	hash, err := CASPut(ctx, fs, accountA, data)
+	require.NoError(t, err)
+
+	// same hash, different account namespaces -> different keys
+	require.NotEqual(t, CASKey(accountA, hash), CASKey(accountB, hash))
+
+	// account A can see its own object
+	ok, err := CASExists(ctx, fs, accountA, hash)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// account B cannot read account A's object by hash alone
+	ok, err = CASExists(ctx, fs, accountB, hash)
+	require.NoError(t, err)
+	require.False(t, ok)
 }

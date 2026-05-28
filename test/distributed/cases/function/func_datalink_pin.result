@@ -24,7 +24,7 @@ select load_file(cast('file:///bogus/nonexistent/path.txt?contenthash=c0535e4be2
 ➤ cas_decoupled[12,0,0]  𝄀
 Hello world!
 select load_file(cast('file://$resources/file_test/normal.txt?contenthash=0000000000000000000000000000000000000000000000000000000000000000' as datalink)) as missing_cas;
-file datalink_cas/00/0000000000000000000000000000000000000000000000000000000000000000 is not found
+file 0000000000000000000000000000000000000000000000000000000000000000 is not found
 select load_file(cast('file://$resources/file_test/normal.txt?contenthash=notavalidhash' as datalink)) as bad_hash;
 internal error: invalid datalink contenthash length 13, want 64
 select datalink_pin(cast('unknownscheme://x/y' as datalink)) as pin_bad_scheme;
@@ -52,3 +52,7 @@ select id, load_file(dl) as ow_pinned_read from pin_ow where id = 1;
 1  ¦  version-ONE
 drop table pin_ow;
 drop stage pin_ow_st;
+create account pin_acc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+select load_file(cast('file:///x.txt?contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a' as datalink)) as cross_account_blocked;
+file c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a is not found
+drop account pin_acc;

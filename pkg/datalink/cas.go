@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -48,42 +49,52 @@ func ValidateContentHash(hash string) error {
 }
 
 // CASKey returns the storage key of a content-addressed blob within the SHARED
-// file service (without the service-name prefix). Layout: datalink_cas/<h2>/<hash>.
+// file service (without the service-name prefix). Layout:
+// datalink_cas/<accountID>/<h2>/<hash>.
+//
+// The blob is namespaced by accountID so that a contenthash is not a global
+// bearer capability: a hash known to one account cannot be used to read another
+// account's pinned bytes, and there is no cross-account dedup visibility. The
+// accountID must come from the trusted execution context (defines.GetAccountId),
+// never from the datalink URL.
+//
 // hash must be a validated sha256 hex digest (see ValidateContentHash).
 //
 // The read path reads this key directly from the SHARED FileService rather than
 // routing through GetForETL, because SHARED may be a plain FileService (e.g.
 // LocalFS in standalone) that does not implement ETLFileService.
-func CASKey(hash string) string {
-	return casPrefix + "/" + hash[:2] + "/" + hash
+func CASKey(accountID uint32, hash string) string {
+	return casPrefix + "/" + strconv.FormatUint(uint64(accountID), 10) + "/" + hash[:2] + "/" + hash
 }
 
 // casHashFromKey extracts the hash from a CAS key produced by CASKey, reporting
 // whether p is such a key. Deriving ContentHash from an already-parsed MoPath
 // (rather than re-parsing the URL) keeps ContentHash and MoPath consistent even
-// for malformed input with duplicate/mixed-case contenthash params.
+// for malformed input with duplicate/mixed-case contenthash params. The trailing
+// path segment is always the hash regardless of the account/<h2> prefix.
 func casHashFromKey(p string) (string, bool) {
 	prefix := casPrefix + "/"
 	if !strings.HasPrefix(p, prefix) {
 		return "", false
 	}
-	rest := p[len(prefix):] // "<h2>/<hash>"
+	rest := p[len(prefix):] // "<accountID>/<h2>/<hash>"
 	if idx := strings.LastIndex(rest, "/"); idx >= 0 {
 		return rest[idx+1:], true
 	}
 	return "", false
 }
 
-// CASPut writes data into the content-addressed store and returns its sha256
-// hex digest. The store is write-once and immutable: if the blob already exists
-// the write is skipped (natural dedup), so repeated Puts of identical bytes
-// succeed without error and never overwrite the existing object.
-func CASPut(ctx context.Context, fs fileservice.FileService, data []byte) (string, error) {
+// CASPut writes data into the calling account's content-addressed namespace and
+// returns its sha256 hex digest. The store is write-once and immutable: if the
+// blob already exists the write is skipped (natural per-account dedup), so
+// repeated Puts of identical bytes succeed without error and never overwrite the
+// existing object.
+func CASPut(ctx context.Context, fs fileservice.FileService, accountID uint32, data []byte) (string, error) {
 	sum := sha256.Sum256(data)
 	hash := hex.EncodeToString(sum[:])
 
 	vec := fileservice.IOVector{
-		FilePath: CASKey(hash),
+		FilePath: CASKey(accountID, hash),
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: 0,
@@ -101,9 +112,10 @@ func CASPut(ctx context.Context, fs fileservice.FileService, data []byte) (strin
 	return hash, nil
 }
 
-// CASExists reports whether a blob addressed by hash exists in the store.
-func CASExists(ctx context.Context, fs fileservice.FileService, hash string) (bool, error) {
-	if _, err := fs.StatFile(ctx, CASKey(hash)); err != nil {
+// CASExists reports whether a blob addressed by hash exists in the given
+// account's namespace.
+func CASExists(ctx context.Context, fs fileservice.FileService, accountID uint32, hash string) (bool, error) {
+	if _, err := fs.StatFile(ctx, CASKey(accountID, hash)); err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return false, nil
 		}

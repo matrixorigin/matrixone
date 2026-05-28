@@ -3542,7 +3542,14 @@ func pinDatalink(rawURL string, casFS fileservice.FileService, proc *process.Pro
 		return "", err
 	}
 
-	hash, err := datalink.CASPut(proc.Ctx, casFS, fileBytes)
+	// Namespace the CAS object by the calling account (resolved from the trusted
+	// context, never from the URL) so a contenthash is not a cross-account bearer
+	// capability.
+	accountID, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return "", err
+	}
+	hash, err := datalink.CASPut(proc.Ctx, casFS, accountID, fileBytes)
 	if err != nil {
 		return "", err
 	}

@@ -53,3 +53,14 @@ select load_file(cast('stage://pin_ow_st/f.txt' as datalink)) as ow_live_read;
 select id, load_file(dl) as ow_pinned_read from pin_ow where id = 1;
 drop table pin_ow;
 drop stage pin_ow_st;
+
+-- 11. cross-account isolation: a pinned datalink's CAS object is namespaced by
+--     account, so a contenthash is not a global bearer token. The sys account
+--     pinned normal.txt ('Hello world!', hash c0535e..) in the cases above; a
+--     separate account reading the same contenthash is served from its own
+--     (empty) namespace and errors out, never reaching the sys account's bytes.
+create account pin_acc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+-- @session:id=2&user=pin_acc:admin:accountadmin&password=123456
+select load_file(cast('file:///x.txt?contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a' as datalink)) as cross_account_blocked;
+-- @session
+drop account pin_acc;
