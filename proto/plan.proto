@@ -601,6 +601,8 @@ message UpdateCtx {
 	repeated ColRef insert_cols	= 7 [(gogoproto.nullable) = false];
 	repeated ColRef delete_cols	= 8 [(gogoproto.nullable) = false];
 	repeated ColRef partition_cols	= 9 [(gogoproto.nullable) = false];
+	bool skip_insert_on_null_pk	= 10;
+	int32 insert_pk_col_idx	= 11;
 }
 
 message InsertCtx {
