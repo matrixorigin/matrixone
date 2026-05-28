@@ -651,6 +651,9 @@ func TestBase(t *testing.T) {
 		) {
 			require.NotNil(t, tc.TxnRef())
 			require.Equal(t, tc.Txn().SnapshotTS, tc.SnapshotTS())
+			newSnapshotTS := newTestTimestamp(42)
+			tc.SetSnapshotTS(newSnapshotTS)
+			require.Equal(t, newSnapshotTS, tc.SnapshotTS())
 			require.NotEqual(t, timestamp.Timestamp{}, tc.CreateTS())
 			require.Equal(t, txn.TxnStatus_Active, tc.Status())
 		},

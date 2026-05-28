@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 
 	"github.com/stretchr/testify/assert"
@@ -7088,6 +7089,47 @@ func TestSHA1(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, SHA1Func)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestHllCardinality(t *testing.T) {
+	sketch := hll.NewNoSparse()
+	sketch.Insert([]byte("a"))
+	sketch.Insert([]byte("b"))
+	sketch.Insert([]byte("b"))
+	data, err := sketch.MarshalBinary()
+	require.NoError(t, err)
+
+	testCases := []tcTemp{
+		{
+			info: "test hll cardinality",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varbinary.ToType(),
+					[]string{string(data), "", string(data)},
+					[]bool{false, true, false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{2, 0, 2},
+				[]bool{false, true, false}),
+		},
+		{
+			info: "test invalid hll sketch",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varbinary.ToType(),
+					[]string{"bad"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), true,
+				[]uint64{0},
+				[]bool{false}),
+		},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, HllCardinality)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}

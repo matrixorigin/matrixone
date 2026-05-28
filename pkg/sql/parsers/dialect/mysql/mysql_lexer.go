@@ -114,6 +114,18 @@ type Lexer struct {
 	stmts      []tree.Statement
 	paramIndex int
 	lower      int64
+	lastToken  int
+}
+
+// reservedKeywordsAfterAS lists tokens that represent reserved keywords
+// which should be treated as identifiers when they follow AS (aliases).
+// This allows statements like SELECT 1 AS rows or SELECT NOW() AS current_time.
+var reservedKeywordsAfterAS = map[int]bool{
+	ROWS:              true,
+	CURRENT_TIME:      true,
+	CURRENT_TIMESTAMP: true,
+	LOCALTIME:         true,
+	LOCALTIMESTAMP:    true,
 }
 
 func NewLexer(dialectType dialect.DialectType, sql string, lower int64) *Lexer {
@@ -129,6 +141,7 @@ func (l *Lexer) setScanner(s *Scanner, lower int64) {
 	l.stmts = nil
 	l.paramIndex = 0
 	l.lower = lower
+	l.lastToken = 0
 }
 
 func (l *Lexer) GetParamIndex() int {
@@ -147,6 +160,14 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		return l.toFloat(lval, str)
 	}
 
+	// Allow reserved keywords as aliases after AS.
+	// MySQL treats most keywords as identifiers in alias context, e.g.:
+	//   SELECT NOW() AS current_time, COUNT(*) AS rows FROM t
+	if reservedKeywordsAfterAS[typ] && l.lastToken == AS {
+		typ = ID
+	}
+
+	l.lastToken = typ
 	lval.str = str
 	return typ
 }
