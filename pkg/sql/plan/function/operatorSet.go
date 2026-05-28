@@ -34,10 +34,59 @@ var (
 		types.T_bit,
 		types.T_uuid,
 		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_json, types.T_datalink,
 	}
 )
+
+func mixedStringNumericToVarchar(source []types.Type) (types.Type, bool) {
+	hasString := false
+	hasNumeric := false
+	for _, t := range source {
+		if t.Oid.IsMySQLString() {
+			hasString = true
+		}
+		if t.Oid.IsInteger() || t.Oid.IsFloat() || t.Oid.IsDecimal() {
+			hasNumeric = true
+		}
+		if hasString && hasNumeric {
+			retType := types.T_varchar.ToType()
+			retType.Width = types.MaxVarBinaryLen
+			return retType, true
+		}
+	}
+	return types.Type{}, false
+}
+
+func needDecimalMetadataCast(source []types.Type, target types.Type) bool {
+	if !target.Oid.IsDecimal() {
+		return false
+	}
+	for i := range source {
+		if source[i].Oid != target.Oid {
+			return true
+		}
+		if source[i].Scale != target.Scale || source[i].Width != target.Width {
+			return true
+		}
+	}
+	return false
+}
+
+func requireDecimalReturn(source []types.Type) bool {
+	hasDecimal := false
+	for i := range source {
+		if source[i].Oid.IsDecimal() {
+			hasDecimal = true
+			continue
+		}
+		if source[i].IsIntOrUint() {
+			continue
+		}
+		return false
+	}
+	return hasDecimal
+}
 
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
 func caseCheck(_ []overload, inputs []types.Type) checkResult {
@@ -98,9 +147,28 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			source = append(source, inputs[l-1])
 		}
 
+		if retType, ok := mixedStringNumericToVarchar(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			for i := range finalTypes {
+				if i%2 == 0 {
+					finalTypes[i] = types.T_bool.ToType()
+				} else {
+					finalTypes[i] = retType
+				}
+			}
+			if len(inputs)%2 == 1 {
+				finalTypes[len(finalTypes)-1] = retType
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+
 		target := make([]types.T, len(source))
+		decimalReturnRequired := requireDecimalReturn(source)
 
 		for _, rett := range retOperatorCaseSupports {
+			if decimalReturnRequired && !rett.IsDecimal() {
+				continue
+			}
 			for i := range target {
 				target[i] = rett
 			}
@@ -109,33 +177,36 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 				continue
 			}
 			if cost < minCost {
-				minCost = cost
 				retType = rett.ToType()
 				if retType.Oid.IsDecimal() {
-					setMaxScaleFromSource(&retType, source)
+					if !setSafeDecimalWidthAndScaleFromSource(&retType, source) {
+						continue
+					}
 				} else if retType.Oid.IsMySQLString() {
 					setMaxWidthFromSource(&retType, source)
 				}
+				minCost = cost
 			}
 		}
 		if minCost == math.MaxInt32 {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
-		if minCost == 0 && !needCast && !retType.Oid.IsMySQLString() {
-			return newCheckResultWithSuccess(0)
-		}
-
 		finalTypes := make([]types.Type, len(inputs))
+		shouldCast := needCast || retType.Oid.IsMySQLString() || needDecimalMetadataCast(source, retType)
 		for i := range finalTypes {
-			if i%2 == 0 {
+			if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
 				finalTypes[i] = types.T_bool.ToType()
 			} else {
 				finalTypes[i] = retType
 			}
+			if finalTypes[i].Oid != inputs[i].Oid {
+				shouldCast = true
+			}
 		}
-		if len(inputs)%2 == 1 {
-			finalTypes[len(finalTypes)-1] = retType
+		if !shouldCast {
+			return newCheckResultWithSuccess(0)
 		}
+
 		return newCheckResultWithCast(0, finalTypes)
 	}
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -182,6 +253,8 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return generalCaseFn[types.Decimal64](parameters, result, proc, length, selectList)
 	case types.T_decimal128:
 		return generalCaseFn[types.Decimal128](parameters, result, proc, length, selectList)
+	case types.T_decimal256:
+		return generalCaseFn[types.Decimal256](parameters, result, proc, length, selectList)
 	case types.T_enum:
 		return generalCaseFn[types.Enum](parameters, result, proc, length, selectList)
 	case types.T_char:
@@ -199,7 +272,7 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func generalCaseFn[T constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-	types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	types.Decimal64 | types.Decimal128 | types.Decimal256 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	// case Xn then Yn else Z
 	xs := make([]vector.FunctionParameterWrapper[bool], 0, len(vecs)/2)
 	ys := make([]vector.FunctionParameterWrapper[T], 0, len(vecs)/2)
@@ -322,7 +395,7 @@ var (
 		types.T_bool, types.T_date, types.T_datetime,
 		types.T_bit,
 		types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_json,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_timestamp, types.T_time, types.T_datalink,
 	}
 )
@@ -338,16 +411,8 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 			needCast = true
 		}
 
-		// Special handling for mixed string/numeric types (issue #19998)
-		// If one is string and the other is numeric, prefer string type
-		// This avoids runtime errors when casting 'All years' to int
 		source := []types.Type{inputs[1], inputs[2]}
-		isNumeric0 := source[0].Oid.IsInteger() || source[0].Oid.IsFloat() || source[0].Oid.IsDecimal()
-		isNumeric1 := source[1].Oid.IsInteger() || source[1].Oid.IsFloat() || source[1].Oid.IsDecimal()
-		if (source[0].Oid.IsMySQLString() && isNumeric1) ||
-			(isNumeric0 && source[1].Oid.IsMySQLString()) {
-			retType := types.T_varchar.ToType()
-			setMaxWidthFromSource(&retType, source)
+		if retType, ok := mixedStringNumericToVarchar(source); ok {
 			return newCheckResultWithCast(0, []types.Type{types.T_bool.ToType(), retType, retType})
 		}
 
@@ -355,7 +420,11 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 		retType := types.Type{}
 
 		target := make([]types.T, 2)
+		decimalReturnRequired := requireDecimalReturn(source)
 		for _, rett := range retOperatorIffSupports {
+			if decimalReturnRequired && !rett.IsDecimal() {
+				continue
+			}
 			target[0], target[1] = rett, rett
 
 			c, cost := tryToMatch(source, target)
@@ -363,23 +432,32 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 				continue
 			}
 			if cost < minCost {
-				minCost = cost
 				retType = rett.ToType()
 				if retType.Oid.IsDecimal() {
-					setMaxScaleFromSource(&retType, source)
+					if !setSafeDecimalWidthAndScaleFromSource(&retType, source) {
+						continue
+					}
 				} else if retType.Oid.IsMySQLString() {
 					setMaxWidthFromSource(&retType, source)
 				}
+				minCost = cost
 			}
 		}
 
 		if minCost == math.MaxInt32 {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
-		if minCost == 0 && !needCast && !retType.Oid.IsMySQLString() {
+		finalTypes := []types.Type{types.T_bool.ToType(), retType, retType}
+		shouldCast := needCast || retType.Oid.IsMySQLString() || needDecimalMetadataCast(source, retType)
+		for i := range inputs {
+			if inputs[i].Oid != finalTypes[i].Oid {
+				shouldCast = true
+			}
+		}
+		if !shouldCast {
 			return newCheckResultWithSuccess(0)
 		}
-		return newCheckResultWithCast(0, []types.Type{types.T_bool.ToType(), retType, retType})
+		return newCheckResultWithCast(0, finalTypes)
 	}
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
@@ -421,6 +499,8 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return generalIffFn[types.Decimal64](parameters, result, proc, length, selectList)
 	case types.T_decimal128:
 		return generalIffFn[types.Decimal128](parameters, result, proc, length, selectList)
+	case types.T_decimal256:
+		return generalIffFn[types.Decimal256](parameters, result, proc, length, selectList)
 	case types.T_time:
 		return generalIffFn[types.Time](parameters, result, proc, length, selectList)
 	case types.T_timestamp:
@@ -434,7 +514,7 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-	types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	types.Decimal64 | types.Decimal128 | types.Decimal256 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[bool](vecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](vecs[1])
 	p3 := vector.GenerateFunctionFixedTypeParameter[T](vecs[2])

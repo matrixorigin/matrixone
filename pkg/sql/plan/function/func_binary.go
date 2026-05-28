@@ -175,6 +175,118 @@ func generalMathMulti[T mathMultiT](funcName string, ivecs []*vector.Vector, res
 	}, selectList)
 }
 
+func generalTruncateMulti[T mathMultiT](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
+	cb mathMultiFun[T], selectList *FunctionSelectList) (err error) {
+	if len(ivecs) != 2 {
+		return moerr.NewInvalidArg(proc.Ctx, "the number of arguments for truncate", len(ivecs))
+	}
+
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[T](result)
+	p1 := vector.OptGetParamFromWrapper[T](rs, 0, ivecs[0])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[T](rsVec)
+
+	c1, c2 := ivecs[0].IsConst(), ivecs[1].IsConst()
+	rsNull := rsVec.GetNulls()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	if c1 && c2 {
+		v1, null1 := p1.GetValue(0)
+		v2, null2 := p2.GetValue(0)
+		if null1 || null2 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			r := cb(v1, v2)
+			for i := uint64(0); i < uint64(length); i++ {
+				rss[i] = r
+			}
+		}
+		return nil
+	}
+
+	if c1 {
+		v1, null1 := p1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else if p2.WithAnyNullValue() || rsAnyNull {
+			nulls.Or(rsNull, ivecs[1].GetNulls(), rsNull)
+			for i := uint64(0); i < uint64(length); i++ {
+				if rsNull.Contains(i) {
+					continue
+				}
+				v2, _ := p2.GetValue(i)
+				rss[i] = cb(v1, v2)
+			}
+		} else {
+			for i := uint64(0); i < uint64(length); i++ {
+				v2, _ := p2.GetValue(i)
+				rss[i] = cb(v1, v2)
+			}
+		}
+		return nil
+	}
+
+	if c2 {
+		v2, null2 := p2.GetValue(0)
+		if null2 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else if p1.WithAnyNullValue() || rsAnyNull {
+			nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+			for i := uint64(0); i < uint64(length); i++ {
+				if rsNull.Contains(i) {
+					continue
+				}
+				v1, _ := p1.GetValue(i)
+				rss[i] = cb(v1, v2)
+			}
+		} else {
+			for i := uint64(0); i < uint64(length); i++ {
+				v1, _ := p1.GetValue(i)
+				rss[i] = cb(v1, v2)
+			}
+		}
+		return nil
+	}
+
+	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		nulls.Or(rsNull, ivecs[1].GetNulls(), rsNull)
+		for i := uint64(0); i < uint64(length); i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetValue(i)
+			v2, _ := p2.GetValue(i)
+			rss[i] = cb(v1, v2)
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetValue(i)
+		v2, _ := p2.GetValue(i)
+		rss[i] = cb(v1, v2)
+	}
+	return nil
+}
+
 func CeilStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	digits := int64(0)
 	if len(ivecs) > 1 {
@@ -616,7 +728,7 @@ func truncateUint64(x uint64, digits int64) uint64 {
 }
 
 func TruncateUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return generalMathMulti("truncate", ivecs, result, proc, length, truncateUint64, selectList)
+	return generalTruncateMulti(ivecs, result, proc, length, truncateUint64, selectList)
 }
 
 func truncateInt64(x int64, digits int64) int64 {
@@ -634,7 +746,7 @@ func truncateInt64(x int64, digits int64) int64 {
 }
 
 func TruncateInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return generalMathMulti("truncate", ivecs, result, proc, length, truncateInt64, selectList)
+	return generalTruncateMulti(ivecs, result, proc, length, truncateInt64, selectList)
 }
 
 func truncateFloat64(x float64, digits int64) float64 {
@@ -667,7 +779,7 @@ func truncateFloat64(x float64, digits int64) float64 {
 }
 
 func TruncateFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return generalMathMulti("truncate", ivecs, result, proc, length, truncateFloat64, selectList)
+	return generalTruncateMulti(ivecs, result, proc, length, truncateFloat64, selectList)
 }
 
 func truncateDecimal64(x types.Decimal64, digits int64, scale int32, isConst bool) types.Decimal64 {
@@ -703,7 +815,7 @@ func TruncateDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	cb := func(x types.Decimal64, digits int64) types.Decimal64 {
 		return truncateDecimal64(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
 	}
-	return generalMathMulti("truncate", ivecs, result, proc, length, cb, selectList)
+	return generalTruncateMulti(ivecs, result, proc, length, cb, selectList)
 }
 
 func truncateDecimal128(x types.Decimal128, digits int64, scale int32, isConst bool) types.Decimal128 {
@@ -738,7 +850,7 @@ func TruncateDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	cb := func(x types.Decimal128, digits int64) types.Decimal128 {
 		return truncateDecimal128(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
 	}
-	return generalMathMulti("truncate", ivecs, result, proc, length, cb, selectList)
+	return generalTruncateMulti(ivecs, result, proc, length, cb, selectList)
 }
 
 func roundDecimal64(x types.Decimal64, digits int64, scale int32, isConst bool) types.Decimal64 {
@@ -791,6 +903,19 @@ type NormalType interface {
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 0 {
+		if retType, ok := mixedStringNumericToVarchar(inputs); ok {
+			castType := make([]types.Type, len(inputs))
+			for i := range castType {
+				castType[i] = retType
+			}
+			for i, over := range overloads {
+				if len(over.args) == 1 && over.args[0] == retType.Oid {
+					return newCheckResultWithCast(i, castType)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+
 		minIndex := -1
 		minOid := types.T(0)
 		minCost := math.MaxInt
