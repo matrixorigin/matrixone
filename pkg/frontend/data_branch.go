@@ -711,21 +711,25 @@ func diffMergeAgency(
 		return
 	}
 	var (
-		done      bool
-		wg        = new(sync.WaitGroup)
-		outputErr atomic.Value
-		retBatCh  = make(chan batchWithKind, 10)
-		stopCh    = make(chan struct{})
-		stopOnce  sync.Once
-		emit      emitFunc
-		stop      func()
-		waited    bool
+		done         bool
+		wg           = new(sync.WaitGroup)
+		outputErr    atomic.Value
+		retBatCh     = make(chan batchWithKind, 10)
+		retBatChOnce sync.Once
+		stopCh       = make(chan struct{})
+		stopOnce     sync.Once
+		emit         emitFunc
+		stop         func()
+		waited       bool
 	)
+	closeRetBatCh := func() {
+		retBatChOnce.Do(func() {
+			close(retBatCh)
+		})
+	}
 
 	defer func() {
-		if retBatCh != nil {
-			close(retBatCh)
-		}
+		closeRetBatCh()
 		if !waited {
 			wg.Wait()
 		}
@@ -826,10 +830,7 @@ func diffMergeAgency(
 	); err != nil {
 		// If the consumer cancelled the context (e.g., PICK conflict FAIL),
 		// wait for it to finish and prefer its real error over context.Canceled.
-		if retBatCh != nil {
-			close(retBatCh)
-			retBatCh = nil
-		}
+		closeRetBatCh()
 		waited = true
 		wg.Wait()
 		if outputErr.Load() != nil {
@@ -838,8 +839,7 @@ func diffMergeAgency(
 		return
 	}
 
-	close(retBatCh)
-	retBatCh = nil
+	closeRetBatCh()
 	waited = true
 
 	wg.Wait()
