@@ -51,8 +51,15 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.hashmapBuilder.OnDuplicateAction = hashBuild.OnDuplicateAction
 	hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
 	hashBuild.ctr.hashmapBuilder.DedupColTypes = hashBuild.DedupColTypes
+	hashBuild.ctr.hashmapBuilder.DedupBuildKeepLast = hashBuild.DedupBuildKeepLast
 
-	return hashBuild.ctr.hashmapBuilder.Prepare(hashBuild.Conditions, hashBuild.DelColIdx, proc)
+	if err := hashBuild.ctr.hashmapBuilder.Prepare(hashBuild.Conditions, hashBuild.DelColIdx, proc); err != nil {
+		return err
+	}
+	if hashBuild.DedupBuildKeepLast {
+		hashBuild.ctr.hashmapBuilder.SetDedupDeleteInfo(hashBuild.DedupDeleteMarkerColIdx, hashBuild.DedupDeleteKeepColIdxList)
+	}
+	return nil
 }
 
 func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {

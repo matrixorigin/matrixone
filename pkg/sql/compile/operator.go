@@ -940,11 +940,13 @@ func constructMultiUpdate(
 		}
 
 		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
-			ObjRef:        updateCtx.ObjRef,
-			TableDef:      updateCtx.TableDef,
-			InsertCols:    insertCols,
-			DeleteCols:    deleteCols,
-			PartitionCols: partitionCols,
+			ObjRef:             updateCtx.ObjRef,
+			TableDef:           updateCtx.TableDef,
+			InsertCols:         insertCols,
+			DeleteCols:         deleteCols,
+			PartitionCols:      partitionCols,
+			SkipInsertOnNullPk: updateCtx.SkipInsertOnNullPk,
+			InsertPkColIdx:     int(updateCtx.InsertPkColIdx),
 		}
 	}
 	arg.Action = action
@@ -1281,11 +1283,17 @@ func constructDedupJoin(n, left *plan.Node, qry *plan.Query, leftTypes, rightTyp
 		}
 	}
 	arg.DelColIdx = -1
+	arg.DedupDeleteMarkerColIdx = -1
 	if n.DedupJoinCtx != nil {
 		arg.UpdateColIdxList = n.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = n.DedupJoinCtx.UpdateColExprList
 		if n.OnDuplicateAction == plan.Node_FAIL && len(n.DedupJoinCtx.OldColList) > 0 {
 			arg.DelColIdx = n.DedupJoinCtx.OldColList[0].ColPos
+			if len(n.DedupJoinCtx.OldColList) > 1 {
+				arg.DedupBuildKeepLast = true
+				arg.DedupDeleteMarkerColIdx = n.DedupJoinCtx.OldColList[1].ColPos
+				arg.DedupDeleteKeepColIdxList = dedupDeleteKeepColIdxList(n)
+			}
 		}
 	}
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
@@ -1340,11 +1348,17 @@ func constructRightDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, p
 	arg.DedupColName = n.DedupColName
 	arg.DedupColTypes = n.DedupColTypes
 	arg.DelColIdx = -1
+	arg.DedupDeleteMarkerColIdx = -1
 	if n.DedupJoinCtx != nil {
 		arg.UpdateColIdxList = n.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = n.DedupJoinCtx.UpdateColExprList
 		if n.OnDuplicateAction == plan.Node_FAIL && len(n.DedupJoinCtx.OldColList) > 0 {
 			arg.DelColIdx = n.DedupJoinCtx.OldColList[0].ColPos
+			if len(n.DedupJoinCtx.OldColList) > 1 {
+				arg.DedupBuildKeepLast = true
+				arg.DedupDeleteMarkerColIdx = n.DedupJoinCtx.OldColList[1].ColPos
+				arg.DedupDeleteKeepColIdxList = dedupDeleteKeepColIdxList(n)
+			}
 		}
 	}
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
@@ -1357,6 +1371,24 @@ func constructRightDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, p
 		panic("wrong joinmap tag!")
 	}
 	return arg
+}
+
+// dedupDeleteKeepColIdxList collects all distinct ColPos values from OldColList.
+// These columns are preserved on delete-only rows produced by keepDiscardedRowsForDelete.
+func dedupDeleteKeepColIdxList(node *plan.Node) []int32 {
+	if node.DedupJoinCtx == nil {
+		return nil
+	}
+	seen := make(map[int32]struct{}, len(node.DedupJoinCtx.OldColList))
+	out := make([]int32, 0, len(node.DedupJoinCtx.OldColList))
+	for _, ref := range node.DedupJoinCtx.OldColList {
+		if _, ok := seen[ref.ColPos]; ok {
+			continue
+		}
+		seen[ref.ColPos] = struct{}{}
+		out = append(out, ref.ColPos)
+	}
+	return out
 }
 
 func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *product.Product {
@@ -2085,6 +2117,9 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
 		ret.DelColIdx = arg.DelColIdx
+		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
+		ret.DedupDeleteMarkerColIdx = arg.DedupDeleteMarkerColIdx
+		ret.DedupDeleteKeepColIdxList = arg.DedupDeleteKeepColIdxList
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
@@ -2101,6 +2136,9 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
 		ret.DelColIdx = arg.DelColIdx
+		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
+		ret.DedupDeleteMarkerColIdx = arg.DedupDeleteMarkerColIdx
+		ret.DedupDeleteKeepColIdxList = arg.DedupDeleteKeepColIdxList
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}

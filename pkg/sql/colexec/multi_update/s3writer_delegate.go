@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -938,6 +939,18 @@ func resetMergeBlockForOldCN(proc *process.Process, bat *batch.Batch) error {
 		}
 
 		vector.AppendBytes(destVec, objStats.Marshal(), false, proc.GetMPool())
+	}
+	return nil
+}
+
+func checkMainTableNotNull(proc *process.Process, updateCtx *MultiUpdateCtx, bat *batch.Batch) error {
+	for insertIdx := range updateCtx.InsertCols {
+		col := updateCtx.TableDef.Cols[insertIdx]
+		if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
+			if bat.Vecs[insertIdx].HasNull() {
+				return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+			}
+		}
 	}
 	return nil
 }

@@ -1,0 +1,26 @@
+drop table if exists mowl_workflow_cases;
+CREATE TABLE mowl_workflow_cases (
+id VARCHAR(36) NOT NULL,
+task_id VARCHAR(36) DEFAULT NULL,
+PRIMARY KEY (id),
+KEY idx_task_id (task_id)
+);
+INSERT INTO mowl_workflow_cases VALUES ('case-001', 'task-001');
+INSERT INTO mowl_workflow_cases VALUES ('case-002', 'task-002');
+BEGIN;
+ALTER TABLE mowl_workflow_cases ADD COLUMN scheduler_visible TINYINT(1) NOT NULL DEFAULT 1;
+CREATE INDEX idx_cases_scheduler ON mowl_workflow_cases (scheduler_visible);
+UPDATE mowl_workflow_cases SET scheduler_visible = 0 WHERE id = 'case-001';
+COMMIT;
+SELECT id, scheduler_visible FROM mowl_workflow_cases ORDER BY id;
+id	scheduler_visible
+case-001	0
+case-002	1
+BEGIN;
+CREATE INDEX idx_cases_task ON mowl_workflow_cases (task_id);
+DELETE FROM mowl_workflow_cases WHERE id = 'case-002';
+COMMIT;
+SELECT COUNT(*) FROM mowl_workflow_cases;
+COUNT(*)
+1
+drop table mowl_workflow_cases;

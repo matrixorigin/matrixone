@@ -1,0 +1,86 @@
+-- @desc:test for SIGN()
+
+-- constants and NULL
+select sign(123), sign(123.123), sign(-123), sign(-123.123), sign(0), sign(NULL);
+select sign(-32), sign(0), sign(234);
+
+-- signed integer types
+drop table if exists sign_signed_types;
+create table sign_signed_types (
+    c_tiny tinyint,
+    c_small smallint,
+    c_int int,
+    c_big bigint
+);
+insert into sign_signed_types values
+    (-1, -2, -3, -4),
+    (0, 0, 0, 0),
+    (1, 2, 3, 4),
+    (null, null, null, null);
+select sign(c_tiny), sign(c_small), sign(c_int), sign(c_big) from sign_signed_types order by c_big;
+drop table sign_signed_types;
+
+-- unsigned integer types
+drop table if exists sign_unsigned_types;
+create table sign_unsigned_types (
+    c_tiny tinyint unsigned,
+    c_small smallint unsigned,
+    c_int int unsigned,
+    c_big bigint unsigned
+);
+insert into sign_unsigned_types values
+    (0, 0, 0, 0),
+    (1, 2, 3, 4),
+    (255, 65535, 4294967295, 18446744073709551615),
+    (null, null, null, null);
+select sign(c_tiny), sign(c_small), sign(c_int), sign(c_big) from sign_unsigned_types order by c_big;
+drop table sign_unsigned_types;
+
+-- floating point types
+drop table if exists sign_float_types;
+create table sign_float_types (
+    c_float float,
+    c_double double
+);
+insert into sign_float_types values
+    (-123.5, -123.123456789),
+    (0, 0),
+    (123.5, 123.123456789),
+    (null, null);
+select sign(c_float), sign(c_double) from sign_float_types order by c_double;
+drop table sign_float_types;
+
+-- decimal64 and decimal128 types
+drop table if exists sign_decimal_types;
+create table sign_decimal_types (
+    c_decimal64 decimal(18, 6),
+    c_decimal128 decimal(38, 19)
+);
+insert into sign_decimal_types values
+    (-123.123456, -1234567890123456789.1234567890123456789),
+    (0.000000, 0.0000000000000000000),
+    (123.123456, 1234567890123456789.1234567890123456789),
+    (null, null);
+select sign(c_decimal64), sign(c_decimal128) from sign_decimal_types order by c_decimal64;
+drop table sign_decimal_types;
+
+-- expressions
+select sign(abs(-2) - 2), sign(abs(-2) - 3), sign(abs(-2) - 1);
+select sign(cast(18446744073709551615 as unsigned)), sign(cast(0 as unsigned));
+select sign(cast(123.123 as decimal(10, 3))), sign(cast(-123.123 as decimal(10, 3))), sign(cast(0.000 as decimal(10, 3)));
+
+-- string numeric inputs should use floating point numeric conversion
+select sign('0.5'), sign('-0.3'), sign('123.123'), sign('-123.123'), sign('0'), sign(NULL);
+
+drop table if exists sign_string_types;
+create table sign_string_types (
+    c_char char(16),
+    c_varchar varchar(16),
+    c_text text
+);
+insert into sign_string_types values
+    ('0.5', '-0.3', '123.123'),
+    ('-0.5', '0', '-123.123'),
+    (null, null, null);
+select sign(c_char), sign(c_varchar), sign(c_text) from sign_string_types order by c_text;
+drop table sign_string_types;

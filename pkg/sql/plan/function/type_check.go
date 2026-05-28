@@ -185,6 +185,34 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithCast(minIndex, castType)
 }
 
+func signTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 && inputs[0].Oid.IsMySQLString() {
+		for i, ov := range overloads {
+			if len(ov.args) == 1 && ov.args[0] == types.T_float64 {
+				return newCheckResultWithCast(i, []types.Type{types.T_float64.ToType()})
+			}
+		}
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
+func truncateTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 2 && inputs[0].Oid.IsMySQLString() {
+		can, _ := fixedImplicitTypeCast(inputs[1], types.T_int64)
+		if inputs[1].Oid != types.T_int64 && !can {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		for i, ov := range overloads {
+			if len(ov.args) == 2 && ov.args[0] == types.T_float64 && ov.args[1] == types.T_int64 {
+				return newCheckResultWithCast(i, []types.Type{types.T_float64.ToType(), types.T_int64.ToType()})
+			}
+		}
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
 // a fixed type match method without any type convert. (const null exception)
 // if all parameters were `constant null`, match the first one whose number of parameters was same.
 func fixedDirectlyTypeMatch(overload []overload, inputs []types.Type) checkResult {
@@ -348,6 +376,108 @@ func setMaxScaleFromSource(t *types.Type, source []types.Type) {
 				t.Scale = source[i].Scale
 			}
 		}
+	}
+}
+
+func setSafeDecimalWidthAndScaleFromSource(t *types.Type, source []types.Type) bool {
+	if !t.Oid.IsDecimal() {
+		return true
+	}
+	hasDecimalOrInteger := false
+	maxScale := int32(0)
+	maxIntegralWidth := int32(0)
+
+	for i := range source {
+		if source[i].Oid.IsDecimal() {
+			if !hasDecimalOrInteger {
+				maxScale = source[i].Scale
+				maxIntegralWidth = source[i].Width - source[i].Scale
+				if maxIntegralWidth < 0 {
+					maxIntegralWidth = 0
+				}
+				hasDecimalOrInteger = true
+			}
+			if source[i].Scale > maxScale {
+				maxScale = source[i].Scale
+			}
+			integralWidth := source[i].Width - source[i].Scale
+			if integralWidth > maxIntegralWidth {
+				maxIntegralWidth = integralWidth
+			}
+			continue
+		}
+
+		if source[i].IsIntOrUint() {
+			hasDecimalOrInteger = true
+			if integralWidth := integerIntegralWidth(source[i].Oid); integralWidth > maxIntegralWidth {
+				maxIntegralWidth = integralWidth
+			}
+		}
+	}
+	if !hasDecimalOrInteger {
+		return true
+	}
+
+	requiredWidth := maxIntegralWidth + maxScale
+	oid, ok := decimalTypeForRequiredWidth(t.Oid, requiredWidth)
+	if !ok {
+		return false
+	}
+	t.Oid = oid
+	t.Size = int32(t.Oid.TypeLen())
+	t.Scale = maxScale
+	t.Width = requiredWidth
+	return true
+}
+
+func decimalTypeForRequiredWidth(oid types.T, requiredWidth int32) (types.T, bool) {
+	switch oid {
+	case types.T_decimal64:
+		if requiredWidth <= types.T_decimal64.ToType().Width {
+			return types.T_decimal64, true
+		}
+		if requiredWidth <= types.T_decimal128.ToType().Width {
+			return types.T_decimal128, true
+		}
+		if requiredWidth <= types.T_decimal256.ToType().Width {
+			return types.T_decimal256, true
+		}
+		return oid, false
+	case types.T_decimal128:
+		if requiredWidth <= types.T_decimal128.ToType().Width {
+			return types.T_decimal128, true
+		}
+		if requiredWidth <= types.T_decimal256.ToType().Width {
+			return types.T_decimal256, true
+		}
+		return oid, false
+	case types.T_decimal256:
+		return types.T_decimal256, requiredWidth <= types.T_decimal256.ToType().Width
+	default:
+		return oid, true
+	}
+}
+
+func integerIntegralWidth(oid types.T) int32 {
+	switch oid {
+	case types.T_int8:
+		return 3
+	case types.T_uint8:
+		return 3
+	case types.T_int16:
+		return 5
+	case types.T_uint16:
+		return 5
+	case types.T_int32:
+		return 10
+	case types.T_uint32:
+		return 10
+	case types.T_int64:
+		return 19
+	case types.T_uint64:
+		return 20
+	default:
+		return 0
 	}
 }
 
@@ -1573,6 +1703,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1598,6 +1729,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1623,6 +1755,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1648,6 +1781,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1673,6 +1807,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1698,6 +1833,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1723,6 +1859,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1748,6 +1885,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1817,6 +1955,7 @@ func initFixed3() {
 				{toType: types.T_float32, preferLevel: 2},
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1842,6 +1981,33 @@ func initFixed3() {
 				{toType: types.T_float32, preferLevel: 2},
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 2},
+				{toType: types.T_decimal256, preferLevel: 1},
+				{toType: types.T_timestamp, preferLevel: 2},
+				{toType: types.T_char, preferLevel: 2},
+				{toType: types.T_varchar, preferLevel: 2},
+				{toType: types.T_binary, preferLevel: 2},
+				{toType: types.T_varbinary, preferLevel: 2},
+				{toType: types.T_blob, preferLevel: 2},
+				{toType: types.T_text, preferLevel: 2},
+			},
+		},
+
+		{
+			from: types.T_decimal256,
+			toList: []toRule{
+				{toType: types.T_bool, preferLevel: 2},
+				{toType: types.T_int8, preferLevel: 2},
+				{toType: types.T_int16, preferLevel: 2},
+				{toType: types.T_int32, preferLevel: 2},
+				{toType: types.T_int64, preferLevel: 2},
+				{toType: types.T_uint8, preferLevel: 2},
+				{toType: types.T_uint16, preferLevel: 2},
+				{toType: types.T_uint32, preferLevel: 2},
+				{toType: types.T_uint64, preferLevel: 2},
+				{toType: types.T_float32, preferLevel: 2},
+				{toType: types.T_float64, preferLevel: 1},
+				{toType: types.T_decimal64, preferLevel: 2},
+				{toType: types.T_decimal128, preferLevel: 2},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},

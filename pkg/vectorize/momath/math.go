@@ -31,6 +31,14 @@ func Acos(v float64) (float64, error) {
 	}
 }
 
+func Asin(v float64) (float64, error) {
+	if v < -1 || v > 1 {
+		return 0, moerr.NewInvalidArgNoCtx("asin", v)
+	} else {
+		return math.Asin(v), nil
+	}
+}
+
 func Atan(v float64) (float64, error) {
 	return math.Atan(v), nil
 }
@@ -89,6 +97,10 @@ func Lg(v float64) (float64, error) {
 
 func Sin(v float64) (float64, error) {
 	return math.Sin(v), nil
+}
+
+func Radians(v float64) float64 {
+	return v * math.Pi / 180
 }
 
 func Sinh(v float64) (float64, error) {

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/exp/constraints"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -2303,6 +2304,71 @@ func builtInSin(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
+func builtInSignSigned[T constraints.Signed](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[T, int64](parameters, result, proc, length, func(v T) int64 {
+		switch {
+		case v < 0:
+			return -1
+		case v > 0:
+			return 1
+		default:
+			return 0
+		}
+	}, selectList)
+}
+
+func builtInSignUnsigned[T constraints.Unsigned](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[T, int64](parameters, result, proc, length, func(v T) int64 {
+		if v == 0 {
+			return 0
+		}
+		return 1
+	}, selectList)
+}
+
+func builtInSignFloat[T constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[T, int64](parameters, result, proc, length, func(v T) int64 {
+		switch {
+		case v < 0:
+			return -1
+		case v > 0:
+			return 1
+		default:
+			return 0
+		}
+	}, selectList)
+}
+
+func builtInSignDecimal64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Decimal64, int64](parameters, result, proc, length, func(v types.Decimal64) int64 {
+		if v == 0 {
+			return 0
+		}
+		if v.Sign() {
+			return -1
+		}
+		return 1
+	}, selectList)
+}
+
+func builtInSignDecimal128(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Decimal128, int64](parameters, result, proc, length, func(v types.Decimal128) int64 {
+		if v == (types.Decimal128{}) {
+			return 0
+		}
+		if v.Sign() {
+			return -1
+		}
+		return 1
+	}, selectList)
+}
+
+func builtInRadians(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[float64, float64](parameters, result, proc, length, func(v float64) float64 {
+		return momath.Radians(v)
+	}, selectList)
+}
+
 func builtInSinh(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
@@ -2348,25 +2414,9 @@ func builtInCos(parameters []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func builtInCot(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	rs := vector.MustFunctionResult[float64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := p1.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			sinValue, err := momath.Cot(v)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(sinValue, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		return momath.Cot(v)
+	}, selectList)
 }
 
 func builtInTan(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -2414,13 +2464,13 @@ func builtInExp(parameters []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func builtInSqrt(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithErrorCheck[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
 		return momath.Sqrt(v)
 	}, selectList)
 }
 
 func builtInSqrtArray[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytesWithErrorCheck(parameters, result, proc, length, func(in []byte) (out []byte, err error) {
+	return opUnaryBytesToBytesWithNullOnError(parameters, result, proc, length, func(in []byte) (out []byte, err error) {
 		_in := types.BytesToArray[T](in)
 
 		_out, err := moarray.Sqrt(_in)
@@ -2433,25 +2483,15 @@ func builtInSqrtArray[T types.RealNumbers](parameters []*vector.Vector, result v
 }
 
 func builtInACos(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	rs := vector.MustFunctionResult[float64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := p1.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			sinValue, err := momath.Acos(v)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(sinValue, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		return momath.Acos(v)
+	}, selectList)
+}
+
+func builtInASin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		return momath.Asin(v)
+	}, selectList)
 }
 
 func builtInDegrees(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -2515,100 +2555,38 @@ func builtInATan2(parameters []*vector.Vector, result vector.FunctionResultWrapp
 }
 
 func builtInLn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	rs := vector.MustFunctionResult[float64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := p1.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			sinValue, err := momath.Ln(v)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(sinValue, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		return momath.Ln(v)
+	}, selectList)
 }
 
 func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[1])
-	rs := vector.MustFunctionResult[float64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if v1 == float64(1) {
-				return moerr.NewInvalidArg(proc.Ctx, "log base", 1)
-			}
-			tempV1, err := momath.Ln(v1)
-			if err != nil {
-				return moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
-			}
-			tempV2, err := momath.Ln(v2)
-			if err != nil {
-				return moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
-			}
-			if err = rs.Append(tempV2/tempV1, false); err != nil {
-				return err
-			}
+	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
+		if v1 == 1 {
+			return 0, moerr.NewInvalidArg(proc.Ctx, "log base", 1)
 		}
-	}
-	return nil
+		tempV1, err := momath.Ln(v1)
+		if err != nil {
+			return 0, moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
+		}
+		tempV2, err := momath.Ln(v2)
+		if err != nil {
+			return 0, moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
+		}
+		return tempV2 / tempV1, nil
+	}, selectList)
 }
 
 func builtInLog2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	rs := vector.MustFunctionResult[float64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := p1.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			log2Value, err := momath.Log2(v)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(log2Value, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		return momath.Log2(v)
+	}, selectList)
 }
 
 func builtInLog10(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	rs := vector.MustFunctionResult[float64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := p1.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			log10Value, err := momath.Lg(v)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(log10Value, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		return momath.Lg(v)
+	}, selectList)
 }
 
 type opBuiltInRand struct {
