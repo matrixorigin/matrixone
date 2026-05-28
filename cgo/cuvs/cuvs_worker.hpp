@@ -466,6 +466,15 @@ public:
         }
     }
 
+    // Non-copyable, non-movable: the destructor cudaFreeHost's host_half_buf_,
+    // so any accidental copy/move would either double-free (copy) or leave a
+    // dangling pointer in the source (raw move). Each worker thread owns a
+    // single instance for its lifetime; there's no legitimate need to copy.
+    raft_handle_wrapper_t(const raft_handle_wrapper_t&)            = delete;
+    raft_handle_wrapper_t& operator=(const raft_handle_wrapper_t&) = delete;
+    raft_handle_wrapper_t(raft_handle_wrapper_t&&)                 = delete;
+    raft_handle_wrapper_t& operator=(raft_handle_wrapper_t&&)      = delete;
+
     ~raft_handle_wrapper_t() {
         if (host_half_buf_) {
             // cudaFreeHost requires a live CUDA context on this device.
@@ -845,6 +854,15 @@ private:
             q.push(std::move(t));
         } catch (...) {
             in_flight_tasks_--;
+            // Wake any waiter in sync() — if the rollback drops the counter
+            // back to 0, a thread blocked in sync_cv_.wait() would otherwise
+            // sleep forever (the decrement alone doesn't signal). sync_mu_ is
+            // held across notify to close the lost-wakeup window the
+            // flight_guard documents below.
+            {
+                std::lock_guard<std::mutex> lock(sync_mu_);
+                sync_cv_.notify_all();
+            }
             results_store_.discard(id);
             throw;
         }

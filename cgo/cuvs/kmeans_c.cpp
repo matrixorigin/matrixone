@@ -88,8 +88,11 @@ gpu_kmeans_c gpu_kmeans_new(uint32_t n_clusters, uint32_t dimension, distance_ty
         }
         return static_cast<gpu_kmeans_c>(new gpu_kmeans_any_t(qtype, ptr));
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_kmeans_new", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_kmeans_new", "unknown C++ exception");
     }
     return nullptr;
 }
@@ -99,8 +102,11 @@ void gpu_kmeans_destroy(gpu_kmeans_c kmeans_c, void* errmsg) {
     try {
         delete static_cast<gpu_kmeans_any_t*>(kmeans_c);
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_kmeans_destroy", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_kmeans_destroy", "unknown C++ exception");
     }
 }
 
@@ -116,8 +122,11 @@ void gpu_kmeans_start(gpu_kmeans_c kmeans_c, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_kmeans_start", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_kmeans_start", "unknown C++ exception");
     }
 }
 
@@ -133,8 +142,11 @@ void gpu_kmeans_train_quantizer(gpu_kmeans_c kmeans_c, const float* train_data, 
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_kmeans_train_quantizer", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_kmeans_train_quantizer", "unknown C++ exception");
     }
 }
 
@@ -150,8 +162,11 @@ void gpu_kmeans_set_quantizer(gpu_kmeans_c kmeans_c, float min, float max, void*
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_kmeans_set_quantizer", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_kmeans_set_quantizer", "unknown C++ exception");
     }
 }
 
@@ -167,8 +182,11 @@ void gpu_kmeans_get_quantizer(gpu_kmeans_c kmeans_c, float* min, float* max, voi
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_kmeans_get_quantizer", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_kmeans_get_quantizer", "unknown C++ exception");
     }
 }
 
@@ -188,8 +206,11 @@ gpu_kmeans_fit_res_t gpu_kmeans_fit(gpu_kmeans_c kmeans_c, const void* X_data, u
         result.inertia = res.inertia;
         result.n_iter = (int)res.n_iter;
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_kmeans_fit", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_kmeans_fit", "unknown C++ exception");
     }
     return result;
 }
@@ -210,8 +231,11 @@ gpu_kmeans_predict_res_t gpu_kmeans_predict(gpu_kmeans_c kmeans_c, const void* X
         result.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
         result.inertia = cpp_res->inertia;
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_kmeans_predict", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_kmeans_predict", "unknown C++ exception");
     }
     return result;
 }
@@ -232,8 +256,11 @@ gpu_kmeans_predict_res_t gpu_kmeans_predict_float(gpu_kmeans_c kmeans_c, const f
         result.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
         result.inertia = cpp_res->inertia;
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_kmeans_predict_float", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_kmeans_predict_float", "unknown C++ exception");
     }
     return result;
 }
@@ -255,8 +282,11 @@ gpu_kmeans_fit_predict_res_t gpu_kmeans_fit_predict(gpu_kmeans_c kmeans_c, const
         result.inertia = cpp_res->inertia;
         result.n_iter = (int)cpp_res->n_iter;
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_kmeans_fit_predict", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_kmeans_fit_predict", "unknown C++ exception");
     }
     return result;
 }
@@ -278,23 +308,34 @@ gpu_kmeans_fit_predict_res_t gpu_kmeans_fit_predict_float(gpu_kmeans_c kmeans_c,
         result.inertia = cpp_res->inertia;
         result.n_iter = (int)cpp_res->n_iter;
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_kmeans_fit_predict_float", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_kmeans_fit_predict_float", "unknown C++ exception");
     }
     return result;
 }
 
 void gpu_kmeans_get_labels(gpu_kmeans_result_c result_c, uint64_t n_samples, int64_t* labels) {
-    if (!result_c) return;
-    auto* labels_vec = &static_cast<kmeans_result_t*>(result_c)->labels;
-    if (labels_vec->size() >= n_samples) {
-        std::copy(labels_vec->begin(), labels_vec->begin() + n_samples, labels);
+    try {
+        if (!result_c) return;
+        auto* labels_vec = &static_cast<kmeans_result_t*>(result_c)->labels;
+        if (labels_vec->size() >= n_samples) {
+            std::copy(labels_vec->begin(), labels_vec->begin() + n_samples, labels);
+        }
+    } catch (...) {
+        matrixone::log_err("gpu_kmeans_get_labels: unknown C++ exception (swallowed)");
     }
 }
 
 void gpu_kmeans_free_result(gpu_kmeans_result_c result_c) {
-    if (!result_c) return;
-    delete static_cast<kmeans_result_t*>(result_c);
+    try {
+        if (!result_c) return;
+        delete static_cast<kmeans_result_t*>(result_c);
+    } catch (...) {
+        matrixone::log_err("gpu_kmeans_free_result: unknown C++ exception (swallowed)");
+    }
 }
 
 void gpu_kmeans_get_centroids(gpu_kmeans_c kmeans_c, void* centroids, void* errmsg) {
@@ -325,8 +366,11 @@ void gpu_kmeans_get_centroids(gpu_kmeans_c kmeans_c, void* centroids, void* errm
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_kmeans_get_centroids", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_kmeans_get_centroids", "unknown C++ exception");
     }
 }
 
@@ -345,8 +389,12 @@ char* gpu_kmeans_info(gpu_kmeans_c kmeans_c, void* errmsg) {
         }
         return strdup(info.c_str());
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_kmeans_info", e.what());
+        return nullptr;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_kmeans_info", "unknown C++ exception");
         return nullptr;
     }
 }

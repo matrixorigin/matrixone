@@ -209,10 +209,26 @@ TEST(GpuBruteForceTest, EmptyDataset) {
 }
 
 TEST(GpuBruteForceTest, LargeLimit) {
+    // Regression test for commit c7b7bf2a ("fix avoid neighbour MAX_INT32 junk
+    // and return -1 for invalid neighbour id").
+    //
+    // When k > count, cuVS brute_force fills the trailing slots of the
+    // neighbors buffer with sentinel/junk values (typically UINT32_MAX
+    // cast through int64_t = 4294967295). Pre-fix, the empty-host_ids
+    // branch in brute_force.hpp passed these through unchanged because
+    // it skipped the id-mapping pass entirely. Post-fix, map_neighbor_id
+    // is always invoked and bounds-checks raw against local_count, so
+    // OOB sentinels collapse to -1.
+    //
+    // This test exercises the implicit-IDs path (no `ids.data()` passed
+    // to the constructor) which is exactly the path commit c7b7bf2a
+    // closed. Tightened from the original tolerant form that accepted
+    // both -1 and the junk values — accepting the junk would silently
+    // regress the fix.
     const uint32_t dimension = 2;
     const uint64_t count = 5;
     std::vector<float> dataset(count * dimension, 1.0);
-    
+
     gpu_brute_force_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
     index.start();
     index.build();
@@ -223,11 +239,50 @@ TEST(GpuBruteForceTest, LargeLimit) {
 
     ASSERT_EQ(result.neighbors.size(), (size_t)limit);
     for (int i = 0; i < 5; ++i) ASSERT_GE(result.neighbors[i], 0);
-    
-    // Neighbors > count might be filled with -1 (int64_t) or 4294967295 (if it was cast from uint32_t -1)
+
+    // Strict: OOB slots MUST be -1. If this fails with 4294967295 / 0xFFFFFFFF
+    // it means the empty-host_ids branch is bypassing map_neighbor_id again.
     for (int i = 5; i < 10; ++i) {
-        int64_t nid = result.neighbors[i];
-        ASSERT_TRUE(nid == -1 || nid == (int64_t)4294967295ULL || nid == (int64_t)0xFFFFFFFF);
+        ASSERT_EQ(result.neighbors[i], (int64_t)-1);
+    }
+
+    index.destroy();
+}
+
+// Companion regression test for commit c7b7bf2a — same MAX_INT32 junk
+// guard, but with EXPLICIT host_ids populated. The pre-fix code already
+// ran the id-mapping pass when host_ids was non-empty, but it had no
+// bounds-check on `raw`, so a sentinel raw of UINT32_MAX would have
+// indexed wildly past host_ids.size() — typically a crash, but in
+// release builds with relaxed bounds checking it could also leak garbage
+// from adjacent memory. map_neighbor_id's `raw >= data_size` guard
+// short-circuits this before the subscript.
+TEST(GpuBruteForceTest, LargeLimitWithExplicitIds) {
+    const uint32_t dimension = 2;
+    const uint64_t count = 5;
+    std::vector<float> dataset(count * dimension, 1.0);
+    std::vector<int64_t> ids = {1000, 1001, 1002, 1003, 1004};
+
+    gpu_brute_force_t<float> index(dataset.data(), count, dimension,
+                                   DistanceType_L2Expanded, 1, 0, ids.data());
+    index.start();
+    index.build();
+
+    std::vector<float> queries(dimension, 1.0);
+    uint32_t limit = 10;
+    auto result = index.search(queries.data(), 1, dimension, limit,
+                               brute_force_search_params_default());
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)limit);
+    // The first 5 slots are mapped through host_ids — must be in {1000..1004}.
+    for (int i = 0; i < 5; ++i) {
+        ASSERT_GE(result.neighbors[i], (int64_t)1000);
+        ASSERT_LE(result.neighbors[i], (int64_t)1004);
+    }
+    // Trailing OOB slots: strict -1, never leaking adjacent host_ids slots
+    // or raw sentinel values.
+    for (int i = 5; i < 10; ++i) {
+        ASSERT_EQ(result.neighbors[i], (int64_t)-1);
     }
 
     index.destroy();

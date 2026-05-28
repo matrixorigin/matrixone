@@ -62,8 +62,12 @@ gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_v
         }
         return static_cast<gpu_brute_force_c>(new gpu_brute_force_any_t(qtype, index_ptr));
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_brute_force_new", e.what());
+        return nullptr;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_brute_force_new", "unknown C++ exception");
         return nullptr;
     }
 }
@@ -84,8 +88,12 @@ gpu_brute_force_c gpu_brute_force_new_empty(uint64_t total_count, uint32_t dimen
         }
         return static_cast<gpu_brute_force_c>(new gpu_brute_force_any_t(qtype, index_ptr));
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_brute_force_new_empty", e.what());
+        return nullptr;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_brute_force_new_empty", "unknown C++ exception");
         return nullptr;
     }
 }
@@ -100,8 +108,11 @@ void gpu_brute_force_start(gpu_brute_force_c index_c, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_brute_force_start", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_brute_force_start", "unknown C++ exception");
     }
 }
 
@@ -115,8 +126,11 @@ void gpu_brute_force_build(gpu_brute_force_c index_c, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_brute_force_build", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_brute_force_build", "unknown C++ exception");
     }
 }
 
@@ -130,8 +144,11 @@ void gpu_brute_force_add_chunk(gpu_brute_force_c index_c, const void* chunk_data
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_brute_force_add_chunk", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_brute_force_add_chunk", "unknown C++ exception");
     }
 }
 
@@ -145,8 +162,11 @@ void gpu_brute_force_add_chunk_float(gpu_brute_force_c index_c, const float* chu
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_brute_force_add_chunk_float", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_brute_force_add_chunk_float", "unknown C++ exception");
     }
 }
 
@@ -172,8 +192,12 @@ gpu_brute_force_search_result_c gpu_brute_force_search(gpu_brute_force_c index_c
         }
         return static_cast<gpu_brute_force_search_result_c>(result_ptr);
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_brute_force_search", e.what());
+        return nullptr;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_brute_force_search", "unknown C++ exception");
         return nullptr;
     }
 }
@@ -200,8 +224,12 @@ gpu_brute_force_search_result_c gpu_brute_force_search_float(gpu_brute_force_c i
         }
         return static_cast<gpu_brute_force_search_result_c>(result_ptr);
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_brute_force_search_float", e.what());
+        return nullptr;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_brute_force_search_float", "unknown C++ exception");
         return nullptr;
     }
 }
@@ -220,6 +248,9 @@ uint64_t gpu_brute_force_search_async(gpu_brute_force_c index_c, const void* que
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_async", e.what());
         return 0;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_async", "unknown C++ exception");
+        return 0;
     }
 }
 
@@ -236,6 +267,9 @@ uint64_t gpu_brute_force_search_float_async(gpu_brute_force_c index_c, const flo
         }
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_float_async", e.what());
+        return 0;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_float_async", "unknown C++ exception");
         return 0;
     }
 }
@@ -264,49 +298,68 @@ gpu_brute_force_search_result_c gpu_brute_force_search_wait(gpu_brute_force_c in
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_wait", e.what());
         return nullptr;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_wait", "unknown C++ exception");
+        return nullptr;
     }
 }
 
 void gpu_brute_force_get_results(gpu_brute_force_search_result_c result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances) {
-    if (!result_c) return;
-    auto* search_result = static_cast<matrixone::gpu_brute_force_t<float>::search_result_t*>(result_c);
+    try {
+        if (!result_c) return;
+        auto* search_result = static_cast<matrixone::gpu_brute_force_t<float>::search_result_t*>(result_c);
 
-    size_t total = num_queries * limit;
-    if (search_result->neighbors.size() >= total) {
-        std::copy(search_result->neighbors.begin(), search_result->neighbors.begin() + total, neighbors);
-    } else {
-        std::fill(neighbors, neighbors + total, -1);
-    }
+        size_t total = num_queries * limit;
+        if (search_result->neighbors.size() >= total) {
+            std::copy(search_result->neighbors.begin(), search_result->neighbors.begin() + total, neighbors);
+        } else {
+            std::fill(neighbors, neighbors + total, -1);
+        }
 
-    if (search_result->distances.size() >= total) {
-        std::copy(search_result->distances.begin(), search_result->distances.begin() + total, distances);
-    } else {
-        std::fill(distances, distances + total, std::numeric_limits<float>::infinity());
+        if (search_result->distances.size() >= total) {
+            std::copy(search_result->distances.begin(), search_result->distances.begin() + total, distances);
+        } else {
+            std::fill(distances, distances + total, std::numeric_limits<float>::infinity());
+        }
+    } catch (...) {
+        matrixone::log_err("gpu_brute_force_get_results: unknown C++ exception (swallowed)");
     }
 }
 
 void gpu_brute_force_free_search_result(gpu_brute_force_search_result_c result_c) {
-    if (!result_c) return;
-    delete static_cast<matrixone::gpu_brute_force_t<float>::search_result_t*>(result_c);
+    try {
+        if (!result_c) return;
+        delete static_cast<matrixone::gpu_brute_force_t<float>::search_result_t*>(result_c);
+    } catch (...) {
+        matrixone::log_err("gpu_brute_force_free_search_result: unknown C++ exception (swallowed)");
+    }
 }
 
 uint64_t gpu_brute_force_cap(gpu_brute_force_c index_c) {
-    if (!index_c) return 0;
-    auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
-    switch (any->qtype) {
-        case Quantization_F32: return static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->cap();
-        case Quantization_F16: return static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->cap();
-        default: return 0;
+    try {
+        if (!index_c) return 0;
+        auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32: return static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->cap();
+            case Quantization_F16: return static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->cap();
+            default: return 0;
+        }
+    } catch (...) {
+        return 0;
     }
 }
 
 uint64_t gpu_brute_force_len(gpu_brute_force_c index_c) {
-    if (!index_c) return 0;
-    auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
-    switch (any->qtype) {
-        case Quantization_F32: return static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->len();
-        case Quantization_F16: return static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->len();
-        default: return 0;
+    try {
+        if (!index_c) return 0;
+        auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32: return static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->len();
+            case Quantization_F16: return static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->len();
+            default: return 0;
+        }
+    } catch (...) {
+        return 0;
     }
 }
 
@@ -323,8 +376,12 @@ char* gpu_brute_force_info(gpu_brute_force_c index_c, void* errmsg) {
         }
         return strdup(info.c_str());
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_brute_force_info", e.what());
+        return nullptr;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_brute_force_info", "unknown C++ exception");
         return nullptr;
     }
 }
@@ -337,6 +394,9 @@ void gpu_brute_force_destroy(gpu_brute_force_c index_c, void* errmsg) {
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg,
  "Error in gpu_brute_force_destroy", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_brute_force_destroy", "unknown C++ exception");
     }
 }
 
@@ -355,6 +415,8 @@ void gpu_brute_force_set_filter_columns(gpu_brute_force_c index_c, const char* c
         }
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_set_filter_columns", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_set_filter_columns", "unknown C++ exception");
     }
 }
 
@@ -371,6 +433,8 @@ void gpu_brute_force_add_filter_chunk(gpu_brute_force_c index_c, uint32_t col_id
         }
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_add_filter_chunk", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_add_filter_chunk", "unknown C++ exception");
     }
 }
 
@@ -403,6 +467,9 @@ gpu_brute_force_search_result_c gpu_brute_force_search_with_filter(gpu_brute_for
         return static_cast<gpu_brute_force_search_result_c>(result_ptr);
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_with_filter", e.what());
+        return nullptr;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_with_filter", "unknown C++ exception");
         return nullptr;
     }
 }
@@ -437,6 +504,9 @@ gpu_brute_force_search_result_c gpu_brute_force_search_float_with_filter(gpu_bru
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_float_with_filter", e.what());
         return nullptr;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_float_with_filter", "unknown C++ exception");
+        return nullptr;
     }
 }
 
@@ -457,6 +527,9 @@ uint64_t gpu_brute_force_search_float_with_filter_async(gpu_brute_force_c index_
         }
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_float_with_filter_async", e.what());
+        return 0;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_float_with_filter_async", "unknown C++ exception");
         return 0;
     }
 }

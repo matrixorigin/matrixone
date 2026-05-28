@@ -411,6 +411,18 @@ public:
                     this->build_internal(handle);
                     return std::any();
                 });
+                // SHARDED-only post-build cleanup: free every shard's training
+                // matrix from replicated_datasets_. The cuVS IVF-PQ build copies
+                // the input vectors into the PQ-coded lists internally, so the
+                // raw training matrix is unreferenced after build returns.
+                // extend_internal (line ~639) only ever erases the last shard's
+                // entry; the others would otherwise leak GB-scale GPU memory
+                // for the full index lifetime. REPLICATED is excluded — its
+                // extend_internal erases per-device on each extend call.
+                if (this->dist_mode == DistributionMode_SHARDED) {
+                    std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                    this->replicated_datasets_.clear();
+                }
             }
         } catch (const std::exception& e) {
             std::cerr << "[IVFPQ build ERROR] during GPU build dispatch mode=" << mode_str
@@ -716,6 +728,12 @@ public:
             [&](raft_handle_wrapper_t& handle, const int64_t* seq_ids, uint64_t n) {
                 this->extend_internal(handle, new_data, n, seq_ids);
             });
+        // Invalidate dynamic-batching cache: IVF-PQ extend mutates the cuVS
+        // index in place, so dynb_cache_t entries keyed on the raw upstream
+        // pointer survive with pre-extend state and serve stale search
+        // results. dynb_cache_ has its own mutex; in-flight searches keep
+        // their wrapper alive via shared_ptr, so clearing is race-safe.
+        this->dynb_cache_.clear();
     }
 
     void extend_float(const float* new_data, uint64_t n_rows, const int64_t* new_ids) {
@@ -724,6 +742,8 @@ public:
             [&](raft_handle_wrapper_t& handle, const int64_t* seq_ids, uint64_t n) {
                 this->extend_internal_float(handle, new_data, n, seq_ids);
             });
+        // See extend() above — same staleness, same fix.
+        this->dynb_cache_.clear();
     }
 
     // Sync T-typed entry — wraps search_async + search_wait. SHARDED inline
@@ -757,7 +777,13 @@ public:
             if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("search_async: index not loaded");
         }
         if (!this->worker) throw std::runtime_error("Worker not initialized");
-        (void)query_dimension;  // search_internal uses this->dimension; param kept for signature parity.
+        // search_internal uses this->dimension internally; reject any
+        // mismatched caller dim instead of silently coercing.
+        if (query_dimension != this->dimension) {
+            throw std::invalid_argument(
+                "search_with_filter_async: query_dimension (" + std::to_string(query_dimension) +
+                ") does not match index dimension (" + std::to_string(this->dimension) + ")");
+        }
 
         auto queries_copy = std::make_shared<std::vector<T>>(queries_data, queries_data + num_queries * this->dimension);
 
@@ -1149,6 +1175,15 @@ public:
         if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
         if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
         if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
+        // Reject mismatched caller dim. search_float_internal sizes its H2D
+        // extent by this->dimension (query_dimension param is unused inside),
+        // so passing a different value here would either OOB-read or
+        // under-copy host queries. See the T-typed sibling at line ~762.
+        if (query_dimension != this->dimension) {
+            throw std::invalid_argument(
+                "search_float_with_filter_async: query_dimension (" + std::to_string(query_dimension) +
+                ") does not match index dimension (" + std::to_string(this->dimension) + ")");
+        }
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
             if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("search_async: index not loaded");
@@ -1185,6 +1220,12 @@ public:
         if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
         if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
         if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
+        // Reject mismatched caller dim — see search_float_with_filter_async.
+        if (query_dimension != this->dimension) {
+            throw std::invalid_argument(
+                "search_float_async: query_dimension (" + std::to_string(query_dimension) +
+                ") does not match index dimension (" + std::to_string(this->dimension) + ")");
+        }
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
             if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("search_async: index not loaded");
@@ -1483,10 +1524,28 @@ public:
 
     void save(const std::string& filename) const {
         if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("Index not built");
-        
+
+        // SHARDED can't fit in one file — caller must use save_dir().
+        if (this->dist_mode == DistributionMode_SHARDED) {
+            throw std::runtime_error("save(filename) not supported for SHARDED IVF-PQ; use save_dir()");
+        }
+
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
-                cuvs::neighbors::ivf_pq::serialize(*(handle.get_raft_resources()), filename, *index_);
+                if (this->dist_mode == DistributionMode_SINGLE_GPU) {
+                    cuvs::neighbors::ivf_pq::serialize(*(handle.get_raft_resources()), filename, *index_);
+                } else {
+                    // REPLICATED: serialize the local replica if present, else any other.
+                    int dev_id = handle.get_device_id();
+                    auto it = this->replicated_indices_.find(dev_id);
+                    if (it == this->replicated_indices_.end())
+                        it = this->replicated_indices_.begin();
+                    if (it == this->replicated_indices_.end())
+                        throw std::runtime_error("No replicated IVF-PQ index found to serialize");
+                    cuvs::neighbors::ivf_pq::serialize(
+                        *(handle.get_raft_resources()), filename,
+                        *std::static_pointer_cast<ivf_pq_index>(it->second));
+                }
                 return std::any();
             }
         );
@@ -1532,9 +1591,14 @@ public:
             this->worker->submit_all_devices(task);
         }
 
-        try {
-            this->load_ids(filename + ".ids");
-        } catch (...) {}
+        // .ids sidecar is optional — see cagra.hpp's load() for the rationale.
+        {
+            std::ifstream probe(filename + ".ids", std::ios::binary);
+            if (probe.good()) {
+                probe.close();
+                this->load_ids(filename + ".ids");
+            }
+        }
 
         this->is_loaded_ = true;
         this->train_quantizer_if_needed();
@@ -1668,6 +1732,11 @@ public:
                 // longer comment in cagra.hpp load_dir() for the failure mode.
                 raft::resource::sync_stream(*res);
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                // Mirror load(): count/dimension/current_offset_ must be set
+                // alongside index_, or search_async throws "index dimension is 0".
+                this->count           = static_cast<uint64_t>(local_idx->size());
+                this->dimension       = static_cast<uint32_t>(local_idx->dim());
+                this->current_offset_ = this->count;
                 index_ = std::move(local_idx);
                 return std::any();
             };
@@ -1685,6 +1754,12 @@ public:
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                    // Mirror load(): set count/dimension/current_offset_ on every
+                    // replica. submit_all_devices fans out, but each replica has the
+                    // same shape so the redundant writes converge on the same values.
+                    this->count           = static_cast<uint64_t>(local_idx->size());
+                    this->dimension       = static_cast<uint32_t>(local_idx->dim());
+                    this->current_offset_ = this->count;
                     this->replicated_indices_[handle.get_device_id()] =
                         std::shared_ptr<ivf_pq_index>(std::move(local_idx));
                     return std::any();
@@ -1704,12 +1779,17 @@ public:
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                    // dimension is identical across shards; each device sets it
+                    // (idempotent). count / current_offset_ are aggregate values
+                    // pulled from the manifest after submit, below.
+                    this->dimension = static_cast<uint32_t>(local_idx->dim());
                     this->replicated_indices_[handle.get_device_id()] =
                         std::shared_ptr<ivf_pq_index>(std::move(local_idx));
                     return std::any();
                 }
             );
-            this->count           = static_cast<uint32_t>(json_int(m.raw, "capacity"));
+            // this->count is uint64_t; casting through uint32_t would truncate at 4B rows.
+            this->count           = static_cast<uint64_t>(json_int(m.raw, "capacity"));
             this->current_offset_ = static_cast<uint64_t>(json_int(m.raw, "length"));
 
         } else {

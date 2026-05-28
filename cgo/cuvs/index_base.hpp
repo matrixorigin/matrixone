@@ -415,7 +415,11 @@ public:
                 std::shared_lock<std::shared_mutex> base_lock(mutex_);
 
                 using bs_t = raft::core::bitset<uint32_t, int64_t>;
-                auto* bs = new bs_t(res, static_cast<int64_t>(shard_sz));
+                // make_shared up front so a throwing raft::copy / thrust::fill_n
+                // can't leak the bitset. Cast to shared_ptr<void> on the success
+                // path; on throw the local shared_ptr destructs and frees.
+                auto bs_owned = std::make_shared<bs_t>(res, static_cast<int64_t>(shard_sz));
+                bs_t* bs = bs_owned.get();
                 uint64_t n_words   = (shard_sz + 31) / 32;
                 uint64_t start_word = shard_offset / 32; // always integer since shard_offset % 32 == 0
 
@@ -437,7 +441,7 @@ public:
                     }
                 }
 
-                info->ptr     = std::shared_ptr<void>(bs, [](void* p){ delete static_cast<bs_t*>(p); });
+                info->ptr     = std::static_pointer_cast<void>(bs_owned);
                 info->version = current_ver;
             }
         }
@@ -454,7 +458,11 @@ public:
                 std::shared_lock<std::shared_mutex> base_lock(mutex_);
 
                 using bs_t = raft::core::bitset<uint32_t, int64_t>;
-                auto* bs = new bs_t(res, static_cast<int64_t>(current_offset_));
+                // make_shared up front — same rationale as the build_search_bitset
+                // sibling above. Ownership transfers via static_pointer_cast on
+                // success; on throw, bs_owned destructs locally and frees.
+                auto bs_owned = std::make_shared<bs_t>(res, static_cast<int64_t>(current_offset_));
+                bs_t* bs = bs_owned.get();
                 uint64_t n_words = (current_offset_ + 31) / 32;
 
                 if (deleted_bitset_.empty()) {
@@ -474,7 +482,7 @@ public:
                     }
                 }
 
-                info->ptr = std::shared_ptr<void>(bs, [](void* p){ delete static_cast<bs_t*>(p); });
+                info->ptr     = std::static_pointer_cast<void>(bs_owned);
                 info->version = current_ver;
             }
         }
@@ -1273,9 +1281,15 @@ public:
         *max = quantizer_.max();
     }
 
-    const IdT* get_host_ids() const {
+    // Returns a snapshot of host_ids by value. The previous signature
+    // (const IdT*) released the shared_lock before the caller could read,
+    // so a concurrent extend() resize would invalidate the pointer.
+    // Callers that only need to test for empty can compare the returned
+    // vector's empty() instead. Zero call sites today, but the contract
+    // change forecloses the dangling-pointer trap if one is added later.
+    std::vector<IdT> get_host_ids() const {
         std::shared_lock<std::shared_mutex> lock(mutex_);
-        return host_ids.empty() ? nullptr : host_ids.data();
+        return host_ids;
     }
 
     void save_ids(const std::string& filename) const {
@@ -1294,6 +1308,11 @@ public:
 
     void load_ids(const std::string& filename) {
         std::ifstream is(filename, std::ios::binary);
+        // Any open failure here is a real error — callers that treat "no
+        // sidecar" as legitimate must probe the file before calling.
+        // (See the three load() sites in cagra/ivf_flat/ivf_pq.hpp which do
+        // exactly this.) load_common_components is the manifest-driven
+        // counterpart: it only calls load_ids when m.has_ids is true.
         if (!is) throw std::runtime_error("Failed to open file for loading IDs: " + filename);
         uint64_t size;
         is.read(reinterpret_cast<char*>(&size), sizeof(size));

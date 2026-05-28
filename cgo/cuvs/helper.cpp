@@ -48,11 +48,20 @@ void save_host_matrix(const std::string& filename, raft::host_matrix_view<const 
     out.write(reinterpret_cast<const char*>(view.data_handle()), rows * cols * sizeof(float));
 }
 
-void set_errmsg(void* errmsg, const char* context, const char* message) {
+void set_errmsg(void* errmsg, const char* context, const char* message) noexcept {
     if (!errmsg) return;
     char** err_ptr_ptr = static_cast<char**>(errmsg);
-    std::string full_msg = std::string(context) + ": " + message;
-    *err_ptr_ptr = strdup(full_msg.c_str());
+    try {
+        std::string full_msg = std::string(context ? context : "") + ": " +
+                               std::string(message ? message : "");
+        *err_ptr_ptr = strdup(full_msg.c_str());
+    } catch (...) {
+        // String construction or allocation failed under OOM. Fall back
+        // to a static literal — strdup of a non-null literal can still
+        // return NULL on OOM, in which case the caller sees NULL (which
+        // it already had to handle).
+        *err_ptr_ptr = strdup("set_errmsg: allocation failed");
+    }
 }
 
 std::string get_timestamp() {
@@ -215,18 +224,30 @@ void cast_float_to_half_host(const float* __restrict__ src,
 extern "C" {
 
 int gpu_get_device_count() {
-    int count = 0;
-    cudaGetDeviceCount(&count);
-    return count;
+    try {
+        int count = 0;
+        cudaGetDeviceCount(&count);
+        return count;
+    } catch (...) {
+        return 0;
+    }
 }
 
 int gpu_get_next_device_id() {
-    return matrixone::get_next_device_id();
+    try {
+        return matrixone::get_next_device_id();
+    } catch (...) {
+        return 0;
+    }
 }
 
 void gpu_get_device_list(int* devices, int count) {
-    for (int i = 0; i < count; ++i) {
-        devices[i] = i;
+    try {
+        for (int i = 0; i < count; ++i) {
+            devices[i] = i;
+        }
+    } catch (...) {
+        matrixone::log_err("gpu_get_device_list: unknown C++ exception (swallowed)");
     }
 }
 
@@ -272,6 +293,8 @@ void gpu_convert_f32_to_f16(const float* src, void* dst, uint64_t total_elements
 
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_convert_f32_to_f16", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_convert_f32_to_f16", "unknown C++ exception");
     }
 }
 
@@ -285,6 +308,9 @@ void* gpu_alloc_pinned(uint64_t size, void* errmsg) {
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_alloc_pinned", e.what());
         return nullptr;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_alloc_pinned", "unknown C++ exception");
+        return nullptr;
     }
 }
 
@@ -296,6 +322,8 @@ void gpu_free_pinned(void* ptr, void* errmsg) {
         }
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_free_pinned", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_free_pinned", "unknown C++ exception");
     }
 }
 

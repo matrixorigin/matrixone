@@ -192,6 +192,9 @@ void load_matrix_raw_ptr(const raft::resources& res, const std::string& filename
     if (n_rows == 0 || n_cols == 0) return;
 
     std::ifstream file(filename, std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to open file: " + filename);
+    }
     file.seekg(sizeof(file_header_t));
 
     if (!is_device_ptr) {
@@ -204,11 +207,19 @@ void load_matrix_raw_ptr(const raft::resources& res, const std::string& filename
         for (int64_t row_offset = 0; row_offset < n_rows; row_offset += DEFAULT_CHUNK_SIZE) {
             int64_t current_chunk_rows = std::min(DEFAULT_CHUNK_SIZE, n_rows - row_offset);
             size_t total_chunk_elements = current_chunk_rows * n_cols;
+            std::streamsize wanted = static_cast<std::streamsize>(total_chunk_elements * sizeof(S));
             chunk_host.resize(total_chunk_elements);
-            file.read(reinterpret_cast<char*>(chunk_host.data()), total_chunk_elements * sizeof(S));
+            file.read(reinterpret_cast<char*>(chunk_host.data()), wanted);
+            if (file.gcount() != wanted) {
+                throw std::runtime_error("Truncated read from: " + filename);
+            }
             raft::copy(out_ptr + (row_offset * n_cols), chunk_host.data(), total_chunk_elements, raft::resource::get_cuda_stream(res));
+            // Sync per iteration: chunk_host is reused next iteration, and
+            // raft::copy H2D is async on the stream. Without this sync, the
+            // next file.read clobbers the host bytes before the prior DMA
+            // has consumed them — silent index corruption.
+            raft::resource::sync_stream(res);
         }
-        raft::resource::sync_stream(res);
     }
 }
 
@@ -222,29 +233,44 @@ void load_matrix_chunked_ptr(const raft::resources& res, const std::string& file
     if (n_rows == 0 || n_cols == 0) return;
 
     std::ifstream file(filename, std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to open file: " + filename);
+    }
     file.seekg(sizeof(file_header_t));
 
     scalar_quantizer_t<S> quantizer;
     if constexpr (DoQuantize) {
         int64_t n_train = std::min(n_rows, static_cast<int64_t>(500));
         std::vector<S> train_host(n_train * n_cols);
-        file.read(reinterpret_cast<char*>(train_host.data()), train_host.size() * sizeof(S));
+        std::streamsize train_wanted = static_cast<std::streamsize>(train_host.size() * sizeof(S));
+        file.read(reinterpret_cast<char*>(train_host.data()), train_wanted);
+        if (file.gcount() != train_wanted) {
+            throw std::runtime_error("Truncated training-set read from: " + filename);
+        }
         auto train_device = raft::make_device_matrix<S, int64_t>(res, n_train, n_cols);
         raft::copy(train_device.data_handle(), train_host.data(), train_host.size(), raft::resource::get_cuda_stream(res));
         quantizer.train(res, train_device.view());
+        // train_host is about to go out of scope, but the H2D copy is async —
+        // sync now so the device read finishes before the host buffer is
+        // freed (otherwise UAF / corrupt training data).
+        raft::resource::sync_stream(res);
         file.seekg(sizeof(file_header_t));
     }
 
     std::vector<S> chunk_host;
     auto chunk_device_src = raft::make_device_matrix<S, int64_t>(res, DEFAULT_CHUNK_SIZE, n_cols);
-    
+
     for (int64_t row_offset = 0; row_offset < n_rows; row_offset += DEFAULT_CHUNK_SIZE) {
         int64_t current_chunk_rows = std::min(DEFAULT_CHUNK_SIZE, n_rows - row_offset);
         size_t total_chunk_elements = current_chunk_rows * n_cols;
+        std::streamsize wanted = static_cast<std::streamsize>(total_chunk_elements * sizeof(S));
         chunk_host.resize(total_chunk_elements);
-        file.read(reinterpret_cast<char*>(chunk_host.data()), total_chunk_elements * sizeof(S));
+        file.read(reinterpret_cast<char*>(chunk_host.data()), wanted);
+        if (file.gcount() != wanted) {
+            throw std::runtime_error("Truncated chunk read from: " + filename);
+        }
         raft::copy(chunk_device_src.data_handle(), chunk_host.data(), total_chunk_elements, raft::resource::get_cuda_stream(res));
-        
+
         auto current_chunk_src_view = raft::make_device_matrix_view<const S, int64_t>(chunk_device_src.data_handle(), current_chunk_rows, n_cols);
 
         if constexpr (DoQuantize) {
@@ -258,8 +284,11 @@ void load_matrix_chunked_ptr(const raft::resources& res, const std::string& file
                 raft::copy(res, out_chunk_view, current_chunk_src_view);
             }
         }
+        // Sync per iteration: chunk_host is reused, the H2D copy + transform
+        // are async on the stream. Without this sync, the next file.read
+        // clobbers chunk_host before the DMA has finished reading it.
+        raft::resource::sync_stream(res);
     }
-    raft::resource::sync_stream(res);
 }
 
 } // namespace detail

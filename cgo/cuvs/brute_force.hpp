@@ -342,10 +342,19 @@ public:
         return this->search_wait(job_id);
     }
 
-    uint64_t search_async(const T* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const brute_force_search_params_t& sp) {
+    uint64_t search_async(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const brute_force_search_params_t& sp) {
         if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
         if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
         if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
+        // Reject mismatched caller dim. The queries_copy below copies
+        // num_queries * this->dimension elements from queries_data, which
+        // OOB-reads if caller sized their buffer by a different query_dimension.
+        // Same fix as the float-typed sibling.
+        if (query_dimension != this->dimension) {
+            throw std::invalid_argument(
+                "search_async: query_dimension (" + std::to_string(query_dimension) +
+                ") does not match index dimension (" + std::to_string(this->dimension) + ")");
+        }
         if (!this->is_loaded_ || !index_) throw std::runtime_error("search_async: index not loaded");
 
         auto queries_copy = std::make_shared<std::vector<T>>(queries_data, queries_data + num_queries * this->dimension);
@@ -369,12 +378,19 @@ public:
     // bitmap eval stays on the calling thread and the GPU search goes through
     // worker->submit.
     uint64_t search_with_filter_async(const T* queries_data, uint64_t num_queries,
-                                      uint32_t /*query_dimension*/, uint32_t limit,
+                                      uint32_t query_dimension, uint32_t limit,
                                       const brute_force_search_params_t& sp,
                                       const std::string& preds_json) {
         if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
         if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
         if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
+        // See search_async() above — host copy sizes by this->dimension,
+        // so a mismatched caller dim would OOB-read the queries buffer.
+        if (query_dimension != this->dimension) {
+            throw std::invalid_argument(
+                "search_with_filter_async: query_dimension (" + std::to_string(query_dimension) +
+                ") does not match index dimension (" + std::to_string(this->dimension) + ")");
+        }
         if (!this->is_loaded_ || !index_) throw std::runtime_error("search_async: index not loaded");
         if (!this->worker) throw std::runtime_error("Worker not initialized");
 
@@ -492,6 +508,16 @@ public:
         if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
         if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
         if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
+        // Reject a mismatched caller dim instead of silently coercing to
+        // this->dimension. search_float_internal sizes its H2D extent by
+        // this->dimension; if caller's query_dimension differed we'd either
+        // OOB-read or under-copy host queries. Fail loudly so the caller bug
+        // surfaces here rather than as wrong search results.
+        if (query_dimension != this->dimension) {
+            throw std::invalid_argument(
+                "search_float_async: query_dimension (" + std::to_string(query_dimension) +
+                ") does not match index dimension (" + std::to_string(this->dimension) + ")");
+        }
         if (!this->is_loaded_ || !index_) throw std::runtime_error("search_async: index not loaded");
 
         auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
@@ -523,6 +549,12 @@ public:
         if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
         if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
         if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
+        // See search_float_async() above for the rationale.
+        if (query_dimension != this->dimension) {
+            throw std::invalid_argument(
+                "search_float_with_filter_async: query_dimension (" + std::to_string(query_dimension) +
+                ") does not match index dimension (" + std::to_string(this->dimension) + ")");
+        }
         if (!this->is_loaded_ || !index_) throw std::runtime_error("search_async: index not loaded");
         if (!this->worker) throw std::runtime_error("Worker not initialized");
 

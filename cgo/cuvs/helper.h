@@ -55,8 +55,13 @@ void save_host_matrix(const std::string& filename, raft::host_matrix_view<const 
 
 /**
  * @brief Helper to set an error message in a C-compatible way.
+ *
+ * noexcept: callable from inside any `catch` block (including the
+ * sweep added at every extern "C" boundary). If string construction
+ * throws bad_alloc, the slot is set to a static fallback message
+ * rather than re-throwing.
  */
-void set_errmsg(void* errmsg, const char* context, const char* message);
+void set_errmsg(void* errmsg, const char* context, const char* message) noexcept;
 
 /**
  * @brief "HH:MM:SS.mmm" wall-clock timestamp used as a prefix for log lines.

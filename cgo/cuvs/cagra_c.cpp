@@ -24,6 +24,9 @@
 #include <iostream>
 #include <vector>
 #include <cstring>
+#include <memory>
+#include <limits>
+#include <algorithm>
 
 using namespace matrixone;
 
@@ -91,8 +94,11 @@ gpu_cagra_c gpu_cagra_new(const void* dataset_data, uint64_t count_vectors, uint
         }
         return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(qtype, ptr));
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_new", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_new", "unknown C++ exception");
     }
     return nullptr;
 }
@@ -123,8 +129,11 @@ gpu_cagra_c gpu_cagra_new_empty(uint64_t total_count, uint32_t dimension, distan
         }
         return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(qtype, ptr));
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_new_empty", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_new_empty", "unknown C++ exception");
     }
     return nullptr;
 }
@@ -154,8 +163,11 @@ gpu_cagra_c gpu_cagra_load_file(const char* filename, uint32_t dimension, distan
         }
         return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(qtype, ptr));
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_load_file", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_load_file", "unknown C++ exception");
     }
     return nullptr;
 }
@@ -165,8 +177,11 @@ void gpu_cagra_destroy(gpu_cagra_c index_c, void* errmsg) {
     try {
         delete static_cast<gpu_cagra_any_t*>(index_c);
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_destroy", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_destroy", "unknown C++ exception");
     }
 }
 
@@ -182,8 +197,11 @@ void gpu_cagra_start(gpu_cagra_c index_c, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_start", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_start", "unknown C++ exception");
     }
 }
 
@@ -199,8 +217,11 @@ void gpu_cagra_build(gpu_cagra_c index_c, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_build", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_build", "unknown C++ exception");
     }
 }
 
@@ -216,8 +237,11 @@ void gpu_cagra_add_chunk(gpu_cagra_c index_c, const void* chunk_data, uint64_t c
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_add_chunk", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_add_chunk", "unknown C++ exception");
     }
 }
 
@@ -233,8 +257,11 @@ void gpu_cagra_add_chunk_float(gpu_cagra_c index_c, const float* chunk_data, uin
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_add_chunk_float", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_add_chunk_float", "unknown C++ exception");
     }
 }
 
@@ -250,8 +277,11 @@ void gpu_cagra_train_quantizer(gpu_cagra_c index_c, const float* train_data, uin
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_train_quantizer", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_train_quantizer", "unknown C++ exception");
     }
 }
 
@@ -269,6 +299,9 @@ void gpu_cagra_set_batch_window(gpu_cagra_c index_c, int64_t window_us, void* er
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_set_batch_window", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_set_batch_window", "unknown C++ exception");
     }
 }
 
@@ -286,6 +319,9 @@ void gpu_cagra_set_dynb_conservative_dispatch(gpu_cagra_c index_c, bool enable, 
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_set_dynb_conservative_dispatch", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_set_dynb_conservative_dispatch", "unknown C++ exception");
     }
 }
 
@@ -301,8 +337,11 @@ void gpu_cagra_set_quantizer(gpu_cagra_c index_c, float min, float max, void* er
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_set_quantizer", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_set_quantizer", "unknown C++ exception");
     }
 }
 
@@ -318,8 +357,11 @@ void gpu_cagra_get_quantizer(gpu_cagra_c index_c, float* min, float* max, void* 
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_get_quantizer", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_get_quantizer", "unknown C++ exception");
     }
 }
 
@@ -336,6 +378,8 @@ void gpu_cagra_save(gpu_cagra_c index_c, const char* filename, void* errmsg) {
         }
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_save", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_save", "unknown C++ exception");
     }
 }
 
@@ -352,6 +396,8 @@ void gpu_cagra_save_dir(gpu_cagra_c index_c, const char* dir, void* errmsg) {
         }
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_save_dir", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_save_dir", "unknown C++ exception");
     }
 }
 
@@ -368,6 +414,8 @@ void gpu_cagra_delete_id(gpu_cagra_c index_c, int64_t id, void* errmsg) {
         }
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_delete_id", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_delete_id", "unknown C++ exception");
     }
 }
 
@@ -385,6 +433,8 @@ void gpu_cagra_load_dir(gpu_cagra_c index_c, const char* dir,
         }
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_load_dir", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_load_dir", "unknown C++ exception");
     }
 }
 
@@ -395,7 +445,7 @@ gpu_cagra_search_res_t gpu_cagra_search(gpu_cagra_c index_c, const void* queries
     gpu_cagra_search_res_t result = {nullptr};
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
-        auto* cpp_res = new cagra_search_result_t();
+        auto cpp_res = std::make_unique<cagra_search_result_t>();
         switch (any->qtype) {
             case Quantization_F32: *cpp_res = static_cast<gpu_cagra_t<float>*>(any->ptr)->search(static_cast<const float*>(queries_data), num_queries, query_dimension, limit, search_params); break;
             case Quantization_F16: *cpp_res = static_cast<gpu_cagra_t<half>*>(any->ptr)->search(static_cast<const half*>(queries_data), num_queries, query_dimension, limit, search_params); break;
@@ -403,10 +453,13 @@ gpu_cagra_search_res_t gpu_cagra_search(gpu_cagra_c index_c, const void* queries
             case Quantization_UINT8: *cpp_res = static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->search(static_cast<const uint8_t*>(queries_data), num_queries, query_dimension, limit, search_params); break;
             default: break;
         }
-        result.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
+        result.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_search", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_search", "unknown C++ exception");
     }
     return result;
 }
@@ -418,7 +471,7 @@ gpu_cagra_search_res_t gpu_cagra_search_float(gpu_cagra_c index_c, const float* 
     gpu_cagra_search_res_t result = {nullptr};
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
-        auto* cpp_res = new cagra_search_result_t();
+        auto cpp_res = std::make_unique<cagra_search_result_t>();
         switch (any->qtype) {
             case Quantization_F32: *cpp_res = static_cast<gpu_cagra_t<float>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit, search_params); break;
             case Quantization_F16: *cpp_res = static_cast<gpu_cagra_t<half>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit, search_params); break;
@@ -426,9 +479,11 @@ gpu_cagra_search_res_t gpu_cagra_search_float(gpu_cagra_c index_c, const float* 
             case Quantization_UINT8: *cpp_res = static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit, search_params); break;
             default: break;
         }
-        result.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
+        result.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_float", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_float", "unknown C++ exception");
     }
     return result;
 }
@@ -449,6 +504,9 @@ uint64_t gpu_cagra_search_async(gpu_cagra_c index_c, const void* queries_data, u
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_async", e.what());
         return 0;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_async", "unknown C++ exception");
+        return 0;
     }
 }
 
@@ -468,6 +526,9 @@ uint64_t gpu_cagra_search_float_async(gpu_cagra_c index_c, const float* queries_
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_float_async", e.what());
         return 0;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_float_async", "unknown C++ exception");
+        return 0;
     }
 }
 
@@ -476,7 +537,7 @@ gpu_cagra_search_res_t gpu_cagra_search_wait(gpu_cagra_c index_c, uint64_t job_i
     gpu_cagra_search_res_t result = {nullptr};
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
-        auto* cpp_res = new cagra_search_result_t();
+        auto cpp_res = std::make_unique<cagra_search_result_t>();
         switch (any->qtype) {
             case Quantization_F32: *cpp_res = static_cast<gpu_cagra_t<float>*>(any->ptr)->search_wait(job_id); break;
             case Quantization_F16: *cpp_res = static_cast<gpu_cagra_t<half>*>(any->ptr)->search_wait(job_id); break;
@@ -484,54 +545,88 @@ gpu_cagra_search_res_t gpu_cagra_search_wait(gpu_cagra_c index_c, uint64_t job_i
             case Quantization_UINT8: *cpp_res = static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->search_wait(job_id); break;
             default: break;
         }
-        result.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
+        result.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_wait", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_wait", "unknown C++ exception");
     }
     return result;
 }
 void gpu_cagra_get_neighbors(gpu_cagra_result_c result_c, uint64_t total_elements, int64_t* neighbors) {
-    if (!result_c) return;
-    auto* neighbors_vec = &static_cast<cagra_search_result_t*>(result_c)->neighbors;
-    if (neighbors_vec->size() >= total_elements) {
-        std::copy(neighbors_vec->begin(), neighbors_vec->begin() + total_elements, neighbors);
+    try {
+        if (!neighbors || total_elements == 0) return;
+        if (!result_c) {
+            // No result_t: caller buffer must not be left uninitialized.
+            std::fill(neighbors, neighbors + total_elements, static_cast<int64_t>(-1));
+            return;
+        }
+        auto* neighbors_vec = &static_cast<cagra_search_result_t*>(result_c)->neighbors;
+        uint64_t n_copy = std::min<uint64_t>(neighbors_vec->size(), total_elements);
+        std::copy(neighbors_vec->begin(), neighbors_vec->begin() + n_copy, neighbors);
+        // Sentinel-fill the tail: caller asked for total_elements but vec was shorter.
+        // -1 matches map_neighbor_id's OOB sentinel (index_base.hpp).
+        std::fill(neighbors + n_copy, neighbors + total_elements, static_cast<int64_t>(-1));
+    } catch (...) {
+        matrixone::log_err("gpu_cagra_get_neighbors: unknown C++ exception (swallowed)");
     }
 }
 
 void gpu_cagra_get_distances(gpu_cagra_result_c result_c, uint64_t total_elements, float* distances) {
-    if (!result_c) return;
-    auto* distances_vec = &static_cast<cagra_search_result_t*>(result_c)->distances;
-    if (distances_vec->size() >= total_elements) {
-        std::copy(distances_vec->begin(), distances_vec->begin() + total_elements, distances);
+    try {
+        if (!distances || total_elements == 0) return;
+        if (!result_c) {
+            std::fill(distances, distances + total_elements, std::numeric_limits<float>::max());
+            return;
+        }
+        auto* distances_vec = &static_cast<cagra_search_result_t*>(result_c)->distances;
+        uint64_t n_copy = std::min<uint64_t>(distances_vec->size(), total_elements);
+        std::copy(distances_vec->begin(), distances_vec->begin() + n_copy, distances);
+        // Sentinel-fill the tail to match brute_force_c.cpp convention.
+        std::fill(distances + n_copy, distances + total_elements, std::numeric_limits<float>::max());
+    } catch (...) {
+        matrixone::log_err("gpu_cagra_get_distances: unknown C++ exception (swallowed)");
     }
 }
 
 void gpu_cagra_free_result(gpu_cagra_result_c result_c) {
-    if (!result_c) return;
-    delete static_cast<cagra_search_result_t*>(result_c);
+    try {
+        if (!result_c) return;
+        delete static_cast<cagra_search_result_t*>(result_c);
+    } catch (...) {
+        matrixone::log_err("gpu_cagra_free_result: unknown C++ exception (swallowed)");
+    }
 }
 
 uint64_t gpu_cagra_cap(gpu_cagra_c index_c) {
-    if (!index_c) return 0;
-    auto* any = static_cast<gpu_cagra_any_t*>(index_c);
-    switch (any->qtype) {
-        case Quantization_F32: return static_cast<gpu_cagra_t<float>*>(any->ptr)->cap();
-        case Quantization_F16: return static_cast<gpu_cagra_t<half>*>(any->ptr)->cap();
-        case Quantization_INT8: return static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->cap();
-        case Quantization_UINT8: return static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->cap();
-        default: return 0;
+    try {
+        if (!index_c) return 0;
+        auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32: return static_cast<gpu_cagra_t<float>*>(any->ptr)->cap();
+            case Quantization_F16: return static_cast<gpu_cagra_t<half>*>(any->ptr)->cap();
+            case Quantization_INT8: return static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->cap();
+            case Quantization_UINT8: return static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->cap();
+            default: return 0;
+        }
+    } catch (...) {
+        return 0;
     }
 }
 
 uint64_t gpu_cagra_len(gpu_cagra_c index_c) {
-    if (!index_c) return 0;
-    auto* any = static_cast<gpu_cagra_any_t*>(index_c);
-    switch (any->qtype) {
-        case Quantization_F32: return static_cast<gpu_cagra_t<float>*>(any->ptr)->len();
-        case Quantization_F16: return static_cast<gpu_cagra_t<half>*>(any->ptr)->len();
-        case Quantization_INT8: return static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->len();
-        case Quantization_UINT8: return static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->len();
-        default: return 0;
+    try {
+        if (!index_c) return 0;
+        auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32: return static_cast<gpu_cagra_t<float>*>(any->ptr)->len();
+            case Quantization_F16: return static_cast<gpu_cagra_t<half>*>(any->ptr)->len();
+            case Quantization_INT8: return static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->len();
+            case Quantization_UINT8: return static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->len();
+            default: return 0;
+        }
+    } catch (...) {
+        return 0;
     }
 }
 
@@ -558,6 +653,9 @@ char* gpu_cagra_get_filter_col_meta_json(gpu_cagra_c index_c, void* errmsg) {
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_get_filter_col_meta_json", e.what());
         return strdup("");
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_get_filter_col_meta_json", "unknown C++ exception");
+        return strdup("");
     }
 }
 
@@ -576,8 +674,12 @@ char* gpu_cagra_info(gpu_cagra_c index_c, void* errmsg) {
         }
         return strdup(info.c_str());
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_info", e.what());
+        return nullptr;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_info", "unknown C++ exception");
         return nullptr;
     }
 }
@@ -596,6 +698,8 @@ void gpu_cagra_extend(gpu_cagra_c index_c, const void* additional_data, uint64_t
         }
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_extend", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_extend", "unknown C++ exception");
     }
 }
 
@@ -637,8 +741,11 @@ gpu_cagra_c gpu_cagra_merge(gpu_cagra_c* indices_c, int num_indices, uint32_t nt
         }
         return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(qtype, merged_ptr));
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_merge", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_cagra_merge", "unknown C++ exception");
     }
     return nullptr;
 }
@@ -660,6 +767,8 @@ void gpu_cagra_set_filter_columns(gpu_cagra_c index_c, const char* col_meta_json
         }
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_set_filter_columns", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_set_filter_columns", "unknown C++ exception");
     }
 }
 
@@ -678,6 +787,8 @@ void gpu_cagra_add_filter_chunk(gpu_cagra_c index_c, uint32_t col_idx,
         }
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_add_filter_chunk", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_add_filter_chunk", "unknown C++ exception");
     }
 }
 
@@ -689,7 +800,7 @@ gpu_cagra_search_res_t gpu_cagra_search_with_filter(gpu_cagra_c index_c, const v
     gpu_cagra_search_res_t result = {nullptr};
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
-        auto* cpp_res = new cagra_search_result_t();
+        auto cpp_res = std::make_unique<cagra_search_result_t>();
         std::string preds = preds_json ? preds_json : "";
         switch (any->qtype) {
             case Quantization_F32:   *cpp_res = static_cast<gpu_cagra_t<float>*>(any->ptr)->search_with_filter(static_cast<const float*>(queries_data), num_queries, query_dimension, limit, sp, preds); break;
@@ -698,9 +809,11 @@ gpu_cagra_search_res_t gpu_cagra_search_with_filter(gpu_cagra_c index_c, const v
             case Quantization_UINT8: *cpp_res = static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->search_with_filter(static_cast<const uint8_t*>(queries_data), num_queries, query_dimension, limit, sp, preds); break;
             default: break;
         }
-        result.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
+        result.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_with_filter", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_with_filter", "unknown C++ exception");
     }
     return result;
 }
@@ -713,7 +826,7 @@ gpu_cagra_search_res_t gpu_cagra_search_float_with_filter(gpu_cagra_c index_c, c
     gpu_cagra_search_res_t result = {nullptr};
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
-        auto* cpp_res = new cagra_search_result_t();
+        auto cpp_res = std::make_unique<cagra_search_result_t>();
         std::string preds = preds_json ? preds_json : "";
         switch (any->qtype) {
             case Quantization_F32:   *cpp_res = static_cast<gpu_cagra_t<float>*>(any->ptr)->search_float_with_filter(queries_data, num_queries, query_dimension, limit, sp, preds); break;
@@ -722,9 +835,11 @@ gpu_cagra_search_res_t gpu_cagra_search_float_with_filter(gpu_cagra_c index_c, c
             case Quantization_UINT8: *cpp_res = static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->search_float_with_filter(queries_data, num_queries, query_dimension, limit, sp, preds); break;
             default: break;
         }
-        result.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
+        result.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_float_with_filter", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_float_with_filter", "unknown C++ exception");
     }
     return result;
 }
@@ -746,6 +861,9 @@ uint64_t gpu_cagra_search_float_with_filter_async(gpu_cagra_c index_c, const flo
         }
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_float_with_filter_async", e.what());
+        return 0;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_float_with_filter_async", "unknown C++ exception");
         return 0;
     }
 }
