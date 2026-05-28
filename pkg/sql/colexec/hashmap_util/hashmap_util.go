@@ -48,11 +48,19 @@ type HashmapBuilder struct {
 	DedupColName      string
 	DedupColTypes     []plan.Type
 
+	// DedupBuildKeepLast: when true, fan-out duplicates in the build side (one new
+	// row matching multiple old rows) are kept as delete-only rows rather than
+	// discarded, so all conflicting old rows are deleted and the new row is inserted
+	// exactly once. Used by REPLACE INTO with PK + unique key conflicts.
+	DedupBuildKeepLast bool
+
 	IgnoreRows *bitmap.Bitmap
 
-	delColIdx int32
-	delVecs   []*vector.Vector
-	DelRows   *bitmap.Bitmap
+	delColIdx                 int32
+	dedupDeleteMarkerColIdx   int32
+	dedupDeleteKeepColIdxList []int32
+	delVecs                   []*vector.Vector
+	DelRows                   *bitmap.Bitmap
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -117,8 +125,16 @@ func (hb *HashmapBuilder) Prepare(keyCols []*plan.Expr, delColIdx int32, proc *p
 	} else {
 		hb.delColIdx = -1
 	}
+	hb.dedupDeleteMarkerColIdx = -1
 
 	return nil
+}
+
+// SetDedupDeleteInfo configures the delete-marker and keep-column lists used by
+// keepDiscardedRowsForDelete. Must be called after Prepare.
+func (hb *HashmapBuilder) SetDedupDeleteInfo(markerColIdx int32, keepColIdxList []int32) {
+	hb.dedupDeleteMarkerColIdx = markerColIdx
+	hb.dedupDeleteKeepColIdxList = keepColIdxList
 }
 
 func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool) {
@@ -243,7 +259,10 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
+	return hb.buildHashmapInternal(hashOnPK, needAllocateSels, needUniqueVec, hb.DedupBuildKeepLast, proc)
+}
 
+func (hb *HashmapBuilder) buildHashmapInternal(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, dedupBuildKeepLast bool, proc *process.Process) error {
 	var err error
 	if err = hb.evalJoinCondition(proc); err != nil {
 		return err
@@ -281,7 +300,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		hb.MultiSels.InitSel(hb.InputBatchRowCount)
 	}
 
-	if hb.IsDedup && hb.OnDuplicateAction == plan.Node_IGNORE {
+	if hb.IsDedup && (hb.OnDuplicateAction == plan.Node_IGNORE || dedupBuildKeepLast) {
 		hb.IgnoreRows = &bitmap.Bitmap{}
 		hb.IgnoreRows.InitWithSize(int64(hb.InputBatchRowCount))
 	}
@@ -290,7 +309,14 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		vOld        uint64
 		cardinality uint64
 		newSels     []int64
+		lastRows    []int64
 	)
+	if dedupBuildKeepLast {
+		lastRows = make([]int64, hb.InputBatchRowCount+1)
+		for i := range lastRows {
+			lastRows[i] = -1
+		}
+	}
 
 	for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
 		if i%(hashmap.UnitLimit*32) == 0 {
@@ -347,6 +373,16 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 				if v <= cardinality {
 					switch hb.OnDuplicateAction {
 					case plan.Node_FAIL:
+						if dedupBuildKeepLast {
+							// Fan-out: two build-side rows share the same key (one new row
+							// matched multiple old rows). Keep the later one, discard the
+							// earlier so only one copy is inserted.
+							if lastRows[v] >= 0 {
+								hb.IgnoreRows.Add(uint64(lastRows[v]))
+							}
+							lastRows[v] = int64(i + k)
+							continue
+						}
 						var rowStr string
 						if len(hb.DedupColTypes) == 1 {
 							if hb.DedupColName == catalog.IndexTableIndexColName {
@@ -374,6 +410,9 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 					}
 				} else {
 					cardinality = v
+					if dedupBuildKeepLast {
+						lastRows[v] = int64(i + k)
+					}
 				}
 			} else if !hashOnPK && needAllocateSels {
 				hb.MultiSels.InsertSel(int32(v-1), int32(i+k))
@@ -418,16 +457,39 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		}
 	}
 
+	// Handle fan-out duplicates: discarded rows that still need to delete old rows.
+	if dedupBuildKeepLast && hb.IgnoreRows != nil && hb.IgnoreRows.Count() > 0 {
+		if err := hb.keepDiscardedRowsForDelete(proc); err != nil {
+			return err
+		}
+		totalRowCount := hb.Batches.RowCount()
+		delCount := 0
+		if hb.DelRows != nil {
+			delCount = int(hb.DelRows.Count())
+		}
+		hb.InputBatchRowCount = totalRowCount - delCount
+		hb.resetHashmapForRebuild(proc)
+		if err := hb.buildHashmapInternal(hashOnPK, needAllocateSels, needUniqueVec, false, proc); err != nil {
+			return err
+		}
+		hb.InputBatchRowCount = totalRowCount
+		return nil
+	}
+
 	if hb.delColIdx != -1 {
 		hb.DelRows = &bitmap.Bitmap{}
 		hb.DelRows.InitWithSize(int64(cardinality))
 
+		// Scan every build row including delete-only rows appended by
+		// keepDiscardedRowsForDelete. Use Batches.RowCount() instead of
+		// InputBatchRowCount so appended rows are not missed.
+		delScanRowCount := hb.Batches.RowCount()
 		tmpVecs := make([]*vector.Vector, 1)
-		for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
+		for i := 0; i < delScanRowCount; i += hashmap.UnitLimit {
 			if i%(hashmap.UnitLimit*32) == 0 {
 				runtime.Gosched()
 			}
-			n := hb.InputBatchRowCount - i
+			n := delScanRowCount - i
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
@@ -469,4 +531,139 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 	}
 
 	return nil
+}
+
+// resetHashmapForRebuild clears hashmap state so buildHashmapInternal can be
+// called again after keepDiscardedRowsForDelete has reorganised the batches.
+func (hb *HashmapBuilder) resetHashmapForRebuild(proc *process.Process) {
+	if hb.IntHashMap != nil {
+		hb.IntHashMap.Free()
+		hb.IntHashMap = nil
+	}
+	if hb.StrHashMap != nil {
+		hb.StrHashMap.Free()
+		hb.StrHashMap = nil
+	}
+	hb.MultiSels.Free()
+	if hb.needDupVec {
+		for i := range hb.vecs {
+			if hb.vecs[i] != nil {
+				for j := range hb.vecs[i] {
+					if hb.vecs[i][j] != nil {
+						hb.vecs[i][j].Free(proc.Mp())
+					}
+				}
+			}
+		}
+	}
+	hb.vecs = nil
+	hb.delVecs = nil
+	for i := range hb.UniqueJoinKeys {
+		if hb.UniqueJoinKeys[i] != nil {
+			hb.UniqueJoinKeys[i].Free(proc.Mp())
+		}
+	}
+	hb.UniqueJoinKeys = nil
+	hb.IgnoreRows = nil
+}
+
+// keepDiscardedRowsForDelete separates build-side rows that were discarded as
+// fan-out duplicates but still carry a valid old-row reference (non-null
+// dedupDeleteMarkerColIdx). Those rows are moved to the end of Batches as
+// delete-only rows so the delColIdx scan can mark the corresponding probe-side
+// rows for deletion without re-inserting the new row a second time.
+func (hb *HashmapBuilder) keepDiscardedRowsForDelete(proc *process.Process) error {
+	if hb.dedupDeleteMarkerColIdx < 0 {
+		return hb.Batches.Shrink(hb.IgnoreRows, proc)
+	}
+
+	activeRows := hb.IgnoreRows.Clone()
+	activeRows.Negate()
+	activeCount := activeRows.Count()
+
+	discardedWithDeletes := make([]int32, 0, hb.IgnoreRows.Count())
+	itr := hb.IgnoreRows.Iterator()
+	for itr.HasNext() {
+		row := itr.Next()
+		batIdx := row / colexec.DefaultBatchSize
+		rowIdx := row % colexec.DefaultBatchSize
+		markerVec := hb.Batches.Buf[batIdx].Vecs[hb.dedupDeleteMarkerColIdx]
+		if !markerVec.IsNull(rowIdx) {
+			discardedWithDeletes = append(discardedWithDeletes, int32(row))
+		}
+	}
+
+	if len(discardedWithDeletes) == 0 {
+		return hb.Batches.Shrink(hb.IgnoreRows, proc)
+	}
+
+	if len(hb.dedupDeleteKeepColIdxList) == 0 {
+		hb.dedupDeleteKeepColIdxList = []int32{hb.dedupDeleteMarkerColIdx}
+		if hb.delColIdx >= 0 && hb.delColIdx != hb.dedupDeleteMarkerColIdx {
+			hb.dedupDeleteKeepColIdxList = append(hb.dedupDeleteKeepColIdxList, hb.delColIdx)
+		}
+	}
+
+	deleteOnlyBat, err := hb.makeDeleteOnlyBatch(discardedWithDeletes, proc)
+	if err != nil {
+		return err
+	}
+	defer deleteOnlyBat.Clean(proc.Mp())
+
+	if err := hb.Batches.Shrink(hb.IgnoreRows, proc); err != nil {
+		return err
+	}
+	if err := hb.Batches.CopyIntoBatches(deleteOnlyBat, proc); err != nil {
+		return err
+	}
+
+	hb.DelRows = &bitmap.Bitmap{}
+	hb.DelRows.InitWithSize(int64(activeCount + len(discardedWithDeletes)))
+	for i := range discardedWithDeletes {
+		hb.DelRows.Add(uint64(activeCount + i))
+	}
+	return nil
+}
+
+// makeDeleteOnlyBatch builds a batch containing only the columns needed for
+// deletion (dedupDeleteKeepColIdxList) from the specified discarded rows.
+// All other column slots are filled with nulls to keep the batch schema
+// compatible with the existing Batches layout.
+func (hb *HashmapBuilder) makeDeleteOnlyBatch(rows []int32, proc *process.Process) (*batch.Batch, error) {
+	keepCols := make(map[int32]struct{}, len(hb.dedupDeleteKeepColIdxList))
+	for _, colIdx := range hb.dedupDeleteKeepColIdxList {
+		keepCols[colIdx] = struct{}{}
+	}
+
+	bat := batch.NewOffHeapWithSize(len(hb.Batches.Buf[0].Vecs))
+	bat.Attrs = hb.Batches.Buf[0].Attrs
+	for colIdx, vec := range hb.Batches.Buf[0].Vecs {
+		bat.Vecs[colIdx] = vector.NewOffHeapVecWithType(*vec.GetType())
+	}
+
+	cleanOnErr := true
+	defer func() {
+		if cleanOnErr {
+			bat.Clean(proc.Mp())
+		}
+	}()
+
+	for _, row := range rows {
+		srcBatIdx := int(row) / colexec.DefaultBatchSize
+		srcRowIdx := int64(int(row) % colexec.DefaultBatchSize)
+		for colIdx, dst := range bat.Vecs {
+			src := hb.Batches.Buf[srcBatIdx].Vecs[colIdx]
+			if _, keep := keepCols[int32(colIdx)]; keep || src.IsNull(uint64(srcRowIdx)) {
+				if err := dst.UnionOne(src, srcRowIdx, proc.Mp()); err != nil {
+					return nil, err
+				}
+			} else if err := dst.UnionNull(proc.Mp()); err != nil {
+				return nil, err
+			}
+		}
+		bat.AddRowCount(1)
+	}
+
+	cleanOnErr = false
+	return bat, nil
 }
