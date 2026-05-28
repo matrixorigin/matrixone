@@ -166,25 +166,37 @@ func TestCoverage_getInterfaceValue(t *testing.T) {
 	}
 }
 
-func TestCoverage_isMissingTableForFkCleanup(t *testing.T) {
+func TestCoverage_isMissingTableByIdForFkCleanup(t *testing.T) {
 	t.Run("no such table error", func(t *testing.T) {
 		err := moerr.NewNoSuchTableNoCtx("db", "tbl")
-		assert.True(t, isMissingTableForFkCleanup(err))
+		assert.True(t, isMissingTableByIdForFkCleanup(err))
 	})
 
 	t.Run("internal error with can not find table", func(t *testing.T) {
 		err := moerr.NewInternalErrorNoCtx("can not find table by id 123")
-		assert.True(t, isMissingTableForFkCleanup(err))
+		assert.True(t, isMissingTableByIdForFkCleanup(err))
 	})
 
 	t.Run("internal error without matching message", func(t *testing.T) {
 		err := moerr.NewInternalErrorNoCtx("something else")
-		assert.False(t, isMissingTableForFkCleanup(err))
+		assert.False(t, isMissingTableByIdForFkCleanup(err))
 	})
 
 	t.Run("other error type", func(t *testing.T) {
 		err := moerr.NewInvalidInputNoCtx("bad input")
-		assert.False(t, isMissingTableForFkCleanup(err))
+		assert.False(t, isMissingTableByIdForFkCleanup(err))
+	})
+}
+
+func TestCoverage_isMissingTableByNameForDropDatabase(t *testing.T) {
+	t.Run("no such table error", func(t *testing.T) {
+		err := moerr.NewNoSuchTableNoCtx("db", "tbl")
+		assert.True(t, isMissingTableByNameForDropDatabase(err))
+	})
+
+	t.Run("internal table id error is not a name lookup miss", func(t *testing.T) {
+		err := moerr.NewInternalErrorNoCtx("can not find table by id 123")
+		assert.False(t, isMissingTableByNameForDropDatabase(err))
 	})
 }
 
@@ -338,12 +350,12 @@ func TestCoverage_getInterfaceValueUint(t *testing.T) {
 func TestCoverage_isMissingTableContainsSubstring(t *testing.T) {
 	// Verify exact substring matching
 	err := moerr.NewInternalErrorNoCtx("prefix can not find table by id suffix")
-	result := isMissingTableForFkCleanup(err)
+	result := isMissingTableByIdForFkCleanup(err)
 	assert.True(t, result)
 
 	// Check case sensitivity
 	errCase := moerr.NewInternalErrorNoCtx("CAN NOT FIND TABLE BY ID")
-	resultCase := isMissingTableForFkCleanup(errCase)
+	resultCase := isMissingTableByIdForFkCleanup(errCase)
 	// The function uses strings.Contains which is case-sensitive
 	assert.Equal(t, strings.Contains(errCase.Error(), "can not find table by id"), resultCase)
 }
