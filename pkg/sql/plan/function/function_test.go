@@ -242,6 +242,56 @@ func Test_GetFunctionByName(t *testing.T) {
 	}
 }
 
+func TestGetFunctionByNameAESDecryptReturnsBlob(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name string
+		args []types.Type
+	}{
+		{
+			name: "blob input",
+			args: []types.Type{types.T_blob.ToType(), types.T_varchar.ToType()},
+		},
+		{
+			name: "varchar input",
+			args: []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+		},
+		{
+			name: "char input",
+			args: []types.Type{types.T_char.ToType(), types.T_varchar.ToType()},
+		},
+		{
+			name: "text input",
+			args: []types.Type{types.T_text.ToType(), types.T_varchar.ToType()},
+		},
+		{
+			name: "blob input with iv",
+			args: []types.Type{types.T_blob.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+		},
+		{
+			name: "varchar input with iv",
+			args: []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+		},
+		{
+			name: "char input with iv",
+			args: []types.Type{types.T_char.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+		},
+		{
+			name: "text input with iv",
+			args: []types.Type{types.T_text.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			get, err := GetFunctionByName(proc.Ctx, "aes_decrypt", tc.args)
+			require.NoError(t, err)
+			require.Equal(t, int32(AES_DECRYPT), get.fid)
+			require.Equal(t, types.T_blob.ToType(), get.retType)
+		})
+	}
+}
+
 func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, true, GetFunctionIsWinFunByName("rank"))
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
