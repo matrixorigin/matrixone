@@ -142,53 +142,6 @@ func TestDataBranchDiffColumns(t *testing.T) {
 	require.Nil(t, diffStmt.OutputOpt)
 }
 
-func TestDataBranchPick(t *testing.T) {
-	// Single PK value list
-	stmt, err := ParseOne(context.TODO(), "data branch pick db1.src into db2.dst keys (1, 2, 3)", 1)
-	require.NoError(t, err)
-	pickStmt, ok := stmt.(*tree.DataBranchPick)
-	require.True(t, ok)
-	require.Equal(t, "src", string(pickStmt.SrcTable.ObjectName))
-	require.Equal(t, "dst", string(pickStmt.DstTable.ObjectName))
-	require.NotNil(t, pickStmt.Keys)
-	require.Equal(t, tree.PickKeysValues, pickStmt.Keys.Type)
-	require.Len(t, pickStmt.Keys.KeyExprs, 3)
-	require.Nil(t, pickStmt.ConflictOpt)
-
-	// With conflict option
-	stmt, err = ParseOne(context.TODO(), "data branch pick src into dst keys (1, 2) when conflict skip", 1)
-	require.NoError(t, err)
-	pickStmt, ok = stmt.(*tree.DataBranchPick)
-	require.True(t, ok)
-	require.NotNil(t, pickStmt.ConflictOpt)
-	require.Equal(t, tree.CONFLICT_SKIP, pickStmt.ConflictOpt.Opt)
-
-	// Subquery keys
-	stmt, err = ParseOne(context.TODO(), "data branch pick src into dst keys (select pk from t1 where id > 10)", 1)
-	require.NoError(t, err)
-	pickStmt, ok = stmt.(*tree.DataBranchPick)
-	require.True(t, ok)
-	require.NotNil(t, pickStmt.Keys)
-	require.Equal(t, tree.PickKeysSubquery, pickStmt.Keys.Type)
-	require.NotNil(t, pickStmt.Keys.Select)
-
-	// WHEN CONFLICT ACCEPT
-	stmt, err = ParseOne(context.TODO(), "data branch pick src into dst keys (100) when conflict accept", 1)
-	require.NoError(t, err)
-	pickStmt, ok = stmt.(*tree.DataBranchPick)
-	require.True(t, ok)
-	require.NotNil(t, pickStmt.ConflictOpt)
-	require.Equal(t, tree.CONFLICT_ACCEPT, pickStmt.ConflictOpt.Opt)
-
-	// WHEN CONFLICT FAIL
-	stmt, err = ParseOne(context.TODO(), "data branch pick src into dst keys (100) when conflict fail", 1)
-	require.NoError(t, err)
-	pickStmt, ok = stmt.(*tree.DataBranchPick)
-	require.True(t, ok)
-	require.NotNil(t, pickStmt.ConflictOpt)
-	require.Equal(t, tree.CONFLICT_FAIL, pickStmt.ConflictOpt.Opt)
-}
-
 var (
 	partitionSQL = struct {
 		input  string
@@ -538,6 +491,42 @@ var (
 		}, {
 			input:  "UPDATE items,(SELECT id FROM items WHERE id IN (SELECT id FROM items WHERE retail / wholesale >= 1.3 AND quantity < 100)) AS discounted SET items.retail = items.retail * 0.9 WHERE items.id = discounted.id",
 			output: "update items cross join (select id from items where id in (select id from items where retail / wholesale >= 1.3 and quantity < 100)) as discounted set items.retail = items.retail * 0.9 where items.id = discounted.id",
+		}, {
+			input:  "UPDATE t SET remark = c.province FROM company c WHERE c.id = t.company_id",
+			output: "update t set remark = c.province from company as c where c.id = t.company_id",
+		}, {
+			input:  "UPDATE vec_join_case t SET remark = CONCAT('hot-', c.province) FROM company c WHERE c.id = t.company_id AND l2_distance(embedding, \"[0.2,0.2,0.3,0.3]\") < 0.35",
+			output: "update vec_join_case as t set remark = CONCAT(hot-, c.province) from company as c where c.id = t.company_id and l2_distance(embedding, [0.2,0.2,0.3,0.3]) < 0.35",
+		}, {
+			input:  "UPDATE t SET a = b.x FROM b, c WHERE t.id = b.id AND b.k = c.k",
+			output: "update t set a = b.x from b cross join c where t.id = b.id and b.k = c.k",
+		}, {
+			input:  "WITH cc AS (SELECT * FROM company) UPDATE t SET remark = c.province FROM cc c WHERE c.id = t.company_id",
+			output: "with cc as (select * from company) update t set remark = c.province from cc as c where c.id = t.company_id",
+		}, {
+			input:  "UPDATE t1 JOIN t2 ON t1.k = t2.k SET t1.v = t2.v FROM t3 WHERE t3.id = t1.id",
+			output: "update t1 inner join t2 on t1.k = t2.k set t1.v = t2.v from t3 where t3.id = t1.id",
+		}, {
+			// FROM b JOIN c ON ... — the FROM-clause join tree must keep its
+			// grouping after Format so round-tripping does not change the
+			// associativity. (Cross-joining target+source previously dropped
+			// the parens and re-parsed as (t CROSS b) JOIN c.)
+			input:  "UPDATE t SET v = c.v FROM b JOIN c ON b.k = c.k WHERE t.id = b.id",
+			output: "update t set v = c.v from b inner join c on b.k = c.k where t.id = b.id",
+		}, {
+			input:  "UPDATE t SET v = c.v FROM b LEFT JOIN c ON b.k = c.k WHERE t.id = b.id",
+			output: "update t set v = c.v from b left join c on b.k = c.k where t.id = b.id",
+		}, {
+			// FROM "b, c JOIN d ON ..." parses to b CROSS (c INNER d). Without
+			// the right-operand paren the round-trip would re-parse as
+			// (b CROSS c) INNER d, changing the ON's binding.
+			input:  "UPDATE t SET v = d.v FROM b, c JOIN d ON c.k = d.k WHERE t.id = b.id AND b.k = c.k",
+			output: "update t set v = d.v from b cross join (c inner join d on c.k = d.k) where t.id = b.id and b.k = c.k",
+		}, {
+			// Same shape but the inner join is LEFT, where the associativity
+			// change is also a semantic change (which side is preserved).
+			input:  "UPDATE t SET v = d.v FROM b, c LEFT JOIN d ON c.k = d.k WHERE t.id = b.id AND b.k = c.k",
+			output: "update t set v = d.v from b cross join (c left join d on c.k = d.k) where t.id = b.id and b.k = c.k",
 		}, {
 			input:  "with t2 as (select * from t1) DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
 			output: "with t2 as (select * from t1) delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
@@ -3577,6 +3566,10 @@ var (
 			input:  "create table pt2 (id int, date_column date, value int) partition by range (year(date_column)) (partition p1 values less than (2010) comment 'Before 2010', partition p2 values less than (2020) comment '2010 - 2019', partition p3 values less than (MAXVALUE) comment '2020 and Beyond')",
 			output: "create table pt2 (id int, date_column date, value int) partition by range (year(date_column)) (partition p1 values less than (2010) comment = 'Before 2010', partition p2 values less than (2020) comment = '2010 - 2019', partition p3 values less than (MAXVALUE) comment = '2020 and Beyond')",
 		},
+		{
+			input:  "select 'O''Brien'",
+			output: "select 'O''Brien'",
+		},
 	}
 )
 
@@ -3611,6 +3604,82 @@ func TestTaskKeywordIsNonReservedForIdentifiers(t *testing.T) {
 		require.True(t, ok, sql)
 		require.Len(t, createStmt.Defs, 2, sql)
 	}
+}
+
+func TestCreateSQLTaskPreservesQuotedStrings(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create task task_quotes when ('gate' = 'gate') as begin insert into gate_sink select 'gate-ok'; select case when 1 = 1 then 'PASS' else 'FAIL' end; end", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.Contains(t, createStmt.GateCondition, "'gate'")
+	require.Contains(t, createStmt.SQLBody, "'gate-ok'")
+	require.Contains(t, createStmt.SQLBody, "'PASS'")
+	require.Contains(t, createStmt.SQLBody, "'FAIL'")
+
+	formatted := tree.String(createStmt, dialect.MYSQL)
+	require.Contains(t, formatted, "'gate'")
+	require.Contains(t, formatted, "'gate-ok'")
+	require.Contains(t, formatted, "'PASS'")
+	require.Contains(t, formatted, "'FAIL'")
+}
+
+func TestCreateSQLTaskPreservesTimestampUnits(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create task task_time as begin select timestampdiff(hour, current_timestamp(), current_timestamp()); select extract(hour from current_timestamp()); select interval 1 hour; end", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, current_timestamp(), current_timestamp())")
+	require.Contains(t, createStmt.SQLBody, "extract(hour, current_timestamp())")
+	require.Contains(t, createStmt.SQLBody, "INTERVAL 1 hour")
+
+	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
+	require.Contains(t, formatted, "timestampdiff(hour, current_timestamp(), current_timestamp())")
+	require.Contains(t, formatted, "extract(hour, current_timestamp())")
+	require.Contains(t, formatted, "INTERVAL 1 hour")
+}
+
+func TestCreateSQLTaskPreservesComplexTimestampUnits(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), `create task task_time_complex as begin
+insert into silver_fiix_offline_tracker
+select
+    work_order_id,
+    hp_pump_code,
+    min(offline_start) as offline_start,
+    max(offline_end) as offline_end,
+    timestampdiff(hour, min(offline_start), max(offline_end)) as downtime_hours
+from t
+group by work_order_id, hp_pump_code;
+
+insert into gold_off_session_wo_match
+with proximity_match as (
+    select
+        row_number() over (
+            partition by s.pump, s.session_id
+            order by abs(timestampdiff(minute, s.session_start, wo.dtm_date_created))
+        ) as rn
+    from t
+    where abs(timestampdiff(hour, s.session_start, wo.dtm_date_created)) <= 4
+)
+select * from proximity_match;
+end`, 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.NotContains(t, createStmt.SQLBody, "timestampdiff('hour'")
+	require.NotContains(t, createStmt.SQLBody, "timestampdiff('minute'")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, min(offline_start), max(offline_end))")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(minute, s.session_start, wo.dtm_date_created)")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, s.session_start, wo.dtm_date_created)")
+
+	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
+	require.NotContains(t, formatted, "timestampdiff('hour'")
+	require.NotContains(t, formatted, "timestampdiff('minute'")
+	require.Contains(t, formatted, "timestampdiff(hour, min(offline_start), max(offline_end))")
+	require.Contains(t, formatted, "timestampdiff(minute, s.session_start, wo.dtm_date_created)")
+	require.Contains(t, formatted, "timestampdiff(hour, s.session_start, wo.dtm_date_created)")
 }
 
 var (

@@ -1,6 +1,6 @@
 show table_number from mo_task;
 ➤ Number of tables in mo_task[-5,64,0]  𝄀
-3
+5
 show table_number from information_schema;
 ➤ Number of tables in information_schema[-5,64,0]  𝄀
 24

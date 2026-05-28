@@ -74,6 +74,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	rssCacheFamilyEvictTimeout   = 10 * time.Second
+	rssCacheAdmissionPressureTTL = 2 * time.Minute
+)
+
+var (
+	evictMemoryCachesToCapacityPercent = fileservice.EvictMemoryCachesToCapacityPercent
+)
+
+func makeRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
+	return func(ctx context.Context, targetPercent int64) {
+		pressureUntil := time.Now().Add(rssCacheAdmissionPressureTTL)
+		fileservice.SetMemoryCachePressureTargetPercent(targetPercent, pressureUntil)
+
+		memoryCtx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseRSSCacheEvict)
+		defer cancel()
+		evictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
+	}
+}
+
 func NewService(
 	cfg *Config,
 	ctx context.Context,
@@ -204,6 +224,7 @@ func NewService(
 		90.0/100.0,
 		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
 		rscthrottler.WithRSSScavenging(),
+		rscthrottler.WithRSSCacheEvictor(makeRSSCacheEvictor(rssCacheFamilyEvictTimeout)),
 	)
 
 	srv.pu.LockService = srv.lockService

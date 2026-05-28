@@ -53,7 +53,10 @@ COPY --from=builder /matrixone/mo-service /mo-service
 COPY --from=builder /matrixone/etc /etc
 COPY --from=builder /matrixone/thirdparties/install/lib/*.so /usr/local/lib
 COPY --from=builder /matrixone/cgo/*.so /usr/local/lib
+COPY --from=builder /matrixone/pkg/monlp/tokenizer/dict /usr/local/share/jieba
 COPY --from=builder /root/miniconda/envs/go/lib /root/miniconda/envs/go/lib
+
+ENV MO_JIEBA_DICT_DIR=/usr/local/share/jieba
 
 ENV PATH="/usr/local/cuda/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH}"
