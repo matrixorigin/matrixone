@@ -250,6 +250,67 @@ func TestMemThrottlerRSSCacheEvictionByRSSRate(t *testing.T) {
 	require.Equal(t, int64(rssCacheHardTarget), throttler.lastRSSCacheTarget.Load())
 }
 
+func TestMemThrottlerRSSPressureStateTargetLifecycle(t *testing.T) {
+	oldFreeOSMemory := freeOSMemory
+	defer func() { freeOSMemory = oldFreeOSMemory }()
+	freeOSMemory = func() {}
+
+	var setTargets []int64
+	var clearCalls int
+	evictTargets := make(chan int64, 4)
+
+	now := time.Now().UnixNano()
+	throttler := &memThrottler{limitRate: 0.90}
+	throttler.options.enableRSSScavenging = true
+	throttler.options.rssCacheTargetSetter = func(targetPercent int64) {
+		setTargets = append(setTargets, targetPercent)
+	}
+	throttler.options.rssCacheTargetClearer = func() {
+		clearCalls++
+	}
+	throttler.options.rssCacheEvictor = func(_ context.Context, targetPercent int64) {
+		evictTargets <- targetPercent
+	}
+	throttler.actualTotalMemory.Store(1000 * mpool.GB)
+	throttler.limit.Store(900 * mpool.GB)
+	throttler.reserved.Store(800 * mpool.GB)
+
+	throttler.tryScavengeRSS(now, 850*mpool.GB)
+	require.Equal(t, rssPressureSoft, rssPressureState(throttler.rssPressureState.Load()))
+	require.Equal(t, []int64{rssCacheSoftTarget}, setTargets)
+	require.Eventually(t, func() bool {
+		return recvTarget(evictTargets) == rssCacheSoftTarget
+	}, time.Second, time.Millisecond)
+
+	throttler.tryScavengeRSS(now+int64(time.Second), 920*mpool.GB)
+	require.Equal(t, rssPressureHard, rssPressureState(throttler.rssPressureState.Load()))
+	require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget}, setTargets)
+	require.Eventually(t, func() bool {
+		return recvTarget(evictTargets) == rssCacheHardTarget
+	}, time.Second, time.Millisecond)
+
+	throttler.tryScavengeRSS(now+2*int64(time.Second), 870*mpool.GB)
+	require.Equal(t, rssPressureSoft, rssPressureState(throttler.rssPressureState.Load()))
+	require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget, rssCacheSoftTarget}, setTargets)
+	require.Equal(t, 1, clearCalls)
+	select {
+	case target := <-evictTargets:
+		t.Fatalf("unexpected downgrade cache evict target %d", target)
+	default:
+	}
+
+	throttler.tryScavengeRSS(now+3*int64(time.Second), 920*mpool.GB)
+	require.Equal(t, rssPressureHard, rssPressureState(throttler.rssPressureState.Load()))
+	require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget, rssCacheSoftTarget, rssCacheHardTarget}, setTargets)
+	require.Eventually(t, func() bool {
+		return recvTarget(evictTargets) == rssCacheHardTarget
+	}, time.Second, time.Millisecond)
+
+	throttler.tryScavengeRSS(now+4*int64(time.Second), 800*mpool.GB)
+	require.Equal(t, rssPressureNone, rssPressureState(throttler.rssPressureState.Load()))
+	require.Equal(t, 2, clearCalls)
+}
+
 func TestMemThrottlerRSSCacheEvictionConcurrentEscalation(t *testing.T) {
 	oldFreeOSMemory := freeOSMemory
 	defer func() { freeOSMemory = oldFreeOSMemory }()
@@ -284,7 +345,7 @@ func TestMemThrottlerRSSCacheEvictionConcurrentEscalation(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		<-start
-		throttler.tryScavengeRSS(now, 850*mpool.GB)
+		throttler.tryScavengeRSS(now, 890*mpool.GB)
 	}()
 	go func() {
 		defer wg.Done()
