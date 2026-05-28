@@ -18,41 +18,75 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
+// procWithAccount returns a process whose context carries an account id, plus
+// that id. A pinned datalink resolves its CAS namespace from this account.
+func procWithAccount(t *testing.T) (*process.Process, uint32) {
+	proc := testutil.NewProc(t)
+	accountID, err := defines.GetAccountId(proc.Ctx)
+	require.NoError(t, err)
+	return proc, accountID
+}
+
 // A pinned datalink resolves to the immutable CAS object path, never the live path.
 func TestParseDatalinkContentHashResolvesToCAS(t *testing.T) {
+	proc, accountID := procWithAccount(t)
 	hash := strings.Repeat("a", 64)
-	moUrl, offsetSize, err := ParseDatalink("file:///a/b/c/1.txt?contenthash="+hash, nil)
+	moUrl, offsetSize, err := ParseDatalink("file:///a/b/c/1.txt?contenthash="+hash, proc)
 	require.NoError(t, err)
-	require.Equal(t, CASKey(hash), moUrl)
+	require.Equal(t, CASKey(accountID, hash), moUrl)
 	require.NotEqual(t, "/a/b/c/1.txt", moUrl) // must not fall back to the live path
 	require.Equal(t, []int64{0, -1}, offsetSize)
 }
 
 // An uppercase hash is normalized to lowercase so it matches the stored sha256 hex.
 func TestParseDatalinkContentHashNormalizesCase(t *testing.T) {
-	moUrl, _, err := ParseDatalink("file:///a/b/c/1.txt?contenthash="+strings.Repeat("A", 64), nil)
+	proc, accountID := procWithAccount(t)
+	moUrl, _, err := ParseDatalink("file:///a/b/c/1.txt?contenthash="+strings.Repeat("A", 64), proc)
 	require.NoError(t, err)
-	require.Equal(t, CASKey(strings.Repeat("a", 64)), moUrl)
+	require.Equal(t, CASKey(accountID, strings.Repeat("a", 64)), moUrl)
 }
 
 // offset/size still apply on top of a pinned object.
 func TestParseDatalinkContentHashWithOffsetSize(t *testing.T) {
+	proc, accountID := procWithAccount(t)
 	hash := strings.Repeat("a", 64)
-	moUrl, offsetSize, err := ParseDatalink("file:///a/b/c/1.txt?contenthash="+hash+"&offset=1&size=2", nil)
+	moUrl, offsetSize, err := ParseDatalink("file:///a/b/c/1.txt?contenthash="+hash+"&offset=1&size=2", proc)
 	require.NoError(t, err)
-	require.Equal(t, CASKey(hash), moUrl)
+	require.Equal(t, CASKey(accountID, hash), moUrl)
 	require.Equal(t, []int64{1, 2}, offsetSize)
 }
 
-// A pinned stage datalink does not need the live stage resolution (nil proc is fine).
+// A pinned stage datalink does not need the live stage resolution.
 func TestParseDatalinkContentHashStageNoLiveResolution(t *testing.T) {
+	proc, accountID := procWithAccount(t)
 	hash := strings.Repeat("b", 64)
-	moUrl, _, err := ParseDatalink("stage://st/doc.txt?contenthash="+hash, nil)
+	moUrl, _, err := ParseDatalink("stage://st/doc.txt?contenthash="+hash, proc)
 	require.NoError(t, err)
-	require.Equal(t, CASKey(hash), moUrl)
+	require.Equal(t, CASKey(accountID, hash), moUrl)
+}
+
+// A pinned datalink resolved in different account contexts maps to distinct CAS
+// keys: the contenthash alone does not address a globally shared object.
+func TestParseDatalinkContentHashIsAccountScoped(t *testing.T) {
+	proc, accountID := procWithAccount(t)
+	hash := strings.Repeat("a", 64)
+
+	moUrl, _, err := ParseDatalink("file:///a/b/c/1.txt?contenthash="+hash, proc)
+	require.NoError(t, err)
+	require.Equal(t, CASKey(accountID, hash), moUrl)
+
+	// a different account resolving the same URL gets a different CAS key
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, accountID+1)
+	otherUrl, _, err := ParseDatalink("file:///a/b/c/1.txt?contenthash="+hash, proc)
+	require.NoError(t, err)
+	require.Equal(t, CASKey(accountID+1, hash), otherUrl)
+	require.NotEqual(t, moUrl, otherUrl)
 }
 
 func TestParseDatalinkInvalidContentHash(t *testing.T) {

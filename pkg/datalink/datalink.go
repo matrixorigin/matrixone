@@ -143,11 +143,19 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int64, error
 	// never resolves to the live external path, so historical snapshot bytes stay
 	// reproducible. A missing CAS object surfaces as a read error rather than a
 	// silent fall back to the live (possibly overwritten) file.
+	//
+	// The CAS key is namespaced by the calling account, resolved from the trusted
+	// execution context (never from the URL). This binds the read to the caller's
+	// account: a contenthash cannot be used to read another account's pinned bytes.
 	if hash, ok := urlParams[ContentHashKey]; ok {
 		if err = ValidateContentHash(hash); err != nil {
 			return "", nil, err
 		}
-		return CASKey(hash), offsetSize, nil
+		accountID, err := contentHashAccountID(proc)
+		if err != nil {
+			return "", nil, err
+		}
+		return CASKey(accountID, hash), offsetSize, nil
 	}
 
 	// 4. live reference: resolve to the external file's current location
@@ -177,6 +185,17 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int64, error
 	return moUrl, offsetSize, nil
 }
 
+// contentHashAccountID resolves the account that owns a pinned datalink's CAS
+// namespace from the trusted execution context. A pinned read/write requires a
+// session account; resolving it from the URL would re-introduce the bearer-token
+// problem the per-account namespace is meant to prevent.
+func contentHashAccountID(proc *process.Process) (uint32, error) {
+	if proc == nil {
+		return 0, moerr.NewInternalErrorNoCtx("pinned datalink requires an execution context to resolve the account")
+	}
+	return defines.GetAccountId(proc.Ctx)
+}
+
 func (d Datalink) NewReadCloser(proc *process.Process) (io.ReadCloser, error) {
 	if d.ContentHash != "" {
 		// pinned value: read the immutable CAS object directly from the SHARED
@@ -201,7 +220,10 @@ func (d Datalink) NewReadCloser(proc *process.Process) (io.ReadCloser, error) {
 		}
 		if err = fs.Read(proc.Ctx, &vec); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				return nil, moerr.NewFileNotFound(proc.Ctx, d.MoPath)
+				// Key the error on the content hash, not the internal CAS storage
+				// path: the path embeds the file-service layout and the account id
+				// (non-deterministic), while the hash is what the user supplied.
+				return nil, moerr.NewFileNotFound(proc.Ctx, d.ContentHash)
 			}
 			return nil, err
 		}
@@ -242,7 +264,7 @@ func (d Datalink) StatSize(proc *process.Process) (int64, error) {
 		entry, err := fs.StatFile(proc.Ctx, d.MoPath)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				return 0, moerr.NewFileNotFound(proc.Ctx, d.MoPath)
+				return 0, moerr.NewFileNotFound(proc.Ctx, d.ContentHash)
 			}
 			return 0, err
 		}
