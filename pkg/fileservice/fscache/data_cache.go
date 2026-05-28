@@ -16,10 +16,14 @@ package fscache
 
 import (
 	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
 )
 
 type CacheKey = pb.CacheKey
+
+var ErrCacheAdmissionRejected = moerr.NewInternalErrorNoCtx("cache admission rejected")
 
 type DataCache interface {
 	EnsureNBytes(ctx context.Context, want int)

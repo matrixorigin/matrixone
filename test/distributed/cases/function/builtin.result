@@ -830,5 +830,28 @@ max(greatest(d1, d2))    max(least(d1, d2))
 103.14    102.72
 select count(*) from testt where greatest(ts1, ts2) = least(ts1, ts3);
 invalid input: column ts3 does not exist
+select greatest(null, 1);
+greatest(null, 1)
+null
+select greatest(1, null);
+greatest(1, null)
+null
+select least(null, 1);
+least(null, 1)
+null
+select least(1, null);
+least(1, null)
+null
+select greatest(null, null);
+greatest(null, null)
+null
+select greatest(i, null) from testt limit 2;
+greatest(i, null)
+null
+null
+select least(null, i) from testt limit 2;
+least(null, i)
+null
+null
 drop table testt;
 drop database test01;
