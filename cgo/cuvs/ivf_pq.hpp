@@ -1483,10 +1483,28 @@ public:
 
     void save(const std::string& filename) const {
         if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("Index not built");
-        
+
+        // SHARDED can't fit in one file — caller must use save_dir().
+        if (this->dist_mode == DistributionMode_SHARDED) {
+            throw std::runtime_error("save(filename) not supported for SHARDED IVF-PQ; use save_dir()");
+        }
+
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
-                cuvs::neighbors::ivf_pq::serialize(*(handle.get_raft_resources()), filename, *index_);
+                if (this->dist_mode == DistributionMode_SINGLE_GPU) {
+                    cuvs::neighbors::ivf_pq::serialize(*(handle.get_raft_resources()), filename, *index_);
+                } else {
+                    // REPLICATED: serialize the local replica if present, else any other.
+                    int dev_id = handle.get_device_id();
+                    auto it = this->replicated_indices_.find(dev_id);
+                    if (it == this->replicated_indices_.end())
+                        it = this->replicated_indices_.begin();
+                    if (it == this->replicated_indices_.end())
+                        throw std::runtime_error("No replicated IVF-PQ index found to serialize");
+                    cuvs::neighbors::ivf_pq::serialize(
+                        *(handle.get_raft_resources()), filename,
+                        *std::static_pointer_cast<ivf_pq_index>(it->second));
+                }
                 return std::any();
             }
         );
@@ -1668,6 +1686,11 @@ public:
                 // longer comment in cagra.hpp load_dir() for the failure mode.
                 raft::resource::sync_stream(*res);
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                // Mirror load(): count/dimension/current_offset_ must be set
+                // alongside index_, or search_async throws "index dimension is 0".
+                this->count           = static_cast<uint64_t>(local_idx->size());
+                this->dimension       = static_cast<uint32_t>(local_idx->dim());
+                this->current_offset_ = this->count;
                 index_ = std::move(local_idx);
                 return std::any();
             };
@@ -1685,6 +1708,12 @@ public:
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                    // Mirror load(): set count/dimension/current_offset_ on every
+                    // replica. submit_all_devices fans out, but each replica has the
+                    // same shape so the redundant writes converge on the same values.
+                    this->count           = static_cast<uint64_t>(local_idx->size());
+                    this->dimension       = static_cast<uint32_t>(local_idx->dim());
+                    this->current_offset_ = this->count;
                     this->replicated_indices_[handle.get_device_id()] =
                         std::shared_ptr<ivf_pq_index>(std::move(local_idx));
                     return std::any();
@@ -1704,6 +1733,10 @@ public:
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                    // dimension is identical across shards; each device sets it
+                    // (idempotent). count / current_offset_ are aggregate values
+                    // pulled from the manifest after submit, below.
+                    this->dimension = static_cast<uint32_t>(local_idx->dim());
                     this->replicated_indices_[handle.get_device_id()] =
                         std::shared_ptr<ivf_pq_index>(std::move(local_idx));
                     return std::any();

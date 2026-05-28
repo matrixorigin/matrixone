@@ -32,6 +32,8 @@ struct gpu_job_t {
     cudaStream_t stream;
     void* d_ptr;
     int device_id;
+    distance_type_t metric;  // needed by _wait to apply the InnerProduct sign flip
+                             // that the synchronous pairwise_distance applies inline
 };
 
 class gpu_job_mgr_t {
@@ -96,6 +98,8 @@ void gpu_pairwise_distance(const void* x,
 
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_pairwise_distance", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_pairwise_distance", "unknown C++ exception");
     }
 }
 
@@ -123,6 +127,7 @@ uint64_t gpu_pairwise_distance_launch(const void* x,
         job.stream = raft::resource::get_cuda_stream(res);
         job.d_ptr = nullptr;
         job.device_id = device_id;
+        job.metric = metric;
 
         // 2. Launch kernels asynchronously
         if (qtype == Quantization_F32) {
@@ -138,6 +143,9 @@ uint64_t gpu_pairwise_distance_launch(const void* x,
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_pairwise_distance_launch", e.what());
         return 0;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_pairwise_distance_launch", "unknown C++ exception");
+        return 0;
     }
 }
 
@@ -152,6 +160,17 @@ void gpu_pairwise_distance_wait(uint64_t job_id, void* errmsg) {
         // 1. Synchronize the stream to ensure copies are finished
         RAFT_CUDA_TRY(cudaStreamSynchronize(job.stream));
 
+        // 1b. Apply InnerProduct sign flip on the host buffer to match the
+        // synchronous pairwise_distance() contract (distance.hpp:179-183).
+        // cuVS returns raw IP; MO callers expect negated IP so that smaller
+        // distance == more similar (consistent with L2 ordering).
+        if (job.metric == DistanceType_InnerProduct && job.host_dist) {
+            uint64_t n = static_cast<uint64_t>(job.n_x) * static_cast<uint64_t>(job.n_y);
+            for (uint64_t i = 0; i < n; ++i) {
+                job.host_dist[i] *= -1.0f;
+            }
+        }
+
         // 2. Free device buffers.
         // cudaFreeAsync behaviour for cross-device callers is not guaranteed
         // across all driver versions, so explicitly set the correct device
@@ -164,6 +183,8 @@ void gpu_pairwise_distance_wait(uint64_t job_id, void* errmsg) {
         }
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_pairwise_distance_wait", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_pairwise_distance_wait", "unknown C++ exception");
     }
 }
 

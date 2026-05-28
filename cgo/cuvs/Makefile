@@ -43,7 +43,9 @@ NVCC_FLAGS := -O3 -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC -fopenmp -mar
     -gencode arch=compute_86,code=sm_86 \
     -gencode arch=compute_89,code=sm_89 \
     -gencode arch=compute_90,code=sm_90 \
-    -gencode arch=compute_90,code=compute_90
+    -gencode arch=compute_100,code=sm_100 \
+    -gencode arch=compute_120,code=sm_120 \
+    -gencode arch=compute_120,code=compute_120
 
 # LDFLAGS for linking only. DO NOT include -x cu here.
 # -fopenmp ensures the link driver pulls libgomp in when nvcc invokes g++ to
