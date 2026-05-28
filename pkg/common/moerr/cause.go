@@ -52,6 +52,7 @@ var (
 	CauseHeartbeat          = NewInternalError(context.Background(), "cn service heartbeat")
 	CauseCanClaimDaemonTask = NewInternalError(context.Background(), "canClaimDaemonTask")
 	CauseMergeObject        = NewInternalError(context.Background(), "merge object")
+	CauseRSSCacheEvict      = NewInternalError(context.Background(), "rss cache evict")
 	//pkg/common/morpc
 	CauseDeadlineContextCodec = NewInternalError(context.Background(), "morpc deadlineContextCodec")
 	CausePingPongMain         = NewInternalError(context.Background(), "morpc ping pong main")
@@ -75,6 +76,8 @@ var (
 	CauseNewAwsSDKv2     = NewInternalError(context.Background(), "fileservice newAwsSDKv2")
 	CauseReadCache       = NewInternalError(context.Background(), "fileservice read cache")
 	CauseRemoteCacheRead = NewInternalError(context.Background(), "fileservice remote cache read")
+	//pkg/vm/engine/disttae
+	CauseWorkspaceRSSCacheEvict = NewInternalError(context.Background(), "workspace rss cache evict")
 	//pkg/frontend
 	CauseRegisterCdc           = NewInternalError(context.Background(), "register cdc")
 	CauseInternalExecutorExec  = NewInternalError(context.Background(), "internal executor exec")
