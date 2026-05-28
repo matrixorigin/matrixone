@@ -31,4 +31,5 @@ func TestCagraPluginHookGetters(t *testing.T) {
 	require.NotNil(t, p.Catalog())
 	require.NotNil(t, p.Compile())
 	require.NotNil(t, p.Plan())
+	require.NotNil(t, p.Idxcron())
 }

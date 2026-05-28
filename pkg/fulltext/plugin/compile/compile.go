@@ -44,20 +44,19 @@ type Hooks struct{}
 
 // HandleCreateIndex is lifted from Scope.handleFullTextIndexTable
 // (pkg/sql/compile/ddl_index_algo.go:132). indexDefs is keyed by
-// IndexAlgoTableType — fulltext uses a single key,
-// catalog.FullTextIndex_TblType, so the map has exactly one entry.
+// IndexAlgoTableType — fulltext's BuildFullTextIndexDefs sets that to
+// the empty string (see plan/schema.go), so the map has exactly one
+// entry under the "" key.
 func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
 	if len(indexDefs) != 1 {
 		return moerr.NewInternalErrorNoCtx("invalid fulltext index table definition")
 	}
-	indexDef, ok := indexDefs[catalog.FullTextIndex_TblType]
-	if !ok {
-		// Fall back to the only entry — earlier inline paths used
-		// IndexAlgoTableType case-insensitively and some legacy code
-		// may pass an unkeyed map.
-		for _, def := range indexDefs {
-			indexDef = def
-		}
+	// Single-entry map — grab the sole value regardless of key. The
+	// dispatcher keys by catalog.ToLower(IndexAlgoTableType) which is
+	// "" for fulltext today, but we don't depend on that here.
+	var indexDef *plan.IndexDef
+	for _, def := range indexDefs {
+		indexDef = def
 	}
 
 	// 1. create the hidden table.

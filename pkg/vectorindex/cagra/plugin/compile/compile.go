@@ -103,8 +103,16 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 	if len(indexDefs) != 2 {
 		return moerr.NewInternalErrorNoCtx("invalid cagra index table definition")
 	}
-	if len(indexDefs[catalog.Cagra_TblType_Metadata].Parts) != 1 {
-		return moerr.NewInternalErrorNoCtx("invalid hnsw index part must be 1.")
+	metaDef, ok := indexDefs[catalog.Cagra_TblType_Metadata]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("cagra_meta index definition not found")
+	}
+	storageDef, ok := indexDefs[catalog.Cagra_TblType_Storage]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("cagra_index index definition not found")
+	}
+	if len(metaDef.Parts) != 1 {
+		return moerr.NewInternalErrorNoCtx("invalid cagra index part must be 1.")
 	}
 
 	if info := ctx.IndexInfo(); info != nil {
@@ -123,8 +131,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return nil
 	}
 
-	key := indexDefs[catalog.Cagra_TblType_Storage].IndexTableName
-	cache.Cache.Remove(key)
+	cache.Cache.Remove(storageDef.IndexTableName)
 
 	sqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
 	if err != nil {
@@ -141,7 +148,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return err
 	}
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexCagraAlgo.ToString())
-	indexName := indexDefs[catalog.Cagra_TblType_Metadata].IndexName
+	indexName := metaDef.IndexName
 
 	if forceSync {
 		// Background reindex: build cagra_create synchronously inside
@@ -162,7 +169,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 			indexName, sinkerType, true, "", originalTableDef); err != nil {
 			return err
 		}
-		return registerIdxcronUpdate(ctx, indexDefs[catalog.Cagra_TblType_Metadata], ctx.QryDatabase(), originalTableDef)
+		return registerIdxcronUpdate(ctx, metaDef, ctx.QryDatabase(), originalTableDef)
 	}
 
 	// Always-async path (CREATE INDEX, foreground reindex): defer the
@@ -179,7 +186,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		indexName, sinkerType, false, strings.Join(buildSqls, ";"), originalTableDef); err != nil {
 		return err
 	}
-	return registerIdxcronUpdate(ctx, indexDefs[catalog.Cagra_TblType_Metadata], ctx.QryDatabase(), originalTableDef)
+	return registerIdxcronUpdate(ctx, metaDef, ctx.QryDatabase(), originalTableDef)
 }
 
 // registerIdxcronUpdate writes the cron task's frozen-metadata row into

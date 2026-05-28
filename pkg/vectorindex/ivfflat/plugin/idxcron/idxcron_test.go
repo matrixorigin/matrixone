@@ -41,7 +41,7 @@ const oneWeek = 24 * 7 * time.Hour
 type updatableCase struct {
 	name      string
 	jstr      string
-	dsize     uint64
+	dsize     int64
 	nlists    int64
 	ts        types.Timestamp
 	createdAt types.Timestamp
@@ -182,8 +182,8 @@ func TestUpdatable(t *testing.T) {
 
 			stub := gostub.Stub(&RunGetCountSql, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 8, 0))
-				require.NoError(t, vector.AppendFixed[uint64](bat.Vecs[0], ta.dsize, false, mp))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+				require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], ta.dsize, false, mp))
 				bat.SetRowCount(1)
 				return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
 			})

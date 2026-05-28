@@ -20,10 +20,6 @@
 // plugins stub BuildFullTextIndexDefs; the fulltext plugin stubs
 // BuildSecondaryIndexDefs; the SQL-layer dispatch picks the right
 // hook by parse-tree type.
-//
-// Phase 1: BuildFullTextIndexDefs returns an error. Inline path at
-// pkg/sql/plan/build_ddl.go::buildFullTextIndexTable still handles
-// fulltext. Phase 3 will lift the body here.
 package plan
 
 import (

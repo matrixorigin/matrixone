@@ -133,7 +133,10 @@ func (Hooks) BuildFullTextIndexDefs(
 	}
 
 	// 5a. foreign primary key column (matches source table's PK type).
-	pkSrc := colMap[pkeyName]
+	pkSrc, ok := colMap[pkeyName]
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("primary key column not found for fulltext index")
+	}
 	tableDef.Cols = append(tableDef.Cols, &plan.ColDef{
 		Name: catalog.FullTextIndex_TabCol_Id,
 		Alg:  plan.CompressType_Lz4,

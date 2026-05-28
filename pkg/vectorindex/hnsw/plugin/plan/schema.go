@@ -63,7 +63,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "HNSW only supports VECF32 and VECF64 column types")
 		}
 		for _, existedIndex := range existedIndexes {
-			if existedIndex.IndexAlgo == "hnsw" && existedIndex.Parts[0] == name {
+			if existedIndex.IndexAlgo == catalog.MoIndexHnswAlgo.ToString() && existedIndex.Parts[0] == name {
 				return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple HNSW indexes are not allowed to use the same column")
 			}
 		}

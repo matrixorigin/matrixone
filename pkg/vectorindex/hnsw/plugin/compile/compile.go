@@ -73,7 +73,15 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 	if len(indexDefs) != 2 {
 		return moerr.NewInternalErrorNoCtx("invalid hnsw index table definition")
 	}
-	if len(indexDefs[catalog.Hnsw_TblType_Metadata].Parts) != 1 {
+	metaDef, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
+	}
+	storageDef, ok := indexDefs[catalog.Hnsw_TblType_Storage]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("hnsw_index index definition not found")
+	}
+	if len(metaDef.Parts) != 1 {
 		return moerr.NewInternalErrorNoCtx("invalid hnsw index part must be 1.")
 	}
 
@@ -93,8 +101,7 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 		return nil
 	}
 
-	key := indexDefs[catalog.Hnsw_TblType_Storage].IndexTableName
-	cache.Cache.Remove(key)
+	cache.Cache.Remove(storageDef.IndexTableName)
 
 	// delete old data first
 	sqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
@@ -107,17 +114,20 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 		}
 	}
 
-	async, err := catalog.IsIndexAsync(indexDefs[catalog.Hnsw_TblType_Metadata].IndexAlgoParams)
+	async, err := catalog.IsIndexAsync(metaDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
 
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
-	indexName := indexDefs[catalog.Hnsw_TblType_Metadata].IndexName
+	indexName := metaDef.IndexName
 
 	if !async {
 		// Build the index immediately, then register a CDC task that
-		// only consumes changes from now forward.
+		// only consumes changes from now forward. Drop any prior CDC
+		// task first — on REINDEX re-entry the previous task would
+		// otherwise survive at its old watermark and replay historical
+		// events on top of the freshly built state.
 		sqls, err := genBuildSQL(ctx, indexDefs)
 		if err != nil {
 			return err
@@ -126,6 +136,9 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 			if err = ctx.RunSql(sql); err != nil {
 				return err
 			}
+		}
+		if err := ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(), originalTableDef.Name, indexName); err != nil {
+			return err
 		}
 		return ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
 			indexName, sinkerType, true, "", originalTableDef)

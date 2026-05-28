@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	ivfpqruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -267,7 +268,7 @@ func TestIvfpqIdxcronMetadata_Background(t *testing.T) {
 func TestIvfpqIndexFlagConst(t *testing.T) {
 	// Sanity-check the gate constant matches the catalog string the
 	// HandleCreateIndex body checks against.
-	require.Equal(t, "experimental_ivfpq_index", "experimental_ivfpq_index")
+	require.Equal(t, "experimental_ivfpq_index", ivfpqruntime.IvfpqIndexFlag)
 }
 
 // experimentalFlagCtx wraps the stub to toggle IsExperimentalEnabled.

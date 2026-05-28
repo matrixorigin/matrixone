@@ -14,38 +14,17 @@
 
 // Package plugin is the fulltext index plugin registration point.
 //
-// # Phase 1 (current)
+// All four hook surfaces (catalog / compile / plan / idxcron) are
+// live: catalog hooks in runtime/, compile hooks in compile/, plan
+// hooks in plan/, idxcron hook in idxcron/. The plan-layer
+// BuildSecondaryIndexDefs returns an error by contract — fulltext is
+// reached via BuildFullTextIndexDefs instead, since CREATE FULLTEXT
+// INDEX parses to *tree.FullTextIndex, a distinct AST node from
+// *tree.Index.
 //
-// Skeleton landed. Catalog hooks (HiddenTableTypes, SyncDescriptor,
-// ShouldTruncateHiddenTable, …) are fully implemented in runtime/.
-// Compile and plan hooks are STUBS that return errors.
-//
-// The plugin IS registered with the global registry — but the inline
-// fulltext arms in pkg/sql/compile/ddl.go::CreateTable (line ~788)
-// and pkg/sql/plan/build_ddl.go::buildFullTextIndexTable still handle
-// the actual DDL. The fulltext-specific if-arms take precedence over
-// indexplugin.IsVectorIndexAlgo, so the stubs here never run.
-//
-// # Phase 2 — Compile lift
-//
-// Lift pkg/sql/compile/ddl_index_algo.go::handleFullTextIndexTable and
-// pkg/sql/compile/util.go::genInsertIndexTableSqlForFullTextIndex into
-// compile/compile.go. Route fulltext through the multiTableIndexes
-// loop alongside vector indexes.
-//
-// # Phase 3 — Plan lift
-//
-// Lift pkg/sql/plan/build_ddl.go::buildFullTextIndexTable into
-// plan/plan.go's BuildFullTextIndexDefs body. Switch the three
-// inline call sites in build_ddl.go to type-switch and dispatch via
-// the plugin's plan.Hooks. Collapse the remaining
-// catalog.IsFullTextIndexAlgo arms in non-DML dispatch chains.
-//
-// # Phase 4 — DML lift (deferred)
-//
-// Out of scope. buildPreInsertFullTextIndex etc. in
-// pkg/sql/plan/build_dml_util.go stay inline until a DML plugin
-// surface (pre/post insert/delete) is added.
+// DML hooks (preinsert / postinsert / delete) remain inline in
+// pkg/sql/plan/build_dml_util.go; the plugin framework does not yet
+// expose a DML hook surface.
 package plugin
 
 import (
@@ -88,8 +67,5 @@ func (p *Plugin) Idxcron() idxcronplugin.Hooks { return p.idxcronHooks }
 // Compile-time check that *Plugin satisfies the AlgoPlugin interface.
 var _ plugin.AlgoPlugin = (*Plugin)(nil)
 
-// init registers fulltext with the global plugin registry. Compile +
-// plan hooks are Phase 1 stubs — the inline arms in pkg/sql/compile
-// and pkg/sql/plan continue to drive fulltext DDL until Phases 2 and
-// 3 lift them.
+// init registers fulltext with the global plugin registry.
 func init() { plugin.Register(New()) }

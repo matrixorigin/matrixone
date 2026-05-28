@@ -144,7 +144,15 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 	if len(indexDefs) != 2 {
 		return moerr.NewInternalErrorNoCtx("invalid ivfpq index table definition")
 	}
-	if len(indexDefs[catalog.Ivfpq_TblType_Metadata].Parts) != 1 {
+	metaDef, ok := indexDefs[catalog.Ivfpq_TblType_Metadata]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("ivfpq_meta index definition not found")
+	}
+	storageDef, ok := indexDefs[catalog.Ivfpq_TblType_Storage]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("ivfpq_index index definition not found")
+	}
+	if len(metaDef.Parts) != 1 {
 		return moerr.NewInternalErrorNoCtx("invalid ivfpq index part must be 1.")
 	}
 
@@ -166,8 +174,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 	}
 
 	// 3. clear the cache
-	key := indexDefs[catalog.Ivfpq_TblType_Storage].IndexTableName
-	cache.Cache.Remove(key)
+	cache.Cache.Remove(storageDef.IndexTableName)
 
 	// 4. delete old data first
 	sqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
@@ -188,7 +195,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return err
 	}
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexIvfpqAlgo.ToString())
-	indexName := indexDefs[catalog.Ivfpq_TblType_Metadata].IndexName
+	indexName := metaDef.IndexName
 
 	if forceSync {
 		// Background reindex: build ivfpq_create synchronously inside
@@ -207,7 +214,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 			indexName, sinkerType, true, "", originalTableDef); err != nil {
 			return err
 		}
-		return registerIdxcronUpdate(ctx, indexDefs[catalog.Ivfpq_TblType_Metadata], ctx.QryDatabase(), originalTableDef)
+		return registerIdxcronUpdate(ctx, metaDef, ctx.QryDatabase(), originalTableDef)
 	}
 
 	// Always-async path: defer ivfpq_create to the CDC pipeline's
@@ -285,6 +292,14 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*pl
 
 // IdxcronMetadata pins IVF-PQ's build-time params into the cron task's
 // metadata blob — see CAGRA's compile.go for the rationale.
+// kmeans_train_percent is consumed at rebuild time by the cuvs
+// ivfpq_create table function (pkg/sql/colexec/table_function/
+// ivfpq_create_gpu.go:310 — read via proc.GetResolveVariableFunc),
+// so it must be pinned here for the value the user picked at
+// CREATE INDEX to survive into the cron-triggered rebuild.
+// kmeans_max_iteration is captured for parity with kmeans_train_percent
+// and to future-proof against a downstream cuvs ivfpq_create that
+// consumes it.
 func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 	logutil.Infof("[plugin] ivfpq IdxcronMetadata: isFrontend=%v", ctx.IsFrontend())
 	return compileplugin.BuildIdxcronMetadata(ctx, compileplugin.IdxcronVarSpec{

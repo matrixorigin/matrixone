@@ -36,16 +36,20 @@ func (Hooks) BuildSecondaryIndexDefs(
 ) ([]*plan.IndexDef, []*plan.TableDef, error) {
 
 	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
-		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for hnsw index")
+		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for cagra index")
 	}
-	if colMap[pkeyName].Typ.Id != int32(types.T_int64) {
+	pk, ok := colMap[pkeyName]
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("primary key column not found for cagra index")
+	}
+	if pk.Typ.Id != int32(types.T_int64) {
 		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be int64")
 	}
 
 	indexParts := make([]string, 1)
 	{
 		if len(indexInfo.KeyParts) != 1 {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "don't support multi column  CAGRA vector index")
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "don't support multi column CAGRA vector index")
 		}
 		name := indexInfo.KeyParts[0].ColName.ColName()
 		indexParts[0] = name
@@ -56,7 +60,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Cagra only supports VECF32 column types")
 		}
 		for _, existedIndex := range existedIndexes {
-			if existedIndex.IndexAlgo == "cagra" && existedIndex.Parts[0] == name {
+			if existedIndex.IndexAlgo == catalog.MoIndexCagraAlgo.ToString() && existedIndex.Parts[0] == name {
 				return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple CAGRA indexes are not allowed to use the same column")
 			}
 		}

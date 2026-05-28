@@ -47,7 +47,7 @@ var _ iscppkg.Hooks = Hooks{}
 // vector column type.
 func (Hooks) NewSqlWriter(jobID iscppkg.JobID, info *iscppkg.ConsumerInfo,
 	tabledef *plan.TableDef, indexdefs []*plan.IndexDef) (iscppkg.IndexSqlWriter, error) {
-	return iscppkg.NewHnswSqlWriter("hnsw", jobID, info, tabledef, indexdefs)
+	return iscppkg.NewHnswSqlWriter(catalog.MoIndexHnswAlgo.ToString(), jobID, info, tabledef, indexdefs)
 }
 
 // Run dispatches to the right RunHnsw[T] specialization based on the

@@ -51,7 +51,7 @@ var _ iscppkg.Hooks = Hooks{}
 
 func (Hooks) NewSqlWriter(jobID iscppkg.JobID, info *iscppkg.ConsumerInfo,
 	tabledef *plan.TableDef, indexdefs []*plan.IndexDef) (iscppkg.IndexSqlWriter, error) {
-	return iscppkg.NewCuvsCdcWriter("cagra", info.DBName, info.TableName, info.IndexName,
+	return iscppkg.NewCuvsCdcWriter(catalog.MoIndexCagraAlgo.ToString(), info.DBName, info.TableName, info.IndexName,
 		tabledef, indexdefs)
 }
 

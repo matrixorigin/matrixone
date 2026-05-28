@@ -54,7 +54,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 		return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IVFFLAT only supports VECFXX column types")
 	}
 	for _, existedIndex := range existedIndexes {
-		if existedIndex.IndexAlgo == "ivfflat" && existedIndex.Parts[0] == name {
+		if existedIndex.IndexAlgo == catalog.MoIndexIvfFlatAlgo.ToString() && existedIndex.Parts[0] == name {
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple IVFFLAT indexes are not allowed to use the same column")
 		}
 	}

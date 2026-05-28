@@ -306,6 +306,16 @@ func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname stri
 			err = mErr
 			return
 		}
+		// IsFrontend gate above covers the background re-entry case, but
+		// BuildIdxcronMetadata can also return nil in frontend mode when
+		// FrontendProbeVar resolves to nil (sub-Compile inheriting a
+		// partial frontend resolver, e.g. CREATE TABLE CLONE). Passing
+		// "" to RegisterUpdate would trip mo_index_update.metadata's
+		// JSON NOT NULL — mirror the per-plugin registerIdxcronUpdate
+		// guard and skip.
+		if len(metadata) == 0 {
+			continue
+		}
 
 		idxmap[idx.IndexName] = true
 		err = idxcron.RegisterUpdate(c.proc.Ctx,

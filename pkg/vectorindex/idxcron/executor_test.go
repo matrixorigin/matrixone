@@ -48,7 +48,7 @@ import (
 
 type TestTask struct {
 	jstr      string
-	dsize     uint64
+	dsize     int64
 	nlists    int64
 	ts        types.Timestamp
 	createdAt types.Timestamp
@@ -66,7 +66,7 @@ func getTestCases(t *testing.T) []TestTask {
         "kmeans_max_iteration":{"t":"I", "v":4},
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
-			dsize:     uint64(100),
+			dsize:     int64(100),
 			nlists:    int64(1000),
 			ts:        types.UnixToTimestamp(0),
 			createdAt: types.UnixToTimestamp(time.Now().Unix()),
@@ -81,7 +81,7 @@ func getTestCases(t *testing.T) []TestTask {
         "kmeans_max_iteration":{"t":"I", "v":4},
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
-			dsize:     uint64(1000000),
+			dsize:     int64(1000000),
 			nlists:    int64(1000),
 			ts:        types.UnixToTimestamp(0),
 			createdAt: types.UnixToTimestamp(time.Now().Unix()),
@@ -95,7 +95,7 @@ func getTestCases(t *testing.T) []TestTask {
         "kmeans_max_iteration":{"t":"I", "v":4},
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
-			dsize:     uint64(1000000),
+			dsize:     int64(1000000),
 			nlists:    int64(1000),
 			ts:        types.UnixToTimestamp(0),
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
@@ -109,7 +109,7 @@ func getTestCases(t *testing.T) []TestTask {
 	"kmeans_max_iteration":{"t":"I", "v":4},
 	"ivf_threads_build":{"t":"I", "v":8}
 	}}`,
-			dsize:    uint64(1000000),
+			dsize:    int64(1000000),
 			nlists:   int64(1000),
 			ts:       types.UnixToTimestamp(0),
 			hour:     3,
@@ -122,7 +122,7 @@ func getTestCases(t *testing.T) []TestTask {
         "kmeans_max_iteration":{"t":"I", "v":4},
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
-			dsize:     uint64(1000000),
+			dsize:     int64(1000000),
 			nlists:    int64(1000),
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
@@ -140,7 +140,7 @@ func getTestCases(t *testing.T) []TestTask {
         "kmeans_max_iteration":{"t":"I", "v":4},
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
-			dsize:     uint64(1000000),
+			dsize:     int64(1000000),
 			nlists:    int64(1000),
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
@@ -158,7 +158,7 @@ func getTestCases(t *testing.T) []TestTask {
         "kmeans_max_iteration":{"t":"I", "v":4},
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
-			dsize:     uint64(10000000),
+			dsize:     int64(10000000),
 			nlists:    int64(1000),
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
@@ -176,7 +176,7 @@ func getTestCases(t *testing.T) []TestTask {
         "kmeans_max_iteration":{"t":"I", "v":4},
         "ivf_threads_build":{"t":"I", "v":8}
         }}`,
-			dsize:     uint64(10000000),
+			dsize:     int64(10000000),
 			nlists:    int64(1000),
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
@@ -190,7 +190,7 @@ func getTestCases(t *testing.T) []TestTask {
 		},
 		{
 			jstr:      "",
-			dsize:     uint64(10000000),
+			dsize:     int64(10000000),
 			nlists:    int64(1000),
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
@@ -204,7 +204,7 @@ func getTestCases(t *testing.T) []TestTask {
 		},
 		{
 			jstr:      "",
-			dsize:     uint64(10000000),
+			dsize:     int64(10000000),
 			nlists:    int64(1000),
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
 			ts: func() types.Timestamp {
@@ -396,8 +396,8 @@ func TestIvfflatReindex(t *testing.T) {
 
 			stub2 := gostub.Stub(&ivfflatidxcron.RunGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 8, 0))
-				vector.AppendFixed[uint64](bat.Vecs[0], ta.dsize, false, mp)
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+				vector.AppendFixed[int64](bat.Vecs[0], ta.dsize, false, mp)
 				bat.SetRowCount(1)
 				return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
 
@@ -476,8 +476,8 @@ func TestIvfflatReindexAutoUpdateOff(t *testing.T) {
 
 			stub2 := gostub.Stub(&ivfflatidxcron.RunGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 8, 0))
-				vector.AppendFixed[uint64](bat.Vecs[0], ta.dsize, false, mp)
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+				vector.AppendFixed[int64](bat.Vecs[0], ta.dsize, false, mp)
 				bat.SetRowCount(1)
 				return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
 
@@ -529,8 +529,8 @@ func TestExecutorRunFakeTasks(t *testing.T) {
 	// runGetCountSql
 	stub2 := gostub.Stub(&ivfflatidxcron.RunGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 8, 0))
-		vector.AppendFixed[uint64](bat.Vecs[0], uint64(1000000), false, mp)
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+		vector.AppendFixed[int64](bat.Vecs[0], int64(1000000), false, mp)
 		bat.SetRowCount(1)
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
 
@@ -614,8 +614,8 @@ func TestExecutorRunFull(t *testing.T) {
 	// runGetCountSql
 	stub2 := gostub.Stub(&ivfflatidxcron.RunGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 8, 0))
-		vector.AppendFixed[uint64](bat.Vecs[0], uint64(1000000), false, mp)
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+		vector.AppendFixed[int64](bat.Vecs[0], int64(1000000), false, mp)
 		bat.SetRowCount(1)
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
 

@@ -132,7 +132,20 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 	// 1. static check
 	if len(indexDefs) != 3 {
 		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")
-	} else if len(indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].Parts) != 1 {
+	}
+	metaDef, ok := indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("ivfflat metadata index definition not found")
+	}
+	centroidsDef, ok := indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("ivfflat centroids index definition not found")
+	}
+	entriesDef, ok := indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("ivfflat entries index definition not found")
+	}
+	if len(metaDef.Parts) != 1 {
 		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")
 	}
 
@@ -154,10 +167,6 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 	if ctx.IsCCPRTaskTransaction() && ctx.IsTableFromPublication(originalTableDef) {
 		return nil
 	}
-
-	metaDef := indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
-	centroidsDef := indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids]
-	entriesDef := indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries]
 
 	async, err := catalog.IsIndexAsync(metaDef.IndexAlgoParams)
 	if err != nil {
@@ -215,7 +224,14 @@ func indexColCount(ctx compileplugin.CompileContext, indexDef *plan.IndexDef,
 	defer rs.Close()
 	var n int64
 	rs.ReadRows(func(_ int, cols []*vector.Vector) bool {
-		n = executor.GetFixedRows[int64](cols[0])[0]
+		if len(cols) == 0 {
+			return false
+		}
+		rows := executor.GetFixedRows[int64](cols[0])
+		if len(rows) == 0 {
+			return false
+		}
+		n = rows[0]
 		return false
 	})
 	return n, nil

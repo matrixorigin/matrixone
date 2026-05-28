@@ -82,7 +82,7 @@ func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (ok bool, reason string,
 
 	// Fewer source rows than clusters — k-means can't form a
 	// non-degenerate index, so skip and let brute-force handle queries.
-	if dsize < uint64(nlist) {
+	if dsize < nlist {
 		return false, fmt.Sprintf("source data size < Nlist (%d < %d)", dsize, nlist), nil
 	}
 
@@ -146,7 +146,9 @@ func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (ok bool, reason string,
 // lookupNlist reads the "lists" key from the named index's
 // indexAlgoParams. Returns 0 (not an error) when the key is absent
 // or the index isn't found — the caller surfaces missing-LISTS as a
-// task error to match the executor's historical behaviour.
+// task error to match the executor's historical behaviour. A
+// malformed JSON value for the lists key is surfaced as an error
+// rather than silently treated as "missing".
 func lookupNlist(indexes []*plan.IndexDef, indexName string) (int64, error) {
 	for _, idx := range indexes {
 		if idx.IndexName != indexName {
@@ -162,8 +164,11 @@ func lookupNlist(indexes []*plan.IndexDef, indexName string) (int64, error) {
 }
 
 // countSourceRows runs the SELECT COUNT(*) used to drive the
-// nsample heuristic. Returns 0 on an empty/absent result.
-func countSourceRows(sqlproc *sqlexec.SqlProcess, dbName, tableName string) (uint64, error) {
+// nsample heuristic. Returns 0 on an empty/absent result. COUNT
+// aggregates are registered as types.T_int64 (see
+// pkg/sql/plan/function/list_agg.go), so the result vector is int64;
+// reading it as uint64 would panic the type check.
+func countSourceRows(sqlproc *sqlexec.SqlProcess, dbName, tableName string) (int64, error) {
 	sql := fmt.Sprintf("SELECT COUNT(*) FROM `%s`.`%s`", dbName, tableName)
 	res, err := RunGetCountSql(sqlproc, sql)
 	if err != nil {
@@ -178,5 +183,5 @@ func countSourceRows(sqlproc *sqlexec.SqlProcess, dbName, tableName string) (uin
 	if bat.RowCount() == 0 {
 		return 0, nil
 	}
-	return vector.GetFixedAtWithTypeCheck[uint64](bat.Vecs[0], 0), nil
+	return vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0), nil
 }

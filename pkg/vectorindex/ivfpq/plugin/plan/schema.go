@@ -61,7 +61,11 @@ func (Hooks) BuildSecondaryIndexDefs(
 	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
 		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for ivfpq index")
 	}
-	if colMap[pkeyName].Typ.Id != int32(types.T_int64) {
+	pk, ok := colMap[pkeyName]
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("primary key column not found for ivfpq index")
+	}
+	if pk.Typ.Id != int32(types.T_int64) {
 		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be int64")
 	}
 
@@ -81,7 +85,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IvfPQ only supports VECF32 column types")
 		}
 		for _, existedIndex := range existedIndexes {
-			if existedIndex.IndexAlgo == "ivfpq" && existedIndex.Parts[0] == name {
+			if existedIndex.IndexAlgo == catalog.MoIndexIvfpqAlgo.ToString() && existedIndex.Parts[0] == name {
 				return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple IVFPQ indexes are not allowed to use the same column")
 			}
 		}
