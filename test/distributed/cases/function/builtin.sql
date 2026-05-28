@@ -509,6 +509,13 @@ select greatest(i, j, k), least(i, j, k) from testt order by least(i, j, k) limi
 select greatest(i, j, t), least(i, j, t) from testt order by greatest(i, j, k) limit 2;
 select max(greatest(d1, d2)), max(least(d1, d2)) from testt;
 select count(*) from testt where greatest(ts1, ts2) = least(ts1, ts3);
+select greatest(null, 1);
+select greatest(1, null);
+select least(null, 1);
+select least(1, null);
+select greatest(null, null);
+select greatest(i, null) from testt limit 2;
+select least(null, i) from testt limit 2;
 drop table testt;
 
 drop database test01;

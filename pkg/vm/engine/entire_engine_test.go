@@ -363,6 +363,10 @@ func (o *testOperator) SnapshotTS() timestamp.Timestamp {
 	panic("should not call")
 }
 
+func (o *testOperator) SetSnapshotTS(ts timestamp.Timestamp) {
+	panic("should not call")
+}
+
 func (o *testOperator) CreateTS() timestamp.Timestamp {
 	panic("should not call")
 }

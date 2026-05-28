@@ -58,6 +58,36 @@ func mixedStringNumericToVarchar(source []types.Type) (types.Type, bool) {
 	return types.Type{}, false
 }
 
+func needDecimalMetadataCast(source []types.Type, target types.Type) bool {
+	if !target.Oid.IsDecimal() {
+		return false
+	}
+	for i := range source {
+		if source[i].Oid != target.Oid {
+			return true
+		}
+		if source[i].Scale != target.Scale || source[i].Width != target.Width {
+			return true
+		}
+	}
+	return false
+}
+
+func requireDecimalReturn(source []types.Type) bool {
+	hasDecimal := false
+	for i := range source {
+		if source[i].Oid.IsDecimal() {
+			hasDecimal = true
+			continue
+		}
+		if source[i].IsIntOrUint() {
+			continue
+		}
+		return false
+	}
+	return hasDecimal
+}
+
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
 func caseCheck(_ []overload, inputs []types.Type) checkResult {
 	l := len(inputs)
@@ -133,8 +163,12 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 
 		target := make([]types.T, len(source))
+		decimalReturnRequired := requireDecimalReturn(source)
 
 		for _, rett := range retOperatorCaseSupports {
+			if decimalReturnRequired && !rett.IsDecimal() {
+				continue
+			}
 			for i := range target {
 				target[i] = rett
 			}
@@ -143,33 +177,36 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 				continue
 			}
 			if cost < minCost {
-				minCost = cost
 				retType = rett.ToType()
 				if retType.Oid.IsDecimal() {
-					setMaxScaleFromSource(&retType, source)
+					if !setSafeDecimalWidthAndScaleFromSource(&retType, source) {
+						continue
+					}
 				} else if retType.Oid.IsMySQLString() {
 					setMaxWidthFromSource(&retType, source)
 				}
+				minCost = cost
 			}
 		}
 		if minCost == math.MaxInt32 {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
-		if minCost == 0 && !needCast && !retType.Oid.IsMySQLString() {
-			return newCheckResultWithSuccess(0)
-		}
-
 		finalTypes := make([]types.Type, len(inputs))
+		shouldCast := needCast || retType.Oid.IsMySQLString() || needDecimalMetadataCast(source, retType)
 		for i := range finalTypes {
-			if i%2 == 0 {
+			if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
 				finalTypes[i] = types.T_bool.ToType()
 			} else {
 				finalTypes[i] = retType
 			}
+			if finalTypes[i].Oid != inputs[i].Oid {
+				shouldCast = true
+			}
 		}
-		if len(inputs)%2 == 1 {
-			finalTypes[len(finalTypes)-1] = retType
+		if !shouldCast {
+			return newCheckResultWithSuccess(0)
 		}
+
 		return newCheckResultWithCast(0, finalTypes)
 	}
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -383,7 +420,11 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 		retType := types.Type{}
 
 		target := make([]types.T, 2)
+		decimalReturnRequired := requireDecimalReturn(source)
 		for _, rett := range retOperatorIffSupports {
+			if decimalReturnRequired && !rett.IsDecimal() {
+				continue
+			}
 			target[0], target[1] = rett, rett
 
 			c, cost := tryToMatch(source, target)
@@ -391,23 +432,32 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 				continue
 			}
 			if cost < minCost {
-				minCost = cost
 				retType = rett.ToType()
 				if retType.Oid.IsDecimal() {
-					setMaxScaleFromSource(&retType, source)
+					if !setSafeDecimalWidthAndScaleFromSource(&retType, source) {
+						continue
+					}
 				} else if retType.Oid.IsMySQLString() {
 					setMaxWidthFromSource(&retType, source)
 				}
+				minCost = cost
 			}
 		}
 
 		if minCost == math.MaxInt32 {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
-		if minCost == 0 && !needCast && !retType.Oid.IsMySQLString() {
+		finalTypes := []types.Type{types.T_bool.ToType(), retType, retType}
+		shouldCast := needCast || retType.Oid.IsMySQLString() || needDecimalMetadataCast(source, retType)
+		for i := range inputs {
+			if inputs[i].Oid != finalTypes[i].Oid {
+				shouldCast = true
+			}
+		}
+		if !shouldCast {
 			return newCheckResultWithSuccess(0)
 		}
-		return newCheckResultWithCast(0, []types.Type{types.T_bool.ToType(), retType, retType})
+		return newCheckResultWithCast(0, finalTypes)
 	}
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
