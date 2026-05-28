@@ -930,9 +930,22 @@ func getTableStuff(
 	tarTblDef = tblStuff.tarRel.GetTableDef(ctx)
 	baseTblDef = tblStuff.baseRel.GetTableDef(ctx)
 
-	if !isSchemaEquivalent(tarTblDef, baseTblDef) {
-		err = moerr.NewInternalErrorNoCtx("the target table schema is not equivalent to the base table.")
+	var commonIdxes, tarOnlyIdxes []int
+	if commonIdxes, tarOnlyIdxes, err = checkSchemaCompatibility(tarTblDef, baseTblDef); err != nil {
 		return
+	}
+	tblStuff.def.commonIdxes = commonIdxes
+	tblStuff.def.tarOnlyIdxes = tarOnlyIdxes
+
+	// Build baseColToTarIdx: for each physical base column, find the matching target column index.
+	tblStuff.def.baseColToTarIdx = make([]int, len(baseTblDef.Cols))
+	for i := range tblStuff.def.baseColToTarIdx {
+		tblStuff.def.baseColToTarIdx[i] = -1
+	}
+	for i, baseCol := range baseTblDef.Cols {
+		if tarColIdx, ok := tarTblDef.Name2ColIndex[strings.ToLower(baseCol.Name)]; ok {
+			tblStuff.def.baseColToTarIdx[i] = int(tarColIdx)
+		}
 	}
 
 	if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
@@ -1071,38 +1084,68 @@ func diffOnBase(
 	return
 }
 
-func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
-	if len(leftDef.Cols) != len(rightDef.Cols) {
-		return false
+func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, tarOnlyIdxes []int, err error) {
+	// Build a map from lowercase base column name to *ColDef.
+	baseColMap := make(map[string]*plan.ColDef, len(baseDef.Cols))
+	for _, col := range baseDef.Cols {
+		baseColMap[strings.ToLower(col.Name)] = col
 	}
 
-	for i := range leftDef.Cols {
-		if leftDef.Cols[i].ColId != rightDef.Cols[i].ColId {
-			return false
+	// Iterate over target columns to find common and target-only columns.
+	for i, tarCol := range tarDef.Cols {
+		if tarCol.Name == catalog.Row_ID ||
+			tarCol.Name == catalog.FakePrimaryKeyColName ||
+			tarCol.Name == catalog.CPrimaryKeyColName {
+			continue
 		}
 
-		if leftDef.Cols[i].Typ.Id != rightDef.Cols[i].Typ.Id {
-			return false
-		}
-
-		if leftDef.Cols[i].ClusterBy != rightDef.Cols[i].ClusterBy {
-			return false
-		}
-
-		if leftDef.Cols[i].Primary != rightDef.Cols[i].Primary {
-			return false
-		}
-
-		if leftDef.Cols[i].Seqnum != rightDef.Cols[i].Seqnum {
-			return false
-		}
-
-		if leftDef.Cols[i].NotNull != rightDef.Cols[i].NotNull {
-			return false
+		baseCol, found := baseColMap[strings.ToLower(tarCol.Name)]
+		if found {
+			if baseCol.Typ.Id == tarCol.Typ.Id {
+				commonIdxes = append(commonIdxes, i)
+			} else {
+				err = moerr.NewInternalErrorNoCtxf(
+					"schema compatibility check: column '%s' exists in both schemas but has different types (target: %d, base: %d)",
+					tarCol.Name, tarCol.Typ.Id, baseCol.Typ.Id,
+				)
+				return
+			}
+		} else {
+			tarOnlyIdxes = append(tarOnlyIdxes, i)
 		}
 	}
 
-	return true
+	// Verify PK columns exist in common columns.
+	commonColNameSet := make(map[string]bool, len(commonIdxes))
+	for _, idx := range commonIdxes {
+		commonColNameSet[strings.ToLower(tarDef.Cols[idx].Name)] = true
+	}
+
+	if baseDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		// For fake PK tables, the PK column is generated from all columns.
+		// No specific PK name to verify.
+	} else if baseDef.Pkey.CompPkeyCol != nil {
+		for _, pkName := range baseDef.Pkey.Names {
+			if !commonColNameSet[strings.ToLower(pkName)] {
+				err = moerr.NewInternalErrorNoCtxf(
+					"schema compatibility check: composite primary key column '%s' is not present in common columns",
+					pkName,
+				)
+				return
+			}
+		}
+	} else {
+		pkName := baseDef.Pkey.PkeyColName
+		if !commonColNameSet[strings.ToLower(pkName)] {
+			err = moerr.NewInternalErrorNoCtxf(
+				"schema compatibility check: primary key column '%s' is not present in common columns",
+				pkName,
+			)
+			return
+		}
+	}
+
+	return
 }
 
 func getRelationById(

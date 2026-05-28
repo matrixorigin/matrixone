@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -714,4 +716,187 @@ func TestValidateOutputDirPath(t *testing.T) {
 		err := validateOutputDirPath(ctx, ses, "s3-opts,endpoint=http://127.0.0.1:65535,region=us-east-1,bucket=b,key=k,secret=s,prefix=tmp:")
 		require.Error(t, err)
 	})
+}
+
+func TestCheckSchemaCompatibility_Identical(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	commonIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Empty(t, tarOnlyIdxes)
+}
+
+func TestCheckSchemaCompatibility_ExtraColumnOnTarget(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "c", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	commonIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{2}, tarOnlyIdxes)
+}
+
+func TestCheckSchemaCompatibility_PKChanged(t *testing.T) {
+	// base has PK on column "a" which is also in target, so it passes.
+	// We need a case where the BASE's PK column does NOT exist in target.
+	// Target has different columns entirely, so base PK "a" is missing from common.
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"x"},
+			PkeyColName: "x",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "x", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "y", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	_, _, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "primary key column")
+}
+
+func TestCheckSchemaCompatibility_TypeMismatch(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_varchar)}}, // varchar in target
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}}, // int in base
+		},
+	}
+
+	_, _, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "has different types")
+}
+
+func TestCheckSchemaCompatibility_CompositePK(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a", "b"},
+			PkeyColName: "__cpkey__",
+			CompPkeyCol: &plan.ColDef{Name: "__cpkey__"},
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "c", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a", "b"},
+			PkeyColName: "__cpkey__",
+			CompPkeyCol: &plan.ColDef{Name: "__cpkey__"},
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	commonIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{2}, tarOnlyIdxes)
+}
+
+func TestCheckSchemaCompatibility_FakePK(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: catalog.FakePrimaryKeyColName,
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "c", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: catalog.FakePrimaryKeyColName,
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	commonIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{2}, tarOnlyIdxes)
 }
