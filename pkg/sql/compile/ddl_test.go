@@ -1185,6 +1185,10 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	txnOp.EXPECT().SetSnapshotTS(timestamp.Timestamp{}).Do(
+		func(ts timestamp.Timestamp) {
+			txnMeta.SnapshotTS = ts
+		}).Times(1)
 	txnOp.EXPECT().TxnRef().Return(&txnMeta).AnyTimes()
 	txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 	proc.Base.TxnOperator = txnOp
@@ -1259,6 +1263,10 @@ func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	txnOp.EXPECT().SetSnapshotTS(timestamp.Timestamp{}).Do(
+		func(ts timestamp.Timestamp) {
+			txnMeta.SnapshotTS = ts
+		}).Times(1)
 	txnOp.EXPECT().TxnRef().Return(&txnMeta).AnyTimes()
 	txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 	proc.Base.TxnOperator = txnOp
