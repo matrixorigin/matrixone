@@ -16,7 +16,7 @@ PWD=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 UNAME_S=$(shell uname -s | tr A-Z a-z)
 UNAME_M=$(shell uname -m)
 USEARCH_DIR=_usearch_build
-USEARCH_TAR=usearch-2.23.0.tar.gz
+USEARCH_TAR=usearch-2.25.3.tar.gz
 STRINGZILLA_DIR=StringZilla-4.2.1
 STRINGZILLA_TAR=$(STRINGZILLA_DIR).tar.gz
 SIMSIMD_DIR=SimSIMD-6.5.3
@@ -84,6 +84,7 @@ install/include/usearch.h:
 	rm -rf $(USEARCH_DIR)
 	mkdir -p $(USEARCH_DIR)
 	tar zxvf $(USEARCH_TAR) -C $(USEARCH_DIR) --strip-components=1
+	mkdir -p $(USEARCH_DIR)/fp16 $(USEARCH_DIR)/simsimd $(USEARCH_DIR)/stringzilla
 	cp -r $(FP16_DIR)/* $(USEARCH_DIR)/fp16
 	cp -r $(SIMSIMD_DIR)/* $(USEARCH_DIR)/simsimd
 	cp -r $(STRINGZILLA_DIR)/* $(USEARCH_DIR)/stringzilla
