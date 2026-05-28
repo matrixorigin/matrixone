@@ -273,18 +273,17 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 			shouldEvictCache = true
 		}
 	}
-	m.rssScavengeMu.Unlock()
 
-	if shouldClearCacheTarget && m.options.rssCacheTargetClearer != nil &&
-		m.isRSSPressureGenerationCurrent(generation, nextState) {
+	if shouldClearCacheTarget && m.options.rssCacheTargetClearer != nil {
 		m.options.rssCacheTargetClearer()
 	}
-	if shouldSetCacheTarget && m.isRSSPressureGenerationCurrent(generation, nextState) {
+	if shouldSetCacheTarget {
 		if resetCacheTargetFirst && m.options.rssCacheTargetClearer != nil {
 			m.options.rssCacheTargetClearer()
 		}
 		m.options.rssCacheTargetSetter(cacheTargetPercent)
 	}
+	m.rssScavengeMu.Unlock()
 
 	needFreeOSMemory := nextState != rssPressureNone &&
 		float64(visible) < float64(rss)*rssScavengeVisibleRate
@@ -328,14 +327,6 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 	if shouldFreeOSMemory {
 		freeOSMemory()
 	}
-}
-
-func (m *memThrottler) isRSSPressureGenerationCurrent(
-	generation int64,
-	state rssPressureState,
-) bool {
-	return m.rssPressureGen.Load() == generation &&
-		rssPressureState(m.rssPressureState.Load()) == state
 }
 
 func nextRSSPressureState(prev rssPressureState, rssRate float64) rssPressureState {

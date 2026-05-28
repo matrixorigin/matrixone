@@ -38,15 +38,25 @@ type MemCache struct {
 var memCacheCallbackSeed = maphash.MakeSeed()
 
 var (
-	memCachePressureMu            sync.Mutex
-	memCachePressureTargetPercent atomic.Int64
-	memCachePressureDeadline      atomic.Int64
+	memCachePressureMu                sync.Mutex
+	memCachePressureTargets           = make(map[string]memCachePressureTargetState)
+	memCachePressureEffectivePercent  atomic.Int64
+	memCachePressureEffectiveDeadline atomic.Int64
 )
 
+type memCachePressureTargetState struct {
+	percent  int64
+	deadline int64
+}
+
 func SetMemoryCachePressureTargetPercent(percent int64, until time.Time) {
+	SetMemoryCachePressureTargetPercentByOwner("", percent, until)
+}
+
+func SetMemoryCachePressureTargetPercentByOwner(owner string, percent int64, until time.Time) {
 	now := time.Now()
 	if percent <= 0 || !until.After(now) {
-		ClearMemoryCachePressureTarget()
+		ClearMemoryCachePressureTargetByOwner(owner)
 		return
 	}
 	if percent > 100 {
@@ -56,19 +66,30 @@ func SetMemoryCachePressureTargetPercent(percent int64, until time.Time) {
 	memCachePressureMu.Lock()
 	defer memCachePressureMu.Unlock()
 
-	oldDeadline := memCachePressureDeadline.Load()
-	oldPercent := memCachePressureTargetPercent.Load()
+	old := memCachePressureTargets[owner]
+	oldDeadline := old.deadline
+	oldPercent := old.percent
 	if oldDeadline > now.UnixNano() && oldPercent > 0 && oldPercent < percent {
 		return
 	}
-	memCachePressureTargetPercent.Store(percent)
-	memCachePressureDeadline.Store(until.UnixNano())
+	memCachePressureTargets[owner] = memCachePressureTargetState{
+		percent:  percent,
+		deadline: until.UnixNano(),
+	}
+	recomputeMemoryCachePressureTargetLocked(now.UnixNano())
 }
 
 func ClearMemoryCachePressureTarget() {
 	memCachePressureMu.Lock()
-	memCachePressureTargetPercent.Store(0)
-	memCachePressureDeadline.Store(0)
+	clear(memCachePressureTargets)
+	recomputeMemoryCachePressureTargetLocked(time.Now().UnixNano())
+	memCachePressureMu.Unlock()
+}
+
+func ClearMemoryCachePressureTargetByOwner(owner string) {
+	memCachePressureMu.Lock()
+	delete(memCachePressureTargets, owner)
+	recomputeMemoryCachePressureTargetLocked(time.Now().UnixNano())
 	memCachePressureMu.Unlock()
 }
 
@@ -77,18 +98,51 @@ func clearMemoryCachePressureTargetForTest() {
 }
 
 func memoryCachePressureTarget(capacity int64) (int64, bool) {
-	deadline := memCachePressureDeadline.Load()
-	if deadline == 0 || time.Now().UnixNano() > deadline {
-		return 0, false
+	now := time.Now().UnixNano()
+
+	deadline := memCachePressureEffectiveDeadline.Load()
+	percent := memCachePressureEffectivePercent.Load()
+	if deadline > now && percent > 0 {
+		if percent > 100 {
+			percent = 100
+		}
+		return capacity * percent / 100, true
 	}
-	percent := memCachePressureTargetPercent.Load()
-	if percent <= 0 {
+
+	memCachePressureMu.Lock()
+	defer memCachePressureMu.Unlock()
+
+	percent, _ = recomputeMemoryCachePressureTargetLocked(now)
+	if percent == 0 {
 		return 0, false
 	}
 	if percent > 100 {
 		percent = 100
 	}
 	return capacity * percent / 100, true
+}
+
+func recomputeMemoryCachePressureTargetLocked(now int64) (int64, int64) {
+	percent := int64(0)
+	deadline := int64(0)
+	for owner, target := range memCachePressureTargets {
+		if target.deadline == 0 || now > target.deadline {
+			delete(memCachePressureTargets, owner)
+			continue
+		}
+		if target.percent <= 0 {
+			continue
+		}
+		if percent == 0 || target.percent < percent {
+			percent = target.percent
+			deadline = target.deadline
+		} else if target.percent == percent && target.deadline < deadline {
+			deadline = target.deadline
+		}
+	}
+	memCachePressureEffectivePercent.Store(percent)
+	memCachePressureEffectiveDeadline.Store(deadline)
+	return percent, deadline
 }
 
 func (m *MemCache) callbacksLock(key fscache.CacheKey) *sync.Mutex {
