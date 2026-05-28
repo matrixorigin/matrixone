@@ -186,6 +186,68 @@ func Test_parallelSendWithRetryStopsDuringBackoffOnContextCancel(t *testing.T) {
 	assert.Nil(t, <-resultC)
 }
 
+func Test_parallelSendWithRetryBacksOffAfterTxnErrorResponse(t *testing.T) {
+	sendCount := 0
+	sender := &retryTestSender{
+		send: func(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+			sendCount++
+			if sendCount == 1 {
+				return &rpc.SendResult{
+					Responses: []txn.TxnResponse{
+						{TxnError: txn.WrapError(moerr.NewInternalErrorNoCtx("retry response error"), 0)},
+					},
+				}, nil
+			}
+			return &rpc.SendResult{}, nil
+		},
+	}
+	s := NewTestTxnServiceWithLogAndZombie(t, 1, sender, NewTestClock(1), nil, time.Millisecond*3).(*service)
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close(false))
+	}()
+
+	start := time.Now()
+	result := s.parallelSendWithRetry(context.Background(), nil, nil)
+	assert.NotNil(t, result)
+	assert.Equal(t, 2, sendCount)
+	assert.GreaterOrEqual(t, time.Since(start), 100*time.Millisecond)
+}
+
+func Test_parallelSendWithRetryStopsDuringTxnErrorBackoffOnContextCancel(t *testing.T) {
+	firstSend := make(chan struct{})
+	sender := &retryTestSender{
+		send: func(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+			select {
+			case <-firstSend:
+				return &rpc.SendResult{}, nil
+			default:
+				close(firstSend)
+				return &rpc.SendResult{
+					Responses: []txn.TxnResponse{
+						{TxnError: txn.WrapError(moerr.NewInternalErrorNoCtx("retry response error"), 0)},
+					},
+				}, nil
+			}
+		},
+	}
+	s := NewTestTxnServiceWithLogAndZombie(t, 1, sender, NewTestClock(1), nil, time.Millisecond*3).(*service)
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close(false))
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	resultC := make(chan *rpc.SendResult, 1)
+	go func() {
+		resultC <- s.parallelSendWithRetry(ctx, nil, nil)
+	}()
+
+	<-firstSend
+	cancel()
+	assert.Nil(t, <-resultC)
+}
+
 func Test_parallelSendWithRetryReturnsNilWhenContextAlreadyCanceled(t *testing.T) {
 	called := false
 	sender := &retryTestSender{
