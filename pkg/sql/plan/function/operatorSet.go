@@ -147,6 +147,21 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			source = append(source, inputs[l-1])
 		}
 
+		if retType, ok := mixedStringNumericToVarchar(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			for i := range finalTypes {
+				if i%2 == 0 {
+					finalTypes[i] = types.T_bool.ToType()
+				} else {
+					finalTypes[i] = retType
+				}
+			}
+			if len(inputs)%2 == 1 {
+				finalTypes[len(finalTypes)-1] = retType
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+
 		target := make([]types.T, len(source))
 		decimalReturnRequired := requireDecimalReturn(source)
 
