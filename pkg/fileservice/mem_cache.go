@@ -16,8 +16,11 @@ package fileservice
 
 import (
 	"context"
+	"errors"
 	"hash/maphash"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
@@ -33,6 +36,57 @@ type MemCache struct {
 }
 
 var memCacheCallbackSeed = maphash.MakeSeed()
+
+var (
+	memCachePressureMu            sync.Mutex
+	memCachePressureTargetPercent atomic.Int64
+	memCachePressureDeadline      atomic.Int64
+)
+
+func SetMemoryCachePressureTargetPercent(percent int64, until time.Time) {
+	now := time.Now()
+	if percent <= 0 || !until.After(now) {
+		memCachePressureMu.Lock()
+		memCachePressureTargetPercent.Store(0)
+		memCachePressureDeadline.Store(0)
+		memCachePressureMu.Unlock()
+		return
+	}
+	if percent > 100 {
+		percent = 100
+	}
+
+	memCachePressureMu.Lock()
+	defer memCachePressureMu.Unlock()
+
+	oldDeadline := memCachePressureDeadline.Load()
+	oldPercent := memCachePressureTargetPercent.Load()
+	if oldDeadline > now.UnixNano() && oldPercent > 0 && oldPercent < percent {
+		return
+	}
+	memCachePressureTargetPercent.Store(percent)
+	memCachePressureDeadline.Store(until.UnixNano())
+}
+
+func clearMemoryCachePressureTargetForTest() {
+	memCachePressureTargetPercent.Store(0)
+	memCachePressureDeadline.Store(0)
+}
+
+func memoryCachePressureTarget(capacity int64) (int64, bool) {
+	deadline := memCachePressureDeadline.Load()
+	if deadline == 0 || time.Now().UnixNano() > deadline {
+		return 0, false
+	}
+	percent := memCachePressureTargetPercent.Load()
+	if percent <= 0 {
+		return 0, false
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	return capacity * percent / 100, true
+}
 
 func (m *MemCache) callbacksLock(key fscache.CacheKey) *sync.Mutex {
 	var hasher maphash.Hash
@@ -151,6 +205,7 @@ func NewMemCache(
 	}
 
 	dataCache = fifocache.NewDataCacheWithPrepareSet(capacityFunc, prepareSetFn, postSetFn, postGetFn, postEvictFn)
+	dataCache.SetAdmissionTarget(memoryCachePressureTarget)
 
 	ret.cache = dataCache
 
@@ -241,10 +296,16 @@ func (m *MemCache) Update(
 			Offset: entry.Offset,
 			Sz:     entry.Size,
 		}
-
 		LogEvent(ctx, str_set_memory_cache_entry_begin)
-		m.cache.Set(ctx, key, entry.CachedData)
+		err := m.cache.Set(ctx, key, entry.CachedData)
 		LogEvent(ctx, str_set_memory_cache_entry_end)
+		if errors.Is(err, fscache.ErrCacheAdmissionRejected) {
+			metric.FSCachePressureMemorySkipCounter.Inc()
+			continue
+		}
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -263,6 +324,21 @@ func (m *MemCache) DeletePaths(
 
 func (m *MemCache) Evict(ctx context.Context, done chan int64) {
 	m.cache.Evict(ctx, done)
+}
+
+func (m *MemCache) EvictToTarget(ctx context.Context, target int64) int64 {
+	return m.cache.EvictToTargetWithWait(ctx, target)
+}
+
+func (m *MemCache) EvictToCapacityPercent(ctx context.Context, percent int64) int64 {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	target := m.cache.Capacity() * percent / 100
+	return m.EvictToTarget(ctx, target)
 }
 
 func (m *MemCache) Close(ctx context.Context) {

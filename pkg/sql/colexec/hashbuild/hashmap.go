@@ -511,12 +511,19 @@ func (hb *HashmapBuilder) buildHashmap(
 			hb.DelRows.InitWithSize(int64(max(cardinality, uint64(hb.Batches.RowCount()))))
 		}
 
+		// Scan every build row, including the delete-only rows appended by
+		// keepDiscardedRowsForDelete (which preserve their old-PK column). Those
+		// rows are excluded from hb.InputBatchRowCount, so iterate the full batch
+		// row count here; otherwise a discarded fan-out copy carrying the
+		// conflicting old PK could not mark the surviving bucket as deleted
+		// (issue #24428). For non-keep-last paths the two counts are equal.
+		delScanRowCount := hb.Batches.RowCount()
 		tmpVecs := make([]*vector.Vector, 1)
-		for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
+		for i := 0; i < delScanRowCount; i += hashmap.UnitLimit {
 			if i%(hashmap.UnitLimit*32) == 0 {
 				runtime.Gosched()
 			}
-			n := hb.InputBatchRowCount - i
+			n := delScanRowCount - i
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
@@ -605,6 +612,18 @@ func (hb *HashmapBuilder) keepDiscardedRowsForDelete(proc *process.Process) erro
 	}
 	if len(hb.dedupDeleteKeepColIdxList) == 0 {
 		hb.dedupDeleteKeepColIdxList = []int32{hb.dedupDeleteMarkerColIdx}
+		// Also preserve the old-PK (delColIdx) column on the delete-only rows.
+		// The post-shrink delColIdx pass in BuildHashmap marks the build bucket
+		// whose new key equals a build row's old PK as deleted (so the probe
+		// side does not raise a false DuplicateEntry for an existing row that
+		// REPLACE is removing). When one new row fans out to several old rows
+		// via different unique keys AND its new PK also matches an existing row
+		// (issue #24428), the fan-out copy carrying that old PK loses keep-last
+		// and becomes a delete-only row; keeping its old PK lets that pass still
+		// mark the surviving bucket.
+		if hb.delColIdx >= 0 && hb.delColIdx != hb.dedupDeleteMarkerColIdx {
+			hb.dedupDeleteKeepColIdxList = append(hb.dedupDeleteKeepColIdxList, hb.delColIdx)
+		}
 	}
 	deleteOnlyBat, err := hb.makeDeleteOnlyBatch(discardedWithDeletes, proc)
 	if err != nil {
