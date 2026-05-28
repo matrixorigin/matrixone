@@ -41,17 +41,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-func TestMakeRSSCacheEvictorRunsCacheFamiliesConcurrently(t *testing.T) {
+func TestMakeRSSCacheEvictorEvictsMemoryCacheOnly(t *testing.T) {
 	oldMemoryEvictor := evictMemoryCachesToCapacityPercent
-	oldMetaEvictor := evictMetaCacheToCapacityPercent
 	defer func() {
 		evictMemoryCachesToCapacityPercent = oldMemoryEvictor
-		evictMetaCacheToCapacityPercent = oldMetaEvictor
 	}()
 
 	memoryStarted := make(chan struct{})
 	releaseMemory := make(chan struct{})
-	metaStarted := make(chan struct{})
 
 	evictMemoryCachesToCapacityPercent = func(ctx context.Context, targetPercent int64) map[string]int64 {
 		close(memoryStarted)
@@ -60,10 +57,6 @@ func TestMakeRSSCacheEvictorRunsCacheFamiliesConcurrently(t *testing.T) {
 		case <-ctx.Done():
 		}
 		return nil
-	}
-	evictMetaCacheToCapacityPercent = func(ctx context.Context, targetPercent int64) int64 {
-		close(metaStarted)
-		return 0
 	}
 
 	done := make(chan struct{})
@@ -75,14 +68,6 @@ func TestMakeRSSCacheEvictorRunsCacheFamiliesConcurrently(t *testing.T) {
 	require.Eventually(t, func() bool {
 		select {
 		case <-memoryStarted:
-			return true
-		default:
-			return false
-		}
-	}, time.Second, time.Millisecond)
-	require.Eventually(t, func() bool {
-		select {
-		case <-metaStarted:
 			return true
 		default:
 			return false
