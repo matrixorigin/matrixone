@@ -253,6 +253,8 @@ type zombieKey struct {
 // HAKeeper has no elected leader.
 var getShardMembershipFn = getShardMembership
 
+var zombieSelfCheckTimeout = 2 * time.Second
+
 // checkZombieReplicas queries live shard membership for each locally-known
 // voting (shardID, replicaID) pair and returns the set of pairs whose
 // replicaID is no longer present in the cluster's membership map.
@@ -268,10 +270,11 @@ var getShardMembershipFn = getShardMembership
 // motivated this fix is specific to voting members. Non-voting zombies
 // remain subject to HAKeeper's existing checkZombie cleanup path.
 //
-// For each voting record the probe iterates every configured address
-// (DiscoveryAddress first, then ServiceAddresses), skipping addresses that
-// resolve to this store's own logservice listener — probing self is
-// useless because startReplicas runs before the RPC server has started.
+// For each voting record the probe iterates every configured concrete service
+// address, skipping addresses that resolve to this store's own logservice
+// listener — probing self is useless because startReplicas runs before the RPC
+// server has started. DiscoveryAddress-only deployments skip this check because
+// a reverse proxy address cannot establish unanimity across concrete peers.
 //
 // Every peer's gossip-backed membership view is eventually consistent, so a
 // single authoritative reply is not enough: a stale peer could either hide a
@@ -288,8 +291,10 @@ var getShardMembershipFn = getShardMembership
 // The check is best-effort: if no peer answers authoritatively (RPC
 // failure, address is self, or every peer reports "shard unknown"), the
 // shard is treated as "not a zombie" so legitimate cold-start scenarios
-// are not blocked.
-func (l *store) checkZombieReplicas(shards []metadata.LogShard) map[zombieKey]struct{} {
+// are not blocked. The whole sweep is bounded by zombieSelfCheckTimeout;
+// if the budget expires, any replicas not already classified are treated as
+// not-a-zombie and normal startup continues.
+func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogShard) map[zombieKey]struct{} {
 	zombies := make(map[zombieKey]struct{})
 	if len(shards) == 0 {
 		return zombies
@@ -301,13 +306,21 @@ func (l *store) checkZombieReplicas(shards []metadata.LogShard) map[zombieKey]st
 	}
 
 	logger := l.runtime.Logger()
+	ctx, cancel := context.WithTimeout(ctx, zombieSelfCheckTimeout)
+	defer cancel()
 	for _, rec := range shards {
+		if ctx.Err() != nil {
+			return zombies
+		}
 		if rec.NonVoting {
 			continue
 		}
 		var authoritative, presentReplies int
 		for _, address := range addresses {
-			members, ok, err := getShardMembershipFn(l.cfg.UUID, address, rec.ShardID)
+			if ctx.Err() != nil {
+				return zombies
+			}
+			members, ok, err := getShardMembershipFn(ctx, l.cfg.UUID, address, rec.ShardID)
 			if err != nil {
 				logger.Warn("zombie self-check: getShardMembership failed",
 					zap.String("address", address),
@@ -331,11 +344,13 @@ func (l *store) checkZombieReplicas(shards []metadata.LogShard) map[zombieKey]st
 	return zombies
 }
 
-// zombieCheckAddresses returns the ordered list of peer addresses to probe
-// during the zombie self-check. DiscoveryAddress comes first (when set),
-// followed by ServiceAddresses. Entries that resolve to the local logservice
-// listener are filtered out — probing self cannot produce a useful answer
-// because the RPC server has not been started yet at this point.
+// zombieCheckAddresses returns the ordered list of concrete peer addresses to
+// probe during the zombie self-check. DiscoveryAddress is deliberately not
+// used here: it may be a reverse proxy that randomly selects one backend, and
+// a single backend's gossip view cannot satisfy the unanimous-absence rule.
+// Entries that resolve to the local logservice listener are filtered out —
+// probing self cannot produce a useful answer because the RPC server has not
+// been started yet at this point.
 func (l *store) zombieCheckAddresses() []string {
 	selfAddrs := map[string]struct{}{
 		l.cfg.LogServiceListenAddr():  {},
@@ -359,7 +374,6 @@ func (l *store) zombieCheckAddresses() []string {
 		addresses = append(addresses, a)
 	}
 
-	add(l.cfg.HAKeeperClientConfig.DiscoveryAddress)
 	for _, a := range l.cfg.HAKeeperClientConfig.ServiceAddresses {
 		add(a)
 	}
@@ -380,13 +394,16 @@ func (l *store) isSkippedZombie(shardID, replicaID uint64) bool {
 	return ok
 }
 
-func (l *store) startReplicas() error {
+func (l *store) startReplicas(ctx context.Context) error {
 	l.mu.Lock()
 	shards := make([]metadata.LogShard, 0)
 	shards = append(shards, l.mu.metadata.Shards...)
 	l.mu.Unlock()
 
-	zombies := l.checkZombieReplicas(shards)
+	zombies := l.checkZombieReplicas(ctx, shards)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	l.mu.Lock()
 	l.mu.skippedZombies = zombies
 	l.mu.Unlock()

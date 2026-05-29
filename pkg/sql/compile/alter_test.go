@@ -29,7 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
@@ -47,13 +51,8 @@ import (
 
 func TestShouldEnableAlterCopyPipelineFlush(t *testing.T) {
 	assert.False(t, shouldEnableAlterCopyPipelineFlush(nil))
-	assert.False(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterTable{}))
-	assert.False(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterTable{
-		Options: &plan2.AlterCopyOpt{SkipPkDedup: false},
-	}))
-	assert.True(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterTable{
-		Options: &plan2.AlterCopyOpt{SkipPkDedup: true},
-	}))
+	assert.False(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterCopyOpt{SkipPkDedup: false}))
+	assert.True(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterCopyOpt{SkipPkDedup: true}))
 }
 
 type alterCopyInsertSpyExecutor struct {
@@ -61,17 +60,36 @@ type alterCopyInsertSpyExecutor struct {
 	insertErr    error
 	insertCtx    context.Context
 	insertOption executor.StatementOption
+	results      map[string]executor.Result
+	errs         map[string]error
+	executedSQLs []string
 }
+
+const (
+	alterCopyTestPkNullCheckSQL      = "SELECT `col4` FROM `test`.`dept` WHERE `col4` IS NULL LIMIT 1"
+	alterCopyTestPkDuplicateCheckSQL = "SELECT `col4` FROM `test`.`dept` GROUP BY `col4` HAVING count(*) > 1 LIMIT 1"
+)
 
 func (e *alterCopyInsertSpyExecutor) Exec(
 	ctx context.Context,
 	sql string,
 	opts executor.Options,
 ) (executor.Result, error) {
+	e.executedSQLs = append(e.executedSQLs, sql)
 	if sql == e.insertSQL {
 		e.insertCtx = ctx
 		e.insertOption = opts.StatementOption()
 		return executor.Result{}, e.insertErr
+	}
+	if e.errs != nil {
+		if err, ok := e.errs[sql]; ok {
+			return executor.Result{}, err
+		}
+	}
+	if e.results != nil {
+		if res, ok := e.results[sql]; ok {
+			return res, nil
+		}
 	}
 	return executor.Result{}, nil
 }
@@ -232,6 +250,364 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetAlterCopyPkPrecheck(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		tableDef         *plan.TableDef
+		copyTableDef     *plan.TableDef
+		skipPkDedup      bool
+		wantCols         []string
+		wantCheckNotNull bool
+	}{
+		{
+			name: "add pk on nullable original column",
+			tableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+			},
+			copyTableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "col4", NotNull: true, Primary: true, Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
+			wantCols:         []string{"col4"},
+			wantCheckNotNull: true,
+		},
+		{
+			name: "add pk on not null original column",
+			tableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "col4", NotNull: true, Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+			},
+			copyTableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "col4", NotNull: true, Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
+			wantCols: []string{"col4"},
+		},
+		{
+			name: "static skip pk dedup needs no precheck",
+			tableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
+			copyTableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
+			skipPkDedup: true,
+		},
+		{
+			name: "pk column is not copied from original table",
+			tableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+			},
+			copyTableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "new_col", Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "new_col", Names: []string{"new_col"}},
+			},
+		},
+		{
+			name: "pk column type change can change dedup key value",
+			tableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "col4", Typ: plan.Type{Id: int32(types.T_varchar), Width: 16}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+			},
+			copyTableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "col4", NotNull: true, Primary: true, Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
+		},
+		{
+			name: "pk column width change can change dedup key value",
+			tableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "col4", Typ: plan.Type{Id: int32(types.T_varchar), Width: 32}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+			},
+			copyTableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "col4", NotNull: true, Primary: true, Typ: plan.Type{Id: int32(types.T_varchar), Width: 8}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			qry := &plan2.AlterTable{
+				TableDef:     tc.tableDef,
+				CopyTableDef: tc.copyTableDef,
+				Options: &plan2.AlterCopyOpt{
+					SkipPkDedup:     tc.skipPkDedup,
+					TargetTableName: "dept_copy",
+				},
+			}
+			pkCols, checkNotNull := getAlterCopyPkPrecheck(qry)
+			assert.Equal(t, tc.wantCols, pkCols)
+			assert.Equal(t, tc.wantCheckNotNull, checkNotNull)
+		})
+	}
+}
+
+func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	proc.Base.SessionInfo.TimeZone = time.Local
+
+	serviceID := "alter-copy-pk-precheck"
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: serviceID}).AnyTimes()
+	proc.Base.LockService = lockSvc
+	require.Equal(t, serviceID, proc.GetService())
+
+	const accountID = catalog.System_Account
+	ctx := defines.AttachAccountId(context.Background(), accountID)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+	proc.Base.TxnClient = txnCli
+	proc.Base.TxnOperator = txnOp
+
+	tableDef := &plan.TableDef{
+		TblId: 1,
+		Name:  "dept",
+		Cols: []*plan.ColDef{
+			{Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+	}
+	copyTableDef := &plan.TableDef{
+		TblId: 2,
+		Name:  "dept_copy",
+		Cols: []*plan.ColDef{
+			{Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+	}
+	alterTable := &plan2.AlterTable{
+		Database:          "test",
+		TableDef:          tableDef,
+		CopyTableDef:      copyTableDef,
+		CreateTmpTableSql: "create table dept_copy",
+		InsertTmpDataSql:  "insert into dept_copy select * from dept",
+		Options: &plan2.AlterCopyOpt{
+			SkipPkDedup:     false,
+			TargetTableName: "dept_copy",
+		},
+	}
+	s := &Scope{
+		Magic: AlterTable,
+		Plan: &plan.Plan{
+			Plan: &plan2.Plan_Ddl{
+				Ddl: &plan2.DataDefinition{
+					DdlType: plan2.DataDefinition_ALTER_TABLE,
+					Definition: &plan2.DataDefinition_AlterTable{
+						AlterTable: alterTable,
+					},
+				},
+			},
+		},
+	}
+
+	originRel := mock_frontend.NewMockRelation(ctrl)
+	originRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().CopyTableDef(gomock.Any()).Return(copyTableDef).AnyTimes()
+
+	mockDb := mock_frontend.NewMockDatabase(ctrl)
+	mockDb.EXPECT().Relation(gomock.Any(), "dept", gomock.Any()).Return(originRel, nil).AnyTimes()
+	mockDb.EXPECT().Relation(gomock.Any(), "dept_copy", gomock.Any()).Return(copyRel, nil).AnyTimes()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(mockDb, nil).AnyTimes()
+
+	insertErr := errors.New("stop after insert-copy")
+	spyExec := &alterCopyInsertSpyExecutor{
+		insertSQL: alterTable.InsertTmpDataSql,
+		insertErr: insertErr,
+	}
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spyExec)
+	moruntime.SetupServiceBasedRuntime(proc.GetService(), rt)
+
+	c := NewCompile("test", "test", "alter table dept", "", "", eng, proc, nil, false, nil, time.Now())
+	c.pn = s.Plan
+
+	err := s.AlterTableCopy(c)
+	require.ErrorIs(t, err, insertErr)
+	assert.False(t, alterTable.Options.SkipPkDedup)
+	require.NotNil(t, spyExec.insertCtx)
+	assert.Equal(t, true, spyExec.insertCtx.Value(ioutil.PipelineFlushKey) == true)
+	require.NotSame(t, alterTable.Options, spyExec.insertOption.AlterCopyDedupOpt())
+	require.True(t, spyExec.insertOption.AlterCopyDedupOpt().SkipPkDedup)
+	require.Equal(t, alterTable.Options.TargetTableName, spyExec.insertOption.AlterCopyDedupOpt().TargetTableName)
+	assert.Equal(t, []string{
+		alterTable.CreateTmpTableSql,
+		alterCopyTestPkNullCheckSQL,
+		alterCopyTestPkDuplicateCheckSQL,
+		alterTable.InsertTmpDataSql,
+	}, spyExec.executedSQLs)
+}
+
+func TestPrecheckAlterCopyPkDedupRejectsNull(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	alterTable := testAlterCopyAddPrimaryKeyPlan()
+	spyExec := &alterCopyInsertSpyExecutor{}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	spyExec.results = map[string]executor.Result{
+		alterCopyTestPkNullCheckSQL: newAlterCopyConstNullResult(c.proc.Mp(), types.T_int32.ToType()),
+	}
+
+	opt, err := c.precheckAlterCopyPkDedup("test", "dept", alterTable)
+	require.Error(t, err)
+	require.Nil(t, opt)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
+	assert.False(t, alterTable.Options.SkipPkDedup)
+	assert.Equal(t, []string{alterCopyTestPkNullCheckSQL}, spyExec.executedSQLs)
+}
+
+func TestPrecheckAlterCopyPkDedupRejectsDuplicate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	alterTable := testAlterCopyAddPrimaryKeyPlan()
+	spyExec := &alterCopyInsertSpyExecutor{}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	spyExec.results = map[string]executor.Result{
+		alterCopyTestPkDuplicateCheckSQL: newAlterCopyFixedResult(t, c.proc.Mp(), types.T_int32.ToType(), []int32{7}),
+	}
+
+	opt, err := c.precheckAlterCopyPkDedup("test", "dept", alterTable)
+	require.Error(t, err)
+	require.Nil(t, opt)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	assert.False(t, alterTable.Options.SkipPkDedup)
+	assert.Equal(t, []string{alterCopyTestPkNullCheckSQL, alterCopyTestPkDuplicateCheckSQL}, spyExec.executedSQLs)
+}
+
+func TestPrecheckAlterCopyPkDedupCanSkipNullCheck(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	alterTable := testAlterCopyAddPrimaryKeyPlan()
+	alterTable.TableDef.Cols[0].NotNull = true
+	spyExec := &alterCopyInsertSpyExecutor{}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+
+	opt, err := c.precheckAlterCopyPkDedup("test", "dept", alterTable)
+	require.NoError(t, err)
+	require.NotNil(t, opt)
+	assert.True(t, opt.SkipPkDedup)
+	assert.False(t, alterTable.Options.SkipPkDedup)
+	require.NotSame(t, alterTable.Options, opt)
+	assert.Equal(t, []string{alterCopyTestPkDuplicateCheckSQL}, spyExec.executedSQLs)
+}
+
+func TestPrecheckAlterCopyPkDedupDoesNotMutatePlanOption(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	alterTable := testAlterCopyAddPrimaryKeyPlan()
+	spyExec := &alterCopyInsertSpyExecutor{}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+
+	firstOpt, err := c.precheckAlterCopyPkDedup("test", "dept", alterTable)
+	require.NoError(t, err)
+	require.NotNil(t, firstOpt)
+	require.True(t, firstOpt.SkipPkDedup)
+	require.False(t, alterTable.Options.SkipPkDedup)
+
+	secondOpt, err := c.precheckAlterCopyPkDedup("test", "dept", alterTable)
+	require.NoError(t, err)
+	require.NotNil(t, secondOpt)
+	require.True(t, secondOpt.SkipPkDedup)
+	require.False(t, alterTable.Options.SkipPkDedup)
+	require.NotSame(t, firstOpt, secondOpt)
+
+	assert.Equal(t, []string{
+		alterCopyTestPkNullCheckSQL,
+		alterCopyTestPkDuplicateCheckSQL,
+		alterCopyTestPkNullCheckSQL,
+		alterCopyTestPkDuplicateCheckSQL,
+	}, spyExec.executedSQLs)
+}
+
+func testAlterCopyAddPrimaryKeyPlan() *plan2.AlterTable {
+	return &plan2.AlterTable{
+		Database: "test",
+		TableDef: &plan.TableDef{
+			Name: "dept",
+			Cols: []*plan.ColDef{
+				{Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}},
+			},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+		},
+		CopyTableDef: &plan.TableDef{
+			Name: "dept_copy",
+			Cols: []*plan.ColDef{
+				{Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}},
+			},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+		},
+		Options: &plan2.AlterCopyOpt{
+			SkipPkDedup:     false,
+			TargetTableName: "dept_copy",
+		},
+	}
+}
+
+func newAlterCopyPrecheckCompile(t *testing.T, ctrl *gomock.Controller, exec executor.SQLExecutor) *Compile {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	proc.Base.SessionInfo.TimeZone = time.Local
+
+	serviceID := "alter-copy-precheck-" + t.Name()
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: serviceID}).AnyTimes()
+	proc.Base.LockService = lockSvc
+
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+	proc.Base.TxnClient = txnCli
+	proc.Base.TxnOperator = txnOp
+
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	moruntime.SetupServiceBasedRuntime(proc.GetService(), rt)
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	c := NewCompile("test", "test", "alter table dept", "", "", eng, proc, nil, false, nil, time.Now())
+	c.pn = &plan.Plan{
+		Plan: &plan2.Plan_Ddl{
+			Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_ALTER_TABLE,
+			},
+		},
+	}
+	return c
+}
+
+func newAlterCopyConstNullResult(mp *mpool.MPool, typ types.Type) executor.Result {
+	bat := batch.NewWithSize(1)
+	bat.SetRowCount(1)
+	bat.Vecs[0] = vector.NewConstNull(typ, 1, mp)
+	return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
+}
+
+func newAlterCopyFixedResult[T any](t *testing.T, mp *mpool.MPool, typ types.Type, values []T) executor.Result {
+	memRes := executor.NewMemResult([]types.Type{typ}, mp)
+	memRes.NewBatchWithRowCount(len(values))
+	require.NoError(t, executor.AppendFixedRows(memRes, 0, values))
+	return memRes.GetResult()
 }
 
 func TestScope_AlterTableInplace(t *testing.T) {
