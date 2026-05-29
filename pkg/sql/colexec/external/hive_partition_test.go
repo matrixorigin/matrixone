@@ -16,10 +16,14 @@ package external
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -52,11 +56,31 @@ func TestParseHivePartitionSegment_EmptyValue(t *testing.T) {
 	assert.Equal(t, "", seg.Value)
 }
 
-func TestParseHivePartitionSegment_RejectsPercentLiteral(t *testing.T) {
-	_, isHive, err := ParseHivePartitionSegment("country=US%2FCA")
+func TestParseHivePartitionSegment_DecodesPercentValue(t *testing.T) {
+	seg, isHive, err := ParseHivePartitionSegment("country=US%2FCA")
+	require.NoError(t, err)
 	assert.True(t, isHive)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "URL-encoded values are not supported")
+	assert.Equal(t, "country", seg.Key)
+	assert.Equal(t, "US/CA", seg.Value)
+}
+
+func TestParseHivePartitionSegment_DecodesOnce(t *testing.T) {
+	seg, isHive, err := ParseHivePartitionSegment("country=US%252FCA")
+	require.NoError(t, err)
+	assert.True(t, isHive)
+	assert.Equal(t, "US%2FCA", seg.Value)
+}
+
+func TestParseHivePartitionSegment_DecodesSpaceAndUnicode(t *testing.T) {
+	seg, isHive, err := ParseHivePartitionSegment("city=New%20York")
+	require.NoError(t, err)
+	assert.True(t, isHive)
+	assert.Equal(t, "New York", seg.Value)
+
+	seg, isHive, err = ParseHivePartitionSegment("city=%E4%B8%8A%E6%B5%B7")
+	require.NoError(t, err)
+	assert.True(t, isHive)
+	assert.Equal(t, "上海", seg.Value)
 }
 
 func TestParseHivePartitionSegment_NotPartition(t *testing.T) {
@@ -75,7 +99,8 @@ func TestParseHivePartitionSegment_InvalidPercentLiteral(t *testing.T) {
 	_, isHive, err := ParseHivePartitionSegment("country=US%ZZ")
 	assert.True(t, isHive)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "URL-encoded values are not supported")
+	assert.Contains(t, err.Error(), "invalid URL escape")
+	assert.Contains(t, err.Error(), "US%ZZ")
 }
 
 func TestParseHivePartitionSegment_DefaultPartition(t *testing.T) {
@@ -208,9 +233,11 @@ func TestMatchPartitionValue_VarcharExact(t *testing.T) {
 
 func TestMatchPartitionValue_UnknownTypes(t *testing.T) {
 	unknownTypes := []types.T{
-		types.T_bool, types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_date, types.T_datetime,
-		types.T_timestamp, types.T_json, types.T_uuid,
+		types.T_bool, types.T_bit, types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_date, types.T_time,
+		types.T_datetime, types.T_timestamp, types.T_json, types.T_uuid,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_enum,
+		types.T_array_float32, types.T_array_float64,
 	}
 	for _, typ := range unknownTypes {
 		ct := tree.HivePartColType{Id: int32(typ)}
@@ -235,6 +262,52 @@ func TestMatchPartitionValue_ZeroPaddedVarcharConservative(t *testing.T) {
 	assert.Equal(t, MatchTrue, matchPartitionValue("01", []string{"01"}, ct))
 	assert.Equal(t, MatchUnknown, matchPartitionValue("01", []string{"1"}, ct),
 		"varchar partitions keep string semantics; a mismatch is not pruned away")
+}
+
+func TestMatchPartitionCompare_IntRange(t *testing.T) {
+	ct := tree.HivePartColType{Id: int32(types.T_int32)}
+	assert.Equal(t, MatchTrue, matchPartitionCompare("-5", []string{"-10"}, ct, PartOpGt))
+	assert.Equal(t, MatchFalse, matchPartitionCompare("-20", []string{"-10"}, ct, PartOpGt))
+	assert.Equal(t, MatchTrue, matchPartitionCompare("0", []string{"0"}, ct, PartOpGe))
+	assert.Equal(t, MatchTrue, matchPartitionCompare("01", []string{"2"}, ct, PartOpLt))
+}
+
+func TestMatchPartitionCompare_UintRange(t *testing.T) {
+	ct := tree.HivePartColType{Id: int32(types.T_uint32)}
+	assert.Equal(t, MatchTrue, matchPartitionCompare("0", []string{"0"}, ct, PartOpGe))
+	assert.Equal(t, MatchFalse, matchPartitionCompare("0", []string{"1"}, ct, PartOpGe))
+	assert.Equal(t, MatchUnknown, matchPartitionCompare("1", []string{"-1"}, ct, PartOpGt))
+}
+
+func TestMatchPartitionCompare_OverflowAndStringUnknown(t *testing.T) {
+	int8Type := tree.HivePartColType{Id: int32(types.T_int8)}
+	assert.Equal(t, MatchUnknown, matchPartitionCompare("128", []string{"1"}, int8Type, PartOpGt))
+	assert.Equal(t, MatchUnknown, matchPartitionCompare("1", []string{"128"}, int8Type, PartOpGt))
+
+	strType := tree.HivePartColType{Id: int32(types.T_varchar)}
+	assert.Equal(t, MatchUnknown, matchPartitionCompare("b", []string{"a"}, strType, PartOpGt))
+}
+
+func TestMatchPartitionRange_UnsupportedTypesUnknown(t *testing.T) {
+	unsupportedTypes := []types.T{
+		types.T_bool, types.T_bit, types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_date, types.T_time,
+		types.T_datetime, types.T_timestamp, types.T_json, types.T_uuid,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_enum,
+		types.T_array_float32, types.T_array_float64,
+	}
+	for _, typ := range unsupportedTypes {
+		ct := tree.HivePartColType{Id: int32(typ)}
+		assert.Equal(t, MatchUnknown, matchPartitionRange("1", []string{"0", "2"}, ct),
+			"type %v should return MatchUnknown", typ)
+	}
+}
+
+func TestMatchPartitionNull(t *testing.T) {
+	assert.Equal(t, MatchTrue, matchPartitionNull(HiveDefaultPartition, true))
+	assert.Equal(t, MatchFalse, matchPartitionNull("2024", true))
+	assert.Equal(t, MatchFalse, matchPartitionNull(HiveDefaultPartition, false))
+	assert.Equal(t, MatchTrue, matchPartitionNull("2024", false))
 }
 
 // --- DiscoverHivePartitions tests ---
@@ -279,6 +352,10 @@ func TestDiscoverHivePartitions_SingleLevel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, result.PartitionCount)
 	assert.Equal(t, 2, len(result.Files))
+	assert.Equal(t, 2, result.DiscoveredFiles)
+	assert.Equal(t, 2, result.PrunedFiles)
+	assert.Equal(t, int64(3000), result.DiscoveredBytes)
+	assert.Equal(t, int64(3000), result.PrunedBytes)
 	assert.Equal(t, int64(1000), result.Files[0].FileSize)
 }
 
@@ -420,14 +497,17 @@ func TestDiscoverHivePartitions_NilColTypes(t *testing.T) {
 	assert.Equal(t, 2, len(result.Files))
 }
 
-func TestDiscoverHivePartitions_PercentInDirName(t *testing.T) {
+func TestDiscoverHivePartitions_DecodedPercentInDirName(t *testing.T) {
 	dirs := map[string][]fileservice.DirEntry{
 		"/data": {
 			{Name: "country=US%2FCA", IsDir: true},
 		},
+		"/data/country=US%2FCA": {
+			{Name: "f.parquet", IsDir: false, Size: 100},
+		},
 	}
 
-	_, err := DiscoverHivePartitions(
+	result, err := DiscoverHivePartitions(
 		context.Background(),
 		mockListDir(dirs),
 		"/data",
@@ -435,8 +515,10 @@ func TestDiscoverHivePartitions_PercentInDirName(t *testing.T) {
 		[]tree.HivePartColType{{Id: int32(types.T_varchar)}},
 		nil,
 	)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "%")
+	require.NoError(t, err)
+	require.Len(t, result.Files, 1)
+	assert.Equal(t, "/data/country=US%2FCA/f.parquet", result.Files[0].FilePath)
+	assert.Equal(t, 1, result.PartitionCount)
 }
 
 func TestDiscoverHivePartitions_RejectsUnsafeDirName(t *testing.T) {
@@ -561,6 +643,100 @@ func TestDiscoverHivePartitions_ListCallLimit(t *testing.T) {
 	assert.Contains(t, err.Error(), "List calls")
 }
 
+func TestDiscoverHivePartitions_WorkerErrorCancelsOtherWorkers(t *testing.T) {
+	wantErr := errors.New("boom")
+	slowStarted := make(chan struct{})
+	slowCanceled := make(chan struct{})
+	var closeSlowStarted sync.Once
+	var closeSlowCanceled sync.Once
+
+	listDir := func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
+		return func(yield func(*fileservice.DirEntry, error) bool) {
+			switch prefix {
+			case "/data":
+				yield(&fileservice.DirEntry{Name: "year=2024", IsDir: true}, nil)
+				yield(&fileservice.DirEntry{Name: "year=2025", IsDir: true}, nil)
+			case "/data/year=2024":
+				select {
+				case <-slowStarted:
+				case <-time.After(time.Second):
+					yield(nil, errors.New("slow worker did not start"))
+					return
+				}
+				yield(nil, wantErr)
+			case "/data/year=2025":
+				closeSlowStarted.Do(func() { close(slowStarted) })
+				<-ctx.Done()
+				closeSlowCanceled.Do(func() { close(slowCanceled) })
+				yield(nil, context.Cause(ctx))
+			}
+		}
+	}
+
+	_, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(),
+		listDir,
+		"/data",
+		[]string{"year"},
+		[]tree.HivePartColType{{Id: int32(types.T_int32)}},
+		nil,
+		&DiscoverOptions{ListConcurrency: 2},
+	)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, wantErr)
+	select {
+	case <-slowCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("slow worker was not canceled after peer worker failed")
+	}
+}
+
+func TestDiscoverHivePartitions_ContextCancellationStopsWorkers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	allStarted := make(chan struct{})
+	var closeAllStarted sync.Once
+	var canceledWorkers int32
+	var startedWorkers int32
+
+	go func() {
+		<-allStarted
+		cancel()
+	}()
+
+	listDir := func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
+		return func(yield func(*fileservice.DirEntry, error) bool) {
+			switch prefix {
+			case "/data":
+				yield(&fileservice.DirEntry{Name: "year=2024", IsDir: true}, nil)
+				yield(&fileservice.DirEntry{Name: "year=2025", IsDir: true}, nil)
+			default:
+				if atomic.AddInt32(&startedWorkers, 1) == 2 {
+					closeAllStarted.Do(func() { close(allStarted) })
+				}
+				<-ctx.Done()
+				atomic.AddInt32(&canceledWorkers, 1)
+				yield(nil, context.Cause(ctx))
+			}
+		}
+	}
+
+	_, err := DiscoverHivePartitionsWithPruneExpr(
+		ctx,
+		listDir,
+		"/data",
+		[]string{"year"},
+		[]tree.HivePartColType{{Id: int32(types.T_int32)}},
+		nil,
+		&DiscoverOptions{ListConcurrency: 2},
+	)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&canceledWorkers))
+}
+
 // ---------------------------------------------------------------------------
 // ClassifyFilters tests
 // ---------------------------------------------------------------------------
@@ -619,6 +795,34 @@ func makeBetweenExpr(col, low, high *plan.Expr) *plan.Expr {
 			Args: []*plan.Expr{col, low, high},
 		}},
 	}
+}
+
+func makeFuncExpr(fid int32, args ...*plan.Expr) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: int64(fid) << 32},
+			Args: args,
+		}},
+	}
+}
+
+func makeAndExpr(args ...*plan.Expr) *plan.Expr {
+	return makeFuncExpr(function.AND, args...)
+}
+
+func makeOrExpr(args ...*plan.Expr) *plan.Expr {
+	return makeFuncExpr(function.OR, args...)
+}
+
+func makeUnaryMinusExpr(arg *plan.Expr) *plan.Expr {
+	return makeFuncExpr(function.UNARY_MINUS, arg)
+}
+
+func requirePartitionAtom(t *testing.T, expr PartitionPruneExpr) *PartitionAtom {
+	t.Helper()
+	atom, ok := expr.(*PartitionAtom)
+	require.True(t, ok, "expected PartitionAtom, got %T", expr)
+	return atom
 }
 
 func TestClassifyFilters_Basic(t *testing.T) {
@@ -1080,6 +1284,220 @@ func TestExtractPartitionPredicates_InVecVarchar(t *testing.T) {
 	require.Equal(t, 1, len(preds))
 	assert.Equal(t, PartOpIn, preds[0].Op)
 	assert.Equal(t, []string{"US", "CN"}, preds[0].Values)
+}
+
+func TestExtractPartitionPruneExpr_RangeComparisons(t *testing.T) {
+	td := makeTableDef("year", "data")
+	partColSet := map[string]bool{"year": true}
+	cases := []struct {
+		name string
+		expr *plan.Expr
+		op   PartitionOp
+	}{
+		{
+			name: "greater than",
+			expr: makeFuncExpr(function.GREAT_THAN, makeColExpr(0, "year"), makeLitInt64(2020)),
+			op:   PartOpGt,
+		},
+		{
+			name: "greater equal",
+			expr: makeFuncExpr(function.GREAT_EQUAL, makeColExpr(0, "year"), makeLitInt64(2020)),
+			op:   PartOpGe,
+		},
+		{
+			name: "less than",
+			expr: makeFuncExpr(function.LESS_THAN, makeColExpr(0, "year"), makeLitInt64(2025)),
+			op:   PartOpLt,
+		},
+		{
+			name: "less equal",
+			expr: makeFuncExpr(function.LESS_EQUAL, makeColExpr(0, "year"), makeLitInt64(2025)),
+			op:   PartOpLe,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pruneExpr := ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{tc.expr}, partColSet)
+			atom := requirePartitionAtom(t, pruneExpr)
+			assert.Equal(t, "year", atom.ColName)
+			assert.Equal(t, tc.op, atom.Op)
+		})
+	}
+}
+
+func TestExtractPartitionPruneExpr_ReversedRangeComparisons(t *testing.T) {
+	td := makeTableDef("year", "data")
+	partColSet := map[string]bool{"year": true}
+
+	pruneExpr := ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{
+		makeFuncExpr(function.LESS_THAN, makeLitInt64(2020), makeColExpr(0, "year")),
+	}, partColSet)
+	atom := requirePartitionAtom(t, pruneExpr)
+	assert.Equal(t, PartOpGt, atom.Op)
+	assert.Equal(t, []string{"2020"}, atom.Values)
+
+	pruneExpr = ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{
+		makeFuncExpr(function.GREAT_EQUAL, makeLitInt64(2025), makeColExpr(0, "year")),
+	}, partColSet)
+	atom = requirePartitionAtom(t, pruneExpr)
+	assert.Equal(t, PartOpLe, atom.Op)
+	assert.Equal(t, []string{"2025"}, atom.Values)
+}
+
+func TestExtractPartitionPruneExpr_AndOrTree(t *testing.T) {
+	td := makeTableDef("year", "month")
+	partColSet := map[string]bool{"year": true, "month": true}
+	expr := makeOrExpr(
+		makeAndExpr(
+			makeEqExpr(makeColExpr(0, "year"), makeLitInt64(2024)),
+			makeEqExpr(makeColExpr(1, "month"), makeLitInt64(1)),
+		),
+		makeAndExpr(
+			makeEqExpr(makeColExpr(0, "year"), makeLitInt64(2025)),
+			makeBetweenExpr(makeColExpr(1, "month"), makeLitInt64(2), makeLitInt64(3)),
+		),
+	)
+
+	pruneExpr := ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{expr}, partColSet)
+	orExpr, ok := pruneExpr.(*PartitionOr)
+	require.True(t, ok, "expected OR tree, got %T", pruneExpr)
+	assert.Len(t, orExpr.Children, 2)
+}
+
+func TestExtractPartitionPruneExpr_RangeAndIntersection(t *testing.T) {
+	td := makeTableDef("year")
+	partColSet := map[string]bool{"year": true}
+
+	pruneExpr := ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{
+		makeAndExpr(
+			makeFuncExpr(function.GREAT_EQUAL, makeColExpr(0, "year"), makeLitInt64(2020)),
+			makeFuncExpr(function.LESS_EQUAL, makeColExpr(0, "year"), makeLitInt64(2024)),
+		),
+	}, partColSet)
+	andExpr, ok := pruneExpr.(*PartitionAnd)
+	require.True(t, ok, "expected AND tree, got %T", pruneExpr)
+	require.Len(t, andExpr.Children, 2)
+
+	pruneExpr = ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{
+		makeAndExpr(
+			makeFuncExpr(function.GREAT_THAN, makeColExpr(0, "year"), makeLitInt64(2025)),
+			makeFuncExpr(function.LESS_THAN, makeColExpr(0, "year"), makeLitInt64(2020)),
+		),
+	}, partColSet)
+	andExpr, ok = pruneExpr.(*PartitionAnd)
+	require.True(t, ok, "expected empty-interval AND tree, got %T", pruneExpr)
+	require.Len(t, andExpr.Children, 2)
+}
+
+func TestExtractPartitionPruneExpr_OrWithIn(t *testing.T) {
+	td := makeTableDef("year")
+	partColSet := map[string]bool{"year": true}
+	pruneExpr := ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{
+		makeOrExpr(
+			makeInExpr(makeColExpr(0, "year"), makeLitInt64(2020), makeLitInt64(2021)),
+			makeEqExpr(makeColExpr(0, "year"), makeLitInt64(2024)),
+		),
+	}, partColSet)
+
+	orExpr, ok := pruneExpr.(*PartitionOr)
+	require.True(t, ok, "expected OR tree, got %T", pruneExpr)
+	require.Len(t, orExpr.Children, 2)
+}
+
+func TestExtractPartitionPruneExpr_MixedOrFallback(t *testing.T) {
+	td := makeTableDef("year", "amount", catalog.ExternalFilePath)
+	partColSet := map[string]bool{"year": true}
+	mixedPhysical := makeOrExpr(
+		makeEqExpr(makeColExpr(0, "year"), makeLitInt64(2024)),
+		makeFuncExpr(function.GREAT_THAN, makeColExpr(1, "amount"), makeLitInt64(10)),
+	)
+	mixedFilepath := makeOrExpr(
+		makeEqExpr(makeColExpr(0, "year"), makeLitInt64(2024)),
+		makeEqExpr(makeColExpr(2, catalog.ExternalFilePath), makeLitString("x")),
+	)
+
+	assert.Nil(t, ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{mixedPhysical}, partColSet))
+	assert.Nil(t, ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{mixedFilepath}, partColSet))
+}
+
+func TestExtractPartitionPruneExpr_FunctionSubqueryNullFallback(t *testing.T) {
+	td := makeTableDef("year")
+	partColSet := map[string]bool{"year": true}
+	wrappedPartitionCol := makeFuncExpr(function.UNARY_MINUS, makeColExpr(0, "year"))
+	subquery := &plan.Expr{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{Typ: plan.SubqueryRef_SCALAR}}}
+	nullLit := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+
+	assert.Nil(t, ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{
+		makeEqExpr(wrappedPartitionCol, makeLitInt64(2024)),
+	}, partColSet))
+	assert.Nil(t, ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{
+		makeEqExpr(makeColExpr(0, "year"), subquery),
+	}, partColSet))
+	assert.Nil(t, ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{
+		makeEqExpr(makeColExpr(0, "year"), nullLit),
+	}, partColSet))
+}
+
+func TestExtractPartitionPruneExpr_NotFallback(t *testing.T) {
+	td := makeTableDef("year")
+	partColSet := map[string]bool{"year": true}
+
+	notExpr := makeFuncExpr(function.NOT,
+		makeFuncExpr(function.GREAT_EQUAL, makeColExpr(0, "year"), makeLitInt64(2024)))
+	notInExpr := makeFuncExpr(function.NOT_IN, makeColExpr(0, "year"), makeLitInt64(2024))
+	notBetweenExpr := makeFuncExpr(function.NOT, makeBetweenExpr(makeColExpr(0, "year"), makeLitInt64(2020), makeLitInt64(2024)))
+
+	assert.Nil(t, ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{notExpr}, partColSet))
+	assert.Nil(t, ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{notInExpr}, partColSet))
+	assert.Nil(t, ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{notBetweenExpr}, partColSet))
+}
+
+func TestExtractPartitionPruneExpr_IsNullAtoms(t *testing.T) {
+	td := makeTableDef("year")
+	partColSet := map[string]bool{"year": true}
+
+	pruneExpr := ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{
+		makeFuncExpr(function.ISNULL, makeColExpr(0, "year")),
+	}, partColSet)
+	atom := requirePartitionAtom(t, pruneExpr)
+	assert.Equal(t, PartOpIsNull, atom.Op)
+
+	pruneExpr = ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{
+		makeFuncExpr(function.ISNOTNULL, makeColExpr(0, "year")),
+	}, partColSet)
+	atom = requirePartitionAtom(t, pruneExpr)
+	assert.Equal(t, PartOpIsNotNull, atom.Op)
+}
+
+func TestExtractPartitionPruneExpr_UnaryMinusLiteral(t *testing.T) {
+	td := makeTableDef("year")
+	partColSet := map[string]bool{"year": true}
+
+	pruneExpr := ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{
+		makeFuncExpr(function.GREAT_THAN, makeColExpr(0, "year"), makeUnaryMinusExpr(makeLitInt64(2020))),
+	}, partColSet)
+	atom := requirePartitionAtom(t, pruneExpr)
+	assert.Equal(t, PartOpGt, atom.Op)
+	assert.Equal(t, []string{"-2020"}, atom.Values)
+
+	pruneExpr = ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{
+		makeBetweenExpr(makeColExpr(0, "year"), makeUnaryMinusExpr(makeLitInt64(10)), makeLitInt64(10)),
+	}, partColSet)
+	atom = requirePartitionAtom(t, pruneExpr)
+	assert.Equal(t, PartOpBetween, atom.Op)
+	assert.Equal(t, []string{"-10", "10"}, atom.Values)
+}
+
+func TestExtractPartitionPruneExpr_NodeLimitFallback(t *testing.T) {
+	td := makeTableDef("year")
+	partColSet := map[string]bool{"year": true}
+	args := make([]*plan.Expr, 0, maxPartitionPruneExprNodes+1)
+	for i := 0; i <= maxPartitionPruneExprNodes; i++ {
+		args = append(args, makeEqExpr(makeColExpr(0, "year"), makeLitInt64(int64(i))))
+	}
+
+	assert.Nil(t, ExtractPartitionPruneExprFromExprs(td, []*plan.Expr{makeOrExpr(args...)}, partColSet))
 }
 
 func TestMatchPartitionValue_SetWithEnumvalues(t *testing.T) {
@@ -1787,6 +2205,753 @@ func TestDiscoverHivePartitions_BetweenPredicate(t *testing.T) {
 	assert.Equal(t, 3, len(result.Files))
 }
 
+func TestDiscoverHivePartitions_RangePruneExpr(t *testing.T) {
+	dirs := map[string][]fileservice.DirEntry{
+		"/data": {
+			{Name: "year=2021", IsDir: true},
+			{Name: "year=2022", IsDir: true},
+			{Name: "year=2023", IsDir: true},
+			{Name: "year=2024", IsDir: true},
+		},
+		"/data/year=2023": {{Name: "a.parquet", IsDir: false, Size: 100}},
+		"/data/year=2024": {{Name: "b.parquet", IsDir: false, Size: 200}},
+	}
+
+	result, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(),
+		mockListDir(dirs),
+		"/data",
+		[]string{"year"},
+		[]tree.HivePartColType{{Id: int32(types.T_int32)}},
+		&PartitionAtom{ColName: "year", Op: PartOpGt, Values: []string{"2022"}},
+		nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.PartitionCount)
+	assert.Equal(t, 2, result.PrunedCount)
+	require.Len(t, result.Files, 2)
+	assert.Equal(t, 2, result.PrunedFiles)
+	assert.Equal(t, int64(300), result.PrunedBytes)
+	assert.Equal(t, "/data/year=2023/a.parquet", result.Files[0].FilePath)
+	assert.Equal(t, "/data/year=2024/b.parquet", result.Files[1].FilePath)
+}
+
+func TestDiscoverHivePartitions_EmptyRangeIntersection(t *testing.T) {
+	dirs := map[string][]fileservice.DirEntry{
+		"/data": {
+			{Name: "year=2020", IsDir: true},
+			{Name: "year=2025", IsDir: true},
+		},
+		"/data/year=2020": {{Name: "a.parquet", IsDir: false, Size: 100}},
+		"/data/year=2025": {{Name: "b.parquet", IsDir: false, Size: 200}},
+	}
+
+	result, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(),
+		mockListDir(dirs),
+		"/data",
+		[]string{"year"},
+		[]tree.HivePartColType{{Id: int32(types.T_int32)}},
+		&PartitionAnd{Children: []PartitionPruneExpr{
+			&PartitionAtom{ColName: "year", Op: PartOpGt, Values: []string{"2025"}},
+			&PartitionAtom{ColName: "year", Op: PartOpLt, Values: []string{"2020"}},
+		}},
+		nil,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, result.Files)
+	assert.Equal(t, 0, result.PartitionCount)
+	assert.Equal(t, 2, result.PrunedCount)
+}
+
+func TestDiscoverHivePartitions_OrPruneExpr(t *testing.T) {
+	dirs := map[string][]fileservice.DirEntry{
+		"/data": {
+			{Name: "year=2020", IsDir: true},
+			{Name: "year=2021", IsDir: true},
+			{Name: "year=2024", IsDir: true},
+		},
+		"/data/year=2020": {{Name: "a.parquet", IsDir: false, Size: 100}},
+		"/data/year=2024": {{Name: "b.parquet", IsDir: false, Size: 200}},
+	}
+
+	result, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(),
+		mockListDir(dirs),
+		"/data",
+		[]string{"year"},
+		[]tree.HivePartColType{{Id: int32(types.T_int32)}},
+		&PartitionOr{Children: []PartitionPruneExpr{
+			&PartitionAtom{ColName: "year", Op: PartOpEq, Values: []string{"2020"}},
+			&PartitionAtom{ColName: "year", Op: PartOpEq, Values: []string{"2024"}},
+		}},
+		nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.PartitionCount)
+	assert.Equal(t, 1, result.PrunedCount)
+	require.Len(t, result.Files, 2)
+	assert.Equal(t, "/data/year=2020/a.parquet", result.Files[0].FilePath)
+	assert.Equal(t, "/data/year=2024/b.parquet", result.Files[1].FilePath)
+}
+
+func TestDiscoverHivePartitions_OverlappingOrDoesNotDuplicateFiles(t *testing.T) {
+	dirs := map[string][]fileservice.DirEntry{
+		"/data": {
+			{Name: "year=2024", IsDir: true},
+			{Name: "year=2025", IsDir: true},
+		},
+		"/data/year=2024": {{Name: "a.parquet", IsDir: false, Size: 100}},
+		"/data/year=2025": {{Name: "b.parquet", IsDir: false, Size: 200}},
+	}
+
+	result, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(),
+		mockListDir(dirs),
+		"/data",
+		[]string{"year"},
+		[]tree.HivePartColType{{Id: int32(types.T_int32)}},
+		&PartitionOr{Children: []PartitionPruneExpr{
+			&PartitionAtom{ColName: "year", Op: PartOpEq, Values: []string{"2024"}},
+			&PartitionAtom{ColName: "year", Op: PartOpIn, Values: []string{"2024", "2025"}},
+		}},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Files, 2)
+	assert.Equal(t, "/data/year=2024/a.parquet", result.Files[0].FilePath)
+	assert.Equal(t, "/data/year=2025/b.parquet", result.Files[1].FilePath)
+}
+
+func TestDiscoverHivePartitions_UnknownOrBranchKeepsDirectory(t *testing.T) {
+	dirs := map[string][]fileservice.DirEntry{
+		"/data": {
+			{Name: "country=CN", IsDir: true},
+			{Name: "country=US", IsDir: true},
+		},
+		"/data/country=CN": {{Name: "cn.parquet", IsDir: false, Size: 100}},
+		"/data/country=US": {{Name: "us.parquet", IsDir: false, Size: 200}},
+	}
+
+	result, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(),
+		mockListDir(dirs),
+		"/data",
+		[]string{"country"},
+		[]tree.HivePartColType{{Id: int32(types.T_varchar)}},
+		&PartitionOr{Children: []PartitionPruneExpr{
+			&PartitionAtom{ColName: "country", Op: PartOpEq, Values: []string{"US"}},
+			&PartitionAtom{ColName: "country", Op: PartOpEq, Values: []string{"FR"}},
+		}},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Files, 2)
+	assert.Equal(t, 0, result.PrunedCount, "varchar mismatches are unknown and must be kept")
+}
+
+func TestDiscoverHivePartitions_MultiLevelOrPruneExpr(t *testing.T) {
+	dirs := map[string][]fileservice.DirEntry{
+		"/data": {
+			{Name: "year=2024", IsDir: true},
+			{Name: "year=2025", IsDir: true},
+		},
+		"/data/year=2024": {
+			{Name: "month=01", IsDir: true},
+			{Name: "month=02", IsDir: true},
+		},
+		"/data/year=2025": {
+			{Name: "month=01", IsDir: true},
+			{Name: "month=02", IsDir: true},
+		},
+		"/data/year=2024/month=01": {{Name: "a.parquet", IsDir: false, Size: 100}},
+		"/data/year=2025/month=02": {{Name: "b.parquet", IsDir: false, Size: 200}},
+	}
+	pruneExpr := &PartitionOr{Children: []PartitionPruneExpr{
+		&PartitionAnd{Children: []PartitionPruneExpr{
+			&PartitionAtom{ColName: "year", Op: PartOpEq, Values: []string{"2024"}},
+			&PartitionAtom{ColName: "month", Op: PartOpEq, Values: []string{"1"}},
+		}},
+		&PartitionAnd{Children: []PartitionPruneExpr{
+			&PartitionAtom{ColName: "year", Op: PartOpEq, Values: []string{"2025"}},
+			&PartitionAtom{ColName: "month", Op: PartOpEq, Values: []string{"2"}},
+		}},
+	}}
+
+	result, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(),
+		mockListDir(dirs),
+		"/data",
+		[]string{"year", "month"},
+		[]tree.HivePartColType{
+			{Id: int32(types.T_int32)},
+			{Id: int32(types.T_int32)},
+		},
+		pruneExpr,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Files, 2)
+	assert.Equal(t, "/data/year=2024/month=01/a.parquet", result.Files[0].FilePath)
+	assert.Equal(t, "/data/year=2025/month=02/b.parquet", result.Files[1].FilePath)
+	assert.Equal(t, 2, result.PrunedCount)
+}
+
+func TestDiscoverHivePartitions_HalfBoundOrKeepsUnknownBranch(t *testing.T) {
+	dirs := map[string][]fileservice.DirEntry{
+		"/data": {
+			{Name: "part_a=1", IsDir: true},
+			{Name: "part_a=3", IsDir: true},
+		},
+		"/data/part_a=1": {
+			{Name: "part_b=1", IsDir: true},
+		},
+		"/data/part_a=3": {
+			{Name: "part_b=2", IsDir: true},
+		},
+		"/data/part_a=1/part_b=1": {{Name: "a.parquet", IsDir: false, Size: 100}},
+		"/data/part_a=3/part_b=2": {{Name: "b.parquet", IsDir: false, Size: 200}},
+	}
+	pruneExpr := &PartitionOr{Children: []PartitionPruneExpr{
+		&PartitionAtom{ColName: "part_a", Op: PartOpEq, Values: []string{"1"}},
+		&PartitionAtom{ColName: "part_b", Op: PartOpEq, Values: []string{"2"}},
+	}}
+
+	result, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(),
+		mockListDir(dirs),
+		"/data",
+		[]string{"part_a", "part_b"},
+		[]tree.HivePartColType{
+			{Id: int32(types.T_int32)},
+			{Id: int32(types.T_int32)},
+		},
+		pruneExpr,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Files, 2)
+	assert.Equal(t, "/data/part_a=1/part_b=1/a.parquet", result.Files[0].FilePath)
+	assert.Equal(t, "/data/part_a=3/part_b=2/b.parquet", result.Files[1].FilePath)
+}
+
+func TestDiscoverHivePartitions_IsNullPruneExpr(t *testing.T) {
+	dirs := map[string][]fileservice.DirEntry{
+		"/data": {
+			{Name: "year=2024", IsDir: true},
+			{Name: "year=__HIVE_DEFAULT_PARTITION__", IsDir: true},
+		},
+		"/data/year=__HIVE_DEFAULT_PARTITION__": {{Name: "null.parquet", IsDir: false, Size: 100}},
+		"/data/year=2024":                       {{Name: "nonnull.parquet", IsDir: false, Size: 200}},
+	}
+
+	result, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(),
+		mockListDir(dirs),
+		"/data",
+		[]string{"year"},
+		[]tree.HivePartColType{{Id: int32(types.T_int32)}},
+		&PartitionAtom{ColName: "year", Op: PartOpIsNull},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Files, 1)
+	assert.Equal(t, "/data/year=__HIVE_DEFAULT_PARTITION__/null.parquet", result.Files[0].FilePath)
+
+	result, err = DiscoverHivePartitionsWithPruneExpr(
+		context.Background(),
+		mockListDir(dirs),
+		"/data",
+		[]string{"year"},
+		[]tree.HivePartColType{{Id: int32(types.T_int32)}},
+		&PartitionAtom{ColName: "year", Op: PartOpIsNotNull},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Files, 1)
+	assert.Equal(t, "/data/year=2024/nonnull.parquet", result.Files[0].FilePath)
+}
+
+func TestHivePartitionListCache_DisabledCallsRealList(t *testing.T) {
+	ResetHivePartitionListCacheForTest()
+	var calls atomic.Int32
+	dirs := map[string][]fileservice.DirEntry{
+		"/data":           {{Name: "year=2024", IsDir: true}},
+		"/data/year=2024": {{Name: "f.parquet", IsDir: false, Size: 100}},
+	}
+	listDir := func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
+		calls.Add(1)
+		return mockListDir(dirs)(ctx, prefix)
+	}
+
+	for i := 0; i < 2; i++ {
+		_, err := DiscoverHivePartitionsWithPruneExpr(
+			context.Background(),
+			listDir,
+			"/data",
+			[]string{"year"},
+			[]tree.HivePartColType{{Id: int32(types.T_int32)}},
+			nil,
+			nil,
+		)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, int32(4), calls.Load())
+}
+
+func TestHivePartitionListCache_EnabledHitsSecondQuery(t *testing.T) {
+	ResetHivePartitionListCacheForTest()
+	var calls atomic.Int32
+	dirs := map[string][]fileservice.DirEntry{
+		"/data":           {{Name: "year=2024", IsDir: true}},
+		"/data/year=2024": {{Name: "f.parquet", IsDir: false, Size: 100}},
+	}
+	listDir := func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
+		calls.Add(1)
+		return mockListDir(dirs)(ctx, prefix)
+	}
+	opts := &DiscoverOptions{
+		CacheTTL:       time.Minute,
+		CacheKeyPrefix: "test-cache",
+	}
+
+	first, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(), listDir, "/data",
+		[]string{"year"}, []tree.HivePartColType{{Id: int32(types.T_int32)}}, nil, opts)
+	require.NoError(t, err)
+	assert.Equal(t, 0, first.CacheHits)
+	assert.Equal(t, 2, first.CacheMisses)
+	assert.Equal(t, 2, first.ListCalls)
+
+	second, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(), listDir, "/data",
+		[]string{"year"}, []tree.HivePartColType{{Id: int32(types.T_int32)}}, nil, opts)
+	require.NoError(t, err)
+	assert.Equal(t, 2, second.CacheHits)
+	assert.Equal(t, 0, second.CacheMisses)
+	assert.Equal(t, 0, second.ListCalls, "warm cache hit must not count as a real List call")
+	assert.Equal(t, int32(2), calls.Load())
+}
+
+func TestHivePartitionDirectPrefixStats_WarmCacheSkipsRealParentList(t *testing.T) {
+	ResetHivePartitionListCacheForTest()
+	var mu sync.Mutex
+	calls := make(map[string]int)
+	dirs := map[string][]fileservice.DirEntry{
+		"/data": {
+			{Name: "year=2024", IsDir: true},
+			{Name: "year=2025", IsDir: true},
+		},
+		"/data/year=2024": {{Name: "f2024.parquet", IsDir: false, Size: 100}},
+		"/data/year=2025": {{Name: "f2025.parquet", IsDir: false, Size: 200}},
+	}
+	listDir := func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
+		mu.Lock()
+		calls[prefix]++
+		mu.Unlock()
+		return mockListDir(dirs)(ctx, prefix)
+	}
+	opts := &DiscoverOptions{CacheTTL: time.Minute, CacheKeyPrefix: "direct-warm"}
+
+	first, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(), listDir, "/data",
+		[]string{"year"}, []tree.HivePartColType{{Id: int32(types.T_int32)}}, nil, opts)
+	require.NoError(t, err)
+	assert.Equal(t, 0, first.DirectPrefixHits)
+	assert.Equal(t, 3, first.DirectPrefixMisses)
+
+	second, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(), listDir, "/data",
+		[]string{"year"}, []tree.HivePartColType{{Id: int32(types.T_int32)}},
+		&PartitionAtom{ColName: "year", Op: PartOpEq, Values: []string{"2024"}}, opts)
+	require.NoError(t, err)
+	require.Len(t, second.Files, 1)
+	assert.Equal(t, "/data/year=2024/f2024.parquet", second.Files[0].FilePath)
+	assert.Equal(t, 2, second.DirectPrefixHits)
+	assert.Equal(t, 0, second.DirectPrefixMisses)
+	assert.Equal(t, 0, second.ListCalls)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 1, calls["/data"], "warm direct prefix must not re-list the parent directory")
+	assert.Equal(t, 1, calls["/data/year=2024"], "warm direct prefix reused the cached leaf file list")
+	assert.Equal(t, 1, calls["/data/year=2025"])
+}
+
+func TestHivePartitionDirectPrefix_UsesCachedRawSegments(t *testing.T) {
+	tests := []struct {
+		name             string
+		partCol          string
+		colType          tree.HivePartColType
+		rootEntry        string
+		atomValue        string
+		leafPrefix       string
+		unwantedPrefixes []string
+	}{
+		{
+			name:       "zero padded integer",
+			partCol:    "month",
+			colType:    tree.HivePartColType{Id: int32(types.T_int32)},
+			rootEntry:  "month=01",
+			atomValue:  "1",
+			leafPrefix: "/data/month=01",
+			unwantedPrefixes: []string{
+				"/data/month=1",
+			},
+		},
+		{
+			name:       "url encoded string",
+			partCol:    "country",
+			colType:    tree.HivePartColType{Id: int32(types.T_varchar)},
+			rootEntry:  "country=US%2FCA",
+			atomValue:  "US/CA",
+			leafPrefix: "/data/country=US%2FCA",
+			unwantedPrefixes: []string{
+				"/data/country=US/CA",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ResetHivePartitionListCacheForTest()
+			cachePrefix := "direct-raw-" + tc.name
+			globalHivePartitionListCache.set(
+				cachePrefix+"\x1f"+"prefix=/data",
+				[]fileservice.DirEntry{{Name: tc.rootEntry, IsDir: true}},
+				time.Minute, 10, 1<<20)
+
+			var mu sync.Mutex
+			calls := make(map[string]int)
+			dirs := map[string][]fileservice.DirEntry{
+				tc.leafPrefix: {{Name: "f.parquet", IsDir: false, Size: 100}},
+			}
+			listDir := func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
+				mu.Lock()
+				calls[prefix]++
+				mu.Unlock()
+				return mockListDir(dirs)(ctx, prefix)
+			}
+
+			result, err := DiscoverHivePartitionsWithPruneExpr(
+				context.Background(),
+				listDir,
+				"/data",
+				[]string{tc.partCol},
+				[]tree.HivePartColType{tc.colType},
+				&PartitionAtom{ColName: tc.partCol, Op: PartOpEq, Values: []string{tc.atomValue}},
+				&DiscoverOptions{CacheTTL: time.Minute, CacheKeyPrefix: cachePrefix},
+			)
+			require.NoError(t, err)
+			require.Len(t, result.Files, 1)
+			assert.Equal(t, tc.leafPrefix+"/f.parquet", result.Files[0].FilePath)
+			assert.Equal(t, 1, result.DirectPrefixHits)
+			assert.Equal(t, 1, result.DirectPrefixMisses)
+
+			mu.Lock()
+			defer mu.Unlock()
+			assert.Equal(t, 0, calls["/data"], "cached parent metadata avoids re-listing root")
+			assert.Equal(t, 1, calls[tc.leafPrefix], "discovery must list the observed raw child prefix")
+			for _, prefix := range tc.unwantedPrefixes {
+				assert.Equal(t, 0, calls[prefix], "must not synthesize raw prefix from SQL literal")
+			}
+		})
+	}
+}
+
+func TestHivePartitionDirectPrefix_DuplicateRawIntegerRepresentations(t *testing.T) {
+	ResetHivePartitionListCacheForTest()
+	cachePrefix := "direct-duplicate-raw"
+	globalHivePartitionListCache.set(
+		cachePrefix+"\x1f"+"prefix=/data",
+		[]fileservice.DirEntry{
+			{Name: "year=02024", IsDir: true},
+			{Name: "year=2024", IsDir: true},
+		},
+		time.Minute, 10, 1<<20)
+
+	var mu sync.Mutex
+	calls := make(map[string]int)
+	dirs := map[string][]fileservice.DirEntry{
+		"/data/year=02024": {{Name: "padded.parquet", IsDir: false, Size: 100}},
+		"/data/year=2024":  {{Name: "plain.parquet", IsDir: false, Size: 200}},
+	}
+	listDir := func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
+		mu.Lock()
+		calls[prefix]++
+		mu.Unlock()
+		return mockListDir(dirs)(ctx, prefix)
+	}
+
+	result, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(),
+		listDir,
+		"/data",
+		[]string{"year"},
+		[]tree.HivePartColType{{Id: int32(types.T_int32)}},
+		&PartitionAtom{ColName: "year", Op: PartOpEq, Values: []string{"2024"}},
+		&DiscoverOptions{CacheTTL: time.Minute, CacheKeyPrefix: cachePrefix},
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Files, 2)
+	assert.Equal(t, "/data/year=02024/padded.parquet", result.Files[0].FilePath)
+	assert.Equal(t, "/data/year=2024/plain.parquet", result.Files[1].FilePath)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 0, calls["/data"])
+	assert.Equal(t, 1, calls["/data/year=02024"])
+	assert.Equal(t, 1, calls["/data/year=2024"])
+}
+
+func TestHivePartitionListCache_TTLExpiryAndErrorNotCached(t *testing.T) {
+	ResetHivePartitionListCacheForTest()
+	var calls atomic.Int32
+	wantErr := errors.New("temporary list error")
+	listDir := func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
+		call := calls.Add(1)
+		return func(yield func(*fileservice.DirEntry, error) bool) {
+			if call == 1 {
+				yield(nil, wantErr)
+				return
+			}
+			yield(&fileservice.DirEntry{Name: "year=2024", IsDir: true}, nil)
+		}
+	}
+	opts := DiscoverOptions{CacheTTL: 10 * time.Millisecond, CacheKeyPrefix: "ttl"}
+	result := &PartitionDiscoveryResult{}
+	_, err := listHivePartitionDir(context.Background(), listDir, "/data", opts, result)
+	require.ErrorIs(t, err, wantErr)
+
+	entries, err := listHivePartitionDir(context.Background(), listDir, "/data", opts, result)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, int32(2), calls.Load())
+
+	time.Sleep(20 * time.Millisecond)
+	_, err = listHivePartitionDir(context.Background(), listDir, "/data", opts, result)
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), calls.Load())
+}
+
+func TestHivePartitionListCache_DeepCopyAndEviction(t *testing.T) {
+	ResetHivePartitionListCacheForTest()
+	globalHivePartitionListCache.set("a", []fileservice.DirEntry{{Name: "year=2024", IsDir: true}}, time.Minute, 10, 1<<20)
+	entries, ok := globalHivePartitionListCache.get("a")
+	require.True(t, ok)
+	entries[0].Name = "mutated"
+
+	entries, ok = globalHivePartitionListCache.get("a")
+	require.True(t, ok)
+	assert.Equal(t, "year=2024", entries[0].Name)
+
+	globalHivePartitionListCache.set("b", []fileservice.DirEntry{{Name: "year=2025", IsDir: true}}, time.Minute, 1, 1<<20)
+	globalHivePartitionListCache.mu.Lock()
+	_, hasA := globalHivePartitionListCache.entries["a"]
+	_, hasB := globalHivePartitionListCache.entries["b"]
+	globalHivePartitionListCache.mu.Unlock()
+	assert.False(t, hasA)
+	assert.True(t, hasB)
+
+	ResetHivePartitionListCacheForTest()
+	globalHivePartitionListCache.mu.Lock()
+	assert.Empty(t, globalHivePartitionListCache.entries)
+	globalHivePartitionListCache.mu.Unlock()
+}
+
+func TestHivePartitionListCache_Singleflight(t *testing.T) {
+	ResetHivePartitionListCacheForTest()
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	listDir := func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
+		calls.Add(1)
+		close(started)
+		<-release
+		return func(yield func(*fileservice.DirEntry, error) bool) {
+			yield(&fileservice.DirEntry{Name: "year=2024", IsDir: true}, nil)
+		}
+	}
+	opts := DiscoverOptions{CacheTTL: time.Minute, CacheKeyPrefix: "singleflight"}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := listHivePartitionDir(context.Background(), listDir, "/data", opts, &PartitionDiscoveryResult{})
+			errs <- err
+		}()
+	}
+	<-started
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	assert.Equal(t, int32(1), calls.Load())
+}
+
+func TestHivePartitionListCacheKey_DoesNotExposeSecret(t *testing.T) {
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{ScanType: tree.S3, Filepath: "s3://bucket/root"},
+		ExParam: tree.ExParam{S3Param: &tree.S3Parameter{
+			Endpoint:   "https://s3.example.com/",
+			Bucket:     "bucket",
+			Provider:   "AWS",
+			APIKey:     "AKIA_TEST",
+			APISecret:  "super-secret",
+			RoleArn:    "arn:aws:iam::1:role/r",
+			ExternalId: "external",
+		}},
+	}
+
+	key := BuildHivePartitionListCacheKey(param, 42, "/root", "/root/year=2024")
+	assert.Contains(t, key, "account=42")
+	assert.Contains(t, key, "provider=aws")
+	assert.NotContains(t, key, "super-secret")
+	assert.NotContains(t, key, "AKIA_TEST")
+	assert.Contains(t, key, hashHivePartitionAccessKeyID("AKIA_TEST"))
+}
+
+func TestHivePartitionListCacheKey_IsolatesIdentityDimensions(t *testing.T) {
+	makeParam := func() *tree.ExternParam {
+		return &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{ScanType: tree.S3, Filepath: "s3://bucket/root"},
+			ExParam: tree.ExParam{S3Param: &tree.S3Parameter{
+				Endpoint:   "https://s3.example.com/",
+				Bucket:     "bucket-a",
+				Provider:   "AWS",
+				APIKey:     "AKIA_A",
+				APISecret:  "secret-a",
+				RoleArn:    "arn:aws:iam::1:role/a",
+				ExternalId: "external-a",
+			}},
+		}
+	}
+	base := BuildHivePartitionListCacheKey(makeParam(), 42, "/root", "/root/year=2024")
+
+	assert.NotEqual(t, base, BuildHivePartitionListCacheKey(makeParam(), 43, "/root", "/root/year=2024"))
+
+	p := makeParam()
+	p.S3Param.Endpoint = "https://s3.other.example.com/"
+	assert.NotEqual(t, base, BuildHivePartitionListCacheKey(p, 42, "/root", "/root/year=2024"))
+
+	p = makeParam()
+	p.S3Param.Bucket = "bucket-b"
+	assert.NotEqual(t, base, BuildHivePartitionListCacheKey(p, 42, "/root", "/root/year=2024"))
+
+	p = makeParam()
+	p.S3Param.RoleArn = "arn:aws:iam::1:role/b"
+	assert.NotEqual(t, base, BuildHivePartitionListCacheKey(p, 42, "/root", "/root/year=2024"))
+
+	p = makeParam()
+	p.S3Param.APIKey = "AKIA_B"
+	assert.NotEqual(t, base, BuildHivePartitionListCacheKey(p, 42, "/root", "/root/year=2024"))
+
+	p = makeParam()
+	p.S3Param.APISecret = "secret-b"
+	assert.Equal(t, base, BuildHivePartitionListCacheKey(p, 42, "/root", "/root/year=2024"),
+		"cache identity intentionally excludes APISecret")
+}
+
+func TestDiscoverHivePartitions_ListConcurrencyBoundAndStableOrder(t *testing.T) {
+	var active atomic.Int32
+	var maxActive atomic.Int32
+	dirs := map[string][]fileservice.DirEntry{
+		"/data": {
+			{Name: "year=2025", IsDir: true},
+			{Name: "year=2021", IsDir: true},
+			{Name: "year=2024", IsDir: true},
+			{Name: "year=2022", IsDir: true},
+			{Name: "year=2023", IsDir: true},
+		},
+	}
+	for year := 2021; year <= 2025; year++ {
+		prefix := fmt.Sprintf("/data/year=%d", year)
+		dirs[prefix] = []fileservice.DirEntry{{Name: fmt.Sprintf("f%d.parquet", year), IsDir: false, Size: int64(year)}}
+	}
+	listDir := func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
+		cur := active.Add(1)
+		for {
+			old := maxActive.Load()
+			if cur <= old || maxActive.CompareAndSwap(old, cur) {
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+		active.Add(-1)
+		return mockListDir(dirs)(ctx, prefix)
+	}
+
+	result, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(),
+		listDir,
+		"/data",
+		[]string{"year"},
+		[]tree.HivePartColType{{Id: int32(types.T_int32)}},
+		nil,
+		&DiscoverOptions{ListConcurrency: 2},
+	)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, maxActive.Load(), int32(2))
+	require.Len(t, result.Files, 5)
+	assert.Equal(t, "/data/year=2021/f2021.parquet", result.Files[0].FilePath)
+	assert.Equal(t, "/data/year=2025/f2025.parquet", result.Files[4].FilePath)
+}
+
+func TestDiscoverHivePartitions_ConcurrentMaxListCalls(t *testing.T) {
+	dirs := map[string][]fileservice.DirEntry{
+		"/data": {
+			{Name: "year=2021", IsDir: true},
+			{Name: "year=2022", IsDir: true},
+			{Name: "year=2023", IsDir: true},
+		},
+		"/data/year=2021": {{Name: "a.parquet", IsDir: false, Size: 100}},
+		"/data/year=2022": {{Name: "b.parquet", IsDir: false, Size: 200}},
+		"/data/year=2023": {{Name: "c.parquet", IsDir: false, Size: 300}},
+	}
+
+	_, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(),
+		mockListDir(dirs),
+		"/data",
+		[]string{"year"},
+		[]tree.HivePartColType{{Id: int32(types.T_int32)}},
+		nil,
+		&DiscoverOptions{ListConcurrency: 3, MaxListCalls: 2},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "List calls")
+}
+
+func TestDiscoverHivePartitions_ConcurrentMaxPartitions(t *testing.T) {
+	dirs := map[string][]fileservice.DirEntry{
+		"/data": {
+			{Name: "year=2021", IsDir: true},
+			{Name: "year=2022", IsDir: true},
+			{Name: "year=2023", IsDir: true},
+		},
+		"/data/year=2021": {{Name: "a.parquet", IsDir: false, Size: 100}},
+		"/data/year=2022": {{Name: "b.parquet", IsDir: false, Size: 200}},
+		"/data/year=2023": {{Name: "c.parquet", IsDir: false, Size: 300}},
+	}
+
+	_, err := DiscoverHivePartitionsWithPruneExpr(
+		context.Background(),
+		mockListDir(dirs),
+		"/data",
+		[]string{"year"},
+		[]tree.HivePartColType{{Id: int32(types.T_int32)}},
+		nil,
+		&DiscoverOptions{ListConcurrency: 3, MaxPartitions: 2},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "partitions")
+}
+
 func TestDiscoverHivePartitions_MultiLevelPartialPredicate(t *testing.T) {
 	dirs := map[string][]fileservice.DirEntry{
 		"/data": {
@@ -1869,4 +3034,76 @@ func TestDiscoverHivePartitions_WarnPartitionCount(t *testing.T) {
 	assert.Equal(t, 5001, result.PartitionCount)
 	assert.True(t, result.warnEmitted, "warning should have been emitted for >5000 partitions")
 	assert.Equal(t, 5001, len(result.Files))
+}
+
+func TestPartitionPruneReferencedColsCoverageHack(t *testing.T) {
+	var nilAtom *PartitionAtom
+	assert.Nil(t, nilAtom.ReferencedCols())
+
+	atom := &PartitionAtom{ColName: "Year", Op: PartOpEq, Values: []string{"2024"}}
+	assert.Equal(t, map[string]bool{"year": true}, atom.ReferencedCols())
+
+	andExpr := &PartitionAnd{Children: []PartitionPruneExpr{
+		atom,
+		&PartitionAtom{ColName: "Month", Op: PartOpEq, Values: []string{"01"}},
+	}}
+	assert.Equal(t, map[string]bool{"year": true, "month": true}, andExpr.ReferencedCols())
+
+	orExpr := &PartitionOr{Children: []PartitionPruneExpr{andExpr}}
+	assert.Equal(t, map[string]bool{"year": true, "month": true}, orExpr.ReferencedCols())
+	assert.Nil(t, mergeReferencedCols(nil))
+}
+
+func TestPartitionCompareUnsignedCoverageHack(t *testing.T) {
+	colType := tree.HivePartColType{Id: int32(types.T_uint8)}
+	assert.Equal(t, MatchTrue, matchPartitionCompare("4", []string{"5"}, colType, PartOpLt))
+	assert.Equal(t, MatchTrue, matchPartitionCompare("5", []string{"5"}, colType, PartOpLe))
+	assert.Equal(t, MatchTrue, matchPartitionCompare("6", []string{"5"}, colType, PartOpGt))
+	assert.Equal(t, MatchTrue, matchPartitionCompare("5", []string{"5"}, colType, PartOpGe))
+	assert.Equal(t, MatchFalse, matchPartitionCompare("4", []string{"5"}, colType, PartOpGt))
+	assert.Equal(t, MatchUnknown, matchPartitionCompare("4", []string{"5", "6"}, colType, PartOpGt))
+	assert.False(t, compareUnsigned(1, 1, PartOpBetween))
+	assert.False(t, compareSigned(1, 1, PartOpBetween))
+}
+
+func TestGetNegatedLiteralStringCoverageHack(t *testing.T) {
+	litExpr := func(lit *plan.Literal) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Lit{Lit: lit}}
+	}
+	cases := []struct {
+		name string
+		lit  *plan.Literal
+		want string
+	}{
+		{name: "i8", lit: &plan.Literal{Value: &plan.Literal_I8Val{I8Val: 1}}, want: "-1"},
+		{name: "i16", lit: &plan.Literal{Value: &plan.Literal_I16Val{I16Val: 2}}, want: "-2"},
+		{name: "i32", lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 3}}, want: "-3"},
+		{name: "i64", lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 4}}, want: "-4"},
+		{name: "u8 zero", lit: &plan.Literal{Value: &plan.Literal_U8Val{U8Val: 0}}, want: "0"},
+		{name: "u8", lit: &plan.Literal{Value: &plan.Literal_U8Val{U8Val: 5}}, want: "-5"},
+		{name: "u16 zero", lit: &plan.Literal{Value: &plan.Literal_U16Val{U16Val: 0}}, want: "0"},
+		{name: "u16", lit: &plan.Literal{Value: &plan.Literal_U16Val{U16Val: 6}}, want: "-6"},
+		{name: "u32 zero", lit: &plan.Literal{Value: &plan.Literal_U32Val{U32Val: 0}}, want: "0"},
+		{name: "u32", lit: &plan.Literal{Value: &plan.Literal_U32Val{U32Val: 7}}, want: "-7"},
+		{name: "u64 zero", lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 0}}, want: "0"},
+		{name: "u64", lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 8}}, want: "-8"},
+		{name: "float", lit: &plan.Literal{Value: &plan.Literal_Fval{Fval: 1.5}}, want: "-1.5"},
+		{name: "double", lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 2.5}}, want: "-2.5"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := getNegatedLiteralString(litExpr(tc.lit))
+			require.True(t, ok)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+
+	_, ok := getNegatedLiteralString(&plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "year"}}})
+	assert.False(t, ok)
+	_, ok = getNegatedLiteralString(litExpr(nil))
+	assert.False(t, ok)
+	_, ok = getNegatedLiteralString(litExpr(&plan.Literal{Isnull: true}))
+	assert.False(t, ok)
+	_, ok = getNegatedLiteralString(litExpr(&plan.Literal{Value: &plan.Literal_Sval{Sval: "x"}}))
+	assert.False(t, ok)
 }
