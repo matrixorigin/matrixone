@@ -704,50 +704,11 @@ func decimalIntegerDiv[T types.Decimal64 | types.Decimal128](parameters []*vecto
 		case types.Decimal128:
 			d1 := any(v1).(types.Decimal128)
 			d2 := any(v2).(types.Decimal128)
-			// For integer DIV: align scales then use truncating integer division.
-			// When scales are equal, raw1/raw2 is the correct truncated integer quotient.
-			if scale1 != scale2 {
-				if scale1 < scale2 {
-					d1, err = d1.Scale(scale2 - scale1)
-				} else {
-					d2, err = d2.Scale(scale1 - scale2)
-				}
-				if err != nil {
-					return err
-				}
-			}
-			// Truncating integer division via decimal128ToInt64 then int64 division
-			n1, convErr := decimal128ToInt64(d1)
-			if convErr != nil {
-				return convErr
-			}
-			n2, convErr := decimal128ToInt64(d2)
-			if convErr != nil {
-				return convErr
-			}
-			rss[i] = n1 / n2
+			rss[i], err = decimal128IntDivToInt64(d1, d2, scale1, scale2)
 		case types.Decimal64:
 			d1Val := any(v1).(types.Decimal64)
 			d2Val := any(v2).(types.Decimal64)
-			n1 := int64(d1Val)
-			n2 := int64(d2Val)
-			if scale1 != scale2 {
-				// Align scales by multiplying the smaller-scale value
-				if scale1 < scale2 {
-					for s := scale1; s < scale2; s++ {
-						n1 *= 10
-					}
-				} else {
-					for s := scale2; s < scale1; s++ {
-						n2 *= 10
-					}
-				}
-			}
-			if n2 == 0 {
-				rsNull.Add(i)
-				continue
-			}
-			rss[i] = n1 / n2
+			rss[i], err = decimal128IntDivToInt64(decimal64ToDecimal128(d1Val), decimal64ToDecimal128(d2Val), scale1, scale2)
 		default:
 			panic("unsupported decimal type")
 		}
@@ -756,6 +717,41 @@ func decimalIntegerDiv[T types.Decimal64 | types.Decimal128](parameters []*vecto
 		}
 	}
 	return nil
+}
+
+func decimal64ToDecimal128(v types.Decimal64) types.Decimal128 {
+	return types.Decimal128{B0_63: uint64(v), B64_127: uint64(int64(v) >> 63)}
+}
+
+func decimal128IntDivToInt64(x, y types.Decimal128, scale1, scale2 int32) (int64, error) {
+	signx := x.Sign()
+	signy := y.Sign()
+	if signx {
+		x = x.Minus()
+	}
+	if signy {
+		y = y.Minus()
+	}
+
+	scaleAdj := scale2 - scale1
+	var err error
+	if scaleAdj > 0 {
+		x, err = x.Scale(scaleAdj)
+	} else if scaleAdj < 0 {
+		y, err = y.Scale(-scaleAdj)
+	}
+	if err != nil {
+		return 0, err
+	}
+
+	x, err = x.Div128Trunc(y)
+	if err != nil {
+		return 0, err
+	}
+	if signx != signy {
+		x = x.Minus()
+	}
+	return decimal128ToInt64(x)
 }
 
 func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
