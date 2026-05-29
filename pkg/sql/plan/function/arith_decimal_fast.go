@@ -1157,6 +1157,14 @@ func d128IntDivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32,
 	return nil
 }
 
+func decimal128IntDivResultToInt64(divResult, x, y types.Decimal128, scale1, scale2 int32) (int64, error) {
+	val, err := decimal128ToInt64(divResult)
+	if err != nil {
+		return 0, moerr.NewInvalidInputNoCtxf("Decimal128 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
+	}
+	return val, nil
+}
+
 // ---- Decimal128 modulo ----
 
 func d128ModKernel(shouldError bool) func(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
@@ -1681,7 +1689,7 @@ func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsn
 					}
 				}
 				var err error
-				rs[i], err = decimal128ToInt64(divResult)
+				rs[i], err = decimal128IntDivResultToInt64(divResult, v1[i], v2[i], scale1, scale2)
 				if err != nil {
 					return err
 				}
@@ -1706,7 +1714,7 @@ func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsn
 				signyU := d128Abs(&absY)
 				if absY.B64_127 == 0 {
 					if d128IntDivInline(a, absY.B0_63, signyU, scaleFactor, &divResult) {
-						val, err := decimal128ToInt64(divResult)
+						val, err := decimal128IntDivResultToInt64(divResult, a, b, scale1, scale2)
 						rs[i] = val
 						if err != nil {
 							return err
@@ -1719,7 +1727,7 @@ func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsn
 				return err
 			}
 			var err error
-			rs[i], err = decimal128ToInt64(divResult)
+			rs[i], err = decimal128IntDivResultToInt64(divResult, a, b, scale1, scale2)
 			if err != nil {
 				return err
 			}
@@ -1747,7 +1755,7 @@ func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsn
 					}
 				}
 				var err error
-				rs[i], err = decimal128ToInt64(divResult)
+				rs[i], err = decimal128IntDivResultToInt64(divResult, a, v2[i], scale1, scale2)
 				if err != nil {
 					return err
 				}
@@ -1771,7 +1779,7 @@ func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsn
 				signyU := d128Abs(&absY)
 				if absY.B64_127 == 0 {
 					if d128IntDivInline(a, absY.B0_63, signyU, scaleFactor, &divResult) {
-						val, err := decimal128ToInt64(divResult)
+						val, err := decimal128IntDivResultToInt64(divResult, a, v2[i], scale1, scale2)
 						rs[i] = val
 						if err != nil {
 							return err
@@ -1784,7 +1792,7 @@ func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsn
 				return err
 			}
 			var err error
-			rs[i], err = decimal128ToInt64(divResult)
+			rs[i], err = decimal128IntDivResultToInt64(divResult, a, v2[i], scale1, scale2)
 			if err != nil {
 				return err
 			}
@@ -1818,7 +1826,7 @@ func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsn
 					}
 				}
 				var err error
-				rs[i], err = decimal128ToInt64(divResult)
+				rs[i], err = decimal128IntDivResultToInt64(divResult, v1[i], b, scale1, scale2)
 				if err != nil {
 					return err
 				}
@@ -1834,7 +1842,7 @@ func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsn
 				return err
 			}
 			var err error
-			rs[i], err = decimal128ToInt64(divResult)
+			rs[i], err = decimal128IntDivResultToInt64(divResult, v1[i], b, scale1, scale2)
 			if err != nil {
 				return err
 			}
@@ -3587,7 +3595,7 @@ func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scale, scaleAdj in
 			return err
 		}
 		var err error
-		*dst, err = decimal128ToInt64(divResult)
+		*dst, err = decimal128IntDivResultToInt64(divResult, x, y, scale1, scale2)
 		return err
 	}
 
@@ -3614,7 +3622,7 @@ func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scale, scaleAdj in
 					continue
 				}
 				var err error
-				rs[i], err = decimal128ToInt64(divResult)
+				rs[i], err = decimal128IntDivResultToInt64(divResult, d256toD128(v1[i]), d256toD128(v2[i]), scale1, scale2)
 				if err != nil {
 					return err
 				}
@@ -3661,7 +3669,7 @@ func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scale, scaleAdj in
 					continue
 				}
 				var err error
-				rs[i], err = decimal128ToInt64(divResult)
+				rs[i], err = decimal128IntDivResultToInt64(divResult, x, d256toD128(v2[i]), scale1, scale2)
 				if err != nil {
 					return err
 				}
@@ -3711,7 +3719,7 @@ func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scale, scaleAdj in
 						continue
 					}
 					var err error
-					rs[i], err = decimal128ToInt64(divResult)
+					rs[i], err = decimal128IntDivResultToInt64(divResult, d256toD128(v1[i]), y, scale1, scale2)
 					if err != nil {
 						return err
 					}
@@ -4764,7 +4772,7 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 					}
 				}
 				var err error
-				rs[i], err = decimal128ToInt64(divResult)
+				rs[i], err = decimal128IntDivResultToInt64(divResult, x, d64toD128(v2[i]), scale1, scale2)
 				if err != nil {
 					return err
 				}
@@ -4790,7 +4798,7 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 				signyU := d128Abs(&absY)
 				if absY.B64_127 == 0 {
 					if d128IntDivInline(x, absY.B0_63, signyU, scaleFactor, &divResult) {
-						val, err := decimal128ToInt64(divResult)
+						val, err := decimal128IntDivResultToInt64(divResult, x, y, scale1, scale2)
 						rs[i] = val
 						if err != nil {
 							return err
@@ -4803,7 +4811,7 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 				return err
 			}
 			var err error
-			rs[i], err = decimal128ToInt64(divResult)
+			rs[i], err = decimal128IntDivResultToInt64(divResult, x, y, scale1, scale2)
 			if err != nil {
 				return err
 			}
@@ -4832,7 +4840,7 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 					}
 				}
 				var err error
-				rs[i], err = decimal128ToInt64(divResult)
+				rs[i], err = decimal128IntDivResultToInt64(divResult, x, d64toD128(v2[i]), scale1, scale2)
 				if err != nil {
 					return err
 				}
@@ -4856,7 +4864,7 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 				signyU := d128Abs(&absY)
 				if absY.B64_127 == 0 {
 					if d128IntDivInline(x, absY.B0_63, signyU, scaleFactor, &divResult) {
-						val, err := decimal128ToInt64(divResult)
+						val, err := decimal128IntDivResultToInt64(divResult, x, d64toD128(v2[i]), scale1, scale2)
 						rs[i] = val
 						if err != nil {
 							return err
@@ -4869,7 +4877,7 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 				return err
 			}
 			var err error
-			rs[i], err = decimal128ToInt64(divResult)
+			rs[i], err = decimal128IntDivResultToInt64(divResult, x, d64toD128(v2[i]), scale1, scale2)
 			if err != nil {
 				return err
 			}
@@ -4904,7 +4912,7 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 					}
 				}
 				var err error
-				rs[i], err = decimal128ToInt64(divResult)
+				rs[i], err = decimal128IntDivResultToInt64(divResult, x, y, scale1, scale2)
 				if err != nil {
 					return err
 				}
@@ -4921,7 +4929,7 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 				return err
 			}
 			var err error
-			rs[i], err = decimal128ToInt64(divResult)
+			rs[i], err = decimal128IntDivResultToInt64(divResult, x, y, scale1, scale2)
 			if err != nil {
 				return err
 			}

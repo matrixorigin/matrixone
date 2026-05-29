@@ -1,8 +1,23 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package function
 
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -40,6 +55,16 @@ func TestDecimal128IntDivCorrectness(t *testing.T) {
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
+}
+
+func TestDecimal128IntDivOverflowMessage(t *testing.T) {
+	v1 := []types.Decimal128{mustParseD128("12345678909876543212345678909876543243")}
+	v2 := []types.Decimal128{{B0_63: 4}}
+	rs := make([]int64, 1)
+	rsnull := nulls.NewWithSize(1)
+
+	err := d128IntDiv(v1, v2, rs, 0, 0, rsnull, true)
+	require.ErrorContains(t, err, "Decimal128 Div overflow: 12345678909876543212345678909876543243/4")
 }
 
 func mustParseD128(s string) types.Decimal128 {
