@@ -3035,3 +3035,75 @@ func TestDiscoverHivePartitions_WarnPartitionCount(t *testing.T) {
 	assert.True(t, result.warnEmitted, "warning should have been emitted for >5000 partitions")
 	assert.Equal(t, 5001, len(result.Files))
 }
+
+func TestPartitionPruneReferencedColsCoverageHack(t *testing.T) {
+	var nilAtom *PartitionAtom
+	assert.Nil(t, nilAtom.ReferencedCols())
+
+	atom := &PartitionAtom{ColName: "Year", Op: PartOpEq, Values: []string{"2024"}}
+	assert.Equal(t, map[string]bool{"year": true}, atom.ReferencedCols())
+
+	andExpr := &PartitionAnd{Children: []PartitionPruneExpr{
+		atom,
+		&PartitionAtom{ColName: "Month", Op: PartOpEq, Values: []string{"01"}},
+	}}
+	assert.Equal(t, map[string]bool{"year": true, "month": true}, andExpr.ReferencedCols())
+
+	orExpr := &PartitionOr{Children: []PartitionPruneExpr{andExpr}}
+	assert.Equal(t, map[string]bool{"year": true, "month": true}, orExpr.ReferencedCols())
+	assert.Nil(t, mergeReferencedCols(nil))
+}
+
+func TestPartitionCompareUnsignedCoverageHack(t *testing.T) {
+	colType := tree.HivePartColType{Id: int32(types.T_uint8)}
+	assert.Equal(t, MatchTrue, matchPartitionCompare("4", []string{"5"}, colType, PartOpLt))
+	assert.Equal(t, MatchTrue, matchPartitionCompare("5", []string{"5"}, colType, PartOpLe))
+	assert.Equal(t, MatchTrue, matchPartitionCompare("6", []string{"5"}, colType, PartOpGt))
+	assert.Equal(t, MatchTrue, matchPartitionCompare("5", []string{"5"}, colType, PartOpGe))
+	assert.Equal(t, MatchFalse, matchPartitionCompare("4", []string{"5"}, colType, PartOpGt))
+	assert.Equal(t, MatchUnknown, matchPartitionCompare("4", []string{"5", "6"}, colType, PartOpGt))
+	assert.False(t, compareUnsigned(1, 1, PartOpBetween))
+	assert.False(t, compareSigned(1, 1, PartOpBetween))
+}
+
+func TestGetNegatedLiteralStringCoverageHack(t *testing.T) {
+	litExpr := func(lit *plan.Literal) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Lit{Lit: lit}}
+	}
+	cases := []struct {
+		name string
+		lit  *plan.Literal
+		want string
+	}{
+		{name: "i8", lit: &plan.Literal{Value: &plan.Literal_I8Val{I8Val: 1}}, want: "-1"},
+		{name: "i16", lit: &plan.Literal{Value: &plan.Literal_I16Val{I16Val: 2}}, want: "-2"},
+		{name: "i32", lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 3}}, want: "-3"},
+		{name: "i64", lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 4}}, want: "-4"},
+		{name: "u8 zero", lit: &plan.Literal{Value: &plan.Literal_U8Val{U8Val: 0}}, want: "0"},
+		{name: "u8", lit: &plan.Literal{Value: &plan.Literal_U8Val{U8Val: 5}}, want: "-5"},
+		{name: "u16 zero", lit: &plan.Literal{Value: &plan.Literal_U16Val{U16Val: 0}}, want: "0"},
+		{name: "u16", lit: &plan.Literal{Value: &plan.Literal_U16Val{U16Val: 6}}, want: "-6"},
+		{name: "u32 zero", lit: &plan.Literal{Value: &plan.Literal_U32Val{U32Val: 0}}, want: "0"},
+		{name: "u32", lit: &plan.Literal{Value: &plan.Literal_U32Val{U32Val: 7}}, want: "-7"},
+		{name: "u64 zero", lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 0}}, want: "0"},
+		{name: "u64", lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 8}}, want: "-8"},
+		{name: "float", lit: &plan.Literal{Value: &plan.Literal_Fval{Fval: 1.5}}, want: "-1.5"},
+		{name: "double", lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 2.5}}, want: "-2.5"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := getNegatedLiteralString(litExpr(tc.lit))
+			require.True(t, ok)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+
+	_, ok := getNegatedLiteralString(&plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "year"}}})
+	assert.False(t, ok)
+	_, ok = getNegatedLiteralString(litExpr(nil))
+	assert.False(t, ok)
+	_, ok = getNegatedLiteralString(litExpr(&plan.Literal{Isnull: true}))
+	assert.False(t, ok)
+	_, ok = getNegatedLiteralString(litExpr(&plan.Literal{Value: &plan.Literal_Sval{Sval: "x"}}))
+	assert.False(t, ok)
+}

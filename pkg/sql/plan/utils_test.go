@@ -1057,6 +1057,91 @@ func TestValidateAndSetHivePartitionOptions_AutoInferenceMaxListCalls(t *testing
 	assert.Contains(t, err.Error(), "specify hive_partition_columns explicitly")
 }
 
+func TestPrepareHiveInferenceParamS3Backfill(t *testing.T) {
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.S3}}
+	options := []string{
+		"filepath", "s3://bucket/prefix/",
+		"format", "PARQUET",
+		"endpoint", "https://s3.example.com",
+		"region", "us-west-2",
+		"access_key_id", "ak",
+		"secret_access_key", "sk",
+		"bucket", "bucket",
+		"provider", "minio",
+		"role_arn", "role",
+		"external_id", "external",
+	}
+
+	prepareHiveInferenceParam(param, options)
+
+	assert.Equal(t, "s3://bucket/prefix/", param.Filepath)
+	assert.Equal(t, "parquet", param.Format)
+	require.NotNil(t, param.S3Param)
+	assert.Equal(t, "https://s3.example.com", param.S3Param.Endpoint)
+	assert.Equal(t, "us-west-2", param.S3Param.Region)
+	assert.Equal(t, "ak", param.S3Param.APIKey)
+	assert.Equal(t, "sk", param.S3Param.APISecret)
+	assert.Equal(t, "bucket", param.S3Param.Bucket)
+	assert.Equal(t, "minio", param.S3Param.Provider)
+	assert.Equal(t, "role", param.S3Param.RoleArn)
+	assert.Equal(t, "external", param.S3Param.ExternalId)
+
+	prepareHiveInferenceParam(param, []string{
+		"filepath", "other",
+		"format", "csv",
+		"endpoint", "changed",
+		"region", "changed",
+		"access_key_id", "changed",
+		"secret_access_key", "changed",
+		"bucket", "changed",
+		"provider", "changed",
+		"role_arn", "changed",
+		"external_id", "changed",
+	})
+	assert.Equal(t, "s3://bucket/prefix/", param.Filepath)
+	assert.Equal(t, "parquet", param.Format)
+	assert.Equal(t, "https://s3.example.com", param.S3Param.Endpoint)
+	assert.Equal(t, "ak", param.S3Param.APIKey)
+
+	local := &tree.ExternParam{}
+	prepareHiveInferenceParam(local, []string{"filepath", "/data", "format", "PARQUET"})
+	assert.Equal(t, "/data", local.Filepath)
+	assert.Equal(t, "parquet", local.Format)
+	assert.Nil(t, local.S3Param)
+}
+
+func TestHiveInferencePathHelpersCoverage(t *testing.T) {
+	assert.Equal(t, "etl:/tmp/data", normalizeHiveInferPath(" etl:/tmp/data/ "))
+	assert.Equal(t, "svc:arg/data", normalizeHiveInferPath("svc:arg/data"))
+	assert.Equal(t, "/warehouse/table", normalizeHiveInferPath("warehouse/table"))
+
+	assert.Equal(t, "root", deriveHiveInferReadPath("/warehouse/table", "root", "/warehouse/table"))
+	assert.Equal(t, "/outside", deriveHiveInferReadPath("/warehouse/table", "root", "/outside"))
+	assert.Equal(t, "year=2024", deriveHiveInferReadPath("/warehouse/table", ".", "/warehouse/table/year=2024"))
+	assert.Equal(t, "root/year=2024/month=01", deriveHiveInferReadPath("/warehouse/table", "root", "/warehouse/table/year=2024/month=01"))
+	assert.Equal(t, "year=2024", deriveHiveInferReadPath("/warehouse/table", "", "/warehouse/table/year=2024"))
+
+	key, isHive, err := parseHiveInferSegmentKey("Year=2024")
+	require.NoError(t, err)
+	assert.True(t, isHive)
+	assert.Equal(t, "year", key)
+
+	key, isHive, err = parseHiveInferSegmentKey("plain")
+	require.NoError(t, err)
+	assert.False(t, isHive)
+	assert.Empty(t, key)
+
+	for _, segment := range []string{".=x", "..=x", "bad-key=x"} {
+		_, isHive, err = parseHiveInferSegmentKey(segment)
+		require.Error(t, err)
+		assert.True(t, isHive)
+	}
+
+	assert.True(t, isHiveInferHidden(".spark"))
+	assert.True(t, isHiveInferHidden("_temporary"))
+	assert.False(t, isHiveInferHidden("year=2024"))
+}
+
 func TestHivePartitionCatalogRoundTripUsesPersistedInference(t *testing.T) {
 	param := &tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
