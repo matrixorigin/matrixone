@@ -1,56 +1,56 @@
 select right('Hello', 1) from dual;
-➤ right(Hello, 1)[12,-1,0]  𝄀
+right(Hello, 1)
 o
 select right('Hello', 2) from dual;
-➤ right(Hello, 2)[12,-1,0]  𝄀
+right(Hello, 2)
 lo
 select right('Hello', 3) from dual;
-➤ right(Hello, 3)[12,-1,0]  𝄀
+right(Hello, 3)
 llo
 select right('Hello', 0) from dual;
-➤ right(Hello, 0)[12,-1,0]  𝄀
+right(Hello, 0)
 
 select right('Hello', -1) from dual;
-➤ right(Hello, -1)[12,-1,0]  𝄀
+right(Hello, -1)
 
 select right('Hello', null) from dual;
-➤ right(Hello, null)[12,-1,0]  𝄀
+right(Hello, null)
 null
 select right(null, null) from dual;
-➤ right(null, null)[12,-1,0]  𝄀
+right(null, null)
 null
 select right('foobarbar', 4) from dual;
-➤ right(foobarbar, 4)[12,-1,0]  𝄀
+right(foobarbar, 4)
 rbar
 select right('abcde', 10) from dual;
-➤ right(abcde, 10)[12,-1,0]  𝄀
+right(abcde, 10)
 abcde
 select right('abcde', 2 + 1) from dual;
-➤ right(abcde, 2 + 1)[12,-1,0]  𝄀
+right(abcde, 2 + 1)
 cde
 select right('abcde', abs(-2)) from dual;
-➤ right(abcde, abs(-2))[12,-1,0]  𝄀
+right(abcde, abs(-2))
 de
 select right('abcde', cos(0)) from dual;
-➤ right(abcde, cos(0))[12,-1,0]  𝄀
+right(abcde, cos(0))
 e
 select right('abcde', length('king')) from dual;
-➤ right(abcde, length(king))[12,-1,0]  𝄀
+right(abcde, length(king))
 bcde
 select right('qwerty', '1') from dual;
-➤ right(qwerty, 1)[12,-1,0]  𝄀
+right(qwerty, 1)
 y
 select right('qwerty', '1' + 2) from dual;
-➤ right(qwerty, 1 + 2)[12,-1,0]  𝄀
+right(qwerty, 1 + 2)
 rty
 select right('是都方式快递费', 3) from dual;
-➤ right(是都方式快递费, 3)[12,-1,0]  𝄀
+right(是都方式快递费, 3)
 快递费
 select right('あいうえお', 3) from dual;
-➤ right(あいうえお, 3)[12,-1,0]  𝄀
+right(あいうえお, 3)
 うえお
 select right('龔龖龗龞龡', 3) from dual;
-➤ right(龔龖龗龞龡, 3)[12,-1,0]  𝄀
+right(龔龖龗龞龡, 3)
 龗龞龡
 drop table if exists t_right;
 create table t_right(str varchar(100), ch char(20), len int);
@@ -61,43 +61,43 @@ insert into t_right values('ABCDEFGHijklmn   ', 'short', -1);
 insert into t_right values('', '', 3);
 insert into t_right values(null, null, 2);
 insert into t_right values('nullable length', 'nullable', null);
-select right(str, len), right(ch, len) from t_right;
-➤ right(str, len)[12,-1,0]  ¦  right(ch, len)[1,255,0]  𝄀
-lmn  ¦  RLD  𝄀
-23456  ¦         𝄀
-ABCDEF  GHIJKLMN  ¦  XYZ  𝄀
-  ¦    𝄀
-  ¦    𝄀
-null  ¦  null  𝄀
-null  ¦  null
+select right(str, len), hex(right(ch, len)), length(right(ch, len)) from t_right;
+right(str, len)    hex(right(ch, len))    length(right(ch, len))
+lmn    524C44    3
+23456    2020202020    5
+ABCDEF  GHIJKLMN    58595A    3
+        0
+        0
+null    null    null
+null    null    null
 select right(str, 3) from t_right;
-➤ right(str, 3)[12,-1,0]  𝄀
-lmn  𝄀
-456  𝄀
-LMN  𝄀
-     𝄀
-  𝄀
-null  𝄀
+right(str, 3)
+lmn
+456
+LMN
+   
+
+null
 gth
 select right(str, null) from t_right;
-➤ right(str, null)[12,-1,0]  𝄀
-null  𝄀
-null  𝄀
-null  𝄀
-null  𝄀
-null  𝄀
-null  𝄀
+right(str, null)
+null
+null
+null
+null
+null
+null
 null
 select right(null, len) from t_right;
-➤ right(null, len)[12,-1,0]  𝄀
-null  𝄀
-null  𝄀
-null  𝄀
-null  𝄀
-null  𝄀
-null  𝄀
+right(null, len)
+null
+null
+null
+null
+null
+null
 null
 select str from t_right where right(str, 3) = 'lmn';
-➤ str[12,-1,0]  𝄀
+str
 abcdefghijklmn
 drop table t_right;
