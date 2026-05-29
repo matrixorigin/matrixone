@@ -158,7 +158,7 @@ create table t2 (a int, b int, primary key(a));
 insert into t2 values (1,1),(2,2);
 begin;
 data branch pick t2 into t1 keys(2) when conflict accept;
-internal error: DATA BRANCH PICK is not supported in explicit transactions
+internal error: DATA BRANCH MERGE/PICK is not supported in explicit transactions
 rollback;
 select * from t1 order by a;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
