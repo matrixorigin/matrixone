@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -78,16 +79,22 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 }
 
 func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.TableDef, indexDef *plan.IndexDef) string {
-	keyExpr := partsToColsStr(indexDef.Parts)
+	groupExpr := partsToColsStr(indexDef.Parts)
+	nullCheckExpr := fmt.Sprintf("%s IS NOT NULL", groupExpr)
 	if len(indexDef.Parts) > 1 {
-		keyExpr = fmt.Sprintf("serial(%s)", keyExpr)
+		nullChecks := make([]string, 0, len(indexDef.Parts))
+		for _, part := range indexDef.Parts {
+			part = catalog.ResolveAlias(part)
+			nullChecks = append(nullChecks, fmt.Sprintf("%s IS NOT NULL", quoteMySQLQualifiedIdent(part)))
+		}
+		nullCheckExpr = strings.Join(nullChecks, " AND ")
 	}
-	return fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s IS NOT NULL GROUP BY %s HAVING count(*) > 1 LIMIT 1",
-		keyExpr,
+	return fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s GROUP BY %s HAVING count(*) > 1 LIMIT 1",
+		groupExpr,
 		quoteMySQLIdent(dbName),
 		quoteMySQLIdent(tableDef.Name),
-		keyExpr,
-		keyExpr,
+		nullCheckExpr,
+		groupExpr,
 	)
 }
 
@@ -107,8 +114,8 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 	}
 	defer duplicateCheckRes.Close()
 
-	if values, _, ok := firstAlterCopyResultRow(duplicateCheckRes, 1); ok {
-		return moerr.NewDuplicateEntry(c.proc.Ctx, formatAlterCopyPkValue(values), indexDef.IndexName)
+	if values, _, ok := firstAlterCopyResultRow(duplicateCheckRes, len(indexDef.Parts)); ok {
+		return moerr.NewDuplicateEntry(c.proc.Ctx, formatAlterCopyPkValue(values), catalog.IndexTableIndexColName)
 	}
 
 	// The precheck has already proved source-key uniqueness at this snapshot.

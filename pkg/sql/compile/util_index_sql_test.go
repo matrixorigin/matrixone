@@ -105,7 +105,7 @@ func TestBuildCreateUniqueIndexDuplicateCheckSQL(t *testing.T) {
 
 		sql := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
 
-		require.Equal(t, "SELECT serial(`order`,`id`) FROM `test`.`orders` WHERE serial(`order`,`id`) IS NOT NULL GROUP BY serial(`order`,`id`) HAVING count(*) > 1 LIMIT 1", sql)
+		require.Equal(t, "SELECT `order`,`id` FROM `test`.`orders` WHERE `order` IS NOT NULL AND `id` IS NOT NULL GROUP BY `order`,`id` HAVING count(*) > 1 LIMIT 1", sql)
 	})
 }
 
@@ -183,6 +183,45 @@ func TestPrecheckAndInsertUniqueIndexTableRejectsDuplicateBeforeInsert(t *testin
 	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	require.Contains(t, err.Error(), "Duplicate entry '7' for key '__mo_index_idx_col'")
+	require.Equal(t, []string{checkSQL}, spyExec.executedSQLs)
+	require.Nil(t, spyExec.insertCtx)
+}
+
+func TestPrecheckAndInsertUniqueIndexTableFormatsCompoundDuplicate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc.ReplaceTopCtx(ctx)
+	proc.Ctx = ctx
+
+	const (
+		insertSQL = "insert into  `test`.`__mo_index_unique_test` select serial(`order`,`id`), `pk` from `test`.`orders` where serial(`order`,`id`) is not null;"
+		checkSQL  = "SELECT `order`,`id` FROM `test`.`orders` WHERE `order` IS NOT NULL AND `id` IS NOT NULL GROUP BY `order`,`id` HAVING count(*) > 1 LIMIT 1"
+	)
+	spyExec := &alterCopyInsertSpyExecutor{}
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(moruntime.InternalSQLExecutor, spyExec)
+
+	c := &Compile{proc: proc, pn: &planpb.Plan{}}
+	memRes := executor.NewMemResult([]types.Type{types.T_int32.ToType(), types.T_int32.ToType()}, c.proc.Mp())
+	memRes.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(memRes, 0, []int32{1}))
+	require.NoError(t, executor.AppendFixedRows(memRes, 1, []int32{2}))
+	spyExec.results = map[string]executor.Result{
+		checkSQL: memRes.GetResult(),
+	}
+
+	tableDef := &planpb.TableDef{Name: "orders"}
+	indexDef := &planpb.IndexDef{
+		IndexName:      "u_order_id",
+		IndexTableName: "__mo_index_unique_test",
+		Parts:          []string{"order", catalog.CreateAlias("id")},
+		Unique:         true,
+	}
+
+	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	require.Contains(t, err.Error(), "Duplicate entry '(1,2)' for key '__mo_index_idx_col'")
 	require.Equal(t, []string{checkSQL}, spyExec.executedSQLs)
 	require.Nil(t, spyExec.insertCtx)
 }
