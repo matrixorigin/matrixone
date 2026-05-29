@@ -709,3 +709,122 @@ TEST(GpuIvfPqTest, FilteredSearchEmptyPredsMatchesUnfiltered) {
 
     index.destroy();
 }
+
+// Regression test for the k > index_size cuVS rejection that erictest/21
+// surfaced via the Go-side over-fetch path (apply_indices.go:84 5× factor on
+// small limits). search_internal now clamps to effective_k = min(limit, shard_sz)
+// and pads the tail with (-1, FLT_MAX). See filter.hpp helpers.
+TEST(GpuIvfPqTest, KExceedsIndexSizeClampsAndPads) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 20;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j) {
+            dataset[i * dimension + j] = static_cast<float>(i + 1);
+        }
+    }
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 2;
+    bp.m = 2;
+    bp.bits_per_code = 8;
+    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
+                              bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.build();
+
+    // Query near id=10 (vector value 11). limit=25 > count=20 — cuVS would
+    // reject without the clamp.
+    std::vector<float> query(dimension, 11.0f);
+    const uint32_t limit = 25;
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 2;
+
+    auto result = index.search(query.data(), 1, dimension, limit, sp);
+
+    // Buffer shape preserved.
+    ASSERT_EQ(result.neighbors.size(), (size_t)limit);
+    ASSERT_EQ(result.distances.size(), (size_t)limit);
+
+    // The first 20 slots should all be valid (in [0, 20)). cuVS may or may
+    // not return them in true L2 order under PQ approximation, so we just
+    // assert they're in range and unique.
+    std::vector<int64_t> seen;
+    for (uint32_t i = 0; i < count; ++i) {
+        int64_t n = result.neighbors[i];
+        ASSERT_GE(n, 0);
+        ASSERT_LT(n, (int64_t)count);
+        seen.push_back(n);
+    }
+    std::sort(seen.begin(), seen.end());
+    for (uint32_t i = 1; i < count; ++i) {
+        ASSERT_NE(seen[i], seen[i - 1]);
+    }
+
+    // Pad slots [20, 25) MUST be (-1, FLT_MAX).
+    for (uint32_t i = count; i < limit; ++i) {
+        ASSERT_EQ(result.neighbors[i], (int64_t)-1);
+        ASSERT_EQ(result.distances[i], std::numeric_limits<float>::max());
+    }
+
+    index.destroy();
+}
+
+// Multi-query variant — exercises the per-row strided scatter in
+// scatter_with_padding (production uses num_queries=1, so this is the only
+// guard against the row-stride bug class). Each query row's tail slots must
+// independently land at -1 / FLT_MAX.
+TEST(GpuIvfPqTest, MultiQueryKExceedsIndexSize) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 20;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j) {
+            dataset[i * dimension + j] = static_cast<float>(i + 1);
+        }
+    }
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 2;
+    bp.m = 2;
+    bp.bits_per_code = 8;
+    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
+                              bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.build();
+
+    const uint64_t num_queries = 4;
+    const uint32_t limit = 25;
+    std::vector<float> queries(num_queries * dimension);
+    for (uint64_t q = 0; q < num_queries; ++q) {
+        const float v = static_cast<float>(2 * q + 3);  // targets ids ~2, 4, 6, 8
+        for (uint32_t j = 0; j < dimension; ++j) {
+            queries[q * dimension + j] = v;
+        }
+    }
+
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 2;
+
+    auto result = index.search(queries.data(), num_queries, dimension, limit, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)(num_queries * limit));
+    ASSERT_EQ(result.distances.size(), (size_t)(num_queries * limit));
+
+    // Per-query row: first 20 slots valid in [0, 20), last 5 slots sentinel.
+    for (uint64_t q = 0; q < num_queries; ++q) {
+        for (uint32_t i = 0; i < count; ++i) {
+            int64_t n = result.neighbors[q * limit + i];
+            ASSERT_GE(n, 0);
+            ASSERT_LT(n, (int64_t)count);
+        }
+        for (uint32_t i = count; i < limit; ++i) {
+            ASSERT_EQ(result.neighbors[q * limit + i], (int64_t)-1);
+            ASSERT_EQ(result.distances[q * limit + i], std::numeric_limits<float>::max());
+        }
+    }
+
+    index.destroy();
+}

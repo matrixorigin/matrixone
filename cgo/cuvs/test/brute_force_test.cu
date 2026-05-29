@@ -400,3 +400,93 @@ TEST(CuvsWorkerTest, ConcurrentSearches) {
 
     index.destroy();
 }
+
+// k > index_size for brute_force. search_internal clamps to
+// effective_k = min(limit, local_count) and pads (-1, FLT_MAX).
+// brute_force is SINGLE_GPU only; no shard layer involved.
+TEST(GpuBruteForceTest, KExceedsIndexSizeClampsAndPads) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 20;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j) {
+            dataset[i * dimension + j] = static_cast<float>(i + 1);
+        }
+    }
+
+    gpu_brute_force_t<float> index(dataset.data(), count, dimension,
+                                   DistanceType_L2Expanded, 1, 0);
+    index.start();
+    index.build();
+
+    std::vector<float> query(dimension, 11.0f);
+    const uint32_t limit = 25;
+
+    auto result = index.search(query.data(), 1, dimension, limit,
+                               brute_force_search_params_default());
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)limit);
+    ASSERT_EQ(result.distances.size(), (size_t)limit);
+
+    std::vector<int64_t> seen;
+    for (uint32_t i = 0; i < count; ++i) {
+        int64_t n = result.neighbors[i];
+        ASSERT_GE(n, 0);
+        ASSERT_LT(n, (int64_t)count);
+        seen.push_back(n);
+    }
+    std::sort(seen.begin(), seen.end());
+    for (uint32_t i = 1; i < count; ++i) ASSERT_NE(seen[i], seen[i - 1]);
+
+    for (uint32_t i = count; i < limit; ++i) {
+        ASSERT_EQ(result.neighbors[i], (int64_t)-1);
+        ASSERT_EQ(result.distances[i], std::numeric_limits<float>::max());
+    }
+
+    index.destroy();
+}
+
+// Multi-query for brute_force's int64_t neighbor scatter path.
+TEST(GpuBruteForceTest, MultiQueryKExceedsIndexSize) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 20;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j) {
+            dataset[i * dimension + j] = static_cast<float>(i + 1);
+        }
+    }
+
+    gpu_brute_force_t<float> index(dataset.data(), count, dimension,
+                                   DistanceType_L2Expanded, 1, 0);
+    index.start();
+    index.build();
+
+    const uint64_t num_queries = 4;
+    const uint32_t limit = 25;
+    std::vector<float> queries(num_queries * dimension);
+    for (uint64_t q = 0; q < num_queries; ++q) {
+        const float v = static_cast<float>(2 * q + 3);
+        for (uint32_t j = 0; j < dimension; ++j) queries[q * dimension + j] = v;
+    }
+
+    auto result = index.search(queries.data(), num_queries, dimension, limit,
+                               brute_force_search_params_default());
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)(num_queries * limit));
+    ASSERT_EQ(result.distances.size(), (size_t)(num_queries * limit));
+
+    for (uint64_t q = 0; q < num_queries; ++q) {
+        for (uint32_t i = 0; i < count; ++i) {
+            int64_t n = result.neighbors[q * limit + i];
+            ASSERT_GE(n, 0);
+            ASSERT_LT(n, (int64_t)count);
+        }
+        for (uint32_t i = count; i < limit; ++i) {
+            ASSERT_EQ(result.neighbors[q * limit + i], (int64_t)-1);
+            ASSERT_EQ(result.distances[q * limit + i], std::numeric_limits<float>::max());
+        }
+    }
+
+    index.destroy();
+}

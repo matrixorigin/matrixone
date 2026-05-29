@@ -645,3 +645,99 @@ TEST(GpuCagraTest, ExtendWithHostIds) {
 
     index.destroy();
 }
+
+// k > index_size for CAGRA. CAGRA default build params need ~128 rows
+// (intermediate_graph_degree=128), so build with count=130 and limit=200
+// triggers the clamp. search_internal clamps to effective_k and pads
+// (-1, FLT_MAX) via scatter_with_padding<uint32_t>; the (uint32_t)-1
+// sentinel becomes -1 through map_neighbor_id (index_base.hpp:262).
+TEST(GpuCagraTest, KExceedsIndexSizeClampsAndPads) {
+    const uint32_t dimension = 3;
+    const uint64_t count = 130;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < count; ++i) {
+        for (uint32_t j = 0; j < dimension; ++j) {
+            dataset[i * dimension + j] = static_cast<float>(i + 1);
+        }
+    }
+
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
+                             bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.build();
+
+    std::vector<float> query(dimension, 65.0f);
+    const uint32_t limit = 200;
+    cagra_search_params_t sp = cagra_search_params_default();
+
+    auto result = index.search(query.data(), 1, dimension, limit, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)limit);
+    ASSERT_EQ(result.distances.size(), (size_t)limit);
+
+    std::vector<int64_t> seen;
+    for (uint32_t i = 0; i < count; ++i) {
+        int64_t n = result.neighbors[i];
+        ASSERT_GE(n, 0);
+        ASSERT_LT(n, (int64_t)count);
+        seen.push_back(n);
+    }
+    std::sort(seen.begin(), seen.end());
+    for (uint32_t i = 1; i < count; ++i) ASSERT_NE(seen[i], seen[i - 1]);
+
+    for (uint32_t i = count; i < limit; ++i) {
+        ASSERT_EQ(result.neighbors[i], (int64_t)-1);
+        ASSERT_EQ(result.distances[i], std::numeric_limits<float>::max());
+    }
+
+    index.destroy();
+}
+
+// Multi-query for CAGRA's uint32_t raw_neighbors scatter path.
+TEST(GpuCagraTest, MultiQueryKExceedsIndexSize) {
+    const uint32_t dimension = 3;
+    const uint64_t count = 130;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < count; ++i) {
+        for (uint32_t j = 0; j < dimension; ++j) {
+            dataset[i * dimension + j] = static_cast<float>(i + 1);
+        }
+    }
+
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
+                             bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.build();
+
+    const uint64_t num_queries = 4;
+    const uint32_t limit = 200;
+    std::vector<float> queries(num_queries * dimension);
+    for (uint64_t q = 0; q < num_queries; ++q) {
+        const float v = static_cast<float>(20 + 30 * q);
+        for (uint32_t j = 0; j < dimension; ++j) queries[q * dimension + j] = v;
+    }
+
+    cagra_search_params_t sp = cagra_search_params_default();
+    auto result = index.search(queries.data(), num_queries, dimension, limit, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)(num_queries * limit));
+    ASSERT_EQ(result.distances.size(), (size_t)(num_queries * limit));
+
+    for (uint64_t q = 0; q < num_queries; ++q) {
+        for (uint32_t i = 0; i < count; ++i) {
+            int64_t n = result.neighbors[q * limit + i];
+            ASSERT_GE(n, 0);
+            ASSERT_LT(n, (int64_t)count);
+        }
+        for (uint32_t i = count; i < limit; ++i) {
+            ASSERT_EQ(result.neighbors[q * limit + i], (int64_t)-1);
+            ASSERT_EQ(result.distances[q * limit + i], std::numeric_limits<float>::max());
+        }
+    }
+
+    index.destroy();
+}

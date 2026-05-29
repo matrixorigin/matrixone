@@ -269,6 +269,90 @@ inline int64_t map_neighbor_id(int64_t raw, int64_t offset,
     return static_cast<int64_t>(host_ids[global_pos]);
 }
 
+// =============================================================================
+// Top-k clamp + sentinel-padding helpers (peers of map_neighbor_id).
+//
+// cuVS rejects k > index_size. The Go planner over-fetches (5× LIMIT for small
+// limits, see pkg/sql/plan/apply_indices.go:84) to compensate for post-filter
+// dropouts, which on small indexes pushes k past the row count. Each cuVS
+// wrapper search clamps k via clamp_k_to_index_size(limit, shard_sz), runs
+// the search at the clamped k, then pads tail slots with (-1, FLT_MAX) so the
+// externally-visible buffer shape stays (num_queries × limit). map_neighbor_id
+// above already passes -1 through (raw < 0 → -1). Sentinel values match the
+// existing convention (helper.h cpu_topk_merge_sharded pads with (-1, FLT_MAX);
+// apply_pq_post_filter_locked uses FLT_MAX).
+// =============================================================================
+
+// Effective top-k for the cuVS call: clamp the caller's requested limit to
+// the shard / index row count. Pure host-side; raft-free.
+inline uint32_t clamp_k_to_index_size(uint32_t limit, uint64_t shard_sz) {
+    return static_cast<uint32_t>(
+        std::min<uint64_t>(static_cast<uint64_t>(limit), shard_sz));
+}
+
+// Scatter a tightly-packed (num_queries × effective_k) device->host result
+// into a strided (num_queries × limit) destination, padding each row's tail
+// [effective_k, limit) with (neighbor_sentinel, FLT_MAX). NeighborT is
+// int64_t for IVF/BF and uint32_t for CAGRA's raw_neighbors.
+template <typename NeighborT>
+inline void scatter_with_padding(NeighborT*       dst_neighbors,
+                                 float*           dst_distances,
+                                 const NeighborT* src_neighbors,
+                                 const float*     src_distances,
+                                 uint64_t         num_queries,
+                                 uint32_t         limit,
+                                 uint32_t         effective_k,
+                                 NeighborT        neighbor_sentinel) {
+    const float kDistSentinel = std::numeric_limits<float>::max();
+    for (uint64_t q = 0; q < num_queries; ++q) {
+        if (effective_k > 0) {
+            std::memcpy(dst_neighbors + q * limit,
+                        src_neighbors + q * effective_k,
+                        static_cast<size_t>(effective_k) * sizeof(NeighborT));
+            std::memcpy(dst_distances + q * limit,
+                        src_distances + q * effective_k,
+                        static_cast<size_t>(effective_k) * sizeof(float));
+        }
+        std::fill(dst_neighbors + q * limit + effective_k,
+                  dst_neighbors + (q + 1) * limit,
+                  neighbor_sentinel);
+        std::fill(dst_distances + q * limit + effective_k,
+                  dst_distances + (q + 1) * limit,
+                  kDistSentinel);
+    }
+}
+
+// All-sentinel fill for the empty-shard early-return (effective_k == 0).
+template <typename NeighborT>
+inline void fill_all_sentinel(NeighborT* neighbors, float* distances,
+                              size_t count, NeighborT neighbor_sentinel) {
+    std::fill_n(neighbors, count, neighbor_sentinel);
+    std::fill_n(distances, count, std::numeric_limits<float>::max());
+}
+
+// InnerProduct sign flip on the search result's distances. cuvs returns
+// inner-product distances negated (so smaller is "closer") — we flip back so
+// downstream callers see the true inner product. ±FLT_MAX sentinels are
+// preserved (they mark padded / filtered-out slots from scatter_with_padding
+// or fill_all_sentinel above). No-op for any other metric.
+inline void transform_distance(distance_type_t metric,
+                               float* distances, size_t count) {
+    if (metric != DistanceType_InnerProduct) return;
+    const float kSentinel = std::numeric_limits<float>::max();
+    for (size_t i = 0; i < count; ++i) {
+        if (distances[i] != kSentinel && distances[i] != -kSentinel) {
+            distances[i] *= -1.0f;
+        }
+    }
+}
+
+// Convenience overload for the persistent-index path where distances live in
+// a std::vector. Same semantics as the (float*, size_t) form.
+inline void transform_distance(distance_type_t metric,
+                               std::vector<float>& distances) {
+    transform_distance(metric, distances.data(), distances.size());
+}
+
 /**
  * @brief Base class for GPU-based vector indices (IVF-Flat, IVF-PQ, CAGRA).
  *
@@ -770,17 +854,6 @@ public:
     // Common management methods
     virtual void destroy() {
         if (worker) worker->stop();
-    }
-
-
-    void transform_distance(distance_type_t metric, std::vector<float>& distances) const {
-        if (metric == DistanceType_InnerProduct) {
-            for (auto& d : distances) {
-                if (d != std::numeric_limits<float>::max() && d != -std::numeric_limits<float>::max()) {
-                    d *= -1.0f;
-                }
-            }
-        }
     }
 
     // ---- Request-level batching knobs (see dynamic_batching.hpp) ----
