@@ -17,8 +17,10 @@ package frontend
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -46,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	plan0 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -1122,6 +1125,94 @@ func TestSerializePlanToJson(t *testing.T) {
 		require.Equal(t, int64(0), stats.BytesScan)
 		t.Logf("SQL plan to json : %s\n", string(json))
 	}
+}
+
+func TestMarshalPlanHandlerSanitizesNonFinitePlanStats(t *testing.T) {
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	stmt := &motrace.StatementInfo{
+		StatementID: uid,
+		Statement:   []byte("select 1"),
+		RequestAt:   time.Now().Add(-2 * time.Second),
+	}
+	logicPlan := &plan0.Plan{
+		Plan: &plan0.Plan_Query{
+			Query: &plan0.Query{
+				Nodes: []*plan0.Node{
+					{
+						NodeId:   0,
+						NodeType: plan0.Node_VALUE_SCAN,
+						Stats: &plan0.Stats{
+							Cost: math.Inf(1),
+						},
+					},
+				},
+				Steps: []int32{0},
+			},
+		},
+	}
+
+	h := NewMarshalPlanHandler(context.Background(), stmt, logicPlan, nil)
+	jsonBytes := h.Marshal(context.Background())
+
+	jsonStr := string(jsonBytes)
+	require.NotContains(t, jsonStr, "serialize plan to json error")
+	require.NotEqual(t, string(sqlQueryIgnoreExecPlan), jsonStr)
+	require.NotEqual(t, string(sqlQueryNoRecordExecPlan), jsonStr)
+	require.NotContains(t, jsonStr, "Inf")
+	require.NotContains(t, jsonStr, "NaN")
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(jsonBytes, &decoded), "plan json must be parseable: %s", jsonStr)
+	require.NotEmpty(t, decoded)
+	// the non-finite Cost must have been replaced by a finite value
+	require.Contains(t, jsonStr, `"cost":0`)
+}
+
+// TestMarshalPlanHandlerDoesNotMutateSharedPhyPlan guards against the sanitizer
+// mutating the caller's physical plan: PhyPlan is deep-copied before marshaling,
+// so non-finite stats reachable through OperatorStats.BackgroundQueries (live
+// *plan.Query objects) must be sanitized only on the copy, not the original.
+func TestMarshalPlanHandlerDoesNotMutateSharedPhyPlan(t *testing.T) {
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	stmt := &motrace.StatementInfo{
+		StatementID: uid,
+		Statement:   []byte("select 1"),
+		RequestAt:   time.Now().Add(-2 * time.Second),
+	}
+	logicPlan := &plan0.Plan{
+		Plan: &plan0.Plan_Query{
+			Query: &plan0.Query{
+				Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN, Stats: &plan0.Stats{}}},
+				Steps: []int32{0},
+			},
+		},
+	}
+
+	bgQuery := &plan0.Query{
+		Nodes: []*plan0.Node{
+			{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN, Stats: &plan0.Stats{Cost: math.Inf(1)}},
+		},
+		Steps: []int32{0},
+	}
+	phyPlan := &models.PhyPlan{
+		LocalScope: []models.PhyScope{
+			{
+				Magic: "Normal",
+				RootOperator: &models.PhyOperator{
+					OpName:  "test",
+					OpStats: &process.OperatorStats{BackgroundQueries: []*plan0.Query{bgQuery}},
+				},
+			},
+		},
+	}
+
+	h := NewMarshalPlanHandler(context.Background(), stmt, logicPlan, phyPlan)
+	_ = h.Marshal(context.Background())
+
+	// the caller's live plan stats must be untouched
+	require.True(t, math.IsInf(bgQuery.Nodes[0].Stats.Cost, 1), "shared PhyPlan was mutated by Marshal")
 }
 
 func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, error) {

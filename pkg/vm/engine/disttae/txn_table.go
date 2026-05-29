@@ -70,6 +70,50 @@ const (
 var traceFilterExprInterval atomic.Uint64
 var traceFilterExprInterval2 atomic.Uint64
 
+// pkCheckSemaphore limits concurrent block I/O in PKPersistedBetween to prevent
+// mpool explosion when many transactions simultaneously check primary key conflicts.
+var pkCheckSemaphore = make(chan struct{}, 16)
+
+const maxChangedObjectsForIO = 64
+const maxCandidateBlksForIO = 32
+
+func shouldBailoutOnChangedObjects(cnt int) bool {
+	return cnt > maxChangedObjectsForIO
+}
+
+func shouldBailoutOnCandidateBlocks(cnt int) bool {
+	return cnt > maxCandidateBlksForIO
+}
+
+func pkCheckBailoutOnChangedObjects(cnt int) bool {
+	if !shouldBailoutOnChangedObjects(cnt) {
+		return false
+	}
+	v2.TxnPKChangeCheckBailoutCounter.Inc()
+	return true
+}
+
+func pkCheckBailoutOnCandidateBlocks(cnt int) bool {
+	if !shouldBailoutOnCandidateBlocks(cnt) {
+		return false
+	}
+	v2.TxnPKChangeCheckBailoutCounter.Inc()
+	return true
+}
+
+func acquirePKCheckSemaphore(ctx context.Context) error {
+	select {
+	case pkCheckSemaphore <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func releasePKCheckSemaphore() {
+	<-pkCheckSemaphore
+}
+
 var _ engine.Relation = new(txnTable)
 
 func newTxnTable(
@@ -2154,6 +2198,11 @@ func (tbl *txnTable) PKPersistedBetween(
 
 	//only check data objects.
 	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
+
+	if pkCheckBailoutOnChangedObjects(len(cObjs)) {
+		return true, nil
+	}
+
 	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
 	if err := ForeachCommittedObjects(cObjs, delObjs, p,
 		func(obj objectio.ObjectEntry) (err2 error) {
@@ -2264,39 +2313,54 @@ func (tbl *txnTable) PKPersistedBetween(
 		}
 	}
 
+	if pkCheckBailoutOnCandidateBlocks(len(candidateBlks)) {
+		return true, nil
+	}
+
 	cacheVectors := containers.NewVectors(1)
-	//read block ,check if keys exist in the block.
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
 	pkType := plan2.ExprType2Type(&pkDef.Typ)
 	if len(candidateBlks) > 0 {
+		// Acquire semaphore to limit concurrent block I/O across all transactions.
+		// This prevents 1000 goroutines from simultaneously reading blocks and
+		// exhausting mpool capacity. Scoped to the block loop only — tombstone
+		// checking below is not rate-limited by this semaphore.
+		if err := acquirePKCheckSemaphore(ctx); err != nil {
+			return false, err
+		}
+
 		v2.TxnPKChangeCheckIOCounter.Inc()
-	}
-	for _, blk := range candidateBlks {
-		release, err := ioutil.LoadColumns(
-			ctx,
-			[]uint16{uint16(pkSeq)},
-			[]types.Type{pkType},
-			fs,
-			blk.MetaLocation(),
-			cacheVectors,
-			tbl.proc.Load().GetMPool(),
-			fileservice.Policy(0),
-		)
-		if err != nil {
-			return true, err
-		}
 
-		searchFunc := filter.DecideSearchFunc(blk.IsSorted())
-		if searchFunc == nil {
-			searchFunc = buildUnsortedFilter()
-		}
+		for _, blk := range candidateBlks {
+			release, err := ioutil.LoadColumns(
+				ctx,
+				[]uint16{uint16(pkSeq)},
+				[]types.Type{pkType},
+				fs,
+				blk.MetaLocation(),
+				cacheVectors,
+				tbl.proc.Load().GetMPool(),
+				fileservice.Policy(0),
+			)
+			if err != nil {
+				releasePKCheckSemaphore()
+				return true, err
+			}
 
-		sels := searchFunc(cacheVectors)
-		release()
-		if len(sels) > 0 {
-			return true, nil
+			searchFunc := filter.DecideSearchFunc(blk.IsSorted())
+			if searchFunc == nil {
+				searchFunc = buildUnsortedFilter()
+			}
+
+			sels := searchFunc(cacheVectors)
+			release()
+			if len(sels) > 0 {
+				releasePKCheckSemaphore()
+				return true, nil
+			}
 		}
+		releasePKCheckSemaphore()
 	}
 	if checkTombstone {
 		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
@@ -2390,6 +2454,19 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	}()
 
 	v2.TxnPKMayBeChangedTotalCounter.Inc()
+
+	// SQL standard: NULL != NULL, filter out NULLs before duplicate checking.
+	// Also creates a owned copy so InplaceSort in PKPersistedBetween won't
+	// corrupt the caller's batch vector or its null bitmap.
+	mp := tbl.proc.Load().Mp()
+	keysVector, err := dupVectorWithoutNulls(keysVector, mp)
+	if err != nil {
+		return false, err
+	}
+	defer keysVector.Free(mp)
+	if keysVector.Length() == 0 {
+		return false, nil
+	}
 
 	if tbl.db.op.IsSnapOp() {
 		return false,
@@ -2774,4 +2851,23 @@ func (tbl *txnTable) getCommittedRows(
 
 func (tbl *txnTable) GetExtraInfo() *api.SchemaExtra {
 	return tbl.extraInfo
+}
+
+// dupVectorWithoutNulls returns an owned copy of v with NULL rows removed.
+// If v has no NULLs it returns Dup(v). The caller must Free the result.
+func dupVectorWithoutNulls(v *vector.Vector, mp *mpool.MPool) (*vector.Vector, error) {
+	if !v.HasNull() {
+		return v.Dup(mp)
+	}
+	filtered := vector.NewVec(*v.GetType())
+	nsp := v.GetNulls()
+	for i := 0; i < v.Length(); i++ {
+		if !nsp.Contains(uint64(i)) {
+			if err := filtered.UnionOne(v, int64(i), mp); err != nil {
+				filtered.Free(mp)
+				return nil, err
+			}
+		}
+	}
+	return filtered, nil
 }

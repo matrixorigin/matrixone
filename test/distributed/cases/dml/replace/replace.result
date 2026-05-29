@@ -86,3 +86,21 @@ mo_ctl(dn, flush, replace_db.bug_22340)
 REPLACE INTO bug_22340 VALUES (1,100,'[1, 2, 3]'),(2,100,'[1, 2, 3]'),(3,100,'[1, 2, 3]'),(4,100,'[1, 2, 3]'),(5,100,'[1, 2, 3]'),(6,100,'[1, 2, 3]'),(7,100,'[1, 2, 3]'),(8,100,'[1, 2, 3]'),(9,100,'[1, 2, 3]'),(10,100,'[1, 2, 3]');
 drop table bug_22340;
 drop database replace_db;
+use `replace`;
+drop table if exists multi_uk;
+create table multi_uk (pk int primary key, uk1 int unique, uk2 int unique, v varchar(10));
+insert into multi_uk values (1, 10, 100, 'old1'), (2, 20, 200, 'old2');
+replace into multi_uk values (1, 20, 300, 'new');
+select * from multi_uk order by pk;
+pk	uk1	uk2	v
+1	20	300	new
+drop table multi_uk;
+drop table if exists multi_uk2;
+create table multi_uk2 (pk int primary key, uk1 int unique, v varchar(10));
+insert into multi_uk2 values (1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c');
+replace into multi_uk2 values (1, 20, 'new');
+select * from multi_uk2 order by pk;
+pk	uk1	v
+1	20	new
+3	30	c
+drop table multi_uk2;
