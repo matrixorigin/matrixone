@@ -61,6 +61,8 @@ type S3FS struct {
 
 var _ FileService = new(S3FS)
 
+var errFullFilePreloadActualSizeExceeded = errors.New("full-file preload actual size exceeded admission")
+
 func NewS3FS(
 	ctx context.Context,
 	args ObjectStorageArguments,
@@ -696,7 +698,15 @@ read_disk_cache:
 	}
 	s3ReadStart := time.Now()
 	if err := s.read(ctx, vector); err != nil {
-		return err
+		if !errors.Is(err, errFullFilePreloadActualSizeExceeded) {
+			return err
+		}
+		releaseFullFilePreloadToken(vector.preloadToken)
+		vector.disableFullFilePreload(fullFilePreloadReasonActualSize)
+		vector.preloadToken = nil
+		if err := s.read(ctx, vector); err != nil {
+			return err
+		}
 	}
 	metric.FSReadDurationS3Read.Observe(time.Since(s3ReadStart).Seconds())
 	// Record S3 read size (all bytes read from S3)
@@ -816,9 +826,16 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		defer reader.Close()
 		tStart := time.Now()
 		LogEvent(ctx, str_io_readall_begin)
-		bs, err = io.ReadAll(reader)
+		readAllReader := io.Reader(reader)
+		if limit := fullFilePreloadActualReadLimit(vector.preloadToken); readFullObject && limit > 0 {
+			readAllReader = io.LimitReader(reader, limit+1)
+		}
+		bs, err = io.ReadAll(readAllReader)
 		LogEvent(ctx, str_io_readall_end, len(bs))
 		metric.FSReadDurationIOReadAll.Observe(time.Since(tStart).Seconds())
+		if limit := fullFilePreloadActualReadLimit(vector.preloadToken); readFullObject && limit > 0 && int64(len(bs)) > limit {
+			return nil, errFullFilePreloadActualSizeExceeded
+		}
 		if readFullObject {
 			recordFullFilePreloadReadBytes(vector.preloadToken, int64(len(bs)))
 		}

@@ -177,6 +177,30 @@ func TestS3FSFullFilePreloadTokenCoversResultProcessing(t *testing.T) {
 	vec.Release()
 }
 
+func TestS3FSFullFilePreloadStaleLowHintFallsBackToRange(t *testing.T) {
+	defer resetFullFilePreloadForTest(64<<20, 4, 128<<20)()
+
+	storage := &rangeRecordingObjectStorage{data: "0123456789abcdef"}
+	fs := &S3FS{
+		storage:  storage,
+		ioMerger: NewIOMerger(),
+	}
+
+	vec := &IOVector{
+		FilePath:         "foo",
+		FullFileSizeHint: 4,
+		Entries: []IOEntry{
+			{Offset: 4, Size: 3},
+		},
+	}
+	require.NoError(t, fs.Read(context.Background(), vec))
+	require.Equal(t, []byte("456"), vec.Entries[0].Data)
+	require.Equal(t, int64(0), fullFilePreloadInflight.Load())
+	require.Len(t, storage.ranges, 2)
+	require.Equal(t, readRangeRecord{min: ptrTo[int64](0), max: nil}, storage.ranges[0])
+	require.Equal(t, readRangeRecord{min: ptrTo[int64](4), max: ptrTo[int64](7)}, storage.ranges[1])
+}
+
 type readRangeRecord struct {
 	min *int64
 	max *int64

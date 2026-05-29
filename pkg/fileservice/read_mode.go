@@ -40,6 +40,7 @@ const (
 	fullFilePreloadReasonBudget      = "budget"
 	fullFilePreloadReasonCountBudget = "count-budget"
 	fullFilePreloadReasonBytesBudget = "bytes-budget"
+	fullFilePreloadReasonActualSize  = "actual-size"
 )
 
 var (
@@ -205,8 +206,8 @@ func acquireFullFilePreloadToken(estimatedBytes int64) (*fullFilePreloadToken, b
 		}
 	}
 
-	budget := fullFilePreloadBudgetBytes.Load()
 	for {
+		budget := fullFilePreloadBudgetBytes.Load()
 		current := fullFilePreloadInflightBytes.Load()
 		if budget > 0 && current+estimatedBytes > budget {
 			fullFilePreloadInflight.Add(-1)
@@ -235,6 +236,18 @@ func recordFullFilePreloadReadBytes(token *fullFilePreloadToken, actualBytes int
 	if token != nil && actualBytes > 0 {
 		metric.AddFSFullFilePreloadReadBytes(actualBytes)
 	}
+}
+
+func fullFilePreloadActualReadLimit(token *fullFilePreloadToken) int64 {
+	if token == nil {
+		return 0
+	}
+	limit := token.estimatedBytes
+	maxObjectBytes := fullFilePreloadMaxObjectBytes.Load()
+	if maxObjectBytes > 0 && maxObjectBytes < limit {
+		limit = maxObjectBytes
+	}
+	return limit
 }
 
 func updateFullFilePreloadInflightMetrics() {
