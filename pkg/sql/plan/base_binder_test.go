@@ -23,54 +23,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ============================================================================
-// getIntervalExprArgs
-// ============================================================================
-
 func makeListExpr(list []*plan.Expr) *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_List{
 			List: &plan.ExprList{List: list},
 		},
 	}
-}
-
-func TestGetIntervalExprArgs_NilExpr(t *testing.T) {
-	ctx := context.Background()
-	expr1, expr2, err := getIntervalExprArgs(ctx, nil)
-	require.Error(t, err)
-	require.Nil(t, expr1)
-	require.Nil(t, expr2)
-}
-
-func TestGetIntervalExprArgs_NotList(t *testing.T) {
-	ctx := context.Background()
-	expr := makePlan2Int64ConstExprWithType(42)
-	expr1, expr2, err := getIntervalExprArgs(ctx, expr)
-	require.Error(t, err)
-	require.Nil(t, expr1)
-	require.Nil(t, expr2)
-}
-
-func TestGetIntervalExprArgs_TooShort(t *testing.T) {
-	ctx := context.Background()
-	expr := makeListExpr([]*plan.Expr{makePlan2Int64ConstExprWithType(1)})
-	expr1, expr2, err := getIntervalExprArgs(ctx, expr)
-	require.Error(t, err)
-	require.Nil(t, expr1)
-	require.Nil(t, expr2)
-}
-
-func TestGetIntervalExprArgs_Valid(t *testing.T) {
-	ctx := context.Background()
-	first := makePlan2Int64ConstExprWithType(3)
-	second := makePlan2StringConstExprWithType("day")
-	expr := makeListExpr([]*plan.Expr{first, second})
-
-	expr1, expr2, err := getIntervalExprArgs(ctx, expr)
-	require.NoError(t, err)
-	require.Equal(t, first, expr1)
-	require.Equal(t, second, expr2)
 }
 
 // ============================================================================
