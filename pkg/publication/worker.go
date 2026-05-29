@@ -311,9 +311,8 @@ type worker struct {
 	writeObjectWorker        WriteObjectWorker
 
 	// Sync protection keepalive management
-	syncProtectionMu     sync.RWMutex
-	syncProtectionJobs   map[string]*syncProtectionEntry
-	syncProtectionTicker *time.Ticker
+	syncProtectionMu   sync.RWMutex
+	syncProtectionJobs map[string]*syncProtectionEntry
 }
 
 type TaskContext struct {
@@ -509,10 +508,6 @@ func (w *worker) Stop() {
 	if w.writeObjectWorker != nil {
 		w.writeObjectWorker.Stop()
 	}
-	// Stop sync protection ticker
-	if w.syncProtectionTicker != nil {
-		w.syncProtectionTicker.Stop()
-	}
 }
 
 // ============================================================================
@@ -563,14 +558,14 @@ func (w *worker) GetSyncProtectionTTL(jobID string) int64 {
 // all registered sync protection jobs to prevent TTL expiration
 func (w *worker) RunSyncProtectionKeepAlive() {
 	renewInterval := GetSyncProtectionRenewInterval()
-	w.syncProtectionTicker = time.NewTicker(renewInterval)
-	defer w.syncProtectionTicker.Stop()
+	ticker := time.NewTicker(renewInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-w.ctx.Done():
 			return
-		case <-w.syncProtectionTicker.C:
+		case <-ticker.C:
 			w.renewAllSyncProtections()
 		}
 	}
