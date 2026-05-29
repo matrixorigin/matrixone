@@ -4779,8 +4779,8 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 // returns the frozen bytes, so historical snapshots stay reproducible even if
 // the external object is overwritten out of band.
 //
-//   - Inputs that already carry a contenthash are returned unchanged (idempotent):
-//     no live read and no second CAS write.
+//   - Inputs that already carry a valid contenthash are validated and returned
+//     unchanged (idempotent): no live read and no second CAS write.
 //   - If the external file cannot be read, pin errors out (never silently falls
 //     back to an un-pinned value).
 //   - The default, un-pinned datalink behavior is unaffected: only values passed
@@ -4816,7 +4816,7 @@ func DatalinkPin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 // pinDatalink reads the live bytes of rawURL, stores them in the CAS, and returns
 // rawURL rewritten to address that immutable copy via ?contenthash=. Already
-// pinned URLs are returned unchanged.
+// pinned URLs are validated and returned unchanged.
 func pinDatalink(rawURL string, casFS fileservice.FileService, proc *process.Process) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -4828,6 +4828,9 @@ func pinDatalink(rawURL string, casFS fileservice.FileService, proc *process.Pro
 	// ParseDatalink which lower-cases query keys.
 	for k := range q {
 		if strings.EqualFold(k, datalink.ContentHashKey) {
+			if err := datalink.ValidateContentHash(strings.ToLower(q.Get(k))); err != nil {
+				return "", err
+			}
 			return rawURL, nil
 		}
 	}

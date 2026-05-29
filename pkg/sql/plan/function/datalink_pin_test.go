@@ -115,6 +115,45 @@ func TestDatalinkPinIdempotent(t *testing.T) {
 	require.True(t, s, info)
 }
 
+func TestDatalinkPinRejectsInvalidExistingContentHash(t *testing.T) {
+	proc := testutil.NewProc(t)
+
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{
+			name: "short",
+			url:  "file:///does/not/matter.txt?contenthash=abc",
+		},
+		{
+			name: "non-hex",
+			url:  "file:///does/not/matter.txt?contenthash=" + strings.Repeat("g", 64),
+		},
+		{
+			name: "empty",
+			url:  "file:///does/not/matter.txt?contenthash=",
+		},
+		{
+			name: "mixed-case-key",
+			url:  "file:///does/not/matter.txt?ContentHash=bad",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(types.T_datalink.ToType(),
+					[]string{c.url}, []bool{false})},
+				NewFunctionTestResult(types.T_datalink.ToType(), true,
+					[]string{""}, []bool{false}),
+				DatalinkPin)
+			s, info := tc.Run()
+			require.True(t, s, info)
+		})
+	}
+}
+
 // NULL in, NULL out.
 func TestDatalinkPinNull(t *testing.T) {
 	proc := testutil.NewProc(t)
