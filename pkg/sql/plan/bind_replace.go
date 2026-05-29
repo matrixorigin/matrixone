@@ -169,16 +169,72 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			},
 		}
 
-		joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+		pkCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 			leftExpr,
 			rightExpr,
 		})
+
+		// Build LEFT JOIN condition: PK = PK OR (UK1 = UK1) OR (UK2 = UK2) ...
+		// This allows a single new row to match multiple conflicting old rows
+		// (one per unique key constraint), so all old rows are captured and
+		// deleted in a single pass.
+		joinConds := []*plan.Expr{pkCond}
+		for i, idxDef := range tableDef.Indexes {
+			if !idxDef.Unique || skipUniqueIdx[i] {
+				continue
+			}
+			var ukPartConds []*plan.Expr
+			for _, part := range idxDef.Parts {
+				colName := catalog.ResolveAlias(part)
+				colIdx := tableDef.Name2ColIndex[colName]
+				colTyp := tableDef.Cols[colIdx].Typ
+				lExpr := &plan.Expr{
+					Typ: colTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: selectTag,
+							ColPos: colName2Idx[tableDef.Name+"."+colName],
+						},
+					},
+				}
+				rExpr := &plan.Expr{
+					Typ: colTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: oldScanTag,
+							ColPos: colIdx,
+						},
+					},
+				}
+				partCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{lExpr, rExpr})
+				ukPartConds = append(ukPartConds, partCond)
+			}
+			if len(ukPartConds) == 0 {
+				continue
+			}
+			ukCond := ukPartConds[0]
+			for _, c := range ukPartConds[1:] {
+				ukCond, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{ukCond, c})
+			}
+			joinConds = append(joinConds, ukCond)
+		}
+
+		var joinOnList []*plan.Expr
+		if len(joinConds) == 1 {
+			joinOnList = joinConds
+		} else {
+			combined := joinConds[0]
+			for _, c := range joinConds[1:] {
+				combined, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{combined, c})
+			}
+			joinOnList = []*plan.Expr{combined}
+		}
 
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{lastNodeID, oldScanNodeID},
 			JoinType: plan.Node_LEFT,
-			OnList:   []*plan.Expr{joinCond},
+			OnList:   joinOnList,
 		}, bindCtx)
 
 		lastNodeID = builder.appendNode(&plan.Node{
@@ -187,6 +243,40 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			Children:    []int32{lastNodeID},
 			BindingTags: []int32{fullProjTag},
 		}, bindCtx)
+	}
+
+	// replaceDedupOldColList builds OldColList for each DEDUP JOIN:
+	//   [0] = first (the conflict-detecting column, e.g. old PK or old UK)
+	//   [1] = old main-table RowID (dedupDeleteMarkerColIdx — non-null when the
+	//         old row actually existed; used by keepDiscardedRowsForDelete to
+	//         identify fan-out copies that still need to delete an old row)
+	//   [2] = old main-table PK
+	//   [...] = old index key columns
+	// Duplicate positions are de-duplicated.
+	oldMainRowIDPos := oldColName2Idx[tableDef.Name+"."+catalog.Row_ID]
+	oldMainPKPos := oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+	replaceDedupOldColList := func(first [2]int32) []plan.ColRef {
+		oldCols := make([]plan.ColRef, 0, 3+len(tableDef.Indexes))
+		seen := make(map[[2]int32]struct{}, 3+len(tableDef.Indexes))
+		appendOldCol := func(pos [2]int32) {
+			if _, ok := seen[pos]; ok {
+				return
+			}
+			seen[pos] = struct{}{}
+			oldCols = append(oldCols, plan.ColRef{RelPos: pos[0], ColPos: pos[1]})
+		}
+		appendOldCol(first)
+		appendOldCol(oldMainRowIDPos)
+		appendOldCol(oldMainPKPos)
+		for i := range tableDef.Indexes {
+			if idxTableDefs[i] == nil {
+				continue
+			}
+			if pos, ok := oldColName2Idx[idxTableDefs[i].Name+"."+catalog.IndexTableIndexColName]; ok {
+				appendOldCol(pos)
+			}
+		}
+		return oldCols
 	}
 
 	// detect primary key confliction
@@ -255,12 +345,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			DedupColName:      dedupColName,
 			DedupColTypes:     dedupColTypes,
 			DedupJoinCtx: &plan.DedupJoinCtx{
-				OldColList: []plan.ColRef{
-					{
-						RelPos: oldPkPos[0],
-						ColPos: oldPkPos[1],
-					},
-				},
+				OldColList: replaceDedupOldColList(oldPkPos),
 			},
 		}
 
@@ -334,7 +419,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			dedupColTypes[j] = tableDef.Cols[tableDef.Name2ColIndex[catalog.ResolveAlias(part)]].Typ
 		}
 
-		oldPkPos := oldColName2Idx[idxTableDefs[i].Name+"."+catalog.IndexTableIndexColName]
+		oldIdxPos := oldColName2Idx[idxTableDefs[i].Name+"."+catalog.IndexTableIndexColName]
 
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:          plan.Node_JOIN,
@@ -345,12 +430,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			DedupColName:      dedupColName,
 			DedupColTypes:     dedupColTypes,
 			DedupJoinCtx: &plan.DedupJoinCtx{
-				OldColList: []plan.ColRef{
-					{
-						RelPos: oldPkPos[0],
-						ColPos: oldPkPos[1],
-					},
-				},
+				OldColList: replaceDedupOldColList(oldIdxPos),
 			},
 		}, bindCtx)
 	}
@@ -453,6 +533,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			PrimaryColTyp:      finalProjList[newPkIdx].Typ,
 		})
 
+		insertPkColIdx := int32(-1)
+		for i, col := range insertCols {
+			if col.ColPos == newPkIdx {
+				insertPkColIdx = int32(i)
+				break
+			}
+		}
+		if insertPkColIdx < 0 {
+			panic("replace main table primary key column not found in insert columns")
+		}
+
 		oldRowIdPos := oldColName2Idx[tableDef.Name+"."+catalog.Row_ID]
 		deleteCols[0].RelPos = finalProjTag
 		deleteCols[0].ColPos = int32(len(finalProjList))
@@ -487,10 +578,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		})
 
 		updateCtxList = append(updateCtxList, &plan.UpdateCtx{
-			ObjRef:     objRef,
-			TableDef:   tableDef,
-			InsertCols: insertCols,
-			DeleteCols: deleteCols,
+			ObjRef:             objRef,
+			TableDef:           tableDef,
+			InsertCols:         insertCols,
+			DeleteCols:         deleteCols,
+			SkipInsertOnNullPk: true,
+			InsertPkColIdx:     insertPkColIdx,
 		})
 	}
 

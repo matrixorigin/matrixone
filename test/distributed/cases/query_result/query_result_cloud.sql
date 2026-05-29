@@ -88,7 +88,6 @@ select * from result_scan(last_query_id()) as u;
 alter table tt add unique index id(a);
 /* cloud_user */show index from tt;
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue#17598
 /* cloud_user */show node list;
 select * from result_scan(last_query_id()) as u;
 -- @bvt:issue

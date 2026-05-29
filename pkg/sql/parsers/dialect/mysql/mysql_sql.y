@@ -3013,6 +3013,19 @@ update_no_with_stmt:
             Where: $7,
         }
     }
+|    UPDATE priority_opt ignore_opt table_reference SET update_list FROM table_references where_expression_opt
+    {
+        // PostgreSQL-style UPDATE target SET ... FROM source_tables WHERE ...
+        // The target table is kept in Tables; FROM-clause sources are stored
+        // separately in From so the binder/planner can treat them as read-only
+        // join sources rather than DML targets.
+        $$ = &tree.Update{
+            Tables: tree.TableExprs{$4},
+            Exprs:  $6,
+            From:   &tree.From{Tables: tree.TableExprs{$8}},
+            Where:  $9,
+        }
+    }
 
 update_list:
     update_value

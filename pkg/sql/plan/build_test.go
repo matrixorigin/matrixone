@@ -682,6 +682,18 @@ func TestUpdate(t *testing.T) {
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"update NATION a join NATION2 b on a.N_REGIONKEY = b.R_REGIONKEY set a.N_NAME = 'aa'",
+		// PostgreSQL-style UPDATE ... FROM
+		"UPDATE NATION a SET a.N_NAME = 'aa' FROM NATION2 b WHERE a.N_REGIONKEY = b.R_REGIONKEY",
+		"UPDATE NATION SET N_NAME = 'bb' FROM REGION WHERE NATION.N_REGIONKEY = REGION.R_REGIONKEY",
+		"UPDATE NATION a SET a.N_NAME = 'cc' FROM NATION2 b, REGION c WHERE a.N_REGIONKEY = b.R_REGIONKEY AND b.R_REGIONKEY = c.R_REGIONKEY",
+		// Unqualified SET LHS must bind to the target only; both NATION and
+		// NATION2 expose N_NAME but this should NOT be reported as ambiguous.
+		"UPDATE NATION SET N_NAME = NATION2.N_NAME FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY",
+		// FROM-clause join tree (JOIN ... ON ...) must round-trip without
+		// changing associativity.
+		"UPDATE NATION a SET a.N_NAME = 'dd' FROM NATION2 b JOIN REGION c ON b.R_REGIONKEY = c.R_REGIONKEY WHERE a.N_REGIONKEY = b.R_REGIONKEY",
+		// Self-join: target and source are the same table.
+		"UPDATE NATION a SET a.N_NAME = b.N_NAME FROM NATION b WHERE a.N_REGIONKEY = b.N_REGIONKEY",
 		"prepare stmt1 from 'update nation set n_name = ? where n_nationkey > ?'",
 		"drop index idx1 on test_idx",
 	}
@@ -689,8 +701,10 @@ func TestUpdate(t *testing.T) {
 
 	// should error
 	sqls = []string{
-		"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2",    // column not exist
-		"UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2", // table not exist
+		"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2",                                         // column not exist
+		"UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2",                                      // table not exist
+		"UPDATE NATION a SET a.N_NAME = 'x' FROM NOTEXIST b WHERE a.N_REGIONKEY = b.R_REGIONKEY", // FROM table not exist
+		"UPDATE NATION a SET a.N_NAME = 'x' FROM NATION2 b WHERE a.N_REGIONKEY = b.NOT_A_COL",    // FROM column not exist
 	}
 	runTestShouldError(mock, t, sqls)
 }

@@ -736,6 +736,168 @@ func TestScope_DropDatabase_ToleratesDanglingHiddenIndexMetadata(t *testing.T) {
 	})
 }
 
+func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	txnMeta := txn.TxnMeta{}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
+	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	txnOp.EXPECT().TxnRef().Return(&txnMeta).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	deletedRelErr := moerr.NewNoSuchTable(ctx, "acc_test02", "aff01")
+	deleteStopErr := moerr.NewInternalError(ctx, "stop after database delete")
+
+	parentRel := mock_frontend.NewMockRelation(ctrl)
+	parentRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(11)).AnyTimes()
+
+	mockDb := mock_frontend.NewMockDatabase(ctrl)
+	mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+	mockDb.EXPECT().Relations(gomock.Any()).Return([]string{"aff01", "pri01"}, nil).Times(1)
+	mockDb.EXPECT().Relation(gomock.Any(), "aff01", gomock.Any()).Return(nil, deletedRelErr).Times(1)
+	mockDb.EXPECT().Relation(gomock.Any(), "pri01", gomock.Any()).Return(parentRel, nil).Times(1)
+	mockDb.EXPECT().Relations(gomock.Any()).Return([]string{"aff01"}, nil).Times(1)
+	mockDb.EXPECT().Relation(gomock.Any(), "aff01", gomock.Any()).Return(nil, deletedRelErr).Times(1)
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "acc_test02", gomock.Any()).Return(mockDb, nil).Times(3)
+	eng.EXPECT().Delete(gomock.Any(), "acc_test02", gomock.Any()).Return(deleteStopErr).Times(1)
+
+	getConstraintDef := gostub.Stub(&GetConstraintDef, func(_ context.Context, rel engine.Relation) (*engine.ConstraintDef, error) {
+		if rel == parentRel {
+			return &engine.ConstraintDef{Cts: []engine.Constraint{}}, nil
+		}
+		t.Fatalf("unexpected relation passed to GetConstraintDef")
+		return nil, nil
+	})
+	defer getConstraintDef.Reset()
+
+	lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+		return nil
+	})
+	defer lockMoDb.Reset()
+
+	dropDbDef := &plan2.DropDatabase{
+		IfExists: false,
+		Database: "acc_test02",
+	}
+	cplan := &plan.Plan{
+		Plan: &plan2.Plan_Ddl{
+			Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_DROP_DATABASE,
+				Definition: &plan2.DataDefinition_DropDatabase{
+					DropDatabase: dropDbDef,
+				},
+			},
+		},
+	}
+	s := &Scope{
+		Magic: DropDatabase,
+		Plan:  cplan,
+	}
+
+	c := NewCompile("test", "test", "drop database acc_test02", "", "", eng, proc, nil, false, nil, time.Now())
+	require.ErrorIs(t, s.DropDatabase(c), deleteStopErr)
+}
+
+func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	txnMeta := txn.TxnMeta{}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
+	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	txnOp.EXPECT().TxnRef().Return(&txnMeta).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	relationErr := moerr.NewInternalErrorf(ctx, "can not find table by id %d", 99)
+
+	parentRel := mock_frontend.NewMockRelation(ctrl)
+	parentRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(11)).AnyTimes()
+
+	mockDb := mock_frontend.NewMockDatabase(ctrl)
+	mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+	mockDb.EXPECT().Relations(gomock.Any()).Return([]string{"pri01"}, nil).Times(1)
+	mockDb.EXPECT().Relation(gomock.Any(), "pri01", gomock.Any()).Return(parentRel, nil).Times(1)
+	mockDb.EXPECT().Relations(gomock.Any()).Return([]string{"aff01"}, nil).Times(1)
+	mockDb.EXPECT().Relation(gomock.Any(), "aff01", gomock.Any()).Return(nil, relationErr).Times(1)
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "acc_test02", gomock.Any()).Return(mockDb, nil).Times(3)
+
+	getConstraintDef := gostub.Stub(&GetConstraintDef, func(_ context.Context, rel engine.Relation) (*engine.ConstraintDef, error) {
+		if rel == parentRel {
+			return &engine.ConstraintDef{Cts: []engine.Constraint{}}, nil
+		}
+		t.Fatalf("unexpected relation passed to GetConstraintDef")
+		return nil, nil
+	})
+	defer getConstraintDef.Reset()
+
+	lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+		return nil
+	})
+	defer lockMoDb.Reset()
+
+	dropDbDef := &plan2.DropDatabase{
+		IfExists: false,
+		Database: "acc_test02",
+	}
+	cplan := &plan.Plan{
+		Plan: &plan2.Plan_Ddl{
+			Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_DROP_DATABASE,
+				Definition: &plan2.DataDefinition_DropDatabase{
+					DropDatabase: dropDbDef,
+				},
+			},
+		},
+	}
+	s := &Scope{
+		Magic: DropDatabase,
+		Plan:  cplan,
+	}
+
+	c := NewCompile("test", "test", "drop database acc_test02", "", "", eng, proc, nil, false, nil, time.Now())
+	require.ErrorIs(t, s.DropDatabase(c), relationErr)
+}
+
+func TestMissingTablePredicates(t *testing.T) {
+	ctx := context.Background()
+
+	noSuchTableErr := moerr.NewNoSuchTable(ctx, "db1", "t1")
+	canNotFindTableByIDErr := moerr.NewInternalError(ctx, "can not find table by id : accountId: 0")
+	otherInternalErr := moerr.NewInternalError(ctx, "some other internal error")
+	otherErr := moerr.NewBadDB(ctx, "db1")
+
+	require.True(t, isMissingTableByNameForDropDatabase(noSuchTableErr))
+	require.False(t, isMissingTableByNameForDropDatabase(canNotFindTableByIDErr))
+	require.False(t, isMissingTableByNameForDropDatabase(otherInternalErr))
+	require.False(t, isMissingTableByNameForDropDatabase(otherErr))
+
+	require.True(t, isMissingTableByIdForFkCleanup(noSuchTableErr))
+	require.True(t, isMissingTableByIdForFkCleanup(canNotFindTableByIDErr))
+	require.False(t, isMissingTableByIdForFkCleanup(otherInternalErr))
+	require.False(t, isMissingTableByIdForFkCleanup(otherErr))
+}
+
 func Test_addTimeSpan(t *testing.T) {
 	cases := []struct {
 		name    string

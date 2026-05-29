@@ -1894,16 +1894,43 @@ func getTableInfos(
 		return nil, err
 	}
 
-	// only recreate snapshoted table need create sql
+	return fillTableCreateSQLsForRestore(
+		sid,
+		fmt.Sprint(snapshot),
+		tableInfos,
+		func(tblInfo *tableInfo) (string, error) {
+			return getCreateTableSql(ctx, bh, snapshot, tblInfo.dbName, tblInfo.tblName)
+		},
+	)
+}
+
+func fillTableCreateSQLsForRestore(
+	sid string,
+	restoreSource string,
+	tableInfos []*tableInfo,
+	getCreateSQL func(*tableInfo) (string, error),
+) ([]*tableInfo, error) {
+	restorable := make([]*tableInfo, 0, len(tableInfos))
 	for _, tblInfo := range tableInfos {
-		if tblInfo.createSql, err = getCreateTableSql(
-			ctx, bh, snapshot, dbName, tblInfo.tblName,
-		); err != nil {
+		createSQL, err := getCreateSQL(tblInfo)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				getLogger(sid).Warn(
+					"skip stale table metadata during restore",
+					zap.String("restore-source", restoreSource),
+					zap.String("database", tblInfo.dbName),
+					zap.String("table", tblInfo.tblName),
+					zap.Error(err),
+				)
+				continue
+			}
 			return nil, err
 		}
-	}
 
-	return tableInfos, nil
+		tblInfo.createSql = createSQL
+		restorable = append(restorable, tblInfo)
+	}
+	return restorable, nil
 }
 
 func getCreateDatabaseSql(ctx context.Context,
