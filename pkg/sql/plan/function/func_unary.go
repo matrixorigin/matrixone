@@ -492,6 +492,55 @@ func JsonQuote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return opUnaryStrToBytesWithErrorCheck(ivecs, result, proc, length, single, selectList)
 }
 
+func Quote(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		data, isNull := source.GetStrValue(i)
+		if isNull {
+			if err := rs.AppendBytes([]byte("NULL"), false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendBytes(quoteSQLString(data), false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func quoteSQLString(data []byte) []byte {
+	quoted := make([]byte, 0, len(data)+2)
+	quoted = append(quoted, '\'')
+	for _, ch := range data {
+		switch ch {
+		case 0:
+			quoted = append(quoted, '\\', '0')
+		case '\'':
+			quoted = append(quoted, '\\', '\'')
+		case '\\':
+			quoted = append(quoted, '\\', '\\')
+		case 26:
+			quoted = append(quoted, '\\', 'Z')
+		default:
+			quoted = append(quoted, ch)
+		}
+	}
+	quoted = append(quoted, '\'')
+	return quoted
+}
+
 func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	jsonSingle := func(v []byte) (string, error) {
 		bj := types.DecodeJson(v)
