@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -5338,10 +5341,6 @@ func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTa
 		return nil
 	}
 
-	if len(hiveCols) == 0 {
-		return moerr.NewBadConfig(ctx, "hive_partition_columns is required when hive_partitioning is enabled")
-	}
-
 	if err := rejectDuplicateKeys(ctx, raw, []string{"format", "filepath"}); err != nil {
 		return err
 	}
@@ -5354,6 +5353,14 @@ func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTa
 	rawFilepath := getRawOption(raw, "filepath")
 	if len(stmt.Param.StageName) != 0 || strings.HasPrefix(rawFilepath, "stage://") {
 		return moerr.NewBadConfig(ctx, "hive_partitioning does not support stage external tables")
+	}
+
+	if len(hiveCols) == 0 || (len(hiveCols) == 1 && strings.EqualFold(strings.TrimSpace(hiveCols[0]), "auto")) {
+		prepareHiveInferenceParam(stmt.Param, raw)
+		hiveCols, err = inferHivePartitionColumns(ctx, stmt.Param)
+		if err != nil {
+			return err
+		}
 	}
 
 	normalized := make([]string, 0, len(hiveCols))
@@ -5399,6 +5406,190 @@ func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTa
 	stmt.Param.HivePartitionColTypes = colTypes
 	stmt.Param.Option = stripHiveOptionKeys(stmt.Param.Option)
 	return nil
+}
+
+func prepareHiveInferenceParam(param *tree.ExternParam, options []string) {
+	if param.Filepath == "" {
+		param.Filepath = getRawOption(options, "filepath")
+	}
+	if param.Format == "" {
+		param.Format = strings.ToLower(getRawOption(options, "format"))
+	}
+	if param.ScanType != tree.S3 {
+		return
+	}
+	if param.S3Param == nil {
+		param.S3Param = &tree.S3Parameter{}
+	}
+	if param.S3Param.Endpoint == "" {
+		param.S3Param.Endpoint = getRawOption(options, "endpoint")
+	}
+	if param.S3Param.Region == "" {
+		param.S3Param.Region = getRawOption(options, "region")
+	}
+	if param.S3Param.APIKey == "" {
+		param.S3Param.APIKey = getRawOption(options, "access_key_id")
+	}
+	if param.S3Param.APISecret == "" {
+		param.S3Param.APISecret = getRawOption(options, "secret_access_key")
+	}
+	if param.S3Param.Bucket == "" {
+		param.S3Param.Bucket = getRawOption(options, "bucket")
+	}
+	if param.S3Param.Provider == "" {
+		param.S3Param.Provider = getRawOption(options, "provider")
+	}
+	if param.S3Param.RoleArn == "" {
+		param.S3Param.RoleArn = getRawOption(options, "role_arn")
+	}
+	if param.S3Param.ExternalId == "" {
+		param.S3Param.ExternalId = getRawOption(options, "external_id")
+	}
+}
+
+const (
+	hivePartitionInferMaxDepth      = 16
+	hivePartitionInferMaxListCalls  = 64
+	hivePartitionInferMaxSampleDirs = 64
+)
+
+func inferHivePartitionColumns(ctx context.Context, param *tree.ExternParam) ([]string, error) {
+	basePath := normalizeHiveInferPath(param.Filepath)
+	listDir, err := newHiveInferListDir(param, basePath)
+	if err != nil {
+		return nil, err
+	}
+
+	currentPrefixes := []string{basePath}
+	inferred := make([]string, 0)
+	listCalls := 0
+	for depth := 0; depth < hivePartitionInferMaxDepth && len(currentPrefixes) > 0; depth++ {
+		var levelKey string
+		nextPrefixes := make([]string, 0)
+		for _, prefix := range currentPrefixes {
+			listCalls++
+			if listCalls > hivePartitionInferMaxListCalls {
+				return nil, moerr.NewBadConfigf(ctx,
+					"hive partition auto inference exceeded %d List calls; specify hive_partition_columns explicitly",
+					hivePartitionInferMaxListCalls)
+			}
+			for entry, err := range listDir(ctx, prefix) {
+				if err != nil {
+					return nil, moerr.NewBadConfigf(ctx,
+						"hive partition auto inference failed to list '%s': %v; specify hive_partition_columns explicitly",
+						prefix, err)
+				}
+				if entry == nil || !entry.IsDir || isHiveInferHidden(entry.Name) {
+					continue
+				}
+				key, isHive, err := parseHiveInferSegmentKey(entry.Name)
+				if err != nil {
+					return nil, err
+				}
+				if !isHive {
+					continue
+				}
+				if levelKey == "" {
+					levelKey = key
+				} else if levelKey != key {
+					return nil, moerr.NewBadConfigf(ctx,
+						"hive partition auto inference found mixed keys '%s' and '%s' at the same level; specify hive_partition_columns explicitly",
+						levelKey, key)
+				}
+				if len(nextPrefixes) < hivePartitionInferMaxSampleDirs {
+					nextPrefixes = append(nextPrefixes, path.Join(prefix, entry.Name))
+				}
+			}
+			if len(nextPrefixes) >= hivePartitionInferMaxSampleDirs {
+				break
+			}
+		}
+		if levelKey == "" {
+			break
+		}
+		inferred = append(inferred, levelKey)
+		currentPrefixes = nextPrefixes
+	}
+	if len(inferred) == 0 {
+		return nil, moerr.NewBadConfig(ctx,
+			"hive partition auto inference found no hive-style partition directories; specify hive_partition_columns explicitly")
+	}
+	return inferred, nil
+}
+
+type hiveInferListDirFunc func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error]
+
+func newHiveInferListDir(param *tree.ExternParam, basePath string) (hiveInferListDirFunc, error) {
+	if param.ScanType == tree.S3 {
+		fs, baseReadPath, err := GetForETLWithType(param, basePath)
+		if err != nil {
+			return nil, err
+		}
+		return func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
+			return fs.List(ctx, deriveHiveInferReadPath(basePath, baseReadPath, prefix))
+		}, nil
+	}
+	return func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
+		fs, readPath, err := GetForETLWithType(param, prefix)
+		if err != nil {
+			return func(yield func(*fileservice.DirEntry, error) bool) {
+				yield(nil, err)
+			}
+		}
+		return fs.List(ctx, readPath)
+	}, nil
+}
+
+func normalizeHiveInferPath(p string) string {
+	p = strings.TrimSpace(p)
+	if strings.HasPrefix(p, "etl:") {
+		return path.Clean(p)
+	}
+	if strings.Contains(p, fileservice.ServiceNameSeparator) {
+		return path.Clean(p)
+	}
+	return path.Clean("/" + p)
+}
+
+func deriveHiveInferReadPath(basePath, baseReadPath, prefix string) string {
+	prefix = normalizeHiveInferPath(prefix)
+	if prefix == basePath {
+		return baseReadPath
+	}
+	if !strings.HasPrefix(prefix, basePath+"/") {
+		return prefix
+	}
+	rel := strings.TrimPrefix(prefix, basePath+"/")
+	if rel == "" {
+		return baseReadPath
+	}
+	if baseReadPath == "" || baseReadPath == "." {
+		return rel
+	}
+	return path.Join(baseReadPath, rel)
+}
+
+func parseHiveInferSegmentKey(segment string) (string, bool, error) {
+	idx := strings.IndexByte(segment, '=')
+	if idx <= 0 {
+		return "", false, nil
+	}
+	key := segment[:idx]
+	if key == "." || key == ".." {
+		return "", true, moerr.NewBadConfigf(context.Background(),
+			"invalid hive partition key '%s' during auto inference", key)
+	}
+	for _, r := range key {
+		if r != '_' && (r < '0' || r > '9') && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
+			return "", true, moerr.NewBadConfigf(context.Background(),
+				"invalid hive partition key '%s' during auto inference", key)
+		}
+	}
+	return strings.ToLower(key), true, nil
+}
+
+func isHiveInferHidden(name string) bool {
+	return len(name) > 0 && (name[0] == '.' || name[0] == '_')
 }
 
 func parseHiveOptionsFromRawOptions(ctx context.Context, options []string) (enabled bool, cols []string, err error) {
