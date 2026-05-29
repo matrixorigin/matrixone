@@ -747,12 +747,13 @@ func TestUpdateFallbackGeneratedColumnsUseDefaultAfterRewrite(t *testing.T) {
 		t.Fatalf("build fallback update with generated column over DEFAULT: %v", err)
 	}
 
-	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
+	requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
 		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1,
-		len(mock.ctxt.tables["emp"].Cols)+1, "default-marker")
-	if !exprContainsStringLiteral(generatedExpr, "job-default") {
-		t.Fatalf("generated column should use expanded DEFAULT expression, got %s", generatedExpr.String())
-	}
+		len(mock.ctxt.tables["emp"].Cols)+1, "default-marker",
+		func(generatedExpr *plan.Expr) bool {
+			return exprContainsStringLiteral(generatedExpr, "job-default")
+		},
+		"generated column should use expanded DEFAULT expression")
 }
 
 func TestUpdateFallbackGeneratedColumnsUseOnUpdateAfterRewrite(t *testing.T) {
@@ -766,12 +767,13 @@ func TestUpdateFallbackGeneratedColumnsUseOnUpdateAfterRewrite(t *testing.T) {
 		t.Fatalf("build fallback update with generated column over ON UPDATE: %v", err)
 	}
 
-	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
+	requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
 		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1,
-		len(mock.ctxt.tables["emp"].Cols)+1, "on-update-marker")
-	if !exprContainsStringLiteral(generatedExpr, "job-on-update") {
-		t.Fatalf("generated column should use ON UPDATE expression, got %s", generatedExpr.String())
-	}
+		len(mock.ctxt.tables["emp"].Cols)+1, "on-update-marker",
+		func(generatedExpr *plan.Expr) bool {
+			return exprContainsStringLiteral(generatedExpr, "job-on-update")
+		},
+		"generated column should use ON UPDATE expression")
 }
 
 func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
@@ -785,12 +787,13 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 		t.Fatalf("build fallback update with generated column chain: %v", err)
 	}
 
-	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
+	requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
 		len(mock.ctxt.tables["emp"].Cols)+3+len(mock.ctxt.tables["dept"].Cols)+1,
-		len(mock.ctxt.tables["emp"].Cols)+2, "chain-marker")
-	if !exprContainsColName(generatedExpr, "empno") || exprContainsColName(generatedExpr, "mgr") {
-		t.Fatalf("generated column chain should use freshly recomputed earlier generated column, got %s", generatedExpr.String())
-	}
+		len(mock.ctxt.tables["emp"].Cols)+2, "chain-marker",
+		func(generatedExpr *plan.Expr) bool {
+			return exprContainsColName(generatedExpr, "empno") && !exprContainsColName(generatedExpr, "mgr")
+		},
+		"generated column chain should use freshly recomputed earlier generated column")
 }
 
 func setMockGeneratedColumn(t *testing.T, mock *MockOptimizer, tableName, generatedName, sourceName string) {
@@ -875,7 +878,16 @@ func makeStringConstExpr(typ plan.Type, value string) *plan.Expr {
 	}
 }
 
-func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int, pos int, marker string) *plan.Expr {
+func requireFallbackSourceProjectExpr(
+	t *testing.T,
+	query *Query,
+	projectLen int,
+	pos int,
+	marker string,
+	accept func(*plan.Expr) bool,
+	message string,
+) *plan.Expr {
+	candidates := make([]string, 0, 2)
 	for _, node := range query.Nodes {
 		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen || pos >= len(node.ProjectList) {
 			continue
@@ -890,9 +902,14 @@ func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int
 		if !hasMarker {
 			continue
 		}
-		return node.ProjectList[pos]
+		expr := node.ProjectList[pos]
+		if accept(expr) {
+			return expr
+		}
+		candidates = append(candidates, expr.String())
 	}
-	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
+	t.Fatalf("%s; no matching fallback source project with length %d and marker %q, candidates: %s",
+		message, projectLen, marker, strings.Join(candidates, "; "))
 	return nil
 }
 
