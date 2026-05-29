@@ -492,18 +492,24 @@ func TestPushClient_UnusedTableGCTicker(t *testing.T) {
 	t.Run("subscriber nil", func(t *testing.T) {
 		var c PushClient
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go c.unusedTableGCTicker(ctx)
+		done := startTickerForTest(t, func() {
+			c.unusedTableGCTicker(ctx)
+		})
 		time.Sleep(time.Millisecond * 10)
+		cancel()
+		waitTickerStopped(t, done)
 	})
 
 	t.Run("context done", func(t *testing.T) {
 		var c PushClient
 		c.subscriber = &logTailSubscriber{}
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go c.unusedTableGCTicker(ctx)
+		done := startTickerForTest(t, func() {
+			c.unusedTableGCTicker(ctx)
+		})
 		time.Sleep(time.Millisecond * 10)
+		cancel()
+		waitTickerStopped(t, done)
 	})
 }
 
@@ -600,26 +606,19 @@ func TestPushClient_PartitionStateGCTicker(t *testing.T) {
 		gcPartitionStateTicker = orig
 	}()
 
-	startPStateGCTicker := func(c *PushClient, ctx context.Context) {
-		var (
-			wait sync.WaitGroup
-		)
-
-		wait.Add(1)
-		go func() {
-			wait.Done()
+	startPStateGCTicker := func(t *testing.T, c *PushClient, ctx context.Context) <-chan struct{} {
+		return startTickerForTest(t, func() {
 			c.partitionStateGCTicker(ctx, nil)
-		}()
-
-		wait.Wait()
+		})
 	}
 
 	t.Run("subscriber nil", func(t *testing.T) {
 		var c PushClient
 		ctx, cancel := context.WithCancel(context.Background())
-		startPStateGCTicker(&c, ctx)
+		done := startPStateGCTicker(t, &c, ctx)
 		time.Sleep(time.Millisecond * 10)
 		cancel()
+		waitTickerStopped(t, done)
 	})
 
 	t.Run("context done", func(t *testing.T) {
@@ -627,11 +626,34 @@ func TestPushClient_PartitionStateGCTicker(t *testing.T) {
 		c.subscriber = &logTailSubscriber{}
 		ctx, cancel := context.WithCancel(context.Background())
 
-		startPStateGCTicker(&c, ctx)
+		done := startPStateGCTicker(t, &c, ctx)
 
 		time.Sleep(time.Millisecond * 10)
 		cancel()
+		waitTickerStopped(t, done)
 	})
+}
+
+func startTickerForTest(t *testing.T, run func()) <-chan struct{} {
+	t.Helper()
+	done := make(chan struct{})
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		defer close(done)
+		run()
+	}()
+	<-started
+	return done
+}
+
+func waitTickerStopped(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("ticker goroutine did not stop")
+	}
 }
 
 func TestPushClient_DoGCPartitionState(t *testing.T) {
