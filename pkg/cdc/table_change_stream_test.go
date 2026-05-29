@@ -1860,6 +1860,11 @@ func (n *noopTxnOperator) SnapshotTS() timestamp.Timestamp {
 	return n.snapshot
 }
 
+func (n *noopTxnOperator) SetSnapshotTS(ts timestamp.Timestamp) {
+	n.snapshot = ts
+	n.meta.SnapshotTS = ts
+}
+
 func (n *noopTxnOperator) CreateTS() timestamp.Timestamp {
 	return timestamp.Timestamp{}
 }
