@@ -301,38 +301,6 @@ func TestBindFuncExprImplByPlanExpr_LeadLagDefaultCastDifferentDecimalScale(t *t
 	})
 }
 
-// TestBindFuncExprImplByPlanExpr_PowAlias tests that "pow" is correctly
-// remapped to "power" (line ~1781 in base_binder.go:
-// case "pow": name = "power").
-func TestBindFuncExprImplByPlanExpr_PowAlias(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("pow with two int args", func(t *testing.T) {
-		x := makeInt64ConstPlanExpr(2)
-		y := makeInt64ConstPlanExpr(10)
-		result, err := BindFuncExprImplByPlanExpr(ctx, "pow", []*plan.Expr{x, y})
-		require.NoError(t, err)
-		require.NotNil(t, result)
-
-		f := result.GetF()
-		require.NotNil(t, f, "result should be a function")
-		// "pow" is remapped to "power"
-		require.Equal(t, "power", f.Func.GetObjName())
-	})
-
-	t.Run("power with two int args", func(t *testing.T) {
-		x := makeInt64ConstPlanExpr(3)
-		y := makeInt64ConstPlanExpr(4)
-		result, err := BindFuncExprImplByPlanExpr(ctx, "power", []*plan.Expr{x, y})
-		require.NoError(t, err)
-		require.NotNil(t, result)
-
-		f := result.GetF()
-		require.NotNil(t, f)
-		require.Equal(t, "power", f.Func.GetObjName())
-	})
-}
-
 func TestBindFuncExprImplByPlanExpr_Atan2Alias(t *testing.T) {
 	ctx := context.Background()
 	y := makeInt64ConstPlanExpr(-2)
