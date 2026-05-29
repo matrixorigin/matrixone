@@ -24,7 +24,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
+	"reflect"
 	gotrace "runtime/trace"
 	"slices"
 	"sort"
@@ -3753,7 +3755,11 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
 		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
 		if phyPlan != nil {
-			h.marshalPlan.PhyPlan = *phyPlan
+			// Deep copy: Marshal sanitizes non-finite floats in place, and a
+			// shallow copy would share slices and the OperatorStats pointers
+			// (whose BackgroundQueries hold live *plan.Query stats), letting the
+			// sanitizer mutate the caller's physical plan.
+			h.marshalPlan.PhyPlan = deepCopyPhyPlan(phyPlan)
 		}
 	}
 	return h
@@ -3829,6 +3835,7 @@ func (h *marshalPlanHandler) allocBufferIfNeeded() {
 func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 	var err error
 	if h.marshalPlan != nil {
+		sanitizeNonFiniteFloatValues(h.marshalPlan)
 		h.allocBufferIfNeeded()
 		h.buffer.Reset()
 		var jsonBytesLen = 0
@@ -3858,6 +3865,135 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 		return sqlQueryNoRecordExecPlan
 	}
 	return
+}
+
+func deepCopyPhyPlan(src *models.PhyPlan) models.PhyPlan {
+	dst := *src
+	dst.LocalScope = deepCopyPhyScopes(src.LocalScope)
+	dst.RemoteScope = deepCopyPhyScopes(src.RemoteScope)
+	return dst
+}
+
+func deepCopyPhyScopes(src []models.PhyScope) []models.PhyScope {
+	if src == nil {
+		return nil
+	}
+	dst := make([]models.PhyScope, len(src))
+	for i := range src {
+		dst[i] = deepCopyPhyScope(src[i])
+	}
+	return dst
+}
+
+func deepCopyPhyScope(src models.PhyScope) models.PhyScope {
+	dst := src
+	if src.Receiver != nil {
+		dst.Receiver = append([]models.PhyReceiver(nil), src.Receiver...)
+	}
+	if src.DataSource != nil {
+		ds := *src.DataSource
+		if src.DataSource.Attributes != nil {
+			ds.Attributes = append([]string(nil), src.DataSource.Attributes...)
+		}
+		dst.DataSource = &ds
+	}
+	dst.PreScopes = deepCopyPhyScopes(src.PreScopes)
+	dst.RootOperator = deepCopyPhyOperator(src.RootOperator)
+	return dst
+}
+
+func deepCopyPhyOperator(src *models.PhyOperator) *models.PhyOperator {
+	if src == nil {
+		return nil
+	}
+	dst := *src
+	if src.DestReceiver != nil {
+		dst.DestReceiver = append([]models.PhyReceiver(nil), src.DestReceiver...)
+	}
+	dst.OpStats = deepCopyOperatorStats(src.OpStats)
+	if src.Children != nil {
+		dst.Children = make([]*models.PhyOperator, len(src.Children))
+		for i := range src.Children {
+			dst.Children[i] = deepCopyPhyOperator(src.Children[i])
+		}
+	}
+	return &dst
+}
+
+func deepCopyOperatorStats(src *process.OperatorStats) *process.OperatorStats {
+	if src == nil {
+		return nil
+	}
+	dst := *src
+	if src.OperatorMetrics != nil {
+		dst.OperatorMetrics = make(map[process.MetricType]int64, len(src.OperatorMetrics))
+		for k, v := range src.OperatorMetrics {
+			dst.OperatorMetrics[k] = v
+		}
+	}
+	if src.BackgroundQueries != nil {
+		dst.BackgroundQueries = make([]*plan.Query, len(src.BackgroundQueries))
+		for i := range src.BackgroundQueries {
+			dst.BackgroundQueries[i] = plan2.DeepCopyQuery(src.BackgroundQueries[i])
+		}
+	}
+	return &dst
+}
+
+func sanitizeNonFiniteFloatValues(v any) {
+	sanitizeNonFiniteFloatValue(reflect.ValueOf(v), make(map[uintptr]struct{}))
+}
+
+func sanitizeNonFiniteFloatValue(v reflect.Value, seen map[uintptr]struct{}) {
+	if !v.IsValid() {
+		return
+	}
+	switch v.Kind() {
+	case reflect.Interface:
+		if !v.IsNil() {
+			sanitizeNonFiniteFloatValue(v.Elem(), seen)
+		}
+	case reflect.Ptr:
+		if v.IsNil() {
+			return
+		}
+		ptr := v.Pointer()
+		if _, ok := seen[ptr]; ok {
+			return
+		}
+		seen[ptr] = struct{}{}
+		sanitizeNonFiniteFloatValue(v.Elem(), seen)
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			sanitizeNonFiniteFloatValue(v.Field(i), seen)
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			sanitizeNonFiniteFloatValue(v.Index(i), seen)
+		}
+	case reflect.Map:
+		if v.IsNil() {
+			return
+		}
+		for _, key := range v.MapKeys() {
+			value := v.MapIndex(key)
+			if !value.IsValid() {
+				continue
+			}
+			copied := reflect.New(value.Type()).Elem()
+			copied.Set(value)
+			sanitizeNonFiniteFloatValue(copied, seen)
+			v.SetMapIndex(key, copied)
+		}
+	case reflect.Float32, reflect.Float64:
+		if !v.CanSet() {
+			return
+		}
+		f := v.Float()
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			v.SetFloat(0)
+		}
+	}
 }
 
 var sqlQueryIgnoreExecPlan = []byte(`{}`)

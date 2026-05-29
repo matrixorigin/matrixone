@@ -72,12 +72,15 @@ type RightDedupJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 
-	OnDuplicateAction plan.Node_OnDuplicateAction
-	DedupColName      string
-	DedupColTypes     []plan.Type
-	DelColIdx         int32
-	UpdateColIdxList  []int32
-	UpdateColExprList []*plan.Expr
+	OnDuplicateAction         plan.Node_OnDuplicateAction
+	DedupColName              string
+	DedupColTypes             []plan.Type
+	DelColIdx                 int32
+	DedupBuildKeepLast        bool
+	DedupDeleteMarkerColIdx   int32
+	DedupDeleteKeepColIdxList []int32
+	UpdateColIdxList          []int32
+	UpdateColExprList         []*plan.Expr
 
 	vm.OperatorBase
 }
