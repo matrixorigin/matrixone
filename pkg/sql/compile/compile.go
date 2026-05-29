@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1588,12 +1589,16 @@ func (c *Compile) getHivePartitionFileList(node *plan.Node, param *tree.ExternPa
 	partFilters, fpFilters, rowFilters := external.ClassifyFilters(
 		node.TableDef, node.FilterList, partColSet)
 
-	preds := external.ExtractPartitionPredicatesFromExprs(node.TableDef, partFilters, partColSet)
+	pruneExpr := external.ExtractPartitionPruneExprFromExprs(node.TableDef, partFilters, partColSet)
 
 	listDir := external.NewListDirFunc(param)
-	result, err := external.DiscoverHivePartitions(
+	options, err := c.getHivePartitionDiscoverOptions(param)
+	if err != nil {
+		return nil, nil, err
+	}
+	result, err := external.DiscoverHivePartitionsWithPruneExpr(
 		c.proc.Ctx, listDir, param.Filepath,
-		param.HivePartitionCols, param.HivePartitionColTypes, preds)
+		param.HivePartitionCols, param.HivePartitionColTypes, pruneExpr, options)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1614,8 +1619,132 @@ func (c *Compile) getHivePartitionFileList(node *plan.Node, param *tree.ExternPa
 		rowFilters = append(rowFilters, leftover...)
 	}
 
+	updateHivePartitionScanStats(node, param.Filepath, result, fileSize)
 	node.FilterList = rowFilters
 	return fileList, fileSize, nil
+}
+
+const (
+	hivePartitionCacheTTLVar        = "hive_partition_cache_ttl"
+	hivePartitionCacheMaxEntriesVar = "hive_partition_cache_max_entries"
+	hivePartitionCacheMaxBytesVar   = "hive_partition_cache_max_bytes"
+	hivePartitionListConcurrencyVar = "hive_partition_list_concurrency"
+)
+
+func (c *Compile) getHivePartitionDiscoverOptions(param *tree.ExternParam) (*external.DiscoverOptions, error) {
+	resolve := c.proc.GetResolveVariableFunc()
+	if resolve == nil {
+		return nil, nil
+	}
+	cacheTTLSeconds, err := resolveHivePartitionIntVar(resolve, hivePartitionCacheTTLVar)
+	if err != nil {
+		return nil, err
+	}
+	cacheMaxEntries, err := resolveHivePartitionIntVar(resolve, hivePartitionCacheMaxEntriesVar)
+	if err != nil {
+		return nil, err
+	}
+	cacheMaxBytes, err := resolveHivePartitionIntVar(resolve, hivePartitionCacheMaxBytesVar)
+	if err != nil {
+		return nil, err
+	}
+	listConcurrency, err := resolveHivePartitionIntVar(resolve, hivePartitionListConcurrencyVar)
+	if err != nil {
+		return nil, err
+	}
+
+	if cacheTTLSeconds <= 0 && cacheMaxEntries <= 0 && cacheMaxBytes <= 0 && listConcurrency <= 0 {
+		return nil, nil
+	}
+	opts := &external.DiscoverOptions{}
+	if listConcurrency > 0 {
+		opts.ListConcurrency = int(listConcurrency)
+	}
+	if cacheTTLSeconds > 0 {
+		accountID := uint32(0)
+		if id, err := defines.GetAccountId(c.proc.Ctx); err == nil {
+			accountID = id
+		}
+		opts.CacheTTL = time.Duration(cacheTTLSeconds) * time.Second
+		opts.CacheKeyPrefix = external.BuildHivePartitionListCacheKeyPrefix(param, accountID, param.Filepath)
+	}
+	if cacheMaxEntries > 0 {
+		opts.CacheMaxEntries = int(cacheMaxEntries)
+	}
+	if cacheMaxBytes > 0 {
+		opts.CacheMaxBytes = cacheMaxBytes
+	}
+	return opts, nil
+}
+
+func resolveHivePartitionIntVar(
+	resolve func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error),
+	name string,
+) (int64, error) {
+	v, err := resolve(name, true, false)
+	if err != nil {
+		return 0, err
+	}
+	switch x := v.(type) {
+	case nil:
+		return 0, nil
+	case int:
+		return int64(x), nil
+	case int8:
+		return int64(x), nil
+	case int16:
+		return int64(x), nil
+	case int32:
+		return int64(x), nil
+	case int64:
+		return x, nil
+	case uint:
+		return int64(x), nil
+	case uint8:
+		return int64(x), nil
+	case uint16:
+		return int64(x), nil
+	case uint32:
+		return int64(x), nil
+	case uint64:
+		if x > uint64(^uint64(0)>>1) {
+			return 0, moerr.NewInvalidInputNoCtxf("%s is too large: %d", name, x)
+		}
+		return int64(x), nil
+	case string:
+		if strings.TrimSpace(x) == "" {
+			return 0, nil
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(x), 10, 64)
+		if err != nil {
+			return 0, moerr.NewInvalidInputNoCtxf("invalid %s value %q: %v", name, x, err)
+		}
+		return n, nil
+	default:
+		return 0, moerr.NewInvalidInputNoCtxf("invalid %s type %T", name, v)
+	}
+}
+
+func updateHivePartitionScanStats(node *plan.Node, basePath string, result *external.PartitionDiscoveryResult, fileSize []int64) {
+	if node.Stats == nil {
+		node.Stats = &plan.Stats{}
+	}
+	var prunedBytes int64
+	for _, size := range fileSize {
+		prunedBytes += size
+	}
+	node.Stats.BlockNum = int32(len(fileSize))
+	node.Stats.Cost = float64(prunedBytes)
+	if node.Stats.TableCnt == 0 {
+		node.Stats.TableCnt = float64(len(fileSize))
+	}
+	if node.Stats.Outcnt == 0 {
+		node.Stats.Outcnt = float64(len(fileSize))
+	}
+	logutil.Debugf("hive partition discovery summary: base=%s files=%d bytes=%d pruned_files=%d pruned_bytes=%d partitions=%d pruned=%d list_calls=%d cache_hits=%d cache_misses=%d direct_prefix_hits=%d direct_prefix_misses=%d duration=%s",
+		basePath, len(fileSize), prunedBytes, result.PrunedFiles, result.PrunedBytes,
+		result.PartitionCount, result.PrunedCount, result.ListCalls, result.CacheHits, result.CacheMisses,
+		result.DirectPrefixHits, result.DirectPrefixMisses, result.DiscoveryDuration)
 }
 
 func runFilePathFilters(
