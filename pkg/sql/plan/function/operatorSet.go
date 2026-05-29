@@ -39,25 +39,6 @@ var (
 	}
 )
 
-func mixedStringNumericToVarchar(source []types.Type) (types.Type, bool) {
-	hasString := false
-	hasNumeric := false
-	for _, t := range source {
-		if t.Oid.IsMySQLString() {
-			hasString = true
-		}
-		if t.Oid.IsInteger() || t.Oid.IsFloat() || t.Oid.IsDecimal() {
-			hasNumeric = true
-		}
-		if hasString && hasNumeric {
-			retType := types.T_varchar.ToType()
-			retType.Width = types.MaxVarBinaryLen
-			return retType, true
-		}
-	}
-	return types.Type{}, false
-}
-
 func needDecimalMetadataCast(source []types.Type, target types.Type) bool {
 	if !target.Oid.IsDecimal() {
 		return false
@@ -145,21 +126,6 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 		if l%2 == 1 {
 			source = append(source, inputs[l-1])
-		}
-
-		if retType, ok := mixedStringNumericToVarchar(source); ok {
-			finalTypes := make([]types.Type, len(inputs))
-			for i := range finalTypes {
-				if i%2 == 0 {
-					finalTypes[i] = types.T_bool.ToType()
-				} else {
-					finalTypes[i] = retType
-				}
-			}
-			if len(inputs)%2 == 1 {
-				finalTypes[len(finalTypes)-1] = retType
-			}
-			return newCheckResultWithCast(0, finalTypes)
 		}
 
 		target := make([]types.T, len(source))
