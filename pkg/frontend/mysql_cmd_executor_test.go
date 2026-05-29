@@ -1082,6 +1082,25 @@ func Test_statement_type(t *testing.T) {
 	})
 }
 
+func TestCanExecuteDataBranchMergePickInUncommittedTransaction(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{},
+	}
+
+	for _, stmt := range []tree.Statement{
+		&tree.DataBranchMerge{},
+		&tree.DataBranchPick{},
+	} {
+		can, err := statementCanBeExecutedInUncommittedTransaction(context.TODO(), ses, stmt)
+		require.NoError(t, err)
+		require.False(t, can)
+
+		err = canExecuteStatementInUncommittedTransaction(context.TODO(), ses, stmt)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), dataBranchMergePickExplicitTxnErrorInfo())
+	}
+}
+
 func Test_convert_type(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("type conversion", t, func() {

@@ -28,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 )
 
+const dataBranchMergePickExplicitTxnError = "DATA BRANCH MERGE/PICK is not supported in explicit transactions"
+
 func TestDataBranchMerge(t *testing.T) {
 	embed.RunBaseClusterTests(
 		func(c embed.Cluster) {
@@ -45,6 +47,9 @@ func TestDataBranchMerge(t *testing.T) {
 
 			t.Log("merge simple LCA regression")
 			runMergeSimpleLCARegression(t, ctx, sqlDB)
+
+			t.Log("merge and pick reject explicit transactions")
+			runDataBranchMergePickExplicitTxnError(t, ctx, sqlDB)
 		},
 	)
 }
@@ -92,4 +97,35 @@ func runMergeSimpleLCARegression(t *testing.T, parentCtx context.Context, db *sq
 		},
 		queryStringRows(t, ctx, db, "data branch diff t2 against t1"),
 	)
+}
+
+func runDataBranchMergePickExplicitTxnError(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	dbName := testutils.GetDatabaseName(t)
+	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
+	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+	defer func() {
+		execSQLDB(t, ctx, db, "use mo_catalog")
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	}()
+
+	execSQLDB(t, ctx, db, "create table base (id int primary key, v int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,1),(2,2)")
+
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "update src set v = 9 where id = 1")
+	execSQLDB(t, ctx, db, "begin")
+	errMsg := execExpectError(t, ctx, db, "data branch merge src into base when conflict accept")
+	require.Contains(t, errMsg, dataBranchMergePickExplicitTxnError)
+	execSQLDB(t, ctx, db, "rollback")
+
+	execSQLDB(t, ctx, db, "data branch create table pick_src from base")
+	execSQLDB(t, ctx, db, "insert into pick_src values (3,3)")
+	execSQLDB(t, ctx, db, "begin")
+	errMsg = execExpectError(t, ctx, db, "data branch pick pick_src into base keys(3)")
+	require.Contains(t, errMsg, dataBranchMergePickExplicitTxnError)
+	execSQLDB(t, ctx, db, "rollback")
 }
