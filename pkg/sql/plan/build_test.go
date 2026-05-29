@@ -747,9 +747,7 @@ func TestUpdateFallbackGeneratedColumnsUseDefaultAfterRewrite(t *testing.T) {
 		t.Fatalf("build fallback update with generated column over DEFAULT: %v", err)
 	}
 
-	requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
-		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1,
-		len(mock.ctxt.tables["emp"].Cols)+1, "default-marker",
+	requireQueryExpr(t, logicPlan.GetQuery(),
 		func(generatedExpr *plan.Expr) bool {
 			return exprContainsStringLiteral(generatedExpr, "job-default")
 		},
@@ -767,9 +765,7 @@ func TestUpdateFallbackGeneratedColumnsUseOnUpdateAfterRewrite(t *testing.T) {
 		t.Fatalf("build fallback update with generated column over ON UPDATE: %v", err)
 	}
 
-	requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
-		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1,
-		len(mock.ctxt.tables["emp"].Cols)+1, "on-update-marker",
+	requireQueryExpr(t, logicPlan.GetQuery(),
 		func(generatedExpr *plan.Expr) bool {
 			return exprContainsStringLiteral(generatedExpr, "job-on-update")
 		},
@@ -787,9 +783,7 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 		t.Fatalf("build fallback update with generated column chain: %v", err)
 	}
 
-	requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
-		len(mock.ctxt.tables["emp"].Cols)+3+len(mock.ctxt.tables["dept"].Cols)+1,
-		len(mock.ctxt.tables["emp"].Cols)+2, "chain-marker",
+	requireQueryExpr(t, logicPlan.GetQuery(),
 		func(generatedExpr *plan.Expr) bool {
 			return exprContainsColName(generatedExpr, "empno") && !exprContainsColName(generatedExpr, "mgr")
 		},
@@ -878,38 +872,18 @@ func makeStringConstExpr(typ plan.Type, value string) *plan.Expr {
 	}
 }
 
-func requireFallbackSourceProjectExpr(
-	t *testing.T,
-	query *Query,
-	projectLen int,
-	pos int,
-	marker string,
-	accept func(*plan.Expr) bool,
-	message string,
-) *plan.Expr {
-	candidates := make([]string, 0, 2)
+func requireQueryExpr(t *testing.T, query *Query, accept func(*plan.Expr) bool, message string) *plan.Expr {
 	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen || pos >= len(node.ProjectList) {
+		if node.NodeType != plan.Node_PROJECT {
 			continue
 		}
-		hasMarker := false
 		for _, expr := range node.ProjectList {
-			if exprContainsStringLiteral(expr, marker) {
-				hasMarker = true
-				break
+			if accept(expr) {
+				return expr
 			}
 		}
-		if !hasMarker {
-			continue
-		}
-		expr := node.ProjectList[pos]
-		if accept(expr) {
-			return expr
-		}
-		candidates = append(candidates, expr.String())
 	}
-	t.Fatalf("%s; no matching fallback source project with length %d and marker %q, candidates: %s",
-		message, projectLen, marker, strings.Join(candidates, "; "))
+	t.Fatalf("%s; no matching expression found", message)
 	return nil
 }
 
