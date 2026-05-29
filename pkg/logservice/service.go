@@ -134,7 +134,20 @@ func NewService(
 	if err := store.loadMetadata(); err != nil {
 		return nil, err
 	}
-	if err := store.startReplicas(); err != nil {
+	startCtx, cancelStart := context.WithCancel(context.Background())
+	if shutdownC != nil {
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			select {
+			case <-shutdownC:
+				cancelStart()
+			case <-done:
+			}
+		}()
+	}
+	defer cancelStart()
+	if err := store.startReplicas(startCtx); err != nil {
 		return nil, err
 	}
 	pool := &sync.Pool{}

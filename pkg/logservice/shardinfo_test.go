@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -65,7 +66,7 @@ func TestGetShardInfo(t *testing.T) {
 func TestGetShardInfo_LeaderAddressEmptyReturnsNotReady(t *testing.T) {
 	orig := queryShardInfoRawFn
 	defer func() { queryShardInfoRawFn = orig }()
-	queryShardInfoRawFn = func(sid, address string, shardID uint64) (pb.ShardInfoQueryResult, bool, error) {
+	queryShardInfoRawFn = func(ctx context.Context, sid, address string, shardID uint64) (pb.ShardInfoQueryResult, bool, error) {
 		return pb.ShardInfoQueryResult{
 			ShardID:  shardID,
 			LeaderID: 1,
@@ -88,7 +89,7 @@ func TestGetShardInfo_LeaderAddressEmptyReturnsNotReady(t *testing.T) {
 func TestGetShardInfo_OmitsUnreachableFollowers(t *testing.T) {
 	orig := queryShardInfoRawFn
 	defer func() { queryShardInfoRawFn = orig }()
-	queryShardInfoRawFn = func(sid, address string, shardID uint64) (pb.ShardInfoQueryResult, bool, error) {
+	queryShardInfoRawFn = func(ctx context.Context, sid, address string, shardID uint64) (pb.ShardInfoQueryResult, bool, error) {
 		return pb.ShardInfoQueryResult{
 			ShardID:  shardID,
 			LeaderID: 1,
