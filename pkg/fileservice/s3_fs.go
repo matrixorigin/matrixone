@@ -61,7 +61,7 @@ type S3FS struct {
 
 var _ FileService = new(S3FS)
 
-var errFullFilePreloadActualSizeExceeded = errors.New("full-file preload actual size exceeded admission")
+var errFullFilePreloadActualSizeExceeded = moerr.NewInternalErrorNoCtx("full-file preload actual size exceeded admission")
 
 func NewS3FS(
 	ctx context.Context,
