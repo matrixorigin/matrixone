@@ -1160,9 +1160,25 @@ func d128IntDivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32,
 func decimal128IntDivResultToInt64(divResult, x, y types.Decimal128, scale1, scale2 int32) (int64, error) {
 	val, err := decimal128ToInt64(divResult)
 	if err != nil {
-		return 0, moerr.NewInvalidInputNoCtxf("Decimal128 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
+		if decimal128IntDivLegacyDecimalOverflow(x, y, scale1, scale2) {
+			return 0, moerr.NewInvalidInputNoCtxf("Decimal128 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
+		}
+		return 0, err
 	}
 	return val, nil
+}
+
+func decimal128IntDivLegacyDecimalOverflow(x, y types.Decimal128, scale1, scale2 int32) bool {
+	scale := scale1
+	if scale < scale2 {
+		scale = scale2
+	}
+	scale += 6
+	scaleAdj := scale - scale1 + scale2
+
+	var divResult types.Decimal128
+	err := d128DivOne(x, y, &divResult, scaleAdj, nulls.NewWithSize(1), 0, true, scale1, scale2)
+	return err != nil
 }
 
 // ---- Decimal128 modulo ----

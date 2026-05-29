@@ -67,6 +67,16 @@ func TestDecimal128IntDivOverflowMessage(t *testing.T) {
 	require.ErrorContains(t, err, "Decimal128 Div overflow: 12345678909876543212345678909876543243/4")
 }
 
+func TestDecimal128IntDivBigIntOverflowMessage(t *testing.T) {
+	v1 := []types.Decimal128{mustParseD128("99999999999999999999")}
+	v2 := []types.Decimal128{{B0_63: 1}}
+	rs := make([]int64, 1)
+	rsnull := nulls.NewWithSize(1)
+
+	err := d128IntDiv(v1, v2, rs, 0, 0, rsnull, true)
+	require.ErrorContains(t, err, "data out of range: data type BIGINT")
+}
+
 func mustParseD128(s string) types.Decimal128 {
 	d, err := types.ParseDecimal128(s, 38, 0)
 	if err != nil {
