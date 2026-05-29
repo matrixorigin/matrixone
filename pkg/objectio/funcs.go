@@ -143,9 +143,10 @@ func ReadOneBlockWithMeta(
 	policy fileservice.Policy,
 ) (ioVec fileservice.IOVector, err error) {
 	ioVec = fileservice.IOVector{
-		FilePath: name,
-		Entries:  make([]fileservice.IOEntry, 0, len(seqnums)),
-		Policy:   policy,
+		FilePath:         name,
+		Entries:          make([]fileservice.IOEntry, 0, len(seqnums)),
+		Policy:           policy,
+		FullFileSizeHint: int64(meta.BlockHeader().MetaLocation().End() + FooterSize),
 	}
 	var generatedIOVec fileservice.IOVector
 	defer func() {

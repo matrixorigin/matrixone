@@ -615,19 +615,16 @@ read_disk_cache:
 			return nil
 		}
 
-		// try to cache IOEntry if not caching the full file
-		if vector.Policy.CacheIOEntry() {
-			defer func() {
-				if err != nil {
-					return
-				}
-				t0 := time.Now()
-				LogEvent(ctx, str_update_disk_cache_Caches_begin)
-				err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
-				LogEvent(ctx, str_update_disk_cache_Caches_end)
-				metric.FSReadDurationUpdateDiskCache.Observe(time.Since(t0).Seconds())
-			}()
-		}
+		defer func() {
+			if err != nil || vector.readFullObject {
+				return
+			}
+			t0 := time.Now()
+			LogEvent(ctx, str_update_disk_cache_Caches_begin)
+			err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
+			LogEvent(ctx, str_update_disk_cache_Caches_end)
+			metric.FSReadDurationUpdateDiskCache.Observe(time.Since(t0).Seconds())
+		}()
 
 	}
 
@@ -645,31 +642,49 @@ read_disk_cache:
 		}
 	}
 
+	vector.resolveS3ReadMode()
+	defer func() {
+		releaseFullFilePreloadToken(vector.preloadToken)
+	}()
+
 	mayReadMemoryCache := vector.Policy&SkipMemoryCacheReads == 0
 	mayReadDiskCache := vector.Policy&SkipDiskCacheReads == 0
 	if mayReadMemoryCache || mayReadDiskCache {
-		// may read caches, merge
-		LogEvent(ctx, str_ioMerger_Merge_begin)
-		startLock := time.Now()
-		done, wait := s.ioMerger.Merge(vector.ioMergeKey(), maxIOWaitDuration)
-		if done != nil {
-			defer done()
-			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
-			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
-			LogEvent(ctx, str_ioMerger_Merge_initiate)
-			LogEvent(ctx, str_ioMerger_Merge_end)
-		} else {
-			LogEvent(ctx, str_ioMerger_Merge_wait)
-			wait()
-			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
-			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
-			LogEvent(ctx, str_ioMerger_Merge_end)
-			if mayReadMemoryCache {
-				goto read_memory_cache
+		for {
+			// may read caches, merge
+			LogEvent(ctx, str_ioMerger_Merge_begin)
+			startLock := time.Now()
+			done, wait := s.ioMerger.Merge(vector.ioMergeKey(), maxIOWaitDuration)
+			if done != nil {
+				if !vector.acquireFullFilePreloadForS3() {
+					done()
+					stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
+					metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
+					LogEvent(ctx, str_ioMerger_Merge_end)
+					continue
+				}
+				defer done()
+				stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
+				metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
+				LogEvent(ctx, str_ioMerger_Merge_initiate)
+				LogEvent(ctx, str_ioMerger_Merge_end)
+				break
 			} else {
-				goto read_disk_cache
+				LogEvent(ctx, str_ioMerger_Merge_wait)
+				wait()
+				stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
+				metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
+				LogEvent(ctx, str_ioMerger_Merge_end)
+				vector.resetReadMode()
+				if mayReadMemoryCache {
+					goto read_memory_cache
+				} else {
+					goto read_disk_cache
+				}
 			}
 		}
+	} else {
+		vector.acquireFullFilePreloadForS3()
 	}
 
 	// Count bytes that will be read from S3 (entries that are not done yet)
@@ -804,6 +819,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		bs, err = io.ReadAll(reader)
 		LogEvent(ctx, str_io_readall_end, len(bs))
 		metric.FSReadDurationIOReadAll.Observe(time.Since(tStart).Seconds())
+		if readFullObject {
+			recordFullFilePreloadReadBytes(vector.preloadToken, int64(len(bs)))
+		}
 		if err != nil {
 			return nil, err
 		}
