@@ -790,6 +790,19 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 		"generated column chain should use freshly recomputed earlier generated column")
 }
 
+func TestUpdateFallbackEnumColumnUsesStableUpdateOrder(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	col := requireMockColumn(t, mock, "emp", "job")
+	col.Typ.Id = int32(types.T_enum)
+	col.Typ.Enumvalues = "CLERK,MANAGER,SALESMAN"
+
+	_, err := runOneStmt(mock, t,
+		"UPDATE emp SET comm = 1, job = 'CLERK' WHERE deptno = 10")
+	if err != nil {
+		t.Fatalf("build fallback update with enum update column: %v", err)
+	}
+}
+
 func setMockGeneratedColumn(t *testing.T, mock *MockOptimizer, tableName, generatedName, sourceName string) {
 	tableDef := mock.ctxt.tables[tableName]
 	if tableDef == nil {
