@@ -215,15 +215,12 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		isMulti:       tblInfo.isMulti,
 		needAggFilter: tblInfo.needAggFilter,
 	}
-	aliasesByIdx := make([]string, len(tblInfo.tableDefs))
-	for alias, idx := range tblInfo.alias {
-		aliasesByIdx[idx] = alias
-	}
-	for idx, alias := range aliasesByIdx {
+	for _, alias := range orderedDmlAliases(tblInfo.alias) {
 		columns, ok := usedTbl[alias]
 		if !ok {
 			continue
 		}
+		idx := tblInfo.alias[alias]
 		tblDef := tblInfo.tableDefs[idx]
 		newTblInfo.objRef = append(newTblInfo.objRef, tblInfo.objRef[idx])
 		newTblInfo.tableDefs = append(newTblInfo.tableDefs, tblDef)
@@ -253,6 +250,14 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 	}
 
 	return newTblInfo, nil
+}
+
+func orderedDmlAliases(aliasToIdx map[string]int) []string {
+	aliases := make([]string, len(aliasToIdx))
+	for alias, idx := range aliasToIdx {
+		aliases[idx] = alias
+	}
+	return aliases
 }
 
 func checkTableType(ctx context.Context, tableDef *TableDef) error {
