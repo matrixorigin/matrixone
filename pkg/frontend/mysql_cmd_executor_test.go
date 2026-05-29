@@ -1110,6 +1110,43 @@ func TestCanExecuteDataBranchMergePickInUncommittedTransaction(t *testing.T) {
 	}
 }
 
+func TestHandleDataBranchMergePickRejectExplicitTransactionFallback(t *testing.T) {
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: true}).AnyTimes()
+	ses.proc.Base.TxnOperator = txnOperator
+
+	ec := newTestExecCtx(ctx, ctrl)
+
+	for _, tc := range []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "merge",
+			run: func() error {
+				return handleBranchMerge(ec, ses, &tree.DataBranchMerge{})
+			},
+		},
+		{
+			name: "pick",
+			run: func() error {
+				return handleBranchPick(ec, ses, &tree.DataBranchPick{})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			require.Error(t, err)
+			require.Contains(t, err.Error(), dataBranchMergePickExplicitTxnErrorInfo())
+		})
+	}
+}
+
 func Test_convert_type(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("type conversion", t, func() {
