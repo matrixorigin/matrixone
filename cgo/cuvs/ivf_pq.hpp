@@ -1047,13 +1047,6 @@ public:
                 raft::resource::sync_stream(*res);
             }
 
-            auto& n_buf = handle.neighbors_buf(static_cast<size_t>(num_queries) * limit);
-            auto& d_buf = handle.distances_buf(static_cast<size_t>(num_queries) * limit);
-            auto neighbors_device_internal = raft::make_device_matrix_view<int64_t, int64_t>(
-                n_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-            auto distances_device_internal = raft::make_device_matrix_view<float, int64_t>(
-                d_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-
             if (this->dist_mode == DistributionMode_SHARDED) {
                 int rank = handle.get_rank();
                 shard_sz = this->shard_sizes_[rank];
@@ -1061,41 +1054,83 @@ public:
                 for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
             }
 
-            std::shared_ptr<raft::core::bitset<uint32_t, int64_t>> bs_ptr;
-            if (prebuilt) {
-                if (prebuilt->has_filter) {
-                    bs_ptr = this->upload_host_mask(handle, prebuilt->mask, shard_sz);
-                    user_host_mask_ptr    = &prebuilt->mask;
-                    user_filter_popcount  = prebuilt->popcount;
-                } else if (prebuilt->deletes_only) {
-                    bs_ptr = this->acquire_delete_bitset_device(handle, start_row, shard_sz);
-                }
-            } else {
-                bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &local_user_mask, &user_filter_popcount);
-                if (!local_user_mask.empty()) user_host_mask_ptr = &local_user_mask;
-            }
+            // Clamp cuVS top-k to the shard's row count: cuVS rejects k > index_size
+            // (see ivf_pq_search.cuh). Go planner over-fetches by 5× for filtered
+            // searches (apply_indices.go:84), so small indexes can ask for k > rows.
+            // We run cuVS at effective_k and pad the (num_queries × limit) host
+            // result with (-1, FLT_MAX) sentinels — downstream readers already
+            // skip -1 (apply_pq_post_filter_locked, map_neighbor_id, the SHARDED
+            // merger). See index_base.hpp for the helpers.
+            const uint32_t effective_k = matrixone::clamp_k_to_index_size(
+                static_cast<uint32_t>(limit), shard_sz);
 
-            if (bs_ptr) {
-                auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
-                cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
-                                                    raft::make_const_mdspan(queries_device),
-                                                    neighbors_device_internal, distances_device_internal, filter);
-            } else if (this->batch_window() != 0) {
-                this->dynb_cache_.search(*res, handle.get_device_id(), local_index, search_params,
-                                         static_cast<int64_t>(limit),
-                                         static_cast<uint32_t>(search_params.n_probes), 0u,
-                                         this->dynb_concurrency_hint(),
-                                         this->dynb_conservative_dispatch(),
-                                         static_cast<double>(this->batch_window()) / 1000.0,
-                                         raft::make_const_mdspan(queries_device),
-                                         neighbors_device_internal, distances_device_internal);
+            if (effective_k == 0) {
+                // Empty shard — no GPU work to issue. Post-filter + map_neighbor_id
+                // below are no-ops on all-(-1) data; transform_distance preserves
+                // FLT_MAX (index_base.hpp:779).
+                matrixone::fill_all_sentinel<int64_t>(
+                    search_res.neighbors.data(), search_res.distances.data(),
+                    static_cast<size_t>(num_queries) * limit, /*neighbor_sentinel=*/-1LL);
             } else {
-                cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
-                                                    raft::make_const_mdspan(queries_device),
-                                                    neighbors_device_internal, distances_device_internal);
+                auto& n_buf = handle.neighbors_buf(static_cast<size_t>(num_queries) * limit);
+                auto& d_buf = handle.distances_buf(static_cast<size_t>(num_queries) * limit);
+                auto neighbors_device_internal = raft::make_device_matrix_view<int64_t, int64_t>(
+                    n_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(effective_k));
+                auto distances_device_internal = raft::make_device_matrix_view<float, int64_t>(
+                    d_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(effective_k));
+
+                std::shared_ptr<raft::core::bitset<uint32_t, int64_t>> bs_ptr;
+                if (prebuilt) {
+                    if (prebuilt->has_filter) {
+                        bs_ptr = this->upload_host_mask(handle, prebuilt->mask, shard_sz);
+                        user_host_mask_ptr    = &prebuilt->mask;
+                        user_filter_popcount  = prebuilt->popcount;
+                    } else if (prebuilt->deletes_only) {
+                        bs_ptr = this->acquire_delete_bitset_device(handle, start_row, shard_sz);
+                    }
+                } else {
+                    bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &local_user_mask, &user_filter_popcount);
+                    if (!local_user_mask.empty()) user_host_mask_ptr = &local_user_mask;
+                }
+
+                if (bs_ptr) {
+                    auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
+                    cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
+                                                        raft::make_const_mdspan(queries_device),
+                                                        neighbors_device_internal, distances_device_internal, filter);
+                } else if (this->batch_window() != 0) {
+                    this->dynb_cache_.search(*res, handle.get_device_id(), local_index, search_params,
+                                             static_cast<int64_t>(effective_k),
+                                             static_cast<uint32_t>(search_params.n_probes), 0u,
+                                             this->dynb_concurrency_hint(),
+                                             this->dynb_conservative_dispatch(),
+                                             static_cast<double>(this->batch_window()) / 1000.0,
+                                             raft::make_const_mdspan(queries_device),
+                                             neighbors_device_internal, distances_device_internal);
+                } else {
+                    cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
+                                                        raft::make_const_mdspan(queries_device),
+                                                        neighbors_device_internal, distances_device_internal);
+                }
+                if (effective_k == static_cast<uint32_t>(limit)) {
+                    // Shape matches; copy directly into search_res.
+                    raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device_internal);
+                    raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device_internal);
+                } else {
+                    // Copy tight (num_queries × effective_k) into temp, then scatter
+                    // into the (num_queries × limit) host buffer with sentinel pad.
+                    std::vector<int64_t> tmp_n(static_cast<size_t>(num_queries) * effective_k);
+                    std::vector<float>   tmp_d(static_cast<size_t>(num_queries) * effective_k);
+                    raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(tmp_n.data(), num_queries, effective_k), neighbors_device_internal);
+                    raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(tmp_d.data(), num_queries, effective_k), distances_device_internal);
+                    handle.sync();  // drain copies before scattering host buffers
+                    matrixone::scatter_with_padding<int64_t>(
+                        search_res.neighbors.data(), search_res.distances.data(),
+                        tmp_n.data(), tmp_d.data(),
+                        num_queries, static_cast<uint32_t>(limit), effective_k,
+                        /*neighbor_sentinel=*/-1LL);
+                }
             }
-            raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device_internal);
-            raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device_internal);
         } else {
             std::string msg = "IVF-PQ search error: No valid index found for device " + std::to_string(handle.get_device_id()) +
                              " (Mode: " + mode_name(this->dist_mode) + ")";
@@ -1144,7 +1179,7 @@ public:
             }
         }
 
-        this->transform_distance(this->metric, search_res.distances);
+        transform_distance(this->metric, search_res.distances);
         return search_res;
     }
 
@@ -1353,14 +1388,6 @@ public:
         uint64_t user_filter_popcount = 0;      // popcount(user_filter ∧ ¬deleted); see WARNING above
 
         if (local_index) {
-            // Reuse per-thread grow-only neighbor / distance workspace buffers (Step C).
-            auto& n_buf = handle.neighbors_buf(static_cast<size_t>(num_queries) * limit);
-            auto& d_buf = handle.distances_buf(static_cast<size_t>(num_queries) * limit);
-            auto neighbors_device = raft::make_device_matrix_view<int64_t, int64_t>(
-                n_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-            auto distances_device = raft::make_device_matrix_view<float, int64_t>(
-                d_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-
             if (this->dist_mode == DistributionMode_SHARDED) {
                 int rank = handle.get_rank();
                 shard_sz = this->shard_sizes_[rank];
@@ -1368,42 +1395,75 @@ public:
                 for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
             }
 
-            std::shared_ptr<raft::core::bitset<uint32_t, int64_t>> bs_ptr;
-            if (prebuilt) {
-                if (prebuilt->has_filter) {
-                    bs_ptr = this->upload_host_mask(handle, prebuilt->mask, shard_sz);
-                    user_host_mask_ptr   = &prebuilt->mask;
-                    user_filter_popcount = prebuilt->popcount;
-                } else if (prebuilt->deletes_only) {
-                    bs_ptr = this->acquire_delete_bitset_device(handle, start_row, shard_sz);
+            // See search_internal above for the rationale: clamp k to shard_sz,
+            // run cuVS at effective_k, pad the (num_queries × limit) result with
+            // (-1, FLT_MAX). index_base.hpp owns the helpers.
+            const uint32_t effective_k = matrixone::clamp_k_to_index_size(
+                static_cast<uint32_t>(limit), shard_sz);
+
+            if (effective_k == 0) {
+                matrixone::fill_all_sentinel<int64_t>(
+                    search_res.neighbors.data(), search_res.distances.data(),
+                    static_cast<size_t>(num_queries) * limit, /*neighbor_sentinel=*/-1LL);
+            } else {
+                // Reuse per-thread grow-only neighbor / distance workspace buffers (Step C).
+                auto& n_buf = handle.neighbors_buf(static_cast<size_t>(num_queries) * limit);
+                auto& d_buf = handle.distances_buf(static_cast<size_t>(num_queries) * limit);
+                auto neighbors_device = raft::make_device_matrix_view<int64_t, int64_t>(
+                    n_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(effective_k));
+                auto distances_device = raft::make_device_matrix_view<float, int64_t>(
+                    d_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(effective_k));
+
+                std::shared_ptr<raft::core::bitset<uint32_t, int64_t>> bs_ptr;
+                if (prebuilt) {
+                    if (prebuilt->has_filter) {
+                        bs_ptr = this->upload_host_mask(handle, prebuilt->mask, shard_sz);
+                        user_host_mask_ptr   = &prebuilt->mask;
+                        user_filter_popcount = prebuilt->popcount;
+                    } else if (prebuilt->deletes_only) {
+                        bs_ptr = this->acquire_delete_bitset_device(handle, start_row, shard_sz);
+                    }
+                } else {
+                    bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &local_user_mask, &user_filter_popcount);
+                    if (!local_user_mask.empty()) user_host_mask_ptr = &local_user_mask;
                 }
-            } else {
-                bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &local_user_mask, &user_filter_popcount);
-                if (!local_user_mask.empty()) user_host_mask_ptr = &local_user_mask;
-            }
 
-            if (bs_ptr) {
-                auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
-                cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
-                                                    raft::make_const_mdspan(q_dev_t),
-                                                    neighbors_device, distances_device, filter);
-            } else if (this->batch_window() != 0) {
-                this->dynb_cache_.search(*res, handle.get_device_id(), local_index, search_params,
-                                         static_cast<int64_t>(limit),
-                                         static_cast<uint32_t>(search_params.n_probes), 0u,
-                                         this->dynb_concurrency_hint(),
-                                         this->dynb_conservative_dispatch(),
-                                         static_cast<double>(this->batch_window()) / 1000.0,
-                                         raft::make_const_mdspan(q_dev_t),
-                                         neighbors_device, distances_device);
-            } else {
-                cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
-                                                    raft::make_const_mdspan(q_dev_t),
-                                                    neighbors_device, distances_device);
-            }
+                if (bs_ptr) {
+                    auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
+                    cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
+                                                        raft::make_const_mdspan(q_dev_t),
+                                                        neighbors_device, distances_device, filter);
+                } else if (this->batch_window() != 0) {
+                    this->dynb_cache_.search(*res, handle.get_device_id(), local_index, search_params,
+                                             static_cast<int64_t>(effective_k),
+                                             static_cast<uint32_t>(search_params.n_probes), 0u,
+                                             this->dynb_concurrency_hint(),
+                                             this->dynb_conservative_dispatch(),
+                                             static_cast<double>(this->batch_window()) / 1000.0,
+                                             raft::make_const_mdspan(q_dev_t),
+                                             neighbors_device, distances_device);
+                } else {
+                    cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
+                                                        raft::make_const_mdspan(q_dev_t),
+                                                        neighbors_device, distances_device);
+                }
 
-            raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device);
-            raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device);
+                if (effective_k == static_cast<uint32_t>(limit)) {
+                    raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device);
+                    raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device);
+                } else {
+                    std::vector<int64_t> tmp_n(static_cast<size_t>(num_queries) * effective_k);
+                    std::vector<float>   tmp_d(static_cast<size_t>(num_queries) * effective_k);
+                    raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(tmp_n.data(), num_queries, effective_k), neighbors_device);
+                    raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(tmp_d.data(), num_queries, effective_k), distances_device);
+                    handle.sync();
+                    matrixone::scatter_with_padding<int64_t>(
+                        search_res.neighbors.data(), search_res.distances.data(),
+                        tmp_n.data(), tmp_d.data(),
+                        num_queries, static_cast<uint32_t>(limit), effective_k,
+                        /*neighbor_sentinel=*/-1LL);
+                }
+            }
         } else {
             std::string msg = "IVF-PQ search error: No valid index found for device " + std::to_string(handle.get_device_id()) +
                              " (Mode: " + mode_name(this->dist_mode) + ")";
@@ -1452,7 +1512,7 @@ public:
             }
         }
 
-        this->transform_distance(this->metric, search_res.distances);
+        transform_distance(this->metric, search_res.distances);
         return search_res;
     }
 

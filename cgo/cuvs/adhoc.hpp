@@ -23,6 +23,7 @@
 #include <cuvs/neighbors/brute_force.hpp>
 #include <cuvs/distance/distance.hpp>
 #include "helper.h"
+#include "index_base.hpp"  // clamp_k_to_index_size / scatter_with_padding / fill_all_sentinel / transform_distance
 #include <vector>
 #include <cstdint>
 
@@ -111,16 +112,30 @@ void adhoc_brute_force_search(const raft::resources& res,
                               float* distances) {
     auto stream = raft::resource::get_cuda_stream(res);
 
+    // cuVS rejects k > n_rows. Clamp to effective_k and pad the caller's
+    // (n_queries × limit) buffers with (-1, FLT_MAX) — same pattern as the
+    // persistent-index search paths. See index_base.hpp for helpers.
+    const uint32_t effective_k = clamp_k_to_index_size(limit, n_rows);
+
+    if (effective_k == 0) {
+        // Empty dataset — no GPU work, no temp index to build.
+        fill_all_sentinel<int64_t>(neighbors, distances,
+                                   static_cast<size_t>(n_queries) * limit,
+                                   /*neighbor_sentinel=*/-1LL);
+        return;
+    }
+
     // Helper to align sizes to 256 bytes (CUDA default alignment)
     auto align_size = [](size_t size) {
         return (size + 255) & ~255;
     };
 
-    // 1. Calculate total buffer sizes with alignment
+    // 1. Calculate total buffer sizes with alignment. Sized to effective_k
+    // (not limit) — cuVS writes exactly n_queries * effective_k entries.
     size_t dataset_bytes = n_rows * dim * sizeof(T);
     size_t queries_bytes = n_queries * dim * sizeof(T);
-    size_t neighbors_bytes = n_queries * limit * sizeof(int64_t);
-    size_t distances_bytes = n_queries * limit * sizeof(float);
+    size_t neighbors_bytes = static_cast<size_t>(n_queries) * effective_k * sizeof(int64_t);
+    size_t distances_bytes = static_cast<size_t>(n_queries) * effective_k * sizeof(float);
 
     size_t dataset_alloc = align_size(dataset_bytes);
     size_t queries_alloc = align_size(queries_bytes);
@@ -141,27 +156,39 @@ void adhoc_brute_force_search(const raft::resources& res,
     raft::copy(res, raft::make_device_matrix_view<T, int64_t>(reinterpret_cast<T*>(d_queries), (int64_t)n_queries, (int64_t)dim), raft::make_host_matrix_view<const T, int64_t>(queries, (int64_t)n_queries, (int64_t)dim));
     raft::resource::sync_stream(res);
 
-    // 3. Prepare Views (zero allocation)
+    // 3. Prepare Views (zero allocation). Neighbors / distances at effective_k.
     auto dataset_view = raft::make_device_matrix_view<const T, int64_t>(reinterpret_cast<const T*>(d_dataset), (int64_t)n_rows, (int64_t)dim);
     auto queries_view = raft::make_device_matrix_view<const T, int64_t>(reinterpret_cast<const T*>(d_queries), (int64_t)n_queries, (int64_t)dim);
-    auto neighbors_view = raft::make_device_matrix_view<int64_t, int64_t>(reinterpret_cast<int64_t*>(d_neighbors), (int64_t)n_queries, (int64_t)limit);
-    auto distances_view = raft::make_device_matrix_view<float, int64_t>(reinterpret_cast<float*>(d_distances), (int64_t)n_queries, (int64_t)limit);
+    auto neighbors_view = raft::make_device_matrix_view<int64_t, int64_t>(reinterpret_cast<int64_t*>(d_neighbors), (int64_t)n_queries, (int64_t)effective_k);
+    auto distances_view = raft::make_device_matrix_view<float, int64_t>(reinterpret_cast<float*>(d_distances), (int64_t)n_queries, (int64_t)effective_k);
 
     // 4. Build temporary index (view-based, very fast)
     cuvs::neighbors::brute_force::index_params index_params;
     index_params.metric = metric;
     auto index = cuvs::neighbors::brute_force::build(res, index_params, raft::make_const_mdspan(dataset_view));
 
-    // 5. Execute Search
+    // 5. Execute Search — cuVS reads k from neighbors_view.extent(1) = effective_k.
     cuvs::neighbors::brute_force::search_params search_params;
-    cuvs::neighbors::brute_force::search(res, search_params, index, 
-                                         raft::make_const_mdspan(queries_view), 
-                                         neighbors_view, 
+    cuvs::neighbors::brute_force::search(res, search_params, index,
+                                         raft::make_const_mdspan(queries_view),
+                                         neighbors_view,
                                          distances_view);
 
-    // 6. Async copy results back to host
-    raft::copy(res, raft::make_host_matrix_view<int64_t, int64_t>(neighbors, (int64_t)n_queries, (int64_t)limit), neighbors_view);
-    raft::copy(res, raft::make_host_matrix_view<float, int64_t>(distances, (int64_t)n_queries, (int64_t)limit), distances_view);
+    // 6. Async copy results back to host. Fast path when effective_k == limit
+    // writes directly into the caller buffer; otherwise stage in a tight host
+    // tmp and scatter row-by-row with sentinel padding so the (n_queries × limit)
+    // row layout the caller expects is preserved.
+    std::vector<int64_t> tmp_n;
+    std::vector<float>   tmp_d;
+    if (effective_k == limit) {
+        raft::copy(res, raft::make_host_matrix_view<int64_t, int64_t>(neighbors, (int64_t)n_queries, (int64_t)limit), neighbors_view);
+        raft::copy(res, raft::make_host_matrix_view<float, int64_t>(distances, (int64_t)n_queries, (int64_t)limit), distances_view);
+    } else {
+        tmp_n.resize(static_cast<size_t>(n_queries) * effective_k);
+        tmp_d.resize(static_cast<size_t>(n_queries) * effective_k);
+        raft::copy(res, raft::make_host_matrix_view<int64_t, int64_t>(tmp_n.data(), (int64_t)n_queries, (int64_t)effective_k), neighbors_view);
+        raft::copy(res, raft::make_host_matrix_view<float, int64_t>(tmp_d.data(), (int64_t)n_queries, (int64_t)effective_k), distances_view);
+    }
 
     // 7. Synchronize
     raft::resource::sync_stream(res);
@@ -169,18 +196,25 @@ void adhoc_brute_force_search(const raft::resources& res,
     // 8. Async free
     RAFT_CUDA_TRY(cudaFreeAsync(d_ptr, stream));
 
-    if (metric == cuvs::distance::DistanceType::InnerProduct) {
-        for (size_t i = 0; i < n_queries * limit; ++i) {
-            distances[i] *= -1.0f;
-        }
+    if (effective_k != limit) {
+        scatter_with_padding<int64_t>(neighbors, distances,
+                                      tmp_n.data(), tmp_d.data(),
+                                      n_queries, limit, effective_k,
+                                      /*neighbor_sentinel=*/-1LL);
     }
 
-    // Sentinel-out invalid neighbor indices. cuvs may return junk values
-    // (INT64_MAX, UINT32_MAX, INT32_MAX, etc.) in unfilled slots when limit
-    // exceeds the dataset size or a filter excludes everything. A single
-    // bounds check against n_rows catches all of them — mirrors the
-    // map_neighbor_id helper used in the persistent-index path.
-    for (size_t i = 0; i < n_queries * limit; ++i) {
+    // InnerProduct sign flip — sentinel-preserving. distance_type_t and
+    // cuvs::distance::DistanceType share the same numeric layout (see
+    // cuvs_types.h and adhoc_c.cpp:39's reverse cast).
+    transform_distance(static_cast<distance_type_t>(metric),
+                       distances,
+                       static_cast<size_t>(n_queries) * limit);
+
+    // Defense-in-depth: cuvs may still write junk values (INT64_MAX,
+    // UINT32_MAX, INT32_MAX, etc.) into the [0, effective_k) valid slots
+    // — e.g. for fewer-than-k matches after dedup. Bounds-check against
+    // n_rows; padded slots [effective_k, limit) already pass (neighbors=-1).
+    for (size_t i = 0; i < static_cast<size_t>(n_queries) * limit; ++i) {
         if (neighbors[i] < 0 || neighbors[i] >= static_cast<int64_t>(n_rows)) {
             neighbors[i] = -1;
         }

@@ -893,15 +893,6 @@ public:
                 raft::resource::sync_stream(*res);
             }
 
-            // Step C: reuse per-thread neighbor / distance workspaces. CAGRA
-            // returns uint32 neighbors so we use cagra_neighbors_buf.
-            auto& n_buf = handle.cagra_neighbors_buf(static_cast<size_t>(num_queries) * limit);
-            auto& d_buf = handle.distances_buf(static_cast<size_t>(num_queries) * limit);
-            auto neighbors_device = raft::make_device_matrix_view<uint32_t, int64_t>(
-                n_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-            auto distances_device = raft::make_device_matrix_view<float, int64_t>(
-                d_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-
             // Compute this device's row range for build_search_bitset. Matches the
             // slicing used by sync_shard_bitset (shard_offset is always % 32 == 0).
             uint64_t start_row = 0, shard_sz = this->count;
@@ -912,40 +903,80 @@ public:
                 for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
             }
 
-            std::shared_ptr<raft::core::bitset<uint32_t, int64_t>> bs_ptr;
-            if (prebuilt) {
-                if (prebuilt->has_filter) {
-                    bs_ptr = this->upload_host_mask(handle, prebuilt->mask, shard_sz);
-                } else if (prebuilt->deletes_only) {
-                    bs_ptr = this->acquire_delete_bitset_device(handle, start_row, shard_sz);
+            // Clamp cuVS top-k to shard_sz (cuVS rejects k > index_size). See
+            // ivf_pq.hpp search_internal for the full rationale; the CAGRA
+            // variant uses uint32_t raw_neighbors which is already prefilled
+            // with (uint32_t)-1 at construction (line 880 above), so empty-shard
+            // / pad tails inherit the sentinel for free on the neighbor side.
+            // Distances still need an explicit FLT_MAX pad.
+            const uint32_t effective_k = matrixone::clamp_k_to_index_size(
+                static_cast<uint32_t>(limit), shard_sz);
+
+            if (effective_k == 0) {
+                // raw_neighbors is already (uint32_t)-1 from its constructor;
+                // just pad distances. map_neighbor_id below converts
+                // (uint32_t)-1 → int64(UINT32_MAX), which fails the
+                // data_size bound and becomes -1.
+                std::fill(search_res.distances.begin(), search_res.distances.end(),
+                          std::numeric_limits<float>::max());
+            } else {
+                // Step C: reuse per-thread neighbor / distance workspaces. CAGRA
+                // returns uint32 neighbors so we use cagra_neighbors_buf.
+                auto& n_buf = handle.cagra_neighbors_buf(static_cast<size_t>(num_queries) * limit);
+                auto& d_buf = handle.distances_buf(static_cast<size_t>(num_queries) * limit);
+                auto neighbors_device = raft::make_device_matrix_view<uint32_t, int64_t>(
+                    n_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(effective_k));
+                auto distances_device = raft::make_device_matrix_view<float, int64_t>(
+                    d_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(effective_k));
+
+                std::shared_ptr<raft::core::bitset<uint32_t, int64_t>> bs_ptr;
+                if (prebuilt) {
+                    if (prebuilt->has_filter) {
+                        bs_ptr = this->upload_host_mask(handle, prebuilt->mask, shard_sz);
+                    } else if (prebuilt->deletes_only) {
+                        bs_ptr = this->acquire_delete_bitset_device(handle, start_row, shard_sz);
+                    }
+                } else {
+                    bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz);
                 }
-            } else {
-                bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz);
-            }
 
-            if (bs_ptr) {
-                auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
-                cuvs::neighbors::cagra::search(*res, search_params, *local_index,
-                                                    raft::make_const_mdspan(queries_device),
-                                                    neighbors_device, distances_device, filter);
-            } else if (this->batch_window() != 0) {
-                this->dynb_cache_.search(*res, handle.get_device_id(), local_index, search_params,
-                                         static_cast<int64_t>(limit),
-                                         static_cast<uint32_t>(search_params.itopk_size),
-                                         static_cast<uint32_t>(search_params.search_width),
-                                         this->dynb_concurrency_hint(),
-                                         this->dynb_conservative_dispatch(),
-                                         static_cast<double>(this->batch_window()) / 1000.0,
-                                         raft::make_const_mdspan(queries_device),
-                                         neighbors_device, distances_device);
-            } else {
-                cuvs::neighbors::cagra::search(*res, search_params, *local_index,
-                                                    raft::make_const_mdspan(queries_device),
-                                                    neighbors_device, distances_device);
-            }
+                if (bs_ptr) {
+                    auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
+                    cuvs::neighbors::cagra::search(*res, search_params, *local_index,
+                                                        raft::make_const_mdspan(queries_device),
+                                                        neighbors_device, distances_device, filter);
+                } else if (this->batch_window() != 0) {
+                    this->dynb_cache_.search(*res, handle.get_device_id(), local_index, search_params,
+                                             static_cast<int64_t>(effective_k),
+                                             static_cast<uint32_t>(search_params.itopk_size),
+                                             static_cast<uint32_t>(search_params.search_width),
+                                             this->dynb_concurrency_hint(),
+                                             this->dynb_conservative_dispatch(),
+                                             static_cast<double>(this->batch_window()) / 1000.0,
+                                             raft::make_const_mdspan(queries_device),
+                                             neighbors_device, distances_device);
+                } else {
+                    cuvs::neighbors::cagra::search(*res, search_params, *local_index,
+                                                        raft::make_const_mdspan(queries_device),
+                                                        neighbors_device, distances_device);
+                }
 
-            raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t>(raw_neighbors.data(), num_queries, limit), neighbors_device);
-            raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device);
+                if (effective_k == static_cast<uint32_t>(limit)) {
+                    raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t>(raw_neighbors.data(), num_queries, limit), neighbors_device);
+                    raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device);
+                } else {
+                    std::vector<uint32_t> tmp_n(static_cast<size_t>(num_queries) * effective_k);
+                    std::vector<float>    tmp_d(static_cast<size_t>(num_queries) * effective_k);
+                    raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t>(tmp_n.data(), num_queries, effective_k), neighbors_device);
+                    raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(tmp_d.data(), num_queries, effective_k), distances_device);
+                    handle.sync();
+                    matrixone::scatter_with_padding<uint32_t>(
+                        raw_neighbors.data(), search_res.distances.data(),
+                        tmp_n.data(), tmp_d.data(),
+                        num_queries, static_cast<uint32_t>(limit), effective_k,
+                        /*neighbor_sentinel=*/static_cast<uint32_t>(-1));
+                }
+            }
         } else {
             std::string msg = "CAGRA search error: No valid index found for device " + std::to_string(handle.get_device_id()) +
                              " (Mode: " + mode_name(this->dist_mode) + ")";
@@ -974,7 +1005,7 @@ public:
             }
         }
 
-        this->transform_distance(this->metric, search_res.distances);
+        transform_distance(this->metric, search_res.distances);
         return search_res;
     }
 
@@ -1159,15 +1190,6 @@ public:
         }
 
         if (local_index) {
-            // Step C: reuse per-thread neighbor / distance workspaces (CAGRA
-            // returns uint32 neighbors).
-            auto& n_buf = handle.cagra_neighbors_buf(static_cast<size_t>(num_queries) * limit);
-            auto& d_buf = handle.distances_buf(static_cast<size_t>(num_queries) * limit);
-            auto neighbors_device = raft::make_device_matrix_view<uint32_t, int64_t>(
-                n_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-            auto distances_device = raft::make_device_matrix_view<float, int64_t>(
-                d_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-
             uint64_t start_row = 0, shard_sz = this->count;
             if (this->dist_mode == DistributionMode_SHARDED) {
                 int rank = handle.get_rank();
@@ -1176,40 +1198,72 @@ public:
                 for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
             }
 
-            std::shared_ptr<raft::core::bitset<uint32_t, int64_t>> bs_ptr;
-            if (prebuilt) {
-                if (prebuilt->has_filter) {
-                    bs_ptr = this->upload_host_mask(handle, prebuilt->mask, shard_sz);
-                } else if (prebuilt->deletes_only) {
-                    bs_ptr = this->acquire_delete_bitset_device(handle, start_row, shard_sz);
+            // See search_internal above for the rationale. raw_neighbors_f is
+            // already (uint32_t)-1-filled; distances need an explicit FLT_MAX pad.
+            const uint32_t effective_k = matrixone::clamp_k_to_index_size(
+                static_cast<uint32_t>(limit), shard_sz);
+
+            if (effective_k == 0) {
+                std::fill(search_res.distances.begin(), search_res.distances.end(),
+                          std::numeric_limits<float>::max());
+            } else {
+                // Step C: reuse per-thread neighbor / distance workspaces (CAGRA
+                // returns uint32 neighbors).
+                auto& n_buf = handle.cagra_neighbors_buf(static_cast<size_t>(num_queries) * limit);
+                auto& d_buf = handle.distances_buf(static_cast<size_t>(num_queries) * limit);
+                auto neighbors_device = raft::make_device_matrix_view<uint32_t, int64_t>(
+                    n_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(effective_k));
+                auto distances_device = raft::make_device_matrix_view<float, int64_t>(
+                    d_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(effective_k));
+
+                std::shared_ptr<raft::core::bitset<uint32_t, int64_t>> bs_ptr;
+                if (prebuilt) {
+                    if (prebuilt->has_filter) {
+                        bs_ptr = this->upload_host_mask(handle, prebuilt->mask, shard_sz);
+                    } else if (prebuilt->deletes_only) {
+                        bs_ptr = this->acquire_delete_bitset_device(handle, start_row, shard_sz);
+                    }
+                } else {
+                    bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz);
                 }
-            } else {
-                bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz);
-            }
 
-            if (bs_ptr) {
-                auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
-                cuvs::neighbors::cagra::search(*res, search_params, *local_index,
-                                                    raft::make_const_mdspan(q_dev_t),
-                                                    neighbors_device, distances_device, filter);
-            } else if (this->batch_window() != 0) {
-                this->dynb_cache_.search(*res, handle.get_device_id(), local_index, search_params,
-                                         static_cast<int64_t>(limit),
-                                         static_cast<uint32_t>(search_params.itopk_size),
-                                         static_cast<uint32_t>(search_params.search_width),
-                                         this->dynb_concurrency_hint(),
-                                         this->dynb_conservative_dispatch(),
-                                         static_cast<double>(this->batch_window()) / 1000.0,
-                                         raft::make_const_mdspan(q_dev_t),
-                                         neighbors_device, distances_device);
-            } else {
-                cuvs::neighbors::cagra::search(*res, search_params, *local_index,
-                                                    raft::make_const_mdspan(q_dev_t),
-                                                    neighbors_device, distances_device);
-            }
+                if (bs_ptr) {
+                    auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
+                    cuvs::neighbors::cagra::search(*res, search_params, *local_index,
+                                                        raft::make_const_mdspan(q_dev_t),
+                                                        neighbors_device, distances_device, filter);
+                } else if (this->batch_window() != 0) {
+                    this->dynb_cache_.search(*res, handle.get_device_id(), local_index, search_params,
+                                             static_cast<int64_t>(effective_k),
+                                             static_cast<uint32_t>(search_params.itopk_size),
+                                             static_cast<uint32_t>(search_params.search_width),
+                                             this->dynb_concurrency_hint(),
+                                             this->dynb_conservative_dispatch(),
+                                             static_cast<double>(this->batch_window()) / 1000.0,
+                                             raft::make_const_mdspan(q_dev_t),
+                                             neighbors_device, distances_device);
+                } else {
+                    cuvs::neighbors::cagra::search(*res, search_params, *local_index,
+                                                        raft::make_const_mdspan(q_dev_t),
+                                                        neighbors_device, distances_device);
+                }
 
-            raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t>(raw_neighbors_f.data(), num_queries, limit), neighbors_device);
-            raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device);
+                if (effective_k == static_cast<uint32_t>(limit)) {
+                    raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t>(raw_neighbors_f.data(), num_queries, limit), neighbors_device);
+                    raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device);
+                } else {
+                    std::vector<uint32_t> tmp_n(static_cast<size_t>(num_queries) * effective_k);
+                    std::vector<float>    tmp_d(static_cast<size_t>(num_queries) * effective_k);
+                    raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t>(tmp_n.data(), num_queries, effective_k), neighbors_device);
+                    raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(tmp_d.data(), num_queries, effective_k), distances_device);
+                    handle.sync();
+                    matrixone::scatter_with_padding<uint32_t>(
+                        raw_neighbors_f.data(), search_res.distances.data(),
+                        tmp_n.data(), tmp_d.data(),
+                        num_queries, static_cast<uint32_t>(limit), effective_k,
+                        /*neighbor_sentinel=*/static_cast<uint32_t>(-1));
+                }
+            }
         } else {
             std::string msg = "CAGRA search error: No valid index found for device " + std::to_string(handle.get_device_id()) +
                              " (Mode: " + mode_name(this->dist_mode) + ")";
@@ -1233,7 +1287,7 @@ public:
             }
         }
 
-        this->transform_distance(this->metric, search_res.distances);
+        transform_distance(this->metric, search_res.distances);
         return search_res;
     }
 

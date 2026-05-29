@@ -441,6 +441,22 @@ public:
         search_res.neighbors.resize(num_queries * limit);
         search_res.distances.resize(num_queries * limit);
 
+        // Clamp cuVS top-k to the live row count (cuVS rejects k > index_size).
+        // brute_force is SINGLE_GPU only, so local_count is the only "shard".
+        // See ivf_pq.hpp for rationale; index_base.hpp owns the helpers.
+        const uint32_t effective_k = matrixone::clamp_k_to_index_size(
+            static_cast<uint32_t>(limit), local_count);
+
+        if (effective_k == 0) {
+            // Empty index — skip GPU work, pre-fill sentinels. The
+            // map_neighbor_id loop below leaves -1 unchanged; transform_distance
+            // preserves FLT_MAX (index_base.hpp:779).
+            matrixone::fill_all_sentinel<int64_t>(
+                search_res.neighbors.data(), search_res.distances.data(),
+                static_cast<size_t>(num_queries) * limit, /*neighbor_sentinel=*/-1LL);
+            return search_res;
+        }
+
         auto queries_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)num_queries, (int64_t)this->dimension);
         raft::copy(*res, queries_device.view(), raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
         // Legacy path syncs so the deletes-only sync_device_bitset below can
@@ -450,8 +466,8 @@ public:
             raft::resource::sync_stream(*res);
         }
 
-        auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
-        auto distances_device = raft::make_device_matrix<float, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
+        auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(*res, (int64_t)num_queries, (int64_t)effective_k);
+        auto distances_device = raft::make_device_matrix<float, int64_t>(*res, (int64_t)num_queries, (int64_t)effective_k);
 
         std::shared_ptr<raft::core::bitset<uint32_t, int64_t>> bs_ptr;
         if (prebuilt) {
@@ -479,8 +495,21 @@ public:
                                                 neighbors_device.view(), distances_device.view());
         }
 
-        raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
-        raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
+        if (effective_k == static_cast<uint32_t>(limit)) {
+            raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
+            raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
+        } else {
+            std::vector<int64_t> tmp_n(static_cast<size_t>(num_queries) * effective_k);
+            std::vector<float>   tmp_d(static_cast<size_t>(num_queries) * effective_k);
+            raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(tmp_n.data(), num_queries, effective_k), neighbors_device.view());
+            raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(tmp_d.data(), num_queries, effective_k), distances_device.view());
+            handle.sync();
+            matrixone::scatter_with_padding<int64_t>(
+                search_res.neighbors.data(), search_res.distances.data(),
+                tmp_n.data(), tmp_d.data(),
+                num_queries, static_cast<uint32_t>(limit), effective_k,
+                /*neighbor_sentinel=*/-1LL);
+        }
 
         handle.sync();
 
@@ -493,7 +522,7 @@ public:
                 static_cast<int64_t>(local_count), this->host_ids);
         }
 
-        this->transform_distance(this->metric, search_res.distances);
+        transform_distance(this->metric, search_res.distances);
         return search_res;
     }
 
@@ -613,8 +642,19 @@ public:
         search_res.neighbors.resize(num_queries * limit);
         search_res.distances.resize(num_queries * limit);
 
-        auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
-        auto distances_device = raft::make_device_matrix<float, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
+        // See search_internal above for the rationale.
+        const uint32_t effective_k = matrixone::clamp_k_to_index_size(
+            static_cast<uint32_t>(limit), local_count);
+
+        if (effective_k == 0) {
+            matrixone::fill_all_sentinel<int64_t>(
+                search_res.neighbors.data(), search_res.distances.data(),
+                static_cast<size_t>(num_queries) * limit, /*neighbor_sentinel=*/-1LL);
+            return search_res;
+        }
+
+        auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(*res, (int64_t)num_queries, (int64_t)effective_k);
+        auto distances_device = raft::make_device_matrix<float, int64_t>(*res, (int64_t)num_queries, (int64_t)effective_k);
 
         std::shared_ptr<raft::core::bitset<uint32_t, int64_t>> bs_ptr;
         if (prebuilt) {
@@ -639,8 +679,21 @@ public:
                                                 neighbors_device.view(), distances_device.view());
         }
 
-        raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
-        raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
+        if (effective_k == static_cast<uint32_t>(limit)) {
+            raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
+            raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
+        } else {
+            std::vector<int64_t> tmp_n(static_cast<size_t>(num_queries) * effective_k);
+            std::vector<float>   tmp_d(static_cast<size_t>(num_queries) * effective_k);
+            raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(tmp_n.data(), num_queries, effective_k), neighbors_device.view());
+            raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(tmp_d.data(), num_queries, effective_k), distances_device.view());
+            handle.sync();
+            matrixone::scatter_with_padding<int64_t>(
+                search_res.neighbors.data(), search_res.distances.data(),
+                tmp_n.data(), tmp_d.data(),
+                num_queries, static_cast<uint32_t>(limit), effective_k,
+                /*neighbor_sentinel=*/-1LL);
+        }
 
         handle.sync();
 
@@ -653,7 +706,7 @@ public:
                 static_cast<int64_t>(local_count), this->host_ids);
         }
 
-        this->transform_distance(this->metric, search_res.distances);
+        transform_distance(this->metric, search_res.distances);
         return search_res;
     }
 
