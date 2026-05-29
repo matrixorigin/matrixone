@@ -110,6 +110,13 @@ type MultiUpdateCtx struct {
 	InsertCols    []int
 	DeleteCols    []int
 	PartitionCols []int
+	// SkipInsertOnNullPk: when true, rows with a null pk column are silently
+	// skipped in the insert path. Used by REPLACE INTO to handle delete-only rows
+	// (fan-out duplicates that carry an old row ID but no new values).
+	SkipInsertOnNullPk bool
+	// InsertPkColIdx is the PK column's index within InsertCols. Only used with
+	// SkipInsertOnNullPk.
+	InsertPkColIdx int
 }
 
 func (update MultiUpdate) TypeName() string {

@@ -25,6 +25,7 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -211,6 +212,69 @@ func TestBuildTableInfoListSQLEscapesLiterals(t *testing.T) {
 	}
 	if !strings.Contains(sql, "relname like 'tbl''name'") {
 		t.Fatalf("table name was not escaped in SQL: %s", sql)
+	}
+}
+
+func TestGetTableInfosFromTSSkipsStaleTableMetadata(t *testing.T) {
+	ctx := context.WithValue(context.TODO(), defines.TenantIDKey{}, uint32(sysAccountID))
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	const (
+		dbName      = "acc_test02"
+		snapshotTs  = int64(100)
+		fromAccount = uint32(10)
+		toAccount   = uint32(20)
+	)
+
+	bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, fromAccount)] =
+		newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+			{"base_t", "BASE TABLE", "r"},
+			{"aff01", "BASE TABLE", "r"},
+		})
+	bh.sql2result[fmt.Sprintf("show create table `%s`.`base_t` {MO_TS = %d}", dbName, snapshotTs)] =
+		newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{"base_t", "create table base_t (id int)"}})
+	bh.sql2result[fmt.Sprintf("show create table `%s`.`aff01` {MO_TS = %d}", dbName, snapshotTs)] =
+		newMrsForRestoreStringRows([]string{"Table", "Create Table"}, nil)
+
+	tableInfos, err := getTableInfosFromTS(ctx, "", bh, dbName, "", snapshotTs, fromAccount, toAccount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tableInfos) != 1 {
+		t.Fatalf("expected one restorable table, got %d", len(tableInfos))
+	}
+	if tableInfos[0].tblName != "base_t" {
+		t.Fatalf("expected base_t, got %s", tableInfos[0].tblName)
+	}
+	if tableInfos[0].createSql != "create table base_t (id int)" {
+		t.Fatalf("unexpected create sql: %s", tableInfos[0].createSql)
+	}
+}
+
+func TestGetTableInfosFromTSReturnsCreateTableErrors(t *testing.T) {
+	ctx := context.WithValue(context.TODO(), defines.TenantIDKey{}, uint32(sysAccountID))
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	const (
+		dbName      = "acc_test02"
+		snapshotTs  = int64(100)
+		fromAccount = uint32(10)
+		toAccount   = uint32(20)
+	)
+
+	createTableSQL := fmt.Sprintf("show create table `%s`.`aff01` {MO_TS = %d}", dbName, snapshotTs)
+	createTableErr := moerr.NewInternalError(ctx, "failed to read create table")
+	bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, fromAccount)] =
+		newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+			{"aff01", "BASE TABLE", "r"},
+		})
+	bh.sql2err[createTableSQL] = createTableErr
+
+	_, err := getTableInfosFromTS(ctx, "", bh, dbName, "", snapshotTs, fromAccount, toAccount)
+	if err != createTableErr {
+		t.Fatalf("expected create table error, got %v", err)
 	}
 }
 
