@@ -215,8 +215,15 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		isMulti:       tblInfo.isMulti,
 		needAggFilter: tblInfo.needAggFilter,
 	}
-	for alias, columns := range usedTbl {
-		idx := tblInfo.alias[alias]
+	aliasesByIdx := make([]string, len(tblInfo.tableDefs))
+	for alias, idx := range tblInfo.alias {
+		aliasesByIdx[idx] = alias
+	}
+	for idx, alias := range aliasesByIdx {
+		columns, ok := usedTbl[alias]
+		if !ok {
+			continue
+		}
 		tblDef := tblInfo.tableDefs[idx]
 		newTblInfo.objRef = append(newTblInfo.objRef, tblInfo.objRef[idx])
 		newTblInfo.tableDefs = append(newTblInfo.tableDefs, tblDef)
