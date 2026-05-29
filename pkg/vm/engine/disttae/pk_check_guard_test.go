@@ -21,7 +21,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestShouldBailoutOnChangedObjects(t *testing.T) {
@@ -102,4 +106,44 @@ func TestPkCheckSemaphore_RespectsContextCancellation(t *testing.T) {
 	case <-ctx.Done():
 		// expected
 	}
+}
+
+func TestPKCommitTSMatchedInRange(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+
+	from := types.BuildTS(10, 0)
+	to := types.BuildTS(20, 0)
+
+	vec := vector.NewVec(types.T_TS.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec, types.BuildTS(10, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.BuildTS(11, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.BuildTS(20, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.BuildTS(21, 0), false, mp))
+
+	changed, ok := pkCommitTSMatchedInRange(vec, []int64{0, 3}, from, to)
+	require.True(t, ok)
+	require.False(t, changed)
+
+	changed, ok = pkCommitTSMatchedInRange(vec, []int64{1}, from, to)
+	require.True(t, ok)
+	require.True(t, changed)
+
+	changed, ok = pkCommitTSMatchedInRange(vec, []int64{2}, from, to)
+	require.True(t, ok)
+	require.True(t, changed)
+
+	vec.SetNull(1)
+	changed, ok = pkCommitTSMatchedInRange(vec, []int64{1}, from, to)
+	require.False(t, ok)
+	require.False(t, changed)
+
+	constNull := vector.NewConstNull(types.T_TS.ToType(), 1, mp)
+	defer constNull.Free(mp)
+	changed, ok = pkCommitTSMatchedInRange(constNull, []int64{0}, from, to)
+	require.False(t, ok)
+	require.False(t, changed)
 }
