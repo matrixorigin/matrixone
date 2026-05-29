@@ -1,0 +1,97 @@
+select json_length('[1, 2, {"a": 3}]');
+json_length([1, 2, {"a": 3}])
+3
+select json_length('{"a": 1, "b": {"c": 30}}');
+json_length({"a": 1, "b": {"c": 30}})
+2
+select json_length('{"a": 1, "b": {"c": 30}}', '$.b');
+json_length({"a": 1, "b": {"c": 30}}, $.b)
+1
+select json_length('"hello"');
+json_length("hello")
+1
+select json_length('42');
+json_length(42)
+1
+select json_length('true');
+json_length(true)
+1
+select json_length('null');
+json_length(null)
+1
+select json_length('[]');
+json_length([])
+0
+select json_length('[1]');
+json_length([1])
+1
+select json_length('[1,2,3,4,5]');
+json_length([1,2,3,4,5])
+5
+select json_length('{}');
+json_length({})
+0
+select json_length('{"a":1}');
+json_length({"a":1})
+1
+select json_length('{"a":1,"b":2,"c":3}');
+json_length({"a":1,"b":2,"c":3})
+3
+select json_length('{"a": [1,2,3], "b": {"c": [4,5]}}', '$.a');
+json_length({"a": [1,2,3], "b": {"c": [4,5]}}, $.a)
+3
+select json_length('{"a": [1,2,3], "b": {"c": [4,5]}}', '$.b.c');
+json_length({"a": [1,2,3], "b": {"c": [4,5]}}, $.b.c)
+2
+select json_length('{"a": [1,2,3], "b": {"c": [4,5]}}', '$.b');
+json_length({"a": [1,2,3], "b": {"c": [4,5]}}, $.b)
+1
+select json_length('{"a": 1}', '$.b');
+json_length({"a": 1}, $.b)
+null
+select json_length(null);
+json_length(null)
+null
+select json_length('[1,2]', null);
+json_length([1,2], null)
+null
+select json_length('invalid');  -- should error
+invalid argument json_length, bad value invalid JSON document
+select json_length(json_array(1, 2, 3));
+json_length(json_array(1, 2, 3))
+3
+select json_length(json_object('a', 1, 'b', 2));
+json_length(json_object(a, 1, b, 2))
+2
+drop table if exists t1;
+create table t1 (a varchar(100));
+insert into t1 values ('[1,2,3]'), ('{"a":1,"b":2}'), ('"hello"'), (null);
+select a, json_length(a) from t1;
+a    json_length(a)
+[1,2,3]    3
+{"a":1,"b":2}    2
+"hello"    1
+null    null
+drop table if exists t2;
+create table t2 (a json);
+insert into t2 values ('[1,2,3]'), ('{"a":1,"b":2}'), ('"hello"'), ('null');
+select a, json_length(a) from t2;
+a    json_length(a)
+[1, 2, 3]    3
+{"a": 1, "b": 2}    2
+"hello"    1
+null    1
+drop table t1;
+select json_length(json_array(1, 2, 3));
+json_length(json_array(1, 2, 3))
+3
+select json_length(json_object('a', json_array(1, 2, 3), 'b', json_object('x', 1)));
+json_length(json_object(a, json_array(1, 2, 3), b, json_object(x, 1)))
+2
+select json_length(json_object('a', json_array(1, 2, 3), 'b', json_object('x', 1)), '$.a');
+json_length(json_object(a, json_array(1, 2, 3), b, json_object(x, 1)), $.a)
+3
+select json_length(json_object('a', json_array(1, 2, 3), 'b', json_object('x', 1)), '$.b');
+json_length(json_object(a, json_array(1, 2, 3), b, json_object(x, 1)), $.b)
+1
+drop table t2;
