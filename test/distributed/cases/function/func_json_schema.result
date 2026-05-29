@@ -1,0 +1,116 @@
+select json_schema_valid('{"type":"object","properties":{"lat":{"type":"number","minimum":-90,"maximum":90}},"required":["lat"]}', '{"lat":60}');
+json_schema_valid({"type":"object","properties":{"lat":{"type":"number","minimum":-90,"maximum":90}},"required":["lat"]}, {"lat":60})
+1
+select json_schema_valid('{"type":"object","properties":{"lat":{"type":"number","minimum":-90,"maximum":90}},"required":["lat"]}', '{}');
+json_schema_valid({"type":"object","properties":{"lat":{"type":"number","minimum":-90,"maximum":90}},"required":["lat"]}, {})
+0
+select json_schema_valid('{"type":"object","properties":{"lat":{"type":"number","minimum":-90,"maximum":90}},"required":["lat"]}', '{"lat":100}');
+json_schema_valid({"type":"object","properties":{"lat":{"type":"number","minimum":-90,"maximum":90}},"required":["lat"]}, {"lat":100})
+0
+select json_schema_valid('{"type":"object","properties":{"lat":{"type":"number","minimum":-90,"maximum":90}},"required":["lat"]}', '{"lat":-100}');
+json_schema_valid({"type":"object","properties":{"lat":{"type":"number","minimum":-90,"maximum":90}},"required":["lat"]}, {"lat":-100})
+0
+select json_schema_valid('{"type":"object","properties":{"lat":{"type":"number","minimum":-90,"maximum":90}}}', '{}');
+json_schema_valid({"type":"object","properties":{"lat":{"type":"number","minimum":-90,"maximum":90}}}, {})
+1
+select json_schema_valid('{"type":"number","minimum":0,"maximum":100}', '42');
+json_schema_valid({"type":"number","minimum":0,"maximum":100}, 42)
+1
+select json_schema_valid('{"type":"number","minimum":0,"maximum":100}', '200');
+json_schema_valid({"type":"number","minimum":0,"maximum":100}, 200)
+0
+select json_schema_valid('{"type":"string","minLength":2,"maxLength":5}', '"hi"');
+json_schema_valid({"type":"string","minLength":2,"maxLength":5}, "hi")
+1
+select json_schema_valid('{"type":"string","minLength":2,"maxLength":5}', '"h"');
+json_schema_valid({"type":"string","minLength":2,"maxLength":5}, "h")
+0
+select json_schema_valid('{"type":"string","minLength":2,"maxLength":5}', '"too_long_string"');
+json_schema_valid({"type":"string","minLength":2,"maxLength":5}, "too_long_string")
+0
+select json_schema_valid('{"type":"string","pattern":"^[a-z]+$"}', '"hello"');
+json_schema_valid({"type":"string","pattern":"^[a-z]+$"}, "hello")
+1
+select json_schema_valid('{"type":"string","pattern":"^[a-z]+$"}', '"HELLO"');
+json_schema_valid({"type":"string","pattern":"^[a-z]+$"}, "HELLO")
+0
+select json_schema_valid('{"type":"string","enum":["red","green","blue"]}', '"red"');
+json_schema_valid({"type":"string","enum":["red","green","blue"]}, "red")
+1
+select json_schema_valid('{"type":"string","enum":["red","green","blue"]}', '"yellow"');
+json_schema_valid({"type":"string","enum":["red","green","blue"]}, "yellow")
+0
+select json_schema_valid('{"type":"array","items":{"type":"number"},"minItems":1,"maxItems":3}', '[1,2,3]');
+json_schema_valid({"type":"array","items":{"type":"number"},"minItems":1,"maxItems":3}, [1,2,3])
+1
+select json_schema_valid('{"type":"array","items":{"type":"number"},"minItems":1,"maxItems":3}', '[]');
+json_schema_valid({"type":"array","items":{"type":"number"},"minItems":1,"maxItems":3}, [])
+0
+select json_schema_valid('{"type":"array","items":{"type":"number"},"minItems":1,"maxItems":3}', '["a"]');
+json_schema_valid({"type":"array","items":{"type":"number"},"minItems":1,"maxItems":3}, ["a"])
+0
+select json_schema_valid('{"type":"number","multipleOf":5}', '10');
+json_schema_valid({"type":"number","multipleOf":5}, 10)
+1
+select json_schema_valid('{"type":"number","multipleOf":5}', '7');
+json_schema_valid({"type":"number","multipleOf":5}, 7)
+0
+select json_schema_valid('{"type":"object","properties":{"addr":{"type":"object","properties":{"city":{"type":"string"},"zip":{"type":"string"}},"required":["city"]}},"required":["addr"]}', '{"addr":{"city":"NYC","zip":"10001"}}');
+json_schema_valid({"type":"object","properties":{"addr":{"type":"object","properties":{"city":{"type":"string"},"zip":{"type":"string"}},"required":["city"]}},"required":["addr"]}, {"addr":{"city":"NYC","zip":"10001"}})
+1
+select json_schema_valid('{"type":"object","properties":{"addr":{"type":"object","properties":{"city":{"type":"string"},"zip":{"type":"string"}},"required":["city"]}},"required":["addr"]}', '{"addr":{"zip":"10001"}}');
+json_schema_valid({"type":"object","properties":{"addr":{"type":"object","properties":{"city":{"type":"string"},"zip":{"type":"string"}},"required":["city"]}},"required":["addr"]}, {"addr":{"zip":"10001"}})
+0
+select json_schema_valid('{"type":"object","properties":{"a":{"type":"number"}}}', '{"a":1,"b":"extra"}');
+json_schema_valid({"type":"object","properties":{"a":{"type":"number"}}}, {"a":1,"b":"extra"})
+1
+select json_schema_valid(null, '{"a":1}');
+json_schema_valid(null, {"a":1})
+null
+select json_schema_valid('{"type":"object"}', null);
+json_schema_valid({"type":"object"}, null)
+null
+select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), json_object('val', 42));
+json_schema_valid(json_object(type, number, minimum, 0, maximum, 100), json_object(val, 42))
+0
+select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), json_object('val', 200));
+json_schema_valid(json_object(type, number, minimum, 0, maximum, 100), json_object(val, 200))
+0
+select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), json_array(42));
+json_schema_valid(json_object(type, number, minimum, 0, maximum, 100), json_array(42))
+0
+select json_schema_valid(json_object('type', 'number', 'minimum', 0, 'maximum', 100), json_array(200));
+json_schema_valid(json_object(type, number, minimum, 0, maximum, 100), json_array(200))
+0
+select json_schema_validation_report('{"type":"object","required":["name"]}', '{"name":"test"}');
+json_schema_validation_report({"type":"object","required":["name"]}, {"name":"test"})
+{"valid": true}
+select json_schema_validation_report('{"type":"object","required":["name","age"]}', '{"name":"test"}');
+json_schema_validation_report({"type":"object","required":["name","age"]}, {"name":"test"})
+{"document-location": "$", "reason": "age is required", "schema-failed-keyword": "required", "schema-location": "#/required", "valid": false}
+select json_schema_validation_report('{"type":"object","properties":{"x":{"type":"number"}},"required":["x"]}', '{"x":"not_a_number"}');
+json_schema_validation_report({"type":"object","properties":{"x":{"type":"number"}},"required":["x"]}, {"x":"not_a_number"})
+{"document-location": "$.x", "reason": "Invalid type. Expected: number, given: string", "schema-failed-keyword": "type", "schema-location": "#/type", "valid": false}
+select json_schema_validation_report('{"type":"number","minimum":0,"maximum":100}', '200');
+json_schema_validation_report({"type":"number","minimum":0,"maximum":100}, 200)
+{"document-location": "$", "reason": "Must be less than or equal to 100", "schema-failed-keyword": "maximum", "schema-location": "#/maximum", "valid": false}
+select json_schema_validation_report(null, '{}');
+json_schema_validation_report(null, {})
+null
+select json_schema_validation_report('{"type":"object"}', null);
+json_schema_validation_report({"type":"object"}, null)
+null
+drop table if exists t1;
+create table t1 (j json);
+insert into t1 values ('{"a":1}'), ('{"a":"not_number"}'), ('{"b":2}');
+select json_schema_valid(json_object('type', 'object', 'properties', json_object('a', json_object('type', 'number')), 'required', json_array('a')), j) from t1;
+json_schema_valid(json_object(type, object, properties, json_object(a, json_object(type, number)), required, json_array(a)), j)
+1
+0
+0
+select json_schema_validation_report(json_object('type', 'object', 'properties', json_object('a', json_object('type', 'number')), 'required', json_array('a')), j) from t1;
+json_schema_validation_report(json_object(type, object, properties, json_object(a, json_object(type, number)), required, json_array(a)), j)
+{"valid": true}
+{"document-location": "$.a", "reason": "Invalid type. Expected: number, given: string", "schema-failed-keyword": "type", "schema-location": "#/type", "valid": false}
+{"document-location": "$", "reason": "a is required", "schema-failed-keyword": "required", "schema-location": "#/required", "valid": false}
+drop table t1;
