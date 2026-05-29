@@ -81,7 +81,7 @@ func handleBranchPick(
 	stmt *tree.DataBranchPick,
 ) (err error) {
 	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
-		return moerr.NewInternalError(execCtx.reqCtx, "DATA BRANCH PICK is not supported in explicit transactions")
+		return moerr.NewInternalError(execCtx.reqCtx, dataBranchMergePickExplicitTxnErrorInfo())
 	}
 	if stmt.ConflictOpt == nil {
 		stmt.ConflictOpt = &tree.ConflictOpt{

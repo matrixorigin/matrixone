@@ -1082,6 +1082,34 @@ func Test_statement_type(t *testing.T) {
 	})
 }
 
+func TestCanExecuteDataBranchMergePickInUncommittedTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	for _, stmt := range []tree.Statement{
+		&tree.DataBranchMerge{},
+		&tree.DataBranchPick{},
+	} {
+		ses := newTestSession(t, ctrl)
+		can, err := statementCanBeExecutedInUncommittedTransaction(context.TODO(), ses, stmt)
+		require.NoError(t, err)
+		require.True(t, can)
+
+		ses.GetTxnHandler().SetOptionBits(OPTION_NOT_AUTOCOMMIT)
+		can, err = statementCanBeExecutedInUncommittedTransaction(context.TODO(), ses, stmt)
+		require.NoError(t, err)
+		require.True(t, can)
+
+		ses.GetTxnHandler().SetOptionBits(OPTION_BEGIN)
+		can, err = statementCanBeExecutedInUncommittedTransaction(context.TODO(), ses, stmt)
+		require.NoError(t, err)
+		require.False(t, can)
+		err = canExecuteStatementInUncommittedTransaction(context.TODO(), ses, stmt)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), dataBranchMergePickExplicitTxnErrorInfo())
+	}
+}
+
 func Test_convert_type(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("type conversion", t, func() {
