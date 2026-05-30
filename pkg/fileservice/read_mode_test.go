@@ -127,8 +127,8 @@ func TestS3FSReadUsesDowngradedRange(t *testing.T) {
 	require.Equal(t, readRangeRecord{min: ptrTo[int64](4), max: ptrTo[int64](7)}, storage.ranges[0])
 }
 
-func TestS3FSReadWithoutSizeHintUsesRange(t *testing.T) {
-	defer resetFullFilePreloadForTest(64<<20, 4, 128<<20)()
+func TestS3FSReadWithoutSizeHintUsesBoundedFullFilePreload(t *testing.T) {
+	defer resetFullFilePreloadForTest(64<<20, 4, 512<<20)()
 
 	storage := &rangeRecordingObjectStorage{data: "0123456789abcdef"}
 	fs := &S3FS{
@@ -145,8 +145,31 @@ func TestS3FSReadWithoutSizeHintUsesRange(t *testing.T) {
 	require.NoError(t, fs.Read(context.Background(), vec))
 	require.Equal(t, []byte("456"), vec.Entries[0].Data)
 	require.Len(t, storage.ranges, 1)
-	require.Equal(t, readRangeRecord{min: ptrTo[int64](4), max: ptrTo[int64](7)}, storage.ranges[0])
+	require.Equal(t, readRangeRecord{min: ptrTo[int64](0), max: nil}, storage.ranges[0])
 	require.Equal(t, int64(0), fullFilePreloadInflight.Load())
+}
+
+func TestS3FSReadWithoutSizeHintFallsBackWhenActualSizeExceedsLimit(t *testing.T) {
+	defer resetFullFilePreloadForTest(8<<20, 4, 512<<20)()
+
+	storage := &rangeRecordingObjectStorage{data: strings.Repeat("a", 8<<20+1)}
+	fs := &S3FS{
+		storage:  storage,
+		ioMerger: NewIOMerger(),
+	}
+
+	vec := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{Offset: 4, Size: 3},
+		},
+	}
+	require.NoError(t, fs.Read(context.Background(), vec))
+	require.Equal(t, []byte("aaa"), vec.Entries[0].Data)
+	require.Equal(t, int64(0), fullFilePreloadInflight.Load())
+	require.Len(t, storage.ranges, 2)
+	require.Equal(t, readRangeRecord{min: ptrTo[int64](0), max: nil}, storage.ranges[0])
+	require.Equal(t, readRangeRecord{min: ptrTo[int64](4), max: ptrTo[int64](7)}, storage.ranges[1])
 }
 
 func TestS3FSFullFilePreloadTokenCoversResultProcessing(t *testing.T) {

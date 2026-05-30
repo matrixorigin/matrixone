@@ -23,9 +23,9 @@ import (
 )
 
 const (
-	defaultFullFilePreloadMaxObjectBytes = int64(32 << 20)
+	defaultFullFilePreloadMaxObjectBytes = int64(256 << 20)
 	defaultFullFilePreloadMaxInflight    = int64(16)
-	defaultFullFilePreloadUnknownBytes   = int64(16 << 20)
+	defaultFullFilePreloadUnknownBytes   = defaultFullFilePreloadMaxObjectBytes
 	minFullFilePreloadBudgetBytes        = int64(512 << 20)
 	maxFullFilePreloadBudgetBytes        = int64(2 << 30)
 )
@@ -111,12 +111,7 @@ func (i *IOVector) resolveS3ReadMode() {
 	}
 
 	estimatedBytes, knownSize := i.fullFilePreloadEstimatedBytes()
-	if !knownSize {
-		i.disableFullFilePreload(fullFilePreloadReasonUnknownSize)
-		metric.ObserveFSFullFilePreloadAdmission("downgrade", fullFilePreloadReasonUnknownSize)
-		return
-	}
-	if estimatedBytes > fullFilePreloadMaxObjectBytes.Load() {
+	if knownSize && estimatedBytes > fullFilePreloadMaxObjectBytes.Load() {
 		i.disableFullFilePreload(fullFilePreloadReasonLargeObject)
 		metric.ObserveFSFullFilePreloadAdmission("downgrade", fullFilePreloadReasonLargeObject)
 		return
@@ -132,12 +127,7 @@ func (i *IOVector) acquireFullFilePreloadForS3() bool {
 	if !i.readFullObject || i.preloadToken != nil {
 		return true
 	}
-	estimatedBytes, knownSize := i.fullFilePreloadEstimatedBytes()
-	if !knownSize {
-		i.disableFullFilePreload(fullFilePreloadReasonUnknownSize)
-		metric.ObserveFSFullFilePreloadAdmission("downgrade", fullFilePreloadReasonUnknownSize)
-		return false
-	}
+	estimatedBytes, _ := i.fullFilePreloadEstimatedBytes()
 	token, ok, reason := acquireFullFilePreloadToken(estimatedBytes)
 	if !ok {
 		i.disableFullFilePreload(reason)
@@ -179,6 +169,9 @@ func (i *IOVector) fullFilePreloadEstimatedBytes() (int64, bool) {
 	if i.FullFileSizeHint > 0 {
 		return i.FullFileSizeHint, true
 	}
+	// Unknown-size reads are still bounded by the token budget and the actual
+	// read limit. Treating them as range reads by default regresses normal scan
+	// workloads that rely on full-file disk-cache warmup.
 	return defaultFullFilePreloadUnknownBytes, false
 }
 
