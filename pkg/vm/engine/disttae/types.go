@@ -1129,7 +1129,6 @@ func (e *Entry) isCatalog() bool {
 
 // txnDatabase represents an opened database in a transaction
 type txnDatabase struct {
-	accountId         uint32
 	databaseId        uint64
 	databaseName      string
 	databaseType      string
