@@ -330,7 +330,6 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 
 	key := genDatabaseKey(accountId, name)
 	txn.databaseOps.addCreateDatabase(key, txn.statementID, &txnDatabase{
-		accountId:    accountId,
 		op:           op,
 		databaseId:   databaseId,
 		databaseName: name,
@@ -487,7 +486,6 @@ func (e *Engine) Database(
 	}
 
 	return &txnDatabase{
-		accountId:         accountId,
 		op:                op,
 		databaseName:      name,
 		databaseId:        item.Id,
@@ -695,8 +693,6 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	txnDB := toDelDB.(*txnDatabase)
-	rels = filterDeleteDatabaseRelations(txnDB, rels, name, op)
 	for _, relName := range rels {
 		if err := toDelDB.Delete(ctx, relName); err != nil {
 			return err
@@ -704,7 +700,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	}
 
 	// fetch (accountid, databaseid, rowid) to delete the database
-	databaseId := txnDB.databaseId
+	databaseId := toDelDB.(*txnDatabase).databaseId
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
@@ -753,31 +749,6 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	key := genDatabaseKey(accountId, name)
 	txn.databaseOps.addDeleteDatabase(key, txn.statementID, databaseId)
 	return nil
-}
-
-func filterDeleteDatabaseRelations(db *txnDatabase, rels []string, databaseName string, op client.TxnOperator) []string {
-	filtered := make([]string, 0, len(rels))
-	for _, relName := range rels {
-		if isDeleteDatabaseRelationDeletedInTxn(db, db.accountId, relName) {
-			logutil.Info(
-				"skip table already deleted in txn during database delete",
-				zap.String("database", databaseName),
-				zap.String("table", relName),
-				zap.String("txn", op.Txn().DebugString()),
-			)
-			continue
-		}
-		filtered = append(filtered, relName)
-	}
-	return filtered
-}
-
-func isDeleteDatabaseRelationDeletedInTxn(db *txnDatabase, accountId uint32, relName string) bool {
-	if db.databaseId == catalog.MO_CATALOG_ID && catalog.IsSystemTableByName(relName) {
-		accountId = catalog.System_Account
-	}
-	key := genTableKey(accountId, relName, db.databaseId, db.databaseName)
-	return db.getTxn().tableOps.existAndDeleted(key)
 }
 
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
