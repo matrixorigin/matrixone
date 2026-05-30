@@ -53,8 +53,8 @@ func (i *IOVector) ReleaseReadResultOnError() {
 }
 
 func (i *IOVector) readRange() (min *int64, max *int64, readFull bool) {
-	readFull = i.Policy.CacheFullFile() &&
-		!i.Policy.Any(SkipDiskCache)
+	i.resolveReadMode()
+	readFull = i.readFullObject
 
 	if readFull {
 		// full range

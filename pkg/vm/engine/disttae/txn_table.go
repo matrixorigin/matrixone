@@ -2741,7 +2741,7 @@ func (tbl *txnTable) PKPersistedBetween(
 				blk.MetaLocation(),
 				cacheVectors,
 				tbl.proc.Load().GetMPool(),
-				fileservice.Policy(0),
+				fileservice.SkipFullFilePreloads,
 			)
 			if err != nil {
 				releasePKCheckSemaphore()
@@ -2819,7 +2819,9 @@ func tombstonePKExistsInRange(
 				vecCount = 2
 			}
 			tombVectors := containers.NewVectors(vecCount)
-			_, release, err := ioutil.ReadDeletes(ctx, loc, fs, isCNCreated, tombVectors, &pkType)
+			_, release, err := ioutil.ReadDeletesWithPolicy(
+				ctx, loc, fs, isCNCreated, tombVectors, &pkType, fileservice.SkipFullFilePreloads,
+			)
 			if err != nil {
 				return true, "tombstone_read_error", nil
 			}
