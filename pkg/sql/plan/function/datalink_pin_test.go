@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -99,17 +100,87 @@ func TestDatalinkPinReproducesBytesAfterOverwrite(t *testing.T) {
 	require.True(t, s, info)
 }
 
-// An already-pinned datalink is returned unchanged (idempotent): no live read,
-// no second CAS write. The live file need not even exist.
-func TestDatalinkPinIdempotent(t *testing.T) {
+// An already-pinned datalink whose CAS blob exists for the calling account is
+// returned unchanged (idempotent): no live read, no second CAS write.
+func TestDatalinkPinIdempotentWhenBlobExists(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "doc.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("v1"), 0o600))
+
 	proc := testutil.NewProc(t)
-	alreadyPinned := "file:///does/not/matter.txt?contenthash=" + strings.Repeat("a", 64)
+	liveURL := "file://" + filePath
+	pinned := pinnedURLOf(liveURL, []byte("v1"))
+
+	// first pin materializes the CAS blob for this account
+	first := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_datalink.ToType(),
+			[]string{liveURL}, []bool{false})},
+		NewFunctionTestResult(types.T_datalink.ToType(), false,
+			[]string{pinned}, []bool{false}),
+		DatalinkPin)
+	s, info := first.Run()
+	require.True(t, s, info)
+
+	// re-pinning the already-pinned URL returns it unchanged: the blob is present.
+	again := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_datalink.ToType(),
+			[]string{pinned}, []bool{false})},
+		NewFunctionTestResult(types.T_datalink.ToType(), false,
+			[]string{pinned}, []bool{false}),
+		DatalinkPin)
+	s, info = again.Run()
+	require.True(t, s, info)
+}
+
+// Re-pinning an already-pinned URL whose CAS blob is absent for the calling
+// account re-materializes it from the live source when the live bytes still hash
+// to the declared contenthash. The blob is then readable for this account (under
+// the old unconditional early-return it was never stored, so a read would fail).
+func TestDatalinkPinRepinsAbsentBlobFromLive(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "doc.txt")
+	content := []byte("frozen")
+	require.NoError(t, os.WriteFile(filePath, content, 0o600))
+
+	proc := testutil.NewProc(t)
+	liveURL := "file://" + filePath
+	pinned := pinnedURLOf(liveURL, content) // contenthash = sha256(content); blob not yet stored
 
 	tc := NewFunctionTestCase(proc,
 		[]FunctionTestInput{NewFunctionTestInput(types.T_datalink.ToType(),
-			[]string{alreadyPinned}, []bool{false})},
+			[]string{pinned}, []bool{false})},
 		NewFunctionTestResult(types.T_datalink.ToType(), false,
-			[]string{alreadyPinned}, []bool{false}),
+			[]string{pinned}, []bool{false}),
+		DatalinkPin)
+	s, info := tc.Run()
+	require.True(t, s, info)
+
+	dl, err := datalink.NewDatalink(pinned, proc)
+	require.NoError(t, err)
+	got, err := dl.GetBytes(proc)
+	require.NoError(t, err)
+	require.Equal(t, content, got)
+}
+
+// Re-pinning an already-pinned URL whose CAS blob is absent for the calling
+// account re-reads the live source. If the live bytes no longer hash to the
+// declared contenthash, the requested version is unavailable, so pin errors out
+// rather than silently pinning different bytes under the old hash.
+func TestDatalinkPinRepinRejectsChangedLiveContent(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "doc.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("actual-bytes"), 0o600))
+
+	proc := testutil.NewProc(t)
+	// a valid-format hash that does not match the live file; no CAS blob exists.
+	mismatch := strings.Repeat("a", 64)
+	pinned := "file://" + filePath + "?contenthash=" + mismatch
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_datalink.ToType(),
+			[]string{pinned}, []bool{false})},
+		NewFunctionTestResult(types.T_datalink.ToType(), true,
+			[]string{""}, []bool{false}),
 		DatalinkPin)
 	s, info := tc.Run()
 	require.True(t, s, info)
@@ -228,6 +299,24 @@ func TestDatalinkPinRejectsOversizedFile(t *testing.T) {
 		NewFunctionTestResult(types.T_datalink.ToType(), true,
 			[]string{""}, []bool{false}),
 		DatalinkPin)
+	s, info := tc.Run()
+	require.True(t, s, info)
+}
+
+// save_file() must reject writes to a pinned (contenthash) datalink: the pinned
+// value addresses an immutable CAS object, so writing through it would target the
+// internal CAS key rather than any real external path.
+func TestWriteFileDatalinkRejectsPinned(t *testing.T) {
+	proc := testutil.NewProc(t)
+	pinned := "file:///does/not/matter.txt?contenthash=" + strings.Repeat("a", 64)
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datalink.ToType(), []string{pinned}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"new content"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), true, []int64{0}, []bool{false}),
+		WriteFileDatalink)
 	s, info := tc.Run()
 	require.True(t, s, info)
 }

@@ -56,3 +56,5 @@ create account pin_acc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 select load_file(cast('file:///x.txt?contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a' as datalink)) as cross_account_blocked;
 file c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a is not found
 drop account pin_acc;
+select save_file(cast('file:///bogus/path.txt?contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a' as datalink), 'should-fail') as pin_write_rejected;
+internal error: cannot write to a pinned datalink (contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a): pinned content is immutable

@@ -99,7 +99,14 @@ func (d Datalink) GetPlainText(proc *process.Process) ([]byte, error) {
 }
 
 func (d Datalink) NewWriter(proc *process.Process) (*fileservice.FileServiceWriter, error) {
-
+	// A pinned (?contenthash=) datalink addresses an immutable CAS object, and its
+	// MoPath is the internal CAS key rather than the original external path. Writing
+	// through it would route to that CAS key and break the pinned-read contract, so
+	// reject writes outright: pinned content is immutable.
+	if d.ContentHash != "" {
+		return nil, moerr.NewInternalErrorf(proc.Ctx,
+			"cannot write to a pinned datalink (contenthash=%s): pinned content is immutable", d.ContentHash)
+	}
 	return fileservice.NewFileServiceWriter(d.MoPath, proc.Ctx)
 }
 
