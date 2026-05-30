@@ -146,10 +146,6 @@ func ReadOneBlockWithMeta(
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0, len(seqnums)),
 		Policy:   policy,
-		// Some persisted object locations can be off by one byte from the
-		// storage object length. Keep the admission hint conservative enough
-		// to avoid a full-object attempt followed by an immediate range retry.
-		FullFileSizeHint: int64(meta.BlockHeader().MetaLocation().End() + FooterSize + 1),
 	}
 	var generatedIOVec fileservice.IOVector
 	defer func() {

@@ -418,18 +418,6 @@ func ReadDeletes(
 	cacheVectors containers.Vectors,
 	pkType *types.Type,
 ) (objectio.ObjectDataMeta, func(), error) {
-	return ReadDeletesWithPolicy(ctx, deltaLoc, fs, isPersistedByCN, cacheVectors, pkType, fileservice.Policy(0))
-}
-
-func ReadDeletesWithPolicy(
-	ctx context.Context,
-	deltaLoc objectio.Location,
-	fs fileservice.FileService,
-	isPersistedByCN bool,
-	cacheVectors containers.Vectors,
-	pkType *types.Type,
-	policy fileservice.Policy,
-) (objectio.ObjectDataMeta, func(), error) {
 
 	var cols []uint16
 	var typs []types.Type
@@ -448,7 +436,7 @@ func ReadDeletesWithPolicy(
 	}
 
 	return LoadTombstoneColumns(
-		ctx, cols, typs, fs, deltaLoc, cacheVectors, nil, policy,
+		ctx, cols, typs, fs, deltaLoc, cacheVectors, nil, fileservice.Policy(0),
 	)
 }
 
