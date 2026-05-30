@@ -95,18 +95,8 @@ type IOVector struct {
 	// Policy controls policy for the vector
 	Policy Policy
 
-	// FullFileSizeHint optionally provides the whole-object size for read-mode admission.
-	// It is only a hint; implementations must still tolerate unknown or stale values.
-	FullFileSizeHint int64
-
 	// Caches indicates extra caches to operate on
 	Caches []IOVectorCache
-
-	readModeResolved bool
-	readFullObject   bool
-	readModeReason   string
-	s3ReadModeReady  bool
-	preloadToken     *fullFilePreloadToken
 }
 
 type IOEntry struct {
