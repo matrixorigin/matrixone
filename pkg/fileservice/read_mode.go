@@ -110,21 +110,23 @@ func (i *IOVector) resolveS3ReadMode() {
 		return
 	}
 
+	if !fullFilePreloadUnderPressure() {
+		return
+	}
+
 	estimatedBytes, knownSize := i.fullFilePreloadEstimatedBytes()
 	if knownSize && estimatedBytes > fullFilePreloadMaxObjectBytes.Load() {
 		i.disableFullFilePreload(fullFilePreloadReasonLargeObject)
 		metric.ObserveFSFullFilePreloadAdmission("downgrade", fullFilePreloadReasonLargeObject)
 		return
 	}
-	if fullFilePreloadUnderPressure() {
-		i.disableFullFilePreload(fullFilePreloadReasonPressure)
-		metric.ObserveFSFullFilePreloadAdmission("downgrade", fullFilePreloadReasonPressure)
-		return
-	}
 }
 
 func (i *IOVector) acquireFullFilePreloadForS3() bool {
 	if !i.readFullObject || i.preloadToken != nil {
+		return true
+	}
+	if !fullFilePreloadUnderPressure() {
 		return true
 	}
 	estimatedBytes, _ := i.fullFilePreloadEstimatedBytes()

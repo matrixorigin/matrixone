@@ -62,13 +62,13 @@ func TestFullFilePreloadReadRangeDoesNotAcquireToken(t *testing.T) {
 	require.Equal(t, int64(0), fullFilePreloadInflight.Load())
 }
 
-func TestFullFilePreloadReadModeDowngradesOnPressure(t *testing.T) {
+func TestFullFilePreloadReadModeDowngradesLargeObjectOnPressure(t *testing.T) {
 	defer resetFullFilePreloadForTest(64<<20, 4, 128<<20)()
 
 	SetMemoryCachePressureTargetPercentByOwner("test-rss", 80, time.Now().Add(time.Minute))
 	vec := &IOVector{
 		FilePath:         "foo",
-		FullFileSizeHint: 8 << 20,
+		FullFileSizeHint: 128 << 20,
 		Entries: []IOEntry{
 			{Offset: 1024, Size: 4096},
 		},
@@ -85,6 +85,7 @@ func TestFullFilePreloadReadModeDowngradesOnPressure(t *testing.T) {
 
 func TestIOMergeKeyUsesResolvedReadMode(t *testing.T) {
 	defer resetFullFilePreloadForTest(64<<20, 4, 4<<20)()
+	SetMemoryCachePressureTargetPercentByOwner("test-rss", 80, time.Now().Add(time.Minute))
 
 	vec := &IOVector{
 		FilePath:         "foo",
@@ -107,6 +108,7 @@ func TestIOMergeKeyUsesResolvedReadMode(t *testing.T) {
 
 func TestS3FSReadUsesDowngradedRange(t *testing.T) {
 	defer resetFullFilePreloadForTest(64<<20, 4, 4<<20)()
+	SetMemoryCachePressureTargetPercentByOwner("test-rss", 80, time.Now().Add(time.Minute))
 
 	storage := &rangeRecordingObjectStorage{data: "0123456789abcdef"}
 	fs := &S3FS{
@@ -151,6 +153,7 @@ func TestS3FSReadWithoutSizeHintUsesBoundedFullFilePreload(t *testing.T) {
 
 func TestS3FSReadWithoutSizeHintFallsBackWhenActualSizeExceedsLimit(t *testing.T) {
 	defer resetFullFilePreloadForTest(8<<20, 4, 512<<20)()
+	SetMemoryCachePressureTargetPercentByOwner("test-rss", 80, time.Now().Add(time.Minute))
 
 	storage := &rangeRecordingObjectStorage{data: strings.Repeat("a", 8<<20+1)}
 	fs := &S3FS{
@@ -174,6 +177,7 @@ func TestS3FSReadWithoutSizeHintFallsBackWhenActualSizeExceedsLimit(t *testing.T
 
 func TestS3FSFullFilePreloadTokenCoversResultProcessing(t *testing.T) {
 	defer resetFullFilePreloadForTest(64<<20, 4, 128<<20)()
+	SetMemoryCachePressureTargetPercentByOwner("test-rss", 80, time.Now().Add(time.Minute))
 
 	storage := &rangeRecordingObjectStorage{data: "0123456789abcdef"}
 	fs := &S3FS{
@@ -202,6 +206,7 @@ func TestS3FSFullFilePreloadTokenCoversResultProcessing(t *testing.T) {
 
 func TestS3FSFullFilePreloadStaleLowHintFallsBackToRange(t *testing.T) {
 	defer resetFullFilePreloadForTest(64<<20, 4, 128<<20)()
+	SetMemoryCachePressureTargetPercentByOwner("test-rss", 80, time.Now().Add(time.Minute))
 
 	storage := &rangeRecordingObjectStorage{data: "0123456789abcdef"}
 	fs := &S3FS{
