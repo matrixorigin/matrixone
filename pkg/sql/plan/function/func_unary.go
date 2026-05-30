@@ -3461,8 +3461,10 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 // returns the frozen bytes, so historical snapshots stay reproducible even if
 // the external object is overwritten out of band.
 //
-//   - Inputs that already carry a valid contenthash are validated and returned
-//     unchanged (idempotent): no live read and no second CAS write.
+//   - Inputs that already carry a valid contenthash are returned unchanged
+//     (idempotent) only when the CAS blob exists in the caller's account; if it is
+//     absent (e.g. minted by another account), they are re-pinned from the live
+//     source and the live bytes must still reproduce the declared hash.
 //   - If the external file cannot be read, pin errors out (never silently falls
 //     back to an un-pinned value).
 //   - The default, un-pinned datalink behavior is unaffected: only values passed
@@ -3497,8 +3499,15 @@ func DatalinkPin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 // pinDatalink reads the live bytes of rawURL, stores them in the CAS, and returns
-// rawURL rewritten to address that immutable copy via ?contenthash=. Already
-// pinned URLs are validated and returned unchanged.
+// rawURL rewritten to address that immutable copy via ?contenthash=.
+//
+// An already-pinned URL is idempotent only when its CAS blob exists in the calling
+// account's namespace; then it is validated and returned unchanged (no live read,
+// no second CAS write). If the blob is absent for this account (e.g. a contenthash
+// minted by another account), the URL is re-pinned from the live source for the
+// current account, and the live bytes must still reproduce the declared hash —
+// otherwise the requested version is unavailable and pin errors out rather than
+// silently pinning different bytes.
 func pinDatalink(rawURL string, casFS fileservice.FileService, proc *process.Process) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -3506,15 +3515,41 @@ func pinDatalink(rawURL string, casFS fileservice.FileService, proc *process.Pro
 	}
 
 	q := u.Query()
-	// already pinned -> idempotent. Match case-insensitively, consistent with
-	// ParseDatalink which lower-cases query keys.
+	// Detect an existing contenthash (case-insensitively, consistent with
+	// ParseDatalink which lower-cases query keys).
+	var pinnedKey, pinnedHash string
 	for k := range q {
 		if strings.EqualFold(k, datalink.ContentHashKey) {
-			if err := datalink.ValidateContentHash(strings.ToLower(q.Get(k))); err != nil {
-				return "", err
-			}
+			pinnedKey = k
+			pinnedHash = strings.ToLower(q.Get(k))
+			break
+		}
+	}
+
+	if pinnedKey != "" {
+		if err := datalink.ValidateContentHash(pinnedHash); err != nil {
+			return "", err
+		}
+		accountID, err := defines.GetAccountId(proc.Ctx)
+		if err != nil {
+			return "", err
+		}
+		// Idempotent only when the blob actually exists in THIS account's CAS
+		// namespace. A contenthash present only in another account's namespace would
+		// otherwise be returned unchanged and fail at read time; re-pin it from the
+		// live source for the current account instead.
+		exists, err := datalink.CASExists(proc.Ctx, casFS, accountID, pinnedHash)
+		if err != nil {
+			return "", err
+		}
+		if exists {
 			return rawURL, nil
 		}
+		// Strip the contenthash so the live external path is read below; otherwise
+		// NewDatalink would resolve to the (missing) CAS key instead of the file.
+		q.Del(pinnedKey)
+		u.RawQuery = q.Encode()
+		rawURL = u.String()
 	}
 
 	// read the live bytes this datalink currently references
@@ -3543,6 +3578,17 @@ func pinDatalink(rawURL string, casFS fileservice.FileService, proc *process.Pro
 	fileBytes, err := dl.GetBytes(proc)
 	if err != nil {
 		return "", err
+	}
+
+	// Re-pin of an already-pinned input: the live bytes must still reproduce the
+	// declared version. If they no longer match, that version is unavailable to the
+	// current account, so error out rather than silently pinning different bytes.
+	if pinnedHash != "" {
+		sum := sha256.Sum256(fileBytes)
+		if got := hex.EncodeToString(sum[:]); got != pinnedHash {
+			return "", moerr.NewInternalErrorf(proc.Ctx,
+				"datalink_pin: live content no longer matches pinned contenthash %s (now %s)", pinnedHash, got)
+		}
 	}
 
 	// Namespace the CAS object by the calling account (resolved from the trusted

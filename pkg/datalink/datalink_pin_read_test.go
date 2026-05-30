@@ -131,6 +131,19 @@ func TestNewReadCloserPinnedCrossAccountIsolated(t *testing.T) {
 	require.Error(t, err)
 }
 
+// A pinned (contenthash) datalink addresses an immutable CAS object, so writes
+// must be refused: NewWriter would otherwise build a writer over the internal CAS
+// key (MoPath), clobbering the content-addressed store at the wrong backing path.
+func TestNewWriterRejectsPinned(t *testing.T) {
+	proc, _ := procWithAccount(t)
+	dl, err := NewDatalink("file:///bogus/path.txt?contenthash="+strings.Repeat("a", 64), proc)
+	require.NoError(t, err)
+	require.NotEmpty(t, dl.ContentHash)
+
+	_, err = dl.NewWriter(proc)
+	require.Error(t, err)
+}
+
 // Reading a pinned datalink whose CAS object is missing errors out: it never
 // falls back to the live (bogus) path.
 func TestNewReadCloserPinnedMissing(t *testing.T) {

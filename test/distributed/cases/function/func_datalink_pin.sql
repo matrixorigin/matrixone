@@ -64,3 +64,8 @@ create account pin_acc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 select load_file(cast('file:///x.txt?contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a' as datalink)) as cross_account_blocked;
 -- @session
 drop account pin_acc;
+
+-- 12. writes to a pinned (contenthash) datalink are rejected: the pinned value
+--     addresses an immutable CAS object whose internal key is not a writable
+--     external path, so save_file must error rather than clobber the wrong path.
+select save_file(cast('file:///bogus/path.txt?contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a' as datalink), 'should-fail') as pin_write_rejected;
