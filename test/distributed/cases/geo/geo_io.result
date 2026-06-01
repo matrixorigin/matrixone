@@ -1,0 +1,59 @@
+select st_astext(st_geomfromtext('POINT(1 2)')) as point;
+point
+POINT(1 2)
+select st_astext(st_geomfromtext('LINESTRING(0 0,1 1,2 3)')) as linestring;
+linestring
+LINESTRING(0 0,1 1,2 3)
+select st_astext(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))')) as polygon;
+polygon
+POLYGON((0 0,4 0,4 4,0 4,0 0))
+select st_astext(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0),(2 2,2 4,4 4,4 2,2 2))')) as polygon_hole;
+polygon_hole
+POLYGON((0 0,10 0,10 10,0 10,0 0),(2 2,2 4,4 4,4 2,2 2))
+select st_astext(st_geomfromtext('MULTIPOINT(1 1,2 2)')) as multipoint;
+multipoint
+MULTIPOINT(1 1,2 2)
+select st_astext(st_geomfromtext('MULTILINESTRING((0 0,1 1),(2 2,3 3))')) as multilinestring;
+multilinestring
+MULTILINESTRING((0 0,1 1),(2 2,3 3))
+select st_astext(st_geomfromtext('MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((2 2,3 2,3 3,2 2)))')) as multipolygon;
+multipolygon
+MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((2 2,3 2,3 3,2 2)))
+select st_astext(st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0,1 1))')) as collection;
+collection
+GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0,1 1))
+select st_astext(st_geomfromtext('POINT EMPTY')) as point_empty;
+point_empty
+POINT EMPTY
+select st_astext(st_geomfromtext('GEOMETRYCOLLECTION EMPTY')) as collection_empty;
+collection_empty
+GEOMETRYCOLLECTION EMPTY
+select st_astext(st_geomfromtext('POINT(-1.5 2.25)')) as decimals;
+decimals
+POINT(-1.5 2.25)
+select st_astext(st_geomfromtext('POINT(1e2 -3.5e-1)')) as scientific;
+scientific
+POINT(100 -0.35)
+select st_astext(cast('POINT(7 8)' as geometry)) as cast_point;
+cast_point
+POINT(7 8)
+select st_astext(cast('POLYGON((0 0,1 0,1 1,0 1,0 0))' as geometry)) as cast_polygon;
+cast_polygon
+POLYGON((0 0,1 0,1 1,0 1,0 0))
+select st_geomfromtext('POINT(7 8)') as direct_geom;
+direct_geom
+POINT(7 8)
+select st_astext(st_geomfromtext(null)) as null_text;
+null_text
+null
+select st_astext(cast(null as geometry)) as null_cast;
+null_cast
+null
+select st_astext(cast('NOT A GEOMETRY' as geometry));
+invalid input: invalid geometry payload
+select st_astext(cast('POINT(1' as geometry));
+invalid input: invalid geometry payload
+select st_astext(cast('POINT(NaN 1)' as geometry));
+invalid input: invalid geometry payload
+select st_astext(st_geomfromtext('CIRCLE(0 0,1)'));
+invalid input: invalid geometry type
