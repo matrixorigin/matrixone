@@ -119,6 +119,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	}
 
 	vars["foreign_key_checks"] = int64(1)
+	vars["sort_spill_mem"] = int64(0)
 
 	if result, ok := vars[varName]; ok {
 		return result, nil
