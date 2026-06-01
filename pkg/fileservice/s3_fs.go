@@ -1020,15 +1020,16 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	file string,
 	getReader func(context.Context, *int64, *int64) (io.ReadCloser, error),
 ) (done bool, err error) {
-	reader, err := getReader(ctx, ptrTo[int64](0), nil)
-	if err != nil {
-		return true, err
-	}
-	stream := newFullObjectDiskCacheReader(reader, vector)
+	stream := newFullObjectDiskCacheReader(vector)
 
 	t0 := time.Now()
 	LogEvent(ctx, str_disk_cache_setfile_begin)
 	err = s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+		reader, err := getReader(ctx, ptrTo[int64](0), nil)
+		if err != nil {
+			return nil, err
+		}
+		stream.reader = reader
 		stream.opened = true
 		return stream, nil
 	})
@@ -1067,9 +1068,8 @@ type fullObjectEntryCapture struct {
 	data   bytes.Buffer
 }
 
-func newFullObjectDiskCacheReader(reader io.ReadCloser, vector *IOVector) *fullObjectDiskCacheReader {
+func newFullObjectDiskCacheReader(vector *IOVector) *fullObjectDiskCacheReader {
 	ret := &fullObjectDiskCacheReader{
-		reader: reader,
 		vector: vector,
 	}
 	for i := range vector.Entries {

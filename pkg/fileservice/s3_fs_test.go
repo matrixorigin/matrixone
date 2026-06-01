@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/xml"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -677,6 +679,46 @@ func TestS3FSFullObjectDiskCacheFillDoesNotRetainWholeObjectBuffer(t *testing.T)
 	assert.Equal(t, int64(1), pcSet.FileService.S3.Get.Load())
 	assert.Equal(t, int64(1), pcSet.FileService.Cache.Disk.Hit.Load())
 	hitVec.Release()
+}
+
+func TestS3FSReadFullObjectToDiskCacheStreamingDoesNotOpenReaderWhenCacheExists(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	assert.Nil(t, err)
+	defer cache.Close(ctx)
+
+	written, err := cache.SetFile(ctx, "foo/bar", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("hello world"))), nil
+	})
+	assert.Nil(t, err)
+	assert.True(t, written)
+
+	fs := &S3FS{
+		diskCache: cache,
+	}
+	vector := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Offset: 1,
+				Size:   4,
+			},
+		},
+	}
+
+	getReaderCalls := 0
+	done, err := fs.readFullObjectToDiskCacheStreaming(
+		ctx,
+		vector,
+		"foo/bar",
+		func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+			getReaderCalls++
+			return io.NopCloser(bytes.NewReader([]byte("backend"))), nil
+		},
+	)
+	assert.Nil(t, err)
+	assert.False(t, done)
+	assert.Zero(t, getReaderCalls)
 }
 
 type S3CredentialTestCase struct {
