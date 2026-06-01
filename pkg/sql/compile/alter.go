@@ -98,6 +98,9 @@ func alterCopyPkColumnValueUnchanged(oldCol, newCol *plan.ColDef) bool {
 		oldTyp.GetEnumvalues() == newTyp.GetEnumvalues()
 }
 
+// Only precheck source rows when the copied PK columns keep value-preserving
+// definitions. If ALTER changes the key value during copy, insert-time dedup
+// must remain enabled for the target table.
 func getAlterCopyPkPrecheck(qry *plan.AlterTable) (pkCols []string, checkNotNull bool) {
 	if qry == nil || qry.Options == nil || qry.Options.GetSkipPkDedup() {
 		return nil, false
@@ -227,6 +230,8 @@ func (c *Compile) precheckAlterCopyPkDedup(dbName, tblName string, qry *plan.Alt
 		return qry.Options, nil
 	}
 
+	// Prove PK validity on the source snapshot first, then let insert-copy avoid
+	// building the target-side PK dedup hash table for the full backfill.
 	if checkNotNull {
 		nullCheckSQL := buildAlterCopyPkNullCheckSQL(dbName, tblName, pkCols)
 		nullCheckRes, err := c.runSqlWithResultAndOptions(nullCheckSQL, NoAccountId, executor.StatementOption{}.WithDisableLog())

@@ -20,10 +20,16 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	pbtask "github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -84,8 +90,11 @@ func handleCreateSQLTask(ctx context.Context, ses *Session, stmt *tree.CreateSQL
 	if err != nil {
 		return err
 	}
-	_, err = store.AddSQLTask(ctx, sqlTask)
-	return err
+	if _, err = store.AddSQLTask(ctx, sqlTask); err != nil {
+		return err
+	}
+	syncSQLTaskMetadataCommitTimestamp(ctx, ses)
+	return nil
 }
 
 func handleAlterSQLTask(ctx context.Context, ses *Session, stmt *tree.AlterSQLTask) error {
@@ -132,8 +141,11 @@ func handleAlterSQLTask(ctx context.Context, ses *Session, stmt *tree.AlterSQLTa
 		sqlTask.TimeoutSeconds = timeoutSeconds
 	}
 	sqlTask.UpdatedAt = now
-	_, err = store.UpdateSQLTask(ctx, []taskservice.SQLTask{sqlTask}, taskservice.WithTaskIDCond(taskservice.EQ, sqlTask.TaskID))
-	return err
+	if _, err = store.UpdateSQLTask(ctx, []taskservice.SQLTask{sqlTask}, taskservice.WithTaskIDCond(taskservice.EQ, sqlTask.TaskID)); err != nil {
+		return err
+	}
+	syncSQLTaskMetadataCommitTimestamp(ctx, ses)
+	return nil
 }
 
 func handleDropSQLTask(ctx context.Context, ses *Session, stmt *tree.DropSQLTask) error {
@@ -156,8 +168,11 @@ func handleDropSQLTask(ctx context.Context, ses *Session, stmt *tree.DropSQLTask
 		return moerr.NewInternalErrorf(ctx, "sql task %s not found", string(stmt.Name))
 	}
 	sqlTask := tasks[0]
-	_, err = store.DeleteSQLTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, sqlTask.TaskID))
-	return err
+	if _, err = store.DeleteSQLTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, sqlTask.TaskID)); err != nil {
+		return err
+	}
+	syncSQLTaskMetadataCommitTimestamp(ctx, ses)
+	return nil
 }
 
 func handleExecuteSQLTask(ctx context.Context, ses *Session, stmt *tree.ExecuteSQLTask) error {
@@ -193,6 +208,7 @@ func handleExecuteSQLTask(ctx context.Context, ses *Session, stmt *tree.ExecuteS
 		}
 		return err
 	}
+	syncSQLTaskMetadataCommitTimestamp(ctx, ses)
 	return nil
 }
 
@@ -332,6 +348,67 @@ func getSQLTaskService(ctx context.Context, ses *Session) (taskservice.TaskServi
 		return nil, moerr.NewInternalError(ctx, "task service not ready yet, please try again later.")
 	}
 	return ts, nil
+}
+
+// SQL task metadata is written through task storage, which may connect through another CN.
+// Sync the current CN to the cluster's latest commit ts before returning to the session.
+func syncSQLTaskMetadataCommitTimestamp(ctx context.Context, ses *Session) {
+	if ses == nil || ses.proc == nil || ses.proc.Base == nil {
+		return
+	}
+	qc := ses.proc.Base.QueryClient
+	txnClient := ses.proc.Base.TxnClient
+	if qc == nil || txnClient == nil {
+		return
+	}
+	cluster := clusterservice.GetMOCluster(qc.ServiceID())
+	if cluster == nil {
+		return
+	}
+
+	addresses := make([]string, 0, 4)
+	cluster.GetCNService(
+		clusterservice.NewSelectAll(),
+		func(cn metadata.CNService) bool {
+			if cn.QueryAddress != "" {
+				addresses = append(addresses, cn.QueryAddress)
+			}
+			return true
+		},
+	)
+
+	var (
+		maxCommitTS timestamp.Timestamp
+		hasTS       bool
+	)
+	for _, addr := range addresses {
+		req := qc.NewRequest(querypb.CmdMethod_GetCommit)
+		ctxReq, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseSyncLatestCommitT)
+		resp, err := qc.SendMessage(ctxReq, addr, req)
+		cancel()
+		if err != nil {
+			logutil.Warn(
+				"sql task sync commit timestamp failed",
+				zap.String("address", addr),
+				zap.Error(err),
+			)
+			continue
+		}
+		if resp == nil {
+			continue
+		}
+		if commitResp := resp.GetCommit; commitResp != nil {
+			if !hasTS || maxCommitTS.Less(commitResp.CurrentCommitTS) {
+				maxCommitTS = commitResp.CurrentCommitTS
+				hasTS = true
+			}
+		}
+		qc.Release(resp)
+	}
+
+	if hasTS {
+		txnClient.SyncLatestCommitTS(maxCommitTS)
+	}
 }
 
 func getSQLTaskByName(ctx context.Context, store taskservice.TaskStorage, name string, accountID uint32) (taskservice.SQLTask, error) {
