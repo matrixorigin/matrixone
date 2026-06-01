@@ -4008,6 +4008,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("join_spill_mem", 0, common.TiB, false),
 		Default:           int64(0),
 	},
+	"sort_spill_mem": {
+		Name:              "sort_spill_mem",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("sort_spill_mem", 0, common.TiB, false),
+		Default:           int64(0),
+	},
 	"max_dop": {
 		Name:              "max_dop",
 		Scope:             ScopeBoth,
