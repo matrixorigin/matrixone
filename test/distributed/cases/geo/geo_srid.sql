@@ -16,13 +16,22 @@ select st_srid(st_geometryn(st_geomfromtext('MULTIPOINT(1 1,2 2)', 4326), 1)) as
 -- The geometry itself round-trips regardless of SRID.
 select st_astext(st_geomfromtext('POINT(1 2)', 4326)) as wkt_with_srid;
 
--- A SRID column records its declared SRID in the schema.
+-- A SRID column records its declared SRID and stores matching-SRID geometries.
 drop database if exists geo_srid;
 create database geo_srid;
 use geo_srid;
 drop table if exists gs;
 create table gs(g point srid 4326);
 show create table gs;
+insert into gs values (st_geomfromtext('POINT(1 1)', 4326));
+insert into gs values (st_geomfromtext('POINT(2 2)', 4326));
+select st_astext(g) as wkt, st_srid(g) as srid from gs order by 1;
+-- A geometry with a different SRID is rejected.
+-- @regex("does not match",true)
+insert into gs values (st_geomfromtext('POINT(3 3)', 0));
+-- A geometry with no SRID is rejected for a SRID-constrained column.
+-- @regex("does not match",true)
+insert into gs values (st_geomfromtext('POINT(3 3)'));
 drop table gs;
 
 -- A plain geometry column has SRID 0.

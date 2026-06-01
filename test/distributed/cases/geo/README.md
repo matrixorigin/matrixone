@@ -33,6 +33,6 @@ Then run them normally:
 ## Scope notes
 
 Tests intentionally cover only what is implemented today. Not yet exercised
-(pending follow-up work): inserting into `SRID`-constrained columns, `GEOMETRY32`
-value storage / `geometry`↔`geometry32` casts, and geodetic (SRID 4326)
-computation — spatial measures here are Cartesian.
+(pending follow-up work): `GEOMETRY32` value storage / `geometry`↔`geometry32`
+casts, and geodetic (SRID 4326) computation — spatial measures here are
+Cartesian.
