@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -1340,8 +1339,24 @@ func GetPrefetchOnSubscribed() (bool, []*regexp.Regexp) {
 	return true, regexps
 }
 
+// DocIDFilter is a membership filter over doc_id values used to prune the
+// fulltext index scan to the candidate docs that pass the surrounding
+// relational predicate. It is implemented by *bloomfilter.CBloomFilter (the
+// fallback for non-integer PKs, satisfied structurally) and by the roaring64
+// bitset wrapper in pkg/common/docfilter (the exact filter for integer PKs).
+type DocIDFilter interface {
+	// Test reports whether the raw fixed bytes of a single doc_id may be present.
+	Test(data []byte) bool
+	// TestVector tests every row of a doc_id vector, invoking cb(exist, isnull, row).
+	TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8
+	// Valid reports whether the filter is usable.
+	Valid() bool
+	// Free releases any resources held by the filter.
+	Free()
+}
+
 type FilterHint struct {
 	Must        bool
 	BloomFilter []byte
-	BF          *bloomfilter.CBloomFilter
+	BF          DocIDFilter
 }

@@ -27,7 +27,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	commonUtil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -2334,24 +2334,25 @@ func (tbl *txnTable) BuildReaders(
 	def := tbl.GetTableDef(ctx)
 	shards := relData.Split(newNum)
 
-	var mainBF *bloomfilter.CBloomFilter
+	// Reconstruct the doc_id filter from the tagged bytes. docfilter hides which
+	// structure (cbitmap / CRoaring / bloom) backs it; we just hand each reader
+	// a share and free the builder reference at the end.
+	var mainFilter docfilter.DocIDFilter
 	if len(filterHint.BloomFilter) > 0 {
-		mainBF = &bloomfilter.CBloomFilter{}
-		if err := mainBF.Unmarshal(filterHint.BloomFilter); err != nil {
-			mainBF = nil
+		if f, ferr := docfilter.New(filterHint.BloomFilter); ferr == nil {
+			mainFilter = f
 		}
 	}
 
 	for i := 0; i < newNum; i++ {
 		hint := filterHint
-		if mainBF != nil {
-			// CBloomFilter is thread safe for Test and TestVector
-			hint.BF = mainBF.SharePointer()
+		if mainFilter != nil {
+			hint.BF = mainFilter.Share()
 		}
 		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shards[i], tombstonePolicy, engine.GeneralLocalDataSource)
 		if err != nil {
-			if mainBF != nil {
-				mainBF.Free()
+			if mainFilter != nil {
+				mainFilter.Free()
 			}
 			return nil, err
 		}
@@ -2368,8 +2369,8 @@ func (tbl *txnTable) BuildReaders(
 			hint,
 		)
 		if err != nil {
-			if mainBF != nil {
-				mainBF.Free()
+			if mainFilter != nil {
+				mainFilter.Free()
 			}
 			return nil, err
 		}
@@ -2377,8 +2378,8 @@ func (tbl *txnTable) BuildReaders(
 		rds = append(rds, rd)
 	}
 
-	if mainBF != nil {
-		mainBF.Free()
+	if mainFilter != nil {
+		mainFilter.Free()
 	}
 	return rds, nil
 }

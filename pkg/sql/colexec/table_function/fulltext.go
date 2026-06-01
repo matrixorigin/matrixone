@@ -22,7 +22,7 @@ import (
 	"sync"
 
 	"github.com/bytedance/sonic"
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -878,8 +878,6 @@ func fulltextIndexMatch(
 	return
 }
 
-const fulltextBfProbability = 0.001
-
 // fulltextBloomFilterResult holds the result from waiting for a BloomFilter runtime filter.
 type fulltextBloomFilterResult struct {
 	bloomFilterBytes []byte // serialized CBloomFilter for reader-level filtering
@@ -910,14 +908,12 @@ func waitFulltextBloomFilter(proc *process.Process, specs []*plan.RuntimeFilterS
 	}
 	defer keyvec.Free(proc.Mp())
 
-	// Build CBloomFilter for reader-level doc_id filtering
-	bf := bloomfilter.NewCBloomFilterWithProbability(int64(keyvec.Length()), fulltextBfProbability)
-	bf.AddVector(keyvec)
-	bfBytes, marshalErr := bf.Marshal()
-	bf.Free()
-	if marshalErr != nil {
-		return nil, marshalErr
+	// docfilter picks and tags the doc_id filter structure (exact bitset for
+	// integer PKs, CBloomFilter otherwise); the reader's docfilter.New
+	// reconstructs it. The caller need not know which structure is used.
+	payload, err := docfilter.Build(keyvec)
+	if err != nil {
+		return nil, err
 	}
-
-	return &fulltextBloomFilterResult{bloomFilterBytes: bfBytes}, nil
+	return &fulltextBloomFilterResult{bloomFilterBytes: payload}, nil
 }

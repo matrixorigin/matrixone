@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -383,17 +384,17 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	buildBloomFilterWithUniqueJoinKeys := func(vec *vector.Vector) error {
 		// sometimes user create index with empty data and lead to have single NIL centroid
 		// all entries will have centroid_id = 1. i.e. whole table scan
-		// In this case, build bloomfilter with unique join keys
-
-		ukeybf := bloomfilter.NewCBloomFilterWithProbability(int64(vec.Length()), bfProbability)
-		defer ukeybf.Free()
-		ukeybf.AddVector(vec)
-
-		ukeybfbytes, err := ukeybf.Marshal()
+		// In this case, build the filter from the unique join keys.
+		//
+		// docfilter picks the structure: an exact bitset (cbitmap / CRoaring) for
+		// integer PKs — no false positives, which also avoids the bloom-fp /
+		// centroid-pruning interaction in IVF pre mode — or a CBloomFilter
+		// otherwise. The reader's docfilter.New reconstructs it from the tag.
+		payload, err := docfilter.Build(vec)
 		if err != nil {
 			return err
 		}
-		sqlproc.IvfBloomFilter = ukeybfbytes
+		sqlproc.IvfBloomFilter = payload
 		return nil
 	}
 
@@ -474,37 +475,16 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		return moerr.NewInternalError(sqlproc.GetContext(), "result from bloomfilter size not match with input key vector")
 	}
 
-	nexist := 0
-	for _, e := range exists {
-		if e != 0 {
-			nexist++
-		}
-	}
-
-	bf2 := bloomfilter.NewCBloomFilterWithProbability(int64(nexist), bfProbability)
-	defer func() {
-		if bf2 != nil {
-			bf2.Free()
-		}
-	}()
-
-	// Add filtered key to bloomfilter
-	if nexist > 0 {
-		for i, e := range exists {
-			if e != 0 {
-				bf2.Add(keyvec.GetRawBytesAt(i))
-			}
-		}
-	}
-	bfbytes, err := bf2.Marshal()
+	// docfilter builds the filter over the centroid-filtered keys (the `exists`
+	// mask): an exact bitset for integer PKs (no false positives, which avoids
+	// the bloom-fp / centroid-pruning interaction in IVF pre mode), else a
+	// CBloomFilter. The reader's docfilter.New reconstructs it from the tag.
+	payload, err := docfilter.BuildMasked(keyvec, exists)
 	if err != nil {
 		return err
 	}
-	sqlproc.IvfBloomFilter = bfbytes
-
-	//os.Stderr.WriteString(fmt.Sprintf("IVF BloomFilter Build: #Entries for selected centers =  %d, #UniqueKey = %d, #ExistAfterFilter = %d,  Built Time = %v\n", rowCount, keyvec.Length(), nexist, elapsed))
-
-	return
+	sqlproc.IvfBloomFilter = payload
+	return nil
 }
 
 // Call usearch.Search

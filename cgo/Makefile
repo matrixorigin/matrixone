@@ -8,9 +8,9 @@ CC ?= gcc
 OPT_LV := -O3 -ffast-math -ftree-vectorize -funroll-loops
 COMMON_CFLAGS := -g $(OPT_LV) -Wall -Werror -fPIC -I../thirdparties/install/include
 CFLAGS := -std=c99 $(COMMON_CFLAGS)
-OBJS := mo.o arith.o compare.o logic.o xcall.o usearchex.o bloom.o
+OBJS := mo.o arith.o compare.o logic.o xcall.o usearchex.o bloom.o croaring.o
 CUDA_OBJS :=
-LDFLAGS := -L../thirdparties/install/lib -lusearch_c
+LDFLAGS := -L../thirdparties/install/lib -lusearch_c -lroaring
 TARGET_LIB := libmo.so
 
 ifeq ($(UNAME_S),Darwin)
