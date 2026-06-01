@@ -61,6 +61,71 @@ func TestDecimal128IntDivOverflowMessage(t *testing.T) {
 	require.ErrorContains(t, err, "data out of range: data type BIGINT")
 }
 
+func TestDecimal128IntDivFallbackCoverage(t *testing.T) {
+	var dst types.Decimal128
+	require.False(t, d128IntDivInline(types.Decimal128{B64_127: 1 << 62}, 1, 0, 10, &dst))
+	require.False(t, d128IntDivInline(types.Decimal128{B0_63: ^uint64(0)}, 1, 0, ^uint64(0), &dst))
+
+	rsnull := nulls.NewWithSize(2)
+	err := d128IntDivOne(types.Decimal128{B0_63: 1}, types.Decimal128{}, &dst, 0, rsnull, 1, false, 0, 0)
+	require.NoError(t, err)
+	require.True(t, rsnull.Contains(1))
+
+	err = d128IntDivOne(types.Decimal128{B0_63: 1}, types.Decimal128{}, &dst, 0, rsnull, 0, true, 0, 0)
+	require.Error(t, err)
+
+	large := types.Decimal128{B64_127: 1}
+	divisor := mustParseD128("100000000000000000000")
+	err = d128IntDivOne(large, divisor, &dst, 20, nulls.NewWithSize(1), 0, true, 0, 20)
+	require.NoError(t, err)
+	require.Equal(t, large, dst)
+
+	err = d128IntDivOne(types.Decimal128{B0_63: 10}, large, &dst, -20, nulls.NewWithSize(1), 0, true, 20, 0)
+	require.NoError(t, err)
+	require.Equal(t, types.Decimal128{}, dst)
+
+	err = d128IntDivOne(types.Decimal128{B0_63: 1}, types.Decimal128{B0_63: 1}, &dst, 39, nulls.NewWithSize(1), 0, true, 0, 39)
+	require.ErrorContains(t, err, "Decimal128 IntDiv overflow")
+
+	err = d128IntDivOne(types.Decimal128{B0_63: 1}, large, &dst, -100, nulls.NewWithSize(1), 0, true, 100, 0)
+	require.ErrorContains(t, err, "Decimal128 IntDiv overflow")
+}
+
+func TestDecimalIntDivScaleAndFallbackBranches(t *testing.T) {
+	t.Run("D128ScalarVectorFallback", func(t *testing.T) {
+		v1 := []types.Decimal128{{B64_127: 1}}
+		v2 := []types.Decimal128{{B0_63: 2}, {B0_63: 4}}
+		rs := make([]int64, len(v2))
+		require.Error(t, d128IntDiv(v1, v2, rs, 0, 0, nulls.NewWithSize(len(v2)), true))
+	})
+
+	t.Run("D128VectorScalarFallback", func(t *testing.T) {
+		v1 := []types.Decimal128{{B64_127: 1}, {B64_127: 2}}
+		v2 := []types.Decimal128{{B0_63: 2}}
+		rs := make([]int64, len(v1))
+		require.Error(t, d128IntDiv(v1, v2, rs, 0, 0, nulls.NewWithSize(len(v1)), true))
+	})
+
+	t.Run("D64ScalarBranches", func(t *testing.T) {
+		v1 := []types.Decimal64{100}
+		v2 := []types.Decimal64{3, types.Decimal64(^uint64(2))}
+		rs := make([]int64, len(v2))
+		require.NoError(t, d64IntDiv(v1, v2, rs, 0, 0, nulls.NewWithSize(len(v2)), true))
+		require.Equal(t, []int64{33, -33}, rs)
+	})
+
+	t.Run("D256GenericScaleAdjust", func(t *testing.T) {
+		x := types.Decimal256{B128_191: 5}
+		y := types.Decimal256{B128_191: 2}
+		rs := make([]int64, 1)
+		require.NoError(t, d256IntDiv([]types.Decimal256{x}, []types.Decimal256{y}, rs, 0, 1, nulls.NewWithSize(1), true))
+		require.Equal(t, int64(25), rs[0])
+
+		require.NoError(t, d256IntDiv([]types.Decimal256{x}, []types.Decimal256{y}, rs, 1, 0, nulls.NewWithSize(1), true))
+		require.Equal(t, int64(0), rs[0])
+	})
+}
+
 func mustParseD128(s string) types.Decimal128 {
 	d, err := types.ParseDecimal128(s, 38, 0)
 	if err != nil {
