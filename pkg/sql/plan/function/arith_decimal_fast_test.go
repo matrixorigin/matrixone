@@ -1976,6 +1976,22 @@ func BenchmarkD128IntDiv_Generic(b *testing.B) {
 	}
 }
 
+func BenchmarkD128Sub_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal128, benchN)
+	ys := make([]types.Decimal128, benchN)
+	rs := make([]types.Decimal128, benchN)
+	for i := range xs {
+		xs[i] = randD128(rng)
+		ys[i] = randD128(rng)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d128Sub(xs, ys, rs, 2, 2, nul)
+	}
+}
+
 func randD256(rng *rand.Rand) types.Decimal256 {
 	return types.Decimal256{
 		B0_63:    rng.Uint64(),

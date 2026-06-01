@@ -29,13 +29,24 @@ package function
 import (
 	"math"
 	"math/bits"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/simdkernels"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// d128AsU64 reinterprets a []Decimal128 as []uint64 (lo, hi, lo, hi, ...).
+// Decimal128 is exactly {B0_63, B64_127 uint64} with no padding.
+func d128AsU64(s []types.Decimal128) []uint64 {
+	if len(s) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*uint64)(unsafe.Pointer(&s[0])), len(s)*2)
+}
 
 func operandsAt[T any](v1, v2 []T, idx int) (T, T) {
 	// Branchless: mask is 0 when len==1 (scalar), -1 when len>1 (vector).
@@ -140,14 +151,7 @@ func d128AddSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 
 	if len1 == len2 {
 		if noNull {
-			for i := 0; i < len1; i++ {
-				signX := v1[i].B64_127 >> 63
-				rs[i].B0_63, carry = bits.Add64(v1[i].B0_63, v2[i].B0_63, 0)
-				rs[i].B64_127, _ = bits.Add64(v1[i].B64_127, v2[i].B64_127, carry)
-				if signX == v2[i].B64_127>>63 && signX != rs[i].B64_127>>63 {
-					return i
-				}
-			}
+			return simdkernels.D128AddChecked(d128AsU64(v1), d128AsU64(v2), d128AsU64(rs))
 		} else {
 			for i := 0; i < len1; i++ {
 				if bmp.Contains(uint64(i)) {
@@ -165,13 +169,7 @@ func d128AddSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 		a := v1[0]
 		signA := a.B64_127 >> 63
 		if noNull {
-			for i := 0; i < len2; i++ {
-				rs[i].B0_63, carry = bits.Add64(a.B0_63, v2[i].B0_63, 0)
-				rs[i].B64_127, _ = bits.Add64(a.B64_127, v2[i].B64_127, carry)
-				if signA == v2[i].B64_127>>63 && signA != rs[i].B64_127>>63 {
-					return i
-				}
-			}
+			return simdkernels.D128AddScalarChecked(a.B0_63, a.B64_127, d128AsU64(v2), d128AsU64(rs))
 		} else {
 			for i := 0; i < len2; i++ {
 				if bmp.Contains(uint64(i)) {
@@ -188,13 +186,7 @@ func d128AddSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 		b := v2[0]
 		signB := b.B64_127 >> 63
 		if noNull {
-			for i := 0; i < len1; i++ {
-				rs[i].B0_63, carry = bits.Add64(v1[i].B0_63, b.B0_63, 0)
-				rs[i].B64_127, _ = bits.Add64(v1[i].B64_127, b.B64_127, carry)
-				if v1[i].B64_127>>63 == signB && v1[i].B64_127>>63 != rs[i].B64_127>>63 {
-					return i
-				}
-			}
+			return simdkernels.D128AddScalarChecked(b.B0_63, b.B64_127, d128AsU64(v1), d128AsU64(rs))
 		} else {
 			for i := 0; i < len1; i++ {
 				if bmp.Contains(uint64(i)) {
@@ -291,14 +283,7 @@ func d128SubSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 
 	if len1 == len2 {
 		if noNull {
-			for i := 0; i < len1; i++ {
-				signX := v1[i].B64_127 >> 63
-				rs[i].B0_63, borrow = bits.Sub64(v1[i].B0_63, v2[i].B0_63, 0)
-				rs[i].B64_127, _ = bits.Sub64(v1[i].B64_127, v2[i].B64_127, borrow)
-				if signX != v2[i].B64_127>>63 && signX != rs[i].B64_127>>63 {
-					return i
-				}
-			}
+			return simdkernels.D128SubChecked(d128AsU64(v1), d128AsU64(v2), d128AsU64(rs))
 		} else {
 			for i := 0; i < len1; i++ {
 				if bmp.Contains(uint64(i)) {
@@ -316,13 +301,7 @@ func d128SubSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 		a := v1[0]
 		signA := a.B64_127 >> 63
 		if noNull {
-			for i := 0; i < len2; i++ {
-				rs[i].B0_63, borrow = bits.Sub64(a.B0_63, v2[i].B0_63, 0)
-				rs[i].B64_127, _ = bits.Sub64(a.B64_127, v2[i].B64_127, borrow)
-				if signA != v2[i].B64_127>>63 && signA != rs[i].B64_127>>63 {
-					return i
-				}
-			}
+			return simdkernels.D128ScalarSubChecked(a.B0_63, a.B64_127, d128AsU64(v2), d128AsU64(rs))
 		} else {
 			for i := 0; i < len2; i++ {
 				if bmp.Contains(uint64(i)) {
@@ -339,14 +318,7 @@ func d128SubSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 		b := v2[0]
 		signB := b.B64_127 >> 63
 		if noNull {
-			for i := 0; i < len1; i++ {
-				signX := v1[i].B64_127 >> 63
-				rs[i].B0_63, borrow = bits.Sub64(v1[i].B0_63, b.B0_63, 0)
-				rs[i].B64_127, _ = bits.Sub64(v1[i].B64_127, b.B64_127, borrow)
-				if signX != signB && signX != rs[i].B64_127>>63 {
-					return i
-				}
-			}
+			return simdkernels.D128SubScalarChecked(d128AsU64(v1), b.B0_63, b.B64_127, d128AsU64(rs))
 		} else {
 			for i := 0; i < len1; i++ {
 				if bmp.Contains(uint64(i)) {
