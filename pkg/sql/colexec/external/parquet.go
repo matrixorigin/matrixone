@@ -687,6 +687,24 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				return parquetValueToUint64(proc.Ctx, st, v)
 			})
 		}
+	case types.T_bit:
+		if !isParquetIntegerSource(st, true) {
+			break
+		}
+		bitWidth := parquetBitWidth(dt)
+		maxValue := maxParquetBitValue(bitWidth)
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, uint64(0), func(v parquet.Value) (uint64, error) {
+				val, err := parquetValueToUint64(proc.Ctx, st, v)
+				if err != nil {
+					return 0, err
+				}
+				if val > maxValue {
+					return 0, moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows BIT(%d)", val, bitWidth)
+				}
+				return val, nil
+			})
+		}
 	case types.T_float32:
 		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(st.LogicalType()) {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
@@ -1026,6 +1044,16 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					types.Time(0),
 				)
 			}
+		} else if isParquetIntegerSource(st, false) {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Time(0), func(v parquet.Value) (types.Time, error) {
+					val, err := parquetValueToInt64(proc.Ctx, st, v)
+					if err != nil {
+						return 0, err
+					}
+					return types.Time(val), nil
+				})
+			}
 		} else {
 			// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#time
 			lt := st.LogicalType()
@@ -1302,6 +1330,31 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processStringToJson(proc.Ctx, mp, page, proc, vec)
+		}
+	case types.T_uuid:
+		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+				func(data []byte) (types.Uuid, error) {
+					return types.ParseUuid(util.UnsafeBytesToString(data))
+				},
+				types.Uuid{},
+			)
+		}
+	case types.T_enum:
+		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
+			break
+		}
+		enumValues := dt.Enumvalues
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+				func(data []byte) (types.Enum, error) {
+					return types.ParseEnum(enumValues, util.UnsafeBytesToString(data))
+				},
+				types.Enum(0),
+			)
 		}
 	}
 	if mp.mapper != nil {
@@ -1807,6 +1860,21 @@ func processParquetValuesToBytes(
 		}
 	}
 	return nil
+}
+
+func parquetBitWidth(dt plan.Type) int {
+	width := int(dt.Width)
+	if width <= 0 || width > types.MaxBitLen {
+		return types.MaxBitLen
+	}
+	return width
+}
+
+func maxParquetBitValue(width int) uint64 {
+	if width >= types.MaxBitLen {
+		return math.MaxUint64
+	}
+	return (uint64(1) << width) - 1
 }
 
 func isParquetIntegerSource(st parquet.Type, includeBoolean bool) bool {
