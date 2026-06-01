@@ -742,6 +742,10 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	min, max, readFullObject := vector.readRange()
+	if readFullObject && s.isFullObjectDiskCacheUpdating(vector.FilePath, path.File) {
+		min, max = vector.readMinimalRangePreserveSize()
+		readFullObject = false
+	}
 
 	// a function to get an io.ReadCloser
 	getReader := func(ctx context.Context, min *int64, max *int64) (io.ReadCloser, error) {
@@ -993,6 +997,19 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	return nil
+}
+
+func (s *S3FS) isFullObjectDiskCacheUpdating(vectorPath string, filePath string) bool {
+	if s.diskCache == nil {
+		return false
+	}
+	if s.diskCache.isUpdating(s.diskCache.pathForFile(filePath)) {
+		return true
+	}
+	if vectorPath != filePath && s.diskCache.isUpdating(s.diskCache.pathForFile(vectorPath)) {
+		return true
+	}
+	return false
 }
 
 func (s *S3FS) shouldStreamFullObjectToDiskCache(vector *IOVector) bool {

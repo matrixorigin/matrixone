@@ -681,6 +681,86 @@ func TestS3FSFullObjectDiskCacheFillDoesNotRetainWholeObjectBuffer(t *testing.T)
 	hitVec.Release()
 }
 
+func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
+	ctx := context.Background()
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(t, err)
+	defer fs.Close(ctx)
+
+	data := bytes.Repeat([]byte("abcd"), 1<<10)
+	err = fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: int64(len(data)),
+				Data: data,
+			},
+		},
+		Policy: SkipDiskCache | SkipMemoryCache,
+	})
+	assert.Nil(t, err)
+
+	updatingPath := fs.diskCache.pathForFile("foo/bar")
+	doneUpdate := fs.diskCache.startUpdate(updatingPath)
+	released := false
+	release := func() {
+		if !released {
+			doneUpdate()
+			released = true
+		}
+	}
+	defer release()
+
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		vec := &IOVector{
+			FilePath: "foo/bar",
+			Entries: []IOEntry{
+				{
+					Offset: 123,
+					Size:   7,
+				},
+			},
+		}
+		err := fs.Read(ctx, vec)
+		if err != nil {
+			readDone <- readResult{err: err}
+			return
+		}
+		readDone <- readResult{data: vec.Entries[0].Data}
+	}()
+
+	select {
+	case result := <-readDone:
+		assert.Nil(t, result.err)
+		assert.Equal(t, data[123:130], result.data)
+		assert.True(t, fs.diskCache.isUpdating(updatingPath))
+	case <-time.After(2 * time.Second):
+		release()
+		result := <-readDone
+		t.Fatalf("range read waited for full-object disk cache update: %v", result.err)
+	}
+}
+
 func TestS3FSReadFullObjectToDiskCacheStreamingDoesNotOpenReaderWhenCacheExists(t *testing.T) {
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
