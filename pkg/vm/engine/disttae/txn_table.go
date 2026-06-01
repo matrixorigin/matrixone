@@ -114,6 +114,16 @@ func releasePKCheckSemaphore() {
 	<-pkCheckSemaphore
 }
 
+// Keep this diagnostic narrow; PK range checks can be hot under concurrent DML.
+func shouldLogPKPersistedChanged(tableID uint64) bool {
+	switch tableID {
+	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
+		return true
+	default:
+		return false
+	}
+}
+
 var _ engine.Relation = new(txnTable)
 
 func newTxnTable(
@@ -1533,6 +1543,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		if !hasRowId {
 			rowIdCol := plan2.MakeRowIdColDef()
 			cols = append(cols, rowIdCol)
+			name2index[catalog.Row_ID] = int32(len(cols) - 1)
 		}
 
 		tbl.tableDef = &plan.TableDef{
@@ -2501,6 +2512,35 @@ func (tbl *txnTable) getPartitionState(
 	return
 }
 
+// pkCommitTSMatchedInRange narrows PK hits with row-level commit-ts. The second
+// return value is false when the commit-ts vector is unavailable or unusable;
+// callers should keep the original conservative behavior in that case.
+func pkCommitTSMatchedInRange(
+	commitTSVec *vector.Vector,
+	sels []int64,
+	from, to types.TS,
+) (bool, bool) {
+	if commitTSVec == nil ||
+		commitTSVec.GetType().Oid != types.T_TS ||
+		commitTSVec.IsConstNull() {
+		return false, false
+	}
+	timestamps := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
+	for _, sel := range sels {
+		if sel < 0 || int(sel) >= len(timestamps) {
+			return false, false
+		}
+		if commitTSVec.IsNull(uint64(sel)) {
+			return false, false
+		}
+		ts := timestamps[sel]
+		if ts.GT(&from) && ts.LE(&to) {
+			return true, true
+		}
+	}
+	return false, true
+}
+
 func (tbl *txnTable) PKPersistedBetween(
 	p *logtailreplay.PartitionState,
 	from types.TS,
@@ -2509,10 +2549,38 @@ func (tbl *txnTable) PKPersistedBetween(
 	checkTombstone bool,
 ) (changed bool, err error) {
 
+	start := time.Now()
+	reason := ""
+	delObjs := make(map[objectio.ObjectNameShort]struct{})
+	cObjs := make(map[objectio.ObjectNameShort]struct{})
+	candidateBlks := make(map[types.Blockid]*objectio.BlockInfo)
 	v2.TxnPKChangeCheckTotalCounter.Inc()
 	defer func() {
-		if err != nil && changed {
+		if err == nil && changed {
 			v2.TxnPKChangeCheckChangedCounter.Inc()
+		}
+		if changed {
+			if !shouldLogPKPersistedChanged(tbl.tableId) {
+				return
+			}
+			if reason == "" {
+				reason = "unknown"
+			}
+			logutil.Info(
+				"txn pk persisted check changed",
+				zap.String("reason", reason),
+				zap.String("table-name", tbl.tableName),
+				zap.String("txn", tbl.db.op.Txn().DebugString()),
+				zap.String("from", from.ToString()),
+				zap.String("to", to.ToString()),
+				zap.Int("key-count", keys.Length()),
+				zap.Int("changed-objects", len(cObjs)),
+				zap.Int("deleted-objects", len(delObjs)),
+				zap.Int("candidate-blocks", len(candidateBlks)),
+				zap.Bool("check-tombstone", checkTombstone),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err),
+			)
 		}
 	}()
 	ctx := tbl.proc.Load().Ctx
@@ -2524,12 +2592,12 @@ func (tbl *txnTable) PKPersistedBetween(
 		bf   objectio.BloomFilter
 	)
 
-	candidateBlks := make(map[types.Blockid]*objectio.BlockInfo)
-
-	//only check data objects.
-	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
+	// Only check data objects. A matching object/block can still be an older
+	// version, so later row-level commit-ts checks narrow the final answer.
+	delObjs, cObjs = p.GetChangedObjsBetween(from.Next(), types.MaxTs())
 
 	if pkCheckBailoutOnChangedObjects(len(cObjs)) {
+		reason = "changed_objects_bailout"
 		return true, nil
 	}
 
@@ -2606,6 +2674,7 @@ func (tbl *txnTable) PKPersistedBetween(
 
 			return
 		}); err != nil {
+		reason = "data_object_check_error"
 		return true, err
 	}
 
@@ -2644,10 +2713,11 @@ func (tbl *txnTable) PKPersistedBetween(
 	}
 
 	if pkCheckBailoutOnCandidateBlocks(len(candidateBlks)) {
+		reason = "candidate_blocks_bailout"
 		return true, nil
 	}
 
-	cacheVectors := containers.NewVectors(1)
+	cacheVectors := containers.NewVectors(2)
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
 	pkType := plan2.ExprType2Type(&pkDef.Typ)
@@ -2665,8 +2735,8 @@ func (tbl *txnTable) PKPersistedBetween(
 		for _, blk := range candidateBlks {
 			release, err := ioutil.LoadColumns(
 				ctx,
-				[]uint16{uint16(pkSeq)},
-				[]types.Type{pkType},
+				[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS},
+				[]types.Type{pkType, types.T_TS.ToType()},
 				fs,
 				blk.MetaLocation(),
 				cacheVectors,
@@ -2675,6 +2745,7 @@ func (tbl *txnTable) PKPersistedBetween(
 			)
 			if err != nil {
 				releasePKCheckSemaphore()
+				reason = "data_block_read_error"
 				return true, err
 			}
 
@@ -2684,18 +2755,32 @@ func (tbl *txnTable) PKPersistedBetween(
 			}
 
 			sels := searchFunc(cacheVectors)
-			release()
 			if len(sels) > 0 {
-				releasePKCheckSemaphore()
-				return true, nil
+				changed, ok := pkCommitTSMatchedInRange(&cacheVectors[1], sels, from, to)
+				release()
+				if !ok || changed {
+					releasePKCheckSemaphore()
+					if ok {
+						reason = "data_commit_ts_hit"
+					} else {
+						reason = "data_commit_ts_unavailable"
+					}
+					return true, nil
+				}
+				continue
 			}
+			release()
 		}
 		releasePKCheckSemaphore()
 	}
 	if checkTombstone {
 		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 		pkType := plan2.ExprType2Type(&pkDef.Typ)
-		return tombstonePKExistsInRange(ctx, p, from, keys, pkType, fs)
+		changed, tombstoneReason, err := tombstonePKExistsInRange(ctx, p, from, to, keys, pkType, fs)
+		if changed {
+			reason = tombstoneReason
+		}
+		return changed, err
 	}
 	return false, nil
 }
@@ -2707,20 +2792,21 @@ func tombstonePKExistsInRange(
 	ctx context.Context,
 	p *logtailreplay.PartitionState,
 	from types.TS,
+	to types.TS,
 	keys *vector.Vector,
 	pkType types.Type,
 	fs fileservice.FileService,
-) (bool, error) {
+) (bool, string, error) {
 	tombObjs := p.GetChangedTombstoneObjsBetween(from)
 	if len(tombObjs) == 0 {
-		return false, nil
+		return false, "", nil
 	}
 	const tombstoneRowsThreshold = 50000
 	var totalRows uint32
 	for i := range tombObjs {
 		totalRows += tombObjs[i].Rows()
 		if totalRows > tombstoneRowsThreshold {
-			return true, nil
+			return true, "tombstone_rows_bailout", nil
 		}
 	}
 	searchKeys := LinearSearchOffsetByValFactory(keys)
@@ -2735,17 +2821,29 @@ func tombstonePKExistsInRange(
 			tombVectors := containers.NewVectors(vecCount)
 			_, release, err := ioutil.ReadDeletes(ctx, loc, fs, isCNCreated, tombVectors, &pkType)
 			if err != nil {
-				return true, nil
+				return true, "tombstone_read_error", nil
 			}
 			pkVec := tombVectors[1]
 			hits := searchKeys(&pkVec)
-			release()
 			if len(hits) > 0 {
-				return true, nil
+				if isCNCreated {
+					release()
+					return true, "tombstone_cn_hit", nil
+				}
+				changed, ok := pkCommitTSMatchedInRange(&tombVectors[2], hits, from, to)
+				release()
+				if !ok || changed {
+					if ok {
+						return true, "tombstone_commit_ts_hit", nil
+					}
+					return true, "tombstone_commit_ts_unavailable", nil
+				}
+				continue
 			}
+			release()
 		}
 	}
-	return false, nil
+	return false, "", nil
 }
 
 func (tbl *txnTable) PrimaryKeysMayBeUpserted(
