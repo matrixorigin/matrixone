@@ -609,6 +609,76 @@ func TestS3PrefetchFile(t *testing.T) {
 
 }
 
+func TestS3FSFullObjectDiskCacheFillDoesNotRetainWholeObjectBuffer(t *testing.T) {
+	ctx := context.Background()
+	var pcSet perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &pcSet)
+
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(t, err)
+	defer fs.Close(ctx)
+
+	data := bytes.Repeat([]byte("abcd"), 1<<18)
+	err = fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: int64(len(data)),
+				Data: data,
+			},
+		},
+		Policy: SkipDiskCache | SkipMemoryCache,
+	})
+	assert.Nil(t, err)
+
+	vec := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Offset: 12345,
+				Size:   7,
+			},
+		},
+	}
+	err = fs.Read(ctx, vec)
+	assert.Nil(t, err)
+	assert.Equal(t, data[12345:12352], vec.Entries[0].Data)
+	assert.Less(t, cap(vec.Entries[0].Data), len(data)/16)
+	assert.Equal(t, int64(1), pcSet.FileService.S3.Get.Load())
+	vec.Release()
+
+	hitVec := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Offset: 54321,
+				Size:   11,
+			},
+		},
+	}
+	err = fs.Read(ctx, hitVec)
+	assert.Nil(t, err)
+	assert.Equal(t, data[54321:54332], hitVec.Entries[0].Data)
+	assert.Equal(t, int64(1), pcSet.FileService.S3.Get.Load())
+	assert.Equal(t, int64(1), pcSet.FileService.Cache.Disk.Hit.Load())
+	hitVec.Release()
+}
+
 type S3CredentialTestCase struct {
 	Skip bool
 	ObjectStorageArguments

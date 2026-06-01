@@ -196,48 +196,6 @@ var (
 	FSCachePressureMetaEvictDuration   = fsCachePressureEvictDuration.WithLabelValues("meta")
 )
 
-var (
-	fsFullFilePreloadAdmissionCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "fs",
-			Name:      "full_file_preload_admission_total",
-			Help:      "Total number of full-file preload admission decisions.",
-		}, []string{"result", "reason"})
-
-	fsFullFilePreloadInflight = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "mo",
-			Subsystem: "fs",
-			Name:      "full_file_preload_inflight",
-			Help:      "Current full-file preload inflight count and reserved bytes.",
-		}, []string{"type"})
-
-	FSFullFilePreloadInflightCount = fsFullFilePreloadInflight.WithLabelValues("count")
-	FSFullFilePreloadInflightBytes = fsFullFilePreloadInflight.WithLabelValues("bytes")
-
-	FSFullFilePreloadReadBytesCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "fs",
-			Name:      "full_file_preload_read_bytes_total",
-			Help:      "Total bytes read by admitted full-file preloads.",
-		})
-)
-
-func ObserveFSFullFilePreloadAdmission(result, reason string) {
-	fsFullFilePreloadAdmissionCounter.WithLabelValues(result, reason).Inc()
-}
-
-func SetFSFullFilePreloadInflight(count, bytes int64) {
-	FSFullFilePreloadInflightCount.Set(float64(count))
-	FSFullFilePreloadInflightBytes.Set(float64(bytes))
-}
-
-func AddFSFullFilePreloadReadBytes(bytes int64) {
-	FSFullFilePreloadReadBytesCounter.Add(float64(bytes))
-}
-
 // GetFsCacheBytesGauge return inuse, cap Gauge metric
 // {typ} should be [mem, disk, meta]
 func GetFsCacheBytesGauge(name, typ string) (inuse prometheus.Gauge, capacity prometheus.Gauge) {

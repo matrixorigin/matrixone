@@ -61,8 +61,6 @@ type S3FS struct {
 
 var _ FileService = new(S3FS)
 
-var errFullFilePreloadActualSizeExceeded = moerr.NewInternalErrorNoCtx("full-file preload actual size exceeded admission")
-
 func NewS3FS(
 	ctx context.Context,
 	args ObjectStorageArguments,
@@ -617,16 +615,19 @@ read_disk_cache:
 			return nil
 		}
 
-		defer func() {
-			if err != nil || vector.readFullObject {
-				return
-			}
-			t0 := time.Now()
-			LogEvent(ctx, str_update_disk_cache_Caches_begin)
-			err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
-			LogEvent(ctx, str_update_disk_cache_Caches_end)
-			metric.FSReadDurationUpdateDiskCache.Observe(time.Since(t0).Seconds())
-		}()
+		// try to cache IOEntry if not caching the full file
+		if vector.Policy.CacheIOEntry() {
+			defer func() {
+				if err != nil {
+					return
+				}
+				t0 := time.Now()
+				LogEvent(ctx, str_update_disk_cache_Caches_begin)
+				err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
+				LogEvent(ctx, str_update_disk_cache_Caches_end)
+				metric.FSReadDurationUpdateDiskCache.Observe(time.Since(t0).Seconds())
+			}()
+		}
 
 	}
 
@@ -644,49 +645,31 @@ read_disk_cache:
 		}
 	}
 
-	vector.resolveS3ReadMode()
-	defer func() {
-		releaseFullFilePreloadToken(vector.preloadToken)
-	}()
-
 	mayReadMemoryCache := vector.Policy&SkipMemoryCacheReads == 0
 	mayReadDiskCache := vector.Policy&SkipDiskCacheReads == 0
 	if mayReadMemoryCache || mayReadDiskCache {
-		for {
-			// may read caches, merge
-			LogEvent(ctx, str_ioMerger_Merge_begin)
-			startLock := time.Now()
-			done, wait := s.ioMerger.Merge(vector.ioMergeKey(), maxIOWaitDuration)
-			if done != nil {
-				if !vector.acquireFullFilePreloadForS3() {
-					done()
-					stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
-					metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
-					LogEvent(ctx, str_ioMerger_Merge_end)
-					continue
-				}
-				defer done()
-				stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
-				metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
-				LogEvent(ctx, str_ioMerger_Merge_initiate)
-				LogEvent(ctx, str_ioMerger_Merge_end)
-				break
+		// may read caches, merge
+		LogEvent(ctx, str_ioMerger_Merge_begin)
+		startLock := time.Now()
+		done, wait := s.ioMerger.Merge(vector.ioMergeKey(), maxIOWaitDuration)
+		if done != nil {
+			defer done()
+			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
+			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
+			LogEvent(ctx, str_ioMerger_Merge_initiate)
+			LogEvent(ctx, str_ioMerger_Merge_end)
+		} else {
+			LogEvent(ctx, str_ioMerger_Merge_wait)
+			wait()
+			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
+			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
+			LogEvent(ctx, str_ioMerger_Merge_end)
+			if mayReadMemoryCache {
+				goto read_memory_cache
 			} else {
-				LogEvent(ctx, str_ioMerger_Merge_wait)
-				wait()
-				stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
-				metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
-				LogEvent(ctx, str_ioMerger_Merge_end)
-				vector.resetReadMode()
-				if mayReadMemoryCache {
-					goto read_memory_cache
-				} else {
-					goto read_disk_cache
-				}
+				goto read_disk_cache
 			}
 		}
-	} else {
-		vector.acquireFullFilePreloadForS3()
 	}
 
 	// Count bytes that will be read from S3 (entries that are not done yet)
@@ -698,15 +681,7 @@ read_disk_cache:
 	}
 	s3ReadStart := time.Now()
 	if err := s.read(ctx, vector); err != nil {
-		if !errors.Is(err, errFullFilePreloadActualSizeExceeded) {
-			return err
-		}
-		releaseFullFilePreloadToken(vector.preloadToken)
-		vector.disableFullFilePreload(fullFilePreloadReasonActualSize)
-		vector.preloadToken = nil
-		if err := s.read(ctx, vector); err != nil {
-			return err
-		}
+		return err
 	}
 	metric.FSReadDurationS3Read.Observe(time.Since(s3ReadStart).Seconds())
 	// Record S3 read size (all bytes read from S3)
@@ -797,6 +772,16 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		}, nil
 	}
 
+	if readFullObject && s.shouldStreamFullObjectToDiskCache(vector) {
+		done, err := s.readFullObjectToDiskCacheStreaming(ctx, vector, path.File, getReader)
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+	}
+
 	// a function to get data lazily
 	var contentBytes []byte
 	var contentErr error
@@ -826,19 +811,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		defer reader.Close()
 		tStart := time.Now()
 		LogEvent(ctx, str_io_readall_begin)
-		readAllReader := io.Reader(reader)
-		if limit := fullFilePreloadActualReadLimit(vector.preloadToken); readFullObject && limit > 0 {
-			readAllReader = io.LimitReader(reader, limit+1)
-		}
-		bs, err = io.ReadAll(readAllReader)
+		bs, err = io.ReadAll(reader)
 		LogEvent(ctx, str_io_readall_end, len(bs))
 		metric.FSReadDurationIOReadAll.Observe(time.Since(tStart).Seconds())
-		if limit := fullFilePreloadActualReadLimit(vector.preloadToken); readFullObject && limit > 0 && int64(len(bs)) > limit {
-			return nil, errFullFilePreloadActualSizeExceeded
-		}
-		if readFullObject {
-			recordFullFilePreloadReadBytes(vector.preloadToken, int64(len(bs)))
-		}
 		if err != nil {
 			return nil, err
 		}
@@ -1017,6 +992,172 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		}
 	}
 
+	return nil
+}
+
+func (s *S3FS) shouldStreamFullObjectToDiskCache(vector *IOVector) bool {
+	if s.diskCache == nil || vector.Policy.Any(SkipDiskCacheWrites) {
+		return false
+	}
+	for i := range vector.Entries {
+		entry := &vector.Entries[i]
+		if entry.done {
+			continue
+		}
+		if entry.Size == 0 {
+			return false
+		}
+		if entry.WriterForRead != nil || entry.ReadCloserForRead != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *S3FS) readFullObjectToDiskCacheStreaming(
+	ctx context.Context,
+	vector *IOVector,
+	file string,
+	getReader func(context.Context, *int64, *int64) (io.ReadCloser, error),
+) (done bool, err error) {
+	reader, err := getReader(ctx, ptrTo[int64](0), nil)
+	if err != nil {
+		return true, err
+	}
+	stream := newFullObjectDiskCacheReader(reader, vector)
+
+	t0 := time.Now()
+	LogEvent(ctx, str_disk_cache_setfile_begin)
+	err = s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+		stream.opened = true
+		return stream, nil
+	})
+	LogEvent(ctx, str_disk_cache_setfile_end)
+	metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
+	if err != nil {
+		return true, err
+	}
+	if !stream.opened {
+		return false, nil
+	}
+	if stream.err != nil {
+		return true, stream.err
+	}
+	if !stream.eof {
+		return false, nil
+	}
+
+	return true, stream.fillVector(ctx, s, file)
+}
+
+type fullObjectDiskCacheReader struct {
+	reader   io.ReadCloser
+	vector   *IOVector
+	captures []fullObjectEntryCapture
+	offset   int64
+	opened   bool
+	eof      bool
+	err      error
+}
+
+type fullObjectEntryCapture struct {
+	index  int
+	offset int64
+	size   int64
+	data   bytes.Buffer
+}
+
+func newFullObjectDiskCacheReader(reader io.ReadCloser, vector *IOVector) *fullObjectDiskCacheReader {
+	ret := &fullObjectDiskCacheReader{
+		reader: reader,
+		vector: vector,
+	}
+	for i := range vector.Entries {
+		entry := &vector.Entries[i]
+		if entry.done {
+			continue
+		}
+		ret.captures = append(ret.captures, fullObjectEntryCapture{
+			index:  i,
+			offset: entry.Offset,
+			size:   entry.Size,
+		})
+	}
+	return ret
+}
+
+func (r *fullObjectDiskCacheReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if n > 0 {
+		r.capture(p[:n])
+		r.offset += int64(n)
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		r.err = err
+	}
+	if errors.Is(err, io.EOF) {
+		r.eof = true
+	}
+	return n, err
+}
+
+func (r *fullObjectDiskCacheReader) Close() error {
+	return r.reader.Close()
+}
+
+func (r *fullObjectDiskCacheReader) capture(chunk []byte) {
+	chunkStart := r.offset
+	chunkEnd := chunkStart + int64(len(chunk))
+	for i := range r.captures {
+		capture := &r.captures[i]
+		start := max(capture.offset, chunkStart)
+		end := chunkEnd
+		if capture.size >= 0 {
+			end = min(capture.offset+capture.size, chunkEnd)
+		}
+		if start >= end {
+			continue
+		}
+		_, _ = capture.data.Write(chunk[start-chunkStart : end-chunkStart])
+	}
+}
+
+func (r *fullObjectDiskCacheReader) fillVector(
+	ctx context.Context,
+	allocator CacheDataAllocator,
+	file string,
+) error {
+	for i := range r.captures {
+		capture := &r.captures[i]
+		entry := r.vector.Entries[capture.index]
+		if entry.Size == 0 {
+			return moerr.NewEmptyRangeNoCtx(file)
+		}
+
+		data := capture.data.Bytes()
+		if capture.size >= 0 {
+			if int64(len(data)) < capture.size {
+				return moerr.NewUnexpectedEOFNoCtx(file)
+			}
+		} else {
+			if len(data) == 0 {
+				return moerr.NewEmptyRangeNoCtx(file)
+			}
+			entry.Size = int64(len(data))
+		}
+
+		if int64(len(entry.Data)) < entry.Size {
+			entry.Data = data
+		} else {
+			copy(entry.Data, data)
+		}
+
+		if err := entry.setCachedData(ctx, allocator); err != nil {
+			return err
+		}
+		r.vector.Entries[capture.index] = entry
+	}
+	metric.FSReadS3Counter.Add(float64(len(r.captures)))
 	return nil
 }
 
