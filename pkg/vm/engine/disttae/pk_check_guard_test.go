@@ -21,7 +21,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestShouldBailoutOnChangedObjects(t *testing.T) {
@@ -102,4 +107,120 @@ func TestPkCheckSemaphore_RespectsContextCancellation(t *testing.T) {
 	case <-ctx.Done():
 		// expected
 	}
+}
+
+func TestAcquireReleasePKCheckSemaphore(t *testing.T) {
+	require.NoError(t, acquirePKCheckSemaphore(context.Background()))
+	releasePKCheckSemaphore()
+
+	for i := 0; i < cap(pkCheckSemaphore); i++ {
+		require.NoError(t, acquirePKCheckSemaphore(context.Background()))
+	}
+	defer func() {
+		for i := 0; i < cap(pkCheckSemaphore); i++ {
+			releasePKCheckSemaphore()
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, acquirePKCheckSemaphore(ctx), context.Canceled)
+}
+
+func TestPKCommitTSMatchedInRange(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+
+	from := types.BuildTS(10, 0)
+	to := types.BuildTS(20, 0)
+
+	vec := vector.NewVec(types.T_TS.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec, types.BuildTS(10, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.BuildTS(11, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.BuildTS(20, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.BuildTS(21, 0), false, mp))
+
+	changed, ok := pkCommitTSMatchedInRange(vec, []int64{0, 3}, from, to)
+	require.True(t, ok)
+	require.False(t, changed)
+
+	changed, ok = pkCommitTSMatchedInRange(vec, []int64{1}, from, to)
+	require.True(t, ok)
+	require.True(t, changed)
+
+	changed, ok = pkCommitTSMatchedInRange(vec, []int64{2}, from, to)
+	require.True(t, ok)
+	require.True(t, changed)
+
+	vec.SetNull(1)
+	changed, ok = pkCommitTSMatchedInRange(vec, []int64{1}, from, to)
+	require.False(t, ok)
+	require.False(t, changed)
+
+	constNull := vector.NewConstNull(types.T_TS.ToType(), 1, mp)
+	defer constNull.Free(mp)
+	changed, ok = pkCommitTSMatchedInRange(constNull, []int64{0}, from, to)
+	require.False(t, ok)
+	require.False(t, changed)
+
+	// nil vector returns (false, false)
+	changed, ok = pkCommitTSMatchedInRange(nil, []int64{0}, from, to)
+	require.False(t, ok)
+	require.False(t, changed)
+
+	// Wrong type (non-TS) returns (false, false)
+	wrongTypeVec := vector.NewVec(types.T_int64.ToType())
+	defer wrongTypeVec.Free(mp)
+	require.NoError(t, vector.AppendFixed[int64](wrongTypeVec, 42, false, mp))
+	changed, ok = pkCommitTSMatchedInRange(wrongTypeVec, []int64{0}, from, to)
+	require.False(t, ok)
+	require.False(t, changed)
+
+	// Out-of-range sel returns (false, false)
+	vec2 := vector.NewVec(types.T_TS.ToType())
+	defer vec2.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec2, types.BuildTS(15, 0), false, mp))
+	changed, ok = pkCommitTSMatchedInRange(vec2, []int64{5}, from, to)
+	require.False(t, ok)
+	require.False(t, changed)
+
+	// Negative sel returns (false, false)
+	changed, ok = pkCommitTSMatchedInRange(vec2, []int64{-1}, from, to)
+	require.False(t, ok)
+	require.False(t, changed)
+}
+
+func TestPkCheckBailoutOnChangedObjects(t *testing.T) {
+	// Below threshold — no bailout, no counter increment.
+	assert.False(t, pkCheckBailoutOnChangedObjects(0))
+	assert.False(t, pkCheckBailoutOnChangedObjects(maxChangedObjectsForIO))
+
+	// Above threshold — bailout fires.
+	assert.True(t, pkCheckBailoutOnChangedObjects(maxChangedObjectsForIO+1))
+	assert.True(t, pkCheckBailoutOnChangedObjects(1000))
+}
+
+func TestPkCheckBailoutOnCandidateBlocks(t *testing.T) {
+	// Below threshold — no bailout.
+	assert.False(t, pkCheckBailoutOnCandidateBlocks(0))
+	assert.False(t, pkCheckBailoutOnCandidateBlocks(maxCandidateBlksForIO))
+
+	// Above threshold — bailout fires.
+	assert.True(t, pkCheckBailoutOnCandidateBlocks(maxCandidateBlksForIO+1))
+	assert.True(t, pkCheckBailoutOnCandidateBlocks(1000))
+}
+
+func TestShouldLogPKPersistedChanged(t *testing.T) {
+	// System catalog tables should log.
+	assert.True(t, shouldLogPKPersistedChanged(catalog.MO_DATABASE_ID))
+	assert.True(t, shouldLogPKPersistedChanged(catalog.MO_TABLES_ID))
+	assert.True(t, shouldLogPKPersistedChanged(catalog.MO_COLUMNS_ID))
+
+	// Regular user tables should not log.
+	assert.False(t, shouldLogPKPersistedChanged(0))
+	assert.False(t, shouldLogPKPersistedChanged(1000))
+	assert.False(t, shouldLogPKPersistedChanged(999999))
 }
