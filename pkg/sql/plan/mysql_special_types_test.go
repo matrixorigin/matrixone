@@ -23,6 +23,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestGeomFromTextSRIDInResultType verifies that a constant SRID argument to
+// ST_GeomFromText lands in the result type's Width (since geometry cells store
+// bare WKB and SRID lives in the type).
+func TestGeomFromTextSRIDInResultType(t *testing.T) {
+	ctx := context.Background()
+	wktArg := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "POINT(1 2)"}}},
+	}
+	sridArg := makePlan2Int64ConstExprWithType(4326)
+
+	expr, err := BindFuncExprImplByPlanExpr(ctx, "st_geomfromtext", []*plan.Expr{wktArg, sridArg})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_geometry), expr.Typ.Id)
+	srid, defined := decodeGeometrySRIDWidth(expr.Typ.Width)
+	require.True(t, defined)
+	require.Equal(t, uint32(4326), srid)
+
+	// Without an SRID argument, the result type carries no SRID.
+	expr2, err := BindFuncExprImplByPlanExpr(ctx, "st_geomfromtext", []*plan.Expr{wktArg})
+	require.NoError(t, err)
+	_, defined2 := decodeGeometrySRIDWidth(expr2.Typ.Width)
+	require.False(t, defined2)
+}
+
 func geometryPlanType(id types.T, subtype string, srid uint32, sridDefined bool) *plan.Type {
 	return &plan.Type{
 		Id:    int32(id),

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -7580,6 +7581,27 @@ func TestStCoveredByWithGeometryCollections(t *testing.T) {
 	}
 }
 
+// geomInputEWKT builds a geometry test input from an "SRID=n;WKT" string,
+// encoding the SRID into the input type's Width (srid+1) since SRID is no longer
+// stored in the payload.
+func geomInputEWKT(ewkt string) FunctionTestInput {
+	wkt := ewkt
+	srid := uint32(0)
+	if strings.HasPrefix(strings.ToUpper(ewkt), "SRID=") {
+		if sep := strings.IndexByte(ewkt, ';'); sep > 5 {
+			if v, err := strconv.ParseUint(ewkt[5:sep], 10, 32); err == nil {
+				srid = uint32(v)
+				wkt = ewkt[sep+1:]
+			}
+		}
+	}
+	typ := types.T_geometry.ToType()
+	if srid != 0 {
+		typ.Width = int32(srid + 1)
+	}
+	return NewFunctionTestInput(typ, []string{wkt}, []bool{false})
+}
+
 func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 	boolTests := []struct {
 		name  string
@@ -7663,9 +7685,10 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 	for _, tc := range boolTests {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
+			// SRID lives in the type now; encode it from the EWKT prefix.
 			inputs := []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(), []string{tc.left}, []bool{false}),
-				NewFunctionTestInput(types.T_geometry.ToType(), []string{tc.right}, []bool{false}),
+				geomInputEWKT(tc.left),
+				geomInputEWKT(tc.right),
 			}
 			expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
 			tcc := NewFunctionTestCase(proc, inputs, expect, tc.fn)
@@ -7679,8 +7702,8 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 	t.Run("distance", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		inputs := []FunctionTestInput{
-			NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=4326;MULTIPOINT((0 0),(3 0))"}, []bool{false}),
-			NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=3857;POINT(2 0)"}, []bool{false}),
+			geomInputEWKT("SRID=4326;MULTIPOINT((0 0),(3 0))"),
+			geomInputEWKT("SRID=3857;POINT(2 0)"),
 		}
 		expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
 		tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)

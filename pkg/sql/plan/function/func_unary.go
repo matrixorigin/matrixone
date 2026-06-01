@@ -53,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -797,24 +798,94 @@ func StGeomFromTextWithSRID(ivecs []*vector.Vector, result vector.FunctionResult
 }
 
 func StSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[uint32](ivecs, result, proc, length, func(v []byte) (uint32, error) {
-		_, srid, sridDefined, err := decodeGeometryPayload(v)
-		if err != nil {
-			return 0, err
+	// SRID is carried by the column/expression type (Width = srid+1 when a SRID
+	// is defined, 0 otherwise), not by the bare-WKB payload.
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
+	rs := vector.MustFunctionResult[uint32](result)
+	src := vector.GenerateFunctionStrParameter(ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
 		}
-		if !sridDefined {
-			return 0, nil
+		if _, null := src.GetStrValue(i); null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
 		}
-		return srid, nil
-	}, selectList)
+		if err := rs.Append(srid, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func encodeGeometryPayload(wkt string, srid uint32, sridDefined bool) []byte {
-	wkt = strings.TrimSpace(wkt)
-	if !sridDefined {
+// sridFromTypeWidth decodes the SRID stored in a geometry type's Width
+// (srid+1 when defined, 0 when undefined → SRID 0).
+func sridFromTypeWidth(width int32) uint32 {
+	if width > 0 {
+		return uint32(width - 1)
+	}
+	return 0
+}
+
+// geometryResultType is the retType for geometry-producing spatial functions.
+// SRID lives in the type (Width), so a derived geometry inherits its source
+// geometry's SRID. For constructors whose first argument is text (e.g.
+// ST_GeomFromText), there is no source geometry and the SRID is supplied by the
+// binder from a constant argument (Width stays 0 here).
+func geometryResultType(parameters []types.Type) types.Type {
+	t := types.T_geometry.ToType()
+	if len(parameters) > 0 && (parameters[0].Oid == types.T_geometry || parameters[0].Oid == types.T_geometry32) {
+		t.Width = parameters[0].Width
+	}
+	return t
+}
+
+// encodeGeometryPayload parses a WKT (or EWKT "SRID=n;WKT") string and returns
+// the bare standard WKB bytes that a geometry varlena stores. SRID is NOT
+// stored in the cell (it lives in the column type), so the srid arguments are
+// ignored and any EWKT SRID prefix is stripped. See docs/design/gisimpl.md.
+func encodeGeometryPayload(wkt string, _ uint32, _ bool) []byte {
+	wkt, _, _ = stripEWKTSRID(strings.TrimSpace(wkt))
+	g, err := geo.ParseWKT(wkt)
+	if err != nil {
+		// Internal callers pass well-formed WKT and external input is
+		// validated before storage; on an unexpected parse error keep the raw
+		// text (decode tolerates legacy text) so the error surfaces downstream
+		// rather than silently corrupting data.
 		return functionUtil.QuickStrToBytes(wkt)
 	}
-	return functionUtil.QuickStrToBytes(fmt.Sprintf("SRID=%d;%s", srid, wkt))
+	return geo.WriteWKB(g)
+}
+
+// stripEWKTSRID removes a leading "SRID=n;" prefix from an (E)WKT string,
+// returning the bare WKT, the parsed SRID, and whether a prefix was present.
+func stripEWKTSRID(s string) (wkt string, srid uint32, hasSRID bool) {
+	if !strings.HasPrefix(strings.ToUpper(s), "SRID=") {
+		return s, 0, false
+	}
+	sep := strings.IndexByte(s, ';')
+	if sep <= len("SRID=") {
+		return s, 0, false
+	}
+	parsed, err := strconv.ParseUint(strings.TrimSpace(s[len("SRID="):sep]), 10, 32)
+	if err != nil {
+		return s, 0, false
+	}
+	return strings.TrimSpace(s[sep+1:]), uint32(parsed), true
+}
+
+// payloadIsWKB reports whether a geometry payload is WKB (the stored form)
+// rather than legacy WKT text. Standard WKB begins with a byte-order marker
+// (0x00 big-endian or 0x01 little-endian); WKT begins with a type-keyword
+// letter.
+func payloadIsWKB(payload []byte) bool {
+	return len(payload) > 0 && (payload[0] == 0 || payload[0] == 1)
 }
 
 func geometryTypeNameFromText(wkt string) (string, error) {
@@ -847,30 +918,28 @@ func geometryTypeNameFromText(wkt string) (string, error) {
 	}
 }
 
+// decodeGeometryPayload returns the WKT text of a stored geometry. The stored
+// form is bare WKB; for backward/test compatibility legacy WKT (or EWKT) text
+// payloads are also accepted. SRID is never carried in the payload, so the srid
+// return values are always (0, false) — callers that need the SRID read it from
+// the column/vector type instead.
 func decodeGeometryPayload(payload []byte) (wkt string, srid uint32, sridDefined bool, err error) {
-	s := strings.TrimSpace(functionUtil.QuickBytesToStr(payload))
-	if len(s) == 0 {
+	if len(payload) == 0 {
 		return "", 0, false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
-	upper := strings.ToUpper(s)
-	if !strings.HasPrefix(upper, "SRID=") {
-		return s, 0, false, nil
+	if payloadIsWKB(payload) {
+		g, rerr := geo.ReadWKB(payload)
+		if rerr != nil {
+			return "", 0, false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		return geo.WriteWKT(g), 0, false, nil
 	}
-
-	sepIdx := strings.IndexByte(s, ';')
-	if sepIdx <= len("SRID=") || sepIdx == len(s)-1 {
+	// Legacy WKT/EWKT text.
+	s, _, _ := stripEWKTSRID(strings.TrimSpace(functionUtil.QuickBytesToStr(payload)))
+	if s == "" {
 		return "", 0, false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
-	value := strings.TrimSpace(s[len("SRID="):sepIdx])
-	parsed, parseErr := strconv.ParseUint(value, 10, 32)
-	if parseErr != nil {
-		return "", 0, false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
-	}
-	wkt = strings.TrimSpace(s[sepIdx+1:])
-	if wkt == "" {
-		return "", 0, false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
-	}
-	return wkt, uint32(parsed), true, nil
+	return s, 0, false, nil
 }
 
 func GeometryPayloadToText(payload []byte) (string, error) {

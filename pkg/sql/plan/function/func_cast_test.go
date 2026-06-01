@@ -2428,7 +2428,12 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 					require.True(t, null, "row %d should be null", i)
 				} else {
 					require.False(t, null, "row %d should not be null", i)
-					require.Equal(t, want, string(get), "row %d value not match", i)
+					if tt.toType.Oid == types.T_geometry || tt.toType.Oid == types.T_geometry32 {
+						// Geometry is stored as WKB; compare canonical WKT.
+						require.Equal(t, geometryComparisonWKT([]byte(want)), geometryComparisonWKT(get), "row %d value not match", i)
+					} else {
+						require.Equal(t, want, string(get), "row %d value not match", i)
+					}
 				}
 			}
 

@@ -7995,66 +7995,99 @@ func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 }
 
 func StDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_DISTANCE", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
 		return geometryDistance(v1, v2)
 	}, selectList)
 }
 
 func StContains(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_CONTAINS", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryContains(v1, v2)
 	}, selectList)
 }
 
 func StWithin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_WITHIN", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryWithin(v1, v2)
 	}, selectList)
 }
 
 func StIntersects(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_INTERSECTS", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryIntersects(v1, v2)
 	}, selectList)
 }
 
 func StDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_DISJOINT", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryDisjoint(v1, v2)
 	}, selectList)
 }
 
 func StTouches(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_TOUCHES", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryTouches(v1, v2)
 	}, selectList)
 }
 
 func StCrosses(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_CROSSES", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryCrosses(v1, v2)
 	}, selectList)
 }
 
 func StOverlaps(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_OVERLAPS", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryOverlaps(v1, v2)
 	}, selectList)
 }
 
 func StEquals(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_EQUALS", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryEquals(v1, v2)
 	}, selectList)
 }
 
 func StCovers(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_COVERS", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryCovers(v1, v2)
 	}, selectList)
 }
 
 func StCoveredBy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_COVEREDBY", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryCoveredBy(v1, v2)
 	}, selectList)
@@ -8123,6 +8156,22 @@ func ensureMatchingGeometrySRID(functionName string, left, right []byte) error {
 	}
 	if leftSRID != rightSRID {
 		return moerr.NewInvalidInputNoCtxf(differentGeometrySRIDsErrorTemplate, functionName, leftSRID, rightSRID)
+	}
+	return nil
+}
+
+// checkBinaryGeometryTypeSRID rejects a binary spatial function whose two
+// operands carry different SRIDs. SRID lives in the column/expression type
+// (Width), not in the bare-WKB payload, so the two input vectors' types are
+// compared.
+func checkBinaryGeometryTypeSRID(functionName string, ivecs []*vector.Vector) error {
+	if len(ivecs) < 2 {
+		return nil
+	}
+	left := sridFromTypeWidth(ivecs[0].GetType().Width)
+	right := sridFromTypeWidth(ivecs[1].GetType().Width)
+	if left != right {
+		return moerr.NewInvalidInputNoCtxf(differentGeometrySRIDsErrorTemplate, functionName, left, right)
 	}
 	return nil
 }

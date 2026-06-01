@@ -2113,6 +2113,24 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 	}
 
+	// Geometry constructors with an explicit constant SRID argument record the
+	// SRID in the result type's Width (geometry cells store bare WKB, so SRID
+	// lives in the type). A non-constant SRID cannot be represented this way.
+	if returnType.Oid == types.T_geometry || returnType.Oid == types.T_geometry32 {
+		switch name {
+		case "st_geomfromtext", "st_geomfromwkb", "st_geometryfromtext", "st_pointfromtext",
+			"st_linefromtext", "st_polygonfromtext", "st_mpointfromtext", "st_mlinefromtext",
+			"st_mpolyfromtext", "st_geomcollfromtext":
+			if len(args) >= 2 {
+				if lit, ok := args[len(args)-1].Expr.(*plan.Expr_Lit); ok && lit.Lit != nil {
+					if iv, ok := lit.Lit.GetValue().(*plan.Literal_I64Val); ok && iv.I64Val >= 0 {
+						returnType.Width = encodeGeometrySRIDWidth(uint32(iv.I64Val), true)
+					}
+				}
+			}
+		}
+	}
+
 	if function.GetFunctionIsAggregateByName(name) {
 		if constExpr := args[0].GetLit(); constExpr != nil && constExpr.Isnull {
 			args[0].Typ = makePlan2Type(&returnType)

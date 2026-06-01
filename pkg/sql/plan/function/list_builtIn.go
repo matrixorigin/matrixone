@@ -3852,7 +3852,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StGeomFromText
@@ -3862,7 +3862,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StGeomFromText
@@ -3872,7 +3872,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StGeomFromText
@@ -3882,7 +3882,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StGeomFromTextWithSRID
@@ -3892,7 +3892,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_char, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StGeomFromTextWithSRID
@@ -3902,7 +3902,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_text, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StGeomFromTextWithSRID
@@ -4007,7 +4007,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StGeometryN
@@ -4343,7 +4343,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StStartPoint
@@ -4364,7 +4364,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StEndPoint
@@ -4385,7 +4385,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StPointN
@@ -4406,7 +4406,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StExteriorRing
@@ -4448,7 +4448,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StInteriorRingN
@@ -4595,7 +4595,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StEnvelope
@@ -4616,7 +4616,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StCentroid
@@ -4637,7 +4637,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StBoundary
@@ -4679,7 +4679,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_geometry.ToType()
+					return geometryResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return StPointOnSurface

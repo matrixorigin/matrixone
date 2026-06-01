@@ -1188,14 +1188,27 @@ func TestStGeomFromTextWithSRIDOutOfRange(t *testing.T) {
 
 func TestStSRID(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=4326;POINT(1 2)", "POINT(3 4)"}, []bool{false, false}),
-	}
-	expect := NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{4326, 0}, []bool{false, false})
 
+	// SRID lives in the column/expression type (Width = srid+1), not in the
+	// payload, so every row of a vector shares the type's SRID.
+	geomType := types.T_geometry.ToType()
+	geomType.Width = 4327 // encodes SRID 4326
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{"POINT(1 2)", "POINT(3 4)"}, []bool{false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{4326, 4326}, []bool{false, false})
 	fcTC := NewFunctionTestCase(proc, inputs, expect, StSRID)
 	s, info := fcTC.Run()
 	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
+
+	// An undefined SRID (Width 0) reports SRID 0.
+	inputs2 := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+	}
+	expect2 := NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{0}, []bool{false})
+	fcTC2 := NewFunctionTestCase(proc, inputs2, expect2, StSRID)
+	s2, info2 := fcTC2.Run()
+	require.True(t, s2, fmt.Sprintf("err info is '%s'", info2))
 }
 
 func initStGeometryTypeTestCase() []tcTemp {
