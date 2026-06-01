@@ -37,7 +37,7 @@ insert into t_right values('nullable length', 'nullable', null);
 
 -- @case
 select right(str, len), hex(right(ch, len)), length(right(ch, len)) from t_right;
-select right(str, 3) from t_right;
+select hex(right(str, 3)), length(right(str, 3)) from t_right;
 select right(str, null) from t_right;
 select right(null, len) from t_right;
 select str from t_right where right(str, 3) = 'lmn';

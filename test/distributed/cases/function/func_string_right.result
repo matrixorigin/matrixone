@@ -70,15 +70,15 @@ ABCDEF  GHIJKLMN    58595A    3
         0
 null    null    null
 null    null    null
-select right(str, 3) from t_right;
-right(str, 3)
-lmn
-456
-LMN
-   
-
-null
-gth
+select hex(right(str, 3)), length(right(str, 3)) from t_right;
+hex(right(str, 3))    length(right(str, 3))
+6C6D6E    3
+343536    3
+4C4D4E    3
+202020    3
+    0
+null    null
+677468    3
 select right(str, null) from t_right;
 right(str, null)
 null
