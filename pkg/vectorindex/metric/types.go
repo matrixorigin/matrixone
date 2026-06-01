@@ -52,6 +52,54 @@ const (
 	Metric_TypeCount
 )
 
+type QuantizationType uint16
+
+const (
+	Quantization_F32 QuantizationType = iota
+	Quantization_F16
+	Quantization_INT8
+	Quantization_UINT8
+	Quantization_F64
+)
+
+const (
+	Quantization_F32_Str   = "float32"
+	Quantization_F16_Str   = "float16"
+	Quantization_INT8_Str  = "int8"
+	Quantization_UINT8_Str = "uint8"
+	Quantization_F64_Str   = "float64"
+)
+
+// UsearchQuantizationNameToType maps a SQL quantization name to its
+// enum value for the usearch (HNSW) backend, which supports float32,
+// float16, float64, int8, and uint8.
+var UsearchQuantizationNameToType = map[string]QuantizationType{
+	Quantization_F32_Str:   Quantization_F32,
+	Quantization_F16_Str:   Quantization_F16,
+	Quantization_F64_Str:   Quantization_F64,
+	Quantization_INT8_Str:  Quantization_INT8,
+	Quantization_UINT8_Str: Quantization_UINT8,
+}
+
+// CuvsQuantizationNameToType is the analogous map for the cuvs
+// (CAGRA / IVF-PQ) backend. cuvs does NOT support float64, so f64
+// is intentionally omitted; including it here would let CREATE INDEX
+// pass the validator and then fail downstream in the GPU code path.
+var CuvsQuantizationNameToType = map[string]QuantizationType{
+	Quantization_F32_Str:   Quantization_F32,
+	Quantization_F16_Str:   Quantization_F16,
+	Quantization_INT8_Str:  Quantization_INT8,
+	Quantization_UINT8_Str: Quantization_UINT8,
+}
+
+// ValidQuantization gates the QUANTIZATION='X' option in CREATE INDEX
+// for CAGRA / IVF-PQ — both cuvs-backed, so the cuvs map is the
+// source of truth. See pkg/catalog/secondary_index_utils.go.
+func ValidQuantization(val string) bool {
+	_, ok := CuvsQuantizationNameToType[val]
+	return ok
+}
+
 var (
 	DistFuncOpTypes = map[string]string{
 		DistFn_L2Distance:     OpType_L2Distance,

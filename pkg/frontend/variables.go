@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
 
 var (
@@ -3668,7 +3669,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("probe_limit", 1, 1024, false),
+		Type:              InitSystemVariableIntType("probe_limit", 1, 80000, false),
 		Default:           int64(5),
 	},
 	"kmeans_train_percent": {
@@ -3742,6 +3743,78 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("hnsw_max_index_capacity", 1, 5000000000, false),
 		Default:           int64(1000000),
+	},
+	"experimental_cagra_index": {
+		Name:              "experimental_cagra_index",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_cagra_index"),
+		Default:           int8(0),
+	},
+	"cagra_threads_build": {
+		Name:              "cagra_threads_build",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("cagra_threads_build", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"cagra_threads_search": {
+		Name:              "cagra_threads_search",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("cagra_threads_search", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"cagra_max_index_capacity": {
+		Name:              "cagra_max_index_capacity",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("cagra_max_index_capacity", 0, 5000000000, false),
+		Default:           int64(0),
+	},
+	"cagra_batch_window": {
+		Name:              "cagra_batch_window",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("cagra_batch_window", 0, 5000000000, false),
+		Default:           int64(0),
+	},
+	"ivfpq_threads_build": {
+		Name:              "ivfpq_threads_build",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivfpq_threads_build", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"ivfpq_threads_search": {
+		Name:              "ivfpq_threads_search",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivfpq_threads_search", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"ivfpq_max_index_capacity": {
+		Name:              "ivfpq_max_index_capacity",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivfpq_max_index_capacity", 0, 5000000000, false),
+		Default:           int64(0),
+	},
+	"ivfpq_batch_window": {
+		Name:              "ivfpq_batch_window",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivfpq_batch_window", 0, 5000000000, false),
+		Default:           int64(0),
 	},
 	"validate_password": {
 		Name:              "validate_password",
@@ -3911,12 +3984,36 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("agg_spill_mem", 0, common.TiB, false),
 		Default:           int64(0),
 	},
+	"gpu_mode": {
+		// gpu_mode toggles vector-index dispatch (brute force,
+		// kmeans, adhoc brute force, pairwise distance) between
+		// the cuvs GPU path and the CPU fallback. The Default
+		// reads gpumode.GpuMode, which is flipped to true at
+		// init() in -tags gpu builds and stays false otherwise —
+		// so the sysvar default matches the binary's build tag.
+		// Per-session `SET gpu_mode = 0/1` overrides the default;
+		// dispatch sites consult gpumode.EffectiveGpuMode.
+		Name:              "gpu_mode",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("gpu_mode"),
+		Default:           gpumode.GpuModeDefaultInt8(),
+	},
 	"join_spill_mem": {
 		Name:              "join_spill_mem",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("join_spill_mem", 0, common.TiB, false),
+		Default:           int64(0),
+	},
+	"sort_spill_mem": {
+		Name:              "sort_spill_mem",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("sort_spill_mem", 0, common.TiB, false),
 		Default:           int64(0),
 	},
 	"max_dop": {
