@@ -4068,3 +4068,101 @@ func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestTTLTableOption(t *testing.T) {
+	ctx := context.TODO()
+	cases := []struct {
+		input  string
+		output string
+	}{
+		{
+			input:  "create table t (id int, created_at timestamp) ttl = `created_at` + interval 7 day",
+			output: "create table t (id int, created_at timestamp) ttl = created_at + INTERVAL 7 day",
+		},
+		{
+			// `=` is optional, aligning with TiDB
+			input:  "create table t (id int, created_at timestamp) ttl created_at + interval 7 day",
+			output: "create table t (id int, created_at timestamp) ttl = created_at + INTERVAL 7 day",
+		},
+		{
+			input:  "create table t (id int, created_at timestamp) ttl = `created_at` + interval 7 day ttl_enable = 'ON' ttl_job_interval = '1h'",
+			output: "create table t (id int, created_at timestamp) ttl = created_at + INTERVAL 7 day ttl_enable = 'ON' ttl_job_interval = '1h'",
+		},
+		{
+			input:  "alter table t ttl = `created_at` + interval 30 day",
+			output: "alter table t ttl = created_at + INTERVAL 30 day",
+		},
+		{
+			input:  "alter table t ttl_enable = 'OFF'",
+			output: "alter table t ttl_enable = 'OFF'",
+		},
+		{
+			input:  "alter table t ttl_job_interval = '6h'",
+			output: "alter table t ttl_job_interval = '6h'",
+		},
+		{
+			input:  "alter table t remove ttl",
+			output: "alter table t remove ttl",
+		},
+		{
+			// ttl / ttl_enable / ttl_job_interval are non-reserved identifiers
+			input:  "create table ttl (ttl int, ttl_enable int, ttl_job_interval int)",
+			output: "create table ttl (ttl int, ttl_enable int, ttl_job_interval int)",
+		},
+	}
+	for _, c := range cases {
+		ast, err := ParseOne(ctx, c.input, 1)
+		require.NoError(t, err, "input: %s", c.input)
+		require.Equal(t, c.output, tree.String(ast, dialect.MYSQL), "input: %s", c.input)
+	}
+}
+
+func TestTTLTableOptionAST(t *testing.T) {
+	ctx := context.TODO()
+
+	ast, err := ParseOne(ctx, "create table t (id int, created_at timestamp) ttl = `created_at` + interval 7 day ttl_enable = 'ON' ttl_job_interval = '1h'", 1)
+	require.NoError(t, err)
+	ct, ok := ast.(*tree.CreateTable)
+	require.True(t, ok)
+
+	var sawTTL, sawEnable, sawInterval bool
+	for _, opt := range ct.Options {
+		switch o := opt.(type) {
+		case *tree.TableOptionTTL:
+			sawTTL = true
+			be, ok := o.Expr.(*tree.BinaryExpr)
+			require.True(t, ok)
+			require.Equal(t, tree.PLUS, be.Op)
+		case *tree.TableOptionTTLEnable:
+			sawEnable = true
+			require.Equal(t, "ON", o.Enable)
+		case *tree.TableOptionTTLJobInterval:
+			sawInterval = true
+			require.Equal(t, "1h", o.Interval)
+		}
+	}
+	require.True(t, sawTTL, "missing TableOptionTTL")
+	require.True(t, sawEnable, "missing TableOptionTTLEnable")
+	require.True(t, sawInterval, "missing TableOptionTTLJobInterval")
+
+	ast2, err := ParseOne(ctx, "alter table t remove ttl", 1)
+	require.NoError(t, err)
+	at, ok := ast2.(*tree.AlterTable)
+	require.True(t, ok)
+	require.Len(t, at.Options, 1)
+	_, ok = at.Options[0].(*tree.AlterTableRemoveTTL)
+	require.True(t, ok)
+}
+
+func TestTTLTableOptionInvalid(t *testing.T) {
+	ctx := context.TODO()
+	for _, sql := range []string{
+		"create table t (id int) ttl =",
+		"create table t (id int) ttl = created_at +",
+		"create table t (id int) ttl = created_at + interval 7",
+		"alter table t remove",
+	} {
+		_, err := ParseOne(ctx, sql, 1)
+		require.Error(t, err, "expected parse error for: %s", sql)
+	}
+}
