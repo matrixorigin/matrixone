@@ -225,13 +225,17 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			return plan.Type{Id: int32(types.T_json)}, nil
 		case defines.MYSQL_TYPE_GEOMETRY:
 			fstr := strings.ToUpper(n.InternalType.FamilyString)
-			typ := plan.Type{Id: int32(types.T_geometry)}
+			oid := types.T_geometry
 			srid := uint32(0)
 			sridDefined := false
 			if n.InternalType.GeoMetadata != nil {
 				srid = n.InternalType.GeoMetadata.SRID
 				sridDefined = n.InternalType.GeoMetadata.SRIDDefined
+				if n.InternalType.GeoMetadata.Float32 {
+					oid = types.T_geometry32
+				}
 			}
+			typ := plan.Type{Id: int32(oid)}
 			typ.Scale = int32(geometrySubtypeEnum(fstr))
 			typ.Width = encodeGeometrySRIDWidth(srid, sridDefined)
 			return typ, nil

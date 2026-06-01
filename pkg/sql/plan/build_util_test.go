@@ -164,6 +164,41 @@ func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
 	require.Equal(t, uint32(0), srid)
 }
 
+func TestGetTypeFromAstGeometryAliases(t *testing.T) {
+	cases := []struct {
+		col         string
+		wantOid     types.T
+		wantSubtype string
+		wantSRID    uint32
+		sridDefined bool
+	}{
+		{"point", types.T_geometry, "POINT", 0, false},
+		{"geometry32", types.T_geometry32, "", 0, false},
+		{"point32", types.T_geometry32, "POINT", 0, false},
+		{"geography", types.T_geometry, "", 4326, true},
+		{"geography32", types.T_geometry32, "", 4326, true},
+		{"multipolygon32", types.T_geometry32, "MULTIPOLYGON", 0, false},
+	}
+	for _, c := range cases {
+		t.Run(c.col, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (g "+c.col+")", 1)
+			require.NoError(t, err)
+			createTable := stmt.(*tree.CreateTable)
+			colDef := createTable.Defs[0].(*tree.ColumnTableDef)
+
+			typ, err := getTypeFromAst(context.Background(), colDef.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(c.wantOid), typ.Id)
+			require.Equal(t, c.wantSubtype, geometrySubtypeName(&typ))
+			srid, defined := geometrySRIDValue(&typ)
+			require.Equal(t, c.sridDefined, defined)
+			if c.sridDefined {
+				require.Equal(t, c.wantSRID, srid)
+			}
+		})
+	}
+}
+
 func TestApplyColumnAttributesToTypeRejectsNonGeometrySRID(t *testing.T) {
 	tests := []string{
 		"create table t (a int srid 4326)",
