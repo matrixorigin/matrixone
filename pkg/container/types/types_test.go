@@ -174,6 +174,19 @@ func TestT_GeometryVarlen(t *testing.T) {
 	require.Equal(t, uint8(1), New(T_geometry, 0, 0).Charset)
 }
 
+func TestT_Geometry32Varlen(t *testing.T) {
+	typ := T_geometry32.ToType()
+	require.Equal(t, int32(VarlenaSize), typ.Size)
+	require.Equal(t, VarlenaSize, T_geometry32.TypeLen())
+	require.Equal(t, -24, T_geometry32.FixedLength())
+	require.True(t, typ.IsVarlen())
+	require.Equal(t, uint8(1), CharsetType(T_geometry32))
+	require.Equal(t, uint8(1), New(T_geometry32, 0, 0).Charset)
+	require.Equal(t, "GEOMETRY32", T_geometry32.String())
+	require.Equal(t, "T_geometry32", T_geometry32.OidString())
+	require.Equal(t, T_geometry32, Types["geometry32"])
+}
+
 func sliceCopy(a, b []float64) {
 	for i := range a {
 		b[i] = a[i] + a[i]
