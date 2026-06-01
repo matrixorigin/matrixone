@@ -2954,7 +2954,7 @@ type TableOptionTTLEnable struct {
 }
 
 func (node *TableOptionTTLEnable) Format(ctx *FmtCtx) {
-	ctx.WriteString("ttl_enable = '" + node.Enable + "'")
+	ctx.WriteString("ttl_enable = '" + strings.ReplaceAll(node.Enable, "'", "''") + "'")
 }
 
 func (node TableOptionTTLEnable) TypeName() string { return "tree.TableOptionTTLEnable" }
@@ -2980,7 +2980,7 @@ type TableOptionTTLJobInterval struct {
 }
 
 func (node *TableOptionTTLJobInterval) Format(ctx *FmtCtx) {
-	ctx.WriteString("ttl_job_interval = '" + node.Interval + "'")
+	ctx.WriteString("ttl_job_interval = '" + strings.ReplaceAll(node.Interval, "'", "''") + "'")
 }
 
 func (node TableOptionTTLJobInterval) TypeName() string { return "tree.TableOptionTTLJobInterval" }

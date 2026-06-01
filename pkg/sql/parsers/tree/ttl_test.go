@@ -15,18 +15,32 @@
 package tree
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
+// newIntervalExpr builds `INTERVAL <n> <unit>` the same way the grammar does,
+// so the test exercises the real TTL expression format path.
+func newIntervalExpr(n int64, unit string) *FuncExpr {
+	return &FuncExpr{
+		FuncName: NewCStr("interval", 1),
+		Exprs: Exprs{
+			NewNumVal(n, strconv.FormatInt(n, 10), false, P_int64),
+			NewTimeUnitExpr(unit),
+		},
+	}
+}
+
 func TestTableOptionTTLFormat(t *testing.T) {
-	expr := NewBinaryExpr(PLUS, NewUnresolvedColName("created_at"), NewNumVal(int64(7), "7", false, P_int64))
+	// Cover the core TTL syntax output: `col + INTERVAL n unit`.
+	expr := NewBinaryExpr(PLUS, NewUnresolvedColName("created_at"), newIntervalExpr(7, "day"))
 	ttl := NewTableOptionTTL(expr)
 	ctx := NewFmtCtx(dialect.MYSQL)
 	ttl.Format(ctx)
-	require.Equal(t, "ttl = created_at + 7", ctx.String())
+	require.Equal(t, "ttl = created_at + INTERVAL 7 day", ctx.String())
 	require.Equal(t, "tree.TableOptionTTL", ttl.TypeName())
 	ttl.Free()
 
@@ -37,12 +51,25 @@ func TestTableOptionTTLFormat(t *testing.T) {
 	require.Equal(t, "tree.TableOptionTTLEnable", enable.TypeName())
 	enable.Free()
 
+	// A value containing a single quote must be escaped so the output re-parses.
+	enableQuoted := NewTableOptionTTLEnable("O'N")
+	ctx = NewFmtCtx(dialect.MYSQL)
+	enableQuoted.Format(ctx)
+	require.Equal(t, "ttl_enable = 'O''N'", ctx.String())
+	enableQuoted.Free()
+
 	interval := NewTableOptionTTLJobInterval("1h")
 	ctx = NewFmtCtx(dialect.MYSQL)
 	interval.Format(ctx)
 	require.Equal(t, "ttl_job_interval = '1h'", ctx.String())
 	require.Equal(t, "tree.TableOptionTTLJobInterval", interval.TypeName())
 	interval.Free()
+
+	intervalQuoted := NewTableOptionTTLJobInterval("a'b")
+	ctx = NewFmtCtx(dialect.MYSQL)
+	intervalQuoted.Format(ctx)
+	require.Equal(t, "ttl_job_interval = 'a''b'", ctx.String())
+	intervalQuoted.Free()
 }
 
 func TestAlterTableRemoveTTLFormat(t *testing.T) {

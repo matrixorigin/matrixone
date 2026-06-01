@@ -4105,6 +4105,24 @@ func TestTTLTableOption(t *testing.T) {
 			output: "alter table t remove ttl",
 		},
 		{
+			// `=` is optional on ALTER too (table_option flows into alter_option)
+			input:  "alter table t ttl `created_at` + interval 30 day",
+			output: "alter table t ttl = created_at + INTERVAL 30 day",
+		},
+		{
+			input:  "alter table t ttl_enable 'OFF'",
+			output: "alter table t ttl_enable = 'OFF'",
+		},
+		{
+			input:  "alter table t ttl_job_interval '6h'",
+			output: "alter table t ttl_job_interval = '6h'",
+		},
+		{
+			// embedded single quote must round-trip via escaping
+			input:  "create table t (id int, created_at timestamp) ttl = `created_at` + interval 7 day ttl_enable = 'O''N'",
+			output: "create table t (id int, created_at timestamp) ttl = created_at + INTERVAL 7 day ttl_enable = 'O''N'",
+		},
+		{
 			// ttl / ttl_enable / ttl_job_interval are non-reserved identifiers
 			input:  "create table ttl (ttl int, ttl_enable int, ttl_job_interval int)",
 			output: "create table ttl (ttl int, ttl_enable int, ttl_job_interval int)",
