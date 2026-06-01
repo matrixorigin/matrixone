@@ -111,6 +111,13 @@ func RegisterSum2(id int64) {
 		nil,
 		aggSumOfDecimalInitResult,
 		aggSumOfDecimal64Fill, aggSumOfDecimal64Fills, aggSumOfDecimal64Merge, nil)
+
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_bool.ToType(), SumReturnType, true),
+		nil,
+		nil,
+		aggSumInitResult[uint64],
+		aggSumOfBoolFill, aggSumOfBoolFills, aggSumOfBoolMerge, nil)
 }
 
 var (
@@ -120,6 +127,7 @@ var (
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
+		types.T_bool,
 	}
 	SumReturnType = func(typs []types.Type) types.Type {
 		switch typs[0].Oid {
@@ -130,6 +138,8 @@ var (
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 			return types.T_uint64.ToType()
 		case types.T_bit:
+			return types.T_uint64.ToType()
+		case types.T_bool:
 			return types.T_uint64.ToType()
 		case types.T_decimal64:
 			return types.New(types.T_decimal128, 38, typs[0].Scale)
@@ -252,6 +262,34 @@ func aggSumMerge[from numeric, to numericWithMaxScale](
 	isEmpty1, isEmpty2 bool,
 	resultGetter1, resultGetter2 aggexec.AggGetter[to],
 	resultSetter aggexec.AggSetter[to]) error {
+	resultSetter(resultGetter1() + resultGetter2())
+	return nil
+}
+
+func aggSumOfBoolFill(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value bool, isEmpty bool,
+	resultGetter aggexec.AggGetter[uint64], resultSetter aggexec.AggSetter[uint64]) error {
+	if value {
+		resultSetter(resultGetter() + 1)
+	}
+	return nil
+}
+func aggSumOfBoolFills(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value bool, count int, isEmpty bool,
+	resultGetter aggexec.AggGetter[uint64], resultSetter aggexec.AggSetter[uint64]) error {
+	if value {
+		resultSetter(resultGetter() + uint64(count))
+	}
+	return nil
+}
+func aggSumOfBoolMerge(
+	_, _ aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
+	resultGetter1, resultGetter2 aggexec.AggGetter[uint64],
+	resultSetter aggexec.AggSetter[uint64]) error {
 	resultSetter(resultGetter1() + resultGetter2())
 	return nil
 }
