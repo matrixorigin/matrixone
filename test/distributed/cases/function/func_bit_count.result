@@ -1,51 +1,51 @@
 SELECT BIT_COUNT(64), BIT_COUNT(BINARY 64);
-BIT_COUNT(64)    BIT_COUNT(BINARY(64))
-1    7
+➤ BIT_COUNT(64)[-5,64,0]  ¦  BIT_COUNT(BINARY(64))[-5,64,0]  𝄀
+1  ¦  7
 SELECT BIT_COUNT('64'), BIT_COUNT(_binary '64');
-BIT_COUNT(64)    BIT_COUNT(64)
-1    7
+➤ BIT_COUNT(64)[-5,64,0]  ¦  BIT_COUNT(64)[-5,64,0]  𝄀
+1  ¦  7
 SELECT BIT_COUNT(X'40'), BIT_COUNT(_binary X'40');
-BIT_COUNT(0x40)    BIT_COUNT(40)
-1    0
+➤ BIT_COUNT(0x40)[-5,64,0]  ¦  BIT_COUNT(0x40)[-5,64,0]  𝄀
+1  ¦  1
 SELECT BIT_COUNT(NULL);
-BIT_COUNT(null)
+➤ BIT_COUNT(null)[-5,64,0]  𝄀
 null
 SELECT BIT_COUNT(0), BIT_COUNT(1), BIT_COUNT(2), BIT_COUNT(3), BIT_COUNT(255), BIT_COUNT(256);
-BIT_COUNT(0)    BIT_COUNT(1)    BIT_COUNT(2)    BIT_COUNT(3)    BIT_COUNT(255)    BIT_COUNT(256)
-0    1    1    2    8    1
+➤ BIT_COUNT(0)[-5,64,0]  ¦  BIT_COUNT(1)[-5,64,0]  ¦  BIT_COUNT(2)[-5,64,0]  ¦  BIT_COUNT(3)[-5,64,0]  ¦  BIT_COUNT(255)[-5,64,0]  ¦  BIT_COUNT(256)[-5,64,0]  𝄀
+0  ¦  1  ¦  1  ¦  2  ¦  8  ¦  1
 SELECT BIT_COUNT(-1), BIT_COUNT(-2), BIT_COUNT(-9223372036854775808);
-BIT_COUNT(-1)    BIT_COUNT(-2)    BIT_COUNT(-9223372036854775808)
-64    63    1
+➤ BIT_COUNT(-1)[-5,64,0]  ¦  BIT_COUNT(-2)[-5,64,0]  ¦  BIT_COUNT(-9223372036854775808)[-5,64,0]  𝄀
+64  ¦  63  ¦  1
 SELECT BIT_COUNT(CAST(64 AS TINYINT)), BIT_COUNT(CAST(64 AS SMALLINT)), BIT_COUNT(CAST(64 AS INT)), BIT_COUNT(CAST(64 AS BIGINT));
-BIT_COUNT(cast(64 as tinyint))    BIT_COUNT(cast(64 as smallint))    BIT_COUNT(cast(64 as int))    BIT_COUNT(cast(64 as bigint))
-1    1    1    1
+➤ BIT_COUNT(cast(64 as tinyint))[-5,64,0]  ¦  BIT_COUNT(cast(64 as smallint))[-5,64,0]  ¦  BIT_COUNT(cast(64 as int))[-5,64,0]  ¦  BIT_COUNT(cast(64 as bigint))[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
 SELECT BIT_COUNT(CAST(255 AS TINYINT UNSIGNED)), BIT_COUNT(CAST(65535 AS SMALLINT UNSIGNED)), BIT_COUNT(CAST(4294967295 AS INT UNSIGNED));
-BIT_COUNT(cast(255 as tinyint unsigned))    BIT_COUNT(cast(65535 as smallint unsigned))    BIT_COUNT(cast(4294967295 as int unsigned))
-8    16    32
+➤ BIT_COUNT(cast(255 as tinyint unsigned))[-5,64,0]  ¦  BIT_COUNT(cast(65535 as smallint unsigned))[-5,64,0]  ¦  BIT_COUNT(cast(4294967295 as int unsigned))[-5,64,0]  𝄀
+8  ¦  16  ¦  32
 SELECT BIT_COUNT(CAST(64.9 AS FLOAT)), BIT_COUNT(CAST(64.9 AS DOUBLE));
-BIT_COUNT(cast(64.9 as float))    BIT_COUNT(cast(64.9 as double))
-1    1
+➤ BIT_COUNT(cast(64.9 as float))[-5,64,0]  ¦  BIT_COUNT(cast(64.9 as double))[-5,64,0]  𝄀
+1  ¦  1
 SELECT BIT_COUNT(CAST(64.9 AS DECIMAL(10, 1))), BIT_COUNT(CAST(255.9 AS DECIMAL(10, 1)));
-BIT_COUNT(cast(64.9 as decimal(10, 1)))    BIT_COUNT(cast(255.9 as decimal(10, 1)))
-1    8
+➤ BIT_COUNT(cast(64.9 as decimal(10, 1)))[-5,64,0]  ¦  BIT_COUNT(cast(255.9 as decimal(10, 1)))[-5,64,0]  𝄀
+1  ¦  8
 SELECT BIT_COUNT('0'), BIT_COUNT('1'), BIT_COUNT('64'), BIT_COUNT('255'), BIT_COUNT('-1');
-BIT_COUNT(0)    BIT_COUNT(1)    BIT_COUNT(64)    BIT_COUNT(255)    BIT_COUNT(-1)
-0    1    1    8    64
+➤ BIT_COUNT(0)[-5,64,0]  ¦  BIT_COUNT(1)[-5,64,0]  ¦  BIT_COUNT(64)[-5,64,0]  ¦  BIT_COUNT(255)[-5,64,0]  ¦  BIT_COUNT(-1)[-5,64,0]  𝄀
+0  ¦  1  ¦  1  ¦  8  ¦  64
 SELECT BIT_COUNT(CAST('64' AS CHAR)), BIT_COUNT(CAST('64' AS VARCHAR(10))), BIT_COUNT(CAST('64' AS TEXT));
-BIT_COUNT(cast(64 as varchar))    BIT_COUNT(cast(64 as varchar(10)))    BIT_COUNT(cast(64 as text))
-1    1    1
+➤ BIT_COUNT(cast(64 as varchar))[-5,64,0]  ¦  BIT_COUNT(cast(64 as varchar(10)))[-5,64,0]  ¦  BIT_COUNT(cast(64 as text))[-5,64,0]  𝄀
+1  ¦  1  ¦  1
 SELECT BIT_COUNT(BINARY '64'), BIT_COUNT(_binary '64'), BIT_COUNT(CAST('64' AS BINARY)), BIT_COUNT(CAST('64' AS VARBINARY(2)));
-BIT_COUNT(BINARY(64))    BIT_COUNT(64)    BIT_COUNT(cast(64 as binary))    BIT_COUNT(cast(64 as varbinary(2)))
-7    7    7    7
+➤ BIT_COUNT(BINARY(64))[-5,64,0]  ¦  BIT_COUNT(64)[-5,64,0]  ¦  BIT_COUNT(cast(64 as binary))[-5,64,0]  ¦  BIT_COUNT(cast(64 as varbinary(2)))[-5,64,0]  𝄀
+7  ¦  7  ¦  7  ¦  7
 SELECT BIT_COUNT(X'00'), BIT_COUNT(X'01'), BIT_COUNT(X'40'), BIT_COUNT(X'FF'), BIT_COUNT(X'FFFF');
-BIT_COUNT(0x00)    BIT_COUNT(0x01)    BIT_COUNT(0x40)    BIT_COUNT(0xFF)    BIT_COUNT(0xFFFF)
-0    1    1    8    16
+➤ BIT_COUNT(0x00)[-5,64,0]  ¦  BIT_COUNT(0x01)[-5,64,0]  ¦  BIT_COUNT(0x40)[-5,64,0]  ¦  BIT_COUNT(0xFF)[-5,64,0]  ¦  BIT_COUNT(0xFFFF)[-5,64,0]  𝄀
+0  ¦  1  ¦  1  ¦  8  ¦  16
 SELECT BIT_COUNT(_binary X'00'), BIT_COUNT(_binary X'01'), BIT_COUNT(_binary X'40'), BIT_COUNT(_binary X'FF'), BIT_COUNT(_binary X'FFFF');
-BIT_COUNT(00)    BIT_COUNT(01)    BIT_COUNT(40)    BIT_COUNT(FF)    BIT_COUNT(FFFF)
-0    0    0    0    0
+➤ BIT_COUNT(0x00)[-5,64,0]  ¦  BIT_COUNT(0x01)[-5,64,0]  ¦  BIT_COUNT(0x40)[-5,64,0]  ¦  BIT_COUNT(0xFF)[-5,64,0]  ¦  BIT_COUNT(0xFFFF)[-5,64,0]  𝄀
+0  ¦  1  ¦  1  ¦  8  ¦  16
 SELECT BIT_COUNT(UNHEX('40')), BIT_COUNT(UNHEX('FF')), BIT_COUNT(UNHEX('FFFF'));
-BIT_COUNT(UNHEX(40))    BIT_COUNT(UNHEX(FF))    BIT_COUNT(UNHEX(FFFF))
-1    8    16
+➤ BIT_COUNT(UNHEX(40))[-5,64,0]  ¦  BIT_COUNT(UNHEX(FF))[-5,64,0]  ¦  BIT_COUNT(UNHEX(FFFF))[-5,64,0]  𝄀
+1  ¦  8  ¦  16
 DROP TABLE IF EXISTS t_bit_count;
 CREATE TABLE t_bit_count(
 id INT,
@@ -59,11 +59,11 @@ INSERT INTO t_bit_count VALUES
 (2, -1, 255, '-1', X'FF'),
 (3, NULL, NULL, NULL, NULL);
 SELECT id, BIT_COUNT(i), BIT_COUNT(u), BIT_COUNT(s), BIT_COUNT(b) FROM t_bit_count ORDER BY id;
-id    BIT_COUNT(i)    BIT_COUNT(u)    BIT_COUNT(s)    BIT_COUNT(b)
-1    1    1    1    1
-2    64    8    64    8
-3    null    null    null    null
+➤ id[4,32,0]  ¦  BIT_COUNT(i)[-5,64,0]  ¦  BIT_COUNT(u)[-5,64,0]  ¦  BIT_COUNT(s)[-5,64,0]  ¦  BIT_COUNT(b)[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  64  ¦  8  ¦  64  ¦  8  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null
 SELECT id FROM t_bit_count WHERE BIT_COUNT(b) = 1 ORDER BY id;
-id
+➤ id[4,32,0]  𝄀
 1
 DROP TABLE t_bit_count;
