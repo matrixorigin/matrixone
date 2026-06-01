@@ -726,6 +726,26 @@ func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
 	}
 	defer release()
 
+	fullObjectVec := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: int64(len(data)),
+			},
+		},
+	}
+	doneMerge, waitMerge := fs.ioMerger.Merge(fullObjectVec.ioMergeKey(), maxIOWaitDuration)
+	assert.NotNil(t, doneMerge)
+	assert.Nil(t, waitMerge)
+	releasedMerge := false
+	releaseMerge := func() {
+		if !releasedMerge {
+			doneMerge()
+			releasedMerge = true
+		}
+	}
+	defer releaseMerge()
+
 	type readResult struct {
 		data []byte
 		err  error
@@ -742,11 +762,12 @@ func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
 			},
 		}
 		err := fs.Read(ctx, vec)
+		defer vec.Release()
 		if err != nil {
 			readDone <- readResult{err: err}
 			return
 		}
-		readDone <- readResult{data: vec.Entries[0].Data}
+		readDone <- readResult{data: append([]byte(nil), vec.Entries[0].Data...)}
 	}()
 
 	select {
@@ -755,9 +776,100 @@ func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
 		assert.Equal(t, data[123:130], result.data)
 		assert.True(t, fs.diskCache.isUpdating(updatingPath))
 	case <-time.After(2 * time.Second):
+		releaseMerge()
 		release()
 		result := <-readDone
-		t.Fatalf("range read waited for full-object disk cache update: %v", result.err)
+		t.Fatalf("range read waited for full-object disk cache update or io merge: %v", result.err)
+	}
+}
+
+func TestS3FSRangeReadSkipsFullObjectIOMergeBeforeDiskCacheUpdate(t *testing.T) {
+	ctx := context.Background()
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(t, err)
+	defer fs.Close(ctx)
+
+	data := bytes.Repeat([]byte("abcd"), 1<<10)
+	err = fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: int64(len(data)),
+				Data: data,
+			},
+		},
+		Policy: SkipDiskCache | SkipMemoryCache,
+	})
+	assert.Nil(t, err)
+
+	fullObjectVec := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: int64(len(data)),
+			},
+		},
+	}
+	doneMerge, waitMerge := fs.ioMerger.Merge(fullObjectVec.ioMergeKey(), maxIOWaitDuration)
+	assert.NotNil(t, doneMerge)
+	assert.Nil(t, waitMerge)
+	releasedMerge := false
+	releaseMerge := func() {
+		if !releasedMerge {
+			doneMerge()
+			releasedMerge = true
+		}
+	}
+	defer releaseMerge()
+
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		vec := &IOVector{
+			FilePath: "foo/bar",
+			Entries: []IOEntry{
+				{
+					Offset: 123,
+					Size:   7,
+				},
+			},
+		}
+		err := fs.Read(ctx, vec)
+		defer vec.Release()
+		if err != nil {
+			readDone <- readResult{err: err}
+			return
+		}
+		readDone <- readResult{data: append([]byte(nil), vec.Entries[0].Data...)}
+	}()
+
+	select {
+	case result := <-readDone:
+		assert.Nil(t, result.err)
+		assert.Equal(t, data[123:130], result.data)
+		assert.False(t, fs.diskCache.isUpdating(fs.diskCache.pathForFile("foo/bar")))
+	case <-time.After(2 * time.Second):
+		releaseMerge()
+		result := <-readDone
+		t.Fatalf("range read waited for full-object io merge before disk cache update: %v", result.err)
 	}
 }
 

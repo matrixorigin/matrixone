@@ -29,10 +29,11 @@ type IOMerger struct {
 }
 
 type IOMergeKey struct {
-	Path   string
-	Offset int64
-	End    int64
-	Policy Policy
+	Path       string
+	Offset     int64
+	End        int64
+	FullObject bool
+	Policy     Policy
 }
 
 func NewIOMerger() *IOMerger {
@@ -104,8 +105,27 @@ func (i *IOVector) ioMergeKey() IOMergeKey {
 	}
 	min, max, readFull := i.readRange()
 	if readFull {
+		key.FullObject = true
 		return key
 	}
+	return i.ioMergeKeyWithRange(key, min, max)
+}
+
+func (i *IOVector) ioMergeKeyForMinimalRangePreserveSize() IOMergeKey {
+	key := IOMergeKey{
+		Path:   i.FilePath,
+		Policy: i.Policy,
+	}
+	min, max := i.readMinimalRangePreserveSize()
+	return i.ioMergeKeyWithRange(key, min, max)
+}
+
+func (i *IOVector) canBypassFullObjectMergeWait() bool {
+	min, max := i.readMinimalRangePreserveSize()
+	return min != nil && (*min != 0 || max != nil)
+}
+
+func (i *IOVector) ioMergeKeyWithRange(key IOMergeKey, min *int64, max *int64) IOMergeKey {
 	if min != nil {
 		key.Offset = *min
 	}

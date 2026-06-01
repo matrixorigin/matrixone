@@ -343,7 +343,8 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	}()
 
 	done, _ := s.ioMerger.Merge(IOMergeKey{
-		Path: filePath,
+		Path:       filePath,
+		FullObject: true,
 	}, maxIOWaitDuration)
 	if done != nil {
 		defer done()
@@ -647,11 +648,24 @@ read_disk_cache:
 
 	mayReadMemoryCache := vector.Policy&SkipMemoryCacheReads == 0
 	mayReadDiskCache := vector.Policy&SkipDiskCacheReads == 0
+	forceMinimalRangeRead := false
 	if mayReadMemoryCache || mayReadDiskCache {
 		// may read caches, merge
 		LogEvent(ctx, str_ioMerger_Merge_begin)
 		startLock := time.Now()
-		done, wait := s.ioMerger.Merge(vector.ioMergeKey(), maxIOWaitDuration)
+		mergeKey := vector.ioMergeKey()
+		if skipFullObjectRead, err := s.shouldSkipFullObjectDiskCacheForUpdating(vector); err != nil {
+			return err
+		} else if skipFullObjectRead {
+			mergeKey = vector.ioMergeKeyForMinimalRangePreserveSize()
+			forceMinimalRangeRead = true
+		}
+		done, wait := s.ioMerger.Merge(mergeKey, maxIOWaitDuration)
+		if wait != nil && mergeKey.FullObject && vector.canBypassFullObjectMergeWait() {
+			mergeKey = vector.ioMergeKeyForMinimalRangePreserveSize()
+			forceMinimalRangeRead = true
+			done, wait = s.ioMerger.Merge(mergeKey, maxIOWaitDuration)
+		}
 		if done != nil {
 			defer done()
 			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
@@ -680,7 +694,7 @@ read_disk_cache:
 		}
 	}
 	s3ReadStart := time.Now()
-	if err := s.read(ctx, vector); err != nil {
+	if err := s.read(ctx, vector, forceMinimalRangeRead); err != nil {
 		return err
 	}
 	metric.FSReadDurationS3Read.Observe(time.Since(s3ReadStart).Seconds())
@@ -730,7 +744,7 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
-func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
+func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead bool) (err error) {
 	if vector.allDone() {
 		// all cache hit
 		return nil
@@ -742,7 +756,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	min, max, readFullObject := vector.readRange()
-	if readFullObject && s.isFullObjectDiskCacheUpdating(vector.FilePath, path.File) {
+	if readFullObject && (forceMinimalRangeRead || s.isFullObjectDiskCacheUpdating(vector.FilePath, path.File)) {
 		min, max = vector.readMinimalRangePreserveSize()
 		readFullObject = false
 	}
@@ -1010,6 +1024,19 @@ func (s *S3FS) isFullObjectDiskCacheUpdating(vectorPath string, filePath string)
 		return true
 	}
 	return false
+}
+
+func (s *S3FS) shouldSkipFullObjectDiskCacheForUpdating(vector *IOVector) (bool, error) {
+	if s.diskCache == nil ||
+		!vector.Policy.CacheFullFile() ||
+		vector.Policy.Any(SkipDiskCache) {
+		return false, nil
+	}
+	path, err := ParsePathAtService(vector.FilePath, s.name)
+	if err != nil {
+		return false, err
+	}
+	return s.isFullObjectDiskCacheUpdating(vector.FilePath, path.File), nil
 }
 
 func (s *S3FS) shouldStreamFullObjectToDiskCache(vector *IOVector) bool {
