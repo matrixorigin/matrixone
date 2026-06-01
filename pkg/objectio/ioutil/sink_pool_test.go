@@ -605,6 +605,54 @@ func TestSinker_WithPipelineFlush_WithSortKeyGroupsBlocks(t *testing.T) {
 	require.NoError(t, sinker.Close())
 }
 
+func TestSinker_WithPipelineFlush_SubmitThresholdBelowCap(t *testing.T) {
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](
+		proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	attrs, typs, seqnums := mockSchema(3, 2)
+
+	factory := NewFSinkerImplFactory(
+		seqnums,
+		2,
+		true,
+		false,
+		0,
+	)
+
+	// Use a threshold below the 64MB cap so the cap branch is NOT triggered.
+	// This exercises the "threshold stays as-is" path in trySpillMergeSortPipeline.
+	sinker := NewSinker(
+		2,
+		attrs,
+		typs,
+		factory,
+		proc.Mp(),
+		fs,
+		WithMemorySizeThreshold(mpool.MB*32),
+		WithAllMergeSorted(),
+		WithPipelineFlush(),
+	)
+
+	for i := 0; i < 3; i++ {
+		bat := containers.MockBatch(typs, 8192, 2, nil)
+		err = sinker.Write(context.Background(), containers.ToCNBatch(bat))
+		assert.NoError(t, err)
+	}
+
+	err = sinker.Sync(context.Background())
+	assert.NoError(t, err)
+
+	totalRows := uint32(0)
+	for j := 0; j < len(sinker.result.persisted); j++ {
+		totalRows += sinker.result.persisted[j].Rows()
+	}
+	require.Equal(t, uint32(8192*3), totalRows)
+
+	require.NoError(t, sinker.Close())
+}
+
 func TestSinker_WithPipelineFlush_Reset(t *testing.T) {
 	proc := testutil.NewProc(t)
 	fs, err := fileservice.Get[fileservice.FileService](
