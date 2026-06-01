@@ -109,6 +109,24 @@ func TestPkCheckSemaphore_RespectsContextCancellation(t *testing.T) {
 	}
 }
 
+func TestAcquireReleasePKCheckSemaphore(t *testing.T) {
+	require.NoError(t, acquirePKCheckSemaphore(context.Background()))
+	releasePKCheckSemaphore()
+
+	for i := 0; i < cap(pkCheckSemaphore); i++ {
+		require.NoError(t, acquirePKCheckSemaphore(context.Background()))
+	}
+	defer func() {
+		for i := 0; i < cap(pkCheckSemaphore); i++ {
+			releasePKCheckSemaphore()
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, acquirePKCheckSemaphore(ctx), context.Canceled)
+}
+
 func TestPKCommitTSMatchedInRange(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() {

@@ -348,6 +348,69 @@ func TestGetAlterCopyPkPrecheck(t *testing.T) {
 	}
 }
 
+func TestAlterCopyPrecheckHelpers(t *testing.T) {
+	assert.Nil(t, alterCopyPkPrecheckColumns(nil))
+	assert.Nil(t, alterCopyPkPrecheckColumns(&plan.TableDef{}))
+	assert.Nil(t, alterCopyPkPrecheckColumns(&plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+	}))
+	assert.Nil(t, alterCopyPkPrecheckColumns(&plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName},
+	}))
+	assert.Equal(t, []string{"a", "b"}, alterCopyPkPrecheckColumns(&plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a", "", "b"}},
+	}))
+
+	assert.Equal(t, "`db``name`.`tbl``name`", quoteAlterCopyTableName("db`name", "tbl`name"))
+	assert.Equal(t, "(1,2)", formatAlterCopyPkValue([]string{"1", "2"}))
+	assert.Equal(t, "(a,b)", alterCopyDedupColName([]string{"a", "b"}))
+
+	assert.Nil(t, cloneAlterCopyOpt(nil))
+	opt := &plan2.AlterCopyOpt{
+		SkipPkDedup:        true,
+		SkipUniqueIdxDedup: map[string]bool{"u": true},
+		SkipIndexesCopy:    map[string]bool{"i": true},
+	}
+	clone := cloneAlterCopyOpt(opt)
+	require.NotNil(t, clone)
+	require.NotSame(t, opt, clone)
+	clone.SkipUniqueIdxDedup["u"] = false
+	clone.SkipIndexesCopy["i"] = false
+	assert.True(t, opt.SkipUniqueIdxDedup["u"])
+	assert.True(t, opt.SkipIndexesCopy["i"])
+}
+
+func TestFirstAlterCopyResultRowEmptyAndShortRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+
+	values, nulls, ok := firstAlterCopyResultRow(executor.Result{}, 2)
+	require.False(t, ok)
+	require.Nil(t, values)
+	require.Nil(t, nulls)
+
+	empty := batch.NewWithSize(1)
+	empty.SetRowCount(0)
+	res := executor.Result{Mp: mp, Batches: []*batch.Batch{nil, empty}}
+	values, nulls, ok = firstAlterCopyResultRow(res, 1)
+	require.False(t, ok)
+	require.Nil(t, values)
+	require.Nil(t, nulls)
+
+	bat := batch.NewWithSize(1)
+	bat.SetRowCount(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed[int32](bat.Vecs[0], 42, false, mp))
+	defer bat.Clean(mp)
+
+	values, nulls, ok = firstAlterCopyResultRow(executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, 2)
+	require.True(t, ok)
+	assert.Equal(t, []string{"42", ""}, values)
+	assert.Equal(t, []bool{false, false}, nulls)
+}
+
 func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
