@@ -34,6 +34,11 @@ create external table hive_err3 (
 id int, amount double
 ) infile{'filepath'='$resources/hive_partition/single_level/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='nonexistent'};
 invalid configuration: partition column 'nonexistent' not found in table columns
+drop table if exists hive_err3_auto;
+create external table hive_err3_auto (
+id int, amount double
+) infile{'filepath'='$resources/hive_partition/single_level/', 'format'='parquet', 'hive_partitioning'='true'};
+invalid configuration: partition column 'year' not found in table columns
 drop table if exists hive_err4;
 create external table hive_err4 (
 id int, year int
@@ -266,6 +271,26 @@ group by year, month order by year, month;
 ➤ year[4,32,0]  ¦  month[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
 2024  ¦  01  ¦  3  𝄀
 2025  ¦  02  ¦  3
+drop table if exists hive_multi_auto;
+create external table hive_multi_auto (
+id int,
+amount double,
+year int,
+month varchar(2)
+) infile{'filepath'='$resources/hive_partition/multi_level/', 'format'='parquet', 'hive_partitioning'='true'};
+select year, month, count(*) as cnt from hive_multi_auto group by year, month order by year, month;
+➤ year[4,32,0]  ¦  month[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
+2024  ¦  01  ¦  3  𝄀
+2024  ¦  02  ¦  3  𝄀
+2024  ¦  03  ¦  3  𝄀
+2025  ¦  01  ¦  3  𝄀
+2025  ¦  02  ¦  3  𝄀
+2025  ¦  03  ¦  3
+select id, year, month from hive_multi_auto where year = 2024 and month = '02' order by id;
+➤ id[4,32,0]  ¦  year[4,32,0]  ¦  month[12,-1,0]  𝄀
+202420  ¦  2024  ¦  02  𝄀
+202421  ¦  2024  ¦  02  𝄀
+202422  ¦  2024  ¦  02
 drop table if exists hive_string;
 create external table hive_string (
 id int,
