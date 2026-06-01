@@ -9820,6 +9820,276 @@ func TestGetSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(t *testing.T) {
 	})
 }
 
+func TestGetSqlForScopedGrantOptionHelpers(t *testing.T) {
+	require.Equal(
+		t,
+		`select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = 38 and obj_type = "table" and obj_id = 10001;`,
+		getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001),
+	)
+	require.Equal(
+		t,
+		`select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = 38 and obj_type = "view";`,
+		getSqlForCheckRoleHasPrivilegeWGOWithObjType(int64(PrivilegeTypeTableOwnership), objectTypeView),
+	)
+}
+
+func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(1001))
+	roleID := int64(1001)
+
+	t.Run("non table privilege falls back to unscoped query", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeCreateDatabase)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			nil,
+			bh,
+			PrivilegeTypeCreateDatabase,
+			tree.OBJECT_TYPE_ACCOUNT,
+			tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR},
+		)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+	})
+
+	t.Run("table ownership uses object scoped ownership query", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable, 10001)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+	})
+
+	t.Run("table ownership uses object type scoped ownership query", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObjType(int64(PrivilegeTypeTableOwnership), objectTypeView)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjType(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeView)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+	})
+
+	t.Run("unsupported scoped privilege falls back to unscoped WGO sql", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeCreateDatabase)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
+			ctx, bh, PrivilegeTypeCreateDatabase, objectTypeTable, objectIDAll)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+	})
+
+	t.Run("unsupported object type scoped privilege falls back to unscoped WGO sql", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeCreateDatabase)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjType(
+			ctx, bh, PrivilegeTypeCreateDatabase, objectTypeView)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+	})
+
+	t.Run("object scoped exec error is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001)
+		bh.sql2err[sql] = moerr.NewInternalError(ctx, "object scoped WGO failed")
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable, 10001)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("object scoped row decode error is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{"bad-role-id"}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable, 10001)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("object type scoped exec error is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObjType(int64(PrivilegeTypeTableOwnership), objectTypeTable)
+		bh.sql2err[sql] = moerr.NewInternalError(ctx, "object type scoped WGO failed")
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjType(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("object type scoped get result error is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObjType(int64(PrivilegeTypeTableOwnership), objectTypeTable)
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjType(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+		require.Equal(t, sql, bh.currentSql)
+	})
+
+	t.Run("object type scoped row decode error is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObjType(int64(PrivilegeTypeTableOwnership), objectTypeTable)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{"bad-role-id"}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjType(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("unresolved object falls back to object type scoped lookup", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		checkTableSQL, err := getSqlForCheckDatabaseTable(ctx, "db", "missing_table")
+		require.NoError(t, err)
+		bh.sql2result[checkTableSQL] = newMrsForCheckDatabaseTable([][]interface{}{})
+		objTypeSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable)
+		bh.sql2result[objTypeSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+				TabName: "missing_table",
+			},
+		)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+	})
+
+	t.Run("view primary path error is returned before legacy lookup", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		checkViewSQL, err := getSqlForCheckDatabaseView(ctx, "db", "v")
+		require.NoError(t, err)
+		bh.sql2result[checkViewSQL] = newMrsForCheckDatabaseTable([][]interface{}{{10001}})
+
+		viewObjSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeView, 10001)
+		bh.sql2err[viewObjSQL] = moerr.NewInternalError(ctx, "view WGO failed")
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_VIEW,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				DbName:  "db",
+				TabName: "v",
+			},
+		)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("view legacy path propagates legacy query error", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		checkViewSQL, err := getSqlForCheckDatabaseView(ctx, "db", "v")
+		require.NoError(t, err)
+		bh.sql2result[checkViewSQL] = newMrsForCheckDatabaseTable([][]interface{}{{10001}})
+
+		viewObjSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeView, 10001)
+		bh.sql2result[viewObjSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+		viewGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeView, objectIDAll)
+		bh.sql2result[viewGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+
+		legacyObjSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10001)
+		bh.sql2err[legacyObjSQL] = moerr.NewInternalError(ctx, "legacy view WGO failed")
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_VIEW,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				DbName:  "db",
+				TabName: "v",
+			},
+		)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("merge tolerates nil and empty role sets", func(t *testing.T) {
+		dst := &btree.Set[int64]{}
+		dst.Insert(1)
+		mergeRoleSets(nil, dst)
+		mergeRoleSets(dst, nil)
+		mergeRoleSets(dst, &btree.Set[int64]{})
+		require.Equal(t, 1, dst.Len())
+
+		src := &btree.Set[int64]{}
+		src.Insert(2)
+		mergeRoleSets(dst, src)
+		require.True(t, dst.Contains(1))
+		require.True(t, dst.Contains(2))
+	})
+}
+
 func TestDoAlterDatabaseConfig(t *testing.T) {
 	convey.Convey("doAlterDatabaseConfig success", t, func() {
 		ctrl := gomock.NewController(t)
