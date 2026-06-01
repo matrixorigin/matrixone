@@ -34,6 +34,7 @@ import (
 )
 
 const DefaultInMemoryStagedSize = mpool.MB * 16
+const pipelineSortKeySubmitThreshold = mpool.MB * 64
 
 // Cap each sort-key pipeline submission so backfill can produce reasonably
 // sized objects without letting pending sorted batches grow without bound.
