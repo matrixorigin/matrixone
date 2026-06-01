@@ -130,6 +130,20 @@ func TestDecimalIntDivScaleAndFallbackBranches(t *testing.T) {
 		require.Equal(t, []int64{33, -33}, rs)
 	})
 
+	t.Run("D64NonInlineBranches", func(t *testing.T) {
+		vec := []types.Decimal64{100, 200}
+		scalar := []types.Decimal64{4}
+		rs := make([]int64, len(vec))
+		require.NoError(t, d64IntDiv(vec, []types.Decimal64{3, 4}, rs, 20, 0, nulls.NewWithSize(len(vec)), true))
+		require.Equal(t, []int64{0, 0}, rs)
+
+		require.NoError(t, d64IntDiv(scalar, vec, rs, 20, 0, nulls.NewWithSize(len(vec)), true))
+		require.Equal(t, []int64{0, 0}, rs)
+
+		require.NoError(t, d64IntDiv(vec, scalar, rs, 20, 0, nulls.NewWithSize(len(vec)), true))
+		require.Equal(t, []int64{0, 0}, rs)
+	})
+
 	t.Run("D256GenericScaleAdjust", func(t *testing.T) {
 		x := types.Decimal256{B128_191: 5}
 		y := types.Decimal256{B128_191: 2}
