@@ -549,6 +549,24 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				return parquetValueToUint64(proc.Ctx, st, v)
 			})
 		}
+	case types.T_bit:
+		if !isParquetIntegerSource(st, true) {
+			break
+		}
+		bitWidth := parquetBitWidth(dt)
+		maxValue := maxParquetBitValue(bitWidth)
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, uint64(0), func(v parquet.Value) (uint64, error) {
+				val, err := parquetValueToUint64(proc.Ctx, st, v)
+				if err != nil {
+					return 0, err
+				}
+				if val > maxValue {
+					return 0, moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows BIT(%d)", val, bitWidth)
+				}
+				return val, nil
+			})
+		}
 	case types.T_float32:
 		if !isParquetFloatConvertibleSource(st) {
 			break
@@ -762,65 +780,87 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 		}
 	case types.T_time:
-		// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#time
-		lt := st.LogicalType()
-		if lt == nil {
-			break
-		}
-		timeT := lt.Time
-		if timeT == nil {
-			break
-		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			switch {
-			case timeT.Unit.Nanos != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					dictValues := dictData.Int64()
-					converted := make([]types.Time, len(dictValues))
-					for i, v := range dictValues {
-						converted[i] = types.Time(v / 1000)
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			scale := dt.Scale
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+					func(data []byte) (types.Time, error) {
+						return types.ParseTime(util.UnsafeBytesToString(data), scale)
+					},
+					types.Time(0),
+				)
+			}
+		} else if isParquetIntegerSource(st, false) {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Time(0), func(v parquet.Value) (types.Time, error) {
+					val, err := parquetValueToInt64(proc.Ctx, st, v)
+					if err != nil {
+						return 0, err
 					}
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
-						return converted[int(idx)]
-					})
-				}
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Time {
-					return types.Time(v / 1000)
+					return types.Time(val), nil
 				})
-			case timeT.Unit.Micros != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					bs, _ := dictData.Data()
-					dictTimes := types.DecodeSlice[types.Time](bs)
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(dictTimes), indexes, func(idx int32) types.Time {
-						return dictTimes[int(idx)]
-					})
-				}
-				bs, _ := data.Data()
-				return copyPageToVec(mp, page, proc, vec, types.DecodeSlice[types.Time](bs))
-			case timeT.Unit.Millis != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					dictValues := dictData.Int32()
-					converted := make([]types.Time, len(dictValues))
-					for i, v := range dictValues {
-						converted[i] = types.Time(v) * 1000
+			}
+		} else {
+			// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#time
+			lt := st.LogicalType()
+			if lt == nil {
+				break
+			}
+			timeT := lt.Time
+			if timeT == nil {
+				break
+			}
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				switch {
+				case timeT.Unit.Nanos != nil:
+					if dict != nil {
+						dictData := dict.Page().Data()
+						dictValues := dictData.Int64()
+						converted := make([]types.Time, len(dictValues))
+						for i, v := range dictValues {
+							converted[i] = types.Time(v / 1000)
+						}
+						indexes := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
+							return converted[int(idx)]
+						})
 					}
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
-						return converted[int(idx)]
+					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Time {
+						return types.Time(v / 1000)
 					})
+				case timeT.Unit.Micros != nil:
+					if dict != nil {
+						dictData := dict.Page().Data()
+						bs, _ := dictData.Data()
+						dictTimes := types.DecodeSlice[types.Time](bs)
+						indexes := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(dictTimes), indexes, func(idx int32) types.Time {
+							return dictTimes[int(idx)]
+						})
+					}
+					bs, _ := data.Data()
+					return copyPageToVec(mp, page, proc, vec, types.DecodeSlice[types.Time](bs))
+				case timeT.Unit.Millis != nil:
+					if dict != nil {
+						dictData := dict.Page().Data()
+						dictValues := dictData.Int32()
+						converted := make([]types.Time, len(dictValues))
+						for i, v := range dictValues {
+							converted[i] = types.Time(v) * 1000
+						}
+						indexes := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
+							return converted[int(idx)]
+						})
+					}
+					return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) types.Time {
+						return types.Time(v) * 1000
+					})
+				default:
+					return moerr.NewInternalError(proc.Ctx, "unknown unit")
 				}
-				return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) types.Time {
-					return types.Time(v) * 1000
-				})
-			default:
-				return moerr.NewInternalError(proc.Ctx, "unknown unit")
 			}
 		}
 	case types.T_decimal64:
@@ -1026,6 +1066,31 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processStringToJson(proc.Ctx, mp, page, proc, vec)
+		}
+	case types.T_uuid:
+		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+				func(data []byte) (types.Uuid, error) {
+					return types.ParseUuid(util.UnsafeBytesToString(data))
+				},
+				types.Uuid{},
+			)
+		}
+	case types.T_enum:
+		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
+			break
+		}
+		enumValues := dt.Enumvalues
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+				func(data []byte) (types.Enum, error) {
+					return types.ParseEnum(enumValues, util.UnsafeBytesToString(data))
+				},
+				types.Enum(0),
+			)
 		}
 	}
 	if mp.mapper != nil {
@@ -1468,6 +1533,21 @@ func processParquetValuesToBytes(
 		}
 	}
 	return nil
+}
+
+func parquetBitWidth(dt plan.Type) int {
+	width := int(dt.Width)
+	if width <= 0 || width > types.MaxBitLen {
+		return types.MaxBitLen
+	}
+	return width
+}
+
+func maxParquetBitValue(width int) uint64 {
+	if width >= types.MaxBitLen {
+		return math.MaxUint64
+	}
+	return (uint64(1) << width) - 1
 }
 
 func isParquetIntegerSource(st parquet.Type, includeBoolean bool) bool {
