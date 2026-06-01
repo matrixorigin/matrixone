@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -57,6 +58,26 @@ func TestBitCountBinaryString(t *testing.T) {
 		BitCountBinaryString)
 	ok, info := tc.Run()
 	require.True(t, ok, info)
+}
+
+func TestBitCountVarcharWithIsBin(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	input := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("64"), []byte("@"), {0x00}, {0xff}},
+		nil,
+		types.T_varchar.ToType(),
+		mp,
+	)
+	defer input.Free(mp)
+	input.SetIsBin(true)
+
+	result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(input.Length()))
+
+	require.NoError(t, BitCountNonBinaryString([]*vector.Vector{input}, result, proc, input.Length(), nil))
+	require.Equal(t, []uint64{7, 1, 0, 8}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
 }
 
 func TestBitCountTypeCheck(t *testing.T) {

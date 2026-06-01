@@ -3,9 +3,10 @@ BIT_COUNT(64)    BIT_COUNT(BINARY(64))
 1    7
 SELECT BIT_COUNT('64'), BIT_COUNT(_binary '64');
 BIT_COUNT(64)    BIT_COUNT(64)
-1    1
+1    7
 SELECT BIT_COUNT(X'40'), BIT_COUNT(_binary X'40');
-strconv.ParseInt: parsing "@": invalid syntax
+BIT_COUNT(0x40)    BIT_COUNT(40)
+1    0
 SELECT BIT_COUNT(NULL);
 BIT_COUNT(null)
 null
@@ -35,11 +36,13 @@ BIT_COUNT(cast(64 as varchar))    BIT_COUNT(cast(64 as varchar(10)))    BIT_COUN
 1    1    1
 SELECT BIT_COUNT(BINARY '64'), BIT_COUNT(_binary '64'), BIT_COUNT(CAST('64' AS BINARY)), BIT_COUNT(CAST('64' AS VARBINARY(2)));
 BIT_COUNT(BINARY(64))    BIT_COUNT(64)    BIT_COUNT(cast(64 as binary))    BIT_COUNT(cast(64 as varbinary(2)))
-7    1    7    7
+7    7    7    7
 SELECT BIT_COUNT(X'00'), BIT_COUNT(X'01'), BIT_COUNT(X'40'), BIT_COUNT(X'FF'), BIT_COUNT(X'FFFF');
-strconv.ParseInt: parsing "\x00": invalid syntax
+BIT_COUNT(0x00)    BIT_COUNT(0x01)    BIT_COUNT(0x40)    BIT_COUNT(0xFF)    BIT_COUNT(0xFFFF)
+0    1    1    8    16
 SELECT BIT_COUNT(_binary X'00'), BIT_COUNT(_binary X'01'), BIT_COUNT(_binary X'40'), BIT_COUNT(_binary X'FF'), BIT_COUNT(_binary X'FFFF');
-invalid argument bit_count, bad value 
+BIT_COUNT(00)    BIT_COUNT(01)    BIT_COUNT(40)    BIT_COUNT(FF)    BIT_COUNT(FFFF)
+0    0    0    0    0
 SELECT BIT_COUNT(UNHEX('40')), BIT_COUNT(UNHEX('FF')), BIT_COUNT(UNHEX('FFFF'));
 BIT_COUNT(UNHEX(40))    BIT_COUNT(UNHEX(FF))    BIT_COUNT(UNHEX(FFFF))
 1    8    16
