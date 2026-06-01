@@ -879,11 +879,10 @@ func TestS3FSReadFullObjectToDiskCacheStreamingDoesNotOpenReaderWhenCacheExists(
 	assert.Nil(t, err)
 	defer cache.Close(ctx)
 
-	written, err := cache.SetFile(ctx, "foo/bar", func(context.Context) (io.ReadCloser, error) {
+	err = cache.SetFile(ctx, "foo/bar", func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader([]byte("hello world"))), nil
 	})
 	assert.Nil(t, err)
-	assert.True(t, written)
 
 	fs := &S3FS{
 		diskCache: cache,
