@@ -8401,7 +8401,16 @@ func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
 			// If we can't resolve the object, fall back to obj_type-only check
 			return getRoleSetThatPrivilegeGrantedToWGOWithObjType(ctx, bh, privType, objType)
 		}
-		return getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, objId)
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, objId)
+		if err != nil {
+			return nil, err
+		}
+		globalRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, objectIDAll)
+		if err != nil {
+			return nil, err
+		}
+		mergeRoleSets(roleSet, globalRoleSet)
+		return roleSet, nil
 	}
 
 	// For truly global wildcard levels (*.*), filter by obj_type only.
