@@ -5357,7 +5357,12 @@ func (c *Compile) getLower() int64 {
 		if err != nil {
 			return 1
 		}
-		lower = lowerVar.(int64)
+		// lowerVar may be nil (e.g. the session variable is not resolvable in
+		// some internal SQL contexts); fall back to the default instead of
+		// panicking on the type assertion.
+		if v, ok := lowerVar.(int64); ok {
+			lower = v
+		}
 	}
 	return lower
 }

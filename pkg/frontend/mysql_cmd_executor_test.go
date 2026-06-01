@@ -1317,16 +1317,24 @@ func TestCanExecuteDataBranchMergePickInUncommittedTransaction(t *testing.T) {
 		&tree.DataBranchMerge{},
 		&tree.DataBranchPick{},
 	} {
+		// option bits are cumulative (setBits does |=), so use a fresh session
+		// per scenario to isolate the bit under test.
+
+		// autocommit: allowed
 		ses := newTestSession(t, ctrl)
 		can, err := statementCanBeExecutedInUncommittedTransaction(context.TODO(), ses, stmt)
 		require.NoError(t, err)
 		require.True(t, can)
 
+		// implicit transaction (autocommit off, no explicit BEGIN): allowed
+		ses = newTestSession(t, ctrl)
 		ses.GetTxnHandler().SetOptionBits(OPTION_NOT_AUTOCOMMIT)
 		can, err = statementCanBeExecutedInUncommittedTransaction(context.TODO(), ses, stmt)
 		require.NoError(t, err)
 		require.True(t, can)
 
+		// explicit transaction (BEGIN only): rejected with the clear error
+		ses = newTestSession(t, ctrl)
 		ses.GetTxnHandler().SetOptionBits(OPTION_BEGIN)
 		can, err = statementCanBeExecutedInUncommittedTransaction(context.TODO(), ses, stmt)
 		require.NoError(t, err)
