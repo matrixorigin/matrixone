@@ -68,6 +68,7 @@ func TestDupOperatorMergeTop(t *testing.T) {
 func TestDupOperatorMergeOrder(t *testing.T) {
 	op := mergeorder.NewArgument()
 	op.OrderBySpecs = []*plan.OrderBySpec{{Flag: plan.OrderBySpec_ASC}}
+	op.SpillThreshold = 1234
 	result := dupOperator(op, 0, 1)
 	if result == nil {
 		t.Fatal("dupOperator returned nil for MergeOrder")
@@ -75,6 +76,9 @@ func TestDupOperatorMergeOrder(t *testing.T) {
 	dupOp := result.(*mergeorder.MergeOrder)
 	if len(dupOp.OrderBySpecs) != len(op.OrderBySpecs) {
 		t.Errorf("OrderBySpecs length mismatch: got %d, want %d", len(dupOp.OrderBySpecs), len(op.OrderBySpecs))
+	}
+	if dupOp.SpillThreshold != op.SpillThreshold {
+		t.Errorf("SpillThreshold mismatch: got %d, want %d", dupOp.SpillThreshold, op.SpillThreshold)
 	}
 }
 
