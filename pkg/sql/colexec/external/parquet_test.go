@@ -382,6 +382,107 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.Equal(t, "false", vecStr.GetStringAt(1))
 	})
 
+	t.Run("int8 to bit", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Int(8), []parquet.Value{
+			parquet.Int32Value(0),
+			parquet.Int32Value(1),
+			parquet.Int32Value(127),
+		})
+
+		vec := vector.NewVec(types.New(types.T_bit, 8, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bit), Width: 8, NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []uint64{0, 1, 127}, vector.MustFixedColWithTypeCheck[uint64](vec))
+	})
+
+	t.Run("bool to bit", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Leaf(parquet.BooleanType), []parquet.Value{
+			parquet.BooleanValue(true),
+			parquet.BooleanValue(false),
+		})
+
+		vec := vector.NewVec(types.New(types.T_bit, 1, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bit), Width: 1, NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []uint64{1, 0}, vector.MustFixedColWithTypeCheck[uint64](vec))
+	})
+
+	t.Run("negative signed int8 to bit", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Int(8), []parquet.Value{
+			parquet.Int32Value(-1),
+		})
+
+		vec := vector.NewVec(types.New(types.T_bit, 8, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bit), Width: 8, NotNullable: true})
+		require.NotNil(t, mp)
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "negative parquet value")
+	})
+
+	t.Run("int16 to bit overflow", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Int(16), []parquet.Value{
+			parquet.Int32Value(256),
+		})
+
+		vec := vector.NewVec(types.New(types.T_bit, 8, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bit), Width: 8, NotNullable: true})
+		require.NotNil(t, mp)
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "overflows BIT(8)")
+	})
+
+	t.Run("string to uuid", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.String(), []parquet.Value{
+			parquet.ByteArrayValue([]byte("c8477387-eb5b-4d97-af1b-48d9db74856d")),
+			parquet.ByteArrayValue([]byte("00000000-0000-0000-0000-000000000001")),
+		})
+
+		vec := vector.NewVec(types.T_uuid.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uuid), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+
+		want0, err := types.ParseUuid("c8477387-eb5b-4d97-af1b-48d9db74856d")
+		require.NoError(t, err)
+		want1, err := types.ParseUuid("00000000-0000-0000-0000-000000000001")
+		require.NoError(t, err)
+		require.Equal(t, []types.Uuid{want0, want1}, vector.MustFixedColWithTypeCheck[types.Uuid](vec))
+	})
+
+	t.Run("plain int64 micros to time", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Leaf(parquet.Int64Type), []parquet.Value{
+			parquet.Int64Value(0),
+			parquet.Int64Value(45_296_123_456),
+		})
+
+		vec := vector.NewVec(types.New(types.T_time, 0, 6))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_time), Scale: 6, NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []types.Time{0, types.Time(45_296_123_456)}, vector.MustFixedColWithTypeCheck[types.Time](vec))
+	})
+
+	t.Run("string to enum", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Encoded(parquet.String(), &parquet.RLEDictionary), []parquet.Value{
+			parquet.ByteArrayValue([]byte("red")),
+			parquet.ByteArrayValue([]byte("green")),
+			parquet.ByteArrayValue([]byte("red")),
+		})
+
+		vec := vector.NewVec(types.T_enum.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_enum), Enumvalues: "red,green,blue", NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []types.Enum{1, 2, 1}, vector.MustFixedColWithTypeCheck[types.Enum](vec))
+	})
+
 	t.Run("int64 to int32 and varchar", func(t *testing.T) {
 		f, page := writeDictAndGetPage(t, parquet.Int(64), []parquet.Value{
 			parquet.Int64Value(100),

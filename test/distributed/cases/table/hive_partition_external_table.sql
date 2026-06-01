@@ -31,11 +31,15 @@ create external table hive_single (
     year int
 ) infile{'filepath'='$resources/hive_partition/single_level/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='year'};
 
--- 1.2 DDL error: missing partition_columns
+-- 1.2 Auto inference when hive_partition_columns is omitted
 drop table if exists hive_err1;
 create external table hive_err1 (
     id int, year int
 ) infile{'filepath'='$resources/hive_partition/single_level/', 'format'='parquet', 'hive_partitioning'='true'};
+select count(*) as cnt from hive_err1 where year = 2024;
+-- @ignore:1
+show create table hive_err1;
+desc hive_err1;
 
 -- 1.3 DDL error: format not parquet
 drop table if exists hive_err2;
@@ -122,14 +126,28 @@ select year, count(*) as cnt from hive_single where year in (2022) group by year
 -- 2.5 NOT IN (rowFilter fallback)
 select year, count(*) as cnt from hive_single where year not in (2020, 2021, 2022) group by year order by year;
 
--- 2.6 Non-prunable GT (rowFilter fallback, must not lose data)
+-- 2.6 GT range pruning
 select count(*) as cnt from hive_single where year > 2022;
 
--- 2.7 BETWEEN (rowFilter fallback)
+-- 2.6.1 GE/LT/LE range pruning
+select count(*) as cnt from hive_single where year >= 2023;
+select count(*) as cnt from hive_single where year < 2022;
+select count(*) as cnt from hive_single where year <= 2021;
+
+-- 2.7 BETWEEN range pruning
 select year, count(*) as cnt from hive_single where year between 2021 and 2023 group by year order by year;
 
--- 2.8 OR condition (rowFilter fallback; not prunable in P0)
+-- 2.8 OR condition pruning
 select year, count(*) as cnt from hive_single where year = 2020 or year = 2024 group by year order by year;
+select year, count(*) as cnt from hive_single where year in (2020, 2021) or year = 2024 group by year order by year;
+select year, count(*) as cnt from hive_single where year < 2021 or year > 2023 group by year order by year;
+
+-- 2.8.1 Reverse range comparison pruning
+select count(*) as cnt from hive_single where 2021 < year;
+select count(*) as cnt from hive_single where 2025 >= year;
+
+-- 2.8.2 Empty range intersection prunes all partitions
+select count(*) as cnt from hive_single where year > 2024 and year < 2020;
 
 -- 2.9 Partition column only in SELECT
 select distinct year from hive_single order by year;
@@ -218,6 +236,11 @@ group by a.year, a.month order by a.year, a.month;
 select year, mc from (
     select year, count(distinct month) as mc from hive_multi group by year
 ) t order by year;
+
+-- 3.12 Multi-level OR pruning
+select year, month, count(*) as cnt from hive_multi
+where (year = 2024 and month = '01') or (year = 2025 and month = '02')
+group by year, month order by year, month;
 
 -- ============================================================================
 -- 4. String Partition
@@ -335,6 +358,24 @@ select count(*) as cnt from hive_single where year = 2024 and __mo_filepath like
 -- 7.7 Contradictory partition + filepath (empty result, but evaluates correctly)
 select count(*) as cnt from hive_single where year = 2024 and __mo_filepath like '%year=2020%';
 
+-- 7.7.1 OR across partition and __mo_filepath falls back to row filtering
+select count(*) as cnt from hive_single where year = 2024 or __mo_filepath like '%year=2020%';
+
+-- 7.8 Multiple parquet files under each hive partition.
+-- This keeps BVT small while covering the runtime path that fanouts more than
+-- one file per partition, plus partition-value fill and __mo_filepath fill.
+drop table if exists hive_fanout_small;
+create external table hive_fanout_small (
+    id int,
+    amount double,
+    part_id int
+) infile{'filepath'='$resources/hive_partition/fanout_small/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select count(*) as cnt from hive_fanout_small;
+select count(distinct __mo_filepath) as paths from hive_fanout_small;
+select part_id, count(*) as rows_per_part, count(distinct __mo_filepath) as files_per_part
+from hive_fanout_small group by part_id order by part_id;
+select count(*) as cnt from hive_fanout_small where part_id in (1, 3, 9);
+
 -- ============================================================================
 -- 8. EXPLAIN Verification
 -- ============================================================================
@@ -438,14 +479,33 @@ create external table hive_invalid_type (
 select * from hive_invalid_type;
 select count(*) from hive_invalid_type;
 
--- 10.2 URL-encoded directory name containing '%' should report error (P0 known limitation)
+-- 10.2 URL-encoded directory value is decoded for SQL values; file path stays raw
 drop table if exists hive_url_encoded;
 create external table hive_url_encoded (
     id int,
     amount double,
     country varchar(20)
 ) infile{'filepath'='$resources/hive_partition/url_encoded/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='country'};
-select * from hive_url_encoded;
+select id, country from hive_url_encoded where country = 'US/CA';
+
+-- 10.2.1 Invalid URL escape reports the raw encoded value
+drop table if exists hive_invalid_url;
+create external table hive_invalid_url (
+    id int,
+    amount double,
+    country varchar(20)
+) infile{'filepath'='$resources/hive_partition/invalid_url/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='country'};
+select * from hive_invalid_url;
+
+-- 10.2.2 Negative integer partition ranges
+drop table if exists hive_negative_year;
+create external table hive_negative_year (
+    id int,
+    amount double,
+    year int
+) infile{'filepath'='$resources/hive_partition/negative_year/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='year'};
+select year, count(*) as cnt from hive_negative_year where year > -2020 group by year order by year;
+select year, count(*) as cnt from hive_negative_year where year between -10 and 10 group by year order by year;
 
 -- 10.3 Stage hive external table should be rejected at DDL
 drop table if exists hive_stage_err;
@@ -476,6 +536,14 @@ select id, year from hive_col_overlap order by id;
 
 -- 10.6 Non-hive parquet smoke: regular physical column query (not just __mo_filepath)
 select id, amount from parquet_non_hive order by id;
+
+-- 10.6.1 Non-hive parquet with raw percent in path
+drop table if exists parquet_non_hive_percent;
+create external table parquet_non_hive_percent (
+    id int,
+    amount double
+) infile{'filepath'='$resources/hive_partition/non_hive_percent/simple%20copy.parquet', 'format'='parquet'};
+select id, amount from parquet_non_hive_percent order by id;
 
 -- 10.7 Case-insensitive column name in DDL
 drop table if exists hive_mixed_case;
