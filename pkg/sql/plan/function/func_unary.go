@@ -32,6 +32,7 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
+	"math/bits"
 	"net"
 	"runtime"
 	"sort"
@@ -531,6 +532,105 @@ func BinFloat[T constraints.Float](ivecs []*vector.Vector, result vector.Functio
 		}
 		return val, err
 	}, selectList)
+}
+
+func bitCountFromUint64(v uint64) uint64 {
+	return uint64(bits.OnesCount64(v))
+}
+
+func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64, error) {
+	if err := overflowForNumericToNumeric[T, int64](proc.Ctx, []T{v}, nil); err != nil {
+		return 0, err
+	}
+	return bitCountFromUint64(uint64(int64(v))), nil
+}
+
+func bitCountFromDecimal64(v types.Decimal64, scale int32) (uint64, error) {
+	intPart := strings.Split(v.Format(scale), ".")[0]
+	val, err := strconv.ParseInt(intPart, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return bitCountFromUint64(uint64(val)), nil
+}
+
+func bitCountFromDecimal128(v types.Decimal128, scale int32) (uint64, error) {
+	intPart := strings.Split(v.Format(scale), ".")[0]
+	val, err := strconv.ParseInt(intPart, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return bitCountFromUint64(uint64(val)), nil
+}
+
+func bitCountFromDecimal256(v types.Decimal256, scale int32) (uint64, error) {
+	intPart := strings.Split(v.Format(scale), ".")[0]
+	val, err := strconv.ParseInt(intPart, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return bitCountFromUint64(uint64(val)), nil
+}
+
+func bitCountFromNonBinaryString(v []byte) (uint64, error) {
+	s := strings.TrimSpace(convertByteSliceToString(v))
+	if s == "" {
+		return 0, moerr.NewInvalidArgNoCtx("bit_count", s)
+	}
+	val, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return bitCountFromUint64(uint64(val)), nil
+}
+
+func bitCountFromBinaryString(v []byte) uint64 {
+	var cnt uint64
+	for _, b := range v {
+		cnt += uint64(bits.OnesCount8(b))
+	}
+	return cnt
+}
+
+func BitCountInteger[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[T, uint64](ivecs, result, proc, length, func(v T) uint64 {
+		return bitCountFromUint64(uint64(v))
+	}, selectList)
+}
+
+func BitCountFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithErrorCheck[T, uint64](ivecs, result, proc, length, func(v T) (uint64, error) {
+		return bitCountFromFloat(v, proc)
+	}, selectList)
+}
+
+func BitCountDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToFixedWithErrorCheck[types.Decimal64, uint64](ivecs, result, proc, length, func(v types.Decimal64) (uint64, error) {
+		return bitCountFromDecimal64(v, scale)
+	}, selectList)
+}
+
+func BitCountDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToFixedWithErrorCheck[types.Decimal128, uint64](ivecs, result, proc, length, func(v types.Decimal128) (uint64, error) {
+		return bitCountFromDecimal128(v, scale)
+	}, selectList)
+}
+
+func BitCountDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToFixedWithErrorCheck[types.Decimal256, uint64](ivecs, result, proc, length, func(v types.Decimal256) (uint64, error) {
+		return bitCountFromDecimal256(v, scale)
+	}, selectList)
+}
+
+func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[uint64](ivecs, result, proc, length, bitCountFromNonBinaryString, selectList)
+}
+
+func BitCountBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
 }
 
 func BitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

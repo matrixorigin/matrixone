@@ -1,0 +1,66 @@
+SELECT BIT_COUNT(64), BIT_COUNT(BINARY 64);
+BIT_COUNT(64)    BIT_COUNT(BINARY(64))
+1    7
+SELECT BIT_COUNT('64'), BIT_COUNT(_binary '64');
+BIT_COUNT(64)    BIT_COUNT(64)
+1    1
+SELECT BIT_COUNT(X'40'), BIT_COUNT(_binary X'40');
+strconv.ParseInt: parsing "@": invalid syntax
+SELECT BIT_COUNT(NULL);
+BIT_COUNT(null)
+null
+SELECT BIT_COUNT(0), BIT_COUNT(1), BIT_COUNT(2), BIT_COUNT(3), BIT_COUNT(255), BIT_COUNT(256);
+BIT_COUNT(0)    BIT_COUNT(1)    BIT_COUNT(2)    BIT_COUNT(3)    BIT_COUNT(255)    BIT_COUNT(256)
+0    1    1    2    8    1
+SELECT BIT_COUNT(-1), BIT_COUNT(-2), BIT_COUNT(-9223372036854775808);
+BIT_COUNT(-1)    BIT_COUNT(-2)    BIT_COUNT(-9223372036854775808)
+64    63    1
+SELECT BIT_COUNT(CAST(64 AS TINYINT)), BIT_COUNT(CAST(64 AS SMALLINT)), BIT_COUNT(CAST(64 AS INT)), BIT_COUNT(CAST(64 AS BIGINT));
+BIT_COUNT(cast(64 as tinyint))    BIT_COUNT(cast(64 as smallint))    BIT_COUNT(cast(64 as int))    BIT_COUNT(cast(64 as bigint))
+1    1    1    1
+SELECT BIT_COUNT(CAST(255 AS TINYINT UNSIGNED)), BIT_COUNT(CAST(65535 AS SMALLINT UNSIGNED)), BIT_COUNT(CAST(4294967295 AS INT UNSIGNED));
+BIT_COUNT(cast(255 as tinyint unsigned))    BIT_COUNT(cast(65535 as smallint unsigned))    BIT_COUNT(cast(4294967295 as int unsigned))
+8    16    32
+SELECT BIT_COUNT(CAST(64.9 AS FLOAT)), BIT_COUNT(CAST(64.9 AS DOUBLE));
+BIT_COUNT(cast(64.9 as float))    BIT_COUNT(cast(64.9 as double))
+1    1
+SELECT BIT_COUNT(CAST(64.9 AS DECIMAL(10, 1))), BIT_COUNT(CAST(255.9 AS DECIMAL(10, 1)));
+BIT_COUNT(cast(64.9 as decimal(10, 1)))    BIT_COUNT(cast(255.9 as decimal(10, 1)))
+1    8
+SELECT BIT_COUNT('0'), BIT_COUNT('1'), BIT_COUNT('64'), BIT_COUNT('255'), BIT_COUNT('-1');
+BIT_COUNT(0)    BIT_COUNT(1)    BIT_COUNT(64)    BIT_COUNT(255)    BIT_COUNT(-1)
+0    1    1    8    64
+SELECT BIT_COUNT(CAST('64' AS CHAR)), BIT_COUNT(CAST('64' AS VARCHAR(10))), BIT_COUNT(CAST('64' AS TEXT));
+BIT_COUNT(cast(64 as varchar))    BIT_COUNT(cast(64 as varchar(10)))    BIT_COUNT(cast(64 as text))
+1    1    1
+SELECT BIT_COUNT(BINARY '64'), BIT_COUNT(_binary '64'), BIT_COUNT(CAST('64' AS BINARY)), BIT_COUNT(CAST('64' AS VARBINARY(2)));
+BIT_COUNT(BINARY(64))    BIT_COUNT(64)    BIT_COUNT(cast(64 as binary))    BIT_COUNT(cast(64 as varbinary(2)))
+7    1    7    7
+SELECT BIT_COUNT(X'00'), BIT_COUNT(X'01'), BIT_COUNT(X'40'), BIT_COUNT(X'FF'), BIT_COUNT(X'FFFF');
+strconv.ParseInt: parsing "\x00": invalid syntax
+SELECT BIT_COUNT(_binary X'00'), BIT_COUNT(_binary X'01'), BIT_COUNT(_binary X'40'), BIT_COUNT(_binary X'FF'), BIT_COUNT(_binary X'FFFF');
+invalid argument bit_count, bad value 
+SELECT BIT_COUNT(UNHEX('40')), BIT_COUNT(UNHEX('FF')), BIT_COUNT(UNHEX('FFFF'));
+BIT_COUNT(UNHEX(40))    BIT_COUNT(UNHEX(FF))    BIT_COUNT(UNHEX(FFFF))
+1    8    16
+DROP TABLE IF EXISTS t_bit_count;
+CREATE TABLE t_bit_count(
+id INT,
+i BIGINT,
+u BIGINT UNSIGNED,
+s VARCHAR(10),
+b VARBINARY(4)
+);
+INSERT INTO t_bit_count VALUES
+(1, 64, 64, '64', X'40'),
+(2, -1, 255, '-1', X'FF'),
+(3, NULL, NULL, NULL, NULL);
+SELECT id, BIT_COUNT(i), BIT_COUNT(u), BIT_COUNT(s), BIT_COUNT(b) FROM t_bit_count ORDER BY id;
+id    BIT_COUNT(i)    BIT_COUNT(u)    BIT_COUNT(s)    BIT_COUNT(b)
+1    1    1    1    1
+2    64    8    64    8
+3    null    null    null    null
+SELECT id FROM t_bit_count WHERE BIT_COUNT(b) = 1 ORDER BY id;
+id
+1
+DROP TABLE t_bit_count;

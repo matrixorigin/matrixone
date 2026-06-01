@@ -639,10 +639,11 @@ const (
 	HLL_ADD_AGG     = 453
 	HLL_MERGE_AGG   = 454
 	HLL_CARDINALITY = 455
+	BIT_COUNT       = 456
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 456
+	FUNCTION_END_NUMBER = 457
 )
 
 // functionIdRegister is what function we have registered already.
@@ -720,6 +721,7 @@ var functionIdRegister = map[string]int32{
 	"bit_or":                BIT_OR,
 	"bit_and":               BIT_AND,
 	"bit_xor":               BIT_XOR,
+	"bit_count":             BIT_COUNT,
 	"cluster_centers":       CLUSTER_CENTERS,
 	"subvector":             SUB_VECTOR,
 	"std":                   STDDEV_POP,
