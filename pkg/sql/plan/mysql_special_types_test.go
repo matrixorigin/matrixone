@@ -48,6 +48,34 @@ func TestGeomFromTextSRIDInResultType(t *testing.T) {
 	require.False(t, defined2)
 }
 
+// TestFuncCastForGeometrySRID verifies that SRID compatibility is enforced at
+// bind time from the value/column types.
+func TestFuncCastForGeometrySRID(t *testing.T) {
+	ctx := context.Background()
+	mkGeom := func(srid uint32, defined bool) *plan.Expr {
+		return &plan.Expr{Typ: *geometryPlanType(types.T_geometry, "POINT", srid, defined)}
+	}
+
+	// Matching SRID is accepted.
+	col4326 := *geometryPlanType(types.T_geometry, "POINT", 4326, true)
+	_, err := funcCastForGeometryType(ctx, mkGeom(4326, true), col4326)
+	require.NoError(t, err)
+
+	// Mismatched SRID is rejected.
+	_, err = funcCastForGeometryType(ctx, mkGeom(0, true), col4326)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "SRID of the geometry does not match")
+
+	// A value with no SRID into a SRID-constrained column is rejected.
+	_, err = funcCastForGeometryType(ctx, mkGeom(0, false), col4326)
+	require.Error(t, err)
+
+	// An unconstrained (no-SRID) column accepts any SRID.
+	colAny := *geometryPlanType(types.T_geometry, "POINT", 0, false)
+	_, err = funcCastForGeometryType(ctx, mkGeom(4326, true), colAny)
+	require.NoError(t, err)
+}
+
 func geometryPlanType(id types.T, subtype string, srid uint32, sridDefined bool) *plan.Type {
 	return &plan.Type{
 		Id:    int32(id),

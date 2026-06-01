@@ -210,16 +210,27 @@ func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (
 		expr.Typ = targetType
 		return expr, nil
 	}
-	// The runtime cast_geometry_to_subtype function still validates against a
-	// metadata string ("POINT;SRID=4326"); derive it from the column's
-	// Scale/Width at this bind boundary.
-	srid, sridDefined := geometrySRIDValue(&targetType)
-	targetMetadata := geometryMetadataString(geometrySubtypeName(&targetType), srid, sridDefined)
+
+	// SRID is enforced here at bind time, from the types (the WKB payload does
+	// not carry an SRID). A SRID-constrained column requires the value to carry
+	// the same SRID; an unconstrained column (Width 0) accepts any SRID.
+	if columnSRID, columnDefined := geometrySRIDValue(&targetType); columnDefined {
+		valueSRID, _ := geometrySRIDValue(&expr.Typ)
+		if valueSRID != columnSRID {
+			return nil, moerr.NewInvalidInputf(ctx,
+				"The SRID of the geometry does not match the SRID of the column. The SRID of the geometry is %d, but the SRID of the column is %d.",
+				valueSRID, columnSRID)
+		}
+	}
+
 	if isGeometryPlanType(&expr.Typ) && expr.Typ.Scale == targetType.Scale && expr.Typ.Width == targetType.Width {
 		expr.Typ = targetType
 		return expr, nil
 	}
 
+	// The runtime cast_geometry_to_subtype validates the value's subtype and
+	// normalizes the stored bytes to WKB; it only needs the column subtype name.
+	targetMetadata := geometrySubtypeName(&targetType)
 	args := make([]*Expr, 2)
 	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
 	targetSubtypeExpr, err := binder.BindExpr(tree.NewNumVal(targetMetadata, targetMetadata, false, tree.P_char), 0, false)
