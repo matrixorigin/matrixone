@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -43,23 +44,76 @@ func isEnumOrSetPlanType(typ *plan.Type) bool {
 }
 
 func isGeometryPlanType(typ *plan.Type) bool {
-	return typ != nil && typ.Id == int32(types.T_geometry)
+	return typ != nil && (typ.Id == int32(types.T_geometry) || typ.Id == int32(types.T_geometry32))
 }
+
+// Geometry subtype and SRID are stored in the column type's Scale and Width
+// (per docs/design/gisimpl.md §1.4), not in Enumvalues:
+//
+//   - Scale holds the geo.Subtype enum (0 GENERIC .. 7 GEOMETRYCOLLECTION).
+//   - Width holds srid+1 when the column declares an SRID, or 0 when it does
+//     not. The +1 offset preserves the "SRID defined vs unspecified"
+//     distinction while still keeping the SRID in Width. Only SRID 0 and 4326
+//     are meaningful for computation, so the int32 range of Width is ample.
 
 func geometrySubtypeName(typ *plan.Type) string {
 	if !isGeometryPlanType(typ) {
 		return ""
 	}
-	subtype, _, _ := decodeGeometryMetadata(typ.GetEnumvalues())
-	return subtype
+	return geometrySubtypeNameFromEnum(geo.Subtype(typ.Scale))
 }
 
 func geometrySRIDValue(typ *plan.Type) (uint32, bool) {
 	if !isGeometryPlanType(typ) {
 		return 0, false
 	}
-	_, srid, ok := decodeGeometryMetadata(typ.GetEnumvalues())
-	return srid, ok
+	return decodeGeometrySRIDWidth(typ.Width)
+}
+
+// geometrySubtypeEnum maps a subtype name (as it appears in DDL) to the
+// geo.Subtype enum stored in Scale. "" and "GEOMETRY" map to GENERIC.
+func geometrySubtypeEnum(name string) geo.Subtype {
+	switch strings.ToUpper(strings.TrimSpace(name)) {
+	case "POINT":
+		return geo.POINT
+	case "LINESTRING":
+		return geo.LINESTRING
+	case "POLYGON":
+		return geo.POLYGON
+	case "MULTIPOINT":
+		return geo.MULTIPOINT
+	case "MULTILINESTRING":
+		return geo.MULTILINESTRING
+	case "MULTIPOLYGON":
+		return geo.MULTIPOLYGON
+	case "GEOMETRYCOLLECTION":
+		return geo.GEOMETRYCOLLECTION
+	default:
+		return geo.GENERIC
+	}
+}
+
+// geometrySubtypeNameFromEnum is the inverse of geometrySubtypeEnum; GENERIC
+// maps to "" (no subtype constraint), matching the convention callers expect.
+func geometrySubtypeNameFromEnum(s geo.Subtype) string {
+	if s == geo.GENERIC {
+		return ""
+	}
+	return s.String()
+}
+
+func encodeGeometrySRIDWidth(srid uint32, defined bool) int32 {
+	if !defined {
+		return 0
+	}
+	return int32(srid + 1)
+}
+
+func decodeGeometrySRIDWidth(width int32) (uint32, bool) {
+	if width <= 0 {
+		return 0, false
+	}
+	return uint32(width - 1), true
 }
 
 func geometryMetadataString(subtype string, srid uint32, sridDefined bool) string {
@@ -71,36 +125,6 @@ func geometryMetadataString(subtype string, srid uint32, sridDefined bool) strin
 		return fmt.Sprintf("SRID=%d", srid)
 	}
 	return fmt.Sprintf("%s;SRID=%d", subtype, srid)
-}
-
-func decodeGeometryMetadata(metadata string) (subtype string, srid uint32, sridDefined bool) {
-	metadata = strings.TrimSpace(metadata)
-	if metadata == "" {
-		return "", 0, false
-	}
-	parts := strings.Split(metadata, ";")
-	start := 0
-	head := strings.TrimSpace(parts[0])
-	if !strings.HasPrefix(strings.ToUpper(head), "SRID=") {
-		subtype = normalizeGeometrySubtype(head)
-		start = 1
-	}
-	for _, part := range parts[start:] {
-		part = strings.TrimSpace(part)
-		if len(part) < len("SRID=") || !strings.EqualFold(part[:5], "SRID=") {
-			continue
-		}
-		value := strings.TrimSpace(part[5:])
-		if value == "" {
-			continue
-		}
-		parsed, err := strconv.ParseUint(value, 10, 32)
-		if err != nil {
-			continue
-		}
-		return subtype, uint32(parsed), true
-	}
-	return subtype, 0, false
 }
 
 func normalizeGeometrySubtype(subtype string) string {
@@ -186,8 +210,12 @@ func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (
 		expr.Typ = targetType
 		return expr, nil
 	}
-	targetMetadata := targetType.Enumvalues
-	if isGeometryPlanType(&expr.Typ) && expr.Typ.GetEnumvalues() == targetMetadata {
+	// The runtime cast_geometry_to_subtype function still validates against a
+	// metadata string ("POINT;SRID=4326"); derive it from the column's
+	// Scale/Width at this bind boundary.
+	srid, sridDefined := geometrySRIDValue(&targetType)
+	targetMetadata := geometryMetadataString(geometrySubtypeName(&targetType), srid, sridDefined)
+	if isGeometryPlanType(&expr.Typ) && expr.Typ.Scale == targetType.Scale && expr.Typ.Width == targetType.Width {
 		expr.Typ = targetType
 		return expr, nil
 	}

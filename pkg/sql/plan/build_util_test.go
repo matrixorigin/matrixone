@@ -113,9 +113,11 @@ func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
 	typ, err := getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_geometry), typ.Id)
-	require.Equal(t, "POINT", typ.Enumvalues)
+	require.Equal(t, "POINT", geometrySubtypeName(&typ))
 	require.NoError(t, applyColumnAttributesToType(context.Background(), &typ, colDef.Attributes))
-	require.Equal(t, "POINT", typ.Enumvalues)
+	require.Equal(t, "POINT", geometrySubtypeName(&typ))
+	_, sridDefined := geometrySRIDValue(&typ)
+	require.False(t, sridDefined)
 
 	stmt, err = mysql.ParseOne(context.Background(), "create table t (g geometry)", 1)
 	require.NoError(t, err)
@@ -127,7 +129,9 @@ func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
 	typ, err = getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_geometry), typ.Id)
-	require.Empty(t, typ.Enumvalues)
+	require.Equal(t, "", geometrySubtypeName(&typ))
+	_, sridDefined = geometrySRIDValue(&typ)
+	require.False(t, sridDefined)
 
 	stmt, err = mysql.ParseOne(context.Background(), "create table t (g point srid 4326)", 1)
 	require.NoError(t, err)
@@ -139,7 +143,10 @@ func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
 	typ, err = getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 	require.NoError(t, applyColumnAttributesToType(context.Background(), &typ, colDef.Attributes))
-	require.Equal(t, "POINT;SRID=4326", typ.Enumvalues)
+	require.Equal(t, "POINT", geometrySubtypeName(&typ))
+	srid, sridDefined := geometrySRIDValue(&typ)
+	require.True(t, sridDefined)
+	require.Equal(t, uint32(4326), srid)
 
 	stmt, err = mysql.ParseOne(context.Background(), "create table t (g geometry srid 0)", 1)
 	require.NoError(t, err)
@@ -151,7 +158,10 @@ func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
 	typ, err = getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 	require.NoError(t, applyColumnAttributesToType(context.Background(), &typ, colDef.Attributes))
-	require.Equal(t, "SRID=0", typ.Enumvalues)
+	require.Equal(t, "", geometrySubtypeName(&typ))
+	srid, sridDefined = geometrySRIDValue(&typ)
+	require.True(t, sridDefined)
+	require.Equal(t, uint32(0), srid)
 }
 
 func TestApplyColumnAttributesToTypeRejectsNonGeometrySRID(t *testing.T) {

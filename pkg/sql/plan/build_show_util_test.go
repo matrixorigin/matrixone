@@ -372,9 +372,10 @@ func TestShowCreateS3HiveExternalTableUsesS3Options(t *testing.T) {
 }
 
 func TestFormatColTypeGeometrySubtype(t *testing.T) {
+	// Subtype lives in Scale, SRID in Width (srid+1 when defined).
 	require.Equal(t, "POINT", FormatColType(plan.Type{
-		Id:         int32(types.T_geometry),
-		Enumvalues: "POINT",
+		Id:    int32(types.T_geometry),
+		Scale: int32(geometrySubtypeEnum("POINT")),
 	}))
 
 	require.Equal(t, "GEOMETRY", FormatColType(plan.Type{
@@ -382,12 +383,13 @@ func TestFormatColTypeGeometrySubtype(t *testing.T) {
 	}))
 
 	require.Equal(t, "POINT SRID 4326", FormatColType(plan.Type{
-		Id:         int32(types.T_geometry),
-		Enumvalues: "POINT;SRID=4326",
+		Id:    int32(types.T_geometry),
+		Scale: int32(geometrySubtypeEnum("POINT")),
+		Width: encodeGeometrySRIDWidth(4326, true),
 	}))
 
 	require.Equal(t, "GEOMETRY SRID 0", FormatColType(plan.Type{
-		Id:         int32(types.T_geometry),
-		Enumvalues: "SRID=0",
+		Id:    int32(types.T_geometry),
+		Width: encodeGeometrySRIDWidth(0, true),
 	}))
 }

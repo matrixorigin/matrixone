@@ -23,20 +23,65 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func geometryPlanType(id types.T, subtype string, srid uint32, sridDefined bool) *plan.Type {
+	return &plan.Type{
+		Id:    int32(id),
+		Scale: int32(geometrySubtypeEnum(subtype)),
+		Width: encodeGeometrySRIDWidth(srid, sridDefined),
+	}
+}
+
 func TestGeometryPlanTypeHelpers(t *testing.T) {
-	typ := &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT"}
+	// Subtype is read from Scale, SRID from Width.
+	typ := geometryPlanType(types.T_geometry, "POINT", 0, false)
 	require.True(t, isGeometryPlanType(typ))
 	require.Equal(t, "POINT", geometrySubtypeName(typ))
-	require.Equal(t, "", geometrySubtypeName(&plan.Type{Id: int32(types.T_geometry)}))
-	require.Equal(t, "", geometrySubtypeName(&plan.Type{Id: int32(types.T_varchar)}))
+	_, ok := geometrySRIDValue(typ)
+	require.False(t, ok) // SRID not defined
 
-	typ = &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT;SRID=4326"}
+	// GENERIC geometry has no subtype name.
+	require.Equal(t, "", geometrySubtypeName(&plan.Type{Id: int32(types.T_geometry)}))
+	// Non-geometry types yield nothing.
+	require.Equal(t, "", geometrySubtypeName(&plan.Type{Id: int32(types.T_varchar)}))
+	// T_geometry32 is also a geometry plan type.
+	require.True(t, isGeometryPlanType(geometryPlanType(types.T_geometry32, "POINT", 0, false)))
+
+	typ = geometryPlanType(types.T_geometry, "POINT", 4326, true)
 	require.Equal(t, "POINT", geometrySubtypeName(typ))
 	srid, ok := geometrySRIDValue(typ)
 	require.True(t, ok)
 	require.Equal(t, uint32(4326), srid)
+
 	require.Equal(t, "POINT;SRID=4326", geometryMetadataString("POINT", 4326, true))
 	require.Equal(t, "SRID=0", geometryMetadataString("", 0, true))
+}
+
+func TestGeometrySubtypeEnumRoundTrip(t *testing.T) {
+	for _, name := range []string{"POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION"} {
+		require.Equal(t, name, geometrySubtypeNameFromEnum(geometrySubtypeEnum(name)), name)
+	}
+	// GENERIC / GEOMETRY map to the empty (no-constraint) name.
+	require.Equal(t, "", geometrySubtypeNameFromEnum(geometrySubtypeEnum("GEOMETRY")))
+	require.Equal(t, "", geometrySubtypeNameFromEnum(geometrySubtypeEnum("")))
+}
+
+func TestGeometrySRIDWidthEncoding(t *testing.T) {
+	// Undefined SRID encodes to 0 and decodes back to (0, false).
+	srid, ok := decodeGeometrySRIDWidth(encodeGeometrySRIDWidth(0, false))
+	require.False(t, ok)
+	require.Equal(t, uint32(0), srid)
+
+	// Defined SRID 0 is distinct from undefined.
+	w0 := encodeGeometrySRIDWidth(0, true)
+	require.Equal(t, int32(1), w0)
+	srid, ok = decodeGeometrySRIDWidth(w0)
+	require.True(t, ok)
+	require.Equal(t, uint32(0), srid)
+
+	// Defined SRID 4326 round-trips.
+	srid, ok = decodeGeometrySRIDWidth(encodeGeometrySRIDWidth(4326, true))
+	require.True(t, ok)
+	require.Equal(t, uint32(4326), srid)
 }
 
 func TestGeometrySubtypeCompatible(t *testing.T) {
@@ -49,7 +94,7 @@ func TestGeometrySubtypeCompatible(t *testing.T) {
 }
 
 func TestFuncCastForGeometryTypeNull(t *testing.T) {
-	target := plan.Type{Id: int32(types.T_geometry), Enumvalues: "GEOMETRY"}
+	target := *geometryPlanType(types.T_geometry, "GEOMETRY", 0, false)
 	for _, expr := range []*plan.Expr{
 		{
 			Typ: plan.Type{Id: int32(types.T_any)},
