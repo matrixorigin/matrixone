@@ -292,6 +292,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*mergeorder.MergeOrder)
 		op := mergeorder.NewArgument()
 		op.OrderBySpecs = t.OrderBySpecs
+		op.SpillThreshold = t.SpillThreshold
 		op.SetInfo(&info)
 		return op
 	case vm.Intersect:
@@ -1507,6 +1508,7 @@ func constructMergeTop(node *plan.Node, topN *plan.Expr) *mergetop.MergeTop {
 func constructMergeOrder(node *plan.Node) *mergeorder.MergeOrder {
 	arg := mergeorder.NewArgument()
 	arg.OrderBySpecs = node.OrderBy
+	arg.SpillThreshold = node.SpillMem
 	return arg
 }
 

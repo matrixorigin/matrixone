@@ -478,6 +478,7 @@ message Instruction {
   Apply apply = 51;
   MultiUpdate multi_update = 52;
   PostDml post_dml = 53;
+  int64 spill_mem = 54;
 }
 
 message AnalysisList {
