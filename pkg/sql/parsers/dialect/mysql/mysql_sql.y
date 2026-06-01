@@ -414,8 +414,8 @@ func sqlTaskInt64(v any) int64 {
 %token <str> PROPERTIES
 
 // Secondary Index
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -4103,6 +4103,27 @@ alter_table_alter:
         var io *tree.IndexOption = nil
         io = tree.NewIndexOption()
         io.IType = tree.INDEX_TYPE_HNSW
+        var name = tree.Identifier($2.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
+    }
+| REINDEX ident IVFPQ index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $4 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_IVFPQ
+        } else {
+            io = $4
+            io.IType = tree.INDEX_TYPE_IVFPQ
+        }
+        var name = tree.Identifier($2.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
+    }
+| REINDEX ident CAGRA
+    {
+        var io *tree.IndexOption = nil
+        io = tree.NewIndexOption()
+        io.IType = tree.INDEX_TYPE_CAGRA
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
@@ -8212,8 +8233,8 @@ index_option_list:
 	      opt1.AlgoParamList = opt2.AlgoParamList
 	    } else if len(opt2.AlgoParamVectorOpType) > 0 {
 	      opt1.AlgoParamVectorOpType = opt2.AlgoParamVectorOpType
-	    } else if opt2.HnswM > 0 {
-	      opt1.HnswM = opt2.HnswM
+	    } else if opt2.AlgoParamM > 0 {
+	      opt1.AlgoParamM = opt2.AlgoParamM
 	    } else if opt2.HnswEfConstruction > 0 {
  	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
             } else if opt2.HnswEfSearch > 0 {
@@ -8228,7 +8249,23 @@ index_option_list:
 	      opt1.Day = opt2.Day
  	    } else if opt2.Hour > 0 {
 	      opt1.Hour = opt2.Hour
-	    }
+	    } else if opt2.IntermediateGraphDegree > 0 {
+              opt1.IntermediateGraphDegree = opt2.IntermediateGraphDegree
+	    } else if opt2.GraphDegree > 0 {
+              opt1.GraphDegree = opt2.GraphDegree
+	    } else if opt2.BitsPerCode > 0 {
+              opt1.BitsPerCode = opt2.BitsPerCode
+            } else if len(opt2.Quantization) > 0 {
+              opt1.Quantization = opt2.Quantization
+            } else if len(opt2.DistributionMode) > 0 {
+              opt1.DistributionMode = opt2.DistributionMode
+            } else if opt2.BitsPerCode > 0 {
+              opt1.BitsPerCode = opt2.BitsPerCode
+            } else if opt2.ITopkSize > 0 {
+              opt1.ITopkSize = opt2.ITopkSize
+            } else if len(opt2.IncludeColumns) > 0 {
+              opt1.IncludeColumns = opt2.IncludeColumns
+            }
             $$ = opt1
         }
     }
@@ -8290,7 +8327,7 @@ index_option:
 		return 1
 	}
 	io := tree.NewIndexOption()
-	io.HnswM = val
+	io.AlgoParamM = val
 	$$ = io
     }
 |   EF_CONSTRUCTION equal_opt INTEGRAL
@@ -8315,6 +8352,68 @@ index_option:
 	io.HnswEfSearch = val
 	$$ = io
      }
+|   INTERMEDIATE_GRAPH_DEGREE equal_opt INTEGRAL
+    {
+        val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("INTERMEDIATE_GRAPH_DEGREE should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.IntermediateGraphDegree = val
+	$$ = io
+     }
+|   GRAPH_DEGREE equal_opt INTEGRAL
+    {
+        val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("GRAPH_DEGREE should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.GraphDegree = val
+	$$ = io
+     }
+|   ITOPK_SIZE equal_opt INTEGRAL
+    {
+        val := int64($3.(int64))
+        if val <= 0 {
+                yylex.Error("GRAPH_DEGREE should be greater than 0")
+                return 1
+        }
+        io := tree.NewIndexOption()
+        io.ITopkSize = val
+        $$ = io
+     }
+|   INCLUDE '(' column_name_list ')'
+    {
+        io := tree.NewIndexOption()
+        io.IncludeColumns = $3
+        $$ = io
+    }
+|   QUANTIZATION STRING
+    {
+        io := tree.NewIndexOption()
+        io.Quantization = $2
+        $$ = io
+    }
+|   DISTRIBUTION_MODE STRING
+    {
+        io := tree.NewIndexOption()
+        io.DistributionMode = $2
+        $$ = io
+    }
+|   BITS_PER_CODE equal_opt INTEGRAL
+    {
+        val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("M should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.BitsPerCode = val
+	$$ = io
+    }
 |    ASYNC
      {
 	io := tree.NewIndexOption()
@@ -8417,6 +8516,14 @@ using_opt:
 |   USING HNSW
     {
 	$$ = tree.INDEX_TYPE_HNSW
+    }
+|   USING IVFPQ
+    {
+	$$ = tree.INDEX_TYPE_IVFPQ
+    }
+|   USING CAGRA
+    {
+	$$ = tree.INDEX_TYPE_CAGRA
     }
 |   USING MASTER
     {
@@ -10064,6 +10171,10 @@ index_def:
                 keyTyp = tree.INDEX_TYPE_BSI
 	    case "hnsw":
  	        keyTyp = tree.INDEX_TYPE_HNSW
+	    case "cagra":
+ 	        keyTyp = tree.INDEX_TYPE_CAGRA
+	    case "ivfpq":
+ 	        keyTyp = tree.INDEX_TYPE_IVFPQ
             default:
                 yylex.Error("Invalid the type of index")
                 goto ret1
@@ -10105,6 +10216,10 @@ index_def:
 		keyTyp = tree.INDEX_TYPE_BSI
 	     case "hnsw":
 	        keyTyp = tree.INDEX_TYPE_HNSW
+	     case "cagra":
+	        keyTyp = tree.INDEX_TYPE_CAGRA
+	     case "ivfpq":
+	        keyTyp = tree.INDEX_TYPE_IVFPQ
             default:
                 yylex.Error("Invalid type of index")
                 goto ret1
@@ -10270,6 +10385,8 @@ index_type:
 |   MASTER
 |   BSI
 |   HNSW
+|   CAGRA
+|   IVFPQ
 
 insert_method_options:
     NO
@@ -13764,6 +13881,7 @@ non_reserved_keyword:
 |   BIT
 |   BLOB
 |   BOOL
+|   BITS_PER_CODE
 |   BRANCH
 |   CLONE
 |   CANCEL
@@ -13804,6 +13922,7 @@ non_reserved_keyword:
 |   DO
 |   DOUBLE
 |   DIRECTORY
+|   DISTRIBUTION_MODE
 |   DUPLICATE
 |   DELAY_KEY_WRITE
 |   EF_CONSTRUCTION
@@ -13825,13 +13944,19 @@ non_reserved_keyword:
 |   GEOMETRY
 |   GEOMETRYCOLLECTION
 |   GLOBAL
+|   GRAPH_DEGREE
 |   HNSW
+|   CAGRA
+|   IVFPQ
 |   PERSIST
 |   GRANT
+|   INCLUDE
 |   INT
 |   INTEGER
 |   INDEXES
+|   INTERMEDIATE_GRAPH_DEGREE
 |   ISOLATION
+|   ITOPK_SIZE
 |   JSON
 |   VECF32
 |   VECF64
@@ -13886,6 +14011,7 @@ non_reserved_keyword:
 |   PROCEDURE
 |   PROXY
 |	PERIOD
+|   QUANTIZATION
 |   QUERY
 |   PAUSE
 |   PROFILES
