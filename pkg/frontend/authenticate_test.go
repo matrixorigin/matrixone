@@ -10187,11 +10187,19 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedFallsBackToLegacyViewRecords(t
 		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 		objectTypeView, 10001)
 	bh.sql2result[viewObjSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+	viewGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeView, objectIDAll)
+	bh.sql2result[viewGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
 
 	legacyObjSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
 		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 		objectTypeTable, 10001)
 	bh.sql2result[legacyObjSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+	legacyGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeTable, objectIDAll)
+	bh.sql2result[legacyGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
 
 	roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
 		ctx,
@@ -10231,11 +10239,19 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedKeepsDatabaseScopeForViewDatab
 		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 		objectTypeView, dbID)
 	bh.sql2result[viewScopedSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+	viewGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeView, objectIDAll)
+	bh.sql2result[viewGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
 
 	legacyScopedSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
 		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 		objectTypeTable, dbID)
 	bh.sql2result[legacyScopedSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+	legacyGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeTable, objectIDAll)
+	bh.sql2result[legacyGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
 
 	// 旧实现会错误命中 obj_type 级别结果，把其他数据库上的 db.* WGO 复用到当前库。
 	viewObjTypeSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
@@ -10286,11 +10302,19 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedKeepsCurrentDatabaseScopeForVi
 		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 		objectTypeView, dbID)
 	bh.sql2result[viewScopedSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+	viewGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeView, objectIDAll)
+	bh.sql2result[viewGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
 
 	legacyScopedSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
 		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 		objectTypeTable, dbID)
 	bh.sql2result[legacyScopedSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+	legacyGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeTable, objectIDAll)
+	bh.sql2result[legacyGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
 
 	viewObjTypeSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
 		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
