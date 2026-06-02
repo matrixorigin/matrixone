@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -4280,6 +4281,15 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 
 	if !hasAccount {
 		return err
+	}
+	// Reclaim the dropped tenant's pinned datalink CAS blobs. Best-effort: the
+	// account metadata is already committed and the periodic sweep is the backstop,
+	// so a failure here must not fail DROP ACCOUNT.
+	if sharedFS, gerr := fileservice.Get[fileservice.FileService](
+		getPu(ses.GetService()).FileService, defines.SharedFileServiceName); gerr != nil {
+		ses.Errorf(ctx, "dropAccount %s: get shared fs for CAS cleanup failed: %v", da.Name, gerr)
+	} else if derr := datalink.CASDeleteAccountPrefix(ctx, sharedFS, uint32(accountId)); derr != nil {
+		ses.Errorf(ctx, "dropAccount %s: clean datalink CAS prefix failed: %v", da.Name, derr)
 	}
 	// if drop the account, add the account to kill queue
 	ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
