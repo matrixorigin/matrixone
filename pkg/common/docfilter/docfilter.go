@@ -12,37 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package docfilter provides an exact, roaring64-backed doc_id membership
-// filter used to prune the fulltext index scan to the candidate documents that
-// pass a surrounding relational predicate.
+// Package docfilter provides an exact, integer-PK doc_id membership filter used
+// to prune the fulltext / IVF index scan to the candidate documents that pass a
+// surrounding relational predicate.
 //
-// It is the integer-PK alternative to the CBloomFilter pushdown filter: when
-// doc_id is an integer type, a roaring64 bitset is cheaper to build (no
-// hashing), exact (no false positives, so no re-verification is needed), and
-// fast to probe. For non-integer PKs the caller falls back to CBloomFilter.
-//
-// RoaringFilter satisfies the engine.MembershipFilter interface structurally
-// (Test/TestVector/Valid/Free) so it can be stored in engine.FilterHint.BF
-// alongside *bloomfilter.CBloomFilter.
+// For an integer PK it builds an exact bitset — a dense cbitmap for a bounded
+// id range (cbitmap.go), else the compact C CRoaring bitset (croaring.go, via
+// pkg cgo). Both are cheaper to build than a bloom filter (no hashing) and exact
+// (no false positives, so no re-verification is needed). For non-integer PKs the
+// caller falls back to a CBloomFilter. Build produces a tagged payload and New
+// reconstructs the right structure from the tag; callers hold the result behind
+// the MembershipFilter interface and never see the concrete structure.
 package docfilter
 
 import (
-	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// Tag bytes prefixed to the serialized doc_id filter so the reader knows how to
-// interpret the payload. They share the same []byte transport channel
-// (defines.FulltextBloomFilter -> FilterHint.BloomFilter) the CBloomFilter uses.
-const (
-	TagBloom  byte = 0 // payload is a marshaled *bloomfilter.CBloomFilter
-	TagBitset byte = 1 // payload is a marshaled roaring64.Bitmap
-)
+// TagBloom marks a payload serialized by the CBloomFilter fallback (non-integer
+// PKs). It shares the reader-side transport channel
+// (defines.FulltextBloomFilter -> FilterHint.BloomFilter) with TagCRoaring
+// (croaring.go) and TagCbitmap (cbitmap.go); New dispatches on the tag.
+const TagBloom byte = 0
 
-// SupportsBitset reports whether a doc_id column type can be filtered with a
-// roaring64 bitset (i.e. it is a fixed-width integer type). Non-integer PKs
-// (varchar/uuid/decimal/composite) must use the CBloomFilter fallback.
+// SupportsBitset reports whether a doc_id column type can be filtered with an
+// exact integer bitset (cbitmap / CRoaring), i.e. it is a fixed-width integer
+// type. Non-integer PKs (varchar/uuid/decimal/composite) use the CBloomFilter
+// fallback.
 func SupportsBitset(t types.Type) bool {
 	switch t.Oid {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -55,8 +51,8 @@ func SupportsBitset(t types.Type) bool {
 
 // rawIntToUint64 decodes the raw little-endian fixed bytes of an integer doc_id
 // (width 1/2/4/8) into a uint64 by zero-extension. The SAME decode is used on
-// the build side (each candidate value) and the probe side (each scanned
-// doc_id), so the mapping is consistent regardless of signedness or width.
+// the build side (in C) and the single-key probe side, so the mapping is
+// consistent regardless of signedness or width.
 func rawIntToUint64(b []byte) uint64 {
 	var x uint64
 	n := len(b)
@@ -68,98 +64,3 @@ func rawIntToUint64(b []byte) uint64 {
 	}
 	return x
 }
-
-// BuildBitset builds a roaring64 bitset from the candidate doc_id vector,
-// skipping nulls. The vector must be a fixed-width integer type (see
-// SupportsBitset).
-func BuildBitset(v *vector.Vector) *roaring64.Bitmap {
-	bm := roaring64.New()
-	n := v.Length()
-	for i := 0; i < n; i++ {
-		if v.IsNull(uint64(i)) {
-			continue
-		}
-		bm.Add(rawIntToUint64(v.GetRawBytesAt(i)))
-	}
-	return bm
-}
-
-// MarshalBitset serializes a roaring64 bitset to bytes (no tag prefix).
-func MarshalBitset(bm *roaring64.Bitmap) ([]byte, error) {
-	return bm.MarshalBinary()
-}
-
-// RoaringFilter wraps a roaring64 bitset and implements engine.MembershipFilter.
-type RoaringFilter struct {
-	bm *roaring64.Bitmap
-}
-
-// NewRoaringFilter deserializes a roaring64 bitset payload (no tag prefix)
-// into a RoaringFilter.
-func NewRoaringFilter(data []byte) (*RoaringFilter, error) {
-	bm := roaring64.New()
-	if err := bm.UnmarshalBinary(data); err != nil {
-		return nil, err
-	}
-	return &RoaringFilter{bm: bm}, nil
-}
-
-// Test reports whether the raw fixed bytes of a single doc_id are present.
-func (f *RoaringFilter) Test(data []byte) bool {
-	if f == nil || f.bm == nil {
-		return false
-	}
-	return f.bm.Contains(rawIntToUint64(data))
-}
-
-// TestVector tests every row of a doc_id vector. For each row it invokes
-// cb(exist, isnull, row) and returns a parallel []uint8 of 0/1 membership
-// (nulls are reported as non-existent), matching CBloomFilter.TestVector.
-func (f *RoaringFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8 {
-	if f == nil || f.bm == nil {
-		return nil
-	}
-	n := v.Length()
-	res := make([]uint8, n)
-	for i := 0; i < n; i++ {
-		isnull := v.IsNull(uint64(i))
-		exist := false
-		if !isnull {
-			exist = f.bm.Contains(rawIntToUint64(v.GetRawBytesAt(i)))
-		}
-		if exist {
-			res[i] = 1
-		}
-		if cb != nil {
-			cb(exist, isnull, i)
-		}
-	}
-	return res
-}
-
-// Share returns a new wrapper over the SAME underlying bitmap, for handing one
-// filter to each parallel reader. roaring64 Contains is safe for concurrent
-// reads, and each reader's Free() clears only its own wrapper reference (the
-// shared bitmap is reclaimed by GC once all wrappers drop it) — so a reader
-// closing never nils a filter another reader is still using.
-func (f *RoaringFilter) Share() *RoaringFilter {
-	if f == nil {
-		return nil
-	}
-	return &RoaringFilter{bm: f.bm}
-}
-
-// Valid reports whether the filter is usable.
-func (f *RoaringFilter) Valid() bool {
-	return f != nil && f.bm != nil
-}
-
-// Free drops the underlying bitset reference (pure Go, GC reclaims).
-func (f *RoaringFilter) Free() {
-	if f != nil {
-		f.bm = nil
-	}
-}
-
-// Exact is true: a roaring bitset is an exact membership test (no false positives).
-func (f *RoaringFilter) Exact() bool { return true }

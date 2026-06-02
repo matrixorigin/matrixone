@@ -69,8 +69,9 @@ func mustCbitmap(tb testing.TB, v *vector.Vector) []byte {
 	return out
 }
 
-// BenchmarkBuild compares building + serializing a CBloomFilter vs a roaring64
-// bitset from the same N integer doc_ids. Reports the serialized size too.
+// BenchmarkBuild compares building + serializing the doc_id filter structures
+// (bloom / dense cbitmap / C CRoaring) from the same N integer doc_ids. Reports
+// the serialized size too.
 func BenchmarkBuild(b *testing.B) {
 	mp := mpool.MustNewZero()
 	for _, n := range benchSizes {
@@ -88,20 +89,6 @@ func BenchmarkBuild(b *testing.B) {
 				}
 				sz = len(out)
 				bf.Free()
-			}
-			b.ReportMetric(float64(sz), "bytes")
-		})
-
-		b.Run(fmt.Sprintf("bitset/N=%d", n), func(b *testing.B) {
-			b.ReportAllocs()
-			var sz int
-			for i := 0; i < b.N; i++ {
-				bm := BuildBitset(keyvec)
-				out, err := MarshalBitset(bm)
-				if err != nil {
-					b.Fatal(err)
-				}
-				sz = len(out)
 			}
 			b.ReportMetric(float64(sz), "bytes")
 		})
@@ -139,8 +126,8 @@ func BenchmarkBuild(b *testing.B) {
 	}
 }
 
-// BenchmarkTestVector compares probing a block of doc_ids (50% hit) against a
-// prebuilt CBloomFilter vs roaring64 bitset.
+// BenchmarkTestVector compares probing a block of doc_ids (50% hit) against the
+// prebuilt structures (bloom / cbitmap / C CRoaring).
 func BenchmarkTestVector(b *testing.B) {
 	mp := mpool.MustNewZero()
 	const probeRows = 8192
@@ -150,7 +137,6 @@ func BenchmarkTestVector(b *testing.B) {
 
 		bf := bloomfilter.NewCBloomFilterWithProbability(int64(n), benchFpProbability)
 		bf.AddVector(keyvec)
-		rf := &RoaringFilter{bm: BuildBitset(keyvec)}
 		cbf, err := NewCbitmapFilter(mustCbitmap(b, keyvec))
 		if err != nil {
 			b.Fatal(err)
@@ -164,12 +150,6 @@ func BenchmarkTestVector(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				bf.TestVector(probe, nil)
-			}
-		})
-		b.Run(fmt.Sprintf("bitset/N=%d", n), func(b *testing.B) {
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				rf.TestVector(probe, nil)
 			}
 		})
 		b.Run(fmt.Sprintf("cbitmap/N=%d", n), func(b *testing.B) {
@@ -207,7 +187,6 @@ func BenchmarkTestSingle(b *testing.B) {
 
 		bf := bloomfilter.NewCBloomFilterWithProbability(int64(n), benchFpProbability)
 		bf.AddVector(keyvec)
-		rf := &RoaringFilter{bm: BuildBitset(keyvec)}
 		cbf, err := NewCbitmapFilter(mustCbitmap(b, keyvec))
 		if err != nil {
 			b.Fatal(err)
@@ -221,13 +200,6 @@ func BenchmarkTestSingle(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				for _, r := range raws {
 					_ = bf.Test(r)
-				}
-			}
-		})
-		b.Run(fmt.Sprintf("bitset/N=%d", n), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				for _, r := range raws {
-					_ = rf.Test(r)
 				}
 			}
 		})
