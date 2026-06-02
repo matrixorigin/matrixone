@@ -565,9 +565,10 @@ var predefinedFunids = map[int]int{
 	ST_INTERSECTION:               509,
 	ST_DIFFERENCE:                 510,
 	ST_SYMDIFFERENCE:              511,
+	ST_BUFFER:                     512,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 512,
+	FUNCTION_END_NUMBER: 513,
 }
 
 func Test_funids(t *testing.T) {

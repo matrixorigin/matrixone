@@ -715,9 +715,12 @@ const (
 	ST_DIFFERENCE    = 510
 	ST_SYMDIFFERENCE = 511
 
+	// GIS buffer
+	ST_BUFFER = 512
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 512
+	FUNCTION_END_NUMBER = 513
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1178,6 +1181,7 @@ var functionIdRegister = map[string]int32{
 	"st_intersection":                ST_INTERSECTION,
 	"st_difference":                  ST_DIFFERENCE,
 	"st_symdifference":               ST_SYMDIFFERENCE,
+	"st_buffer":                      ST_BUFFER,
 	"st_geometrytype":                ST_GEOMETRYTYPE,
 	"st_x":                           ST_X,
 	"st_y":                           ST_Y,

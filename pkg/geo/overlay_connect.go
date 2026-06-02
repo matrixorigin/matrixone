@@ -39,7 +39,7 @@ func segmentIntersection(a1, a2, b1, b2 Coord) (int, Coord, Coord) {
 		if t < 0 || t > 1 {
 			return 0, Coord{}, Coord{}
 		}
-		return 1, Coord{X: a1.X + s*va.X, Y: a1.Y + s*va.Y}, Coord{}
+		return 1, snapCoord(Coord{X: a1.X + s*va.X, Y: a1.Y + s*va.Y}), Coord{}
 	}
 	// Parallel segments.
 	if cross(e, va) != 0 {
@@ -60,9 +60,9 @@ func segmentIntersection(a1, a2, b1, b2 Coord) (int, Coord, Coord) {
 	lo := math.Max(smin, 0)
 	hi := math.Min(smax, 1)
 	if lo == hi {
-		return 1, pt(lo), Coord{}
+		return 1, snapCoord(pt(lo)), Coord{}
 	}
-	return 2, pt(lo), pt(hi)
+	return 2, snapCoord(pt(lo)), snapCoord(pt(hi))
 }
 
 // orderEvents filters the swept events to those contributing to the result and

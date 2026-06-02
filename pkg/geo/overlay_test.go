@@ -118,6 +118,20 @@ func TestOverlayHalfOverlapInvariants(t *testing.T) {
 	require.InDelta(t, areaA+areaB, union+inter, 1e-9)
 }
 
+func TestOverlayNonConvexFloat(t *testing.T) {
+	// A non-convex "cross" polygon unioned with a float-coordinate disc must
+	// keep the area invariant (snap-rounding makes near-coincident points
+	// coincide exactly). Regression for the buffer union path.
+	cross := wkt(t, "POLYGON((-1 0,0 0,0 -1,10 -1,10 0,11 0,11 10,10 10,10 11,0 11,0 10,-1 10,-1 0))")
+	disc := Polygon(circlePolygon(Coord{X: 0, Y: 0}, 1, 16))
+
+	areaCross, areaDisc := CartesianArea(cross), CartesianArea(disc)
+	_, inter := overlayArea(t, cross, disc, OpIntersection)
+	_, union := overlayArea(t, cross, disc, OpUnion)
+	require.InDelta(t, areaCross+areaDisc, union+inter, 1e-6)
+	require.Greater(t, union, areaCross) // the disc pokes outside the cross
+}
+
 func TestOverlayNonAreal(t *testing.T) {
 	_, err := Overlay(wkt(t, "POINT(0 0)"), wkt(t, "POLYGON((0 0,1 0,1 1,0 1,0 0))"), OpUnion)
 	require.Error(t, err)

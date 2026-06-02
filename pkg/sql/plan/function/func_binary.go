@@ -8069,6 +8069,53 @@ func StPointFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
+// StBuffer returns the buffer polygon of a geometry at the given distance
+// (default 8 segments per quarter circle).
+func StBuffer(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrFixedToStrWithErrorCheck[float64](ivecs, result, proc, length, func(v string, dist float64) (string, error) {
+		g, err := decodeGeoGeometry(functionUtil.QuickStrToBytes(v))
+		if err != nil {
+			return "", err
+		}
+		b, berr := geo.Buffer(g, dist, 8)
+		if berr != nil {
+			return "", moerr.NewInvalidInputNoCtx(berr.Error())
+		}
+		return functionUtil.QuickBytesToStr(geo.WriteWKB(b)), nil
+	}, selectList)
+}
+
+// StBufferQS is ST_Buffer with an explicit segments-per-quarter-circle count.
+func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	dists := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+	quads := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := source.GetStrValue(i)
+		dist, null2 := dists.GetValue(i)
+		qs, null3 := quads.GetValue(i)
+		if null1 || null2 || null3 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		g, err := decodeGeoGeometry(v)
+		if err != nil {
+			return err
+		}
+		b, berr := geo.Buffer(g, dist, int(qs))
+		if berr != nil {
+			return moerr.NewInvalidInputNoCtx(berr.Error())
+		}
+		if err := rs.AppendBytes(geo.WriteWKB(b), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // overlayBinary builds an eval function for a polygon Boolean operation.
 func overlayBinary(op geo.BoolOp) fEvalFn {
 	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

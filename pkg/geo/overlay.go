@@ -63,6 +63,29 @@ func ovSignedArea(p0, p1, p2 Coord) float64 {
 	return (p0.X-p2.X)*(p1.Y-p2.Y) - (p1.X-p2.X)*(p0.Y-p2.Y)
 }
 
+// snapScale snaps coordinates to a fixed grid so that points which should
+// coincide do so exactly. The sweep-line algorithm relies on exact equality;
+// integer-valued inputs are robust, while irrational coordinates (e.g. from
+// circle approximations) are not. Snap-rounding both inputs and computed
+// intersection points to this grid restores robustness at ~1e-9 precision.
+const snapScale = 1e9
+
+func snapCoord(c Coord) Coord {
+	return Coord{
+		X: ovRound(c.X*snapScale) / snapScale,
+		Y: ovRound(c.Y*snapScale) / snapScale,
+	}
+}
+
+// ovRound is math.Round inlined to avoid an import cycle of intent; rounds half
+// away from zero.
+func ovRound(x float64) float64 {
+	if x >= 0 {
+		return float64(int64(x + 0.5))
+	}
+	return float64(int64(x - 0.5))
+}
+
 func ovEqual(a, b Coord) bool { return a.X == b.X && a.Y == b.Y }
 
 // below reports whether this event's edge lies below point p.
@@ -219,6 +242,7 @@ func newEvent(p Coord, left bool, subject bool) *ovEvent {
 
 // addEdge enqueues the two endpoints of one polygon edge.
 func (o *overlay) addEdge(p1, p2 Coord, subject bool) {
+	p1, p2 = snapCoord(p1), snapCoord(p2)
 	if ovEqual(p1, p2) {
 		return // skip zero-length edges
 	}
@@ -372,6 +396,10 @@ func (o *overlay) possibleIntersection(e1, e2 *ovEvent) int {
 
 // divideSegment splits edge e at point p, producing two edges.
 func (o *overlay) divideSegment(e *ovEvent, p Coord) {
+	p = snapCoord(p)
+	if ovEqual(p, e.p) || ovEqual(p, e.other.p) {
+		return // snapped onto an existing endpoint; nothing to split
+	}
 	r := newEvent(p, false, e.subject)
 	r.other = e
 	r.kind = e.kind

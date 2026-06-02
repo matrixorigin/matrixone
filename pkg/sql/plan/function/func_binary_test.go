@@ -5288,6 +5288,37 @@ func TestStMeasuresGeodetic(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestBufferOp(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Point buffer is a disc; compare the SQL output to the geo kernel's WKT.
+	g := "POINT(0 0)"
+	gp, _ := geo.ParseWKT(g)
+	want, err := geo.Buffer(gp, 2.0, 8)
+	require.NoError(t, err)
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{g}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{2.0}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{geo.WriteWKT(want)}, []bool{false}), StBuffer)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+
+	// With explicit segments-per-quarter.
+	want3, _ := geo.Buffer(gp, 2.0, 4)
+	tc3 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{g}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{2.0}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{4}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{geo.WriteWKT(want3)}, []bool{false}), StBufferQS)
+	ok, info = tc3.Run()
+	require.True(t, ok, info)
+}
+
 func TestOverlayOps(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
