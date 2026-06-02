@@ -1716,6 +1716,28 @@ func TestHandleLockConflictLockedLogOnMissingRangeKey(t *testing.T) {
 				waitTxn := pb.WaitTxn{TxnID: txnID, CreatedOn: "test"}
 				w := acquireWaiter(waitTxn, "test", logger)
 
+				staleKey := []byte{2}
+				staleWaiters := newWaiterQueue()
+				staleWaiters.init(logger)
+				staleWaiters.put(w)
+				lt.mu.store.Add(staleKey, Lock{
+					createAt: time.Now(),
+					holders:  newHolders(),
+					waiters:  staleWaiters,
+				})
+
+				recreatedKey := []byte{99}
+				recreatedHolders := newHolders()
+				recreatedHolders.add(pb.WaitTxn{TxnID: []byte("recreated-holder"), CreatedOn: "test"})
+				recreatedWaiters := newWaiterQueue()
+				recreatedWaiters.init(logger)
+				lt.mu.store.Add(recreatedKey, Lock{
+					createAt: time.Now(),
+					holders:  recreatedHolders,
+					waiters:  recreatedWaiters,
+				})
+
+				nextConflictKey := []byte{1}
 				holderTxnID := []byte("holder1")
 				holderWaitTxn := pb.WaitTxn{TxnID: holderTxnID, CreatedOn: "test"}
 				h := newHolders()
@@ -1727,6 +1749,7 @@ func TestHandleLockConflictLockedLogOnMissingRangeKey(t *testing.T) {
 					holders:  h,
 					waiters:  wq,
 				}
+				lt.mu.store.Add(nextConflictKey, conflictWith)
 
 				c := &lockContext{
 					ctx:     context.Background(),
@@ -1740,15 +1763,24 @@ func TestHandleLockConflictLockedLogOnMissingRangeKey(t *testing.T) {
 						},
 					},
 					w:                w,
-					rangeLastWaitKey: []byte{99},
+					rangeLastWaitKey: recreatedKey,
 					result:           pb.Result{},
 				}
 
-				// rangeLastWaitKey {99} is not in the store, so the error log
-				// branch (previously a panic) should execute without crashing.
-				err := lt.handleLockConflictLocked(c, []byte{1}, conflictWith)
+				// rangeLastWaitKey was removed by a range merge and recreated by
+				// another txn without this waiter, but the waiter may still exist
+				// in another stale no-holder lock queue.
+				err := lt.handleLockConflictLocked(c, nextConflictKey, conflictWith)
 				assert.NoError(t, err)
-				assert.Equal(t, []byte{1}, c.rangeLastWaitKey)
+				assert.Equal(t, nextConflictKey, c.rangeLastWaitKey)
+				_, ok := lt.mu.store.Get(staleKey)
+				assert.False(t, ok)
+				_, ok = lt.mu.store.Get(recreatedKey)
+				assert.True(t, ok)
+
+				nextLock, ok := lt.mu.store.Get(nextConflictKey)
+				require.True(t, ok)
+				assert.Equal(t, 1, nextLock.waiters.size())
 			})
 		},
 	)

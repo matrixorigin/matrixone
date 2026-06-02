@@ -119,6 +119,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	}
 
 	vars["foreign_key_checks"] = int64(1)
+	vars["sort_spill_mem"] = int64(0)
 
 	if result, ok := vars[varName]; ok {
 		return result, nil
@@ -629,6 +630,45 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		pks:    []int{0},
 		outcnt: 13,
+	}
+
+	/*
+		create table single_idx_t(
+			id int primary key,
+			val int,
+			index idx_val(val)
+		);
+	*/
+	constraintTestSchema["single_idx_t"] = &Schema{
+		tblId: 88900,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"val", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks: []int{0},
+		idxs: []index{
+			{
+				indexName: "idx_val",
+				tableName: catalog.SecondaryIndexTableNamePrefix + "single-idx-t-idx-val",
+				parts:     []string{"val"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+				},
+				tableExist: true,
+				unique:     false,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.SecondaryIndexTableNamePrefix+"single-idx-t-idx-val"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+			{catalog.IndexTablePrimaryColName, types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
 	}
 
 	/*

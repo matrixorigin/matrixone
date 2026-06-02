@@ -29,4 +29,10 @@ dependencies:
 - nccl>=2.19
 - ninja
 - sysroot_linux-64==2.28
+- libcudf
+- libcufile-dev
+- libkvikio
+- libnuma
+- libnvcomp
+- libnvcomp-dev
 name: go_cuda-130_arch-x86_64

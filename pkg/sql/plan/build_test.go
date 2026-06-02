@@ -725,6 +725,266 @@ func TestUpdate(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestUpdateFallbackMultiTargetGeneratedColumnsKeepProjectLayout(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
+	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.job = dept.loc, dept.loc = emp.job WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback multi-target update with generated columns: %v", err)
+	}
+	query := logicPlan.GetQuery()
+
+	assertFallbackUpdateProjectLength(t, query, len(mock.ctxt.tables["emp"].Cols)+2)
+	assertFallbackUpdateProjectLength(t, query, len(mock.ctxt.tables["dept"].Cols)+2)
+}
+
+func TestUpdateFallbackGeneratedColumnsUseDefaultAfterRewrite(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockDefaultExpr(t, mock, "emp", "job", "job-default")
+	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.job = DEFAULT, dept.loc = 'default-marker' WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback update with generated column over DEFAULT: %v", err)
+	}
+
+	node := requireFallbackSourceProjectNode(t, logicPlan.GetQuery(),
+		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1, "default-marker")
+	if !nodeContainsStringLiteral(node, "job-default") {
+		t.Fatalf("generated column should use expanded DEFAULT expression, got %v", node.ProjectList)
+	}
+}
+
+func TestUpdateFallbackGeneratedColumnsUseOnUpdateAfterRewrite(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockOnUpdateExpr(t, mock, "emp", "job", "job-on-update")
+	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'on-update-marker' WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback update with generated column over ON UPDATE: %v", err)
+	}
+
+	node := requireFallbackSourceProjectNode(t, logicPlan.GetQuery(),
+		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1, "on-update-marker")
+	if !nodeContainsStringLiteral(node, "job-on-update") {
+		t.Fatalf("generated column should use ON UPDATE expression, got %v", node.ProjectList)
+	}
+}
+
+func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "emp", "mgr", "empno")
+	setMockGeneratedColumn(t, mock, "emp", "deptno", "mgr")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'chain-marker' WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback update with generated column chain: %v", err)
+	}
+
+	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
+		len(mock.ctxt.tables["emp"].Cols)+3+len(mock.ctxt.tables["dept"].Cols)+1,
+		len(mock.ctxt.tables["emp"].Cols)+2, "chain-marker")
+	if !exprContainsColName(generatedExpr, "empno") || exprContainsColName(generatedExpr, "mgr") {
+		t.Fatalf("generated column chain should use freshly recomputed earlier generated column, got %s", generatedExpr.String())
+	}
+}
+
+func setMockGeneratedColumn(t *testing.T, mock *MockOptimizer, tableName, generatedName, sourceName string) {
+	tableDef := mock.ctxt.tables[tableName]
+	if tableDef == nil {
+		t.Fatalf("missing mock table %s", tableName)
+	}
+
+	var generatedCol *ColDef
+	var sourceCol *ColDef
+	var sourcePos int32
+	for idx, col := range tableDef.Cols {
+		switch col.Name {
+		case generatedName:
+			generatedCol = col
+		case sourceName:
+			sourceCol = col
+			sourcePos = int32(idx)
+		}
+	}
+	if generatedCol == nil {
+		t.Fatalf("missing generated column %s.%s", tableName, generatedName)
+	}
+	if sourceCol == nil {
+		t.Fatalf("missing generated source column %s.%s", tableName, sourceName)
+	}
+
+	generatedCol.GeneratedCol = &plan.GeneratedCol{
+		Expr: &plan.Expr{
+			Typ: sourceCol.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: sourcePos,
+					Name:   sourceName,
+				},
+			},
+		},
+		IsStored: true,
+	}
+}
+
+func setMockDefaultExpr(t *testing.T, mock *MockOptimizer, tableName, colName, value string) {
+	col := requireMockColumn(t, mock, tableName, colName)
+	col.Default = &plan.Default{
+		Expr:         makeStringConstExpr(col.Typ, value),
+		OriginString: value,
+		NullAbility:  true,
+	}
+}
+
+func setMockOnUpdateExpr(t *testing.T, mock *MockOptimizer, tableName, colName, value string) {
+	col := requireMockColumn(t, mock, tableName, colName)
+	col.OnUpdate = &plan.OnUpdate{
+		Expr:         makeStringConstExpr(col.Typ, value),
+		OriginString: value,
+	}
+}
+
+func requireMockColumn(t *testing.T, mock *MockOptimizer, tableName, colName string) *ColDef {
+	tableDef := mock.ctxt.tables[tableName]
+	if tableDef == nil {
+		t.Fatalf("missing mock table %s", tableName)
+	}
+	for _, col := range tableDef.Cols {
+		if col.Name == colName {
+			return col
+		}
+	}
+	t.Fatalf("missing mock column %s.%s", tableName, colName)
+	return nil
+}
+
+func makeStringConstExpr(typ plan.Type, value string) *plan.Expr {
+	return &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Sval{Sval: value},
+			},
+		},
+	}
+}
+
+func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int, marker string) *Node {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen {
+			continue
+		}
+		hasMarker := false
+		for _, expr := range node.ProjectList {
+			if exprContainsStringLiteral(expr, marker) {
+				hasMarker = true
+				break
+			}
+		}
+		if !hasMarker {
+			continue
+		}
+		return node
+	}
+	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
+	return nil
+}
+
+func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int, pos int, marker string) *plan.Expr {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen || pos >= len(node.ProjectList) {
+			continue
+		}
+		hasMarker := false
+		for _, expr := range node.ProjectList {
+			if exprContainsStringLiteral(expr, marker) {
+				hasMarker = true
+				break
+			}
+		}
+		if !hasMarker {
+			continue
+		}
+		return node.ProjectList[pos]
+	}
+	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
+	return nil
+}
+
+func nodeContainsStringLiteral(node *Node, value string) bool {
+	for _, expr := range node.ProjectList {
+		if exprContainsStringLiteral(expr, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func assertFallbackUpdateProjectLength(t *testing.T, query *Query, projectLen int) {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen || len(node.Children) != 1 {
+			continue
+		}
+		child := query.Nodes[node.Children[0]]
+		if child.NodeType != plan.Node_SINK_SCAN {
+			continue
+		}
+		return
+	}
+	t.Fatalf("missing fallback update project with length %d", projectLen)
+}
+
+func exprContainsStringLiteral(expr *plan.Expr, value string) bool {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		if sval, ok := e.Lit.Value.(*plan.Literal_Sval); ok {
+			return sval.Sval == value
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if exprContainsStringLiteral(arg, value) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprContainsStringLiteral(item, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func exprContainsColName(expr *plan.Expr, name string) bool {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return e.Col.Name == name || strings.HasSuffix(e.Col.Name, "."+name)
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if exprContainsColName(arg, name) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprContainsColName(item, name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestDelete(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// should pass
@@ -831,6 +1091,74 @@ func TestReplacePlanStructure(t *testing.T) {
 	}
 	assert.True(t, hasMultiUpdate, "REPLACE plan should contain MULTI_UPDATE node")
 	assert.True(t, hasDedupJoin, "REPLACE plan should contain DEDUP JOIN node")
+}
+
+func TestReplaceNonUniqueSingleIndexDeleteUsesIndexRowID(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO single_idx_t VALUES (1, 100)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var multiUpdate *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdate = node
+			break
+		}
+	}
+	if multiUpdate == nil {
+		t.Fatal("REPLACE plan should contain MULTI_UPDATE node")
+	}
+
+	var idxUpdateCtx *plan.UpdateCtx
+	for _, updateCtx := range multiUpdate.UpdateCtxList {
+		if updateCtx.TableDef == nil {
+			continue
+		}
+		if strings.HasPrefix(updateCtx.TableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
+			idxUpdateCtx = updateCtx
+			break
+		}
+	}
+	if idxUpdateCtx == nil {
+		t.Fatal("REPLACE plan should contain UpdateCtx for the secondary index table")
+	}
+	if len(idxUpdateCtx.DeleteCols) < 2 {
+		t.Fatal("secondary index UpdateCtx should contain delete columns")
+	}
+	if len(multiUpdate.Children) != 1 {
+		t.Fatalf("MULTI_UPDATE should have one child, got %d", len(multiUpdate.Children))
+	}
+
+	oldRowIDDeleteCol := idxUpdateCtx.DeleteCols[0]
+	oldIdxDeleteCol := idxUpdateCtx.DeleteCols[1]
+	child := query.Nodes[multiUpdate.Children[0]]
+	if oldRowIDDeleteCol.ColPos < 0 || int(oldRowIDDeleteCol.ColPos) >= len(child.ProjectList) {
+		t.Fatalf("DeleteCols[0] ColPos %d out of child project range %d",
+			oldRowIDDeleteCol.ColPos, len(child.ProjectList))
+	}
+	if oldIdxDeleteCol.ColPos < 0 || int(oldIdxDeleteCol.ColPos) >= len(child.ProjectList) {
+		t.Fatalf("DeleteCols[1] ColPos %d out of child project range %d",
+			oldIdxDeleteCol.ColPos, len(child.ProjectList))
+	}
+	wantRowIDName := idxUpdateCtx.TableDef.Name + "." + catalog.Row_ID
+	wantIdxName := idxUpdateCtx.TableDef.Name + "." + catalog.IndexTableIndexColName
+	assert.Equal(t, wantRowIDName, oldRowIDDeleteCol.Name,
+		"DeleteCols[0] should read Row_ID from the secondary index table")
+	assert.Equal(t, wantIdxName, oldIdxDeleteCol.Name,
+		"DeleteCols[1] should read the secondary index key column")
+	assert.Equal(t, int32(types.T_Rowid), child.ProjectList[oldRowIDDeleteCol.ColPos].Typ.Id,
+		"DeleteCols[0] should point at a Row_ID vector in the MULTI_UPDATE input")
+	assert.NotEqual(t, oldRowIDDeleteCol.ColPos, oldIdxDeleteCol.ColPos,
+		"Row_ID and index key delete columns must not collapse to the same input column")
+	assert.False(t, oldRowIDDeleteCol.RelPos == 0 && oldRowIDDeleteCol.ColPos == 0 &&
+		oldRowIDDeleteCol.Name != wantRowIDName,
+		"DeleteCols[0] must not fall back to a zero-value ColRef")
 }
 
 func findDedupBuildKeepLastFlags(query *plan.Query) []bool {
