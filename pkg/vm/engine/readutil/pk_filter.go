@@ -54,7 +54,7 @@ func DirectConstructBlockPKFilter(
 func ConstructBlockPKFilter(
 	isFakePK bool,
 	basePKFilter BasePKFilter,
-	bf engine.DocIDFilter,
+	bf engine.MembershipFilter,
 ) (f objectio.BlockReadFilter, err error) {
 	if bf != nil && !bf.Valid() {
 		bf = nil

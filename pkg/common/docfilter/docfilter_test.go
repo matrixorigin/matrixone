@@ -46,7 +46,7 @@ func buildIntVec[T int8 | int16 | int32 | int64 | uint8 | uint16 | uint32 | uint
 	return v
 }
 
-func TestRoaringDocFilterInt64(t *testing.T) {
+func TestRoaringFilterInt64(t *testing.T) {
 	mp := mpool.MustNewZero()
 	present := []int64{1, 2, 100, 1 << 40, -7}
 	v := buildIntVec(t, mp, types.T_int64.ToType(), present, nil)
@@ -57,7 +57,7 @@ func TestRoaringDocFilterInt64(t *testing.T) {
 	require.NoError(t, err)
 
 	// round-trip deserialize
-	f, err := NewRoaringDocFilter(payload)
+	f, err := NewRoaringFilter(payload)
 	require.NoError(t, err)
 	require.True(t, f.Valid())
 
@@ -93,13 +93,13 @@ func TestRoaringDocFilterInt64(t *testing.T) {
 	require.Equal(t, []string{"hit", "miss", "hit", "null"}, seen)
 }
 
-func TestRoaringDocFilterWidths(t *testing.T) {
+func TestRoaringFilterWidths(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	t.Run("int32", func(t *testing.T) {
 		v := buildIntVec(t, mp, types.T_int32.ToType(), []int32{5, 6, 7}, nil)
 		defer v.Free(mp)
-		f, err := NewRoaringDocFilter(must(MarshalBitset(BuildBitset(v))))
+		f, err := NewRoaringFilter(must(MarshalBitset(BuildBitset(v))))
 		require.NoError(t, err)
 		require.True(t, f.Test(v.GetRawBytesAt(0)))
 		require.True(t, f.Test(v.GetRawBytesAt(2)))
@@ -108,7 +108,7 @@ func TestRoaringDocFilterWidths(t *testing.T) {
 	t.Run("uint64", func(t *testing.T) {
 		v := buildIntVec(t, mp, types.T_uint64.ToType(), []uint64{0, 1 << 63, 42}, nil)
 		defer v.Free(mp)
-		f, err := NewRoaringDocFilter(must(MarshalBitset(BuildBitset(v))))
+		f, err := NewRoaringFilter(must(MarshalBitset(BuildBitset(v))))
 		require.NoError(t, err)
 		for i := 0; i < v.Length(); i++ {
 			require.True(t, f.Test(v.GetRawBytesAt(i)))
@@ -118,7 +118,7 @@ func TestRoaringDocFilterWidths(t *testing.T) {
 	t.Run("uint8", func(t *testing.T) {
 		v := buildIntVec(t, mp, types.T_uint8.ToType(), []uint8{0, 200, 255}, nil)
 		defer v.Free(mp)
-		f, err := NewRoaringDocFilter(must(MarshalBitset(BuildBitset(v))))
+		f, err := NewRoaringFilter(must(MarshalBitset(BuildBitset(v))))
 		require.NoError(t, err)
 		require.True(t, f.Test(v.GetRawBytesAt(2)))
 	})
@@ -130,7 +130,7 @@ func TestShareIndependentFree(t *testing.T) {
 	v := buildIntVec(t, mp, types.T_int64.ToType(), []int64{11, 22}, nil)
 	defer v.Free(mp)
 
-	f, err := NewRoaringDocFilter(must(MarshalBitset(BuildBitset(v))))
+	f, err := NewRoaringFilter(must(MarshalBitset(BuildBitset(v))))
 	require.NoError(t, err)
 
 	a := f.Share()
@@ -146,7 +146,7 @@ func TestShareIndependentFree(t *testing.T) {
 }
 
 func TestNilFilterSafe(t *testing.T) {
-	var f *RoaringDocFilter
+	var f *RoaringFilter
 	require.False(t, f.Valid())
 	require.False(t, f.Test([]byte{1, 2, 3, 4, 5, 6, 7, 8}))
 	require.Nil(t, f.TestVector(nil, nil))

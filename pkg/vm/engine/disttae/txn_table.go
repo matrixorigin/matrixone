@@ -67,6 +67,12 @@ const (
 	AllColumns = "*"
 )
 
+// docfilter.MembershipFilter (producer view, with Share) must stay assignable to
+// engine.MembershipFilter (consumer view) so docfilter.New(...).Share() can be
+// stored in FilterHint.BF. This compile-time assertion locks that relationship
+// from a package that imports both, since docfilter cannot import engine.
+var _ engine.MembershipFilter = (docfilter.MembershipFilter)(nil)
+
 var traceFilterExprInterval atomic.Uint64
 var traceFilterExprInterval2 atomic.Uint64
 
@@ -2337,7 +2343,7 @@ func (tbl *txnTable) BuildReaders(
 	// Reconstruct the doc_id filter from the tagged bytes. docfilter hides which
 	// structure (cbitmap / CRoaring / bloom) backs it; we just hand each reader
 	// a share and free the builder reference at the end.
-	var mainFilter docfilter.DocIDFilter
+	var mainFilter docfilter.MembershipFilter
 	if len(filterHint.BloomFilter) > 0 {
 		if f, ferr := docfilter.New(filterHint.BloomFilter); ferr == nil {
 			mainFilter = f

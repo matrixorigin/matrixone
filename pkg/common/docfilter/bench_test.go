@@ -150,12 +150,12 @@ func BenchmarkTestVector(b *testing.B) {
 
 		bf := bloomfilter.NewCBloomFilterWithProbability(int64(n), benchFpProbability)
 		bf.AddVector(keyvec)
-		rf := &RoaringDocFilter{bm: BuildBitset(keyvec)}
-		cbf, err := NewCbitmapDocFilter(mustCbitmap(b, keyvec))
+		rf := &RoaringFilter{bm: BuildBitset(keyvec)}
+		cbf, err := NewCbitmapFilter(mustCbitmap(b, keyvec))
 		if err != nil {
 			b.Fatal(err)
 		}
-		crf, err := NewCRoaringDocFilter(must(BuildCRoaringBytes(keyvec)))
+		crf, err := NewCRoaringFilter(must(BuildCRoaringBytes(keyvec)))
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -207,12 +207,12 @@ func BenchmarkTestSingle(b *testing.B) {
 
 		bf := bloomfilter.NewCBloomFilterWithProbability(int64(n), benchFpProbability)
 		bf.AddVector(keyvec)
-		rf := &RoaringDocFilter{bm: BuildBitset(keyvec)}
-		cbf, err := NewCbitmapDocFilter(mustCbitmap(b, keyvec))
+		rf := &RoaringFilter{bm: BuildBitset(keyvec)}
+		cbf, err := NewCbitmapFilter(mustCbitmap(b, keyvec))
 		if err != nil {
 			b.Fatal(err)
 		}
-		crf, err := NewCRoaringDocFilter(must(BuildCRoaringBytes(keyvec)))
+		crf, err := NewCRoaringFilter(must(BuildCRoaringBytes(keyvec)))
 		if err != nil {
 			b.Fatal(err)
 		}

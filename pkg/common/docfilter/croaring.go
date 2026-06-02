@@ -35,10 +35,10 @@ import (
 // filter (build/probe in C, one cgo call per vector).
 const TagCRoaring byte = 2
 
-// CRoaringDocFilter wraps a C roaring64_bitmap_t (via cgo/croaring) and
-// implements engine.DocIDFilter. It uses CBloomFilter-style refcounting so the
+// CRoaringFilter wraps a C roaring64_bitmap_t (via cgo/croaring) and
+// implements engine.MembershipFilter. It uses CBloomFilter-style refcounting so the
 // same C bitmap can be shared across parallel readers and freed exactly once.
-type CRoaringDocFilter struct {
+type CRoaringFilter struct {
 	ptr    unsafe.Pointer
 	refcnt int32
 }
@@ -84,8 +84,8 @@ func BuildCRoaringBytes(v *vector.Vector) ([]byte, error) {
 	return C.GoBytes(unsafe.Pointer(buf), C.int(clen)), nil
 }
 
-// NewCRoaringDocFilter deserializes a portable roaring64 payload (no tag prefix).
-func NewCRoaringDocFilter(data []byte) (*CRoaringDocFilter, error) {
+// NewCRoaringFilter deserializes a portable roaring64 payload (no tag prefix).
+func NewCRoaringFilter(data []byte) (*CRoaringFilter, error) {
 	if len(data) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("croaring: empty payload")
 	}
@@ -93,11 +93,11 @@ func NewCRoaringDocFilter(data []byte) (*CRoaringDocFilter, error) {
 	if ptr == nil {
 		return nil, moerr.NewInternalErrorNoCtx("croaring: deserialize failed")
 	}
-	return &CRoaringDocFilter{ptr: ptr, refcnt: 1}, nil
+	return &CRoaringFilter{ptr: ptr, refcnt: 1}, nil
 }
 
 // Test reports whether the raw fixed bytes of a single doc_id are present.
-func (f *CRoaringDocFilter) Test(data []byte) bool {
+func (f *CRoaringFilter) Test(data []byte) bool {
 	if f == nil || f.ptr == nil {
 		return false
 	}
@@ -105,7 +105,7 @@ func (f *CRoaringDocFilter) Test(data []byte) bool {
 }
 
 // TestVector tests every row of an integer doc_id vector in one cgo call.
-func (f *CRoaringDocFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8 {
+func (f *CRoaringFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8 {
 	if f == nil || f.ptr == nil {
 		return nil
 	}
@@ -128,24 +128,24 @@ func (f *CRoaringDocFilter) TestVector(v *vector.Vector, cb func(bool, bool, int
 }
 
 // Valid reports whether the filter is usable.
-func (f *CRoaringDocFilter) Valid() bool {
+func (f *CRoaringFilter) Valid() bool {
 	return f != nil && f.ptr != nil
 }
 
 // SharePointer increments the refcount and returns the same filter, so each
 // parallel reader holds a share and the C bitmap is freed exactly once.
-func (f *CRoaringDocFilter) SharePointer() *CRoaringDocFilter {
+func (f *CRoaringFilter) SharePointer() *CRoaringFilter {
 	atomic.AddInt32(&f.refcnt, 1)
 	return f
 }
 
-// Share implements DocIDFilter (refcounted; returns the same C bitmap).
-func (f *CRoaringDocFilter) Share() DocIDFilter {
+// Share implements MembershipFilter (refcounted; returns the same C bitmap).
+func (f *CRoaringFilter) Share() MembershipFilter {
 	return f.SharePointer()
 }
 
 // Free drops one reference; the C bitmap is released when the last is freed.
-func (f *CRoaringDocFilter) Free() {
+func (f *CRoaringFilter) Free() {
 	if f != nil && f.ptr != nil {
 		if atomic.AddInt32(&f.refcnt, -1) == 0 {
 			C.mo_croaring_free(f.ptr)
@@ -153,3 +153,6 @@ func (f *CRoaringDocFilter) Free() {
 		}
 	}
 }
+
+// Exact is true: a roaring bitset is an exact membership test (no false positives).
+func (f *CRoaringFilter) Exact() bool { return true }

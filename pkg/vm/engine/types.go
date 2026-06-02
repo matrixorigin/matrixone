@@ -1339,18 +1339,29 @@ func GetPrefetchOnSubscribed() (bool, []*regexp.Regexp) {
 	return true, regexps
 }
 
-// DocIDFilter is a membership filter over doc_id values used to prune the
-// fulltext index scan to the candidate docs that pass the surrounding
-// relational predicate. It is implemented by *bloomfilter.CBloomFilter (the
-// fallback for non-integer PKs, satisfied structurally) and by the roaring64
-// bitset wrapper in pkg/common/docfilter (the exact filter for integer PKs).
-type DocIDFilter interface {
-	// Test reports whether the raw fixed bytes of a single doc_id may be present.
+// MembershipFilter is a membership filter over the indexed primary-key values
+// (fulltext calls this PK doc_id) used to prune an index scan to the candidate
+// rows that pass the surrounding relational predicate. It is implemented in
+// pkg/common/docfilter by an exact bitset (cbitmap / CRoaring) for integer PKs
+// and by a CBloomFilter (approximate) for non-integer PKs.
+//
+// This is the CONSUMER (probe) view, so it deliberately omits Share() — a plain
+// *bloomfilter.CBloomFilter satisfies it directly. The PRODUCER superset is
+// docfilter.MembershipFilter, which adds Share() and is assignable to this
+// interface (enforced by a compile-time assertion in package disttae, where
+// both packages are imported). Keep the shared method set here as the single
+// source of truth; docfilter's interface only adds to it.
+type MembershipFilter interface {
+	// Test reports whether the raw fixed bytes of a single key may be present.
 	Test(data []byte) bool
-	// TestVector tests every row of a doc_id vector, invoking cb(exist, isnull, row).
+	// TestVector tests every row of a key vector, invoking cb(exist, isnull, row).
 	TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8
 	// Valid reports whether the filter is usable.
 	Valid() bool
+	// Exact reports whether membership is exact (a bitset, no false positives)
+	// rather than approximate (a bloom filter). Callers can skip downstream
+	// re-verification when this is true.
+	Exact() bool
 	// Free releases any resources held by the filter.
 	Free()
 }
@@ -1358,5 +1369,5 @@ type DocIDFilter interface {
 type FilterHint struct {
 	Must        bool
 	BloomFilter []byte
-	BF          DocIDFilter
+	BF          MembershipFilter
 }

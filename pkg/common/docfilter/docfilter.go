@@ -21,7 +21,7 @@
 // hashing), exact (no false positives, so no re-verification is needed), and
 // fast to probe. For non-integer PKs the caller falls back to CBloomFilter.
 //
-// RoaringDocFilter satisfies the engine.DocIDFilter interface structurally
+// RoaringFilter satisfies the engine.MembershipFilter interface structurally
 // (Test/TestVector/Valid/Free) so it can be stored in engine.FilterHint.BF
 // alongside *bloomfilter.CBloomFilter.
 package docfilter
@@ -102,23 +102,23 @@ func AddRaw(bm *roaring64.Bitmap, raw []byte) {
 	bm.Add(rawIntToUint64(raw))
 }
 
-// RoaringDocFilter wraps a roaring64 bitset and implements engine.DocIDFilter.
-type RoaringDocFilter struct {
+// RoaringFilter wraps a roaring64 bitset and implements engine.MembershipFilter.
+type RoaringFilter struct {
 	bm *roaring64.Bitmap
 }
 
-// NewRoaringDocFilter deserializes a roaring64 bitset payload (no tag prefix)
-// into a RoaringDocFilter.
-func NewRoaringDocFilter(data []byte) (*RoaringDocFilter, error) {
+// NewRoaringFilter deserializes a roaring64 bitset payload (no tag prefix)
+// into a RoaringFilter.
+func NewRoaringFilter(data []byte) (*RoaringFilter, error) {
 	bm := roaring64.New()
 	if err := bm.UnmarshalBinary(data); err != nil {
 		return nil, err
 	}
-	return &RoaringDocFilter{bm: bm}, nil
+	return &RoaringFilter{bm: bm}, nil
 }
 
 // Test reports whether the raw fixed bytes of a single doc_id are present.
-func (f *RoaringDocFilter) Test(data []byte) bool {
+func (f *RoaringFilter) Test(data []byte) bool {
 	if f == nil || f.bm == nil {
 		return false
 	}
@@ -128,7 +128,7 @@ func (f *RoaringDocFilter) Test(data []byte) bool {
 // TestVector tests every row of a doc_id vector. For each row it invokes
 // cb(exist, isnull, row) and returns a parallel []uint8 of 0/1 membership
 // (nulls are reported as non-existent), matching CBloomFilter.TestVector.
-func (f *RoaringDocFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8 {
+func (f *RoaringFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8 {
 	if f == nil || f.bm == nil {
 		return nil
 	}
@@ -155,21 +155,24 @@ func (f *RoaringDocFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)
 // reads, and each reader's Free() clears only its own wrapper reference (the
 // shared bitmap is reclaimed by GC once all wrappers drop it) — so a reader
 // closing never nils a filter another reader is still using.
-func (f *RoaringDocFilter) Share() *RoaringDocFilter {
+func (f *RoaringFilter) Share() *RoaringFilter {
 	if f == nil {
 		return nil
 	}
-	return &RoaringDocFilter{bm: f.bm}
+	return &RoaringFilter{bm: f.bm}
 }
 
 // Valid reports whether the filter is usable.
-func (f *RoaringDocFilter) Valid() bool {
+func (f *RoaringFilter) Valid() bool {
 	return f != nil && f.bm != nil
 }
 
 // Free drops the underlying bitset reference (pure Go, GC reclaims).
-func (f *RoaringDocFilter) Free() {
+func (f *RoaringFilter) Free() {
 	if f != nil {
 		f.bm = nil
 	}
 }
+
+// Exact is true: a roaring bitset is an exact membership test (no false positives).
+func (f *RoaringFilter) Exact() bool { return true }

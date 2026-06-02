@@ -45,11 +45,11 @@ func CbitmapFeasible(maxVal uint64) bool {
 	return maxVal+1 <= MaxCbitmapBits
 }
 
-// BuildIntegerDocFilter builds the best exact filter for an integer doc_id
+// BuildIntegerFilter builds the best exact filter for an integer doc_id
 // vector and returns the tag byte to prepend + the serialized payload: a dense
 // cbitmap when the id range is bounded (fastest), else a compact CRoaring
 // bitset (sparse-safe). The reader picks the structure from the tag.
-func BuildIntegerDocFilter(v *vector.Vector) (byte, []byte, error) {
+func BuildIntegerFilter(v *vector.Vector) (byte, []byte, error) {
 	if data, ok, err := BuildCbitmapBytes(v); err != nil {
 		return 0, nil, err
 	} else if ok {
@@ -62,12 +62,12 @@ func BuildIntegerDocFilter(v *vector.Vector) (byte, []byte, error) {
 	return TagCRoaring, data, nil
 }
 
-// CbitmapDocFilter wraps a C dense bitset (cgo/cbitmap) and implements
-// engine.DocIDFilter. Build and probe run entirely in C over the raw column
+// CbitmapFilter wraps a C dense bitset (cgo/cbitmap) and implements
+// engine.MembershipFilter. Build and probe run entirely in C over the raw column
 // buffer (one cgo call per vector), and it uses CRoaring-style refcounting so
 // the same C bitset can be shared across parallel readers and freed once. It is
 // the fastest exact filter for dense, bounded integer doc_ids.
-type CbitmapDocFilter struct {
+type CbitmapFilter struct {
 	ptr    unsafe.Pointer
 	refcnt int32
 }
@@ -102,8 +102,8 @@ func BuildCbitmapBytes(v *vector.Vector) (data []byte, ok bool, err error) {
 	return b, true, nil
 }
 
-// NewCbitmapDocFilter deserializes a dense bitset payload (no tag prefix).
-func NewCbitmapDocFilter(data []byte) (*CbitmapDocFilter, error) {
+// NewCbitmapFilter deserializes a dense bitset payload (no tag prefix).
+func NewCbitmapFilter(data []byte) (*CbitmapFilter, error) {
 	if len(data) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("cbitmap: empty payload")
 	}
@@ -111,11 +111,11 @@ func NewCbitmapDocFilter(data []byte) (*CbitmapDocFilter, error) {
 	if ptr == nil {
 		return nil, moerr.NewInternalErrorNoCtx("cbitmap: deserialize failed")
 	}
-	return &CbitmapDocFilter{ptr: ptr, refcnt: 1}, nil
+	return &CbitmapFilter{ptr: ptr, refcnt: 1}, nil
 }
 
 // Test reports whether the raw fixed bytes of a single doc_id are present.
-func (f *CbitmapDocFilter) Test(data []byte) bool {
+func (f *CbitmapFilter) Test(data []byte) bool {
 	if f == nil || f.ptr == nil {
 		return false
 	}
@@ -123,7 +123,7 @@ func (f *CbitmapDocFilter) Test(data []byte) bool {
 }
 
 // TestVector tests every row of an integer doc_id vector in one cgo call.
-func (f *CbitmapDocFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8 {
+func (f *CbitmapFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8 {
 	if f == nil || f.ptr == nil {
 		return nil
 	}
@@ -146,24 +146,24 @@ func (f *CbitmapDocFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)
 }
 
 // Valid reports whether the filter is usable.
-func (f *CbitmapDocFilter) Valid() bool {
+func (f *CbitmapFilter) Valid() bool {
 	return f != nil && f.ptr != nil
 }
 
 // SharePointer increments the refcount and returns the same filter, so each
 // parallel reader holds a share and the C bitset is freed exactly once.
-func (f *CbitmapDocFilter) SharePointer() *CbitmapDocFilter {
+func (f *CbitmapFilter) SharePointer() *CbitmapFilter {
 	atomic.AddInt32(&f.refcnt, 1)
 	return f
 }
 
-// Share implements DocIDFilter (refcounted; returns the same C bitset).
-func (f *CbitmapDocFilter) Share() DocIDFilter {
+// Share implements MembershipFilter (refcounted; returns the same C bitset).
+func (f *CbitmapFilter) Share() MembershipFilter {
 	return f.SharePointer()
 }
 
 // Free drops one reference; the C bitset is released when the last is freed.
-func (f *CbitmapDocFilter) Free() {
+func (f *CbitmapFilter) Free() {
 	if f != nil && f.ptr != nil {
 		if atomic.AddInt32(&f.refcnt, -1) == 0 {
 			C.mo_cbitmap_free(f.ptr)
@@ -171,3 +171,6 @@ func (f *CbitmapDocFilter) Free() {
 		}
 	}
 }
+
+// Exact is true: a dense bitset is an exact membership test (no false positives).
+func (f *CbitmapFilter) Exact() bool { return true }

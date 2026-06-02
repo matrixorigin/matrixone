@@ -24,29 +24,36 @@ import (
 // (used for non-integer PKs). Matches the previous fulltext/IVF values.
 const bloomFpProbability = 0.001
 
-// DocIDFilter is a doc_id membership filter. Its method set is a superset of
-// engine.DocIDFilter (it adds Share), so a DocIDFilter value can be stored
-// directly in engine.FilterHint.BF without this package importing engine.
+// MembershipFilter is a primary-key membership filter (fulltext calls the PK
+// doc_id). It is the PRODUCER view: its method set is exactly the consumer
+// interface engine.MembershipFilter (Test/TestVector/Valid/Exact/Free) plus
+// Share, so a value can be stored directly in engine.FilterHint.BF without this
+// package importing engine (a pkg/common -> pkg/vm/engine layering inversion).
+// The two are kept compatible by a compile-time assertion in package disttae;
+// the shared method set's single source of truth lives in engine.
 //
 // Callers obtain one via New (from tagged bytes produced by Build) and never
 // need to know which concrete structure (cbitmap / CRoaring / bloom) backs it.
-type DocIDFilter interface {
-	// Test reports whether the raw fixed bytes of a single doc_id may be present.
+type MembershipFilter interface {
+	// Test reports whether the raw fixed bytes of a single key may be present.
 	Test(data []byte) bool
-	// TestVector tests every row of a doc_id vector, invoking cb(exist, isnull, row).
+	// TestVector tests every row of a key vector, invoking cb(exist, isnull, row).
 	TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8
 	// Valid reports whether the filter is usable.
 	Valid() bool
+	// Exact reports whether membership is exact (a bitset, no false positives)
+	// rather than approximate (a bloom filter).
+	Exact() bool
 	// Free releases resources / drops one share.
 	Free()
 	// Share returns a filter for one parallel reader (refcount or per-reader wrapper).
-	Share() DocIDFilter
+	Share() MembershipFilter
 }
 
 var (
-	_ DocIDFilter = (*CbitmapDocFilter)(nil)
-	_ DocIDFilter = (*CRoaringDocFilter)(nil)
-	_ DocIDFilter = (*bloomDocFilter)(nil)
+	_ MembershipFilter = (*CbitmapFilter)(nil)
+	_ MembershipFilter = (*CRoaringFilter)(nil)
+	_ MembershipFilter = (*cbloomFilter)(nil)
 )
 
 // Build serializes the best doc_id filter for the whole vector and returns the
@@ -56,7 +63,7 @@ var (
 // transport the bytes; New reconstructs the right filter from the tag.
 func Build(v *vector.Vector) ([]byte, error) {
 	if SupportsBitset(*v.GetType()) {
-		tag, payload, err := BuildIntegerDocFilter(v)
+		tag, payload, err := BuildIntegerFilter(v)
 		if err != nil {
 			return nil, err
 		}
@@ -69,21 +76,21 @@ func Build(v *vector.Vector) ([]byte, error) {
 	return append([]byte{TagBloom}, payload...), nil
 }
 
-// New reconstructs a DocIDFilter from the tagged bytes produced by Build.
-func New(data []byte) (DocIDFilter, error) {
+// New reconstructs a MembershipFilter from the tagged bytes produced by Build.
+func New(data []byte) (MembershipFilter, error) {
 	if len(data) <= 1 {
 		return nil, moerr.NewInternalErrorNoCtx("docfilter: empty filter payload")
 	}
 	tag, payload := data[0], data[1:]
 	switch tag {
 	case TagCbitmap:
-		f, err := NewCbitmapDocFilter(payload)
+		f, err := NewCbitmapFilter(payload)
 		if err != nil {
 			return nil, err
 		}
 		return f, nil
 	case TagCRoaring:
-		f, err := NewCRoaringDocFilter(payload)
+		f, err := NewCRoaringFilter(payload)
 		if err != nil {
 			return nil, err
 		}
@@ -93,7 +100,7 @@ func New(data []byte) (DocIDFilter, error) {
 		if err := bf.Unmarshal(payload); err != nil {
 			return nil, err
 		}
-		return &bloomDocFilter{bf: bf}, nil
+		return &cbloomFilter{bf: bf}, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("docfilter: unknown filter tag")
 	}
@@ -108,33 +115,36 @@ func buildBloomBytes(v *vector.Vector) ([]byte, error) {
 	return bf.Marshal()
 }
 
-// bloomDocFilter adapts *bloomfilter.CBloomFilter to DocIDFilter (the non-integer
+// cbloomFilter adapts *bloomfilter.CBloomFilter to MembershipFilter (the non-integer
 // PK fallback), so New can return it behind the interface like the bitsets.
-type bloomDocFilter struct {
+type cbloomFilter struct {
 	bf *bloomfilter.CBloomFilter
 }
 
-func (f *bloomDocFilter) Test(data []byte) bool {
+func (f *cbloomFilter) Test(data []byte) bool {
 	return f != nil && f.bf != nil && f.bf.Test(data)
 }
 
-func (f *bloomDocFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8 {
+func (f *cbloomFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8 {
 	if f == nil || f.bf == nil {
 		return nil
 	}
 	return f.bf.TestVector(v, cb)
 }
 
-func (f *bloomDocFilter) Valid() bool {
+func (f *cbloomFilter) Valid() bool {
 	return f != nil && f.bf != nil && f.bf.Valid()
 }
 
-func (f *bloomDocFilter) Free() {
+// Exact is false: a bloom filter is approximate (has false positives).
+func (f *cbloomFilter) Exact() bool { return false }
+
+func (f *cbloomFilter) Free() {
 	if f != nil && f.bf != nil {
 		f.bf.Free()
 	}
 }
 
-func (f *bloomDocFilter) Share() DocIDFilter {
-	return &bloomDocFilter{bf: f.bf.SharePointer()}
+func (f *cbloomFilter) Share() MembershipFilter {
+	return &cbloomFilter{bf: f.bf.SharePointer()}
 }

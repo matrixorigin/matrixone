@@ -22,7 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCRoaringDocFilter(t *testing.T) {
+func TestCRoaringFilter(t *testing.T) {
 	mp := mpool.MustNewZero()
 	present := []int64{1, 2, 100, 1 << 40, 7}
 	v := buildIntVec(t, mp, types.T_int64.ToType(), present, nil)
@@ -32,7 +32,7 @@ func TestCRoaringDocFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, payload)
 
-	f, err := NewCRoaringDocFilter(payload)
+	f, err := NewCRoaringFilter(payload)
 	require.NoError(t, err)
 	require.True(t, f.Valid())
 	defer f.Free()
@@ -53,7 +53,7 @@ func TestCRoaringDocFilter(t *testing.T) {
 	// uint32 width
 	v32 := buildIntVec(t, mp, types.T_uint32.ToType(), []uint32{5, 6, 7}, nil)
 	defer v32.Free(mp)
-	f32, err := NewCRoaringDocFilter(must(BuildCRoaringBytes(v32)))
+	f32, err := NewCRoaringFilter(must(BuildCRoaringBytes(v32)))
 	require.NoError(t, err)
 	defer f32.Free()
 	require.True(t, f32.Test(v32.GetRawBytesAt(0)))

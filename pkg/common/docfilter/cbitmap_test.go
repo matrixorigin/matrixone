@@ -22,7 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCbitmapDocFilter(t *testing.T) {
+func TestCbitmapFilter(t *testing.T) {
 	mp := mpool.MustNewZero()
 	present := []int64{1, 2, 100, 4096, 7}
 	v := buildIntVec(t, mp, types.T_int64.ToType(), present, nil)
@@ -33,7 +33,7 @@ func TestCbitmapDocFilter(t *testing.T) {
 	require.True(t, ok)
 	require.NotEmpty(t, payload)
 
-	f, err := NewCbitmapDocFilter(payload)
+	f, err := NewCbitmapFilter(payload)
 	require.NoError(t, err)
 	require.True(t, f.Valid())
 
