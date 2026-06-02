@@ -15,8 +15,9 @@
 package geo
 
 import (
-	"errors"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // planarLineLength returns the total Cartesian length of a coordinate chain.
@@ -58,7 +59,7 @@ func pointAtLength(pts []Coord, target float64) Point {
 func InterpolatePoint(l LineString, f float64) (Point, error) {
 	n := len(l.Points)
 	if n == 0 {
-		return Point{}, errors.New("ST_LineInterpolatePoint: empty line")
+		return Point{}, moerr.NewInvalidInputNoCtx("ST_LineInterpolatePoint: empty line")
 	}
 	if n == 1 {
 		return Point{X: l.Points[0].X, Y: l.Points[0].Y}, nil
@@ -77,7 +78,7 @@ func InterpolatePoint(l LineString, f float64) (Point, error) {
 // returned as a Point, otherwise as a MultiPoint.
 func InterpolatePoints(l LineString, f float64) (Geometry, error) {
 	if f <= 0 || f > 1 {
-		return nil, errors.New("ST_LineInterpolatePoints: fraction must be in (0, 1]")
+		return nil, moerr.NewInvalidInputNoCtx("ST_LineInterpolatePoints: fraction must be in (0, 1]")
 	}
 	var pts []Point
 	for k := 1; ; k++ {
@@ -107,11 +108,11 @@ func InterpolatePoints(l LineString, f float64) (Geometry, error) {
 func PointAtDistance(l LineString, dist float64) (Point, error) {
 	n := len(l.Points)
 	if n == 0 {
-		return Point{}, errors.New("ST_PointAtDistance: empty line")
+		return Point{}, moerr.NewInvalidInputNoCtx("ST_PointAtDistance: empty line")
 	}
 	total := planarLineLength(l.Points)
 	if dist < 0 || dist > total {
-		return Point{}, errors.New("ST_PointAtDistance: distance is out of range")
+		return Point{}, moerr.NewInvalidInputNoCtx("ST_PointAtDistance: distance is out of range")
 	}
 	return pointAtLength(l.Points, dist), nil
 }

@@ -15,9 +15,10 @@
 package geo
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // ParseWKT parses a Well-Known Text representation into a Geometry. It accepts
@@ -403,7 +404,7 @@ func (p *wktParser) eof() bool {
 }
 
 func (p *wktParser) errf(format string, args ...any) error {
-	return fmt.Errorf("invalid WKT: "+format+" (at offset %d)", append(args, p.pos)...)
+	return moerr.NewInvalidInputNoCtxf("invalid WKT: "+format+" (at offset %d)", append(args, p.pos)...)
 }
 
 func isDigit(c byte) bool  { return c >= '0' && c <= '9' }

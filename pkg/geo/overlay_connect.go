@@ -15,8 +15,9 @@
 package geo
 
 import (
-	"fmt"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // segmentIntersection computes the intersection of segments a1a2 and b1b2.
@@ -285,7 +286,7 @@ func polygonRings(g Geometry) ([][]Coord, error) {
 		}
 		return rings, nil
 	default:
-		return nil, fmt.Errorf("overlay requires POLYGON or MULTIPOLYGON input, got %s", subtypeName(g.Type()))
+		return nil, moerr.NewInvalidInputNoCtxf("overlay requires POLYGON or MULTIPOLYGON input, got %s", subtypeName(g.Type()))
 	}
 }
 
@@ -323,7 +324,7 @@ func Overlay(a, b Geometry, op BoolOp) (Geometry, error) {
 	}
 
 	processed := o.run()
-	var sortedEvents []*ovEvent
+	sortedEvents := make([]*ovEvent, 0, len(processed)*2)
 	for _, e := range processed {
 		sortedEvents = append(sortedEvents, e, e.other)
 	}

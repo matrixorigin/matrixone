@@ -15,8 +15,9 @@
 package geo
 
 import (
-	"fmt"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // geohashBase32 is the standard geohash alphabet (no a, i, l, o).
@@ -72,7 +73,7 @@ func DecodeGeoHash(hash string) (lon, lat float64, err error) {
 	for _, c := range strings.ToLower(hash) {
 		idx := strings.IndexRune(geohashBase32, c)
 		if idx < 0 {
-			return 0, 0, fmt.Errorf("invalid geohash character %q", string(c))
+			return 0, 0, moerr.NewInvalidInputNoCtxf("invalid geohash character %q", string(c))
 		}
 		for bit := 4; bit >= 0; bit-- {
 			b := (idx >> bit) & 1

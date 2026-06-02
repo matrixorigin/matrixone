@@ -16,8 +16,9 @@ package geo
 
 import (
 	"encoding/binary"
-	"fmt"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // ReadWKB decodes standard Well-Known Binary (float64 coordinates) into a
@@ -37,7 +38,7 @@ func readWKB(b []byte, f32 bool) (Geometry, error) {
 		return nil, err
 	}
 	if r.pos != len(b) {
-		return nil, fmt.Errorf("invalid WKB: %d trailing byte(s)", len(b)-r.pos)
+		return nil, moerr.NewInvalidInputNoCtxf("invalid WKB: %d trailing byte(s)", len(b)-r.pos)
 	}
 	return g, nil
 }
@@ -284,5 +285,5 @@ func (r *wkbReader) readOrd(little bool) (float64, error) {
 }
 
 func (r *wkbReader) errf(format string, args ...any) error {
-	return fmt.Errorf("invalid WKB: "+format+" (at offset %d)", append(args, r.pos)...)
+	return moerr.NewInvalidInputNoCtxf("invalid WKB: "+format+" (at offset %d)", append(args, r.pos)...)
 }

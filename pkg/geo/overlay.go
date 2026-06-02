@@ -54,7 +54,6 @@ type ovEvent struct {
 	otherInOut   bool
 	prevInResult *ovEvent
 	inResult     bool
-	resultInOut  bool
 	contourID    int
 	pos          int
 }

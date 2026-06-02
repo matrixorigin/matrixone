@@ -15,8 +15,9 @@
 package geo
 
 import (
-	"errors"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // circlePolygon approximates a disc of radius r centered at c with segs sides.
@@ -86,7 +87,7 @@ func forEachSegment(g Geometry, fn func(a, b Coord)) {
 // Only non-negative distances are supported.
 func Buffer(g Geometry, dist float64, quadSegs int) (Geometry, error) {
 	if dist < 0 {
-		return nil, errors.New("ST_Buffer: negative distance is not supported")
+		return nil, moerr.NewInvalidInputNoCtx("ST_Buffer: negative distance is not supported")
 	}
 	if dist == 0 {
 		return g, nil

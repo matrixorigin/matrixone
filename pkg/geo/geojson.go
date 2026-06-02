@@ -16,10 +16,11 @@ package geo
 
 import (
 	"encoding/json"
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // WriteGeoJSON renders g as an RFC 7946 GeoJSON geometry object. When maxDec is
@@ -138,7 +139,7 @@ func ParseGeoJSON(data []byte) (Geometry, error) {
 		Geometries  []json.RawMessage `json:"geometries"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("invalid GeoJSON: %v", err)
+		return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON: %v", err)
 	}
 	return parseGeoJSONObj(raw.Type, raw.Coordinates, raw.Geometries)
 }
@@ -148,31 +149,31 @@ func parseGeoJSONObj(typ string, coords json.RawMessage, geoms []json.RawMessage
 	case "Point":
 		var c []float64
 		if err := json.Unmarshal(coords, &c); err != nil {
-			return nil, fmt.Errorf("invalid GeoJSON Point: %v", err)
+			return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON Point: %v", err)
 		}
 		if len(c) == 0 {
 			return Point{IsEmpty: true}, nil
 		}
 		if len(c) < 2 {
-			return nil, fmt.Errorf("invalid GeoJSON Point: need 2 coordinates")
+			return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON Point: need 2 coordinates")
 		}
 		return Point{X: c[0], Y: c[1]}, nil
 	case "LineString":
 		seq, err := parseCoordSeq(coords)
 		if err != nil {
-			return nil, fmt.Errorf("invalid GeoJSON LineString: %v", err)
+			return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON LineString: %v", err)
 		}
 		return LineString{Points: seq}, nil
 	case "Polygon":
 		rings, err := parseRings(coords)
 		if err != nil {
-			return nil, fmt.Errorf("invalid GeoJSON Polygon: %v", err)
+			return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON Polygon: %v", err)
 		}
 		return Polygon{Rings: rings}, nil
 	case "MultiPoint":
 		seq, err := parseCoordSeq(coords)
 		if err != nil {
-			return nil, fmt.Errorf("invalid GeoJSON MultiPoint: %v", err)
+			return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON MultiPoint: %v", err)
 		}
 		pts := make([]Point, len(seq))
 		for i, c := range seq {
@@ -182,7 +183,7 @@ func parseGeoJSONObj(typ string, coords json.RawMessage, geoms []json.RawMessage
 	case "MultiLineString":
 		rings, err := parseRings(coords)
 		if err != nil {
-			return nil, fmt.Errorf("invalid GeoJSON MultiLineString: %v", err)
+			return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON MultiLineString: %v", err)
 		}
 		lines := make([]LineString, len(rings))
 		for i, r := range rings {
@@ -192,13 +193,13 @@ func parseGeoJSONObj(typ string, coords json.RawMessage, geoms []json.RawMessage
 	case "MultiPolygon":
 		var rawPolys []json.RawMessage
 		if err := json.Unmarshal(coords, &rawPolys); err != nil {
-			return nil, fmt.Errorf("invalid GeoJSON MultiPolygon: %v", err)
+			return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON MultiPolygon: %v", err)
 		}
 		polys := make([]Polygon, len(rawPolys))
 		for i, rp := range rawPolys {
 			rings, err := parseRings(rp)
 			if err != nil {
-				return nil, fmt.Errorf("invalid GeoJSON MultiPolygon: %v", err)
+				return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON MultiPolygon: %v", err)
 			}
 			polys[i] = Polygon{Rings: rings}
 		}
@@ -212,7 +213,7 @@ func parseGeoJSONObj(typ string, coords json.RawMessage, geoms []json.RawMessage
 				Geometries  []json.RawMessage `json:"geometries"`
 			}
 			if err := json.Unmarshal(rg, &sub); err != nil {
-				return nil, fmt.Errorf("invalid GeoJSON GeometryCollection: %v", err)
+				return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON GeometryCollection: %v", err)
 			}
 			g, err := parseGeoJSONObj(sub.Type, sub.Coordinates, sub.Geometries)
 			if err != nil {
@@ -222,9 +223,9 @@ func parseGeoJSONObj(typ string, coords json.RawMessage, geoms []json.RawMessage
 		}
 		return GeometryCollection{Geometries: subs}, nil
 	case "":
-		return nil, fmt.Errorf("invalid GeoJSON: missing type")
+		return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON: missing type")
 	default:
-		return nil, fmt.Errorf("unsupported GeoJSON type %q", typ)
+		return nil, moerr.NewInvalidInputNoCtxf("unsupported GeoJSON type %q", typ)
 	}
 }
 
@@ -236,7 +237,7 @@ func parseCoordSeq(data json.RawMessage) ([]Coord, error) {
 	out := make([]Coord, len(rows))
 	for i, r := range rows {
 		if len(r) < 2 {
-			return nil, fmt.Errorf("need 2 coordinates per position")
+			return nil, moerr.NewInvalidInputNoCtxf("need 2 coordinates per position")
 		}
 		out[i] = Coord{X: r[0], Y: r[1]}
 	}
