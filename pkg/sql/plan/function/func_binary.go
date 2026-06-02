@@ -8069,6 +8069,55 @@ func StPointFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
+// StAsGeoJSONPrec renders a geometry as GeoJSON, rounding each coordinate to at
+// most maxdecimaldigits decimal places.
+func StAsGeoJSONPrec(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrFixedToStrWithErrorCheck[int64](ivecs, result, proc, length, func(v string, maxDec int64) (string, error) {
+		g, err := decodeGeoGeometry(functionUtil.QuickStrToBytes(v))
+		if err != nil {
+			return "", err
+		}
+		md := int(maxDec)
+		if md < 0 {
+			md = -1
+		}
+		return geo.WriteGeoJSON(g, md), nil
+	}, selectList)
+}
+
+// StGeomFromGeoJSONWithSRID builds a geometry from a GeoJSON object with an
+// explicit SRID (recorded in the result type's Width by the binder).
+func StGeomFromGeoJSONWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	maxPoints := maxPointsInGeometryLimit(proc)
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	srids := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := source.GetStrValue(i)
+		srid, null2 := srids.GetValue(i)
+		if null1 || null2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if srid < 0 {
+			return moerr.NewInvalidInputNoCtx("SRID must be non-negative")
+		}
+		g, err := geo.ParseGeoJSON(v)
+		if err != nil {
+			return moerr.NewInvalidInputNoCtx(err.Error())
+		}
+		if err := validateGeometryTextForStorage(geo.WriteWKT(g), maxPoints); err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(geo.WriteWKB(g), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // --- MBR (minimum bounding rectangle) predicates ---------------------------
 
 // mbrPredicate evaluates a bounding-box predicate on the envelopes of two

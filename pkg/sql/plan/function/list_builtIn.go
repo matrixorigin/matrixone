@@ -4248,6 +4248,42 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// GeoJSON: st_asgeojson, st_geomfromgeojson
+	{
+		functionId: ST_ASGEOJSON,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:   func() executeLogicOfOverload { return StAsGeoJSON }},
+			{overloadId: 1, args: []types.T{types.T_geometry, types.T_int64},
+				retType: func(parameters []types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:   func() executeLogicOfOverload { return StAsGeoJSONPrec }},
+		},
+	},
+	{
+		functionId: ST_GEOMFROMGEOJSON,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			// Single-arg form defaults to SRID 4326 (per MySQL). SRID lives in
+			// the type Width as srid+1, so 4326 -> 4327.
+			{overloadId: 0, args: []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					t := types.T_geometry.ToType()
+					t.Width = 4327
+					return t
+				},
+				newOp: func() executeLogicOfOverload { return StGeomFromGeoJSON }},
+			{overloadId: 1, args: []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry.ToType() },
+				newOp:   func() executeLogicOfOverload { return StGeomFromGeoJSONWithSRID }},
+		},
+	},
+
 	// function `st_geomfromtext`
 	{
 		functionId: ST_GEOMFROMTEXT,

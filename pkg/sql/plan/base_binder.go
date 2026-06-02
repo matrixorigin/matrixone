@@ -2120,7 +2120,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		switch name {
 		case "st_geomfromtext", "st_geomfromwkb", "st_geometryfromtext", "st_pointfromtext",
 			"st_linefromtext", "st_polygonfromtext", "st_mpointfromtext", "st_mlinefromtext",
-			"st_mpolyfromtext", "st_geomcollfromtext", "st_pointfromgeohash":
+			"st_mpolyfromtext", "st_geomcollfromtext", "st_pointfromgeohash",
+			"st_geomfromgeojson":
 			if len(args) >= 2 {
 				if lit, ok := args[len(args)-1].Expr.(*plan.Expr_Lit); ok && lit.Lit != nil {
 					if iv, ok := lit.Lit.GetValue().(*plan.Literal_I64Val); ok && iv.I64Val >= 0 {

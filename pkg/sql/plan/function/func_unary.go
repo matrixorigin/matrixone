@@ -751,6 +751,35 @@ func StAsWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	}, selectList)
 }
 
+// StAsGeoJSON renders a geometry as an RFC 7946 GeoJSON geometry object
+// (full coordinate precision).
+func StAsGeoJSON(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		g, err := decodeGeoGeometry(v)
+		if err != nil {
+			return nil, err
+		}
+		return functionUtil.QuickStrToBytes(geo.WriteGeoJSON(g, -1)), nil
+	}, selectList)
+}
+
+// StGeomFromGeoJSON builds a geometry from a GeoJSON geometry object. Per
+// MySQL, the default SRID is 4326 (recorded in the result type's Width by the
+// binder/overload).
+func StGeomFromGeoJSON(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	maxPoints := maxPointsInGeometryLimit(proc)
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		g, err := geo.ParseGeoJSON(v)
+		if err != nil {
+			return nil, moerr.NewInvalidInputNoCtx(err.Error())
+		}
+		if err := validateGeometryTextForStorage(geo.WriteWKT(g), maxPoints); err != nil {
+			return nil, err
+		}
+		return geo.WriteWKB(g), nil
+	}, selectList)
+}
+
 // StGeomFromWKB builds a geometry from standard Well-Known Binary.
 func StGeomFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	maxPoints := maxPointsInGeometryLimit(proc)

@@ -5288,6 +5288,54 @@ func TestStMeasuresGeodetic(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestGeoJSONFunctions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// ST_AsGeoJSON(geometry).
+	tcAs := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{`{"type":"Point","coordinates":[1,2]}`}, []bool{false}), StAsGeoJSON)
+	ok, info := tcAs.Run()
+	require.True(t, ok, info)
+
+	// ST_AsGeoJSON(geometry, maxdec).
+	tcAsP := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1.23456 2.34567)"}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{`{"type":"Point","coordinates":[1.23,2.35]}`}, []bool{false}), StAsGeoJSONPrec)
+	ok, info = tcAsP.Run()
+	require.True(t, ok, info)
+
+	// ST_GeomFromGeoJSON -> canonical WKT via geometry comparison.
+	tcFrom := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`{"type":"LineString","coordinates":[[0,0],[1,1],[2,2]]}`}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false,
+			[]string{"LINESTRING(0 0, 1 1, 2 2)"}, []bool{false}), StGeomFromGeoJSON)
+	ok, info = tcFrom.Run()
+	require.True(t, ok, info)
+
+	// ST_GeomFromGeoJSON(str, srid).
+	tcFromS := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`{"type":"Point","coordinates":[3,4]}`}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false,
+			[]string{"POINT(3 4)"}, []bool{false}), StGeomFromGeoJSONWithSRID)
+	ok, info = tcFromS.Run()
+	require.True(t, ok, info)
+}
+
 func TestMBRPredicates(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
