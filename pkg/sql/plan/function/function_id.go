@@ -657,9 +657,18 @@ const (
 	ST_MPOLYFROMTEXT    = 470
 	ST_GEOMCOLLFROMTEXT = 471
 
+	// GIS typed WKB constructors
+	ST_POINTFROMWKB    = 472
+	ST_LINEFROMWKB     = 473
+	ST_POLYFROMWKB     = 474
+	ST_MPOINTFROMWKB   = 475
+	ST_MLINEFROMWKB    = 476
+	ST_MPOLYFROMWKB    = 477
+	ST_GEOMCOLLFROMWKB = 478
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 472
+	FUNCTION_END_NUMBER = 479
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1073,6 +1082,20 @@ var functionIdRegister = map[string]int32{
 	"st_geomcollfromtext":            ST_GEOMCOLLFROMTEXT,
 	"st_geomcollfromtxt":             ST_GEOMCOLLFROMTEXT,
 	"st_geometrycollectionfromtext":  ST_GEOMCOLLFROMTEXT,
+	"st_geometryfromwkb":             ST_GEOMFROMWKB,
+	"st_pointfromwkb":                ST_POINTFROMWKB,
+	"st_linefromwkb":                 ST_LINEFROMWKB,
+	"st_linestringfromwkb":           ST_LINEFROMWKB,
+	"st_polyfromwkb":                 ST_POLYFROMWKB,
+	"st_polygonfromwkb":              ST_POLYFROMWKB,
+	"st_mpointfromwkb":               ST_MPOINTFROMWKB,
+	"st_multipointfromwkb":           ST_MPOINTFROMWKB,
+	"st_mlinefromwkb":                ST_MLINEFROMWKB,
+	"st_multilinestringfromwkb":      ST_MLINEFROMWKB,
+	"st_mpolyfromwkb":                ST_MPOLYFROMWKB,
+	"st_multipolygonfromwkb":         ST_MPOLYFROMWKB,
+	"st_geomcollfromwkb":             ST_GEOMCOLLFROMWKB,
+	"st_geometrycollectionfromwkb":   ST_GEOMCOLLFROMWKB,
 	"st_geometrytype":                ST_GEOMETRYTYPE,
 	"st_x":                           ST_X,
 	"st_y":                           ST_Y,

@@ -890,6 +890,68 @@ func StGeomCollFromText(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return stFromTextSubtype("GEOMETRYCOLLECTION")(ivecs, result, proc, length, selectList)
 }
 
+// geomFromWKBSubtype is the shared implementation of the typed WKB constructors
+// (ST_PointFromWKB, ...): read standard WKB, assert the expected subtype, and
+// re-emit bare WKB.
+func geomFromWKBSubtype(payload []byte, maxPoints int64, want string) ([]byte, error) {
+	g, err := geo.ReadWKB(payload)
+	if err != nil {
+		g, err = geo.ReadWKBFloat32(payload)
+		if err != nil {
+			return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+	}
+	wkt := geo.WriteWKT(g)
+	if err := validateGeometryTextForStorage(wkt, maxPoints); err != nil {
+		return nil, err
+	}
+	typeName, err := geometryTypeNameFromText(wkt)
+	if err != nil {
+		return nil, err
+	}
+	if typeName != want {
+		return nil, moerr.NewInvalidInputNoCtxf("geometry is not a %s", want)
+	}
+	return geo.WriteWKB(g), nil
+}
+
+func stFromWKBSubtype(want string) fEvalFn {
+	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		maxPoints := maxPointsInGeometryLimit(proc)
+		return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+			return geomFromWKBSubtype(v, maxPoints, want)
+		}, selectList)
+	}
+}
+
+func StPointFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromWKBSubtype("POINT")(ivecs, result, proc, length, selectList)
+}
+
+func StLineFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromWKBSubtype("LINESTRING")(ivecs, result, proc, length, selectList)
+}
+
+func StPolyFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromWKBSubtype("POLYGON")(ivecs, result, proc, length, selectList)
+}
+
+func StMPointFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromWKBSubtype("MULTIPOINT")(ivecs, result, proc, length, selectList)
+}
+
+func StMLineFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromWKBSubtype("MULTILINESTRING")(ivecs, result, proc, length, selectList)
+}
+
+func StMPolyFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromWKBSubtype("MULTIPOLYGON")(ivecs, result, proc, length, selectList)
+}
+
+func StGeomCollFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromWKBSubtype("GEOMETRYCOLLECTION")(ivecs, result, proc, length, selectList)
+}
+
 func StSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// SRID is carried by the column/expression type (Width = srid+1 when a SRID
 	// is defined, 0 otherwise), not by the bare-WKB payload.

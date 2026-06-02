@@ -47,6 +47,26 @@ func jsonConstructorSupportsType(oid types.T) bool {
 	}
 }
 
+// wkbConstructor builds a typed WKB geometry constructor function definition
+// (ST_PointFromWKB, ...) accepting varchar/blob/varbinary input.
+func wkbConstructor(id int, fn executeLogicOfOverload) FuncNew {
+	mk := func(t types.T, oid int) overload {
+		return overload{
+			overloadId: oid,
+			args:       []types.T{t},
+			retType:    func(parameters []types.Type) types.Type { return types.T_geometry.ToType() },
+			newOp:      func() executeLogicOfOverload { return fn },
+		}
+	}
+	return FuncNew{
+		functionId: id,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads:  []overload{mk(types.T_varchar, 0), mk(types.T_blob, 1), mk(types.T_varbinary, 2)},
+	}
+}
+
 var supportedStringBuiltIns = []FuncNew{
 	// function `ascii`
 	{
@@ -4000,6 +4020,15 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp:   func() executeLogicOfOverload { return StGeomCollFromText }},
 		},
 	},
+
+	// typed WKB constructors: st_pointfromwkb, st_linefromwkb, ...
+	wkbConstructor(ST_POINTFROMWKB, StPointFromWKB),
+	wkbConstructor(ST_LINEFROMWKB, StLineFromWKB),
+	wkbConstructor(ST_POLYFROMWKB, StPolyFromWKB),
+	wkbConstructor(ST_MPOINTFROMWKB, StMPointFromWKB),
+	wkbConstructor(ST_MLINEFROMWKB, StMLineFromWKB),
+	wkbConstructor(ST_MPOLYFROMWKB, StMPolyFromWKB),
+	wkbConstructor(ST_GEOMCOLLFROMWKB, StGeomCollFromWKB),
 
 	// function `st_geomfromtext`
 	{

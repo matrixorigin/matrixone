@@ -1213,6 +1213,29 @@ func TestTypedTextConstructors(t *testing.T) {
 	run(StGeomCollFromText, "POINT(1 1)", "", true)
 }
 
+func TestTypedWKBConstructors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	run := func(fn fEvalFn, wkt, want string, wantErr bool) {
+		wkb := string(encodeGeometryPayload(wkt, 0, false))
+		inputs := []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{wkb}, []bool{false})}
+		expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{want}, []bool{false})
+		tc := NewFunctionTestCase(proc, inputs, expect, fn)
+		ok, info := tc.Run()
+		if wantErr {
+			require.False(t, ok, "%s should be rejected", wkt)
+		} else {
+			require.True(t, ok, info)
+		}
+	}
+	run(StPointFromWKB, "POINT(1 2)", "POINT(1 2)", false)
+	run(StPointFromWKB, "LINESTRING(0 0,1 1)", "", true)
+	run(StLineFromWKB, "LINESTRING(0 0,1 1,2 3)", "LINESTRING(0 0,1 1,2 3)", false)
+	run(StPolyFromWKB, "POLYGON((0 0,1 0,1 1,0 0))", "POLYGON((0 0,1 0,1 1,0 0))", false)
+	run(StMPointFromWKB, "MULTIPOINT(1 1,2 2)", "MULTIPOINT(1 1,2 2)", false)
+	run(StGeomCollFromWKB, "GEOMETRYCOLLECTION(POINT(1 1))", "GEOMETRYCOLLECTION(POINT(1 1))", false)
+	run(StGeomCollFromWKB, "POINT(1 1)", "", true)
+}
+
 func TestStSRID(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

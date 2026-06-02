@@ -525,9 +525,16 @@ var predefinedFunids = map[int]int{
 	ST_MLINEFROMTEXT:              469,
 	ST_MPOLYFROMTEXT:              470,
 	ST_GEOMCOLLFROMTEXT:           471,
+	ST_POINTFROMWKB:               472,
+	ST_LINEFROMWKB:                473,
+	ST_POLYFROMWKB:                474,
+	ST_MPOINTFROMWKB:              475,
+	ST_MLINEFROMWKB:               476,
+	ST_MPOLYFROMWKB:               477,
+	ST_GEOMCOLLFROMWKB:            478,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 472,
+	FUNCTION_END_NUMBER: 479,
 }
 
 func Test_funids(t *testing.T) {
