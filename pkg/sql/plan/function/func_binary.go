@@ -8080,7 +8080,7 @@ func StBuffer(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		}
 		b, berr := geo.Buffer(g, dist, 8)
 		if berr != nil {
-			return "", moerr.NewInvalidInputNoCtx(berr.Error())
+			return "", berr
 		}
 		return functionUtil.QuickBytesToStr(geoEncodeWKB(b, f32)), nil
 	}, selectList)
@@ -8109,7 +8109,7 @@ func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		}
 		b, berr := geo.Buffer(g, dist, int(qs))
 		if berr != nil {
-			return moerr.NewInvalidInputNoCtx(berr.Error())
+			return berr
 		}
 		if err := rs.AppendBytes(geoEncodeWKB(b, f32), false); err != nil {
 			return err
@@ -8134,7 +8134,7 @@ func overlayBinary(op geo.BoolOp) fEvalFn {
 			}
 			g, oerr := geo.Overlay(a, b, op)
 			if oerr != nil {
-				return nil, moerr.NewInvalidInputNoCtx(oerr.Error())
+				return nil, oerr
 			}
 			return geoEncodeWKB(g, f32), nil
 		}, selectList)
@@ -8242,7 +8242,7 @@ func StLineInterpolatePoint(ivecs []*vector.Vector, result vector.FunctionResult
 		}
 		p, err := geo.InterpolatePoint(l, f)
 		if err != nil {
-			return "", moerr.NewInvalidInputNoCtx(err.Error())
+			return "", err
 		}
 		return functionUtil.QuickBytesToStr(geoEncodeWKB(p, f32)), nil
 	}, selectList)
@@ -8258,7 +8258,7 @@ func StLineInterpolatePoints(ivecs []*vector.Vector, result vector.FunctionResul
 		}
 		g, err := geo.InterpolatePoints(l, f)
 		if err != nil {
-			return "", moerr.NewInvalidInputNoCtx(err.Error())
+			return "", err
 		}
 		return functionUtil.QuickBytesToStr(geoEncodeWKB(g, f32)), nil
 	}, selectList)
@@ -8274,7 +8274,7 @@ func StPointAtDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		}
 		p, err := geo.PointAtDistance(l, d)
 		if err != nil {
-			return "", moerr.NewInvalidInputNoCtx(err.Error())
+			return "", err
 		}
 		return functionUtil.QuickBytesToStr(geoEncodeWKB(p, f32)), nil
 	}, selectList)
@@ -8347,7 +8347,7 @@ func StGeomFromGeoJSONWithSRID(ivecs []*vector.Vector, result vector.FunctionRes
 		}
 		g, err := geo.ParseGeoJSON(v)
 		if err != nil {
-			return moerr.NewInvalidInputNoCtx(err.Error())
+			return err
 		}
 		if err := validateGeometryTextForStorage(geo.WriteWKT(g), maxPoints); err != nil {
 			return err

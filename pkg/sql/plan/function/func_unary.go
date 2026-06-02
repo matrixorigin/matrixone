@@ -771,7 +771,7 @@ func StGeomFromGeoJSON(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
 		g, err := geo.ParseGeoJSON(v)
 		if err != nil {
-			return nil, moerr.NewInvalidInputNoCtx(err.Error())
+			return nil, err
 		}
 		if err := validateGeometryTextForStorage(geo.WriteWKT(g), maxPoints); err != nil {
 			return nil, err
