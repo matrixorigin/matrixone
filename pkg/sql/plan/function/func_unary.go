@@ -952,6 +952,67 @@ func StGeomCollFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	return stFromWKBSubtype("GEOMETRYCOLLECTION")(ivecs, result, proc, length, selectList)
 }
 
+// StLongitude returns the X (longitude) ordinate of a point (ST_Longitude).
+func StLongitude(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
+		x, _, err := parsePointXYFromPayload(v)
+		return x, err
+	}, selectList)
+}
+
+// StLatitude returns the Y (latitude) ordinate of a point (ST_Latitude).
+func StLatitude(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
+		_, y, err := parsePointXYFromPayload(v)
+		return y, err
+	}, selectList)
+}
+
+// StSwapXY swaps the X and Y of every coordinate of a geometry (ST_SwapXY).
+func StSwapXY(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		g, err := decodeGeoGeometry(v)
+		if err != nil {
+			return nil, err
+		}
+		return geo.WriteWKB(geo.SwapXY(g)), nil
+	}, selectList)
+}
+
+// StValidate returns the geometry if it is structurally valid, otherwise NULL
+// (ST_Validate).
+func StValidate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	src := vector.GenerateFunctionStrParameter(ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v, null := src.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		valid, err := isValidFromPayload(v)
+		if err != nil || !valid {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes(v, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func StSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// SRID is carried by the column/expression type (Width = srid+1 when a SRID
 	// is defined, 0 otherwise), not by the bare-WKB payload.

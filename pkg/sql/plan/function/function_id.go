@@ -666,9 +666,17 @@ const (
 	ST_MPOLYFROMWKB    = 477
 	ST_GEOMCOLLFROMWKB = 478
 
+	// GIS point/misc
+	ST_LONGITUDE       = 479
+	ST_LATITUDE        = 480
+	ST_SWAPXY          = 481
+	ST_VALIDATE        = 482
+	ST_MAKEENVELOPE    = 483
+	ST_DISTANCE_SPHERE = 484
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 479
+	FUNCTION_END_NUMBER = 485
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1096,6 +1104,12 @@ var functionIdRegister = map[string]int32{
 	"st_multipolygonfromwkb":         ST_MPOLYFROMWKB,
 	"st_geomcollfromwkb":             ST_GEOMCOLLFROMWKB,
 	"st_geometrycollectionfromwkb":   ST_GEOMCOLLFROMWKB,
+	"st_longitude":                   ST_LONGITUDE,
+	"st_latitude":                    ST_LATITUDE,
+	"st_swapxy":                      ST_SWAPXY,
+	"st_validate":                    ST_VALIDATE,
+	"st_makeenvelope":                ST_MAKEENVELOPE,
+	"st_distance_sphere":             ST_DISTANCE_SPHERE,
 	"st_geometrytype":                ST_GEOMETRYTYPE,
 	"st_x":                           ST_X,
 	"st_y":                           ST_Y,

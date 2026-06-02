@@ -5287,6 +5287,60 @@ func TestStMeasuresGeodetic(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestPointMiscFunctions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom := types.T_geometry.ToType()
+
+	runFloat := func(fn fEvalFn, wkt string, want float64) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(geom, []string{wkt}, []bool{false})},
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+	runFloat(StLongitude, "POINT(3 4)", 3)
+	runFloat(StLatitude, "POINT(3 4)", 4)
+
+	// ST_SwapXY
+	tcSwap := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(geom, []string{"LINESTRING(0 1,2 3)"}, []bool{false})},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"LINESTRING(1 0,3 2)"}, []bool{false}), StSwapXY)
+	ok, info := tcSwap.Run()
+	require.True(t, ok, info)
+
+	// ST_Validate: valid geometry passes through, invalid -> NULL.
+	tcValid := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(geom,
+			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0))", "POLYGON((0 0,4 4,4 0,0 4,0 0))"}, []bool{false, false})},
+		NewFunctionTestResult(types.T_geometry.ToType(), false,
+			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0))", ""}, []bool{false, true}), StValidate)
+	ok, info = tcValid.Run()
+	require.True(t, ok, info)
+
+	// ST_MakeEnvelope
+	tcEnv := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom, []string{"POINT(0 0)"}, []bool{false}),
+			NewFunctionTestInput(geom, []string{"POINT(2 3)"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"POLYGON((0 0,2 0,2 3,0 3,0 0))"}, []bool{false}), StMakeEnvelope)
+	ok, info = tcEnv.Run()
+	require.True(t, ok, info)
+
+	// ST_Distance_Sphere equals the S2 great-circle distance.
+	wantD, _ := geodeticDistance(
+		encodeGeometryPayload("POINT(0 0)", 0, false),
+		encodeGeometryPayload("POINT(1 0)", 0, false))
+	tcSphere := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom, []string{"POINT(0 0)"}, []bool{false}),
+			NewFunctionTestInput(geom, []string{"POINT(1 0)"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantD}, []bool{false}), StDistanceSphere)
+	ok, info = tcSphere.Run()
+	require.True(t, ok, info)
+}
+
 func TestStMeasuresWithSRID(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	geom := types.T_geometry.ToType() // SRID-undefined type

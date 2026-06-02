@@ -7995,6 +7995,45 @@ func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 	}, selectList)
 }
 
+// StMakeEnvelope builds the axis-aligned rectangle polygon spanning two corner
+// points (ST_MakeEnvelope).
+func StMakeEnvelope(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
+		x1, y1, err := parsePointXYFromPayload(v1)
+		if err != nil {
+			return nil, err
+		}
+		x2, y2, err := parsePointXYFromPayload(v2)
+		if err != nil {
+			return nil, err
+		}
+		minX, maxX := math.Min(x1, x2), math.Max(x1, x2)
+		minY, maxY := math.Min(y1, y2), math.Max(y1, y2)
+		ring := []geo.Coord{{X: minX, Y: minY}, {X: maxX, Y: minY}, {X: maxX, Y: maxY}, {X: minX, Y: maxY}, {X: minX, Y: minY}}
+		return geo.WriteWKB(geo.Polygon{Rings: [][]geo.Coord{ring}}), nil
+	}, selectList)
+}
+
+// StDistanceSphere returns the great-circle distance in meters between two
+// geometries on a sphere of EarthRadiusMeters (ST_Distance_Sphere).
+func StDistanceSphere(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
+		lg, err := decodeGeoGeometry(v1)
+		if err != nil {
+			return 0, err
+		}
+		rg, err := decodeGeoGeometry(v2)
+		if err != nil {
+			return 0, err
+		}
+		d, ok := geo.DistanceMeters(lg, rg)
+		if !ok {
+			return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		return d, nil
+	}, selectList)
+}
+
 // geometryDistanceBySRID computes the distance between two geometries in the
 // coordinate system selected by srid: geodesic meters for SRID 4326, Cartesian
 // otherwise.
