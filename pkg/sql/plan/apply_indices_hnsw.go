@@ -275,6 +275,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 		OrderBy:  orderByScore,
 		Limit:    limit,                         // Apply LIMIT after sorting
 		Offset:   DeepCopyExpr(sortNode.Offset), // Apply OFFSET after sorting
+		SpillMem: builder.sortSpillMem,
 	}, ctx)
 
 	projNode.Children[0] = sortByID

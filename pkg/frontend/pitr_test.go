@@ -112,6 +112,66 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 	})
 }
 
+func Test_checkPitrValidOrNot_AllowsExplicitCurrentAccountForScopedRestore(t *testing.T) {
+	tenant := &TenantInfo{
+		Tenant:   "acc01",
+		TenantID: 101,
+	}
+	pitr := &pitrRecord{
+		pitrName:     "pitr01",
+		level:        tree.PITRLEVELACCOUNT.String(),
+		accountId:    101,
+		accountName:  "acc01",
+		databaseName: "db01",
+		tableName:    "t01",
+	}
+
+	err := checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELDATABASE,
+		AccountName:  "acc01",
+		DatabaseName: "db01",
+	}, tenant)
+	require.NoError(t, err)
+
+	err = checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELTABLE,
+		AccountName:  "acc01",
+		DatabaseName: "db01",
+		TableName:    "t01",
+	}, tenant)
+	require.NoError(t, err)
+}
+
+func Test_checkPitrValidOrNot_RejectsOtherAccountForScopedRestore(t *testing.T) {
+	tenant := &TenantInfo{
+		Tenant:   "acc01",
+		TenantID: 101,
+	}
+	pitr := &pitrRecord{
+		pitrName:     "pitr01",
+		level:        tree.PITRLEVELACCOUNT.String(),
+		accountId:    101,
+		accountName:  "acc01",
+		databaseName: "db01",
+		tableName:    "t01",
+	}
+
+	err := checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELDATABASE,
+		AccountName:  "acc02",
+		DatabaseName: "db01",
+	}, tenant)
+	require.Error(t, err)
+
+	err = checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELTABLE,
+		AccountName:  "acc02",
+		DatabaseName: "db01",
+		TableName:    "t01",
+	}, tenant)
+	require.Error(t, err)
+}
+
 func Test_createPubByPitr(t *testing.T) {
 	convey.Convey("createPubByPitr success", t, func() {
 		ctrl := gomock.NewController(t)
@@ -1483,7 +1543,7 @@ func Test_doRestorePitr_Account(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -1609,7 +1669,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -1732,7 +1792,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -1849,7 +1909,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -1973,7 +2033,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -2091,7 +2151,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -2219,7 +2279,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -2341,7 +2401,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -2463,25 +2523,25 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
 		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 
-		sql = fmt.Sprintf("show full tables from `mo_catalog` {MO_TS = %d}", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{
-			{"mo_user", "BASE TABLE"},
+		sql = buildTableInfoListSQL(moCatalog, "", resovleTs, uint32(sysAccountID))
+		mrs = newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+			{"mo_user", "BASE TABLE", "r"},
 		})
 		bh.sql2result[sql] = mrs
 
 		err = restoreSystemDatabaseWithPitr(ctx, "", bh, "pitr01", resovleTs, 0)
 		assert.Error(t, err)
 
-		sql = fmt.Sprintf("show full tables from `mo_catalog` {snapshot = '%s'}", "pitr01")
-		mrs = newMrsForPitrRecord([][]interface{}{
-			{"mo_user", "BASE TABLE"},
+		sql = buildTableInfoListSQL(moCatalog, "", resovleTs, uint32(sysAccountID))
+		mrs = newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+			{"mo_user", "BASE TABLE", "r"},
 		})
 		bh.sql2result[sql] = mrs
 

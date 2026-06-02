@@ -23,6 +23,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -859,6 +860,51 @@ func TestHashDiff_NoLCAWithStubHandles(t *testing.T) {
 	require.Equal(t, [][]any{{int64(3), "base-only", "hb"}}, got[1].rows)
 }
 
+func TestHashDiff_FakePKClosesMigratedHashmaps(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.pkKind = fakeKind
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+	tblStuff.maxTombstoneBatchCnt = 1
+	alloc := &trackingHashmapAllocator{}
+	tblStuff.hashmapAllocator = &branchHashmapAllocator{upstream: alloc}
+
+	tarData := buildHashDiffDataBatch(t, ses.proc.Mp(), [][]any{
+		{int64(1), "target", "h1", commitTSBytes(types.BuildTS(15, 0))},
+	})
+	baseData := buildHashDiffDataBatch(t, ses.proc.Mp(), [][]any{
+		{int64(2), "base", "h2", commitTSBytes(types.BuildTS(12, 0))},
+	})
+
+	err = hashDiff(
+		context.Background(),
+		ses,
+		nil,
+		tblStuff,
+		branchMetaInfo{},
+		compositeOption{},
+		func(w batchWithKind) (bool, error) {
+			tblStuff.retPool.releaseRetBatch(w.batch, false)
+			return false, nil
+		},
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{data: tarData}},
+		}},
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{data: baseData}},
+		}},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Zero(t, alloc.outstanding.Load())
+}
+
 func buildVisibleComparisonBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {
 	t.Helper()
 
@@ -921,6 +967,31 @@ func (s *stubEngineChangesHandle) Next(context.Context, *mpool.MPool) (*batch.Ba
 
 func (s *stubEngineChangesHandle) Close() error {
 	return nil
+}
+
+type trackingHashmapAllocator struct {
+	outstanding atomic.Int64
+}
+
+func (a *trackingHashmapAllocator) Allocate(size uint64, _ malloc.Hints) ([]byte, malloc.Deallocator, error) {
+	a.outstanding.Add(int64(size))
+	return make([]byte, int(size)), &trackingHashmapDeallocator{
+		allocator: a,
+		size:      size,
+	}, nil
+}
+
+type trackingHashmapDeallocator struct {
+	allocator *trackingHashmapAllocator
+	size      uint64
+}
+
+func (d *trackingHashmapDeallocator) Deallocate() {
+	d.allocator.outstanding.Add(-int64(d.size))
+}
+
+func (d *trackingHashmapDeallocator) As(malloc.Trait) bool {
+	return false
 }
 
 func buildHashDiffDataBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {

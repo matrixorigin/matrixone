@@ -51,7 +51,7 @@ func GetShardInfo(
 	address string,
 	shardID uint64,
 ) (ShardInfo, bool, error) {
-	si, ok, err := queryShardInfoRawFn(sid, address, shardID)
+	si, ok, err := queryShardInfoRawFn(context.Background(), sid, address, shardID)
 	if err != nil || !ok {
 		return ShardInfo{}, false, err
 	}
@@ -83,11 +83,12 @@ var queryShardInfoRawFn = queryShardInfoRaw
 // zombie self-check needs, because the scenario that produces zombies is
 // exactly the one where HAKeeper has no leader.
 func getShardMembership(
+	ctx context.Context,
 	sid string,
 	address string,
 	shardID uint64,
 ) (map[uint64]string, bool, error) {
-	si, ok, err := queryShardInfoRawFn(sid, address, shardID)
+	si, ok, err := queryShardInfoRawFn(ctx, sid, address, shardID)
 	if err != nil || !ok {
 		return nil, false, err
 	}
@@ -102,6 +103,7 @@ func getShardMembership(
 // without applying the leader-known filter. ok=false means the queried peer
 // has no record of the shard in its gossip registry.
 func queryShardInfoRaw(
+	ctx context.Context,
 	sid string,
 	address string,
 	shardID uint64,
@@ -110,7 +112,7 @@ func queryShardInfoRaw(
 	respPool.New = func() interface{} {
 		return &RPCResponse{pool: respPool}
 	}
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseGetShardInfo)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second, moerr.CauseGetShardInfo)
 	defer cancel()
 	cc, err := getRPCClient(
 		ctx,

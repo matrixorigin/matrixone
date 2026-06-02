@@ -149,6 +149,7 @@ type tableInfo struct {
 	dbName    string
 	tblName   string
 	typ       tableType
+	relKind   string
 	createSql string
 }
 
@@ -1198,6 +1199,15 @@ func restoreToDatabaseOrTable(
 			continue
 		}
 
+		// external table data is stored outside MO and cannot be restored by clone.
+		if shouldSkipRestoreTableInBulk(tblInfo) {
+			if restoreToTbl {
+				return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
+			}
+			getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore external table: %v.%v", snapshotName, tblInfo.dbName, tblInfo.tblName))
+			continue
+		}
+
 		// skip view
 		if tblInfo.typ == view {
 			viewMap[key] = tblInfo
@@ -1494,6 +1504,9 @@ func recreateTable(
 	toAccountId uint32,
 	snapshotTs int64,
 ) (err error) {
+	if isExternalTable(tblInfo) {
+		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
+	}
 
 	getLogger(sid).Debug(
 		fmt.Sprintf("[%s] start to restore table: %v, restore timestamp: %d",
@@ -1586,6 +1599,21 @@ func needSkipSystemTable(accountId uint32, tblinfo *tableInfo) bool {
 	} else {
 		return tblinfo.dbName == moCatalog && (tblinfo.typ == clusterTable || needSkipTablesInMocatalog[tblinfo.tblName] == 1)
 	}
+}
+
+func isExternalTable(tblInfo *tableInfo) bool {
+	return tblInfo != nil && tblInfo.relKind == catalog.SystemExternalRel
+}
+
+func shouldSkipRestoreTableInBulk(tblInfo *tableInfo) bool {
+	return isExternalTable(tblInfo)
+}
+
+func newExternalTableRestoreError(ctx context.Context, tblInfo *tableInfo, source string) error {
+	if tblInfo == nil {
+		return moerr.NewInternalError(ctx, "external table cannot be restored")
+	}
+	return moerr.NewInternalErrorf(ctx, "external table %s.%s cannot be restored from %s", tblInfo.dbName, tblInfo.tblName, source)
 }
 
 func checkSnapShotExistOrNot(ctx context.Context, bh BackgroundExec, snapshotName string) (bool, error) {
@@ -1849,27 +1877,29 @@ func showFullTables(
 ) ([]*tableInfo, error) {
 
 	newCtx := ctx
-
-	sql := fmt.Sprintf("show full tables from `%s`", dbName)
-	if len(tblName) > 0 {
-		sql += fmt.Sprintf(" like '%s'", tblName)
-	}
+	ts := int64(0)
 
 	if snapshot != nil {
 		if snapshot.TS != nil {
-			sql += fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
+			ts = snapshot.TS.PhysicalTime
 		}
 		if snapshot.Tenant != nil {
 			newCtx = defines.AttachAccountId(newCtx, snapshot.Tenant.TenantID)
 		}
 	}
 
+	accountId, err := defines.GetAccountId(newCtx)
+	if err != nil {
+		return nil, err
+	}
+	sql := buildTableInfoListSQL(dbName, tblName, ts, accountId)
+
 	getLogger(sid).Debug(fmt.Sprintf(
 		"[%v] show full table `%s.%s` sql: %s",
 		snapshot, dbName, tblName, sql))
 
-	// cols: table name, table type
-	colsList, err := getStringColsList(newCtx, bh, sql, 0, 1)
+	// cols: table name, table type, relkind
+	colsList, err := getStringColsList(newCtx, bh, sql, 0, 1, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -1880,6 +1910,7 @@ func showFullTables(
 			dbName:  dbName,
 			tblName: cols[0],
 			typ:     tableType(cols[1]),
+			relKind: cols[2],
 		}
 	}
 
@@ -1888,6 +1919,41 @@ func showFullTables(
 		snapshot, dbName, tblName, len(ans)))
 
 	return ans, nil
+}
+
+func buildTableInfoListSQL(dbName string, tblName string, ts int64, accountId uint32) string {
+	snapshotSpec := ""
+	if ts > 0 {
+		snapshotSpec = fmt.Sprintf(" {MO_TS = %d}", ts)
+	}
+	mustShowTable := fmt.Sprintf(
+		"relname = %s or relname = %s or relname = %s",
+		quoteSQLStringLiteral("mo_database"),
+		quoteSQLStringLiteral("mo_tables"),
+		quoteSQLStringLiteral("mo_columns"),
+	)
+	clusterTableClause := fmt.Sprintf(" or relkind = %s", quoteSQLStringLiteral(catalog.SystemClusterRel))
+	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTableClause)
+	sql := fmt.Sprintf(
+		"select relname, case relkind when %s then 'VIEW' when %s then 'CLUSTER TABLE' else 'BASE TABLE' end as table_type, relkind from %s.mo_tables%s where reldatabase = %s and relname != %s and relname not like %s and relname not like %s and relname != %s and relkind != %s and (%s)",
+		quoteSQLStringLiteral(catalog.SystemViewRel),
+		quoteSQLStringLiteral(catalog.SystemClusterRel),
+		moCatalog,
+		snapshotSpec,
+		quoteSQLStringLiteral(dbName),
+		quoteSQLStringLiteral(catalog.MOAutoIncrTable),
+		quoteSQLStringLiteral(catalog.IndexTableNamePrefix+"%"),
+		quoteSQLStringLiteral("__mo_tmp_%"),
+		quoteSQLStringLiteral(catalog.MO_ACCOUNT_LOCK),
+		quoteSQLStringLiteral(catalog.SystemPartitionRel),
+		accountClause,
+	)
+	if len(tblName) > 0 {
+		sql += fmt.Sprintf(" and relname like %s", quoteSQLStringLiteral(tblName))
+	}
+	sql += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel))
+	sql += fmt.Sprintf(" order by %s", catalog.SystemRelAttr_Name)
+	return sql
 }
 
 func getTableInfos(
@@ -1908,16 +1974,43 @@ func getTableInfos(
 		return nil, err
 	}
 
-	// only recreate snapshoted table need create sql
+	return fillTableCreateSQLsForRestore(
+		sid,
+		fmt.Sprint(snapshot),
+		tableInfos,
+		func(tblInfo *tableInfo) (string, error) {
+			return getCreateTableSql(ctx, bh, snapshot, tblInfo.dbName, tblInfo.tblName)
+		},
+	)
+}
+
+func fillTableCreateSQLsForRestore(
+	sid string,
+	restoreSource string,
+	tableInfos []*tableInfo,
+	getCreateSQL func(*tableInfo) (string, error),
+) ([]*tableInfo, error) {
+	restorable := make([]*tableInfo, 0, len(tableInfos))
 	for _, tblInfo := range tableInfos {
-		if tblInfo.createSql, err = getCreateTableSql(
-			ctx, bh, snapshot, dbName, tblInfo.tblName,
-		); err != nil {
+		createSQL, err := getCreateSQL(tblInfo)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				getLogger(sid).Warn(
+					"skip stale table metadata during restore",
+					zap.String("restore-source", restoreSource),
+					zap.String("database", tblInfo.dbName),
+					zap.String("table", tblInfo.tblName),
+					zap.Error(err),
+				)
+				continue
+			}
 			return nil, err
 		}
-	}
 
-	return tableInfos, nil
+		tblInfo.createSql = createSQL
+		restorable = append(restorable, tblInfo)
+	}
+	return restorable, nil
 }
 
 func getCreateDatabaseSql(ctx context.Context,
