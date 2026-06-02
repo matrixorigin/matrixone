@@ -979,6 +979,30 @@ func StSwapXY(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}, selectList)
 }
 
+// StLatFromGeoHash returns the latitude of the center of a geohash cell
+// (ST_LatFromGeoHash).
+func StLatFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
+		_, lat, err := geo.DecodeGeoHash(functionUtil.QuickBytesToStr(v))
+		if err != nil {
+			return 0, moerr.NewInvalidInputNoCtx("invalid geohash")
+		}
+		return lat, nil
+	}, selectList)
+}
+
+// StLongFromGeoHash returns the longitude of the center of a geohash cell
+// (ST_LongFromGeoHash).
+func StLongFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
+		lon, _, err := geo.DecodeGeoHash(functionUtil.QuickBytesToStr(v))
+		if err != nil {
+			return 0, moerr.NewInvalidInputNoCtx("invalid geohash")
+		}
+		return lon, nil
+	}, selectList)
+}
+
 // StValidate returns the geometry if it is structurally valid, otherwise NULL
 // (ST_Validate).
 func StValidate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

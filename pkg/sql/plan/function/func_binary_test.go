@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -5284,6 +5285,55 @@ func TestStMeasuresGeodetic(t *testing.T) {
 		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantArea}, []bool{false}),
 		StArea)
 	ok, info := fcTC.Run()
+	require.True(t, ok, info)
+}
+
+func TestGeoHashFunctions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// ST_GeoHash(point, len) and ST_GeoHash(lon, lat, len) -> "ezs42".
+	tcP := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(-5.603 42.605)"}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{5}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"ezs42"}, []bool{false}), StGeoHashFromPoint)
+	ok, info := tcP.Run()
+	require.True(t, ok, info)
+
+	tcLL := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{-5.603}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{42.605}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{5}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"ezs42"}, []bool{false}), StGeoHashFromLonLat)
+	ok, info = tcLL.Run()
+	require.True(t, ok, info)
+
+	// Decode back.
+	wantLon, wantLat, _ := geo.DecodeGeoHash("ezs42")
+	tcLat := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"ezs42"}, []bool{false})},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantLat}, []bool{false}), StLatFromGeoHash)
+	ok, info = tcLat.Run()
+	require.True(t, ok, info)
+
+	tcLon := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"ezs42"}, []bool{false})},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantLon}, []bool{false}), StLongFromGeoHash)
+	ok, info = tcLon.Run()
+	require.True(t, ok, info)
+
+	// ST_PointFromGeoHash(geohash, srid) -> center point.
+	wantPt := geo.WriteWKT(geo.Point{X: wantLon, Y: wantLat})
+	tcPt := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"ezs42"}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{wantPt}, []bool{false}), StPointFromGeoHash)
+	ok, info = tcPt.Run()
 	require.True(t, ok, info)
 }
 

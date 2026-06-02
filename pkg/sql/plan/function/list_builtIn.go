@@ -4098,6 +4098,55 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// GeoHash: st_geohash, st_latfromgeohash, st_longfromgeohash, st_pointfromgeohash
+	{
+		functionId: ST_GEOHASH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_int64},
+				retType: func(parameters []types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:   func() executeLogicOfOverload { return StGeoHashFromPoint }},
+			{overloadId: 1, args: []types.T{types.T_float64, types.T_float64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:   func() executeLogicOfOverload { return StGeoHashFromLonLat }},
+		},
+	},
+	{
+		functionId: ST_LATFROMGEOHASH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:   func() executeLogicOfOverload { return StLatFromGeoHash }},
+		},
+	},
+	{
+		functionId: ST_LONGFROMGEOHASH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:   func() executeLogicOfOverload { return StLongFromGeoHash }},
+		},
+	},
+	{
+		functionId: ST_POINTFROMGEOHASH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry.ToType() },
+				newOp:   func() executeLogicOfOverload { return StPointFromGeoHash }},
+		},
+	},
+
 	// function `st_geomfromtext`
 	{
 		functionId: ST_GEOMFROMTEXT,

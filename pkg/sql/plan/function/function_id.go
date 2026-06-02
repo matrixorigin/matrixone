@@ -674,9 +674,15 @@ const (
 	ST_MAKEENVELOPE    = 483
 	ST_DISTANCE_SPHERE = 484
 
+	// GIS GeoHash
+	ST_GEOHASH          = 485
+	ST_LATFROMGEOHASH   = 486
+	ST_LONGFROMGEOHASH  = 487
+	ST_POINTFROMGEOHASH = 488
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 485
+	FUNCTION_END_NUMBER = 489
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1110,6 +1116,10 @@ var functionIdRegister = map[string]int32{
 	"st_validate":                    ST_VALIDATE,
 	"st_makeenvelope":                ST_MAKEENVELOPE,
 	"st_distance_sphere":             ST_DISTANCE_SPHERE,
+	"st_geohash":                     ST_GEOHASH,
+	"st_latfromgeohash":              ST_LATFROMGEOHASH,
+	"st_longfromgeohash":             ST_LONGFROMGEOHASH,
+	"st_pointfromgeohash":            ST_POINTFROMGEOHASH,
 	"st_geometrytype":                ST_GEOMETRYTYPE,
 	"st_x":                           ST_X,
 	"st_y":                           ST_Y,

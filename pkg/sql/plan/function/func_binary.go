@@ -7995,6 +7995,80 @@ func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 	}, selectList)
 }
 
+// StGeoHashFromPoint is ST_GeoHash(point, max_length): the geohash of a point.
+func StGeoHashFromPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrFixedToStrWithErrorCheck[int64](ivecs, result, proc, length, func(v string, maxLen int64) (string, error) {
+		x, y, err := parsePointXYFromPayload(functionUtil.QuickStrToBytes(v))
+		if err != nil {
+			return "", err
+		}
+		return geo.EncodeGeoHash(x, y, int(maxLen)), nil
+	}, selectList)
+}
+
+// StGeoHashFromLonLat is ST_GeoHash(longitude, latitude, max_length).
+func StGeoHashFromLonLat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	lons := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+	lats := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+	lens := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		lon, n1 := lons.GetValue(i)
+		lat, n2 := lats.GetValue(i)
+		l, n3 := lens.GetValue(i)
+		if n1 || n2 || n3 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(geo.EncodeGeoHash(lon, lat, int(l))), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// StPointFromGeoHash is ST_PointFromGeoHash(geohash, srid): the center point of
+// a geohash cell. The SRID lands in the result type via the binder.
+func StPointFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	hashes := vector.GenerateFunctionStrParameter(ivecs[0])
+	srids := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		h, n1 := hashes.GetStrValue(i)
+		_, n2 := srids.GetValue(i)
+		if n1 || n2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		lon, lat, err := geo.DecodeGeoHash(functionUtil.QuickBytesToStr(h))
+		if err != nil {
+			return moerr.NewInvalidInputNoCtx("invalid geohash")
+		}
+		if err := rs.AppendBytes(geo.WriteWKB(geo.Point{X: lon, Y: lat}), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // StMakeEnvelope builds the axis-aligned rectangle polygon spanning two corner
 // points (ST_MakeEnvelope).
 func StMakeEnvelope(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

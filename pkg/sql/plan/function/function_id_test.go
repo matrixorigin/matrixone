@@ -538,9 +538,13 @@ var predefinedFunids = map[int]int{
 	ST_VALIDATE:                   482,
 	ST_MAKEENVELOPE:               483,
 	ST_DISTANCE_SPHERE:            484,
+	ST_GEOHASH:                    485,
+	ST_LATFROMGEOHASH:             486,
+	ST_LONGFROMGEOHASH:            487,
+	ST_POINTFROMGEOHASH:           488,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 485,
+	FUNCTION_END_NUMBER: 489,
 }
 
 func Test_funids(t *testing.T) {
