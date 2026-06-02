@@ -341,6 +341,40 @@ func Test_CastGeometry32(t *testing.T) {
 	}
 }
 
+// Test_CastGeometryPrecisionBothWays proves the cast actually converts the
+// coordinate width in each direction: a POINT is 13 bytes as float32 WKB and
+// 21 bytes as float64 WKB.
+func Test_CastGeometryPrecisionBothWays(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	pointF32 := string(encodeGeometryPayloadFloat32("POINT(5 6)"))    // float32 WKB
+	pointF64 := string(encodeGeometryPayload("POINT(5 6)", 0, false)) // float64 WKB
+
+	castLen := func(srcType types.Type, src string, dstType types.Type) int {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(srcType, []string{src}, []bool{false}),
+				NewFunctionTestInput(dstType, []string{}, []bool{}),
+			},
+			NewFunctionTestResult(dstType, false, []string{"POINT(5 6)"}, []bool{false}), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+		return len(tc.GetResultVectorDirectly().GetBytesAt(0))
+	}
+
+	geom := types.T_geometry.ToType()
+	geom32 := types.T_geometry32.ToType()
+
+	// geometry (float64 WKB) -> geometry32 must shrink to float32 WKB.
+	require.Equal(t, 13, castLen(geom, pointF64, geom32))
+	// geometry32 (float32 WKB) -> geometry must grow to float64 WKB.
+	require.Equal(t, 21, castLen(geom32, pointF32, geom))
+	// idempotent same-type casts keep their width.
+	require.Equal(t, 13, castLen(geom32, pointF32, geom32))
+	require.Equal(t, 21, castLen(geom, pointF64, geom))
+}
+
 func Test_CastVarcharToGeometry(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

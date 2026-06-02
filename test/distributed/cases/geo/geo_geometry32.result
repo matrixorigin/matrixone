@@ -22,13 +22,17 @@ invalid argument function length, bad value [GEOMETRY32]
 select id, st_geometrytype(g) as gtype from g32 order by id;
 invalid argument function st_geometrytype, bad value [GEOMETRY32]
 select st_x(g) as x, st_y(g) as y from g32 where id = 1;
-invalid argument function st_x, bad value [GEOMETRY32]
+x    y
+1.0    2.0
 select st_area(g) as area from g32 where id = 3;
-invalid argument function st_area, bad value [GEOMETRY32]
+area
+4.0
 select st_length(g) as len from g32 where id = 2;
-invalid argument function st_length, bad value [GEOMETRY32]
+len
+5.0
 select st_astext(st_centroid(g)) as centroid from g32 where id = 3;
-invalid argument function st_centroid, bad value [GEOMETRY32]
+centroid
+POINT(1 1)
 drop table g32;
 select st_astext(cast(st_geomfromtext('POINT(1.5 2.25)') as geometry32)) as to32;
 to32
@@ -39,4 +43,38 @@ POINT(1.5 2.25)
 select st_astext(cast('LINESTRING(0 0,1 1)' as geometry32)) as text_to_32;
 text_to_32
 LINESTRING(0 0,1 1)
+drop table if exists g32p;
+create table g32p(id int, g geometry32);
+insert into g32p values
+(1, st_geomfromtext('POINT(1.5 2.5)')),
+(2, st_geomfromtext('LINESTRING(0 0, 3 4)')),
+(3, st_geomfromtext('POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))'));
+select st_x(g) as x, st_y(g) as y from g32p where id = 1;
+x    y
+1.5    2.5
+select length(st_centroid(g)) as centroid_bytes from g32p where id = 3;
+invalid argument function length, bad value [GEOMETRY32]
+select length(st_startpoint(g)) as start_bytes from g32p where id = 2;
+invalid argument function length, bad value [GEOMETRY32]
+select st_astext(st_swapxy(g)) as swapped from g32p where id = 1;
+swapped
+POINT(2.5 1.5)
+select st_astext(st_envelope(g)) as env from g32p where id = 2;
+env
+POLYGON((0 0,3 0,3 4,0 4,0 0))
+select st_astext(st_convexhull(g)) as hull from g32p where id = 3;
+hull
+POLYGON((0 0,4 0,4 4,0 4,0 0))
+select length(st_buffer(g, 1)) > 0 as buffered from g32p where id = 1;
+invalid argument function length, bad value [GEOMETRY32]
+select st_length(g) as len from g32p where id = 2;
+len
+5.0
+select st_area(g) as area from g32p where id = 3;
+area
+16.0
+select st_distance(a.g, b.g) as dist from g32p a, g32p b where a.id = 1 and b.id = 1;
+dist
+0.0
+drop table g32p;
 drop database geo32;
