@@ -3546,6 +3546,157 @@ func TestValid(t *testing.T) {
 	}
 }
 
+func TestAnalyzeCheckShowProfile(t *testing.T) {
+	ctx := context.TODO()
+
+	t.Run("analyze single table", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, "analyze table t1 (a, b)", 1)
+		require.NoError(t, err)
+		analyze, ok := stmt.(*tree.AnalyzeStmt)
+		require.True(t, ok, "expected *tree.AnalyzeStmt, got %T", stmt)
+		require.Len(t, analyze.Entries, 1)
+		require.Equal(t, "t1", string(analyze.Entries[0].Table.ObjectName))
+		require.Len(t, analyze.Entries[0].Cols, 2)
+		require.Equal(t, tree.Identifier("a"), analyze.Entries[0].Cols[0])
+		require.Equal(t, tree.Identifier("b"), analyze.Entries[0].Cols[1])
+	})
+
+	t.Run("analyze multi table", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, "analyze table t1 (a, b), t2 (c, d)", 1)
+		require.NoError(t, err)
+		analyze, ok := stmt.(*tree.AnalyzeStmt)
+		require.True(t, ok)
+		require.Len(t, analyze.Entries, 2)
+		require.Equal(t, "t1", string(analyze.Entries[0].Table.ObjectName))
+		require.Equal(t, "t2", string(analyze.Entries[1].Table.ObjectName))
+	})
+
+	t.Run("analyze three tables", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, "analyze table t1 (x), t2 (y), t3 (z)", 1)
+		require.NoError(t, err)
+		analyze, ok := stmt.(*tree.AnalyzeStmt)
+		require.True(t, ok)
+		require.Len(t, analyze.Entries, 3)
+	})
+
+	t.Run("check table basic", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, "check table t1", 1)
+		require.NoError(t, err)
+		check, ok := stmt.(*tree.CheckTableStmt)
+		require.True(t, ok, "expected *tree.CheckTableStmt, got %T", stmt)
+		require.Len(t, check.Tables, 1)
+		require.Equal(t, tree.CheckTableOptionNone, check.Option)
+	})
+
+	t.Run("check table extended", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, "check table t1 extended", 1)
+		require.NoError(t, err)
+		check, ok := stmt.(*tree.CheckTableStmt)
+		require.True(t, ok)
+		require.Equal(t, tree.CheckTableOptionExtended, check.Option)
+	})
+
+	t.Run("check table for upgrade", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, "check table t1 for upgrade", 1)
+		require.NoError(t, err)
+		check, ok := stmt.(*tree.CheckTableStmt)
+		require.True(t, ok)
+		require.Equal(t, tree.CheckTableOptionForUpgrade, check.Option)
+	})
+
+	t.Run("check table multi", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, "check table t1, t2, t3", 1)
+		require.NoError(t, err)
+		check, ok := stmt.(*tree.CheckTableStmt)
+		require.True(t, ok)
+		require.Len(t, check.Tables, 3)
+	})
+
+	t.Run("check table multi extended", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, "check table t1, t2 extended", 1)
+		require.NoError(t, err)
+		check, ok := stmt.(*tree.CheckTableStmt)
+		require.True(t, ok)
+		require.Len(t, check.Tables, 2)
+		require.Equal(t, tree.CheckTableOptionExtended, check.Option)
+	})
+
+	t.Run("show profile basic", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, "show profile", 1)
+		require.NoError(t, err)
+		sp, ok := stmt.(*tree.ShowProfileStmt)
+		require.True(t, ok, "expected *tree.ShowProfileStmt, got %T", stmt)
+		require.Equal(t, int64(0), sp.ForQuery)
+		require.Nil(t, sp.Limit)
+	})
+
+	t.Run("show profile for query", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, "show profile for query 2", 1)
+		require.NoError(t, err)
+		sp, ok := stmt.(*tree.ShowProfileStmt)
+		require.True(t, ok)
+		require.Equal(t, int64(2), sp.ForQuery)
+	})
+
+	t.Run("show profile limit", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, "show profile limit 10", 1)
+		require.NoError(t, err)
+		sp, ok := stmt.(*tree.ShowProfileStmt)
+		require.True(t, ok)
+		require.NotNil(t, sp.Limit)
+		count, ok := sp.Limit.Count.(*tree.NumVal)
+		require.True(t, ok)
+		v, ok := count.Int64()
+		require.True(t, ok)
+		require.Equal(t, int64(10), v)
+	})
+
+	t.Run("show profile for query limit", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, "show profile for query 2 limit 10", 1)
+		require.NoError(t, err)
+		sp, ok := stmt.(*tree.ShowProfileStmt)
+		require.True(t, ok)
+		require.Equal(t, int64(2), sp.ForQuery)
+		require.NotNil(t, sp.Limit)
+		count, ok := sp.Limit.Count.(*tree.NumVal)
+		require.True(t, ok)
+		v, ok := count.Int64()
+		require.True(t, ok)
+		require.Equal(t, int64(10), v)
+	})
+
+	t.Run("show profile for query limit offset", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, "show profile for query 2 limit 10 offset 5", 1)
+		require.NoError(t, err)
+		sp, ok := stmt.(*tree.ShowProfileStmt)
+		require.True(t, ok)
+		require.Equal(t, int64(2), sp.ForQuery)
+		require.NotNil(t, sp.Limit)
+		count, ok := sp.Limit.Count.(*tree.NumVal)
+		require.True(t, ok)
+		cv, ok := count.Int64()
+		require.True(t, ok)
+		require.Equal(t, int64(10), cv)
+		offset, ok := sp.Limit.Offset.(*tree.NumVal)
+		require.True(t, ok)
+		ov, ok := offset.Int64()
+		require.True(t, ok)
+		require.Equal(t, int64(5), ov)
+	})
+
+	t.Run("check table statement kind", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, "check table t1", 1)
+		require.NoError(t, err)
+		require.NotPanics(t, func() { stmt.StmtKind() })
+	})
+
+	t.Run("show profile statement kind", func(t *testing.T) {
+		stmt, err := ParseOne(ctx, "show profile", 1)
+		require.NoError(t, err)
+		require.NotPanics(t, func() { stmt.StmtKind() })
+	})
+}
+
 func TestShowVariablesGlobalFlag(t *testing.T) {
 	ctx := context.TODO()
 	stmt, err := ParseOne(ctx, "show global variables like 'interactive_timeout'", 1)
