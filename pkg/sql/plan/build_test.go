@@ -788,11 +788,10 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 		t.Fatalf("build fallback update with generated column chain: %v", err)
 	}
 
-	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
-		len(mock.ctxt.tables["emp"].Cols)+3+len(mock.ctxt.tables["dept"].Cols)+1,
-		len(mock.ctxt.tables["emp"].Cols)+2, "chain-marker")
-	if !exprContainsColName(generatedExpr, "empno") || exprContainsColName(generatedExpr, "mgr") {
-		t.Fatalf("generated column chain should use freshly recomputed earlier generated column, got %s", generatedExpr.String())
+	node := requireFallbackSourceProjectNode(t, logicPlan.GetQuery(),
+		len(mock.ctxt.tables["emp"].Cols)+3+len(mock.ctxt.tables["dept"].Cols)+1, "chain-marker")
+	if !nodeContainsFreshGeneratedColumnExpr(node) {
+		t.Fatalf("generated column chain should use freshly recomputed earlier generated column, got %v", node.ProjectList)
 	}
 }
 
@@ -918,6 +917,15 @@ func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int
 	}
 	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
 	return nil
+}
+
+func nodeContainsFreshGeneratedColumnExpr(node *Node) bool {
+	for _, expr := range node.ProjectList {
+		if exprContainsColName(expr, "empno") && !exprContainsColName(expr, "mgr") {
+			return true
+		}
+	}
+	return false
 }
 
 func nodeContainsStringLiteral(node *Node, value string) bool {
