@@ -28,12 +28,12 @@ import (
 
 func TestHandleBackup(t *testing.T) {
 	h := mockTAEHandle(context.Background(), t, &options.Options{})
-	
+
 	req := &cmd_util.Checkpoint{
 		FlushDuration: time.Second,
 	}
 	resp := &api.SyncLogTailResp{}
-	
+
 	cb, err := h.HandleBackup(context.Background(), txn.TxnMeta{}, req, resp)
 	require.NoError(t, err)
 	if cb != nil {
@@ -43,9 +43,9 @@ func TestHandleBackup(t *testing.T) {
 
 func TestHandleDiskCleaner_AddCheckerTTL(t *testing.T) {
 	h := mockTAEHandle(context.Background(), t, &options.Options{})
-	
+
 	resp := &api.TNStringResponse{}
-	
+
 	// valid ttl
 	req := &cmd_util.DiskCleaner{
 		Op:    cmd_util.AddChecker,
@@ -62,7 +62,7 @@ func TestHandleDiskCleaner_AddCheckerTTL(t *testing.T) {
 	req.Value = "invalid"
 	_, err = h.HandleDiskCleaner(context.Background(), txn.TxnMeta{}, req, resp)
 	require.Error(t, err)
-	
+
 	// less than 1 hour
 	req.Value = "30m"
 	_, err = h.HandleDiskCleaner(context.Background(), txn.TxnMeta{}, req, resp)
@@ -71,9 +71,9 @@ func TestHandleDiskCleaner_AddCheckerTTL(t *testing.T) {
 
 func TestHandleDiskCleaner_AddCheckerMinTS(t *testing.T) {
 	h := mockTAEHandle(context.Background(), t, &options.Options{})
-	
+
 	resp := &api.TNStringResponse{}
-	
+
 	// valid minTS
 	req := &cmd_util.DiskCleaner{
 		Op:    cmd_util.AddChecker,
