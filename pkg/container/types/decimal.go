@@ -827,6 +827,28 @@ func (x Decimal128) Div128(y Decimal128) (Decimal128, error) {
 	return x, nil
 }
 
+func (x Decimal128) Div128Trunc(y Decimal128) (Decimal128, error) {
+	if y.B0_63 == 0 && y.B64_127 == 0 {
+		return x, moerr.NewInvalidInputNoCtxf("Decimal128 Div by Zero: %s/%s", x.Format(0), y.Format(0))
+	}
+	if y.B64_127 == 0 {
+		x.B64_127, y.B64_127 = bits.Div64(0, x.B64_127, y.B0_63)
+		x.B0_63, _ = bits.Div64(y.B64_127, x.B0_63, y.B0_63)
+	} else {
+		if x.Less(y) {
+			x.B64_127 = 0
+			x.B0_63 = 0
+		} else {
+			n := bits.LeadingZeros64(y.B64_127)
+			v, _ := bits.Div64(x.B64_127, x.B0_63, y.Right(64-n).B0_63)
+			v >>= 63 - n
+			x.B0_63 = v >> 1
+			x.B64_127 = 0
+		}
+	}
+	return x, nil
+}
+
 func (x Decimal256) Div256(y Decimal256) (Decimal256, error) {
 	if y.B128_191 == 0 && y.B192_255 == 0 && y.B64_127 == 0 {
 		if y.B0_63 == 0 {
