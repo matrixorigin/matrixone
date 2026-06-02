@@ -118,10 +118,13 @@ func TestCASDeleteIdempotent(t *testing.T) {
 func TestCASListAccount(t *testing.T) {
 	ctx := context.Background()
 	fs := newTestCASFS(t)
-	h1, _ := CASPut(ctx, fs, testAccountID, []byte("a"))
-	h2, _ := CASPut(ctx, fs, testAccountID, []byte("bb"))
+	h1, err := CASPut(ctx, fs, testAccountID, []byte("a"))
+	require.NoError(t, err)
+	h2, err := CASPut(ctx, fs, testAccountID, []byte("bb"))
+	require.NoError(t, err)
 	// another account's object must not appear
-	_, _ = CASPut(ctx, fs, uint32(999), []byte("other"))
+	_, err = CASPut(ctx, fs, uint32(999), []byte("other"))
+	require.NoError(t, err)
 
 	got := map[string]bool{}
 	for e, err := range CASListAccount(ctx, fs, testAccountID) {
@@ -136,9 +139,12 @@ func TestCASListAccount(t *testing.T) {
 func TestCASDeleteAccountPrefix(t *testing.T) {
 	ctx := context.Background()
 	fs := newTestCASFS(t)
-	h1, _ := CASPut(ctx, fs, testAccountID, []byte("a"))
-	h2, _ := CASPut(ctx, fs, testAccountID, []byte("bb"))
-	keep, _ := CASPut(ctx, fs, uint32(999), []byte("other"))
+	h1, err := CASPut(ctx, fs, testAccountID, []byte("a"))
+	require.NoError(t, err)
+	h2, err := CASPut(ctx, fs, testAccountID, []byte("bb"))
+	require.NoError(t, err)
+	keep, err := CASPut(ctx, fs, uint32(999), []byte("other"))
+	require.NoError(t, err)
 
 	require.NoError(t, CASDeleteAccountPrefix(ctx, fs, testAccountID))
 	for _, h := range []string{h1, h2} {
@@ -150,6 +156,21 @@ func TestCASDeleteAccountPrefix(t *testing.T) {
 	ok, err := CASExists(ctx, fs, uint32(999), keep)
 	require.NoError(t, err)
 	require.True(t, ok)
+}
+
+// An account that never pinned anything has an empty namespace: listing yields
+// nothing and deleting the prefix is a no-op success.
+func TestCASEmptyNamespace(t *testing.T) {
+	ctx := context.Background()
+	fs := newTestCASFS(t)
+
+	count := 0
+	for _, err := range CASListAccount(ctx, fs, testAccountID) {
+		require.NoError(t, err)
+		count++
+	}
+	require.Equal(t, 0, count)
+	require.NoError(t, CASDeleteAccountPrefix(ctx, fs, testAccountID))
 }
 
 // CAS objects are namespaced per account: bytes pinned by one account are not

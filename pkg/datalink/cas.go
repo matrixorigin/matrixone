@@ -152,7 +152,8 @@ func CASDelete(ctx context.Context, fs fileservice.FileService, accountID uint32
 
 // CASListAccount enumerates every blob in the account's namespace. The CAS
 // layout is datalink_cas/<accountID>/<h2>/<hash>, so it lists the account dir,
-// descends one level into each <h2> bucket, and yields the trailing hash.
+// descends one level into each <h2> bucket, and yields a CASEntry per blob with
+// its sha256 hash, full storage key, and size.
 func CASListAccount(ctx context.Context, fs fileservice.FileService, accountID uint32) iter.Seq2[CASEntry, error] {
 	prefix := CASAccountPrefix(accountID)
 	return func(yield func(CASEntry, error) bool) {
