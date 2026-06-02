@@ -17,11 +17,21 @@ the column/expression type.
 | `geo_srid.sql` | SRID carried by the type: `ST_GeomFromText(wkt, srid)` + `ST_SRID`, SRID propagation through derived geometries, `SRID` columns, and binary-function SRID-mismatch rejection. |
 | `geo_geometry32.sql` | `GEOMETRY32` (float32-coordinate) DDL, storage round-trips (float32 WKB), spatial functions, and `geometry`↔`geometry32` casts. |
 | `geo_geodetic.sql` | SRID 4326 measures (`ST_Length`, `ST_Distance`, `ST_Area`) return meters / m² (geodesic) vs Cartesian for SRID 0, incl. a `GEOGRAPHY` column. |
+| `geo_geohash.sql` | `ST_GeoHash` (point and lon/lat forms), `ST_LatFromGeoHash`, `ST_LongFromGeoHash`, `ST_PointFromGeoHash`. |
+| `geo_mbr.sql` | MBR bounding-box predicates: `MBRContains`, `MBRCoveredBy`, `MBRCovers`, `MBRDisjoint`, `MBREquals`, `MBRIntersects`, `MBROverlaps`, `MBRTouches`, `MBRWithin`. |
+| `geo_geojson.sql` | `ST_AsGeoJSON` (with `maxdecimaldigits`) and `ST_GeomFromGeoJSON` (default SRID 4326, explicit SRID), round-trips, invalid-input rejection. |
+| `geo_construct.sql` | `ST_ConvexHull`, `ST_Simplify`, `ST_Collect` (native), with SRID preservation. |
+| `geo_lineref.sql` | Linear referencing: `ST_LineInterpolatePoint`, `ST_LineInterpolatePoints`, `ST_PointAtDistance` (planar). |
+| `geo_discrete.sql` | Discrete curve distances `ST_FrechetDistance`, `ST_HausdorffDistance` (planar). |
+| `geo_overlay.sql` | Polygon Boolean overlay `ST_Union`, `ST_Intersection`, `ST_Difference`, `ST_SymDifference` (Martinez-Rueda), area-checked. |
+| `geo_buffer.sql` | `ST_Buffer(geom, distance [, segs_per_quarter])` (planar Minkowski-sum buffer via union). |
 
 Together these exercise every implemented `ST_*` function (the I/O constructors
 and accessors, the unary measures and derived geometries, the binary distance
-and relationship predicates, the validity predicates, `ST_SRID`, and the WKB
-binary I/O) plus their synonyms.
+and relationship predicates, the validity predicates, `ST_SRID`, the WKB
+binary I/O, GeoHash, MBR predicates, GeoJSON, the native constructive ops
+— convex hull, simplify, collect, buffer — linear referencing, discrete curve
+distances, and the polygon Boolean overlay) plus their synonyms.
 
 ## Generating the `.result` files
 
