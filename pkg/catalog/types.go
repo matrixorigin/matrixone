@@ -244,6 +244,9 @@ const (
 	SystemRelAttr_Kind           = "relkind"
 	SystemRelAttr_Comment        = "rel_comment"
 	SystemRelAttr_CreateSQL      = "rel_createsql"
+	SystemRelAttr_TTL            = "rel_ttl"              // TTL expiry expression, persisted as a table property
+	SystemRelAttr_TTLEnable      = "rel_ttl_enable"       // TTL background job switch (on/off)
+	SystemRelAttr_TTLJobInterval = "rel_ttl_job_interval" // TTL background job interval (e.g. 1h)
 	SystemRelAttr_CreateAt       = "created_time"
 	SystemRelAttr_Creator        = "creator"
 	SystemRelAttr_Owner          = "owner"

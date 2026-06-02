@@ -851,6 +851,10 @@ func buildCreateTable(
 		createTable.TableDef.AutoIncrOffset = v
 	}
 
+	// TTL table options are aggregated here and persisted together after the loop.
+	var ttlExpr, ttlEnable, ttlJobInterval string
+	var hasTTL, hasTTLEnable, hasTTLJobInterval bool
+
 	// set option
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
@@ -893,6 +897,33 @@ func buildCreateTable(
 				createTable.TableDef.AutoIncrOffset = opt.Value - 1
 			}
 
+		case *tree.TableOptionTTL:
+			// TTL is only allowed on normal base tables.
+			if stmt.Temporary || stmt.IsClusterTable || stmt.IsDynamicTable || stmt.Param != nil {
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "TTL is only supported on normal base tables")
+			}
+			cols := make(map[string]int32, len(createTable.TableDef.Cols))
+			for _, col := range createTable.TableDef.Cols {
+				cols[strings.ToLower(col.Name)] = col.Typ.Id
+			}
+			if err = validateTTLExpr(ctx.GetContext(), opt.Expr, cols); err != nil {
+				return nil, err
+			}
+			ttlExpr = ttlExprString(opt.Expr)
+			hasTTL = true
+
+		case *tree.TableOptionTTLEnable:
+			if ttlEnable, err = normalizeTTLEnable(ctx.GetContext(), opt.Enable); err != nil {
+				return nil, err
+			}
+			hasTTLEnable = true
+
+		case *tree.TableOptionTTLJobInterval:
+			if ttlJobInterval, err = validateTTLJobInterval(ctx.GetContext(), opt.Interval); err != nil {
+				return nil, err
+			}
+			hasTTLJobInterval = true
+
 		// these table options is not support in plan
 		// case *tree.TableOptionEngine, *tree.TableOptionSecondaryEngine, *tree.TableOptionCharset,
 		// 	*tree.TableOptionCollate, *tree.TableOptionAutoIncrement, *tree.TableOptionComment,
@@ -916,6 +947,30 @@ func buildCreateTable(
 		default:
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 		}
+	}
+
+	// Finalize TTL options: TTL_ENABLE / TTL_JOB_INTERVAL require a TTL expression,
+	// and missing sub-options fall back to their defaults.
+	if hasTTL {
+		if !hasTTLEnable {
+			ttlEnable = defaultTTLEnable
+		}
+		if !hasTTLJobInterval {
+			ttlJobInterval = defaultTTLJobInterval
+		}
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: []*plan.Property{
+						{Key: catalog.SystemRelAttr_TTL, Value: ttlExpr},
+						{Key: catalog.SystemRelAttr_TTLEnable, Value: ttlEnable},
+						{Key: catalog.SystemRelAttr_TTLJobInterval, Value: ttlJobInterval},
+					},
+				},
+			},
+		})
+	} else if hasTTLEnable || hasTTLJobInterval {
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "TTL_ENABLE/TTL_JOB_INTERVAL require a TTL expression")
 	}
 
 	// After handleTableOptions, so begin the partitions processing depend on TableDef

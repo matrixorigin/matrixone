@@ -464,17 +464,26 @@ func ConstructCreateTableSQL(
 	createStr += ")"
 
 	var comment string
+	var ttlExpr, ttlEnable, ttlJobInterval string
 	var properties []*plan.Property // Collect non-system properties for PROPERTIES clause
 	for _, def := range tableDef.Defs {
 		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
 			for _, kv := range proDef.Properties.Properties {
-				if kv.Key == catalog.SystemRelAttr_Comment {
+				switch kv.Key {
+				case catalog.SystemRelAttr_Comment:
 					comment = " COMMENT='" + kv.Value + "'"
-				} else if kv.Key != catalog.SystemRelAttr_Kind &&
-					kv.Key != catalog.SystemRelAttr_CreateSQL &&
-					kv.Key != catalog.PropSchemaExtra {
-					// Collect non-system properties (excluding Comment, Kind, CreateSQL, SchemaExtra)
-					// These will be included in PROPERTIES clause
+				case catalog.SystemRelAttr_TTL:
+					ttlExpr = kv.Value
+				case catalog.SystemRelAttr_TTLEnable:
+					ttlEnable = kv.Value
+				case catalog.SystemRelAttr_TTLJobInterval:
+					ttlJobInterval = kv.Value
+				case catalog.SystemRelAttr_Kind,
+					catalog.SystemRelAttr_CreateSQL,
+					catalog.PropSchemaExtra:
+					// system properties, excluded from PROPERTIES clause
+				default:
+					// Collect non-system properties; these will be in the PROPERTIES clause
 					properties = append(properties, kv)
 				}
 			}
@@ -482,6 +491,17 @@ func ConstructCreateTableSQL(
 	}
 
 	createStr += comment
+
+	// Reflect the TTL clause (round-trippable through the parser) when present.
+	if ttlExpr != "" {
+		createStr += " TTL = " + ttlExpr
+		if ttlEnable != "" {
+			createStr += " TTL_ENABLE = '" + ttlEnable + "'"
+		}
+		if ttlJobInterval != "" {
+			createStr += " TTL_JOB_INTERVAL = '" + ttlJobInterval + "'"
+		}
+	}
 
 	if tableDef.Partition != nil {
 		ps := ctx.GetProcess().GetPartitionService()
