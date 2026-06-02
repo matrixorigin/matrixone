@@ -2611,6 +2611,82 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		convey.So(ok, convey.ShouldBeFalse)
 	})
 
+	convey.Convey("grant privilege [ObjectType: View] database star covers same database view", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.GrantPrivilege{
+			Privileges: []*tree.Privilege{
+				{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+			},
+			ObjType: tree.OBJECT_TYPE_VIEW,
+			Level: &tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				DbName:  "db",
+				TabName: "v1",
+			},
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.tenant = &TenantInfo{
+			Tenant:        "xxx",
+			User:          "xxx",
+			DefaultRole:   "xxx",
+			TenantID:      1001,
+			UserID:        1001,
+			DefaultRoleID: 1001,
+		}
+		ctx := ses.GetTxnHandler().GetTxnCtx()
+		bh.init()
+
+		checkViewSql, err := getSqlForCheckDatabaseView(ctx, "db", "v1")
+		convey.So(err, convey.ShouldBeNil)
+		bh.sql2result[checkViewSql] = newMrsForCheckDatabaseTable([][]interface{}{{10002}})
+		checkDbSql, err := getSqlForCheckDatabase(ctx, "db")
+		convey.So(err, convey.ShouldBeNil)
+		bh.sql2result[checkDbSql] = newMrsForCheckDatabase([][]interface{}{{10001}})
+
+		privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), stmt.Privileges[0].Type, stmt.ObjType)
+		convey.So(err, convey.ShouldBeNil)
+		viewObjScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeView, 10002)
+		bh.sql2result[viewObjScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+		viewGlobalScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeView, objectIDAll)
+		bh.sql2result[viewGlobalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+		viewDbScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeView, 10001)
+		bh.sql2result[viewDbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{
+			{ses.GetTenantInfo().GetDefaultRoleID()},
+		})
+		legacyObjScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10002)
+		bh.sql2result[legacyObjScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+		legacyGlobalScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll)
+		bh.sql2result[legacyGlobalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+		legacyDbScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10001)
+		bh.sql2result[legacyDbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
 	convey.Convey("grant privilege [ObjectType: View] same database view ownership covers view grant", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
