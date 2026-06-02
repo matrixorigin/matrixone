@@ -13,6 +13,7 @@ the column/expression type.
 | `geo_functions_unary.sql` | Accessors (`ST_GeometryType`, `ST_X`, `ST_Y`, `ST_Dimension`, `ST_NumPoints`, `ST_NumGeometries`, `ST_NumInteriorRings`, `ST_IsEmpty`, `ST_IsClosed`, `ST_IsCollection`, …), measures (`ST_Area`, `ST_Length`), and derived geometries (`ST_Centroid`, `ST_Boundary`, `ST_Envelope`, `ST_StartPoint`, `ST_EndPoint`, `ST_PointN`, `ST_ExteriorRing`, `ST_InteriorRingN`, `ST_GeometryN`, `ST_PointOnSurface`). |
 | `geo_functions_binary.sql` | `ST_Distance` and the relationship predicates `ST_Contains`, `ST_Within`, `ST_Intersects`, `ST_Disjoint`, `ST_Touches`, `ST_Crosses`, `ST_Overlaps`, `ST_Equals`, `ST_Covers`, `ST_CoveredBy` (Cartesian / SRID 0). |
 | `geo_srid.sql` | SRID carried by the type: `ST_GeomFromText(wkt, srid)` + `ST_SRID`, SRID propagation through derived geometries, `SRID` columns, and binary-function SRID-mismatch rejection. |
+| `geo_geometry32.sql` | `GEOMETRY32` (float32-coordinate) DDL, storage round-trips (float32 WKB), spatial functions, and `geometry`↔`geometry32` casts. |
 
 ## Generating the `.result` files
 
@@ -33,6 +34,5 @@ Then run them normally:
 ## Scope notes
 
 Tests intentionally cover only what is implemented today. Not yet exercised
-(pending follow-up work): `GEOMETRY32` value storage / `geometry`↔`geometry32`
-casts, and geodetic (SRID 4326) computation — spatial measures here are
-Cartesian.
+(pending follow-up work): geodetic (SRID 4326) computation — spatial measures
+here are Cartesian — and `ST_AsWKB`/`ST_GeomFromWKB` binary I/O.
