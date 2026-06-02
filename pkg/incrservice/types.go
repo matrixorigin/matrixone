@@ -135,8 +135,13 @@ type IncrValueStore interface {
 	Allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error)
 	// UpdateMinValue update auto column min value to specified value.
 	UpdateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
-	// SetOffset updates the offset of an auto-increment column. If the current offset is already >= the new offset, this is a no-op.
+	// SetOffset updates the offset of an auto-increment column, only raising it when the new
+	// value exceeds the current. If the current offset is already >= the new offset, this is a no-op.
 	SetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txnOp client.TxnOperator) error
+	// ForceSetOffset sets the offset of an auto-increment column to any value, bypassing
+	// the monotonic guard. Only called during ALTER TABLE AUTO_INCREMENT which holds an
+	// exclusive DDL lock, ensuring no concurrent inserts.
+	ForceSetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txnOp client.TxnOperator) error
 	// Delete remove metadata records from catalog.AutoIncrTableName.
 	Delete(ctx context.Context, tableID uint64) error
 	// Close the store

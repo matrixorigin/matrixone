@@ -320,6 +320,47 @@ func (s *sqlStore) SetOffset(
 	res, err := s.exec.Exec(
 		ctx,
 		fmt.Sprintf(
+			"update %s set offset = %d where table_id = %d and col_name = '%s' and offset < %d",
+			incrTableName, offset, tableID, colName, offset,
+		),
+		opts,
+	)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	return nil
+}
+
+// ForceSetOffset sets the offset of an auto-increment column to any value,
+// bypassing the monotonic guard. Only called from service.SetOffset during
+// ALTER TABLE AUTO_INCREMENT, which holds an exclusive DDL lock.
+func (s *sqlStore) ForceSetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	if !isValidColumnName(colName) {
+		return moerr.NewInternalErrorf(ctx,
+			"incrservice: invalid column name: %s", colName)
+	}
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp)
+	if txnOp == nil {
+		opts = opts.
+			WithWaitCommittedLogApplied().
+			WithEnableTrace().
+			WithDisableWaitPaused().
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	} else {
+		opts = opts.WithDisableIncrStatement()
+	}
+	res, err := s.exec.Exec(
+		ctx,
+		fmt.Sprintf(
 			"update %s set offset = %d where table_id = %d and col_name = '%s'",
 			incrTableName, offset, tableID, colName,
 		),
