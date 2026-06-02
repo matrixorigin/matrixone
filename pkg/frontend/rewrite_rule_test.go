@@ -896,12 +896,38 @@ func TestOutputColumnsFromRewriteSelectStatementASTBranches(t *testing.T) {
 		Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}},
 	}
 
+	// UnionClause with different column names is not mergeable.
 	columns, ok := outputColumnsFromRewriteSelectStatement(&tree.UnionClause{
 		Left:  selectClause,
 		Right: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("b")}}},
 	})
+	require.False(t, ok)
+	require.Nil(t, columns)
+
+	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.UnionClause{
+		Type:  tree.UNION,
+		Left:  selectClause,
+		Right: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}}},
+	})
 	require.True(t, ok)
 	require.Equal(t, []rewriteRuleOutputColumn{{name: "a", expr: "a"}}, columns)
+
+	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.UnionClause{
+		Type:  tree.UNION,
+		All:   true,
+		Left:  selectClause,
+		Right: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}}},
+	})
+	require.False(t, ok)
+	require.Nil(t, columns)
+
+	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.UnionClause{
+		Type:  tree.INTERSECT,
+		Left:  selectClause,
+		Right: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}}},
+	})
+	require.False(t, ok)
+	require.Nil(t, columns)
 
 	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.ParenSelect{})
 	require.False(t, ok)

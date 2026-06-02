@@ -82,6 +82,20 @@ func GetFunctionIsWinFunByName(name string) bool {
 	return f.isWindow()
 }
 
+func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	if !exists {
+		return false
+	}
+	f := allSupportedFunctions[fid]
+	for i := range f.Overloads {
+		if f.Overloads[i].CannotFold() || f.Overloads[i].IsRealTimeRelated() {
+			return true
+		}
+	}
+	return false
+}
+
 func GetFunctionIsWinOrderFunByName(name string) bool {
 	fid, exists := getFunctionIdByNameWithoutErr(name)
 	if !exists {
