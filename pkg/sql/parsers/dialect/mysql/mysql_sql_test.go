@@ -3309,8 +3309,8 @@ var (
 			output: "restore table acc01.db01.t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00 to account acc02",
 		},
 		{
-			input:  "restore account acc01 database db01 table t01 from pitr pitr01 '2021-01-01 00:00:00'",
-			output: "restore account acc01 database db01 table t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+			input:  "restore table acc01.db01.t01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore table acc01.db01.t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
 		},
 		{
 			input:  "restore account acc01 from pitr pitr01 '2021-01-01 00:00:00'",

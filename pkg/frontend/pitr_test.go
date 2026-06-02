@@ -3807,9 +3807,9 @@ func Test_resolveRestorePitrAccounts_SameAccount(t *testing.T) {
 	})
 
 	stmt := &tree.RestorePitr{
-		Name:        "pitr01",
-		Level:       tree.RESTORELEVELDATABASE,
-		AccountName: "acc01",
+		Name:         "pitr01",
+		Level:        tree.RESTORELEVELDATABASE,
+		AccountName:  "acc01",
 		DatabaseName: "db01",
 	}
 	accounts, err := resolveRestorePitrAccounts(context.Background(), ses, bh, nil, stmt, 0)
@@ -3839,9 +3839,9 @@ func Test_resolveRestorePitrAccounts_SysAccount(t *testing.T) {
 	bh.init()
 
 	stmt := &tree.RestorePitr{
-		Name:        "pitr01",
-		Level:       tree.RESTORELEVELDATABASE,
-		AccountName: sysAccountName,
+		Name:         "pitr01",
+		Level:        tree.RESTORELEVELDATABASE,
+		AccountName:  sysAccountName,
 		DatabaseName: "db01",
 	}
 	accounts, err := resolveRestorePitrAccounts(context.Background(), ses, bh, nil, stmt, 0)
@@ -3876,9 +3876,9 @@ func Test_resolveRestorePitrAccounts_ViaPitrRecord(t *testing.T) {
 		accountName: "acc05",
 	}
 	stmt := &tree.RestorePitr{
-		Name:        "pitr01",
-		Level:       tree.RESTORELEVELDATABASE,
-		AccountName: "acc05",
+		Name:         "pitr01",
+		Level:        tree.RESTORELEVELDATABASE,
+		AccountName:  "acc05",
 		DatabaseName: "db01",
 	}
 	accounts, err := resolveRestorePitrAccounts(context.Background(), ses, bh, pitr, stmt, 0)
