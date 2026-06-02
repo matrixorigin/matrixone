@@ -10403,22 +10403,93 @@ func TestCheckRoleWhetherDatabaseOwner(t *testing.T) {
 }
 
 func TestGetSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(t *testing.T) {
-	convey.Convey("getetSqlForCheckRoleHasPrivilegeWGODependsOnPrivType", t, func() {
-		out1 := "select distinct role_id from mo_catalog.mo_role_privs where (with_grant_option = true and (privilege_id = 0 or privilege_id = 14)) or privilege_id = 15;"
-		sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeCreateAccount)
-		convey.So(out1, convey.ShouldEqual, sql)
+	t.Run("account scoped privileges include account all or ownership", func(t *testing.T) {
+		privTypes := []PrivilegeType{
+			PrivilegeTypeCreateAccount,
+			PrivilegeTypeDropAccount,
+			PrivilegeTypeAlterAccount,
+			PrivilegeTypeUpgradeAccount,
+			PrivilegeTypeCreateUser,
+			PrivilegeTypeDropUser,
+			PrivilegeTypeAlterUser,
+			PrivilegeTypeCreateRole,
+			PrivilegeTypeDropRole,
+			PrivilegeTypeAlterRole,
+			PrivilegeTypeCreateDatabase,
+			PrivilegeTypeDropDatabase,
+			PrivilegeTypeShowDatabases,
+			PrivilegeTypeConnect,
+			PrivilegeTypeManageGrants,
+			PrivilegeTypeAccountAll,
+		}
+		for _, privType := range privTypes {
+			require.Equal(
+				t,
+				getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(
+					int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership)),
+				getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType),
+			)
+		}
 	})
 
-	convey.Convey("getetSqlForCheckRoleHasPrivilegeWGODependsOnPrivType", t, func() {
-		out2 := "select distinct role_id from mo_catalog.mo_role_privs where (with_grant_option = true and (privilege_id = 18 or privilege_id = 28)) or privilege_id = 29;"
-		sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeShowTables)
-		convey.So(out2, convey.ShouldEqual, sql)
+	t.Run("database scoped privileges include database all or ownership", func(t *testing.T) {
+		privTypes := []PrivilegeType{
+			PrivilegeTypeShowTables,
+			PrivilegeTypeCreateTable,
+			PrivilegeTypeDropTable,
+			PrivilegeTypeCreateView,
+			PrivilegeTypeDropView,
+			PrivilegeTypeAlterView,
+			PrivilegeTypeAlterTable,
+			PrivilegeTypeDatabaseAll,
+		}
+		for _, privType := range privTypes {
+			require.Equal(
+				t,
+				getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(
+					int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership)),
+				getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType),
+			)
+		}
 	})
 
-	convey.Convey("getetSqlForCheckRoleHasPrivilegeWGODependsOnPrivType", t, func() {
-		out3 := "select distinct role_id from mo_catalog.mo_role_privs where (with_grant_option = true and (privilege_id = 30 or privilege_id = 37)) or privilege_id = 38;"
-		sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeSelect)
-		convey.So(out3, convey.ShouldEqual, sql)
+	t.Run("table scoped privileges include table all or ownership", func(t *testing.T) {
+		privTypes := []PrivilegeType{
+			PrivilegeTypeSelect,
+			PrivilegeTypeInsert,
+			PrivilegeTypeUpdate,
+			PrivilegeTypeTruncate,
+			PrivilegeTypeDelete,
+			PrivilegeTypeReference,
+			PrivilegeTypeIndex,
+			PrivilegeTypeTableAll,
+		}
+		for _, privType := range privTypes {
+			require.Equal(
+				t,
+				getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(
+					int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership)),
+				getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType),
+			)
+		}
+	})
+
+	t.Run("ownership and other privileges use direct grant option sql", func(t *testing.T) {
+		privTypes := []PrivilegeType{
+			PrivilegeTypeAccountOwnership,
+			PrivilegeTypeDatabaseOwnership,
+			PrivilegeTypeTableOwnership,
+			PrivilegeTypeExecute,
+			PrivilegeTypeValues,
+			PrivilegeTypeUserOwnership,
+		}
+		for _, privType := range privTypes {
+			require.Equal(
+				t,
+				getSqlForCheckRoleHasPrivilegeWGO(int64(privType)),
+				getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType),
+			)
+		}
 	})
 }
 
@@ -10703,6 +10774,167 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
 				DbName:  "db",
 				TabName: "v",
+			},
+		)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("database star object scoped WGO error is returned", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		checkDbSQL, err := getSqlForCheckDatabase(ctx, "db")
+		require.NoError(t, err)
+		bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{{10001}})
+
+		objSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10001)
+		bh.sql2err[objSQL] = moerr.NewInternalError(ctx, "object scoped WGO failed")
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level:  tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+				DbName: "db",
+			},
+		)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("global scoped WGO error is returned", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		checkDbSQL, err := getSqlForCheckDatabase(ctx, "db")
+		require.NoError(t, err)
+		bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{{10001}})
+
+		objSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10001)
+		bh.sql2result[objSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+		globalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll)
+		bh.sql2err[globalSQL] = moerr.NewInternalError(ctx, "global WGO failed")
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level:  tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+				DbName: "db",
+			},
+		)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("missing database id returns exact and global role set", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		checkTableSQL, err := getSqlForCheckDatabaseTable(ctx, "db", "t1")
+		require.NoError(t, err)
+		bh.sql2result[checkTableSQL] = newMrsForCheckDatabaseTable([][]interface{}{{10001}})
+		checkDbSQL, err := getSqlForCheckDatabase(ctx, "db")
+		require.NoError(t, err)
+		bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{})
+
+		objSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10001)
+		bh.sql2result[objSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+		globalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll)
+		bh.sql2result[globalSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID + 1}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				DbName:  "db",
+				TabName: "t1",
+			},
+		)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+		require.True(t, roleSet.Contains(roleID+1))
+	})
+
+	t.Run("database scoped WGO query error is returned", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		checkTableSQL, err := getSqlForCheckDatabaseTable(ctx, "db", "t1")
+		require.NoError(t, err)
+		bh.sql2result[checkTableSQL] = newMrsForCheckDatabaseTable([][]interface{}{{10001}})
+		checkDbSQL, err := getSqlForCheckDatabase(ctx, "db")
+		require.NoError(t, err)
+		bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{{10002}})
+
+		objSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10001)
+		bh.sql2result[objSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+		globalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll)
+		bh.sql2result[globalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+		dbSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10002)
+		bh.sql2err[dbSQL] = moerr.NewInternalError(ctx, "database scoped WGO failed")
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				DbName:  "db",
+				TabName: "t1",
 			},
 		)
 		require.Error(t, err)
