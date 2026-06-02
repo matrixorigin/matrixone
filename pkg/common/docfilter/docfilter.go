@@ -89,19 +89,6 @@ func MarshalBitset(bm *roaring64.Bitmap) ([]byte, error) {
 	return bm.MarshalBinary()
 }
 
-// NewBitmap returns an empty roaring64 bitset for incremental building (e.g.
-// when only a selected subset of an integer-PK vector should be added).
-func NewBitmap() *roaring64.Bitmap {
-	return roaring64.New()
-}
-
-// AddRaw adds a single integer doc_id, given as its raw fixed little-endian
-// bytes, to bm — using the same decode as Test/BuildBitset so build and probe
-// stay consistent.
-func AddRaw(bm *roaring64.Bitmap, raw []byte) {
-	bm.Add(rawIntToUint64(raw))
-}
-
 // RoaringFilter wraps a roaring64 bitset and implements engine.MembershipFilter.
 type RoaringFilter struct {
 	bm *roaring64.Bitmap

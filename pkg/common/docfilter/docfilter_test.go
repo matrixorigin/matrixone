@@ -60,6 +60,7 @@ func TestRoaringFilterInt64(t *testing.T) {
 	f, err := NewRoaringFilter(payload)
 	require.NoError(t, err)
 	require.True(t, f.Valid())
+	require.True(t, f.Exact()) // a roaring bitset is exact
 
 	// every present value tests true via raw bytes
 	for i := range present {
