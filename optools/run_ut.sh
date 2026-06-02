@@ -42,6 +42,7 @@ UT_TIMEOUT=${UT_TIMEOUT:-"15"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
+UT_REPORT_CLEAN="$G_WKSP/$G_TS-UT-Report.clean.out"
 UT_FILTER="$G_WKSP/$G_TS-UT-Filter.out"
 UT_COUNT="$G_WKSP/$G_TS-UT-Count.out"
 CODE_COVERAGE="$G_WKSP/$G_TS-UT-Coverage.html"
@@ -112,7 +113,30 @@ function run_tests(){
 
 function ut_summary(){
   go install github.com/matrixorigin/go-ut-analysis@latest
-  go-ut-analysis test -f "${UT_REPORT}" --first 10 --report-path  "${BUILD_WKSP}/ut-report" --stdout=false;
+  python3 - "$UT_REPORT" "$UT_REPORT_CLEAN" <<'PY'
+import json
+import sys
+
+src = sys.argv[1]
+dst = sys.argv[2]
+invalid = 0
+
+with open(src, "r", encoding="utf-8", errors="replace") as fin, open(dst, "w", encoding="utf-8") as fout:
+    for raw in fin:
+        line = raw.rstrip("\n")
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            invalid += 1
+            continue
+        fout.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+if invalid:
+    print(f"filtered {invalid} invalid UT report lines from {src}", file=sys.stderr)
+PY
+  go-ut-analysis test -f "${UT_REPORT_CLEAN}" --first 10 --report-path  "${BUILD_WKSP}/ut-report" --stdout=false;
   if find ut-report > /dev/null 2>&1 && ! find ut-report/failed/outputs > /dev/null 2>&1; then
     logger "INF" "UNIT TESTING SUCCEEDED !!!"
   else
