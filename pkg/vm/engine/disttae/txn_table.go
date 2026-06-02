@@ -114,6 +114,7 @@ func releasePKCheckSemaphore() {
 	<-pkCheckSemaphore
 }
 
+// Keep this diagnostic narrow; PK range checks can be hot under concurrent DML.
 func shouldLogPKPersistedChanged(tableID uint64) bool {
 	switch tableID {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
@@ -2591,7 +2592,8 @@ func (tbl *txnTable) PKPersistedBetween(
 		bf   objectio.BloomFilter
 	)
 
-	//only check data objects.
+	// Only check data objects. A matching object/block can still be an older
+	// version, so later row-level commit-ts checks narrow the final answer.
 	delObjs, cObjs = p.GetChangedObjsBetween(from.Next(), types.MaxTs())
 
 	// Under high-concurrency workloads (e.g., 1000 TPCC terminals), many transactions
