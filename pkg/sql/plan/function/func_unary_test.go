@@ -1478,6 +1478,22 @@ func TestHour(t *testing.T) {
 	}
 }
 
+func TestTimeToHour(t *testing.T) {
+	tc := NewFunctionTestCase(
+		testutil.NewProcess(t),
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_time.ToType(), []types.Time{
+				types.TimeFromClock(false, 26, 30, 45, 0),
+				types.TimeFromClock(false, 3, 1, 2, 0),
+			}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{2, 3}, []bool{false, false}),
+		TimeToHour,
+	)
+	s, info := tc.Run()
+	require.True(t, s, info)
+}
+
 func initMinuteTestCase() []tcTemp {
 	d1, _ := types.ParseDatetime("2004-04-03 10:20:00", 6)
 	d2, _ := types.ParseTimestamp(time.Local, "2004-08-03 01:01:37", 6)
@@ -1530,6 +1546,22 @@ func TestMinute(t *testing.T) {
 	}
 }
 
+func TestTimeToMinute(t *testing.T) {
+	tc := NewFunctionTestCase(
+		testutil.NewProcess(t),
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_time.ToType(), []types.Time{
+				types.TimeFromClock(false, 26, 30, 45, 0),
+				types.TimeFromClock(false, 3, 1, 2, 0),
+			}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{30, 1}, []bool{false, false}),
+		TimeToMinute,
+	)
+	s, info := tc.Run()
+	require.True(t, s, info)
+}
+
 func initSecondTestCase() []tcTemp {
 	d1, _ := types.ParseDatetime("2004-04-03 10:20:00", 6)
 	d2, _ := types.ParseTimestamp(time.Local, "2004-01-03 23:15:08", 6)
@@ -1580,6 +1612,22 @@ func TestSecond(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestTimeToSecond(t *testing.T) {
+	tc := NewFunctionTestCase(
+		testutil.NewProcess(t),
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_time.ToType(), []types.Time{
+				types.TimeFromClock(false, 26, 30, 45, 0),
+				types.TimeFromClock(false, 3, 1, 2, 0),
+			}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{45, 2}, []bool{false, false}),
+		TimeToSecond,
+	)
+	s, info := tc.Run()
+	require.True(t, s, info)
 }
 
 func initBinaryTestCase() []tcTemp {
@@ -3152,6 +3200,51 @@ func TestDateTimeToMonth(t *testing.T) {
 	}
 }
 
+func TestQuarter(t *testing.T) {
+	dates := []types.Date{
+		types.DateFromCalendar(2024, 1, 15),
+		types.DateFromCalendar(2024, 4, 15),
+		types.DateFromCalendar(2024, 7, 15),
+		types.DateFromCalendar(2024, 12, 15),
+	}
+	datetimes := make([]types.Datetime, len(dates))
+	for i, date := range dates {
+		datetimes[i] = date.ToDatetime()
+	}
+
+	testCases := []tcTemp{
+		{
+			info: "test date to quarter",
+			typ:  types.T_date,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(), dates, []bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{1, 2, 3, 4}, []bool{false, false, false, false}),
+		},
+		{
+			info: "test datetime to quarter",
+			typ:  types.T_datetime,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), datetimes, []bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{1, 2, 3, 4}, []bool{false, false, false, false}),
+		},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		var fcTC FunctionTestCase
+		switch tc.typ {
+		case types.T_date:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToQuarter)
+		case types.T_datetime:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToQuarter)
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initDateStringToMonthTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -3766,6 +3859,103 @@ func TestDateTimeToWeekday(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToWeekday)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestDayNames(t *testing.T) {
+	date := types.DateFromCalendar(2024, 6, 2)
+	datetime := date.ToDatetime()
+	timestamp, err := types.ParseTimestamp(time.Local, "2024-06-02 10:11:12", 6)
+	require.NoError(t, err)
+
+	proc := testutil.NewProcess(t)
+	testCases := []tcTemp{
+		{
+			info: "test date to day name",
+			typ:  types.T_date,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"Sunday"}, []bool{false}),
+		},
+		{
+			info: "test datetime to day name",
+			typ:  types.T_datetime,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"Sunday"}, []bool{false}),
+		},
+		{
+			info: "test timestamp to day name",
+			typ:  types.T_timestamp,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{timestamp}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"Sunday"}, []bool{false}),
+		},
+	}
+	for _, tc := range testCases {
+		var fcTC FunctionTestCase
+		switch tc.typ {
+		case types.T_date:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToDayName)
+		case types.T_datetime:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToDayName)
+		case types.T_timestamp:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, TimestampToDayName)
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestMonthNames(t *testing.T) {
+	date := types.DateFromCalendar(2024, 6, 2)
+	datetime := date.ToDatetime()
+	timestamp, err := types.ParseTimestamp(time.Local, "2024-06-02 10:11:12", 6)
+	require.NoError(t, err)
+
+	testCases := []tcTemp{
+		{
+			info: "test date to month name",
+			typ:  types.T_date,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"June"}, []bool{false}),
+		},
+		{
+			info: "test datetime to month name",
+			typ:  types.T_datetime,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"June"}, []bool{false}),
+		},
+		{
+			info: "test timestamp to month name",
+			typ:  types.T_timestamp,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{timestamp}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"June"}, []bool{false}),
+		},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		var fcTC FunctionTestCase
+		switch tc.typ {
+		case types.T_date:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToMonthName)
+		case types.T_datetime:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToMonthName)
+		case types.T_timestamp:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, TimestampToMonthName)
+		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
