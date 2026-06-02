@@ -2950,14 +2950,17 @@ func BenchmarkD256IntDiv_Generic(b *testing.B) {
 
 // refD128IntDiv computes the reference result for D128 integer division.
 func refD128IntDiv(x, y types.Decimal128, scale1, scale2 int32) (int64, error) {
-	r, rScale, err := x.Div(y, scale1, scale2)
-	if err != nil {
-		return 0, err
+	signx := x.Sign()
+	signy := y.Sign()
+	if signx {
+		x = x.Minus()
 	}
-	if rScale > 0 {
-		r, _ = r.Scale(-rScale)
+	if signy {
+		y = y.Minus()
 	}
-	return decimal128ToInt64(r)
+	x256 := types.Decimal256{B0_63: x.B0_63, B64_127: x.B64_127}
+	y256 := types.Decimal256{B0_63: y.B0_63, B64_127: y.B64_127}
+	return refD256IntDivUnsigned(x256, y256, signx != signy, scale1, scale2)
 }
 
 func TestD64IntDiv(t *testing.T) {
@@ -3169,12 +3172,34 @@ func TestD128IntDiv(t *testing.T) {
 
 // refD256IntDiv computes the reference result for D256 integer division.
 func refD256IntDiv(x, y types.Decimal256, scale1, scale2 int32) (int64, error) {
-	r, rScale, err := x.Div(y, scale1, scale2)
+	signx := x.Sign()
+	signy := y.Sign()
+	if signx {
+		x = x.Minus()
+	}
+	if signy {
+		y = y.Minus()
+	}
+	return refD256IntDivUnsigned(x, y, signx != signy, scale1, scale2)
+}
+
+func refD256IntDivUnsigned(x, y types.Decimal256, neg bool, scale1, scale2 int32) (int64, error) {
+	scaleAdj := scale2 - scale1
+	var err error
+	if scaleAdj > 0 {
+		x, err = x.Scale(scaleAdj)
+	} else if scaleAdj < 0 {
+		y, err = y.Scale(-scaleAdj)
+	}
 	if err != nil {
 		return 0, err
 	}
-	if rScale > 0 {
-		r, _ = r.Scale(-rScale)
+	r, err := x.Div256Trunc(y)
+	if err != nil {
+		return 0, err
+	}
+	if neg {
+		r = r.Minus()
 	}
 	return decimal256ToInt64(r)
 }
@@ -3197,6 +3222,18 @@ func TestD256IntDiv(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, want, rs[i], "d256IntDiv[%d]", i)
 		}
+	})
+
+	t.Run("GenericPathTruncates", func(t *testing.T) {
+		x := types.Decimal256{B128_191: 5}
+		y := types.Decimal256{B128_191: 2}
+		v1 := []types.Decimal256{x, x.Minus()}
+		v2 := []types.Decimal256{y, y}
+		rs := make([]int64, len(v1))
+		nul := nulls.NewWithSize(len(v1))
+
+		require.NoError(t, d256IntDiv(v1, v2, rs, 0, 0, nul, true))
+		require.Equal(t, []int64{2, -2}, rs)
 	})
 
 	t.Run("ScalarVec", func(t *testing.T) {
