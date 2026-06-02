@@ -91,10 +91,6 @@ func (i *IOVector) readMinimalRange() (min *int64, max *int64) {
 	return
 }
 
-func (i *IOVector) readMinimalRangePreserveSize() (min *int64, max *int64) {
-	return i.readMinimalRange()
-}
-
 func (i *IOVector) size() *int64 {
 	if len(i.Entries) == 0 {
 		return nil

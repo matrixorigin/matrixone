@@ -98,6 +98,11 @@ func (i *IOMerger) Merge(key IOMergeKey, maxWaitDuration time.Duration) (done fu
 	}, nil
 }
 
+func (i *IOMerger) IsMerging(key IOMergeKey) bool {
+	_, ok := i.flying.Load(key)
+	return ok
+}
+
 func (i *IOVector) ioMergeKey() IOMergeKey {
 	key := IOMergeKey{
 		Path:   i.FilePath,
@@ -111,17 +116,17 @@ func (i *IOVector) ioMergeKey() IOMergeKey {
 	return i.ioMergeKeyWithRange(key, min, max)
 }
 
-func (i *IOVector) ioMergeKeyForMinimalRangePreserveSize() IOMergeKey {
+func (i *IOVector) ioMergeKeyForMinimalRange() IOMergeKey {
 	key := IOMergeKey{
 		Path:   i.FilePath,
 		Policy: i.Policy,
 	}
-	min, max := i.readMinimalRangePreserveSize()
+	min, max := i.readMinimalRange()
 	return i.ioMergeKeyWithRange(key, min, max)
 }
 
 func (i *IOVector) canBypassFullObjectMergeWait() bool {
-	min, max := i.readMinimalRangePreserveSize()
+	min, max := i.readMinimalRange()
 	return min != nil && (*min != 0 || max != nil)
 }
 

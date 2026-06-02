@@ -657,15 +657,16 @@ read_disk_cache:
 		if skipFullObjectRead, err := s.shouldSkipFullObjectDiskCacheForUpdating(vector); err != nil {
 			return err
 		} else if skipFullObjectRead {
-			mergeKey = vector.ioMergeKeyForMinimalRangePreserveSize()
+			mergeKey = vector.ioMergeKeyForMinimalRange()
+			forceMinimalRangeRead = true
+		}
+		if mergeKey.FullObject &&
+			vector.canBypassFullObjectMergeWait() &&
+			s.ioMerger.IsMerging(mergeKey) {
+			mergeKey = vector.ioMergeKeyForMinimalRange()
 			forceMinimalRangeRead = true
 		}
 		done, wait := s.ioMerger.Merge(mergeKey, maxIOWaitDuration)
-		if wait != nil && mergeKey.FullObject && vector.canBypassFullObjectMergeWait() {
-			mergeKey = vector.ioMergeKeyForMinimalRangePreserveSize()
-			forceMinimalRangeRead = true
-			done, wait = s.ioMerger.Merge(mergeKey, maxIOWaitDuration)
-		}
 		if done != nil {
 			defer done()
 			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
@@ -757,7 +758,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 
 	min, max, readFullObject := vector.readRange()
 	if readFullObject && (forceMinimalRangeRead || s.isFullObjectDiskCacheUpdating(vector.FilePath, path.File)) {
-		min, max = vector.readMinimalRangePreserveSize()
+		min, max = vector.readMinimalRange()
 		readFullObject = false
 	}
 
@@ -1083,12 +1084,16 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		return true, err
 	}
 	if !stream.opened {
+		// The cache already has an index entry. Fall back to the regular read path,
+		// which can serve the request from cache without opening another S3 reader.
 		return false, nil
 	}
 	if stream.err != nil {
 		return true, stream.err
 	}
 	if !stream.eof {
+		// SetFile did not consume the whole reader. Keep the original read path so
+		// the caller still gets data without trusting a partial streaming capture.
 		return false, nil
 	}
 

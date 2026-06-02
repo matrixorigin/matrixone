@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/xml"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -910,6 +911,62 @@ func TestS3FSReadFullObjectToDiskCacheStreamingDoesNotOpenReaderWhenCacheExists(
 	assert.Nil(t, err)
 	assert.False(t, done)
 	assert.Zero(t, getReaderCalls)
+}
+
+func TestS3FSReadFullObjectToDiskCacheStreamingReturnsReaderError(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	assert.Nil(t, err)
+	defer cache.Close(ctx)
+
+	fs := &S3FS{
+		diskCache: cache,
+	}
+	vector := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Offset: 1,
+				Size:   3,
+			},
+		},
+	}
+	readerErr := errors.New("reader failed")
+
+	done, err := fs.readFullObjectToDiskCacheStreaming(
+		ctx,
+		vector,
+		"foo/bar",
+		func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+			return &errorReadCloser{
+				reader: bytes.NewReader([]byte("hello world")),
+				err:    readerErr,
+			}, nil
+		},
+	)
+
+	assert.True(t, done)
+	assert.ErrorIs(t, err, readerErr)
+	assert.False(t, vector.Entries[0].done)
+	assert.Nil(t, vector.Entries[0].Data)
+	assert.Equal(t, int64(3), vector.Entries[0].Size)
+}
+
+type errorReadCloser struct {
+	reader *bytes.Reader
+	err    error
+}
+
+func (e *errorReadCloser) Read(p []byte) (int, error) {
+	n, err := e.reader.Read(p)
+	if err != nil {
+		return n, e.err
+	}
+	return n, nil
+}
+
+func (e *errorReadCloser) Close() error {
+	return nil
 }
 
 type S3CredentialTestCase struct {
