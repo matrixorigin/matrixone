@@ -196,8 +196,6 @@ select sum(distinct a),sum(distinct grp) from t1;
 ➤ sum(distinct a)[-5,64,0]  ¦  sum(distinct grp)[-5,64,0]  𝄀
 21  ¦  6
 drop table t1;
-
-#SUM over bool column: counts rows where flag is true
 create table t1 (flag bool);
 insert into t1 values (true), (false), (true), (true), (false);
 select sum(flag) from t1;
@@ -207,8 +205,6 @@ select avg(flag) from t1;
 ➤ avg(flag)[8,54,0]  𝄀
 0.6
 drop table t1;
-
-#SUM over bool column with DISTINCT
 create table t1 (flag bool);
 insert into t1 values (true), (true), (false), (true), (false);
 select sum(distinct flag) from t1;
@@ -218,8 +214,6 @@ select avg(distinct flag) from t1;
 ➤ avg(distinct flag)[8,54,0]  𝄀
 0.5
 drop table t1;
-
-#SUM over comparison expressions: >, <, >=, <=, =, !=, <>
 create table t1 (val int);
 insert into t1 values (1), (3), (5), (7), (9);
 select sum(val > 4) from t1;
@@ -247,8 +241,6 @@ select sum(val <> 5) from t1;
 ➤ sum(val <> 5)[-5,64,0]  𝄀
 4
 drop table t1;
-
-#SUM over boolean expressions with AND/OR/NOT
 create table t1 (a int, b int);
 insert into t1 values (1, 10), (3, 5), (5, 3), (7, 1);
 select sum(a > 2 and b > 2) from t1;
@@ -261,8 +253,6 @@ select sum(not (a > 2)) from t1;
 ➤ sum(not (a > 2))[-5,64,0]  𝄀
 1
 drop table t1;
-
-#SUM over IS NULL / IS NOT NULL
 create table t1 (val int);
 insert into t1 values (1), (null), (3), (null), (5);
 select sum(val is null) from t1;
@@ -275,8 +265,6 @@ select avg(val is null) from t1;
 ➤ avg(val is null)[8,54,0]  𝄀
 0.4
 drop table t1;
-
-#SUM over BETWEEN / NOT BETWEEN
 create table t1 (val int);
 insert into t1 values (1), (2), (3), (4), (5);
 select sum(val between 2 and 4) from t1;
@@ -286,8 +274,6 @@ select sum(val not between 2 and 4) from t1;
 ➤ sum(val not between 2 and 4)[-5,64,0]  𝄀
 2
 drop table t1;
-
-#SUM over IN / NOT IN
 create table t1 (val int);
 insert into t1 values (1), (2), (3), (4), (5);
 select sum(val in (1, 3, 5)) from t1;
@@ -297,8 +283,6 @@ select sum(val not in (2, 4)) from t1;
 ➤ sum(val not in (2, 4))[-5,64,0]  𝄀
 3
 drop table t1;
-
-#SUM over LIKE / NOT LIKE
 create table t1 (name varchar(20));
 insert into t1 values ('apple'), ('banana'), ('apricot'), ('cherry');
 select sum(name like 'a%') from t1;
@@ -308,8 +292,6 @@ select sum(name like '%a%') from t1;
 ➤ sum(name like '%a%')[-5,64,0]  𝄀
 3
 drop table t1;
-
-#SUM/AVG bool with GROUP BY
 create table t1 (grp int, val int);
 insert into t1 values (1, 10), (1, 3), (2, 8), (2, 2), (2, 5);
 select grp, sum(val > 4) from t1 group by grp order by grp;
@@ -321,8 +303,6 @@ select grp, avg(val > 4) from t1 group by grp order by grp;
 1  ¦  0.5  𝄀
 2  ¦  0.6667
 drop table t1;
-
-#SUM/AVG bool with WHERE
 create table t1 (status varchar(10), val int);
 insert into t1 values ('ERROR', 1), ('OK', 2), ('ERROR', 3), ('OK', 4), ('ERROR', 5);
 select sum(status = 'ERROR') from t1;
@@ -335,24 +315,18 @@ select sum(status = 'OK') from t1;
 ➤ sum(status = 'OK')[-5,64,0]  𝄀
 2
 drop table t1;
-
-#SUM/AVG bool with HAVING
 create table t1 (grp int, val int);
 insert into t1 values (1, 10), (1, 3), (1, 5), (2, 2), (2, 1);
 select grp, sum(val > 4) from t1 group by grp having sum(val > 4) > 0;
 ➤ grp[4,32,0]  ¦  sum(val > 4)[-5,64,0]  𝄀
 1  ¦  2
 drop table t1;
-
-#Multiple SUM bool expressions in one query
 create table t1 (status varchar(10), val int);
 insert into t1 values ('ERROR', 1), ('WARN', 2), ('ERROR', 3), ('INFO', 4), ('ERROR', 5);
 select sum(status = 'ERROR'), sum(status = 'WARN'), sum(status = 'INFO') from t1;
 ➤ sum(status = 'ERROR')[-5,64,0]  ¦  sum(status = 'WARN')[-5,64,0]  ¦  sum(status = 'INFO')[-5,64,0]  𝄀
 3  ¦  1  ¦  1
 drop table t1;
-
-#SUM/AVG bool edge cases: all true, all false, NULLs
 create table t1 (flag bool);
 insert into t1 values (true), (true), (true);
 select sum(flag), avg(flag) from t1;
@@ -368,8 +342,6 @@ select sum(flag), avg(flag) from t1;
 ➤ sum(flag)[-5,64,0]  ¦  avg(flag)[8,54,0]  𝄀
 0  ¦  0.0
 drop table t1;
-
-#VARIANCE/STDDEV should still reject bool input
 create table t1 (flag bool);
 insert into t1 values (true);
 select variance(flag) from t1;
@@ -377,8 +349,6 @@ invalid argument aggregate function variance, bad value [BOOL]
 select stddev(flag) from t1;
 invalid argument aggregate function stddev, bad value [BOOL]
 drop table t1;
-
-#SUM over nested boolean expressions
 create table t1 (a int, b int);
 insert into t1 values (1, 1), (2, 3), (3, 2), (4, 4), (5, 5);
 select sum(a > 2 and b > 2) from t1;
@@ -386,10 +356,8 @@ select sum(a > 2 and b > 2) from t1;
 2
 select sum((a > 3) or (b < 3)) from t1;
 ➤ sum((a > 3) or (b < 3))[-5,64,0]  𝄀
-5
+4
 drop table t1;
-
-#SUM bool in subquery
 create table t1 (val int);
 insert into t1 values (1), (3), (5);
 select (select sum(val > 2) from t1) as cnt;
