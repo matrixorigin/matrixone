@@ -1151,6 +1151,12 @@ func CastSetIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResu
 func CastGeometryToSubtype(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(targetSubtype, payload []byte) ([]byte, error) {
 		columnSubtype := strings.ToUpper(strings.TrimSpace(functionUtil.QuickBytesToStr(targetSubtype)))
+		// A "32:" prefix marks a GEOMETRY32 (float32-coordinate) column.
+		float32Column := false
+		if strings.HasPrefix(columnSubtype, "32:") {
+			float32Column = true
+			columnSubtype = strings.TrimPrefix(columnSubtype, "32:")
+		}
 		// Tolerate any legacy "SUBTYPE;SRID=n" metadata: keep only the subtype.
 		if idx := strings.IndexByte(columnSubtype, ';'); idx >= 0 {
 			columnSubtype = strings.TrimSpace(columnSubtype[:idx])
@@ -1166,8 +1172,11 @@ func CastGeometryToSubtype(ivecs []*vector.Vector, result vector.FunctionResultW
 		if columnSubtype != "" && columnSubtype != "GEOMETRY" && valueSubtype != "GEOMETRY" && valueSubtype != columnSubtype {
 			return nil, moerr.NewInvalidInputNoCtxf("cannot store %s in %s column", valueSubtype, columnSubtype)
 		}
-		// Always store bare WKB, regardless of whether the input was WKB or
-		// (legacy) WKT text.
+		// Store bare WKB — float32 coordinates for a GEOMETRY32 column, float64
+		// otherwise — regardless of whether the input was WKB or (legacy) WKT.
+		if float32Column {
+			return encodeGeometryPayloadFloat32(wkt), nil
+		}
 		return encodeGeometryPayload(wkt, 0, false), nil
 	}, selectList)
 }

@@ -40,6 +40,10 @@ func geometryComparisonWKT(b []byte) string {
 	)
 	if payloadIsWKB(b) {
 		g, err = geo.ReadWKB(b)
+		if err != nil {
+			// float32-coordinate WKB (GEOMETRY32)
+			g, err = geo.ReadWKBFloat32(b)
+		}
 	} else {
 		s, _, _ := stripEWKTSRID(strings.TrimSpace(string(b)))
 		g, err = geo.ParseWKT(s)
@@ -904,7 +908,7 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	case types.T_timestamp:
 		values := val.([]types.Timestamp)
 		vector.AppendFixedList(vec, values, nil, mp)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		values := val.([]string)
 		vector.AppendStringList(vec, values, nil, mp)
 	case types.T_array_float32:

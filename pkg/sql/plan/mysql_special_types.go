@@ -223,14 +223,20 @@ func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (
 		}
 	}
 
-	if isGeometryPlanType(&expr.Typ) && expr.Typ.Scale == targetType.Scale && expr.Typ.Width == targetType.Width {
+	if isGeometryPlanType(&expr.Typ) && expr.Typ.Id == targetType.Id &&
+		expr.Typ.Scale == targetType.Scale && expr.Typ.Width == targetType.Width {
 		expr.Typ = targetType
 		return expr, nil
 	}
 
 	// The runtime cast_geometry_to_subtype validates the value's subtype and
-	// normalizes the stored bytes to WKB; it only needs the column subtype name.
+	// normalizes the stored bytes to WKB. It needs the column subtype name and,
+	// for a GEOMETRY32 column, a "32:" prefix so the bytes are written as
+	// float32-coordinate WKB.
 	targetMetadata := geometrySubtypeName(&targetType)
+	if types.T(targetType.Id) == types.T_geometry32 {
+		targetMetadata = "32:" + targetMetadata
+	}
 	args := make([]*Expr, 2)
 	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
 	targetSubtypeExpr, err := binder.BindExpr(tree.NewNumVal(targetMetadata, targetMetadata, false, tree.P_char), 0, false)

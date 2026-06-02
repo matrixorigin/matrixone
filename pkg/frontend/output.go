@@ -91,7 +91,7 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 		row[i] = vector.GetFixedAtNoTypeCheck[float64](vec, rowIndex)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		row[i] = commonutil.CloneBytesIf(vec.GetBytesAt(rowIndex), !safeRefSlice)
-	case types.T_geometry:
+	case types.T_geometry, types.T_geometry32:
 		text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt(rowIndex))
 		if err != nil {
 			return err
@@ -222,7 +222,7 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 		row[i] = colSlices.arrFloat64[sliceIdx][rowIndex]
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		row[i] = commonutil.CloneBytesIf(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex), !safeRefSlice)
-	case types.T_geometry:
+	case types.T_geometry, types.T_geometry32:
 		text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex))
 		if err != nil {
 			return err
@@ -596,7 +596,7 @@ func (slices *ColumnSlices) GetBytesBased(r uint64, i uint64) ([]byte, error) {
 	switch vec.GetType().Oid { //get col
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		return commonutil.CloneBytesIf(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), !slices.safeRefSlice), nil
-	case types.T_geometry:
+	case types.T_geometry, types.T_geometry32:
 		text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)))
 		if err != nil {
 			return nil, err

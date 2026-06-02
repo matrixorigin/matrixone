@@ -259,6 +259,65 @@ func Test_CastFromDecimal256(t *testing.T) {
 	}
 }
 
+func TestGeometry32EncodeDecode(t *testing.T) {
+	// Float32 WKB is shorter than float64 (4 vs 8 bytes per ordinate) and both
+	// decode back to the same WKT.
+	f32 := encodeGeometryPayloadFloat32("POINT(1 2)")
+	f64 := encodeGeometryPayload("POINT(1 2)", 0, false)
+	require.Len(t, f32, 13)
+	require.Len(t, f64, 21)
+
+	got32, _, _, err := decodeGeometryPayload(f32)
+	require.NoError(t, err)
+	require.Equal(t, "POINT(1 2)", got32)
+
+	got64, _, _, err := decodeGeometryPayload(f64)
+	require.NoError(t, err)
+	require.Equal(t, "POINT(1 2)", got64)
+}
+
+func Test_CastGeometry32(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// A geometry32 (float32 WKB) source value.
+	pointF32 := string(encodeGeometryPayloadFloat32("POINT(5 6)"))
+
+	testCases := []tcTemp{
+		{
+			info: "cast varchar to geometry32",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"POINT(1 2)"}, []bool{false}),
+		},
+		{
+			info: "cast geometry to geometry32",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{"LINESTRING(0 0,1 1)"}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"LINESTRING(0 0,1 1)"}, []bool{false}),
+		},
+		{
+			info: "cast geometry32 to geometry (float32 WKB source)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{pointF32}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"POINT(5 6)"}, []bool{false}),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.info, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, tc.info, info)
+		})
+	}
+}
+
 func Test_CastVarcharToGeometry(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

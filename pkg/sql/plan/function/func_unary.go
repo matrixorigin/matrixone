@@ -863,6 +863,17 @@ func encodeGeometryPayload(wkt string, _ uint32, _ bool) []byte {
 	return geo.WriteWKB(g)
 }
 
+// encodeGeometryPayloadFloat32 is the GEOMETRY32 counterpart of
+// encodeGeometryPayload: it parses WKT and returns float32-coordinate WKB.
+func encodeGeometryPayloadFloat32(wkt string) []byte {
+	wkt, _, _ = stripEWKTSRID(strings.TrimSpace(wkt))
+	g, err := geo.ParseWKT(wkt)
+	if err != nil {
+		return functionUtil.QuickStrToBytes(wkt)
+	}
+	return geo.WriteWKBFloat32(g)
+}
+
 // stripEWKTSRID removes a leading "SRID=n;" prefix from an (E)WKT string,
 // returning the bare WKT, the parsed SRID, and whether a prefix was present.
 func stripEWKTSRID(s string) (wkt string, srid uint32, hasSRID bool) {
@@ -930,7 +941,15 @@ func decodeGeometryPayload(payload []byte) (wkt string, srid uint32, sridDefined
 	if payloadIsWKB(payload) {
 		g, rerr := geo.ReadWKB(payload)
 		if rerr != nil {
-			return "", 0, false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+			// A float32-coordinate WKB (GEOMETRY32) carries 4 coordinate bytes
+			// where standard WKB carries 8, so the float64 reader runs out of
+			// bytes on it; fall back to the float32 reader. The two encodings
+			// are unambiguous by length, so this also serves columns whose OID
+			// is GEOMETRY32.
+			g, rerr = geo.ReadWKBFloat32(payload)
+			if rerr != nil {
+				return "", 0, false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+			}
 		}
 		return geo.WriteWKT(g), 0, false, nil
 	}
