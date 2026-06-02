@@ -34,8 +34,8 @@ select row_count();
 delete from t where id=4;
 select row_count();
 
--- replace counts the rows written
-replace into t values (1,1000);
+-- replace that inserts a brand-new row affects 1 row
+replace into t values (50,500);
 select row_count();
 
 -- after a result-set statement, row_count() is -1

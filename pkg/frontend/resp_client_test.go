@@ -18,6 +18,8 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,4 +54,35 @@ func TestSessionLastAffectedRows(t *testing.T) {
 	// -1 sentinel used after result-set statements.
 	ses.SetLastAffectedRows(-1)
 	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
+}
+
+func TestRecordLastAffectedRows(t *testing.T) {
+	cases := []struct {
+		name   string
+		stmt   tree.Statement
+		affect uint64
+		want   int64
+	}{
+		{"insert", &tree.Insert{}, 5, 5},
+		{"update", &tree.Update{}, 3, 3},
+		{"delete", &tree.Delete{}, 1, 1},
+		{"replace", &tree.Replace{}, 2, 2},
+		{"load", &tree.Load{}, 7, 7},
+		{"select -> -1", &tree.Select{}, 0, -1},
+		{"ddl -> 0", &tree.CreateTable{}, 0, 0},
+	}
+	for _, c := range cases {
+		ses := &Session{}
+		proc := &process.Process{Base: &process.BaseProcess{AffectedRows: new(int64)}}
+		execCtx := &ExecCtx{
+			stmt:      c.stmt,
+			runResult: &util.RunResult{AffectRows: c.affect},
+			proc:      proc,
+		}
+		recordLastAffectedRows(ses, execCtx)
+		// Written to both the process (for same-proc multi-statement COM_QUERY)
+		// and the session (for the next COM_QUERY).
+		require.Equal(t, c.want, proc.GetAffectedRows(), "%s: proc", c.name)
+		require.Equal(t, c.want, ses.GetLastAffectedRows(), "%s: session", c.name)
+	}
 }

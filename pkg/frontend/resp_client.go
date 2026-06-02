@@ -39,6 +39,34 @@ func isRowCountDML(stmt tree.Statement) bool {
 	}
 }
 
+// recordLastAffectedRows records the value the ROW_COUNT() builtin should return
+// for the statement that just finished. It is called once per statement, right
+// after execution, so it covers both single- and multi-statement COM_QUERY and
+// the binary-protocol execute path.
+//
+// MySQL semantics: affected rows for DML, -1 after a statement that returns a
+// result set (SELECT/SHOW/...), 0 otherwise (DDL, SET, ...).
+//
+// The value is written to both the process and the session: the process so that
+// a later statement reusing the same proc (multi-statement COM_QUERY) reads the
+// fresh value, and the session so that the next COM_QUERY (which builds a new
+// proc seeded from the session) reads it too.
+func recordLastAffectedRows(ses *Session, execCtx *ExecCtx) {
+	var n int64
+	switch {
+	case isRowCountDML(execCtx.stmt):
+		if execCtx.runResult != nil {
+			n = int64(execCtx.runResult.AffectRows)
+		}
+	case execCtx.stmt.StmtKind().OutputType() == tree.OUTPUT_RESULT_ROW:
+		n = -1
+	}
+	if execCtx.proc != nil {
+		execCtx.proc.SetAffectedRows(n)
+	}
+	ses.SetLastAffectedRows(n)
+}
+
 // response the client
 func respClientWhenSuccess(ses *Session,
 	execCtx *ExecCtx) (err error) {

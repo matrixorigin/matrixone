@@ -30,13 +30,13 @@ delete from t where id=4;
 select row_count();
 ➤ row_count()[-5,64,0]  𝄀
 1
-replace into t values (1,1000);
+replace into t values (50,500);
 select row_count();
 ➤ row_count()[-5,64,0]  𝄀
 1
 select v from t where id=1;
 ➤ v[4,32,0]  𝄀
-1000
+11
 select row_count();
 ➤ row_count()[-5,64,0]  𝄀
 -1

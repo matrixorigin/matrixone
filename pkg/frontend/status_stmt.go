@@ -183,15 +183,6 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		rspLen = execCtx.runResult.AffectRows
 	}
 
-	// Record the affected rows for the ROW_COUNT() builtin to read in the next
-	// statement. MySQL semantics: DML reports the affected row count, while other
-	// status statements (DDL, SET, ...) report 0.
-	if isRowCountDML(execCtx.stmt) {
-		ses.SetLastAffectedRows(int64(rspLen))
-	} else {
-		ses.SetLastAffectedRows(0)
-	}
-
 	switch execCtx.stmt.(type) {
 	case *tree.Select:
 		//select ... into ...
