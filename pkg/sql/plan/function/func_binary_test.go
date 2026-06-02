@@ -5287,6 +5287,52 @@ func TestStMeasuresGeodetic(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestStMeasuresWithSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom := types.T_geometry.ToType() // SRID-undefined type
+	poly := "POLYGON((0 0,1 0,1 1,0 1,0 0))"
+
+	wantGeo, _ := geodeticArea(encodeGeometryPayload(poly, 0, false))
+	wantCart, _ := geometryArea(encodeGeometryPayload(poly, 0, false))
+
+	// ST_Area(poly, 4326) forces geodesic even though the type SRID is 0.
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom, []string{poly}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantGeo}, []bool{false}),
+		StAreaWithSRID)
+	ok, info := fc.Run()
+	require.True(t, ok, info)
+
+	// ST_Area(poly, 0) forces Cartesian.
+	fc2 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom, []string{poly}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantCart}, []bool{false}),
+		StAreaWithSRID)
+	ok2, info2 := fc2.Run()
+	require.True(t, ok2, info2)
+
+	// ST_Distance(p1, p2, 4326) is geodesic.
+	wantDist, _ := geodeticDistance(
+		encodeGeometryPayload("POINT(0 0)", 0, false),
+		encodeGeometryPayload("POINT(1 0)", 0, false))
+	fc3 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom, []string{"POINT(0 0)"}, []bool{false}),
+			NewFunctionTestInput(geom, []string{"POINT(1 0)"}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantDist}, []bool{false}),
+		StDistanceWithSRID)
+	ok3, info3 := fc3.Run()
+	require.True(t, ok3, info3)
+}
+
 func TestStDistance(t *testing.T) {
 	testCases := initStDistanceTestCase()
 

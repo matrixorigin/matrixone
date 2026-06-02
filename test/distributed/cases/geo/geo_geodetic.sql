@@ -14,6 +14,12 @@ select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(3 4)'))
 select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))', 4326)) as geodesic_area_m2;
 select st_area(st_geomfromtext('POLYGON((0 0,3 0,3 4,0 4,0 0))')) as cartesian_area;
 
+-- The +SRID overload forces the coordinate system regardless of the type SRID.
+select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), 4326) as forced_geodesic_m2;
+select st_length(st_geomfromtext('LINESTRING(0 0,1 0)'), 4326) as forced_geodesic_len_m;
+select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 0)'), 4326) as forced_geodesic_dist_m;
+select st_area(st_geomfromtext('POLYGON((0 0,3 0,3 4,0 4,0 0))', 4326), 0) as forced_cartesian_area;
+
 -- A GEOGRAPHY column (generic geometry defaulting to SRID 4326) computes
 -- geodesically.
 drop database if exists geo_geodetic;

@@ -4137,6 +4137,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return StDistance
 				},
 			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_geometry, types.T_geometry, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StDistanceWithSRID
+				},
+			},
 		},
 	},
 
@@ -4179,6 +4189,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return StLength
 				},
 			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_geometry, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StLengthWithSRID
+				},
+			},
 		},
 	},
 
@@ -4198,6 +4218,16 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return StArea
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_geometry, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StAreaWithSRID
 				},
 			},
 		},

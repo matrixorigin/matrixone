@@ -7995,18 +7995,59 @@ func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 	}, selectList)
 }
 
+// geometryDistanceBySRID computes the distance between two geometries in the
+// coordinate system selected by srid: geodesic meters for SRID 4326, Cartesian
+// otherwise.
+func geometryDistanceBySRID(left, right []byte, srid uint32) (float64, error) {
+	if srid == geo.SRIDWGS84 {
+		return geodeticDistance(left, right)
+	}
+	return geometryDistance(left, right)
+}
+
 func StDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if err := checkBinaryGeometryTypeSRID("ST_DISTANCE", ivecs); err != nil {
 		return err
 	}
-	// SRID 4326 returns geodesic distance in meters; SRID 0 is Cartesian.
 	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
-		if srid == geo.SRIDWGS84 {
-			return geodeticDistance(v1, v2)
-		}
-		return geometryDistance(v1, v2)
+		return geometryDistanceBySRID(v1, v2, srid)
 	}, selectList)
+}
+
+// StDistanceWithSRID is the ST_Distance(geom, geom, srid) overload: the explicit
+// SRID overrides the operand type SRIDs for the computation.
+func StDistanceWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	left := vector.GenerateFunctionStrParameter(ivecs[0])
+	right := vector.GenerateFunctionStrParameter(ivecs[1])
+	srids := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v1, n1 := left.GetStrValue(i)
+		v2, n2 := right.GetStrValue(i)
+		s, n3 := srids.GetValue(i)
+		if n1 || n2 || n3 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		d, err := geometryDistanceBySRID(v1, v2, uint32(s))
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(d, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // geodeticDistance returns the WGS 84 geodesic distance in meters between two

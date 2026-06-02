@@ -3133,25 +3133,50 @@ func StIsEmpty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	}, selectList)
 }
 
+// geometryLengthBySRID computes the length of a geometry in the coordinate
+// system selected by srid: geodesic meters for SRID 4326, Cartesian otherwise.
+func geometryLengthBySRID(payload []byte, srid uint32) (float64, error) {
+	if srid == geo.SRIDWGS84 {
+		return geodeticLength(payload)
+	}
+	return geometryLength(payload)
+}
+
 func StLength(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	// SRID 4326 computes a geodesic length in meters; SRID 0 is Cartesian.
 	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
-		if srid == geo.SRIDWGS84 {
-			return geodeticLength(v)
-		}
-		return geometryLength(v)
+		return geometryLengthBySRID(v, srid)
 	}, selectList)
 }
 
+// StLengthWithSRID is the ST_Length(geom, srid) overload.
+func StLengthWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrFixedToFixedWithErrorCheck[int64, float64](ivecs, result, proc, length, func(v string, srid int64) (float64, error) {
+		return geometryLengthBySRID(functionUtil.QuickStrToBytes(v), uint32(srid))
+	}, selectList)
+}
+
+// geometryAreaBySRID computes the area of a geometry in the coordinate system
+// selected by srid: geodesic square meters for SRID 4326, Cartesian otherwise.
+func geometryAreaBySRID(payload []byte, srid uint32) (float64, error) {
+	if srid == geo.SRIDWGS84 {
+		return geodeticArea(payload)
+	}
+	return geometryArea(payload)
+}
+
 func StArea(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	// SRID 4326 computes a geodesic area in square meters; SRID 0 is Cartesian.
 	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
-		if srid == geo.SRIDWGS84 {
-			return geodeticArea(v)
-		}
-		return geometryArea(v)
+		return geometryAreaBySRID(v, srid)
+	}, selectList)
+}
+
+// StAreaWithSRID is the ST_Area(geom, srid) overload: the explicit SRID
+// overrides the geometry's type SRID for the computation.
+func StAreaWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrFixedToFixedWithErrorCheck[int64, float64](ivecs, result, proc, length, func(v string, srid int64) (float64, error) {
+		return geometryAreaBySRID(functionUtil.QuickStrToBytes(v), uint32(srid))
 	}, selectList)
 }
 
