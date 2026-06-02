@@ -296,4 +296,7 @@ isnull(locate(col1, col2))
 0
 0
 drop table locate03;
+TP QUERY PLAN
+Project
+  ->  Values Scan "*VALUES*"
 drop database testx;
