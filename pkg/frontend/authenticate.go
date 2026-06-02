@@ -3592,6 +3592,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		account.SetDefaultRole(sr.Role.UserName)
 		// then, reset secondary role to none
 		account.SetUseSecondaryRole(false)
+		ses.InvalidatePrivilegeCache()
 
 		return err
 	}

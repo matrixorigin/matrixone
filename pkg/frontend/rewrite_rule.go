@@ -290,11 +290,11 @@ func loadActiveRoleIDsForRuleCache(ctx context.Context, bh BackgroundExec, tenan
 }
 
 func getSqlForRoleIDsOfUserForRuleCache(userID int) string {
-	return fmt.Sprintf("select role_id,with_grant_option from mo_catalog.mo_user_grant where user_id = %d order by granted_time asc, role_id asc;", userID)
+	return fmt.Sprintf("select role_id from mo_catalog.mo_user_grant where user_id = %d order by granted_time asc, role_id asc;", userID)
 }
 
 func getSqlForInheritedRoleIDsForRuleCache(roleID int64) string {
-	return fmt.Sprintf("select granted_id,with_grant_option from mo_catalog.mo_role_grant where grantee_id = %d order by granted_time asc, granted_id asc;", roleID)
+	return fmt.Sprintf("select granted_id from mo_catalog.mo_role_grant where grantee_id = %d order by granted_time asc, granted_id asc;", roleID)
 }
 
 func getSqlForRoleRulesOfRoleIDs(roleIDs []int64) string {
@@ -317,28 +317,14 @@ func mergeRewriteRules(ctx context.Context, leftRule, rightRule string) (string,
 		return leftRule, nil
 	}
 
-	leftColumns, ok, err := rewriteRuleOutputColumns(ctx, leftRule)
+	mergedRule, ok, err := mergeRewriteRulesSafely(ctx, leftRule, rightRule)
 	if err != nil {
 		return "", err
 	}
 	if !ok {
-		return "", moerr.NewInvalidInputf(ctx,
-			"conflicting rewrite rules %q and %q cannot be merged safely", leftRule, rightRule)
+		return rightRule, nil
 	}
-	rightColumns, ok, err := rewriteRuleOutputColumns(ctx, rightRule)
-	if err != nil {
-		return "", err
-	}
-	if !ok {
-		return "", moerr.NewInvalidInputf(ctx,
-			"conflicting rewrite rules %q and %q cannot be merged safely", leftRule, rightRule)
-	}
-	if !sameRewriteOutputColumns(leftColumns, rightColumns) {
-		return "", moerr.NewInvalidInputf(ctx,
-			"conflicting rewrite rules %q and %q cannot be merged safely", leftRule, rightRule)
-	}
-	return "", moerr.NewInvalidInputf(ctx,
-		"conflicting rewrite rules %q and %q cannot be merged safely", leftRule, rightRule)
+	return mergedRule, nil
 }
 
 func trimRewriteRuleForUnion(rule string) string {
@@ -352,6 +338,42 @@ func trimRewriteRuleForUnion(rule string) string {
 type rewriteRuleOutputColumn struct {
 	name string
 	expr string
+}
+
+func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string) (string, bool, error) {
+	leftColumns, ok, err := rewriteRuleOutputColumns(ctx, leftRule)
+	if err != nil {
+		return "", false, err
+	}
+	if !ok {
+		return "", false, nil
+	}
+
+	rightColumns, ok, err := rewriteRuleOutputColumns(ctx, rightRule)
+	if err != nil {
+		return "", false, err
+	}
+	if !ok {
+		return "", false, nil
+	}
+
+	if !sameRewriteOutputColumns(leftColumns, rightColumns) {
+		return "", false, nil
+	}
+
+	return fmt.Sprintf("(%s) union all (%s)", leftRule, rightRule), true, nil
+}
+
+func outputColumnsFromRewriteSelectExprs(exprs tree.SelectExprs) ([]rewriteRuleOutputColumn, bool) {
+	columns := make([]rewriteRuleOutputColumn, 0, len(exprs))
+	for _, expr := range exprs {
+		column, ok := outputColumnFromRewriteSelectExpr(expr)
+		if !ok {
+			return nil, false
+		}
+		columns = append(columns, column)
+	}
+	return columns, true
 }
 
 func rewriteRuleOutputColumns(ctx context.Context, rule string) ([]rewriteRuleOutputColumn, bool, error) {
@@ -384,9 +406,6 @@ func validateRewriteRuleSQL(ctx context.Context, rule string) error {
 func outputColumnsFromRewriteStatement(stmt tree.Statement) ([]rewriteRuleOutputColumn, bool) {
 	switch s := stmt.(type) {
 	case *tree.Select:
-		if len(s.OrderBy) > 0 || s.Limit != nil {
-			return nil, false
-		}
 		return outputColumnsFromRewriteSelectStatement(s.Select)
 	case *tree.ParenSelect:
 		if s.Select == nil {
@@ -401,46 +420,26 @@ func outputColumnsFromRewriteStatement(stmt tree.Statement) ([]rewriteRuleOutput
 func outputColumnsFromRewriteSelectStatement(stmt tree.SelectStatement) ([]rewriteRuleOutputColumn, bool) {
 	switch s := stmt.(type) {
 	case *tree.SelectClause:
-		if !mergeableRewriteSelectClause(s) {
+		return outputColumnsFromRewriteSelectExprs(s.Exprs)
+	case *tree.UnionClause:
+		leftColumns, ok := outputColumnsFromRewriteSelectStatement(s.Left)
+		if !ok {
 			return nil, false
 		}
-		columns := make([]rewriteRuleOutputColumn, 0, len(s.Exprs))
-		for _, expr := range s.Exprs {
-			column, ok := outputColumnFromRewriteSelectExpr(expr)
-			if !ok {
-				return nil, false
-			}
-			columns = append(columns, column)
+		rightColumns, ok := outputColumnsFromRewriteSelectStatement(s.Right)
+		if !ok {
+			return nil, false
 		}
-		return columns, true
-	case *tree.UnionClause:
-		// Only treat UNION DISTINCT as structurally inspectable for output-column validation.
-		// mergeRewriteRules itself no longer combines distinct rules because doing so
-		// can change query semantics.
-		if s.Type == tree.UNION && !s.All {
-			leftColumns, ok := outputColumnsFromRewriteSelectStatement(s.Left)
-			if !ok {
-				return nil, false
-			}
-			rightColumns, ok := outputColumnsFromRewriteSelectStatement(s.Right)
-			if !ok {
-				return nil, false
-			}
-			if !sameRewriteOutputColumns(leftColumns, rightColumns) {
-				return nil, false
-			}
-			return leftColumns, true
+		if !sameRewriteOutputColumns(leftColumns, rightColumns) {
+			return nil, false
 		}
-		return nil, false
+		return leftColumns, true
 	case *tree.ParenSelect:
 		if s.Select == nil {
 			return nil, false
 		}
 		return outputColumnsFromRewriteStatement(s.Select)
 	case *tree.Select:
-		if len(s.OrderBy) > 0 || s.Limit != nil {
-			return nil, false
-		}
 		return outputColumnsFromRewriteSelectStatement(s.Select)
 	default:
 		return nil, false
