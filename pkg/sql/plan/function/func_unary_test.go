@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -1361,6 +1362,47 @@ func TestStY(t *testing.T) {
 	fcTC = NewFunctionTestCase(proc, testCases[2].inputs, testCases[2].expect, StY)
 	s, info = fcTC.Run()
 	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", testCases[2].info, info))
+}
+
+// geom32WKB builds the float32-coordinate WKB payload a GEOMETRY32 cell stores.
+func geom32WKB(t *testing.T, wkt string) string {
+	t.Helper()
+	g, err := geo.ParseWKT(wkt)
+	require.NoError(t, err)
+	return string(geo.WriteWKBFloat32(g))
+}
+
+func TestStXY32(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// GEOMETRY32 ST_X / ST_Y return float32, for both text and float32-WKB input.
+	run := func(fn fEvalFn, input string, want float32) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{input}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_float32.ToType(), false, []float32{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	run(StX32, "POINT(1.5 2.5)", 1.5)
+	run(StY32, "POINT(1.5 2.5)", 2.5)
+	run(StLongitude32, "POINT(1.5 2.5)", 1.5)
+	run(StLatitude32, "POINT(1.5 2.5)", 2.5)
+	// Real float32 WKB payload.
+	run(StX32, geom32WKB(t, "POINT(1.5 2.5)"), 1.5)
+	run(StY32, geom32WKB(t, "POINT(1.5 2.5)"), 2.5)
+
+	// The float64 forms still return float64 on a GEOMETRY input.
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1.5 2.5)"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1.5}, []bool{false}), StX)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
 }
 
 func TestStXYRejectNonPoint(t *testing.T) {

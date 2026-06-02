@@ -994,28 +994,45 @@ func StGeomCollFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 
 // StLongitude returns the X (longitude) ordinate of a point (ST_Longitude).
 func StLongitude(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
-		x, _, err := parsePointXYFromPayload(v)
-		return x, err
-	}, selectList)
+	return stPointOrdinate[float64](ivecs, result, proc, length, selectList, true)
+}
+
+// StLongitude32 is the GEOMETRY32 overload of ST_Longitude (returns float32).
+func StLongitude32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stPointOrdinate[float32](ivecs, result, proc, length, selectList, true)
 }
 
 // StLatitude returns the Y (latitude) ordinate of a point (ST_Latitude).
 func StLatitude(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
-		_, y, err := parsePointXYFromPayload(v)
-		return y, err
+	return stPointOrdinate[float64](ivecs, result, proc, length, selectList, false)
+}
+
+// StLatitude32 is the GEOMETRY32 overload of ST_Latitude (returns float32).
+func StLatitude32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stPointOrdinate[float32](ivecs, result, proc, length, selectList, false)
+}
+
+// stPointOrdinate returns the X (wantX) or Y ordinate of a POINT as type T, so
+// the same logic serves the float64 (GEOMETRY) and float32 (GEOMETRY32) forms.
+func stPointOrdinate[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, wantX bool) error {
+	return opUnaryBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v []byte) (T, error) {
+		x, y, err := parsePointXYFromPayload(v)
+		if wantX {
+			return T(x), err
+		}
+		return T(y), err
 	}, selectList)
 }
 
 // StSwapXY swaps the X and Y of every coordinate of a geometry (ST_SwapXY).
 func StSwapXY(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
 		g, err := decodeGeoGeometry(v)
 		if err != nil {
 			return nil, err
 		}
-		return geo.WriteWKB(geo.SwapXY(g)), nil
+		return geoEncodeWKB(geo.SwapXY(g), f32), nil
 	}, selectList)
 }
 
@@ -1119,11 +1136,49 @@ func sridFromTypeWidth(width int32) uint32 {
 // ST_GeomFromText), there is no source geometry and the SRID is supplied by the
 // binder from a constant argument (Width stays 0 here).
 func geometryResultType(parameters []types.Type) types.Type {
-	t := types.T_geometry.ToType()
+	// A GEOMETRY32 input yields a GEOMETRY32 (float32) result; everything else
+	// stays GEOMETRY (float64). The OID is always available from the argument
+	// type, so geometry-returning functions preserve the input precision.
+	oid := types.T_geometry
+	if len(parameters) > 0 && parameters[0].Oid == types.T_geometry32 {
+		oid = types.T_geometry32
+	}
+	t := oid.ToType()
 	if len(parameters) > 0 && (parameters[0].Oid == types.T_geometry || parameters[0].Oid == types.T_geometry32) {
 		t.Width = parameters[0].Width
 	}
 	return t
+}
+
+// geometryArgIsFloat32 reports whether the i-th argument vector is a GEOMETRY32
+// (float32-coordinate) value, so an eval function can emit matching output.
+func geometryArgIsFloat32(ivecs []*vector.Vector, i int) bool {
+	return i < len(ivecs) && ivecs[i].GetType().Oid == types.T_geometry32
+}
+
+// geoEncodeWKB writes g as float32 WKB when f32 is set, else standard float64 WKB.
+func geoEncodeWKB(g geo.Geometry, f32 bool) []byte {
+	if f32 {
+		return geo.WriteWKBFloat32(g)
+	}
+	return geo.WriteWKB(g)
+}
+
+// reencodeGeom32 transcodes an already-encoded WKB payload to float32 WKB when
+// f32 is set; otherwise it returns the payload unchanged. Used by
+// geometry-returning functions that build their output through helpers that
+// always emit standard float64 WKB.
+func reencodeGeom32(out []byte, f32 bool) []byte {
+	if !f32 || len(out) == 0 {
+		return out
+	}
+	g, err := geo.ReadWKB(out)
+	if err != nil {
+		if g, err = geo.ReadWKBFloat32(out); err != nil {
+			return out
+		}
+	}
+	return geo.WriteWKBFloat32(g)
 }
 
 // encodeGeometryPayload parses a WKT (or EWKT "SRID=n;WKT") string and returns
@@ -2099,17 +2154,21 @@ func StGeometryType(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 }
 
 func StX(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
-		x, _, err := parsePointXYFromPayload(v)
-		return x, err
-	}, selectList)
+	return stPointOrdinate[float64](ivecs, result, proc, length, selectList, true)
+}
+
+// StX32 is the GEOMETRY32 overload of ST_X (returns float32).
+func StX32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stPointOrdinate[float32](ivecs, result, proc, length, selectList, true)
 }
 
 func StY(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
-		_, y, err := parsePointXYFromPayload(v)
-		return y, err
-	}, selectList)
+	return stPointOrdinate[float64](ivecs, result, proc, length, selectList, false)
+}
+
+// StY32 is the GEOMETRY32 overload of ST_Y (returns float32).
+func StY32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stPointOrdinate[float32](ivecs, result, proc, length, selectList, false)
 }
 
 func StNumGeometries(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
