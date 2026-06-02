@@ -1320,9 +1320,11 @@ const (
 	checkRoleHasPrivilegeWGOOrWithOwnershipFormat = `select distinct role_id from mo_catalog.mo_role_privs where (with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d;`
 
 	// obj-scoped WGO check: for table/view grants that must not leak across different objects.
-	checkRoleHasPrivilegeWGOWithObjFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s" and obj_id = %d;`
+	checkRoleHasPrivilegeWGOWithObjFormat         = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s" and obj_id = %d;`
+	checkRoleHasPrivilegeWGOWithObjAndLevelFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s" and obj_id = %d and privilege_level = "%s";`
 
-	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjFormat = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s" and obj_id = %d;`
+	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjFormat         = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s" and obj_id = %d;`
+	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevelFormat = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s" and obj_id = %d and privilege_level = "%s";`
 
 	// obj_type-only WGO check: for wildcard grants (*.*) that still need table vs view distinction.
 	checkRoleHasPrivilegeWGOWithObjTypeFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s";`
@@ -1903,8 +1905,16 @@ func getSqlForCheckRoleHasPrivilegeWGOWithObj(privilegeId int64, objType objectT
 	return fmt.Sprintf(checkRoleHasPrivilegeWGOWithObjFormat, privilegeId, objType, objId)
 }
 
+func getSqlForCheckRoleHasPrivilegeWGOWithObjAndLevel(privilegeId int64, objType objectType, objId int64, privilegeLevel privilegeLevelType) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOWithObjAndLevelFormat, privilegeId, objType, objId, privilegeLevel)
+}
+
 func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(privilegeId, allPrivId, ownershipPrivId int64, objType objectType, objId int64) string {
 	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipWithObjFormat, privilegeId, allPrivId, ownershipPrivId, objType, objId)
+}
+
+func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(privilegeId, allPrivId, ownershipPrivId int64, objType objectType, objId int64, privilegeLevel privilegeLevelType) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevelFormat, privilegeId, allPrivId, ownershipPrivId, objType, objId, privilegeLevel)
 }
 
 func getSqlForCheckRoleHasPrivilegeWGOWithObjType(privilegeId int64, objType objectType) string {
@@ -8215,23 +8225,23 @@ func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
 	// matching, so view grants can check both new view entries and legacy table entries.
 	switch level.Level {
 	case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
-		return getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, objectIDAll)
+		return getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(ctx, bh, privType, objType, objectIDAll, privilegeLevelStarStar)
 	case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
 		tree.PRIVILEGE_LEVEL_TYPE_TABLE,
 		tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
 		tree.PRIVILEGE_LEVEL_TYPE_STAR:
-		_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, astObjType, level)
+		privilegeLevel, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, astObjType, level)
 		if err != nil {
 			if !isMissingPrivilegeObjectError(err) {
 				return nil, err
 			}
 			return getRoleSetThatPrivilegeGrantedToWGOWithObjType(ctx, bh, privType, objType)
 		}
-		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, objId)
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(ctx, bh, privType, objType, objId, privilegeLevel)
 		if err != nil {
 			return nil, err
 		}
-		globalRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, objectIDAll)
+		globalRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(ctx, bh, privType, objType, objectIDAll, privilegeLevelStarStar)
 		if err != nil {
 			return nil, err
 		}
@@ -8249,7 +8259,7 @@ func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
 				}
 				return roleSet, nil
 			}
-			dbRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, dbId)
+			dbRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(ctx, bh, privType, objType, dbId, privilegeLevelDatabaseStar)
 			if err != nil {
 				return nil, err
 			}
@@ -8296,6 +8306,49 @@ func getRoleSetThatPrivilegeGrantedToWGOWithObj(
 			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objType, objId)
 	case PrivilegeTypeTableOwnership:
 		sql = getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(privType), objType, objId)
+	default:
+		sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
+	}
+
+	rset := &btree.Set[int64]{}
+	bh.ClearExecResultSet()
+	err := bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			id, err := erArray[0].GetInt64(ctx, i, 0)
+			if err != nil {
+				return nil, err
+			}
+			rset.Insert(id)
+		}
+	}
+	return rset, err
+}
+
+func getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(
+	ctx context.Context,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	objType objectType,
+	objId int64,
+	privilegeLevel privilegeLevelType,
+) (*btree.Set[int64], error) {
+	var sql string
+	switch privType {
+	case PrivilegeTypeSelect, PrivilegeTypeInsert, PrivilegeTypeUpdate,
+		PrivilegeTypeTruncate, PrivilegeTypeDelete, PrivilegeTypeReference,
+		PrivilegeTypeIndex, PrivilegeTypeValues, PrivilegeTypeTableAll:
+		sql = getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objType, objId, privilegeLevel)
+	case PrivilegeTypeTableOwnership:
+		sql = getSqlForCheckRoleHasPrivilegeWGOWithObjAndLevel(int64(privType), objType, objId, privilegeLevel)
 	default:
 		sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 	}

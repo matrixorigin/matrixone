@@ -788,7 +788,26 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 		t.Fatalf("build fallback update with generated column chain: %v", err)
 	}
 
-	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
+	query := logicPlan.GetQuery()
+	foundAgg := false
+	foundAnyValue := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+		foundAgg = true
+		for _, expr := range node.AggList {
+			if exprContainsFuncName(expr, "any_value") {
+				foundAnyValue = true
+				break
+			}
+		}
+	}
+	if !foundAgg || !foundAnyValue {
+		t.Fatalf("fallback update should build agg dedup path with any_value, foundAgg=%v foundAnyValue=%v", foundAgg, foundAnyValue)
+	}
+
+	generatedExpr := requireFallbackSourceProjectExpr(t, query,
 		len(mock.ctxt.tables["emp"].Cols)+3+len(mock.ctxt.tables["dept"].Cols)+1,
 		len(mock.ctxt.tables["emp"].Cols)+2, "chain-marker")
 	if !exprContainsColName(generatedExpr, "empno") || exprContainsColName(generatedExpr, "mgr") {
@@ -939,6 +958,27 @@ func assertFallbackUpdateProjectLength(t *testing.T, query *Query, projectLen in
 		return
 	}
 	t.Fatalf("missing fallback update project with length %d", projectLen)
+}
+
+func exprContainsFuncName(expr *plan.Expr, name string) bool {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F.Func != nil && e.F.Func.ObjName == name {
+			return true
+		}
+		for _, arg := range e.F.Args {
+			if exprContainsFuncName(arg, name) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprContainsFuncName(item, name) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func exprContainsStringLiteral(expr *plan.Expr, value string) bool {
