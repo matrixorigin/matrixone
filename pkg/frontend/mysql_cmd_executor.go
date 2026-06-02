@@ -96,8 +96,8 @@ func unclassifiedStatementInUncommittedTxnErrorInfo() string {
 	return "unclassified statement appears in uncommitted transaction"
 }
 
-func dataBranchMergePickExplicitTxnErrorInfo() string {
-	return "DATA BRANCH MERGE/PICK is not supported in explicit transactions"
+func dataBranchMergePickTxnErrorInfo() string {
+	return "DATA BRANCH MERGE/PICK is not supported in transactions"
 }
 
 func writeWriteConflictsErrorInfo() string {
@@ -2633,7 +2633,7 @@ func canExecuteStatementInUncommittedTransaction(
 	if !can {
 		switch stmt.(type) {
 		case *tree.DataBranchMerge, *tree.DataBranchPick:
-			return moerr.NewInternalError(reqCtx, dataBranchMergePickExplicitTxnErrorInfo())
+			return moerr.NewInternalError(reqCtx, dataBranchMergePickTxnErrorInfo())
 		}
 		//is ddl statement
 		if IsCreateDropDatabase(stmt) {
