@@ -28,6 +28,17 @@ func setResponse(ses *Session, isLastStmt bool, rspLen uint64) *Response {
 	return ses.SetNewResponse(OkResponse, rspLen, int(COM_QUERY), "", isLastStmt)
 }
 
+// isRowCountDML reports whether the statement is a DML whose affected rows
+// should be exposed by the ROW_COUNT() builtin.
+func isRowCountDML(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Replace, *tree.Load:
+		return true
+	default:
+		return false
+	}
+}
+
 // response the client
 func respClientWhenSuccess(ses *Session,
 	execCtx *ExecCtx) (err error) {
