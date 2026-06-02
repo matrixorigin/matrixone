@@ -509,8 +509,15 @@ var predefinedFunids = map[int]int{
 	HLL_ADD_AGG:                   453,
 	HLL_MERGE_AGG:                 454,
 	HLL_CARDINALITY:               455,
-	DATE_TRUNC:                    456,
-	FUNCTION_END_NUMBER:           457,
+	DATE_TRUNC:                    463,
+	JSON_TYPE:                     456,
+	JSON_VALID:                    457,
+	JSON_KEYS:                     458,
+	JSON_PRETTY:                   459,
+	JSON_SCHEMA_VALID:             460,
+	JSON_SCHEMA_VALID_REPORT:      461,
+	JSON_VALUE:                    462,
+	FUNCTION_END_NUMBER:           464,
 }
 
 func Test_funids(t *testing.T) {
