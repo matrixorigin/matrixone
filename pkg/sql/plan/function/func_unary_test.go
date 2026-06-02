@@ -1434,6 +1434,25 @@ func TestGeometry32ReturningUnary(t *testing.T) {
 	check(StExteriorRing, "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", "LINESTRING(0 0,4 0,4 4,0 4,0 0)")
 }
 
+func TestGeometry32Measures(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	runF32 := func(fn fEvalFn, in string, want float32) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{geom32WKB(t, in)}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_float32.ToType(), false, []float32{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	// ST_Length32 / ST_Area32 return float32 for a GEOMETRY32 input.
+	runF32(StLength32, "LINESTRING(0 0, 3 4)", 5.0)
+	runF32(StArea32, "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", 16.0)
+}
+
 func TestStXYRejectNonPoint(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{

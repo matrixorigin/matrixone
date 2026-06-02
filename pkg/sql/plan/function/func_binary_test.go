@@ -5288,6 +5288,31 @@ func TestStMeasuresGeodetic(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestGeometry32Distances(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	g32 := func(wkt string) string {
+		g, err := geo.ParseWKT(wkt)
+		require.NoError(t, err)
+		return string(geo.WriteWKBFloat32(g))
+	}
+	run := func(fn fEvalFn, a, b string, want float32) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32(a)}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32(b)}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_float32.ToType(), false, []float32{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	// ST_Distance / Frechet / Hausdorff on GEOMETRY32 return float32.
+	run(StDistance32, "POINT(0 0)", "POINT(3 4)", 5.0)
+	run(StFrechetDistance32, "LINESTRING(0 0, 10 0)", "LINESTRING(0 1, 10 1)", 1.0)
+	run(StHausdorffDistance32, "LINESTRING(0 0, 10 0)", "LINESTRING(0 1, 10 1)", 1.0)
+}
+
 func TestGeometry32ReturningBinary(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

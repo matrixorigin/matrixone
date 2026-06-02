@@ -3486,16 +3486,36 @@ func geometryLengthBySRID(payload []byte, srid uint32) (float64, error) {
 }
 
 func StLength(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stLength[float64](ivecs, result, proc, length, selectList)
+}
+
+// StLength32 is the GEOMETRY32 overload of ST_Length (returns float32).
+func StLength32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stLength[float32](ivecs, result, proc, length, selectList)
+}
+
+func stLength[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
-		return geometryLengthBySRID(v, srid)
+	return opUnaryBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v []byte) (T, error) {
+		l, err := geometryLengthBySRID(v, srid)
+		return T(l), err
 	}, selectList)
 }
 
 // StLengthWithSRID is the ST_Length(geom, srid) overload.
 func StLengthWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opBinaryStrFixedToFixedWithErrorCheck[int64, float64](ivecs, result, proc, length, func(v string, srid int64) (float64, error) {
-		return geometryLengthBySRID(functionUtil.QuickStrToBytes(v), uint32(srid))
+	return stLengthWithSRID[float64](ivecs, result, proc, length, selectList)
+}
+
+// StLengthWithSRID32 is the GEOMETRY32 overload of ST_Length(geom, srid).
+func StLengthWithSRID32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stLengthWithSRID[float32](ivecs, result, proc, length, selectList)
+}
+
+func stLengthWithSRID[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrFixedToFixedWithErrorCheck[int64, T](ivecs, result, proc, length, func(v string, srid int64) (T, error) {
+		l, err := geometryLengthBySRID(functionUtil.QuickStrToBytes(v), uint32(srid))
+		return T(l), err
 	}, selectList)
 }
 
@@ -3509,17 +3529,37 @@ func geometryAreaBySRID(payload []byte, srid uint32) (float64, error) {
 }
 
 func StArea(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stArea[float64](ivecs, result, proc, length, selectList)
+}
+
+// StArea32 is the GEOMETRY32 overload of ST_Area (returns float32).
+func StArea32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stArea[float32](ivecs, result, proc, length, selectList)
+}
+
+func stArea[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
-		return geometryAreaBySRID(v, srid)
+	return opUnaryBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v []byte) (T, error) {
+		a, err := geometryAreaBySRID(v, srid)
+		return T(a), err
 	}, selectList)
 }
 
 // StAreaWithSRID is the ST_Area(geom, srid) overload: the explicit SRID
 // overrides the geometry's type SRID for the computation.
 func StAreaWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opBinaryStrFixedToFixedWithErrorCheck[int64, float64](ivecs, result, proc, length, func(v string, srid int64) (float64, error) {
-		return geometryAreaBySRID(functionUtil.QuickStrToBytes(v), uint32(srid))
+	return stAreaWithSRID[float64](ivecs, result, proc, length, selectList)
+}
+
+// StAreaWithSRID32 is the GEOMETRY32 overload of ST_Area(geom, srid).
+func StAreaWithSRID32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stAreaWithSRID[float32](ivecs, result, proc, length, selectList)
+}
+
+func stAreaWithSRID[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrFixedToFixedWithErrorCheck[int64, T](ivecs, result, proc, length, func(v string, srid int64) (T, error) {
+		a, err := geometryAreaBySRID(functionUtil.QuickStrToBytes(v), uint32(srid))
+		return T(a), err
 	}, selectList)
 }
 

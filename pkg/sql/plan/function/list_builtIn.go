@@ -4107,6 +4107,9 @@ var supportedStringBuiltIns = []FuncNew{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
 				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
 				newOp:   func() executeLogicOfOverload { return StDistanceSphere }},
+			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type { return types.T_float32.ToType() },
+				newOp:   func() executeLogicOfOverload { return StDistanceSphere32 }},
 		},
 	},
 
@@ -4430,6 +4433,9 @@ var supportedStringBuiltIns = []FuncNew{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
 				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
 				newOp:   func() executeLogicOfOverload { return StFrechetDistance }},
+			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type { return types.T_float32.ToType() },
+				newOp:   func() executeLogicOfOverload { return StFrechetDistance32 }},
 		},
 	},
 	{
@@ -4441,6 +4447,9 @@ var supportedStringBuiltIns = []FuncNew{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
 				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
 				newOp:   func() executeLogicOfOverload { return StHausdorffDistance }},
+			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type { return types.T_float32.ToType() },
+				newOp:   func() executeLogicOfOverload { return StHausdorffDistance32 }},
 		},
 	},
 
@@ -4743,6 +4752,26 @@ var supportedStringBuiltIns = []FuncNew{
 					return StDistanceWithSRID
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_geometry32, types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StDistance32
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_geometry32, types.T_geometry32, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StDistanceWithSRID32
+				},
+			},
 		},
 	},
 
@@ -4795,6 +4824,26 @@ var supportedStringBuiltIns = []FuncNew{
 					return StLengthWithSRID
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StLength32
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_geometry32, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StLengthWithSRID32
+				},
+			},
 		},
 	},
 
@@ -4824,6 +4873,26 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return StAreaWithSRID
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StArea32
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_geometry32, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StAreaWithSRID32
 				},
 			},
 		},

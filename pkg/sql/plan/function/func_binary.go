@@ -8164,7 +8164,16 @@ func StSymDifference(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 // StFrechetDistance returns the discrete Fréchet distance (planar) between two
 // geometries' vertex sequences.
 func StFrechetDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
+	return stFrechetDistance[float64](ivecs, result, proc, length, selectList)
+}
+
+// StFrechetDistance32 is the GEOMETRY32 overload of ST_FrechetDistance.
+func StFrechetDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFrechetDistance[float32](ivecs, result, proc, length, selectList)
+}
+
+func stFrechetDistance[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
 		a, err := decodeGeoGeometry(v1)
 		if err != nil {
 			return 0, err
@@ -8177,14 +8186,23 @@ func StFrechetDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		if !ok {
 			return 0, moerr.NewInvalidInputNoCtx("ST_FrechetDistance: empty geometry")
 		}
-		return d, nil
+		return T(d), nil
 	}, selectList)
 }
 
 // StHausdorffDistance returns the discrete Hausdorff distance (planar) between
 // two geometries' vertex sets.
 func StHausdorffDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
+	return stHausdorffDistance[float64](ivecs, result, proc, length, selectList)
+}
+
+// StHausdorffDistance32 is the GEOMETRY32 overload of ST_HausdorffDistance.
+func StHausdorffDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stHausdorffDistance[float32](ivecs, result, proc, length, selectList)
+}
+
+func stHausdorffDistance[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
 		a, err := decodeGeoGeometry(v1)
 		if err != nil {
 			return 0, err
@@ -8197,7 +8215,7 @@ func StHausdorffDistance(ivecs []*vector.Vector, result vector.FunctionResultWra
 		if !ok {
 			return 0, moerr.NewInvalidInputNoCtx("ST_HausdorffDistance: empty geometry")
 		}
-		return d, nil
+		return T(d), nil
 	}, selectList)
 }
 
@@ -8455,7 +8473,16 @@ func StMakeEnvelope(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 // StDistanceSphere returns the great-circle distance in meters between two
 // geometries on a sphere of EarthRadiusMeters (ST_Distance_Sphere).
 func StDistanceSphere(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
+	return stDistanceSphere[float64](ivecs, result, proc, length, selectList)
+}
+
+// StDistanceSphere32 is the GEOMETRY32 overload of ST_Distance_Sphere.
+func StDistanceSphere32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDistanceSphere[float32](ivecs, result, proc, length, selectList)
+}
+
+func stDistanceSphere[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
 		lg, err := decodeGeoGeometry(v1)
 		if err != nil {
 			return 0, err
@@ -8468,7 +8495,7 @@ func StDistanceSphere(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		if !ok {
 			return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
 		}
-		return d, nil
+		return T(d), nil
 	}, selectList)
 }
 
@@ -8483,22 +8510,41 @@ func geometryDistanceBySRID(left, right []byte, srid uint32) (float64, error) {
 }
 
 func StDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDistance[float64](ivecs, result, proc, length, selectList)
+}
+
+// StDistance32 is the GEOMETRY32 overload of ST_Distance (returns float32).
+func StDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDistance[float32](ivecs, result, proc, length, selectList)
+}
+
+func stDistance[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if err := checkBinaryGeometryTypeSRID("ST_DISTANCE", ivecs); err != nil {
 		return err
 	}
 	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
-	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
-		return geometryDistanceBySRID(v1, v2, srid)
+	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
+		d, err := geometryDistanceBySRID(v1, v2, srid)
+		return T(d), err
 	}, selectList)
 }
 
 // StDistanceWithSRID is the ST_Distance(geom, geom, srid) overload: the explicit
 // SRID overrides the operand type SRIDs for the computation.
 func StDistanceWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDistanceWithSRID[float64](ivecs, result, proc, length, selectList)
+}
+
+// StDistanceWithSRID32 is the GEOMETRY32 overload of ST_Distance(geom, geom, srid).
+func StDistanceWithSRID32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDistanceWithSRID[float32](ivecs, result, proc, length, selectList)
+}
+
+func stDistanceWithSRID[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	left := vector.GenerateFunctionStrParameter(ivecs[0])
 	right := vector.GenerateFunctionStrParameter(ivecs[1])
 	srids := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
-	rs := vector.MustFunctionResult[float64](result)
+	rs := vector.MustFunctionResult[T](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && (selectList.IgnoreAllRow() ||
 			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
@@ -8520,7 +8566,7 @@ func StDistanceWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		if err != nil {
 			return err
 		}
-		if err := rs.Append(d, false); err != nil {
+		if err := rs.Append(T(d), false); err != nil {
 			return err
 		}
 	}
