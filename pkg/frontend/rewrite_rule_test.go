@@ -472,12 +472,9 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 		{30, "db2.t2", "select * from db2.t2 where age > 30"},
 	})
 
-	rules, err := loadRuleCache(context.Background(), ses)
-	require.NoError(t, err)
-	require.Equal(t, map[string]string{
-		"db1.t1": "(select a, age from db1.t1 where age < 3) union distinct (select A, Age from db1.t1 where age > 28)",
-		"db2.t2": "select a from db2.t2 where a = 20",
-	}, rules)
+	_, err := loadRuleCache(context.Background(), ses)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot be merged safely")
 }
 
 func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
@@ -685,40 +682,16 @@ func TestMergeRewriteRules(t *testing.T) {
 
 	left := "select a from db1.t1 where a = 1"
 	right := "select a from db1.t1 where a = 2"
-	merged, err := mergeRewriteRules(ctx, left, right)
-	require.NoError(t, err)
-	require.Equal(t, "(select a from db1.t1 where a = 1) union distinct (select a from db1.t1 where a = 2)", merged)
-
-	merged, err = mergeRewriteRules(ctx, merged, "select a from db1.t1 where a = 3")
-	require.NoError(t, err)
-	require.Equal(t, "((select a from db1.t1 where a = 1) union distinct (select a from db1.t1 where a = 2)) union distinct (select a from db1.t1 where a = 3)", merged)
-
-	merged, err = mergeRewriteRules(ctx, "select a, age from db1.t1 where age > 28", "select a from db1.t1 where a = 2")
-	require.NoError(t, err)
-	require.Equal(t,
-		"select a from db1.t1 where a = 2",
-		merged,
-	)
-
-	merged, err = mergeRewriteRules(ctx, "select * from db1.t1 where age > 28", "select * from db1.t1 where age < 3")
-	require.NoError(t, err)
-	require.Equal(t,
-		"select * from db1.t1 where age < 3",
-		merged,
-	)
-
-	merged, err = mergeRewriteRules(ctx, "select t.* from db1.t1 as t where age > 28", "select t.* from db1.t1 as t where age < 3")
-	require.NoError(t, err)
-	require.Equal(t,
-		"select t.* from db1.t1 as t where age < 3",
-		merged,
-	)
-
-	fallbackCases := []struct {
+	cases := []struct {
 		name  string
 		left  string
 		right string
 	}{
+		{
+			name:  "same simple projection different filter",
+			left:  left,
+			right: right,
+		},
 		{
 			name:  "top-level order by",
 			left:  "select a from db1.t1 where age > 28 order by a",
@@ -764,69 +737,41 @@ func TestMergeRewriteRules(t *testing.T) {
 			left:  "select a + 1 as b from db1.t1 where age > 28",
 			right: "select a + 2 as b from db1.t1 where age < 3",
 		},
+		{
+			name:  "star projection",
+			left:  "select * from db1.t1 where age > 28",
+			right: "select * from db1.t1 where age < 3",
+		},
+		{
+			name:  "qualified star projection",
+			left:  "select t.* from db1.t1 as t where age > 28",
+			right: "select t.* from db1.t1 as t where age < 3",
+		},
+		{
+			name:  "same aliases same source columns different filter",
+			left:  "select a as x from db1.t1 where age > 28",
+			right: "select a as x from db1.t1 where age < 3",
+		},
+		{
+			name:  "same scalar expressions different filter",
+			left:  "select a + 1 as b from db1.t1 where age > 28",
+			right: "select a + 1 as b from db1.t1 where age < 3",
+		},
 	}
-	for _, tc := range fallbackCases {
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			merged, err = mergeRewriteRules(ctx, tc.left, tc.right)
-			require.NoError(t, err)
-			require.Equal(t, tc.right, merged)
+			_, err := mergeRewriteRules(ctx, tc.left, tc.right)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "cannot be merged safely")
 		})
 	}
 
-	merged, err = mergeRewriteRules(ctx, "select a as x from db1.t1 where age > 28", "select a as x from db1.t1 where age < 3")
+	merged, err := mergeRewriteRules(ctx, "select a from db1.t1 where a = 1", "select a from db1.t1 where a = 1")
 	require.NoError(t, err)
-	require.Equal(t, "(select a as x from db1.t1 where age > 28) union distinct (select a as x from db1.t1 where age < 3)", merged)
-
-	merged, err = mergeRewriteRules(ctx, "select a + 1 as b from db1.t1 where age > 28", "select a + 1 as b from db1.t1 where age < 3")
-	require.NoError(t, err)
-	require.Equal(t, "(select a + 1 as b from db1.t1 where age > 28) union distinct (select a + 1 as b from db1.t1 where age < 3)", merged)
+	require.Equal(t, "select a from db1.t1 where a = 1", merged)
 
 	_, err = mergeRewriteRules(ctx, "select a from", "select a from db1.t1")
 	require.Error(t, err)
-}
-
-func TestMergeRewriteRulesFallbackWhenEitherSideIsUnmergeable(t *testing.T) {
-	ctx := context.Background()
-
-	cases := []struct {
-		name  string
-		left  string
-		right string
-	}{
-		{
-			name:  "left has order by",
-			left:  "select a from db1.t1 where a = 1 order by a",
-			right: "select a from db1.t1 where a = 2",
-		},
-		{
-			name:  "right has order by",
-			left:  "select a from db1.t1 where a = 1",
-			right: "select a from db1.t1 where a = 2 order by a",
-		},
-		{
-			name:  "left has aggregate",
-			left:  "select count(*) as c from db1.t1 where a = 1",
-			right: "select count(*) as c from db1.t1 where a = 2",
-		},
-		{
-			name:  "right has aggregate",
-			left:  "select a from db1.t1 where a = 1",
-			right: "select count(*) as a from db1.t1 where a = 2",
-		},
-		{
-			name:  "right has unsupported expression",
-			left:  "select a from db1.t1 where a = 1",
-			right: "select @@sql_mode as a from db1.t1 where a = 2",
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			merged, err := mergeRewriteRules(ctx, tc.left, tc.right)
-			require.NoError(t, err)
-			require.Equal(t, tc.right, merged)
-		})
-	}
 }
 
 func TestRewriteRuleOutputColumns(t *testing.T) {
