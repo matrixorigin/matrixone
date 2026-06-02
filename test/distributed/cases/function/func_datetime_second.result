@@ -1,0 +1,52 @@
+SELECT SECOND('15:30:45') AS result1;
+invalid argument parse timestamp, bad value 15:30:45
+SELECT SECOND('15:30:45') AS time_with_seconds;
+invalid argument parse timestamp, bad value 15:30:45
+SELECT SECOND('00:00:00') AS zero_seconds;
+invalid argument parse timestamp, bad value 00:00:00
+SELECT SECOND('23:59:59') AS max_seconds;
+invalid argument parse timestamp, bad value 23:59:59
+SELECT SECOND('12:34:56') AS various_seconds;
+invalid argument parse timestamp, bad value 12:34:56
+SELECT SECOND('2024-12-20 15:30:45') AS datetime_with_seconds;
+datetime_with_seconds
+45
+SELECT SECOND('2024-12-20 00:00:00') AS datetime_zero;
+datetime_zero
+0
+SELECT SECOND('2024-12-20 23:59:59') AS datetime_max;
+datetime_max
+59
+SELECT SECOND(TIMESTAMP('2024-12-20 15:30:45')) AS timestamp_with_seconds;
+timestamp_with_seconds
+45
+SELECT SECOND(NULL) AS null_input;
+null_input
+null
+CREATE TABLE t1(t TIME);
+INSERT INTO t1 VALUES ('15:30:45'), ('00:00:00'), ('23:59:59'), ('12:34:56');
+SELECT t, SECOND(t) AS second FROM t1;
+t    second
+15:30:45    45
+00:00:00    0
+23:59:59    59
+12:34:56    56
+DROP TABLE t1;
+CREATE TABLE t1(dt DATETIME);
+INSERT INTO t1 VALUES ('2024-12-20 15:30:45'), ('2024-12-20 00:00:00'), ('2024-12-20 23:59:59');
+SELECT dt, SECOND(dt) AS second FROM t1;
+dt    second
+2024-12-20 15:30:45    45
+2024-12-20 00:00:00    0
+2024-12-20 23:59:59    59
+DROP TABLE t1;
+CREATE TABLE t1(t TIME);
+INSERT INTO t1 VALUES ('15:30:45'), ('00:00:00'), ('23:59:59'), ('12:34:56');
+SELECT * FROM t1 WHERE SECOND(t) > 30;
+t
+15:30:45
+23:59:59
+12:34:56
+DROP TABLE t1;
+SELECT SECOND('15:30:45') AS result1, SECOND('15:30:00') AS result2, SECOND('15:30:59') AS result3;
+invalid argument parse timestamp, bad value 15:30:45
