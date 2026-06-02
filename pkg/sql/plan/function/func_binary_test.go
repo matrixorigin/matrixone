@@ -5288,6 +5288,68 @@ func TestStMeasuresGeodetic(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestGeometry32ReturningBinary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	g32 := func(wkt string) string {
+		g, err := geo.ParseWKT(wkt)
+		require.NoError(t, err)
+		return string(geo.WriteWKBFloat32(g))
+	}
+	// out must be genuinely float32 WKB and round-trip to wantWKT.
+	assertF32 := func(tc FunctionTestCase, wantWKT string) {
+		t.Helper()
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+		raw := tc.GetResultVectorDirectly().GetBytesAt(0)
+		g, err := geo.ReadWKBFloat32(raw)
+		require.NoError(t, err, "output should be float32 WKB")
+		require.Equal(t, wantWKT, geo.WriteWKT(g))
+	}
+
+	// ST_Simplify(geom32, tol) -> geom32.
+	assertF32(NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32("LINESTRING(0 0, 5 0.0001, 10 0)")}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0.001}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"LINESTRING(0 0,10 0)"}, []bool{false}), StSimplify),
+		"LINESTRING(0 0,10 0)")
+
+	// ST_LineInterpolatePoint(geom32, frac) -> geom32 point.
+	assertF32(NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32("LINESTRING(0 0, 10 0)")}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0.5}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"POINT(5 0)"}, []bool{false}), StLineInterpolatePoint),
+		"POINT(5 0)")
+
+	// ST_Collect(geom32, geom32) -> geom32 multipoint.
+	assertF32(NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32("POINT(0 0)")}, []bool{false}),
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32("POINT(1 1)")}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"MULTIPOINT(0 0,1 1)"}, []bool{false}), StCollect),
+		"MULTIPOINT(0 0,1 1)")
+
+	// ST_Union(geom32, geom32) -> geom32 polygon. Expected computed via the same
+	// engine so the ring order matches; the value is checked to be float32 WKB.
+	ua, _ := geo.ParseWKT("POLYGON((0 0,4 0,4 4,0 4,0 0))")
+	ub, _ := geo.ParseWKT("POLYGON((4 0,8 0,8 4,4 4,4 0))")
+	uexp, err := geo.Overlay(ua, ub, geo.OpUnion)
+	require.NoError(t, err)
+	wantU := geo.WriteWKT(uexp)
+	assertF32(NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32("POLYGON((0 0,4 0,4 4,0 4,0 0))")}, []bool{false}),
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32("POLYGON((4 0,8 0,8 4,4 4,4 0))")}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{wantU}, []bool{false}), StUnion),
+		wantU)
+}
+
 func TestBufferOp(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

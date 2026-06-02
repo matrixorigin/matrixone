@@ -8072,6 +8072,7 @@ func StPointFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrap
 // StBuffer returns the buffer polygon of a geometry at the given distance
 // (default 8 segments per quarter circle).
 func StBuffer(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opBinaryStrFixedToStrWithErrorCheck[float64](ivecs, result, proc, length, func(v string, dist float64) (string, error) {
 		g, err := decodeGeoGeometry(functionUtil.QuickStrToBytes(v))
 		if err != nil {
@@ -8081,12 +8082,13 @@ func StBuffer(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		if berr != nil {
 			return "", moerr.NewInvalidInputNoCtx(berr.Error())
 		}
-		return functionUtil.QuickBytesToStr(geo.WriteWKB(b)), nil
+		return functionUtil.QuickBytesToStr(geoEncodeWKB(b, f32)), nil
 	}, selectList)
 }
 
 // StBufferQS is ST_Buffer with an explicit segments-per-quarter-circle count.
 func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	source := vector.GenerateFunctionStrParameter(ivecs[0])
 	dists := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
 	quads := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
@@ -8109,7 +8111,7 @@ func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if berr != nil {
 			return moerr.NewInvalidInputNoCtx(berr.Error())
 		}
-		if err := rs.AppendBytes(geo.WriteWKB(b), false); err != nil {
+		if err := rs.AppendBytes(geoEncodeWKB(b, f32), false); err != nil {
 			return err
 		}
 	}
@@ -8119,6 +8121,8 @@ func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 // overlayBinary builds an eval function for a polygon Boolean operation.
 func overlayBinary(op geo.BoolOp) fEvalFn {
 	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		// float32 output only when both operands are GEOMETRY32.
+		f32 := geometryArgIsFloat32(ivecs, 0) && geometryArgIsFloat32(ivecs, 1)
 		return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
 			a, err := decodeGeoGeometry(v1)
 			if err != nil {
@@ -8132,7 +8136,7 @@ func overlayBinary(op geo.BoolOp) fEvalFn {
 			if oerr != nil {
 				return nil, moerr.NewInvalidInputNoCtx(oerr.Error())
 			}
-			return geo.WriteWKB(g), nil
+			return geoEncodeWKB(g, f32), nil
 		}, selectList)
 	}
 }
@@ -8212,6 +8216,7 @@ func requireLineString(v []byte) (geo.LineString, error) {
 
 // StLineInterpolatePoint returns the point at a fraction of a line's length.
 func StLineInterpolatePoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opBinaryStrFixedToStrWithErrorCheck[float64](ivecs, result, proc, length, func(v string, f float64) (string, error) {
 		l, err := requireLineString(functionUtil.QuickStrToBytes(v))
 		if err != nil {
@@ -8221,12 +8226,13 @@ func StLineInterpolatePoint(ivecs []*vector.Vector, result vector.FunctionResult
 		if err != nil {
 			return "", moerr.NewInvalidInputNoCtx(err.Error())
 		}
-		return functionUtil.QuickBytesToStr(geo.WriteWKB(p)), nil
+		return functionUtil.QuickBytesToStr(geoEncodeWKB(p, f32)), nil
 	}, selectList)
 }
 
 // StLineInterpolatePoints returns points at every fraction interval along a line.
 func StLineInterpolatePoints(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opBinaryStrFixedToStrWithErrorCheck[float64](ivecs, result, proc, length, func(v string, f float64) (string, error) {
 		l, err := requireLineString(functionUtil.QuickStrToBytes(v))
 		if err != nil {
@@ -8236,12 +8242,13 @@ func StLineInterpolatePoints(ivecs []*vector.Vector, result vector.FunctionResul
 		if err != nil {
 			return "", moerr.NewInvalidInputNoCtx(err.Error())
 		}
-		return functionUtil.QuickBytesToStr(geo.WriteWKB(g)), nil
+		return functionUtil.QuickBytesToStr(geoEncodeWKB(g, f32)), nil
 	}, selectList)
 }
 
 // StPointAtDistance returns the point at a distance along a line.
 func StPointAtDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opBinaryStrFixedToStrWithErrorCheck[float64](ivecs, result, proc, length, func(v string, d float64) (string, error) {
 		l, err := requireLineString(functionUtil.QuickStrToBytes(v))
 		if err != nil {
@@ -8251,25 +8258,27 @@ func StPointAtDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		if err != nil {
 			return "", moerr.NewInvalidInputNoCtx(err.Error())
 		}
-		return functionUtil.QuickBytesToStr(geo.WriteWKB(p)), nil
+		return functionUtil.QuickBytesToStr(geoEncodeWKB(p, f32)), nil
 	}, selectList)
 }
 
 // StSimplify reduces a geometry's vertices with Douglas-Peucker at the given
 // planar tolerance.
 func StSimplify(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opBinaryStrFixedToStrWithErrorCheck[float64](ivecs, result, proc, length, func(v string, tol float64) (string, error) {
 		g, err := decodeGeoGeometry(functionUtil.QuickStrToBytes(v))
 		if err != nil {
 			return "", err
 		}
-		return functionUtil.QuickBytesToStr(geo.WriteWKB(geo.Simplify(g, tol))), nil
+		return functionUtil.QuickBytesToStr(geoEncodeWKB(geo.Simplify(g, tol), f32)), nil
 	}, selectList)
 }
 
 // StCollect bundles two geometries into the most specific aggregate (multi or
 // collection).
 func StCollect(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0) && geometryArgIsFloat32(ivecs, 1)
 	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
 		a, err := decodeGeoGeometry(v1)
 		if err != nil {
@@ -8279,7 +8288,7 @@ func StCollect(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if err != nil {
 			return nil, err
 		}
-		return geo.WriteWKB(geo.Collect(a, b)), nil
+		return geoEncodeWKB(geo.Collect(a, b), f32), nil
 	}, selectList)
 }
 

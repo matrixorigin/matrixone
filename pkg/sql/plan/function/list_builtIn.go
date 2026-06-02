@@ -4320,6 +4320,9 @@ var supportedStringBuiltIns = []FuncNew{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_float64},
 				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
 				newOp:   func() executeLogicOfOverload { return StSimplify }},
+			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_float64},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StSimplify }},
 		},
 	},
 	{
@@ -4329,6 +4332,9 @@ var supportedStringBuiltIns = []FuncNew{
 		checkFn:    fixedTypeMatch,
 		Overloads: []overload{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StCollect }},
+			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_geometry32},
 				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
 				newOp:   func() executeLogicOfOverload { return StCollect }},
 		},
@@ -4347,6 +4353,12 @@ var supportedStringBuiltIns = []FuncNew{
 			{overloadId: 1, args: []types.T{types.T_geometry, types.T_float64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
 				newOp:   func() executeLogicOfOverload { return StBufferQS }},
+			{overloadId: 2, args: []types.T{types.T_geometry32, types.T_float64},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StBuffer }},
+			{overloadId: 3, args: []types.T{types.T_geometry32, types.T_float64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StBufferQS }},
 		},
 	},
 
@@ -4360,6 +4372,9 @@ var supportedStringBuiltIns = []FuncNew{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
 				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
 				newOp:   func() executeLogicOfOverload { return StUnion }},
+			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StUnion }},
 		},
 	},
 	{
@@ -4369,6 +4384,9 @@ var supportedStringBuiltIns = []FuncNew{
 		checkFn:    fixedTypeMatch,
 		Overloads: []overload{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StIntersection }},
+			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_geometry32},
 				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
 				newOp:   func() executeLogicOfOverload { return StIntersection }},
 		},
@@ -4382,6 +4400,9 @@ var supportedStringBuiltIns = []FuncNew{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
 				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
 				newOp:   func() executeLogicOfOverload { return StDifference }},
+			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StDifference }},
 		},
 	},
 	{
@@ -4391,6 +4412,9 @@ var supportedStringBuiltIns = []FuncNew{
 		checkFn:    fixedTypeMatch,
 		Overloads: []overload{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StSymDifference }},
+			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_geometry32},
 				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
 				newOp:   func() executeLogicOfOverload { return StSymDifference }},
 		},
@@ -4430,6 +4454,9 @@ var supportedStringBuiltIns = []FuncNew{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_float64},
 				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
 				newOp:   func() executeLogicOfOverload { return StLineInterpolatePoint }},
+			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_float64},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StLineInterpolatePoint }},
 		},
 	},
 	{
@@ -4441,6 +4468,9 @@ var supportedStringBuiltIns = []FuncNew{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_float64},
 				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
 				newOp:   func() executeLogicOfOverload { return StLineInterpolatePoints }},
+			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_float64},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StLineInterpolatePoints }},
 		},
 	},
 	{
@@ -4450,6 +4480,9 @@ var supportedStringBuiltIns = []FuncNew{
 		checkFn:    fixedTypeMatch,
 		Overloads: []overload{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_float64},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StPointAtDistance }},
+			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_float64},
 				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
 				newOp:   func() executeLogicOfOverload { return StPointAtDistance }},
 		},
