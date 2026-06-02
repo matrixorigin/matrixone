@@ -61,7 +61,17 @@ func Build(v *vector.Vector) ([]byte, error) {
 // all rows) — e.g. IVF's centroid-filtered keys.
 func BuildMasked(v *vector.Vector, keep []uint8) ([]byte, error) {
 	if SupportsBitset(*v.GetType()) {
-		tag, payload, err := BuildIntegerDocFilterU64(maskedU64(v, keep))
+		var tag byte
+		var payload []byte
+		var err error
+		if keep == nil {
+			// Whole vector: build directly from the column buffer in C (one cgo
+			// call), no per-row Go decode.
+			tag, payload, err = BuildIntegerDocFilter(v)
+		} else {
+			// Subset: extract the surviving keys in Go, then build from them in C.
+			tag, payload, err = BuildIntegerDocFilterU64(maskedU64(v, keep))
+		}
 		if err != nil {
 			return nil, err
 		}

@@ -14,8 +14,17 @@
 
 package docfilter
 
+/*
+#include <stdlib.h>
+#include "../../../cgo/cbitmap.h"
+*/
+import "C"
+
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"sync/atomic"
+	"unsafe"
+
+	_ "github.com/matrixorigin/matrixone/cgo"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -68,72 +77,69 @@ func BuildIntegerDocFilterU64(vals []uint64) (byte, []byte, error) {
 	return TagCRoaring, data, nil
 }
 
-// CbitmapDocFilter wraps the dense (C-assisted) bitmap.Bitmap and implements
-// engine.DocIDFilter. Pure-Go membership (one shift+mask), so it is the fastest
-// exact filter for dense, bounded integer doc_ids.
+// CbitmapDocFilter wraps a C dense bitset (cgo/cbitmap) and implements
+// engine.DocIDFilter. Build and probe run entirely in C over the raw column
+// buffer (one cgo call per vector), and it uses CRoaring-style refcounting so
+// the same C bitset can be shared across parallel readers and freed once. It is
+// the fastest exact filter for dense, bounded integer doc_ids.
 type CbitmapDocFilter struct {
-	bm *bitmap.Bitmap
+	ptr    unsafe.Pointer
+	refcnt int32
 }
 
-// buildCbitmap builds a dense bitmap from the given values, returning ok=false
-// (no error) if the max value exceeds MaxCbitmapBits so the caller can fall back.
-func buildCbitmap(vals []uint64) (*bitmap.Bitmap, bool) {
-	// Too many candidate keys: skip the dense bitmap (CRoaring is more
-	// memory-efficient for large sets). Same budget as the id-range cap below
-	// (a dense bitmap is only worthwhile within MaxCbitmapBits), and an early
-	// out before the max scan. For unique PKs count <= maxId+1, so this only
-	// binds on pathological duplicate-heavy input.
-	if uint64(len(vals)) > MaxCbitmapBits {
-		return nil, false
+// cbitmapSerialize serializes a C bitset handle to bytes (no tag prefix).
+func cbitmapSerialize(f unsafe.Pointer) ([]byte, error) {
+	var clen C.size_t
+	buf := C.mo_cbitmap_serialize(f, &clen)
+	if buf == nil {
+		return nil, moerr.NewInternalErrorNoCtx("cbitmap: serialize failed")
 	}
-	var maxv uint64
-	for _, v := range vals {
-		if v > maxv {
-			maxv = v
-		}
-	}
-	if len(vals) > 0 && !CbitmapFeasible(maxv) {
-		return nil, false
-	}
-	bm := &bitmap.Bitmap{}
-	bm.InitWithSize(int64(maxv + 1))
-	bm.AddMany(vals)
-	return bm, true
+	defer C.mo_cbitmap_free_buf(buf)
+	return C.GoBytes(unsafe.Pointer(buf), C.int(clen)), nil
 }
 
-// BuildCbitmapBytes builds a dense bitset from an integer doc_id vector and
-// returns its serialization (no tag). ok=false means the id range is too large
-// for a dense bitmap (caller should use CRoaring instead).
+// BuildCbitmapBytes builds a dense bitset from an integer doc_id vector (read
+// directly in C) and returns its serialization (no tag). ok=false means the id
+// range is too large for a dense bitmap (caller should use CRoaring instead).
 func BuildCbitmapBytes(v *vector.Vector) (data []byte, ok bool, err error) {
-	vals := vectorToU64(v)
-	bm, ok := buildCbitmap(vals)
-	if !ok {
+	cdata, dataLen, elemsz, nitem, nullPtr, nullLen := vecFixedArgs(v)
+	f := C.mo_cbitmap_build_fixed(cdata, dataLen, elemsz, nitem, nullPtr, nullLen,
+		C.uint64_t(MaxCbitmapBits))
+	if f == nil {
+		// id range exceeds MaxCbitmapBits (or OOM): fall back to CRoaring.
 		return nil, false, nil
 	}
-	return bm.Marshal(), true, nil
+	defer C.mo_cbitmap_free(f)
+	b, err := cbitmapSerialize(f)
+	if err != nil {
+		return nil, false, err
+	}
+	return b, true, nil
 }
 
 // BuildCbitmapBytesU64 is the explicit-set variant (e.g. IVF centroid-filtered
 // keys). ok=false means the id range is too large for a dense bitmap.
 func BuildCbitmapBytesU64(vals []uint64) (data []byte, ok bool, err error) {
-	bm, ok := buildCbitmap(vals)
-	if !ok {
+	var f unsafe.Pointer
+	if len(vals) > 0 {
+		// Treat the uint64 slice as a fixed 8-byte-element buffer; on a
+		// little-endian platform each element's bytes decode back to the value.
+		f = C.mo_cbitmap_build_fixed(unsafe.Pointer(&vals[0]),
+			C.size_t(len(vals)*8), C.size_t(8), C.size_t(len(vals)), nil, 0,
+			C.uint64_t(MaxCbitmapBits))
+	} else {
+		f = C.mo_cbitmap_build_fixed(nil, 0, C.size_t(8), 0, nil, 0,
+			C.uint64_t(MaxCbitmapBits))
+	}
+	if f == nil {
 		return nil, false, nil
 	}
-	return bm.Marshal(), true, nil
-}
-
-// vectorToU64 decodes a fixed integer vector's non-null rows to []uint64.
-func vectorToU64(v *vector.Vector) []uint64 {
-	n := v.Length()
-	out := make([]uint64, 0, n)
-	for i := 0; i < n; i++ {
-		if v.IsNull(uint64(i)) {
-			continue
-		}
-		out = append(out, rawIntToUint64(v.GetRawBytesAt(i)))
+	defer C.mo_cbitmap_free(f)
+	b, err := cbitmapSerialize(f)
+	if err != nil {
+		return nil, false, err
 	}
-	return out
+	return b, true, nil
 }
 
 // NewCbitmapDocFilter deserializes a dense bitset payload (no tag prefix).
@@ -141,39 +147,39 @@ func NewCbitmapDocFilter(data []byte) (*CbitmapDocFilter, error) {
 	if len(data) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("cbitmap: empty payload")
 	}
-	bm := &bitmap.Bitmap{}
-	if err := bm.UnmarshalBinary(data); err != nil {
-		return nil, err
+	ptr := C.mo_cbitmap_deserialize((*C.uint8_t)(unsafe.Pointer(&data[0])), C.size_t(len(data)))
+	if ptr == nil {
+		return nil, moerr.NewInternalErrorNoCtx("cbitmap: deserialize failed")
 	}
-	return &CbitmapDocFilter{bm: bm}, nil
+	return &CbitmapDocFilter{ptr: ptr, refcnt: 1}, nil
 }
 
 // Test reports whether the raw fixed bytes of a single doc_id are present.
 func (f *CbitmapDocFilter) Test(data []byte) bool {
-	if f == nil || f.bm == nil {
+	if f == nil || f.ptr == nil {
 		return false
 	}
-	return f.bm.Contains(rawIntToUint64(data))
+	return bool(C.mo_cbitmap_contain(f.ptr, C.uint64_t(rawIntToUint64(data))))
 }
 
-// TestVector tests every row of an integer doc_id vector.
+// TestVector tests every row of an integer doc_id vector in one cgo call.
 func (f *CbitmapDocFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8 {
-	if f == nil || f.bm == nil {
+	if f == nil || f.ptr == nil {
 		return nil
 	}
-	n := v.Length()
-	res := make([]uint8, n)
-	for i := 0; i < n; i++ {
-		isnull := v.IsNull(uint64(i))
-		exist := false
-		if !isnull {
-			exist = f.bm.Contains(rawIntToUint64(v.GetRawBytesAt(i)))
-		}
-		if exist {
-			res[i] = 1
-		}
-		if cb != nil {
-			cb(exist, isnull, i)
+	length := v.Length()
+	res := make([]uint8, length)
+	if length == 0 {
+		return res
+	}
+	data, dataLen, elemsz, nitem, nullPtr, nullLen := vecFixedArgs(v)
+	if data != nil {
+		C.mo_cbitmap_test_fixed(f.ptr, data, dataLen, elemsz, nitem, nullPtr, nullLen, unsafe.Pointer(&res[0]))
+	}
+	if cb != nil {
+		nulls := v.GetNulls()
+		for i := 0; i < length; i++ {
+			cb(res[i] != 0, nulls.Contains(uint64(i)), i)
 		}
 	}
 	return res
@@ -181,21 +187,27 @@ func (f *CbitmapDocFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)
 
 // Valid reports whether the filter is usable.
 func (f *CbitmapDocFilter) Valid() bool {
-	return f != nil && f.bm != nil
+	return f != nil && f.ptr != nil
 }
 
-// Share returns a new wrapper over the same bitmap for a parallel reader; the
-// underlying bitmap is read-only and GC-reclaimed once all wrappers drop it.
+// SharePointer increments the refcount and returns the same filter, so each
+// parallel reader holds a share and the C bitset is freed exactly once.
+func (f *CbitmapDocFilter) SharePointer() *CbitmapDocFilter {
+	atomic.AddInt32(&f.refcnt, 1)
+	return f
+}
+
+// Share implements DocIDFilter (refcounted; returns the same C bitset).
 func (f *CbitmapDocFilter) Share() DocIDFilter {
-	if f == nil {
-		return nil
-	}
-	return &CbitmapDocFilter{bm: f.bm}
+	return f.SharePointer()
 }
 
-// Free drops this wrapper's reference (pure Go, GC reclaims the bitmap).
+// Free drops one reference; the C bitset is released when the last is freed.
 func (f *CbitmapDocFilter) Free() {
-	if f != nil {
-		f.bm = nil
+	if f != nil && f.ptr != nil {
+		if atomic.AddInt32(&f.refcnt, -1) == 0 {
+			C.mo_cbitmap_free(f.ptr)
+			f.ptr = nil
+		}
 	}
 }

@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -60,6 +59,16 @@ func makeProbeVec(tb testing.TB, mp *mpool.MPool, rows int) *vector.Vector {
 	return v
 }
 
+// mustCbitmap builds + serializes a dense cbitmap, failing the bench if the id
+// range is not feasible (the bench keys are dense, so it always should be).
+func mustCbitmap(tb testing.TB, v *vector.Vector) []byte {
+	out, ok, err := BuildCbitmapBytes(v)
+	if err != nil || !ok {
+		tb.Fatalf("build cbitmap: ok=%v err=%v", ok, err)
+	}
+	return out
+}
+
 // BenchmarkBuild compares building + serializing a CBloomFilter vs a roaring64
 // bitset from the same N integer doc_ids. Reports the serialized size too.
 func BenchmarkBuild(b *testing.B) {
@@ -97,20 +106,16 @@ func BenchmarkBuild(b *testing.B) {
 			b.ReportMetric(float64(sz), "bytes")
 		})
 
-		// cbitmap: a DENSE bitset indexed by the doc_id value. Sized to the max
-		// key (here 2N), so size = O(max value), not O(N) — only viable for
+		// cbitmap: a DENSE bitset indexed by the doc_id value, built + serialized
+		// in C directly from the column buffer (one cgo call). Sized to the max
+		// key (here ~2N), so size = O(max value), not O(N) — only viable for
 		// dense/bounded integer PKs. Keys are odd values in [1, 2N).
 		b.Run(fmt.Sprintf("cbitmap/N=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
-			col := vector.MustFixedColNoTypeCheck[int64](keyvec)
 			var sz int
 			for i := 0; i < b.N; i++ {
-				bm := &bitmap.Bitmap{}
-				bm.InitWithSize(int64(2 * n))
-				for _, v := range col {
-					bm.Add(uint64(v))
-				}
-				sz = len(bm.Marshal())
+				out := mustCbitmap(b, keyvec)
+				sz = len(out)
 			}
 			b.ReportMetric(float64(sz), "bytes")
 		})
@@ -146,12 +151,10 @@ func BenchmarkTestVector(b *testing.B) {
 		bf := bloomfilter.NewCBloomFilterWithProbability(int64(n), benchFpProbability)
 		bf.AddVector(keyvec)
 		rf := &RoaringDocFilter{bm: BuildBitset(keyvec)}
-		cbm := &bitmap.Bitmap{}
-		cbm.InitWithSize(int64(2 * n))
-		for _, v := range vector.MustFixedColNoTypeCheck[int64](keyvec) {
-			cbm.Add(uint64(v))
+		cbf, err := NewCbitmapDocFilter(mustCbitmap(b, keyvec))
+		if err != nil {
+			b.Fatal(err)
 		}
-		probeCol := vector.MustFixedColNoTypeCheck[int64](probe)
 		crf, err := NewCRoaringDocFilter(must(BuildCRoaringBytes(keyvec)))
 		if err != nil {
 			b.Fatal(err)
@@ -172,9 +175,7 @@ func BenchmarkTestVector(b *testing.B) {
 		b.Run(fmt.Sprintf("cbitmap/N=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				for _, v := range probeCol {
-					_ = cbm.Contains(uint64(v))
-				}
+				cbf.TestVector(probe, nil)
 			}
 		})
 		b.Run(fmt.Sprintf("croaring/N=%d", n), func(b *testing.B) {
@@ -185,6 +186,7 @@ func BenchmarkTestVector(b *testing.B) {
 		})
 
 		bf.Free()
+		cbf.Free()
 		crf.Free()
 		keyvec.Free(mp)
 		probe.Free(mp)
@@ -206,12 +208,10 @@ func BenchmarkTestSingle(b *testing.B) {
 		bf := bloomfilter.NewCBloomFilterWithProbability(int64(n), benchFpProbability)
 		bf.AddVector(keyvec)
 		rf := &RoaringDocFilter{bm: BuildBitset(keyvec)}
-		cbm := &bitmap.Bitmap{}
-		cbm.InitWithSize(int64(2 * n))
-		for _, v := range vector.MustFixedColNoTypeCheck[int64](keyvec) {
-			cbm.Add(uint64(v))
+		cbf, err := NewCbitmapDocFilter(mustCbitmap(b, keyvec))
+		if err != nil {
+			b.Fatal(err)
 		}
-		probeCol := vector.MustFixedColNoTypeCheck[int64](probe)
 		crf, err := NewCRoaringDocFilter(must(BuildCRoaringBytes(keyvec)))
 		if err != nil {
 			b.Fatal(err)
@@ -233,8 +233,8 @@ func BenchmarkTestSingle(b *testing.B) {
 		})
 		b.Run(fmt.Sprintf("cbitmap/N=%d", n), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				for _, v := range probeCol {
-					_ = cbm.Contains(uint64(v))
+				for _, r := range raws {
+					_ = cbf.Test(r)
 				}
 			}
 		})
@@ -247,6 +247,7 @@ func BenchmarkTestSingle(b *testing.B) {
 		})
 
 		bf.Free()
+		cbf.Free()
 		crf.Free()
 		keyvec.Free(mp)
 		probe.Free(mp)
