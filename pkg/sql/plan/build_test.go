@@ -880,17 +880,7 @@ func makeStringConstExpr(typ plan.Type, value string) *plan.Expr {
 
 func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int, marker string) *Node {
 	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen {
-			continue
-		}
-		hasMarker := false
-		for _, expr := range node.ProjectList {
-			if exprContainsStringLiteral(expr, marker) {
-				hasMarker = true
-				break
-			}
-		}
-		if !hasMarker {
+		if !isFallbackSourceProjectNode(query, node, projectLen, marker) {
 			continue
 		}
 		return node
@@ -901,23 +891,31 @@ func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int
 
 func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int, pos int, marker string) *plan.Expr {
 	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen || pos >= len(node.ProjectList) {
-			continue
-		}
-		hasMarker := false
-		for _, expr := range node.ProjectList {
-			if exprContainsStringLiteral(expr, marker) {
-				hasMarker = true
-				break
-			}
-		}
-		if !hasMarker {
+		if !isFallbackSourceProjectNode(query, node, projectLen, marker) || pos >= len(node.ProjectList) {
 			continue
 		}
 		return node.ProjectList[pos]
 	}
 	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
 	return nil
+}
+
+func isFallbackSourceProjectNode(query *Query, node *Node, projectLen int, marker string) bool {
+	if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen {
+		return false
+	}
+	if len(node.Children) == 1 {
+		childIdx := node.Children[0]
+		if childIdx >= 0 && childIdx < int32(len(query.Nodes)) && query.Nodes[childIdx].NodeType == plan.Node_SINK_SCAN {
+			return false
+		}
+	}
+	for _, expr := range node.ProjectList {
+		if exprContainsStringLiteral(expr, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func nodeContainsStringLiteral(node *Node, value string) bool {
