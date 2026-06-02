@@ -66,12 +66,13 @@ select interval(-21, -20, -10, 0, 10);
 0
 select interval(2.9, 1, 2, 3, 4);
 ➤ interval(2.9, 1, 2, 3, 4)[-5,64,0]  𝄀
-3
+2
 select interval('10', '1', '10', '100');
 ➤ interval(10, 1, 10, 100)[-5,64,0]  𝄀
 2
 select interval('10.9', '1', '10', '100');
-invalid argument cast to int, bad value 10.9
+➤ interval(10.9, 1, 10, 100)[-5,64,0]  𝄀
+2
 select interval(5 + 5, 1, 10, 100);
 ➤ interval(5 + 5, 1, 10, 100)[-5,64,0]  𝄀
 2

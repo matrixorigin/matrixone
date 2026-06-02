@@ -688,35 +688,39 @@ func builtInIntervalCheck(_ []overload, inputs []types.Type) checkResult {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
 
-	castTypes := make([]types.Type, len(inputs))
-	shouldCast := false
-	for i, source := range inputs {
-		c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_int64})
-		if c == matchFailed {
+	for _, source := range inputs {
+		if !intervalTypeSupported(source) {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
-		if c == matchByCast {
-			shouldCast = true
-			castTypes[i] = types.T_int64.ToType()
-		} else {
-			castTypes[i] = source
-		}
-	}
-	if shouldCast {
-		return newCheckResultWithCast(0, castTypes)
 	}
 	return newCheckResultWithSuccess(0)
 }
 
+func intervalTypeSupported(source types.Type) bool {
+	return source.IsIntOrUint() ||
+		source.IsFloat() ||
+		source.Oid == types.T_decimal64 ||
+		source.Oid == types.T_decimal128 ||
+		source.Oid.IsMySQLString() ||
+		source.Oid == types.T_any
+}
+
 func builtInInterval(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
-	args := make([]vector.FunctionParameterWrapper[int64], len(parameters))
+	args := make([]intervalParam, len(parameters))
 	for i := range parameters {
-		args[i] = vector.GenerateFunctionFixedTypeParameter[int64](parameters[i])
+		var err error
+		args[i], err = makeIntervalParam(parameters[i])
+		if err != nil {
+			return err
+		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		n, null := args[0].GetValue(i)
+		n, null, err := args[0].float(i)
+		if err != nil {
+			return err
+		}
 		if null {
 			if err := rs.Append(-1, false); err != nil {
 				return err
@@ -724,22 +728,223 @@ func builtInInterval(parameters []*vector.Vector, result vector.FunctionResultWr
 			continue
 		}
 
-		lo, hi := 1, len(args)
-		for lo < hi {
-			mid := lo + (hi-lo)/2
-			v, _ := args[mid].GetValue(i)
-			if n < v {
-				hi = mid
-			} else {
-				lo = mid + 1
+		var nDec types.Decimal128
+		useDecimalComparison := args[0].useDecimalComparison()
+		if useDecimalComparison {
+			nDec, _, err = args[0].decimal(i)
+			if err != nil {
+				return err
 			}
 		}
 
-		if err := rs.Append(int64(lo-1), false); err != nil {
+		ret := len(args) - 1
+		for j := 1; j < len(args); j++ {
+			var cmp int
+			if useDecimalComparison && args[j].canCompareAsDecimal() {
+				var vDec types.Decimal128
+				vDec, null, err = args[j].decimal(i)
+				if err != nil {
+					return err
+				}
+				if null {
+					continue
+				}
+				cmp = types.CompareDecimal128WithScale(vDec, nDec, args[j].decimalScale(), args[0].decimalScale())
+			} else {
+				var v float64
+				v, null, err = args[j].float(i)
+				if err != nil {
+					return err
+				}
+				if null {
+					continue
+				}
+				switch {
+				case v > n:
+					cmp = 1
+				case v < n:
+					cmp = -1
+				default:
+					cmp = 0
+				}
+			}
+			if cmp > 0 {
+				ret = j - 1
+				break
+			}
+		}
+
+		if err := rs.Append(int64(ret), false); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+type intervalParam struct {
+	typ  types.Type
+	f64  vector.FunctionParameterWrapper[float64]
+	f32  vector.FunctionParameterWrapper[float32]
+	i64  vector.FunctionParameterWrapper[int64]
+	i32  vector.FunctionParameterWrapper[int32]
+	i16  vector.FunctionParameterWrapper[int16]
+	i8   vector.FunctionParameterWrapper[int8]
+	u64  vector.FunctionParameterWrapper[uint64]
+	u32  vector.FunctionParameterWrapper[uint32]
+	u16  vector.FunctionParameterWrapper[uint16]
+	u8   vector.FunctionParameterWrapper[uint8]
+	d64  vector.FunctionParameterWrapper[types.Decimal64]
+	d128 vector.FunctionParameterWrapper[types.Decimal128]
+	str  vector.FunctionParameterWrapper[types.Varlena]
+}
+
+func makeIntervalParam(v *vector.Vector) (intervalParam, error) {
+	p := intervalParam{typ: *v.GetType()}
+	switch p.typ.Oid {
+	case types.T_float64:
+		p.f64 = vector.GenerateFunctionFixedTypeParameter[float64](v)
+	case types.T_float32:
+		p.f32 = vector.GenerateFunctionFixedTypeParameter[float32](v)
+	case types.T_int64:
+		p.i64 = vector.GenerateFunctionFixedTypeParameter[int64](v)
+	case types.T_int32:
+		p.i32 = vector.GenerateFunctionFixedTypeParameter[int32](v)
+	case types.T_int16:
+		p.i16 = vector.GenerateFunctionFixedTypeParameter[int16](v)
+	case types.T_int8:
+		p.i8 = vector.GenerateFunctionFixedTypeParameter[int8](v)
+	case types.T_uint64:
+		p.u64 = vector.GenerateFunctionFixedTypeParameter[uint64](v)
+	case types.T_uint32:
+		p.u32 = vector.GenerateFunctionFixedTypeParameter[uint32](v)
+	case types.T_uint16:
+		p.u16 = vector.GenerateFunctionFixedTypeParameter[uint16](v)
+	case types.T_uint8:
+		p.u8 = vector.GenerateFunctionFixedTypeParameter[uint8](v)
+	case types.T_decimal64:
+		p.d64 = vector.GenerateFunctionFixedTypeParameter[types.Decimal64](v)
+	case types.T_decimal128:
+		p.d128 = vector.GenerateFunctionFixedTypeParameter[types.Decimal128](v)
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+		p.str = vector.GenerateFunctionStrParameter(v)
+	case types.T_any:
+		p.i64 = vector.GenerateFunctionFixedTypeParameter[int64](v)
+	default:
+		return p, moerr.NewInvalidInputNoCtxf("interval function have invalid input args type %s", p.typ.Oid.String())
+	}
+	return p, nil
+}
+
+func (p intervalParam) useDecimalComparison() bool {
+	return p.typ.IsIntOrUint() || p.typ.IsDecimal()
+}
+
+func (p intervalParam) canCompareAsDecimal() bool {
+	return p.typ.IsIntOrUint() || p.typ.Oid == types.T_decimal64 || p.typ.Oid == types.T_decimal128
+}
+
+func (p intervalParam) decimalScale() int32 {
+	if p.typ.Oid == types.T_decimal64 || p.typ.Oid == types.T_decimal128 {
+		return p.typ.Scale
+	}
+	return 0
+}
+
+func (p intervalParam) decimal(idx uint64) (types.Decimal128, bool, error) {
+	switch p.typ.Oid {
+	case types.T_decimal128:
+		v, null := p.d128.GetValue(idx)
+		return v, null, nil
+	case types.T_decimal64:
+		v, null := p.d64.GetValue(idx)
+		return types.Decimal128FromDecimal64(v, p.typ.Scale), null, nil
+	case types.T_int64:
+		v, null := p.i64.GetValue(idx)
+		return types.Decimal128FromInt64(v), null, nil
+	case types.T_int32:
+		v, null := p.i32.GetValue(idx)
+		return types.Decimal128FromInt64(int64(v)), null, nil
+	case types.T_int16:
+		v, null := p.i16.GetValue(idx)
+		return types.Decimal128FromInt64(int64(v)), null, nil
+	case types.T_int8:
+		v, null := p.i8.GetValue(idx)
+		return types.Decimal128FromInt64(int64(v)), null, nil
+	case types.T_uint64:
+		v, null := p.u64.GetValue(idx)
+		if v <= math.MaxInt64 {
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
+		d, err := types.ParseDecimal128(strconv.FormatUint(v, 10), 38, 0)
+		return d, null, err
+	case types.T_uint32:
+		v, null := p.u32.GetValue(idx)
+		return types.Decimal128FromInt64(int64(v)), null, nil
+	case types.T_uint16:
+		v, null := p.u16.GetValue(idx)
+		return types.Decimal128FromInt64(int64(v)), null, nil
+	case types.T_uint8:
+		v, null := p.u8.GetValue(idx)
+		return types.Decimal128FromInt64(int64(v)), null, nil
+	default:
+		return types.Decimal128{}, false, moerr.NewInvalidInputNoCtxf("interval function have invalid decimal comparison type %s", p.typ.Oid.String())
+	}
+}
+
+func (p intervalParam) float(idx uint64) (float64, bool, error) {
+	switch p.typ.Oid {
+	case types.T_float64:
+		v, null := p.f64.GetValue(idx)
+		return v, null, nil
+	case types.T_float32:
+		v, null := p.f32.GetValue(idx)
+		return float64(v), null, nil
+	case types.T_int64:
+		v, null := p.i64.GetValue(idx)
+		return float64(v), null, nil
+	case types.T_int32:
+		v, null := p.i32.GetValue(idx)
+		return float64(v), null, nil
+	case types.T_int16:
+		v, null := p.i16.GetValue(idx)
+		return float64(v), null, nil
+	case types.T_int8:
+		v, null := p.i8.GetValue(idx)
+		return float64(v), null, nil
+	case types.T_uint64:
+		v, null := p.u64.GetValue(idx)
+		return float64(v), null, nil
+	case types.T_uint32:
+		v, null := p.u32.GetValue(idx)
+		return float64(v), null, nil
+	case types.T_uint16:
+		v, null := p.u16.GetValue(idx)
+		return float64(v), null, nil
+	case types.T_uint8:
+		v, null := p.u8.GetValue(idx)
+		return float64(v), null, nil
+	case types.T_decimal64:
+		v, null := p.d64.GetValue(idx)
+		return types.Decimal64ToFloat64(v, p.typ.Scale), null, nil
+	case types.T_decimal128:
+		v, null := p.d128.GetValue(idx)
+		return types.Decimal128ToFloat64(v, p.typ.Scale), null, nil
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+		v, null := p.str.GetStrValue(idx)
+		if null {
+			return 0, true, nil
+		}
+		f, err := strconv.ParseFloat(string(v), 64)
+		if err != nil {
+			return 0, false, moerr.NewInvalidArgNoCtx("cast to double", fmt.Sprintf("bad value %s", string(v)))
+		}
+		return f, false, nil
+	case types.T_any:
+		v, null := p.i64.GetValue(idx)
+		return float64(v), null, nil
+	default:
+		return 0, false, moerr.NewInvalidInputNoCtxf("interval function have invalid input args type %s", p.typ.Oid.String())
+	}
 }
 
 func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {

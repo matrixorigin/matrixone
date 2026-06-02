@@ -328,6 +328,48 @@ func Test_BuiltIn_Interval(t *testing.T) {
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 1, 2, 2, 3}, []bool{false, false, false, false, false}),
 		},
+		{
+			info: "float search value compares without integer rounding",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{2.9}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{4}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2}, []bool{false}),
+		},
+		{
+			info: "string decimal values compare in numeric context",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"10.9"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"10"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"100"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2}, []bool{false}),
+		},
+		{
+			info: "decimal search value compares exactly against integer thresholds",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_decimal128.ToTypeWithScale(1), []types.Decimal128{mustDecimal128(t, "2.9", 38, 1)}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{4}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2}, []bool{false}),
+		},
+		{
+			info: "null thresholds are skipped",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{100}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2}, []bool{false}),
+		},
 	}
 
 	proc := testutil.NewProcess(t)
@@ -336,6 +378,13 @@ func Test_BuiltIn_Interval(t *testing.T) {
 		ok, info := tcc.Run()
 		require.True(t, ok, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func mustDecimal128(t *testing.T, v string, width, scale int32) types.Decimal128 {
+	t.Helper()
+	d, err := types.ParseDecimal128(v, width, scale)
+	require.NoError(t, err)
+	return d
 }
 
 func Test_BuiltIn_IntervalRegistered(t *testing.T) {
