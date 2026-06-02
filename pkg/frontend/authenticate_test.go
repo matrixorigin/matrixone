@@ -2553,7 +2553,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		bh.sql2result[globalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
 		otherDbScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
 			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
-			objectTypeTable, 10002, privilegeLevelDatabaseTable)
+			objectTypeTable, 10002, privilegeLevelDatabaseStar)
 		bh.sql2result[otherDbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{
 			{ses.GetTenantInfo().GetDefaultRoleID()},
 		})
@@ -2762,9 +2762,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		viewDbScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
 			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 			objectTypeView, 10001, privilegeLevelDatabaseStar)
-		bh.sql2result[viewDbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{
-			{ses.GetTenantInfo().GetDefaultRoleID()},
-		})
+		bh.sql2result[viewDbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
 		legacyObjScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
 			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 			objectTypeTable, 10002, privilegeLevelDatabaseTable)
@@ -2776,7 +2774,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		legacyDbScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
 			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 			objectTypeTable, 10001, privilegeLevelDatabaseStar)
-		bh.sql2result[legacyDbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+		bh.sql2result[legacyDbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{
+			{ses.GetTenantInfo().GetDefaultRoleID()},
+		})
 
 		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
 		require.NoError(t, err)
@@ -10750,12 +10750,12 @@ func TestGetSqlForScopedGrantOptionHelpers(t *testing.T) {
 	)
 	require.Equal(
 		t,
-		`select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = 38 and obj_type = "table" and obj_id = 10001 and privilege_level = "d.t";`,
+		`select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = 38 and obj_type = "table" and obj_id = 10001 and privilege_level in ("d.t","t");`,
 		getSqlForCheckRoleHasPrivilegeWGOWithObjAndLevel(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001, privilegeLevelDatabaseTable),
 	)
 	require.Equal(
 		t,
-		`select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = 30 or privilege_id = 37)) or privilege_id = 38) and obj_type = "view" and obj_id = 10002 and privilege_level = "d.*";`,
+		`select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = 30 or privilege_id = 37)) or privilege_id = 38) and obj_type = "view" and obj_id = 10002 and privilege_level in ("d.*","*");`,
 		getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objectTypeView, 10002, privilegeLevelDatabaseStar),
 	)
 }
