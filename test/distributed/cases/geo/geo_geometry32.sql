@@ -4,9 +4,10 @@ drop database if exists geo32;
 create database geo32;
 use geo32;
 
--- DDL: generic geometry32 and a subtype alias.
+-- DDL: generic geometry32 and a subtype alias; SHOW CREATE renders the 32 family.
 drop table if exists t32;
-create table t32(id int, g geometry32, p point32);
+create table t32(id int, g geometry32, p point32, l linestring32);
+show create table t32;
 drop table t32;
 
 -- Storage round-trip: values are stored as float32 WKB, rendered as WKT.

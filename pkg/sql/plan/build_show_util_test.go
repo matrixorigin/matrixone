@@ -392,4 +392,13 @@ func TestFormatColTypeGeometrySubtype(t *testing.T) {
 		Id:    int32(types.T_geometry),
 		Width: encodeGeometrySRIDWidth(0, true),
 	}))
+
+	// GEOMETRY32 family renders with the "32" suffix.
+	require.Equal(t, "GEOMETRY32", FormatColType(plan.Type{
+		Id: int32(types.T_geometry32),
+	}))
+	require.Equal(t, "POINT32", FormatColType(plan.Type{
+		Id:    int32(types.T_geometry32),
+		Scale: int32(geometrySubtypeEnum("POINT")),
+	}))
 }
