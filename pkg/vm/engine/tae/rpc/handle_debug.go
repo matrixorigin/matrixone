@@ -722,6 +722,22 @@ func (h *Handle) HandleBackup(
 	return
 }
 
+// ttlChecker returns a disk-cleaner checker that protects checkpoints whose
+// endTS is within ttl of the engine's HLC clock and marks older ones
+// consumable. endTS is an HLC timestamp, so the cutoff is derived from the HLC
+// clock (h.db.TxnMgr.Now()), not wall-clock — HLC can be ahead of wall clock,
+// and a wall-clock cutoff would skew the comparison and keep checkpoints that
+// are actually older than the TTL. Now() is read per call so the cutoff slides
+// with current time.
+func (h *Handle) ttlChecker(ttl time.Duration) func(item any) bool {
+	return func(item any) bool {
+		ckp := item.(*checkpoint.CheckpointEntry)
+		ts := types.BuildTS(h.db.TxnMgr.Now().Physical()-int64(ttl), 0)
+		endTS := ckp.GetEnd()
+		return !endTS.GE(&ts)
+	}
+}
+
 func (h *Handle) HandleDiskCleaner(
 	ctx context.Context,
 	meta txn.TxnMeta,
@@ -897,17 +913,7 @@ func (h *Handle) HandleDiskCleaner(
 			return nil, moerr.NewInvalidArgNoCtx(key, value)
 		}
 		h.db.DiskCleaner.GetCleaner().AddChecker(
-			func(item any) bool {
-				checkpoint := item.(*checkpoint.CheckpointEntry)
-				// Base the TTL cutoff on the engine's HLC clock, not wall-clock:
-				// endTS is an HLC timestamp, and HLC can be ahead of wall clock,
-				// so a wall-clock cutoff would skew the comparison and keep
-				// checkpoints that are actually older than the TTL. Read Now()
-				// per call so the cutoff still slides with current time.
-				ts := types.BuildTS(h.db.TxnMgr.Now().Physical()-int64(ttl), 0)
-				endTS := checkpoint.GetEnd()
-				return !endTS.GE(&ts)
-			}, cmd_util.CheckerKeyTTL)
+			h.ttlChecker(ttl), cmd_util.CheckerKeyTTL)
 		return
 	case cmd_util.CheckerKeyMinTS:
 		// Set a minTS, checkpoints whose endTS is less than this minTS can be consumed

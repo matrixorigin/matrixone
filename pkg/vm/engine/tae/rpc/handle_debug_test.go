@@ -19,12 +19,32 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
+
+// TestHandleTTLChecker exercises the disk-cleaner TTL checker predicate built
+// by HandleDiskCleaner: a checkpoint within the TTL window is protected
+// (returns false), an older one is consumable (returns true). The cutoff is
+// derived from the engine's HLC clock.
+func TestHandleTTLChecker(t *testing.T) {
+	h := mockTAEHandle(context.Background(), t, &options.Options{})
+
+	chk := h.ttlChecker(time.Hour)
+
+	// endTS within the TTL window (just now) -> protected.
+	recent := checkpoint.NewCheckpointEntry("", types.TS{}, h.db.TxnMgr.Now(), checkpoint.ET_Incremental)
+	require.False(t, chk(recent))
+
+	// endTS far older than the TTL cutoff -> consumable.
+	old := checkpoint.NewCheckpointEntry("", types.TS{}, types.BuildTS(1, 0), checkpoint.ET_Incremental)
+	require.True(t, chk(old))
+}
 
 func TestHandleBackup(t *testing.T) {
 	h := mockTAEHandle(context.Background(), t, &options.Options{})
