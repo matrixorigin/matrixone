@@ -33,7 +33,9 @@ drop table t2;
 CREATE TABLE t1 (name char(1) default NULL, val int default NULL);
 INSERT INTO t1 VALUES ('a',1),  ('a',2),  ('a',2),  ('a',2),  ('a',3),  ('a',6), ('a',7), ('a',11), ('a',11), ('a',12), ('a',13), ('a',13), ('a',20), ('b',2), ('b',3), ('b',4), ('b',5);
 SELECT s.name, AVG(s.val) AS med FROM (SELECT x.name, x.val FROM t1 x, t1 y WHERE x.name=y.name GROUP BY x.name, x.val HAVING SUM(y.val <= x.val) >= COUNT(*)/2 AND SUM(y.val >= x.val) >= COUNT(*)/2) AS s GROUP BY s.name;
-invalid argument aggregate function sum, bad value [BOOL]
+➤ name[1,1,0]  ¦  med[8,54,0]  𝄀
+a  ¦  7.0  𝄀
+b  ¦  3.5
 drop table t1;
 create table t1 (a integer, b integer);
 insert into t1 values (1,4), (2,2),(2,2), (4,1),(4,1),(4,1),(4,1);
