@@ -150,6 +150,11 @@ type Session struct {
 
 	lastInsertID uint64
 
+	// lastAffectedRows records the rows affected by the previous statement,
+	// consumed by the ROW_COUNT() builtin. MySQL semantics: -1 after a
+	// result-set statement (SELECT/SHOW...), 0 after DDL, affected rows after DML.
+	lastAffectedRows int64
+
 	// tStmt is used only to record the StatementInfo
 	// QueryResult please use feSessionImpl.stmtProfile instead.
 	tStmt *motrace.StatementInfo
@@ -1002,6 +1007,18 @@ func (ses *Session) GetLastInsertID() uint64 {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.lastInsertID
+}
+
+func (ses *Session) SetLastAffectedRows(num int64) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.lastAffectedRows = num
+}
+
+func (ses *Session) GetLastAffectedRows() int64 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.lastAffectedRows
 }
 
 func (ses *Session) SetCmd(cmd CommandType) {

@@ -3112,6 +3112,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		SessionId:            ses.GetSessId(),
 	}
 	proc.SetLastInsertID(ses.GetLastInsertID())
+	// Carry the previous statement's affected rows into this proc so the
+	// ROW_COUNT() builtin can read it.
+	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
