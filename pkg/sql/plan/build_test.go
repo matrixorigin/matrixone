@@ -887,6 +887,9 @@ func makeStringConstExpr(typ plan.Type, value string) *plan.Expr {
 
 func requireQueryExpr(t *testing.T, query *Query, accept func(*plan.Expr) bool, message string) *plan.Expr {
 	for _, node := range query.Nodes {
+		if isSinkScanProjectNode(query, node) {
+			continue
+		}
 		if node.NodeType != plan.Node_PROJECT {
 			continue
 		}
@@ -900,6 +903,13 @@ func requireQueryExpr(t *testing.T, query *Query, accept func(*plan.Expr) bool, 
 	return nil
 }
 
+func isSinkScanProjectNode(query *Query, node *Node) bool {
+	if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 {
+		return false
+	}
+	childIdx := node.Children[0]
+	return childIdx >= 0 && childIdx < int32(len(query.Nodes)) && query.Nodes[childIdx].NodeType == plan.Node_SINK_SCAN
+}
 func assertFallbackUpdateProjectLength(t *testing.T, query *Query, projectLen int) {
 	for _, node := range query.Nodes {
 		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen || len(node.Children) != 1 {
