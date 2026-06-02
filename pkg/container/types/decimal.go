@@ -1038,6 +1038,12 @@ func (x Decimal128) div128Trunc(y Decimal128) (Decimal128, error) {
 	return x, nil
 }
 
+// Div128Trunc is the exported version of div128Trunc for integer division (DIV)
+// which truncates toward zero instead of rounding half-up.
+func (x Decimal128) Div128Trunc(y Decimal128) (Decimal128, error) {
+	return x.div128Trunc(y)
+}
+
 func (x Decimal256) Div256(y Decimal256) (Decimal256, error) {
 	if y.B128_191 == 0 && y.B192_255 == 0 && y.B64_127 == 0 {
 		if y.B0_63 == 0 {
@@ -1110,6 +1116,12 @@ func (x Decimal256) div256Trunc(y Decimal256) (Decimal256, error) {
 		}
 	}
 	return z.Right(1), nil
+}
+
+// Div256Trunc is the exported version of div256Trunc for integer division (DIV)
+// which truncates toward zero instead of rounding half-up.
+func (x Decimal256) Div256Trunc(y Decimal256) (Decimal256, error) {
+	return x.div256Trunc(y)
 }
 
 func (x Decimal64) Mod64(y Decimal64) (Decimal64, error) {
