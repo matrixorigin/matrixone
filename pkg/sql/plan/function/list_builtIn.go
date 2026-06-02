@@ -4507,6 +4507,38 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `position`
+	// POSITION(substr IN str) is a synonym for LOCATE(substr, str)
+	{
+		functionId: POSITION,
+		class:      plan.Function_STRICT,
+		layout:     POSITION_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInLocate2Args
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_char, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInLocate2Args
+				},
+			},
+		},
+	},
+
 	// function `PI`
 	{
 		functionId: PI,

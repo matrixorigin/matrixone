@@ -582,6 +582,7 @@ var functionIdRegister = map[string]int32{
 	"floor":             FLOOR,
 	"lpad":              LPAD,
 	"pi":                PI,
+	"position":          POSITION,
 	"round":             ROUND,
 	"truncate":          TRUNCATE,
 	"rpad":              RPAD,

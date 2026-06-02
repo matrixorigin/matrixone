@@ -626,3 +626,11 @@ func TestAnalyzeInfoDescribeImpl_GetDescription(t *testing.T) {
 		})
 	}
 }
+
+func TestPositionFunctionExplain(t *testing.T) {
+	sqls := []string{
+		"explain SELECT POSITION('y' IN 'xyz')",
+	}
+	mockOptimizer := plan.NewMockOptimizer(false)
+	runTestShouldPass(mockOptimizer, t, sqls)
+}
