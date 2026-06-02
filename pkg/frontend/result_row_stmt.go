@@ -251,10 +251,6 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 		return nil
 	}
 
-	// A result-set statement (SELECT/SHOW/...) makes ROW_COUNT() return -1,
-	// per MySQL semantics.
-	ses.SetLastAffectedRows(-1)
-
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 		if len(execCtx.proc.GetSessionInfo().SeqAddValues) != 0 {
@@ -349,8 +345,6 @@ func (resper *MysqlResp) respPrebuildResultRow(ses *Session,
 	if execCtx.inMigration {
 		return nil
 	}
-	// A result-set statement makes ROW_COUNT() return -1, per MySQL semantics.
-	ses.SetLastAffectedRows(-1)
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
 	res := ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, execCtx.isLastStmt)
 	if err := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err != nil {
@@ -366,8 +360,6 @@ func (resper *MysqlResp) respMixedResultRow(ses *Session,
 	if execCtx.inMigration {
 		return nil
 	}
-	// A result-set statement makes ROW_COUNT() return -1, per MySQL semantics.
-	ses.SetLastAffectedRows(-1)
 	//!!!the columnDef has been sent after the compiling ends. It should not be sent here again.
 	//only the result rows need to be sent.
 	mrs := ses.GetMysqlResultSet()
@@ -391,12 +383,6 @@ func (resper *MysqlResp) respBySituation(ses *Session,
 	defer func() {
 		execCtx.results = nil
 	}()
-	// ROW_COUNT(): a result set makes it -1; otherwise there are no affected rows.
-	if len(execCtx.results) == 0 {
-		ses.SetLastAffectedRows(0)
-	} else {
-		ses.SetLastAffectedRows(-1)
-	}
 	resp := NewGeneralOkResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus())
 	if len(execCtx.results) == 0 {
 		if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {

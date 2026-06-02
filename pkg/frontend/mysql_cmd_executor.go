@@ -2833,6 +2833,11 @@ func executeStmtWithResponse(ses *Session,
 		return err
 	}
 
+	// Record the rows affected by this statement so the ROW_COUNT() builtin in a
+	// following statement (same proc for multi-statement COM_QUERY, or the next
+	// COM_QUERY via the session) reads the correct value.
+	recordLastAffectedRows(ses, execCtx)
+
 	err = respClientWhenSuccess(ses, execCtx)
 	if err != nil {
 		return err
