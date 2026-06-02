@@ -43,10 +43,6 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
-	err = rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId)
-	if err != nil {
-		return nil, err
-	}
 
 	sourceStep := builder.appendStep(lastNodeId)
 	query, err := builder.createQuery()
@@ -60,6 +56,11 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	// }
 
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
+
+	err = rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId)
+	if err != nil {
+		return nil, err
+	}
 
 	// append sink node
 	lastNodeId = appendSinkNode(builder, queryBindCtx, lastNodeId)
