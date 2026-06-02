@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	fj "github.com/matrixorigin/matrixone/pkg/sql/plan/function/fault"
@@ -7998,9 +7999,43 @@ func StDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	if err := checkBinaryGeometryTypeSRID("ST_DISTANCE", ivecs); err != nil {
 		return err
 	}
+	// SRID 4326 returns geodesic distance in meters; SRID 0 is Cartesian.
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
+		if srid == geo.SRIDWGS84 {
+			return geodeticDistance(v1, v2)
+		}
 		return geometryDistance(v1, v2)
 	}, selectList)
+}
+
+// geodeticDistance returns the WGS 84 geodesic distance in meters between two
+// geometries.
+func geodeticDistance(left, right []byte) (float64, error) {
+	leftType, err := geometryTypeNameFromPayload(left)
+	if err != nil {
+		return 0, err
+	}
+	rightType, err := geometryTypeNameFromPayload(right)
+	if err != nil {
+		return 0, err
+	}
+	if !isDistanceSupportedGeometryType(leftType) || !isDistanceSupportedGeometryType(rightType) {
+		return 0, moerr.NewInvalidInputNoCtx("ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+	}
+	lg, err := decodeGeoGeometry(left)
+	if err != nil {
+		return 0, err
+	}
+	rg, err := decodeGeoGeometry(right)
+	if err != nil {
+		return 0, err
+	}
+	d, ok := geo.DistanceMeters(lg, rg)
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	return d, nil
 }
 
 func StContains(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

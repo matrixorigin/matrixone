@@ -896,6 +896,65 @@ func encodeGeometryPayload(wkt string, _ uint32, _ bool) []byte {
 	return geo.WriteWKB(g)
 }
 
+// decodeGeoGeometry decodes a stored geometry payload (WKB float64/float32, or
+// legacy WKT/EWKT text) into the geo.Geometry model used by the Cartesian and
+// geodetic computation kernels.
+func decodeGeoGeometry(payload []byte) (geo.Geometry, error) {
+	if len(payload) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	if payloadIsWKB(payload) {
+		g, err := geo.ReadWKB(payload)
+		if err != nil {
+			g, err = geo.ReadWKBFloat32(payload)
+			if err != nil {
+				return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+			}
+		}
+		return g, nil
+	}
+	s, _, _ := stripEWKTSRID(strings.TrimSpace(functionUtil.QuickBytesToStr(payload)))
+	g, err := geo.ParseWKT(s)
+	if err != nil {
+		return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	return g, nil
+}
+
+// geodeticArea returns the WGS 84 geodesic area (square meters) of a polygon or
+// multipolygon.
+func geodeticArea(payload []byte) (float64, error) {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return 0, err
+	}
+	if typeName != "POLYGON" && typeName != "MULTIPOLYGON" {
+		return 0, moerr.NewInvalidInputNoCtx("geometry is not a POLYGON or MULTIPOLYGON")
+	}
+	g, err := decodeGeoGeometry(payload)
+	if err != nil {
+		return 0, err
+	}
+	return geo.AreaSquareMeters(g), nil
+}
+
+// geodeticLength returns the WGS 84 geodesic length (meters) of a linestring or
+// multilinestring.
+func geodeticLength(payload []byte) (float64, error) {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return 0, err
+	}
+	if typeName != "LINESTRING" && typeName != "MULTILINESTRING" {
+		return 0, moerr.NewInvalidInputNoCtx("geometry is not a LINESTRING or MULTILINESTRING")
+	}
+	g, err := decodeGeoGeometry(payload)
+	if err != nil {
+		return 0, err
+	}
+	return geo.LengthMeters(g), nil
+}
+
 // encodeGeometryPayloadFloat32 is the GEOMETRY32 counterpart of
 // encodeGeometryPayload: it parses WKT and returns float32-coordinate WKB.
 func encodeGeometryPayloadFloat32(wkt string) []byte {
@@ -3075,13 +3134,23 @@ func StIsEmpty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 func StLength(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// SRID 4326 computes a geodesic length in meters; SRID 0 is Cartesian.
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
+		if srid == geo.SRIDWGS84 {
+			return geodeticLength(v)
+		}
 		return geometryLength(v)
 	}, selectList)
 }
 
 func StArea(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// SRID 4326 computes a geodesic area in square meters; SRID 0 is Cartesian.
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
+		if srid == geo.SRIDWGS84 {
+			return geodeticArea(v)
+		}
 		return geometryArea(v)
 	}, selectList)
 }

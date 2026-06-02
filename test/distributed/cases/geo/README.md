@@ -14,6 +14,7 @@ the column/expression type.
 | `geo_functions_binary.sql` | `ST_Distance` and the relationship predicates `ST_Contains`, `ST_Within`, `ST_Intersects`, `ST_Disjoint`, `ST_Touches`, `ST_Crosses`, `ST_Overlaps`, `ST_Equals`, `ST_Covers`, `ST_CoveredBy` (Cartesian / SRID 0). |
 | `geo_srid.sql` | SRID carried by the type: `ST_GeomFromText(wkt, srid)` + `ST_SRID`, SRID propagation through derived geometries, `SRID` columns, and binary-function SRID-mismatch rejection. |
 | `geo_geometry32.sql` | `GEOMETRY32` (float32-coordinate) DDL, storage round-trips (float32 WKB), spatial functions, and `geometry`↔`geometry32` casts. |
+| `geo_geodetic.sql` | SRID 4326 measures (`ST_Length`, `ST_Distance`, `ST_Area`) return meters / m² (geodesic) vs Cartesian for SRID 0, incl. a `GEOGRAPHY` column. |
 
 ## Generating the `.result` files
 
@@ -33,6 +34,7 @@ Then run them normally:
 
 ## Scope notes
 
-Tests intentionally cover only what is implemented today. Spatial measures here
-are Cartesian; geodetic (SRID 4326) computation is the remaining follow-up
-(design Step 2).
+Tests intentionally cover only what is implemented today. SRID 4326 geodetic
+computation is wired into the measures (`ST_Length`/`ST_Distance`/`ST_Area`);
+the relationship predicates (`ST_Contains`, `ST_Intersects`, …) are still
+evaluated in the Cartesian plane (geodetic predicates are a follow-up).

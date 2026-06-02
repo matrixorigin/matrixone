@@ -5247,6 +5247,46 @@ func initStDistanceTestCase() []tcTemp {
 	}
 }
 
+func TestStMeasuresGeodetic(t *testing.T) {
+	// geo.EarthRadiusMeters = 6371008.8; one degree of arc on the mean sphere.
+	oneDeg := (math.Pi / 180.0) * 6371008.8 // ~111194.93 m
+
+	// geodesic length of a one-degree equatorial segment.
+	l, err := geodeticLength(encodeGeometryPayload("LINESTRING(0 0,1 0)", 0, false))
+	require.NoError(t, err)
+	require.InDelta(t, oneDeg, l, 1.0)
+
+	// geodesic distance between two points one degree apart.
+	d, err := geodeticDistance(
+		encodeGeometryPayload("POINT(0 0)", 0, false),
+		encodeGeometryPayload("POINT(1 0)", 0, false))
+	require.NoError(t, err)
+	require.InDelta(t, oneDeg, d, 1.0)
+
+	// geodesic area of a ~1deg x 1deg cell near the equator (square meters).
+	a, err := geodeticArea(encodeGeometryPayload("POLYGON((0 0,1 0,1 1,0 1,0 0))", 0, false))
+	require.NoError(t, err)
+	require.InEpsilon(t, 1.2365e10, a, 0.02)
+
+	// Type validation is preserved on the geodetic path.
+	_, err = geodeticArea(encodeGeometryPayload("POINT(1 1)", 0, false))
+	require.Error(t, err)
+	_, err = geodeticLength(encodeGeometryPayload("POINT(1 1)", 0, false))
+	require.Error(t, err)
+
+	// Dispatch: ST_Area on a SRID-4326 typed input uses the geodesic kernel.
+	proc := testutil.NewProcess(t)
+	geom4326 := types.T_geometry.ToType()
+	geom4326.Width = 4327 // SRID 4326
+	wantArea, _ := geodeticArea(encodeGeometryPayload("POLYGON((0 0,1 0,1 1,0 1,0 0))", 0, false))
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(geom4326, []string{"POLYGON((0 0,1 0,1 1,0 1,0 0))"}, []bool{false})},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantArea}, []bool{false}),
+		StArea)
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
+}
+
 func TestStDistance(t *testing.T) {
 	testCases := initStDistanceTestCase()
 
