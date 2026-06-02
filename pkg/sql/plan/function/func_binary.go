@@ -8069,6 +8069,47 @@ func StPointFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
+// overlayBinary builds an eval function for a polygon Boolean operation.
+func overlayBinary(op geo.BoolOp) fEvalFn {
+	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
+			a, err := decodeGeoGeometry(v1)
+			if err != nil {
+				return nil, err
+			}
+			b, err := decodeGeoGeometry(v2)
+			if err != nil {
+				return nil, err
+			}
+			g, oerr := geo.Overlay(a, b, op)
+			if oerr != nil {
+				return nil, moerr.NewInvalidInputNoCtx(oerr.Error())
+			}
+			return geo.WriteWKB(g), nil
+		}, selectList)
+	}
+}
+
+// StUnion returns the polygon union of two areal geometries.
+func StUnion(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return overlayBinary(geo.OpUnion)(ivecs, result, proc, length, selectList)
+}
+
+// StIntersection returns the polygon intersection of two areal geometries.
+func StIntersection(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return overlayBinary(geo.OpIntersection)(ivecs, result, proc, length, selectList)
+}
+
+// StDifference returns the polygon difference (g1 minus g2).
+func StDifference(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return overlayBinary(geo.OpDifference)(ivecs, result, proc, length, selectList)
+}
+
+// StSymDifference returns the polygon symmetric difference of two geometries.
+func StSymDifference(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return overlayBinary(geo.OpXOR)(ivecs, result, proc, length, selectList)
+}
+
 // StFrechetDistance returns the discrete Fréchet distance (planar) between two
 // geometries' vertex sequences.
 func StFrechetDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

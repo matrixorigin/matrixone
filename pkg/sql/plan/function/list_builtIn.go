@@ -4319,6 +4319,52 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// Boolean overlay: st_union, st_intersection, st_difference, st_symdifference.
+	{
+		functionId: ST_UNION,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StUnion }},
+		},
+	},
+	{
+		functionId: ST_INTERSECTION,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StIntersection }},
+		},
+	},
+	{
+		functionId: ST_DIFFERENCE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StDifference }},
+		},
+	},
+	{
+		functionId: ST_SYMDIFFERENCE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StSymDifference }},
+		},
+	},
+
 	// Discrete curve distances: st_frechetdistance, st_hausdorffdistance.
 	{
 		functionId: ST_FRECHETDISTANCE,

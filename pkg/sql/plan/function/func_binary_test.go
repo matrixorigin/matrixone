@@ -5288,6 +5288,46 @@ func TestStMeasuresGeodetic(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestOverlayOps(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	a := "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))"
+	b := "POLYGON((2 2, 6 2, 6 6, 2 6, 2 2))"
+
+	// The SQL function delegates to geo.Overlay; computing the expected value the
+	// same way makes the WKB output canonicalize to identical WKT, validating the
+	// full decode -> overlay -> WKB round-trip through the function framework.
+	expect := func(g1, g2 string, op geo.BoolOp) string {
+		ga, _ := geo.ParseWKT(g1)
+		gb, _ := geo.ParseWKT(g2)
+		r, err := geo.Overlay(ga, gb, op)
+		require.NoError(t, err)
+		return geo.WriteWKT(r)
+	}
+	run := func(fn fEvalFn, g1, g2 string, op geo.BoolOp, wantArea float64) {
+		t.Helper()
+		// Sanity-check the area at the geo level.
+		ga, _ := geo.ParseWKT(g1)
+		gb, _ := geo.ParseWKT(g2)
+		r, _ := geo.Overlay(ga, gb, op)
+		require.InDelta(t, wantArea, geo.CartesianArea(r), 1e-9)
+		// And exercise the SQL wiring.
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g1}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g2}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_geometry.ToType(), false, []string{expect(g1, g2, op)}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	run(StIntersection, a, b, geo.OpIntersection, 4.0)
+	run(StUnion, a, b, geo.OpUnion, 28.0)
+	run(StDifference, a, b, geo.OpDifference, 12.0)
+	run(StSymDifference, a, b, geo.OpXOR, 24.0)
+}
+
 func TestDiscreteDistances(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

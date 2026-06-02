@@ -709,9 +709,15 @@ const (
 	ST_FRECHETDISTANCE   = 506
 	ST_HAUSDORFFDISTANCE = 507
 
+	// GIS Boolean overlay operations
+	ST_UNION         = 508
+	ST_INTERSECTION  = 509
+	ST_DIFFERENCE    = 510
+	ST_SYMDIFFERENCE = 511
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 508
+	FUNCTION_END_NUMBER = 512
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1168,6 +1174,10 @@ var functionIdRegister = map[string]int32{
 	"st_pointatdistance":             ST_POINTATDISTANCE,
 	"st_frechetdistance":             ST_FRECHETDISTANCE,
 	"st_hausdorffdistance":           ST_HAUSDORFFDISTANCE,
+	"st_union":                       ST_UNION,
+	"st_intersection":                ST_INTERSECTION,
+	"st_difference":                  ST_DIFFERENCE,
+	"st_symdifference":               ST_SYMDIFFERENCE,
 	"st_geometrytype":                ST_GEOMETRYTYPE,
 	"st_x":                           ST_X,
 	"st_y":                           ST_Y,
