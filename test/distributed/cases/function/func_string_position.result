@@ -43,3 +43,6 @@ DROP TABLE t1;
 SELECT POSITION('World' IN 'Hello World') AS position_result, LOCATE('World', 'Hello World') AS locate_result;
 position_result    locate_result
 7    7
+TP QUERY PLAN
+Project
+  ->  Values Scan "*VALUES*"
