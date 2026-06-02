@@ -272,6 +272,84 @@ func Test_BuiltIn_Lpad(t *testing.T) {
 	}
 }
 
+func Test_BuiltIn_Interval(t *testing.T) {
+	testCases := []tcTemp{
+		{
+			info: "mysql example with middle match",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{23}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{15}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{17}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{30}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{44}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{200}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{3}, []bool{false}),
+		},
+		{
+			info: "mysql example with equality",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{100}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1000}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2}, []bool{false}),
+		},
+		{
+			info: "mysql example with first threshold",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{22}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{23}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{30}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{44}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{200}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+		},
+		{
+			info: "null search value returns -1",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{-1}, []bool{false}),
+		},
+		{
+			info: "vectorized rows",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 5, 10, 11, 100}, []bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1, 1, 1}, []bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 10, 10, 10, 10}, []bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{100, 100, 100, 100, 100}, []bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 1, 2, 2, 3}, []bool{false, false, false, false, false}),
+		},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInInterval)
+		ok, info := tcc.Run()
+		require.True(t, ok, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func Test_BuiltIn_IntervalRegistered(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fn, err := GetFunctionByName(proc.Ctx, "interval", []types.Type{
+		types.T_float64.ToType(),
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(INTERVAL), fn.fid)
+	require.Equal(t, types.T_int64, fn.retType.Oid)
+}
+
 func Test_BuiltIn_MoShowVisibleBinGeometry(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typeBytes, err := types.Encode(&types.Type{Oid: types.T_geometry})

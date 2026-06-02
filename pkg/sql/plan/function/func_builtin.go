@@ -683,6 +683,65 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
+func builtInIntervalCheck(_ []overload, inputs []types.Type) checkResult {
+	if len(inputs) < 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	castTypes := make([]types.Type, len(inputs))
+	shouldCast := false
+	for i, source := range inputs {
+		c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_int64})
+		if c == matchFailed {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if c == matchByCast {
+			shouldCast = true
+			castTypes[i] = types.T_int64.ToType()
+		} else {
+			castTypes[i] = source
+		}
+	}
+	if shouldCast {
+		return newCheckResultWithCast(0, castTypes)
+	}
+	return newCheckResultWithSuccess(0)
+}
+
+func builtInInterval(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	args := make([]vector.FunctionParameterWrapper[int64], len(parameters))
+	for i := range parameters {
+		args[i] = vector.GenerateFunctionFixedTypeParameter[int64](parameters[i])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		n, null := args[0].GetValue(i)
+		if null {
+			if err := rs.Append(-1, false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		lo, hi := 1, len(args)
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			v, _ := args[mid].GetValue(i)
+			if n < v {
+				hi = mid
+			} else {
+				lo = mid + 1
+			}
+		}
+
+		if err := rs.Append(int64(lo-1), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 	// CHAR accepts one or more integer arguments
 	if len(inputs) < 1 {
