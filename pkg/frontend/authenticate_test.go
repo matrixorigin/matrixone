@@ -10840,6 +10840,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		)
 		require.Error(t, err)
 		require.Nil(t, roleSet)
+		require.Equal(t, viewObjSQL, bh.currentSql)
 	})
 
 	t.Run("view legacy path propagates legacy query error", func(t *testing.T) {
@@ -10856,18 +10857,25 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		require.NoError(t, err)
 		bh.sql2result[checkViewSQL] = newMrsForCheckDatabaseTable([][]interface{}{{10001}})
 
-		viewObjSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+		viewObjSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
 			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
-			objectTypeView, 10001)
+			objectTypeView, 10001, privilegeLevelDatabaseTable)
 		bh.sql2result[viewObjSQL] = newMrsForPrivilegeWGO([][]interface{}{})
 		viewGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
 			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 			objectTypeView, objectIDAll, privilegeLevelStarStar)
 		bh.sql2result[viewGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+		checkDbSQL, err := getSqlForCheckDatabase(ctx, "db")
+		require.NoError(t, err)
+		bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{{10002}})
+		viewDbSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeView, 10002, privilegeLevelDatabaseStar)
+		bh.sql2result[viewDbSQL] = newMrsForPrivilegeWGO([][]interface{}{})
 
 		legacyObjSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
 			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
-			objectTypeTable, 10001, privilegeLevelDatabaseStar)
+			objectTypeTable, 10001, privilegeLevelDatabaseTable)
 		bh.sql2err[legacyObjSQL] = moerr.NewInternalError(ctx, "legacy view WGO failed")
 
 		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
@@ -10884,6 +10892,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		)
 		require.Error(t, err)
 		require.Nil(t, roleSet)
+		require.Equal(t, legacyObjSQL, bh.currentSql)
 	})
 
 	t.Run("database star object scoped WGO error is returned", func(t *testing.T) {
@@ -10902,7 +10911,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 
 		objSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
 			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
-			objectTypeTable, 10001, privilegeLevelDatabaseTable)
+			objectTypeTable, 10001, privilegeLevelDatabaseStar)
 		bh.sql2err[objSQL] = moerr.NewInternalError(ctx, "object scoped WGO failed")
 
 		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
@@ -10918,6 +10927,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		)
 		require.Error(t, err)
 		require.Nil(t, roleSet)
+		require.Equal(t, objSQL, bh.currentSql)
 	})
 
 	t.Run("global scoped WGO error is returned", func(t *testing.T) {
@@ -10936,7 +10946,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 
 		objSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
 			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
-			objectTypeTable, 10001, privilegeLevelDatabaseTable)
+			objectTypeTable, 10001, privilegeLevelDatabaseStar)
 		bh.sql2result[objSQL] = newMrsForPrivilegeWGO([][]interface{}{})
 		globalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
 			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
@@ -10956,6 +10966,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		)
 		require.Error(t, err)
 		require.Nil(t, roleSet)
+		require.Equal(t, globalSQL, bh.currentSql)
 	})
 
 	t.Run("missing database id returns exact and global role set", func(t *testing.T) {
