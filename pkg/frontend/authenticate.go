@@ -4996,10 +4996,9 @@ func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbN
 		return id, nil
 	}
 	if isDb {
-		return 0, moerr.NewInternalErrorf(ctx, `there is no database "%s"`, dbName)
+		return 0, moerr.NewBadDB(ctx, dbName)
 	} else {
-		//TODO: check the database exists or not first
-		return 0, moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
+		return 0, moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}
 }
 
@@ -5026,7 +5025,7 @@ func getViewId(ctx context.Context, bh BackgroundExec, dbName, viewName string) 
 		}
 		return id, nil
 	}
-	return 0, moerr.NewInternalErrorf(ctx, `there is no view "%s" in database "%s"`, viewName, dbName)
+	return 0, moerr.NewNoSuchTable(ctx, dbName, viewName)
 }
 
 type viewSecurityInfo struct {
@@ -8398,7 +8397,9 @@ func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
 		level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR {
 		_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, astObjType, level)
 		if err != nil {
-			// If we can't resolve the object, fall back to obj_type-only check
+			if !isMissingPrivilegeObjectError(err) {
+				return nil, err
+			}
 			return getRoleSetThatPrivilegeGrantedToWGOWithObjType(ctx, bh, privType, objType)
 		}
 		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, objId)
@@ -8415,6 +8416,10 @@ func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
 
 	// For truly global wildcard levels (*.*), filter by obj_type only.
 	return getRoleSetThatPrivilegeGrantedToWGOWithObjType(ctx, bh, privType, objType)
+}
+
+func isMissingPrivilegeObjectError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.ErrNoSuchTable)
 }
 
 func mergeRoleSets(dst, src *btree.Set[int64]) {
@@ -8532,6 +8537,9 @@ func setIsIntersected(A, B *btree.Set[int64]) bool {
 // determineUserCanGrantPrivilegesToOthers decides the privileges can be granted to others.
 func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) (ret bool, stats statistic.StatsArray, err error) {
 	stats.Reset()
+	if gp == nil || gp.Level == nil {
+		return false, stats, moerr.NewInternalError(ctx, "grant privilege level is missing")
+	}
 
 	//step1: normalize the names of roles and users
 	//step2: decide the current user
