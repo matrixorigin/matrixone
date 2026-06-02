@@ -6745,7 +6745,8 @@ func TestDoSwitchRolePrimaryRoleInvalidatesCaches(t *testing.T) {
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
-		bh.sql2result[getSqlForRoleIdOfRole("role2")] = newMrsForPasswordOfUser([][]interface{}{
+		sql, _ := getSqlForRoleIdOfRole(context.TODO(), "role2")
+		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{
 			{"6"},
 		})
 		bh.sql2result[getSqlForCheckUserGrant(6, int64(tenant.GetUserID()))] = newMrsForPasswordOfUser([][]interface{}{
