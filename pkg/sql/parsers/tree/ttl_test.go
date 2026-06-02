@@ -80,3 +80,43 @@ func TestAlterTableRemoveTTLFormat(t *testing.T) {
 	require.Equal(t, "tree.AlterTableRemoveTTL", remove.TypeName())
 	remove.Free()
 }
+
+// ttlOptions allocates a fresh set of the three TTL table options.
+func ttlOptions() []TableOption {
+	return []TableOption{
+		NewTableOptionTTL(NewBinaryExpr(PLUS, NewUnresolvedColName("created_at"), newIntervalExpr(7, "day"))),
+		NewTableOptionTTLEnable("ON"),
+		NewTableOptionTTLJobInterval("1h"),
+	}
+}
+
+// TestCreateTableResetFreesTTLOptions covers the TTL cases in both
+// CreateTable.reset switches (Options and DTOptions).
+func TestCreateTableResetFreesTTLOptions(t *testing.T) {
+	ct := &CreateTable{
+		Options:   ttlOptions(),
+		DTOptions: ttlOptions(),
+	}
+	require.NotPanics(t, func() { ct.reset() })
+}
+
+// TestAlterTableResetFreesTTLOptions covers the TTL / REMOVE TTL cases in
+// AlterTable.reset.
+func TestAlterTableResetFreesTTLOptions(t *testing.T) {
+	opts := ttlOptions()
+	at := &AlterTable{
+		Options: []AlterTableOption{opts[0], opts[1], opts[2], NewAlterTableRemoveTTL()},
+	}
+	require.NotPanics(t, func() { at.reset() })
+}
+
+// TestPartitionResetFreesTTLOptions covers the TTL cases in the option-free
+// switches of Partition.reset and SubPartition.reset (these share the generic
+// TableOption Free handling).
+func TestPartitionResetFreesTTLOptions(t *testing.T) {
+	p := &Partition{Options: ttlOptions()}
+	require.NotPanics(t, func() { p.reset() })
+
+	sp := &SubPartition{Options: ttlOptions()}
+	require.NotPanics(t, func() { sp.reset() })
+}
