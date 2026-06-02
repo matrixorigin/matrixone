@@ -374,6 +374,42 @@ func TestDiskCacheUpdateCleanupRemovesUnindexedFile(t *testing.T) {
 	require.False(t, cache.cache.Contains(diskPath))
 }
 
+func TestDiskCacheReadSkipsFullFileWhileUpdating(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+
+	diskPath := cache.pathForFile("foo")
+	doneUpdate := cache.startUpdate(diskPath)
+	defer doneUpdate()
+
+	readVector := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Offset: 1,
+				Size:   2,
+			},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cache.Read(ctx, readVector)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("disk cache read should not wait for an in-progress full-file update")
+	}
+	require.False(t, readVector.Entries[0].done)
+	readVector.Release()
+}
+
 func TestDiskCacheStaleRepairReplacesCacheEntrySize(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
