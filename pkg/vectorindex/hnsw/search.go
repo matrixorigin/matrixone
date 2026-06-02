@@ -243,6 +243,30 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 }
 
 // check config and update some parameters such as ef_search
+func (s *HnswSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+	keys, dists, err := s.Search(proc, query, rt)
+	if err != nil {
+		return err
+	}
+	if keys == nil {
+		return nil
+	}
+	switch ks := keys.(type) {
+	case []int64:
+		copy(outKeys, ks)
+	case []any:
+		for i, k := range ks {
+			outKeys[i] = k.(int64)
+		}
+	default:
+		return moerr.NewInternalErrorNoCtx("HnswSearch: unknown keys type")
+	}
+	for i, d := range dists {
+		outDists[i] = float32(d)
+	}
+	return nil
+}
+
 func (s *HnswSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 	return nil
 }
