@@ -107,3 +107,23 @@ func TestIOMergerMaxWait(t *testing.T) {
 	// will return
 	wait()
 }
+
+func TestIOMergerIsMerging(t *testing.T) {
+	merger := NewIOMerger()
+	key := IOMergeKey{
+		Path: "foo",
+	}
+
+	done, wait := merger.Merge(key, time.Second)
+
+	if done == nil || wait != nil {
+		t.Fatal("expected first merge to initiate")
+	}
+	if !merger.IsMerging(key) {
+		t.Fatal("expected key to be merging")
+	}
+	done()
+	if merger.IsMerging(key) {
+		t.Fatal("expected key to stop merging")
+	}
+}
