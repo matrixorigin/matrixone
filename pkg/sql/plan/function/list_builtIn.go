@@ -4068,6 +4068,9 @@ var supportedStringBuiltIns = []FuncNew{
 			{overloadId: 0, args: []types.T{types.T_geometry},
 				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
 				newOp:   func() executeLogicOfOverload { return StSwapXY }},
+			{overloadId: 1, args: []types.T{types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StSwapXY }},
 		},
 	},
 	{
@@ -4077,6 +4080,9 @@ var supportedStringBuiltIns = []FuncNew{
 		checkFn:    fixedTypeMatch,
 		Overloads: []overload{
 			{overloadId: 0, args: []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StValidate }},
+			{overloadId: 1, args: []types.T{types.T_geometry32},
 				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
 				newOp:   func() executeLogicOfOverload { return StValidate }},
 		},
@@ -4298,6 +4304,9 @@ var supportedStringBuiltIns = []FuncNew{
 		checkFn:    fixedTypeMatch,
 		Overloads: []overload{
 			{overloadId: 0, args: []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StConvexHull }},
+			{overloadId: 1, args: []types.T{types.T_geometry32},
 				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
 				newOp:   func() executeLogicOfOverload { return StConvexHull }},
 		},
@@ -4632,6 +4641,16 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return geometryResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return StGeometryN
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_geometry32, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return geometryResultType(parameters)
 				},
@@ -5005,6 +5024,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return StStartPoint
 				},
 			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type {
+					return geometryResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return StStartPoint
+				},
+			},
 		},
 	},
 
@@ -5019,6 +5048,16 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return geometryResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return StEndPoint
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_geometry32},
 				retType: func(parameters []types.Type) types.Type {
 					return geometryResultType(parameters)
 				},
@@ -5047,6 +5086,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return StPointN
 				},
 			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_geometry32, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return geometryResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return StPointN
+				},
+			},
 		},
 	},
 
@@ -5061,6 +5110,16 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return geometryResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return StExteriorRing
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_geometry32},
 				retType: func(parameters []types.Type) types.Type {
 					return geometryResultType(parameters)
 				},
@@ -5103,6 +5162,16 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return geometryResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return StInteriorRingN
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_geometry32, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return geometryResultType(parameters)
 				},
@@ -5257,6 +5326,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return StEnvelope
 				},
 			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type {
+					return geometryResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return StEnvelope
+				},
+			},
 		},
 	},
 
@@ -5278,6 +5357,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return StCentroid
 				},
 			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type {
+					return geometryResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return StCentroid
+				},
+			},
 		},
 	},
 
@@ -5292,6 +5381,16 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return geometryResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return StBoundary
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_geometry32},
 				retType: func(parameters []types.Type) types.Type {
 					return geometryResultType(parameters)
 				},
@@ -5334,6 +5433,16 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return geometryResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return StPointOnSurface
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_geometry32},
 				retType: func(parameters []types.Type) types.Type {
 					return geometryResultType(parameters)
 				},

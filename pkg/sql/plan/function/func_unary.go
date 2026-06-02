@@ -782,12 +782,13 @@ func StGeomFromGeoJSON(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 
 // StConvexHull returns the convex hull of a geometry (planar, monotone chain).
 func StConvexHull(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
 		g, err := decodeGeoGeometry(v)
 		if err != nil {
 			return nil, err
 		}
-		return geo.WriteWKB(geo.ConvexHull(g)), nil
+		return geoEncodeWKB(geo.ConvexHull(g), f32), nil
 	}, selectList)
 }
 
@@ -2257,7 +2258,8 @@ func StGeometryN(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		if err != nil {
 			return err
 		}
-		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(item), false); err != nil {
+		out := reencodeGeom32(functionUtil.QuickStrToBytes(item), geometryArgIsFloat32(ivecs, 0))
+		if err := rs.AppendBytes(out, false); err != nil {
 			return err
 		}
 	}
@@ -2299,7 +2301,7 @@ func StPointN(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		if err != nil {
 			return err
 		}
-		if err := rs.AppendBytes(point, false); err != nil {
+		if err := rs.AppendBytes(reencodeGeom32(point, geometryArgIsFloat32(ivecs, 0)), false); err != nil {
 			return err
 		}
 	}
@@ -2307,8 +2309,13 @@ func StPointN(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 func StExteriorRing(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		return polygonExteriorRingFromPayload(v)
+		out, err := polygonExteriorRingFromPayload(v)
+		if err != nil {
+			return nil, err
+		}
+		return reencodeGeom32(out, f32), nil
 	}, selectList)
 }
 
@@ -2353,7 +2360,7 @@ func StInteriorRingN(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		if err != nil {
 			return err
 		}
-		if err := rs.AppendBytes(ring, false); err != nil {
+		if err := rs.AppendBytes(reencodeGeom32(ring, geometryArgIsFloat32(ivecs, 0)), false); err != nil {
 			return err
 		}
 	}
@@ -2397,20 +2404,35 @@ func StIsRing(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 func StEnvelope(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		return envelopeFromPayload(v)
+		out, err := envelopeFromPayload(v)
+		if err != nil {
+			return nil, err
+		}
+		return reencodeGeom32(out, f32), nil
 	}, selectList)
 }
 
 func StCentroid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		return centroidFromPayload(v)
+		out, err := centroidFromPayload(v)
+		if err != nil {
+			return nil, err
+		}
+		return reencodeGeom32(out, f32), nil
 	}, selectList)
 }
 
 func StBoundary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		return boundaryFromPayload(v)
+		out, err := boundaryFromPayload(v)
+		if err != nil {
+			return nil, err
+		}
+		return reencodeGeom32(out, f32), nil
 	}, selectList)
 }
 
@@ -2421,20 +2443,35 @@ func StIsValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 func StPointOnSurface(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		return pointOnSurfaceFromPayload(v)
+		out, err := pointOnSurfaceFromPayload(v)
+		if err != nil {
+			return nil, err
+		}
+		return reencodeGeom32(out, f32), nil
 	}, selectList)
 }
 
 func StStartPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		return lineStringTerminalPointFromPayload(v, true)
+		out, err := lineStringTerminalPointFromPayload(v, true)
+		if err != nil {
+			return nil, err
+		}
+		return reencodeGeom32(out, f32), nil
 	}, selectList)
 }
 
 func StEndPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		return lineStringTerminalPointFromPayload(v, false)
+		out, err := lineStringTerminalPointFromPayload(v, false)
+		if err != nil {
+			return nil, err
+		}
+		return reencodeGeom32(out, f32), nil
 	}, selectList)
 }
 

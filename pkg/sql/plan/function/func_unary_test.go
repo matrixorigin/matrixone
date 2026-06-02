@@ -1405,6 +1405,35 @@ func TestStXY32(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestGeometry32ReturningUnary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// For a GEOMETRY32 input, a geometry-returning function must emit float32 WKB
+	// (shorter than float64 WKB) and round-trip to the expected WKT.
+	check := func(fn fEvalFn, in, wantWKT string) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{geom32WKB(t, in)}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{wantWKT}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+		// The output must be float32 WKB (decodable by the float32 reader).
+		raw := tc.GetResultVectorDirectly().GetBytesAt(0)
+		g, ferr := geo.ReadWKBFloat32(raw)
+		require.NoError(t, ferr, "output should be float32 WKB")
+		require.Equal(t, wantWKT, geo.WriteWKT(g))
+	}
+
+	check(StSwapXY, "POINT(1.5 2.5)", "POINT(2.5 1.5)")
+	check(StConvexHull, "MULTIPOINT(0 0, 4 0, 4 4, 0 4, 2 2)", "POLYGON((0 0,4 0,4 4,0 4,0 0))")
+	check(StEnvelope, "LINESTRING(0 0, 2 3)", "POLYGON((0 0,2 0,2 3,0 3,0 0))")
+	check(StStartPoint, "LINESTRING(1 2, 3 4, 5 6)", "POINT(1 2)")
+	check(StEndPoint, "LINESTRING(1 2, 3 4, 5 6)", "POINT(5 6)")
+	check(StExteriorRing, "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", "LINESTRING(0 0,4 0,4 4,0 4,0 0)")
+}
+
 func TestStXYRejectNonPoint(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
