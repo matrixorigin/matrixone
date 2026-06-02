@@ -644,10 +644,13 @@ const (
 	JSON_SCHEMA_VALID_REPORT = 461
 	JSON_VALUE               = 462
 
+	// GIS binary I/O
+	ST_ASWKB       = 463
+	ST_GEOMFROMWKB = 464
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-
-	FUNCTION_END_NUMBER = 463
+	FUNCTION_END_NUMBER = 465
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1040,7 +1043,12 @@ var functionIdRegister = map[string]int32{
 	"cast_set_index_value_to_index":  CAST_SET_INDEX_VALUE_TO_INDEX,
 	"cast_geometry_to_subtype":       CAST_GEOMETRY_TO_SUBTYPE,
 	"st_astext":                      ST_ASTEXT,
+	"st_aswkt":                       ST_ASTEXT,
+	"st_aswkb":                       ST_ASWKB,
+	"st_asbinary":                    ST_ASWKB,
 	"st_geomfromtext":                ST_GEOMFROMTEXT,
+	"st_geomfromwkb":                 ST_GEOMFROMWKB,
+	"st_geomfrombinary":              ST_GEOMFROMWKB,
 	"st_geometrytype":                ST_GEOMETRYTYPE,
 	"st_x":                           ST_X,
 	"st_y":                           ST_Y,

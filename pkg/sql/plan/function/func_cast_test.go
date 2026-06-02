@@ -259,6 +259,29 @@ func Test_CastFromDecimal256(t *testing.T) {
 	}
 }
 
+func TestStAsWKBAndGeomFromWKB(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	pointWKB := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	lineWKB := string(encodeGeometryPayload("LINESTRING(0 0,1 1)", 0, false))
+
+	// ST_AsWKB(geometry) -> standard WKB blob equal to the stored WKB.
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false})},
+		NewFunctionTestResult(types.T_blob.ToType(), false, []string{pointWKB}, []bool{false}),
+		StAsWKB)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+
+	// ST_GeomFromWKB(wkb) -> geometry rendering as the original WKT.
+	tc2 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{lineWKB}, []bool{false})},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"LINESTRING(0 0,1 1)"}, []bool{false}),
+		StGeomFromWKB)
+	ok2, info2 := tc2.Run()
+	require.True(t, ok2, info2)
+}
+
 func TestGeometry32EncodeDecode(t *testing.T) {
 	// Float32 WKB is shorter than float64 (4 vs 8 bytes per ordinate) and both
 	// decode back to the same WKT.

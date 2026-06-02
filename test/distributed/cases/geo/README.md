@@ -8,7 +8,7 @@ the column/expression type.
 
 | File | Covers |
 |------|--------|
-| `geo_io.sql` | WKT↔WKB↔geometry round-trips (`ST_GeomFromText`, `ST_AsText`, `CAST`), all seven kinds + `EMPTY`, number formats, NULL and invalid-input handling. |
+| `geo_io.sql` | WKT↔WKB↔geometry round-trips (`ST_GeomFromText`, `ST_AsText`, `ST_AsWKB`/`ST_GeomFromWKB` and the `*Binary` synonyms, `CAST`), all seven kinds + `EMPTY`, number formats, NULL and invalid-input handling. |
 | `geo_type_ddl.sql` | DDL for `GEOMETRY` and the subtype aliases, the `GEOMETRY32`/`GEOGRAPHY`/`*32` aliases, `SRID` attribute, `SHOW CREATE TABLE`, insert/select/update/delete storage, and subtype enforcement. |
 | `geo_functions_unary.sql` | Accessors (`ST_GeometryType`, `ST_X`, `ST_Y`, `ST_Dimension`, `ST_NumPoints`, `ST_NumGeometries`, `ST_NumInteriorRings`, `ST_IsEmpty`, `ST_IsClosed`, `ST_IsCollection`, …), measures (`ST_Area`, `ST_Length`), and derived geometries (`ST_Centroid`, `ST_Boundary`, `ST_Envelope`, `ST_StartPoint`, `ST_EndPoint`, `ST_PointN`, `ST_ExteriorRing`, `ST_InteriorRingN`, `ST_GeometryN`, `ST_PointOnSurface`). |
 | `geo_functions_binary.sql` | `ST_Distance` and the relationship predicates `ST_Contains`, `ST_Within`, `ST_Intersects`, `ST_Disjoint`, `ST_Touches`, `ST_Crosses`, `ST_Overlaps`, `ST_Equals`, `ST_Covers`, `ST_CoveredBy` (Cartesian / SRID 0). |
@@ -33,6 +33,6 @@ Then run them normally:
 
 ## Scope notes
 
-Tests intentionally cover only what is implemented today. Not yet exercised
-(pending follow-up work): geodetic (SRID 4326) computation — spatial measures
-here are Cartesian — and `ST_AsWKB`/`ST_GeomFromWKB` binary I/O.
+Tests intentionally cover only what is implemented today. Spatial measures here
+are Cartesian; geodetic (SRID 4326) computation is the remaining follow-up
+(design Step 2).

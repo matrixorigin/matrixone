@@ -734,6 +734,39 @@ func StAsText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}, selectList)
 }
 
+// StAsWKB returns the standard (float64) Well-Known Binary of a geometry,
+// up-converting a GEOMETRY32 value to float64 so the output is always
+// interoperable standard WKB.
+func StAsWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		wkt, _, _, err := decodeGeometryPayload(v)
+		if err != nil {
+			return nil, err
+		}
+		g, perr := geo.ParseWKT(wkt)
+		if perr != nil {
+			return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		return geo.WriteWKB(g), nil
+	}, selectList)
+}
+
+// StGeomFromWKB builds a geometry from standard Well-Known Binary.
+func StGeomFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	maxPoints := maxPointsInGeometryLimit(proc)
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		g, err := geo.ReadWKB(v)
+		if err != nil {
+			return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		wkt := geo.WriteWKT(g)
+		if err := validateGeometryTextForStorage(wkt, maxPoints); err != nil {
+			return nil, err
+		}
+		return geo.WriteWKB(g), nil
+	}, selectList)
+}
+
 func StGeomFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	maxPoints := maxPointsInGeometryLimit(proc)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
