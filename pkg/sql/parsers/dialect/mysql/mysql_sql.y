@@ -6537,7 +6537,7 @@ join_table:
             Cond: $4,
         }
     }
-|   table_reference outer_join table_factor join_condition
+|   table_reference outer_join table_factor join_condition_opt
     {
         $$ = &tree.JoinTableExpr{
             Left: $1,

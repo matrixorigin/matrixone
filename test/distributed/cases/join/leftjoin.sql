@@ -132,4 +132,15 @@ drop table t_order;
 drop table t_summary;
 drop table t_mapping;
 
+-- LEFT JOIN without ON/USING (issue #24737)
+drop table if exists t_left_no_on;
+drop table if exists t_right_no_on;
+create table t_left_no_on (id int primary key, name varchar(20));
+create table t_right_no_on (id int primary key, left_id int);
+insert into t_left_no_on values (1, 'a'), (2, 'b');
+insert into t_right_no_on values (1, 1), (2, 1);
+select t_left_no_on.id, t_left_no_on.name from t_left_no_on left join t_right_no_on where t_left_no_on.id = 1;
+drop table if exists t_left_no_on;
+drop table if exists t_right_no_on;
+
 drop database if exists d1;
