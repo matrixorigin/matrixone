@@ -8211,10 +8211,13 @@ func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
 	objType objectType,
 	level tree.PrivilegeLevel,
 ) (*btree.Set[int64], error) {
-	if level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
-		level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
-		level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR ||
-		level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR {
+	switch level.Level {
+	case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
+		return getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, objectIDAll)
+	case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+		tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+		tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+		tree.PRIVILEGE_LEVEL_TYPE_STAR:
 		_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, astObjType, level)
 		if err != nil {
 			if !isMissingPrivilegeObjectError(err) {
@@ -8231,6 +8234,25 @@ func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
 			return nil, err
 		}
 		mergeRoleSets(roleSet, globalRoleSet)
+		if level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
+			level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
+			dbName := level.DbName
+			if dbName == "" {
+				dbName = ses.GetDatabaseName()
+			}
+			dbId, err := getDatabaseOrTableId(ctx, bh, true, dbName, "")
+			if err != nil {
+				if !isMissingPrivilegeObjectError(err) {
+					return nil, err
+				}
+				return roleSet, nil
+			}
+			dbRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, dbId)
+			if err != nil {
+				return nil, err
+			}
+			mergeRoleSets(roleSet, dbRoleSet)
+		}
 		return roleSet, nil
 	}
 
