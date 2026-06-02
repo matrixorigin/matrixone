@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -238,7 +239,8 @@ func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg
 		return moerr.NewInternalErrorNoCtx("number of centroids in db != Nlist")
 	}
 
-	bfidx, err := brute_force.NewBruteForceIndex[T](centroids, idxcfg.Ivfflat.Dimensions, metric.MetricType(idxcfg.Ivfflat.Metric), uint(elemsz), uint(nthread))
+	gpuMode := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
+	bfidx, err := brute_force.NewBruteForceIndex[T](centroids, idxcfg.Ivfflat.Dimensions, metric.MetricType(idxcfg.Ivfflat.Metric), uint(elemsz), uint(nthread), gpuMode)
 	if err != nil {
 		return err
 	}
@@ -691,6 +693,30 @@ func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 }
 
 // check config and update some parameters such as ef_search
+func (s *IvfflatSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+	keys, dists, err := s.Search(proc, query, rt)
+	if err != nil {
+		return err
+	}
+	if keys == nil {
+		return nil
+	}
+	switch ks := keys.(type) {
+	case []int64:
+		copy(outKeys, ks)
+	case []any:
+		for i, k := range ks {
+			outKeys[i] = k.(int64)
+		}
+	default:
+		return moerr.NewInternalErrorNoCtx("IvfSearch: unknown keys type")
+	}
+	for i, d := range dists {
+		outDists[i] = float32(d)
+	}
+	return nil
+}
+
 func (s *IvfflatSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 	return nil
 }
