@@ -5288,6 +5288,49 @@ func TestStMeasuresGeodetic(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestMBRPredicates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	run := func(fn fEvalFn, g1, g2 string, want bool) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g1}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g2}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_bool.ToType(), false, []bool{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	outer := "POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))"
+	inner := "POLYGON((2 2, 4 2, 4 4, 2 4, 2 2))"
+	right := "POLYGON((10 0, 20 0, 20 10, 10 10, 10 0))"  // shares the x=10 edge
+	far := "POLYGON((20 20, 30 20, 30 30, 20 30, 20 20))" // disjoint
+	cross := "POLYGON((5 5, 15 5, 15 15, 5 15, 5 5))"     // partial overlap
+
+	run(MBRContains, outer, inner, true)
+	run(MBRContains, inner, outer, false)
+	run(MBRWithin, inner, outer, true)
+	run(MBRCovers, outer, inner, true)
+	run(MBRCoveredBy, inner, outer, true)
+
+	run(MBREquals, outer, outer, true)
+	run(MBREquals, outer, inner, false)
+
+	run(MBRDisjoint, outer, far, true)
+	run(MBRDisjoint, outer, inner, false)
+	run(MBRIntersects, outer, inner, true)
+	run(MBRIntersects, outer, far, false)
+
+	run(MBRTouches, outer, right, true)
+	run(MBRTouches, outer, cross, false)
+
+	run(MBROverlaps, outer, cross, true)
+	run(MBROverlaps, outer, inner, false) // containment is not overlap
+	run(MBROverlaps, outer, right, false) // edge touch is not overlap
+}
+
 func TestGeoHashFunctions(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

@@ -4147,6 +4147,107 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// MBR predicates: bounding-box comparisons over two geometries -> bool.
+	{
+		functionId: MBRCONTAINS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:   func() executeLogicOfOverload { return MBRContains }},
+		},
+	},
+	{
+		functionId: MBRCOVEREDBY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:   func() executeLogicOfOverload { return MBRCoveredBy }},
+		},
+	},
+	{
+		functionId: MBRCOVERS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:   func() executeLogicOfOverload { return MBRCovers }},
+		},
+	},
+	{
+		functionId: MBRDISJOINT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:   func() executeLogicOfOverload { return MBRDisjoint }},
+		},
+	},
+	{
+		functionId: MBREQUALS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:   func() executeLogicOfOverload { return MBREquals }},
+		},
+	},
+	{
+		functionId: MBRINTERSECTS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:   func() executeLogicOfOverload { return MBRIntersects }},
+		},
+	},
+	{
+		functionId: MBROVERLAPS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:   func() executeLogicOfOverload { return MBROverlaps }},
+		},
+	},
+	{
+		functionId: MBRTOUCHES,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:   func() executeLogicOfOverload { return MBRTouches }},
+		},
+	},
+	{
+		functionId: MBRWITHIN,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:   func() executeLogicOfOverload { return MBRWithin }},
+		},
+	},
+
 	// function `st_geomfromtext`
 	{
 		functionId: ST_GEOMFROMTEXT,

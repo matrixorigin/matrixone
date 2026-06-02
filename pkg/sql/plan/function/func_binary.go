@@ -8069,6 +8069,98 @@ func StPointFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
+// --- MBR (minimum bounding rectangle) predicates ---------------------------
+
+// mbrPredicate evaluates a bounding-box predicate on the envelopes of two
+// geometries.
+func mbrPredicate(left, right []byte, pred func(a, b geo.BBox) bool) (bool, error) {
+	lg, err := decodeGeoGeometry(left)
+	if err != nil {
+		return false, err
+	}
+	rg, err := decodeGeoGeometry(right)
+	if err != nil {
+		return false, err
+	}
+	a, ok1 := geo.Envelope(lg)
+	b, ok2 := geo.Envelope(rg)
+	if !ok1 || !ok2 {
+		return false, nil
+	}
+	return pred(a, b), nil
+}
+
+func bboxContains(a, b geo.BBox) bool {
+	return a.MinX <= b.MinX && a.MinY <= b.MinY && a.MaxX >= b.MaxX && a.MaxY >= b.MaxY
+}
+
+func bboxDisjoint(a, b geo.BBox) bool {
+	return a.MaxX < b.MinX || a.MinX > b.MaxX || a.MaxY < b.MinY || a.MinY > b.MaxY
+}
+
+func bboxTouches(a, b geo.BBox) bool {
+	ix1, iy1 := math.Max(a.MinX, b.MinX), math.Max(a.MinY, b.MinY)
+	ix2, iy2 := math.Min(a.MaxX, b.MaxX), math.Min(a.MaxY, b.MaxY)
+	if ix1 > ix2 || iy1 > iy2 {
+		return false
+	}
+	// Intersect, but only along an edge or at a point (zero-area intersection).
+	return ix1 == ix2 || iy1 == iy2
+}
+
+func bboxOverlaps(a, b geo.BBox) bool {
+	ix1, iy1 := math.Max(a.MinX, b.MinX), math.Max(a.MinY, b.MinY)
+	ix2, iy2 := math.Min(a.MaxX, b.MaxX), math.Min(a.MaxY, b.MaxY)
+	if ix1 >= ix2 || iy1 >= iy2 {
+		return false // disjoint or touching only
+	}
+	return !bboxContains(a, b) && !bboxContains(b, a)
+}
+
+func mbrBinary(name string, pred func(a, b geo.BBox) bool) fEvalFn {
+	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
+			return mbrPredicate(v1, v2, pred)
+		}, selectList)
+	}
+}
+
+func MBRContains(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBRContains", bboxContains)(ivecs, result, proc, length, selectList)
+}
+
+func MBRCovers(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBRCovers", bboxContains)(ivecs, result, proc, length, selectList)
+}
+
+func MBRWithin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBRWithin", func(a, b geo.BBox) bool { return bboxContains(b, a) })(ivecs, result, proc, length, selectList)
+}
+
+func MBRCoveredBy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBRCoveredBy", func(a, b geo.BBox) bool { return bboxContains(b, a) })(ivecs, result, proc, length, selectList)
+}
+
+func MBRDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBRDisjoint", bboxDisjoint)(ivecs, result, proc, length, selectList)
+}
+
+func MBRIntersects(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBRIntersects", func(a, b geo.BBox) bool { return !bboxDisjoint(a, b) })(ivecs, result, proc, length, selectList)
+}
+
+func MBREquals(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBREquals", func(a, b geo.BBox) bool { return a == b })(ivecs, result, proc, length, selectList)
+}
+
+func MBROverlaps(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBROverlaps", bboxOverlaps)(ivecs, result, proc, length, selectList)
+}
+
+func MBRTouches(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBRTouches", bboxTouches)(ivecs, result, proc, length, selectList)
+}
+
 // StMakeEnvelope builds the axis-aligned rectangle polygon spanning two corner
 // points (ST_MakeEnvelope).
 func StMakeEnvelope(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
