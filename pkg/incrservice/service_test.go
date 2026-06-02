@@ -239,8 +239,9 @@ func TestMemStoreSetOffsetLowerThanPreAllocated(t *testing.T) {
 			def[0].Offset = 10000
 			require.NoError(t, store.Create(ctx, 0, def, nil))
 
-			// SetOffset to a value LOWER than the current offset
-			require.NoError(t, store.SetOffset(ctx, 0, def[0].ColName, 99, nil))
+			// ForceSetOffset to a value LOWER than the current offset bypasses
+			// the monotonic guard. Regular SetOffset would reject the decrease.
+			require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 99, nil))
 
 			store.Lock()
 			require.Equal(t, uint64(99), store.caches[0][0].Offset)
@@ -350,6 +351,88 @@ func TestDeleteOnOtherService(t *testing.T) {
 			op2 := ops[1]
 			require.NoError(t, s2.Delete(ctx, 0, op2))
 			require.NoError(t, op2.Commit(ctx))
+		})
+}
+
+
+func TestForceSetOffset(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			s := ss[0]
+			op := ops[0]
+			def := newTestTableDef(1)
+			require.NoError(t, s.Create(ctx, 0, def, op))
+			require.NoError(t, op.Commit(ctx))
+
+			// Simulate pre-allocation by advancing the store offset past the
+			// desired value. CountPerAllocate defaults to 10000.
+			store := s.store.(*memStore)
+			store.Lock()
+			store.caches[0][0].Offset = 10000
+			store.Unlock()
+
+			// SetOffset should detect the pre-allocation gap and use
+			// ForceSetOffset to bypass the store-level monotonic guard.
+			require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 100, nil))
+
+			store.Lock()
+			require.Equal(t, uint64(100), store.caches[0][0].Offset)
+			store.Unlock()
+		})
+}
+
+func TestMemStoreForceSetOffset(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			store := ss[0].store.(*memStore)
+			op := ops[0]
+			def := newTestTableDef(1)
+			require.NoError(t, store.Create(ctx, 0, def, op))
+
+			// ForceSetOffset bypasses the monotonic guard, allowing any value.
+			require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 50, op))
+
+			store.Lock()
+			require.Equal(t, uint64(50), store.uncommitted[string(op.Txn().ID)][0][0].Offset)
+			store.Unlock()
+		})
+}
+
+func TestMemStoreForceSetOffsetLowerThanCurrent(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			store := ss[0].store.(*memStore)
+			op := ops[0]
+			def := newTestTableDef(1)
+			require.NoError(t, store.Create(ctx, 0, def, op))
+
+			// Raise offset first with monotonic SetOffset.
+			require.NoError(t, store.SetOffset(ctx, 0, def[0].ColName, 1000, op))
+
+			// ForceSetOffset can lower it below the current value.
+			require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 100, op))
+
+			store.Lock()
+			require.Equal(t, uint64(100), store.uncommitted[string(op.Txn().ID)][0][0].Offset)
+			store.Unlock()
 		})
 }
 

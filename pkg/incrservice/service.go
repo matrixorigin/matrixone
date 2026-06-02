@@ -290,6 +290,28 @@ func (s *service) SetOffset(
 	if err := s.Reload(ctx, tableID); err != nil {
 		return err
 	}
+
+	// Check if the current store offset was already advanced past the desired
+	// value by pre-allocation (CountPerAllocate defaults to 10000). When this
+	// happens the store-level monotonic guard in SetOffset would reject the
+	// lower value. Use ForceSetOffset instead to bypass the guard. This is safe
+	// because Reload already dropped all local caches and ALTER TABLE holds an
+	// exclusive DDL lock.
+	// Use nil txnOp to read from committed state, since the ALTER TABLE
+	// transaction is new and has no uncommitted incrservice changes.
+	cols, err := s.store.GetColumns(ctx, tableID, nil)
+	if err != nil {
+		return err
+	}
+	for i := range cols {
+		if cols[i].ColName == colName {
+			if cols[i].Offset >= offset {
+				return s.store.ForceSetOffset(ctx, tableID, colName, offset, txnOp)
+			}
+			break
+		}
+	}
+
 	return s.store.SetOffset(ctx, tableID, colName, offset, txnOp)
 }
 
