@@ -830,6 +830,66 @@ func StGeomFromTextWithSRID(ivecs []*vector.Vector, result vector.FunctionResult
 	return nil
 }
 
+// geomFromTextSubtype is the shared implementation of the typed text
+// constructors (ST_PointFromText, ST_LineFromText, ...): parse WKT, assert the
+// expected subtype, and return bare WKB. The optional SRID argument of the
+// +SRID overloads is ignored here (it lands in the result type via the binder);
+// the eval only reads the WKT parameter.
+func geomFromTextSubtype(payload []byte, maxPoints int64, want string) ([]byte, error) {
+	wkt := strings.TrimSpace(functionUtil.QuickBytesToStr(payload))
+	if len(wkt) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	if err := validateGeometryTextForStorage(wkt, maxPoints); err != nil {
+		return nil, err
+	}
+	typeName, err := geometryTypeNameFromText(wkt)
+	if err != nil {
+		return nil, err
+	}
+	if typeName != want {
+		return nil, moerr.NewInvalidInputNoCtxf("geometry is not a %s", want)
+	}
+	return encodeGeometryPayload(wkt, 0, false), nil
+}
+
+func stFromTextSubtype(want string) func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error {
+	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		maxPoints := maxPointsInGeometryLimit(proc)
+		return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+			return geomFromTextSubtype(v, maxPoints, want)
+		}, selectList)
+	}
+}
+
+func StPointFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromTextSubtype("POINT")(ivecs, result, proc, length, selectList)
+}
+
+func StLineFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromTextSubtype("LINESTRING")(ivecs, result, proc, length, selectList)
+}
+
+func StPolyFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromTextSubtype("POLYGON")(ivecs, result, proc, length, selectList)
+}
+
+func StMPointFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromTextSubtype("MULTIPOINT")(ivecs, result, proc, length, selectList)
+}
+
+func StMLineFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromTextSubtype("MULTILINESTRING")(ivecs, result, proc, length, selectList)
+}
+
+func StMPolyFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromTextSubtype("MULTIPOLYGON")(ivecs, result, proc, length, selectList)
+}
+
+func StGeomCollFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromTextSubtype("GEOMETRYCOLLECTION")(ivecs, result, proc, length, selectList)
+}
+
 func StSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// SRID is carried by the column/expression type (Width = srid+1 when a SRID
 	// is defined, 0 otherwise), not by the bare-WKB payload.

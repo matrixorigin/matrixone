@@ -3922,6 +3922,85 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// typed text constructors: st_pointfromtext, st_linefromtext, ...
+	{
+		functionId: ST_POINTFROMTEXT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry.ToType() },
+				newOp:   func() executeLogicOfOverload { return StPointFromText }},
+		},
+	},
+	{
+		functionId: ST_LINEFROMTEXT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry.ToType() },
+				newOp:   func() executeLogicOfOverload { return StLineFromText }},
+		},
+	},
+	{
+		functionId: ST_POLYFROMTEXT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry.ToType() },
+				newOp:   func() executeLogicOfOverload { return StPolyFromText }},
+		},
+	},
+	{
+		functionId: ST_MPOINTFROMTEXT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry.ToType() },
+				newOp:   func() executeLogicOfOverload { return StMPointFromText }},
+		},
+	},
+	{
+		functionId: ST_MLINEFROMTEXT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry.ToType() },
+				newOp:   func() executeLogicOfOverload { return StMLineFromText }},
+		},
+	},
+	{
+		functionId: ST_MPOLYFROMTEXT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry.ToType() },
+				newOp:   func() executeLogicOfOverload { return StMPolyFromText }},
+		},
+	},
+	{
+		functionId: ST_GEOMCOLLFROMTEXT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry.ToType() },
+				newOp:   func() executeLogicOfOverload { return StGeomCollFromText }},
+		},
+	},
+
 	// function `st_geomfromtext`
 	{
 		functionId: ST_GEOMFROMTEXT,

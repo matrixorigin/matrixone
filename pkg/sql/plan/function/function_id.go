@@ -648,9 +648,18 @@ const (
 	ST_ASWKB       = 463
 	ST_GEOMFROMWKB = 464
 
+	// GIS typed text constructors
+	ST_POINTFROMTEXT    = 465
+	ST_LINEFROMTEXT     = 466
+	ST_POLYFROMTEXT     = 467
+	ST_MPOINTFROMTEXT   = 468
+	ST_MLINEFROMTEXT    = 469
+	ST_MPOLYFROMTEXT    = 470
+	ST_GEOMCOLLFROMTEXT = 471
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 465
+	FUNCTION_END_NUMBER = 472
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1047,8 +1056,23 @@ var functionIdRegister = map[string]int32{
 	"st_aswkb":                       ST_ASWKB,
 	"st_asbinary":                    ST_ASWKB,
 	"st_geomfromtext":                ST_GEOMFROMTEXT,
+	"st_geometryfromtext":            ST_GEOMFROMTEXT,
 	"st_geomfromwkb":                 ST_GEOMFROMWKB,
 	"st_geomfrombinary":              ST_GEOMFROMWKB,
+	"st_pointfromtext":               ST_POINTFROMTEXT,
+	"st_linefromtext":                ST_LINEFROMTEXT,
+	"st_linestringfromtext":          ST_LINEFROMTEXT,
+	"st_polyfromtext":                ST_POLYFROMTEXT,
+	"st_polygonfromtext":             ST_POLYFROMTEXT,
+	"st_mpointfromtext":              ST_MPOINTFROMTEXT,
+	"st_multipointfromtext":          ST_MPOINTFROMTEXT,
+	"st_mlinefromtext":               ST_MLINEFROMTEXT,
+	"st_multilinestringfromtext":     ST_MLINEFROMTEXT,
+	"st_mpolyfromtext":               ST_MPOLYFROMTEXT,
+	"st_multipolygonfromtext":        ST_MPOLYFROMTEXT,
+	"st_geomcollfromtext":            ST_GEOMCOLLFROMTEXT,
+	"st_geomcollfromtxt":             ST_GEOMCOLLFROMTEXT,
+	"st_geometrycollectionfromtext":  ST_GEOMCOLLFROMTEXT,
 	"st_geometrytype":                ST_GEOMETRYTYPE,
 	"st_x":                           ST_X,
 	"st_y":                           ST_Y,
@@ -1074,6 +1098,7 @@ var functionIdRegister = map[string]int32{
 	"st_pointn":                      ST_POINTN,
 	"st_exteriorring":                ST_EXTERIORRING,
 	"st_numinteriorrings":            ST_NUMINTERIORRINGS,
+	"st_numinteriorring":             ST_NUMINTERIORRINGS,
 	"st_interiorringn":               ST_INTERIORRINGN,
 	"st_numpoints":                   ST_NUMPOINTS,
 	"st_isclosed":                    ST_ISCLOSED,

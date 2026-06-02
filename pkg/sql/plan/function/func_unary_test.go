@@ -1186,6 +1186,33 @@ func TestStGeomFromTextWithSRIDOutOfRange(t *testing.T) {
 	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
 }
 
+func TestTypedTextConstructors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	run := func(fn fEvalFn, wkt, want string, wantErr bool) {
+		inputs := []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{wkt}, []bool{false})}
+		expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{want}, []bool{false})
+		tc := NewFunctionTestCase(proc, inputs, expect, fn)
+		ok, info := tc.Run()
+		if wantErr {
+			require.False(t, ok, "%s should be rejected", wkt)
+		} else {
+			require.True(t, ok, info)
+		}
+	}
+	// Each constructor accepts its subtype and rejects others.
+	run(StPointFromText, "POINT(1 2)", "POINT(1 2)", false)
+	run(StPointFromText, "LINESTRING(0 0,1 1)", "", true)
+	run(StLineFromText, "LINESTRING(0 0,1 1,2 3)", "LINESTRING(0 0,1 1,2 3)", false)
+	run(StLineFromText, "POINT(1 2)", "", true)
+	run(StPolyFromText, "POLYGON((0 0,1 0,1 1,0 0))", "POLYGON((0 0,1 0,1 1,0 0))", false)
+	run(StPolyFromText, "POINT(1 2)", "", true)
+	run(StMPointFromText, "MULTIPOINT(1 1,2 2)", "MULTIPOINT(1 1,2 2)", false)
+	run(StMLineFromText, "MULTILINESTRING((0 0,1 1),(2 2,3 3))", "MULTILINESTRING((0 0,1 1),(2 2,3 3))", false)
+	run(StMPolyFromText, "MULTIPOLYGON(((0 0,1 0,1 1,0 0)))", "MULTIPOLYGON(((0 0,1 0,1 1,0 0)))", false)
+	run(StGeomCollFromText, "GEOMETRYCOLLECTION(POINT(1 1))", "GEOMETRYCOLLECTION(POINT(1 1))", false)
+	run(StGeomCollFromText, "POINT(1 1)", "", true)
+}
+
 func TestStSRID(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
