@@ -156,3 +156,9 @@ func (f *CRoaringFilter) Free() {
 
 // Exact is true: a roaring bitset is an exact membership test (no false positives).
 func (f *CRoaringFilter) Exact() bool { return true }
+
+// CHandle returns the underlying C roaring64 handle for the cgo search bridge.
+func (f *CRoaringFilter) CHandle() unsafe.Pointer { return f.ptr }
+
+// CKind reports the roaring64 structure tag.
+func (f *CRoaringFilter) CKind() byte { return TagCRoaring }

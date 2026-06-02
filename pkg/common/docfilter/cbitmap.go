@@ -174,3 +174,9 @@ func (f *CbitmapFilter) Free() {
 
 // Exact is true: a dense bitset is an exact membership test (no false positives).
 func (f *CbitmapFilter) Exact() bool { return true }
+
+// CHandle returns the underlying C dense-bitset handle for the cgo search bridge.
+func (f *CbitmapFilter) CHandle() unsafe.Pointer { return f.ptr }
+
+// CKind reports the dense-bitset structure tag.
+func (f *CbitmapFilter) CKind() byte { return TagCbitmap }

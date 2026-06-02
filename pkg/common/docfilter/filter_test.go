@@ -108,6 +108,40 @@ func TestNewErrors(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestCFilterBridge covers the cgo bridge methods (CHandle/CKind) on
+// MembershipFilter used by the usearch filtered search, for all three structures.
+func TestCFilterBridge(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	cases := []struct {
+		name     string
+		build    func() *vector.Vector
+		wantKind byte
+	}{
+		{"cbitmap", func() *vector.Vector {
+			return buildIntVec(t, mp, types.T_int64.ToType(), []int64{1, 2, 3}, nil)
+		}, TagCbitmap},
+		{"croaring", func() *vector.Vector {
+			return buildIntVec(t, mp, types.T_int64.ToType(), []int64{1, int64(MaxCbitmapBits) + 5}, nil)
+		}, TagCRoaring},
+		{"bloom", func() *vector.Vector {
+			return buildVarcharVec(t, mp, []string{"a", "b"})
+		}, TagBloom},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := tc.build()
+			defer v.Free(mp)
+			f, err := New(must(Build(v)))
+			require.NoError(t, err)
+			defer f.Free()
+
+			require.Equal(t, tc.wantKind, f.CKind())
+			require.NotNil(t, f.CHandle())
+		})
+	}
+}
+
 func TestCbitmapFeasible(t *testing.T) {
 	require.True(t, CbitmapFeasible(0))
 	require.True(t, CbitmapFeasible(100))

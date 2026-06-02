@@ -15,6 +15,8 @@
 package docfilter
 
 import (
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,12 +27,13 @@ import (
 const bloomFpProbability = 0.001
 
 // MembershipFilter is a primary-key membership filter (fulltext calls the PK
-// doc_id). It is the PRODUCER view: its method set is exactly the consumer
-// interface engine.MembershipFilter (Test/TestVector/Valid/Exact/Free) plus
-// Share, so a value can be stored directly in engine.FilterHint.BF without this
-// package importing engine (a pkg/common -> pkg/vm/engine layering inversion).
-// The two are kept compatible by a compile-time assertion in package disttae;
-// the shared method set's single source of truth lives in engine.
+// doc_id). It is the PRODUCER view: its method set is the consumer interface
+// engine.MembershipFilter (Test/TestVector/Valid/Exact/Free) plus Share — so a
+// value can be stored directly in engine.FilterHint.BF without this package
+// importing engine (a pkg/common -> pkg/vm/engine layering inversion) — plus
+// the CHandle/CKind cgo bridge below. The consumer half is kept compatible with
+// engine.MembershipFilter by a compile-time assertion in package disttae; that
+// shared method set's single source of truth lives in engine.
 //
 // Callers obtain one via New (from tagged bytes produced by Build) and never
 // need to know which concrete structure (cbitmap / CRoaring / bloom) backs it.
@@ -48,6 +51,15 @@ type MembershipFilter interface {
 	Free()
 	// Share returns a filter for one parallel reader (refcount or per-reader wrapper).
 	Share() MembershipFilter
+
+	// CHandle returns the underlying C handle (mo_cbitmap_t* / roaring64 /
+	// bloomfilter_t*) for the cgo vector-index filtered-search bridge
+	// (pkg/vectorindex/usearchex), whose C predicate tests each candidate key
+	// against the structure directly.
+	CHandle() unsafe.Pointer
+	// CKind reports the structure tag (TagBloom / TagCRoaring / TagCbitmap),
+	// telling the bridge which C membership test to dispatch.
+	CKind() byte
 }
 
 var (
@@ -138,6 +150,17 @@ func (f *cbloomFilter) Valid() bool {
 
 // Exact is false: a bloom filter is approximate (has false positives).
 func (f *cbloomFilter) Exact() bool { return false }
+
+// CHandle returns the underlying C bloomfilter_t* for the cgo search bridge.
+func (f *cbloomFilter) CHandle() unsafe.Pointer {
+	if f == nil || f.bf == nil {
+		return nil
+	}
+	return unsafe.Pointer(f.bf.Ptr())
+}
+
+// CKind reports the bloom structure tag.
+func (f *cbloomFilter) CKind() byte { return TagBloom }
 
 func (f *cbloomFilter) Free() {
 	if f != nil && f.bf != nil {
