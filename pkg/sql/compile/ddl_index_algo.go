@@ -15,12 +15,17 @@
 package compile
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -55,11 +60,72 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 		return nil
 	}
 	insertSQL := genInsertIndexTableSql(originalTableDef, indexDef, qryDatabase, indexDef.Unique)
-	err := c.runSql(insertSQL)
+	if indexDef.Unique {
+		return c.precheckAndInsertUniqueIndexTable(qryDatabase, originalTableDef, indexDef, insertSQL)
+	}
+	return c.runSql(insertSQL)
+}
+
+func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.TableDef, indexDef *plan.IndexDef) string {
+	groupExpr := partsToColsStr(indexDef.Parts)
+	nullCheckExpr := fmt.Sprintf("%s IS NOT NULL", groupExpr)
+	if len(indexDef.Parts) > 1 {
+		nullChecks := make([]string, 0, len(indexDef.Parts))
+		for _, part := range indexDef.Parts {
+			part = catalog.ResolveAlias(part)
+			nullChecks = append(nullChecks, fmt.Sprintf("%s IS NOT NULL", quoteMySQLQualifiedIdent(part)))
+		}
+		nullCheckExpr = strings.Join(nullChecks, " AND ")
+	}
+	return fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s GROUP BY %s HAVING count(*) > 1 LIMIT 1",
+		groupExpr,
+		quoteMySQLIdent(dbName),
+		quoteMySQLIdent(tableDef.Name),
+		nullCheckExpr,
+		groupExpr,
+	)
+}
+
+func (c *Compile) precheckAndInsertUniqueIndexTable(
+	dbName string,
+	tableDef *plan.TableDef,
+	indexDef *plan.IndexDef,
+	insertSQL string,
+) error {
+	// Unique indexes allow NULL keys, so the check mirrors the hidden-index
+	// backfill filter and only groups non-NULL keys.
+	duplicateCheckSQL := buildCreateUniqueIndexDuplicateCheckSQL(dbName, tableDef, indexDef)
+	duplicateCheckRes, err := c.runSqlWithResultAndOptions(duplicateCheckSQL, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
+		c.proc.Errorf(c.proc.Ctx, "create unique index duplicate check failed, sql is %s", duplicateCheckSQL)
 		return err
 	}
-	return nil
+	defer duplicateCheckRes.Close()
+
+	if values, _, ok := firstAlterCopyResultRow(duplicateCheckRes, len(indexDef.Parts)); ok {
+		return moerr.NewDuplicateEntry(c.proc.Ctx, formatAlterCopyPkValue(values), catalog.IndexTableIndexColName)
+	}
+
+	// The precheck has already proved source-key uniqueness at this snapshot.
+	// Let the hidden-index backfill skip its insert-time PK hash dedup path.
+	opt := &plan.AlterCopyOpt{
+		TargetTableName: indexDef.IndexTableName,
+		SkipPkDedup:     true,
+	}
+	stmtOpt := executor.StatementOption{}.WithAlterCopyOpt(opt)
+
+	restoreCtx := c.proc.Ctx
+	if restoreCtx == nil {
+		restoreCtx = c.proc.GetTopContext()
+		if restoreCtx == nil {
+			restoreCtx = context.Background()
+		}
+	}
+	c.proc.Ctx = context.WithValue(restoreCtx, ioutil.PipelineFlushKey, true)
+	defer func() {
+		c.proc.Ctx = restoreCtx
+	}()
+	return c.runSqlWithOptions(insertSQL, stmtOpt)
 }
 
 func (s *Scope) handleRegularSecondaryIndexTable(

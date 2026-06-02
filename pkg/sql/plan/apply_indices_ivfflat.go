@@ -773,6 +773,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		Limit:      limit,                         // Apply LIMIT after sorting
 		Offset:     DeepCopyExpr(sortNode.Offset), // Apply OFFSET after sorting
 		RankOption: DeepCopyRankOption(vecCtx.rankOption),
+		SpillMem:   builder.sortSpillMem,
 	}, ctx)
 
 	projNode.Children[0] = sortByID
