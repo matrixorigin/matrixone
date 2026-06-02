@@ -33,6 +33,16 @@ create table gs(g point srid 4326);
 show create table gs;
 Table    Create Table
 gs    CREATE TABLE `gs` (\n  `g` point srid 4326 DEFAULT NULL\n)
+insert into gs values (st_geomfromtext('POINT(1 1)', 4326));
+insert into gs values (st_geomfromtext('POINT(2 2)', 4326));
+select st_astext(g) as wkt, st_srid(g) as srid from gs order by 1;
+wkt    srid
+POINT(1 1)    4326
+POINT(2 2)    4326
+insert into gs values (st_geomfromtext('POINT(3 3)', 0));
+invalid input: The SRID of the geometry does not match the SRID of the column. The SRID of the geometry is 0, but the SRID of the column is 4326.
+insert into gs values (st_geomfromtext('POINT(3 3)'));
+invalid input: The SRID of the geometry does not match the SRID of the column. The SRID of the geometry is 0, but the SRID of the column is 4326.
 drop table gs;
 drop table if exists gp;
 create table gp(g geometry);
