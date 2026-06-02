@@ -5288,6 +5288,27 @@ func TestStMeasuresGeodetic(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestLinearReferencing(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	geomFloat := func(fn fEvalFn, line string, f float64, wantWKT string) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{line}, []bool{false}),
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{f}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_geometry.ToType(), false, []string{wantWKT}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	geomFloat(StLineInterpolatePoint, "LINESTRING(0 0, 10 0)", 0.5, "POINT(5 0)")
+	geomFloat(StLineInterpolatePoint, "LINESTRING(0 0, 10 0, 10 10)", 0.75, "POINT(10 5)")
+	geomFloat(StLineInterpolatePoints, "LINESTRING(0 0, 10 0)", 0.25, "MULTIPOINT(2.5 0, 5 0, 7.5 0, 10 0)")
+	geomFloat(StPointAtDistance, "LINESTRING(0 0, 10 0)", 3, "POINT(3 0)")
+}
+
 func TestConstructiveOps(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

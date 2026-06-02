@@ -8069,6 +8069,64 @@ func StPointFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
+// requireLineString decodes a geometry payload and asserts it is a LINESTRING.
+func requireLineString(v []byte) (geo.LineString, error) {
+	g, err := decodeGeoGeometry(v)
+	if err != nil {
+		return geo.LineString{}, err
+	}
+	l, ok := g.(geo.LineString)
+	if !ok {
+		return geo.LineString{}, moerr.NewInvalidInputNoCtx("geometry is not a LINESTRING")
+	}
+	return l, nil
+}
+
+// StLineInterpolatePoint returns the point at a fraction of a line's length.
+func StLineInterpolatePoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrFixedToStrWithErrorCheck[float64](ivecs, result, proc, length, func(v string, f float64) (string, error) {
+		l, err := requireLineString(functionUtil.QuickStrToBytes(v))
+		if err != nil {
+			return "", err
+		}
+		p, err := geo.InterpolatePoint(l, f)
+		if err != nil {
+			return "", moerr.NewInvalidInputNoCtx(err.Error())
+		}
+		return functionUtil.QuickBytesToStr(geo.WriteWKB(p)), nil
+	}, selectList)
+}
+
+// StLineInterpolatePoints returns points at every fraction interval along a line.
+func StLineInterpolatePoints(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrFixedToStrWithErrorCheck[float64](ivecs, result, proc, length, func(v string, f float64) (string, error) {
+		l, err := requireLineString(functionUtil.QuickStrToBytes(v))
+		if err != nil {
+			return "", err
+		}
+		g, err := geo.InterpolatePoints(l, f)
+		if err != nil {
+			return "", moerr.NewInvalidInputNoCtx(err.Error())
+		}
+		return functionUtil.QuickBytesToStr(geo.WriteWKB(g)), nil
+	}, selectList)
+}
+
+// StPointAtDistance returns the point at a distance along a line.
+func StPointAtDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrFixedToStrWithErrorCheck[float64](ivecs, result, proc, length, func(v string, d float64) (string, error) {
+		l, err := requireLineString(functionUtil.QuickStrToBytes(v))
+		if err != nil {
+			return "", err
+		}
+		p, err := geo.PointAtDistance(l, d)
+		if err != nil {
+			return "", moerr.NewInvalidInputNoCtx(err.Error())
+		}
+		return functionUtil.QuickBytesToStr(geo.WriteWKB(p)), nil
+	}, selectList)
+}
+
 // StSimplify reduces a geometry's vertices with Douglas-Peucker at the given
 // planar tolerance.
 func StSimplify(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

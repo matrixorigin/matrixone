@@ -700,9 +700,14 @@ const (
 	ST_SIMPLIFY   = 501
 	ST_COLLECT    = 502
 
+	// GIS linear referencing
+	ST_LINEINTERPOLATEPOINT  = 503
+	ST_LINEINTERPOLATEPOINTS = 504
+	ST_POINTATDISTANCE       = 505
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 503
+	FUNCTION_END_NUMBER = 506
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1154,6 +1159,9 @@ var functionIdRegister = map[string]int32{
 	"st_convexhull":                  ST_CONVEXHULL,
 	"st_simplify":                    ST_SIMPLIFY,
 	"st_collect":                     ST_COLLECT,
+	"st_lineinterpolatepoint":        ST_LINEINTERPOLATEPOINT,
+	"st_lineinterpolatepoints":       ST_LINEINTERPOLATEPOINTS,
+	"st_pointatdistance":             ST_POINTATDISTANCE,
 	"st_geometrytype":                ST_GEOMETRYTYPE,
 	"st_x":                           ST_X,
 	"st_y":                           ST_Y,

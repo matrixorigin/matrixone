@@ -4319,6 +4319,41 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// Linear referencing: st_lineinterpolatepoint(s), st_pointatdistance.
+	{
+		functionId: ST_LINEINTERPOLATEPOINT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_float64},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StLineInterpolatePoint }},
+		},
+	},
+	{
+		functionId: ST_LINEINTERPOLATEPOINTS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_float64},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StLineInterpolatePoints }},
+		},
+	},
+	{
+		functionId: ST_POINTATDISTANCE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_float64},
+				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
+				newOp:   func() executeLogicOfOverload { return StPointAtDistance }},
+		},
+	},
+
 	// function `st_geomfromtext`
 	{
 		functionId: ST_GEOMFROMTEXT,
