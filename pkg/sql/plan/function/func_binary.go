@@ -3930,7 +3930,7 @@ func makeTimeFormat(ctx context.Context, hour uint64, minute, sec uint8, msec ui
 	case 'S', 's':
 		FormatInt2BufByWidth(int(sec), 2, buf)
 	case 'T':
-		fmt.Fprintf(buf, "%02d:%02d:%02d", hour%24, minute, sec)
+		fmt.Fprintf(buf, "%02d:%02d:%02d", hour, minute, sec)
 	default:
 		// For unsupported format specifiers, just write the character as-is
 		// This matches MySQL behavior where non-time format specifiers are ignored
@@ -6976,7 +6976,7 @@ func MakeDateString(
 }
 
 // makeTimeFromInt64: Helper function to create Time from int64 values
-func makeTimeFromInt64(hour, minute, second int64, rs *vector.FunctionResult[types.Time], i uint64) error {
+func makeTimeFromInt64(hour, minute, second int64, microsecond uint32, rs *vector.FunctionResult[types.Time], i uint64) error {
 	// MySQL allows hour to be in range [0, 838] (TIME type range)
 	// minute and second should be in range [0, 59]
 	// If values are out of range, MySQL returns NULL
@@ -6990,7 +6990,7 @@ func makeTimeFromInt64(hour, minute, second int64, rs *vector.FunctionResult[typ
 
 	// Create Time value using TimeFromClock
 	// hour can be up to 838, so we use uint64 for hour
-	timeValue := types.TimeFromClock(false, uint64(hour), uint8(minute), uint8(second), 0)
+	timeValue := types.TimeFromClock(false, uint64(hour), uint8(minute), uint8(second), microsecond)
 
 	// Validate the resulting time
 	h := timeValue.Hour()
@@ -7016,7 +7016,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 	// Create parameter wrappers based on types (these can be reused for all rows)
 	var getHourValue func(uint64) (int64, bool)
 	var getMinuteValue func(uint64) (int64, bool)
-	var getSecondValue func(uint64) (int64, bool)
+	var getSecondValue func(uint64) (int64, uint32, bool)
 
 	// Setup hour parameter extractor
 	switch hourType {
@@ -7106,39 +7106,48 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 	switch secondType {
 	case types.T_int8:
 		secondParam := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[2])
-		getSecondValue = func(i uint64) (int64, bool) {
+		getSecondValue = func(i uint64) (int64, uint32, bool) {
 			val, null := secondParam.GetValue(i)
-			return int64(val), null
+			return int64(val), 0, null
 		}
 	case types.T_int16:
 		secondParam := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[2])
-		getSecondValue = func(i uint64) (int64, bool) {
+		getSecondValue = func(i uint64) (int64, uint32, bool) {
 			val, null := secondParam.GetValue(i)
-			return int64(val), null
+			return int64(val), 0, null
 		}
 	case types.T_int32:
 		secondParam := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[2])
-		getSecondValue = func(i uint64) (int64, bool) {
+		getSecondValue = func(i uint64) (int64, uint32, bool) {
 			val, null := secondParam.GetValue(i)
-			return int64(val), null
+			return int64(val), 0, null
 		}
 	case types.T_int64:
 		secondParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
-		getSecondValue = func(i uint64) (int64, bool) {
+		getSecondValue = func(i uint64) (int64, uint32, bool) {
 			val, null := secondParam.GetValue(i)
-			return val, null
+			return val, 0, null
 		}
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		secondParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[2])
-		getSecondValue = func(i uint64) (int64, bool) {
+		getSecondValue = func(i uint64) (int64, uint32, bool) {
 			val, null := secondParam.GetValue(i)
-			return int64(val), null
+			return int64(val), 0, null
 		}
 	case types.T_float32, types.T_float64:
 		secondParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[2])
-		getSecondValue = func(i uint64) (int64, bool) {
+		getSecondValue = func(i uint64) (int64, uint32, bool) {
 			val, null := secondParam.GetValue(i)
-			return int64(val), null // Truncate decimal part
+			if val < 0 {
+				return int64(val), 0, null
+			}
+			second := int64(val)
+			microsecond := uint32(math.Round((val - float64(second)) * float64(types.MicroSecsPerSec)))
+			if microsecond >= types.MicroSecsPerSec {
+				second++
+				microsecond = 0
+			}
+			return second, microsecond, null
 		}
 	default:
 		return moerr.NewInvalidArgNoCtx("MAKETIME second parameter", secondType)
@@ -7148,7 +7157,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 	for i := uint64(0); i < uint64(length); i++ {
 		hourInt, null1 := getHourValue(i)
 		minuteInt, null2 := getMinuteValue(i)
-		secondInt, null3 := getSecondValue(i)
+		secondInt, microsecond, null3 := getSecondValue(i)
 
 		if null1 || null2 || null3 {
 			if err := rs.Append(types.Time(0), true); err != nil {
@@ -7157,7 +7166,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			continue
 		}
 
-		if err := makeTimeFromInt64(hourInt, minuteInt, secondInt, rs, i); err != nil {
+		if err := makeTimeFromInt64(hourInt, minuteInt, secondInt, microsecond, rs, i); err != nil {
 			return err
 		}
 	}

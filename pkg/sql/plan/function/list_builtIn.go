@@ -7591,7 +7591,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_time},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_uint16.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeToHour

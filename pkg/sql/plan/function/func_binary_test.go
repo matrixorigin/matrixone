@@ -8519,6 +8519,7 @@ func initTimeFormatTestCase() []tcTemp {
 	t2, _ := types.ParseTime("00:00:00", 6)
 	t3, _ := types.ParseTime("23:59:59.123456", 6)
 	t4, _ := types.ParseTime("12:34:56.789012", 6)
+	t5, _ := types.ParseTime("123:45:06", 6)
 
 	return []tcTemp{
 		{
@@ -8537,13 +8538,13 @@ func initTimeFormatTestCase() []tcTemp {
 			info: "test time_format - %T",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1},
-					[]bool{false}),
+					[]types.Time{t1, t5},
+					[]bool{false, false}),
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%T"}, []bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"15:30:45"},
-				[]bool{false}),
+				[]string{"15:30:45", "123:45:06"},
+				[]bool{false, false}),
 		},
 		{
 			info: "test time_format - %h:%i:%s %p",
@@ -8605,6 +8606,22 @@ func TestTimeFormat(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestMakeTimePreservesFractionalSeconds(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{12}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{34}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{56.789012}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_time.ToType(), false,
+			[]types.Time{types.TimeFromClock(false, 12, 34, 56, 789012)},
+			[]bool{false}),
+		MakeTime)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", "test maketime fractional seconds", info))
 }
 
 // TestTimestampDiffDateString tests TIMESTAMPDIFF with DATE and string arguments

@@ -3695,10 +3695,9 @@ func DatetimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 }
 
 func TimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Time, uint8](ivecs, result, proc, length, func(v types.Time) uint8 {
+	return opUnaryFixedToFixed[types.Time, uint16](ivecs, result, proc, length, func(v types.Time) uint16 {
 		hour, _, _, _, _ := v.ClockFormat()
-		// HOUR function returns 0-23, so we need to take modulo 24
-		return uint8(hour % 24)
+		return uint16(hour)
 	}, selectList)
 }
 
