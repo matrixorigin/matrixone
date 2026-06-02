@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -63,30 +62,27 @@ var _ engine.Engine = new(Engine)
 const (
 	workspaceRSSCacheFamilyEvictTimeout   = 10 * time.Second
 	workspaceRSSCacheAdmissionPressureTTL = 2 * time.Minute
+	workspaceRSSCachePressureTargetOwner  = "workspace-rss"
 )
 
 func makeWorkspaceRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
 	return func(ctx context.Context, targetPercent int64) {
-		pressureUntil := time.Now().Add(workspaceRSSCacheAdmissionPressureTTL)
-		fileservice.SetMemoryCachePressureTargetPercent(targetPercent, pressureUntil)
-		objectio.SetMetaCachePressureTargetPercent(targetPercent, pressureUntil)
-
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			memoryCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-			fileservice.EvictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
-		}()
-		go func() {
-			defer wg.Done()
-			metaCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-			objectio.EvictCacheToCapacityPercent(metaCtx, targetPercent)
-		}()
-		wg.Wait()
+		memoryCtx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseWorkspaceRSSCacheEvict)
+		defer cancel()
+		fileservice.EvictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
 	}
+}
+
+func setWorkspaceRSSCachePressureTarget(targetPercent int64) {
+	fileservice.SetMemoryCachePressureTargetPercentByOwner(
+		workspaceRSSCachePressureTargetOwner,
+		targetPercent,
+		time.Now().Add(workspaceRSSCacheAdmissionPressureTTL),
+	)
+}
+
+func clearWorkspaceRSSCachePressureTarget() {
+	fileservice.ClearMemoryCachePressureTargetByOwner(workspaceRSSCachePressureTargetOwner)
 }
 
 func New(
@@ -173,6 +169,10 @@ func New(
 	if e.config.memThrottler == nil {
 		throttlerOptions := []rscthrottler.MemThrottlerOption{
 			rscthrottler.WithRSSScavenging(),
+			rscthrottler.WithRSSCachePressureTarget(
+				setWorkspaceRSSCachePressureTarget,
+				clearWorkspaceRSSCachePressureTarget,
+			),
 			rscthrottler.WithRSSCacheEvictor(
 				makeWorkspaceRSSCacheEvictor(workspaceRSSCacheFamilyEvictTimeout),
 			),
@@ -330,6 +330,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 
 	key := genDatabaseKey(accountId, name)
 	txn.databaseOps.addCreateDatabase(key, txn.statementID, &txnDatabase{
+		accountId:    accountId,
 		op:           op,
 		databaseId:   databaseId,
 		databaseName: name,
@@ -486,6 +487,7 @@ func (e *Engine) Database(
 	}
 
 	return &txnDatabase{
+		accountId:         accountId,
 		op:                op,
 		databaseName:      name,
 		databaseId:        item.Id,
@@ -693,6 +695,8 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	txnDB := toDelDB.(*txnDatabase)
+	rels = filterDeleteDatabaseRelations(txnDB, rels, name, op)
 	for _, relName := range rels {
 		if err := toDelDB.Delete(ctx, relName); err != nil {
 			return err
@@ -700,7 +704,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	}
 
 	// fetch (accountid, databaseid, rowid) to delete the database
-	databaseId := toDelDB.(*txnDatabase).databaseId
+	databaseId := txnDB.databaseId
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
@@ -749,6 +753,31 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	key := genDatabaseKey(accountId, name)
 	txn.databaseOps.addDeleteDatabase(key, txn.statementID, databaseId)
 	return nil
+}
+
+func filterDeleteDatabaseRelations(db *txnDatabase, rels []string, databaseName string, op client.TxnOperator) []string {
+	filtered := make([]string, 0, len(rels))
+	for _, relName := range rels {
+		if isDeleteDatabaseRelationDeletedInTxn(db, db.accountId, relName) {
+			logutil.Info(
+				"skip table already deleted in txn during database delete",
+				zap.String("database", databaseName),
+				zap.String("table", relName),
+				zap.String("txn", op.Txn().DebugString()),
+			)
+			continue
+		}
+		filtered = append(filtered, relName)
+	}
+	return filtered
+}
+
+func isDeleteDatabaseRelationDeletedInTxn(db *txnDatabase, accountId uint32, relName string) bool {
+	if db.databaseId == catalog.MO_CATALOG_ID && catalog.IsSystemTableByName(relName) {
+		accountId = catalog.System_Account
+	}
+	key := genTableKey(accountId, relName, db.databaseId, db.databaseName)
+	return db.getTxn().tableOps.existAndDeleted(key)
 }
 
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {

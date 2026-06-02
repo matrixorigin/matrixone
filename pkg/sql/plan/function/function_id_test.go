@@ -509,8 +509,17 @@ var predefinedFunids = map[int]int{
 	HLL_ADD_AGG:                   453,
 	HLL_MERGE_AGG:                 454,
 	HLL_CARDINALITY:               455,
-	DATALINK_PIN:                  456,
-	FUNCTION_END_NUMBER:           457,
+	JSON_TYPE:                     456,
+	JSON_VALID:                    457,
+	JSON_KEYS:                     458,
+	JSON_PRETTY:                   459,
+	JSON_SCHEMA_VALID:             460,
+	JSON_SCHEMA_VALID_REPORT:      461,
+	JSON_VALUE:                    462,
+	DATALINK_PIN:                  463,
+	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
+	// TODO: every one should put the new function id in front of this one if you want to make a new function.
+	FUNCTION_END_NUMBER: 464,
 }
 
 func Test_funids(t *testing.T) {
