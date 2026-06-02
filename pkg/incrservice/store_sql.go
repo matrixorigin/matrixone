@@ -320,8 +320,8 @@ func (s *sqlStore) SetOffset(
 	res, err := s.exec.Exec(
 		ctx,
 		fmt.Sprintf(
-			"update %s set offset = %d where table_id = %d and col_name = '%s'",
-			incrTableName, offset, tableID, colName,
+			"update %s set offset = %d where table_id = %d and col_name = '%s' and offset < %d",
+			incrTableName, offset, tableID, colName, offset,
 		),
 		opts,
 	)
