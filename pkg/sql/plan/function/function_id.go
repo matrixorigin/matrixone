@@ -643,7 +643,7 @@ const (
 	JSON_SCHEMA_VALID        = 460
 	JSON_SCHEMA_VALID_REPORT = 461
 	JSON_VALUE               = 462
-  BIT_COUNT                = 463
+	BIT_COUNT                = 463
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
