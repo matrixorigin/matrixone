@@ -234,6 +234,11 @@ func (node *RestorePitr) Format(ctx *FmtCtx) {
 			ctx.WriteString("self account")
 		}
 	case RESTORELEVELDATABASE:
+		if len(node.AccountName) != 0 {
+			ctx.WriteString("account ")
+			node.AccountName.Format(ctx)
+			ctx.WriteString(" ")
+		}
 		ctx.WriteString("database ")
 		if len(node.AccountName) > 0 {
 			node.AccountName.Format(ctx)

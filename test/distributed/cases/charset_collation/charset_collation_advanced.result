@@ -59,8 +59,8 @@ SELECT * FROM t_hex_test ORDER BY id;
 SELECT id, original, UNHEX(hex_value) as decoded FROM t_hex_test ORDER BY id;
 ➤ id[4,32,0]  ¦  original[12,-1,0]  ¦  decoded[12,-1,0]  𝄀
 1  ¦  Hello  ¦  Hello  𝄀
-2  ¦  你好  ¦  你好  𝄀
-3  ¦  😀  ¦  😀
+2  ¦  你好  ¦  ä½ å¥½  𝄀
+3  ¦  😀  ¦  ð
 CREATE TABLE t_pad_test (
 id INT PRIMARY KEY,
 data VARCHAR(100)
