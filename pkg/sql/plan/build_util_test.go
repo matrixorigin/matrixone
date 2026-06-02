@@ -217,3 +217,43 @@ func TestBuildDefaultExprGeometryAllowsNullDefault(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, def)
 }
+
+func TestBuildDefaultExprAllowsParenthesizedUuidForStringDefault(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	stmt, err := mysql.ParseOne(context.Background(), "create table t (id varchar(191) not null default (uuid()))", 1)
+	require.NoError(t, err)
+
+	createTable, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	colDef, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+	require.True(t, ok)
+
+	typ, err := getTypeFromAst(context.Background(), colDef.Type)
+	require.NoError(t, err)
+
+	def, err := buildDefaultExpr(colDef, typ, proc)
+	require.NoError(t, err)
+	require.NotNil(t, def)
+	require.NotNil(t, def.Expr)
+	require.Equal(t, "(uuid())", def.OriginString)
+}
+
+func TestBuildDefaultExprKeepsBareUuidTypeGuard(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	stmt, err := mysql.ParseOne(context.Background(), "create table t (a int default uuid())", 1)
+	require.NoError(t, err)
+
+	createTable, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	colDef, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+	require.True(t, ok)
+
+	typ, err := getTypeFromAst(context.Background(), colDef.Type)
+	require.NoError(t, err)
+
+	_, err = buildDefaultExpr(colDef, typ, proc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid default value for column 'a'")
+}

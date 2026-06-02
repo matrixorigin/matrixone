@@ -325,6 +325,12 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 			OriginString: "",
 		}, nil
 	}
+	originExpr := expr
+	isExpressionDefault := false
+	if paren, ok := expr.(*tree.ParenExpr); ok {
+		isExpressionDefault = true
+		expr = paren.Expr
+	}
 
 	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
 	planExpr, err := binder.BindExpr(expr, 0, false)
@@ -333,7 +339,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	}
 
 	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
-		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" {
+		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" && !isExpressionDefault {
 			return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
 		}
 	}
@@ -350,7 +356,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	}
 
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
-	fmtCtx.PrintExpr(expr, expr, false)
+	fmtCtx.PrintExpr(originExpr, originExpr, false)
 	return &plan.Default{
 		NullAbility:  nullAbility,
 		Expr:         newExpr,
