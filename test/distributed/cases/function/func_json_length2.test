@@ -1,0 +1,58 @@
+-- basic scalar tests
+select json_length('[1, 2, {"a": 3}]');
+select json_length('{"a": 1, "b": {"c": 30}}');
+select json_length('{"a": 1, "b": {"c": 30}}', '$.b');
+select json_length('"hello"');
+select json_length('42');
+select json_length('true');
+select json_length('null');
+
+-- arrays
+select json_length('[]');
+select json_length('[1]');
+select json_length('[1,2,3,4,5]');
+
+-- objects
+select json_length('{}');
+select json_length('{"a":1}');
+select json_length('{"a":1,"b":2,"c":3}');
+
+-- nested path
+select json_length('{"a": [1,2,3], "b": {"c": [4,5]}}', '$.a');
+select json_length('{"a": [1,2,3], "b": {"c": [4,5]}}', '$.b.c');
+select json_length('{"a": [1,2,3], "b": {"c": [4,5]}}', '$.b');
+
+-- path not matching
+select json_length('{"a": 1}', '$.b');
+
+-- null arguments
+select json_length(null);
+select json_length('[1,2]', null);
+
+-- invalid JSON
+select json_length('invalid');  -- should error
+
+-- via json function results
+select json_length(json_array(1, 2, 3));
+select json_length(json_object('a', 1, 'b', 2));
+
+-- varchar column
+drop table if exists t1;
+create table t1 (a varchar(100));
+insert into t1 values ('[1,2,3]'), ('{"a":1,"b":2}'), ('"hello"'), (null);
+select a, json_length(a) from t1;
+
+-- json column  
+drop table if exists t2;
+create table t2 (a json);
+insert into t2 values ('[1,2,3]'), ('{"a":1,"b":2}'), ('"hello"'), ('null');
+select a, json_length(a) from t2;
+
+drop table t1;
+
+-- T_json input via json_array
+select json_length(json_array(1, 2, 3));
+select json_length(json_object('a', json_array(1, 2, 3), 'b', json_object('x', 1)));
+select json_length(json_object('a', json_array(1, 2, 3), 'b', json_object('x', 1)), '$.a');
+select json_length(json_object('a', json_array(1, 2, 3), 'b', json_object('x', 1)), '$.b');
+drop table t2;
