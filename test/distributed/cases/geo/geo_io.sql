@@ -21,6 +21,9 @@ select st_astext(st_geomfromtext('POINT(1e2 -3.5e-1)')) as scientific;
 select st_astext(cast('POINT(7 8)' as geometry)) as cast_point;
 select st_astext(cast('POLYGON((0 0,1 0,1 1,0 1,0 0))' as geometry)) as cast_polygon;
 
+-- ST_AsWKT is a synonym for ST_AsText.
+select st_aswkt(st_geomfromtext('POINT(1 2)')) as aswkt_point;
+
 -- A geometry-typed column renders directly as WKT.
 select st_geomfromtext('POINT(7 8)') as direct_geom;
 
