@@ -16,6 +16,9 @@ package frontend
 
 import (
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_mysqlResp(t *testing.T) {
@@ -25,4 +28,28 @@ func Test_mysqlResp(t *testing.T) {
 	resp.SetU32(CONNID, 100)
 	resp.GetU32(CONNID)
 	resp.ResetStatistics()
+}
+
+func TestIsRowCountDML(t *testing.T) {
+	require.True(t, isRowCountDML(&tree.Insert{}))
+	require.True(t, isRowCountDML(&tree.Update{}))
+	require.True(t, isRowCountDML(&tree.Delete{}))
+	require.True(t, isRowCountDML(&tree.Replace{}))
+	require.True(t, isRowCountDML(&tree.Load{}))
+
+	require.False(t, isRowCountDML(&tree.Select{}))
+	require.False(t, isRowCountDML(&tree.CreateTable{}))
+	require.False(t, isRowCountDML(nil))
+}
+
+func TestSessionLastAffectedRows(t *testing.T) {
+	ses := &Session{}
+	require.Equal(t, int64(0), ses.GetLastAffectedRows())
+
+	ses.SetLastAffectedRows(7)
+	require.Equal(t, int64(7), ses.GetLastAffectedRows())
+
+	// -1 sentinel used after result-set statements.
+	ses.SetLastAffectedRows(-1)
+	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
 }
