@@ -224,6 +224,30 @@ func TestMemStoreSetOffsetReturnsError(t *testing.T) {
 		})
 }
 
+func TestMemStoreSetOffsetLowerThanPreAllocated(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			store := ss[0].store.(*memStore)
+			def := newTestTableDef(1)
+			// Simulate pre-allocation by advancing the offset to a high value
+			def[0].Offset = 10000
+			require.NoError(t, store.Create(ctx, 0, def, nil))
+
+			// SetOffset to a value LOWER than the current offset
+			require.NoError(t, store.SetOffset(ctx, 0, def[0].ColName, 99, nil))
+
+			store.Lock()
+			require.Equal(t, uint64(99), store.caches[0][0].Offset)
+			store.Unlock()
+		})
+}
+
 func TestCreateWithTxnAborted(t *testing.T) {
 	runServiceTests(
 		t,
