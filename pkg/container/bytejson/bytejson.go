@@ -38,7 +38,11 @@ func (bj ByteJson) String() string {
 }
 
 func (bj ByteJson) Unquote() (string, error) {
-	if bj.Type != TpCodeString {
+	if bj.Type != TpCodeString &&
+		bj.Type != TpCodeDate &&
+		bj.Type != TpCodeTime &&
+		bj.Type != TpCodeDatetime &&
+		bj.Type != TpCodeBlob {
 		return bj.String(), nil
 	}
 	str := bj.GetString()
@@ -158,6 +162,14 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 		buf, err = bj.toFloat64(buf)
 	case TpCodeString:
 		buf, err = bj.toString(buf)
+	case TpCodeDecimal:
+		data := bj.GetString()
+		buf = append(buf, data...)
+	case TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
+		buf = append(buf, '"')
+		data := bj.GetString()
+		buf = append(buf, data...)
+		buf = append(buf, '"')
 	default:
 		err = moerr.NewInvalidInputNoCtxf("invalid json type '%v'", bj.Type)
 	}
@@ -254,6 +266,22 @@ func (bj ByteJson) getObjectKey(i int) []byte {
 	return bj.Data[keyOff : keyOff+keyLen]
 }
 
+// GetObjectKey returns the key at index i of a JSON object.
+// Keys are stored in sorted order (binary search is used for lookups).
+func (bj ByteJson) GetObjectKey(i int) []byte {
+	return bj.getObjectKey(i)
+}
+
+// GetObjectVal returns the value at index i of a JSON object.
+func (bj ByteJson) GetObjectVal(i int) ByteJson {
+	return bj.getObjectVal(i)
+}
+
+// GetArrayElem returns the element at index i of a JSON array.
+func (bj ByteJson) GetArrayElem(i int) ByteJson {
+	return bj.getArrayElem(i)
+}
+
 func (bj ByteJson) getArrayElem(i int) ByteJson {
 	return bj.getValEntry(headerSize + i*valEntrySize)
 }
@@ -271,7 +299,7 @@ func (bj ByteJson) getValEntry(off int) ByteJson {
 		return ByteJson{Type: TpCodeLiteral, Data: bj.Data[off+valTypeSize : off+valTypeSize+1]}
 	case TpCodeUint64, TpCodeInt64, TpCodeFloat64:
 		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+numberSize]}
-	case TpCodeString:
+	case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
 		num, length := calStrLen(bj.Data[valOff:])
 		totalLen := uint32(num) + uint32(length)
 		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+totalLen]}
@@ -281,6 +309,14 @@ func (bj ByteJson) getValEntry(off int) ByteJson {
 }
 
 func (bj ByteJson) queryValByKey(key []byte) ByteJson {
+	val, ok := bj.queryValByKeyExists(key)
+	if !ok {
+		return Null
+	}
+	return val
+}
+
+func (bj ByteJson) queryValByKeyExists(key []byte) (ByteJson, bool) {
 	cnt := bj.GetElemCnt()
 	var idx int
 	if cnt < binarySearchCutoff {
@@ -299,9 +335,9 @@ func (bj ByteJson) queryValByKey(key []byte) ByteJson {
 	}
 
 	if idx >= cnt || !bytes.Equal(bj.getObjectKey(idx), key) {
-		return Null
+		return Null, false
 	}
-	return bj.getObjectVal(idx)
+	return bj.getObjectVal(idx), true
 }
 
 func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
@@ -410,6 +446,14 @@ func (bj ByteJson) Query(paths []*Path) ByteJson {
 }
 
 func (bj ByteJson) querySimple(path *Path) ByteJson {
+	val, ok := bj.querySimpleExist(path)
+	if !ok {
+		return Null
+	}
+	return val
+}
+
+func (bj ByteJson) querySimpleExist(path *Path) (ByteJson, bool) {
 	cur := bj
 	// don't go through th step(), recursive call route.  We know
 	// we have a simple path, each step will bring us to ONE SINGLE next value.
@@ -420,21 +464,25 @@ func (bj ByteJson) querySimple(path *Path) ByteJson {
 			case subPathIdx:
 				start, _, _ := sub.idx.genIndex(1)
 				if start != 0 {
-					return Null
+					return Null, false
 				}
 				// obj[0] is itself, continue
 			case subPathKey:
 				if sub.key == "*" {
 					panic("bytejson simple path should not contain *")
 				} else {
-					cur = cur.queryValByKey(util.UnsafeStringToBytes(sub.key))
+					var ok bool
+					cur, ok = cur.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
+					if !ok {
+						return Null, false
+					}
 				}
 			default:
-				return Null
+				return Null, false
 			}
 		} else if cur.Type == TpCodeArray {
 			if sub.tp != subPathIdx {
-				return Null
+				return Null, false
 			}
 			cnt := cur.GetElemCnt()
 			idx, _, _ := sub.idx.genIndex(cnt)
@@ -443,15 +491,15 @@ func (bj ByteJson) querySimple(path *Path) ByteJson {
 			// if (last && idx < 0) || cnt <= idx {
 			if idx < 0 || cnt <= idx {
 				// out of range
-				return Null
+				return Null, false
 			} else {
 				cur = cur.getArrayElem(idx)
 			}
 		} else {
-			return Null
+			return Null, false
 		}
 	}
-	return cur
+	return cur, true
 }
 
 func (bj ByteJson) QuerySimple(paths []*Path) ByteJson {
@@ -490,6 +538,12 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 
 	if len(pathList) == 0 {
 		return bj, nil
+	}
+
+	for _, path := range pathList {
+		if path == nil || !path.IsSimple() {
+			return Null, moerr.NewInvalidInputNoCtx("path expression is not simple")
+		}
 	}
 
 	for i := 0; i < len(pathList); i++ {
