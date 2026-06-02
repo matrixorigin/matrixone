@@ -44,6 +44,15 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 		return nil, err
 	}
 
+	// Save selectNode ProjectList before optimization to preserve original
+	// column references for generated column chain resolution.
+	// createQuery() → removeSimpleProjections() → replaceColumnsForNode()
+	// may replace column references in the ProjectList with expressions from
+	// removed child PROJECTs, breaking baseLookup in the rewrite step.
+	selectNode := builder.qry.Nodes[lastNodeId]
+	savedProjectList := make([]*plan.Expr, len(selectNode.ProjectList))
+	copy(savedProjectList, selectNode.ProjectList)
+
 	sourceStep := builder.appendStep(lastNodeId)
 	query, err := builder.createQuery()
 	if err != nil {
@@ -57,7 +66,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
-	rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId)
+	rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId, savedProjectList)
 
 	// append sink node
 	lastNodeId = appendSinkNode(builder, queryBindCtx, lastNodeId)
@@ -192,7 +201,7 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 	return nil
 }
 
-func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlanCtx, lastNodeId int32) {
+func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlanCtx, lastNodeId int32, originalProjectList []*plan.Expr) {
 	selectNode := builder.qry.Nodes[lastNodeId]
 	tableBase := int32(0)
 	for _, upPlanCtx := range planCtxs {
@@ -208,9 +217,9 @@ func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlan
 			baseLookup := make([]*plan.Expr, len(tableDef.Cols))
 			for ci, col := range tableDef.Cols {
 				if newOff, ok := upPlanCtx.updateColPosMap[col.Name]; ok {
-					baseLookup[ci] = selectNode.ProjectList[tableBase+int32(newOff)]
+					baseLookup[ci] = originalProjectList[tableBase+int32(newOff)]
 				} else {
-					baseLookup[ci] = selectNode.ProjectList[tableBase+int32(ci)]
+					baseLookup[ci] = originalProjectList[tableBase+int32(ci)]
 				}
 			}
 			for ci, col := range tableDef.Cols {
