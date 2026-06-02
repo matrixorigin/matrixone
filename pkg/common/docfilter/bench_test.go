@@ -29,7 +29,7 @@ const benchFpProbability = 0.001
 // benchSizes are candidate-set cardinalities N (the number of doc_ids the
 // filter is built from). The whole point of the bitset is cheaper build at
 // large N, so we sweep a range.
-var benchSizes = []int{100000, 1000000, 10000000}
+var benchSizes = []int{100000, 1000000, 10000000, 20000000}
 
 // makeInt64Vec builds an int64 doc_id vector of n distinct (odd) keys.
 func makeInt64Vec(tb testing.TB, mp *mpool.MPool, n int) *vector.Vector {
