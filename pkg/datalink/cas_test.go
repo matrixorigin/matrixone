@@ -100,6 +100,58 @@ func TestCASKey(t *testing.T) {
 	require.Equal(t, "datalink_cas/7/ab/abcd1234ef", CASKey(7, "abcd1234ef"))
 }
 
+func TestCASDeleteIdempotent(t *testing.T) {
+	ctx := context.Background()
+	fs := newTestCASFS(t)
+	data := []byte("to delete")
+	hash, err := CASPut(ctx, fs, testAccountID, data)
+	require.NoError(t, err)
+
+	require.NoError(t, CASDelete(ctx, fs, testAccountID, hash))
+	ok, err := CASExists(ctx, fs, testAccountID, hash)
+	require.NoError(t, err)
+	require.False(t, ok)
+	// deleting a non-existent object is a success (idempotent)
+	require.NoError(t, CASDelete(ctx, fs, testAccountID, hash))
+}
+
+func TestCASListAccount(t *testing.T) {
+	ctx := context.Background()
+	fs := newTestCASFS(t)
+	h1, _ := CASPut(ctx, fs, testAccountID, []byte("a"))
+	h2, _ := CASPut(ctx, fs, testAccountID, []byte("bb"))
+	// another account's object must not appear
+	_, _ = CASPut(ctx, fs, uint32(999), []byte("other"))
+
+	got := map[string]bool{}
+	for e, err := range CASListAccount(ctx, fs, testAccountID) {
+		require.NoError(t, err)
+		got[e.Hash] = true
+	}
+	require.True(t, got[h1])
+	require.True(t, got[h2])
+	require.Len(t, got, 2)
+}
+
+func TestCASDeleteAccountPrefix(t *testing.T) {
+	ctx := context.Background()
+	fs := newTestCASFS(t)
+	h1, _ := CASPut(ctx, fs, testAccountID, []byte("a"))
+	h2, _ := CASPut(ctx, fs, testAccountID, []byte("bb"))
+	keep, _ := CASPut(ctx, fs, uint32(999), []byte("other"))
+
+	require.NoError(t, CASDeleteAccountPrefix(ctx, fs, testAccountID))
+	for _, h := range []string{h1, h2} {
+		ok, err := CASExists(ctx, fs, testAccountID, h)
+		require.NoError(t, err)
+		require.False(t, ok)
+	}
+	// other account is unaffected
+	ok, err := CASExists(ctx, fs, uint32(999), keep)
+	require.NoError(t, err)
+	require.True(t, ok)
+}
+
 // CAS objects are namespaced per account: bytes pinned by one account are not
 // visible to another account by hash alone. This is the core fix for the bearer
 // capability concern — a contenthash is no longer a cross-account read token.

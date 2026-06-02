@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"iter"
 	"strconv"
 	"strings"
 
@@ -122,4 +123,77 @@ func CASExists(ctx context.Context, fs fileservice.FileService, accountID uint32
 		return false, err
 	}
 	return true, nil
+}
+
+// CASEntry is a single blob enumerated from an account's CAS namespace.
+type CASEntry struct {
+	Hash string
+	Key  string
+	Size int64
+}
+
+// CASAccountPrefix returns the key prefix that holds all CAS blobs of an
+// account: "datalink_cas/<accountID>/".
+func CASAccountPrefix(accountID uint32) string {
+	return casPrefix + "/" + strconv.FormatUint(uint64(accountID), 10) + "/"
+}
+
+// CASDelete removes a single content-addressed blob. A missing object is not an
+// error: deletion is idempotent so a sweep can safely retry.
+func CASDelete(ctx context.Context, fs fileservice.FileService, accountID uint32, hash string) error {
+	if err := fs.Delete(ctx, CASKey(accountID, hash)); err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// CASListAccount enumerates every blob in the account's namespace. The CAS
+// layout is datalink_cas/<accountID>/<h2>/<hash>, so it lists the account dir,
+// descends one level into each <h2> bucket, and yields the trailing hash.
+func CASListAccount(ctx context.Context, fs fileservice.FileService, accountID uint32) iter.Seq2[CASEntry, error] {
+	prefix := CASAccountPrefix(accountID)
+	return func(yield func(CASEntry, error) bool) {
+		for bucket, err := range fs.List(ctx, prefix) {
+			if err != nil {
+				yield(CASEntry{}, err)
+				return
+			}
+			if !bucket.IsDir {
+				continue // CAS layout always nests under an <h2> bucket
+			}
+			bucketPath := prefix + bucket.Name + "/"
+			for ent, err := range fs.List(ctx, bucketPath) {
+				if err != nil {
+					yield(CASEntry{}, err)
+					return
+				}
+				if ent.IsDir {
+					continue
+				}
+				e := CASEntry{Hash: ent.Name, Key: bucketPath + ent.Name, Size: ent.Size}
+				if !yield(e, nil) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// CASDeleteAccountPrefix removes the entire CAS namespace of one account. Used
+// by DROP ACCOUNT so a removed tenant leaves no pinned blobs behind.
+func CASDeleteAccountPrefix(ctx context.Context, fs fileservice.FileService, accountID uint32) error {
+	var keys []string
+	for e, err := range CASListAccount(ctx, fs, accountID) {
+		if err != nil {
+			return err
+		}
+		keys = append(keys, e.Key)
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	return fs.Delete(ctx, keys...)
 }
