@@ -596,6 +596,7 @@ var functionIdRegister = map[string]int32{
 	"get_format":        GET_FORMAT,
 	"left":              LEFT,
 	"time_format":       TIME_FORMAT,
+	"right":             RIGHT,
 	// unary functions
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	"abs":                            ABS,
