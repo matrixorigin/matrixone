@@ -446,21 +446,6 @@ func outputColumnsFromRewriteSelectStatement(stmt tree.SelectStatement) ([]rewri
 	}
 }
 
-func mergeableRewriteSelectClause(stmt *tree.SelectClause) bool {
-	if stmt.Distinct || stmt.Option&(tree.QuerySpecOptionDistinct|tree.QuerySpecOptionDistinctRow) != 0 {
-		return false
-	}
-	if stmt.GroupBy != nil || stmt.Having != nil {
-		return false
-	}
-	for _, expr := range stmt.Exprs {
-		if !rewriteExprIsMergeSafe(expr.Expr) {
-			return false
-		}
-	}
-	return true
-}
-
 func outputColumnFromRewriteSelectExpr(expr tree.SelectExpr) (rewriteRuleOutputColumn, bool) {
 	if expr.As != nil && !expr.As.Empty() {
 		return rewriteRuleOutputColumn{
