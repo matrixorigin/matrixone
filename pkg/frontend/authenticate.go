@@ -1321,10 +1321,10 @@ const (
 
 	// obj-scoped WGO check: for table/view grants that must not leak across different objects.
 	checkRoleHasPrivilegeWGOWithObjFormat         = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s" and obj_id = %d;`
-	checkRoleHasPrivilegeWGOWithObjAndLevelFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s" and obj_id = %d and privilege_level = "%s";`
+	checkRoleHasPrivilegeWGOWithObjAndLevelFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s" and obj_id = %d and privilege_level in (%s);`
 
 	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjFormat         = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s" and obj_id = %d;`
-	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevelFormat = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s" and obj_id = %d and privilege_level = "%s";`
+	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevelFormat = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s" and obj_id = %d and privilege_level in (%s);`
 
 	// obj_type-only WGO check: for wildcard grants (*.*) that still need table vs view distinction.
 	checkRoleHasPrivilegeWGOWithObjTypeFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s";`
@@ -1906,7 +1906,7 @@ func getSqlForCheckRoleHasPrivilegeWGOWithObj(privilegeId int64, objType objectT
 }
 
 func getSqlForCheckRoleHasPrivilegeWGOWithObjAndLevel(privilegeId int64, objType objectType, objId int64, privilegeLevel privilegeLevelType) string {
-	return fmt.Sprintf(checkRoleHasPrivilegeWGOWithObjAndLevelFormat, privilegeId, objType, objId, privilegeLevel)
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOWithObjAndLevelFormat, privilegeId, objType, objId, scopedGrantOptionPrivilegeLevelsSQL(privilegeLevel))
 }
 
 func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(privilegeId, allPrivId, ownershipPrivId int64, objType objectType, objId int64) string {
@@ -1914,7 +1914,16 @@ func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(privilegeId, allPri
 }
 
 func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(privilegeId, allPrivId, ownershipPrivId int64, objType objectType, objId int64, privilegeLevel privilegeLevelType) string {
-	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevelFormat, privilegeId, allPrivId, ownershipPrivId, objType, objId, privilegeLevel)
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevelFormat, privilegeId, allPrivId, ownershipPrivId, objType, objId, scopedGrantOptionPrivilegeLevelsSQL(privilegeLevel))
+}
+
+func scopedGrantOptionPrivilegeLevelsSQL(privilegeLevel privilegeLevelType) string {
+	levels := append([]privilegeLevelType{privilegeLevel}, equivalentScopedGrantOptionPrivilegeLevels(privilegeLevel)...)
+	parts := make([]string, 0, len(levels))
+	for _, level := range levels {
+		parts = append(parts, fmt.Sprintf(`"%s"`, level))
+	}
+	return strings.Join(parts, ",")
 }
 
 func getSqlForCheckRoleHasPrivilegeWGOWithObjType(privilegeId int64, objType objectType) string {
@@ -8265,6 +8274,20 @@ func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
 	}
 
 	return getRoleSetThatPrivilegeGrantedToWGOWithObjType(ctx, bh, privType, objType)
+}
+
+func equivalentScopedGrantOptionPrivilegeLevels(privilegeLevel privilegeLevelType) []privilegeLevelType {
+	switch privilegeLevel {
+	case privilegeLevelDatabaseStar:
+		return []privilegeLevelType{privilegeLevelStar}
+	case privilegeLevelStar:
+		return []privilegeLevelType{privilegeLevelDatabaseStar}
+	case privilegeLevelDatabaseTable:
+		return []privilegeLevelType{privilegeLevelTable}
+	case privilegeLevelTable:
+		return []privilegeLevelType{privilegeLevelDatabaseTable}
+	}
+	return nil
 }
 
 func isMissingPrivilegeObjectError(err error) bool {
