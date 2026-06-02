@@ -51,33 +51,18 @@ var (
 
 // Build serializes the best doc_id filter for the whole vector and returns the
 // tagged bytes: an exact bitset (cbitmap for a bounded integer-id range, else
-// CRoaring) for integer PKs, or a CBloomFilter for non-integer PKs. Callers
-// just transport the bytes; New reconstructs the right filter from the tag.
+// CRoaring) for integer PKs, or a CBloomFilter for non-integer PKs. Build and
+// probe read the column buffer directly in C (one cgo call). Callers just
+// transport the bytes; New reconstructs the right filter from the tag.
 func Build(v *vector.Vector) ([]byte, error) {
-	return BuildMasked(v, nil)
-}
-
-// BuildMasked is Build over the subset of rows where keep[i] != 0 (keep nil =
-// all rows) — e.g. IVF's centroid-filtered keys.
-func BuildMasked(v *vector.Vector, keep []uint8) ([]byte, error) {
 	if SupportsBitset(*v.GetType()) {
-		var tag byte
-		var payload []byte
-		var err error
-		if keep == nil {
-			// Whole vector: build directly from the column buffer in C (one cgo
-			// call), no per-row Go decode.
-			tag, payload, err = BuildIntegerDocFilter(v)
-		} else {
-			// Subset: extract the surviving keys in Go, then build from them in C.
-			tag, payload, err = BuildIntegerDocFilterU64(maskedU64(v, keep))
-		}
+		tag, payload, err := BuildIntegerDocFilter(v)
 		if err != nil {
 			return nil, err
 		}
 		return append([]byte{tag}, payload...), nil
 	}
-	payload, err := buildBloomBytes(v, keep)
+	payload, err := buildBloomBytes(v)
 	if err != nil {
 		return nil, err
 	}
@@ -114,45 +99,12 @@ func New(data []byte) (DocIDFilter, error) {
 	}
 }
 
-// maskedU64 decodes the kept, non-null rows of a fixed integer vector to uint64.
-func maskedU64(v *vector.Vector, keep []uint8) []uint64 {
-	n := v.Length()
-	out := make([]uint64, 0, n)
-	for i := 0; i < n; i++ {
-		if keep != nil && keep[i] == 0 {
-			continue
-		}
-		if v.IsNull(uint64(i)) {
-			continue
-		}
-		out = append(out, rawIntToUint64(v.GetRawBytesAt(i)))
-	}
-	return out
-}
-
-// buildBloomBytes builds a CBloomFilter over the kept rows and marshals it.
-func buildBloomBytes(v *vector.Vector, keep []uint8) ([]byte, error) {
-	n := v.Length()
-	cnt := n
-	if keep != nil {
-		cnt = 0
-		for i := 0; i < n; i++ {
-			if keep[i] != 0 {
-				cnt++
-			}
-		}
-	}
-	bf := bloomfilter.NewCBloomFilterWithProbability(int64(cnt), bloomFpProbability)
+// buildBloomBytes builds a CBloomFilter over the vector and marshals it (the
+// non-integer-PK fallback).
+func buildBloomBytes(v *vector.Vector) ([]byte, error) {
+	bf := bloomfilter.NewCBloomFilterWithProbability(int64(v.Length()), bloomFpProbability)
 	defer bf.Free()
-	if keep == nil {
-		bf.AddVector(v)
-	} else {
-		for i := 0; i < n; i++ {
-			if keep[i] != 0 && !v.IsNull(uint64(i)) {
-				bf.Add(v.GetRawBytesAt(i))
-			}
-		}
-	}
+	bf.AddVector(v)
 	return bf.Marshal()
 }
 

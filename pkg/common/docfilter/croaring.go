@@ -84,32 +84,6 @@ func BuildCRoaringBytes(v *vector.Vector) ([]byte, error) {
 	return C.GoBytes(unsafe.Pointer(buf), C.int(clen)), nil
 }
 
-// BuildCRoaringBytesU64 builds a roaring64 bitset from an explicit uint64 set
-// (used when only a selected subset of keys should be added, e.g. IVF's
-// centroid-filtered keys) and returns its portable serialization (no tag).
-func BuildCRoaringBytesU64(vals []uint64) ([]byte, error) {
-	r := C.mo_croaring_create()
-	if r == nil {
-		return nil, moerr.NewInternalErrorNoCtx("croaring: create failed")
-	}
-	defer C.mo_croaring_free(r)
-
-	if len(vals) > 0 {
-		// Treat the uint64 slice as a fixed 8-byte-element buffer; on a
-		// little-endian platform each element's bytes decode back to the value.
-		C.mo_croaring_add_fixed(r, unsafe.Pointer(&vals[0]),
-			C.size_t(len(vals)*8), C.size_t(8), C.size_t(len(vals)), nil, 0)
-	}
-
-	var clen C.size_t
-	buf := C.mo_croaring_serialize(r, &clen)
-	if buf == nil {
-		return nil, moerr.NewInternalErrorNoCtx("croaring: serialize failed")
-	}
-	defer C.mo_croaring_free_buf(buf)
-	return C.GoBytes(unsafe.Pointer(buf), C.int(clen)), nil
-}
-
 // NewCRoaringDocFilter deserializes a portable roaring64 payload (no tag prefix).
 func NewCRoaringDocFilter(data []byte) (*CRoaringDocFilter, error) {
 	if len(data) == 0 {

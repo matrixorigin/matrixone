@@ -69,13 +69,6 @@ func rawIntToUint64(b []byte) uint64 {
 	return x
 }
 
-// RawIntToUint64 decodes the raw little-endian fixed bytes of an integer
-// doc_id (width 1/2/4/8) into a uint64 by zero-extension — exported for callers
-// that build a filter from selected rows (e.g. IVF's centroid-filtered keys).
-func RawIntToUint64(b []byte) uint64 {
-	return rawIntToUint64(b)
-}
-
 // BuildBitset builds a roaring64 bitset from the candidate doc_id vector,
 // skipping nulls. The vector must be a fixed-width integer type (see
 // SupportsBitset).

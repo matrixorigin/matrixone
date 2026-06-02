@@ -62,21 +62,6 @@ func BuildIntegerDocFilter(v *vector.Vector) (byte, []byte, error) {
 	return TagCRoaring, data, nil
 }
 
-// BuildIntegerDocFilterU64 is the explicit-set variant of BuildIntegerDocFilter
-// (e.g. IVF centroid-filtered keys).
-func BuildIntegerDocFilterU64(vals []uint64) (byte, []byte, error) {
-	if data, ok, err := BuildCbitmapBytesU64(vals); err != nil {
-		return 0, nil, err
-	} else if ok {
-		return TagCbitmap, data, nil
-	}
-	data, err := BuildCRoaringBytesU64(vals)
-	if err != nil {
-		return 0, nil, err
-	}
-	return TagCRoaring, data, nil
-}
-
 // CbitmapDocFilter wraps a C dense bitset (cgo/cbitmap) and implements
 // engine.DocIDFilter. Build and probe run entirely in C over the raw column
 // buffer (one cgo call per vector), and it uses CRoaring-style refcounting so
@@ -107,31 +92,6 @@ func BuildCbitmapBytes(v *vector.Vector) (data []byte, ok bool, err error) {
 		C.uint64_t(MaxCbitmapBits))
 	if f == nil {
 		// id range exceeds MaxCbitmapBits (or OOM): fall back to CRoaring.
-		return nil, false, nil
-	}
-	defer C.mo_cbitmap_free(f)
-	b, err := cbitmapSerialize(f)
-	if err != nil {
-		return nil, false, err
-	}
-	return b, true, nil
-}
-
-// BuildCbitmapBytesU64 is the explicit-set variant (e.g. IVF centroid-filtered
-// keys). ok=false means the id range is too large for a dense bitmap.
-func BuildCbitmapBytesU64(vals []uint64) (data []byte, ok bool, err error) {
-	var f unsafe.Pointer
-	if len(vals) > 0 {
-		// Treat the uint64 slice as a fixed 8-byte-element buffer; on a
-		// little-endian platform each element's bytes decode back to the value.
-		f = C.mo_cbitmap_build_fixed(unsafe.Pointer(&vals[0]),
-			C.size_t(len(vals)*8), C.size_t(8), C.size_t(len(vals)), nil, 0,
-			C.uint64_t(MaxCbitmapBits))
-	} else {
-		f = C.mo_cbitmap_build_fixed(nil, 0, C.size_t(8), 0, nil, 0,
-			C.uint64_t(MaxCbitmapBits))
-	}
-	if f == nil {
 		return nil, false, nil
 	}
 	defer C.mo_cbitmap_free(f)
