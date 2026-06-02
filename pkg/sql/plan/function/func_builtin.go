@@ -782,169 +782,175 @@ func builtInInterval(parameters []*vector.Vector, result vector.FunctionResultWr
 }
 
 type intervalParam struct {
-	typ  types.Type
-	f64  vector.FunctionParameterWrapper[float64]
-	f32  vector.FunctionParameterWrapper[float32]
-	i64  vector.FunctionParameterWrapper[int64]
-	i32  vector.FunctionParameterWrapper[int32]
-	i16  vector.FunctionParameterWrapper[int16]
-	i8   vector.FunctionParameterWrapper[int8]
-	u64  vector.FunctionParameterWrapper[uint64]
-	u32  vector.FunctionParameterWrapper[uint32]
-	u16  vector.FunctionParameterWrapper[uint16]
-	u8   vector.FunctionParameterWrapper[uint8]
-	d64  vector.FunctionParameterWrapper[types.Decimal64]
-	d128 vector.FunctionParameterWrapper[types.Decimal128]
-	str  vector.FunctionParameterWrapper[types.Varlena]
+	float             func(uint64) (float64, bool, error)
+	decimal           func(uint64) (types.Decimal128, bool, error)
+	useDecimalCompare bool
+	canDecimalCompare bool
+	decScale          int32
 }
 
 func makeIntervalParam(v *vector.Vector) (intervalParam, error) {
-	p := intervalParam{typ: *v.GetType()}
-	switch p.typ.Oid {
+	typ := *v.GetType()
+	p := intervalParam{
+		useDecimalCompare: typ.IsIntOrUint() || typ.IsDecimal(),
+		canDecimalCompare: typ.IsIntOrUint() || typ.Oid == types.T_decimal64 || typ.Oid == types.T_decimal128,
+	}
+	if typ.Oid == types.T_decimal64 || typ.Oid == types.T_decimal128 {
+		p.decScale = typ.Scale
+	}
+
+	switch typ.Oid {
 	case types.T_float64:
-		p.f64 = vector.GenerateFunctionFixedTypeParameter[float64](v)
+		fp := vector.GenerateFunctionFixedTypeParameter[float64](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return v, null, nil
+		}
 	case types.T_float32:
-		p.f32 = vector.GenerateFunctionFixedTypeParameter[float32](v)
+		fp := vector.GenerateFunctionFixedTypeParameter[float32](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
 	case types.T_int64:
-		p.i64 = vector.GenerateFunctionFixedTypeParameter[int64](v)
+		fp := vector.GenerateFunctionFixedTypeParameter[int64](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(v), null, nil
+		}
 	case types.T_int32:
-		p.i32 = vector.GenerateFunctionFixedTypeParameter[int32](v)
+		fp := vector.GenerateFunctionFixedTypeParameter[int32](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
 	case types.T_int16:
-		p.i16 = vector.GenerateFunctionFixedTypeParameter[int16](v)
+		fp := vector.GenerateFunctionFixedTypeParameter[int16](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
 	case types.T_int8:
-		p.i8 = vector.GenerateFunctionFixedTypeParameter[int8](v)
+		fp := vector.GenerateFunctionFixedTypeParameter[int8](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
 	case types.T_uint64:
-		p.u64 = vector.GenerateFunctionFixedTypeParameter[uint64](v)
+		fp := vector.GenerateFunctionFixedTypeParameter[uint64](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			if v <= math.MaxInt64 {
+				return types.Decimal128FromInt64(int64(v)), null, nil
+			}
+			d, err := types.ParseDecimal128(strconv.FormatUint(v, 10), 38, 0)
+			return d, null, err
+		}
 	case types.T_uint32:
-		p.u32 = vector.GenerateFunctionFixedTypeParameter[uint32](v)
+		fp := vector.GenerateFunctionFixedTypeParameter[uint32](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
 	case types.T_uint16:
-		p.u16 = vector.GenerateFunctionFixedTypeParameter[uint16](v)
+		fp := vector.GenerateFunctionFixedTypeParameter[uint16](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
 	case types.T_uint8:
-		p.u8 = vector.GenerateFunctionFixedTypeParameter[uint8](v)
+		fp := vector.GenerateFunctionFixedTypeParameter[uint8](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
 	case types.T_decimal64:
-		p.d64 = vector.GenerateFunctionFixedTypeParameter[types.Decimal64](v)
+		fp := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal64ToFloat64(v, typ.Scale), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromDecimal64(v, typ.Scale), null, nil
+		}
 	case types.T_decimal128:
-		p.d128 = vector.GenerateFunctionFixedTypeParameter[types.Decimal128](v)
+		fp := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128ToFloat64(v, typ.Scale), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return v, null, nil
+		}
 	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
-		p.str = vector.GenerateFunctionStrParameter(v)
+		fp := vector.GenerateFunctionStrParameter(v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetStrValue(idx)
+			if null {
+				return 0, true, nil
+			}
+			f, err := strconv.ParseFloat(string(v), 64)
+			if err != nil {
+				return 0, false, moerr.NewInvalidArgNoCtx("cast to double", fmt.Sprintf("bad value %s", string(v)))
+			}
+			return f, false, nil
+		}
 	case types.T_any:
-		p.i64 = vector.GenerateFunctionFixedTypeParameter[int64](v)
+		fp := vector.GenerateFunctionFixedTypeParameter[int64](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
 	default:
-		return p, moerr.NewInvalidInputNoCtxf("interval function have invalid input args type %s", p.typ.Oid.String())
+		return p, moerr.NewInvalidInputNoCtxf("interval function have invalid input args type %s", typ.Oid.String())
 	}
 	return p, nil
 }
 
 func (p intervalParam) useDecimalComparison() bool {
-	return p.typ.IsIntOrUint() || p.typ.IsDecimal()
+	return p.useDecimalCompare
 }
 
 func (p intervalParam) canCompareAsDecimal() bool {
-	return p.typ.IsIntOrUint() || p.typ.Oid == types.T_decimal64 || p.typ.Oid == types.T_decimal128
+	return p.canDecimalCompare
 }
 
 func (p intervalParam) decimalScale() int32 {
-	if p.typ.Oid == types.T_decimal64 || p.typ.Oid == types.T_decimal128 {
-		return p.typ.Scale
-	}
-	return 0
-}
-
-func (p intervalParam) decimal(idx uint64) (types.Decimal128, bool, error) {
-	switch p.typ.Oid {
-	case types.T_decimal128:
-		v, null := p.d128.GetValue(idx)
-		return v, null, nil
-	case types.T_decimal64:
-		v, null := p.d64.GetValue(idx)
-		return types.Decimal128FromDecimal64(v, p.typ.Scale), null, nil
-	case types.T_int64:
-		v, null := p.i64.GetValue(idx)
-		return types.Decimal128FromInt64(v), null, nil
-	case types.T_int32:
-		v, null := p.i32.GetValue(idx)
-		return types.Decimal128FromInt64(int64(v)), null, nil
-	case types.T_int16:
-		v, null := p.i16.GetValue(idx)
-		return types.Decimal128FromInt64(int64(v)), null, nil
-	case types.T_int8:
-		v, null := p.i8.GetValue(idx)
-		return types.Decimal128FromInt64(int64(v)), null, nil
-	case types.T_uint64:
-		v, null := p.u64.GetValue(idx)
-		if v <= math.MaxInt64 {
-			return types.Decimal128FromInt64(int64(v)), null, nil
-		}
-		d, err := types.ParseDecimal128(strconv.FormatUint(v, 10), 38, 0)
-		return d, null, err
-	case types.T_uint32:
-		v, null := p.u32.GetValue(idx)
-		return types.Decimal128FromInt64(int64(v)), null, nil
-	case types.T_uint16:
-		v, null := p.u16.GetValue(idx)
-		return types.Decimal128FromInt64(int64(v)), null, nil
-	case types.T_uint8:
-		v, null := p.u8.GetValue(idx)
-		return types.Decimal128FromInt64(int64(v)), null, nil
-	default:
-		return types.Decimal128{}, false, moerr.NewInvalidInputNoCtxf("interval function have invalid decimal comparison type %s", p.typ.Oid.String())
-	}
-}
-
-func (p intervalParam) float(idx uint64) (float64, bool, error) {
-	switch p.typ.Oid {
-	case types.T_float64:
-		v, null := p.f64.GetValue(idx)
-		return v, null, nil
-	case types.T_float32:
-		v, null := p.f32.GetValue(idx)
-		return float64(v), null, nil
-	case types.T_int64:
-		v, null := p.i64.GetValue(idx)
-		return float64(v), null, nil
-	case types.T_int32:
-		v, null := p.i32.GetValue(idx)
-		return float64(v), null, nil
-	case types.T_int16:
-		v, null := p.i16.GetValue(idx)
-		return float64(v), null, nil
-	case types.T_int8:
-		v, null := p.i8.GetValue(idx)
-		return float64(v), null, nil
-	case types.T_uint64:
-		v, null := p.u64.GetValue(idx)
-		return float64(v), null, nil
-	case types.T_uint32:
-		v, null := p.u32.GetValue(idx)
-		return float64(v), null, nil
-	case types.T_uint16:
-		v, null := p.u16.GetValue(idx)
-		return float64(v), null, nil
-	case types.T_uint8:
-		v, null := p.u8.GetValue(idx)
-		return float64(v), null, nil
-	case types.T_decimal64:
-		v, null := p.d64.GetValue(idx)
-		return types.Decimal64ToFloat64(v, p.typ.Scale), null, nil
-	case types.T_decimal128:
-		v, null := p.d128.GetValue(idx)
-		return types.Decimal128ToFloat64(v, p.typ.Scale), null, nil
-	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
-		v, null := p.str.GetStrValue(idx)
-		if null {
-			return 0, true, nil
-		}
-		f, err := strconv.ParseFloat(string(v), 64)
-		if err != nil {
-			return 0, false, moerr.NewInvalidArgNoCtx("cast to double", fmt.Sprintf("bad value %s", string(v)))
-		}
-		return f, false, nil
-	case types.T_any:
-		v, null := p.i64.GetValue(idx)
-		return float64(v), null, nil
-	default:
-		return 0, false, moerr.NewInvalidInputNoCtxf("interval function have invalid input args type %s", p.typ.Oid.String())
-	}
+	return p.decScale
 }
 
 func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
