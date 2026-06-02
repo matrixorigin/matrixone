@@ -8069,6 +8069,34 @@ func StPointFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
+// StSimplify reduces a geometry's vertices with Douglas-Peucker at the given
+// planar tolerance.
+func StSimplify(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrFixedToStrWithErrorCheck[float64](ivecs, result, proc, length, func(v string, tol float64) (string, error) {
+		g, err := decodeGeoGeometry(functionUtil.QuickStrToBytes(v))
+		if err != nil {
+			return "", err
+		}
+		return functionUtil.QuickBytesToStr(geo.WriteWKB(geo.Simplify(g, tol))), nil
+	}, selectList)
+}
+
+// StCollect bundles two geometries into the most specific aggregate (multi or
+// collection).
+func StCollect(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
+		a, err := decodeGeoGeometry(v1)
+		if err != nil {
+			return nil, err
+		}
+		b, err := decodeGeoGeometry(v2)
+		if err != nil {
+			return nil, err
+		}
+		return geo.WriteWKB(geo.Collect(a, b)), nil
+	}, selectList)
+}
+
 // StAsGeoJSONPrec renders a geometry as GeoJSON, rounding each coordinate to at
 // most maxdecimaldigits decimal places.
 func StAsGeoJSONPrec(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

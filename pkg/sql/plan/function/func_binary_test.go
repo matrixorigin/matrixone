@@ -5288,6 +5288,44 @@ func TestStMeasuresGeodetic(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestConstructiveOps(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// ST_ConvexHull(geometry).
+	tcHull := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(),
+				[]string{"MULTIPOINT(0 0, 4 0, 4 4, 0 4, 2 2)"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false,
+			[]string{"POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))"}, []bool{false}), StConvexHull)
+	ok, info := tcHull.Run()
+	require.True(t, ok, info)
+
+	// ST_Simplify(geometry, tolerance).
+	tcSimp := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(),
+				[]string{"LINESTRING(0 0, 5 0.0001, 10 0)"}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0.001}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false,
+			[]string{"LINESTRING(0 0, 10 0)"}, []bool{false}), StSimplify)
+	ok, info = tcSimp.Run()
+	require.True(t, ok, info)
+
+	// ST_Collect(geometry, geometry).
+	tcColl := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(0 0)"}, []bool{false}),
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 1)"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false,
+			[]string{"MULTIPOINT(0 0, 1 1)"}, []bool{false}), StCollect)
+	ok, info = tcColl.Run()
+	require.True(t, ok, info)
+}
+
 func TestGeoJSONFunctions(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

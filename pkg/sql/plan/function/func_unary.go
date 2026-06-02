@@ -780,6 +780,17 @@ func StGeomFromGeoJSON(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	}, selectList)
 }
 
+// StConvexHull returns the convex hull of a geometry (planar, monotone chain).
+func StConvexHull(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		g, err := decodeGeoGeometry(v)
+		if err != nil {
+			return nil, err
+		}
+		return geo.WriteWKB(geo.ConvexHull(g)), nil
+	}, selectList)
+}
+
 // StGeomFromWKB builds a geometry from standard Well-Known Binary.
 func StGeomFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	maxPoints := maxPointsInGeometryLimit(proc)

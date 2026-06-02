@@ -695,9 +695,14 @@ const (
 	ST_ASGEOJSON       = 498
 	ST_GEOMFROMGEOJSON = 499
 
+	// GIS constructive operations
+	ST_CONVEXHULL = 500
+	ST_SIMPLIFY   = 501
+	ST_COLLECT    = 502
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 500
+	FUNCTION_END_NUMBER = 503
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1146,6 +1151,9 @@ var functionIdRegister = map[string]int32{
 	"mbrwithin":                      MBRWITHIN,
 	"st_asgeojson":                   ST_ASGEOJSON,
 	"st_geomfromgeojson":             ST_GEOMFROMGEOJSON,
+	"st_convexhull":                  ST_CONVEXHULL,
+	"st_simplify":                    ST_SIMPLIFY,
+	"st_collect":                     ST_COLLECT,
 	"st_geometrytype":                ST_GEOMETRYTYPE,
 	"st_x":                           ST_X,
 	"st_y":                           ST_Y,
