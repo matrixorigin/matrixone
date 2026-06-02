@@ -1313,35 +1313,35 @@ func TestCanExecuteDataBranchMergePickInUncommittedTransaction(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
+	// A user session manages its own transaction for MERGE/PICK and cannot
+	// follow an outer user transaction, so it must be rejected in ANY active
+	// user transaction (both implicit autocommit=0 and explicit BEGIN). The
+	// option bits do not change the outcome; a fresh session is used per
+	// scenario because setBits is cumulative (|=).
 	for _, stmt := range []tree.Statement{
 		&tree.DataBranchMerge{},
 		&tree.DataBranchPick{},
 	} {
-		// option bits are cumulative (setBits does |=), so use a fresh session
-		// per scenario to isolate the bit under test.
-
-		// autocommit: allowed
+		// explicit transaction (BEGIN): rejected with the clear error
 		ses := newTestSession(t, ctrl)
+		ses.GetTxnHandler().SetOptionBits(OPTION_BEGIN)
 		can, err := statementCanBeExecutedInUncommittedTransaction(context.TODO(), ses, stmt)
 		require.NoError(t, err)
-		require.True(t, can)
+		require.False(t, can)
+		err = canExecuteStatementInUncommittedTransaction(context.TODO(), ses, stmt)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), dataBranchMergePickTxnErrorInfo())
 
-		// implicit transaction (autocommit off, no explicit BEGIN): allowed
+		// implicit transaction (autocommit off, no explicit BEGIN): also
+		// rejected — it cannot follow the outer implicit transaction either.
 		ses = newTestSession(t, ctrl)
 		ses.GetTxnHandler().SetOptionBits(OPTION_NOT_AUTOCOMMIT)
-		can, err = statementCanBeExecutedInUncommittedTransaction(context.TODO(), ses, stmt)
-		require.NoError(t, err)
-		require.True(t, can)
-
-		// explicit transaction (BEGIN only): rejected with the clear error
-		ses = newTestSession(t, ctrl)
-		ses.GetTxnHandler().SetOptionBits(OPTION_BEGIN)
 		can, err = statementCanBeExecutedInUncommittedTransaction(context.TODO(), ses, stmt)
 		require.NoError(t, err)
 		require.False(t, can)
 		err = canExecuteStatementInUncommittedTransaction(context.TODO(), ses, stmt)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), dataBranchMergePickExplicitTxnErrorInfo())
+		require.Contains(t, err.Error(), dataBranchMergePickTxnErrorInfo())
 	}
 }
 
@@ -1377,7 +1377,7 @@ func TestHandleDataBranchMergePickRejectExplicitTransactionFallback(t *testing.T
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.run()
 			require.Error(t, err)
-			require.Contains(t, err.Error(), dataBranchMergePickExplicitTxnErrorInfo())
+			require.Contains(t, err.Error(), dataBranchMergePickTxnErrorInfo())
 		})
 	}
 }

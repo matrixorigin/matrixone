@@ -7,8 +7,17 @@ create table t2 (a int, b int, primary key(a));
 insert into t2 values (1,1),(2,2);
 begin;
 data branch merge t2 into t1 when conflict accept;
-internal error: DATA BRANCH MERGE/PICK is not supported in explicit transactions
+internal error: DATA BRANCH MERGE/PICK is not supported in transactions
 rollback;
+select * from t1 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1
+set autocommit = 0;
+insert into t1 values (3,3);
+data branch merge t2 into t1 when conflict accept;
+internal error: DATA BRANCH MERGE/PICK is not supported in transactions
+rollback;
+set autocommit = 1;
 select * from t1 order by a;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  1
