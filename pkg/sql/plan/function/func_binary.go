@@ -8069,6 +8069,46 @@ func StPointFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
+// StFrechetDistance returns the discrete Fréchet distance (planar) between two
+// geometries' vertex sequences.
+func StFrechetDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
+		a, err := decodeGeoGeometry(v1)
+		if err != nil {
+			return 0, err
+		}
+		b, err := decodeGeoGeometry(v2)
+		if err != nil {
+			return 0, err
+		}
+		d, ok := geo.FrechetDistance(a, b)
+		if !ok {
+			return 0, moerr.NewInvalidInputNoCtx("ST_FrechetDistance: empty geometry")
+		}
+		return d, nil
+	}, selectList)
+}
+
+// StHausdorffDistance returns the discrete Hausdorff distance (planar) between
+// two geometries' vertex sets.
+func StHausdorffDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
+		a, err := decodeGeoGeometry(v1)
+		if err != nil {
+			return 0, err
+		}
+		b, err := decodeGeoGeometry(v2)
+		if err != nil {
+			return 0, err
+		}
+		d, ok := geo.HausdorffDistance(a, b)
+		if !ok {
+			return 0, moerr.NewInvalidInputNoCtx("ST_HausdorffDistance: empty geometry")
+		}
+		return d, nil
+	}, selectList)
+}
+
 // requireLineString decodes a geometry payload and asserts it is a LINESTRING.
 func requireLineString(v []byte) (geo.LineString, error) {
 	g, err := decodeGeoGeometry(v)

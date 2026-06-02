@@ -559,9 +559,11 @@ var predefinedFunids = map[int]int{
 	ST_LINEINTERPOLATEPOINT:       503,
 	ST_LINEINTERPOLATEPOINTS:      504,
 	ST_POINTATDISTANCE:            505,
+	ST_FRECHETDISTANCE:            506,
+	ST_HAUSDORFFDISTANCE:          507,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 506,
+	FUNCTION_END_NUMBER: 508,
 }
 
 func Test_funids(t *testing.T) {

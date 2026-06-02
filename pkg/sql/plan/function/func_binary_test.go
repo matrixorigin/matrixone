@@ -5288,6 +5288,27 @@ func TestStMeasuresGeodetic(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestDiscreteDistances(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	run := func(fn fEvalFn, g1, g2 string, want float64) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g1}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g2}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	run(StHausdorffDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 1, 10 1)", 1.0)
+	run(StHausdorffDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 0, 10 0)", 0.0)
+	run(StFrechetDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 1, 10 1)", 1.0)
+	run(StFrechetDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 0, 10 5)", 5.0)
+}
+
 func TestLinearReferencing(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

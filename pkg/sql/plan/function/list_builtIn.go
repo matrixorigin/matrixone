@@ -4319,6 +4319,30 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// Discrete curve distances: st_frechetdistance, st_hausdorffdistance.
+	{
+		functionId: ST_FRECHETDISTANCE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:   func() executeLogicOfOverload { return StFrechetDistance }},
+		},
+	},
+	{
+		functionId: ST_HAUSDORFFDISTANCE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:   func() executeLogicOfOverload { return StHausdorffDistance }},
+		},
+	},
+
 	// Linear referencing: st_lineinterpolatepoint(s), st_pointatdistance.
 	{
 		functionId: ST_LINEINTERPOLATEPOINT,
