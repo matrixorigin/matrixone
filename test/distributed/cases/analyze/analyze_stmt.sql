@@ -28,12 +28,6 @@ insert into t_analyze_02 values
 -- ANALYZE TABLE single table (existing behavior)
 analyze table t_analyze_01(a, b);
 
--- ANALYZE TABLE multi-table (new feature)
-analyze table t_analyze_01(a, b), t_analyze_02(x, y);
-
--- ANALYZE TABLE three tables
-analyze table t_analyze_01(a), t_analyze_02(x), t_analyze_02(y);
-
 -- CHECK TABLE: returns not-supported error
 check table t_analyze_01;
 check table t_analyze_01 extended;

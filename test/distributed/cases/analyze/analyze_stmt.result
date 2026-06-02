@@ -1,0 +1,49 @@
+drop database if exists db_analyze_stmt;
+create database db_analyze_stmt;
+use db_analyze_stmt;
+drop table if exists t_analyze_01;
+create table t_analyze_01(
+a int,
+b varchar(10)
+);
+insert into t_analyze_01 values
+(1, 'a'),
+(1, 'a'),
+(2, 'b'),
+(2, 'c');
+drop table if exists t_analyze_02;
+create table t_analyze_02(
+x int,
+y int
+);
+insert into t_analyze_02 values
+(1, 10),
+(2, 20),
+(3, 30),
+(4, 40);
+analyze table t_analyze_01(a, b);
+approx_count_distinct(a)    approx_count_distinct(b)
+2    3
+check table t_analyze_01;
+not supported: CHECK TABLE is not supported in MatrixOne
+check table t_analyze_01 extended;
+not supported: CHECK TABLE is not supported in MatrixOne
+check table t_analyze_01 for upgrade;
+not supported: CHECK TABLE is not supported in MatrixOne
+check table t_analyze_01, t_analyze_02;
+not supported: CHECK TABLE is not supported in MatrixOne
+check table t_analyze_01, t_analyze_02 extended;
+not supported: CHECK TABLE is not supported in MatrixOne
+show profile;
+not supported: SHOW PROFILE is not supported in MatrixOne
+show profile for query 2;
+not supported: SHOW PROFILE is not supported in MatrixOne
+show profile limit 10;
+not supported: SHOW PROFILE is not supported in MatrixOne
+show profile for query 2 limit 10;
+not supported: SHOW PROFILE is not supported in MatrixOne
+show profile for query 2 limit 10 offset 5;
+not supported: SHOW PROFILE is not supported in MatrixOne
+drop table t_analyze_01;
+drop table t_analyze_02;
+drop database db_analyze_stmt;
