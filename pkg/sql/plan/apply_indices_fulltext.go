@@ -15,13 +15,11 @@ package plan
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -244,42 +242,34 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		idxtblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, idxdef.IndexTableName)
 		srctblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, scanNode.TableDef.Name)
 		fn := ftidxscan.GetF()
-		pattern := fn.Args[0].GetLit().GetSval()
-		mode := fn.Args[1].GetLit().GetI64Val()
-
-		fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
-		alias_name := fmt.Sprintf("mo_fulltext_alias_%d", i)
 		params := idxdef.IndexAlgoParams
+		aliasName := fmt.Sprintf("mo_fulltext_alias_%d", i)
 
-		var exprs tree.Exprs
-		exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](srctblname, srctblname, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](idxtblname, idxtblname, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[int64](mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
+		modeLit := fn.Args[1].GetLit()
+		if modeLit == nil {
+			return -1, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "fulltext search mode must be a constant")
+		}
+		mode := modeLit.GetI64Val()
 
-		name := tree.NewUnresolvedName(fulltext_func)
-
-		// TableFuncion AST
-		tmpTableFunc := &tree.AliasedTableExpr{
-			Expr: &tree.TableFunction{
-				Func: &tree.FuncExpr{
-					Func:     tree.FuncName2ResolvableFunctionReference(name),
-					FuncName: fulltext_func,
-					Exprs:    exprs,
-					Type:     tree.FUNC_TYPE_TABLE,
-				},
-			},
-			As: tree.AliasClause{
-				Alias: tree.Identifier(alias_name),
-			},
+		sql := ""
+		if patternLit := fn.Args[0].GetLit(); patternLit != nil {
+			fullTextSQL, err := builder.getFullTextIndexScanSql(params, idxtblname, patternLit.GetSval(), mode)
+			if err != nil {
+				return -1, nil, nil, err
+			}
+			sql = fullTextSQL
 		}
 
-		curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, -1, nil)
+		exprs := []*plan.Expr{
+			makePlan2StringConstExprWithType(srctblname),
+			makePlan2StringConstExprWithType(idxtblname),
+			DeepCopyExpr(fn.Args[0]),
+			DeepCopyExpr(fn.Args[1]),
+		}
+		curr_ftnode_id, err := builder.buildFullTextIndexScanNode(ctx, exprs, nil, params, sql)
 		if err != nil {
 			return -1, nil, nil, err
 		}
-
 		// save the created fulltext node to either filter or projection
 		// check equal fulltext_match() and return node id to correct project position
 		if i < proj_offset {
@@ -302,6 +292,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 		curr_ftnode := builder.qry.Nodes[curr_ftnode_id]
 		curr_ftnode_tag := curr_ftnode.BindingTags[0]
+		for colPos, colDef := range curr_ftnode.TableDef.Cols {
+			builder.nameByColRef[[2]int32{curr_ftnode_tag, int32(colPos)}] = aliasName + "." + colDef.Name
+		}
 		curr_ftnode_pkcol := &Expr{
 			Typ: pkType,
 			Expr: &plan.Expr_Col{
@@ -608,17 +601,7 @@ func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *pl
 		return false
 	}
 
-	// check search pattern and mode
-	var pattern1, pattern2 string
-	var mode1, mode2 int64
-
-	pattern1 = fn1.Args[0].GetLit().GetSval()
-	mode1 = fn1.Args[1].GetLit().GetI64Val()
-
-	pattern2 = fn2.Args[0].GetLit().GetSval()
-	mode2 = fn2.Args[1].GetLit().GetI64Val()
-
-	if pattern1 != pattern2 || mode1 != mode2 {
+	if !exprStructuralEqual(fn1.Args[0], fn2.Args[0]) || !exprStructuralEqual(fn1.Args[1], fn2.Args[1]) {
 		return false
 	}
 

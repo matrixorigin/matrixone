@@ -545,6 +545,12 @@ id
 select id from src where match(body) against('+读书会 +提效 +社群 +案例 +运营' IN BOOLEAN MODE);
 id
 1
+prepare ft_stmt from 'select id from src where match(body) against(? IN BOOLEAN MODE) order by id';
+set @q = '+读书会 +提效 +社群 +案例 +运营';
+execute ft_stmt using @q;
+id
+1
+deallocate prepare ft_stmt;
 select id from src where match(body) against('肥胖的原因都是因为摄入fat多导致的吗' IN NATURAL LANGUAGE MODE);
 id
 3

@@ -679,7 +679,7 @@ func sqlTaskInt64(v any) int64 {
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
 %type <fullTextSearchType> fulltext_search_opt
-%type <str> search_pattern
+%type <expr> search_pattern
 %type <referenceOptionType> ref_opt on_delete on_update
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
@@ -11061,7 +11061,11 @@ simple_expr:
 search_pattern:
     STRING
     {
-        $$ = $1
+        $$ = tree.NewNumVal($1, $1, false, tree.P_char)
+    }
+|   VALUE_ARG
+    {
+        $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
     }
 
 function_call_window:

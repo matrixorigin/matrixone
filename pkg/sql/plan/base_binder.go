@@ -1158,7 +1158,18 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 	args := make([]*Expr, 2+len(astExpr.KeyParts))
 
 	mode := int64(astExpr.Mode)
-	args[0] = makePlan2StringConstExprWithType(astExpr.Pattern, false)
+	pattern, err := b.impl.BindExpr(astExpr.Pattern, depth, false)
+	if err != nil {
+		return nil, err
+	}
+	if pattern.Typ.Id != int32(types.T_varchar) {
+		varcharTyp := types.T_varchar.ToType()
+		pattern, err = makePlan2CastExpr(b.GetContext(), pattern, makePlan2Type(&varcharTyp))
+		if err != nil {
+			return nil, err
+		}
+	}
+	args[0] = pattern
 	args[1] = makePlan2Int64ConstExprWithType(mode)
 	for i, k := range astExpr.KeyParts {
 		c, err := b.baseBindColRef(k.ColName, depth, isRoot)
