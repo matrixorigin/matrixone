@@ -8601,6 +8601,56 @@ func setIsIntersected(A, B *btree.Set[int64]) bool {
 	return false
 }
 
+func expandRoleSetWithInheritedRoles(ctx context.Context, bh BackgroundExec, roleSet *btree.Set[int64]) error {
+	roleSetOfKthIteration := &btree.Set[int64]{}
+	roleSetOfKPlusOneThIteration := &btree.Set[int64]{}
+	roleSetOfVisited := &btree.Set[int64]{}
+
+	for _, roleID := range roleSet.Keys() {
+		roleSetOfKthIteration.Insert(roleID)
+		roleSetOfVisited.Insert(roleID)
+	}
+
+	for roleSetOfKthIteration.Len() != 0 {
+		roleSetOfKPlusOneThIteration.Clear()
+		for _, roleID := range roleSetOfKthIteration.Keys() {
+			sqlForInheritedRoleIdOfRoleId := getSqlForInheritedRoleIdOfRoleId(roleID)
+			bh.ClearExecResultSet()
+			if err := bh.Exec(ctx, sqlForInheritedRoleIdOfRoleId); err != nil {
+				return moerr.NewInternalErrorf(ctx, "get inherited role id of the role id. error:%v", err)
+			}
+
+			erArray, err := getResultSet(ctx, bh)
+			if err != nil {
+				return err
+			}
+
+			if execResultArrayHasData(erArray) {
+				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+					inheritedRoleID, err := erArray[0].GetInt64(ctx, i, 0)
+					if err != nil {
+						return err
+					}
+					if roleSetOfVisited.Contains(inheritedRoleID) {
+						continue
+					}
+					roleSetOfVisited.Insert(inheritedRoleID)
+					roleSet.Insert(inheritedRoleID)
+					roleSetOfKPlusOneThIteration.Insert(inheritedRoleID)
+				}
+			}
+		}
+
+		roleSetOfKthIteration, roleSetOfKPlusOneThIteration = roleSetOfKPlusOneThIteration, roleSetOfKthIteration
+	}
+
+	return nil
+}
+
+func shouldExpandCurrentUserRolesForPrivilegeGrant(privType PrivilegeType, astObjType tree.ObjectType) bool {
+	return privType.Scope() == PrivilegeScopeDatabase && astObjType == tree.OBJECT_TYPE_DATABASE
+}
+
 // determineUserCanGrantPrivilegesToOthers decides the privileges can be granted to others.
 func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) (ret bool, stats statistic.StatsArray, err error) {
 	stats.Reset()
@@ -8632,6 +8682,7 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 	roleSetOfVisited := &btree.Set[int64]{}
 	// the set of roles of the current user that executes this statement or function
 	roleSetOfCurrentUser := &btree.Set[int64]{}
+	currentUserRoleSetExpanded := false
 
 	roleSetOfCurrentUser.Insert(int64(account.GetDefaultRoleID()))
 
@@ -8666,6 +8717,16 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 
 		if setIsIntersected(roleSetOfPrivilegeGrantedToWGO, roleSetOfCurrentUser) {
 			continue
+		}
+		if !currentUserRoleSetExpanded && shouldExpandCurrentUserRolesForPrivilegeGrant(privType, gp.ObjType) {
+			err = expandRoleSetWithInheritedRoles(ctx, bh, roleSetOfCurrentUser)
+			if err != nil {
+				return false, stats, err
+			}
+			currentUserRoleSetExpanded = true
+			if setIsIntersected(roleSetOfPrivilegeGrantedToWGO, roleSetOfCurrentUser) {
+				continue
+			}
 		}
 
 		riResult := goOn
