@@ -2372,7 +2372,7 @@ func TestCDCPauseTaskCompleteHookUpdatesCatalogState(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	sql := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = 'paused' WHERE 1=1 AND account_id = 1 AND task_id = 'task1'"
+	sql := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = 'paused' WHERE 1=1 AND account_id = 1 AND task_id = 'task1' AND state = 'pausing'"
 	mock.ExpectExec(sql).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	hook := CDCPauseTaskCompleteHook(func() ie.InternalExecutor {
@@ -2424,6 +2424,7 @@ func TestCDCPauseTaskCompleteHookUsesFreshContext(t *testing.T) {
 	}))
 	require.NoError(t, capture.execCtxErr)
 	require.Contains(t, capture.execSQL, "state = 'paused'")
+	require.Contains(t, capture.execSQL, "AND state = 'pausing'")
 }
 
 func TestCdcTask_PauseWhileStarting(t *testing.T) {

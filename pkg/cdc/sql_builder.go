@@ -123,6 +123,12 @@ const (
 		"WHERE " +
 		"1=1 AND account_id = %d AND task_id = '%s'"
 
+	CDCUpdateTaskStateByTaskIdAndStateSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_task` " +
+		"SET state = '%s' " +
+		"WHERE " +
+		"1=1 AND account_id = %d AND task_id = '%s' AND state = '%s'"
+
 	CDCGetDataKeySqlTemplate = "SELECT " +
 		"encrypted_key " +
 		"FROM mo_catalog.mo_data_key " +
@@ -262,8 +268,9 @@ const (
 	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx = 19
 	CDCClearTaskTableErrorsSQL_Idx                  = 20
 	CDCUpdateTaskStateByTaskIdSQL_Idx               = 21
+	CDCUpdateTaskStateByTaskIdAndStateSQL_Idx       = 22
 
-	CDCSqlTemplateCount = 22
+	CDCSqlTemplateCount = 23
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -313,6 +320,9 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	},
 	CDCUpdateTaskStateByTaskIdSQL_Idx: {
 		SQL: CDCUpdateTaskStateByTaskIdSqlTemplate,
+	},
+	CDCUpdateTaskStateByTaskIdAndStateSQL_Idx: {
+		SQL: CDCUpdateTaskStateByTaskIdAndStateSqlTemplate,
 	},
 	CDCInsertWatermarkSqlTemplate_Idx: {
 		SQL: CDCInsertWatermarkSqlTemplate,
@@ -530,6 +540,21 @@ func (b cdcSQLBuilder) UpdateTaskStateByTaskIdSQL(
 		state,
 		accountId,
 		taskId,
+	)
+}
+
+func (b cdcSQLBuilder) UpdateTaskStateByTaskIdAndStateSQL(
+	accountId uint64,
+	taskId string,
+	state string,
+	currentState string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateTaskStateByTaskIdAndStateSQL_Idx].SQL,
+		state,
+		accountId,
+		taskId,
+		currentState,
 	)
 }
 
