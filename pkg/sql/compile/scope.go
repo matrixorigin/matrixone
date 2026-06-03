@@ -416,7 +416,18 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	if !checkPipelineStandaloneExecutableAtRemote(s) {
 		return s.MergeRun(c)
 	}
-
+	if scopeContainsVarExpr(s) {
+		folded, err := foldVarExprsInScope(s, c.proc)
+		if err != nil {
+			return err
+		}
+		if folded {
+			runtime.ServiceRuntime(s.Proc.GetService()).Logger().
+				Debug("fold variable expressions before remote run",
+					zap.String("local-address", c.addr),
+					zap.String("remote-address", s.NodeInfo.Addr))
+		}
+	}
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
 			zap.String("local-address", c.addr),
