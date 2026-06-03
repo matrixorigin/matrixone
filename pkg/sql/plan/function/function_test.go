@@ -316,6 +316,25 @@ func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
 }
 
+func TestRunPositionCharFunctionDirectly(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []*vector.Vector{
+		testutil.NewVector(2, types.T_char.ToType(), proc.Mp(), false, []string{"y", "a"}),
+		testutil.NewVector(2, types.T_char.ToType(), proc.Mp(), false, []string{"xyz", "bbb"}),
+	}
+	startMp := proc.Mp().CurrNB()
+
+	v, err := RunFunctionDirectly(proc, EncodeOverloadID(POSITION, 1), inputs, 2)
+	require.NoError(t, err)
+	require.Equal(t, types.T_int64, v.GetType().Oid)
+	require.Equal(t, 2, v.Length())
+	require.Equal(t, []int64{2, 0}, vector.MustFixedColNoTypeCheck[int64](v))
+
+	v.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, startMp, proc.Mp().CurrNB())
+}
+
 func TestRunFunctionDirectly(t *testing.T) {
 	// fold case.
 	{
