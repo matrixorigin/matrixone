@@ -4213,7 +4213,7 @@ func DateIntAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 			}
 			resultDt, err := doDateAdd(d, v2, iTyp)
 			if err != nil {
-				if isDatetimeOverflowMaxError(err) {
+				if isDateOverflowMaxError(err) {
 					rsNull.Add(i)
 					continue
 				}
