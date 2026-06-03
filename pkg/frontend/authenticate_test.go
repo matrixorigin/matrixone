@@ -6566,6 +6566,8 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 
 		err := doSetSecondaryRoleAll(ses.GetTxnHandler().GetTxnCtx(), ses)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
+		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
 	})
 
 	convey.Convey("do set secondary role succ", t, func() {
@@ -6605,6 +6607,8 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 
 		err := doSetSecondaryRoleAll(ses.GetTxnHandler().GetTxnCtx(), ses)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
+		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
 	})
 }
 
@@ -6644,6 +6648,8 @@ func TestDoSwitchRoleSecondaryRoleAllInvalidatesRuleCache(t *testing.T) {
 		})
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeTrue)
+		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
+		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
 
 		ses.ruleCacheMu.RLock()
 		cacheIsNil := ses.ruleCache == nil

@@ -477,6 +477,46 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 	}, rules)
 }
 
+func TestLoadRuleCacheMergesPrimaryAndSecondaryRoleRules(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ses := newSes(&privilege{}, ctrl)
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          "test_rule_user_multi",
+		DefaultRole:   "test_rule_role_multi_a",
+		TenantID:      sysAccountID,
+		UserID:        42,
+		DefaultRoleID: 10,
+	}
+	tenant.SetUseSecondaryRole(true)
+	ses.SetTenantInfo(tenant)
+
+	bh.sql2result[getSqlForRoleIDsOfUserForRuleCache(42)] = newMrsForRoleIdOfUserId([][]interface{}{
+		{10},
+		{20},
+	})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(20)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10, 20})] = newMrsForRewriteRules([][]interface{}{
+		{20, "db1.t1", "select * from db1.t1 where age < 3"},
+		{10, "db1.t1", "select * from db1.t1 where age > 1"},
+	})
+
+	rules, err := loadRuleCache(context.Background(), ses)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{
+		"db1.t1": "select * from db1.t1 where (age > 1) or (age < 3)",
+	}, rules)
+}
+
 func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
