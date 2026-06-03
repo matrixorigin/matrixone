@@ -16,6 +16,7 @@ package external
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -33,7 +34,14 @@ func NewParquetReader(param *ExternalParam, proc *process.Process) *ParquetReade
 }
 
 func (r *ParquetReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty bool, err error) {
+	openStart := time.Now()
 	r.param = param
+	defer func() {
+		param.addParquetProfile(process.ParquetProfileStats{
+			OpenTime: time.Since(openStart).Nanoseconds(),
+		})
+	}()
+
 	if err := param.refreshPartitionValues(proc); err != nil {
 		return false, err
 	}
@@ -41,6 +49,11 @@ func (r *ParquetReader) Open(param *ExternalParam, proc *process.Process) (fileE
 	if err != nil {
 		return false, err
 	}
+	stats := process.ParquetProfileStats{Files: 1}
+	if r.h != nil {
+		stats.RowGroups = int64(len(r.h.rowGroups))
+	}
+	param.addParquetProfile(stats)
 	// newParquetHandler returns (nil, nil) for empty files
 	if r.h == nil {
 		return true, nil
@@ -76,9 +89,13 @@ func (r *ParquetReader) ReadBatch(
 			return false, err
 		}
 	}
+	if buf.RowCount() > 0 {
+		r.param.addParquetProfile(process.ParquetProfileStats{RowsRead: int64(buf.RowCount())})
+	}
 
-	// Check if file is finished: getData sets offset and checks NumRows
-	if r.h.file != nil && r.h.offset >= r.h.file.NumRows() {
+	// Check if file is finished: getData sets offset against the selected
+	// row groups, not necessarily the whole file.
+	if r.h.isFinished() {
 		return true, nil
 	}
 	return false, nil
