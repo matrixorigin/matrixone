@@ -305,20 +305,22 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 			}
 		}
 
-		for colName, updateKey := range updateKeys {
-			for _, coldef := range tableDef.Cols {
-				if coldef.Name == colName && isEnumOrSetPlanType(&coldef.Typ) {
-					updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)
-					if err != nil {
-						return 0, nil, err
-					}
+		for _, coldef := range tableDef.Cols {
+			updateKey, ok := updateKeys[coldef.Name]
+			if !ok {
+				continue
+			}
+			if isEnumOrSetPlanType(&coldef.Typ) {
+				updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)
+				if err != nil {
+					return 0, nil, err
 				}
 			}
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: updateKey,
 			})
-			updateColPosMap[colName] = offset
-			if _, ok := pkNameMap[colName]; ok {
+			updateColPosMap[coldef.Name] = offset
+			if _, ok := pkNameMap[coldef.Name]; ok {
 				updatePkColCount++
 			}
 			offset++
