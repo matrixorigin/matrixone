@@ -4,81 +4,113 @@ use parq;
 create table t1(id bigint,name varchar);
 load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table t1;
 select * from t1;
-id    name
-1    user1
-2    user2
-7    user7
-8    user8
-10    user10
-12    user12
-15    user15
-16    user16
+➤ id[-5,64,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  user1  𝄀
+2  ¦  user2  𝄀
+7  ¦  user7  𝄀
+8  ¦  user8  𝄀
+10  ¦  user10  𝄀
+12  ¦  user12  𝄀
+15  ¦  user15  𝄀
+16  ¦  user16
+create table pq_parallel_guard(id bigint, name varchar);
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_parallel_guard parallel 'true';
+select count(*) from pq_parallel_guard;
+➤ count(*)[-5,64,0]  𝄀
+8
+drop table pq_parallel_guard;
+create table pq_option_reject(id bigint, name varchar);
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet', 'compression'='gzip'} into table pq_option_reject;
+invalid configuration: LOAD DATA with format='parquet' does not support compression option
+load data infile {'filepath'='$resources/load_data/simple.parq', 'jsondata'='object', 'format'='parquet'} into table pq_option_reject;
+invalid configuration: LOAD DATA with format='parquet' does not support jsondata option
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet', 'jsondata'='object'} into table pq_option_reject;
+invalid configuration: LOAD DATA with format='parquet' does not support jsondata option
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet', 'hive_partitioning'='true'} into table pq_option_reject;
+invalid configuration: LOAD DATA with format='parquet' does not support hive partitioning options
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_option_reject fields terminated by ',';
+invalid configuration: LOAD DATA with format='parquet' does not support FIELDS option
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_option_reject lines terminated by '\n';
+invalid configuration: LOAD DATA with format='parquet' does not support LINES option
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_option_reject ignore 1 lines;
+invalid configuration: LOAD DATA with format='parquet' does not support IGNORE LINES
+load data local infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_option_reject;
+load parquet local is not yet implemented
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_option_reject (id, @name);
+parquet load with @variables in column list is not yet implemented
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_option_reject set name=nullif(name,'x');
+parquet load with SET clause is not yet implemented
+drop table pq_option_reject;
+create table pq_column_error(missing_col int);
+load data infile {'filepath'='$resources/parquet/supported_types.parquet', 'format'='parquet'} into table pq_column_error;
+invalid input: column missing_col not found
+drop table pq_column_error;
 create table t2(id bigint not null, name varchar not null, sex bool, f32 float(5,2));
 load data infile {'filepath'='$resources/load_data/simple2.parq', 'format'='parquet'} into table t2;
 select * from t2;
-id    name    sex    f32
-1    user1    0    1.0
-2    user2    0    null
-7    user7    0    7.0
-8    user8    1    null
-10    user10    0    10.0
-12    user12    0    null
-15    user15    0    null
-16    user16    1    null
+➤ id[-5,64,0]  ¦  name[12,-1,0]  ¦  sex[-7,1,0]  ¦  f32[7,5,2]  𝄀
+1  ¦  user1  ¦  0  ¦  1.0  𝄀
+2  ¦  user2  ¦  0  ¦  null  𝄀
+7  ¦  user7  ¦  0  ¦  7.0  𝄀
+8  ¦  user8  ¦  1  ¦  null  𝄀
+10  ¦  user10  ¦  0  ¦  10.0  𝄀
+12  ¦  user12  ¦  0  ¦  null  𝄀
+15  ¦  user15  ¦  0  ¦  null  𝄀
+16  ¦  user16  ¦  1  ¦  null
 create table t3(c varchar);
 load data infile {'filepath'='$resources/load_data/indexed_str.parq', 'format'='parquet'} into table t3;
 select * from t3;
-c
-null
-aa
-null
-bb
-aa
-789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@
-789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@
-aa
-bb
-xyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABC
-null
-null
+➤ c[12,-1,0]  𝄀
+null  𝄀
+aa  𝄀
+null  𝄀
+bb  𝄀
+aa  𝄀
+789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@  𝄀
+789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@  𝄀
+aa  𝄀
+bb  𝄀
+xyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABC  𝄀
+null  𝄀
+null  𝄀
 xyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABC
 create table t4(id bigint not null, name varchar not null, sex bool, f32 float(5,2));
 create stage parqstage URL='file:///$resources/load_data/';
 load data infile {'filepath'='stage://parqstage/simple2.parq', 'format'='parquet'} into table t4;
 select * from t4;
-id    name    sex    f32
-1    user1    0    1.0
-2    user2    0    null
-7    user7    0    7.0
-8    user8    1    null
-10    user10    0    10.0
-12    user12    0    null
-15    user15    0    null
-16    user16    1    null
+➤ id[-5,64,0]  ¦  name[12,-1,0]  ¦  sex[-7,1,0]  ¦  f32[7,5,2]  𝄀
+1  ¦  user1  ¦  0  ¦  1.0  𝄀
+2  ¦  user2  ¦  0  ¦  null  𝄀
+7  ¦  user7  ¦  0  ¦  7.0  𝄀
+8  ¦  user8  ¦  1  ¦  null  𝄀
+10  ¦  user10  ¦  0  ¦  10.0  𝄀
+12  ¦  user12  ¦  0  ¦  null  𝄀
+15  ¦  user15  ¦  0  ¦  null  𝄀
+16  ¦  user16  ¦  1  ¦  null
 drop stage parqstage;
 create table t5(id bigint, name varchar, int8column tinyint, int16column smallint, binarycolumn binary, varbinarycolumn varbinary(32), blobcolumn blob);
 load data infile {'filepath'='$resources/load_data/int8_int16_binary_varbinary_blob.parq', 'format'='parquet'} into table t5;
 select * from t5;
-id    name    int8column    int16column    binarycolumn    varbinarycolumn    blobcolumn
-1    Alice    1    100    binary1    varbinary1    blob1
-2    Bob    2    200    binary2    varbinary2    blob2
-3    Charlie    3    300    binary3    varbinary3    blob3
-4    Diana    4    400    binary4    varbinary4    blob4
-5    Eve    5    500    binary5    varbinary5    blob5
+➤ id[-5,64,0]  ¦  name[12,-1,0]  ¦  int8column[-6,8,0]  ¦  int16column[5,16,0]  ¦  binarycolumn[12,3,0]  ¦  varbinarycolumn[12,96,0]  ¦  blobcolumn[12,0,0]  𝄀
+1  ¦  Alice  ¦  1  ¦  100  ¦  binary1  ¦  varbinary1  ¦  blob1  𝄀
+2  ¦  Bob  ¦  2  ¦  200  ¦  binary2  ¦  varbinary2  ¦  blob2  𝄀
+3  ¦  Charlie  ¦  3  ¦  300  ¦  binary3  ¦  varbinary3  ¦  blob3  𝄀
+4  ¦  Diana  ¦  4  ¦  400  ¦  binary4  ¦  varbinary4  ¦  blob4  𝄀
+5  ¦  Eve  ¦  5  ¦  500  ¦  binary5  ¦  varbinary5  ¦  blob5
 create table t6(id int, name varchar(100), scores text, address text, metadata text);
 load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table t6;
 select * from t6;
-id    name    scores    address    metadata
-1    Alice    [85, 90, 78]    {"city": "Beijing", "zip": "100000"}    {"key1": "value1", "key2": "value2"}
-2    Bob    [92, 88]    {"city": "Shanghai", "zip": "200000"}    {"a": "b"}
-3    Charlie    [76, 85, 90, 95]    {"city": "Guangzhou", "zip": "510000"}    {"m": "n", "x": "y", "z": "w"}
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  scores[12,0,0]  ¦  address[12,0,0]  ¦  metadata[12,0,0]  𝄀
+1  ¦  Alice  ¦  [85, 90, 78]  ¦  {"city": "Beijing", "zip": "100000"}  ¦  {"key1": "value1", "key2": "value2"}  𝄀
+2  ¦  Bob  ¦  [92, 88]  ¦  {"city": "Shanghai", "zip": "200000"}  ¦  {"a": "b"}  𝄀
+3  ¦  Charlie  ¦  [76, 85, 90, 95]  ¦  {"city": "Guangzhou", "zip": "510000"}  ¦  {"m": "n", "x": "y", "z": "w"}
 create table t7(id int, name varchar(100), scores json, address json, metadata json);
 load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table t7;
 select * from t7;
-id    name    scores    address    metadata
-1    Alice    [85, 90, 78]    {"city": "Beijing", "zip": "100000"}    {"key1": "value1", "key2": "value2"}
-2    Bob    [92, 88]    {"city": "Shanghai", "zip": "200000"}    {"a": "b"}
-3    Charlie    [76, 85, 90, 95]    {"city": "Guangzhou", "zip": "510000"}    {"m": "n", "x": "y", "z": "w"}
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  scores[-1,2147483647,0]  ¦  address[-1,2147483647,0]  ¦  metadata[-1,2147483647,0]  𝄀
+1  ¦  Alice  ¦  [85, 90, 78]  ¦  {"city": "Beijing", "zip": "100000"}  ¦  {"key1": "value1", "key2": "value2"}  𝄀
+2  ¦  Bob  ¦  [92, 88]  ¦  {"city": "Shanghai", "zip": "200000"}  ¦  {"a": "b"}  𝄀
+3  ¦  Charlie  ¦  [76, 85, 90, 95]  ¦  {"city": "Guangzhou", "zip": "510000"}  ¦  {"m": "n", "x": "y", "z": "w"}
 drop table if exists pq_nullable_test;
 CREATE TABLE pq_nullable_test (
 id BIGINT NOT NULL,
@@ -94,18 +126,18 @@ COUNT(*) as total_rows,
 SUM(CASE WHEN col_nullable_with_null IS NULL THEN 1 ELSE 0 END) as null_count_col1,
 SUM(CASE WHEN col_all_null IS NULL THEN 1 ELSE 0 END) as null_count_all_null
 FROM pq_nullable_test;
-total_rows    null_count_col1    null_count_all_null
-5    2    5
+➤ total_rows[-5,64,0]  ¦  null_count_col1[-5,64,0]  ¦  null_count_all_null[-5,64,0]  𝄀
+5  ¦  2  ¦  5
 SELECT COUNT(*) FROM pq_nullable_test WHERE col_not_nullable IS NULL;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT * FROM pq_nullable_test ORDER BY id;
-id    col_nullable_with_null    col_nullable_no_null    col_not_nullable    col_all_null
-1    10.5    A    100    null
-2    null    B    200    null
-3    30.2    C    300    null
-4    null    D    400    null
-5    50.1    E    500    null
+➤ id[-5,64,0]  ¦  col_nullable_with_null[8,54,0]  ¦  col_nullable_no_null[12,-1,0]  ¦  col_not_nullable[-5,64,0]  ¦  col_all_null[8,54,0]  𝄀
+1  ¦  10.5  ¦  A  ¦  100  ¦  null  𝄀
+2  ¦  null  ¦  B  ¦  200  ¦  null  𝄀
+3  ¦  30.2  ¦  C  ¦  300  ¦  null  𝄀
+4  ¦  null  ¦  D  ¦  400  ¦  null  𝄀
+5  ¦  50.1  ¦  E  ¦  500  ¦  null
 drop table pq_nullable_test;
 drop table if exists parquet_complex_types;
 CREATE TABLE `parquet_complex_types` (
@@ -127,11 +159,11 @@ CREATE TABLE `parquet_complex_types` (
 load data infile {'filepath'='$resources/parquet/complex.parquet', 'format'='parquet'} into table parquet_complex_types;
 select * from parquet_complex_types order by test_id limit 3;
 ➤ test_id[-5,64,0]  ¦  decimal_small[3,10,2]  ¦  decimal_medium[3,18,4]  ¦  decimal_large[3,38,6]  ¦  timestamp_utc[93,64,0]  ¦  timestamp_micros[93,64,0]  ¦  timestamp_millis[93,64,0]  ¦  map_string_int[-1,2147483647,0]  ¦  map_string_string[-1,2147483647,0]  ¦  struct_simple[-1,2147483647,0]  ¦  struct_nested[-1,2147483647,0]  ¦  list_int[-1,2147483647,0]  ¦  list_string[-1,2147483647,0]  ¦  list_struct[-1,2147483647,0]  𝄀
-0  ¦  -84956395.77  ¦  48549239237439.8438  ¦  -3657605477313590430068499283968.000000  ¦  2022-07-24 14:35:36  ¦  2023-12-13 18:32:17.360544000  ¦  2023-09-11 02:26:10.731000000  ¦  {"key_0": 469}  ¦  {"key_0": "value_844", "key_1": "value_15"}  ¦  {"age": 74, "name": "user_1305"}  ¦  {"user": {"name": "user_4084", "profile": {"city": "Guangzhou", "country": "China"}}}  ¦  [114, 625, 391, 582, 144, 912, 593]  ¦  ["item_858", "item_97", "item_4", "item_211", "item_726", "item_406"]  ¦  [{"id": 0, "name": "item_0"}, {"id": 1, "name": "item_1"}, {"id": 2, "name": "item_2"}, {"id": 3, "name": "item_3"}, {"id": 4, "name": "item_4"}]  𝄀
-1  ¦  5912648.53  ¦  -94462690481611.3281  ¦  2937746366852315562009560088576.000000  ¦  2023-12-02 02:34:01  ¦  2022-03-13 01:41:19.637821000  ¦  2023-12-22 18:27:03.641000000  ¦  {"key_0": 889, "key_1": 817, "key_2": 386}  ¦  {"key_0": "value_100", "key_1": "value_307", "key_2": "value_134", "key_3": "value_133"}  ¦  {"age": 34, "name": "user_9994"}  ¦  {"user": {"name": "user_5901", "profile": {"city": "Guangzhou", "country": "China"}}}  ¦  [437]  ¦  ["item_642", "item_911", "item_778"]  ¦  [{"id": 0, "name": "item_0"}, {"id": 1, "name": "item_1"}, {"id": 2, "name": "item_2"}, {"id": 3, "name": "item_3"}, {"id": 4, "name": "item_4"}]  𝄀
-2  ¦  -1488207.76  ¦  54995689092595.9688  ¦  5839644290979080503870820974592.000000  ¦  2022-04-29 03:19:37  ¦  2020-09-23 03:59:34.427134000  ¦  2022-08-10 11:33:01.333000000  ¦  {"key_0": 262}  ¦  {"key_0": "value_363", "key_1": "value_769", "key_2": "value_931", "key_3": "value_216", "key_4": "value_514"}  ¦  {"age": 69, "name": "user_2212"}  ¦  {"user": {"name": "user_6646", "profile": {"city": "Guangzhou", "country": "China"}}}  ¦  [271, 499, 705, 309, 964, 921, 734]  ¦  ["item_145", "item_396", "item_985"]  ¦  [{"id": 0, "name": "item_0"}, {"id": 1, "name": "item_1"}, {"id": 2, "name": "item_2"}, {"id": 3, "name": "item_3"}, {"id": 4, "name": "item_4"}]
+0  ¦  -84956395.77  ¦  48549239237439.8438  ¦  -3657605477313590430068499283968.000000  ¦  2022-07-24 22:35:36  ¦  2023-12-14 02:32:17.360544000  ¦  2023-09-11 10:26:10.731000000  ¦  {"key_0": 469}  ¦  {"key_0": "value_844", "key_1": "value_15"}  ¦  {"age": 74, "name": "user_1305"}  ¦  {"user": {"name": "user_4084", "profile": {"city": "Guangzhou", "country": "China"}}}  ¦  [114, 625, 391, 582, 144, 912, 593]  ¦  ["item_858", "item_97", "item_4", "item_211", "item_726", "item_406"]  ¦  [{"id": 0, "name": "item_0"}, {"id": 1, "name": "item_1"}, {"id": 2, "name": "item_2"}, {"id": 3, "name": "item_3"}, {"id": 4, "name": "item_4"}]  𝄀
+1  ¦  5912648.53  ¦  -94462690481611.3281  ¦  2937746366852315562009560088576.000000  ¦  2023-12-02 10:34:01  ¦  2022-03-13 09:41:19.637821000  ¦  2023-12-23 02:27:03.641000000  ¦  {"key_0": 889, "key_1": 817, "key_2": 386}  ¦  {"key_0": "value_100", "key_1": "value_307", "key_2": "value_134", "key_3": "value_133"}  ¦  {"age": 34, "name": "user_9994"}  ¦  {"user": {"name": "user_5901", "profile": {"city": "Guangzhou", "country": "China"}}}  ¦  [437]  ¦  ["item_642", "item_911", "item_778"]  ¦  [{"id": 0, "name": "item_0"}, {"id": 1, "name": "item_1"}, {"id": 2, "name": "item_2"}, {"id": 3, "name": "item_3"}, {"id": 4, "name": "item_4"}]  𝄀
+2  ¦  -1488207.76  ¦  54995689092595.9688  ¦  5839644290979080503870820974592.000000  ¦  2022-04-29 11:19:37  ¦  2020-09-23 11:59:34.427134000  ¦  2022-08-10 19:33:01.333000000  ¦  {"key_0": 262}  ¦  {"key_0": "value_363", "key_1": "value_769", "key_2": "value_931", "key_3": "value_216", "key_4": "value_514"}  ¦  {"age": 69, "name": "user_2212"}  ¦  {"user": {"name": "user_6646", "profile": {"city": "Guangzhou", "country": "China"}}}  ¦  [271, 499, 705, 309, 964, 921, 734]  ¦  ["item_145", "item_396", "item_985"]  ¦  [{"id": 0, "name": "item_0"}, {"id": 1, "name": "item_1"}, {"id": 2, "name": "item_2"}, {"id": 3, "name": "item_3"}, {"id": 4, "name": "item_4"}]
 SELECT COUNT(*) FROM parquet_complex_types;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 1000
 drop table parquet_complex_types;
 drop table if exists ts_test;
@@ -142,10 +174,10 @@ ts_no_tz_millis DATETIME
 );
 load data infile {'filepath'='$resources/parquet/ts_no_tz_test.parquet', 'format'='parquet'} into table ts_test;
 select * from ts_test;
-id    ts_no_tz_micros    ts_no_tz_millis
-1    2023-10-27 10:00:00    2025-12-25 08:30:00
-2    1960-01-01 12:00:00    2000-01-01 00:00:00
-3    null    2023-12-31 23:59:59
+➤ id[-5,64,0]  ¦  ts_no_tz_micros[93,64,0]  ¦  ts_no_tz_millis[93,64,0]  𝄀
+1  ¦  2023-10-27 10:00:00  ¦  2025-12-25 08:30:00  𝄀
+2  ¦  1960-01-01 12:00:00  ¦  2000-01-01 00:00:00  𝄀
+3  ¦  null  ¦  2023-12-31 23:59:59
 drop table ts_test;
 drop table if exists none_compression;
 CREATE TABLE none_compression (
@@ -156,8 +188,8 @@ status BOOL
 );
 load data infile {'filepath'='$resources/parquet/test_none.parquet', 'format'='parquet'} into table none_compression;
 SELECT 'NONE' as codec, COUNT(*), SUM(value) FROM none_compression;
-codec    COUNT(*)    SUM(value)
-NONE    9    55.35
+➤ codec[12,-1,0]  ¦  COUNT(*)[-5,64,0]  ¦  SUM(value)[8,54,0]  𝄀
+NONE  ¦  9  ¦  55.35
 drop table if exists snappy_compression;
 CREATE TABLE snappy_compression (
 id BIGINT,
@@ -167,8 +199,8 @@ status BOOL
 );
 load data infile {'filepath'='$resources/parquet/test_snappy.parquet', 'format'='parquet'} into table snappy_compression;
 SELECT 'NONE' as codec, COUNT(*), SUM(value) FROM snappy_compression;
-codec    COUNT(*)    SUM(value)
-NONE    9    55.35
+➤ codec[12,-1,0]  ¦  COUNT(*)[-5,64,0]  ¦  SUM(value)[8,54,0]  𝄀
+NONE  ¦  9  ¦  55.35
 drop table if exists gzip_compression;
 CREATE TABLE gzip_compression (
 id BIGINT,
@@ -178,8 +210,8 @@ status BOOL
 );
 load data infile {'filepath'='$resources/parquet/test_gzip.parquet', 'format'='parquet'} into table gzip_compression;
 SELECT 'NONE' as codec, COUNT(*), SUM(value) FROM gzip_compression;
-codec    COUNT(*)    SUM(value)
-NONE    9    55.35
+➤ codec[12,-1,0]  ¦  COUNT(*)[-5,64,0]  ¦  SUM(value)[8,54,0]  𝄀
+NONE  ¦  9  ¦  55.35
 drop table if exists lz4_compression;
 CREATE TABLE lz4_compression (
 id BIGINT,
@@ -189,8 +221,8 @@ status BOOL
 );
 load data infile {'filepath'='$resources/parquet/test_lz4.parquet', 'format'='parquet'} into table lz4_compression;
 SELECT 'NONE' as codec, COUNT(*), SUM(value) FROM lz4_compression;
-codec    COUNT(*)    SUM(value)
-NONE    9    55.35
+➤ codec[12,-1,0]  ¦  COUNT(*)[-5,64,0]  ¦  SUM(value)[8,54,0]  𝄀
+NONE  ¦  9  ¦  55.35
 drop table if exists zstd_compression;
 CREATE TABLE zstd_compression (
 id BIGINT,
@@ -200,8 +232,8 @@ status BOOL
 );
 load data infile {'filepath'='$resources/parquet/test_zstd.parquet', 'format'='parquet'} into table zstd_compression;
 SELECT 'NONE' as codec, COUNT(*), SUM(value) FROM zstd_compression;
-codec    COUNT(*)    SUM(value)
-NONE    9    55.35
+➤ codec[12,-1,0]  ¦  COUNT(*)[-5,64,0]  ¦  SUM(value)[8,54,0]  𝄀
+NONE  ¦  9  ¦  55.35
 drop table if exists brotli_compression;
 CREATE TABLE brotli_compression (
 id BIGINT,
@@ -211,8 +243,20 @@ status BOOL
 );
 load data infile {'filepath'='$resources/parquet/test_brotli.parquet', 'format'='parquet'} into table brotli_compression;
 select 'NONE' as codec, count(*), sum(value) from brotli_compression;
-codec    count(*)    sum(value)
-NONE    9    55.35
+➤ codec[12,-1,0]  ¦  count(*)[-5,64,0]  ¦  sum(value)[8,54,0]  𝄀
+NONE  ¦  9  ¦  55.35
+drop table if exists pq_multi_file_pattern;
+CREATE TABLE pq_multi_file_pattern (
+id BIGINT,
+name VARCHAR(100),
+value DOUBLE,
+status BOOL
+);
+load data infile {'filepath'='$resources/parquet/test_[bgnslz]*.parquet', 'format'='parquet'} into table pq_multi_file_pattern parallel 'true';
+select count(*), cast(round(sum(value), 2) as decimal(10,2)) as total_value, min(id), max(id) from pq_multi_file_pattern;
+➤ count(*)[-5,64,0]  ¦  total_value[3,10,2]  ¦  min(id)[-5,64,0]  ¦  max(id)[-5,64,0]  𝄀
+54  ¦  332.10  ¦  1  ¦  9
+drop table pq_multi_file_pattern;
 drop table if exists pq_version_compare;
 CREATE TABLE `pq_version_compare` (
 `id` bigint DEFAULT NULL,
@@ -221,17 +265,17 @@ CREATE TABLE `pq_version_compare` (
 );
 load data infile {'filepath'='$resources/parquet/test_v1_legacy.parquet', 'format'='parquet'} into table pq_version_compare;
 select * from pq_version_compare;
-id    user_name    login_time
-1    Alpha    2023-01-01 10:00:00
-2    Beta    2023-05-20 15:30:00
-3    Gamma    2024-01-01 00:00:00
+➤ id[-5,64,0]  ¦  user_name[12,-1,0]  ¦  login_time[93,64,0]  𝄀
+1  ¦  Alpha  ¦  2023-01-01 10:00:00  𝄀
+2  ¦  Beta  ¦  2023-05-20 15:30:00  𝄀
+3  ¦  Gamma  ¦  2024-01-01 00:00:00
 truncate table pq_version_compare;
 load data infile {'filepath'='$resources/parquet/test_v2_modern.parquet', 'format'='parquet'} into table pq_version_compare;
 select * from pq_version_compare;
-id    user_name    login_time
-1    Alpha    2023-01-01 10:00:00
-2    Beta    2023-05-20 15:30:00
-3    Gamma    2024-01-01 00:00:00
+➤ id[-5,64,0]  ¦  user_name[12,-1,0]  ¦  login_time[93,64,0]  𝄀
+1  ¦  Alpha  ¦  2023-01-01 10:00:00  𝄀
+2  ¦  Beta  ¦  2023-05-20 15:30:00  𝄀
+3  ¦  Gamma  ¦  2024-01-01 00:00:00
 drop table if exists pq_stats_check;
 CREATE TABLE pq_stats_check (
 id BIGINT,
@@ -239,43 +283,43 @@ score DOUBLE
 );
 load data infile {'filepath'='$resources/parquet/no_stats.parquet', 'format'='parquet'} into table pq_stats_check;
 select * from pq_stats_check;
-id    score
-10    85.5
-20    92.0
-30    78.5
-40    88.0
-50    95.5
+➤ id[-5,64,0]  ¦  score[8,54,0]  𝄀
+10  ¦  85.5  𝄀
+20  ¦  92.0  𝄀
+30  ¦  78.5  𝄀
+40  ¦  88.0  𝄀
+50  ¦  95.5
 select 'no_stats' as source, count(*), MIN(id), MAX(score) from pq_stats_check;
-source    count(*)    MIN(id)    MAX(score)
-no_stats    5    10    95.5
+➤ source[12,-1,0]  ¦  count(*)[-5,64,0]  ¦  MIN(id)[-5,64,0]  ¦  MAX(score)[8,54,0]  𝄀
+no_stats  ¦  5  ¦  10  ¦  95.5
 truncate pq_stats_check;
 load data infile {'filepath'='$resources/parquet/with_stats.parquet', 'format'='parquet'} into table pq_stats_check;
 select * from pq_stats_check;
-id    score
-10    85.5
-20    92.0
-30    78.5
-40    88.0
-50    95.5
+➤ id[-5,64,0]  ¦  score[8,54,0]  𝄀
+10  ¦  85.5  𝄀
+20  ¦  92.0  𝄀
+30  ¦  78.5  𝄀
+40  ¦  88.0  𝄀
+50  ¦  95.5
 select 'no_stats' as source, count(*), MIN(id), MAX(score) from pq_stats_check;
-source    count(*)    MIN(id)    MAX(score)
-no_stats    5    10    95.5
+➤ source[12,-1,0]  ¦  count(*)[-5,64,0]  ¦  MIN(id)[-5,64,0]  ¦  MAX(score)[8,54,0]  𝄀
+no_stats  ¦  5  ¦  10  ¦  95.5
 drop table if exists empty_table;
 create table empty_table(col1 bigint, col2 varchar);
 load data infile {'filepath'='$resources/parquet/empty_test.parquet', 'format'='parquet'} into table empty_table;
 select * from empty_table;
-col1    col2
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]
 drop table if exists empty_table01;
 create table empty_table01(id bigint, name varchar);
 load data infile {'filepath'='$resources/parquet/empty_test.parquet', 'format'='parquet'} into table empty_table01;
 select * from empty_table;
-col1    col2
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]
 drop table if exists empty_table02;
 create table empty_table02(col1 int);
 load data infile {'filepath'='$resources/parquet/empty_test.parquet', 'format'='parquet'} into table empty_table02;
 invalid input: column count mismatch: parquet file has 2 columns, but table has 1 columns
 select * from empty_table02;
-col1
+➤ col1[4,32,0]
 drop table if exists wide_100_columns;
 CREATE TABLE wide_100_columns (
 col_0 BIGINT, col_1 DOUBLE, col_2 BIGINT, col_3 DOUBLE, col_4 BIGINT,
@@ -301,18 +345,18 @@ col_95 DOUBLE, col_96 BIGINT, col_97 DOUBLE, col_98 BIGINT, col_99 DOUBLE
 );
 load data infile {'filepath'='$resources/parquet/wide_table_100.parquet', 'format'='parquet'} into table wide_100_columns;
 select count(*) from wide_100_columns;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 10
 select max(col_99) from wide_100_columns;
-max(col_99)
+➤ max(col_99)[8,54,0]  𝄀
 65.09616047354105
 select col_0, col_50, col_99 from wide_100_columns LIMIT 5;
-col_0    col_50    col_99
-8532    6030    1.9133920123024617
-6843    5056    41.18178009514648
-6330    5820    24.09602999503998
-8321    8116    57.81033963088119
-9724    9055    42.0138364779882
+➤ col_0[-5,64,0]  ¦  col_50[-5,64,0]  ¦  col_99[8,54,0]  𝄀
+8532  ¦  6030  ¦  1.9133920123024617  𝄀
+6843  ¦  5056  ¦  41.18178009514648  𝄀
+6330  ¦  5820  ¦  24.09602999503998  𝄀
+8321  ¦  8116  ¦  57.81033963088119  𝄀
+9724  ¦  9055  ¦  42.0138364779882
 drop table if exists pq_supported_types;
 CREATE TABLE pq_supported_types (
 int32_col INT,
@@ -328,13 +372,20 @@ ts_col TIMESTAMP
 );
 load data infile {'filepath'='$resources/parquet/supported_types.parquet', 'format'='parquet'} into table pq_supported_types;
 select int32_col,int64_col,uint32_col,float32_col,float64_col,string_col,bool_col,date_col,time_col from pq_supported_types;
-int32_col    int64_col    uint32_col    float32_col    float64_col    string_col    bool_col    date_col    time_col
-1    10000000000    4000000000    1.1    1.111111111    Matrix    1    2023-01-01    10:00:00
-2    20000000000    4100000000    2.2    2.222222222    Origin    0    2024-05-20    15:30:45
-3    30000000000    4200000000    3.3    3.333333333    One    1    2025-12-31    23:59:59
+➤ int32_col[4,32,0]  ¦  int64_col[-5,64,0]  ¦  uint32_col[4,32,0]  ¦  float32_col[7,24,0]  ¦  float64_col[8,54,0]  ¦  string_col[12,-1,0]  ¦  bool_col[-7,1,0]  ¦  date_col[91,64,0]  ¦  time_col[92,64,0]  𝄀
+1  ¦  10000000000  ¦  4000000000  ¦  1.1  ¦  1.111111111  ¦  Matrix  ¦  1  ¦  2023-01-01  ¦  10:00:00  𝄀
+2  ¦  20000000000  ¦  4100000000  ¦  2.2  ¦  2.222222222  ¦  Origin  ¦  0  ¦  2024-05-20  ¦  15:30:45  𝄀
+3  ¦  30000000000  ¦  4200000000  ¦  3.3  ¦  3.333333333  ¦  One  ¦  1  ¦  2025-12-31  ¦  23:59:59
 select count(*) from pq_supported_types;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
+drop table if exists pq_extra_parquet_columns;
+create table pq_extra_parquet_columns(int32_col int);
+load data infile {'filepath'='$resources/parquet/supported_types.parquet', 'format'='parquet'} into table pq_extra_parquet_columns;
+select count(*), min(int32_col), max(int32_col) from pq_extra_parquet_columns;
+➤ count(*)[-5,64,0]  ¦  min(int32_col)[4,32,0]  ¦  max(int32_col)[4,32,0]  𝄀
+3  ¦  1  ¦  3
+drop table pq_extra_parquet_columns;
 drop table if exists pq_new_types;
 create table pq_new_types (
 col_int8 TINYINT,
@@ -346,22 +397,22 @@ col_decimal DECIMAL(18, 3)
 );
 load data infile {'filepath'='$resources/parquet/new_supported_types.parquet', 'format'='parquet'} into table pq_new_types;
 select count(*) from pq_new_types;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 select * from pq_new_types;
-col_int8    col_int16    col_large_string    col_ts_no_tz    col_binary    col_decimal
-127    32767    Short string    2023-01-01 12:00:00        123.456
--128    -32768    AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA    2024-05-20 15:30:45    hello    -0.001
-0    100    MatrixOrigin    2025-12-31 23:59:59    ÿþý    999999.999
+➤ col_int8[-6,8,0]  ¦  col_int16[5,16,0]  ¦  col_large_string[12,0,0]  ¦  col_ts_no_tz[93,64,0]  ¦  col_binary[12,0,0]  ¦  col_decimal[3,18,3]  𝄀
+127  ¦  32767  ¦  Short string  ¦  2023-01-01 12:00:00  ¦    ¦  123.456  𝄀
+-128  ¦  -32768  ¦  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  ¦  2024-05-20 15:30:45  ¦  hello  ¦  -0.001  𝄀
+0  ¦  100  ¦  MatrixOrigin  ¦  2025-12-31 23:59:59  ¦  ÿþý  ¦  999999.999
 select length(col_binary) from pq_new_types;
-length(col_binary)
-3
-5
+➤ length(col_binary)[-5,64,0]  𝄀
+3  𝄀
+5  𝄀
 3
 select col_ts_no_tz from pq_new_types;
-col_ts_no_tz
-2023-01-01 12:00:00
-2024-05-20 15:30:45
+➤ col_ts_no_tz[93,64,0]  𝄀
+2023-01-01 12:00:00  𝄀
+2024-05-20 15:30:45  𝄀
 2025-12-31 23:59:59
 drop table if exists subtask_test;
 create table subtask_test (
@@ -373,10 +424,10 @@ c_large_str TEXT
 );
 load data infile {'filepath'='$resources/parquet/subtask_22691_test.parquet', 'format'='parquet'} into table subtask_test;
 select * from subtask_test;
-c_int8    c_int16    c_binary    c_decimal    c_large_str
-1    1000     ÿ     123.4567    hello
--128    -32768    matrixone    -1.0000    worldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworld
-127    32767    parquet    999999.9999    large_string_test
+➤ c_int8[-6,8,0]  ¦  c_int16[5,16,0]  ¦  c_binary[12,0,0]  ¦  c_decimal[3,12,4]  ¦  c_large_str[12,0,0]  𝄀
+1  ¦  1000  ¦   ÿ   ¦  123.4567  ¦  hello  𝄀
+-128  ¦  -32768  ¦  matrixone  ¦  -1.0000  ¦  worldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworld  𝄀
+127  ¦  32767  ¦  parquet  ¦  999999.9999  ¦  large_string_test
 drop table if exists pq_decimal_boundary;
 create table pq_decimal_boundary (
 dec_p9_s2 DECIMAL(9, 2),
@@ -386,18 +437,18 @@ dec_p38_s38 DECIMAL(38, 38)
 );
 load data infile {'filepath'='$resources/parquet/decimal_boundary_test.parquet', 'format'='parquet'} into table pq_decimal_boundary;
 select * from pq_decimal_boundary;
-dec_p9_s2    dec_p18_s9    dec_p38_s0    dec_p38_s38
-9999999.99    999999999.999999999    99999999999999999999999999999999999999    1E-38
--9999999.99    -999999999.999999999    -99999999999999999999999999999999999999    -1E-38
-0.00    1.234567890    0    null
+➤ dec_p9_s2[3,9,2]  ¦  dec_p18_s9[3,18,9]  ¦  dec_p38_s0[3,39,0]  ¦  dec_p38_s38[3,38,38]  𝄀
+9999999.99  ¦  999999999.999999999  ¦  99999999999999999999999999999999999999  ¦  1E-38  𝄀
+-9999999.99  ¦  -999999999.999999999  ¦  -99999999999999999999999999999999999999  ¦  -1E-38  𝄀
+0.00  ¦  1.234567890  ¦  0  ¦  null
 select dec_p38_s0 from pq_decimal_boundary WHERE dec_p38_s0 > 0;
-dec_p38_s0
+➤ dec_p38_s0[3,39,0]  𝄀
 99999999999999999999999999999999999999
 select dec_p38_s38 from pq_decimal_boundary WHERE dec_p38_s38 > 0;
-dec_p38_s38
+➤ dec_p38_s38[3,38,38]  𝄀
 1E-38
 select dec_p9_s2 * 1.1 from pq_decimal_boundary LIMIT 1;
-dec_p9_s2 * 1.1
+➤ dec_p9_s2 * 1.1[3,38,3]  𝄀
 10999999.989
 drop table if exists pq_binary_test;
 create table pq_binary_test (
@@ -412,20 +463,20 @@ hex(bin_fixed) as fixed_hex,
 hex(bin_var) as var_hex,
 hex(bin_blob) as blob_hex
 from pq_binary_test;
-fixed_hex    var_hex    blob_hex
-3132333435    68656C6C6F20776F726C64    FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011
-4142434445    6D61747269786F6E65    62696E6172795F64617461
-464748494A    70617271756574    null
+➤ fixed_hex[12,-1,0]  ¦  var_hex[12,-1,0]  ¦  blob_hex[12,-1,0]  𝄀
+3132333435  ¦  68656C6C6F20776F726C64  ¦  FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011  𝄀
+4142434445  ¦  6D61747269786F6E65  ¦  62696E6172795F64617461  𝄀
+464748494A  ¦  70617271756574  ¦  null
 select length(bin_fixed) from pq_binary_test;
-length(bin_fixed)
-5
-5
+➤ length(bin_fixed)[-5,64,0]  𝄀
+5  𝄀
+5  𝄀
 5
 select count(*) from pq_binary_test where bin_blob is null;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 select length(bin_empty) from pq_binary_test limit 1;
-length(bin_empty)
+➤ length(bin_empty)[-5,64,0]  𝄀
 0
 drop table if exists parquet_01;
 CREATE TABLE `parquet_01` (
@@ -437,15 +488,48 @@ CREATE TABLE `parquet_01` (
 );
 load data infile {'filepath'='$resources/parquet/Iris.parquet', 'format'='parquet'} into table parquet_01;
 select count(*) from parquet_01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 150
 drop table if exists pq_date32_datetime;
 create table pq_date32_datetime(date_col datetime, value int);
 load data infile {'filepath'='$resources/load_data/date32_datetime.parq', 'format'='parquet'} into table pq_date32_datetime;
 select * from pq_date32_datetime;
-date_col    value
-2024-01-01 00:00:00    100
-2024-06-15 00:00:00    200
-1970-01-01 00:00:00    300
-null    400
+➤ date_col[93,64,0]  ¦  value[4,32,0]  𝄀
+2024-01-01 00:00:00  ¦  100  𝄀
+2024-06-15 00:00:00  ¦  200  𝄀
+1970-01-01 00:00:00  ¦  300  𝄀
+null  ¦  400
+drop table if exists pq_file_fanout_rollback;
+create table pq_file_fanout_rollback(id bigint, name varchar(100), value double, status bool);
+insert into pq_file_fanout_rollback values(-1, 'seed', 0.0, false);
+load data infile {'filepath'='$resources/parquet/test_*.parquet', 'format'='parquet'} into table pq_file_fanout_rollback parallel 'true';
+invalid input: column name not found
+select count(*), min(id), max(id), cast(round(sum(value), 2) as decimal(10,2)) from pq_file_fanout_rollback;
+➤ count(*)[-5,64,0]  ¦  min(id)[-5,64,0]  ¦  max(id)[-5,64,0]  ¦  cast(round(sum(value), 2) as decimal(10, 2))[3,10,2]  𝄀
+1  ¦  -1  ¦  -1  ¦  0.00
+drop table pq_file_fanout_rollback;
+drop table if exists pq_not_null_rollback;
+create table pq_not_null_rollback(
+id bigint not null primary key,
+col_nullable_with_null double not null,
+col_nullable_no_null varchar(10),
+col_not_nullable bigint not null,
+col_all_null double
+);
+insert into pq_not_null_rollback values(-1, 0.0, 'seed', 0, null);
+load data infile {'filepath'='$resources/parquet/nullable_test.parquet', 'format'='parquet'} into table pq_not_null_rollback parallel 'true';
+constraint violation: cannot load NULL value into NOT NULL column
+select count(*), min(id), max(id), sum(col_nullable_with_null) from pq_not_null_rollback;
+➤ count(*)[-5,64,0]  ¦  min(id)[-5,64,0]  ¦  max(id)[-5,64,0]  ¦  sum(col_nullable_with_null)[8,54,0]  𝄀
+1  ¦  -1  ¦  -1  ¦  0.0
+drop table pq_not_null_rollback;
+drop table if exists pq_type_error_rollback;
+create table pq_type_error_rollback(test_case varchar(50) not null, value int not null);
+insert into pq_type_error_rollback values('seed', 0);
+load data infile {'filepath'='$resources/load_data/string_to_int_invalid.parq', 'format'='parquet'} into table pq_type_error_rollback parallel 'true';
+internal error: row 0: strconv.ParseInt: parsing "abc": invalid syntax
+select count(*), min(test_case), max(test_case), sum(value) from pq_type_error_rollback;
+➤ count(*)[-5,64,0]  ¦  min(test_case)[12,-1,0]  ¦  max(test_case)[12,-1,0]  ¦  sum(value)[-5,64,0]  𝄀
+1  ¦  seed  ¦  seed  ¦  0
+drop table pq_type_error_rollback;
 drop database parq;
