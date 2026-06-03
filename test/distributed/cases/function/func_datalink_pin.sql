@@ -69,3 +69,18 @@ drop account pin_acc;
 --     addresses an immutable CAS object whose internal key is not a writable
 --     external path, so save_file must error rather than clobber the wrong path.
 select save_file(cast('file:///bogus/path.txt?contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a' as datalink), 'should-fail') as pin_write_rejected;
+
+-- 13. pinning with an offset past EOF errors out (mirrors load_file), instead of
+--     silently pinning zero bytes and minting the empty-content hash.
+select datalink_pin(cast('file://$resources/file_test/normal.txt?offset=100' as datalink)) as pin_offset_past_eof;
+
+-- 14. a live path must not use the reserved datalink_cas/ prefix: otherwise
+--     file://datalink_cas/<acct>/<hh>/<hash> would be mistaken for a pinned CAS
+--     key and read straight from shared storage, bypassing account isolation.
+select load_file(cast('file://datalink_cas/0/c0/c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a' as datalink)) as reserved_prefix_rejected;
+select datalink_pin(cast('file://datalink_cas/0/c0/c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a' as datalink)) as reserved_prefix_pin_rejected;
+
+-- 15. a duplicated contenthash parameter (mixed case) folds nondeterministically,
+--     so it is rejected outright by both the parser and datalink_pin.
+select load_file(cast('file:///x.txt?contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a&ContentHash=0000000000000000000000000000000000000000000000000000000000000000' as datalink)) as dup_contenthash_rejected;
+select datalink_pin(cast('file://$resources/file_test/normal.txt?contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a&ContentHash=0000000000000000000000000000000000000000000000000000000000000000' as datalink)) as dup_contenthash_pin_rejected;

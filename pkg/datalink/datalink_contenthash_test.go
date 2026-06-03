@@ -89,6 +89,31 @@ func TestParseDatalinkContentHashIsAccountScoped(t *testing.T) {
 	require.NotEqual(t, moUrl, otherUrl)
 }
 
+// Security: a live URL must not be allowed to resolve into the reserved internal
+// datalink_cas/ prefix. Otherwise file://datalink_cas/<acct>/<hh>/<hash> would be
+// treated as a pinned CAS key by casHashFromKey and read directly from SHARED,
+// letting one account read another account's pinned blob by guessing the path.
+func TestParseDatalinkRejectsReservedCASPrefix(t *testing.T) {
+	proc, accountID := procWithAccount(t)
+	raw := "file://" + CASKey(accountID, strings.Repeat("a", 64)) // file://datalink_cas/<acct>/aa/aa..
+
+	_, _, err := ParseDatalink(raw, proc)
+	require.Error(t, err, "ParseDatalink must reject the reserved datalink_cas/ prefix")
+
+	_, err = NewDatalink(raw, proc)
+	require.Error(t, err, "NewDatalink must reject the reserved datalink_cas/ prefix")
+}
+
+// Mixed-case duplicate contenthash params fold non-deterministically (the winning
+// value depends on Go map iteration order), so they must be rejected outright.
+func TestParseDatalinkRejectsDuplicateContentHash(t *testing.T) {
+	proc, _ := procWithAccount(t)
+	raw := "file:///x.txt?contenthash=" + strings.Repeat("a", 64) +
+		"&ContentHash=" + strings.Repeat("b", 64)
+	_, _, err := ParseDatalink(raw, proc)
+	require.Error(t, err)
+}
+
 func TestParseDatalinkInvalidContentHash(t *testing.T) {
 	cases := []string{
 		"file:///a/b/c/1.txt?contenthash=abc",                        // too short

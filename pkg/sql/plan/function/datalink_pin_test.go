@@ -303,6 +303,63 @@ func TestDatalinkPinRejectsOversizedFile(t *testing.T) {
 	require.True(t, s, info)
 }
 
+// pin must reject an offset past EOF (matching load_file) instead of silently
+// pinning an empty slice and returning the hash of empty content.
+func TestDatalinkPinRejectsOffsetPastEOF(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "doc.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("hello"), 0o600))
+
+	proc := testutil.NewProc(t)
+	input := "file://" + filePath + "?offset=100" // file is 5 bytes
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_datalink.ToType(),
+			[]string{input}, []bool{false})},
+		NewFunctionTestResult(types.T_datalink.ToType(), true,
+			[]string{""}, []bool{false}),
+		DatalinkPin)
+	s, info := tc.Run()
+	require.True(t, s, info)
+}
+
+// Mixed-case duplicate contenthash params are non-deterministic to fold, so pin
+// rejects them. The blob is pre-materialized so the idempotent path would
+// otherwise succeed — proving the error comes from duplicate detection, not from
+// a missing-blob re-pin failure.
+func TestDatalinkPinRejectsDuplicateContentHash(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "doc.txt")
+	content := []byte("dup-content")
+	require.NoError(t, os.WriteFile(filePath, content, 0o600))
+
+	proc := testutil.NewProc(t)
+	liveURL := "file://" + filePath
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+
+	// pin once so the blob exists in this account's CAS
+	first := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_datalink.ToType(),
+			[]string{liveURL}, []bool{false})},
+		NewFunctionTestResult(types.T_datalink.ToType(), false,
+			[]string{pinnedURLOf(liveURL, content)}, []bool{false}),
+		DatalinkPin)
+	s, info := first.Run()
+	require.True(t, s, info)
+
+	// same hash under two casings: must be rejected, not idempotently accepted
+	dupURL := liveURL + "?contenthash=" + hash + "&ContentHash=" + hash
+	dup := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_datalink.ToType(),
+			[]string{dupURL}, []bool{false})},
+		NewFunctionTestResult(types.T_datalink.ToType(), true,
+			[]string{""}, []bool{false}),
+		DatalinkPin)
+	s, info = dup.Run()
+	require.True(t, s, info)
+}
+
 // save_file() must reject writes to a pinned (contenthash) datalink: the pinned
 // value addresses an immutable CAS object, so writing through it would target the
 // internal CAS key rather than any real external path.

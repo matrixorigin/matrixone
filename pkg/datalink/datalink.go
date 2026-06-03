@@ -121,10 +121,17 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int64, error
 	}
 
 	// 1. collect query params. Values are lower-cased; a sha256 hex digest is
-	// already lower-case so the contenthash value is unaffected.
+	// already lower-case so the contenthash value is unaffected. A parameter that
+	// repeats (the same key, or case-insensitive variants such as contenthash and
+	// ContentHash) folds to a single map entry whose winner depends on map
+	// iteration order, so reject duplicates outright to keep parsing deterministic.
 	urlParams := make(map[string]string)
 	for k, v := range u.Query() {
-		urlParams[strings.ToLower(k)] = strings.ToLower(v[0])
+		lk := strings.ToLower(k)
+		if _, dup := urlParams[lk]; dup || len(v) > 1 {
+			return "", nil, moerr.NewInternalErrorNoCtxf("duplicate datalink query parameter %q", lk)
+		}
+		urlParams[lk] = strings.ToLower(v[0])
 	}
 
 	// 2. get size and offset from the query (apply to both live and pinned values)
@@ -187,6 +194,16 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int64, error
 		}
 	default:
 		return "", nil, moerr.NewNYINoCtxf("unsupported url scheme %s", u.Scheme)
+	}
+
+	// A live reference must never resolve into the reserved datalink_cas/ prefix.
+	// Otherwise file://datalink_cas/<acct>/<hh>/<hash> would be mistaken for a
+	// pinned CAS key by casHashFromKey and read straight from SHARED, letting one
+	// account read another account's pinned blob by guessing the path. Only the
+	// contenthash branch above (account namespaced from the trusted context) may
+	// produce a datalink_cas/ key.
+	if strings.HasPrefix(moUrl, casPrefix+"/") {
+		return "", nil, moerr.NewInternalErrorNoCtxf("datalink path must not use the reserved %q prefix", casPrefix)
 	}
 
 	return moUrl, offsetSize, nil

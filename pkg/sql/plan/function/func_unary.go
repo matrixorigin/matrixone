@@ -3516,17 +3516,23 @@ func pinDatalink(rawURL string, casFS fileservice.FileService, proc *process.Pro
 
 	q := u.Query()
 	// Detect an existing contenthash (case-insensitively, consistent with
-	// ParseDatalink which lower-cases query keys).
-	var pinnedKey, pinnedHash string
+	// ParseDatalink which lower-cases query keys). Collect every case variant so a
+	// duplicated parameter (e.g. contenthash=X&ContentHash=Y) is rejected rather
+	// than resolved by nondeterministic map iteration order, and so all variants
+	// are stripped together below.
+	var pinnedKeys []string
+	var pinnedHash string
 	for k := range q {
 		if strings.EqualFold(k, datalink.ContentHashKey) {
-			pinnedKey = k
+			pinnedKeys = append(pinnedKeys, k)
 			pinnedHash = strings.ToLower(q.Get(k))
-			break
 		}
 	}
+	if len(pinnedKeys) > 1 {
+		return "", moerr.NewInternalErrorf(proc.Ctx, "duplicate %s parameter", datalink.ContentHashKey)
+	}
 
-	if pinnedKey != "" {
+	if len(pinnedKeys) == 1 {
 		if err := datalink.ValidateContentHash(pinnedHash); err != nil {
 			return "", err
 		}
@@ -3547,7 +3553,7 @@ func pinDatalink(rawURL string, casFS fileservice.FileService, proc *process.Pro
 		}
 		// Strip the contenthash so the live external path is read below; otherwise
 		// NewDatalink would resolve to the (missing) CAS key instead of the file.
-		q.Del(pinnedKey)
+		q.Del(pinnedKeys[0])
 		u.RawQuery = q.Encode()
 		rawURL = u.String()
 	}
@@ -3568,6 +3574,11 @@ func pinDatalink(rawURL string, casFS fileservice.FileService, proc *process.Pro
 		fileSize, err := dl.StatSize(proc)
 		if err != nil {
 			return "", err
+		}
+		// Mirror load_file: an offset past EOF is an error, not a silent pin of zero
+		// bytes that would mint the empty-content hash.
+		if dl.Offset > fileSize {
+			return "", moerr.NewInternalError(proc.Ctx, "offset exceeds file size")
 		}
 		size = fileSize - dl.Offset
 	}
