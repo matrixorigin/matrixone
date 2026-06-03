@@ -807,11 +807,28 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 		t.Fatalf("fallback update should build agg dedup path with any_value, foundAgg=%v foundAnyValue=%v", foundAgg, foundAnyValue)
 	}
 
-	generatedExpr := requireFallbackSourceProjectExpr(t, query,
-		len(mock.ctxt.tables["emp"].Cols)+3+len(mock.ctxt.tables["dept"].Cols)+1,
-		len(mock.ctxt.tables["emp"].Cols)+2, "chain-marker")
-	if !exprContainsColName(generatedExpr, "empno") || exprContainsColName(generatedExpr, "mgr") {
-		t.Fatalf("generated column chain should use freshly recomputed earlier generated column, got %s", generatedExpr.String())
+	// Verify the generated-column chain without depending on the order of the
+	// appended update/recompute slots (that order is sensitive to map iteration
+	// and was a source of flakiness). emp contributes len(emp.Cols) base columns
+	// followed by its appended update + recomputed-generated expressions; both
+	// generated columns (mgr, deptno) must be freshly recomputed down to empno,
+	// so within that appended region none may reference the stale mgr column and
+	// exactly two must reference empno.
+	empCols := len(mock.ctxt.tables["emp"].Cols)
+	deptCols := len(mock.ctxt.tables["dept"].Cols)
+	node := requireFallbackSourceProjectNode(t, query, empCols+3+deptCols+1, "chain-marker")
+	empnoRefs := 0
+	for pos := empCols; pos < empCols+3; pos++ {
+		e := node.ProjectList[pos]
+		if exprContainsColName(e, "mgr") {
+			t.Fatalf("generated column chain must use freshly recomputed empno, not stale mgr; appended pos %d = %s", pos, e.String())
+		}
+		if exprContainsColName(e, "empno") {
+			empnoRefs++
+		}
+	}
+	if empnoRefs != 2 {
+		t.Fatalf("expected both generated columns (mgr, deptno) freshly recomputed to empno, got %d empno refs in emp appended region", empnoRefs)
 	}
 }
 
@@ -903,17 +920,6 @@ func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int
 			continue
 		}
 		return node
-	}
-	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
-	return nil
-}
-
-func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int, pos int, marker string) *plan.Expr {
-	for _, node := range query.Nodes {
-		if !isFallbackSourceProjectNode(query, node, projectLen, marker) || pos >= len(node.ProjectList) {
-			continue
-		}
-		return node.ProjectList[pos]
 	}
 	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
 	return nil
