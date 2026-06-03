@@ -40,9 +40,9 @@ func TestBitCountString(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tc := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"64", "-1", "255"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "   ", "64", "-1", "255"}, nil),
 		},
-		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 64, 8}, nil),
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 0, 1, 64, 8}, nil),
 		BitCountNonBinaryString)
 	ok, info := tc.Run()
 	require.True(t, ok, info)

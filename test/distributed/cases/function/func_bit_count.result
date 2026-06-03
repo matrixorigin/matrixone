@@ -34,9 +34,15 @@ SELECT BIT_COUNT('0'), BIT_COUNT('1'), BIT_COUNT('64'), BIT_COUNT('255'), BIT_CO
 SELECT BIT_COUNT(CAST('64' AS CHAR)), BIT_COUNT(CAST('64' AS VARCHAR(10))), BIT_COUNT(CAST('64' AS TEXT));
 ➤ BIT_COUNT(cast(64 as varchar))[-5,64,0]  ¦  BIT_COUNT(cast(64 as varchar(10)))[-5,64,0]  ¦  BIT_COUNT(cast(64 as text))[-5,64,0]  𝄀
 1  ¦  1  ¦  1
+SELECT BIT_COUNT(''), BIT_COUNT('   '), BIT_COUNT(CAST('' AS CHAR)), BIT_COUNT(CAST('' AS VARCHAR(10))), BIT_COUNT(CAST('' AS TEXT));
+➤ BIT_COUNT()[-5,64,0]  ¦  BIT_COUNT(   )[-5,64,0]  ¦  BIT_COUNT(cast( as varchar))[-5,64,0]  ¦  BIT_COUNT(cast( as varchar(10)))[-5,64,0]  ¦  BIT_COUNT(cast( as text))[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0
 SELECT BIT_COUNT(BINARY '64'), BIT_COUNT(_binary '64'), BIT_COUNT(CAST('64' AS BINARY)), BIT_COUNT(CAST('64' AS VARBINARY(2)));
 ➤ BIT_COUNT(BINARY(64))[-5,64,0]  ¦  BIT_COUNT(64)[-5,64,0]  ¦  BIT_COUNT(cast(64 as binary))[-5,64,0]  ¦  BIT_COUNT(cast(64 as varbinary(2)))[-5,64,0]  𝄀
 7  ¦  7  ¦  7  ¦  7
+SELECT BIT_COUNT(BINARY ''), BIT_COUNT(_binary ''), BIT_COUNT(CAST('' AS BINARY)), BIT_COUNT(CAST('' AS VARBINARY(2)));
+➤ BIT_COUNT(BINARY())[-5,64,0]  ¦  BIT_COUNT()[-5,64,0]  ¦  BIT_COUNT(cast( as binary))[-5,64,0]  ¦  BIT_COUNT(cast( as varbinary(2)))[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0
 SELECT BIT_COUNT(X'00'), BIT_COUNT(X'01'), BIT_COUNT(X'40'), BIT_COUNT(X'FF'), BIT_COUNT(X'FFFF');
 ➤ BIT_COUNT(0x00)[-5,64,0]  ¦  BIT_COUNT(0x01)[-5,64,0]  ¦  BIT_COUNT(0x40)[-5,64,0]  ¦  BIT_COUNT(0xFF)[-5,64,0]  ¦  BIT_COUNT(0xFFFF)[-5,64,0]  𝄀
 0  ¦  1  ¦  1  ¦  8  ¦  16

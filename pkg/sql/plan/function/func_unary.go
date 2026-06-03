@@ -575,7 +575,7 @@ func bitCountFromDecimal256(v types.Decimal256, scale int32) (uint64, error) {
 func bitCountFromNonBinaryString(v []byte) (uint64, error) {
 	s := strings.TrimSpace(convertByteSliceToString(v))
 	if s == "" {
-		return 0, moerr.NewInvalidArgNoCtx("bit_count", s)
+		return 0, nil
 	}
 	val, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
