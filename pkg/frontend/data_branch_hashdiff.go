@@ -1208,7 +1208,7 @@ func compareRowInWrappedBatches(
 	if len(compareIdxes) == 0 {
 		compareIdxes = tblStuff.def.visibleIdxes // backward compat when commonIdxes not set
 	}
-	for _, colIdx := range compareIdxes {
+	for batchIdx, colIdx := range compareIdxes {
 		if skipPKCols {
 			if slices.Index(tblStuff.def.pkColIdxes, colIdx) != -1 {
 				continue
@@ -1216,8 +1216,8 @@ func compareRowInWrappedBatches(
 		}
 
 		var (
-			vec1 = wrapped1.batch.Vecs[colIdx]
-			vec2 = wrapped2.batch.Vecs[colIdx]
+			vec1 = wrapped1.batch.Vecs[batchIdx]
+			vec2 = wrapped2.batch.Vecs[batchIdx]
 		)
 
 		if cmp, err := compareSingleValInVector(
