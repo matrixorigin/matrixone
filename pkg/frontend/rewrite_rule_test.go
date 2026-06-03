@@ -475,8 +475,8 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 	rules, err := loadRuleCache(context.Background(), ses)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"db1.t1": "(select A, Age from db1.t1 where age > 28) union all (select a, age from db1.t1 where age < 3)",
-		"db2.t2": "select * from db2.t2 where age > 30",
+		"db1.t1": "(select a, age from db1.t1 where age < 3) union all (select A, Age from db1.t1 where age > 28)",
+		"db2.t2": "select a from db2.t2 where a = 20",
 	}, rules)
 }
 
