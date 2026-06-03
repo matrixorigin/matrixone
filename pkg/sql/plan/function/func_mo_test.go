@@ -151,3 +151,81 @@ func TestCastGeometryToSubtypeRejectTooManyPoints(t *testing.T) {
 	require.False(t, succeed)
 	require.Contains(t, info, "max_points_in_geometry=3")
 }
+
+func TestCastJsonToArray(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	jsonTexts := []string{`["red","blue",null]`, `[[1,2],[3,null]]`}
+	encoded := makeJSONEncodedFromText(t, jsonTexts, nil)
+
+	testCases := []tcTemp{
+		{
+			info: "varchar array accepts string elements",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"array(varchar(20))"}, []bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(), encoded[:1], []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_json.ToType(), false, encoded[:1], []bool{false}),
+		},
+		{
+			info: "nested integer array accepts nested arrays",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"array(array(int))"}, []bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(), encoded[1:], []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_json.ToType(), false, encoded[1:], []bool{false}),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.info, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastJsonToArray)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestCastJsonToArrayRejectsNonArray(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	encoded := makeJSONEncodedFromText(t, []string{`{"tag":"red"}`}, nil)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"array(varchar(20))"}, []bool{false}),
+		NewFunctionTestInput(types.T_json.ToType(), encoded, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_json.ToType(), false, []string{""}, []bool{false})
+
+	tcc := NewFunctionTestCase(proc, inputs, expect, CastJsonToArray)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "cannot store JSON OBJECT in array(varchar(20)) column")
+}
+
+func TestCastJsonToArrayRejectsIncompatibleElement(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCases := []struct {
+		name      string
+		arrayType string
+		jsonText  string
+	}{
+		{name: "string in int array", arrayType: "array(int)", jsonText: `["1"]`},
+		{name: "number in varchar array", arrayType: "array(varchar(20))", jsonText: `[1]`},
+		{name: "varchar width", arrayType: "array(varchar(3))", jsonText: `["toolong"]`},
+		{name: "scalar in nested array", arrayType: "array(array(int))", jsonText: `[[1],2]`},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded := makeJSONEncodedFromText(t, []string{tc.jsonText}, nil)
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.arrayType}, []bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(), encoded, []bool{false}),
+			}
+			expect := NewFunctionTestResult(types.T_json.ToType(), false, []string{""}, []bool{false})
+
+			tcc := NewFunctionTestCase(proc, inputs, expect, CastJsonToArray)
+			succeed, info := tcc.Run()
+			require.False(t, succeed)
+			require.Contains(t, info, "cannot store JSON value with incompatible element type in "+tc.arrayType+" column")
+		})
+	}
+}

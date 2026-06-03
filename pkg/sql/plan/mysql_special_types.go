@@ -46,6 +46,10 @@ func isGeometryPlanType(typ *plan.Type) bool {
 	return typ != nil && typ.Id == int32(types.T_geometry)
 }
 
+func isTypedArrayPlanType(typ *plan.Type) bool {
+	return typ != nil && typ.Id == int32(types.T_json) && arrayPlanTypeString(typ) != ""
+}
+
 func arrayPlanTypeString(typ *plan.Type) string {
 	if typ == nil {
 		return ""
@@ -193,7 +197,7 @@ func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (
 		return expr, nil
 	}
 	targetType.NotNullable = expr.Typ.NotNullable
-	if types.T(expr.Typ.Id) == types.T_any || isGeometryNullLiteralExpr(expr) {
+	if types.T(expr.Typ.Id) == types.T_any || isNullLiteralExpr(expr) {
 		expr.Typ = targetType
 		return expr, nil
 	}
@@ -220,7 +224,44 @@ func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (
 	return castedExpr, nil
 }
 
-func isGeometryNullLiteralExpr(expr *Expr) bool {
+func funcCastForTypedArrayType(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	if !isTypedArrayPlanType(&targetType) {
+		return expr, nil
+	}
+	targetType.NotNullable = expr.Typ.NotNullable
+	if types.T(expr.Typ.Id) == types.T_any || isNullLiteralExpr(expr) {
+		expr.Typ = targetType
+		return expr, nil
+	}
+	if isTypedArrayPlanType(&expr.Typ) && expr.Typ.GetEnumvalues() == targetType.GetEnumvalues() {
+		expr.Typ = targetType
+		return expr, nil
+	}
+
+	jsonType := plan.Type{Id: int32(types.T_json), NotNullable: expr.Typ.NotNullable}
+	jsonExpr, err := forceCastExpr(ctx, expr, jsonType)
+	if err != nil {
+		return nil, err
+	}
+
+	args := make([]*Expr, 2)
+	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
+	targetArrayTypeExpr, err := binder.BindExpr(tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char), 0, false)
+	if err != nil {
+		return nil, err
+	}
+	args[0] = targetArrayTypeExpr
+	args[1] = jsonExpr
+
+	castedExpr, err := BindFuncExprImplByPlanExpr(ctx, moJsonCastToArrayFun, args)
+	if err != nil {
+		return nil, err
+	}
+	castedExpr.Typ = targetType
+	return castedExpr, nil
+}
+
+func isNullLiteralExpr(expr *Expr) bool {
 	if expr == nil {
 		return false
 	}

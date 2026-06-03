@@ -981,6 +981,9 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 	if targetType.Typ.Id == 0 {
 		return expr, nil
 	}
+	if isTypedArrayPlanType(&targetType.Typ) {
+		return funcCastForTypedArrayType(ctx, expr, targetType.Typ)
+	}
 	t1 := makeTypeByPlan2Expr(expr)
 	if t1.Eq(t2) {
 		return expr, nil
@@ -1005,6 +1008,9 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	if targetType.Id == 0 {
 		return expr, nil
+	}
+	if isTypedArrayPlanType(&targetType) {
+		return funcCastForTypedArrayType(ctx, expr, targetType)
 	}
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if t1.Eq(t2) {
@@ -1247,7 +1253,7 @@ func buildValueScan(
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			binder.builder = builder
 			for _, r := range slt.Rows {
-				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) {
+				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)
 					if err != nil {
 						return err

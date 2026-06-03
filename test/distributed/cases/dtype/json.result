@@ -92,3 +92,31 @@ create table t7 (a json default '{"t1":"a"}');
 not supported: JSON column 'a' cannot have default value
 drop table if exists t8;
 create table t8 (a json default null);
+drop table if exists typed_array_json;
+create table typed_array_json(id int primary key, tags array(varchar(20)), scores array(int), nested array(array(int)));
+desc typed_array_json;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO    PRI    null
+tags    array(varchar(20))    YES        null
+scores    array(int)    YES        null
+nested    array(array(int))    YES        null
+select column_name, data_type, column_type from information_schema.columns where table_schema = database() and table_name = 'typed_array_json' and column_name in ('tags','scores','nested') order by ordinal_position;
+column_name    data_type    column_type
+tags    ARRAY    array(varchar(20))
+scores    ARRAY    array(int)
+nested    ARRAY    array(array(int))
+insert into typed_array_json values (1, '["red","blue"]', '[1,2,null]', '[[1,2],[3,null]]');
+select id, tags, scores, nested from typed_array_json;
+id    tags    scores    nested
+1    ["red", "blue"]    [1, 2, null]    [[1, 2], [3, null]]
+insert into typed_array_json(id,tags) values (2, '{"red":true}');
+invalid input: cannot store JSON OBJECT in array(varchar(20)) column
+insert into typed_array_json(id,tags) values (3, '[1]');
+invalid input: cannot store JSON value with incompatible element type in array(varchar(20)) column
+insert into typed_array_json(id,scores) values (4, '["1"]');
+invalid input: cannot store JSON value with incompatible element type in array(int) column
+update typed_array_json set tags='{"red":true}' where id=1;
+invalid input: cannot store JSON OBJECT in array(varchar(20)) column
+update typed_array_json set scores='[1,"2"]' where id=1;
+invalid input: cannot store JSON value with incompatible element type in array(int) column
+drop table typed_array_json;
