@@ -155,11 +155,11 @@ func TestPatternToSqlGojiebaPhrase(t *testing.T) {
 	assert.False(t, strings.Contains(sql, "word = '我来到北京'"),
 		"phrase must not collapse to a single word lookup: %s", sql)
 
-	// Positional JOIN deltas must reflect the BytePos differences between
-	// consecutive jieba tokens in the query (3 between 我→来到, 6 between
-	// 来到→北京).
-	assert.Contains(t, sql, "pos = 3", "missing 我→来到 byte delta in: %s", sql)
-	assert.Contains(t, sql, "pos = 9", "missing 我→北京 byte delta in: %s", sql)
+	// Positional anchor offsets must reflect the BytePos differences between
+	// each jieba token and the first token in the query (3 for 我→来到, 9 for
+	// 我→北京), so all three tokens align on a common phrase anchor.
+	assert.Contains(t, sql, "pos - 3 AS anchor", "missing 我→来到 byte delta in: %s", sql)
+	assert.Contains(t, sql, "pos - 9 AS anchor", "missing 我→北京 byte delta in: %s", sql)
 }
 
 // TestParsePhraseWhitespaceParserUnchanged makes sure the non-gojieba phrase
