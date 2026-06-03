@@ -4586,6 +4586,18 @@ var supportedStringBuiltIns = []FuncNew{
 					return StGeometryType
 				},
 			},
+			{
+				// GEOMETRY32 reports the same type names; the type code lives
+				// in the WKB header, independent of the float32/float64 width.
+				overloadId: 1,
+				args:       []types.T{types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StGeometryType
+				},
+			},
 		},
 	},
 

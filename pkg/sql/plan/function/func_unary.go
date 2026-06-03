@@ -3522,10 +3522,26 @@ func stLengthWithSRID[T float32 | float64](ivecs []*vector.Vector, result vector
 // geometryAreaBySRID computes the area of a geometry in the coordinate system
 // selected by srid: geodesic square meters for SRID 4326, Cartesian otherwise.
 func geometryAreaBySRID(payload []byte, srid uint32) (float64, error) {
+	// An empty areal geometry has zero area. ST_Intersection of disjoint
+	// polygons yields POLYGON EMPTY, whose coordinate-less WKT both area
+	// kernels would otherwise fail to parse ("invalid polygon payload").
+	wkt, _, _, err := decodeGeometryPayload(payload)
+	if err != nil {
+		return 0, err
+	}
+	if isEmptyGeometryWKT(wkt) {
+		return 0, nil
+	}
 	if srid == geo.SRIDWGS84 {
 		return geodeticArea(payload)
 	}
 	return geometryArea(payload)
+}
+
+// isEmptyGeometryWKT reports whether wkt is an empty geometry such as
+// "POLYGON EMPTY" or "MULTIPOLYGON EMPTY".
+func isEmptyGeometryWKT(wkt string) bool {
+	return strings.HasSuffix(strings.ToUpper(strings.TrimSpace(wkt)), " EMPTY")
 }
 
 func StArea(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

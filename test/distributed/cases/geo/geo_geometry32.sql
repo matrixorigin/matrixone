@@ -18,7 +18,9 @@ insert into g32 values (2, st_geomfromtext('LINESTRING(0 0,3 4)'));
 insert into g32 values (3, st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'));
 select id, st_astext(g) as wkt from g32 order by id;
 -- A 2D point stored as float32 WKB occupies 13 bytes (vs 21 for float64).
-select length(g) as f32_point_bytes from g32 where id = 1;
+-- length() is a byte-length function over the raw payload, so cast to
+-- varbinary to measure the stored WKB size.
+select length(cast(g as varbinary)) as f32_point_bytes from g32 where id = 1;
 select id, st_geometrytype(g) as gtype from g32 order by id;
 
 -- Spatial functions read GEOMETRY32 correctly (computation is float64 internally).
@@ -49,14 +51,14 @@ select st_x(g) as x, st_y(g) as y from g32p where id = 1;
 -- Geometry-returning functions preserve GEOMETRY32: a float32-WKB point is 13
 -- bytes, a float64-WKB point is 21. ST_Centroid / ST_StartPoint of a
 -- GEOMETRY32 column stay float32 (13 bytes).
-select length(st_centroid(g)) as centroid_bytes from g32p where id = 3;
-select length(st_startpoint(g)) as start_bytes from g32p where id = 2;
+select length(cast(st_centroid(g) as varbinary)) as centroid_bytes from g32p where id = 3;
+select length(cast(st_startpoint(g) as varbinary)) as start_bytes from g32p where id = 2;
 select st_astext(st_swapxy(g)) as swapped from g32p where id = 1;
 select st_astext(st_envelope(g)) as env from g32p where id = 2;
 
 -- ST_ConvexHull / ST_Buffer over GEOMETRY32 also stay float32.
 select st_astext(st_convexhull(g)) as hull from g32p where id = 3;
-select length(st_buffer(g, 1)) > 0 as buffered from g32p where id = 1;
+select length(cast(st_buffer(g, 1) as varbinary)) > 0 as buffered from g32p where id = 1;
 
 -- Measures over GEOMETRY32 return float32.
 select st_length(g) as len from g32p where id = 2;

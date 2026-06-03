@@ -45,6 +45,9 @@ select st_length(st_geomfromtext('MULTILINESTRING((0 0,0 1),(0 0,1 0))')) as mli
 
 -- Derived geometries (rendered as WKT).
 select st_astext(st_centroid(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'))) as centroid;
+-- ST_Centroid currently supports POINT/LINESTRING/POLYGON only; MULTIPOINT is
+-- rejected. Assert that explicitly rather than silently baking in the error.
+-- @regex("geometry type is not supported by ST_Centroid",true)
 select st_astext(st_centroid(st_geomfromtext('MULTIPOINT(0 0,2 0,2 2,0 2)'))) as centroid_mp;
 select st_astext(st_envelope(st_geomfromtext('LINESTRING(1 2,3 4,0 5)'))) as envelope;
 select st_astext(st_boundary(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))'))) as boundary;

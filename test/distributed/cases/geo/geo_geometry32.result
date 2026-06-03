@@ -17,10 +17,14 @@ id    wkt
 1    POINT(1 2)
 2    LINESTRING(0 0,3 4)
 3    POLYGON((0 0,2 0,2 2,0 2,0 0))
-select length(g) as f32_point_bytes from g32 where id = 1;
-invalid argument function length, bad value [GEOMETRY32]
+select length(cast(g as varbinary)) as f32_point_bytes from g32 where id = 1;
+f32_point_bytes
+13
 select id, st_geometrytype(g) as gtype from g32 order by id;
-invalid argument function st_geometrytype, bad value [GEOMETRY32]
+id    gtype
+1    POINT
+2    LINESTRING
+3    POLYGON
 select st_x(g) as x, st_y(g) as y from g32 where id = 1;
 x    y
 1.0    2.0
@@ -52,10 +56,12 @@ insert into g32p values
 select st_x(g) as x, st_y(g) as y from g32p where id = 1;
 x    y
 1.5    2.5
-select length(st_centroid(g)) as centroid_bytes from g32p where id = 3;
-invalid argument function length, bad value [GEOMETRY32]
-select length(st_startpoint(g)) as start_bytes from g32p where id = 2;
-invalid argument function length, bad value [GEOMETRY32]
+select length(cast(st_centroid(g) as varbinary)) as centroid_bytes from g32p where id = 3;
+centroid_bytes
+13
+select length(cast(st_startpoint(g) as varbinary)) as start_bytes from g32p where id = 2;
+start_bytes
+13
 select st_astext(st_swapxy(g)) as swapped from g32p where id = 1;
 swapped
 POINT(2.5 1.5)
@@ -65,8 +71,9 @@ POLYGON((0 0,3 0,3 4,0 4,0 0))
 select st_astext(st_convexhull(g)) as hull from g32p where id = 3;
 hull
 POLYGON((0 0,4 0,4 4,0 4,0 0))
-select length(st_buffer(g, 1)) > 0 as buffered from g32p where id = 1;
-invalid argument function length, bad value [GEOMETRY32]
+select length(cast(st_buffer(g, 1) as varbinary)) > 0 as buffered from g32p where id = 1;
+buffered
+1
 select st_length(g) as len from g32p where id = 2;
 len
 5.0
