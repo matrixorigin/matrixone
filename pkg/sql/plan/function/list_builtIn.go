@@ -11551,6 +11551,138 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `is_uuid`
+	{
+		functionId: IS_UUID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInIsUUID
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInIsUUID
+				},
+			},
+		},
+	},
+
+	// function `uuid_short`
+	{
+		functionId: UUID_SHORT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInUUIDShort
+				},
+			},
+		},
+	},
+
+	// function `uuid_to_bin`
+	{
+		functionId: UUID_TO_BIN,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 1 && len(inputs) != 2 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			castTypes := make([]types.Type, len(inputs))
+			copy(castTypes, inputs)
+			needCast := false
+			if !inputs[0].Oid.IsMySQLString() {
+				castTypes[0] = types.T_varchar.ToType()
+				needCast = true
+			}
+			if len(inputs) == 2 && !inputs[1].Oid.IsInteger() {
+				castTypes[1] = types.T_int64.ToType()
+				needCast = true
+			}
+			if needCast {
+				return newCheckResultWithCast(0, castTypes)
+			}
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varbinary.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInUUIDToBin
+				},
+			},
+		},
+	},
+
+	// function `bin_to_uuid`
+	{
+		functionId: BIN_TO_UUID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 1 && len(inputs) != 2 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			castTypes := make([]types.Type, len(inputs))
+			copy(castTypes, inputs)
+			needCast := false
+			switch inputs[0].Oid {
+			case types.T_binary, types.T_varbinary, types.T_blob:
+			default:
+				castTypes[0] = types.T_varbinary.ToType()
+				needCast = true
+			}
+			if len(inputs) == 2 && !inputs[1].Oid.IsInteger() {
+				castTypes[1] = types.T_int64.ToType()
+				needCast = true
+			}
+			if needCast {
+				return newCheckResultWithCast(0, castTypes)
+			}
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInBinToUUID
+				},
+			},
+		},
+	},
+
 	// function `values`
 	{
 		functionId: VALUES,

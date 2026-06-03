@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -1227,6 +1228,257 @@ func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *
 		}
 	}
 	return nil
+}
+
+func builtInIsUUID(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[bool](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetStrValue(i)
+		if null {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.Append(isUUIDString(functionUtil.QuickBytesToStr(v)), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInUUIDShort(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		val, err := uuid.NewV7()
+		if err != nil {
+			return moerr.NewInternalError(proc.Ctx, "newuuid failed")
+		}
+		if err := rs.Append(uuidV7ToShort(types.Uuid(val)), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInUUIDToBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	var getSwapFlag func(uint64) (int64, bool)
+	if len(parameters) == 2 {
+		getSwapFlag = makeIntegerParamGetter(parameters[1])
+	}
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		uuidBytes, null := p1.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		swapFlag := int64(0)
+		if getSwapFlag != nil {
+			var null2 bool
+			swapFlag, null2 = getSwapFlag(i)
+			if null2 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		u, err := parseUUIDString(functionUtil.QuickBytesToStr(uuidBytes))
+		if err != nil {
+			return moerr.NewInvalidArg(proc.Ctx, "uuid_to_bin", functionUtil.QuickBytesToStr(uuidBytes))
+		}
+		out := uuidToBin(u, swapFlag != 0)
+		if err := rs.AppendBytes(out[:], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInBinToUUID(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	var getSwapFlag func(uint64) (int64, bool)
+	if len(parameters) == 2 {
+		getSwapFlag = makeIntegerParamGetter(parameters[1])
+	}
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		bin, null := p1.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		swapFlag := int64(0)
+		if getSwapFlag != nil {
+			var null2 bool
+			swapFlag, null2 = getSwapFlag(i)
+			if null2 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if len(bin) != 16 {
+			return moerr.NewInvalidArg(proc.Ctx, "bin_to_uuid", len(bin))
+		}
+		var u types.Uuid
+		copy(u[:], bin)
+		if swapFlag != 0 {
+			u = unswapUUIDTimeParts(u)
+		}
+		if err := rs.AppendBytes([]byte(u.String()), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func makeIntegerParamGetter(param *vector.Vector) func(uint64) (int64, bool) {
+	switch param.GetType().Oid {
+	case types.T_int8:
+		p := vector.GenerateFunctionFixedTypeParameter[int8](param)
+		return func(idx uint64) (int64, bool) {
+			v, null := p.GetValue(idx)
+			return int64(v), null
+		}
+	case types.T_int16:
+		p := vector.GenerateFunctionFixedTypeParameter[int16](param)
+		return func(idx uint64) (int64, bool) {
+			v, null := p.GetValue(idx)
+			return int64(v), null
+		}
+	case types.T_int32:
+		p := vector.GenerateFunctionFixedTypeParameter[int32](param)
+		return func(idx uint64) (int64, bool) {
+			v, null := p.GetValue(idx)
+			return int64(v), null
+		}
+	case types.T_int64:
+		p := vector.GenerateFunctionFixedTypeParameter[int64](param)
+		return func(idx uint64) (int64, bool) {
+			return p.GetValue(idx)
+		}
+	case types.T_uint8:
+		p := vector.GenerateFunctionFixedTypeParameter[uint8](param)
+		return func(idx uint64) (int64, bool) {
+			v, null := p.GetValue(idx)
+			return int64(v), null
+		}
+	case types.T_uint16:
+		p := vector.GenerateFunctionFixedTypeParameter[uint16](param)
+		return func(idx uint64) (int64, bool) {
+			v, null := p.GetValue(idx)
+			return int64(v), null
+		}
+	case types.T_uint32:
+		p := vector.GenerateFunctionFixedTypeParameter[uint32](param)
+		return func(idx uint64) (int64, bool) {
+			v, null := p.GetValue(idx)
+			return int64(v), null
+		}
+	case types.T_uint64:
+		p := vector.GenerateFunctionFixedTypeParameter[uint64](param)
+		return func(idx uint64) (int64, bool) {
+			v, null := p.GetValue(idx)
+			return int64(v), null
+		}
+	default:
+		p := vector.GenerateFunctionFixedTypeParameter[int64](param)
+		return func(idx uint64) (int64, bool) {
+			return p.GetValue(idx)
+		}
+	}
+}
+
+func isUUIDString(s string) bool {
+	_, err := parseUUIDString(s)
+	return err == nil
+}
+
+func parseUUIDString(s string) (types.Uuid, error) {
+	if !isMySQLUUIDFormat(s) {
+		return types.Uuid{}, moerr.NewInvalidInputNoCtx("invalid uuid")
+	}
+	if len(s) == 38 {
+		s = s[1:37]
+	}
+	return types.ParseUuid(s)
+}
+
+func isMySQLUUIDFormat(s string) bool {
+	switch len(s) {
+	case 32:
+		return allUUIDHex(s)
+	case 36:
+		return isDashedUUIDFormat(s)
+	case 38:
+		return s[0] == '{' && s[37] == '}' && isDashedUUIDFormat(s[1:37])
+	default:
+		return false
+	}
+}
+
+func isDashedUUIDFormat(s string) bool {
+	if s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' {
+		return false
+	}
+	return allUUIDHex(s[:8]) &&
+		allUUIDHex(s[9:13]) &&
+		allUUIDHex(s[14:18]) &&
+		allUUIDHex(s[19:23]) &&
+		allUUIDHex(s[24:])
+}
+
+func allUUIDHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isUUIDHex(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isUUIDHex(c byte) bool {
+	return ('0' <= c && c <= '9') ||
+		('a' <= c && c <= 'f') ||
+		('A' <= c && c <= 'F')
+}
+
+func uuidToBin(u types.Uuid, swap bool) [16]byte {
+	if !swap {
+		return [16]byte(u)
+	}
+	return swapUUIDTimeParts(u)
+}
+
+func swapUUIDTimeParts(u types.Uuid) [16]byte {
+	return [16]byte{
+		u[6], u[7],
+		u[4], u[5],
+		u[0], u[1], u[2], u[3],
+		u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15],
+	}
+}
+
+func unswapUUIDTimeParts(u types.Uuid) types.Uuid {
+	return types.Uuid{
+		u[4], u[5], u[6], u[7],
+		u[2], u[3],
+		u[0], u[1],
+		u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15],
+	}
+}
+
+func uuidV7ToShort(u types.Uuid) uint64 {
+	return xxhash.Sum64(u[:])
 }
 
 func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {

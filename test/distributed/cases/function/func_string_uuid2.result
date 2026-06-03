@@ -1,0 +1,124 @@
+select is_uuid('6ccd780c-baba-1026-9564-5b8c656024db');
+➤ is_uuid(6ccd780c-baba-1026-9564-5b8c656024db)[-7,1,0]  𝄀
+1
+select is_uuid('6ccd780cbaba102695645b8c656024db');
+➤ is_uuid(6ccd780cbaba102695645b8c656024db)[-7,1,0]  𝄀
+1
+select is_uuid('{6ccd780c-baba-1026-9564-5b8c656024db}');
+➤ is_uuid({6ccd780c-baba-1026-9564-5b8c656024db})[-7,1,0]  𝄀
+1
+select is_uuid('6CCD780C-BABA-1026-9564-5B8C656024DB');
+➤ is_uuid(6CCD780C-BABA-1026-9564-5B8C656024DB)[-7,1,0]  𝄀
+1
+select is_uuid('urn:uuid:6ccd780c-baba-1026-9564-5b8c656024db');
+➤ is_uuid(urn:uuid:6ccd780c-baba-1026-9564-5b8c656024db)[-7,1,0]  𝄀
+0
+select is_uuid('6ccd780c-baba-1026-9564-5b8c656024d');
+➤ is_uuid(6ccd780c-baba-1026-9564-5b8c656024d)[-7,1,0]  𝄀
+0
+select is_uuid('6ccd780c-baba-1026-9564-5b8c656024dz');
+➤ is_uuid(6ccd780c-baba-1026-9564-5b8c656024dz)[-7,1,0]  𝄀
+0
+select is_uuid('6ccd780c-baba-1026-95645b8c656024db');
+➤ is_uuid(6ccd780c-baba-1026-95645b8c656024db)[-7,1,0]  𝄀
+0
+select is_uuid('{6ccd780cbaba102695645b8c656024db}');
+➤ is_uuid({6ccd780cbaba102695645b8c656024db})[-7,1,0]  𝄀
+0
+select is_uuid(' 6ccd780c-baba-1026-9564-5b8c656024db ');
+➤ is_uuid( 6ccd780c-baba-1026-9564-5b8c656024db )[-7,1,0]  𝄀
+0
+select is_uuid('');
+➤ is_uuid()[-7,1,0]  𝄀
+0
+select is_uuid('not-a-uuid');
+➤ is_uuid(not-a-uuid)[-7,1,0]  𝄀
+0
+select is_uuid(null);
+➤ is_uuid(null)[-7,1,0]  𝄀
+null
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db'));
+➤ hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db))[12,-1,0]  𝄀
+6CCD780CBABA102695645B8C656024DB
+select hex(uuid_to_bin('6ccd780cbaba102695645b8c656024db'));
+➤ hex(uuid_to_bin(6ccd780cbaba102695645b8c656024db))[12,-1,0]  𝄀
+6CCD780CBABA102695645B8C656024DB
+select hex(uuid_to_bin('{6ccd780c-baba-1026-9564-5b8c656024db}'));
+➤ hex(uuid_to_bin({6ccd780c-baba-1026-9564-5b8c656024db}))[12,-1,0]  𝄀
+6CCD780CBABA102695645B8C656024DB
+select hex(uuid_to_bin('6CCD780C-BABA-1026-9564-5B8C656024DB'));
+➤ hex(uuid_to_bin(6CCD780C-BABA-1026-9564-5B8C656024DB))[12,-1,0]  𝄀
+6CCD780CBABA102695645B8C656024DB
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1));
+➤ hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 1))[12,-1,0]  𝄀
+1026BABA6CCD780C95645B8C656024DB
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 0));
+➤ hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 0))[12,-1,0]  𝄀
+6CCD780CBABA102695645B8C656024DB
+select hex(uuid_to_bin(null));
+➤ hex(uuid_to_bin(null))[12,-1,0]  𝄀
+null
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', null));
+➤ hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, null))[12,-1,0]  𝄀
+null
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db'));
+➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db))[12,-1,0]  𝄀
+6ccd780c-baba-1026-9564-5b8c656024db
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), 1);
+➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 1), 1)[12,-1,0]  𝄀
+6ccd780c-baba-1026-9564-5b8c656024db
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), 0);
+➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 1), 0)[12,-1,0]  𝄀
+1026baba-6ccd-780c-9564-5b8c656024db
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db'), null);
+➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db), null)[12,-1,0]  𝄀
+null
+select bin_to_uuid(null);
+➤ bin_to_uuid(null)[12,-1,0]  𝄀
+null
+select uuid_to_bin('not-a-uuid');
+invalid argument uuid_to_bin, bad value not-a-uuid
+select uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024dz');
+invalid argument uuid_to_bin, bad value 6ccd780c-baba-1026-9564-5b8c656024dz
+select bin_to_uuid(cast('short' as varbinary));
+invalid argument bin_to_uuid, bad value 5
+select bin_to_uuid(cast('123456789012345' as varbinary));
+invalid argument bin_to_uuid, bad value 15
+select bin_to_uuid(cast('12345678901234567' as varbinary));
+invalid argument bin_to_uuid, bad value 17
+select uuid_short() is not null;
+➤ uuid_short() is not null[-7,1,0]  𝄀
+1
+select uuid_short() > 0;
+➤ uuid_short() > 0[-7,1,0]  𝄀
+1
+drop table if exists t_uuid_funcs;
+create table t_uuid_funcs(id int, u varchar(50), swap_flag int);
+insert into t_uuid_funcs values
+(1, '6ccd780c-baba-1026-9564-5b8c656024db', 0),
+(2, '6ccd780cbaba102695645b8c656024db', 1),
+(3, '{6ccd780c-baba-1026-9564-5b8c656024db}', null),
+(4, 'not-a-uuid', 0),
+(5, null, 1);
+select id, is_uuid(u) from t_uuid_funcs order by id;
+➤ id[4,32,0]  ¦  is_uuid(u)[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  0  𝄀
+5  ¦  null
+select id, bin_to_uuid(uuid_to_bin(u)) from t_uuid_funcs where is_uuid(u) order by id;
+➤ id[4,32,0]  ¦  bin_to_uuid(uuid_to_bin(u))[12,-1,0]  𝄀
+1  ¦  6ccd780c-baba-1026-9564-5b8c656024db  𝄀
+2  ¦  6ccd780c-baba-1026-9564-5b8c656024db  𝄀
+3  ¦  6ccd780c-baba-1026-9564-5b8c656024db
+select id, hex(uuid_to_bin(u, swap_flag)) from t_uuid_funcs where is_uuid(u) order by id;
+➤ id[4,32,0]  ¦  hex(uuid_to_bin(u, swap_flag))[12,-1,0]  𝄀
+1  ¦  6CCD780CBABA102695645B8C656024DB  𝄀
+2  ¦  1026BABA6CCD780C95645B8C656024DB  𝄀
+3  ¦  null
+select id, bin_to_uuid(uuid_to_bin(u, swap_flag), swap_flag) from t_uuid_funcs where is_uuid(u) and swap_flag is not null order by id;
+➤ id[4,32,0]  ¦  bin_to_uuid(uuid_to_bin(u, swap_flag), swap_flag)[12,-1,0]  𝄀
+1  ¦  6ccd780c-baba-1026-9564-5b8c656024db  𝄀
+2  ¦  6ccd780c-baba-1026-9564-5b8c656024db
+drop table t_uuid_funcs;
