@@ -350,12 +350,6 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 			zap.String("current-status", tk.TaskStatus.String()))
 		return nil
 	}
-	tk.TaskStatus = task.TaskStatus_Paused
-	_, err = t.runner.service.UpdateDaemonTask(ctx, []task.DaemonTask{tk})
-	if err != nil {
-		return moerr.AttachCause(ctx, err)
-	}
-
 	if t.runner.exists(tk.ID) {
 		ar := t.task.activeRoutine.Load()
 		if ar == nil || *ar == nil {
@@ -366,6 +360,15 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 			return err
 		}
 	}
+
+	tk.TaskStatus = task.TaskStatus_Paused
+	updateCtx, updateCancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CausePauseTaskHandle)
+	defer updateCancel()
+	_, err = t.runner.service.UpdateDaemonTask(updateCtx, []task.DaemonTask{tk})
+	if err != nil {
+		return moerr.AttachCause(updateCtx, err)
+	}
+
 	if err := t.runner.pauseTaskCompleted(ctx, tk); err != nil {
 		return err
 	}
@@ -753,7 +756,22 @@ func (r *taskRunner) pauseTasks(ctx context.Context) []task.DaemonTask {
 		WithTaskStatusCond(task.TaskStatus_PauseRequested),
 		WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
 	)
-	tasks := r.mergeTasks(localPause, laggedPause)
+	// A CDC pause completion hook may fail after the daemon task has already been
+	// persisted as Paused. Keep polling Paused CDC tasks so the hook has a retry path.
+	var localPausedFinalize, laggedPausedFinalize []task.DaemonTask
+	if r.options.pauseTaskCompleted != nil {
+		localPausedFinalize = r.queryDaemonTasks(ctx,
+			WithTaskStatusCond(task.TaskStatus_Paused),
+			WithTaskRunnerCond(EQ, r.runnerID),
+			WithTaskExecutorCond(EQ, task.TaskCode_InitCdc),
+		)
+		laggedPausedFinalize = r.queryDaemonTasks(ctx,
+			WithTaskStatusCond(task.TaskStatus_Paused),
+			WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
+			WithTaskExecutorCond(EQ, task.TaskCode_InitCdc),
+		)
+	}
+	tasks := r.mergeTasks(localPause, laggedPause, localPausedFinalize, laggedPausedFinalize)
 	if len(tasks) > 0 {
 		for _, t := range tasks {
 			r.logger.Info("cdc.task.pause.enqueue",
@@ -767,6 +785,8 @@ func (r *taskRunner) pauseTasks(ctx context.Context) []task.DaemonTask {
 		r.logger.Debug("cdc.task.pause.enqueue.none",
 			zap.Int("local-candidates", len(localPause)),
 			zap.Int("lagged-candidates", len(laggedPause)),
+			zap.Int("local-paused-finalize-candidates", len(localPausedFinalize)),
+			zap.Int("lagged-paused-finalize-candidates", len(laggedPausedFinalize)),
 		)
 	}
 	return tasks
