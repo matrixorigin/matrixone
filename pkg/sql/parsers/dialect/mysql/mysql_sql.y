@@ -11960,6 +11960,15 @@ function_call_generic:
             Exprs: tree.Exprs{timeUinit, $5},
         }
     }
+|   POSITION '(' bit_expr IN bit_expr ')'
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+        }
+    }
 |   func_not_keyword '(' expression_list_opt ')'
     {
         name := tree.NewUnresolvedColName($1)
@@ -14287,7 +14296,6 @@ func_not_keyword:
 |   NOW
 |    ADDDATE
 |   CURDATE
-|   POSITION
 |   SESSION_USER
 |   SUBDATE
 |   SYSTEM_USER
