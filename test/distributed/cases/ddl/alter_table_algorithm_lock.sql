@@ -68,3 +68,22 @@ SHOW COLUMNS FROM t_alg_lock;
 
 -- Cleanup
 drop table if exists t_alg_lock;
+
+-- ============================================================
+-- Temporary table tests with ALGORITHM/LOCK hints
+-- ============================================================
+
+-- T1: ALGORITHM=INPLACE with ADD INDEX on temp table
+create temporary table tmp_alg_lock(a INT, b INT);
+ALTER TABLE tmp_alg_lock ALGORITHM=INPLACE, ADD INDEX idx_tmp_a(a);
+
+-- T2: LOCK=DEFAULT with DROP INDEX on temp table
+ALTER TABLE tmp_alg_lock LOCK=DEFAULT, DROP INDEX idx_tmp_a;
+
+-- T3: ALGORITHM=DEFAULT with ADD INDEX on temp table
+ALTER TABLE tmp_alg_lock ALGORITHM=DEFAULT, ADD INDEX idx_tmp_b(b);
+
+-- T4: LOCK=SHARED with ADD INDEX on temp table
+ALTER TABLE tmp_alg_lock LOCK=SHARED, ADD INDEX idx_tmp_ab(a, b);
+
+drop table tmp_alg_lock;

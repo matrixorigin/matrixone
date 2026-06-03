@@ -39,3 +39,10 @@ c3	INT(32)	YES		null
 c4_new	INT(32)	YES		null
 c5_new	INT(32)	YES		null
 drop table if exists t_alg_lock;
+
+create temporary table tmp_alg_lock(a INT, b INT);
+ALTER TABLE tmp_alg_lock ALGORITHM=INPLACE, ADD INDEX idx_tmp_a(a);
+ALTER TABLE tmp_alg_lock LOCK=DEFAULT, DROP INDEX idx_tmp_a;
+ALTER TABLE tmp_alg_lock ALGORITHM=DEFAULT, ADD INDEX idx_tmp_b(b);
+ALTER TABLE tmp_alg_lock LOCK=SHARED, ADD INDEX idx_tmp_ab(a, b);
+drop table tmp_alg_lock;

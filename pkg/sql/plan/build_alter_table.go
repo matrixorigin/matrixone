@@ -483,6 +483,8 @@ func allowTempTableAlterForIndex(stmt *tree.AlterTable) bool {
 	}
 	for _, opt := range stmt.Options {
 		switch o := opt.(type) {
+		case *tree.AlterOptionAlgorithm, *tree.AlterOptionLock:
+			// hints only; validated later by ResolveAlterTableAlgorithm / resolveAndValidateLock
 		case *tree.AlterOptionAdd:
 			switch o.Def.(type) {
 			case *tree.Index, *tree.UniqueIndex, *tree.FullTextIndex:
