@@ -215,7 +215,11 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		isMulti:       tblInfo.isMulti,
 		needAggFilter: tblInfo.needAggFilter,
 	}
-	for alias, columns := range usedTbl {
+	for _, alias := range orderedDmlAliases(tblInfo.alias) {
+		columns, ok := usedTbl[alias]
+		if !ok {
+			continue
+		}
 		idx := tblInfo.alias[alias]
 		tblDef := tblInfo.tableDefs[idx]
 		newTblInfo.objRef = append(newTblInfo.objRef, tblInfo.objRef[idx])
@@ -246,6 +250,20 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 	}
 
 	return newTblInfo, nil
+}
+
+// orderedDmlAliases returns the DML target table aliases in their original
+// declaration order (the index recorded in aliasToIdx), so that downstream
+// projection-offset math is deterministic. Ranging the underlying usedTbl map
+// directly would order tables by Go's randomized map iteration, which makes the
+// fallback generated-column rewrite resolve the wrong base column on multi-table
+// UPDATEs (flaky plan / flaky tests).
+func orderedDmlAliases(aliasToIdx map[string]int) []string {
+	aliases := make([]string, len(aliasToIdx))
+	for alias, idx := range aliasToIdx {
+		aliases[idx] = alias
+	}
+	return aliases
 }
 
 func checkTableType(ctx context.Context, tableDef *TableDef) error {

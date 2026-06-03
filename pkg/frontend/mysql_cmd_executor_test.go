@@ -1431,6 +1431,79 @@ func TestLockTablesSessionState(t *testing.T) {
 	require.False(t, ses.hasLockedTables.Load())
 }
 
+func TestCanExecuteDataBranchMergePickInUncommittedTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	// A user session manages its own transaction for MERGE/PICK and cannot
+	// follow an outer user transaction, so it must be rejected in ANY active
+	// user transaction (both implicit autocommit=0 and explicit BEGIN). The
+	// option bits do not change the outcome; a fresh session is used per
+	// scenario because setBits is cumulative (|=).
+	for _, stmt := range []tree.Statement{
+		&tree.DataBranchMerge{},
+		&tree.DataBranchPick{},
+	} {
+		// explicit transaction (BEGIN): rejected with the clear error
+		ses := newTestSession(t, ctrl)
+		ses.GetTxnHandler().SetOptionBits(OPTION_BEGIN)
+		can, err := statementCanBeExecutedInUncommittedTransaction(context.TODO(), ses, stmt)
+		require.NoError(t, err)
+		require.False(t, can)
+		err = canExecuteStatementInUncommittedTransaction(context.TODO(), ses, stmt)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), dataBranchMergePickTxnErrorInfo())
+
+		// implicit transaction (autocommit off, no explicit BEGIN): also
+		// rejected — it cannot follow the outer implicit transaction either.
+		ses = newTestSession(t, ctrl)
+		ses.GetTxnHandler().SetOptionBits(OPTION_NOT_AUTOCOMMIT)
+		can, err = statementCanBeExecutedInUncommittedTransaction(context.TODO(), ses, stmt)
+		require.NoError(t, err)
+		require.False(t, can)
+		err = canExecuteStatementInUncommittedTransaction(context.TODO(), ses, stmt)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), dataBranchMergePickTxnErrorInfo())
+	}
+}
+
+func TestHandleDataBranchMergePickRejectExplicitTransactionFallback(t *testing.T) {
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: true}).AnyTimes()
+	ses.proc.Base.TxnOperator = txnOperator
+
+	ec := newTestExecCtx(ctx, ctrl)
+
+	for _, tc := range []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "merge",
+			run: func() error {
+				return handleBranchMerge(ec, ses, &tree.DataBranchMerge{})
+			},
+		},
+		{
+			name: "pick",
+			run: func() error {
+				return handleBranchPick(ec, ses, &tree.DataBranchPick{})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			require.Error(t, err)
+			require.Contains(t, err.Error(), dataBranchMergePickTxnErrorInfo())
+		})
+	}
+}
+
 func Test_convert_type(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("type conversion", t, func() {
