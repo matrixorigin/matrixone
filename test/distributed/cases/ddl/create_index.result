@@ -114,12 +114,15 @@ create unique index x on t12(a);
 not supported: TEXT column 'a' cannot be in index
 create index x2 on t12(a);
 not supported: TEXT column 'a' cannot be in index
+create index x3 on t12(a(100));
+create unique index x4 on t12(a(100));
 drop table t12;
 create table t13(a blob);
 create unique index x on t13(a);
 not supported: BLOB column 'a' cannot be in index
 create index x2 on t13(a);
 not supported: BLOB column 'a' cannot be in index
+create index x3 on t13(a(100));
 drop table t13;
 create table t14(a json);
 create unique index x on t14(a);

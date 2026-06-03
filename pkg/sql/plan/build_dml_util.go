@@ -2195,6 +2195,7 @@ func appendPreInsertPlan(
 	var useColumns []int32
 	idxDef := tableDef.Indexes[indexIdx]
 	colsMap := make(map[string]int)
+	prefixLengths := catalog.IndexPrefixLengthsFromParams(idxDef.IndexAlgoParams)
 
 	for i, col := range tableDef.Cols {
 		colsMap[col.Name] = i
@@ -2212,10 +2213,14 @@ func appendPreInsertPlan(
 
 	pkColumn, originPkType := getPkPos(tableDef, false)
 	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, pkColumn)
+	lastNodeId, useColumns, err := appendIndexPrefixProjection(builder, bindCtx, tableDef, lastNodeId, keyParts, colsMap, useColumns, prefixLengths)
+	if err != nil {
+		return -1, err
+	}
 
 	var ukType Type
 	if len(idxDef.Parts) == 1 || isSpatialIndexDef(idxDef) {
-		ukType = tableDef.Cols[useColumns[0]].Typ
+		ukType = builder.qry.Nodes[lastNodeId].ProjectList[useColumns[0]].Typ
 	} else {
 		ukType = Type{
 			Id:    int32(types.T_varchar),
@@ -2520,6 +2525,88 @@ func appendDeleteIndexTablePlan(
 	}, bindCtx)
 	recalcStatsByRuntimeFilter(builder.qry.Nodes[leftId], builder.qry.Nodes[lastNodeId], builder)
 	return lastNodeId, nil
+}
+
+func appendIndexPrefixProjection(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeId int32,
+	keyParts []string,
+	colsMap map[string]int,
+	useColumns []int32,
+	prefixLengths map[string]int,
+) (int32, []int32, error) {
+	if len(prefixLengths) == 0 {
+		return lastNodeId, useColumns, nil
+	}
+
+	lastProject := builder.qry.Nodes[lastNodeId].ProjectList
+	projectProjection := make([]*Expr, len(lastProject), len(lastProject)+len(prefixLengths))
+	for i := range lastProject {
+		projectProjection[i] = &plan.Expr{
+			Typ: lastProject[i].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(i),
+				},
+			},
+		}
+	}
+
+	newUseColumns := make([]int32, 0, len(useColumns))
+	hasPrefixPart := false
+	for _, part := range keyParts {
+		part = catalog.ResolveAlias(part)
+		pos, ok := colsMap[part]
+		if !ok {
+			continue
+		}
+		length := prefixLengths[part]
+		if length <= 0 {
+			newUseColumns = append(newUseColumns, int32(pos))
+			continue
+		}
+
+		prefixExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "substring", []*Expr{
+			{
+				Typ: lastProject[pos].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(pos),
+						Name:   part,
+					},
+				},
+			},
+			makePlan2Int64ConstExprWithType(1),
+			makePlan2Int64ConstExprWithType(int64(length)),
+		})
+		if err != nil {
+			return -1, nil, err
+		}
+		if prefixType, ok := indexTableKeyTypeForPrefix(lastProject[pos].Typ); ok {
+			prefixExpr, err = appendCastBeforeExpr(builder.GetContext(), prefixExpr, prefixType)
+			if err != nil {
+				return -1, nil, err
+			}
+		}
+		newUseColumns = append(newUseColumns, int32(len(projectProjection)))
+		projectProjection = append(projectProjection, prefixExpr)
+		hasPrefixPart = true
+	}
+
+	if !hasPrefixPart {
+		return lastNodeId, useColumns, nil
+	}
+
+	projectNode := &Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeId},
+		ProjectList: projectProjection,
+	}
+	return builder.appendNode(projectNode, bindCtx), newUseColumns, nil
 }
 
 func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,

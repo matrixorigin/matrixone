@@ -79,13 +79,18 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 }
 
 func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.TableDef, indexDef *plan.IndexDef) string {
-	groupExpr := partsToColsStr(indexDef.Parts)
+	prefixLengths := catalog.IndexPrefixLengthsFromParams(indexDef.IndexAlgoParams)
+	groupExpr := partsToIndexExprStr(indexDef.Parts, prefixLengths)
 	nullCheckExpr := fmt.Sprintf("%s IS NOT NULL", groupExpr)
 	if len(indexDef.Parts) > 1 {
 		nullChecks := make([]string, 0, len(indexDef.Parts))
 		for _, part := range indexDef.Parts {
 			part = catalog.ResolveAlias(part)
-			nullChecks = append(nullChecks, fmt.Sprintf("%s IS NOT NULL", quoteMySQLQualifiedIdent(part)))
+			partExpr := quoteMySQLQualifiedIdent(part)
+			if length := prefixLengths[part]; length > 0 {
+				partExpr = fmt.Sprintf("substring(%s, 1, %d)", partExpr, length)
+			}
+			nullChecks = append(nullChecks, fmt.Sprintf("%s IS NOT NULL", partExpr))
 		}
 		nullCheckExpr = strings.Join(nullChecks, " AND ")
 	}

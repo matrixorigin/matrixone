@@ -493,6 +493,29 @@ func TestBuildAlterTableError(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestBuildIndexAllowsEnumAndTextBlobPrefix(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE TABLE enum_idx_ok1 (id VARCHAR(191) PRIMARY KEY, role ENUM('a','b','c'), INDEX idx_role(role));",
+		"CREATE TABLE enum_idx_ok2 (id VARCHAR(191) PRIMARY KEY, role ENUM('a','b','c'), UNIQUE INDEX uq_role(role));",
+		"CREATE TABLE enum_idx_ok3 (id VARCHAR(191) PRIMARY KEY, name VARCHAR(191), role ENUM('a','b','c'), INDEX idx_name_role(name, role));",
+		"CREATE TABLE text_prefix_ok1 (id INT PRIMARY KEY, t TEXT, INDEX idx_t(t(100)));",
+		"CREATE TABLE text_prefix_ok2 (id INT PRIMARY KEY, t TEXT, UNIQUE INDEX uq_t(t(100)));",
+		"CREATE TABLE blob_prefix_ok1 (id INT PRIMARY KEY, b BLOB, INDEX idx_b(b(100)));",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestBuildIndexRejectsTextBlobPlainIndex(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqlerrs := []string{
+		"CREATE TABLE text_plain_err1 (id INT PRIMARY KEY, t TEXT, INDEX idx_t(t));",
+		"CREATE TABLE text_plain_err2 (id INT PRIMARY KEY, t TEXT, UNIQUE INDEX uq_t(t));",
+		"CREATE TABLE blob_plain_err1 (id INT PRIMARY KEY, b BLOB, INDEX idx_b(b));",
+	}
+	runTestShouldError(mock, t, sqlerrs)
+}
+
 func TestGeometryDDLGuardsSQLPaths(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	rt := moruntime.DefaultRuntime()

@@ -70,7 +70,12 @@ func (preInsertSecIdx *PreInsertSecIdx) initBuf(bat *batch.Batch, secondaryColum
 	}
 
 	if len(secondaryColumnPos) == 1 {
-		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(*bat.Vecs[secondaryColumnPos[0]].GetType())
+		ukType := preInsertSecIdx.PreInsertCtx.UkType
+		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(types.Type{
+			Oid:   types.T(ukType.Id),
+			Width: ukType.Width,
+			Scale: ukType.Scale,
+		})
 	} else {
 		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	}

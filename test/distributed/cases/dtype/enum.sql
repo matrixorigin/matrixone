@@ -155,6 +155,20 @@ select * from pri04 where col2 = 'database';
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri04' and COLUMN_NAME not like '__mo%';
 drop table pri04;
 
+drop table if exists enum_idx01;
+create table enum_idx01 (id varchar(191) primary key, role enum('a','b','c'), index idx_role(role));
+show create table enum_idx01;
+drop table enum_idx01;
+
+drop table if exists enum_idx02;
+create table enum_idx02 (id varchar(191) primary key, role enum('a','b','c'), unique index uq_role(role));
+show create table enum_idx02;
+drop table enum_idx02;
+
+drop table if exists enum_idx03;
+create table enum_idx03 (id varchar(191) primary key, name varchar(191), role enum('a','b','c'), index idx_name_role(name, role));
+show create table enum_idx03;
+drop table enum_idx03;
 
 -- insert into table,  either use a number to represent a number or insert a specific value
 -- query, update, or delete data, can also use numeric numbers or specific values

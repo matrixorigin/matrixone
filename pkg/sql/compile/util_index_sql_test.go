@@ -58,6 +58,26 @@ func TestGenInsertIndexTableSql_QuotesReservedKeywordColumn(t *testing.T) {
 	require.Contains(t, sql, "select serial_full(`order`,`id`), `id` from `test`.`files_related_mph`;")
 }
 
+func TestGenInsertIndexTableSql_UsesPrefixExpression(t *testing.T) {
+	originTableDef := &planpb.TableDef{
+		Name: "orders",
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+	}
+	indexDef := &planpb.IndexDef{
+		IndexTableName:  "__mo_index_unique_test",
+		Parts:           []string{"order"},
+		Unique:          true,
+		IndexAlgoParams: `{"prefix_lengths":"order:5"}`,
+	}
+
+	sql := genInsertIndexTableSql(originTableDef, indexDef, "test", true)
+
+	require.Equal(t, "insert into  `test`.`__mo_index_unique_test` select (substring(`order`, 1, 5)), `id` from `test`.`orders` where (substring(`order`, 1, 5)) is not null;", sql)
+}
+
 func TestGenInsertIndexTableSql_SpatialIndexUsesRawGeometryColumn(t *testing.T) {
 	originTableDef := &planpb.TableDef{
 		Name: "geo_t",
@@ -106,6 +126,20 @@ func TestBuildCreateUniqueIndexDuplicateCheckSQL(t *testing.T) {
 		sql := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
 
 		require.Equal(t, "SELECT `order`,`id` FROM `test`.`orders` WHERE `order` IS NOT NULL AND `id` IS NOT NULL GROUP BY `order`,`id` HAVING count(*) > 1 LIMIT 1", sql)
+	})
+
+	t.Run("prefix column", func(t *testing.T) {
+		indexDef := &planpb.IndexDef{
+			IndexName:       "u_order",
+			IndexTableName:  "__mo_index_unique_test",
+			Parts:           []string{"order"},
+			Unique:          true,
+			IndexAlgoParams: `{"prefix_lengths":"order:5"}`,
+		}
+
+		sql := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+
+		require.Equal(t, "SELECT substring(`order`, 1, 5) FROM `test`.`orders` WHERE substring(`order`, 1, 5) IS NOT NULL GROUP BY substring(`order`, 1, 5) HAVING count(*) > 1 LIMIT 1", sql)
 	})
 }
 

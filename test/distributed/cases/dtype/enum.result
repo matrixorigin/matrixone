@@ -226,6 +226,24 @@ table_name    column_name    data_type    is_nullable
 pri04    col1    INT    YES
 pri04    col2    ENUM    YES
 drop table pri04;
+drop table if exists enum_idx01;
+create table enum_idx01 (id varchar(191) primary key, role enum('a','b','c'), index idx_role(role));
+show create table enum_idx01;
+Table    Create Table
+enum_idx01    CREATE TABLE `enum_idx01` (\n  `id` varchar(191) NOT NULL,\n  `role` enum('a','b','c') DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_role` (`role`)\n)
+drop table enum_idx01;
+drop table if exists enum_idx02;
+create table enum_idx02 (id varchar(191) primary key, role enum('a','b','c'), unique index uq_role(role));
+show create table enum_idx02;
+Table    Create Table
+enum_idx02    CREATE TABLE `enum_idx02` (\n  `id` varchar(191) NOT NULL,\n  `role` enum('a','b','c') DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uq_role` (`role`)\n)
+drop table enum_idx02;
+drop table if exists enum_idx03;
+create table enum_idx03 (id varchar(191) primary key, name varchar(191), role enum('a','b','c'), index idx_name_role(name, role));
+show create table enum_idx03;
+Table    Create Table
+enum_idx03    CREATE TABLE `enum_idx03` (\n  `id` varchar(191) NOT NULL,\n  `name` varchar(191) DEFAULT NULL,\n  `role` enum('a','b','c') DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_name_role` (`name`,`role`)\n)
+drop table enum_idx03;
 drop table if exists inert01;
 create table insert01 (id int primary key,
 order_number VARCHAR(20),
@@ -506,13 +524,10 @@ create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeo
 not supported: ENUM column 'col2' cannot be in primary key
 drop table if exists agg01;
 create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw') unique);
-not supported: ENUM column 'col2' cannot be in unique index
 drop table if exists agg01;
 create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw'), unique key (col2));
-not supported: ENUM column 'col2' cannot be in unique index
 drop table if exists agg01;
 create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw'), key (col2));
-not supported: ENUM column 'col2' cannot be in secondary index
 drop table if exists agg01;
 drop table if exists test_enum_order;
 create table test_enum_order (id int, val enum('low', 'medium', 'high', 'critical'));

@@ -85,11 +85,14 @@ drop table t11;
 create table t12(a text);
 create unique index x on t12(a);
 create index x2 on t12(a);
+create index x3 on t12(a(100));
+create unique index x4 on t12(a(100));
 drop table t12;
 
 create table t13(a blob);
 create unique index x on t13(a);
 create index x2 on t13(a);
+create index x3 on t13(a(100));
 drop table t13;
 
 create table t14(a json);
