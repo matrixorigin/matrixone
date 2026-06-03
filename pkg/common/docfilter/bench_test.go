@@ -26,6 +26,22 @@ import (
 
 const benchFpProbability = 0.001
 
+// benchCbitmapCap forces cbitmap construction regardless of the production
+// MaxCbitmapBits, so the benchmark measures cbitmap at every N (the dense bench
+// keys reach ~2N, which exceeds the production cap at large N). It is a
+// measurement knob only; production uses MaxCbitmapBits.
+const benchCbitmapCap = uint64(1) << 31
+
+// mustCbitmap builds a dense cbitmap (uncapped) for benchmarking; the dense
+// bench keys are always feasible under benchCbitmapCap.
+func mustCbitmap(tb testing.TB, v *vector.Vector) []byte {
+	out, ok, err := buildCbitmapBytesCap(v, benchCbitmapCap)
+	if err != nil || !ok {
+		tb.Fatalf("build cbitmap: ok=%v err=%v", ok, err)
+	}
+	return out
+}
+
 // benchSizes are candidate-set cardinalities N (the number of doc_ids the
 // filter is built from). The whole point of the bitset is cheaper build at
 // large N, so we sweep a range.
@@ -59,16 +75,6 @@ func makeProbeVec(tb testing.TB, mp *mpool.MPool, rows int) *vector.Vector {
 	return v
 }
 
-// mustCbitmap builds + serializes a dense cbitmap, failing the bench if the id
-// range is not feasible (the bench keys are dense, so it always should be).
-func mustCbitmap(tb testing.TB, v *vector.Vector) []byte {
-	out, ok, err := BuildCbitmapBytes(v)
-	if err != nil || !ok {
-		tb.Fatalf("build cbitmap: ok=%v err=%v", ok, err)
-	}
-	return out
-}
-
 // BenchmarkBuild compares building + serializing the doc_id filter structures
 // (bloom / dense cbitmap / C CRoaring) from the same N integer doc_ids. Reports
 // the serialized size too.
@@ -96,13 +102,13 @@ func BenchmarkBuild(b *testing.B) {
 		// cbitmap: a DENSE bitset indexed by the doc_id value, built + serialized
 		// in C directly from the column buffer (one cgo call). Sized to the max
 		// key (here ~2N), so size = O(max value), not O(N) — only viable for
-		// dense/bounded integer PKs. Keys are odd values in [1, 2N).
+		// dense/bounded integer PKs within MaxCbitmapBits. Keys are odd values
+		// in [1, 2N), so it is skipped once 2N exceeds the cap (CRoaring's regime).
 		b.Run(fmt.Sprintf("cbitmap/N=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
 			var sz int
 			for i := 0; i < b.N; i++ {
-				out := mustCbitmap(b, keyvec)
-				sz = len(out)
+				sz = len(mustCbitmap(b, keyvec))
 			}
 			b.ReportMetric(float64(sz), "bytes")
 		})
@@ -137,10 +143,6 @@ func BenchmarkTestVector(b *testing.B) {
 
 		bf := bloomfilter.NewCBloomFilterWithProbability(int64(n), benchFpProbability)
 		bf.AddVector(keyvec)
-		cbf, err := NewCbitmapFilter(mustCbitmap(b, keyvec))
-		if err != nil {
-			b.Fatal(err)
-		}
 		crf, err := NewCRoaringFilter(must(BuildCRoaringBytes(keyvec)))
 		if err != nil {
 			b.Fatal(err)
@@ -153,6 +155,11 @@ func BenchmarkTestVector(b *testing.B) {
 			}
 		})
 		b.Run(fmt.Sprintf("cbitmap/N=%d", n), func(b *testing.B) {
+			cbf, err := NewCbitmapFilter(mustCbitmap(b, keyvec))
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer cbf.Free()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				cbf.TestVector(probe, nil)
@@ -166,7 +173,6 @@ func BenchmarkTestVector(b *testing.B) {
 		})
 
 		bf.Free()
-		cbf.Free()
 		crf.Free()
 		keyvec.Free(mp)
 		probe.Free(mp)
@@ -187,10 +193,6 @@ func BenchmarkTestSingle(b *testing.B) {
 
 		bf := bloomfilter.NewCBloomFilterWithProbability(int64(n), benchFpProbability)
 		bf.AddVector(keyvec)
-		cbf, err := NewCbitmapFilter(mustCbitmap(b, keyvec))
-		if err != nil {
-			b.Fatal(err)
-		}
 		crf, err := NewCRoaringFilter(must(BuildCRoaringBytes(keyvec)))
 		if err != nil {
 			b.Fatal(err)
@@ -204,6 +206,11 @@ func BenchmarkTestSingle(b *testing.B) {
 			}
 		})
 		b.Run(fmt.Sprintf("cbitmap/N=%d", n), func(b *testing.B) {
+			cbf, err := NewCbitmapFilter(mustCbitmap(b, keyvec))
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer cbf.Free()
 			for i := 0; i < b.N; i++ {
 				for _, r := range raws {
 					_ = cbf.Test(r)
@@ -219,9 +226,128 @@ func BenchmarkTestSingle(b *testing.B) {
 		})
 
 		bf.Free()
-		cbf.Free()
 		crf.Free()
 		keyvec.Free(mp)
 		probe.Free(mp)
+	}
+}
+
+// makeClusteredVec builds `runs` consecutive ranges of runLen ids each (gap =
+// runLen between runs, ~50% global density). Contiguous runs are run_optimize's
+// sweet spot (e.g. a BETWEEN range or a sequential-PK slice).
+func makeClusteredVec(tb testing.TB, mp *mpool.MPool, runs, runLen int) *vector.Vector {
+	v := vector.NewVec(types.T_int64.ToType())
+	for r := 0; r < runs; r++ {
+		base := int64(r) * int64(2*runLen)
+		for j := 0; j < runLen; j++ {
+			if err := vector.AppendFixed(v, base+int64(j), false, mp); err != nil {
+				tb.Fatal(err)
+			}
+		}
+	}
+	return v
+}
+
+// BenchmarkRunOptimize compares building a CRoaring filter without vs with the
+// run_optimize pass on clustered (contiguous-run) id sets. The time delta is
+// run_optimize's cost; the "bytes" metric shows the size it saves.
+func BenchmarkRunOptimize(b *testing.B) {
+	mp := mpool.MustNewZero()
+	cases := []struct {
+		runs, runLen int
+	}{
+		{1, 1000000}, // one contiguous 1M range
+		{100, 10000}, // 100 runs of 10k
+		{10000, 100}, // 10k runs of 100
+		{1000000, 1}, // fully scattered (no runs — worst case for run_optimize)
+	}
+	for _, tc := range cases {
+		v := makeClusteredVec(b, mp, tc.runs, tc.runLen)
+		name := fmt.Sprintf("runs=%d/len=%d", tc.runs, tc.runLen)
+
+		b.Run("plain/"+name, func(b *testing.B) {
+			b.ReportAllocs()
+			var sz int
+			for i := 0; i < b.N; i++ {
+				out, err := buildCRoaringBytes(v, false)
+				if err != nil {
+					b.Fatal(err)
+				}
+				sz = len(out)
+			}
+			b.ReportMetric(float64(sz), "bytes")
+		})
+		b.Run("runopt/"+name, func(b *testing.B) {
+			b.ReportAllocs()
+			var sz int
+			for i := 0; i < b.N; i++ {
+				out, err := buildCRoaringBytes(v, true)
+				if err != nil {
+					b.Fatal(err)
+				}
+				sz = len(out)
+			}
+			b.ReportMetric(float64(sz), "bytes")
+		})
+		v.Free(mp)
+	}
+}
+
+// BenchmarkTestVectorRunOpt compares probing a block of keys against a plain
+// vs run-optimized CRoaring filter (clustered data). Shows whether converting
+// containers to run-length encoding changes membership-probe latency.
+func BenchmarkTestVectorRunOpt(b *testing.B) {
+	mp := mpool.MustNewZero()
+	const probeRows = 8192
+	cases := []struct {
+		runs, runLen int
+	}{
+		{1, 1000000},
+		{100, 10000},
+		{10000, 100},
+	}
+	for _, tc := range cases {
+		v := makeClusteredVec(b, mp, tc.runs, tc.runLen)
+		maxKey := int64(tc.runs) * int64(2*tc.runLen)
+		step := maxKey / int64(probeRows)
+		if step < 1 {
+			step = 1
+		}
+		// Spread probes across the whole range so many containers are touched
+		// (≈50% hit, since runs occupy ~half the range).
+		probe := vector.NewVec(types.T_int64.ToType())
+		for i := 0; i < probeRows; i++ {
+			if err := vector.AppendFixed(probe, int64(i)*step, false, mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+		name := fmt.Sprintf("runs=%d/len=%d", tc.runs, tc.runLen)
+
+		plain, err := NewCRoaringFilter(must(buildCRoaringBytes(v, false)))
+		if err != nil {
+			b.Fatal(err)
+		}
+		runopt, err := NewCRoaringFilter(must(buildCRoaringBytes(v, true)))
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		b.Run("plain/"+name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				plain.TestVector(probe, nil)
+			}
+		})
+		b.Run("runopt/"+name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				runopt.TestVector(probe, nil)
+			}
+		})
+
+		plain.Free()
+		runopt.Free()
+		probe.Free(mp)
+		v.Free(mp)
 	}
 }

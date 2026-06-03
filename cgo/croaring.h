@@ -54,4 +54,8 @@ void *mo_croaring_deserialize(const uint8_t *buf, size_t len);
 
 uint64_t mo_croaring_cardinality(void *r);
 
+// Run-length-optimize eligible containers (helps clustered/consecutive id sets).
+// Returns true if the representation changed.
+bool mo_croaring_run_optimize(void *r);
+
 #endif  // MO_CROARING_H

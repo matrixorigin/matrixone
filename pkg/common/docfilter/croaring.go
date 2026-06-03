@@ -64,6 +64,14 @@ func vecFixedArgs(v *vector.Vector) (data unsafe.Pointer, dataLen C.size_t, elem
 // BuildCRoaringBytes builds a roaring64 bitset from an integer doc_id vector
 // (read directly in C) and returns its portable serialization (no tag prefix).
 func BuildCRoaringBytes(v *vector.Vector) ([]byte, error) {
+	return buildCRoaringBytes(v, false)
+}
+
+// buildCRoaringBytes builds a roaring64 bitset; when runOpt is true it adds a
+// run_optimize pass that converts consecutive runs to run-length containers —
+// far smaller for clustered/contiguous id sets (e.g. a BETWEEN range or
+// sequential PKs), at the cost of an extra pass over the containers.
+func buildCRoaringBytes(v *vector.Vector, runOpt bool) ([]byte, error) {
 	r := C.mo_croaring_create()
 	if r == nil {
 		return nil, moerr.NewInternalErrorNoCtx("croaring: create failed")
@@ -73,6 +81,9 @@ func BuildCRoaringBytes(v *vector.Vector) ([]byte, error) {
 	data, dataLen, elemsz, nitem, nullPtr, nullLen := vecFixedArgs(v)
 	if data != nil {
 		C.mo_croaring_add_fixed(r, data, dataLen, elemsz, nitem, nullPtr, nullLen)
+	}
+	if runOpt {
+		C.mo_croaring_run_optimize(r)
 	}
 
 	var clen C.size_t

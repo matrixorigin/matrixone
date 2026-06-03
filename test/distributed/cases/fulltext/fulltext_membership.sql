@@ -2,7 +2,7 @@
 -- three filter structures that docfilter.Build selects based on the source
 -- table's primary-key type:
 --   section 1: integer PK, small/bounded ids        -> dense cbitmap
---   section 2: integer PK, large ids (> 2^27)        -> compact CRoaring bitset
+--   section 2: integer PK, large ids (> 2^23)        -> compact CRoaring bitset
 --   section 3: varchar (non-integer) PK              -> CBloomFilter (approx)
 -- The pushdown is transparent to query results, so each section verifies that
 -- "match(...) against(...) AND <relational predicate>" returns the correct rows
@@ -51,7 +51,7 @@ select count(*) from ft_cbitmap
 where match(title, body) against('machine learning') and category = 'tech';
 
 -- ============================================================================
--- section 2: integer PK, large ids (> 2^27 = 134217728) -> CRoaring
+-- section 2: integer PK, large ids (> 2^23 = 8388608) -> CRoaring
 -- ============================================================================
 create table ft_croaring (
     id bigint primary key,

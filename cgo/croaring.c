@@ -32,6 +32,7 @@ size_t roaring64_bitmap_portable_serialize(const roaring64_bitmap_t *r,
 roaring64_bitmap_t *roaring64_bitmap_portable_deserialize_safe(const char *buf,
                                                                size_t maxbytes);
 uint64_t roaring64_bitmap_get_cardinality(const roaring64_bitmap_t *r);
+bool roaring64_bitmap_run_optimize(roaring64_bitmap_t *r);
 
 // Decode elemsz little-endian bytes (1/2/4/8) of a fixed integer into uint64
 // by zero-extension. Identical decode on build and probe keeps mapping stable.
@@ -47,6 +48,13 @@ void *mo_croaring_create(void) { return (void *)roaring64_bitmap_create(); }
 
 void mo_croaring_free(void *r) {
   if (r) roaring64_bitmap_free((roaring64_bitmap_t *)r);
+}
+
+// Convert eligible containers to run-length encoding (helps clustered/
+// consecutive id sets). Returns true if the representation changed.
+bool mo_croaring_run_optimize(void *r) {
+  if (!r) return false;
+  return roaring64_bitmap_run_optimize((roaring64_bitmap_t *)r);
 }
 
 void mo_croaring_add_fixed(void *r, const void *key, size_t len, size_t elemsz,

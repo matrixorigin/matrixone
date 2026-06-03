@@ -35,9 +35,14 @@ const TagCbitmap byte = 3
 
 // MaxCbitmapBits caps the dense bitset size. A dense bitmap is indexed by the
 // doc_id value, so its size is O(max value), not O(count) — only viable when
-// the max id is bounded. Above this the caller must fall back (CRoaring).
-// 2^27 bits = 16 MB (covers dense integer PKs up to ~134M).
-const MaxCbitmapBits = uint64(1) << 27
+// the max id is bounded. Above this the caller falls back to CRoaring.
+//
+// 2^23 bits = 1 MB, sized to stay within a typical per-core L2 cache so the
+// random per-row membership probe hits L2 rather than L3/DRAM, and to bound
+// per-query memory under concurrency (N concurrent queries * up to 1 MB).
+// Covers dense integer PKs up to ~8.4M; sparser/larger id ranges fall back to
+// the compact CRoaring bitset.
+const MaxCbitmapBits = uint64(1) << 23
 
 // CbitmapFeasible reports whether a max doc_id value is small enough that a
 // dense cbitmap is worthwhile (vs the compact CRoaring filter).
@@ -87,11 +92,18 @@ func cbitmapSerialize(f unsafe.Pointer) ([]byte, error) {
 // directly in C) and returns its serialization (no tag). ok=false means the id
 // range is too large for a dense bitmap (caller should use CRoaring instead).
 func BuildCbitmapBytes(v *vector.Vector) (data []byte, ok bool, err error) {
+	return buildCbitmapBytesCap(v, MaxCbitmapBits)
+}
+
+// buildCbitmapBytesCap is BuildCbitmapBytes with an explicit bit cap. Production
+// callers use BuildCbitmapBytes (MaxCbitmapBits); benchmarks pass a larger cap
+// to measure cbitmap beyond the production budget.
+func buildCbitmapBytesCap(v *vector.Vector, maxBits uint64) (data []byte, ok bool, err error) {
 	cdata, dataLen, elemsz, nitem, nullPtr, nullLen := vecFixedArgs(v)
 	f := C.mo_cbitmap_build_fixed(cdata, dataLen, elemsz, nitem, nullPtr, nullLen,
-		C.uint64_t(MaxCbitmapBits))
+		C.uint64_t(maxBits))
 	if f == nil {
-		// id range exceeds MaxCbitmapBits (or OOM): fall back to CRoaring.
+		// id range exceeds maxBits (or OOM): fall back to CRoaring.
 		return nil, false, nil
 	}
 	defer C.mo_cbitmap_free(f)
