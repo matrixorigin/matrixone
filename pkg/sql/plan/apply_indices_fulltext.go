@@ -118,6 +118,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			OrderBy:  orderByScore,
 			Limit:    DeepCopyExpr(scanNode.Limit),
 			Offset:   DeepCopyExpr(scanNode.Offset),
+			SpillMem: builder.sortSpillMem,
 		}, ctx)
 
 		// move scanNode.Limit to sortNode
