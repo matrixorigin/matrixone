@@ -578,9 +578,6 @@ func (exec *CDCTaskExecutor) Pause() error {
 			// Channel full or Start() already exited, ignore
 		}
 	}
-	if err := exec.updateTaskState(context.Background(), cdc.CDCState_Paused); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -818,29 +815,60 @@ func (exec *CDCTaskExecutor) updateErrMsg(ctx context.Context, errMsg string) (e
 	)
 }
 
-func (exec *CDCTaskExecutor) updateTaskState(ctx context.Context, state string) error {
-	if exec.ie == nil || exec.spec == nil || len(exec.spec.Accounts) == 0 {
+func CDCPauseTaskCompleteHook(sqlExecutorFactory func() ie.InternalExecutor) taskservice.PauseTaskCompletedHook {
+	return func(ctx context.Context, daemonTask task.DaemonTask) error {
+		if daemonTask.Details == nil {
+			return nil
+		}
+		details, ok := daemonTask.Details.Details.(*task.Details_CreateCdc)
+		if !ok || details.CreateCdc == nil {
+			return nil
+		}
+		return updateCDCTaskState(
+			ctx,
+			sqlExecutorFactory,
+			details.CreateCdc,
+			cdc.CDCState_Paused,
+		)
+	}
+}
+
+func updateCDCTaskState(
+	ctx context.Context,
+	sqlExecutorFactory func() ie.InternalExecutor,
+	spec *task.CreateCdcDetails,
+	state string,
+) error {
+	if sqlExecutorFactory == nil || spec == nil || len(spec.Accounts) == 0 {
 		logutil.Warn(
 			"cdc.frontend.task.update_state.skipped",
 			zap.String("state", state),
 		)
 		return nil
 	}
-	accountID := uint64(exec.spec.Accounts[0].GetId())
+	sqlExecutor := sqlExecutorFactory()
+	if sqlExecutor == nil {
+		logutil.Warn(
+			"cdc.frontend.task.update_state.skipped",
+			zap.String("state", state),
+		)
+		return nil
+	}
+	accountID := uint64(spec.Accounts[0].GetId())
 	sql := cdc.CDCSQLBuilder.UpdateTaskStateByTaskIdSQL(
 		accountID,
-		exec.spec.TaskId,
+		spec.TaskId,
 		state,
 	)
-	if err := exec.ie.Exec(
+	if err := sqlExecutor.Exec(
 		defines.AttachAccountId(ctx, catalog.System_Account),
 		sql,
 		ie.SessionOverrideOptions{},
 	); err != nil {
 		logutil.Error(
 			"cdc.frontend.task.update_state.failed",
-			zap.String("task-id", exec.spec.TaskId),
-			zap.String("task-name", exec.spec.TaskName),
+			zap.String("task-id", spec.TaskId),
+			zap.String("task-name", spec.TaskName),
 			zap.Uint64("account-id", accountID),
 			zap.String("state", state),
 			zap.Error(err),

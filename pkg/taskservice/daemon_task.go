@@ -342,7 +342,7 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 			t.runner.logger.Debug("cdc.task.pause.skip.already-paused",
 				zap.Uint64("task-id", tk.ID),
 				zap.String("task-name", taskNameFromDetails(tk)))
-			return nil
+			return t.runner.pauseTaskCompleted(ctx, tk)
 		}
 		t.runner.logger.Warn("cdc.task.pause.skip.invalid-status",
 			zap.Uint64("task-id", tk.ID),
@@ -366,12 +366,29 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := t.runner.pauseTaskCompleted(ctx, tk); err != nil {
+		return err
+	}
 	t.runner.logger.Info("cdc.task.pause.finish",
 		zap.Uint64("task-id", tk.ID),
 		zap.String("task-name", taskNameFromDetails(tk)),
 		zap.String("new-status", tk.TaskStatus.String()),
 		zap.Duration("elapsed", time.Since(start)),
 	)
+	return nil
+}
+
+func (r *taskRunner) pauseTaskCompleted(ctx context.Context, tk task.DaemonTask) error {
+	if r.options.pauseTaskCompleted == nil {
+		return nil
+	}
+	if err := r.options.pauseTaskCompleted(ctx, tk); err != nil {
+		r.logger.Error("cdc.task.pause.complete-hook.failed",
+			zap.Uint64("task-id", tk.ID),
+			zap.String("task-name", taskNameFromDetails(tk)),
+			zap.Error(err))
+		return err
+	}
 	return nil
 }
 
