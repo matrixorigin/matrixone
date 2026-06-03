@@ -3824,6 +3824,61 @@ func TestCDCTaskExecutor_Pause_WithWatermarkFlushSuccess(t *testing.T) {
 	assert.Equal(t, StatePaused, executor.stateMachine.State())
 }
 
+func TestCDCTaskExecutor_Pause_RetriesForceFlushBeforePaused(t *testing.T) {
+	holdCh := make(chan int, 1)
+	flushCalls := 0
+	u := cdc.NewCDCWatermarkUpdater(
+		t.Name(),
+		&mockLogWatermarksIe{hasError: false, rowCount: 1},
+		cdc.WithCustomizedScheduleJob(func(job *cdc.UpdaterJob) error {
+			flushCalls++
+			if flushCalls == 1 {
+				return moerr.NewInternalErrorNoCtx("force flush failed")
+			}
+			job.DoneWithResult(nil)
+			return nil
+		}),
+	)
+
+	executor := &CDCTaskExecutor{
+		activeRoutine:    cdc.NewCdcActiveRoutine(),
+		watermarkUpdater: u,
+		cnUUID:           "test-cn",
+		runningReaders:   &sync.Map{},
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task1",
+			TaskName: "task1",
+			Accounts: []*task.Account{
+				{Id: 100},
+			},
+		},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       holdCh,
+		ie:           &mockLogWatermarksIe{hasError: false, rowCount: 1},
+	}
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+
+	err := executor.Pause()
+	require.ErrorContains(t, err, "force flush failed")
+	require.Equal(t, StatePausing, executor.stateMachine.State())
+	require.Equal(t, 1, flushCalls)
+	select {
+	case <-holdCh:
+		t.Fatal("pause should not release Start before ForceFlush succeeds")
+	default:
+	}
+
+	require.NoError(t, executor.Pause())
+	require.Equal(t, StatePaused, executor.stateMachine.State())
+	require.Equal(t, 2, flushCalls)
+	select {
+	case <-holdCh:
+	default:
+		t.Fatal("pause should release Start after ForceFlush succeeds")
+	}
+}
+
 // Mock IE for logCurrentWatermarks tests
 type mockLogWatermarksIe struct {
 	hasError       bool
