@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -215,7 +216,19 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		isMulti:       tblInfo.isMulti,
 		needAggFilter: tblInfo.needAggFilter,
 	}
-	for alias, columns := range usedTbl {
+	// Iterate the updated tables in their original statement order. Ranging
+	// over the usedTbl map directly would randomize the table (and therefore
+	// the projection column) layout across runs, making the generated plan
+	// non-deterministic.
+	usedAliases := make([]string, 0, len(usedTbl))
+	for alias := range usedTbl {
+		usedAliases = append(usedAliases, alias)
+	}
+	sort.Slice(usedAliases, func(i, j int) bool {
+		return tblInfo.alias[usedAliases[i]] < tblInfo.alias[usedAliases[j]]
+	})
+	for _, alias := range usedAliases {
+		columns := usedTbl[alias]
 		idx := tblInfo.alias[alias]
 		tblDef := tblInfo.tableDefs[idx]
 		newTblInfo.objRef = append(newTblInfo.objRef, tblInfo.objRef[idx])
