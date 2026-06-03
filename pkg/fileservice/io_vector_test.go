@@ -85,3 +85,44 @@ func TestIOVectorReleaseReadResultOnErrorSkipsUndoneReleaseData(t *testing.T) {
 	require.False(t, vector.Entries[1].done)
 	require.Nil(t, vector.Entries[1].fromCache)
 }
+
+func TestIOVectorReadRangeDoesNotMutateReadToEndEntry(t *testing.T) {
+	vector := IOVector{
+		FilePath: "foo",
+		Policy:   SkipFullFilePreloads,
+		Entries: []IOEntry{
+			{
+				Offset: 4,
+				Size:   -1,
+			},
+		},
+	}
+
+	min, max, readFull := vector.readRange()
+
+	require.False(t, readFull)
+	require.NotNil(t, min)
+	require.Equal(t, int64(4), *min)
+	require.Nil(t, max)
+	require.Equal(t, int64(-1), vector.Entries[0].Size)
+}
+
+func TestIOVectorIOMergeKeyDoesNotMutateReadToEndEntry(t *testing.T) {
+	vector := IOVector{
+		FilePath: "foo",
+		Policy:   SkipFullFilePreloads,
+		Entries: []IOEntry{
+			{
+				Offset: 4,
+				Size:   -1,
+			},
+		},
+	}
+
+	key := vector.ioMergeKey()
+
+	require.False(t, key.FullObject)
+	require.Equal(t, int64(4), key.Offset)
+	require.Equal(t, int64(0), key.End)
+	require.Equal(t, int64(-1), vector.Entries[0].Size)
+}

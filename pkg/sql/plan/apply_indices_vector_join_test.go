@@ -782,11 +782,12 @@ func TestGetDistRangeFromFiltersWithJoinVectorArg(t *testing.T) {
 		}},
 	}
 
-	remainingFilters, distRange := builder.getDistRangeFromFilters([]*plan.Expr{filter}, &ivfIndexContext{
-		partPos:      1,
-		origFuncName: "l2_distance",
-		vecLitArg:    newVectorJoinColExpr(2, 1, "v", floatTyp),
-	})
+	remainingFilters, distRange := builder.getDistRangeFromFilters(
+		[]*plan.Expr{filter},
+		1,
+		"l2_distance",
+		newVectorJoinColExpr(2, 1, "v", floatTyp),
+	)
 	require.Nil(t, distRange)
 	require.Equal(t, []*plan.Expr{filter}, remainingFilters)
 }
