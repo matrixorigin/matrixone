@@ -408,7 +408,11 @@ func appendPickedBatchRows(
 				}
 			}
 		} else {
-			if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
+			pickInsertIdxes := tblStuff.def.visibleIdxes
+			if len(tblStuff.def.tarOnlyIdxes) > 0 {
+				pickInsertIdxes = tblStuff.def.commonIdxes
+			}
+			if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer, pickInsertIdxes); err != nil {
 				return
 			}
 		}

@@ -937,17 +937,6 @@ func getTableStuff(
 	tblStuff.def.commonIdxes = commonIdxes
 	tblStuff.def.tarOnlyIdxes = tarOnlyIdxes
 
-	// Build baseColToTarIdx: for each physical base column, find the matching target column index.
-	tblStuff.def.baseColToTarIdx = make([]int, len(baseTblDef.Cols))
-	for i := range tblStuff.def.baseColToTarIdx {
-		tblStuff.def.baseColToTarIdx[i] = -1
-	}
-	for i, baseCol := range baseTblDef.Cols {
-		if tarColIdx, ok := tarTblDef.Name2ColIndex[strings.ToLower(baseCol.Name)]; ok {
-			tblStuff.def.baseColToTarIdx[i] = int(tarColIdx)
-		}
-	}
-
 	if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		tblStuff.def.pkKind = fakeKind
 		for i, col := range baseTblDef.Cols {
@@ -990,6 +979,35 @@ func getTableStuff(
 		}
 
 		tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, i)
+	}
+
+	// Build baseColToTarIdx: map each base data column (in batch column order,
+	// excluding Row_ID / FakePK / CPK) to its position in target colNames.
+	// colNames is already populated above from tarTblDef.Cols (excluding Row_ID,
+	// including FakePK/CPK). This mapping is used by projectBaseBatchToTarget to
+	// place base batch vectors at the correct target positions.
+	{
+		baseDataNames := make([]string, 0, len(baseTblDef.Cols))
+		for _, col := range baseTblDef.Cols {
+			if col.Name == catalog.Row_ID ||
+				col.Name == catalog.FakePrimaryKeyColName ||
+				col.Name == catalog.CPrimaryKeyColName {
+				continue
+			}
+			baseDataNames = append(baseDataNames, col.Name)
+		}
+		tblStuff.def.baseColToTarIdx = make([]int, len(baseDataNames))
+		for i := range tblStuff.def.baseColToTarIdx {
+			tblStuff.def.baseColToTarIdx[i] = -1
+		}
+		for i, name := range baseDataNames {
+			for j, tarName := range tblStuff.def.colNames {
+				if strings.EqualFold(name, tarName) {
+					tblStuff.def.baseColToTarIdx[i] = j
+					break
+				}
+			}
+		}
 	}
 
 	tblStuff.retPool = &retBatchList{}
