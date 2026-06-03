@@ -819,7 +819,7 @@ func (exec *CDCTaskExecutor) updateErrMsg(ctx context.Context, errMsg string) (e
 }
 
 func CDCPauseTaskCompleteHook(sqlExecutorFactory func() ie.InternalExecutor) taskservice.PauseTaskCompletedHook {
-	return func(ctx context.Context, daemonTask task.DaemonTask) error {
+	return func(_ context.Context, daemonTask task.DaemonTask) error {
 		if daemonTask.Details == nil {
 			return nil
 		}
