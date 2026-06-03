@@ -470,6 +470,34 @@ func TestPauseTasksRetriesPausedCDCFinalize(t *testing.T) {
 	require.Empty(t, r.pauseTasks(context.Background()))
 }
 
+func TestPauseCompletedTasksClearedByLifecycle(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+
+	resumeDT := newDaemonTaskForTest(1, task.TaskStatus_ResumeRequested, r.runnerID)
+	resumeDT.Metadata.ID = "pause-completed-resume-1"
+	mustAddTestDaemonTask(t, store, 1, resumeDT)
+	resumeRef := &daemonTask{task: resumeDT}
+	resumeAR := ActiveRoutine(newMockActiveRoutine())
+	resumeRef.activeRoutine.Store(&resumeAR)
+	r.markPauseTaskCompleted(resumeDT.ID)
+	require.NoError(t, newResumeTask(r, resumeRef).Handle(context.Background()))
+	require.False(t, r.isPauseTaskCompleted(resumeDT.ID))
+
+	cancelDT := newDaemonTaskForTest(2, task.TaskStatus_CancelRequested, r.runnerID)
+	cancelDT.Metadata.ID = "pause-completed-cancel-1"
+	mustAddTestDaemonTask(t, store, 1, cancelDT)
+	r.markPauseTaskCompleted(cancelDT.ID)
+	require.NoError(t, newCancelTask(r, &daemonTask{task: cancelDT}).Handle(context.Background()))
+	require.False(t, r.isPauseTaskCompleted(cancelDT.ID))
+
+	removeDT := newDaemonTaskForTest(3, task.TaskStatus_Paused, r.runnerID)
+	removeDT.Metadata.ID = "pause-completed-remove-1"
+	r.addDaemonTask(&daemonTask{task: removeDT})
+	r.markPauseTaskCompleted(removeDT.ID)
+	r.removeDaemonTask(removeDT.ID)
+	require.False(t, r.isPauseTaskCompleted(removeDT.ID))
+}
+
 func TestRunDaemonTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		c := make(chan struct{})

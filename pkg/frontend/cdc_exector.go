@@ -860,10 +860,11 @@ func updateCDCTaskState(
 		return nil
 	}
 	accountID := uint64(spec.Accounts[0].GetId())
-	sql := cdc.CDCSQLBuilder.UpdateTaskStateByTaskIdSQL(
+	sql := cdc.CDCSQLBuilder.UpdateTaskStateByTaskIdAndStateSQL(
 		accountID,
 		spec.TaskId,
 		state,
+		cdc.CDCState_Pausing,
 	)
 	if err := sqlExecutor.Exec(
 		defines.AttachAccountId(ctx, catalog.System_Account),
