@@ -1,0 +1,83 @@
+set ivf_preload_entries = 0;
+set probe_limit = 5;
+drop database if exists ivf_membership;
+create database ivf_membership;
+use ivf_membership;
+create table ivf_cbitmap (
+id int primary key,
+category varchar(50),
+score float,
+embedding vecf32(8)
+);
+insert into ivf_cbitmap values
+(1,  'cat1', 5.0, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]'),
+(2,  'cat1', 4.5, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]'),
+(3,  'cat2', 4.0, '[0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3]'),
+(4,  'cat2', 3.5, '[0.4,0.4,0.4,0.4,0.4,0.4,0.4,0.4]'),
+(5,  'cat3', 3.0, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]'),
+(6,  'cat3', 2.5, '[0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6]'),
+(7,  'cat1', 2.0, '[0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7]'),
+(8,  'cat2', 1.5, '[0.8,0.8,0.8,0.8,0.8,0.8,0.8,0.8]'),
+(9,  'cat3', 1.0, '[0.9,0.9,0.9,0.9,0.9,0.9,0.9,0.9]'),
+(10, 'cat1', 0.5, '[1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0]');
+create index idx_cbitmap using ivfflat on ivf_cbitmap(embedding) lists=2 op_type 'vector_l2_ops';
+select id, category, score from ivf_cbitmap
+where category = 'cat1' and score > 2.0
+order by l2_distance(embedding, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]')
+limit 3 by rank with option 'mode=pre';
+id    category    score
+1    cat1    5.0
+2    cat1    4.5
+create table ivf_croaring (
+id bigint primary key,
+category varchar(50),
+score float,
+embedding vecf32(8)
+);
+insert into ivf_croaring values
+(200000001, 'cat1', 5.0, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]'),
+(200000002, 'cat1', 4.5, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]'),
+(200000003, 'cat2', 4.0, '[0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3]'),
+(200000004, 'cat2', 3.5, '[0.4,0.4,0.4,0.4,0.4,0.4,0.4,0.4]'),
+(200000005, 'cat3', 3.0, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]'),
+(200000006, 'cat3', 2.5, '[0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6]'),
+(200000007, 'cat1', 2.0, '[0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7]'),
+(200000008, 'cat2', 1.5, '[0.8,0.8,0.8,0.8,0.8,0.8,0.8,0.8]'),
+(200000009, 'cat3', 1.0, '[0.9,0.9,0.9,0.9,0.9,0.9,0.9,0.9]'),
+(200000010, 'cat1', 0.5, '[1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0]');
+create index idx_croaring using ivfflat on ivf_croaring(embedding) lists=2 op_type 'vector_l2_ops';
+select id, category, score from ivf_croaring
+where category = 'cat1' and score > 2.0
+order by l2_distance(embedding, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]')
+limit 3 by rank with option 'mode=pre';
+id    category    score
+200000001    cat1    5.0
+200000002    cat1    4.5
+create table ivf_bloom (
+id varchar(64) primary key,
+category varchar(50),
+score float,
+embedding vecf32(8)
+);
+insert into ivf_bloom values
+('v01', 'cat1', 5.0, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]'),
+('v02', 'cat1', 4.5, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]'),
+('v03', 'cat2', 4.0, '[0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3]'),
+('v04', 'cat2', 3.5, '[0.4,0.4,0.4,0.4,0.4,0.4,0.4,0.4]'),
+('v05', 'cat3', 3.0, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]'),
+('v06', 'cat3', 2.5, '[0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6]'),
+('v07', 'cat1', 2.0, '[0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7]'),
+('v08', 'cat2', 1.5, '[0.8,0.8,0.8,0.8,0.8,0.8,0.8,0.8]'),
+('v09', 'cat3', 1.0, '[0.9,0.9,0.9,0.9,0.9,0.9,0.9,0.9]'),
+('v10', 'cat1', 0.5, '[1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0]');
+create index idx_bloom using ivfflat on ivf_bloom(embedding) lists=2 op_type 'vector_l2_ops';
+select id, category, score from ivf_bloom
+where category = 'cat1' and score > 2.0
+order by l2_distance(embedding, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]')
+limit 3 by rank with option 'mode=pre';
+id    category    score
+v01    cat1    5.0
+v02    cat1    4.5
+set ivf_preload_entries = 0;
+set probe_limit = 5;
+drop database ivf_membership;
