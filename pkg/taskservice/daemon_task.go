@@ -339,6 +339,12 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 	// Pause must be idempotent; repeated pause requests should not call activeRoutine.Pause again.
 	if tk.TaskStatus != task.TaskStatus_PauseRequested {
 		if tk.TaskStatus == task.TaskStatus_Paused {
+			if t.runner.isPauseTaskCompleted(tk.ID) {
+				t.runner.logger.Debug("cdc.task.pause.skip.completed",
+					zap.Uint64("task-id", tk.ID),
+					zap.String("task-name", taskNameFromDetails(tk)))
+				return nil
+			}
 			t.runner.logger.Debug("cdc.task.pause.skip.already-paused",
 				zap.Uint64("task-id", tk.ID),
 				zap.String("task-name", taskNameFromDetails(tk)))
@@ -350,6 +356,7 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 			zap.String("current-status", tk.TaskStatus.String()))
 		return nil
 	}
+	t.runner.clearPauseTaskCompleted(tk.ID)
 	if t.runner.exists(tk.ID) {
 		ar := t.task.activeRoutine.Load()
 		if ar == nil || *ar == nil {
@@ -392,7 +399,45 @@ func (r *taskRunner) pauseTaskCompleted(ctx context.Context, tk task.DaemonTask)
 			zap.Error(err))
 		return err
 	}
+	r.markPauseTaskCompleted(tk.ID)
 	return nil
+}
+
+func (r *taskRunner) markPauseTaskCompleted(id uint64) {
+	r.pauseCompletedTasks.Lock()
+	defer r.pauseCompletedTasks.Unlock()
+	r.pauseCompletedTasks.m[id] = struct{}{}
+}
+
+func (r *taskRunner) clearPauseTaskCompleted(id uint64) {
+	r.pauseCompletedTasks.Lock()
+	defer r.pauseCompletedTasks.Unlock()
+	delete(r.pauseCompletedTasks.m, id)
+}
+
+func (r *taskRunner) isPauseTaskCompleted(id uint64) bool {
+	r.pauseCompletedTasks.Lock()
+	defer r.pauseCompletedTasks.Unlock()
+	_, ok := r.pauseCompletedTasks.m[id]
+	return ok
+}
+
+func (r *taskRunner) filterUncompletedPauseTasks(tasks []task.DaemonTask) []task.DaemonTask {
+	if len(tasks) == 0 {
+		return tasks
+	}
+	r.pauseCompletedTasks.Lock()
+	defer r.pauseCompletedTasks.Unlock()
+
+	n := 0
+	for _, tk := range tasks {
+		if _, ok := r.pauseCompletedTasks.m[tk.ID]; ok {
+			continue
+		}
+		tasks[n] = tk
+		n++
+	}
+	return tasks[:n]
 }
 
 type cancelTask struct {
@@ -765,11 +810,13 @@ func (r *taskRunner) pauseTasks(ctx context.Context) []task.DaemonTask {
 			WithTaskRunnerCond(EQ, r.runnerID),
 			WithTaskExecutorCond(EQ, task.TaskCode_InitCdc),
 		)
+		localPausedFinalize = r.filterUncompletedPauseTasks(localPausedFinalize)
 		laggedPausedFinalize = r.queryDaemonTasks(ctx,
 			WithTaskStatusCond(task.TaskStatus_Paused),
 			WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
 			WithTaskExecutorCond(EQ, task.TaskCode_InitCdc),
 		)
+		laggedPausedFinalize = r.filterUncompletedPauseTasks(laggedPausedFinalize)
 	}
 	tasks := r.mergeTasks(localPause, laggedPause, localPausedFinalize, laggedPausedFinalize)
 	if len(tasks) > 0 {
