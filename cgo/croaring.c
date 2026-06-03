@@ -14,25 +14,16 @@
 
 #include "croaring.h"
 #include "bitmap.h"
+#include "roaring.h"
 #include <stdlib.h>
 
-// Forward declarations of the CRoaring roaring64 C API we call. Declared here
-// (instead of including the large amalgamated roaring.h, which requires C11) so
-// this wrapper compiles cleanly under the cgo C99 toolchain; symbols resolve
-// from libroaring.a at link. Pinned to CRoaring 4.7.0.
-typedef struct roaring64_bitmap_s roaring64_bitmap_t;
-roaring64_bitmap_t *roaring64_bitmap_create(void);
-void roaring64_bitmap_free(roaring64_bitmap_t *r);
-void roaring64_bitmap_add_many(roaring64_bitmap_t *r, size_t n_args,
-                               const uint64_t *vals);
-bool roaring64_bitmap_contains(const roaring64_bitmap_t *r, uint64_t val);
-size_t roaring64_bitmap_portable_size_in_bytes(const roaring64_bitmap_t *r);
-size_t roaring64_bitmap_portable_serialize(const roaring64_bitmap_t *r,
-                                           char *buf);
-roaring64_bitmap_t *roaring64_bitmap_portable_deserialize_safe(const char *buf,
-                                                               size_t maxbytes);
-uint64_t roaring64_bitmap_get_cardinality(const roaring64_bitmap_t *r);
-bool roaring64_bitmap_run_optimize(roaring64_bitmap_t *r);
+// Include the real CRoaring header (the amalgamated roaring.h) so the roaring64
+// prototypes we call are the single source of truth: any upstream signature
+// change is a compile error here, not a silent ABI mismatch at link. roaring.h
+// requires C11 (it uses <stdatomic.h>), which is why the cgo C build is C11.
+// No version assert by design: a CRoaring upgrade compiles cleanly as long as
+// the signatures we use are unchanged, so bumps stay frictionless and a real
+// incompatibility still surfaces as a compile error.
 
 // Decode elemsz little-endian bytes (1/2/4/8) of a fixed integer into uint64
 // by zero-extension. Identical decode on build and probe keeps mapping stable.
@@ -57,23 +48,31 @@ bool mo_croaring_run_optimize(void *r) {
   return roaring64_bitmap_run_optimize((roaring64_bitmap_t *)r);
 }
 
-void mo_croaring_add_fixed(void *r, const void *key, size_t len, size_t elemsz,
+bool mo_croaring_add_fixed(void *r, const void *key, size_t len, size_t elemsz,
                            size_t nitem, const void *nullmap,
                            size_t nullmaplen) {
   (void)nullmaplen;
-  if (!r || elemsz == 0 || nitem == 0) return;
+  if (!r) return false;                        // no bitmap -> caller must error
+  if (elemsz == 0 || nitem == 0) return true;  // nothing to add
   const unsigned char *p = (const unsigned char *)key;
-  // Collect into a temp array and bulk-insert (roaring sorts + inserts in one
-  // pass, which is much faster than per-value add).
-  uint64_t *tmp = (uint64_t *)malloc(nitem * sizeof(uint64_t));
-  if (!tmp) return;
+  // Bulk-insert in fixed-size batches via a stack buffer: roaring sorts +
+  // inserts each batch in one pass (far faster than per-value add) WITHOUT the
+  // previous O(nitem) heap temp, whose silent NULL-on-OOM could leave the bitmap
+  // empty and then serialize as a valid-looking but membership-empty filter
+  // (dropping all matching rows). The stack buffer cannot fail to allocate.
+  enum { CHUNK = 2048 };
+  uint64_t buf[CHUNK];
   size_t cnt = 0;
   for (size_t i = 0, j = 0; i < nitem && j < len; i++, j += elemsz) {
     if (nullmap && bitmap_test((uint64_t *)nullmap, i)) continue;
-    tmp[cnt++] = mo_decode_uint(p + j, elemsz);
+    buf[cnt++] = mo_decode_uint(p + j, elemsz);
+    if (cnt == CHUNK) {
+      roaring64_bitmap_add_many((roaring64_bitmap_t *)r, cnt, buf);
+      cnt = 0;
+    }
   }
-  roaring64_bitmap_add_many((roaring64_bitmap_t *)r, cnt, tmp);
-  free(tmp);
+  if (cnt) roaring64_bitmap_add_many((roaring64_bitmap_t *)r, cnt, buf);
+  return true;
 }
 
 bool mo_croaring_contains(void *r, uint64_t val) {

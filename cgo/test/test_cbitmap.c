@@ -24,10 +24,57 @@
 // A generous bit cap for the feasible tests (1M bits).
 #define MAXBITS (1ULL << 20)
 
+// Test shim: build and return the handle, or NULL on any non-OK status, so the
+// existing CHECK(f != NULL / f == NULL) feasibility assertions keep working
+// against the status-returning mo_cbitmap_build_fixed API.
+static void *cbm_build(const void *key, size_t len, size_t elemsz, size_t nitem,
+                       const void *nullmap, size_t nullmaplen, uint64_t max_bits,
+                       int use_offset) {
+    void *f = NULL;
+    mo_cbitmap_build_fixed(key, len, elemsz, nitem, nullmap, nullmaplen,
+                           max_bits, use_offset, &f);
+    return f;
+}
+
+// Exercises the explicit build status codes directly (the shim above hides them).
+void test_status() {
+    printf("Testing build status codes...\n");
+    void *f = NULL;
+    uint32_t k[] = {1, 2, 3};
+
+    // Feasible -> OK, handle set.
+    int st = mo_cbitmap_build_fixed(k, sizeof(k), sizeof(uint32_t), 3, NULL, 0,
+                                    MAXBITS, 0, &f);
+    CHECK(st == MO_CBITMAP_OK && f != NULL, "feasible build -> OK + handle");
+    mo_cbitmap_free(f);
+
+    // Span exceeds cap -> RANGE_TOO_LARGE (caller falls back to CRoaring), no handle.
+    uint32_t big[] = {999};
+    f = (void *)0x1;
+    st = mo_cbitmap_build_fixed(big, sizeof(big), sizeof(uint32_t), 1, NULL, 0,
+                                100, 0, &f);
+    CHECK(st == MO_CBITMAP_RANGE_TOO_LARGE && f == NULL,
+          "over-cap -> RANGE_TOO_LARGE + NULL handle");
+
+    // Unsupported element width on a non-empty column -> INVALID_INPUT.
+    uint8_t weird[3] = {1, 2, 3};
+    f = (void *)0x1;
+    st = mo_cbitmap_build_fixed(weird, sizeof(weird), 3 /*not 1/2/4/8*/, 1, NULL,
+                                0, MAXBITS, 0, &f);
+    CHECK(st == MO_CBITMAP_INVALID_INPUT && f == NULL,
+          "bad elemsz -> INVALID_INPUT + NULL handle");
+
+    // NULL out -> INVALID_INPUT (no crash).
+    st = mo_cbitmap_build_fixed(k, sizeof(k), sizeof(uint32_t), 3, NULL, 0,
+                                MAXBITS, 0, NULL);
+    CHECK(st == MO_CBITMAP_INVALID_INPUT, "NULL out -> INVALID_INPUT");
+    printf("build status codes passed\n");
+}
+
 void test_build_contain() {
     printf("Testing build_fixed + contain...\n");
     uint32_t keys[] = {1, 2, 100, 4096};
-    void *f = mo_cbitmap_build_fixed(keys, sizeof(keys), sizeof(uint32_t), 4,
+    void *f = cbm_build(keys, sizeof(keys), sizeof(uint32_t), 4,
                                      NULL, 0, MAXBITS, 0);
     CHECK(f != NULL, "build should succeed");
     CHECK(mo_cbitmap_contain(f, 1), "1 present");
@@ -47,7 +94,7 @@ void test_test_fixed_and_nulls() {
     uint64_t nullmap = 0;
     bitmap_set(&nullmap, 1);
     int64_t keys[] = {10, 20, 30};
-    void *f = mo_cbitmap_build_fixed(keys, sizeof(keys), sizeof(int64_t), 3,
+    void *f = cbm_build(keys, sizeof(keys), sizeof(int64_t), 3,
                                      &nullmap, sizeof(nullmap), MAXBITS, 0);
     CHECK(f != NULL, "build ok");
     CHECK(mo_cbitmap_contain(f, 10), "10 present");
@@ -78,7 +125,7 @@ void test_test_fixed_and_nulls() {
 void test_serialize_roundtrip() {
     printf("Testing serialize/deserialize...\n");
     uint32_t keys[] = {7, 64, 65, 1000};
-    void *f = mo_cbitmap_build_fixed(keys, sizeof(keys), sizeof(uint32_t), 4,
+    void *f = cbm_build(keys, sizeof(keys), sizeof(uint32_t), 4,
                                      NULL, 0, MAXBITS, 0);
     CHECK(f != NULL, "build ok");
 
@@ -106,13 +153,13 @@ void test_feasibility_gate() {
     printf("Testing feasibility gate...\n");
     // Max value 999 with a 100-bit cap -> infeasible -> NULL (caller falls back).
     uint32_t big[] = {999};
-    void *f = mo_cbitmap_build_fixed(big, sizeof(big), sizeof(uint32_t), 1,
+    void *f = cbm_build(big, sizeof(big), sizeof(uint32_t), 1,
                                      NULL, 0, 100, 0);
     CHECK(f == NULL, "max value exceeds cap -> NULL");
 
     // Max value 50 with a 100-bit cap -> feasible.
     uint32_t ok[] = {50};
-    void *f2 = mo_cbitmap_build_fixed(ok, sizeof(ok), sizeof(uint32_t), 1,
+    void *f2 = cbm_build(ok, sizeof(ok), sizeof(uint32_t), 1,
                                       NULL, 0, 100, 0);
     CHECK(f2 != NULL, "within cap -> ok");
     CHECK(mo_cbitmap_contain(f2, 50), "50 present");
@@ -123,7 +170,7 @@ void test_feasibility_gate() {
 void test_empty_and_nil() {
     printf("Testing empty set + NULL safety...\n");
     // Empty input yields a valid filter that matches nothing.
-    void *f = mo_cbitmap_build_fixed(NULL, 0, sizeof(uint32_t), 0, NULL, 0, MAXBITS, 0);
+    void *f = cbm_build(NULL, 0, sizeof(uint32_t), 0, NULL, 0, MAXBITS, 0);
     CHECK(f != NULL, "empty build -> valid empty filter");
     CHECK(!mo_cbitmap_contain(f, 0), "empty contains nothing");
     CHECK(!mo_cbitmap_contain(f, 1), "empty contains nothing");
@@ -150,7 +197,7 @@ void test_width_compat() {
     // Build from a 4-byte 42; probing the same value at other widths must hit
     // the same bit (identical LE zero-extension on both sides).
     uint32_t k32 = 42;
-    void *f = mo_cbitmap_build_fixed(&k32, sizeof(k32), sizeof(uint32_t), 1,
+    void *f = cbm_build(&k32, sizeof(k32), sizeof(uint32_t), 1,
                                      NULL, 0, MAXBITS, 0);
     CHECK(f != NULL, "build ok");
     CHECK(mo_cbitmap_contain(f, 42), "42 present");
@@ -174,11 +221,11 @@ void test_offset() {
     // the legacy value-indexed layout is infeasible (max ~10M), but the offset
     // layout (base=min, span=3) fits.
     int64_t keys[] = {10000000, 10000001, 10000002, 10000003};
-    void *legacy = mo_cbitmap_build_fixed(keys, sizeof(keys), sizeof(int64_t), 4,
+    void *legacy = cbm_build(keys, sizeof(keys), sizeof(int64_t), 4,
                                           NULL, 0, 100, 0);
     CHECK(legacy == NULL, "legacy layout infeasible for high values under tiny cap");
 
-    void *f = mo_cbitmap_build_fixed(keys, sizeof(keys), sizeof(int64_t), 4,
+    void *f = cbm_build(keys, sizeof(keys), sizeof(int64_t), 4,
                                      NULL, 0, 100, 1);
     CHECK(f != NULL, "offset layout feasible (span fits cap)");
     CHECK(mo_cbitmap_contain(f, 10000000), "min present");
@@ -217,6 +264,7 @@ int main() {
     test_empty_and_nil();
     test_width_compat();
     test_offset();
+    test_status();
     printf("All cbitmap tests passed!\n");
     return 0;
 }

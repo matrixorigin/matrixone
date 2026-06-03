@@ -33,7 +33,10 @@ void mo_croaring_free(void *r);
 //   nitem:      number of rows
 //   nullmap:    optional MO null bitmap (uint64 words) or NULL
 //   nullmaplen: bytes of nullmap
-void mo_croaring_add_fixed(void *r, const void *key, size_t len, size_t elemsz,
+// Returns true on success, false only when r is NULL (the caller must then
+// surface an error rather than serialize an empty filter). Adds in fixed-size
+// batches with no large temporary allocation.
+bool mo_croaring_add_fixed(void *r, const void *key, size_t len, size_t elemsz,
                            size_t nitem, const void *nullmap, size_t nullmaplen);
 
 // Single membership test (value already decoded to uint64).

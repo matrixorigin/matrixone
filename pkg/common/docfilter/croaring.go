@@ -80,7 +80,9 @@ func buildCRoaringBytes(v *vector.Vector, runOpt bool) ([]byte, error) {
 
 	data, dataLen, elemsz, nitem, nullPtr, nullLen := vecFixedArgs(v)
 	if data != nil {
-		C.mo_croaring_add_fixed(r, data, dataLen, elemsz, nitem, nullPtr, nullLen)
+		if !bool(C.mo_croaring_add_fixed(r, data, dataLen, elemsz, nitem, nullPtr, nullLen)) {
+			return nil, moerr.NewInternalErrorNoCtx("croaring: add failed")
+		}
 	}
 	if runOpt {
 		C.mo_croaring_run_optimize(r)

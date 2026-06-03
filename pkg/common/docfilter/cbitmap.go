@@ -49,7 +49,11 @@ const MaxCbitmapBits = uint64(1) << 23
 // value-indexed (offset-off) bound; with CbitmapUseOffset the actual build
 // gates on the value SPAN (max-min), which is never larger.
 func CbitmapFeasible(maxVal uint64) bool {
-	return maxVal+1 <= MaxCbitmapBits
+	// Written as maxVal < MaxCbitmapBits (not maxVal+1 <= MaxCbitmapBits) so that
+	// maxVal == math.MaxUint64 — what a negative/maxed integer PK zero-extends to
+	// — does not wrap maxVal+1 to 0 and wrongly report a 2^64-wide range as
+	// feasible. Equivalent to "nbits = maxVal+1 fits within MaxCbitmapBits".
+	return maxVal < MaxCbitmapBits
 }
 
 // BuildIntegerFilter builds the best exact filter for an integer doc_id
@@ -119,11 +123,19 @@ func buildCbitmapBytesCap(v *vector.Vector, maxBits uint64, useOffset bool) (dat
 	if useOffset {
 		off = 1
 	}
-	f := C.mo_cbitmap_build_fixed(cdata, dataLen, elemsz, nitem, nullPtr, nullLen,
-		C.uint64_t(maxBits), off)
-	if f == nil {
-		// id range exceeds maxBits (or OOM): fall back to CRoaring.
+	var f unsafe.Pointer
+	status := C.mo_cbitmap_build_fixed(cdata, dataLen, elemsz, nitem, nullPtr, nullLen,
+		C.uint64_t(maxBits), off, &f)
+	switch status {
+	case C.MO_CBITMAP_RANGE_TOO_LARGE:
+		// The ONLY status that means "fall back to CRoaring": ok=false, no error.
 		return nil, false, nil
+	case C.MO_CBITMAP_OOM:
+		return nil, false, moerr.NewInternalErrorNoCtx("cbitmap: build out of memory")
+	case C.MO_CBITMAP_OK:
+		// proceed below
+	default: // MO_CBITMAP_INVALID_INPUT or any unexpected status
+		return nil, false, moerr.NewInternalErrorNoCtx("cbitmap: invalid build input")
 	}
 	defer C.mo_cbitmap_free(f)
 	b, err := cbitmapSerialize(f)

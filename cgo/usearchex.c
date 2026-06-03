@@ -40,7 +40,11 @@ static int filtered_search_membership_cb(usearch_key_t key, void *data) {
         case USEARCHEX_FILTER_CROARING:
             return mo_croaring_contains(mf->filter, (uint64_t)key) ? 1 : 0;
         default:
-            return 1;
+            // Unknown kind: fail CLOSED (exclude). Keeping the candidate here
+            // would silently disable filtering for the whole search. The Go
+            // caller also validates the kind before entering this path, so this
+            // is defense in depth.
+            return 0;
     }
 }
 

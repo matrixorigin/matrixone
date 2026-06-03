@@ -26,14 +26,18 @@ import (
 // (used for non-integer PKs). Matches the previous fulltext/IVF values.
 const bloomFpProbability = 0.001
 
-// MembershipFilter is a primary-key membership filter (fulltext calls the PK
-// doc_id). It is the PRODUCER view: its method set is the consumer interface
+// MembershipFilter is the primary-key membership PROBE contract (fulltext calls
+// the PK doc_id). Its method set is the consumer interface
 // engine.MembershipFilter (Test/TestVector/Valid/Exact/Free) plus Share — so a
 // value can be stored directly in engine.FilterHint.BF without this package
-// importing engine (a pkg/common -> pkg/vm/engine layering inversion) — plus
-// the CHandle/CKind cgo bridge below. The consumer half is kept compatible with
-// engine.MembershipFilter by a compile-time assertion in package disttae; that
-// shared method set's single source of truth lives in engine.
+// importing engine (a pkg/common -> pkg/vm/engine layering inversion). The
+// consumer half is kept compatible with engine.MembershipFilter by a
+// compile-time assertion in package disttae; that shared method set's single
+// source of truth lives in engine.
+//
+// This is intentionally free of any cgo/unsafe detail: a general (non-C-backed)
+// filter implementation only needs to probe. The C-bridge methods live on the
+// separate CFilter contract below, which the cgo search bridge type-asserts.
 //
 // Callers obtain one via New (from tagged bytes produced by Build) and never
 // need to know which concrete structure (cbitmap / CRoaring / bloom) backs it.
@@ -51,11 +55,18 @@ type MembershipFilter interface {
 	Free()
 	// Share returns a filter for one parallel reader (refcount or per-reader wrapper).
 	Share() MembershipFilter
+}
 
+// CFilter is the C-backed ADAPTER contract: a MembershipFilter that can also
+// expose its underlying C handle + structure tag for the cgo vector-index
+// filtered-search bridge (pkg/vectorindex/usearchex), whose C predicate tests
+// each candidate key against the structure directly. The bridge type-asserts a
+// MembershipFilter to CFilter, so general filters that cannot back a C search
+// are not forced to expose unsafe.Pointer details.
+type CFilter interface {
+	MembershipFilter
 	// CHandle returns the underlying C handle (mo_cbitmap_t* / roaring64 /
-	// bloomfilter_t*) for the cgo vector-index filtered-search bridge
-	// (pkg/vectorindex/usearchex), whose C predicate tests each candidate key
-	// against the structure directly.
+	// bloomfilter_t*).
 	CHandle() unsafe.Pointer
 	// CKind reports the structure tag (TagBloom / TagCRoaring / TagCbitmap),
 	// telling the bridge which C membership test to dispatch.
@@ -66,6 +77,10 @@ var (
 	_ MembershipFilter = (*CbitmapFilter)(nil)
 	_ MembershipFilter = (*CRoaringFilter)(nil)
 	_ MembershipFilter = (*cbloomFilter)(nil)
+	// The concrete C-backed filters also satisfy the cgo-bridge adapter.
+	_ CFilter = (*CbitmapFilter)(nil)
+	_ CFilter = (*CRoaringFilter)(nil)
+	_ CFilter = (*cbloomFilter)(nil)
 )
 
 // Build serializes the best doc_id filter for the whole vector and returns the

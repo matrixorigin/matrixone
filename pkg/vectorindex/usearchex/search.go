@@ -55,13 +55,33 @@ func FilteredSearchUnsafeWithMembership(
 		return []usearch.Key{}, []float32{}, nil
 	}
 
-	// Extract the filter's C handle + kind. A nil/invalid filter leaves fptr
-	// NULL, which the C predicate treats as "keep all".
+	// Extract the filter's C handle + kind. A nil filter means "unfiltered" and
+	// leaves fptr NULL (the C predicate keeps all). But a non-nil filter that is
+	// invalid, of an unknown kind, or has a nil handle is an ERROR — silently
+	// treating any of those as keep-all would skip intended filtering and return
+	// extra rows.
 	var fptr unsafe.Pointer
 	var kind C.int
-	if f != nil && f.Valid() {
-		fptr = f.CHandle()
-		kind = C.int(f.CKind())
+	if f != nil {
+		if !f.Valid() {
+			return nil, nil, moerr.NewInternalErrorNoCtx("usearchex: invalid (non-nil) membership filter")
+		}
+		// The C search predicate needs the underlying handle + kind, which live
+		// on the C-bridge adapter contract (not the general probe interface).
+		cf, ok := f.(docfilter.CFilter)
+		if !ok {
+			return nil, nil, moerr.NewInternalErrorNoCtx("usearchex: membership filter does not support the C search bridge")
+		}
+		switch cf.CKind() {
+		case docfilter.TagBloom, docfilter.TagCRoaring, docfilter.TagCbitmap:
+		default:
+			return nil, nil, moerr.NewInternalErrorNoCtx("usearchex: unknown membership filter kind")
+		}
+		fptr = cf.CHandle()
+		if fptr == nil {
+			return nil, nil, moerr.NewInternalErrorNoCtx("usearchex: membership filter has nil handle")
+		}
+		kind = C.int(cf.CKind())
 	}
 
 	keys = make([]usearch.Key, limit)

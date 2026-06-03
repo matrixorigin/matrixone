@@ -136,8 +136,11 @@ func TestCFilterBridge(t *testing.T) {
 			require.NoError(t, err)
 			defer f.Free()
 
-			require.Equal(t, tc.wantKind, f.CKind())
-			require.NotNil(t, f.CHandle())
+			// CHandle/CKind live on the C-bridge adapter, not the probe interface.
+			cf, ok := f.(CFilter)
+			require.True(t, ok, "New result must satisfy CFilter")
+			require.Equal(t, tc.wantKind, cf.CKind())
+			require.NotNil(t, cf.CHandle())
 		})
 	}
 }

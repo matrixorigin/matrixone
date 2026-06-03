@@ -17,6 +17,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+// WARNING: HOST-ENDIAN serialization (deliberate, for speed). mo_cbitmap_serialize
+// memcpy's the [base][nbits][raw words] payload in the machine's native byte
+// order, so a payload is only valid when exchanged between same-endianness MO
+// nodes. This differs from the CRoaring filter, which uses CRoaring's PORTABLE
+// serialization. All current MO targets are little-endian; this assert turns a
+// big-endian build into a loud compile error rather than letting it silently
+// emit payloads other nodes would misread. If MO ever runs on a big-endian or
+// mixed-endian deployment, port mo_cbitmap_serialize/deserialize to explicit
+// little-endian (de)serialization first.
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__)
+#error "cbitmap serialization is host-endian and assumes little-endian; port to portable (de)serialization before building for a big-endian target"
+#endif
+
 // A dense bitset over [base, base+nbits). bit i represents value base+i, so the
 // structure is sized to the value SPAN, not the max value. When the builder is
 // told not to offset, base is 0 and bit i == value i (legacy layout). words
@@ -38,11 +51,19 @@ static inline uint64_t mo_cbm_decode(const unsigned char *p, size_t elemsz) {
   return x;
 }
 
-void *mo_cbitmap_build_fixed(const void *key, size_t len, size_t elemsz,
-                             size_t nitem, const void *nullmap,
-                             size_t nullmaplen, uint64_t max_bits,
-                             int use_offset) {
+int mo_cbitmap_build_fixed(const void *key, size_t len, size_t elemsz,
+                           size_t nitem, const void *nullmap,
+                           size_t nullmaplen, uint64_t max_bits,
+                           int use_offset, void **out) {
   (void)nullmaplen;
+  if (!out) return MO_CBITMAP_INVALID_INPUT;
+  *out = NULL;
+  // A non-empty column must have a supported integer width; reject anything
+  // else rather than silently mis-decoding it.
+  if (nitem != 0 &&
+      elemsz != 1 && elemsz != 2 && elemsz != 4 && elemsz != 8) {
+    return MO_CBITMAP_INVALID_INPUT;
+  }
   const unsigned char *p = (const unsigned char *)key;
 
   // Pass 1: find the min and max non-null value. With use_offset the bitset is
@@ -70,10 +91,10 @@ void *mo_cbitmap_build_fixed(const void *key, size_t len, size_t elemsz,
   // Feasibility gate: bail (caller falls back to the compact CRoaring filter)
   // if the bit count would exceed the cap. Checking span >= max_bits also
   // avoids the span+1 overflow for pathological ranges.
-  if (any && span >= max_bits) return NULL;
+  if (any && span >= max_bits) return MO_CBITMAP_RANGE_TOO_LARGE;
 
   mo_cbitmap_t *f = (mo_cbitmap_t *)malloc(sizeof(mo_cbitmap_t));
-  if (!f) return NULL;
+  if (!f) return MO_CBITMAP_OOM;
   f->base = base;
   f->nbits = any ? (span + 1) : 0;
   f->words = NULL;
@@ -82,7 +103,7 @@ void *mo_cbitmap_build_fixed(const void *key, size_t len, size_t elemsz,
     f->words = (uint64_t *)calloc(nwords, sizeof(uint64_t));
     if (!f->words) {
       free(f);
-      return NULL;
+      return MO_CBITMAP_OOM;
     }
   }
 
@@ -93,7 +114,8 @@ void *mo_cbitmap_build_fixed(const void *key, size_t len, size_t elemsz,
       bitmap_set(f->words, mo_cbm_decode(p + j, elemsz) - base);
     }
   }
-  return f;
+  *out = f;
+  return MO_CBITMAP_OK;
 }
 
 void mo_cbitmap_free(void *f) {

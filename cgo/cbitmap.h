@@ -28,6 +28,15 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// Build status codes for mo_cbitmap_build_fixed. They disambiguate the reasons
+// a build produces no filter so the Go caller reacts correctly: RANGE_TOO_LARGE
+// -> fall back to the compact CRoaring filter; OOM / INVALID_INPUT -> surface an
+// error (never silently disable filtering, which would drop matching rows).
+#define MO_CBITMAP_OK              0  // *out set to a valid filter (may be empty)
+#define MO_CBITMAP_RANGE_TOO_LARGE 1  // value span >= max_bits
+#define MO_CBITMAP_OOM             2  // allocation failed
+#define MO_CBITMAP_INVALID_INPUT   3  // bad arguments (e.g. elemsz not 1/2/4/8, NULL out)
+
 // Build a dense bitset from a fixed-width integer column read directly from the
 // vector's data buffer (one cgo call).
 //   key:        pointer to the fixed column data (may be NULL when nitem == 0)
@@ -40,13 +49,16 @@
 //   use_offset: when nonzero, base the bitset at min(values) so its size is the
 //               value SPAN (max-min) rather than the max value; 0 keeps the
 //               legacy value-indexed layout (base 0).
-// Returns NULL when the bit count would exceed max_bits (caller falls back to
-// CRoaring) or on allocation failure. An empty input yields a valid empty
-// bitset that matches nothing (not NULL).
-void *mo_cbitmap_build_fixed(const void *key, size_t len, size_t elemsz,
-                             size_t nitem, const void *nullmap,
-                             size_t nullmaplen, uint64_t max_bits,
-                             int use_offset);
+//   out:        on MO_CBITMAP_OK receives the filter handle (an empty input
+//               yields a valid empty filter that matches nothing); set to NULL
+//               on every non-OK status.
+// Returns one of the MO_CBITMAP_* status codes above. The status — not a NULL
+// return — tells the caller whether to fall back (RANGE_TOO_LARGE) or to error
+// (OOM / INVALID_INPUT); the two must not be conflated.
+int mo_cbitmap_build_fixed(const void *key, size_t len, size_t elemsz,
+                           size_t nitem, const void *nullmap,
+                           size_t nullmaplen, uint64_t max_bits,
+                           int use_offset, void **out);
 void mo_cbitmap_free(void *f);
 
 // Single membership test (value already decoded to uint64).

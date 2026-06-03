@@ -379,8 +379,9 @@ func TestAppendVectorSQLLiteral(t *testing.T) {
 		buf, err := AppendVectorSQLLiteral(ctx, vec, 0, nil)
 		require.NoError(t, err)
 		// 10 bits is 2 bytes. 0x3FF -> [0x03, 0xFF] (big endian encoded)
-		// EncodeUint64 gives [0xFF, 0x03, 0x00...] so slice to 2 bytes is [0xFF, 0x03], reversed is [0x03, 0xFF]
-		require.Equal(t, "'\x03\xff'", string(buf))
+		// EncodeUint64 gives [0xFF, 0x03, 0x00...] so slice to 2 bytes is [0xFF, 0x03], reversed is [0x03, 0xFF].
+		// Emitted as a safe hex literal x'..' (not raw bytes inside quotes).
+		require.Equal(t, "x'03ff'", string(buf))
 	})
 
 	t.Run("ints", func(t *testing.T) {

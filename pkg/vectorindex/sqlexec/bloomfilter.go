@@ -109,9 +109,11 @@ func AppendVectorSQLLiteral(ctx context.Context, vec *vector.Vector, row int, bu
 		byteLength := (bitLength + 7) / 8
 		b := types.EncodeUint64(&value)[:byteLength]
 		slices.Reverse(b)
-		buf = append(buf, '\'')
-		buf = append(buf, b...)
-		buf = append(buf, '\'')
+		// Emit as a hex literal x'..' rather than quoting the raw bytes: the
+		// big-endian bit bytes can contain quotes, backslashes, or comment-like
+		// sequences that would otherwise break out of the string literal and
+		// alter the IN (...) SQL this feeds into. Hex is byte-identical and safe.
+		buf = AppendHex(buf, b)
 	case types.T_int8:
 		value := vector.GetFixedAtWithTypeCheck[int8](vec, row)
 		buf = AppendInt64(buf, int64(value))

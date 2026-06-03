@@ -23,6 +23,15 @@
 // caller falls back to a CBloomFilter. Build produces a tagged payload and New
 // reconstructs the right structure from the tag; callers hold the result behind
 // the MembershipFilter interface and never see the concrete structure.
+//
+// WARNING — transport endianness: the cbitmap payload (TagCbitmap) is serialized
+// in HOST byte order (a raw memcpy of [base][nbits][bitmap words]) for speed, so
+// it is only valid when exchanged between MO nodes of the SAME endianness. The
+// CRoaring (TagCRoaring) and CBloomFilter (TagBloom) payloads use portable
+// serialization and are endianness-independent. All current MO targets are
+// little-endian and a big-endian build fails to compile (see the static guard in
+// cgo/cbitmap.c). Before deploying MO on a big-endian or mixed-endian cluster,
+// switch cbitmap (de)serialization to an explicit little-endian format.
 package docfilter
 
 import (
