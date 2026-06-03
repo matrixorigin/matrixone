@@ -21,12 +21,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 // sqlTxnDuration is the per-query transaction budget for sweep reference reads.
 const sqlTxnDuration = 5 * time.Minute
+
+// Package-level function variables so tests can stub the real SQL calls.
+var (
+	runTxnWithSqlContext = sqlexec.RunTxnWithSqlContext
+	runSql               = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		return sqlexec.RunSql(sqlproc, sql)
+	}
+)
 
 // sqlEnv implements sweepEnv over the real CN SQL executor.
 type sqlEnv struct {
@@ -38,10 +47,10 @@ type sqlEnv struct {
 // listAccountIDs reads all live account ids from the sys-account mo_account view.
 func (e *sqlEnv) listAccountIDs(ctx context.Context) ([]uint32, error) {
 	var ids []uint32
-	err := sqlexec.RunTxnWithSqlContext(ctx, e.engine, e.txnClient, e.uuid,
+	err := runTxnWithSqlContext(ctx, e.engine, e.txnClient, e.uuid,
 		catalog.System_Account, sqlTxnDuration, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, _ any) error {
-			res, err := sqlexec.RunSql(sqlproc, "SELECT account_id FROM mo_catalog.mo_account")
+			res, err := runSql(sqlproc, "SELECT account_id FROM mo_catalog.mo_account")
 			if err != nil {
 				return err
 			}
@@ -79,13 +88,13 @@ type acctRefs struct {
 // datalinkColumns lists the account's datalink-typed, non-hidden, user-table columns.
 func (r *acctRefs) datalinkColumns(ctx context.Context) ([]columnRef, error) {
 	var cols []columnRef
-	err := sqlexec.RunTxnWithSqlContext(ctx, r.env.engine, r.env.txnClient, r.env.uuid,
+	err := runTxnWithSqlContext(ctx, r.env.engine, r.env.txnClient, r.env.uuid,
 		r.accountID, sqlTxnDuration, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, _ any) error {
 			const sql = "SELECT att_database, att_relname, attname, atttyp FROM mo_catalog.mo_columns " +
 				"WHERE att_database NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics') " +
 				"AND att_is_hidden = 0"
-			res, err := sqlexec.RunSql(sqlproc, sql)
+			res, err := runSql(sqlproc, sql)
 			if err != nil {
 				return err
 			}
@@ -128,10 +137,10 @@ func (r *acctRefs) scanColumn(ctx context.Context, ref columnRef, snapshotHint s
 	}
 
 	var values []string
-	err := sqlexec.RunTxnWithSqlContext(ctx, r.env.engine, r.env.txnClient, r.env.uuid,
+	err := runTxnWithSqlContext(ctx, r.env.engine, r.env.txnClient, r.env.uuid,
 		r.accountID, sqlTxnDuration, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, _ any) error {
-			res, err := sqlexec.RunSql(sqlproc, sql)
+			res, err := runSql(sqlproc, sql)
 			if err != nil {
 				return err
 			}
@@ -157,10 +166,10 @@ func (r *acctRefs) scanColumn(ctx context.Context, ref columnRef, snapshotHint s
 // liveSnapshots lists the account's currently-live snapshots.
 func (r *acctRefs) liveSnapshots(ctx context.Context) ([]snapshotRef, error) {
 	var snaps []snapshotRef
-	err := sqlexec.RunTxnWithSqlContext(ctx, r.env.engine, r.env.txnClient, r.env.uuid,
+	err := runTxnWithSqlContext(ctx, r.env.engine, r.env.txnClient, r.env.uuid,
 		r.accountID, sqlTxnDuration, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, _ any) error {
-			res, err := sqlexec.RunSql(sqlproc, "SELECT sname, ts FROM mo_catalog.mo_snapshots")
+			res, err := runSql(sqlproc, "SELECT sname, ts FROM mo_catalog.mo_snapshots")
 			if err != nil {
 				return err
 			}
