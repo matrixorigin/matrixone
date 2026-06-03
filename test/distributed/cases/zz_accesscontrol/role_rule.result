@@ -139,6 +139,7 @@ select * from db1.t1 order by a;
 a    age
 1    1
 2    2
+100    30
 create role test_rule_role_alias_a;
 create role test_rule_role_alias_b;
 alter role test_rule_role_alias_a add rule "select a, age from db1.t1 where age >= 1" on table db1.t1;

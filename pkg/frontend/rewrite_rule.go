@@ -340,6 +340,9 @@ type rewriteRuleOutputColumn struct {
 	expr string
 }
 
+// Rewrite rules are merged as opaque SELECT branches with UNION ALL when their
+// output-column signatures match exactly. Top-level ORDER BY / LIMIT are allowed
+// and remain scoped inside each branch.
 func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string) (string, bool, error) {
 	leftColumns, ok, err := rewriteRuleOutputColumns(ctx, leftRule)
 	if err != nil {

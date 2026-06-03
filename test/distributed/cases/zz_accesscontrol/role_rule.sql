@@ -127,7 +127,7 @@ alter role test_rule_role_validate add rule "select a, age from db1.t1 where age
 alter role test_rule_role_validate add rule "delete from db1.t1 where a = 1" on table db1.t1;
 show rules on role test_rule_role_validate;
 
--- 15. ORDER BY/LIMIT rules are not merged and the later compatible rule wins
+-- 15. ORDER BY/LIMIT rules with the same output columns are merged
 create role test_rule_role_unmergeable_a;
 create role test_rule_role_unmergeable_b;
 alter role test_rule_role_unmergeable_a add rule "select a, age from db1.t1 where age > 28 order by a limit 1" on table db1.t1;
