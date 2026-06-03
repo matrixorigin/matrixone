@@ -824,6 +824,8 @@ func CDCPauseTaskCompleteHook(sqlExecutorFactory func() ie.InternalExecutor) tas
 		if !ok || details.CreateCdc == nil {
 			return nil
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+		defer cancel()
 		return updateCDCTaskState(
 			ctx,
 			sqlExecutorFactory,

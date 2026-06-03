@@ -845,6 +845,26 @@ func (tie *testIE) ApplySessionOverride(options ie.SessionOverrideOptions) {
 	panic("implement me")
 }
 
+var _ ie.InternalExecutor = new(captureExecContextIE)
+
+type captureExecContextIE struct {
+	execCtxErr error
+	execSQL    string
+}
+
+func (e *captureExecContextIE) Exec(ctx context.Context, sql string, options ie.SessionOverrideOptions) error {
+	e.execCtxErr = ctx.Err()
+	e.execSQL = sql
+	return nil
+}
+
+func (e *captureExecContextIE) Query(ctx context.Context, sql string, options ie.SessionOverrideOptions) ie.InternalExecResult {
+	panic("unexpected query")
+}
+
+func (e *captureExecContextIE) ApplySessionOverride(options ie.SessionOverrideOptions) {
+}
+
 const (
 	mSqlIdx1 int = iota
 	mSqlIdx2
@@ -2361,6 +2381,32 @@ func TestCDCPauseTaskCompleteHookUpdatesCatalogState(t *testing.T) {
 		},
 	}))
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCDCPauseTaskCompleteHookUsesFreshContext(t *testing.T) {
+	capture := &captureExecContextIE{}
+	hook := CDCPauseTaskCompleteHook(func() ie.InternalExecutor {
+		return capture
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.NoError(t, hook(ctx, task.DaemonTask{
+		Details: &task.Details{
+			Details: &task.Details_CreateCdc{
+				CreateCdc: &task.CreateCdcDetails{
+					TaskId:   "task1",
+					TaskName: "task1",
+					Accounts: []*task.Account{
+						{Id: 1},
+					},
+				},
+			},
+		},
+	}))
+	require.NoError(t, capture.execCtxErr)
+	require.Contains(t, capture.execSQL, "state = 'paused'")
 }
 
 func TestCdcTask_PauseWhileStarting(t *testing.T) {
