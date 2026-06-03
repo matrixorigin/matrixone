@@ -725,6 +725,18 @@ func TestUpdate(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestUpdateFromUsesAggDedup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp SET emp.sal = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build PostgreSQL-style update from: %v", err)
+	}
+
+	assertFallbackUpdateAggDedupWithAnyValue(t, logicPlan.GetQuery())
+}
+
 func TestUpdateFallbackMultiTargetGeneratedColumnsKeepProjectLayout(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
@@ -789,23 +801,7 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 	}
 
 	query := logicPlan.GetQuery()
-	foundAgg := false
-	foundAnyValue := false
-	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_AGG {
-			continue
-		}
-		foundAgg = true
-		for _, expr := range node.AggList {
-			if exprContainsFuncName(expr, "any_value") {
-				foundAnyValue = true
-				break
-			}
-		}
-	}
-	if !foundAgg || !foundAnyValue {
-		t.Fatalf("fallback update should build agg dedup path with any_value, foundAgg=%v foundAnyValue=%v", foundAgg, foundAnyValue)
-	}
+	assertFallbackUpdateAggDedupWithAnyValue(t, query)
 
 	// Verify the generated-column chain without depending on the order of the
 	// appended update/recompute slots (that order is sensitive to map iteration
@@ -964,6 +960,26 @@ func assertFallbackUpdateProjectLength(t *testing.T, query *Query, projectLen in
 		return
 	}
 	t.Fatalf("missing fallback update project with length %d", projectLen)
+}
+
+func assertFallbackUpdateAggDedupWithAnyValue(t *testing.T, query *Query) {
+	foundAgg := false
+	foundAnyValue := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+		foundAgg = true
+		for _, expr := range node.AggList {
+			if exprContainsFuncName(expr, "any_value") {
+				foundAnyValue = true
+				break
+			}
+		}
+	}
+	if !foundAgg || !foundAnyValue {
+		t.Fatalf("fallback update should build agg dedup path with any_value, foundAgg=%v foundAnyValue=%v", foundAgg, foundAnyValue)
+	}
 }
 
 func exprContainsFuncName(expr *plan.Expr, name string) bool {
