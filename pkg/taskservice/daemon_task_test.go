@@ -416,6 +416,59 @@ func TestPauseTaskHandleCallsCompleteHookForNonLocalTask(t *testing.T) {
 	require.Equal(t, task.TaskStatus_Paused, tasks[0].TaskStatus)
 }
 
+func TestPauseTaskHandleKeepsPauseRequestedWhenActivePauseFails(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_PauseRequested, r.runnerID)
+	dt.Metadata.ID = "pause-active-fail-1"
+	mustAddTestDaemonTask(t, store, 1, dt)
+	taskRef := &daemonTask{task: dt}
+	r.addDaemonTask(taskRef)
+
+	ar := ActiveRoutine(&mockErrActiveRoutine{pauseErr: errors.New("pause failed")})
+	taskRef.activeRoutine.Store(&ar)
+
+	pauseH := newPauseTask(r, taskRef)
+	require.ErrorContains(t, pauseH.Handle(context.Background()), "pause failed")
+
+	tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_PauseRequested, tasks[0].TaskStatus)
+}
+
+func TestPauseTasksRetriesPausedCDCFinalize(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+
+	calls := atomic.Int32{}
+	r.options.pauseTaskCompleted = func(ctx context.Context, tk task.DaemonTask) error {
+		if calls.Add(1) == 1 {
+			return errors.New("finalize failed")
+		}
+		return nil
+	}
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_PauseRequested, "r2")
+	dt.Metadata.ID = "pause-finalize-retry-1"
+	dt.Metadata.Executor = task.TaskCode_InitCdc
+	dt.LastHeartbeat = time.Time{}
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	pauseH := newPauseTask(r, &daemonTask{task: dt})
+	require.ErrorContains(t, pauseH.Handle(context.Background()), "finalize failed")
+	require.Equal(t, int32(1), calls.Load())
+
+	tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_Paused, tasks[0].TaskStatus)
+
+	retryTasks := r.pauseTasks(context.Background())
+	require.Len(t, retryTasks, 1)
+	require.Equal(t, dt.ID, retryTasks[0].ID)
+	require.Equal(t, task.TaskStatus_Paused, retryTasks[0].TaskStatus)
+
+	retryH := newPauseTask(r, &daemonTask{task: retryTasks[0]})
+	require.NoError(t, retryH.Handle(context.Background()))
+	require.Equal(t, int32(2), calls.Load())
+}
+
 func TestRunDaemonTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		c := make(chan struct{})
