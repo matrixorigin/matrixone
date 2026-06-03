@@ -21,11 +21,13 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func TestSingleSql(t *testing.T) {
@@ -744,9 +746,77 @@ func TestAnalyzeInfoDescribeImpl_GetDescription_ReadSize(t *testing.T) {
 }
 
 func TestPositionFunctionExplain(t *testing.T) {
-	sqls := []string{
-		"explain SELECT POSITION('y' IN 'xyz')",
+	ctx := context.Background()
+	options := NewExplainDefaultOptions()
+
+	literal := func(s string) *plan2.Expr {
+		return &plan2.Expr{
+			Typ: plan2.Type{Id: int32(types.T_varchar)},
+			Expr: &plan2.Expr_Lit{Lit: &plan2.Literal{
+				Value: &plan2.Literal_Sval{Sval: s},
+			}},
+		}
 	}
-	mockOptimizer := plan.NewMockOptimizer(false)
-	runTestShouldPass(mockOptimizer, t, sqls)
+	badExpr := func() *plan2.Expr {
+		return &plan2.Expr{
+			Typ: plan2.Type{Id: int32(types.T_varchar)},
+			Expr: &plan2.Expr_F{F: &plan2.Function{
+				Func: &plan2.ObjectRef{Obj: -1, ObjName: "bad"},
+			}},
+		}
+	}
+	positionExpr := func(args ...*plan2.Expr) *plan2.Expr {
+		return &plan2.Expr{
+			Typ: plan2.Type{Id: int32(types.T_int64)},
+			Expr: &plan2.Expr_F{F: &plan2.Function{
+				Func: &plan2.ObjectRef{
+					Obj:     function.EncodeOverloadID(function.POSITION, 0),
+					ObjName: "position",
+				},
+				Args: args,
+			}},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		expr    *plan2.Expr
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "format position",
+			expr: positionExpr(literal("y"), literal("xyz")),
+			want: "position('y' in 'xyz')",
+		},
+		{
+			name:    "first arg error",
+			expr:    positionExpr(badExpr(), literal("xyz")),
+			wantErr: true,
+		},
+		{
+			name:    "second arg error",
+			expr:    positionExpr(literal("y"), badExpr()),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := bytes.NewBuffer(nil)
+			err := describeExpr(ctx, tt.expr, options, buf)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("describeExpr() error = %v", err)
+			}
+			if got := buf.String(); got != tt.want {
+				t.Fatalf("describeExpr() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
