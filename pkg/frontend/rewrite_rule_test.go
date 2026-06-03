@@ -18,7 +18,6 @@ import (
 	"context"
 	"math/rand"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 	"testing/quick"
@@ -29,8 +28,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -475,7 +472,7 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 	rules, err := loadRuleCache(context.Background(), ses)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"db1.t1": "(select a, age from db1.t1 where age < 3) union all (select A, Age from db1.t1 where age > 28)",
+		"db1.t1": "select a, age from db1.t1 where (age < 3) or (age > 28)",
 		"db2.t2": "select a from db2.t2 where a = 20",
 	}, rules)
 }
@@ -687,11 +684,11 @@ func TestMergeRewriteRules(t *testing.T) {
 	right := "select a from db1.t1 where a = 2"
 	merged, err := mergeRewriteRules(ctx, left, right)
 	require.NoError(t, err)
-	require.Equal(t, "(select a from db1.t1 where a = 1) union all (select a from db1.t1 where a = 2)", merged)
+	require.Equal(t, "select a from db1.t1 where (a = 1) or (a = 2)", merged)
 
 	merged, err = mergeRewriteRules(ctx, merged, "select a from db1.t1 where a = 3")
 	require.NoError(t, err)
-	require.Equal(t, "((select a from db1.t1 where a = 1) union all (select a from db1.t1 where a = 2)) union all (select a from db1.t1 where a = 3)", merged)
+	require.Equal(t, "select a from db1.t1 where ((a = 1) or (a = 2)) or (a = 3)", merged)
 
 	mergeCases := []struct {
 		name  string
@@ -703,67 +700,37 @@ func TestMergeRewriteRules(t *testing.T) {
 			name:  "same simple projection different filter",
 			left:  left,
 			right: right,
-			want:  "(select a from db1.t1 where a = 1) union all (select a from db1.t1 where a = 2)",
-		},
-		{
-			name:  "top-level order by",
-			left:  "select a from db1.t1 where age > 28 order by a",
-			right: "select a from db1.t1 where age < 3",
-			want:  "(select a from db1.t1 where age > 28 order by a) union all (select a from db1.t1 where age < 3)",
-		},
-		{
-			name:  "top-level limit",
-			left:  "select a from db1.t1 where age > 28 limit 1",
-			right: "select a from db1.t1 where age < 3",
-			want:  "(select a from db1.t1 where age > 28 limit 1) union all (select a from db1.t1 where age < 3)",
-		},
-		{
-			name:  "distinct",
-			left:  "select distinct a from db1.t1 where age > 28",
-			right: "select distinct a from db1.t1 where age < 3",
-			want:  "(select distinct a from db1.t1 where age > 28) union all (select distinct a from db1.t1 where age < 3)",
-		},
-		{
-			name:  "group by",
-			left:  "select a from db1.t1 where age > 28 group by a",
-			right: "select a from db1.t1 where age < 3 group by a",
-			want:  "(select a from db1.t1 where age > 28 group by a) union all (select a from db1.t1 where age < 3 group by a)",
-		},
-		{
-			name:  "having",
-			left:  "select a from db1.t1 where age > 28 having a > 1",
-			right: "select a from db1.t1 where age < 3 having a > 1",
-			want:  "(select a from db1.t1 where age > 28 having a > 1) union all (select a from db1.t1 where age < 3 having a > 1)",
-		},
-		{
-			name:  "aggregate",
-			left:  "select count(*) as c from db1.t1 where age > 28",
-			right: "select count(*) as c from db1.t1 where age < 3",
-			want:  "(select count(*) as c from db1.t1 where age > 28) union all (select count(*) as c from db1.t1 where age < 3)",
-		},
-		{
-			name:  "window",
-			left:  "select row_number() over () as rn from db1.t1 where age > 28",
-			right: "select row_number() over () as rn from db1.t1 where age < 3",
-			want:  "(select row_number() over () as rn from db1.t1 where age > 28) union all (select row_number() over () as rn from db1.t1 where age < 3)",
+			want:  "select a from db1.t1 where (a = 1) or (a = 2)",
 		},
 		{
 			name:  "same aliases same source columns different filter",
 			left:  "select a as x from db1.t1 where age > 28",
 			right: "select a as x from db1.t1 where age < 3",
-			want:  "(select a as x from db1.t1 where age > 28) union all (select a as x from db1.t1 where age < 3)",
+			want:  "select a as x from db1.t1 where (age > 28) or (age < 3)",
 		},
 		{
-			name:  "same scalar expressions different filter",
-			left:  "select a + 1 as b from db1.t1 where age > 28",
-			right: "select a + 1 as b from db1.t1 where age < 3",
-			want:  "(select a + 1 as b from db1.t1 where age > 28) union all (select a + 1 as b from db1.t1 where age < 3)",
+			name:  "star projection",
+			left:  "select * from db1.t1 where age > 28",
+			right: "select * from db1.t1 where age < 3",
+			want:  "select * from db1.t1 where (age > 28) or (age < 3)",
 		},
 		{
-			name:  "pre-merged union all",
-			left:  "(select a from db1.t1 where a = 1) union all (select a from db1.t1 where a = 2)",
-			right: "select a from db1.t1 where a = 3",
-			want:  "((select a from db1.t1 where a = 1) union all (select a from db1.t1 where a = 2)) union all (select a from db1.t1 where a = 3)",
+			name:  "qualified star projection",
+			left:  "select t.* from db1.t1 as t where age > 28",
+			right: "select t.* from db1.t1 as t where age < 3",
+			want:  "select t.* from db1.t1 as t where (age > 28) or (age < 3)",
+		},
+		{
+			name:  "left side has no where",
+			left:  "select a, age from db1.t1",
+			right: "select a, age from db1.t1 where age < 3",
+			want:  "select a, age from db1.t1",
+		},
+		{
+			name:  "right side has no where",
+			left:  "select a, age from db1.t1 where age > 28",
+			right: "select a, age from db1.t1",
+			want:  "select a, age from db1.t1",
 		},
 	}
 	for _, tc := range mergeCases {
@@ -790,14 +757,54 @@ func TestMergeRewriteRules(t *testing.T) {
 			right: "select a + 2 as b from db1.t1 where age < 3",
 		},
 		{
-			name:  "star projection",
-			left:  "select * from db1.t1 where age > 28",
-			right: "select * from db1.t1 where age < 3",
+			name:  "same scalar expressions",
+			left:  "select a + 1 from db1.t1 where age > 28",
+			right: "select a + 1 from db1.t1 where age < 3",
 		},
 		{
-			name:  "qualified star projection",
-			left:  "select t.* from db1.t1 as t where age > 28",
-			right: "select t.* from db1.t1 as t where age < 3",
+			name:  "aggregate",
+			left:  "select count(*) from db1.t1 where age > 28",
+			right: "select count(*) from db1.t1 where age < 3",
+		},
+		{
+			name:  "window",
+			left:  "select row_number() over () from db1.t1 where age > 28",
+			right: "select row_number() over () from db1.t1 where age < 3",
+		},
+		{
+			name:  "top-level order by",
+			left:  "select a from db1.t1 where age > 28 order by a",
+			right: "select a from db1.t1 where age < 3",
+		},
+		{
+			name:  "top-level limit",
+			left:  "select a from db1.t1 where age > 28 limit 1",
+			right: "select a from db1.t1 where age < 3",
+		},
+		{
+			name:  "distinct",
+			left:  "select distinct a from db1.t1 where age > 28",
+			right: "select distinct a from db1.t1 where age < 3",
+		},
+		{
+			name:  "group by",
+			left:  "select a from db1.t1 where age > 28 group by a",
+			right: "select a from db1.t1 where age < 3 group by a",
+		},
+		{
+			name:  "having",
+			left:  "select a from db1.t1 where age > 28 having a > 1",
+			right: "select a from db1.t1 where age < 3 having a > 1",
+		},
+		{
+			name:  "union",
+			left:  "(select a from db1.t1 where a = 1) union all (select a from db1.t1 where a = 2)",
+			right: "select a from db1.t1 where a = 3",
+		},
+		{
+			name:  "join",
+			left:  "select t1.a from db1.t1 join db1.t2 on t1.a = t2.a where t1.age > 28",
+			right: "select t1.a from db1.t1 join db1.t2 on t1.a = t2.a where t1.age < 3",
 		},
 	}
 	for _, tc := range fallbackCases {
@@ -816,326 +823,115 @@ func TestMergeRewriteRules(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRewriteRuleOutputColumns(t *testing.T) {
-	ctx := context.Background()
+func TestTrimRewriteRuleForMerge(t *testing.T) {
+	require.Equal(t, "select a from db1.t1", trimRewriteRuleForMerge("  select a from db1.t1  ;;  ; "))
+	require.Equal(t, "select a from db1.t1", trimRewriteRuleForMerge("select a from db1.t1"))
+	require.Equal(t, "", trimRewriteRuleForMerge(" ; ; "))
+}
 
-	columns, ok, err := rewriteRuleOutputColumns(ctx, "select A as x, a + 1 as b from db1.t1")
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, []rewriteRuleOutputColumn{
-		{name: "x", expr: "a"},
-		{name: "b", expr: "a + 1"},
-	}, columns)
-
+func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 	cases := []struct {
-		name string
-		rule string
-		ok   bool
+		name       string
+		rule       string
+		ok         bool
+		selectList string
+		table      string
 	}{
-		{name: "top-level order by", rule: "select a from db1.t1 order by a", ok: true},
-		{name: "top-level limit", rule: "select a from db1.t1 limit 1", ok: true},
-		{name: "union order by", rule: "select a from db1.t1 union select a from db1.t2 order by a", ok: true},
-		{name: "distinct", rule: "select distinct a from db1.t1", ok: true},
-		{name: "group by", rule: "select a from db1.t1 group by a", ok: true},
-		{name: "having", rule: "select a from db1.t1 having a > 1", ok: true},
-		{name: "star", rule: "select * from db1.t1", ok: false},
-		{name: "qualified star", rule: "select t.* from db1.t1 as t", ok: false},
-		{name: "aggregate projection", rule: "select sum(a) as s from db1.t1", ok: true},
-		{name: "window projection", rule: "select row_number() over () as rn from db1.t1", ok: true},
+		{
+			name:       "simple select",
+			rule:       "select A, Age from db1.t1 where age > 28",
+			ok:         true,
+			selectList: "a, age",
+			table:      "db1.t1",
+		},
+		{
+			name:       "star projection",
+			rule:       "select * from db1.t1 where age > 28",
+			ok:         true,
+			selectList: "*",
+			table:      "db1.t1",
+		},
+		{
+			name:       "qualified star with alias",
+			rule:       "select t.* from db1.t1 as t where age > 28",
+			ok:         true,
+			selectList: "t.*",
+			table:      "db1.t1 as t",
+		},
+		{
+			name:       "aliased column",
+			rule:       "select a as x from db1.t1 where age > 28",
+			ok:         true,
+			selectList: "a as x",
+			table:      "db1.t1",
+		},
+		{
+			name: "scalar expression",
+			rule: "select a + 1 from db1.t1 where age > 28",
+			ok:   false,
+		},
+		{
+			name: "aggregate",
+			rule: "select count(*) from db1.t1 where age > 28",
+			ok:   false,
+		},
+		{
+			name: "window",
+			rule: "select row_number() over () from db1.t1 where age > 28",
+			ok:   false,
+		},
+		{
+			name: "top-level order by",
+			rule: "select a from db1.t1 where age > 28 order by a",
+			ok:   false,
+		},
+		{
+			name: "top-level limit",
+			rule: "select a from db1.t1 where age > 28 limit 1",
+			ok:   false,
+		},
+		{
+			name: "distinct",
+			rule: "select distinct a from db1.t1 where age > 28",
+			ok:   false,
+		},
+		{
+			name: "group by",
+			rule: "select a from db1.t1 where age > 28 group by a",
+			ok:   false,
+		},
+		{
+			name: "having",
+			rule: "select a from db1.t1 where age > 28 having a > 1",
+			ok:   false,
+		},
+		{
+			name: "union",
+			rule: "select a from db1.t1 where age > 28 union all select a from db1.t1 where age < 3",
+			ok:   false,
+		},
+		{
+			name: "join",
+			rule: "select t1.a from db1.t1 join db1.t2 on t1.a = t2.a where t1.age > 28",
+			ok:   false,
+		},
 	}
+
+	ctx := context.Background()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			columns, ok, err := rewriteRuleOutputColumns(ctx, tc.rule)
+			shape, ok, err := rewriteRuleMergeShapeForRule(ctx, tc.rule)
 			require.NoError(t, err)
 			require.Equal(t, tc.ok, ok)
-			if tc.ok {
-				require.NotNil(t, columns)
-			} else {
-				require.Nil(t, columns)
+			if !tc.ok {
+				require.Nil(t, shape)
+				return
 			}
+			require.NotNil(t, shape)
+			require.Equal(t, tc.selectList, shape.selectList)
+			require.Equal(t, tc.table, shape.table)
 		})
 	}
-}
-
-func TestTrimRewriteRuleForUnion(t *testing.T) {
-	require.Equal(t, "select a from db1.t1", trimRewriteRuleForUnion("  select a from db1.t1  ;;  ; "))
-	require.Equal(t, "select a from db1.t1", trimRewriteRuleForUnion("select a from db1.t1"))
-	require.Equal(t, "", trimRewriteRuleForUnion(" ; ; "))
-}
-
-func TestOutputColumnsFromRewriteStatementASTBranches(t *testing.T) {
-	selectClause := &tree.SelectClause{
-		Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}},
-	}
-
-	columns, ok := outputColumnsFromRewriteStatement(&tree.ParenSelect{
-		Select: &tree.Select{Select: selectClause},
-	})
-	require.True(t, ok)
-	require.Equal(t, []rewriteRuleOutputColumn{{name: "a", expr: "a"}}, columns)
-
-	columns, ok = outputColumnsFromRewriteStatement(&tree.ParenSelect{})
-	require.False(t, ok)
-	require.Nil(t, columns)
-
-	columns, ok = outputColumnsFromRewriteStatement(&tree.Delete{})
-	require.False(t, ok)
-	require.Nil(t, columns)
-}
-
-func TestOutputColumnsFromRewriteSelectStatementASTBranches(t *testing.T) {
-	selectClause := &tree.SelectClause{
-		Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}},
-	}
-
-	// UnionClause with different column names is not mergeable.
-	columns, ok := outputColumnsFromRewriteSelectStatement(&tree.UnionClause{
-		Left:  selectClause,
-		Right: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("b")}}},
-	})
-	require.False(t, ok)
-	require.Nil(t, columns)
-
-	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.UnionClause{
-		Type:  tree.UNION,
-		Left:  selectClause,
-		Right: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}}},
-	})
-	require.True(t, ok)
-	require.Equal(t, []rewriteRuleOutputColumn{{name: "a", expr: "a"}}, columns)
-
-	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.UnionClause{
-		Type:  tree.UNION,
-		All:   true,
-		Left:  selectClause,
-		Right: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}}},
-	})
-	require.True(t, ok)
-	require.Equal(t, []rewriteRuleOutputColumn{{name: "a", expr: "a"}}, columns)
-
-	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.UnionClause{
-		Type:  tree.INTERSECT,
-		Left:  selectClause,
-		Right: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}}},
-	})
-	require.True(t, ok)
-	require.Equal(t, []rewriteRuleOutputColumn{{name: "a", expr: "a"}}, columns)
-
-	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.ParenSelect{})
-	require.False(t, ok)
-	require.Nil(t, columns)
-
-	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.Select{
-		Select:  selectClause,
-		OrderBy: tree.OrderBy{&tree.Order{Expr: tree.NewUnresolvedColName("a")}},
-	})
-	require.True(t, ok)
-	require.Equal(t, []rewriteRuleOutputColumn{{name: "a", expr: "a"}}, columns)
-
-	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.Select{Select: selectClause})
-	require.True(t, ok)
-	require.Equal(t, []rewriteRuleOutputColumn{{name: "a", expr: "a"}}, columns)
-
-	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.ValuesStatement{})
-	require.False(t, ok)
-	require.Nil(t, columns)
-}
-
-func TestOutputColumnFromRewriteSelectExprBranches(t *testing.T) {
-	column, ok := outputColumnFromRewriteSelectExpr(tree.SelectExpr{
-		Expr: tree.NewBinaryExpr(tree.PLUS, tree.NewUnresolvedColName("a"), rewriteRuleNumVal(1)),
-	})
-	require.True(t, ok)
-	require.Equal(t, rewriteRuleOutputColumn{name: "a + 1", expr: "a + 1"}, column)
-
-	column, ok = outputColumnFromRewriteSelectExpr(tree.SelectExpr{
-		Expr: tree.NewUnresolvedColName("A"),
-		As:   tree.NewCStr("AliasA", 1),
-	})
-	require.True(t, ok)
-	require.Equal(t, rewriteRuleOutputColumn{name: "aliasa", expr: "a"}, column)
-
-	column, ok = outputColumnFromRewriteSelectExpr(tree.SelectExpr{
-		Expr: tree.NewUnresolvedNameWithStar(tree.NewCStr("t", 1)),
-	})
-	require.False(t, ok)
-	require.Equal(t, rewriteRuleOutputColumn{}, column)
-}
-
-func TestSameRewriteOutputColumnsComparesNamesAndExpressions(t *testing.T) {
-	cases := []struct {
-		name  string
-		left  string
-		right string
-		same  bool
-	}{
-		{
-			name:  "same aliases and same column expression",
-			left:  "select A as x, age as y from db1.t1",
-			right: "select a as x, age as y from db1.t1",
-			same:  true,
-		},
-		{
-			name:  "same aliases but swapped column expressions",
-			left:  "select a as x, age as y from db1.t1",
-			right: "select age as x, a as y from db1.t1",
-			same:  false,
-		},
-		{
-			name:  "same aliases but different scalar expressions",
-			left:  "select a + 1 as x from db1.t1",
-			right: "select a + 2 as x from db1.t1",
-			same:  false,
-		},
-		{
-			name:  "same expressions but different aliases",
-			left:  "select a + 1 as x from db1.t1",
-			right: "select a + 1 as y from db1.t1",
-			same:  false,
-		},
-	}
-
-	ctx := context.Background()
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			left, ok, err := rewriteRuleOutputColumns(ctx, tc.left)
-			require.NoError(t, err)
-			require.True(t, ok)
-			right, ok, err := rewriteRuleOutputColumns(ctx, tc.right)
-			require.NoError(t, err)
-			require.True(t, ok)
-			require.Equal(t, tc.same, sameRewriteOutputColumns(left, right))
-		})
-	}
-}
-
-func TestRewriteExprIsMergeSafe(t *testing.T) {
-	cases := []struct {
-		name string
-		sql  string
-		safe bool
-	}{
-		{name: "simple column", sql: "select a from db1.t1", safe: true},
-		{name: "binary expression", sql: "select a + age from db1.t1", safe: true},
-		{name: "comparison expression", sql: "select a > age from db1.t1", safe: true},
-		{name: "case expression", sql: "select case when a > 0 then age else 0 end from db1.t1", safe: true},
-		{name: "scalar function", sql: "select abs(a) from db1.t1", safe: true},
-		{name: "cast expression", sql: "select cast(a as signed) from db1.t1", safe: true},
-		{name: "between expression", sql: "select a between 1 and 3 from db1.t1", safe: true},
-		{name: "aggregate function", sql: "select count(*) from db1.t1", safe: false},
-		{name: "window function", sql: "select row_number() over () from db1.t1", safe: false},
-		{name: "subquery expression", sql: "select exists (select a from db1.t1) from db1.t1", safe: false},
-		{name: "system variable expression", sql: "select @@sql_mode from db1.t1", safe: false},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			exprs := parseRewriteRuleSelectExprs(t, tc.sql)
-			require.Len(t, exprs, 1)
-			require.Equal(t, tc.safe, rewriteExprIsMergeSafe(exprs[0].Expr))
-		})
-	}
-}
-
-func TestRewriteExprIsMergeSafeASTBranches(t *testing.T) {
-	safeColumn := tree.NewUnresolvedColName("a")
-	safeNumber := rewriteRuleNumVal(1)
-	unsafeExpr := rewriteRuleUnsafeSubqueryExpr()
-
-	cases := []struct {
-		name string
-		expr tree.Expr
-		safe bool
-	}{
-		{name: "nil expression", expr: nil, safe: true},
-		{name: "string literal", expr: tree.NewStrVal("'x'"), safe: true},
-		{name: "unqualified star", expr: tree.UnqualifiedStar{}, safe: true},
-		{name: "unary expression", expr: tree.NewUnaryExpr(tree.UNARY_MINUS, safeNumber), safe: true},
-		{name: "comparison with escape", expr: tree.NewComparisonExprWithEscape(tree.LIKE, safeColumn, tree.NewStrVal("'a%'"), tree.NewStrVal("'\\'")), safe: true},
-		{name: "and expression", expr: tree.NewAndExpr(safeColumn, safeNumber), safe: true},
-		{name: "xor expression", expr: tree.NewXorExpr(safeColumn, safeNumber), safe: true},
-		{name: "or expression", expr: tree.NewOrExpr(safeColumn, safeNumber), safe: true},
-		{name: "not expression", expr: tree.NewNotExpr(safeColumn), safe: true},
-		{name: "is null expression", expr: tree.NewIsNullExpr(safeColumn), safe: true},
-		{name: "is not null expression", expr: tree.NewIsNotNullExpr(safeColumn), safe: true},
-		{name: "is unknown expression", expr: tree.NewIsUnknownExpr(safeColumn), safe: true},
-		{name: "is not unknown expression", expr: tree.NewIsNotUnknownExpr(safeColumn), safe: true},
-		{name: "is true expression", expr: tree.NewIsTrueExpr(safeColumn), safe: true},
-		{name: "is not true expression", expr: tree.NewIsNotTrueExpr(safeColumn), safe: true},
-		{name: "is false expression", expr: tree.NewIsFalseExpr(safeColumn), safe: true},
-		{name: "is not false expression", expr: tree.NewIsNotFalseExpr(safeColumn), safe: true},
-		{name: "paren expression", expr: tree.NewParentExpr(safeColumn), safe: true},
-		{name: "function with table type", expr: rewriteRuleFuncExpr("abs", tree.FUNC_TYPE_TABLE, nil, safeColumn), safe: false},
-		{name: "function without a resolvable name", expr: &tree.FuncExpr{}, safe: false},
-		{name: "function with unsafe argument", expr: rewriteRuleFuncExpr("abs", tree.FUNC_TYPE_DEFAULT, nil, unsafeExpr), safe: false},
-		{name: "function with unsafe order by", expr: rewriteRuleFuncExpr("abs", tree.FUNC_TYPE_DEFAULT, tree.OrderBy{&tree.Order{Expr: unsafeExpr}}, safeColumn), safe: false},
-		{name: "serial extract expression", expr: &tree.SerialExtractExpr{SerialExpr: safeColumn, IndexExpr: safeNumber}, safe: true},
-		{name: "serial extract with unsafe index", expr: &tree.SerialExtractExpr{SerialExpr: safeColumn, IndexExpr: unsafeExpr}, safe: false},
-		{name: "bit cast expression", expr: &tree.BitCastExpr{Expr: safeColumn}, safe: true},
-		{name: "tuple expression", expr: &tree.Tuple{Exprs: tree.Exprs{safeColumn, safeNumber}}, safe: true},
-		{name: "tuple with unsafe member", expr: &tree.Tuple{Exprs: tree.Exprs{safeColumn, unsafeExpr}}, safe: false},
-		{name: "case with unsafe else", expr: &tree.CaseExpr{Expr: safeColumn, Else: unsafeExpr}, safe: false},
-		{name: "case with nil when", expr: &tree.CaseExpr{Whens: []*tree.When{nil, tree.NewWhen(safeColumn, safeNumber)}, Else: safeNumber}, safe: true},
-		{name: "case with unsafe when", expr: &tree.CaseExpr{Whens: []*tree.When{tree.NewWhen(unsafeExpr, safeNumber)}, Else: safeNumber}, safe: false},
-		{name: "interval expression", expr: &tree.IntervalExpr{Expr: safeNumber}, safe: true},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.safe, rewriteExprIsMergeSafe(tc.expr))
-		})
-	}
-}
-
-func TestRewriteExprsAndOrderByAreMergeSafe(t *testing.T) {
-	safeColumn := tree.NewUnresolvedColName("a")
-	unsafeExpr := rewriteRuleUnsafeSubqueryExpr()
-
-	require.True(t, rewriteExprsAreMergeSafe(nil))
-	require.True(t, rewriteExprsAreMergeSafe(tree.Exprs{safeColumn}))
-	require.False(t, rewriteExprsAreMergeSafe(tree.Exprs{safeColumn, unsafeExpr}))
-
-	require.True(t, rewriteOrderByIsMergeSafe(tree.OrderBy{nil, &tree.Order{Expr: safeColumn}}))
-	require.False(t, rewriteOrderByIsMergeSafe(tree.OrderBy{&tree.Order{Expr: unsafeExpr}}))
-}
-
-func TestRewriteFuncExprName(t *testing.T) {
-	require.Equal(t, "abs", rewriteFuncExprName(&tree.FuncExpr{FuncName: tree.NewCStr("ABS", 1)}))
-	require.Equal(t, "lower", rewriteFuncExprName(&tree.FuncExpr{
-		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("LOWER")),
-	}))
-	require.Equal(t, "", rewriteFuncExprName(&tree.FuncExpr{}))
-}
-
-func parseRewriteRuleSelectExprs(t *testing.T, sql string) tree.SelectExprs {
-	t.Helper()
-
-	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
-	require.NoError(t, err)
-	selectStmt, ok := stmt.(*tree.Select)
-	require.True(t, ok)
-	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
-	require.True(t, ok)
-	return selectClause.Exprs
-}
-
-func rewriteRuleNumVal(v int64) *tree.NumVal {
-	return tree.NewNumVal[int64](v, strconv.FormatInt(v, 10), false, tree.P_int64)
-}
-
-func rewriteRuleFuncExpr(name string, typ tree.FuncType, orderBy tree.OrderBy, exprs ...tree.Expr) *tree.FuncExpr {
-	return &tree.FuncExpr{
-		FuncName: tree.NewCStr(name, 1),
-		Type:     typ,
-		Exprs:    exprs,
-		OrderBy:  orderBy,
-	}
-}
-
-func rewriteRuleUnsafeSubqueryExpr() tree.Expr {
-	return tree.NewSubquery(&tree.SelectClause{
-		Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}},
-	}, true)
 }
 
 func newMrsForRewriteRules(rows [][]interface{}) *MysqlResultSet {
