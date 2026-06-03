@@ -1,0 +1,16 @@
+create account cas_gc_acc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+create database cas_gc_db;
+use cas_gc_db;
+create table t(id int, dl datalink);
+insert into t values(1, datalink_pin(cast('file://$resources/file_test/normal.txt' as datalink)));
+insert into t values(2, datalink_pin(cast('file://$resources/file_test/normal.txt?offset=0&size=5' as datalink)));
+select id, load_file(dl) as content from t order by id;
+➤ id[4,32,0]  ¦  content[12,0,0]  𝄀
+1  ¦  Hello world!  𝄀
+2  ¦  Hello
+drop account cas_gc_acc;
+create account cas_gc_acc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+select load_file(datalink_pin('file://$resources/file_test/normal.txt')) as repin;
+➤ repin[12,0,0]  𝄀
+Hello world!
+drop account cas_gc_acc;
