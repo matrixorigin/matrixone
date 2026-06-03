@@ -287,6 +287,24 @@ func init() {
 		reuse.DefaultOptions[TableOptionComment](), //.
 	) //WithEnableChecker()
 
+	reuse.CreatePool[TableOptionTTL](
+		func() *TableOptionTTL { return &TableOptionTTL{} },
+		func(t *TableOptionTTL) { t.reset() },
+		reuse.DefaultOptions[TableOptionTTL](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionTTLEnable](
+		func() *TableOptionTTLEnable { return &TableOptionTTLEnable{} },
+		func(t *TableOptionTTLEnable) { t.reset() },
+		reuse.DefaultOptions[TableOptionTTLEnable](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionTTLJobInterval](
+		func() *TableOptionTTLJobInterval { return &TableOptionTTLJobInterval{} },
+		func(t *TableOptionTTLJobInterval) { t.reset() },
+		reuse.DefaultOptions[TableOptionTTLJobInterval](), //.
+	) //WithEnableChecker()
+
 	reuse.CreatePool[TableOptionAvgRowLength](
 		func() *TableOptionAvgRowLength { return &TableOptionAvgRowLength{} },
 		func(t *TableOptionAvgRowLength) { t.reset() },
@@ -1160,6 +1178,12 @@ func (node *CreateTable) reset() {
 				opt.Free()
 			case *TableOptionComment:
 				opt.Free()
+			case *TableOptionTTL:
+				opt.Free()
+			case *TableOptionTTLEnable:
+				opt.Free()
+			case *TableOptionTTLJobInterval:
+				opt.Free()
 			case *TableOptionAvgRowLength:
 				opt.Free()
 			case *TableOptionChecksum:
@@ -1248,6 +1272,12 @@ func (node *CreateTable) reset() {
 			case *TableOptionAutoIncrement:
 				opt.Free()
 			case *TableOptionComment:
+				opt.Free()
+			case *TableOptionTTL:
+				opt.Free()
+			case *TableOptionTTLEnable:
+				opt.Free()
+			case *TableOptionTTLJobInterval:
 				opt.Free()
 			case *TableOptionAvgRowLength:
 				opt.Free()
@@ -2890,6 +2920,85 @@ func NewTableOptionComment(c string) *TableOptionComment {
 	return t
 }
 
+// TableOptionTTL carries the TTL expiry expression, e.g. `ts + INTERVAL 7 DAY`.
+type TableOptionTTL struct {
+	tableOptionImpl
+	Expr Expr
+}
+
+func (node *TableOptionTTL) Format(ctx *FmtCtx) {
+	ctx.WriteString("ttl = ")
+	node.Expr.Format(ctx)
+}
+
+func (node TableOptionTTL) TypeName() string { return "tree.TableOptionTTL" }
+
+func (node *TableOptionTTL) reset() {
+	*node = TableOptionTTL{}
+}
+
+func (node *TableOptionTTL) Free() {
+	reuse.Free[TableOptionTTL](node, nil)
+}
+
+func NewTableOptionTTL(expr Expr) *TableOptionTTL {
+	t := reuse.Alloc[TableOptionTTL](nil)
+	t.Expr = expr
+	return t
+}
+
+// TableOptionTTLEnable toggles the background TTL job, e.g. `TTL_ENABLE = 'ON'`.
+type TableOptionTTLEnable struct {
+	tableOptionImpl
+	Enable string
+}
+
+func (node *TableOptionTTLEnable) Format(ctx *FmtCtx) {
+	ctx.WriteString("ttl_enable = '" + strings.ReplaceAll(node.Enable, "'", "''") + "'")
+}
+
+func (node TableOptionTTLEnable) TypeName() string { return "tree.TableOptionTTLEnable" }
+
+func (node *TableOptionTTLEnable) reset() {
+	*node = TableOptionTTLEnable{}
+}
+
+func (node *TableOptionTTLEnable) Free() {
+	reuse.Free[TableOptionTTLEnable](node, nil)
+}
+
+func NewTableOptionTTLEnable(enable string) *TableOptionTTLEnable {
+	t := reuse.Alloc[TableOptionTTLEnable](nil)
+	t.Enable = enable
+	return t
+}
+
+// TableOptionTTLJobInterval sets the TTL job schedule, e.g. `TTL_JOB_INTERVAL = '1h'`.
+type TableOptionTTLJobInterval struct {
+	tableOptionImpl
+	Interval string
+}
+
+func (node *TableOptionTTLJobInterval) Format(ctx *FmtCtx) {
+	ctx.WriteString("ttl_job_interval = '" + strings.ReplaceAll(node.Interval, "'", "''") + "'")
+}
+
+func (node TableOptionTTLJobInterval) TypeName() string { return "tree.TableOptionTTLJobInterval" }
+
+func (node *TableOptionTTLJobInterval) reset() {
+	*node = TableOptionTTLJobInterval{}
+}
+
+func (node *TableOptionTTLJobInterval) Free() {
+	reuse.Free[TableOptionTTLJobInterval](node, nil)
+}
+
+func NewTableOptionTTLJobInterval(interval string) *TableOptionTTLJobInterval {
+	t := reuse.Alloc[TableOptionTTLJobInterval](nil)
+	t.Interval = interval
+	return t
+}
+
 type TableOptionAvgRowLength struct {
 	tableOptionImpl
 	Length uint64
@@ -3864,6 +3973,12 @@ func (node *Partition) reset() {
 				opt.Free()
 			case *TableOptionComment:
 				opt.Free()
+			case *TableOptionTTL:
+				opt.Free()
+			case *TableOptionTTLEnable:
+				opt.Free()
+			case *TableOptionTTLJobInterval:
+				opt.Free()
 			case *TableOptionAvgRowLength:
 				opt.Free()
 			case *TableOptionChecksum:
@@ -3996,6 +4111,12 @@ func (node *SubPartition) reset() {
 			case *TableOptionAutoIncrement:
 				opt.Free()
 			case *TableOptionComment:
+				opt.Free()
+			case *TableOptionTTL:
+				opt.Free()
+			case *TableOptionTTLEnable:
+				opt.Free()
+			case *TableOptionTTLJobInterval:
 				opt.Free()
 			case *TableOptionAvgRowLength:
 				opt.Free()
