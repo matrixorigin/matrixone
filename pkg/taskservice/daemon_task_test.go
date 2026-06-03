@@ -467,6 +467,7 @@ func TestPauseTasksRetriesPausedCDCFinalize(t *testing.T) {
 	retryH := newPauseTask(r, &daemonTask{task: retryTasks[0]})
 	require.NoError(t, retryH.Handle(context.Background()))
 	require.Equal(t, int32(2), calls.Load())
+	require.Empty(t, r.pauseTasks(context.Background()))
 }
 
 func TestRunDaemonTask(t *testing.T) {
