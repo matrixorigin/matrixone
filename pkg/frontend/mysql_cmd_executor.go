@@ -1170,7 +1170,10 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 		ses.ReplaceDerivedStmt(prevInsideStmt)
 	}()
 
-	var lastErr error
+	if len(stmt.Entries) == 0 {
+		return moerr.NewInternalError(execCtx.reqCtx, "ANALYZE TABLE requires at least one table")
+	}
+
 	for _, entry := range stmt.Entries {
 		ctx := tree.NewFmtCtx(dialect.MYSQL)
 		ctx.WriteString("select ")
@@ -1192,18 +1195,29 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 		err := doComQuery(ses, &tempExecCtx, &UserInput{sql: sql})
 		tempExecCtx.Close()
 		if err != nil {
-			lastErr = err
+			return err
 		}
 	}
-	return lastErr
+	return nil
 }
 
 func handleCheckTableStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.CheckTableStmt) error {
-	return moerr.NewNotSupported(execCtx.reqCtx, "CHECK TABLE is not supported in MatrixOne")
+	msg := "CHECK TABLE is not supported in MatrixOne"
+	switch stmt.Option {
+	case tree.CheckTableOptionExtended:
+		msg = "CHECK TABLE ... EXTENDED is not supported in MatrixOne"
+	case tree.CheckTableOptionForUpgrade:
+		msg = "CHECK TABLE ... FOR UPGRADE is not supported in MatrixOne"
+	}
+	return moerr.NewNotSupported(execCtx.reqCtx, msg)
 }
 
 func handleShowProfileStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ShowProfileStmt) error {
-	return moerr.NewNotSupported(execCtx.reqCtx, "SHOW PROFILE is not supported in MatrixOne")
+	msg := "SHOW PROFILE is not supported in MatrixOne"
+	if stmt.ForQuery > 0 {
+		msg = fmt.Sprintf("SHOW PROFILE FOR QUERY %d is not supported in MatrixOne", stmt.ForQuery)
+	}
+	return moerr.NewNotSupported(execCtx.reqCtx, msg)
 }
 
 func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt) error {

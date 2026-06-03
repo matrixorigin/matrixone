@@ -27,23 +27,23 @@ approx_count_distinct(a)    approx_count_distinct(b)
 check table t_analyze_01;
 not supported: CHECK TABLE is not supported in MatrixOne
 check table t_analyze_01 extended;
-not supported: CHECK TABLE is not supported in MatrixOne
+not supported: CHECK TABLE ... EXTENDED is not supported in MatrixOne
 check table t_analyze_01 for upgrade;
-not supported: CHECK TABLE is not supported in MatrixOne
+not supported: CHECK TABLE ... FOR UPGRADE is not supported in MatrixOne
 check table t_analyze_01, t_analyze_02;
 not supported: CHECK TABLE is not supported in MatrixOne
 check table t_analyze_01, t_analyze_02 extended;
-not supported: CHECK TABLE is not supported in MatrixOne
+not supported: CHECK TABLE ... EXTENDED is not supported in MatrixOne
 show profile;
 not supported: SHOW PROFILE is not supported in MatrixOne
 show profile for query 2;
-not supported: SHOW PROFILE is not supported in MatrixOne
+not supported: SHOW PROFILE FOR QUERY 2 is not supported in MatrixOne
 show profile limit 10;
 not supported: SHOW PROFILE is not supported in MatrixOne
 show profile for query 2 limit 10;
-not supported: SHOW PROFILE is not supported in MatrixOne
+not supported: SHOW PROFILE FOR QUERY 2 is not supported in MatrixOne
 show profile for query 2 limit 10 offset 5;
-not supported: SHOW PROFILE is not supported in MatrixOne
+not supported: SHOW PROFILE FOR QUERY 2 is not supported in MatrixOne
 drop table t_analyze_01;
 drop table t_analyze_02;
 drop database db_analyze_stmt;
