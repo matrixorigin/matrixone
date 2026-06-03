@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/datalink/casgc"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -365,6 +366,16 @@ func (s *service) registerExecutorsLocked() {
 			s.cfg.UUID,
 			s.storeEngine,
 			s._txnClient,
+			common.ISCPAllocator,
+		),
+	)
+
+	s.task.runner.RegisterExecutor(task.TaskCode_DatalinkCASGCExecutor,
+		casgc.DatalinkCASGCExecutorFactory(
+			s.cfg.UUID,
+			s.storeEngine,
+			s._txnClient,
+			s.fileService,
 			common.ISCPAllocator,
 		),
 	)

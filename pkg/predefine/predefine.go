@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/datalink/casgc"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
@@ -95,6 +96,12 @@ func GenInitCronTaskSQL(codes ...int32) (string, error) {
 		return "", err
 	}
 	cronTasks = append(cronTasks, task5)
+
+	task6, err := createCronTask(casgc.DatalinkCASGCTaskMetadata(task.TaskCode_DatalinkCASGCExecutor), casgc.DatalinkCASGCCronExpr)
+	if err != nil {
+		return "", err
+	}
+	cronTasks = append(cronTasks, task6)
 
 	sql := fmt.Sprintf(`insert into %s.sys_cron_task (
                            task_metadata_id,
