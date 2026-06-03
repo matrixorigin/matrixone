@@ -1196,7 +1196,7 @@ func Test_updateCdcTask_pause(t *testing.T) {
 	mock.ExpectPrepare(sql11)
 
 	sql12 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = .* WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
-	mock.ExpectExec(sql12).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(sql12).WithArgs("pausing").WillReturnResult(sqlmock.NewResult(1, 1))
 
 	sql13 := "DELETE FROM `mo_catalog`.`mo_cdc_task` WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
 	mock.ExpectExec(sql13).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -2328,6 +2328,41 @@ func TestCdcTask_Pause(t *testing.T) {
 	_ = executor.stateMachine.Transition(TransitionStartSuccess)
 	err := executor.Pause()
 	assert.NoErrorf(t, err, "Pause()")
+}
+
+func TestCdcTask_PauseUpdatesCatalogStateAfterPauseComplete(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	sql := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = 'paused' WHERE 1=1 AND account_id = 1 AND task_id = 'task1'"
+	mock.ExpectExec(sql).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	executor := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		ie: &testIE{
+			db: db,
+			genIdx: func(sql string) int {
+				return -1
+			},
+		},
+		cnUUID:         "test-cn",
+		runningReaders: &sync.Map{},
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task1",
+			TaskName: "task1",
+			Accounts: []*task.Account{
+				{Id: 1},
+			},
+		},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
+	}
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+
+	require.NoError(t, executor.Pause())
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestCdcTask_PauseWhileStarting(t *testing.T) {
