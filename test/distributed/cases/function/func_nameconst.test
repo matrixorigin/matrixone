@@ -1,0 +1,23 @@
+-- @suit
+-- @case
+-- @desc:test for function name_const
+-- @label:bvt
+
+select name_const('myname', 14);
+select name_const('str_name', 'abc');
+select name_const('null_name', null);
+select name_const('decimal_name', 12.34);
+select name_const(123, -456);
+select name_const('myname', 14) as alias_name;
+select name_const('expr_name', 14) + 1;
+select name_const('folded_expr', abs(-1));
+select name_const('bad_expr', now());
+select name_const(null, 1);
+select name_const('bad_args');
+
+drop table if exists name_const_t;
+create table name_const_t(a int, b varchar(10));
+insert into name_const_t values (1, 'x'), (2, 'y'), (null, null);
+select name_const('col_a', a) from name_const_t order by a;
+select name_const(b, 1) from name_const_t order by a;
+drop table name_const_t;

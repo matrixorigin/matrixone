@@ -20,6 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,4 +93,77 @@ func TestBindFuncExprImplByPlanExpr_JsonValid(t *testing.T) {
 		require.NotNil(t, f)
 		require.Equal(t, int32(types.T_bool), result.Typ.Id)
 	})
+}
+
+func TestBindNameConstConstArgs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "string name and int value",
+			sql:  "select name_const('myname', 14)",
+		},
+		{
+			name: "numeric name and negative value",
+			sql:  "select name_const(123, -456)",
+		},
+		{
+			name: "parenthesized literals",
+			sql:  "select name_const(('myname'), (14))",
+		},
+		{
+			name: "folded constant value",
+			sql:  "select name_const('myname', cast(14 as signed))",
+		},
+		{
+			name: "folded function value",
+			sql:  "select name_const('myname', abs(-1))",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, bindNameConstSelect(tc.sql))
+		})
+	}
+}
+
+func TestBindNameConstInvalidArgs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "wrong arg count",
+			sql:  "select name_const('myname')",
+		},
+		{
+			name: "null name",
+			sql:  "select name_const(null, 1)",
+		},
+		{
+			name: "column name",
+			sql:  "select name_const(a, 1) from t",
+		},
+		{
+			name: "column value",
+			sql:  "select name_const('myname', a) from t",
+		},
+		{
+			name: "non-foldable function value",
+			sql:  "select name_const('myname', now())",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Error(t, bindNameConstSelect(tc.sql))
+		})
+	}
+}
+
+func bindNameConstSelect(sql string) error {
+	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 1)
+	if err != nil {
+		return err
+	}
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	return err
 }

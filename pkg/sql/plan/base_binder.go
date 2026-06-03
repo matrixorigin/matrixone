@@ -1423,6 +1423,14 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 			}
 		}
 
+	case "name_const":
+		if proc == nil {
+			return nil, moerr.NewInvalidInput(ctx, "can't use name_const without proc")
+		}
+		if err := foldNameConstArgs(ctx, proc, retExpr.GetF().Args); err != nil {
+			return nil, err
+		}
+
 	case "between":
 		if proc == nil {
 			goto between_fallback
@@ -2878,4 +2886,25 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 		return BindFuncExprImplByPlanExpr(ctx, "not", []*plan.Expr{newExpr})
 	}
 	return newExpr, nil
+}
+
+func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
+	if len(args) != 2 {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", len(args))
+	}
+
+	for i := range args {
+		foldedArg, err := ConstantFold(batch.EmptyForConstFoldBatch, args[i], proc, false, true)
+		if err != nil {
+			return err
+		}
+		args[i] = foldedArg
+	}
+
+	nameLit := args[0].GetLit()
+	valueLit := args[1].GetLit()
+	if nameLit == nil || nameLit.Isnull || valueLit == nil {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
+	}
+	return nil
 }
