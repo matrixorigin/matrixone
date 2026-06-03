@@ -180,6 +180,11 @@ type taskRunner struct {
 		m map[uint64]*daemonTask
 	}
 
+	pauseCompletedTasks struct {
+		sync.Mutex
+		m map[uint64]struct{}
+	}
+
 	options struct {
 		queryLimit         int
 		parallelism        int
@@ -220,6 +225,7 @@ func NewTaskRunner(runnerID string, service TaskService, claimFn func(string) bo
 	r.runningTasks.completedTasks = make(map[uint64]struct{})
 	r.pendingTaskHandle = make(chan TaskHandler, 20)
 	r.daemonTasks.m = make(map[uint64]*daemonTask)
+	r.pauseCompletedTasks.m = make(map[uint64]struct{})
 	return r
 }
 

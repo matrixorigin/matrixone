@@ -472,6 +472,15 @@ func (exec *CDCTaskExecutor) Restart() error {
 
 // Pause cdc task
 func (exec *CDCTaskExecutor) Pause() error {
+	if exec.stateMachine.State() == StatePaused {
+		logutil.Info(
+			"cdc.frontend.task.pause_skip_already_paused",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("task-name", exec.spec.TaskName),
+		)
+		return nil
+	}
+
 	// Check if running before state transition
 	wasRunning := exec.stateMachine.IsRunning()
 

@@ -2350,6 +2350,23 @@ func TestCdcTask_Pause(t *testing.T) {
 	assert.NoErrorf(t, err, "Pause()")
 }
 
+func TestCdcTask_PauseAlreadyPausedIsIdempotent(t *testing.T) {
+	executor := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task1",
+			TaskName: "task1",
+		},
+		stateMachine: NewExecutorStateMachine(),
+	}
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+	require.NoError(t, executor.stateMachine.Transition(TransitionPause))
+	require.NoError(t, executor.stateMachine.Transition(TransitionPauseComplete))
+
+	require.NoError(t, executor.Pause())
+	require.Equal(t, StatePaused, executor.stateMachine.State())
+}
+
 func TestCDCPauseTaskCompleteHookUpdatesCatalogState(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
