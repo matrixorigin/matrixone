@@ -2184,6 +2184,57 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `quote`
+	{
+		functionId: QUOTE,
+		class:      0,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Quote
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Quote
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Quote
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_blob},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Quote
+				},
+			},
+		},
+	},
+
 	// function `reverse`
 	{
 		functionId: REVERSE,
@@ -4502,6 +4553,38 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return OctFloat[float64]
+				},
+			},
+		},
+	},
+
+	// function `position`
+	// POSITION(substr IN str) is a synonym for LOCATE(substr, str)
+	{
+		functionId: POSITION,
+		class:      plan.Function_STRICT,
+		layout:     POSITION_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInLocate2Args
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_char, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInLocate2Args
 				},
 			},
 		},
