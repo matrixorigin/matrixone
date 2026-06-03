@@ -451,6 +451,18 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			return err
 		}
 		buf.WriteString(")")
+	case function.POSITION_FUNCTION:
+		buf.WriteString(funcExpr.Func.GetObjName() + "(")
+		err = describeExpr(ctx, funcExpr.Args[0], options, buf)
+		if err != nil {
+			return err
+		}
+		buf.WriteString(" in ")
+		err = describeExpr(ctx, funcExpr.Args[1], options, buf)
+		if err != nil {
+			return err
+		}
+		buf.WriteString(")")
 	case function.UNKNOW_KIND_FUNCTION:
 		return moerr.NewInvalidInput(ctx, "explain contains UNKNOW_KIND_FUNCTION")
 	}

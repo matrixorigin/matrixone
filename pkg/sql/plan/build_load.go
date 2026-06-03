@@ -211,6 +211,125 @@ func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, e
 	return csvReader.Pos(), nil
 }
 
+func validateLoadParquetOptions(param *tree.ExternParam, ctx CompilerContext) error {
+	if param == nil || !isLoadParquetFormat(param) {
+		return nil
+	}
+	if param.Local {
+		return moerr.NewNYI(ctx.GetContext(), "load parquet local")
+	}
+	if loadOptionExists(param, "compression") || hasExplicitLoadCompression(param.CompressType) {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='parquet' does not support compression option")
+	}
+	if loadOptionExists(param, "jsondata") || param.JsonData != "" {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='parquet' does not support jsondata option")
+	}
+	if loadOptionExists(param, "hive_partitioning") || loadOptionExists(param, "hive_partition_columns") ||
+		param.HivePartitioning || len(param.HivePartitionCols) > 0 {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='parquet' does not support hive partitioning options")
+	}
+	if param.Tail == nil {
+		return nil
+	}
+	if param.Tail.Fields != nil {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='parquet' does not support FIELDS option")
+	}
+	if param.Tail.Lines != nil {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='parquet' does not support LINES option")
+	}
+	if param.Tail.IgnoredLines > 0 {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='parquet' does not support IGNORE LINES")
+	}
+	if hasLoadUserVariable(param.Tail.ColumnList) {
+		return moerr.NewNYI(ctx.GetContext(), "parquet load with @variables in column list")
+	}
+	if len(param.Tail.Assignments) > 0 {
+		return moerr.NewNYI(ctx.GetContext(), "parquet load with SET clause")
+	}
+	return nil
+}
+
+func isLoadParquetFormat(param *tree.ExternParam) bool {
+	if param.Format == tree.PARQUET {
+		return true
+	}
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		if strings.EqualFold(param.Option[i], "format") &&
+			strings.EqualFold(param.Option[i+1], tree.PARQUET) {
+			return true
+		}
+	}
+	return false
+}
+
+func loadOptionExists(param *tree.ExternParam, key string) bool {
+	key = strings.ToLower(key)
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		if strings.ToLower(param.Option[i]) == key {
+			return true
+		}
+	}
+	return false
+}
+
+func hasExplicitLoadCompression(compressType string) bool {
+	return compressType != "" && !strings.EqualFold(compressType, tree.AUTO)
+}
+
+func hasLoadUserVariable(cols []tree.LoadColumn) bool {
+	for _, col := range cols {
+		if _, ok := col.(*tree.VarExpr); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func makeLoadExternalStats(param *tree.ExternParam, offset int64) *plan.Stats {
+	// LOAD external scan parallelism is currently sized by
+	// getParallelSizeForExternalScan as Cost*Rowsize/WriteS3Threshold.
+	// Use input bytes as Cost and keep Rowsize=1 to provide a byte-size hint
+	// without changing that compile-time formula. This stats shape is valid
+	// only for LOAD external scan sizing; do not reuse it for query planning
+	// paths where Cost is interpreted as optimizer cost or row cardinality.
+	stats := &plan.Stats{Rowsize: 1}
+	if param == nil {
+		return stats
+	}
+	var inputSize int64
+	if param.ScanType == tree.INLINE {
+		inputSize = int64(len(param.Data))
+	} else {
+		inputSize = param.FileSize - offset
+	}
+	if inputSize < 0 {
+		inputSize = 0
+	}
+	stats.Cost = float64(inputSize)
+	if inputSize > 0 {
+		stats.BlockNum = 1
+		stats.TableCnt = 1
+		stats.Outcnt = 1
+	}
+	return stats
+}
+
+func loadParquetMayListFiles(param *tree.ExternParam) bool {
+	return param != nil &&
+		param.Format == tree.PARQUET &&
+		strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[")
+}
+
+func totalLoadFileSize(fileSize []int64) int64 {
+	var total int64
+	for _, size := range fileSize {
+		if size > 0 {
+			total += size
+		}
+	}
+	return total
+}
+
 func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -238,6 +357,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
 		return nil, err
 	}
+	if err := validateLoadParquetOptions(stmt.Param, ctx); err != nil {
+		return nil, err
+	}
 	tableDef := tblInfo.tableDefs[0]
 	objRef := tblInfo.objRef[0]
 	originTableDef := tableDef
@@ -260,7 +382,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		}
 		stmt.Param.FileStartOff = offset
 	}
-	stmt.Param.ParallelLoadRequested = stmt.Param.Parallel
+	stmt.Param.ParallelLoadRequested = stmt.Param.ParallelLoadRequested || stmt.Param.Parallel
 
 	if stmt.Param.FileSize-offset < int64(LoadParallelMinSize) {
 		stmt.Param.Parallel = false
@@ -298,7 +420,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	externalScanNode := &plan.Node{
 		NodeType:    plan.Node_EXTERNAL_SCAN,
-		Stats:       &plan.Stats{},
+		Stats:       makeLoadExternalStats(stmt.Param, offset),
 		ProjectList: externalProject,
 		ObjRef:      objRef,
 		TableDef:    tableDef,
@@ -336,7 +458,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		builder.qry.LoadWriteS3 = false
 	}
 
-	if stmt.Param.Parallel && noCompress {
+	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET {
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode)
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
@@ -415,6 +537,18 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	}
 
 	param.Ctx = ctx.GetContext()
+	if loadParquetMayListFiles(param) {
+		fileList, fileSize, err := ReadDir(param)
+		param.Ctx = nil
+		if err != nil {
+			return "", err
+		}
+		if len(fileList) == 0 {
+			return "", moerr.NewInvalidInput(ctx.GetContext(), "the file does not exist in load flow")
+		}
+		param.FileSize = totalLoadFileSize(fileSize)
+		return param.Filepath, nil
+	}
 	if err := StatFile(param); err != nil {
 		if moerror, ok := err.(*moerr.Error); ok {
 			if moerror.ErrorCode() == moerr.ErrFileNotFound {
