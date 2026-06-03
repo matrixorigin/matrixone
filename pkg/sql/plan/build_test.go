@@ -906,30 +906,6 @@ func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int
 	return nil
 }
 
-func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int, pos int, marker string) *plan.Expr {
-	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen {
-			continue
-		}
-		hasMarker := false
-		for _, expr := range node.ProjectList {
-			if exprContainsStringLiteral(expr, marker) {
-				hasMarker = true
-				break
-			}
-		}
-		if !hasMarker {
-			continue
-		}
-		if pos < len(node.ProjectList) {
-			return node.ProjectList[pos]
-		}
-		return nil
-	}
-	t.Fatalf("missing fallback source project expr with len=%d, pos=%d, marker=%q", projectLen, pos, marker)
-	return nil
-}
-
 func requireQueryExpr(t *testing.T, query *Query, accept func(*plan.Expr) bool, message string) *plan.Expr {
 	for _, node := range query.Nodes {
 		for _, expr := range node.ProjectList {
