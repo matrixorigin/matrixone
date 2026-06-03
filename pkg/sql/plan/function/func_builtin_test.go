@@ -1667,6 +1667,66 @@ func TestBuiltInUUIDFunctions(t *testing.T) {
 	}
 }
 
+func TestBuiltInUUIDSwapFlagIntegerTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	u := "6ccd780c-baba-1026-9564-5b8c656024db"
+	bin := string([]byte{
+		0x6c, 0xcd, 0x78, 0x0c, 0xba, 0xba, 0x10, 0x26,
+		0x95, 0x64, 0x5b, 0x8c, 0x65, 0x60, 0x24, 0xdb,
+	})
+	swapped := string([]byte{
+		0x10, 0x26, 0xba, 0xba, 0x6c, 0xcd, 0x78, 0x0c,
+		0x95, 0x64, 0x5b, 0x8c, 0x65, 0x60, 0x24, 0xdb,
+	})
+
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		values any
+	}{
+		{"int8", types.T_int8.ToType(), []int8{0, 1, 1}},
+		{"int16", types.T_int16.ToType(), []int16{0, 1, 1}},
+		{"int32", types.T_int32.ToType(), []int32{0, 1, 1}},
+		{"int64", types.T_int64.ToType(), []int64{0, 1, 1}},
+		{"uint8", types.T_uint8.ToType(), []uint8{0, 1, 1}},
+		{"uint16", types.T_uint16.ToType(), []uint16{0, 1, 1}},
+		{"uint32", types.T_uint32.ToType(), []uint32{0, 1, 1}},
+		{"uint64", types.T_uint64.ToType(), []uint64{0, 1, 1}},
+	} {
+		t.Run(tc.name+"/uuid_to_bin", func(t *testing.T) {
+			ftc := tcTemp{
+				info: "uuid_to_bin with " + tc.name + " swap flag",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{u, u, u}, []bool{false, false, false}),
+					NewFunctionTestInput(tc.typ, tc.values, []bool{false, false, true}),
+				},
+				expect: NewFunctionTestResult(types.T_varbinary.ToType(), false,
+					[]string{bin, swapped, ""},
+					[]bool{false, false, true}),
+			}
+			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInUUIDToBin)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, ftc.info, info)
+		})
+
+		t.Run(tc.name+"/bin_to_uuid", func(t *testing.T) {
+			ftc := tcTemp{
+				info: "bin_to_uuid with " + tc.name + " swap flag",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varbinary.ToType(), []string{bin, swapped, swapped}, []bool{false, false, false}),
+					NewFunctionTestInput(tc.typ, tc.values, []bool{false, false, true}),
+				},
+				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+					[]string{u, u, ""},
+					[]bool{false, false, true}),
+			}
+			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInBinToUUID)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, ftc.info, info)
+		})
+	}
+}
+
 func TestBuiltInUUIDShort(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), proc.Mp())
