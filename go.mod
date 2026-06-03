@@ -14,6 +14,7 @@ require (
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.34
 	github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible
 	github.com/aliyun/credentials-go v1.3.10
+	github.com/ashvardanian/stringzilla/golang v0.0.0-20260505125223-1166b5b45646
 	github.com/aws/aws-sdk-go v1.55.5
 	github.com/aws/aws-sdk-go-v2 v1.32.5
 	github.com/aws/aws-sdk-go-v2/config v1.28.5
@@ -91,8 +92,8 @@ require (
 	github.com/tidwall/btree v1.7.0
 	github.com/tidwall/pretty v1.2.1
 	github.com/tmc/langchaingo v0.1.13
-	github.com/unum-cloud/usearch/golang v0.0.0-20260524141737-9fd6b0115dcd
 	github.com/xeipuuv/gojsonschema v1.2.0
+	github.com/unum-cloud/usearch/golang v0.0.0-20260524141737-9fd6b0115dcd
 	github.com/yanyiwu/gojieba v1.4.7
 	go.starlark.net v0.0.0-20250701195324-d457b4515e0e
 	go.uber.org/automaxprocs v1.5.3
