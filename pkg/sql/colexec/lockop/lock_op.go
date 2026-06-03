@@ -1235,6 +1235,9 @@ func (lockOp *LockOp) RewriteLockRowsExpressions(rewrite func(*plan.Expr) (*plan
 	targets := make([]lockTarget, len(lockOp.targets))
 	copy(targets, lockOp.targets)
 	for i := range targets {
+		if targets[i].lockRows == nil {
+			continue
+		}
 		expr, exprFolded, err := rewrite(targets[i].lockRows)
 		if err != nil {
 			return false, err

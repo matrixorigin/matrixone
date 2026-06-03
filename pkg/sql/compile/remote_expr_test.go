@@ -132,6 +132,39 @@ func TestFoldVarExprsInScopeUsesPrivateExprCopies(t *testing.T) {
 	require.Equal(t, "TRADITIONAL", proj2.ProjectList[0].GetLit().GetSval())
 }
 
+func TestFoldVarExprsInRemoteRunScopeDoesNotMutateReusableScope(t *testing.T) {
+	shared := makeTestVarExpr("sql_mode")
+	proc1 := newResolveVariableProcess(t, "ANSI")
+	proc2 := newResolveVariableProcess(t, "TRADITIONAL")
+
+	scope := newScope(Remote)
+	proj := projection.NewArgument()
+	proj.ProjectList = []*plan.Expr{shared}
+	scope.setRootOperator(proj)
+
+	remoteScope1, folded, err := foldVarExprsInRemoteRunScope(scope, proc1)
+	require.NoError(t, err)
+	require.True(t, folded)
+	remoteProj1 := remoteScope1.RootOp.(*projection.Projection)
+	require.Equal(t, "ANSI", remoteProj1.ProjectList[0].GetLit().GetSval())
+
+	require.True(t, scopeContainsVarExpr(scope))
+	require.IsType(t, &plan.Expr_V{}, shared.Expr)
+	require.Same(t, shared, proj.ProjectList[0])
+
+	remoteScope2, folded, err := foldVarExprsInRemoteRunScope(scope, proc2)
+	require.NoError(t, err)
+	require.True(t, folded)
+	remoteProj2 := remoteScope2.RootOp.(*projection.Projection)
+	require.Equal(t, "TRADITIONAL", remoteProj2.ProjectList[0].GetLit().GetSval())
+
+	require.NotSame(t, scope, remoteScope1)
+	require.NotSame(t, scope.RootOp, remoteScope1.RootOp)
+	require.NotSame(t, remoteScope1.RootOp, remoteScope2.RootOp)
+	require.NotSame(t, remoteProj1.ProjectList[0], remoteProj2.ProjectList[0])
+	require.True(t, scopeContainsVarExpr(scope))
+}
+
 func TestFoldVarExprsInHiddenExpressionsUsePrivateCopies(t *testing.T) {
 	proc := newResolveVariableProcess(t, "ANSI")
 	sharedAggExpr := makeTestVarExpr("sql_mode")
@@ -143,9 +176,20 @@ func TestFoldVarExprsInHiddenExpressionsUsePrivateCopies(t *testing.T) {
 		aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{sharedAggExpr}, nil),
 	}
 	lockOp := lockop.NewArgumentByEngine(nil)
+	lockOp.AddLockTarget(2, nil, 0, types.T_int64.ToType(), -1, -1, nil, false)
 	lockOp.AddLockTarget(1, nil, 0, types.T_int64.ToType(), -1, -1, sharedLockRows, false)
 	groupOp.AppendChild(lockOp)
 	scope.setRootOperator(groupOp)
+
+	rewriteCalls := 0
+	rewritten, err := lockOp.RewriteLockRowsExpressions(func(expr *plan.Expr) (*plan.Expr, bool, error) {
+		require.NotNil(t, expr)
+		rewriteCalls++
+		return expr, false, nil
+	})
+	require.NoError(t, err)
+	require.False(t, rewritten)
+	require.Equal(t, 1, rewriteCalls)
 
 	folded, err := foldVarExprsInScope(scope, proc)
 	require.NoError(t, err)

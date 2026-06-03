@@ -110,6 +110,54 @@ func foldVarExprsInScope(s *Scope, proc *process.Process) (bool, error) {
 	return folded, nil
 }
 
+func foldVarExprsInRemoteRunScope(s *Scope, proc *process.Process) (*Scope, bool, error) {
+	if !scopeContainsVarExpr(s) {
+		return s, false, nil
+	}
+	copied := copyScopeForVarExprFold(s)
+	folded, err := foldVarExprsInScope(copied, proc)
+	return copied, folded, err
+}
+
+func copyScopeForVarExprFold(s *Scope) *Scope {
+	if s == nil {
+		return nil
+	}
+	copied := *s
+	if s.DataSource != nil {
+		dataSource := *s.DataSource
+		copied.DataSource = &dataSource
+	}
+	if s.RootOp != nil {
+		copied.RootOp = copyOperatorTreeForVarExprFold(s.RootOp)
+	}
+	if len(s.PreScopes) > 0 {
+		copied.PreScopes = make([]*Scope, len(s.PreScopes))
+		for i := range s.PreScopes {
+			copied.PreScopes[i] = copyScopeForVarExprFold(s.PreScopes[i])
+		}
+	}
+	return &copied
+}
+
+func copyOperatorTreeForVarExprFold(op vm.Operator) vm.Operator {
+	if op == nil {
+		return nil
+	}
+	value := reflect.ValueOf(op)
+	if value.Kind() != reflect.Pointer || value.IsNil() {
+		return op
+	}
+	copiedValue := reflect.New(value.Elem().Type())
+	copiedValue.Elem().Set(value.Elem())
+	copied := copiedValue.Interface().(vm.Operator)
+	copied.GetOperatorBase().SetChildren(nil)
+	for i := 0; i < op.GetOperatorBase().NumChildren(); i++ {
+		copied.GetOperatorBase().AppendChild(copyOperatorTreeForVarExprFold(op.GetOperatorBase().GetChildren(i)))
+	}
+	return copied
+}
+
 func sourceContainsVarExpr(source *Source) bool {
 	if source == nil {
 		return false
@@ -271,6 +319,12 @@ func foldVarExprsInValue(v reflect.Value, seen map[uintptr]struct{}, proc *proce
 		}
 		if v.Type() == planExprPtrType {
 			return foldVarExprInSettableValue(v, proc)
+		}
+		if v.CanSet() && containsVarExprInValue(v, nil) {
+			copied := reflect.New(v.Type().Elem())
+			copied.Elem().Set(v.Elem())
+			v.Set(copied)
+			v = copied
 		}
 		hiddenFolded, err := foldVarExprsInHiddenExpressions(v, proc)
 		if err != nil {
