@@ -3332,6 +3332,120 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		convey.So(strings.Join(bh.executedSQLs, "\n"), convey.ShouldNotContainSubstring, unscopedSql)
 	})
 
+	convey.Convey("grant privilege [ObjectType: Database] inherited role grant option covers database star", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.GrantPrivilege{
+			Privileges: []*tree.Privilege{
+				{Type: tree.PRIVILEGE_TYPE_STATIC_DROP_TABLE},
+			},
+			ObjType: tree.OBJECT_TYPE_DATABASE,
+			Level: &tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+			},
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		internRoleID := int64(1001)
+		devRoleID := int64(1002)
+		testRoleID := int64(1003)
+		ses.tenant = &TenantInfo{
+			Tenant:        "xxx",
+			User:          "xxx",
+			DefaultRole:   "intern",
+			TenantID:      1001,
+			UserID:        1001,
+			DefaultRoleID: uint32(internRoleID),
+		}
+		ctx := ses.GetTxnHandler().GetTxnCtx()
+		bh.init()
+
+		globalSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndExactLevel(
+			int64(PrivilegeTypeDropTable), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership),
+			objectTypeDatabase, objectIDAll, privilegeLevelStar)
+		bh.sql2result[globalSql] = newMrsForPrivilegeWGO([][]interface{}{
+			{testRoleID},
+		})
+		globalStarStarSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndExactLevel(
+			int64(PrivilegeTypeDropTable), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership),
+			objectTypeDatabase, objectIDAll, privilegeLevelStarStar)
+		bh.sql2result[globalStarStarSql] = newMrsForPrivilegeWGO([][]interface{}{})
+		bh.sql2result[getSqlForInheritedRoleIdOfRoleId(internRoleID)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+			{devRoleID, false},
+		})
+		bh.sql2result[getSqlForInheritedRoleIdOfRoleId(devRoleID)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+			{testRoleID, false},
+		})
+		bh.sql2result[getSqlForInheritedRoleIdOfRoleId(testRoleID)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
+		roleGrantWGOSql := getSqlForCheckRoleGrantWGO(testRoleID)
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(strings.Join(bh.executedSQLs, "\n"), convey.ShouldNotContainSubstring, roleGrantWGOSql)
+	})
+
+	convey.Convey("grant privilege [ObjectType: Account] inherited role grant option does not cover account star", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.GrantPrivilege{
+			Privileges: []*tree.Privilege{
+				{Type: tree.PRIVILEGE_TYPE_STATIC_DROP_DATABASE},
+			},
+			ObjType: tree.OBJECT_TYPE_ACCOUNT,
+			Level: &tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+			},
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		internRoleID := int64(1001)
+		devRoleID := int64(1002)
+		ses.tenant = &TenantInfo{
+			Tenant:        "xxx",
+			User:          "xxx",
+			DefaultRole:   "intern",
+			TenantID:      1001,
+			UserID:        1001,
+			DefaultRoleID: uint32(internRoleID),
+		}
+		ctx := ses.GetTxnHandler().GetTxnCtx()
+		bh.init()
+
+		wgoSql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeDropDatabase)
+		bh.sql2result[wgoSql] = newMrsForPrivilegeWGO([][]interface{}{
+			{devRoleID},
+		})
+		roleGrantWGOSql := getSqlForCheckRoleGrantWGO(devRoleID)
+		bh.sql2result[roleGrantWGOSql] = newMrsForRoleWGO([][]interface{}{})
+		inheritedSql := getSqlForInheritedRoleIdOfRoleId(internRoleID)
+		bh.sql2result[inheritedSql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+			{devRoleID, false},
+		})
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+		convey.So(strings.Join(bh.executedSQLs, "\n"), convey.ShouldNotContainSubstring, inheritedSql)
+	})
+
 	convey.Convey("grant privilege [ObjectType: Database] succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -9463,6 +9577,10 @@ func (bt *backgroundExecTest) ExecRestore(ctx context.Context, s string, from ui
 }
 
 func (bt *backgroundExecTest) GetExecResultSet() []interface{} {
+	if _, ok := bt.sql2result[bt.currentSql]; !ok &&
+		strings.HasPrefix(bt.currentSql, "select granted_id,with_grant_option from mo_catalog.mo_role_grant where grantee_id = ") {
+		return []interface{}{newMrsForInheritedRoleIdOfRoleId([][]interface{}{})}
+	}
 	return []interface{}{bt.sql2result[bt.currentSql]}
 }
 
