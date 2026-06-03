@@ -76,10 +76,10 @@ type SqlProcess struct {
 
 	// Optional RuntimeFilterSpec
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-	// Optional BloomFilter bytes for ivf entries scan.
-	IvfBloomFilter []byte
-	// Optional BloomFilter bytes for fulltext index scan.
-	FulltextBloomFilter []byte
+	// Optional doc_id membership-filter bytes (tagged docfilter payload) for the ivf entries scan.
+	IvfMembershipFilter []byte
+	// Optional doc_id membership-filter bytes (tagged docfilter payload) for the fulltext index scan.
+	FulltextMembershipFilter []byte
 	// Optional exact primary-key filter list (SQL literals, comma-separated).
 	// When set, ivf_search uses it to build "pk IN (...)" and skip centroid filtering.
 	ExactPkFilter string
@@ -132,11 +132,11 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 		//-------------------------------------------------------
 		topContext := proc.GetTopContext()
 		// Attach optional BloomFilter to context for internal executor.
-		if len(sqlproc.IvfBloomFilter) > 0 {
-			topContext = context.WithValue(topContext, defines.IvfBloomFilter{}, sqlproc.IvfBloomFilter)
+		if len(sqlproc.IvfMembershipFilter) > 0 {
+			topContext = context.WithValue(topContext, defines.IvfMembershipFilter{}, sqlproc.IvfMembershipFilter)
 		}
-		if len(sqlproc.FulltextBloomFilter) > 0 {
-			topContext = context.WithValue(topContext, defines.FulltextBloomFilter{}, sqlproc.FulltextBloomFilter)
+		if len(sqlproc.FulltextMembershipFilter) > 0 {
+			topContext = context.WithValue(topContext, defines.FulltextMembershipFilter{}, sqlproc.FulltextMembershipFilter)
 		}
 		// Attach optional DistRange to context for internal executor.
 		if sqlproc.IndexReaderParam != nil {
@@ -202,11 +202,11 @@ func RunStreamingSql(
 
 		//-------------------------------------------------------
 		// Attach optional BloomFilter to context for internal executor.
-		if len(sqlproc.IvfBloomFilter) > 0 {
-			ctx = context.WithValue(ctx, defines.IvfBloomFilter{}, sqlproc.IvfBloomFilter)
+		if len(sqlproc.IvfMembershipFilter) > 0 {
+			ctx = context.WithValue(ctx, defines.IvfMembershipFilter{}, sqlproc.IvfMembershipFilter)
 		}
-		if len(sqlproc.FulltextBloomFilter) > 0 {
-			ctx = context.WithValue(ctx, defines.FulltextBloomFilter{}, sqlproc.FulltextBloomFilter)
+		if len(sqlproc.FulltextMembershipFilter) > 0 {
+			ctx = context.WithValue(ctx, defines.FulltextMembershipFilter{}, sqlproc.FulltextMembershipFilter)
 		}
 		accountId, err := defines.GetAccountId(proc.Ctx)
 		if err != nil {

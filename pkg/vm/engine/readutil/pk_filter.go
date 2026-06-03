@@ -140,7 +140,7 @@ func ConstructBlockPKFilter(
 		return readFilter, nil
 	}
 
-	// Case with BloomFilter: wrap existing search func.
+	// Case with a membership filter: wrap existing search func.
 
 	// Reusable temporary variables (defined outside closure to avoid allocation on each call)
 	var (

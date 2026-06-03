@@ -29,13 +29,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
-// WaitBloomFilter blocks until it receives a RuntimeFilter_BLOOMFILTER message
+// WaitUniqueJoinKeys blocks until it receives a RuntimeFilter_UNIQUEJOINKEYS message
 // that matches sqlproc.RuntimeFilterSpecs (if any). It returns the raw serialized
 // unique join key bytes from the build side.
 //
 // The caller is responsible for deserializing the bytes and deciding how to use
-// them (e.g. exact pk IN filter vs bloom filter based on its own threshold).
-func WaitBloomFilter(sqlproc *SqlProcess) ([]byte, error) {
+// them (e.g. exact pk IN filter vs a membership filter based on its own threshold).
+func WaitUniqueJoinKeys(sqlproc *SqlProcess) ([]byte, error) {
 	if sqlproc.Proc == nil {
 		return nil, nil
 	}
@@ -44,7 +44,7 @@ func WaitBloomFilter(sqlproc *SqlProcess) ([]byte, error) {
 		return nil, nil
 	}
 	spec := sqlproc.RuntimeFilterSpecs[0]
-	if !spec.UseBloomFilter {
+	if !spec.UseMembershipFilter {
 		return nil, nil
 	}
 
@@ -63,7 +63,7 @@ func WaitBloomFilter(sqlproc *SqlProcess) ([]byte, error) {
 		if !ok {
 			continue
 		}
-		if m.Typ != message.RuntimeFilter_BLOOMFILTER {
+		if m.Typ != message.RuntimeFilter_UNIQUEJOINKEYS {
 			continue
 		}
 		return m.Data, nil

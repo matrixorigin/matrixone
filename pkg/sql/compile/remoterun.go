@@ -216,20 +216,20 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		}
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if len(s.DataSource.BloomFilter) > 0 {
-				p.DataSource.BloomFilter = s.DataSource.BloomFilter
-			} else if bfVal := s.Proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+			if len(s.DataSource.MembershipFilterBytes) > 0 {
+				p.DataSource.MembershipFilter = s.DataSource.MembershipFilterBytes
+			} else if bfVal := s.Proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					p.DataSource.BloomFilter = bf
+					p.DataSource.MembershipFilter = bf
 				}
 			}
 		}
-		// Fulltext index table: attach FulltextBloomFilter from context.
+		// Fulltext index table: attach FulltextMembershipFilter from context.
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if bfVal := s.Proc.Ctx.Value(defines.FulltextBloomFilter{}); bfVal != nil {
+			if bfVal := s.Proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					p.DataSource.BloomFilter = bf
+					p.DataSource.MembershipFilter = bf
 				}
 			}
 		}
@@ -333,19 +333,19 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	dsc := p.GetDataSource()
 	if dsc != nil {
 		s.DataSource = &Source{
-			SchemaName:         dsc.SchemaName,
-			RelationName:       dsc.TableName,
-			Attributes:         dsc.ColList,
-			PushdownId:         dsc.PushdownId,
-			PushdownAddr:       dsc.PushdownAddr,
-			FilterExpr:         dsc.Expr,
-			TableDef:           dsc.TableDef,
-			node:               dsc.Node,
-			Timestamp:          *dsc.Timestamp,
-			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
-			isConst:            dsc.IsConst,
-			RecvMsgList:        dsc.RecvMsgList,
-			BloomFilter:        dsc.BloomFilter,
+			SchemaName:            dsc.SchemaName,
+			RelationName:          dsc.TableName,
+			Attributes:            dsc.ColList,
+			PushdownId:            dsc.PushdownId,
+			PushdownAddr:          dsc.PushdownAddr,
+			FilterExpr:            dsc.Expr,
+			TableDef:              dsc.TableDef,
+			node:                  dsc.Node,
+			Timestamp:             *dsc.Timestamp,
+			RuntimeFilterSpecs:    dsc.RuntimeFilterProbeList,
+			isConst:               dsc.IsConst,
+			RecvMsgList:           dsc.RecvMsgList,
+			MembershipFilterBytes: dsc.MembershipFilter,
 		}
 		// Extract IndexReaderParam from node for remote CN execution
 		if dsc.Node != nil {

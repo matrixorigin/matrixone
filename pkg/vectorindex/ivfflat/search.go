@@ -33,7 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
-// exactPkFilterThreshold controls when WaitBloomFilter converts the received
+// exactPkFilterThreshold controls when WaitUniqueJoinKeys converts the received
 // unique join keys into an exact "pk IN (...)" filter instead of building a
 // bloom filter. For very small PK sets, bloom filter false positives interact
 // poorly with centroid pruning in IVF pre mode. Keeping this threshold small
@@ -182,12 +182,12 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 		return
 	}
 	spec := sqlproc.RuntimeFilterSpecs[0]
-	if !spec.UseBloomFilter {
+	if !spec.UseMembershipFilter {
 		return
 	}
 
 	// Get raw unique join key bytes from the build side.
-	vecbytes, err := sqlexec.WaitBloomFilter(sqlproc)
+	vecbytes, err := sqlexec.WaitUniqueJoinKeys(sqlproc)
 	if err != nil {
 		return
 	}
@@ -225,7 +225,7 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 	if err != nil {
 		return err
 	}
-	sqlproc.IvfBloomFilter = payload
+	sqlproc.IvfMembershipFilter = payload
 	return nil
 }
 
@@ -276,7 +276,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	}
 
 	if sqlproc != nil && sqlproc.ExactPkFilter != "" {
-		// Exact PK path: WaitBloomFilter converted small key set into ExactPkFilter.
+		// Exact PK path: WaitUniqueJoinKeys converted small key set into ExactPkFilter.
 		// Query entries directly by pk list, skip centroid-based filtering.
 		sql = fmt.Sprintf(
 			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",

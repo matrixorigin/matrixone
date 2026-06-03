@@ -1367,7 +1367,7 @@ type MembershipFilter interface {
 }
 
 type FilterHint struct {
-	Must        bool
-	BloomFilter []byte
-	BF          MembershipFilter
+	Must                  bool
+	MembershipFilterBytes []byte
+	BF                    MembershipFilter
 }

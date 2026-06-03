@@ -31,7 +31,7 @@ import (
 
 // TagBloom marks a payload serialized by the CBloomFilter fallback (non-integer
 // PKs). It shares the reader-side transport channel
-// (defines.FulltextBloomFilter -> FilterHint.BloomFilter) with TagCRoaring
+// (defines.FulltextMembershipFilter -> FilterHint.MembershipFilterBytes) with TagCRoaring
 // (croaring.go) and TagCbitmap (cbitmap.go); New dispatches on the tag.
 const TagBloom byte = 0
 

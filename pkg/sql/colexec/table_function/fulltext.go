@@ -66,8 +66,8 @@ type fulltextState struct {
 	resbuf           []*vectorindex.SearchResultAnyKey
 	ranking          bool
 
-	// Serialized CBloomFilter bytes for reader-level doc_id filtering
-	fulltextBloomFilter []byte
+	// Serialized membership-filter (docfilter) bytes for reader-level doc_id filtering
+	fulltextMembershipFilter []byte
 
 	// holding output batch
 	batch *batch.Batch
@@ -382,9 +382,9 @@ func runWordStats(
 	}
 
 	sqlProc := sqlexec.NewSqlProcess(proc)
-	// Attach CBloomFilter for reader-level doc_id filtering on fulltext index table.
-	if len(u.fulltextBloomFilter) > 0 {
-		sqlProc.FulltextBloomFilter = u.fulltextBloomFilter
+	// Attach the membership filter for reader-level doc_id filtering on the fulltext index table.
+	if len(u.fulltextMembershipFilter) > 0 {
+		sqlProc.FulltextMembershipFilter = u.fulltextMembershipFilter
 	}
 
 	result, err = ft_runSql_streaming(ctx, sqlProc, sql, u.streamCh, u.errCh)
@@ -392,10 +392,10 @@ func runWordStats(
 	return
 }
 
-func runSqlWithFulltextFilter(proc *process.Process, fulltextBloomFilter []byte, sql string) (executor.Result, error) {
+func runSqlWithFulltextFilter(proc *process.Process, fulltextMembershipFilter []byte, sql string) (executor.Result, error) {
 	sqlProc := sqlexec.NewSqlProcess(proc)
-	if len(fulltextBloomFilter) > 0 {
-		sqlProc.FulltextBloomFilter = fulltextBloomFilter
+	if len(fulltextMembershipFilter) > 0 {
+		sqlProc.FulltextMembershipFilter = fulltextMembershipFilter
 	}
 	return ft_runSql(sqlProc, sql)
 }
@@ -424,7 +424,7 @@ func runSingleKeywordTopK(
 		return false, err
 	}
 
-	topKRes, err := runSqlWithFulltextFilter(proc, u.fulltextBloomFilter, topKSQL)
+	topKRes, err := runSqlWithFulltextFilter(proc, u.fulltextMembershipFilter, topKSQL)
 	if err != nil {
 		return false, err
 	}
@@ -771,14 +771,14 @@ func fulltextIndexMatch(
 
 	opStats := tableFunction.OpAnalyzer.GetOpStats()
 
-	// Wait for BloomFilter runtime filter if configured (pre-filter pushdown)
-	if u.fulltextBloomFilter == nil && len(tableFunction.RuntimeFilterSpecs) > 0 {
-		bfResult, bfErr := waitFulltextBloomFilter(proc, tableFunction.RuntimeFilterSpecs)
+	// Wait for the unique-join-keys runtime filter if configured (pre-filter pushdown)
+	if u.fulltextMembershipFilter == nil && len(tableFunction.RuntimeFilterSpecs) > 0 {
+		bfResult, bfErr := waitFulltextMembershipFilter(proc, tableFunction.RuntimeFilterSpecs)
 		if bfErr != nil {
 			return bfErr
 		}
 		if bfResult != nil {
-			u.fulltextBloomFilter = bfResult.bloomFilterBytes
+			u.fulltextMembershipFilter = bfResult.membershipFilterBytes
 		}
 	}
 
@@ -878,26 +878,26 @@ func fulltextIndexMatch(
 	return
 }
 
-// fulltextBloomFilterResult holds the result from waiting for a BloomFilter runtime filter.
-type fulltextBloomFilterResult struct {
-	bloomFilterBytes []byte // serialized CBloomFilter for reader-level filtering
+// fulltextMembershipFilterResult holds the result from waiting for a unique-join-keys runtime filter.
+type fulltextMembershipFilterResult struct {
+	membershipFilterBytes []byte // serialized membership-filter payload for reader-level filtering
 }
 
-// waitFulltextBloomFilter waits for a BloomFilter runtime filter message,
-// deserializes the PK vector, and builds a CBloomFilter for reader-level doc_id filtering.
-func waitFulltextBloomFilter(proc *process.Process, specs []*plan.RuntimeFilterSpec) (*fulltextBloomFilterResult, error) {
+// waitFulltextMembershipFilter waits for a unique-join-keys runtime filter message,
+// deserializes the PK vector, and builds the doc_id membership filter for reader-level filtering.
+func waitFulltextMembershipFilter(proc *process.Process, specs []*plan.RuntimeFilterSpec) (*fulltextMembershipFilterResult, error) {
 	if len(specs) == 0 {
 		return nil, nil
 	}
 	spec := specs[0]
-	if !spec.UseBloomFilter {
+	if !spec.UseMembershipFilter {
 		return nil, nil
 	}
 
 	sqlProc := sqlexec.NewSqlProcess(proc)
 	sqlProc.RuntimeFilterSpecs = specs
 
-	vecbytes, err := sqlexec.WaitBloomFilter(sqlProc)
+	vecbytes, err := sqlexec.WaitUniqueJoinKeys(sqlProc)
 	if err != nil || len(vecbytes) == 0 {
 		return nil, err
 	}
@@ -915,5 +915,5 @@ func waitFulltextBloomFilter(proc *process.Process, specs []*plan.RuntimeFilterS
 	if err != nil {
 		return nil, err
 	}
-	return &fulltextBloomFilterResult{bloomFilterBytes: payload}, nil
+	return &fulltextMembershipFilterResult{membershipFilterBytes: payload}, nil
 }

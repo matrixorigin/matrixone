@@ -2344,8 +2344,8 @@ func (tbl *txnTable) BuildReaders(
 	// structure (cbitmap / CRoaring / bloom) backs it; we just hand each reader
 	// a share and free the builder reference at the end.
 	var mainFilter docfilter.MembershipFilter
-	if len(filterHint.BloomFilter) > 0 {
-		if f, ferr := docfilter.New(filterHint.BloomFilter); ferr == nil {
+	if len(filterHint.MembershipFilterBytes) > 0 {
+		if f, ferr := docfilter.New(filterHint.MembershipFilterBytes); ferr == nil {
 			mainFilter = f
 		}
 	}

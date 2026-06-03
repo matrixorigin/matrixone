@@ -31,7 +31,7 @@ import (
 
 // setupKeyFilter builds an int64 key vector of n rows, broadcasts it as the
 // build-side runtime bloom filter, and wires the matching RuntimeFilterSpec so
-// getBloomFilter's WaitBloomFilter receives it.
+// getBloomFilter's WaitUniqueJoinKeys receives it.
 func setupKeyFilter(t *testing.T, n int) *sqlexec.SqlProcess {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
@@ -49,16 +49,16 @@ func setupKeyFilter(t *testing.T, n int) *sqlexec.SqlProcess {
 	tag := int32(42)
 	message.SendMessage(message.RuntimeFilterMessage{
 		Tag:  tag,
-		Typ:  message.RuntimeFilter_BLOOMFILTER,
+		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
 		Data: data,
 	}, mb)
 	sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
-		{Tag: tag, UseBloomFilter: true},
+		{Tag: tag, UseMembershipFilter: true},
 	}
 	return sqlproc
 }
 
-// runGetBloomFilter calls getBloomFilter with a timeout guard (WaitBloomFilter
+// runGetBloomFilter calls getBloomFilter with a timeout guard (WaitUniqueJoinKeys
 // blocks on the message board).
 func runGetBloomFilter(t *testing.T, sqlproc *sqlexec.SqlProcess) {
 	idx := &IvfflatSearchIndex[float32]{}
@@ -77,11 +77,11 @@ func TestGetBloomFilter_DocFilter(t *testing.T) {
 	sqlproc := setupKeyFilter(t, exactPkFilterThreshold+50)
 	runGetBloomFilter(t, sqlproc)
 
-	require.NotEmpty(t, sqlproc.IvfBloomFilter)
+	require.NotEmpty(t, sqlproc.IvfMembershipFilter)
 	require.Empty(t, sqlproc.ExactPkFilter)
 
 	// The payload reconstructs into a usable membership filter.
-	f, err := docfilter.New(sqlproc.IvfBloomFilter)
+	f, err := docfilter.New(sqlproc.IvfMembershipFilter)
 	require.NoError(t, err)
 	require.True(t, f.Valid())
 	f.Free()
@@ -93,5 +93,5 @@ func TestGetBloomFilter_ExactPk(t *testing.T) {
 	runGetBloomFilter(t, sqlproc)
 
 	require.NotEmpty(t, sqlproc.ExactPkFilter)
-	require.Empty(t, sqlproc.IvfBloomFilter)
+	require.Empty(t, sqlproc.IvfMembershipFilter)
 }
