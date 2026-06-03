@@ -8244,40 +8244,66 @@ func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
 			if !isMissingPrivilegeObjectError(err) {
 				return nil, err
 			}
-			return getRoleSetThatPrivilegeGrantedToWGOWithObjType(ctx, bh, privType, objType)
+			// The target object does not exist, so we cannot match on its obj_id.
+			// Fall back to only the broader, object-id-independent scopes (global
+			// *.* and, when resolvable, the database-wide db.*). This still honors
+			// holders of global/db-wide grant option while preventing grants on
+			// unrelated specific objects of the same type from satisfying the check.
+			return broaderScopeRoleSetForLevel(ctx, ses, bh, privType, objType, level)
 		}
 		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(ctx, bh, privType, objType, objId, privilegeLevel)
 		if err != nil {
 			return nil, err
 		}
-		globalRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(ctx, bh, privType, objType, objectIDAll, privilegeLevelStarStar)
+		broaderRoleSet, err := broaderScopeRoleSetForLevel(ctx, ses, bh, privType, objType, level)
 		if err != nil {
 			return nil, err
 		}
-		mergeRoleSets(roleSet, globalRoleSet)
-		if level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
-			level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
-			dbName := level.DbName
-			if dbName == "" {
-				dbName = ses.GetDatabaseName()
-			}
-			dbId, err := getDatabaseOrTableId(ctx, bh, true, dbName, "")
-			if err != nil {
-				if !isMissingPrivilegeObjectError(err) {
-					return nil, err
-				}
-				return roleSet, nil
-			}
-			dbRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(ctx, bh, privType, objType, dbId, privilegeLevelDatabaseStar)
-			if err != nil {
-				return nil, err
-			}
-			mergeRoleSets(roleSet, dbRoleSet)
-		}
+		mergeRoleSets(roleSet, broaderRoleSet)
 		return roleSet, nil
 	}
 
 	return getRoleSetThatPrivilegeGrantedToWGOWithObjType(ctx, bh, privType, objType)
+}
+
+// broaderScopeRoleSetForLevel collects roles whose grant option covers the target
+// through a scope that does not depend on the target object's own obj_id: the global
+// *.* scope always, plus the database-wide db.* scope when the grant targets a table
+// (DATABASE_TABLE/TABLE) and the database itself still resolves. A missing database is
+// skipped rather than treated as an error, mirroring the object-missing fallback.
+func broaderScopeRoleSetForLevel(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	objType objectType,
+	level tree.PrivilegeLevel,
+) (*btree.Set[int64], error) {
+	roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(ctx, bh, privType, objType, objectIDAll, privilegeLevelStarStar)
+	if err != nil {
+		return nil, err
+	}
+	if level.Level != tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE &&
+		level.Level != tree.PRIVILEGE_LEVEL_TYPE_TABLE {
+		return roleSet, nil
+	}
+	dbName := level.DbName
+	if dbName == "" {
+		dbName = ses.GetDatabaseName()
+	}
+	dbId, err := getDatabaseOrTableId(ctx, bh, true, dbName, "")
+	if err != nil {
+		if !isMissingPrivilegeObjectError(err) {
+			return nil, err
+		}
+		return roleSet, nil
+	}
+	dbRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(ctx, bh, privType, objType, dbId, privilegeLevelDatabaseStar)
+	if err != nil {
+		return nil, err
+	}
+	mergeRoleSets(roleSet, dbRoleSet)
+	return roleSet, nil
 }
 
 func equivalentScopedGrantOptionPrivilegeLevels(privilegeLevel privilegeLevelType) []privilegeLevelType {
