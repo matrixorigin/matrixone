@@ -85,6 +85,14 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		}
 	}
 
+	var sortSpillMem int64
+	sortSpillMemInt, err := ctx.ResolveVariable("sort_spill_mem", true, false)
+	if err == nil {
+		if sortSpillMemVal, ok := sortSpillMemInt.(int64); ok {
+			sortSpillMem = sortSpillMemVal
+		}
+	}
+
 	var maxDop int64
 	maxDopInt, err := ctx.ResolveVariable("max_dop", true, false)
 	if err == nil {
@@ -107,6 +115,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		mysqlCompatible:      mysqlCompatible,
 		aggSpillMem:          aggSpillMem,
 		joinSpillMem:         joinSpillMem,
+		sortSpillMem:         sortSpillMem,
 		tag2Table:            make(map[int32]*TableDef),
 		tag2NodeID:           make(map[int32]int32),
 		isPrepareStatement:   isPrepareStatement,
@@ -2506,6 +2515,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			NodeType: plan.Node_SORT,
 			Children: []int32{lastNodeID},
 			OrderBy:  orderBys,
+			SpillMem: builder.sortSpillMem,
 		}, ctx)
 	}
 
@@ -3192,6 +3202,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			NodeType: plan.Node_SORT,
 			Children: []int32{nodeID},
 			OrderBy:  sortSpecs,
+			SpillMem: builder.sortSpillMem,
 		}, ctx)
 	}
 
@@ -4258,6 +4269,7 @@ func (builder *QueryBuilder) appendSortNode(ctx *BindContext, nodeID int32, boun
 		NodeType: plan.Node_SORT,
 		Children: []int32{nodeID},
 		OrderBy:  boundOrderBys,
+		SpillMem: builder.sortSpillMem,
 	}, ctx)
 }
 

@@ -1,0 +1,43 @@
+drop database if exists qesortspill;
+create database qesortspill;
+use qesortspill;
+drop table if exists t1;
+create table t1(id int, grp int);
+insert into t1 values (1,40),(2,10),(3,20),(4,10),(5,30),(6,20);
+insert into t1
+select result + 100, result % 50
+from generate_series(1, 200000) g;
+show variables like 'sort_spill_mem';
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+sort_spill_mem  ¦  0
+set @@sort_spill_mem = 1;
+show variables like 'sort_spill_mem';
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+sort_spill_mem  ¦  1
+set @@max_dop = 1;
+select id, grp from t1 where id <= 6 order by grp, id;
+➤ id[4,32,0]  ¦  grp[4,32,0]  𝄀
+2  ¦  10  𝄀
+4  ¦  10  𝄀
+3  ¦  20  𝄀
+6  ¦  20  𝄀
+5  ¦  30  𝄀
+1  ¦  40
+explain (analyze true, check '["Sort", "SpillSize=", "Sort Key: t1.grp INTERNAL, t1.id INTERNAL"]')
+select id, grp from t1 order by grp, id;
+-- @regex("SpillSize=", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=200006 outputRows=200006 (min=200006, max=200006) InputSize=1.53 MiB OutputSize=1.53 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.53 MiB (min=1.53 MiB, max=1.53 MiB)  𝄀
+  ->  Sort  𝄀
+        Analyze: timeConsumed=23ms waitTime=0ms inputRows=200006 outputRows=200006 (min=200006, max=200006) InputSize=1.53 MiB OutputSize=1.53 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=3.05 MiB (min=1.53 MiB, max=1.53 MiB) SpillRows=200006 SpillSize=1.53 MiB (min=0 bytes, max=1.53 MiB)  𝄀
+        Sort Key: t1.grp INTERNAL, t1.id INTERNAL  𝄀
+        ->  Table Scan on qesortspill.t1  𝄀
+              Analyze: timeConsumed=3ms waitTime=0ms inputBlocks=26 inputRows=200006 outputRows=200006 (min=200006, max=200006) InputSize=1.53 MiB OutputSize=1.53 MiB ReadSize=794.26 KiB|0 bytes|794.26 KiB MemorySize=128.00 KiB (min=128.00 KiB, max=128.00 KiB)
+set @@max_dop = 0;
+set @@sort_spill_mem = 0;
+show variables like 'sort_spill_mem';
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+sort_spill_mem  ¦  0
+drop table if exists t1;
+drop database if exists qesortspill;
