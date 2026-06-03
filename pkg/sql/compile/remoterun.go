@@ -664,6 +664,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			StrictSqlMode:          t.Es.StrictSqlMode,
 			ParallelLoad:           t.Es.ParallelLoad,
 			LoadEmptyNumericAsZero: t.Es.LoadEmptyNumericAsZero,
+			ParquetRowGroupShards:  t.Es.ParquetRowGroupShards,
 		}
 		in.ProjectList = t.ProjectList
 	case *source.Source:
@@ -1124,6 +1125,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 					StrictSqlMode:          t.StrictSqlMode,
 					ParallelLoad:           t.ParallelLoad,
 					LoadEmptyNumericAsZero: t.LoadEmptyNumericAsZero,
+					ParquetRowGroupShards:  t.ParquetRowGroupShards,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
