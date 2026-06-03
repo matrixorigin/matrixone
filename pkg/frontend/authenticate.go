@@ -8241,11 +8241,9 @@ func getRoleSetThatDatabasePrivilegeGrantedToWGOScoped(
 ) (*btree.Set[int64], error) {
 	switch level.Level {
 	case tree.PRIVILEGE_LEVEL_TYPE_STAR:
-		return getRoleSetThatDatabasePrivilegeGrantedToWGOWithObjAndLevel(
-			ctx, bh, privType, objectIDAll, privilegeLevelStar)
+		return broaderDatabaseScopeRoleSet(ctx, bh, privType)
 	case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
-		return getRoleSetThatDatabasePrivilegeGrantedToWGOWithObjAndLevel(
-			ctx, bh, privType, objectIDAll, privilegeLevelStarStar)
+		return broaderDatabaseScopeRoleSet(ctx, bh, privType)
 	case tree.PRIVILEGE_LEVEL_TYPE_DATABASE,
 		tree.PRIVILEGE_LEVEL_TYPE_TABLE:
 		privilegeLevel, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, tree.OBJECT_TYPE_DATABASE, level)
