@@ -82,6 +82,8 @@ option (gogoproto.protosizer_all) = true;
    PublicationExecutor = 11;
    // SQL task
    SQLTask = 12;
+   // Datalink CAS garbage-collection sweep task
+   DatalinkCASGCExecutor = 13;
  }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.
