@@ -17,9 +17,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-// A dense bitset sized to nbits bits (words holds bitmap_size(nbits) uint64s).
-// words is NULL when nbits == 0 (an empty filter that matches nothing).
+// A dense bitset over [base, base+nbits). bit i represents value base+i, so the
+// structure is sized to the value SPAN, not the max value. When the builder is
+// told not to offset, base is 0 and bit i == value i (legacy layout). words
+// holds bitmap_size(nbits) uint64s; NULL when nbits == 0 (matches nothing).
 typedef struct {
+  uint64_t base;
   uint64_t nbits;
   uint64_t *words;
 } mo_cbitmap_t;
@@ -37,28 +40,42 @@ static inline uint64_t mo_cbm_decode(const unsigned char *p, size_t elemsz) {
 
 void *mo_cbitmap_build_fixed(const void *key, size_t len, size_t elemsz,
                              size_t nitem, const void *nullmap,
-                             size_t nullmaplen, uint64_t max_bits) {
+                             size_t nullmaplen, uint64_t max_bits,
+                             int use_offset) {
   (void)nullmaplen;
   const unsigned char *p = (const unsigned char *)key;
 
-  // Pass 1: find the max non-null value (a dense bitset is sized by value).
-  uint64_t maxv = 0;
+  // Pass 1: find the min and max non-null value. With use_offset the bitset is
+  // based at min, so its size is the value SPAN (max-min); otherwise base is 0
+  // and it is sized by max (legacy layout).
+  uint64_t minv = 0, maxv = 0;
   int any = 0;
   if (elemsz != 0) {
     for (size_t i = 0, j = 0; i < nitem && j < len; i++, j += elemsz) {
       if (nullmap && bitmap_test((uint64_t *)nullmap, i)) continue;
       uint64_t v = mo_cbm_decode(p + j, elemsz);
-      if (!any || v > maxv) maxv = v;
-      any = 1;
+      if (!any) {
+        minv = maxv = v;
+        any = 1;
+      } else {
+        if (v < minv) minv = v;
+        if (v > maxv) maxv = v;
+      }
     }
   }
-  // Feasibility gate: a dense bitset needs maxv+1 bits; bail (caller falls back
-  // to the compact CRoaring filter) if that exceeds the cap.
-  if (any && maxv + 1 > max_bits) return NULL;
+
+  uint64_t base = use_offset ? minv : 0;
+  // span = maxv - base (never overflows: maxv >= base); span+1 is the bit count.
+  uint64_t span = any ? (maxv - base) : 0;
+  // Feasibility gate: bail (caller falls back to the compact CRoaring filter)
+  // if the bit count would exceed the cap. Checking span >= max_bits also
+  // avoids the span+1 overflow for pathological ranges.
+  if (any && span >= max_bits) return NULL;
 
   mo_cbitmap_t *f = (mo_cbitmap_t *)malloc(sizeof(mo_cbitmap_t));
   if (!f) return NULL;
-  f->nbits = any ? (maxv + 1) : 0;
+  f->base = base;
+  f->nbits = any ? (span + 1) : 0;
   f->words = NULL;
   uint64_t nwords = bitmap_size(f->nbits);  // (nbits+63)>>6; 0 when nbits == 0
   if (nwords) {
@@ -69,11 +86,11 @@ void *mo_cbitmap_build_fixed(const void *key, size_t len, size_t elemsz,
     }
   }
 
-  // Pass 2: set a bit per non-null value.
+  // Pass 2: set a bit per non-null value, offset by base.
   if (elemsz != 0 && f->words) {
     for (size_t i = 0, j = 0; i < nitem && j < len; i++, j += elemsz) {
       if (nullmap && bitmap_test((uint64_t *)nullmap, i)) continue;
-      bitmap_set(f->words, mo_cbm_decode(p + j, elemsz));
+      bitmap_set(f->words, mo_cbm_decode(p + j, elemsz) - base);
     }
   }
   return f;
@@ -89,8 +106,10 @@ void mo_cbitmap_free(void *f) {
 bool mo_cbitmap_contain(void *f, uint64_t val) {
   if (!f) return false;
   mo_cbitmap_t *b = (mo_cbitmap_t *)f;
-  if (val >= b->nbits) return false;
-  return bitmap_test(b->words, val);
+  if (val < b->base) return false;  // below base also guards the subtraction
+  uint64_t idx = val - b->base;
+  if (idx >= b->nbits) return false;
+  return bitmap_test(b->words, idx);
 }
 
 void mo_cbitmap_test_fixed(void *f, const void *key, size_t len, size_t elemsz,
@@ -106,22 +125,30 @@ void mo_cbitmap_test_fixed(void *f, const void *key, size_t len, size_t elemsz,
       continue;
     }
     uint64_t v = mo_cbm_decode(p + j, elemsz);
-    out[i] = (v < b->nbits && bitmap_test(b->words, v)) ? 1 : 0;
+    if (v < b->base) {
+      out[i] = 0;
+      continue;
+    }
+    uint64_t idx = v - b->base;
+    out[i] = (idx < b->nbits && bitmap_test(b->words, idx)) ? 1 : 0;
   }
 }
 
 uint8_t *mo_cbitmap_serialize(void *f, size_t *len) {
   mo_cbitmap_t *b = (mo_cbitmap_t *)f;
   uint64_t nwords = bitmap_size(b->nbits);
-  size_t sz = sizeof(uint64_t) + (size_t)nwords * sizeof(uint64_t);
+  // Header: [base u64][nbits u64], then the bitmap words.
+  size_t sz = 2 * sizeof(uint64_t) + (size_t)nwords * sizeof(uint64_t);
   uint8_t *buf = (uint8_t *)malloc(sz);
   if (!buf) {
     *len = 0;
     return NULL;
   }
-  memcpy(buf, &b->nbits, sizeof(uint64_t));
+  memcpy(buf, &b->base, sizeof(uint64_t));
+  memcpy(buf + sizeof(uint64_t), &b->nbits, sizeof(uint64_t));
   if (nwords) {
-    memcpy(buf + sizeof(uint64_t), b->words, (size_t)nwords * sizeof(uint64_t));
+    memcpy(buf + 2 * sizeof(uint64_t), b->words,
+           (size_t)nwords * sizeof(uint64_t));
   }
   *len = sz;
   return buf;
@@ -130,14 +157,16 @@ uint8_t *mo_cbitmap_serialize(void *f, size_t *len) {
 void mo_cbitmap_free_buf(uint8_t *buf) { free(buf); }
 
 void *mo_cbitmap_deserialize(const uint8_t *buf, size_t len) {
-  if (!buf || len < sizeof(uint64_t)) return NULL;
-  uint64_t nbits = 0;
-  memcpy(&nbits, buf, sizeof(uint64_t));
+  if (!buf || len < 2 * sizeof(uint64_t)) return NULL;
+  uint64_t base = 0, nbits = 0;
+  memcpy(&base, buf, sizeof(uint64_t));
+  memcpy(&nbits, buf + sizeof(uint64_t), sizeof(uint64_t));
   uint64_t nwords = bitmap_size(nbits);
-  if (len < sizeof(uint64_t) + (size_t)nwords * sizeof(uint64_t)) return NULL;
+  if (len < 2 * sizeof(uint64_t) + (size_t)nwords * sizeof(uint64_t)) return NULL;
 
   mo_cbitmap_t *f = (mo_cbitmap_t *)malloc(sizeof(mo_cbitmap_t));
   if (!f) return NULL;
+  f->base = base;
   f->nbits = nbits;
   f->words = NULL;
   if (nwords) {
@@ -146,7 +175,8 @@ void *mo_cbitmap_deserialize(const uint8_t *buf, size_t len) {
       free(f);
       return NULL;
     }
-    memcpy(f->words, buf + sizeof(uint64_t), (size_t)nwords * sizeof(uint64_t));
+    memcpy(f->words, buf + 2 * sizeof(uint64_t),
+           (size_t)nwords * sizeof(uint64_t));
   }
   return f;
 }

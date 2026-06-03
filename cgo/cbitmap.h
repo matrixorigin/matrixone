@@ -37,12 +37,16 @@
 //   nullmap:    optional MO null bitmap (uint64 words) or NULL
 //   nullmaplen: bytes of nullmap
 //   max_bits:   dense-bitset size cap in bits
-// Returns NULL when (max id + 1) would exceed max_bits (caller falls back to
+//   use_offset: when nonzero, base the bitset at min(values) so its size is the
+//               value SPAN (max-min) rather than the max value; 0 keeps the
+//               legacy value-indexed layout (base 0).
+// Returns NULL when the bit count would exceed max_bits (caller falls back to
 // CRoaring) or on allocation failure. An empty input yields a valid empty
 // bitset that matches nothing (not NULL).
 void *mo_cbitmap_build_fixed(const void *key, size_t len, size_t elemsz,
                              size_t nitem, const void *nullmap,
-                             size_t nullmaplen, uint64_t max_bits);
+                             size_t nullmaplen, uint64_t max_bits,
+                             int use_offset);
 void mo_cbitmap_free(void *f);
 
 // Single membership test (value already decoded to uint64).
@@ -53,8 +57,9 @@ void mo_cbitmap_test_fixed(void *f, const void *key, size_t len, size_t elemsz,
                            size_t nitem, const void *nullmap,
                            size_t nullmaplen, void *result);
 
-// Serialize into a freshly malloc'd buffer ([nbits as u64][bitmap words]); *len
-// gets the length. Caller frees with mo_cbitmap_free_buf. Returns NULL on OOM.
+// Serialize into a freshly malloc'd buffer ([base u64][nbits u64][bitmap
+// words]); *len gets the length. Caller frees with mo_cbitmap_free_buf. Returns
+// NULL on OOM.
 // The format is host-endian and only exchanged between same-architecture MO
 // nodes (same as the build/probe data path).
 uint8_t *mo_cbitmap_serialize(void *f, size_t *len);

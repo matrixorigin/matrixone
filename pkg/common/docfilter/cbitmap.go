@@ -45,7 +45,9 @@ const TagCbitmap byte = 3
 const MaxCbitmapBits = uint64(1) << 23
 
 // CbitmapFeasible reports whether a max doc_id value is small enough that a
-// dense cbitmap is worthwhile (vs the compact CRoaring filter).
+// dense cbitmap is worthwhile (vs the compact CRoaring filter). This is the
+// value-indexed (offset-off) bound; with CbitmapUseOffset the actual build
+// gates on the value SPAN (max-min), which is never larger.
 func CbitmapFeasible(maxVal uint64) bool {
 	return maxVal+1 <= MaxCbitmapBits
 }
@@ -88,20 +90,37 @@ func cbitmapSerialize(f unsafe.Pointer) ([]byte, error) {
 	return C.GoBytes(unsafe.Pointer(buf), C.int(clen)), nil
 }
 
+// CbitmapUseOffset, when true, bases the dense bitset at min(values) so its size
+// is the value SPAN (max-min) rather than the max value. This lets high-but-
+// narrow id sets — recent rows of a large table, BETWEEN ranges, or
+// signed/negative PKs (which zero-extend to huge uint64) — stay within
+// MaxCbitmapBits instead of falling back to CRoaring. On by default: it strictly
+// shrinks the bitset (size = span, never larger than the value-indexed layout)
+// at no probe cost (BenchmarkTestVectorOffset: identical probe time), so a
+// bounded-span set uses the fast dense path even when its absolute ids are
+// large. The base is carried in the serialized payload, so the reader is
+// agnostic to this flag (a payload built with it on is probed correctly either
+// way).
+var CbitmapUseOffset = true
+
 // BuildCbitmapBytes builds a dense bitset from an integer doc_id vector (read
 // directly in C) and returns its serialization (no tag). ok=false means the id
 // range is too large for a dense bitmap (caller should use CRoaring instead).
 func BuildCbitmapBytes(v *vector.Vector) (data []byte, ok bool, err error) {
-	return buildCbitmapBytesCap(v, MaxCbitmapBits)
+	return buildCbitmapBytesCap(v, MaxCbitmapBits, CbitmapUseOffset)
 }
 
-// buildCbitmapBytesCap is BuildCbitmapBytes with an explicit bit cap. Production
-// callers use BuildCbitmapBytes (MaxCbitmapBits); benchmarks pass a larger cap
-// to measure cbitmap beyond the production budget.
-func buildCbitmapBytesCap(v *vector.Vector, maxBits uint64) (data []byte, ok bool, err error) {
+// buildCbitmapBytesCap is BuildCbitmapBytes with an explicit bit cap and offset
+// flag. Production callers use BuildCbitmapBytes (MaxCbitmapBits +
+// CbitmapUseOffset); benchmarks pass these explicitly to measure each variant.
+func buildCbitmapBytesCap(v *vector.Vector, maxBits uint64, useOffset bool) (data []byte, ok bool, err error) {
 	cdata, dataLen, elemsz, nitem, nullPtr, nullLen := vecFixedArgs(v)
+	off := C.int(0)
+	if useOffset {
+		off = 1
+	}
 	f := C.mo_cbitmap_build_fixed(cdata, dataLen, elemsz, nitem, nullPtr, nullLen,
-		C.uint64_t(maxBits))
+		C.uint64_t(maxBits), off)
 	if f == nil {
 		// id range exceeds maxBits (or OOM): fall back to CRoaring.
 		return nil, false, nil

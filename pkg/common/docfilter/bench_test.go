@@ -35,7 +35,7 @@ const benchCbitmapCap = uint64(1) << 31
 // mustCbitmap builds a dense cbitmap (uncapped) for benchmarking; the dense
 // bench keys are always feasible under benchCbitmapCap.
 func mustCbitmap(tb testing.TB, v *vector.Vector) []byte {
-	out, ok, err := buildCbitmapBytesCap(v, benchCbitmapCap)
+	out, ok, err := buildCbitmapBytesCap(v, benchCbitmapCap, false)
 	if err != nil || !ok {
 		tb.Fatalf("build cbitmap: ok=%v err=%v", ok, err)
 	}
@@ -349,5 +349,111 @@ func BenchmarkTestVectorRunOpt(b *testing.B) {
 		runopt.Free()
 		probe.Free(mp)
 		v.Free(mp)
+	}
+}
+
+// BenchmarkCbitmapOffset compares building a dense cbitmap without vs with the
+// base offset for high-but-narrow id sets (fixed count, increasing base, span
+// fixed at 2*count). Without offset the size is base/8 (grows with the absolute
+// id); with offset it is span/8 (stays tiny). Shows the size + build win.
+func BenchmarkCbitmapOffset(b *testing.B) {
+	mp := mpool.MustNewZero()
+	const count = 1000 // span = 2*count = 2000, regardless of base
+	for _, base := range []int64{1_000_000, 10_000_000, 100_000_000} {
+		v := vector.NewVec(types.T_int64.ToType())
+		for i := 0; i < count; i++ {
+			if err := vector.AppendFixed(v, base+int64(i*2), false, mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+		name := fmt.Sprintf("base=%d/count=%d", base, count)
+
+		b.Run("off/"+name, func(b *testing.B) {
+			b.ReportAllocs()
+			var sz int
+			for i := 0; i < b.N; i++ {
+				out, ok, err := buildCbitmapBytesCap(v, benchCbitmapCap, false)
+				if err != nil || !ok {
+					b.Fatalf("ok=%v err=%v", ok, err)
+				}
+				sz = len(out)
+			}
+			b.ReportMetric(float64(sz), "bytes")
+		})
+		b.Run("on/"+name, func(b *testing.B) {
+			b.ReportAllocs()
+			var sz int
+			for i := 0; i < b.N; i++ {
+				out, ok, err := buildCbitmapBytesCap(v, benchCbitmapCap, true)
+				if err != nil || !ok {
+					b.Fatalf("ok=%v err=%v", ok, err)
+				}
+				sz = len(out)
+			}
+			b.ReportMetric(float64(sz), "bytes")
+		})
+		v.Free(mp)
+	}
+}
+
+// BenchmarkTestVectorOffset compares probing a block of keys against a cbitmap
+// built without vs with the base offset (high-but-narrow set). Probes are
+// localized near the candidate window, so this confirms the offset doesn't slow
+// the probe (the tiny offset bitmap is L1-resident; the large value-indexed one
+// is only touched in one region).
+func BenchmarkTestVectorOffset(b *testing.B) {
+	mp := mpool.MustNewZero()
+	const count = 1000
+	const probeRows = 8192
+	for _, base := range []int64{1_000_000, 10_000_000, 100_000_000} {
+		v := vector.NewVec(types.T_int64.ToType())
+		for i := 0; i < count; i++ {
+			if err := vector.AppendFixed(v, base+int64(i*2), false, mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+		// probe spans [base, base+probeRows): even offsets < 2*count hit, rest miss.
+		probe := vector.NewVec(types.T_int64.ToType())
+		for i := 0; i < probeRows; i++ {
+			if err := vector.AppendFixed(probe, base+int64(i), false, mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+		name := fmt.Sprintf("base=%d", base)
+
+		dataOff, ok, err := buildCbitmapBytesCap(v, benchCbitmapCap, false)
+		if err != nil || !ok {
+			b.Fatalf("off ok=%v err=%v", ok, err)
+		}
+		off, err := NewCbitmapFilter(dataOff)
+		if err != nil {
+			b.Fatal(err)
+		}
+		dataOn, ok, err := buildCbitmapBytesCap(v, benchCbitmapCap, true)
+		if err != nil || !ok {
+			b.Fatalf("on ok=%v err=%v", ok, err)
+		}
+		on, err := NewCbitmapFilter(dataOn)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		b.Run("off/"+name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				off.TestVector(probe, nil)
+			}
+		})
+		b.Run("on/"+name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				on.TestVector(probe, nil)
+			}
+		})
+
+		off.Free()
+		on.Free()
+		v.Free(mp)
+		probe.Free(mp)
 	}
 }

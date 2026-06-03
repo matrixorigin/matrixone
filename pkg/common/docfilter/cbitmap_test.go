@@ -56,10 +56,58 @@ func TestCbitmapFilter(t *testing.T) {
 	require.True(t, f.Valid())
 	require.True(t, f.Test(v.GetRawBytesAt(0)))
 
-	// over-budget id range -> ok=false (caller falls back to CRoaring)
-	big := buildIntVec(t, mp, types.T_int64.ToType(), []int64{int64(MaxCbitmapBits) + 10}, nil)
+	// over-budget id SPAN -> ok=false (caller falls back to CRoaring). With the
+	// base offset on (default), feasibility is span-based, so a lone huge value
+	// (span 0) is feasible — it's a set whose SPAN exceeds the cap that falls
+	// back. {0, MaxCbitmapBits+10} spans past the cap either way (base 0).
+	big := buildIntVec(t, mp, types.T_int64.ToType(), []int64{0, int64(MaxCbitmapBits) + 10}, nil)
 	defer big.Free(mp)
 	_, ok, err = BuildCbitmapBytes(big)
 	require.NoError(t, err)
 	require.False(t, ok)
+}
+
+// TestCbitmapNegativeInt32 verifies negative int32 values — which zero-extend to
+// large uint64 (int32 -1 -> 0xFFFFFFFF = 4294967295, NOT the int64 -1 pattern) —
+// are handled consistently across build (C decode), Test (Go rawIntToUint64),
+// and TestVector (C decode). It also shows the offset layout makes a clustered
+// all-negative set feasible, where the value-indexed layout cannot (max ~4.3B).
+func TestCbitmapNegativeInt32(t *testing.T) {
+	mp := mpool.MustNewZero()
+	orig := CbitmapUseOffset
+	defer func() { CbitmapUseOffset = orig }()
+
+	// All-negative, clustered: uint64(int32(-1)) ~= 4.29B (max), uint64(int32(
+	// -1000)) (min) -> span ~999.
+	present := []int32{-1000, -100, -50, -1}
+	v := buildIntVec(t, mp, types.T_int32.ToType(), present, nil)
+	defer v.Free(mp)
+
+	// Without offset: max ~4.29B >> MaxCbitmapBits -> infeasible -> CRoaring.
+	CbitmapUseOffset = false
+	_, ok, err := BuildCbitmapBytes(v)
+	require.NoError(t, err)
+	require.False(t, ok, "negative int32 max (~4.3B) exceeds the cap without offset")
+
+	// With offset: span ~999 -> feasible, membership exact.
+	CbitmapUseOffset = true
+	payload, ok, err := BuildCbitmapBytes(v)
+	require.NoError(t, err)
+	require.True(t, ok, "offset makes the narrow negative span feasible")
+
+	f, err := NewCbitmapFilter(payload)
+	require.NoError(t, err)
+	defer f.Free()
+
+	for i := range present {
+		require.True(t, f.Test(v.GetRawBytesAt(i)), "value %d present", present[i])
+	}
+	// absent: negatives inside the span but unset, plus positives (below base).
+	absent := buildIntVec(t, mp, types.T_int32.ToType(), []int32{-2, -999, -101, 0, 5}, nil)
+	defer absent.Free(mp)
+	for i := 0; i < absent.Length(); i++ {
+		require.False(t, f.Test(absent.GetRawBytesAt(i)), "row %d should be absent", i)
+	}
+	// TestVector (C decode) must agree with Test (Go decode) on the same data.
+	require.Equal(t, []uint8{1, 1, 1, 1}, f.TestVector(v, nil))
 }

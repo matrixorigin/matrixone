@@ -2,7 +2,7 @@
 -- three filter structures that docfilter.Build selects based on the source
 -- table's primary-key type:
 --   section 1: integer PK, small/bounded ids        -> dense cbitmap
---   section 2: integer PK, large ids (> 2^23)        -> compact CRoaring bitset
+--   section 2: integer PK, wide id span (> 2^23)     -> compact CRoaring bitset
 --   section 3: varchar (non-integer) PK              -> CBloomFilter (approx)
 -- In "mode=pre" the relational predicate (category/score) builds the candidate
 -- PK filter that prunes the vector search. The filter is transparent to
@@ -45,7 +45,10 @@ order by l2_distance(embedding, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]')
 limit 3 by rank with option 'mode=pre';
 
 -- ============================================================================
--- section 2: integer PK, large ids (> 2^23 = 8388608) -> CRoaring
+-- section 2: integer PK, wide id span (> 2^23 = 8388608) -> CRoaring
+-- The candidate PK span (cat1 & score>2.0 rows: 10000000 .. 20000000 = 10M)
+-- exceeds MaxCbitmapBits even with the base offset (on by default), so the dense
+-- cbitmap is infeasible and docfilter.Build falls back to the CRoaring bitset.
 -- ============================================================================
 create table ivf_croaring (
     id bigint primary key,
@@ -54,16 +57,16 @@ create table ivf_croaring (
     embedding vecf32(8)
 );
 insert into ivf_croaring values
-(200000001, 'cat1', 5.0, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]'),
-(200000002, 'cat1', 4.5, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]'),
-(200000003, 'cat2', 4.0, '[0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3]'),
-(200000004, 'cat2', 3.5, '[0.4,0.4,0.4,0.4,0.4,0.4,0.4,0.4]'),
-(200000005, 'cat3', 3.0, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]'),
-(200000006, 'cat3', 2.5, '[0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6]'),
-(200000007, 'cat1', 2.0, '[0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7]'),
-(200000008, 'cat2', 1.5, '[0.8,0.8,0.8,0.8,0.8,0.8,0.8,0.8]'),
-(200000009, 'cat3', 1.0, '[0.9,0.9,0.9,0.9,0.9,0.9,0.9,0.9]'),
-(200000010, 'cat1', 0.5, '[1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0]');
+(10000000,  'cat1', 5.0, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]'),
+(20000000,  'cat1', 4.5, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]'),
+(30000000,  'cat2', 4.0, '[0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3]'),
+(40000000,  'cat2', 3.5, '[0.4,0.4,0.4,0.4,0.4,0.4,0.4,0.4]'),
+(50000000,  'cat3', 3.0, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]'),
+(60000000,  'cat3', 2.5, '[0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6]'),
+(70000000,  'cat1', 2.0, '[0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7]'),
+(80000000,  'cat2', 1.5, '[0.8,0.8,0.8,0.8,0.8,0.8,0.8,0.8]'),
+(90000000,  'cat3', 1.0, '[0.9,0.9,0.9,0.9,0.9,0.9,0.9,0.9]'),
+(100000000, 'cat1', 0.5, '[1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0]');
 
 create index idx_croaring using ivfflat on ivf_croaring(embedding) lists=2 op_type 'vector_l2_ops';
 
