@@ -1840,6 +1840,18 @@ var (
 		}, {
 			input: "select * from t1 natural left join t2",
 		}, {
+			input:  "select * from t1 left join t2 where t1.id = 1",
+			output: "select * from t1 left join t2 where t1.id = 1",
+		}, {
+			input:  "select * from t1 right join t2 where t1.id = 1",
+			output: "select * from t1 right join t2 where t1.id = 1",
+		}, {
+			input:  "select * from t1 left join (select * from t2) as sub where t1.id = 1",
+			output: "select * from t1 left join (select * from t2) as sub where t1.id = 1",
+		}, {
+			input:  "select * from t1 left join t2",
+			output: "select * from t1 left join t2",
+		}, {
 			input: "select 1",
 		}, {
 			input: "select $ from t",
