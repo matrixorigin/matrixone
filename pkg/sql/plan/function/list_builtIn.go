@@ -11582,27 +11582,6 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
-	// function `uuid_short`
-	{
-		functionId: UUID_SHORT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				volatile:   true,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint64.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return builtInUUIDShort
-				},
-			},
-		},
-	},
-
 	// function `uuid_to_bin`
 	{
 		functionId: UUID_TO_BIN,

@@ -644,14 +644,13 @@ const (
 	JSON_SCHEMA_VALID_REPORT = 461
 	JSON_VALUE               = 462
 	IS_UUID                  = 463
-	UUID_SHORT               = 464
-	UUID_TO_BIN              = 465
-	BIN_TO_UUID              = 466
+	UUID_TO_BIN              = 464
+	BIN_TO_UUID              = 465
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 
-	FUNCTION_END_NUMBER = 467
+	FUNCTION_END_NUMBER = 466
 )
 
 // functionIdRegister is what function we have registered already.
@@ -948,7 +947,6 @@ var functionIdRegister = map[string]int32{
 	"mo_win_truncate":                MO_WIN_TRUNCATE,
 	"uuid":                           UUID,
 	"is_uuid":                        IS_UUID,
-	"uuid_short":                     UUID_SHORT,
 	"uuid_to_bin":                    UUID_TO_BIN,
 	"bin_to_uuid":                    BIN_TO_UUID,
 	"load_file":                      LOAD_FILE,

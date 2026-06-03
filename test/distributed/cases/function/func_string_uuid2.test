@@ -30,8 +30,6 @@ select uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024dz');
 select bin_to_uuid(cast('short' as varbinary));
 select bin_to_uuid(cast('123456789012345' as varbinary));
 select bin_to_uuid(cast('12345678901234567' as varbinary));
-select uuid_short() is not null;
-select uuid_short() > 0;
 
 drop table if exists t_uuid_funcs;
 create table t_uuid_funcs(id int, u varchar(50), swap_flag int);

@@ -25,7 +25,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -1248,20 +1247,6 @@ func builtInIsUUID(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func builtInUUIDShort(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[uint64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		val, err := uuid.NewV7()
-		if err != nil {
-			return moerr.NewInternalError(proc.Ctx, "newuuid failed")
-		}
-		if err := rs.Append(uuidV7ToShort(types.Uuid(val)), false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func builtInUUIDToBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	var getSwapFlag func(uint64) (int64, bool)
@@ -1475,10 +1460,6 @@ func unswapUUIDTimeParts(u types.Uuid) types.Uuid {
 		u[0], u[1],
 		u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15],
 	}
-}
-
-func uuidV7ToShort(u types.Uuid) uint64 {
-	return xxhash.Sum64(u[:])
 }
 
 func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {

@@ -1726,21 +1726,3 @@ func TestBuiltInUUIDSwapFlagIntegerTypes(t *testing.T) {
 		})
 	}
 }
-
-func TestBuiltInUUIDShort(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), proc.Mp())
-	require.NoError(t, result.PreExtendAndReset(3))
-	require.NoError(t, builtInUUIDShort(nil, result, proc, 3, nil))
-	vec := result.GetResultVector()
-	require.Equal(t, 3, vec.Length())
-	values := vector.MustFixedColWithTypeCheck[uint64](vec)
-	require.NotZero(t, values[0])
-	require.NotZero(t, values[1])
-	require.NotZero(t, values[2])
-	require.NotEqual(t, values[0], values[1])
-	require.NotEqual(t, values[1], values[2])
-	fixed := types.Uuid{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10}
-	require.NotZero(t, uuidV7ToShort(fixed))
-	require.Equal(t, uint64(0xb5cb2cb49784abff), uuidV7ToShort(fixed))
-}

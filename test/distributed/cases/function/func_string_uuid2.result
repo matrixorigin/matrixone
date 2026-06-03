@@ -86,12 +86,6 @@ select bin_to_uuid(cast('123456789012345' as varbinary));
 invalid argument bin_to_uuid, bad value 15
 select bin_to_uuid(cast('12345678901234567' as varbinary));
 invalid argument bin_to_uuid, bad value 17
-select uuid_short() is not null;
-➤ uuid_short() is not null[-7,1,0]  𝄀
-1
-select uuid_short() > 0;
-➤ uuid_short() > 0[-7,1,0]  𝄀
-1
 drop table if exists t_uuid_funcs;
 create table t_uuid_funcs(id int, u varchar(50), swap_flag int);
 insert into t_uuid_funcs values
