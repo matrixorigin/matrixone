@@ -474,17 +474,34 @@ func rewriteRuleSingleTableSource(from *tree.From) (string, bool) {
 		return "", false
 	}
 
-	tableExpr, ok := from.Tables[0].(*tree.AliasedTableExpr)
-	if !ok || tableExpr.As.Cols != nil || len(tableExpr.IndexHints) > 0 {
-		return "", false
-	}
-
-	tableName, ok := tableExpr.Expr.(*tree.TableName)
-	if !ok || tableName.AtTsExpr != nil {
+	tableExpr, ok := rewriteRuleSingleTableExpr(from.Tables[0])
+	if !ok {
 		return "", false
 	}
 
 	return normalizeRewriteSQL(tree.String(tableExpr, dialect.MYSQL)), true
+}
+
+func rewriteRuleSingleTableExpr(expr tree.TableExpr) (*tree.AliasedTableExpr, bool) {
+	if joinExpr, ok := expr.(*tree.JoinTableExpr); ok {
+		// The MySQL parser wraps a lone table reference as a CROSS JoinTableExpr.
+		if joinExpr.Right != nil || joinExpr.Cond != nil || joinExpr.Option != "" {
+			return nil, false
+		}
+		expr = joinExpr.Left
+	}
+
+	tableExpr, ok := expr.(*tree.AliasedTableExpr)
+	if !ok || tableExpr.As.Cols != nil || len(tableExpr.IndexHints) > 0 {
+		return nil, false
+	}
+
+	tableName, ok := tableExpr.Expr.(*tree.TableName)
+	if !ok || tableName.AtTsExpr != nil {
+		return nil, false
+	}
+
+	return tableExpr, true
 }
 
 func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {

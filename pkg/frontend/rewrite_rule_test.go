@@ -919,6 +919,13 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 			table:      "db1.t1",
 		},
 		{
+			name:       "parenthesized single table",
+			rule:       "select a from (db1.t1) where age > 28",
+			ok:         true,
+			selectList: "a",
+			table:      "db1.t1",
+		},
+		{
 			name: "scalar expression",
 			rule: "select a + 1 from db1.t1 where age > 28",
 			ok:   false,
