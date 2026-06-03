@@ -34,6 +34,9 @@ import (
 // RunnerOption option for create task runner
 type RunnerOption func(*taskRunner)
 
+// PauseTaskCompletedHook is called after a daemon task pause has been completed.
+type PauseTaskCompletedHook func(context.Context, task.DaemonTask) error
+
 // WithRunnerLogger set logger
 func WithRunnerLogger(logger *zap.Logger) RunnerOption {
 	return func(r *taskRunner) {
@@ -121,6 +124,12 @@ func WithRunnerRetryInterval(interval time.Duration) RunnerOption {
 	}
 }
 
+func WithRunnerPauseTaskCompleted(hook PauseTaskCompletedHook) RunnerOption {
+	return func(r *taskRunner) {
+		r.options.pauseTaskCompleted = hook
+	}
+}
+
 func WithHaKeeperClient(getClient func() util.HAKeeperClient) RunnerOption {
 	return func(r *taskRunner) {
 		r.getClient = getClient
@@ -172,14 +181,15 @@ type taskRunner struct {
 	}
 
 	options struct {
-		queryLimit        int
-		parallelism       int
-		maxWaitTasks      int
-		fetchInterval     time.Duration
-		fetchTimeout      time.Duration
-		retryInterval     time.Duration
-		heartbeatInterval time.Duration
-		heartbeatTimeout  time.Duration
+		queryLimit         int
+		parallelism        int
+		maxWaitTasks       int
+		fetchInterval      time.Duration
+		fetchTimeout       time.Duration
+		retryInterval      time.Duration
+		heartbeatInterval  time.Duration
+		heartbeatTimeout   time.Duration
+		pauseTaskCompleted PauseTaskCompletedHook
 	}
 
 	getClient func() util.HAKeeperClient
