@@ -906,7 +906,11 @@ func waitFulltextMembershipFilter(proc *process.Process, specs []*plan.RuntimeFi
 	if err = keyvec.UnmarshalBinary(vecbytes); err != nil {
 		return nil, err
 	}
-	defer keyvec.Free(proc.Mp())
+	// No keyvec.Free here on purpose: UnmarshalBinary aliases vecbytes (it sets
+	// cantFreeData/cantFreeArea), so keyvec owns no mpool memory — the struct and
+	// the aliased bytes are reclaimed by GC. Calling Free(mp) would be a no-op for
+	// this zero-copy path, and tying its release to a specific mpool would be a
+	// cross-pool free hazard if the deserialization ever became owning.
 
 	// docfilter picks and tags the doc_id filter structure (exact bitset for
 	// integer PKs, CBloomFilter otherwise); the reader's docfilter.New
