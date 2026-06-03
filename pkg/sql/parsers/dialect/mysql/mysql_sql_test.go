@@ -83,6 +83,17 @@ func TestOriginSQL(t *testing.T) {
 	}
 }
 
+func TestPositionFunctionSyntax(t *testing.T) {
+	tests := []string{
+		"select position('y' in 'xyz')",
+		"select position(substr in str) from t1",
+	}
+	for _, sql := range tests {
+		_, err := ParseOne(context.TODO(), sql, 1)
+		require.NoError(t, err, sql)
+	}
+}
+
 func TestDataBranchDiffOutputModes(t *testing.T) {
 	stmt, err := ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} output summary`, 1)
 	require.NoError(t, err)
