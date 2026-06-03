@@ -299,5 +299,5 @@ drop table locate03;
 EXPLAIN SELECT POSITION('y' IN 'xyz');
 TP QUERY PLAN
 Project
-  ->  Values Scan "*VALUES*"
+  ->  Values Scan "*VALUES*" 
 drop database testx;
