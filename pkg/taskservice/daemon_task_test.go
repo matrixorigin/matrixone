@@ -387,6 +387,35 @@ func TestPauseAndCancelTaskHandleBranchesDirect(t *testing.T) {
 	require.ErrorContains(t, cancelH.Handle(context.Background()), "cancel failed")
 }
 
+func TestPauseTaskHandleCallsCompleteHookForNonLocalTask(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+
+	completed := make(chan task.DaemonTask, 1)
+	r.options.pauseTaskCompleted = func(ctx context.Context, tk task.DaemonTask) error {
+		completed <- tk
+		return nil
+	}
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_PauseRequested, "r2")
+	dt.Metadata.ID = "pause-non-local-1"
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	pauseH := newPauseTask(r, &daemonTask{task: dt})
+	require.NoError(t, pauseH.Handle(context.Background()))
+
+	select {
+	case tk := <-completed:
+		require.Equal(t, dt.ID, tk.ID)
+		require.Equal(t, task.TaskStatus_Paused, tk.TaskStatus)
+	case <-time.After(time.Second):
+		t.Fatal("pause complete hook was not called")
+	}
+
+	tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Len(t, tasks, 1)
+	require.Equal(t, task.TaskStatus_Paused, tasks[0].TaskStatus)
+}
+
 func TestRunDaemonTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		c := make(chan struct{})
