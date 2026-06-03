@@ -2943,7 +2943,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		convey.So(ok, convey.ShouldBeFalse)
 	})
 
-	convey.Convey("grant privilege [ObjectType: Table] missing table falls back to object type scoped grant option", t, func() {
+	convey.Convey("grant privilege [ObjectType: Table] missing table is allowed by global grant option", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -2984,6 +2984,86 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 		privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), stmt.Privileges[0].Type, stmt.ObjType)
 		convey.So(err, convey.ShouldBeNil)
+
+		// Holding the global *.* grant option still authorizes the grant on a
+		// missing object; the obj_id-independent scope does not depend on the table.
+		globalScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll, privilegeLevelStarStar)
+		bh.sql2result[globalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{
+			{ses.GetTenantInfo().GetDefaultRoleID()},
+		})
+		checkDbSql, err := getSqlForCheckDatabase(ctx, "db")
+		convey.So(err, convey.ShouldBeNil)
+		bh.sql2result[checkDbSql] = newMrsForCheckDatabase([][]interface{}{{10002}})
+		dbScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10002, privilegeLevelDatabaseStar)
+		bh.sql2result[dbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("grant privilege [ObjectType: Table] missing table is not authorized by an unrelated same-type grant", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.GrantPrivilege{
+			Privileges: []*tree.Privilege{
+				{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+			},
+			ObjType: tree.OBJECT_TYPE_TABLE,
+			Level: &tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				DbName:  "db",
+				TabName: "missing_t",
+			},
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.tenant = &TenantInfo{
+			Tenant:        "xxx",
+			User:          "xxx",
+			DefaultRole:   "xxx",
+			TenantID:      1001,
+			UserID:        1001,
+			DefaultRoleID: 1001,
+		}
+		ctx := ses.GetTxnHandler().GetTxnCtx()
+		bh.init()
+
+		checkTableSql, err := getSqlForCheckDatabaseTable(ctx, "db", "missing_t")
+		convey.So(err, convey.ShouldBeNil)
+		bh.sql2result[checkTableSql] = newMrsForCheckDatabaseTable([][]interface{}{})
+
+		privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), stmt.Privileges[0].Type, stmt.ObjType)
+		convey.So(err, convey.ShouldBeNil)
+
+		// Neither the global nor the db-wide scope grants this role grant option.
+		globalScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll, privilegeLevelStarStar)
+		bh.sql2result[globalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+		checkDbSql, err := getSqlForCheckDatabase(ctx, "db")
+		convey.So(err, convey.ShouldBeNil)
+		bh.sql2result[checkDbSql] = newMrsForCheckDatabase([][]interface{}{{10002}})
+		dbScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10002, privilegeLevelDatabaseStar)
+		bh.sql2result[dbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+
+		// The role only holds grant option on an unrelated same-type object. The
+		// obj_type-only query would return it, but it must not be consulted nor
+		// satisfy authorization for a missing object.
 		objTypeScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjType(
 			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objectTypeTable)
 		bh.sql2result[objTypeScopedSql] = newMrsForPrivilegeWGO([][]interface{}{
@@ -2992,7 +3072,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(ok, convey.ShouldBeFalse)
+		convey.So(strings.Join(bh.executedSQLs, "\n"), convey.ShouldNotContainSubstring, objTypeScopedSql)
 	})
 
 	convey.Convey("grant privilege [ObjectType: View] global view star star covers database view", t, func() {
@@ -10742,7 +10823,7 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		require.Nil(t, roleSet)
 	})
 
-	t.Run("unresolved object falls back to object type scoped lookup", func(t *testing.T) {
+	t.Run("unresolved object falls back to broader scope and honors global grant option", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -10754,6 +10835,21 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		checkTableSQL, err := getSqlForCheckDatabaseTable(ctx, "db", "missing_table")
 		require.NoError(t, err)
 		bh.sql2result[checkTableSQL] = newMrsForCheckDatabaseTable([][]interface{}{})
+
+		globalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll, privilegeLevelStarStar)
+		bh.sql2result[globalSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		checkDbSQL, err := getSqlForCheckDatabase(ctx, "db")
+		require.NoError(t, err)
+		bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{{10002}})
+		dbStarSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10002, privilegeLevelDatabaseStar)
+		bh.sql2result[dbStarSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+
+		// The legacy obj_type-only fallback must never be consulted for a missing object.
 		objTypeSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjType(
 			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 			objectTypeTable)
@@ -10772,6 +10868,101 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.True(t, roleSet.Contains(roleID))
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), objTypeSQL)
+	})
+
+	t.Run("unresolved object is not satisfied by unrelated same-type grant", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		checkTableSQL, err := getSqlForCheckDatabaseTable(ctx, "db", "missing_table")
+		require.NoError(t, err)
+		bh.sql2result[checkTableSQL] = newMrsForCheckDatabaseTable([][]interface{}{})
+
+		// Neither the global nor the db-wide scope grants this role grant option.
+		globalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll, privilegeLevelStarStar)
+		bh.sql2result[globalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+
+		checkDbSQL, err := getSqlForCheckDatabase(ctx, "db")
+		require.NoError(t, err)
+		bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{{10002}})
+		dbStarSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10002, privilegeLevelDatabaseStar)
+		bh.sql2result[dbStarSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+
+		// The role only holds grant option on an unrelated same-type object, which the
+		// obj_type-only query would return; it must not satisfy the missing-object check.
+		objTypeSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjType(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable)
+		bh.sql2result[objTypeSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+				TabName: "missing_table",
+			},
+		)
+		require.NoError(t, err)
+		require.False(t, roleSet.Contains(roleID))
+		require.Equal(t, 0, roleSet.Len())
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), objTypeSQL)
+	})
+
+	t.Run("unresolved object with missing database checks only the global scope", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		checkTableSQL, err := getSqlForCheckDatabaseTable(ctx, "missing_db", "missing_table")
+		require.NoError(t, err)
+		bh.sql2result[checkTableSQL] = newMrsForCheckDatabaseTable([][]interface{}{})
+
+		globalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll, privilegeLevelStarStar)
+		bh.sql2result[globalSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		// The database itself is missing, so the db.* scope must be skipped, not errored.
+		checkDbSQL, err := getSqlForCheckDatabase(ctx, "missing_db")
+		require.NoError(t, err)
+		bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{})
+		dbStarLevelFragment := scopedGrantOptionPrivilegeLevelsSQL(privilegeLevelDatabaseStar)
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				DbName:  "missing_db",
+				TabName: "missing_table",
+			},
+		)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+		// We attempted to resolve the database, found it missing, and skipped db.*.
+		require.Contains(t, strings.Join(bh.executedSQLs, "\n"), checkDbSQL)
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), dbStarLevelFragment)
 	})
 
 	t.Run("object resolution exec error is returned without fallback", func(t *testing.T) {
