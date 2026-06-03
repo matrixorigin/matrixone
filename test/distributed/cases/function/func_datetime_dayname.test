@@ -1,0 +1,38 @@
+# Basic test case from requirements
+SELECT DAYNAME('2007-02-03') AS result1;
+
+# Additional test cases
+# DATE type
+SELECT DAYNAME('2007-02-03') AS saturday;
+SELECT DAYNAME('2007-02-04') AS sunday;
+SELECT DAYNAME('2007-02-05') AS monday;
+SELECT DAYNAME('2007-02-06') AS tuesday;
+SELECT DAYNAME('2007-02-07') AS wednesday;
+SELECT DAYNAME('2007-02-08') AS thursday;
+SELECT DAYNAME('2007-02-09') AS friday;
+
+# DATETIME type
+SELECT DAYNAME('2007-02-03 12:30:45') AS datetime_saturday;
+SELECT DAYNAME('2007-12-31 23:59:59') AS datetime_monday;
+
+# TIMESTAMP type
+SELECT DAYNAME('2007-02-03 12:30:45') AS timestamp_saturday;
+
+# NULL handling
+SELECT DAYNAME(NULL) AS null_date;
+
+# Table usage
+CREATE TABLE t1(d DATE, dt DATETIME);
+INSERT INTO t1 VALUES ('2007-02-03', '2007-02-03 12:00:00'), ('2007-02-04', '2007-02-04 12:00:00');
+SELECT DAYNAME(d) AS day_from_date, DAYNAME(dt) AS day_from_datetime FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2007-02-03'), ('2007-02-04'), ('2007-02-05');
+SELECT * FROM t1 WHERE DAYNAME(d) = 'Saturday';
+DROP TABLE t1;
+
+# All weekdays
+SELECT DAYNAME('2007-01-01') AS monday, DAYNAME('2007-01-02') AS tuesday, DAYNAME('2007-01-03') AS wednesday, DAYNAME('2007-01-04') AS thursday, DAYNAME('2007-01-05') AS friday, DAYNAME('2007-01-06') AS saturday, DAYNAME('2007-01-07') AS sunday;
+

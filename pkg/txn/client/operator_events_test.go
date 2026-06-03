@@ -37,6 +37,58 @@ func TestClosedEvent(t *testing.T) {
 		txn.TxnStatus_Aborted)
 }
 
+func TestRollbackClosedEventWhenWaitRunningSQLFails(t *testing.T) {
+	runOperatorTests(
+		t,
+		func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+			_, sqlCancel := context.WithCancel(context.Background())
+			token := tc.EnterRunSqlWithTokenAndSQL(sqlCancel, "select 1")
+			defer tc.ExitRunSqlWithToken(token)
+			defer sqlCancel()
+
+			rollbackCtx, cancelRollback := context.WithCancel(ctx)
+			cancelRollback()
+
+			cnt := 0
+			tc.AppendEventCallback(ClosedEvent,
+				func(event TxnEvent) {
+					cnt++
+					assert.Equal(t, txn.TxnStatus_Aborted, event.Txn.Status)
+					assert.Error(t, event.Err)
+				})
+
+			require.Error(t, tc.Rollback(rollbackCtx))
+			assert.Equal(t, 1, cnt)
+			assert.True(t, tc.mu.closed)
+		})
+}
+
+func TestCommitClosedEventWhenWaitRunningSQLFails(t *testing.T) {
+	runOperatorTests(
+		t,
+		func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+			_, sqlCancel := context.WithCancel(context.Background())
+			token := tc.EnterRunSqlWithTokenAndSQL(sqlCancel, "select 1")
+			defer tc.ExitRunSqlWithToken(token)
+			defer sqlCancel()
+
+			commitCtx, cancelCommit := context.WithCancel(ctx)
+			cancelCommit()
+
+			cnt := 0
+			tc.AppendEventCallback(ClosedEvent,
+				func(event TxnEvent) {
+					cnt++
+					assert.Equal(t, txn.TxnStatus_Aborted, event.Txn.Status)
+					assert.Error(t, event.Err)
+				})
+
+			require.Error(t, tc.Commit(commitCtx))
+			assert.Equal(t, 1, cnt)
+			assert.True(t, tc.mu.closed)
+		})
+}
+
 func runClosedEventTests(
 	t *testing.T,
 	getAction func(tc *txnOperator) func(context.Context) error,

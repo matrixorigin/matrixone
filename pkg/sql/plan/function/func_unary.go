@@ -492,6 +492,55 @@ func JsonQuote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return opUnaryStrToBytesWithErrorCheck(ivecs, result, proc, length, single, selectList)
 }
 
+func Quote(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		data, isNull := source.GetStrValue(i)
+		if isNull {
+			if err := rs.AppendBytes([]byte("NULL"), false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendBytes(quoteSQLString(data), false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func quoteSQLString(data []byte) []byte {
+	quoted := make([]byte, 0, len(data)+2)
+	quoted = append(quoted, '\'')
+	for _, ch := range data {
+		switch ch {
+		case 0:
+			quoted = append(quoted, '\\', '0')
+		case '\'':
+			quoted = append(quoted, '\\', '\'')
+		case '\\':
+			quoted = append(quoted, '\\', '\\')
+		case 26:
+			quoted = append(quoted, '\\', 'Z')
+		default:
+			quoted = append(quoted, ch)
+		}
+	}
+	quoted = append(quoted, '\'')
+	return quoted
+}
+
 func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	jsonSingle := func(v []byte) (string, error) {
 		bj := types.DecodeJson(v)
@@ -914,6 +963,13 @@ func DatetimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}, selectList)
 }
 
+func TimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Time, uint8](ivecs, result, proc, length, func(v types.Time) uint8 {
+		hour, _, _, _, _ := v.ClockFormat()
+		return uint8(hour % 24)
+	}, selectList)
+}
+
 func TimestampToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
 		return uint8(v.ToDatetime(proc.GetSessionInfo().TimeZone).Minute())
@@ -926,6 +982,13 @@ func DatetimeToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}, selectList)
 }
 
+func TimeToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Time, uint8](ivecs, result, proc, length, func(v types.Time) uint8 {
+		_, minute, _, _, _ := v.ClockFormat()
+		return minute
+	}, selectList)
+}
+
 func TimestampToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
 		return uint8(v.ToDatetime(proc.GetSessionInfo().TimeZone).Sec())
@@ -935,6 +998,13 @@ func TimestampToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 func DatetimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Datetime, uint8](ivecs, result, proc, length, func(v types.Datetime) uint8 {
 		return uint8(v.Sec())
+	}, selectList)
+}
+
+func TimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Time, uint8](ivecs, result, proc, length, func(v types.Time) uint8 {
+		_, _, sec, _, _ := v.ClockFormat()
+		return sec
 	}, selectList)
 }
 
@@ -1291,6 +1361,18 @@ func DatetimeToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	}, selectList)
 }
 
+func DateToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Date, uint8](ivecs, result, proc, length, func(v types.Date) uint8 {
+		return uint8(v.Quarter())
+	}, selectList)
+}
+
+func DatetimeToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Datetime, uint8](ivecs, result, proc, length, func(v types.Datetime) uint8 {
+		return uint8(v.ToDate().Quarter())
+	}, selectList)
+}
+
 // TODO: I will support template soon.
 func DateStringToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	//return opUnaryStrToFixedWithErrorCheck[uint8](ivecs, result, proc, length, func(v string) (uint8, error) {
@@ -1513,6 +1595,54 @@ func TimestampToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWr
 		// DAYOFWEEK returns 1-7, where 1=Sunday, 2=Monday, ..., 7=Saturday
 		// DayOfWeek() returns 0-6, where 0=Sunday, 1=Monday, ..., 6=Saturday
 		return int64(v.ToDatetime(proc.GetSessionInfo().TimeZone).ToDate().DayOfWeek()) + 1
+	}, selectList)
+}
+
+func DateToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Date](ivecs, result, proc, length, func(v types.Date) string {
+		return v.DayOfWeek().String()
+	}, selectList)
+}
+
+func DatetimeToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) string {
+		return v.DayOfWeek().String()
+	}, selectList)
+}
+
+func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) string {
+		return v.ToDatetime(proc.GetSessionInfo().TimeZone).DayOfWeek().String()
+	}, selectList)
+}
+
+func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Date](ivecs, result, proc, length, func(v types.Date) string {
+		month := v.Month()
+		if month >= 1 && month <= 12 {
+			return MonthNames[month-1]
+		}
+		return ""
+	}, selectList)
+}
+
+func DatetimeToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) string {
+		month := v.Month()
+		if month >= 1 && month <= 12 {
+			return MonthNames[month-1]
+		}
+		return ""
+	}, selectList)
+}
+
+func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) string {
+		month := v.ToDatetime(proc.GetSessionInfo().TimeZone).Month()
+		if month >= 1 && month <= 12 {
+			return MonthNames[month-1]
+		}
+		return ""
 	}, selectList)
 }
 

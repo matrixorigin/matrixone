@@ -421,7 +421,13 @@ var predefinedFunids = map[int]int{
 	JSON_VALUE:               368,
 	DEGREES:                  369,
 	TRUNCATE:                 370,
-	FUNCTION_END_NUMBER:      371,
+	QUARTER:                  371,
+	TIME_FORMAT:              372,
+	DAYNAME:                  373,
+	MAKETIME:                 374,
+	MONTHNAME:                375,
+	QUOTE:                    376,
+	FUNCTION_END_NUMBER:      377,
 }
 
 func Test_funids(t *testing.T) {

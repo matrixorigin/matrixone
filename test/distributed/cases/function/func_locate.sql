@@ -190,6 +190,7 @@ execute s1;
 prepare s2 from 'select isnull(locate(col1, col2)) from locate03';
 execute s2;
 drop table locate03;
+EXPLAIN SELECT POSITION('y' IN 'xyz');
 drop database testx;
 
 

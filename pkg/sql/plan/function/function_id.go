@@ -449,10 +449,16 @@ const (
 	JSON_VALUE               = 368
 	DEGREES                  = 369
 	TRUNCATE                 = 370
+	QUARTER                  = 371
+	TIME_FORMAT              = 372
+	DAYNAME                  = 373
+	MAKETIME                 = 374
+	MONTHNAME                = 375
+	QUOTE                    = 376
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 371
+	FUNCTION_END_NUMBER = 377
 )
 
 // functionIdRegister is what function we have registered already.
@@ -577,6 +583,7 @@ var functionIdRegister = map[string]int32{
 	"floor":             FLOOR,
 	"lpad":              LPAD,
 	"pi":                PI,
+	"position":          POSITION,
 	"round":             ROUND,
 	"truncate":          TRUNCATE,
 	"rpad":              RPAD,
@@ -590,6 +597,7 @@ var functionIdRegister = map[string]int32{
 	"from_unixtime":     FROM_UNIXTIME,
 	"get_format":        GET_FORMAT,
 	"left":              LEFT,
+	"time_format":       TIME_FORMAT,
 	"right":             RIGHT,
 	// unary functions
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
@@ -602,8 +610,11 @@ var functionIdRegister = map[string]int32{
 	"date":                           DATE,
 	"degrees":                        DEGREES,
 	"time":                           TIME,
+	"dayname":                        DAYNAME,
 	"hour":                           HOUR,
 	"minute":                         MINUTE,
+	"monthname":                      MONTHNAME,
+	"quarter":                        QUARTER,
 	"second":                         SECOND,
 	"sqrt":                           SQRT,
 	"to_seconds":                     TO_SECONDS,
@@ -623,6 +634,7 @@ var functionIdRegister = map[string]int32{
 	"month":                          MONTH,
 	"not_in_rows":                    NOT_IN_ROWS,
 	"oct":                            OCT,
+	"quote":                          QUOTE,
 	"radians":                        RADIAN,
 	"rand":                           RANDOM,
 	"reverse":                        REVERSE,
@@ -642,6 +654,7 @@ var functionIdRegister = map[string]int32{
 	"isempty":                        ISEMPTY,
 	"date_add":                       DATE_ADD,
 	"date_sub":                       DATE_SUB,
+	"maketime":                       MAKETIME,
 	"atan":                           ATAN,
 	"cos":                            COS,
 	"cot":                            COT,
