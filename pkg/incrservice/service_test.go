@@ -354,7 +354,6 @@ func TestDeleteOnOtherService(t *testing.T) {
 		})
 }
 
-
 func TestForceSetOffset(t *testing.T) {
 	runServiceTests(
 		t,
