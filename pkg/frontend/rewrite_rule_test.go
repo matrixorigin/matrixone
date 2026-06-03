@@ -732,6 +732,12 @@ func TestMergeRewriteRules(t *testing.T) {
 			right: "select a, age from db1.t1",
 			want:  "select a, age from db1.t1",
 		},
+		{
+			name:  "where subquery can contain order by and limit",
+			left:  "select a from db1.t1 where a in (select a from db1.t2 order by a limit 1)",
+			right: "select a from db1.t1 where age < 3",
+			want:  "select a from db1.t1 where (a in (select a from db1.t2 order by a limit 1)) or (age < 3)",
+		},
 	}
 	for _, tc := range mergeCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -863,6 +869,13 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 			rule:       "select a as x from db1.t1 where age > 28",
 			ok:         true,
 			selectList: "a as x",
+			table:      "db1.t1",
+		},
+		{
+			name:       "where subquery with order by and limit",
+			rule:       "select a from db1.t1 where a in (select a from db1.t2 order by a limit 1)",
+			ok:         true,
+			selectList: "a",
 			table:      "db1.t1",
 		},
 		{

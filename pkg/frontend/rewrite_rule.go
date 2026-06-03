@@ -488,6 +488,8 @@ func rewriteRuleSingleTableSource(from *tree.From) (string, bool) {
 }
 
 func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {
+	// Mergeability is decided from the top-level SELECT shape only. Predicate
+	// internals, including subqueries, stay opaque and are only OR-ed together.
 	switch {
 	case left == nil || left.Expr == nil:
 		return nil
