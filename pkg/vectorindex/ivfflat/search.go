@@ -283,8 +283,16 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	if sqlproc != nil && sqlproc.ExactPkFilter != "" {
 		// Exact PK path: WaitUniqueJoinKeys converted small key set into ExactPkFilter.
 		// Query entries directly by pk list, skip centroid-based filtering.
+		//
+		// Do NOT add ORDER BY vec_dist / LIMIT here. Unlike the centroid path (whose
+		// scanned entries are all valid indexed vectors, so its top-k IS the answer),
+		// this path returns the full small candidate set and lets the mode=pre
+		// consumer do the final ranking and LIMIT. Pre-limiting this query regressed
+		// vector_ivf_mode.sql (LIMIT k returned k-1 rows: a row the index ordered
+		// ahead but the consumer discards consumed a LIMIT slot), so leave ordering
+		// and truncation to the consumer.
 		sql = fmt.Sprintf(
-			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
+			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
@@ -295,7 +303,6 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			idx.Version,
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			sqlproc.ExactPkFilter,
-			rt.Limit,
 		)
 	} else {
 		// Standard centroid-based path with optional CBloomFilter pre-filtering.
