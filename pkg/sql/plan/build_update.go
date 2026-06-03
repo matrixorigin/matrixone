@@ -204,8 +204,10 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlanCtx, lastNodeId int32, originalProjectList []*plan.Expr) {
 	selectNode := builder.qry.Nodes[lastNodeId]
 	tableBase := int32(0)
+	origBase := int32(0)
 	for _, upPlanCtx := range planCtxs {
 		tableDef := upPlanCtx.tableDef
+		origUpdateLen := upPlanCtx.updateColLength
 		hasGenerated := false
 		for _, col := range tableDef.Cols {
 			if col.GeneratedCol != nil {
@@ -217,9 +219,9 @@ func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlan
 			baseLookup := make([]*plan.Expr, len(tableDef.Cols))
 			for ci, col := range tableDef.Cols {
 				if newOff, ok := upPlanCtx.updateColPosMap[col.Name]; ok {
-					baseLookup[ci] = originalProjectList[tableBase+int32(newOff)]
+					baseLookup[ci] = originalProjectList[origBase+int32(newOff)]
 				} else {
-					baseLookup[ci] = originalProjectList[tableBase+int32(ci)]
+					baseLookup[ci] = originalProjectList[origBase+int32(ci)]
 				}
 			}
 			for ci, col := range tableDef.Cols {
@@ -243,6 +245,7 @@ func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlan
 			}
 		}
 		tableBase += int32(len(tableDef.Cols) + upPlanCtx.updateColLength)
+		origBase += int32(len(tableDef.Cols) + origUpdateLen)
 	}
 
 	for _, upPlanCtx := range planCtxs {
