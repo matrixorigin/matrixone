@@ -201,6 +201,11 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 	if err != nil {
 		return
 	}
+	// No keyvec.Free here on purpose: UnmarshalBinary aliases vecbytes (it sets
+	// cantFreeData/cantFreeArea), so keyvec owns no mpool memory — the struct and
+	// the aliased bytes are reclaimed by GC. Calling Free(mp) would be a no-op for
+	// this zero-copy path, and tying its release to a specific mpool would be a
+	// cross-pool free hazard if the deserialization ever became owning.
 
 	// Small PK set: build an exact "pk IN (...)" SQL filter instead of a
 	// pushdown doc_id filter. For very small sets the IN-list is cheaper and
@@ -279,7 +284,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		// Exact PK path: WaitUniqueJoinKeys converted small key set into ExactPkFilter.
 		// Query entries directly by pk list, skip centroid-based filtering.
 		sql = fmt.Sprintf(
-			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
@@ -290,6 +295,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			idx.Version,
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			sqlproc.ExactPkFilter,
+			rt.Limit,
 		)
 	} else {
 		// Standard centroid-based path with optional CBloomFilter pre-filtering.
