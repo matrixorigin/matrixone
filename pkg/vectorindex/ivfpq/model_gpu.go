@@ -425,27 +425,22 @@ func (idx *IvfpqModel[T]) LoadIndex(
 	// Replay (which needs includeBytesPerRow from the loaded cuvs index) is
 	// deferred until after Unpack — we only fetch the raw chunks here.
 	var (
-		cdcWg       sync.WaitGroup
-		cdcErr      error
 		dim         = int(idxcfg.CuvsIvfpq.Dimensions)
 		eventChunks []cuvscdc.EventChunk
 	)
 
-	cdcWg.Add(1)
-	go func() {
-		defer cdcWg.Done()
-		chunks, e := idx.loadCdcEventsFromDB(sqlproc, tblcfg)
-		if e != nil {
-			cdcErr = e
-			return
-		}
-		eventChunks = chunks
-	}()
+	// Fetch the tag=1 CDC chunks first, SEQUENTIALLY: this and the model-chunk
+	// (tag=ModelChunk) streaming load below both execute SQL on sqlproc's single
+	// txn operator, which is not safe to drive concurrently. eventChunks is only
+	// replayed later (after Unpack), so fetching it up front changes nothing.
+	eventChunks, err = idx.loadCdcEventsFromDB(sqlproc, tblcfg)
+	if err != nil {
+		return err
+	}
 
 	if len(idx.Path) == 0 {
 		fp, err = os.CreateTemp("", "ivfpq")
 		if err != nil {
-			cdcWg.Wait()
 			return err
 		}
 		fname = fp.Name()
@@ -463,7 +458,6 @@ func (idx *IvfpqModel[T]) LoadIndex(
 		}()
 
 		if err = fallocate.Fallocate(fp, 0, idx.FileSize); err != nil {
-			cdcWg.Wait()
 			return err
 		}
 
@@ -508,7 +502,6 @@ func (idx *IvfpqModel[T]) LoadIndex(
 			}
 		}
 		if err != nil {
-			cdcWg.Wait()
 			return
 		}
 
@@ -517,10 +510,6 @@ func (idx *IvfpqModel[T]) LoadIndex(
 		fp = nil
 	}
 
-	cdcWg.Wait()
-	if cdcErr != nil {
-		return cdcErr
-	}
 	// Replay happens after Unpack — see below.
 
 	chksum, err := vectorindex.CheckSum(idx.Path)

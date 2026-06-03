@@ -124,7 +124,7 @@ func (s *IvfpqSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt v
 }
 
 // Load implements cache.VectorIndexSearchIf.
-func (s *IvfpqSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
+func (s *IvfpqSearch[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	indexes, err := LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {
 		return err
@@ -136,6 +136,15 @@ func (s *IvfpqSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 	s.Indexes = indexes
+	// From here the GPU sub-indexes are owned by s. If a later step fails, the
+	// cache drops the entry WITHOUT calling Destroy (see VectorIndexCache.Search),
+	// and there is no finalizer, so release them here to avoid orphaning GPU
+	// memory on every failed load. Destroy is idempotent and safe on partial state.
+	defer func() {
+		if err != nil {
+			s.Destroy()
+		}
+	}()
 	if err = s.loadCdcTail(sqlproc); err != nil {
 		return err
 	}

@@ -444,28 +444,23 @@ func (idx *CagraModel[T]) LoadIndex(
 	// Replay (which needs includeBytesPerRow from the loaded cuvs index) is
 	// deferred until after Unpack — we only fetch the raw chunks here.
 	var (
-		cdcWg       sync.WaitGroup
-		cdcErr      error
 		dim         = int(idxcfg.CuvsCagra.Dimensions)
 		eventChunks []cuvscdc.EventChunk
 	)
 
-	cdcWg.Add(1)
-	go func() {
-		defer cdcWg.Done()
-		chunks, e := idx.loadCdcEventsFromDB(sqlproc, tblcfg)
-		if e != nil {
-			cdcErr = e
-			return
-		}
-		eventChunks = chunks
-	}()
+	// Fetch the tag=1 CDC chunks first, SEQUENTIALLY: this and the model-tar
+	// (tag=ModelChunk) streaming load below both execute SQL on sqlproc's single
+	// txn operator, which is not safe to drive concurrently. eventChunks is only
+	// replayed later (after Unpack), so fetching it up front changes nothing.
+	eventChunks, err = idx.loadCdcEventsFromDB(sqlproc, tblcfg)
+	if err != nil {
+		return err
+	}
 
 	if len(idx.Path) == 0 {
 		// Download the tar file from the database via streaming SQL.
 		fp, err = os.CreateTemp("", "cagra")
 		if err != nil {
-			cdcWg.Wait()
 			return err
 		}
 		fname = fp.Name()
@@ -483,7 +478,6 @@ func (idx *CagraModel[T]) LoadIndex(
 		}()
 
 		if err = fallocate.Fallocate(fp, 0, idx.FileSize); err != nil {
-			cdcWg.Wait()
 			return err
 		}
 
@@ -529,19 +523,12 @@ func (idx *CagraModel[T]) LoadIndex(
 			}
 		}
 		if err != nil {
-			cdcWg.Wait()
 			return
 		}
 
 		idx.Path = fp.Name()
 		fp.Close()
 		fp = nil
-	}
-
-	// Wait for CDC deltas; surface any error before we touch the GPU.
-	cdcWg.Wait()
-	if cdcErr != nil {
-		return cdcErr
 	}
 
 	// Verify checksum.
