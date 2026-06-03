@@ -63,10 +63,16 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 
 	// encode structures which need to send.
 	var scopeEncodeData, processEncodeData []byte
-	var withoutOutput bool
-	scopeEncodeData, withoutOutput, processEncodeData, err = prepareRemoteRunSendingData(c.sql, s)
+	var withoutOutput, folded bool
+	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(c.sql, s, c.proc)
 	if err != nil {
 		return nil, err
+	}
+	if folded {
+		getLogger(s.Proc.GetService()).
+			Debug("fold variable expressions before remote run",
+				zap.String("local-address", c.addr),
+				zap.String("remote-address", s.NodeInfo.Addr))
 	}
 
 	// generate a new sender to do send work.
@@ -171,41 +177,24 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 	return true
 }
 
-func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, withoutOutput bool, processData []byte, err error) {
-	// if simpleRun is true, it indicates that this pipeline will not produce any output.
-	withoutOutput = true
-
-	// if the last operator is a sender operator, we need to keep it in local for sending batch to its receivers correctly.
-	if lastOpType := s.RootOp.OpType(); lastOpType == vm.Connector || lastOpType == vm.Dispatch {
-		withoutOutput = false
-
-		originRoot := s.RootOp
-		if originRoot.GetOperatorBase().NumChildren() == 0 {
-			s.RootOp = nil
-		} else {
-			s.RootOp = originRoot.GetOperatorBase().GetChildren(0)
-		}
-
-		// todo: the following code to set children to nil must be a bug.
-		// 		but I kept it here because there will be an operator release twice bug once I remove this code.
-		//		I cannot find it why, maybe two scopes hold the same operator list pointer.
-		originRoot.GetOperatorBase().SetChildren(nil)
-		defer func() {
-			s.doSetRootOperator(originRoot)
-		}()
+func prepareRemoteRunSendingData(sqlStr string, s *Scope, proc *process.Process) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
+	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(s)
+	encodedScope, folded, err = foldVarExprsInRemoteRunScope(encodedScope, proc)
+	if err != nil {
+		return nil, false, nil, false, err
 	}
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeScope(s); err != nil {
-		return nil, false, nil, err
+	if scopeData, err = encodeScope(encodedScope); err != nil {
+		return nil, false, nil, false, err
 	}
 
 	// Encode the Process related information.
 	if processData, err = encodeProcessInfo(s.Proc, sqlStr); err != nil {
-		return nil, false, nil, err
+		return nil, false, nil, false, err
 	}
 
-	return scopeData, withoutOutput, processData, nil
+	return scopeData, withoutOutput, processData, folded, nil
 }
 
 func receiveMessageFromCnServer(s *Scope, withoutOutput bool, sender *messageSenderOnClient) error {
@@ -313,6 +302,25 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 			return errCall
 		}
 	}
+}
+
+func getScopeForRemoteRunEncoding(s *Scope) (*Scope, bool) {
+	withoutOutput := true
+	if s.RootOp == nil {
+		return s, withoutOutput
+	}
+
+	if lastOpType := s.RootOp.OpType(); lastOpType == vm.Connector || lastOpType == vm.Dispatch {
+		withoutOutput = false
+		copied := *s
+		if s.RootOp.GetOperatorBase().NumChildren() == 0 {
+			copied.RootOp = nil
+		} else {
+			copied.RootOp = s.RootOp.GetOperatorBase().GetChildren(0)
+		}
+		return &copied, withoutOutput
+	}
+	return s, withoutOutput
 }
 
 // messageSenderOnClient support a series of methods
