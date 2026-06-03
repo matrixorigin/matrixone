@@ -283,8 +283,18 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	if sqlproc != nil && sqlproc.ExactPkFilter != "" {
 		// Exact PK path: WaitUniqueJoinKeys converted small key set into ExactPkFilter.
 		// Query entries directly by pk list, skip centroid-based filtering.
+		//
+		// Do NOT add ORDER BY vec_dist / LIMIT here. Adding "ORDER BY vec_dist LIMIT k"
+		// makes the planner push the sort+limit INTO this entries Table Scan (EXPLAIN
+		// shows "Index Reader Param: Sort Key ... Limit: k" on the scan), which applies
+		// the LIMIT *before* the "pk IN (...)" / prefix_eq filter -- i.e. it turns our
+		// intended pre-filter into a POST-filter: it takes the global top-k by distance
+		// over ALL entries, then keeps only the candidates, so fewer than k matching rows
+		// survive (regressed vector_ivf_mode.sql). With no ORDER BY/LIMIT the scan stays
+		// a plain filtered read that returns the full candidate set; the downstream
+		// Node_SORT + LIMIT k does the ranking and truncation.
 		sql = fmt.Sprintf(
-			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
+			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
@@ -295,7 +305,6 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			idx.Version,
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			sqlproc.ExactPkFilter,
-			rt.Limit,
 		)
 	} else {
 		// Standard centroid-based path with optional CBloomFilter pre-filtering.
