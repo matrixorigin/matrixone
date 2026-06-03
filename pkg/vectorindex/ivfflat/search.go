@@ -201,6 +201,10 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 	if err != nil {
 		return
 	}
+	// Free the deserialized key vector once the filter is built; it is only read
+	// here to produce the exact pk-IN list or the docfilter payload (the fulltext
+	// path frees its keyvec the same way).
+	defer keyvec.Free(sqlproc.Proc.Mp())
 
 	// Small PK set: build an exact "pk IN (...)" SQL filter instead of a
 	// pushdown doc_id filter. For very small sets the IN-list is cheaper and
@@ -279,7 +283,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		// Exact PK path: WaitUniqueJoinKeys converted small key set into ExactPkFilter.
 		// Query entries directly by pk list, skip centroid-based filtering.
 		sql = fmt.Sprintf(
-			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
@@ -290,6 +294,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			idx.Version,
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			sqlproc.ExactPkFilter,
+			rt.Limit,
 		)
 	} else {
 		// Standard centroid-based path with optional CBloomFilter pre-filtering.
