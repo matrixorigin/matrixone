@@ -426,7 +426,8 @@ var predefinedFunids = map[int]int{
 	DAYNAME:                  373,
 	MAKETIME:                 374,
 	MONTHNAME:                375,
-	FUNCTION_END_NUMBER:      376,
+	QUOTE:                    376,
+	FUNCTION_END_NUMBER:      377,
 }
 
 func Test_funids(t *testing.T) {
