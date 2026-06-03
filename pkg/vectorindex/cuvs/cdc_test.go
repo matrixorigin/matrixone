@@ -224,7 +224,11 @@ func TestDecodeEventRecord_StopsAtPad(t *testing.T) {
 
 // TestCdcAppendEventsSql_Empty asserts no SQL for an empty batch.
 func TestCdcAppendEventsSql_Empty(t *testing.T) {
-	if got := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, nil, nil, ""); len(got) != 0 {
+	got, err := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, nil, nil, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
 		t.Fatalf("expected no SQL for empty batch, got %d", len(got))
 	}
 }
@@ -236,7 +240,10 @@ func TestCdcAppendEventsSql_DeleteOnly(t *testing.T) {
 	ops := []CdcOp{CdcOpDelete, CdcOpDelete, CdcOpDelete, CdcOpDelete}
 	buf, sizes := encodeBatch(t, 4, 0, ops, pkids, nil, nil)
 
-	sqls := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, buf, sizes, "")
+	sqls, err := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, buf, sizes, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(sqls) != 1 {
 		t.Fatalf("expected 1 SQL, got %d", len(sqls))
 	}
@@ -274,7 +281,10 @@ func TestCdcAppendEventsSql_InsertOnly(t *testing.T) {
 	ops := []CdcOp{CdcOpInsert, CdcOpInsert, CdcOpInsert}
 	buf, sizes := encodeBatch(t, dim, 0, ops, pkids, vecs, nil)
 
-	sqls := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, buf, sizes, "")
+	sqls, err := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, buf, sizes, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(sqls) != 1 {
 		t.Fatalf("expected 1 SQL, got %d", len(sqls))
 	}
@@ -308,7 +318,10 @@ func TestCdcAppendEventsSql_Mixed(t *testing.T) {
 	vecs := [][]float32{{1, 2, 3, 4}, {5, 6, 7, 8}}
 	buf, sizes := encodeBatch(t, dim, 0, ops, pkids, vecs, nil)
 
-	sqls := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, buf, sizes, "")
+	sqls, err := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, buf, sizes, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(sqls) != 1 {
 		t.Fatalf("expected 1 SQL, got %d", len(sqls))
 	}
@@ -350,7 +363,10 @@ func TestCdcAppendEventsSql_ChunkPacking(t *testing.T) {
 	}
 	buf, sizes := encodeBatch(t, dim, 0, ops, pkids, vecs, nil)
 
-	sqls := CdcAppendEventsSql(testTblcfg(), "idx-1", 5, buf, sizes, "")
+	sqls, err := CdcAppendEventsSql(testTblcfg(), "idx-1", 5, buf, sizes, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	all := strings.Join(sqls, " ; ")
 	blobs := extractUnhexBlobs(t, all)
 	if len(blobs) != 2 {

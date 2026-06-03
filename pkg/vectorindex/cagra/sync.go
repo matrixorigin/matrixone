@@ -290,7 +290,10 @@ func (s *CagraSync) Save(sqlproc *sqlexec.SqlProcess) error {
 	// uses it when no tag=0 sub-index is loaded (small-data-only
 	// indexes); when a sub-index IS loaded the search prefers the
 	// model tar's colMetaJSON, so the redundancy is harmless.
-	sqls := cuvscdc.CdcAppendEventsSql(s.tblcfg, s.activeIndexId, nextId, s.pendingRecords, s.pendingSizes, s.colMetaJSON)
+	sqls, serr := cuvscdc.CdcAppendEventsSql(s.tblcfg, s.activeIndexId, nextId, s.pendingRecords, s.pendingSizes, s.colMetaJSON)
+	if serr != nil {
+		return serr
+	}
 	if len(sqls) == 0 {
 		return nil
 	}

@@ -80,5 +80,5 @@ func SaveSmallTailAsCdc(
 		sizes = append(sizes, len(records)-before)
 	}
 
-	return CdcAppendEventsSql(tblcfg, vectorindex.CdcTailId, 0, records, sizes, colMetaJSON), nil
+	return CdcAppendEventsSql(tblcfg, vectorindex.CdcTailId, 0, records, sizes, colMetaJSON)
 }

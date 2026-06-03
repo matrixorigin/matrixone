@@ -340,9 +340,9 @@ func CdcAppendEventsSql(
 	records []byte,
 	recordSizes []int,
 	colMetaJSON string,
-) []string {
+) ([]string, error) {
 	if len(records) == 0 || len(recordSizes) == 0 {
-		return nil
+		return nil, nil
 	}
 	var headerBytes []byte
 	if colMetaJSON != "" {
@@ -353,7 +353,9 @@ func CdcAppendEventsSql(
 	maxPayload := vectorindex.MaxChunkSize - cdcFrameOverhead - len(headerBytes)
 	if maxPayload <= 0 {
 		// colMetaJSON alone consumes the whole chunk budget — caller bug.
-		return nil
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"cdc: chunk header (%d bytes) leaves no room for records in a %d-byte chunk (overhead %d)",
+			len(headerBytes), vectorindex.MaxChunkSize, cdcFrameOverhead)
 	}
 	sqlPrefix := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tblcfg.DbName, tblcfg.IndexTable)
 	var sqls []string
@@ -372,9 +374,14 @@ func CdcAppendEventsSql(
 			j++
 		}
 		if j == i {
-			// A single record is larger than the chunk payload budget —
-			// caller bug.
-			return nil
+			// A single record is larger than the whole per-chunk payload budget.
+			// Error out (rather than silently returning nil) so the CREATE/REINDEX
+			// fails loudly instead of dropping rows that would never enter the
+			// index. Practically unreachable: it needs a vector dimension above
+			// ~16K (record = 9 + 4*dim + includeBytes must exceed maxPayload).
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"cdc: record %d (%d bytes) exceeds the per-chunk payload budget of %d bytes",
+				i, recordSizes[i], maxPayload)
 		}
 		// Count per-op records in this chunk by peeking at byte 0 of each
 		// record (the op code) using recordSizes to step through.
@@ -405,7 +412,7 @@ func CdcAppendEventsSql(
 	if len(values) > 0 {
 		sqls = append(sqls, sqlPrefix+strings.Join(values, ", "))
 	}
-	return sqls
+	return sqls, nil
 }
 
 // CdcLoadEventsSql formats the SELECT that returns every tag=1 chunk for the
