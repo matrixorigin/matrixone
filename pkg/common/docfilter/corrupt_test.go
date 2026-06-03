@@ -57,3 +57,38 @@ func TestCorruptBloomPayloadRejected(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, f)
 }
+
+// TestCorruptCbitmapPayloadRejected guards mo_cbitmap_deserialize against a
+// forged/corrupt header. nbits is read straight from the buffer; sizing the read
+// via bitmap_size(nbits)=(nbits+63)>>6 OVERFLOWS for large nbits (e.g. MaxUint64
+// -> nwords=0), so a 16-byte payload would be accepted as a "valid" filter that
+// then crashes / matches nothing on probe. New must reject any header whose
+// nbits is not exactly consistent with the payload length.
+func TestCorruptCbitmapPayloadRejected(t *testing.T) {
+	// cbitmap payload (host little-endian): [base u64][nbits u64][words...].
+	// Forge base=0, nbits=MaxUint64, NO words (16-byte payload) — the overflow case.
+	hdr := make([]byte, 16)
+	binary.LittleEndian.PutUint64(hdr[0:8], 0)
+	binary.LittleEndian.PutUint64(hdr[8:16], ^uint64(0))
+	f, err := New(append([]byte{TagCbitmap}, hdr...))
+	require.Error(t, err, "forged cbitmap header (huge nbits, no words) must be rejected")
+	require.Nil(t, f)
+
+	// nbits inconsistent with the words present: 24-byte payload = 1 word (64
+	// bits) but nbits claims 1000.
+	hdr2 := make([]byte, 24)
+	binary.LittleEndian.PutUint64(hdr2[8:16], 1000)
+	f, err = New(append([]byte{TagCbitmap}, hdr2...))
+	require.Error(t, err)
+	require.Nil(t, f)
+
+	// Payload not a whole number of words (16-byte header + 3 stray bytes).
+	f, err = New(append([]byte{TagCbitmap}, make([]byte, 16+3)...))
+	require.Error(t, err)
+	require.Nil(t, f)
+
+	// Truncated below the 16-byte header.
+	f, err = New(append([]byte{TagCbitmap}, []byte{1, 2, 3, 4}...))
+	require.Error(t, err)
+	require.Nil(t, f)
+}

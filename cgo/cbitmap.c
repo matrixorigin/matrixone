@@ -183,8 +183,26 @@ void *mo_cbitmap_deserialize(const uint8_t *buf, size_t len) {
   uint64_t base = 0, nbits = 0;
   memcpy(&base, buf, sizeof(uint64_t));
   memcpy(&nbits, buf + sizeof(uint64_t), sizeof(uint64_t));
-  uint64_t nwords = bitmap_size(nbits);
-  if (len < 2 * sizeof(uint64_t) + (size_t)nwords * sizeof(uint64_t)) return NULL;
+
+  // Derive the word count from the ACTUAL payload length and require nbits to be
+  // exactly consistent with it, rather than trusting nbits to size the read.
+  // Computing bitmap_size(nbits) = (nbits+63)>>6 from an untrusted nbits
+  // OVERFLOWS for large nbits (e.g. nbits=MaxUint64 -> nwords=0), so a forged
+  // 16-byte payload would otherwise be accepted as a "valid" filter that then
+  // crashes / matches nothing on probe. Reject any header that does not match.
+  size_t payload = len - 2 * sizeof(uint64_t);
+  if (payload % sizeof(uint64_t) != 0) return NULL;  // not a whole number of words
+  uint64_t nwords = (uint64_t)(payload / sizeof(uint64_t));
+  // ceil(nbits/64) must equal nwords, checked WITHOUT the nbits+63 overflow: for
+  // nwords words, nbits must lie in ((nwords-1)*64, nwords*64]; nbits==0 iff
+  // nwords==0. nwords comes from len, so nwords*64 cannot overflow here.
+  if (nbits == 0) {
+    if (nwords != 0) return NULL;
+  } else {
+    if (nwords == 0) return NULL;
+    if (nbits > nwords * 64) return NULL;
+    if (nbits <= (nwords - 1) * 64) return NULL;
+  }
 
   mo_cbitmap_t *f = (mo_cbitmap_t *)malloc(sizeof(mo_cbitmap_t));
   if (!f) return NULL;
