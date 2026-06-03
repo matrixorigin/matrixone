@@ -131,7 +131,7 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 
 		//-------------------------------------------------------
 		topContext := proc.GetTopContext()
-		// Attach optional BloomFilter to context for internal executor.
+		// Attach optional membership filter payload to context for internal executor.
 		if len(sqlproc.IvfMembershipFilter) > 0 {
 			topContext = context.WithValue(topContext, defines.IvfMembershipFilter{}, sqlproc.IvfMembershipFilter)
 		}
@@ -201,7 +201,7 @@ func RunStreamingSql(
 		}
 
 		//-------------------------------------------------------
-		// Attach optional BloomFilter to context for internal executor.
+		// Attach optional membership filter payload to context for internal executor.
 		if len(sqlproc.IvfMembershipFilter) > 0 {
 			ctx = context.WithValue(ctx, defines.IvfMembershipFilter{}, sqlproc.IvfMembershipFilter)
 		}
