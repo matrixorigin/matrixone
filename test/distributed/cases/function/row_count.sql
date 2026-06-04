@@ -1,6 +1,6 @@
 -- row_count() returns the number of rows affected by the previous statement,
 -- following MySQL semantics: affected rows for DML, -1 after a result-set
--- statement, 0 after DDL or when no rows are affected.
+-- statement or a failed statement, 0 after DDL or when no rows are affected.
 drop database if exists row_count_db;
 create database row_count_db;
 use row_count_db;
@@ -47,6 +47,10 @@ select row_count();
 
 -- DDL reports 0
 create table t2(a int);
+select row_count();
+
+-- a failed statement (duplicate primary key) makes row_count() return -1
+insert into t values (1,12345);
 select row_count();
 
 drop database if exists row_count_db;

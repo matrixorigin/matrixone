@@ -3125,6 +3125,20 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// Copy curvalues stored in session to this proc.
 	// Deep copy the map, takes some memory.
 	ses.CopySeqToProc(proc)
+
+	// MySQL semantics: when a statement fails (parse / compile / execution error),
+	// ROW_COUNT() for the following statement must return -1. recordLastAffectedRows
+	// only runs after a statement succeeds, so cover every error path of the main
+	// COM_QUERY / COM_STMT_EXECUTE flow here. proc is the session's reused proc and
+	// is reseeded from the session on the next query, so the session value drives
+	// the next statement; the proc is updated too for completeness.
+	defer func() {
+		if retErr != nil {
+			ses.SetLastAffectedRows(-1)
+			proc.SetAffectedRows(-1)
+		}
+	}()
+
 	if ses.GetTenantInfo() != nil {
 		proc.Base.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.Base.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
