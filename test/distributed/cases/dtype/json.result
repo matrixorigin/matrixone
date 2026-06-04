@@ -120,3 +120,11 @@ invalid input: cannot store JSON OBJECT in array(varchar(20)) column
 update typed_array_json set scores='[1,"2"]' where id=1;
 invalid input: cannot store JSON value with incompatible element type in array(int) column
 drop table typed_array_json;
+create table typed_array_unsupported(tags array(bit));
+invalid input: unsupported ARRAY element type bit
+drop table if exists typed_array_binary;
+create table typed_array_binary(id int primary key, payload array(varbinary(3)));
+insert into typed_array_binary values (1, '["abc"]');
+insert into typed_array_binary values (2, '["\\u00e9\\u00e9"]');
+invalid input: cannot store JSON value with incompatible element type in array(varbinary(3)) column
+drop table typed_array_binary;
