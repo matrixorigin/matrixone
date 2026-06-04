@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"sort"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -308,7 +309,21 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 			}
 		}
 
-		for colName, updateKey := range updateKeys {
+		// Emit the update columns in a deterministic order. updateKeys is a Go
+		// map, so ranging it directly appended the update exprs to the project
+		// list (and recorded updateColPosMap) in random order across runs — the
+		// per-target column-block half of the same nondeterministic-layout bug
+		// the table-order fix in getUpdateTableInfo addresses. Sorting the column
+		// names emits exactly the same set in a stable order. (Order only affects
+		// layout, not correctness: downstream looks columns up by name via
+		// updateColPosMap, not by position.)
+		updateColNames := make([]string, 0, len(updateKeys))
+		for colName := range updateKeys {
+			updateColNames = append(updateColNames, colName)
+		}
+		sort.Strings(updateColNames)
+		for _, colName := range updateColNames {
+			updateKey := updateKeys[colName]
 			for _, coldef := range tableDef.Cols {
 				if coldef.Name == colName && isEnumOrSetPlanType(&coldef.Typ) {
 					updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)
