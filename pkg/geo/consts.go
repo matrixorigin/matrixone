@@ -50,6 +50,12 @@ const (
 	SRIDWGS84 uint32 = 4326
 )
 
+// maxGeometryNestingDepth bounds GEOMETRYCOLLECTION nesting in the WKB and WKT
+// parsers. Without a limit a maliciously deep collection recurses until Go's
+// hard stack limit triggers a fatal (unrecoverable) "stack overflow" that kills
+// the process. It matches the SQL layer's maxGeometryCollectionNestingDepth.
+const maxGeometryNestingDepth = 64
+
 // MaxSRID is the largest SRID the SQL layer can persist. The SRID is carried in
 // the column/expression type's int32 Width as srid+1 (0 means "undefined"), so
 // the usable range is [0, math.MaxInt32-1]. Larger values would overflow Width

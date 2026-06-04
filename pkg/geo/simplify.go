@@ -73,7 +73,11 @@ func simplifyRings(rings [][]Coord, tol float64) [][]Coord {
 
 func douglasPeucker(pts []Coord, tol float64) []Coord {
 	if len(pts) < 3 {
-		return pts
+		// Return a copy, never the input's backing array: the recursive case
+		// does append(left[:len(left)-1], right...), which would otherwise
+		// overwrite the caller's coordinate slice (and simplifyRings would then
+		// emit a corrupted ring via its degenerate `out[i] = r` branch).
+		return append([]Coord(nil), pts...)
 	}
 	end := len(pts) - 1
 	maxD := 0.0

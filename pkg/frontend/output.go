@@ -765,7 +765,7 @@ func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector
 	case types.T_float64:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrFloat64)
 		colSlices.arrFloat64 = append(colSlices.arrFloat64, vector.ToSliceNoTypeCheck2[float64](vec))
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry, types.T_geometry32:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrVarlena)
 		colSlices.arrVarlena = append(colSlices.arrVarlena, vector.ToSliceNoTypeCheck2[types.Varlena](vec))
 	case types.T_array_float32:

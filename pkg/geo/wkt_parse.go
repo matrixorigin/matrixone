@@ -29,7 +29,7 @@ import (
 // rejected (per gis.md, POINTZ/POINTM and friends are out of scope).
 func ParseWKT(s string) (Geometry, error) {
 	p := &wktParser{s: s}
-	g, err := p.parseGeometry()
+	g, err := p.parseGeometry(1)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +44,7 @@ type wktParser struct {
 	pos int
 }
 
-func (p *wktParser) parseGeometry() (Geometry, error) {
+func (p *wktParser) parseGeometry(depth int) (Geometry, error) {
 	kw, err := p.parseKeyword()
 	if err != nil {
 		return nil, err
@@ -63,7 +63,7 @@ func (p *wktParser) parseGeometry() (Geometry, error) {
 	case "MULTIPOLYGON":
 		return p.parseMultiPolygon()
 	case "GEOMETRYCOLLECTION":
-		return p.parseGeometryCollection()
+		return p.parseGeometryCollection(depth)
 	default:
 		return nil, p.errf("unknown geometry type %q", kw)
 	}
@@ -208,16 +208,21 @@ func (p *wktParser) parseMultiPolygon() (Geometry, error) {
 	return MultiPolygon{Polygons: polys}, nil
 }
 
-func (p *wktParser) parseGeometryCollection() (Geometry, error) {
+func (p *wktParser) parseGeometryCollection(depth int) (Geometry, error) {
 	if p.tryKeyword("EMPTY") {
 		return GeometryCollection{}, nil
+	}
+	// Bound nesting so a maliciously deep GEOMETRYCOLLECTION cannot recurse to a
+	// fatal (unrecoverable) stack overflow.
+	if depth > maxGeometryNestingDepth {
+		return nil, p.errf("geometry collection nesting depth exceeds %d", maxGeometryNestingDepth)
 	}
 	if err := p.expectByte('('); err != nil {
 		return nil, err
 	}
 	var geoms []Geometry
 	for {
-		g, err := p.parseGeometry()
+		g, err := p.parseGeometry(depth + 1)
 		if err != nil {
 			return nil, err
 		}

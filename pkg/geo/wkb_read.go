@@ -33,7 +33,7 @@ func ReadWKB(b []byte) (Geometry, error) {
 // GEOMETRY32 variant) instead of 8-byte float64.
 func readWKB(b []byte, f32 bool) (Geometry, error) {
 	r := &wkbReader{b: b, f32: f32}
-	g, err := r.readGeometry()
+	g, err := r.readGeometry(1)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +58,7 @@ func (r *wkbReader) ordSize() int {
 
 func (r *wkbReader) remaining() int { return len(r.b) - r.pos }
 
-func (r *wkbReader) readGeometry() (Geometry, error) {
+func (r *wkbReader) readGeometry(depth int) (Geometry, error) {
 	little, err := r.readByteOrder()
 	if err != nil {
 		return nil, err
@@ -113,7 +113,7 @@ func (r *wkbReader) readGeometry() (Geometry, error) {
 		if n > 0 {
 			pts = make([]Point, n)
 			for i := range n {
-				sub, err := r.readGeometry()
+				sub, err := r.readGeometry(depth)
 				if err != nil {
 					return nil, err
 				}
@@ -134,7 +134,7 @@ func (r *wkbReader) readGeometry() (Geometry, error) {
 		if n > 0 {
 			lines = make([]LineString, n)
 			for i := range n {
-				sub, err := r.readGeometry()
+				sub, err := r.readGeometry(depth)
 				if err != nil {
 					return nil, err
 				}
@@ -155,7 +155,7 @@ func (r *wkbReader) readGeometry() (Geometry, error) {
 		if n > 0 {
 			polys = make([]Polygon, n)
 			for i := range n {
-				sub, err := r.readGeometry()
+				sub, err := r.readGeometry(depth)
 				if err != nil {
 					return nil, err
 				}
@@ -168,6 +168,11 @@ func (r *wkbReader) readGeometry() (Geometry, error) {
 		}
 		return MultiPolygon{Polygons: polys}, nil
 	case wkbGeometryCollection:
+		// Bound nesting so a maliciously deep GEOMETRYCOLLECTION cannot recurse
+		// to a fatal (unrecoverable) stack overflow.
+		if depth > maxGeometryNestingDepth {
+			return nil, r.errf("geometry collection nesting depth exceeds %d", maxGeometryNestingDepth)
+		}
 		n, err := r.readCount(little, 5)
 		if err != nil {
 			return nil, err
@@ -176,7 +181,7 @@ func (r *wkbReader) readGeometry() (Geometry, error) {
 		if n > 0 {
 			geoms = make([]Geometry, n)
 			for i := range n {
-				sub, err := r.readGeometry()
+				sub, err := r.readGeometry(depth + 1)
 				if err != nil {
 					return nil, err
 				}
