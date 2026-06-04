@@ -445,6 +445,27 @@ set @q = '+读书会 +提效 +社群 +案例 +运营';
 execute ft_stmt using @q;
 deallocate prepare ft_stmt;
 
+prepare ft_nl_stmt from 'select id from src where match(body) against(? IN NATURAL LANGUAGE MODE) order by id';
+set @q = '肥胖的原因都是因为摄入脂肪多导致的吗';
+execute ft_nl_stmt using @q;
+deallocate prepare ft_nl_stmt;
+
+prepare ft_qe_stmt from 'select id from src where match(body) against(? WITH QUERY EXPANSION) order by id';
+set @q = '肥胖的原因都是因为摄入脂肪多导致的吗';
+execute ft_qe_stmt using @q;
+deallocate prepare ft_qe_stmt;
+
+prepare ft_multi_stmt from 'select id from src where match(body) against(? IN BOOLEAN MODE) and match(body) against(? IN BOOLEAN MODE) order by id';
+set @q1 = '+读书会';
+set @q2 = '+社群';
+execute ft_multi_stmt using @q1, @q2;
+deallocate prepare ft_multi_stmt;
+
+prepare ft_mixed_stmt from 'select id from src where match(body) against(''+读书会'' IN BOOLEAN MODE) and match(body) against(? IN BOOLEAN MODE) order by id';
+set @q = '+运营';
+execute ft_mixed_stmt using @q;
+deallocate prepare ft_mixed_stmt;
+
 select id from src where match(body) against('肥胖的原因都是因为摄入fat多导致的吗' IN NATURAL LANGUAGE MODE);
 CREATE TABLE example_table (id INT PRIMARY KEY,english_text TEXT, chinese_text TEXT,json_data JSON);
 INSERT INTO example_table (id, english_text, chinese_text, json_data) VALUES(1, 'Hello, world!', '你好世界', '{"name": "Alice", "age": 30}'),(2, 'This is a test.', '这是一个测试', '{"name": "Bob", "age": 25}'),(3, 'Full-text search is powerful.', '全文搜索很强大', '{"name": "Charlie", "age": 35}');

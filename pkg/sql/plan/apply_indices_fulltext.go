@@ -601,6 +601,8 @@ func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *pl
 		return false
 	}
 
+	// Pattern arguments may be bound parameters, so compare the bound
+	// expression tree instead of dereferencing literal strings.
 	if !exprStructuralEqual(fn1.Args[0], fn2.Args[0]) || !exprStructuralEqual(fn1.Args[1], fn2.Args[1]) {
 		return false
 	}

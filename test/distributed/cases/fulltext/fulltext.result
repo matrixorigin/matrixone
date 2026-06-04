@@ -551,6 +551,30 @@ execute ft_stmt using @q;
 id
 1
 deallocate prepare ft_stmt;
+prepare ft_nl_stmt from 'select id from src where match(body) against(? IN NATURAL LANGUAGE MODE) order by id';
+set @q = '肥胖的原因都是因为摄入脂肪多导致的吗';
+execute ft_nl_stmt using @q;
+id
+2
+deallocate prepare ft_nl_stmt;
+prepare ft_qe_stmt from 'select id from src where match(body) against(? WITH QUERY EXPANSION) order by id';
+set @q = '肥胖的原因都是因为摄入脂肪多导致的吗';
+execute ft_qe_stmt using @q;
+internal error: Query Expansion mode not supported
+deallocate prepare ft_qe_stmt;
+prepare ft_multi_stmt from 'select id from src where match(body) against(? IN BOOLEAN MODE) and match(body) against(? IN BOOLEAN MODE) order by id';
+set @q1 = '+读书会';
+set @q2 = '+社群';
+execute ft_multi_stmt using @q1, @q2;
+id
+1
+deallocate prepare ft_multi_stmt;
+prepare ft_mixed_stmt from 'select id from src where match(body) against(''+读书会'' IN BOOLEAN MODE) and match(body) against(? IN BOOLEAN MODE) order by id';
+set @q = '+运营';
+execute ft_mixed_stmt using @q;
+id
+1
+deallocate prepare ft_mixed_stmt;
 select id from src where match(body) against('肥胖的原因都是因为摄入fat多导致的吗' IN NATURAL LANGUAGE MODE);
 id
 3
