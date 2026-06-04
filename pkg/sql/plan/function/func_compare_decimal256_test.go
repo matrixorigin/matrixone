@@ -15,9 +15,12 @@
 package function
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -170,6 +173,170 @@ func Test_NullSafeEqualFn_Decimal256(t *testing.T) {
 			[]bool{true, true}, []bool{false, false}),
 	}
 	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, nullSafeEqualFn)
+	s, info := fcTC.Run()
+	require.True(t, s, info, tc.info)
+}
+
+// Test_ValueDec256Compare_AllBranches exercises the const/variable, null and
+// scale-direction (m>=0 / m<0) branches of valueDec256Compare directly, so the
+// decimal256 comparison helper is covered beyond the simple variable path.
+func Test_ValueDec256Compare_AllBranches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	eq := func(a, b types.Decimal256) bool { return a == b }
+
+	mkVar := func(scale int32, vals []int64, nullList []bool) *vector.Vector {
+		vec := vector.NewVec(types.New(types.T_decimal256, 76, scale))
+		ds := make([]types.Decimal256, len(vals))
+		for i, v := range vals {
+			ds[i] = types.Decimal256FromInt64(v)
+		}
+		require.NoError(t, vector.AppendFixedList(vec, ds, nullList, mp))
+		return vec
+	}
+	mkConst := func(scale int32, val int64, length int) *vector.Vector {
+		vec, err := vector.NewConstFixed(types.New(types.T_decimal256, 76, scale),
+			types.Decimal256FromInt64(val), length, mp)
+		require.NoError(t, err)
+		return vec
+	}
+	run := func(p1, p2 *vector.Vector, length int) ([]bool, *nulls.Nulls) {
+		w := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
+		require.NoError(t, w.PreExtendAndReset(length))
+		rs := vector.MustFunctionResult[bool](w)
+		require.NoError(t, valueDec256Compare([]*vector.Vector{p1, p2}, rs, uint64(length), eq, nil))
+		rsVec := rs.GetResultVector()
+		col := vector.MustFixedColWithTypeCheck[bool](rsVec)
+		out := make([]bool, length)
+		copy(out, col)
+		return out, rsVec.GetNulls()
+	}
+
+	// const vs const: m>=0 then m<0 (5 == 5.00).
+	r, _ := run(mkConst(0, 5, 2), mkConst(2, 500, 2), 2)
+	require.Equal(t, []bool{true, true}, r)
+	r, _ = run(mkConst(2, 500, 2), mkConst(0, 5, 2), 2)
+	require.Equal(t, []bool{true, true}, r)
+
+	// c1 (p1 const) m>=0: with null then without null.
+	r, ns := run(mkConst(0, 5, 2), mkVar(2, []int64{500, 0}, []bool{false, true}), 2)
+	require.True(t, r[0])
+	require.True(t, ns.Contains(1))
+	r, _ = run(mkConst(0, 5, 2), mkVar(2, []int64{500, 400}, nil), 2)
+	require.Equal(t, []bool{true, false}, r)
+
+	// c1 m<0: with null then without null.
+	r, ns = run(mkConst(2, 500, 2), mkVar(0, []int64{5, 0}, []bool{false, true}), 2)
+	require.True(t, r[0])
+	require.True(t, ns.Contains(1))
+	r, _ = run(mkConst(2, 500, 2), mkVar(0, []int64{5, 6}, nil), 2)
+	require.Equal(t, []bool{true, false}, r)
+
+	// c2 (p2 const) m>=0: with null then without null.
+	r, ns = run(mkVar(0, []int64{5, 0}, []bool{false, true}), mkConst(2, 500, 2), 2)
+	require.True(t, r[0])
+	require.True(t, ns.Contains(1))
+	r, _ = run(mkVar(0, []int64{5, 4}, nil), mkConst(2, 500, 2), 2)
+	require.Equal(t, []bool{true, false}, r)
+
+	// c2 m<0: with null then without null.
+	r, ns = run(mkVar(2, []int64{500, 0}, []bool{false, true}), mkConst(0, 5, 2), 2)
+	require.True(t, r[0])
+	require.True(t, ns.Contains(1))
+	r, _ = run(mkVar(2, []int64{500, 600}, nil), mkConst(0, 5, 2), 2)
+	require.Equal(t, []bool{true, false}, r)
+
+	// var vs var with null: m>=0 then m<0.
+	r, ns = run(mkVar(0, []int64{5, 0}, []bool{false, true}), mkVar(2, []int64{500, 500}, nil), 2)
+	require.True(t, r[0])
+	require.True(t, ns.Contains(1))
+	r, ns = run(mkVar(2, []int64{500, 0}, []bool{false, true}), mkVar(0, []int64{5, 5}, nil), 2)
+	require.True(t, r[0])
+	require.True(t, ns.Contains(1))
+
+	// var vs var without null: m>=0 then m<0.
+	r, _ = run(mkVar(0, []int64{5, 6}, nil), mkVar(2, []int64{500, 500}, nil), 2)
+	require.Equal(t, []bool{true, false}, r)
+	r, _ = run(mkVar(2, []int64{500, 600}, nil), mkVar(0, []int64{5, 7}, nil), 2)
+	require.Equal(t, []bool{true, false}, r)
+}
+
+// Test_ValueDec256Compare_ScaleOverflowError verifies that an overflow from
+// Decimal256.Scale() (extreme scale span) is propagated as an error instead of
+// comparing un-scaled raw values (issue #24565 review).
+func Test_ValueDec256Compare_ScaleOverflowError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	big, err := types.ParseDecimal256(strings.Repeat("9", 76), 76, 0)
+	require.NoError(t, err)
+	p1, err := vector.NewConstFixed(types.New(types.T_decimal256, 76, 0), big, 1, mp)
+	require.NoError(t, err)
+	p2, err := vector.NewConstFixed(types.New(types.T_decimal256, 76, 30), types.Decimal256FromInt64(1), 1, mp)
+	require.NoError(t, err)
+	w := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
+	require.NoError(t, w.PreExtendAndReset(1))
+	rs := vector.MustFunctionResult[bool](w)
+	err = valueDec256Compare([]*vector.Vector{p1, p2}, rs, 1,
+		func(a, b types.Decimal256) bool { return a == b }, nil)
+	require.Error(t, err)
+}
+
+func Test_LessThanFn_Decimal256(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := tcTemp{
+		info: "decimal256 < decimal256",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_decimal256, 58, 0),
+				[]types.Decimal256{types.Decimal256FromInt64(1), types.Decimal256FromInt64(5)},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.New(types.T_decimal256, 58, 0),
+				[]types.Decimal256{types.Decimal256FromInt64(5), types.Decimal256FromInt64(1)},
+				[]bool{false, false}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false}, []bool{false, false}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, lessThanFn)
+	s, info := fcTC.Run()
+	require.True(t, s, info, tc.info)
+}
+
+func Test_LessEqualFn_Decimal256(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := tcTemp{
+		info: "decimal256 <= decimal256",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_decimal256, 58, 0),
+				[]types.Decimal256{types.Decimal256FromInt64(5), types.Decimal256FromInt64(6)},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.New(types.T_decimal256, 58, 0),
+				[]types.Decimal256{types.Decimal256FromInt64(5), types.Decimal256FromInt64(1)},
+				[]bool{false, false}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false}, []bool{false, false}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, lessEqualFn)
+	s, info := fcTC.Run()
+	require.True(t, s, info, tc.info)
+}
+
+func Test_GreatEqualFn_Decimal256(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := tcTemp{
+		info: "decimal256 >= decimal256",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_decimal256, 58, 0),
+				[]types.Decimal256{types.Decimal256FromInt64(5), types.Decimal256FromInt64(1)},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.New(types.T_decimal256, 58, 0),
+				[]types.Decimal256{types.Decimal256FromInt64(5), types.Decimal256FromInt64(5)},
+				[]bool{false, false}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false}, []bool{false, false}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, greatEqualFn)
 	s, info := fcTC.Run()
 	require.True(t, s, info, tc.info)
 }

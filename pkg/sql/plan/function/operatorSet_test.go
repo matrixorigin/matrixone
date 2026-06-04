@@ -766,6 +766,35 @@ func Test_CoalesceCheck_DecimalPromoteToDecimal256(t *testing.T) {
 	}
 }
 
+// required precision overflows decimal256 -> coalesce fails instead of
+// silently truncating.
+func Test_CoalesceCheck_DecimalOverflowFails(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_decimal128}},
+		{args: []types.T{types.T_decimal256}},
+	}
+	inputs := []types.Type{
+		types.New(types.T_decimal256, 76, 0),
+		types.New(types.T_decimal256, 76, 76), // 76 integral + 76 scale = 152 > 76
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, failedFunctionParametersWrong, result.status)
+}
+
+// the aligned decimal type has no matching overload -> coalesce fails.
+func Test_CoalesceCheck_DecimalNoOverloadFails(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_decimal64}},
+		{args: []types.T{types.T_decimal128}},
+	} // no decimal256 overload
+	inputs := []types.Type{
+		types.New(types.T_decimal128, 38, 0),
+		types.New(types.T_decimal128, 38, 38), // requires decimal256
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, failedFunctionParametersWrong, result.status)
+}
+
 func Test_CaseWhen_WithNullAndStringComparison(t *testing.T) {
 	// Test CASE WHEN with NULL value compared to string
 	// This should not error, matching MySQL behavior
