@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -305,7 +306,7 @@ func rewriteRemoteDispatchesForLocalSource(
 			}
 
 			receiverInfo := &binding.scope.RemoteReceivRegInfos[binding.infoIdx]
-			if binding.scope.ipAddrMatch(localAddr) {
+			if binding.scope.ipAddrMatch(localAddr) && !shouldKeepRemoteReceiverForLocalFallback(dispatchOp) {
 				if reg, ok := getReceiverWaitRegister(binding); ok {
 					reg.NilBatchCnt = source.NodeInfo.Mcpu
 					dispatchOp.LocalRegs = append(dispatchOp.LocalRegs, reg)
@@ -329,6 +330,14 @@ func rewriteRemoteDispatchesForLocalSource(
 		normalizeDispatchFuncAfterRemoteRewrite(dispatchOp)
 		return nil
 	})
+}
+
+func shouldKeepRemoteReceiverForLocalFallback(dispatchOp *dispatch.Dispatch) bool {
+	if dispatchOp.FuncId != dispatch.ShuffleToAllFunc {
+		return false
+	}
+	return dispatchOp.ShuffleType == plan2.ShuffleToLocalMatchedReg ||
+		dispatchOp.ShuffleType == plan2.ShuffleToMultiMatchedReg
 }
 
 func getReceiverWaitRegister(binding remoteReceiverBinding) (*process.WaitRegister, bool) {
