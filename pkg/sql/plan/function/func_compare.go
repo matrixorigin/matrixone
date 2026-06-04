@@ -804,12 +804,18 @@ func valueDec256Compare(
 			nulls.AddRange(rsNull, 0, length)
 		} else {
 			if m >= 0 {
-				x, _ := v1.Scale(m)
+				x, err := v1.Scale(m)
+				if err != nil {
+					return err
+				}
 				for i := uint64(0); i < length; i++ {
 					rss[i] = cmpFn(x, v2)
 				}
 			} else {
-				y, _ := v2.Scale(-m)
+				y, err := v2.Scale(-m)
+				if err != nil {
+					return err
+				}
 				for i := uint64(0); i < length; i++ {
 					rss[i] = cmpFn(v1, y)
 				}
@@ -824,7 +830,10 @@ func valueDec256Compare(
 			nulls.AddRange(rsNull, 0, length)
 		} else {
 			if m >= 0 {
-				x, _ := v1.Scale(m)
+				x, err := v1.Scale(m)
+				if err != nil {
+					return err
+				}
 				if p2.WithAnyNullValue() || rsAnyNull {
 					nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
 					for i := uint64(0); i < length; i++ {
@@ -848,14 +857,20 @@ func valueDec256Compare(
 							continue
 						}
 						v2, _ := p2.GetValue(i)
-						y, _ := v2.Scale(-m)
+						y, err := v2.Scale(-m)
+						if err != nil {
+							return err
+						}
 						rss[i] = cmpFn(v1, y)
 					}
 				} else {
 					scaleMy := -m
 					for i := uint64(0); i < length; i++ {
 						v2, _ := p2.GetValue(i)
-						y, _ := v2.Scale(scaleMy)
+						y, err := v2.Scale(scaleMy)
+						if err != nil {
+							return err
+						}
 						rss[i] = cmpFn(v1, y)
 					}
 				}
@@ -878,18 +893,27 @@ func valueDec256Compare(
 							continue
 						}
 						v1, _ := p1.GetValue(i)
-						x, _ := v1.Scale(m)
+						x, err := v1.Scale(m)
+						if err != nil {
+							return err
+						}
 						rss[i] = cmpFn(x, v2)
 					}
 				} else {
 					for i := uint64(0); i < length; i++ {
 						v1, _ := p1.GetValue(i)
-						x, _ := v1.Scale(m)
+						x, err := v1.Scale(m)
+						if err != nil {
+							return err
+						}
 						rss[i] = cmpFn(x, v2)
 					}
 				}
 			} else {
-				y, _ := v2.Scale(-m)
+				y, err := v2.Scale(-m)
+				if err != nil {
+					return err
+				}
 				if p1.WithAnyNullValue() || rsAnyNull {
 					nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
 					for i := uint64(0); i < length; i++ {
@@ -920,7 +944,10 @@ func valueDec256Compare(
 				}
 				v1, _ := p1.GetValue(i)
 				v2, _ := p2.GetValue(i)
-				x, _ := v1.Scale(m)
+				x, err := v1.Scale(m)
+				if err != nil {
+					return err
+				}
 				rss[i] = cmpFn(x, v2)
 			}
 		} else {
@@ -931,7 +958,10 @@ func valueDec256Compare(
 				}
 				v1, _ := p1.GetValue(i)
 				v2, _ := p2.GetValue(i)
-				y, _ := v2.Scale(scaleMy)
+				y, err := v2.Scale(scaleMy)
+				if err != nil {
+					return err
+				}
 				rss[i] = cmpFn(v1, y)
 			}
 		}
@@ -942,7 +972,10 @@ func valueDec256Compare(
 		for i := uint64(0); i < length; i++ {
 			v1, _ := p1.GetValue(i)
 			v2, _ := p2.GetValue(i)
-			x, _ := v1.Scale(m)
+			x, err := v1.Scale(m)
+			if err != nil {
+				return err
+			}
 			rss[i] = cmpFn(x, v2)
 		}
 	} else {
@@ -950,7 +983,10 @@ func valueDec256Compare(
 		for i := uint64(0); i < length; i++ {
 			v1, _ := p1.GetValue(i)
 			v2, _ := p2.GetValue(i)
-			y, _ := v2.Scale(scaleMy)
+			y, err := v2.Scale(scaleMy)
+			if err != nil {
+				return err
+			}
 			rss[i] = cmpFn(v1, y)
 		}
 	}
