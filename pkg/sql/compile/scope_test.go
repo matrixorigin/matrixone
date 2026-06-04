@@ -1241,12 +1241,12 @@ func TestScopeGetRelDataError(t *testing.T) {
 }
 
 // mockRelation is a mock Relation that captures the FilterHint passed to BuildReaders
-type mockRelationForBloomFilter struct {
+type mockRelationForMembershipFilter struct {
 	engine.Relation
 	capturedHint engine.FilterHint
 }
 
-func (m *mockRelationForBloomFilter) BuildReaders(
+func (m *mockRelationForMembershipFilter) BuildReaders(
 	ctx context.Context,
 	proc any,
 	expr *plan.Expr,
@@ -1306,14 +1306,14 @@ func (m *mockRelationForParallelOrderBy) BuildReaders(
 	return m.readers, nil
 }
 
-func TestBuildReadersBloomFilterHint(t *testing.T) {
-	t.Run("BloomFilter set when node is IVFFLAT Entries and context has bloom filter", func(t *testing.T) {
+func TestBuildReadersMembershipFilterHint(t *testing.T) {
+	t.Run("MembershipFilter set when node is IVFFLAT Entries and context has membership filter", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
 		proc.Ctx = ctx
 
-		mockRel := &mockRelationForBloomFilter{}
+		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
@@ -1340,16 +1340,16 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
 		require.NotNil(t, readers)
-		require.Equal(t, expectedBloomFilter, mockRel.capturedHint.BloomFilter)
+		require.Equal(t, expectedMembershipFilter, mockRel.capturedHint.MembershipFilterBytes)
 	})
 
-	t.Run("BloomFilter not set when node is nil", func(t *testing.T) {
+	t.Run("MembershipFilter not set when node is nil", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
 		proc.Ctx = ctx
 
-		mockRel := &mockRelationForBloomFilter{}
+		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
@@ -1372,16 +1372,16 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
 		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.BloomFilter)
+		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
 	})
 
-	t.Run("BloomFilter not set when TableDef is nil", func(t *testing.T) {
+	t.Run("MembershipFilter not set when TableDef is nil", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
 		proc.Ctx = ctx
 
-		mockRel := &mockRelationForBloomFilter{}
+		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
@@ -1406,16 +1406,16 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
 		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.BloomFilter)
+		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
 	})
 
-	t.Run("BloomFilter not set when TableType is not IVFFLAT Entries", func(t *testing.T) {
+	t.Run("MembershipFilter not set when TableType is not IVFFLAT Entries", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
 		proc.Ctx = ctx
 
-		mockRel := &mockRelationForBloomFilter{}
+		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
@@ -1442,14 +1442,14 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
 		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.BloomFilter)
+		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
 	})
 
-	t.Run("BloomFilter not set when context has no IvfBloomFilter", func(t *testing.T) {
+	t.Run("MembershipFilter not set when context has no IvfMembershipFilter", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		// No IvfBloomFilter in context
+		// No IvfMembershipFilter in context
 
-		mockRel := &mockRelationForBloomFilter{}
+		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
@@ -1476,15 +1476,15 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
 		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.BloomFilter)
+		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
 	})
 
-	t.Run("BloomFilter not set when context value is not []byte", func(t *testing.T) {
+	t.Run("MembershipFilter not set when context value is not []byte", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, "not a byte slice")
+		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, "not a byte slice")
 		proc.Ctx = ctx
 
-		mockRel := &mockRelationForBloomFilter{}
+		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
@@ -1511,15 +1511,15 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
 		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.BloomFilter)
+		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
 	})
 
-	t.Run("BloomFilter not set when context value is empty []byte", func(t *testing.T) {
+	t.Run("MembershipFilter not set when context value is empty []byte", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, []byte{}) // empty byte slice
+		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, []byte{}) // empty byte slice
 		proc.Ctx = ctx
 
-		mockRel := &mockRelationForBloomFilter{}
+		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
@@ -1546,7 +1546,7 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
 		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.BloomFilter)
+		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
 	})
 }
 

@@ -108,7 +108,7 @@ func makeConstInputExprsIvfpqCreate() []*plan.Expr {
 	tblcfg := `{"db":"db","src":"src","metadata":"__meta","index":"__index","index_capacity":100}`
 	return []*plan.Expr{
 		{
-			Typ: plan.Type{Id: int32(types.T_varchar), Width: 512},
+			Typ:  plan.Type{Id: int32(types.T_varchar), Width: 512},
 			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: tblcfg}}},
 		},
 		{
@@ -197,8 +197,8 @@ func TestIvfpqCreateParamFail(t *testing.T) {
 	ivfpq_runSql = mock_ivfpq_runSql
 
 	failedParams := []string{
-		`{`,                                                // invalid JSON
-		`{"op_type":"vector_cos_ops"}`,                    // unsupported op_type for IVF-PQ
+		`{`,                            // invalid JSON
+		`{"op_type":"vector_cos_ops"}`, // unsupported op_type for IVF-PQ
 		`{"op_type":"vector_l2_ops","lists":"notnumber"}`, // non-numeric lists
 		`{"op_type":"vector_l2_ops","m":"notnumber"}`,     // non-numeric m
 		`{"op_type":"vector_l2_ops","bits_per_code":"x"}`, // non-numeric bits_per_code
@@ -230,9 +230,9 @@ func TestIvfpqCreateIndexTableConfigFail(t *testing.T) {
 	param := `{"op_type":"vector_l2_ops","lists":"4","m":"2","bits_per_code":"8"}`
 
 	type failCase struct {
-		args   []*plan.Expr
-		bat    *batch.Batch
-		desc   string
+		args []*plan.Expr
+		bat  *batch.Batch
+		desc string
 	}
 
 	makeArgs := func(tblcfg string, idTyp types.T, vecTyp types.T, vecDim int32) ([]*plan.Expr, *batch.Batch) {

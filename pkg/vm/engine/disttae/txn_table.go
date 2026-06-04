@@ -27,7 +27,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	commonUtil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -66,6 +66,12 @@ import (
 const (
 	AllColumns = "*"
 )
+
+// docfilter.MembershipFilter (producer view, with Share) must stay assignable to
+// engine.MembershipFilter (consumer view) so docfilter.New(...).Share() can be
+// stored in FilterHint.BF. This compile-time assertion locks that relationship
+// from a package that imports both, since docfilter cannot import engine.
+var _ engine.MembershipFilter = (docfilter.MembershipFilter)(nil)
 
 var traceFilterExprInterval atomic.Uint64
 var traceFilterExprInterval2 atomic.Uint64
@@ -2334,25 +2340,49 @@ func (tbl *txnTable) BuildReaders(
 	def := tbl.GetTableDef(ctx)
 	shards := relData.Split(newNum)
 
-	var mainBF *bloomfilter.CBloomFilter
-	if len(filterHint.BloomFilter) > 0 {
-		mainBF = &bloomfilter.CBloomFilter{}
-		if err := mainBF.Unmarshal(filterHint.BloomFilter); err != nil {
-			mainBF = nil
+	// Reconstruct the doc_id filter from the tagged bytes. docfilter hides which
+	// structure (cbitmap / CRoaring / bloom) backs it; we just hand each reader
+	// a share and free the builder reference at the end.
+	var mainFilter docfilter.MembershipFilter
+	if len(filterHint.MembershipFilterBytes) > 0 {
+		f, ferr := docfilter.New(filterHint.MembershipFilterBytes)
+		if ferr != nil {
+			// A non-empty payload that fails to decode must NOT be silently
+			// dropped to a nil filter (which disables filtering and lets all rows
+			// through). Fail closed so the corruption surfaces instead of
+			// returning wrong results.
+			return nil, ferr
+		}
+		mainFilter = f
+	}
+
+	// On an error mid-loop we return nil (not rds), so the caller never gets the
+	// partially-built readers and can never Close them to drop their filter
+	// shares. Track every share we hand out and, on the error paths, free all of
+	// them plus the builder's own reference — otherwise the C filter's refcount
+	// never reaches 0 and it leaks for the process lifetime. On success the
+	// readers own their shares and drop them via reset(); we free only the
+	// builder reference.
+	var shares []docfilter.MembershipFilter
+	freeOnError := func() {
+		for _, s := range shares {
+			s.Free()
+		}
+		if mainFilter != nil {
+			mainFilter.Free()
 		}
 	}
 
 	for i := 0; i < newNum; i++ {
 		hint := filterHint
-		if mainBF != nil {
-			// CBloomFilter is thread safe for Test and TestVector
-			hint.BF = mainBF.SharePointer()
+		if mainFilter != nil {
+			sh := mainFilter.Share()
+			shares = append(shares, sh)
+			hint.BF = sh
 		}
 		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shards[i], tombstonePolicy, engine.GeneralLocalDataSource)
 		if err != nil {
-			if mainBF != nil {
-				mainBF.Free()
-			}
+			freeOnError()
 			return nil, err
 		}
 		rd, err := readutil.NewReader(
@@ -2368,17 +2398,15 @@ func (tbl *txnTable) BuildReaders(
 			hint,
 		)
 		if err != nil {
-			if mainBF != nil {
-				mainBF.Free()
-			}
+			freeOnError()
 			return nil, err
 		}
 
 		rds = append(rds, rd)
 	}
 
-	if mainBF != nil {
-		mainBF.Free()
+	if mainFilter != nil {
+		mainFilter.Free()
 	}
 	return rds, nil
 }
