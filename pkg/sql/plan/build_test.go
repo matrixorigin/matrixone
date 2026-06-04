@@ -747,11 +747,11 @@ func TestUpdateFallbackGeneratedColumnsUseDefaultAfterRewrite(t *testing.T) {
 		t.Fatalf("build fallback update with generated column over DEFAULT: %v", err)
 	}
 
-	requireQueryExpr(t, logicPlan.GetQuery(),
-		func(generatedExpr *plan.Expr) bool {
-			return exprContainsStringLiteral(generatedExpr, "job-default")
-		},
-		"generated column should use expanded DEFAULT expression")
+	node := requireFallbackSourceProjectNode(t, logicPlan.GetQuery(),
+		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1, "default-marker")
+	if !nodeContainsStringLiteral(node, "job-default") {
+		t.Fatalf("generated column should use expanded DEFAULT expression, got %v", node.ProjectList)
+	}
 }
 
 func TestUpdateFallbackGeneratedColumnsUseOnUpdateAfterRewrite(t *testing.T) {
@@ -765,11 +765,11 @@ func TestUpdateFallbackGeneratedColumnsUseOnUpdateAfterRewrite(t *testing.T) {
 		t.Fatalf("build fallback update with generated column over ON UPDATE: %v", err)
 	}
 
-	requireQueryExpr(t, logicPlan.GetQuery(),
-		func(generatedExpr *plan.Expr) bool {
-			return exprContainsStringLiteral(generatedExpr, "job-on-update")
-		},
-		"generated column should use ON UPDATE expression")
+	node := requireFallbackSourceProjectNode(t, logicPlan.GetQuery(),
+		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1, "on-update-marker")
+	if !nodeContainsStringLiteral(node, "job-on-update") {
+		t.Fatalf("generated column should use ON UPDATE expression, got %v", node.ProjectList)
+	}
 }
 
 func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
@@ -885,11 +885,29 @@ func makeStringConstExpr(typ plan.Type, value string) *plan.Expr {
 	}
 }
 
-func requireQueryExpr(t *testing.T, query *Query, accept func(*plan.Expr) bool, message string) *plan.Expr {
+func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int, marker string) *Node {
 	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_PROJECT {
+		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen {
 			continue
 		}
+		hasMarker := false
+		for _, expr := range node.ProjectList {
+			if exprContainsStringLiteral(expr, marker) {
+				hasMarker = true
+				break
+			}
+		}
+		if !hasMarker {
+			continue
+		}
+		return node
+	}
+	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
+	return nil
+}
+
+func requireQueryExpr(t *testing.T, query *Query, accept func(*plan.Expr) bool, message string) *plan.Expr {
+	for _, node := range query.Nodes {
 		for _, expr := range node.ProjectList {
 			if accept(expr) {
 				return expr
@@ -898,6 +916,15 @@ func requireQueryExpr(t *testing.T, query *Query, accept func(*plan.Expr) bool, 
 	}
 	t.Fatalf("%s; no matching expression found", message)
 	return nil
+}
+
+func nodeContainsStringLiteral(node *Node, value string) bool {
+	for _, expr := range node.ProjectList {
+		if exprContainsStringLiteral(expr, value) {
+			return true
+		}
+	}
+	return false
 }
 
 func assertFallbackUpdateProjectLength(t *testing.T, query *Query, projectLen int) {
