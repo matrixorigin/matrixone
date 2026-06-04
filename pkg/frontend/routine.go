@@ -235,6 +235,17 @@ func (rt *Routine) reportSystemStatus() (r bool) {
 	return
 }
 
+func (rt *Routine) getCleanupContext() context.Context {
+	if ses := rt.getSession(); ses != nil {
+		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
+			if ctx := txnHandler.GetTxnCtx(); ctx != nil {
+				return ctx
+			}
+		}
+	}
+	return context.Background()
+}
+
 func (rt *Routine) handleRequest(req *Request) error {
 	var routineCtx context.Context
 	var err error
@@ -346,6 +357,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 		//ensure cleaning the transaction
 		ses.Error(tenantCtx, "rollback the txn.")
 		tempExecCtx := ExecCtx{
+			reqCtx: rt.getCleanupContext(),
 			ses:    ses,
 			txnOpt: FeTxnOption{byRollback: true},
 		}
@@ -434,6 +446,7 @@ func (rt *Routine) cleanup() {
 			ses.EnterFPrint(FPCleanup)
 			defer ses.ExitFPrint(FPCleanup)
 			tempExecCtx := ExecCtx{
+				reqCtx: rt.getCleanupContext(),
 				ses:    ses,
 				txnOpt: FeTxnOption{byRollback: true},
 			}
