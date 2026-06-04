@@ -1993,7 +1993,13 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				globalScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
 					int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 					objType, objectIDAll)
-				bh.sql2result[globalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+				if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR {
+					bh.sql2result[globalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{
+						{ses.GetTenantInfo().GetDefaultRoleID()},
+					})
+				} else {
+					bh.sql2result[globalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+				}
 			}
 
 			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
@@ -10510,6 +10516,53 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable)
 		require.Error(t, err)
 		require.Nil(t, roleSet)
+	})
+
+	t.Run("table star star ignores narrower object type scoped WGO", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		globalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll)
+		bh.sql2result[globalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+		objTypeSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable)
+		bh.sql2result[objTypeSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			nil,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR},
+		)
+		require.NoError(t, err)
+		require.Zero(t, roleSet.Len())
+		require.False(t, roleSet.Contains(roleID))
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), objTypeSQL)
+	})
+
+	t.Run("table star star accepts global object scoped WGO", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		globalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll)
+		bh.sql2result[globalSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			nil,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR},
+		)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+		require.Equal(t, globalSQL, bh.currentSql)
 	})
 
 	t.Run("unresolved object falls back to object type scoped lookup", func(t *testing.T) {

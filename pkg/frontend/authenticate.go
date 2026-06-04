@@ -8414,8 +8414,9 @@ func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
 		return roleSet, nil
 	}
 
-	// For truly global wildcard levels (*.*), filter by obj_type only.
-	return getRoleSetThatPrivilegeGrantedToWGOWithObjType(ctx, bh, privType, objType)
+	// For truly global wildcard levels (*.*), only global object grants can authorize
+	// further grants. Narrower scopes such as db.* or db.table must not be promoted to *.*.
+	return getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, objectIDAll)
 }
 
 func isMissingPrivilegeObjectError(err error) bool {
