@@ -8220,8 +8220,8 @@ func getRoleSetThatPrivilegeGrantedToWGOScoped(
 		if err != nil {
 			return nil, err
 		}
-		legacyRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
-			ctx, ses, bh, privType, astObjType, objectTypeTable, level)
+		legacyRoleSet, err := getRoleSetThatViewPrivilegeGrantedToWGOLegacyExact(
+			ctx, ses, bh, privType, level)
 		if err != nil {
 			return nil, err
 		}
@@ -8234,6 +8234,29 @@ func getRoleSetThatPrivilegeGrantedToWGOScoped(
 		return nil, err
 	}
 	return getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(ctx, ses, bh, privType, astObjType, objType, level)
+}
+
+func getRoleSetThatViewPrivilegeGrantedToWGOLegacyExact(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	level tree.PrivilegeLevel,
+) (*btree.Set[int64], error) {
+	switch level.Level {
+	case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+		tree.PRIVILEGE_LEVEL_TYPE_TABLE:
+		privilegeLevel, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, tree.OBJECT_TYPE_VIEW, level)
+		if err != nil {
+			if !isMissingPrivilegeObjectError(err) {
+				return nil, err
+			}
+			return &btree.Set[int64]{}, nil
+		}
+		return getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(ctx, bh, privType, objectTypeTable, objId, privilegeLevel)
+	default:
+		return &btree.Set[int64]{}, nil
+	}
 }
 
 func getRoleSetThatDatabasePrivilegeGrantedToWGOScoped(
