@@ -21,7 +21,7 @@ package geo
 // intersection, difference and symmetric difference of areal geometries.
 
 import (
-	"sort"
+	"container/heap"
 )
 
 // BoolOp selects which Boolean operation overlay computes.
@@ -56,6 +56,14 @@ type ovEvent struct {
 	inResult     bool
 	contourID    int
 	pos          int
+
+	// seq is a monotonic insertion sequence used only as a final tiebreaker so
+	// the status-line ordering is a strict total order (compareSegments can
+	// return 0 for distinct collinear-overlapping segments). snode points to
+	// this event's node in the status-line tree while it is on the sweep line,
+	// giving O(log n) removal and neighbor lookup without a linear scan.
+	seq   int
+	snode *slNode
 }
 
 func ovSignedArea(p0, p1, p2 Coord) float64 {
@@ -179,55 +187,237 @@ func compareSegments(le1, le2 *ovEvent) int {
 	return 1
 }
 
-// eventQueue is a sorted insertion priority queue keyed by compareEvents.
-type eventQueue struct {
-	events []*ovEvent
-}
+// eventQueue is a binary min-heap of sweep events ordered by compareEvents, so
+// push/pop are O(log n) rather than the O(n) of a sorted-slice insertion.
+type eventHeap []*ovEvent
 
-func (q *eventQueue) push(e *ovEvent) {
-	// Insert keeping the slice sorted so pop takes the front (earliest).
-	i := sort.Search(len(q.events), func(i int) bool {
-		return compareEvents(q.events[i], e) >= 0
-	})
-	q.events = append(q.events, nil)
-	copy(q.events[i+1:], q.events[i:])
-	q.events[i] = e
-}
-
-func (q *eventQueue) pop() *ovEvent {
-	e := q.events[0]
-	q.events = q.events[1:]
+func (h eventHeap) Len() int           { return len(h) }
+func (h eventHeap) Less(i, j int) bool { return compareEvents(h[i], h[j]) < 0 }
+func (h eventHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *eventHeap) Push(x any)        { *h = append(*h, x.(*ovEvent)) }
+func (h *eventHeap) Pop() any {
+	old := *h
+	n := len(old)
+	e := old[n-1]
+	old[n-1] = nil
+	*h = old[:n-1]
 	return e
 }
 
-func (q *eventQueue) empty() bool { return len(q.events) == 0 }
+type eventQueue struct {
+	h eventHeap
+}
 
-// statusLine is the ordered set of edges currently crossing the sweep line.
+func (q *eventQueue) push(e *ovEvent) { heap.Push(&q.h, e) }
+func (q *eventQueue) pop() *ovEvent   { return heap.Pop(&q.h).(*ovEvent) }
+func (q *eventQueue) empty() bool     { return len(q.h) == 0 }
+
+// statusLine is the ordered set of edges currently crossing the sweep line,
+// backed by an AVL tree so insert, remove and neighbor lookup are O(log n). The
+// sorted-slice version was O(n) per operation (and used a linear scan to locate
+// an edge), degrading large overlays toward O(n^2).
+//
+// compareSegments is the primary order; it can return 0 for distinct
+// collinear-overlapping segments, so the event's monotonic seq is the final
+// tiebreaker to keep a strict total order.
+type slNode struct {
+	e           *ovEvent
+	left, right *slNode
+	parent      *slNode
+	height      int
+}
+
 type statusLine struct {
-	items []*ovEvent
+	root *slNode
+	seq  int
 }
 
-func (s *statusLine) insert(e *ovEvent) int {
-	i := sort.Search(len(s.items), func(i int) bool {
-		return compareSegments(s.items[i], e) >= 0
-	})
-	s.items = append(s.items, nil)
-	copy(s.items[i+1:], s.items[i:])
-	s.items[i] = e
-	return i
-}
-
-func (s *statusLine) removeAt(i int) {
-	s.items = append(s.items[:i], s.items[i+1:]...)
-}
-
-func (s *statusLine) indexOf(e *ovEvent) int {
-	for i, it := range s.items {
-		if it == e {
-			return i
-		}
+func statusLess(a, b *ovEvent) bool {
+	if c := compareSegments(a, b); c != 0 {
+		return c < 0
 	}
-	return -1
+	return a.seq < b.seq
+}
+
+func slHeight(n *slNode) int {
+	if n == nil {
+		return 0
+	}
+	return n.height
+}
+
+func slUpdate(n *slNode) {
+	l, r := slHeight(n.left), slHeight(n.right)
+	if l > r {
+		n.height = l + 1
+	} else {
+		n.height = r + 1
+	}
+}
+
+func slBalance(n *slNode) int { return slHeight(n.left) - slHeight(n.right) }
+
+// rotateLeft/rotateRight return the new subtree root and fix child parent
+// links; the caller relinks the parent.
+func slRotateLeft(x *slNode) *slNode {
+	y := x.right
+	x.right = y.left
+	if y.left != nil {
+		y.left.parent = x
+	}
+	y.left = x
+	y.parent = x.parent
+	x.parent = y
+	slUpdate(x)
+	slUpdate(y)
+	return y
+}
+
+func slRotateRight(x *slNode) *slNode {
+	y := x.left
+	x.left = y.right
+	if y.right != nil {
+		y.right.parent = x
+	}
+	y.right = x
+	y.parent = x.parent
+	x.parent = y
+	slUpdate(x)
+	slUpdate(y)
+	return y
+}
+
+func slRebalance(n *slNode) *slNode {
+	slUpdate(n)
+	b := slBalance(n)
+	if b > 1 {
+		if slBalance(n.left) < 0 {
+			n.left = slRotateLeft(n.left)
+			n.left.parent = n
+		}
+		return slRotateRight(n)
+	}
+	if b < -1 {
+		if slBalance(n.right) > 0 {
+			n.right = slRotateRight(n.right)
+			n.right.parent = n
+		}
+		return slRotateLeft(n)
+	}
+	return n
+}
+
+// insert adds e and returns its node; e.snode is set so the node can later be
+// found in O(1) from the event.
+func (s *statusLine) insert(e *ovEvent) *slNode {
+	s.seq++
+	e.seq = s.seq
+	node := &slNode{e: e, height: 1}
+	e.snode = node
+	s.root = slInsert(nil, s.root, node)
+	return node
+}
+
+func slInsert(parent, root, node *slNode) *slNode {
+	if root == nil {
+		node.parent = parent
+		return node
+	}
+	if statusLess(node.e, root.e) {
+		root.left = slInsert(root, root.left, node)
+	} else {
+		root.right = slInsert(root, root.right, node)
+	}
+	r := slRebalance(root)
+	r.parent = parent
+	return r
+}
+
+func slMin(n *slNode) *slNode {
+	for n.left != nil {
+		n = n.left
+	}
+	return n
+}
+
+// remove deletes node n (located in O(1) via e.snode). The deleted event is
+// captured first: in the two-children case slDelete moves the successor's event
+// into n, so reading n.e afterwards would refer to the successor, not the
+// removed edge.
+func (s *statusLine) remove(n *slNode) {
+	del := n.e
+	s.root = slDelete(nil, s.root, del)
+	if s.root != nil {
+		s.root.parent = nil
+	}
+	del.snode = nil
+}
+
+func slDelete(parent, root *slNode, e *ovEvent) *slNode {
+	if root == nil {
+		return nil
+	}
+	if e == root.e {
+		if root.left == nil || root.right == nil {
+			child := root.left
+			if child == nil {
+				child = root.right
+			}
+			if child != nil {
+				child.parent = parent
+			}
+			return child
+		}
+		// Two children: replace with in-order successor's event, then delete it.
+		succ := slMin(root.right)
+		root.e = succ.e
+		root.e.snode = root
+		root.right = slDelete(root, root.right, succ.e)
+	} else if statusLess(e, root.e) {
+		root.left = slDelete(root, root.left, e)
+	} else {
+		root.right = slDelete(root, root.right, e)
+	}
+	r := slRebalance(root)
+	r.parent = parent
+	return r
+}
+
+// prev/next return the in-order predecessor/successor events, or nil.
+func (s *statusLine) prev(n *slNode) *ovEvent {
+	if n.left != nil {
+		m := n.left
+		for m.right != nil {
+			m = m.right
+		}
+		return m.e
+	}
+	cur := n
+	for cur.parent != nil && cur.parent.left == cur {
+		cur = cur.parent
+	}
+	if cur.parent == nil {
+		return nil
+	}
+	return cur.parent.e
+}
+
+func (s *statusLine) next(n *slNode) *ovEvent {
+	if n.right != nil {
+		m := n.right
+		for m.left != nil {
+			m = m.left
+		}
+		return m.e
+	}
+	cur := n
+	for cur.parent != nil && cur.parent.right == cur {
+		cur = cur.parent
+	}
+	if cur.parent == nil {
+		return nil
+	}
+	return cur.parent.e
 }
 
 type overlay struct {
@@ -429,14 +619,10 @@ func (o *overlay) run() []*ovEvent {
 		e := o.q.pop()
 
 		if e.left {
-			pos := status.insert(e)
-			var prev *ovEvent
-			if pos > 0 {
-				prev = status.items[pos-1]
-			}
+			node := status.insert(e)
+			prev := status.prev(node)
 			o.computeFields(e, prev)
-			if pos+1 < len(status.items) {
-				next := status.items[pos+1]
+			if next := status.next(node); next != nil {
 				if o.possibleIntersection(e, next) == 2 {
 					o.computeFields(e, prev)
 					o.computeFields(next, e)
@@ -444,11 +630,7 @@ func (o *overlay) run() []*ovEvent {
 			}
 			if prev != nil {
 				if o.possibleIntersection(prev, e) == 2 {
-					var prevPrev *ovEvent
-					ppos := status.indexOf(prev)
-					if ppos > 0 {
-						prevPrev = status.items[ppos-1]
-					}
+					prevPrev := status.prev(prev.snode)
 					o.computeFields(prev, prevPrev)
 					o.computeFields(e, prev)
 				}
@@ -456,19 +638,14 @@ func (o *overlay) run() []*ovEvent {
 		} else {
 			// Right endpoint: locate the matching left event and remove it.
 			le := e.other
-			pos := status.indexOf(le)
-			if pos < 0 {
+			node := le.snode
+			if node == nil {
 				continue
 			}
-			var prev, next *ovEvent
-			if pos > 0 {
-				prev = status.items[pos-1]
-			}
-			if pos+1 < len(status.items) {
-				next = status.items[pos+1]
-			}
+			prev := status.prev(node)
+			next := status.next(node)
 			sortedResult = append(sortedResult, le)
-			status.removeAt(pos)
+			status.remove(node)
 			if prev != nil && next != nil {
 				o.possibleIntersection(prev, next)
 			}
