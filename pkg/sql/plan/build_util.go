@@ -223,6 +223,18 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			return plan.Type{Id: int32(types.T_text)}, nil
 		case defines.MYSQL_TYPE_JSON:
 			return plan.Type{Id: int32(types.T_json)}, nil
+		case defines.MYSQL_TYPE_TYPED_ARRAY:
+			if n.InternalType.ArrayContents == nil {
+				return plan.Type{}, moerr.NewInternalError(ctx, "array type missing element type")
+			}
+			if _, err := getTypeFromAst(ctx, n.InternalType.ArrayContents); err != nil {
+				return plan.Type{}, err
+			}
+			if err := validateTypedArrayElementType(ctx, n.InternalType.ArrayContents); err != nil {
+				return plan.Type{}, err
+			}
+			arrayType := tree.String(&n.InternalType, dialect.MYSQL)
+			return plan.Type{Id: int32(types.T_json), Enumvalues: arrayType}, nil
 		case defines.MYSQL_TYPE_GEOMETRY:
 			fstr := strings.ToUpper(n.InternalType.FamilyString)
 			typ := plan.Type{Id: int32(types.T_geometry)}
