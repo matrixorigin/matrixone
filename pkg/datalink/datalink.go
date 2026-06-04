@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/datalink/docx"
 	"github.com/matrixorigin/matrixone/pkg/datalink/pdf"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
@@ -36,6 +37,10 @@ type Datalink struct {
 	Offset int64
 	Size   int64
 	MoPath string
+
+	// ContentHash is non-empty when the datalink is pinned (carries ?contenthash=).
+	// In that case MoPath addresses an immutable CAS object in the SHARED service.
+	ContentHash string
 }
 
 func NewDatalink(aurl string, proc *process.Process) (Datalink, error) {
@@ -49,7 +54,15 @@ func NewDatalink(aurl string, proc *process.Process) (Datalink, error) {
 	if err != nil {
 		return Datalink{}, err
 	}
-	return Datalink{Url: u, Offset: int64(offsetSize[0]), Size: int64(offsetSize[1]), MoPath: moUrl}, nil
+
+	dl := Datalink{Url: u, Offset: offsetSize[0], Size: offsetSize[1], MoPath: moUrl}
+	// Derive ContentHash from the parsed MoPath so it always addresses the same
+	// CAS object that ParseDatalink resolved (no split-brain on duplicate or
+	// mixed-case contenthash params).
+	if hash, ok := casHashFromKey(moUrl); ok {
+		dl.ContentHash = hash
+	}
+	return dl, nil
 }
 
 func (d Datalink) GetBytes(proc *process.Process) ([]byte, error) {
@@ -86,7 +99,14 @@ func (d Datalink) GetPlainText(proc *process.Process) ([]byte, error) {
 }
 
 func (d Datalink) NewWriter(proc *process.Process) (*fileservice.FileServiceWriter, error) {
-
+	// A pinned (?contenthash=) datalink addresses an immutable CAS object, and its
+	// MoPath is the internal CAS key rather than the original external path. Writing
+	// through it would route to that CAS key and break the pinned-read contract, so
+	// reject writes outright: pinned content is immutable.
+	if d.ContentHash != "" {
+		return nil, moerr.NewInternalErrorf(proc.Ctx,
+			"cannot write to a pinned datalink (contenthash=%s): pinned content is immutable", d.ContentHash)
+	}
 	return fileservice.NewFileServiceWriter(d.MoPath, proc.Ctx)
 }
 
@@ -100,8 +120,60 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int64, error
 		return "", nil, err
 	}
 
+	// 1. collect query params. Values are lower-cased; a sha256 hex digest is
+	// already lower-case so the contenthash value is unaffected. A parameter that
+	// repeats (the same key, or case-insensitive variants such as contenthash and
+	// ContentHash) folds to a single map entry whose winner depends on map
+	// iteration order, so reject duplicates outright to keep parsing deterministic.
+	urlParams := make(map[string]string)
+	for k, v := range u.Query() {
+		lk := strings.ToLower(k)
+		if _, dup := urlParams[lk]; dup || len(v) > 1 {
+			return "", nil, moerr.NewInternalErrorNoCtxf("duplicate datalink query parameter %q", lk)
+		}
+		urlParams[lk] = strings.ToLower(v[0])
+	}
+
+	// 2. get size and offset from the query (apply to both live and pinned values)
+	offsetSize := []int64{0, -1}
+	if _, ok := urlParams["offset"]; ok {
+		if offsetSize[0], err = strconv.ParseInt(urlParams["offset"], 10, 64); err != nil {
+			return "", nil, err
+		}
+	}
+	if _, ok := urlParams["size"]; ok {
+		if offsetSize[1], err = strconv.ParseInt(urlParams["size"], 10, 64); err != nil {
+			return "", nil, err
+		}
+	}
+	if offsetSize[0] < 0 {
+		return "", nil, moerr.NewInternalErrorNoCtx("offset cannot be negative")
+	}
+	if offsetSize[1] < -1 {
+		return "", nil, moerr.NewInternalErrorNoCtx("size cannot be less than -1")
+	}
+
+	// 3. a pinned datalink (?contenthash=) addresses an immutable CAS object and
+	// never resolves to the live external path, so historical snapshot bytes stay
+	// reproducible. A missing CAS object surfaces as a read error rather than a
+	// silent fall back to the live (possibly overwritten) file.
+	//
+	// The CAS key is namespaced by the calling account, resolved from the trusted
+	// execution context (never from the URL). This binds the read to the caller's
+	// account: a contenthash cannot be used to read another account's pinned bytes.
+	if hash, ok := urlParams[ContentHashKey]; ok {
+		if err = ValidateContentHash(hash); err != nil {
+			return "", nil, err
+		}
+		accountID, err := contentHashAccountID(proc)
+		if err != nil {
+			return "", nil, err
+		}
+		return CASKey(accountID, hash), offsetSize, nil
+	}
+
+	// 4. live reference: resolve to the external file's current location
 	var moUrl string
-	// 1. get moUrl from the path
 	switch u.Scheme {
 	case stage.FILE_PROTOCOL:
 		moUrl = strings.Join([]string{u.Host, u.Path}, "")
@@ -124,35 +196,64 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int64, error
 		return "", nil, moerr.NewNYINoCtxf("unsupported url scheme %s", u.Scheme)
 	}
 
-	// 2. get size and offset from the query
-	urlParams := make(map[string]string)
-	for k, v := range u.Query() {
-		urlParams[strings.ToLower(k)] = strings.ToLower(v[0])
-	}
-	offsetSize := []int64{0, -1}
-	if _, ok := urlParams["offset"]; ok {
-		if offsetSize[0], err = strconv.ParseInt(urlParams["offset"], 10, 64); err != nil {
-			return "", nil, err
-		}
-	}
-	if _, ok := urlParams["size"]; ok {
-		if offsetSize[1], err = strconv.ParseInt(urlParams["size"], 10, 64); err != nil {
-			return "", nil, err
-		}
-	}
-
-	if offsetSize[0] < 0 {
-		return "", nil, moerr.NewInternalErrorNoCtx("offset cannot be negative")
-	}
-
-	if offsetSize[1] < -1 {
-		return "", nil, moerr.NewInternalErrorNoCtx("size cannot be less than -1")
+	// A live reference must never resolve into the reserved datalink_cas/ prefix.
+	// Otherwise file://datalink_cas/<acct>/<hh>/<hash> would be mistaken for a
+	// pinned CAS key by casHashFromKey and read straight from SHARED, letting one
+	// account read another account's pinned blob by guessing the path. Only the
+	// contenthash branch above (account namespaced from the trusted context) may
+	// produce a datalink_cas/ key.
+	if strings.HasPrefix(moUrl, casPrefix+"/") {
+		return "", nil, moerr.NewInternalErrorNoCtxf("datalink path must not use the reserved %q prefix", casPrefix)
 	}
 
 	return moUrl, offsetSize, nil
 }
 
+// contentHashAccountID resolves the account that owns a pinned datalink's CAS
+// namespace from the trusted execution context. A pinned read/write requires a
+// session account; resolving it from the URL would re-introduce the bearer-token
+// problem the per-account namespace is meant to prevent.
+func contentHashAccountID(proc *process.Process) (uint32, error) {
+	if proc == nil {
+		return 0, moerr.NewInternalErrorNoCtx("pinned datalink requires an execution context to resolve the account")
+	}
+	return defines.GetAccountId(proc.Ctx)
+}
+
 func (d Datalink) NewReadCloser(proc *process.Process) (io.ReadCloser, error) {
+	if d.ContentHash != "" {
+		// pinned value: read the immutable CAS object directly from the SHARED
+		// service. SHARED may be a plain FileService (e.g. LocalFS in standalone)
+		// that does not implement ETLFileService, so we must not route through
+		// GetForETL here. A missing object surfaces as a read error rather than a
+		// silent fall back to the live (possibly overwritten) file.
+		fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+		if err != nil {
+			return nil, err
+		}
+		var r io.ReadCloser
+		vec := fileservice.IOVector{
+			FilePath: d.MoPath,
+			Entries: []fileservice.IOEntry{
+				0: {
+					Offset:            d.Offset,
+					Size:              d.Size,
+					ReadCloserForRead: &r,
+				},
+			},
+		}
+		if err = fs.Read(proc.Ctx, &vec); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				// Key the error on the content hash, not the internal CAS storage
+				// path: the path embeds the file-service layout and the account id
+				// (non-deterministic), while the hash is what the user supplied.
+				return nil, moerr.NewFileNotFound(proc.Ctx, d.ContentHash)
+			}
+			return nil, err
+		}
+		return r, nil
+	}
+
 	fs := proc.GetFileService()
 	fs, readPath, err := fileservice.GetForETL(proc.Ctx, fs, d.MoPath)
 	if fs == nil || err != nil {
@@ -174,4 +275,33 @@ func (d Datalink) NewReadCloser(proc *process.Process) (io.ReadCloser, error) {
 		return nil, err
 	}
 	return r, nil
+}
+
+// StatSize returns the byte size of the referenced object, transparently
+// handling both live references and pinned (content-addressed) values.
+func (d Datalink) StatSize(proc *process.Process) (int64, error) {
+	if d.ContentHash != "" {
+		fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+		if err != nil {
+			return 0, err
+		}
+		entry, err := fs.StatFile(proc.Ctx, d.MoPath)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				return 0, moerr.NewFileNotFound(proc.Ctx, d.ContentHash)
+			}
+			return 0, err
+		}
+		return entry.Size, nil
+	}
+
+	etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), d.MoPath)
+	if err != nil {
+		return 0, err
+	}
+	entry, err := etlFS.StatFile(proc.Ctx, readPath)
+	if err != nil {
+		return 0, err
+	}
+	return entry.Size, nil
 }

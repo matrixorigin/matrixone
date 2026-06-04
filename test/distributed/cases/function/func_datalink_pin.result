@@ -1,0 +1,70 @@
+select load_file(datalink_pin(cast('file://$resources/file_test/normal.txt' as datalink))) as pin_datalink;
+➤ pin_datalink[12,0,0]  𝄀
+Hello world!
+select load_file(datalink_pin('file://$resources/file_test/normal.txt')) as pin_varchar;
+➤ pin_varchar[12,0,0]  𝄀
+Hello world!
+select load_file(datalink_pin(cast('file://$resources/file_test/normal.txt' as text))) as pin_text;
+➤ pin_text[12,0,0]  𝄀
+Hello world!
+select load_file(datalink_pin(datalink_pin(cast('file://$resources/file_test/normal.txt' as datalink)))) as pin_idempotent;
+➤ pin_idempotent[12,0,0]  𝄀
+Hello world!
+select load_file(datalink_pin(cast('file://$resources/file_test/normal.txt?offset=0&size=5' as datalink))) as pin_slice;
+➤ pin_slice[12,0,0]  𝄀
+Hello
+create table pin_t(id int, dl datalink);
+insert into pin_t values(1, datalink_pin(cast('file://$resources/file_test/normal.txt' as datalink)));
+insert into pin_t values(2, datalink_pin(cast('file://$resources/file_test/normal.txt?offset=0&size=5' as datalink)));
+select id, load_file(dl) as content from pin_t order by id;
+➤ id[4,32,0]  ¦  content[12,0,0]  𝄀
+1  ¦  Hello world!  𝄀
+2  ¦  Hello
+select load_file(cast('file:///bogus/nonexistent/path.txt?contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a' as datalink)) as cas_decoupled;
+➤ cas_decoupled[12,0,0]  𝄀
+Hello world!
+select load_file(cast('file://$resources/file_test/normal.txt?contenthash=0000000000000000000000000000000000000000000000000000000000000000' as datalink)) as missing_cas;
+file 0000000000000000000000000000000000000000000000000000000000000000 is not found
+select load_file(cast('file://$resources/file_test/normal.txt?contenthash=notavalidhash' as datalink)) as bad_hash;
+internal error: invalid datalink contenthash length 13, want 64
+select datalink_pin(cast('unknownscheme://x/y' as datalink)) as pin_bad_scheme;
+unsupported url scheme unknownscheme is not yet implemented
+select datalink_pin(cast(null as datalink)) as pin_null;
+➤ pin_null[12,0,0]  𝄀
+null
+drop table pin_t;
+create stage pin_ow_st URL='file://$resources/into_outfile/pin_ow_a/';
+select save_file(cast('stage://pin_ow_st/f.txt' as datalink), 'version-ONE') as ow_setup_v1;
+➤ ow_setup_v1[-5,64,0]  𝄀
+11
+create table pin_ow(id int, dl datalink);
+insert into pin_ow values(1, datalink_pin(cast('stage://pin_ow_st/f.txt' as datalink)));
+drop stage pin_ow_st;
+create stage pin_ow_st URL='file://$resources/into_outfile/pin_ow_b/';
+select save_file(cast('stage://pin_ow_st/f.txt' as datalink), 'version-TWO') as ow_setup_v2;
+➤ ow_setup_v2[-5,64,0]  𝄀
+11
+select load_file(cast('stage://pin_ow_st/f.txt' as datalink)) as ow_live_read;
+➤ ow_live_read[12,0,0]  𝄀
+version-TWO
+select id, load_file(dl) as ow_pinned_read from pin_ow where id = 1;
+➤ id[4,32,0]  ¦  ow_pinned_read[12,0,0]  𝄀
+1  ¦  version-ONE
+drop table pin_ow;
+drop stage pin_ow_st;
+create account pin_acc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+select load_file(cast('file:///x.txt?contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a' as datalink)) as cross_account_blocked;
+file c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a is not found
+drop account pin_acc;
+select save_file(cast('file:///bogus/path.txt?contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a' as datalink), 'should-fail') as pin_write_rejected;
+internal error: cannot write to a pinned datalink (contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a): pinned content is immutable
+select datalink_pin(cast('file://$resources/file_test/normal.txt?offset=100' as datalink)) as pin_offset_past_eof;
+internal error: offset exceeds file size
+select load_file(cast('file://datalink_cas/0/c0/c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a' as datalink)) as reserved_prefix_rejected;
+internal error: datalink path must not use the reserved "datalink_cas" prefix
+select datalink_pin(cast('file://datalink_cas/0/c0/c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a' as datalink)) as reserved_prefix_pin_rejected;
+internal error: datalink path must not use the reserved "datalink_cas" prefix
+select load_file(cast('file:///x.txt?contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a&ContentHash=0000000000000000000000000000000000000000000000000000000000000000' as datalink)) as dup_contenthash_rejected;
+internal error: duplicate datalink query parameter "contenthash"
+select datalink_pin(cast('file://$resources/file_test/normal.txt?contenthash=c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a&ContentHash=0000000000000000000000000000000000000000000000000000000000000000' as datalink)) as dup_contenthash_pin_rejected;
+internal error: duplicate contenthash parameter

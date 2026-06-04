@@ -33,6 +33,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"net/url"
 	"runtime"
 	"sort"
 	"strconv"
@@ -52,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/datalink"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
@@ -3364,18 +3366,14 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		}
 		size := dl.Size
 		if size < 0 {
-			etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), dl.MoPath)
+			fileSize, err := dl.StatSize(proc)
 			if err != nil {
 				return err
 			}
-			entry, err := etlFS.StatFile(proc.Ctx, readPath)
-			if err != nil {
-				return err
-			}
-			if dl.Offset > entry.Size {
+			if dl.Offset > fileSize {
 				return moerr.NewInternalError(proc.Ctx, "offset exceeds file size")
 			}
-			size = entry.Size - dl.Offset
+			size = fileSize - dl.Offset
 		}
 		if size > int64(types.MaxBlobLen) {
 			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
@@ -3455,6 +3453,178 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 
 	}
 	return nil
+}
+
+// DatalinkPin freezes the bytes currently referenced by a datalink into the
+// immutable content-addressed store (CAS) and returns a datalink carrying
+// ?contenthash=<sha256> of those bytes. Reading the pinned datalink later always
+// returns the frozen bytes, so historical snapshots stay reproducible even if
+// the external object is overwritten out of band.
+//
+//   - Inputs that already carry a valid contenthash are returned unchanged
+//     (idempotent) only when the CAS blob exists in the caller's account; if it is
+//     absent (e.g. minted by another account), they are re-pinned from the live
+//     source and the live bytes must still reproduce the declared hash.
+//   - If the external file cannot be read, pin errors out (never silently falls
+//     back to an un-pinned value).
+//   - The default, un-pinned datalink behavior is unaffected: only values passed
+//     through datalink_pin participate in content freezing.
+func DatalinkPin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	urlVec := vector.GenerateFunctionStrParameter(ivecs[0])
+
+	casFS, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return err
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		_url, null := urlVec.GetStrValue(i)
+		if null {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		pinned, err := pinDatalink(util.UnsafeBytesToString(_url), casFS, proc)
+		if err != nil {
+			return err
+		}
+		if err = rs.AppendBytes([]byte(pinned), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// pinDatalink reads the live bytes of rawURL, stores them in the CAS, and returns
+// rawURL rewritten to address that immutable copy via ?contenthash=.
+//
+// An already-pinned URL is idempotent only when its CAS blob exists in the calling
+// account's namespace; then it is validated and returned unchanged (no live read,
+// no second CAS write). If the blob is absent for this account (e.g. a contenthash
+// minted by another account), the URL is re-pinned from the live source for the
+// current account, and the live bytes must still reproduce the declared hash —
+// otherwise the requested version is unavailable and pin errors out rather than
+// silently pinning different bytes.
+func pinDatalink(rawURL string, casFS fileservice.FileService, proc *process.Process) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+
+	q := u.Query()
+	// Detect an existing contenthash (case-insensitively, consistent with
+	// ParseDatalink which lower-cases query keys). Collect every case variant so a
+	// duplicated parameter (e.g. contenthash=X&ContentHash=Y) is rejected rather
+	// than resolved by nondeterministic map iteration order, and so all variants
+	// are stripped together below.
+	var pinnedKeys []string
+	var pinnedHash string
+	for k := range q {
+		if strings.EqualFold(k, datalink.ContentHashKey) {
+			pinnedKeys = append(pinnedKeys, k)
+			pinnedHash = strings.ToLower(q.Get(k))
+		}
+	}
+	if len(pinnedKeys) > 1 {
+		return "", moerr.NewInternalErrorf(proc.Ctx, "duplicate %s parameter", datalink.ContentHashKey)
+	}
+
+	if len(pinnedKeys) == 1 {
+		if err := datalink.ValidateContentHash(pinnedHash); err != nil {
+			return "", err
+		}
+		accountID, err := defines.GetAccountId(proc.Ctx)
+		if err != nil {
+			return "", err
+		}
+		// Idempotent only when the blob actually exists in THIS account's CAS
+		// namespace. A contenthash present only in another account's namespace would
+		// otherwise be returned unchanged and fail at read time; re-pin it from the
+		// live source for the current account instead.
+		exists, err := datalink.CASExists(proc.Ctx, casFS, accountID, pinnedHash)
+		if err != nil {
+			return "", err
+		}
+		if exists {
+			return rawURL, nil
+		}
+		// Strip the contenthash so the live external path is read below; otherwise
+		// NewDatalink would resolve to the (missing) CAS key instead of the file.
+		q.Del(pinnedKeys[0])
+		u.RawQuery = q.Encode()
+		rawURL = u.String()
+	}
+
+	// read the live bytes this datalink currently references
+	dl, err := datalink.NewDatalink(rawURL, proc)
+	if err != nil {
+		return "", err
+	}
+
+	// Size guard, mirroring load_file: refuse to pin more than one blob's worth of
+	// bytes. Pinning copies the whole (sliced) object into memory, so without this
+	// a huge object would OOM the CN. The effective size accounts for offset/size,
+	// so a small slice of a large file is still allowed. Streaming hash/copy of
+	// arbitrarily large objects is a follow-up (see issue #24555).
+	size := dl.Size
+	if size < 0 {
+		fileSize, err := dl.StatSize(proc)
+		if err != nil {
+			return "", err
+		}
+		// Mirror load_file: an offset past EOF is an error, not a silent pin of zero
+		// bytes that would mint the empty-content hash.
+		if dl.Offset > fileSize {
+			return "", moerr.NewInternalError(proc.Ctx, "offset exceeds file size")
+		}
+		size = fileSize - dl.Offset
+	}
+	if size > int64(types.MaxBlobLen) {
+		return "", moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+	}
+
+	fileBytes, err := dl.GetBytes(proc)
+	if err != nil {
+		return "", err
+	}
+
+	// Re-pin of an already-pinned input: the live bytes must still reproduce the
+	// declared version. If they no longer match, that version is unavailable to the
+	// current account, so error out rather than silently pinning different bytes.
+	if pinnedHash != "" {
+		sum := sha256.Sum256(fileBytes)
+		if got := hex.EncodeToString(sum[:]); got != pinnedHash {
+			return "", moerr.NewInternalErrorf(proc.Ctx,
+				"datalink_pin: live content no longer matches pinned contenthash %s (now %s)", pinnedHash, got)
+		}
+	}
+
+	// Namespace the CAS object by the calling account (resolved from the trusted
+	// context, never from the URL) so a contenthash is not a cross-account bearer
+	// capability.
+	accountID, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return "", err
+	}
+	hash, err := datalink.CASPut(proc.Ctx, casFS, accountID, fileBytes)
+	if err != nil {
+		return "", err
+	}
+
+	// Rewrite the URL to address the immutable copy. The sliced bytes are already
+	// baked into the CAS object, so drop offset/size (case-insensitively, matching
+	// ParseDatalink which lower-cases query keys) to avoid re-slicing on read.
+	for k := range q {
+		if strings.EqualFold(k, "offset") || strings.EqualFold(k, "size") {
+			q.Del(k)
+		}
+	}
+	q.Set(datalink.ContentHashKey, hash)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
 func MoMemUsage(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

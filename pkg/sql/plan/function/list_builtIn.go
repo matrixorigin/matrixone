@@ -10909,6 +10909,63 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `datalink_pin`
+	// freezes the referenced bytes into the content-addressed store and returns a
+	// datalink carrying ?contenthash=<sha256>, so historical snapshots are reproducible.
+	{
+		functionId: DATALINK_PIN,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_datalink},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datalink.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DatalinkPin
+				},
+			},
+			{
+				overloadId: 1,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datalink.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DatalinkPin
+				},
+			},
+			{
+				overloadId: 2,
+				volatile:   true,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datalink.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DatalinkPin
+				},
+			},
+			{
+				overloadId: 3,
+				volatile:   true,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datalink.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DatalinkPin
+				},
+			},
+		},
+	},
+
 	// function `mo_memory_usage`
 	{
 		functionId: MO_MEMORY_USAGE,
