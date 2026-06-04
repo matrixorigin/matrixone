@@ -145,28 +145,69 @@ func TestTombstonePKExistsInRange(t *testing.T) {
 	// Case 1: search for PK=200, should find it
 	keys1 := vector.NewVec(int32Type)
 	require.NoError(t, vector.AppendFixed[int32](keys1, 200, false, proc.GetMPool()))
-	changed, err := tombstonePKExistsInRange(ctx, pState, from, keys1, int32Type, fs)
+	changed, _, err := tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys1, int32Type, fs)
 	require.NoError(t, err)
 	require.True(t, changed)
 
 	// Case 2: search for PK=999, should not find it
 	keys2 := vector.NewVec(int32Type)
 	require.NoError(t, vector.AppendFixed[int32](keys2, 999, false, proc.GetMPool()))
-	changed, err = tombstonePKExistsInRange(ctx, pState, from, keys2, int32Type, fs)
+	changed, _, err = tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys2, int32Type, fs)
 	require.NoError(t, err)
 	require.False(t, changed)
 
 	// Case 3: search for PK=500, should find it in second tombstone
 	keys3 := vector.NewVec(int32Type)
 	require.NoError(t, vector.AppendFixed[int32](keys3, 500, false, proc.GetMPool()))
-	changed, err = tombstonePKExistsInRange(ctx, pState, from, keys3, int32Type, fs)
+	changed, _, err = tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys3, int32Type, fs)
 	require.NoError(t, err)
 	require.True(t, changed)
 
 	// Case 4: no tombstone objects changed after from=25
-	changed, err = tombstonePKExistsInRange(ctx, pState, types.BuildTS(25, 0), keys1, int32Type, fs)
+	changed, _, err = tombstonePKExistsInRange(ctx, pState, types.BuildTS(25, 0), types.MaxTs(), keys1, int32Type, fs)
 	require.NoError(t, err)
 	require.False(t, changed)
+}
+
+func TestTombstonePKExistsInRangeRowsThresholdBailout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	pState := logtailreplay.NewPartitionState("", true, 0, false)
+	int32Type := types.T_int32.ToType()
+
+	// Write a real CN tombstone so we get a valid ObjectStats base.
+	writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, int32Type, -1)
+	bat := readutil.NewCNTombstoneBatch(&int32Type, objectio.HiddenColumnSelection_None)
+	require.NoError(t, vector.AppendFixed[types.Rowid](bat.Vecs[0], types.RandomRowid(), false, proc.GetMPool()))
+	require.NoError(t, vector.AppendFixed[int32](bat.Vecs[1], 100, false, proc.GetMPool()))
+	bat.SetRowCount(1)
+	require.NoError(t, writer.Write(ctx, bat))
+	stats, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, stats, 1)
+
+	// Override the row count to exceed the 50000 threshold.
+	require.NoError(t, objectio.SetObjectStatsRowCnt(&stats[0], 60000))
+
+	require.NoError(t, pState.HandleObjectEntry(ctx, fs, objectio.ObjectEntry{
+		ObjectStats: stats[0],
+		CreateTime:  types.BuildTS(15, 0),
+	}, true))
+
+	keys := vector.NewVec(int32Type)
+	require.NoError(t, vector.AppendFixed[int32](keys, 100, false, proc.GetMPool()))
+
+	changed, reason, err := tombstonePKExistsInRange(
+		ctx, pState, types.BuildTS(10, 0), types.MaxTs(), keys, int32Type, fs,
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "tombstone_rows_bailout", reason)
 }
 
 func TestBlockMetaMarshal(t *testing.T) {

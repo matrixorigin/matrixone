@@ -4829,7 +4829,7 @@ func onPreUpdateCDCTasks(
 	// Step2: update or cancel cdc task
 	var targetCDCStatus string
 	if targetTaskStatus == task.TaskStatus_PauseRequested {
-		targetCDCStatus = cdc.CDCState_Paused
+		targetCDCStatus = cdc.CDCState_Pausing
 	} else {
 		targetCDCStatus = cdc.CDCState_Running
 	}
