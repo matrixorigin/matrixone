@@ -253,3 +253,9 @@ SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
 SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
              ELSE CAST(0 AS DECIMAL(38,20)) END)
      BETWEEN CAST(1 AS DECIMAL(38,20)) AND CAST(10 AS DECIMAL(38,20)) AS decimal256_between;
+
+-- @case
+-- @desc:test for coalesce promoting decimal branches to decimal256 when integral+scale overflows decimal128
+-- @label:bvt
+SELECT COALESCE(CAST(1 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_decimal256;
+SELECT COALESCE(CAST(12345678901234567890123456789012345678 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_bignum;

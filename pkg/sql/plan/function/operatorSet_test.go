@@ -765,6 +765,30 @@ func Test_CoalesceCheck_DecimalAligned_NoCast(t *testing.T) {
 	require.Equal(t, 1, result.idx)
 }
 
+// issue #24565 review: when the combined integral width + scale overflows
+// decimal128, coalesce must promote the common type to decimal256 instead of
+// keeping decimal128 (which would drop integer capacity and overflow on cast).
+func Test_CoalesceCheck_DecimalPromoteToDecimal256(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_decimal64}},
+		{args: []types.T{types.T_decimal128}},
+		{args: []types.T{types.T_decimal256}},
+	}
+	inputs := []types.Type{
+		types.New(types.T_decimal128, 38, 0),  // 38 integral digits
+		types.New(types.T_decimal128, 38, 38), // 38 fractional digits
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, 2, result.idx) // decimal256 overload
+	require.Len(t, result.finalType, len(inputs))
+	for _, typ := range result.finalType {
+		require.Equal(t, types.T_decimal256, typ.Oid)
+		require.Equal(t, int32(38), typ.Scale)
+		require.Equal(t, int32(76), typ.Width) // 38 integral + 38 scale
+	}
+}
+
 func Test_CaseFn_Decimal256Execution(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	d1, err := types.ParseDecimal256("111111111111111111111111111111111111111", 76, 0)

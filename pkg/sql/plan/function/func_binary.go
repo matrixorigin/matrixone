@@ -891,20 +891,23 @@ type NormalType interface {
 		constraints.Integer
 }
 
-// decimalInputsAligned reports whether all inputs (already known to share the
-// same decimal Oid) also share the same scale and width, so that coalesce can
-// be evaluated without inserting alignment casts.
-func decimalInputsAligned(inputs []types.Type) bool {
-	if len(inputs) == 0 {
-		return true
+// coalesceDecimalResult derives the common decimal result type for a coalesce
+// over decimal/integer branches, preserving the maximum integral width and
+// scale and promoting to a wider decimal family (decimal256) when the combined
+// precision overflows decimal128. It then resolves the matching overload index.
+// Returns ok=false when the required precision overflows decimal256 or no
+// overload matches the resulting decimal family.
+func coalesceDecimalResult(overloads []overload, minOid types.T, inputs []types.Type) (types.Type, int, bool) {
+	target := minOid.ToType()
+	if !setSafeDecimalWidthAndScaleFromSource(&target, inputs) {
+		return types.Type{}, -1, false
 	}
-	scale, width := inputs[0].Scale, inputs[0].Width
-	for i := 1; i < len(inputs); i++ {
-		if inputs[i].Scale != scale || inputs[i].Width != width {
-			return false
+	for i, over := range overloads {
+		if len(over.args) == 1 && over.args[0] == target.Oid {
+			return target, i, true
 		}
 	}
-	return true
+	return types.Type{}, -1, false
 }
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
@@ -939,9 +942,9 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 				// Decimals that match directly still need scale/width alignment
 				// across branches: without it the result inherits the first
 				// branch's scale while carrying another branch's raw value,
-				// magnifying the result (issue #24565). Only short-circuit when
-				// every decimal branch already shares the same scale and width.
-				if requireOid.IsDecimal() && !decimalInputsAligned(inputs) {
+				// magnifying the result (issue #24565). Keep them as a candidate
+				// and resolve the aligned type below instead of short-circuiting.
+				if requireOid.IsDecimal() {
 					if cos < minCost {
 						minIndex = i
 						minCost = cos
@@ -961,6 +964,32 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 		if minIndex == -1 {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
+
+		// Decimal branches: choose a common type that keeps the maximum integral
+		// width and scale (promoting to decimal256 when needed), so the result
+		// neither loses integer capacity nor inherits a single branch's scale.
+		if minOid.IsDecimal() {
+			target, overloadIndex, ok := coalesceDecimalResult(overloads, minOid, inputs)
+			if !ok {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			aligned := true
+			for i := range inputs {
+				if inputs[i].Oid != target.Oid || inputs[i].Scale != target.Scale || inputs[i].Width != target.Width {
+					aligned = false
+					break
+				}
+			}
+			if aligned {
+				return newCheckResultWithSuccess(overloadIndex)
+			}
+			castType := make([]types.Type, len(inputs))
+			for i := range castType {
+				castType[i] = target
+			}
+			return newCheckResultWithCast(overloadIndex, castType)
+		}
+
 		castType := make([]types.Type, len(inputs))
 		for i := range castType {
 			if minOid == inputs[i].Oid {
@@ -971,7 +1000,7 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 		}
 
-		if minOid.IsDecimal() || minOid.IsDateRelate() {
+		if minOid.IsDateRelate() {
 			setMaxScaleForAll(castType)
 		}
 		return newCheckResultWithCast(minIndex, castType)
