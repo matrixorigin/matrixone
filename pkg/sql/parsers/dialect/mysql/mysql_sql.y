@@ -623,7 +623,7 @@ func sqlTaskInt64(v any) int64 {
 %type <toAccountOpt> to_account_opt
 %type <conflictOpt> conflict_opt
 %type <pickKeys> pick_keys_clause
-%type <diffOutputOpt> diff_output_opt
+%type <diffOutputOpt> diff_output_opt diff_database_output_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -8808,6 +8808,14 @@ branch_stmt:
     	t.OutputOpt = $8
     	$$ = t
     }
+|   DATA BRANCH DIFF DATABASE db_name AGAINST DATABASE db_name diff_database_output_opt
+    {
+        t := tree.NewDataBranchDiffDatabase()
+        t.TargetDatabase = tree.Identifier($5)
+        t.BaseDatabase = tree.Identifier($8)
+        t.OutputOpt = $9
+        $$ = t
+    }
 |   DATA BRANCH MERGE table_name INTO table_name conflict_opt
     {
     	t := tree.NewDataBranchMerge()
@@ -8815,6 +8823,14 @@ branch_stmt:
     	t.DstTable = *$6
     	t.ConflictOpt = $7
     	$$ = t
+    }
+|   DATA BRANCH MERGE DATABASE db_name INTO DATABASE db_name conflict_opt
+    {
+        t := tree.NewDataBranchMergeDatabase()
+        t.SrcDatabase = tree.Identifier($5)
+        t.DstDatabase = tree.Identifier($8)
+        t.ConflictOpt = $9
+        $$ = t
     }
 |   DATA BRANCH PICK table_name INTO table_name pick_keys_clause conflict_opt
     {
@@ -8867,6 +8883,26 @@ branch_stmt:
     	t.ConflictOpt = $13
     	$$ = t
     }
+|   DATA BRANCH PICK DATABASE db_name INTO DATABASE db_name BETWEEN SNAPSHOT ident AND ident conflict_opt
+    {
+        t := tree.NewDataBranchPickDatabase()
+        t.SrcDatabase = tree.Identifier($5)
+        t.DstDatabase = tree.Identifier($8)
+        t.BetweenFrom = yylex.(*Lexer).GetDbOrTblName($11.Origin())
+        t.BetweenTo = yylex.(*Lexer).GetDbOrTblName($13.Origin())
+        t.ConflictOpt = $14
+        $$ = t
+    }
+|   DATA BRANCH PICK DATABASE db_name INTO DATABASE db_name BETWEEN SNAPSHOT STRING AND STRING conflict_opt
+    {
+        t := tree.NewDataBranchPickDatabase()
+        t.SrcDatabase = tree.Identifier($5)
+        t.DstDatabase = tree.Identifier($8)
+        t.BetweenFrom = $11
+        t.BetweenTo = $13
+        t.ConflictOpt = $14
+        $$ = t
+    }
 
 diff_columns_opt:
     {
@@ -8902,13 +8938,30 @@ diff_output_opt:
     }
     | OUTPUT COUNT
     {
-    	$$ = &tree.DiffOutputOpt {
+        $$ = &tree.DiffOutputOpt {
            Count: true,
         }
     }
     | OUTPUT SUMMARY
     {
-    	$$ = &tree.DiffOutputOpt {
+        $$ = &tree.DiffOutputOpt {
+           Summary: true,
+        }
+    }
+
+diff_database_output_opt:
+    {
+       $$ = nil
+    }
+    | OUTPUT COUNT
+    {
+        $$ = &tree.DiffOutputOpt {
+           Count: true,
+        }
+    }
+    | OUTPUT SUMMARY
+    {
+        $$ = &tree.DiffOutputOpt {
            Summary: true,
         }
     }

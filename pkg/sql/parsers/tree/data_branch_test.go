@@ -434,3 +434,34 @@ func TestDataBranchPickFormat(t *testing.T) {
 		require.Contains(t, ctx.String(), "when conflict "+tt.expect)
 	}
 }
+
+func TestDataBranchDatabaseFormat(t *testing.T) {
+	diffStmt := &DataBranchDiffDatabase{
+		TargetDatabase: Identifier("src_db"),
+		BaseDatabase:   Identifier("dst_db"),
+		OutputOpt:      &DiffOutputOpt{Summary: true},
+	}
+	require.Equal(t, "DataBranchDiffDatabase", diffStmt.TypeName())
+	ctx := NewFmtCtx(0)
+	diffStmt.Format(ctx)
+	require.Equal(t, "data branch diff database src_db against database dst_db output summary", ctx.String())
+
+	countStmt := &DataBranchDiffDatabase{
+		TargetDatabase: Identifier("src_db"),
+		BaseDatabase:   Identifier("dst_db"),
+		OutputOpt:      &DiffOutputOpt{Count: true},
+	}
+	ctx = NewFmtCtx(0)
+	countStmt.Format(ctx)
+	require.Equal(t, "data branch diff database src_db against database dst_db output count", ctx.String())
+
+	mergeStmt := &DataBranchMergeDatabase{
+		SrcDatabase: Identifier("src_db"),
+		DstDatabase: Identifier("dst_db"),
+		ConflictOpt: &ConflictOpt{Opt: CONFLICT_SKIP},
+	}
+	require.Equal(t, "DataBranchMergeDatabase", mergeStmt.TypeName())
+	ctx = NewFmtCtx(0)
+	mergeStmt.Format(ctx)
+	require.Equal(t, "data branch merge database src_db into database dst_db when conflict skip", ctx.String())
+}

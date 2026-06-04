@@ -12486,3 +12486,72 @@ func Test_determinePrivilegeSetOfStatement_CreateTableAsSelect(t *testing.T) {
 	require.False(t, seen[PrivilegeTypeSelect])
 	require.False(t, seen[PrivilegeTypeInsert])
 }
+
+func TestDeterminePrivilegeSetOfStatementDataBranchDatabaseUsesTargetDatabases(t *testing.T) {
+	tests := []struct {
+		name string
+		stmt tree.Statement
+		dbs  []string
+	}{
+		{
+			name: "diff",
+			stmt: &tree.DataBranchDiffDatabase{
+				TargetDatabase: tree.Identifier("src_db"),
+				BaseDatabase:   tree.Identifier("dst_db"),
+			},
+			dbs: []string{"src_db", "dst_db"},
+		},
+		{
+			name: "merge",
+			stmt: &tree.DataBranchMergeDatabase{
+				SrcDatabase: tree.Identifier("src_db"),
+				DstDatabase: tree.Identifier("dst_db"),
+			},
+			dbs: []string{"src_db", "dst_db"},
+		},
+		{
+			name: "pick",
+			stmt: &tree.DataBranchPickDatabase{
+				SrcDatabase: tree.Identifier("src_db"),
+				DstDatabase: tree.Identifier("dst_db"),
+			},
+			dbs: []string{"src_db", "dst_db"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			priv := determinePrivilegeSetOfStatement(tt.stmt)
+			require.Equal(t, objectTypeDatabase, priv.objectType())
+			require.Len(t, priv.entries, 2)
+
+			compound := priv.entries[0]
+			require.Equal(t, privilegeEntryTypeCompound, compound.privilegeEntryTyp)
+			require.NotNil(t, compound.compound)
+
+			var got []string
+			for _, item := range compound.compound.items {
+				require.Equal(t, PrivilegeTypeDatabaseAll, item.privilegeTyp)
+				require.Equal(t, objectTypeDatabase, item.objType)
+				require.NotEmpty(t, item.dbName)
+				got = append(got, item.dbName)
+			}
+			require.ElementsMatch(t, tt.dbs, got)
+
+			require.Equal(t, privilegeEntryTypeGeneral, priv.entries[1].privilegeEntryTyp)
+			require.Equal(t, PrivilegeTypeAccountAll, priv.entries[1].privilegeId)
+		})
+	}
+}
+
+func TestCanBypassFailedDatabasePrivilegeCheckForStatementRejectsDataBranchDatabase(t *testing.T) {
+	tests := []tree.Statement{
+		&tree.DataBranchDiffDatabase{},
+		&tree.DataBranchMergeDatabase{},
+		&tree.DataBranchPickDatabase{},
+	}
+
+	for _, stmt := range tests {
+		require.False(t, canBypassFailedDatabasePrivilegeCheckForStatement(stmt))
+	}
+}

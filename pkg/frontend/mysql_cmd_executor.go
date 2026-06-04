@@ -2627,7 +2627,8 @@ func canExecuteStatementInUncommittedTransaction(
 		return err
 	}
 	if !can {
-		if _, ok := stmt.(*tree.DataBranchPick); ok {
+		switch stmt.(type) {
+		case *tree.DataBranchPick, *tree.DataBranchPickDatabase:
 			return moerr.NewInternalError(reqCtx, "DATA BRANCH PICK is not supported in explicit transactions")
 		}
 		//is ddl statement
