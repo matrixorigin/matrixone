@@ -56,6 +56,24 @@ func TestSessionLastAffectedRows(t *testing.T) {
 	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
 }
 
+func TestMarkRowCountFailed(t *testing.T) {
+	// session + proc both reset to -1
+	ses := &Session{}
+	proc := &process.Process{Base: &process.BaseProcess{AffectedRows: new(int64)}}
+	ses.SetLastAffectedRows(9)
+	proc.SetAffectedRows(9)
+	markRowCountFailed(ses, proc)
+	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
+	require.Equal(t, int64(-1), proc.GetAffectedRows())
+
+	// nil proc is tolerated; the session is still updated. This mirrors the
+	// COM_STMT_EXECUTE parse-failure path, which never reaches doComQuery.
+	ses2 := &Session{}
+	ses2.SetLastAffectedRows(5)
+	markRowCountFailed(ses2, nil)
+	require.Equal(t, int64(-1), ses2.GetLastAffectedRows())
+}
+
 func TestRecordLastAffectedRows(t *testing.T) {
 	cases := []struct {
 		name   string

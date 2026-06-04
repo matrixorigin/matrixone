@@ -53,4 +53,12 @@ select row_count();
 insert into t values (1,12345);
 select row_count();
 
+-- prepared statement: row_count() must be evaluated at EXECUTE time, not frozen
+-- at PREPARE time
+insert into t values (6,60),(7,70);
+prepare stmt1 from 'select row_count()';
+delete from t where id in (1,2,3);
+execute stmt1;
+deallocate prepare stmt1;
+
 drop database if exists row_count_db;

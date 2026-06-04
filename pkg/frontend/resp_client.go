@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func setResponse(ses *Session, isLastStmt bool, rspLen uint64) *Response {
@@ -65,6 +66,17 @@ func recordLastAffectedRows(ses *Session, execCtx *ExecCtx) {
 		execCtx.proc.SetAffectedRows(n)
 	}
 	ses.SetLastAffectedRows(n)
+}
+
+// markRowCountFailed sets the ROW_COUNT() state to -1, the value MySQL reports
+// for the statement following a failed one. It updates both the session (which
+// drives the next COM_QUERY, since the proc is reseeded from the session) and
+// the given proc (for completeness within the current request). proc may be nil.
+func markRowCountFailed(ses *Session, proc *process.Process) {
+	ses.SetLastAffectedRows(-1)
+	if proc != nil {
+		proc.SetAffectedRows(-1)
+	}
 }
 
 // response the client
