@@ -307,7 +307,7 @@ func (d *DiskCache) Read(
 		if f, ok := openedFiles[diskPath]; ok {
 			// use opened file
 			LogEvent(ctx, str_disk_cache_file_seek_begin)
-			_, err = file.Seek(entry.Offset, io.SeekStart)
+			_, err = f.Seek(entry.Offset, io.SeekStart)
 			LogEvent(ctx, str_disk_cache_file_seek_end)
 			if err == nil {
 				file = f
@@ -340,7 +340,9 @@ func (d *DiskCache) Read(
 				}
 			} else {
 				// open file
-				d.waitUpdateComplete(ctx, diskPath)
+				if d.isUpdating(diskPath) {
+					return nil
+				}
 				LogEvent(ctx, str_disk_cache_file_open_begin)
 				diskFile, err := os.Open(diskPath)
 				LogEvent(ctx, str_disk_cache_file_open_end)
@@ -655,6 +657,12 @@ func (d *DiskCache) waitUpdateComplete(ctx context.Context, path string) {
 		d.updatingPaths.Wait()
 	}
 	d.updatingPaths.L.Unlock()
+}
+
+func (d *DiskCache) isUpdating(path string) bool {
+	d.updatingPaths.L.Lock()
+	defer d.updatingPaths.L.Unlock()
+	return d.updatingPaths.m[path]
 }
 
 func (d *DiskCache) startUpdate(path string) (done func()) {

@@ -23,11 +23,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
+// NewKMeans: gpuMode is accepted-but-ignored in non-gpu builds — CPU
+// (balanced kmeans) is the only option here. The signature matches
+// the gpu.go variant so callers pass the flag uniformly.
 func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	maxIterations int, deltaThreshold float64,
 	distanceType metric.MetricType, _ kmeans.InitType,
 	spherical bool,
 	nworker int,
+	_ bool,
 ) (kmeans.Clusterer, error) {
 	return balanced.NewKMeans(vectors, clusterCnt, maxIterations, deltaThreshold, distanceType, spherical, nworker)
 }

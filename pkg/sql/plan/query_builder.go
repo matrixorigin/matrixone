@@ -5512,6 +5512,14 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId = builder.buildTableStats(tbl, ctx, exprs, children)
 	case "load_file_chunks":
 		nodeId = builder.buildLoadFileChunks(tbl, ctx, exprs, children)
+	case "cagra_create":
+		nodeId, err = builder.buildCagraCreate(tbl, ctx, exprs, children)
+	case "cagra_search":
+		nodeId, err = builder.buildCagraSearch(tbl, ctx, exprs, children)
+	case "ivfpq_create":
+		nodeId, err = builder.buildIvfpqCreate(tbl, ctx, exprs, children)
+	case "ivfpq_search":
+		nodeId, err = builder.buildIvfpqSearch(tbl, ctx, exprs, children)
 	default:
 		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 	}
@@ -5665,12 +5673,21 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 		} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 			return builder.compCtx.ResolveSnapshotWithSnapshotName(lit.Sval)
 		} else if tsExpr.Type == tree.ATMOTIMESTAMP {
-			var ts timestamp.Timestamp
-			if ts, err = timestamp.ParseTimestamp(lit.Sval); err != nil {
-				return
+			// try human-readable datetime first, fall back to debug timestamp format
+			if ts, err2 := time.Parse("2006-01-02 15:04:05.999999999", lit.Sval); err2 == nil {
+				tsNano := ts.UTC().UnixNano()
+				if tsNano <= 0 {
+					err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.Sval)
+					return
+				}
+				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
+			} else {
+				var ts timestamp.Timestamp
+				if ts, err = timestamp.ParseTimestamp(lit.Sval); err != nil {
+					return
+				}
+				snapshot = &Snapshot{TS: &ts, Tenant: tenant}
 			}
-
-			snapshot = &Snapshot{TS: &ts, Tenant: tenant}
 		} else if tsExpr.Type == tree.ASOFTIMESTAMP {
 			var ts int64
 			if ts, err = doResolveTimeStamp(lit.Sval); err != nil {

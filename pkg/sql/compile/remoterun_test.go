@@ -304,6 +304,49 @@ func Test_convertToVmInstruction(t *testing.T) {
 	}
 }
 
+func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
+	ctx := &scopeContext{
+		id:     1,
+		root:   &scopeContext{},
+		parent: &scopeContext{},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+
+	shards := []*pipeline.ParquetRowGroupShard{
+		{
+			FileIndex:     2,
+			RowGroupStart: 3,
+			RowGroupEnd:   5,
+			NumRows:       1024,
+			Bytes:         4096,
+		},
+	}
+	op := external.NewArgument().WithEs(
+		&external.ExternalParam{
+			ExParamConst: external.ExParamConst{
+				FileList:              []string{"s3://bucket/part.parquet"},
+				FileSize:              []int64{8192},
+				FileOffsetTotal:       []*pipeline.FileOffset{{Offset: []int64{0, -1}}},
+				ParquetRowGroupShards: shards,
+			},
+			ExParam: external.ExParam{
+				Fileparam: &external.ExFileparam{},
+				Filter:    &external.FilterParam{},
+			},
+		},
+	)
+
+	_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, shards, pipeInstr.ExternalScan.ParquetRowGroupShards)
+
+	restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+	require.NoError(t, err)
+	restoredExternal := restored.(*external.External)
+	require.Equal(t, shards, restoredExternal.Es.ParquetRowGroupShards)
+}
+
 func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,
@@ -707,7 +750,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		Proc:   proc,
 		RootOp: connector.NewArgument(),
 	}
-	_, withoutOut, _, err := prepareRemoteRunSendingData("", s1)
+	_, withoutOut, _, _, err := prepareRemoteRunSendingData("", s1, proc)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 	require.NotNil(t, s1.RootOp)
@@ -721,7 +764,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	}
 	s2.RootOp.AppendChild(value_scan.NewArgument())
 	originChild := s2.RootOp.GetOperatorBase().GetChildren(0)
-	_, withoutOut, _, err = prepareRemoteRunSendingData("", s2)
+	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s2, proc)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 	require.Equal(t, 1, s2.RootOp.GetOperatorBase().NumChildren())
@@ -734,7 +777,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		RootOp: value_scan.NewArgument(),
 	}
 	s3.RootOp.AppendChild(value_scan.NewArgument())
-	_, withoutOut, _, err = prepareRemoteRunSendingData("", s3)
+	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s3, proc)
 	require.NoError(t, err)
 	require.True(t, withoutOut)
 }
