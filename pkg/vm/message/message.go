@@ -28,6 +28,7 @@ import (
 )
 
 const messageTimeout = 300 * time.Second
+const multiCNMessageBoardRetainDuration = 2 * messageTimeout
 const ALLCN = "ALLCN"
 const CURRENTCN = "CURRENTCN"
 
@@ -78,6 +79,8 @@ type MessageBoard struct {
 	multiCN       bool
 	stmtId        uuid.UUID
 	messageCenter *MessageCenter
+	refCount      int
+	releasedAt    time.Time
 	messages      []*Message
 	waiters       []chan bool
 	rwMutex       *sync.RWMutex
@@ -116,16 +119,27 @@ func (m *MessageBoard) DebugString() string {
 }
 
 func (m *MessageBoard) SetMultiCN(center *MessageCenter, stmtId uuid.UUID) *MessageBoard {
+	now := time.Now()
 	center.RwMutex.Lock()
 	defer center.RwMutex.Unlock()
+	center.cleanupReleasedBoardsLocked(now)
+
 	mb, ok := center.StmtIDToBoard[stmtId]
 	if ok {
+		mb.rwMutex.Lock()
+		mb.reset = false
+		mb.refCount++
+		mb.releasedAt = time.Time{}
+		mb.rwMutex.Unlock()
 		return mb
 	}
 	m.rwMutex.Lock()
+	m.reset = false
 	m.multiCN = true
 	m.stmtId = stmtId
 	m.messageCenter = center
+	m.refCount = 1
+	m.releasedAt = time.Time{}
 	m.rwMutex.Unlock()
 	center.StmtIDToBoard[stmtId] = m
 	return m
@@ -141,10 +155,25 @@ func (m *MessageBoard) BeforeRunonce() {
 func (m *MessageBoard) Reset() *MessageBoard {
 	if m.multiCN {
 		m.messageCenter.RwMutex.Lock()
-		delete(m.messageCenter.StmtIDToBoard, m.stmtId)
+		if current, ok := m.messageCenter.StmtIDToBoard[m.stmtId]; ok && current == m {
+			m.rwMutex.Lock()
+			if m.refCount > 0 {
+				m.refCount--
+			}
+			if m.refCount == 0 && m.releasedAt.IsZero() {
+				releasedAt := time.Now()
+				m.releasedAt = releasedAt
+				m.cleanupWaitersLocked()
+				m.rwMutex.Unlock()
+				m.messageCenter.scheduleReleasedBoardCleanup(m.stmtId, m, releasedAt)
+			} else {
+				m.rwMutex.Unlock()
+			}
+		}
 		m.messageCenter.RwMutex.Unlock()
-		// other pipeline could still access thie messageBoard
-		// so reset current message board to a new one
+		// Other remote pipelines for the same statement may not have reached SetMultiCN
+		// yet. Keep the shared board briefly so late fragments can reuse queued
+		// runtime filter and join map messages.
 		return NewMessageBoard()
 	}
 	m.rwMutex.Lock()
@@ -153,6 +182,49 @@ func (m *MessageBoard) Reset() *MessageBoard {
 	m.multiCN = false
 	m.reset = true
 	return m
+}
+
+func (mc *MessageCenter) cleanupReleasedBoardsLocked(now time.Time) {
+	for stmtID, mb := range mc.StmtIDToBoard {
+		if mb == nil {
+			delete(mc.StmtIDToBoard, stmtID)
+			continue
+		}
+
+		mb.rwMutex.RLock()
+		refCount := mb.refCount
+		releasedAt := mb.releasedAt
+		mb.rwMutex.RUnlock()
+		if refCount != 0 || releasedAt.IsZero() {
+			continue
+		}
+		if now.Sub(releasedAt) < multiCNMessageBoardRetainDuration {
+			continue
+		}
+		delete(mc.StmtIDToBoard, stmtID)
+		mb.cleanupQueuedMessages()
+	}
+}
+
+func (mc *MessageCenter) scheduleReleasedBoardCleanup(stmtID uuid.UUID, mb *MessageBoard, releasedAt time.Time) {
+	time.AfterFunc(multiCNMessageBoardRetainDuration, func() {
+		mc.RwMutex.Lock()
+		defer mc.RwMutex.Unlock()
+
+		current, ok := mc.StmtIDToBoard[stmtID]
+		if !ok || current != mb {
+			return
+		}
+
+		mb.rwMutex.RLock()
+		shouldCleanup := mb.refCount == 0 && mb.releasedAt.Equal(releasedAt)
+		mb.rwMutex.RUnlock()
+		if !shouldCleanup {
+			return
+		}
+		delete(mc.StmtIDToBoard, stmtID)
+		mb.cleanupQueuedMessages()
+	})
 }
 
 func (m *MessageBoard) cleanupQueuedMessages() {
@@ -174,6 +246,10 @@ func (m *MessageBoard) cleanupQueuedMessagesLocked() {
 		m.messages[i] = nil
 	}
 	m.messages = m.messages[:0]
+	m.waiters = m.waiters[:0]
+}
+
+func (m *MessageBoard) cleanupWaitersLocked() {
 	m.waiters = m.waiters[:0]
 }
 
