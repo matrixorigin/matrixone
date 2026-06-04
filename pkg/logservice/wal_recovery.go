@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"container/heap"
 	"context"
 	"encoding/binary"
 	"io"
@@ -31,6 +32,8 @@ import (
 )
 
 const walRecoveredTagFile = "./WAL_RECOVERED"
+
+const logEntrySafeDSNOffset = 50
 
 // WALEntry represents a WAL entry read from the recovery file
 type WALEntry struct {
@@ -100,7 +103,9 @@ func (s *Service) RecoverWALData(ctx context.Context, cfg Config) error {
 		zap.Uint64("first_raft_index", walData.Entries[0].RaftIndex),
 		zap.Uint64("last_raft_index", walData.Entries[len(walData.Entries)-1].RaftIndex),
 		zap.Uint64("first_entry_dsn", walData.Entries[0].DSN),
-		zap.Uint64("last_entry_dsn", walData.Entries[len(walData.Entries)-1].DSN))
+		zap.Uint64("last_entry_dsn", walData.Entries[len(walData.Entries)-1].DSN),
+		zap.Uint64("first_entry_safe_dsn", walData.Entries[0].SafeDSN),
+		zap.Uint64("last_entry_safe_dsn", walData.Entries[len(walData.Entries)-1].SafeDSN))
 
 	// Replay WAL entries to Log shard
 	if err := s.replayWALEntries(ctx, walData); err != nil {
@@ -189,8 +194,101 @@ func (s *Service) readWALDataFile(ctx context.Context, filePath string) (*WALRec
 	sort.SliceStable(entries, func(i, j int) bool {
 		return entries[i].RaftIndex < entries[j].RaftIndex
 	})
+	normalizeWALEntrySafeDSN(entries)
 
 	return &WALRecoveryData{Entries: entries}, nil
+}
+
+func normalizeWALEntrySafeDSN(entries []WALEntry) {
+	baseSafeDSN := firstNormalDSN(entries)
+	if baseSafeDSN > 0 {
+		baseSafeDSN--
+	}
+
+	contiguousDSN := baseSafeDSN
+	pending := make(dsnIntervalHeap, 0)
+	for i := range entries {
+		entry := &entries[i]
+		if entry.DSN != 0 && entry.EntryCount != 0 {
+			start := entry.DSN
+			end := entry.DSN + uint64(entry.EntryCount) - 1
+			if start <= contiguousDSN+1 {
+				if end > contiguousDSN {
+					contiguousDSN = end
+				}
+				contiguousDSN = drainContiguousIntervals(&pending, contiguousDSN)
+			} else {
+				heap.Push(&pending, dsnInterval{start: start, end: end})
+			}
+		}
+
+		safeDSN := entry.SafeDSN
+		if safeDSN == 0 || safeDSN > contiguousDSN {
+			safeDSN = contiguousDSN
+		}
+		if safeDSN < baseSafeDSN {
+			safeDSN = baseSafeDSN
+		}
+		entry.SafeDSN = safeDSN
+		if len(entry.RawData) >= logEntrySafeDSNOffset+8 {
+			binary.LittleEndian.PutUint64(entry.RawData[logEntrySafeDSNOffset:], safeDSN)
+		}
+	}
+}
+
+func firstNormalDSN(entries []WALEntry) uint64 {
+	for _, entry := range entries {
+		if entry.DSN != 0 && entry.EntryCount != 0 {
+			return entry.DSN
+		}
+	}
+	return 0
+}
+
+func drainContiguousIntervals(pending *dsnIntervalHeap, contiguousDSN uint64) uint64 {
+	for pending.Len() > 0 {
+		next := (*pending)[0]
+		if next.start > contiguousDSN+1 {
+			break
+		}
+		heap.Pop(pending)
+		if next.end > contiguousDSN {
+			contiguousDSN = next.end
+		}
+	}
+	return contiguousDSN
+}
+
+type dsnInterval struct {
+	start uint64
+	end   uint64
+}
+
+type dsnIntervalHeap []dsnInterval
+
+func (h dsnIntervalHeap) Len() int { return len(h) }
+
+func (h dsnIntervalHeap) Less(i, j int) bool {
+	if h[i].start != h[j].start {
+		return h[i].start < h[j].start
+	}
+	return h[i].end < h[j].end
+}
+
+func (h dsnIntervalHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *dsnIntervalHeap) Push(x any) {
+	*h = append(*h, x.(dsnInterval))
+}
+
+func (h *dsnIntervalHeap) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
 }
 
 // buildUserEntryCmd builds a LogService command for UserEntryUpdate.
@@ -275,6 +373,8 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 		if i == 0 {
 			logger.Info("WAL recovery: processing first entry",
 				zap.Uint64("dsn", entry.DSN),
+				zap.Uint64("safe_dsn", entry.SafeDSN),
+				zap.Uint64("raft_index", entry.RaftIndex),
 				zap.Int("data_len", len(entry.RawData)))
 		}
 
@@ -308,6 +408,8 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 				zap.Int("current", i+1),
 				zap.Int("total", len(walData.Entries)),
 				zap.Uint64("dsn", entry.DSN),
+				zap.Uint64("safe_dsn", entry.SafeDSN),
+				zap.Uint64("raft_index", entry.RaftIndex),
 				zap.Uint64("lsn", lsn))
 		}
 	}

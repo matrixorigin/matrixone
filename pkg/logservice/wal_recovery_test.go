@@ -57,6 +57,41 @@ func TestReadWALDataFileOrdersByRaftIndex(t *testing.T) {
 	}
 }
 
+func TestReadWALDataFileNormalizesSafeDSN(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wal_data.bin")
+	input := []WALEntry{
+		{DSN: 10, SafeDSN: 60, RaftIndex: 100, RaftTerm: 1, EntryCount: 11, RawData: testRawLogEntry(60)},
+		{DSN: 50, SafeDSN: 60, RaftIndex: 200, RaftTerm: 1, EntryCount: 11, RawData: testRawLogEntry(60)},
+		{DSN: 21, SafeDSN: 60, RaftIndex: 300, RaftTerm: 1, EntryCount: 29, RawData: testRawLogEntry(60)},
+	}
+	if err := writeTestWALDataFile(path, input); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Service{runtime: runtime.DefaultRuntime()}
+	data, err := s.readWALDataFile(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotSafeDSNs := make([]uint64, 0, len(data.Entries))
+	gotPayloadSafeDSNs := make([]uint64, 0, len(data.Entries))
+	for _, entry := range data.Entries {
+		gotSafeDSNs = append(gotSafeDSNs, entry.SafeDSN)
+		gotPayloadSafeDSNs = append(
+			gotPayloadSafeDSNs,
+			binary.LittleEndian.Uint64(entry.RawData[logEntrySafeDSNOffset:]),
+		)
+	}
+
+	if want := []uint64{20, 20, 60}; !reflect.DeepEqual(gotSafeDSNs, want) {
+		t.Fatalf("unexpected safe DSNs: got %v, want %v", gotSafeDSNs, want)
+	}
+	if want := []uint64{20, 20, 60}; !reflect.DeepEqual(gotPayloadSafeDSNs, want) {
+		t.Fatalf("unexpected payload safe DSNs: got %v, want %v", gotPayloadSafeDSNs, want)
+	}
+}
+
 func writeTestWALDataFile(path string, entries []WALEntry) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -87,4 +122,10 @@ func writeTestWALDataFile(path string, entries []WALEntry) error {
 	}
 
 	return nil
+}
+
+func testRawLogEntry(safeDSN uint64) []byte {
+	data := make([]byte, logEntrySafeDSNOffset+8)
+	binary.LittleEndian.PutUint64(data[logEntrySafeDSNOffset:], safeDSN)
+	return data
 }
