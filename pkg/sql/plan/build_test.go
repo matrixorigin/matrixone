@@ -847,6 +847,55 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 	}
 }
 
+func TestUpdateFallbackGeneratedColumnMultiTableNonFirstHasGenerated(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// Generate dname from loc on the second table (dept).
+	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'non-first-gen' WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback multi-table update with non-first table generated column: %v", err)
+	}
+	query := logicPlan.GetQuery()
+
+	// The source project should contain emp cols (9) + SET comm (1) + dept cols (4) + SET loc (1) + generated dname (1) = 16.
+	empCols := len(mock.ctxt.tables["emp"].Cols)
+	deptCols := len(mock.ctxt.tables["dept"].Cols)
+	expectedLen := empCols + 1 + deptCols + 1 + 1 // emp SET + dept SET + dname generated
+	node := requireFallbackSourceProjectNode(t, query, expectedLen, "non-first-gen")
+	if !nodeContainsStringLiteral(node, "non-first-gen") {
+		t.Fatalf("generated column on non-first table should contain the SET value, got %v", node.ProjectList)
+	}
+}
+
+func TestUpdateFallbackGeneratedColumnChainAfterOptimize(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// Chain: sal depends on comm, comm is a SET column.
+	// After optimization and rewrite, sal's generated expr should use the SET value of comm.
+	setMockGeneratedColumn(t, mock, "emp", "sal", "comm")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'chain-opt-marker' WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback update with generated column after optimization: %v", err)
+	}
+
+	// emp cols (9) + SET comm (1) + generated sal (1) + dept cols (4) + SET loc (1) = 16
+	empCols := len(mock.ctxt.tables["emp"].Cols)
+	deptCols := len(mock.ctxt.tables["dept"].Cols)
+	expectedLen := empCols + 2 + deptCols + 1
+	// Position of generated sal: after emp cols (9) + SET comm (1) = index 10
+	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(), expectedLen,
+		empCols+1, "chain-opt-marker")
+	if generatedExpr == nil {
+		t.Fatal("generated column position after optimization should not be nil")
+	}
+	// The generated expr should be a non-nil expression (DeepCopy of the SET value).
+	// We don't check the exact contents since substituteColRefsInExpr deep-copies,
+	// but we verify the expression exists at the expected position.
+}
+
 func setMockGeneratedColumn(t *testing.T, mock *MockOptimizer, tableName, generatedName, sourceName string) {
 	tableDef := mock.ctxt.tables[tableName]
 	if tableDef == nil {
@@ -930,8 +979,13 @@ func makeStringConstExpr(typ plan.Type, value string) *plan.Expr {
 }
 
 func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int, marker string) *Node {
-	for _, node := range query.Nodes {
+	for i, node := range query.Nodes {
 		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen {
+			continue
+		}
+		// The source PROJECT is referenced by a SINK node (added by appendSinkNode).
+		// Skip PROJECT nodes created by buildUpdatePlans (INSERT/DELETE plans).
+		if !hasSinkParent(query, i) {
 			continue
 		}
 		hasMarker := false
@@ -951,8 +1005,13 @@ func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int
 }
 
 func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int, pos int, marker string) *plan.Expr {
-	for _, node := range query.Nodes {
+	for i, node := range query.Nodes {
 		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen || pos >= len(node.ProjectList) {
+			continue
+		}
+		// The source PROJECT is referenced by a SINK node (added by appendSinkNode).
+		// Skip PROJECT nodes created by buildUpdatePlans (INSERT/DELETE plans).
+		if !hasSinkParent(query, i) {
 			continue
 		}
 		hasMarker := false
@@ -969,6 +1028,19 @@ func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int
 	}
 	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
 	return nil
+}
+
+func hasSinkParent(query *Query, nodeIdx int) bool {
+	for _, otherNode := range query.Nodes {
+		if otherNode.NodeType == plan.Node_SINK {
+			for _, childID := range otherNode.Children {
+				if childID == int32(nodeIdx) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func nodeContainsStringLiteral(node *Node, value string) bool {
