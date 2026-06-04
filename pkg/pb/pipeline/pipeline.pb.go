@@ -4622,6 +4622,7 @@ type ProcessInfo struct {
 	SessionInfo          SessionInfo       `protobuf:"bytes,7,opt,name=session_info,json=sessionInfo,proto3" json:"session_info"`
 	SessionLogger        SessionLoggerInfo `protobuf:"bytes,8,opt,name=session_logger,json=sessionLogger,proto3" json:"session_logger"`
 	PrepareParams        PrepareParamInfo  `protobuf:"bytes,9,opt,name=prepare_params,json=prepareParams,proto3" json:"prepare_params"`
+	AffectedRows         int64             `protobuf:"varint,10,opt,name=affected_rows,json=affectedRows,proto3" json:"affected_rows,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
 	XXX_unrecognized     []byte            `json:"-"`
 	XXX_sizecache        int32             `json:"-"`
@@ -4721,6 +4722,13 @@ func (m *ProcessInfo) GetPrepareParams() PrepareParamInfo {
 		return m.PrepareParams
 	}
 	return PrepareParamInfo{}
+}
+
+func (m *ProcessInfo) GetAffectedRows() int64 {
+	if m != nil {
+		return m.AffectedRows
+	}
+	return 0
 }
 
 type SessionInfo struct {
@@ -10429,6 +10437,11 @@ func (m *ProcessInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.AffectedRows != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.AffectedRows))
+		i--
+		dAtA[i] = 0x50
+	}
 	{
 		size, err := m.PrepareParams.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
@@ -12994,6 +13007,9 @@ func (m *ProcessInfo) ProtoSize() (n int) {
 	n += 1 + l + sovPipeline(uint64(l))
 	l = m.PrepareParams.ProtoSize()
 	n += 1 + l + sovPipeline(uint64(l))
+	if m.AffectedRows != 0 {
+		n += 1 + sovPipeline(uint64(m.AffectedRows))
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -26674,6 +26690,25 @@ func (m *ProcessInfo) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 10:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AffectedRows", wireType)
+			}
+			m.AffectedRows = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.AffectedRows |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])
