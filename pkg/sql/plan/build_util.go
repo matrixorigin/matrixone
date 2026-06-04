@@ -235,6 +235,11 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 					oid = types.T_geometry32
 				}
 			}
+			if sridDefined {
+				if err := validateGeometrySRID(int64(srid)); err != nil {
+					return plan.Type{}, err
+				}
+			}
 			typ := plan.Type{Id: int32(oid)}
 			typ.Scale = int32(geometrySubtypeEnum(fstr))
 			typ.Width = encodeGeometrySRIDWidth(srid, sridDefined)

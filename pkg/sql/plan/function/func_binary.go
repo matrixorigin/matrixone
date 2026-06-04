@@ -8342,8 +8342,8 @@ func StGeomFromGeoJSONWithSRID(ivecs []*vector.Vector, result vector.FunctionRes
 			}
 			continue
 		}
-		if srid < 0 {
-			return moerr.NewInvalidInputNoCtx("SRID must be non-negative")
+		if srid < 0 || srid > int64(geo.MaxSRID) {
+			return moerr.NewInvalidInputNoCtxf("SRID should be between 0 and %d", geo.MaxSRID)
 		}
 		g, err := geo.ParseGeoJSON(v)
 		if err != nil {

@@ -2123,10 +2123,24 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			"st_mpolyfromtext", "st_geomcollfromtext", "st_pointfromgeohash",
 			"st_geomfromgeojson":
 			if len(args) >= 2 {
-				if lit, ok := args[len(args)-1].Expr.(*plan.Expr_Lit); ok && lit.Lit != nil {
-					if iv, ok := lit.Lit.GetValue().(*plan.Literal_I64Val); ok && iv.I64Val >= 0 {
-						returnType.Width = encodeGeometrySRIDWidth(uint32(iv.I64Val), true)
+				// The SRID is carried in the result type's Width, so it must be
+				// a constant known at bind time. A non-constant SRID (column,
+				// parameter, or CAST/arithmetic expression) cannot be
+				// represented this way and is rejected rather than being
+				// silently dropped.
+				lit, ok := args[len(args)-1].Expr.(*plan.Expr_Lit)
+				if !ok || lit.Lit == nil {
+					return nil, moerr.NewInvalidInput(ctx, "the SRID argument of a geometry constructor must be a constant integer")
+				}
+				if !lit.Lit.Isnull {
+					iv, ok := lit.Lit.GetValue().(*plan.Literal_I64Val)
+					if !ok {
+						return nil, moerr.NewInvalidInput(ctx, "the SRID argument of a geometry constructor must be a constant integer")
 					}
+					if err := validateGeometrySRID(iv.I64Val); err != nil {
+						return nil, err
+					}
+					returnType.Width = encodeGeometrySRIDWidth(uint32(iv.I64Val), true)
 				}
 			}
 		}

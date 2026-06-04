@@ -853,8 +853,8 @@ func StGeomFromTextWithSRID(ivecs []*vector.Vector, result vector.FunctionResult
 			}
 			continue
 		}
-		if sridValue < 0 || sridValue > math.MaxUint32 {
-			return moerr.NewInvalidInputNoCtx("SRID should be between 0 and 4294967295")
+		if sridValue < 0 || sridValue > int64(geo.MaxSRID) {
+			return moerr.NewInvalidInputNoCtxf("SRID should be between 0 and %d", geo.MaxSRID)
 		}
 
 		wkt := strings.TrimSpace(functionUtil.QuickBytesToStr(v))

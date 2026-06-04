@@ -52,11 +52,20 @@ func writeGeoJSON(b *strings.Builder, g Geometry, maxDec int) {
 		b.WriteByte('}')
 	case MultiPoint:
 		b.WriteString(`{"type":"MultiPoint","coordinates":`)
-		coords := make([]Coord, 0, len(v.Points))
-		for _, p := range v.Points {
-			coords = append(coords, Coord{X: p.X, Y: p.Y})
+		b.WriteByte('[')
+		for i, p := range v.Points {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			// An empty member must not be fabricated as [0,0]; emit an empty
+			// position, mirroring how a standalone empty Point is written.
+			if p.IsEmpty {
+				b.WriteString("[]")
+			} else {
+				gjWriteCoord(b, Coord{X: p.X, Y: p.Y}, maxDec)
+			}
 		}
-		gjWriteCoordSeq(b, coords, maxDec)
+		b.WriteByte(']')
 		b.WriteByte('}')
 	case MultiLineString:
 		b.WriteString(`{"type":"MultiLineString","coordinates":`)
@@ -154,8 +163,10 @@ func parseGeoJSONObj(typ string, coords json.RawMessage, geoms []json.RawMessage
 		if len(c) == 0 {
 			return Point{IsEmpty: true}, nil
 		}
-		if len(c) < 2 {
-			return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON Point: need 2 coordinates")
+		// The engine is 2D only; reject (rather than silently truncate) 3D/4D
+		// positions so coordinate data loss is explicit.
+		if len(c) != 2 {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON Point: a position must have exactly 2 coordinates")
 		}
 		return Point{X: c[0], Y: c[1]}, nil
 	case "LineString":
@@ -171,13 +182,22 @@ func parseGeoJSONObj(typ string, coords json.RawMessage, geoms []json.RawMessage
 		}
 		return Polygon{Rings: rings}, nil
 	case "MultiPoint":
-		seq, err := parseCoordSeq(coords)
-		if err != nil {
+		var rows [][]float64
+		if err := json.Unmarshal(coords, &rows); err != nil {
 			return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON MultiPoint: %v", err)
 		}
-		pts := make([]Point, len(seq))
-		for i, c := range seq {
-			pts[i] = Point{X: c.X, Y: c.Y}
+		pts := make([]Point, len(rows))
+		for i, r := range rows {
+			// An empty position denotes an empty point member; any other size
+			// than 2 is rejected (the engine is 2D only).
+			if len(r) == 0 {
+				pts[i] = Point{IsEmpty: true}
+				continue
+			}
+			if len(r) != 2 {
+				return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON MultiPoint: a position must have exactly 2 coordinates")
+			}
+			pts[i] = Point{X: r[0], Y: r[1]}
 		}
 		return MultiPoint{Points: pts}, nil
 	case "MultiLineString":
@@ -236,8 +256,10 @@ func parseCoordSeq(data json.RawMessage) ([]Coord, error) {
 	}
 	out := make([]Coord, len(rows))
 	for i, r := range rows {
-		if len(r) < 2 {
-			return nil, moerr.NewInvalidInputNoCtxf("need 2 coordinates per position")
+		// 2D engine: reject 3D/4D positions instead of silently dropping the
+		// extra ordinates.
+		if len(r) != 2 {
+			return nil, moerr.NewInvalidInputNoCtxf("a position must have exactly 2 coordinates")
 		}
 		out[i] = Coord{X: r[0], Y: r[1]}
 	}

@@ -2088,7 +2088,7 @@ select st_astext(st_geomfromtext('POINT EMPTY', 4326)) as empty_point_text, st_s
 empty_point_text    empty_point_srid
 POINT EMPTY    4326
 select st_geomfromtext('POINT(1 1)', 5000000000);
-invalid input: SRID should be between 0 and 4294967295
+invalid input: SRID should be between 0 and 2147483646
 select st_geomfromtext('POINT(Inf 1)', 4326);
 invalid input: invalid geometry payload
 drop table geo_srid_value_ok;

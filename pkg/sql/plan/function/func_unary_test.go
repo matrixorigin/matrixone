@@ -1117,9 +1117,9 @@ func TestStGeomFromTextWithSRID(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 2)", "POINT EMPTY", "LINESTRING EMPTY"}, []bool{false, false, false}),
-		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326, math.MaxUint32, 0}, []bool{false, false, false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326, int64(geo.MaxSRID), 0}, []bool{false, false, false}),
 	}
-	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"SRID=4326;POINT(1 2)", "SRID=4294967295;POINT EMPTY", "SRID=0;LINESTRING EMPTY"}, []bool{false, false, false})
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"SRID=4326;POINT(1 2)", "SRID=2147483646;POINT EMPTY", "SRID=0;LINESTRING EMPTY"}, []bool{false, false, false})
 
 	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromTextWithSRID)
 	s, info := fcTC.Run()

@@ -50,6 +50,13 @@ const (
 	SRIDWGS84 uint32 = 4326
 )
 
+// MaxSRID is the largest SRID the SQL layer can persist. The SRID is carried in
+// the column/expression type's int32 Width as srid+1 (0 means "undefined"), so
+// the usable range is [0, math.MaxInt32-1]. Larger values would overflow Width
+// and silently collapse (e.g. 4294967295+1 wraps to the undefined sentinel),
+// so the SQL layer rejects them.
+const MaxSRID uint32 = 1<<31 - 2 // math.MaxInt32 - 1
+
 // String returns the canonical WKT keyword for the subtype. GENERIC maps to
 // "GEOMETRY".
 func (s Subtype) String() string {

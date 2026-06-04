@@ -1825,12 +1825,47 @@ func decimal256ToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal256 to %s", toType))
 }
 
+// geometryToTextCast renders a GEOMETRY/GEOMETRY32 value as WKT for casts to a
+// textual type, matching ST_AsText.
+func geometryToTextCast(
+	source vector.FunctionParameterWrapper[types.Varlena],
+	result vector.FunctionResultWrapper, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := source.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		wkt, _, _, err := decodeGeometryPayload(v)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes([]byte(wkt), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func strTypeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	ctx := proc.Ctx
 
 	fromType := source.GetType()
+	// Geometry is stored as bare WKB. Casting to a textual type must render
+	// WKT (like ST_AsText); the generic string-copy path below would otherwise
+	// emit the raw, unreadable WKB bytes. Casts to binary/varbinary/blob (raw
+	// payload) and to another geometry type keep the existing behavior.
+	if fromType.Oid == types.T_geometry || fromType.Oid == types.T_geometry32 {
+		switch toType.Oid {
+		case types.T_char, types.T_varchar, types.T_text:
+			return geometryToTextCast(source, result, length)
+		}
+	}
 	if fromType.Oid == types.T_blob {
 		// For handling BLOB to ARRAY implicit casting.
 		// This is used for VECTOR FAST/BINARY IO.

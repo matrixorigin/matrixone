@@ -27,6 +27,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+// validateGeometrySRID rejects SRIDs that cannot be stored in the type Width
+// (see geo.MaxSRID).
+func validateGeometrySRID(srid int64) error {
+	if srid < 0 || srid > int64(geo.MaxSRID) {
+		return moerr.NewInvalidInputNoCtxf("SRID should be between 0 and %d", geo.MaxSRID)
+	}
+	return nil
+}
+
 func isEnumPlanType(typ *plan.Type) bool {
 	return typ != nil && typ.Id == int32(types.T_enum) && len(typ.GetEnumvalues()) > 0
 }
