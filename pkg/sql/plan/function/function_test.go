@@ -266,6 +266,15 @@ func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
 }
 
+func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("rand"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("uuid"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("now"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
+	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
+	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
+}
+
 func TestRunPositionCharFunctionDirectly(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []*vector.Vector{
