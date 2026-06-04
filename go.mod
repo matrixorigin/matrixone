@@ -92,8 +92,8 @@ require (
 	github.com/tidwall/btree v1.7.0
 	github.com/tidwall/pretty v1.2.1
 	github.com/tmc/langchaingo v0.1.13
-	github.com/xeipuuv/gojsonschema v1.2.0
 	github.com/unum-cloud/usearch/golang v0.0.0-20260524141737-9fd6b0115dcd
+	github.com/xeipuuv/gojsonschema v1.2.0
 	github.com/yanyiwu/gojieba v1.4.7
 	go.starlark.net v0.0.0-20250701195324-d457b4515e0e
 	go.uber.org/automaxprocs v1.5.3
