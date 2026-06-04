@@ -562,9 +562,7 @@ func bitCountFromMysqlIntegerString(s string) (uint64, error) {
 		return bitCountFromUint64(uint64(val)), nil
 	}
 
-	if strings.HasPrefix(s, "+") {
-		s = s[1:]
-	}
+	s = strings.TrimPrefix(s, "+")
 	val, err := strconv.ParseUint(s, 10, 64)
 	if err != nil {
 		if errors.Is(err, strconv.ErrRange) {
