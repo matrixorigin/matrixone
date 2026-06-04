@@ -36,7 +36,9 @@ func TestPrepareRemote(t *testing.T) {
 
 	d := Dispatch{
 		FuncId: SendToAllFunc,
-		ctr:    &container{},
+		ctr: &container{
+			remoteRegsCnt: 1,
+		},
 		RemoteRegs: []colexec.ReceiveInfo{
 			{Uuid: uid},
 		},
@@ -49,6 +51,20 @@ func TestPrepareRemote(t *testing.T) {
 	require.True(t, b)
 	require.Equal(t, proc, p)
 	require.Equal(t, d.ctr.remoteInfo, c)
+	require.Equal(t, len(d.RemoteRegs), cap(c))
+
+	wcs := &process.WrapCs{Uid: uid}
+	select {
+	case c <- wcs:
+	default:
+		require.Fail(t, "remote receiver notification should not block before dispatch receives the first batch")
+	}
+
+	end, err := d.waitRemoteRegsReady(proc)
+	require.NoError(t, err)
+	require.False(t, end)
+	require.True(t, d.ctr.prepared)
+	require.Equal(t, []*process.WrapCs{wcs}, d.ctr.remoteReceivers)
 }
 
 // TestReceiverDone_OldBehavior tests the old behavior (kept for backward compatibility verification)
