@@ -711,21 +711,25 @@ func diffMergeAgency(
 		return
 	}
 	var (
-		done      bool
-		wg        = new(sync.WaitGroup)
-		outputErr atomic.Value
-		retBatCh  = make(chan batchWithKind, 10)
-		stopCh    = make(chan struct{})
-		stopOnce  sync.Once
-		emit      emitFunc
-		stop      func()
-		waited    bool
+		done         bool
+		wg           = new(sync.WaitGroup)
+		outputErr    atomic.Value
+		retBatCh     = make(chan batchWithKind, 10)
+		retBatChOnce sync.Once
+		stopCh       = make(chan struct{})
+		stopOnce     sync.Once
+		emit         emitFunc
+		stop         func()
+		waited       bool
 	)
+	closeRetBatCh := func() {
+		retBatChOnce.Do(func() {
+			close(retBatCh)
+		})
+	}
 
 	defer func() {
-		if retBatCh != nil {
-			close(retBatCh)
-		}
+		closeRetBatCh()
 		if !waited {
 			wg.Wait()
 		}
@@ -789,6 +793,7 @@ func diffMergeAgency(
 	}
 
 	wg.Add(2)
+	outputCh := retBatCh
 
 	go func() {
 		defer wg.Done()
@@ -800,19 +805,19 @@ func diffMergeAgency(
 			// 5. as file
 
 			if err2 := satisfyDiffOutputOpt(
-				ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, retBatCh,
+				ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, outputCh,
 			); err2 != nil {
 				outputErr.Store(err2)
 			}
 		} else if pickStmt != nil {
 			if err2 := pickMergeDiffs(
-				ctx, cancel, ses, bh, pickStmt, dagInfo, tblStuff, retBatCh,
+				ctx, cancel, ses, bh, pickStmt, dagInfo, tblStuff, outputCh,
 			); err2 != nil {
 				outputErr.Store(err2)
 			}
 		} else {
 			if err2 := mergeDiffs(
-				ctx, cancel, ses, bh, mergeStmt, dagInfo, tblStuff, retBatCh,
+				ctx, cancel, ses, bh, mergeStmt, dagInfo, tblStuff, outputCh,
 			); err2 != nil {
 				outputErr.Store(err2)
 			}
@@ -825,10 +830,7 @@ func diffMergeAgency(
 	); err != nil {
 		// If the consumer cancelled the context (e.g., PICK conflict FAIL),
 		// wait for it to finish and prefer its real error over context.Canceled.
-		if retBatCh != nil {
-			close(retBatCh)
-			retBatCh = nil
-		}
+		closeRetBatCh()
 		waited = true
 		wg.Wait()
 		if outputErr.Load() != nil {
@@ -837,8 +839,7 @@ func diffMergeAgency(
 		return
 	}
 
-	close(retBatCh)
-	retBatCh = nil
+	closeRetBatCh()
 	waited = true
 
 	wg.Wait()

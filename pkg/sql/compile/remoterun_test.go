@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -349,11 +350,12 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
 				{
-					ObjRef:        &plan.ObjectRef{ObjName: "t1"},
-					TableDef:      &plan.TableDef{Name: "t1"},
-					InsertCols:    []int{0, 1, 2},
-					DeleteCols:    []int{3, 4},
-					PartitionCols: []int{5, 6},
+					ObjRef:         &plan.ObjectRef{ObjName: "t1"},
+					TableDef:       &plan.TableDef{Name: "t1"},
+					InsertCols:     []int{0, 1, 2},
+					DeleteCols:     []int{3, 4},
+					PartitionCols:  []int{5, 6},
+					InsertPkColIdx: 1,
 				},
 			},
 			Action: multi_update.UpdateWriteTable,
@@ -368,7 +370,40 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, []int{5, 6}, restoredOp.MultiUpdateCtx[0].PartitionCols)
 		require.Equal(t, []int{0, 1, 2}, restoredOp.MultiUpdateCtx[0].InsertCols)
 		require.Equal(t, []int{3, 4}, restoredOp.MultiUpdateCtx[0].DeleteCols)
+		require.Equal(t, 1, restoredOp.MultiUpdateCtx[0].InsertPkColIdx)
 		require.True(t, restoredOp.IsRemote)
+	})
+
+	t.Run("DedupJoin_DedupBuildKeepLast", func(t *testing.T) {
+		op := &dedupjoin.DedupJoin{
+			Conditions:         [][]*plan.Expr{nil, nil},
+			DedupBuildKeepLast: true,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.DedupJoin.DedupBuildKeepLast)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		require.True(t, restored.(*dedupjoin.DedupJoin).DedupBuildKeepLast)
+	})
+
+	t.Run("MergeOrder_SpillThreshold", func(t *testing.T) {
+		op := &mergeorder.MergeOrder{
+			OrderBySpecs:   []*planpb.OrderBySpec{{Flag: planpb.OrderBySpec_DESC}},
+			SpillThreshold: 4096,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, int64(4096), pipeInstr.SpillMem)
+		require.Len(t, pipeInstr.OrderBy, 1)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*mergeorder.MergeOrder)
+		require.Equal(t, int64(4096), restoredOp.SpillThreshold)
+		require.Len(t, restoredOp.OrderBySpecs, 1)
+		require.Equal(t, planpb.OrderBySpec_DESC, restoredOp.OrderBySpecs[0].Flag)
 	})
 
 	t.Run("Deletion_Engine", func(t *testing.T) {
@@ -672,7 +707,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		Proc:   proc,
 		RootOp: connector.NewArgument(),
 	}
-	_, withoutOut, _, err := prepareRemoteRunSendingData("", s1)
+	_, withoutOut, _, _, err := prepareRemoteRunSendingData("", s1, proc)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 	require.NotNil(t, s1.RootOp)
@@ -686,7 +721,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	}
 	s2.RootOp.AppendChild(value_scan.NewArgument())
 	originChild := s2.RootOp.GetOperatorBase().GetChildren(0)
-	_, withoutOut, _, err = prepareRemoteRunSendingData("", s2)
+	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s2, proc)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 	require.Equal(t, 1, s2.RootOp.GetOperatorBase().NumChildren())
@@ -699,7 +734,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		RootOp: value_scan.NewArgument(),
 	}
 	s3.RootOp.AppendChild(value_scan.NewArgument())
-	_, withoutOut, _, err = prepareRemoteRunSendingData("", s3)
+	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s3, proc)
 	require.NoError(t, err)
 	require.True(t, withoutOut)
 }

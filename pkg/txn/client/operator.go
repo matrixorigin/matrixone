@@ -686,6 +686,12 @@ func (tc *txnOperator) SnapshotTS() timestamp.Timestamp {
 	return tc.mu.txn.SnapshotTS
 }
 
+func (tc *txnOperator) SetSnapshotTS(ts timestamp.Timestamp) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.txn.SnapshotTS = ts
+}
+
 func (tc *txnOperator) CreateTS() timestamp.Timestamp {
 	return tc.reset.createTs
 }
@@ -817,6 +823,9 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 	if err := tc.CancelAndWaitRunningSQLWithSQL(ctx, 0, "<commit>"); err != nil {
+		// Commit can be called with an already-canceled context while SQL is still running.
+		// The commit has not been sent yet, so close locally as aborted to release active/leak state.
+		tc.closeAsAborted(ctx, err)
 		return err
 	}
 
@@ -868,6 +877,9 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 
 func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
 	if err := tc.CancelAndWaitRunningSQLWithSQL(ctx, 0, "<rollback>"); err != nil {
+		// Rollback can be called from connection cleanup with an already-canceled context.
+		// Still close the operator locally so txnClient active/leak-check state is released.
+		tc.closeAsAborted(ctx, err)
 		return err
 	}
 
@@ -1504,6 +1516,17 @@ func (tc *txnOperator) closeLocked(ctx context.Context) {
 				Txn:   tc.mu.txn,
 				Err:   tc.reset.commitErr,
 			})
+	}
+}
+
+func (tc *txnOperator) closeAsAborted(ctx context.Context, err error) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	if !tc.mu.closed {
+		tc.reset.commitErr = err
+		tc.mu.txn.Status = txn.TxnStatus_Aborted
+		tc.closeLocked(ctx)
 	}
 }
 

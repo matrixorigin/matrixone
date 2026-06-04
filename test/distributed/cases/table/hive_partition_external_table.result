@@ -11,7 +11,19 @@ drop table if exists hive_err1;
 create external table hive_err1 (
 id int, year int
 ) infile{'filepath'='$resources/hive_partition/single_level/', 'format'='parquet', 'hive_partitioning'='true'};
-invalid configuration: hive_partition_columns is required when hive_partitioning is enabled
+select count(*) as cnt from hive_err1 where year = 2024;
+➤ cnt[-5,64,0]  𝄀
+5
+show create table hive_err1;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+hive_err1  ¦  CREATE EXTERNAL TABLE `hive_err1` (
+  `id` int DEFAULT NULL,
+  `year` int DEFAULT NULL
+) INFILE{'FILEPATH'='/Users/linjunhong/workspace/matrixone/test/distributed/resources/hive_partition/single_level/','COMPRESSION'='','FORMAT'='parquet','JSONDATA'='','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='year'}
+desc hive_err1;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+year  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table if exists hive_err2;
 create external table hive_err2 (
 id int, year int
@@ -22,6 +34,11 @@ create external table hive_err3 (
 id int, amount double
 ) infile{'filepath'='$resources/hive_partition/single_level/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='nonexistent'};
 invalid configuration: partition column 'nonexistent' not found in table columns
+drop table if exists hive_err3_auto;
+create external table hive_err3_auto (
+id int, amount double
+) infile{'filepath'='$resources/hive_partition/single_level/', 'format'='parquet', 'hive_partitioning'='true'};
+invalid configuration: partition column 'year' not found in table columns
 drop table if exists hive_err4;
 create external table hive_err4 (
 id int, year int
@@ -53,7 +70,7 @@ hive_single  ¦  CREATE EXTERNAL TABLE `hive_single` (
   `id` int DEFAULT NULL,
   `amount` double DEFAULT NULL,
   `year` int DEFAULT NULL
-) INFILE{'FILEPATH'='$resources/hive_partition/single_level/','COMPRESSION'='','FORMAT'='parquet','JSONDATA'='','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='year'}
+) INFILE{'FILEPATH'='/Users/linjunhong/workspace/matrixone/test/distributed/resources/hive_partition/single_level/','COMPRESSION'='','FORMAT'='parquet','JSONDATA'='','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='year'}
 load data infile '$resources/hive_partition/single_level/year=2024/data.parquet' into table hive_single;
 invalid input: cannot insert/update/delete from external table
 create index idx_hive_single_id on hive_single(id);
@@ -90,6 +107,15 @@ select year, count(*) as cnt from hive_single where year not in (2020, 2021, 202
 select count(*) as cnt from hive_single where year > 2022;
 ➤ cnt[-5,64,0]  𝄀
 10
+select count(*) as cnt from hive_single where year >= 2023;
+➤ cnt[-5,64,0]  𝄀
+10
+select count(*) as cnt from hive_single where year < 2022;
+➤ cnt[-5,64,0]  𝄀
+10
+select count(*) as cnt from hive_single where year <= 2021;
+➤ cnt[-5,64,0]  𝄀
+10
 select year, count(*) as cnt from hive_single where year between 2021 and 2023 group by year order by year;
 ➤ year[4,32,0]  ¦  cnt[-5,64,0]  𝄀
 2021  ¦  5  𝄀
@@ -99,6 +125,24 @@ select year, count(*) as cnt from hive_single where year = 2020 or year = 2024 g
 ➤ year[4,32,0]  ¦  cnt[-5,64,0]  𝄀
 2020  ¦  5  𝄀
 2024  ¦  5
+select year, count(*) as cnt from hive_single where year in (2020, 2021) or year = 2024 group by year order by year;
+➤ year[4,32,0]  ¦  cnt[-5,64,0]  𝄀
+2020  ¦  5  𝄀
+2021  ¦  5  𝄀
+2024  ¦  5
+select year, count(*) as cnt from hive_single where year < 2021 or year > 2023 group by year order by year;
+➤ year[4,32,0]  ¦  cnt[-5,64,0]  𝄀
+2020  ¦  5  𝄀
+2024  ¦  5
+select count(*) as cnt from hive_single where 2021 < year;
+➤ cnt[-5,64,0]  𝄀
+15
+select count(*) as cnt from hive_single where 2025 >= year;
+➤ cnt[-5,64,0]  𝄀
+25
+select count(*) as cnt from hive_single where year > 2024 and year < 2020;
+➤ cnt[-5,64,0]  𝄀
+0
 select distinct year from hive_single order by year;
 ➤ year[4,32,0]  𝄀
 2020  𝄀
@@ -120,7 +164,7 @@ select count(distinct year) as distinct_years from hive_single;
 ➤ distinct_years[-5,64,0]  𝄀
 5
 select count(distinct id) as distinct_ids_2024 from hive_single where year = 2024;
-distinct_ids_2024
+➤ distinct_ids_2024[-5,64,0]  𝄀
 5
 select count(*) from hive_single where year + 1 = 2025;
 ➤ count(*)[-5,64,0]  𝄀
@@ -221,6 +265,32 @@ select year, count(distinct month) as mc from hive_multi group by year
 ➤ year[4,32,0]  ¦  mc[-5,64,0]  𝄀
 2024  ¦  3  𝄀
 2025  ¦  3
+select year, month, count(*) as cnt from hive_multi
+where (year = 2024 and month = '01') or (year = 2025 and month = '02')
+group by year, month order by year, month;
+➤ year[4,32,0]  ¦  month[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
+2024  ¦  01  ¦  3  𝄀
+2025  ¦  02  ¦  3
+drop table if exists hive_multi_auto;
+create external table hive_multi_auto (
+id int,
+amount double,
+year int,
+month varchar(2)
+) infile{'filepath'='$resources/hive_partition/multi_level/', 'format'='parquet', 'hive_partitioning'='true'};
+select year, month, count(*) as cnt from hive_multi_auto group by year, month order by year, month;
+➤ year[4,32,0]  ¦  month[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
+2024  ¦  01  ¦  3  𝄀
+2024  ¦  02  ¦  3  𝄀
+2024  ¦  03  ¦  3  𝄀
+2025  ¦  01  ¦  3  𝄀
+2025  ¦  02  ¦  3  𝄀
+2025  ¦  03  ¦  3
+select id, year, month from hive_multi_auto where year = 2024 and month = '02' order by id;
+➤ id[4,32,0]  ¦  year[4,32,0]  ¦  month[12,-1,0]  𝄀
+202420  ¦  2024  ¦  02  𝄀
+202421  ¦  2024  ¦  02  𝄀
+202422  ¦  2024  ¦  02
 drop table if exists hive_string;
 create external table hive_string (
 id int,
@@ -343,6 +413,37 @@ select count(*) as cnt from hive_single where year = 2024 and __mo_filepath like
 select count(*) as cnt from hive_single where year = 2024 and __mo_filepath like '%year=2020%';
 ➤ cnt[-5,64,0]  𝄀
 0
+select count(*) as cnt from hive_single where year = 2024 or __mo_filepath like '%year=2020%';
+➤ cnt[-5,64,0]  𝄀
+10
+drop table if exists hive_fanout_small;
+create external table hive_fanout_small (
+id int,
+amount double,
+part_id int
+) infile{'filepath'='$resources/hive_partition/fanout_small/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select count(*) as cnt from hive_fanout_small;
+➤ cnt[-5,64,0]  𝄀
+100
+select count(distinct __mo_filepath) as paths from hive_fanout_small;
+➤ paths[-5,64,0]  𝄀
+20
+select part_id, count(*) as rows_per_part, count(distinct __mo_filepath) as files_per_part
+from hive_fanout_small group by part_id order by part_id;
+➤ part_id[4,32,0]  ¦  rows_per_part[-5,64,0]  ¦  files_per_part[-5,64,0]  𝄀
+0  ¦  10  ¦  2  𝄀
+1  ¦  10  ¦  2  𝄀
+2  ¦  10  ¦  2  𝄀
+3  ¦  10  ¦  2  𝄀
+4  ¦  10  ¦  2  𝄀
+5  ¦  10  ¦  2  𝄀
+6  ¦  10  ¦  2  𝄀
+7  ¦  10  ¦  2  𝄀
+8  ¦  10  ¦  2  𝄀
+9  ¦  10  ¦  2
+select count(*) as cnt from hive_fanout_small where part_id in (1, 3, 9);
+➤ cnt[-5,64,0]  𝄀
+30
 explain (check '["External Scan", "Filter Cond"]') select * from hive_single where year = 2024;
 ➤ AP QUERY PLAN ON MULTICN(10 core)[12,0,0]  𝄀
 Project  𝄀
@@ -464,8 +565,34 @@ id int,
 amount double,
 country varchar(20)
 ) infile{'filepath'='$resources/hive_partition/url_encoded/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='country'};
-select * from hive_url_encoded;
-internal error: hive partition directory name contains '%' which is not supported: 'country=US%2FCA'
+select id, country from hive_url_encoded where country = 'US/CA';
+➤ id[4,32,0]  ¦  country[12,-1,0]  𝄀
+1  ¦  US/CA
+drop table if exists hive_invalid_url;
+create external table hive_invalid_url (
+id int,
+amount double,
+country varchar(20)
+) infile{'filepath'='$resources/hive_partition/invalid_url/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='country'};
+select * from hive_invalid_url;
+internal error: invalid URL escape in hive partition value 'US%ZZ': invalid URL escape "%ZZ"
+drop table if exists hive_negative_year;
+create external table hive_negative_year (
+id int,
+amount double,
+year int
+) infile{'filepath'='$resources/hive_partition/negative_year/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='year'};
+select year, count(*) as cnt from hive_negative_year where year > -2020 group by year order by year;
+➤ year[4,32,0]  ¦  cnt[-5,64,0]  𝄀
+-10  ¦  2  𝄀
+0  ¦  2  𝄀
+10  ¦  2  𝄀
+2024  ¦  2
+select year, count(*) as cnt from hive_negative_year where year between -10 and 10 group by year order by year;
+➤ year[4,32,0]  ¦  cnt[-5,64,0]  𝄀
+-10  ¦  2  𝄀
+0  ¦  2  𝄀
+10  ¦  2
 drop table if exists hive_stage_err;
 create external table hive_stage_err (
 id int, year int
@@ -493,6 +620,16 @@ select id, year from hive_col_overlap order by id;
 1  ¦  2024  𝄀
 2  ¦  2024
 select id, amount from parquet_non_hive order by id;
+➤ id[4,32,0]  ¦  amount[8,54,0]  𝄀
+1  ¦  100.0  𝄀
+2  ¦  200.0  𝄀
+3  ¦  300.0
+drop table if exists parquet_non_hive_percent;
+create external table parquet_non_hive_percent (
+id int,
+amount double
+) infile{'filepath'='$resources/hive_partition/non_hive_percent/simple%20copy.parquet', 'format'='parquet'};
+select id, amount from parquet_non_hive_percent order by id;
 ➤ id[4,32,0]  ¦  amount[8,54,0]  𝄀
 1  ¦  100.0  𝄀
 2  ¦  200.0  𝄀

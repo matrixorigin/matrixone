@@ -27,6 +27,8 @@ func Test_heartbeat(t *testing.T) {
 	defer cancel()
 
 	conf := &Config{}
+	conf.Frontend.Host = "0.0.0.0"
+	conf.Frontend.Port = 6001
 	client := &testHAKClient{
 		cfg: conf,
 	}
@@ -38,4 +40,7 @@ func Test_heartbeat(t *testing.T) {
 		logger:          logutil.GetPanicLogger(),
 	}
 	sv.heartbeat(ctx)
+	if client.lastCNHeartbeat.SQLAddress != "127.0.0.1:6001" {
+		t.Fatalf("expected heartbeat SQLAddress 127.0.0.1:6001, got %q", client.lastCNHeartbeat.SQLAddress)
+	}
 }

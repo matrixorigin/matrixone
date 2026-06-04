@@ -2928,7 +2928,6 @@ func builtInATan2(parameters []*vector.Vector, result vector.FunctionResultWrapp
 				return err
 			}
 		} else {
-			// ATAN2(Y, X) - use math.Atan2 which properly handles all edge cases
 			if err := rs.Append(math.Atan2(v1, v2), false); err != nil {
 				return err
 			}

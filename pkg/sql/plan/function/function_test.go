@@ -141,6 +141,17 @@ func Test_fixedTypeCastRule2(t *testing.T) {
 	}
 }
 
+func Test_fixedImplicitTypeCast_Decimal256MirrorsDecimal128(t *testing.T) {
+	for _, target := range []types.T{types.T_bool, types.T_timestamp} {
+		can128, cost128 := fixedImplicitTypeCast(types.T_decimal128.ToType(), target)
+		require.True(t, can128)
+
+		can256, cost256 := fixedImplicitTypeCast(types.T_decimal256.ToType(), target)
+		require.Equal(t, can128, can256, target.String())
+		require.Equal(t, cost128, cost256, target.String())
+	}
+}
+
 func Test_GetFunctionByName(t *testing.T) {
 	type fInput struct {
 		name string
@@ -181,6 +192,14 @@ func Test_GetFunctionByName(t *testing.T) {
 			requireFid: DIV, requireOid: 0,
 			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToType(), types.T_float64.ToType()},
 			requireRet: types.T_float64.ToType(),
+		},
+
+		{
+			name: "from_unixtime", args: []types.Type{types.New(types.T_decimal256, 65, 0)},
+			shouldErr:  false,
+			requireFid: FROM_UNIXTIME, requireOid: 3,
+			shouldCast: false,
+			requireRet: types.T_datetime.ToType(),
 		},
 
 		{
@@ -245,6 +264,34 @@ func Test_GetFunctionByName(t *testing.T) {
 func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, true, GetFunctionIsWinFunByName("rank"))
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
+}
+
+func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("rand"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("uuid"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("now"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
+	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
+	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
+}
+
+func TestRunPositionCharFunctionDirectly(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []*vector.Vector{
+		testutil.NewVector(2, types.T_char.ToType(), proc.Mp(), false, []string{"y", "a"}),
+		testutil.NewVector(2, types.T_char.ToType(), proc.Mp(), false, []string{"xyz", "bbb"}),
+	}
+	startMp := proc.Mp().CurrNB()
+
+	v, err := RunFunctionDirectly(proc, EncodeOverloadID(POSITION, 1), inputs, 2)
+	require.NoError(t, err)
+	require.Equal(t, types.T_int64, v.GetType().Oid)
+	require.Equal(t, 2, v.Length())
+	require.Equal(t, []int64{2, 0}, vector.MustFixedColNoTypeCheck[int64](v))
+
+	v.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, startMp, proc.Mp().CurrNB())
 }
 
 func TestRunFunctionDirectly(t *testing.T) {

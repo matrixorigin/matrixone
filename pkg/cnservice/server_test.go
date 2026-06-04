@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -41,6 +40,50 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+func TestMakeRSSCacheEvictorEvictsMemoryCacheOnly(t *testing.T) {
+	oldMemoryEvictor := evictMemoryCachesToCapacityPercent
+	defer func() {
+		evictMemoryCachesToCapacityPercent = oldMemoryEvictor
+	}()
+
+	memoryStarted := make(chan struct{})
+	releaseMemory := make(chan struct{})
+
+	evictMemoryCachesToCapacityPercent = func(ctx context.Context, targetPercent int64) map[string]int64 {
+		close(memoryStarted)
+		select {
+		case <-releaseMemory:
+		case <-ctx.Done():
+		}
+		return nil
+	}
+
+	done := make(chan struct{})
+	go func() {
+		makeRSSCacheEvictor(time.Second)(context.Background(), 50)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-memoryStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+
+	close(releaseMemory)
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+}
 
 func Test_InitServer(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -217,43 +260,4 @@ func Test_tenant(t *testing.T) {
 
 	err = sv.UpgradeTenant(ctx, "acc3", 1, true)
 	assert.Error(t, err)
-}
-
-func TestMakeRSSCacheEvictorUsesIndependentTimeouts(t *testing.T) {
-	defer fileservice.SetMemoryCachePressureTargetPercent(0, time.Time{})
-	defer objectio.SetMetaCachePressureTargetPercent(0, time.Time{})
-
-	oldMem := evictMemoryCachesToCapacityPercent
-	oldMeta := evictMetaCacheToCapacityPercent
-	defer func() {
-		evictMemoryCachesToCapacityPercent = oldMem
-		evictMetaCacheToCapacityPercent = oldMeta
-	}()
-
-	var (
-		memCalled  bool
-		metaCalled bool
-	)
-	evictMemoryCachesToCapacityPercent = func(ctx context.Context, targetPercent int64) map[string]int64 {
-		memCalled = true
-		assert.Equal(t, int64(80), targetPercent)
-		_, ok := ctx.Deadline()
-		assert.True(t, ok)
-		<-ctx.Done()
-		assert.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
-		return nil
-	}
-	evictMetaCacheToCapacityPercent = func(ctx context.Context, targetPercent int64) int64 {
-		metaCalled = true
-		assert.Equal(t, int64(80), targetPercent)
-		_, ok := ctx.Deadline()
-		assert.True(t, ok)
-		assert.NoError(t, ctx.Err())
-		return 0
-	}
-
-	makeRSSCacheEvictor(10*time.Millisecond)(context.Background(), 80)
-
-	assert.True(t, memCalled)
-	assert.True(t, metaCalled)
 }

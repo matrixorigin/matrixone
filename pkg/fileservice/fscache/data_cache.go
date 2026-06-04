@@ -16,10 +16,14 @@ package fscache
 
 import (
 	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
 )
 
 type CacheKey = pb.CacheKey
+
+var ErrCacheAdmissionRejected = moerr.NewInternalErrorNoCtx("cache admission rejected")
 
 type DataCache interface {
 	EnsureNBytes(ctx context.Context, want int)
@@ -32,5 +36,4 @@ type DataCache interface {
 	Flush(ctx context.Context)
 	Evict(ctx context.Context, done chan int64)
 	EvictToTargetWithWait(ctx context.Context, target int64) int64
-	ForceEvictWithWait(ctx context.Context, n int64) int64
 }

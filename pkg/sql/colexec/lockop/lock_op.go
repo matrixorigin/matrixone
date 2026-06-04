@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -170,6 +171,12 @@ func callNonBlocking(
 	}
 
 	lockOp.ctr.lockCount += int64(result.Batch.RowCount())
+	lockStart := time.Now()
+	metricv2.TxnLockOpBatchRowsHistogram.Observe(float64(result.Batch.RowCount()))
+	metricv2.TxnLockOpBatchBytesHistogram.Observe(float64(result.Batch.Size()))
+	defer func() {
+		metricv2.TxnLockOpBatchHoldDurationHistogram.Observe(time.Since(lockStart).Seconds())
+	}()
 	if err = performLock(result.Batch, proc, lockOp, analyzer, -1); err != nil {
 		return result, err
 	}
@@ -1211,6 +1218,39 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 		partitionColumnIndexInBatch:  partitionColIndexInBatch,
 	})
 	return lockOp
+}
+
+func (lockOp *LockOp) GetLockRowsExpressions() []*plan.Expr {
+	exprs := make([]*plan.Expr, 0, len(lockOp.targets))
+	for i := range lockOp.targets {
+		if lockOp.targets[i].lockRows != nil {
+			exprs = append(exprs, lockOp.targets[i].lockRows)
+		}
+	}
+	return exprs
+}
+
+func (lockOp *LockOp) RewriteLockRowsExpressions(rewrite func(*plan.Expr) (*plan.Expr, bool, error)) (bool, error) {
+	folded := false
+	targets := make([]lockTarget, len(lockOp.targets))
+	copy(targets, lockOp.targets)
+	for i := range targets {
+		if targets[i].lockRows == nil {
+			continue
+		}
+		expr, exprFolded, err := rewrite(targets[i].lockRows)
+		if err != nil {
+			return false, err
+		}
+		if exprFolded {
+			targets[i].lockRows = expr
+			folded = true
+		}
+	}
+	if folded {
+		lockOp.targets = targets
+	}
+	return folded, nil
 }
 
 // LockTable lock all table, used for delete, truncate and drop table

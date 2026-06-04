@@ -1,0 +1,50 @@
+-- basic scalar tests
+select json_valid('{"a": 1}');
+select json_valid('[1, 2, 3]');
+select json_valid('"hello"');
+select json_valid('null');
+select json_valid('true');
+select json_valid('false');
+select json_valid('42');
+select json_valid('3.14');
+select json_valid('{}');
+select json_valid('[]');
+select json_valid('hello');
+select json_valid('');
+select json_valid(null);
+
+-- nested JSON
+select json_valid('{"a": {"b": [1,2,3]}, "c": "hello"}');
+select json_valid('[{"a":1}, [2,3], "str"]');
+
+-- invalid JSON
+select json_valid('{invalid');
+select json_valid('[1,2,');
+select json_valid('{"a":}');
+select json_valid('{key: "no_quotes"}');
+select json_valid("'single quote'");
+
+-- via json_object / json_array
+select json_valid(json_object('a', 1, 'b', 2));
+select json_valid(json_array(1, 2, 3));
+
+-- varchar column
+drop table if exists t1;
+create table t1 (a varchar(100));
+insert into t1 values ('{"a":1}'), ('[1,2,3]'), ('"hello"'), ('{}'), ('invalid'), (null), ('');
+select a, json_valid(a) from t1;
+
+-- json column
+drop table if exists t2;
+create table t2 (a json);
+insert into t2 values ('{"a":1}'), ('[1,2,3]'), ('"hello"'), ('{}'), ('[]'), (null);
+select a, json_valid(a) from t2;
+
+-- where clause
+select * from t1 where json_valid(a);
+
+-- having
+select json_valid(a), count(*) from t1 group by json_valid(a) order by 1;
+
+drop table t1;
+drop table t2;
