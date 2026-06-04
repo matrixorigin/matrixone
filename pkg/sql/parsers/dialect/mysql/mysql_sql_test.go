@@ -3213,6 +3213,10 @@ var (
 			output: "create table t1 (a vecf32(3), b vecf64(3), c int)",
 		},
 		{
+			input:  "create table t1 (id bigint primary key, embedding vecf32(3), payload json, tags array(varchar(20)))",
+			output: "create table t1 (id bigint primary key, embedding vecf32(3), payload json, tags array(varchar(20)))",
+		},
+		{
 			input:  "alter table tbl1 drop constraint fk_name",
 			output: "alter table tbl1 drop foreign key fk_name",
 		},
