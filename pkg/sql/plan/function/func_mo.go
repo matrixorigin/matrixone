@@ -1302,6 +1302,16 @@ func normalizeTypedArrayElementName(name string) string {
 	switch strings.TrimSpace(name) {
 	case "bool", "boolean":
 		return "bool"
+	case "int1":
+		return "tinyint"
+	case "int2":
+		return "smallint"
+	case "int3":
+		return "mediumint"
+	case "int4":
+		return "int"
+	case "int8":
+		return "bigint"
 	case "tinyint", "smallint", "int", "integer", "mediumint", "bigint":
 		if name == "integer" {
 			return "int"
@@ -1370,7 +1380,7 @@ func typedArrayElementCompatible(spec typedArrayElementSpec, elem bytejson.ByteJ
 	case "text":
 		return elem.Type == bytejson.TpCodeString
 	case "binary", "varbinary":
-		return (elem.Type == bytejson.TpCodeString || elem.Type == bytejson.TpCodeBlob) && jsonStringFitsWidth(elem, spec.width)
+		return (elem.Type == bytejson.TpCodeString || elem.Type == bytejson.TpCodeBlob) && jsonBinaryStringFitsWidth(elem, spec.width)
 	case "blob":
 		return elem.Type == bytejson.TpCodeString || elem.Type == bytejson.TpCodeBlob
 	case "date":
@@ -1438,6 +1448,17 @@ func jsonStringFitsWidth(elem bytejson.ByteJson, width int) bool {
 		return true
 	}
 	return utf8.RuneCount(elem.GetString()) <= width
+}
+
+func jsonBinaryStringFitsWidth(elem bytejson.ByteJson, width int) bool {
+	if width < 0 {
+		return true
+	}
+	s, err := elem.Unquote()
+	if err != nil {
+		return false
+	}
+	return len(s) <= width
 }
 
 func jsonStringParses(elem bytejson.ByteJson, parse func(string) bool) bool {

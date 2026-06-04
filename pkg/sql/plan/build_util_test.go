@@ -184,6 +184,31 @@ func TestGetTypeFromAstArrayValidatesElementType(t *testing.T) {
 	require.Contains(t, err.Error(), "typeLen is over the MaxVarcharLen")
 }
 
+func TestGetTypeFromAstArrayRejectsUnsupportedElementType(t *testing.T) {
+	tests := []string{
+		"create table t (tags array(bit))",
+		"create table t (tags array(enum('a','b')))",
+		"create table t (tags array(vecf32(3)))",
+		"create table t (tags array(array(bit)))",
+	}
+
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+
+			createTable, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			colDef, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+			require.True(t, ok)
+
+			_, err = getTypeFromAst(context.Background(), colDef.Type)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "unsupported ARRAY element type")
+		})
+	}
+}
+
 func TestApplyColumnAttributesToTypeRejectsNonGeometrySRID(t *testing.T) {
 	tests := []string{
 		"create table t (a int srid 4326)",

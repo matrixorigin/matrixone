@@ -230,6 +230,9 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			if _, err := getTypeFromAst(ctx, n.InternalType.ArrayContents); err != nil {
 				return plan.Type{}, err
 			}
+			if err := validateTypedArrayElementType(ctx, n.InternalType.ArrayContents); err != nil {
+				return plan.Type{}, err
+			}
 			arrayType := tree.String(&n.InternalType, dialect.MYSQL)
 			return plan.Type{Id: int32(types.T_json), Enumvalues: arrayType}, nil
 		case defines.MYSQL_TYPE_GEOMETRY:

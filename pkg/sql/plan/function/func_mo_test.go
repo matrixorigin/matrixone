@@ -154,7 +154,7 @@ func TestCastGeometryToSubtypeRejectTooManyPoints(t *testing.T) {
 
 func TestCastJsonToArray(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	jsonTexts := []string{`["red","blue",null]`, `[[1,2],[3,null]]`}
+	jsonTexts := []string{`["red","blue",null]`, `[[1,2],[3,null]]`, `[127]`}
 	encoded := makeJSONEncodedFromText(t, jsonTexts, nil)
 
 	testCases := []tcTemp{
@@ -170,9 +170,17 @@ func TestCastJsonToArray(t *testing.T) {
 			info: "nested integer array accepts nested arrays",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"array(array(int))"}, []bool{false}),
-				NewFunctionTestInput(types.T_json.ToType(), encoded[1:], []bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(), encoded[1:2], []bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_json.ToType(), false, encoded[1:], []bool{false}),
+			expect: NewFunctionTestResult(types.T_json.ToType(), false, encoded[1:2], []bool{false}),
+		},
+		{
+			info: "integer alias array accepts matching elements",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"array(int1)"}, []bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(), encoded[2:3], []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_json.ToType(), false, encoded[2:3], []bool{false}),
 		},
 	}
 
@@ -210,6 +218,7 @@ func TestCastJsonToArrayRejectsIncompatibleElement(t *testing.T) {
 		{name: "string in int array", arrayType: "array(int)", jsonText: `["1"]`},
 		{name: "number in varchar array", arrayType: "array(varchar(20))", jsonText: `[1]`},
 		{name: "varchar width", arrayType: "array(varchar(3))", jsonText: `["toolong"]`},
+		{name: "varbinary byte width", arrayType: "array(varbinary(3))", jsonText: "[\"\u00e9\u00e9\"]"},
 		{name: "scalar in nested array", arrayType: "array(array(int))", jsonText: `[[1],2]`},
 	}
 
