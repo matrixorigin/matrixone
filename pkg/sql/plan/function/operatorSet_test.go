@@ -704,6 +704,44 @@ func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {
 	}
 }
 
+// issue #24565: COALESCE over decimal branches with different scales must align
+// scale/width across all branches, otherwise the result inherits the first
+// branch's scale while carrying another branch's raw value (magnified result).
+func Test_CoalesceCheck_DecimalScaleAlignment(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_decimal64}},
+		{args: []types.T{types.T_decimal128}},
+	}
+	inputs := []types.Type{
+		types.New(types.T_decimal128, 23, 2),
+		types.New(types.T_decimal128, 38, 7),
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, 1, result.idx) // decimal128 overload
+	require.Len(t, result.finalType, len(inputs))
+	for _, typ := range result.finalType {
+		require.Equal(t, types.T_decimal128, typ.Oid)
+		require.Equal(t, int32(7), typ.Scale)
+		require.Equal(t, int32(38), typ.Width)
+	}
+}
+
+func Test_CoalesceCheck_DecimalAligned_NoCast(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_decimal64}},
+		{args: []types.T{types.T_decimal128}},
+	}
+	inputs := []types.Type{
+		types.New(types.T_decimal128, 20, 4),
+		types.New(types.T_decimal128, 20, 4),
+	}
+	result := coalesceCheck(overloads, inputs)
+	// Already aligned -> no alignment cast needed, plain direct match.
+	require.Equal(t, succeedMatched, result.status)
+	require.Equal(t, 1, result.idx)
+}
+
 func Test_CaseWhen_WithNullAndStringComparison(t *testing.T) {
 	// Test CASE WHEN with NULL value compared to string
 	// This should not error, matching MySQL behavior
