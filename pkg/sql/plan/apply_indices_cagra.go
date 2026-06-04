@@ -39,6 +39,7 @@ type cagraIndexContext struct {
 	params       string
 	nThread      int64
 	batchWindow  int64
+	gpuMultiSim  int64
 }
 
 func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*cagraIndexContext, error) {
@@ -101,6 +102,11 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 		return nil, err
 	}
 
+	gpuMultiSim, err := builder.compCtx.ResolveVariable("gpu_multi_simulation", true, false)
+	if err != nil {
+		return nil, err
+	}
+
 	return &cagraIndexContext{
 		vecCtx:       vecCtx,
 		metaDef:      metaDef,
@@ -113,6 +119,7 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 		params:       idxDef.IndexAlgoParams,
 		nThread:      nThread.(int64),
 		batchWindow:  batchWindow.(int64),
+		gpuMultiSim:  gpuMultiSim.(int64),
 	}, nil
 }
 
@@ -135,14 +142,15 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		return nodeID, err
 	}
 
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d}`,
+	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d, "gpu_multi_simulation": %d}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
 		cagraCtx.metaDef.IndexTableName,
 		cagraCtx.idxDef.IndexTableName,
 		cagraCtx.nThread,
 		cagraCtx.origFuncName,
-		cagraCtx.batchWindow)
+		cagraCtx.batchWindow,
+		cagraCtx.gpuMultiSim)
 
 	// Predicate pushdown on INCLUDE columns and the primary key: peel
 	// filters that reference only INCLUDE columns (or the PK, routed to

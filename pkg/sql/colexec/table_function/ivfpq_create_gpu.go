@@ -330,6 +330,9 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 
 		// ---- GPU devices ----
 		devices, _ := cuvs.GetGpuDeviceList()
+		// test-only: present N logical GPUs (all on device 0) so SHARDED / REPLICATED
+		// modes can be built on a single-GPU host. No-op when gpu_multi_simulation < 2.
+		devices = vectorindex.SimulateDevices(devices, u.tblcfg.GpuMultiSimulation)
 
 		nthread := uint32(vectorindex.GetConcurrency(u.tblcfg.ThreadsBuild))
 		uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)

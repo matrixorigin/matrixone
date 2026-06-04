@@ -15,6 +15,29 @@ CPU-only BVT run is not gated on a GPU.
 | `vector_ivfpq_async.sql` | IVF-PQ | `gpu_cases/pessimistic_transaction/vector/` | ASYNC build via InitSQL + ISCP CDC INSERT/DELETE/UPDATE into the tag=1 overflow |
 | `vector_cagra_load.sql` | CAGRA | `gpu_cases/pessimistic_transaction/vector/` | real 128-dim SIFT data: build over 10k rows, append another 10k via CDC, search both layers |
 | `vector_ivfpq_load.sql` | IVF-PQ | `gpu_cases/pessimistic_transaction/vector/` | real 128-dim SIFT data: build over 10k rows, append another 10k via CDC, search both layers |
+| `vector_cagra_sharded.sql` | CAGRA | `gpu_cases/vector/` | `distribution_mode 'sharded'` (2-way + 3-way) via `gpu_multi_simulation` — shard split + top-k merge, exact-match search |
+| `vector_ivfpq_sharded.sql` | IVF-PQ | `gpu_cases/vector/` | `distribution_mode 'sharded'` (2-way) via `gpu_multi_simulation` — per-shard codebook + merge, exact-match search |
+| `vector_cagra_replicated.sql` | CAGRA | `gpu_cases/vector/` | `distribution_mode 'replicated'` via `gpu_multi_simulation` — full-copy replicas, load-balanced search |
+| `vector_ivfpq_replicated.sql` | IVF-PQ | `gpu_cases/vector/` | `distribution_mode 'replicated'` via `gpu_multi_simulation` — full-copy replicas, load-balanced search |
+
+## Distribution modes on a single GPU (`gpu_multi_simulation`)
+
+The `*_sharded.sql` / `*_replicated.sql` cases exercise the multi-GPU dispatch
+paths (`distribution_mode 'sharded'` / `'replicated'`) on a one-GPU host. The
+test-only session variable `gpu_multi_simulation = N` makes the index present
+**N logical GPUs all mapped to physical device 0** (`[0,0,…]`), so the shard /
+replica fan-out, merge, and per-rank locking run for real — see
+`pkg/vectorindex.SimulateDevices`. The same value must be set for the
+`CREATE INDEX` and the `SELECT` so build and search agree on the topology; each
+case resets it to `0` at the end. This validates the **orchestration** logic,
+not true multi-device behavior (separate VRAM / NVLink / real parallelism).
+
+SHARDED needs enough rows: the splitter rounds each shard down to a multiple of
+**32 rows** (word-aligned deleted bitset), so a shard with < 32 rows is empty.
+The sharded cases therefore use **128 rows** (64/64 for 2-way, 32/32/64 for
+3-way); the replicated cases keep the 20-row set since each replica is a full
+copy. Per-rank index/dataset state is keyed by logical **rank** (not device id)
+so the N copies coexist on device 0 instead of colliding.
 
 ## Layout convention
 

@@ -28,6 +28,23 @@ func TestValidDistributionMode(t *testing.T) {
 	require.False(t, ValidDistributionMode(""))
 }
 
+func TestSimulateDevices(t *testing.T) {
+	real := []int{0}
+	// n < 2 is a no-op: the real device list is returned unchanged.
+	require.Equal(t, real, SimulateDevices(real, 0))
+	require.Equal(t, real, SimulateDevices(real, 1))
+	multi := []int{0, 1, 2}
+	require.Equal(t, multi, SimulateDevices(multi, 1))
+
+	// n >= 2 presents N logical GPUs, all mapped to physical device 0.
+	require.Equal(t, []int{0, 0}, SimulateDevices([]int{0}, 2))
+	require.Equal(t, []int{0, 0, 0}, SimulateDevices([]int{0}, 3))
+
+	// Even on a real multi-GPU host the simulation forces every logical rank
+	// onto device 0 so it stays deterministic on a single-GPU machine.
+	require.Equal(t, []int{0, 0}, SimulateDevices([]int{0, 1, 2, 3}, 2))
+}
+
 func TestCdc(t *testing.T) {
 	key := int64(0)
 	v := []float32{0, 1, 2}

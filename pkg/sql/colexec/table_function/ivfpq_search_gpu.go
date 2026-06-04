@@ -57,6 +57,9 @@ var newIvfpqAlgo = newIvfpqAlgoFn
 
 func newIvfpqAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
 	devices, _ := cuvs.GetGpuDeviceList()
+	// test-only: mirror the build-side device simulation so search loads the same
+	// SHARDED / REPLICATED topology. No-op when gpu_multi_simulation < 2.
+	devices = vectorindex.SimulateDevices(devices, tblcfg.GpuMultiSimulation)
 	switch metric.QuantizationType(idxcfg.CuvsIvfpq.Quantization) {
 	case metric.Quantization_F16:
 		return ivfpqPkg.NewIvfpqSearch[cuvs.Float16](idxcfg, tblcfg, devices)

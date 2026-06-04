@@ -61,8 +61,13 @@ namespace matrixone {
 // hold the pool alive for process lifetime, so we cannot free into a destroyed
 // pool from a `device_uvector` whose lifetime crosses cuvs_worker_t teardown.
 // On process exit the OS reclaims everything.
+// Upper bound on GPU count, so the per-device helpers below can use plain static
+// arrays indexed by device_id (lock-free O(1) lookup; std::mutex / once_flag are
+// non-movable, so a map/vector won't hold them directly). A device_id outside
+// [0, kMaxDevices) falls back to a shared slot — correct, just over-serialized.
+inline constexpr int kMaxDevices = 16;
+
 inline void ensure_rmm_pool_for_device(int device_id) {
-    constexpr int kMaxDevices = 16;
     static std::once_flag flags[kMaxDevices];
     static std::mutex keepalive_mu;
     static std::vector<std::shared_ptr<void>> keepalives;
@@ -97,6 +102,31 @@ inline void ensure_rmm_pool_for_device(int device_id) {
                       << std::endl;
         }
     });
+}
+
+// Per-physical-device serialization of index-mutating cuVS calls (build AND
+// extend). cuVS build/extend (ivf_flat / ivf_pq kmeans, cagra graph) are NOT
+// safe to run concurrently on the SAME physical GPU — they use device-global
+// workspace in raft/cuVS (e.g. kmeans_balanced::arrange_fine_clusters), so two
+// running at once on one device SIGSEGV.
+//
+// The lock is process-wide (one static array per process), so it serializes
+// EVERY caller targeting a given physical device — not just the REPLICATED /
+// SHARDED ranks of one index, but also concurrent CREATE INDEX / async-CDC
+// builds and extends issued from different sessions onto the same GPU (there is
+// no higher-level build queue in MO). On real multi-GPU, distinct devices take
+// distinct mutexes, so independent builds still run fully in parallel; only
+// same-device work serializes — unavoidable, since one GPU cannot build two
+// indexes at once regardless. The gpu_multi_simulation device list [0,0,…] maps
+// every rank to device 0, which is what exercises this path on a single GPU.
+//
+// Acquire ONLY around the cuVS build/extend call — never across this->mutex_ or
+// other locks. Search is read-only and intentionally stays lock-free here.
+inline std::mutex& device_build_mutex(int device_id) {
+    static std::mutex muxes[kMaxDevices];
+    static std::mutex fallback;
+    if (device_id < 0 || device_id >= kMaxDevices) return fallback;
+    return muxes[device_id];
 }
 
 // Process-static raw cuda_memory_resource that bypasses the per-device pool.

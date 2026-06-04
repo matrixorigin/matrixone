@@ -124,6 +124,10 @@ type IndexTableConfig struct {
 
 	// GPU related
 	BatchWindow int64 `json:"batch_window"`
+	// GpuMultiSimulation is a test-only knob: when >= 2, the device list is
+	// replaced with physical device 0 repeated N times so SHARDED / REPLICATED
+	// distribution modes can be exercised on a single-GPU host. 0/1 = real devices.
+	GpuMultiSimulation int64 `json:"gpu_multi_simulation"`
 }
 
 // HNSW specified parameters
@@ -347,4 +351,18 @@ func GetConcurrencyForBuild(nthread int64) int64 {
 		return nthread
 	}
 	return int64(runtime.NumCPU())
+}
+
+// SimulateDevices is a test-only seam for exercising SHARDED / REPLICATED
+// distribution modes on a single-GPU host. When n >= 2 it returns a device list
+// of physical device 0 repeated n times ([0,0,...]), so the cuVS worker pool
+// spins up n logical ranks (each with its own stream/handle) all on device 0.
+// When n < 2 the real device list is returned unchanged.
+func SimulateDevices(devices []int, n int64) []int {
+	if n < 2 {
+		return devices
+	}
+	sim := make([]int, n)
+	// all zeros -> every logical rank maps to physical device 0
+	return sim
 }

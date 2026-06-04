@@ -335,15 +335,21 @@ public:
             raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
             raft::resource::sync_stream(*res);
 
-            auto local_idx = std::make_unique<ivf_flat_index>(cuvs::neighbors::ivf_flat::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device)));
+            // Serialize concurrent builds on the same physical device (cuVS kmeans
+            // is not safe to run twice at once on one GPU — see device_build_mutex).
+            std::unique_ptr<ivf_flat_index> local_idx;
+            {
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                local_idx = std::make_unique<ivf_flat_index>(cuvs::neighbors::ivf_flat::build(
+                    *res, index_params, raft::make_const_mdspan(dataset_device)));
+            }
 
             handle.set_index_ptr(static_cast<const ivf_flat_index*>(local_idx.get()));
 
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<ivf_flat_index>(std::move(local_idx));
-                this->replicated_datasets_[handle.get_device_id()] = std::move(dataset_storage);
+                this->replicated_indices_[handle.get_rank()] = std::shared_ptr<ivf_flat_index>(std::move(local_idx));
+                this->replicated_datasets_[handle.get_rank()] = std::move(dataset_storage);
             }
             handle.sync();
         } else if (this->dist_mode == DistributionMode_SHARDED) {
@@ -375,15 +381,21 @@ public:
                        raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data() + (start_row * this->dimension), num_rows, this->dimension));
             raft::resource::sync_stream(*res);
 
-            auto local_idx = std::make_unique<ivf_flat_index>(cuvs::neighbors::ivf_flat::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device)));
+            // Serialize concurrent builds on the same physical device (cuVS kmeans
+            // is not safe to run twice at once on one GPU — see device_build_mutex).
+            std::unique_ptr<ivf_flat_index> local_idx;
+            {
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                local_idx = std::make_unique<ivf_flat_index>(cuvs::neighbors::ivf_flat::build(
+                    *res, index_params, raft::make_const_mdspan(dataset_device)));
+            }
 
             handle.set_index_ptr(static_cast<const ivf_flat_index*>(local_idx.get()));
 
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<ivf_flat_index>(std::move(local_idx));
-                this->replicated_datasets_[handle.get_device_id()] = std::move(dataset_storage);
+                this->replicated_indices_[handle.get_rank()] = std::shared_ptr<ivf_flat_index>(std::move(local_idx));
+                this->replicated_datasets_[handle.get_rank()] = std::move(dataset_storage);
             }
             handle.sync();
         } else {
@@ -400,8 +412,12 @@ public:
             raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
             raft::resource::sync_stream(*res);
 
-            auto new_idx = std::make_unique<ivf_flat_index>(cuvs::neighbors::ivf_flat::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device)));
+            std::unique_ptr<ivf_flat_index> new_idx;
+            {
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                new_idx = std::make_unique<ivf_flat_index>(cuvs::neighbors::ivf_flat::build(
+                    *res, index_params, raft::make_const_mdspan(dataset_device)));
+            }
 
             handle.sync();
 
@@ -432,38 +448,50 @@ public:
             ivf_flat_index* idx_ptr;
             {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                auto it = this->replicated_indices_.find(handle.get_device_id());
+                auto it = this->replicated_indices_.find(handle.get_rank());
                 if (it == this->replicated_indices_.end())
                     throw std::runtime_error("extend_internal: no index for device");
                 idx_ptr = static_cast<ivf_flat_index*>(it->second.get());
             }
-            cuvs::neighbors::ivf_flat::extend(*res,
-                raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            {
+                // Serialize index-mutating cuVS calls on the same physical device.
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                cuvs::neighbors::ivf_flat::extend(*res,
+                    raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            }
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->replicated_datasets_.erase(handle.get_device_id());
+                this->replicated_datasets_.erase(handle.get_rank());
             }
         } else if (this->dist_mode == DistributionMode_SHARDED) {
             // Only the last shard's device calls this; seq_ids are already shard-local.
             ivf_flat_index* idx_ptr;
             {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                auto it = this->replicated_indices_.find(handle.get_device_id());
+                auto it = this->replicated_indices_.find(handle.get_rank());
                 if (it == this->replicated_indices_.end())
                     throw std::runtime_error("extend_internal: no SHARDED index for device");
                 idx_ptr = static_cast<ivf_flat_index*>(it->second.get());
             }
-            cuvs::neighbors::ivf_flat::extend(*res,
-                raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            {
+                // Serialize index-mutating cuVS calls on the same physical device.
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                cuvs::neighbors::ivf_flat::extend(*res,
+                    raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            }
             {
                 // Erase only the last shard's stale build dataset; other shards' entries remain valid.
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->replicated_datasets_.erase(handle.get_device_id());
+                this->replicated_datasets_.erase(handle.get_rank());
             }
         } else {
             if (!index_) throw std::runtime_error("extend_internal: index not built");
-            cuvs::neighbors::ivf_flat::extend(*res,
-                raft::make_const_mdspan(new_vecs_device), indices_opt, index_.get());
+            {
+                // Serialize index-mutating cuVS calls on the same physical device.
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                cuvs::neighbors::ivf_flat::extend(*res,
+                    raft::make_const_mdspan(new_vecs_device), indices_opt, index_.get());
+            }
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->dataset_device_ptr_.reset();
@@ -490,38 +518,50 @@ public:
             ivf_flat_index* idx_ptr;
             {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                auto it = this->replicated_indices_.find(handle.get_device_id());
+                auto it = this->replicated_indices_.find(handle.get_rank());
                 if (it == this->replicated_indices_.end())
                     throw std::runtime_error("extend_internal_float: no index for device");
                 idx_ptr = static_cast<ivf_flat_index*>(it->second.get());
             }
-            cuvs::neighbors::ivf_flat::extend(*res,
-                raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            {
+                // Serialize index-mutating cuVS calls on the same physical device.
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                cuvs::neighbors::ivf_flat::extend(*res,
+                    raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            }
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->replicated_datasets_.erase(handle.get_device_id());
+                this->replicated_datasets_.erase(handle.get_rank());
             }
         } else if (this->dist_mode == DistributionMode_SHARDED) {
             // Only the last shard's device calls this; seq_ids are already shard-local.
             ivf_flat_index* idx_ptr;
             {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                auto it = this->replicated_indices_.find(handle.get_device_id());
+                auto it = this->replicated_indices_.find(handle.get_rank());
                 if (it == this->replicated_indices_.end())
                     throw std::runtime_error("extend_internal_float: no SHARDED index for device");
                 idx_ptr = static_cast<ivf_flat_index*>(it->second.get());
             }
-            cuvs::neighbors::ivf_flat::extend(*res,
-                raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            {
+                // Serialize index-mutating cuVS calls on the same physical device.
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                cuvs::neighbors::ivf_flat::extend(*res,
+                    raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            }
             {
                 // Erase only the last shard's stale build dataset; other shards' entries remain valid.
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->replicated_datasets_.erase(handle.get_device_id());
+                this->replicated_datasets_.erase(handle.get_rank());
             }
         } else {
             if (!index_) throw std::runtime_error("extend_internal_float: index not built");
-            cuvs::neighbors::ivf_flat::extend(*res,
-                raft::make_const_mdspan(new_vecs_device), indices_opt, index_.get());
+            {
+                // Serialize index-mutating cuVS calls on the same physical device.
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                cuvs::neighbors::ivf_flat::extend(*res,
+                    raft::make_const_mdspan(new_vecs_device), indices_opt, index_.get());
+            }
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->dataset_device_ptr_.reset();
@@ -821,7 +861,7 @@ public:
             {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 if (!this->replicated_indices_.empty()) {
-                    auto it = this->replicated_indices_.find(handle.get_device_id());
+                    auto it = this->replicated_indices_.find(handle.get_rank());
                     if (it != this->replicated_indices_.end()) {
                         auto shared_idx = std::static_pointer_cast<ivf_flat_index>(it->second);
                         local_index = shared_idx.get();
@@ -1015,7 +1055,7 @@ public:
             {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 if (!this->replicated_indices_.empty()) {
-                    auto it = this->replicated_indices_.find(handle.get_device_id());
+                    auto it = this->replicated_indices_.find(handle.get_rank());
                     if (it != this->replicated_indices_.end()) {
                         auto shared_idx = std::static_pointer_cast<ivf_flat_index>(it->second);
                         local_index = shared_idx.get();
@@ -1176,7 +1216,7 @@ public:
                 if (this->dist_mode == DistributionMode_SINGLE_GPU) {
                     index_ = std::move(local_idx);
                 } else if (this->dist_mode == DistributionMode_REPLICATED) {
-                    this->replicated_indices_[handle.get_device_id()] =
+                    this->replicated_indices_[handle.get_rank()] =
                         std::shared_ptr<ivf_flat_index>(std::move(local_idx));
                 } else if (this->dist_mode == DistributionMode_SHARDED) {
                     throw std::runtime_error("SHARDED mode load is not yet supported in cuVS-MatrixOne");
@@ -1231,8 +1271,8 @@ public:
         } else if (this->dist_mode == DistributionMode_REPLICATED) {
             uint64_t job_id = this->worker->submit_main(
                 [&](raft_handle_wrapper_t& handle) -> std::any {
-                    int dev_id = handle.get_device_id();
-                    auto it = this->replicated_indices_.find(dev_id);
+                    int key = handle.get_rank();
+                    auto it = this->replicated_indices_.find(key);
                     if (it == this->replicated_indices_.end())
                         it = this->replicated_indices_.begin();
                     if (it == this->replicated_indices_.end())
@@ -1252,7 +1292,7 @@ public:
                 [&](raft_handle_wrapper_t& handle) -> std::any {
                     int rank = handle.get_rank();
                     std::string shard_file = dir + "/shard_" + std::to_string(rank) + ".bin";
-                    auto it = this->replicated_indices_.find(handle.get_device_id());
+                    auto it = this->replicated_indices_.find(handle.get_rank());
                     if (it != this->replicated_indices_.end()) {
                         cuvs::neighbors::ivf_flat::serialize(
                             *(handle.get_raft_resources()), shard_file,
@@ -1332,7 +1372,7 @@ public:
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                    this->replicated_indices_[handle.get_device_id()] =
+                    this->replicated_indices_[handle.get_rank()] =
                         std::shared_ptr<ivf_flat_index>(std::move(local_idx));
                     return std::any();
                 }
@@ -1351,7 +1391,7 @@ public:
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                    this->replicated_indices_[handle.get_device_id()] =
+                    this->replicated_indices_[handle.get_rank()] =
                         std::shared_ptr<ivf_flat_index>(std::move(local_idx));
                     return std::any();
                 }
@@ -1389,7 +1429,7 @@ public:
             auto res = handle.get_raft_resources();
             const ivf_flat_index* local_index = nullptr;
             if (!this->replicated_indices_.empty()) {
-                auto it = this->replicated_indices_.find(handle.get_device_id());
+                auto it = this->replicated_indices_.find(handle.get_rank());
                 if (it != this->replicated_indices_.end()) {
                     local_index = std::static_pointer_cast<ivf_flat_index>(it->second).get();
                 }

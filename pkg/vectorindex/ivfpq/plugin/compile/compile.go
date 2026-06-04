@@ -371,6 +371,12 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 	}
 	cfg.IndexCapacity = idxcap.(int64)
 
+	gpusim, err := ctx.ResolveVariable("gpu_multi_simulation", true, false)
+	if err != nil {
+		return nil, err
+	}
+	cfg.GpuMultiSimulation = gpusim.(int64)
+
 	cfgbytes, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, err
