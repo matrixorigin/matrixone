@@ -8648,7 +8648,14 @@ func expandRoleSetWithInheritedRoles(ctx context.Context, bh BackgroundExec, rol
 }
 
 func shouldExpandCurrentUserRolesForPrivilegeGrant(privType PrivilegeType, astObjType tree.ObjectType) bool {
-	return privType.Scope() == PrivilegeScopeDatabase && astObjType == tree.OBJECT_TYPE_DATABASE
+	switch privType.Scope() {
+	case PrivilegeScopeDatabase:
+		return astObjType == tree.OBJECT_TYPE_DATABASE
+	case PrivilegeScopeTable:
+		return astObjType == tree.OBJECT_TYPE_TABLE || astObjType == tree.OBJECT_TYPE_VIEW
+	default:
+		return false
+	}
 }
 
 // determineUserCanGrantPrivilegesToOthers decides the privileges can be granted to others.

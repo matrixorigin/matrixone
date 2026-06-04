@@ -753,6 +753,57 @@ func TestUpdateFallbackMultiTargetGeneratedColumnsKeepProjectLayout(t *testing.T
 	assertFallbackUpdateProjectLength(t, query, len(mock.ctxt.tables["dept"].Cols)+2)
 }
 
+// TestUpdateFallbackProjectLayoutDeterministic guards the per-target column-block
+// order of the fallback UPDATE planner. A multi-column SET must produce a
+// byte-identical project layout on every build; before the fix, ranging the
+// updateKeys map (column -> expr) appended the update expressions to the project
+// list in random order across runs. A fresh optimizer per iteration rebuilds the
+// maps, and Go randomizes map iteration, so a regression here fails reliably.
+func TestUpdateFallbackProjectLayoutDeterministic(t *testing.T) {
+	// Multi-target (emp, dept) exercises the table-block order; the two plain
+	// (non-indexed) update columns on emp (mgr, sal) exercise the per-target
+	// column order. Both were Go-map-ordered before the fix.
+	const sql = "UPDATE emp, dept SET emp.mgr = 1, emp.sal = 2, dept.loc = 'x' WHERE emp.deptno = dept.deptno"
+	var want []string
+	for iter := 0; iter < 16; iter++ {
+		mock := NewMockOptimizer(true)
+		logicPlan, err := runOneStmt(mock, t, sql)
+		if err != nil {
+			t.Fatalf("build fallback update (iter %d): %v", iter, err)
+		}
+		got := fallbackUpdateProjectLayout(logicPlan.GetQuery())
+		if len(got) == 0 {
+			t.Fatalf("iter %d: no fallback update project node found", iter)
+		}
+		if iter == 0 {
+			want = got
+			continue
+		}
+		assert.Equal(t, want, got,
+			"fallback UPDATE project layout must be deterministic across builds (iter %d)", iter)
+	}
+}
+
+// fallbackUpdateProjectLayout returns a stable signature of every fallback UPDATE
+// project node (a PROJECT over a SINK_SCAN): the ordered string form of each
+// project expression. query.Nodes is built in a deterministic index order, so
+// any cross-build difference reflects nondeterministic plan construction.
+func fallbackUpdateProjectLayout(query *Query) []string {
+	var layout []string
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 {
+			continue
+		}
+		if query.Nodes[node.Children[0]].NodeType != plan.Node_SINK_SCAN {
+			continue
+		}
+		for _, e := range node.ProjectList {
+			layout = append(layout, e.String())
+		}
+	}
+	return layout
+}
+
 func TestUpdateFallbackGeneratedColumnsUseDefaultAfterRewrite(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockDefaultExpr(t, mock, "emp", "job", "job-default")

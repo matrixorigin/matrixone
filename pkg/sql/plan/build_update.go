@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"sort"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -308,26 +309,34 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 			}
 		}
 
-		// Iterate columns in table-definition order rather than ranging over the
-		// updateKeys map directly: map iteration is randomized, which made the
-		// appended update-expression positions (and thus the whole project
-		// layout) nondeterministic across plan builds.
-		for _, coldef := range tableDef.Cols {
-			updateKey, ok := updateKeys[coldef.Name]
-			if !ok {
-				continue
-			}
-			if isEnumOrSetPlanType(&coldef.Typ) {
-				updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)
-				if err != nil {
-					return 0, nil, err
+		// Emit the update columns in a deterministic order. updateKeys is a Go
+		// map, so ranging it directly appended the update exprs to the project
+		// list (and recorded updateColPosMap) in random order across runs — the
+		// per-target column-block half of the same nondeterministic-layout bug
+		// the table-order fix in getUpdateTableInfo addresses. Sorting the column
+		// names emits exactly the same set in a stable order. (Order only affects
+		// layout, not correctness: downstream looks columns up by name via
+		// updateColPosMap, not by position.)
+		updateColNames := make([]string, 0, len(updateKeys))
+		for colName := range updateKeys {
+			updateColNames = append(updateColNames, colName)
+		}
+		sort.Strings(updateColNames)
+		for _, colName := range updateColNames {
+			updateKey := updateKeys[colName]
+			for _, coldef := range tableDef.Cols {
+				if coldef.Name == colName && isEnumOrSetPlanType(&coldef.Typ) {
+					updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)
+					if err != nil {
+						return 0, nil, err
+					}
 				}
 			}
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: updateKey,
 			})
-			updateColPosMap[coldef.Name] = offset
-			if _, ok := pkNameMap[coldef.Name]; ok {
+			updateColPosMap[colName] = offset
+			if _, ok := pkNameMap[colName]; ok {
 				updatePkColCount++
 			}
 			offset++
