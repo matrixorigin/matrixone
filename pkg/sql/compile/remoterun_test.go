@@ -756,6 +756,18 @@ func Test_checkPipelineStandaloneExecutableAtRemote(t *testing.T) {
 		require.False(t, checkPipelineStandaloneExecutableAtRemote(s0))
 	}
 
+	// a root dispatch is a legal remote-run output boundary and runs on the coordinator side.
+	{
+		s0 := &Scope{
+			Proc: proc.NewContextChildProc(0),
+		}
+		op1 := dispatch.NewArgument()
+		op1.LocalRegs = []*process.WaitRegister{{}}
+		s0.RootOp = op1
+
+		require.True(t, checkPipelineStandaloneExecutableAtRemote(s0))
+	}
+
 	// a pipeline holds an invalid connector should return false.
 	{
 		// s0, pre: s1
@@ -1024,6 +1036,52 @@ func Test_rewriteRemoteRunLocalFallbacksUpdatesRemainingRemoteReceiver(t *testin
 	require.Equal(t, localAddr, remoteReceiver.RemoteReceivRegInfos[0].FromAddr)
 }
 
+func Test_rewriteRemoteRunLocalFallbacksUpdatesRemoteReceiverForRemoteRootDispatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	localAddr := "cn-local:6001"
+	sourceAddr := "cn-source:6001"
+	targetAddr := "cn-target:6001"
+
+	remoteReceiver := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: targetAddr, Mcpu: 1},
+		Proc:     proc.NewContextChildProc(1),
+		RootOp:   merge.NewArgument(),
+	}
+	receiverUuid, err := uuid.NewV7()
+	require.NoError(t, err)
+	remoteReceiver.RemoteReceivRegInfos = []RemoteReceivRegInfo{{
+		Idx:      0,
+		Uuid:     receiverUuid,
+		FromAddr: sourceAddr,
+	}}
+
+	source := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: sourceAddr, Mcpu: 1},
+		Proc:     proc.NewContextChildProc(0),
+	}
+	sourceDispatch := dispatch.NewArgument()
+	sourceDispatch.FuncId = dispatch.SendToAllFunc
+	sourceDispatch.LocalRegs = []*process.WaitRegister{{
+		Ch2: make(chan process.PipelineSignal, 1),
+	}}
+	sourceDispatch.RemoteRegs = []colexec.ReceiveInfo{{
+		Uuid:     receiverUuid,
+		NodeAddr: targetAddr,
+	}}
+	source.RootOp = sourceDispatch
+
+	require.True(t, checkPipelineStandaloneExecutableAtRemote(source))
+
+	rewriteRemoteRunLocalFallbacks(localAddr, []*Scope{source, remoteReceiver})
+
+	require.Len(t, sourceDispatch.RemoteRegs, 1)
+	require.Len(t, sourceDispatch.LocalRegs, 1)
+	require.Len(t, remoteReceiver.RemoteReceivRegInfos, 1)
+	require.Equal(t, localAddr, remoteReceiver.RemoteReceivRegInfos[0].FromAddr)
+}
+
 func Test_rewriteRemoteRunLocalFallbacksKeepsStandaloneRemoteScope(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	localAddr := "cn-local:6001"
@@ -1046,6 +1104,12 @@ func Test_rewriteRemoteRunLocalFallbacksKeepsStandaloneRemoteScope(t *testing.T)
 	source := &Scope{
 		Magic:    Remote,
 		NodeInfo: engine.Node{Addr: remoteAddr, Mcpu: 1},
+		Proc:     proc.NewContextChildProc(1),
+		RootOp:   merge.NewArgument(),
+	}
+	remotePayloadChild := &Scope{
+		Magic:    Normal,
+		NodeInfo: engine.Node{Addr: remoteAddr, Mcpu: 1},
 		Proc:     proc.NewContextChildProc(0),
 	}
 	sourceDispatch := dispatch.NewArgument()
@@ -1054,7 +1118,8 @@ func Test_rewriteRemoteRunLocalFallbacksKeepsStandaloneRemoteScope(t *testing.T)
 		Uuid:     receiverUuid,
 		NodeAddr: localAddr,
 	}}
-	source.RootOp = sourceDispatch
+	remotePayloadChild.RootOp = sourceDispatch
+	source.PreScopes = []*Scope{remotePayloadChild}
 
 	rewriteRemoteRunLocalFallbacks(localAddr, []*Scope{source, localReceiver})
 

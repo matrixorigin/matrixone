@@ -156,43 +156,50 @@ func checkPipelineStandaloneExecutableAtRemoteWithLog(s *Scope, enableLog bool) 
 				toScan = append(toScan, node.PreScopes...)
 			}
 
-			if node.RootOp == nil {
-				continue
-			}
-			if node.RootOp.OpType() == vm.Dispatch {
-				t := node.RootOp.(*dispatch.Dispatch)
-				for i := range t.LocalRegs {
-					if _, ok := regs[t.LocalRegs[i]]; !ok {
-						if enableLog {
-							s.Proc.Infof(
-								s.Proc.Ctx,
-								"txn id : %s, the pipeline %p convert to execute locally because it holds a dispatch operator will send data to other local pipeline tree.",
-								s.Proc.GetTxnOperator().Txn().ID, s)
-						}
-
-						return false
-					}
-				}
-				continue
-			}
-			if node.RootOp.OpType() == vm.Connector {
-				t := node.RootOp.(*connector.Connector)
-				if _, ok := regs[t.Reg]; !ok {
-					if enableLog {
-						s.Proc.Infof(
-							s.Proc.Ctx,
-							"txn id : %s, the pipeline %p convert to execute locally because it holds a connector operator will send data to other local pipeline tree.",
-							s.Proc.GetTxnOperator().Txn().ID, s)
-					}
-
-					return false
-				}
-				continue
+			if scopeHoldsLocalTargetOutsideTree(node, regs, enableLog, s) {
+				return false
 			}
 		}
 	}
 
 	return true
+}
+
+func scopeHoldsLocalTargetOutsideTree(s *Scope, regs map[*process.WaitRegister]struct{}, enableLog bool, logScope *Scope) bool {
+	if s == nil || s.RootOp == nil {
+		return false
+	}
+
+	found := false
+	vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
+		switch t := op.(type) {
+		case *dispatch.Dispatch:
+			for i := range t.LocalRegs {
+				if _, ok := regs[t.LocalRegs[i]]; !ok {
+					if enableLog && !found {
+						logScope.Proc.Infof(
+							logScope.Proc.Ctx,
+							"txn id : %s, the pipeline %p convert to execute locally because it holds a dispatch operator will send data to other local pipeline tree.",
+							logScope.Proc.GetTxnOperator().Txn().ID, logScope)
+					}
+					found = true
+					return nil
+				}
+			}
+		case *connector.Connector:
+			if _, ok := regs[t.Reg]; !ok {
+				if enableLog && !found {
+					logScope.Proc.Infof(
+						logScope.Proc.Ctx,
+						"txn id : %s, the pipeline %p convert to execute locally because it holds a connector operator will send data to other local pipeline tree.",
+						logScope.Proc.GetTxnOperator().Txn().ID, logScope)
+				}
+				found = true
+			}
+		}
+		return nil
+	})
+	return found
 }
 
 type remoteReceiverBinding struct {
@@ -217,6 +224,7 @@ func rewriteRemoteRunLocalFallbacks(localAddr string, roots []*Scope) {
 	seenLocalSource := make(map[*Scope]struct{})
 	for _, root := range roots {
 		collectRemoteRunLocalFallbackSources(root, localAddr, &localSources, seenLocalSource)
+		collectRemoteRunLocalOutputDispatchSources(root, localAddr, &localSources, seenLocalSource)
 	}
 	if len(localSources) == 0 {
 		return
@@ -246,6 +254,35 @@ func collectRemoteReceiverBindings(s *Scope, receiverByUuid map[uuid.UUID]remote
 	for _, preScope := range s.PreScopes {
 		collectRemoteReceiverBindings(preScope, receiverByUuid)
 	}
+}
+
+func collectRemoteRunLocalOutputDispatchSources(s *Scope, localAddr string, result *[]*Scope, seen map[*Scope]struct{}) {
+	if s == nil {
+		return
+	}
+
+	if s.Magic == Remote && !s.ipAddrMatch(localAddr) &&
+		checkPipelineStandaloneExecutableAtRemoteWithLog(s, false) {
+		if scopeRootDispatchRunsOnLocal(s) {
+			if _, ok := seen[s]; !ok {
+				seen[s] = struct{}{}
+				*result = append(*result, s)
+			}
+		}
+		return
+	}
+
+	for _, preScope := range s.PreScopes {
+		collectRemoteRunLocalOutputDispatchSources(preScope, localAddr, result, seen)
+	}
+}
+
+func scopeRootDispatchRunsOnLocal(s *Scope) bool {
+	if s == nil || s.RootOp == nil {
+		return false
+	}
+	_, ok := s.RootOp.(*dispatch.Dispatch)
+	return ok
 }
 
 func collectRemoteRunLocalFallbackSources(s *Scope, localAddr string, result *[]*Scope, seen map[*Scope]struct{}) {
