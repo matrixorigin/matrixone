@@ -155,11 +155,9 @@ func (m *MessageBoard) Reset() *MessageBoard {
 			if m.refCount > 0 {
 				m.refCount--
 			}
-			if m.refCount == 0 && m.releasedAt.IsZero() {
-				releasedAt := time.Now()
-				m.releasedAt = releasedAt
+			if m.refCount == 0 {
+				m.releasedAt = time.Now()
 				m.cleanupWaiters()
-				m.messageCenter.scheduleReleasedBoardCleanup(m.stmtId, m, releasedAt)
 			}
 		}
 		m.messageCenter.RwMutex.Unlock()
@@ -187,20 +185,6 @@ func (mc *MessageCenter) cleanupReleasedBoardsLocked(now time.Time) {
 		delete(mc.StmtIDToBoard, stmtID)
 		mb.cleanupQueuedMessages()
 	}
-}
-
-func (mc *MessageCenter) scheduleReleasedBoardCleanup(stmtID uuid.UUID, mb *MessageBoard, releasedAt time.Time) {
-	time.AfterFunc(multiCNMessageBoardRetainDuration, func() {
-		mc.RwMutex.Lock()
-		defer mc.RwMutex.Unlock()
-
-		current, ok := mc.StmtIDToBoard[stmtID]
-		if !ok || current != mb || mb.refCount != 0 || !mb.releasedAt.Equal(releasedAt) {
-			return
-		}
-		delete(mc.StmtIDToBoard, stmtID)
-		mb.cleanupQueuedMessages()
-	})
 }
 
 func (m *MessageBoard) cleanupQueuedMessages() {
