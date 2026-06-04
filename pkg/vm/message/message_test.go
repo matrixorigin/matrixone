@@ -15,6 +15,7 @@
 package message
 
 import (
+	"context"
 	"runtime"
 	"runtime/debug"
 	"sync"
@@ -96,16 +97,8 @@ func TestMessageBoardFinalizerDestroysQueuedMessages(t *testing.T) {
 	var destroyed atomic.Int32
 
 	func() {
-		center := &MessageCenter{
-			StmtIDToBoard: make(map[uuid.UUID]*MessageBoard),
-			RwMutex:       &sync.Mutex{},
-		}
-		mb := NewMessageBoard().SetMultiCN(center, uuid.New())
+		mb := NewMessageBoard()
 		SendMessage(testMessage{tag: 1, destroyed: &destroyed}, mb)
-
-		newBoard := mb.Reset()
-		require.NotSame(t, mb, newBoard)
-		require.Empty(t, center.StmtIDToBoard)
 	}()
 
 	require.Eventually(t, func() bool {
@@ -113,4 +106,69 @@ func TestMessageBoardFinalizerDestroysQueuedMessages(t *testing.T) {
 		debug.FreeOSMemory()
 		return destroyed.Load() == 1
 	}, 5*time.Second, 20*time.Millisecond)
+}
+
+func TestMultiCNMessageBoardResetRetainsBoardForSameStatement(t *testing.T) {
+	center := &MessageCenter{
+		StmtIDToBoard: make(map[uuid.UUID]*MessageBoard),
+		RwMutex:       &sync.Mutex{},
+	}
+	stmtID := uuid.New()
+	mb := NewMessageBoard().SetMultiCN(center, stmtID)
+
+	newBoard := mb.Reset()
+	require.NotSame(t, mb, newBoard)
+	require.Same(t, mb, center.StmtIDToBoard[stmtID])
+
+	reused := NewMessageBoard().SetMultiCN(center, stmtID)
+	require.Same(t, mb, reused)
+	require.Equal(t, 1, reused.refCount)
+	require.True(t, reused.releasedAt.IsZero())
+}
+
+func TestMultiCNMessageBoardResetKeepsQueuedMessagesForLateReceiver(t *testing.T) {
+	center := &MessageCenter{
+		StmtIDToBoard: make(map[uuid.UUID]*MessageBoard),
+		RwMutex:       &sync.Mutex{},
+	}
+	stmtID := uuid.New()
+	mb := NewMessageBoard().SetMultiCN(center, stmtID)
+	SendMessage(testMessage{tag: 1}, mb)
+
+	_ = mb.Reset()
+
+	reused := NewMessageBoard().SetMultiCN(center, stmtID)
+	receiver := NewMessageReceiver([]int32{1}, AddrBroadCastOnCurrentCN(), reused)
+	msgs, ctxDone, err := receiver.ReceiveMessage(false, context.Background())
+
+	require.NoError(t, err)
+	require.False(t, ctxDone)
+	require.Len(t, msgs, 1)
+	require.IsType(t, testMessage{}, msgs[0])
+}
+
+func TestMultiCNMessageBoardCleanupReleasedBoards(t *testing.T) {
+	var destroyed atomic.Int32
+	center := &MessageCenter{
+		StmtIDToBoard: make(map[uuid.UUID]*MessageBoard),
+		RwMutex:       &sync.Mutex{},
+	}
+	stmtID := uuid.New()
+	mb := NewMessageBoard().SetMultiCN(center, stmtID)
+	SendMessage(testMessage{tag: 1, destroyed: &destroyed}, mb)
+
+	_ = mb.Reset()
+	require.Len(t, center.StmtIDToBoard, 1)
+	require.Equal(t, int32(0), destroyed.Load())
+	require.Len(t, mb.messages, 1)
+	require.Empty(t, mb.waiters)
+
+	center.RwMutex.Lock()
+	mb.releasedAt = time.Now().Add(-multiCNMessageBoardRetainDuration - time.Second)
+	center.cleanupReleasedBoardsLocked(time.Now())
+	center.RwMutex.Unlock()
+
+	require.Empty(t, center.StmtIDToBoard)
+	require.Equal(t, int32(1), destroyed.Load())
+	require.Empty(t, mb.messages)
 }

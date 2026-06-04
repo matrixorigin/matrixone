@@ -28,6 +28,7 @@ import (
 )
 
 const messageTimeout = 300 * time.Second
+const multiCNMessageBoardRetainDuration = 2 * messageTimeout
 const ALLCN = "ALLCN"
 const CURRENTCN = "CURRENTCN"
 
@@ -78,6 +79,8 @@ type MessageBoard struct {
 	multiCN       bool
 	stmtId        uuid.UUID
 	messageCenter *MessageCenter
+	refCount      int
+	releasedAt    time.Time
 	messages      []*Message
 	waiters       []chan bool
 	rwMutex       *sync.RWMutex
@@ -116,16 +119,23 @@ func (m *MessageBoard) DebugString() string {
 }
 
 func (m *MessageBoard) SetMultiCN(center *MessageCenter, stmtId uuid.UUID) *MessageBoard {
+	now := time.Now()
 	center.RwMutex.Lock()
 	defer center.RwMutex.Unlock()
+	center.cleanupReleasedBoardsLocked(now)
+
 	mb, ok := center.StmtIDToBoard[stmtId]
 	if ok {
+		mb.refCount++
+		mb.releasedAt = time.Time{}
 		return mb
 	}
 	m.rwMutex.Lock()
 	m.multiCN = true
 	m.stmtId = stmtId
 	m.messageCenter = center
+	m.refCount = 1
+	m.releasedAt = time.Time{}
 	m.rwMutex.Unlock()
 	center.StmtIDToBoard[stmtId] = m
 	return m
@@ -141,10 +151,19 @@ func (m *MessageBoard) BeforeRunonce() {
 func (m *MessageBoard) Reset() *MessageBoard {
 	if m.multiCN {
 		m.messageCenter.RwMutex.Lock()
-		delete(m.messageCenter.StmtIDToBoard, m.stmtId)
+		if current, ok := m.messageCenter.StmtIDToBoard[m.stmtId]; ok && current == m {
+			if m.refCount > 0 {
+				m.refCount--
+			}
+			if m.refCount == 0 {
+				m.releasedAt = time.Now()
+				m.cleanupWaiters()
+			}
+		}
 		m.messageCenter.RwMutex.Unlock()
-		// other pipeline could still access thie messageBoard
-		// so reset current message board to a new one
+		// Other remote pipelines for the same statement may not have reached SetMultiCN yet.
+		// Keep the board and its queued messages briefly so late receivers can still see
+		// messages sent by earlier pipelines.
 		return NewMessageBoard()
 	}
 	m.rwMutex.Lock()
@@ -153,6 +172,19 @@ func (m *MessageBoard) Reset() *MessageBoard {
 	m.multiCN = false
 	m.reset = true
 	return m
+}
+
+func (mc *MessageCenter) cleanupReleasedBoardsLocked(now time.Time) {
+	for stmtID, mb := range mc.StmtIDToBoard {
+		if mb == nil || mb.refCount != 0 || mb.releasedAt.IsZero() {
+			continue
+		}
+		if now.Sub(mb.releasedAt) < multiCNMessageBoardRetainDuration {
+			continue
+		}
+		delete(mc.StmtIDToBoard, stmtID)
+		mb.cleanupQueuedMessages()
+	}
 }
 
 func (m *MessageBoard) cleanupQueuedMessages() {
@@ -174,6 +206,15 @@ func (m *MessageBoard) cleanupQueuedMessagesLocked() {
 		m.messages[i] = nil
 	}
 	m.messages = m.messages[:0]
+	m.waiters = m.waiters[:0]
+}
+
+func (m *MessageBoard) cleanupWaiters() {
+	if m == nil || m.rwMutex == nil {
+		return
+	}
+	m.rwMutex.Lock()
+	defer m.rwMutex.Unlock()
 	m.waiters = m.waiters[:0]
 }
 
