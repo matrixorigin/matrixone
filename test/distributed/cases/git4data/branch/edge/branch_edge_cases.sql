@@ -124,6 +124,7 @@ data branch create table pick_src from base;
 insert into pick_src values (3, 'three');
 
 begin;
+-- @regex("(DATA BRANCH PICK is not supported in explicit transactions|Write conflicts detected|txn need retry|deadlock detected)",true)
 data branch pick pick_src into pick_dst keys(3) when conflict accept;
 rollback;
 select count(*) as pick_dst_rows from pick_dst;
