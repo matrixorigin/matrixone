@@ -891,6 +891,22 @@ type NormalType interface {
 		constraints.Integer
 }
 
+// decimalInputsAligned reports whether all inputs (already known to share the
+// same decimal Oid) also share the same scale and width, so that coalesce can
+// be evaluated without inserting alignment casts.
+func decimalInputsAligned(inputs []types.Type) bool {
+	if len(inputs) == 0 {
+		return true
+	}
+	scale, width := inputs[0].Scale, inputs[0].Width
+	for i := 1; i < len(inputs); i++ {
+		if inputs[i].Scale != scale || inputs[i].Width != width {
+			return false
+		}
+	}
+	return true
+}
+
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 0 {
 		if retType, ok := mixedStringNumericToVarchar(inputs); ok {
@@ -920,6 +936,19 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 			if sta == matchFailed {
 				continue
 			} else if sta == matchDirectly {
+				// Decimals that match directly still need scale/width alignment
+				// across branches: without it the result inherits the first
+				// branch's scale while carrying another branch's raw value,
+				// magnifying the result (issue #24565). Only short-circuit when
+				// every decimal branch already shares the same scale and width.
+				if requireOid.IsDecimal() && !decimalInputsAligned(inputs) {
+					if cos < minCost {
+						minIndex = i
+						minCost = cos
+						minOid = requireOid
+					}
+					continue
+				}
 				return newCheckResultWithSuccess(i)
 			} else {
 				if cos < minCost {
