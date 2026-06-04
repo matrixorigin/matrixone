@@ -221,3 +221,35 @@ SELECT
   IFF(1 = 2,
       CAST(1 AS DECIMAL(38,0)),
       CAST(0 AS DECIMAL(38,20))) AS iff_decimal256_false;
+
+-- @case
+-- @desc:test for coalesce over decimal branches with different scales aligns scale/width
+-- @label:bvt
+SELECT 7.01970 * CAST(-58140.00 AS DECIMAL(23,2)) AS direct_mul;
+SELECT COALESCE(
+  CAST(NULL AS DECIMAL(23,2)),
+  7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
+) AS coalesce_decimal_scale;
+SELECT COALESCE(
+  CAST(1.23 AS DECIMAL(23,2)),
+  7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
+) AS coalesce_first_non_null;
+
+-- @case
+-- @desc:test for comparing a decimal256 case result with a decimal128 value
+-- @label:bvt
+SELECT (CASE WHEN 1 = 1 THEN CAST(1 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     = CAST(1 AS DECIMAL(38,20)) AS decimal256_eq_decimal128;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     > CAST(1 AS DECIMAL(38,20)) AS decimal256_gt_decimal128;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     < CAST(1 AS DECIMAL(38,20)) AS decimal256_lt_decimal128;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     != CAST(1 AS DECIMAL(38,20)) AS decimal256_ne_decimal128;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     BETWEEN CAST(1 AS DECIMAL(38,20)) AND CAST(10 AS DECIMAL(38,20)) AS decimal256_between;
