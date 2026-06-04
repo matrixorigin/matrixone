@@ -86,6 +86,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -801,5 +802,148 @@ func Test_checkPipelineStandaloneExecutableAtRemote(t *testing.T) {
 		s1.PreScopes = append(s1.PreScopes, s2)
 
 		require.False(t, checkPipelineStandaloneExecutableAtRemote(s0))
+	}
+}
+
+func Test_rewriteRemoteRunLocalFallbacksConvertsLocalReceiver(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	localAddr := "cn-local:6001"
+	remoteAddr := "cn-remote:6001"
+
+	localReceiver := &Scope{
+		Magic:    Merge,
+		NodeInfo: engine.Node{Addr: localAddr, Mcpu: 1},
+		Proc:     proc.NewContextChildProc(1),
+		RootOp:   merge.NewArgument(),
+	}
+	receiverUuid, err := uuid.NewV7()
+	require.NoError(t, err)
+	localReceiver.RemoteReceivRegInfos = []RemoteReceivRegInfo{{
+		Idx:      0,
+		Uuid:     receiverUuid,
+		FromAddr: remoteAddr,
+	}}
+
+	source := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: remoteAddr, Mcpu: 1},
+		Proc:     proc.NewContextChildProc(0),
+	}
+	sourceDispatch := dispatch.NewArgument()
+	sourceDispatch.FuncId = dispatch.SendToAllFunc
+	sourceDispatch.RemoteRegs = []colexec.ReceiveInfo{{
+		Uuid:     receiverUuid,
+		NodeAddr: localAddr,
+	}}
+	sourceDispatch.ShuffleRegIdxRemote = []int{3}
+	source.RootOp = sourceDispatch
+	source.PreScopes = []*Scope{newScopeWithExternalLocalDispatch(proc)}
+
+	rewriteRemoteRunLocalFallbacks(localAddr, []*Scope{source, localReceiver})
+
+	require.Empty(t, sourceDispatch.RemoteRegs)
+	require.Equal(t, dispatch.SendToAllLocalFunc, sourceDispatch.FuncId)
+	require.Len(t, sourceDispatch.LocalRegs, 1)
+	require.Same(t, localReceiver.Proc.Reg.MergeReceivers[0], sourceDispatch.LocalRegs[0])
+	require.Equal(t, 1, localReceiver.Proc.Reg.MergeReceivers[0].NilBatchCnt)
+	require.Equal(t, []int{3}, sourceDispatch.ShuffleRegIdxLocal)
+	require.Empty(t, sourceDispatch.ShuffleRegIdxRemote)
+	require.Empty(t, localReceiver.RemoteReceivRegInfos)
+}
+
+func Test_rewriteRemoteRunLocalFallbacksUpdatesRemainingRemoteReceiver(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	localAddr := "cn-local:6001"
+	sourceAddr := "cn-source:6001"
+	targetAddr := "cn-target:6001"
+
+	remoteReceiver := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: targetAddr, Mcpu: 1},
+		Proc:     proc.NewContextChildProc(1),
+		RootOp:   merge.NewArgument(),
+	}
+	receiverUuid, err := uuid.NewV7()
+	require.NoError(t, err)
+	remoteReceiver.RemoteReceivRegInfos = []RemoteReceivRegInfo{{
+		Idx:      0,
+		Uuid:     receiverUuid,
+		FromAddr: sourceAddr,
+	}}
+
+	source := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: sourceAddr, Mcpu: 1},
+		Proc:     proc.NewContextChildProc(0),
+	}
+	sourceDispatch := dispatch.NewArgument()
+	sourceDispatch.FuncId = dispatch.SendToAllFunc
+	sourceDispatch.RemoteRegs = []colexec.ReceiveInfo{{
+		Uuid:     receiverUuid,
+		NodeAddr: targetAddr,
+	}}
+	sourceDispatch.ShuffleRegIdxRemote = []int{5}
+	source.RootOp = sourceDispatch
+	source.PreScopes = []*Scope{newScopeWithExternalLocalDispatch(proc)}
+
+	rewriteRemoteRunLocalFallbacks(localAddr, []*Scope{source, remoteReceiver})
+
+	require.Len(t, sourceDispatch.RemoteRegs, 1)
+	require.Equal(t, dispatch.SendToAllFunc, sourceDispatch.FuncId)
+	require.Empty(t, sourceDispatch.LocalRegs)
+	require.Equal(t, []int{5}, sourceDispatch.ShuffleRegIdxRemote)
+	require.Len(t, remoteReceiver.RemoteReceivRegInfos, 1)
+	require.Equal(t, localAddr, remoteReceiver.RemoteReceivRegInfos[0].FromAddr)
+}
+
+func Test_rewriteRemoteRunLocalFallbacksKeepsStandaloneRemoteScope(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	localAddr := "cn-local:6001"
+	remoteAddr := "cn-remote:6001"
+
+	localReceiver := &Scope{
+		Magic:    Merge,
+		NodeInfo: engine.Node{Addr: localAddr, Mcpu: 1},
+		Proc:     proc.NewContextChildProc(1),
+		RootOp:   merge.NewArgument(),
+	}
+	receiverUuid, err := uuid.NewV7()
+	require.NoError(t, err)
+	localReceiver.RemoteReceivRegInfos = []RemoteReceivRegInfo{{
+		Idx:      0,
+		Uuid:     receiverUuid,
+		FromAddr: remoteAddr,
+	}}
+
+	source := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: remoteAddr, Mcpu: 1},
+		Proc:     proc.NewContextChildProc(0),
+	}
+	sourceDispatch := dispatch.NewArgument()
+	sourceDispatch.FuncId = dispatch.SendToAllFunc
+	sourceDispatch.RemoteRegs = []colexec.ReceiveInfo{{
+		Uuid:     receiverUuid,
+		NodeAddr: localAddr,
+	}}
+	source.RootOp = sourceDispatch
+
+	rewriteRemoteRunLocalFallbacks(localAddr, []*Scope{source, localReceiver})
+
+	require.Len(t, sourceDispatch.RemoteRegs, 1)
+	require.Empty(t, sourceDispatch.LocalRegs)
+	require.Len(t, localReceiver.RemoteReceivRegInfos, 1)
+	require.Equal(t, remoteAddr, localReceiver.RemoteReceivRegInfos[0].FromAddr)
+}
+
+func newScopeWithExternalLocalDispatch(proc *process.Process) *Scope {
+	localDispatch := dispatch.NewArgument()
+	localDispatch.LocalRegs = []*process.WaitRegister{{
+		Ch2: make(chan process.PipelineSignal, 1),
+	}}
+	return &Scope{
+		Magic:  Normal,
+		Proc:   proc.NewContextChildProc(0),
+		RootOp: localDispatch,
 	}
 }

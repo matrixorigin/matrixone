@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -112,6 +113,13 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 //
 // it returns true if the pipeline has only the root operator capable of sending data to other outer pipeline.
 func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
+	return checkPipelineStandaloneExecutableAtRemoteWithLog(s, true)
+}
+
+func checkPipelineStandaloneExecutableAtRemoteWithLog(s *Scope, enableLog bool) bool {
+	if s == nil {
+		return true
+	}
 	var regs = make(map[*process.WaitRegister]struct{})
 	var toScan []*Scope
 	// record which mergeReceivers this scope tree holds.
@@ -125,8 +133,10 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 				toScan = append(toScan, node.PreScopes...)
 			}
 
-			for i := range node.Proc.Reg.MergeReceivers {
-				regs[node.Proc.Reg.MergeReceivers[i]] = struct{}{}
+			if node.Proc != nil {
+				for i := range node.Proc.Reg.MergeReceivers {
+					regs[node.Proc.Reg.MergeReceivers[i]] = struct{}{}
+				}
 			}
 		}
 	}
@@ -145,14 +155,19 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 				toScan = append(toScan, node.PreScopes...)
 			}
 
+			if node.RootOp == nil {
+				continue
+			}
 			if node.RootOp.OpType() == vm.Dispatch {
 				t := node.RootOp.(*dispatch.Dispatch)
 				for i := range t.LocalRegs {
 					if _, ok := regs[t.LocalRegs[i]]; !ok {
-						s.Proc.Infof(
-							s.Proc.Ctx,
-							"txn id : %s, the pipeline %p convert to execute locally because it holds a dispatch operator will send data to other local pipeline tree.",
-							s.Proc.GetTxnOperator().Txn().ID, s)
+						if enableLog {
+							s.Proc.Infof(
+								s.Proc.Ctx,
+								"txn id : %s, the pipeline %p convert to execute locally because it holds a dispatch operator will send data to other local pipeline tree.",
+								s.Proc.GetTxnOperator().Txn().ID, s)
+						}
 
 						return false
 					}
@@ -162,10 +177,12 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 			if node.RootOp.OpType() == vm.Connector {
 				t := node.RootOp.(*connector.Connector)
 				if _, ok := regs[t.Reg]; !ok {
-					s.Proc.Infof(
-						s.Proc.Ctx,
-						"txn id : %s, the pipeline %p convert to execute locally because it holds a connector operator will send data to other local pipeline tree.",
-						s.Proc.GetTxnOperator().Txn().ID, s)
+					if enableLog {
+						s.Proc.Infof(
+							s.Proc.Ctx,
+							"txn id : %s, the pipeline %p convert to execute locally because it holds a connector operator will send data to other local pipeline tree.",
+							s.Proc.GetTxnOperator().Txn().ID, s)
+					}
 
 					return false
 				}
@@ -175,6 +192,189 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 	}
 
 	return true
+}
+
+type remoteReceiverBinding struct {
+	scope   *Scope
+	infoIdx int
+}
+
+func rewriteRemoteRunLocalFallbacks(localAddr string, roots []*Scope) {
+	if len(roots) == 0 {
+		return
+	}
+
+	receiverByUuid := make(map[uuid.UUID]remoteReceiverBinding)
+	for _, root := range roots {
+		collectRemoteReceiverBindings(root, receiverByUuid)
+	}
+	if len(receiverByUuid) == 0 {
+		return
+	}
+
+	localSources := make([]*Scope, 0)
+	seenLocalSource := make(map[*Scope]struct{})
+	for _, root := range roots {
+		collectRemoteRunLocalFallbackSources(root, localAddr, &localSources, seenLocalSource)
+	}
+	if len(localSources) == 0 {
+		return
+	}
+
+	removedReceivers := make(map[uuid.UUID]struct{})
+	for _, source := range localSources {
+		rewriteRemoteDispatchesForLocalSource(source, localAddr, receiverByUuid, removedReceivers)
+	}
+	if len(removedReceivers) > 0 {
+		for _, root := range roots {
+			removeRemoteReceiverBindings(root, removedReceivers)
+		}
+	}
+}
+
+func collectRemoteReceiverBindings(s *Scope, receiverByUuid map[uuid.UUID]remoteReceiverBinding) {
+	if s == nil {
+		return
+	}
+	for i := range s.RemoteReceivRegInfos {
+		receiverByUuid[s.RemoteReceivRegInfos[i].Uuid] = remoteReceiverBinding{
+			scope:   s,
+			infoIdx: i,
+		}
+	}
+	for _, preScope := range s.PreScopes {
+		collectRemoteReceiverBindings(preScope, receiverByUuid)
+	}
+}
+
+func collectRemoteRunLocalFallbackSources(s *Scope, localAddr string, result *[]*Scope, seen map[*Scope]struct{}) {
+	if s == nil {
+		return
+	}
+	if s.Magic == Remote &&
+		!s.ipAddrMatch(localAddr) &&
+		!checkPipelineStandaloneExecutableAtRemoteWithLog(s, false) {
+		collectScopesRunLocallyByRemoteFallback(s, result, seen)
+	}
+	for _, preScope := range s.PreScopes {
+		collectRemoteRunLocalFallbackSources(preScope, localAddr, result, seen)
+	}
+}
+
+func collectScopesRunLocallyByRemoteFallback(s *Scope, result *[]*Scope, seen map[*Scope]struct{}) {
+	if s == nil {
+		return
+	}
+	if _, ok := seen[s]; !ok {
+		seen[s] = struct{}{}
+		*result = append(*result, s)
+	}
+	for _, preScope := range s.PreScopes {
+		if preScope.Magic == Remote {
+			continue
+		}
+		collectScopesRunLocallyByRemoteFallback(preScope, result, seen)
+	}
+}
+
+func rewriteRemoteDispatchesForLocalSource(
+	source *Scope,
+	localAddr string,
+	receiverByUuid map[uuid.UUID]remoteReceiverBinding,
+	removedReceivers map[uuid.UUID]struct{},
+) {
+	vm.HandleAllOp(source.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
+		dispatchOp, ok := op.(*dispatch.Dispatch)
+		if !ok || len(dispatchOp.RemoteRegs) == 0 {
+			return nil
+		}
+
+		originalRemoteRegs := dispatchOp.RemoteRegs
+		originalShuffleRegIdxRemote := dispatchOp.ShuffleRegIdxRemote
+		remoteRegs := originalRemoteRegs[:0]
+		remoteShuffleRegIdx := originalShuffleRegIdxRemote[:0]
+
+		for i, remoteReg := range originalRemoteRegs {
+			binding, ok := receiverByUuid[remoteReg.Uuid]
+			if !ok {
+				remoteRegs = append(remoteRegs, remoteReg)
+				if i < len(originalShuffleRegIdxRemote) {
+					remoteShuffleRegIdx = append(remoteShuffleRegIdx, originalShuffleRegIdxRemote[i])
+				}
+				continue
+			}
+
+			receiverInfo := &binding.scope.RemoteReceivRegInfos[binding.infoIdx]
+			if binding.scope.ipAddrMatch(localAddr) {
+				if reg, ok := getReceiverWaitRegister(binding); ok {
+					reg.NilBatchCnt = source.NodeInfo.Mcpu
+					dispatchOp.LocalRegs = append(dispatchOp.LocalRegs, reg)
+					if i < len(originalShuffleRegIdxRemote) {
+						dispatchOp.ShuffleRegIdxLocal = append(dispatchOp.ShuffleRegIdxLocal, originalShuffleRegIdxRemote[i])
+					}
+					removedReceivers[remoteReg.Uuid] = struct{}{}
+					continue
+				}
+			}
+
+			receiverInfo.FromAddr = localAddr
+			remoteRegs = append(remoteRegs, remoteReg)
+			if i < len(originalShuffleRegIdxRemote) {
+				remoteShuffleRegIdx = append(remoteShuffleRegIdx, originalShuffleRegIdxRemote[i])
+			}
+		}
+
+		dispatchOp.RemoteRegs = remoteRegs
+		dispatchOp.ShuffleRegIdxRemote = remoteShuffleRegIdx
+		normalizeDispatchFuncAfterRemoteRewrite(dispatchOp)
+		return nil
+	})
+}
+
+func getReceiverWaitRegister(binding remoteReceiverBinding) (*process.WaitRegister, bool) {
+	if binding.scope == nil || binding.scope.Proc == nil {
+		return nil, false
+	}
+	if binding.infoIdx < 0 || binding.infoIdx >= len(binding.scope.RemoteReceivRegInfos) {
+		return nil, false
+	}
+	receiverIdx := binding.scope.RemoteReceivRegInfos[binding.infoIdx].Idx
+	if receiverIdx < 0 || receiverIdx >= len(binding.scope.Proc.Reg.MergeReceivers) {
+		return nil, false
+	}
+	reg := binding.scope.Proc.Reg.MergeReceivers[receiverIdx]
+	return reg, reg != nil
+}
+
+func normalizeDispatchFuncAfterRemoteRewrite(dispatchOp *dispatch.Dispatch) {
+	if len(dispatchOp.RemoteRegs) > 0 {
+		return
+	}
+	switch dispatchOp.FuncId {
+	case dispatch.SendToAllFunc:
+		dispatchOp.FuncId = dispatch.SendToAllLocalFunc
+	case dispatch.SendToAnyFunc:
+		dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
+	}
+}
+
+func removeRemoteReceiverBindings(s *Scope, removed map[uuid.UUID]struct{}) {
+	if s == nil {
+		return
+	}
+	if len(s.RemoteReceivRegInfos) > 0 {
+		infos := s.RemoteReceivRegInfos[:0]
+		for i := range s.RemoteReceivRegInfos {
+			if _, ok := removed[s.RemoteReceivRegInfos[i].Uuid]; ok {
+				continue
+			}
+			infos = append(infos, s.RemoteReceivRegInfos[i])
+		}
+		s.RemoteReceivRegInfos = infos
+	}
+	for _, preScope := range s.PreScopes {
+		removeRemoteReceiverBindings(preScope, removed)
+	}
 }
 
 func prepareRemoteRunSendingData(sqlStr string, s *Scope, proc *process.Process) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
