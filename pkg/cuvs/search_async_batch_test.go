@@ -126,7 +126,7 @@ func TestGpuCagraSearchFloat32AsyncBatched(t *testing.T) {
 
 	// Each goroutine uses a unique query so we can verify per-caller
 	// result demuxing through submit_batched_async's per-request setter.
-	runConcurrentAsync(t, /*nGoroutines=*/ 16, /*nPerGoroutine=*/ 8, func(qid int) (int64, error) {
+	runConcurrentAsync(t, 16 /*nGoroutines*/, 8 /*nPerGoroutine*/, func(qid int) (int64, error) {
 		q := []float32{float32(qid), float32(qid)}
 		jobID, err := index.SearchFloat32AsyncWithParams(q, 1, dimension, 1, sp)
 		if err != nil {
@@ -172,7 +172,7 @@ func TestGpuIvfFlatSearchFloat32AsyncBatched(t *testing.T) {
 	sp := DefaultIvfFlatSearchParams()
 	sp.NProbes = 16 // probe all lists for deterministic recall on a small index.
 
-	runConcurrentAsync(t, /*nGoroutines=*/ 16, /*nPerGoroutine=*/ 8, func(qid int) (int64, error) {
+	runConcurrentAsync(t, 16 /*nGoroutines*/, 8 /*nPerGoroutine*/, func(qid int) (int64, error) {
 		q := []float32{float32(qid), float32(qid)}
 		jobID, err := index.SearchFloat32AsyncWithParams(q, 1, dimension, 1, sp)
 		if err != nil {
@@ -307,13 +307,13 @@ func ivfPqAsyncBatchedMatchesSync(t *testing.T, conservativeDispatch bool) {
 // dispatching at the real size.
 func TestGpuIvfPqSearchFloat32AsyncBatched(t *testing.T) {
 	t.Skip("cuVS dynamic_batching conservative_dispatch=true deadlocks on this host; see TestGpuCagraSearchFloat32AsyncBatched for the diagnosis.")
-	ivfPqAsyncBatchedMatchesSync(t, /*conservativeDispatch=*/ true)
+	ivfPqAsyncBatchedMatchesSync(t, true /*conservativeDispatch*/)
 }
 
 // TestGpuIvfPqSearchFloat32AsyncBatch — conservative_dispatch = false:
 // dynamic_batching dispatches eagerly at the full batch size.
 func TestGpuIvfPqSearchFloat32AsyncBatch(t *testing.T) {
-	ivfPqAsyncBatchedMatchesSync(t, /*conservativeDispatch=*/ false)
+	ivfPqAsyncBatchedMatchesSync(t, false /*conservativeDispatch*/)
 }
 
 // TestGpuCagraAsyncBatchedMatchesSync sanity-checks that the async-batched
