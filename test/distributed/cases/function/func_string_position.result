@@ -46,4 +46,4 @@ position_result    locate_result
 EXPLAIN SELECT POSITION('y' IN 'xyz');
 TP QUERY PLAN
 Project
-  ->  Values Scan "*VALUES*"
+  ->  Values Scan "*VALUES*" 
