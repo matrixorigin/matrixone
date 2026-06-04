@@ -47,4 +47,9 @@ create table t2(a int);
 select row_count();
 ➤ row_count()[-5,64,0]  𝄀
 0
+insert into t values (1,12345);
+Duplicate entry '1' for key 'id'
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+-1
 drop database if exists row_count_db;
