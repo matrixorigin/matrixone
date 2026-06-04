@@ -747,11 +747,11 @@ func TestUpdateFallbackGeneratedColumnsUseDefaultAfterRewrite(t *testing.T) {
 		t.Fatalf("build fallback update with generated column over DEFAULT: %v", err)
 	}
 
-	requireQueryExpr(t, logicPlan.GetQuery(),
-		func(generatedExpr *plan.Expr) bool {
-			return exprContainsStringLiteral(generatedExpr, "job-default")
-		},
-		"generated column should use expanded DEFAULT expression")
+	node := requireFallbackSourceProjectNode(t, logicPlan.GetQuery(),
+		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1, "default-marker")
+	if !nodeContainsStringLiteral(node, "job-default") {
+		t.Fatalf("generated column should use expanded DEFAULT expression, got %v", node.ProjectList)
+	}
 }
 
 func TestUpdateFallbackGeneratedColumnsUseOnUpdateAfterRewrite(t *testing.T) {
@@ -765,11 +765,11 @@ func TestUpdateFallbackGeneratedColumnsUseOnUpdateAfterRewrite(t *testing.T) {
 		t.Fatalf("build fallback update with generated column over ON UPDATE: %v", err)
 	}
 
-	requireQueryExpr(t, logicPlan.GetQuery(),
-		func(generatedExpr *plan.Expr) bool {
-			return exprContainsStringLiteral(generatedExpr, "job-on-update")
-		},
-		"generated column should use ON UPDATE expression")
+	node := requireFallbackSourceProjectNode(t, logicPlan.GetQuery(),
+		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1, "on-update-marker")
+	if !nodeContainsStringLiteral(node, "job-on-update") {
+		t.Fatalf("generated column should use ON UPDATE expression, got %v", node.ProjectList)
+	}
 }
 
 func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
@@ -885,6 +885,27 @@ func makeStringConstExpr(typ plan.Type, value string) *plan.Expr {
 	}
 }
 
+func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int, marker string) *Node {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen {
+			continue
+		}
+		hasMarker := false
+		for _, expr := range node.ProjectList {
+			if exprContainsStringLiteral(expr, marker) {
+				hasMarker = true
+				break
+			}
+		}
+		if !hasMarker {
+			continue
+		}
+		return node
+	}
+	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
+	return nil
+}
+
 func requireQueryExpr(t *testing.T, query *Query, accept func(*plan.Expr) bool, message string) *plan.Expr {
 	for _, node := range query.Nodes {
 		if isSinkScanProjectNode(query, node) {
@@ -909,6 +930,15 @@ func isSinkScanProjectNode(query *Query, node *Node) bool {
 	}
 	childIdx := node.Children[0]
 	return childIdx >= 0 && childIdx < int32(len(query.Nodes)) && query.Nodes[childIdx].NodeType == plan.Node_SINK_SCAN
+}
+
+func nodeContainsStringLiteral(node *Node, value string) bool {
+	for _, expr := range node.ProjectList {
+		if exprContainsStringLiteral(expr, value) {
+			return true
+		}
+	}
+	return false
 }
 func assertFallbackUpdateProjectLength(t *testing.T, query *Query, projectLen int) {
 	for _, node := range query.Nodes {

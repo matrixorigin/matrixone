@@ -28,3 +28,5 @@ DROP TABLE t1;
 # Comparison with LOCATE (should return same results)
 SELECT POSITION('World' IN 'Hello World') AS position_result, LOCATE('World', 'Hello World') AS locate_result;
 
+# EXPLAIN POSITION
+EXPLAIN SELECT POSITION('y' IN 'xyz');
