@@ -3710,7 +3710,15 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_CLOSE:
 		// rewrite to "deallocate Prepare stmt_name"
-		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
+		data := req.GetData().([]byte)
+		if len(data) < 4 {
+			// A malformed (too short) packet is a failed statement: reset
+			// ROW_COUNT() to -1 and return an error instead of panicking on the slice.
+			markRowCountFailed(ses, ses.GetProc())
+			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(),
+				moerr.NewInternalError(execCtx.reqCtx, "invalid COM_STMT_CLOSE packet")), nil
+		}
+		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		var preStmt *PrepareStmt
 		stmtName := getPrepareStmtName(stmtID)
 		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
@@ -3735,7 +3743,15 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_RESET:
 		//Payload of COM_STMT_RESET
-		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
+		data := req.GetData().([]byte)
+		if len(data) < 4 {
+			// A malformed (too short) packet is a failed statement: reset
+			// ROW_COUNT() to -1 and return an error instead of panicking on the slice.
+			markRowCountFailed(ses, ses.GetProc())
+			return NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(),
+				moerr.NewInternalError(execCtx.reqCtx, "invalid COM_STMT_RESET packet")), nil
+		}
+		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		var preStmt *PrepareStmt
 		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
