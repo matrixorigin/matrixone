@@ -291,7 +291,7 @@ drop snapshot role_sp01;
 drop role if exists test_role;
 create role test_role;
 grant select,insert,update on table testdb.* to test_role with grant option;
-internal error: there is no database "testdb"
+Unknown database testdb
 grant all on account * to test_role;
 grant ownership on database *.* to test_role;
 grant ownership on table *.* to test_role;
