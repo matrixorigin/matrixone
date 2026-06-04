@@ -8364,8 +8364,7 @@ func getRoleSetThatPrivilegeGrantedToWGOScoped(
 		if err != nil {
 			return nil, err
 		}
-		legacyRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
-			ctx, ses, bh, privType, astObjType, objectTypeTable, level)
+		legacyRoleSet, err := getRoleSetThatViewPrivilegeGrantedToWGOLegacyExact(ctx, ses, bh, privType, level)
 		if err != nil {
 			return nil, err
 		}
@@ -8406,6 +8405,22 @@ func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
 		if err != nil {
 			return nil, err
 		}
+		if level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
+			level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
+			dbName := level.DbName
+			if dbName == "" {
+				dbName = ses.GetDatabaseName()
+			}
+			dbId, err := getDatabaseOrTableId(ctx, bh, true, dbName, "")
+			if err != nil {
+				return nil, err
+			}
+			dbScopeRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, dbId)
+			if err != nil {
+				return nil, err
+			}
+			mergeRoleSets(roleSet, dbScopeRoleSet)
+		}
 		globalRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, objectIDAll)
 		if err != nil {
 			return nil, err
@@ -8417,6 +8432,27 @@ func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
 	// For truly global wildcard levels (*.*), only global object grants can authorize
 	// further grants. Narrower scopes such as db.* or db.table must not be promoted to *.*.
 	return getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, objectIDAll)
+}
+
+func getRoleSetThatViewPrivilegeGrantedToWGOLegacyExact(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	level tree.PrivilegeLevel,
+) (*btree.Set[int64], error) {
+	if level.Level != tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE &&
+		level.Level != tree.PRIVILEGE_LEVEL_TYPE_TABLE {
+		return &btree.Set[int64]{}, nil
+	}
+	_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, tree.OBJECT_TYPE_VIEW, level)
+	if err != nil {
+		if isMissingPrivilegeObjectError(err) {
+			return &btree.Set[int64]{}, nil
+		}
+		return nil, err
+	}
+	return getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objectTypeTable, objId)
 }
 
 func isMissingPrivilegeObjectError(err error) bool {
