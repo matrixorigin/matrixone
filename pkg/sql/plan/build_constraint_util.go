@@ -215,7 +215,19 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		isMulti:       tblInfo.isMulti,
 		needAggFilter: tblInfo.needAggFilter,
 	}
-	for alias, columns := range usedTbl {
+	// Preserve the original target-table order from tblInfo. Iterating
+	// usedTbl directly would randomize order across runs (Go map
+	// iteration), which makes the fallback UPDATE planner emit the
+	// per-target column blocks in a non-deterministic layout.
+	aliasByIdx := make([]string, len(tblInfo.tableDefs))
+	for alias, idx := range tblInfo.alias {
+		aliasByIdx[idx] = alias
+	}
+	for _, alias := range aliasByIdx {
+		columns, ok := usedTbl[alias]
+		if !ok {
+			continue
+		}
 		idx := tblInfo.alias[alias]
 		tblDef := tblInfo.tableDefs[idx]
 		newTblInfo.objRef = append(newTblInfo.objRef, tblInfo.objRef[idx])
