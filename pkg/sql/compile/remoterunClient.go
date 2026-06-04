@@ -336,8 +336,7 @@ func shouldKeepRemoteReceiverForLocalFallback(dispatchOp *dispatch.Dispatch) boo
 	if dispatchOp.FuncId != dispatch.ShuffleToAllFunc {
 		return false
 	}
-	return dispatchOp.ShuffleType == plan2.ShuffleToLocalMatchedReg ||
-		dispatchOp.ShuffleType == plan2.ShuffleToMultiMatchedReg
+	return dispatchOp.ShuffleType != plan2.ShuffleToRegIndex
 }
 
 func getReceiverWaitRegister(binding remoteReceiverBinding) (*process.WaitRegister, bool) {

@@ -851,6 +851,60 @@ func Test_rewriteRemoteRunLocalFallbacksConvertsLocalReceiver(t *testing.T) {
 	require.Empty(t, localReceiver.RemoteReceivRegInfos)
 }
 
+func Test_rewriteRemoteRunLocalFallbacksConvertsShuffleRegIndexLocalReceiver(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	localAddr := "cn-local:6001"
+	remoteAddr := "cn-remote:6001"
+
+	localReceiver := &Scope{
+		Magic:    Merge,
+		NodeInfo: engine.Node{Addr: localAddr, Mcpu: 1},
+		Proc:     proc.NewContextChildProc(1),
+		RootOp:   merge.NewArgument(),
+	}
+	receiverUuid, err := uuid.NewV7()
+	require.NoError(t, err)
+	localReceiver.RemoteReceivRegInfos = []RemoteReceivRegInfo{{
+		Idx:      0,
+		Uuid:     receiverUuid,
+		FromAddr: remoteAddr,
+	}}
+
+	originalLocalRegs := []*process.WaitRegister{
+		{Ch2: make(chan process.PipelineSignal, 1)},
+		{Ch2: make(chan process.PipelineSignal, 1)},
+	}
+	source := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: remoteAddr, Mcpu: 1},
+		Proc:     proc.NewContextChildProc(0),
+	}
+	sourceDispatch := dispatch.NewArgument()
+	sourceDispatch.FuncId = dispatch.ShuffleToAllFunc
+	sourceDispatch.ShuffleType = plan.ShuffleToRegIndex
+	sourceDispatch.LocalRegs = append(sourceDispatch.LocalRegs, originalLocalRegs...)
+	sourceDispatch.RemoteRegs = []colexec.ReceiveInfo{{
+		Uuid:     receiverUuid,
+		NodeAddr: localAddr,
+	}}
+	sourceDispatch.ShuffleRegIdxLocal = []int{0, 1}
+	sourceDispatch.ShuffleRegIdxRemote = []int{2}
+	source.RootOp = sourceDispatch
+	source.PreScopes = []*Scope{newScopeWithExternalLocalDispatch(proc)}
+
+	rewriteRemoteRunLocalFallbacks(localAddr, []*Scope{source, localReceiver})
+
+	require.Equal(t, dispatch.ShuffleToAllFunc, sourceDispatch.FuncId)
+	require.Empty(t, sourceDispatch.RemoteRegs)
+	require.Len(t, sourceDispatch.LocalRegs, 3)
+	require.Same(t, originalLocalRegs[0], sourceDispatch.LocalRegs[0])
+	require.Same(t, originalLocalRegs[1], sourceDispatch.LocalRegs[1])
+	require.Same(t, localReceiver.Proc.Reg.MergeReceivers[0], sourceDispatch.LocalRegs[2])
+	require.Equal(t, []int{0, 1, 2}, sourceDispatch.ShuffleRegIdxLocal)
+	require.Empty(t, sourceDispatch.ShuffleRegIdxRemote)
+	require.Empty(t, localReceiver.RemoteReceivRegInfos)
+}
+
 func Test_rewriteRemoteRunLocalFallbacksKeepsHybridShuffleLocalReceiverRemote(t *testing.T) {
 	testCases := []struct {
 		name        string
