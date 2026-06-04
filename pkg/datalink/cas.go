@@ -186,7 +186,7 @@ func CASListAccount(ctx context.Context, fs fileservice.FileService, accountID u
 // CASDeleteAccountPrefix removes the entire CAS namespace of one account. Used
 // by DROP ACCOUNT so a removed tenant leaves no pinned blobs behind.
 func CASDeleteAccountPrefix(ctx context.Context, fs fileservice.FileService, accountID uint32) error {
-	var keys []string
+	keys := make([]string, 0, 16)
 	for e, err := range CASListAccount(ctx, fs, accountID) {
 		if err != nil {
 			return err
