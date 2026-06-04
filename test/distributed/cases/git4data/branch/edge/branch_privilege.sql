@@ -10,7 +10,6 @@
 --   DATA BRANCH CREATE DATABASE succeeds when either source read privilege or
 --   CREATE DATABASE privilege is missing.
 
--- @bvt:issue#24840
 set global enable_privilege_cache = off;
 
 drop account if exists br_priv_bypass_acc;
@@ -60,6 +59,7 @@ create user u_db_both identified by '111' default role r_db_both;
 -- Current actual:
 --   succeeds and creates br_tbl_select_only.
 -- @session:id=2&user=br_priv_bypass_acc:u_tbl_select_only:r_tbl_select_only&password=111
+-- @bvt:issue#24840
 data branch create table br_priv_src.br_tbl_select_only
   from br_priv_src.base_tbl{snapshot='br_priv_tbl_sp'};
 
@@ -68,6 +68,7 @@ select count(*) as br_tbl_select_only_exists
   from mo_catalog.mo_tables
  where reldatabase = 'br_priv_src'
    and relname = 'br_tbl_select_only';
+-- @bvt:issue
 
 -- Case 2: TABLE branch with only target CREATE TABLE privilege.
 -- Expected after fix:
@@ -75,6 +76,7 @@ select count(*) as br_tbl_select_only_exists
 -- Current actual:
 --   succeeds and creates br_tbl_create_only.
 -- @session:id=3&user=br_priv_bypass_acc:u_tbl_create_only:r_tbl_create_only&password=111
+-- @bvt:issue#24840
 data branch create table br_priv_src.br_tbl_create_only
   from br_priv_src.base_tbl{snapshot='br_priv_tbl_sp'};
 
@@ -83,6 +85,7 @@ select count(*) as br_tbl_create_only_exists
   from mo_catalog.mo_tables
  where reldatabase = 'br_priv_src'
    and relname = 'br_tbl_create_only';
+-- @bvt:issue
 
 -- Case 3: TABLE branch with both privileges.
 -- Expected:
@@ -103,6 +106,7 @@ select count(*) as br_tbl_both_exists
 -- Current actual:
 --   succeeds and creates br_db_select_only.
 -- @session:id=5&user=br_priv_bypass_acc:u_db_select_only:r_db_select_only&password=111
+-- @bvt:issue#24840
 data branch create database br_db_select_only
   from br_priv_src{snapshot='br_priv_db_sp'};
 
@@ -110,6 +114,7 @@ data branch create database br_db_select_only
 select count(*) as br_db_select_only_exists
   from mo_catalog.mo_database
  where datname = 'br_db_select_only';
+-- @bvt:issue
 
 -- Case 5: DATABASE branch with only CREATE DATABASE privilege.
 -- Expected after fix:
@@ -117,6 +122,7 @@ select count(*) as br_db_select_only_exists
 -- Current actual:
 --   succeeds and creates br_db_create_only.
 -- @session:id=6&user=br_priv_bypass_acc:u_db_create_only:r_db_create_only&password=111
+-- @bvt:issue#24840
 data branch create database br_db_create_only
   from br_priv_src{snapshot='br_priv_db_sp'};
 
@@ -124,6 +130,7 @@ data branch create database br_db_create_only
 select count(*) as br_db_create_only_exists
   from mo_catalog.mo_database
  where datname = 'br_db_create_only';
+-- @bvt:issue
 
 -- Case 6: DATABASE branch with both privileges.
 -- Expected:
@@ -147,4 +154,3 @@ drop database if exists br_db_both;
 -- @session
 drop account if exists br_priv_bypass_acc;
 set global enable_privilege_cache = on;
--- @bvt:issue

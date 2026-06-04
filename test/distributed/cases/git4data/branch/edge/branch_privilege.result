@@ -30,6 +30,7 @@ create user u_db_create_only identified by '111' default role r_db_create_only;
 create user u_db_both identified by '111' default role r_db_both;
 data branch create table br_priv_src.br_tbl_select_only
 from br_priv_src.base_tbl{snapshot='br_priv_tbl_sp'};
+
 select count(*) as br_tbl_select_only_exists
 from mo_catalog.mo_tables
 where reldatabase = 'br_priv_src'
@@ -38,6 +39,7 @@ br_tbl_select_only_exists
 1
 data branch create table br_priv_src.br_tbl_create_only
 from br_priv_src.base_tbl{snapshot='br_priv_tbl_sp'};
+
 select count(*) as br_tbl_create_only_exists
 from mo_catalog.mo_tables
 where reldatabase = 'br_priv_src'
@@ -54,6 +56,7 @@ br_tbl_both_exists
 1
 data branch create database br_db_select_only
 from br_priv_src{snapshot='br_priv_db_sp'};
+
 select count(*) as br_db_select_only_exists
 from mo_catalog.mo_database
 where datname = 'br_db_select_only';
@@ -61,6 +64,7 @@ br_db_select_only_exists
 1
 data branch create database br_db_create_only
 from br_priv_src{snapshot='br_priv_db_sp'};
+
 select count(*) as br_db_create_only_exists
 from mo_catalog.mo_database
 where datname = 'br_db_create_only';
