@@ -153,6 +153,11 @@ type store struct {
 
 	// onReplicaChanged is a called when the replicas on the store changes.
 	onReplicaChanged func(shardID uint64, replicaID uint64, typ ChangeType)
+
+	// walRecoveryInProgress indicates that WAL recovery is in progress.
+	// When true, checkBootstrap will not set HAKeeperRunning state,
+	// preventing TN from starting before WAL recovery completes.
+	walRecoveryInProgress atomic.Bool
 }
 
 func newLogStore(cfg Config,

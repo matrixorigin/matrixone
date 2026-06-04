@@ -949,31 +949,32 @@ fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=
 errNews := $(shell grep -onr 'errors.New' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=system_vars.go --exclude=Makefile)
 withTimeout := $(shell grep -onr 'context.WithTimeout' pkg/ --exclude-dir=.git --exclude-dir=vendor \
-				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
+				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile | grep -v 'context.WithTimeoutCause')
 withDeadline := $(shell grep -onr 'context.WithDeadline' pkg/ --exclude-dir=.git --exclude-dir=vendor \
-				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
+				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile | grep -v 'context.WithDeadlineCause')
 
 
 .PHONY: err-check
 err-check:
-ifneq ("$(strip $(fmtErrs))$(strip $(errNews))", "")
- ifneq ("$(strip $(fmtErrs))", "")
-		$(warning 'fmt.Errorf()' is found.)
-		$(warning One of 'fmt.Errorf()' is called at: $(shell printf "%s\n" $(fmtErrs) | head -1))
- endif
- ifneq ("$(strip $(errNews))", "")
-		$(warning 'errors.New()' is found.)
-		$(warning One of 'errors.New()' is called at: $(shell printf "%s\n" $(errNews) | head -1))
- endif
- ifneq ("$(strip $(withTimeout))", "")
- 		$(warning 'context.WithTimeout' is found.)
- 		$(warning One of 'context.WithTimeout' is called at: $(shell printf "%s\n" $(errNews) | head -1))
- endif
- ifneq ("$(strip $(withDeadline))", "")
- 		$(warning 'context.WithDeadline' is found.)
- 		$(warning One of 'context.WithDeadline' is called at: $(shell printf "%s\n" $(errNews) | head -1))
- endif
-	$(error Use moerr instead.)
-else
-	$(info Does not find 'fmt.Errorf()', 'errors.New()','context.WithTimeout' and 'context.WithDeadline')
-endif
+	@if [ -n "$(strip $(fmtErrs))$(strip $(errNews))$(strip $(withTimeout))$(strip $(withDeadline))" ]; then \
+		if [ -n "$(strip $(fmtErrs))" ]; then \
+			echo "'fmt.Errorf()' is found."; \
+			echo "One of 'fmt.Errorf()' is called at: $$(printf "%s\n" $(fmtErrs) | head -1)"; \
+		fi; \
+		if [ -n "$(strip $(errNews))" ]; then \
+			echo "'errors.New()' is found."; \
+			echo "One of 'errors.New()' is called at: $$(printf "%s\n" $(errNews) | head -1)"; \
+		fi; \
+		if [ -n "$(strip $(withTimeout))" ]; then \
+			echo "'context.WithTimeout' is found."; \
+			echo "One of 'context.WithTimeout' is called at: $$(printf "%s\n" $(withTimeout) | head -1)"; \
+		fi; \
+		if [ -n "$(strip $(withDeadline))" ]; then \
+			echo "'context.WithDeadline' is found."; \
+			echo "One of 'context.WithDeadline' is called at: $$(printf "%s\n" $(withDeadline) | head -1)"; \
+		fi; \
+		echo "Use moerr instead."; \
+		exit 1; \
+	else \
+		echo "Does not find 'fmt.Errorf()', 'errors.New()','context.WithTimeout' and 'context.WithDeadline'"; \
+	fi

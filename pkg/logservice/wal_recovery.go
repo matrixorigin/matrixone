@@ -17,10 +17,10 @@ package logservice
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"os"
 	"sort"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -127,7 +127,6 @@ func (s *Service) RecoverWALData(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-
 // readWALDataFile reads WAL entries from the binary data file
 // File format:
 // [count:4][entry1_header:40][entry1_data]...[entryN_header:40][entryN_data]
@@ -139,14 +138,14 @@ func (s *Service) readWALDataFile(ctx context.Context, filePath string) (*WALRec
 	// Open the file
 	f, err := os.Open(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open WAL data file: %w", err)
+		return nil, moerr.NewInternalErrorf(ctx, "failed to open WAL data file: %v", err)
 	}
 	defer f.Close()
 
 	// Read entry count
 	countBuf := make([]byte, 4)
 	if _, err := io.ReadFull(f, countBuf); err != nil {
-		return nil, fmt.Errorf("failed to read entry count: %w", err)
+		return nil, moerr.NewInternalErrorf(ctx, "failed to read entry count: %v", err)
 	}
 	count := binary.LittleEndian.Uint32(countBuf)
 
@@ -161,7 +160,7 @@ func (s *Service) readWALDataFile(ctx context.Context, filePath string) (*WALRec
 	for i := uint32(0); i < count; i++ {
 		// Read header
 		if _, err := io.ReadFull(f, headerBuf); err != nil {
-			return nil, fmt.Errorf("failed to read entry %d header: %w", i, err)
+			return nil, moerr.NewInternalErrorf(ctx, "failed to read entry %d header: %v", i, err)
 		}
 
 		entry := WALEntry{
@@ -177,7 +176,7 @@ func (s *Service) readWALDataFile(ctx context.Context, filePath string) (*WALRec
 		// Read raw data
 		entry.RawData = make([]byte, dataLen)
 		if _, err := io.ReadFull(f, entry.RawData); err != nil {
-			return nil, fmt.Errorf("failed to read entry %d data: %w", i, err)
+			return nil, moerr.NewInternalErrorf(ctx, "failed to read entry %d data: %v", i, err)
 		}
 
 		entries = append(entries, entry)
@@ -191,6 +190,19 @@ func (s *Service) readWALDataFile(ctx context.Context, filePath string) (*WALRec
 	return &WALRecoveryData{Entries: entries}, nil
 }
 
+// buildUserEntryCmd builds a LogService command for UserEntryUpdate.
+// LogService command format:
+// - UpdateType: 4 bytes (big-endian uint32) = 2 (UserEntryUpdate)
+// - LeaseHolderID: 8 bytes (big-endian uint64)
+// - Payload: LogEntry data
+func buildUserEntryCmd(leaseHolderID uint64, payload []byte) []byte {
+	cmd := make([]byte, headerSize+8+len(payload))
+	binaryEnc.PutUint32(cmd[0:4], uint32(pb.UserEntryUpdate))
+	binaryEnc.PutUint64(cmd[4:12], leaseHolderID)
+	copy(cmd[12:], payload)
+	return cmd
+}
+
 // replayWALEntries replays WAL entries to the Log shard
 func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData) error {
 	logger := s.runtime.SubLogger(runtime.SystemInit)
@@ -202,25 +214,93 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 		zap.Uint64("shard_id", shardID),
 		zap.Int("entry_count", len(walData.Entries)))
 
-	// Replay each entry
-	for i, entry := range walData.Entries {
-		// The RawData contains the original LogEntry that was stored in Raft
-		// We need to append it to the Log shard
-		rec := pb.LogRecord{
-			Data: entry.RawData,
+	// Wait for Log shard to be ready before replaying.
+	logger.Info("WAL recovery: waiting for Log shard to be ready",
+		zap.Uint64("shard_id", shardID))
+
+	maxWaitTime := 5 * time.Minute
+	waitStart := time.Now()
+	for {
+		if time.Since(waitStart) > maxWaitTime {
+			return moerr.NewInternalErrorf(ctx, "timeout waiting for Log shard %d to be ready", shardID)
 		}
 
-		// Use the store's append method to write to the Log shard
-		lsn, err := s.store.append(ctx, shardID, rec.Data)
+		info, ok := s.getShardInfo(shardID)
+		if ok && info.LeaderID != 0 {
+			logger.Info("WAL recovery: Log shard is ready",
+				zap.Uint64("shard_id", shardID),
+				zap.Uint64("leader_id", info.LeaderID))
+			time.Sleep(5 * time.Second)
+
+			info2, ok2 := s.getShardInfo(shardID)
+			if ok2 && info2.LeaderID != 0 {
+				logger.Info("WAL recovery: Log shard leader confirmed",
+					zap.Uint64("shard_id", shardID),
+					zap.Uint64("leader_id", info2.LeaderID))
+				break
+			}
+			logger.Warn("WAL recovery: Log shard leader lost after wait, retrying...")
+			continue
+		}
+
+		logger.Info("WAL recovery: Log shard not ready yet, waiting...",
+			zap.Uint64("shard_id", shardID),
+			zap.Bool("found", ok))
+		time.Sleep(time.Second)
+	}
+
+	// Replay each entry
+	logger.Info("WAL recovery: starting entry replay loop",
+		zap.Int("total_entries", len(walData.Entries)))
+
+	appendCtx, cancel := context.WithTimeoutCause(ctx, 30*time.Second, moerr.CauseLogServiceBootstrap)
+	v, err := s.store.read(appendCtx, shardID, leaseHolderIDQuery{})
+	cancel()
+
+	var leaseHolderID uint64
+	if err != nil {
+		logger.Warn("WAL recovery: failed to get lease holder ID, using 0",
+			zap.Error(err))
+		leaseHolderID = 0
+	} else {
+		leaseHolderID = v.(uint64)
+		logger.Info("WAL recovery: got current lease holder ID",
+			zap.Uint64("lease_holder_id", leaseHolderID))
+	}
+
+	for i, entry := range walData.Entries {
+		if i == 0 {
+			logger.Info("WAL recovery: processing first entry",
+				zap.Uint64("dsn", entry.DSN),
+				zap.Int("data_len", len(entry.RawData)))
+		}
+
+		cmd := buildUserEntryCmd(leaseHolderID, entry.RawData)
+		appendCtx, cancel := context.WithTimeoutCause(ctx, 30*time.Second, moerr.CauseLogServiceBootstrap)
+
+		if i == 0 {
+			logger.Info("WAL recovery: calling append for first entry",
+				zap.Int("cmd_len", len(cmd)))
+		}
+
+		lsn, err := s.store.append(appendCtx, shardID, cmd)
+		cancel()
+
+		if i == 0 {
+			logger.Info("WAL recovery: first append completed",
+				zap.Uint64("lsn", lsn),
+				zap.Error(err))
+		}
+
 		if err != nil {
 			logger.Error("WAL recovery: failed to append entry",
 				zap.Int("index", i),
 				zap.Uint64("dsn", entry.DSN),
 				zap.Error(err))
-			return fmt.Errorf("failed to append WAL entry %d (DSN=%d): %w", i, entry.DSN, err)
+			return moerr.NewInternalErrorf(ctx, "failed to append WAL entry %d (DSN=%d): %v", i, entry.DSN, err)
 		}
 
-		if i%100 == 0 || i == len(walData.Entries)-1 {
+		if i%1000 == 0 || i == len(walData.Entries)-1 {
 			logger.Info("WAL recovery: progress",
 				zap.Int("current", i+1),
 				zap.Int("total", len(walData.Entries)),
