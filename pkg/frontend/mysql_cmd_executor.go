@@ -3356,8 +3356,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// the next statement; the proc is updated too for completeness.
 	defer func() {
 		if retErr != nil {
-			ses.SetLastAffectedRows(-1)
-			proc.SetAffectedRows(-1)
+			markRowCountFailed(ses, proc)
 		}
 	}()
 
@@ -3686,6 +3685,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			if prepareStmt != nil {
 				prepareStmt.clearBinaryParamState(ses.GetProc())
 			}
+			// MySQL semantics: a failed statement makes the next ROW_COUNT() return -1.
+			// This parse failure never reaches doComQuery, so the error defer there
+			// does not run; set the state explicitly here.
+			markRowCountFailed(ses, ses.GetProc())
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		execCtx.prepareColDef = prepareStmt.ColDefData
