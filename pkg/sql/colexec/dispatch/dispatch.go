@@ -133,6 +133,9 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	whichToSend := result.Batch
 	if result.Batch == nil {
 		result.Status = vm.ExecStop
+		if err := dispatch.waitRemoteRegsReadyBeforeStop(proc); err != nil {
+			return result, err
+		}
 		printShuffleResult(dispatch)
 		return result, nil
 	}
@@ -156,6 +159,14 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 	}
 	return result, err
+}
+
+func (dispatch *Dispatch) waitRemoteRegsReadyBeforeStop(proc *process.Process) error {
+	if dispatch.ctr == nil || !dispatch.ctr.isRemote || dispatch.ctr.prepared {
+		return nil
+	}
+	_, err := dispatch.waitRemoteRegsReady(proc)
+	return err
 }
 
 func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, error) {

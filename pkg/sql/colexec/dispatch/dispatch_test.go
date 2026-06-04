@@ -15,6 +15,7 @@
 package dispatch
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/google/uuid"
@@ -23,8 +24,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type eofChildOp struct {
+	vm.OperatorBase
+}
+
+func (op *eofChildOp) Free(*process.Process, bool, error)  {}
+func (op *eofChildOp) Reset(*process.Process, bool, error) {}
+func (op *eofChildOp) Release()                            {}
+func (op *eofChildOp) String(buf *bytes.Buffer)            { buf.WriteString("eof_child") }
+func (op *eofChildOp) OpType() vm.OpType                   { return vm.Mock }
+func (op *eofChildOp) GetOperatorBase() *vm.OperatorBase   { return &op.OperatorBase }
+func (op *eofChildOp) ExecProjection(_ *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+func (op *eofChildOp) Prepare(*process.Process) error {
+	op.OpAnalyzer = process.NewAnalyzer(0, false, false, "eof_child")
+	return nil
+}
+func (op *eofChildOp) Call(*process.Process) (vm.CallResult, error) {
+	result := vm.NewCallResult()
+	result.Status = vm.ExecStop
+	return result, nil
+}
 
 func TestPrepareRemote(t *testing.T) {
 	_ = colexec.NewServer(nil)
@@ -65,6 +90,45 @@ func TestPrepareRemote(t *testing.T) {
 	require.False(t, end)
 	require.True(t, d.ctr.prepared)
 	require.Equal(t, []*process.WrapCs{wcs}, d.ctr.remoteReceivers)
+}
+
+func TestDispatchCallWaitsRemoteReceiversOnNoData(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	proc := testutil.NewProcess(t)
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+
+	d := &Dispatch{
+		FuncId:              ShuffleToAllFunc,
+		ShuffleRegIdxRemote: []int{0},
+		RemoteRegs: []colexec.ReceiveInfo{
+			{Uuid: uid},
+		},
+	}
+	d.AppendChild(&eofChildOp{})
+	require.NoError(t, vm.Prepare(d, proc))
+
+	wcs := &process.WrapCs{
+		Uid: uid,
+		Err: make(chan error, 1),
+	}
+	d.ctr.remoteInfo <- wcs
+
+	result, err := d.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.True(t, d.ctr.prepared)
+	require.Equal(t, []*process.WrapCs{wcs}, d.ctr.remoteReceivers)
+
+	d.Reset(proc, false, nil)
+	select {
+	case err = <-wcs.Err:
+		require.NoError(t, err)
+	default:
+		require.Fail(t, "remote receiver should be notified when a remote dispatch ends without data")
+	}
 }
 
 // TestReceiverDone_OldBehavior tests the old behavior (kept for backward compatibility verification)
