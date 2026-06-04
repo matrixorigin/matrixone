@@ -19,7 +19,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
 
@@ -281,18 +284,24 @@ func TestValidateLoadParquetOptionsIgnoresNonParquet(t *testing.T) {
 }
 
 func TestMakeLoadExternalStatsUsesInputBytes(t *testing.T) {
+	tableDef := &TableDef{
+		Cols: []*ColDef{
+			{Name: "a", Typ: Type{Id: int32(types.T_int64), Width: 64}},
+			{Name: "b", Typ: Type{Id: int32(types.T_char), Width: 1}},
+		},
+	}
 	stats := makeLoadExternalStats(&tree.ExternParam{
 		ExParamConst: tree.ExParamConst{FileSize: 100},
-	}, 25)
-	require.Equal(t, float64(75), stats.Cost)
-	require.Equal(t, float64(1), stats.Rowsize)
-	require.Equal(t, int32(1), stats.BlockNum)
-	require.Equal(t, float64(1), stats.TableCnt)
-	require.Equal(t, float64(1), stats.Outcnt)
+	}, tableDef, 25)
+	require.GreaterOrEqual(t, stats.Cost, float64(1))
+	require.GreaterOrEqual(t, stats.Rowsize, float64(1))
+	requireLoadByteHint(t, stats, 75)
+	require.Equal(t, stats.Cost, stats.TableCnt)
+	require.Equal(t, stats.Cost, stats.Outcnt)
 
 	stats = makeLoadExternalStats(&tree.ExternParam{
 		ExParamConst: tree.ExParamConst{FileSize: 10},
-	}, 20)
+	}, tableDef, 20)
 	require.Equal(t, float64(0), stats.Cost)
 	require.Equal(t, float64(1), stats.Rowsize)
 	require.Equal(t, int32(0), stats.BlockNum)
@@ -300,11 +309,41 @@ func TestMakeLoadExternalStatsUsesInputBytes(t *testing.T) {
 	stats = makeLoadExternalStats(&tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
 			ScanType: tree.INLINE,
+			Format:   tree.CSV,
 			Data:     "1,2\n3,4\n",
 		},
-	}, 0)
-	require.Equal(t, float64(8), stats.Cost)
-	require.Equal(t, float64(1), stats.Rowsize)
+	}, tableDef, 0)
+	require.Equal(t, float64(3), stats.Rowsize)
+	requireLoadByteHint(t, stats, 8)
+}
+
+func TestMakeLoadExternalStatsKeepsLargeLoadMultiCN(t *testing.T) {
+	tableDef := &TableDef{
+		Cols: []*ColDef{
+			{Name: "a", Typ: Type{Id: int32(types.T_int64), Width: 64}},
+			{Name: "b", Typ: Type{Id: int32(types.T_char), Width: 1}},
+		},
+	}
+	inputSize := int64(float64(options.DefaultBlockMaxRows) * GetRowSizeFromTableDef(tableDef, true) * 0.8 * float64(BlockThresholdForOneCN+1))
+	stats := makeLoadExternalStats(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{FileSize: inputSize},
+	}, tableDef, 0)
+	require.Greater(t, stats.BlockNum, int32(BlockThresholdForOneCN))
+	require.Greater(t, stats.Cost, float64(costThresholdForOneCN))
+	require.Equal(t, ExecTypeAP_MULTICN, GetExecType(&Query{
+		Nodes: []*Node{{
+			NodeType: pbplan.Node_EXTERNAL_SCAN,
+			Stats:    stats,
+		}},
+		Steps: []int32{0},
+	}, false, false))
+}
+
+func requireLoadByteHint(t *testing.T, stats *Stats, inputSize int64) {
+	t.Helper()
+	estimatedBytes := stats.Cost * stats.Rowsize
+	require.GreaterOrEqual(t, estimatedBytes, float64(inputSize))
+	require.Less(t, estimatedBytes, float64(inputSize)+stats.Rowsize)
 }
 
 func TestLoadParquetMayListFiles(t *testing.T) {

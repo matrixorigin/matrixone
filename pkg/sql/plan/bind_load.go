@@ -184,7 +184,7 @@ func (builder *QueryBuilder) bindExternalScan(
 
 	externalScanNode := &plan.Node{
 		NodeType: plan.Node_EXTERNAL_SCAN,
-		Stats:    makeLoadExternalStats(stmt.Param, offset),
+		Stats:    makeLoadExternalStats(stmt.Param, tableDef, offset),
 		ObjRef:   objRef,
 		TableDef: tableDef,
 		ExternScan: &plan.ExternScan{

@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 const (
@@ -285,13 +287,11 @@ func hasLoadUserVariable(cols []tree.LoadColumn) bool {
 	return false
 }
 
-func makeLoadExternalStats(param *tree.ExternParam, offset int64) *plan.Stats {
+func makeLoadExternalStats(param *tree.ExternParam, tableDef *TableDef, offset int64) *plan.Stats {
 	// LOAD external scan parallelism is currently sized by
 	// getParallelSizeForExternalScan as Cost*Rowsize/WriteS3Threshold.
-	// Use input bytes as Cost and keep Rowsize=1 to provide a byte-size hint
-	// without changing that compile-time formula. This stats shape is valid
-	// only for LOAD external scan sizing; do not reuse it for query planning
-	// paths where Cost is interpreted as optimizer cost or row cardinality.
+	// Keep Cost*Rowsize close to input bytes, but express Cost/Outcnt/BlockNum
+	// as row/cardinality estimates so large LOAD keeps the expected AP path.
 	stats := &plan.Stats{Rowsize: 1}
 	if param == nil {
 		return stats
@@ -305,13 +305,46 @@ func makeLoadExternalStats(param *tree.ExternParam, offset int64) *plan.Stats {
 	if inputSize < 0 {
 		inputSize = 0
 	}
-	stats.Cost = float64(inputSize)
-	if inputSize > 0 {
-		stats.BlockNum = 1
-		stats.TableCnt = 1
-		stats.Outcnt = 1
+	if inputSize == 0 {
+		return stats
 	}
+
+	rowSize := estimateLoadRowsize(param, tableDef, inputSize)
+	rowCount := math.Ceil(float64(inputSize) / rowSize)
+	if rowCount < 1 {
+		rowCount = 1
+	}
+	stats.Cost = rowCount
+	stats.Outcnt = rowCount
+	stats.TableCnt = rowCount
+	stats.Rowsize = rowSize
+	stats.Selectivity = 1
+	stats.BlockNum = int32(rowCount/float64(options.DefaultBlockMaxRows)) + 1
 	return stats
+}
+
+func estimateLoadRowsize(param *tree.ExternParam, tableDef *TableDef, inputSize int64) float64 {
+	if param != nil && param.ScanType == tree.INLINE && param.Format == tree.CSV {
+		if idx := strings.Index(param.Data, "\n"); idx > 0 {
+			return clampLoadRowsize(float64(idx), inputSize)
+		}
+	}
+	if tableDef != nil {
+		if rowSize := GetRowSizeFromTableDef(tableDef, true) * 0.8; rowSize > 0 {
+			return clampLoadRowsize(rowSize, inputSize)
+		}
+	}
+	return clampLoadRowsize(1, inputSize)
+}
+
+func clampLoadRowsize(rowSize float64, inputSize int64) float64 {
+	if rowSize < 1 {
+		return 1
+	}
+	if inputSize > 0 && rowSize > float64(inputSize) {
+		return float64(inputSize)
+	}
+	return rowSize
 }
 
 func loadParquetMayListFiles(param *tree.ExternParam) bool {
@@ -420,7 +453,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	externalScanNode := &plan.Node{
 		NodeType:    plan.Node_EXTERNAL_SCAN,
-		Stats:       makeLoadExternalStats(stmt.Param, offset),
+		Stats:       makeLoadExternalStats(stmt.Param, tableDef, offset),
 		ProjectList: externalProject,
 		ObjRef:      objRef,
 		TableDef:    tableDef,
