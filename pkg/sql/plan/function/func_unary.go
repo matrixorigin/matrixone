@@ -2158,7 +2158,11 @@ func StX(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *proc
 	return stPointOrdinate[float64](ivecs, result, proc, length, selectList, true)
 }
 
-// StX32 is the GEOMETRY32 overload of ST_X (returns float32).
+// StX32 is the GEOMETRY32 overload of ST_X. It returns float32, matching the
+// stored coordinate width of a GEOMETRY32 value. This is a deliberate MatrixOne
+// extension: MySQL's ST_X always returns DOUBLE; for the float32 GEOMETRY32
+// family the coordinate accessors stay float32 to avoid implying precision the
+// value does not carry. Plain GEOMETRY still returns float64 via StX.
 func StX32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stPointOrdinate[float32](ivecs, result, proc, length, selectList, true)
 }
