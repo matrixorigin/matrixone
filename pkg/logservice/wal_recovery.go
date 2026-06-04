@@ -97,8 +97,10 @@ func (s *Service) RecoverWALData(ctx context.Context, cfg Config) error {
 
 	logger.Info("WAL recovery: loaded WAL entries",
 		zap.Int("count", len(walData.Entries)),
-		zap.Uint64("first_dsn", walData.Entries[0].DSN),
-		zap.Uint64("last_dsn", walData.Entries[len(walData.Entries)-1].DSN))
+		zap.Uint64("first_raft_index", walData.Entries[0].RaftIndex),
+		zap.Uint64("last_raft_index", walData.Entries[len(walData.Entries)-1].RaftIndex),
+		zap.Uint64("first_entry_dsn", walData.Entries[0].DSN),
+		zap.Uint64("last_entry_dsn", walData.Entries[len(walData.Entries)-1].DSN))
 
 	// Replay WAL entries to Log shard
 	if err := s.replayWALEntries(ctx, walData); err != nil {
@@ -182,9 +184,10 @@ func (s *Service) readWALDataFile(ctx context.Context, filePath string) (*WALRec
 		entries = append(entries, entry)
 	}
 
-	// Sort entries by DSN to ensure correct replay order
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].DSN < entries[j].DSN
+	// Replay must follow the original LogService PSN order. The backup file
+	// stores the source raft index, which is the old LogService LSN/PSN.
+	sort.SliceStable(entries, func(i, j int) bool {
+		return entries[i].RaftIndex < entries[j].RaftIndex
 	})
 
 	return &WALRecoveryData{Entries: entries}, nil
