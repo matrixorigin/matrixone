@@ -608,7 +608,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			},
 		}
 		buildSpec := MakeRuntimeFilter(rfTag, false, 0, buildExpr, false)
-		buildSpec.UseBloomFilter = true
+		buildSpec.UseMembershipFilter = true
 		innerJoinNode := builder.qry.Nodes[innerJoinNodeID]
 		innerJoinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
 
@@ -623,7 +623,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			},
 		}
 		probeSpec := MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)
-		probeSpec.UseBloomFilter = true
+		probeSpec.UseMembershipFilter = true
 		tableFuncNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
 
 		// The original scan was guarded during the recursive planner pass so the vector rewrite
