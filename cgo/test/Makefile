@@ -27,12 +27,18 @@ else
 endif
 
 CFLAGS := -I.. -g -I../../thirdparties/install/include $(COMPILER_FLAGS)
-LDFLAGS := $(LIBS) $(LINKER_FLAGS)
+LDFLAGS := $(LIBS) -lroaring $(LINKER_FLAGS)
 
-all: test_add.exe test_bloom.exe test_varlena.exe
+all: test_add.exe test_bloom.exe test_varlena.exe test_cbitmap.exe test_croaring.exe
 
-test_add.exe: test_add.c 
+test_add.exe: test_add.c
 	$(CC) $(CFLAGS) -o $@ test_add.c $(LDFLAGS)
+
+test_cbitmap.exe: test_cbitmap.c
+	$(CC) $(CFLAGS) -o $@ test_cbitmap.c $(LDFLAGS)
+
+test_croaring.exe: test_croaring.c
+	$(CC) $(CFLAGS) -o $@ test_croaring.c $(LDFLAGS)
 
 test_bloom.exe: test_bloom.c
 	$(CC) $(CFLAGS) -o $@ test_bloom.c $(LDFLAGS)
