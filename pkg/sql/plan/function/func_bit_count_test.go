@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -40,10 +41,136 @@ func TestBitCountString(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tc := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "   ", "64", "-1", "255"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{
+				"", "   ", "64", "+1", "-1", "-2", "255",
+				"9223372036854775808",
+				"18446744073709551615",
+				"18446744073709551616",
+				"-9223372036854775808",
+				"-18446744073709551616",
+			}, nil),
 		},
-		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 0, 1, 64, 8}, nil),
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{
+			0, 0, 1, 1, 64, 63, 8,
+			1,
+			64,
+			64,
+			1,
+			1,
+		}, nil),
 		BitCountNonBinaryString)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestBitCountStringInvalidFormat(t *testing.T) {
+	_, err := bitCountFromMysqlIntegerString("123abc")
+	require.Error(t, err)
+
+	_, err = bitCountFromMysqlIntegerString("1.9")
+	require.Error(t, err)
+}
+
+func TestBitCountFloat(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{
+				1.4, 1.5, 2.5, 3.5,
+				-1.4, -1.5, -2.5, -3.5,
+				math.Inf(1), math.Inf(-1),
+			}, nil),
+		},
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{
+			1, 1, 1, 1,
+			64, 63, 63, 62,
+			63, 1,
+		}, nil),
+		BitCountFloat[float64])
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+
+	_, err := bitCountFromFloat(math.NaN(), proc)
+	require.Error(t, err)
+}
+
+func TestBitCountDecimal64(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.New(types.T_decimal64, 18, 1)
+	inputs := []string{"1.4", "1.5", "2.5", "-1.4", "-1.5", "-2.5"}
+	values := make([]types.Decimal64, len(inputs))
+	for i, input := range inputs {
+		v, err := types.ParseDecimal64(input, typ.Width, typ.Scale)
+		require.NoError(t, err)
+		values[i] = v
+	}
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(typ, values, nil),
+		},
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 1, 2, 64, 63, 63}, nil),
+		BitCountDecimal64)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+
+	got, err := bitCountFromDecimal64(types.Decimal64Max, 0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(63), got)
+
+	got, err = bitCountFromDecimal64(types.Decimal64Min, 0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), got)
+}
+
+func TestBitCountDecimal128(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.New(types.T_decimal128, 38, 0)
+	inputs := []string{
+		"9223372036854775807",
+		"9223372036854775808",
+		"18446744073709551615",
+		"18446744073709551616",
+		"-9223372036854775808",
+		"-18446744073709551616",
+	}
+	values := make([]types.Decimal128, len(inputs))
+	for i, input := range inputs {
+		v, err := types.ParseDecimal128(input, typ.Width, typ.Scale)
+		require.NoError(t, err)
+		values[i] = v
+	}
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(typ, values, nil),
+		},
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{63, 63, 63, 63, 1, 1}, nil),
+		BitCountDecimal128)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestBitCountDecimal256(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.New(types.T_decimal256, 65, 1)
+	values := []types.Decimal256{
+		mustParseDecimal256(t, "1.5", 1),
+		mustParseDecimal256(t, "2.5", 1),
+		mustParseDecimal256(t, "-1.5", 1),
+		mustParseDecimal256(t, "9223372036854775807.0", 1),
+		mustParseDecimal256(t, "9223372036854775808.0", 1),
+		mustParseDecimal256(t, "18446744073709551615.0", 1),
+		mustParseDecimal256(t, "18446744073709551616.0", 1),
+		mustParseDecimal256(t, "-18446744073709551616.0", 1),
+	}
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(typ, values, nil),
+		},
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 2, 63, 63, 63, 63, 63, 1}, nil),
+		BitCountDecimal256)
 	ok, info := tc.Run()
 	require.True(t, ok, info)
 }

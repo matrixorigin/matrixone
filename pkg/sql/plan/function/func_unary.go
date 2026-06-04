@@ -27,6 +27,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"hash/crc32"
@@ -538,50 +539,99 @@ func bitCountFromUint64(v uint64) uint64 {
 	return uint64(bits.OnesCount64(v))
 }
 
-func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64, error) {
-	if err := overflowForNumericToNumeric[T, int64](proc.Ctx, []T{v}, nil); err != nil {
-		return 0, err
-	}
-	return bitCountFromUint64(uint64(int64(v))), nil
+const minInt64BitPattern = uint64(1) << 63
+
+func bitCountFromSignedInt64Pattern(v int64) uint64 {
+	return bitCountFromUint64(uint64(v))
 }
 
-func bitCountFromDecimal64(v types.Decimal64, scale int32) (uint64, error) {
-	intPart := strings.Split(v.Format(scale), ".")[0]
-	val, err := strconv.ParseInt(intPart, 10, 64)
-	if err != nil {
-		return 0, err
-	}
-	return bitCountFromUint64(uint64(val)), nil
-}
-
-func bitCountFromDecimal128(v types.Decimal128, scale int32) (uint64, error) {
-	intPart := strings.Split(v.Format(scale), ".")[0]
-	val, err := strconv.ParseInt(intPart, 10, 64)
-	if err != nil {
-		return 0, err
-	}
-	return bitCountFromUint64(uint64(val)), nil
-}
-
-func bitCountFromDecimal256(v types.Decimal256, scale int32) (uint64, error) {
-	intPart := strings.Split(v.Format(scale), ".")[0]
-	val, err := strconv.ParseInt(intPart, 10, 64)
-	if err != nil {
-		return 0, err
-	}
-	return bitCountFromUint64(uint64(val)), nil
-}
-
-func bitCountFromNonBinaryString(v []byte) (uint64, error) {
-	s := strings.TrimSpace(convertByteSliceToString(v))
+func bitCountFromMysqlIntegerString(s string) (uint64, error) {
+	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0, nil
 	}
-	val, err := strconv.ParseInt(s, 10, 64)
+
+	if strings.HasPrefix(s, "-") {
+		val, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			if errors.Is(err, strconv.ErrRange) {
+				return bitCountFromUint64(minInt64BitPattern), nil
+			}
+			return 0, err
+		}
+		return bitCountFromUint64(uint64(val)), nil
+	}
+
+	if strings.HasPrefix(s, "+") {
+		s = s[1:]
+	}
+	val, err := strconv.ParseUint(s, 10, 64)
 	if err != nil {
+		if errors.Is(err, strconv.ErrRange) {
+			return bitCountFromUint64(math.MaxUint64), nil
+		}
 		return 0, err
 	}
-	return bitCountFromUint64(uint64(val)), nil
+	return bitCountFromUint64(val), nil
+}
+
+func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64, error) {
+	val := float64(v)
+	if math.IsNaN(val) {
+		return 0, moerr.NewInvalidInput(proc.Ctx, "The input value is out of range")
+	}
+	if val <= float64(math.MinInt64) {
+		return bitCountFromUint64(minInt64BitPattern), nil
+	}
+	const maxInt64PlusOne = 9223372036854775808.0
+	if val >= maxInt64PlusOne {
+		return bitCountFromUint64(uint64(math.MaxInt64)), nil
+	}
+	rounded := math.RoundToEven(val)
+	if rounded <= float64(math.MinInt64) {
+		return bitCountFromUint64(minInt64BitPattern), nil
+	}
+	if rounded >= maxInt64PlusOne {
+		return bitCountFromUint64(uint64(math.MaxInt64)), nil
+	}
+	return bitCountFromSignedInt64Pattern(int64(rounded)), nil
+}
+
+func bitCountFromDecimal64(v types.Decimal64, scale int32) (uint64, error) {
+	v = v.Round(scale, 0, true)
+	if v.Less(types.Decimal64Min) {
+		return bitCountFromUint64(minInt64BitPattern), nil
+	}
+	if types.Decimal64Max.Less(v) {
+		return bitCountFromUint64(uint64(math.MaxInt64)), nil
+	}
+	return bitCountFromSignedInt64Pattern(int64(v)), nil
+}
+
+func bitCountFromDecimal128(v types.Decimal128, scale int32) (uint64, error) {
+	v = v.Round(scale, 0, true)
+	if v.Less(types.Decimal128FromInt64(math.MinInt64)) {
+		return bitCountFromUint64(minInt64BitPattern), nil
+	}
+	if types.Decimal128FromInt64(math.MaxInt64).Less(v) {
+		return bitCountFromUint64(uint64(math.MaxInt64)), nil
+	}
+	return bitCountFromSignedInt64Pattern(int64(v.B0_63)), nil
+}
+
+func bitCountFromDecimal256(v types.Decimal256, scale int32) (uint64, error) {
+	v = v.Round(scale, 0, true)
+	if v.Less(types.Decimal256FromInt64(math.MinInt64)) {
+		return bitCountFromUint64(minInt64BitPattern), nil
+	}
+	if types.Decimal256FromInt64(math.MaxInt64).Less(v) {
+		return bitCountFromUint64(uint64(math.MaxInt64)), nil
+	}
+	return bitCountFromSignedInt64Pattern(int64(v.B0_63)), nil
+}
+
+func bitCountFromNonBinaryString(v []byte) (uint64, error) {
+	return bitCountFromMysqlIntegerString(convertByteSliceToString(v))
 }
 
 func bitCountFromBinaryString(v []byte) uint64 {
