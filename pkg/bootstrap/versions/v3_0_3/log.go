@@ -12,17 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package bootstrap
+package v3_0_3
 
 import (
-	"testing"
-
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 )
 
-func TestInitUpgradeTracksLatest3_0Version(t *testing.T) {
-	s := &service{}
-	s.initUpgrade()
-
-	require.Equal(t, "3.0.3", s.GetFinalVersion())
+func getLogger(sid string) *log.MOLogger {
+	return runtime.ServiceRuntime(sid).Logger()
 }
