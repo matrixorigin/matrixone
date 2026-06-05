@@ -11106,6 +11106,7 @@ func DateTrunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 // DateTruncDate truncates a date value to the specified precision.
+// Sub-day units (hour, minute, second) are rejected because DATE has no time component.
 func DateTruncDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[1])
@@ -11120,6 +11121,9 @@ func DateTruncDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			}
 		} else {
 			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(unit))
+			if unitStr == "hour" || unitStr == "minute" || unitStr == "second" {
+				return moerr.NewInternalErrorNoCtxf("unsupported unit '%s' for date_trunc on DATE type", unitStr)
+			}
 			dt := d.ToDatetime()
 			truncated, err := dateTruncCore(unitStr, dt)
 			if err != nil {
@@ -11134,16 +11138,17 @@ func DateTruncDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 }
 
 // DateTruncTimestamp truncates a timestamp value to the specified precision.
+// Returns TIMESTAMP to preserve the input's timezone/instant semantics.
 func DateTruncTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[1])
-	rs := vector.MustFunctionResult[types.Datetime](result)
+	rs := vector.MustFunctionResult[types.Timestamp](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
 		unit, null1 := p1.GetStrValue(i)
 		ts, null2 := p2.GetValue(i)
 		if null1 || null2 {
-			if err := rs.Append(types.Datetime(0), true); err != nil {
+			if err := rs.Append(types.Timestamp(0), true); err != nil {
 				return err
 			}
 		} else {
@@ -11157,7 +11162,7 @@ func DateTruncTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			if err != nil {
 				return err
 			}
-			if err := rs.Append(truncated, false); err != nil {
+			if err := rs.Append(truncated.ToTimestamp(loc), false); err != nil {
 				return err
 			}
 		}
