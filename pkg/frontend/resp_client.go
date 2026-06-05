@@ -29,24 +29,18 @@ func setResponse(ses *Session, isLastStmt bool, rspLen uint64) *Response {
 	return ses.SetNewResponse(OkResponse, rspLen, int(COM_QUERY), "", isLastStmt)
 }
 
-// isRowCountDML reports whether the statement is a DML whose affected rows
-// should be exposed by the ROW_COUNT() builtin.
-func isRowCountDML(stmt tree.Statement) bool {
-	switch stmt.(type) {
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Replace, *tree.Load:
-		return true
-	default:
-		return false
-	}
-}
-
 // recordLastAffectedRows records the value the ROW_COUNT() builtin should return
 // for the statement that just finished. It is called once per statement, right
 // after execution, so it covers both single- and multi-statement COM_QUERY and
 // the binary-protocol execute path.
 //
-// MySQL semantics: affected rows for DML, -1 after a statement that returns a
-// result set (SELECT/SHOW/...), 0 otherwise (DDL, SET, ...).
+// MySQL semantics, keyed off how the statement reports its result rather than a
+// fixed AST whitelist:
+//   - result-set statement (SELECT/SHOW/...): -1
+//   - status statement: the rows it actually affected. This covers DML, LOAD and
+//     status-returning selects such as `SELECT ... INTO ...`; DDL and other
+//     no-op status statements naturally carry AffectRows == 0.
+//   - anything else (undefined output): 0
 //
 // The value is written to both the process and the session: the process so that
 // a later statement reusing the same proc (multi-statement COM_QUERY) reads the
@@ -54,13 +48,13 @@ func isRowCountDML(stmt tree.Statement) bool {
 // proc seeded from the session) reads it too.
 func recordLastAffectedRows(ses *Session, execCtx *ExecCtx) {
 	var n int64
-	switch {
-	case isRowCountDML(execCtx.stmt):
+	switch execCtx.stmt.StmtKind().OutputType() {
+	case tree.OUTPUT_RESULT_ROW:
+		n = -1
+	case tree.OUTPUT_STATUS:
 		if execCtx.runResult != nil {
 			n = int64(execCtx.runResult.AffectRows)
 		}
-	case execCtx.stmt.StmtKind().OutputType() == tree.OUTPUT_RESULT_ROW:
-		n = -1
 	}
 	if execCtx.proc != nil {
 		execCtx.proc.SetAffectedRows(n)

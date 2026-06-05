@@ -47,6 +47,15 @@ create table t2(a int);
 select row_count();
 ➤ row_count()[-5,64,0]  𝄀
 0
+create table src(a int);
+insert into src values (1),(2),(3),(4),(5),(6);
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+6
+create table ctas as select * from src;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+6
 insert into t values (1,12345);
 Duplicate entry '1' for key 'id'
 select row_count();
