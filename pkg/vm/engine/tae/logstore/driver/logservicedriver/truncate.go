@@ -162,7 +162,11 @@ func (d *LogServiceDriver) truncateFromRemote(
 		)
 	}()
 
-	if client, err = d.clientPool.GetOnFly(); err == ErrClientPoolClosed {
+	// NOTE: GetOnFly may return (nil, err) when the client factory fails to
+	// create a client (e.g. logservice.NewClient times out). Return on any
+	// error; otherwise the deferred client.Putback() below would dereference a
+	// nil *wrappedClient and panic. This mirrors the Get() path below.
+	if client, err = d.clientPool.GetOnFly(); err != nil {
 		return
 	}
 	defer client.Putback()
