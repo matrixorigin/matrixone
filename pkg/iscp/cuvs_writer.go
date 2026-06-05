@@ -314,6 +314,12 @@ func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 		return nil
 	})
 	if err != nil {
+		// The factory may have constructed `sync` (GPU resources) inside the
+		// callback before RunTxn's commit failed — release it here so a commit
+		// failure doesn't leak the GPU index. (defer below isn't reached yet.)
+		if sync != nil {
+			sync.Destroy()
+		}
 		errch <- err
 		return
 	}

@@ -263,6 +263,13 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// Pre-count source rows; needed both for IndexCapacity auto-
 		// detection (when 0) and for the small-tail CDC cutoff
 		// computation below. One round trip per build.
+		//
+		// Snapshot safety: this COUNT(*) runs via NewSqlProcess(proc), i.e. on
+		// the SAME proc/transaction as the table function's source scan that
+		// streams the build rows. Under MO's per-txn snapshot isolation both
+		// observe the same read timestamp, so srcRowCount equals the number of
+		// rows actually streamed — the `rowsSeen >= cdcCutoff` split cannot drift
+		// even under concurrent writes to the source table.
 		srcRowCount, err := fetchSrcTableRowCount(proc, cagra_runSql, u.tblcfg.DbName, u.tblcfg.SrcTable)
 		if err != nil {
 			return err

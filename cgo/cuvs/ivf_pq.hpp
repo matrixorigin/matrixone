@@ -1069,9 +1069,9 @@ public:
 
         if (local_index) {
             // Reuse per-thread grow-only workspace buffers (Step C). Allocated
-            // once per worker thread out of the RMM pool installed by
-            // ensure_rmm_pool_for_device, then resized lazily to the largest
-            // num_queries seen so far. Eliminates 4-5 cudaMallocs per search.
+            // once per worker thread out of the RMM pool (via worker_pool_mr in
+            // ensure_uvec_), then resized lazily to the largest num_queries seen
+            // so far. Eliminates 4-5 cudaMallocs per search.
             auto& q_buf = handle.template q_dev_buf<T>(static_cast<size_t>(num_queries) * this->dimension);
             auto queries_device = raft::make_device_matrix_view<T, int64_t>(
                 q_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));

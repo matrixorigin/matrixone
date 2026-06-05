@@ -170,8 +170,8 @@ func (s *CagraSearch[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	if err = s.buildOverflow(); err != nil {
 		return err
 	}
-	s.MultiIndex = s.buildMultiIndex()
-	return nil
+	s.MultiIndex, err = s.buildMultiIndex()
+	return err
 }
 
 // loadCdcTail loads the tag=1 event-log rows persisted by CDC under the
@@ -358,10 +358,12 @@ func (s *CagraSearch[T]) buildOverflow() error {
 // which returns []int64{}, []float64{} on s.MultiIndex == nil — that's
 // the load-bearing path for "no main index + no brute-force → empty
 // result". Any future regression here will fail TestCagraSearchEmpty.
-func (s *CagraSearch[T]) buildMultiIndex() *cuvs.MultiGpuCagra[T] {
+func (s *CagraSearch[T]) buildMultiIndex() (*cuvs.MultiGpuCagra[T], error) {
 	cuvsMetric, ok := metric.MetricTypeToCuvsMetric[metric.MetricType(s.Idxcfg.CuvsCagra.Metric)]
 	if !ok {
-		return nil
+		// Unsupported metric is a real error — surface it rather than returning a
+		// nil index, which Search would treat as an (empty) success.
+		return nil, moerr.NewInternalErrorNoCtxf("CagraSearch: unsupported metric type %v", s.Idxcfg.CuvsCagra.Metric)
 	}
 	gpuIndices := make([]*cuvs.GpuCagra[T], 0, len(s.Indexes))
 	for _, model := range s.Indexes {
@@ -370,12 +372,12 @@ func (s *CagraSearch[T]) buildMultiIndex() *cuvs.MultiGpuCagra[T] {
 		}
 	}
 	if len(gpuIndices) == 0 && s.Overflow == nil {
-		// Empty index: no sub-indexes AND no brute-force overflow.
+		// Empty index: no sub-indexes AND no brute-force overflow. Not an error —
 		// Search returns an empty result via its nil-MultiIndex guard.
-		return nil
+		return nil, nil
 	}
 	dim := uint32(s.Idxcfg.CuvsCagra.Dimensions)
-	return cuvs.NewMultiGpuCagra(gpuIndices, s.Overflow, dim, cuvsMetric)
+	return cuvs.NewMultiGpuCagra(gpuIndices, s.Overflow, dim, cuvsMetric), nil
 }
 
 // loadIndexes loads each model's index data from the database.

@@ -151,8 +151,8 @@ func (s *IvfpqSearch[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	if err = s.buildOverflow(); err != nil {
 		return err
 	}
-	s.MultiIndex = s.buildMultiIndex()
-	return nil
+	s.MultiIndex, err = s.buildMultiIndex()
+	return err
 }
 
 // loadCdcTail mirrors cagra.CagraSearch.loadCdcTail — see that for the
@@ -344,10 +344,12 @@ func (s *IvfpqSearch[T]) buildOverflow() error {
 // s.MultiIndex == nil — that's the load-bearing path for "no main
 // index + no brute-force → empty result". Any future regression here
 // will fail TestIvfpqSearchEmpty.
-func (s *IvfpqSearch[T]) buildMultiIndex() *cuvs.MultiGpuIvfPq[T] {
+func (s *IvfpqSearch[T]) buildMultiIndex() (*cuvs.MultiGpuIvfPq[T], error) {
 	cuvsMetric, ok := metric.MetricTypeToCuvsMetric[metric.MetricType(s.Idxcfg.CuvsIvfpq.Metric)]
 	if !ok {
-		return nil
+		// Unsupported metric is a real error — surface it rather than returning a
+		// nil index, which Search would treat as an (empty) success.
+		return nil, moerr.NewInternalErrorNoCtxf("IvfpqSearch: unsupported metric type %v", s.Idxcfg.CuvsIvfpq.Metric)
 	}
 	gpuIndices := make([]*cuvs.GpuIvfPq[T], 0, len(s.Indexes))
 	for _, model := range s.Indexes {
@@ -356,12 +358,12 @@ func (s *IvfpqSearch[T]) buildMultiIndex() *cuvs.MultiGpuIvfPq[T] {
 		}
 	}
 	if len(gpuIndices) == 0 && s.Overflow == nil {
-		// Empty index: no sub-indexes AND no brute-force overflow.
+		// Empty index: no sub-indexes AND no brute-force overflow. Not an error —
 		// Search returns an empty result via its nil-MultiIndex guard.
-		return nil
+		return nil, nil
 	}
 	dim := uint32(s.Idxcfg.CuvsIvfpq.Dimensions)
-	return cuvs.NewMultiGpuIvfPq(gpuIndices, s.Overflow, dim, cuvsMetric)
+	return cuvs.NewMultiGpuIvfPq(gpuIndices, s.Overflow, dim, cuvsMetric), nil
 }
 
 // loadIndexes loads each model's index data from the database.
