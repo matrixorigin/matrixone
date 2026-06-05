@@ -1296,6 +1296,26 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 
+	//promote interval expr rewrite here
+	if name == "interval" {
+		if len(astArgs) == 2 {
+			//interval expr like 'interval 5 day'
+			if _, ok := astArgs[1].(*tree.TimeUnitExpr); ok {
+				// rewrite interval function to ListExpr, and return directly
+				return &plan.Expr{
+					Typ: plan.Type{
+						Id: int32(types.T_interval),
+					},
+					Expr: &plan.Expr_List{
+						List: &plan.ExprList{
+							List: args,
+						},
+					},
+				}, nil
+			}
+		}
+	}
+
 	if b.builder != nil {
 		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
 		if err == nil {
@@ -1568,20 +1588,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return args[0], nil
 			}
 		}
-	case "interval":
-		if isIntervalExprSyntax(args) {
-			// rewrite interval expression syntax to ListExpr, and return directly
-			return &plan.Expr{
-				Typ: plan.Type{
-					Id: int32(types.T_interval),
-				},
-				Expr: &plan.Expr_List{
-					List: &plan.ExprList{
-						List: args,
-					},
-				},
-			}, nil
-		}
+
 	case "and", "or", "not", "xor":
 		// why not append cast function?
 		// for i := 0; i < len(args); i++ {
@@ -2698,18 +2705,6 @@ func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) 
 
 func resetIntervalFunction(ctx context.Context, intervalExpr *Expr) ([]*Expr, error) {
 	return resetIntervalFunctionArgs(ctx, intervalExpr)
-}
-
-func isIntervalExprSyntax(args []*Expr) bool {
-	if len(args) != 2 {
-		return false
-	}
-	lit := args[1].GetLit()
-	if lit == nil || lit.Isnull {
-		return false
-	}
-	_, err := types.IntervalTypeOf(lit.GetSval())
-	return err == nil
 }
 
 func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr, error) {

@@ -57,7 +57,7 @@ select interval(2, 1.5, 2.5, 3.5);
 select interval(cast(2.90 as decimal(10,2)), cast(1.0 as decimal(10,1)), cast(2.90 as decimal(10,2)), cast(3.0 as decimal(10,1)));
 select interval(cast(2.90 as decimal(10,2)), 1, 2, 3);
 
--- MySQL-style numeric conversion from strings should return values with warnings, not fail.
+-- Should errors
 select interval('', 1, 10, 100);
 select interval('   ', 1, 10, 100);
 select interval('1abc', 1, 10, 100);
