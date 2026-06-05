@@ -168,6 +168,78 @@ func TestSimulatedShardedIvfFlat(t *testing.T) {
 	}
 }
 
+// TestSimulatedShardedDeleteIvfFlat exercises the filtered (soft-delete) SHARDED
+// search path under simulation — the case the per-device shard-bitset cache got
+// wrong. With the [0,0,0,0] device list every shard maps to physical device 0;
+// the cache used to key by dev_id alone, so two shards (different shard_offset,
+// same dev_id) collided on one entry and one reused the other's delete-bitset
+// slice — a deleted row in one shard could still be returned. The fix keys the
+// shard bitset cache by (dev_id, shard_offset). Deletes here span two different
+// shards; each must be excluded from its own shard's results.
+func TestSimulatedShardedDeleteIvfFlat(t *testing.T) {
+	simSkipNoGPU(t)
+	dim := uint32(4)
+	count := uint64(128) // 4 shards of 32; shard_offsets 0 / 32 / 64 / 96
+	ds, ids := simData(count, dim)
+
+	bp := DefaultIvfFlatBuildParams()
+	bp.NLists = 4
+	bp.KmeansTrainsetFraction = 1.0
+	idx, err := NewGpuIvfFlat[float32](ds, count, dim, L2Expanded, bp, simDevices(), simRanks, Sharded, ids)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer idx.Destroy()
+	if err := idx.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := idx.Build(); err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	sp := DefaultIvfFlatSearchParams()
+	sp.NProbes = 4
+
+	// Soft-delete rows in two DIFFERENT shards: row 40 (shard 1 @offset 32) and
+	// row 80 (shard 2 @offset 64). id = row + 100.
+	delRows := []uint64{40, 80}
+	for _, row := range delRows {
+		if err := idx.DeleteId(int64(row + 100)); err != nil {
+			t.Fatalf("delete id %d: %v", row+100, err)
+		}
+	}
+
+	// Searching a deleted row's own vector must NOT return that id — its shard's
+	// delete bitset must apply. With the old dev_id-keyed cache, whichever shard
+	// synced first won the single device-0 entry and the other shard's delete was
+	// dropped, so the deleted id came back. The nearest *surviving* row (adjacent,
+	// within tol 2) is returned instead.
+	for _, row := range delRows {
+		res, err := idx.Search(simRow(ds, dim, row), 1, dim, 1, sp)
+		if err != nil {
+			t.Fatalf("search deleted row %d: %v", row, err)
+		}
+		if len(res.Neighbors) != 1 {
+			t.Fatalf("row %d: expected 1 neighbor, got %v", row, res.Neighbors)
+		}
+		if res.Neighbors[0] == int64(row+100) {
+			t.Fatalf("row %d: deleted id %d was returned — shard delete bitset not applied (cache collision)",
+				row, row+100)
+		}
+		simExpectNeighbor(t, res.Neighbors, int64(row+100), 2) // adjacent surviving row
+	}
+
+	// Non-deleted rows in other shards still return themselves — confirms the
+	// deletes didn't corrupt the other shards' bitsets.
+	for _, row := range []uint64{3, 110} { // shard 0 and shard 3
+		res, err := idx.Search(simRow(ds, dim, row), 1, dim, 1, sp)
+		if err != nil {
+			t.Fatalf("search row %d: %v", row, err)
+		}
+		simExpectNeighbor(t, res.Neighbors, int64(row+100), simTolExact)
+	}
+}
+
 func TestSimulatedReplicatedExtendIvfFlat(t *testing.T) {
 	simSkipNoGPU(t)
 	dim := uint32(4)

@@ -388,6 +388,58 @@ TEST(GpuIvfFlatTest, SimulatedShardedBuildSearch) {
     index.destroy();
 }
 
+// SHARDED soft-delete under simulation — exercises the per-shard delete-bitset
+// cache (gpu_index_base_t::device_shard_bitsets_ / acquire_delete_bitset_device).
+// With the [0,0] device list both shards map to physical device 0; the cache must
+// key by RANK, not dev_id. Pre-fix the two shards collided on a single device-0
+// entry and one shard reused the other's bitset slice (and the version check then
+// skipped re-syncing), so a deleted row in one shard was still returned. Here we
+// delete one row in EACH shard and require both to be excluded from their own
+// shard's results.
+TEST(GpuIvfFlatTest, SimulatedShardedDeleteSearch) {
+    if (gpu_get_device_count() < 1) { TEST_LOG("Skipping SimulatedShardedDeleteSearch (no GPU)"); return; }
+
+    const uint32_t dim = 4; const uint64_t count = 64; // 2 shards of 32; offsets 0 / 32
+    std::vector<float> ds(count * dim); std::vector<int64_t> ids(count);
+    for (uint64_t i = 0; i < count; ++i) { for (uint32_t j = 0; j < dim; ++j) ds[i*dim+j] = (float)(i+1); ids[i] = (int64_t)(i+100); }
+
+    std::vector<int> sim2 = {0, 0};
+    ivf_flat_build_params_t bp = ivf_flat_build_params_default(); bp.n_lists = 4;
+    gpu_ivf_flat_t<float> index(ds.data(), count, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_SHARDED, ids.data());
+    index.start(); index.build();
+    ASSERT_TRUE(index.info().find("\"ranks\": 2") != std::string::npos);
+
+    // Soft-delete one row per shard: row 10 (id 110) in shard 0 @offset 0, and
+    // row 45 (id 145) in shard 1 @offset 32.
+    index.delete_id(110);
+    index.delete_id(145);
+
+    ivf_flat_search_params_t sp = ivf_flat_search_params_default(); sp.n_probes = 4;
+
+    // Probing a deleted row's own vector must NOT return that id — its shard's
+    // delete must apply. Pre-fix, the colliding cache dropped one shard's delete
+    // and returned the deleted id. The nearest surviving row (adjacent, +/-1) is
+    // returned instead (row 9/11 resp. 44/46 are equidistant — accept either).
+    for (int r : {10, 45}) {
+        std::vector<float> q(ds.begin()+r*dim, ds.begin()+(r+1)*dim);
+        auto res = index.search(q.data(), 1, dim, 1, sp);
+        ASSERT_EQ(res.neighbors.size(), (size_t)1);
+        ASSERT_NE(res.neighbors[0], (int64_t)(r+100));      // deleted id excluded
+        int64_t d = res.neighbors[0] - (int64_t)(r+100);
+        ASSERT_TRUE(d == 1 || d == -1);                     // adjacent surviving row
+    }
+
+    // Non-deleted rows (one per shard) still return themselves — confirms the
+    // deletes did not corrupt the OTHER shard's bitset slice.
+    for (int r : {3, 50}) {
+        std::vector<float> q(ds.begin()+r*dim, ds.begin()+(r+1)*dim);
+        auto res = index.search(q.data(), 1, dim, 1, sp);
+        ASSERT_EQ(res.neighbors.size(), (size_t)1);
+        ASSERT_EQ(res.neighbors[0], (int64_t)(r+100));
+    }
+    index.destroy();
+}
+
 // Concurrent EXTEND on the same physical device. extend() replicates to every
 // rank via submit_all_devices, so under [0,0] two cuVS extends run on device 0
 // at once — which raced and crashed pre-fix. The per-device build/extend mutex
