@@ -11241,6 +11241,29 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `cast_json_to_array`
+	{
+		functionId: CAST_JSON_TO_ARRAY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_json},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastJsonToArray
+				},
+			},
+		},
+	},
+
 	// function `cast_nano_to_timestamp`
 	{
 		functionId: CAST_NANO_TO_TIMESTAMP,

@@ -361,7 +361,9 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, err
 		}
 		typeName := "ENUM"
-		if typ.Oid == types.T_uint64 {
+		if typ.Oid == types.T_json && strings.HasPrefix(strings.ToLower(strings.TrimSpace(enumStr)), "array(") {
+			return functionUtil.QuickStrToBytes(enumStr), nil
+		} else if typ.Oid == types.T_uint64 {
 			typeName = "SET"
 		} else if typ.Oid == types.T_geometry {
 			subtype := ""

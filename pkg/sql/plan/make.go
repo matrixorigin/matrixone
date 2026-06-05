@@ -612,6 +612,15 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 			return expr, nil
 		}
 	}
+	if isTypedArrayPlanType(&targetType) {
+		expr, err = funcCastForTypedArrayType(ctx, expr, targetType)
+		if err != nil {
+			return nil, err
+		}
+		if isSameColumnType(expr.Typ, targetType) {
+			return expr, nil
+		}
+	}
 
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	fGet, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
