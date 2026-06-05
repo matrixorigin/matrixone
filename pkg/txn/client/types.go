@@ -134,6 +134,8 @@ type TxnOperator interface {
 	UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error
 	// SnapshotTS returns the snapshot timestamp of the transaction.
 	SnapshotTS() timestamp.Timestamp
+	// SetSnapshotTS updates the snapshot timestamp of the transaction.
+	SetSnapshotTS(ts timestamp.Timestamp)
 	// CreateTS returns the creation timestamp of the txnOperator.
 	CreateTS() timestamp.Timestamp
 	// Status returns the current transaction status.

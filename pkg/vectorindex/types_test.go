@@ -20,6 +20,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestValidDistributionMode(t *testing.T) {
+	require.True(t, ValidDistributionMode(DistributionMode_SINGLE_GPU_Str))
+	require.True(t, ValidDistributionMode(DistributionMode_SHARDED_Str))
+	require.True(t, ValidDistributionMode(DistributionMode_REPLICATED_Str))
+	require.False(t, ValidDistributionMode("unknown"))
+	require.False(t, ValidDistributionMode(""))
+}
+
 func TestCdc(t *testing.T) {
 	key := int64(0)
 	v := []float32{0, 1, 2}

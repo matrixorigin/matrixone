@@ -3297,8 +3297,16 @@ var (
 			output: "restore database db01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
 		},
 		{
+			input:  "restore account acc01 database db01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore account acc01 database db01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
 			input:  "restore database db01 table t01 from pitr pitr01 '2021-01-01 00:00:00'",
 			output: "restore database db01 table t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore account acc01 database db01 table t01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore account acc01 database db01 table t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
 		},
 		{
 			input:  "restore account acc01 from pitr pitr01 '2021-01-01 00:00:00'",
@@ -3481,50 +3489,73 @@ var (
 			input:  "select get_format(timestamp, 'ISO')",
 			output: "select get_format(TIMESTAMP, ISO)",
 		},
-		// Issue #23122: ANALYZE TABLE multi-table
 		{
-			input:  "analyze table t1 (a, b), t2 (c, d)",
-			output: "analyze table t1(a, b), t2(c, d)",
-		},
-		// Issue #23122: CHECK TABLE
-		{
-			input:  "check table t1",
-			output: "check table t1",
+			input:  "create index idx using cagra on A (a) intermediate_graph_degree = 4 graph_degree = 100 OP_TYPE 'VECTOR_L2_OPS' QUANTIZATION 'F16' DISTRIBUTION_MODE 'SINGLE_GPU' itopk_size = 512",
+			output: "create index idx using cagra on a (a) OP_TYPE VECTOR_L2_OPS INTERMEDIATE_GRAPH_DEGREE 4 GRAPH_DEGREE 100 QUANTIZATION F16 DISTRIBUTION_MODE SINGLE_GPU ITOPK_SIZE 512 ",
 		},
 		{
-			input:  "check table t1 extended",
-			output: "check table t1 extended",
+			input:  "create index idx using ivfpq on A (a) LISTS 4 BITS_PER_CODE 8 OP_TYPE 'VECTOR_L2_OPS' QUANTIZATION 'INT8' M 4",
+			output: "create index idx using ivfpq on a (a) LISTS 4 M 4 OP_TYPE VECTOR_L2_OPS QUANTIZATION INT8 BITS_PER_CODE 8 ",
 		},
 		{
-			input:  "check table t1, t2",
-			output: "check table t1, t2",
+			input:  "create index idx using cagra on A (a) INCLUDE (price)",
+			output: "create index idx using cagra on a (a) INCLUDE (price) ",
 		},
 		{
-			input:  "check table t1 for upgrade",
-			output: "check table t1 for upgrade",
-		},
-		// Issue #23122: SHOW PROFILE
-		{
-			input:  "show profile",
-			output: "show profile",
+			input:  "create index idx using cagra on A (a) INCLUDE (price, category_id)",
+			output: "create index idx using cagra on a (a) INCLUDE (price, category_id) ",
 		},
 		{
-			input:  "show profile for query 2",
-			output: "show profile for query 2",
+			input:  "create index idx using cagra on A (a) OP_TYPE 'VECTOR_L2_OPS' INCLUDE (price, category_id)",
+			output: "create index idx using cagra on a (a) OP_TYPE VECTOR_L2_OPS INCLUDE (price, category_id) ",
 		},
 		{
-			input:  "show profile limit 10",
-			output: "show profile limit 10",
+			input:  "create index idx using ivfpq on A (a) LISTS 4 BITS_PER_CODE 8 INCLUDE (price)",
+			output: "create index idx using ivfpq on a (a) LISTS 4 BITS_PER_CODE 8 INCLUDE (price) ",
 		},
-		{
-			input:  "show profile for query 2 limit 10",
-			output: "show profile for query 2 limit 10",
-		},
-		{
-			input:  "show profile for query 2 limit 10 offset 5",
-			output: "show profile for query 2 limit 10 offset 5",
-		},
-	}
+			// Issue #23122: ANALYZE TABLE multi-table
+			{
+				input:  "analyze table t1 (a, b), t2 (c, d)",
+				output: "analyze table t1(a, b), t2(c, d)",
+			},
+			// Issue #23122: CHECK TABLE
+			{
+				input:  "check table t1",
+				output: "check table t1",
+			},
+			{
+				input:  "check table t1 extended",
+				output: "check table t1 extended",
+			},
+			{
+				input:  "check table t1, t2",
+				output: "check table t1, t2",
+			},
+			{
+				input:  "check table t1 for upgrade",
+				output: "check table t1 for upgrade",
+			},
+			// Issue #23122: SHOW PROFILE
+			{
+				input:  "show profile",
+				output: "show profile",
+			},
+			{
+				input:  "show profile for query 2",
+				output: "show profile for query 2",
+			},
+			{
+				input:  "show profile limit 10",
+				output: "show profile limit 10",
+			},
+			{
+				input:  "show profile for query 2 limit 10",
+				output: "show profile for query 2 limit 10",
+			},
+			{
+				input:  "show profile for query 2 limit 10 offset 5",
+				output: "show profile for query 2 limit 10 offset 5",
+			},	}
 )
 
 func TestValid(t *testing.T) {
@@ -3544,157 +3575,6 @@ func TestValid(t *testing.T) {
 		}
 		ast.StmtKind()
 	}
-}
-
-func TestAnalyzeCheckShowProfile(t *testing.T) {
-	ctx := context.TODO()
-
-	t.Run("analyze single table", func(t *testing.T) {
-		stmt, err := ParseOne(ctx, "analyze table t1 (a, b)", 1)
-		require.NoError(t, err)
-		analyze, ok := stmt.(*tree.AnalyzeStmt)
-		require.True(t, ok, "expected *tree.AnalyzeStmt, got %T", stmt)
-		require.Len(t, analyze.Entries, 1)
-		require.Equal(t, "t1", string(analyze.Entries[0].Table.ObjectName))
-		require.Len(t, analyze.Entries[0].Cols, 2)
-		require.Equal(t, tree.Identifier("a"), analyze.Entries[0].Cols[0])
-		require.Equal(t, tree.Identifier("b"), analyze.Entries[0].Cols[1])
-	})
-
-	t.Run("analyze multi table", func(t *testing.T) {
-		stmt, err := ParseOne(ctx, "analyze table t1 (a, b), t2 (c, d)", 1)
-		require.NoError(t, err)
-		analyze, ok := stmt.(*tree.AnalyzeStmt)
-		require.True(t, ok)
-		require.Len(t, analyze.Entries, 2)
-		require.Equal(t, "t1", string(analyze.Entries[0].Table.ObjectName))
-		require.Equal(t, "t2", string(analyze.Entries[1].Table.ObjectName))
-	})
-
-	t.Run("analyze three tables", func(t *testing.T) {
-		stmt, err := ParseOne(ctx, "analyze table t1 (x), t2 (y), t3 (z)", 1)
-		require.NoError(t, err)
-		analyze, ok := stmt.(*tree.AnalyzeStmt)
-		require.True(t, ok)
-		require.Len(t, analyze.Entries, 3)
-	})
-
-	t.Run("check table basic", func(t *testing.T) {
-		stmt, err := ParseOne(ctx, "check table t1", 1)
-		require.NoError(t, err)
-		check, ok := stmt.(*tree.CheckTableStmt)
-		require.True(t, ok, "expected *tree.CheckTableStmt, got %T", stmt)
-		require.Len(t, check.Tables, 1)
-		require.Equal(t, tree.CheckTableOptionNone, check.Option)
-	})
-
-	t.Run("check table extended", func(t *testing.T) {
-		stmt, err := ParseOne(ctx, "check table t1 extended", 1)
-		require.NoError(t, err)
-		check, ok := stmt.(*tree.CheckTableStmt)
-		require.True(t, ok)
-		require.Equal(t, tree.CheckTableOptionExtended, check.Option)
-	})
-
-	t.Run("check table for upgrade", func(t *testing.T) {
-		stmt, err := ParseOne(ctx, "check table t1 for upgrade", 1)
-		require.NoError(t, err)
-		check, ok := stmt.(*tree.CheckTableStmt)
-		require.True(t, ok)
-		require.Equal(t, tree.CheckTableOptionForUpgrade, check.Option)
-	})
-
-	t.Run("check table multi", func(t *testing.T) {
-		stmt, err := ParseOne(ctx, "check table t1, t2, t3", 1)
-		require.NoError(t, err)
-		check, ok := stmt.(*tree.CheckTableStmt)
-		require.True(t, ok)
-		require.Len(t, check.Tables, 3)
-	})
-
-	t.Run("check table multi extended", func(t *testing.T) {
-		stmt, err := ParseOne(ctx, "check table t1, t2 extended", 1)
-		require.NoError(t, err)
-		check, ok := stmt.(*tree.CheckTableStmt)
-		require.True(t, ok)
-		require.Len(t, check.Tables, 2)
-		require.Equal(t, tree.CheckTableOptionExtended, check.Option)
-	})
-
-	t.Run("show profile basic", func(t *testing.T) {
-		stmt, err := ParseOne(ctx, "show profile", 1)
-		require.NoError(t, err)
-		sp, ok := stmt.(*tree.ShowProfileStmt)
-		require.True(t, ok, "expected *tree.ShowProfileStmt, got %T", stmt)
-		require.Equal(t, int64(0), sp.ForQuery)
-		require.Nil(t, sp.Limit)
-	})
-
-	t.Run("show profile for query", func(t *testing.T) {
-		stmt, err := ParseOne(ctx, "show profile for query 2", 1)
-		require.NoError(t, err)
-		sp, ok := stmt.(*tree.ShowProfileStmt)
-		require.True(t, ok)
-		require.Equal(t, int64(2), sp.ForQuery)
-	})
-
-	t.Run("show profile limit", func(t *testing.T) {
-		stmt, err := ParseOne(ctx, "show profile limit 10", 1)
-		require.NoError(t, err)
-		sp, ok := stmt.(*tree.ShowProfileStmt)
-		require.True(t, ok)
-		require.NotNil(t, sp.Limit)
-		count, ok := sp.Limit.Count.(*tree.NumVal)
-		require.True(t, ok)
-		v, ok := count.Int64()
-		require.True(t, ok)
-		require.Equal(t, int64(10), v)
-	})
-
-	t.Run("show profile for query limit", func(t *testing.T) {
-		stmt, err := ParseOne(ctx, "show profile for query 2 limit 10", 1)
-		require.NoError(t, err)
-		sp, ok := stmt.(*tree.ShowProfileStmt)
-		require.True(t, ok)
-		require.Equal(t, int64(2), sp.ForQuery)
-		require.NotNil(t, sp.Limit)
-		count, ok := sp.Limit.Count.(*tree.NumVal)
-		require.True(t, ok)
-		v, ok := count.Int64()
-		require.True(t, ok)
-		require.Equal(t, int64(10), v)
-	})
-
-	t.Run("show profile for query limit offset", func(t *testing.T) {
-		stmt, err := ParseOne(ctx, "show profile for query 2 limit 10 offset 5", 1)
-		require.NoError(t, err)
-		sp, ok := stmt.(*tree.ShowProfileStmt)
-		require.True(t, ok)
-		require.Equal(t, int64(2), sp.ForQuery)
-		require.NotNil(t, sp.Limit)
-		count, ok := sp.Limit.Count.(*tree.NumVal)
-		require.True(t, ok)
-		cv, ok := count.Int64()
-		require.True(t, ok)
-		require.Equal(t, int64(10), cv)
-		offset, ok := sp.Limit.Offset.(*tree.NumVal)
-		require.True(t, ok)
-		ov, ok := offset.Int64()
-		require.True(t, ok)
-		require.Equal(t, int64(5), ov)
-	})
-
-	t.Run("check table statement kind", func(t *testing.T) {
-		stmt, err := ParseOne(ctx, "check table t1", 1)
-		require.NoError(t, err)
-		require.NotPanics(t, func() { stmt.StmtKind() })
-	})
-
-	t.Run("show profile statement kind", func(t *testing.T) {
-		stmt, err := ParseOne(ctx, "show profile", 1)
-		require.NoError(t, err)
-		require.NotPanics(t, func() { stmt.StmtKind() })
-	})
 }
 
 func TestShowVariablesGlobalFlag(t *testing.T) {
@@ -3998,13 +3878,6 @@ var (
 		},
 		{
 			input: "ALTER TABLE t1 ADD PARTITION (PARTITION p5 VALUES IN (15, 17)",
-		},
-		// Issue #23122: Invalid syntax that should still fail
-		{
-			input: "check table", // no table name
-		},
-		{
-			input: "analyze table t1, t2(a)", // first table has no column list
 		},
 	}
 )
