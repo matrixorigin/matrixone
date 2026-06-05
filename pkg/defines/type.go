@@ -250,13 +250,15 @@ type VarScopeKey struct{}
 // Determine if it is a stored procedure
 type InSp struct{}
 
-// IvfBloomFilter carries BloomFilter bytes for ivf entries scan in internal SQL executor.
+// IvfMembershipFilter carries doc_id membership-filter bytes (tagged docfilter
+// payload) for the ivf entries scan in the internal SQL executor.
 // This key is set on context when invoking internal SQL from ivf_search.
-type IvfBloomFilter struct{}
+type IvfMembershipFilter struct{}
 
-// FulltextBloomFilter carries BloomFilter bytes for fulltext index scan in internal SQL executor.
+// FulltextMembershipFilter carries doc_id membership-filter bytes (tagged
+// docfilter payload) for the fulltext index scan in the internal SQL executor.
 // This key is set on context when invoking internal SQL from fulltext_index_match.
-type FulltextBloomFilter struct{}
+type FulltextMembershipFilter struct{}
 
 // IvfReaderParam carries DistRange for ivf entries scan in internal SQL executor.
 // This key is set on context when invoking internal SQL from ivf_search.
