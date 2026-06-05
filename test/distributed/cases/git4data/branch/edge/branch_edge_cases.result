@@ -25,6 +25,7 @@ select id, u, k, v from dst where k = 40 order by id;
 id    u    k    v
 2    102    40    two-src
 insert into dst values (5, 104, 50, 'dup-u');
+-- @regex("Duplicate entry '104' for key '(u|__mo_index_idx_col)'(\[[0-9,]+\])?", true)
 Duplicate entry '104' for key 'u'
 data branch create table merge_dst from base;
 data branch create table merge_src from base;
@@ -38,6 +39,7 @@ data branch create table conflict_src from base;
 insert into conflict_dst values (4, 104, 40, 'dst-four');
 insert into conflict_src values (5, 104, 50, 'src-five');
 data branch merge conflict_src into conflict_dst when conflict accept;
+-- @regex("Duplicate entry '104' for key '(u|__mo_index_idx_col)'(\[[0-9,]+\])?", true)
 Duplicate entry '104' for key 'u'
 select id, u, k, v from conflict_dst order by id;
 id    u    k    v
