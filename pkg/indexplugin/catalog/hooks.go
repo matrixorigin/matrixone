@@ -21,6 +21,7 @@
 package catalog
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -46,6 +47,41 @@ type Hooks interface {
 	// "vector_l2_ops") to the internal metric identifier. Used by
 	// plan-side op_type validation.
 	SupportedOpTypes() map[string]string
+
+	// SupportedVectorTypes lists the indexed (vector) column types this
+	// algorithm accepts, e.g. {types.T_array_float32} for CAGRA / IVF-PQ
+	// (cuvs is f32-only) or {types.T_array_float32, types.T_array_float64}
+	// for HNSW / IVF-FLAT. Consumed by plan-side CREATE INDEX column-type
+	// validation (each plugin's BuildSecondaryIndexDefs) via
+	// catalog.SupportsVectorType.
+	//
+	// SPECIAL CASE: nil/empty means "this index has no vector column" (NOT
+	// "all types") — only fulltext returns nil. So SupportsVectorType reports
+	// false for an empty list. Every real vector index enumerates its
+	// concrete element types.
+	SupportedVectorTypes() []types.T
+
+	// SupportedPrimaryKeyTypes lists the source-table primary-key column
+	// types this algorithm supports, e.g. {types.T_int64} for CAGRA / IVF-PQ
+	// / HNSW. Consumed by plan-side PK validation via
+	// catalog.SupportsPrimaryKeyType.
+	//
+	// SPECIAL CASE: nil/empty means "no constraint — any PK type is accepted"
+	// (the opposite convention from SupportedVectorTypes). IVF-FLAT and
+	// fulltext return nil. So SupportsPrimaryKeyType reports true for an empty
+	// list.
+	SupportedPrimaryKeyTypes() []types.T
+
+	// SupportedIncludeColumnTypes lists the scalar column types accepted as
+	// INCLUDE (pre-filter) columns, e.g. {types.T_int32, types.T_int64,
+	// types.T_float32, types.T_float64} for CAGRA / IVF-PQ. Consumed by
+	// plan-side INCLUDE validation (validateIncludeColumns) via
+	// catalog.SupportsIncludeColumnType.
+	//
+	// SPECIAL CASE: nil/empty means "this index does not support INCLUDE
+	// columns" (like SupportedVectorTypes — NOT "all types"). HNSW, IVF-FLAT
+	// and fulltext return nil, so SupportsIncludeColumnType reports false.
+	SupportedIncludeColumnTypes() []types.T
 
 	// ExperimentalFlag returns the experimental-feature flag name that
 	// must be enabled (set to true via SET / system var) for this
@@ -97,6 +133,57 @@ type Hooks interface {
 	//   checkValidIndexUpdateByIndexdef, CreateAllIndexUpdateTasks,
 	//   DropAllIndexUpdateTasks.
 	SyncDescriptor() SyncDescriptor
+}
+
+// SupportsVectorType reports whether the given column type is an accepted
+// indexed (vector) column type for the algorithm described by h. It is the
+// single source of truth other code should consult instead of hardcoding
+// per-algorithm VECF32/VECF64 checks.
+//
+// SPECIAL CASE: an empty SupportedVectorTypes() means "no vector column" (e.g.
+// fulltext), so this returns false — NOT "all types". This is deliberately the
+// OPPOSITE of SupportsPrimaryKeyType's empty-list convention: no real vector
+// index wants "any vector type", whereas several indexes accept any PK type.
+func SupportsVectorType(h Hooks, t types.T) bool {
+	for _, s := range h.SupportedVectorTypes() {
+		if s == t {
+			return true
+		}
+	}
+	return false
+}
+
+// SupportsPrimaryKeyType reports whether t is an accepted primary-key column
+// type for h.
+//
+// SPECIAL CASE: an empty SupportedPrimaryKeyTypes() means "no constraint — any
+// PK type is accepted" (IVF-FLAT, fulltext), so this returns true. This is the
+// OPPOSITE of SupportsVectorType's empty-list convention (see there).
+func SupportsPrimaryKeyType(h Hooks, t types.T) bool {
+	pks := h.SupportedPrimaryKeyTypes()
+	if len(pks) == 0 {
+		return true
+	}
+	for _, s := range pks {
+		if s == t {
+			return true
+		}
+	}
+	return false
+}
+
+// SupportsIncludeColumnType reports whether t is an accepted INCLUDE
+// (pre-filter) column type for h.
+//
+// SPECIAL CASE: an empty SupportedIncludeColumnTypes() means "INCLUDE columns
+// not supported" (like SupportsVectorType), so this returns false.
+func SupportsIncludeColumnType(h Hooks, t types.T) bool {
+	for _, s := range h.SupportedIncludeColumnTypes() {
+		if s == t {
+			return true
+		}
+	}
+	return false
 }
 
 // SinkerType_IndexSync mirrors iscp.ConsumerType_IndexSync (value 0).

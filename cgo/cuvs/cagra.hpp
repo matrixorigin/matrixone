@@ -1575,13 +1575,18 @@ public:
         // Drop dynamic_batching wrappers *before* worker->stop() — they hold CUDA
         // streams/buffers tied to the worker threads' resources (see ivf_pq.hpp).
         this->dynb_cache_.clear();
+        // ALL GPU-memory holders must also be freed *before* worker->stop() — they
+        // free device memory back into the per-device RMM pool, which must happen
+        // while the worker's CUDA streams are still alive (see ivf_pq.hpp::destroy).
+        {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            index_.reset();
+            this->replicated_indices_.clear();
+            this->replicated_datasets_.clear();
+            this->quantizer_.reset();
+            this->dataset_device_ptr_.reset();
+        }
         if (this->worker) this->worker->stop();
-        std::unique_lock<std::shared_mutex> lock(this->mutex_);
-        index_.reset();
-        this->replicated_indices_.clear();
-        this->replicated_datasets_.clear();
-        this->quantizer_.reset();
-        this->dataset_device_ptr_.reset();
     }
 
     uint32_t get_dim() const { return this->dimension; }

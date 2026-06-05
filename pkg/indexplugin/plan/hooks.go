@@ -35,6 +35,7 @@ package plan
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -163,6 +164,10 @@ type Hooks interface {
 var (
 	CreateIndexDef         func(idx *tree.Index, indexTableName, indexAlgoTableType string, indexParts []string, isUnique bool) (*plan.IndexDef, error)
 	MakeHiddenColDefByName func(name string) *plan.ColDef
-	ValidateIncludeColumns func(ctx CompilerContext, includeCols []*tree.UnresolvedName, colMap map[string]*plan.ColDef, vecColName, pkeyName string) error
+	// ValidateIncludeColumns checks the INCLUDE column list. supportedTypes is
+	// the plugin's accepted INCLUDE column types (catalog.Hooks.
+	// SupportedIncludeColumnTypes()) — an empty slice means INCLUDE columns are
+	// not supported by the algorithm.
+	ValidateIncludeColumns func(ctx CompilerContext, includeCols []*tree.UnresolvedName, colMap map[string]*plan.ColDef, vecColName, pkeyName string, supportedTypes []types.T) error
 	DeepCopyColDefList     func([]*plan.ColDef) []*plan.ColDef
 )

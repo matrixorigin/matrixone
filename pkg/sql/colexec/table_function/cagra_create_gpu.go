@@ -28,16 +28,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	cuvsfilter "github.com/matrixorigin/matrixone/pkg/cuvs/filter"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cagraPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra"
+	cagrart "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// cagraCatalogHooks is the shared (stateless) catalog-hooks instance used for
+// plugin-declared type validation (see pkg/indexplugin/catalog).
+var cagraCatalogHooks = cagrart.CatalogHooks{}
 
 var cagra_runSql = sqlexec.RunSql
 
@@ -308,12 +314,12 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 
 		// ---- validate argument types ----
 		idVec := tf.ctr.argVecs[1]
-		if idVec.GetType().Oid != types.T_int64 {
+		if !catalogplugin.SupportsPrimaryKeyType(cagraCatalogHooks, idVec.GetType().Oid) {
 			return moerr.NewInvalidInput(proc.Ctx, "second argument (pkid) must be an int64")
 		}
 
 		faVec := tf.ctr.argVecs[2]
-		if faVec.GetType().Oid != types.T_array_float32 {
+		if !catalogplugin.SupportsVectorType(cagraCatalogHooks, faVec.GetType().Oid) {
 			return moerr.NewInvalidInput(proc.Ctx, "third argument (vector) must be a float32 array")
 		}
 

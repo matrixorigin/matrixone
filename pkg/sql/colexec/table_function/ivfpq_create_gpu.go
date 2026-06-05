@@ -28,16 +28,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	cuvsfilter "github.com/matrixorigin/matrixone/pkg/cuvs/filter"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	ivfpqPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq"
+	ivfpqrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// ivfpqCatalogHooks is the shared (stateless) catalog-hooks instance used for
+// plugin-declared type validation (see pkg/indexplugin/catalog).
+var ivfpqCatalogHooks = ivfpqrt.CatalogHooks{}
 
 var ivfpq_runSql = sqlexec.RunSql
 
@@ -315,12 +321,12 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 
 		// ---- validate argument types ----
-		if len(tf.Args) < 3 || tf.Args[1].Typ.Id != int32(types.T_int64) {
+		if len(tf.Args) < 3 || !catalogplugin.SupportsPrimaryKeyType(ivfpqCatalogHooks, types.T(tf.Args[1].Typ.Id)) {
 			return moerr.NewInvalidInput(proc.Ctx, "second argument (pkid) must be an int64")
 		}
 
 		faVec := tf.ctr.argVecs[2]
-		if faVec.GetType().Oid != types.T_array_float32 {
+		if !catalogplugin.SupportsVectorType(ivfpqCatalogHooks, faVec.GetType().Oid) {
 			return moerr.NewInvalidInput(proc.Ctx, "third argument (vector) must be a float32 array")
 		}
 

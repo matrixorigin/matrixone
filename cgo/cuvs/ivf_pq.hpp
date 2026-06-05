@@ -1910,13 +1910,22 @@ public:
         // dynb_cache_ has its own mutex, so this is safe vs. an in-flight search
         // (which keeps the wrapper alive via its own shared_ptr).
         this->dynb_cache_.clear();
+        // ALL GPU-memory holders must also be freed *before* worker->stop().
+        // index_ / replicated_* / quantizer_ / dataset_device_ptr_ free device
+        // memory back into the per-device RMM pool; that free must run while the
+        // worker's CUDA streams are still alive. Freeing after stop() tags the
+        // pool's freed blocks with destroyed streams, which later poisons an
+        // unrelated GPU allocation (e.g. a pairwise-distance device_buffer)
+        // and aborts in the pool's do_deallocate (cudaErrorInvalidResourceHandle).
+        {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            index_.reset();
+            this->replicated_indices_.clear();
+            this->replicated_datasets_.clear();
+            this->quantizer_.reset();
+            this->dataset_device_ptr_.reset();
+        }
         if (this->worker) this->worker->stop();
-        std::unique_lock<std::shared_mutex> lock(this->mutex_);
-        index_.reset();
-        this->replicated_indices_.clear();
-        this->replicated_datasets_.clear();
-        this->quantizer_.reset();
-        this->dataset_device_ptr_.reset();
     }
 
     uint32_t get_dim() const { return this->dimension; }

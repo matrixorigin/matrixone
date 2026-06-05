@@ -18,11 +18,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	ivfpqrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
 )
+
+// ivfpqCatalogHooks is the shared (stateless) catalog-hooks instance used for
+// plugin-declared type validation (see pkg/indexplugin/catalog).
+var ivfpqCatalogHooks = ivfpqrt.CatalogHooks{}
 
 // BuildSecondaryIndexDefs runs during plan-tree construction for
 // CREATE INDEX (pkg/sql/plan/build_ddl.go:2081 dispatch). It returns the
@@ -65,7 +71,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("primary key column not found for ivfpq index")
 	}
-	if pk.Typ.Id != int32(types.T_int64) {
+	if !catalogplugin.SupportsPrimaryKeyType(ivfpqCatalogHooks, types.T(pk.Typ.Id)) {
 		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be int64")
 	}
 
@@ -81,7 +87,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 		if _, ok := colMap[name]; !ok {
 			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
 		}
-		if colMap[name].Typ.Id != int32(types.T_array_float32) {
+		if !catalogplugin.SupportsVectorType(ivfpqCatalogHooks, types.T(colMap[name].Typ.Id)) {
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IvfPQ only supports VECF32 column types")
 		}
 		for _, existedIndex := range existedIndexes {
@@ -92,7 +98,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 	}
 
 	if indexInfo.IndexOption != nil {
-		if err := planplugin.ValidateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0], pkeyName); err != nil {
+		if err := planplugin.ValidateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0], pkeyName, ivfpqCatalogHooks.SupportedIncludeColumnTypes()); err != nil {
 			return nil, nil, err
 		}
 	}
