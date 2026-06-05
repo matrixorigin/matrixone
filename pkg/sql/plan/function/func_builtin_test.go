@@ -314,6 +314,24 @@ func Test_BuiltIn_MoShowVisibleBinGeometry(t *testing.T) {
 	require.True(t, succeed, tc.info, info)
 }
 
+func Test_BuiltIn_MoShowVisibleBinArrayMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typeBytes, err := types.Encode(&types.Type{Oid: types.T_json})
+	require.NoError(t, err)
+
+	tc := tcTemp{
+		info: "show visible bin array metadata",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{string(typeBytes)}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"array(varchar(20))"}, nil),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"array(varchar(20))"}, nil),
+	}
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInMoShowVisibleBinEnum)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, tc.info, info)
+}
+
 func Test_BuiltIn_MoShowVisibleBinGeometryWithLen(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typeBytes, err := types.Encode(&types.Type{Oid: types.T_geometry})
