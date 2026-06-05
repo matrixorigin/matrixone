@@ -615,24 +615,15 @@ func bitCountFromDecimal64(v types.Decimal64, scale int32) (uint64, error) {
 
 func bitCountFromDecimal128(v types.Decimal128, scale int32) (uint64, error) {
 	v = v.Round(scale, 0, true)
-	if v.Less(types.Decimal128FromInt64(math.MinInt64)) {
-		return bitCountFromUint64(minInt64BitPattern), nil
-	}
-	if types.Decimal128FromInt64(math.MaxInt64).Less(v) {
-		return bitCountFromUint64(uint64(math.MaxInt64)), nil
-	}
-	return bitCountFromSignedInt64Pattern(int64(v.B0_63)), nil
+	return uint64(bits.OnesCount64(v.B0_63) + bits.OnesCount64(v.B64_127)), nil
 }
 
 func bitCountFromDecimal256(v types.Decimal256, scale int32) (uint64, error) {
 	v = v.Round(scale, 0, true)
-	if v.Less(types.Decimal256FromInt64(math.MinInt64)) {
-		return bitCountFromUint64(minInt64BitPattern), nil
-	}
-	if types.Decimal256FromInt64(math.MaxInt64).Less(v) {
-		return bitCountFromUint64(uint64(math.MaxInt64)), nil
-	}
-	return bitCountFromSignedInt64Pattern(int64(v.B0_63)), nil
+	return uint64(bits.OnesCount64(v.B0_63) +
+		bits.OnesCount64(v.B64_127) +
+		bits.OnesCount64(v.B128_191) +
+		bits.OnesCount64(v.B192_255)), nil
 }
 
 func bitCountFromNonBinaryString(v []byte) (uint64, error) {

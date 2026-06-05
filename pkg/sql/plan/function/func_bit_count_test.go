@@ -84,7 +84,7 @@ func TestBitCountFloat(t *testing.T) {
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{
 			1, 1, 1, 1,
 			64, 63, 63, 62,
-			63, 1,
+			64, 1,
 		}, nil),
 		BitCountFloat[float64])
 	ok, info := tc.Run()
@@ -131,6 +131,7 @@ func TestBitCountDecimal128(t *testing.T) {
 		"9223372036854775808",
 		"18446744073709551615",
 		"18446744073709551616",
+		"-1",
 		"-9223372036854775808",
 		"-18446744073709551616",
 	}
@@ -145,7 +146,7 @@ func TestBitCountDecimal128(t *testing.T) {
 		[]FunctionTestInput{
 			NewFunctionTestInput(typ, values, nil),
 		},
-		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{63, 63, 63, 63, 1, 1}, nil),
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{63, 1, 64, 1, 128, 65, 64}, nil),
 		BitCountDecimal128)
 	ok, info := tc.Run()
 	require.True(t, ok, info)
@@ -162,6 +163,7 @@ func TestBitCountDecimal256(t *testing.T) {
 		mustParseDecimal256(t, "9223372036854775808.0", 1),
 		mustParseDecimal256(t, "18446744073709551615.0", 1),
 		mustParseDecimal256(t, "18446744073709551616.0", 1),
+		mustParseDecimal256(t, "-1.0", 1),
 		mustParseDecimal256(t, "-18446744073709551616.0", 1),
 	}
 
@@ -169,7 +171,7 @@ func TestBitCountDecimal256(t *testing.T) {
 		[]FunctionTestInput{
 			NewFunctionTestInput(typ, values, nil),
 		},
-		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 2, 63, 63, 63, 63, 63, 1}, nil),
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 2, 255, 63, 1, 64, 1, 256, 192}, nil),
 		BitCountDecimal256)
 	ok, info := tc.Run()
 	require.True(t, ok, info)
