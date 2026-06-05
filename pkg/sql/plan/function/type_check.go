@@ -27,16 +27,17 @@ import (
 // 4. Mod
 func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	// decimal256 is not present in the static binary cast matrix below.
-	// When one side is decimal256 and the other is a decimal or an integer,
-	// promote both to decimal256 so downstream operator support checks and
-	// execution see a single, consistent decimal type. A decimal side keeps its
-	// own scale/width; an integer side becomes decimal256(integralWidth, 0).
-	// This is neutral for arithmetic operators (their support checks reject
-	// decimal256, so they keep failing exactly as before) and enables decimal256
-	// comparison against both decimals and bare integer literals (issue #24565).
-	if (s1.Oid == types.T_decimal256 || s2.Oid == types.T_decimal256) &&
-		isDecimalOrInteger(s1) && isDecimalOrInteger(s2) {
-		return true, decimal256FromSource(s1), decimal256FromSource(s2)
+	// When one side is decimal256, handle the cases missing from the static
+	// binary cast matrix below. Decimal/integer pairs keep exact decimal256
+	// semantics. Float pairs follow the existing decimal64/decimal128 vs float
+	// rule and use approximate float64 comparison.
+	if s1.Oid == types.T_decimal256 || s2.Oid == types.T_decimal256 {
+		if isDecimalOrInteger(s1) && isDecimalOrInteger(s2) {
+			return true, decimal256FromSource(s1), decimal256FromSource(s2)
+		}
+		if isFloatType(s1.Oid) || isFloatType(s2.Oid) {
+			return true, types.T_float64.ToType(), types.T_float64.ToType()
+		}
 	}
 	check := fixedBinaryCastRule1[s1.Oid][s2.Oid]
 	if check.cast {

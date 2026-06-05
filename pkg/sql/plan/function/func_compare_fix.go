@@ -562,6 +562,17 @@ func getAsCompareValueSlice(v *vector.Vector) []numericCompareValue {
 			result[i] = numericCompareValue{kind: numericCompareFinite, rat: r}
 		}
 		return result
+	case types.T_decimal256:
+		cols := vector.MustFixedColNoTypeCheck[types.Decimal256](v)
+		result := make([]numericCompareValue, len(cols))
+		for i, val := range cols {
+			r, ok := new(big.Rat).SetString(val.Format(t.Scale))
+			if !ok {
+				panic("invalid decimal256 value for numeric comparison")
+			}
+			result[i] = numericCompareValue{kind: numericCompareFinite, rat: r}
+		}
+		return result
 	default:
 		return nil
 	}
@@ -647,6 +658,13 @@ func getAsFloat64Slice(v *vector.Vector) []float64 {
 		result := make([]float64, len(cols))
 		for i, val := range cols {
 			result[i] = types.Decimal128ToFloat64(val, t.Scale)
+		}
+		return result
+	case types.T_decimal256:
+		cols := vector.MustFixedColNoTypeCheck[types.Decimal256](v)
+		result := make([]float64, len(cols))
+		for i, val := range cols {
+			result[i] = types.Decimal256ToFloat64(val, t.Scale)
 		}
 		return result
 	default:

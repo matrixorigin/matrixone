@@ -99,6 +99,27 @@ func Test_FixedTypeCastRule1_Decimal256VsInteger(t *testing.T) {
 	require.Equal(t, int32(5), t2.Scale)
 }
 
+// Test_FixedTypeCastRule1_Decimal256VsFloat covers decimal256 comparisons
+// against approximate numeric values. Existing decimal64/decimal128 vs float
+// rules cast both sides to float64; decimal256 must bind the same way.
+func Test_FixedTypeCastRule1_Decimal256VsFloat(t *testing.T) {
+	has, t1, t2 := fixedTypeCastRule1(
+		types.New(types.T_decimal256, 58, 20),
+		types.T_float64.ToType(),
+	)
+	require.True(t, has)
+	require.Equal(t, types.T_float64, t1.Oid)
+	require.Equal(t, types.T_float64, t2.Oid)
+
+	has, t1, t2 = fixedTypeCastRule1(
+		types.T_float32.ToType(),
+		types.New(types.T_decimal256, 58, 20),
+	)
+	require.True(t, has)
+	require.Equal(t, types.T_float64, t1.Oid)
+	require.Equal(t, types.T_float64, t2.Oid)
+}
+
 // Test_IsNumericType_Decimal256 verifies decimal256 is recognised by the
 // runtime type-mismatch fallback path (issue #24565 review).
 func Test_IsNumericType_Decimal256(t *testing.T) {
@@ -190,6 +211,19 @@ func Test_BetweenCheckFn_Decimal256Promotion(t *testing.T) {
 	require.Len(t, res.finalType, 3)
 	for _, ft := range res.finalType {
 		require.True(t, ft.Oid.IsDecimal())
+	}
+
+	// decimal256 compared with approximate numeric bounds follows the existing
+	// decimal-vs-float rule and casts all operands to float64.
+	res = betweenFunc.checkFn(betweenFunc.Overloads, []types.Type{
+		types.New(types.T_decimal256, 58, 20),
+		types.T_float32.ToType(),
+		types.T_float64.ToType(),
+	})
+	require.Equal(t, succeedWithCast, res.status)
+	require.Len(t, res.finalType, 3)
+	for _, ft := range res.finalType {
+		require.Equal(t, types.T_float64, ft.Oid)
 	}
 }
 
@@ -299,6 +333,56 @@ func Test_NullSafeEqualFn_Decimal256(t *testing.T) {
 	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, nullSafeEqualFn)
 	s, info := fcTC.Run()
 	require.True(t, s, info, tc.info)
+}
+
+func Test_Decimal256TypeMismatchCompare(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("decimal256 equals float64", func(t *testing.T) {
+		tc := tcTemp{
+			info: "decimal256 = float64 type mismatch",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal256, 65, 2),
+					[]types.Decimal256{
+						types.Decimal256FromInt64(100),
+						types.Decimal256FromInt64(250),
+						types.Decimal256FromInt64(300),
+					}, nil),
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{1.0, 2.0, 2.5}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false}, nil),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, equalFn)
+		s, info := fcTC.Run()
+		require.True(t, s, info, tc.info)
+	})
+
+	t.Run("decimal256 greater than decimal128", func(t *testing.T) {
+		tc := tcTemp{
+			info: "decimal256 > decimal128 type mismatch",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal256, 65, 2),
+					[]types.Decimal256{
+						types.Decimal256FromInt64(100),
+						types.Decimal256FromInt64(250),
+						types.Decimal256FromInt64(300),
+					}, nil),
+				NewFunctionTestInput(types.New(types.T_decimal128, 38, 2),
+					[]types.Decimal128{
+						{B0_63: 100},
+						{B0_63: 200},
+						{B0_63: 350},
+					}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true, false}, nil),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, greatThanFn)
+		s, info := fcTC.Run()
+		require.True(t, s, info, tc.info)
+	})
 }
 
 // Test_ValueDec256Compare_AllBranches exercises the const/variable, null and
