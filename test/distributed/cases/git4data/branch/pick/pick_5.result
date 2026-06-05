@@ -46,6 +46,23 @@ a	b
 drop table pick_keys;
 drop table t1;
 drop table t2;
+create table orders (order_id int primary key, customer varchar(20), amount int);
+insert into orders values (1,'Alice',10),(2,'Bob',20),(3,'Carol',30);
+data branch create table orders_fix from orders;
+insert into orders_fix values (4,'Grace',40),(5,'Heidi',50),(6,'Grace',60);
+data branch pick orders_fix into orders keys(select order_id from orders_fix where customer = 'Grace') when conflict accept;
+select * from orders order by order_id asc;
+➤ order_id[4,32,0]  ¦  customer[12,-1,0]  ¦  amount[4,32,0]  𝄀
+1  ¦  Alice  ¦  10  𝄀
+2  ¦  Bob  ¦  20  𝄀
+3  ¦  Carol  ¦  30  𝄀
+4  ¦  Grace  ¦  40  𝄀
+6  ¦  Grace  ¦  60
+data branch diff orders_fix against orders;
+➤ diff orders_fix against orders[12,0,0]  ¦  flag[12,0,0]  ¦  order_id[4,0,0]  ¦  customer[12,0,0]  ¦  amount[4,0,0]  𝄀
+orders_fix  ¦  INSERT  ¦  5  ¦  Heidi  ¦  50
+drop table orders;
+drop table orders_fix;
 create table t0 (a int, b int, primary key(a));
 insert into t0 values (1,1),(2,2),(3,3);
 data branch create table t1 from t0;
