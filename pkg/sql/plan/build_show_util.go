@@ -865,6 +865,10 @@ func skipBlockComment(s string, start int) int {
 
 // FormatColType Get the formatted description of the column type.
 func FormatColType(colType plan.Type) string {
+	if arrayType := arrayPlanTypeString(&colType); arrayType != "" {
+		return strings.ToUpper(arrayType[:len("array")]) + arrayType[len("array"):]
+	}
+
 	typ := types.T(colType.Id).ToType()
 
 	ts := typ.String()
