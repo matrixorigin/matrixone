@@ -315,18 +315,21 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 		}
 	}
 
+	originExpr := expr
+	semanticExpr := unwrapParenExpr(expr)
+
 	colNameOrigin := col.Name.ColNameOrigin()
 	if typ.Id == int32(types.T_json) {
-		if expr != nil && !isNullAstExpr(expr) {
+		if semanticExpr != nil && !isNullAstExpr(semanticExpr) {
 			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("JSON column '%s' cannot have default value", colNameOrigin))
 		}
 	}
 	if isGeometryPlanType(&typ) {
-		if expr != nil && !isNullAstExpr(expr) {
+		if semanticExpr != nil && !isNullAstExpr(semanticExpr) {
 			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("GEOMETRY column '%s' cannot have default value", colNameOrigin))
 		}
 	}
-	if !nullAbility && isNullAstExpr(expr) {
+	if !nullAbility && isNullAstExpr(semanticExpr) {
 		return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
 	}
 
@@ -337,15 +340,10 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 			OriginString: "",
 		}, nil
 	}
-	originExpr := expr
-	isExpressionDefault := false
-	if paren, ok := expr.(*tree.ParenExpr); ok {
-		isExpressionDefault = true
-		expr = paren.Expr
-	}
+	_, isExpressionDefault := originExpr.(*tree.ParenExpr)
 
 	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
-	planExpr, err := binder.BindExpr(expr, 0, false)
+	planExpr, err := binder.BindExpr(semanticExpr, 0, false)
 	if err != nil {
 		return nil, err
 	}
