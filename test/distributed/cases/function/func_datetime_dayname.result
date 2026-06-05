@@ -1,0 +1,52 @@
+SELECT DAYNAME('2007-02-03') AS result1;
+result1
+Saturday
+SELECT DAYNAME('2007-02-03') AS saturday;
+saturday
+Saturday
+SELECT DAYNAME('2007-02-04') AS sunday;
+sunday
+Sunday
+SELECT DAYNAME('2007-02-05') AS monday;
+monday
+Monday
+SELECT DAYNAME('2007-02-06') AS tuesday;
+tuesday
+Tuesday
+SELECT DAYNAME('2007-02-07') AS wednesday;
+wednesday
+Wednesday
+SELECT DAYNAME('2007-02-08') AS thursday;
+thursday
+Thursday
+SELECT DAYNAME('2007-02-09') AS friday;
+friday
+Friday
+SELECT DAYNAME('2007-02-03 12:30:45') AS datetime_saturday;
+datetime_saturday
+Saturday
+SELECT DAYNAME('2007-12-31 23:59:59') AS datetime_monday;
+datetime_monday
+Monday
+SELECT DAYNAME('2007-02-03 12:30:45') AS timestamp_saturday;
+timestamp_saturday
+Saturday
+SELECT DAYNAME(NULL) AS null_date;
+null_date
+null
+CREATE TABLE t1(d DATE, dt DATETIME);
+INSERT INTO t1 VALUES ('2007-02-03', '2007-02-03 12:00:00'), ('2007-02-04', '2007-02-04 12:00:00');
+SELECT DAYNAME(d) AS day_from_date, DAYNAME(dt) AS day_from_datetime FROM t1;
+day_from_date    day_from_datetime
+Saturday    Saturday
+Sunday    Sunday
+DROP TABLE t1;
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2007-02-03'), ('2007-02-04'), ('2007-02-05');
+SELECT * FROM t1 WHERE DAYNAME(d) = 'Saturday';
+d
+2007-02-03
+DROP TABLE t1;
+SELECT DAYNAME('2007-01-01') AS monday, DAYNAME('2007-01-02') AS tuesday, DAYNAME('2007-01-03') AS wednesday, DAYNAME('2007-01-04') AS thursday, DAYNAME('2007-01-05') AS friday, DAYNAME('2007-01-06') AS saturday, DAYNAME('2007-01-07') AS sunday;
+monday    tuesday    wednesday    thursday    friday    saturday    sunday
+Monday    Tuesday    Wednesday    Thursday    Friday    Saturday    Sunday

@@ -53,6 +53,12 @@ create external table hive_err3 (
     id int, amount double
 ) infile{'filepath'='$resources/hive_partition/single_level/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='nonexistent'};
 
+-- 1.4.1 DDL error: inferred partition column must exist in table schema
+drop table if exists hive_err3_auto;
+create external table hive_err3_auto (
+    id int, amount double
+) infile{'filepath'='$resources/hive_partition/single_level/', 'format'='parquet', 'hive_partitioning'='true'};
+
 -- 1.5 DDL error: duplicate hive key
 drop table if exists hive_err4;
 create external table hive_err4 (
@@ -241,6 +247,18 @@ select year, mc from (
 select year, month, count(*) as cnt from hive_multi
 where (year = 2024 and month = '01') or (year = 2025 and month = '02')
 group by year, month order by year, month;
+
+-- 3.13 Multi-level partition columns auto inference
+drop table if exists hive_multi_auto;
+create external table hive_multi_auto (
+    id int,
+    amount double,
+    year int,
+    month varchar(2)
+) infile{'filepath'='$resources/hive_partition/multi_level/', 'format'='parquet', 'hive_partitioning'='true'};
+
+select year, month, count(*) as cnt from hive_multi_auto group by year, month order by year, month;
+select id, year, month from hive_multi_auto where year = 2024 and month = '02' order by id;
 
 -- ============================================================================
 -- 4. String Partition
