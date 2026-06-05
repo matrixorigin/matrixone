@@ -18,11 +18,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	ivfflatrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
 )
+
+// ivfflatCatalogHooks is the shared (stateless) catalog-hooks instance used for
+// plugin-declared type validation (see pkg/indexplugin/catalog).
+var ivfflatCatalogHooks = ivfflatrt.CatalogHooks{}
 
 // BuildSecondaryIndexDefs builds the three hidden tables IVF-FLAT needs:
 // metadata (key/val for version + clustering timestamps), centroids
@@ -50,7 +56,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 	if _, ok := colMap[name]; !ok {
 		return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
 	}
-	if colMap[name].Typ.Id != int32(types.T_array_float32) && colMap[name].Typ.Id != int32(types.T_array_float64) {
+	if !catalogplugin.SupportsVectorType(ivfflatCatalogHooks, types.T(colMap[name].Typ.Id)) {
 		return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IVFFLAT only supports VECFXX column types")
 	}
 	for _, existedIndex := range existedIndexes {

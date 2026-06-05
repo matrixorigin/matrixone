@@ -18,11 +18,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	hnswrt "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
 )
+
+// hnswCatalogHooks is the shared (stateless) catalog-hooks instance used for
+// plugin-declared type validation (see pkg/indexplugin/catalog).
+var hnswCatalogHooks = hnswrt.CatalogHooks{}
 
 // BuildSecondaryIndexDefs constructs the IndexDef + TableDef pair for the
 // two hidden tables HNSW requires (metadata + storage). Lifted from
@@ -45,7 +51,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
 		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for hnsw index")
 	}
-	if colMap[pkeyName].Typ.Id != int32(types.T_int64) {
+	if !catalogplugin.SupportsPrimaryKeyType(hnswCatalogHooks, types.T(colMap[pkeyName].Typ.Id)) {
 		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be bigint")
 	}
 
@@ -59,7 +65,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 		if _, ok := colMap[name]; !ok {
 			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
 		}
-		if colMap[name].Typ.Id != int32(types.T_array_float32) && colMap[name].Typ.Id != int32(types.T_array_float64) {
+		if !catalogplugin.SupportsVectorType(hnswCatalogHooks, types.T(colMap[name].Typ.Id)) {
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "HNSW only supports VECF32 and VECF64 column types")
 		}
 		for _, existedIndex := range existedIndexes {

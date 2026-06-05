@@ -262,6 +262,9 @@ func (m mockCatalogHooks) HiddenTableTypes() []string                           
 func (m mockCatalogHooks) ParamsFromTree(_ *tree.Index) (map[string]string, error) { return nil, nil }
 func (m mockCatalogHooks) DefaultOptions() map[string]string                       { return nil }
 func (m mockCatalogHooks) SupportedOpTypes() map[string]string                     { return nil }
+func (m mockCatalogHooks) SupportedVectorTypes() []types.T                         { return nil }
+func (m mockCatalogHooks) SupportedPrimaryKeyTypes() []types.T                     { return nil }
+func (m mockCatalogHooks) SupportedIncludeColumnTypes() []types.T                  { return nil }
 func (m mockCatalogHooks) ExperimentalFlag() string                                { return "" }
 func (m mockCatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
 	return catalogplugin.AlterTableCloneBehavior{}

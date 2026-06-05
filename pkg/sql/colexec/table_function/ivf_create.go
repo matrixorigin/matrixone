@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/device"
+	ivfflatrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -47,9 +49,11 @@ const (
 )
 
 var (
-	ClusterCentersSupportTypes = []types.T{
-		types.T_array_float32, types.T_array_float64,
-	}
+	// ivfflatCatalogHooks is the shared (stateless) catalog-hooks instance used
+	// for plugin-declared vector-type validation (see pkg/indexplugin/catalog).
+	// It replaces the former ClusterCentersSupportTypes list so the supported
+	// vector types live in one place — the IVF-FLAT plugin's catalog hooks.
+	ivfflatCatalogHooks = ivfflatrt.CatalogHooks{}
 
 	ivf_runSql = sqlexec.RunSql
 )
@@ -305,14 +309,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		}
 
 		embedvec := res.Batches[0].Vecs[0]
-		supported := false
-		for _, t := range ClusterCentersSupportTypes {
-			if embedvec.GetType().Oid == t {
-				supported = true
-				break
-			}
-		}
-		if !supported {
+		if !catalogplugin.SupportsVectorType(ivfflatCatalogHooks, embedvec.GetType().Oid) {
 			return moerr.NewInvalidInput(proc.Ctx, "Second argument (vector must be a vecf32 or vecf64 type")
 		}
 

@@ -21,6 +21,7 @@ package runtime
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -60,7 +61,16 @@ func (CatalogHooks) DefaultOptions() map[string]string { return nil }
 // Returning "" preserves that behavior.
 func (CatalogHooks) ExperimentalFlag() string { return "" }
 
+// SupportedVectorTypes: fulltext has no vector column.
+func (CatalogHooks) SupportedVectorTypes() []types.T { return nil }
+
+// SupportedPrimaryKeyTypes: fulltext imposes no PK-type constraint.
+func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return nil }
+
 // SupportedOpTypes — fulltext has no metric/op-type concept.
+// SupportedIncludeColumnTypes: this index has no INCLUDE-column support.
+func (CatalogHooks) SupportedIncludeColumnTypes() []types.T { return nil }
+
 func (CatalogHooks) SupportedOpTypes() map[string]string { return nil }
 
 // ParamsFromTree — fulltext parses to *tree.FullTextIndex, not

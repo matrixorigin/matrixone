@@ -18,6 +18,7 @@ package runtime
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -66,6 +67,17 @@ const HnswIndexFlag = "experimental_hnsw_index"
 
 // ExperimentalFlag: HNSW DDL is gated by HnswIndexFlag.
 func (CatalogHooks) ExperimentalFlag() string { return HnswIndexFlag }
+
+// SupportedVectorTypes: HNSW (usearch) indexes f32 or f64 vectors.
+func (CatalogHooks) SupportedVectorTypes() []types.T {
+	return []types.T{types.T_array_float32, types.T_array_float64}
+}
+
+// SupportedPrimaryKeyTypes: requires an int64 primary key.
+func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return []types.T{types.T_int64} }
+
+// SupportedIncludeColumnTypes: this index has no INCLUDE-column support.
+func (CatalogHooks) SupportedIncludeColumnTypes() []types.T { return nil }
 
 func (CatalogHooks) SupportedOpTypes() map[string]string {
 	out := make(map[string]string, len(metric.OpTypeToUsearchMetric))

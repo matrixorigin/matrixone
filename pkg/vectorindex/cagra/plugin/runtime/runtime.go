@@ -18,6 +18,7 @@ package runtime
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
 	"strings"
 
@@ -73,6 +74,18 @@ const CagraIndexFlag = "experimental_cagra_index"
 
 // ExperimentalFlag: CAGRA DDL is gated by CagraIndexFlag.
 func (CatalogHooks) ExperimentalFlag() string { return CagraIndexFlag }
+
+// SupportedVectorTypes: CAGRA (cuvs) indexes f32 vectors only.
+func (CatalogHooks) SupportedVectorTypes() []types.T { return []types.T{types.T_array_float32} }
+
+// SupportedPrimaryKeyTypes: requires an int64 primary key.
+func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return []types.T{types.T_int64} }
+
+// SupportedIncludeColumnTypes: cuvs INCLUDE (pre-filter) columns accept
+// int32/int64/float32/float64 scalars.
+func (CatalogHooks) SupportedIncludeColumnTypes() []types.T {
+	return []types.T{types.T_int32, types.T_int64, types.T_float32, types.T_float64}
+}
 
 func (CatalogHooks) SupportedOpTypes() map[string]string {
 	out := make(map[string]string, len(metric.OpTypeToUsearchMetric))

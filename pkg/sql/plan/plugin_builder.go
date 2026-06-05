@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -39,8 +40,8 @@ func init() {
 // call time.
 func validateIncludeColumnsForPlugin(ctx planplugin.CompilerContext,
 	includeCols []*tree.UnresolvedName, colMap map[string]*plan.ColDef,
-	vecColName, pkeyName string) error {
-	return validateIncludeColumns(ctx.(CompilerContext), includeCols, colMap, vecColName, pkeyName)
+	vecColName, pkeyName string, supportedTypes []types.T) error {
+	return validateIncludeColumns(ctx.(CompilerContext), includeCols, colMap, vecColName, pkeyName, supportedTypes)
 }
 
 // *QueryBuilder satisfies planplugin.PlanBuilder. Compile-time check

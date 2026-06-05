@@ -2392,7 +2392,8 @@ func validateIncludeColumns(ctx CompilerContext,
 	includeCols []*tree.UnresolvedName,
 	colMap map[string]*ColDef,
 	vecColName string,
-	pkeyName string) error {
+	pkeyName string,
+	supportedTypes []types.T) error {
 	if len(includeCols) == 0 {
 		return nil
 	}
@@ -2425,13 +2426,21 @@ func validateIncludeColumns(ctx CompilerContext,
 			return moerr.NewInvalidInputf(ctx.GetContext(),
 				"INCLUDE column '%s' is not exist", origin)
 		}
-		switch types.T(col.Typ.Id) {
-		case types.T_int32, types.T_int64, types.T_float32, types.T_float64:
-			// supported
-		default:
+		// Supported INCLUDE column types are declared by the index plugin
+		// (catalog.Hooks.SupportedIncludeColumnTypes()) and threaded in via
+		// supportedTypes — the single source of truth, not hardcoded here.
+		colType := types.T(col.Typ.Id)
+		supported := false
+		for _, st := range supportedTypes {
+			if colType == st {
+				supported = true
+				break
+			}
+		}
+		if !supported {
 			return moerr.NewNotSupportedf(ctx.GetContext(),
 				"INCLUDE column '%s' has unsupported type %s (supported: int32, int64, float32, float64)",
-				origin, types.T(col.Typ.Id).String())
+				origin, colType.String())
 		}
 	}
 	return nil

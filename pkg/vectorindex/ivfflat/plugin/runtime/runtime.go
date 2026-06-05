@@ -22,6 +22,7 @@ package runtime
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -108,6 +109,18 @@ func (CatalogHooks) ExperimentalFlag() string { return "" }
 
 // SupportedOpTypes returns IVF-FLAT's metric registry. IVF uses a
 // distinct metric table from HNSW/USearch (OpTypeToIvfMetric).
+// SupportedVectorTypes: IVF-FLAT indexes f32 or f64 vectors.
+func (CatalogHooks) SupportedVectorTypes() []types.T {
+	return []types.T{types.T_array_float32, types.T_array_float64}
+}
+
+// SupportedPrimaryKeyTypes: IVF-FLAT imposes no PK-type constraint — the
+// primary key may be any type. nil = "no constraint".
+func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return nil }
+
+// SupportedIncludeColumnTypes: this index has no INCLUDE-column support.
+func (CatalogHooks) SupportedIncludeColumnTypes() []types.T { return nil }
+
 func (CatalogHooks) SupportedOpTypes() map[string]string {
 	out := make(map[string]string, len(metric.OpTypeToIvfMetric))
 	for k, v := range metric.OpTypeToIvfMetric {
