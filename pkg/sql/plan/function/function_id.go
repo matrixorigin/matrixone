@@ -632,17 +632,23 @@ const (
 	ST_EQUALS                = 449
 	ST_COVERS                = 450
 	ST_COVEREDBY             = 451
-
-	JSON_LENGTH = 452
-
-	// hll function
-	HLL_ADD_AGG     = 453
-	HLL_MERGE_AGG   = 454
-	HLL_CARDINALITY = 455
+	JSON_LENGTH              = 452
+	HLL_ADD_AGG              = 453
+	HLL_MERGE_AGG            = 454
+	HLL_CARDINALITY          = 455
+	JSON_TYPE                = 456
+	JSON_VALID               = 457
+	JSON_KEYS                = 458
+	JSON_PRETTY              = 459
+	JSON_SCHEMA_VALID        = 460
+	JSON_SCHEMA_VALID_REPORT = 461
+	JSON_VALUE               = 462
+	CAST_JSON_TO_ARRAY       = 463
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 456
+
+	FUNCTION_END_NUMBER = 464
 )
 
 // functionIdRegister is what function we have registered already.
@@ -917,8 +923,15 @@ var functionIdRegister = map[string]int32{
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
-	"json_length":                    JSON_LENGTH,
 	"hll_cardinality":                HLL_CARDINALITY,
+	"json_type":                      JSON_TYPE,
+	"json_valid":                     JSON_VALID,
+	"json_length":                    JSON_LENGTH,
+	"json_keys":                      JSON_KEYS,
+	"json_pretty":                    JSON_PRETTY,
+	"json_schema_valid":              JSON_SCHEMA_VALID,
+	"json_schema_validation_report":  JSON_SCHEMA_VALID_REPORT,
+	"json_value":                     JSON_VALUE,
 	"jq":                             JQ,
 	"try_jq":                         TRY_JQ,
 	"moplugin":                       WASM,
@@ -1027,6 +1040,7 @@ var functionIdRegister = map[string]int32{
 	"cast_set_value_to_index":        CAST_SET_VALUE_TO_INDEX,
 	"cast_set_index_value_to_index":  CAST_SET_INDEX_VALUE_TO_INDEX,
 	"cast_geometry_to_subtype":       CAST_GEOMETRY_TO_SUBTYPE,
+	"cast_json_to_array":             CAST_JSON_TO_ARRAY,
 	"st_astext":                      ST_ASTEXT,
 	"st_geomfromtext":                ST_GEOMFROMTEXT,
 	"st_geometrytype":                ST_GEOMETRYTYPE,

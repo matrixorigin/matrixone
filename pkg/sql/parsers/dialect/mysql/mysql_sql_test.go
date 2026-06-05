@@ -83,6 +83,17 @@ func TestOriginSQL(t *testing.T) {
 	}
 }
 
+func TestPositionFunctionSyntax(t *testing.T) {
+	tests := []string{
+		"select position('y' in 'xyz')",
+		"select position(substr in str) from t1",
+	}
+	for _, sql := range tests {
+		_, err := ParseOne(context.TODO(), sql, 1)
+		require.NoError(t, err, sql)
+	}
+}
+
 func TestDataBranchDiffOutputModes(t *testing.T) {
 	stmt, err := ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} output summary`, 1)
 	require.NoError(t, err)
@@ -3200,6 +3211,10 @@ var (
 		{
 			input:  "create table t1(a vecf32(3), b vecf64(3), c int)",
 			output: "create table t1 (a vecf32(3), b vecf64(3), c int)",
+		},
+		{
+			input:  "create table t1 (id bigint primary key, embedding vecf32(3), payload json, tags array(varchar(20)))",
+			output: "create table t1 (id bigint primary key, embedding vecf32(3), payload json, tags array(varchar(20)))",
 		},
 		{
 			input:  "alter table tbl1 drop constraint fk_name",

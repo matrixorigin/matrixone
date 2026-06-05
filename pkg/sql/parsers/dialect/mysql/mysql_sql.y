@@ -892,6 +892,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> BACKUP FILESYSTEM PARALLELISM RESTORE
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
+%token <str> ARRAY
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -12002,6 +12003,15 @@ function_call_generic:
             Exprs: tree.Exprs{timeUinit, $5},
         }
     }
+|   POSITION '(' bit_expr IN bit_expr ')'
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+        }
+    }
 |   func_not_keyword '(' expression_list_opt ')'
     {
         name := tree.NewUnresolvedColName($1)
@@ -12849,6 +12859,19 @@ column_type:
 |   char_type
 |   time_type
 |   spatial_type
+|   ARRAY '(' column_type ')'
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_TYPED_ARRAY),
+                ArrayContents: $3,
+            },
+        }
+    }
 
 numeric_type:
     int_type length_opt
@@ -13926,6 +13949,7 @@ non_reserved_keyword:
 |   ACCOUNTS
 |   AGAINST
 |   ALWAYS
+|   ARRAY
 |   AVG_ROW_LENGTH
 |   AUTO_RANDOM
 |   ATTRIBUTE
@@ -14330,7 +14354,6 @@ func_not_keyword:
 |   NOW
 |    ADDDATE
 |   CURDATE
-|   POSITION
 |   SESSION_USER
 |   SUBDATE
 |   SYSTEM_USER

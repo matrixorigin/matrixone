@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -1466,11 +1467,12 @@ func TestParquet_openFile_localNYI(t *testing.T) {
 }
 
 func TestParquetShouldPrefetchS3Parquet(t *testing.T) {
-	require.True(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize))
-	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize+1))
-	require.False(t, shouldPrefetchS3Parquet(tree.S3, false, maxParquetS3PrefetchSize))
-	require.False(t, shouldPrefetchS3Parquet(tree.INFILE, true, maxParquetS3PrefetchSize))
-	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, -1))
+	require.True(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize, false))
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize+1, false))
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, false, maxParquetS3PrefetchSize, false))
+	require.False(t, shouldPrefetchS3Parquet(tree.INFILE, true, maxParquetS3PrefetchSize, false))
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, -1, false))
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, 80*1024*1024, true))
 }
 
 func TestParquet_prepare_missingColumn(t *testing.T) {
@@ -1655,6 +1657,47 @@ func TestParquet_ScanParquetFile_MappingErrorClosesPages(t *testing.T) {
 	require.NoError(t, r.Close())
 }
 
+func TestParquet_RowGroupSelection_MappingErrorClosesPages(t *testing.T) {
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Uint(64)})
+	w := parquet.NewWriter(&buf, schema, parquet.MaxRowsPerRowGroup(1))
+	_, err := w.WriteRows([]parquet.Row{
+		{parquet.ValueOf(uint64(1)).Level(0, 0, 0)},
+		{parquet.ValueOf(uint64(1<<63)).Level(0, 0, 0)},
+	})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:                   context.Background(),
+			Attrs:                 []plan.ExternAttr{{ColName: "c", ColIndex: 0}},
+			Cols:                  []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}}},
+			Extern:                &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE, Format: tree.PARQUET}},
+			FileSize:              []int64{int64(buf.Len())},
+			ParquetRowGroupShards: []*pipeline.ParquetRowGroupShard{{FileIndex: 0, RowGroupStart: 1, RowGroupEnd: 2}},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	proc := testutil.NewProc(t)
+	bat := vectorBatch([]types.Type{types.T_int64.ToType()})
+
+	r := NewParquetReader(param, proc)
+	fileEmpty, err := r.Open(param, proc)
+	require.NoError(t, err)
+	require.False(t, fileEmpty)
+	_, err = r.ReadBatch(context.Background(), bat, proc, nil)
+	require.ErrorContains(t, err, "overflows BIGINT")
+	require.NotNil(t, r.h)
+	require.Len(t, r.h.pages, 1)
+	require.Nil(t, r.h.pages[0])
+	require.Nil(t, r.h.currentPage[0])
+	require.Zero(t, r.h.pageOffset[0])
+	require.NoError(t, r.Close())
+}
+
 func TestParquet_ScanParquetFile_CountStarNoAttrs(t *testing.T) {
 	save := maxParquetBatchCnt
 	maxParquetBatchCnt = 2
@@ -1704,6 +1747,309 @@ func TestParquet_ScanParquetFile_CountStarNoAttrs(t *testing.T) {
 	require.Equal(t, 3, total)
 }
 
+func TestParquet_RowGroupSelection_PagePath(t *testing.T) {
+	save := maxParquetBatchCnt
+	maxParquetBatchCnt = 3
+	defer func() { maxParquetBatchCnt = save }()
+
+	data := writeInt32ParquetWithRowGroups(t, []int32{0, 1, 2, 3, 4, 5}, 2)
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:      context.Background(),
+			Attrs:    []plan.ExternAttr{{ColName: "c", ColIndex: 0}},
+			Cols:     []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}}},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
+			FileSize: []int64{int64(len(data))},
+			ParquetRowGroupShards: []*pipeline.ParquetRowGroupShard{
+				{FileIndex: 0, RowGroupStart: 1, RowGroupEnd: 3},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(data)
+
+	proc := testutil.NewProc(t)
+	r := NewParquetReader(param, proc)
+	fileEmpty, err := r.Open(param, proc)
+	require.NoError(t, err)
+	require.False(t, fileEmpty)
+	defer r.Close()
+
+	got := make([]int32, 0, 4)
+	for attempts := 0; attempts < 4; attempts++ {
+		bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
+		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
+		require.NoError(t, rerr)
+		values := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
+		got = append(got, values[:bat.RowCount()]...)
+		if finished {
+			break
+		}
+	}
+	require.Equal(t, []int32{2, 3, 4, 5}, got)
+}
+
+func TestParquet_RowGroupSelection_RowCountOnly(t *testing.T) {
+	save := maxParquetBatchCnt
+	maxParquetBatchCnt = 3
+	defer func() { maxParquetBatchCnt = save }()
+
+	data := writeInt32ParquetWithRowGroups(t, []int32{0, 1, 2, 3, 4, 5}, 2)
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:      context.Background(),
+			Cols:     []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}}},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
+			FileSize: []int64{int64(len(data))},
+			ParquetRowGroupShards: []*pipeline.ParquetRowGroupShard{
+				{FileIndex: 0, RowGroupStart: 1, RowGroupEnd: 3},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(data)
+
+	proc := testutil.NewProc(t)
+	r := NewParquetReader(param, proc)
+	fileEmpty, err := r.Open(param, proc)
+	require.NoError(t, err)
+	require.False(t, fileEmpty)
+	defer r.Close()
+
+	var total int
+	for attempts := 0; attempts < 4; attempts++ {
+		bat := batch.NewWithSize(0)
+		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
+		require.NoError(t, rerr)
+		total += bat.RowCount()
+		if finished {
+			break
+		}
+	}
+	require.Equal(t, 4, total)
+}
+
+func TestParquet_RowGroupSelection_InvalidShard(t *testing.T) {
+	data := writeInt32ParquetWithRowGroups(t, []int32{0, 1, 2, 3}, 2)
+	for _, shard := range []*pipeline.ParquetRowGroupShard{
+		{FileIndex: 0, RowGroupStart: 1, RowGroupEnd: 4},
+		{FileIndex: 0, RowGroupStart: 1, RowGroupEnd: 1},
+	} {
+		param := &ExternalParam{
+			ExParamConst: ExParamConst{
+				Ctx:      context.Background(),
+				Attrs:    []plan.ExternAttr{{ColName: "c", ColIndex: 0}},
+				Cols:     []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}}},
+				Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
+				FileSize: []int64{int64(len(data))},
+				ParquetRowGroupShards: []*pipeline.ParquetRowGroupShard{
+					shard,
+				},
+			},
+			ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+		}
+		param.Extern.Data = string(data)
+
+		proc := testutil.NewProc(t)
+		r := NewParquetReader(param, proc)
+		fileEmpty, err := r.Open(param, proc)
+		require.Error(t, err)
+		require.False(t, fileEmpty)
+		require.Contains(t, err.Error(), "invalid parquet row group shard")
+	}
+}
+
+func TestParquet_RowGroupSelection_NestedRowMode(t *testing.T) {
+	save := maxParquetBatchCnt
+	maxParquetBatchCnt = 4
+	defer func() { maxParquetBatchCnt = save }()
+
+	data := writeNestedParquetWithRowGroups(t, []int32{0, 1, 2, 3}, 2)
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:      context.Background(),
+			Attrs:    []plan.ExternAttr{{ColName: "c", ColIndex: 0}},
+			Cols:     []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_text)}}},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
+			FileSize: []int64{int64(len(data))},
+			ParquetRowGroupShards: []*pipeline.ParquetRowGroupShard{
+				{FileIndex: 0, RowGroupStart: 1, RowGroupEnd: 2},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(data)
+
+	proc := testutil.NewProc(t)
+	r := NewParquetReader(param, proc)
+	fileEmpty, err := r.Open(param, proc)
+	require.NoError(t, err)
+	require.False(t, fileEmpty)
+	defer r.Close()
+
+	bat := vectorBatch([]types.Type{types.New(types.T_text, 0, 0)})
+	finished, err := r.ReadBatch(context.Background(), bat, proc, nil)
+	require.NoError(t, err)
+	require.True(t, finished)
+	require.Equal(t, 2, bat.RowCount())
+	require.Equal(t, 2, bat.Vecs[0].Length())
+}
+
+func TestParquet_RowGroupSelection_SerialVsShards_Nulls(t *testing.T) {
+	save := maxParquetBatchCnt
+	maxParquetBatchCnt = 2
+	defer func() { maxParquetBatchCnt = save }()
+
+	data := writeNullableInt32ParquetWithRowGroups(t, []nullableInt32{
+		{value: 1, valid: true},
+		{valid: false},
+		{value: 3, valid: true},
+		{valid: false},
+		{value: 5, valid: true},
+		{value: 6, valid: true},
+	}, 2)
+
+	serial := scanNullableInt32Parquet(t, data, nil, false)
+	var sharded []string
+	for i := int32(0); i < 3; i++ {
+		sharded = append(sharded, scanNullableInt32Parquet(t, data, []*pipeline.ParquetRowGroupShard{
+			{FileIndex: 0, RowGroupStart: i, RowGroupEnd: i + 1},
+		}, false)...)
+	}
+	require.Equal(t, []string{"1", "NULL", "3", "NULL", "5", "6"}, serial)
+	require.Equal(t, serial, sharded)
+}
+
+func TestParquet_RowGroupSelection_NotNullViolation(t *testing.T) {
+	data := writeNullableInt32ParquetWithRowGroups(t, []nullableInt32{
+		{value: 1, valid: true},
+		{value: 2, valid: true},
+		{valid: false},
+		{value: 4, valid: true},
+	}, 2)
+
+	param := nullableInt32ParquetParam(data, []*pipeline.ParquetRowGroupShard{
+		{FileIndex: 0, RowGroupStart: 1, RowGroupEnd: 2},
+	}, true)
+	proc := testutil.NewProc(t)
+	r := NewParquetReader(param, proc)
+	fileEmpty, err := r.Open(param, proc)
+	require.NoError(t, err)
+	require.False(t, fileEmpty)
+	defer r.Close()
+
+	bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
+	_, err = r.ReadBatch(context.Background(), bat, proc, nil)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation), "unexpected error: %v", err)
+	require.Contains(t, err.Error(), "cannot load NULL value into NOT NULL column")
+}
+
+func TestParquet_RowGroupSelection_SerialVsShards_NestedRowMode(t *testing.T) {
+	save := maxParquetBatchCnt
+	maxParquetBatchCnt = 2
+	defer func() { maxParquetBatchCnt = save }()
+
+	data := writeNestedParquetWithRowGroups(t, []int32{0, 1, 2, 3}, 2)
+	serial := scanNestedTextParquet(t, data, nil)
+	var sharded []string
+	for i := int32(0); i < 2; i++ {
+		sharded = append(sharded, scanNestedTextParquet(t, data, []*pipeline.ParquetRowGroupShard{
+			{FileIndex: 0, RowGroupStart: i, RowGroupEnd: i + 1},
+		})...)
+	}
+	require.Equal(t, serial, sharded)
+	require.Len(t, serial, 4)
+}
+
+func TestParquet_ProfileStats_PagePath(t *testing.T) {
+	save := maxParquetBatchCnt
+	maxParquetBatchCnt = 2
+	defer func() { maxParquetBatchCnt = save }()
+
+	data := writeInt32ParquetWithRowGroups(t, []int32{0, 1, 2, 3, 4, 5}, 2)
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:      context.Background(),
+			Attrs:    []plan.ExternAttr{{ColName: "c", ColIndex: 0}},
+			Cols:     []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}}},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE, Format: tree.PARQUET, Data: string(data)}},
+			FileSize: []int64{int64(len(data))},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(data)
+
+	proc := testutil.NewProc(t)
+	r := NewParquetReader(param, proc)
+	fileEmpty, err := r.Open(param, proc)
+	require.NoError(t, err)
+	require.False(t, fileEmpty)
+	defer r.Close()
+
+	var totalRows int
+	for attempts := 0; attempts < 5; attempts++ {
+		bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
+		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
+		require.NoError(t, rerr)
+		totalRows += bat.RowCount()
+		if finished {
+			break
+		}
+	}
+	require.Equal(t, 6, totalRows)
+
+	stats := param.takeParquetProfile()
+	require.Equal(t, int64(1), stats.Files)
+	require.Equal(t, int64(3), stats.RowGroups)
+	require.Equal(t, int64(6), stats.RowsRead)
+	require.Equal(t, int64(len(data)), stats.BytesRead)
+	require.Positive(t, stats.OpenTime)
+	require.Positive(t, stats.ReadPageTime)
+	require.Positive(t, stats.MapTime)
+	require.Zero(t, stats.RowModeTime)
+	require.True(t, param.takeParquetProfile().Empty())
+}
+
+func TestParquet_ProfileStats_RowMode(t *testing.T) {
+	data := writeNestedParquetWithRowGroups(t, []int32{0, 1, 2, 3}, 2)
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:      context.Background(),
+			Attrs:    []plan.ExternAttr{{ColName: "c", ColIndex: 0}},
+			Cols:     []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_text)}}},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE, Format: tree.PARQUET}},
+			FileSize: []int64{int64(len(data))},
+			ParquetRowGroupShards: []*pipeline.ParquetRowGroupShard{
+				{FileIndex: 0, RowGroupStart: 1, RowGroupEnd: 2},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(data)
+
+	proc := testutil.NewProc(t)
+	r := NewParquetReader(param, proc)
+	fileEmpty, err := r.Open(param, proc)
+	require.NoError(t, err)
+	require.False(t, fileEmpty)
+	defer r.Close()
+
+	bat := vectorBatch([]types.Type{types.New(types.T_text, 0, 0)})
+	finished, err := r.ReadBatch(context.Background(), bat, proc, nil)
+	require.NoError(t, err)
+	require.True(t, finished)
+	require.Equal(t, 2, bat.RowCount())
+
+	stats := param.takeParquetProfile()
+	require.Equal(t, int64(1), stats.Files)
+	require.Equal(t, int64(1), stats.RowGroups)
+	require.Equal(t, int64(2), stats.RowsRead)
+	require.Equal(t, int64(len(data)), stats.BytesRead)
+	require.Positive(t, stats.OpenTime)
+	require.Positive(t, stats.RowModeTime)
+}
+
 // helper to build a batch with provided vector types
 func vectorBatch(ts []types.Type) *batch.Batch {
 	bat := batch.NewWithSize(len(ts))
@@ -1711,6 +2057,160 @@ func vectorBatch(ts []types.Type) *batch.Batch {
 		bat.Vecs[i] = vector.NewVec(t)
 	}
 	return bat
+}
+
+func writeInt32ParquetWithRowGroups(t *testing.T, values []int32, rowsPerGroup int64) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Leaf(parquet.Int32Type)})
+	w := parquet.NewWriter(&buf, schema, parquet.MaxRowsPerRowGroup(rowsPerGroup))
+	rows := make([]parquet.Row, len(values))
+	for i, value := range values {
+		rows[i] = parquet.Row{parquet.Int32Value(value).Level(0, 0, 0)}
+	}
+	_, err := w.WriteRows(rows)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	require.Len(t, f.RowGroups(), (len(values)+int(rowsPerGroup)-1)/int(rowsPerGroup))
+	return buf.Bytes()
+}
+
+func writeNestedParquetWithRowGroups(t *testing.T, values []int32, rowsPerGroup int64) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"c": parquet.Group{
+			"v": parquet.Leaf(parquet.Int32Type),
+		},
+	})
+	w := parquet.NewWriter(&buf, schema, parquet.MaxRowsPerRowGroup(rowsPerGroup))
+	rows := make([]parquet.Row, len(values))
+	for i, value := range values {
+		rows[i] = parquet.Row{parquet.Int32Value(value).Level(0, 0, 0)}
+	}
+	_, err := w.WriteRows(rows)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	require.Len(t, f.RowGroups(), (len(values)+int(rowsPerGroup)-1)/int(rowsPerGroup))
+	return buf.Bytes()
+}
+
+type nullableInt32 struct {
+	value int32
+	valid bool
+}
+
+func writeNullableInt32ParquetWithRowGroups(t *testing.T, values []nullableInt32, rowsPerGroup int64) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Optional(parquet.Leaf(parquet.Int32Type))})
+	w := parquet.NewWriter(&buf, schema, parquet.MaxRowsPerRowGroup(rowsPerGroup))
+	rows := make([]parquet.Row, len(values))
+	for i, value := range values {
+		if value.valid {
+			rows[i] = parquet.Row{parquet.Int32Value(value.value).Level(0, 1, 0)}
+		} else {
+			rows[i] = parquet.Row{parquet.NullValue().Level(0, 0, 0)}
+		}
+	}
+	_, err := w.WriteRows(rows)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	require.Len(t, f.RowGroups(), (len(values)+int(rowsPerGroup)-1)/int(rowsPerGroup))
+	return buf.Bytes()
+}
+
+func nullableInt32ParquetParam(data []byte, shards []*pipeline.ParquetRowGroupShard, notNull bool) *ExternalParam {
+	return &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:                   context.Background(),
+			Attrs:                 []plan.ExternAttr{{ColName: "c", ColIndex: 0}},
+			Cols:                  []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int32), NotNullable: notNull}}},
+			Extern:                &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE, Format: tree.PARQUET, Data: string(data)}},
+			FileSize:              []int64{int64(len(data))},
+			ParquetRowGroupShards: shards,
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+}
+
+func scanNullableInt32Parquet(t *testing.T, data []byte, shards []*pipeline.ParquetRowGroupShard, notNull bool) []string {
+	t.Helper()
+	param := nullableInt32ParquetParam(data, shards, notNull)
+	param.Extern.Data = string(data)
+	proc := testutil.NewProc(t)
+	r := NewParquetReader(param, proc)
+	fileEmpty, err := r.Open(param, proc)
+	require.NoError(t, err)
+	require.False(t, fileEmpty)
+	defer r.Close()
+
+	var rows []string
+	for attempts := 0; attempts < 8; attempts++ {
+		bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
+		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
+		require.NoError(t, rerr)
+		values := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
+		for i := 0; i < bat.RowCount(); i++ {
+			if bat.Vecs[0].IsNull(uint64(i)) {
+				rows = append(rows, "NULL")
+			} else {
+				rows = append(rows, fmt.Sprintf("%d", values[i]))
+			}
+		}
+		if finished {
+			return rows
+		}
+	}
+	t.Fatalf("parquet scan did not finish")
+	return nil
+}
+
+func scanNestedTextParquet(t *testing.T, data []byte, shards []*pipeline.ParquetRowGroupShard) []string {
+	t.Helper()
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:                   context.Background(),
+			Attrs:                 []plan.ExternAttr{{ColName: "c", ColIndex: 0}},
+			Cols:                  []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_text)}}},
+			Extern:                &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE, Format: tree.PARQUET}},
+			FileSize:              []int64{int64(len(data))},
+			ParquetRowGroupShards: shards,
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(data)
+	proc := testutil.NewProc(t)
+	r := NewParquetReader(param, proc)
+	fileEmpty, err := r.Open(param, proc)
+	require.NoError(t, err)
+	require.False(t, fileEmpty)
+	defer r.Close()
+
+	var rows []string
+	for attempts := 0; attempts < 8; attempts++ {
+		bat := vectorBatch([]types.Type{types.New(types.T_text, 0, 0)})
+		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
+		require.NoError(t, rerr)
+		for i := 0; i < bat.RowCount(); i++ {
+			if bat.Vecs[0].IsNull(uint64(i)) {
+				rows = append(rows, "NULL")
+			} else {
+				rows = append(rows, bat.Vecs[0].GetStringAt(i))
+			}
+		}
+		if finished {
+			return rows
+		}
+	}
+	t.Fatalf("parquet scan did not finish")
+	return nil
 }
 
 func Test_parquet_strLoader(t *testing.T) {
@@ -1972,7 +2472,12 @@ func Test_wrapParseError(t *testing.T) {
 func Test_fsReaderAt_ReadAt(t *testing.T) {
 	data := []byte("hello world")
 	fs := &fakeFS{b: data}
-	r := &fsReaderAt{fs: fs, readPath: "fake:hello", ctx: context.Background()}
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Extern: &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tree.PARQUET}},
+		},
+	}
+	r := &fsReaderAt{fs: fs, readPath: "fake:hello", ctx: context.Background(), param: param}
 	buf := make([]byte, 5)
 	n, err := r.ReadAt(buf, 6)
 	require.NoError(t, err)
@@ -1981,6 +2486,7 @@ func Test_fsReaderAt_ReadAt(t *testing.T) {
 	require.Equal(t, fileservice.Policy(fileservice.SkipFullFilePreloads), fs.lastPolicy)
 	require.Equal(t, int64(6), fs.lastOffset)
 	require.Equal(t, int64(5), fs.lastSize)
+	require.Equal(t, int64(5), param.takeParquetProfile().BytesRead)
 }
 
 func TestParquetS3ReadAmplificationRepro(t *testing.T) {
