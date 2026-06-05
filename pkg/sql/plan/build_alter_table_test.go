@@ -640,11 +640,43 @@ func TestAlterTableVarcharLengthBumped(t *testing.T) {
 
 func TestAlterTableAutoIncrement(t *testing.T) {
 	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["auto_incr_t"] = &ObjectRef{
+		SchemaName: "constraint_test",
+		ObjName:    "auto_incr_t",
+	}
+	mock.ctxt.tables["auto_incr_t"] = &TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     24532,
+		Name:      "auto_incr_t",
+		Cols: []*ColDef{
+			{
+				ColId:   0,
+				Name:    "id",
+				Primary: true,
+				Typ: plan.Type{
+					Id:       int32(types.T_uint64),
+					AutoIncr: true,
+				},
+				Default: &plan.Default{},
+			},
+			{
+				ColId:   1,
+				Name:    "v",
+				Typ:     plan.Type{Id: int32(types.T_int32)},
+				Default: &plan.Default{},
+			},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Cols:        []uint64{0},
+			Names:       []string{"id"},
+		},
+	}
 
 	sqls := []string{
-		`ALTER TABLE constraint_test.dept AUTO_INCREMENT = 1000;`,
-		`ALTER TABLE constraint_test.dept AUTO_INCREMENT = 0;`,
-		`ALTER TABLE constraint_test.dept AUTO_INCREMENT = 5;`,
+		`ALTER TABLE constraint_test.auto_incr_t AUTO_INCREMENT = 1000;`,
+		`ALTER TABLE constraint_test.auto_incr_t AUTO_INCREMENT = 0;`,
+		`ALTER TABLE constraint_test.auto_incr_t AUTO_INCREMENT = 5;`,
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 }
