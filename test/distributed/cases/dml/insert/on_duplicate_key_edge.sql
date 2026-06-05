@@ -162,3 +162,22 @@ insert into t_odku_auto (uk_val, data) values (3, 'third');
 select * from t_odku_auto order by id;
 
 drop table if exists t_odku_auto;
+
+-- Issue #23145: ODKU only handles primary-key conflicts. Unique-key conflicts
+-- on auto_increment tables intentionally return duplicate-key errors.
+drop table if exists ai_duplicate_test;
+create table ai_duplicate_test (
+    id int auto_increment primary key,
+    code varchar(20) unique,
+    count int
+);
+
+insert into ai_duplicate_test (code, count) values ('A', 1), ('B', 2);
+-- @regex("Duplicate entry 'A' for key", true)
+insert into ai_duplicate_test (code, count) values ('A', 5)
+    on duplicate key update count = count + 1;
+select * from ai_duplicate_test order by id;
+insert into ai_duplicate_test (code, count) values ('C', 10);
+select * from ai_duplicate_test order by id;
+
+drop table if exists ai_duplicate_test;
