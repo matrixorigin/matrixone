@@ -349,7 +349,11 @@ type VarExpressionExecutor struct {
 }
 
 func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
-	val, err := proc.GetResolveVariableFunc()(expr.name, expr.system, expr.global)
+	resolveVariableFunc := proc.GetResolveVariableFunc()
+	if resolveVariableFunc == nil {
+		return nil, moerr.NewInternalErrorf(proc.Ctx, "resolve variable function is not set for variable %s", expr.name)
+	}
+	val, err := resolveVariableFunc(expr.name, expr.system, expr.global)
 	if err != nil {
 		return nil, err
 	}
