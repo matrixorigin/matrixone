@@ -587,7 +587,6 @@ func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64,
 	// exactly convertible to double, so for large double x, the test
 	// x <= LLONG_MAX does not guarantee x will fit in a longlong,
 	// and may give a compiler warning). LLONG_MIN is exact.
-	const LLONG_MAX_DOUBLE = 9223372036854774784.0
 
 	// Similar, for ulonglong.
 	const ULLONG_MAX_DOUBLE = 18446744073709549568.0
