@@ -32,18 +32,6 @@ func Test_mysqlResp(t *testing.T) {
 	resp.ResetStatistics()
 }
 
-func TestIsRowCountDML(t *testing.T) {
-	require.True(t, isRowCountDML(&tree.Insert{}))
-	require.True(t, isRowCountDML(&tree.Update{}))
-	require.True(t, isRowCountDML(&tree.Delete{}))
-	require.True(t, isRowCountDML(&tree.Replace{}))
-	require.True(t, isRowCountDML(&tree.Load{}))
-
-	require.False(t, isRowCountDML(&tree.Select{}))
-	require.False(t, isRowCountDML(&tree.CreateTable{}))
-	require.False(t, isRowCountDML(nil))
-}
-
 func TestSessionLastAffectedRows(t *testing.T) {
 	ses := &Session{}
 	require.Equal(t, int64(0), ses.GetLastAffectedRows())
@@ -86,7 +74,11 @@ func TestRecordLastAffectedRows(t *testing.T) {
 		{"delete", &tree.Delete{}, 1, 1},
 		{"replace", &tree.Replace{}, 2, 2},
 		{"load", &tree.Load{}, 7, 7},
-		{"select -> -1", &tree.Select{}, 0, -1},
+		// status-returning select (SELECT ... INTO ...) keeps its affected rows.
+		{"select into -> affect", &tree.Select{Ep: &tree.ExportParam{}}, 9, 9},
+		// plain result-set select reports -1 regardless of AffectRows.
+		{"select -> -1", &tree.Select{}, 4, -1},
+		// DDL is a status statement but affects no rows.
 		{"ddl -> 0", &tree.CreateTable{}, 0, 0},
 	}
 	for _, c := range cases {

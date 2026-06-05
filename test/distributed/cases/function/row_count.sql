@@ -49,6 +49,14 @@ select row_count();
 create table t2(a int);
 select row_count();
 
+-- a status statement that still affects rows (create table ... as select)
+-- reports the number of rows it inserted, not 0
+create table src(a int);
+insert into src values (1),(2),(3),(4),(5),(6);
+select row_count();
+create table ctas as select * from src;
+select row_count();
+
 -- a failed statement (duplicate primary key) makes row_count() return -1
 insert into t values (1,12345);
 select row_count();
