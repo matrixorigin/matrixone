@@ -258,6 +258,12 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 		})
 
 	if err != nil {
+		// NewSync may have allocated the index (native resources) before the txn
+		// failed — release it here so the early return doesn't leak it (the defer
+		// below isn't reached yet).
+		if sync != nil {
+			sync.Destroy()
+		}
 		errch <- err
 		return
 	}

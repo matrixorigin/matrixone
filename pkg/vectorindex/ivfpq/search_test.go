@@ -100,7 +100,7 @@ func TestIvfpqSearchTypeMismatch(t *testing.T) {
 
 	s := NewIvfpqSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
 	s.Indexes = []*IvfpqModel[float32]{idx}
-	s.MultiIndex = s.buildMultiIndex()
+	s.MultiIndex, _ = s.buildMultiIndex()
 
 	rt := vectorindex.RuntimeConfig{Limit: 4}
 
@@ -120,7 +120,7 @@ func TestIvfpqSearchAndSearchFloat32(t *testing.T) {
 
 	s := NewIvfpqSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
 	s.Indexes = []*IvfpqModel[float32]{idx}
-	s.MultiIndex = s.buildMultiIndex()
+	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
 	query := data[:testDim]
@@ -158,7 +158,7 @@ func TestIvfpqSearchMultipleIndexes(t *testing.T) {
 
 	s := NewIvfpqSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
 	s.Indexes = []*IvfpqModel[float32]{idx0, idx1}
-	s.MultiIndex = s.buildMultiIndex()
+	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
 	query := data[:testDim]

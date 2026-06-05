@@ -119,7 +119,7 @@ func TestCagraSearchAndSearchFloat32(t *testing.T) {
 
 	s := NewCagraSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
 	s.Indexes = []*CagraModel[float32]{idx}
-	s.MultiIndex = s.buildMultiIndex()
+	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
 	query := data[:testDim] // first vector; internal ID 0 should be closest
@@ -160,7 +160,7 @@ func TestCagraSearchMultipleIndexes(t *testing.T) {
 
 	s := NewCagraSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
 	s.Indexes = []*CagraModel[float32]{idx0, idx1}
-	s.MultiIndex = s.buildMultiIndex()
+	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
 	query := data[:testDim]
