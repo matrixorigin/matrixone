@@ -581,18 +581,25 @@ func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64,
 	if val <= float64(math.MinInt64) {
 		return bitCountFromUint64(minInt64BitPattern), nil
 	}
-	const maxInt64PlusOne = 9223372036854775808.0
-	if val >= maxInt64PlusOne {
-		return bitCountFromUint64(uint64(math.MaxInt64)), nil
-	}
+	//2^63 - 1 = 9223372036854775807
+	//2^64 - 1 = 18446744073709551615
+	// The largest longlong that will fix into a double (LLONG_MAX is not
+	// exactly convertible to double, so for large double x, the test
+	// x <= LLONG_MAX does not guarantee x will fit in a longlong,
+	// and may give a compiler warning). LLONG_MIN is exact.
+	const LLONG_MAX_DOUBLE = 9223372036854774784.0
+
+	// Similar, for ulonglong.
+	const ULLONG_MAX_DOUBLE = 18446744073709549568.0
+
 	rounded := math.RoundToEven(val)
 	if rounded <= float64(math.MinInt64) {
 		return bitCountFromUint64(minInt64BitPattern), nil
 	}
-	if rounded >= maxInt64PlusOne {
-		return bitCountFromUint64(uint64(math.MaxInt64)), nil
+	if rounded >= ULLONG_MAX_DOUBLE {
+		return bitCountFromUint64(uint64(math.MaxUint64)), nil
 	}
-	return bitCountFromSignedInt64Pattern(int64(rounded)), nil
+	return bitCountFromUint64(uint64(rounded)), nil
 }
 
 func bitCountFromDecimal64(v types.Decimal64, scale int32) (uint64, error) {
