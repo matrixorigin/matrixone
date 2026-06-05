@@ -376,10 +376,12 @@ var (
 		"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),'','') AS `COMMENT`," +
 		"`idx`.`comment` AS `INDEX_COMMENT`," +
 		"if(`idx`.`is_visible`,'YES','NO') AS `IS_VISIBLE`," +
-		"NULL AS `EXPRESSION`" +
+		"NULL AS `EXPRESSION` " +
 		"from (`mo_catalog`.`mo_indexes` `idx` " +
-		"join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`))" +
-		"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`)"
+		"join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)) " +
+		"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname` " +
+		"and `tcl`.`account_id` = `tbl`.`account_id` and `tcl`.`att_database` = `tbl`.`reldatabase` and `tcl`.`att_relname` = `tbl`.`relname`) " +
+		"where `tbl`.`account_id` = current_account_id()"
 
 	InformationSchemaReferentialConstraintsDDL = "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS AS " +
 		"SELECT DISTINCT " +
