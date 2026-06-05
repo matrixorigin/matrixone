@@ -27,17 +27,16 @@ import (
 // 4. Mod
 func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	// decimal256 is not present in the static binary cast matrix below.
-	// When both sides are decimals and at least one is decimal256, promote both
-	// to decimal256 (each side keeps its own scale/width) so downstream operator
-	// support checks and execution see a single, consistent decimal type.
+	// When one side is decimal256 and the other is a decimal or an integer,
+	// promote both to decimal256 so downstream operator support checks and
+	// execution see a single, consistent decimal type. A decimal side keeps its
+	// own scale/width; an integer side becomes decimal256(integralWidth, 0).
 	// This is neutral for arithmetic operators (their support checks reject
 	// decimal256, so they keep failing exactly as before) and enables decimal256
-	// comparison.
+	// comparison against both decimals and bare integer literals (issue #24565).
 	if (s1.Oid == types.T_decimal256 || s2.Oid == types.T_decimal256) &&
-		s1.Oid.IsDecimal() && s2.Oid.IsDecimal() {
-		return true,
-			types.New(types.T_decimal256, s1.Width, s1.Scale),
-			types.New(types.T_decimal256, s2.Width, s2.Scale)
+		isDecimalOrInteger(s1) && isDecimalOrInteger(s2) {
+		return true, decimal256FromSource(s1), decimal256FromSource(s2)
 	}
 	check := fixedBinaryCastRule1[s1.Oid][s2.Oid]
 	if check.cast {
@@ -492,6 +491,42 @@ func integerIntegralWidth(oid types.T) int32 {
 	default:
 		return 0
 	}
+}
+
+// isDecimalOrInteger reports whether t is a decimal or an integer type, i.e. a
+// numeric type that can be losslessly cast into a wider decimal.
+func isDecimalOrInteger(t types.Type) bool {
+	return t.Oid.IsDecimal() || t.IsIntOrUint()
+}
+
+// decimal256FromSource converts a decimal-or-integer source type into the
+// decimal256 type used for a decimal256 comparison. A decimal source keeps its
+// own width/scale; an integer source becomes decimal256(integralWidth, 0).
+func decimal256FromSource(s types.Type) types.Type {
+	if s.Oid == types.T_decimal256 {
+		return s
+	}
+	if s.Oid.IsDecimal() {
+		return types.New(types.T_decimal256, s.Width, s.Scale)
+	}
+	return types.New(types.T_decimal256, integerIntegralWidth(s.Oid), 0)
+}
+
+// widestDecimalFamily returns the widest decimal family present among the
+// inputs (decimal256 > decimal128 > decimal64). It is used as the floor family
+// for setSafeDecimalWidthAndScaleFromSource so the computed common type never
+// drops below any operand's family.
+func widestDecimalFamily(inputs []types.Type) types.T {
+	widest := types.T_decimal64
+	for i := range inputs {
+		switch inputs[i].Oid {
+		case types.T_decimal256:
+			return types.T_decimal256
+		case types.T_decimal128:
+			widest = types.T_decimal128
+		}
+	}
+	return widest
 }
 
 func setMaxWidthFromSource(t *types.Type, source []types.Type) {

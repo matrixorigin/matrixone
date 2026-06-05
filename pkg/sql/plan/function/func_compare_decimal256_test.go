@@ -61,12 +61,136 @@ func Test_FixedTypeCastRule1_Decimal256Promotion(t *testing.T) {
 	require.Equal(t, types.T_decimal256, t1.Oid)
 	require.Equal(t, types.T_decimal256, t2.Oid)
 
-	// decimal256 vs non-decimal must NOT be handled by the promotion shortcut.
+	// decimal256 vs a non-decimal/non-integer type (varchar) must NOT be
+	// handled by the promotion shortcut.
 	has, _, _ = fixedTypeCastRule1(
+		types.New(types.T_decimal256, 58, 20),
+		types.T_varchar.ToType(),
+	)
+	require.False(t, has)
+}
+
+// Test_FixedTypeCastRule1_Decimal256VsInteger covers the decimal256-vs-integer
+// promotion path: a bare integer literal compared with a decimal256 value must
+// promote both sides to decimal256 so the comparison binds (issue #24565
+// review). The integer side becomes decimal256(integralWidth, 0).
+func Test_FixedTypeCastRule1_Decimal256VsInteger(t *testing.T) {
+	has, t1, t2 := fixedTypeCastRule1(
 		types.New(types.T_decimal256, 58, 20),
 		types.T_int64.ToType(),
 	)
-	require.False(t, has)
+	require.True(t, has)
+	require.Equal(t, types.T_decimal256, t1.Oid)
+	require.Equal(t, int32(20), t1.Scale)
+	require.Equal(t, types.T_decimal256, t2.Oid)
+	require.Equal(t, int32(0), t2.Scale)
+	require.Equal(t, int32(19), t2.Width) // int64 integral width
+
+	// reversed: integer on the left.
+	has, t1, t2 = fixedTypeCastRule1(
+		types.T_uint32.ToType(),
+		types.New(types.T_decimal256, 40, 5),
+	)
+	require.True(t, has)
+	require.Equal(t, types.T_decimal256, t1.Oid)
+	require.Equal(t, int32(0), t1.Scale)
+	require.Equal(t, int32(10), t1.Width) // uint32 integral width
+	require.Equal(t, types.T_decimal256, t2.Oid)
+	require.Equal(t, int32(5), t2.Scale)
+}
+
+// Test_IsNumericType_Decimal256 verifies decimal256 is recognised by the
+// runtime type-mismatch fallback path (issue #24565 review).
+func Test_IsNumericType_Decimal256(t *testing.T) {
+	require.True(t, isNumericType(types.T_decimal256))
+	require.True(t, isNumericType(types.T_decimal128))
+	require.False(t, isNumericType(types.T_varchar))
+}
+
+// Test_DecimalHelpers covers the small decimal helper funcs used by the BETWEEN
+// and comparison binding paths.
+func Test_DecimalHelpers(t *testing.T) {
+	require.True(t, isDecimalOrInteger(types.New(types.T_decimal128, 38, 2)))
+	require.True(t, isDecimalOrInteger(types.T_int64.ToType()))
+	require.False(t, isDecimalOrInteger(types.T_float64.ToType()))
+	require.False(t, isDecimalOrInteger(types.T_varchar.ToType()))
+
+	require.Equal(t, types.T_decimal64, widestDecimalFamily([]types.Type{
+		types.New(types.T_decimal64, 18, 2), types.T_int64.ToType()}))
+	require.Equal(t, types.T_decimal128, widestDecimalFamily([]types.Type{
+		types.New(types.T_decimal64, 18, 2), types.New(types.T_decimal128, 38, 2)}))
+	require.Equal(t, types.T_decimal256, widestDecimalFamily([]types.Type{
+		types.New(types.T_decimal128, 38, 2), types.New(types.T_decimal256, 76, 2)}))
+
+	// decimal256FromSource: decimal256 unchanged, decimal preserves width/scale,
+	// integer becomes (integralWidth, 0).
+	d256 := types.New(types.T_decimal256, 50, 10)
+	require.Equal(t, d256, decimal256FromSource(d256))
+	got := decimal256FromSource(types.New(types.T_decimal128, 38, 6))
+	require.Equal(t, types.T_decimal256, got.Oid)
+	require.Equal(t, int32(38), got.Width)
+	require.Equal(t, int32(6), got.Scale)
+	got = decimal256FromSource(types.T_int64.ToType())
+	require.Equal(t, types.T_decimal256, got.Oid)
+	require.Equal(t, int32(19), got.Width)
+	require.Equal(t, int32(0), got.Scale)
+}
+
+// Test_BetweenCheckFn_Decimal256Promotion verifies the BETWEEN checkFn computes
+// a common decimal type preserving max integral width + max scale and promotes
+// to decimal256 when decimal128 would overflow (issue #24565 review). Example:
+// DECIMAL(38,0) BETWEEN DECIMAL(38,30) AND DECIMAL(38,30) needs 38 integral + 30
+// scale = 68 digits, i.e. DECIMAL256(68,30) (scale 30 is the 3.0-dev max).
+func Test_BetweenCheckFn_Decimal256Promotion(t *testing.T) {
+	var betweenFunc *FuncNew
+	for i := range supportedOperators {
+		if supportedOperators[i].functionId == BETWEEN {
+			betweenFunc = &supportedOperators[i]
+			break
+		}
+	}
+	require.NotNil(t, betweenFunc, "BETWEEN operator should be defined")
+
+	// DECIMAL(38,0) BETWEEN DECIMAL(38,30) AND DECIMAL(38,30) -> DECIMAL256(68,30).
+	res := betweenFunc.checkFn(betweenFunc.Overloads, []types.Type{
+		types.New(types.T_decimal128, 38, 0),
+		types.New(types.T_decimal128, 38, 30),
+		types.New(types.T_decimal128, 38, 30),
+	})
+	require.Equal(t, succeedWithCast, res.status)
+	require.Len(t, res.finalType, 3)
+	for _, ft := range res.finalType {
+		require.Equal(t, types.T_decimal256, ft.Oid)
+		require.Equal(t, int32(30), ft.Scale)
+		require.Equal(t, int32(68), ft.Width)
+	}
+
+	// mixed family (dec64 value, dec128 bounds) must not be rejected; all three
+	// aligned to a common decimal type.
+	res = betweenFunc.checkFn(betweenFunc.Overloads, []types.Type{
+		types.New(types.T_decimal64, 18, 2),
+		types.New(types.T_decimal128, 38, 4),
+		types.New(types.T_decimal128, 38, 4),
+	})
+	require.Equal(t, succeedWithCast, res.status)
+	require.Len(t, res.finalType, 3)
+	for _, ft := range res.finalType {
+		require.True(t, ft.Oid.IsDecimal())
+		require.Equal(t, res.finalType[0].Oid, ft.Oid)
+		require.Equal(t, int32(4), ft.Scale)
+	}
+
+	// decimal value with integer bounds stays numeric and binds.
+	res = betweenFunc.checkFn(betweenFunc.Overloads, []types.Type{
+		types.New(types.T_decimal128, 20, 2),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.Equal(t, succeedWithCast, res.status)
+	require.Len(t, res.finalType, 3)
+	for _, ft := range res.finalType {
+		require.True(t, ft.Oid.IsDecimal())
+	}
 }
 
 func Test_CompareOperatorSupports_Decimal256(t *testing.T) {

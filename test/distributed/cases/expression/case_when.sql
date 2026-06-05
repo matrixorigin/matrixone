@@ -273,3 +273,20 @@ select
     between cast(1 as decimal(38,20)) and cast(100 as decimal(38,20)) as in_range
 from t_dec256_between order by a;
 drop table t_dec256_between;
+
+-- @case
+-- @desc:test for comparing a decimal256 case result with a bare integer literal
+-- @label:bvt
+SELECT (CASE WHEN 1 = 1 THEN CAST(1 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END) = 1 AS decimal256_eq_int;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END) > 1 AS decimal256_gt_int;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     BETWEEN 1 AND 10 AS decimal256_between_int;
+
+-- @case
+-- @desc:test for between aligning a decimal value to a wider scale that overflows decimal128 into decimal256
+-- @label:bvt
+SELECT CAST(1 AS DECIMAL(38,0))
+     BETWEEN CAST(0.5 AS DECIMAL(38,30)) AND CAST(2 AS DECIMAL(38,30)) AS between_promote_decimal256;
