@@ -29,6 +29,7 @@ select id, u, k, v from dst where k = 20 order by id;
 select id, u, k, v from dst where k = 40 order by id;
 
 -- Ordinary unique-index enforcement still rejects duplicates after PICK.
+-- @regex("Duplicate entry '104' for key '(u|__mo_index_idx_col)'(\[[0-9,]+\])?",true)
 insert into dst values (5, 104, 50, 'dup-u');
 
 data branch create table merge_dst from base;
@@ -42,6 +43,7 @@ data branch create table conflict_src from base;
 insert into conflict_dst values (4, 104, 40, 'dst-four');
 insert into conflict_src values (5, 104, 50, 'src-five');
 -- MERGE must not bypass unique-index validation.
+-- @regex("Duplicate entry '104' for key '(u|__mo_index_idx_col)'(\[[0-9,]+\])?",true)
 data branch merge conflict_src into conflict_dst when conflict accept;
 select id, u, k, v from conflict_dst order by id;
 
