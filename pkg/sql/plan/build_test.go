@@ -725,6 +725,18 @@ func TestUpdate(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestUpdateFromUsesAggDedup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp SET emp.sal = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build PostgreSQL-style update from: %v", err)
+	}
+
+	assertFallbackUpdateAggDedupWithAnyValue(t, logicPlan.GetQuery())
+}
+
 func TestUpdateFallbackMultiTargetGeneratedColumnsKeepProjectLayout(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
@@ -839,11 +851,31 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 		t.Fatalf("build fallback update with generated column chain: %v", err)
 	}
 
-	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(),
-		len(mock.ctxt.tables["emp"].Cols)+3+len(mock.ctxt.tables["dept"].Cols)+1,
-		len(mock.ctxt.tables["emp"].Cols)+2, "chain-marker")
-	if !exprContainsColName(generatedExpr, "empno") || exprContainsColName(generatedExpr, "mgr") {
-		t.Fatalf("generated column chain should use freshly recomputed earlier generated column, got %s", generatedExpr.String())
+	query := logicPlan.GetQuery()
+	assertFallbackUpdateAggDedupWithAnyValue(t, query)
+
+	// Verify the generated-column chain without depending on the order of the
+	// appended update/recompute slots (that order is sensitive to map iteration
+	// and was a source of flakiness). emp contributes len(emp.Cols) base columns
+	// followed by its appended update + recomputed-generated expressions; both
+	// generated columns (mgr, deptno) must be freshly recomputed down to empno,
+	// so within that appended region none may reference the stale mgr column and
+	// exactly two must reference empno.
+	empCols := len(mock.ctxt.tables["emp"].Cols)
+	deptCols := len(mock.ctxt.tables["dept"].Cols)
+	node := requireFallbackSourceProjectNode(t, query, empCols+3+deptCols+1, "chain-marker")
+	empnoRefs := 0
+	for pos := empCols; pos < empCols+3; pos++ {
+		e := node.ProjectList[pos]
+		if exprContainsColName(e, "mgr") {
+			t.Fatalf("generated column chain must use freshly recomputed empno, not stale mgr; appended pos %d = %s", pos, e.String())
+		}
+		if exprContainsColName(e, "empno") {
+			empnoRefs++
+		}
+	}
+	if empnoRefs != 2 {
+		t.Fatalf("expected both generated columns (mgr, deptno) freshly recomputed to empno, got %d empno refs in emp appended region", empnoRefs)
 	}
 }
 
@@ -931,17 +963,7 @@ func makeStringConstExpr(typ plan.Type, value string) *plan.Expr {
 
 func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int, marker string) *Node {
 	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen {
-			continue
-		}
-		hasMarker := false
-		for _, expr := range node.ProjectList {
-			if exprContainsStringLiteral(expr, marker) {
-				hasMarker = true
-				break
-			}
-		}
-		if !hasMarker {
+		if !isFallbackSourceProjectNode(query, node, projectLen, marker) {
 			continue
 		}
 		return node
@@ -950,25 +972,22 @@ func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int
 	return nil
 }
 
-func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int, pos int, marker string) *plan.Expr {
-	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen || pos >= len(node.ProjectList) {
-			continue
-		}
-		hasMarker := false
-		for _, expr := range node.ProjectList {
-			if exprContainsStringLiteral(expr, marker) {
-				hasMarker = true
-				break
-			}
-		}
-		if !hasMarker {
-			continue
-		}
-		return node.ProjectList[pos]
+func isFallbackSourceProjectNode(query *Query, node *Node, projectLen int, marker string) bool {
+	if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen {
+		return false
 	}
-	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
-	return nil
+	if len(node.Children) == 1 {
+		childIdx := node.Children[0]
+		if childIdx >= 0 && childIdx < int32(len(query.Nodes)) && query.Nodes[childIdx].NodeType == plan.Node_SINK_SCAN {
+			return false
+		}
+	}
+	for _, expr := range node.ProjectList {
+		if exprContainsStringLiteral(expr, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func nodeContainsStringLiteral(node *Node, value string) bool {
@@ -992,6 +1011,47 @@ func assertFallbackUpdateProjectLength(t *testing.T, query *Query, projectLen in
 		return
 	}
 	t.Fatalf("missing fallback update project with length %d", projectLen)
+}
+
+func assertFallbackUpdateAggDedupWithAnyValue(t *testing.T, query *Query) {
+	foundAgg := false
+	foundAnyValue := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+		foundAgg = true
+		for _, expr := range node.AggList {
+			if exprContainsFuncName(expr, "any_value") {
+				foundAnyValue = true
+				break
+			}
+		}
+	}
+	if !foundAgg || !foundAnyValue {
+		t.Fatalf("fallback update should build agg dedup path with any_value, foundAgg=%v foundAnyValue=%v", foundAgg, foundAnyValue)
+	}
+}
+
+func exprContainsFuncName(expr *plan.Expr, name string) bool {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F.Func != nil && e.F.Func.ObjName == name {
+			return true
+		}
+		for _, arg := range e.F.Args {
+			if exprContainsFuncName(arg, name) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprContainsFuncName(item, name) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func exprContainsStringLiteral(expr *plan.Expr, value string) bool {
