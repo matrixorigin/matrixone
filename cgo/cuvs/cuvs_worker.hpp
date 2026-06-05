@@ -585,8 +585,9 @@ public:
     // serialize correctly with searches issued on the same handle.
     //
     // Lifetime: these uvectors are destroyed in the handle's dtor. The RMM
-    // pool installed in start() is process-lifetime, so the deallocations
-    // always release into a live pool — no ordering hazard at shutdown.
+    // pool (obtained via worker_pool_mr()) is process-lifetime, so the
+    // deallocations always release into a live pool — no ordering hazard at
+    // shutdown.
     //
     // Thread-safety: one handle per worker thread; no synchronization
     // needed on access.
@@ -664,7 +665,16 @@ private:
     size_t host_half_capacity_ = 0;
 
     // Grow-only device workspace buffers (allocated on the handle's stream
-    // out of the RMM pool installed by ensure_rmm_pool_for_device).
+    // out of the RMM pool, passed explicitly via worker_pool_mr() in ensure_uvec_).
+    //
+    // !!! DECLARATION ORDER IS LOAD-BEARING — DO NOT REORDER !!!
+    // These uvectors MUST be declared AFTER res_ (which owns the CUDA stream).
+    // Members destruct in reverse declaration order, so these are freed FIRST,
+    // back into the stream-ordered pool while the worker stream is STILL ALIVE,
+    // and res_ (the stream) is destroyed LAST. Moving res_ below these would free
+    // pool blocks on an already-destroyed stream and re-introduce the
+    // cudaErrorInvalidResourceHandle pool poisoning (see pairwise.md and the
+    // worker_pool_mr comment at the top of this file).
     std::unique_ptr<rmm::device_uvector<float>>    q_buf_f_;
     std::unique_ptr<rmm::device_uvector<__half>>   q_buf_h_;
     std::unique_ptr<rmm::device_uvector<int8_t>>   q_buf_i8_;

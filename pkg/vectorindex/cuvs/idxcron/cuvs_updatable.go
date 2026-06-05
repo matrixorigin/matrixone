@@ -30,7 +30,6 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -164,14 +163,10 @@ func CuvsUpdatable(
 		threshold = spec.MinSizeDefault
 	}
 
-	// Derive dim + includeBytesPerRow for DecodeEventRecord. The
-	// values must match the writer side so records frame correctly.
-	dim, ibpr, err := deriveCuvsRecordShape(in.TableDef, in.IndexName, spec.StorageTableType, algoParams)
-	if err != nil {
-		return false, "", err
-	}
-
-	count, err := countTag1Records(in.Sqlproc, in.TableDef.DbName, storageTbl, dim, ibpr)
+	// Count brute-force-overflow growth straight from the CDC tail chunk
+	// headers (n_inserts + n_upserts) — no per-record decode, so no
+	// record-shape (dim / includeBytesPerRow) needs deriving here.
+	count, err := countTag1Records(in.Sqlproc, in.TableDef.DbName, storageTbl)
 	if err != nil {
 		return false, "", err
 	}
@@ -215,85 +210,14 @@ func readInt64Param(algoParams, key string) (int64, error) {
 	return v, nil
 }
 
-// deriveCuvsRecordShape returns (dim, includeBytesPerRow) for the
-// (table, index) pair so DecodeEventRecord can walk tag=1 chunk
-// bytes. dim is the vector column's Width (the index's first part).
-// includeBytesPerRow is computed from indexAlgoParams' INCLUDE
-// columns via ResolveIncludeColumns — same path the writer used to
-// encode the chunks, so widths agree by construction.
-func deriveCuvsRecordShape(
-	tableDef *plan.TableDef,
-	indexName string,
-	storageTblType string,
-	algoParams string,
-) (dim, includeBytesPerRow int, err error) {
-	// Find any IndexDef row with our index name (metadata or storage
-	// — both share parts/algoParams). Prefer the storage row since
-	// it carries the algoParams we already parsed.
-	var partsCol string
-	for _, idx := range tableDef.Indexes {
-		if idx.IndexName == indexName && idx.IndexAlgoTableType == storageTblType {
-			if len(idx.Parts) == 0 {
-				return 0, 0, moerr.NewInternalErrorNoCtxf(
-					"CuvsUpdatable: index %q storage def has no Parts", indexName)
-			}
-			partsCol = idx.Parts[0]
-			break
-		}
-	}
-	if partsCol == "" {
-		return 0, 0, moerr.NewInternalErrorNoCtxf(
-			"CuvsUpdatable: storage IndexDef not found for index %q", indexName)
-	}
-
-	pos, ok := tableDef.Name2ColIndex[partsCol]
-	if !ok {
-		return 0, 0, moerr.NewInternalErrorNoCtxf(
-			"CuvsUpdatable: vector column %q not in tableDef", partsCol)
-	}
-	col := tableDef.Cols[pos]
-	dim = int(col.Typ.Width)
-
-	// Resolve INCLUDE columns from algoParams (may be empty → ibpr=0).
-	includedColumns := includedColumnsFromAlgoParams(algoParams)
-	_, _, includeBytesPerRow, err = cuvscdc.ResolveIncludeColumns(
-		includedColumns,
-		tableDef.Name2ColIndex,
-		func(p int32) int32 { return tableDef.Cols[p].Typ.Id },
-	)
-	if err != nil {
-		return 0, 0, err
-	}
-	return dim, includeBytesPerRow, nil
-}
-
-// includedColumnsFromAlgoParams extracts the comma-separated INCLUDE
-// column names from indexAlgoParams. Returns "" if absent.
-func includedColumnsFromAlgoParams(algoParams string) string {
-	if algoParams == "" {
-		return ""
-	}
-	const key = "included_columns"
-	ast, err := sonic.Get([]byte(algoParams), key)
-	if err != nil {
-		return ""
-	}
-	s, err := ast.StrictString()
-	if err != nil {
-		return ""
-	}
-	return s
-}
-
 // countTag1Records runs the chunk-fetch SQL, unframes each row's
-// chunk data, and sums the per-op counts (n_inserts / n_deletes) carried
-// in the chunk frame header. The net-additions count (inserts - deletes)
-// approximates how many new rows the rebuild would see beyond the
-// existing index.
+// chunk data, and sums the per-op counts carried in the chunk frame
+// header. It returns n_inserts + n_upserts — the brute-force-overflow
+// growth that the rebuild would fold into a fresh main index (deletes
+// don't grow the overflow; see the body comment).
 func countTag1Records(
 	sqlproc *sqlexec.SqlProcess,
 	dbName, storageTbl string,
-	dim, includeBytesPerRow int,
 ) (int64, error) {
 	sql := fmt.Sprintf(
 		"SELECT data FROM `%s`.`%s` WHERE index_id = '%s' AND tag = %d",
@@ -336,8 +260,6 @@ func countTag1Records(
 	// over-triggers at worst (wasted rebuild, not a correctness bug).
 	// The n_upserts / n_deletes breakdown is preserved in the chunk
 	// header for logging and audits.
-	_ = dim
-	_ = includeBytesPerRow
 	_ = totalDeletes
 	return totalInserts + totalUpserts, nil
 }
