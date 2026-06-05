@@ -61,12 +61,48 @@ namespace matrixone {
 // hold the pool alive for process lifetime, so we cannot free into a destroyed
 // pool from a `device_uvector` whose lifetime crosses cuvs_worker_t teardown.
 // On process exit the OS reclaims everything.
+//
+// IMPORTANT — the pool is NOT installed as the per-device global default
+// (`set_per_device_resource`). It used to be, but that pulled *every* GPU
+// allocation onto the shared stream-ordered pool, including:
+//   - the cuVS index body (centroids/codebooks) built via the worker stream,
+//   - non-worker pairwise/adhoc scratch (`cuvs::distance::pairwise_distance`).
+// The pool is process-static but those streams are not: when an index is
+// dropped (`worker->stop()` destroys the worker stream) the index body is freed
+// back into the pool tagged with a now-dead stream, leaving a poisoned free
+// block / sticky cudaErrorInvalidResourceHandle that aborts the next checked
+// CUDA call anywhere (the pool's `do_deallocate` → `cudaEventRecord`).
+// See pairwise.md. So the pool is now reachable ONLY via `worker_pool_mr()`,
+// which the cuvs_worker handle passes explicitly to its grow-only search
+// workspace uvectors (`ensure_uvec_`). Those live on the worker's stable stream
+// and are freed before that stream is destroyed (handle member order), so the
+// pool only ever sees a stream that outlives the allocation. Everything else
+// (index body, pairwise scratch) now uses the plain default cuda_memory_resource
+// — plain cudaMalloc/cudaFree, never stream-ordered, so a dying stream can't
+// poison anything.
+inline rmm::mr::cuda_memory_resource* raw_device_mr();           // defined below
+inline rmm::mr::device_memory_resource* worker_pool_mr(int device_id);
+
 inline void ensure_rmm_pool_for_device(int device_id) {
+    (void)device_id;
+    // Pool creation is now lazy inside worker_pool_mr(); nothing to install as a
+    // global default. Kept as a no-op so existing call sites need no change.
+}
+
+// Returns the per-device stream-ordered pool MR, lazily created on first use.
+// Pass this explicitly to worker-owned device_uvectors (search workspace) so the
+// pool services the hot path WITHOUT being the global default (see the comment
+// on ensure_rmm_pool_for_device). Returns raw_device_mr() (plain) if pool init
+// fails, so callers always get a valid MR. The pool/base shared_ptrs are kept
+// alive for the whole process in `keepalives` (never torn down) — same lifetime
+// guarantee as before.
+inline rmm::mr::device_memory_resource* worker_pool_mr(int device_id) {
     constexpr int kMaxDevices = 16;
     static std::once_flag flags[kMaxDevices];
+    static rmm::mr::device_memory_resource* pools[kMaxDevices] = {};
     static std::mutex keepalive_mu;
     static std::vector<std::shared_ptr<void>> keepalives;
-    if (device_id < 0 || device_id >= kMaxDevices) return;
+    if (device_id < 0 || device_id >= kMaxDevices) return raw_device_mr();
     std::call_once(flags[device_id], [device_id] {
         try {
             cudaSetDevice(device_id);
@@ -83,20 +119,22 @@ inline void ensure_rmm_pool_for_device(int device_id) {
                 rmm::mr::pool_memory_resource<rmm::mr::cuda_memory_resource>>(
                     base.get(),
                     rmm::percent_of_free_device_memory(10));
-            rmm::mr::set_per_device_resource(rmm::cuda_device_id{device_id}, pool.get());
             std::lock_guard<std::mutex> lk(keepalive_mu);
             keepalives.push_back(pool);   // pool outlives every device_uvector
             keepalives.push_back(base);   // base outlives the pool
+            pools[device_id] = pool.get();
         } catch (const std::exception& e) {
-            std::cerr << "[ensure_rmm_pool_for_device] device=" << device_id
-                      << " failed to install pool MR: " << e.what()
+            std::cerr << "[worker_pool_mr] device=" << device_id
+                      << " failed to create pool MR: " << e.what()
                       << " — falling back to cuda_memory_resource" << std::endl;
         } catch (...) {
-            std::cerr << "[ensure_rmm_pool_for_device] device=" << device_id
+            std::cerr << "[worker_pool_mr] device=" << device_id
                       << " failed with unknown error — falling back to cuda_memory_resource"
                       << std::endl;
         }
     });
+    return pools[device_id] ? pools[device_id]
+                            : static_cast<rmm::mr::device_memory_resource*>(raw_device_mr());
 }
 
 // Process-static raw cuda_memory_resource that bypasses the per-device pool.
@@ -597,7 +635,15 @@ private:
     rmm::device_uvector<U>& ensure_uvec_(std::unique_ptr<rmm::device_uvector<U>>& slot, size_t n) {
         auto stream = raft::resource::get_cuda_stream(*res_);
         if (!slot) {
-            slot = std::make_unique<rmm::device_uvector<U>>(n, stream);
+            // Allocate the grow-only search workspace from the per-device pool
+            // EXPLICITLY (worker_pool_mr) — the pool is no longer the global
+            // default (see ensure_rmm_pool_for_device). This keeps the search
+            // hot path (~18 uvectors/query) pool-backed. The uvector captures
+            // this MR and frees back to it; resize() below reuses it. The buffer
+            // lives on the worker's stable stream and is destroyed before that
+            // stream (handle member order), so the pool never sees a dead stream.
+            slot = std::make_unique<rmm::device_uvector<U>>(
+                n, stream, matrixone::worker_pool_mr(device_id_));
             return *slot;
         }
         if (slot->size() < n) {
