@@ -111,7 +111,7 @@ namespace matrixone {
 //   dataset_device_ptr_ holds the build dataset on device (reset after extend).
 //
 // REPLICATED:
-//   replicated_indices_[dev_id] holds a full copy per GPU (cast to ivf_pq_index*).
+//   replicated_indices_[rank] holds a full copy per rank (cast to ivf_pq_index*).
 //   The replicated dataset pointers (replicated_datasets_) are used during build
 //   and erased after the first extend on each device.
 //   search_internal / search_float_internal use per-thread cached index ptr

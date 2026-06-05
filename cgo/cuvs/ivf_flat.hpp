@@ -72,8 +72,8 @@ namespace matrixone {
 //   dataset_device_ptr_ holds the build dataset on device (reset after extend).
 //
 // REPLICATED:
-//   replicated_indices_[dev_id] holds a full copy per GPU (cast to ivf_flat_index*).
-//   replicated_datasets_[dev_id] holds the build dataset per GPU (erased after extend).
+//   replicated_indices_[rank] holds a full copy per rank (cast to ivf_flat_index*).
+//   replicated_datasets_[rank] holds the build dataset per rank (erased after extend).
 //   Searches can run on any GPU concurrently.
 //   Extends must replicate to all GPUs via submit_all_devices(); set_ids() is
 //   called once in extend() after all GPU work completes.
@@ -96,7 +96,7 @@ namespace matrixone {
 //   or shard-local [old_shard_size .. old_shard_size+n_rows) for SHARDED.
 // - After GPU extend, call set_ids() and update count + current_offset_ under unique_lock.
 // - SINGLE_GPU: dataset_device_ptr_ reset after extend.
-// - REPLICATED: replicated_datasets_[dev_id] erased after extend (all devices).
+// - REPLICATED: replicated_datasets_[rank] erased after extend (all ranks).
 // - SHARDED: replicated_datasets_ NOT touched (other shards' entries remain valid).
 //
 //

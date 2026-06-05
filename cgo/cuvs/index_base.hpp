@@ -109,7 +109,7 @@ using ::distribution_mode_t;
 //   - extend: submit_main() + wait(); GPU sequential indices required for cuVS.
 //
 // REPLICATED
-//   - N GPUs, each holds a full copy of the index in replicated_indices_[dev_id].
+//   - N GPUs, each holds a full copy of the index in replicated_indices_[rank].
 //   - build: submit_all_devices() — concurrent build on all GPUs.
 //   - search: submit() — dispatches to any GPU, uses per-thread cached index ptr.
 //   - extend: submit_all_devices() — concurrent extend on all GPUs; set_ids() is
@@ -124,7 +124,7 @@ using ::distribution_mode_t;
 //             results merged via merge_sharded_results().
 //   - extend: routes new rows to the last shard via submit_to_rank(last_rank).
 //             shard-local seq_ids = [old_last_shard_size .. old_last_shard_size+n_rows).
-//             replicated_datasets_[last_dev_id] erased (stale); other shards' entries untouched.
+//             replicated_datasets_[last_rank] erased (stale); other shards' entries untouched.
 //   - SHARDED shard sizing: rows_per_shard is rounded DOWN to a multiple of 32
 //     (i.e., (count / num_shards) & ~31). The last shard absorbs the remainder.
 //     This is required for word-aligned bitset slicing in sync_shard_bitset().
