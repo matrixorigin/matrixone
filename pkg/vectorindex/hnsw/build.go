@@ -65,6 +65,15 @@ func NewHnswBuild[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, uid string, 
 		nthread = 1
 	}
 
+	// MatrixOne #24849 / USearch #735 (open): concurrent add() can orphan nodes —
+	// the vector is stored (contains() returns true) but the HNSW graph never links
+	// it, so search() can never reach it, producing flaky recall@1 (an exact match
+	// is intermittently missed). This is a real build race, not just HNSW
+	// approximation. Reproduced in pkg/vectorindex/hnsw/zz_orphan_test.go:
+	// multi-threaded build orphans ~1/30, single-threaded 0/30. Until the upstream
+	// race is fixed, force a single build thread for correctness.
+	nthread = 1
+
 	info = &HnswBuild[T]{
 		uid:     uid,
 		cfg:     cfg,
