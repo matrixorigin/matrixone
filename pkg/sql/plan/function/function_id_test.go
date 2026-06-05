@@ -509,7 +509,7 @@ var predefinedFunids = map[int]int{
 	HLL_ADD_AGG:                   453,
 	HLL_MERGE_AGG:                 454,
 	HLL_CARDINALITY:               455,
-	DATE_TRUNC:                    463,
+	DATE_TRUNC:                    464,
 	JSON_TYPE:                     456,
 	JSON_VALID:                    457,
 	JSON_KEYS:                     458,
@@ -517,7 +517,9 @@ var predefinedFunids = map[int]int{
 	JSON_SCHEMA_VALID:             460,
 	JSON_SCHEMA_VALID_REPORT:      461,
 	JSON_VALUE:                    462,
-	FUNCTION_END_NUMBER:           464,
+	CAST_JSON_TO_ARRAY:            463,
+	FUNCTION_END_NUMBER:           465,
+	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 }
 
 func Test_funids(t *testing.T) {
