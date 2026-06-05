@@ -694,7 +694,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	*/
 	constraintTestSchema["dept"] = &Schema{
 		tblId: 88888,
-		cols:  []col{
+		cols: []col{
 			{"deptno", types.T_uint32, true, 32, 0},
 			{"dname", types.T_varchar, true, 15, 0},
 			{"loc", types.T_varchar, true, 50, 0},
@@ -757,7 +757,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	*/
 	constraintTestSchema["dept_composite_uk"] = &Schema{
 		tblId: 88889,
-		cols:  []col{
+		cols: []col{
 			{"deptno", types.T_uint32, true, 32, 0},
 			{"dname", types.T_varchar, true, 15, 0},
 			{"loc", types.T_varchar, true, 50, 0},
