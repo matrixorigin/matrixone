@@ -261,3 +261,15 @@ SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
 -- @label:bvt
 SELECT COALESCE(CAST(1 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_decimal256;
 SELECT COALESCE(CAST(12345678901234567890123456789012345678 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_bignum;
+
+-- @case
+-- @desc:test for non-constant decimal256 BETWEEN with mixed-scale bounds
+-- @label:bvt
+drop table if exists t_dec256_between;
+create table t_dec256_between (a decimal(38,0));
+insert into t_dec256_between values (5),(50),(500);
+select
+  (case when 1 = 1 then a else cast(0 as decimal(38,30)) end)
+    between cast(1 as decimal(38,20)) and cast(100 as decimal(38,20)) as in_range
+from t_dec256_between order by a;
+drop table t_dec256_between;

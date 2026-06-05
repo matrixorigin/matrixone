@@ -277,24 +277,32 @@ var supportedOperators = []FuncNew{
 			if t01.Oid != t02.Oid {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
+			if !otherCompareOperatorSupports(t01, t1) || !otherCompareOperatorSupports(t01, t2) {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
 
-			if t01.Oid == types.T_decimal64 || t01.Oid == types.T_decimal128 || t01.Oid == types.T_decimal256 {
-				if t01.Scale != t1.Scale || t02.Scale != t2.Scale {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
+			// betweenImpl compares raw decimal values without rescaling at
+			// runtime, so all three operands must share the same scale. Align
+			// them to the max scale (issue #24565) instead of rejecting
+			// mixed-scale decimals.
+			if t01.Oid.IsDecimal() {
+				maxScale := t01.Scale
+				if t1.Scale > maxScale {
+					maxScale = t1.Scale
+				}
+				if t2.Scale > maxScale {
+					maxScale = t2.Scale
+				}
+				if t01.Scale != maxScale || t1.Scale != maxScale || t2.Scale != maxScale {
+					t01.Scale, t1.Scale, t2.Scale = maxScale, maxScale, maxScale
+					return newCheckResultWithCast(0, []types.Type{t01, t1, t2})
 				}
 			}
 
 			if has0 || has1 {
-				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
-					return newCheckResultWithCast(0, []types.Type{t01, t1, t2})
-				}
-			} else {
-				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
-					return newCheckResultWithSuccess(0)
-				}
+				return newCheckResultWithCast(0, []types.Type{t01, t1, t2})
 			}
-
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
+			return newCheckResultWithSuccess(0)
 		},
 
 		Overloads: []overload{

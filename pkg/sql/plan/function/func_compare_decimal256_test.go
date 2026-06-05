@@ -340,3 +340,32 @@ func Test_GreatEqualFn_Decimal256(t *testing.T) {
 	s, info := fcTC.Run()
 	require.True(t, s, info, tc.info)
 }
+
+// Test_BetweenImpl_Decimal256_NonConst exercises the runtime decimal256 path of
+// BETWEEN with a non-constant left operand, which previously fell through to
+// panic("unreached code") because betweenImpl had no decimal256 branch
+// (issue #24565 review).
+func Test_BetweenImpl_Decimal256_NonConst(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	// p0: non-constant decimal256 column; p1/p2: constant bounds [1, 100].
+	p0 := vector.NewVec(types.New(types.T_decimal256, 76, 0))
+	require.NoError(t, vector.AppendFixedList(p0, []types.Decimal256{
+		types.Decimal256FromInt64(5),
+		types.Decimal256FromInt64(50),
+		types.Decimal256FromInt64(500),
+	}, nil, mp))
+	p1, err := vector.NewConstFixed(types.New(types.T_decimal256, 76, 0), types.Decimal256FromInt64(1), 3, mp)
+	require.NoError(t, err)
+	p2, err := vector.NewConstFixed(types.New(types.T_decimal256, 76, 0), types.Decimal256FromInt64(100), 3, mp)
+	require.NoError(t, err)
+
+	w := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
+	require.NoError(t, w.PreExtendAndReset(3))
+	require.NoError(t, betweenImpl([]*vector.Vector{p0, p1, p2}, w, proc, 3, nil))
+
+	rs := vector.MustFunctionResult[bool](w)
+	col := vector.MustFixedColWithTypeCheck[bool](rs.GetResultVector())
+	require.Equal(t, []bool{true, true, false}, col[:3])
+}
