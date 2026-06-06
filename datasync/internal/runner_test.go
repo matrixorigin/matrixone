@@ -1,6 +1,7 @@
 package datasync
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -74,11 +75,13 @@ func TestRunTaskRetriesExportAndImports(t *testing.T) {
 	dir := t.TempDir()
 	exec := &fakeExecutor{failMoDumpCalls: 1}
 	db := &fakeDB{sourceRows: 2, targetRows: 2}
+	var progress bytes.Buffer
 	r := Runner{
 		Config:   testConfig(dir),
 		Mode:     ModeSync,
 		Executor: exec,
 		DB:       db,
+		Progress: &progress,
 	}
 
 	row := r.runTask(context.Background(), "run1", testTask())
@@ -97,6 +100,17 @@ func TestRunTaskRetriesExportAndImports(t *testing.T) {
 	}
 	if db.ensureTargetCalls != 1 {
 		t.Fatalf("ensureTargetCalls = %d, want 1", db.ensureTargetCalls)
+	}
+	progressText := progress.String()
+	for _, want := range []string{
+		"datasync: [tenant_a.src_db.t1 -> target.dst_db] export started",
+		"datasync: [tenant_a.src_db.t1 -> target.dst_db] export succeeded rows=2 attempts=2",
+		"datasync: [tenant_a.src_db.t1 -> target.dst_db] import started",
+		"datasync: [tenant_a.src_db.t1 -> target.dst_db] import succeeded rows=2 attempts=1",
+	} {
+		if !strings.Contains(progressText, want) {
+			t.Fatalf("progress = %q, missing %q", progressText, want)
+		}
 	}
 }
 
@@ -138,11 +152,13 @@ func TestRunTaskImportModeSkipsExportAndImportsExistingFiles(t *testing.T) {
 	}
 	exec := &fakeExecutor{}
 	db := &fakeDB{sourceRows: 2, targetRows: 2}
+	var progress bytes.Buffer
 	r := Runner{
 		Config:   testConfig(dir),
 		Mode:     ModeImport,
 		Executor: exec,
 		DB:       db,
+		Progress: &progress,
 	}
 
 	row := r.runTask(context.Background(), "run1", task)
@@ -158,6 +174,19 @@ func TestRunTaskImportModeSkipsExportAndImportsExistingFiles(t *testing.T) {
 	}
 	if exec.moDumpCalls != 0 || exec.mysqlCalls != 1 {
 		t.Fatalf("moDumpCalls=%d mysqlCalls=%d", exec.moDumpCalls, exec.mysqlCalls)
+	}
+	progressText := progress.String()
+	if strings.Contains(progressText, "export started") {
+		t.Fatalf("progress = %q, want no export start in import mode", progressText)
+	}
+	for _, want := range []string{
+		"datasync: [tenant_a.src_db.t1 -> target.dst_db] export skipped; using existing files",
+		"datasync: [tenant_a.src_db.t1 -> target.dst_db] import started",
+		"datasync: [tenant_a.src_db.t1 -> target.dst_db] import succeeded rows=2 attempts=1",
+	} {
+		if !strings.Contains(progressText, want) {
+			t.Fatalf("progress = %q, missing %q", progressText, want)
+		}
 	}
 }
 

@@ -61,6 +61,8 @@ Examples:
   datasync -config configs/example.yaml -mode sync -cleanup-export-after-import
 
 Notes:
+  - Progress is printed to stderr while the run is active. The final
+    machine-readable result line is printed to stdout.
   - Reports are written under output_dir/<run-id>/ as export-report.*,
     import-report.*, and summary-report.* files. Markdown reports are Chinese.
   - Row count mismatches after import are treated as table import failures and
@@ -106,6 +108,7 @@ Notes:
 		Options: datasync.Options{
 			CleanupExportAfterImport: *cleanupExportAfterImport,
 		},
+		Progress: stderr,
 	}.Run(context.Background(), *runID)
 	if err != nil {
 		fmt.Fprintf(stderr, "datasync failed: %v\n", err)

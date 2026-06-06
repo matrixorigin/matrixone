@@ -3,6 +3,7 @@ package datasync
 import (
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	"time"
 )
@@ -13,6 +14,7 @@ type App struct {
 	Options   Options
 	Discovery Discovery
 	Runner    TaskRunner
+	Progress  io.Writer
 }
 
 type Discovery interface {
@@ -41,14 +43,17 @@ type Result struct {
 }
 
 func (a App) Run(ctx context.Context, runID string) (Result, error) {
+	progress := newProgressLogger(a.Progress)
+	progress.Printf("datasync: run %s mode=%s started", runID, a.Mode)
 	tasks, err := a.buildTasks(ctx, runID)
 	if err != nil {
 		return Result{}, err
 	}
+	progress.Printf("datasync: planned %d table task(s)", len(tasks))
 
 	runner := a.Runner
 	if runner == nil {
-		runner = MatrixOneRunner{Config: a.Config, Options: a.Options}
+		runner = MatrixOneRunner{Config: a.Config, Options: a.Options, Progress: a.Progress}
 	}
 	runReport, err := runner.Run(ctx, a.Mode, runID, tasks)
 	if err != nil {
@@ -56,11 +61,22 @@ func (a App) Run(ctx context.Context, runID string) (Result, error) {
 	}
 
 	runDir := filepath.Join(a.Config.OutputDir, runID)
+	progress.Printf("datasync: writing reports to %s", runDir)
 	writtenReport, err := Write(runDir, a.Mode, runReport)
 	result := Result{RunID: runID, PlannedTasks: len(tasks), Report: writtenReport}
 	if err != nil {
 		return result, err
 	}
+	progress.Printf("datasync: reports written export=%s import=%s summary=%s",
+		writtenReport.Summary.ExportMarkdownReportPath,
+		writtenReport.Summary.ImportMarkdownReportPath,
+		writtenReport.Summary.SummaryMarkdownReportPath,
+	)
+	progress.Printf("datasync: run %s finished succeeded=%d failed=%d",
+		runID,
+		writtenReport.Summary.SucceededTasks,
+		writtenReport.Summary.FailedTasks,
+	)
 	if writtenReport.Summary.FailedTasks > 0 {
 		return result, fmt.Errorf("%d table tasks failed", writtenReport.Summary.FailedTasks)
 	}
@@ -68,8 +84,11 @@ func (a App) Run(ctx context.Context, runID string) (Result, error) {
 }
 
 func (a App) buildTasks(ctx context.Context, runID string) ([]Task, error) {
+	progress := newProgressLogger(a.Progress)
 	if a.Mode == ModeImport {
-		return tasksFromReport(filepath.Join(a.Config.OutputDir, runID, "export-report.json"), a.Config)
+		reportPath := filepath.Join(a.Config.OutputDir, runID, "export-report.json")
+		progress.Printf("datasync: restoring import tasks from %s", reportPath)
+		return tasksFromReport(reportPath, a.Config)
 	}
 	if a.Discovery == nil {
 		a.Discovery = MatrixOneDiscovery{}
@@ -77,10 +96,21 @@ func (a App) buildTasks(ctx context.Context, runID string) ([]Task, error) {
 
 	discovered := make(map[DatabaseKey][]string)
 	for _, database := range a.Config.Databases {
+		progress.Printf("datasync: discovering source %s %s at %s:%d",
+			database.Source.Name,
+			database.Source.Database,
+			database.Source.Host,
+			database.Source.Port,
+		)
 		tables, err := a.Discovery.ListTables(ctx, database.Source, database.Source.Database)
 		if err != nil {
 			return nil, err
 		}
+		progress.Printf("datasync: discovered %d table(s) from source %s %s",
+			len(tables),
+			database.Source.Name,
+			database.Source.Database,
+		)
 		discovered[databaseKey(database.Source)] = tables
 	}
 	return BuildTasks(a.Config, discovered)
@@ -168,16 +198,18 @@ func (MatrixOneDiscovery) ListTables(ctx context.Context, source DatabaseEndpoin
 }
 
 type MatrixOneRunner struct {
-	Config  *Config
-	Options Options
+	Config   *Config
+	Options  Options
+	Progress io.Writer
 }
 
 func (m MatrixOneRunner) Run(ctx context.Context, mode Mode, runID string, tasks []Task) (RunReport, error) {
 	return Runner{
-		Config:  m.Config,
-		Mode:    mode,
-		Options: m.Options,
-		DB:      MatrixOneRunDB{Config: m.Config},
+		Config:   m.Config,
+		Mode:     mode,
+		Options:  m.Options,
+		DB:       MatrixOneRunDB{Config: m.Config},
+		Progress: m.Progress,
 	}.Run(ctx, runID, tasks)
 }
 

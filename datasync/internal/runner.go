@@ -3,6 +3,7 @@ package datasync
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +26,7 @@ type Runner struct {
 	Options  Options
 	Executor Executor
 	DB       DB
+	Progress io.Writer
 }
 
 type Options struct {
@@ -71,6 +73,7 @@ func ParseMode(value string) (Mode, error) {
 
 func (r Runner) Run(ctx context.Context, runID string, tasks []Task) (RunReport, error) {
 	start := time.Now()
+	progress := newProgressLogger(r.Progress)
 	if r.Executor == nil {
 		r.Executor = LocalExecutor{}
 	}
@@ -81,12 +84,19 @@ func (r Runner) Run(ctx context.Context, runID string, tasks []Task) (RunReport,
 	rows := make([]TableReport, len(tasks))
 	jobs := make(chan int)
 	var wg sync.WaitGroup
+	var completedMu sync.Mutex
+	completed := 0
 	for worker := 0; worker < r.Config.Parallelism; worker++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for idx := range jobs {
-				rows[idx] = r.runTask(ctx, runID, tasks[idx])
+				rows[idx] = r.runTaskWithProgress(ctx, runID, tasks[idx], progress)
+				completedMu.Lock()
+				completed++
+				current := completed
+				completedMu.Unlock()
+				progress.Printf("datasync: completed %d/%d table task(s)", current, len(tasks))
 			}
 		}()
 	}
@@ -111,6 +121,11 @@ func (r Runner) Run(ctx context.Context, runID string, tasks []Task) (RunReport,
 }
 
 func (r Runner) runTask(ctx context.Context, runID string, task Task) TableReport {
+	return r.runTaskWithProgress(ctx, runID, task, newProgressLogger(r.Progress))
+}
+
+func (r Runner) runTaskWithProgress(ctx context.Context, runID string, task Task, progress *progressLogger) TableReport {
+	label := taskProgressLabel(task)
 	row := TableReport{
 		RunID:          runID,
 		SourceName:     task.SourceName,
@@ -134,11 +149,14 @@ func (r Runner) runTask(ctx context.Context, runID string, task Task) TableRepor
 	var err error
 	if r.effectiveMode() == ModeImport {
 		row.ExportStatus = StatusSkipped
+		progress.Printf("datasync: [%s] export skipped; using existing files", label)
 	} else {
+		progress.Printf("datasync: [%s] export started", label)
 		sourceRows, err := r.DB.CountSourceRows(ctx, task)
 		if err != nil {
 			row.ExportStatus = StatusFailed
 			row.Error = err.Error()
+			progress.Printf("datasync: [%s] export failed: %s", label, row.Error)
 			return row
 		}
 		row.SourceRows = sourceRows
@@ -164,9 +182,11 @@ func (r Runner) runTask(ctx context.Context, runID string, task Task) TableRepor
 		if err != nil {
 			row.ExportStatus = StatusFailed
 			row.Error = err.Error()
+			progress.Printf("datasync: [%s] export failed attempts=%d: %s", label, row.ExportAttempts, row.Error)
 			return row
 		}
 		row.ExportStatus = StatusSuccess
+		progress.Printf("datasync: [%s] export succeeded rows=%d attempts=%d", label, row.SourceRows, row.ExportAttempts)
 	}
 	if _, err := requireFile(sqlFile); err != nil {
 		row.Error = err.Error()
@@ -175,6 +195,7 @@ func (r Runner) runTask(ctx context.Context, runID string, task Task) TableRepor
 		} else {
 			row.ExportStatus = StatusFailed
 		}
+		progress.Printf("datasync: [%s] %s failed: %s", label, failedPhase(row), row.Error)
 		return row
 	}
 	csvInfo, err := requireFile(csvFile)
@@ -185,18 +206,22 @@ func (r Runner) runTask(ctx context.Context, runID string, task Task) TableRepor
 		} else {
 			row.ExportStatus = StatusFailed
 		}
+		progress.Printf("datasync: [%s] %s failed: %s", label, failedPhase(row), row.Error)
 		return row
 	}
 	row.CSVFileSize = csvInfo.Size()
 
 	if r.effectiveMode() == ModeExport {
 		row.ImportStatus = StatusSkipped
+		progress.Printf("datasync: [%s] import skipped; export mode", label)
 		return row
 	}
 
+	progress.Printf("datasync: [%s] import started", label)
 	if err := r.DB.EnsureTargetDatabase(ctx, task); err != nil {
 		row.ImportStatus = StatusFailed
 		row.Error = err.Error()
+		progress.Printf("datasync: [%s] import failed: %s", label, row.Error)
 		return row
 	}
 	row.ImportStartedAt = time.Now()
@@ -225,16 +250,28 @@ func (r Runner) runTask(ctx context.Context, runID string, task Task) TableRepor
 	if err != nil {
 		row.ImportStatus = StatusFailed
 		row.Error = err.Error()
+		progress.Printf("datasync: [%s] import failed attempts=%d: %s", label, row.ImportAttempts, row.Error)
 		return row
 	}
 	row.ImportStatus = StatusSuccess
+	progress.Printf("datasync: [%s] import succeeded rows=%d attempts=%d", label, row.TargetRows, row.ImportAttempts)
 	if r.shouldCleanupExportAfterImport(row) {
 		if err := os.RemoveAll(tableDir); err != nil {
 			row.ImportStatus = StatusFailed
 			row.Error = err.Error()
+			progress.Printf("datasync: [%s] cleanup failed: %s", label, row.Error)
+		} else {
+			progress.Printf("datasync: [%s] cleaned exported files", label)
 		}
 	}
 	return row
+}
+
+func failedPhase(row TableReport) string {
+	if row.ImportStatus == StatusFailed {
+		return "import"
+	}
+	return "export"
 }
 
 func (r Runner) shouldCleanupExportAfterImport(row TableReport) bool {

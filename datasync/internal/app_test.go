@@ -1,6 +1,7 @@
 package datasync
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -14,11 +15,13 @@ import (
 func TestRunBuildsTasksFromDiscoveredTablesAndWritesReport(t *testing.T) {
 	cfg := testAppConfig(t.TempDir())
 	runner := &fakeRunner{}
+	var progress bytes.Buffer
 	app := App{
 		Config:    cfg,
 		Mode:      ModeExport,
 		Discovery: fakeDiscovery{tables: []string{"keep", "skip", "other"}},
 		Runner:    runner,
+		Progress:  &progress,
 	}
 
 	result, err := app.Run(context.Background(), "run1")
@@ -38,6 +41,19 @@ func TestRunBuildsTasksFromDiscoveredTablesAndWritesReport(t *testing.T) {
 	task := runner.tasks[0]
 	if task.SourceTable != "keep" || task.TargetName != "target_a" || task.TargetHost != "target" || task.TargetPassword != "222" || task.TargetDatabase != "dst_db" {
 		t.Fatalf("task = %+v", task)
+	}
+	progressText := progress.String()
+	for _, want := range []string{
+		"datasync: run run1 mode=export started",
+		"datasync: discovering source tenant_a src_db at 127.0.0.1:6001",
+		"datasync: planned 1 table task(s)",
+		"datasync: writing reports to " + filepath.Join(cfg.OutputDir, "run1"),
+		"datasync: reports written export=",
+		"datasync: run run1 finished succeeded=1 failed=0",
+	} {
+		if !strings.Contains(progressText, want) {
+			t.Fatalf("progress = %q, missing %q", progressText, want)
+		}
 	}
 }
 
@@ -185,13 +201,15 @@ func TestRunImportModeBuildsTasksFromExistingReportWithoutDiscovery(t *testing.T
 		t.Fatal(err)
 	}
 	runner := &fakeRunner{}
+	var progress bytes.Buffer
 	app := App{
 		Config: testAppConfig(dir),
 		Mode:   ModeImport,
 		Discovery: fakeDiscovery{
 			err: errors.New("source discovery should not run in import mode"),
 		},
-		Runner: runner,
+		Runner:   runner,
+		Progress: &progress,
 	}
 
 	result, err := app.Run(context.Background(), "run1")
@@ -224,6 +242,9 @@ func TestRunImportModeBuildsTasksFromExistingReportWithoutDiscovery(t *testing.T
 	}
 	if result.Report.Summary.TotalSourceRows != 7 {
 		t.Fatalf("TotalSourceRows = %d, want preserved source row count", result.Report.Summary.TotalSourceRows)
+	}
+	if !strings.Contains(progress.String(), "datasync: restoring import tasks from "+filepath.Join(runDir, "export-report.json")) {
+		t.Fatalf("progress = %q, want import restore message", progress.String())
 	}
 }
 

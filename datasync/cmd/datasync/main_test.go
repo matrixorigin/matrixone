@@ -62,6 +62,8 @@ func TestExitCodePrintsDetailedHelp(t *testing.T) {
 		"import-report.*",
 		"summary-report.*",
 		"Markdown reports are Chinese",
+		"Progress is printed to stderr",
+		"machine-readable result line is printed to stdout",
 		"Examples:",
 	} {
 		if !strings.Contains(help, want) {
