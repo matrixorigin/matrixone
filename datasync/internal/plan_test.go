@@ -15,7 +15,7 @@ func TestBuildTasksAppliesIncludeThenExclude(t *testing.T) {
 		}},
 	}
 	tables := map[DatabaseKey][]string{
-		{SourceName: "tenant_a", Database: "src_db"}: {"keep", "skip", "other"},
+		databaseKey(cfg.Databases[0].Source): {"keep", "skip", "other"},
 	}
 
 	tasks := BuildTasks(cfg, tables)
@@ -69,7 +69,7 @@ func TestBuildTasksWithoutIncludeExportsDiscoveredMinusExclude(t *testing.T) {
 		}},
 	}
 	tables := map[DatabaseKey][]string{
-		{SourceName: "tenant_a", Database: "src_db"}: {"keep", "skip", "other"},
+		databaseKey(cfg.Databases[0].Source): {"keep", "skip", "other"},
 	}
 
 	tasks := BuildTasks(cfg, tables)
@@ -99,8 +99,8 @@ func TestBuildTasksPreservesDatabaseAndTableOrder(t *testing.T) {
 		},
 	}
 	tables := map[DatabaseKey][]string{
-		{SourceName: "tenant_a", Database: "a_db1"}: {"a1_t1", "a1_t2"},
-		{SourceName: "tenant_b", Database: "b_db1"}: {"b1_t1", "b1_t2"},
+		databaseKey(cfg.Databases[0].Source): {"a1_t1", "a1_t2"},
+		databaseKey(cfg.Databases[1].Source): {"b1_t1", "b1_t2"},
 	}
 
 	tasks := BuildTasks(cfg, tables)

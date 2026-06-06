@@ -81,7 +81,7 @@ func (a App) buildTasks(ctx context.Context, runID string) ([]Task, error) {
 		if err != nil {
 			return nil, err
 		}
-		discovered[DatabaseKey{SourceName: database.Source.Name, Database: database.Source.Database}] = tables
+		discovered[databaseKey(database.Source)] = tables
 	}
 	return BuildTasks(a.Config, discovered), nil
 }

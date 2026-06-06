@@ -2,6 +2,9 @@ package datasync
 
 type DatabaseKey struct {
 	SourceName string
+	SourceHost string
+	SourcePort int
+	SourceUser string
 	Database   string
 }
 
@@ -40,7 +43,7 @@ func BuildTasks(cfg *Config, tables map[DatabaseKey][]string) []Task {
 			excluded[table] = struct{}{}
 		}
 
-		discovered := tables[DatabaseKey{SourceName: database.Source.Name, Database: database.Source.Database}]
+		discovered := tables[databaseKey(database.Source)]
 		discoveredSet := make(map[string]struct{}, len(discovered))
 		for _, table := range discovered {
 			discoveredSet[table] = struct{}{}
@@ -77,4 +80,14 @@ func BuildTasks(cfg *Config, tables map[DatabaseKey][]string) []Task {
 		}
 	}
 	return tasks
+}
+
+func databaseKey(source DatabaseEndpoint) DatabaseKey {
+	return DatabaseKey{
+		SourceName: source.Name,
+		SourceHost: source.Host,
+		SourcePort: source.Port,
+		SourceUser: source.User,
+		Database:   source.Database,
+	}
 }

@@ -227,6 +227,55 @@ func TestRunImportModeBuildsTasksFromExistingReportWithoutDiscovery(t *testing.T
 	}
 }
 
+func TestRunKeepsDiscoveryResultsScopedToFullSourceEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testAppConfig(dir)
+	cfg.Databases = []DatabaseTask{
+		{
+			Source:        DatabaseEndpoint{Name: "tenant", Host: "source-a", Port: 6001, User: "source_a:admin", Password: "source-pass", Database: "src_db"},
+			Target:        DatabaseEndpoint{Name: "target_a", Host: "target", Port: 6001, User: "target:admin", Password: "target-pass", Database: "dst_a"},
+			IncludeTables: []string{"a_only"},
+		},
+		{
+			Source:        DatabaseEndpoint{Name: "tenant", Host: "source-b", Port: 6002, User: "source_b:admin", Password: "source-pass", Database: "src_db"},
+			Target:        DatabaseEndpoint{Name: "target_b", Host: "target", Port: 6001, User: "target:admin", Password: "target-pass", Database: "dst_b"},
+			IncludeTables: []string{"b_only"},
+		},
+	}
+	runner := &fakeRunner{}
+	app := App{
+		Config: cfg,
+		Mode:   ModeExport,
+		Discovery: fakeDiscovery{
+			tablesBySourceUser: map[string][]string{
+				"source_a:admin": {"a_only"},
+				"source_b:admin": {"b_only"},
+			},
+		},
+		Runner: runner,
+	}
+
+	result, err := app.Run(context.Background(), "run1")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.PlannedTasks != 2 {
+		t.Fatalf("PlannedTasks = %d, want 2", result.PlannedTasks)
+	}
+	got := map[string]string{}
+	for _, task := range runner.tasks {
+		got[task.SourceUser] = task.SourceTable
+	}
+	want := map[string]string{
+		"source_a:admin": "a_only",
+		"source_b:admin": "b_only",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("tasks by source user = %#v, want %#v", got, want)
+	}
+}
+
 func TestTasksFromReportMatchesTargetPasswordByFullTargetEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	runDir := filepath.Join(dir, "run1")
@@ -350,13 +399,17 @@ func TestMatrixOneRunDBUsesTaskEndpoints(t *testing.T) {
 }
 
 type fakeDiscovery struct {
-	tables []string
-	err    error
+	tables             []string
+	tablesBySourceUser map[string][]string
+	err                error
 }
 
-func (f fakeDiscovery) ListTables(context.Context, DatabaseEndpoint, string) ([]string, error) {
+func (f fakeDiscovery) ListTables(_ context.Context, source DatabaseEndpoint, _ string) ([]string, error) {
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.tablesBySourceUser != nil {
+		return f.tablesBySourceUser[source.User], nil
 	}
 	return f.tables, nil
 }
