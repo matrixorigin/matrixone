@@ -25,6 +25,8 @@ rtk go run ./cmd/datasync -config configs/example.yaml -mode sync -cleanup-expor
 
 `-mode export` only writes the run export files and reports. `-mode import` skips `mo-dump` and imports SQL/CSV files from the existing run directory selected by `-run-id`.
 
+Each run writes `report.json`, `report.csv`, and a Chinese Markdown summary `report.md` under `output_dir/<run-id>/`.
+
 Use `-run-id <id>` to choose a stable run directory under `output_dir`.
 
 The config uses optional top-level `source` and `target` entries for shared connection defaults: `name`, `host`, `port`, `user`, and `password`. Each `databases` entry has its own `source.database` and `target.database`, and may override any inherited connection field. If a database entry cannot be completed from its own fields plus the top-level defaults, that entry is ignored.

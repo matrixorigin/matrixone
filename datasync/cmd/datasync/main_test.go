@@ -58,6 +58,8 @@ func TestExitCodePrintsDetailedHelp(t *testing.T) {
 		"-mode import",
 		"-cleanup-export-after-import",
 		"false by default",
+		"report.md",
+		"Chinese summary",
 		"Examples:",
 	} {
 		if !strings.Contains(help, want) {

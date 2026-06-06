@@ -3,9 +3,11 @@ package datasync
 import (
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -23,14 +25,15 @@ type RunReport struct {
 }
 
 type Summary struct {
-	TotalTasks      int           `json:"total_tasks"`
-	SucceededTasks  int           `json:"succeeded_tasks"`
-	FailedTasks     int           `json:"failed_tasks"`
-	TotalSourceRows int64         `json:"total_source_rows"`
-	TotalTargetRows int64         `json:"total_target_rows"`
-	Duration        time.Duration `json:"-"`
-	JSONReportPath  string        `json:"json_report_path"`
-	CSVReportPath   string        `json:"csv_report_path"`
+	TotalTasks         int           `json:"total_tasks"`
+	SucceededTasks     int           `json:"succeeded_tasks"`
+	FailedTasks        int           `json:"failed_tasks"`
+	TotalSourceRows    int64         `json:"total_source_rows"`
+	TotalTargetRows    int64         `json:"total_target_rows"`
+	Duration           time.Duration `json:"-"`
+	JSONReportPath     string        `json:"json_report_path"`
+	CSVReportPath      string        `json:"csv_report_path"`
+	MarkdownReportPath string        `json:"markdown_report_path"`
 }
 
 type TableReport struct {
@@ -70,14 +73,15 @@ type jsonRunReport struct {
 }
 
 type jsonSummary struct {
-	TotalTasks      int    `json:"total_tasks"`
-	SucceededTasks  int    `json:"succeeded_tasks"`
-	FailedTasks     int    `json:"failed_tasks"`
-	TotalSourceRows int64  `json:"total_source_rows"`
-	TotalTargetRows int64  `json:"total_target_rows"`
-	Duration        string `json:"duration"`
-	JSONReportPath  string `json:"json_report_path"`
-	CSVReportPath   string `json:"csv_report_path"`
+	TotalTasks         int    `json:"total_tasks"`
+	SucceededTasks     int    `json:"succeeded_tasks"`
+	FailedTasks        int    `json:"failed_tasks"`
+	TotalSourceRows    int64  `json:"total_source_rows"`
+	TotalTargetRows    int64  `json:"total_target_rows"`
+	Duration           string `json:"duration"`
+	JSONReportPath     string `json:"json_report_path"`
+	CSVReportPath      string `json:"csv_report_path"`
+	MarkdownReportPath string `json:"markdown_report_path"`
 }
 
 type jsonTableReport struct {
@@ -116,10 +120,14 @@ func Write(dir string, r RunReport) (RunReport, error) {
 	}
 	r.Summary.JSONReportPath = filepath.Join(dir, "report.json")
 	r.Summary.CSVReportPath = filepath.Join(dir, "report.csv")
+	r.Summary.MarkdownReportPath = filepath.Join(dir, "report.md")
 	if err := writeJSON(r.Summary.JSONReportPath, r); err != nil {
 		return r, err
 	}
 	if err := writeCSV(r.Summary.CSVReportPath, r.Tables); err != nil {
+		return r, err
+	}
+	if err := writeMarkdown(r.Summary.MarkdownReportPath, r); err != nil {
 		return r, err
 	}
 	return r, nil
@@ -185,14 +193,15 @@ func fromJSONReport(r jsonRunReport) RunReport {
 	return RunReport{
 		RunID: r.RunID,
 		Summary: Summary{
-			TotalTasks:      r.Summary.TotalTasks,
-			SucceededTasks:  r.Summary.SucceededTasks,
-			FailedTasks:     r.Summary.FailedTasks,
-			TotalSourceRows: r.Summary.TotalSourceRows,
-			TotalTargetRows: r.Summary.TotalTargetRows,
-			Duration:        parseDuration(r.Summary.Duration),
-			JSONReportPath:  r.Summary.JSONReportPath,
-			CSVReportPath:   r.Summary.CSVReportPath,
+			TotalTasks:         r.Summary.TotalTasks,
+			SucceededTasks:     r.Summary.SucceededTasks,
+			FailedTasks:        r.Summary.FailedTasks,
+			TotalSourceRows:    r.Summary.TotalSourceRows,
+			TotalTargetRows:    r.Summary.TotalTargetRows,
+			Duration:           parseDuration(r.Summary.Duration),
+			JSONReportPath:     r.Summary.JSONReportPath,
+			CSVReportPath:      r.Summary.CSVReportPath,
+			MarkdownReportPath: r.Summary.MarkdownReportPath,
 		},
 		Tables: rows,
 	}
@@ -242,17 +251,61 @@ func toJSONReport(r RunReport) jsonRunReport {
 	return jsonRunReport{
 		RunID: r.RunID,
 		Summary: jsonSummary{
-			TotalTasks:      r.Summary.TotalTasks,
-			SucceededTasks:  r.Summary.SucceededTasks,
-			FailedTasks:     r.Summary.FailedTasks,
-			TotalSourceRows: r.Summary.TotalSourceRows,
-			TotalTargetRows: r.Summary.TotalTargetRows,
-			Duration:        r.Summary.Duration.String(),
-			JSONReportPath:  r.Summary.JSONReportPath,
-			CSVReportPath:   r.Summary.CSVReportPath,
+			TotalTasks:         r.Summary.TotalTasks,
+			SucceededTasks:     r.Summary.SucceededTasks,
+			FailedTasks:        r.Summary.FailedTasks,
+			TotalSourceRows:    r.Summary.TotalSourceRows,
+			TotalTargetRows:    r.Summary.TotalTargetRows,
+			Duration:           r.Summary.Duration.String(),
+			JSONReportPath:     r.Summary.JSONReportPath,
+			CSVReportPath:      r.Summary.CSVReportPath,
+			MarkdownReportPath: r.Summary.MarkdownReportPath,
 		},
 		Tables: rows,
 	}
+}
+
+func writeMarkdown(path string, r RunReport) error {
+	var b strings.Builder
+	fmt.Fprintln(&b, "# 数据同步报告")
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "## 汇总")
+	fmt.Fprintf(&b, "- 运行 ID：%s\n", r.RunID)
+	fmt.Fprintf(&b, "- 任务总数：%d\n", r.Summary.TotalTasks)
+	fmt.Fprintf(&b, "- 成功任务：%d\n", r.Summary.SucceededTasks)
+	fmt.Fprintf(&b, "- 失败任务：%d\n", r.Summary.FailedTasks)
+	fmt.Fprintf(&b, "- 源端总行数：%d\n", r.Summary.TotalSourceRows)
+	fmt.Fprintf(&b, "- 目标端总行数：%d\n", r.Summary.TotalTargetRows)
+	fmt.Fprintf(&b, "- 总耗时：%s\n", r.Summary.Duration)
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "## 报告文件")
+	fmt.Fprintf(&b, "- JSON：%s\n", r.Summary.JSONReportPath)
+	fmt.Fprintf(&b, "- CSV：%s\n", r.Summary.CSVReportPath)
+	fmt.Fprintf(&b, "- Markdown：%s\n", r.Summary.MarkdownReportPath)
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "## 表同步结果")
+	fmt.Fprintln(&b, "| 源端 | 目标端 | 源端行数 | 目标端行数 | CSV大小 | 导出状态 | 导入状态 | 导出重试 | 导入重试 | 错误 |")
+	fmt.Fprintln(&b, "| ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- |")
+	for _, row := range r.Tables {
+		fmt.Fprintf(&b, "| %s | %s | %d | %d | %d bytes | %s | %s | %d | %d | %s |\n",
+			markdownCell(row.SourceName+"."+row.SourceDatabase+"."+row.SourceTable),
+			markdownCell(row.TargetName+"."+row.TargetDatabase+"."+row.SourceTable),
+			row.SourceRows,
+			row.TargetRows,
+			row.CSVFileSize,
+			markdownCell(row.ExportStatus),
+			markdownCell(row.ImportStatus),
+			row.ExportAttempts,
+			row.ImportAttempts,
+			markdownCell(row.Error),
+		)
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func markdownCell(value string) string {
+	value = strings.ReplaceAll(value, "\n", " ")
+	return strings.ReplaceAll(value, "|", `\|`)
 }
 
 func writeCSV(path string, rows []TableReport) error {

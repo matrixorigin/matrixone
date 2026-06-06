@@ -260,4 +260,14 @@ func assertReport(t *testing.T, runDir string) {
 	if !strings.Contains(string(csvReport), "csv_file_size_bytes") {
 		t.Fatalf("report.csv missing csv_file_size_bytes header: %s", csvReport)
 	}
+	markdownReport, err := os.ReadFile(filepath.Join(runDir, "report.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	markdownText := string(markdownReport)
+	for _, want := range []string{"# 数据同步报告", "## 汇总", "## 表同步结果", "CSV大小"} {
+		if !strings.Contains(markdownText, want) {
+			t.Fatalf("report.md missing %q: %s", want, markdownText)
+		}
+	}
 }

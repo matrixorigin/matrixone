@@ -54,13 +54,16 @@ func TestWriteReports(t *testing.T) {
 	if filepath.Base(written.Summary.CSVReportPath) != "report.csv" {
 		t.Fatalf("CSVReportPath = %q, want report.csv", written.Summary.CSVReportPath)
 	}
+	if filepath.Base(written.Summary.MarkdownReportPath) != "report.md" {
+		t.Fatalf("MarkdownReportPath = %q, want report.md", written.Summary.MarkdownReportPath)
+	}
 
 	jsonBytes, err := os.ReadFile(filepath.Join(dir, "report.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	jsonText := string(jsonBytes)
-	for _, want := range []string{`"run_id": "run1"`, `"duration": "10ms"`, `"json_report_path":`, `"csv_file_size_bytes": 12`} {
+	for _, want := range []string{`"run_id": "run1"`, `"duration": "10ms"`, `"json_report_path":`, `"markdown_report_path":`, `"csv_file_size_bytes": 12`} {
 		if !strings.Contains(jsonText, want) {
 			t.Fatalf("report.json missing %q: %s", want, jsonText)
 		}
@@ -89,6 +92,33 @@ func TestWriteReports(t *testing.T) {
 	row := records[1]
 	if row[16] != StatusSuccess || row[17] != StatusSuccess || row[24] != "1" || row[25] != "1" {
 		t.Fatalf("CSV row status/attempt columns = %#v", row)
+	}
+
+	markdownBytes, err := os.ReadFile(filepath.Join(dir, "report.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	markdownText := string(markdownBytes)
+	for _, want := range []string{
+		"# 数据同步报告",
+		"## 汇总",
+		"- 运行 ID：run1",
+		"- 任务总数：1",
+		"- 成功任务：1",
+		"- 失败任务：0",
+		"- 源端总行数：3",
+		"- 目标端总行数：3",
+		"## 报告文件",
+		"report.json",
+		"report.csv",
+		"report.md",
+		"## 表同步结果",
+		"| 源端 | 目标端 | 源端行数 | 目标端行数 | CSV大小 | 导出状态 | 导入状态 | 导出重试 | 导入重试 | 错误 |",
+		"| tenant_a.src_db.t1 | target_a.dst_db.t1 | 3 | 3 | 12 bytes | success | success | 1 | 1 |  |",
+	} {
+		if !strings.Contains(markdownText, want) {
+			t.Fatalf("report.md missing %q:\n%s", want, markdownText)
+		}
 	}
 }
 
