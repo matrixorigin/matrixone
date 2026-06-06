@@ -32,7 +32,7 @@ func TestTaskPathsUseStableTableDirectory(t *testing.T) {
 
 	tableDir, sqlFile, csvFile := r.taskPaths("run1", task)
 
-	if !strings.HasSuffix(tableDir, filepath.Join("run1", "exports", "tenant_a", "src_db", "t1")) {
+	if !strings.HasSuffix(tableDir, filepath.Join("run1", "exports", "tenant_a", "src_db", "t1", "target", "dst_db", "127.0.0.1", "6001", "target:admin")) {
 		t.Fatalf("tableDir = %s", tableDir)
 	}
 	if filepath.Base(sqlFile) != "t1.sql" {
@@ -40,6 +40,33 @@ func TestTaskPathsUseStableTableDirectory(t *testing.T) {
 	}
 	if filepath.Base(csvFile) != "src_db_t1.csv" {
 		t.Fatalf("csvFile = %s", csvFile)
+	}
+}
+
+func TestTaskPathsSeparateSameSourceTableForDifferentTargets(t *testing.T) {
+	dir := t.TempDir()
+	r := Runner{Config: &Config{OutputDir: dir}}
+	first := testTask()
+	first.TargetName = "target_a"
+	first.TargetHost = "target-a"
+	first.TargetPort = 6002
+	first.TargetUser = "target_a:admin"
+	first.TargetDatabase = "dst_db"
+	second := testTask()
+	second.TargetName = "target_b"
+	second.TargetHost = "target-b"
+	second.TargetPort = 6003
+	second.TargetUser = "target_b:admin"
+	second.TargetDatabase = "dst_db"
+
+	firstDir, firstSQL, firstCSV := r.taskPaths("run1", first)
+	secondDir, secondSQL, secondCSV := r.taskPaths("run1", second)
+
+	if firstDir == secondDir {
+		t.Fatalf("tableDir = %q for both targets, want distinct directories", firstDir)
+	}
+	if firstSQL == secondSQL || firstCSV == secondCSV {
+		t.Fatalf("paths overlap: first sql=%q csv=%q second sql=%q csv=%q", firstSQL, firstCSV, secondSQL, secondCSV)
 	}
 }
 

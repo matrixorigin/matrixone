@@ -255,7 +255,19 @@ func (r Runner) effectiveMode() Mode {
 }
 
 func (r Runner) taskPaths(runID string, task Task) (string, string, string) {
-	tableDir := filepath.Join(r.Config.OutputDir, runID, "exports", task.SourceName, task.SourceDatabase, task.SourceTable)
+	tableDir := filepath.Join(
+		r.Config.OutputDir,
+		runID,
+		"exports",
+		task.SourceName,
+		task.SourceDatabase,
+		task.SourceTable,
+		task.TargetName,
+		task.TargetDatabase,
+		task.TargetHost,
+		strconv.Itoa(task.TargetPort),
+		task.TargetUser,
+	)
 	sqlFile := filepath.Join(tableDir, task.SourceTable+".sql")
 	csvFile := filepath.Join(tableDir, task.SourceDatabase+"_"+task.SourceTable+".csv")
 	return tableDir, sqlFile, csvFile

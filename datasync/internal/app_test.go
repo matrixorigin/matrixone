@@ -227,6 +227,53 @@ func TestRunImportModeBuildsTasksFromExistingReportWithoutDiscovery(t *testing.T
 	}
 }
 
+func TestTasksFromReportMatchesTargetPasswordByFullTargetEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	runDir := filepath.Join(dir, "run1")
+	existingReport := RunReport{
+		RunID: "run1",
+		Tables: []TableReport{{
+			SourceName:     "tenant_a",
+			SourceHost:     "source",
+			SourcePort:     6001,
+			SourceDatabase: "src_db",
+			SourceTable:    "t1",
+			TargetName:     "target",
+			TargetHost:     "target-b",
+			TargetPort:     6003,
+			TargetUser:     "target_b:admin",
+			TargetDatabase: "dst_db",
+			SourceRows:     7,
+		}},
+	}
+	if _, err := Write(runDir, existingReport); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testAppConfig(dir)
+	cfg.Databases = []DatabaseTask{
+		{
+			Source: DatabaseEndpoint{Name: "tenant_a", Host: "source", Port: 6001, User: "source:admin", Password: "source-pass", Database: "src_db"},
+			Target: DatabaseEndpoint{Name: "target", Host: "target-a", Port: 6002, User: "target_a:admin", Password: "wrong-pass", Database: "dst_db"},
+		},
+		{
+			Source: DatabaseEndpoint{Name: "tenant_a", Host: "source", Port: 6001, User: "source:admin", Password: "source-pass", Database: "src_db"},
+			Target: DatabaseEndpoint{Name: "target", Host: "target-b", Port: 6003, User: "target_b:admin", Password: "right-pass", Database: "dst_db"},
+		},
+	}
+
+	tasks, err := tasksFromReport(filepath.Join(runDir, "report.json"), cfg)
+	if err != nil {
+		t.Fatalf("tasksFromReport() error = %v", err)
+	}
+
+	if len(tasks) != 1 {
+		t.Fatalf("len(tasks) = %d, want 1", len(tasks))
+	}
+	if tasks[0].TargetPassword != "right-pass" {
+		t.Fatalf("TargetPassword = %q, want password for full target endpoint", tasks[0].TargetPassword)
+	}
+}
+
 func TestMatrixOneDiscoveryListsTableNames(t *testing.T) {
 	originalOpenDB := openDB
 	defer func() { openDB = originalOpenDB }()

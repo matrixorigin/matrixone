@@ -93,7 +93,10 @@ func tasksFromReport(path string, cfg *Config) ([]Task, error) {
 	}
 	tasks := make([]Task, 0, len(runReport.Tables))
 	for _, row := range runReport.Tables {
-		password := targetPasswordForReportRow(cfg, row)
+		password, err := targetPasswordForReportRow(cfg, row)
+		if err != nil {
+			return nil, err
+		}
 		tasks = append(tasks, Task{
 			SourceName:     row.SourceName,
 			SourceHost:     row.SourceHost,
@@ -112,16 +115,27 @@ func tasksFromReport(path string, cfg *Config) ([]Task, error) {
 	return tasks, nil
 }
 
-func targetPasswordForReportRow(cfg *Config, row TableReport) string {
+func targetPasswordForReportRow(cfg *Config, row TableReport) (string, error) {
 	for _, database := range cfg.Databases {
 		if database.Source.Name == row.SourceName &&
 			database.Source.Database == row.SourceDatabase &&
 			database.Target.Name == row.TargetName &&
+			database.Target.Host == row.TargetHost &&
+			database.Target.Port == row.TargetPort &&
+			database.Target.User == row.TargetUser &&
 			database.Target.Database == row.TargetDatabase {
-			return database.Target.Password
+			return database.Target.Password, nil
 		}
 	}
-	return ""
+	return "", fmt.Errorf("target password not found for report row %s.%s -> %s.%s at %s:%d as %s",
+		row.SourceDatabase,
+		row.SourceTable,
+		row.TargetName,
+		row.TargetDatabase,
+		row.TargetHost,
+		row.TargetPort,
+		row.TargetUser,
+	)
 }
 
 func NewRunID(now time.Time) string {
