@@ -242,6 +242,29 @@ func TestBuildColumnsFromMoColumnsRows_FallbackToAttnumWhenSeqnumMissing(t *test
 	assert.Equal(t, 1, cols[1].PhysicalPosition)
 }
 
+func TestInferCatalogLayout(t *testing.T) {
+	tests := []struct {
+		name      string
+		dataWidth int
+		tableID   uint64
+		layout    string
+		offset    int
+	}{
+		{name: "current_tables", dataWidth: len(catalog.MoTablesSchema), tableID: moTablesID, layout: currentCatalogLayout.name, offset: 0},
+		{name: "current_tables_fakepk", dataWidth: len(catalog.MoTablesSchema) + 1, tableID: moTablesID, layout: currentCatalogLayout.name, offset: 1},
+		{name: "legacy3_tables", dataWidth: len(legacy3CatalogLayout.moTablesSchema), tableID: moTablesID, layout: legacy3CatalogLayout.name, offset: 0},
+		{name: "legacy3_columns", dataWidth: len(legacy3CatalogLayout.moColumnsSchema), tableID: moColumnsID, layout: legacy3CatalogLayout.name, offset: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			layout, offset := inferCatalogLayout(tt.dataWidth, tt.tableID)
+			assert.Equal(t, tt.layout, layout.name)
+			assert.Equal(t, tt.offset, offset)
+		})
+	}
+}
+
 // TestLogicalTableViewWithSchema_mergeHeaders merges schema column names using position-based mapping.
 func TestLogicalTableViewWithSchema_mergeHeaders(t *testing.T) {
 	schema := &TableSchema{
@@ -469,6 +492,17 @@ func TestBuildCreateTableFromMoColumns(t *testing.T) {
 	assert.Contains(t, ddl, "CREATE TABLE")
 }
 
+func TestHardcodedCreateTableForLegacy3Dev(t *testing.T) {
+	ddl := hardcodedCreateTableForLayout(catalog.MO_TABLES_ID, legacy3CatalogLayout)
+	assert.Contains(t, ddl, "CREATE TABLE `mo_tables`")
+	assert.NotContains(t, ddl, "rel_logical_id")
+
+	ddl = hardcodedCreateTableForLayout(catalog.MO_COLUMNS_ID, legacy3CatalogLayout)
+	assert.Contains(t, ddl, "CREATE TABLE `mo_columns`")
+	assert.NotContains(t, ddl, "attr_generated")
+	assert.NotContains(t, ddl, "attr_has_generated")
+}
+
 func TestBuildCreateTableFromMoColumns_empty(t *testing.T) {
 	view := &LogicalTableView{
 		Headers: []string{"object", "block", "row", "att_relname_id", "attname", "atttyp", "attnum", "att_is_hidden"},
@@ -493,7 +527,7 @@ func TestHardcodedCreateTable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("table-%d", tt.tableID), func(t *testing.T) {
-			ddl := hardcodedCreateTable(tt.tableID)
+			ddl := hardcodedCreateTableForLayout(tt.tableID, currentCatalogLayout)
 			if tt.wantName == "" {
 				assert.Empty(t, ddl)
 			} else {
@@ -502,4 +536,23 @@ func TestHardcodedCreateTable(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWriteCSVMetadata(t *testing.T) {
+	var buf bytes.Buffer
+	err := writeCSVMetadata(&buf, &TableSchema{
+		TableName:    "t1",
+		DatabaseName: "db1",
+		CreateSQL:    "CREATE TABLE t1 (id INT)",
+	}, logicalTableStats{
+		VisibleRows:  10,
+		DeletedRows:  3,
+		PhysicalRows: 13,
+	})
+	require.NoError(t, err)
+	out := buf.String()
+	assert.Contains(t, out, "-- CREATE TABLE t1 (id INT)")
+	assert.Contains(t, out, "-- Database: db1")
+	assert.Contains(t, out, "-- Table: t1")
+	assert.Contains(t, out, "-- Visible rows: 10 (deleted: 3, physical: 13)")
 }

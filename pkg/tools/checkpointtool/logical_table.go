@@ -26,6 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 )
 
+type logicalTableStats struct {
+	PhysicalRows int
+	DeletedRows  int
+	VisibleRows  int
+}
+
 // BuildLogicalTableView materializes a tombstone-applied logical table view.
 func (r *CheckpointReader) BuildLogicalTableView(
 	ctx context.Context,
@@ -37,42 +43,81 @@ func (r *CheckpointReader) BuildLogicalTableView(
 		Headers: []string{"object", "block", "row"},
 		Rows:    make([][]string, 0),
 	}
+	stats, err := r.scanLogicalTable(ctx, snapshotTS, dataEntries, tombEntries,
+		func(cols []objecttool.ColInfo) error {
+			if len(view.Headers) != 3 {
+				return nil
+			}
+			for _, col := range cols {
+				view.Headers = append(view.Headers, fmt.Sprintf("col_%d", col.Idx))
+				view.ColTypes = append(view.ColTypes, col.Type)
+			}
+			return nil
+		},
+		func(objShort string, blockIdx int, rowIdx int, values []string) error {
+			row := make([]string, 0, len(values)+3)
+			row = append(row, objShort, fmt.Sprintf("%d", blockIdx), fmt.Sprintf("%d", rowIdx))
+			row = append(row, values...)
+			view.Rows = append(view.Rows, row)
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	view.PhysicalRows = stats.PhysicalRows
+	view.DeletedRows = stats.DeletedRows
+	view.VisibleRows = stats.VisibleRows
+	return view, nil
+}
+
+func (r *CheckpointReader) scanLogicalTable(
+	ctx context.Context,
+	snapshotTS types.TS,
+	dataEntries []*ObjectEntryInfo,
+	tombEntries []*ObjectEntryInfo,
+	onColumns func([]objecttool.ColInfo) error,
+	onRow func(objShort string, blockIdx int, rowIdx int, values []string) error,
+) (logicalTableStats, error) {
+	stats := logicalTableStats{}
 	if len(dataEntries) == 0 {
-		return view, nil
+		return stats, nil
 	}
 
 	visibleDataEntries := visibleObjectEntries(dataEntries, snapshotTS)
 	visibleTombEntries := visibleObjectEntries(tombEntries, snapshotTS)
 	tombstoneStats := dedupeObjectStats(visibleTombEntries)
+	columnsSent := false
+
 	for _, entry := range visibleDataEntries {
 		objName := entry.ObjectStats.ObjectName().String()
 		reader, err := objecttool.OpenWithFS(ctx, r.fs, objName, objName)
 		if err != nil {
 			if isDataFileNotFound(err) {
-				continue // GC'd data object; skip
+				continue
 			}
-			return nil, err
+			return stats, err
 		}
 
-		if len(view.Headers) == 3 {
-			cols := reader.Columns()
-			for _, col := range cols {
-				view.Headers = append(view.Headers, fmt.Sprintf("col_%d", col.Idx))
-				view.ColTypes = append(view.ColTypes, col.Type)
+		if !columnsSent && onColumns != nil {
+			if err := onColumns(reader.Columns()); err != nil {
+				_ = reader.Close()
+				return stats, err
 			}
+			columnsSent = true
 		}
 
 		relevantTombstones, err := r.filterTombstonesForObject(ctx, entry.ObjectStats.ObjectName().ObjectId(), tombstoneStats)
 		if err != nil {
 			_ = reader.Close()
-			return nil, err
+			return stats, err
 		}
 
 		for blockIdx := 0; blockIdx < int(entry.ObjectStats.BlkCnt()); blockIdx++ {
 			bat, release, err := reader.ReadBlock(ctx, uint32(blockIdx))
 			if err != nil {
 				_ = reader.Close()
-				return nil, err
+				return stats, err
 			}
 
 			if bat.RowCount() == 0 {
@@ -80,30 +125,35 @@ func (r *CheckpointReader) BuildLogicalTableView(
 				continue
 			}
 
-			view.PhysicalRows += bat.RowCount()
+			stats.PhysicalRows += bat.RowCount()
 
 			deleteMask, err := r.buildDeleteMaskForBlock(ctx, &snapshotTS, entry.ObjectStats, uint16(blockIdx), relevantTombstones)
 			if err != nil {
 				release()
 				_ = reader.Close()
-				return nil, err
+				return stats, err
 			}
 
 			for rowIdx := 0; rowIdx < bat.RowCount(); rowIdx++ {
 				if deleteMask.IsValid() && deleteMask.Contains(uint64(rowIdx)) {
-					view.DeletedRows++
+					stats.DeletedRows++
 					continue
 				}
-				row := make([]string, 0, len(bat.Vecs)+3)
-				row = append(row,
-					entry.ObjectStats.ObjectName().Short().ShortString(),
-					fmt.Sprintf("%d", blockIdx),
-					fmt.Sprintf("%d", rowIdx),
-				)
-				for _, vec := range bat.Vecs {
-					row = append(row, vecValueToString(vec, rowIdx))
+				if onRow != nil {
+					values := make([]string, len(bat.Vecs))
+					for i, vec := range bat.Vecs {
+						values[i] = vecValueToString(vec, rowIdx)
+					}
+					if err := onRow(entry.ObjectStats.ObjectName().Short().ShortString(), blockIdx, rowIdx, values); err != nil {
+						if deleteMask.IsValid() {
+							deleteMask.Release()
+						}
+						release()
+						_ = reader.Close()
+						return stats, err
+					}
 				}
-				view.Rows = append(view.Rows, row)
+				stats.VisibleRows++
 			}
 
 			if deleteMask.IsValid() {
@@ -113,12 +163,11 @@ func (r *CheckpointReader) BuildLogicalTableView(
 		}
 
 		if err := reader.Close(); err != nil {
-			return nil, err
+			return stats, err
 		}
 	}
 
-	view.VisibleRows = len(view.Rows)
-	return view, nil
+	return stats, nil
 }
 
 func dedupeObjectStats(entries []*ObjectEntryInfo) []objectio.ObjectStats {

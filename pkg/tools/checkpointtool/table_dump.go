@@ -19,6 +19,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -37,6 +38,25 @@ const (
 	moColumnsID = uint64(catalog.MO_COLUMNS_ID)
 )
 
+type catalogLayout struct {
+	name            string
+	moTablesSchema  []string
+	moColumnsSchema []string
+}
+
+var (
+	currentCatalogLayout = catalogLayout{
+		name:            "current",
+		moTablesSchema:  append([]string(nil), catalog.MoTablesSchema...),
+		moColumnsSchema: append([]string(nil), catalog.MoColumnsSchema...),
+	}
+	legacy3CatalogLayout = catalogLayout{
+		name:            "3.0-dev",
+		moTablesSchema:  append([]string(nil), catalog.MoTablesSchema[:len(catalog.MoTablesSchema)-1]...),
+		moColumnsSchema: append([]string(nil), catalog.MoColumnsSchema[:len(catalog.MoColumnsSchema)-2]...),
+	}
+)
+
 // TableColumn describes one column in a user table schema.
 type TableColumn struct {
 	Name             string // SQL column name
@@ -51,6 +71,50 @@ type TableSchema struct {
 	DatabaseName string
 	Columns      []TableColumn // sorted by Position
 	CreateSQL    string        // raw CREATE TABLE from mo_tables.rel_createsql
+}
+
+func knownCatalogLayouts() []catalogLayout {
+	return []catalogLayout{currentCatalogLayout, legacy3CatalogLayout}
+}
+
+func schemaForLayout(layout catalogLayout, tableID uint64) []string {
+	switch tableID {
+	case moTablesID:
+		return layout.moTablesSchema
+	case moColumnsID:
+		return layout.moColumnsSchema
+	default:
+		return nil
+	}
+}
+
+func inferCatalogLayout(dataWidth int, tableID uint64) (catalogLayout, int) {
+	for _, layout := range knownCatalogLayouts() {
+		schema := schemaForLayout(layout, tableID)
+		if len(schema) == 0 {
+			continue
+		}
+		switch dataWidth {
+		case len(schema):
+			return layout, 0
+		case len(schema) + 1:
+			return layout, 1
+		}
+	}
+	return currentCatalogLayout, 0
+}
+
+func fallbackCatalogColIndex(view *LogicalTableView, tableID uint64, colName string) int {
+	if idx := view.columnDataIndex(colName); idx >= 0 {
+		return idx
+	}
+	layout, offset := inferCatalogLayout(len(view.Headers)-logicalViewMetaCols, tableID)
+	for i, name := range schemaForLayout(layout, tableID) {
+		if name == colName {
+			return i + offset
+		}
+	}
+	return -1
 }
 
 // ReadTableSchema reads the schema for a user table by reading mo_tables and mo_columns
@@ -81,10 +145,7 @@ func (r *CheckpointReader) ReadTableSchema(
 		// Don't log - expected for system tables or when mo_tables not in checkpoint
 	} else if moTablesView != nil {
 		// Resolve column positions by name (handles hidden column offset)
-		relIDCol := moTablesView.columnDataIndex("rel_id")
-		if relIDCol < 0 {
-			relIDCol = moTablesPhysRelID
-		}
+		relIDCol := fallbackCatalogColIndex(moTablesView, moTablesID, "rel_id")
 		for _, row := range moTablesView.Rows {
 			dataRow := row[logicalViewMetaCols:]
 			if relIDCol < 0 || relIDCol >= len(dataRow) {
@@ -120,17 +181,28 @@ func (r *CheckpointReader) getTableLogicalView(
 	tableID uint64,
 	snapshotTS types.TS,
 ) (*LogicalTableView, error) {
-	composed, err := r.ComposeAt(snapshotTS)
+	allData, allTomb, err := r.getTableEntriesAt(ctx, tableID, snapshotTS)
 	if err != nil {
 		return nil, err
+	}
+	return r.BuildLogicalTableView(ctx, snapshotTS, allData, allTomb)
+}
+
+func (r *CheckpointReader) getTableEntriesAt(
+	ctx context.Context,
+	tableID uint64,
+	snapshotTS types.TS,
+) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error) {
+	composed, err := r.ComposeAt(snapshotTS)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	tbl, ok := composed.Tables[tableID]
 	if !ok || (len(tbl.DataRanges) == 0 && len(tbl.TombRanges) == 0) {
-		return nil, moerr.NewInternalErrorf(ctx, "table %d not found in checkpoint at ts %s", tableID, snapshotTS.ToString())
+		return nil, nil, moerr.NewInternalErrorf(ctx, "table %d not found in checkpoint at ts %s", tableID, snapshotTS.ToString())
 	}
 
-	// Collect all entries that contain this table (base + incrementals)
 	type entryRef struct {
 		entry *EntryInfo
 	}
@@ -142,23 +214,21 @@ func (r *CheckpointReader) getTableLogicalView(
 		entryRefs = append(entryRefs, entryRef{entry: incr})
 	}
 
-	// Aggregate data/tomb entries across all checkpoint entries
 	var allData, allTomb []*ObjectEntryInfo
 	for _, ref := range entryRefs {
 		e := r.entries[ref.entry.Index]
 		dataEntries, tombEntries, err := r.GetObjectEntries(e, tableID)
 		if err != nil {
-			continue // skip entries that don't have this table
+			continue
 		}
 		allData = append(allData, dataEntries...)
 		allTomb = append(allTomb, tombEntries...)
 	}
 
 	if len(allData) == 0 {
-		return nil, moerr.NewInternalErrorf(ctx, "no data entries for table %d", tableID)
+		return nil, nil, moerr.NewInternalErrorf(ctx, "no data entries for table %d", tableID)
 	}
-
-	return r.BuildLogicalTableView(ctx, snapshotTS, allData, allTomb)
+	return allData, allTomb, nil
 }
 
 // DumpTableCSV reads a user table's logical view and writes it as CSV to w.
@@ -172,12 +242,7 @@ func (r *CheckpointReader) DumpTableCSV(
 	snapshotTS types.TS,
 	dataEntries, tombEntries []*ObjectEntryInfo,
 ) error {
-	view, err := r.BuildLogicalTableView(ctx, snapshotTS, dataEntries, tombEntries)
-	if err != nil {
-		return err
-	}
-
-	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, view)
+	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
 	if len(schema.Columns) == 0 {
 		return moerr.NewInternalErrorf(
 			ctx,
@@ -185,7 +250,7 @@ func (r *CheckpointReader) DumpTableCSV(
 			tableID,
 		)
 	}
-	return WriteCSV(w, schema, view)
+	return r.streamTableCSV(ctx, w, schema, snapshotTS, dataEntries, tombEntries)
 }
 
 // DumpTableCSVComposed dumps a table to CSV by composing the full checkpoint view
@@ -197,11 +262,11 @@ func (r *CheckpointReader) DumpTableCSVComposed(
 	tableID uint64,
 	snapshotTS types.TS,
 ) error {
-	view, err := r.getTableLogicalView(ctx, tableID, snapshotTS)
+	dataEntries, tombEntries, err := r.getTableEntriesAt(ctx, tableID, snapshotTS)
 	if err != nil {
 		return err
 	}
-	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, view)
+	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
 	if len(schema.Columns) == 0 {
 		return moerr.NewInternalErrorf(
 			ctx,
@@ -209,7 +274,66 @@ func (r *CheckpointReader) DumpTableCSVComposed(
 			tableID,
 		)
 	}
-	return WriteCSV(w, schema, view)
+	return r.streamTableCSV(ctx, w, schema, snapshotTS, dataEntries, tombEntries)
+}
+
+func (r *CheckpointReader) streamTableCSV(
+	ctx context.Context,
+	w io.Writer,
+	schema *TableSchema,
+	snapshotTS types.TS,
+	dataEntries, tombEntries []*ObjectEntryInfo,
+) error {
+	tmpFile, err := os.CreateTemp("", "mo-tool-table-dump-*.csv")
+	if err != nil {
+		return err
+	}
+	tmpName := tmpFile.Name()
+	defer os.Remove(tmpName)
+	defer tmpFile.Close()
+
+	cw := csv.NewWriter(tmpFile)
+	header := make([]string, 0, len(schema.Columns))
+	physicalPositions := make([]int, 0, len(schema.Columns))
+	for _, col := range schema.Columns {
+		header = append(header, col.Name)
+		physicalPos := col.PhysicalPosition
+		if physicalPos < 0 {
+			physicalPos = col.Position
+		}
+		physicalPositions = append(physicalPositions, physicalPos)
+	}
+	if err := cw.Write(header); err != nil {
+		return err
+	}
+
+	stats, err := r.scanLogicalTable(ctx, snapshotTS, dataEntries, tombEntries, nil,
+		func(_ string, _ int, _ int, values []string) error {
+			row := make([]string, len(physicalPositions))
+			for i, pos := range physicalPositions {
+				if pos >= 0 && pos < len(values) {
+					row[i] = values[pos]
+				}
+			}
+			return cw.Write(row)
+		},
+	)
+	if err != nil {
+		return err
+	}
+	cw.Flush()
+	if err := cw.Error(); err != nil {
+		return err
+	}
+
+	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	if err := writeCSVMetadata(w, schema, stats); err != nil {
+		return err
+	}
+	_, err = io.Copy(w, tmpFile)
+	return err
 }
 
 // WriteCSV writes a LogicalTableView with the given schema as CSV to w.
@@ -218,23 +342,11 @@ func WriteCSV(w io.Writer, schema *TableSchema, view *LogicalTableView) error {
 	defer cw.Flush()
 
 	// Write header comments (DDL + metadata)
-	if schema.CreateSQL != "" {
-		if _, err := fmt.Fprintf(w, "-- %s\n", schema.CreateSQL); err != nil {
-			return err
-		}
-	}
-	if schema.DatabaseName != "" {
-		if _, err := fmt.Fprintf(w, "-- Database: %s\n", schema.DatabaseName); err != nil {
-			return err
-		}
-	}
-	if schema.TableName != "" {
-		if _, err := fmt.Fprintf(w, "-- Table: %s\n", schema.TableName); err != nil {
-			return err
-		}
-	}
-	if _, err := fmt.Fprintf(w, "-- Visible rows: %d (deleted: %d, physical: %d)\n",
-		view.VisibleRows, view.DeletedRows, view.PhysicalRows); err != nil {
+	if err := writeCSVMetadata(w, schema, logicalTableStats{
+		VisibleRows:  view.VisibleRows,
+		DeletedRows:  view.DeletedRows,
+		PhysicalRows: view.PhysicalRows,
+	}); err != nil {
 		return err
 	}
 
@@ -253,6 +365,27 @@ func WriteCSV(w io.Writer, schema *TableSchema, view *LogicalTableView) error {
 
 	cw.Flush()
 	return cw.Error()
+}
+
+func writeCSVMetadata(w io.Writer, schema *TableSchema, stats logicalTableStats) error {
+	if schema.CreateSQL != "" {
+		if _, err := fmt.Fprintf(w, "-- %s\n", schema.CreateSQL); err != nil {
+			return err
+		}
+	}
+	if schema.DatabaseName != "" {
+		if _, err := fmt.Fprintf(w, "-- Database: %s\n", schema.DatabaseName); err != nil {
+			return err
+		}
+	}
+	if schema.TableName != "" {
+		if _, err := fmt.Fprintf(w, "-- Table: %s\n", schema.TableName); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintf(w, "-- Visible rows: %d (deleted: %d, physical: %d)\n",
+		stats.VisibleRows, stats.DeletedRows, stats.PhysicalRows)
+	return err
 }
 
 // MergeLogicalViewWithSchema replaces col_N headers with real column names from the schema
@@ -317,26 +450,17 @@ func buildSchemaFromMoTablesRow(view *LogicalTableView, fullRow []string) *Table
 	schema := &TableSchema{}
 	dataRow := fullRow[logicalViewMetaCols:]
 
-	relNameIdx := view.columnDataIndex("relname")
-	if relNameIdx < 0 {
-		relNameIdx = moTablesPhysRelName
-	}
+	relNameIdx := fallbackCatalogColIndex(view, moTablesID, "relname")
 	if relNameIdx < len(dataRow) {
 		schema.TableName = dataRow[relNameIdx]
 	}
 
-	relDBIdx := view.columnDataIndex("reldatabase")
-	if relDBIdx < 0 {
-		relDBIdx = moTablesPhysRelDatabase
-	}
+	relDBIdx := fallbackCatalogColIndex(view, moTablesID, "reldatabase")
 	if relDBIdx < len(dataRow) {
 		schema.DatabaseName = dataRow[relDBIdx]
 	}
 
-	createSQLIdx := view.columnDataIndex("rel_createsql")
-	if createSQLIdx < 0 {
-		createSQLIdx = moTablesPhysRelCreateSQL
-	}
+	createSQLIdx := fallbackCatalogColIndex(view, moTablesID, "rel_createsql")
 	if createSQLIdx < len(dataRow) {
 		schema.CreateSQL = dataRow[createSQLIdx]
 	}
@@ -350,31 +474,12 @@ func buildSchemaFromMoTablesRow(view *LogicalTableView, fullRow []string) *Table
 func buildColumnsFromMoColumnsRows(view *LogicalTableView, tableID uint64) []TableColumn {
 	tableIDStr := fmt.Sprintf("%d", tableID)
 
-	// Resolve column positions by name with hardcoded fallback for col_N headers
-	relnameIDCol := view.columnDataIndex("att_relname_id")
-	if relnameIDCol < 0 {
-		relnameIDCol = moColsPhysRelNameID
-	}
-	nameCol := view.columnDataIndex("attname")
-	if nameCol < 0 {
-		nameCol = moColsPhysAttName
-	}
-	typCol := view.columnDataIndex("atttyp")
-	if typCol < 0 {
-		typCol = moColsPhysAttTyp
-	}
-	numCol := view.columnDataIndex("attnum")
-	if numCol < 0 {
-		numCol = moColsPhysAttNum
-	}
-	hiddenCol := view.columnDataIndex("att_is_hidden")
-	if hiddenCol < 0 {
-		hiddenCol = moColsPhysIsHidden
-	}
-	seqNumCol := view.columnDataIndex("att_seqnum")
-	if seqNumCol < 0 {
-		seqNumCol = moColsPhysSeqNum
-	}
+	relnameIDCol := fallbackCatalogColIndex(view, moColumnsID, "att_relname_id")
+	nameCol := fallbackCatalogColIndex(view, moColumnsID, "attname")
+	typCol := fallbackCatalogColIndex(view, moColumnsID, "atttyp")
+	numCol := fallbackCatalogColIndex(view, moColumnsID, "attnum")
+	hiddenCol := fallbackCatalogColIndex(view, moColumnsID, "att_is_hidden")
+	seqNumCol := fallbackCatalogColIndex(view, moColumnsID, "att_seqnum")
 
 	var cols []TableColumn
 	for _, fullRow := range view.Rows {
@@ -445,25 +550,6 @@ func buildColumnsFromMoColumnsRows(view *LogicalTableView, tableID uint64) []Tab
 // types when mo_tables/mo_columns metadata is unavailable. Physical object columns may
 // include hidden system columns, and without mo_columns we cannot safely distinguish
 // visible columns from hidden ones.
-//
-// hardcoded physical column positions for mo_tables (after stripping meta cols).
-// Layout: [rel_id(0), relname(1), reldatabase(2), reldatabase_id(3), ...]
-// These are used as fallback when the LogicalTableView has col_N headers.
-const (
-	moTablesPhysRelID        = 0
-	moTablesPhysRelName      = 1
-	moTablesPhysRelDatabase  = 2
-	moTablesPhysRelCreateSQL = 7
-
-	// mo_columns hardcoded physical positions (after meta cols).
-	moColsPhysRelNameID = 4
-	moColsPhysAttName   = 6
-	moColsPhysAttTyp    = 7
-	moColsPhysAttNum    = 8
-	moColsPhysIsHidden  = 18
-	moColsPhysSeqNum    = 22
-)
-
 func (r *CheckpointReader) ShowCreateTable(
 	ctx context.Context,
 	tableID uint64,
@@ -472,14 +558,8 @@ func (r *CheckpointReader) ShowCreateTable(
 	// 1. Try mo_tables.rel_createsql
 	moTablesView, err := r.getTableLogicalView(ctx, moTablesID, snapshotTS)
 	if err == nil && moTablesView != nil {
-		relIDCol := moTablesView.columnDataIndex("rel_id")
-		if relIDCol < 0 {
-			relIDCol = moTablesPhysRelID
-		}
-		createSQLCol := moTablesView.columnDataIndex("rel_createsql")
-		if createSQLCol < 0 {
-			createSQLCol = moTablesPhysRelCreateSQL
-		}
+		relIDCol := fallbackCatalogColIndex(moTablesView, moTablesID, "rel_id")
+		createSQLCol := fallbackCatalogColIndex(moTablesView, moTablesID, "rel_createsql")
 		for _, fullRow := range moTablesView.Rows {
 			row := fullRow[logicalViewMetaCols:]
 			if relIDCol < len(row) && row[relIDCol] == fmt.Sprintf("%d", tableID) {
@@ -500,7 +580,18 @@ func (r *CheckpointReader) ShowCreateTable(
 	}
 
 	// 3. Hardcoded built-in table schemas
-	if ddl := hardcodedCreateTable(tableID); ddl != "" {
+	layout := currentCatalogLayout
+	switch tableID {
+	case moTablesID:
+		if moTablesView != nil {
+			layout, _ = inferCatalogLayout(len(moTablesView.Headers)-logicalViewMetaCols, moTablesID)
+		}
+	case moColumnsID:
+		if moColumnsView != nil {
+			layout, _ = inferCatalogLayout(len(moColumnsView.Headers)-logicalViewMetaCols, moColumnsID)
+		}
+	}
+	if ddl := hardcodedCreateTableForLayout(tableID, layout); ddl != "" {
 		return ddl, nil
 	}
 
@@ -522,26 +613,11 @@ func getTableName(view *LogicalTableView, tableID uint64) string {
 // buildCreateTableFromMoColumns reconstructs a CREATE TABLE DDL from mo_columns data.
 func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64) string {
 	tableIDStr := fmt.Sprintf("%d", tableID)
-	relnameIDCol := view.columnDataIndex("att_relname_id")
-	if relnameIDCol < 0 {
-		relnameIDCol = moColsPhysRelNameID
-	}
-	nameCol := view.columnDataIndex("attname")
-	if nameCol < 0 {
-		nameCol = moColsPhysAttName
-	}
-	typCol := view.columnDataIndex("atttyp")
-	if typCol < 0 {
-		typCol = moColsPhysAttTyp
-	}
-	numCol := view.columnDataIndex("attnum")
-	if numCol < 0 {
-		numCol = moColsPhysAttNum
-	}
-	hiddenCol := view.columnDataIndex("att_is_hidden")
-	if hiddenCol < 0 {
-		hiddenCol = moColsPhysIsHidden
-	}
+	relnameIDCol := fallbackCatalogColIndex(view, moColumnsID, "att_relname_id")
+	nameCol := fallbackCatalogColIndex(view, moColumnsID, "attname")
+	typCol := fallbackCatalogColIndex(view, moColumnsID, "atttyp")
+	numCol := fallbackCatalogColIndex(view, moColumnsID, "attnum")
+	hiddenCol := fallbackCatalogColIndex(view, moColumnsID, "att_is_hidden")
 
 	type colInfo struct {
 		name     string
@@ -611,7 +687,7 @@ func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64) strin
 // hardcodedCreateTable returns the CREATE TABLE DDL for core built-in system tables.
 // These tables' schemas are known at compile time and may not appear in the checkpoint's
 // mo_tables/mo_columns (due to minimal deployments).
-func hardcodedCreateTable(tableID uint64) string {
+func hardcodedCreateTableForLayout(tableID uint64, layout catalogLayout) string {
 	switch tableID {
 	case catalog.MO_DATABASE_ID:
 		return "CREATE TABLE `mo_database` (\n" +
@@ -627,6 +703,30 @@ func hardcodedCreateTable(tableID uint64) string {
 			"  `__mo_cpkey_dat` VARCHAR(65535)\n" +
 			");"
 	case catalog.MO_TABLES_ID:
+		if layout.name == legacy3CatalogLayout.name {
+			return "CREATE TABLE `mo_tables` (\n" +
+				"  `rel_id` BIGINT,\n" +
+				"  `relname` VARCHAR(5000),\n" +
+				"  `reldatabase` VARCHAR(5000),\n" +
+				"  `reldatabase_id` BIGINT,\n" +
+				"  `relpersistence` VARCHAR(5000),\n" +
+				"  `relkind` VARCHAR(5000),\n" +
+				"  `rel_comment` VARCHAR(5000),\n" +
+				"  `rel_createsql` TEXT,\n" +
+				"  `created_time` TIMESTAMP,\n" +
+				"  `creator` INT UNSIGNED,\n" +
+				"  `owner` INT UNSIGNED,\n" +
+				"  `account_id` INT UNSIGNED,\n" +
+				"  `partitioned` TINYINT,\n" +
+				"  `partition_info` BLOB,\n" +
+				"  `viewdef` VARCHAR(5000),\n" +
+				"  `constraint` VARCHAR(5000),\n" +
+				"  `schema_version` INT UNSIGNED,\n" +
+				"  `schema_catalog_version` INT UNSIGNED,\n" +
+				"  `extra_info` VARCHAR,\n" +
+				"  `__mo_cpkey_rel` VARCHAR(65535)\n" +
+				");"
+		}
 		return "CREATE TABLE `mo_tables` (\n" +
 			"  `rel_id` BIGINT,\n" +
 			"  `relname` VARCHAR(5000),\n" +
@@ -651,6 +751,35 @@ func hardcodedCreateTable(tableID uint64) string {
 			"  `rel_logical_id` BIGINT\n" +
 			");"
 	case catalog.MO_COLUMNS_ID:
+		if layout.name == legacy3CatalogLayout.name {
+			return "CREATE TABLE `mo_columns` (\n" +
+				"  `att_uniq_name` VARCHAR(256),\n" +
+				"  `account_id` INT UNSIGNED,\n" +
+				"  `att_database_id` BIGINT,\n" +
+				"  `att_database` VARCHAR(256),\n" +
+				"  `att_relname_id` BIGINT,\n" +
+				"  `att_relname` VARCHAR(256),\n" +
+				"  `attname` VARCHAR(256),\n" +
+				"  `atttyp` VARCHAR(256),\n" +
+				"  `attnum` INT,\n" +
+				"  `att_length` INT,\n" +
+				"  `attnotnull` TINYINT,\n" +
+				"  `atthasdef` TINYINT,\n" +
+				"  `att_default` VARCHAR(2048),\n" +
+				"  `attisdropped` TINYINT,\n" +
+				"  `att_constraint_type` CHAR(1),\n" +
+				"  `att_is_unsigned` TINYINT,\n" +
+				"  `att_is_auto_increment` TINYINT,\n" +
+				"  `att_comment` VARCHAR(2048),\n" +
+				"  `att_is_hidden` TINYINT,\n" +
+				"  `att_has_update` TINYINT,\n" +
+				"  `att_update` VARCHAR(2048),\n" +
+				"  `att_is_clusterby` TINYINT,\n" +
+				"  `att_seqnum` SMALLINT UNSIGNED,\n" +
+				"  `att_enum` VARCHAR,\n" +
+				"  `__mo_cpkey_col` VARCHAR(65535)\n" +
+				");"
+		}
 		return "CREATE TABLE `mo_columns` (\n" +
 			"  `att_uniq_name` VARCHAR(256),\n" +
 			"  `account_id` INT UNSIGNED,\n" +
