@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 )
 
 type progressLogger struct {
@@ -21,7 +22,8 @@ func (p *progressLogger) Printf(format string, args ...any) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	fmt.Fprintf(p.w, format+"\n", args...)
+	message := fmt.Sprintf(format, args...)
+	fmt.Fprintf(p.w, "%s %s\n", time.Now().Format("2006-01-02 15:04:05"), message)
 }
 
 func taskProgressLabel(task Task) string {
