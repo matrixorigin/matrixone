@@ -12,26 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package object
+package checkpointtool
 
 import (
 	"context"
+	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
-	"github.com/spf13/cobra"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func viewCommand(storage *toolfs.StorageOptions) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "view <object-file>",
-		Short: "Interactive object file viewer",
-		Long:  "Open an object file in interactive mode for browsing and analysis",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			path := args[0]
-			return runObjectView(context.Background(), path, *storage)
-		},
-	}
-
-	return cmd
+func TestBuildLogicalTableViewEmpty(t *testing.T) {
+	reader := &CheckpointReader{}
+	view, err := reader.BuildLogicalTableView(context.Background(), types.TS{}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"object", "block", "row"}, view.Headers)
+	assert.Empty(t, view.Rows)
+	assert.Equal(t, 0, view.PhysicalRows)
+	assert.Equal(t, 0, view.DeletedRows)
+	assert.Equal(t, 0, view.VisibleRows)
 }

@@ -15,6 +15,8 @@
 package interactive
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
@@ -47,6 +49,7 @@ type State struct {
 	info        *checkpointtool.CheckpointInfo
 	dataEntries []*checkpointtool.ObjectEntryInfo
 	tombEntries []*checkpointtool.ObjectEntryInfo
+	logicalView *checkpointtool.LogicalTableView
 }
 
 // NewState creates a new state
@@ -66,6 +69,7 @@ func (s *State) Mode() ViewMode                                 { return s.mode 
 func (s *State) Entries() []*checkpoint.CheckpointEntry         { return s.entries }
 func (s *State) DataEntries() []*checkpointtool.ObjectEntryInfo { return s.dataEntries }
 func (s *State) TombEntries() []*checkpointtool.ObjectEntryInfo { return s.tombEntries }
+func (s *State) LogicalView() *checkpointtool.LogicalTableView  { return s.logicalView }
 func (s *State) HasAccountFilter() bool                         { return s.filterAccountID >= 0 }
 func (s *State) GetAccountFilter() int64                        { return s.filterAccountID }
 
@@ -129,6 +133,7 @@ func (s *State) SwitchToTables() error {
 		return err
 	}
 	s.tables = tables
+	s.logicalView = nil
 	s.mode = ViewModeTable
 	return nil
 }
@@ -142,6 +147,24 @@ func (s *State) SelectTable(tableID uint64) error {
 	}
 	s.dataEntries = dataEntries
 	s.tombEntries = tombEntries
+	s.logicalView = nil
+	return nil
+}
+
+// LoadLogicalView materializes the tombstone-applied logical rows for the selected table.
+func (s *State) LoadLogicalView() error {
+	if s.logicalView != nil {
+		return nil
+	}
+	if s.selectedEntry < 0 || s.selectedEntry >= len(s.entries) {
+		return nil
+	}
+	snapshotTS := s.entries[s.selectedEntry].GetEnd()
+	view, err := s.reader.BuildLogicalTableView(context.Background(), snapshotTS, s.dataEntries, s.tombEntries)
+	if err != nil {
+		return err
+	}
+	s.logicalView = view
 	return nil
 }
 

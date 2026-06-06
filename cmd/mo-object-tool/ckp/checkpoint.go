@@ -22,10 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool/interactive"
+	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
 	"github.com/spf13/cobra"
 )
 
 func PrepareCommand() *cobra.Command {
+	var storage toolfs.StorageOptions
 	cmd := &cobra.Command{
 		Use:   "ckp [directory]",
 		Short: "Checkpoint viewer tool",
@@ -36,14 +38,22 @@ func PrepareCommand() *cobra.Command {
 			if len(args) == 1 {
 				dir = args[0]
 			}
-			return runViewer(dir)
+			return runViewer(dir, storage)
 		},
 	}
+	addStorageFlags(cmd, &storage)
 
-	cmd.AddCommand(infoCommand())
-	cmd.AddCommand(viewCommand())
+	cmd.AddCommand(infoCommand(&storage))
+	cmd.AddCommand(viewCommand(&storage))
 
 	return cmd
+}
+
+func addStorageFlags(cmd *cobra.Command, storage *toolfs.StorageOptions) {
+	cmd.PersistentFlags().StringVar(&storage.FSConfig, "fs-config", "", "MO config TOML containing fileservice settings")
+	cmd.PersistentFlags().StringVar(&storage.FSName, "fs-name", "SHARED", "fileservice name to use from --fs-config")
+	cmd.PersistentFlags().StringVar(&storage.S3, "s3", "", "S3 arguments, for example bucket=...,endpoint=...,region=...,key-prefix=...,key-id=...,key-secret=...")
+	cmd.PersistentFlags().StringVar(&storage.Backend, "backend", "", "remote backend for --s3: S3 or MINIO")
 }
 
 func setupLogFile() (*os.File, error) {
@@ -76,7 +86,7 @@ func setupLogFile() (*os.File, error) {
 	return logFile, nil
 }
 
-func runViewer(dir string) error {
+func runViewer(dir string, storage toolfs.StorageOptions) error {
 	logFile, err := setupLogFile()
 	if err != nil {
 		return fmt.Errorf("setup log file: %w", err)
@@ -84,7 +94,7 @@ func runViewer(dir string) error {
 	defer logFile.Close()
 
 	ctx := context.Background()
-	reader, err := checkpointtool.Open(ctx, dir)
+	reader, err := openReader(ctx, dir, storage)
 	if err != nil {
 		return fmt.Errorf("open checkpoint dir: %w", err)
 	}
@@ -93,7 +103,7 @@ func runViewer(dir string) error {
 	return interactive.Run(reader)
 }
 
-func infoCommand() *cobra.Command {
+func infoCommand(storage *toolfs.StorageOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "info [directory]",
 		Short: "Show checkpoint summary",
@@ -111,7 +121,7 @@ func infoCommand() *cobra.Command {
 			defer logFile.Close()
 
 			ctx := context.Background()
-			reader, err := checkpointtool.Open(ctx, dir)
+			reader, err := openReader(ctx, dir, *storage)
 			if err != nil {
 				return fmt.Errorf("open checkpoint dir: %w", err)
 			}
@@ -134,7 +144,7 @@ func infoCommand() *cobra.Command {
 	}
 }
 
-func viewCommand() *cobra.Command {
+func viewCommand(storage *toolfs.StorageOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "view [directory]",
 		Short: "Interactive checkpoint viewer",
@@ -144,7 +154,21 @@ func viewCommand() *cobra.Command {
 			if len(args) == 1 {
 				dir = args[0]
 			}
-			return runViewer(dir)
+			return runViewer(dir, *storage)
 		},
 	}
+}
+
+func openReader(ctx context.Context, dir string, storage toolfs.StorageOptions) (*checkpointtool.CheckpointReader, error) {
+	if !storage.IsRemote() {
+		return checkpointtool.Open(ctx, dir)
+	}
+	fs, display, err := toolfs.Open(ctx, storage)
+	if err != nil {
+		return nil, err
+	}
+	if display == "" {
+		display = dir
+	}
+	return checkpointtool.OpenWithFS(ctx, fs, display, checkpointtool.WithCloseFS())
 }

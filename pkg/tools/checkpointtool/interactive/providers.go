@@ -242,6 +242,32 @@ func (p *TableDetailProvider) GetOverview() string {
 		formatSize(totalOriginSize), formatSize(totalCompSize))
 }
 
+type LogicalTableProvider struct {
+	state *State
+}
+
+func (p *LogicalTableProvider) GetRows() [][]string {
+	view := p.state.LogicalView()
+	if view == nil {
+		return nil
+	}
+	return view.Rows
+}
+
+func (p *LogicalTableProvider) GetRowNums() []string {
+	return nil
+}
+
+func (p *LogicalTableProvider) GetOverview() string {
+	view := p.state.LogicalView()
+	tbl := p.state.GetSelectedTable()
+	if view == nil || tbl == nil {
+		return ""
+	}
+	return fmt.Sprintf("Table %d logical view │ visible: %d │ deleted: %d │ physical: %d",
+		tbl.TableID, view.VisibleRows, view.DeletedRows, view.PhysicalRows)
+}
+
 // === Table Detail Handler ===
 
 type tableDetailHandler struct {
@@ -270,12 +296,27 @@ func (h *tableDetailHandler) OnBack() tea.Cmd {
 	return func() tea.Msg { return goBackMsg{} }
 }
 
+func (h *tableDetailHandler) OnCustomKey(key string) tea.Cmd {
+	if key == "L" {
+		return func() tea.Msg { return openLogicalTableMsg{} }
+	}
+	return nil
+}
+
 // FilterRow filters by type (Data/Tomb)
 func (h *tableDetailHandler) FilterRow(row []string, filter string) bool {
 	if len(row) > 0 {
 		return strings.EqualFold(row[0], filter)
 	}
 	return false
+}
+
+type logicalTableHandler struct {
+	interactive.DefaultHandler
+}
+
+func (h *logicalTableHandler) OnBack() tea.Cmd {
+	return func() tea.Msg { return goBackMsg{} }
 }
 
 // === Account List Provider ===

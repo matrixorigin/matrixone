@@ -37,6 +37,7 @@ type CheckpointReader struct {
 	dir     string
 	entries []*checkpoint.CheckpointEntry
 	mp      *mpool.MPool
+	closeFS bool
 }
 
 // Option configures CheckpointReader
@@ -49,6 +50,13 @@ func WithMPool(mp *mpool.MPool) Option {
 	}
 }
 
+// WithCloseFS closes the file service when the reader is closed.
+func WithCloseFS() Option {
+	return func(r *CheckpointReader) {
+		r.closeFS = true
+	}
+}
+
 // Open opens checkpoint data from a directory
 func Open(ctx context.Context, dir string, opts ...Option) (*CheckpointReader, error) {
 	fs, err := fileservice.NewLocalFS(ctx, "local", dir, fileservice.DisabledCacheConfig, nil)
@@ -56,6 +64,11 @@ func Open(ctx context.Context, dir string, opts ...Option) (*CheckpointReader, e
 		return nil, moerr.NewInternalErrorf(ctx, "create file service: %v", err)
 	}
 
+	return OpenWithFS(ctx, fs, dir, append(opts, WithCloseFS())...)
+}
+
+// OpenWithFS opens checkpoint data from an existing file service.
+func OpenWithFS(ctx context.Context, fs fileservice.FileService, dir string, opts ...Option) (*CheckpointReader, error) {
 	r := &CheckpointReader{
 		ctx: ctx,
 		fs:  fs,
@@ -72,6 +85,11 @@ func Open(ctx context.Context, dir string, opts ...Option) (*CheckpointReader, e
 		return nil, err
 	}
 	return r, nil
+}
+
+// FS returns the file service used by this reader.
+func (r *CheckpointReader) FS() fileservice.FileService {
+	return r.fs
 }
 
 func (r *CheckpointReader) loadEntries() error {
@@ -375,6 +393,9 @@ func (r *CheckpointReader) ComposeAt(ts types.TS) (*ComposedView, error) {
 // Close releases resources
 func (r *CheckpointReader) Close() error {
 	r.entries = nil
+	if r.closeFS && r.fs != nil {
+		r.fs.Close(r.ctx)
+	}
 	return nil
 }
 

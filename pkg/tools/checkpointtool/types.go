@@ -80,3 +80,12 @@ type ComposedView struct {
 	Incrementals []*EntryInfo
 	Tables       map[uint64]*TableInfo
 }
+
+// LogicalTableView contains a tombstone-applied table view for a checkpoint table.
+type LogicalTableView struct {
+	Headers      []string
+	Rows         [][]string
+	PhysicalRows int
+	DeletedRows  int
+	VisibleRows  int
+}

@@ -221,6 +221,16 @@ func TestTableDetailHandler(t *testing.T) {
 		assert.True(t, handler.MatchRow(row, "123"))
 		assert.False(t, handler.MatchRow(row, "notfound"))
 	})
+
+	t.Run("custom_key_logical_view", func(t *testing.T) {
+		handler := &tableDetailHandler{}
+		cmd := handler.OnCustomKey("L")
+		if assert.NotNil(t, cmd) {
+			msg := cmd()
+			_, ok := msg.(openLogicalTableMsg)
+			assert.True(t, ok)
+		}
+	})
 }
 
 // TestTSFormatting tests timestamp formatting

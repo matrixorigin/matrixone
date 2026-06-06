@@ -74,11 +74,12 @@ func Run(reader *checkpointtool.CheckpointReader) error {
 					},
 					ExpandFunc: expandObjectStats,
 				},
-				ObjectNameCol:  4,                    // object_name column after expansion
-				BaseDir:        m.state.reader.Dir(), // Base directory for nested objects
+				ObjectNameCol:  4, // object_name column after expansion
 				CustomOverview: ckpDataOverview,
 			}
-			if err := objectinteractive.RunUnified(context.Background(), um.GetObjectToOpen(), opts); err != nil {
+			if err := objectinteractive.RunUnifiedWithFS(
+				context.Background(), m.state.reader.FS(), um.GetObjectToOpen(), opts,
+			); err != nil {
 				return err
 			}
 			// Clear the object to open flag and continue with current state

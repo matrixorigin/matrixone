@@ -81,8 +81,12 @@ func Open(ctx context.Context, path string) (*ObjectReader, error) {
 		return nil, moerr.NewInternalErrorf(ctx, "create file service: %v", err)
 	}
 
-	// 3. Create reader
-	objReader, err := objectio.NewObjectReaderWithStr(filename, fs,
+	return OpenWithFS(ctx, fs, filename, path)
+}
+
+// OpenWithFS opens an object file from an existing file service.
+func OpenWithFS(ctx context.Context, fs fileservice.FileService, fileName string, displayPath string) (*ObjectReader, error) {
+	objReader, err := objectio.NewObjectReaderWithStr(fileName, fs,
 		objectio.WithMetaCachePolicyOption(fileservice.SkipMemoryCache|fileservice.SkipFullFilePreloads))
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "create object reader: %v", err)
@@ -99,7 +103,7 @@ func Open(ctx context.Context, path string) (*ObjectReader, error) {
 	dataMeta := meta.MustDataMeta()
 
 	// 5. Build info
-	info := buildObjectInfo(path, dataMeta)
+	info := buildObjectInfo(displayPath, dataMeta)
 	cols := buildColInfo(dataMeta)
 
 	return &ObjectReader{
