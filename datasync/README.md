@@ -27,7 +27,7 @@ rtk go run ./cmd/datasync -config configs/example.yaml -mode sync -cleanup-expor
 
 Use `-run-id <id>` to choose a stable run directory under `output_dir`.
 
-The config uses top-level `databases` entries. Each entry has an independent `source` database endpoint and `target` database endpoint, so different source databases can import into different target tenants or instances.
+The config uses optional top-level `source` and `target` entries for shared connection defaults: `name`, `host`, `port`, `user`, and `password`. Each `databases` entry has its own `source.database` and `target.database`, and may override any inherited connection field. If a database entry cannot be completed from its own fields plus the top-level defaults, that entry is ignored.
 
 Table filtering is evaluated per database:
 

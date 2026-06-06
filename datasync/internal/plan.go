@@ -1,6 +1,4 @@
-package plan
-
-import "github.com/matrixorigin/datasync/internal/config"
+package datasync
 
 type DatabaseKey struct {
 	SourceName string
@@ -24,8 +22,8 @@ type Task struct {
 	TargetDatabase string
 }
 
-func (t Task) TargetEndpoint() config.Endpoint {
-	return config.Endpoint{
+func (t Task) TargetEndpoint() Endpoint {
+	return Endpoint{
 		Name:     t.TargetName,
 		Host:     t.TargetHost,
 		Port:     t.TargetPort,
@@ -34,7 +32,7 @@ func (t Task) TargetEndpoint() config.Endpoint {
 	}
 }
 
-func BuildTasks(cfg *config.Config, tables map[DatabaseKey][]string) []Task {
+func BuildTasks(cfg *Config, tables map[DatabaseKey][]string) []Task {
 	var tasks []Task
 	for _, database := range cfg.Databases {
 		excluded := make(map[string]struct{}, len(database.ExcludeTables))

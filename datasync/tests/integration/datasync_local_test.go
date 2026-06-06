@@ -63,51 +63,41 @@ parallelism: 2
 retry:
   max_attempts: 2
   backoff: 1ms
+source:
+  host: 127.0.0.1
+  port: 6001
+  password: "111"
+target:
+  host: 127.0.0.1
+  port: 6001
+  password: "111"
 databases:
   - source:
       name: tenant_a_db1
-      host: 127.0.0.1
-      port: 6001
       user: dsync_src_a:admin
-      password: "111"
       database: dsync_a_db1
     target:
       name: target_a
-      host: 127.0.0.1
-      port: 6001
       user: dsync_target_a:admin
-      password: "111"
       database: dsync_target_a1
     include_tables: [t_keep, t_skip]
     exclude_tables: [t_skip]
   - source:
       name: tenant_a_db2
-      host: 127.0.0.1
-      port: 6001
       user: dsync_src_a:admin
-      password: "111"
       database: dsync_a_db2
     target:
       name: target_a
-      host: 127.0.0.1
-      port: 6001
       user: dsync_target_a:admin
-      password: "111"
       database: dsync_target_a2
     include_tables: [orders]
   - source:
       name: tenant_b_db1
-      host: 127.0.0.1
-      port: 6001
       user: dsync_src_b:admin
-      password: "111"
       database: dsync_b_db1
     target:
       name: target_b
-      host: 127.0.0.1
-      port: 6001
       user: dsync_target_b:admin
-      password: "111"
       database: dsync_target_b1
     exclude_tables: [audit]
 `)

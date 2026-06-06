@@ -47,7 +47,9 @@ func TestExitCodePrintsDetailedHelp(t *testing.T) {
 	for _, want := range []string{
 		"Usage: datasync -config <config.yaml> [options]",
 		"Configuration:",
-		"databases entries",
+		"top-level source and target",
+		"connection defaults",
+		"Incomplete database entries are ignored",
 		"include_tables",
 		"exclude_tables",
 		"Modes:",

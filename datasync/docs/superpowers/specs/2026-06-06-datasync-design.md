@@ -50,20 +50,23 @@ retry:
   max_attempts: 3
   backoff: 2s
 
+source:
+  host: 127.0.0.1
+  port: 6001
+  password: "111"
+target:
+  host: 127.0.0.1
+  port: 6001
+  password: "111"
+
 databases:
   - source:
       name: tenant_a_db1
-      host: 127.0.0.1
-      port: 6001
       user: dsync_src_a:admin
-      password: "111"
       database: dsync_a_db1
     target:
       name: target_a
-      host: 127.0.0.1
-      port: 6001
       user: dsync_target_a:admin
-      password: "111"
       database: dsync_target_a1
     include_tables:
       - t_keep
@@ -74,7 +77,9 @@ databases:
 
 Rules:
 
-- Each `databases` entry has independent source and target connection config, including the source database name and target database name.
+- Top-level `source` and `target` entries are optional connection defaults for `name`, `host`, `port`, `user`, and `password`.
+- Each `databases` entry supplies `source.database` and `target.database`, and may override any inherited source or target connection field.
+- If a `databases` entry cannot be completed from its own fields plus top-level defaults, that entry is ignored.
 - If `include_tables` is configured, only discovered ordinary tables listed there are candidates.
 - If `include_tables` is omitted or empty, all discovered ordinary tables are candidates.
 - `exclude_tables` removes matching tables from the candidate set.

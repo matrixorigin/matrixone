@@ -9,7 +9,7 @@ The tool must:
 - Export data from multiple MatrixOne tenants.
 - Support multiple databases per source tenant.
 - Export each table separately using `mo-dump -csv`.
-- Read a config file that selects database sync entries with independent source/target endpoints and include/exclude table filters.
+- Read a config file that selects database sync entries with optional global source/target endpoint defaults and include/exclude table filters.
 - Produce per-table results including row counts, timing, attempts, status, and errors.
 - Retry failed export/import operations.
 - Keep export/import idempotent.
@@ -25,7 +25,7 @@ The tool must:
 - Call the existing `mo-dump` binary as an external process.
 - Keep `mo-dump` unchanged.
 - Use YAML config.
-- Use top-level `databases` entries so each source database has an independent target endpoint and target database.
+- Use optional top-level `source` and `target` defaults while allowing each `databases` entry to override connection fields and choose independent source/target databases.
 - Use one table task directory per exported table.
 - Let `datasync` create and select target databases because table-level `mo-dump -csv -tbl` SQL does not include `CREATE DATABASE` or `USE`.
 - Rely on generated table SQL containing `DROP TABLE IF EXISTS` for overwrite import idempotency.
@@ -55,39 +55,40 @@ Completed in the current workspace:
   - `-cleanup-export-after-import` deletes each successfully imported table export directory in `sync` mode only.
   - The default keeps exported SQL/CSV files.
 - Config loading and validation:
-  - `internal/config/config.go`
-  - `internal/config/config_test.go`
+  - `internal/config.go`
+  - `internal/config_test.go`
   - `configs/example.yaml`
-  - Each database entry has independent `source` and `target` connection config.
+  - Top-level `source` and `target` define optional defaults for `name`, `host`, `port`, `user`, and `password`.
+  - Each database entry supplies `source.database` and `target.database`, may override inherited connection fields, and is ignored if it remains incomplete.
   - `include_tables` is applied as an allow-list before `exclude_tables` removes tables.
 - Duplicate YAML keys are rejected for custom top-level and `retry` mappings.
 - MatrixOne database client:
-  - `internal/db/db.go`
-  - `internal/db/db_test.go`
+  - `internal/db.go`
+  - `internal/db_test.go`
 - Table task planner:
-  - `internal/plan/plan.go`
-  - `internal/plan/plan_test.go`
+  - `internal/plan.go`
+  - `internal/plan_test.go`
 - Retry helper:
-  - `internal/retry/retry.go`
-  - `internal/retry/retry_test.go`
+  - `internal/retry.go`
+  - `internal/retry_test.go`
 - Report writer:
-  - `internal/report/report.go`
-  - `internal/report/report_test.go`
+  - `internal/report.go`
+  - `internal/report_test.go`
   - Per-table reports include exported CSV data file size in bytes.
 - Runner:
-  - `internal/run/runner.go`
-  - `internal/run/runner_test.go`
+  - `internal/runner.go`
+  - `internal/runner_test.go`
   - Import retries include target row count checks, so mismatches are retried before a table is marked failed.
   - Successful `sync` imports can optionally clean their table export directory after CSV size/report metrics are captured.
 - App orchestration:
-  - `internal/app/app.go`
-  - `internal/app/app_test.go`
+  - `internal/app.go`
+  - `internal/app_test.go`
 - Opt-in local MatrixOne integration test:
   - `tests/integration/datasync_local_test.go`
 
 ## Current Verification
 
-Passing on local `main`:
+Passing on `feat/datasync`:
 
 ```bash
 rtk go test ./...
@@ -97,7 +98,7 @@ rtk proxy env DATASYNC_INTEGRATION=1 go test ./tests/integration -v
 rtk go run ./cmd/datasync -version
 ```
 
-Current test count reported by `rtk go test ./...`: 97 tests across 9 packages. The integration test is skipped unless `DATASYNC_INTEGRATION=1` is set.
+Current test count reported by `rtk go test ./...`: 87 tests across 3 packages. Current statement coverage is 85.7%. The integration test is skipped unless `DATASYNC_INTEGRATION=1` is set.
 
 ## Not Yet Implemented
 

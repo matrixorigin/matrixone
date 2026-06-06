@@ -8,9 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/matrixorigin/datasync/internal/app"
-	"github.com/matrixorigin/datasync/internal/config"
-	"github.com/matrixorigin/datasync/internal/run"
+	datasync "github.com/matrixorigin/datasync/internal"
 )
 
 var version = "dev"
@@ -34,10 +32,12 @@ datasync exports selected MatrixOne source tenant tables with mo-dump -csv
 and imports them into configured target databases with mysql source.
 
 Configuration:
-  The config file contains top-level databases entries. Each entry has its own
-  source endpoint/database and target endpoint/database. Set include_tables to
-  allow only specific discovered tables, then use exclude_tables to remove
-  tables from that candidate set.
+  Optional top-level source and target entries define connection defaults:
+  name, host, port, user, and password. Each databases entry supplies
+  source.database and target.database, and can override any inherited field.
+  Incomplete database entries are ignored after default inheritance. Set
+  include_tables to allow only specific discovered tables, then use
+  exclude_tables to remove tables from that candidate set.
 
 Modes:
   -mode sync
@@ -84,25 +84,25 @@ Notes:
 		fmt.Fprintln(stderr, "missing required -config")
 		return 2
 	}
-	mode, err := run.ParseMode(*modeText)
+	mode, err := datasync.ParseMode(*modeText)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := datasync.Load(*configPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "load config: %v\n", err)
 		return 1
 	}
 	if *runID == "" {
-		*runID = app.NewRunID(time.Now())
+		*runID = datasync.NewRunID(time.Now())
 	}
 
-	result, err := app.App{
+	result, err := datasync.App{
 		Config: cfg,
 		Mode:   mode,
-		Options: run.Options{
+		Options: datasync.Options{
 			CleanupExportAfterImport: *cleanupExportAfterImport,
 		},
 	}.Run(context.Background(), *runID)

@@ -1,4 +1,4 @@
-package config
+package datasync
 
 import (
 	"os"
@@ -119,6 +119,114 @@ databases:
 	}
 }
 
+func TestLoadUsesGlobalSourceAndTargetDefaults(t *testing.T) {
+	cfg := loadConfig(t, `
+mo_dump_path: /tmp/mo-dump
+mysql_path: /tmp/mysql
+source:
+  name: global_source
+  host: 127.0.0.1
+  port: 6001
+  user: global_src:admin
+  password: src-pass
+target:
+  name: global_target
+  host: 127.0.0.2
+  port: 6002
+  user: global_target:admin
+  password: target-pass
+databases:
+  - source:
+      database: src_db1
+    target:
+      database: dst_db1
+  - source:
+      name: local_source
+      host: 127.0.0.3
+      port: 6003
+      user: local_src:admin
+      password: local-src-pass
+      database: src_db2
+    target:
+      name: local_target
+      host: 127.0.0.4
+      port: 6004
+      user: local_target:admin
+      password: local-target-pass
+      database: dst_db2
+`)
+
+	first := cfg.Databases[0]
+	if first.Source.Name != "global_source" ||
+		first.Source.Host != "127.0.0.1" ||
+		first.Source.Port != 6001 ||
+		first.Source.User != "global_src:admin" ||
+		first.Source.Password != "src-pass" ||
+		first.Source.Database != "src_db1" ||
+		first.Target.Name != "global_target" ||
+		first.Target.Host != "127.0.0.2" ||
+		first.Target.Port != 6002 ||
+		first.Target.User != "global_target:admin" ||
+		first.Target.Password != "target-pass" ||
+		first.Target.Database != "dst_db1" {
+		t.Fatalf("first database = %+v", first)
+	}
+
+	second := cfg.Databases[1]
+	if second.Source.Name != "local_source" ||
+		second.Source.Host != "127.0.0.3" ||
+		second.Source.Port != 6003 ||
+		second.Source.User != "local_src:admin" ||
+		second.Source.Password != "local-src-pass" ||
+		second.Source.Database != "src_db2" ||
+		second.Target.Name != "local_target" ||
+		second.Target.Host != "127.0.0.4" ||
+		second.Target.Port != 6004 ||
+		second.Target.User != "local_target:admin" ||
+		second.Target.Password != "local-target-pass" ||
+		second.Target.Database != "dst_db2" {
+		t.Fatalf("second database = %+v", second)
+	}
+}
+
+func TestLoadSkipsIncompleteDatabaseWithoutGlobalEndpoint(t *testing.T) {
+	cfg := loadConfig(t, `
+mo_dump_path: /tmp/mo-dump
+mysql_path: /tmp/mysql
+databases:
+  - source:
+      database: missing_connection_info
+    target:
+      name: target
+      host: 127.0.0.1
+      port: 6001
+      user: target:admin
+      password: "111"
+      database: dst_missing
+  - source:
+      name: tenant_a
+      host: 127.0.0.1
+      port: 6001
+      user: tenant:admin
+      password: "111"
+      database: src_db
+    target:
+      name: target
+      host: 127.0.0.1
+      port: 6001
+      user: target:admin
+      password: "111"
+      database: dst_db
+`)
+
+	if len(cfg.Databases) != 1 {
+		t.Fatalf("len(Databases) = %d, want 1", len(cfg.Databases))
+	}
+	if cfg.Databases[0].Source.Database != "src_db" {
+		t.Fatalf("remaining database = %+v", cfg.Databases[0])
+	}
+}
+
 func TestLoadRejectsMissingEnv(t *testing.T) {
 	path := writeConfig(t, `
 mo_dump_path: /tmp/mo-dump
@@ -187,41 +295,41 @@ databases:
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
 `, wantErr: "databases"},
-		{name: "missing source endpoint field", yaml: `
+		{name: "missing source endpoint field leaves no complete database", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
 databases:
   - source: {name: tenant_a, port: 6001, user: tenant:admin, password: "111", database: src_db}
     target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
-`, wantErr: "databases[0].source.host"},
-		{name: "missing target endpoint field", yaml: `
+`, wantErr: "databases must contain at least one complete database"},
+		{name: "missing target endpoint field leaves no complete database", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
 databases:
   - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
     target: {name: target, host: 127.0.0.1, port: 6001, password: "111", database: dst_db}
-`, wantErr: "databases[0].target.user"},
-		{name: "missing source database", yaml: `
+`, wantErr: "databases must contain at least one complete database"},
+		{name: "missing source database leaves no complete database", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
 databases:
   - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111"}
     target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
-`, wantErr: "databases[0].source.database"},
-		{name: "missing target database", yaml: `
+`, wantErr: "databases must contain at least one complete database"},
+		{name: "missing target database leaves no complete database", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
 databases:
   - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
     target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111"}
-`, wantErr: "databases[0].target.database"},
-		{name: "bad source port", yaml: `
+`, wantErr: "databases must contain at least one complete database"},
+		{name: "zero source port leaves no complete database", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
 databases:
   - source: {name: tenant_a, host: 127.0.0.1, port: 0, user: tenant:admin, password: "111", database: src_db}
     target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
-`, wantErr: "databases[0].source.port"},
+`, wantErr: "databases must contain at least one complete database"},
 		{name: "bad target port", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql

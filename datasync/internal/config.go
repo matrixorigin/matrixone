@@ -1,4 +1,4 @@
-package config
+package datasync
 
 import (
 	"fmt"
@@ -26,6 +26,8 @@ type Config struct {
 	OutputDir   string         `yaml:"output_dir"`
 	Parallelism int            `yaml:"parallelism"`
 	Retry       RetryConfig    `yaml:"retry"`
+	Source      Endpoint       `yaml:"source"`
+	Target      Endpoint       `yaml:"target"`
 	Databases   []DatabaseTask `yaml:"databases"`
 }
 
@@ -68,6 +70,8 @@ type rawConfig struct {
 	ParallelSet  bool
 	Retry        rawRetryConfig
 	RetrySet     bool
+	Source       Endpoint
+	Target       Endpoint
 	Databases    []DatabaseTask
 }
 
@@ -117,6 +121,14 @@ func (r *rawConfig) UnmarshalYAML(value *yaml.Node) error {
 				return fmt.Errorf("retry must be a mapping")
 			}
 			if err := val.Decode(&r.Retry); err != nil {
+				return err
+			}
+		case "source":
+			if err := decodeNodeStrict(val, &r.Source); err != nil {
+				return err
+			}
+		case "target":
+			if err := decodeNodeStrict(val, &r.Target); err != nil {
 				return err
 			}
 		case "databases":
@@ -216,6 +228,8 @@ func materializeConfig(raw rawConfig) Config {
 		MoDumpPath: raw.MoDumpPath,
 		MySQLPath:  raw.MySQLPath,
 		OutputDir:  raw.OutputDir,
+		Source:     raw.Source,
+		Target:     raw.Target,
 		Databases:  raw.Databases,
 	}
 	if !raw.ParallelSet {
@@ -283,6 +297,14 @@ func expandConfigEnvRefs(cfg *Config) error {
 		&cfg.MySQLPath,
 		&cfg.OutputDir,
 		&cfg.Retry.BackoffText,
+		&cfg.Source.Name,
+		&cfg.Source.Host,
+		&cfg.Source.User,
+		&cfg.Source.Password,
+		&cfg.Target.Name,
+		&cfg.Target.Host,
+		&cfg.Target.User,
+		&cfg.Target.Password,
 	}
 
 	for databaseIndex := range cfg.Databases {
@@ -334,8 +356,15 @@ func validate(cfg *Config) error {
 	if cfg.Retry.MaxAttempts < 1 {
 		return fmt.Errorf("retry.max_attempts must be at least 1")
 	}
+	if err := validateOptionalEndpoint("source", cfg.Source); err != nil {
+		return err
+	}
+	if err := validateOptionalEndpoint("target", cfg.Target); err != nil {
+		return err
+	}
+	cfg.Databases = materializeDatabaseEndpoints(cfg.Source, cfg.Target, cfg.Databases)
 	if len(cfg.Databases) == 0 {
-		return fmt.Errorf("databases must contain at least one database")
+		return fmt.Errorf("databases must contain at least one complete database")
 	}
 	for databaseIndex, database := range cfg.Databases {
 		prefix := fmt.Sprintf("databases[%d]", databaseIndex)
@@ -355,6 +384,53 @@ func validate(cfg *Config) error {
 	return nil
 }
 
+func materializeDatabaseEndpoints(globalSource, globalTarget Endpoint, databases []DatabaseTask) []DatabaseTask {
+	var materialized []DatabaseTask
+	for _, database := range databases {
+		database.Source = mergeDatabaseEndpoint(globalSource, database.Source)
+		database.Target = mergeDatabaseEndpoint(globalTarget, database.Target)
+		if !databaseHasCompleteEndpoints(database) {
+			continue
+		}
+		materialized = append(materialized, database)
+	}
+	return materialized
+}
+
+func mergeDatabaseEndpoint(defaults Endpoint, endpoint DatabaseEndpoint) DatabaseEndpoint {
+	if endpoint.Name == "" {
+		endpoint.Name = defaults.Name
+	}
+	if endpoint.Host == "" {
+		endpoint.Host = defaults.Host
+	}
+	if endpoint.Port == 0 {
+		endpoint.Port = defaults.Port
+	}
+	if endpoint.User == "" {
+		endpoint.User = defaults.User
+	}
+	if endpoint.Password == "" {
+		endpoint.Password = defaults.Password
+	}
+	return endpoint
+}
+
+func databaseHasCompleteEndpoints(database DatabaseTask) bool {
+	return database.Source.Name != "" &&
+		database.Source.Host != "" &&
+		database.Source.Port != 0 &&
+		database.Source.User != "" &&
+		database.Source.Password != "" &&
+		database.Source.Database != "" &&
+		database.Target.Name != "" &&
+		database.Target.Host != "" &&
+		database.Target.Port != 0 &&
+		database.Target.User != "" &&
+		database.Target.Password != "" &&
+		database.Target.Database != ""
+}
+
 func validateDatabaseEndpoint(prefix string, endpoint DatabaseEndpoint) error {
 	if err := validateEndpoint(prefix, Endpoint{
 		Name:     endpoint.Name,
@@ -367,6 +443,13 @@ func validateDatabaseEndpoint(prefix string, endpoint DatabaseEndpoint) error {
 	}
 	if endpoint.Database == "" {
 		return fmt.Errorf("%s.database is required", prefix)
+	}
+	return nil
+}
+
+func validateOptionalEndpoint(prefix string, endpoint Endpoint) error {
+	if endpoint.Port > maxPort {
+		return fmt.Errorf("%s.port must be at most %d", prefix, maxPort)
 	}
 	return nil
 }

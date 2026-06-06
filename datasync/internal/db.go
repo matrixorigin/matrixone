@@ -1,4 +1,4 @@
-package db
+package datasync
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"github.com/go-sql-driver/mysql"
 )
 
-type Endpoint struct {
+type DBEndpoint struct {
 	Host     string
 	Port     int
 	User     string
@@ -26,7 +26,7 @@ type Client struct {
 	db *sql.DB
 }
 
-func DSN(ep Endpoint, database string) string {
+func DSN(ep DBEndpoint, database string) string {
 	cfg := mysql.NewConfig()
 	cfg.User = strings.ReplaceAll(ep.User, ":", "#")
 	cfg.Passwd = ep.Password
@@ -39,7 +39,7 @@ func DSN(ep Endpoint, database string) string {
 	return cfg.FormatDSN()
 }
 
-func Open(ctx context.Context, ep Endpoint, database string) (*Client, error) {
+func Open(ctx context.Context, ep DBEndpoint, database string) (*Client, error) {
 	conn, err := sql.Open("mysql", DSN(ep, database))
 	if err != nil {
 		return nil, err

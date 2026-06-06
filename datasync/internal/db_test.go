@@ -1,4 +1,4 @@
-package db
+package datasync
 
 import (
 	"context"
@@ -16,7 +16,7 @@ func TestQuoteIdent(t *testing.T) {
 }
 
 func TestDSN(t *testing.T) {
-	ep := Endpoint{Host: "127.0.0.1", Port: 6001, User: "acc:admin", Password: "111"}
+	ep := DBEndpoint{Host: "127.0.0.1", Port: 6001, User: "acc:admin", Password: "111"}
 	got := DSN(ep, "db1")
 	want := "acc#admin:111@tcp(127.0.0.1:6001)/db1?allowAllFiles=true&multiStatements=true&parseTime=true"
 	if got != want {
@@ -25,7 +25,7 @@ func TestDSN(t *testing.T) {
 }
 
 func TestDSNEmptyDatabase(t *testing.T) {
-	ep := Endpoint{Host: "127.0.0.1", Port: 6001, User: "acc:admin", Password: "111"}
+	ep := DBEndpoint{Host: "127.0.0.1", Port: 6001, User: "acc:admin", Password: "111"}
 	got := DSN(ep, "")
 	want := "acc#admin:111@tcp(127.0.0.1:6001)/?allowAllFiles=true&multiStatements=true&parseTime=true"
 	if got != want {
@@ -34,7 +34,7 @@ func TestDSNEmptyDatabase(t *testing.T) {
 }
 
 func TestDSNPasswordSpecialCharacters(t *testing.T) {
-	ep := Endpoint{Host: "mo.local", Port: 6001, User: "acc:admin", Password: "p:a/s@s?x=y&z"}
+	ep := DBEndpoint{Host: "mo.local", Port: 6001, User: "acc:admin", Password: "p:a/s@s?x=y&z"}
 	got := DSN(ep, "db1")
 	want := "acc#admin:p:a/s@s?x=y&z@tcp(mo.local:6001)/db1?allowAllFiles=true&multiStatements=true&parseTime=true"
 	if got != want {

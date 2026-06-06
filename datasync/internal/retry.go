@@ -1,16 +1,16 @@
-package retry
+package datasync
 
 import (
 	"context"
 	"time"
 )
 
-type Config struct {
+type RetryPolicy struct {
 	MaxAttempts int
 	Backoff     time.Duration
 }
 
-func Do(ctx context.Context, cfg Config, fn func(context.Context, int) error) error {
+func Do(ctx context.Context, cfg RetryPolicy, fn func(context.Context, int) error) error {
 	if cfg.MaxAttempts < 1 {
 		cfg.MaxAttempts = 1
 	}

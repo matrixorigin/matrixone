@@ -1,4 +1,4 @@
-package report
+package datasync
 
 import (
 	"encoding/csv"

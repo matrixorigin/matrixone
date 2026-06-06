@@ -1,4 +1,4 @@
-package retry
+package datasync
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 
 func TestDoRetriesUntilSuccess(t *testing.T) {
 	var gotAttempts []int
-	err := Do(context.Background(), Config{MaxAttempts: 3, Backoff: time.Nanosecond}, func(_ context.Context, attempt int) error {
+	err := Do(context.Background(), RetryPolicy{MaxAttempts: 3, Backoff: time.Nanosecond}, func(_ context.Context, attempt int) error {
 		gotAttempts = append(gotAttempts, attempt)
 		if attempt < 2 {
 			return errors.New("temporary")
@@ -36,7 +36,7 @@ func TestDoReturnsLastError(t *testing.T) {
 	errLast := errors.New("last")
 	errs := []error{errFirst, errLast}
 
-	err := Do(context.Background(), Config{MaxAttempts: 2, Backoff: time.Nanosecond}, func(_ context.Context, attempt int) error {
+	err := Do(context.Background(), RetryPolicy{MaxAttempts: 2, Backoff: time.Nanosecond}, func(_ context.Context, attempt int) error {
 		return errs[attempt-1]
 	})
 	if !errors.Is(err, errLast) {
@@ -48,7 +48,7 @@ func TestDoTreatsMaxAttemptsLessThanOneAsOne(t *testing.T) {
 	attempts := 0
 	errBoom := errors.New("boom")
 
-	err := Do(context.Background(), Config{MaxAttempts: 0, Backoff: time.Nanosecond}, func(context.Context, int) error {
+	err := Do(context.Background(), RetryPolicy{MaxAttempts: 0, Backoff: time.Nanosecond}, func(context.Context, int) error {
 		attempts++
 		return errBoom
 	})
@@ -65,7 +65,7 @@ func TestDoReturnsContextErrorWhenCanceledDuringBackoff(t *testing.T) {
 	defer cancel()
 
 	attempts := 0
-	err := Do(ctx, Config{MaxAttempts: 2, Backoff: time.Hour}, func(context.Context, int) error {
+	err := Do(ctx, RetryPolicy{MaxAttempts: 2, Backoff: time.Hour}, func(context.Context, int) error {
 		attempts++
 		cancel()
 		return errors.New("temporary")

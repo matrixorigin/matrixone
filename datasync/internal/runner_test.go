@@ -1,4 +1,4 @@
-package run
+package datasync
 
 import (
 	"context"
@@ -9,15 +9,11 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/matrixorigin/datasync/internal/config"
-	"github.com/matrixorigin/datasync/internal/plan"
-	"github.com/matrixorigin/datasync/internal/report"
 )
 
 func TestTaskPathsUseStableTableDirectory(t *testing.T) {
 	dir := t.TempDir()
-	task := plan.Task{
+	task := Task{
 		SourceName:     "tenant_a",
 		SourceHost:     "127.0.0.1",
 		SourcePort:     6001,
@@ -32,7 +28,7 @@ func TestTaskPathsUseStableTableDirectory(t *testing.T) {
 		TargetPassword: "111",
 		TargetDatabase: "dst_db",
 	}
-	r := Runner{Config: &config.Config{OutputDir: dir}}
+	r := Runner{Config: &Config{OutputDir: dir}}
 
 	tableDir, sqlFile, csvFile := r.taskPaths("run1", task)
 
@@ -60,7 +56,7 @@ func TestRunTaskRetriesExportAndImports(t *testing.T) {
 
 	row := r.runTask(context.Background(), "run1", testTask())
 
-	if row.ExportStatus != report.StatusSuccess || row.ImportStatus != report.StatusSuccess {
+	if row.ExportStatus != StatusSuccess || row.ImportStatus != StatusSuccess {
 		t.Fatalf("row = %+v", row)
 	}
 	if row.ExportAttempts != 2 || row.ImportAttempts != 1 {
@@ -90,7 +86,7 @@ func TestRunTaskExportModeSkipsImport(t *testing.T) {
 
 	row := r.runTask(context.Background(), "run1", testTask())
 
-	if row.ExportStatus != report.StatusSuccess || row.ImportStatus != report.StatusSkipped {
+	if row.ExportStatus != StatusSuccess || row.ImportStatus != StatusSkipped {
 		t.Fatalf("row = %+v", row)
 	}
 	if exec.mysqlCalls != 0 || db.ensureTargetCalls != 0 {
@@ -124,7 +120,7 @@ func TestRunTaskImportModeSkipsExportAndImportsExistingFiles(t *testing.T) {
 
 	row := r.runTask(context.Background(), "run1", task)
 
-	if row.ExportStatus != report.StatusSkipped || row.ImportStatus != report.StatusSuccess {
+	if row.ExportStatus != StatusSkipped || row.ImportStatus != StatusSuccess {
 		t.Fatalf("row = %+v", row)
 	}
 	if row.SourceRows != 2 {
@@ -160,7 +156,7 @@ func TestRunImportModeCountsSkippedExportAsSuccess(t *testing.T) {
 		DB:       &fakeDB{targetRows: 2},
 	}
 
-	out, err := r.Run(context.Background(), "run1", []plan.Task{task})
+	out, err := r.Run(context.Background(), "run1", []Task{task})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -182,7 +178,7 @@ func TestRunSummaryCountsFailures(t *testing.T) {
 		DB:       &fakeDB{sourceRows: 2, targetRows: 1},
 	}
 
-	out, err := r.Run(context.Background(), "run1", []plan.Task{testTask()})
+	out, err := r.Run(context.Background(), "run1", []Task{testTask()})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -208,7 +204,7 @@ func TestRunTaskRetriesImportWhenTargetRowCountMismatches(t *testing.T) {
 
 	row := r.runTask(context.Background(), "run1", testTask())
 
-	if row.ImportStatus != report.StatusSuccess {
+	if row.ImportStatus != StatusSuccess {
 		t.Fatalf("ImportStatus = %q error=%q, want success after retry", row.ImportStatus, row.Error)
 	}
 	if exec.mysqlCalls != 2 {
@@ -233,7 +229,7 @@ func TestRunTaskKeepsExportFilesByDefaultAfterSyncImportSuccess(t *testing.T) {
 
 	row := r.runTask(context.Background(), "run1", testTask())
 
-	if row.ImportStatus != report.StatusSuccess {
+	if row.ImportStatus != StatusSuccess {
 		t.Fatalf("row = %+v", row)
 	}
 	if _, err := os.Stat(filepath.Dir(row.SQLFile)); err != nil {
@@ -253,7 +249,7 @@ func TestRunTaskCleansExportFilesAfterSyncImportSuccessWhenEnabled(t *testing.T)
 
 	row := r.runTask(context.Background(), "run1", testTask())
 
-	if row.ImportStatus != report.StatusSuccess {
+	if row.ImportStatus != StatusSuccess {
 		t.Fatalf("row = %+v", row)
 	}
 	if _, err := os.Stat(filepath.Dir(row.SQLFile)); !os.IsNotExist(err) {
@@ -276,7 +272,7 @@ func TestRunTaskKeepsExportFilesAfterSyncImportFailureWhenCleanupEnabled(t *test
 
 	row := r.runTask(context.Background(), "run1", testTask())
 
-	if row.ImportStatus != report.StatusFailed {
+	if row.ImportStatus != StatusFailed {
 		t.Fatalf("row = %+v, want failed import", row)
 	}
 	if _, err := os.Stat(filepath.Dir(row.SQLFile)); err != nil {
@@ -294,7 +290,7 @@ func TestRunTaskReturnsSourceCountError(t *testing.T) {
 	}
 
 	row := r.runTask(context.Background(), "run1", testTask())
-	if row.ExportStatus != report.StatusFailed || !strings.Contains(row.Error, "count failed") {
+	if row.ExportStatus != StatusFailed || !strings.Contains(row.Error, "count failed") {
 		t.Fatalf("row = %+v, want source count failure", row)
 	}
 }
@@ -308,7 +304,7 @@ func TestRunTaskReturnsMissingSQLFileError(t *testing.T) {
 	}
 
 	row := r.runTask(context.Background(), "run1", testTask())
-	if row.ExportStatus != report.StatusFailed || !strings.Contains(row.Error, "t1.sql") {
+	if row.ExportStatus != StatusFailed || !strings.Contains(row.Error, "t1.sql") {
 		t.Fatalf("row = %+v, want missing SQL failure", row)
 	}
 }
@@ -322,7 +318,7 @@ func TestRunTaskReturnsMissingCSVFileError(t *testing.T) {
 	}
 
 	row := r.runTask(context.Background(), "run1", testTask())
-	if row.ExportStatus != report.StatusFailed || !strings.Contains(row.Error, "src_db_t1.csv") {
+	if row.ExportStatus != StatusFailed || !strings.Contains(row.Error, "src_db_t1.csv") {
 		t.Fatalf("row = %+v, want missing CSV failure", row)
 	}
 }
@@ -337,7 +333,7 @@ func TestRunTaskReturnsEnsureTargetError(t *testing.T) {
 	}
 
 	row := r.runTask(context.Background(), "run1", testTask())
-	if row.ImportStatus != report.StatusFailed || !strings.Contains(row.Error, "ensure failed") {
+	if row.ImportStatus != StatusFailed || !strings.Contains(row.Error, "ensure failed") {
 		t.Fatalf("row = %+v, want ensure target failure", row)
 	}
 }
@@ -352,7 +348,7 @@ func TestRunTaskReturnsMySQLSourceError(t *testing.T) {
 	}
 
 	row := r.runTask(context.Background(), "run1", testTask())
-	if row.ImportStatus != report.StatusFailed || !strings.Contains(row.Error, "mysql failed") {
+	if row.ImportStatus != StatusFailed || !strings.Contains(row.Error, "mysql failed") {
 		t.Fatalf("row = %+v, want mysql failure", row)
 	}
 }
@@ -367,7 +363,7 @@ func TestRunTaskReturnsTargetCountError(t *testing.T) {
 	}
 
 	row := r.runTask(context.Background(), "run1", testTask())
-	if row.ImportStatus != report.StatusFailed || !strings.Contains(row.Error, "target count failed") {
+	if row.ImportStatus != StatusFailed || !strings.Contains(row.Error, "target count failed") {
 		t.Fatalf("row = %+v, want target count failure", row)
 	}
 }
@@ -542,19 +538,19 @@ type fakeDB struct {
 	targetCalls       int
 }
 
-func (f *fakeDB) CountSourceRows(context.Context, plan.Task) (int64, error) {
+func (f *fakeDB) CountSourceRows(context.Context, Task) (int64, error) {
 	if f.sourceErr != nil {
 		return 0, f.sourceErr
 	}
 	return f.sourceRows, nil
 }
 
-func (f *fakeDB) EnsureTargetDatabase(context.Context, plan.Task) error {
+func (f *fakeDB) EnsureTargetDatabase(context.Context, Task) error {
 	f.ensureTargetCalls++
 	return f.ensureTargetErr
 }
 
-func (f *fakeDB) CountTargetRows(context.Context, plan.Task) (int64, error) {
+func (f *fakeDB) CountTargetRows(context.Context, Task) (int64, error) {
 	f.targetCalls++
 	if f.targetErr != nil {
 		return 0, f.targetErr
@@ -569,21 +565,21 @@ func (f *fakeDB) CountTargetRows(context.Context, plan.Task) (int64, error) {
 	return f.targetRows, nil
 }
 
-func testConfig(dir string) *config.Config {
-	return &config.Config{
+func testConfig(dir string) *Config {
+	return &Config{
 		MoDumpPath:  "/bin/mo-dump",
 		MySQLPath:   "/bin/mysql",
 		OutputDir:   dir,
 		Parallelism: 1,
-		Retry: config.RetryConfig{
+		Retry: RetryConfig{
 			MaxAttempts: 2,
 			Backoff:     time.Nanosecond,
 		},
 	}
 }
 
-func testTask() plan.Task {
-	return plan.Task{
+func testTask() Task {
+	return Task{
 		SourceName:     "tenant_a",
 		SourceHost:     "127.0.0.1",
 		SourcePort:     6001,

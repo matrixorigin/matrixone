@@ -1,17 +1,15 @@
-package plan
+package datasync
 
 import (
 	"reflect"
 	"testing"
-
-	"github.com/matrixorigin/datasync/internal/config"
 )
 
 func TestBuildTasksAppliesIncludeThenExclude(t *testing.T) {
-	cfg := &config.Config{
-		Databases: []config.DatabaseTask{{
-			Source:        config.DatabaseEndpoint{Name: "tenant_a", Host: "src", Port: 6001, User: "a:admin", Password: "111", Database: "src_db"},
-			Target:        config.DatabaseEndpoint{Name: "target_a", Host: "dst", Port: 6002, User: "target:admin", Password: "222", Database: "dst_db"},
+	cfg := &Config{
+		Databases: []DatabaseTask{{
+			Source:        DatabaseEndpoint{Name: "tenant_a", Host: "src", Port: 6001, User: "a:admin", Password: "111", Database: "src_db"},
+			Target:        DatabaseEndpoint{Name: "target_a", Host: "dst", Port: 6002, User: "target:admin", Password: "222", Database: "dst_db"},
 			IncludeTables: []string{"keep", "skip", "missing"},
 			ExcludeTables: []string{"skip"},
 		}},
@@ -63,10 +61,10 @@ func TestTaskTargetEndpoint(t *testing.T) {
 }
 
 func TestBuildTasksWithoutIncludeExportsDiscoveredMinusExclude(t *testing.T) {
-	cfg := &config.Config{
-		Databases: []config.DatabaseTask{{
-			Source:        config.DatabaseEndpoint{Name: "tenant_a", Host: "src", Port: 6001, User: "a:admin", Password: "111", Database: "src_db"},
-			Target:        config.DatabaseEndpoint{Name: "target_a", Host: "dst", Port: 6002, User: "target:admin", Password: "222", Database: "dst_db"},
+	cfg := &Config{
+		Databases: []DatabaseTask{{
+			Source:        DatabaseEndpoint{Name: "tenant_a", Host: "src", Port: 6001, User: "a:admin", Password: "111", Database: "src_db"},
+			Target:        DatabaseEndpoint{Name: "target_a", Host: "dst", Port: 6002, User: "target:admin", Password: "222", Database: "dst_db"},
 			ExcludeTables: []string{"skip"},
 		}},
 	}
@@ -87,15 +85,15 @@ func TestBuildTasksWithoutIncludeExportsDiscoveredMinusExclude(t *testing.T) {
 }
 
 func TestBuildTasksPreservesDatabaseAndTableOrder(t *testing.T) {
-	cfg := &config.Config{
-		Databases: []config.DatabaseTask{
+	cfg := &Config{
+		Databases: []DatabaseTask{
 			{
-				Source: config.DatabaseEndpoint{Name: "tenant_a", Host: "src-a", Port: 6001, User: "a:admin", Password: "a-pass", Database: "a_db1"},
-				Target: config.DatabaseEndpoint{Name: "target_a", Host: "dst-a", Port: 6001, User: "target-a:admin", Password: "target-pass", Database: "target_a1"},
+				Source: DatabaseEndpoint{Name: "tenant_a", Host: "src-a", Port: 6001, User: "a:admin", Password: "a-pass", Database: "a_db1"},
+				Target: DatabaseEndpoint{Name: "target_a", Host: "dst-a", Port: 6001, User: "target-a:admin", Password: "target-pass", Database: "target_a1"},
 			},
 			{
-				Source:        config.DatabaseEndpoint{Name: "tenant_b", Host: "src-b", Port: 6002, User: "b:admin", Password: "b-pass", Database: "b_db1"},
-				Target:        config.DatabaseEndpoint{Name: "target_b", Host: "dst-b", Port: 6002, User: "target-b:admin", Password: "target-pass", Database: "target_b1"},
+				Source:        DatabaseEndpoint{Name: "tenant_b", Host: "src-b", Port: 6002, User: "b:admin", Password: "b-pass", Database: "b_db1"},
+				Target:        DatabaseEndpoint{Name: "target_b", Host: "dst-b", Port: 6002, User: "target-b:admin", Password: "target-pass", Database: "target_b1"},
 				IncludeTables: []string{"b1_t2", "b1_t1"},
 			},
 		},
