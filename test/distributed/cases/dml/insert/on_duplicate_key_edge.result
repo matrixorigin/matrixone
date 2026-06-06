@@ -149,3 +149,25 @@ select * from t_odku_auto order by id;
 2  ¦  2  ¦  second  𝄀
 4  ¦  3  ¦  third
 drop table if exists t_odku_auto;
+drop table if exists ai_duplicate_test;
+create table ai_duplicate_test (
+id int auto_increment primary key,
+code varchar(20) unique,
+count int
+);
+insert into ai_duplicate_test (code, count) values ('A', 1), ('B', 2);
+insert into ai_duplicate_test (code, count) values ('A', 5)
+on duplicate key update count = count + 1;
+-- @regex("(Duplicate entry 'A' for key '.*'|^$)", true)
+Duplicate entry 'A' for key 'code'
+select * from ai_duplicate_test order by id;
+➤ id[4,32,0]  ¦  code[12,-1,0]  ¦  count[4,32,0]  𝄀
+1  ¦  A  ¦  1  𝄀
+2  ¦  B  ¦  2
+insert into ai_duplicate_test (code, count) values ('C', 10);
+select * from ai_duplicate_test order by id;
+➤ id[4,32,0]  ¦  code[12,-1,0]  ¦  count[4,32,0]  𝄀
+1  ¦  A  ¦  1  𝄀
+2  ¦  B  ¦  2  𝄀
+4  ¦  C  ¦  10
+drop table if exists ai_duplicate_test;
