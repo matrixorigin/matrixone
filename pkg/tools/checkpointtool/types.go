@@ -16,6 +16,7 @@ package checkpointtool
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
@@ -68,9 +69,9 @@ type TableInfo struct {
 
 // ObjectEntryInfo contains detailed object entry information with timestamps
 type ObjectEntryInfo struct {
-	Range      ckputil.TableRange
-	CreateTime types.TS
-	DeleteTime types.TS
+	ObjectStats objectio.ObjectStats
+	CreateTime  types.TS
+	DeleteTime  types.TS
 }
 
 // ComposedView represents logical checkpoint view at a timestamp
@@ -85,6 +86,7 @@ type ComposedView struct {
 type LogicalTableView struct {
 	Headers      []string
 	Rows         [][]string
+	ColTypes     []types.Type // column types for data columns (after meta cols)
 	PhysicalRows int
 	DeletedRows  int
 	VisibleRows  int

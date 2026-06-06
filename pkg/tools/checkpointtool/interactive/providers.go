@@ -161,35 +161,37 @@ func (p *TableDetailProvider) GetRows() [][]string {
 	rows := make([][]string, 0, len(dataEntries)+len(tombEntries))
 
 	for _, entry := range dataEntries {
-		objName := entry.Range.ObjectStats.ObjectName().String()
-		rangeStr := fmt.Sprintf("%d-%d~%d-%d",
-			entry.Range.Start.GetBlockOffset(), entry.Range.Start.GetRowOffset(),
-			entry.Range.End.GetBlockOffset(), entry.Range.End.GetRowOffset())
-		rangeRows := entry.Range.End.GetRowOffset() - entry.Range.Start.GetRowOffset() + 1
+		objName := entry.ObjectStats.ObjectName().String()
+		blockEnd := int(entry.ObjectStats.BlkCnt()) - 1
+		if blockEnd < 0 {
+			blockEnd = 0
+		}
+		blockSpan := fmt.Sprintf("0..%d", blockEnd)
 
 		rows = append(rows, []string{
 			"Data",
 			objName,
-			rangeStr,
-			fmt.Sprintf("%d", rangeRows),
-			formatSize(entry.Range.ObjectStats.Size()),
+			blockSpan,
+			fmt.Sprintf("%d", entry.ObjectStats.Rows()),
+			formatSize(entry.ObjectStats.Size()),
 			formatTSShort(entry.CreateTime),
 		})
 	}
 
 	for _, entry := range tombEntries {
-		objName := entry.Range.ObjectStats.ObjectName().String()
-		rangeStr := fmt.Sprintf("%d-%d~%d-%d",
-			entry.Range.Start.GetBlockOffset(), entry.Range.Start.GetRowOffset(),
-			entry.Range.End.GetBlockOffset(), entry.Range.End.GetRowOffset())
-		rangeRows := entry.Range.End.GetRowOffset() - entry.Range.Start.GetRowOffset() + 1
+		objName := entry.ObjectStats.ObjectName().String()
+		blockEnd := int(entry.ObjectStats.BlkCnt()) - 1
+		if blockEnd < 0 {
+			blockEnd = 0
+		}
+		blockSpan := fmt.Sprintf("0..%d", blockEnd)
 
 		rows = append(rows, []string{
 			"Tomb",
 			objName,
-			rangeStr,
-			fmt.Sprintf("%d", rangeRows),
-			formatSize(entry.Range.ObjectStats.Size()),
+			blockSpan,
+			fmt.Sprintf("%d", entry.ObjectStats.Rows()),
+			formatSize(entry.ObjectStats.Size()),
 			formatTSShort(entry.CreateTime),
 		})
 	}
@@ -217,16 +219,16 @@ func (p *TableDetailProvider) GetOverview() string {
 	tombObjects := make(map[string]struct{})
 
 	for _, e := range dataEntries {
-		objName := e.Range.ObjectStats.ObjectName().String()
+		objName := e.ObjectStats.ObjectName().String()
 		if _, exists := dataObjects[objName]; !exists {
 			dataObjects[objName] = &objStats{
-				originSize: e.Range.ObjectStats.OriginSize(),
-				compSize:   e.Range.ObjectStats.Size(),
+				originSize: e.ObjectStats.OriginSize(),
+				compSize:   e.ObjectStats.Size(),
 			}
 		}
 	}
 	for _, e := range tombEntries {
-		objName := e.Range.ObjectStats.ObjectName().String()
+		objName := e.ObjectStats.ObjectName().String()
 		tombObjects[objName] = struct{}{}
 	}
 
@@ -287,7 +289,7 @@ func (h *tableDetailHandler) OnSelect(rowIdx int) tea.Cmd {
 	}
 
 	if entry != nil {
-		return func() tea.Msg { return openObjectMsg{path: entry.Range.ObjectStats.ObjectName().String()} }
+		return func() tea.Msg { return openObjectMsg{path: entry.ObjectStats.ObjectName().String()} }
 	}
 	return nil
 }

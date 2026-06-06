@@ -18,7 +18,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/tools/interactive"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 )
 
 // Messages for page navigation
@@ -36,7 +35,6 @@ type UnifiedModel struct {
 
 	// For opening objects
 	objectToOpen string
-	rangeToOpen  *ckputil.TableRange
 	quitting     bool
 }
 
@@ -87,7 +85,7 @@ func (m *UnifiedModel) createTablesListPage() *interactive.GenericPage {
 func (m *UnifiedModel) createTableDetailPage() *interactive.GenericPage {
 	config := interactive.PageConfig{
 		Title:         "═══ Table Detail ═══",
-		Headers:       []string{"Type", "Object", "Range", "Rows", "Size", "Created"},
+		Headers:       []string{"Type", "Object", "Blocks", "Rows", "Size", "Created"},
 		ShowRowNumber: true,
 		EnableCursor:  true,
 		EnableSearch:  true,
@@ -152,14 +150,6 @@ func (m *UnifiedModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case openObjectMsg:
 		m.objectToOpen = msg.path
-		idx := m.currentPage.GetCursor()
-		dataEntries := m.state.DataEntries()
-		tombEntries := m.state.TombEntries()
-		if idx < len(dataEntries) {
-			m.rangeToOpen = &dataEntries[idx].Range
-		} else if idx < len(dataEntries)+len(tombEntries) {
-			m.rangeToOpen = &tombEntries[idx-len(dataEntries)].Range
-		}
 		m.quitting = true
 		return m, tea.Quit
 
@@ -205,13 +195,7 @@ func (m *UnifiedModel) GetObjectToOpen() string {
 	return m.objectToOpen
 }
 
-// GetRangeToOpen returns the range to open (if any)
-func (m *UnifiedModel) GetRangeToOpen() *ckputil.TableRange {
-	return m.rangeToOpen
-}
-
 // ClearObjectToOpen clears the object to open flag
 func (m *UnifiedModel) ClearObjectToOpen() {
 	m.objectToOpen = ""
-	m.rangeToOpen = nil
 }

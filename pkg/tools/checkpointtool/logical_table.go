@@ -17,6 +17,7 @@ package checkpointtool
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -40,11 +41,16 @@ func (r *CheckpointReader) BuildLogicalTableView(
 		return view, nil
 	}
 
-	tombstoneStats := dedupeObjectStats(tombEntries)
-	for _, entry := range dataEntries {
-		objName := entry.Range.ObjectStats.ObjectName().String()
+	visibleDataEntries := visibleObjectEntries(dataEntries, snapshotTS)
+	visibleTombEntries := visibleObjectEntries(tombEntries, snapshotTS)
+	tombstoneStats := dedupeObjectStats(visibleTombEntries)
+	for _, entry := range visibleDataEntries {
+		objName := entry.ObjectStats.ObjectName().String()
 		reader, err := objecttool.OpenWithFS(ctx, r.fs, objName, objName)
 		if err != nil {
+			if isDataFileNotFound(err) {
+				continue // GC'd data object; skip
+			}
 			return nil, err
 		}
 
@@ -52,60 +58,45 @@ func (r *CheckpointReader) BuildLogicalTableView(
 			cols := reader.Columns()
 			for _, col := range cols {
 				view.Headers = append(view.Headers, fmt.Sprintf("col_%d", col.Idx))
+				view.ColTypes = append(view.ColTypes, col.Type)
 			}
 		}
 
-		relevantTombstones, err := r.filterTombstonesForObject(ctx, entry.Range.ObjectStats.ObjectName().ObjectId(), tombstoneStats)
+		relevantTombstones, err := r.filterTombstonesForObject(ctx, entry.ObjectStats.ObjectName().ObjectId(), tombstoneStats)
 		if err != nil {
 			_ = reader.Close()
 			return nil, err
 		}
 
-		startBlock := int(entry.Range.Start.GetBlockOffset())
-		endBlock := int(entry.Range.End.GetBlockOffset())
-		for blockIdx := startBlock; blockIdx <= endBlock; blockIdx++ {
+		for blockIdx := 0; blockIdx < int(entry.ObjectStats.BlkCnt()); blockIdx++ {
 			bat, release, err := reader.ReadBlock(ctx, uint32(blockIdx))
 			if err != nil {
 				_ = reader.Close()
 				return nil, err
 			}
 
-			startRow := 0
-			endRow := bat.RowCount() - 1
-			if blockIdx == startBlock {
-				startRow = int(entry.Range.Start.GetRowOffset())
-			}
-			if blockIdx == endBlock {
-				endRow = int(entry.Range.End.GetRowOffset())
-			}
-			if startRow < 0 {
-				startRow = 0
-			}
-			if endRow >= bat.RowCount() {
-				endRow = bat.RowCount() - 1
-			}
-			if startRow > endRow || startRow >= bat.RowCount() {
+			if bat.RowCount() == 0 {
 				release()
 				continue
 			}
 
-			view.PhysicalRows += endRow - startRow + 1
+			view.PhysicalRows += bat.RowCount()
 
-			deleteMask, err := r.buildDeleteMaskForBlock(ctx, &snapshotTS, entry.Range.ObjectStats, uint16(blockIdx), relevantTombstones)
+			deleteMask, err := r.buildDeleteMaskForBlock(ctx, &snapshotTS, entry.ObjectStats, uint16(blockIdx), relevantTombstones)
 			if err != nil {
 				release()
 				_ = reader.Close()
 				return nil, err
 			}
 
-			for rowIdx := startRow; rowIdx <= endRow; rowIdx++ {
+			for rowIdx := 0; rowIdx < bat.RowCount(); rowIdx++ {
 				if deleteMask.IsValid() && deleteMask.Contains(uint64(rowIdx)) {
 					view.DeletedRows++
 					continue
 				}
 				row := make([]string, 0, len(bat.Vecs)+3)
 				row = append(row,
-					entry.Range.ObjectStats.ObjectName().Short().ShortString(),
+					entry.ObjectStats.ObjectName().Short().ShortString(),
 					fmt.Sprintf("%d", blockIdx),
 					fmt.Sprintf("%d", rowIdx),
 				)
@@ -134,14 +125,53 @@ func dedupeObjectStats(entries []*ObjectEntryInfo) []objectio.ObjectStats {
 	seen := make(map[string]struct{})
 	stats := make([]objectio.ObjectStats, 0, len(entries))
 	for _, entry := range entries {
-		name := entry.Range.ObjectStats.ObjectName().String()
+		name := entry.ObjectStats.ObjectName().String()
 		if _, ok := seen[name]; ok {
 			continue
 		}
 		seen[name] = struct{}{}
-		stats = append(stats, entry.Range.ObjectStats)
+		stats = append(stats, entry.ObjectStats)
 	}
 	return stats
+}
+
+func visibleObjectEntries(entries []*ObjectEntryInfo, snapshotTS types.TS) []*ObjectEntryInfo {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	merged := make(map[string]*ObjectEntryInfo, len(entries))
+	for _, entry := range entries {
+		name := entry.ObjectStats.ObjectName().String()
+		existing, ok := merged[name]
+		if !ok {
+			copyEntry := *entry
+			merged[name] = &copyEntry
+			continue
+		}
+		if existing.CreateTime.IsEmpty() || (!entry.CreateTime.IsEmpty() && entry.CreateTime.LT(&existing.CreateTime)) {
+			existing.CreateTime = entry.CreateTime
+		}
+		if existing.DeleteTime.IsEmpty() || (!entry.DeleteTime.IsEmpty() && existing.DeleteTime.LT(&entry.DeleteTime)) {
+			existing.DeleteTime = entry.DeleteTime
+		}
+	}
+
+	visible := make([]*ObjectEntryInfo, 0, len(merged))
+	for _, entry := range merged {
+		obj := objectio.ObjectEntry{
+			ObjectStats: entry.ObjectStats,
+			CreateTime:  entry.CreateTime,
+			DeleteTime:  entry.DeleteTime,
+		}
+		if obj.Visible(snapshotTS) {
+			visible = append(visible, entry)
+		}
+	}
+	sort.Slice(visible, func(i, j int) bool {
+		return visible[i].ObjectStats.ObjectName().String() < visible[j].ObjectStats.ObjectName().String()
+	})
+	return visible
 }
 
 func (r *CheckpointReader) filterTombstonesForObject(
