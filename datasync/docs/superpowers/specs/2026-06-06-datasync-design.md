@@ -95,6 +95,7 @@ The CLI accepts a config file and an explicit run mode:
 - `-mode sync` is the default and performs export followed by import.
 - `-mode export` performs table discovery and export only, then writes reports with import status marked as skipped.
 - `-mode import` uses `-run-id` to select an existing run directory, skips `mo-dump`, verifies each task SQL/CSV file exists, and imports those files into the target databases.
+- `-cleanup-export-after-import` is optional and only applies to `sync` mode; when set, each successfully imported table deletes its export directory after report metrics have been captured.
 
 1. Load and validate configuration.
 2. Create a run directory:
@@ -116,6 +117,8 @@ The CLI accepts a config file and an explicit run mode:
    - Import using `mysql --local-infile=1`, connected to the target database, with:
      `source <table>.sql`
    - Count target rows with `SELECT COUNT(*) FROM <target_db>.<table>`.
+   - Compare target rows with source rows. A mismatch is an import failure and participates in the import retry loop.
+   - If `-cleanup-export-after-import` is set in `sync` mode and the table import succeeds, delete that table's export directory after capturing SQL/CSV paths and CSV file size.
    - Record task status and metrics.
 5. Write reports:
    - `runs/<run_id>/report.json`
@@ -146,6 +149,8 @@ Each table task has separate retry loops for export and import.
 - `backoff` is the base delay between attempts.
 - Export retry cleans the table task directory before retrying.
 - Import retry re-runs the same table SQL. This is safe because the SQL drops and recreates the table.
+- Import retry includes the target row count check. A source/target row count mismatch retries the import and is reported as a table failure if all attempts are exhausted.
+- Export cleanup is disabled by default. When enabled, it only removes successful table export directories in `sync` mode; failed tables, `export` mode, and `import` mode retain export files.
 - Failed tasks are recorded in the report with the final error message and attempt count.
 - The CLI exits non-zero if any table task fails.
 
@@ -217,7 +222,7 @@ Updated: 2026-06-06
 Implemented:
 
 - Go module and `cmd/datasync` CLI skeleton.
-- CLI flags: `-config`, `-mode sync|export|import`, `-run-id`, and `-version`.
+- CLI flags: `-config`, `-mode sync|export|import`, `-run-id`, `-cleanup-export-after-import`, and `-version`.
 - YAML configuration loading and validation.
 - Example configuration at `configs/example.yaml`.
 - MatrixOne database client helpers for DSN generation, connection, ordinary table discovery, row count, database creation, and identifier quoting.

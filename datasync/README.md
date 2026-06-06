@@ -20,11 +20,18 @@ The default mode is `sync`, which exports each selected source table and then im
 rtk go run ./cmd/datasync -config configs/example.yaml -mode sync
 rtk go run ./cmd/datasync -config configs/example.yaml -mode export
 rtk go run ./cmd/datasync -config configs/example.yaml -mode import -run-id <existing-run-id>
+rtk go run ./cmd/datasync -config configs/example.yaml -mode sync -cleanup-export-after-import
 ```
 
 `-mode export` only writes the run export files and reports. `-mode import` skips `mo-dump` and imports SQL/CSV files from the existing run directory selected by `-run-id`.
 
 Use `-run-id <id>` to choose a stable run directory under `output_dir`.
+
+After each import, `datasync` compares the target row count with the source row count. A mismatch is treated as an import failure and retried according to `retry.max_attempts`.
+
+By default, exported SQL/CSV files are retained after sync imports. Use `-cleanup-export-after-import` in `sync` mode to delete each table's export directory after that table imports successfully. Failed tables, `export` mode, and `import` mode always keep export files.
+
+Use `-help` for detailed command-line usage and examples.
 
 ## Local MatrixOne Integration Test
 

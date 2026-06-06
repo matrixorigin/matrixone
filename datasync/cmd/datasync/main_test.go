@@ -35,6 +35,34 @@ func TestExitCodeRejectsMissingConfig(t *testing.T) {
 	}
 }
 
+func TestExitCodePrintsDetailedHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := exitCode([]string{"-help"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("exitCode() = %d, want 0", code)
+	}
+	help := stderr.String()
+	for _, want := range []string{
+		"Usage: datasync -config <config.yaml> [options]",
+		"Modes:",
+		"-mode sync",
+		"-mode export",
+		"-mode import",
+		"-cleanup-export-after-import",
+		"false by default",
+		"Examples:",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("help missing %q:\n%s", want, help)
+		}
+	}
+	if stdout.String() != "" {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+}
+
 func TestExitCodeRejectsInvalidMode(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 

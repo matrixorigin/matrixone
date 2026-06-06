@@ -16,6 +16,8 @@ The tool must:
 - Import into a target MatrixOne database with configurable source-to-target database mapping.
 - Use overwrite import semantics.
 - Use `mysql source` for imports.
+- Treat post-import source/target row count mismatches as import failures that are retried.
+- Optionally clean successful table export files after `sync` imports while retaining them by default.
 
 ## Design Decisions
 
@@ -48,6 +50,9 @@ Completed in the current workspace:
   - `-mode sync` runs export followed by import and is the default.
   - `-mode export` runs export only and marks import status as skipped.
   - `-mode import` skips export and imports SQL/CSV files from the existing run directory selected by `-run-id`.
+- CLI cleanup option:
+  - `-cleanup-export-after-import` deletes each successfully imported table export directory in `sync` mode only.
+  - The default keeps exported SQL/CSV files.
 - Config loading and validation:
   - `internal/config/config.go`
   - `internal/config/config_test.go`
@@ -69,6 +74,8 @@ Completed in the current workspace:
 - Runner:
   - `internal/run/runner.go`
   - `internal/run/runner_test.go`
+  - Import retries include target row count checks, so mismatches are retried before a table is marked failed.
+  - Successful `sync` imports can optionally clean their table export directory after CSV size/report metrics are captured.
 - App orchestration:
   - `internal/app/app.go`
   - `internal/app/app_test.go`
@@ -87,7 +94,7 @@ rtk proxy env DATASYNC_INTEGRATION=1 go test ./tests/integration -v
 rtk go run ./cmd/datasync -version
 ```
 
-Current test count reported by `rtk go test ./...`: 61 tests across 9 packages. The integration test is skipped unless `DATASYNC_INTEGRATION=1` is set.
+Current test count reported by `rtk go test ./...`: 97 tests across 9 packages. The integration test is skipped unless `DATASYNC_INTEGRATION=1` is set.
 
 ## Not Yet Implemented
 

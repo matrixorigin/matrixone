@@ -25,8 +25,48 @@ func exitCode(args []string, stdout, stderr io.Writer) int {
 	configPath := flags.String("config", "", "path to YAML configuration file")
 	modeText := flags.String("mode", "sync", "run mode: sync, export, or import")
 	runID := flags.String("run-id", "", "optional run id")
+	cleanupExportAfterImport := flags.Bool("cleanup-export-after-import", false, "in sync mode, delete each table's exported SQL/CSV files after that table imports successfully; false by default")
 	showVersion := flags.Bool("version", false, "print version and exit")
+	flags.Usage = func() {
+		fmt.Fprint(stderr, `Usage: datasync -config <config.yaml> [options]
+
+datasync exports selected MatrixOne source tenant tables with mo-dump -csv
+and imports them into configured target databases with mysql source.
+
+Modes:
+  -mode sync
+      Default. Discover source tables, export each table, import each table,
+      compare target rows with the source row count, and write reports.
+  -mode export
+      Discover and export only. Import status is recorded as skipped.
+  -mode import
+      Import from an existing run directory selected by -run-id. This skips
+      source discovery and mo-dump, then reuses runs/<run-id>/report.json plus
+      the existing SQL/CSV files.
+
+Options:
+`)
+		flags.PrintDefaults()
+		fmt.Fprint(stderr, `
+Examples:
+  datasync -config configs/example.yaml
+  datasync -config configs/example.yaml -mode export -run-id qa-20260606
+  datasync -config configs/example.yaml -mode import -run-id qa-20260606
+  datasync -config configs/example.yaml -mode sync -cleanup-export-after-import
+
+Notes:
+  - Reports are written under output_dir/<run-id>/ as report.json and report.csv.
+  - Row count mismatches after import are treated as table import failures and
+    are retried according to retry.max_attempts.
+  - -cleanup-export-after-import only affects successful table imports in sync
+    mode. It is false by default, so exported SQL/CSV files are retained unless
+    this option is explicitly set.
+`)
+	}
 	if err := flags.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
 		return 2
 	}
 
@@ -53,7 +93,13 @@ func exitCode(args []string, stdout, stderr io.Writer) int {
 		*runID = app.NewRunID(time.Now())
 	}
 
-	result, err := app.App{Config: cfg, Mode: mode}.Run(context.Background(), *runID)
+	result, err := app.App{
+		Config: cfg,
+		Mode:   mode,
+		Options: run.Options{
+			CleanupExportAfterImport: *cleanupExportAfterImport,
+		},
+	}.Run(context.Background(), *runID)
 	if err != nil {
 		fmt.Fprintf(stderr, "datasync failed: %v\n", err)
 		return 1

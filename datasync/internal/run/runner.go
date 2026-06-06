@@ -27,8 +27,13 @@ const (
 type Runner struct {
 	Config   *config.Config
 	Mode     Mode
+	Options  Options
 	Executor Executor
 	DB       DB
+}
+
+type Options struct {
+	CleanupExportAfterImport bool
 }
 
 type Executor interface {
@@ -198,12 +203,23 @@ func (r Runner) runTask(ctx context.Context, runID string, task plan.Task) repor
 	row.ImportStartedAt = time.Now()
 	err = retry.Do(ctx, retryCfg, func(ctx context.Context, attempt int) error {
 		row.ImportAttempts = attempt
-		return r.Executor.MySQLSource(ctx, MySQLSourceRequest{
+		if err := r.Executor.MySQLSource(ctx, MySQLSourceRequest{
 			Binary:   r.Config.MySQLPath,
 			Target:   r.Config.Target,
 			Database: task.TargetDatabase,
 			SQLFile:  sqlFile,
-		})
+		}); err != nil {
+			return err
+		}
+		targetRows, err := r.DB.CountTargetRows(ctx, task.TargetDatabase, task.SourceTable)
+		if err != nil {
+			return err
+		}
+		row.TargetRows = targetRows
+		if row.SourceRows != row.TargetRows {
+			return fmt.Errorf("row count mismatch: source=%d target=%d", row.SourceRows, row.TargetRows)
+		}
+		return nil
 	})
 	row.ImportFinishedAt = time.Now()
 	row.ImportDuration = row.ImportFinishedAt.Sub(row.ImportStartedAt)
@@ -212,19 +228,24 @@ func (r Runner) runTask(ctx context.Context, runID string, task plan.Task) repor
 		row.Error = err.Error()
 		return row
 	}
-	targetRows, err := r.DB.CountTargetRows(ctx, task.TargetDatabase, task.SourceTable)
-	if err != nil {
-		row.ImportStatus = report.StatusFailed
-		row.Error = err.Error()
-		return row
-	}
-	row.TargetRows = targetRows
 	row.ImportStatus = report.StatusSuccess
-	if row.ExportStatus != report.StatusSkipped && row.SourceRows != row.TargetRows {
-		row.ImportStatus = report.StatusFailed
-		row.Error = fmt.Sprintf("row count mismatch: source=%d target=%d", row.SourceRows, row.TargetRows)
+	if r.shouldCleanupExportAfterImport(row) {
+		if err := os.RemoveAll(tableDir); err != nil {
+			row.ImportStatus = report.StatusFailed
+			row.Error = err.Error()
+		}
 	}
 	return row
+}
+
+func (r Runner) shouldCleanupExportAfterImport(row report.TableReport) bool {
+	if !r.Options.CleanupExportAfterImport {
+		return false
+	}
+	if r.effectiveMode() != ModeSync {
+		return false
+	}
+	return row.ExportStatus == report.StatusSuccess && row.ImportStatus == report.StatusSuccess
 }
 
 func (r Runner) effectiveMode() Mode {

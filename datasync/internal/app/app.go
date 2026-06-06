@@ -16,6 +16,7 @@ import (
 type App struct {
 	Config    *config.Config
 	Mode      run.Mode
+	Options   run.Options
 	Discovery Discovery
 	Runner    TaskRunner
 }
@@ -53,7 +54,7 @@ func (a App) Run(ctx context.Context, runID string) (Result, error) {
 
 	runner := a.Runner
 	if runner == nil {
-		runner = MatrixOneRunner{Config: a.Config}
+		runner = MatrixOneRunner{Config: a.Config, Options: a.Options}
 	}
 	runReport, err := runner.Run(ctx, a.Mode, runID, tasks)
 	if err != nil {
@@ -143,14 +144,16 @@ func (MatrixOneDiscovery) ListTables(ctx context.Context, source config.Source, 
 }
 
 type MatrixOneRunner struct {
-	Config *config.Config
+	Config  *config.Config
+	Options run.Options
 }
 
 func (m MatrixOneRunner) Run(ctx context.Context, mode run.Mode, runID string, tasks []plan.Task) (report.RunReport, error) {
 	return run.Runner{
-		Config: m.Config,
-		Mode:   mode,
-		DB:     MatrixOneRunDB{Config: m.Config},
+		Config:  m.Config,
+		Mode:    mode,
+		Options: m.Options,
+		DB:      MatrixOneRunDB{Config: m.Config},
 	}.Run(ctx, runID, tasks)
 }
 

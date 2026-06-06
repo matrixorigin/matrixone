@@ -72,6 +72,54 @@ func TestRunBuildsTasksFromDiscoveredTablesAndWritesReport(t *testing.T) {
 	}
 }
 
+func TestRunPassesOptionsToDefaultRunner(t *testing.T) {
+	originalOpenDB := openDB
+	defer func() { openDB = originalOpenDB }()
+
+	dir := t.TempDir()
+	cfg := &config.Config{
+		OutputDir:   dir,
+		Parallelism: 1,
+		MoDumpPath:  filepath.Join(dir, "mo-dump"),
+		MySQLPath:   filepath.Join(dir, "mysql"),
+		Retry:       config.RetryConfig{MaxAttempts: 1},
+		Target:      config.Endpoint{Host: "target", Port: 6001, User: "target:admin", Password: "111"},
+		Sources: []config.Source{{
+			Endpoint:  config.Endpoint{Name: "tenant_a", Host: "source", Port: 6001, User: "source:admin", Password: "111"},
+			Databases: []config.Database{{Name: "src_db", Target: "dst_db"}},
+		}},
+	}
+	openDB = func(ctx context.Context, endpoint db.Endpoint, database string) (dbClient, error) {
+		return &fakeDBClient{
+			tables: []db.Table{{Name: "t1", Kind: "r"}},
+			count:  2,
+		}, nil
+	}
+	if err := os.WriteFile(cfg.MoDumpPath, []byte("#!/bin/sh\nprintf 'DROP TABLE IF EXISTS t1;\\n'\nprintf '1\\n2\\n' > src_db_t1.csv\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.MySQLPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Config: cfg,
+		Mode:   run.ModeSync,
+		Options: run.Options{
+			CleanupExportAfterImport: true,
+		},
+		Discovery: fakeDiscovery{tables: []string{"t1"}},
+	}
+
+	result, err := app.Run(context.Background(), "run1")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Dir(result.Report.Tables[0].SQLFile)); !os.IsNotExist(err) {
+		t.Fatalf("export dir exists after default runner cleanup, stat err=%v", err)
+	}
+}
+
 func TestRunReturnsErrorWhenTableTaskFailsAfterWritingReport(t *testing.T) {
 	cfg := &config.Config{
 		OutputDir: t.TempDir(),
