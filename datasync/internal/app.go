@@ -56,7 +56,7 @@ func (a App) Run(ctx context.Context, runID string) (Result, error) {
 	}
 
 	runDir := filepath.Join(a.Config.OutputDir, runID)
-	writtenReport, err := Write(runDir, runReport)
+	writtenReport, err := Write(runDir, a.Mode, runReport)
 	result := Result{RunID: runID, PlannedTasks: len(tasks), Report: writtenReport}
 	if err != nil {
 		return result, err
@@ -69,7 +69,7 @@ func (a App) Run(ctx context.Context, runID string) (Result, error) {
 
 func (a App) buildTasks(ctx context.Context, runID string) ([]Task, error) {
 	if a.Mode == ModeImport {
-		return tasksFromReport(filepath.Join(a.Config.OutputDir, runID, "report.json"), a.Config)
+		return tasksFromReport(filepath.Join(a.Config.OutputDir, runID, "export-report.json"), a.Config)
 	}
 	if a.Discovery == nil {
 		a.Discovery = MatrixOneDiscovery{}

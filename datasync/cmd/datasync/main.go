@@ -47,8 +47,8 @@ Modes:
       Discover and export only. Import status is recorded as skipped.
   -mode import
       Import from an existing run directory selected by -run-id. This skips
-      source discovery and mo-dump, then reuses runs/<run-id>/report.json plus
-      the existing SQL/CSV files.
+      source discovery and mo-dump, then reuses runs/<run-id>/export-report.json
+      plus the existing SQL/CSV files.
 
 Options:
 `)
@@ -61,8 +61,8 @@ Examples:
   datasync -config configs/example.yaml -mode sync -cleanup-export-after-import
 
 Notes:
-  - Reports are written under output_dir/<run-id>/ as report.json, report.csv,
-    and a Chinese summary report.md.
+  - Reports are written under output_dir/<run-id>/ as export-report.*,
+    import-report.*, and summary-report.* files. Markdown reports are Chinese.
   - Row count mismatches after import are treated as table import failures and
     are retried according to retry.max_attempts.
   - -cleanup-export-after-import only affects successful table imports in sync
@@ -111,15 +111,15 @@ Notes:
 		fmt.Fprintf(stderr, "datasync failed: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "run_id=%s mode=%s planned_tasks=%d succeeded=%d failed=%d json_report=%s csv_report=%s markdown_report=%s\n",
+	fmt.Fprintf(stdout, "run_id=%s mode=%s planned_tasks=%d succeeded=%d failed=%d export_report=%s import_report=%s summary_report=%s\n",
 		result.RunID,
 		mode,
 		result.PlannedTasks,
 		result.Report.Summary.SucceededTasks,
 		result.Report.Summary.FailedTasks,
-		result.Report.Summary.JSONReportPath,
-		result.Report.Summary.CSVReportPath,
-		result.Report.Summary.MarkdownReportPath,
+		result.Report.Summary.ExportMarkdownReportPath,
+		result.Report.Summary.ImportMarkdownReportPath,
+		result.Report.Summary.SummaryMarkdownReportPath,
 	)
 	return 0
 }

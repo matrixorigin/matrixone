@@ -23,9 +23,9 @@ rtk go run ./cmd/datasync -config configs/example.yaml -mode import -run-id <exi
 rtk go run ./cmd/datasync -config configs/example.yaml -mode sync -cleanup-export-after-import
 ```
 
-`-mode export` only writes the run export files and reports. `-mode import` skips `mo-dump` and imports SQL/CSV files from the existing run directory selected by `-run-id`.
+`-mode export` only writes the run export files plus export and summary reports. `-mode import` skips `mo-dump` and imports SQL/CSV files from the existing run directory selected by `-run-id`; it reads task metadata from `export-report.json`.
 
-Each run writes `report.json`, `report.csv`, and a Chinese Markdown summary `report.md` under `output_dir/<run-id>/`.
+Runs write separate `export-report.*`, `import-report.*`, and `summary-report.*` files under `output_dir/<run-id>/`. Markdown reports are written in Chinese.
 
 Use `-run-id <id>` to choose a stable run directory under `output_dir`.
 

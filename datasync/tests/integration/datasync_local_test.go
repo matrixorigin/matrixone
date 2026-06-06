@@ -193,7 +193,7 @@ func assertTableMissing(t *testing.T, mysql, user, password, database, table str
 
 func assertReport(t *testing.T, runDir string) {
 	t.Helper()
-	reportPath := filepath.Join(runDir, "report.json")
+	reportPath := filepath.Join(runDir, "summary-report.json")
 	data, err := os.ReadFile(reportPath)
 	if err != nil {
 		t.Fatal(err)
@@ -253,21 +253,26 @@ func assertReport(t *testing.T, runDir string) {
 			t.Fatalf("table report missing target connection fields: %+v", table)
 		}
 	}
-	csvReport, err := os.ReadFile(filepath.Join(runDir, "report.csv"))
+	csvReport, err := os.ReadFile(filepath.Join(runDir, "summary-report.csv"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(csvReport), "csv_file_size_bytes") {
-		t.Fatalf("report.csv missing csv_file_size_bytes header: %s", csvReport)
+		t.Fatalf("summary-report.csv missing csv_file_size_bytes header: %s", csvReport)
 	}
-	markdownReport, err := os.ReadFile(filepath.Join(runDir, "report.md"))
+	markdownReport, err := os.ReadFile(filepath.Join(runDir, "summary-report.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	markdownText := string(markdownReport)
-	for _, want := range []string{"# 数据同步报告", "## 汇总", "## 表同步结果", "CSV大小"} {
+	for _, want := range []string{"# 数据同步汇总报告", "## 汇总", "## 表同步结果", "CSV大小", "导出重试次数", "导入重试次数"} {
 		if !strings.Contains(markdownText, want) {
-			t.Fatalf("report.md missing %q: %s", want, markdownText)
+			t.Fatalf("summary-report.md missing %q: %s", want, markdownText)
+		}
+	}
+	for _, file := range []string{"export-report.md", "import-report.md", "summary-report.md"} {
+		if _, err := os.Stat(filepath.Join(runDir, file)); err != nil {
+			t.Fatalf("%s missing: %v", file, err)
 		}
 	}
 }

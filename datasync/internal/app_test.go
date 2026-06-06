@@ -32,8 +32,8 @@ func TestRunBuildsTasksFromDiscoveredTablesAndWritesReport(t *testing.T) {
 	if runner.mode != ModeExport {
 		t.Fatalf("runner mode = %q, want export", runner.mode)
 	}
-	if filepath.Base(result.Report.Summary.JSONReportPath) != "report.json" {
-		t.Fatalf("JSONReportPath = %q, want report.json", result.Report.Summary.JSONReportPath)
+	if filepath.Base(result.Report.Summary.SummaryJSONReportPath) != "summary-report.json" {
+		t.Fatalf("SummaryJSONReportPath = %q, want summary-report.json", result.Report.Summary.SummaryJSONReportPath)
 	}
 	task := runner.tasks[0]
 	if task.SourceTable != "keep" || task.TargetName != "target_a" || task.TargetHost != "target" || task.TargetPassword != "222" || task.TargetDatabase != "dst_db" {
@@ -99,8 +99,8 @@ func TestRunReturnsErrorWhenTableTaskFailsAfterWritingReport(t *testing.T) {
 	if !strings.Contains(err.Error(), "1 table tasks failed") {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if filepath.Base(result.Report.Summary.JSONReportPath) != "report.json" {
-		t.Fatalf("JSONReportPath = %q, want report.json after failure", result.Report.Summary.JSONReportPath)
+	if filepath.Base(result.Report.Summary.SummaryJSONReportPath) != "summary-report.json" {
+		t.Fatalf("SummaryJSONReportPath = %q, want summary-report.json after failure", result.Report.Summary.SummaryJSONReportPath)
 	}
 }
 
@@ -181,7 +181,7 @@ func TestRunImportModeBuildsTasksFromExistingReportWithoutDiscovery(t *testing.T
 			SourceRows:     7,
 		}},
 	}
-	if _, err := Write(runDir, existingReport); err != nil {
+	if _, err := Write(runDir, ModeExport, existingReport); err != nil {
 		t.Fatal(err)
 	}
 	runner := &fakeRunner{}
@@ -295,7 +295,7 @@ func TestTasksFromReportMatchesTargetPasswordByFullTargetEndpoint(t *testing.T) 
 			SourceRows:     7,
 		}},
 	}
-	if _, err := Write(runDir, existingReport); err != nil {
+	if _, err := Write(runDir, ModeExport, existingReport); err != nil {
 		t.Fatal(err)
 	}
 	cfg := testAppConfig(dir)
@@ -310,7 +310,7 @@ func TestTasksFromReportMatchesTargetPasswordByFullTargetEndpoint(t *testing.T) 
 		},
 	}
 
-	tasks, err := tasksFromReport(filepath.Join(runDir, "report.json"), cfg)
+	tasks, err := tasksFromReport(filepath.Join(runDir, "export-report.json"), cfg)
 	if err != nil {
 		t.Fatalf("tasksFromReport() error = %v", err)
 	}

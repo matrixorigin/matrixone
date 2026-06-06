@@ -40,36 +40,36 @@ func TestWriteReports(t *testing.T) {
 			ExportStatus:   StatusSuccess,
 			ImportStatus:   StatusSuccess,
 			ExportAttempts: 1,
-			ImportAttempts: 1,
+			ImportAttempts: 2,
 		}},
 	}
 
-	written, err := Write(dir, r)
+	written, err := Write(dir, ModeSync, r)
 	if err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
-	if filepath.Base(written.Summary.JSONReportPath) != "report.json" {
-		t.Fatalf("JSONReportPath = %q, want report.json", written.Summary.JSONReportPath)
+	if filepath.Base(written.Summary.ExportMarkdownReportPath) != "export-report.md" {
+		t.Fatalf("ExportMarkdownReportPath = %q, want export-report.md", written.Summary.ExportMarkdownReportPath)
 	}
-	if filepath.Base(written.Summary.CSVReportPath) != "report.csv" {
-		t.Fatalf("CSVReportPath = %q, want report.csv", written.Summary.CSVReportPath)
+	if filepath.Base(written.Summary.ImportMarkdownReportPath) != "import-report.md" {
+		t.Fatalf("ImportMarkdownReportPath = %q, want import-report.md", written.Summary.ImportMarkdownReportPath)
 	}
-	if filepath.Base(written.Summary.MarkdownReportPath) != "report.md" {
-		t.Fatalf("MarkdownReportPath = %q, want report.md", written.Summary.MarkdownReportPath)
+	if filepath.Base(written.Summary.SummaryMarkdownReportPath) != "summary-report.md" {
+		t.Fatalf("SummaryMarkdownReportPath = %q, want summary-report.md", written.Summary.SummaryMarkdownReportPath)
 	}
 
-	jsonBytes, err := os.ReadFile(filepath.Join(dir, "report.json"))
+	jsonBytes, err := os.ReadFile(filepath.Join(dir, "summary-report.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	jsonText := string(jsonBytes)
-	for _, want := range []string{`"run_id": "run1"`, `"duration": "10ms"`, `"json_report_path":`, `"markdown_report_path":`, `"csv_file_size_bytes": 12`} {
+	for _, want := range []string{`"run_id": "run1"`, `"duration": "10ms"`, `"summary_markdown_report_path":`, `"csv_file_size_bytes": 12`, `"export_retries": 0`, `"import_retries": 1`} {
 		if !strings.Contains(jsonText, want) {
-			t.Fatalf("report.json missing %q: %s", want, jsonText)
+			t.Fatalf("summary-report.json missing %q: %s", want, jsonText)
 		}
 	}
 
-	csvBytes, err := os.ReadFile(filepath.Join(dir, "report.csv"))
+	csvBytes, err := os.ReadFile(filepath.Join(dir, "summary-report.csv"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestWriteReports(t *testing.T) {
 		"run1,tenant_a,127.0.0.1,6001,src_db,t1,target_a,127.0.0.2,6002,target:admin,dst_db,/tmp/t1.sql,/tmp/src_db_t1.csv,12",
 	} {
 		if !strings.Contains(csvText, want) {
-			t.Fatalf("report.csv missing %q: %s", want, csvText)
+			t.Fatalf("summary-report.csv missing %q: %s", want, csvText)
 		}
 	}
 	records, err := csv.NewReader(strings.NewReader(csvText)).ReadAll()
@@ -90,17 +90,17 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("CSV record count = %d, want 2", len(records))
 	}
 	row := records[1]
-	if row[16] != StatusSuccess || row[17] != StatusSuccess || row[24] != "1" || row[25] != "1" {
-		t.Fatalf("CSV row status/attempt columns = %#v", row)
+	if row[16] != StatusSuccess || row[17] != StatusSuccess || row[24] != "0" || row[25] != "1" {
+		t.Fatalf("CSV row status/retry columns = %#v", row)
 	}
 
-	markdownBytes, err := os.ReadFile(filepath.Join(dir, "report.md"))
+	markdownBytes, err := os.ReadFile(filepath.Join(dir, "summary-report.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	markdownText := string(markdownBytes)
 	for _, want := range []string{
-		"# 数据同步报告",
+		"# 数据同步汇总报告",
 		"## 汇总",
 		"- 运行 ID：run1",
 		"- 任务总数：1",
@@ -109,15 +109,31 @@ func TestWriteReports(t *testing.T) {
 		"- 源端总行数：3",
 		"- 目标端总行数：3",
 		"## 报告文件",
-		"report.json",
-		"report.csv",
-		"report.md",
+		"export-report.md",
+		"import-report.md",
+		"summary-report.md",
 		"## 表同步结果",
-		"| 源端 | 目标端 | 源端行数 | 目标端行数 | CSV大小 | 导出状态 | 导入状态 | 导出重试 | 导入重试 | 错误 |",
-		"| tenant_a.src_db.t1 | target_a.dst_db.t1 | 3 | 3 | 12 bytes | success | success | 1 | 1 |  |",
+		"| 源端 | 目标端 | 源端行数 | 目标端行数 | CSV大小 | 导出状态 | 导入状态 | 导出重试次数 | 导入重试次数 | 错误 |",
+		"| tenant_a.src_db.t1 | target_a.dst_db.t1 | 3 | 3 | 12 bytes | success | success | 0 | 1 |  |",
 	} {
 		if !strings.Contains(markdownText, want) {
-			t.Fatalf("report.md missing %q:\n%s", want, markdownText)
+			t.Fatalf("summary-report.md missing %q:\n%s", want, markdownText)
+		}
+	}
+
+	for _, file := range []string{
+		"export-report.json",
+		"export-report.csv",
+		"export-report.md",
+		"import-report.json",
+		"import-report.csv",
+		"import-report.md",
+		"summary-report.json",
+		"summary-report.csv",
+		"summary-report.md",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, file)); err != nil {
+			t.Fatalf("%s missing: %v", file, err)
 		}
 	}
 }
@@ -128,14 +144,14 @@ func TestWriteReturnsMkdirError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Write(filepath.Join(file, "report"), RunReport{}); err == nil {
+	if _, err := Write(filepath.Join(file, "report"), ModeSync, RunReport{}); err == nil {
 		t.Fatal("Write() error = nil, want mkdir error")
 	}
 }
 
 func TestReadReport(t *testing.T) {
 	dir := t.TempDir()
-	written, err := Write(dir, RunReport{
+	written, err := Write(dir, ModeSync, RunReport{
 		RunID: "run1",
 		Summary: Summary{
 			TotalTasks:     1,
@@ -165,7 +181,7 @@ func TestReadReport(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	read, err := Read(written.Summary.JSONReportPath)
+	read, err := Read(written.Summary.SummaryJSONReportPath)
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
@@ -211,7 +227,7 @@ func TestWriteReturnsJSONCreateError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Write(file, RunReport{}); err == nil {
+	if _, err := Write(file, ModeSync, RunReport{}); err == nil {
 		t.Fatal("Write() error = nil, want json create error")
 	}
 }
