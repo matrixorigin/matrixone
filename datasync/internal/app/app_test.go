@@ -173,6 +173,55 @@ func TestRunReturnsReportWriteError(t *testing.T) {
 	}
 }
 
+func TestRunImportModeBuildsTasksFromExistingReportWithoutDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	runDir := filepath.Join(dir, "run1")
+	existingReport := report.RunReport{
+		RunID: "run1",
+		Tables: []report.TableReport{{
+			SourceName:     "tenant_a",
+			SourceHost:     "127.0.0.1",
+			SourcePort:     6001,
+			SourceDatabase: "src_db",
+			SourceTable:    "t1",
+			TargetDatabase: "dst_db",
+		}},
+	}
+	if _, err := report.Write(runDir, existingReport); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	app := App{
+		Config: &config.Config{OutputDir: dir},
+		Mode:   run.ModeImport,
+		Discovery: fakeDiscovery{
+			err: errors.New("source discovery should not run in import mode"),
+		},
+		Runner: runner,
+	}
+
+	result, err := app.Run(context.Background(), "run1")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.PlannedTasks != 1 {
+		t.Fatalf("PlannedTasks = %d, want 1", result.PlannedTasks)
+	}
+	if len(runner.tasks) != 1 {
+		t.Fatalf("runner task count = %d, want 1", len(runner.tasks))
+	}
+	task := runner.tasks[0]
+	if task.SourceName != "tenant_a" ||
+		task.SourceHost != "127.0.0.1" ||
+		task.SourcePort != 6001 ||
+		task.SourceDatabase != "src_db" ||
+		task.SourceTable != "t1" ||
+		task.TargetDatabase != "dst_db" {
+		t.Fatalf("task = %+v", task)
+	}
+}
+
 func TestMatrixOneDiscoveryListsTableNames(t *testing.T) {
 	originalOpenDB := openDB
 	defer func() { openDB = originalOpenDB }()

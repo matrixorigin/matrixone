@@ -99,6 +99,70 @@ func TestWriteReturnsMkdirError(t *testing.T) {
 	}
 }
 
+func TestReadReport(t *testing.T) {
+	dir := t.TempDir()
+	written, err := Write(dir, RunReport{
+		RunID: "run1",
+		Summary: Summary{
+			TotalTasks:     1,
+			SucceededTasks: 1,
+			Duration:       5 * time.Millisecond,
+		},
+		Tables: []TableReport{{
+			RunID:          "run1",
+			SourceName:     "tenant_a",
+			SourceHost:     "127.0.0.1",
+			SourcePort:     6001,
+			SourceDatabase: "src_db",
+			SourceTable:    "t1",
+			TargetDatabase: "dst_db",
+			CSVFileSize:    12,
+			ExportDuration: time.Millisecond,
+			ImportDuration: 2 * time.Millisecond,
+			ExportStatus:   StatusSuccess,
+			ImportStatus:   StatusSuccess,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	read, err := Read(written.Summary.JSONReportPath)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	if read.RunID != "run1" || read.Summary.Duration != 5*time.Millisecond {
+		t.Fatalf("report = %+v, want run1 with 5ms duration", read)
+	}
+	if len(read.Tables) != 1 {
+		t.Fatalf("table count = %d, want 1", len(read.Tables))
+	}
+	table := read.Tables[0]
+	if table.SourceName != "tenant_a" ||
+		table.SourceHost != "127.0.0.1" ||
+		table.SourcePort != 6001 ||
+		table.CSVFileSize != 12 ||
+		table.ExportDuration != time.Millisecond ||
+		table.ImportDuration != 2*time.Millisecond {
+		t.Fatalf("table = %+v", table)
+	}
+}
+
+func TestReadReportReturnsErrors(t *testing.T) {
+	if _, err := Read(filepath.Join(t.TempDir(), "missing.json")); err == nil {
+		t.Fatal("Read() error = nil, want missing file error")
+	}
+
+	path := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(path, []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(path); err == nil {
+		t.Fatal("Read() error = nil, want invalid JSON error")
+	}
+}
+
 func TestWriteReturnsJSONCreateError(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "not-a-dir")
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {

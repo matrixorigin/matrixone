@@ -46,21 +46,10 @@ type Result struct {
 }
 
 func (a App) Run(ctx context.Context, runID string) (Result, error) {
-	if a.Discovery == nil {
-		a.Discovery = MatrixOneDiscovery{}
+	tasks, err := a.buildTasks(ctx, runID)
+	if err != nil {
+		return Result{}, err
 	}
-
-	discovered := make(map[plan.DatabaseKey][]string)
-	for _, source := range a.Config.Sources {
-		for _, database := range source.Databases {
-			tables, err := a.Discovery.ListTables(ctx, source, database.Name)
-			if err != nil {
-				return Result{}, err
-			}
-			discovered[plan.DatabaseKey{SourceName: source.Name, Database: database.Name}] = tables
-		}
-	}
-	tasks := plan.BuildTasks(a.Config, discovered)
 
 	runner := a.Runner
 	if runner == nil {
@@ -81,6 +70,46 @@ func (a App) Run(ctx context.Context, runID string) (Result, error) {
 		return result, fmt.Errorf("%d table tasks failed", writtenReport.Summary.FailedTasks)
 	}
 	return result, nil
+}
+
+func (a App) buildTasks(ctx context.Context, runID string) ([]plan.Task, error) {
+	if a.Mode == run.ModeImport {
+		return tasksFromReport(filepath.Join(a.Config.OutputDir, runID, "report.json"))
+	}
+	if a.Discovery == nil {
+		a.Discovery = MatrixOneDiscovery{}
+	}
+
+	discovered := make(map[plan.DatabaseKey][]string)
+	for _, source := range a.Config.Sources {
+		for _, database := range source.Databases {
+			tables, err := a.Discovery.ListTables(ctx, source, database.Name)
+			if err != nil {
+				return nil, err
+			}
+			discovered[plan.DatabaseKey{SourceName: source.Name, Database: database.Name}] = tables
+		}
+	}
+	return plan.BuildTasks(a.Config, discovered), nil
+}
+
+func tasksFromReport(path string) ([]plan.Task, error) {
+	runReport, err := report.Read(path)
+	if err != nil {
+		return nil, err
+	}
+	tasks := make([]plan.Task, 0, len(runReport.Tables))
+	for _, row := range runReport.Tables {
+		tasks = append(tasks, plan.Task{
+			SourceName:     row.SourceName,
+			SourceHost:     row.SourceHost,
+			SourcePort:     row.SourcePort,
+			SourceDatabase: row.SourceDatabase,
+			SourceTable:    row.SourceTable,
+			TargetDatabase: row.TargetDatabase,
+		})
+	}
+	return tasks, nil
 }
 
 func NewRunID(now time.Time) string {

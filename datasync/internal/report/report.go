@@ -117,6 +117,18 @@ func Write(dir string, r RunReport) (RunReport, error) {
 	return r, nil
 }
 
+func Read(path string) (RunReport, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return RunReport{}, err
+	}
+	var r jsonRunReport
+	if err := json.Unmarshal(data, &r); err != nil {
+		return RunReport{}, err
+	}
+	return fromJSONReport(r), nil
+}
+
 func writeJSON(path string, r RunReport) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -127,6 +139,59 @@ func writeJSON(path string, r RunReport) error {
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
 	return enc.Encode(toJSONReport(r))
+}
+
+func fromJSONReport(r jsonRunReport) RunReport {
+	rows := make([]TableReport, 0, len(r.Tables))
+	for _, row := range r.Tables {
+		rows = append(rows, TableReport{
+			RunID:            row.RunID,
+			SourceName:       row.SourceName,
+			SourceHost:       row.SourceHost,
+			SourcePort:       row.SourcePort,
+			SourceDatabase:   row.SourceDatabase,
+			SourceTable:      row.SourceTable,
+			TargetDatabase:   row.TargetDatabase,
+			SQLFile:          row.SQLFile,
+			CSVFile:          row.CSVFile,
+			CSVFileSize:      row.CSVFileSize,
+			SourceRows:       row.SourceRows,
+			TargetRows:       row.TargetRows,
+			ExportStatus:     row.ExportStatus,
+			ImportStatus:     row.ImportStatus,
+			ExportStartedAt:  row.ExportStartedAt,
+			ExportFinishedAt: row.ExportFinishedAt,
+			ImportStartedAt:  row.ImportStartedAt,
+			ImportFinishedAt: row.ImportFinishedAt,
+			ExportDuration:   parseDuration(row.ExportDuration),
+			ImportDuration:   parseDuration(row.ImportDuration),
+			ExportAttempts:   row.ExportAttempts,
+			ImportAttempts:   row.ImportAttempts,
+			Error:            row.Error,
+		})
+	}
+	return RunReport{
+		RunID: r.RunID,
+		Summary: Summary{
+			TotalTasks:      r.Summary.TotalTasks,
+			SucceededTasks:  r.Summary.SucceededTasks,
+			FailedTasks:     r.Summary.FailedTasks,
+			TotalSourceRows: r.Summary.TotalSourceRows,
+			TotalTargetRows: r.Summary.TotalTargetRows,
+			Duration:        parseDuration(r.Summary.Duration),
+			JSONReportPath:  r.Summary.JSONReportPath,
+			CSVReportPath:   r.Summary.CSVReportPath,
+		},
+		Tables: rows,
+	}
+}
+
+func parseDuration(value string) time.Duration {
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return 0
+	}
+	return duration
 }
 
 func toJSONReport(r RunReport) jsonRunReport {
