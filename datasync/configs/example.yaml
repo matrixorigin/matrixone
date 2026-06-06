@@ -7,28 +7,28 @@ retry:
   backoff: 2s
 
 source:
+  name: default_source
   host: 127.0.0.1
   port: 6001
+  user: dsync_src_default:admin
   password: "111"
 target:
+  name: default_target
   host: 127.0.0.1
   port: 6001
+  user: dsync_target_default:admin
   password: "111"
 
 databases:
-  - source:
-      name: tenant_a_db1
-      user: dsync_src_a:admin
-      database: dsync_a_db1
-    target:
-      name: target_a
-      user: dsync_target_a:admin
-      database: dsync_target_a1
-    include_tables:
-      - t_keep
-      - t_skip
+  # Simple form: source and target database names are both dsync_shared.
+  - dsync_shared
+
+  # Simple mapping form: same database name, plus table filters.
+  - database: dsync_ops
     exclude_tables:
-      - t_skip
+      - audit
+
+  # Full form: use it when source/target database names or tenant users differ.
   - source:
       name: tenant_a_db2
       user: dsync_src_a:admin
@@ -47,5 +47,3 @@ databases:
       name: target_b
       user: dsync_target_b:admin
       database: dsync_target_b1
-    exclude_tables:
-      - audit

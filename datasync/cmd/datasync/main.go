@@ -33,11 +33,12 @@ and imports them into configured target databases with mysql source.
 
 Configuration:
   Optional top-level source and target entries define connection defaults:
-  name, host, port, user, and password. Each databases entry supplies
-  source.database and target.database, and can override any inherited field.
-  Incomplete database entries are ignored after default inheritance. Set
-  include_tables to allow only specific discovered tables, then use
-  exclude_tables to remove tables from that candidate set.
+  name, host, port, user, and password. If source and target database names
+  match, a databases entry can be just the database name, or a mapping with
+  database plus include_tables/exclude_tables. Use full source/target mappings
+  when source and target database names differ or a database needs its own
+  connection override. Incomplete database entries are ignored after default
+  inheritance.
 
 Modes:
   -mode sync
@@ -59,6 +60,12 @@ Examples:
   datasync -config configs/example.yaml -mode export -run-id qa-20260606
   datasync -config configs/example.yaml -mode import -run-id qa-20260606
   datasync -config configs/example.yaml -mode sync -cleanup-export-after-import
+
+Simple database config:
+  databases:
+    - sales
+    - database: ops
+      exclude_tables: [audit]
 
 Notes:
   - Progress is printed to stderr while the run is active. The final

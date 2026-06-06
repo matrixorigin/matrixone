@@ -57,6 +57,7 @@ type DatabaseEndpoint struct {
 type DatabaseTask struct {
 	Source        DatabaseEndpoint `yaml:"source"`
 	Target        DatabaseEndpoint `yaml:"target"`
+	Database      string           `yaml:"-"`
 	IncludeTables []string         `yaml:"include_tables"`
 	ExcludeTables []string         `yaml:"exclude_tables"`
 	SourcePortSet bool             `yaml:"-"`
@@ -84,6 +85,12 @@ type rawRetryConfig struct {
 }
 
 func (d *DatabaseTask) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		if err := value.Decode(&d.Database); err != nil {
+			return err
+		}
+		return nil
+	}
 	if value.Kind != yaml.MappingNode {
 		return fmt.Errorf("database task must be a mapping")
 	}
@@ -95,6 +102,10 @@ func (d *DatabaseTask) UnmarshalYAML(value *yaml.Node) error {
 		key := value.Content[i]
 		val := value.Content[i+1]
 		switch key.Value {
+		case "database":
+			if err := val.Decode(&d.Database); err != nil {
+				return err
+			}
 		case "source":
 			d.SourcePortSet = mappingValue(val, "port") != nil
 			if err := decodeNodeStrict(val, &d.Source); err != nil {
@@ -372,6 +383,7 @@ func expandConfigEnvRefs(cfg *Config) error {
 			&database.Target.User,
 			&database.Target.Password,
 			&database.Target.Database,
+			&database.Database,
 		)
 
 		for includeIndex := range database.IncludeTables {
@@ -454,6 +466,14 @@ func validateExplicitDatabasePorts(databases []DatabaseTask) error {
 func materializeDatabaseEndpoints(globalSource, globalTarget Endpoint, databases []DatabaseTask) []DatabaseTask {
 	var materialized []DatabaseTask
 	for _, database := range databases {
+		if database.Database != "" {
+			if database.Source.Database == "" {
+				database.Source.Database = database.Database
+			}
+			if database.Target.Database == "" {
+				database.Target.Database = database.Database
+			}
+		}
 		database.Source = mergeDatabaseEndpoint(globalSource, database.Source)
 		database.Target = mergeDatabaseEndpoint(globalTarget, database.Target)
 		if !databaseHasCompleteEndpoints(database) {

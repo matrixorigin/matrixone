@@ -189,6 +189,83 @@ databases:
 	}
 }
 
+func TestLoadUsesSimpleDatabaseNameForMatchingSourceAndTargetDatabases(t *testing.T) {
+	t.Setenv("SIMPLE_DB", "analytics")
+	cfg := loadConfig(t, `
+mo_dump_path: /tmp/mo-dump
+mysql_path: /tmp/mysql
+source:
+  name: global_source
+  host: 127.0.0.1
+  port: 6001
+  user: global_src:admin
+  password: src-pass
+target:
+  name: global_target
+  host: 127.0.0.2
+  port: 6002
+  user: global_target:admin
+  password: target-pass
+databases:
+  - ${SIMPLE_DB}
+  - database: ops
+    include_tables: [events, jobs]
+    exclude_tables: [jobs]
+`)
+
+	if len(cfg.Databases) != 2 {
+		t.Fatalf("len(Databases) = %d, want 2", len(cfg.Databases))
+	}
+	first := cfg.Databases[0]
+	if first.Source.Database != "analytics" || first.Target.Database != "analytics" {
+		t.Fatalf("first source/target database = %q/%q, want analytics/analytics", first.Source.Database, first.Target.Database)
+	}
+	if first.Source.Name != "global_source" || first.Target.Name != "global_target" {
+		t.Fatalf("first endpoints did not inherit globals: %+v", first)
+	}
+
+	second := cfg.Databases[1]
+	if second.Source.Database != "ops" || second.Target.Database != "ops" {
+		t.Fatalf("second source/target database = %q/%q, want ops/ops", second.Source.Database, second.Target.Database)
+	}
+	if !reflect.DeepEqual(second.IncludeTables, []string{"events", "jobs"}) {
+		t.Fatalf("IncludeTables = %#v", second.IncludeTables)
+	}
+	if !reflect.DeepEqual(second.ExcludeTables, []string{"jobs"}) {
+		t.Fatalf("ExcludeTables = %#v", second.ExcludeTables)
+	}
+}
+
+func TestLoadAllowsSourceAndTargetDatabaseToOverrideSimpleDatabaseName(t *testing.T) {
+	cfg := loadConfig(t, `
+mo_dump_path: /tmp/mo-dump
+mysql_path: /tmp/mysql
+source:
+  name: global_source
+  host: 127.0.0.1
+  port: 6001
+  user: global_src:admin
+  password: src-pass
+target:
+  name: global_target
+  host: 127.0.0.2
+  port: 6002
+  user: global_target:admin
+  password: target-pass
+databases:
+  - source:
+      database: source_override
+    database: shared_default
+    target:
+      database: target_override
+`)
+
+	database := cfg.Databases[0]
+	if database.Source.Database != "source_override" || database.Target.Database != "target_override" {
+		t.Fatalf("source/target database = %q/%q, want explicit overrides", database.Source.Database, database.Target.Database)
+	}
+}
+
 func TestLoadSkipsIncompleteDatabaseWithoutGlobalEndpoint(t *testing.T) {
 	cfg := loadConfig(t, `
 mo_dump_path: /tmp/mo-dump

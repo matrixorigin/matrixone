@@ -22,13 +22,13 @@ func TestLocalMatrixOneEndToEnd(t *testing.T) {
 
 	runSQL(t, mysql, "dump", "111", `
 drop account if exists dsync_src_a;
-drop account if exists dsync_src_b;
+drop account if exists dsync_simple_src;
+drop account if exists dsync_simple_target;
 drop account if exists dsync_target_a;
-drop account if exists dsync_target_b;
 create account dsync_src_a admin_name 'admin' identified by '111';
-create account dsync_src_b admin_name 'admin' identified by '111';
+create account dsync_simple_src admin_name 'admin' identified by '111';
+create account dsync_simple_target admin_name 'admin' identified by '111';
 create account dsync_target_a admin_name 'admin' identified by '111';
-create account dsync_target_b admin_name 'admin' identified by '111';
 `)
 	runSQL(t, mysql, "dsync_src_a:admin", "111", `
 create database dsync_a_db1;
@@ -42,12 +42,12 @@ insert into dsync_a_db2.orders values (10,'book'),(11,'pen');
 create table dsync_a_db2.ignored(id int primary key);
 insert into dsync_a_db2.ignored values (404);
 `)
-	runSQL(t, mysql, "dsync_src_b:admin", "111", `
-create database dsync_b_db1;
-create table dsync_b_db1.events(id int primary key, label varchar(50));
-insert into dsync_b_db1.events values (1,'login'),(2,'logout');
-create table dsync_b_db1.audit(id int primary key);
-insert into dsync_b_db1.audit values (7);
+	runSQL(t, mysql, "dsync_simple_src:admin", "111", `
+create database dsync_same_db;
+create table dsync_same_db.events(id int primary key, label varchar(50));
+insert into dsync_same_db.events values (1,'login'),(2,'logout');
+create table dsync_same_db.audit(id int primary key);
+insert into dsync_same_db.audit values (7);
 `)
 	runSQL(t, mysql, "dsync_target_a:admin", "111", `
 create database dsync_target_a1;
@@ -64,12 +64,16 @@ retry:
   max_attempts: 2
   backoff: 1ms
 source:
+  name: simple_source
   host: 127.0.0.1
   port: 6001
+  user: dsync_simple_src:admin
   password: "111"
 target:
+  name: simple_target
   host: 127.0.0.1
   port: 6001
+  user: dsync_simple_target:admin
   password: "111"
 databases:
   - source:
@@ -91,14 +95,7 @@ databases:
       user: dsync_target_a:admin
       database: dsync_target_a2
     include_tables: [orders]
-  - source:
-      name: tenant_b_db1
-      user: dsync_src_b:admin
-      database: dsync_b_db1
-    target:
-      name: target_b
-      user: dsync_target_b:admin
-      database: dsync_target_b1
+  - database: dsync_same_db
     exclude_tables: [audit]
 `)
 	if err := os.WriteFile(configPath, config, 0o600); err != nil {
@@ -115,18 +112,18 @@ databases:
 
 	assertCount(t, mysql, "dsync_target_a:admin", "111", "dsync_target_a1", "t_keep", "3")
 	assertCount(t, mysql, "dsync_target_a:admin", "111", "dsync_target_a2", "orders", "2")
-	assertCount(t, mysql, "dsync_target_b:admin", "111", "dsync_target_b1", "events", "2")
+	assertCount(t, mysql, "dsync_simple_target:admin", "111", "dsync_same_db", "events", "2")
 	assertTableMissing(t, mysql, "dsync_target_a:admin", "111", "dsync_target_a1", "t_skip")
 	assertTableMissing(t, mysql, "dsync_target_a:admin", "111", "dsync_target_a2", "ignored")
-	assertTableMissing(t, mysql, "dsync_target_b:admin", "111", "dsync_target_b1", "audit")
+	assertTableMissing(t, mysql, "dsync_simple_target:admin", "111", "dsync_same_db", "audit")
 	assertReport(t, filepath.Join(outDir, "itest"))
 
 	runSQL(t, mysql, "dsync_target_a:admin", "111", `
 drop database dsync_target_a1;
 drop database dsync_target_a2;
 `)
-	runSQL(t, mysql, "dsync_target_b:admin", "111", `
-drop database dsync_target_b1;
+	runSQL(t, mysql, "dsync_simple_target:admin", "111", `
+drop database dsync_same_db;
 `)
 	importCmd := exec.Command("go", "run", "./cmd/datasync", "-config", configPath, "-mode", "import", "-run-id", "itest")
 	importCmd.Dir = root
@@ -138,7 +135,7 @@ drop database dsync_target_b1;
 
 	assertCount(t, mysql, "dsync_target_a:admin", "111", "dsync_target_a1", "t_keep", "3")
 	assertCount(t, mysql, "dsync_target_a:admin", "111", "dsync_target_a2", "orders", "2")
-	assertCount(t, mysql, "dsync_target_b:admin", "111", "dsync_target_b1", "events", "2")
+	assertCount(t, mysql, "dsync_simple_target:admin", "111", "dsync_same_db", "events", "2")
 	assertReport(t, filepath.Join(outDir, "itest"))
 }
 

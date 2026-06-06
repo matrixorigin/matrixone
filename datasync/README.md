@@ -29,7 +29,26 @@ Runs write separate `export-report.*`, `import-report.*`, and `summary-report.*`
 
 Use `-run-id <id>` to choose a stable run directory under `output_dir`.
 
-The config uses optional top-level `source` and `target` entries for shared connection defaults: `name`, `host`, `port`, `user`, and `password`. Each `databases` entry has its own `source.database` and `target.database`, and may override any inherited connection field. If a database entry cannot be completed from its own fields plus the top-level defaults, that entry is ignored.
+The config uses optional top-level `source` and `target` entries for shared connection defaults: `name`, `host`, `port`, `user`, and `password`. Most entries can use the simple form when source and target database names are the same:
+
+```yaml
+databases:
+  - sales
+  - database: ops
+    exclude_tables: [audit]
+```
+
+Use the full form when source and target database names differ or one database needs its own connection override:
+
+```yaml
+databases:
+  - source:
+      database: source_sales
+    target:
+      database: target_sales
+```
+
+If a database entry cannot be completed from its own fields plus the top-level defaults, that entry is ignored.
 
 Table filtering is evaluated per database:
 
