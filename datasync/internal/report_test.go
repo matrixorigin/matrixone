@@ -39,6 +39,8 @@ func TestWriteReports(t *testing.T) {
 			TargetRows:     3,
 			ExportStatus:   StatusSuccess,
 			ImportStatus:   StatusSuccess,
+			ExportDuration: 3 * time.Millisecond,
+			ImportDuration: 4 * time.Millisecond,
 			ExportAttempts: 1,
 			ImportAttempts: 2,
 		}},
@@ -113,8 +115,8 @@ func TestWriteReports(t *testing.T) {
 		"import-report.md",
 		"summary-report.md",
 		"## 表同步结果",
-		"| 源端 | 目标端 | 源端行数 | 目标端行数 | CSV大小 | 导出状态 | 导入状态 | 导出重试次数 | 导入重试次数 | 错误 |",
-		"| tenant_a.src_db.t1 | target_a.dst_db.t1 | 3 | 3 | 12 bytes | success | success | 0 | 1 |  |",
+		"| 源端 | 目标端 | 源端行数 | 目标端行数 | CSV大小 | 导出耗时 | 导入耗时 | 导出状态 | 导入状态 | 导出重试次数 | 导入重试次数 | 错误 |",
+		"| tenant_a.src_db.t1 | target_a.dst_db.t1 | 3 | 3 | 12 bytes | 3ms | 4ms | success | success | 0 | 1 |  |",
 	} {
 		if !strings.Contains(markdownText, want) {
 			t.Fatalf("summary-report.md missing %q:\n%s", want, markdownText)

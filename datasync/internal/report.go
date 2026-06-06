@@ -350,15 +350,17 @@ func writeMarkdown(path string, kind reportKind, r RunReport) error {
 	fmt.Fprintf(&b, "- 汇总报告：%s / %s / %s\n", r.Summary.SummaryJSONReportPath, r.Summary.SummaryCSVReportPath, r.Summary.SummaryMarkdownReportPath)
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "## 表同步结果")
-	fmt.Fprintln(&b, "| 源端 | 目标端 | 源端行数 | 目标端行数 | CSV大小 | 导出状态 | 导入状态 | 导出重试次数 | 导入重试次数 | 错误 |")
-	fmt.Fprintln(&b, "| ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- |")
+	fmt.Fprintln(&b, "| 源端 | 目标端 | 源端行数 | 目标端行数 | CSV大小 | 导出耗时 | 导入耗时 | 导出状态 | 导入状态 | 导出重试次数 | 导入重试次数 | 错误 |")
+	fmt.Fprintln(&b, "| ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- |")
 	for _, row := range r.Tables {
-		fmt.Fprintf(&b, "| %s | %s | %d | %d | %d bytes | %s | %s | %d | %d | %s |\n",
+		fmt.Fprintf(&b, "| %s | %s | %d | %d | %d bytes | %s | %s | %s | %s | %d | %d | %s |\n",
 			markdownCell(row.SourceName+"."+row.SourceDatabase+"."+row.SourceTable),
 			markdownCell(row.TargetName+"."+row.TargetDatabase+"."+row.SourceTable),
 			row.SourceRows,
 			row.TargetRows,
 			row.CSVFileSize,
+			row.ExportDuration,
+			row.ImportDuration,
 			markdownCell(row.ExportStatus),
 			markdownCell(row.ImportStatus),
 			retries(row.ExportAttempts),

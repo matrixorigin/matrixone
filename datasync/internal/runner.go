@@ -182,11 +182,11 @@ func (r Runner) runTaskWithProgress(ctx context.Context, runID string, task Task
 		if err != nil {
 			row.ExportStatus = StatusFailed
 			row.Error = err.Error()
-			progress.Printf("datasync: [%s] export failed attempts=%d: %s", label, row.ExportAttempts, row.Error)
+			progress.Printf("datasync: [%s] export failed attempts=%d duration=%s: %s", label, row.ExportAttempts, row.ExportDuration, row.Error)
 			return row
 		}
 		row.ExportStatus = StatusSuccess
-		progress.Printf("datasync: [%s] export succeeded rows=%d attempts=%d", label, row.SourceRows, row.ExportAttempts)
+		progress.Printf("datasync: [%s] export succeeded rows=%d attempts=%d duration=%s", label, row.SourceRows, row.ExportAttempts, row.ExportDuration)
 	}
 	if _, err := requireFile(sqlFile); err != nil {
 		row.Error = err.Error()
@@ -250,11 +250,11 @@ func (r Runner) runTaskWithProgress(ctx context.Context, runID string, task Task
 	if err != nil {
 		row.ImportStatus = StatusFailed
 		row.Error = err.Error()
-		progress.Printf("datasync: [%s] import failed attempts=%d: %s", label, row.ImportAttempts, row.Error)
+		progress.Printf("datasync: [%s] import failed attempts=%d duration=%s: %s", label, row.ImportAttempts, row.ImportDuration, row.Error)
 		return row
 	}
 	row.ImportStatus = StatusSuccess
-	progress.Printf("datasync: [%s] import succeeded rows=%d attempts=%d", label, row.TargetRows, row.ImportAttempts)
+	progress.Printf("datasync: [%s] import succeeded rows=%d attempts=%d duration=%s", label, row.TargetRows, row.ImportAttempts, row.ImportDuration)
 	if r.shouldCleanupExportAfterImport(row) {
 		if err := os.RemoveAll(tableDir); err != nil {
 			row.ImportStatus = StatusFailed

@@ -104,9 +104,9 @@ func TestRunTaskRetriesExportAndImports(t *testing.T) {
 	progressText := progress.String()
 	for _, want := range []string{
 		"datasync: [tenant_a.src_db.t1 -> target.dst_db] export started",
-		"datasync: [tenant_a.src_db.t1 -> target.dst_db] export succeeded rows=2 attempts=2",
+		"datasync: [tenant_a.src_db.t1 -> target.dst_db] export succeeded rows=2 attempts=2 duration=",
 		"datasync: [tenant_a.src_db.t1 -> target.dst_db] import started",
-		"datasync: [tenant_a.src_db.t1 -> target.dst_db] import succeeded rows=2 attempts=1",
+		"datasync: [tenant_a.src_db.t1 -> target.dst_db] import succeeded rows=2 attempts=1 duration=",
 	} {
 		if !strings.Contains(progressText, want) {
 			t.Fatalf("progress = %q, missing %q", progressText, want)
@@ -182,7 +182,7 @@ func TestRunTaskImportModeSkipsExportAndImportsExistingFiles(t *testing.T) {
 	for _, want := range []string{
 		"datasync: [tenant_a.src_db.t1 -> target.dst_db] export skipped; using existing files",
 		"datasync: [tenant_a.src_db.t1 -> target.dst_db] import started",
-		"datasync: [tenant_a.src_db.t1 -> target.dst_db] import succeeded rows=2 attempts=1",
+		"datasync: [tenant_a.src_db.t1 -> target.dst_db] import succeeded rows=2 attempts=1 duration=",
 	} {
 		if !strings.Contains(progressText, want) {
 			t.Fatalf("progress = %q, missing %q", progressText, want)

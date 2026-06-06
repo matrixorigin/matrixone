@@ -262,7 +262,7 @@ func assertReport(t *testing.T, runDir string) {
 		t.Fatal(err)
 	}
 	markdownText := string(markdownReport)
-	for _, want := range []string{"# 数据同步汇总报告", "## 汇总", "## 表同步结果", "CSV大小", "导出重试次数", "导入重试次数"} {
+	for _, want := range []string{"# 数据同步汇总报告", "## 汇总", "## 表同步结果", "CSV大小", "导出耗时", "导入耗时", "导出重试次数", "导入重试次数"} {
 		if !strings.Contains(markdownText, want) {
 			t.Fatalf("summary-report.md missing %q: %s", want, markdownText)
 		}
