@@ -2,11 +2,16 @@ package app
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/datasync/internal/config"
+	"github.com/matrixorigin/datasync/internal/db"
 	"github.com/matrixorigin/datasync/internal/plan"
 	"github.com/matrixorigin/datasync/internal/report"
 	"github.com/matrixorigin/datasync/internal/run"
@@ -96,11 +101,159 @@ func TestRunReturnsErrorWhenTableTaskFailsAfterWritingReport(t *testing.T) {
 	}
 }
 
+func TestNewRunID(t *testing.T) {
+	now := time.Date(2026, 6, 6, 7, 8, 9, 0, time.UTC)
+	if got := NewRunID(now); got != "20260606-070809" {
+		t.Fatalf("NewRunID() = %q, want 20260606-070809", got)
+	}
+}
+
+func TestRunReturnsDiscoveryError(t *testing.T) {
+	errBoom := errors.New("discover failed")
+	app := App{
+		Config: &config.Config{
+			Sources: []config.Source{{
+				Endpoint:  config.Endpoint{Name: "tenant_a"},
+				Databases: []config.Database{{Name: "src_db"}},
+			}},
+		},
+		Discovery: fakeDiscovery{err: errBoom},
+		Runner:    &fakeRunner{},
+	}
+
+	_, err := app.Run(context.Background(), "run1")
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("Run() error = %v, want discovery error", err)
+	}
+}
+
+func TestRunReturnsRunnerError(t *testing.T) {
+	errBoom := errors.New("runner failed")
+	app := App{
+		Config: &config.Config{
+			OutputDir: t.TempDir(),
+			Sources: []config.Source{{
+				Endpoint:  config.Endpoint{Name: "tenant_a"},
+				Databases: []config.Database{{Name: "src_db", Target: "dst_db"}},
+			}},
+		},
+		Discovery: fakeDiscovery{tables: []string{"t1"}},
+		Runner:    &fakeRunner{err: errBoom},
+	}
+
+	_, err := app.Run(context.Background(), "run1")
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("Run() error = %v, want runner error", err)
+	}
+}
+
+func TestRunReturnsReportWriteError(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "not-a-dir")
+	app := App{
+		Config: &config.Config{
+			OutputDir: file,
+			Sources: []config.Source{{
+				Endpoint:  config.Endpoint{Name: "tenant_a"},
+				Databases: []config.Database{{Name: "src_db", Target: "dst_db"}},
+			}},
+		},
+		Discovery: fakeDiscovery{tables: []string{"t1"}},
+		Runner:    &fakeRunner{},
+	}
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := app.Run(context.Background(), "run1")
+	if err == nil {
+		t.Fatal("Run() error = nil, want report write error")
+	}
+	if result.RunID != "run1" || result.PlannedTasks != 1 {
+		t.Fatalf("result = %+v, want partial result", result)
+	}
+}
+
+func TestMatrixOneDiscoveryListsTableNames(t *testing.T) {
+	originalOpenDB := openDB
+	defer func() { openDB = originalOpenDB }()
+	fake := &fakeDBClient{
+		tables: []db.Table{{Name: "t1", Kind: "r"}, {Name: "t2", Kind: "r"}},
+	}
+	openDB = func(ctx context.Context, endpoint db.Endpoint, database string) (dbClient, error) {
+		if endpoint.User != "a:admin" || database != "src_db" {
+			t.Fatalf("openDB endpoint=%+v database=%q", endpoint, database)
+		}
+		return fake, nil
+	}
+
+	tables, err := MatrixOneDiscovery{}.ListTables(context.Background(), config.Source{
+		Endpoint: config.Endpoint{Host: "127.0.0.1", Port: 6001, User: "a:admin", Password: "111"},
+	}, "src_db")
+	if err != nil {
+		t.Fatalf("ListTables() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(tables, []string{"t1", "t2"}) {
+		t.Fatalf("tables = %#v, want t1/t2", tables)
+	}
+	if !fake.closed {
+		t.Fatal("client was not closed")
+	}
+}
+
+func TestMatrixOneRunDBUsesConfiguredEndpoints(t *testing.T) {
+	originalOpenDB := openDB
+	defer func() { openDB = originalOpenDB }()
+	var calls []string
+	openDB = func(ctx context.Context, endpoint db.Endpoint, database string) (dbClient, error) {
+		calls = append(calls, endpoint.User+"@"+database)
+		return &fakeDBClient{count: 5}, nil
+	}
+	runDB := MatrixOneRunDB{Config: &config.Config{
+		Target: config.Endpoint{Host: "target", Port: 6001, User: "target:admin", Password: "111"},
+	}}
+	task := plan.Task{
+		SourceHost:     "source",
+		SourcePort:     6002,
+		SourceUser:     "source:admin",
+		SourcePassword: "222",
+		SourceDatabase: "src_db",
+		SourceTable:    "t1",
+	}
+
+	sourceRows, err := runDB.CountSourceRows(context.Background(), task)
+	if err != nil {
+		t.Fatalf("CountSourceRows() error = %v", err)
+	}
+	if sourceRows != 5 {
+		t.Fatalf("CountSourceRows() = %d, want 5", sourceRows)
+	}
+	if err := runDB.EnsureTargetDatabase(context.Background(), "dst_db"); err != nil {
+		t.Fatalf("EnsureTargetDatabase() error = %v", err)
+	}
+	targetRows, err := runDB.CountTargetRows(context.Background(), "dst_db", "t1")
+	if err != nil {
+		t.Fatalf("CountTargetRows() error = %v", err)
+	}
+	if targetRows != 5 {
+		t.Fatalf("CountTargetRows() = %d, want 5", targetRows)
+	}
+
+	want := []string{"source:admin@src_db", "target:admin@", "target:admin@dst_db"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("openDB calls = %#v, want %#v", calls, want)
+	}
+}
+
 type fakeDiscovery struct {
 	tables []string
+	err    error
 }
 
 func (f fakeDiscovery) ListTables(context.Context, config.Source, string) ([]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	return f.tables, nil
 }
 
@@ -108,11 +261,15 @@ type fakeRunner struct {
 	mode        run.Mode
 	tasks       []plan.Task
 	failedTasks int
+	err         error
 }
 
 func (f *fakeRunner) Run(ctx context.Context, mode run.Mode, runID string, tasks []plan.Task) (report.RunReport, error) {
 	f.mode = mode
 	f.tasks = tasks
+	if f.err != nil {
+		return report.RunReport{}, f.err
+	}
 	return report.RunReport{
 		RunID: runID,
 		Summary: report.Summary{
@@ -130,4 +287,27 @@ func (f *fakeRunner) Run(ctx context.Context, mode run.Mode, runID string, tasks
 			ImportStatus:   report.StatusSkipped,
 		}},
 	}, nil
+}
+
+type fakeDBClient struct {
+	tables []db.Table
+	count  int64
+	closed bool
+}
+
+func (f *fakeDBClient) Close() error {
+	f.closed = true
+	return nil
+}
+
+func (f *fakeDBClient) ListOrdinaryTables(context.Context, string) ([]db.Table, error) {
+	return f.tables, nil
+}
+
+func (f *fakeDBClient) CountRows(context.Context, string, string) (int64, error) {
+	return f.count, nil
+}
+
+func (f *fakeDBClient) EnsureDatabase(context.Context, string) error {
+	return nil
 }

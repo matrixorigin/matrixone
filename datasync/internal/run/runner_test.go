@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -181,6 +182,184 @@ func TestRunSummaryCountsFailures(t *testing.T) {
 	}
 }
 
+func TestRunTaskReturnsSourceCountError(t *testing.T) {
+	errBoom := errors.New("count failed")
+	r := Runner{
+		Config:   testConfig(t.TempDir()),
+		Mode:     ModeSync,
+		Executor: &fakeExecutor{},
+		DB:       &fakeDB{sourceErr: errBoom},
+	}
+
+	row := r.runTask(context.Background(), "run1", testTask())
+	if row.ExportStatus != report.StatusFailed || !strings.Contains(row.Error, "count failed") {
+		t.Fatalf("row = %+v, want source count failure", row)
+	}
+}
+
+func TestRunTaskReturnsMissingSQLFileError(t *testing.T) {
+	r := Runner{
+		Config:   testConfig(t.TempDir()),
+		Mode:     ModeSync,
+		Executor: &fakeExecutor{skipSQL: true},
+		DB:       &fakeDB{sourceRows: 2},
+	}
+
+	row := r.runTask(context.Background(), "run1", testTask())
+	if row.ExportStatus != report.StatusFailed || !strings.Contains(row.Error, "t1.sql") {
+		t.Fatalf("row = %+v, want missing SQL failure", row)
+	}
+}
+
+func TestRunTaskReturnsMissingCSVFileError(t *testing.T) {
+	r := Runner{
+		Config:   testConfig(t.TempDir()),
+		Mode:     ModeSync,
+		Executor: &fakeExecutor{skipCSV: true},
+		DB:       &fakeDB{sourceRows: 2},
+	}
+
+	row := r.runTask(context.Background(), "run1", testTask())
+	if row.ExportStatus != report.StatusFailed || !strings.Contains(row.Error, "src_db_t1.csv") {
+		t.Fatalf("row = %+v, want missing CSV failure", row)
+	}
+}
+
+func TestRunTaskReturnsEnsureTargetError(t *testing.T) {
+	errBoom := errors.New("ensure failed")
+	r := Runner{
+		Config:   testConfig(t.TempDir()),
+		Mode:     ModeSync,
+		Executor: &fakeExecutor{},
+		DB:       &fakeDB{sourceRows: 2, ensureTargetErr: errBoom},
+	}
+
+	row := r.runTask(context.Background(), "run1", testTask())
+	if row.ImportStatus != report.StatusFailed || !strings.Contains(row.Error, "ensure failed") {
+		t.Fatalf("row = %+v, want ensure target failure", row)
+	}
+}
+
+func TestRunTaskReturnsMySQLSourceError(t *testing.T) {
+	errBoom := errors.New("mysql failed")
+	r := Runner{
+		Config:   testConfig(t.TempDir()),
+		Mode:     ModeSync,
+		Executor: &fakeExecutor{mysqlErr: errBoom},
+		DB:       &fakeDB{sourceRows: 2},
+	}
+
+	row := r.runTask(context.Background(), "run1", testTask())
+	if row.ImportStatus != report.StatusFailed || !strings.Contains(row.Error, "mysql failed") {
+		t.Fatalf("row = %+v, want mysql failure", row)
+	}
+}
+
+func TestRunTaskReturnsTargetCountError(t *testing.T) {
+	errBoom := errors.New("target count failed")
+	r := Runner{
+		Config:   testConfig(t.TempDir()),
+		Mode:     ModeSync,
+		Executor: &fakeExecutor{},
+		DB:       &fakeDB{sourceRows: 2, targetErr: errBoom},
+	}
+
+	row := r.runTask(context.Background(), "run1", testTask())
+	if row.ImportStatus != report.StatusFailed || !strings.Contains(row.Error, "target count failed") {
+		t.Fatalf("row = %+v, want target count failure", row)
+	}
+}
+
+func TestRequireFileRejectsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := requireFile(dir); err == nil {
+		t.Fatal("requireFile() error = nil, want directory error")
+	}
+}
+
+func TestLocalExecutorMoDumpRunsBinaryInWorkDirAndWritesStdout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args.txt")
+	pwdFile := filepath.Join(dir, "pwd.txt")
+	binary := writeShellScript(t, dir, "mo-dump", `#!/bin/sh
+printf '%s\n' "$@" > "`+argsFile+`"
+pwd > "`+pwdFile+`"
+printf 'DROP TABLE IF EXISTS t1;\n'
+`)
+	sqlFile := filepath.Join(dir, "out.sql")
+	task := testTask()
+
+	err := LocalExecutor{}.MoDump(context.Background(), MoDumpRequest{
+		Binary:  binary,
+		Task:    task,
+		WorkDir: dir,
+		SQLFile: sqlFile,
+	})
+	if err != nil {
+		t.Fatalf("MoDump() error = %v", err)
+	}
+
+	sqlBytes, err := os.ReadFile(sqlFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(sqlBytes), "DROP TABLE") {
+		t.Fatalf("SQL output = %q, want dump stdout", string(sqlBytes))
+	}
+	argsBytes, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := string(argsBytes)
+	for _, want := range []string{"-u\na:admin", "-p\n111", "-h\n127.0.0.1", "-P\n6001", "-db\nsrc_db", "-tbl\nt1", "-csv", "--local-infile=true"} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("args = %q, missing %q", args, want)
+		}
+	}
+	pwdBytes, err := os.ReadFile(pwdFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(pwdBytes)) != dir {
+		t.Fatalf("pwd = %q, want %q", strings.TrimSpace(string(pwdBytes)), dir)
+	}
+}
+
+func TestLocalExecutorMySQLSourceRunsSourceCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "mysql-args.txt")
+	binary := writeShellScript(t, dir, "mysql", `#!/bin/sh
+printf '%s\n' "$@" > "`+argsFile+`"
+`)
+
+	err := LocalExecutor{}.MySQLSource(context.Background(), MySQLSourceRequest{
+		Binary:   binary,
+		Target:   testConfig(dir).Target,
+		Database: "dst_db",
+		SQLFile:  "/tmp/t1.sql",
+	})
+	if err != nil {
+		t.Fatalf("MySQLSource() error = %v", err)
+	}
+
+	argsBytes, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := string(argsBytes)
+	for _, want := range []string{"--local-infile=1", "-h\n127.0.0.1", "-P\n6001", "-u\ntarget:admin", "-p111", "dst_db", "-e\nsource /tmp/t1.sql"} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("args = %q, missing %q", args, want)
+		}
+	}
+}
+
 func TestParseMode(t *testing.T) {
 	tests := []struct {
 		value string
@@ -208,10 +387,22 @@ func TestParseMode(t *testing.T) {
 	}
 }
 
+func writeShellScript(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 type fakeExecutor struct {
 	moDumpCalls     int
 	mysqlCalls      int
 	failMoDumpCalls int
+	skipSQL         bool
+	skipCSV         bool
+	mysqlErr        error
 }
 
 func (f *fakeExecutor) MoDump(ctx context.Context, req MoDumpRequest) error {
@@ -222,33 +413,47 @@ func (f *fakeExecutor) MoDump(ctx context.Context, req MoDumpRequest) error {
 	if err := os.MkdirAll(req.WorkDir, 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(req.SQLFile, []byte("DROP TABLE IF EXISTS `t1`;"), 0o644); err != nil {
-		return err
+	if !f.skipSQL {
+		if err := os.WriteFile(req.SQLFile, []byte("DROP TABLE IF EXISTS `t1`;"), 0o644); err != nil {
+			return err
+		}
 	}
-	return os.WriteFile(filepath.Join(req.WorkDir, "src_db_t1.csv"), []byte("1\n2\n"), 0o644)
+	if !f.skipCSV {
+		return os.WriteFile(filepath.Join(req.WorkDir, "src_db_t1.csv"), []byte("1\n2\n"), 0o644)
+	}
+	return nil
 }
 
 func (f *fakeExecutor) MySQLSource(context.Context, MySQLSourceRequest) error {
 	f.mysqlCalls++
-	return nil
+	return f.mysqlErr
 }
 
 type fakeDB struct {
 	sourceRows        int64
 	targetRows        int64
 	ensureTargetCalls int
+	sourceErr         error
+	ensureTargetErr   error
+	targetErr         error
 }
 
 func (f *fakeDB) CountSourceRows(context.Context, plan.Task) (int64, error) {
+	if f.sourceErr != nil {
+		return 0, f.sourceErr
+	}
 	return f.sourceRows, nil
 }
 
 func (f *fakeDB) EnsureTargetDatabase(context.Context, string) error {
 	f.ensureTargetCalls++
-	return nil
+	return f.ensureTargetErr
 }
 
 func (f *fakeDB) CountTargetRows(context.Context, string, string) (int64, error) {
+	if f.targetErr != nil {
+		return 0, f.targetErr
+	}
 	return f.targetRows, nil
 }
 

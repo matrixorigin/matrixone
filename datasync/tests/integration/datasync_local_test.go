@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -99,6 +100,7 @@ sources:
 	assertCount(t, mysql, "dsync_target:admin", "111", "dsync_target_a2", "orders", "2")
 	assertCount(t, mysql, "dsync_target:admin", "111", "dsync_target_b1", "events", "2")
 	assertTableMissing(t, mysql, "dsync_target:admin", "111", "dsync_target_a1", "t_skip")
+	assertReport(t, filepath.Join(outDir, "itest"))
 
 	runSQL(t, mysql, "dsync_target:admin", "111", `
 drop database dsync_target_a1;
@@ -116,6 +118,7 @@ drop database dsync_target_b1;
 	assertCount(t, mysql, "dsync_target:admin", "111", "dsync_target_a1", "t_keep", "3")
 	assertCount(t, mysql, "dsync_target:admin", "111", "dsync_target_a2", "orders", "2")
 	assertCount(t, mysql, "dsync_target:admin", "111", "dsync_target_b1", "events", "2")
+	assertReport(t, filepath.Join(outDir, "itest"))
 }
 
 func repoRoot(t *testing.T) string {
@@ -164,5 +167,62 @@ func assertTableMissing(t *testing.T, mysql, user, password, database, table str
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err == nil {
 		t.Fatalf("%s.%s exists, want missing", database, table)
+	}
+}
+
+func assertReport(t *testing.T, runDir string) {
+	t.Helper()
+	reportPath := filepath.Join(runDir, "report.json")
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report struct {
+		Summary struct {
+			TotalTasks     int `json:"total_tasks"`
+			SucceededTasks int `json:"succeeded_tasks"`
+			FailedTasks    int `json:"failed_tasks"`
+		} `json:"summary"`
+		Tables []struct {
+			SourceTable    string `json:"source_table"`
+			CSVFile        string `json:"csv_file"`
+			CSVFileSize    int64  `json:"csv_file_size_bytes"`
+			ExportStatus   string `json:"export_status"`
+			ImportStatus   string `json:"import_status"`
+			TargetRowCount int64  `json:"target_rows"`
+			SourceRowCount int64  `json:"source_rows"`
+			TargetDatabase string `json:"target_database"`
+			SourceDatabase string `json:"source_database"`
+		} `json:"tables"`
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Summary.TotalTasks != 3 || report.Summary.SucceededTasks != 3 || report.Summary.FailedTasks != 0 {
+		t.Fatalf("summary = %+v, want 3 successful tasks", report.Summary)
+	}
+	if len(report.Tables) != 3 {
+		t.Fatalf("table count = %d, want 3", len(report.Tables))
+	}
+	for _, table := range report.Tables {
+		if table.CSVFile == "" || table.CSVFileSize <= 0 {
+			t.Fatalf("table report missing CSV file size: %+v", table)
+		}
+		if table.ExportStatus != "success" && table.ExportStatus != "skipped" {
+			t.Fatalf("export status = %q, want success or skipped", table.ExportStatus)
+		}
+		if table.ImportStatus != "success" {
+			t.Fatalf("import status = %q, want success", table.ImportStatus)
+		}
+		if table.TargetRowCount <= 0 {
+			t.Fatalf("target row count = %d, want positive", table.TargetRowCount)
+		}
+	}
+	csvReport, err := os.ReadFile(filepath.Join(runDir, "report.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(csvReport), "csv_file_size_bytes") {
+		t.Fatalf("report.csv missing csv_file_size_bytes header: %s", csvReport)
 	}
 }

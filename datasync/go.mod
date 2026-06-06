@@ -3,6 +3,7 @@ module github.com/matrixorigin/datasync
 go 1.23.0
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/go-sql-driver/mysql v1.8.1
 	gopkg.in/yaml.v3 v3.0.1
 )

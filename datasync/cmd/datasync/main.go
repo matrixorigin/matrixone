@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -15,30 +16,38 @@ import (
 var version = "dev"
 
 func main() {
-	configPath := flag.String("config", "", "path to YAML configuration file")
-	modeText := flag.String("mode", "sync", "run mode: sync, export, or import")
-	runID := flag.String("run-id", "", "optional run id")
-	showVersion := flag.Bool("version", false, "print version and exit")
-	flag.Parse()
+	os.Exit(exitCode(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func exitCode(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("datasync", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "", "path to YAML configuration file")
+	modeText := flags.String("mode", "sync", "run mode: sync, export, or import")
+	runID := flags.String("run-id", "", "optional run id")
+	showVersion := flags.Bool("version", false, "print version and exit")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
 
 	if *showVersion {
-		fmt.Println(version)
-		return
+		fmt.Fprintln(stdout, version)
+		return 0
 	}
 	if *configPath == "" {
-		fmt.Fprintln(os.Stderr, "missing required -config")
-		os.Exit(2)
+		fmt.Fprintln(stderr, "missing required -config")
+		return 2
 	}
 	mode, err := run.ParseMode(*modeText)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		fmt.Fprintln(stderr, err)
+		return 2
 	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "load config: %v\n", err)
+		return 1
 	}
 	if *runID == "" {
 		*runID = app.NewRunID(time.Now())
@@ -46,10 +55,10 @@ func main() {
 
 	result, err := app.App{Config: cfg, Mode: mode}.Run(context.Background(), *runID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "datasync failed: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "datasync failed: %v\n", err)
+		return 1
 	}
-	fmt.Printf("run_id=%s mode=%s planned_tasks=%d succeeded=%d failed=%d json_report=%s csv_report=%s\n",
+	fmt.Fprintf(stdout, "run_id=%s mode=%s planned_tasks=%d succeeded=%d failed=%d json_report=%s csv_report=%s\n",
 		result.RunID,
 		mode,
 		result.PlannedTasks,
@@ -58,4 +67,5 @@ func main() {
 		result.Report.Summary.JSONReportPath,
 		result.Report.Summary.CSVReportPath,
 	)
+	return 0
 }

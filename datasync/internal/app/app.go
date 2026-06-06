@@ -28,6 +28,17 @@ type TaskRunner interface {
 	Run(context.Context, run.Mode, string, []plan.Task) (report.RunReport, error)
 }
 
+type dbClient interface {
+	Close() error
+	ListOrdinaryTables(context.Context, string) ([]db.Table, error)
+	CountRows(context.Context, string, string) (int64, error)
+	EnsureDatabase(context.Context, string) error
+}
+
+var openDB = func(ctx context.Context, endpoint db.Endpoint, database string) (dbClient, error) {
+	return db.Open(ctx, endpoint, database)
+}
+
 type Result struct {
 	RunID        string
 	PlannedTasks int
@@ -79,7 +90,7 @@ func NewRunID(now time.Time) string {
 type MatrixOneDiscovery struct{}
 
 func (MatrixOneDiscovery) ListTables(ctx context.Context, source config.Source, database string) ([]string, error) {
-	client, err := db.Open(ctx, db.Endpoint{
+	client, err := openDB(ctx, db.Endpoint{
 		Host:     source.Host,
 		Port:     source.Port,
 		User:     source.User,
@@ -118,7 +129,7 @@ type MatrixOneRunDB struct {
 }
 
 func (m MatrixOneRunDB) CountSourceRows(ctx context.Context, task plan.Task) (int64, error) {
-	client, err := db.Open(ctx, db.Endpoint{
+	client, err := openDB(ctx, db.Endpoint{
 		Host:     task.SourceHost,
 		Port:     task.SourcePort,
 		User:     task.SourceUser,
@@ -132,7 +143,7 @@ func (m MatrixOneRunDB) CountSourceRows(ctx context.Context, task plan.Task) (in
 }
 
 func (m MatrixOneRunDB) EnsureTargetDatabase(ctx context.Context, database string) error {
-	client, err := db.Open(ctx, db.Endpoint{
+	client, err := openDB(ctx, db.Endpoint{
 		Host:     m.Config.Target.Host,
 		Port:     m.Config.Target.Port,
 		User:     m.Config.Target.User,
@@ -146,7 +157,7 @@ func (m MatrixOneRunDB) EnsureTargetDatabase(ctx context.Context, database strin
 }
 
 func (m MatrixOneRunDB) CountTargetRows(ctx context.Context, database, table string) (int64, error) {
-	client, err := db.Open(ctx, db.Endpoint{
+	client, err := openDB(ctx, db.Endpoint{
 		Host:     m.Config.Target.Host,
 		Port:     m.Config.Target.Port,
 		User:     m.Config.Target.User,

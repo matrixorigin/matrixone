@@ -87,3 +87,31 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("CSV row status/attempt columns = %#v", row)
 	}
 }
+
+func TestWriteReturnsMkdirError(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Write(filepath.Join(file, "report"), RunReport{}); err == nil {
+		t.Fatal("Write() error = nil, want mkdir error")
+	}
+}
+
+func TestWriteReturnsJSONCreateError(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Write(file, RunReport{}); err == nil {
+		t.Fatal("Write() error = nil, want json create error")
+	}
+}
+
+func TestWriteCSVReturnsCreateError(t *testing.T) {
+	if err := writeCSV(filepath.Join(t.TempDir(), "missing", "report.csv"), nil); err == nil {
+		t.Fatal("writeCSV() error = nil, want create error")
+	}
+}
