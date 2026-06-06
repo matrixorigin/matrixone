@@ -50,42 +50,35 @@ retry:
   max_attempts: 3
   backoff: 2s
 
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: dsync_target:admin
-  password: "111"
-
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: dsync_src_a:admin
-    password: "111"
-    databases:
-      - name: dsync_a_db1
-        target: dsync_target_a1
-        exclude_tables:
-          - t_skip
-      - name: dsync_a_db2
-        target: dsync_target_a2
-  - name: tenant_b
-    host: 127.0.0.1
-    port: 6001
-    user: dsync_src_b:admin
-    password: "111"
-    databases:
-      - name: dsync_b_db1
-        target: dsync_target_b1
+databases:
+  - source:
+      name: tenant_a_db1
+      host: 127.0.0.1
+      port: 6001
+      user: dsync_src_a:admin
+      password: "111"
+      database: dsync_a_db1
+    target:
+      name: target_a
+      host: 127.0.0.1
+      port: 6001
+      user: dsync_target_a:admin
+      password: "111"
+      database: dsync_target_a1
+    include_tables:
+      - t_keep
+      - t_skip
+    exclude_tables:
+      - t_skip
 ```
 
 Rules:
 
-- Each source tenant has a complete connection config.
-- Each source database may map to a different target database.
-- If `target` is omitted for a database, the target database name defaults to the source database name.
-- `exclude_tables` removes matching source tables from the export plan.
+- Each `databases` entry has independent source and target connection config, including the source database name and target database name.
+- If `include_tables` is configured, only discovered ordinary tables listed there are candidates.
+- If `include_tables` is omitted or empty, all discovered ordinary tables are candidates.
+- `exclude_tables` removes matching tables from the candidate set.
+- If `exclude_tables` is omitted or empty, no tables are removed.
 - Passwords may be supplied directly in the config or as environment references using `${ENV_NAME}`. Missing referenced environment variables are configuration errors.
 
 ## Data Flow
@@ -100,10 +93,10 @@ The CLI accepts a config file and an explicit run mode:
 1. Load and validate configuration.
 2. Create a run directory:
    `runs/<run_id>/`
-3. For each source tenant/database:
+3. For each configured database sync entry:
    - Connect to the source MatrixOne tenant.
    - Discover ordinary tables using MatrixOne metadata.
-   - Remove excluded tables.
+   - Apply `include_tables`, then remove `exclude_tables`.
    - Build one task per remaining table.
 4. For each table task:
    - Count source rows with `SELECT COUNT(*) FROM <db>.<table>`.

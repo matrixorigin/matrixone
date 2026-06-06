@@ -43,8 +43,8 @@ type Executor interface {
 
 type DB interface {
 	CountSourceRows(context.Context, plan.Task) (int64, error)
-	EnsureTargetDatabase(context.Context, string) error
-	CountTargetRows(context.Context, string, string) (int64, error)
+	EnsureTargetDatabase(context.Context, plan.Task) error
+	CountTargetRows(context.Context, plan.Task) (int64, error)
 }
 
 type MoDumpRequest struct {
@@ -124,6 +124,10 @@ func (r Runner) runTask(ctx context.Context, runID string, task plan.Task) repor
 		SourceDatabase: task.SourceDatabase,
 		SourceTable:    task.SourceTable,
 		SourceRows:     task.SourceRows,
+		TargetName:     task.TargetName,
+		TargetHost:     task.TargetHost,
+		TargetPort:     task.TargetPort,
+		TargetUser:     task.TargetUser,
 		TargetDatabase: task.TargetDatabase,
 		ImportStatus:   report.StatusPending,
 	}
@@ -195,7 +199,7 @@ func (r Runner) runTask(ctx context.Context, runID string, task plan.Task) repor
 		return row
 	}
 
-	if err := r.DB.EnsureTargetDatabase(ctx, task.TargetDatabase); err != nil {
+	if err := r.DB.EnsureTargetDatabase(ctx, task); err != nil {
 		row.ImportStatus = report.StatusFailed
 		row.Error = err.Error()
 		return row
@@ -205,13 +209,13 @@ func (r Runner) runTask(ctx context.Context, runID string, task plan.Task) repor
 		row.ImportAttempts = attempt
 		if err := r.Executor.MySQLSource(ctx, MySQLSourceRequest{
 			Binary:   r.Config.MySQLPath,
-			Target:   r.Config.Target,
+			Target:   task.TargetEndpoint(),
 			Database: task.TargetDatabase,
 			SQLFile:  sqlFile,
 		}); err != nil {
 			return err
 		}
-		targetRows, err := r.DB.CountTargetRows(ctx, task.TargetDatabase, task.SourceTable)
+		targetRows, err := r.DB.CountTargetRows(ctx, task)
 		if err != nil {
 			return err
 		}

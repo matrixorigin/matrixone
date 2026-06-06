@@ -33,6 +33,12 @@ func exitCode(args []string, stdout, stderr io.Writer) int {
 datasync exports selected MatrixOne source tenant tables with mo-dump -csv
 and imports them into configured target databases with mysql source.
 
+Configuration:
+  The config file contains top-level databases entries. Each entry has its own
+  source endpoint/database and target endpoint/database. Set include_tables to
+  allow only specific discovered tables, then use exclude_tables to remove
+  tables from that candidate set.
+
 Modes:
   -mode sync
       Default. Discover source tables, export each table, import each table,

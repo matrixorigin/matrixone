@@ -46,6 +46,10 @@ func TestExitCodePrintsDetailedHelp(t *testing.T) {
 	help := stderr.String()
 	for _, want := range []string{
 		"Usage: datasync -config <config.yaml> [options]",
+		"Configuration:",
+		"databases entries",
+		"include_tables",
+		"exclude_tables",
 		"Modes:",
 		"-mode sync",
 		"-mode export",

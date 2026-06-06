@@ -9,7 +9,7 @@ The tool must:
 - Export data from multiple MatrixOne tenants.
 - Support multiple databases per source tenant.
 - Export each table separately using `mo-dump -csv`.
-- Read a config file that selects tenants/databases and excludes specific tables.
+- Read a config file that selects database sync entries with independent source/target endpoints and include/exclude table filters.
 - Produce per-table results including row counts, timing, attempts, status, and errors.
 - Retry failed export/import operations.
 - Keep export/import idempotent.
@@ -25,6 +25,7 @@ The tool must:
 - Call the existing `mo-dump` binary as an external process.
 - Keep `mo-dump` unchanged.
 - Use YAML config.
+- Use top-level `databases` entries so each source database has an independent target endpoint and target database.
 - Use one table task directory per exported table.
 - Let `datasync` create and select target databases because table-level `mo-dump -csv -tbl` SQL does not include `CREATE DATABASE` or `USE`.
 - Rely on generated table SQL containing `DROP TABLE IF EXISTS` for overwrite import idempotency.
@@ -57,6 +58,8 @@ Completed in the current workspace:
   - `internal/config/config.go`
   - `internal/config/config_test.go`
   - `configs/example.yaml`
+  - Each database entry has independent `source` and `target` connection config.
+  - `include_tables` is applied as an allow-list before `exclude_tables` removes tables.
 - Duplicate YAML keys are rejected for custom top-level and `retry` mappings.
 - MatrixOne database client:
   - `internal/db/db.go`

@@ -27,6 +27,10 @@ func TestWriteReports(t *testing.T) {
 			SourcePort:     6001,
 			SourceDatabase: "src_db",
 			SourceTable:    "t1",
+			TargetName:     "target_a",
+			TargetHost:     "127.0.0.2",
+			TargetPort:     6002,
+			TargetUser:     "target:admin",
 			TargetDatabase: "dst_db",
 			SQLFile:        "/tmp/t1.sql",
 			CSVFile:        "/tmp/src_db_t1.csv",
@@ -68,8 +72,8 @@ func TestWriteReports(t *testing.T) {
 	}
 	csvText := string(csvBytes)
 	for _, want := range []string{
-		"run_id,source_name,source_host,source_port,source_database,source_table,target_database,sql_file,csv_file,csv_file_size_bytes",
-		"run1,tenant_a,127.0.0.1,6001,src_db,t1,dst_db,/tmp/t1.sql,/tmp/src_db_t1.csv,12",
+		"run_id,source_name,source_host,source_port,source_database,source_table,target_name,target_host,target_port,target_user,target_database,sql_file,csv_file,csv_file_size_bytes",
+		"run1,tenant_a,127.0.0.1,6001,src_db,t1,target_a,127.0.0.2,6002,target:admin,dst_db,/tmp/t1.sql,/tmp/src_db_t1.csv,12",
 	} {
 		if !strings.Contains(csvText, want) {
 			t.Fatalf("report.csv missing %q: %s", want, csvText)
@@ -83,7 +87,7 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("CSV record count = %d, want 2", len(records))
 	}
 	row := records[1]
-	if row[12] != StatusSuccess || row[13] != StatusSuccess || row[20] != "1" || row[21] != "1" {
+	if row[16] != StatusSuccess || row[17] != StatusSuccess || row[24] != "1" || row[25] != "1" {
 		t.Fatalf("CSV row status/attempt columns = %#v", row)
 	}
 }
@@ -115,6 +119,10 @@ func TestReadReport(t *testing.T) {
 			SourcePort:     6001,
 			SourceDatabase: "src_db",
 			SourceTable:    "t1",
+			TargetName:     "target_a",
+			TargetHost:     "127.0.0.2",
+			TargetPort:     6002,
+			TargetUser:     "target:admin",
 			TargetDatabase: "dst_db",
 			CSVFileSize:    12,
 			ExportDuration: time.Millisecond,
@@ -142,6 +150,10 @@ func TestReadReport(t *testing.T) {
 	if table.SourceName != "tenant_a" ||
 		table.SourceHost != "127.0.0.1" ||
 		table.SourcePort != 6001 ||
+		table.TargetName != "target_a" ||
+		table.TargetHost != "127.0.0.2" ||
+		table.TargetPort != 6002 ||
+		table.TargetUser != "target:admin" ||
 		table.CSVFileSize != 12 ||
 		table.ExportDuration != time.Millisecond ||
 		table.ImportDuration != 2*time.Millisecond {

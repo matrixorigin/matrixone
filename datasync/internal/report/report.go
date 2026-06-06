@@ -40,6 +40,10 @@ type TableReport struct {
 	SourcePort       int           `json:"source_port"`
 	SourceDatabase   string        `json:"source_database"`
 	SourceTable      string        `json:"source_table"`
+	TargetName       string        `json:"target_name"`
+	TargetHost       string        `json:"target_host"`
+	TargetPort       int           `json:"target_port"`
+	TargetUser       string        `json:"target_user"`
 	TargetDatabase   string        `json:"target_database"`
 	SQLFile          string        `json:"sql_file"`
 	CSVFile          string        `json:"csv_file"`
@@ -83,6 +87,10 @@ type jsonTableReport struct {
 	SourcePort       int       `json:"source_port"`
 	SourceDatabase   string    `json:"source_database"`
 	SourceTable      string    `json:"source_table"`
+	TargetName       string    `json:"target_name"`
+	TargetHost       string    `json:"target_host"`
+	TargetPort       int       `json:"target_port"`
+	TargetUser       string    `json:"target_user"`
 	TargetDatabase   string    `json:"target_database"`
 	SQLFile          string    `json:"sql_file"`
 	CSVFile          string    `json:"csv_file"`
@@ -151,6 +159,10 @@ func fromJSONReport(r jsonRunReport) RunReport {
 			SourcePort:       row.SourcePort,
 			SourceDatabase:   row.SourceDatabase,
 			SourceTable:      row.SourceTable,
+			TargetName:       row.TargetName,
+			TargetHost:       row.TargetHost,
+			TargetPort:       row.TargetPort,
+			TargetUser:       row.TargetUser,
 			TargetDatabase:   row.TargetDatabase,
 			SQLFile:          row.SQLFile,
 			CSVFile:          row.CSVFile,
@@ -204,6 +216,10 @@ func toJSONReport(r RunReport) jsonRunReport {
 			SourcePort:       row.SourcePort,
 			SourceDatabase:   row.SourceDatabase,
 			SourceTable:      row.SourceTable,
+			TargetName:       row.TargetName,
+			TargetHost:       row.TargetHost,
+			TargetPort:       row.TargetPort,
+			TargetUser:       row.TargetUser,
 			TargetDatabase:   row.TargetDatabase,
 			SQLFile:          row.SQLFile,
 			CSVFile:          row.CSVFile,
@@ -254,6 +270,10 @@ func writeCSV(path string, rows []TableReport) error {
 		"source_port",
 		"source_database",
 		"source_table",
+		"target_name",
+		"target_host",
+		"target_port",
+		"target_user",
 		"target_database",
 		"sql_file",
 		"csv_file",
@@ -283,6 +303,10 @@ func writeCSV(path string, rows []TableReport) error {
 			strconv.Itoa(row.SourcePort),
 			row.SourceDatabase,
 			row.SourceTable,
+			row.TargetName,
+			row.TargetHost,
+			strconv.Itoa(row.TargetPort),
+			row.TargetUser,
 			row.TargetDatabase,
 			row.SQLFile,
 			row.CSVFile,

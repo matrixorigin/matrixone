@@ -18,38 +18,12 @@ import (
 )
 
 func TestRunBuildsTasksFromDiscoveredTablesAndWritesReport(t *testing.T) {
-	cfg := &config.Config{
-		OutputDir:   t.TempDir(),
-		Parallelism: 1,
-		MoDumpPath:  "/bin/mo-dump",
-		MySQLPath:   "/bin/mysql",
-		Target: config.Endpoint{
-			Name:     "target",
-			Host:     "127.0.0.1",
-			Port:     6001,
-			User:     "target:admin",
-			Password: "111",
-		},
-		Sources: []config.Source{{
-			Endpoint: config.Endpoint{
-				Name:     "tenant_a",
-				Host:     "127.0.0.1",
-				Port:     6001,
-				User:     "a:admin",
-				Password: "111",
-			},
-			Databases: []config.Database{{
-				Name:          "src_db",
-				Target:        "dst_db",
-				ExcludeTables: []string{"skip"},
-			}},
-		}},
-	}
+	cfg := testAppConfig(t.TempDir())
 	runner := &fakeRunner{}
 	app := App{
 		Config:    cfg,
 		Mode:      run.ModeExport,
-		Discovery: fakeDiscovery{tables: []string{"keep", "skip"}},
+		Discovery: fakeDiscovery{tables: []string{"keep", "skip", "other"}},
 		Runner:    runner,
 	}
 
@@ -67,8 +41,9 @@ func TestRunBuildsTasksFromDiscoveredTablesAndWritesReport(t *testing.T) {
 	if filepath.Base(result.Report.Summary.JSONReportPath) != "report.json" {
 		t.Fatalf("JSONReportPath = %q, want report.json", result.Report.Summary.JSONReportPath)
 	}
-	if got := runner.tasks[0].SourceTable; got != "keep" {
-		t.Fatalf("planned table = %q, want keep", got)
+	task := runner.tasks[0]
+	if task.SourceTable != "keep" || task.TargetName != "target_a" || task.TargetHost != "target" || task.TargetPassword != "222" || task.TargetDatabase != "dst_db" {
+		t.Fatalf("task = %+v", task)
 	}
 }
 
@@ -77,18 +52,11 @@ func TestRunPassesOptionsToDefaultRunner(t *testing.T) {
 	defer func() { openDB = originalOpenDB }()
 
 	dir := t.TempDir()
-	cfg := &config.Config{
-		OutputDir:   dir,
-		Parallelism: 1,
-		MoDumpPath:  filepath.Join(dir, "mo-dump"),
-		MySQLPath:   filepath.Join(dir, "mysql"),
-		Retry:       config.RetryConfig{MaxAttempts: 1},
-		Target:      config.Endpoint{Host: "target", Port: 6001, User: "target:admin", Password: "111"},
-		Sources: []config.Source{{
-			Endpoint:  config.Endpoint{Name: "tenant_a", Host: "source", Port: 6001, User: "source:admin", Password: "111"},
-			Databases: []config.Database{{Name: "src_db", Target: "dst_db"}},
-		}},
-	}
+	cfg := testAppConfig(dir)
+	cfg.MoDumpPath = filepath.Join(dir, "mo-dump")
+	cfg.MySQLPath = filepath.Join(dir, "mysql")
+	cfg.Retry.MaxAttempts = 1
+	cfg.Databases[0].IncludeTables = []string{"t1"}
 	openDB = func(ctx context.Context, endpoint db.Endpoint, database string) (dbClient, error) {
 		return &fakeDBClient{
 			tables: []db.Table{{Name: "t1", Kind: "r"}},
@@ -121,15 +89,8 @@ func TestRunPassesOptionsToDefaultRunner(t *testing.T) {
 }
 
 func TestRunReturnsErrorWhenTableTaskFailsAfterWritingReport(t *testing.T) {
-	cfg := &config.Config{
-		OutputDir: t.TempDir(),
-		Sources: []config.Source{{
-			Endpoint:  config.Endpoint{Name: "tenant_a", Host: "127.0.0.1", Port: 6001, User: "a:admin", Password: "111"},
-			Databases: []config.Database{{Name: "src_db", Target: "dst_db"}},
-		}},
-	}
 	app := App{
-		Config:    cfg,
+		Config:    testAppConfig(t.TempDir()),
 		Discovery: fakeDiscovery{tables: []string{"t1"}},
 		Runner: &fakeRunner{
 			failedTasks: 1,
@@ -159,12 +120,7 @@ func TestNewRunID(t *testing.T) {
 func TestRunReturnsDiscoveryError(t *testing.T) {
 	errBoom := errors.New("discover failed")
 	app := App{
-		Config: &config.Config{
-			Sources: []config.Source{{
-				Endpoint:  config.Endpoint{Name: "tenant_a"},
-				Databases: []config.Database{{Name: "src_db"}},
-			}},
-		},
+		Config:    testAppConfig(t.TempDir()),
 		Discovery: fakeDiscovery{err: errBoom},
 		Runner:    &fakeRunner{},
 	}
@@ -178,13 +134,7 @@ func TestRunReturnsDiscoveryError(t *testing.T) {
 func TestRunReturnsRunnerError(t *testing.T) {
 	errBoom := errors.New("runner failed")
 	app := App{
-		Config: &config.Config{
-			OutputDir: t.TempDir(),
-			Sources: []config.Source{{
-				Endpoint:  config.Endpoint{Name: "tenant_a"},
-				Databases: []config.Database{{Name: "src_db", Target: "dst_db"}},
-			}},
-		},
+		Config:    testAppConfig(t.TempDir()),
 		Discovery: fakeDiscovery{tables: []string{"t1"}},
 		Runner:    &fakeRunner{err: errBoom},
 	}
@@ -198,14 +148,8 @@ func TestRunReturnsRunnerError(t *testing.T) {
 func TestRunReturnsReportWriteError(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "not-a-dir")
 	app := App{
-		Config: &config.Config{
-			OutputDir: file,
-			Sources: []config.Source{{
-				Endpoint:  config.Endpoint{Name: "tenant_a"},
-				Databases: []config.Database{{Name: "src_db", Target: "dst_db"}},
-			}},
-		},
-		Discovery: fakeDiscovery{tables: []string{"t1"}},
+		Config:    testAppConfig(file),
+		Discovery: fakeDiscovery{tables: []string{"keep"}},
 		Runner:    &fakeRunner{},
 	}
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
@@ -235,6 +179,10 @@ func TestRunImportModeBuildsTasksFromExistingReportWithoutDiscovery(t *testing.T
 			SourcePort:     6001,
 			SourceDatabase: "src_db",
 			SourceTable:    "t1",
+			TargetName:     "target_a",
+			TargetHost:     "target",
+			TargetPort:     6002,
+			TargetUser:     "target:admin",
 			TargetDatabase: "dst_db",
 			SourceRows:     7,
 		}},
@@ -244,7 +192,7 @@ func TestRunImportModeBuildsTasksFromExistingReportWithoutDiscovery(t *testing.T
 	}
 	runner := &fakeRunner{}
 	app := App{
-		Config: &config.Config{OutputDir: dir},
+		Config: testAppConfig(dir),
 		Mode:   run.ModeImport,
 		Discovery: fakeDiscovery{
 			err: errors.New("source discovery should not run in import mode"),
@@ -269,6 +217,11 @@ func TestRunImportModeBuildsTasksFromExistingReportWithoutDiscovery(t *testing.T
 		task.SourcePort != 6001 ||
 		task.SourceDatabase != "src_db" ||
 		task.SourceTable != "t1" ||
+		task.TargetName != "target_a" ||
+		task.TargetHost != "target" ||
+		task.TargetPort != 6002 ||
+		task.TargetUser != "target:admin" ||
+		task.TargetPassword != "222" ||
 		task.TargetDatabase != "dst_db" {
 		t.Fatalf("task = %+v", task)
 	}
@@ -293,8 +246,8 @@ func TestMatrixOneDiscoveryListsTableNames(t *testing.T) {
 		return fake, nil
 	}
 
-	tables, err := MatrixOneDiscovery{}.ListTables(context.Background(), config.Source{
-		Endpoint: config.Endpoint{Host: "127.0.0.1", Port: 6001, User: "a:admin", Password: "111"},
+	tables, err := MatrixOneDiscovery{}.ListTables(context.Background(), config.DatabaseEndpoint{
+		Host: "127.0.0.1", Port: 6001, User: "a:admin", Password: "111", Database: "src_db",
 	}, "src_db")
 	if err != nil {
 		t.Fatalf("ListTables() error = %v", err)
@@ -308,7 +261,7 @@ func TestMatrixOneDiscoveryListsTableNames(t *testing.T) {
 	}
 }
 
-func TestMatrixOneRunDBUsesConfiguredEndpoints(t *testing.T) {
+func TestMatrixOneRunDBUsesTaskEndpoints(t *testing.T) {
 	originalOpenDB := openDB
 	defer func() { openDB = originalOpenDB }()
 	var calls []string
@@ -316,9 +269,7 @@ func TestMatrixOneRunDBUsesConfiguredEndpoints(t *testing.T) {
 		calls = append(calls, endpoint.User+"@"+database)
 		return &fakeDBClient{count: 5}, nil
 	}
-	runDB := MatrixOneRunDB{Config: &config.Config{
-		Target: config.Endpoint{Host: "target", Port: 6001, User: "target:admin", Password: "111"},
-	}}
+	runDB := MatrixOneRunDB{Config: &config.Config{}}
 	task := plan.Task{
 		SourceHost:     "source",
 		SourcePort:     6002,
@@ -326,6 +277,11 @@ func TestMatrixOneRunDBUsesConfiguredEndpoints(t *testing.T) {
 		SourcePassword: "222",
 		SourceDatabase: "src_db",
 		SourceTable:    "t1",
+		TargetHost:     "target",
+		TargetPort:     6003,
+		TargetUser:     "target:admin",
+		TargetPassword: "333",
+		TargetDatabase: "dst_db",
 	}
 
 	sourceRows, err := runDB.CountSourceRows(context.Background(), task)
@@ -335,10 +291,10 @@ func TestMatrixOneRunDBUsesConfiguredEndpoints(t *testing.T) {
 	if sourceRows != 5 {
 		t.Fatalf("CountSourceRows() = %d, want 5", sourceRows)
 	}
-	if err := runDB.EnsureTargetDatabase(context.Background(), "dst_db"); err != nil {
+	if err := runDB.EnsureTargetDatabase(context.Background(), task); err != nil {
 		t.Fatalf("EnsureTargetDatabase() error = %v", err)
 	}
-	targetRows, err := runDB.CountTargetRows(context.Background(), "dst_db", "t1")
+	targetRows, err := runDB.CountTargetRows(context.Background(), task)
 	if err != nil {
 		t.Fatalf("CountTargetRows() error = %v", err)
 	}
@@ -357,7 +313,7 @@ type fakeDiscovery struct {
 	err    error
 }
 
-func (f fakeDiscovery) ListTables(context.Context, config.Source, string) ([]string, error) {
+func (f fakeDiscovery) ListTables(context.Context, config.DatabaseEndpoint, string) ([]string, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -394,6 +350,7 @@ func (f *fakeRunner) Run(ctx context.Context, mode run.Mode, runID string, tasks
 			SourceName:     "tenant_a",
 			SourceDatabase: "src_db",
 			SourceTable:    "t1",
+			TargetName:     "target_a",
 			TargetDatabase: "dst_db",
 			SourceRows:     sourceRows,
 			ExportStatus:   report.StatusSuccess,
@@ -423,4 +380,20 @@ func (f *fakeDBClient) CountRows(context.Context, string, string) (int64, error)
 
 func (f *fakeDBClient) EnsureDatabase(context.Context, string) error {
 	return nil
+}
+
+func testAppConfig(outputDir string) *config.Config {
+	return &config.Config{
+		OutputDir:   outputDir,
+		Parallelism: 1,
+		MoDumpPath:  "/bin/mo-dump",
+		MySQLPath:   "/bin/mysql",
+		Retry:       config.RetryConfig{MaxAttempts: 2, Backoff: time.Nanosecond},
+		Databases: []config.DatabaseTask{{
+			Source:        config.DatabaseEndpoint{Name: "tenant_a", Host: "127.0.0.1", Port: 6001, User: "a:admin", Password: "111", Database: "src_db"},
+			Target:        config.DatabaseEndpoint{Name: "target_a", Host: "target", Port: 6002, User: "target:admin", Password: "222", Database: "dst_db"},
+			IncludeTables: []string{"keep"},
+			ExcludeTables: []string{"skip"},
+		}},
+	}
 }

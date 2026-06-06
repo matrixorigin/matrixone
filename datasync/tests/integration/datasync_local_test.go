@@ -23,10 +23,12 @@ func TestLocalMatrixOneEndToEnd(t *testing.T) {
 	runSQL(t, mysql, "dump", "111", `
 drop account if exists dsync_src_a;
 drop account if exists dsync_src_b;
-drop account if exists dsync_target;
+drop account if exists dsync_target_a;
+drop account if exists dsync_target_b;
 create account dsync_src_a admin_name 'admin' identified by '111';
 create account dsync_src_b admin_name 'admin' identified by '111';
-create account dsync_target admin_name 'admin' identified by '111';
+create account dsync_target_a admin_name 'admin' identified by '111';
+create account dsync_target_b admin_name 'admin' identified by '111';
 `)
 	runSQL(t, mysql, "dsync_src_a:admin", "111", `
 create database dsync_a_db1;
@@ -37,13 +39,17 @@ create table dsync_a_db1.t_skip(id int primary key);
 insert into dsync_a_db1.t_skip values (99);
 create table dsync_a_db2.orders(id int primary key, item varchar(50));
 insert into dsync_a_db2.orders values (10,'book'),(11,'pen');
+create table dsync_a_db2.ignored(id int primary key);
+insert into dsync_a_db2.ignored values (404);
 `)
 	runSQL(t, mysql, "dsync_src_b:admin", "111", `
 create database dsync_b_db1;
 create table dsync_b_db1.events(id int primary key, label varchar(50));
 insert into dsync_b_db1.events values (1,'login'),(2,'logout');
+create table dsync_b_db1.audit(id int primary key);
+insert into dsync_b_db1.audit values (7);
 `)
-	runSQL(t, mysql, "dsync_target:admin", "111", `
+	runSQL(t, mysql, "dsync_target_a:admin", "111", `
 create database dsync_target_a1;
 create table dsync_target_a1.t_keep(id int primary key, name varchar(50));
 insert into dsync_target_a1.t_keep values (100,'old');
@@ -57,32 +63,53 @@ parallelism: 2
 retry:
   max_attempts: 2
   backoff: 1ms
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: dsync_target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: dsync_src_a:admin
-    password: "111"
-    databases:
-      - name: dsync_a_db1
-        target: dsync_target_a1
-        exclude_tables: [t_skip]
-      - name: dsync_a_db2
-        target: dsync_target_a2
-  - name: tenant_b
-    host: 127.0.0.1
-    port: 6001
-    user: dsync_src_b:admin
-    password: "111"
-    databases:
-      - name: dsync_b_db1
-        target: dsync_target_b1
+databases:
+  - source:
+      name: tenant_a_db1
+      host: 127.0.0.1
+      port: 6001
+      user: dsync_src_a:admin
+      password: "111"
+      database: dsync_a_db1
+    target:
+      name: target_a
+      host: 127.0.0.1
+      port: 6001
+      user: dsync_target_a:admin
+      password: "111"
+      database: dsync_target_a1
+    include_tables: [t_keep, t_skip]
+    exclude_tables: [t_skip]
+  - source:
+      name: tenant_a_db2
+      host: 127.0.0.1
+      port: 6001
+      user: dsync_src_a:admin
+      password: "111"
+      database: dsync_a_db2
+    target:
+      name: target_a
+      host: 127.0.0.1
+      port: 6001
+      user: dsync_target_a:admin
+      password: "111"
+      database: dsync_target_a2
+    include_tables: [orders]
+  - source:
+      name: tenant_b_db1
+      host: 127.0.0.1
+      port: 6001
+      user: dsync_src_b:admin
+      password: "111"
+      database: dsync_b_db1
+    target:
+      name: target_b
+      host: 127.0.0.1
+      port: 6001
+      user: dsync_target_b:admin
+      password: "111"
+      database: dsync_target_b1
+    exclude_tables: [audit]
 `)
 	if err := os.WriteFile(configPath, config, 0o600); err != nil {
 		t.Fatal(err)
@@ -96,15 +123,19 @@ sources:
 		t.Fatalf("datasync failed: %v", err)
 	}
 
-	assertCount(t, mysql, "dsync_target:admin", "111", "dsync_target_a1", "t_keep", "3")
-	assertCount(t, mysql, "dsync_target:admin", "111", "dsync_target_a2", "orders", "2")
-	assertCount(t, mysql, "dsync_target:admin", "111", "dsync_target_b1", "events", "2")
-	assertTableMissing(t, mysql, "dsync_target:admin", "111", "dsync_target_a1", "t_skip")
+	assertCount(t, mysql, "dsync_target_a:admin", "111", "dsync_target_a1", "t_keep", "3")
+	assertCount(t, mysql, "dsync_target_a:admin", "111", "dsync_target_a2", "orders", "2")
+	assertCount(t, mysql, "dsync_target_b:admin", "111", "dsync_target_b1", "events", "2")
+	assertTableMissing(t, mysql, "dsync_target_a:admin", "111", "dsync_target_a1", "t_skip")
+	assertTableMissing(t, mysql, "dsync_target_a:admin", "111", "dsync_target_a2", "ignored")
+	assertTableMissing(t, mysql, "dsync_target_b:admin", "111", "dsync_target_b1", "audit")
 	assertReport(t, filepath.Join(outDir, "itest"))
 
-	runSQL(t, mysql, "dsync_target:admin", "111", `
+	runSQL(t, mysql, "dsync_target_a:admin", "111", `
 drop database dsync_target_a1;
 drop database dsync_target_a2;
+`)
+	runSQL(t, mysql, "dsync_target_b:admin", "111", `
 drop database dsync_target_b1;
 `)
 	importCmd := exec.Command("go", "run", "./cmd/datasync", "-config", configPath, "-mode", "import", "-run-id", "itest")
@@ -115,9 +146,9 @@ drop database dsync_target_b1;
 		t.Fatalf("datasync import failed: %v", err)
 	}
 
-	assertCount(t, mysql, "dsync_target:admin", "111", "dsync_target_a1", "t_keep", "3")
-	assertCount(t, mysql, "dsync_target:admin", "111", "dsync_target_a2", "orders", "2")
-	assertCount(t, mysql, "dsync_target:admin", "111", "dsync_target_b1", "events", "2")
+	assertCount(t, mysql, "dsync_target_a:admin", "111", "dsync_target_a1", "t_keep", "3")
+	assertCount(t, mysql, "dsync_target_a:admin", "111", "dsync_target_a2", "orders", "2")
+	assertCount(t, mysql, "dsync_target_b:admin", "111", "dsync_target_b1", "events", "2")
 	assertReport(t, filepath.Join(outDir, "itest"))
 }
 
@@ -192,6 +223,10 @@ func assertReport(t *testing.T, runDir string) {
 			ImportStatus   string `json:"import_status"`
 			TargetRowCount int64  `json:"target_rows"`
 			SourceRowCount int64  `json:"source_rows"`
+			TargetName     string `json:"target_name"`
+			TargetHost     string `json:"target_host"`
+			TargetPort     int    `json:"target_port"`
+			TargetUser     string `json:"target_user"`
 			TargetDatabase string `json:"target_database"`
 			SourceDatabase string `json:"source_database"`
 		} `json:"tables"`
@@ -223,6 +258,9 @@ func assertReport(t *testing.T, runDir string) {
 		}
 		if table.SourceRowCount != table.TargetRowCount {
 			t.Fatalf("row counts for %s.%s source=%d target=%d, want equal", table.SourceDatabase, table.SourceTable, table.SourceRowCount, table.TargetRowCount)
+		}
+		if table.TargetName == "" || table.TargetHost == "" || table.TargetPort == 0 || table.TargetUser == "" {
+			t.Fatalf("table report missing target connection fields: %+v", table)
 		}
 	}
 	csvReport, err := os.ReadFile(filepath.Join(runDir, "report.csv"))

@@ -22,7 +22,7 @@ type App struct {
 }
 
 type Discovery interface {
-	ListTables(context.Context, config.Source, string) ([]string, error)
+	ListTables(context.Context, config.DatabaseEndpoint, string) ([]string, error)
 }
 
 type TaskRunner interface {
@@ -75,32 +75,31 @@ func (a App) Run(ctx context.Context, runID string) (Result, error) {
 
 func (a App) buildTasks(ctx context.Context, runID string) ([]plan.Task, error) {
 	if a.Mode == run.ModeImport {
-		return tasksFromReport(filepath.Join(a.Config.OutputDir, runID, "report.json"))
+		return tasksFromReport(filepath.Join(a.Config.OutputDir, runID, "report.json"), a.Config)
 	}
 	if a.Discovery == nil {
 		a.Discovery = MatrixOneDiscovery{}
 	}
 
 	discovered := make(map[plan.DatabaseKey][]string)
-	for _, source := range a.Config.Sources {
-		for _, database := range source.Databases {
-			tables, err := a.Discovery.ListTables(ctx, source, database.Name)
-			if err != nil {
-				return nil, err
-			}
-			discovered[plan.DatabaseKey{SourceName: source.Name, Database: database.Name}] = tables
+	for _, database := range a.Config.Databases {
+		tables, err := a.Discovery.ListTables(ctx, database.Source, database.Source.Database)
+		if err != nil {
+			return nil, err
 		}
+		discovered[plan.DatabaseKey{SourceName: database.Source.Name, Database: database.Source.Database}] = tables
 	}
 	return plan.BuildTasks(a.Config, discovered), nil
 }
 
-func tasksFromReport(path string) ([]plan.Task, error) {
+func tasksFromReport(path string, cfg *config.Config) ([]plan.Task, error) {
 	runReport, err := report.Read(path)
 	if err != nil {
 		return nil, err
 	}
 	tasks := make([]plan.Task, 0, len(runReport.Tables))
 	for _, row := range runReport.Tables {
+		password := targetPasswordForReportRow(cfg, row)
 		tasks = append(tasks, plan.Task{
 			SourceName:     row.SourceName,
 			SourceHost:     row.SourceHost,
@@ -108,10 +107,27 @@ func tasksFromReport(path string) ([]plan.Task, error) {
 			SourceDatabase: row.SourceDatabase,
 			SourceTable:    row.SourceTable,
 			SourceRows:     row.SourceRows,
+			TargetName:     row.TargetName,
+			TargetHost:     row.TargetHost,
+			TargetPort:     row.TargetPort,
+			TargetUser:     row.TargetUser,
+			TargetPassword: password,
 			TargetDatabase: row.TargetDatabase,
 		})
 	}
 	return tasks, nil
+}
+
+func targetPasswordForReportRow(cfg *config.Config, row report.TableReport) string {
+	for _, database := range cfg.Databases {
+		if database.Source.Name == row.SourceName &&
+			database.Source.Database == row.SourceDatabase &&
+			database.Target.Name == row.TargetName &&
+			database.Target.Database == row.TargetDatabase {
+			return database.Target.Password
+		}
+	}
+	return ""
 }
 
 func NewRunID(now time.Time) string {
@@ -120,7 +136,7 @@ func NewRunID(now time.Time) string {
 
 type MatrixOneDiscovery struct{}
 
-func (MatrixOneDiscovery) ListTables(ctx context.Context, source config.Source, database string) ([]string, error) {
+func (MatrixOneDiscovery) ListTables(ctx context.Context, source config.DatabaseEndpoint, database string) ([]string, error) {
 	client, err := openDB(ctx, db.Endpoint{
 		Host:     source.Host,
 		Port:     source.Port,
@@ -175,30 +191,30 @@ func (m MatrixOneRunDB) CountSourceRows(ctx context.Context, task plan.Task) (in
 	return client.CountRows(ctx, task.SourceDatabase, task.SourceTable)
 }
 
-func (m MatrixOneRunDB) EnsureTargetDatabase(ctx context.Context, database string) error {
+func (m MatrixOneRunDB) EnsureTargetDatabase(ctx context.Context, task plan.Task) error {
 	client, err := openDB(ctx, db.Endpoint{
-		Host:     m.Config.Target.Host,
-		Port:     m.Config.Target.Port,
-		User:     m.Config.Target.User,
-		Password: m.Config.Target.Password,
+		Host:     task.TargetHost,
+		Port:     task.TargetPort,
+		User:     task.TargetUser,
+		Password: task.TargetPassword,
 	}, "")
 	if err != nil {
 		return err
 	}
 	defer client.Close()
-	return client.EnsureDatabase(ctx, database)
+	return client.EnsureDatabase(ctx, task.TargetDatabase)
 }
 
-func (m MatrixOneRunDB) CountTargetRows(ctx context.Context, database, table string) (int64, error) {
+func (m MatrixOneRunDB) CountTargetRows(ctx context.Context, task plan.Task) (int64, error) {
 	client, err := openDB(ctx, db.Endpoint{
-		Host:     m.Config.Target.Host,
-		Port:     m.Config.Target.Port,
-		User:     m.Config.Target.User,
-		Password: m.Config.Target.Password,
-	}, database)
+		Host:     task.TargetHost,
+		Port:     task.TargetPort,
+		User:     task.TargetUser,
+		Password: task.TargetPassword,
+	}, task.TargetDatabase)
 	if err != nil {
 		return 0, err
 	}
 	defer client.Close()
-	return client.CountRows(ctx, database, table)
+	return client.CountRows(ctx, task.TargetDatabase, task.SourceTable)
 }

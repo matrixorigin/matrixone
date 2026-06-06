@@ -27,6 +27,15 @@ rtk go run ./cmd/datasync -config configs/example.yaml -mode sync -cleanup-expor
 
 Use `-run-id <id>` to choose a stable run directory under `output_dir`.
 
+The config uses top-level `databases` entries. Each entry has an independent `source` database endpoint and `target` database endpoint, so different source databases can import into different target tenants or instances.
+
+Table filtering is evaluated per database:
+
+- If `include_tables` is configured, only discovered tables listed there are candidates.
+- If `include_tables` is omitted or empty, all discovered ordinary tables are candidates.
+- `exclude_tables` is then removed from the candidate set.
+- If `exclude_tables` is omitted or empty, nothing is removed.
+
 After each import, `datasync` compares the target row count with the source row count. A mismatch is treated as an import failure and retried according to `retry.max_attempts`.
 
 By default, exported SQL/CSV files are retained after sync imports. Use `-cleanup-export-after-import` in `sync` mode to delete each table's export directory after that table imports successfully. Failed tables, `export` mode, and `import` mode always keep export files.

@@ -21,13 +21,12 @@ const (
 var envRefPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 type Config struct {
-	MoDumpPath  string      `yaml:"mo_dump_path"`
-	MySQLPath   string      `yaml:"mysql_path"`
-	OutputDir   string      `yaml:"output_dir"`
-	Parallelism int         `yaml:"parallelism"`
-	Retry       RetryConfig `yaml:"retry"`
-	Target      Endpoint    `yaml:"target"`
-	Sources     []Source    `yaml:"sources"`
+	MoDumpPath  string         `yaml:"mo_dump_path"`
+	MySQLPath   string         `yaml:"mysql_path"`
+	OutputDir   string         `yaml:"output_dir"`
+	Parallelism int            `yaml:"parallelism"`
+	Retry       RetryConfig    `yaml:"retry"`
+	Databases   []DatabaseTask `yaml:"databases"`
 }
 
 type RetryConfig struct {
@@ -44,15 +43,20 @@ type Endpoint struct {
 	Password string `yaml:"password"`
 }
 
-type Source struct {
-	Endpoint  `yaml:",inline"`
-	Databases []Database `yaml:"databases"`
+type DatabaseEndpoint struct {
+	Name     string `yaml:"name"`
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+	Database string `yaml:"database"`
 }
 
-type Database struct {
-	Name          string   `yaml:"name"`
-	Target        string   `yaml:"target"`
-	ExcludeTables []string `yaml:"exclude_tables"`
+type DatabaseTask struct {
+	Source        DatabaseEndpoint `yaml:"source"`
+	Target        DatabaseEndpoint `yaml:"target"`
+	IncludeTables []string         `yaml:"include_tables"`
+	ExcludeTables []string         `yaml:"exclude_tables"`
 }
 
 type rawConfig struct {
@@ -64,8 +68,7 @@ type rawConfig struct {
 	ParallelSet  bool
 	Retry        rawRetryConfig
 	RetrySet     bool
-	Target       Endpoint
-	Sources      []Source
+	Databases    []DatabaseTask
 }
 
 type rawRetryConfig struct {
@@ -116,12 +119,8 @@ func (r *rawConfig) UnmarshalYAML(value *yaml.Node) error {
 			if err := val.Decode(&r.Retry); err != nil {
 				return err
 			}
-		case "target":
-			if err := decodeNodeStrict(val, &r.Target); err != nil {
-				return err
-			}
-		case "sources":
-			if err := decodeNodeStrict(val, &r.Sources); err != nil {
+		case "databases":
+			if err := decodeNodeStrict(val, &r.Databases); err != nil {
 				return err
 			}
 		default:
@@ -217,8 +216,7 @@ func materializeConfig(raw rawConfig) Config {
 		MoDumpPath: raw.MoDumpPath,
 		MySQLPath:  raw.MySQLPath,
 		OutputDir:  raw.OutputDir,
-		Target:     raw.Target,
-		Sources:    raw.Sources,
+		Databases:  raw.Databases,
 	}
 	if !raw.ParallelSet {
 		cfg.Parallelism = defaultParallelism
@@ -276,16 +274,6 @@ func applyDefaultsAndValidate(cfg *Config, outputDirSet bool) error {
 	}
 	cfg.Retry.Backoff = backoff
 
-	for sourceIndex := range cfg.Sources {
-		source := &cfg.Sources[sourceIndex]
-		for databaseIndex := range source.Databases {
-			database := &source.Databases[databaseIndex]
-			if database.Target == "" {
-				database.Target = database.Name
-			}
-		}
-	}
-
 	return validate(cfg)
 }
 
@@ -295,27 +283,28 @@ func expandConfigEnvRefs(cfg *Config) error {
 		&cfg.MySQLPath,
 		&cfg.OutputDir,
 		&cfg.Retry.BackoffText,
-		&cfg.Target.Name,
-		&cfg.Target.Host,
-		&cfg.Target.User,
-		&cfg.Target.Password,
 	}
 
-	for sourceIndex := range cfg.Sources {
-		source := &cfg.Sources[sourceIndex]
+	for databaseIndex := range cfg.Databases {
+		database := &cfg.Databases[databaseIndex]
 		stringFields = append(stringFields,
-			&source.Name,
-			&source.Host,
-			&source.User,
-			&source.Password,
+			&database.Source.Name,
+			&database.Source.Host,
+			&database.Source.User,
+			&database.Source.Password,
+			&database.Source.Database,
+			&database.Target.Name,
+			&database.Target.Host,
+			&database.Target.User,
+			&database.Target.Password,
+			&database.Target.Database,
 		)
 
-		for databaseIndex := range source.Databases {
-			database := &source.Databases[databaseIndex]
-			stringFields = append(stringFields, &database.Name, &database.Target)
-			for excludeIndex := range database.ExcludeTables {
-				stringFields = append(stringFields, &database.ExcludeTables[excludeIndex])
-			}
+		for includeIndex := range database.IncludeTables {
+			stringFields = append(stringFields, &database.IncludeTables[includeIndex])
+		}
+		for excludeIndex := range database.ExcludeTables {
+			stringFields = append(stringFields, &database.ExcludeTables[excludeIndex])
 		}
 	}
 
@@ -345,24 +334,47 @@ func validate(cfg *Config) error {
 	if cfg.Retry.MaxAttempts < 1 {
 		return fmt.Errorf("retry.max_attempts must be at least 1")
 	}
-	if err := validateEndpoint("target", cfg.Target); err != nil {
-		return err
+	if len(cfg.Databases) == 0 {
+		return fmt.Errorf("databases must contain at least one database")
 	}
-	if len(cfg.Sources) == 0 {
-		return fmt.Errorf("sources must contain at least one source")
-	}
-	for sourceIndex, source := range cfg.Sources {
-		prefix := fmt.Sprintf("sources[%d]", sourceIndex)
-		if err := validateEndpoint(prefix, source.Endpoint); err != nil {
+	for databaseIndex, database := range cfg.Databases {
+		prefix := fmt.Sprintf("databases[%d]", databaseIndex)
+		if err := validateDatabaseEndpoint(prefix+".source", database.Source); err != nil {
 			return err
 		}
-		if len(source.Databases) == 0 {
-			return fmt.Errorf("%s.databases must contain at least one database", prefix)
+		if err := validateDatabaseEndpoint(prefix+".target", database.Target); err != nil {
+			return err
 		}
-		for databaseIndex, database := range source.Databases {
-			if database.Name == "" {
-				return fmt.Errorf("%s.databases[%d].database.name is required", prefix, databaseIndex)
-			}
+		if err := validateTableList(prefix+".include_tables", database.IncludeTables); err != nil {
+			return err
+		}
+		if err := validateTableList(prefix+".exclude_tables", database.ExcludeTables); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateDatabaseEndpoint(prefix string, endpoint DatabaseEndpoint) error {
+	if err := validateEndpoint(prefix, Endpoint{
+		Name:     endpoint.Name,
+		Host:     endpoint.Host,
+		Port:     endpoint.Port,
+		User:     endpoint.User,
+		Password: endpoint.Password,
+	}); err != nil {
+		return err
+	}
+	if endpoint.Database == "" {
+		return fmt.Errorf("%s.database is required", prefix)
+	}
+	return nil
+}
+
+func validateTableList(prefix string, tables []string) error {
+	for tableIndex, table := range tables {
+		if table == "" {
+			return fmt.Errorf("%s[%d] must not be empty", prefix, tableIndex)
 		}
 	}
 	return nil

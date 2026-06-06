@@ -25,6 +25,11 @@ func TestTaskPathsUseStableTableDirectory(t *testing.T) {
 		SourcePassword: "111",
 		SourceDatabase: "src_db",
 		SourceTable:    "t1",
+		TargetName:     "target",
+		TargetHost:     "127.0.0.1",
+		TargetPort:     6001,
+		TargetUser:     "target:admin",
+		TargetPassword: "111",
 		TargetDatabase: "dst_db",
 	}
 	r := Runner{Config: &config.Config{OutputDir: dir}}
@@ -437,7 +442,7 @@ printf '%s\n' "$@" > "`+argsFile+`"
 
 	err := LocalExecutor{}.MySQLSource(context.Background(), MySQLSourceRequest{
 		Binary:   binary,
-		Target:   testConfig(dir).Target,
+		Target:   testTask().TargetEndpoint(),
 		Database: "dst_db",
 		SQLFile:  "/tmp/t1.sql",
 	})
@@ -544,12 +549,12 @@ func (f *fakeDB) CountSourceRows(context.Context, plan.Task) (int64, error) {
 	return f.sourceRows, nil
 }
 
-func (f *fakeDB) EnsureTargetDatabase(context.Context, string) error {
+func (f *fakeDB) EnsureTargetDatabase(context.Context, plan.Task) error {
 	f.ensureTargetCalls++
 	return f.ensureTargetErr
 }
 
-func (f *fakeDB) CountTargetRows(context.Context, string, string) (int64, error) {
+func (f *fakeDB) CountTargetRows(context.Context, plan.Task) (int64, error) {
 	f.targetCalls++
 	if f.targetErr != nil {
 		return 0, f.targetErr
@@ -574,13 +579,6 @@ func testConfig(dir string) *config.Config {
 			MaxAttempts: 2,
 			Backoff:     time.Nanosecond,
 		},
-		Target: config.Endpoint{
-			Name:     "target",
-			Host:     "127.0.0.1",
-			Port:     6001,
-			User:     "target:admin",
-			Password: "111",
-		},
 	}
 }
 
@@ -593,6 +591,11 @@ func testTask() plan.Task {
 		SourcePassword: "111",
 		SourceDatabase: "src_db",
 		SourceTable:    "t1",
+		TargetName:     "target",
+		TargetHost:     "127.0.0.1",
+		TargetPort:     6001,
+		TargetUser:     "target:admin",
+		TargetPassword: "111",
 		TargetDatabase: "dst_db",
 	}
 }

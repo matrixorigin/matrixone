@@ -16,34 +16,66 @@ type Task struct {
 	SourceDatabase string
 	SourceTable    string
 	SourceRows     int64
+	TargetName     string
+	TargetHost     string
+	TargetPort     int
+	TargetUser     string
+	TargetPassword string
 	TargetDatabase string
+}
+
+func (t Task) TargetEndpoint() config.Endpoint {
+	return config.Endpoint{
+		Name:     t.TargetName,
+		Host:     t.TargetHost,
+		Port:     t.TargetPort,
+		User:     t.TargetUser,
+		Password: t.TargetPassword,
+	}
 }
 
 func BuildTasks(cfg *config.Config, tables map[DatabaseKey][]string) []Task {
 	var tasks []Task
-	for _, src := range cfg.Sources {
-		for _, database := range src.Databases {
-			excluded := make(map[string]struct{}, len(database.ExcludeTables))
-			for _, table := range database.ExcludeTables {
-				excluded[table] = struct{}{}
-			}
+	for _, database := range cfg.Databases {
+		excluded := make(map[string]struct{}, len(database.ExcludeTables))
+		for _, table := range database.ExcludeTables {
+			excluded[table] = struct{}{}
+		}
 
-			key := DatabaseKey{SourceName: src.Name, Database: database.Name}
-			for _, table := range tables[key] {
-				if _, ok := excluded[table]; ok {
+		discovered := tables[DatabaseKey{SourceName: database.Source.Name, Database: database.Source.Database}]
+		discoveredSet := make(map[string]struct{}, len(discovered))
+		for _, table := range discovered {
+			discoveredSet[table] = struct{}{}
+		}
+
+		candidates := discovered
+		if len(database.IncludeTables) > 0 {
+			candidates = database.IncludeTables
+		}
+		for _, table := range candidates {
+			if len(database.IncludeTables) > 0 {
+				if _, ok := discoveredSet[table]; !ok {
 					continue
 				}
-				tasks = append(tasks, Task{
-					SourceName:     src.Name,
-					SourceHost:     src.Host,
-					SourcePort:     src.Port,
-					SourceUser:     src.User,
-					SourcePassword: src.Password,
-					SourceDatabase: database.Name,
-					SourceTable:    table,
-					TargetDatabase: database.Target,
-				})
 			}
+			if _, ok := excluded[table]; ok {
+				continue
+			}
+			tasks = append(tasks, Task{
+				SourceName:     database.Source.Name,
+				SourceHost:     database.Source.Host,
+				SourcePort:     database.Source.Port,
+				SourceUser:     database.Source.User,
+				SourcePassword: database.Source.Password,
+				SourceDatabase: database.Source.Database,
+				SourceTable:    table,
+				TargetName:     database.Target.Name,
+				TargetHost:     database.Target.Host,
+				TargetPort:     database.Target.Port,
+				TargetUser:     database.Target.User,
+				TargetPassword: database.Target.Password,
+				TargetDatabase: database.Target.Database,
+			})
 		}
 	}
 	return tasks

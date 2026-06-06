@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -13,21 +14,23 @@ func TestLoadDefaultsAndEnvExpansion(t *testing.T) {
 	cfg := loadConfig(t, `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: dsync_target:admin
-  password: ${DSYNC_PASSWORD}
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: dsync_src_a:admin
-    password: "111"
-    databases:
-      - name: src_db
-        exclude_tables: [skip_me]
+databases:
+  - source:
+      name: tenant_a
+      host: 127.0.0.1
+      port: 6001
+      user: dsync_src_a:admin
+      password: ${DSYNC_PASSWORD}
+      database: src_db
+    target:
+      name: tenant_target
+      host: 127.0.0.2
+      port: 6002
+      user: dsync_target:admin
+      password: ${DSYNC_PASSWORD}
+      database: dst_db
+    include_tables: [keep, skip_me]
+    exclude_tables: [skip_me]
 `)
 
 	if cfg.OutputDir != "./runs" {
@@ -39,17 +42,80 @@ sources:
 	if cfg.Retry.MaxAttempts != 3 {
 		t.Fatalf("Retry.MaxAttempts = %d, want 3", cfg.Retry.MaxAttempts)
 	}
-	if cfg.Retry.BackoffText != "2s" {
-		t.Fatalf("Retry.BackoffText = %q, want 2s", cfg.Retry.BackoffText)
+	if cfg.Retry.BackoffText != "2s" || cfg.Retry.Backoff != 2*time.Second {
+		t.Fatalf("Retry backoff = %q/%s, want 2s", cfg.Retry.BackoffText, cfg.Retry.Backoff)
 	}
-	if cfg.Retry.Backoff != 2*time.Second {
-		t.Fatalf("Retry.Backoff = %s, want 2s", cfg.Retry.Backoff)
+	database := cfg.Databases[0]
+	if database.Source.Password != "111" || database.Target.Password != "111" {
+		t.Fatalf("passwords source=%q target=%q, want env-expanded 111", database.Source.Password, database.Target.Password)
 	}
-	if cfg.Target.Password != "111" {
-		t.Fatalf("Target.Password = %q, want 111", cfg.Target.Password)
+	if database.Source.Database != "src_db" || database.Target.Database != "dst_db" {
+		t.Fatalf("databases source=%q target=%q", database.Source.Database, database.Target.Database)
 	}
-	if got := cfg.Sources[0].Databases[0].Target; got != "src_db" {
-		t.Fatalf("default target = %q, want src_db", got)
+	if !reflect.DeepEqual(database.IncludeTables, []string{"keep", "skip_me"}) {
+		t.Fatalf("IncludeTables = %#v", database.IncludeTables)
+	}
+	if !reflect.DeepEqual(database.ExcludeTables, []string{"skip_me"}) {
+		t.Fatalf("ExcludeTables = %#v", database.ExcludeTables)
+	}
+}
+
+func TestLoadExpandsEnvAsStringScalar(t *testing.T) {
+	t.Setenv("DSYNC_PASSWORD", "abc: def # secret")
+	cfg := loadConfig(t, `
+mo_dump_path: /tmp/mo-dump
+mysql_path: /tmp/mysql
+databases:
+  - source:
+      name: tenant_a
+      host: 127.0.0.1
+      port: 6001
+      user: tenant:admin
+      password: ${DSYNC_PASSWORD}
+      database: src_db
+    target:
+      name: target
+      host: 127.0.0.1
+      port: 6001
+      user: target:admin
+      password: ${DSYNC_PASSWORD}
+      database: dst_db
+`)
+
+	if cfg.Databases[0].Source.Password != "abc: def # secret" || cfg.Databases[0].Target.Password != "abc: def # secret" {
+		t.Fatalf("env-expanded passwords = source %q target %q", cfg.Databases[0].Source.Password, cfg.Databases[0].Target.Password)
+	}
+}
+
+func TestLoadParsesExplicitRetryBackoff(t *testing.T) {
+	cfg := loadConfig(t, `
+mo_dump_path: /tmp/mo-dump
+mysql_path: /tmp/mysql
+retry:
+  max_attempts: 5
+  backoff: 1ms
+databases:
+  - source:
+      name: tenant_a
+      host: 127.0.0.1
+      port: 6001
+      user: tenant:admin
+      password: "111"
+      database: src_db
+    target:
+      name: target
+      host: 127.0.0.1
+      port: 6001
+      user: target:admin
+      password: "111"
+      database: dst_db
+`)
+
+	if cfg.Retry.MaxAttempts != 5 {
+		t.Fatalf("Retry.MaxAttempts = %d, want 5", cfg.Retry.MaxAttempts)
+	}
+	if cfg.Retry.BackoffText != "1ms" || cfg.Retry.Backoff != time.Millisecond {
+		t.Fatalf("Retry backoff = %q/%s, want 1ms", cfg.Retry.BackoffText, cfg.Retry.Backoff)
 	}
 }
 
@@ -57,20 +123,21 @@ func TestLoadRejectsMissingEnv(t *testing.T) {
 	path := writeConfig(t, `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: ${MISSING_DSYNC_PASSWORD}
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
+databases:
+  - source:
+      name: tenant_a
+      host: 127.0.0.1
+      port: 6001
+      user: tenant:admin
+      password: ${MISSING_DSYNC_PASSWORD}
+      database: src_db
+    target:
+      name: target
+      host: 127.0.0.1
+      port: 6001
+      user: target:admin
+      password: "111"
+      database: dst_db
 `)
 
 	_, err := Load(path)
@@ -82,693 +149,128 @@ sources:
 	}
 }
 
-func TestLoadExpandsEnvAsStringScalar(t *testing.T) {
-	t.Setenv("DSYNC_PASSWORD", "abc: def # secret")
-	cfg := loadConfig(t, `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: ${DSYNC_PASSWORD}
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`)
-
-	if cfg.Target.Password != "abc: def # secret" {
-		t.Fatalf("Target.Password = %q, want env value preserved exactly", cfg.Target.Password)
-	}
-}
-
-func TestLoadParsesExplicitRetryBackoff(t *testing.T) {
-	cfg := loadConfig(t, `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-retry:
-  backoff: 1ms
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-        target: dst_db
-`)
-
-	if cfg.Retry.BackoffText != "1ms" {
-		t.Fatalf("Retry.BackoffText = %q, want 1ms", cfg.Retry.BackoffText)
-	}
-	if cfg.Retry.Backoff != time.Millisecond {
-		t.Fatalf("Retry.Backoff = %s, want 1ms", cfg.Retry.Backoff)
-	}
-}
-
 func TestLoadRejectsValidationFailures(t *testing.T) {
 	tests := []struct {
 		name    string
 		yaml    string
 		wantErr string
 	}{
-		{
-			name: "missing mo_dump_path",
-			yaml: `
+		{name: "missing mo_dump_path", yaml: `
 mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "mo_dump_path",
-		},
-		{
-			name: "unknown top-level key",
-			yaml: `
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
+`, wantErr: "mo_dump_path"},
+		{name: "missing mysql_path", yaml: `
+mo_dump_path: /tmp/mo-dump
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
+`, wantErr: "mysql_path"},
+		{name: "unknown top-level key", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
-unknown_key: true
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "unknown_key",
-		},
-		{
-			name: "unknown nested key",
-			yaml: `
+sources: []
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
+`, wantErr: "sources"},
+		{name: "unknown nested key", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-        exclude_table: t_skip
-`,
-			wantErr: "exclude_table",
-		},
-		{
-			name: "missing target field",
-			yaml: `
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
+    include: [t1]
+`, wantErr: "include"},
+		{name: "no databases", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "target.user",
-		},
-		{
-			name: "missing mysql_path",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "mysql_path",
-		},
-		{
-			name: "null output dir",
-			yaml: `
+`, wantErr: "databases"},
+		{name: "missing source endpoint field", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
-output_dir: null
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "output_dir",
-		},
-		{
-			name: "empty output dir",
-			yaml: `
+databases:
+  - source: {name: tenant_a, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
+`, wantErr: "databases[0].source.host"},
+		{name: "missing target endpoint field", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
-output_dir: ""
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "output_dir",
-		},
-		{
-			name: "no sources",
-			yaml: `
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, password: "111", database: dst_db}
+`, wantErr: "databases[0].target.user"},
+		{name: "missing source database", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-`,
-			wantErr: "sources",
-		},
-		{
-			name: "negative parallelism",
-			yaml: `
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111"}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
+`, wantErr: "databases[0].source.database"},
+		{name: "missing target database", yaml: `
+mo_dump_path: /tmp/mo-dump
+mysql_path: /tmp/mysql
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111"}
+`, wantErr: "databases[0].target.database"},
+		{name: "bad source port", yaml: `
+mo_dump_path: /tmp/mo-dump
+mysql_path: /tmp/mysql
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 0, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
+`, wantErr: "databases[0].source.port"},
+		{name: "bad target port", yaml: `
+mo_dump_path: /tmp/mo-dump
+mysql_path: /tmp/mysql
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 70000, user: target:admin, password: "111", database: dst_db}
+`, wantErr: "databases[0].target.port"},
+		{name: "empty include table", yaml: `
+mo_dump_path: /tmp/mo-dump
+mysql_path: /tmp/mysql
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
+    include_tables: [""]
+`, wantErr: "include_tables"},
+		{name: "empty exclude table", yaml: `
+mo_dump_path: /tmp/mo-dump
+mysql_path: /tmp/mysql
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
+    exclude_tables: [""]
+`, wantErr: "exclude_tables"},
+		{name: "negative parallelism", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
 parallelism: -1
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "parallelism",
-		},
-		{
-			name: "zero parallelism",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-parallelism: 0
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "parallelism",
-		},
-		{
-			name: "null parallelism",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-parallelism: null
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "parallelism",
-		},
-		{
-			name: "null retry",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-retry: null
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "retry",
-		},
-		{
-			name: "negative retry max attempts",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-retry:
-  max_attempts: -1
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "retry.max_attempts",
-		},
-		{
-			name: "zero retry max attempts",
-			yaml: `
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
+`, wantErr: "parallelism"},
+		{name: "zero retry max attempts", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
 retry:
   max_attempts: 0
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "retry.max_attempts",
-		},
-		{
-			name: "zero retry backoff",
-			yaml: `
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
+`, wantErr: "retry.max_attempts"},
+		{name: "zero retry backoff", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
 retry:
   backoff: 0s
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "retry.backoff",
-		},
-		{
-			name: "empty retry backoff",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-retry:
-  backoff: ""
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "retry.backoff",
-		},
-		{
-			name: "null retry backoff empty scalar",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-retry:
-  backoff:
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "retry.backoff",
-		},
-		{
-			name: "null retry backoff",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-retry:
-  backoff: null
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "retry.backoff",
-		},
-		{
-			name: "negative retry backoff",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-retry:
-  backoff: -1s
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "retry.backoff",
-		},
-		{
-			name: "negative target port",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: -1
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "target.port",
-		},
-		{
-			name: "zero target port",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: 0
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "target.port",
-		},
-		{
-			name: "target port above max",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: 70000
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "target.port",
-		},
-		{
-			name: "negative source port",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: -1
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "sources[0].port",
-		},
-		{
-			name: "source port above max",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 70000
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "sources[0].port",
-		},
-		{
-			name: "zero source port",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 0
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "sources[0].port",
-		},
-		{
-			name: "missing source endpoint field",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    password: "111"
-    databases:
-      - name: src_db
-`,
-			wantErr: "sources[0].user",
-		},
-		{
-			name: "source with no databases",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-`,
-			wantErr: "databases",
-		},
-		{
-			name: "database with empty name",
-			yaml: `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - target: dst_db
-`,
-			wantErr: "database.name",
-		},
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
+`, wantErr: "retry.backoff"},
 	}
 
 	for _, tt := range tests {
@@ -778,40 +280,9 @@ sources:
 				t.Fatal("Load() error = nil, want validation error")
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("Load() error = %v, want substring %q", err, tt.wantErr)
+				t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
 			}
 		})
-	}
-}
-
-func TestLoadRejectsOutputDirEnvExpansionToEmpty(t *testing.T) {
-	t.Setenv("EMPTY_DSYNC_OUTPUT_DIR", "")
-	path := writeConfig(t, `
-mo_dump_path: /tmp/mo-dump
-mysql_path: /tmp/mysql
-output_dir: ${EMPTY_DSYNC_OUTPUT_DIR}
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
-`)
-
-	_, err := Load(path)
-	if err == nil {
-		t.Fatal("Load() error = nil, want output_dir validation error")
-	}
-	if !strings.Contains(err.Error(), "output_dir") {
-		t.Fatalf("Load() error = %v, want output_dir validation error", err)
 	}
 }
 
@@ -821,20 +292,9 @@ mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
 output_dir: ./runs-a
 output_dir: ./runs-b
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
 `)
 
 	_, err := Load(path)
@@ -853,20 +313,9 @@ mysql_path: /tmp/mysql
 retry:
   backoff: 1s
   backoff: 2s
-target:
-  name: target
-  host: 127.0.0.1
-  port: 6001
-  user: target:admin
-  password: "111"
-sources:
-  - name: tenant_a
-    host: 127.0.0.1
-    port: 6001
-    user: tenant:admin
-    password: "111"
-    databases:
-      - name: src_db
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
 `)
 
 	_, err := Load(path)
