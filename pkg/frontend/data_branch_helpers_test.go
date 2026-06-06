@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -83,6 +84,61 @@ func TestContainsDataBranchTempTableName(t *testing.T) {
 	require.False(t, containsDataBranchTempTableName("select '__mo_diff_del_merge_1'"))
 }
 
+func TestDataBranchTempSQLNeedsBackExec(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want bool
+	}{
+		{
+			name: "drop temp table",
+			sql:  "drop table if exists test.__mo_diff_del_merge_1",
+			want: true,
+		},
+		{
+			name: "create temp table",
+			sql:  "create table test.__mo_diff_ins_merge_1 as select id from test.t where 1 = 0",
+			want: true,
+		},
+		{
+			name: "insert into temp table",
+			sql:  "insert into test.__mo_diff_del_merge_1 values (1)",
+			want: true,
+		},
+		{
+			name: "delete from temp table",
+			sql:  "delete from test.__mo_diff_ins_merge_1",
+			want: true,
+		},
+		{
+			name: "main table delete reads temp table",
+			sql:  "delete from test.orders where id in (select id from test.__mo_diff_del_merge_1)",
+			want: false,
+		},
+		{
+			name: "main table insert reads temp table",
+			sql:  "insert into test.orders (id, name) select id, name from test.__mo_diff_ins_merge_1",
+			want: false,
+		},
+		{
+			name: "unknown temp table statement stays conservative",
+			sql:  "select * from test.__mo_diff_ins_merge_1",
+			want: true,
+		},
+		{
+			name: "ordinary statement",
+			sql:  "delete from test.orders where id = 1",
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, dataBranchTempSQLNeedsBackExec(strings.ToLower(tt.sql)))
+		})
+	}
+}
+
 func TestRunSQL_BackgroundExecPaths(t *testing.T) {
 	ses := newValidateSession(t)
 
@@ -135,6 +191,35 @@ func TestRunSQL_DataBranchTempTablesUseBackgroundExec(t *testing.T) {
 	_, err := runSql(context.Background(), ses, bh, stmt, nil, nil)
 	require.NoError(t, err)
 	require.Empty(t, spyExec.sql)
+}
+
+func TestRunSQL_DataBranchMainTableDMLUsesInternalExec(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "delete main table using diff delete table",
+			sql:  "delete from test.orders where id in (select id from test.__mo_diff_del_merge_1)",
+		},
+		{
+			name: "insert main table using diff insert table",
+			sql:  "insert into test.orders (id, name) select id, name from test.__mo_diff_ins_merge_1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ses := newValidateSession(t)
+			spyExec := &pickStreamingExecutor{}
+			bh := newPickStreamingBackExecForTest(t, ses, spyExec)
+
+			ret, err := runSql(context.Background(), ses, bh, tt.sql, nil, nil)
+			require.NoError(t, err)
+			ret.Close()
+			require.Equal(t, tt.sql, spyExec.sql)
+		})
+	}
 }
 
 func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
