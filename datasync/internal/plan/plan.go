@@ -15,6 +15,7 @@ type Task struct {
 	SourcePassword string
 	SourceDatabase string
 	SourceTable    string
+	SourceRows     int64
 	TargetDatabase string
 }
 

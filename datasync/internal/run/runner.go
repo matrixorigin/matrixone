@@ -118,6 +118,7 @@ func (r Runner) runTask(ctx context.Context, runID string, task plan.Task) repor
 		SourcePort:     task.SourcePort,
 		SourceDatabase: task.SourceDatabase,
 		SourceTable:    task.SourceTable,
+		SourceRows:     task.SourceRows,
 		TargetDatabase: task.TargetDatabase,
 		ImportStatus:   report.StatusPending,
 	}

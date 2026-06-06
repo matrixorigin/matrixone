@@ -179,9 +179,10 @@ func assertReport(t *testing.T, runDir string) {
 	}
 	var report struct {
 		Summary struct {
-			TotalTasks     int `json:"total_tasks"`
-			SucceededTasks int `json:"succeeded_tasks"`
-			FailedTasks    int `json:"failed_tasks"`
+			TotalTasks      int   `json:"total_tasks"`
+			SucceededTasks  int   `json:"succeeded_tasks"`
+			FailedTasks     int   `json:"failed_tasks"`
+			TotalSourceRows int64 `json:"total_source_rows"`
 		} `json:"summary"`
 		Tables []struct {
 			SourceTable    string `json:"source_table"`
@@ -201,6 +202,9 @@ func assertReport(t *testing.T, runDir string) {
 	if report.Summary.TotalTasks != 3 || report.Summary.SucceededTasks != 3 || report.Summary.FailedTasks != 0 {
 		t.Fatalf("summary = %+v, want 3 successful tasks", report.Summary)
 	}
+	if report.Summary.TotalSourceRows != 7 {
+		t.Fatalf("total source rows = %d, want 7", report.Summary.TotalSourceRows)
+	}
 	if len(report.Tables) != 3 {
 		t.Fatalf("table count = %d, want 3", len(report.Tables))
 	}
@@ -216,6 +220,9 @@ func assertReport(t *testing.T, runDir string) {
 		}
 		if table.TargetRowCount <= 0 {
 			t.Fatalf("target row count = %d, want positive", table.TargetRowCount)
+		}
+		if table.SourceRowCount != table.TargetRowCount {
+			t.Fatalf("row counts for %s.%s source=%d target=%d, want equal", table.SourceDatabase, table.SourceTable, table.SourceRowCount, table.TargetRowCount)
 		}
 	}
 	csvReport, err := os.ReadFile(filepath.Join(runDir, "report.csv"))

@@ -96,6 +96,7 @@ func TestRunTaskExportModeSkipsImport(t *testing.T) {
 func TestRunTaskImportModeSkipsExportAndImportsExistingFiles(t *testing.T) {
 	dir := t.TempDir()
 	task := testTask()
+	task.SourceRows = 2
 	paths := Runner{Config: testConfig(dir)}
 	tableDir, sqlFile, csvFile := paths.taskPaths("run1", task)
 	if err := os.MkdirAll(tableDir, 0o755); err != nil {
@@ -121,6 +122,9 @@ func TestRunTaskImportModeSkipsExportAndImportsExistingFiles(t *testing.T) {
 	if row.ExportStatus != report.StatusSkipped || row.ImportStatus != report.StatusSuccess {
 		t.Fatalf("row = %+v", row)
 	}
+	if row.SourceRows != 2 {
+		t.Fatalf("SourceRows = %d, want preserved source row count", row.SourceRows)
+	}
 	if row.CSVFileSize != 4 {
 		t.Fatalf("CSVFileSize = %d, want 4", row.CSVFileSize)
 	}
@@ -132,6 +136,7 @@ func TestRunTaskImportModeSkipsExportAndImportsExistingFiles(t *testing.T) {
 func TestRunImportModeCountsSkippedExportAsSuccess(t *testing.T) {
 	dir := t.TempDir()
 	task := testTask()
+	task.SourceRows = 2
 	paths := Runner{Config: testConfig(dir)}
 	tableDir, sqlFile, csvFile := paths.taskPaths("run1", task)
 	if err := os.MkdirAll(tableDir, 0o755); err != nil {
@@ -157,6 +162,9 @@ func TestRunImportModeCountsSkippedExportAsSuccess(t *testing.T) {
 
 	if out.Summary.SucceededTasks != 1 || out.Summary.FailedTasks != 0 {
 		t.Fatalf("summary = %+v, want import task counted as success", out.Summary)
+	}
+	if out.Summary.TotalSourceRows != 2 {
+		t.Fatalf("TotalSourceRows = %d, want preserved source row count", out.Summary.TotalSourceRows)
 	}
 }
 

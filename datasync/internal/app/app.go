@@ -106,6 +106,7 @@ func tasksFromReport(path string) ([]plan.Task, error) {
 			SourcePort:     row.SourcePort,
 			SourceDatabase: row.SourceDatabase,
 			SourceTable:    row.SourceTable,
+			SourceRows:     row.SourceRows,
 			TargetDatabase: row.TargetDatabase,
 		})
 	}

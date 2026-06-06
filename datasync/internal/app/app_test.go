@@ -178,6 +178,9 @@ func TestRunImportModeBuildsTasksFromExistingReportWithoutDiscovery(t *testing.T
 	runDir := filepath.Join(dir, "run1")
 	existingReport := report.RunReport{
 		RunID: "run1",
+		Summary: report.Summary{
+			TotalSourceRows: 7,
+		},
 		Tables: []report.TableReport{{
 			SourceName:     "tenant_a",
 			SourceHost:     "127.0.0.1",
@@ -185,6 +188,7 @@ func TestRunImportModeBuildsTasksFromExistingReportWithoutDiscovery(t *testing.T
 			SourceDatabase: "src_db",
 			SourceTable:    "t1",
 			TargetDatabase: "dst_db",
+			SourceRows:     7,
 		}},
 	}
 	if _, err := report.Write(runDir, existingReport); err != nil {
@@ -219,6 +223,12 @@ func TestRunImportModeBuildsTasksFromExistingReportWithoutDiscovery(t *testing.T
 		task.SourceTable != "t1" ||
 		task.TargetDatabase != "dst_db" {
 		t.Fatalf("task = %+v", task)
+	}
+	if result.Report.Tables[0].SourceRows != 7 {
+		t.Fatalf("SourceRows = %d, want preserved source row count", result.Report.Tables[0].SourceRows)
+	}
+	if result.Report.Summary.TotalSourceRows != 7 {
+		t.Fatalf("TotalSourceRows = %d, want preserved source row count", result.Report.Summary.TotalSourceRows)
 	}
 }
 
@@ -319,12 +329,17 @@ func (f *fakeRunner) Run(ctx context.Context, mode run.Mode, runID string, tasks
 	if f.err != nil {
 		return report.RunReport{}, f.err
 	}
+	var sourceRows int64
+	if len(tasks) > 0 {
+		sourceRows = tasks[0].SourceRows
+	}
 	return report.RunReport{
 		RunID: runID,
 		Summary: report.Summary{
-			TotalTasks:     len(tasks),
-			SucceededTasks: len(tasks) - f.failedTasks,
-			FailedTasks:    f.failedTasks,
+			TotalTasks:      len(tasks),
+			SucceededTasks:  len(tasks) - f.failedTasks,
+			FailedTasks:     f.failedTasks,
+			TotalSourceRows: sourceRows,
 		},
 		Tables: []report.TableReport{{
 			RunID:          runID,
@@ -332,6 +347,7 @@ func (f *fakeRunner) Run(ctx context.Context, mode run.Mode, runID string, tasks
 			SourceDatabase: "src_db",
 			SourceTable:    "t1",
 			TargetDatabase: "dst_db",
+			SourceRows:     sourceRows,
 			ExportStatus:   report.StatusSuccess,
 			ImportStatus:   report.StatusSkipped,
 		}},
