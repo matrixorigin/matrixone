@@ -2,6 +2,7 @@ package datasync
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -18,7 +19,10 @@ func TestBuildTasksAppliesIncludeThenExclude(t *testing.T) {
 		databaseKey(cfg.Databases[0].Source): {"keep", "skip", "other"},
 	}
 
-	tasks := BuildTasks(cfg, tables)
+	tasks, err := BuildTasks(cfg, tables)
+	if err != nil {
+		t.Fatalf("BuildTasks() error = %v", err)
+	}
 	if len(tasks) != 1 {
 		t.Fatalf("len(tasks) = %d, want 1", len(tasks))
 	}
@@ -72,7 +76,10 @@ func TestBuildTasksWithoutIncludeExportsDiscoveredMinusExclude(t *testing.T) {
 		databaseKey(cfg.Databases[0].Source): {"keep", "skip", "other"},
 	}
 
-	tasks := BuildTasks(cfg, tables)
+	tasks, err := BuildTasks(cfg, tables)
+	if err != nil {
+		t.Fatalf("BuildTasks() error = %v", err)
+	}
 
 	var got []string
 	for _, task := range tasks {
@@ -103,7 +110,10 @@ func TestBuildTasksPreservesDatabaseAndTableOrder(t *testing.T) {
 		databaseKey(cfg.Databases[1].Source): {"b1_t1", "b1_t2"},
 	}
 
-	tasks := BuildTasks(cfg, tables)
+	tasks, err := BuildTasks(cfg, tables)
+	if err != nil {
+		t.Fatalf("BuildTasks() error = %v", err)
+	}
 
 	var got []string
 	for _, task := range tasks {
@@ -117,5 +127,33 @@ func TestBuildTasksPreservesDatabaseAndTableOrder(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("task order = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildTasksRejectsDuplicateTargetTable(t *testing.T) {
+	cfg := &Config{
+		Databases: []DatabaseTask{
+			{
+				Source: DatabaseEndpoint{Name: "tenant_a", Host: "src-a", Port: 6001, User: "a:admin", Password: "a-pass", Database: "source_a"},
+				Target: DatabaseEndpoint{Name: "target", Host: "dst", Port: 6001, User: "target:admin", Password: "target-pass", Database: "target_db"},
+			},
+			{
+				Source: DatabaseEndpoint{Name: "tenant_b", Host: "src-b", Port: 6002, User: "b:admin", Password: "b-pass", Database: "source_b"},
+				Target: DatabaseEndpoint{Name: "target", Host: "dst", Port: 6001, User: "target:admin", Password: "target-pass", Database: "target_db"},
+			},
+		},
+	}
+	tables := map[DatabaseKey][]string{
+		databaseKey(cfg.Databases[0].Source): {"orders"},
+		databaseKey(cfg.Databases[1].Source): {"orders"},
+	}
+
+	_, err := BuildTasks(cfg, tables)
+
+	if err == nil {
+		t.Fatal("BuildTasks() error = nil, want duplicate target table error")
+	}
+	if !strings.Contains(err.Error(), "duplicate target table") {
+		t.Fatalf("BuildTasks() error = %q, want duplicate target table", err)
 	}
 }

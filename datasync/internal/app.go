@@ -83,7 +83,7 @@ func (a App) buildTasks(ctx context.Context, runID string) ([]Task, error) {
 		}
 		discovered[databaseKey(database.Source)] = tables
 	}
-	return BuildTasks(a.Config, discovered), nil
+	return BuildTasks(a.Config, discovered)
 }
 
 func tasksFromReport(path string, cfg *Config) ([]Task, error) {
