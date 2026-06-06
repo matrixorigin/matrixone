@@ -59,6 +59,8 @@ type DatabaseTask struct {
 	Target        DatabaseEndpoint `yaml:"target"`
 	IncludeTables []string         `yaml:"include_tables"`
 	ExcludeTables []string         `yaml:"exclude_tables"`
+	SourcePortSet bool             `yaml:"-"`
+	TargetPortSet bool             `yaml:"-"`
 }
 
 type rawConfig struct {
@@ -79,6 +81,56 @@ type rawRetryConfig struct {
 	MaxAttempts *int
 	BackoffText string
 	BackoffSet  bool
+}
+
+func (d *DatabaseTask) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.MappingNode {
+		return fmt.Errorf("database task must be a mapping")
+	}
+	if err := rejectDuplicateMappingKeys(value, "databases[]."); err != nil {
+		return err
+	}
+
+	for i := 0; i < len(value.Content); i += 2 {
+		key := value.Content[i]
+		val := value.Content[i+1]
+		switch key.Value {
+		case "source":
+			d.SourcePortSet = mappingValue(val, "port") != nil
+			if err := decodeNodeStrict(val, &d.Source); err != nil {
+				return err
+			}
+		case "target":
+			d.TargetPortSet = mappingValue(val, "port") != nil
+			if err := decodeNodeStrict(val, &d.Target); err != nil {
+				return err
+			}
+		case "include_tables":
+			if err := val.Decode(&d.IncludeTables); err != nil {
+				return err
+			}
+		case "exclude_tables":
+			if err := val.Decode(&d.ExcludeTables); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("%s is not a known field", key.Value)
+		}
+	}
+
+	return nil
+}
+
+func mappingValue(value *yaml.Node, key string) *yaml.Node {
+	if value.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i < len(value.Content); i += 2 {
+		if value.Content[i].Value == key {
+			return value.Content[i+1]
+		}
+	}
+	return nil
 }
 
 func (r *rawConfig) UnmarshalYAML(value *yaml.Node) error {
@@ -362,6 +414,9 @@ func validate(cfg *Config) error {
 	if err := validateOptionalEndpoint("target", cfg.Target); err != nil {
 		return err
 	}
+	if err := validateExplicitDatabasePorts(cfg.Databases); err != nil {
+		return err
+	}
 	cfg.Databases = materializeDatabaseEndpoints(cfg.Source, cfg.Target, cfg.Databases)
 	if len(cfg.Databases) == 0 {
 		return fmt.Errorf("databases must contain at least one complete database")
@@ -379,6 +434,18 @@ func validate(cfg *Config) error {
 		}
 		if err := validateTableList(prefix+".exclude_tables", database.ExcludeTables); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateExplicitDatabasePorts(databases []DatabaseTask) error {
+	for databaseIndex, database := range databases {
+		if database.SourcePortSet && database.Source.Port < 1 {
+			return fmt.Errorf("databases[%d].source.port must be at least 1", databaseIndex)
+		}
+		if database.TargetPortSet && database.Target.Port < 1 {
+			return fmt.Errorf("databases[%d].target.port must be at least 1", databaseIndex)
 		}
 	}
 	return nil
@@ -455,10 +522,15 @@ func validateOptionalEndpoint(prefix string, endpoint Endpoint) error {
 }
 
 func validateTableList(prefix string, tables []string) error {
+	seen := make(map[string]struct{}, len(tables))
 	for tableIndex, table := range tables {
 		if table == "" {
 			return fmt.Errorf("%s[%d] must not be empty", prefix, tableIndex)
 		}
+		if _, ok := seen[table]; ok {
+			return fmt.Errorf("%s[%d] duplicates %q", prefix, tableIndex, table)
+		}
+		seen[table] = struct{}{}
 	}
 	return nil
 }

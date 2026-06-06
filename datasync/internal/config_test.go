@@ -227,6 +227,39 @@ databases:
 	}
 }
 
+func TestLoadRejectsExplicitZeroDatabasePortWhenGlobalDefaultExists(t *testing.T) {
+	path := writeConfig(t, `
+mo_dump_path: /tmp/mo-dump
+mysql_path: /tmp/mysql
+source:
+  name: global_source
+  host: 127.0.0.1
+  port: 6001
+  user: global_src:admin
+  password: "111"
+target:
+  name: global_target
+  host: 127.0.0.1
+  port: 6001
+  user: global_target:admin
+  password: "111"
+databases:
+  - source:
+      port: 0
+      database: src_db
+    target:
+      database: dst_db
+`)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want explicit zero source port error")
+	}
+	if !strings.Contains(err.Error(), "databases[0].source.port") {
+		t.Fatalf("Load() error = %v, want source port error", err)
+	}
+}
+
 func TestLoadRejectsMissingEnv(t *testing.T) {
 	path := writeConfig(t, `
 mo_dump_path: /tmp/mo-dump
@@ -323,13 +356,13 @@ databases:
   - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
     target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111"}
 `, wantErr: "databases must contain at least one complete database"},
-		{name: "zero source port leaves no complete database", yaml: `
+		{name: "zero source port", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
 databases:
   - source: {name: tenant_a, host: 127.0.0.1, port: 0, user: tenant:admin, password: "111", database: src_db}
     target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
-`, wantErr: "databases must contain at least one complete database"},
+`, wantErr: "databases[0].source.port"},
 		{name: "bad target port", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
@@ -345,6 +378,14 @@ databases:
     target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
     include_tables: [""]
 `, wantErr: "include_tables"},
+		{name: "duplicate include table", yaml: `
+mo_dump_path: /tmp/mo-dump
+mysql_path: /tmp/mysql
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
+    include_tables: [t1, t1]
+`, wantErr: "include_tables"},
 		{name: "empty exclude table", yaml: `
 mo_dump_path: /tmp/mo-dump
 mysql_path: /tmp/mysql
@@ -352,6 +393,14 @@ databases:
   - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
     target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
     exclude_tables: [""]
+`, wantErr: "exclude_tables"},
+		{name: "duplicate exclude table", yaml: `
+mo_dump_path: /tmp/mo-dump
+mysql_path: /tmp/mysql
+databases:
+  - source: {name: tenant_a, host: 127.0.0.1, port: 6001, user: tenant:admin, password: "111", database: src_db}
+    target: {name: target, host: 127.0.0.1, port: 6001, user: target:admin, password: "111", database: dst_db}
+    exclude_tables: [t1, t1]
 `, wantErr: "exclude_tables"},
 		{name: "negative parallelism", yaml: `
 mo_dump_path: /tmp/mo-dump
