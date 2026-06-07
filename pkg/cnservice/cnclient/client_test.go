@@ -31,7 +31,7 @@ func (c *testRPCClient) Send(ctx context.Context, backend string, request morpc.
 	return nil, nil
 }
 
-func (c *testRPCClient) NewStream(ctx context.Context, backend string, lock bool) (morpc.Stream, error) {
+func (c *testRPCClient) NewStream(backend string, lock bool) (morpc.Stream, error) {
 	c.backend = backend
 	c.lock = lock
 	return nil, nil
@@ -48,7 +48,7 @@ func TestPipelineClient_NewStreamAllowsLocalBackend(t *testing.T) {
 		client:              rpcClient,
 	}
 
-	_, err := client.NewStream(context.Background(), "127.0.0.1:1234")
+	_, err := client.NewStream("127.0.0.1:1234")
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1:1234", rpcClient.backend)
 	require.True(t, rpcClient.lock)
