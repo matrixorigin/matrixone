@@ -2087,11 +2087,6 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 			continue
 		}
 		switch key {
-		case "filepath":
-			// stage:// paths have already been expanded to s.Url by
-			// InitInfileOrStageParam. Keep the raw option for show/serialization
-			// compatibility, but never let it override the resolved S3 prefix.
-			continue
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
 			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {

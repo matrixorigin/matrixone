@@ -304,49 +304,6 @@ func Test_convertToVmInstruction(t *testing.T) {
 	}
 }
 
-func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
-	ctx := &scopeContext{
-		id:     1,
-		root:   &scopeContext{},
-		parent: &scopeContext{},
-	}
-	proc := &process.Process{}
-	proc.Base = &process.BaseProcess{}
-
-	shards := []*pipeline.ParquetRowGroupShard{
-		{
-			FileIndex:     2,
-			RowGroupStart: 3,
-			RowGroupEnd:   5,
-			NumRows:       1024,
-			Bytes:         4096,
-		},
-	}
-	op := external.NewArgument().WithEs(
-		&external.ExternalParam{
-			ExParamConst: external.ExParamConst{
-				FileList:              []string{"s3://bucket/part.parquet"},
-				FileSize:              []int64{8192},
-				FileOffsetTotal:       []*pipeline.FileOffset{{Offset: []int64{0, -1}}},
-				ParquetRowGroupShards: shards,
-			},
-			ExParam: external.ExParam{
-				Fileparam: &external.ExFileparam{},
-				Filter:    &external.FilterParam{},
-			},
-		},
-	)
-
-	_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
-	require.NoError(t, err)
-	require.Equal(t, shards, pipeInstr.ExternalScan.ParquetRowGroupShards)
-
-	restored, err := convertToVmOperator(pipeInstr, ctx, nil)
-	require.NoError(t, err)
-	restoredExternal := restored.(*external.External)
-	require.Equal(t, shards, restoredExternal.Es.ParquetRowGroupShards)
-}
-
 func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,

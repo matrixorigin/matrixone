@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
 )
@@ -54,16 +52,6 @@ func (h *ParquetHandler) getNestedMapper(col *parquet.Column, dt plan.Type) *col
 
 // getDataByRow reads data row by row (used when has nested columns)
 func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
-	_, span := trace.Start(proc.Ctx, "ParquetHandler.getDataByRow")
-	defer span.End()
-
-	rowModeStart := time.Now()
-	defer func() {
-		param.addParquetProfile(process.ParquetProfileStats{
-			RowModeTime: time.Since(rowModeStart).Nanoseconds(),
-		})
-	}()
-
 	if h.offset > 0 {
 		if err := h.rowReader.SeekToRow(h.offset); err != nil {
 			return moerr.ConvertGoError(param.Ctx, err)
@@ -86,7 +74,7 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 	bat.SetRowCount(n)
 	h.offset += int64(n)
 
-	finish := n == 0 || h.isFinished()
+	finish := n == 0 || h.offset >= h.file.NumRows()
 	if finish {
 		h.cleanup()
 		// File completion (FileFin/End) is now handled by Call's finishCurrentFile

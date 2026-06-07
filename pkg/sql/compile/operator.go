@@ -353,7 +353,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 					FileList:               t.Es.FileList,
 					FileSize:               t.Es.FileSize,
 					FileOffsetTotal:        t.Es.FileOffsetTotal,
-					ParquetRowGroupShards:  t.Es.ParquetRowGroupShards,
 					Extern:                 t.Es.Extern,
 					StrictSqlMode:          t.Es.StrictSqlMode,
 					ParallelLoad:           t.Es.ParallelLoad,

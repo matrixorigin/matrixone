@@ -1446,21 +1446,6 @@ func TestInitStageS3Param_HappyAndErrors(t *testing.T) {
 		require.Error(t, InitStageS3Param(param, sd))
 	})
 
-	t.Run("stage_filepath_option_ignored", func(t *testing.T) {
-		param := &tree.ExternParam{}
-		param.Ctx = context.Background()
-		param.Option = []string{"filepath", "stage://pq_stage/data.parquet", "format", "parquet"}
-		sd := stage.StageDef{
-			Url:         parse("s3://b/prefix/data.parquet"),
-			Credentials: baseCreds,
-		}
-		require.NoError(t, InitStageS3Param(param, sd))
-		assert.Equal(t, tree.S3, param.ScanType)
-		assert.Equal(t, "parquet", param.Format)
-		assert.Equal(t, "b", param.S3Param.Bucket)
-		assert.Equal(t, "/prefix/data.parquet", param.Filepath)
-	})
-
 	t.Run("jsonline_without_jsondata", func(t *testing.T) {
 		param := &tree.ExternParam{}
 		param.Ctx = context.Background()

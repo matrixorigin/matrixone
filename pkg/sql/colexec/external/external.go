@@ -191,15 +191,14 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	t1 := time.Now()
 
 	analyzer := external.OpAnalyzer
-	param := external.Es
 	defer func() {
 		analyzer.AddScanTime(t1)
-		param.flushParquetProfile(analyzer)
 		span.End()
 		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
 
 	result := vm.NewCallResult()
+	param := external.Es
 	if param.Fileparam.End {
 		result.Status = vm.ExecStop
 		return result, nil
@@ -263,7 +262,6 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	result.Batch = external.ctr.buf
 	if external.ctr.buf != nil {
 		external.ctr.maxAllocSize = max(external.ctr.maxAllocSize, external.ctr.buf.Size())
-		param.addParquetProfile(process.ParquetProfileStats{PeakBatchBytes: int64(external.ctr.buf.Size())})
 		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
 

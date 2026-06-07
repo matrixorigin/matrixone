@@ -18,7 +18,6 @@ import (
 	"bufio"
 	"context"
 	"io"
-	"strings"
 
 	"github.com/parquet-go/parquet-go"
 
@@ -67,18 +66,15 @@ type ExParamConst struct {
 	FileSize        []int64
 	FileOffset      []int64
 	FileOffsetTotal []*pipeline.FileOffset
-	// Optional Parquet row group shards. Empty means whole-file scan.
-	ParquetRowGroupShards []*pipeline.ParquetRowGroupShard
-	Ctx                   context.Context
-	Extern                *tree.ExternParam
-	ClusterTable          *plan.ClusterTable
+	Ctx             context.Context
+	Extern          *tree.ExternParam
+	ClusterTable    *plan.ClusterTable
 }
 
 type ExParam struct {
 	Fileparam         *ExFileparam
 	Filter            *FilterParam
 	currentPartValues map[string]string
-	parquetProfile    process.ParquetProfileStats
 }
 
 type ExFileparam struct {
@@ -158,32 +154,6 @@ func (external External) TypeName() string {
 
 func NewArgument() *External {
 	return reuse.Alloc[External](nil)
-}
-
-func (param *ExternalParam) addParquetProfile(stats process.ParquetProfileStats) {
-	if param == nil || param.Extern == nil || !strings.EqualFold(param.Extern.Format, tree.PARQUET) || stats.Empty() {
-		return
-	}
-	param.parquetProfile.Add(stats)
-}
-
-func (param *ExternalParam) takeParquetProfile() process.ParquetProfileStats {
-	if param == nil {
-		return process.ParquetProfileStats{}
-	}
-	stats := param.parquetProfile
-	param.parquetProfile = process.ParquetProfileStats{}
-	return stats
-}
-
-func (param *ExternalParam) flushParquetProfile(analyzer process.Analyzer) {
-	if analyzer == nil {
-		return
-	}
-	stats := param.takeParquetProfile()
-	if !stats.Empty() {
-		analyzer.AddParquetProfile(stats)
-	}
 }
 
 func (external *External) WithEs(es *ExternalParam) *External {
@@ -304,21 +274,18 @@ func newCSVParserFromReader(extern *tree.ExternParam, r io.Reader) (*csvparser.C
 }
 
 type ParquetHandler struct {
-	file         *parquet.File
-	rowGroup     parquet.RowGroup
-	rowGroups    []parquet.RowGroup
-	rowGroupRows int64
-	offset       int64
-	batchCnt     int64
-	cols         []*parquet.Column
-	mappers      []*columnMapper
-	pages        []parquet.Pages // cached pages iterators for each column
-	currentPage  []parquet.Page  // cached current page for each column
-	pageOffset   []int64         // current offset within each cached page
+	file        *parquet.File
+	offset      int64
+	batchCnt    int64
+	cols        []*parquet.Column
+	mappers     []*columnMapper
+	pages       []parquet.Pages // cached pages iterators for each column
+	currentPage []parquet.Page  // cached current page for each column
+	pageOffset  []int64         // current offset within each cached page
 
 	// for nested types support
 	hasNestedCols bool
-	rowReader     parquet.Rows
+	rowReader     *parquet.Reader
 
 	// virtual column support (hive partitions + __mo_filepath)
 	partitionColIndices []int
