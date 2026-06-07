@@ -185,9 +185,12 @@ func openReader(ctx context.Context, dir string, storage toolfs.StorageOptions) 
 //	mo-tool ckp dump --table-id=12345 [--ts=...] [--output=table.csv] [directory]
 func dumpCommand(storage *toolfs.StorageOptions) *cobra.Command {
 	var (
-		tableID uint64
-		tsStr   string
-		output  string
+		tableID      uint64
+		tsStr        string
+		output       string
+		metaComments bool
+		header       bool
+		rowOrder     string
 	)
 
 	cmd := &cobra.Command{
@@ -203,7 +206,8 @@ physical columns.
 Examples:
   mo-tool ckp dump --table-id=12345 /path/to/ckp          # dump to stdout
   mo-tool ckp dump --table-id=12345 -o users.csv .        # dump to file
-  mo-tool ckp dump --table-id=12345 --ts=1749001234567890:1 .  # dump at specific TS`,
+  mo-tool ckp dump --table-id=12345 --ts=1749001234567890:1 .  # dump at specific TS
+  mo-tool ckp dump --table-id=12345 --header --meta-comments .`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."
@@ -255,7 +259,20 @@ Examples:
 				w = outFile
 			}
 
-			if err := reader.DumpTableCSVComposed(ctx, w, tableID, snapshotTS); err != nil {
+			parsedRowOrder, err := checkpointtool.ParseCSVRowOrder(rowOrder)
+			if err != nil {
+				return err
+			}
+
+			if err := reader.DumpTableCSVComposed(
+				ctx,
+				w,
+				tableID,
+				snapshotTS,
+				checkpointtool.WithCSVMetaComments(metaComments),
+				checkpointtool.WithCSVHeader(header),
+				checkpointtool.WithCSVRowOrder(parsedRowOrder),
+			); err != nil {
 				return fmt.Errorf("dump table %d: %w", tableID, err)
 			}
 
@@ -269,6 +286,9 @@ Examples:
 	cmd.Flags().Uint64Var(&tableID, "table-id", 0, "Table ID to dump (required)")
 	cmd.Flags().StringVar(&tsStr, "ts", "", "Snapshot timestamp in 'physical:logical' format (default: latest)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output CSV file path (default: stdout)")
+	cmd.Flags().BoolVar(&metaComments, "meta-comments", false, "Prepend DDL and row-count comment lines (disabled by default so output can be loaded directly)")
+	cmd.Flags().BoolVar(&header, "header", false, "Include a CSV header row with column names")
+	cmd.Flags().StringVar(&rowOrder, "row-order", string(checkpointtool.CSVRowOrderStorage), "CSV row order: storage (streaming, large-table friendly) or lexical (sort by visible CSV values in memory)")
 
 	return cmd
 }

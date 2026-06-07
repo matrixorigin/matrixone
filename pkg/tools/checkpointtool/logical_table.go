@@ -54,7 +54,7 @@ func (r *CheckpointReader) BuildLogicalTableView(
 			}
 			return nil
 		},
-		func(objShort string, blockIdx int, rowIdx int, values []string) error {
+		func(objShort string, blockIdx int, rowIdx int, values []string, _ []bool) error {
 			row := make([]string, 0, len(values)+3)
 			row = append(row, objShort, fmt.Sprintf("%d", blockIdx), fmt.Sprintf("%d", rowIdx))
 			row = append(row, values...)
@@ -77,7 +77,7 @@ func (r *CheckpointReader) scanLogicalTable(
 	dataEntries []*ObjectEntryInfo,
 	tombEntries []*ObjectEntryInfo,
 	onColumns func([]objecttool.ColInfo) error,
-	onRow func(objShort string, blockIdx int, rowIdx int, values []string) error,
+	onRow func(objShort string, blockIdx int, rowIdx int, values []string, nulls []bool) error,
 ) (logicalTableStats, error) {
 	stats := logicalTableStats{}
 	if len(dataEntries) == 0 {
@@ -141,10 +141,12 @@ func (r *CheckpointReader) scanLogicalTable(
 				}
 				if onRow != nil {
 					values := make([]string, len(bat.Vecs))
+					nulls := make([]bool, len(bat.Vecs))
 					for i, vec := range bat.Vecs {
+						nulls[i] = vec.IsNull(uint64(rowIdx))
 						values[i] = vecValueToString(vec, rowIdx)
 					}
-					if err := onRow(entry.ObjectStats.ObjectName().Short().ShortString(), blockIdx, rowIdx, values); err != nil {
+					if err := onRow(entry.ObjectStats.ObjectName().Short().ShortString(), blockIdx, rowIdx, values, nulls); err != nil {
 						if deleteMask.IsValid() {
 							deleteMask.Release()
 						}

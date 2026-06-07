@@ -16,7 +16,6 @@ package checkpointtool
 
 import (
 	"context"
-	"encoding/csv"
 	"fmt"
 	"io"
 	"os"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 )
 
 const (
@@ -71,6 +71,73 @@ type TableSchema struct {
 	DatabaseName string
 	Columns      []TableColumn // sorted by Position
 	CreateSQL    string        // raw CREATE TABLE from mo_tables.rel_createsql
+}
+
+type CSVRowOrder string
+
+const (
+	CSVRowOrderStorage CSVRowOrder = "storage"
+	CSVRowOrderLexical CSVRowOrder = "lexical"
+)
+
+type CSVExportOptions struct {
+	IncludeMetadata bool
+	IncludeHeader   bool
+	RowOrder        CSVRowOrder
+}
+
+type exportedCSVRow struct {
+	values []string
+	nulls  []bool
+}
+
+type CSVExportOption func(*CSVExportOptions)
+
+func defaultCSVExportOptions() CSVExportOptions {
+	return CSVExportOptions{
+		IncludeMetadata: true,
+		IncludeHeader:   true,
+		RowOrder:        CSVRowOrderStorage,
+	}
+}
+
+func WithCSVMetaComments(include bool) CSVExportOption {
+	return func(opts *CSVExportOptions) {
+		opts.IncludeMetadata = include
+	}
+}
+
+func WithCSVHeader(include bool) CSVExportOption {
+	return func(opts *CSVExportOptions) {
+		opts.IncludeHeader = include
+	}
+}
+
+func WithCSVRowOrder(order CSVRowOrder) CSVExportOption {
+	return func(opts *CSVExportOptions) {
+		opts.RowOrder = order
+	}
+}
+
+func ParseCSVRowOrder(s string) (CSVRowOrder, error) {
+	switch CSVRowOrder(strings.ToLower(strings.TrimSpace(s))) {
+	case "", CSVRowOrderStorage:
+		return CSVRowOrderStorage, nil
+	case CSVRowOrderLexical:
+		return CSVRowOrderLexical, nil
+	default:
+		return "", fmt.Errorf("unsupported row order %q (supported: %s, %s)", s, CSVRowOrderStorage, CSVRowOrderLexical)
+	}
+}
+
+func resolveCSVExportOptions(opts []CSVExportOption) CSVExportOptions {
+	resolved := defaultCSVExportOptions()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&resolved)
+		}
+	}
+	return resolved
 }
 
 type builtinColumnDef struct {
@@ -445,6 +512,7 @@ func (r *CheckpointReader) DumpTableCSV(
 	tableID uint64,
 	snapshotTS types.TS,
 	dataEntries, tombEntries []*ObjectEntryInfo,
+	opts ...CSVExportOption,
 ) error {
 	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
 	if len(schema.Columns) == 0 {
@@ -454,7 +522,7 @@ func (r *CheckpointReader) DumpTableCSV(
 			tableID,
 		)
 	}
-	return r.streamTableCSV(ctx, w, schema, snapshotTS, dataEntries, tombEntries)
+	return r.streamTableCSV(ctx, w, schema, snapshotTS, dataEntries, tombEntries, resolveCSVExportOptions(opts))
 }
 
 // DumpTableCSVComposed dumps a table to CSV by composing the full checkpoint view
@@ -465,6 +533,7 @@ func (r *CheckpointReader) DumpTableCSVComposed(
 	w io.Writer,
 	tableID uint64,
 	snapshotTS types.TS,
+	opts ...CSVExportOption,
 ) error {
 	dataEntries, tombEntries, err := r.getTableEntriesAt(ctx, tableID, snapshotTS)
 	if err != nil {
@@ -478,7 +547,7 @@ func (r *CheckpointReader) DumpTableCSVComposed(
 			tableID,
 		)
 	}
-	return r.streamTableCSV(ctx, w, schema, snapshotTS, dataEntries, tombEntries)
+	return r.streamTableCSV(ctx, w, schema, snapshotTS, dataEntries, tombEntries, resolveCSVExportOptions(opts))
 }
 
 func (r *CheckpointReader) streamTableCSV(
@@ -487,6 +556,7 @@ func (r *CheckpointReader) streamTableCSV(
 	schema *TableSchema,
 	snapshotTS types.TS,
 	dataEntries, tombEntries []*ObjectEntryInfo,
+	options CSVExportOptions,
 ) error {
 	tmpFile, err := os.CreateTemp("", "mo-tool-table-dump-*.csv")
 	if err != nil {
@@ -496,7 +566,6 @@ func (r *CheckpointReader) streamTableCSV(
 	defer os.Remove(tmpName)
 	defer tmpFile.Close()
 
-	cw := csv.NewWriter(tmpFile)
 	header := make([]string, 0, len(schema.Columns))
 	physicalPositions := make([]int, 0, len(schema.Columns))
 	for _, col := range schema.Columns {
@@ -507,68 +576,249 @@ func (r *CheckpointReader) streamTableCSV(
 		}
 		physicalPositions = append(physicalPositions, physicalPos)
 	}
-	if err := cw.Write(header); err != nil {
-		return err
+	var projectedTypes []types.Type
+	if options.IncludeHeader {
+		// header is emitted after we know output mode but before rows
+		if err := writeSQLLoadCSVRow(tmpFile, nil, header, nil); err != nil {
+			return err
+		}
 	}
 
-	stats, err := r.scanLogicalTable(ctx, snapshotTS, dataEntries, tombEntries, nil,
-		func(_ string, _ int, _ int, values []string) error {
-			row := make([]string, len(physicalPositions))
-			for i, pos := range physicalPositions {
-				if pos >= 0 && pos < len(values) {
-					row[i] = values[pos]
-				}
-			}
-			return cw.Write(row)
+	var lexicalRows []exportedCSVRow
+	onRow := func(_ string, _ int, _ int, values []string, nulls []bool) error {
+		row := projectCSVRow(values, physicalPositions)
+		rowNulls := projectCSVNulls(nulls, physicalPositions)
+		if options.RowOrder == CSVRowOrderLexical {
+			lexicalRows = append(lexicalRows, exportedCSVRow{values: row, nulls: rowNulls})
+			return nil
+		}
+		return writeSQLLoadCSVRow(tmpFile, projectedTypes, row, rowNulls)
+	}
+
+	stats, err := r.scanLogicalTable(ctx, snapshotTS, dataEntries, tombEntries,
+		func(cols []objecttool.ColInfo) error {
+			projectedTypes = buildProjectedTypes(cols, physicalPositions)
+			return nil
 		},
+		onRow,
 	)
 	if err != nil {
 		return err
 	}
-	cw.Flush()
-	if err := cw.Error(); err != nil {
-		return err
+	if options.RowOrder == CSVRowOrderLexical {
+		sortCSVRowsLexical(lexicalRows)
+		for _, row := range lexicalRows {
+			if err := writeSQLLoadCSVRow(tmpFile, projectedTypes, row.values, row.nulls); err != nil {
+				return err
+			}
+		}
 	}
 
 	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	if err := writeCSVMetadata(w, schema, stats); err != nil {
-		return err
+	if options.IncludeMetadata {
+		if err := writeCSVMetadata(w, schema, stats); err != nil {
+			return err
+		}
 	}
 	_, err = io.Copy(w, tmpFile)
 	return err
 }
 
 // WriteCSV writes a LogicalTableView with the given schema as CSV to w.
-func WriteCSV(w io.Writer, schema *TableSchema, view *LogicalTableView) error {
-	cw := csv.NewWriter(w)
-	defer cw.Flush()
+func WriteCSV(w io.Writer, schema *TableSchema, view *LogicalTableView, opts ...CSVExportOption) error {
+	options := resolveCSVExportOptions(opts)
 
-	// Write header comments (DDL + metadata)
-	if err := writeCSVMetadata(w, schema, logicalTableStats{
-		VisibleRows:  view.VisibleRows,
-		DeletedRows:  view.DeletedRows,
-		PhysicalRows: view.PhysicalRows,
-	}); err != nil {
-		return err
-	}
-
-	// Merge schema column names into headers
-	merged := MergeLogicalViewWithSchema(view, schema)
-	if err := cw.Write(merged.Headers); err != nil {
-		return err
-	}
-
-	// Write data rows (skip the 3 meta columns)
-	for _, row := range merged.Rows {
-		if err := cw.Write(row); err != nil {
+	if options.IncludeMetadata {
+		if err := writeCSVMetadata(w, schema, logicalTableStats{
+			VisibleRows:  view.VisibleRows,
+			DeletedRows:  view.DeletedRows,
+			PhysicalRows: view.PhysicalRows,
+		}); err != nil {
 			return err
 		}
 	}
 
-	cw.Flush()
-	return cw.Error()
+	// Merge schema column names into headers
+	merged := MergeLogicalViewWithSchema(view, schema)
+	projectedTypes := make([]types.Type, len(schema.Columns))
+	for i, col := range schema.Columns {
+		projectedTypes[i] = sqlTypeStringToType(col.SQLType)
+	}
+	if options.IncludeHeader {
+		if err := writeSQLLoadCSVRow(w, nil, merged.Headers, nil); err != nil {
+			return err
+		}
+	}
+
+	rows := merged.Rows
+	if options.RowOrder == CSVRowOrderLexical {
+		rows = make([][]string, len(merged.Rows))
+		for i, row := range merged.Rows {
+			rows[i] = append([]string(nil), row...)
+		}
+		sort.SliceStable(rows, func(i, j int) bool {
+			return compareCSVRowsLexical(rows[i], rows[j]) < 0
+		})
+	}
+	for _, row := range rows {
+		if err := writeSQLLoadCSVRow(w, projectedTypes, row, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func projectCSVRow(values []string, physicalPositions []int) []string {
+	row := make([]string, len(physicalPositions))
+	for i, pos := range physicalPositions {
+		if pos >= 0 && pos < len(values) {
+			row[i] = values[pos]
+		}
+	}
+	return row
+}
+
+func projectCSVNulls(values []bool, physicalPositions []int) []bool {
+	row := make([]bool, len(physicalPositions))
+	for i, pos := range physicalPositions {
+		if pos >= 0 && pos < len(values) {
+			row[i] = values[pos]
+		}
+	}
+	return row
+}
+
+func sortCSVRowsLexical(rows []exportedCSVRow) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		return compareCSVRowsLexical(rows[i].values, rows[j].values) < 0
+	})
+}
+
+func buildProjectedTypes(cols []objecttool.ColInfo, physicalPositions []int) []types.Type {
+	projected := make([]types.Type, len(physicalPositions))
+	for i, pos := range physicalPositions {
+		if pos >= 0 && pos < len(cols) {
+			projected[i] = cols[pos].Type
+		}
+	}
+	return projected
+}
+
+func writeSQLLoadCSVRow(w io.Writer, colTypes []types.Type, fields []string, nulls []bool) error {
+	for i, field := range fields {
+		if i > 0 {
+			if _, err := io.WriteString(w, ","); err != nil {
+				return err
+			}
+		}
+		typ := types.Type{}
+		if i < len(colTypes) {
+			typ = colTypes[i]
+		}
+		isNull := i < len(nulls) && nulls[i]
+		if err := writeSQLLoadCSVField(w, typ, field, isNull); err != nil {
+			return err
+		}
+	}
+	_, err := io.WriteString(w, "\n")
+	return err
+}
+
+func writeSQLLoadCSVField(w io.Writer, typ types.Type, field string, isNull bool) error {
+	if isNull {
+		_, err := io.WriteString(w, `\N`)
+		return err
+	}
+
+	if shouldQuoteSQLLoadType(typ) {
+		if _, err := io.WriteString(w, `"`); err != nil {
+			return err
+		}
+		escaped := escapeSQLLoadString(field, '"')
+		if _, err := io.WriteString(w, escaped); err != nil {
+			return err
+		}
+		_, err := io.WriteString(w, `"`)
+		return err
+	}
+
+	_, err := io.WriteString(w, field)
+	return err
+}
+
+func escapeSQLLoadString(s string, enclosed byte) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	if enclosed != 0 && enclosed != '\\' {
+		s = strings.ReplaceAll(s, string(enclosed), string([]byte{enclosed, enclosed}))
+	}
+	return s
+}
+
+func shouldQuoteSQLLoadType(typ types.Type) bool {
+	switch typ.Oid {
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_datalink, types.T_json,
+		types.T_geometry, types.T_array_float32, types.T_array_float64:
+		return true
+	default:
+		return false
+	}
+}
+
+func sqlTypeStringToType(sqlType string) types.Type {
+	s := strings.ToUpper(strings.TrimSpace(sqlType))
+	switch {
+	case strings.Contains(s, "CHAR"), strings.Contains(s, "TEXT"), strings.Contains(s, "BLOB"), strings.Contains(s, "DATALINK"):
+		return types.T_varchar.ToType()
+	case strings.Contains(s, "JSON"):
+		return types.T_json.ToType()
+	case strings.Contains(s, "GEOMETRY"):
+		return types.T_geometry.ToType()
+	case strings.Contains(s, "DECIMAL"):
+		return types.New(types.T_decimal128, 0, 0)
+	case strings.Contains(s, "TIMESTAMP"):
+		return types.T_timestamp.ToType()
+	case strings.Contains(s, "DATETIME"):
+		return types.T_datetime.ToType()
+	case strings.HasPrefix(s, "TIME"):
+		return types.T_time.ToType()
+	case strings.Contains(s, "DATE"):
+		return types.T_date.ToType()
+	case strings.Contains(s, "DOUBLE"):
+		return types.T_float64.ToType()
+	case strings.Contains(s, "FLOAT"):
+		return types.T_float32.ToType()
+	case strings.Contains(s, "BOOL"):
+		return types.T_bool.ToType()
+	case strings.Contains(s, "BIGINT"):
+		return types.T_int64.ToType()
+	case strings.Contains(s, "INT"):
+		return types.T_int32.ToType()
+	default:
+		return types.Type{}
+	}
+}
+
+func compareCSVRowsLexical(left, right []string) int {
+	limit := len(left)
+	if len(right) < limit {
+		limit = len(right)
+	}
+	for i := 0; i < limit; i++ {
+		if cmp := strings.Compare(left[i], right[i]); cmp != 0 {
+			return cmp
+		}
+	}
+	switch {
+	case len(left) < len(right):
+		return -1
+	case len(left) > len(right):
+		return 1
+	default:
+		return 0
+	}
 }
 
 func writeCSVMetadata(w io.Writer, schema *TableSchema, stats logicalTableStats) error {

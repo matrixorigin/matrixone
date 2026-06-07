@@ -65,6 +65,8 @@ Dump a logical table view to CSV:
 ```bash
 ./mo-tool ckp dump --table-id=323820 ./mo-data
 ./mo-tool ckp dump --table-id=323820 -o workflow_cases.csv ./mo-data
+./mo-tool ckp dump --table-id=323820 --header --meta-comments ./mo-data
+./mo-tool ckp dump --table-id=323820 --row-order=lexical ./mo-data
 ```
 
 The CSV dump:
@@ -72,10 +74,33 @@ The CSV dump:
 - applies tombstones at the selected checkpoint snapshot
 - excludes hidden system columns
 - uses catalog metadata from `mo_tables` and `mo_columns`
-- streams row output instead of materializing the full CSV in memory first
+- uses MatrixOne SQL export style field formatting so the output can be loaded
+  back with `LOAD DATA`
+- uses `\N` for nulls
+- streams row output instead of materializing the full CSV in memory first when
+  `--row-order=storage` (the default)
 
 If catalog metadata cannot be resolved exactly, the command fails instead of
 guessing from raw physical object columns.
+
+By default, `ckp dump` is geared toward reloadability:
+
+- no metadata comment lines
+- no header row
+
+Use these flags when you want a more human-readable export:
+
+- `--meta-comments` to prepend `-- CREATE TABLE ...` and row count comment lines
+- `--header` to include a header row with visible column names
+- use `--row-order=lexical` if you want deterministic CSV ordering by visible
+  column values for diffing or reproducible snapshots
+
+Row order modes:
+
+- `storage`: object/block/row scan order after tombstone application; this is
+  the default and remains large-table friendly
+- `lexical`: sorts the final visible CSV rows lexicographically by exported
+  column values; this buffers rows in memory and is intended for smaller exports
 
 ## Local Object Usage
 
@@ -236,6 +261,10 @@ If a checkpoint comes from an unknown future layout and neither named columns
 nor known-width inference matches, schema reconstruction can still fail closed.
 That is intentional.
 
+This means `3.0-dev` checkpoint data is supported for the known catalog layout
+differences above, but compatibility is not an open-ended promise for arbitrary
+older or future internal layouts.
+
 ## Important Path Rules
 
 For remote checkpoint inspection, `key-prefix` should point to the MatrixOne
@@ -272,11 +301,11 @@ Checkpoint commands:
 ```bash
 ./mo-tool ckp info [directory] [--fs-config FILE] [--fs-name NAME]
 ./mo-tool ckp view [directory] [--fs-config FILE] [--fs-name NAME]
-./mo-tool ckp dump --table-id ID [directory] [--ts PHYSICAL:LOGICAL] [-o FILE]
+./mo-tool ckp dump --table-id ID [directory] [--ts PHYSICAL:LOGICAL] [-o FILE] [--header] [--meta-comments] [--row-order storage|lexical]
 ./mo-tool ckp show-create-table --table-id ID [directory] [--ts PHYSICAL:LOGICAL]
 ./mo-tool ckp info --backend S3 --s3 key=value,...
 ./mo-tool ckp view --backend MINIO --s3 key=value,...
-./mo-tool ckp dump --table-id ID --backend S3 --s3 key=value,...
+./mo-tool ckp dump --table-id ID --backend S3 --s3 key=value,... [--header] [--meta-comments] [--row-order storage|lexical]
 ./mo-tool ckp show-create-table --table-id ID --backend S3 --s3 key=value,...
 ```
 

@@ -74,6 +74,12 @@ func Open(ctx context.Context, opts StorageOptions) (fileservice.FileService, st
 	if err != nil {
 		return nil, "", err
 	}
+	if backend == "S3" || backend == "MINIO" {
+		fs, _, err = newLazyCacheFS(ctx, fs)
+		if err != nil {
+			return nil, "", err
+		}
+	}
 	return fs, fmt.Sprintf("%s:%s", strings.ToLower(backend), args.KeyPrefix), nil
 }
 
@@ -103,6 +109,13 @@ func openFromConfig(ctx context.Context, path string, fsName string) (fileservic
 			fs, err := fileservice.NewFileService(ctx, fsCfg, nil)
 			if err != nil {
 				return nil, "", err
+			}
+			backend := strings.ToUpper(fsCfg.Backend)
+			if backend == "S3" || backend == "MINIO" {
+				fs, _, err = newLazyCacheFS(ctx, fs)
+				if err != nil {
+					return nil, "", err
+				}
 			}
 			return fs, fmt.Sprintf("%s:%s", path, fsCfg.Name), nil
 		}

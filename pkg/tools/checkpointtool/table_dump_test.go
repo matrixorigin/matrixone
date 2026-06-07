@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -100,10 +101,10 @@ func TestWriteCSV_withData(t *testing.T) {
 
 	assert.Equal(t, 5, len(dataLines)) // header + 4 rows
 	assert.Equal(t, "id,name,age", dataLines[0])
-	assert.Equal(t, "1,Alice,30", dataLines[1])
-	assert.Equal(t, "2,Bob,25", dataLines[2])
+	assert.Equal(t, `1,"Alice",30`, dataLines[1])
+	assert.Equal(t, `2,"Bob",25`, dataLines[2])
 	assert.Equal(t, `3,"Charlie, Jr.",35`, dataLines[3])
-	assert.Equal(t, "4,NULL,NULL", dataLines[4])
+	assert.Equal(t, `4,"NULL",NULL`, dataLines[4])
 }
 
 // TestWriteCSV_withCreateSQLHeader tests the header comment from CreateSQL.
@@ -131,6 +132,31 @@ func TestWriteCSV_withCreateSQLHeader(t *testing.T) {
 	assert.Contains(t, output, "-- CREATE TABLE t1 (id BIGINT)")
 	assert.Contains(t, output, "-- Database: db1")
 	assert.Contains(t, output, "-- Table: t1")
+}
+
+func TestWriteCSV_WithoutMetadataComments(t *testing.T) {
+	schema := &TableSchema{
+		TableName:    "t1",
+		DatabaseName: "db1",
+		CreateSQL:    "CREATE TABLE t1 (id BIGINT)",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "BIGINT", Position: 1, PhysicalPosition: 0},
+		},
+	}
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0"},
+		Rows: [][]string{
+			{"obj1", "0", "0", "42"},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := WriteCSV(&buf, schema, view, WithCSVMetaComments(false))
+	require.NoError(t, err)
+
+	output := strings.TrimSpace(buf.String())
+	assert.Equal(t, "id\n42", output)
+	assert.NotContains(t, output, "-- CREATE TABLE")
 }
 
 // TestWriteCSV_mismatchedColumns verifies that position-based column mapping
@@ -367,8 +393,8 @@ func TestMergeLogicalViewWithSchema_hiddenColumns(t *testing.T) {
 
 	output := buf.String()
 	assert.Contains(t, output, "id,name")
-	assert.Contains(t, output, "1,Alice")
-	assert.Contains(t, output, "2,Bob")
+	assert.Contains(t, output, `1,"Alice"`)
+	assert.Contains(t, output, `2,"Bob"`)
 	assert.NotContains(t, output, "fake_pk") // hidden columns excluded
 	assert.NotContains(t, output, "cpkey")   // hidden columns excluded
 }
@@ -398,6 +424,36 @@ func TestMergeLogicalViewWithSchema_LargeSparsePhysicalPositions(t *testing.T) {
 	merged := MergeLogicalViewWithSchema(view, schema)
 	require.Len(t, merged.Rows, 1)
 	assert.Equal(t, []string{"v0", "v63", "v127"}, merged.Rows[0])
+}
+
+func TestWriteCSV_LexicalRowOrder(t *testing.T) {
+	schema := &TableSchema{
+		TableName: "sorted",
+		Columns: []TableColumn{
+			{Name: "id", Position: 1, PhysicalPosition: 0},
+			{Name: "name", Position: 2, PhysicalPosition: 1},
+		},
+	}
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1"},
+		Rows: [][]string{
+			{"obj2", "0", "1", "2", "zeta"},
+			{"obj1", "0", "0", "1", "beta"},
+			{"obj3", "0", "0", "1", "alpha"},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := WriteCSV(&buf, schema, view, WithCSVMetaComments(false), WithCSVRowOrder(CSVRowOrderLexical))
+	require.NoError(t, err)
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	require.Equal(t, []string{
+		"id,name",
+		"1,alpha",
+		"1,beta",
+		"2,zeta",
+	}, lines)
 }
 
 // makeColumnRow creates a mock mo_columns row with specific values at given indexes.
@@ -461,7 +517,7 @@ func TestColumnSchemaRoundTrip(t *testing.T) {
 
 	output := buf.String()
 	assert.Contains(t, output, "a,b,c")
-	assert.Contains(t, output, "1,hello,1.500000")
+	assert.Contains(t, output, `1,"hello",1.500000`)
 
 	// Verify comments are present
 	assert.Contains(t, output, "-- CREATE TABLE roundtrip")
@@ -617,4 +673,53 @@ func TestWriteCSVMetadata(t *testing.T) {
 	assert.Contains(t, out, "-- Database: db1")
 	assert.Contains(t, out, "-- Table: t1")
 	assert.Contains(t, out, "-- Visible rows: 10 (deleted: 3, physical: 13)")
+}
+
+func TestWriteSQLLoadCSVRow_NullAndEscaping(t *testing.T) {
+	var buf bytes.Buffer
+	types := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_json.ToType()}
+	err := writeSQLLoadCSVRow(&buf, types, []string{`a"b\c`, "42", `{"x":"y"}`}, []bool{false, true, false})
+	require.NoError(t, err)
+	assert.Equal(t, "\"a\"\"b\\\\c\",\\N,\"{\"\"x\"\":\"\"y\"\"}\"\n", buf.String())
+}
+
+func TestWriteSQLLoadCSVRow_RoundTripsThroughCSVParser(t *testing.T) {
+	var buf bytes.Buffer
+	colTypes := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_json.ToType()}
+	err := writeSQLLoadCSVRow(&buf, colTypes, []string{`a"b\c`, "42", `{"x":"y"}`}, []bool{false, true, false})
+	require.NoError(t, err)
+
+	parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+		FieldsTerminatedBy: ",",
+		FieldsEnclosedBy:   `"`,
+		FieldsEscapedBy:    `\`,
+		LinesTerminatedBy:  "\n",
+		Null:               []string{`\N`},
+		UnescapedQuote:     true,
+	}, strings.NewReader(buf.String()), csvparser.ReadBlockSize, false)
+	require.NoError(t, err)
+
+	row, err := parser.Read(nil)
+	require.NoError(t, err)
+	require.Len(t, row, 3)
+	assert.Equal(t, `a"b\c`, row[0].Val)
+	assert.False(t, row[0].IsNull)
+	assert.True(t, row[0].HasStringQuote)
+	assert.True(t, row[1].IsNull)
+	assert.Equal(t, `{"x":"y"}`, row[2].Val)
+	assert.False(t, row[2].IsNull)
+	assert.True(t, row[2].HasStringQuote)
+}
+
+func TestParseCSVRowOrder(t *testing.T) {
+	order, err := ParseCSVRowOrder("storage")
+	require.NoError(t, err)
+	assert.Equal(t, CSVRowOrderStorage, order)
+
+	order, err = ParseCSVRowOrder("lexical")
+	require.NoError(t, err)
+	assert.Equal(t, CSVRowOrderLexical, order)
+
+	_, err = ParseCSVRowOrder("unknown")
+	require.Error(t, err)
 }

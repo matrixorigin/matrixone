@@ -509,63 +509,19 @@ func vecValueToString(vec *vector.Vector, idx int) string {
 		return "NULL"
 	}
 
-	switch vec.GetType().Oid {
-	case types.T_bool:
-		v := vector.MustFixedColWithTypeCheck[bool](vec)
-		return fmt.Sprintf("%v", v[idx])
-	case types.T_int8:
-		v := vector.MustFixedColWithTypeCheck[int8](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_int16:
-		v := vector.MustFixedColWithTypeCheck[int16](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_int32:
-		v := vector.MustFixedColWithTypeCheck[int32](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_int64:
-		v := vector.MustFixedColWithTypeCheck[int64](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_uint8:
-		v := vector.MustFixedColWithTypeCheck[uint8](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_uint16:
-		v := vector.MustFixedColWithTypeCheck[uint16](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_uint32:
-		v := vector.MustFixedColWithTypeCheck[uint32](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_uint64:
-		v := vector.MustFixedColWithTypeCheck[uint64](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_float32:
-		v := vector.MustFixedColWithTypeCheck[float32](vec)
-		return fmt.Sprintf("%.4f", v[idx])
-	case types.T_float64:
-		v := vector.MustFixedColWithTypeCheck[float64](vec)
-		return fmt.Sprintf("%.4f", v[idx])
-	case types.T_char, types.T_varchar, types.T_text:
-		return vec.GetStringAt(idx)
-	case types.T_TS:
-		v := vector.MustFixedColWithTypeCheck[types.TS](vec)
-		return v[idx].ToString()
-	case types.T_Rowid:
-		v := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
-		return fmt.Sprintf("%d-%d", v[idx].GetBlockOffset(), v[idx].GetRowOffset())
-	case types.T_Blockid:
-		v := vector.MustFixedColWithTypeCheck[types.Blockid](vec)
-		return v[idx].String()
-	case types.T_Objectid:
-		v := vector.MustFixedColWithTypeCheck[types.Objectid](vec)
-		return v[idx].ShortStringEx()
-	default:
-		// For binary/blob types, show hex or truncated
-		if vec.GetType().IsVarlen() {
-			bs := vec.GetBytesAt(idx)
-			if len(bs) > 16 {
-				return fmt.Sprintf("%x...", bs[:16])
-			}
-			return fmt.Sprintf("%x", bs)
+	if vec.GetType().Oid == types.T_time {
+		rowIdx := idx
+		if vec.IsConst() {
+			rowIdx = 0
 		}
-		return fmt.Sprintf("<%s>", vec.GetType().String())
+		values := vector.MustFixedColWithTypeCheck[types.Time](vec)
+		if rowIdx >= 0 && rowIdx < len(values) {
+			return values[rowIdx].String2(vec.GetType().Scale)
+		}
 	}
+	value := vec.RowToString(idx)
+	if value == "null" {
+		return "NULL"
+	}
+	return value
 }
