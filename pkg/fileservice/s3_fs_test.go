@@ -682,6 +682,63 @@ func TestS3FSFullObjectDiskCacheFillDoesNotRetainWholeObjectBuffer(t *testing.T)
 	hitVec.Release()
 }
 
+func TestS3FSFullObjectDiskCacheFillDoesNotReturnWholeObjectDataWithCachedData(t *testing.T) {
+	ctx := context.Background()
+	var pcSet perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &pcSet)
+
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(t, err)
+	defer fs.Close(ctx)
+
+	data := bytes.Repeat([]byte("abcd"), 1<<18)
+	err = fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: int64(len(data)),
+				Data: data,
+			},
+		},
+		Policy: SkipDiskCache | SkipMemoryCache,
+	})
+	assert.Nil(t, err)
+
+	vec := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size:        int64(len(data)),
+				ToCacheData: CacheOriginalData,
+			},
+		},
+	}
+	err = fs.Read(ctx, vec)
+	assert.Nil(t, err)
+	assert.NotNil(t, vec.Entries[0].CachedData)
+	if vec.Entries[0].CachedData != nil {
+		assert.Equal(t, data, vec.Entries[0].CachedData.Bytes())
+	}
+	assert.Nil(t, vec.Entries[0].Data)
+	assert.Equal(t, int64(1), pcSet.FileService.S3.Get.Load())
+	vec.Release()
+}
+
 func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
 	ctx := context.Background()
 	fs, err := NewS3FS(
