@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -292,7 +293,7 @@ func TestMakeLoadExternalStatsUsesInputBytes(t *testing.T) {
 	}
 	stats := makeLoadExternalStats(&tree.ExternParam{
 		ExParamConst: tree.ExParamConst{FileSize: 100},
-	}, tableDef, 25)
+	}, tableDef, 25, context.Background())
 	require.GreaterOrEqual(t, stats.Cost, float64(1))
 	require.GreaterOrEqual(t, stats.Rowsize, float64(1))
 	requireLoadByteHint(t, stats, 75)
@@ -301,7 +302,7 @@ func TestMakeLoadExternalStatsUsesInputBytes(t *testing.T) {
 
 	stats = makeLoadExternalStats(&tree.ExternParam{
 		ExParamConst: tree.ExParamConst{FileSize: 10},
-	}, tableDef, 20)
+	}, tableDef, 20, context.Background())
 	require.Equal(t, float64(0), stats.Cost)
 	require.Equal(t, float64(1), stats.Rowsize)
 	require.Equal(t, int32(0), stats.BlockNum)
@@ -312,9 +313,43 @@ func TestMakeLoadExternalStatsUsesInputBytes(t *testing.T) {
 			Format:   tree.CSV,
 			Data:     "1,2\n3,4\n",
 		},
-	}, tableDef, 0)
-	require.Equal(t, float64(3), stats.Rowsize)
+	}, tableDef, 0, context.Background())
+	require.Equal(t, float64(4), stats.Rowsize)
+	require.Equal(t, float64(2), stats.Cost)
 	requireLoadByteHint(t, stats, 8)
+
+	stats = makeLoadExternalStats(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INLINE,
+			Format:   tree.CSV,
+			Data:     "a\nb\nc\n",
+		},
+	}, tableDef, 0, context.Background())
+	require.Equal(t, float64(2), stats.Rowsize)
+	require.Equal(t, float64(3), stats.Cost)
+	requireLoadByteHint(t, stats, 6)
+
+	stats = makeLoadExternalStats(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INLINE,
+			Format:   tree.CSV,
+			Data:     "a|b|c|",
+			Tail: &tree.TailParameter{
+				Lines: &tree.Lines{
+					TerminatedBy: &tree.Terminated{Value: "|"},
+				},
+			},
+		},
+	}, tableDef, 0, context.Background())
+	require.Equal(t, float64(2), stats.Rowsize)
+	require.Equal(t, float64(3), stats.Cost)
+	requireLoadByteHint(t, stats, 6)
+
+	rowSize := GetRowSizeFromTableDef(tableDef, true) * 0.8
+	stats = makeLoadExternalStats(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{FileSize: int64(float64(options.DefaultBlockMaxRows) * rowSize)},
+	}, tableDef, 0, context.Background())
+	require.Equal(t, int32(1), stats.BlockNum)
 }
 
 func TestMakeLoadExternalStatsKeepsLargeLoadMultiCN(t *testing.T) {
@@ -327,7 +362,7 @@ func TestMakeLoadExternalStatsKeepsLargeLoadMultiCN(t *testing.T) {
 	inputSize := int64(float64(options.DefaultBlockMaxRows) * GetRowSizeFromTableDef(tableDef, true) * 0.8 * float64(BlockThresholdForOneCN+1))
 	stats := makeLoadExternalStats(&tree.ExternParam{
 		ExParamConst: tree.ExParamConst{FileSize: inputSize},
-	}, tableDef, 0)
+	}, tableDef, 0, context.Background())
 	require.Greater(t, stats.BlockNum, int32(BlockThresholdForOneCN))
 	require.Greater(t, stats.Cost, float64(costThresholdForOneCN))
 	require.Equal(t, ExecTypeAP_MULTICN, GetExecType(&Query{
@@ -337,6 +372,135 @@ func TestMakeLoadExternalStatsKeepsLargeLoadMultiCN(t *testing.T) {
 		}},
 		Steps: []int32{0},
 	}, false, false))
+}
+
+func TestMakeLoadExternalStatsUsesFirstLineForTextLoad(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	filePath := fileservice.JoinPath(fs.Name(), "wide.csv")
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: filePath,
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   int64(len("1,2\n3,4\n")),
+			Data:   []byte("1,2\n3,4\n"),
+		}},
+	}))
+
+	tableDef := &TableDef{
+		Cols: []*ColDef{
+			{Name: "a", Typ: Type{Id: int32(types.T_varchar), Width: 65535}},
+			{Name: "b", Typ: Type{Id: int32(types.T_varchar), Width: 65535}},
+		},
+	}
+	inputSize := int64(4 * options.DefaultBlockMaxRows * (BlockThresholdForOneCN + 1))
+	stats := makeLoadExternalStats(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: filePath,
+			FileSize: inputSize,
+			Format:   tree.CSV,
+		},
+		ExParam: tree.ExParam{
+			FileService: fs,
+			Ctx:         ctx,
+		},
+	}, tableDef, 0, context.Background())
+
+	require.Equal(t, float64(4), stats.Rowsize)
+	require.Greater(t, stats.BlockNum, int32(BlockThresholdForOneCN))
+	require.Equal(t, ExecTypeAP_MULTICN, GetExecType(&Query{
+		Nodes: []*Node{{
+			NodeType: pbplan.Node_EXTERNAL_SCAN,
+			Stats:    stats,
+		}},
+		Steps: []int32{0},
+	}, false, false))
+
+	crlfPath := fileservice.JoinPath(fs.Name(), "crlf.csv")
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: crlfPath,
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   int64(len("1,2\r\n3,4\r\n")),
+			Data:   []byte("1,2\r\n3,4\r\n"),
+		}},
+	}))
+	stats = makeLoadExternalStats(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: crlfPath,
+			FileSize: inputSize,
+			Format:   tree.CSV,
+			Tail: &tree.TailParameter{
+				Lines: &tree.Lines{
+					TerminatedBy: &tree.Terminated{Value: "\r\n"},
+				},
+			},
+		},
+		ExParam: tree.ExParam{
+			FileService: fs,
+			Ctx:         ctx,
+		},
+	}, tableDef, 0, context.Background())
+	require.Equal(t, float64(5), stats.Rowsize)
+
+	ignoredPath := fileservice.JoinPath(fs.Name(), "ignored.csv")
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: ignoredPath,
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   int64(len("long_header_value\n1,2\n3,4\n")),
+			Data:   []byte("long_header_value\n1,2\n3,4\n"),
+		}},
+	}))
+	stats = makeLoadExternalStats(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: ignoredPath,
+			FileSize: inputSize,
+			Format:   tree.CSV,
+			Tail: &tree.TailParameter{
+				IgnoredLines: 1,
+			},
+		},
+		ExParam: tree.ExParam{
+			FileService: fs,
+			Ctx:         ctx,
+		},
+	}, tableDef, 0, context.Background())
+	require.Equal(t, float64(4), stats.Rowsize)
+
+	schemaRowSize := GetRowSizeFromTableDef(tableDef, true) * 0.8
+	stats = makeLoadExternalStats(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath:     filePath,
+			FileSize:     inputSize,
+			Format:       tree.CSV,
+			CompressType: tree.GZIP,
+		},
+		ExParam: tree.ExParam{
+			FileService: fs,
+			Ctx:         ctx,
+		},
+	}, tableDef, 0, context.Background())
+	require.Equal(t, schemaRowSize, stats.Rowsize)
+
+	stats = makeLoadExternalStats(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: filePath,
+			FileSize: inputSize,
+			Format:   tree.CSV,
+			Tail: &tree.TailParameter{
+				Lines: &tree.Lines{
+					TerminatedBy: &tree.Terminated{Value: "|"},
+				},
+			},
+		},
+		ExParam: tree.ExParam{
+			FileService: fs,
+			Ctx:         ctx,
+		},
+	}, tableDef, 0, context.Background())
+	require.Equal(t, schemaRowSize, stats.Rowsize)
 }
 
 func requireLoadByteHint(t *testing.T, stats *Stats, inputSize int64) {

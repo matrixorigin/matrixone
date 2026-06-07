@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"math"
@@ -287,7 +288,7 @@ func hasLoadUserVariable(cols []tree.LoadColumn) bool {
 	return false
 }
 
-func makeLoadExternalStats(param *tree.ExternParam, tableDef *TableDef, offset int64) *plan.Stats {
+func makeLoadExternalStats(param *tree.ExternParam, tableDef *TableDef, offset int64, ctx context.Context) *plan.Stats {
 	// LOAD external scan parallelism is currently sized by
 	// getParallelSizeForExternalScan as Cost*Rowsize/WriteS3Threshold.
 	// Keep Cost*Rowsize close to input bytes, but express Cost/Outcnt/BlockNum
@@ -309,7 +310,7 @@ func makeLoadExternalStats(param *tree.ExternParam, tableDef *TableDef, offset i
 		return stats
 	}
 
-	rowSize := estimateLoadRowsize(param, tableDef, inputSize)
+	rowSize := estimateLoadRowsize(param, tableDef, inputSize, offset, ctx)
 	rowCount := math.Ceil(float64(inputSize) / rowSize)
 	if rowCount < 1 {
 		rowCount = 1
@@ -319,15 +320,18 @@ func makeLoadExternalStats(param *tree.ExternParam, tableDef *TableDef, offset i
 	stats.TableCnt = rowCount
 	stats.Rowsize = rowSize
 	stats.Selectivity = 1
-	stats.BlockNum = int32(rowCount/float64(options.DefaultBlockMaxRows)) + 1
+	stats.BlockNum = int32(math.Ceil(rowCount / float64(options.DefaultBlockMaxRows)))
 	return stats
 }
 
-func estimateLoadRowsize(param *tree.ExternParam, tableDef *TableDef, inputSize int64) float64 {
+func estimateLoadRowsize(param *tree.ExternParam, tableDef *TableDef, inputSize int64, offset int64, ctx context.Context) float64 {
 	if param != nil && param.ScanType == tree.INLINE && param.Format == tree.CSV {
-		if idx := strings.Index(param.Data, "\n"); idx > 0 {
-			return clampLoadRowsize(float64(idx), inputSize)
+		if rowSize := inlineCSVRowsize(param.Data, loadLinesTerminatedBy(param)); rowSize > 0 {
+			return clampLoadRowsize(rowSize, inputSize)
 		}
+	}
+	if rowSize := estimateLoadRowsizeFromFirstLine(param, inputSize, offset, ctx); rowSize > 0 {
+		return rowSize
 	}
 	if tableDef != nil {
 		if rowSize := GetRowSizeFromTableDef(tableDef, true) * 0.8; rowSize > 0 {
@@ -335,6 +339,93 @@ func estimateLoadRowsize(param *tree.ExternParam, tableDef *TableDef, inputSize 
 		}
 	}
 	return clampLoadRowsize(1, inputSize)
+}
+
+func inlineCSVRowsize(data string, terminatedBy string) float64 {
+	if terminatedBy == "" {
+		terminatedBy = "\n"
+	}
+	if idx := strings.Index(data, terminatedBy); idx >= 0 {
+		return float64(idx + len(terminatedBy))
+	}
+	return float64(len(data))
+}
+
+func loadLinesTerminatedBy(param *tree.ExternParam) string {
+	if param != nil && param.Tail != nil && param.Tail.Lines != nil {
+		if terminated := param.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
+			return terminated.Value
+		}
+	}
+	return "\n"
+}
+
+func estimateLoadRowsizeFromFirstLine(param *tree.ExternParam, inputSize int64, offset int64, ctx context.Context) float64 {
+	lineTerminator := loadLinesTerminatedBy(param)
+	if param == nil ||
+		param.ScanType == tree.INLINE ||
+		param.Local ||
+		param.Format == tree.PARQUET ||
+		getCompressType(param, param.Filepath) != tree.NOCOMPRESS ||
+		(lineTerminator != "\n" && lineTerminator != "\r\n") ||
+		strings.HasPrefix(param.Filepath, "SHARED:/query_result/") {
+		return 0
+	}
+
+	if size := readExternalFirstLineSize(param, offset, ctx); size > 0 {
+		return clampLoadRowsize(float64(size), inputSize)
+	}
+	return 0
+}
+
+func readExternalFirstLineSize(param *tree.ExternParam, offset int64, ctx context.Context) int {
+	if param == nil {
+		return 0
+	}
+	if ctx == nil {
+		ctx = param.Ctx
+	}
+	if ctx == nil {
+		return 0
+	}
+
+	fs, readPath, err := GetForETLWithType(param, param.Filepath)
+	if err != nil {
+		return 0
+	}
+	var r io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: readPath,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset:            offset,
+				Size:              -1,
+				ReadCloserForRead: &r,
+			},
+		},
+	}
+	if err = fs.Read(ctx, &vec); err != nil {
+		return 0
+	}
+	if r == nil {
+		return 0
+	}
+	defer r.Close()
+
+	reader := bufio.NewReader(r)
+	if offset == 0 && param.Tail != nil {
+		for i := uint64(0); i < param.Tail.IgnoredLines; i++ {
+			if _, err := reader.ReadString('\n'); err != nil {
+				return 0
+			}
+		}
+	}
+
+	line, err := reader.ReadString('\n')
+	if len(line) == 0 && err != nil {
+		return 0
+	}
+	return len(line)
 }
 
 func clampLoadRowsize(rowSize float64, inputSize int64) float64 {
@@ -453,7 +544,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	externalScanNode := &plan.Node{
 		NodeType:    plan.Node_EXTERNAL_SCAN,
-		Stats:       makeLoadExternalStats(stmt.Param, tableDef, offset),
+		Stats:       makeLoadExternalStats(stmt.Param, tableDef, offset, ctx.GetContext()),
 		ProjectList: externalProject,
 		ObjRef:      objRef,
 		TableDef:    tableDef,
