@@ -73,6 +73,13 @@ type TableSchema struct {
 	CreateSQL    string        // raw CREATE TABLE from mo_tables.rel_createsql
 }
 
+type builtinColumnDef struct {
+	Name     string
+	SQLType  string
+	Position int
+	Hidden   bool
+}
+
 func knownCatalogLayouts() []catalogLayout {
 	return []catalogLayout{currentCatalogLayout, legacy3CatalogLayout}
 }
@@ -86,6 +93,198 @@ func schemaForLayout(layout catalogLayout, tableID uint64) []string {
 	default:
 		return nil
 	}
+}
+
+func builtinColumnsForLayout(layout catalogLayout, tableID uint64) []builtinColumnDef {
+	switch tableID {
+	case catalog.MO_DATABASE_ID:
+		return []builtinColumnDef{
+			{Name: "dat_id", SQLType: "BIGINT", Position: 0},
+			{Name: "datname", SQLType: "VARCHAR(5000)", Position: 1},
+			{Name: "dat_catalog_name", SQLType: "VARCHAR(5000)", Position: 2},
+			{Name: "dat_createsql", SQLType: "VARCHAR(5000)", Position: 3},
+			{Name: "owner", SQLType: "INT UNSIGNED", Position: 4},
+			{Name: "creator", SQLType: "INT UNSIGNED", Position: 5},
+			{Name: "created_time", SQLType: "TIMESTAMP", Position: 6},
+			{Name: "account_id", SQLType: "INT UNSIGNED", Position: 7},
+			{Name: "dat_type", SQLType: "VARCHAR(32)", Position: 8},
+			{Name: catalog.SystemDBAttr_CPKey, SQLType: "VARCHAR(65535)", Position: 9, Hidden: true},
+		}
+	case catalog.MO_TABLES_ID:
+		cols := []builtinColumnDef{
+			{Name: "rel_id", SQLType: "BIGINT", Position: 0},
+			{Name: "relname", SQLType: "VARCHAR(5000)", Position: 1},
+			{Name: "reldatabase", SQLType: "VARCHAR(5000)", Position: 2},
+			{Name: "reldatabase_id", SQLType: "BIGINT", Position: 3},
+			{Name: "relpersistence", SQLType: "VARCHAR(5000)", Position: 4},
+			{Name: "relkind", SQLType: "VARCHAR(5000)", Position: 5},
+			{Name: "rel_comment", SQLType: "VARCHAR(5000)", Position: 6},
+			{Name: "rel_createsql", SQLType: "TEXT", Position: 7},
+			{Name: "created_time", SQLType: "TIMESTAMP", Position: 8},
+			{Name: "creator", SQLType: "INT UNSIGNED", Position: 9},
+			{Name: "owner", SQLType: "INT UNSIGNED", Position: 10},
+			{Name: "account_id", SQLType: "INT UNSIGNED", Position: 11},
+			{Name: "partitioned", SQLType: "TINYINT", Position: 12},
+			{Name: "partition_info", SQLType: "BLOB", Position: 13},
+			{Name: "viewdef", SQLType: "VARCHAR(5000)", Position: 14},
+			{Name: "constraint", SQLType: "VARCHAR(5000)", Position: 15},
+			{Name: "schema_version", SQLType: "INT UNSIGNED", Position: 16},
+			{Name: "schema_catalog_version", SQLType: "INT UNSIGNED", Position: 17},
+			{Name: "extra_info", SQLType: "VARCHAR", Position: 18, Hidden: true},
+			{Name: catalog.SystemRelAttr_CPKey, SQLType: "VARCHAR(65535)", Position: 19, Hidden: true},
+		}
+		if layout.name != legacy3CatalogLayout.name {
+			cols = append(cols, builtinColumnDef{Name: "rel_logical_id", SQLType: "BIGINT", Position: 20})
+		}
+		return cols
+	case catalog.MO_COLUMNS_ID:
+		cols := []builtinColumnDef{
+			{Name: "att_uniq_name", SQLType: "VARCHAR(256)", Position: 0},
+			{Name: "account_id", SQLType: "INT UNSIGNED", Position: 1},
+			{Name: "att_database_id", SQLType: "BIGINT", Position: 2},
+			{Name: "att_database", SQLType: "VARCHAR(256)", Position: 3},
+			{Name: "att_relname_id", SQLType: "BIGINT", Position: 4},
+			{Name: "att_relname", SQLType: "VARCHAR(256)", Position: 5},
+			{Name: "attname", SQLType: "VARCHAR(256)", Position: 6},
+			{Name: "atttyp", SQLType: "VARCHAR(256)", Position: 7},
+			{Name: "attnum", SQLType: "INT", Position: 8},
+			{Name: "att_length", SQLType: "INT", Position: 9},
+			{Name: "attnotnull", SQLType: "TINYINT", Position: 10},
+			{Name: "atthasdef", SQLType: "TINYINT", Position: 11},
+			{Name: "att_default", SQLType: "VARCHAR(2048)", Position: 12},
+			{Name: "attisdropped", SQLType: "TINYINT", Position: 13},
+			{Name: "att_constraint_type", SQLType: "CHAR(1)", Position: 14},
+			{Name: "att_is_unsigned", SQLType: "TINYINT", Position: 15},
+			{Name: "att_is_auto_increment", SQLType: "TINYINT", Position: 16},
+			{Name: "att_comment", SQLType: "VARCHAR(2048)", Position: 17},
+			{Name: "att_is_hidden", SQLType: "TINYINT", Position: 18},
+			{Name: "att_has_update", SQLType: "TINYINT", Position: 19},
+			{Name: "att_update", SQLType: "VARCHAR(2048)", Position: 20},
+			{Name: "att_is_clusterby", SQLType: "TINYINT", Position: 21},
+			{Name: "att_seqnum", SQLType: "SMALLINT UNSIGNED", Position: 22},
+			{Name: "att_enum", SQLType: "VARCHAR", Position: 23},
+			{Name: catalog.SystemColAttr_CPKey, SQLType: "VARCHAR(65535)", Position: 24, Hidden: true},
+		}
+		if layout.name != legacy3CatalogLayout.name {
+			cols = append(cols,
+				builtinColumnDef{Name: "attr_has_generated", SQLType: "TINYINT", Position: 25},
+				builtinColumnDef{Name: "attr_generated", SQLType: "VARCHAR(2048)", Position: 26},
+			)
+		}
+		return cols
+	default:
+		return nil
+	}
+}
+
+func builtinTableSchemaForLayout(layout catalogLayout, tableID uint64) *TableSchema {
+	cols := builtinColumnsForLayout(layout, tableID)
+	if len(cols) == 0 {
+		return nil
+	}
+
+	schema := &TableSchema{
+		DatabaseName: "mo_catalog",
+	}
+	switch tableID {
+	case catalog.MO_DATABASE_ID:
+		schema.TableName = "mo_database"
+	case catalog.MO_TABLES_ID:
+		schema.TableName = "mo_tables"
+	case catalog.MO_COLUMNS_ID:
+		schema.TableName = "mo_columns"
+	}
+	for _, col := range cols {
+		if col.Hidden {
+			continue
+		}
+		schema.Columns = append(schema.Columns, TableColumn{
+			Name:             col.Name,
+			SQLType:          col.SQLType,
+			Position:         col.Position,
+			PhysicalPosition: col.Position,
+		})
+	}
+	schema.CreateSQL = renderCreateTableDDL(schema.TableName, schema.Columns)
+	return schema
+}
+
+func renderCreateTableDDL(tableName string, cols []TableColumn) string {
+	if tableName == "" || len(cols) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("CREATE TABLE `")
+	sb.WriteString(tableName)
+	sb.WriteString("` (\n")
+	for i, col := range cols {
+		sb.WriteString("  `")
+		sb.WriteString(col.Name)
+		sb.WriteString("`")
+		if col.SQLType != "" {
+			sb.WriteString(" ")
+			sb.WriteString(col.SQLType)
+		}
+		if i < len(cols)-1 {
+			sb.WriteString(",\n")
+		} else {
+			sb.WriteString("\n")
+		}
+	}
+	sb.WriteString(");")
+	return sb.String()
+}
+
+func inferBuiltinCatalogLayout(
+	tableID uint64,
+	moTablesView *LogicalTableView,
+	moColumnsView *LogicalTableView,
+) catalogLayout {
+	switch tableID {
+	case moTablesID:
+		if moTablesView != nil {
+			layout, _ := inferCatalogLayout(len(moTablesView.Headers)-logicalViewMetaCols, moTablesID)
+			return layout
+		}
+	case moColumnsID:
+		if moColumnsView != nil {
+			layout, _ := inferCatalogLayout(len(moColumnsView.Headers)-logicalViewMetaCols, moColumnsID)
+			return layout
+		}
+	case catalog.MO_DATABASE_ID:
+		if moTablesView != nil {
+			layout, _ := inferCatalogLayout(len(moTablesView.Headers)-logicalViewMetaCols, moTablesID)
+			return layout
+		}
+		if moColumnsView != nil {
+			layout, _ := inferCatalogLayout(len(moColumnsView.Headers)-logicalViewMetaCols, moColumnsID)
+			return layout
+		}
+	}
+	return currentCatalogLayout
+}
+
+func mergeBuiltinSchemaFallback(schema *TableSchema, builtin *TableSchema, tableID uint64) *TableSchema {
+	if builtin == nil {
+		return schema
+	}
+	if schema == nil {
+		schema = &TableSchema{TableName: fmt.Sprintf("%d", tableID)}
+	}
+	if schema.TableName == "" || schema.TableName == fmt.Sprintf("%d", tableID) {
+		schema.TableName = builtin.TableName
+	}
+	if schema.DatabaseName == "" {
+		schema.DatabaseName = builtin.DatabaseName
+	}
+	if schema.CreateSQL == "" {
+		schema.CreateSQL = builtin.CreateSQL
+	}
+	if len(schema.Columns) == 0 {
+		schema.Columns = builtin.Columns
+	}
+	return schema
 }
 
 func inferCatalogLayout(dataWidth int, tableID uint64) (catalogLayout, int) {
@@ -168,6 +367,11 @@ func (r *CheckpointReader) ReadTableSchema(
 		if len(cols) > 0 {
 			schema.Columns = cols
 		}
+	}
+
+	if len(schema.Columns) == 0 {
+		layout := inferBuiltinCatalogLayout(tableID, moTablesView, moColumnsView)
+		schema = mergeBuiltinSchemaFallback(schema, builtinTableSchemaForLayout(layout, tableID), tableID)
 	}
 
 	return schema
@@ -688,130 +892,11 @@ func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64) strin
 // These tables' schemas are known at compile time and may not appear in the checkpoint's
 // mo_tables/mo_columns (due to minimal deployments).
 func hardcodedCreateTableForLayout(tableID uint64, layout catalogLayout) string {
-	switch tableID {
-	case catalog.MO_DATABASE_ID:
-		return "CREATE TABLE `mo_database` (\n" +
-			"  `dat_id` BIGINT,\n" +
-			"  `datname` VARCHAR(5000),\n" +
-			"  `dat_catalog_name` VARCHAR(5000),\n" +
-			"  `dat_createsql` VARCHAR(5000),\n" +
-			"  `owner` INT UNSIGNED,\n" +
-			"  `creator` INT UNSIGNED,\n" +
-			"  `created_time` TIMESTAMP,\n" +
-			"  `account_id` INT UNSIGNED,\n" +
-			"  `dat_type` VARCHAR(32),\n" +
-			"  `__mo_cpkey_dat` VARCHAR(65535)\n" +
-			");"
-	case catalog.MO_TABLES_ID:
-		if layout.name == legacy3CatalogLayout.name {
-			return "CREATE TABLE `mo_tables` (\n" +
-				"  `rel_id` BIGINT,\n" +
-				"  `relname` VARCHAR(5000),\n" +
-				"  `reldatabase` VARCHAR(5000),\n" +
-				"  `reldatabase_id` BIGINT,\n" +
-				"  `relpersistence` VARCHAR(5000),\n" +
-				"  `relkind` VARCHAR(5000),\n" +
-				"  `rel_comment` VARCHAR(5000),\n" +
-				"  `rel_createsql` TEXT,\n" +
-				"  `created_time` TIMESTAMP,\n" +
-				"  `creator` INT UNSIGNED,\n" +
-				"  `owner` INT UNSIGNED,\n" +
-				"  `account_id` INT UNSIGNED,\n" +
-				"  `partitioned` TINYINT,\n" +
-				"  `partition_info` BLOB,\n" +
-				"  `viewdef` VARCHAR(5000),\n" +
-				"  `constraint` VARCHAR(5000),\n" +
-				"  `schema_version` INT UNSIGNED,\n" +
-				"  `schema_catalog_version` INT UNSIGNED,\n" +
-				"  `extra_info` VARCHAR,\n" +
-				"  `__mo_cpkey_rel` VARCHAR(65535)\n" +
-				");"
-		}
-		return "CREATE TABLE `mo_tables` (\n" +
-			"  `rel_id` BIGINT,\n" +
-			"  `relname` VARCHAR(5000),\n" +
-			"  `reldatabase` VARCHAR(5000),\n" +
-			"  `reldatabase_id` BIGINT,\n" +
-			"  `relpersistence` VARCHAR(5000),\n" +
-			"  `relkind` VARCHAR(5000),\n" +
-			"  `rel_comment` VARCHAR(5000),\n" +
-			"  `rel_createsql` TEXT,\n" +
-			"  `created_time` TIMESTAMP,\n" +
-			"  `creator` INT UNSIGNED,\n" +
-			"  `owner` INT UNSIGNED,\n" +
-			"  `account_id` INT UNSIGNED,\n" +
-			"  `partitioned` TINYINT,\n" +
-			"  `partition_info` BLOB,\n" +
-			"  `viewdef` VARCHAR(5000),\n" +
-			"  `constraint` VARCHAR(5000),\n" +
-			"  `schema_version` INT UNSIGNED,\n" +
-			"  `schema_catalog_version` INT UNSIGNED,\n" +
-			"  `extra_info` VARCHAR,\n" +
-			"  `__mo_cpkey_rel` VARCHAR(65535),\n" +
-			"  `rel_logical_id` BIGINT\n" +
-			");"
-	case catalog.MO_COLUMNS_ID:
-		if layout.name == legacy3CatalogLayout.name {
-			return "CREATE TABLE `mo_columns` (\n" +
-				"  `att_uniq_name` VARCHAR(256),\n" +
-				"  `account_id` INT UNSIGNED,\n" +
-				"  `att_database_id` BIGINT,\n" +
-				"  `att_database` VARCHAR(256),\n" +
-				"  `att_relname_id` BIGINT,\n" +
-				"  `att_relname` VARCHAR(256),\n" +
-				"  `attname` VARCHAR(256),\n" +
-				"  `atttyp` VARCHAR(256),\n" +
-				"  `attnum` INT,\n" +
-				"  `att_length` INT,\n" +
-				"  `attnotnull` TINYINT,\n" +
-				"  `atthasdef` TINYINT,\n" +
-				"  `att_default` VARCHAR(2048),\n" +
-				"  `attisdropped` TINYINT,\n" +
-				"  `att_constraint_type` CHAR(1),\n" +
-				"  `att_is_unsigned` TINYINT,\n" +
-				"  `att_is_auto_increment` TINYINT,\n" +
-				"  `att_comment` VARCHAR(2048),\n" +
-				"  `att_is_hidden` TINYINT,\n" +
-				"  `att_has_update` TINYINT,\n" +
-				"  `att_update` VARCHAR(2048),\n" +
-				"  `att_is_clusterby` TINYINT,\n" +
-				"  `att_seqnum` SMALLINT UNSIGNED,\n" +
-				"  `att_enum` VARCHAR,\n" +
-				"  `__mo_cpkey_col` VARCHAR(65535)\n" +
-				");"
-		}
-		return "CREATE TABLE `mo_columns` (\n" +
-			"  `att_uniq_name` VARCHAR(256),\n" +
-			"  `account_id` INT UNSIGNED,\n" +
-			"  `att_database_id` BIGINT,\n" +
-			"  `att_database` VARCHAR(256),\n" +
-			"  `att_relname_id` BIGINT,\n" +
-			"  `att_relname` VARCHAR(256),\n" +
-			"  `attname` VARCHAR(256),\n" +
-			"  `atttyp` VARCHAR(256),\n" +
-			"  `attnum` INT,\n" +
-			"  `att_length` INT,\n" +
-			"  `attnotnull` TINYINT,\n" +
-			"  `atthasdef` TINYINT,\n" +
-			"  `att_default` VARCHAR(2048),\n" +
-			"  `attisdropped` TINYINT,\n" +
-			"  `att_constraint_type` CHAR(1),\n" +
-			"  `att_is_unsigned` TINYINT,\n" +
-			"  `att_is_auto_increment` TINYINT,\n" +
-			"  `att_comment` VARCHAR(2048),\n" +
-			"  `att_is_hidden` TINYINT,\n" +
-			"  `att_has_update` TINYINT,\n" +
-			"  `att_update` VARCHAR(2048),\n" +
-			"  `att_is_clusterby` TINYINT,\n" +
-			"  `att_seqnum` SMALLINT UNSIGNED,\n" +
-			"  `att_enum` VARCHAR,\n" +
-			"  `__mo_cpkey_col` VARCHAR(65535),\n" +
-			"  `attr_has_generated` TINYINT,\n" +
-			"  `attr_generated` VARCHAR(2048)\n" +
-			");"
-	default:
+	schema := builtinTableSchemaForLayout(layout, tableID)
+	if schema == nil {
 		return ""
 	}
+	return renderCreateTableDDL(schema.TableName, schema.Columns)
 }
 
 // columnDataIndex returns the data-column index (0-based, after stripping meta columns)

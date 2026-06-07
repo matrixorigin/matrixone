@@ -16,11 +16,13 @@ package checkpointtool
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -496,11 +498,14 @@ func TestHardcodedCreateTableForLegacy3Dev(t *testing.T) {
 	ddl := hardcodedCreateTableForLayout(catalog.MO_TABLES_ID, legacy3CatalogLayout)
 	assert.Contains(t, ddl, "CREATE TABLE `mo_tables`")
 	assert.NotContains(t, ddl, "rel_logical_id")
+	assert.NotContains(t, ddl, "extra_info")
+	assert.NotContains(t, ddl, catalog.SystemRelAttr_CPKey)
 
 	ddl = hardcodedCreateTableForLayout(catalog.MO_COLUMNS_ID, legacy3CatalogLayout)
 	assert.Contains(t, ddl, "CREATE TABLE `mo_columns`")
 	assert.NotContains(t, ddl, "attr_generated")
 	assert.NotContains(t, ddl, "attr_has_generated")
+	assert.NotContains(t, ddl, catalog.SystemColAttr_CPKey)
 }
 
 func TestBuildCreateTableFromMoColumns_empty(t *testing.T) {
@@ -536,6 +541,63 @@ func TestHardcodedCreateTable(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuiltinTableSchemaForLayout_CurrentVisibleColumnsOnly(t *testing.T) {
+	schema := builtinTableSchemaForLayout(currentCatalogLayout, catalog.MO_TABLES_ID)
+	require.NotNil(t, schema)
+	assert.Equal(t, "mo_tables", schema.TableName)
+	assert.Equal(t, "mo_catalog", schema.DatabaseName)
+	assert.NotEmpty(t, schema.CreateSQL)
+
+	var names []string
+	for _, col := range schema.Columns {
+		names = append(names, col.Name)
+		assert.Equal(t, col.Position, col.PhysicalPosition)
+	}
+	assert.Contains(t, names, "rel_logical_id")
+	assert.NotContains(t, names, "extra_info")
+	assert.NotContains(t, names, catalog.SystemRelAttr_CPKey)
+}
+
+func TestBuiltinTableSchemaForLayout_Legacy3Compatibility(t *testing.T) {
+	tablesSchema := builtinTableSchemaForLayout(legacy3CatalogLayout, catalog.MO_TABLES_ID)
+	require.NotNil(t, tablesSchema)
+	var tableNames []string
+	for _, col := range tablesSchema.Columns {
+		tableNames = append(tableNames, col.Name)
+	}
+	assert.NotContains(t, tableNames, "rel_logical_id")
+	assert.NotContains(t, tableNames, "extra_info")
+	assert.NotContains(t, tableNames, catalog.SystemRelAttr_CPKey)
+
+	columnsSchema := builtinTableSchemaForLayout(legacy3CatalogLayout, catalog.MO_COLUMNS_ID)
+	require.NotNil(t, columnsSchema)
+	var columnNames []string
+	for _, col := range columnsSchema.Columns {
+		columnNames = append(columnNames, col.Name)
+	}
+	assert.NotContains(t, columnNames, "attr_has_generated")
+	assert.NotContains(t, columnNames, "attr_generated")
+	assert.NotContains(t, columnNames, catalog.SystemColAttr_CPKey)
+}
+
+func TestReadTableSchema_BuiltinFallbackForSystemTable(t *testing.T) {
+	reader := &CheckpointReader{}
+	schema := reader.ReadTableSchema(context.Background(), catalog.MO_TABLES_ID, types.TS{}, nil)
+
+	require.NotNil(t, schema)
+	assert.Equal(t, "mo_tables", schema.TableName)
+	assert.Equal(t, "mo_catalog", schema.DatabaseName)
+	require.NotEmpty(t, schema.Columns)
+
+	var names []string
+	for _, col := range schema.Columns {
+		names = append(names, col.Name)
+	}
+	assert.Contains(t, names, "relname")
+	assert.NotContains(t, names, "extra_info")
+	assert.NotContains(t, names, catalog.SystemRelAttr_CPKey)
 }
 
 func TestWriteCSVMetadata(t *testing.T) {

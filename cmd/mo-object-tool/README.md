@@ -37,8 +37,45 @@ tables, object ranges, and object data.
 
 Inside table detail view:
 
-- Press `Enter` on a row to open the physical object view for that object range.
+- Press `Enter` on a row to open the physical object view for that object.
 - Press `L` to open a logical table view with tombstones applied to table rows.
+
+## Offline Table Schema And CSV Export
+
+`mo-tool ckp` can reconstruct table schema and export logical table rows directly
+from checkpoint data.
+
+Show the `CREATE TABLE` statement for a table at the latest checkpoint:
+
+```bash
+./mo-tool ckp show-create-table --table-id=272387 ./mo-data
+```
+
+Show the schema at a specific snapshot timestamp:
+
+```bash
+./mo-tool ckp show-create-table \
+  --table-id=272387 \
+  --ts=1780574341899433000:0 \
+  ./mo-data
+```
+
+Dump a logical table view to CSV:
+
+```bash
+./mo-tool ckp dump --table-id=323820 ./mo-data
+./mo-tool ckp dump --table-id=323820 -o workflow_cases.csv ./mo-data
+```
+
+The CSV dump:
+
+- applies tombstones at the selected checkpoint snapshot
+- excludes hidden system columns
+- uses catalog metadata from `mo_tables` and `mo_columns`
+- streams row output instead of materializing the full CSV in memory first
+
+If catalog metadata cannot be resolved exactly, the command fails instead of
+guessing from raw physical object columns.
 
 ## Local Object Usage
 
@@ -99,6 +136,18 @@ MinIO backend.
 The logical table view also uses the same fileservice and applies tombstones at
 the selected checkpoint snapshot timestamp.
 
+The same remote options work for schema lookup and CSV export:
+
+```bash
+./mo-tool ckp show-create-table \
+  --table-id=272387 \
+  --fs-config etc/launch-minio-local/tn.toml
+
+./mo-tool ckp dump \
+  --table-id=323820 \
+  --fs-config etc/launch-minio-local/tn.toml
+```
+
 ## Remote S3 Or MinIO With Inline Arguments
 
 You can also provide object storage settings directly on the command line.
@@ -147,6 +196,46 @@ Supported `--s3` keys include:
 Credentials can also come from the default AWS credential chain when supported
 by the selected backend and when `no-default-credentials` is not set.
 
+## Catalog Layout Compatibility
+
+Checkpoint catalog objects are not completely stable across MatrixOne branches.
+In particular, older `3.0-dev` generated data may differ from newer builds in
+the layout of `mo_tables` and `mo_columns`.
+
+Current tool behavior:
+
+- it first uses actual column names from checkpoint catalog rows when present
+- if the checkpoint only exposes generic `col_N` headers, it infers the system
+  table layout from the observed column count
+- it supports both:
+  - current layout, which includes `mo_tables.rel_logical_id` and
+    `mo_columns.attr_has_generated` / `mo_columns.attr_generated`
+  - older `3.0-dev` layout, which does not include those columns
+
+For `mo_columns`, CSV extraction uses:
+
+- `attnum` for SQL column order
+- `att_seqnum` for physical object column position
+
+This matters for tables with hidden columns, index-related internal columns, or
+wide schemas. Without `att_seqnum`, visible values can shift to the wrong CSV
+column.
+
+In practice, you do not need a separate flag for `3.0-dev` generated data. The
+tool auto-detects the known layout variants and falls back to the matching
+built-in schema for system tables when needed.
+
+Example with older checkpoint data:
+
+```bash
+./mo-tool ckp show-create-table --table-id=2 ./mo-data
+./mo-tool ckp dump --table-id=323820 ./mo-data
+```
+
+If a checkpoint comes from an unknown future layout and neither named columns
+nor known-width inference matches, schema reconstruction can still fail closed.
+That is intentional.
+
 ## Important Path Rules
 
 For remote checkpoint inspection, `key-prefix` should point to the MatrixOne
@@ -183,8 +272,12 @@ Checkpoint commands:
 ```bash
 ./mo-tool ckp info [directory] [--fs-config FILE] [--fs-name NAME]
 ./mo-tool ckp view [directory] [--fs-config FILE] [--fs-name NAME]
+./mo-tool ckp dump --table-id ID [directory] [--ts PHYSICAL:LOGICAL] [-o FILE]
+./mo-tool ckp show-create-table --table-id ID [directory] [--ts PHYSICAL:LOGICAL]
 ./mo-tool ckp info --backend S3 --s3 key=value,...
 ./mo-tool ckp view --backend MINIO --s3 key=value,...
+./mo-tool ckp dump --table-id ID --backend S3 --s3 key=value,...
+./mo-tool ckp show-create-table --table-id ID --backend S3 --s3 key=value,...
 ```
 
 Object commands:
