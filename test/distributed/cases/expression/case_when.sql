@@ -223,3 +223,70 @@ SELECT
   IFF(1 = 2,
       CAST(1 AS DECIMAL(38,0)),
       CAST(0 AS DECIMAL(38,20))) AS iff_decimal256_false;
+
+-- @case
+-- @desc:test for coalesce over decimal branches with different scales aligns scale/width
+-- @label:bvt
+SELECT 7.01970 * CAST(-58140.00 AS DECIMAL(23,2)) AS direct_mul;
+SELECT COALESCE(
+  CAST(NULL AS DECIMAL(23,2)),
+  7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
+) AS coalesce_decimal_scale;
+SELECT COALESCE(
+  CAST(1.23 AS DECIMAL(23,2)),
+  7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
+) AS coalesce_first_non_null;
+
+-- @case
+-- @desc:test for comparing a decimal256 case result with a decimal128 value
+-- @label:bvt
+SELECT (CASE WHEN 1 = 1 THEN CAST(1 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     = CAST(1 AS DECIMAL(38,20)) AS decimal256_eq_decimal128;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     > CAST(1 AS DECIMAL(38,20)) AS decimal256_gt_decimal128;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     < CAST(1 AS DECIMAL(38,20)) AS decimal256_lt_decimal128;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     != CAST(1 AS DECIMAL(38,20)) AS decimal256_ne_decimal128;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     BETWEEN CAST(1 AS DECIMAL(38,20)) AND CAST(10 AS DECIMAL(38,20)) AS decimal256_between;
+
+-- @case
+-- @desc:test for coalesce promoting decimal branches to decimal256 when integral+scale overflows decimal128
+-- @label:bvt
+SELECT COALESCE(CAST(1 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_decimal256;
+SELECT COALESCE(CAST(12345678901234567890123456789012345678 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_bignum;
+
+-- @case
+-- @desc:test for non-constant decimal256 BETWEEN with mixed-scale bounds
+-- @label:bvt
+drop table if exists t_dec256_between;
+create table t_dec256_between (a decimal(38,0));
+insert into t_dec256_between values (5),(50),(500);
+select
+  (case when 1 = 1 then a else cast(0 as decimal(38,30)) end)
+    between cast(1 as decimal(38,20)) and cast(100 as decimal(38,20)) as in_range
+from t_dec256_between order by a;
+drop table t_dec256_between;
+
+-- @case
+-- @desc:test for comparing a decimal256 case result with a bare integer literal
+-- @label:bvt
+SELECT (CASE WHEN 1 = 1 THEN CAST(1 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END) = 1 AS decimal256_eq_int;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END) > 1 AS decimal256_gt_int;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     BETWEEN 1 AND 10 AS decimal256_between_int;
+
+-- @case
+-- @desc:test for between aligning a decimal value to a wider scale that overflows decimal128 into decimal256
+-- @label:bvt
+SELECT CAST(1 AS DECIMAL(38,0))
+     BETWEEN CAST(0.5 AS DECIMAL(38,30)) AND CAST(2 AS DECIMAL(38,30)) AS between_promote_decimal256;
