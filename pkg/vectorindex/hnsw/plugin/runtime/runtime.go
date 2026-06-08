@@ -50,7 +50,7 @@ func (CatalogHooks) ShouldTruncateHiddenTable(_ string) bool { return true }
 // (SyncDescriptor) rather than per table, so SkipWhenAsync stays empty
 // here.
 func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
-	return catalogplugin.AlterTableCloneBehavior{}
+	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
 }
 
 func (CatalogHooks) DefaultOptions() map[string]string {

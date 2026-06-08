@@ -55,7 +55,7 @@ func (CatalogHooks) ShouldTruncateHiddenTable(_ string) bool { return true }
 // AlterTableCloneBehavior — CAGRA leaves both hidden tables empty at
 // CREATE-INDEX time. Mirrors HNSW.
 func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
-	return catalogplugin.AlterTableCloneBehavior{}
+	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
 }
 
 func (CatalogHooks) DefaultOptions() map[string]string {

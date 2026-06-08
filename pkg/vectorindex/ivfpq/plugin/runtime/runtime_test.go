@@ -49,6 +49,9 @@ func TestIvfpqAlterTableCloneBehavior(t *testing.T) {
 	require.False(t, b.ContainsDelete(catalog.Ivfpq_TblType_Storage))
 	require.False(t, b.ContainsSkipWhenAsync(catalog.Ivfpq_TblType_Metadata))
 	require.False(t, b.ContainsSkipWhenAsync(catalog.Ivfpq_TblType_Storage))
+	// IVF-PQ leaves all hidden tables empty at CREATE and rebuilds via CDC, so
+	// the whole index is skipped on async clone (not per hidden table).
+	require.True(t, b.SkipWholeIndex)
 }
 
 func TestIvfpqDefaultOptions(t *testing.T) {

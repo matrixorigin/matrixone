@@ -1157,36 +1157,34 @@ func cloneUnaffectedIndexes(
 			return err
 		}
 
-		// Skip cloning any plugin-registered index whose hidden tables
-		// are maintained via CDC and may not be fully sync'd at the
-		// moment ALTER fires. The previous shape hardcoded "(fulltext
-		// && async) || hnsw" — equivalent to the plugin's
-		// SyncDescriptor saying "UsesCDC AND (AlwaysAsync OR the
-		// per-param async flag is set)". HNSW carries AlwaysAsync=true
-		// (matches the legacy unconditional HNSW arm); IVF-FLAT and
-		// fulltext have AlwaysAsync=false and gate on the per-index
-		// async param.
-		// Per-algo clone semantics live on the plugin's catalog hooks:
-		//   - SyncDescriptor decides "skip the whole index when async"
-		//     (HNSW always, IVF-FLAT / fulltext when the per-index
-		//     async flag is set).
-		//   - AlterTableCloneBehavior decides per-hidden-table
-		//     DELETE-before-clone and per-hidden-table skip-when-async.
-		//     IVF-FLAT is the only non-trivial case today: all three
-		//     hidden tables get DELETE'd (the CREATE on the temp table
-		//     already seeded them), and entries are additionally
-		//     skipped when async (CDC rebuilds entries from ts=0;
-		//     metadata + centroids must still be cloned so the sinker
-		//     has a k-means model to write against).
+		// Per-algo clone semantics live entirely on the plugin's
+		// AlterTableCloneBehavior, which declares two mutually exclusive
+		// policies:
+		//   - SkipWholeIndex: skip the entire index when async. Algorithms that
+		//     leave every hidden table empty at CREATE and rebuild all of them
+		//     via CDC from ts=0 (HNSW / CAGRA / IVF-PQ / fulltext). HNSW is
+		//     AlwaysAsync; the others gate on the per-index async param.
+		//   - DeleteBeforeClone + SkipWhenAsync (per hidden table): IVF-FLAT is
+		//     the only case today. All three hidden tables get DELETE'd (the
+		//     CREATE on the temp table already seeded them), entries are
+		//     additionally skipped when async (CDC rebuilds entries from ts=0),
+		//     while metadata + centroids ARE cloned so the sinker has a k-means
+		//     model to write against.
 		var cloneBehavior catalogplugin.AlterTableCloneBehavior
 		if !oriIdxTblNames.Unique {
 			if p, ok := indexplugin.Get(oriIdxTblNames.IndexAlgo); ok {
 				d := p.Catalog().SyncDescriptor()
-				if d.UsesCDC && (d.AlwaysAsync || async) {
-					logutil.Infof("cloneUnaffectedIndex: skip async index %v\n", oriIdxTblNames)
+				cloneBehavior = p.Catalog().AlterTableCloneBehavior()
+				// Whole-index skip is an EXPLICIT policy (SkipWholeIndex), not
+				// inferred from UsesCDC — a CDC algorithm can still need its model
+				// tables cloned (IVF-FLAT clones metadata + centroids and only
+				// CDC-rebuilds entries via the per-hidden-table policy below).
+				// HNSW is AlwaysAsync; CAGRA / IVF-PQ / fulltext gate on the
+				// per-index async param.
+				if (d.AlwaysAsync || async) && cloneBehavior.SkipWholeIndex {
+					logutil.Infof("cloneUnaffectedIndex: skip whole async index %v\n", oriIdxTblNames)
 					continue
 				}
-				cloneBehavior = p.Catalog().AlterTableCloneBehavior()
 			}
 		}
 

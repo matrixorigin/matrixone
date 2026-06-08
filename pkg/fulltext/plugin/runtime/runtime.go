@@ -47,7 +47,7 @@ func (CatalogHooks) ShouldTruncateHiddenTable(_ string) bool { return true }
 // no DELETE before clone is needed. Async fulltext is skipped at the
 // whole-index level via SyncDescriptor, not per table.
 func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
-	return catalogplugin.AlterTableCloneBehavior{}
+	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
 }
 
 // DefaultOptions — fulltext defaults are inferred at build time; no

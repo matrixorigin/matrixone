@@ -259,11 +259,10 @@ type SyncDescriptor struct {
 //
 // The zero value means "no special behaviour" — the unaffected-index
 // loop clones each hidden table verbatim from source to the new copy.
-// Today only IVF-FLAT populates both fields; HNSW / CAGRA / IVF-PQ /
-// fulltext leave their hidden tables empty at CREATE-INDEX time, so
-// nothing needs deletion before clone, and their async-skip story is
-// "skip the whole index" (handled by SyncDescriptor.UsesCDC +
-// .AlwaysAsync at the top of cloneUnaffectedIndex), not per table.
+// IVF-FLAT populates the per-hidden-table fields; HNSW / CAGRA / IVF-PQ /
+// fulltext leave their hidden tables empty at CREATE-INDEX time, so nothing
+// needs deletion before clone — they set SkipWholeIndex instead, and the
+// whole index is skipped when async rather than handled per table.
 //
 // Field-by-field:
 //
@@ -279,6 +278,20 @@ type SyncDescriptor struct {
 type AlterTableCloneBehavior struct {
 	DeleteBeforeClone []string
 	SkipWhenAsync     []string
+
+	// SkipWholeIndex is the explicit "skip the entire index" clone policy.
+	// When true and the index is async, cloneUnaffectedIndex skips the whole
+	// index — none of its hidden tables are cloned — because the algorithm
+	// leaves every hidden table empty at CREATE-INDEX time and rebuilds all of
+	// them via CDC from ts=0 on the new table (HNSW / CAGRA / IVF-PQ / fulltext).
+	// IVF-FLAT leaves this false: its metadata + centroids must be cloned (the
+	// CDC pipeline only rebuilds entries), so it relies on the per-hidden-table
+	// DeleteBeforeClone / SkipWhenAsync fields above.
+	//
+	// This is intentionally NOT inferred from SyncDescriptor.UsesCDC: a CDC
+	// algorithm can still need its model tables cloned (IVF-FLAT), so the
+	// whole-index skip must be declared explicitly per algorithm.
+	SkipWholeIndex bool
 }
 
 // ContainsDelete reports whether algoTableType is in the

@@ -76,7 +76,7 @@ func (CatalogHooks) ShouldTruncateHiddenTable(_ string) bool { return true }
 // AlterTableCloneBehavior — IVF-PQ leaves both hidden tables empty at
 // CREATE-INDEX time. Mirrors HNSW.
 func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
-	return catalogplugin.AlterTableCloneBehavior{}
+	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
 }
 
 // DefaultOptions is the params map produced when CREATE INDEX is issued

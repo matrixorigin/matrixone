@@ -46,6 +46,9 @@ func TestCagraAlterTableCloneBehavior(t *testing.T) {
 	require.False(t, b.ContainsDelete(catalog.Cagra_TblType_Storage))
 	require.False(t, b.ContainsSkipWhenAsync(catalog.Cagra_TblType_Metadata))
 	require.False(t, b.ContainsSkipWhenAsync(catalog.Cagra_TblType_Storage))
+	// CAGRA leaves all hidden tables empty at CREATE and rebuilds via CDC, so
+	// the whole index is skipped on async clone (not per hidden table).
+	require.True(t, b.SkipWholeIndex)
 }
 
 func TestCagraDefaultOptions(t *testing.T) {
