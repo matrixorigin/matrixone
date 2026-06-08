@@ -1142,6 +1142,19 @@ func sridFromInt64Arg(srid int64) (uint32, error) {
 	return uint32(srid), nil
 }
 
+// validateComputationSRID rejects SRIDs the measurement kernels cannot compute
+// in. Only SRID 0 (unitless Cartesian) and 4326 (WGS 84 geodetic) are dispatched;
+// any other SRID — including projected systems such as 3857 — would otherwise
+// silently fall back to Cartesian math and return a semantically wrong, unitless
+// result. This is the single gate for every ST_Length/ST_Area/ST_Distance path,
+// whether the SRID comes from the operand type's Width or an explicit argument.
+func validateComputationSRID(srid uint32) error {
+	if !geo.SupportedSRID(srid) {
+		return moerr.NewInvalidInputNoCtxf("unsupported SRID %d for spatial computation; only 0 and %d are supported", srid, geo.SRIDWGS84)
+	}
+	return nil
+}
+
 // geometryResultType is the retType for geometry-producing spatial functions.
 // SRID lives in the type (Width), so a derived geometry inherits its source
 // geometry's SRID. For constructors whose first argument is text (e.g.
@@ -3494,6 +3507,9 @@ func StIsEmpty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 // geometryLengthBySRID computes the length of a geometry in the coordinate
 // system selected by srid: geodesic meters for SRID 4326, Cartesian otherwise.
 func geometryLengthBySRID(payload []byte, srid uint32) (float64, error) {
+	if err := validateComputationSRID(srid); err != nil {
+		return 0, err
+	}
 	if srid == geo.SRIDWGS84 {
 		return geodeticLength(payload)
 	}
@@ -3541,6 +3557,9 @@ func stLengthWithSRID[T float32 | float64](ivecs []*vector.Vector, result vector
 // geometryAreaBySRID computes the area of a geometry in the coordinate system
 // selected by srid: geodesic square meters for SRID 4326, Cartesian otherwise.
 func geometryAreaBySRID(payload []byte, srid uint32) (float64, error) {
+	if err := validateComputationSRID(srid); err != nil {
+		return 0, err
+	}
 	// An empty areal geometry has zero area. ST_Intersection of disjoint
 	// polygons yields POLYGON EMPTY, whose coordinate-less WKT both area
 	// kernels would otherwise fail to parse ("invalid polygon payload").

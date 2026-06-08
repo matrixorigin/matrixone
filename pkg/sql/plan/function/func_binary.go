@@ -8551,6 +8551,9 @@ func validateDistanceSphereGeometry(g geo.Geometry) error {
 // coordinate system selected by srid: geodesic meters for SRID 4326, Cartesian
 // otherwise.
 func geometryDistanceBySRID(left, right []byte, srid uint32) (float64, error) {
+	if err := validateComputationSRID(srid); err != nil {
+		return 0, err
+	}
 	if srid == geo.SRIDWGS84 {
 		return geodeticDistance(left, right)
 	}
