@@ -79,13 +79,25 @@ func handleBranchPick(
 	ses *Session,
 	stmt *tree.DataBranchPick,
 ) (err error) {
-	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
-		return moerr.NewInternalError(execCtx.reqCtx, "DATA BRANCH PICK is not supported in explicit transactions")
+	if err = validateDataBranchPickOptions(execCtx.reqCtx, ses, stmt); err != nil {
+		return err
 	}
 	if stmt.ConflictOpt == nil {
 		stmt.ConflictOpt = &tree.ConflictOpt{
 			Opt: tree.CONFLICT_FAIL,
 		}
+	}
+
+	return diffMergeAgency(ses, execCtx, stmt)
+}
+
+func validateDataBranchPickOptions(
+	ctx context.Context,
+	ses *Session,
+	stmt *tree.DataBranchPick,
+) error {
+	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
+		return moerr.NewInternalError(ctx, "DATA BRANCH PICK is not supported in explicit transactions")
 	}
 
 	hasBetween := stmt.BetweenFrom != "" && stmt.BetweenTo != ""
@@ -102,7 +114,7 @@ func handleBranchPick(
 			"destination snapshot option is not supported for DATA BRANCH PICK")
 	}
 
-	return diffMergeAgency(ses, execCtx, stmt)
+	return nil
 }
 
 // pickMergeDiffs is the consumer goroutine for PICK. It receives diff batches

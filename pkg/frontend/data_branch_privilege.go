@@ -40,21 +40,6 @@ type branchPrivilegeRequirement struct {
 	clusterTableOperation         clusterTableOperationType
 }
 
-func isDataBranchStatement(stmt tree.Statement) bool {
-	switch stmt.(type) {
-	case *tree.DataBranchCreateTable,
-		*tree.DataBranchCreateDatabase,
-		*tree.DataBranchDeleteTable,
-		*tree.DataBranchDeleteDatabase,
-		*tree.DataBranchDiff,
-		*tree.DataBranchMerge,
-		*tree.DataBranchPick:
-		return true
-	default:
-		return false
-	}
-}
-
 func authenticateDataBranchStatement(
 	ctx context.Context,
 	ses *Session,
@@ -98,6 +83,9 @@ func authenticateDataBranchStatement(
 		add(delta)
 		return stats, err
 	case *tree.DataBranchPick:
+		if err := validateDataBranchPickOptions(ctx, ses, st); err != nil {
+			return stats, err
+		}
 		delta, err := authenticateDataBranchPick(ctx, ses, st)
 		add(delta)
 		return stats, err
@@ -154,18 +142,10 @@ func authenticateDataBranchCreateDatabase(
 	ses *Session,
 	stmt *tree.DataBranchCreateDatabase,
 ) (statistic.StatsArray, error) {
-	var stats statistic.StatsArray
-	stats.Reset()
-
-	delta, err := requireAllBranchPrivileges(ctx, ses, []branchPrivilegeRequirement{
-		branchCreateDatabaseRequirement(),
-	})
-	stats.Add(&delta)
-	if err != nil {
-		return stats, err
+	createStmt := &tree.CreateDatabase{
+		Name: stmt.DstDatabase,
 	}
-
-	return stats, nil
+	return authenticateUserCanExecuteStatement(ctx, ses, createStmt)
 }
 
 func authenticateDataBranchCreateDatabaseSourceTables(
@@ -322,14 +302,6 @@ func branchCreateTableRequirement(dbName string) branchPrivilegeRequirement {
 		objType:                       objectTypeDatabase,
 		databaseName:                  dbName,
 		privilegeTypes:                []PrivilegeType{PrivilegeTypeCreateTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership},
-		writeDatabaseAndTableDirectly: true,
-	}
-}
-
-func branchCreateDatabaseRequirement() branchPrivilegeRequirement {
-	return branchPrivilegeRequirement{
-		objType:                       objectTypeAccount,
-		privilegeTypes:                []PrivilegeType{PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll},
 		writeDatabaseAndTableDirectly: true,
 	}
 }
