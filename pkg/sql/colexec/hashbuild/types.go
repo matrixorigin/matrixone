@@ -144,6 +144,11 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 	hashBuild.cleanupSpillFiles(proc)
 	hashBuild.ctr.hashmapBuilder.Free(proc)
 	hashBuild.ctr.cleanSpillBufferPool(proc)
+	hashBuild.ctr.freeSpillExprExecs()
+	hashBuild.ctr.spillKeyVecs = nil
+	hashBuild.ctr.spillHashValues = nil
+	hashBuild.ctr.spillBucketRowIds = nil
+	hashBuild.ctr.spillNonEmptyBuckets = nil
 }
 
 func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {

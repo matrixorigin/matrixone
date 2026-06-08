@@ -482,7 +482,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				},
 			}
 			bSpec := MakeRuntimeFilter(tag, false, 0, bExpr, false)
-			bSpec.UseBloomFilter = true
+			bSpec.UseMembershipFilter = true
 			innerJoinNode.RuntimeFilterBuildList = append(innerJoinNode.RuntimeFilterBuildList, bSpec)
 
 			pExpr := &plan.Expr{
@@ -495,7 +495,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				},
 			}
 			pSpec := MakeRuntimeFilter(tag, false, 0, pExpr, false)
-			pSpec.UseBloomFilter = true
+			pSpec.UseMembershipFilter = true
 			ftNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{pSpec}
 		}
 

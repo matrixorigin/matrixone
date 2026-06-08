@@ -223,6 +223,18 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			return plan.Type{Id: int32(types.T_text)}, nil
 		case defines.MYSQL_TYPE_JSON:
 			return plan.Type{Id: int32(types.T_json)}, nil
+		case defines.MYSQL_TYPE_TYPED_ARRAY:
+			if n.InternalType.ArrayContents == nil {
+				return plan.Type{}, moerr.NewInternalError(ctx, "array type missing element type")
+			}
+			if _, err := getTypeFromAst(ctx, n.InternalType.ArrayContents); err != nil {
+				return plan.Type{}, err
+			}
+			if err := validateTypedArrayElementType(ctx, n.InternalType.ArrayContents); err != nil {
+				return plan.Type{}, err
+			}
+			arrayType := tree.String(&n.InternalType, dialect.MYSQL)
+			return plan.Type{Id: int32(types.T_json), Enumvalues: arrayType}, nil
 		case defines.MYSQL_TYPE_GEOMETRY:
 			fstr := strings.ToUpper(n.InternalType.FamilyString)
 			typ := plan.Type{Id: int32(types.T_geometry)}
@@ -303,18 +315,21 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 		}
 	}
 
+	originExpr := expr
+	semanticExpr := unwrapParenExpr(expr)
+
 	colNameOrigin := col.Name.ColNameOrigin()
 	if typ.Id == int32(types.T_json) {
-		if expr != nil && !isNullAstExpr(expr) {
+		if semanticExpr != nil && !isNullAstExpr(semanticExpr) {
 			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("JSON column '%s' cannot have default value", colNameOrigin))
 		}
 	}
 	if isGeometryPlanType(&typ) {
-		if expr != nil && !isNullAstExpr(expr) {
+		if semanticExpr != nil && !isNullAstExpr(semanticExpr) {
 			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("GEOMETRY column '%s' cannot have default value", colNameOrigin))
 		}
 	}
-	if !nullAbility && isNullAstExpr(expr) {
+	if !nullAbility && isNullAstExpr(semanticExpr) {
 		return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
 	}
 
@@ -325,15 +340,16 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 			OriginString: "",
 		}, nil
 	}
+	_, isExpressionDefault := originExpr.(*tree.ParenExpr)
 
 	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
-	planExpr, err := binder.BindExpr(expr, 0, false)
+	planExpr, err := binder.BindExpr(semanticExpr, 0, false)
 	if err != nil {
 		return nil, err
 	}
 
 	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
-		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" {
+		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" && !isExpressionDefault {
 			return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
 		}
 	}
@@ -350,7 +366,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	}
 
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
-	fmtCtx.PrintExpr(expr, expr, false)
+	fmtCtx.PrintExpr(originExpr, originExpr, false)
 	return &plan.Default{
 		NullAbility:  nullAbility,
 		Expr:         newExpr,
