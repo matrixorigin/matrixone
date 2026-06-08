@@ -153,12 +153,12 @@ func TestIvfpqFilterColumnsFromParams_Empty(t *testing.T) {
 
 func TestIvfpqFilterColumnsFromParams_OK(t *testing.T) {
 	got := filterColumnsFromParams(`{"included_columns":"price, name"}`, "src")
-	require.Equal(t, ", src.price, src.name", got)
+	require.Equal(t, ", `src`.`price`, `src`.`name`", got)
 }
 
 func TestIvfpqFilterColumnsFromParams_SkipsBlank(t *testing.T) {
 	got := filterColumnsFromParams(`{"included_columns":"price, ,name"}`, "src")
-	require.Equal(t, ", src.price, src.name", got)
+	require.Equal(t, ", `src`.`price`, `src`.`name`", got)
 }
 
 func TestIvfpqGenBuildSQL_OK(t *testing.T) {
@@ -176,8 +176,15 @@ func TestIvfpqGenBuildSQL_OK(t *testing.T) {
 	sqls, err := genBuildSQL(ctx, ivfpqIndexDefs())
 	require.NoError(t, err)
 	require.Len(t, sqls, 1)
-	require.True(t, strings.Contains(sqls[0], "ivfpq_create"))
-	require.True(t, strings.Contains(sqls[0], "`db1`.`t`"))
+	// Golden skeleton: pin the EXACT rewritten template (the real risk in the #16
+	// migration is a transcription slip in the format string, not the quoting).
+	// Only the cfgbytes JSON (2nd literal) varies, so assert prefix + suffix.
+	require.True(t, strings.HasPrefix(sqls[0],
+		"SELECT f.* from `db1`.`t` AS `src` CROSS APPLY ivfpq_create('{\"op_type\":\"vector_l2_ops\"}', '"),
+		"build SQL prefix mismatch: %s", sqls[0])
+	require.True(t, strings.HasSuffix(sqls[0],
+		"', `src`.`id`, `src`.`v`) AS f;"),
+		"build SQL suffix mismatch: %s", sqls[0])
 }
 
 func TestIvfpqGenBuildSQL_MissingMeta(t *testing.T) {

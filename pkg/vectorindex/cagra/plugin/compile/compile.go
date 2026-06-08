@@ -28,6 +28,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -38,7 +39,10 @@ import (
 
 // insertIntoCagraIndexTableFormat is the SQL template used to populate the
 // CAGRA index storage table. Lifted from pkg/sql/compile/util.go:122.
-const insertIntoCagraIndexTableFormat = "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY cagra_create('%s', '%s', %s, %s) AS f;"
+// The %s placeholders are pre-quoted/escaped via pkg/common/sqlquote: the
+// source table and alias are quoted identifiers, params + config are escaped
+// string literals, and the pk / part are quoted column references.
+const insertIntoCagraIndexTableFormat = "SELECT f.* from %s AS %s CROSS APPLY cagra_create(%s, %s, %s, %s) AS f;"
 
 // actionCagraReindex mirrors idxcron.Action_*. Inlined to avoid an
 // import cycle through pkg/vectorindex/idxcron. Stays in lock-step with
@@ -260,8 +264,8 @@ func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]st
 		return nil, moerr.NewInternalErrorNoCtx("cagra_index index definition not found")
 	}
 	return []string{
-		fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, meta.IndexTableName),
-		fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, idx.IndexTableName),
+		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, meta.IndexTableName)),
+		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, idx.IndexTableName)),
 	}, nil
 }
 
@@ -270,7 +274,7 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 	originalTableDef := ctx.OriginalTableDef()
 	qryDatabase := ctx.QryDatabase()
 	const srcAlias = "src"
-	pkColName := srcAlias + "." + originalTableDef.Pkey.PkeyColName
+	pkCol := originalTableDef.Pkey.PkeyColName
 
 	meta, ok := indexDefs[catalog.Cagra_TblType_Metadata]
 	if !ok {
@@ -286,7 +290,7 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 		IndexTable:    idx.IndexTableName,
 		DbName:        qryDatabase,
 		SrcTable:      originalTableDef.Name,
-		PKey:          pkColName,
+		PKey:          srcAlias + "." + pkCol,
 		KeyPart:       idx.Parts[0],
 	}
 
@@ -308,14 +312,19 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 	}
 
 	params := idx.IndexAlgoParams
-	part := srcAlias + "." + idx.Parts[0] + filterColumnsFromParams(params, srcAlias)
+
+	// Quoted column references for the cagra_create CROSS APPLY args: `src`.`pk`
+	// and `src`.`vec`[, `src`.`inc`...]. Quoting via sqlquote keeps identifiers
+	// containing backticks or reserved words valid.
+	pkColExpr := sqlquote.QualifiedIdent(srcAlias, pkCol)
+	part := sqlquote.QualifiedIdent(srcAlias, idx.Parts[0]) + filterColumnsFromParams(params, srcAlias)
 
 	sql := fmt.Sprintf(insertIntoCagraIndexTableFormat,
-		qryDatabase, originalTableDef.Name,
-		srcAlias,
-		params,
-		string(cfgbytes),
-		pkColName,
+		sqlquote.QualifiedIdent(qryDatabase, originalTableDef.Name),
+		sqlquote.Ident(srcAlias),
+		sqlquote.String(params),
+		sqlquote.String(string(cfgbytes)),
+		pkColExpr,
 		part)
 	return []string{sql}, nil
 }
@@ -340,9 +349,7 @@ func filterColumnsFromParams(indexAlgoParams, srcAlias string) string {
 			continue
 		}
 		sb.WriteString(", ")
-		sb.WriteString(srcAlias)
-		sb.WriteByte('.')
-		sb.WriteString(name)
+		sb.WriteString(sqlquote.QualifiedIdent(srcAlias, name))
 	}
 	return sb.String()
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -744,7 +745,7 @@ func (s *HnswSync[T]) ToSql(ts int64) ([]string, error) {
 	}
 
 	if len(metas) > 0 {
-		metasql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s", s.tblcfg.DbName, s.tblcfg.MetadataTable, strings.Join(metas, ", "))
+		metasql := fmt.Sprintf("INSERT INTO %s VALUES %s", sqlquote.QualifiedIdent(s.tblcfg.DbName, s.tblcfg.MetadataTable), strings.Join(metas, ", "))
 		sqls = append(sqls, metasql)
 	}
 	return sqls, nil

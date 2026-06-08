@@ -29,6 +29,7 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
@@ -220,8 +221,8 @@ func countTag1Records(
 	dbName, storageTbl string,
 ) (int64, error) {
 	sql := fmt.Sprintf(
-		"SELECT data FROM `%s`.`%s` WHERE index_id = '%s' AND tag = %d",
-		dbName, storageTbl, vectorindex.CdcTailId, vectorindex.Tag_CdcEvents)
+		"SELECT data FROM %s WHERE index_id = %s AND tag = %d",
+		sqlquote.QualifiedIdent(dbName, storageTbl), sqlquote.String(vectorindex.CdcTailId), vectorindex.Tag_CdcEvents)
 
 	res, err := runSelectChunkSql(sqlproc, sql)
 	if err != nil {

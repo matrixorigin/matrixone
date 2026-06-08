@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -302,7 +303,7 @@ func (w *FulltextSqlWriter) ToSql() ([]byte, error) {
 }
 
 func (w *FulltextSqlWriter) toFulltextDelete() ([]byte, error) {
-	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` IN (%s)", w.info.DBName, w.indexTableName, catalog.FullTextIndex_TabCol_Id, string(w.vbuf))
+	sql := fmt.Sprintf("DELETE FROM %s WHERE `%s` IN (%s)", sqlquote.QualifiedIdent(w.info.DBName, w.indexTableName), catalog.FullTextIndex_TabCol_Id, string(w.vbuf))
 	return []byte(sql), nil
 }
 
@@ -314,7 +315,12 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 	cnames := make([]string, 0, len(w.srcPos))
 	for i, pos := range w.srcPos {
 		typstr := w.srcType[i].DescString()
-		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as `%s`", i, typstr, w.tabledef.Cols[pos].Name))
+		// Alias is quoted (byte-identical to the old `name` wrapping for ordinary
+		// names, safe for special chars). cnames keeps the RAW name: it feeds the
+		// column references in fulltext_index_tokenize(...) below, and quoting
+		// those would change that call's SQL for every column — keep it identical
+		// to the original.
+		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as %s", i, typstr, sqlquote.Ident(w.tabledef.Cols[pos].Name)))
 		cnames = append(cnames, w.tabledef.Cols[pos].Name)
 	}
 
@@ -322,11 +328,11 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 	cnames_str := strings.Join(cnames, ", ")
 
 	if upsert {
-		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.dbName, w.indexTableName)
+		sql += fmt.Sprintf("REPLACE INTO %s ", sqlquote.QualifiedIdent(w.dbName, w.indexTableName))
 	} else {
 		// IMPORTANT: even it is a INSERT but we still use REPLACE
 		// sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.dbName, w.indexTableName)
-		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.dbName, w.indexTableName)
+		sql += fmt.Sprintf("REPLACE INTO %s ", sqlquote.QualifiedIdent(w.dbName, w.indexTableName))
 	}
 
 	sql += fmt.Sprintf("WITH src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
@@ -642,7 +648,7 @@ func (w *IvfflatSqlWriter) ToSql() ([]byte, error) {
 // catalog.SystemSI_IVFFLAT_TblCol_Entries_pk
 // catalog.CPrimaryKeyColName
 func (w *IvfflatSqlWriter) toIvfflatDelete() ([]byte, error) {
-	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` IN (%s)", w.info.DBName, w.entries_tbl,
+	sql := fmt.Sprintf("DELETE FROM %s WHERE `%s` IN (%s)", sqlquote.QualifiedIdent(w.info.DBName, w.entries_tbl),
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 		string(w.vbuf))
 	return []byte(sql), nil
@@ -658,18 +664,18 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 	for i := range w.srcPos {
 		typstr := w.srcType[i].DescString()
 		cnames = append(cnames, fmt.Sprintf("src%d", i))
-		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as `%s`", i, typstr, cnames[i]))
+		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as %s", i, typstr, sqlquote.Ident(cnames[i])))
 	}
 
 	cols := strings.Join(coldefs, ", ")
 	cnames_str := strings.Join(cnames, ", ")
 
 	if upsert {
-		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.info.DBName, w.entries_tbl)
+		sql += fmt.Sprintf("REPLACE INTO %s ", sqlquote.QualifiedIdent(w.info.DBName, w.entries_tbl))
 	} else {
 		// IMPORTANT: even it is a INSERT but we still use REPLACE
 		//	sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.info.DBName, w.entries_tbl)
-		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.info.DBName, w.entries_tbl)
+		sql += fmt.Sprintf("REPLACE INTO %s ", sqlquote.QualifiedIdent(w.info.DBName, w.entries_tbl))
 	}
 
 	sql += fmt.Sprintf("(`%s`, `%s`, `%s`, `%s`) ",
@@ -678,10 +684,10 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
 
-	versql := fmt.Sprintf("SELECT CAST(%s as BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'", catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		w.info.DBName, w.meta_tbl, catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
+	versql := fmt.Sprintf("SELECT CAST(%s as BIGINT) FROM %s WHERE `%s` = 'version'", catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		sqlquote.QualifiedIdent(w.info.DBName, w.meta_tbl), catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
 
-	sql += fmt.Sprintf("WITH centroid as (SELECT * FROM `%s`.`%s` WHERE `%s` = (%s) ), ", w.info.DBName, w.centroids_tbl, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version, versql)
+	sql += fmt.Sprintf("WITH centroid as (SELECT * FROM %s WHERE `%s` = (%s) ), ", sqlquote.QualifiedIdent(w.info.DBName, w.centroids_tbl), catalog.SystemSI_IVFFLAT_TblCol_Centroids_version, versql)
 	sql += fmt.Sprintf("src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
 	sql += fmt.Sprintf("SELECT `%s`, `%s`, %s FROM src CENTROIDX('%s') JOIN centroid using (`%s`, `%s`)",
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
