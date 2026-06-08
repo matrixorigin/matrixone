@@ -22,6 +22,7 @@ package geo
 
 import (
 	"container/heap"
+	"math"
 )
 
 // BoolOp selects which Boolean operation overlay computes.
@@ -84,13 +85,12 @@ func snapCoord(c Coord) Coord {
 	}
 }
 
-// ovRound is math.Round inlined to avoid an import cycle of intent; rounds half
-// away from zero.
+// ovRound rounds half away from zero. It uses math.Round (which operates
+// entirely in float64) rather than an int64 cast: scaled coordinates exceed the
+// int64 range once a raw coordinate is larger than ~9.22e9 (int64 max / snapScale),
+// and int64(x±0.5) would silently overflow there, corrupting the overlay result.
 func ovRound(x float64) float64 {
-	if x >= 0 {
-		return float64(int64(x + 0.5))
-	}
-	return float64(int64(x - 0.5))
+	return math.Round(x)
 }
 
 func ovEqual(a, b Coord) bool { return a.X == b.X && a.Y == b.Y }

@@ -8482,13 +8482,27 @@ func StDistanceSphere32(ivecs []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func stDistanceSphere[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// ST_Distance_Sphere has stricter constraints than ST_Distance: the two
+	// operands must share an SRID, must be POINT/MULTIPOINT, and their ordinates
+	// must be valid longitude/latitude (the sphere kernel interprets X/Y as
+	// degrees regardless of SRID). Mirror MySQL rather than silently feeding any
+	// geometry, mixed SRID, or out-of-range coordinate to the geodetic kernel.
+	if err := checkBinaryGeometryTypeSRID("ST_DISTANCE_SPHERE", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
 		lg, err := decodeGeoGeometry(v1)
 		if err != nil {
 			return 0, err
 		}
+		if err := validateDistanceSphereGeometry(lg); err != nil {
+			return 0, err
+		}
 		rg, err := decodeGeoGeometry(v2)
 		if err != nil {
+			return 0, err
+		}
+		if err := validateDistanceSphereGeometry(rg); err != nil {
 			return 0, err
 		}
 		d, ok := geo.DistanceMeters(lg, rg)
@@ -8497,6 +8511,40 @@ func stDistanceSphere[T float32 | float64](ivecs []*vector.Vector, result vector
 		}
 		return T(d), nil
 	}, selectList)
+}
+
+// validateDistanceSphereGeometry enforces the ST_Distance_Sphere input contract:
+// only POINT and MULTIPOINT geometries are accepted, and every coordinate must
+// lie within longitude [-180, 180] and latitude [-90, 90].
+func validateDistanceSphereGeometry(g geo.Geometry) error {
+	checkCoord := func(x, y float64) error {
+		if x < -180 || x > 180 {
+			return moerr.NewInvalidInputNoCtxf("ST_DISTANCE_SPHERE longitude %v is out of range [-180, 180]", x)
+		}
+		if y < -90 || y > 90 {
+			return moerr.NewInvalidInputNoCtxf("ST_DISTANCE_SPHERE latitude %v is out of range [-90, 90]", y)
+		}
+		return nil
+	}
+	switch v := g.(type) {
+	case geo.Point:
+		if v.IsEmpty {
+			return nil
+		}
+		return checkCoord(v.X, v.Y)
+	case geo.MultiPoint:
+		for _, p := range v.Points {
+			if p.IsEmpty {
+				continue
+			}
+			if err := checkCoord(p.X, p.Y); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return moerr.NewInvalidInputNoCtx("ST_DISTANCE_SPHERE only supports POINT and MULTIPOINT inputs")
+	}
 }
 
 // geometryDistanceBySRID computes the distance between two geometries in the
@@ -8562,7 +8610,11 @@ func stDistanceWithSRID[T float32 | float64](ivecs []*vector.Vector, result vect
 			}
 			continue
 		}
-		d, err := geometryDistanceBySRID(v1, v2, uint32(s))
+		su, err := sridFromInt64Arg(s)
+		if err != nil {
+			return err
+		}
+		d, err := geometryDistanceBySRID(v1, v2, su)
 		if err != nil {
 			return err
 		}

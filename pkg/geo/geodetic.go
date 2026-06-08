@@ -73,22 +73,34 @@ func LengthMeters(g Geometry) float64 {
 
 // --- Area -----------------------------------------------------------------
 
-// loopFromRing builds a normalized S2 loop from a WKB ring (dropping the
-// repeated closing vertex). Normalize selects the smaller of the two regions
-// the loop bounds, so containment and area are correct regardless of the input
-// winding order for sub-hemisphere polygons.
+// loopFromRing builds an S2 loop from a WKB ring (dropping the repeated closing
+// vertex). The loop's winding follows the ring's: by OGC convention the enclosed
+// region lies to the left of a counter-clockwise ring, so we orient the S2 loop
+// counter-clockwise (positive planar signed area) and trust the input winding to
+// decide which side is the interior.
+//
+// We deliberately avoid s2.Loop.Normalize(), which unconditionally selects the
+// smaller of the two regions a loop bounds: that would silently turn a
+// larger-than-hemisphere polygon into its complement, inverting its area and
+// containment. (Polygons spanning a pole or the antimeridian remain a deferred
+// corner case — planar winding is ill-defined there.)
 func loopFromRing(ring []Coord) *s2.Loop {
 	end := len(ring)
 	if end > 1 && ring[0] == ring[end-1] {
 		end--
 	}
+	ccw := ringSignedArea(ring) >= 0
 	pts := make([]s2.Point, 0, end)
-	for i := 0; i < end; i++ {
-		pts = append(pts, s2Point(ring[i]))
+	if ccw {
+		for i := 0; i < end; i++ {
+			pts = append(pts, s2Point(ring[i]))
+		}
+	} else {
+		for i := end - 1; i >= 0; i-- {
+			pts = append(pts, s2Point(ring[i]))
+		}
 	}
-	loop := s2.LoopFromPoints(pts)
-	loop.Normalize()
-	return loop
+	return s2.LoopFromPoints(pts)
 }
 
 func polygonMeters2(p Polygon) float64 {

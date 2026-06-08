@@ -1131,6 +1131,17 @@ func sridFromTypeWidth(width int32) uint32 {
 	return 0
 }
 
+// sridFromInt64Arg validates an explicit SRID argument (e.g. the trailing srid
+// of ST_Distance/ST_Length/ST_Area) before narrowing it to uint32. A bare
+// uint32(srid) cast would silently wrap a negative or oversized value (-1 →
+// 4294967295) and then pick the wrong coordinate-system kernel, so reject it.
+func sridFromInt64Arg(srid int64) (uint32, error) {
+	if srid < 0 || srid > math.MaxUint32 {
+		return 0, moerr.NewInvalidInputNoCtxf("SRID value %d is out of range [0, 4294967295]", srid)
+	}
+	return uint32(srid), nil
+}
+
 // geometryResultType is the retType for geometry-producing spatial functions.
 // SRID lives in the type (Width), so a derived geometry inherits its source
 // geometry's SRID. For constructors whose first argument is text (e.g.
@@ -3518,7 +3529,11 @@ func StLengthWithSRID32(ivecs []*vector.Vector, result vector.FunctionResultWrap
 
 func stLengthWithSRID[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryStrFixedToFixedWithErrorCheck[int64, T](ivecs, result, proc, length, func(v string, srid int64) (T, error) {
-		l, err := geometryLengthBySRID(functionUtil.QuickStrToBytes(v), uint32(srid))
+		su, err := sridFromInt64Arg(srid)
+		if err != nil {
+			return 0, err
+		}
+		l, err := geometryLengthBySRID(functionUtil.QuickStrToBytes(v), su)
 		return T(l), err
 	}, selectList)
 }
@@ -3578,7 +3593,11 @@ func StAreaWithSRID32(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 
 func stAreaWithSRID[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryStrFixedToFixedWithErrorCheck[int64, T](ivecs, result, proc, length, func(v string, srid int64) (T, error) {
-		a, err := geometryAreaBySRID(functionUtil.QuickStrToBytes(v), uint32(srid))
+		su, err := sridFromInt64Arg(srid)
+		if err != nil {
+			return 0, err
+		}
+		a, err := geometryAreaBySRID(functionUtil.QuickStrToBytes(v), su)
 		return T(a), err
 	}, selectList)
 }

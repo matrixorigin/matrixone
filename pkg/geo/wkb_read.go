@@ -80,6 +80,12 @@ func (r *wkbReader) readGeometry(depth int) (Geometry, error) {
 		if math.IsNaN(x) && math.IsNaN(y) {
 			return Point{IsEmpty: true}, nil
 		}
+		// Only the (NaN, NaN) pattern denotes an empty point. A single NaN (or
+		// a NaN paired with a finite ordinate) is malformed and would poison
+		// every downstream geometry computation, so reject it.
+		if math.IsNaN(x) || math.IsNaN(y) {
+			return nil, r.errf("point coordinate is NaN")
+		}
 		return Point{X: x, Y: y}, nil
 	case wkbLineString:
 		pts, err := r.readCoords(little)
@@ -212,6 +218,12 @@ func (r *wkbReader) readCoords(little bool) ([]Coord, error) {
 		y, err := r.readOrd(little)
 		if err != nil {
 			return nil, err
+		}
+		// A NaN vertex is never valid outside the empty-point sentinel, which
+		// readCoords never produces; reject it so malformed WKB cannot inject
+		// NaN into linestrings, rings, or other coordinate sequences.
+		if math.IsNaN(x) || math.IsNaN(y) {
+			return nil, r.errf("coordinate is NaN")
 		}
 		coords[i] = Coord{X: x, Y: y}
 	}
