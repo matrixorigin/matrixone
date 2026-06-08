@@ -113,12 +113,16 @@ func TestBindNameConstConstArgs(t *testing.T) {
 			sql:  "select name_const(('myname'), (14))",
 		},
 		{
-			name: "folded constant value",
-			sql:  "select name_const('myname', cast(14 as signed))",
+			name: "null value",
+			sql:  "select name_const('myname', null)",
 		},
 		{
-			name: "folded function value",
-			sql:  "select name_const('myname', abs(-1))",
+			name: "negative decimal value",
+			sql:  "select name_const('myname', -12.34)",
+		},
+		{
+			name: "negative string name",
+			sql:  "select name_const(-123, 'abc')",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -147,6 +151,14 @@ func TestBindNameConstInvalidArgs(t *testing.T) {
 		{
 			name: "column value",
 			sql:  "select name_const('myname', a) from t",
+		},
+		{
+			name: "cast function value",
+			sql:  "select name_const('myname', cast(14 as signed))",
+		},
+		{
+			name: "foldable function value",
+			sql:  "select name_const('myname', abs(-1))",
 		},
 		{
 			name: "non-foldable function value",

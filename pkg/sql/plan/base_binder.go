@@ -1425,7 +1425,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 
 	case "name_const":
 		if proc == nil {
-			return nil, moerr.NewInvalidInput(ctx, "can't use name_const without proc")
+			goto between_fallback
 		}
 		if err := foldNameConstArgs(ctx, proc, retExpr.GetF().Args); err != nil {
 			return nil, err
@@ -2893,18 +2893,33 @@ func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.
 		return moerr.NewInvalidArg(ctx, "NAME_CONST", len(args))
 	}
 
-	for i := range args {
-		foldedArg, err := ConstantFold(batch.EmptyForConstFoldBatch, args[i], proc, false, true)
-		if err != nil {
-			return err
-		}
-		args[i] = foldedArg
+	nameLit := args[0].GetLit()
+	if nameLit == nil || nameLit.Isnull || !validNameConstValueExpr(args[1]) {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
 	}
 
-	nameLit := args[0].GetLit()
-	valueLit := args[1].GetLit()
-	if nameLit == nil || nameLit.Isnull || valueLit == nil {
+	foldedArg, err := ConstantFold(batch.EmptyForConstFoldBatch, args[1], proc, false, true)
+	if err != nil {
+		return err
+	}
+	args[1] = foldedArg
+
+	if args[1].GetLit() == nil {
 		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
 	}
 	return nil
+}
+
+func validNameConstValueExpr(arg *plan.Expr) bool {
+	if arg == nil {
+		return false
+	}
+	if arg.GetLit() != nil {
+		return true
+	}
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "unary_minus" || len(fn.Args) != 1 {
+		return false
+	}
+	return fn.Args[0].GetLit() != nil
 }
