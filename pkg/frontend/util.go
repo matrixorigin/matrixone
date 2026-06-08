@@ -900,6 +900,48 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					return nil, nil, err
 				}
 			}
+		case types.T_decimal64:
+			for rowIdx, row := range rows {
+				var val types.Decimal64
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else if val, err = getDecimal64FromRowValue(row[colIndex], typ); err != nil {
+					return nil, nil, err
+				}
+
+				err := vector.AppendFixed[types.Decimal64](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		case types.T_decimal128:
+			for rowIdx, row := range rows {
+				var val types.Decimal128
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else if val, err = getDecimal128FromRowValue(row[colIndex], typ); err != nil {
+					return nil, nil, err
+				}
+
+				err := vector.AppendFixed[types.Decimal128](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		case types.T_decimal256:
+			for rowIdx, row := range rows {
+				var val types.Decimal256
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else if val, err = getDecimal256FromRowValue(row[colIndex], typ); err != nil {
+					return nil, nil, err
+				}
+
+				err := vector.AppendFixed[types.Decimal256](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
 		case types.T_enum:
 			for rowIdx, row := range rows {
 				var val types.Enum
@@ -921,6 +963,45 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		bat.Vecs[colIndex].SetNulls(nsp)
 	}
 	return bat, planColDefs, nil
+}
+
+func getDecimal64FromRowValue(v any, typ types.Type) (types.Decimal64, error) {
+	switch val := v.(type) {
+	case types.Decimal64:
+		return val, nil
+	case string:
+		return types.ParseDecimal64(val, typ.Width, typ.Scale)
+	case []byte:
+		return types.ParseDecimal64(string(val), typ.Width, typ.Scale)
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("%v can't convert to decimal64 type", v)
+	}
+}
+
+func getDecimal128FromRowValue(v any, typ types.Type) (types.Decimal128, error) {
+	switch val := v.(type) {
+	case types.Decimal128:
+		return val, nil
+	case string:
+		return types.ParseDecimal128(val, typ.Width, typ.Scale)
+	case []byte:
+		return types.ParseDecimal128(string(val), typ.Width, typ.Scale)
+	default:
+		return types.Decimal128{}, moerr.NewInternalErrorNoCtxf("%v can't convert to decimal128 type", v)
+	}
+}
+
+func getDecimal256FromRowValue(v any, typ types.Type) (types.Decimal256, error) {
+	switch val := v.(type) {
+	case types.Decimal256:
+		return val, nil
+	case string:
+		return types.ParseDecimal256(val, typ.Width, typ.Scale)
+	case []byte:
+		return types.ParseDecimal256(string(val), typ.Width, typ.Scale)
+	default:
+		return types.Decimal256{}, moerr.NewInternalErrorNoCtxf("%v can't convert to decimal256 type", v)
+	}
 }
 
 func cleanBatch(pool *mpool.MPool, data ...*batch.Batch) {
@@ -1012,6 +1093,17 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 				Id: int32(types.T_enum),
 			}
 			tType = types.New(types.T_enum, 0, 0)
+		case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+			var err error
+			tType, err = mysqlDecimalColType(col)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			pType = plan.Type{
+				Id:    int32(tType.Oid),
+				Width: tType.Width,
+				Scale: tType.Scale,
+			}
 		default:
 			return nil, nil, nil, moerr.NewInternalErrorNoCtxf("unsupported mysql type %d", col.ColumnType())
 		}
@@ -1021,6 +1113,37 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 	return &plan.ResultColDef{
 		ResultCols: resultCols,
 	}, resultColTypes, resultColNames, nil
+}
+
+func mysqlDecimalColType(col Column) (types.Type, error) {
+	width := int32(col.Length())
+	if width <= 2 {
+		return types.Type{}, moerr.NewInternalErrorNoCtxf("missing decimal precision for mysql type %d", col.ColumnType())
+	}
+	width -= 2
+
+	scale := int32(0)
+	if mysqlCol, ok := col.(*MysqlColumn); ok {
+		scale = int32(mysqlCol.Decimal())
+	}
+
+	switch {
+	case width > 38:
+		return types.New(types.T_decimal256, width, scale), nil
+	case width > 16:
+		return types.New(types.T_decimal128, width, scale), nil
+	default:
+		return types.New(types.T_decimal64, width, scale), nil
+	}
+}
+
+func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColumn) error {
+	if err := convertEngineTypeToMysqlType(ctx, typ.Oid, col); err != nil {
+		return err
+	}
+	setColLength(col, typ.Width)
+	col.SetDecimal(typ.Scale)
+	return nil
 }
 
 // errCodeRollbackWholeTxn denotes that the error code
@@ -1424,12 +1547,11 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	c.SetOrgTable(col.TblName)
 	c.SetAutoIncr(col.Typ.AutoIncr)
 	c.SetSchema(col.DbName)
-	err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
-	if err != nil {
+	typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
 	}
 	setColFlag(c)
-	setColLength(c, col.Typ.Width)
 	setCharacter(c)
 
 	// For binary/varbinary with mysql_type_varchar.Change the charset.
@@ -1437,7 +1559,6 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 		c.SetCharset(0x3f)
 	}
 
-	c.SetDecimal(col.Typ.Scale)
 	convertMysqlTextTypeToBlobType(c)
 	return c, nil
 }
