@@ -51,19 +51,21 @@ type AddItem[T types.RealNumbers] struct {
 func NewHnswBuild[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, uid string, nworker int32,
 	cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild[T], err error) {
 
-	// estimate the number of worker threads
-	nthread := 0
-	if nworker <= 1 {
-		// single database thread and set nthread to ThreadsBuild
-		nthread = int(vectorindex.GetConcurrency(tblcfg.ThreadsBuild))
-	} else {
-		// multiple database worker threads
-		threadsbuild := vectorindex.GetConcurrencyForBuild(tblcfg.ThreadsBuild)
-		nthread = int(float64(threadsbuild) / float64(nworker))
-	}
-	if nthread < 1 {
-		nthread = 1
-	}
+	/*
+		// estimate the number of worker threads
+		nthread := 0
+		if nworker <= 1 {
+			// single database thread and set nthread to ThreadsBuild
+			nthread = int(vectorindex.GetConcurrency(tblcfg.ThreadsBuild))
+		} else {
+			// multiple database worker threads
+			threadsbuild := vectorindex.GetConcurrencyForBuild(tblcfg.ThreadsBuild)
+			nthread = int(float64(threadsbuild) / float64(nworker))
+		}
+		if nthread < 1 {
+			nthread = 1
+		}
+	*/
 
 	// MatrixOne #24849 / USearch #735 (open): concurrent add() can orphan nodes —
 	// the vector is stored (contains() returns true) but the HNSW graph never links
@@ -72,7 +74,7 @@ func NewHnswBuild[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, uid string, 
 	// approximation. Reproduced in pkg/vectorindex/hnsw/zz_orphan_test.go:
 	// multi-threaded build orphans ~1/30, single-threaded 0/30. Until the upstream
 	// race is fixed, force a single build thread for correctness.
-	nthread = 1
+	nthread := 1
 
 	info = &HnswBuild[T]{
 		uid:     uid,
