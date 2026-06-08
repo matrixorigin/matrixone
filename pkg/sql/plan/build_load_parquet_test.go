@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -379,12 +380,13 @@ func TestMakeLoadExternalStatsUsesFirstLineForTextLoad(t *testing.T) {
 	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
 	filePath := fileservice.JoinPath(fs.Name(), "wide.csv")
+	data := strings.Repeat("1,2\n", loadFirstLineSampleSize/len("1,2\n")+1)
 	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
 		FilePath: filePath,
 		Entries: []fileservice.IOEntry{{
 			Offset: 0,
-			Size:   int64(len("1,2\n3,4\n")),
-			Data:   []byte("1,2\n3,4\n"),
+			Size:   int64(len(data)),
+			Data:   []byte(data),
 		}},
 	}))
 
@@ -418,12 +420,13 @@ func TestMakeLoadExternalStatsUsesFirstLineForTextLoad(t *testing.T) {
 	}, false, false))
 
 	crlfPath := fileservice.JoinPath(fs.Name(), "crlf.csv")
+	crlfData := strings.Repeat("1,2\r\n", loadFirstLineSampleSize/len("1,2\r\n")+1)
 	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
 		FilePath: crlfPath,
 		Entries: []fileservice.IOEntry{{
 			Offset: 0,
-			Size:   int64(len("1,2\r\n3,4\r\n")),
-			Data:   []byte("1,2\r\n3,4\r\n"),
+			Size:   int64(len(crlfData)),
+			Data:   []byte(crlfData),
 		}},
 	}))
 	stats = makeLoadExternalStats(&tree.ExternParam{
@@ -445,12 +448,13 @@ func TestMakeLoadExternalStatsUsesFirstLineForTextLoad(t *testing.T) {
 	require.Equal(t, float64(5), stats.Rowsize)
 
 	ignoredPath := fileservice.JoinPath(fs.Name(), "ignored.csv")
+	ignoredData := "long_header_value\n" + strings.Repeat("1,2\n", loadFirstLineSampleSize/len("1,2\n")+1)
 	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
 		FilePath: ignoredPath,
 		Entries: []fileservice.IOEntry{{
 			Offset: 0,
-			Size:   int64(len("long_header_value\n1,2\n3,4\n")),
-			Data:   []byte("long_header_value\n1,2\n3,4\n"),
+			Size:   int64(len(ignoredData)),
+			Data:   []byte(ignoredData),
 		}},
 	}))
 	stats = makeLoadExternalStats(&tree.ExternParam{
@@ -501,6 +505,104 @@ func TestMakeLoadExternalStatsUsesFirstLineForTextLoad(t *testing.T) {
 		},
 	}, tableDef, 0, context.Background())
 	require.Equal(t, schemaRowSize, stats.Rowsize)
+}
+
+func TestMakeLoadExternalStatsUsesBoundedFirstLineSample(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	filePath := fileservice.JoinPath(fs.Name(), "long-row.csv")
+	data := strings.Repeat("a", loadFirstLineSampleSize+128)
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: filePath,
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   int64(len(data)),
+			Data:   []byte(data),
+		}},
+	}))
+
+	tableDef := &TableDef{
+		Cols: []*ColDef{
+			{Name: "a", Typ: Type{Id: int32(types.T_int32)}},
+			{Name: "b", Typ: Type{Id: int32(types.T_varchar), Width: 96}},
+		},
+	}
+	schemaRowSize := GetRowSizeFromTableDef(tableDef, true) * 0.8
+	stats := makeLoadExternalStats(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: filePath,
+			FileSize: int64(len(data)),
+			Format:   tree.CSV,
+		},
+		ExParam: tree.ExParam{
+			FileService: fs,
+			Ctx:         ctx,
+		},
+	}, tableDef, 0, ctx)
+
+	require.Equal(t, schemaRowSize, stats.Rowsize)
+	requireLoadByteHint(t, stats, int64(len(data)))
+}
+
+func TestReadExternalFirstLineSizeUsesBoundedRange(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	filePath := fileservice.JoinPath(fs.Name(), "with-newline.csv")
+	data := "abcd\n" + strings.Repeat("x", loadFirstLineSampleSize+128)
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: filePath,
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   int64(len(data)),
+			Data:   []byte(data),
+		}},
+	}))
+
+	size := readExternalFirstLineSize(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: filePath,
+			FileSize: int64(len(data)),
+			Format:   tree.CSV,
+		},
+		ExParam: tree.ExParam{
+			FileService: fs,
+			Ctx:         ctx,
+		},
+	}, int64(len(data)), 0, ctx)
+
+	require.Equal(t, len("abcd\n"), size)
+}
+
+func TestReadExternalFirstLineSizeUsesSmallFileWithoutTrailingNewline(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	filePath := fileservice.JoinPath(fs.Name(), "small.csv")
+	data := "abcd"
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: filePath,
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   int64(len(data)),
+			Data:   []byte(data),
+		}},
+	}))
+
+	size := readExternalFirstLineSize(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: filePath,
+			FileSize: int64(len(data)),
+			Format:   tree.CSV,
+		},
+		ExParam: tree.ExParam{
+			FileService: fs,
+			Ctx:         ctx,
+		},
+	}, int64(len(data)), 0, ctx)
+
+	require.Equal(t, len(data), size)
 }
 
 func requireLoadByteHint(t *testing.T, stats *Stats, inputSize int64) {
