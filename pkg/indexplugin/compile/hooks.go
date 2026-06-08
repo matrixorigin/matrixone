@@ -77,6 +77,13 @@ type CompileContext interface {
 	// executor.DefaultResolveVariable).
 	IsFrontend() bool
 
+	// IsTableClone reports whether this compile runs inside a table-clone scope
+	// (`create table … clone`) — which is how snapshot/restore replays a table.
+	// Lets an index plugin restore a prebuilt model verbatim instead of
+	// rebuilding it. IsFrontend cannot distinguish this (it is true for the
+	// restore backExec too).
+	IsTableClone() bool
+
 	// IsExperimentalEnabled checks whether an experimental-feature flag is
 	// set in the current session/system variables. Used by HNSW today
 	// (flag "experimental_hnsw_index"). Plugins gating on a flag should

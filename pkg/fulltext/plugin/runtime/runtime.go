@@ -50,6 +50,13 @@ func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehav
 	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
 }
 
+// RestoreBehavior — fulltext's hidden table is the bulk inverted index, not a
+// compact model, so it likely stays rebuild-on-restore. Returns the zero value:
+// restore rebuilds via CDC like normal DML.
+func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
+	return catalogplugin.RestoreBehavior{}
+}
+
 // DefaultOptions — fulltext defaults are inferred at build time; no
 // statement-level option JSON is required when the WITH(...) clause is
 // omitted. Matches the legacy catalog.IndexParamsToJsonString path

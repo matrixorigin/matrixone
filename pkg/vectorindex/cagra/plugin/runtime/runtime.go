@@ -58,6 +58,14 @@ func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehav
 	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
 }
 
+// RestoreBehavior — CAGRA's prebuilt model lives in the Storage (tag=0 blob) +
+// Metadata hidden tables; a future RestoreDirectly={Storage,Metadata} would let
+// restore load that model instead of rebuilding the graph via async CDC.
+// Returns the zero value today: restore rebuilds via CDC like normal DML.
+func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
+	return catalogplugin.RestoreBehavior{}
+}
+
 func (CatalogHooks) DefaultOptions() map[string]string {
 	return map[string]string{
 		catalog.IndexAlgoParamOpType: metric.OpType_L2Distance,

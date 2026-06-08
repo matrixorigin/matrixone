@@ -187,8 +187,16 @@ func (s *Scope) handleMasterIndexTable(
 	return nil
 }
 
+// IsTableClone reports whether this scope executes a `create table … clone` —
+// the statement snapshot/restore replays to rebuild a table. Restore-aware
+// behavior in the compile/plugin layer keys off this: the experimental-flag
+// gate below, and pluginCompileCtx.IsTableClone exposed to index plugins.
+func (s *Scope) IsTableClone() bool {
+	return s.Magic == TableClone
+}
+
 func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
-	if s.Magic == TableClone && isPluginExperimentalFlag(flag) {
+	if s.IsTableClone() && isPluginExperimentalFlag(flag) {
 		// A table-clone scope inherits the source table's index set,
 		// which was already created (and gated) when the source went
 		// in. Re-checking the experimental gate at clone time would

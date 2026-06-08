@@ -90,6 +90,16 @@ func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehav
 	}
 }
 
+// RestoreBehavior — IVF-FLAT's k-means model lives in the Metadata + Centroids
+// hidden tables (Entries are the bulk per-row assignments); a future
+// RestoreDirectly={Metadata,Centroids} would let restore preserve the
+// snapshot's centroids instead of re-training k-means, the same model the clone
+// path already protects. Returns the zero value today: restore rebuilds (sync
+// IVF-FLAT re-runs k-means; async rebuilds entries via CDC).
+func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
+	return catalogplugin.RestoreBehavior{}
+}
+
 // DefaultOptions mirrors the IVF-FLAT case of indexParamsToMap when the
 // statement carries no WITH(...) clause: lists=1, op_type=l2.
 func (CatalogHooks) DefaultOptions() map[string]string {

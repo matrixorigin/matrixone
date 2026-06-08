@@ -79,6 +79,14 @@ func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehav
 	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
 }
 
+// RestoreBehavior — IVF-PQ's prebuilt model lives in the Storage (tag=0 blob) +
+// Metadata hidden tables; a future RestoreDirectly={Storage,Metadata} would let
+// restore load that model instead of rebuilding via async CDC. Returns the zero
+// value today: restore rebuilds via CDC like normal DML.
+func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
+	return catalogplugin.RestoreBehavior{}
+}
+
 // DefaultOptions is the params map produced when CREATE INDEX is issued
 // without a WITH(...) clause. Return nil if your algorithm requires
 // explicit options. Keys come from pkg/catalog (IndexAlgoParamOpType etc.).

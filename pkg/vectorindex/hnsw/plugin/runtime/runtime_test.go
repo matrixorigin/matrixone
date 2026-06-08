@@ -49,6 +49,10 @@ func TestHnswAlterTableCloneBehavior(t *testing.T) {
 	// HNSW is AlwaysAsync and rebuilds via CDC, so the whole index is skipped
 	// on async clone (not per hidden table).
 	require.True(t, b.SkipWholeIndex)
+
+	// RestoreBehavior is the zero value today — restore rebuilds the index, no
+	// hidden table is restored directly.
+	require.Empty(t, CatalogHooks{}.RestoreBehavior().RestoreDirectly)
 }
 
 func TestHnswDefaultOptions(t *testing.T) {

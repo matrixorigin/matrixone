@@ -75,6 +75,7 @@ func (s *stubCompileContext) ResolveVariable(name string, _, _ bool) (any, error
 }
 func (s *stubCompileContext) IsExperimentalEnabled(_ string) (bool, error) { return true, nil }
 func (s *stubCompileContext) IsFrontend() bool                             { return s.isFrontend }
+func (s *stubCompileContext) IsTableClone() bool                           { return false }
 func (s *stubCompileContext) IsCCPRTaskTransaction() bool                  { return false }
 func (s *stubCompileContext) IsTableFromPublication(_ *plan.TableDef) bool { return false }
 func (s *stubCompileContext) SinkerTypeFromAlgo(_ string) int8             { return 0 }

@@ -108,6 +108,17 @@ type Hooks interface {
 	// Consumed by pkg/sql/compile/alter.go::cloneUnaffectedIndex.
 	AlterTableCloneBehavior() AlterTableCloneBehavior
 
+	// RestoreBehavior declares how snapshot/restore should reconstruct this
+	// algorithm's hidden tables, the restore-path analogue of
+	// AlterTableCloneBehavior. The zero value means "rebuild every hidden
+	// table via the algorithm's normal mechanism from the restored
+	// main-table rows" — the historical behavior (the snapshot's prebuilt
+	// model is discarded and rebuilt: async CDC for async indexes, a
+	// synchronous k-means re-run for sync IVF-FLAT). The hook exists so a
+	// plugin can opt specific hidden tables into a direct restore of the
+	// prebuilt model. Every plugin returns the zero value today.
+	RestoreBehavior() RestoreBehavior
+
 	// ShouldTruncateHiddenTable reports whether the hidden table of the
 	// given IndexAlgoTableType (one of HiddenTableTypes()) should be
 	// included in a TRUNCATE TABLE on the source table.
@@ -309,6 +320,37 @@ func (b AlterTableCloneBehavior) ContainsDelete(algoTableType string) bool {
 // SkipWhenAsync list.
 func (b AlterTableCloneBehavior) ContainsSkipWhenAsync(algoTableType string) bool {
 	for _, t := range b.SkipWhenAsync {
+		if t == algoTableType {
+			return true
+		}
+	}
+	return false
+}
+
+// RestoreBehavior declares how snapshot/restore should reconstruct an index's
+// hidden tables — the restore-path analogue of AlterTableCloneBehavior. The
+// zero value (the only value any plugin returns today) means "rebuild every
+// hidden table via the algorithm's normal mechanism from the restored
+// main-table rows": the snapshot's prebuilt model is discarded and rebuilt
+// (async CDC for async indexes; a synchronous k-means re-run for sync
+// IVF-FLAT). The hook exists so a plugin can opt specific hidden tables into a
+// direct restore of the prebuilt model, making the restored index faithful to
+// the snapshot and usable immediately.
+//
+// Consulted on the restore path — the `create table … clone` the restore
+// replays; see compileplugin.Context.IsTableClone().
+type RestoreBehavior struct {
+	// RestoreDirectly names the hidden tables (IndexAlgoTableType, members of
+	// HiddenTableTypes()) whose data should be restored verbatim from the
+	// snapshot rather than rebuilt. Empty = rebuild everything (current
+	// behavior).
+	RestoreDirectly []string
+}
+
+// ContainsRestoreDirectly reports whether algoTableType is in the
+// RestoreDirectly list.
+func (b RestoreBehavior) ContainsRestoreDirectly(algoTableType string) bool {
+	for _, t := range b.RestoreDirectly {
 		if t == algoTableType {
 			return true
 		}

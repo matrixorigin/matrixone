@@ -64,6 +64,10 @@ func TestIvfflatAlterTableCloneBehavior(t *testing.T) {
 	// table policy above. This is the bug the explicit flag fixes — inferring
 	// the skip from UsesCDC would drop the cloned k-means model.
 	require.False(t, b.SkipWholeIndex)
+
+	// RestoreBehavior is the zero value today — restore rebuilds (sync k-means
+	// re-run / async CDC), no hidden table is restored directly yet.
+	require.Empty(t, CatalogHooks{}.RestoreBehavior().RestoreDirectly)
 }
 
 func TestIvfflatDefaultOptions(t *testing.T) {
