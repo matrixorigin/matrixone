@@ -1028,6 +1028,13 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 
 	var err error
 	useGlobal := sv.Global
+	if useGlobal {
+		bh := ses.GetBackgroundExec(execCtx.reqCtx)
+		defer bh.Close()
+		if err = ses.refreshGlobalSysVars(execCtx.reqCtx, bh); err != nil {
+			return err
+		}
+	}
 
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
