@@ -52,7 +52,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_year,
 		types.T_array_float32, types.T_array_float64,
-		types.T_datalink, types.T_geometry,
+		types.T_datalink, types.T_geometry, types.T_geometry32,
 	},
 
 	types.T_bool: {
@@ -279,7 +279,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_datalink, types.T_geometry,
+		types.T_datalink, types.T_geometry, types.T_geometry32,
 	},
 
 	types.T_varchar: {
@@ -296,7 +296,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
-		types.T_datalink, types.T_geometry,
+		types.T_datalink, types.T_geometry, types.T_geometry32,
 		types.T_TS,
 	},
 
@@ -312,7 +312,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_varbinary, types.T_binary,
-		types.T_datalink, types.T_geometry,
+		types.T_datalink, types.T_geometry, types.T_geometry32,
 	},
 
 	types.T_varbinary: {
@@ -327,7 +327,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_datalink, types.T_geometry,
+		types.T_datalink, types.T_geometry, types.T_geometry32,
 	},
 
 	types.T_blob: {
@@ -344,7 +344,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
-		types.T_datalink, types.T_geometry,
+		types.T_datalink, types.T_geometry, types.T_geometry32,
 	},
 
 	types.T_text: {
@@ -362,10 +362,15 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
-		types.T_datalink, types.T_geometry,
+		types.T_datalink, types.T_geometry, types.T_geometry32,
 	},
 	types.T_geometry: {
-		types.T_geometry,
+		types.T_geometry, types.T_geometry32,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary,
+	},
+	types.T_geometry32: {
+		types.T_geometry32, types.T_geometry,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 	},
@@ -509,7 +514,7 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_year:
 		s := vector.GenerateFunctionFixedTypeParameter[types.MoYear](from)
 		err = yearToOthers(proc.Ctx, s, *toType, result, length, selectList)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = strTypeToOthers(proc, s, *toType, result, length, selectList)
 	case types.T_array_float32, types.T_array_float64:
@@ -1820,12 +1825,47 @@ func decimal256ToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal256 to %s", toType))
 }
 
+// geometryToTextCast renders a GEOMETRY/GEOMETRY32 value as WKT for casts to a
+// textual type, matching ST_AsText.
+func geometryToTextCast(
+	source vector.FunctionParameterWrapper[types.Varlena],
+	result vector.FunctionResultWrapper, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := source.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		wkt, _, _, err := decodeGeometryPayload(v)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes([]byte(wkt), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func strTypeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	ctx := proc.Ctx
 
 	fromType := source.GetType()
+	// Geometry is stored as bare WKB. Casting to a textual type must render
+	// WKT (like ST_AsText); the generic string-copy path below would otherwise
+	// emit the raw, unreadable WKB bytes. Casts to binary/varbinary/blob (raw
+	// payload) and to another geometry type keep the existing behavior.
+	if fromType.Oid == types.T_geometry || fromType.Oid == types.T_geometry32 {
+		switch toType.Oid {
+		case types.T_char, types.T_varchar, types.T_text:
+			return geometryToTextCast(source, result, length)
+		}
+	}
 	if fromType.Oid == types.T_blob {
 		// For handling BLOB to ARRAY implicit casting.
 		// This is used for VECTOR FAST/BINARY IO.
@@ -1910,7 +1950,7 @@ func strTypeToOthers(proc *process.Process,
 		}
 		return strToTimestamp(source, rs, zone, length, selectList)
 	case types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink, types.T_geometry:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink, types.T_geometry, types.T_geometry32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(ctx, proc, source, rs, length, toType)
 	case types.T_array_float32:
@@ -5463,8 +5503,11 @@ func strToStr(
 		}
 		return nil
 	}
-	if toType.Oid == types.T_geometry {
+	if toType.Oid == types.T_geometry || toType.Oid == types.T_geometry32 {
 		maxPoints := maxPointsInGeometryLimit(proc)
+		toFloat32 := toType.Oid == types.T_geometry32
+		srcOid := from.GetSourceVector().GetType().Oid
+		fromGeom := srcOid == types.T_geometry || srcOid == types.T_geometry32
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
 			if null {
@@ -5473,11 +5516,27 @@ func strToStr(
 				}
 				continue
 			}
-			wkt := strings.TrimSpace(convertByteSliceToString(v))
+			var wkt string
+			if fromGeom {
+				// Geometry/geometry32 WKB source: decode then re-encode at the
+				// target coordinate width.
+				var derr error
+				wkt, _, _, derr = decodeGeometryPayload(v)
+				if derr != nil {
+					return derr
+				}
+			} else {
+				// Text source: validate the raw WKT (no internal EWKT prefix).
+				wkt = strings.TrimSpace(convertByteSliceToString(v))
+			}
 			if err := validateGeometryTextForStorage(wkt, maxPoints); err != nil {
 				return err
 			}
-			if err := to.AppendBytes(encodeGeometryPayload(wkt, 0, false), false); err != nil {
+			payload := encodeGeometryPayload(wkt, 0, false)
+			if toFloat32 {
+				payload = encodeGeometryPayloadFloat32(wkt)
+			}
+			if err := to.AppendBytes(payload, false); err != nil {
 				return err
 			}
 		}
