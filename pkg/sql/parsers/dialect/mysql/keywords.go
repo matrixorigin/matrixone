@@ -672,6 +672,7 @@ func init() {
 		"stage":                      STAGE,
 		"stages":                     STAGES,
 		"credentials":                CREDENTIALS,
+		"array":                      ARRAY,
 		"vecf32":                     VECF32,
 		"vecf64":                     VECF64,
 		"backup":                     BACKUP,
