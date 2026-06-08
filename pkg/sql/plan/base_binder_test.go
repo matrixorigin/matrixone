@@ -117,6 +117,10 @@ func TestBindNameConstConstArgs(t *testing.T) {
 			sql:  "select name_const('myname', null)",
 		},
 		{
+			name: "decimal value",
+			sql:  "select name_const('myname', 12.34)",
+		},
+		{
 			name: "negative decimal value",
 			sql:  "select name_const('myname', -12.34)",
 		},

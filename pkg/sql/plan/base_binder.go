@@ -2917,9 +2917,33 @@ func validNameConstValueExpr(arg *plan.Expr) bool {
 	if arg.GetLit() != nil {
 		return true
 	}
+	if isDecimalLiteralCast(arg) {
+		return true
+	}
 	fn := arg.GetF()
 	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "unary_minus" || len(fn.Args) != 1 {
 		return false
 	}
-	return fn.Args[0].GetLit() != nil
+	return fn.Args[0].GetLit() != nil || isDecimalLiteralCast(fn.Args[0])
+}
+
+func isDecimalLiteralCast(arg *plan.Expr) bool {
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return false
+	}
+	if !types.T(arg.Typ.Id).IsDecimal() || fn.Args[0].GetLit() == nil || fn.Args[1].GetT() == nil {
+		return false
+	}
+	lit := fn.Args[0].GetLit()
+	if lit.Isnull || lit.GetSval() == "" {
+		return false
+	}
+	if _, _, err := types.Parse128(lit.GetSval()); err == nil {
+		return true
+	}
+	if _, _, err := types.Parse256(lit.GetSval()); err == nil {
+		return true
+	}
+	return false
 }
