@@ -67,6 +67,16 @@ func NewHnswModelForBuild[T types.RealNumbers](id string, cfg vectorindex.IndexC
 	var err error
 	idx := &HnswModel[T]{}
 
+	// MatrixOne #24849 / USearch #735 (open): concurrent add() can orphan nodes --
+	// the vector is stored (contains() returns true) but is never linked into the
+	// HNSW graph, so search() can never reach it, producing flaky recall@1 (an
+	// exact match is intermittently missed). NewHnswBuild forces a single build
+	// thread for the create-index path, but the CDC / sync path still creates
+	// models with ThreadsBuild here. Pin every build model to a single thread so
+	// idx.Index.ChangeThreadsAdd(1) is applied on all write paths until the
+	// upstream race is fixed.
+	nthread = 1
+
 	idx.Id = id
 	idx.NThread = uint(nthread)
 	idx.MaxCapacity = max_capacity
