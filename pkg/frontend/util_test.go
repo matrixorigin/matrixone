@@ -1359,6 +1359,7 @@ func Test_convertRowsIntoBatchDecimal(t *testing.T) {
 			col.SetDecimal(tt.scale)
 			mrs.AddColumn(col)
 			mrs.AddRow([]any{tt.value})
+			mrs.AddRow([]any{nil})
 
 			pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 			require.NoError(t, err)
@@ -1374,6 +1375,7 @@ func Test_convertRowsIntoBatchDecimal(t *testing.T) {
 			require.Equal(t, tt.oid, data.Vecs[0].GetType().Oid)
 			require.Equal(t, tt.width, data.Vecs[0].GetType().Width)
 			require.Equal(t, tt.scale, data.Vecs[0].GetType().Scale)
+			require.True(t, data.Vecs[0].GetNulls().Contains(1))
 
 			switch tt.oid {
 			case types.T_decimal64:
@@ -1390,6 +1392,59 @@ func Test_convertRowsIntoBatchDecimal(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_decimalRowValueHelpers(t *testing.T) {
+	typ64 := types.New(types.T_decimal64, 10, 2)
+	dec64, err := types.ParseDecimal64("12.34", typ64.Width, typ64.Scale)
+	require.NoError(t, err)
+	got64, err := getDecimal64FromRowValue(dec64, typ64)
+	require.NoError(t, err)
+	require.Equal(t, dec64, got64)
+	got64, err = getDecimal64FromRowValue([]byte("56.78"), typ64)
+	require.NoError(t, err)
+	require.Equal(t, "56.78", got64.Format(typ64.Scale))
+	_, err = getDecimal64FromRowValue("invalid", typ64)
+	require.Error(t, err)
+	_, err = getDecimal64FromRowValue(int64(1), typ64)
+	require.Error(t, err)
+
+	typ128 := types.New(types.T_decimal128, 20, 3)
+	dec128, err := types.ParseDecimal128("12345678901234567.125", typ128.Width, typ128.Scale)
+	require.NoError(t, err)
+	got128, err := getDecimal128FromRowValue(dec128, typ128)
+	require.NoError(t, err)
+	require.Equal(t, dec128, got128)
+	got128, err = getDecimal128FromRowValue("12345678901234567.125", typ128)
+	require.NoError(t, err)
+	require.Equal(t, "12345678901234567.125", got128.Format(typ128.Scale))
+	_, err = getDecimal128FromRowValue("invalid", typ128)
+	require.Error(t, err)
+	_, err = getDecimal128FromRowValue(int64(1), typ128)
+	require.Error(t, err)
+
+	typ256 := types.New(types.T_decimal256, 50, 4)
+	dec256, err := types.ParseDecimal256("1234567890123456789012345678901234567890.1234", typ256.Width, typ256.Scale)
+	require.NoError(t, err)
+	got256, err := getDecimal256FromRowValue(dec256, typ256)
+	require.NoError(t, err)
+	require.Equal(t, dec256, got256)
+	got256, err = getDecimal256FromRowValue([]byte("1234567890123456789012345678901234567890.1234"), typ256)
+	require.NoError(t, err)
+	require.Equal(t, "1234567890123456789012345678901234567890.1234", got256.Format(typ256.Scale))
+	_, err = getDecimal256FromRowValue("invalid", typ256)
+	require.Error(t, err)
+	_, err = getDecimal256FromRowValue(int64(1), typ256)
+	require.Error(t, err)
+}
+
+func Test_mysqlDecimalColTypeMissingPrecision(t *testing.T) {
+	col := new(MysqlColumn)
+	col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	col.SetLength(2)
+
+	_, err := mysqlDecimalColType(col)
+	require.Error(t, err)
 }
 
 func Test_convertRowsIntoBatchError(t *testing.T) {
