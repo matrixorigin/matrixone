@@ -49,7 +49,26 @@ drop table t1;
 drop table t2;
 
 -- ----------------------------------------------------------------
--- case 3: empty subquery result — should be no-op
+-- case 3: subquery with string literal predicate
+-- ----------------------------------------------------------------
+
+create table orders (order_id int primary key, customer varchar(20), amount int);
+insert into orders values (1,'Alice',10),(2,'Bob',20),(3,'Carol',30);
+
+data branch create table orders_fix from orders;
+insert into orders_fix values (4,'Grace',40),(5,'Heidi',50),(6,'Grace',60);
+
+data branch pick orders_fix into orders keys(select order_id from orders_fix where customer = 'Grace') when conflict accept;
+select * from orders order by order_id asc;
+
+-- verify: non-Grace row is still in diff
+data branch diff orders_fix against orders;
+
+drop table orders;
+drop table orders_fix;
+
+-- ----------------------------------------------------------------
+-- case 4: empty subquery result — should be no-op
 -- ----------------------------------------------------------------
 
 create table t0 (a int, b int, primary key(a));
@@ -70,7 +89,7 @@ drop table t1;
 drop table t2;
 
 -- ----------------------------------------------------------------
--- case 4: large subquery — pick 25 out of 100 new rows
+-- case 5: large subquery — pick 25 out of 100 new rows
 -- ----------------------------------------------------------------
 
 create table t1 (a int, b varchar(20), primary key(a));
@@ -91,7 +110,7 @@ drop table t1;
 drop table t2;
 
 -- ----------------------------------------------------------------
--- case 5: subquery with DISTINCT and ORDER BY
+-- case 6: subquery with DISTINCT and ORDER BY
 -- ----------------------------------------------------------------
 
 create table t0 (a int, b int, primary key(a));
@@ -116,7 +135,7 @@ drop table t1;
 drop table t2;
 
 -- ----------------------------------------------------------------
--- case 6: subquery keys must not contain NULL
+-- case 7: subquery keys must not contain NULL
 -- ----------------------------------------------------------------
 
 create table t1 (a int, b int, primary key(a));
