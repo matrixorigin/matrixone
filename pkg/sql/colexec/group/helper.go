@@ -200,13 +200,13 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 
 	// if current spill bucket is not created, create a new one.
 	if ctr.currentSpillBkt == nil {
-		// check parent level, if it is too deep, return error.
+		// check parent level, if it is too deep, stop spilling and keep data in memory.
 		// we only allow to spill up to spillMaxPass passes.
 		// each pass we take spillMaskBits bits from the hashCode, and use them as the index
 		// to select the spill bucket.  Default params, 32^3 = 32768 spill buckets -- if this
-		// is still not enough, probably we cannot do much anyway, just fail the query.
+		// is still not enough, probably we cannot do much anyway, keep the remaining data in memory.
 		if parentLv >= spillMaxPass {
-			return 0, 0, moerr.NewInternalError(proc.Ctx, "spill level too deep")
+			return 0, 0, nil
 		}
 
 		var parentName string
@@ -420,6 +420,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		if err := bkt.free(); err != nil && retErr == nil {
 			retErr = err
 		}
+		ctr.freeSpillAggList()
 	}()
 
 	// reposition to the start of the file.

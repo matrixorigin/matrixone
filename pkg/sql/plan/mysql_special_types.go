@@ -22,8 +22,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -56,6 +58,77 @@ func isGeometryPlanType(typ *plan.Type) bool {
 	return typ != nil && (typ.Id == int32(types.T_geometry) || typ.Id == int32(types.T_geometry32))
 }
 
+func isTypedArrayPlanType(typ *plan.Type) bool {
+	return typ != nil && typ.Id == int32(types.T_json) && arrayPlanTypeString(typ) != ""
+}
+
+func arrayPlanTypeString(typ *plan.Type) string {
+	if typ == nil {
+		return ""
+	}
+	metadata := strings.TrimSpace(typ.GetEnumvalues())
+	if strings.HasPrefix(strings.ToLower(metadata), "array(") {
+		return metadata
+	}
+	return ""
+}
+
+func validateTypedArrayElementType(ctx context.Context, elem *tree.T) error {
+	if elem == nil {
+		return moerr.NewInternalError(ctx, "array type missing element type")
+	}
+	if elem.InternalType.Oid == uint32(defines.MYSQL_TYPE_TYPED_ARRAY) {
+		if elem.InternalType.ArrayContents == nil {
+			return moerr.NewInternalError(ctx, "array type missing element type")
+		}
+		return validateTypedArrayElementType(ctx, elem.InternalType.ArrayContents)
+	}
+
+	if isSupportedTypedArrayElementType(elem) {
+		return nil
+	}
+	return moerr.NewInvalidInputf(ctx, "unsupported ARRAY element type %s", tree.String(&elem.InternalType, dialect.MYSQL))
+}
+
+func isSupportedTypedArrayElementType(elem *tree.T) bool {
+	if elem == nil {
+		return false
+	}
+	switch defines.MysqlType(elem.InternalType.Oid) {
+	case defines.MYSQL_TYPE_BOOL,
+		defines.MYSQL_TYPE_TINY,
+		defines.MYSQL_TYPE_SHORT,
+		defines.MYSQL_TYPE_LONG,
+		defines.MYSQL_TYPE_INT24,
+		defines.MYSQL_TYPE_LONGLONG,
+		defines.MYSQL_TYPE_FLOAT,
+		defines.MYSQL_TYPE_DOUBLE,
+		defines.MYSQL_TYPE_DECIMAL,
+		defines.MYSQL_TYPE_NEWDECIMAL,
+		defines.MYSQL_TYPE_JSON,
+		defines.MYSQL_TYPE_DATE,
+		defines.MYSQL_TYPE_TIME,
+		defines.MYSQL_TYPE_DATETIME,
+		defines.MYSQL_TYPE_TIMESTAMP,
+		defines.MYSQL_TYPE_YEAR,
+		defines.MYSQL_TYPE_UUID:
+		return true
+	case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
+		switch strings.ToLower(strings.TrimSpace(elem.InternalType.FamilyString)) {
+		case "char", "varchar", "binary", "varbinary":
+			return true
+		default:
+			return false
+		}
+	case defines.MYSQL_TYPE_BLOB:
+		return strings.EqualFold(elem.InternalType.FamilyString, "blob")
+	case defines.MYSQL_TYPE_TEXT:
+		return strings.EqualFold(elem.InternalType.FamilyString, "text")
+	default:
+		return false
+	}
+}
+
 // Geometry subtype and SRID are stored in the column type's Scale and Width
 // (per docs/design/gisimpl.md §1.4), not in Enumvalues:
 //
@@ -64,7 +137,6 @@ func isGeometryPlanType(typ *plan.Type) bool {
 //     not. The +1 offset preserves the "SRID defined vs unspecified"
 //     distinction while still keeping the SRID in Width. Only SRID 0 and 4326
 //     are meaningful for computation, so the int32 range of Width is ample.
-
 func geometrySubtypeName(typ *plan.Type) string {
 	if !isGeometryPlanType(typ) {
 		return ""
@@ -215,7 +287,7 @@ func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (
 		return expr, nil
 	}
 	targetType.NotNullable = expr.Typ.NotNullable
-	if types.T(expr.Typ.Id) == types.T_any || isGeometryNullLiteralExpr(expr) {
+	if types.T(expr.Typ.Id) == types.T_any || isNullLiteralExpr(expr) {
 		expr.Typ = targetType
 		return expr, nil
 	}
@@ -263,7 +335,44 @@ func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (
 	return castedExpr, nil
 }
 
-func isGeometryNullLiteralExpr(expr *Expr) bool {
+func funcCastForTypedArrayType(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	if !isTypedArrayPlanType(&targetType) {
+		return expr, nil
+	}
+	targetType.NotNullable = expr.Typ.NotNullable
+	if types.T(expr.Typ.Id) == types.T_any || isNullLiteralExpr(expr) {
+		expr.Typ = targetType
+		return expr, nil
+	}
+	if isTypedArrayPlanType(&expr.Typ) && expr.Typ.GetEnumvalues() == targetType.GetEnumvalues() {
+		expr.Typ = targetType
+		return expr, nil
+	}
+
+	jsonType := plan.Type{Id: int32(types.T_json), NotNullable: expr.Typ.NotNullable}
+	jsonExpr, err := forceCastExpr(ctx, expr, jsonType)
+	if err != nil {
+		return nil, err
+	}
+
+	args := make([]*Expr, 2)
+	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
+	targetArrayTypeExpr, err := binder.BindExpr(tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char), 0, false)
+	if err != nil {
+		return nil, err
+	}
+	args[0] = targetArrayTypeExpr
+	args[1] = jsonExpr
+
+	castedExpr, err := BindFuncExprImplByPlanExpr(ctx, moJsonCastToArrayFun, args)
+	if err != nil {
+		return nil, err
+	}
+	castedExpr.Typ = targetType
+	return castedExpr, nil
+}
+
+func isNullLiteralExpr(expr *Expr) bool {
 	if expr == nil {
 		return false
 	}

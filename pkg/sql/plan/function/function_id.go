@@ -718,9 +718,12 @@ const (
 	// GIS buffer
 	ST_BUFFER = 512
 
+	// merged from upstream/main (renumbered to avoid colliding with the GIS block above)
+	CAST_JSON_TO_ARRAY = 513
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 513
+	FUNCTION_END_NUMBER = 514
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1112,6 +1115,7 @@ var functionIdRegister = map[string]int32{
 	"cast_set_value_to_index":        CAST_SET_VALUE_TO_INDEX,
 	"cast_set_index_value_to_index":  CAST_SET_INDEX_VALUE_TO_INDEX,
 	"cast_geometry_to_subtype":       CAST_GEOMETRY_TO_SUBTYPE,
+	"cast_json_to_array":             CAST_JSON_TO_ARRAY,
 	"st_astext":                      ST_ASTEXT,
 	"st_aswkt":                       ST_ASTEXT,
 	"st_aswkb":                       ST_ASWKB,
