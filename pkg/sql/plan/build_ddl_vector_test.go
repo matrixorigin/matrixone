@@ -32,10 +32,16 @@ func unresolvedCol(name string) *tree.UnresolvedName {
 	return tree.NewUnresolvedColName(name)
 }
 
+// includeTestSupportedTypes mirrors the CAGRA / IVF-PQ plugin's
+// SupportedIncludeColumnTypes() set, threaded into validateIncludeColumns.
+var includeTestSupportedTypes = []types.T{
+	types.T_int32, types.T_int64, types.T_float32, types.T_float64,
+}
+
 func TestValidateIncludeColumns_Empty(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
-	require.NoError(t, validateIncludeColumns(ctx, nil, nil, "v", "id"))
-	require.NoError(t, validateIncludeColumns(ctx, []*tree.UnresolvedName{}, nil, "v", "id"))
+	require.NoError(t, validateIncludeColumns(ctx, nil, nil, "v", "id", includeTestSupportedTypes))
+	require.NoError(t, validateIncludeColumns(ctx, []*tree.UnresolvedName{}, nil, "v", "id", includeTestSupportedTypes))
 }
 
 func TestValidateIncludeColumns_OK(t *testing.T) {
@@ -46,7 +52,7 @@ func TestValidateIncludeColumns_OK(t *testing.T) {
 	}
 	require.NoError(t, validateIncludeColumns(ctx,
 		[]*tree.UnresolvedName{unresolvedCol("price"), unresolvedCol("cat")},
-		colMap, "v", "id"))
+		colMap, "v", "id", includeTestSupportedTypes))
 }
 
 func TestValidateIncludeColumns_VecColumnRejected(t *testing.T) {
@@ -54,7 +60,7 @@ func TestValidateIncludeColumns_VecColumnRejected(t *testing.T) {
 	colMap := map[string]*ColDef{"v": {Typ: plan.Type{Id: int32(types.T_array_float32)}}}
 	err := validateIncludeColumns(ctx,
 		[]*tree.UnresolvedName{unresolvedCol("v")},
-		colMap, "v", "id")
+		colMap, "v", "id", includeTestSupportedTypes)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "indexed vector column")
 }
@@ -64,7 +70,7 @@ func TestValidateIncludeColumns_PKRejected(t *testing.T) {
 	colMap := map[string]*ColDef{"id": {Typ: plan.Type{Id: int32(types.T_int64)}}}
 	err := validateIncludeColumns(ctx,
 		[]*tree.UnresolvedName{unresolvedCol("id")},
-		colMap, "v", "id")
+		colMap, "v", "id", includeTestSupportedTypes)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "primary key")
 }
@@ -74,7 +80,7 @@ func TestValidateIncludeColumns_Duplicate(t *testing.T) {
 	colMap := map[string]*ColDef{"price": {Typ: plan.Type{Id: int32(types.T_float32)}}}
 	err := validateIncludeColumns(ctx,
 		[]*tree.UnresolvedName{unresolvedCol("price"), unresolvedCol("price")},
-		colMap, "v", "id")
+		colMap, "v", "id", includeTestSupportedTypes)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "duplicate")
 }
@@ -84,7 +90,7 @@ func TestValidateIncludeColumns_NotExist(t *testing.T) {
 	colMap := map[string]*ColDef{"price": {Typ: plan.Type{Id: int32(types.T_float32)}}}
 	err := validateIncludeColumns(ctx,
 		[]*tree.UnresolvedName{unresolvedCol("missing")},
-		colMap, "v", "id")
+		colMap, "v", "id", includeTestSupportedTypes)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not exist")
 }
@@ -94,7 +100,7 @@ func TestValidateIncludeColumns_UnsupportedType(t *testing.T) {
 	colMap := map[string]*ColDef{"name": {Typ: plan.Type{Id: int32(types.T_varchar)}}}
 	err := validateIncludeColumns(ctx,
 		[]*tree.UnresolvedName{unresolvedCol("name")},
-		colMap, "v", "id")
+		colMap, "v", "id", includeTestSupportedTypes)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported type")
 }
@@ -112,5 +118,5 @@ func TestValidateIncludeColumns_AllSupportedNumericTypes(t *testing.T) {
 			unresolvedCol("a"), unresolvedCol("b"),
 			unresolvedCol("c"), unresolvedCol("d"),
 		},
-		colMap, "v", "id"))
+		colMap, "v", "id", includeTestSupportedTypes))
 }
