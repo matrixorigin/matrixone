@@ -239,7 +239,15 @@ func (w *CuvsCdcWriter) encodeInsertOrUpsert(ctx context.Context, row []any, op 
 		return w.appendDelete(key)
 	}
 	v, ok := rawVec.([]float32)
-	if !ok || v == nil {
+	if !ok {
+		// A non-nil value of the wrong type is a real schema/type error, not a
+		// NULL vector — surface it instead of silently dropping the row to a
+		// DELETE (mirrors the HNSW sinker in index_sqlwriter.go).
+		return moerr.NewInternalError(ctx, fmt.Sprintf(
+			"%s cuvs writer: invalid vector type, expected []float32, got %T", w.algoName, rawVec))
+	}
+	if v == nil {
+		// Typed-nil slice — an actually absent vector; encode as DELETE.
 		return w.appendDelete(key)
 	}
 
