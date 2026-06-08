@@ -9231,7 +9231,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		functionId: DATE_TRUNC,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    dateTruncCheck,
 
 		Overloads: []overload{
 			{

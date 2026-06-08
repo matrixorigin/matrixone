@@ -11105,6 +11105,44 @@ func DateTrunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return nil
 }
 
+func dateTruncCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	unitMatch, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_varchar})
+	if unitMatch == matchFailed {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	overloadIdx := -1
+	targetTypes := []types.Type{inputs[0], inputs[1]}
+	switch inputs[1].Oid {
+	case types.T_datetime:
+		overloadIdx = 0
+	case types.T_date:
+		overloadIdx = 1
+	case types.T_timestamp:
+		overloadIdx = 2
+	case types.T_any:
+		overloadIdx = 0
+		targetTypes[1] = types.T_datetime.ToType()
+	default:
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if overloadIdx >= len(overloads) {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	if unitMatch == matchDirectly && targetTypes[1].Oid == inputs[1].Oid {
+		return newCheckResultWithSuccess(overloadIdx)
+	}
+
+	targetTypes[0] = types.T_varchar.ToType()
+	SetTargetScaleFromSource(&inputs[0], &targetTypes[0])
+	return newCheckResultWithCast(overloadIdx, targetTypes)
+}
+
 // DateTruncDate truncates a date value to the specified precision.
 // Sub-day units (hour, minute, second) are rejected because DATE has no time component.
 func DateTruncDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -11122,7 +11160,7 @@ func DateTruncDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 		} else {
 			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(unit))
 			if unitStr == "hour" || unitStr == "minute" || unitStr == "second" {
-				return moerr.NewInternalErrorNoCtxf("unsupported unit '%s' for date_trunc on DATE type", unitStr)
+				return moerr.NewInvalidInputNoCtxf("unsupported unit '%s' for date_trunc on DATE type", unitStr)
 			}
 			dt := d.ToDatetime()
 			truncated, err := dateTruncCore(unitStr, dt)
@@ -11157,22 +11195,42 @@ func DateTruncTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			if loc == nil {
 				loc = time.Local
 			}
-			dt := ts.ToDatetime(loc)
-			truncated, err := dateTruncCore(unitStr, dt)
+			truncated, err := dateTruncTimestamp(unitStr, ts, loc)
 			if err != nil {
 				return err
 			}
-			if err := rs.Append(
-				types.FromClockZone(loc,
-					int32(truncated.Year()), truncated.Month(), truncated.Day(),
-					uint8(truncated.Hour()), uint8(truncated.Minute()), uint8(truncated.Sec()),
-					uint32(truncated.MicroSec())),
-				false); err != nil {
+			if err := rs.Append(truncated, false); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func dateTruncTimestamp(unit string, ts types.Timestamp, loc *time.Location) (types.Timestamp, error) {
+	unixMicro := int64(ts) - int64(types.FromClockUTC(1970, 1, 1, 0, 0, 0, 0))
+	t := time.UnixMicro(unixMicro).In(loc)
+	switch unit {
+	case "hour":
+		return types.UnixMicroToTimestamp(t.Add(-time.Duration(t.Minute())*time.Minute -
+			time.Duration(t.Second())*time.Second -
+			time.Duration(t.Nanosecond()/1000)*time.Microsecond).UnixMicro()), nil
+	case "minute":
+		return types.UnixMicroToTimestamp(t.Add(-time.Duration(t.Second())*time.Second -
+			time.Duration(t.Nanosecond()/1000)*time.Microsecond).UnixMicro()), nil
+	case "second":
+		return types.UnixMicroToTimestamp(t.Add(-time.Duration(t.Nanosecond()/1000) * time.Microsecond).UnixMicro()), nil
+	default:
+		dt := ts.ToDatetime(loc)
+		truncated, err := dateTruncCore(unit, dt)
+		if err != nil {
+			return 0, err
+		}
+		return types.FromClockZone(loc,
+			int32(truncated.Year()), truncated.Month(), truncated.Day(),
+			uint8(truncated.Hour()), uint8(truncated.Minute()), uint8(truncated.Sec()),
+			uint32(truncated.MicroSec())), nil
+	}
 }
 
 // dateTruncCore performs the core truncation logic on a Datetime value.
@@ -11236,7 +11294,7 @@ func dateTruncCore(unit string, dt types.Datetime) (types.Datetime, error) {
 	case "second":
 		msec = 0
 	default:
-		return types.Datetime(0), moerr.NewInternalErrorNoCtxf("unsupported unit '%s' for date_trunc", unit)
+		return types.Datetime(0), moerr.NewInvalidInputNoCtxf("unsupported unit '%s' for date_trunc", unit)
 	}
 
 	return types.DatetimeFromClock(year, month, day, uint8(hour), uint8(minute), uint8(sec), msec), nil
