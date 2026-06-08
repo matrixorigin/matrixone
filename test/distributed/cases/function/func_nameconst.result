@@ -38,6 +38,9 @@ select name_const(null, 1);
 invalid argument NAME_CONST, bad value 
 select name_const('bad_args');
 invalid argument function name_const, bad value [VARCHAR]
+select name_const('xxx_name', -18446744073709551616);
+➤ xxx_name[3,39,0]  𝄀
+-18446744073709551616
 drop table if exists name_const_t;
 create table name_const_t(a int, b varchar(10));
 insert into name_const_t values (1, 'x'), (2, 'y'), (null, null);
