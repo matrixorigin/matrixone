@@ -101,79 +101,8 @@ func handleBranchPick(
 		return moerr.NewInvalidInputNoCtx(
 			"destination snapshot option is not supported for DATA BRANCH PICK")
 	}
-	if err = authenticatePickTablePrivileges(execCtx.reqCtx, ses, stmt); err != nil {
-		return err
-	}
 
 	return diffMergeAgency(ses, execCtx, stmt)
-}
-
-func authenticatePickTablePrivileges(ctx context.Context, ses *Session, stmt *tree.DataBranchPick) error {
-	if stmt == nil || getPu(ses.GetService()).SV.SkipCheckPrivilege || ses.skipAuthForSpecialUser() || ses.GetTenantInfo() == nil {
-		return nil
-	}
-
-	srcDB, srcTbl, err := resolvePickPrivilegeTableName(ses, stmt.SrcTable)
-	if err != nil {
-		return err
-	}
-	dstDB, dstTbl, err := resolvePickPrivilegeTableName(ses, stmt.DstTable)
-	if err != nil {
-		return err
-	}
-
-	if err = requirePickTablePrivilege(ctx, ses, srcDB, srcTbl, clusterTableSelect); err != nil {
-		return err
-	}
-	return requirePickTablePrivilege(ctx, ses, dstDB, dstTbl, clusterTableModify)
-}
-
-func resolvePickPrivilegeTableName(ses *Session, name tree.TableName) (string, string, error) {
-	dbName := name.SchemaName.String()
-	if dbName == "" {
-		dbName = ses.GetDatabaseName()
-	}
-	tableName := name.ObjectName.String()
-	if dbName == "" || tableName == "" {
-		return "", "", moerr.NewInternalErrorNoCtx("the base or target database cannot be empty")
-	}
-	return dbName, tableName, nil
-}
-
-func requirePickTablePrivilege(
-	ctx context.Context,
-	ses *Session,
-	dbName string,
-	tableName string,
-	clusterOp clusterTableOperationType,
-) error {
-	buildEntry := func(typ PrivilegeType) privilegeEntry {
-		entry := privilegeEntriesMap[typ]
-		entry.databaseName = dbName
-		entry.tableName = tableName
-		return entry
-	}
-
-	priv := &privilege{
-		kind:    privilegeKindGeneral,
-		objType: objectTypeTable,
-		entries: []privilegeEntry{
-			buildEntry(PrivilegeTypeTableAll),
-			buildEntry(PrivilegeTypeTableOwnership),
-		},
-		writeDatabaseAndTableDirectly: true,
-		isClusterTable:                isClusterTable(dbName, tableName),
-		clusterTableOperation:         clusterOp,
-	}
-
-	ok, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
-	}
-	return nil
 }
 
 // pickMergeDiffs is the consumer goroutine for PICK. It receives diff batches
