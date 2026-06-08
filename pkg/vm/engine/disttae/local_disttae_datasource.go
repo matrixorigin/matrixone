@@ -143,6 +143,7 @@ type LocalDisttaeDataSource struct {
 		initialized bool
 		txnOffset   int
 		entries     []workspaceDeleteEntry
+		byBlock     map[objectio.Blockid][]workspaceDeleteEntry
 	}
 }
 
@@ -1087,7 +1088,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 		defer ls.table.getTxn().Unlock()
 	}
 
-	for _, entry := range ls.workspaceDeleteEntriesLocked() {
+	for _, entry := range ls.workspaceDeleteEntriesForBlockLocked(bid) {
 		readutil.FastApplyDeletesByRowIds(bid, &leftRows, deletedRows, entry.rowIds, entry.sorted)
 
 		if leftRows != nil && len(leftRows) == 0 {
@@ -1096,6 +1097,57 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 	}
 
 	return leftRows
+}
+
+func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesForBlockLocked(
+	bid *objectio.Blockid,
+) []workspaceDeleteEntry {
+	entries := ls.workspaceDeleteEntriesLocked()
+	if len(entries) == 0 {
+		return nil
+	}
+	if ls.workspaceDeletes.byBlock == nil {
+		ls.workspaceDeletes.byBlock = make(map[objectio.Blockid][]workspaceDeleteEntry)
+		for idx := range entries {
+			ls.addWorkspaceDeleteEntryByBlock(entries[idx])
+		}
+	}
+	return ls.workspaceDeletes.byBlock[*bid]
+}
+
+func (ls *LocalDisttaeDataSource) addWorkspaceDeleteEntryByBlock(entry workspaceDeleteEntry) {
+	if len(entry.rowIds) == 0 {
+		return
+	}
+	if entry.sorted {
+		start := 0
+		current := entry.rowIds[0].CloneBlockID()
+		for idx := 1; idx < len(entry.rowIds); idx++ {
+			blockID := entry.rowIds[idx].CloneBlockID()
+			if blockID == current {
+				continue
+			}
+			ls.workspaceDeletes.byBlock[current] = append(
+				ls.workspaceDeletes.byBlock[current],
+				workspaceDeleteEntry{rowIds: entry.rowIds[start:idx], sorted: true})
+			start = idx
+			current = blockID
+		}
+		ls.workspaceDeletes.byBlock[current] = append(
+			ls.workspaceDeletes.byBlock[current],
+			workspaceDeleteEntry{rowIds: entry.rowIds[start:], sorted: true})
+		return
+	}
+
+	added := make(map[objectio.Blockid]struct{})
+	for _, rowID := range entry.rowIds {
+		blockID := rowID.CloneBlockID()
+		if _, ok := added[blockID]; ok {
+			continue
+		}
+		ls.workspaceDeletes.byBlock[blockID] = append(ls.workspaceDeletes.byBlock[blockID], entry)
+		added[blockID] = struct{}{}
+	}
 }
 
 func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() []workspaceDeleteEntry {
@@ -1143,6 +1195,7 @@ func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() []workspaceDele
 	ls.workspaceDeletes.initialized = true
 	ls.workspaceDeletes.txnOffset = ls.txnOffset
 	ls.workspaceDeletes.entries = entries
+	ls.workspaceDeletes.byBlock = nil
 	return entries
 }
 

@@ -224,12 +224,14 @@ func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testi
 
 	oid := types.NewObjectid()
 	blk := types.NewBlockidWithObjectID(&oid, 1)
+	blk2 := types.NewBlockidWithObjectID(&oid, 2)
+	blk3 := types.NewBlockidWithObjectID(&oid, 3)
 	rows1 := []types.Rowid{
 		types.NewRowid(&blk, 3),
 		types.NewRowid(&blk, 1),
 	}
 	rows2 := []types.Rowid{
-		types.NewRowid(&blk, 2),
+		types.NewRowid(&blk2, 2),
 	}
 
 	m := mpool.MustNewZero()
@@ -290,6 +292,16 @@ func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testi
 		require.True(t, entry.sorted)
 		require.True(t, slices.IsSortedFunc(entry.rowIds, func(a, b types.Rowid) int { return a.Compare(&b) }))
 	}
+	blkEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk)
+	require.Len(t, blkEntries, 1)
+	require.Equal(t, []types.Rowid{types.NewRowid(&blk, 1), types.NewRowid(&blk, 3)}, blkEntries[0].rowIds)
+	blk2Entries := ls.workspaceDeleteEntriesForBlockLocked(&blk2)
+	require.Len(t, blk2Entries, 1)
+	require.Equal(t, rows2, blk2Entries[0].rowIds)
+	require.Empty(t, ls.workspaceDeleteEntriesForBlockLocked(&blk3))
+	require.Equal(t, []int64{4}, ls.applyWorkspaceEntryDeletes(&blk, []int64{1, 3, 4}, nil))
+	require.Equal(t, []int64{4}, ls.applyWorkspaceEntryDeletes(&blk2, []int64{2, 4}, nil))
+	require.Equal(t, []int64{1, 4}, ls.applyWorkspaceEntryDeletes(&blk3, []int64{1, 4}, nil))
 
 	original := vector.MustFixedColNoTypeCheck[types.Rowid](delVec)
 	require.Equal(t, rows1, original)
