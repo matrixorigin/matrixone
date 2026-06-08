@@ -11115,7 +11115,7 @@ func dateTruncCheck(overloads []overload, inputs []types.Type) checkResult {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
 
-	overloadIdx := -1
+	var overloadIdx int
 	targetTypes := []types.Type{inputs[0], inputs[1]}
 	switch inputs[1].Oid {
 	case types.T_datetime:

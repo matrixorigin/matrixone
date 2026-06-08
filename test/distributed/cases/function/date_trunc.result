@@ -77,11 +77,18 @@ d_day
 select date_trunc('hour', cast(null as timestamp)) as ts_null;
 ts_null
 null
+select date_trunc('hour', null) as null_dt;
+null_dt
+null
 select date_trunc(null, cast('2024-05-16 12:34:56.123456' as datetime)) as unit_null_dt;
 unit_null_dt
 null
 select date_trunc('hour', cast('2024-05-16' as date));
 invalid input: unsupported unit 'hour' for date_trunc on DATE type
+select date_trunc('minute', cast('2024-05-16' as date));
+invalid input: unsupported unit 'minute' for date_trunc on DATE type
+select date_trunc('second', cast('2024-05-16' as date));
+invalid input: unsupported unit 'second' for date_trunc on DATE type
 select date_trunc('bogus', cast('2024-05-16 12:34:56' as datetime));
 invalid input: unsupported unit 'bogus' for date_trunc
 select date_trunc('bogus', cast('2024-05-16 12:34:56' as timestamp));
