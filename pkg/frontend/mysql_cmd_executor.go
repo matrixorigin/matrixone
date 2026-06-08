@@ -999,6 +999,13 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 
 	var err error
 	useGlobal := sv.Global
+	if useGlobal {
+		bh := ses.GetBackgroundExec(execCtx.reqCtx)
+		defer bh.Close()
+		if err = ses.refreshGlobalSysVars(execCtx.reqCtx, bh); err != nil {
+			return err
+		}
+	}
 
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -3558,7 +3565,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}
 		// Inject rewrite rules hint before building UserInput (only if enabled)
 		if ses.rewriteEnabled.Load() {
-			query, _ = rewriteSQL(execCtx.reqCtx, ses, query)
+			var rewriteErr error
+			query, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, query)
+			if rewriteErr != nil {
+				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
+				return resp, nil
+			}
 		}
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
 		input := &UserInput{sql: query}
@@ -3601,7 +3613,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		// Inject rewrite rules hint before prepare wrapping (only if enabled)
 		if ses.rewriteEnabled.Load() {
-			sql, _ = rewriteSQL(execCtx.reqCtx, ses, sql)
+			var rewriteErr error
+			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
+			if rewriteErr != nil {
+				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
+				return resp, nil
+			}
 		}
 		ses.addSqlCount(1)
 
