@@ -12,17 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package bootstrap
+package v3_0_3
 
 import (
-	"testing"
-
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 )
 
-func TestInitUpgradeTracksLatest3_0Version(t *testing.T) {
-	s := &service{}
-	s.initUpgrade()
-
-	require.Equal(t, "3.0.3", s.GetFinalVersion())
-}
+// No cluster-level upgrades for v3.0.3.
+var clusterUpgEntries = []versions.UpgradeEntry{}

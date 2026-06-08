@@ -60,6 +60,26 @@ func (expr AggFuncExecExpression) GetArgExpressions() []*plan.Expr {
 	return expr.argExpressions
 }
 
+func (expr *AggFuncExecExpression) RewriteArgExpressions(rewrite func(*plan.Expr) (*plan.Expr, bool, error)) (bool, error) {
+	folded := false
+	args := make([]*plan.Expr, len(expr.argExpressions))
+	copy(args, expr.argExpressions)
+	for i := range args {
+		arg, argFolded, err := rewrite(args[i])
+		if err != nil {
+			return false, err
+		}
+		if argFolded {
+			args[i] = arg
+			folded = true
+		}
+	}
+	if folded {
+		expr.argExpressions = args
+	}
+	return folded, nil
+}
+
 func (expr AggFuncExecExpression) GetExtraConfig() []byte {
 	return expr.extraConfig
 }

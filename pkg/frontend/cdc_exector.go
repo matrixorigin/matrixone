@@ -472,12 +472,24 @@ func (exec *CDCTaskExecutor) Restart() error {
 
 // Pause cdc task
 func (exec *CDCTaskExecutor) Pause() error {
+	state := exec.stateMachine.State()
+	if state == StatePaused {
+		logutil.Info(
+			"cdc.frontend.task.pause_skip_already_paused",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("task-name", exec.spec.TaskName),
+		)
+		return nil
+	}
+
 	// Check if running before state transition
-	wasRunning := exec.stateMachine.IsRunning()
+	wasRunning := state == StateRunning || state == StateStarting
 
 	// Transition to Pausing state
-	if err := exec.stateMachine.Transition(TransitionPause); err != nil {
-		return moerr.NewInternalErrorf(context.Background(), "cannot pause: %v", err)
+	if state != StatePausing {
+		if err := exec.stateMachine.Transition(TransitionPause); err != nil {
+			return moerr.NewInternalErrorf(context.Background(), "cannot pause: %v", err)
+		}
 	}
 
 	// FIX: Mark task as paused ASAP to maximize blocking window
@@ -500,31 +512,6 @@ func (exec *CDCTaskExecutor) Pause() error {
 		zap.String("state", exec.stateMachine.State().String()),
 		zap.Bool("was-running", wasRunning),
 	)
-	defer func() {
-		pauseDuration := time.Since(pauseStartTime)
-		// Transition to Paused state
-		if err := exec.stateMachine.Transition(TransitionPauseComplete); err != nil {
-			logutil.Warn(
-				"cdc.frontend.task.transition_paused_failed",
-				zap.Error(err),
-			)
-		}
-
-		// Metrics: task paused
-		if wasRunning {
-			v2.CdcTaskTotalGauge.WithLabelValues("running").Dec()
-			v2.CdcTaskTotalGauge.WithLabelValues("paused").Inc()
-			v2.CdcTaskStateChangeCounter.WithLabelValues("running", "paused").Inc()
-		}
-
-		logutil.Info(
-			"cdc.frontend.task.pause_success",
-			zap.String("task-id", exec.spec.TaskId),
-			zap.String("task-name", exec.spec.TaskName),
-			zap.String("state", exec.stateMachine.State().String()),
-			zap.Duration("pause-duration", pauseDuration),
-		)
-	}()
 
 	if wasRunning {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
@@ -537,47 +524,63 @@ func (exec *CDCTaskExecutor) Pause() error {
 		// Note: task was marked as paused earlier (before ClosePause) to maximize blocking window
 		// This may cause some watermark updates during stopAllReaders to be blocked,
 		// leading to minor data duplication on resume, but prevents data loss
-
-		// FIX: Force flush watermarks with timeout
-		// This ensures all legitimate watermarks (from commits completed before pause)
-		// are persisted to database before marking pause as complete
-		// Without this, watermarks in cacheUncommitted would be lost, causing data duplication on resume
-		if exec.watermarkUpdater != nil {
-			flushCtx, cancel := context.WithTimeout(
-				defines.AttachAccountId(context.Background(), uint32(exec.spec.Accounts[0].GetId())),
-				30*time.Second, // 30s timeout to prevent hanging
-			)
-			defer cancel()
-
-			if err := exec.watermarkUpdater.ForceFlush(flushCtx); err != nil {
-				logutil.Error(
-					"cdc.frontend.task.pause_force_flush_failed",
-					zap.String("task-id", exec.spec.TaskId),
-					zap.Error(err),
-				)
-				// Return error to ensure data consistency
-				// Pause failure is acceptable, data inconsistency is not
-				return moerr.NewInternalErrorf(context.Background(),
-					"pause failed: unable to flush watermarks: %v", err)
-			}
-
-			logutil.Info(
-				"cdc.frontend.task.pause_watermark_flushed",
-				zap.String("task-id", exec.spec.TaskId),
-			)
-		}
-
-		// Log watermark states after all readers stopped and watermarks flushed
-		exec.logCurrentWatermarks("after_pause")
-
-		// let Start() go
-		select {
-		case exec.holdCh <- 1:
-			// Signal sent successfully
-		default:
-			// Channel full or Start() already exited, ignore
-		}
 	}
+
+	// FIX: Force flush watermarks with timeout
+	// This ensures all legitimate watermarks (from commits completed before pause)
+	// are persisted to database before marking pause as complete
+	// Without this, watermarks in cacheUncommitted would be lost, causing data duplication on resume
+	if exec.watermarkUpdater != nil {
+		flushCtx, cancel := context.WithTimeout(
+			defines.AttachAccountId(context.Background(), uint32(exec.spec.Accounts[0].GetId())),
+			30*time.Second, // 30s timeout to prevent hanging
+		)
+		defer cancel()
+
+		if err := exec.watermarkUpdater.ForceFlush(flushCtx); err != nil {
+			logutil.Error(
+				"cdc.frontend.task.pause_force_flush_failed",
+				zap.String("task-id", exec.spec.TaskId),
+				zap.Error(err),
+			)
+			// Return error to ensure data consistency
+			// Pause failure is acceptable, data inconsistency is not
+			return moerr.NewInternalErrorf(context.Background(),
+				"pause failed: unable to flush watermarks: %v", err)
+		}
+
+		logutil.Info(
+			"cdc.frontend.task.pause_watermark_flushed",
+			zap.String("task-id", exec.spec.TaskId),
+		)
+	}
+
+	// Log watermark states after all readers stopped and watermarks flushed
+	exec.logCurrentWatermarks("after_pause")
+	// let Start() go after the critical pause work has completed successfully
+	select {
+	case exec.holdCh <- 1:
+		// Signal sent successfully
+	default:
+		// Channel full or Start() already exited, ignore
+	}
+	if err := exec.stateMachine.Transition(TransitionPauseComplete); err != nil {
+		return moerr.NewInternalErrorf(context.Background(), "cannot complete pause: %v", err)
+	}
+
+	if wasRunning {
+		v2.CdcTaskTotalGauge.WithLabelValues("running").Dec()
+		v2.CdcTaskTotalGauge.WithLabelValues("paused").Inc()
+		v2.CdcTaskStateChangeCounter.WithLabelValues("running", "paused").Inc()
+	}
+
+	logutil.Info(
+		"cdc.frontend.task.pause_success",
+		zap.String("task-id", exec.spec.TaskId),
+		zap.String("task-name", exec.spec.TaskName),
+		zap.String("state", exec.stateMachine.State().String()),
+		zap.Duration("pause-duration", time.Since(pauseStartTime)),
+	)
 	return nil
 }
 
@@ -813,6 +816,72 @@ func (exec *CDCTaskExecutor) updateErrMsg(ctx context.Context, errMsg string) (e
 		sql,
 		ie.SessionOverrideOptions{},
 	)
+}
+
+func CDCPauseTaskCompleteHook(sqlExecutorFactory func() ie.InternalExecutor) taskservice.PauseTaskCompletedHook {
+	return func(_ context.Context, daemonTask task.DaemonTask) error {
+		if daemonTask.Details == nil {
+			return nil
+		}
+		details, ok := daemonTask.Details.Details.(*task.Details_CreateCdc)
+		if !ok || details.CreateCdc == nil {
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+		defer cancel()
+		return updateCDCTaskState(
+			ctx,
+			sqlExecutorFactory,
+			details.CreateCdc,
+			cdc.CDCState_Paused,
+		)
+	}
+}
+
+func updateCDCTaskState(
+	ctx context.Context,
+	sqlExecutorFactory func() ie.InternalExecutor,
+	spec *task.CreateCdcDetails,
+	state string,
+) error {
+	if sqlExecutorFactory == nil || spec == nil || len(spec.Accounts) == 0 {
+		logutil.Warn(
+			"cdc.frontend.task.update_state.skipped",
+			zap.String("state", state),
+		)
+		return nil
+	}
+	sqlExecutor := sqlExecutorFactory()
+	if sqlExecutor == nil {
+		logutil.Warn(
+			"cdc.frontend.task.update_state.skipped",
+			zap.String("state", state),
+		)
+		return nil
+	}
+	accountID := uint64(spec.Accounts[0].GetId())
+	sql := cdc.CDCSQLBuilder.UpdateTaskStateByTaskIdAndStateSQL(
+		accountID,
+		spec.TaskId,
+		state,
+		cdc.CDCState_Pausing,
+	)
+	if err := sqlExecutor.Exec(
+		defines.AttachAccountId(ctx, catalog.System_Account),
+		sql,
+		ie.SessionOverrideOptions{},
+	); err != nil {
+		logutil.Error(
+			"cdc.frontend.task.update_state.failed",
+			zap.String("task-id", spec.TaskId),
+			zap.String("task-name", spec.TaskName),
+			zap.Uint64("account-id", accountID),
+			zap.String("state", state),
+			zap.Error(err),
+		)
+		return err
+	}
+	return nil
 }
 
 // clearAllTableErrors clears error messages for all tables in this task
