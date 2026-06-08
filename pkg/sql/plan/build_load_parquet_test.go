@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -24,7 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,6 +38,15 @@ type parquetLoadTestCtx struct {
 
 func (c parquetLoadTestCtx) GetContext() context.Context {
 	return c.ctx
+}
+
+type externalStatsTestCtx struct {
+	*MockCompilerContext
+	proc *process.Process
+}
+
+func (c externalStatsTestCtx) GetProcess() *process.Process {
+	return c.proc
 }
 
 func TestValidateLoadParquetOptionsRejectsUnsupportedOptions(t *testing.T) {
@@ -603,6 +615,54 @@ func TestReadExternalFirstLineSizeUsesSmallFileWithoutTrailingNewline(t *testing
 	}, int64(len(data)), 0, ctx)
 
 	require.Equal(t, len(data), size)
+}
+
+func TestGetExternalStatsUsesKnownFileSizeForSmallFile(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	filePath := "etl:/small.csv"
+	data := "abcd"
+	require.NoError(t, proc.GetFileService().Write(ctx, fileservice.IOVector{
+		FilePath: filePath,
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   int64(len(data)),
+			Data:   []byte(data),
+		}},
+	}))
+
+	builder := NewQueryBuilder(pbplan.Query_SELECT, externalStatsTestCtx{
+		MockCompilerContext: &MockCompilerContext{ctx: ctx},
+		proc:                proc,
+	}, false, false)
+	node := &pbplan.Node{
+		NodeType: pbplan.Node_EXTERNAL_SCAN,
+		ExternScan: &pbplan.ExternScan{
+			Type: int32(pbplan.ExternType_EXTERNAL_TB),
+		},
+		TableDef: &pbplan.TableDef{
+			Createsql: mustMarshalExternParam(t, &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{
+					Option: []string{
+						"filepath", filePath,
+						"format", tree.CSV,
+					},
+				},
+			}),
+		},
+	}
+
+	stats := getExternalStats(node, builder)
+
+	require.Equal(t, float64(len(data)), stats.Rowsize)
+	require.Equal(t, float64(1), stats.Outcnt)
+}
+
+func mustMarshalExternParam(t *testing.T, param *tree.ExternParam) string {
+	t.Helper()
+	data, err := json.Marshal(param)
+	require.NoError(t, err)
+	return string(data)
 }
 
 func requireLoadByteHint(t *testing.T, stats *Stats, inputSize int64) {
