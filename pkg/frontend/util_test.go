@@ -1303,6 +1303,88 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 	}
 }
 
+func Test_convertRowsIntoBatchDecimal(t *testing.T) {
+	cases := []struct {
+		name      string
+		mysqlType defines.MysqlType
+		width     int32
+		scale     int32
+		value     any
+		oid       types.T
+		want      string
+	}{
+		{
+			name:      "decimal64 string",
+			mysqlType: defines.MYSQL_TYPE_DECIMAL,
+			width:     10,
+			scale:     2,
+			value:     "15.00",
+			oid:       types.T_decimal64,
+			want:      "15.00",
+		},
+		{
+			name:      "newdecimal decimal128 bytes",
+			mysqlType: defines.MYSQL_TYPE_NEWDECIMAL,
+			width:     20,
+			scale:     3,
+			value:     []byte("12345678901234567.125"),
+			oid:       types.T_decimal128,
+			want:      "12345678901234567.125",
+		},
+		{
+			name:      "decimal256 string",
+			mysqlType: defines.MYSQL_TYPE_DECIMAL,
+			width:     50,
+			scale:     4,
+			value:     "1234567890123456789012345678901234567890.1234",
+			oid:       types.T_decimal256,
+			want:      "1234567890123456789012345678901234567890.1234",
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			mrs := &MysqlResultSet{}
+			col := new(MysqlColumn)
+			col.SetName("d")
+			col.SetColumnType(tt.mysqlType)
+			col.SetLength(uint32(tt.width + 2))
+			col.SetDecimal(tt.scale)
+			mrs.AddColumn(col)
+			mrs.AddRow([]any{tt.value})
+
+			pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+			require.NoError(t, err)
+			data, pColDefs, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+			require.NoError(t, err)
+			require.NotNil(t, data)
+			defer data.Clean(pool)
+
+			require.Len(t, pColDefs.ResultCols, 1)
+			require.Equal(t, int32(tt.oid), pColDefs.ResultCols[0].Typ.Id)
+			require.Equal(t, tt.width, pColDefs.ResultCols[0].Typ.Width)
+			require.Equal(t, tt.scale, pColDefs.ResultCols[0].Typ.Scale)
+			require.Equal(t, tt.oid, data.Vecs[0].GetType().Oid)
+			require.Equal(t, tt.width, data.Vecs[0].GetType().Width)
+			require.Equal(t, tt.scale, data.Vecs[0].GetType().Scale)
+
+			switch tt.oid {
+			case types.T_decimal64:
+				got := vector.GetFixedAtNoTypeCheck[types.Decimal64](data.Vecs[0], 0)
+				require.Equal(t, tt.want, got.Format(tt.scale))
+			case types.T_decimal128:
+				got := vector.GetFixedAtNoTypeCheck[types.Decimal128](data.Vecs[0], 0)
+				require.Equal(t, tt.want, got.Format(tt.scale))
+			case types.T_decimal256:
+				got := vector.GetFixedAtNoTypeCheck[types.Decimal256](data.Vecs[0], 0)
+				require.Equal(t, tt.want, got.Format(tt.scale))
+			default:
+				t.Fatalf("unexpected decimal type %s", tt.oid)
+			}
+		})
+	}
+}
+
 func Test_convertRowsIntoBatchError(t *testing.T) {
 	colMysqlTyps := []defines.MysqlType{
 		defines.MYSQL_TYPE_TIMESTAMP,

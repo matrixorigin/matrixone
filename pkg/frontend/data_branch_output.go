@@ -590,7 +590,7 @@ func buildOutputSchema(
 
 		for _, idx := range displayIdxes {
 			nCol := new(MysqlColumn)
-			if err = convertEngineTypeToMysqlType(ctx, tblStuff.def.colTypes[idx].Oid, nCol); err != nil {
+			if err = setMysqlColumnTypeInfo(ctx, tblStuff.def.colTypes[idx], nCol); err != nil {
 				return
 			}
 
