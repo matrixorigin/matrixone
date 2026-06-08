@@ -34,19 +34,17 @@ select @@global.lower_case_table_names;
 @@lower_case_table_names
 0
 set global interactive_timeout = 20;
-internal error: the system variable is read only
 show global variables like 'interactive_timeout';
 Variable_name    Value
-interactive_timeout    86400
+interactive_timeout    20
 set global net_write_timeout = 10;
 show global variables like 'net_write_timeout';
 Variable_name    Value
 net_write_timeout    10
 set global wait_timeout = 60;
-internal error: the system variable is read only
 show global variables like 'wait_timeout';
 Variable_name    Value
-wait_timeout    86400
+wait_timeout    60
 set global sql_select_limit = 20;
 show global variables like 'sql_select_limit';
 Variable_name    Value

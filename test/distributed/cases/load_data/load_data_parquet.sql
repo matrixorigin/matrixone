@@ -8,6 +8,28 @@ create table t1(id bigint,name varchar);
 load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table t1;
 select * from t1;
 
+create table pq_parallel_guard(id bigint, name varchar);
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_parallel_guard parallel 'true';
+select count(*) from pq_parallel_guard;
+drop table pq_parallel_guard;
+
+create table pq_option_reject(id bigint, name varchar);
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet', 'compression'='gzip'} into table pq_option_reject;
+load data infile {'filepath'='$resources/load_data/simple.parq', 'jsondata'='object', 'format'='parquet'} into table pq_option_reject;
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet', 'jsondata'='object'} into table pq_option_reject;
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet', 'hive_partitioning'='true'} into table pq_option_reject;
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_option_reject fields terminated by ',';
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_option_reject lines terminated by '\n';
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_option_reject ignore 1 lines;
+load data local infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_option_reject;
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_option_reject (id, @name);
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_option_reject set name=nullif(name,'x');
+drop table pq_option_reject;
+
+create table pq_column_error(missing_col int);
+load data infile {'filepath'='$resources/parquet/supported_types.parquet', 'format'='parquet'} into table pq_column_error;
+drop table pq_column_error;
+
 create table t2(id bigint not null, name varchar not null, sex bool, f32 float(5,2));
 load data infile {'filepath'='$resources/load_data/simple2.parq', 'format'='parquet'} into table t2;
 select * from t2;
@@ -153,6 +175,17 @@ CREATE TABLE brotli_compression (
 load data infile {'filepath'='$resources/parquet/test_brotli.parquet', 'format'='parquet'} into table brotli_compression;
 select 'NONE' as codec, count(*), sum(value) from brotli_compression;
 
+drop table if exists pq_multi_file_pattern;
+CREATE TABLE pq_multi_file_pattern (
+    id BIGINT,
+    name VARCHAR(100),
+    value DOUBLE,
+    status BOOL
+);
+load data infile {'filepath'='$resources/parquet/test_[bgnslz]*.parquet', 'format'='parquet'} into table pq_multi_file_pattern parallel 'true';
+select count(*), cast(round(sum(value), 2) as decimal(10,2)) as total_value, min(id), max(id) from pq_multi_file_pattern;
+drop table pq_multi_file_pattern;
+
 -- v1
 drop table if exists pq_version_compare;
 CREATE TABLE `pq_version_compare` (
@@ -249,6 +282,12 @@ load data infile {'filepath'='$resources/parquet/supported_types.parquet', 'form
 select int32_col,int64_col,uint32_col,float32_col,float64_col,string_col,bool_col,date_col,time_col from pq_supported_types;
 select count(*) from pq_supported_types;
 
+drop table if exists pq_extra_parquet_columns;
+create table pq_extra_parquet_columns(int32_col int);
+load data infile {'filepath'='$resources/parquet/supported_types.parquet', 'format'='parquet'} into table pq_extra_parquet_columns;
+select count(*), min(int32_col), max(int32_col) from pq_extra_parquet_columns;
+drop table pq_extra_parquet_columns;
+
 -- new types
 drop table if exists pq_new_types;
 create table pq_new_types (
@@ -329,6 +368,38 @@ drop table if exists pq_date32_datetime;
 create table pq_date32_datetime(date_col datetime, value int);
 load data infile {'filepath'='$resources/load_data/date32_datetime.parq', 'format'='parquet'} into table pq_date32_datetime;
 select * from pq_date32_datetime;
+
+-- rollback: multi-file pattern with one bad schema file must not leave partial rows.
+-- The fixture is below LoadParallelMinSize, so CI validates rollback semantics;
+-- compile fanout branches are covered by Go tests and perf probes.
+drop table if exists pq_file_fanout_rollback;
+create table pq_file_fanout_rollback(id bigint, name varchar(100), value double, status bool);
+insert into pq_file_fanout_rollback values(-1, 'seed', 0.0, false);
+load data infile {'filepath'='$resources/parquet/test_*.parquet', 'format'='parquet'} into table pq_file_fanout_rollback parallel 'true';
+select count(*), min(id), max(id), cast(round(sum(value), 2) as decimal(10,2)) from pq_file_fanout_rollback;
+drop table pq_file_fanout_rollback;
+
+-- rollback: NOT NULL violation must not leave partial rows
+drop table if exists pq_not_null_rollback;
+create table pq_not_null_rollback(
+  id bigint not null primary key,
+  col_nullable_with_null double not null,
+  col_nullable_no_null varchar(10),
+  col_not_nullable bigint not null,
+  col_all_null double
+);
+insert into pq_not_null_rollback values(-1, 0.0, 'seed', 0, null);
+load data infile {'filepath'='$resources/parquet/nullable_test.parquet', 'format'='parquet'} into table pq_not_null_rollback parallel 'true';
+select count(*), min(id), max(id), sum(col_nullable_with_null) from pq_not_null_rollback;
+drop table pq_not_null_rollback;
+
+-- rollback: type conversion failure must not leave partial rows
+drop table if exists pq_type_error_rollback;
+create table pq_type_error_rollback(test_case varchar(50) not null, value int not null);
+insert into pq_type_error_rollback values('seed', 0);
+load data infile {'filepath'='$resources/load_data/string_to_int_invalid.parq', 'format'='parquet'} into table pq_type_error_rollback parallel 'true';
+select count(*), min(test_case), max(test_case), sum(value) from pq_type_error_rollback;
+drop table pq_type_error_rollback;
 
 -- post
 drop database parq;

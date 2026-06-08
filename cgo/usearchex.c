@@ -18,60 +18,52 @@
 #include <stdio.h>
 #include <stdint.h>
 
-typedef struct bitmap_int_t {
-    uint64_t *bitmap;
-    size_t len;
-} bitmap_int_t;
+// Per-candidate membership predicate. `data` is a membership_filter_t carrying
+// the docfilter C handle + its kind; each usearch key (a uint64) is tested
+// against the structure matching that kind. A NULL handle keeps every key.
+typedef struct membership_filter_t {
+    void *filter;
+    int kind;
+} membership_filter_t;
 
-static int filtered_search_bf_cb(usearch_key_t key, void *data) {
-    bloomfilter_t *bf = (bloomfilter_t*) data;
-    if (bf) {
-        return bloomfilter_test(bf, (const char *)&key, sizeof(usearch_key_t));
+static int filtered_search_membership_cb(usearch_key_t key, void *data) {
+    membership_filter_t *mf = (membership_filter_t *)data;
+    if (!mf || !mf->filter) {
+        return 1; // no filter -> keep all
     }
-    return 1;
+    switch (mf->kind) {
+        case USEARCHEX_FILTER_BLOOM:
+            return bloomfilter_test((bloomfilter_t *)mf->filter,
+                                    (const char *)&key, sizeof(usearch_key_t));
+        case USEARCHEX_FILTER_CBITMAP:
+            return mo_cbitmap_contain(mf->filter, (uint64_t)key) ? 1 : 0;
+        case USEARCHEX_FILTER_CROARING:
+            return mo_croaring_contains(mf->filter, (uint64_t)key) ? 1 : 0;
+        default:
+            // Unknown kind: fail CLOSED (exclude). Keeping the candidate here
+            // would silently disable filtering for the whole search. The Go
+            // caller also validates the kind before entering this path, so this
+            // is defense in depth.
+            return 0;
+    }
 }
 
-size_t usearchex_filtered_search_with_bloomfilter(
+size_t usearchex_filtered_search_with_membership(
     usearch_index_t index,
     void const* query_vector, usearch_scalar_kind_t query_kind, size_t count,
-    void *bf,
+    void *filter, int filter_kind,
     usearch_key_t* keys, usearch_distance_t* distances, usearch_error_t* error) {
 
-    return usearch_filtered_search((usearch_index_t)index, 
-            query_vector, 
-            (usearch_scalar_kind_t)query_kind, 
-            count, 
-            filtered_search_bf_cb, 
-            bf, 
-            keys, 
-            distances, 
-            error);
-}
-
-static int filtered_search_bitmap_cb(usearch_key_t key, void *data) {
-    bitmap_int_t *bm = (bitmap_int_t*) data;
-    if (bm) {
-        return bitmap_test_with_len(bm->bitmap, bm->len, key);
-    }
-    return 1;
-}
-
-size_t usearchex_filtered_search_with_bitmap(
-    usearch_index_t index,
-    void const* query_vector, usearch_scalar_kind_t query_kind, size_t count,
-    uint64_t *bitmap, size_t bmlen,
-    usearch_key_t* keys, usearch_distance_t* distances, usearch_error_t* error) {
-
-    bitmap_int_t bm;
-    bm.bitmap = bitmap;
-    bm.len = bmlen;
+    membership_filter_t mf;
+    mf.filter = filter;
+    mf.kind = filter_kind;
 
     return usearch_filtered_search((usearch_index_t)index,
             query_vector,
             (usearch_scalar_kind_t)query_kind,
             count,
-            filtered_search_bitmap_cb,
-            &bm,
+            filtered_search_membership_cb,
+            &mf,
             keys,
             distances,
             error);

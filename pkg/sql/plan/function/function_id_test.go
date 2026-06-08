@@ -516,12 +516,13 @@ var predefinedFunids = map[int]int{
 	JSON_SCHEMA_VALID:             460,
 	JSON_SCHEMA_VALID_REPORT:      461,
 	JSON_VALUE:                    462,
-	IS_UUID:                       463,
-	UUID_TO_BIN:                   464,
-	BIN_TO_UUID:                   465,
+	CAST_JSON_TO_ARRAY:            463,
+	IS_UUID:                       464,
+	UUID_TO_BIN:                   465,
+	BIN_TO_UUID:                   466,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 466,
+	FUNCTION_END_NUMBER: 467,
 }
 
 func Test_funids(t *testing.T) {

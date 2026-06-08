@@ -637,7 +637,7 @@ func TestFullTextCallWithLimitUsesSingleKeywordTopK(t *testing.T) {
 	requireStateFreeReturns(t, ut.arg.ctr.state, ut.arg, ut.proc)
 }
 
-func TestFullTextCallWithLimitPropagatesBloomFilterToFastPathSQL(t *testing.T) {
+func TestFullTextCallWithLimitPropagatesMembershipFilterToFastPathSQL(t *testing.T) {
 	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF, uint64(2))
 
 	inbat := makeBatchFT(ut.proc)
@@ -651,8 +651,8 @@ func TestFullTextCallWithLimitPropagatesBloomFilterToFastPathSQL(t *testing.T) {
 	}
 
 	st := ut.arg.ctr.state.(*fulltextState)
-	wantBloomFilter := []byte("fulltext-filter")
-	st.fulltextBloomFilter = append([]byte(nil), wantBloomFilter...)
+	wantMembershipFilter := []byte("fulltext-filter")
+	st.fulltextMembershipFilter = append([]byte(nil), wantMembershipFilter...)
 
 	prevRunSQL := ft_runSql
 	prevRunStreaming := ft_runSql_streaming
@@ -667,7 +667,7 @@ func TestFullTextCallWithLimitPropagatesBloomFilterToFastPathSQL(t *testing.T) {
 		case strings.Contains(sql, "COUNT(*) from index_table where word = '__DocLen'"):
 			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(sqlproc.Proc)}}, nil
 		case strings.Contains(sql, "COUNT(*) OVER() AS nmatch") && strings.Contains(sql, "ORDER BY tf DESC LIMIT 2"):
-			topKBF = append([]byte(nil), sqlproc.FulltextBloomFilter...)
+			topKBF = append([]byte(nil), sqlproc.FulltextMembershipFilter...)
 			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeTopKBatchFT(sqlproc.Proc)}}, nil
 		default:
 			return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
@@ -685,7 +685,7 @@ func TestFullTextCallWithLimitPropagatesBloomFilterToFastPathSQL(t *testing.T) {
 
 	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
 	require.NoError(t, err)
-	require.Equal(t, wantBloomFilter, topKBF)
+	require.Equal(t, wantMembershipFilter, topKBF)
 
 	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
 	require.NoError(t, err)
