@@ -51,33 +51,34 @@ func Test_GetUncommittedS3Tombstone(t *testing.T) {
 	}
 
 	txn := &Transaction{
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
+		writes: make([]Entry, 0, len(statsList)+1),
 	}
+	txn.writes = append(txn.writes, Entry{typ: INSERT, databaseId: 11, tableId: 22})
 
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[0], nil)
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[1], nil)
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[2], nil)
+	proc := testutil.NewProc(t)
+	for i := range statsList {
+		txn.writes = append(txn.writes, makeS3DeleteEntryForTest(statsList[i], 11, 22, proc.Mp()))
+	}
 
 	objectSlice := objectio.ObjectStatsSlice{}
 
-	require.NoError(t, txn.getUncommittedS3Tombstone(func(stats *objectio.ObjectStats) {
+	require.NoError(t, txn.getUncommittedS3Tombstone(11, 22, 3, false, func(stats *objectio.ObjectStats) {
 		objectSlice.Append(stats[:])
 	}))
-	require.Equal(t, len(statsList), objectSlice.Len())
+	require.Equal(t, 2, objectSlice.Len())
 
-	txn.cn_flushed_s3_tombstone_object_stats_list.Range(func(key, value any) bool {
-		ss := key.(objectio.ObjectStats)
+	for i := 0; i < 2; i++ {
+		ss := statsList[i]
 		found := false
-		for i := range objectSlice.Len() {
-			if bytes.Equal(ss[:], objectSlice.Get(i)[:]) {
+		for j := 0; j < objectSlice.Len(); j++ {
+			if bytes.Equal(ss[:], objectSlice.Get(j)[:]) {
 				found = true
 				break
 			}
 		}
 
 		require.True(t, found)
-		return true
-	})
+	}
 }
 
 func Test_BatchAllocNewRowIds(t *testing.T) {

@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
@@ -85,16 +85,16 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
 	defer closeFunc()
 
-	txnOp.AddWorkspace(&Transaction{
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
-	})
+	txnOp.AddWorkspace(&Transaction{})
 
 	txnDB := txnDatabase{
-		op: txnOp,
+		databaseId: 11,
+		op:         txnOp,
 	}
 
 	txnTbl := txnTable{
-		db: &txnDB,
+		db:      &txnDB,
+		tableId: 22,
 	}
 
 	pState := logtailreplay.NewPartitionState("", true, 0, false)
@@ -140,9 +140,10 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		require.Equal(t, 1, len(ss))
 		require.False(t, ss[0].IsZero())
 
-		//stats = append(stats, ss)
-		txnOp.GetWorkspace().(*Transaction).StashFlushedTombstones(ss[0])
+		txn := txnOp.GetWorkspace().(*Transaction)
+		txn.writes = append(txn.writes, makeS3DeleteEntryForTest(ss[0], 11, 22, proc.Mp()))
 	}
+	ls.txnOffset = len(txnOp.GetWorkspace().(*Transaction).writes)
 
 	deletedMask := objectio.GetReusableBitmap()
 	defer deletedMask.Release()
@@ -153,6 +154,113 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		require.Zero(t, len(left))
 
 		require.True(t, deletedMask.Contains(uint64(tombstoneRowIds[i].GetRowOffset())))
+	}
+}
+
+func TestLocalDatasource_ApplyWorkspaceFlushedS3DeletesHonorsTxnOffset(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+
+	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
+	defer closeFunc()
+
+	txn := &Transaction{}
+	txnOp.AddWorkspace(txn)
+
+	txnDB := txnDatabase{
+		databaseId: 11,
+		op:         txnOp,
+	}
+
+	txnTbl := txnTable{
+		db:      &txnDB,
+		tableId: 22,
+	}
+
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	visibleRow, visibleStats := writeS3TombstoneForTest(t, ctx, proc, fs, int32(1))
+	invisibleRow, invisibleStats := writeS3TombstoneForTest(t, ctx, proc, fs, int32(2))
+
+	txn.writes = append(txn.writes, makeS3DeleteEntryForTest(visibleStats, 11, 22, proc.Mp()))
+	visibleOffset := len(txn.writes)
+
+	txn.writes = append(txn.writes, makeS3DeleteEntryForTest(invisibleStats, 11, 22, proc.Mp()))
+
+	ls := &LocalDisttaeDataSource{
+		fs:        fs,
+		ctx:       ctx,
+		table:     &txnTbl,
+		pState:    logtailreplay.NewPartitionState("", true, 0, false),
+		txnOffset: visibleOffset,
+	}
+
+	visibleMask := objectio.GetReusableBitmap()
+	defer visibleMask.Release()
+	_, err = ls.applyWorkspaceFlushedS3Deletes(visibleRow.BorrowBlockID(), nil, &visibleMask)
+	require.NoError(t, err)
+	require.True(t, visibleMask.Contains(uint64(visibleRow.GetRowOffset())))
+
+	invisibleMask := objectio.GetReusableBitmap()
+	defer invisibleMask.Release()
+	_, err = ls.applyWorkspaceFlushedS3Deletes(invisibleRow.BorrowBlockID(), nil, &invisibleMask)
+	require.NoError(t, err)
+	require.False(t, invisibleMask.Contains(uint64(invisibleRow.GetRowOffset())))
+}
+
+func writeS3TombstoneForTest(
+	t *testing.T,
+	ctx context.Context,
+	proc *process.Process,
+	fs fileservice.FileService,
+	pk int32,
+) (types.Rowid, objectio.ObjectStats) {
+	t.Helper()
+
+	int32Type := types.T_int32.ToType()
+	writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, int32Type, -1)
+	bat := readutil.NewCNTombstoneBatch(
+		&int32Type,
+		objectio.HiddenColumnSelection_None,
+	)
+	defer bat.Clean(proc.Mp())
+
+	row := types.RandomRowid()
+	require.NoError(t, vector.AppendFixed[types.Rowid](bat.Vecs[0], row, false, proc.GetMPool()))
+	require.NoError(t, vector.AppendFixed[int32](bat.Vecs[1], pk, false, proc.GetMPool()))
+	bat.SetRowCount(1)
+
+	require.NoError(t, writer.Write(ctx, bat))
+	ss, err := writer.Sync(proc.Ctx)
+	require.NoError(t, err)
+	require.Len(t, ss, 1)
+	require.False(t, ss[0].IsZero())
+
+	return row, ss[0]
+}
+
+func makeS3DeleteEntryForTest(
+	stats objectio.ObjectStats,
+	databaseId uint64,
+	tableId uint64,
+	mp *mpool.MPool,
+) Entry {
+	bat := batch.NewWithSize(1)
+	bat.SetAttributes([]string{catalog.ObjectMeta_ObjectStats})
+	bat.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+	if err := vector.AppendBytes(bat.Vecs[0], stats.Marshal(), false, mp); err != nil {
+		panic(err)
+	}
+	bat.SetRowCount(1)
+
+	return Entry{
+		typ:        DELETE,
+		databaseId: databaseId,
+		tableId:    tableId,
+		fileName:   stats.ObjectLocation().String(),
+		bat:        bat,
 	}
 }
 
@@ -168,7 +276,6 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	s3Bat.SetRowCount(8193)
 	s3Bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
 	txn := &Transaction{
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 		op:            txnOp,
 		deletedBlocks: &deletedBlocks{},
 		writes: []Entry{

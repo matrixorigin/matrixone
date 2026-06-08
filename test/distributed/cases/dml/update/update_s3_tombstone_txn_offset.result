@@ -1,0 +1,109 @@
+drop database if exists test_update_s3_tombstone_offset;
+create database test_update_s3_tombstone_offset;
+use test_update_s3_tombstone_offset;
+select cast(enable_fault_injection() as int) as ok;
+➤ ok[4,32,0]  𝄀
+1
+select cast(add_fault_point('fj/cn/workspace_force_flush',':::','return',0,'') as int) as ok;
+➤ ok[4,32,0]  𝄀
+1
+create table upd_txn_offset_src(
+id int primary key,
+bic_zsys_id varchar(8),
+rbukrs varchar(8),
+prctr varchar(8),
+cbukrs varchar(16),
+cbuktx varchar(16),
+cprctr varchar(16),
+cprctx varchar(16)
+);
+create table upd_txn_offset_rc(
+id int primary key,
+bic_zsys_id varchar(8),
+rbukrs varchar(8),
+prctr varchar(8),
+cbukrs varchar(16),
+cbuktx varchar(16),
+cprctr varchar(16),
+cprctx varchar(16)
+);
+create table upd_txn_offset_com(
+sysid varchar(8),
+sbukrs varchar(8),
+cbukrs varchar(16),
+cbuktx varchar(16)
+);
+create table upd_txn_offset_prc(
+sysid varchar(8),
+sprctr varchar(8),
+bukrs varchar(8),
+cprctr varchar(16),
+cprctx varchar(16)
+);
+insert into upd_txn_offset_src
+select
+result,
+if(result % 2 = 0, 'CN1', 'US1'),
+cast(result % 32 as varchar),
+cast(result % 64 as varchar),
+null,
+null,
+null,
+null
+from generate_series(1, 81920) g;
+insert into upd_txn_offset_com
+select
+if(result % 2 = 0, 'CN1', 'US1'),
+cast(result as varchar),
+concat('C', cast(result as varchar)),
+concat('COM', cast(result as varchar))
+from generate_series(0, 31) g;
+insert into upd_txn_offset_prc
+select
+if(result % 2 = 0, 'CN1', 'US1'),
+cast(result as varchar),
+'',
+concat('P', cast(result as varchar)),
+concat('PRC', cast(result as varchar))
+from generate_series(0, 63) g;
+set session optimizer_hints="execType=3";
+begin;
+insert into upd_txn_offset_rc select * from upd_txn_offset_src;
+update upd_txn_offset_rc rc
+left join upd_txn_offset_com com
+on rc.bic_zsys_id = com.sysid
+and rc.rbukrs = com.sbukrs
+set
+rc.cbukrs = com.cbukrs,
+rc.cbuktx = com.cbuktx;
+select count(*) from upd_txn_offset_rc where cbukrs is not null;
+➤ count(*)[-5,64,0]  𝄀
+81920
+update upd_txn_offset_rc rc
+left join upd_txn_offset_prc prc
+on rc.prctr = prc.sprctr
+and rc.bic_zsys_id = prc.sysid
+and (
+case
+when prc.bukrs is null or prc.bukrs = '' then true
+else rc.rbukrs = prc.bukrs
+end
+)
+set
+rc.cprctr = prc.cprctr,
+rc.cprctx = prc.cprctx;
+select count(*) from upd_txn_offset_rc;
+➤ count(*)[-5,64,0]  𝄀
+81920
+select count(*) from upd_txn_offset_rc where cbukrs is not null;
+➤ count(*)[-5,64,0]  𝄀
+81920
+select count(*) from upd_txn_offset_rc where cprctr is not null;
+➤ count(*)[-5,64,0]  𝄀
+81920
+rollback;
+set session optimizer_hints="";
+select cast(disable_fault_injection() as int) as ok;
+➤ ok[4,32,0]  𝄀
+1
+drop database test_update_s3_tombstone_offset;

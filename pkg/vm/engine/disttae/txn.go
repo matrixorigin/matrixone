@@ -1213,14 +1213,6 @@ func (txn *Transaction) WriteFileLocked(
 	txn.readOnly.Store(false)
 	txn.workspaceSize += uint64(copied.Size())
 
-	if typ == DELETE {
-		col, area := vector.MustVarlenaRawData(copied.Vecs[0])
-		for i := range col {
-			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
-			txn.StashFlushedTombstones(stats)
-		}
-	}
-
 	entry := Entry{
 		typ:          typ,
 		accountId:    accountId,
@@ -1278,14 +1270,6 @@ func (txn *Transaction) WriteFileLockedSkipTransfer(
 
 	txn.readOnly.Store(false)
 	txn.workspaceSize += uint64(copied.Size())
-
-	if typ == DELETE {
-		col, area := vector.MustVarlenaRawData(copied.Vecs[0])
-		for i := range col {
-			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
-			txn.StashFlushedTombstones(stats)
-		}
-	}
 
 	entry := Entry{
 		typ:          typ,
@@ -1883,14 +1867,40 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 // TODO::remove it after workspace refactor.
 func (txn *Transaction) getUncommittedS3Tombstone(
+	databaseId uint64,
+	tableId uint64,
+	txnOffset int,
+	workspaceLocked bool,
 	appendTo func(stats *objectio.ObjectStats),
 ) (err error) {
 
-	txn.cn_flushed_s3_tombstone_object_stats_list.Range(func(k, v any) bool {
-		ss := k.(objectio.ObjectStats)
-		appendTo(&ss)
-		return true
-	})
+	if !workspaceLocked {
+		txn.Lock()
+		defer txn.Unlock()
+	}
+
+	if txnOffset > len(txn.writes) {
+		txnOffset = len(txn.writes)
+	}
+
+	for i := 0; i < txnOffset; i++ {
+		entry := txn.writes[i]
+		if entry.databaseId != databaseId || entry.tableId != tableId {
+			continue
+		}
+		if entry.typ != DELETE ||
+			entry.bat == nil ||
+			entry.bat.IsEmpty() ||
+			len(entry.bat.Attrs) == 0 ||
+			entry.bat.Attrs[0] != catalog.ObjectMeta_ObjectStats {
+			continue
+		}
+
+		for j := 0; j < entry.bat.Vecs[0].Length(); j++ {
+			stats := objectio.ObjectStats(entry.bat.Vecs[0].GetBytesAt(j))
+			appendTo(&stats)
+		}
+	}
 
 	return nil
 }
@@ -2186,7 +2196,6 @@ func (txn *Transaction) delTransaction() {
 	txn.tableOps = nil
 	txn.databaseOps = nil
 
-	txn.cn_flushed_s3_tombstone_object_stats_list = nil
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
 	colexec.Get().DeleteTxnSegmentIds(txn.op.Txn().ID)
@@ -2269,7 +2278,6 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		},
 		cnObjsSummary:   map[types.Objectid]Summary{},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 
 		commitWorkspaceThreshold: txn.commitWorkspaceThreshold,
 		writeWorkspaceThreshold:  txn.writeWorkspaceThreshold,

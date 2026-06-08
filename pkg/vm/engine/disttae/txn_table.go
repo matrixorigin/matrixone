@@ -646,6 +646,10 @@ func (tbl *txnTable) CollectTombstones(
 
 		//collect uncommitted persisted tombstones.
 		if err := tbl.getTxn().getUncommittedS3Tombstone(
+			tbl.db.databaseId,
+			tbl.tableId,
+			offset,
+			false,
 			func(stats *objectio.ObjectStats) {
 				tombstone.AppendFiles(*stats)
 			}); err != nil {

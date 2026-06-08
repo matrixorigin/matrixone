@@ -138,6 +138,9 @@ type LocalDisttaeDataSource struct {
 
 	filterZM        objectio.ZoneMap
 	tombstonePolicy engine.TombstoneApplyPolicy
+
+	workspaceS3Tombstones       []objectio.ObjectStats
+	workspaceS3TombstonesLoaded bool
 }
 
 func (ls *LocalDisttaeDataSource) String() string {
@@ -1108,13 +1111,10 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 
 	leftRows = offsets
 
-	s3FlushedDeletes := ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
-
-	var tombstones []objectio.ObjectStats
-	s3FlushedDeletes.Range(func(key, value any) bool {
-		tombstones = append(tombstones, key.(objectio.ObjectStats))
-		return true
-	})
+	tombstones, err := ls.getWorkspaceS3Tombstones()
+	if err != nil {
+		return nil, err
+	}
 
 	if len(tombstones) == 0 {
 		return
@@ -1155,6 +1155,29 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 	})
 
 	return offsets, nil
+}
+
+func (ls *LocalDisttaeDataSource) getWorkspaceS3Tombstones() ([]objectio.ObjectStats, error) {
+	if ls.workspaceS3TombstonesLoaded {
+		return ls.workspaceS3Tombstones, nil
+	}
+
+	var tombstones []objectio.ObjectStats
+	err := ls.table.getTxn().getUncommittedS3Tombstone(
+		ls.table.db.databaseId,
+		ls.table.tableId,
+		ls.txnOffset,
+		ls.rc.WorkspaceLocked,
+		func(stats *objectio.ObjectStats) {
+			tombstones = append(tombstones, *stats)
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	ls.workspaceS3Tombstones = tombstones
+	ls.workspaceS3TombstonesLoaded = true
+	return ls.workspaceS3Tombstones, nil
 }
 
 func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
