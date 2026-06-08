@@ -9264,16 +9264,6 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateTruncTimestamp
 				},
 			},
-			{
-				overloadId: 3,
-				args:       []types.T{types.T_varchar, types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return DateTruncString
-				},
-			},
 		},
 	},
 }

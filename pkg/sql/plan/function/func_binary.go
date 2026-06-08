@@ -11162,43 +11162,12 @@ func DateTruncTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			if err != nil {
 				return err
 			}
-			if err := rs.Append(truncated.ToTimestamp(loc), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// DateTruncString truncates a string datetime value to the specified precision.
-func DateTruncString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
-	rs := vector.MustFunctionResult[types.Varlena](result)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		unit, null1 := p1.GetStrValue(i)
-		val, null2 := p2.GetStrValue(i)
-		if null1 || null2 {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		} else {
-			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(unit))
-			valStr := functionUtil.QuickBytesToStr(val)
-			dt, err := types.ParseDatetime(valStr, 6)
-			if err != nil {
-				if err2 := rs.AppendBytes(nil, true); err2 != nil {
-					return err2
-				}
-				continue
-			}
-			truncated, err := dateTruncCore(unitStr, dt)
-			if err != nil {
-				return err
-			}
-			resultStr := truncated.String2(6)
-			if err := rs.AppendBytes([]byte(resultStr), false); err != nil {
+			if err := rs.Append(
+				types.FromClockZone(loc,
+					int32(truncated.Year()), truncated.Month(), truncated.Day(),
+					uint8(truncated.Hour()), uint8(truncated.Minute()), uint8(truncated.Sec()),
+					uint32(truncated.MicroSec())),
+				false); err != nil {
 				return err
 			}
 		}
