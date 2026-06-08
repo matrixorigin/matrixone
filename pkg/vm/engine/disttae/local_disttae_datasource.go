@@ -138,7 +138,20 @@ type LocalDisttaeDataSource struct {
 
 	filterZM        objectio.ZoneMap
 	tombstonePolicy engine.TombstoneApplyPolicy
+
+	workspaceDeletes struct {
+		initialized bool
+		txnOffset   int
+		entries     []workspaceDeleteEntry
+	}
 }
+
+type workspaceDeleteEntry struct {
+	rowIds []objectio.Rowid
+	sorted bool
+}
+
+const mergeWorkspaceDeleteEntriesThreshold = 1024
 
 func (ls *LocalDisttaeDataSource) String() string {
 	blks := make([]*objectio.BlockInfo, ls.rangeSlice.Len())
@@ -647,11 +660,6 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			break
 		}
 
-		if writes[ls.wsCursor].bat == nil || writes[ls.wsCursor].bat.RowCount() == 0 {
-			ls.wsCursor++
-			continue
-		}
-
 		entry := writes[ls.wsCursor]
 
 		if ok := checkWorkspaceEntryType(ls.table, entry, true); !ok {
@@ -1079,18 +1087,8 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 		defer ls.table.getTxn().Unlock()
 	}
 
-	//done := false
-	writes := ls.table.getTxn().writes[:ls.txnOffset]
-
-	for idx := range writes {
-		if ok := checkWorkspaceEntryType(ls.table, writes[idx], false); !ok {
-			continue
-		}
-
-		sorted := writes[idx].bat.Vecs[0].GetSorted()
-		rowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
-
-		readutil.FastApplyDeletesByRowIds(bid, &leftRows, deletedRows, rowIds, sorted)
+	for _, entry := range ls.workspaceDeleteEntriesLocked() {
+		readutil.FastApplyDeletesByRowIds(bid, &leftRows, deletedRows, entry.rowIds, entry.sorted)
 
 		if leftRows != nil && len(leftRows) == 0 {
 			break
@@ -1098,6 +1096,54 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 	}
 
 	return leftRows
+}
+
+func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() []workspaceDeleteEntry {
+	if ls.workspaceDeletes.initialized && ls.workspaceDeletes.txnOffset == ls.txnOffset {
+		return ls.workspaceDeletes.entries
+	}
+
+	entries := ls.workspaceDeletes.entries[:0]
+	writes := ls.table.getTxn().writes[:ls.txnOffset]
+	for idx := range writes {
+		if ok := checkWorkspaceEntryType(ls.table, writes[idx], false); !ok {
+			continue
+		}
+
+		entryRowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
+		sorted := writes[idx].bat.Vecs[0].GetSorted()
+		if !sorted {
+			if len(entryRowIds) <= 1 {
+				sorted = true
+			} else {
+				entryRowIds = slices.Clone(entryRowIds)
+				slices.SortFunc(entryRowIds, func(a, b objectio.Rowid) int { return a.Compare(&b) })
+				sorted = true
+			}
+		}
+		entries = append(entries, workspaceDeleteEntry{
+			rowIds: entryRowIds,
+			sorted: sorted,
+		})
+	}
+
+	if len(entries) > mergeWorkspaceDeleteEntriesThreshold {
+		var rowIds []objectio.Rowid
+		for _, entry := range entries {
+			rowIds = append(rowIds, entry.rowIds...)
+		}
+		slices.SortFunc(rowIds, func(a, b objectio.Rowid) int { return a.Compare(&b) })
+		entries = entries[:0]
+		entries = append(entries, workspaceDeleteEntry{
+			rowIds: rowIds,
+			sorted: true,
+		})
+	}
+
+	ls.workspaceDeletes.initialized = true
+	ls.workspaceDeletes.txnOffset = ls.txnOffset
+	ls.workspaceDeletes.entries = entries
+	return entries
 }
 
 func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
