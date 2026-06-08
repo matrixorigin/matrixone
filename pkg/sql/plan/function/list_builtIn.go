@@ -47,6 +47,14 @@ func jsonConstructorSupportsType(oid types.T) bool {
 	}
 }
 
+func uuidSwapFlagTypeSupported(typ types.Type) bool {
+	return typ.Oid == types.T_bool ||
+		typ.IsIntOrUint() ||
+		typ.IsFloat() ||
+		typ.IsDecimal() ||
+		typ.Oid.IsMySQLString()
+}
+
 var supportedStringBuiltIns = []FuncNew{
 	// function `ascii`
 	{
@@ -11621,8 +11629,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				castTypes[0] = types.T_varchar.ToType()
 				needCast = true
 			}
-			if len(inputs) == 2 && !inputs[1].Oid.IsInteger() {
-				castTypes[1] = types.T_int64.ToType()
+			if len(inputs) == 2 && !uuidSwapFlagTypeSupported(inputs[1]) {
+				castTypes[1] = types.T_float64.ToType()
 				needCast = true
 			}
 			if needCast {
@@ -11662,8 +11670,8 @@ var supportedOthersBuiltIns = []FuncNew{
 				castTypes[0] = types.T_varbinary.ToType()
 				needCast = true
 			}
-			if len(inputs) == 2 && !inputs[1].Oid.IsInteger() {
-				castTypes[1] = types.T_int64.ToType()
+			if len(inputs) == 2 && !uuidSwapFlagTypeSupported(inputs[1]) {
+				castTypes[1] = types.T_float64.ToType()
 				needCast = true
 			}
 			if needCast {

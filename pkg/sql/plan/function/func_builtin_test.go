@@ -1744,3 +1744,64 @@ func TestBuiltInUUIDSwapFlagIntegerTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestBuiltInUUIDSwapFlagBoolCoercion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	u := "6ccd780c-baba-1026-9564-5b8c656024db"
+	bin := string([]byte{
+		0x6c, 0xcd, 0x78, 0x0c, 0xba, 0xba, 0x10, 0x26,
+		0x95, 0x64, 0x5b, 0x8c, 0x65, 0x60, 0x24, 0xdb,
+	})
+	swapped := string([]byte{
+		0x10, 0x26, 0xba, 0xba, 0x6c, 0xcd, 0x78, 0x0c,
+		0x95, 0x64, 0x5b, 0x8c, 0x65, 0x60, 0x24, 0xdb,
+	})
+	decType := types.New(types.T_decimal64, 10, 1)
+	decimalValues := make([]types.Decimal64, 4)
+	for i, input := range []string{"0.0", "0.4", "-0.4", "1.2"} {
+		v, err := types.ParseDecimal64(input, decType.Width, decType.Scale)
+		require.NoError(t, err)
+		decimalValues[i] = v
+	}
+
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		values any
+	}{
+		{"float64", types.T_float64.ToType(), []float64{0, 0.4, -0.4, 1.2}},
+		{"decimal64", decType, decimalValues},
+	} {
+		t.Run(tc.name+"/uuid_to_bin", func(t *testing.T) {
+			ftc := tcTemp{
+				info: "uuid_to_bin with " + tc.name + " bool-coerced swap flag",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{u, u, u, u}, []bool{false, false, false, false}),
+					NewFunctionTestInput(tc.typ, tc.values, []bool{false, false, false, true}),
+				},
+				expect: NewFunctionTestResult(types.T_varbinary.ToType(), false,
+					[]string{bin, swapped, swapped, ""},
+					[]bool{false, false, false, true}),
+			}
+			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInUUIDToBin)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, ftc.info, info)
+		})
+
+		t.Run(tc.name+"/bin_to_uuid", func(t *testing.T) {
+			ftc := tcTemp{
+				info: "bin_to_uuid with " + tc.name + " bool-coerced swap flag",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varbinary.ToType(), []string{bin, swapped, swapped, swapped}, []bool{false, false, false, false}),
+					NewFunctionTestInput(tc.typ, tc.values, []bool{false, false, false, true}),
+				},
+				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+					[]string{u, u, u, ""},
+					[]bool{false, false, false, true}),
+			}
+			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInBinToUUID)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, ftc.info, info)
+		})
+	}
+}

@@ -1251,9 +1251,9 @@ func builtInIsUUID(parameters []*vector.Vector, result vector.FunctionResultWrap
 
 func builtInUUIDToBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
-	var getSwapFlag func(uint64) (int64, bool)
+	var getSwapFlag func(uint64) (bool, bool)
 	if len(parameters) == 2 {
-		getSwapFlag = makeIntegerParamGetter(parameters[1])
+		getSwapFlag = makeBoolParamGetter(parameters[1])
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -1264,7 +1264,7 @@ func builtInUUIDToBin(parameters []*vector.Vector, result vector.FunctionResultW
 			}
 			continue
 		}
-		swapFlag := int64(0)
+		swapFlag := false
 		if getSwapFlag != nil {
 			var null2 bool
 			swapFlag, null2 = getSwapFlag(i)
@@ -1279,7 +1279,7 @@ func builtInUUIDToBin(parameters []*vector.Vector, result vector.FunctionResultW
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "uuid_to_bin", functionUtil.QuickBytesToStr(uuidBytes))
 		}
-		out := uuidToBin(u, swapFlag != 0)
+		out := uuidToBin(u, swapFlag)
 		if err := rs.AppendBytes(out[:], false); err != nil {
 			return err
 		}
@@ -1289,9 +1289,9 @@ func builtInUUIDToBin(parameters []*vector.Vector, result vector.FunctionResultW
 
 func builtInBinToUUID(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
-	var getSwapFlag func(uint64) (int64, bool)
+	var getSwapFlag func(uint64) (bool, bool)
 	if len(parameters) == 2 {
-		getSwapFlag = makeIntegerParamGetter(parameters[1])
+		getSwapFlag = makeBoolParamGetter(parameters[1])
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -1302,7 +1302,7 @@ func builtInBinToUUID(parameters []*vector.Vector, result vector.FunctionResultW
 			}
 			continue
 		}
-		swapFlag := int64(0)
+		swapFlag := false
 		if getSwapFlag != nil {
 			var null2 bool
 			swapFlag, null2 = getSwapFlag(i)
@@ -1318,7 +1318,7 @@ func builtInBinToUUID(parameters []*vector.Vector, result vector.FunctionResultW
 		}
 		var u types.Uuid
 		copy(u[:], bin)
-		if swapFlag != 0 {
+		if swapFlag {
 			u = unswapUUIDTimeParts(u)
 		}
 		if err := rs.AppendBytes([]byte(u.String()), false); err != nil {
@@ -1328,59 +1328,100 @@ func builtInBinToUUID(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-func makeIntegerParamGetter(param *vector.Vector) func(uint64) (int64, bool) {
+func makeBoolParamGetter(param *vector.Vector) func(uint64) (bool, bool) {
 	switch param.GetType().Oid {
+	case types.T_bool:
+		p := vector.GenerateFunctionFixedTypeParameter[bool](param)
+		return func(idx uint64) (bool, bool) {
+			return p.GetValue(idx)
+		}
 	case types.T_int8:
 		p := vector.GenerateFunctionFixedTypeParameter[int8](param)
-		return func(idx uint64) (int64, bool) {
+		return func(idx uint64) (bool, bool) {
 			v, null := p.GetValue(idx)
-			return int64(v), null
+			return v != 0, null
 		}
 	case types.T_int16:
 		p := vector.GenerateFunctionFixedTypeParameter[int16](param)
-		return func(idx uint64) (int64, bool) {
+		return func(idx uint64) (bool, bool) {
 			v, null := p.GetValue(idx)
-			return int64(v), null
+			return v != 0, null
 		}
 	case types.T_int32:
 		p := vector.GenerateFunctionFixedTypeParameter[int32](param)
-		return func(idx uint64) (int64, bool) {
+		return func(idx uint64) (bool, bool) {
 			v, null := p.GetValue(idx)
-			return int64(v), null
+			return v != 0, null
 		}
 	case types.T_int64:
 		p := vector.GenerateFunctionFixedTypeParameter[int64](param)
-		return func(idx uint64) (int64, bool) {
-			return p.GetValue(idx)
+		return func(idx uint64) (bool, bool) {
+			v, null := p.GetValue(idx)
+			return v != 0, null
 		}
 	case types.T_uint8:
 		p := vector.GenerateFunctionFixedTypeParameter[uint8](param)
-		return func(idx uint64) (int64, bool) {
+		return func(idx uint64) (bool, bool) {
 			v, null := p.GetValue(idx)
-			return int64(v), null
+			return v != 0, null
 		}
 	case types.T_uint16:
 		p := vector.GenerateFunctionFixedTypeParameter[uint16](param)
-		return func(idx uint64) (int64, bool) {
+		return func(idx uint64) (bool, bool) {
 			v, null := p.GetValue(idx)
-			return int64(v), null
+			return v != 0, null
 		}
 	case types.T_uint32:
 		p := vector.GenerateFunctionFixedTypeParameter[uint32](param)
-		return func(idx uint64) (int64, bool) {
+		return func(idx uint64) (bool, bool) {
 			v, null := p.GetValue(idx)
-			return int64(v), null
+			return v != 0, null
 		}
 	case types.T_uint64:
 		p := vector.GenerateFunctionFixedTypeParameter[uint64](param)
-		return func(idx uint64) (int64, bool) {
+		return func(idx uint64) (bool, bool) {
 			v, null := p.GetValue(idx)
-			return int64(v), null
+			return v != 0, null
+		}
+	case types.T_float32:
+		p := vector.GenerateFunctionFixedTypeParameter[float32](param)
+		return func(idx uint64) (bool, bool) {
+			v, null := p.GetValue(idx)
+			return v != 0, null
+		}
+	case types.T_float64:
+		p := vector.GenerateFunctionFixedTypeParameter[float64](param)
+		return func(idx uint64) (bool, bool) {
+			v, null := p.GetValue(idx)
+			return v != 0, null
+		}
+	case types.T_decimal64:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](param)
+		return func(idx uint64) (bool, bool) {
+			v, null := p.GetValue(idx)
+			return v != 0, null
+		}
+	case types.T_decimal128:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](param)
+		return func(idx uint64) (bool, bool) {
+			v, null := p.GetValue(idx)
+			return v.Compare(types.Decimal128{}) != 0, null
+		}
+	case types.T_decimal256:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](param)
+		return func(idx uint64) (bool, bool) {
+			v, null := p.GetValue(idx)
+			return v.Compare(types.Decimal256{}) != 0, null
 		}
 	default:
-		p := vector.GenerateFunctionFixedTypeParameter[int64](param)
-		return func(idx uint64) (int64, bool) {
-			return p.GetValue(idx)
+		p := vector.GenerateFunctionStrParameter(param)
+		return func(idx uint64) (bool, bool) {
+			v, null := p.GetStrValue(idx)
+			if null {
+				return false, true
+			}
+			f, err := strconv.ParseFloat(strings.TrimSpace(functionUtil.QuickBytesToStr(v)), 64)
+			return err == nil && f != 0, false
 		}
 	}
 }

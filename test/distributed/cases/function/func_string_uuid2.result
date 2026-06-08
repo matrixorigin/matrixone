@@ -55,6 +55,15 @@ select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1));
 select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 0));
 ➤ hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 0))[12,-1,0]  𝄀
 6CCD780CBABA102695645B8C656024DB
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 0.4));
+➤ hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 0.4))[12,-1,0]  𝄀
+1026BABA6CCD780C95645B8C656024DB
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', -0.4));
+➤ hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, -0.4))[12,-1,0]  𝄀
+1026BABA6CCD780C95645B8C656024DB
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 0.0));
+➤ hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 0.0))[12,-1,0]  𝄀
+6CCD780CBABA102695645B8C656024DB
 select hex(uuid_to_bin(null));
 ➤ hex(uuid_to_bin(null))[12,-1,0]  𝄀
 null
@@ -69,6 +78,15 @@ select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), 1);
 6ccd780c-baba-1026-9564-5b8c656024db
 select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), 0);
 ➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 1), 0)[12,-1,0]  𝄀
+1026baba-6ccd-780c-9564-5b8c656024db
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), 0.4);
+➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 1), 0.4)[12,-1,0]  𝄀
+6ccd780c-baba-1026-9564-5b8c656024db
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), -0.4);
+➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 1), -0.4)[12,-1,0]  𝄀
+6ccd780c-baba-1026-9564-5b8c656024db
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), 0.0);
+➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, 1), 0.0)[12,-1,0]  𝄀
 1026baba-6ccd-780c-9564-5b8c656024db
 select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db'), null);
 ➤ bin_to_uuid(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db), null)[12,-1,0]  𝄀

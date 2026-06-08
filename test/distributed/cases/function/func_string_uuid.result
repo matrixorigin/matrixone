@@ -1,8 +1,8 @@
 create table t1(a INT,  b float);
 insert into t1 values(12124, -4213.413), (12124, -42413.409);
 SELECT length(uuid()) FROM t1;
-length(uuid())
-36
+➤ length(uuid())[-5,64,0]  𝄀
+36  𝄀
 36
 SELECT uuid(1) FROM t1;
 invalid argument function uuid, bad value [BIGINT]
@@ -13,19 +13,19 @@ name VARCHAR NOT NULL
 );
 INSERT INTO namelists (name) VALUES ('Tom'), ('Jane'), ('Bob');
 SELECT * from namelists;
-id    name
-01921d93-c429-7966-a2f6-23890aee82ce    Tom
-01921d93-c429-796a-ae85-60871fd4579e    Jane
-01921d93-c429-796b-b67f-17b1a953026c    Bob
+➤ id[12,-1,0]  ¦  name[12,-1,0]  𝄀
+019ea663-978b-7e3a-a561-94de4fa22379  ¦  Tom  𝄀
+019ea663-978b-7e3b-adf5-405499d2a906  ¦  Jane  𝄀
+019ea663-978b-7e3c-a66f-fe75f033d39b  ¦  Bob
 INSERT INTO namelists (id, name) VALUES ('019213b0-d7bd-7271-a681-49e9d979d8d3', 'Jack');
 INSERT INTO namelists (id, name) VALUES ('019213b0-d7bd-7271-a681-49e9d979d8d3', 'Alan');
 Duplicate entry '019213b0-d7bd-7271-a681-49e9d979d8d3' for key 'id'
 SELECT * from namelists;
-id    name
-01921d93-c429-7966-a2f6-23890aee82ce    Tom
-01921d93-c429-796a-ae85-60871fd4579e    Jane
-01921d93-c429-796b-b67f-17b1a953026c    Bob
-019213b0-d7bd-7271-a681-49e9d979d8d3    Jack
+➤ id[12,-1,0]  ¦  name[12,-1,0]  𝄀
+019ea663-978b-7e3a-a561-94de4fa22379  ¦  Tom  𝄀
+019ea663-978b-7e3b-adf5-405499d2a906  ¦  Jane  𝄀
+019ea663-978b-7e3c-a66f-fe75f033d39b  ¦  Bob  𝄀
+019213b0-d7bd-7271-a681-49e9d979d8d3  ¦  Jack
 Drop Table namelists;
 create table tttt(a int default 0 primary key, b int);
 insert into tttt (b) values(1);
