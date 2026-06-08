@@ -9,7 +9,9 @@ use test_int_interval;
 create table readings (site_id int, date_id int, value double);
 insert into readings values (1, 20260514, 10.0), (1, 20260515, 11.0), (2, 20260514, 20.0), (2, 20260515, 21.0), (3, 20260514, 30.0), (3, 20260515, 31.0);
 
--- INT +/- INTERVAL DAY with column
+-- INT +/- INTERVAL DAY with direct column and aggregate
+select date_id + interval 7 day from readings where site_id = 1 order by date_id;
+select date_id - interval 7 day from readings where site_id = 1 order by date_id;
 select max(date_id) + interval 7 day from readings;
 select max(date_id) - interval 7 day from readings;
 
@@ -25,6 +27,7 @@ select interval 7 day + date_id from readings where site_id = 1;
 select interval 7 day + max(date_id) from readings;
 
 -- WEEK / MONTH / YEAR
+select date_id + interval 1 quarter from readings where site_id = 1 order by date_id;
 select cast(20260515 as int) + interval 2 week;
 select cast(20260515 as int) + interval 1 month;
 select cast(20260515 as int) - interval 1 year;

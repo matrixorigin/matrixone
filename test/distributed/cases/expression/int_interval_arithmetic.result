@@ -3,6 +3,14 @@ create database test_int_interval;
 use test_int_interval;
 create table readings (site_id int, date_id int, value double);
 insert into readings values (1, 20260514, 10.0), (1, 20260515, 11.0), (2, 20260514, 20.0), (2, 20260515, 21.0), (3, 20260514, 30.0), (3, 20260515, 31.0);
+select date_id + interval 7 day from readings where site_id = 1 order by date_id;
+date_id + interval 7 day
+20260521
+20260522
+select date_id - interval 7 day from readings where site_id = 1 order by date_id;
+date_id - interval 7 day
+20260507
+20260508
 select max(date_id) + interval 7 day from readings;
 max(date_id) + interval 7 day
 20260522
@@ -31,6 +39,10 @@ interval 7 day + date_id
 select interval 7 day + max(date_id) from readings;
 interval 7 day + max(date_id)
 20260522
+select date_id + interval 1 quarter from readings where site_id = 1 order by date_id;
+date_id + interval 1 quarter
+20260814
+20260815
 select cast(20260515 as int) + interval 2 week;
 cast(20260515 as int) + interval 2 week
 20260529
