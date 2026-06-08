@@ -11499,7 +11499,7 @@ func TestDateTruncTimestampVectorPreservesDSTFold(t *testing.T) {
 	require.NotEqual(t, got[0], got[1])
 }
 
-func TestDateTruncCheckRejectsStringTimestampInput(t *testing.T) {
+func TestDateTruncCheckRejectsInvalidArguments(t *testing.T) {
 	overloads := allSupportedFunctions[DATE_TRUNC].Overloads
 
 	get := dateTruncCheck(overloads, []types.Type{types.T_char.ToType(), types.T_datetime.ToType()})
@@ -11512,6 +11512,15 @@ func TestDateTruncCheckRejectsStringTimestampInput(t *testing.T) {
 	get = dateTruncCheck(overloads, []types.Type{types.T_varchar.ToType(), types.T_timestamp.ToType()})
 	require.Equal(t, succeedMatched, get.status)
 	require.Equal(t, 2, get.idx)
+
+	get = dateTruncCheck(overloads, []types.Type{types.T_varchar.ToType()})
+	require.Equal(t, failedFunctionParametersWrong, get.status)
+
+	get = dateTruncCheck(overloads, []types.Type{types.T_varchar.ToType(), types.T_datetime.ToType(), types.T_datetime.ToType()})
+	require.Equal(t, failedFunctionParametersWrong, get.status)
+
+	get = dateTruncCheck(overloads, []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()})
+	require.Equal(t, failedFunctionParametersWrong, get.status)
 }
 
 func TestDateTruncInvalidUnitErrorsAreInvalidInput(t *testing.T) {
