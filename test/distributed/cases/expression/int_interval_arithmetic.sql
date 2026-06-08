@@ -17,6 +17,7 @@ select max(date_id) - interval 7 day from readings;
 select cast(20260515 as int) + interval 7 day;
 select cast(20260515 as int) - interval 7 day;
 select cast(99991231 as int) + interval 1 day;
+select cast(10101 as int) - interval 1 day;
 
 -- INTERVAL DAY + INT (symmetric)
 select interval 7 day + cast(20260515 as int);

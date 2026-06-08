@@ -18,6 +18,9 @@ cast(20260515 as int) - interval 7 day
 select cast(99991231 as int) + interval 1 day;
 cast(99991231 as int) + interval 1 day
 null
+select cast(10101 as int) - interval 1 day;
+cast(10101 as int) - interval 1 day
+null
 select interval 7 day + cast(20260515 as int);
 interval 7 day + cast(20260515 as int)
 20260522

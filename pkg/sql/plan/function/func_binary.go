@@ -4169,7 +4169,7 @@ func DateIntSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 			}
 			resultDt, err := doDateSub(d, v2, iTyp)
 			if err != nil {
-				if isDatetimeOverflowMaxError(err) {
+				if isDatetimeOverflowMaxError(err) || moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
 					rsNull.Add(i)
 					continue
 				}
