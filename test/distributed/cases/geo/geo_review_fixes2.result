@@ -1,0 +1,37 @@
+drop database if exists geo_review2;
+create database geo_review2;
+use geo_review2;
+select st_distance_sphere(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 0)')) as one_degree_m;
+one_degree_m
+111195.0802335329
+select st_distance_sphere(st_geomfromtext('MULTIPOINT(0 0,2 2)'), st_geomfromtext('POINT(1 0)')) as mp_ok;
+mp_ok
+111195.0802335329
+select st_distance_sphere(st_geomfromtext('LINESTRING(0 0,1 1)'), st_geomfromtext('POINT(1 0)'));
+invalid input: ST_DISTANCE_SPHERE only supports POINT and MULTIPOINT inputs
+select st_distance_sphere(st_geomfromtext('POINT(200 0)'), st_geomfromtext('POINT(1 0)'));
+invalid input: ST_DISTANCE_SPHERE longitude 200 is out of range [-180, 180]
+select st_distance_sphere(st_geomfromtext('POINT(0 100)'), st_geomfromtext('POINT(1 0)'));
+invalid input: ST_DISTANCE_SPHERE latitude 100 is out of range [-90, 90]
+select st_distance_sphere(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 0));
+invalid input: Binary geometry function ST_DISTANCE_SPHERE given two geometries of different srids: 4326 and 0, which should have been identical.
+select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(3 4)'), 0) as dist_srid0_ok;
+dist_srid0_ok
+5.0
+select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(3 4)'), -1);
+invalid input: SRID value -1 is out of range [0, 4294967295]
+select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), -1);
+invalid input: SRID value -1 is out of range [0, 4294967295]
+select st_length(st_geomfromtext('LINESTRING(0 0,3 4)'), 5000000000);
+invalid input: SRID value 5000000000 is out of range [0, 4294967295]
+select st_astext(st_geomfromwkb(unhex('0101000000000000000000F87F000000000000F87F'))) as empty_pt_ok;
+empty_pt_ok
+POINT EMPTY
+select st_astext(st_geomfromwkb(unhex('0101000000000000000000F87F000000000000F03F')));
+invalid input: invalid geometry payload
+select st_astext(st_intersection(
+st_geomfromtext('POLYGON((0 0,2e10 0,2e10 2e10,0 2e10,0 0))'),
+st_geomfromtext('POLYGON((1e10 1e10,3e10 1e10,3e10 3e10,1e10 3e10,1e10 1e10))'))) as big_overlay;
+big_overlay
+POLYGON((1e+10 1e+10,2e+10 1e+10,2e+10 2e+10,1e+10 2e+10,1e+10 1e+10))
+drop database geo_review2;
