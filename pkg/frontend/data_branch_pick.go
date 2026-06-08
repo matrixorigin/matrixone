@@ -757,7 +757,7 @@ func materializeSubqueryUnified(
 	// Compose the subquery SQL: wrap the user's SELECT with ORDER BY for
 	// streaming sorted results.  For composite PKs we ORDER BY all component
 	// columns so that serial()-encoded keys arrive in ascending byte order.
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
 	stmt.Keys.Select.Format(fmtCtx)
 	subquerySQL := fmtCtx.String()
 
