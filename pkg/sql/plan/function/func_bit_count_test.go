@@ -130,7 +130,6 @@ func TestBitCountDecimal128(t *testing.T) {
 		"9223372036854775807",
 		"9223372036854775808",
 		"18446744073709551615",
-		"18446744073709551616",
 		"-1",
 		"-9223372036854775808",
 		"-18446744073709551616",
@@ -146,10 +145,15 @@ func TestBitCountDecimal128(t *testing.T) {
 		[]FunctionTestInput{
 			NewFunctionTestInput(typ, values, nil),
 		},
-		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{63, 1, 64, 1, 128, 65, 64}, nil),
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{63, 1, 64, 64, 1, 1}, nil),
 		BitCountDecimal128)
 	ok, info := tc.Run()
 	require.True(t, ok, info)
+
+	overflow, err := types.ParseDecimal128("18446744073709551616", typ.Width, typ.Scale)
+	require.NoError(t, err)
+	_, err = bitCountFromDecimal128(overflow, typ.Scale)
+	require.Error(t, err)
 }
 
 func TestBitCountDecimal256(t *testing.T) {
@@ -162,7 +166,6 @@ func TestBitCountDecimal256(t *testing.T) {
 		mustParseDecimal256(t, "9223372036854775807.0", 1),
 		mustParseDecimal256(t, "9223372036854775808.0", 1),
 		mustParseDecimal256(t, "18446744073709551615.0", 1),
-		mustParseDecimal256(t, "18446744073709551616.0", 1),
 		mustParseDecimal256(t, "-1.0", 1),
 		mustParseDecimal256(t, "-18446744073709551616.0", 1),
 	}
@@ -171,10 +174,14 @@ func TestBitCountDecimal256(t *testing.T) {
 		[]FunctionTestInput{
 			NewFunctionTestInput(typ, values, nil),
 		},
-		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 2, 255, 63, 1, 64, 1, 256, 192}, nil),
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 2, 63, 63, 1, 64, 64, 1}, nil),
 		BitCountDecimal256)
 	ok, info := tc.Run()
 	require.True(t, ok, info)
+
+	overflow := mustParseDecimal256(t, "18446744073709551616.0", typ.Scale)
+	_, err := bitCountFromDecimal256(overflow, typ.Scale)
+	require.Error(t, err)
 }
 
 func TestBitCountBinaryString(t *testing.T) {

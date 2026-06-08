@@ -573,6 +573,34 @@ func bitCountFromMysqlIntegerString(s string) (uint64, error) {
 	return bitCountFromUint64(val), nil
 }
 
+func bitCountFromDecimalIntegerString(s string) (uint64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+
+	if strings.HasPrefix(s, "-") {
+		val, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			if errors.Is(err, strconv.ErrRange) {
+				return bitCountFromUint64(minInt64BitPattern), nil
+			}
+			return 0, err
+		}
+		return bitCountFromUint64(uint64(val)), nil
+	}
+
+	s = strings.TrimPrefix(s, "+")
+	val, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		if errors.Is(err, strconv.ErrRange) {
+			return 0, moerr.NewInvalidInputNoCtx("The input value is out of range")
+		}
+		return 0, err
+	}
+	return bitCountFromUint64(val), nil
+}
+
 func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64, error) {
 	val := float64(v)
 	if math.IsNaN(val) {
@@ -614,15 +642,12 @@ func bitCountFromDecimal64(v types.Decimal64, scale int32) (uint64, error) {
 
 func bitCountFromDecimal128(v types.Decimal128, scale int32) (uint64, error) {
 	v = v.Round(scale, 0, true)
-	return uint64(bits.OnesCount64(v.B0_63) + bits.OnesCount64(v.B64_127)), nil
+	return bitCountFromDecimalIntegerString(v.Format(0))
 }
 
 func bitCountFromDecimal256(v types.Decimal256, scale int32) (uint64, error) {
 	v = v.Round(scale, 0, true)
-	return uint64(bits.OnesCount64(v.B0_63) +
-		bits.OnesCount64(v.B64_127) +
-		bits.OnesCount64(v.B128_191) +
-		bits.OnesCount64(v.B192_255)), nil
+	return bitCountFromDecimalIntegerString(v.Format(0))
 }
 
 func bitCountFromNonBinaryString(v []byte) (uint64, error) {
