@@ -26,6 +26,19 @@ import (
 // 3. >= > < <=
 // 4. Mod
 func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	// decimal256 is not present in the static binary cast matrix below.
+	// When one side is decimal256, handle the cases missing from the static
+	// binary cast matrix below. Decimal/integer pairs keep exact decimal256
+	// semantics. Float pairs follow the existing decimal64/decimal128 vs float
+	// rule and use approximate float64 comparison.
+	if s1.Oid == types.T_decimal256 || s2.Oid == types.T_decimal256 {
+		if isDecimalOrInteger(s1) && isDecimalOrInteger(s2) {
+			return true, decimal256FromSource(s1), decimal256FromSource(s2)
+		}
+		if isFloatType(s1.Oid) || isFloatType(s2.Oid) {
+			return true, types.T_float64.ToType(), types.T_float64.ToType()
+		}
+	}
 	check := fixedBinaryCastRule1[s1.Oid][s2.Oid]
 	if check.cast {
 		t1, t2 := check.left.ToType(), check.right.ToType()
@@ -479,6 +492,42 @@ func integerIntegralWidth(oid types.T) int32 {
 	default:
 		return 0
 	}
+}
+
+// isDecimalOrInteger reports whether t is a decimal or an integer type, i.e. a
+// numeric type that can be losslessly cast into a wider decimal.
+func isDecimalOrInteger(t types.Type) bool {
+	return t.Oid.IsDecimal() || t.IsIntOrUint()
+}
+
+// decimal256FromSource converts a decimal-or-integer source type into the
+// decimal256 type used for a decimal256 comparison. A decimal source keeps its
+// own width/scale; an integer source becomes decimal256(integralWidth, 0).
+func decimal256FromSource(s types.Type) types.Type {
+	if s.Oid == types.T_decimal256 {
+		return s
+	}
+	if s.Oid.IsDecimal() {
+		return types.New(types.T_decimal256, s.Width, s.Scale)
+	}
+	return types.New(types.T_decimal256, integerIntegralWidth(s.Oid), 0)
+}
+
+// widestDecimalFamily returns the widest decimal family present among the
+// inputs (decimal256 > decimal128 > decimal64). It is used as the floor family
+// for setSafeDecimalWidthAndScaleFromSource so the computed common type never
+// drops below any operand's family.
+func widestDecimalFamily(inputs []types.Type) types.T {
+	widest := types.T_decimal64
+	for i := range inputs {
+		switch inputs[i].Oid {
+		case types.T_decimal256:
+			return types.T_decimal256
+		case types.T_decimal128:
+			widest = types.T_decimal128
+		}
+	}
+	return widest
 }
 
 func setMaxWidthFromSource(t *types.Type, source []types.Type) {
