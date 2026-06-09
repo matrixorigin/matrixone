@@ -404,32 +404,32 @@ func TestAcquirePolicyForCNFlushS3(t *testing.T) {
 		require.Equal(t, int64(0), throttler.reserved.Load())
 	})
 
-	t.Run("deny when projected rss crosses limit", func(t *testing.T) {
+	t.Run("deny when reserved plus ask exceeds pool limit", func(t *testing.T) {
 		throttler := &memThrottler{limitRate: 0.90}
 		throttler.actualTotalMemory.Store(100)
 		throttler.limit.Store(90)
-		throttler.rss.Store(85)
+		throttler.rss.Store(50)
+		throttler.reserved.Store(60)
 
-		left, ok := AcquirePolicyForCNFlushS3(throttler, 6)
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 31)
 		require.False(t, ok)
-		require.Equal(t, int64(0), left)
+		require.Equal(t, int64(30), left)
+		require.Equal(t, int64(60), throttler.reserved.Load())
+	})
+
+	t.Run("deny when large ask alone exceeds pool limit", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(50)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 100)
+		require.False(t, ok)
+		require.Equal(t, int64(90), left)
 		require.Equal(t, int64(0), throttler.reserved.Load())
 	})
 
-	t.Run("deny when max(rss, reserved) plus ask crosses limit", func(t *testing.T) {
-		throttler := &memThrottler{limitRate: 0.90}
-		throttler.actualTotalMemory.Store(100)
-		throttler.limit.Store(90)
-		throttler.rss.Store(89)
-		throttler.reserved.Store(1)
-
-		left, ok := AcquirePolicyForCNFlushS3(throttler, 2)
-		require.False(t, ok)
-		require.Equal(t, int64(0), left)
-		require.Equal(t, int64(1), throttler.reserved.Load())
-	})
-
-	t.Run("allow when max(rss, reserved) plus ask within limit", func(t *testing.T) {
+	t.Run("allow when rss and pool both within limits", func(t *testing.T) {
 		throttler := &memThrottler{limitRate: 0.90}
 		throttler.actualTotalMemory.Store(100)
 		throttler.limit.Store(90)
@@ -438,7 +438,7 @@ func TestAcquirePolicyForCNFlushS3(t *testing.T) {
 
 		left, ok := AcquirePolicyForCNFlushS3(throttler, 2)
 		require.True(t, ok)
-		require.Equal(t, int64(18), left)
+		require.Equal(t, int64(79), left)
 		require.Equal(t, int64(11), throttler.reserved.Load())
 	})
 
@@ -450,7 +450,7 @@ func TestAcquirePolicyForCNFlushS3(t *testing.T) {
 
 		left, ok := AcquirePolicyForCNFlushS3(throttler, 10)
 		require.True(t, ok)
-		require.Equal(t, int64(10), left)
+		require.Equal(t, int64(80), left)
 		require.Equal(t, int64(10), throttler.reserved.Load())
 	})
 
@@ -463,11 +463,11 @@ func TestAcquirePolicyForCNFlushS3(t *testing.T) {
 
 		left, ok := AcquirePolicyForCNFlushS3(throttler, 10)
 		require.True(t, ok)
-		require.Equal(t, int64(50), left)
+		require.Equal(t, int64(40), left)
 		require.Equal(t, int64(50), throttler.reserved.Load())
 	})
 
-	t.Run("deny when reserved exceeds rss and ask pushes max over limit", func(t *testing.T) {
+	t.Run("deny when reserved plus ask overflows pool", func(t *testing.T) {
 		throttler := &memThrottler{limitRate: 0.90}
 		throttler.actualTotalMemory.Store(100)
 		throttler.limit.Store(90)
@@ -476,7 +476,7 @@ func TestAcquirePolicyForCNFlushS3(t *testing.T) {
 
 		left, ok := AcquirePolicyForCNFlushS3(throttler, 31)
 		require.False(t, ok)
-		require.Equal(t, int64(0), left)
+		require.Equal(t, int64(30), left)
 		require.Equal(t, int64(60), throttler.reserved.Load())
 	})
 }

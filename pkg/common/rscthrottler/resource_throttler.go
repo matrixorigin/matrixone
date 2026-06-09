@@ -606,39 +606,30 @@ func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
 			reserved = 0
 		}
 
-		// Pool check: use max(rss, reserved) instead of the shared
-		// Available() (which sums rss + reserved). For S3 writes the
-		// reserved counter overlaps with mpool allocations already in
-		// RSS, so summing double-counts. Available() is deliberately
-		// not changed — other throttler consumers (workspace, merge)
-		// rely on the sum semantics.
-		rss := throttler.rss.Load()
-		actualMax := int64(throttler.actualTotalMemory.Load())
-		effective := max(rss, reserved)
-		avail := limit - reserved
-		if actualMax-effective < limit {
-			avail = actualMax - effective
-		}
-		if avail < 0 {
-			avail = 0
-		}
-		if !throttler.options.allowOutOfMemoryAcquire && avail < ask {
-			return avail, false
+		// Pool check: forward-looking gate — prevents promising more
+		// S3 write bandwidth than the pool has headroom. Uses reserved
+		// alone (not rss + reserved) because the overlapping portion
+		// of RSS is already bounded by the RSS gate below.
+		if !throttler.options.allowOutOfMemoryAcquire && reserved+ask > limit {
+			return limit - reserved, false
 		}
 
 		total := int64(throttler.actualTotalMemory.Load())
 		if total > 0 && throttler.limitRate > 0 {
-			// RSS gate: same max(rss, reserved) semantics — reserved
-			// overlaps RSS for S3 write buffers.
-			used := max(rss, reserved) + ask
-			if float64(used) > float64(total)*throttler.limitRate {
+			// RSS gate: backward-looking gate — prevents physical OOM
+			// when RSS (including non-S3 memory) is already near the
+			// container limit. Uses RSS alone (not rss + reserved)
+			// because the pool gate above already bounds forward-looking
+			// reservations independently.
+			rss := throttler.rss.Load()
+			if float64(rss) > float64(total)*throttler.limitRate {
 				return 0, false
 			}
 		}
 
 		newReserved := reserved + ask
 		if throttler.reserved.CompareAndSwap(reserved, newReserved) {
-			return avail - ask, true
+			return limit - newReserved, true
 		}
 	}
 }
