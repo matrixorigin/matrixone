@@ -414,7 +414,12 @@ func (m *memThrottler) Available() int64 {
 	if actualMaxMemory-rss >= limit {
 		avail = limit - reserved
 	} else {
-		avail = actualMaxMemory - rss - reserved
+		// When RSS is close to the physical limit, the available headroom is
+		// actualMaxMemory minus the larger of RSS or reserved — not their sum.
+		// reserved double-counts S3 write buffers already reflected in RSS
+		// (mpool off-heap allocations). Using max avoids rejecting legitimate
+		// small writes when RSs is high but the throttler pool has headroom.
+		avail = actualMaxMemory - max(rss, reserved)
 	}
 
 	return max(0, avail)
@@ -612,8 +617,14 @@ func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
 
 		total := int64(throttler.actualTotalMemory.Load())
 		if total > 0 && throttler.limitRate > 0 {
-			used := throttler.rss.Load() + currReserved + ask
-			if float64(used) > float64(total)*throttler.limitRate {
+			// RSS gate: reject when physical memory is nearly exhausted.
+			// Uses RSS alone — not RSS + reserved — because reserved
+			// double-counts S3 write buffers already reflected in RSS
+			// (mpool off-heap allocations). The throttler pool limit
+			// (avail >= ask above) independently bounds concurrent
+			// reservations.
+			rss := throttler.rss.Load()
+			if float64(rss) > float64(total)*throttler.limitRate {
 				return 0, false
 			}
 		}
