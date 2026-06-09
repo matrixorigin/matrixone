@@ -49,7 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -549,7 +549,7 @@ func TestCompileShuffleGroupV2FallbackWhenScopeMcpuDiffersFromDop(t *testing.T) 
 	require.Len(t, result, 1)
 	require.Same(t, scope, result[0])
 	require.IsType(t, &group.Group{}, result[0].RootOp)
-	require.False(t, hasOperatorType(result[0].RootOp, vm.ShuffleV2))
+	require.False(t, hasOperatorType(result[0].RootOp, vm.Shuffle))
 }
 
 func TestCompileShuffleGroupV2FallbackToMergeGroupWhenInputScopesNotSingle(t *testing.T) {
@@ -562,7 +562,7 @@ func TestCompileShuffleGroupV2FallbackToMergeGroupWhenInputScopesNotSingle(t *te
 
 	require.Len(t, result, 1)
 	require.IsType(t, &group.MergeGroup{}, result[0].RootOp)
-	require.False(t, hasOperatorType(result[0].RootOp, vm.ShuffleV2))
+	require.False(t, hasOperatorType(result[0].RootOp, vm.Shuffle))
 }
 
 func TestCompileShuffleGroupV2UsesShuffleWhenScopeMcpuMatchesDop(t *testing.T) {
@@ -575,7 +575,7 @@ func TestCompileShuffleGroupV2UsesShuffleWhenScopeMcpuMatchesDop(t *testing.T) {
 	require.Len(t, result, 1)
 	require.Same(t, scope, result[0])
 	require.IsType(t, &group.Group{}, result[0].RootOp)
-	shuffleOp, ok := result[0].RootOp.GetOperatorBase().GetChildren(0).(*shuffleV2.ShuffleV2)
+	shuffleOp, ok := result[0].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle)
 	require.True(t, ok)
 	require.Equal(t, int32(16), shuffleOp.BucketNum)
 	require.Equal(t, int32(0), shuffleOp.CurrentShuffleIdx)

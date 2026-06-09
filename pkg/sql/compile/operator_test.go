@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -131,12 +131,12 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 	require.Same(t, op.GetShufflePool(), dup2.GetShufflePool())
 }
 
-func TestDupOperatorShuffleV2SharesPoolAcrossWorkers(t *testing.T) {
-	op := shuffleV2.NewArgument()
+func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
+	op := shuffle.NewArgument()
 	op.BucketNum = 4
 
-	dup1 := dupOperator(op, 0, 2).(*shuffleV2.ShuffleV2)
-	dup2 := dupOperator(op, 1, 2).(*shuffleV2.ShuffleV2)
+	dup1 := dupOperator(op, 0, 2).(*shuffle.Shuffle)
+	dup2 := dupOperator(op, 1, 2).(*shuffle.Shuffle)
 
 	require.NotNil(t, op.GetShufflePool())
 	require.Same(t, op.GetShufflePool(), dup1.GetShufflePool())

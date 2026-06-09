@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -46,16 +45,13 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 		shuffle.OpAnalyzer.Reset()
 	}
 
-	if shuffle.RuntimeFilterSpec != nil {
-		shuffle.ctr.runtimeFilterHandled = false
-	}
 	if shuffle.ctr.sels == nil {
 		shuffle.ctr.sels = make([][]int32, shuffle.BucketNum)
 	}
 	if shuffle.GetShufflePool() == nil {
-		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, 1))
+		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, shuffle.BucketNum))
 	}
-	shuffle.ctr.shufflePool.Hold()
+	shuffle.ctr.shufflePool.hold()
 	shuffle.ctr.ending = false
 
 	if shuffle.ShuffleExpr != nil && shuffle.ctr.exprExec == nil {
@@ -68,54 +64,60 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 	return nil
 }
 
-// there are two ways for shuffle to send a batch
-// if a batch belongs to one bucket, send this batch directly, and shuffle need to do nothing
-// else split this batch into pieces, write data into pool. if one bucket is full, send this bucket.
-// for now, we shuffle null to the first bucket
 func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := shuffle.OpAnalyzer
 
 	result := vm.NewCallResult()
 
+	// Put old buf back to pool after cleaning data
 	if shuffle.ctr.buf != nil {
-		shuffle.ctr.buf.Clean(proc.Mp())
+		shuffle.ctr.buf.CleanOnlyData()
+		shuffle.ctr.shufflePool.putBatchToPool(shuffle.ctr.buf, proc.Mp())
 		shuffle.ctr.buf = nil
 	}
 
-	if shuffle.ctr.ending {
-		if shuffle.ctr.lastForShufflePool {
-			//send shuffle pool
-			shuffle.ctr.buf = shuffle.ctr.shufflePool.GetEndingBatch(proc)
-			if shuffle.ctr.buf == nil {
-				result.Status = vm.ExecStop
-			} else {
-				result.Status = vm.ExecHasMore
-			}
-			result.Batch = shuffle.ctr.buf
-		}
+	tmpBat := shuffle.ctr.shufflePool.getFullBatch(shuffle.CurrentShuffleIdx)
+	if tmpBat != nil && tmpBat.RowCount() > 0 {
+		shuffle.ctr.buf = tmpBat
+		result.Batch = tmpBat
 		return result, nil
 	}
 
-	var err error
-	for {
-		shuffle.ctr.buf = shuffle.ctr.shufflePool.GetFullBatch(proc)
-		if shuffle.ctr.buf != nil { // find a full batch
-			break
+	if shuffle.ctr.shufflePool.allStop() {
+		shuffle.ctr.ending = true
+		tmpBat := shuffle.ctr.shufflePool.getLastBatch(shuffle.CurrentShuffleIdx)
+		if tmpBat != nil {
+			shuffle.ctr.buf = tmpBat
+			result.Batch = tmpBat
+			return result, nil
 		}
+		return vm.CancelResult, nil
+	}
+
+	if shuffle.ctr.ending {
+		shuffle.ctr.shufflePool.waitBatchOrEnd(shuffle.CurrentShuffleIdx, proc)
+		result.Batch = batch.EmptyBatch
+		return result, nil
+	}
+
+	for {
+		tmpBat := shuffle.ctr.shufflePool.getFullBatch(shuffle.CurrentShuffleIdx)
+		if tmpBat != nil { // find a full batch
+			shuffle.ctr.buf = tmpBat
+			result.Batch = tmpBat
+			return result, nil
+		}
+
 		// do input
-		result, err = vm.ChildrenCall(shuffle.GetChildren(0), proc, analyzer)
+		result, err := vm.ChildrenCall(shuffle.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
 		}
-
-		result.Status = vm.ExecNext
 		bat := result.Batch
 		if bat == nil {
 			shuffle.ctr.ending = true
-			shuffle.ctr.lastForShufflePool = shuffle.ctr.shufflePool.Ending()
+			shuffle.ctr.shufflePool.stopWriting()
 			result.Batch = batch.EmptyBatch
-			return result, nil
-		} else if bat.Last() {
 			return result, nil
 		} else if !bat.IsEmpty() {
 			if shuffle.ctr.exprExec != nil {
@@ -130,30 +132,20 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if bat != nil {
 				// can directly send this batch
-				//need to wait for runtimefilter_pass before send batch
-				if err = shuffle.handleRuntimeFilter(proc); err != nil {
-					return vm.CancelResult, err
-				}
+				shuffle.ctr.shufflePool.statsDirectlySentBatch(bat)
 				return result, nil
 			}
-			analyzer.SetMemUsed(shuffle.ctr.shufflePool.Size())
 		}
 	}
-
-	//need to wait for runtimefilter_pass before send batch
-	if err = shuffle.handleRuntimeFilter(proc); err != nil {
-		return vm.CancelResult, err
-	}
-
-	// send the batch
-	result.Batch = shuffle.ctr.buf
-	return result, nil
 }
 
 // evalAndShuffle evaluates the ShuffleExpr on the batch, computes shuffle bucket assignments,
 // and either returns the batch directly (single bucket) or splits it into the shuffle pool.
 // The original batch is NOT modified — the expression result is used only for hashing.
 func (shuffle *Shuffle) evalAndShuffle(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+	if shuffle.ShuffleType != int32(plan.ShuffleType_Hash) {
+		panic("evalAndShuffle in Shuffle only supports hash shuffle type")
+	}
 	vec, err := shuffle.ctr.exprExec.Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return nil, err
@@ -164,24 +156,16 @@ func (shuffle *Shuffle) evalAndShuffle(bat *batch.Batch, proc *process.Process) 
 		return bat, nil
 	}
 	if vec.IsConst() {
-		if shuffle.ShuffleType == int32(plan.ShuffleType_Range) {
-			bat.ShuffleIDX = int32(rangeShuffleConstVec(shuffle, vec))
-		} else {
-			bat.ShuffleIDX = int32(shuffleConstVecByHash(shuffle.BucketNum, vec))
-		}
+		bat.ShuffleIDX = int32(shuffleConstVecByHash(shuffle.BucketNum, vec))
 		return bat, nil
 	}
 
 	sels := shuffle.clearSels()
-	if shuffle.ShuffleType == int32(plan.ShuffleType_Range) {
-		rangeShuffleVec(shuffle, sels, vec)
+	lenRegs := uint64(shuffle.BucketNum)
+	if vec.HasNull() {
+		hashShuffleVecWithNull(sels, vec, lenRegs)
 	} else {
-		lenRegs := uint64(shuffle.BucketNum)
-		if vec.HasNull() {
-			hashShuffleVecWithNull(sels, vec, lenRegs)
-		} else {
-			hashShuffleVecWithoutNull(sels, vec, lenRegs)
-		}
+		hashShuffleVecWithoutNull(sels, vec, lenRegs)
 	}
 
 	for i := range sels {
@@ -196,33 +180,6 @@ func (shuffle *Shuffle) evalAndShuffle(bat *batch.Batch, proc *process.Process) 
 
 	err = shuffle.ctr.shufflePool.putBatchIntoShuffledPoolsBySels(bat, sels, proc)
 	return nil, err
-}
-
-func (shuffle *Shuffle) handleRuntimeFilter(proc *process.Process) error {
-	if !shuffle.ctr.runtimeFilterHandled && shuffle.RuntimeFilterSpec != nil {
-		shuffle.msgReceiver = message.NewMessageReceiver(
-			[]int32{shuffle.RuntimeFilterSpec.Tag},
-			message.AddrBroadCastOnCurrentCN(),
-			proc.GetMessageBoard())
-		msgs, ctxDone, err := shuffle.msgReceiver.ReceiveMessage(true, proc.Ctx)
-		if ctxDone {
-			shuffle.ctr.runtimeFilterHandled = true
-			return nil
-		}
-		if err != nil {
-			return err
-		} else {
-			for i := range msgs {
-				msg, _ := msgs[i].(message.RuntimeFilterMessage)
-				switch msg.Typ {
-				case message.RuntimeFilter_PASS, message.RuntimeFilter_DROP:
-					shuffle.ctr.runtimeFilterHandled = true
-					continue
-				}
-			}
-		}
-	}
-	return nil
 }
 
 func (shuffle *Shuffle) clearSels() [][]int32 {
@@ -406,12 +363,13 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 func hashShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	if groupByVec.IsConstNull() {
-		bat.ShuffleIDX = 0
-		return bat, nil
+		err := ap.ctr.shufflePool.putAllBatchIntoPoolByShuffleIdx(bat, proc, 0)
+		return nil, err
 	}
 	if groupByVec.IsConst() {
 		bat.ShuffleIDX = int32(shuffleConstVectorByHash(ap, bat))
-		return bat, nil
+		err := ap.ctr.shufflePool.putAllBatchIntoPoolByShuffleIdx(bat, proc, bat.ShuffleIDX)
+		return nil, err
 	}
 
 	var sels [][]int32
@@ -818,7 +776,11 @@ func rangeShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.
 		ok, regIndex := allBatchInOneRange(ap, bat)
 		if ok {
 			bat.ShuffleIDX = int32(regIndex)
-			return bat, nil
+			if bat.ShuffleIDX == ap.CurrentShuffleIdx {
+				return bat, nil
+			}
+			err := ap.ctr.shufflePool.putAllBatchIntoPoolByShuffleIdx(bat, proc, bat.ShuffleIDX)
+			return nil, err
 		}
 	}
 	var sels [][]int32
@@ -831,9 +793,13 @@ func rangeShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.
 		if len(sels[i]) > 0 && len(sels[i]) != bat.RowCount() {
 			break
 		}
-		if len(sels[i]) == bat.RowCount() {
+		if len(sels[i]) == bat.RowCount() { // all batch in one range
 			bat.ShuffleIDX = int32(i)
-			return bat, nil
+			if bat.ShuffleIDX == ap.CurrentShuffleIdx {
+				return bat, nil
+			}
+			err := ap.ctr.shufflePool.putAllBatchIntoPoolByShuffleIdx(bat, proc, bat.ShuffleIDX)
+			return nil, err
 		}
 	}
 	err := ap.ctr.shufflePool.putBatchIntoShuffledPoolsBySels(bat, sels, proc)
@@ -864,239 +830,7 @@ func shuffleConstVecByHash(bucketNum int32, vec *vector.Vector) uint64 {
 	}
 }
 
-// rangeShuffleConstVec computes the range bucket index for a constant expression result vector.
-func rangeShuffleConstVec(ap *Shuffle, vec *vector.Vector) uint64 {
-	bucketNum := uint64(ap.BucketNum)
-	switch vec.GetType().Oid {
-	case types.T_int64:
-		v := vector.MustFixedColNoTypeCheck[int64](vec)[0]
-		if ap.ShuffleRangeInt64 != nil {
-			return plan2.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, v)
-		}
-		return plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, v, bucketNum)
-	case types.T_int32:
-		v := int64(vector.MustFixedColNoTypeCheck[int32](vec)[0])
-		if ap.ShuffleRangeInt64 != nil {
-			return plan2.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, v)
-		}
-		return plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, v, bucketNum)
-	case types.T_int16:
-		v := int64(vector.MustFixedColNoTypeCheck[int16](vec)[0])
-		if ap.ShuffleRangeInt64 != nil {
-			return plan2.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, v)
-		}
-		return plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, v, bucketNum)
-	case types.T_uint64:
-		v := vector.MustFixedColNoTypeCheck[uint64](vec)[0]
-		if ap.ShuffleRangeUint64 != nil {
-			return plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
-		}
-		return plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
-	case types.T_uint32:
-		v := uint64(vector.MustFixedColNoTypeCheck[uint32](vec)[0])
-		if ap.ShuffleRangeUint64 != nil {
-			return plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
-		}
-		return plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
-	case types.T_uint16:
-		v := uint64(vector.MustFixedColNoTypeCheck[uint16](vec)[0])
-		if ap.ShuffleRangeUint64 != nil {
-			return plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
-		}
-		return plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
-	case types.T_char, types.T_varchar, types.T_text:
-		groupByCol, area := vector.MustVarlenaRawData(vec)
-		v := plan2.VarlenaToUint64(&groupByCol[0], area)
-		if ap.ShuffleRangeUint64 != nil {
-			return plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
-		}
-		return plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
-	default:
-		panic("unsupported shuffle type, wrong plan!")
-	}
-}
-
-// rangeShuffleVec computes range bucket assignments for each row of an expression result vector.
-func rangeShuffleVec(ap *Shuffle, sels [][]int32, vec *vector.Vector) {
-	bucketNum := uint64(ap.BucketNum)
-	switch vec.GetType().Oid {
-	case types.T_int64:
-		col := vector.MustFixedColNoTypeCheck[int64](vec)
-		if ap.ShuffleRangeInt64 != nil {
-			for row, v := range col {
-				if vec.IsNull(uint64(row)) {
-					sels[0] = append(sels[0], int32(row))
-				} else {
-					idx := plan2.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, v)
-					sels[idx] = append(sels[idx], int32(row))
-				}
-			}
-		} else {
-			for row, v := range col {
-				if vec.IsNull(uint64(row)) {
-					sels[0] = append(sels[0], int32(row))
-				} else {
-					idx := plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, v, bucketNum)
-					sels[idx] = append(sels[idx], int32(row))
-				}
-			}
-		}
-	case types.T_int32:
-		col := vector.MustFixedColNoTypeCheck[int32](vec)
-		if ap.ShuffleRangeInt64 != nil {
-			for row, v := range col {
-				if vec.IsNull(uint64(row)) {
-					sels[0] = append(sels[0], int32(row))
-				} else {
-					idx := plan2.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, int64(v))
-					sels[idx] = append(sels[idx], int32(row))
-				}
-			}
-		} else {
-			for row, v := range col {
-				if vec.IsNull(uint64(row)) {
-					sels[0] = append(sels[0], int32(row))
-				} else {
-					idx := plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
-					sels[idx] = append(sels[idx], int32(row))
-				}
-			}
-		}
-	case types.T_int16:
-		col := vector.MustFixedColNoTypeCheck[int16](vec)
-		if ap.ShuffleRangeInt64 != nil {
-			for row, v := range col {
-				if vec.IsNull(uint64(row)) {
-					sels[0] = append(sels[0], int32(row))
-				} else {
-					idx := plan2.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, int64(v))
-					sels[idx] = append(sels[idx], int32(row))
-				}
-			}
-		} else {
-			for row, v := range col {
-				if vec.IsNull(uint64(row)) {
-					sels[0] = append(sels[0], int32(row))
-				} else {
-					idx := plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
-					sels[idx] = append(sels[idx], int32(row))
-				}
-			}
-		}
-	case types.T_uint64:
-		col := vector.MustFixedColNoTypeCheck[uint64](vec)
-		if ap.ShuffleRangeUint64 != nil {
-			for row, v := range col {
-				if vec.IsNull(uint64(row)) {
-					sels[0] = append(sels[0], int32(row))
-				} else {
-					idx := plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
-					sels[idx] = append(sels[idx], int32(row))
-				}
-			}
-		} else {
-			for row, v := range col {
-				if vec.IsNull(uint64(row)) {
-					sels[0] = append(sels[0], int32(row))
-				} else {
-					idx := plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
-					sels[idx] = append(sels[idx], int32(row))
-				}
-			}
-		}
-	case types.T_uint32:
-		col := vector.MustFixedColNoTypeCheck[uint32](vec)
-		if ap.ShuffleRangeUint64 != nil {
-			for row, v := range col {
-				if vec.IsNull(uint64(row)) {
-					sels[0] = append(sels[0], int32(row))
-				} else {
-					idx := plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, uint64(v))
-					sels[idx] = append(sels[idx], int32(row))
-				}
-			}
-		} else {
-			for row, v := range col {
-				if vec.IsNull(uint64(row)) {
-					sels[0] = append(sels[0], int32(row))
-				} else {
-					idx := plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), uint64(v), bucketNum)
-					sels[idx] = append(sels[idx], int32(row))
-				}
-			}
-		}
-	case types.T_uint16:
-		col := vector.MustFixedColNoTypeCheck[uint16](vec)
-		if ap.ShuffleRangeUint64 != nil {
-			for row, v := range col {
-				if vec.IsNull(uint64(row)) {
-					sels[0] = append(sels[0], int32(row))
-				} else {
-					idx := plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, uint64(v))
-					sels[idx] = append(sels[idx], int32(row))
-				}
-			}
-		} else {
-			for row, v := range col {
-				if vec.IsNull(uint64(row)) {
-					sels[0] = append(sels[0], int32(row))
-				} else {
-					idx := plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), uint64(v), bucketNum)
-					sels[idx] = append(sels[idx], int32(row))
-				}
-			}
-		}
-	case types.T_char, types.T_varchar, types.T_text:
-		groupByCol, area := vector.MustVarlenaRawData(vec)
-		if area == nil {
-			if ap.ShuffleRangeUint64 != nil {
-				for row := range groupByCol {
-					if vec.IsNull(uint64(row)) {
-						sels[0] = append(sels[0], int32(row))
-					} else {
-						v := plan2.VarlenaToUint64Inline(&groupByCol[row])
-						idx := plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
-						sels[idx] = append(sels[idx], int32(row))
-					}
-				}
-			} else {
-				for row := range groupByCol {
-					if vec.IsNull(uint64(row)) {
-						sels[0] = append(sels[0], int32(row))
-					} else {
-						v := plan2.VarlenaToUint64Inline(&groupByCol[row])
-						idx := plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
-						sels[idx] = append(sels[idx], int32(row))
-					}
-				}
-			}
-		} else {
-			if ap.ShuffleRangeUint64 != nil {
-				for row := range groupByCol {
-					if vec.IsNull(uint64(row)) {
-						sels[0] = append(sels[0], int32(row))
-					} else {
-						v := plan2.VarlenaToUint64(&groupByCol[row], area)
-						idx := plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
-						sels[idx] = append(sels[idx], int32(row))
-					}
-				}
-			} else {
-				for row := range groupByCol {
-					if vec.IsNull(uint64(row)) {
-						sels[0] = append(sels[0], int32(row))
-					} else {
-						v := plan2.VarlenaToUint64(&groupByCol[row], area)
-						idx := plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
-						sels[idx] = append(sels[idx], int32(row))
-					}
-				}
-			}
-		}
-	default:
-		panic("unsupported shuffle type, wrong plan!")
-	}
-}
+// hashShuffleVecWithNull hashes a vector with null values into shuffle bucket selections.
 func hashShuffleVecWithNull(sels [][]int32, vec *vector.Vector, lenRegs uint64) {
 	switch vec.GetType().Oid {
 	case types.T_int64:

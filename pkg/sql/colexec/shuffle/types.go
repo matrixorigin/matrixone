@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -28,6 +27,7 @@ var _ vm.Operator = new(Shuffle)
 
 type Shuffle struct {
 	ctr                container
+	CurrentShuffleIdx  int32
 	ShuffleColIdx      int32
 	ShuffleType        int32
 	BucketNum          int32
@@ -35,9 +35,8 @@ type Shuffle struct {
 	ShuffleColMax      int64
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
-	RuntimeFilterSpec  *plan.RuntimeFilterSpec
 	ShuffleExpr        *plan.Expr
-	msgReceiver        *message.MessageReceiver
+	IsDebug            bool //used for unit test
 	vm.OperatorBase
 }
 
@@ -73,40 +72,30 @@ func (shuffle *Shuffle) Release() {
 }
 
 type container struct {
-	ending               bool
-	lastForShufflePool   bool
-	sels                 [][]int32
-	buf                  *batch.Batch
-	shufflePool          *ShufflePool
-	runtimeFilterHandled bool
-	exprExec             colexec.ExpressionExecutor
+	ending      bool
+	sels        [][]int32
+	buf         *batch.Batch
+	shufflePool *ShufflePoolV2
+	exprExec    colexec.ExpressionExecutor
 }
 
-func (shuffle *Shuffle) SetShufflePool(sp *ShufflePool) {
+func (shuffle *Shuffle) SetShufflePool(sp *ShufflePoolV2) {
 	shuffle.ctr.shufflePool = sp
 }
 
-func (shuffle *Shuffle) GetShufflePool() *ShufflePool {
+func (shuffle *Shuffle) GetShufflePool() *ShufflePoolV2 {
 	return shuffle.ctr.shufflePool
 }
 
 func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	if shuffle.RuntimeFilterSpec != nil {
-		shuffle.ctr.runtimeFilterHandled = false
-	}
 	if shuffle.ctr.buf != nil {
 		shuffle.ctr.buf.Clean(proc.Mp())
 		shuffle.ctr.buf = nil
 	}
 	if shuffle.ctr.shufflePool != nil {
-		//shuffle.ctr.shufflePool.Print()
-		if pipelineFailed || err != nil {
-			shuffle.ctr.shufflePool.Reset(proc.Mp(), true)
-		} else if shuffle.ctr.lastForShufflePool {
-			shuffle.ctr.shufflePool.Reset(proc.Mp(), false)
-		}
+		shuffle.ctr.shufflePool.Reset(proc.Mp())
 	}
-	shuffle.ctr.lastForShufflePool = false
+	shuffle.ctr.shufflePool = nil
 	shuffle.ctr.sels = nil
 	shuffle.ctr.ending = false
 }
