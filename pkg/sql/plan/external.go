@@ -15,17 +15,14 @@
 package plan
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
-	"io"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -153,7 +150,7 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 		totolSize := len(externScan.Data)
 		lineSize := float64(0.0)
 		if externScan.Format == tree.CSV {
-			lineSize = float64(strings.Index(externScan.Data, "\n"))
+			lineSize = inlineCSVRowsize(externScan.Data, "\n")
 		}
 
 		if externScan.Format == tree.JSONLINE {
@@ -220,28 +217,10 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 		return DefaultStats()
 	}
 
-	//read one line
-	fs, readPath, err := GetForETLWithType(param, param.Filepath)
-	if err != nil {
+	size := readExternalFirstLineSize(param, totalLoadFileSize(fileSize), 0, param.Ctx)
+	if size == 0 {
 		return DefaultHugeStats()
 	}
-	var r io.ReadCloser
-	vec := fileservice.IOVector{
-		FilePath: readPath,
-		Entries: []fileservice.IOEntry{
-			0: {
-				Offset:            0,
-				Size:              -1,
-				ReadCloserForRead: &r,
-			},
-		},
-	}
-	if err = fs.Read(param.Ctx, &vec); err != nil {
-		return DefaultHugeStats()
-	}
-	r2 := bufio.NewReader(r)
-	line, _ := r2.ReadString('\n')
-	size := len(line)
 	cost = cost / float64(size)
 
 	return &plan.Stats{

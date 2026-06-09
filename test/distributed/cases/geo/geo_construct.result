@@ -1,0 +1,37 @@
+select st_astext(st_convexhull(st_geomfromtext('MULTIPOINT(0 0, 4 0, 4 4, 0 4, 2 2)'))) as hull_poly;
+hull_poly
+POLYGON((0 0,4 0,4 4,0 4,0 0))
+select st_astext(st_convexhull(st_geomfromtext('MULTIPOINT(0 0, 1 1, 2 2)'))) as hull_line;
+hull_line
+LINESTRING(0 0,2 2)
+select st_astext(st_convexhull(st_geomfromtext('MULTIPOINT(5 5, 5 5)'))) as hull_point;
+hull_point
+POINT(5 5)
+select st_astext(st_convexhull(st_geomfromtext('POLYGON((0 0, 4 0, 4 4, 0 4, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1))'))) as hull_from_poly;
+hull_from_poly
+POLYGON((0 0,4 0,4 4,0 4,0 0))
+select st_astext(st_simplify(st_geomfromtext('LINESTRING(0 0, 5 0.0001, 10 0)'), 0.001)) as simp_flat;
+simp_flat
+LINESTRING(0 0,10 0)
+select st_astext(st_simplify(st_geomfromtext('LINESTRING(0 0, 5 5, 10 0)'), 0.001)) as simp_bend;
+simp_bend
+LINESTRING(0 0,5 5,10 0)
+select st_astext(st_simplify(st_geomfromtext('POINT(1 2)'), 1)) as simp_point;
+simp_point
+POINT(1 2)
+select st_astext(st_collect(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 1)'))) as collect_pts;
+collect_pts
+MULTIPOINT(0 0,1 1)
+select st_astext(st_collect(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), st_geomfromtext('POLYGON((2 2,3 2,3 3,2 3,2 2))'))) as collect_polys;
+collect_polys
+MULTIPOLYGON(((0 0,1 0,1 1,0 1,0 0)),((2 2,3 2,3 3,2 3,2 2)))
+select st_astext(st_collect(st_geomfromtext('POINT(0 0)'), st_geomfromtext('LINESTRING(0 0, 1 1)'))) as collect_mixed;
+collect_mixed
+GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,1 1))
+drop table if exists cons_t;
+create table cons_t(id int, g geometry srid 4326);
+insert into cons_t values (1, st_geomfromtext('LINESTRING(0 0, 1 0, 2 0, 3 0)', 4326));
+select st_srid(st_simplify(g, 0.5)) as simp_srid, st_srid(st_convexhull(g)) as hull_srid from cons_t;
+simp_srid    hull_srid
+4326    4326
+drop table cons_t;

@@ -43,6 +43,42 @@ func containsDataBranchTempTableName(sqlLower string) bool {
 		containsTempTableMarker(sqlLower, "__mo_diff_ins_")
 }
 
+func dataBranchTempSQLNeedsBackExec(sqlLower string) bool {
+	if !containsDataBranchTempTableName(sqlLower) {
+		return false
+	}
+
+	switch {
+	case strings.HasPrefix(sqlLower, "drop table"):
+		return true
+	case strings.HasPrefix(sqlLower, "create table"):
+		return true
+	case strings.HasPrefix(sqlLower, "truncate table"):
+		return true
+	case strings.HasPrefix(sqlLower, "insert into "):
+		return containsDataBranchTempTableName(firstSQLTableToken(sqlLower[len("insert into "):]))
+	case strings.HasPrefix(sqlLower, "replace into "):
+		return containsDataBranchTempTableName(firstSQLTableToken(sqlLower[len("replace into "):]))
+	case strings.HasPrefix(sqlLower, "delete from "):
+		return containsDataBranchTempTableName(firstSQLTableToken(sqlLower[len("delete from "):]))
+	case strings.HasPrefix(sqlLower, "update "):
+		return containsDataBranchTempTableName(firstSQLTableToken(sqlLower[len("update "):]))
+	default:
+		return true
+	}
+}
+
+func firstSQLTableToken(sqlLower string) string {
+	sqlLower = strings.TrimSpace(sqlLower)
+	for i := 0; i < len(sqlLower); i++ {
+		switch sqlLower[i] {
+		case ' ', '\t', '\n', '\r', '(':
+			return sqlLower[:i]
+		}
+	}
+	return sqlLower
+}
+
 func containsTempTableMarker(sqlLower, marker string) bool {
 	searchFrom := 0
 	for {
@@ -125,7 +161,7 @@ func runSql(
 	if strings.HasPrefix(trimmedLower, "drop database") {
 		// Internal executor does not support DROP DATABASE (IsPublishing panics).
 		useBackExec = true
-	} else if containsDataBranchTempTableName(trimmedLower) {
+	} else if dataBranchTempSQLNeedsBackExec(trimmedLower) {
 		// Branch diff/merge/pick temp tables do repeated DDL/DML in one shared txn.
 		// The internal SQL fast path skips per-statement workspace increments and can
 		// hit ErrTxnNeedRetryWithDefChanged in RC mode while these temp definitions churn.
