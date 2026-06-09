@@ -865,6 +865,10 @@ func skipBlockComment(s string, start int) int {
 
 // FormatColType Get the formatted description of the column type.
 func FormatColType(colType plan.Type) string {
+	if arrayType := arrayPlanTypeString(&colType); arrayType != "" {
+		return strings.ToUpper(arrayType[:len("array")]) + arrayType[len("array"):]
+	}
+
 	typ := types.T(colType.Id).ToType()
 
 	ts := typ.String()
@@ -877,6 +881,11 @@ func FormatColType(colType plan.Type) string {
 	}
 	if subtype := geometrySubtypeName(&colType); subtype != "" {
 		ts = subtype
+		// A GEOMETRY32 subtype column renders with the "32" suffix (e.g.
+		// POINT32) so SHOW CREATE round-trips the float32 family.
+		if types.T(colType.Id) == types.T_geometry32 {
+			ts += "32"
+		}
 	}
 	if srid, ok := geometrySRIDValue(&colType); ok {
 		ts = fmt.Sprintf("%s SRID %d", ts, srid)

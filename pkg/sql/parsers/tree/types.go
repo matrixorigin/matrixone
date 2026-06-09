@@ -53,6 +53,51 @@ type IntervalDurationField struct {
 type GeoMetadata struct {
 	SRID        uint32
 	SRIDDefined bool
+	// Subtype is the base geometry subtype name (POINT, LINESTRING, ...,
+	// GEOMETRY for the generic/unconstrained form), normalized from the DDL
+	// type keyword (e.g. POINT32 -> POINT, GEOGRAPHY -> GEOMETRY).
+	Subtype string
+	// Float32 is true for the GEOMETRY32 family of types (float32-coordinate
+	// WKB); false for the float64 GEOMETRY family.
+	Float32 bool
+}
+
+// NewSpatialType builds a geometry column type from a DDL spatial type keyword,
+// resolving the aliased forms:
+//
+//   - a trailing "32" (e.g. POINT32, GEOMETRY32) selects the float32 family;
+//   - GEOGRAPHY[32] is the generic geometry with a default SRID of 4326.
+//
+// The base subtype is recorded in both FamilyString and GeoMetadata.Subtype.
+func NewSpatialType(keyword string) *T {
+	name := strings.ToUpper(strings.TrimSpace(keyword))
+	isFloat32 := false
+	if strings.HasSuffix(name, "32") {
+		isFloat32 = true
+		name = strings.TrimSuffix(name, "32")
+	}
+	srid := uint32(0)
+	sridDefined := false
+	if name == "GEOGRAPHY" {
+		name = "GEOMETRY"
+		srid = 4326
+		sridDefined = true
+	}
+	locale := ""
+	return &T{
+		InternalType: InternalType{
+			Family:       GeometryFamily,
+			FamilyString: name,
+			Locale:       &locale,
+			Oid:          uint32(defines.MYSQL_TYPE_GEOMETRY),
+			GeoMetadata: &GeoMetadata{
+				SRID:        srid,
+				SRIDDefined: sridDefined,
+				Subtype:     name,
+				Float32:     isFloat32,
+			},
+		},
+	}
 }
 
 type PersistentUserDefinedTypeMetadata struct {
@@ -178,6 +223,12 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 			// Prints 'vecf32(4)'
 			ctx.WriteByte('(')
 			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
+			ctx.WriteByte(')')
+		}
+	case "array":
+		if node.ArrayContents != nil {
+			ctx.WriteByte('(')
+			node.ArrayContents.InternalType.Format(ctx)
 			ctx.WriteByte(')')
 		}
 	default:

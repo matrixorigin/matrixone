@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
@@ -195,6 +196,40 @@ const (
 	generatedExprExtra   uint8 = 6 // generated column Extra: "STORED GENERATED" or "VIRTUAL GENERATED"
 )
 
+// Geometry subtype and SRID live in the column type's Scale and Width (see
+// pkg/sql/plan/mysql_special_types.go): Scale holds the geo.Subtype enum and
+// Width holds srid+1 when an SRID is declared (0 means undeclared). These two
+// helpers mirror that rendering for information_schema.COLUMNS / desc, matching
+// what SHOW CREATE TABLE produces via plan.FormatColType.
+
+// geometryShowDataType renders the DATA_TYPE of a geometry column: the subtype
+// name (POINT, LINESTRING, ...) or the base family when the subtype is generic.
+func geometryShowDataType(typ *types.Type) string {
+	base := "GEOMETRY"
+	if typ.Oid == types.T_geometry32 {
+		base = "GEOMETRY32"
+	}
+	sub := geo.Subtype(typ.Scale)
+	if sub == geo.GENERIC {
+		return base
+	}
+	name := sub.String()
+	if typ.Oid == types.T_geometry32 {
+		name += "32"
+	}
+	return name
+}
+
+// geometryShowColumnType is geometryShowDataType plus a " SRID n" suffix when
+// the column declares an SRID (Width holds srid+1; 0 means undeclared).
+func geometryShowColumnType(typ *types.Type) string {
+	ts := geometryShowDataType(typ)
+	if typ.Width > 0 {
+		ts = fmt.Sprintf("%s SRID %d", ts, uint32(typ.Width-1))
+	}
+	return ts
+}
+
 func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[1])
@@ -240,8 +275,8 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
 			}
-			if typ.Oid == types.T_geometry {
-				return functionUtil.QuickStrToBytes("GEOMETRY"), nil
+			if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
+				return functionUtil.QuickStrToBytes(geometryShowDataType(typ)), nil
 			}
 
 			return functionUtil.QuickStrToBytes(ts), nil
@@ -260,8 +295,8 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
 				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
-			} else if typ.Oid == types.T_geometry {
-				ret = "GEOMETRY"
+			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
+				ret = geometryShowColumnType(typ)
 			} else {
 				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 			}
@@ -361,7 +396,9 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, err
 		}
 		typeName := "ENUM"
-		if typ.Oid == types.T_uint64 {
+		if typ.Oid == types.T_json && strings.HasPrefix(strings.ToLower(strings.TrimSpace(enumStr)), "array(") {
+			return functionUtil.QuickStrToBytes(enumStr), nil
+		} else if typ.Oid == types.T_uint64 {
 			typeName = "SET"
 		} else if typ.Oid == types.T_geometry {
 			subtype := ""
