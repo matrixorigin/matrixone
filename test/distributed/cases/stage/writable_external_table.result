@@ -1,0 +1,72 @@
+drop database if exists wext;
+create database wext;
+use wext;
+drop stage if exists wstage;
+create stage wstage url = 'file:///$resources/into_outfile/stage';
+drop table if exists src;
+create table src(a int, b varchar(20), c double);
+insert into src values (1,'alice',1.5),(2,'bob',2.5),(3,'carol',3.5);
+drop table if exists ext_csv;
+create external table ext_csv(a int, b varchar(20), c double)
+infile{'filepath'='stage://wstage/wext_csv_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_csv_%U.csv'}
+fields terminated by ',';
+insert into ext_csv select * from src;
+select * from ext_csv order by a;
+a    b    c
+1    alice    1.5
+2    bob    2.5
+3    carol    3.5
+select count(*) from ext_csv;
+count(*)
+3
+insert into ext_csv select a+10, b, c from src;
+select * from ext_csv order by a;
+a    b    c
+1    alice    1.5
+2    bob    2.5
+3    carol    3.5
+11    alice    1.5
+12    bob    2.5
+13    carol    3.5
+select count(*) from ext_csv;
+count(*)
+6
+drop table if exists ext_jl;
+create external table ext_jl(a int, b varchar(20), c double)
+infile{'filepath'='stage://wstage/wext_jl_*.jl', 'format'='jsonline', 'write_file_pattern'='stage://wstage/wext_jl_%U.jl', 'jsondata'='object'}
+fields terminated by ',';
+insert into ext_jl select * from src;
+select * from ext_jl order by a;
+a    b    c
+1    alice    1.5
+2    bob    2.5
+3    carol    3.5
+drop table if exists ext_load;
+create external table ext_load(col1 date not null, col2 datetime, col3 timestamp, col4 bool)
+infile{'filepath'='stage://wstage/wext_load_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_load_%U.csv'}
+fields terminated by ',';
+set time_zone = 'SYSTEM';
+load data infile '$resources/load_data/time_date_1.csv' into table ext_load fields terminated by ',';
+select * from ext_load order by col1;
+col1    col2    col3    col4
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    0
+9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    1
+drop table if exists ext_ro;
+create external table ext_ro(a int) infile 'stage://wstage/nonexist_*.csv';
+insert into ext_ro values (1);
+invalid input: cannot insert/update/delete from external table
+create external table ext_bad1(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='/tmp/part-%U.csv'};
+invalid configuration: WRITE_FILE_PATTERN must be a stage:// path, got '/tmp/part-%U.csv'
+create external table ext_bad2(a int)
+infile{'filepath'='stage://wstage/x_*.pq', 'format'='parquet', 'write_file_pattern'='stage://wstage/x_%U.pq'};
+invalid configuration: writable external table only supports csv and jsonline formats, got 'parquet'
+create external table ext_bad3(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%Q.csv'};
+invalid configuration: WRITE_FILE_PATTERN: unsupported directive %Q in pattern "stage://wstage/x_%Q.csv"
+drop table if exists ext_csv;
+drop table if exists ext_jl;
+drop table if exists ext_load;
+drop table if exists src;
+drop stage if exists wstage;
+drop database if exists wext;

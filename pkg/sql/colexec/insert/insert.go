@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -121,6 +122,13 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 	}
 
 	insert.ctr.state = vm.Build
+	if insert.ToExternal {
+		cfg := insert.InsertCtx.ExternalConfig
+		cfg.Attrs = insert.InsertCtx.Attrs
+		insert.ctr.extWriter = externalwrite.NewExternalWriter(proc, cfg)
+		insert.ctr.affectedRows = 0
+		return nil
+	}
 	if insert.ToWriteS3 {
 		fs, err := colexec.GetSharedFSFromProc(proc)
 		if err != nil {
@@ -185,10 +193,48 @@ func (insert *Insert) Call(proc *process.Process) (vm.CallResult, error) {
 		analyzer.AddInsertTime(t)
 	}()
 
+	if insert.ToExternal {
+		return insert.insert_external(proc, analyzer)
+	}
 	if insert.ToWriteS3 {
 		return insert.insert_s3(proc, analyzer)
 	}
 	return insert.insert_table(proc, analyzer)
+}
+
+// insert_external writes a batch into a writable external table's backing file.
+// One operator instance owns one ExternalWriter and therefore one output file.
+// The file is finalized when the input stream ends (nil batch).
+func (insert *Insert) insert_external(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+	input, err := vm.ChildrenCall(insert.GetChildren(0), proc, analyzer)
+	if err != nil {
+		return input, err
+	}
+
+	if input.Batch == nil {
+		// End of input: flush and finalize the file.
+		if insert.ctr.extWriter != nil {
+			if _, cerr := insert.ctr.extWriter.Close(proc.Ctx); cerr != nil {
+				return input, cerr
+			}
+			insert.ctr.extWriter = nil
+		}
+		return input, nil
+	}
+	if input.Batch.IsEmpty() {
+		return input, nil
+	}
+
+	if err = insert.ctr.extWriter.WriteBatch(proc.Ctx, input.Batch); err != nil {
+		return input, err
+	}
+
+	rows := uint64(input.Batch.RowCount())
+	analyzer.AddWrittenRows(int64(rows))
+	if insert.InsertCtx.AddAffectedRows {
+		atomic.AddUint64(&insert.ctr.affectedRows, rows)
+	}
+	return input, nil
 }
 
 func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer) (result vm.CallResult, err error) {

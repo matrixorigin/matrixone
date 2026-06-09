@@ -1934,6 +1934,8 @@ func InitInfileParam(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case ExternalWriteFilePatternKey:
+			// Write-only option for writable external tables; ignored on read.
 		default:
 			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", key)
 		}
@@ -1997,6 +1999,8 @@ func InitS3Param(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case ExternalWriteFilePatternKey:
+			// Write-only option for writable external tables; ignored on read.
 		default:
 			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", key)
 		}
@@ -2024,6 +2028,25 @@ func GetFilePathFromParam(param *tree.ExternParam) string {
 	}
 
 	return fpath
+}
+
+// ExternalWriteFilePatternKey is the external-table option that turns the table
+// into a writable external table. Its value is a strftime template (with the
+// %nN and %U MatrixOne extensions) that must resolve to a stage:// path.
+const ExternalWriteFilePatternKey = "write_file_pattern"
+
+// GetWriteFilePattern returns the WRITE_FILE_PATTERN option of an external table
+// and whether it was set. An external table is writable iff this returns ok.
+func GetWriteFilePattern(param *tree.ExternParam) (string, bool) {
+	if param == nil {
+		return "", false
+	}
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		if strings.ToLower(param.Option[i]) == ExternalWriteFilePatternKey {
+			return param.Option[i+1], true
+		}
+	}
+	return "", false
 }
 
 func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
@@ -2105,6 +2128,8 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case ExternalWriteFilePatternKey:
+			// Write-only option for writable external tables; ignored on read.
 		default:
 			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", key)
 		}

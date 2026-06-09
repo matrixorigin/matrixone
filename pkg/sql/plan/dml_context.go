@@ -208,7 +208,14 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	if err := checkTableType(ctx.GetContext(), tableDef); err != nil {
+	// External tables are not handled by the modern DML binder. Defer to the
+	// legacy planner (buildInsert/buildLoad), which supports INSERT/LOAD into
+	// writable external tables and rejects the rest with a precise error.
+	if tableDef.TableType == catalog.SystemExternalRel {
+		return moerr.NewUnsupportedDML(ctx.GetContext(), "external table")
+	}
+
+	if err := checkTableType(ctx.GetContext(), tableDef, ""); err != nil {
 		return err
 	}
 

@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -922,10 +923,14 @@ func buildCreateTable(
 	if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
-			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns":
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns", ExternalWriteFilePatternKey:
 			default:
 				return nil, moerr.NewBadConfigf(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
 			}
+		}
+
+		if err := validateWriteFilePattern(ctx.GetContext(), stmt.Param); err != nil {
+			return nil, err
 		}
 
 		if err := validateAndSetHivePartitionOptions(ctx.GetContext(), stmt, createTable); err != nil {
@@ -5127,7 +5132,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				return nil, err
 			}
 		case *tree.AlterTableRenameColumnClause:
-			if err := checkTableType(ctx.GetContext(), tableDef); err != nil {
+			if err := checkTableType(ctx.GetContext(), tableDef, ""); err != nil {
 				return nil, err
 			}
 
@@ -5919,6 +5924,30 @@ func constructAddedPartitionDefs(
 	default:
 		return nil, moerr.NewNotSupportedNoCtx("unsupported partition method in ADD PARTITION")
 	}
+}
+
+// validateWriteFilePattern validates the WRITE_FILE_PATTERN option that makes an
+// external table writable. No-op for read-only external tables (option absent).
+func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam) error {
+	pattern, ok := GetWriteFilePattern(param)
+	if !ok {
+		return nil
+	}
+	if !strings.HasPrefix(pattern, "stage://") {
+		return moerr.NewBadConfigf(ctx, "WRITE_FILE_PATTERN must be a stage:// path, got '%s'", pattern)
+	}
+	format := strings.ToLower(param.Format)
+	if format == "" {
+		format = strings.ToLower(getRawOption(param.Option, "format"))
+	}
+	if format != tree.CSV && format != tree.JSONLINE {
+		return moerr.NewBadConfigf(ctx, "writable external table only supports csv and jsonline formats, got '%s'", format)
+	}
+	// Dry-run the pattern against a fixed timestamp to reject bad directives at DDL time.
+	if _, err := externalwrite.ExpandFilePattern(pattern, time.Unix(0, 0).UTC()); err != nil {
+		return err
+	}
+	return nil
 }
 
 // validateAndSetHivePartitionOptions parses and validates hive_partitioning options from the DDL,
