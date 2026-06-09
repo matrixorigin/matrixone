@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -906,6 +907,80 @@ func StAsText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}, selectList)
 }
 
+// StAsWKB returns the standard (float64) Well-Known Binary of a geometry,
+// up-converting a GEOMETRY32 value to float64 so the output is always
+// interoperable standard WKB.
+func StAsWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		wkt, _, _, err := decodeGeometryPayload(v)
+		if err != nil {
+			return nil, err
+		}
+		g, perr := geo.ParseWKT(wkt)
+		if perr != nil {
+			return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		return geo.WriteWKB(g), nil
+	}, selectList)
+}
+
+// StAsGeoJSON renders a geometry as an RFC 7946 GeoJSON geometry object
+// (full coordinate precision).
+func StAsGeoJSON(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		g, err := decodeGeoGeometry(v)
+		if err != nil {
+			return nil, err
+		}
+		return functionUtil.QuickStrToBytes(geo.WriteGeoJSON(g, -1)), nil
+	}, selectList)
+}
+
+// StGeomFromGeoJSON builds a geometry from a GeoJSON geometry object. Per
+// MySQL, the default SRID is 4326 (recorded in the result type's Width by the
+// binder/overload).
+func StGeomFromGeoJSON(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	maxPoints := maxPointsInGeometryLimit(proc)
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		g, err := geo.ParseGeoJSON(v)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateGeometryTextForStorage(geo.WriteWKT(g), maxPoints); err != nil {
+			return nil, err
+		}
+		return geo.WriteWKB(g), nil
+	}, selectList)
+}
+
+// StConvexHull returns the convex hull of a geometry (planar, monotone chain).
+func StConvexHull(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		g, err := decodeGeoGeometry(v)
+		if err != nil {
+			return nil, err
+		}
+		return geoEncodeWKB(geo.ConvexHull(g), f32), nil
+	}, selectList)
+}
+
+// StGeomFromWKB builds a geometry from standard Well-Known Binary.
+func StGeomFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	maxPoints := maxPointsInGeometryLimit(proc)
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		g, err := geo.ReadWKB(v)
+		if err != nil {
+			return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		wkt := geo.WriteWKT(g)
+		if err := validateGeometryTextForStorage(wkt, maxPoints); err != nil {
+			return nil, err
+		}
+		return geo.WriteWKB(g), nil
+	}, selectList)
+}
+
 func StGeomFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	maxPoints := maxPointsInGeometryLimit(proc)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
@@ -951,8 +1026,8 @@ func StGeomFromTextWithSRID(ivecs []*vector.Vector, result vector.FunctionResult
 			}
 			continue
 		}
-		if sridValue < 0 || sridValue > math.MaxUint32 {
-			return moerr.NewInvalidInputNoCtx("SRID should be between 0 and 4294967295")
+		if sridValue < 0 || sridValue > int64(geo.MaxSRID) {
+			return moerr.NewInvalidInputNoCtxf("SRID should be between 0 and %d", geo.MaxSRID)
 		}
 
 		wkt := strings.TrimSpace(functionUtil.QuickBytesToStr(v))
@@ -969,25 +1044,451 @@ func StGeomFromTextWithSRID(ivecs []*vector.Vector, result vector.FunctionResult
 	return nil
 }
 
-func StSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[uint32](ivecs, result, proc, length, func(v []byte) (uint32, error) {
-		_, srid, sridDefined, err := decodeGeometryPayload(v)
+// geomFromTextSubtype is the shared implementation of the typed text
+// constructors (ST_PointFromText, ST_LineFromText, ...): parse WKT, assert the
+// expected subtype, and return bare WKB. The optional SRID argument of the
+// +SRID overloads is ignored here (it lands in the result type via the binder);
+// the eval only reads the WKT parameter.
+func geomFromTextSubtype(payload []byte, maxPoints int64, want string) ([]byte, error) {
+	wkt := strings.TrimSpace(functionUtil.QuickBytesToStr(payload))
+	if len(wkt) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	if err := validateGeometryTextForStorage(wkt, maxPoints); err != nil {
+		return nil, err
+	}
+	typeName, err := geometryTypeNameFromText(wkt)
+	if err != nil {
+		return nil, err
+	}
+	if typeName != want {
+		return nil, moerr.NewInvalidInputNoCtxf("geometry is not a %s", want)
+	}
+	return encodeGeometryPayload(wkt, 0, false), nil
+}
+
+func stFromTextSubtype(want string) func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error {
+	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		maxPoints := maxPointsInGeometryLimit(proc)
+		return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+			return geomFromTextSubtype(v, maxPoints, want)
+		}, selectList)
+	}
+}
+
+func StPointFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromTextSubtype("POINT")(ivecs, result, proc, length, selectList)
+}
+
+func StLineFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromTextSubtype("LINESTRING")(ivecs, result, proc, length, selectList)
+}
+
+func StPolyFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromTextSubtype("POLYGON")(ivecs, result, proc, length, selectList)
+}
+
+func StMPointFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromTextSubtype("MULTIPOINT")(ivecs, result, proc, length, selectList)
+}
+
+func StMLineFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromTextSubtype("MULTILINESTRING")(ivecs, result, proc, length, selectList)
+}
+
+func StMPolyFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromTextSubtype("MULTIPOLYGON")(ivecs, result, proc, length, selectList)
+}
+
+func StGeomCollFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromTextSubtype("GEOMETRYCOLLECTION")(ivecs, result, proc, length, selectList)
+}
+
+// geomFromWKBSubtype is the shared implementation of the typed WKB constructors
+// (ST_PointFromWKB, ...): read standard WKB, assert the expected subtype, and
+// re-emit bare WKB.
+func geomFromWKBSubtype(payload []byte, maxPoints int64, want string) ([]byte, error) {
+	g, err := geo.ReadWKB(payload)
+	if err != nil {
+		g, err = geo.ReadWKBFloat32(payload)
 		if err != nil {
-			return 0, err
+			return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
 		}
-		if !sridDefined {
-			return 0, nil
+	}
+	wkt := geo.WriteWKT(g)
+	if err := validateGeometryTextForStorage(wkt, maxPoints); err != nil {
+		return nil, err
+	}
+	typeName, err := geometryTypeNameFromText(wkt)
+	if err != nil {
+		return nil, err
+	}
+	if typeName != want {
+		return nil, moerr.NewInvalidInputNoCtxf("geometry is not a %s", want)
+	}
+	return geo.WriteWKB(g), nil
+}
+
+func stFromWKBSubtype(want string) fEvalFn {
+	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		maxPoints := maxPointsInGeometryLimit(proc)
+		return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+			return geomFromWKBSubtype(v, maxPoints, want)
+		}, selectList)
+	}
+}
+
+func StPointFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromWKBSubtype("POINT")(ivecs, result, proc, length, selectList)
+}
+
+func StLineFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromWKBSubtype("LINESTRING")(ivecs, result, proc, length, selectList)
+}
+
+func StPolyFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromWKBSubtype("POLYGON")(ivecs, result, proc, length, selectList)
+}
+
+func StMPointFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromWKBSubtype("MULTIPOINT")(ivecs, result, proc, length, selectList)
+}
+
+func StMLineFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromWKBSubtype("MULTILINESTRING")(ivecs, result, proc, length, selectList)
+}
+
+func StMPolyFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromWKBSubtype("MULTIPOLYGON")(ivecs, result, proc, length, selectList)
+}
+
+func StGeomCollFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFromWKBSubtype("GEOMETRYCOLLECTION")(ivecs, result, proc, length, selectList)
+}
+
+// StLongitude returns the X (longitude) ordinate of a point (ST_Longitude).
+func StLongitude(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stPointOrdinate[float64](ivecs, result, proc, length, selectList, true)
+}
+
+// StLongitude32 is the GEOMETRY32 overload of ST_Longitude (returns float32).
+func StLongitude32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stPointOrdinate[float32](ivecs, result, proc, length, selectList, true)
+}
+
+// StLatitude returns the Y (latitude) ordinate of a point (ST_Latitude).
+func StLatitude(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stPointOrdinate[float64](ivecs, result, proc, length, selectList, false)
+}
+
+// StLatitude32 is the GEOMETRY32 overload of ST_Latitude (returns float32).
+func StLatitude32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stPointOrdinate[float32](ivecs, result, proc, length, selectList, false)
+}
+
+// stPointOrdinate returns the X (wantX) or Y ordinate of a POINT as type T, so
+// the same logic serves the float64 (GEOMETRY) and float32 (GEOMETRY32) forms.
+func stPointOrdinate[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, wantX bool) error {
+	return opUnaryBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v []byte) (T, error) {
+		x, y, err := parsePointXYFromPayload(v)
+		if wantX {
+			return T(x), err
 		}
-		return srid, nil
+		return T(y), err
 	}, selectList)
 }
 
-func encodeGeometryPayload(wkt string, srid uint32, sridDefined bool) []byte {
-	wkt = strings.TrimSpace(wkt)
-	if !sridDefined {
+// StSwapXY swaps the X and Y of every coordinate of a geometry (ST_SwapXY).
+func StSwapXY(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		g, err := decodeGeoGeometry(v)
+		if err != nil {
+			return nil, err
+		}
+		return geoEncodeWKB(geo.SwapXY(g), f32), nil
+	}, selectList)
+}
+
+// StLatFromGeoHash returns the latitude of the center of a geohash cell
+// (ST_LatFromGeoHash).
+func StLatFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
+		_, lat, err := geo.DecodeGeoHash(functionUtil.QuickBytesToStr(v))
+		if err != nil {
+			return 0, moerr.NewInvalidInputNoCtx("invalid geohash")
+		}
+		return lat, nil
+	}, selectList)
+}
+
+// StLongFromGeoHash returns the longitude of the center of a geohash cell
+// (ST_LongFromGeoHash).
+func StLongFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
+		lon, _, err := geo.DecodeGeoHash(functionUtil.QuickBytesToStr(v))
+		if err != nil {
+			return 0, moerr.NewInvalidInputNoCtx("invalid geohash")
+		}
+		return lon, nil
+	}, selectList)
+}
+
+// StValidate returns the geometry if it is structurally valid, otherwise NULL
+// (ST_Validate).
+func StValidate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	src := vector.GenerateFunctionStrParameter(ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v, null := src.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		valid, err := isValidFromPayload(v)
+		if err != nil || !valid {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes(v, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func StSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// SRID is carried by the column/expression type (Width = srid+1 when a SRID
+	// is defined, 0 otherwise), not by the bare-WKB payload.
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
+	rs := vector.MustFunctionResult[uint32](result)
+	src := vector.GenerateFunctionStrParameter(ivecs[0])
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, null := src.GetStrValue(i); null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.Append(srid, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// sridFromTypeWidth decodes the SRID stored in a geometry type's Width
+// (srid+1 when defined, 0 when undefined → SRID 0).
+func sridFromTypeWidth(width int32) uint32 {
+	if width > 0 {
+		return uint32(width - 1)
+	}
+	return 0
+}
+
+// sridFromInt64Arg validates an explicit SRID argument (e.g. the trailing srid
+// of ST_Distance/ST_Length/ST_Area) before narrowing it to uint32. A bare
+// uint32(srid) cast would silently wrap a negative or oversized value (-1 →
+// 4294967295) and then pick the wrong coordinate-system kernel, so reject it.
+func sridFromInt64Arg(srid int64) (uint32, error) {
+	if srid < 0 || srid > math.MaxUint32 {
+		return 0, moerr.NewInvalidInputNoCtxf("SRID value %d is out of range [0, 4294967295]", srid)
+	}
+	return uint32(srid), nil
+}
+
+// validateComputationSRID rejects SRIDs the measurement kernels cannot compute
+// in. Only SRID 0 (unitless Cartesian) and 4326 (WGS 84 geodetic) are dispatched;
+// any other SRID — including projected systems such as 3857 — would otherwise
+// silently fall back to Cartesian math and return a semantically wrong, unitless
+// result. This is the single gate for every ST_Length/ST_Area/ST_Distance path,
+// whether the SRID comes from the operand type's Width or an explicit argument.
+func validateComputationSRID(srid uint32) error {
+	if !geo.SupportedSRID(srid) {
+		return moerr.NewInvalidInputNoCtxf("unsupported SRID %d for spatial computation; only 0 and %d are supported", srid, geo.SRIDWGS84)
+	}
+	return nil
+}
+
+// geometryResultType is the retType for geometry-producing spatial functions.
+// SRID lives in the type (Width), so a derived geometry inherits its source
+// geometry's SRID. For constructors whose first argument is text (e.g.
+// ST_GeomFromText), there is no source geometry and the SRID is supplied by the
+// binder from a constant argument (Width stays 0 here).
+func geometryResultType(parameters []types.Type) types.Type {
+	// A GEOMETRY32 input yields a GEOMETRY32 (float32) result; everything else
+	// stays GEOMETRY (float64). The OID is always available from the argument
+	// type, so geometry-returning functions preserve the input precision.
+	oid := types.T_geometry
+	if len(parameters) > 0 && parameters[0].Oid == types.T_geometry32 {
+		oid = types.T_geometry32
+	}
+	t := oid.ToType()
+	if len(parameters) > 0 && (parameters[0].Oid == types.T_geometry || parameters[0].Oid == types.T_geometry32) {
+		t.Width = parameters[0].Width
+	}
+	return t
+}
+
+// geometryArgIsFloat32 reports whether the i-th argument vector is a GEOMETRY32
+// (float32-coordinate) value, so an eval function can emit matching output.
+func geometryArgIsFloat32(ivecs []*vector.Vector, i int) bool {
+	return i < len(ivecs) && ivecs[i].GetType().Oid == types.T_geometry32
+}
+
+// geoEncodeWKB writes g as float32 WKB when f32 is set, else standard float64 WKB.
+func geoEncodeWKB(g geo.Geometry, f32 bool) []byte {
+	if f32 {
+		return geo.WriteWKBFloat32(g)
+	}
+	return geo.WriteWKB(g)
+}
+
+// reencodeGeom32 transcodes an already-encoded WKB payload to float32 WKB when
+// f32 is set; otherwise it returns the payload unchanged. Used by
+// geometry-returning functions that build their output through helpers that
+// always emit standard float64 WKB.
+func reencodeGeom32(out []byte, f32 bool) []byte {
+	if !f32 || len(out) == 0 {
+		return out
+	}
+	g, err := geo.ReadWKB(out)
+	if err != nil {
+		if g, err = geo.ReadWKBFloat32(out); err != nil {
+			return out
+		}
+	}
+	return geo.WriteWKBFloat32(g)
+}
+
+// encodeGeometryPayload parses a WKT (or EWKT "SRID=n;WKT") string and returns
+// the bare standard WKB bytes that a geometry varlena stores. SRID is NOT
+// stored in the cell (it lives in the column type), so the srid arguments are
+// ignored and any EWKT SRID prefix is stripped. See docs/design/gisimpl.md.
+func encodeGeometryPayload(wkt string, _ uint32, _ bool) []byte {
+	wkt, _, _ = stripEWKTSRID(strings.TrimSpace(wkt))
+	g, err := geo.ParseWKT(wkt)
+	if err != nil {
+		// Internal callers pass well-formed WKT and external input is
+		// validated before storage; on an unexpected parse error keep the raw
+		// text (decode tolerates legacy text) so the error surfaces downstream
+		// rather than silently corrupting data.
 		return functionUtil.QuickStrToBytes(wkt)
 	}
-	return functionUtil.QuickStrToBytes(fmt.Sprintf("SRID=%d;%s", srid, wkt))
+	return geo.WriteWKB(g)
+}
+
+// decodeGeoGeometry decodes a stored geometry payload (WKB float64/float32, or
+// legacy WKT/EWKT text) into the geo.Geometry model used by the Cartesian and
+// geodetic computation kernels.
+func decodeGeoGeometry(payload []byte) (geo.Geometry, error) {
+	if len(payload) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	if payloadIsWKB(payload) {
+		g, err := geo.ReadWKB(payload)
+		if err != nil {
+			g, err = geo.ReadWKBFloat32(payload)
+			if err != nil {
+				return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+			}
+		}
+		return g, nil
+	}
+	s, _, _ := stripEWKTSRID(strings.TrimSpace(functionUtil.QuickBytesToStr(payload)))
+	g, err := geo.ParseWKT(s)
+	if err != nil {
+		return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	return g, nil
+}
+
+// geodeticArea returns the WGS 84 geodesic area (square meters) of a polygon or
+// multipolygon.
+func geodeticArea(payload []byte) (float64, error) {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return 0, err
+	}
+	if typeName != "POLYGON" && typeName != "MULTIPOLYGON" {
+		return 0, moerr.NewInvalidInputNoCtx("geometry is not a POLYGON or MULTIPOLYGON")
+	}
+	g, err := decodeGeoGeometry(payload)
+	if err != nil {
+		return 0, err
+	}
+	return geo.AreaSquareMeters(g), nil
+}
+
+// geodeticLength returns the WGS 84 geodesic length (meters) of a linestring or
+// multilinestring.
+func geodeticLength(payload []byte) (float64, error) {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return 0, err
+	}
+	if typeName != "LINESTRING" && typeName != "MULTILINESTRING" {
+		return 0, moerr.NewInvalidInputNoCtx("geometry is not a LINESTRING or MULTILINESTRING")
+	}
+	g, err := decodeGeoGeometry(payload)
+	if err != nil {
+		return 0, err
+	}
+	return geo.LengthMeters(g), nil
+}
+
+// encodeGeometryPayloadFloat32 is the GEOMETRY32 counterpart of
+// encodeGeometryPayload: it parses WKT and returns float32-coordinate WKB.
+func encodeGeometryPayloadFloat32(wkt string) []byte {
+	wkt, _, _ = stripEWKTSRID(strings.TrimSpace(wkt))
+	g, err := geo.ParseWKT(wkt)
+	if err != nil {
+		return functionUtil.QuickStrToBytes(wkt)
+	}
+	return geo.WriteWKBFloat32(g)
+}
+
+// stripEWKTSRID removes a leading "SRID=n;" prefix from an (E)WKT string,
+// returning the bare WKT, the parsed SRID, and whether a prefix was present.
+func stripEWKTSRID(s string) (wkt string, srid uint32, hasSRID bool) {
+	if !strings.HasPrefix(strings.ToUpper(s), "SRID=") {
+		return s, 0, false
+	}
+	sep := strings.IndexByte(s, ';')
+	if sep <= len("SRID=") {
+		return s, 0, false
+	}
+	parsed, err := strconv.ParseUint(strings.TrimSpace(s[len("SRID="):sep]), 10, 32)
+	if err != nil {
+		return s, 0, false
+	}
+	return strings.TrimSpace(s[sep+1:]), uint32(parsed), true
+}
+
+// payloadIsWKB reports whether a geometry payload is WKB (the stored form)
+// rather than legacy WKT text. Standard WKB begins with a byte-order marker
+// (0x00 big-endian or 0x01 little-endian); WKT begins with a type-keyword
+// letter.
+func payloadIsWKB(payload []byte) bool {
+	return len(payload) > 0 && (payload[0] == 0 || payload[0] == 1)
 }
 
 func geometryTypeNameFromText(wkt string) (string, error) {
@@ -1020,30 +1521,36 @@ func geometryTypeNameFromText(wkt string) (string, error) {
 	}
 }
 
+// decodeGeometryPayload returns the WKT text of a stored geometry. The stored
+// form is bare WKB; for backward/test compatibility legacy WKT (or EWKT) text
+// payloads are also accepted. SRID is never carried in the payload, so the srid
+// return values are always (0, false) — callers that need the SRID read it from
+// the column/vector type instead.
 func decodeGeometryPayload(payload []byte) (wkt string, srid uint32, sridDefined bool, err error) {
-	s := strings.TrimSpace(functionUtil.QuickBytesToStr(payload))
-	if len(s) == 0 {
+	if len(payload) == 0 {
 		return "", 0, false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
-	upper := strings.ToUpper(s)
-	if !strings.HasPrefix(upper, "SRID=") {
-		return s, 0, false, nil
+	if payloadIsWKB(payload) {
+		g, rerr := geo.ReadWKB(payload)
+		if rerr != nil {
+			// A float32-coordinate WKB (GEOMETRY32) carries 4 coordinate bytes
+			// where standard WKB carries 8, so the float64 reader runs out of
+			// bytes on it; fall back to the float32 reader. The two encodings
+			// are unambiguous by length, so this also serves columns whose OID
+			// is GEOMETRY32.
+			g, rerr = geo.ReadWKBFloat32(payload)
+			if rerr != nil {
+				return "", 0, false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+			}
+		}
+		return geo.WriteWKT(g), 0, false, nil
 	}
-
-	sepIdx := strings.IndexByte(s, ';')
-	if sepIdx <= len("SRID=") || sepIdx == len(s)-1 {
+	// Legacy WKT/EWKT text.
+	s, _, _ := stripEWKTSRID(strings.TrimSpace(functionUtil.QuickBytesToStr(payload)))
+	if s == "" {
 		return "", 0, false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
-	value := strings.TrimSpace(s[len("SRID="):sepIdx])
-	parsed, parseErr := strconv.ParseUint(value, 10, 32)
-	if parseErr != nil {
-		return "", 0, false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
-	}
-	wkt = strings.TrimSpace(s[sepIdx+1:])
-	if wkt == "" {
-		return "", 0, false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
-	}
-	return wkt, uint32(parsed), true, nil
+	return s, 0, false, nil
 }
 
 func GeometryPayloadToText(payload []byte) (string, error) {
@@ -1845,17 +2352,25 @@ func StGeometryType(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 }
 
 func StX(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
-		x, _, err := parsePointXYFromPayload(v)
-		return x, err
-	}, selectList)
+	return stPointOrdinate[float64](ivecs, result, proc, length, selectList, true)
+}
+
+// StX32 is the GEOMETRY32 overload of ST_X. It returns float32, matching the
+// stored coordinate width of a GEOMETRY32 value. This is a deliberate MatrixOne
+// extension: MySQL's ST_X always returns DOUBLE; for the float32 GEOMETRY32
+// family the coordinate accessors stay float32 to avoid implying precision the
+// value does not carry. Plain GEOMETRY still returns float64 via StX.
+func StX32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stPointOrdinate[float32](ivecs, result, proc, length, selectList, true)
 }
 
 func StY(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
-		_, y, err := parsePointXYFromPayload(v)
-		return y, err
-	}, selectList)
+	return stPointOrdinate[float64](ivecs, result, proc, length, selectList, false)
+}
+
+// StY32 is the GEOMETRY32 overload of ST_Y (returns float32).
+func StY32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stPointOrdinate[float32](ivecs, result, proc, length, selectList, false)
 }
 
 func StNumGeometries(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1944,7 +2459,8 @@ func StGeometryN(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		if err != nil {
 			return err
 		}
-		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(item), false); err != nil {
+		out := reencodeGeom32(functionUtil.QuickStrToBytes(item), geometryArgIsFloat32(ivecs, 0))
+		if err := rs.AppendBytes(out, false); err != nil {
 			return err
 		}
 	}
@@ -1986,7 +2502,7 @@ func StPointN(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		if err != nil {
 			return err
 		}
-		if err := rs.AppendBytes(point, false); err != nil {
+		if err := rs.AppendBytes(reencodeGeom32(point, geometryArgIsFloat32(ivecs, 0)), false); err != nil {
 			return err
 		}
 	}
@@ -1994,8 +2510,13 @@ func StPointN(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 func StExteriorRing(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		return polygonExteriorRingFromPayload(v)
+		out, err := polygonExteriorRingFromPayload(v)
+		if err != nil {
+			return nil, err
+		}
+		return reencodeGeom32(out, f32), nil
 	}, selectList)
 }
 
@@ -2040,7 +2561,7 @@ func StInteriorRingN(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		if err != nil {
 			return err
 		}
-		if err := rs.AppendBytes(ring, false); err != nil {
+		if err := rs.AppendBytes(reencodeGeom32(ring, geometryArgIsFloat32(ivecs, 0)), false); err != nil {
 			return err
 		}
 	}
@@ -2084,20 +2605,35 @@ func StIsRing(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 func StEnvelope(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		return envelopeFromPayload(v)
+		out, err := envelopeFromPayload(v)
+		if err != nil {
+			return nil, err
+		}
+		return reencodeGeom32(out, f32), nil
 	}, selectList)
 }
 
 func StCentroid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		return centroidFromPayload(v)
+		out, err := centroidFromPayload(v)
+		if err != nil {
+			return nil, err
+		}
+		return reencodeGeom32(out, f32), nil
 	}, selectList)
 }
 
 func StBoundary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		return boundaryFromPayload(v)
+		out, err := boundaryFromPayload(v)
+		if err != nil {
+			return nil, err
+		}
+		return reencodeGeom32(out, f32), nil
 	}, selectList)
 }
 
@@ -2108,20 +2644,35 @@ func StIsValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 func StPointOnSurface(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		return pointOnSurfaceFromPayload(v)
+		out, err := pointOnSurfaceFromPayload(v)
+		if err != nil {
+			return nil, err
+		}
+		return reencodeGeom32(out, f32), nil
 	}, selectList)
 }
 
 func StStartPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		return lineStringTerminalPointFromPayload(v, true)
+		out, err := lineStringTerminalPointFromPayload(v, true)
+		if err != nil {
+			return nil, err
+		}
+		return reencodeGeom32(out, f32), nil
 	}, selectList)
 }
 
 func StEndPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		return lineStringTerminalPointFromPayload(v, false)
+		out, err := lineStringTerminalPointFromPayload(v, false)
+		if err != nil {
+			return nil, err
+		}
+		return reencodeGeom32(out, f32), nil
 	}, selectList)
 }
 
@@ -3126,15 +3677,120 @@ func StIsEmpty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	}, selectList)
 }
 
+// geometryLengthBySRID computes the length of a geometry in the coordinate
+// system selected by srid: geodesic meters for SRID 4326, Cartesian otherwise.
+func geometryLengthBySRID(payload []byte, srid uint32) (float64, error) {
+	if err := validateComputationSRID(srid); err != nil {
+		return 0, err
+	}
+	if srid == geo.SRIDWGS84 {
+		return geodeticLength(payload)
+	}
+	return geometryLength(payload)
+}
+
 func StLength(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
-		return geometryLength(v)
+	return stLength[float64](ivecs, result, proc, length, selectList)
+}
+
+// StLength32 is the GEOMETRY32 overload of ST_Length (returns float32).
+func StLength32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stLength[float32](ivecs, result, proc, length, selectList)
+}
+
+func stLength[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
+	return opUnaryBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v []byte) (T, error) {
+		l, err := geometryLengthBySRID(v, srid)
+		return T(l), err
 	}, selectList)
 }
 
+// StLengthWithSRID is the ST_Length(geom, srid) overload.
+func StLengthWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stLengthWithSRID[float64](ivecs, result, proc, length, selectList)
+}
+
+// StLengthWithSRID32 is the GEOMETRY32 overload of ST_Length(geom, srid).
+func StLengthWithSRID32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stLengthWithSRID[float32](ivecs, result, proc, length, selectList)
+}
+
+func stLengthWithSRID[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrFixedToFixedWithErrorCheck[int64, T](ivecs, result, proc, length, func(v string, srid int64) (T, error) {
+		su, err := sridFromInt64Arg(srid)
+		if err != nil {
+			return 0, err
+		}
+		l, err := geometryLengthBySRID(functionUtil.QuickStrToBytes(v), su)
+		return T(l), err
+	}, selectList)
+}
+
+// geometryAreaBySRID computes the area of a geometry in the coordinate system
+// selected by srid: geodesic square meters for SRID 4326, Cartesian otherwise.
+func geometryAreaBySRID(payload []byte, srid uint32) (float64, error) {
+	if err := validateComputationSRID(srid); err != nil {
+		return 0, err
+	}
+	// An empty areal geometry has zero area. ST_Intersection of disjoint
+	// polygons yields POLYGON EMPTY, whose coordinate-less WKT both area
+	// kernels would otherwise fail to parse ("invalid polygon payload").
+	wkt, _, _, err := decodeGeometryPayload(payload)
+	if err != nil {
+		return 0, err
+	}
+	if isEmptyGeometryWKT(wkt) {
+		return 0, nil
+	}
+	if srid == geo.SRIDWGS84 {
+		return geodeticArea(payload)
+	}
+	return geometryArea(payload)
+}
+
+// isEmptyGeometryWKT reports whether wkt is an empty geometry such as
+// "POLYGON EMPTY" or "MULTIPOLYGON EMPTY".
+func isEmptyGeometryWKT(wkt string) bool {
+	return strings.HasSuffix(strings.ToUpper(strings.TrimSpace(wkt)), " EMPTY")
+}
+
 func StArea(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
-		return geometryArea(v)
+	return stArea[float64](ivecs, result, proc, length, selectList)
+}
+
+// StArea32 is the GEOMETRY32 overload of ST_Area (returns float32).
+func StArea32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stArea[float32](ivecs, result, proc, length, selectList)
+}
+
+func stArea[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
+	return opUnaryBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v []byte) (T, error) {
+		a, err := geometryAreaBySRID(v, srid)
+		return T(a), err
+	}, selectList)
+}
+
+// StAreaWithSRID is the ST_Area(geom, srid) overload: the explicit SRID
+// overrides the geometry's type SRID for the computation.
+func StAreaWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stAreaWithSRID[float64](ivecs, result, proc, length, selectList)
+}
+
+// StAreaWithSRID32 is the GEOMETRY32 overload of ST_Area(geom, srid).
+func StAreaWithSRID32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stAreaWithSRID[float32](ivecs, result, proc, length, selectList)
+}
+
+func stAreaWithSRID[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrFixedToFixedWithErrorCheck[int64, T](ivecs, result, proc, length, func(v string, srid int64) (T, error) {
+		su, err := sridFromInt64Arg(srid)
+		if err != nil {
+			return 0, err
+		}
+		a, err := geometryAreaBySRID(functionUtil.QuickStrToBytes(v), su)
+		return T(a), err
 	}, selectList)
 }
 

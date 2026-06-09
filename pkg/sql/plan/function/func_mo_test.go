@@ -75,34 +75,9 @@ func TestCastGeometryToSubtypeRejectMismatch(t *testing.T) {
 	require.Contains(t, info, "cannot store LINESTRING in POINT column")
 }
 
-func TestCastGeometryToSubtypeRejectSRIDMismatch(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT;SRID=4326"}, []bool{false}),
-		NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=0;POINT(1 2)"}, []bool{false}),
-	}
-	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
-
-	tcc := NewFunctionTestCase(proc, inputs, expect, CastGeometryToSubtype)
-	succeed, info := tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "The SRID of the geometry does not match the SRID of the column")
-}
-
-func TestCastGeometryToSubtypeRejectSRIDMismatchGenericGeometryLabel(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"SRID=4326"}, []bool{false}),
-		NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=0;POINT(1 2)"}, []bool{false}),
-	}
-	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
-
-	tcc := NewFunctionTestCase(proc, inputs, expect, CastGeometryToSubtype)
-	succeed, info := tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "column 'GEOMETRY'")
-	require.Contains(t, info, "SRID of the column is 4326")
-}
+// SRID mismatch is now rejected at bind time (see funcCastForGeometryType in
+// the plan package), not by the runtime cast_geometry_to_subtype, which only
+// validates the subtype and normalizes the stored bytes to WKB.
 
 func TestCastGeometryToSubtypeRejectNonFinite(t *testing.T) {
 	proc := testutil.NewProcess(t)
