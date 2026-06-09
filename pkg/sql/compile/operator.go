@@ -923,7 +923,7 @@ func constructExternalInsert(
 		return nil, moerr.NewNotSupportedf(proc.Ctx, "insert into read-only external table %s", oldCtx.TableDef.Name)
 	}
 
-	var attrs []string
+	attrs := make([]string, 0, len(oldCtx.TableDef.Cols))
 	for _, col := range oldCtx.TableDef.Cols {
 		// Skip Row_ID and any hidden/synthetic columns (e.g. __mo_filepath that
 		// the resolver attaches to external tables) — only the declared columns

@@ -60,6 +60,42 @@ func TestExpandFilePattern_UUID(t *testing.T) {
 	require.NotEqual(t, a, b)
 }
 
+func TestStrftimeDirectives(t *testing.T) {
+	// Afternoon so %p == PM and %I wraps the 24h hour into 12h form.
+	ts := time.Date(2026, 1, 5, 14, 3, 9, 0, time.UTC) // Monday, Jan 5 2026
+	cases := map[string]string{
+		"%Y": "2026",
+		"%y": "26",
+		"%m": "01",
+		"%d": "05",
+		"%H": "14",
+		"%I": "02",
+		"%M": "03",
+		"%S": "09",
+		"%p": "PM",
+		"%A": "Monday",
+		"%a": "Mon",
+		"%B": "January",
+		"%b": "Jan",
+	}
+	for pat, want := range cases {
+		got, err := ExpandFilePattern(pat, ts)
+		require.NoError(t, err, "pattern %q", pat)
+		require.Equal(t, want, got, "pattern %q", pat)
+	}
+
+	// %I at midnight and noon: hour 0 -> 12 (AM), hour 12 -> 12 (PM).
+	midnight := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
+	got, err := ExpandFilePattern("%I%p", midnight)
+	require.NoError(t, err)
+	require.Equal(t, "12AM", got)
+
+	noon := time.Date(2026, 1, 5, 12, 0, 0, 0, time.UTC)
+	got, err = ExpandFilePattern("%I%p", noon)
+	require.NoError(t, err)
+	require.Equal(t, "12PM", got)
+}
+
 func TestExpandFilePattern_Errors(t *testing.T) {
 	ts := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
 	cases := []string{

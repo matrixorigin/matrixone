@@ -39,6 +39,40 @@ fields terminated by ',';
 insert into ext_jl select * from src;
 select * from ext_jl order by a;
 
+-- ---------- wide column-type coverage (CSV + JSONLine), incl. NULLs ----------
+drop table if exists wide_src;
+create table wide_src(
+  c_i8 tinyint, c_i64 bigint, c_u32 int unsigned,
+  c_f32 float, c_dec decimal(10,2),
+  c_ch char(4), c_vc varchar(20), c_txt text,
+  c_dt date, c_bool bool, c_bit bit(8), c_json json);
+insert into wide_src values
+  (-1, 9223372036854775807, 4000000000, 1.5, 123.45,
+   'ab', 'hi,there', 'long text', '2026-06-08', true, b'101', '{"k":1}'),
+  (null, null, null, null, null, null, null, null, null, null, null, null);
+
+drop table if exists ext_wide_csv;
+create external table ext_wide_csv(
+  c_i8 tinyint, c_i64 bigint, c_u32 int unsigned,
+  c_f32 float, c_dec decimal(10,2),
+  c_ch char(4), c_vc varchar(20), c_txt text,
+  c_dt date, c_bool bool, c_bit bit(8), c_json json)
+infile{'filepath'='stage://wstage/wext_wide_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_wide_%U.csv'}
+fields terminated by ',' enclosed by '"';
+insert into ext_wide_csv select * from wide_src;
+select c_i8, c_i64, c_u32, c_dec, c_vc, c_bool from ext_wide_csv order by c_i64;
+
+drop table if exists ext_wide_jl;
+create external table ext_wide_jl(
+  c_i8 tinyint, c_i64 bigint, c_u32 int unsigned,
+  c_f32 float, c_dec decimal(10,2),
+  c_ch char(4), c_vc varchar(20), c_txt text,
+  c_dt date, c_bool bool, c_bit bit(8), c_json json)
+infile{'filepath'='stage://wstage/wext_widejl_*.jl', 'format'='jsonline', 'write_file_pattern'='stage://wstage/wext_widejl_%U.jl', 'jsondata'='object'}
+fields terminated by ',';
+insert into ext_wide_jl select * from wide_src;
+select c_i8, c_i64, c_u32, c_dec, c_vc, c_bool from ext_wide_jl order by c_i64;
+
 -- ---------- LOAD into a writable external table ----------
 drop table if exists ext_load;
 create external table ext_load(col1 date not null, col2 datetime, col3 timestamp, col4 bool)
@@ -68,6 +102,9 @@ infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'
 
 drop table if exists ext_csv;
 drop table if exists ext_jl;
+drop table if exists ext_wide_csv;
+drop table if exists ext_wide_jl;
+drop table if exists wide_src;
 drop table if exists ext_load;
 drop table if exists src;
 drop stage if exists wstage;
