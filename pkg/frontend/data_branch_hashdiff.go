@@ -1485,9 +1485,9 @@ func getTupleColumnValue(tuple types.Tuple, tblStuff tableStuff, colIdx int) (an
 	}
 	switch len(tuple) {
 	case totalColCnt, totalColCnt + 1:
-		return tuple[colIdx], nil
+		return normalizeTupleColumnValue(tuple[colIdx], tblStuff.def.colTypes[colIdx])
 	case totalColCnt + 2:
-		return tuple[colIdx+1], nil
+		return normalizeTupleColumnValue(tuple[colIdx+1], tblStuff.def.colTypes[colIdx])
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf(
 			"unexpected tuple width %d for table %s with %d visible columns",
@@ -1583,19 +1583,53 @@ func validateLeadingRowID(side, tableName string, isTombstone bool, bat *batch.B
 }
 
 func appendTupleValueToVector(vec *vector.Vector, val any, mp *mpool.MPool) error {
+	val, err := normalizeTupleColumnValue(val, *vec.GetType())
+	if err != nil {
+		return err
+	}
 	if val == nil {
 		return vector.AppendNull(vec, mp)
 	}
 	if raw, ok := val.([]byte); ok {
-		if !vec.GetType().IsVarlen() {
-			return moerr.NewInternalErrorNoCtxf(
-				"unexpected byte slice for fixed-width column type %s",
-				vec.GetType().String(),
-			)
-		}
 		return vector.AppendBytes(vec, raw, false, mp)
 	}
 	return vector.AppendAny(vec, val, false, mp)
+}
+
+func normalizeTupleColumnValue(val any, typ types.Type) (any, error) {
+	if val == nil {
+		return nil, nil
+	}
+	raw, ok := val.([]byte)
+	if !ok {
+		return val, nil
+	}
+	if typ.IsVarlen() {
+		return raw, nil
+	}
+	fixedLen := typ.Oid.FixedLength()
+	if fixedLen < 0 || len(raw) != fixedLen {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"unexpected byte slice for fixed-width column type %s",
+			typ.String(),
+		)
+	}
+	switch typ.Oid {
+	case types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_uuid, types.T_TS, types.T_Rowid, types.T_Blockid,
+		types.T_enum:
+		return types.DecodeValue(raw, typ.Oid), nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"unexpected byte slice for fixed-width column type %s",
+			typ.String(),
+		)
+	}
 }
 
 func checkConflictAndAppendToBat(
