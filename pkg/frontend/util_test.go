@@ -60,6 +60,19 @@ func init() {
 	testutil.SetupAutoIncrService("")
 }
 
+type testColumnWithoutDecimalScale struct {
+	ColumnImpl
+	signed bool
+}
+
+func (c *testColumnWithoutDecimalScale) SetSigned(signed bool) {
+	c.signed = signed
+}
+
+func (c *testColumnWithoutDecimalScale) IsSigned() bool {
+	return c.signed
+}
+
 func Test_PathExists(t *testing.T) {
 	cases := [...]struct {
 		path   string
@@ -1440,18 +1453,28 @@ func Test_mysqlDecimalColTypeMissingPrecision(t *testing.T) {
 	require.Error(t, err)
 }
 
+func Test_mysqlDecimalColTypeRequiresScaleMetadata(t *testing.T) {
+	col := new(testColumnWithoutDecimalScale)
+	col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	col.SetLength(12)
+
+	_, err := mysqlDecimalColType(col)
+	require.Error(t, err)
+}
+
 func Test_mysqlDecimalColTypePrecisionBoundary(t *testing.T) {
 	cases := []struct {
 		name  string
 		width int32
+		scale int32
 		want  types.T
 	}{
-		{name: "decimal64 below boundary", width: 16, want: types.T_decimal64},
-		{name: "decimal64 precision 17", width: 17, want: types.T_decimal64},
-		{name: "decimal64 precision 18", width: 18, want: types.T_decimal64},
-		{name: "decimal128 precision 19", width: 19, want: types.T_decimal128},
-		{name: "decimal128 max precision", width: 38, want: types.T_decimal128},
-		{name: "decimal256 precision 39", width: 39, want: types.T_decimal256},
+		{name: "decimal64 below boundary", width: 16, scale: 0, want: types.T_decimal64},
+		{name: "decimal64 precision 17", width: 17, scale: 3, want: types.T_decimal64},
+		{name: "decimal64 precision 18", width: 18, scale: 3, want: types.T_decimal64},
+		{name: "decimal128 precision 19", width: 19, scale: 3, want: types.T_decimal128},
+		{name: "decimal128 max precision", width: 38, scale: 3, want: types.T_decimal128},
+		{name: "decimal256 precision 39", width: 39, scale: 3, want: types.T_decimal256},
 	}
 
 	for _, tt := range cases {
@@ -1459,13 +1482,13 @@ func Test_mysqlDecimalColTypePrecisionBoundary(t *testing.T) {
 			col := new(MysqlColumn)
 			col.SetColumnType(defines.MYSQL_TYPE_NEWDECIMAL)
 			col.SetLength(uint32(tt.width + 2))
-			col.SetDecimal(3)
+			col.SetDecimal(tt.scale)
 
 			got, err := mysqlDecimalColType(col)
 			require.NoError(t, err)
 			require.Equal(t, tt.want, got.Oid)
 			require.Equal(t, tt.width, got.Width)
-			require.Equal(t, int32(3), got.Scale)
+			require.Equal(t, tt.scale, got.Scale)
 		})
 	}
 }

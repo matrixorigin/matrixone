@@ -164,6 +164,14 @@ func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	err := appendTupleValueToVector(datetimeVec, []byte("not-raw-fixed"), mp)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unexpected byte slice for fixed-width column")
+
+	decimalTyp := types.New(types.T_decimal256, 39, 4)
+	decimalVec := vector.NewVec(decimalTyp)
+	decimalVal, err := types.ParseDecimal256("12345678901234567890123456789012344.1234", decimalTyp.Width, decimalTyp.Scale)
+	require.NoError(t, err)
+	require.NoError(t, appendTupleValueToVector(decimalVec, types.EncodeDecimal256(&decimalVal), mp))
+	require.Equal(t, 1, decimalVec.Length())
+	require.Equal(t, decimalVal, vector.GetFixedAtNoTypeCheck[types.Decimal256](decimalVec, 0))
 }
 
 func TestCompareSingleValInVector_AllTypes(t *testing.T) {
@@ -468,6 +476,19 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, err := types.Decimal128FromFloat64(12.34, 38, 4)
 				require.NoError(t, err)
 				rightVal, err := types.Decimal128FromFloat64(23.45, 38, 4)
+				require.NoError(t, err)
+				leftVec := buildFixedVector(t, mp, typ, leftVal)
+				rightVec := buildFixedVector(t, mp, typ, rightVal)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
+			},
+		},
+		{
+			name: "decimal256",
+			build: func(t *testing.T, mp *mpool.MPool) (*vector.Vector, *vector.Vector, int) {
+				typ := types.New(types.T_decimal256, 39, 4)
+				leftVal, err := types.ParseDecimal256("12345678901234567890123456789012344.1234", typ.Width, typ.Scale)
+				require.NoError(t, err)
+				rightVal, err := types.ParseDecimal256("12345678901234567890123456789012345.1234", typ.Width, typ.Scale)
 				require.NoError(t, err)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)

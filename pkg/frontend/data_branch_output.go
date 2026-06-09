@@ -1019,7 +1019,7 @@ func appendBatchRowsAsSQLValues(
 
 			switch vec.GetType().Oid {
 			case types.T_datetime, types.T_timestamp, types.T_decimal64,
-				types.T_decimal128, types.T_time:
+				types.T_decimal128, types.T_decimal256, types.T_time:
 				row[colIdx] = types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
 			default:
 				if err = extractRowFromVector(
