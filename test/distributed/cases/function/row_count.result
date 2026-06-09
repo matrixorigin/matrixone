@@ -56,6 +56,16 @@ create table ctas as select * from src;
 select row_count();
 ➤ row_count()[-5,64,0]  𝄀
 6
+create table odku(id int primary key, v int);
+insert into odku values (1,1) on duplicate key update v=v+1;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+1
+create table load_t(id int, v varchar(10));
+load data infile '$resources/load_data/row_count.csv' into table load_t fields terminated by ',';
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+4
 insert into t values (1,12345);
 Duplicate entry '1' for key 'id'
 select row_count();

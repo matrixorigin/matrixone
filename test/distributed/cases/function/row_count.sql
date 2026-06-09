@@ -57,6 +57,16 @@ select row_count();
 create table ctas as select * from src;
 select row_count();
 
+-- insert ... on duplicate key update that inserts a brand-new row affects 1 row
+create table odku(id int primary key, v int);
+insert into odku values (1,1) on duplicate key update v=v+1;
+select row_count();
+
+-- load data reports the number of imported rows
+create table load_t(id int, v varchar(10));
+load data infile '$resources/load_data/row_count.csv' into table load_t fields terminated by ',';
+select row_count();
+
 -- a failed statement (duplicate primary key) makes row_count() return -1
 insert into t values (1,12345);
 select row_count();
