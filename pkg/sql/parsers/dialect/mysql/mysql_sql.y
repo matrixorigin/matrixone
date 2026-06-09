@@ -413,6 +413,9 @@ func sqlTaskInt64(v any) int64 {
 // MO table option
 %token <str> PROPERTIES
 
+// TTL table option
+%token <str> TTL TTL_ENABLE TTL_JOB_INTERVAL
+
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE
@@ -3860,6 +3863,10 @@ alter_option:
 |   table_option
     {
         $$ = tree.AlterTableOption($1)
+    }
+|   REMOVE TTL
+    {
+        $$ = tree.AlterTableOption(tree.NewAlterTableRemoveTTL())
     }
 |   RENAME rename_type alter_table_rename
     {
@@ -9818,6 +9825,19 @@ table_option:
         var Preperties = $3
         $$ = tree.NewTableOptionProperties(Preperties)
     }
+|   TTL equal_opt column_name '+' interval_expr
+    {
+        expr := tree.NewBinaryExpr(tree.PLUS, $3, $5)
+        $$ = tree.NewTableOptionTTL(expr)
+    }
+|   TTL_ENABLE equal_opt STRING
+    {
+        $$ = tree.NewTableOptionTTLEnable($3)
+    }
+|   TTL_JOB_INTERVAL equal_opt STRING
+    {
+        $$ = tree.NewTableOptionTTLJobInterval($3)
+    }
 
 properties_list:
     property_elem
@@ -13745,6 +13765,9 @@ non_reserved_keyword:
 |   AGAINST
 |   ALWAYS
 |   AVG_ROW_LENGTH
+|   TTL
+|   TTL_ENABLE
+|   TTL_JOB_INTERVAL
 |   AUTO_RANDOM
 |   ATTRIBUTE
 |   ACTION

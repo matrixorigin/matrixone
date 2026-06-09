@@ -105,6 +105,12 @@ func init() {
 		reuse.DefaultOptions[AlterOptionDrop](), //.
 	) // WithEnableChecker()
 
+	reuse.CreatePool[AlterTableRemoveTTL](
+		func() *AlterTableRemoveTTL { return &AlterTableRemoveTTL{} },
+		func(a *AlterTableRemoveTTL) { a.reset() },
+		reuse.DefaultOptions[AlterTableRemoveTTL](), //.
+	) // WithEnableChecker()
+
 	reuse.CreatePool[AlterOptionTableName](
 		func() *AlterOptionTableName { return &AlterOptionTableName{} },
 		func(a *AlterOptionTableName) { a.reset() },
@@ -716,6 +722,14 @@ func (node *AlterTable) reset() {
 				opt.Free()
 			case *TableOptionComment:
 				opt.Free()
+			case *TableOptionTTL:
+				opt.Free()
+			case *TableOptionTTLEnable:
+				opt.Free()
+			case *TableOptionTTLJobInterval:
+				opt.Free()
+			case *AlterTableRemoveTTL:
+				opt.Free()
 			case *TableOptionAvgRowLength:
 				opt.Free()
 			case *TableOptionChecksum:
@@ -841,6 +855,27 @@ type alterOptionImpl struct {
 
 func (a *alterOptionImpl) Free() {
 	panic("should implement by child")
+}
+
+// AlterTableRemoveTTL represents `ALTER TABLE ... REMOVE TTL`, which clears the TTL config.
+type AlterTableRemoveTTL struct {
+	alterOptionImpl
+}
+
+func NewAlterTableRemoveTTL() *AlterTableRemoveTTL {
+	return reuse.Alloc[AlterTableRemoveTTL](nil)
+}
+
+func (node *AlterTableRemoveTTL) Free() { reuse.Free[AlterTableRemoveTTL](node, nil) }
+
+func (node *AlterTableRemoveTTL) Format(ctx *FmtCtx) {
+	ctx.WriteString("remove ttl")
+}
+
+func (node AlterTableRemoveTTL) TypeName() string { return "tree.AlterTableRemoveTTL" }
+
+func (node *AlterTableRemoveTTL) reset() {
+	*node = AlterTableRemoveTTL{}
 }
 
 type AlterOptionAlterIndex struct {
