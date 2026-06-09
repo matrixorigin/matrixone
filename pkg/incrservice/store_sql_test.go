@@ -148,6 +148,11 @@ func (tls *testLockService) GetLockTableBind(group uint32, tableID uint64) (lock
 	panic("implement me")
 }
 
+func (tls *testLockService) GetLatestLockTableBind(bind lock.LockTable) (lock.LockTable, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (tls *testLockService) IterLocks(f func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool) {
 	//TODO implement me
 	panic("implement me")

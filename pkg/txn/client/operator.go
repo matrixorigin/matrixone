@@ -1011,7 +1011,13 @@ func (tc *txnOperator) CheckLockTableBinds(ctx context.Context) error {
 
 	var invalid []uint64
 	for _, hold := range lockTables {
-		current, err := tc.lockService.GetLockTableBind(hold.Group, hold.Table)
+		if err := ctx.Err(); err != nil {
+			tc.mu.Lock()
+			tc.mu.lastLockTableBindCheck = time.Time{}
+			tc.mu.Unlock()
+			return err
+		}
+		current, err := tc.lockService.GetLatestLockTableBind(hold)
 		if err != nil {
 			tc.mu.Lock()
 			tc.mu.lastLockTableBindCheck = time.Time{}
