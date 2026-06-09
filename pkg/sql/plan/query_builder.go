@@ -4306,7 +4306,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 	h := &helpFunc{}
 
 	name := tree.NewUnresolvedColName("interval")
-	arg2 := tree.NewNumVal(astTimeWindow.Interval.Unit, astTimeWindow.Interval.Unit, false, tree.P_char)
+	arg2 := tree.NewTimeUnitExpr(astTimeWindow.Interval.Unit)
 	h.interval = &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(name),
 		Exprs: tree.Exprs{astTimeWindow.Interval.Val, arg2},
@@ -4316,7 +4316,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 
 	if astTimeWindow.Sliding != nil {
 		name = tree.NewUnresolvedColName("interval")
-		arg2 = tree.NewNumVal(astTimeWindow.Sliding.Unit, astTimeWindow.Sliding.Unit, false, tree.P_char)
+		arg2 = tree.NewTimeUnitExpr(astTimeWindow.Sliding.Unit)
 		h.sliding = &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
 			Exprs: tree.Exprs{astTimeWindow.Sliding.Val, arg2},
@@ -4329,7 +4329,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 		}
 
 		name = tree.NewUnresolvedColName("interval")
-		arg2 = tree.NewNumVal("second", "second", false, tree.P_char)
+		arg2 = tree.NewTimeUnitExpr("second")
 		expr = &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
 			Exprs: tree.Exprs{div, arg2},
