@@ -712,7 +712,7 @@ func getLockTableBind(
 	tableID uint64,
 	originTableID uint64,
 	serviceID string,
-	sharding pb.Sharding) (pb.LockTable, error) {
+	sharding pb.Sharding) (pb.LockTable, uint64, error) {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseGetLockTableBind)
 	defer cancel()
 
@@ -728,11 +728,11 @@ func getLockTableBind(
 
 	resp, err := c.Send(ctx, req)
 	if err != nil {
-		return pb.LockTable{}, moerr.AttachCause(ctx, err)
+		return pb.LockTable{}, 0, moerr.AttachCause(ctx, err)
 	}
 	defer releaseResponse(resp)
 	v := resp.GetBind.LockTable
-	return v, nil
+	return v, resp.GetBind.AllocatorVersion, nil
 }
 
 type who struct {
