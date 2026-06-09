@@ -40,8 +40,10 @@ type lockTableAllocator struct {
 	client          Client
 	inactiveService sync.Map // lock service id -> inactive time
 	ctl             sync.Map // lock service id -> *commitCtl
-	version         uint64
-	mu              struct {
+	// version is the allocator process epoch. It is set once when the
+	// allocator is constructed; production code must not mutate it at runtime.
+	version uint64
+	mu      struct {
 		sync.RWMutex
 		services   map[string]*serviceBinds
 		lockTables map[uint32]map[uint64]pb.LockTable
@@ -843,6 +845,7 @@ func (l *lockTableAllocator) handleGetBind(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	resp.GetBind.AllocatorVersion = l.version
 	if !l.canGetBind(req.GetBind.ServiceID) {
 		writeResponse(l.logger, cancel, resp, moerr.NewNewTxnInCNRollingRestart(), cs)
 		return
@@ -862,6 +865,7 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	resp.KeepLockTableBind.AllocatorVersion = l.version
 	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
 	if !resp.KeepLockTableBind.OK {
 		// resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart

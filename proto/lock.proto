@@ -252,6 +252,7 @@ message GetBindRequest {
 // GetBindResponse get bind request from allocator response. TN -> CN
 message GetBindResponse {
   LockTable LockTable = 2 [(gogoproto.nullable) = false];
+  uint64 AllocatorVersion = 3;
 }
 
 // KeepLockTableBindRequest keep lock table bind request. CN -> TN
@@ -266,6 +267,7 @@ message KeepLockTableBindRequest {
 message KeepLockTableBindResponse {
   bool OK = 1;
   Status Status = 2;
+  uint64 AllocatorVersion = 3;
 }
 
 // SetRestartServiceRequest set restart lock service request from allocator request. operator -> TN
