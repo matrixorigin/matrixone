@@ -550,7 +550,7 @@ func TestGetExprValue(t *testing.T) {
 			{"set @@x=(select 127)", false, 127},
 			{"set @@x=(select -128)", false, -128},
 			{"set @@x=(select -2147483648)", false, -2147483648},
-			{"set @@x=(select -9223372036854775808)", false, "-9223372036854775808"},
+			{"set @@x=(select -9223372036854775808)", false, int64(-9223372036854775808)},
 			{"set @@x=(select 18446744073709551615)", false, uint64(math.MaxUint64)},
 			{"set @@x=(select 1.1754943508222875e-38)", false, float32(1.1754943508222875e-38)},
 			{"set @@x=(select 3.4028234663852886e+38)", false, float32(3.4028234663852886e+38)},
