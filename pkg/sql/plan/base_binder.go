@@ -1764,6 +1764,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
+		if argLit := args[0].GetLit(); args[0].Typ.Id == int32(types.T_uint64) && argLit != nil && argLit.GetU64Val() == 1<<63 {
+			return makePlan2Int64ConstExprWithType(math.MinInt64), nil
+		}
 		if args[0].Typ.Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
 				Id:          int32(types.T_decimal128),
