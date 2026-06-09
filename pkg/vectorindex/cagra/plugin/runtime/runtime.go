@@ -58,12 +58,28 @@ func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehav
 	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
 }
 
-// RestoreBehavior — CAGRA's prebuilt model lives in the Storage (tag=0 blob) +
-// Metadata hidden tables; a future RestoreDirectly={Storage,Metadata} would let
-// restore load that model instead of rebuilding the graph via async CDC.
-// Returns the zero value today: restore rebuilds via CDC like normal DML.
+// RestoreBehavior — CAGRA's hidden tables (Storage tag=0 model blob + Metadata)
+// are keyed by index_id, so the restore's block-level clone overwrites the
+// CreateTable seed rather than appending — nothing needs delete-before-clone
+// (empty DeleteBeforeClone). The model is rebuilt post-clone by the compile
+// hook's RestoreInitSQL (ALTER … REINDEX … cagra FORCE_SYNC), run by the CDC's
+// first iteration.
 func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
 	return catalogplugin.RestoreBehavior{}
+}
+
+// BuildSessionVars mirrors CAGRA's idxcron Capture set — the build-time session
+// vars that must survive into a background rebuild (restore reindex, idxcron):
+// the cagra_* knobs plus the basics (lower_case_table_names for name resolution
+// in the rebuild SQL, and the experimental flag). CAGRA does NOT train k-means,
+// so no kmeans vars. Captured into algo_params.session_vars at CREATE INDEX.
+func (CatalogHooks) BuildSessionVars() []string {
+	return []string{
+		"cagra_threads_build",
+		"cagra_max_index_capacity",
+		"lower_case_table_names",
+		"experimental_cagra_index",
+	}
 }
 
 func (CatalogHooks) DefaultOptions() map[string]string {

@@ -4099,12 +4099,16 @@ alter_table_alter:
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
-| REINDEX ident HNSW
+| REINDEX ident HNSW index_option_list
     {
-	
         var io *tree.IndexOption = nil
-        io = tree.NewIndexOption()
-        io.IType = tree.INDEX_TYPE_HNSW
+        if $4 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_HNSW
+        } else {
+            io = $4
+            io.IType = tree.INDEX_TYPE_HNSW
+        }
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }

@@ -52,7 +52,7 @@ func TestCagraAlterTableCloneBehavior(t *testing.T) {
 
 	// RestoreBehavior is the zero value today — restore rebuilds the index, no
 	// hidden table is restored directly.
-	require.Empty(t, CatalogHooks{}.RestoreBehavior().RestoreDirectly)
+	require.Empty(t, CatalogHooks{}.RestoreBehavior().DeleteBeforeClone)
 }
 
 func TestCagraDefaultOptions(t *testing.T) {

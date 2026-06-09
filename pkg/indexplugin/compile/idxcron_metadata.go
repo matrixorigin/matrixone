@@ -104,13 +104,31 @@ func BuildIdxcronMetadata(ctx CompileContext, spec IdxcronVarSpec) ([]byte, erro
 		}
 	}
 
+	return CaptureVars(ctx.ResolveVariable, spec.Capture)
+}
+
+// CaptureVars reads each named system/session variable through resolve and
+// packs the typed values into a sqlexec.MetadataWriter JSON ({"cfg":{...}}),
+// type-switching on the resolved runtime value to pick the right Add* method.
+// The output is the typed blob sqlexec.NewMetadata(...).ResolveVariableFunc
+// reads back.
+//
+// Shared by BuildIdxcronMetadata and the algo_params.session_vars capture
+// (pkg/sql/compile/util.go) so both produce byte-identical output — idxcron is
+// intended to later read session_vars from algo_params instead of its own task
+// metadata. resolve has the proc.GetResolveVariableFunc / CompileContext.
+// ResolveVariable signature (name, isSystemVar, isGlobalVar).
+func CaptureVars(resolve func(string, bool, bool) (interface{}, error), names []string) ([]byte, error) {
 	w := sqlexec.NewMetadataWriter()
-	for _, name := range spec.Capture {
-		v, err := ctx.ResolveVariable(name, true, false)
+	for _, name := range names {
+		v, err := resolve(name, true, false)
 		if err != nil {
 			return nil, err
 		}
 		switch tv := v.(type) {
+		case nil:
+			// variable unset / no value — capture nothing for it
+			continue
 		case int8:
 			w.AddInt8(name, tv)
 		case int:
@@ -127,8 +145,11 @@ func BuildIdxcronMetadata(ctx CompileContext, spec IdxcronVarSpec) ([]byte, erro
 			w.AddString(name, tv)
 		default:
 			return nil, moerr.NewInternalErrorNoCtxf(
-				"BuildIdxcronMetadata: variable %q has unsupported type %T", name, v)
+				"CaptureVars: variable %q has unsupported type %T", name, v)
 		}
+	}
+	if len(w.Cfg) == 0 {
+		return nil, nil // nothing captured — no metadata
 	}
 	return w.Marshal()
 }

@@ -272,6 +272,7 @@ func (m mockCatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableClon
 func (m mockCatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
 	return catalogplugin.RestoreBehavior{}
 }
+func (m mockCatalogHooks) BuildSessionVars() []string { return nil }
 func (m mockCatalogHooks) ShouldTruncateHiddenTable(_ string) bool      { return false }
 func (m mockCatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor { return m.d }
 

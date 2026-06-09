@@ -50,11 +50,22 @@ func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehav
 	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
 }
 
-// RestoreBehavior — fulltext's hidden table is the bulk inverted index, not a
-// compact model, so it likely stays rebuild-on-restore. Returns the zero value:
-// restore rebuilds via CDC like normal DML.
-func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
-	return catalogplugin.RestoreBehavior{}
+// RestoreBehavior — CreateTable populates fulltext's inverted-index hidden table
+// inline for a sync index (CROSS APPLY fulltext_index_tokenize), and the
+// restore's block-level clone APPENDS, so it must be emptied with DELETE …
+// WHERE TRUE before the clone re-supplies it — DeleteBeforeClone is the hidden
+// table. (For an async index the table is empty at CreateTable, so the delete is
+// a harmless no-op.) The compile hook's RestoreInitSQL returns "" — no reindex;
+// clone + CDC catch-up rebuild it.
+func (h CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
+	return catalogplugin.RestoreBehavior{DeleteBeforeClone: h.HiddenTableTypes()}
+}
+
+// BuildSessionVars — fulltext's tokenizing build reads no algorithm-specific
+// session vars and has no experimental flag; persist only the basic
+// lower_case_table_names (table-name resolution in the rebuild SQL).
+func (CatalogHooks) BuildSessionVars() []string {
+	return []string{"lower_case_table_names"}
 }
 
 // DefaultOptions — fulltext defaults are inferred at build time; no

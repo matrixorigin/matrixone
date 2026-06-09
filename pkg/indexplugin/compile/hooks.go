@@ -157,6 +157,15 @@ type Hooks interface {
 	// ignored by algorithms that do not support it.
 	HandleReindex(ctx CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error
 
+	// RestoreInitSQL returns (startFromNow, initSQL) for the restored index's
+	// CDC. initSQL rebuilds the index from the cloned rows — run post-commit by
+	// the CDC's first iteration (ProcessInitSQL), so it sees the committed clone
+	// and re-arms the CDC at the post-clone watermark (no replay); startFromNow
+	// is then true. initSQL=="" means no rebuild (the clone + CDC catch-up
+	// suffice, e.g. fulltext) and startFromNow is false (the CDC catches the
+	// cloned tables up from their watermark). See Scope.RestoreTable.
+	RestoreInitSQL(ctx CompileContext, indexDefs map[string]*plan.IndexDef) (startFromNow bool, initSQL string, err error)
+
 	// ValidateReindexParams checks a parameter update against the algorithm's
 	// schema and returns the merged params map. Replaces the inner switch
 	// at ddl.go:929. alter is the planner's AlterTable_Action_AlterIndex

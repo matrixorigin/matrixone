@@ -239,14 +239,70 @@ func IndexParamsMapToJsonString(res map[string]string) (string, error) {
 
 /* 2. ToMap Functions */
 
-// IndexParamsStringToMap used by buildShowCreateTable and restoreDDL
+// IndexParamSessionVars is the reserved algo_params key whose value is a
+// nested, typed sqlexec.Metadata object ({"cfg":{...}}) carrying the build-time
+// session variables captured at CREATE INDEX (e.g. kmeans_train_percent). It is
+// NOT a flat string param: IndexParamsStringToMap skips it (so flat consumers
+// are unaffected), and it is read back via IndexParamsSessionVars.
+const IndexParamSessionVars = "session_vars"
+
+// IndexParamsStringToMap used by buildShowCreateTable and restoreDDL.
+// The reserved IndexParamSessionVars key (a nested typed object) is skipped so
+// flat-string consumers stay unchanged; read it via IndexParamsSessionVars.
 func IndexParamsStringToMap(indexParams string) (map[string]string, error) {
-	var result map[string]string
-	err := json.Unmarshal([]byte(indexParams), &result)
-	if err != nil {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(indexParams), &raw); err != nil {
 		return nil, err
 	}
+	result := make(map[string]string, len(raw))
+	for k, v := range raw {
+		if k == IndexParamSessionVars {
+			continue // nested typed object — see IndexParamsSessionVars
+		}
+		var s string
+		if err := json.Unmarshal(v, &s); err != nil {
+			return nil, err
+		}
+		result[k] = s
+	}
 	return result, nil
+}
+
+// IndexParamsSessionVars extracts the nested session_vars object (the
+// sqlexec.Metadata JSON, {"cfg":{...}}) from an algo_params string, or nil if
+// absent. Pass the result to sqlexec.NewMetadata to resolve typed values.
+func IndexParamsSessionVars(indexParams string) (json.RawMessage, error) {
+	if len(indexParams) == 0 {
+		return nil, nil
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(indexParams), &raw); err != nil {
+		return nil, err
+	}
+	return raw[IndexParamSessionVars], nil
+}
+
+// IndexParamsMapToJsonStringWithSessionVars marshals the flat params plus the
+// nested session_vars object. A nil/empty sessionVars behaves exactly like
+// IndexParamsMapToJsonString (no session_vars key), preserving the old format.
+func IndexParamsMapToJsonStringWithSessionVars(res map[string]string, sessionVars json.RawMessage) (string, error) {
+	if len(sessionVars) == 0 {
+		return IndexParamsMapToJsonString(res)
+	}
+	obj := make(map[string]json.RawMessage, len(res)+1)
+	for k, v := range res {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return "", err
+		}
+		obj[k] = b
+	}
+	obj[IndexParamSessionVars] = sessionVars
+	str, err := json.Marshal(obj)
+	if err != nil {
+		return "", err
+	}
+	return string(str), nil
 }
 
 func fullTextIndexParamsToMap(def *tree.FullTextIndex) (map[string]string, error) {

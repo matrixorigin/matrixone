@@ -125,6 +125,16 @@ func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[str
 	return h.handleCreate(ctx, indexDefs, forceSync)
 }
 
+// RestoreInitSQL — see CAGRA. Rebuilds the IVF-PQ index post-commit during restore.
+func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
+	metaDef, ok := indexDefs[catalog.Ivfpq_TblType_Metadata]
+	if !ok {
+		return false, "", moerr.NewInternalErrorNoCtx("ivfpq_meta index definition not found")
+	}
+	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` ivfpq FORCE_SYNC",
+		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
+}
+
 // handleCreate is the shared body for HandleCreateIndex and
 // HandleReindex. forceSync controls whether ivfpq_create runs inside
 // the current txn (true — background reindex) or is deferred to the

@@ -79,12 +79,29 @@ func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehav
 	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
 }
 
-// RestoreBehavior — IVF-PQ's prebuilt model lives in the Storage (tag=0 blob) +
-// Metadata hidden tables; a future RestoreDirectly={Storage,Metadata} would let
-// restore load that model instead of rebuilding via async CDC. Returns the zero
-// value today: restore rebuilds via CDC like normal DML.
+// RestoreBehavior — IVF-PQ's hidden tables (Storage tag=0 model blob + Metadata)
+// are keyed by index_id, so the restore's block-level clone overwrites the
+// CreateTable seed rather than appending — nothing needs delete-before-clone
+// (empty DeleteBeforeClone). The model is rebuilt post-clone by the compile
+// hook's RestoreInitSQL (ALTER … REINDEX … ivfpq FORCE_SYNC), run by the CDC's
+// first iteration.
 func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
 	return catalogplugin.RestoreBehavior{}
+}
+
+// BuildSessionVars mirrors IVF-PQ's idxcron Capture set — the ivfpq_* knobs,
+// the k-means knobs (trained by the cuvs ivfpq_create build), and the basics
+// (lower_case_table_names, experimental flag). Captured into
+// algo_params.session_vars at CREATE INDEX.
+func (CatalogHooks) BuildSessionVars() []string {
+	return []string{
+		"ivfpq_threads_build",
+		"ivfpq_max_index_capacity",
+		"kmeans_train_percent",
+		"kmeans_max_iteration",
+		"lower_case_table_names",
+		"experimental_ivfpq_index",
+	}
 }
 
 // DefaultOptions is the params map produced when CREATE INDEX is issued

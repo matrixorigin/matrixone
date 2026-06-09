@@ -273,6 +273,15 @@ var (
 		input:  "alter table t1 alter reindex idx1 CAGRA intermediate_graph_degree = 8 graph_degree = 4 force_sync",
 		output: "alter table t1 alter reindex idx1 cagra force_sync",
 	}, {
+		input:  "alter table t1 alter reindex idx1 HNSW",
+		output: "alter table t1 alter reindex idx1 hnsw",
+	}, {
+		// HNSW's REINDEX rule now takes an index_option_list (mysql_sql.y:
+		// REINDEX ident HNSW index_option_list) so restore's RestoreInitSQL
+		// can carry FORCE_SYNC, matching cagra/ivfpq/ivfflat.
+		input:  "alter table t1 alter reindex idx1 HNSW force_sync",
+		output: "alter table t1 alter reindex idx1 hnsw force_sync",
+	}, {
 		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = true day = 33 hour = 12",
 		output: "alter table t1 alter index idx1 ivfflat auto_update = true day = 33 hour = 12",
 	}, {

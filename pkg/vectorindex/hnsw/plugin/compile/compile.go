@@ -59,8 +59,18 @@ type Hooks struct{}
 
 // HandleCreateIndex is lifted from Scope.handleVectorHnswIndex
 // (pkg/sql/compile/ddl_index_algo.go:627).
-func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
-	logutil.Infof("[plugin] hnsw HandleCreateIndex: isFrontend=%v defs=%d", ctx.IsFrontend(), len(indexDefs))
+func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	// Create never overrides the index's async param: the build is synchronous
+	// only if the index itself is sync (decided inside via !async).
+	return h.handleCreate(ctx, indexDefs, false)
+}
+
+// handleCreate is the shared body of HandleCreateIndex and HandleReindex.
+// forceSync=true routes to the inline (!async) build branch regardless of the
+// index's async param — used by ALTER REINDEX … FORCE_SYNC (e.g. restore's
+// RestoreTable) to rebuild an always-async HNSW index synchronously.
+func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+	logutil.Infof("[plugin] hnsw handleCreate: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
 	// Frontend-only: re-entry from background (idxcron ALTER REINDEX,
 	// ProcessInitSQL) must not re-check the flag, since (a) it may
 	// have been toggled off since the original CREATE INDEX, and (b)
@@ -126,12 +136,13 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
 	indexName := metaDef.IndexName
 
-	if !async {
+	if !async || forceSync {
 		// Build the index immediately, then register a CDC task that
 		// only consumes changes from now forward. Drop any prior CDC
 		// task first — on REINDEX re-entry the previous task would
 		// otherwise survive at its old watermark and replay historical
-		// events on top of the freshly built state.
+		// events on top of the freshly built state. forceSync (ALTER
+		// REINDEX … FORCE_SYNC) takes this branch even for an async index.
 		sqls, err := genBuildSQL(ctx, indexDefs)
 		if err != nil {
 			return err
@@ -157,9 +168,21 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 		indexName, sinkerType, false, "", originalTableDef)
 }
 
-// HandleReindex: same code path as create.
-func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, _ bool) error {
-	return h.HandleCreateIndex(ctx, indexDefs)
+// HandleReindex: same code path as create, but honors forceSync so an
+// ALTER REINDEX … FORCE_SYNC (e.g. restore's RestoreTable) rebuilds an
+// always-async HNSW index synchronously instead of deferring to CDC.
+func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+	return h.handleCreate(ctx, indexDefs, forceSync)
+}
+
+// RestoreInitSQL — see CAGRA. Rebuilds the HNSW index post-commit during restore.
+func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
+	metaDef, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
+	if !ok {
+		return false, "", moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
+	}
+	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` hnsw FORCE_SYNC",
+		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
 }
 
 // ValidateReindexParams: HNSW has no online parameter updates.

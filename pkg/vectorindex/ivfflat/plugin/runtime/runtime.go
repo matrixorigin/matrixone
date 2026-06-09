@@ -90,14 +90,27 @@ func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehav
 	}
 }
 
-// RestoreBehavior — IVF-FLAT's k-means model lives in the Metadata + Centroids
-// hidden tables (Entries are the bulk per-row assignments); a future
-// RestoreDirectly={Metadata,Centroids} would let restore preserve the
-// snapshot's centroids instead of re-training k-means, the same model the clone
-// path already protects. Returns the zero value today: restore rebuilds (sync
-// IVF-FLAT re-runs k-means; async rebuilds entries via CDC).
-func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
-	return catalogplugin.RestoreBehavior{}
+// RestoreBehavior — IVF-FLAT seeds all three hidden tables non-empty at
+// CREATE-INDEX (a version=0 metadata row, an initial centroid, bootstrap
+// entries), and the restore's block-level clone APPENDS. So every hidden table
+// must be emptied with DELETE … WHERE TRUE before the clone re-supplies the
+// snapshot's metadata/centroids/entries — DeleteBeforeClone is the full
+// hidden-table set.
+func (h CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
+	return catalogplugin.RestoreBehavior{DeleteBeforeClone: h.HiddenTableTypes()}
+}
+
+// BuildSessionVars mirrors IVF-FLAT's idxcron Capture set — the ivf_* knobs,
+// the k-means knobs (centroid training), and the basics (lower_case_table_names,
+// experimental flag). Captured into algo_params.session_vars at CREATE INDEX.
+func (CatalogHooks) BuildSessionVars() []string {
+	return []string{
+		"ivf_threads_build",
+		"kmeans_train_percent",
+		"kmeans_max_iteration",
+		"lower_case_table_names",
+		"experimental_ivf_index",
+	}
 }
 
 // DefaultOptions mirrors the IVF-FLAT case of indexParamsToMap when the

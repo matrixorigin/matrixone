@@ -40,7 +40,7 @@ import (
 // matters for these tests).
 func init() {
 	if planplugin.CreateIndexDef == nil {
-		planplugin.CreateIndexDef = func(_ *tree.Index, indexTableName, indexAlgoTableType string, indexParts []string, _ bool) (*plan.IndexDef, error) {
+		planplugin.CreateIndexDef = func(_ planplugin.CompilerContext, _ *tree.Index, indexTableName, indexAlgoTableType string, indexParts []string, _ bool) (*plan.IndexDef, error) {
 			return &plan.IndexDef{
 				IndexTableName:     indexTableName,
 				IndexAlgoTableType: indexAlgoTableType,
@@ -60,6 +60,9 @@ func init() {
 type stubCompilerContext struct{ ctx context.Context }
 
 func (c stubCompilerContext) GetContext() context.Context { return c.ctx }
+func (c stubCompilerContext) ResolveVariable(string, bool, bool) (interface{}, error) {
+	return nil, nil
+}
 
 var _ planplugin.CompilerContext = stubCompilerContext{}
 

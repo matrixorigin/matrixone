@@ -1,0 +1,14 @@
+drop database if exists session_vars_db;
+create database session_vars_db;
+use session_vars_db;
+set experimental_ivfpq_index = 1;
+set kmeans_train_percent = 100;
+set kmeans_max_iteration = 12;
+create table t (a bigint primary key, v vecf32(8));
+insert into t values (1, '[1,1,1,1,1,1,1,1]'), (2, '[2,2,2,2,2,2,2,2]'), (3, '[3,3,3,3,3,3,3,3]');
+create index ix using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8;
+select algo_table_type, algo_params from mo_catalog.mo_indexes where name = 'ix' order by algo_table_type;
+➤ algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
+ivfpq_index  ¦  {"bits_per_code":"8","distribution_mode":"single","lists":"2","m":"8","op_type":"vector_l2_ops","quantization":"float32","session_vars":{"cfg":{"experimental_ivfpq_index":{"t":"I8","v":1},"ivfpq_max_index_capacity":{"t":"I","v":0},"ivfpq_threads_build":{"t":"I","v":0},"kmeans_max_iteration":{"t":"I","v":12},"kmeans_train_percent":{"t":"F","v":100},"lower_case_table_names":{"t":"I","v":1}}}}  𝄀
+ivfpq_meta  ¦  {"bits_per_code":"8","distribution_mode":"single","lists":"2","m":"8","op_type":"vector_l2_ops","quantization":"float32","session_vars":{"cfg":{"experimental_ivfpq_index":{"t":"I8","v":1},"ivfpq_max_index_capacity":{"t":"I","v":0},"ivfpq_threads_build":{"t":"I","v":0},"kmeans_max_iteration":{"t":"I","v":12},"kmeans_train_percent":{"t":"F","v":100},"lower_case_table_names":{"t":"I","v":1}}}}
+drop database session_vars_db;

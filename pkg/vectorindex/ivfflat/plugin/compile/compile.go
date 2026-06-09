@@ -70,6 +70,17 @@ func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[str
 	return runCreateOrReindex(ctx, indexDefs, forceSync)
 }
 
+// RestoreInitSQL — see CAGRA. Rebuilds the IVF-FLAT index post-commit during
+// restore (re-derives entries against the restored centroids).
+func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
+	metaDef, ok := indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
+	if !ok {
+		return false, "", moerr.NewInternalErrorNoCtx("ivfflat metadata index definition not found")
+	}
+	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` ivfflat FORCE_SYNC",
+		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
+}
+
 // ValidateReindexParams handles the IVF-FLAT `lists` update at ALTER
 // REINDEX time. The legacy switch at ddl.go:928 wrote new lists into
 // the AlgoParams map and persisted it via UPDATE mo_catalog.mo_indexes

@@ -46,9 +46,11 @@ func TestFullTextAlterTableCloneBehavior(t *testing.T) {
 	// is skipped on async clone (not per hidden table).
 	require.True(t, b.SkipWholeIndex)
 
-	// RestoreBehavior is the zero value today — restore rebuilds the index, no
-	// hidden table is restored directly.
-	require.Empty(t, CatalogHooks{}.RestoreBehavior().RestoreDirectly)
+	// RestoreBehavior deletes the fulltext hidden table before the clone
+	// re-supplies it (CreateTable populates it inline for a sync index and the
+	// block-level clone appends).
+	require.Equal(t, CatalogHooks{}.HiddenTableTypes(),
+		CatalogHooks{}.RestoreBehavior().DeleteBeforeClone)
 }
 
 func TestFullTextDefaultOptions(t *testing.T) {

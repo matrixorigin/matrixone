@@ -119,6 +119,15 @@ type Hooks interface {
 	// prebuilt model. Every plugin returns the zero value today.
 	RestoreBehavior() RestoreBehavior
 
+	// BuildSessionVars returns the names of the session variables this
+	// algorithm's index build depends on (e.g. "kmeans_train_percent",
+	// "kmeans_max_iteration"). At CREATE INDEX these are read from the session
+	// resolver and captured — typed — into algo_params' reserved session_vars
+	// object, so every later background build (restore reindex, idxcron, async
+	// create) resolves them from the index def instead of the background
+	// defaults (DefaultResolveVariable). Empty/nil = none.
+	BuildSessionVars() []string
+
 	// ShouldTruncateHiddenTable reports whether the hidden table of the
 	// given IndexAlgoTableType (one of HiddenTableTypes()) should be
 	// included in a TRUNCATE TABLE on the source table.
@@ -329,28 +338,30 @@ func (b AlterTableCloneBehavior) ContainsSkipWhenAsync(algoTableType string) boo
 
 // RestoreBehavior declares how snapshot/restore should reconstruct an index's
 // hidden tables — the restore-path analogue of AlterTableCloneBehavior. The
-// zero value (the only value any plugin returns today) means "rebuild every
-// hidden table via the algorithm's normal mechanism from the restored
-// main-table rows": the snapshot's prebuilt model is discarded and rebuilt
-// (async CDC for async indexes; a synchronous k-means re-run for sync
-// IVF-FLAT). The hook exists so a plugin can opt specific hidden tables into a
-// direct restore of the prebuilt model, making the restored index faithful to
-// the snapshot and usable immediately.
+// restore replays `create table … clone`, whose table_clone operator copies
+// index hidden tables block-level — an APPEND, not an overwrite. So any hidden
+// table that CreateTable seeds non-empty (e.g. IVF-FLAT's metadata/centroids/
+// entries) must be emptied first, or the clone lays the source data on top of
+// the seed and duplicates it. The zero value (no tables to delete) is correct
+// for algorithms whose storage is keyed and overwrites on append (cuVS keys by
+// index_id).
 //
 // Consulted on the restore path — the `create table … clone` the restore
 // replays; see compileplugin.Context.IsTableClone().
 type RestoreBehavior struct {
-	// RestoreDirectly names the hidden tables (IndexAlgoTableType, members of
-	// HiddenTableTypes()) whose data should be restored verbatim from the
-	// snapshot rather than rebuilt. Empty = rebuild everything (current
-	// behavior).
-	RestoreDirectly []string
+	// DeleteBeforeClone names the hidden tables (IndexAlgoTableType, members of
+	// HiddenTableTypes()) that CreateTable seeds non-empty and so must be
+	// emptied with `DELETE … WHERE TRUE` (a content delete that keeps the table
+	// and its id — not truncate) before the block-level clone appends the
+	// source's data. Mirrors AlterTableCloneBehavior.DeleteBeforeClone. Empty =
+	// nothing to delete (current behavior).
+	DeleteBeforeClone []string
 }
 
-// ContainsRestoreDirectly reports whether algoTableType is in the
-// RestoreDirectly list.
-func (b RestoreBehavior) ContainsRestoreDirectly(algoTableType string) bool {
-	for _, t := range b.RestoreDirectly {
+// ContainsDeleteBeforeClone reports whether algoTableType is in the
+// DeleteBeforeClone list.
+func (b RestoreBehavior) ContainsDeleteBeforeClone(algoTableType string) bool {
+	for _, t := range b.DeleteBeforeClone {
 		if t == algoTableType {
 			return true
 		}

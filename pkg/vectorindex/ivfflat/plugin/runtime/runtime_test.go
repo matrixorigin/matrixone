@@ -65,9 +65,10 @@ func TestIvfflatAlterTableCloneBehavior(t *testing.T) {
 	// the skip from UsesCDC would drop the cloned k-means model.
 	require.False(t, b.SkipWholeIndex)
 
-	// RestoreBehavior is the zero value today — restore rebuilds (sync k-means
-	// re-run / async CDC), no hidden table is restored directly yet.
-	require.Empty(t, CatalogHooks{}.RestoreBehavior().RestoreDirectly)
+	// RestoreBehavior deletes all three hidden tables before the clone re-supplies
+	// them (CreateTable seeds them non-empty and the block-level clone appends).
+	require.Equal(t, CatalogHooks{}.HiddenTableTypes(),
+		CatalogHooks{}.RestoreBehavior().DeleteBeforeClone)
 }
 
 func TestIvfflatDefaultOptions(t *testing.T) {
