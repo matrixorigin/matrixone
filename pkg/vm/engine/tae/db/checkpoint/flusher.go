@@ -42,6 +42,10 @@ import (
 
 var ErrFlusherStopped = moerr.NewInternalErrorNoCtx("flusher stopped")
 
+const (
+	stalledCheckpointFlushAge = checkpointIntentOldAge
+)
+
 type FlushCfg struct {
 	ForceFlushTimeout       time.Duration
 	ForceFlushCheckInterval time.Duration
@@ -303,6 +307,8 @@ type flushImpl struct {
 
 	objMemSizeList []tableAndSize
 
+	stalledCheckpointPickBounded bool
+
 	// Log throttling for collectTableMemUsage
 	logThrottleMu   sync.Mutex
 	lastLogTime     time.Time
@@ -385,14 +391,38 @@ func (flusher *flushImpl) triggerJob(ctx context.Context) {
 		return
 	}
 	flusher.sourcer.Run(flusher.flushLag)
-	entry := flusher.sourcer.GetAndRefreshMerged()
-	if !entry.IsEmpty() {
-		request := new(FlushRequest)
-		request.tree = entry
-		flusher.flushRequestQ.Enqueue(request)
+	var entry *logtail.DirtyTreeEntry
+	intent := flusher.checkpointSchduler.PendingIncrementalCheckpoint()
+	if bounded := flusher.pickStalledCheckpointFlushEntry(intent); bounded {
+		entry = flusher.makeStalledCheckpointFlushEntry()
+		if entry == nil {
+			entry = flusher.sourcer.GetAndRefreshMerged()
+		}
+	} else {
+		entry = flusher.sourcer.GetAndRefreshMerged()
 	}
+	flusher.enqueueCronFlush(entry)
 	_, ts := entry.GetTimeRange()
 	flusher.checkpointSchduler.TryScheduleCheckpoint(ts, false)
+}
+
+func (flusher *flushImpl) pickStalledCheckpointFlushEntry(intent *CheckpointEntry) bool {
+	if !shouldScheduleStalledCheckpointFlush(intent, stalledCheckpointFlushAge) {
+		flusher.stalledCheckpointPickBounded = false
+		return false
+	}
+	flusher.stalledCheckpointPickBounded = !flusher.stalledCheckpointPickBounded
+	return flusher.stalledCheckpointPickBounded
+}
+
+func (flusher *flushImpl) enqueueCronFlush(entry *logtail.DirtyTreeEntry) {
+	if entry == nil || entry.IsEmpty() {
+		return
+	}
+	request := &FlushRequest{
+		tree: entry,
+	}
+	flusher.flushRequestQ.Enqueue(request)
 }
 
 func (flusher *flushImpl) onFlushRequest(items ...any) {
@@ -430,6 +460,44 @@ func (flusher *flushImpl) scheduleFlush(
 	}
 	pressure := flusher.collectTableMemUsage(entry, lastCkp)
 	flusher.checkFlushConditionAndFire(entry, force, pressure, lastCkp)
+}
+
+func (flusher *flushImpl) makeStalledCheckpointFlushEntry() *logtail.DirtyTreeEntry {
+	if flusher.sourcer == nil || flusher.checkpointSchduler == nil {
+		return nil
+	}
+	intent := flusher.checkpointSchduler.PendingIncrementalCheckpoint()
+	return makeStalledCheckpointFlushEntry(flusher.sourcer, intent, stalledCheckpointFlushAge)
+}
+
+func makeStalledCheckpointFlushEntry(
+	sourcer logtail.Collector,
+	intent *CheckpointEntry,
+	threshold time.Duration,
+) *logtail.DirtyTreeEntry {
+	if sourcer == nil || !shouldScheduleStalledCheckpointFlush(intent, threshold) {
+		return nil
+	}
+	start, end := intent.GetStart(), intent.GetEnd()
+	entry := sourcer.ScanInRangePruned(start, end)
+	if entry.IsEmpty() {
+		return nil
+	}
+	logutil.Info(
+		"flusher.ckp.bounded",
+		zap.String("start", start.ToString()),
+		zap.String("end", end.ToString()),
+		zap.Duration("age", intent.Age()),
+		zap.Int("tables", entry.GetTree().TableCount()),
+	)
+	return entry
+}
+
+func shouldScheduleStalledCheckpointFlush(intent *CheckpointEntry, threshold time.Duration) bool {
+	if intent == nil || !intent.IsPendding() || intent.IsFlushChecked() {
+		return false
+	}
+	return intent.Age() > threshold
 }
 
 func foreachAobjBefore(_ context.Context,
@@ -756,9 +824,10 @@ func (flusher *flushImpl) ForceFlushWithInterval(
 			return nil
 		}
 		entry := logtail.NewDirtyTreeEntry(types.TS{}, ts, tree.GetTree())
-		request := new(FlushRequest)
-		request.tree = entry
-		request.force = true
+		request := &FlushRequest{
+			force: true,
+			tree:  entry,
+		}
 		// logutil.Infof("try flush %v",tree.String())
 		return request
 	}
@@ -822,9 +891,10 @@ func (flusher *flushImpl) FlushTable(
 		nTree := model.NewTree()
 		nTree.Tables[tableID] = tableTree
 		entry := logtail.NewDirtyTreeEntry(types.TS{}, ts, nTree)
-		request := new(FlushRequest)
-		request.tree = entry
-		request.force = true
+		request := &FlushRequest{
+			force: true,
+			tree:  entry,
+		}
 		return request
 	}
 
