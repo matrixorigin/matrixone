@@ -320,6 +320,8 @@ func TestLocalDatasourceWorkspaceDeleteEntriesMergesLargeDeleteSet(t *testing.T)
 	blk := types.NewBlockidWithObjectID(&oid, 1)
 	blk2 := types.NewBlockidWithObjectID(&oid, 2)
 
+	// Cross the merge threshold and mix blocks/order so the test exercises the
+	// flatten-sort-then-split path, not just the small-entry cache path.
 	writes := make([]Entry, 0, mergeWorkspaceDeleteEntriesThreshold+1)
 	for i := 0; i < mergeWorkspaceDeleteEntriesThreshold+1; i++ {
 		bid := &blk
@@ -425,6 +427,8 @@ func TestLocalDatasourceWorkspaceDeleteEntriesInvalidatesCacheWhenTxnOffsetChang
 	entries := ls.workspaceDeleteEntriesLocked()
 	require.Len(t, entries, 2)
 	require.Equal(t, 2, ls.workspaceDeletes.txnOffset)
+	// Changing txnOffset must invalidate the block index built for the previous
+	// view of txn writes, otherwise later deletes can be silently skipped.
 	require.Nil(t, ls.workspaceDeletes.byBlock)
 	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row2}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk2))
 	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk))

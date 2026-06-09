@@ -1119,35 +1119,24 @@ func (ls *LocalDisttaeDataSource) addWorkspaceDeleteEntryByBlock(entry workspace
 	if len(entry.rowIds) == 0 {
 		return
 	}
-	if entry.sorted {
-		start := 0
-		current := entry.rowIds[0].CloneBlockID()
-		for idx := 1; idx < len(entry.rowIds); idx++ {
-			blockID := entry.rowIds[idx].CloneBlockID()
-			if blockID == current {
-				continue
-			}
-			ls.workspaceDeletes.byBlock[current] = append(
-				ls.workspaceDeletes.byBlock[current],
-				workspaceDeleteEntry{rowIds: entry.rowIds[start:idx], sorted: true})
-			start = idx
-			current = blockID
+	// workspaceDeleteEntriesLocked normalizes every cached entry to sorted rowids,
+	// so equal block ids are contiguous and can be indexed by slicing.
+	start := 0
+	current := entry.rowIds[0].CloneBlockID()
+	for idx := 1; idx < len(entry.rowIds); idx++ {
+		blockID := entry.rowIds[idx].CloneBlockID()
+		if blockID == current {
+			continue
 		}
 		ls.workspaceDeletes.byBlock[current] = append(
 			ls.workspaceDeletes.byBlock[current],
-			workspaceDeleteEntry{rowIds: entry.rowIds[start:], sorted: true})
-		return
+			workspaceDeleteEntry{rowIds: entry.rowIds[start:idx], sorted: true})
+		start = idx
+		current = blockID
 	}
-
-	added := make(map[objectio.Blockid]struct{})
-	for _, rowID := range entry.rowIds {
-		blockID := rowID.CloneBlockID()
-		if _, ok := added[blockID]; ok {
-			continue
-		}
-		ls.workspaceDeletes.byBlock[blockID] = append(ls.workspaceDeletes.byBlock[blockID], entry)
-		added[blockID] = struct{}{}
-	}
+	ls.workspaceDeletes.byBlock[current] = append(
+		ls.workspaceDeletes.byBlock[current],
+		workspaceDeleteEntry{rowIds: entry.rowIds[start:], sorted: true})
 }
 
 func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() []workspaceDeleteEntry {
@@ -1180,7 +1169,11 @@ func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() []workspaceDele
 	}
 
 	if len(entries) > mergeWorkspaceDeleteEntriesThreshold {
-		var rowIds []objectio.Rowid
+		totalRows := 0
+		for _, entry := range entries {
+			totalRows += len(entry.rowIds)
+		}
+		rowIds := make([]objectio.Rowid, 0, totalRows)
 		for _, entry := range entries {
 			rowIds = append(rowIds, entry.rowIds...)
 		}
