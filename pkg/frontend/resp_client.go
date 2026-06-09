@@ -80,6 +80,17 @@ func markRowCountFailed(ses *Session, proc *process.Process) {
 	}
 }
 
+// restoreRowCount writes v back to both the session and proc. It is used to keep
+// a protocol-only command that is internally rewritten into a real SQL statement
+// (COM_STMT_CLOSE/COM_STMT_RESET -> DEALLOCATE/RESET PREPARE) from clobbering the
+// preceding statement's ROW_COUNT() when it succeeds. proc may be nil.
+func restoreRowCount(ses *Session, proc *process.Process, v int64) {
+	ses.SetLastAffectedRows(v)
+	if proc != nil {
+		proc.SetAffectedRows(v)
+	}
+}
+
 // response the client
 func respClientWhenSuccess(ses *Session,
 	execCtx *ExecCtx) (err error) {

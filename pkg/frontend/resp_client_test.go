@@ -62,6 +62,23 @@ func TestMarkRowCountFailed(t *testing.T) {
 	require.Equal(t, int64(-1), ses2.GetLastAffectedRows())
 }
 
+func TestRestoreRowCount(t *testing.T) {
+	ses := &Session{}
+	proc := &process.Process{Base: &process.BaseProcess{AffectedRows: new(int64)}}
+	// A protocol-only command (e.g. DEALLOCATE PREPARE from COM_STMT_CLOSE) just
+	// recorded 0; restore the preceding statement's value.
+	ses.SetLastAffectedRows(0)
+	proc.SetAffectedRows(0)
+	restoreRowCount(ses, proc, 7)
+	require.Equal(t, int64(7), ses.GetLastAffectedRows())
+	require.Equal(t, int64(7), proc.GetAffectedRows())
+
+	// nil proc is tolerated.
+	ses2 := &Session{}
+	restoreRowCount(ses2, nil, 3)
+	require.Equal(t, int64(3), ses2.GetLastAffectedRows())
+}
+
 func TestRecordLastAffectedRowsSkipsFieldList(t *testing.T) {
 	ses := &Session{}
 	proc := &process.Process{Base: &process.BaseProcess{AffectedRows: new(int64)}}

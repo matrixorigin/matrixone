@@ -64,7 +64,9 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				Producing the data row and sending the data row
 			*/
 			// todo: add trace
-			if _, err = execCtx.runner.Run(0); err != nil {
+			// Keep runResult so ROW_COUNT()/the OK packet report this statement's
+			// affected rows instead of leaking the previous statement's value.
+			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 				return
 			}
 
