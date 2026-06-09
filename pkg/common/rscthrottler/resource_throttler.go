@@ -606,23 +606,21 @@ func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
 			reserved = 0
 		}
 
-		// Pool check: forward-looking gate — prevents promising more
-		// S3 write bandwidth than the pool has headroom. Uses reserved
-		// alone (not rss + reserved) because the overlapping portion
-		// of RSS is already bounded by the RSS gate below.
-		if !throttler.options.allowOutOfMemoryAcquire && reserved+ask > limit {
-			return limit - reserved, false
+		// Pool check: use limit - reserved directly instead of calling
+		// Available(). The shared Available() subtracts RSS from the
+		// pool headroom (actualMaxMemory - rss - reserved), which
+		// double-counts S3 write buffers already reflected in RSS.
+		// The pool only needs to bound forward-looking reservations
+		// against the throttler limit.
+		avail := limit - reserved
+		if !throttler.options.allowOutOfMemoryAcquire && avail < ask {
+			return avail, false
 		}
 
 		total := int64(throttler.actualTotalMemory.Load())
 		if total > 0 && throttler.limitRate > 0 {
-			// RSS gate: backward-looking gate — prevents physical OOM
-			// when RSS (including non-S3 memory) is already near the
-			// container limit. Uses RSS alone (not rss + reserved)
-			// because the pool gate above already bounds forward-looking
-			// reservations independently.
-			rss := throttler.rss.Load()
-			if float64(rss) > float64(total)*throttler.limitRate {
+			used := throttler.rss.Load() + reserved + ask
+			if float64(used) > float64(total)*throttler.limitRate {
 				return 0, false
 			}
 		}

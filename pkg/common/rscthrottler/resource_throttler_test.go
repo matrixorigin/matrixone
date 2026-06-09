@@ -433,13 +433,25 @@ func TestAcquirePolicyForCNFlushS3(t *testing.T) {
 		throttler := &memThrottler{limitRate: 0.90}
 		throttler.actualTotalMemory.Store(100)
 		throttler.limit.Store(90)
-		throttler.rss.Store(80)
+		throttler.rss.Store(70)
 		throttler.reserved.Store(9)
 
 		left, ok := AcquirePolicyForCNFlushS3(throttler, 2)
 		require.True(t, ok)
 		require.Equal(t, int64(79), left)
 		require.Equal(t, int64(11), throttler.reserved.Load())
+	})
+
+	t.Run("allow small write under high rss when pool has headroom", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(88)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 1)
+		require.True(t, ok)
+		require.Equal(t, int64(89), left)
+		require.Equal(t, int64(1), throttler.reserved.Load())
 	})
 
 	t.Run("allow under rss limit and reserve memory", func(t *testing.T) {
