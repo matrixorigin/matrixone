@@ -106,6 +106,12 @@ SELECT BIT_COUNT(BINARY ''), BIT_COUNT(_binary ''), BIT_COUNT(CAST('' AS BINARY)
 SELECT BIT_COUNT(X'00'), BIT_COUNT(X'01'), BIT_COUNT(X'40'), BIT_COUNT(X'FF'), BIT_COUNT(X'FFFF');
 # hex: _binary X'00' = 0x0000; _binary X'01' = 0x0001; _binary X'40' = 0x0040; _binary X'FF' = 0x00ff; _binary X'FFFF' = 0xffff
 SELECT BIT_COUNT(_binary X'00'), BIT_COUNT(_binary X'01'), BIT_COUNT(_binary X'40'), BIT_COUNT(_binary X'FF'), BIT_COUNT(_binary X'FFFF');
+# hex: _binary 0x40 = 0x0040
+SELECT HEX(_binary 0x40), BIT_COUNT(_binary 0x40);
+# hex: _binary 0x00 = 0x0000; _binary 0x01 = 0x0001; _binary 0xff = 0x00ff; _binary 0xFFFF = 0xffff
+SELECT HEX(_binary 0x00), BIT_COUNT(_binary 0x00), HEX(_binary 0x01), BIT_COUNT(_binary 0x01), HEX(_binary 0xff), BIT_COUNT(_binary 0xff), HEX(_binary 0xFFFF), BIT_COUNT(_binary 0xFFFF);
+# hex: _binary 0x0102030405060708 = 0x0102 0304 0506 0708; _binary 0xFFFFFFFFFFFFFFFF = 0xffff ffff ffff ffff
+SELECT HEX(_binary 0x0102030405060708), BIT_COUNT(_binary 0x0102030405060708), HEX(_binary 0xFFFFFFFFFFFFFFFF), BIT_COUNT(_binary 0xFFFFFFFFFFFFFFFF);
 # hex: X'0102030405060708' = 0x0102 0304 0506 0708; X'FFFFFFFFFFFFFFFF' = 0xffff ffff ffff ffff; X'FFFFFFFFFFFFFFFFFF' = 0xffff ffff ffff ffff ff
 SELECT BIT_COUNT(X'0102030405060708'), BIT_COUNT(X'FFFFFFFFFFFFFFFF'), BIT_COUNT(X'FFFFFFFFFFFFFFFFFF');
 # hex: UNHEX('40') = 0x0040; UNHEX('FF') = 0x00ff; UNHEX('FFFF') = 0xffff
@@ -123,9 +129,10 @@ CREATE TABLE t_bit_count(
 INSERT INTO t_bit_count VALUES
     (1, 64, 64, '64', X'40'),
     (2, -1, 255, '-1', X'FF'),
-    (3, NULL, NULL, NULL, NULL);
-# hex: row1 i/u/s/b = 0x0040/0x0040/64 / 0x0040/0x0040; row2 i/u/s/b = -0x0001/0x00ff/-1 / 0xffff ffff ffff ffff/0x00ff; row3 = NULL
+    (3, NULL, NULL, NULL, NULL),
+    (4, 64, 64, '64', _binary 0x40);
+# hex: row1 i/u/s/b = 0x0040/0x0040/64 / 0x0040/0x0040; row2 i/u/s/b = -0x0001/0x00ff/-1 / 0xffff ffff ffff ffff/0x00ff; row3 = NULL; row4 b = _binary 0x40 / 0x0040
 SELECT id, BIT_COUNT(i), BIT_COUNT(u), BIT_COUNT(s), BIT_COUNT(b) FROM t_bit_count ORDER BY id;
-# hex: b values = row1 0x0040; row2 0x00ff; row3 NULL
+# hex: b values = row1 0x0040; row2 0x00ff; row3 NULL; row4 0x0040
 SELECT id FROM t_bit_count WHERE BIT_COUNT(b) = 1 ORDER BY id;
 DROP TABLE t_bit_count;

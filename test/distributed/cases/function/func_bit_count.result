@@ -146,6 +146,15 @@ SELECT BIT_COUNT(X'00'), BIT_COUNT(X'01'), BIT_COUNT(X'40'), BIT_COUNT(X'FF'), B
 SELECT BIT_COUNT(_binary X'00'), BIT_COUNT(_binary X'01'), BIT_COUNT(_binary X'40'), BIT_COUNT(_binary X'FF'), BIT_COUNT(_binary X'FFFF');
 ➤ BIT_COUNT(0x00)[-5,64,0]  ¦  BIT_COUNT(0x01)[-5,64,0]  ¦  BIT_COUNT(0x40)[-5,64,0]  ¦  BIT_COUNT(0xFF)[-5,64,0]  ¦  BIT_COUNT(0xFFFF)[-5,64,0]  𝄀
 0  ¦  1  ¦  1  ¦  8  ¦  16
+SELECT HEX(_binary 0x40), BIT_COUNT(_binary 0x40);
+➤ HEX(0x40)[12,-1,0]  ¦  BIT_COUNT(0x40)[-5,64,0]  𝄀
+40  ¦  1
+SELECT HEX(_binary 0x00), BIT_COUNT(_binary 0x00), HEX(_binary 0x01), BIT_COUNT(_binary 0x01), HEX(_binary 0xff), BIT_COUNT(_binary 0xff), HEX(_binary 0xFFFF), BIT_COUNT(_binary 0xFFFF);
+➤ HEX(0x00)[12,-1,0]  ¦  BIT_COUNT(0x00)[-5,64,0]  ¦  HEX(0x01)[12,-1,0]  ¦  BIT_COUNT(0x01)[-5,64,0]  ¦  HEX(0xff)[12,-1,0]  ¦  BIT_COUNT(0xff)[-5,64,0]  ¦  HEX(0xffff)[12,-1,0]  ¦  BIT_COUNT(0xffff)[-5,64,0]  𝄀
+00  ¦  0  ¦  01  ¦  1  ¦  FF  ¦  8  ¦  FFFF  ¦  16
+SELECT HEX(_binary 0x0102030405060708), BIT_COUNT(_binary 0x0102030405060708), HEX(_binary 0xFFFFFFFFFFFFFFFF), BIT_COUNT(_binary 0xFFFFFFFFFFFFFFFF);
+➤ HEX(0x0102030405060708)[12,-1,0]  ¦  BIT_COUNT(0x0102030405060708)[-5,64,0]  ¦  HEX(0xffffffffffffffff)[12,-1,0]  ¦  BIT_COUNT(0xffffffffffffffff)[-5,64,0]  𝄀
+0102030405060708  ¦  13  ¦  FFFFFFFFFFFFFFFF  ¦  64
 SELECT BIT_COUNT(X'0102030405060708'), BIT_COUNT(X'FFFFFFFFFFFFFFFF'), BIT_COUNT(X'FFFFFFFFFFFFFFFFFF');
 ➤ BIT_COUNT(0x0102030405060708)[-5,64,0]  ¦  BIT_COUNT(0xFFFFFFFFFFFFFFFF)[-5,64,0]  ¦  BIT_COUNT(0xFFFFFFFFFFFFFFFFFF)[-5,64,0]  𝄀
 13  ¦  64  ¦  72
@@ -163,13 +172,16 @@ b VARBINARY(4)
 INSERT INTO t_bit_count VALUES
 (1, 64, 64, '64', X'40'),
 (2, -1, 255, '-1', X'FF'),
-(3, NULL, NULL, NULL, NULL);
+(3, NULL, NULL, NULL, NULL),
+(4, 64, 64, '64', _binary 0x40);
 SELECT id, BIT_COUNT(i), BIT_COUNT(u), BIT_COUNT(s), BIT_COUNT(b) FROM t_bit_count ORDER BY id;
 ➤ id[4,32,0]  ¦  BIT_COUNT(i)[-5,64,0]  ¦  BIT_COUNT(u)[-5,64,0]  ¦  BIT_COUNT(s)[-5,64,0]  ¦  BIT_COUNT(b)[-5,64,0]  𝄀
 1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
 2  ¦  64  ¦  8  ¦  64  ¦  8  𝄀
-3  ¦  null  ¦  null  ¦  null  ¦  null
+3  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  1  ¦  1  ¦  1  ¦  1
 SELECT id FROM t_bit_count WHERE BIT_COUNT(b) = 1 ORDER BY id;
 ➤ id[4,32,0]  𝄀
-1
+1  𝄀
+4
 DROP TABLE t_bit_count;
