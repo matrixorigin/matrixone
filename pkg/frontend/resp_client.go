@@ -47,6 +47,13 @@ func setResponse(ses *Session, isLastStmt bool, rspLen uint64) *Response {
 // fresh value, and the session so that the next COM_QUERY (which builds a new
 // proc seeded from the session) reads it too.
 func recordLastAffectedRows(ses *Session, execCtx *ExecCtx) {
+	// Internal protocol-only helper commands are not user SQL statements and must
+	// not clobber the ROW_COUNT() state of the preceding statement. COM_FIELD_LIST
+	// is routed through doComQuery as InternalCmdFieldList (an OUTPUT_STATUS stmt
+	// with no runResult), which would otherwise record 0.
+	if _, ok := execCtx.stmt.(*InternalCmdFieldList); ok {
+		return
+	}
 	var n int64
 	switch execCtx.stmt.StmtKind().OutputType() {
 	case tree.OUTPUT_RESULT_ROW:
