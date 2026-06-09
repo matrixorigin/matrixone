@@ -16,6 +16,8 @@ package logservice
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/lni/dragonboat/v4"
@@ -174,6 +176,14 @@ func (s *Service) getBackupData(ctx context.Context) (*pb.BackupData, error) {
 		return nil, nil
 	}
 
+	if filepath.IsAbs(filePath) {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, err
+		}
+		return parseBackupData(data)
+	}
+
 	path, err := fileservice.ParsePath(filePath)
 	if err != nil {
 		return nil, err
@@ -218,9 +228,13 @@ func (s *Service) getBackupData(ctx context.Context) (*pb.BackupData, error) {
 	}
 	defer ioVec.Release()
 
-	var data pb.BackupData
-	if err := data.Unmarshal(ioVec.Entries[0].Data); err != nil {
+	return parseBackupData(ioVec.Entries[0].Data)
+}
+
+func parseBackupData(data []byte) (*pb.BackupData, error) {
+	var backup pb.BackupData
+	if err := backup.Unmarshal(data); err != nil {
 		return nil, err
 	}
-	return &data, nil
+	return &backup, nil
 }
