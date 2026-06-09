@@ -694,6 +694,11 @@ func compareSingleValInVector(
 			vector.GetFixedAtNoTypeCheck[types.Decimal128](vec1, rowIdx1),
 			vector.GetFixedAtNoTypeCheck[types.Decimal128](vec2, rowIdx2),
 		), nil
+	case types.T_decimal256:
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Decimal256](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Decimal256](vec2, rowIdx2),
+		), nil
 	case types.T_uuid:
 		return types.CompareValue(
 			vector.GetFixedAtNoTypeCheck[types.Uuid](vec1, rowIdx1),
