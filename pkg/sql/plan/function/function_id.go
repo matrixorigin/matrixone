@@ -721,9 +721,11 @@ const (
 	// merged from upstream/main (renumbered to avoid colliding with the GIS block above)
 	CAST_JSON_TO_ARRAY = 513
 
+	BIT_COUNT = 514
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 514
+	FUNCTION_END_NUMBER = 515
 )
 
 // functionIdRegister is what function we have registered already.
@@ -801,6 +803,7 @@ var functionIdRegister = map[string]int32{
 	"bit_or":                BIT_OR,
 	"bit_and":               BIT_AND,
 	"bit_xor":               BIT_XOR,
+	"bit_count":             BIT_COUNT,
 	"cluster_centers":       CLUSTER_CENTERS,
 	"subvector":             SUB_VECTOR,
 	"std":                   STDDEV_POP,
@@ -874,6 +877,7 @@ var functionIdRegister = map[string]int32{
 	"from_days":         FROM_DAYS,
 	"from_unixtime":     FROM_UNIXTIME,
 	"get_format":        GET_FORMAT,
+	"interval":          INTERVAL,
 	"left":              LEFT,
 	"right":             RIGHT,
 	// unary functions
