@@ -1321,9 +1321,9 @@ func Test_convertRowsIntoBatchDecimal(t *testing.T) {
 		want      string
 	}{
 		{
-			name:      "decimal64 string",
+			name:      "decimal64 max precision string",
 			mysqlType: defines.MYSQL_TYPE_DECIMAL,
-			width:     10,
+			width:     18,
 			scale:     2,
 			value:     "15.00",
 			oid:       types.T_decimal64,
@@ -1445,6 +1445,36 @@ func Test_mysqlDecimalColTypeMissingPrecision(t *testing.T) {
 
 	_, err := mysqlDecimalColType(col)
 	require.Error(t, err)
+}
+
+func Test_mysqlDecimalColTypePrecisionBoundary(t *testing.T) {
+	cases := []struct {
+		name  string
+		width int32
+		want  types.T
+	}{
+		{name: "decimal64 below boundary", width: 16, want: types.T_decimal64},
+		{name: "decimal64 precision 17", width: 17, want: types.T_decimal64},
+		{name: "decimal64 precision 18", width: 18, want: types.T_decimal64},
+		{name: "decimal128 precision 19", width: 19, want: types.T_decimal128},
+		{name: "decimal128 max precision", width: 38, want: types.T_decimal128},
+		{name: "decimal256 precision 39", width: 39, want: types.T_decimal256},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			col.SetColumnType(defines.MYSQL_TYPE_NEWDECIMAL)
+			col.SetLength(uint32(tt.width + 2))
+			col.SetDecimal(3)
+
+			got, err := mysqlDecimalColType(col)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got.Oid)
+			require.Equal(t, tt.width, got.Width)
+			require.Equal(t, int32(3), got.Scale)
+		})
+	}
 }
 
 func Test_convertRowsIntoBatchError(t *testing.T) {

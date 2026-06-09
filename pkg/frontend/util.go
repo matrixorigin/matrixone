@@ -1128,9 +1128,9 @@ func mysqlDecimalColType(col Column) (types.Type, error) {
 	}
 
 	switch {
-	case width > 38:
+	case width > types.T_decimal128.ToType().Width:
 		return types.New(types.T_decimal256, width, scale), nil
-	case width > 16:
+	case width > types.T_decimal64.ToType().Width:
 		return types.New(types.T_decimal128, width, scale), nil
 	default:
 		return types.New(types.T_decimal64, width, scale), nil
