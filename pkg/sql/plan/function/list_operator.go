@@ -289,26 +289,6 @@ var supportedOperators = []FuncNew{
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 
-			// All-numeric decimal BETWEEN: betweenImpl compares raw decimal
-			// values without rescaling at runtime, so the three operands must
-			// share one identical decimal type. Compute a common type that
-			// preserves the max integral width AND max scale across the three
-			// operands (issue #24565), promoting to decimal256 when decimal128
-			// would overflow, instead of rejecting mixed-scale/mixed-family
-			// decimals.
-			anyDecimal := inputs[0].Oid.IsDecimal() || inputs[1].Oid.IsDecimal() || inputs[2].Oid.IsDecimal()
-			allDecimalOrInt := isDecimalOrInteger(inputs[0]) && isDecimalOrInteger(inputs[1]) && isDecimalOrInteger(inputs[2])
-			if anyDecimal && allDecimalOrInt {
-				target := widestDecimalFamily(inputs).ToType()
-				if !setSafeDecimalWidthAndScaleFromSource(&target, inputs) {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
-				if !otherCompareOperatorSupports(target, target) {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
-				return newCheckResultWithCast(0, []types.Type{target, target, target})
-			}
-
 			has0, t01, t1 := fixedTypeCastRule1(inputs[0], inputs[1])
 			has1, t02, t2 := fixedTypeCastRule1(inputs[0], inputs[2])
 			if t01.Oid != t02.Oid {

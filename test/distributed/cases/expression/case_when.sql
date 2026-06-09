@@ -221,9 +221,3 @@ SELECT
   IFF(1 = 2,
       CAST(1 AS DECIMAL(38,0)),
       CAST(0 AS DECIMAL(38,20))) AS iff_decimal256_false;
-
--- @case
--- @desc:test for between aligning a decimal value to a wider scale that overflows decimal128 into decimal256
--- @label:bvt
-SELECT CAST(1 AS DECIMAL(38,0))
-     BETWEEN CAST(0.5 AS DECIMAL(38,30)) AND CAST(2 AS DECIMAL(38,30)) AS between_promote_decimal256;
