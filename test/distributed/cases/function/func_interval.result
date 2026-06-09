@@ -100,6 +100,24 @@ select interval(cast(2.90 as decimal(10,2)), cast(1.0 as decimal(10,1)), cast(2.
 select interval(cast(2.90 as decimal(10,2)), 1, 2, 3);
 ➤ interval(cast(2.90 as decimal(10, 2)), 1, 2, 3)[-5,64,0]  𝄀
 2
+select interval(5, 1, 5, 10) as builtin_interval, date_add('2024-01-01', INTERVAL 1 DAY) as legacy_date_add, '2024-01-01' + INTERVAL 1 DAY as legacy_plus_interval;
+➤ builtin_interval[-5,64,0]  ¦  legacy_date_add[12,-1,0]  ¦  legacy_plus_interval[12,-1,0]  𝄀
+2  ¦  2024-01-02  ¦  2024-01-02
+select interval(5, '1', '5', '10') as builtin_interval_string_arg, date_sub('2024-01-02', INTERVAL 1 DAY) as legacy_date_sub, '2024-01-02' - INTERVAL 1 DAY as legacy_minus_interval;
+➤ builtin_interval_string_arg[-5,64,0]  ¦  legacy_date_sub[12,-1,0]  ¦  legacy_minus_interval[12,-1,0]  𝄀
+2  ¦  2024-01-01  ¦  2024-01-01
+select interval(10, 1, 10, 100) as builtin_interval, date_add('2024-01-01 00:00:00', INTERVAL '1:30' HOUR_MINUTE) as legacy_compound_unit;
+➤ builtin_interval[-5,64,0]  ¦  legacy_compound_unit[12,-1,0]  𝄀
+2  ¦  2024-01-01 01:30:00
+select interval(-1, -10, -1, 0) as builtin_negative_interval, date_add('2024-01-02', INTERVAL -1 DAY) as legacy_negative_interval;
+➤ builtin_negative_interval[-5,64,0]  ¦  legacy_negative_interval[12,-1,0]  𝄀
+2  ¦  2024-01-01
+select case when interval(5, 1, 5, 10) = 2 then date_add('2024-01-01', INTERVAL 1 DAY) else date_sub('2024-01-01', INTERVAL 1 DAY) end as mixed_case_interval;
+➤ mixed_case_interval[12,-1,0]  𝄀
+2024-01-02
+select date_add('2024-01-01', INTERVAL 1 DAY) as legacy_interval_in_select where interval(5, 1, 5, 10) = 2;
+➤ legacy_interval_in_select[12,-1,0]  𝄀
+2024-01-02
 select interval('', 1, 10, 100);
 invalid argument cast to double, bad value bad value 
 select interval('   ', 1, 10, 100);
@@ -158,4 +176,31 @@ select id, interval(n, null, t2, t3) from t_func_interval order by id;
 2  ¦  1  𝄀
 3  ¦  2  𝄀
 4  ¦  -1
+select id, interval(n, t1, t2, t3), date_add('2024-01-01', INTERVAL 1 DAY) from t_func_interval where interval(n, t1, t2, t3) >= 0 order by id;
+➤ id[4,32,0]  ¦  interval(n, t1, t2, t3)[-5,64,0]  ¦  date_add(2024-01-01, INTERVAL 1 day)[12,-1,0]  𝄀
+1  ¦  0  ¦  2024-01-02  𝄀
+2  ¦  1  ¦  2024-01-02  𝄀
+3  ¦  2  ¦  2024-01-02
 drop table t_func_interval;
+drop table if exists t_interval_time_window;
+create table t_interval_time_window(ts timestamp primary key, n int);
+insert into t_interval_time_window values
+('2024-01-01 00:00:00', 1),
+('2024-01-02 00:00:00', 5),
+('2024-01-03 00:00:00', 10);
+select _wstart, _wend, interval(max(n), 1, 5, 10) from t_interval_time_window where ts >= '2024-01-01 00:00:00' and ts < '2024-01-04 00:00:00' interval(ts, 1, day) order by _wstart;
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  interval(max(n), 1, 5, 10)[-5,64,0]  𝄀
+2024-01-01 00:00:00  ¦  2024-01-02 00:00:00  ¦  1  𝄀
+2024-01-02 00:00:00  ¦  2024-01-03 00:00:00  ¦  2  𝄀
+2024-01-03 00:00:00  ¦  2024-01-04 00:00:00  ¦  3
+select _wstart, _wend, interval(count(n), 1, 2, 3) from t_interval_time_window where ts >= '2024-01-01 00:00:00' and ts < '2024-01-04 00:00:00' interval(ts, 1, day) sliding(1, day) fill(none) order by _wstart;
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  interval(count(n), 1, 2, 3)[-5,64,0]  𝄀
+2024-01-01 00:00:00  ¦  2024-01-02 00:00:00  ¦  1  𝄀
+2024-01-02 00:00:00  ¦  2024-01-03 00:00:00  ¦  1  𝄀
+2024-01-03 00:00:00  ¦  2024-01-04 00:00:00  ¦  1
+select _wstart, _wend, interval(max(n), 1, 5, 10), date_add(max(ts), INTERVAL 1 DAY) from t_interval_time_window where ts >= '2024-01-01 00:00:00' and ts < '2024-01-04 00:00:00' interval(ts, 1, day) order by _wstart;
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  interval(max(n), 1, 5, 10)[-5,64,0]  ¦  date_add(max(ts), INTERVAL 1 day)[93,64,0]  𝄀
+2024-01-01 00:00:00  ¦  2024-01-02 00:00:00  ¦  1  ¦  2024-01-02 00:00:00  𝄀
+2024-01-02 00:00:00  ¦  2024-01-03 00:00:00  ¦  2  ¦  2024-01-03 00:00:00  𝄀
+2024-01-03 00:00:00  ¦  2024-01-04 00:00:00  ¦  3  ¦  2024-01-04 00:00:00
+drop table t_interval_time_window;

@@ -57,6 +57,14 @@ select interval(2, 1.5, 2.5, 3.5);
 select interval(cast(2.90 as decimal(10,2)), cast(1.0 as decimal(10,1)), cast(2.90 as decimal(10,2)), cast(3.0 as decimal(10,1)));
 select interval(cast(2.90 as decimal(10,2)), 1, 2, 3);
 
+-- Mixed regression: new INTERVAL(...) builtin must not steal legacy INTERVAL expr syntax.
+select interval(5, 1, 5, 10) as builtin_interval, date_add('2024-01-01', INTERVAL 1 DAY) as legacy_date_add, '2024-01-01' + INTERVAL 1 DAY as legacy_plus_interval;
+select interval(5, '1', '5', '10') as builtin_interval_string_arg, date_sub('2024-01-02', INTERVAL 1 DAY) as legacy_date_sub, '2024-01-02' - INTERVAL 1 DAY as legacy_minus_interval;
+select interval(10, 1, 10, 100) as builtin_interval, date_add('2024-01-01 00:00:00', INTERVAL '1:30' HOUR_MINUTE) as legacy_compound_unit;
+select interval(-1, -10, -1, 0) as builtin_negative_interval, date_add('2024-01-02', INTERVAL -1 DAY) as legacy_negative_interval;
+select case when interval(5, 1, 5, 10) = 2 then date_add('2024-01-01', INTERVAL 1 DAY) else date_sub('2024-01-01', INTERVAL 1 DAY) end as mixed_case_interval;
+select date_add('2024-01-01', INTERVAL 1 DAY) as legacy_interval_in_select where interval(5, 1, 5, 10) = 2;
+
 -- Should errors
 select interval('', 1, 10, 100);
 select interval('   ', 1, 10, 100);
@@ -88,4 +96,17 @@ select id, interval(f, 1, t2, 100) from t_func_interval order by id;
 select id, interval(d, cast(1 as decimal(10,2)), cast(2.90 as decimal(10,2)), cast(100 as decimal(10,2))) from t_func_interval order by id;
 select id, interval(s, st1, st2, '100') from t_func_interval order by id;
 select id, interval(n, null, t2, t3) from t_func_interval order by id;
+select id, interval(n, t1, t2, t3), date_add('2024-01-01', INTERVAL 1 DAY) from t_func_interval where interval(n, t1, t2, t3) >= 0 order by id;
 drop table t_func_interval;
+
+-- Mixed regression with time-window rewrite and INTERVAL(...) builtin in one SQL path.
+drop table if exists t_interval_time_window;
+create table t_interval_time_window(ts timestamp primary key, n int);
+insert into t_interval_time_window values
+    ('2024-01-01 00:00:00', 1),
+    ('2024-01-02 00:00:00', 5),
+    ('2024-01-03 00:00:00', 10);
+select _wstart, _wend, interval(max(n), 1, 5, 10) from t_interval_time_window where ts >= '2024-01-01 00:00:00' and ts < '2024-01-04 00:00:00' interval(ts, 1, day) order by _wstart;
+select _wstart, _wend, interval(count(n), 1, 2, 3) from t_interval_time_window where ts >= '2024-01-01 00:00:00' and ts < '2024-01-04 00:00:00' interval(ts, 1, day) sliding(1, day) fill(none) order by _wstart;
+select _wstart, _wend, interval(max(n), 1, 5, 10), date_add(max(ts), INTERVAL 1 DAY) from t_interval_time_window where ts >= '2024-01-01 00:00:00' and ts < '2024-01-04 00:00:00' interval(ts, 1, day) order by _wstart;
+drop table t_interval_time_window;
