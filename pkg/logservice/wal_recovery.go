@@ -31,9 +31,20 @@ import (
 	"go.uber.org/zap"
 )
 
-const walRecoveredTagFile = "./WAL_RECOVERED"
+const (
+	walRecoveredTagFile = "./WAL_RECOVERED"
 
-const logEntrySafeDSNOffset = 50
+	logEntrySafeDSNOffset = 50
+
+	walDataFileCountSize       = 4
+	walDataFileEntryHeaderSize = 40
+
+	maxWALRecoveryEntries         = 10 * 1000 * 1000
+	maxWALRecoveryEntryDataSize   = defaultMaxMessageSize
+	maxWALRecoveryPreallocEntries = 64 * 1024
+
+	leaseHolderIDSize = 8
+)
 
 // WALEntry represents a WAL entry read from the recovery file
 type WALEntry struct {
@@ -149,26 +160,49 @@ func (s *Service) readWALDataFile(ctx context.Context, filePath string) (*WALRec
 	}
 	defer f.Close()
 
+	fileInfo, err := f.Stat()
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "failed to stat WAL data file: %v", err)
+	}
+	if fileInfo.Size() < walDataFileCountSize {
+		return nil, moerr.NewInternalErrorf(ctx,
+			"WAL data file too small: size %d, need at least %d bytes",
+			fileInfo.Size(), walDataFileCountSize)
+	}
+
 	// Read entry count
-	countBuf := make([]byte, 4)
+	countBuf := make([]byte, walDataFileCountSize)
 	if _, err := io.ReadFull(f, countBuf); err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to read entry count: %v", err)
 	}
 	count := binary.LittleEndian.Uint32(countBuf)
+	if count > maxWALRecoveryEntries {
+		return nil, moerr.NewInternalErrorf(ctx,
+			"WAL data file entry count %d exceeds limit %d",
+			count, maxWALRecoveryEntries)
+	}
+	maxEntriesByFileSize := uint64(fileInfo.Size()-walDataFileCountSize) / walDataFileEntryHeaderSize
+	if uint64(count) > maxEntriesByFileSize {
+		return nil, moerr.NewInternalErrorf(ctx,
+			"WAL data file entry count %d exceeds max possible entries %d for file size %d",
+			count, maxEntriesByFileSize, fileInfo.Size())
+	}
 
 	logger.Info("WAL recovery: reading entries from file",
 		zap.Uint32("count", count),
 		zap.String("file", filePath))
 
-	entries := make([]WALEntry, 0, count)
+	entries := make([]WALEntry, 0, walRecoveryPreallocEntries(count))
 
 	// Read each entry
-	headerBuf := make([]byte, 40)
+	headerBuf := make([]byte, walDataFileEntryHeaderSize)
+	bytesRead := int64(walDataFileCountSize)
 	for i := uint32(0); i < count; i++ {
 		// Read header
 		if _, err := io.ReadFull(f, headerBuf); err != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "failed to read entry %d header: %v", i, err)
 		}
+		bytesRead += walDataFileEntryHeaderSize
 
 		entry := WALEntry{
 			DSN:        binary.LittleEndian.Uint64(headerBuf[0:8]),
@@ -179,14 +213,31 @@ func (s *Service) readWALDataFile(ctx context.Context, filePath string) (*WALRec
 			RawData:    nil,
 		}
 		dataLen := binary.LittleEndian.Uint32(headerBuf[36:40])
+		if dataLen > maxWALRecoveryEntryDataSize {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"WAL data file entry %d data length %d exceeds limit %d",
+				i, dataLen, maxWALRecoveryEntryDataSize)
+		}
+		remaining := fileInfo.Size() - bytesRead
+		if remaining < 0 || uint64(dataLen) > uint64(remaining) {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"WAL data file entry %d data length %d exceeds remaining file bytes %d",
+				i, dataLen, remaining)
+		}
 
 		// Read raw data
-		entry.RawData = make([]byte, dataLen)
+		entry.RawData = make([]byte, int(dataLen))
 		if _, err := io.ReadFull(f, entry.RawData); err != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "failed to read entry %d data: %v", i, err)
 		}
+		bytesRead += int64(dataLen)
 
 		entries = append(entries, entry)
+	}
+	if bytesRead < fileInfo.Size() {
+		logger.Warn("WAL recovery: WAL data file has trailing bytes",
+			zap.Int64("trailing_bytes", fileInfo.Size()-bytesRead),
+			zap.String("file", filePath))
 	}
 
 	// Replay must follow the original LogService PSN order. The backup file
@@ -197,6 +248,13 @@ func (s *Service) readWALDataFile(ctx context.Context, filePath string) (*WALRec
 	normalizeWALEntrySafeDSN(entries)
 
 	return &WALRecoveryData{Entries: entries}, nil
+}
+
+func walRecoveryPreallocEntries(count uint32) int {
+	if count > maxWALRecoveryPreallocEntries {
+		return maxWALRecoveryPreallocEntries
+	}
+	return int(count)
 }
 
 func normalizeWALEntrySafeDSN(entries []WALEntry) {
@@ -297,10 +355,10 @@ func (h *dsnIntervalHeap) Pop() any {
 // - LeaseHolderID: 8 bytes (big-endian uint64)
 // - Payload: LogEntry data
 func buildUserEntryCmd(leaseHolderID uint64, payload []byte) []byte {
-	cmd := make([]byte, headerSize+8+len(payload))
+	cmd := make([]byte, headerSize+leaseHolderIDSize+len(payload))
 	binaryEnc.PutUint32(cmd[0:4], uint32(pb.UserEntryUpdate))
-	binaryEnc.PutUint64(cmd[4:12], leaseHolderID)
-	copy(cmd[12:], payload)
+	binaryEnc.PutUint64(cmd[headerSize:], leaseHolderID)
+	copy(cmd[headerSize+leaseHolderIDSize:], payload)
 	return cmd
 }
 

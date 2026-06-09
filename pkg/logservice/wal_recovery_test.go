@@ -15,14 +15,17 @@
 package logservice
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func TestReadWALDataFileOrdersByRaftIndex(t *testing.T) {
@@ -92,6 +95,92 @@ func TestReadWALDataFileNormalizesSafeDSN(t *testing.T) {
 	}
 }
 
+func TestReadWALDataFileRejectsMalformedFiles(t *testing.T) {
+	s := &Service{runtime: runtime.DefaultRuntime()}
+	testCases := []struct {
+		name       string
+		writeFile  func(string) error
+		wantErrMsg string
+	}{
+		{
+			name: "too small",
+			writeFile: func(path string) error {
+				return os.WriteFile(path, []byte{1, 2, 3}, 0644)
+			},
+			wantErrMsg: "too small",
+		},
+		{
+			name: "count exceeds limit",
+			writeFile: func(path string) error {
+				data := make([]byte, walDataFileCountSize)
+				binary.LittleEndian.PutUint32(data, uint32(maxWALRecoveryEntries+1))
+				return os.WriteFile(path, data, 0644)
+			},
+			wantErrMsg: "exceeds limit",
+		},
+		{
+			name: "count exceeds file size",
+			writeFile: func(path string) error {
+				data := make([]byte, walDataFileCountSize)
+				binary.LittleEndian.PutUint32(data, 1)
+				return os.WriteFile(path, data, 0644)
+			},
+			wantErrMsg: "exceeds max possible entries",
+		},
+		{
+			name: "data length exceeds limit",
+			writeFile: func(path string) error {
+				data := make([]byte, walDataFileCountSize+walDataFileEntryHeaderSize)
+				binary.LittleEndian.PutUint32(data[:walDataFileCountSize], 1)
+				binary.LittleEndian.PutUint32(data[walDataFileCountSize+36:], uint32(maxWALRecoveryEntryDataSize+1))
+				return os.WriteFile(path, data, 0644)
+			},
+			wantErrMsg: "exceeds limit",
+		},
+		{
+			name: "data length exceeds remaining bytes",
+			writeFile: func(path string) error {
+				data := make([]byte, walDataFileCountSize+walDataFileEntryHeaderSize)
+				binary.LittleEndian.PutUint32(data[:walDataFileCountSize], 1)
+				binary.LittleEndian.PutUint32(data[walDataFileCountSize+36:], 8)
+				return os.WriteFile(path, data, 0644)
+			},
+			wantErrMsg: "exceeds remaining file bytes",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "wal_data.bin")
+			if err := tc.writeFile(path); err != nil {
+				t.Fatal(err)
+			}
+			_, err := s.readWALDataFile(context.Background(), path)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tc.wantErrMsg) {
+				t.Fatalf("unexpected error: got %v, want containing %q", err, tc.wantErrMsg)
+			}
+		})
+	}
+}
+
+func TestBuildUserEntryCmdUsesLogserviceCommandLayout(t *testing.T) {
+	payload := []byte{1, 2, 3}
+	cmd := buildUserEntryCmd(42, payload)
+
+	if got := parseCmdTag(cmd); got != pb.UserEntryUpdate {
+		t.Fatalf("unexpected command tag: got %v, want %v", got, pb.UserEntryUpdate)
+	}
+	if got := parseLeaseHolderID(cmd); got != 42 {
+		t.Fatalf("unexpected lease holder ID: got %d, want 42", got)
+	}
+	if !bytes.Equal(cmd[headerSize+leaseHolderIDSize:], payload) {
+		t.Fatalf("unexpected payload: got %v, want %v", cmd[headerSize+leaseHolderIDSize:], payload)
+	}
+}
+
 func writeTestWALDataFile(path string, entries []WALEntry) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -106,7 +195,7 @@ func writeTestWALDataFile(path string, entries []WALEntry) error {
 	}
 
 	for _, entry := range entries {
-		header := make([]byte, 40)
+		header := make([]byte, walDataFileEntryHeaderSize)
 		binary.LittleEndian.PutUint64(header[0:8], entry.DSN)
 		binary.LittleEndian.PutUint64(header[8:16], entry.SafeDSN)
 		binary.LittleEndian.PutUint64(header[16:24], entry.RaftIndex)

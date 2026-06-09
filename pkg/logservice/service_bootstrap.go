@@ -107,8 +107,18 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 	// If WAL recovery is configured, set the flag before setInitialClusterInfo
 	// to prevent HAKeeperRunning state until WAL recovery completes.
 	// This ensures TN waits for WAL recovery before starting.
-	if cfg.BootstrapConfig.Restore.WALDataPath != "" {
+	walRecoveryConfigured := cfg.BootstrapConfig.Restore.WALDataPath != ""
+	walRecoveryFlagSet := false
+	clearWALRecoveryFlag := func() {
+		if walRecoveryFlagSet {
+			s.store.walRecoveryInProgress.Store(false)
+			walRecoveryFlagSet = false
+		}
+	}
+	if walRecoveryConfigured {
 		s.store.walRecoveryInProgress.Store(true)
+		walRecoveryFlagSet = true
+		defer clearWALRecoveryFlag()
 		s.runtime.SubLogger(runtime.SystemInit).Info("WAL recovery: set walRecoveryInProgress flag",
 			zap.String("wal_data_path", cfg.BootstrapConfig.Restore.WALDataPath))
 	}
@@ -142,17 +152,16 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 
 	// Recover WAL data if configured
 	// This must be done after the cluster is initialized and Log shard is running
-	if cfg.BootstrapConfig.Restore.WALDataPath != "" {
+	if walRecoveryConfigured {
 		// walRecoveryInProgress flag was already set before setInitialClusterInfo
 		s.runtime.SubLogger(runtime.SystemInit).Info("WAL recovery: starting WAL data recovery",
 			zap.String("wal_data_path", cfg.BootstrapConfig.Restore.WALDataPath))
 		if err := s.RecoverWALData(ctx, cfg); err != nil {
-			s.store.walRecoveryInProgress.Store(false)
 			s.runtime.SubLogger(runtime.SystemInit).Error("WAL recovery: failed to recover WAL data", zap.Error(err))
 			return err
 		}
 		// Clear the flag after WAL recovery completes
-		s.store.walRecoveryInProgress.Store(false)
+		clearWALRecoveryFlag()
 		s.runtime.SubLogger(runtime.SystemInit).Info("WAL recovery: completed, HAKeeper can now report running state")
 	}
 
