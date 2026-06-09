@@ -6452,19 +6452,23 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
-	case *tree.CloneTable,
-		*tree.DataBranchCreateTable,
-		*tree.DataBranchDeleteTable,
-		*tree.DataBranchMerge,
-		*tree.DataBranchDiff,
-		*tree.DataBranchPick:
+	case *tree.CloneTable:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
-	case *tree.CloneDatabase, *tree.DataBranchCreateDatabase, *tree.DataBranchDeleteDatabase:
+	case *tree.CloneDatabase:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeAccountAll)
 		writeDatabaseAndTableDirectly = true
+	case *tree.DataBranchCreateTable,
+		*tree.DataBranchDeleteTable,
+		*tree.DataBranchMerge,
+		*tree.DataBranchDiff,
+		*tree.DataBranchPick,
+		*tree.DataBranchCreateDatabase,
+		*tree.DataBranchDeleteDatabase:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
@@ -7727,10 +7731,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 			}
 			tbName := string(st.Names[0].ObjectName)
 			return checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
-		case *tree.CloneTable, *tree.CloneDatabase,
-			*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
-			*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
-			*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
+		case *tree.CloneTable, *tree.CloneDatabase:
 			return true, stats, nil
 		}
 	}
