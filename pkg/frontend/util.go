@@ -1367,25 +1367,49 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 	}, resultColTypes, resultColNames, nil
 }
 
+const mysqlDecimalPrecisionLengthOffset uint32 = 2
+
+type mysqlDecimalColumn interface {
+	Column
+	Decimal() uint8
+}
+
 func mysqlDecimalColType(col Column) (types.Type, error) {
-	width := int32(col.Length())
-	if width <= 2 {
-		return types.Type{}, moerr.NewInternalErrorNoCtxf("missing decimal precision for mysql type %d", col.ColumnType())
-	}
-	width -= 2
-
-	scale := int32(0)
-	if mysqlCol, ok := col.(*MysqlColumn); ok {
-		scale = int32(mysqlCol.Decimal())
+	decimalCol, ok := col.(mysqlDecimalColumn)
+	if !ok {
+		return types.Type{}, moerr.NewInternalErrorNoCtxf("missing decimal scale for mysql type %d", col.ColumnType())
 	}
 
+	precision, err := mysqlDecimalPrecisionFromColumn(col)
+	if err != nil {
+		return types.Type{}, err
+	}
+
+	return mysqlDecimalType(precision, int32(decimalCol.Decimal())), nil
+}
+
+func mysqlDecimalPrecisionFromColumn(col Column) (int32, error) {
+	length := col.Length()
+	if length <= mysqlDecimalPrecisionLengthOffset {
+		return 0, moerr.NewInternalErrorNoCtxf("missing decimal precision for mysql type %d", col.ColumnType())
+	}
+
+	precision := length - mysqlDecimalPrecisionLengthOffset
+	if precision > uint32(types.T_decimal256.ToType().Width) {
+		return 0, moerr.NewInternalErrorNoCtxf("invalid decimal precision %d for mysql type %d", precision, col.ColumnType())
+	}
+
+	return int32(precision), nil
+}
+
+func mysqlDecimalType(precision, scale int32) types.Type {
 	switch {
-	case width > types.T_decimal128.ToType().Width:
-		return types.New(types.T_decimal256, width, scale), nil
-	case width > types.T_decimal64.ToType().Width:
-		return types.New(types.T_decimal128, width, scale), nil
+	case precision > types.T_decimal128.ToType().Width:
+		return types.New(types.T_decimal256, precision, scale)
+	case precision > types.T_decimal64.ToType().Width:
+		return types.New(types.T_decimal128, precision, scale)
 	default:
-		return types.New(types.T_decimal64, width, scale), nil
+		return types.New(types.T_decimal64, precision, scale)
 	}
 }
 
@@ -1393,9 +1417,13 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	if err := convertEngineTypeToMysqlType(ctx, typ.Oid, col); err != nil {
 		return err
 	}
+	setMysqlColumnTypeMetadata(col, typ)
+	return nil
+}
+
+func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	setColLength(col, typ.Width)
 	col.SetDecimal(typ.Scale)
-	return nil
 }
 
 // errCodeRollbackWholeTxn denotes that the error code
