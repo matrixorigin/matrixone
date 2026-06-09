@@ -269,6 +269,9 @@ func (m mockCatalogHooks) ExperimentalFlag() string                             
 func (m mockCatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
 	return catalogplugin.AlterTableCloneBehavior{}
 }
+func (m mockCatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
+	return catalogplugin.RestoreBehavior{}
+}
 func (m mockCatalogHooks) ShouldTruncateHiddenTable(_ string) bool      { return false }
 func (m mockCatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor { return m.d }
 
