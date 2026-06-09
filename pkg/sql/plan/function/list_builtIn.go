@@ -11258,6 +11258,25 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `interval`
+	{
+		functionId: INTERVAL,
+		class:      plan.Function_PRODUCE_NO_NULL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    builtInIntervalCheck,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInInterval
+				},
+			},
+		},
+	},
+
 	// function `is_ipv4`
 	{
 		functionId: IS_IPV4,
