@@ -259,6 +259,122 @@ func Test_CastFromDecimal256(t *testing.T) {
 	}
 }
 
+func TestStAsWKBAndGeomFromWKB(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	pointWKB := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	lineWKB := string(encodeGeometryPayload("LINESTRING(0 0,1 1)", 0, false))
+
+	// ST_AsWKB(geometry) -> standard WKB blob equal to the stored WKB.
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false})},
+		NewFunctionTestResult(types.T_blob.ToType(), false, []string{pointWKB}, []bool{false}),
+		StAsWKB)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+
+	// ST_GeomFromWKB(wkb) -> geometry rendering as the original WKT.
+	tc2 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{lineWKB}, []bool{false})},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"LINESTRING(0 0,1 1)"}, []bool{false}),
+		StGeomFromWKB)
+	ok2, info2 := tc2.Run()
+	require.True(t, ok2, info2)
+}
+
+func TestGeometry32EncodeDecode(t *testing.T) {
+	// Float32 WKB is shorter than float64 (4 vs 8 bytes per ordinate) and both
+	// decode back to the same WKT.
+	f32 := encodeGeometryPayloadFloat32("POINT(1 2)")
+	f64 := encodeGeometryPayload("POINT(1 2)", 0, false)
+	require.Len(t, f32, 13)
+	require.Len(t, f64, 21)
+
+	got32, _, _, err := decodeGeometryPayload(f32)
+	require.NoError(t, err)
+	require.Equal(t, "POINT(1 2)", got32)
+
+	got64, _, _, err := decodeGeometryPayload(f64)
+	require.NoError(t, err)
+	require.Equal(t, "POINT(1 2)", got64)
+}
+
+func Test_CastGeometry32(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// A geometry32 (float32 WKB) source value.
+	pointF32 := string(encodeGeometryPayloadFloat32("POINT(5 6)"))
+
+	testCases := []tcTemp{
+		{
+			info: "cast varchar to geometry32",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"POINT(1 2)"}, []bool{false}),
+		},
+		{
+			info: "cast geometry to geometry32",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{"LINESTRING(0 0,1 1)"}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"LINESTRING(0 0,1 1)"}, []bool{false}),
+		},
+		{
+			info: "cast geometry32 to geometry (float32 WKB source)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{pointF32}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"POINT(5 6)"}, []bool{false}),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.info, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, tc.info, info)
+		})
+	}
+}
+
+// Test_CastGeometryPrecisionBothWays proves the cast actually converts the
+// coordinate width in each direction: a POINT is 13 bytes as float32 WKB and
+// 21 bytes as float64 WKB.
+func Test_CastGeometryPrecisionBothWays(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	pointF32 := string(encodeGeometryPayloadFloat32("POINT(5 6)"))    // float32 WKB
+	pointF64 := string(encodeGeometryPayload("POINT(5 6)", 0, false)) // float64 WKB
+
+	castLen := func(srcType types.Type, src string, dstType types.Type) int {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(srcType, []string{src}, []bool{false}),
+				NewFunctionTestInput(dstType, []string{}, []bool{}),
+			},
+			NewFunctionTestResult(dstType, false, []string{"POINT(5 6)"}, []bool{false}), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+		return len(tc.GetResultVectorDirectly().GetBytesAt(0))
+	}
+
+	geom := types.T_geometry.ToType()
+	geom32 := types.T_geometry32.ToType()
+
+	// geometry (float64 WKB) -> geometry32 must shrink to float32 WKB.
+	require.Equal(t, 13, castLen(geom, pointF64, geom32))
+	// geometry32 (float32 WKB) -> geometry must grow to float64 WKB.
+	require.Equal(t, 21, castLen(geom32, pointF32, geom))
+	// idempotent same-type casts keep their width.
+	require.Equal(t, 13, castLen(geom32, pointF32, geom32))
+	require.Equal(t, 21, castLen(geom, pointF64, geom))
+}
+
 func Test_CastVarcharToGeometry(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -2428,7 +2544,12 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 					require.True(t, null, "row %d should be null", i)
 				} else {
 					require.False(t, null, "row %d should not be null", i)
-					require.Equal(t, want, string(get), "row %d value not match", i)
+					if tt.toType.Oid == types.T_geometry || tt.toType.Oid == types.T_geometry32 {
+						// Geometry is stored as WKB; compare canonical WKT.
+						require.Equal(t, geometryComparisonWKT([]byte(want)), geometryComparisonWKT(get), "row %d value not match", i)
+					} else {
+						require.Equal(t, want, string(get), "row %d value not match", i)
+					}
 				}
 			}
 
