@@ -309,6 +309,143 @@ func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testi
 	require.Equal(t, rows2, vector.MustFixedColNoTypeCheck[types.Rowid](delVec2))
 }
 
+func TestLocalDatasourceWorkspaceDeleteEntriesMergesLargeDeleteSet(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+
+	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
+	defer closeFunc()
+
+	oid := types.NewObjectid()
+	blk := types.NewBlockidWithObjectID(&oid, 1)
+	blk2 := types.NewBlockidWithObjectID(&oid, 2)
+
+	writes := make([]Entry, 0, mergeWorkspaceDeleteEntriesThreshold+1)
+	for i := 0; i < mergeWorkspaceDeleteEntriesThreshold+1; i++ {
+		bid := &blk
+		offset := uint32(i)
+		if i%2 == 0 {
+			bid = &blk2
+			offset = uint32(mergeWorkspaceDeleteEntriesThreshold - i)
+		}
+		writes = append(writes, Entry{
+			typ:        DELETE,
+			databaseId: 11,
+			tableId:    22,
+			bat:        newWorkspaceDeleteBatch(t, []types.Rowid{types.NewRowid(bid, offset)}),
+		})
+	}
+
+	txn := &Transaction{op: txnOp, writes: writes}
+	txnOp.AddWorkspace(txn)
+
+	ls := &LocalDisttaeDataSource{
+		ctx:       ctx,
+		txnOffset: len(txn.writes),
+		table: &txnTable{
+			db: &txnDatabase{
+				databaseId: 11,
+				op:         txnOp,
+			},
+			tableId: 22,
+		},
+	}
+
+	entries := ls.workspaceDeleteEntriesLocked()
+	require.Len(t, entries, 1)
+	require.True(t, entries[0].sorted)
+	require.Len(t, entries[0].rowIds, mergeWorkspaceDeleteEntriesThreshold+1)
+	require.True(t, slices.IsSortedFunc(entries[0].rowIds, func(a, b types.Rowid) int { return a.Compare(&b) }))
+
+	blkEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk)
+	require.Len(t, blkEntries, 1)
+	require.True(t, blkEntries[0].sorted)
+	for _, rowID := range blkEntries[0].rowIds {
+		require.Equal(t, blk, *rowID.BorrowBlockID())
+	}
+
+	blk2Entries := ls.workspaceDeleteEntriesForBlockLocked(&blk2)
+	require.Len(t, blk2Entries, 1)
+	require.True(t, blk2Entries[0].sorted)
+	for _, rowID := range blk2Entries[0].rowIds {
+		require.Equal(t, blk2, *rowID.BorrowBlockID())
+	}
+}
+
+func TestLocalDatasourceWorkspaceDeleteEntriesInvalidatesCacheWhenTxnOffsetChanges(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+
+	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
+	defer closeFunc()
+
+	oid := types.NewObjectid()
+	blk := types.NewBlockidWithObjectID(&oid, 1)
+	blk2 := types.NewBlockidWithObjectID(&oid, 2)
+	row := types.NewRowid(&blk, 1)
+	row2 := types.NewRowid(&blk2, 2)
+
+	txn := &Transaction{
+		op: txnOp,
+		writes: []Entry{
+			{
+				typ:        DELETE,
+				databaseId: 11,
+				tableId:    22,
+				bat:        newWorkspaceDeleteBatch(t, []types.Rowid{row}),
+			},
+			{
+				typ:        DELETE,
+				databaseId: 11,
+				tableId:    22,
+				bat:        newWorkspaceDeleteBatch(t, []types.Rowid{row2}),
+			},
+		},
+	}
+	txnOp.AddWorkspace(txn)
+
+	ls := &LocalDisttaeDataSource{
+		ctx:       ctx,
+		txnOffset: 1,
+		table: &txnTable{
+			db: &txnDatabase{
+				databaseId: 11,
+				op:         txnOp,
+			},
+			tableId: 22,
+		},
+	}
+
+	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk))
+	require.Empty(t, ls.workspaceDeleteEntriesForBlockLocked(&blk2))
+	require.Equal(t, 1, ls.workspaceDeletes.txnOffset)
+	require.NotNil(t, ls.workspaceDeletes.byBlock)
+
+	ls.txnOffset = 2
+	entries := ls.workspaceDeleteEntriesLocked()
+	require.Len(t, entries, 2)
+	require.Equal(t, 2, ls.workspaceDeletes.txnOffset)
+	require.Nil(t, ls.workspaceDeletes.byBlock)
+	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row2}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk2))
+	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk))
+}
+
+func newWorkspaceDeleteBatch(t *testing.T, rows []types.Rowid) *batch.Batch {
+	t.Helper()
+
+	m := mpool.MustNewZero()
+	delVec := vector.NewVec(types.T_Rowid.ToType())
+	for _, row := range rows {
+		require.NoError(t, vector.AppendFixed(delVec, row, false, m))
+	}
+
+	delBat := batch.NewWithSize(1)
+	delBat.SetAttributes([]string{catalog.Row_ID})
+	delBat.Vecs[0] = delVec
+	delBat.SetRowCount(len(rows))
+	return delBat
+}
+
 // TestLocalDisttaeDataSource_getBlockZMs_ColumnLookup tests the column lookup logic
 // that fixes the bug where ColPos in JOIN scenarios points to projection list position
 // instead of table column position.
