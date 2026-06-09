@@ -22,10 +22,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -56,77 +54,6 @@ func isEnumOrSetPlanType(typ *plan.Type) bool {
 
 func isGeometryPlanType(typ *plan.Type) bool {
 	return typ != nil && (typ.Id == int32(types.T_geometry) || typ.Id == int32(types.T_geometry32))
-}
-
-func isTypedArrayPlanType(typ *plan.Type) bool {
-	return typ != nil && typ.Id == int32(types.T_json) && arrayPlanTypeString(typ) != ""
-}
-
-func arrayPlanTypeString(typ *plan.Type) string {
-	if typ == nil {
-		return ""
-	}
-	metadata := strings.TrimSpace(typ.GetEnumvalues())
-	if strings.HasPrefix(strings.ToLower(metadata), "array(") {
-		return metadata
-	}
-	return ""
-}
-
-func validateTypedArrayElementType(ctx context.Context, elem *tree.T) error {
-	if elem == nil {
-		return moerr.NewInternalError(ctx, "array type missing element type")
-	}
-	if elem.InternalType.Oid == uint32(defines.MYSQL_TYPE_TYPED_ARRAY) {
-		if elem.InternalType.ArrayContents == nil {
-			return moerr.NewInternalError(ctx, "array type missing element type")
-		}
-		return validateTypedArrayElementType(ctx, elem.InternalType.ArrayContents)
-	}
-
-	if isSupportedTypedArrayElementType(elem) {
-		return nil
-	}
-	return moerr.NewInvalidInputf(ctx, "unsupported ARRAY element type %s", tree.String(&elem.InternalType, dialect.MYSQL))
-}
-
-func isSupportedTypedArrayElementType(elem *tree.T) bool {
-	if elem == nil {
-		return false
-	}
-	switch defines.MysqlType(elem.InternalType.Oid) {
-	case defines.MYSQL_TYPE_BOOL,
-		defines.MYSQL_TYPE_TINY,
-		defines.MYSQL_TYPE_SHORT,
-		defines.MYSQL_TYPE_LONG,
-		defines.MYSQL_TYPE_INT24,
-		defines.MYSQL_TYPE_LONGLONG,
-		defines.MYSQL_TYPE_FLOAT,
-		defines.MYSQL_TYPE_DOUBLE,
-		defines.MYSQL_TYPE_DECIMAL,
-		defines.MYSQL_TYPE_NEWDECIMAL,
-		defines.MYSQL_TYPE_JSON,
-		defines.MYSQL_TYPE_DATE,
-		defines.MYSQL_TYPE_TIME,
-		defines.MYSQL_TYPE_DATETIME,
-		defines.MYSQL_TYPE_TIMESTAMP,
-		defines.MYSQL_TYPE_YEAR,
-		defines.MYSQL_TYPE_UUID:
-		return true
-	case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
-		switch strings.ToLower(strings.TrimSpace(elem.InternalType.FamilyString)) {
-		case "char", "varchar", "binary", "varbinary":
-			return true
-		default:
-			return false
-		}
-	case defines.MYSQL_TYPE_BLOB:
-		return strings.EqualFold(elem.InternalType.FamilyString, "blob")
-	case defines.MYSQL_TYPE_TEXT:
-		return strings.EqualFold(elem.InternalType.FamilyString, "text")
-	default:
-		return false
-	}
 }
 
 // Geometry subtype and SRID are stored in the column type's Scale and Width
