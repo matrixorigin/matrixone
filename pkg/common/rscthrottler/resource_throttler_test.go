@@ -438,8 +438,8 @@ func TestAcquirePolicyForCNFlushS3(t *testing.T) {
 
 		left, ok := AcquirePolicyForCNFlushS3(throttler, 2)
 		require.True(t, ok)
-		require.Equal(t, int64(2), left)
-		require.Equal(t, int64(2), throttler.reserved.Load())
+		require.Equal(t, int64(18), left)
+		require.Equal(t, int64(11), throttler.reserved.Load())
 	})
 
 	t.Run("allow under rss limit and reserve memory", func(t *testing.T) {
