@@ -36,8 +36,9 @@ import (
 )
 
 const (
-	LoadParallelMinSize = int(colexec.WriteS3Threshold)
-	LoadWriteS3MinSize  = 1 << 20
+	LoadParallelMinSize     = int(colexec.WriteS3Threshold)
+	LoadWriteS3MinSize      = 1 << 20
+	loadFirstLineSampleSize = 1 << 20
 )
 
 func getNormalExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, map[string]int32, *TableDef, error) {
@@ -372,13 +373,13 @@ func estimateLoadRowsizeFromFirstLine(param *tree.ExternParam, inputSize int64, 
 		return 0
 	}
 
-	if size := readExternalFirstLineSize(param, offset, ctx); size > 0 {
+	if size := readExternalFirstLineSize(param, inputSize, offset, ctx); size > 0 {
 		return clampLoadRowsize(float64(size), inputSize)
 	}
 	return 0
 }
 
-func readExternalFirstLineSize(param *tree.ExternParam, offset int64, ctx context.Context) int {
+func readExternalFirstLineSize(param *tree.ExternParam, inputSize int64, offset int64, ctx context.Context) int {
 	if param == nil {
 		return 0
 	}
@@ -386,6 +387,14 @@ func readExternalFirstLineSize(param *tree.ExternParam, offset int64, ctx contex
 		ctx = param.Ctx
 	}
 	if ctx == nil {
+		return 0
+	}
+
+	sampleSize := int64(loadFirstLineSampleSize)
+	if inputSize > 0 && inputSize < sampleSize {
+		sampleSize = inputSize
+	}
+	if sampleSize <= 0 {
 		return 0
 	}
 
@@ -399,7 +408,7 @@ func readExternalFirstLineSize(param *tree.ExternParam, offset int64, ctx contex
 		Entries: []fileservice.IOEntry{
 			0: {
 				Offset:            offset,
-				Size:              -1,
+				Size:              sampleSize,
 				ReadCloserForRead: &r,
 			},
 		},
@@ -415,17 +424,24 @@ func readExternalFirstLineSize(param *tree.ExternParam, offset int64, ctx contex
 	reader := bufio.NewReader(r)
 	if offset == 0 && param.Tail != nil {
 		for i := uint64(0); i < param.Tail.IgnoredLines; i++ {
-			if _, err := reader.ReadString('\n'); err != nil {
+			line, err := reader.ReadString('\n')
+			if err != nil || !strings.HasSuffix(line, "\n") {
 				return 0
 			}
 		}
 	}
 
 	line, err := reader.ReadString('\n')
-	if len(line) == 0 && err != nil {
+	if len(line) == 0 {
 		return 0
 	}
-	return len(line)
+	if strings.HasSuffix(line, "\n") {
+		return len(line)
+	}
+	if err == io.EOF && inputSize > 0 && inputSize <= sampleSize {
+		return len(line)
+	}
+	return 0
 }
 
 func clampLoadRowsize(rowSize float64, inputSize int64) float64 {
