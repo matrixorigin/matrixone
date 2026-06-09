@@ -259,3 +259,36 @@ SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
 -- @label:bvt
 SELECT COALESCE(CAST(1 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_decimal256;
 SELECT COALESCE(CAST(12345678901234567890123456789012345678 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_bignum;
+
+-- @case
+-- @desc:test for column-based coalesce over decimal branches with null and non-null rows
+-- @label:bvt
+drop table if exists t_coalesce_col;
+create table t_coalesce_col (id int, a decimal(23,2), b decimal(38,7));
+insert into t_coalesce_col values (1, null, 7.01970 * cast(-58140.00 as decimal(23,2))), (2, 1.23, 7.01970 * cast(-58140.00 as decimal(23,2)));
+select id, coalesce(a, b) as col_coalesce from t_coalesce_col order by id;
+drop table t_coalesce_col;
+
+-- @case
+-- @desc:test for coalesce over mixed integer and decimal branches
+-- @label:bvt
+drop table if exists t_coalesce_mix;
+create table t_coalesce_mix (id int, i int, d decimal(20,5));
+insert into t_coalesce_mix values (1, null, 1.50000), (2, 10, 2.50000);
+select id, coalesce(i, d) as mix_coalesce from t_coalesce_mix order by id;
+drop table t_coalesce_mix;
+select coalesce(null, 1, cast(0.5 as decimal(10,5))) as mix_const_coalesce;
+
+-- @case
+-- @desc:test for coalesce over three or more decimal branches
+-- @label:bvt
+select coalesce(null, cast(1.23 as decimal(23,2)), cast(4.56780 as decimal(38,7))) as three_branch;
+select coalesce(cast(null as decimal(23,2)), cast(null as decimal(20,5)), 7.01970 * cast(-58140.00 as decimal(23,2))) as three_branch_all_decimal;
+
+-- @case
+-- @desc:test for visible inferred decimal type of a coalesce result via view metadata
+-- @label:bvt
+drop view if exists v_coalesce_meta;
+create view v_coalesce_meta as select coalesce(cast(null as decimal(23,2)), 7.01970 * cast(-58140.00 as decimal(23,2))) as c;
+desc v_coalesce_meta;
+drop view v_coalesce_meta;
