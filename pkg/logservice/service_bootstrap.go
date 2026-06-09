@@ -195,6 +195,9 @@ func (s *Service) getBackupData(ctx context.Context) (*pb.BackupData, error) {
 	st, err := fs.StatFile(ctx, filePath)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			if filePath != defaultRestoreFilePath {
+				return nil, err
+			}
 			return nil, nil
 		}
 		return nil, err

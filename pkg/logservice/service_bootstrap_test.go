@@ -72,6 +72,11 @@ func TestGetBackupData(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Nil(t, restore)
 
+	s.cfg.BootstrapConfig.Restore.FilePath = path.Join(dir, "missing_backup_data")
+	restore, err = s.getBackupData(ctx)
+	assert.Error(t, err)
+	assert.Nil(t, restore)
+
 	s.cfg.BootstrapConfig.Restore.FilePath = path.Join(dir, name)
 	restore, err = s.getBackupData(ctx)
 	assert.NoError(t, err)
