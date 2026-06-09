@@ -61,6 +61,9 @@ type service struct {
 	fetchWhoWaitingListC chan who
 	logger               *log.MOLogger
 
+	allocatorVersionMu   sync.Mutex
+	lastAllocatorVersion uint64
+
 	remote struct {
 		client Client
 		server Server
@@ -606,7 +609,7 @@ func (s *service) getLockTableWithCreate(
 		close(c)
 	}()
 
-	bind, err := getLockTableBind(
+	bind, allocatorVersion, err := getLockTableBind(
 		s.remote.client,
 		group,
 		tableID,
@@ -617,6 +620,7 @@ func (s *service) getLockTableWithCreate(
 		return nil, err
 	}
 
+	s.observeAllocatorVersion("get-bind", allocatorVersion)
 	v := s.tableGroups.set(group, tableID, s.createLockTableByBind(bind))
 	return v, nil
 }
@@ -660,6 +664,95 @@ func (s *service) checkBindChangedBeforeLockSuccess(
 		return ErrLockTableBindChanged
 	}
 	return nil
+}
+
+func (s *service) observeAllocatorVersion(source string, observedVersion uint64) int {
+	return s.observeAllocatorVersionWithHolders(source, observedVersion, s.tableGroups)
+}
+
+func (s *service) observeAllocatorVersionWithHolders(
+	source string,
+	observedVersion uint64,
+	holders *lockTableHolders,
+) int {
+	if observedVersion == 0 {
+		return 0
+	}
+
+	s.allocatorVersionMu.Lock()
+	defer s.allocatorVersionMu.Unlock()
+	return s.observeAllocatorVersionLocked(source, observedVersion, holders)
+}
+
+func (s *service) observeAllocatorVersionLocked(
+	source string,
+	observedVersion uint64,
+	holders *lockTableHolders,
+) int {
+	if observedVersion == 0 {
+		return 0
+	}
+
+	oldVersion := s.lastAllocatorVersion
+	if oldVersion != 0 && observedVersion < oldVersion {
+		v2.GetLockServiceAllocatorEpochRegressionCounter(source).Inc()
+		logAllocatorEpochRegression(s.logger, source, oldVersion, observedVersion)
+		return 0
+	}
+	if observedVersion == oldVersion {
+		return 0
+	}
+
+	// Defensive path for minimal service instances used by keeper tests.
+	// Normal lock services always pass a holder and can purge stale binds.
+	if holders == nil {
+		s.lastAllocatorVersion = observedVersion
+		v2.LockServiceAllocatorEpochObservedGauge.Set(float64(observedVersion))
+		v2.GetLockServiceAllocatorEpochChangedCounter(source).Inc()
+		logAllocatorEpochChanged(s.logger, source, oldVersion, observedVersion, 0)
+		return 0
+	}
+
+	removed := holders.removeWithFilter(func(_ uint64, lt lockTable) bool {
+		return lt.getBind().Version < observedVersion
+	}, closeReasonBindChanged)
+	s.lastAllocatorVersion = observedVersion
+	v2.LockServiceAllocatorEpochObservedGauge.Set(float64(observedVersion))
+	v2.GetLockServiceAllocatorEpochChangedCounter(source).Inc()
+	if removed > 0 {
+		v2.GetLockServiceStaleBindPurgedCounter(source).Add(float64(removed))
+	}
+	logAllocatorEpochChanged(s.logger, source, oldVersion, observedVersion, removed)
+	return removed
+}
+
+func (s *service) handleKeepBindFailed(
+	serviceID string,
+	holders *lockTableHolders,
+	oldTableVersion,
+	allocatorVersion uint64,
+) int {
+	s.allocatorVersionMu.Lock()
+	defer s.allocatorVersionMu.Unlock()
+
+	if holders == nil {
+		s.observeAllocatorVersionLocked("keepalive-ok-false-epoch", allocatorVersion, nil)
+		return 0
+	}
+
+	// Keep the original OK=false snapshot guard: if another local purge already
+	// changed holders.version, this service-level purge should skip this round.
+	removed := holders.removeWithFilter(func(_ uint64, lt lockTable) bool {
+		if oldTableVersion != holders.getVersion() {
+			return false
+		}
+		return lt.getBind().ServiceID == serviceID
+	}, closeReasonKeepBindFailed)
+	if removed > 0 {
+		v2.GetLockServiceStaleBindPurgedCounter("keepalive-ok-false-service").Add(float64(removed))
+	}
+	s.observeAllocatorVersionLocked("keepalive-ok-false-epoch", allocatorVersion, holders)
+	return removed
 }
 
 func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
@@ -1142,19 +1235,21 @@ func (m *lockTableHolders) iter(fn func(uint64, lockTable) bool) {
 	}
 }
 
-func (m *lockTableHolders) removeWithFilter(filter func(uint64, lockTable) bool, reason closeReason) {
+func (m *lockTableHolders) removeWithFilter(
+	filter func(uint64, lockTable) bool,
+	reason closeReason,
+) int {
 	m.RLock()
 	defer m.RUnlock()
 
-	removed := false
+	removed := 0
 	for _, h := range m.holders {
-		if h.removeWithFilter(filter, reason) {
-			removed = true
-		}
+		removed += h.removeWithFilter(filter, reason)
 	}
-	if removed {
+	if removed > 0 {
 		m.version.Add(1)
 	}
+	return removed
 }
 
 // getVersion returns the current version of the lockTableHolders
@@ -1212,15 +1307,18 @@ func (m *lockTableHolder) iter(fn func(uint64, lockTable) bool) bool {
 	return true
 }
 
-func (m *lockTableHolder) removeWithFilter(filter func(uint64, lockTable) bool, reason closeReason) bool {
+func (m *lockTableHolder) removeWithFilter(
+	filter func(uint64, lockTable) bool,
+	reason closeReason,
+) int {
 	m.Lock()
 	defer m.Unlock()
-	removed := false
+	removed := 0
 	for id, v := range m.tables {
 		if filter(id, v) {
 			v.close(reason)
 			delete(m.tables, id)
-			removed = true
+			removed++
 		}
 	}
 	return removed
