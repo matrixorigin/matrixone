@@ -339,7 +339,7 @@ func (l *remoteLockTable) handleError(
 	// Note. Since the cn where the remote lock table is located may
 	// be permanently gone, we need to go to the allocator to check if
 	// the bind is valid.
-	new, err := getLockTableBind(
+	new, _, err := getLockTableBind(
 		l.client,
 		l.bind.Group,
 		l.bind.Table,
