@@ -3896,7 +3896,7 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
 	case types.T_text:
 		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
-	case types.T_geometry:
+	case types.T_geometry, types.T_geometry32:
 		col.SetColumnType(defines.MYSQL_TYPE_GEOMETRY)
 	case types.T_uuid:
 		// Downgrade to string for client compatibility (e.g. Go MySQL driver).
