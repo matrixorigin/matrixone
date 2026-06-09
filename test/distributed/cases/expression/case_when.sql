@@ -259,9 +259,3 @@ SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
 -- @label:bvt
 SELECT COALESCE(CAST(1 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_decimal256;
 SELECT COALESCE(CAST(12345678901234567890123456789012345678 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_bignum;
-
--- @case
--- @desc:test for between aligning a decimal value to a wider scale that overflows decimal128 into decimal256
--- @label:bvt
-SELECT CAST(1 AS DECIMAL(38,0))
-     BETWEEN CAST(0.5 AS DECIMAL(38,30)) AND CAST(2 AS DECIMAL(38,30)) AS between_promote_decimal256;

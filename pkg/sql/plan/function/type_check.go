@@ -500,29 +500,6 @@ func integerIntegralWidth(oid types.T) int32 {
 	}
 }
 
-// isDecimalOrInteger reports whether t is a decimal or an integer type, i.e. a
-// numeric type that can be losslessly cast into a wider decimal.
-func isDecimalOrInteger(t types.Type) bool {
-	return t.Oid.IsDecimal() || t.IsIntOrUint()
-}
-
-// widestDecimalFamily returns the widest decimal family present among the
-// inputs (decimal256 > decimal128 > decimal64). It is used as the floor family
-// for setSafeDecimalWidthAndScaleFromSource so the computed common type never
-// drops below any operand's family.
-func widestDecimalFamily(inputs []types.Type) types.T {
-	widest := types.T_decimal64
-	for i := range inputs {
-		switch inputs[i].Oid {
-		case types.T_decimal256:
-			return types.T_decimal256
-		case types.T_decimal128:
-			widest = types.T_decimal128
-		}
-	}
-	return widest
-}
-
 func setMaxWidthFromSource(t *types.Type, source []types.Type) {
 	t.Width = -1
 	for i := range source {
