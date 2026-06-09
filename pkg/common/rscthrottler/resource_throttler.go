@@ -414,12 +414,7 @@ func (m *memThrottler) Available() int64 {
 	if actualMaxMemory-rss >= limit {
 		avail = limit - reserved
 	} else {
-		// When RSS is close to the physical limit, the available headroom is
-		// actualMaxMemory minus the larger of RSS or reserved — not their sum.
-		// reserved double-counts S3 write buffers already reflected in RSS
-		// (mpool off-heap allocations). Using max avoids rejecting legitimate
-		// small writes when RSs is high but the throttler pool has headroom.
-		avail = actualMaxMemory - max(rss, reserved)
+		avail = actualMaxMemory - rss - reserved
 	}
 
 	return max(0, avail)
@@ -605,31 +600,44 @@ func AcquirePolicyForCNFlushS3(
 
 func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
 	for {
-		avail := throttler.Available()
+		limit := throttler.limit.Load()
+		reserved := throttler.reserved.Load()
+		if reserved < 0 {
+			reserved = 0
+		}
+
+		// Pool check: use max(rss, reserved) instead of the shared
+		// Available() (which sums rss + reserved). For S3 writes the
+		// reserved counter overlaps with mpool allocations already in
+		// RSS, so summing double-counts. Available() is deliberately
+		// not changed — other throttler consumers (workspace, merge)
+		// rely on the sum semantics.
+		rss := throttler.rss.Load()
+		actualMax := int64(throttler.actualTotalMemory.Load())
+		effective := max(rss, reserved)
+		avail := limit - reserved
+		if actualMax-effective < limit {
+			avail = actualMax - effective
+		}
+		if avail < 0 {
+			avail = 0
+		}
 		if !throttler.options.allowOutOfMemoryAcquire && avail < ask {
 			return avail, false
 		}
 
-		currReserved := throttler.reserved.Load()
-		if currReserved < 0 {
-			currReserved = 0
-		}
-
 		total := int64(throttler.actualTotalMemory.Load())
 		if total > 0 && throttler.limitRate > 0 {
-			// RSS gate: reject when physical memory is or will be nearly
-			// exhausted. Uses max(rss, reserved) instead of rss + reserved
-			// because reserved overlaps with RSS for S3 write buffers
-			// (mpool off-heap allocations counted in both). max bounds
-			// against whichever is larger without double-counting.
-			used := max(throttler.rss.Load(), currReserved) + ask
+			// RSS gate: same max(rss, reserved) semantics — reserved
+			// overlaps RSS for S3 write buffers.
+			used := max(rss, reserved) + ask
 			if float64(used) > float64(total)*throttler.limitRate {
 				return 0, false
 			}
 		}
 
-		newReserved := currReserved + ask
-		if throttler.reserved.CompareAndSwap(currReserved, newReserved) {
+		newReserved := reserved + ask
+		if throttler.reserved.CompareAndSwap(reserved, newReserved) {
 			return avail - ask, true
 		}
 	}
