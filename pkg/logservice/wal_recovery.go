@@ -135,6 +135,10 @@ func (s *Service) RecoverWALData(ctx context.Context, cfg Config) error {
 			},
 		},
 	}); err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+			logger.Info("WAL recovery: recovery tag file already exists")
+			return nil
+		}
 		logger.Error("WAL recovery: failed to write recovery tag file", zap.Error(err))
 		return err
 	}
