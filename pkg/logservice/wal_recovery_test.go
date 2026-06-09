@@ -181,6 +181,21 @@ func TestBuildUserEntryCmdUsesLogserviceCommandLayout(t *testing.T) {
 	}
 }
 
+func TestGetWALRecoveredTagFileUsesWALDataPath(t *testing.T) {
+	first := getWALRecoveredTagFile(filepath.Join(t.TempDir(), "wal_data.bin"))
+	second := getWALRecoveredTagFile(filepath.Join(t.TempDir(), "wal_data.bin"))
+
+	if first == walRecoveredTagFilePrefix {
+		t.Fatalf("unexpected generic WAL recovery tag path: %s", first)
+	}
+	if first == second {
+		t.Fatalf("expected different WAL paths to use different tag files: %s", first)
+	}
+	if !strings.HasPrefix(first, walRecoveredTagFilePrefix+"_") {
+		t.Fatalf("unexpected WAL recovery tag path: %s", first)
+	}
+}
+
 func writeTestWALDataFile(path string, entries []WALEntry) error {
 	f, err := os.Create(path)
 	if err != nil {

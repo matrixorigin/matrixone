@@ -17,9 +17,12 @@ package logservice
 import (
 	"container/heap"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -32,7 +35,7 @@ import (
 )
 
 const (
-	walRecoveredTagFile = "./WAL_RECOVERED"
+	walRecoveredTagFilePrefix = "./WAL_RECOVERED"
 
 	logEntrySafeDSNOffset = 50
 
@@ -81,12 +84,14 @@ func (s *Service) RecoverWALData(ctx context.Context, cfg Config) error {
 		logger.Error("WAL recovery: failed to get file service", zap.Error(err))
 		return err
 	}
+	walRecoveredTagFile := getWALRecoveredTagFile(walDataPath)
 
 	// Check if already recovered (unless force is set)
 	if !cfg.BootstrapConfig.Restore.Force {
 		_, err := fs.StatFile(ctx, walRecoveredTagFile)
 		if err == nil {
-			logger.Info("WAL recovery: already recovered, skipping")
+			logger.Info("WAL recovery: already recovered, skipping",
+				zap.String("tag_file", walRecoveredTagFile))
 			return nil
 		}
 		if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
@@ -147,6 +152,15 @@ func (s *Service) RecoverWALData(ctx context.Context, cfg Config) error {
 		zap.Int("entries_recovered", len(walData.Entries)))
 
 	return nil
+}
+
+func getWALRecoveredTagFile(walDataPath string) string {
+	key := filepath.Clean(walDataPath)
+	if abs, err := filepath.Abs(walDataPath); err == nil {
+		key = abs
+	}
+	sum := sha256.Sum256([]byte(key))
+	return walRecoveredTagFilePrefix + "_" + hex.EncodeToString(sum[:8])
 }
 
 // readWALDataFile reads WAL entries from the binary data file
