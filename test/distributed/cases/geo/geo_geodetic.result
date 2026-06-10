@@ -1,0 +1,41 @@
+select st_length(st_geomfromtext('LINESTRING(0 0,1 0)', 4326)) as geodesic_len_m;
+geodesic_len_m
+111195.0802335329
+select st_length(st_geomfromtext('LINESTRING(0 0,1 0)')) as cartesian_len;
+cartesian_len
+1.0
+select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326)) as geodesic_dist_m;
+geodesic_dist_m
+111195.0802335329
+select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(3 4)')) as cartesian_dist;
+cartesian_dist
+5.0
+select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))', 4326)) as geodesic_area_m2;
+geodesic_area_m2
+1.236403190946562E10
+select st_area(st_geomfromtext('POLYGON((0 0,3 0,3 4,0 4,0 0))')) as cartesian_area;
+cartesian_area
+12.0
+select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), 4326) as forced_geodesic_m2;
+forced_geodesic_m2
+1.236403190946562E10
+select st_length(st_geomfromtext('LINESTRING(0 0,1 0)'), 4326) as forced_geodesic_len_m;
+forced_geodesic_len_m
+111195.0802335329
+select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 0)'), 4326) as forced_geodesic_dist_m;
+forced_geodesic_dist_m
+111195.0802335329
+select st_area(st_geomfromtext('POLYGON((0 0,3 0,3 4,0 4,0 0))', 4326), 0) as forced_cartesian_area;
+forced_cartesian_area
+12.0
+drop database if exists geo_geodetic;
+create database geo_geodetic;
+use geo_geodetic;
+drop table if exists places;
+create table places(id int, g geography);
+insert into places values (1, st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))', 4326));
+select id, st_srid(g) as srid, st_area(g) as area_m2 from places order by id;
+id    srid    area_m2
+1    4326    1.236403190946562E10
+drop table places;
+drop database geo_geodetic;
