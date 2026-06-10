@@ -392,17 +392,59 @@ func logLockTableClosed(
 	logger *log.MOLogger,
 	bind pb.LockTable,
 	remote bool,
+	reason closeReason,
 ) {
 	if logger == nil {
 		return
 	}
 
+	logLevel := zap.InfoLevel
+	if reason == closeReasonServiceClose {
+		logLevel = zap.DebugLevel
+		if !logger.Enabled(logLevel) {
+			return
+		}
+	}
+
 	logger.Log(
 		"bind closed",
-		getLogOptions(zap.InfoLevel),
+		getLogOptions(logLevel),
 		zap.Bool("remote", remote),
 		zap.String("bind", bind.DebugString()),
+		zap.String("reason", reason.String()),
 	)
+}
+
+// closeReason represents the reason why a lock table is closed.
+type closeReason int
+
+const (
+	closeReasonBindChanged closeReason = iota
+	closeReasonServiceClose
+	closeReasonKeeperFailed
+	closeReasonKeepBindFailed
+)
+
+func (r closeReason) String() string {
+	switch r {
+	case closeReasonBindChanged:
+		return "bind-changed"
+	case closeReasonServiceClose:
+		return "service-close"
+	case closeReasonKeeperFailed:
+		return "keeper-failed"
+	case closeReasonKeepBindFailed:
+		return "keep-bind-failed"
+	default:
+		return "unknown"
+	}
+}
+
+func closeReasonOrDefault(reasons []closeReason) closeReason {
+	if len(reasons) == 0 {
+		return closeReasonBindChanged
+	}
+	return reasons[0]
 }
 
 func logDeadLockFound(
