@@ -28,7 +28,6 @@ import (
 	"sort"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -271,13 +270,6 @@ func (a *QCloudSDK) Write(
 	} else {
 		seeker, ok := r.(io.Seeker)
 		if !ok {
-			var n atomic.Int64
-			if sizeHint != nil {
-				r = &countingReader{
-					R: r,
-					C: &n,
-				}
-			}
 			err := a.WriteMultipartParallel(ctx, key, r, sizeHint, &ParallelMultipartOption{
 				PartSize:    defaultParallelMultipartPartSize,
 				Concurrency: 1,
@@ -285,9 +277,6 @@ func (a *QCloudSDK) Write(
 			})
 			if err != nil {
 				return err
-			}
-			if sizeHint != nil && n.Load() != *sizeHint {
-				return moerr.NewSizeNotMatchNoCtx(key)
 			}
 			return nil
 		}
@@ -329,10 +318,15 @@ func (a *QCloudSDK) WriteMultipartParallel(
 	defer wrapSizeMismatchErr(&err)
 
 	options := normalizeParallelOption(opt)
-	if sizeHint != nil && *sizeHint < minMultipartPartSize {
-		return a.Write(ctx, key, r, sizeHint, options.Expire)
-	}
 	if sizeHint != nil {
+		r = &exactSizeReader{
+			R:        r,
+			Expected: *sizeHint,
+			Key:      key,
+		}
+		if *sizeHint < minMultipartPartSize {
+			return a.Write(ctx, key, r, sizeHint, options.Expire)
+		}
 		expectedParts := (*sizeHint + options.PartSize - 1) / options.PartSize
 		if expectedParts > maxMultipartParts {
 			return moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", expectedParts)

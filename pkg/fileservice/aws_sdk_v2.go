@@ -475,10 +475,15 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 	defer wrapSizeMismatchErr(&err)
 
 	options := normalizeParallelOption(opt)
-	if sizeHint != nil && *sizeHint < minMultipartPartSize {
-		return a.Write(ctx, key, r, sizeHint, options.Expire)
-	}
 	if sizeHint != nil {
+		r = &exactSizeReader{
+			R:        r,
+			Expected: *sizeHint,
+			Key:      key,
+		}
+		if *sizeHint < minMultipartPartSize {
+			return a.Write(ctx, key, r, sizeHint, options.Expire)
+		}
 		expectedParts := (*sizeHint + options.PartSize - 1) / options.PartSize
 		if expectedParts > maxMultipartParts {
 			return moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", expectedParts)
