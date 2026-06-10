@@ -1296,6 +1296,26 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 
+	//promote interval expr rewrite here
+	if name == "interval" {
+		if len(astArgs) == 2 {
+			//interval expr like 'interval 5 day'
+			if _, ok := astArgs[1].(*tree.TimeUnitExpr); ok {
+				// rewrite interval function to ListExpr, and return directly
+				return &plan.Expr{
+					Typ: plan.Type{
+						Id: int32(types.T_interval),
+					},
+					Expr: &plan.Expr_List{
+						List: &plan.ExprList{
+							List: args,
+						},
+					},
+				}, nil
+			}
+		}
+	}
+
 	if b.builder != nil {
 		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
 		if err == nil {
@@ -1568,18 +1588,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return args[0], nil
 			}
 		}
-	case "interval":
-		// rewrite interval function to ListExpr, and return directly
-		return &plan.Expr{
-			Typ: plan.Type{
-				Id: int32(types.T_interval),
-			},
-			Expr: &plan.Expr_List{
-				List: &plan.ExprList{
-					List: args,
-				},
-			},
-		}, nil
+
 	case "and", "or", "not", "xor":
 		// why not append cast function?
 		// for i := 0; i < len(args); i++ {
@@ -1763,6 +1772,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	case "unary_minus":
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
+		}
+		if argLit := args[0].GetLit(); args[0].Typ.Id == int32(types.T_uint64) && argLit != nil && argLit.GetU64Val() == 1<<63 {
+			return makePlan2Int64ConstExprWithType(math.MinInt64), nil
 		}
 		if args[0].Typ.Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
