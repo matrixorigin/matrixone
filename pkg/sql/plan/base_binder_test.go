@@ -142,7 +142,6 @@ func TestBindFuncExprImplByPlanExpr_JsonValid(t *testing.T) {
 	})
 }
 
-<<<<<<< HEAD
 func TestBindNameConstConstArgs(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -230,7 +229,8 @@ func bindNameConstSelect(sql string) error {
 	}
 	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
 	return err
-=======
+}
+
 func TestBindFuncExprImplByAstExpr_IntervalDisambiguation(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 	whereBinder := NewWhereBinder(builder, bindCtx)
@@ -266,5 +266,4 @@ func TestBindFuncExprImplByAstExpr_IntervalDisambiguation(t *testing.T) {
 		require.Len(t, list.List, 2)
 		require.Equal(t, "day", list.List[1].GetLit().GetSval())
 	})
->>>>>>> main
 }
