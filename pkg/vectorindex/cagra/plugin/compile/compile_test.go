@@ -241,7 +241,9 @@ func TestCagraIdxcronMetadata_Frontend(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, got, "frontend session should produce a metadata blob")
 	require.Contains(t, string(got), "cagra_threads_build")
-	require.Contains(t, string(got), "cagra_max_index_capacity")
+	// max_index_capacity is no longer captured into idxcron metadata — it rides
+	// the index's algo_params (set via CREATE INDEX).
+	require.NotContains(t, string(got), "cagra_max_index_capacity")
 }
 
 func TestCagraIdxcronMetadata_Background(t *testing.T) {

@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// IVF-FLAT Updatable hook tests. Lifted from the old executor-side
-// TestCheckIndexUpdatable (pkg/vectorindex/idxcron/executor_test.go)
-// after the lists/nsample heuristic + kmeans_train_percent mutation
-// moved here from (*IndexUpdateTaskInfo).checkIndexUpdatable.
+// IVF-FLAT Updatable hook tests. The lists/nsample heuristic reads
+// kmeans_train_percent from the index's algo_params (a CREATE INDEX
+// option), defaulting when absent.
 
 package idxcron
 
@@ -40,7 +39,7 @@ const oneWeek = 24 * 7 * time.Hour
 
 type updatableCase struct {
 	name      string
-	jstr      string
+	kmeansPct string // kmeans_train_percent in algo_params; "" = absent → build default
 	dsize     int64
 	nlists    int64
 	ts        types.Timestamp
@@ -57,7 +56,7 @@ func updatableCases() []updatableCase {
 	return []updatableCase{
 		{
 			name:      "dsize < nlist → skip",
-			jstr:      `{"cfg":{"kmeans_train_percent":{"t":"F", "v":1}}}`,
+			kmeansPct: "1",
 			dsize:     100,
 			nlists:    1000,
 			ts:        types.UnixToTimestamp(0),
@@ -66,7 +65,7 @@ func updatableCases() []updatableCase {
 		},
 		{
 			name:      "nsample < lower → always reindex",
-			jstr:      `{"cfg":{"kmeans_train_percent":{"t":"F", "v":1}}}`,
+			kmeansPct: "1",
 			dsize:     1000000,
 			nlists:    1000,
 			ts:        types.UnixToTimestamp(0),
@@ -75,7 +74,7 @@ func updatableCases() []updatableCase {
 		},
 		{
 			name:      "nsample in middle, no lastUpdateAt → reindex",
-			jstr:      `{"cfg":{"kmeans_train_percent":{"t":"F", "v":10}}}`,
+			kmeansPct: "10",
 			dsize:     1000000,
 			nlists:    1000,
 			ts:        types.UnixToTimestamp(0),
@@ -84,7 +83,7 @@ func updatableCases() []updatableCase {
 		},
 		{
 			name:      "nsample in middle, lastUpdate 2 weeks ago → reindex",
-			jstr:      `{"cfg":{"kmeans_train_percent":{"t":"F", "v":10}}}`,
+			kmeansPct: "10",
 			dsize:     1000000,
 			nlists:    1000,
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * oneWeek).Unix()),
@@ -93,7 +92,7 @@ func updatableCases() []updatableCase {
 		},
 		{
 			name:      "nsample in middle, lastUpdate 1h ago → skip",
-			jstr:      `{"cfg":{"kmeans_train_percent":{"t":"F", "v":10}}}`,
+			kmeansPct: "10",
 			dsize:     1000000,
 			nlists:    1000,
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * oneWeek).Unix()),
@@ -102,7 +101,7 @@ func updatableCases() []updatableCase {
 		},
 		{
 			name:      "nsample upper, lastUpdate 1h ago → skip",
-			jstr:      `{"cfg":{"kmeans_train_percent":{"t":"F", "v":10}}}`,
+			kmeansPct: "10",
 			dsize:     10000000,
 			nlists:    1000,
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * oneWeek).Unix()),
@@ -110,8 +109,8 @@ func updatableCases() []updatableCase {
 			expected:  false,
 		},
 		{
-			name:      "nsample upper, lastUpdate 2 weeks ago → reindex + mutate",
-			jstr:      `{"cfg":{"kmeans_train_percent":{"t":"F", "v":10}}}`,
+			name:      "nsample upper, lastUpdate 2 weeks ago → reindex",
+			kmeansPct: "10",
 			dsize:     10000000,
 			nlists:    1000,
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * oneWeek).Unix()),
@@ -119,8 +118,8 @@ func updatableCases() []updatableCase {
 			expected:  true,
 		},
 		{
-			name:      "empty metadata, lastUpdate 2 weeks ago → reindex",
-			jstr:      "",
+			name:      "kmeans absent (default), lastUpdate 2 weeks ago → reindex",
+			kmeansPct: "",
 			dsize:     10000000,
 			nlists:    1000,
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * oneWeek).Unix()),
@@ -130,8 +129,12 @@ func updatableCases() []updatableCase {
 	}
 }
 
-func ivfflatTestTableDef(nlist int64) *plan.TableDef {
-	algoParams := `{"lists":"` + intStr(nlist) + `"}`
+func ivfflatTestTableDef(nlist int64, kmeansPct string) *plan.TableDef {
+	algoParams := `{"lists":"` + intStr(nlist) + `"`
+	if kmeansPct != "" {
+		algoParams += `,"kmeans_train_percent":"` + kmeansPct + `"`
+	}
+	algoParams += `}`
 	return &plan.TableDef{
 		DbName: "db",
 		Name:   "tbl",
@@ -173,13 +176,6 @@ func TestUpdatable(t *testing.T) {
 
 	for _, ta := range updatableCases() {
 		t.Run(ta.name, func(t *testing.T) {
-			var m *sqlexec.Metadata
-			if len(ta.jstr) > 0 {
-				var err error
-				m, err = sqlexec.NewMetadataFromJson(ta.jstr)
-				require.NoError(t, err)
-			}
-
 			stub := gostub.Stub(&RunGetCountSql, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 				bat := batch.NewWithSize(1)
 				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
@@ -191,9 +187,8 @@ func TestUpdatable(t *testing.T) {
 
 			lastUpdate := ta.ts
 			ok, _, err := Hooks{}.Updatable(idxcronplugin.UpdatableInput{
-				TableDef:     ivfflatTestTableDef(ta.nlists),
+				TableDef:     ivfflatTestTableDef(ta.nlists, ta.kmeansPct),
 				IndexName:    "ivf_idx",
-				Metadata:     m,
 				CreatedAt:    ta.createdAt,
 				LastUpdateAt: &lastUpdate,
 				Interval:     oneWeek,

@@ -114,10 +114,10 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*pl
 // ctx.IsFrontend() check.
 var ivfflatIdxcronSpec = compileplugin.IdxcronVarSpec{
 	FrontendProbeVar: "ivf_threads_search",
+	// kmeans_* are NOT captured here — they ride the index's algo_params
+	// (set via CREATE INDEX), which the idxcron reindex reads directly.
 	Capture: []string{
 		"ivf_threads_build",
-		"kmeans_train_percent",
-		"kmeans_max_iteration",
 		"lower_case_table_names",
 		"experimental_ivf_index",
 	},

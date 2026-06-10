@@ -257,9 +257,11 @@ func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 		// inheriting a partial frontend resolver returns nil here →
 		// defer to background semantics.
 		FrontendProbeVar: "cagra_threads_search",
+		// max_index_capacity is NOT captured here — it rides the index's
+		// algo_params (set via CREATE INDEX), read directly by the idxcron
+		// reindex.
 		Capture: []string{
 			"cagra_threads_build",
-			"cagra_max_index_capacity",
 			"lower_case_table_names",
 			"experimental_cagra_index",
 		},

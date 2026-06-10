@@ -318,11 +318,11 @@ func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 	logutil.Infof("[plugin] ivfpq IdxcronMetadata: isFrontend=%v", ctx.IsFrontend())
 	return compileplugin.BuildIdxcronMetadata(ctx, compileplugin.IdxcronVarSpec{
 		FrontendProbeVar: "ivfpq_threads_search",
+		// kmeans_* / max_index_capacity are NOT captured here — they ride the
+		// index's algo_params (set via CREATE INDEX), read directly by the
+		// idxcron reindex.
 		Capture: []string{
 			"ivfpq_threads_build",
-			"ivfpq_max_index_capacity",
-			"kmeans_train_percent",
-			"kmeans_max_iteration",
 			"lower_case_table_names",
 			"experimental_ivfpq_index",
 		},
