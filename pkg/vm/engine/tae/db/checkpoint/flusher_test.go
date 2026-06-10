@@ -175,6 +175,12 @@ func TestMergeFlushRequestsKeepsBoundedSeparateFromCron(t *testing.T) {
 	assert.Equal(t, 1, fromForce.GetTree().TableCount())
 }
 
+func TestCheckpointBoundedScheduleBypassesFlushReady(t *testing.T) {
+	assert.False(t, flushScheduleCron.bypassFlushReady())
+	assert.True(t, flushScheduleCheckpointBounded.bypassFlushReady())
+	assert.True(t, flushScheduleForce.bypassFlushReady())
+}
+
 func TestTriggerJobFallsBackToNormalWhenBoundedEntryIsEmpty(t *testing.T) {
 	intentStart := types.BuildTS(2, 0)
 	intentEnd := types.BuildTS(5, 0)

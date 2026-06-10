@@ -88,6 +88,18 @@ const (
 	flushRequestForce
 )
 
+type flushScheduleMode uint8
+
+const (
+	flushScheduleCron flushScheduleMode = iota
+	flushScheduleCheckpointBounded
+	flushScheduleForce
+)
+
+func (mode flushScheduleMode) bypassFlushReady() bool {
+	return mode == flushScheduleCheckpointBounded || mode == flushScheduleForce
+}
+
 type FlushRequest struct {
 	mode flushRequestMode
 	tree *logtail.DirtyTreeEntry
@@ -443,11 +455,11 @@ func (flusher *flushImpl) enqueueFlush(entry *logtail.DirtyTreeEntry, mode flush
 
 func (flusher *flushImpl) onFlushRequest(items ...any) {
 	fromCrons, fromForce, fromCheckpointBounded := mergeFlushRequests(items...)
-	flusher.scheduleFlush(fromForce, true)
+	flusher.scheduleFlush(fromForce, flushScheduleForce)
 	for _, entry := range fromCheckpointBounded {
-		flusher.scheduleFlush(entry, false)
+		flusher.scheduleFlush(entry, flushScheduleCheckpointBounded)
 	}
-	flusher.scheduleFlush(fromCrons, false)
+	flusher.scheduleFlush(fromCrons, flushScheduleCron)
 }
 
 func mergeFlushRequests(items ...any) (
@@ -485,7 +497,7 @@ func mergeFlushRequests(items ...any) (
 
 func (flusher *flushImpl) scheduleFlush(
 	entry *logtail.DirtyTreeEntry,
-	force bool,
+	mode flushScheduleMode,
 ) {
 	if _, injected := objectio.PrintFlushEntryInjected(); injected {
 		logutil.Infof("scheduleFlush: %v", entry.String())
@@ -502,7 +514,7 @@ func (flusher *flushImpl) scheduleFlush(
 		}
 	}
 	pressure := flusher.collectTableMemUsage(entry, lastCkp)
-	flusher.checkFlushConditionAndFire(entry, force, pressure, lastCkp)
+	flusher.checkFlushConditionAndFire(entry, mode, pressure, lastCkp)
 }
 
 func (flusher *flushImpl) makeStalledCheckpointFlushEntry() *logtail.DirtyTreeEntry {
@@ -774,16 +786,20 @@ nextChunk:
 }
 
 func (flusher *flushImpl) checkFlushConditionAndFire(
-	entry *logtail.DirtyTreeEntry, force bool, pressure float64, lastCkp types.TS,
+	entry *logtail.DirtyTreeEntry, mode flushScheduleMode, pressure float64, lastCkp types.TS,
 ) {
 	count := 0
 	_, end := entry.GetTimeRange()
 	for _, ticket := range flusher.objMemSizeList {
 		table, asize, dsize := ticket.tbl, ticket.asize, ticket.dsize
 
-		if force {
+		if mode.bypassFlushReady() {
+			logName := "flusher.force"
+			if mode == flushScheduleCheckpointBounded {
+				logName = "flusher.ckp.bounded.flush"
+			}
 			logutil.Info(
-				"flusher.force",
+				logName,
 				zap.Uint64("id", table.ID),
 				zap.String("name", table.GetLastestSchemaLocked(false).Name),
 			)
