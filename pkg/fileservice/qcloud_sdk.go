@@ -106,6 +106,11 @@ func NewQCloudSDK(
 		httpClient,
 	)
 
+	// Disable COS SDK built-in retry — MatrixOne wraps all operations in
+	// its own DoWithRetry, and SDK retry would double the request count
+	// and stretch failure latency.
+	client.Conf.RetryOpt.Count = 0
+
 	logutil.Info("new object storage",
 		zap.Any("sdk", "qcloud"),
 		zap.Any("arguments", args),
