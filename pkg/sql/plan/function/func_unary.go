@@ -7003,6 +7003,20 @@ func userLevelLockOwner(proc *process.Process) string {
 	return fmt.Sprintf("%d", si.GetConnectionID())
 }
 
+// maxUserLevelLockNameLength is the MySQL-compatible maximum length for
+// user-level lock names (GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK).
+const maxUserLevelLockNameLength = 64
+
+func validateUserLevelLockName(name string) error {
+	if len(name) > maxUserLevelLockNameLength {
+		return moerr.NewInternalErrorNoCtxf(
+			"user-level lock name exceeds maximum length of %d characters",
+			maxUserLevelLockNameLength,
+		)
+	}
+	return nil
+}
+
 func userLevelLockTxnID(owner, name string) []byte {
 	return []byte("mo-user-level-lock\x00" + owner + "\x00" + name)
 }
@@ -7108,6 +7122,9 @@ func userLevelLocksForOwner(owner string) []string {
 }
 
 func getUserLevelLock(name string, timeout float64, proc *process.Process) (int64, error) {
+	if err := validateUserLevelLockName(name); err != nil {
+		return 0, err
+	}
 	ls, err := userLevelLockService(proc)
 	if err != nil {
 		return 0, err
@@ -7137,28 +7154,60 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 	return 1, nil
 }
 
-func releaseUserLevelLock(name string, proc *process.Process) (int64, error) {
+// releaseUserLevelLock releases a user-level lock.
+// It returns (value, isNull, error):
+//   - (1, false, nil): lock was released by this call.
+//   - (0, false, nil): lock exists but is held by another session.
+//   - (0, true, nil):  lock does not exist (MySQL returns NULL).
+func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, error) {
+	if err := validateUserLevelLockName(name); err != nil {
+		return 0, false, err
+	}
 	ls, err := userLevelLockService(proc)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	owner := userLevelLockOwner(proc)
 	count := userLevelLockRefCount(owner, name)
 	if count == 0 {
-		return 0, nil
+		// Probe the lockservice to distinguish "lock does not exist" (NULL)
+		// from "lock exists but held by another session" (0).
+		probeOwner := owner + "\x00release_probe\x00" + name
+		_, probeErr := ls.Lock(
+			proc.Ctx,
+			userLevelLockTableID,
+			[][]byte{userLevelLockRow(proc, name)},
+			userLevelLockTxnID(probeOwner, name),
+			userLevelLockOptions(lockpb.WaitPolicy_FastFail))
+		if probeErr != nil {
+			if userLevelLockConflictOrTimeout(probeErr) {
+				// Lock exists but is held by another session.
+				return 0, false, nil
+			}
+			return 0, false, probeErr
+		}
+		// Lock did not exist — we acquired it via the probe. Release it and
+		// return NULL to signal the lock was already free.
+		if err := ls.Unlock(proc.Ctx, userLevelLockTxnID(probeOwner, name), timestamp.Timestamp{}); err != nil {
+			return 0, false, err
+		}
+		return 0, true, nil
 	}
 	if count > 1 {
 		untrackUserLevelLock(owner, name)
-		return 1, nil
+		return 1, false, nil
 	}
 	if err := ls.Unlock(proc.Ctx, userLevelLockTxnID(owner, name), timestamp.Timestamp{}); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	untrackUserLevelLock(owner, name)
-	return 1, nil
+	return 1, false, nil
 }
 
 func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
+	if err := validateUserLevelLockName(name); err != nil {
+		return 0, err
+	}
 	ls, err := userLevelLockService(proc)
 	if err != nil {
 		return 0, err
@@ -7239,11 +7288,11 @@ func ReleaseLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			}
 			continue
 		}
-		value, err := releaseUserLevelLock(string(name), proc)
+		value, isNull, err := releaseUserLevelLock(string(name), proc)
 		if err != nil {
 			return err
 		}
-		if err := rs.Append(value, false); err != nil {
+		if err := rs.Append(value, isNull); err != nil {
 			return err
 		}
 	}
