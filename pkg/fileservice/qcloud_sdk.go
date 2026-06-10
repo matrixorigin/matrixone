@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -268,13 +269,44 @@ func (a *QCloudSDK) Write(
 		}
 
 	} else {
-		err = a.putObject(
-			ctx,
-			key,
-			r,
-			sizeHint,
-			expire,
-		)
+		seeker, ok := r.(io.Seeker)
+		if !ok {
+			var n atomic.Int64
+			if sizeHint != nil {
+				r = &countingReader{
+					R: r,
+					C: &n,
+				}
+			}
+			err := a.WriteMultipartParallel(ctx, key, r, sizeHint, &ParallelMultipartOption{
+				PartSize:    defaultParallelMultipartPartSize,
+				Concurrency: 1,
+				Expire:      expire,
+			})
+			if err != nil {
+				return err
+			}
+			if sizeHint != nil && n.Load() != *sizeHint {
+				return moerr.NewSizeNotMatchNoCtx(key)
+			}
+			return nil
+		}
+		offset, err := seeker.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+		_, err = DoWithRetry("write", func() (int, error) {
+			if _, err := seeker.Seek(offset, io.SeekStart); err != nil {
+				return 0, err
+			}
+			return 0, a.putObject(
+				ctx,
+				key,
+				r,
+				sizeHint,
+				expire,
+			)
+		}, maxRetryAttemps, IsRetryableError)
 		if err != nil {
 			return err
 		}
