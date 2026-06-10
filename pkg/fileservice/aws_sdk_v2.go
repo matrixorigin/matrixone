@@ -490,6 +490,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		}
 	}
 
+	parentCtx := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -548,7 +549,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 
 	defer func() {
 		if err != nil {
-			_, abortErr := a.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+			_, abortErr := a.client.AbortMultipartUpload(context.WithoutCancel(parentCtx), &s3.AbortMultipartUploadInput{
 				Bucket:   ptrTo(a.bucket),
 				Key:      ptrTo(key),
 				UploadId: output.UploadId,

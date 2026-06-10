@@ -333,6 +333,7 @@ func (a *QCloudSDK) WriteMultipartParallel(
 		}
 	}
 
+	parentCtx := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -398,7 +399,8 @@ func (a *QCloudSDK) WriteMultipartParallel(
 
 	defer func() {
 		if err != nil {
-			_, _ = a.client.Object.AbortMultipartUpload(ctx, key, output.UploadID)
+			_, _ = a.client.Object.AbortMultipartUpload(
+				context.WithoutCancel(parentCtx), key, output.UploadID)
 		}
 	}()
 
