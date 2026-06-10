@@ -38,6 +38,12 @@ select row_count();
 replace into t values (50,500);
 select row_count();
 
+-- replace that collides with an existing key. MatrixOne counts the net rows
+-- written to the target table once, so this reports 1 (MySQL reports 2 for the
+-- delete+insert). The affected-rows divergence is tracked in #24907.
+replace into t values (50,999);
+select row_count();
+
 -- after a result-set statement, row_count() is -1
 select v from t where id=1;
 select row_count();
@@ -60,6 +66,17 @@ select row_count();
 -- insert ... on duplicate key update that inserts a brand-new row affects 1 row
 create table odku(id int primary key, v int);
 insert into odku values (1,1) on duplicate key update v=v+1;
+select row_count();
+
+-- on duplicate key update hitting an existing row that actually changes. MatrixOne
+-- counts the net affected row once, so this reports 1 (MySQL reports 2). Tracked
+-- in #24907.
+insert into odku values (1,1) on duplicate key update v=v+1;
+select row_count();
+
+-- on duplicate key update hitting an existing row with no real change (set to its
+-- current value). MatrixOne reports 1 here (MySQL reports 0). Tracked in #24907.
+insert into odku values (1,100) on duplicate key update v=v;
 select row_count();
 
 -- load data reports the number of imported rows
