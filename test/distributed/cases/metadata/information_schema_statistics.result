@@ -1,0 +1,122 @@
+drop account if exists stat_view_acc;
+drop database if exists stat_view_db;
+drop database if exists stat_view_db_a;
+drop database if exists stat_view_db_b;
+create database stat_view_db;
+use stat_view_db;
+create table t (
+a int primary key,
+b int,
+c int,
+unique key uniq_b (b),
+key idx_bc (b, c)
+);
+select table_schema, table_name, index_name, column_name, seq_in_index, non_unique
+from information_schema.statistics
+where table_schema = 'stat_view_db'
+and table_name = 't'
+order by index_name, seq_in_index;
+table_schema    table_name    index_name    column_name    seq_in_index    non_unique
+stat_view_db    t    PRIMARY    a    1    0
+stat_view_db    t    idx_bc    b    1    1
+stat_view_db    t    idx_bc    c    2    1
+stat_view_db    t    uniq_b    b    1    0
+select count(*) from information_schema.statistics
+where table_schema = 'stat_view_db'
+and table_name = 't';
+count(*)
+4
+show index from t;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t    0    uniq_b    1    b    A    0    NULL    NULL    YES                    YES    b
+t    1    idx_bc    1    b    A    0    NULL    NULL    YES                    YES    b
+t    1    idx_bc    2    c    A    0    NULL    NULL    YES                    YES    c
+t    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+create database stat_view_db_a;
+create database stat_view_db_b;
+use stat_view_db_a;
+create table same_t (
+a int primary key,
+b int,
+c int not null,
+key idx_b (b),
+key idx_c (c)
+);
+use stat_view_db_b;
+create table same_t (
+a int primary key,
+b int not null,
+c int,
+key idx_b (b),
+key idx_c (c)
+);
+select table_schema, table_name, index_name, column_name, nullable
+from information_schema.statistics
+where table_schema in ('stat_view_db_a', 'stat_view_db_b')
+and table_name = 'same_t'
+and index_name in ('idx_b', 'idx_c')
+order by table_schema, index_name, seq_in_index;
+table_schema    table_name    index_name    column_name    nullable
+stat_view_db_a    same_t    idx_b    b    YES
+stat_view_db_a    same_t    idx_c    c
+stat_view_db_b    same_t    idx_b    b
+stat_view_db_b    same_t    idx_c    c    YES
+select table_schema, count(*)
+from information_schema.statistics
+where table_schema in ('stat_view_db_a', 'stat_view_db_b')
+and table_name = 'same_t'
+and index_name in ('idx_b', 'idx_c')
+group by table_schema
+order by table_schema;
+table_schema    count(*)
+stat_view_db_a    2
+stat_view_db_b    2
+create account stat_view_acc admin_name = 'root' identified by '111';
+create database stat_view_db;
+use stat_view_db;
+create table t (
+a int primary key,
+b int,
+c int,
+unique key uniq_b (b),
+key idx_bc (b, c)
+);
+select table_schema, table_name, index_name, column_name, seq_in_index, non_unique
+from information_schema.statistics
+where table_schema = 'stat_view_db'
+and table_name = 't'
+order by index_name, seq_in_index;
+table_schema    table_name    index_name    column_name    seq_in_index    non_unique
+stat_view_db    t    PRIMARY    a    1    0
+stat_view_db    t    idx_bc    b    1    1
+stat_view_db    t    idx_bc    c    2    1
+stat_view_db    t    uniq_b    b    1    0
+select count(*) from information_schema.statistics
+where table_schema = 'stat_view_db'
+and table_name = 't';
+count(*)
+4
+select count(*) from information_schema.statistics
+where table_schema = 'stat_view_db';
+count(*)
+4
+drop database stat_view_db;
+select table_schema, table_name, index_name, column_name, seq_in_index, non_unique
+from information_schema.statistics
+where table_schema = 'stat_view_db'
+and table_name = 't'
+order by index_name, seq_in_index;
+table_schema    table_name    index_name    column_name    seq_in_index    non_unique
+stat_view_db    t    PRIMARY    a    1    0
+stat_view_db    t    idx_bc    b    1    1
+stat_view_db    t    idx_bc    c    2    1
+stat_view_db    t    uniq_b    b    1    0
+select count(*) from information_schema.statistics
+where table_schema = 'stat_view_db'
+and table_name = 't';
+count(*)
+4
+drop account if exists stat_view_acc;
+drop database if exists stat_view_db;
+drop database if exists stat_view_db_a;
+drop database if exists stat_view_db_b;
