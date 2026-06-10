@@ -182,14 +182,18 @@ func TestQCloudSDKWriteNonSeekableFallbackPreservesSizeHint(t *testing.T) {
 	})
 
 	t.Run("short", func(t *testing.T) {
-		server, _ := newMockCOSServer(t, 0)
+		server, state := newMockCOSServer(t, 0)
 		defer server.Close()
+		state.uploadID = "cos-size-mismatch-short"
 
 		sdk := newTestCOSClient(t, server)
 		size := int64(smallObjectThreshold)
 		err := sdk.Write(context.Background(), "object", nonSeekReader{r: bytes.NewReader([]byte("short"))}, &size, nil)
 		if !moerr.IsMoErrCode(err, moerr.ErrSizeNotMatch) {
 			t.Fatalf("expected size mismatch, got %v", err)
+		}
+		if state.putCount != 0 || len(state.parts) != 0 || state.completed.Load() {
+			t.Fatalf("expected no committed object for short reader")
 		}
 	})
 }
