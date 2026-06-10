@@ -259,11 +259,11 @@ func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 		FrontendProbeVar: "cagra_threads_search",
 		// max_index_capacity is NOT captured here — it rides the index's
 		// algo_params (set via CREATE INDEX), read directly by the idxcron
-		// reindex.
+		// reindex. The experimental flag is NOT captured either: the background
+		// reindex (IsFrontend=false) skips the experimental gate.
 		Capture: []string{
 			"cagra_threads_build",
 			"lower_case_table_names",
-			"experimental_cagra_index",
 		},
 	})
 }

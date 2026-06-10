@@ -92,12 +92,13 @@ func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
 // BuildSessionVars are the environmental/perf vars captured into
 // algo_params.session_vars at CREATE INDEX. The index-defining k-means knobs
 // and max_index_capacity ride flat algo_params keys written by ParamsFromTree
-// only when explicitly set in CREATE INDEX.
+// only when explicitly set in CREATE INDEX. The experimental flag is NOT
+// captured: the background reindex (ProcessInitSQL, IsFrontend=false) skips the
+// experimental gate, so its create-time value is never consulted.
 func (CatalogHooks) BuildSessionVars() []string {
 	return []string{
 		"ivfpq_threads_build",
 		"lower_case_table_names",
-		"experimental_ivfpq_index",
 	}
 }
 

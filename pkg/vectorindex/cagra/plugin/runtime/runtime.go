@@ -70,14 +70,15 @@ func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
 
 // BuildSessionVars are the environmental/perf vars captured into
 // algo_params.session_vars at CREATE INDEX (cagra_* threads, lower_case for
-// name resolution, experimental flag). CAGRA does NOT train k-means; its
-// index-defining max_index_capacity rides a flat algo_params key written by
-// ParamsFromTree only when explicitly set in CREATE INDEX.
+// name resolution). CAGRA does NOT train k-means; its index-defining
+// max_index_capacity rides a flat algo_params key written by ParamsFromTree
+// only when explicitly set in CREATE INDEX. The experimental flag is NOT
+// captured: the background reindex (ProcessInitSQL, IsFrontend=false) skips the
+// experimental gate, so its create-time value is never consulted.
 func (CatalogHooks) BuildSessionVars() []string {
 	return []string{
 		"cagra_threads_build",
 		"lower_case_table_names",
-		"experimental_cagra_index",
 	}
 }
 

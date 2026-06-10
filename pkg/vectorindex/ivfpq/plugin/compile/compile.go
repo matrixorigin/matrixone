@@ -320,11 +320,11 @@ func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 		FrontendProbeVar: "ivfpq_threads_search",
 		// kmeans_* / max_index_capacity are NOT captured here — they ride the
 		// index's algo_params (set via CREATE INDEX), read directly by the
-		// idxcron reindex.
+		// idxcron reindex. The experimental flag is NOT captured either: the
+		// background reindex (IsFrontend=false) skips the experimental gate.
 		Capture: []string{
 			"ivfpq_threads_build",
 			"lower_case_table_names",
-			"experimental_ivfpq_index",
 		},
 	})
 }

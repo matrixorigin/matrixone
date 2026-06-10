@@ -115,11 +115,12 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*pl
 var ivfflatIdxcronSpec = compileplugin.IdxcronVarSpec{
 	FrontendProbeVar: "ivf_threads_search",
 	// kmeans_* are NOT captured here — they ride the index's algo_params
-	// (set via CREATE INDEX), which the idxcron reindex reads directly.
+	// (set via CREATE INDEX), which the idxcron reindex reads directly. The
+	// experimental flag is NOT captured either: the background reindex
+	// (IsFrontend=false) skips the experimental gate.
 	Capture: []string{
 		"ivf_threads_build",
 		"lower_case_table_names",
-		"experimental_ivf_index",
 	},
 }
 
