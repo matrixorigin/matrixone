@@ -34,6 +34,10 @@ replace into t values (50,500);
 select row_count();
 ➤ row_count()[-5,64,0]  𝄀
 1
+replace into t values (50,999);
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+1
 select v from t where id=1;
 ➤ v[4,32,0]  𝄀
 11
@@ -58,6 +62,14 @@ select row_count();
 6
 create table odku(id int primary key, v int);
 insert into odku values (1,1) on duplicate key update v=v+1;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+1
+insert into odku values (1,1) on duplicate key update v=v+1;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+1
+insert into odku values (1,100) on duplicate key update v=v;
 select row_count();
 ➤ row_count()[-5,64,0]  𝄀
 1
