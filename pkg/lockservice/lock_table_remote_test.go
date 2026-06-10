@@ -16,7 +16,6 @@ package lockservice
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net"
 	"os"
@@ -153,7 +152,8 @@ func TestIssue20747(t *testing.T) {
 	)
 }
 
-func TestLockRemoteWithContextTimeoutDoesNotTrackLock(t *testing.T) {
+func TestLockRemoteWithContextTimeoutTracksLockForUnlock(t *testing.T) {
+	unlockCalled := make(chan struct{})
 	runRemoteLockTableTests(
 		t,
 		pb.LockTable{ServiceID: "s1"},
@@ -171,25 +171,50 @@ func TestLockRemoteWithContextTimeoutDoesNotTrackLock(t *testing.T) {
 					<-ctx.Done()
 				},
 			)
+			s.RegisterMethodHandler(
+				pb.Method_Unlock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					close(unlockCalled)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				},
+			)
 		},
 		func(l *remoteLockTable, s Server) {
 			txnID := []byte("txn-timeout")
 			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
+			closed := false
 			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 			defer cancel()
 			txn.Lock()
 			defer func() {
-				require.Len(t, txn.lockHolders, 0)
 				txn.Unlock()
-				reuse.Free(txn, nil)
+				if !closed {
+					reuse.Free(txn, nil)
+				}
 			}()
 
 			l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
 				require.Error(t, err)
-				require.True(t,
-					errors.Is(err, context.DeadlineExceeded) ||
-						moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 			})
+			holder := txn.getHoldLocksLocked(l.bind.Group)
+			require.Contains(t, holder.tableKeys, l.bind.Table)
+			require.Contains(t, holder.tableBinds, l.bind.Table)
+
+			require.NoError(t, txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+				return l, nil
+			}, l.logger))
+			closed = true
+			select {
+			case <-unlockCalled:
+			default:
+				require.Fail(t, "expected remote unlock")
+			}
 		},
 		func(lt pb.LockTable) {},
 	)
