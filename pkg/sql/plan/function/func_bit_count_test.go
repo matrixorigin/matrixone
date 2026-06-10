@@ -216,6 +216,27 @@ func TestBitCountVarcharWithIsBin(t *testing.T) {
 	require.Equal(t, []uint64{7, 1, 0, 8}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
 }
 
+func TestBitCountUnhexUsesBinaryStringSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_blob.ToType(), []string{"@", "\xff", "\xff\xff"}, nil),
+		},
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 8, 16}, nil),
+		BitCountBinaryString)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+
+	ctx := context.Background()
+	unhex, err := GetFunctionByName(ctx, "unhex", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, types.T_blob, unhex.retType.Oid)
+
+	bitCount, err := GetFunctionByName(ctx, "bit_count", []types.Type{unhex.retType})
+	require.NoError(t, err)
+	require.Equal(t, int32(14), bitCount.overloadId)
+}
+
 func TestBitCountTypeCheck(t *testing.T) {
 	ctx := context.Background()
 
