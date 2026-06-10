@@ -92,7 +92,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			TableType: catalog.Cagra_TblType_Metadata,
 			Cols:      make([]*plan.ColDef, 4),
 		}
-		indexDefs[0], err = planplugin.CreateIndexDef(ctx, indexInfo,indexTableName, catalog.Cagra_TblType_Metadata, indexParts, false)
+		indexDefs[0], err = planplugin.CreateIndexDef(ctx, indexInfo, indexTableName, catalog.Cagra_TblType_Metadata, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -164,7 +164,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			TableType: catalog.Cagra_TblType_Storage,
 			Cols:      make([]*plan.ColDef, 5),
 		}
-		indexDefs[1], err = planplugin.CreateIndexDef(ctx, indexInfo,indexTableName, catalog.Cagra_TblType_Storage, indexParts, false)
+		indexDefs[1], err = planplugin.CreateIndexDef(ctx, indexInfo, indexTableName, catalog.Cagra_TblType_Storage, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}

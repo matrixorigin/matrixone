@@ -106,7 +106,6 @@ type IndexTableConfig struct {
 	OrigFuncName  string `json:"orig_func_name"`
 	ThreadsBuild  int64  `json:"threads_build"`
 	ThreadsSearch int64  `json:"threads_search"`
-	IndexCapacity int64  `json:"index_capacity"`
 
 	// IVF related
 	EntriesTable       string  `json:"entries"`
@@ -114,8 +113,6 @@ type IndexTableConfig struct {
 	Nprobe             uint    `json:"nprobe"`
 	PKeyType           int32   `json:"pktype"`
 	KeyPartType        int32   `json:"parttype"`
-	KmeansTrainPercent float64 `json:"kmeans_train_percent"`
-	KmeansMaxIteration int64   `json:"kmeans_max_iteration"`
 	Limit              uint64  `json:"limit"`
 	LowerBoundType     int8    `json:"lower_bound_type"`
 	LowerBound         float64 `json:"lower_bound"`
@@ -128,31 +125,37 @@ type IndexTableConfig struct {
 
 // HNSW specified parameters
 type HnswParam struct {
-	M              string `json:"m"`
-	EfConstruction string `json:"ef_construction"`
-	OpType         string `json:"op_type"`
-	EfSearch       string `json:"ef_search"`
-	Async          string `json:"async"`
+	M                string `json:"m"`
+	EfConstruction   string `json:"ef_construction"`
+	OpType           string `json:"op_type"`
+	EfSearch         string `json:"ef_search"`
+	Async            string `json:"async"`
+	MaxIndexCapacity string `json:"max_index_capacity"`
 }
 
 // IVF specified parameters
 type IvfParam struct {
-	Lists        string `json:"lists"`
-	OpType       string `json:"op_type"`
-	Async        string `json:"async"`
-	Quantization string `json:"quantization"`
-	Distribution string `json:"distribution_mode"`
+	Lists              string `json:"lists"`
+	OpType             string `json:"op_type"`
+	Async              string `json:"async"`
+	Quantization       string `json:"quantization"`
+	Distribution       string `json:"distribution_mode"`
+	KmeansTrainPercent string `json:"kmeans_train_percent"`
+	KmeansMaxIteration string `json:"kmeans_max_iteration"`
 }
 
 // IVF-PQ specified parameters
 type IvfpqParam struct {
-	Lists           string `json:"lists"`
-	M               string `json:"m"`
-	BitsPerCode     string `json:"bits_per_code"`
-	OpType          string `json:"op_type"`
-	Quantization    string `json:"quantization"`
-	Distribution    string `json:"distribution_mode"`
-	IncludedColumns string `json:"included_columns"`
+	Lists              string `json:"lists"`
+	M                  string `json:"m"`
+	BitsPerCode        string `json:"bits_per_code"`
+	OpType             string `json:"op_type"`
+	Quantization       string `json:"quantization"`
+	Distribution       string `json:"distribution_mode"`
+	IncludedColumns    string `json:"included_columns"`
+	KmeansTrainPercent string `json:"kmeans_train_percent"`
+	KmeansMaxIteration string `json:"kmeans_max_iteration"`
+	MaxIndexCapacity   string `json:"max_index_capacity"`
 }
 
 // CAGRA specified parameters
@@ -168,16 +171,19 @@ type CagraParam struct {
 	GraphDegee             string `json:"graph_degree"`
 	ITopkSize              string `json:"itopk_size"`
 	IncludedColumns        string `json:"included_columns"`
+	MaxIndexCapacity       string `json:"max_index_capacity"`
 }
 
 type IvfflatIndexConfig struct {
-	Lists      uint
-	Metric     uint16
-	InitType   uint16
-	Dimensions uint
-	Spherical  bool
-	Version    int64
-	VectorType int32
+	Lists              uint
+	Metric             uint16
+	InitType           uint16
+	Dimensions         uint
+	Spherical          bool
+	Version            int64
+	VectorType         int32
+	KmeansTrainPercent float64
+	KmeansMaxIteration int64
 }
 
 type CuvsIvfIndexConfig struct {
@@ -220,13 +226,14 @@ type CuvsIvfpqIndexConfig struct {
 
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig
 type IndexConfig struct {
-	Type      string
-	OpType    string
-	Usearch   usearch.IndexConfig
-	Ivfflat   IvfflatIndexConfig
-	CuvsIvf   CuvsIvfIndexConfig
-	CuvsCagra CuvsCagraIndexConfig
-	CuvsIvfpq CuvsIvfpqIndexConfig
+	Type          string
+	OpType        string
+	IndexCapacity int64
+	Usearch       usearch.IndexConfig
+	Ivfflat       IvfflatIndexConfig
+	CuvsIvf       CuvsIvfIndexConfig
+	CuvsCagra     CuvsCagraIndexConfig
+	CuvsIvfpq     CuvsIvfpqIndexConfig
 }
 
 type RuntimeConfig struct {

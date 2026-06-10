@@ -530,7 +530,7 @@ func (idx *IvfpqModel[T]) LoadIndex(
 	}
 
 	gi, err := cuvs.NewGpuIvfPqEmpty[T](
-		uint64(tblcfg.IndexCapacity),
+		uint64(idxcfg.IndexCapacity),
 		uint32(idxcfg.CuvsIvfpq.Dimensions),
 		cuvsMetric,
 		bp,

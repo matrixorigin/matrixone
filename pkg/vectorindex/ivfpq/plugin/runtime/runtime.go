@@ -89,16 +89,13 @@ func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
 	return catalogplugin.RestoreBehavior{}
 }
 
-// BuildSessionVars mirrors IVF-PQ's idxcron Capture set — the ivfpq_* knobs,
-// the k-means knobs (trained by the cuvs ivfpq_create build), and the basics
-// (lower_case_table_names, experimental flag). Captured into
-// algo_params.session_vars at CREATE INDEX.
+// BuildSessionVars are the environmental/perf vars captured into
+// algo_params.session_vars at CREATE INDEX. The index-defining k-means knobs
+// and max_index_capacity ride flat algo_params keys written by ParamsFromTree
+// only when explicitly set in CREATE INDEX.
 func (CatalogHooks) BuildSessionVars() []string {
 	return []string{
 		"ivfpq_threads_build",
-		"ivfpq_max_index_capacity",
-		"kmeans_train_percent",
-		"kmeans_max_iteration",
 		"lower_case_table_names",
 		"experimental_ivfpq_index",
 	}
@@ -163,6 +160,15 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	}
 }
 
+// Build-param defaults mirror the frontend session-var defaults; the build
+// path (ivfpq_create) uses them when the flat algo_params key is absent (a
+// legacy index). Capacity 0 means "auto-detect from source row count".
+const (
+	DefaultKmeansTrainPercent = float64(10)
+	DefaultKmeansMaxIteration = int64(20)
+	DefaultMaxIndexCapacity   = int64(0)
+)
+
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's
 // INDEX_TYPE_IVFPQ case (pkg/catalog/secondary_index_utils.go:434-477).
 func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
@@ -226,6 +232,16 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	}
 	if idx.IndexOption.Hour > 0 {
 		res[catalog.Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
+	}
+
+	if idx.IndexOption.KmeansTrainPercent > 0 {
+		res[catalog.IndexAlgoParamKmeansTrainPercent] = strconv.FormatInt(idx.IndexOption.KmeansTrainPercent, 10)
+	}
+	if idx.IndexOption.KmeansMaxIteration > 0 {
+		res[catalog.IndexAlgoParamKmeansMaxIteration] = strconv.FormatInt(idx.IndexOption.KmeansMaxIteration, 10)
+	}
+	if idx.IndexOption.MaxIndexCapacity > 0 {
+		res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
 	}
 
 	return res, nil

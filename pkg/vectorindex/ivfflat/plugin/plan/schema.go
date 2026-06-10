@@ -79,7 +79,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			TableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
 			Cols:      make([]*plan.ColDef, 2),
 		}
-		indexDefs[0], err = planplugin.CreateIndexDef(ctx, indexInfo,indexTableName, catalog.SystemSI_IVFFLAT_TblType_Metadata, indexParts, false)
+		indexDefs[0], err = planplugin.CreateIndexDef(ctx, indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Metadata, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -130,7 +130,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			TableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
 			Cols:      make([]*plan.ColDef, 4),
 		}
-		indexDefs[1], err = planplugin.CreateIndexDef(ctx, indexInfo,indexTableName, catalog.SystemSI_IVFFLAT_TblType_Centroids, indexParts, false)
+		indexDefs[1], err = planplugin.CreateIndexDef(ctx, indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Centroids, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -190,7 +190,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
 			Cols:      make([]*plan.ColDef, 5),
 		}
-		indexDefs[2], err = planplugin.CreateIndexDef(ctx, indexInfo,indexTableName, catalog.SystemSI_IVFFLAT_TblType_Entries, indexParts, false)
+		indexDefs[2], err = planplugin.CreateIndexDef(ctx, indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Entries, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}

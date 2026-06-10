@@ -4,10 +4,10 @@ use vector_plugin_smoke;
 set experimental_hnsw_index = 0;
 create table h (a bigint primary key, v vecf32(3));
 insert into h values (1, '[1,1,1]'), (2, '[2,2,2]'), (3, '[3,3,3]'), (4, '[8,8,8]');
-create index ix using hnsw on h (v) op_type "vector_l2_ops";
+create index ix using hnsw on h (v) op_type "vector_l2_ops" max_index_capacity 1000000;
 internal error: experimental_hnsw_index is not enabled
 set experimental_hnsw_index = 1;
-create index ix using hnsw on h (v) op_type "vector_l2_ops";
+create index ix using hnsw on h (v) op_type "vector_l2_ops" max_index_capacity 1000000;
 select algo, algo_table_type from mo_catalog.mo_indexes
 where table_id = (select rel_id from mo_catalog.mo_tables
 where relname = 'h' and reldatabase = 'vector_plugin_smoke')
@@ -22,7 +22,7 @@ h  ¦  CREATE TABLE `h` (
   `a` bigint NOT NULL,
   `v` vecf32(3) DEFAULT NULL,
   PRIMARY KEY (`a`),
-  KEY `ix` USING hnsw (`v`) op_type 'vector_l2_ops' 
+  KEY `ix` USING hnsw (`v`) op_type 'vector_l2_ops'  max_index_capacity = 1000000 
 )
 select a from h order by l2_distance(v, '[1,1,1]') asc limit 2;
 ➤ a[-5,64,0]  𝄀
@@ -32,7 +32,7 @@ set experimental_hnsw_index = 0;
 set experimental_ivf_index = 1;
 create table f (a bigint primary key, v vecf32(3));
 insert into f values (1, '[1,1,1]'), (2, '[2,2,2]'), (3, '[3,3,3]'), (4, '[8,8,8]');
-create index ix using ivfflat on f (v) lists = 2 op_type 'vector_l2_ops';
+create index ix using ivfflat on f (v) lists = 2 op_type 'vector_l2_ops' kmeans_train_percent 5 kmeans_max_iteration 20;
 select algo, algo_table_type from mo_catalog.mo_indexes
 where table_id = (select rel_id from mo_catalog.mo_tables
 where relname = 'f' and reldatabase = 'vector_plugin_smoke')
@@ -48,7 +48,7 @@ f  ¦  CREATE TABLE `f` (
   `a` bigint NOT NULL,
   `v` vecf32(3) DEFAULT NULL,
   PRIMARY KEY (`a`),
-  KEY `ix` USING ivfflat (`v`) lists = 2  op_type 'vector_l2_ops' 
+  KEY `ix` USING ivfflat (`v`) lists = 2  op_type 'vector_l2_ops'  kmeans_train_percent = 5  kmeans_max_iteration = 20 
 )
 select a from f order by l2_distance(v, '[1,1,1]') asc limit 2;
 ➤ a[-5,64,0]  𝄀

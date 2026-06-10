@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -196,7 +197,18 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 			return err
 		}
 
-		if u.tblcfg.IndexCapacity <= 0 {
+		// max_index_capacity: flat algo_params key (set in CREATE INDEX) wins;
+		// otherwise the session variable controls it, then the hardcoded
+		// default. Sourced only when the cfg didn't already carry one.
+		if u.idxcfg.IndexCapacity <= 0 {
+			u.idxcfg.IndexCapacity, err = indexplugin.AlgoParamInt(u.param.MaxIndexCapacity,
+				proc.GetResolveVariableFunc(), "hnsw_max_index_capacity", hnswrt.DefaultMaxIndexCapacity)
+			if err != nil {
+				return err
+			}
+		}
+
+		if u.idxcfg.IndexCapacity <= 0 {
 			return moerr.NewInvalidInput(proc.Ctx, "Index Capacity must be greater than 0")
 		}
 

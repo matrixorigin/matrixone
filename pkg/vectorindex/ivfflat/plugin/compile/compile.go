@@ -322,18 +322,8 @@ func ivfIndexCentroidsTable(
 		}
 		cfg.ThreadsBuild = threads.(int64)
 
-		trainPct, err := ctx.ResolveVariable("kmeans_train_percent", true, false)
-		if err != nil {
-			return err
-		}
-		cfg.KmeansTrainPercent = trainPct.(float64)
-
-		maxIter, err := ctx.ResolveVariable("kmeans_max_iteration", true, false)
-		if err != nil {
-			return err
-		}
-		cfg.KmeansMaxIteration = maxIter.(int64)
-
+		// kmeans_train_percent / kmeans_max_iteration now ride algo_params as
+		// flat keys (written at CREATE INDEX); ivf_create reads them from there.
 		cfgbytes, err := json.Marshal(cfg)
 		if err != nil {
 			return err

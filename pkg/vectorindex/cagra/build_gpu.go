@@ -74,7 +74,7 @@ func (b *CagraBuild[T]) createKey(n int) string {
 // getOrCreateCurrent returns the current sub-index, creating a new one if needed.
 // When the current sub-index is full it is finalized (Build called) and a new one is started.
 func (b *CagraBuild[T]) getOrCreateCurrent() (*CagraModel[T], error) {
-	capacity := b.tblcfg.IndexCapacity
+	capacity := b.idxcfg.IndexCapacity
 
 	if b.current != nil && b.count >= capacity {
 		// Current index is full: build it and retire it.

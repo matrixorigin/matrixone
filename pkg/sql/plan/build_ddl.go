@@ -2016,6 +2016,24 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 	return nil
 }
 
+// buildIndexAlgoParams converts the parsed CREATE INDEX options into the
+// algo_params JSON. Per-algo parameter rules live in each index plugin's
+// Catalog().ParamsFromTree hook; non-plugin algorithms (btree/rtree/master)
+// fall through to catalog (which produces no algo_params for them).
+func buildIndexAlgoParams(indexInfo *tree.Index) (string, error) {
+	if p, ok := indexplugin.Get(indexInfo.KeyType.ToString()); ok {
+		res, err := p.Catalog().ParamsFromTree(indexInfo)
+		if err != nil {
+			return "", err
+		}
+		if len(res) == 0 {
+			return "", nil
+		}
+		return catalog.IndexParamsMapToJsonString(res)
+	}
+	return catalog.IndexParamsToJsonString(indexInfo)
+}
+
 func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) (err error) {
 	if len(pkeyName) == 0 {
 		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for secondary index")
@@ -2191,7 +2209,7 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 	if indexInfo.IndexOption != nil {
 		indexDef.Comment = indexInfo.IndexOption.Comment
 
-		params, err := catalog.IndexParamsToJsonString(indexInfo)
+		params, err := buildIndexAlgoParams(indexInfo)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -2388,7 +2406,7 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	if indexInfo.IndexOption != nil {
 		indexDef.Comment = indexInfo.IndexOption.Comment
 
-		params, err := catalog.IndexParamsToJsonString(indexInfo)
+		params, err := buildIndexAlgoParams(indexInfo)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -2524,7 +2542,7 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 		indexDef.Comment = indexInfo.IndexOption.Comment
 
 		// Create params JSON string and set it
-		params, err := catalog.IndexParamsToJsonString(indexInfo)
+		params, err := buildIndexAlgoParams(indexInfo)
 		if err != nil {
 			return nil, err
 		}
@@ -2548,11 +2566,12 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 
 	}
 
-	// Capture build-time session vars (the plugin's BuildSessionVars, read via
-	// ctx) into IndexAlgoParams here — the single place index params are built —
-	// so session_vars rides into both the mo_tables constraint def (what
-	// ctx.Resolve later reads, e.g. for a clone) and mo_indexes. Background
-	// builds (restore reindex, idxcron) then reproduce the create-time config.
+	// Capture the plugin's build-time session vars (BuildSessionVars) into the
+	// typed algo_params.session_vars blob so background builds (restore reindex,
+	// idxcron, async create) reproduce the create-time config. Index-defining
+	// knobs (kmeans_*, max_index_capacity) are NOT auto-captured here: they ride
+	// flat algo_params keys written by ParamsFromTree only when explicitly set
+	// in CREATE INDEX (so an unset option never pollutes algo_params).
 	if ctx != nil {
 		if p, ok := indexplugin.Get(catalog.ToLower(indexDef.IndexAlgo)); ok {
 			if names := p.Catalog().BuildSessionVars(); len(names) > 0 {

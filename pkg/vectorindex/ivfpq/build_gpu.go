@@ -69,7 +69,7 @@ func (b *IvfpqBuild[T]) createKey(n int) string {
 }
 
 func (b *IvfpqBuild[T]) getOrCreateCurrent() (*IvfpqModel[T], error) {
-	capacity := b.tblcfg.IndexCapacity
+	capacity := b.idxcfg.IndexCapacity
 
 	if b.current != nil && b.count >= capacity {
 		if err := b.current.Build(); err != nil {

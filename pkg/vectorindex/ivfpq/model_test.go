@@ -49,7 +49,8 @@ const (
 
 func testIdxcfg() vectorindex.IndexConfig {
 	return vectorindex.IndexConfig{
-		Type: vectorindex.IVFPQ,
+		Type:          vectorindex.IVFPQ,
+		IndexCapacity: int64(testNVectors),
 		CuvsIvfpq: vectorindex.CuvsIvfpqIndexConfig{
 			Lists:            testNLists,
 			M:                testM,
@@ -67,7 +68,6 @@ func testTblcfg() vectorindex.IndexTableConfig {
 		SrcTable:      "src",
 		MetadataTable: "__ivfpq_meta",
 		IndexTable:    "__ivfpq_index",
-		IndexCapacity: int64(testNVectors),
 	}
 }
 

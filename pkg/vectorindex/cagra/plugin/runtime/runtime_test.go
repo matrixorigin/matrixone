@@ -104,6 +104,7 @@ func TestCagraParamsFromTree_AllOptions(t *testing.T) {
 		AlgoParamVectorOpType:   metric.OpType_CosineDistance,
 		Quantization:            metric.Quantization_INT8_Str,
 		Async:                   true,
+		MaxIndexCapacity:        500000,
 	}}
 	got, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.NoError(t, err)
@@ -113,6 +114,7 @@ func TestCagraParamsFromTree_AllOptions(t *testing.T) {
 	require.Equal(t, metric.OpType_CosineDistance, got[catalog.IndexAlgoParamOpType])
 	require.Equal(t, metric.Quantization_INT8_Str, got[catalog.Quantization])
 	require.Equal(t, "true", got[catalog.Async])
+	require.Equal(t, "500000", got[catalog.IndexAlgoParamMaxIndexCapacity])
 }
 
 func TestCagraParamsFromTree_NegativeIntermediate(t *testing.T) {

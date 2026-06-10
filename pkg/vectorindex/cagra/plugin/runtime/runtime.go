@@ -68,15 +68,14 @@ func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
 	return catalogplugin.RestoreBehavior{}
 }
 
-// BuildSessionVars mirrors CAGRA's idxcron Capture set — the build-time session
-// vars that must survive into a background rebuild (restore reindex, idxcron):
-// the cagra_* knobs plus the basics (lower_case_table_names for name resolution
-// in the rebuild SQL, and the experimental flag). CAGRA does NOT train k-means,
-// so no kmeans vars. Captured into algo_params.session_vars at CREATE INDEX.
+// BuildSessionVars are the environmental/perf vars captured into
+// algo_params.session_vars at CREATE INDEX (cagra_* threads, lower_case for
+// name resolution, experimental flag). CAGRA does NOT train k-means; its
+// index-defining max_index_capacity rides a flat algo_params key written by
+// ParamsFromTree only when explicitly set in CREATE INDEX.
 func (CatalogHooks) BuildSessionVars() []string {
 	return []string{
 		"cagra_threads_build",
-		"cagra_max_index_capacity",
 		"lower_case_table_names",
 		"experimental_cagra_index",
 	}
@@ -140,6 +139,11 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 		IdxcronListsAware: false,
 	}
 }
+
+// DefaultMaxIndexCapacity mirrors the cagra_max_index_capacity session-var
+// default; the build path (cagra_create) uses it when the flat algo_params key
+// is absent (a legacy index). 0 means "auto-detect from source row count".
+const DefaultMaxIndexCapacity = int64(0)
 
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's
 // INDEX_TYPE_CAGRA case (pkg/catalog/secondary_index_utils.go:376-433).
@@ -216,6 +220,10 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 
 	if joined := joinIncludeColumns(idx.IndexOption.IncludeColumns); len(joined) > 0 {
 		res[catalog.IncludedColumns] = joined
+	}
+
+	if idx.IndexOption.MaxIndexCapacity > 0 {
+		res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
 	}
 	return res, nil
 }

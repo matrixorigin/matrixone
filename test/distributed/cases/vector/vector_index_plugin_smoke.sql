@@ -14,11 +14,11 @@ create table h (a bigint primary key, v vecf32(3));
 insert into h values (1, '[1,1,1]'), (2, '[2,2,2]'), (3, '[3,3,3]'), (4, '[8,8,8]');
 
 -- flag OFF: the plugin's experimental-flag gate rejects the create
-create index ix using hnsw on h (v) op_type "vector_l2_ops";
+create index ix using hnsw on h (v) op_type "vector_l2_ops" max_index_capacity 1000000;
 
 -- flag ON: dispatch builds the index
 set experimental_hnsw_index = 1;
-create index ix using hnsw on h (v) op_type "vector_l2_ops";
+create index ix using hnsw on h (v) op_type "vector_l2_ops" max_index_capacity 1000000;
 
 -- plugin registration: algo + hidden-table types written by the catalog hook
 select algo, algo_table_type from mo_catalog.mo_indexes
@@ -33,7 +33,7 @@ set experimental_hnsw_index = 0;
 set experimental_ivf_index = 1;
 create table f (a bigint primary key, v vecf32(3));
 insert into f values (1, '[1,1,1]'), (2, '[2,2,2]'), (3, '[3,3,3]'), (4, '[8,8,8]');
-create index ix using ivfflat on f (v) lists = 2 op_type 'vector_l2_ops';
+create index ix using ivfflat on f (v) lists = 2 op_type 'vector_l2_ops' kmeans_train_percent 5 kmeans_max_iteration 20;
 
 select algo, algo_table_type from mo_catalog.mo_indexes
   where table_id = (select rel_id from mo_catalog.mo_tables

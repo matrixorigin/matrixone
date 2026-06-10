@@ -551,7 +551,7 @@ func (idx *CagraModel[T]) LoadIndex(
 	}
 
 	gi, err := cuvs.NewGpuCagraEmpty[T](
-		uint64(tblcfg.IndexCapacity),
+		uint64(idxcfg.IndexCapacity),
 		uint32(idxcfg.CuvsCagra.Dimensions),
 		cuvsMetric,
 		bp,

@@ -792,7 +792,7 @@ func (idx *HnswModel[T]) LoadIndex(
 		if err != nil {
 			return err
 		}
-		err = usearchidx.Reserve(uint(tblcfg.IndexCapacity))
+		err = usearchidx.Reserve(uint(idxcfg.IndexCapacity))
 		if err != nil {
 			return err
 		}
@@ -815,8 +815,8 @@ func (idx *HnswModel[T]) LoadIndex(
 
 	if !view {
 		// sometimes Reserve() will give bigger capacity than requested
-		if idx.MaxCapacity > uint(tblcfg.IndexCapacity) {
-			idx.MaxCapacity = uint(tblcfg.IndexCapacity)
+		if idx.MaxCapacity > uint(idxcfg.IndexCapacity) {
+			idx.MaxCapacity = uint(idxcfg.IndexCapacity)
 		}
 	}
 

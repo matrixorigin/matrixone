@@ -379,12 +379,8 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 	}
 	cfg.ThreadsBuild = threads.(int64)
 
-	idxcap, err := ctx.ResolveVariable("ivfpq_max_index_capacity", true, false)
-	if err != nil {
-		return nil, err
-	}
-	cfg.IndexCapacity = idxcap.(int64)
-
+	// max_index_capacity now rides algo_params as a flat key (written at
+	// CREATE INDEX); ivfpq_create reads it from there.
 	cfgbytes, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, err

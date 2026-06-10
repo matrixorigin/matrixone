@@ -1,7 +1,6 @@
 drop account if exists acc_ivfpq;
 create account acc_ivfpq ADMIN_NAME 'admin1' IDENTIFIED BY 'test123';
 set experimental_ivfpq_index = 1;
-set kmeans_train_percent = 100;
 create database vdb;
 use vdb;
 create table t_ivfpq (a bigint primary key, v vecf32(8));
@@ -17,7 +16,8 @@ insert into t_ivfpq values
 (17, '[17,17,17,17,17,17,17,17]'), (18, '[18,18,18,18,18,18,18,18]'),
 (19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]');
 create index ix using ivfpq on t_ivfpq (v)
-op_type 'vector_l2_ops' lists=10 m=8 bits_per_code=8;
+op_type 'vector_l2_ops' lists=10 m=8 bits_per_code=8
+kmeans_train_percent 100 kmeans_max_iteration 20 max_index_capacity 100;
 select a from t_ivfpq order by l2_distance(v, '[1,1,1,1,1,1,1,1]') asc limit 1;
 ➤ a[-5,64,0]  𝄀
 1
@@ -31,7 +31,6 @@ drop database vdb;
 restore account acc_ivfpq{snapshot="ivfpq_snap"} to account acc_ivfpq;
 use vdb;
 set probe_limit = 16;
-set kmeans_train_percent = 100;
 select count(*) from t_ivfpq;
 ➤ count(*)[-5,64,0]  𝄀
 20
@@ -41,7 +40,7 @@ t_ivfpq  ¦  CREATE TABLE `t_ivfpq` (
   `a` bigint NOT NULL,
   `v` vecf32(8) DEFAULT NULL,
   PRIMARY KEY (`a`),
-  KEY `ix` USING ivfpq (`v`) lists = 10  m = 8  op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  bits_per_code = 8 
+  KEY `ix` USING ivfpq (`v`) lists = 10  m = 8  op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  bits_per_code = 8  kmeans_train_percent = 100  kmeans_max_iteration = 20  max_index_capacity = 100 
 )
 select sleep(30);
 ➤ sleep(30)[-6,8,0]  𝄀
@@ -72,7 +71,8 @@ insert into t_cagra values
 (17, '[17,17,17,17,17,17,17,17]'), (18, '[18,18,18,18,18,18,18,18]'),
 (19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]');
 create index ix using cagra on t_cagra (v)
-op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32;
+op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32
+max_index_capacity 100;
 drop snapshot if exists cagra_snap;
 create snapshot cagra_snap for account acc_cagra;
 set experimental_cagra_index = 0;
@@ -88,7 +88,7 @@ t_cagra  ¦  CREATE TABLE `t_cagra` (
   `a` bigint NOT NULL,
   `v` vecf32(8) DEFAULT NULL,
   PRIMARY KEY (`a`),
-  KEY `ix` USING cagra (`v`) op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  intermediate_graph_degree = 16  graph_degree = 8  itopk_size = 32 
+  KEY `ix` USING cagra (`v`) op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  intermediate_graph_degree = 16  graph_degree = 8  itopk_size = 32  max_index_capacity = 100 
 )
 select sleep(30);
 ➤ sleep(30)[-6,8,0]  𝄀

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	cuvsfilter "github.com/matrixorigin/matrixone/pkg/cuvs/filter"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -266,6 +267,17 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			return err
 		}
 
+		// max_index_capacity: flat algo_params key (set in CREATE INDEX) wins;
+		// otherwise the session variable controls it, then the hardcoded
+		// default. (Still 0 → auto-detect from srcRowCount below.)
+		if u.idxcfg.IndexCapacity <= 0 {
+			u.idxcfg.IndexCapacity, err = indexplugin.AlgoParamInt(u.param.MaxIndexCapacity,
+				proc.GetResolveVariableFunc(), "ivfpq_max_index_capacity", ivfpqrt.DefaultMaxIndexCapacity)
+			if err != nil {
+				return err
+			}
+		}
+
 		// Pre-count source rows; needed both for IndexCapacity auto-
 		// detection (when 0) and for the small-tail CDC cutoff
 		// computation below. One round trip per build.
@@ -291,10 +303,10 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 				u.tblcfg.DbName, u.tblcfg.SrcTable)
 			return nil
 		}
-		if u.tblcfg.IndexCapacity <= 0 {
-			u.tblcfg.IndexCapacity = srcRowCount
+		if u.idxcfg.IndexCapacity <= 0 {
+			u.idxcfg.IndexCapacity = srcRowCount
 			logutil.Infof("IVFPQ create: auto-detected index capacity = %d from `%s`.`%s`",
-				u.tblcfg.IndexCapacity, u.tblcfg.DbName, u.tblcfg.SrcTable)
+				u.idxcfg.IndexCapacity, u.tblcfg.DbName, u.tblcfg.SrcTable)
 		}
 
 		// Small-tail cutoff. Threshold = the cuvs IVF-PQ k-means
@@ -305,12 +317,12 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		threshold := int64(u.idxcfg.CuvsIvfpq.Lists)
 		u.cdcCutoff = srcRowCount
 		if threshold > 0 {
-			if u.tblcfg.IndexCapacity < threshold {
+			if u.idxcfg.IndexCapacity < threshold {
 				u.cdcCutoff = 0
 				logutil.Infof("IVFPQ create: IndexCapacity %d < lists %d; all %d rows route to CDC tail",
-					u.tblcfg.IndexCapacity, threshold, srcRowCount)
+					u.idxcfg.IndexCapacity, threshold, srcRowCount)
 			} else {
-				lastChunkSize := srcRowCount % u.tblcfg.IndexCapacity
+				lastChunkSize := srcRowCount % u.idxcfg.IndexCapacity
 				if lastChunkSize > 0 && lastChunkSize < threshold {
 					u.cdcCutoff = srcRowCount - lastChunkSize
 					logutil.Infof("IVFPQ create: trailing %d rows < lists %d; routing them to CDC tail (cutoff=%d, total=%d)",
@@ -319,13 +331,16 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			}
 		}
 
-		// kmeans training fraction: read from session variable (0-100 percent → 0-1 fraction)
-		if resolve := proc.GetResolveVariableFunc(); resolve != nil {
-			if val, err2 := resolve("kmeans_train_percent", true, false); err2 == nil && val != nil {
-				if pct := val.(float64); pct > 0 {
-					u.idxcfg.CuvsIvfpq.KmeansTrainsetFraction = pct / 100.0
-				}
-			}
+		// kmeans training fraction (0-100 percent → 0-1 fraction). Flat
+		// algo_params key (set in CREATE INDEX) wins; otherwise the session
+		// variable controls it, then the hardcoded default.
+		trainPct, err := indexplugin.AlgoParamFloat(u.param.KmeansTrainPercent,
+			proc.GetResolveVariableFunc(), "kmeans_train_percent", ivfpqrt.DefaultKmeansTrainPercent)
+		if err != nil {
+			return err
+		}
+		if trainPct > 0 {
+			u.idxcfg.CuvsIvfpq.KmeansTrainsetFraction = trainPct / 100.0
 		}
 
 		// ---- validate argument types ----

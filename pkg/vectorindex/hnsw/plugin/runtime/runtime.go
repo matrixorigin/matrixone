@@ -62,17 +62,12 @@ func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
 	return catalogplugin.RestoreBehavior{}
 }
 
-// BuildSessionVars — HNSW has no idxcron, but a background rebuild (restore
-// reindex) needs the same build-time vars: the hnsw_* knobs plus the basics
-// (lower_case_table_names, experimental flag). No k-means. Captured into
-// algo_params.session_vars at CREATE INDEX.
+// BuildSessionVars returns nil — HNSW captures no session vars into
+// algo_params, keeping its algo_params byte-compatible with pre-session_vars
+// indexes. The index-defining max_index_capacity rides a flat algo_params key
+// written by ParamsFromTree only when explicitly set in CREATE INDEX.
 func (CatalogHooks) BuildSessionVars() []string {
-	return []string{
-		"hnsw_threads_build",
-		"hnsw_max_index_capacity",
-		"lower_case_table_names",
-		"experimental_hnsw_index",
-	}
+	return nil
 }
 
 func (CatalogHooks) DefaultOptions() map[string]string {
@@ -120,6 +115,11 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	}
 }
 
+// DefaultMaxIndexCapacity mirrors the hnsw_max_index_capacity session-var
+// default; the build path (hnsw_create) uses it when the flat algo_params key
+// is absent (a legacy index created before the param was promoted).
+const DefaultMaxIndexCapacity = int64(1000000)
+
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's
 // INDEX_TYPE_HNSW case (pkg/catalog/secondary_index_utils.go:341-375).
 func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
@@ -157,6 +157,10 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 
 	if idx.IndexOption.Async {
 		res[catalog.Async] = "true"
+	}
+
+	if idx.IndexOption.MaxIndexCapacity > 0 {
+		res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
 	}
 	return res, nil
 }

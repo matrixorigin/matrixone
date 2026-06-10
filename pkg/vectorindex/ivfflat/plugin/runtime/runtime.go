@@ -100,17 +100,12 @@ func (h CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
 	return catalogplugin.RestoreBehavior{DeleteBeforeClone: h.HiddenTableTypes()}
 }
 
-// BuildSessionVars mirrors IVF-FLAT's idxcron Capture set — the ivf_* knobs,
-// the k-means knobs (centroid training), and the basics (lower_case_table_names,
-// experimental flag). Captured into algo_params.session_vars at CREATE INDEX.
+// BuildSessionVars returns nil — IVF-FLAT captures no session vars into
+// algo_params, keeping its algo_params byte-compatible with pre-session_vars
+// indexes. Index-defining knobs (k-means) ride flat algo_params keys written by
+// ParamsFromTree only when explicitly set in CREATE INDEX.
 func (CatalogHooks) BuildSessionVars() []string {
-	return []string{
-		"ivf_threads_build",
-		"kmeans_train_percent",
-		"kmeans_max_iteration",
-		"lower_case_table_names",
-		"experimental_ivf_index",
-	}
+	return nil
 }
 
 // DefaultOptions mirrors the IVF-FLAT case of indexParamsToMap when the
@@ -175,6 +170,14 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	}
 }
 
+// Build-param defaults mirror the frontend session-var defaults; the build
+// path (ivf_create) uses them when the flat algo_params key is absent (a
+// legacy index created before the param was promoted).
+const (
+	DefaultKmeansTrainPercent = float64(10)
+	DefaultKmeansMaxIteration = int64(20)
+)
+
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's
 // INDEX_TYPE_IVFFLAT case (pkg/catalog/secondary_index_utils.go:304-340).
 func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
@@ -211,6 +214,13 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	}
 	if idx.IndexOption.Hour > 0 {
 		res[catalog.Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
+	}
+
+	if idx.IndexOption.KmeansTrainPercent > 0 {
+		res[catalog.IndexAlgoParamKmeansTrainPercent] = strconv.FormatInt(idx.IndexOption.KmeansTrainPercent, 10)
+	}
+	if idx.IndexOption.KmeansMaxIteration > 0 {
+		res[catalog.IndexAlgoParamKmeansMaxIteration] = strconv.FormatInt(idx.IndexOption.KmeansMaxIteration, 10)
 	}
 	return res, nil
 }

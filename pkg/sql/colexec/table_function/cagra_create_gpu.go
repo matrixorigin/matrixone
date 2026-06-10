@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	cuvsfilter "github.com/matrixorigin/matrixone/pkg/cuvs/filter"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -260,6 +261,17 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			return err
 		}
 
+		// max_index_capacity: flat algo_params key (set in CREATE INDEX) wins;
+		// otherwise the session variable controls it, then the hardcoded
+		// default. (Still 0 → auto-detect from srcRowCount below.)
+		if u.idxcfg.IndexCapacity <= 0 {
+			u.idxcfg.IndexCapacity, err = indexplugin.AlgoParamInt(u.param.MaxIndexCapacity,
+				proc.GetResolveVariableFunc(), "cagra_max_index_capacity", cagrart.DefaultMaxIndexCapacity)
+			if err != nil {
+				return err
+			}
+		}
+
 		// Pre-count source rows; needed both for IndexCapacity auto-
 		// detection (when 0) and for the small-tail CDC cutoff
 		// computation below. One round trip per build.
@@ -285,10 +297,10 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 				u.tblcfg.DbName, u.tblcfg.SrcTable)
 			return nil
 		}
-		if u.tblcfg.IndexCapacity <= 0 {
-			u.tblcfg.IndexCapacity = srcRowCount
+		if u.idxcfg.IndexCapacity <= 0 {
+			u.idxcfg.IndexCapacity = srcRowCount
 			logutil.Infof("CAGRA create: auto-detected index capacity = %d from `%s`.`%s`",
-				u.tblcfg.IndexCapacity, u.tblcfg.DbName, u.tblcfg.SrcTable)
+				u.idxcfg.IndexCapacity, u.tblcfg.DbName, u.tblcfg.SrcTable)
 		}
 
 		// Compute the small-tail cutoff. The trailing partial chunk is
@@ -307,12 +319,12 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			threshold = 128
 		}
 		u.cdcCutoff = srcRowCount
-		if u.tblcfg.IndexCapacity < threshold {
+		if u.idxcfg.IndexCapacity < threshold {
 			u.cdcCutoff = 0
 			logutil.Infof("CAGRA create: IndexCapacity %d < threshold %d; all %d rows route to CDC tail",
-				u.tblcfg.IndexCapacity, threshold, srcRowCount)
+				u.idxcfg.IndexCapacity, threshold, srcRowCount)
 		} else {
-			lastChunkSize := srcRowCount % u.tblcfg.IndexCapacity
+			lastChunkSize := srcRowCount % u.idxcfg.IndexCapacity
 			if lastChunkSize > 0 && lastChunkSize < threshold {
 				u.cdcCutoff = srcRowCount - lastChunkSize
 				logutil.Infof("CAGRA create: trailing %d rows < threshold %d; routing them to CDC tail (cutoff=%d, total=%d)",

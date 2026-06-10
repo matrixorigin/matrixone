@@ -16,7 +16,6 @@ create account acc_ivfpq ADMIN_NAME 'admin1' IDENTIFIED BY 'test123';
 
 -- @session:id=2&user=acc_ivfpq:admin1&password=test123
 set experimental_ivfpq_index = 1;
-set kmeans_train_percent = 100; 
 create database vdb;
 use vdb;
 create table t_ivfpq (a bigint primary key, v vecf32(8));
@@ -31,8 +30,12 @@ insert into t_ivfpq values
     (15, '[15,15,15,15,15,15,15,15]'), (16, '[16,16,16,16,16,16,16,16]'),
     (17, '[17,17,17,17,17,17,17,17]'), (18, '[18,18,18,18,18,18,18,18]'),
     (19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]');
+-- k-means + capacity given as CREATE INDEX options so they persist into
+-- algo_params and the account-restore reindex reproduces the create-time build
+-- (kmeans_train_percent=100 trains on every row → deterministic exact-match search).
 create index ix using ivfpq on t_ivfpq (v)
-    op_type 'vector_l2_ops' lists=10 m=8 bits_per_code=8;
+    op_type 'vector_l2_ops' lists=10 m=8 bits_per_code=8
+    kmeans_train_percent 100 kmeans_max_iteration 20 max_index_capacity 100;
 select a from t_ivfpq order by l2_distance(v, '[1,1,1,1,1,1,1,1]') asc limit 1;
 select a from t_ivfpq order by l2_distance(v, '[20,20,20,20,20,20,20,20]') asc limit 1;
 -- @session
@@ -52,7 +55,6 @@ use vdb;
 -- probe_limit >= lists makes ivfpq scan every cell, so a limit-1 query for an
 -- exact-match vector returns that row deterministically (mirrors vector_ivfpq).
 set probe_limit = 16;
-set kmeans_train_percent = 100; 
 select count(*) from t_ivfpq;
 show create table t_ivfpq;
 select sleep(30);
@@ -84,7 +86,8 @@ insert into t_cagra values
     (17, '[17,17,17,17,17,17,17,17]'), (18, '[18,18,18,18,18,18,18,18]'),
     (19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]');
 create index ix using cagra on t_cagra (v)
-    op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32;
+    op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32
+    max_index_capacity 100;
 -- @session
 
 drop snapshot if exists cagra_snap;
