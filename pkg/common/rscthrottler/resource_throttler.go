@@ -612,17 +612,19 @@ func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
 		// double-counts S3 write buffers already reflected in RSS.
 		// The pool only needs to bound forward-looking reservations
 		// against the throttler limit.
+		//
+		// No separate RSS-based physical memory gate is needed here:
+		// - pinnedRate >= 0.80 at the AcquirePolicyForCNFlushS3 level
+		//   provides a hard ceiling on pool utilisation.
+		// - RSS scavenging (85 % / 92 % thresholds in tryScavengeRSS)
+		//   handles physical memory pressure with a graduated response
+		//   (cache eviction + FreeOSMemory) that is more effective than
+		//   a binary reject.
+		// The original RSS gate (added in PR #24268 for non-S3 memory
+		// pressure) has been superseded by RSS scavenging.
 		avail := limit - reserved
 		if !throttler.options.allowOutOfMemoryAcquire && avail < ask {
 			return avail, false
-		}
-
-		total := int64(throttler.actualTotalMemory.Load())
-		if total > 0 && throttler.limitRate > 0 {
-			used := throttler.rss.Load() + reserved + ask
-			if float64(used) > float64(total)*throttler.limitRate {
-				return 0, false
-			}
 		}
 
 		newReserved := reserved + ask

@@ -392,16 +392,16 @@ func TestMemThrottlerRSSScavengingDisabled(t *testing.T) {
 }
 
 func TestAcquirePolicyForCNFlushS3(t *testing.T) {
-	t.Run("deny when rss already crosses limit", func(t *testing.T) {
+	t.Run("allow under high rss when pool has headroom", func(t *testing.T) {
 		throttler := &memThrottler{limitRate: 0.90}
 		throttler.actualTotalMemory.Store(100)
 		throttler.limit.Store(90)
 		throttler.rss.Store(91)
 
 		left, ok := AcquirePolicyForCNFlushS3(throttler, 1)
-		require.False(t, ok)
-		require.Equal(t, int64(0), left)
-		require.Equal(t, int64(0), throttler.reserved.Load())
+		require.True(t, ok)
+		require.Equal(t, int64(89), left)
+		require.Equal(t, int64(1), throttler.reserved.Load())
 	})
 
 	t.Run("deny when reserved plus ask exceeds pool limit", func(t *testing.T) {
