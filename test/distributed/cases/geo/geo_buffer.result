@@ -1,0 +1,20 @@
+select st_area(st_buffer(st_geomfromtext('POINT(0 0)'), 2)) between 12.4 and 12.6 as point_buf_ok;
+point_buf_ok
+1
+select st_area(st_buffer(st_geomfromtext('POINT(0 0)'), 2, 32)) between 12.55 and 12.57 as fine_buf_ok;
+fine_buf_ok
+1
+select st_area(st_buffer(st_geomfromtext('LINESTRING(0 0, 10 0)'), 1)) between 23.0 and 23.2 as line_buf_ok;
+line_buf_ok
+1
+select st_area(st_buffer(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))'), 1)) between 142.9 and 143.3 as poly_buf_ok;
+poly_buf_ok
+1
+select st_geometrytype(st_buffer(st_geomfromtext('POINT(0 0)'), 1)) as buf_type;
+buf_type
+POLYGON
+select st_astext(st_buffer(st_geomfromtext('POINT(3 4)'), 0)) as zero_buf;
+zero_buf
+POINT(3 4)
+select st_buffer(st_geomfromtext('POINT(0 0)'), -1);
+invalid input: ST_Buffer: negative distance is not supported
