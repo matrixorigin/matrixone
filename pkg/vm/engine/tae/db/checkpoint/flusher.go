@@ -100,6 +100,10 @@ func (mode flushScheduleMode) bypassFlushReady() bool {
 	return mode == flushScheduleCheckpointBounded || mode == flushScheduleForce
 }
 
+func (mode flushScheduleMode) resetFlushDeadline() bool {
+	return mode != flushScheduleCheckpointBounded
+}
+
 type FlushRequest struct {
 	mode flushRequestMode
 	tree *logtail.DirtyTreeEntry
@@ -803,7 +807,7 @@ func (flusher *flushImpl) checkFlushConditionAndFire(
 				zap.Uint64("id", table.ID),
 				zap.String("name", table.GetLastestSchemaLocked(false).Name),
 			)
-			if err := flusher.fireFlushTabletail(table, end, lastCkp); err == nil {
+			if err := flusher.fireFlushTabletail(table, end, lastCkp); err == nil && mode.resetFlushDeadline() {
 				table.Stats.ResetDeadline(flusher.flushInterval)
 			}
 			continue
