@@ -30,8 +30,11 @@ insert into t_ivfpq values
     (15, '[15,15,15,15,15,15,15,15]'), (16, '[16,16,16,16,16,16,16,16]'),
     (17, '[17,17,17,17,17,17,17,17]'), (18, '[18,18,18,18,18,18,18,18]'),
     (19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]');
+-- kmeans_train_percent given as a CREATE INDEX option so it persists into
+-- algo_params and the restore reindex reproduces the create-time build.
 create index ix using ivfpq on t_ivfpq (v)
-    op_type 'vector_l2_ops' lists=10 m=8 bits_per_code=8;
+    op_type 'vector_l2_ops' lists=10 m=8 bits_per_code=8
+    kmeans_train_percent 100 kmeans_max_iteration 20 max_index_capacity 100;
 
 create table t_cagra (a bigint primary key, v vecf32(8));
 insert into t_cagra values
@@ -46,7 +49,8 @@ insert into t_cagra values
     (17, '[17,17,17,17,17,17,17,17]'), (18, '[18,18,18,18,18,18,18,18]'),
     (19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]');
 create index ix using cagra on t_cagra (v)
-    op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32;
+    op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32
+    max_index_capacity 100;
 -- @session
 
 -- sys takes an account-level snapshot

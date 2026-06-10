@@ -3420,19 +3420,19 @@ func (s *Scope) TableClone(c *Compile) error {
 // index hidden tables and registers their CDC; the block-level clone in
 // table_clone APPENDS onto those tables. So, in place of a bare s.Run(c):
 //
-//	1. drop the index CDC tasks before cloning data;
-//	2. for each hidden table the plugin lists in DeleteBeforeClone (IVF-FLAT's
-//	   metadata/centroids/entries — seeded non-empty by CreateTable), empty the
-//	   seed with `DELETE … WHERE TRUE` (a content delete that keeps the table
-//	   and its id — NOT truncate, which re-creates the table);
-//	3. s.Run(c): clone the main table + index hidden tables (append onto empty);
-//	4. re-register each index's CDC startFromNow=true with a PLUGIN-PROVIDED
-//	   InitSQL. For a vector index that InitSQL is `ALTER … REINDEX … FORCE_SYNC`,
-//	   so the CDC's first iteration runs the reindex in its own post-commit txn —
-//	   rebuilding the model from the committed cloned rows and re-arming the CDC
-//	   at the post-clone watermark. Running it as InitSQL (not inline in this
-//	   clone txn) is what avoids the SnapshotTS replay that double-counts the
-//	   cloned rows.
+//  1. drop the index CDC tasks before cloning data;
+//  2. for each hidden table the plugin lists in DeleteBeforeClone (IVF-FLAT's
+//     metadata/centroids/entries — seeded non-empty by CreateTable), empty the
+//     seed with `DELETE … WHERE TRUE` (a content delete that keeps the table
+//     and its id — NOT truncate, which re-creates the table);
+//  3. s.Run(c): clone the main table + index hidden tables (append onto empty);
+//  4. re-register each index's CDC startFromNow=true with a PLUGIN-PROVIDED
+//     InitSQL. For a vector index that InitSQL is `ALTER … REINDEX … FORCE_SYNC`,
+//     so the CDC's first iteration runs the reindex in its own post-commit txn —
+//     rebuilding the model from the committed cloned rows and re-arming the CDC
+//     at the post-clone watermark. Running it as InitSQL (not inline in this
+//     clone txn) is what avoids the SnapshotTS replay that double-counts the
+//     cloned rows.
 func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 	tableDef := clonePlan.GetCreateTable().GetDdl().GetCreateTable().GetTableDef()
 	if tableDef == nil {

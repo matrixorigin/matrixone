@@ -108,16 +108,16 @@ type IndexTableConfig struct {
 	ThreadsSearch int64  `json:"threads_search"`
 
 	// IVF related
-	EntriesTable       string  `json:"entries"`
-	DataSize           int64   `json:"datasize"`
-	Nprobe             uint    `json:"nprobe"`
-	PKeyType           int32   `json:"pktype"`
-	KeyPartType        int32   `json:"parttype"`
-	Limit              uint64  `json:"limit"`
-	LowerBoundType     int8    `json:"lower_bound_type"`
-	LowerBound         float64 `json:"lower_bound"`
-	UpperBoundType     int8    `json:"upper_bound_type"`
-	UpperBound         float64 `json:"upper_bound"`
+	EntriesTable   string  `json:"entries"`
+	DataSize       int64   `json:"datasize"`
+	Nprobe         uint    `json:"nprobe"`
+	PKeyType       int32   `json:"pktype"`
+	KeyPartType    int32   `json:"parttype"`
+	Limit          uint64  `json:"limit"`
+	LowerBoundType int8    `json:"lower_bound_type"`
+	LowerBound     float64 `json:"lower_bound"`
+	UpperBoundType int8    `json:"upper_bound_type"`
+	UpperBound     float64 `json:"upper_bound"`
 
 	// GPU related
 	BatchWindow int64 `json:"batch_window"`

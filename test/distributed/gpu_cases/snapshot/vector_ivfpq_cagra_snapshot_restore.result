@@ -15,17 +15,17 @@ insert into t_ivfpq values
 (17, '[17,17,17,17,17,17,17,17]'), (18, '[18,18,18,18,18,18,18,18]'),
 (19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]');
 create index ix using ivfpq on t_ivfpq (v)
-op_type 'vector_l2_ops' lists=10 m=8 bits_per_code=8;
+op_type 'vector_l2_ops' lists=10 m=8 bits_per_code=8
+kmeans_train_percent 100 kmeans_max_iteration 20 max_index_capacity 100;
 show create table t_ivfpq;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 t_ivfpq  ¦  CREATE TABLE `t_ivfpq` (
   `a` bigint NOT NULL,
   `v` vecf32(8) DEFAULT NULL,
   PRIMARY KEY (`a`),
-  KEY `ix` USING ivfpq (`v`) lists = 10  m = 8  op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  bits_per_code = 8 
+  KEY `ix` USING ivfpq (`v`) lists = 10  m = 8  op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  bits_per_code = 8  kmeans_train_percent = 100  kmeans_max_iteration = 20  max_index_capacity = 100 
 )
 create snapshot ivfpq_snap for account sys;
-internal error: snapshot ivfpq_snap already exists
 insert into t_ivfpq values (21, '[21,21,21,21,21,21,21,21]');
 delete from t_ivfpq;
 insert into t_ivfpq select * from vector_gpu_snap_db.t_ivfpq {snapshot = 'ivfpq_snap'};
@@ -41,7 +41,7 @@ t_ivfpq  ¦  CREATE TABLE `t_ivfpq` (
   `a` bigint NOT NULL,
   `v` vecf32(8) DEFAULT NULL,
   PRIMARY KEY (`a`),
-  KEY `ix` USING ivfpq (`v`) lists = 10  m = 8  op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  bits_per_code = 8 
+  KEY `ix` USING ivfpq (`v`) lists = 10  m = 8  op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  bits_per_code = 8  kmeans_train_percent = 100  kmeans_max_iteration = 20  max_index_capacity = 100 
 )
 select a from t_ivfpq order by l2_distance(v, '[1,1,1,1,1,1,1,1]') asc limit 3;
 ➤ a[-5,64,0]  𝄀
@@ -64,14 +64,15 @@ insert into t_cagra values
 (17, '[17,17,17,17,17,17,17,17]'), (18, '[18,18,18,18,18,18,18,18]'),
 (19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]');
 create index ix using cagra on t_cagra (v)
-op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32;
+op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32
+max_index_capacity 100;
 show create table t_cagra;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 t_cagra  ¦  CREATE TABLE `t_cagra` (
   `a` bigint NOT NULL,
   `v` vecf32(8) DEFAULT NULL,
   PRIMARY KEY (`a`),
-  KEY `ix` USING cagra (`v`) op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  intermediate_graph_degree = 16  graph_degree = 8  itopk_size = 32 
+  KEY `ix` USING cagra (`v`) op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  intermediate_graph_degree = 16  graph_degree = 8  itopk_size = 32  max_index_capacity = 100 
 )
 create snapshot cagra_snap for account sys;
 insert into t_cagra values (21, '[21,21,21,21,21,21,21,21]');
@@ -89,7 +90,7 @@ t_cagra  ¦  CREATE TABLE `t_cagra` (
   `a` bigint NOT NULL,
   `v` vecf32(8) DEFAULT NULL,
   PRIMARY KEY (`a`),
-  KEY `ix` USING cagra (`v`) op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  intermediate_graph_degree = 16  graph_degree = 8  itopk_size = 32 
+  KEY `ix` USING cagra (`v`) op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  intermediate_graph_degree = 16  graph_degree = 8  itopk_size = 32  max_index_capacity = 100 
 )
 select a from t_cagra order by l2_distance(v, '[1,1,1,1,1,1,1,1]') asc limit 3;
 ➤ a[-5,64,0]  𝄀

@@ -17,7 +17,8 @@ insert into t_ivfpq values
 (17, '[17,17,17,17,17,17,17,17]'), (18, '[18,18,18,18,18,18,18,18]'),
 (19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]');
 create index ix using ivfpq on t_ivfpq (v)
-op_type 'vector_l2_ops' lists=10 m=8 bits_per_code=8;
+op_type 'vector_l2_ops' lists=10 m=8 bits_per_code=8
+kmeans_train_percent 100 kmeans_max_iteration 20 max_index_capacity 100;
 create table t_cagra (a bigint primary key, v vecf32(8));
 insert into t_cagra values
 ( 1, '[1,1,1,1,1,1,1,1]'),         ( 2, '[2,2,2,2,2,2,2,2]'),
@@ -31,7 +32,8 @@ insert into t_cagra values
 (17, '[17,17,17,17,17,17,17,17]'), (18, '[18,18,18,18,18,18,18,18]'),
 (19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]');
 create index ix using cagra on t_cagra (v)
-op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32;
+op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32
+max_index_capacity 100;
 create snapshot vec_snap for account acc_vec;
 set experimental_ivfpq_index = 0;
 set experimental_cagra_index = 0;
@@ -47,7 +49,7 @@ t_ivfpq  ¦  CREATE TABLE `t_ivfpq` (
   `a` bigint NOT NULL,
   `v` vecf32(8) DEFAULT NULL,
   PRIMARY KEY (`a`),
-  KEY `ix` USING ivfpq (`v`) lists = 10  m = 8  op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  bits_per_code = 8 
+  KEY `ix` USING ivfpq (`v`) lists = 10  m = 8  op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  bits_per_code = 8  kmeans_train_percent = 100  kmeans_max_iteration = 20  max_index_capacity = 100 
 )
 select count(*) from t_cagra;
 ➤ count(*)[-5,64,0]  𝄀
@@ -58,7 +60,7 @@ t_cagra  ¦  CREATE TABLE `t_cagra` (
   `a` bigint NOT NULL,
   `v` vecf32(8) DEFAULT NULL,
   PRIMARY KEY (`a`),
-  KEY `ix` USING cagra (`v`) op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  intermediate_graph_degree = 16  graph_degree = 8  itopk_size = 32 
+  KEY `ix` USING cagra (`v`) op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  intermediate_graph_degree = 16  graph_degree = 8  itopk_size = 32  max_index_capacity = 100 
 )
 select sleep(30);
 ➤ sleep(30)[-6,8,0]  𝄀
