@@ -10,6 +10,8 @@ update t1 set c=10 where a=1;
 insert into t1 values(4,4,40);
 create snapshot sp1 for table test t1;
 data branch merge t1 into t0;
+drop snapshot sp1;
+drop snapshot sp0;
 drop table t0;
 drop table t1;
 drop database test;
