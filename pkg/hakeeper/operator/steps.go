@@ -46,6 +46,15 @@ type Replica struct {
 	Epoch     uint64
 }
 
+func replicaStarted(store pb.LogStoreInfo, shardID, replicaID uint64) bool {
+	for _, replicaInfo := range store.Replicas {
+		if replicaInfo.ShardID == shardID && replicaInfo.ReplicaID == replicaID {
+			return true
+		}
+	}
+	return false
+}
+
 type AddLogService struct {
 	Target string
 	Replica
@@ -133,16 +142,11 @@ func (a StartLogService) String() string {
 }
 
 func (a StartLogService) IsFinish(state ClusterState) bool {
-	if _, ok := state.LogState.Stores[a.UUID]; !ok {
+	store, ok := state.LogState.Stores[a.UUID]
+	if !ok {
 		return true
 	}
-	for _, replicaInfo := range state.LogState.Stores[a.UUID].Replicas {
-		if replicaInfo.ShardID == a.ShardID {
-			return true
-		}
-	}
-
-	return false
+	return replicaStarted(store, a.ShardID, a.ReplicaID)
 }
 
 type StartNonVotingLogService struct {
@@ -154,15 +158,11 @@ func (a StartNonVotingLogService) String() string {
 }
 
 func (a StartNonVotingLogService) IsFinish(state ClusterState) bool {
-	if _, ok := state.LogState.Stores[a.UUID]; !ok {
+	store, ok := state.LogState.Stores[a.UUID]
+	if !ok {
 		return true
 	}
-	for _, replicaInfo := range state.LogState.Stores[a.UUID].Replicas {
-		if replicaInfo.ShardID == a.ShardID {
-			return true
-		}
-	}
-	return false
+	return replicaStarted(store, a.ShardID, a.ReplicaID)
 }
 
 type StopLogService struct {
@@ -214,10 +214,8 @@ func (a KillLogZombie) String() string {
 
 func (a KillLogZombie) IsFinish(state ClusterState) bool {
 	if store, ok := state.LogState.Stores[a.UUID]; ok {
-		for _, replicaInfo := range store.Replicas {
-			if replicaInfo.ShardID == a.ShardID {
-				return false
-			}
+		if replicaStarted(store, a.ShardID, a.ReplicaID) {
+			return false
 		}
 	}
 
@@ -397,13 +395,9 @@ func (a BootstrapShard) String() string {
 }
 
 func (a BootstrapShard) IsFinish(state ClusterState) bool {
-	if _, ok := state.LogState.Stores[a.UUID]; !ok {
+	store, ok := state.LogState.Stores[a.UUID]
+	if !ok {
 		return true
 	}
-	for _, replicaInfo := range state.LogState.Stores[a.UUID].Replicas {
-		if replicaInfo.ShardID == a.ShardID {
-			return true
-		}
-	}
-	return false
+	return replicaStarted(store, a.ShardID, a.ReplicaID)
 }

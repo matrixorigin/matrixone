@@ -407,7 +407,7 @@ func TestFixExpiredStore(t *testing.T) {
 								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
 								Epoch:             1,
 								LeaderID:          1},
-							ReplicaID: 2,
+							ReplicaID: 1,
 						}},
 					},
 					"b": {
@@ -611,7 +611,7 @@ func TestFixExpiredStore(t *testing.T) {
 								NonVotingReplicas: map[uint64]string{4: "d", 5: "e"},
 								Epoch:             1,
 								LeaderID:          1},
-							ReplicaID: 2,
+							ReplicaID: 1,
 						}},
 					},
 					"b": {
@@ -647,7 +647,7 @@ func TestFixExpiredStore(t *testing.T) {
 								NonVotingReplicas: map[uint64]string{4: "d", 5: "e"},
 								Epoch:             1,
 								LeaderID:          1},
-							ReplicaID: 3,
+							ReplicaID: 4,
 						}},
 					},
 					"e": {
@@ -659,7 +659,7 @@ func TestFixExpiredStore(t *testing.T) {
 								NonVotingReplicas: map[uint64]string{4: "d", 5: "e"},
 								Epoch:             1,
 								LeaderID:          1},
-							ReplicaID: 3,
+							ReplicaID: 5,
 						}},
 					},
 					"f": {
@@ -766,7 +766,7 @@ func TestFixZombie(t *testing.T) {
 								Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"},
 								Epoch:    2,
 								LeaderID: 1},
-							ReplicaID: 3,
+							ReplicaID: 4,
 						}},
 					},
 				},
@@ -843,7 +843,7 @@ func TestFixZombie(t *testing.T) {
 								Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"},
 								Epoch:    2,
 								LeaderID: 1},
-							ReplicaID: 3,
+							ReplicaID: 4,
 						}},
 					},
 				},

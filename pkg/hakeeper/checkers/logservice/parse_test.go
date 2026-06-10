@@ -1044,6 +1044,32 @@ func TestCollectStats(t *testing.T) {
 	}
 }
 
+func TestGetReplicasToStartRequiresReplicaID(t *testing.T) {
+	replicas := map[uint64]string{262145: "log-1"}
+	stores := map[string]pb.LogStoreInfo{
+		"log-1": {
+			Replicas: []pb.LogReplicaInfo{{
+				LogShardInfo: pb.LogShardInfo{ShardID: 1},
+				ReplicaID:    275385,
+			}},
+		},
+	}
+
+	assert.Equal(t, []replica{{
+		uuid:      "log-1",
+		shardID:   1,
+		replicaID: 262145,
+	}}, getReplicasToStart(1, replicas, stores))
+
+	stores["log-1"] = pb.LogStoreInfo{
+		Replicas: []pb.LogReplicaInfo{{
+			LogShardInfo: pb.LogShardInfo{ShardID: 1},
+			ReplicaID:    262145,
+		}},
+	}
+	assert.Empty(t, getReplicasToStart(1, replicas, stores))
+}
+
 func TestCollectStore(t *testing.T) {
 	cases := []struct {
 		desc     string

@@ -165,7 +165,7 @@ func getReplicasToStart(
 	toStart := make([]replica, 0)
 	for id, uuid := range replicas {
 		store := stores[uuid]
-		if !replicaStarted(shardID, store.Replicas) {
+		if !replicaStarted(shardID, id, uuid, store.Replicas) {
 			rep := replica{
 				uuid:      uuid,
 				shardID:   shardID,
@@ -283,9 +283,17 @@ func sortedReplicaID(replicas map[uint64]string, leaderID uint64) []uint64 {
 }
 
 // replicaStarted checks if a replica is started in LogReplicaInfo.
-func replicaStarted(shardID uint64, replicas []pb.LogReplicaInfo) bool {
+func replicaStarted(shardID, replicaID uint64, uuid string, replicas []pb.LogReplicaInfo) bool {
 	for _, r := range replicas {
-		if r.ShardID == shardID {
+		if r.ShardID != shardID {
+			continue
+		}
+		if r.ReplicaID == replicaID {
+			return true
+		}
+		// Keep compatibility with heartbeat records that omit the local ReplicaID.
+		if r.ReplicaID == 0 &&
+			(r.Replicas[replicaID] == uuid || r.NonVotingReplicas[replicaID] == uuid) {
 			return true
 		}
 	}

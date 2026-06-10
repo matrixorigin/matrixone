@@ -361,6 +361,28 @@ func TestStartLogService(t *testing.T) {
 			},
 			expected: true,
 		},
+		{
+			desc: "same shard with different replica is not completed",
+			command: StartLogService{
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 262145,
+				},
+			},
+			state: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{"a": {
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
+							ShardID:  1,
+							Replicas: map[uint64]string{275385: "a"},
+						},
+						ReplicaID: 275385,
+					}},
+				}},
+			},
+			expected: false,
+		},
 	}
 
 	for i, c := range cases {
@@ -419,6 +441,86 @@ func TestStartNonVotingLogService(t *testing.T) {
 			},
 			expected: true,
 		},
+		{
+			desc: "same shard with different non-voting replica is not completed",
+			command: StartNonVotingLogService{
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 262145,
+				},
+			},
+			state: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{"a": {
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
+							ShardID:  1,
+							Replicas: map[uint64]string{275385: "a"},
+						},
+						ReplicaID: 275385,
+					}},
+				}},
+			},
+			expected: false,
+		},
+	}
+
+	for i, c := range cases {
+		fmt.Printf("case %v: %s\n", i, c.desc)
+		assert.Equal(t, c.expected, c.command.IsFinish(ClusterState{
+			LogState:   c.state,
+			TNState:    pb.TNState{},
+			CNState:    pb.CNState{},
+			ProxyState: pb.ProxyState{},
+		}))
+	}
+}
+
+func TestKillLogZombie(t *testing.T) {
+	cases := []struct {
+		desc     string
+		command  KillLogZombie
+		state    pb.LogState
+		expected bool
+	}{
+		{
+			desc: "zombie still running",
+			command: KillLogZombie{
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 262145,
+				},
+			},
+			state: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{"a": {
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{ShardID: 1},
+						ReplicaID:    262145,
+					}},
+				}},
+			},
+			expected: false,
+		},
+		{
+			desc: "same shard with different replica is completed",
+			command: KillLogZombie{
+				Replica: Replica{
+					UUID:      "a",
+					ShardID:   1,
+					ReplicaID: 262145,
+				},
+			},
+			state: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{"a": {
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{ShardID: 1},
+						ReplicaID:    275385,
+					}},
+				}},
+			},
+			expected: true,
+		},
 	}
 
 	for i, c := range cases {
@@ -470,6 +572,60 @@ func TestStopLogService(t *testing.T) {
 							Replicas: map[uint64]string{1: "a"},
 						},
 						ReplicaID: 1,
+					}},
+				}},
+			},
+			expected: false,
+		},
+	}
+
+	for i, c := range cases {
+		fmt.Printf("case %v: %s\n", i, c.desc)
+		assert.Equal(t, c.expected, c.command.IsFinish(ClusterState{
+			LogState:   c.state,
+			TNState:    pb.TNState{},
+			CNState:    pb.CNState{},
+			ProxyState: pb.ProxyState{},
+		}))
+	}
+}
+
+func TestBootstrapShard(t *testing.T) {
+	cases := []struct {
+		desc     string
+		command  BootstrapShard
+		state    pb.LogState
+		expected bool
+	}{
+		{
+			desc: "bootstrap shard completed",
+			command: BootstrapShard{
+				UUID:      "a",
+				ShardID:   1,
+				ReplicaID: 262145,
+			},
+			state: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{"a": {
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{ShardID: 1},
+						ReplicaID:    262145,
+					}},
+				}},
+			},
+			expected: true,
+		},
+		{
+			desc: "same shard with different replica is not completed",
+			command: BootstrapShard{
+				UUID:      "a",
+				ShardID:   1,
+				ReplicaID: 262145,
+			},
+			state: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{"a": {
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{ShardID: 1},
+						ReplicaID:    275385,
 					}},
 				}},
 			},
