@@ -3441,6 +3441,103 @@ func TestKeepaliveEpochPurgeKeepsGroupMovePop(t *testing.T) {
 	)
 }
 
+func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			alloc.mu.Lock()
+			oldVersion := alloc.version
+			alloc.mu.Unlock()
+
+			l1.allocatorVersionMu.Lock()
+			l1.lastAllocatorVersion = oldVersion
+			l1.allocatorVersionMu.Unlock()
+
+			staleLocalTable := uint64(21501)
+			staleRemoteTable := uint64(21502)
+			staleProxyTable := uint64(21503)
+			currentProxyTable := uint64(21504)
+
+			staleLocalBind := pb.LockTable{
+				Group:       0,
+				Table:       staleLocalTable,
+				OriginTable: staleLocalTable,
+				ServiceID:   l1.serviceID,
+				Version:     oldVersion,
+				Valid:       true,
+			}
+			l1.tableGroups.set(0, staleLocalTable, l1.createLockTableByBind(staleLocalBind))
+
+			staleRemoteBind := pb.LockTable{
+				Group:       0,
+				Table:       staleRemoteTable,
+				OriginTable: staleRemoteTable,
+				ServiceID:   "remote-service",
+				Version:     oldVersion,
+				Valid:       true,
+			}
+			l1.tableGroups.set(
+				0,
+				staleRemoteTable,
+				newRemoteLockTable(
+					l1.serviceID,
+					time.Second,
+					staleRemoteBind,
+					l1.remote.client,
+					l1.handleBindChanged,
+					l1.logger))
+
+			staleProxyBind := staleRemoteBind
+			staleProxyBind.Table = staleProxyTable
+			staleProxyBind.OriginTable = staleProxyTable
+			staleProxy := l1.createLockTableByBind(staleProxyBind)
+			_, ok := staleProxy.(*localLockTableProxy)
+			require.True(t, ok)
+			l1.tableGroups.set(0, staleProxyTable, staleProxy)
+
+			alloc.mu.Lock()
+			alloc.mu.services = make(map[string]*serviceBinds)
+			alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
+			alloc.version++
+			restartedVersion := alloc.version
+			alloc.mu.Unlock()
+
+			currentProxyBind := staleRemoteBind
+			currentProxyBind.Table = currentProxyTable
+			currentProxyBind.OriginTable = currentProxyTable
+			currentProxyBind.Version = restartedVersion
+			currentProxy := l1.createLockTableByBind(currentProxyBind)
+			_, ok = currentProxy.(*localLockTableProxy)
+			require.True(t, ok)
+			l1.tableGroups.set(0, currentProxyTable, currentProxy)
+
+			require.False(t, alloc.KeepLockTableBind(l1.serviceID))
+			require.NotNil(t, l1.tableGroups.get(0, staleLocalTable))
+			require.NotNil(t, l1.tableGroups.get(0, staleRemoteTable))
+			require.NotNil(t, l1.tableGroups.get(0, staleProxyTable))
+			require.NotNil(t, l1.tableGroups.get(0, currentProxyTable))
+
+			l1.remote.keeper.(*lockTableKeeper).doKeepLockTableBind(ctx)
+
+			require.Nil(t, l1.tableGroups.get(0, staleLocalTable))
+			require.Nil(t, l1.tableGroups.get(0, staleRemoteTable))
+			require.Nil(t, l1.tableGroups.get(0, staleProxyTable))
+			preserved := l1.tableGroups.get(0, currentProxyTable)
+			require.NotNil(t, preserved)
+			require.Equal(t, currentProxyBind, preserved.getBind())
+			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
+		},
+		func(cfg *Config) {
+			cfg.EnableRemoteLocalProxy = true
+		})
+}
+
 func TestAllocatorObserverPurgesRemoteAndProxyLockTables(t *testing.T) {
 	runLockServiceTestsWithAdjustConfig(
 		t,
