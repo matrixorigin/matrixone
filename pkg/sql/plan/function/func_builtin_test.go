@@ -17,6 +17,7 @@ package function
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -2203,6 +2204,114 @@ func TestBuiltInUUIDSwapFlagBoolCoercion(t *testing.T) {
 				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 					[]string{u, u, u, ""},
 					[]bool{false, false, false, true}),
+			}
+			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInBinToUUID)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, ftc.info, info)
+		})
+	}
+}
+
+func TestBuiltInUUIDSwapFlagStringStrictCoercion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	u := "6ccd780c-baba-1026-9564-5b8c656024db"
+	bin := string([]byte{
+		0x6c, 0xcd, 0x78, 0x0c, 0xba, 0xba, 0x10, 0x26,
+		0x95, 0x64, 0x5b, 0x8c, 0x65, 0x60, 0x24, 0xdb,
+	})
+	swapped := string([]byte{
+		0x10, 0x26, 0xba, 0xba, 0x6c, 0xcd, 0x78, 0x0c,
+		0x95, 0x64, 0x5b, 0x8c, 0x65, 0x60, 0x24, 0xdb,
+	})
+
+	for _, tc := range []struct {
+		name   string
+		values []string
+		want   []string
+	}{
+		{
+			name:   "valid numeric strings",
+			values: []string{"0", "1", "0.0", "0.4", "-0.4", " 2 "},
+			want:   []string{bin, swapped, bin, swapped, swapped, swapped},
+		},
+	} {
+		t.Run(tc.name+"/uuid_to_bin", func(t *testing.T) {
+			uuids := make([]string, len(tc.values))
+			nulls := make([]bool, len(tc.values))
+			for i := range uuids {
+				uuids[i] = u
+			}
+			ftc := tcTemp{
+				info: "uuid_to_bin with " + tc.name,
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), uuids, nulls),
+					NewFunctionTestInput(types.T_varchar.ToType(), tc.values, nulls),
+				},
+				expect: NewFunctionTestResult(types.T_varbinary.ToType(), false, tc.want, nulls),
+			}
+			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInUUIDToBin)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, ftc.info, info)
+		})
+
+		t.Run(tc.name+"/bin_to_uuid", func(t *testing.T) {
+			bins := make([]string, len(tc.values))
+			nulls := make([]bool, len(tc.values))
+			for i, value := range tc.values {
+				if strings.TrimSpace(value) == "0" || strings.TrimSpace(value) == "0.0" {
+					bins[i] = bin
+				} else {
+					bins[i] = swapped
+				}
+			}
+			ftc := tcTemp{
+				info: "bin_to_uuid with " + tc.name,
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varbinary.ToType(), bins, nulls),
+					NewFunctionTestInput(types.T_varchar.ToType(), tc.values, nulls),
+				},
+				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+					[]string{u, u, u, u, u, u},
+					nulls),
+			}
+			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInBinToUUID)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, ftc.info, info)
+		})
+	}
+
+	for _, tc := range []struct {
+		name  string
+		value string
+	}{
+		{name: "prefix numeric string", value: "1abc"},
+		{name: "prefix positive numeric string", value: "2xyz"},
+		{name: "non numeric string", value: "abc"},
+		{name: "empty string", value: ""},
+		{name: "prefix decimal string", value: "0.4x"},
+	} {
+		t.Run(tc.name+"/uuid_to_bin", func(t *testing.T) {
+			ftc := tcTemp{
+				info: "uuid_to_bin rejects " + tc.name + " swap flag",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{u}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.value}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_varbinary.ToType(), true, []string{""}, []bool{true}),
+			}
+			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInUUIDToBin)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, ftc.info, info)
+		})
+
+		t.Run(tc.name+"/bin_to_uuid", func(t *testing.T) {
+			ftc := tcTemp{
+				info: "bin_to_uuid rejects " + tc.name + " swap flag",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varbinary.ToType(), []string{swapped}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.value}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{true}),
 			}
 			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInBinToUUID)
 			succeed, info := tcc.Run()

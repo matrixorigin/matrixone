@@ -14,17 +14,17 @@ name VARCHAR NOT NULL
 INSERT INTO namelists (name) VALUES ('Tom'), ('Jane'), ('Bob');
 SELECT * from namelists;
 ➤ id[12,-1,0]  ¦  name[12,-1,0]  𝄀
-019ea663-978b-7e3a-a561-94de4fa22379  ¦  Tom  𝄀
-019ea663-978b-7e3b-adf5-405499d2a906  ¦  Jane  𝄀
-019ea663-978b-7e3c-a66f-fe75f033d39b  ¦  Bob
+019eaf97-b88d-72c4-93d1-943c07728b93  ¦  Tom  𝄀
+019eaf97-b88d-72c5-ab96-e0e9ab377d26  ¦  Jane  𝄀
+019eaf97-b88d-72c6-a733-33073e3e7b28  ¦  Bob
 INSERT INTO namelists (id, name) VALUES ('019213b0-d7bd-7271-a681-49e9d979d8d3', 'Jack');
 INSERT INTO namelists (id, name) VALUES ('019213b0-d7bd-7271-a681-49e9d979d8d3', 'Alan');
 Duplicate entry '019213b0-d7bd-7271-a681-49e9d979d8d3' for key 'id'
 SELECT * from namelists;
 ➤ id[12,-1,0]  ¦  name[12,-1,0]  𝄀
-019ea663-978b-7e3a-a561-94de4fa22379  ¦  Tom  𝄀
-019ea663-978b-7e3b-adf5-405499d2a906  ¦  Jane  𝄀
-019ea663-978b-7e3c-a66f-fe75f033d39b  ¦  Bob  𝄀
+019eaf97-b88d-72c4-93d1-943c07728b93  ¦  Tom  𝄀
+019eaf97-b88d-72c5-ab96-e0e9ab377d26  ¦  Jane  𝄀
+019eaf97-b88d-72c6-a733-33073e3e7b28  ¦  Bob  𝄀
 019213b0-d7bd-7271-a681-49e9d979d8d3  ¦  Jack
 Drop Table namelists;
 create table tttt(a int default 0 primary key, b int);
