@@ -3387,23 +3387,49 @@ func TestAllocatorObserverDoesNotPurgeSameEpochBindVersions(t *testing.T) {
 	)
 }
 
-func TestGetBindAllowsRegressedAllocatorVersionWithoutPurging(t *testing.T) {
+func TestGetBindPurgesStaleBindWhenAllocatorIDChangesWithRegressedVersion(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
 			l1 := s[0]
-			table := uint64(19001)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			staleTable := uint64(19001)
+			freshTable := uint64(19002)
+			option := newTestRowExclusiveOptions()
+
+			_, err := l1.Lock(ctx, staleTable, newTestRows(1), newTestTxnID(1), option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, newTestTxnID(1), timestamp.Timestamp{}))
+
+			staleBind := l1.tableGroups.get(0, staleTable).getBind()
+			oldAllocatorID := staleBind.AllocatorID
+			require.NotEmpty(t, oldAllocatorID)
 
 			l1.allocatorVersionMu.Lock()
-			l1.lastAllocatorVersion = alloc.version + 1
-			lastAllocatorVersion := l1.lastAllocatorVersion
+			l1.lastAllocatorID = oldAllocatorID
+			l1.lastAllocatorVersion = staleBind.Version
 			l1.allocatorVersionMu.Unlock()
 
-			_, err := l1.getLockTableWithCreate(0, table, newTestRows(1), pb.Sharding_None)
+			alloc.mu.Lock()
+			alloc.mu.services = make(map[string]*serviceBinds)
+			alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
+			alloc.allocatorID = "restarted-allocator-with-lower-version"
+			alloc.version = staleBind.Version - 1
+			restartedVersion := alloc.version
+			restartedAllocatorID := alloc.allocatorID
+			alloc.mu.Unlock()
+
+			_, err = l1.getLockTableWithCreate(0, freshTable, newTestRows(2), pb.Sharding_None)
 			require.NoError(t, err)
-			require.Equal(t, lastAllocatorVersion, l1.lastAllocatorVersion)
-			require.Equal(t, alloc.version, l1.tableGroups.get(0, table).getBind().Version)
+			require.Nil(t, l1.tableGroups.get(0, staleTable))
+			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
+			require.Equal(t, restartedAllocatorID, l1.lastAllocatorID)
+			freshBind := l1.tableGroups.get(0, freshTable).getBind()
+			require.Equal(t, restartedVersion, freshBind.Version)
+			require.Equal(t, restartedAllocatorID, freshBind.AllocatorID)
 		},
 	)
 }
@@ -3453,9 +3479,11 @@ func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
 
 			alloc.mu.Lock()
 			oldVersion := alloc.version
+			oldAllocatorID := alloc.allocatorID
 			alloc.mu.Unlock()
 
 			l1.allocatorVersionMu.Lock()
+			l1.lastAllocatorID = oldAllocatorID
 			l1.lastAllocatorVersion = oldVersion
 			l1.allocatorVersionMu.Unlock()
 
@@ -3471,6 +3499,7 @@ func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
 				ServiceID:   l1.serviceID,
 				Version:     oldVersion,
 				Valid:       true,
+				AllocatorID: oldAllocatorID,
 			}
 			l1.tableGroups.set(0, staleLocalTable, l1.createLockTableByBind(staleLocalBind))
 
@@ -3481,6 +3510,7 @@ func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
 				ServiceID:   "remote-service",
 				Version:     oldVersion,
 				Valid:       true,
+				AllocatorID: oldAllocatorID,
 			}
 			l1.tableGroups.set(
 				0,
@@ -3504,7 +3534,9 @@ func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
 			alloc.mu.Lock()
 			alloc.mu.services = make(map[string]*serviceBinds)
 			alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
+			alloc.allocatorID = "restarted-allocator-for-keepalive"
 			alloc.version++
+			restartedAllocatorID := alloc.allocatorID
 			restartedVersion := alloc.version
 			alloc.mu.Unlock()
 
@@ -3512,6 +3544,7 @@ func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
 			currentProxyBind.Table = currentProxyTable
 			currentProxyBind.OriginTable = currentProxyTable
 			currentProxyBind.Version = restartedVersion
+			currentProxyBind.AllocatorID = restartedAllocatorID
 			currentProxy := l1.createLockTableByBind(currentProxyBind)
 			_, ok = currentProxy.(*localLockTableProxy)
 			require.True(t, ok)
@@ -3532,6 +3565,7 @@ func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
 			require.NotNil(t, preserved)
 			require.Equal(t, currentProxyBind, preserved.getBind())
 			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
+			require.Equal(t, restartedAllocatorID, l1.lastAllocatorID)
 		},
 		func(cfg *Config) {
 			cfg.EnableRemoteLocalProxy = true
