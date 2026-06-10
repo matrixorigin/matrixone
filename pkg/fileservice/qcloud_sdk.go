@@ -118,7 +118,9 @@ func NewQCloudSDK(
 
 	if !args.NoBucketValidation {
 		// validate bucket
-		_, err := client.Bucket.Head(ctx, &cos.BucketHeadOptions{})
+		_, err := DoWithRetry("cos bucket head", func() (*cos.Response, error) {
+			return client.Bucket.Head(ctx, &cos.BucketHeadOptions{})
+		}, maxRetryAttemps, IsRetryableError)
 		if err != nil {
 			return nil, err
 		}
@@ -404,8 +406,10 @@ func (a *QCloudSDK) WriteMultipartParallel(
 
 	defer func() {
 		if err != nil {
-			_, _ = a.client.Object.AbortMultipartUpload(
-				context.WithoutCancel(parentCtx), key, output.UploadID)
+			_, _ = DoWithRetry("cos abort multipart upload", func() (*cos.Response, error) {
+				return a.client.Object.AbortMultipartUpload(
+					context.WithoutCancel(parentCtx), key, output.UploadID)
+			}, maxRetryAttemps, IsRetryableError)
 		}
 	}()
 
