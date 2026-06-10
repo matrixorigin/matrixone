@@ -16,8 +16,10 @@ package plan
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -30,11 +32,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 const (
-	LoadParallelMinSize = int(colexec.WriteS3Threshold)
-	LoadWriteS3MinSize  = 1 << 20
+	LoadParallelMinSize     = int(colexec.WriteS3Threshold)
+	LoadWriteS3MinSize      = 1 << 20
+	loadFirstLineSampleSize = 1 << 20
 )
 
 func getNormalExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, map[string]int32, *TableDef, error) {
@@ -211,6 +215,261 @@ func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, e
 	return csvReader.Pos(), nil
 }
 
+func validateLoadParquetOptions(param *tree.ExternParam, ctx CompilerContext) error {
+	if param == nil || !isLoadParquetFormat(param) {
+		return nil
+	}
+	if param.Local {
+		return moerr.NewNYI(ctx.GetContext(), "load parquet local")
+	}
+	if loadOptionExists(param, "compression") || hasExplicitLoadCompression(param.CompressType) {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='parquet' does not support compression option")
+	}
+	if loadOptionExists(param, "jsondata") || param.JsonData != "" {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='parquet' does not support jsondata option")
+	}
+	if loadOptionExists(param, "hive_partitioning") || loadOptionExists(param, "hive_partition_columns") ||
+		param.HivePartitioning || len(param.HivePartitionCols) > 0 {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='parquet' does not support hive partitioning options")
+	}
+	if param.Tail == nil {
+		return nil
+	}
+	if param.Tail.Fields != nil {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='parquet' does not support FIELDS option")
+	}
+	if param.Tail.Lines != nil {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='parquet' does not support LINES option")
+	}
+	if param.Tail.IgnoredLines > 0 {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='parquet' does not support IGNORE LINES")
+	}
+	if hasLoadUserVariable(param.Tail.ColumnList) {
+		return moerr.NewNYI(ctx.GetContext(), "parquet load with @variables in column list")
+	}
+	if len(param.Tail.Assignments) > 0 {
+		return moerr.NewNYI(ctx.GetContext(), "parquet load with SET clause")
+	}
+	return nil
+}
+
+func isLoadParquetFormat(param *tree.ExternParam) bool {
+	if param.Format == tree.PARQUET {
+		return true
+	}
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		if strings.EqualFold(param.Option[i], "format") &&
+			strings.EqualFold(param.Option[i+1], tree.PARQUET) {
+			return true
+		}
+	}
+	return false
+}
+
+func loadOptionExists(param *tree.ExternParam, key string) bool {
+	key = strings.ToLower(key)
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		if strings.ToLower(param.Option[i]) == key {
+			return true
+		}
+	}
+	return false
+}
+
+func hasExplicitLoadCompression(compressType string) bool {
+	return compressType != "" && !strings.EqualFold(compressType, tree.AUTO)
+}
+
+func hasLoadUserVariable(cols []tree.LoadColumn) bool {
+	for _, col := range cols {
+		if _, ok := col.(*tree.VarExpr); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func makeLoadExternalStats(param *tree.ExternParam, tableDef *TableDef, offset int64, ctx context.Context) *plan.Stats {
+	// LOAD external scan parallelism is currently sized by
+	// getParallelSizeForExternalScan as Cost*Rowsize/WriteS3Threshold.
+	// Keep Cost*Rowsize close to input bytes, but express Cost/Outcnt/BlockNum
+	// as row/cardinality estimates so large LOAD keeps the expected AP path.
+	stats := &plan.Stats{Rowsize: 1}
+	if param == nil {
+		return stats
+	}
+	var inputSize int64
+	if param.ScanType == tree.INLINE {
+		inputSize = int64(len(param.Data))
+	} else {
+		inputSize = param.FileSize - offset
+	}
+	if inputSize < 0 {
+		inputSize = 0
+	}
+	if inputSize == 0 {
+		return stats
+	}
+
+	rowSize := estimateLoadRowsize(param, tableDef, inputSize, offset, ctx)
+	rowCount := math.Ceil(float64(inputSize) / rowSize)
+	if rowCount < 1 {
+		rowCount = 1
+	}
+	stats.Cost = rowCount
+	stats.Outcnt = rowCount
+	stats.TableCnt = rowCount
+	stats.Rowsize = rowSize
+	stats.Selectivity = 1
+	stats.BlockNum = int32(math.Ceil(rowCount / float64(options.DefaultBlockMaxRows)))
+	return stats
+}
+
+func estimateLoadRowsize(param *tree.ExternParam, tableDef *TableDef, inputSize int64, offset int64, ctx context.Context) float64 {
+	if param != nil && param.ScanType == tree.INLINE && param.Format == tree.CSV {
+		if rowSize := inlineCSVRowsize(param.Data, loadLinesTerminatedBy(param)); rowSize > 0 {
+			return clampLoadRowsize(rowSize, inputSize)
+		}
+	}
+	if rowSize := estimateLoadRowsizeFromFirstLine(param, inputSize, offset, ctx); rowSize > 0 {
+		return rowSize
+	}
+	if tableDef != nil {
+		if rowSize := GetRowSizeFromTableDef(tableDef, true) * 0.8; rowSize > 0 {
+			return clampLoadRowsize(rowSize, inputSize)
+		}
+	}
+	return clampLoadRowsize(1, inputSize)
+}
+
+func inlineCSVRowsize(data string, terminatedBy string) float64 {
+	if terminatedBy == "" {
+		terminatedBy = "\n"
+	}
+	if idx := strings.Index(data, terminatedBy); idx >= 0 {
+		return float64(idx + len(terminatedBy))
+	}
+	return float64(len(data))
+}
+
+func loadLinesTerminatedBy(param *tree.ExternParam) string {
+	if param != nil && param.Tail != nil && param.Tail.Lines != nil {
+		if terminated := param.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
+			return terminated.Value
+		}
+	}
+	return "\n"
+}
+
+func estimateLoadRowsizeFromFirstLine(param *tree.ExternParam, inputSize int64, offset int64, ctx context.Context) float64 {
+	lineTerminator := loadLinesTerminatedBy(param)
+	if param == nil ||
+		param.ScanType == tree.INLINE ||
+		param.Local ||
+		param.Format == tree.PARQUET ||
+		getCompressType(param, param.Filepath) != tree.NOCOMPRESS ||
+		(lineTerminator != "\n" && lineTerminator != "\r\n") ||
+		strings.HasPrefix(param.Filepath, "SHARED:/query_result/") {
+		return 0
+	}
+
+	if size := readExternalFirstLineSize(param, inputSize, offset, ctx); size > 0 {
+		return clampLoadRowsize(float64(size), inputSize)
+	}
+	return 0
+}
+
+func readExternalFirstLineSize(param *tree.ExternParam, inputSize int64, offset int64, ctx context.Context) int {
+	if param == nil {
+		return 0
+	}
+	if ctx == nil {
+		ctx = param.Ctx
+	}
+	if ctx == nil {
+		return 0
+	}
+
+	sampleSize := int64(loadFirstLineSampleSize)
+	if inputSize > 0 && inputSize < sampleSize {
+		sampleSize = inputSize
+	}
+	if sampleSize <= 0 {
+		return 0
+	}
+
+	fs, readPath, err := GetForETLWithType(param, param.Filepath)
+	if err != nil {
+		return 0
+	}
+	var r io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: readPath,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset:            offset,
+				Size:              sampleSize,
+				ReadCloserForRead: &r,
+			},
+		},
+	}
+	if err = fs.Read(ctx, &vec); err != nil {
+		return 0
+	}
+	if r == nil {
+		return 0
+	}
+	defer r.Close()
+
+	reader := bufio.NewReader(r)
+	if offset == 0 && param.Tail != nil {
+		for i := uint64(0); i < param.Tail.IgnoredLines; i++ {
+			line, err := reader.ReadString('\n')
+			if err != nil || !strings.HasSuffix(line, "\n") {
+				return 0
+			}
+		}
+	}
+
+	line, err := reader.ReadString('\n')
+	if len(line) == 0 {
+		return 0
+	}
+	if strings.HasSuffix(line, "\n") {
+		return len(line)
+	}
+	if err == io.EOF && inputSize > 0 && inputSize <= sampleSize {
+		return len(line)
+	}
+	return 0
+}
+
+func clampLoadRowsize(rowSize float64, inputSize int64) float64 {
+	if rowSize < 1 {
+		return 1
+	}
+	if inputSize > 0 && rowSize > float64(inputSize) {
+		return float64(inputSize)
+	}
+	return rowSize
+}
+
+func loadParquetMayListFiles(param *tree.ExternParam) bool {
+	return param != nil &&
+		param.Format == tree.PARQUET &&
+		strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[")
+}
+
+func totalLoadFileSize(fileSize []int64) int64 {
+	var total int64
+	for _, size := range fileSize {
+		if size > 0 {
+			total += size
+		}
+	}
+	return total
+}
+
 func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -238,6 +497,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
 		return nil, err
 	}
+	if err := validateLoadParquetOptions(stmt.Param, ctx); err != nil {
+		return nil, err
+	}
 	tableDef := tblInfo.tableDefs[0]
 	objRef := tblInfo.objRef[0]
 	originTableDef := tableDef
@@ -260,7 +522,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		}
 		stmt.Param.FileStartOff = offset
 	}
-	stmt.Param.ParallelLoadRequested = stmt.Param.Parallel
+	stmt.Param.ParallelLoadRequested = stmt.Param.ParallelLoadRequested || stmt.Param.Parallel
 
 	if stmt.Param.FileSize-offset < int64(LoadParallelMinSize) {
 		stmt.Param.Parallel = false
@@ -298,7 +560,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	externalScanNode := &plan.Node{
 		NodeType:    plan.Node_EXTERNAL_SCAN,
-		Stats:       &plan.Stats{},
+		Stats:       makeLoadExternalStats(stmt.Param, tableDef, offset, ctx.GetContext()),
 		ProjectList: externalProject,
 		ObjRef:      objRef,
 		TableDef:    tableDef,
@@ -336,7 +598,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		builder.qry.LoadWriteS3 = false
 	}
 
-	if stmt.Param.Parallel && noCompress {
+	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET {
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode)
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
@@ -415,6 +677,18 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	}
 
 	param.Ctx = ctx.GetContext()
+	if loadParquetMayListFiles(param) {
+		fileList, fileSize, err := ReadDir(param)
+		param.Ctx = nil
+		if err != nil {
+			return "", err
+		}
+		if len(fileList) == 0 {
+			return "", moerr.NewInvalidInput(ctx.GetContext(), "the file does not exist in load flow")
+		}
+		param.FileSize = totalLoadFileSize(fileSize)
+		return param.Filepath, nil
+	}
 	if err := StatFile(param); err != nil {
 		if moerror, ok := err.(*moerr.Error); ok {
 			if moerror.ErrorCode() == moerr.ErrFileNotFound {

@@ -353,6 +353,14 @@ message file_offset {
   repeated int64 offset = 1;
 }
 
+message parquet_row_group_shard {
+  int32 file_index = 1;
+  int32 row_group_start = 2;
+  int32 row_group_end = 3;
+  int64 num_rows = 4;
+  int64 bytes = 5;
+}
+
 message ExternalScan {
   repeated plan.ExternAttr attrs = 1 [(gogoproto.nullable) = false];
   repeated int64 file_size = 2;
@@ -366,6 +374,7 @@ message ExternalScan {
   int32 column_list_len = 10;
   bool parallel_load = 11;
   bool load_empty_numeric_as_zero = 12;
+  repeated parquet_row_group_shard parquet_row_group_shards = 13;
 }
 
 message StreamScan {
@@ -499,7 +508,7 @@ message Source {
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 11;
   bool is_const = 12;
   repeated plan.msgHeader recv_msg_list = 13 [(gogoproto.nullable) = false];
-  bytes bloom_filter = 14;
+  bytes membership_filter = 14;
 }
 
 message NodeInfo {

@@ -18,13 +18,13 @@ import (
 	"bytes"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
 )
@@ -54,7 +54,7 @@ func DirectConstructBlockPKFilter(
 func ConstructBlockPKFilter(
 	isFakePK bool,
 	basePKFilter BasePKFilter,
-	bf *bloomfilter.CBloomFilter,
+	bf engine.MembershipFilter,
 ) (f objectio.BlockReadFilter, err error) {
 	if bf != nil && !bf.Valid() {
 		bf = nil
@@ -140,7 +140,7 @@ func ConstructBlockPKFilter(
 		return readFilter, nil
 	}
 
-	// Case with BloomFilter: wrap existing search func.
+	// Case with a membership filter: wrap existing search func.
 
 	// Reusable temporary variables (defined outside closure to avoid allocation on each call)
 	var (

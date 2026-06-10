@@ -43,6 +43,17 @@ length(cast(a as varchar))
 36
 36
 drop table t4;
+drop table if exists t5;
+create table t5 (id varchar(191) not null default (uuid()), n varchar(50), primary key(id));
+show create table t5;
+Table    Create Table
+t5    CREATE TABLE `t5` (\n  `id` varchar(191) NOT NULL DEFAULT (uuid()),\n  `n` varchar(50) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+insert into t5(n) values('a'),('b');
+select length(id), n from t5 order by n;
+length(id)    n
+36    a
+36    b
+drop table t5;
 select length(cast(uuid() as varchar));
 length(cast(uuid() as varchar))
 36

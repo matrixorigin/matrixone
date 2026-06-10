@@ -1028,6 +1028,13 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 
 	var err error
 	useGlobal := sv.Global
+	if useGlobal {
+		bh := ses.GetBackgroundExec(execCtx.reqCtx)
+		defer bh.Close()
+		if err = ses.refreshGlobalSysVars(execCtx.reqCtx, bh); err != nil {
+			return err
+		}
+	}
 
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -3944,7 +3951,7 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
 	case types.T_text:
 		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
-	case types.T_geometry:
+	case types.T_geometry, types.T_geometry32:
 		col.SetColumnType(defines.MYSQL_TYPE_GEOMETRY)
 	case types.T_uuid:
 		// Downgrade to string for client compatibility (e.g. Go MySQL driver).

@@ -307,7 +307,7 @@ func (d *DiskCache) Read(
 		if f, ok := openedFiles[diskPath]; ok {
 			// use opened file
 			LogEvent(ctx, str_disk_cache_file_seek_begin)
-			_, err = file.Seek(entry.Offset, io.SeekStart)
+			_, err = f.Seek(entry.Offset, io.SeekStart)
 			LogEvent(ctx, str_disk_cache_file_seek_end)
 			if err == nil {
 				file = f
@@ -340,21 +340,22 @@ func (d *DiskCache) Read(
 				}
 			} else {
 				// open file
-				d.waitUpdateComplete(ctx, diskPath)
-				LogEvent(ctx, str_disk_cache_file_open_begin)
-				diskFile, err := os.Open(diskPath)
-				LogEvent(ctx, str_disk_cache_file_open_end)
-				if err == nil {
-					defer func() {
-						openedFiles[diskPath] = diskFile
-					}()
-					numOpenFull++
-					// seek
-					LogEvent(ctx, str_disk_cache_file_seek_begin)
-					_, err = diskFile.Seek(entry.Offset, io.SeekStart)
-					LogEvent(ctx, str_disk_cache_file_seek_end)
+				if d.waitUpdateCompleteFor(ctx, diskPath, shortIOWaitDuration) {
+					LogEvent(ctx, str_disk_cache_file_open_begin)
+					diskFile, err := os.Open(diskPath)
+					LogEvent(ctx, str_disk_cache_file_open_end)
 					if err == nil {
-						file = diskFile
+						defer func() {
+							openedFiles[diskPath] = diskFile
+						}()
+						numOpenFull++
+						// seek
+						LogEvent(ctx, str_disk_cache_file_seek_begin)
+						_, err = diskFile.Seek(entry.Offset, io.SeekStart)
+						LogEvent(ctx, str_disk_cache_file_seek_end)
+						if err == nil {
+							file = diskFile
+						}
 					}
 				}
 			}
@@ -655,6 +656,46 @@ func (d *DiskCache) waitUpdateComplete(ctx context.Context, path string) {
 		d.updatingPaths.Wait()
 	}
 	d.updatingPaths.L.Unlock()
+}
+
+func (d *DiskCache) waitUpdateCompleteFor(ctx context.Context, path string, timeout time.Duration) bool {
+	d.updatingPaths.L.Lock()
+	updating := d.updatingPaths.m[path]
+	d.updatingPaths.L.Unlock()
+	if !updating {
+		return true
+	}
+	if timeout <= 0 {
+		return false
+	}
+
+	LogEvent(ctx, str_disk_cache_wait_update_complete_begin)
+	defer LogEvent(ctx, str_disk_cache_wait_update_complete_end)
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond * 10)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline.C:
+			return false
+		case <-ticker.C:
+		}
+		d.updatingPaths.L.Lock()
+		updating := d.updatingPaths.m[path]
+		d.updatingPaths.L.Unlock()
+		if !updating {
+			return true
+		}
+	}
+}
+
+func (d *DiskCache) isUpdating(path string) bool {
+	d.updatingPaths.L.Lock()
+	defer d.updatingPaths.L.Unlock()
+	return d.updatingPaths.m[path]
 }
 
 func (d *DiskCache) startUpdate(path string) (done func()) {

@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -272,6 +273,410 @@ func Test_BuiltIn_Lpad(t *testing.T) {
 	}
 }
 
+func Test_BuiltIn_Interval(t *testing.T) {
+	testCases := []tcTemp{
+		{
+			info: "mysql example with middle match",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{23}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{15}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{17}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{30}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{44}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{200}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{3}, []bool{false}),
+		},
+		{
+			info: "mysql example with equality",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{100}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1000}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2}, []bool{false}),
+		},
+		{
+			info: "mysql example with first threshold",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{22}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{23}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{30}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{44}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{200}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+		},
+		{
+			info: "null search value returns -1",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{-1}, []bool{false}),
+		},
+		{
+			info: "vectorized rows",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 5, 10, 11, 100}, []bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1, 1, 1}, []bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 10, 10, 10, 10}, []bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{100, 100, 100, 100, 100}, []bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 1, 2, 2, 3}, []bool{false, false, false, false, false}),
+		},
+		{
+			info: "float search value compares without integer rounding",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{2.9}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{4}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2}, []bool{false}),
+		},
+		{
+			info: "string decimal values compare in numeric context",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"10.9"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"10"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"100"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2}, []bool{false}),
+		},
+		{
+			info: "decimal search value compares exactly against integer thresholds",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_decimal128.ToTypeWithScale(1), []types.Decimal128{mustDecimal128(t, "2.9", 38, 1)}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{4}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2}, []bool{false}),
+		},
+		{
+			info: "null thresholds are skipped",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{100}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2}, []bool{false}),
+		},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInInterval)
+		ok, info := tcc.Run()
+		require.True(t, ok, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func mustDecimal128(t *testing.T, v string, width, scale int32) types.Decimal128 {
+	t.Helper()
+	d, err := types.ParseDecimal128(v, width, scale)
+	require.NoError(t, err)
+	return d
+}
+
+func Test_BuiltIn_IntervalRegistered(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fn, err := GetFunctionByName(proc.Ctx, "interval", []types.Type{
+		types.T_float64.ToType(),
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(INTERVAL), fn.fid)
+	require.Equal(t, types.T_int64, fn.retType.Oid)
+}
+
+func Test_BuiltIn_IntervalCheck(t *testing.T) {
+	result := builtInIntervalCheck(nil, []types.Type{types.T_int64.ToType()})
+	require.Equal(t, failedFunctionParametersWrong, result.status)
+
+	supportedTypes := []types.Type{
+		types.T_int8.ToType(),
+		types.T_int16.ToType(),
+		types.T_int32.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint8.ToType(),
+		types.T_uint16.ToType(),
+		types.T_uint32.ToType(),
+		types.T_uint64.ToType(),
+		types.T_float32.ToType(),
+		types.T_float64.ToType(),
+		types.T_decimal64.ToType(),
+		types.T_decimal128.ToType(),
+		types.T_char.ToType(),
+		types.T_varchar.ToType(),
+		types.T_text.ToType(),
+		types.T_any.ToType(),
+	}
+	for _, typ := range supportedTypes {
+		require.True(t, intervalTypeSupported(typ), typ.String())
+		result = builtInIntervalCheck(nil, []types.Type{types.T_int64.ToType(), typ})
+		require.Equal(t, succeedMatched, result.status, typ.String())
+	}
+
+	unsupportedTypes := []types.Type{
+		types.T_bool.ToType(),
+		types.T_date.ToType(),
+		types.T_datetime.ToType(),
+		types.T_json.ToType(),
+	}
+	for _, typ := range unsupportedTypes {
+		require.False(t, intervalTypeSupported(typ), typ.String())
+		result = builtInIntervalCheck(nil, []types.Type{types.T_int64.ToType(), typ})
+		require.Equal(t, failedFunctionParametersWrong, result.status, typ.String())
+	}
+}
+
+func Test_MakeIntervalParam(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	dec64, err := types.ParseDecimal64("12.5", 18, 1)
+	require.NoError(t, err)
+
+	testCases := []struct {
+		name         string
+		typ          types.Type
+		values       any
+		nulls        []bool
+		floatAt1     float64
+		decimalAt1   types.Decimal128
+		expectNull0  bool
+		expectDec    bool
+		expectScale  int32
+		expectUseDec bool
+		expectCanDec bool
+	}{
+		{
+			name:         "int8",
+			typ:          types.T_int8.ToType(),
+			values:       []int8{0, 8},
+			nulls:        []bool{true, false},
+			floatAt1:     8,
+			decimalAt1:   types.Decimal128FromInt64(8),
+			expectNull0:  true,
+			expectDec:    true,
+			expectUseDec: true,
+			expectCanDec: true,
+		},
+		{
+			name:         "int16",
+			typ:          types.T_int16.ToType(),
+			values:       []int16{0, 16},
+			nulls:        []bool{true, false},
+			floatAt1:     16,
+			decimalAt1:   types.Decimal128FromInt64(16),
+			expectNull0:  true,
+			expectDec:    true,
+			expectUseDec: true,
+			expectCanDec: true,
+		},
+		{
+			name:         "int32",
+			typ:          types.T_int32.ToType(),
+			values:       []int32{0, 32},
+			nulls:        []bool{true, false},
+			floatAt1:     32,
+			decimalAt1:   types.Decimal128FromInt64(32),
+			expectNull0:  true,
+			expectDec:    true,
+			expectUseDec: true,
+			expectCanDec: true,
+		},
+		{
+			name:         "int64",
+			typ:          types.T_int64.ToType(),
+			values:       []int64{0, 64},
+			nulls:        []bool{true, false},
+			floatAt1:     64,
+			decimalAt1:   types.Decimal128FromInt64(64),
+			expectNull0:  true,
+			expectDec:    true,
+			expectUseDec: true,
+			expectCanDec: true,
+		},
+		{
+			name:         "uint8",
+			typ:          types.T_uint8.ToType(),
+			values:       []uint8{0, 8},
+			nulls:        []bool{true, false},
+			floatAt1:     8,
+			decimalAt1:   types.Decimal128FromInt64(8),
+			expectNull0:  true,
+			expectDec:    true,
+			expectUseDec: true,
+			expectCanDec: true,
+		},
+		{
+			name:         "uint16",
+			typ:          types.T_uint16.ToType(),
+			values:       []uint16{0, 16},
+			nulls:        []bool{true, false},
+			floatAt1:     16,
+			decimalAt1:   types.Decimal128FromInt64(16),
+			expectNull0:  true,
+			expectDec:    true,
+			expectUseDec: true,
+			expectCanDec: true,
+		},
+		{
+			name:         "uint32",
+			typ:          types.T_uint32.ToType(),
+			values:       []uint32{0, 32},
+			nulls:        []bool{true, false},
+			floatAt1:     32,
+			decimalAt1:   types.Decimal128FromInt64(32),
+			expectNull0:  true,
+			expectDec:    true,
+			expectUseDec: true,
+			expectCanDec: true,
+		},
+		{
+			name:         "uint64",
+			typ:          types.T_uint64.ToType(),
+			values:       []uint64{0, math.MaxUint64},
+			nulls:        []bool{true, false},
+			floatAt1:     float64(math.MaxUint64),
+			decimalAt1:   mustDecimal128(t, "18446744073709551615", 38, 0),
+			expectNull0:  true,
+			expectDec:    true,
+			expectUseDec: true,
+			expectCanDec: true,
+		},
+		{
+			name:        "float32",
+			typ:         types.T_float32.ToType(),
+			values:      []float32{0, 1.5},
+			nulls:       []bool{true, false},
+			floatAt1:    1.5,
+			expectNull0: true,
+		},
+		{
+			name:        "float64",
+			typ:         types.T_float64.ToType(),
+			values:      []float64{0, 2.5},
+			nulls:       []bool{true, false},
+			floatAt1:    2.5,
+			expectNull0: true,
+		},
+		{
+			name:         "decimal64",
+			typ:          types.T_decimal64.ToTypeWithScale(1),
+			values:       []types.Decimal64{0, dec64},
+			nulls:        []bool{true, false},
+			floatAt1:     12.5,
+			decimalAt1:   types.Decimal128FromDecimal64(dec64, 1),
+			expectNull0:  true,
+			expectDec:    true,
+			expectScale:  1,
+			expectUseDec: true,
+			expectCanDec: true,
+		},
+		{
+			name:         "decimal128",
+			typ:          types.T_decimal128.ToTypeWithScale(1),
+			values:       []types.Decimal128{{}, mustDecimal128(t, "25.5", 38, 1)},
+			nulls:        []bool{true, false},
+			floatAt1:     25.5,
+			decimalAt1:   mustDecimal128(t, "25.5", 38, 1),
+			expectNull0:  true,
+			expectDec:    true,
+			expectScale:  1,
+			expectUseDec: true,
+			expectCanDec: true,
+		},
+		{
+			name:        "varchar",
+			typ:         types.T_varchar.ToType(),
+			values:      []string{"", "10.5"},
+			nulls:       []bool{true, false},
+			floatAt1:    10.5,
+			expectNull0: true,
+		},
+		{
+			name:        "binary",
+			typ:         types.T_binary.ToType(),
+			values:      []string{"", "9.5"},
+			nulls:       []bool{true, false},
+			floatAt1:    9.5,
+			expectNull0: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			param, err := makeIntervalParam(newVectorByType(proc.Mp(), tc.typ, tc.values, nullsFromBools(tc.nulls)))
+			require.NoError(t, err)
+			require.Equal(t, tc.expectUseDec, param.useDecimalComparison())
+			require.Equal(t, tc.expectCanDec, param.canCompareAsDecimal())
+			require.Equal(t, tc.expectScale, param.decimalScale())
+
+			_, null, err := param.float(0)
+			require.NoError(t, err)
+			require.Equal(t, tc.expectNull0, null)
+
+			gotFloat, null, err := param.float(1)
+			require.NoError(t, err)
+			require.False(t, null)
+			require.InEpsilon(t, tc.floatAt1, gotFloat, 0.000001)
+
+			if tc.expectDec {
+				gotDec, null, err := param.decimal(1)
+				require.NoError(t, err)
+				require.False(t, null)
+				require.Equal(t, tc.decimalAt1, gotDec)
+			}
+		})
+	}
+}
+
+func Test_MakeIntervalParamAny(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	param, err := makeIntervalParam(vector.NewConstNull(types.T_any.ToType(), 1, proc.Mp()))
+	require.NoError(t, err)
+
+	got, null, err := param.float(0)
+	require.NoError(t, err)
+	require.True(t, null)
+	require.Zero(t, got)
+}
+
+func Test_MakeIntervalParamInvalid(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	_, err := makeIntervalParam(newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{true}, nil))
+	require.Error(t, err)
+
+	param, err := makeIntervalParam(newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"not-number"}, nil))
+	require.NoError(t, err)
+	_, _, err = param.float(0)
+	require.Error(t, err)
+}
+
+func nullsFromBools(nullList []bool) *nulls.Nulls {
+	if len(nullList) == 0 {
+		return nil
+	}
+	nsp := nulls.NewWithSize(len(nullList))
+	for i, isNull := range nullList {
+		if isNull {
+			nsp.Set(uint64(i))
+		}
+	}
+	return nsp
+}
+
 func Test_BuiltIn_MoShowVisibleBinGeometry(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typeBytes, err := types.Encode(&types.Type{Oid: types.T_geometry})
@@ -311,6 +716,24 @@ func Test_BuiltIn_MoShowVisibleBinGeometry(t *testing.T) {
 	}
 	tcc = NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInMoShowVisibleBinEnum)
 	succeed, info = tcc.Run()
+	require.True(t, succeed, tc.info, info)
+}
+
+func Test_BuiltIn_MoShowVisibleBinArrayMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typeBytes, err := types.Encode(&types.Type{Oid: types.T_json})
+	require.NoError(t, err)
+
+	tc := tcTemp{
+		info: "show visible bin array metadata",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{string(typeBytes)}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"array(varchar(20))"}, nil),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"array(varchar(20))"}, nil),
+	}
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInMoShowVisibleBinEnum)
+	succeed, info := tcc.Run()
 	require.True(t, succeed, tc.info, info)
 }
 
