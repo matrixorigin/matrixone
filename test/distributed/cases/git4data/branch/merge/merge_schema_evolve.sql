@@ -16,6 +16,8 @@ create snapshot sp1 for table test t1;
 -- MERGE should succeed: t1 has [a,b,c], t0 has [a,b]
 data branch merge t1 into t0;
 
+drop snapshot sp1;
+drop snapshot sp0;
 drop table t0;
 drop table t1;
 drop database test;
