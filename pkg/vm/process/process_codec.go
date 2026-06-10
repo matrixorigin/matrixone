@@ -59,6 +59,9 @@ func (proc *Process) BuildProcessInfo(
 			return procInfo, err
 		}
 		procInfo.AccountId = accountId
+		// Carry ROW_COUNT() state so it is correct when an expression that reads
+		// it (e.g. row_count() in a projection) is pushed down to a remote CN.
+		procInfo.AffectedRows = proc.GetAffectedRows()
 		snapshot, err := proc.GetTxnOperator().Snapshot()
 		if err != nil {
 			return procInfo, err
@@ -215,6 +218,7 @@ func (c *codecService) Decode(
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
+	proc.SetAffectedRows(value.AffectedRows)
 	if value.PrepareParams.Length > 0 {
 		proc.Base.prepareParams = vector.NewVecWithData(
 			types.T_text.ToType(),

@@ -38,6 +38,12 @@ select row_count();
 replace into t values (50,500);
 select row_count();
 
+-- replace that collides with an existing key. MatrixOne counts the net rows
+-- written to the target table once, so this reports 1 (MySQL reports 2 for the
+-- delete+insert). The affected-rows divergence is tracked in #24907.
+replace into t values (50,999);
+select row_count();
+
 -- after a result-set statement, row_count() is -1
 select v from t where id=1;
 select row_count();
@@ -47,6 +53,35 @@ select row_count();
 
 -- DDL reports 0
 create table t2(a int);
+select row_count();
+
+-- a status statement that still affects rows (create table ... as select)
+-- reports the number of rows it inserted, not 0
+create table src(a int);
+insert into src values (1),(2),(3),(4),(5),(6);
+select row_count();
+create table ctas as select * from src;
+select row_count();
+
+-- insert ... on duplicate key update that inserts a brand-new row affects 1 row
+create table odku(id int primary key, v int);
+insert into odku values (1,1) on duplicate key update v=v+1;
+select row_count();
+
+-- on duplicate key update hitting an existing row that actually changes. MatrixOne
+-- counts the net affected row once, so this reports 1 (MySQL reports 2). Tracked
+-- in #24907.
+insert into odku values (1,1) on duplicate key update v=v+1;
+select row_count();
+
+-- on duplicate key update hitting an existing row with no real change (set to its
+-- current value). MatrixOne reports 1 here (MySQL reports 0). Tracked in #24907.
+insert into odku values (1,100) on duplicate key update v=v;
+select row_count();
+
+-- load data reports the number of imported rows
+create table load_t(id int, v varchar(10));
+load data infile '$resources/load_data/row_count.csv' into table load_t fields terminated by ',';
 select row_count();
 
 -- a failed statement (duplicate primary key) makes row_count() return -1

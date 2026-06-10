@@ -2503,6 +2503,37 @@ func TestParseExecuteDataWithJSONParam(t *testing.T) {
 	require.Equal(t, string(jsonPayload), prepareStmt.params.GetStringAt(0))
 }
 
+func TestParseExecuteDataRejectsTruncatedTemporalParam(t *testing.T) {
+	ctx := context.TODO()
+	// Each case declares a temporal payload length but supplies no payload bytes,
+	// so the fixed-offset readers would read past the buffer. The length guard must
+	// turn that into an error (which the caller maps to ROW_COUNT() = -1) instead of
+	// panicking.
+	cases := []struct {
+		name   string
+		tp     defines.MysqlType
+		length byte
+	}{
+		{"time-8", defines.MYSQL_TYPE_TIME, 8},
+		{"time-12", defines.MYSQL_TYPE_TIME, 12},
+		{"date-4", defines.MYSQL_TYPE_DATE, 4},
+		{"datetime-7", defines.MYSQL_TYPE_DATETIME, 7},
+		{"timestamp-11", defines.MYSQL_TYPE_TIMESTAMP, 11},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+			// null bitmap (not null) + new-params-bound flag + type + declared length,
+			// but the declared temporal payload is missing.
+			testData := []byte{0, 0, 0, 0, 0, 0, 1, byte(c.tp), 0, c.length}
+			require.NotPanics(t, func() {
+				err := proto.ParseExecuteData(ctx, proc, prepareStmt, testData, 0)
+				require.Error(t, err)
+			})
+		})
+	}
+}
+
 func buildStringExecutePacket(proto *MysqlProtocolImpl, tp defines.MysqlType, payload string) []byte {
 	data := make([]byte, 8+2+9+len(payload))
 	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(tp), 0})
