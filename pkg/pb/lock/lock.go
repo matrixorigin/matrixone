@@ -105,7 +105,8 @@ func (m *Response) DebugString() string {
 // Changed returns true if LockTable bind changed
 func (m LockTable) Changed(v LockTable) bool {
 	return m.Version != v.Version ||
-		m.ServiceID != v.ServiceID
+		m.ServiceID != v.ServiceID ||
+		(m.AllocatorID != "" && v.AllocatorID != "" && m.AllocatorID != v.AllocatorID)
 }
 
 // Equal return true means same bind
@@ -115,7 +116,10 @@ func (m LockTable) Equal(v LockTable) bool {
 
 // DebugString returns the debug string
 func (m LockTable) DebugString() string {
-	return fmt.Sprintf("%d-%d(%d)-%s-%d", m.Group, m.Table, m.OriginTable, m.ServiceID, m.Version)
+	if m.AllocatorID == "" {
+		return fmt.Sprintf("%d-%d(%d)-%s-%d", m.Group, m.Table, m.OriginTable, m.ServiceID, m.Version)
+	}
+	return fmt.Sprintf("%d-%d(%d)-%s-%d-%s", m.Group, m.Table, m.OriginTable, m.ServiceID, m.Version, m.AllocatorID)
 }
 
 // WithGranularity set rows granularity, the default granularity is Row.
