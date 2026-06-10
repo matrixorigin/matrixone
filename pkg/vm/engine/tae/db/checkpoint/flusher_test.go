@@ -181,6 +181,39 @@ func TestCheckpointBoundedScheduleBypassesFlushReady(t *testing.T) {
 	assert.True(t, flushScheduleForce.bypassFlushReady())
 }
 
+func TestCheckpointBoundedScheduleDoesNotResetFlushDeadline(t *testing.T) {
+	assert.True(t, flushScheduleCron.resetFlushDeadline())
+	assert.False(t, flushScheduleCheckpointBounded.resetFlushDeadline())
+	assert.True(t, flushScheduleForce.resetFlushDeadline())
+}
+
+func TestCheckpointBoundedFlushDoesNotResetTableDeadline(t *testing.T) {
+	flusher := &flushImpl{flushInterval: time.Hour}
+	table := catalog.MockStaloneTableEntry(1, catalog.NewEmptySchema("test"))
+	table.Stats.Init(flusher.flushInterval)
+	originalDeadline := table.Stats.GetFlushDeadline()
+	entry := newTestDirtyTreeEntry(types.BuildTS(1, 0), types.BuildTS(2, 0), table.ID)
+	flusher.objMemSizeList = []tableAndSize{{tbl: table}}
+
+	flusher.checkFlushConditionAndFire(
+		entry,
+		flushScheduleCheckpointBounded,
+		0,
+		types.BuildTS(1, 0),
+	)
+
+	assert.Equal(t, originalDeadline, table.Stats.GetFlushDeadline())
+
+	flusher.checkFlushConditionAndFire(
+		entry,
+		flushScheduleForce,
+		0,
+		types.BuildTS(1, 0),
+	)
+
+	assert.NotEqual(t, originalDeadline, table.Stats.GetFlushDeadline())
+}
+
 func TestTriggerJobFallsBackToNormalWhenBoundedEntryIsEmpty(t *testing.T) {
 	intentStart := types.BuildTS(2, 0)
 	intentEnd := types.BuildTS(5, 0)
