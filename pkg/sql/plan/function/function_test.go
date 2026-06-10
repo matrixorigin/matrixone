@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -273,6 +274,41 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
+}
+
+func TestUserLevelLockBuiltinRegistration(t *testing.T) {
+	cases := []struct {
+		name string
+		id   int
+		args []types.T
+	}{
+		{name: "get_lock", id: GET_LOCK, args: []types.T{types.T_varchar, types.T_float64}},
+		{name: "release_lock", id: RELEASE_LOCK, args: []types.T{types.T_varchar}},
+		{name: "is_free_lock", id: IS_FREE_LOCK, args: []types.T{types.T_varchar}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var fn *FuncNew
+			for i := range supportedControlBuiltIns {
+				if supportedControlBuiltIns[i].functionId == tc.id {
+					fn = &supportedControlBuiltIns[i]
+					break
+				}
+			}
+			require.NotNil(t, fn)
+			require.Equal(t, plan.Function_STRICT, fn.class)
+			require.Equal(t, STANDARD_FUNCTION, fn.layout)
+			require.Len(t, fn.Overloads, 1)
+
+			overload := fn.Overloads[0]
+			require.Equal(t, tc.args, overload.args)
+			require.True(t, overload.volatile)
+			require.True(t, overload.realTimeRelated)
+			require.Equal(t, types.T_int64.ToType(), overload.retType(nil))
+			require.NotNil(t, overload.newOp())
+		})
+	}
 }
 
 func TestRunPositionCharFunctionDirectly(t *testing.T) {
