@@ -21,6 +21,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -7338,11 +7339,13 @@ func TestUserLevelLockContention(t *testing.T) {
 		v, err = getUserLevelLock("busy_lock", 0, proc2)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), v)
-		v, err = releaseUserLevelLock("busy_lock", proc2)
+		v, isNull, err := releaseUserLevelLock("busy_lock", proc2)
 		require.NoError(t, err)
+		require.False(t, isNull)
 		require.Equal(t, int64(0), v)
-		v, err = releaseUserLevelLock("busy_lock", proc1)
+		v, isNull, err = releaseUserLevelLock("busy_lock", proc1)
 		require.NoError(t, err)
+		require.False(t, isNull)
 		require.Equal(t, int64(1), v)
 		v, err = getUserLevelLock("busy_lock", 0, proc2)
 		require.NoError(t, err)
@@ -7370,8 +7373,9 @@ func TestUserLevelLockWaitThenAcquire(t *testing.T) {
 		}()
 
 		time.Sleep(100 * time.Millisecond)
-		v, err = releaseUserLevelLock("wait_lock", proc1)
+		v, isNull, err := releaseUserLevelLock("wait_lock", proc1)
 		require.NoError(t, err)
+		require.False(t, isNull)
 		require.Equal(t, int64(1), v)
 		wg.Wait()
 		require.NoError(t, <-errC)
@@ -7415,15 +7419,17 @@ func TestUserLevelLockReentrantRefCount(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
 
-		v, err = releaseUserLevelLock("reentrant_lock", proc1)
+		v, isNull, err := releaseUserLevelLock("reentrant_lock", proc1)
 		require.NoError(t, err)
+		require.False(t, isNull)
 		require.Equal(t, int64(1), v)
 		v, err = getUserLevelLock("reentrant_lock", 0, proc2)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), v)
 
-		v, err = releaseUserLevelLock("reentrant_lock", proc1)
+		v, isNull, err = releaseUserLevelLock("reentrant_lock", proc1)
 		require.NoError(t, err)
+		require.False(t, isNull)
 		require.Equal(t, int64(1), v)
 		v, err = getUserLevelLock("reentrant_lock", 0, proc2)
 		require.NoError(t, err)
@@ -7442,6 +7448,87 @@ func TestReleaseUserLevelLocksCleanup(t *testing.T) {
 		ReleaseUserLevelLocks(proc1)
 
 		v, err = getUserLevelLock("cleanup_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseLockNeverCreatedReturnsNull(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		v, isNull, err := releaseUserLevelLock("missing_lock", proc1)
+		require.NoError(t, err)
+		require.True(t, isNull, "RELEASE_LOCK on never-created lock should return NULL")
+		require.Equal(t, int64(0), v)
+	})
+}
+
+func TestReleaseLockAlreadyReleasedReturnsNull(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		v, err := getUserLevelLock("release_twice", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock("release_twice", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err = releaseUserLevelLock("release_twice", proc1)
+		require.NoError(t, err)
+		require.True(t, isNull, "RELEASE_LOCK on already-released lock should return NULL")
+		require.Equal(t, int64(0), v)
+	})
+}
+
+func TestReleaseLockHeldByOtherSessionReturnsZero(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+
+		v, err := getUserLevelLock("other_session", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock("other_session", proc2)
+		require.NoError(t, err)
+		require.False(t, isNull, "RELEASE_LOCK held by other session should return 0 (not NULL)")
+		require.Equal(t, int64(0), v)
+	})
+}
+
+func TestUserLevelLockNameTooLong(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		overlong := strings.Repeat("x", maxUserLevelLockNameLength+1)
+
+		_, err := getUserLevelLock(overlong, 0, proc1)
+		require.Error(t, err)
+
+		_, _, err = releaseUserLevelLock(overlong, proc1)
+		require.Error(t, err)
+
+		_, err = isUserLevelLockFree(overlong, proc1)
+		require.Error(t, err)
+	})
+}
+
+func TestUserLevelLockNameMaxLength(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		exact64 := strings.Repeat("x", maxUserLevelLockNameLength)
+
+		v, err := getUserLevelLock(exact64, 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock(exact64, proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		v, err = isUserLevelLockFree(exact64, proc1)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
 	})
