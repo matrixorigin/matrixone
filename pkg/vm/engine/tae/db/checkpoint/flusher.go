@@ -455,18 +455,30 @@ func mergeFlushRequests(items ...any) (
 	fromForce *logtail.DirtyTreeEntry,
 	fromCheckpointBounded []*logtail.DirtyTreeEntry,
 ) {
-	fromCrons = logtail.NewEmptyDirtyTreeEntry()
-	fromForce = logtail.NewEmptyDirtyTreeEntry()
+	mergeEntry := func(merged, entry *logtail.DirtyTreeEntry) *logtail.DirtyTreeEntry {
+		if merged == nil {
+			start, end := entry.GetTimeRange()
+			merged = logtail.NewDirtyTreeEntry(start, end, model.NewTree())
+		}
+		merged.Merge(entry)
+		return merged
+	}
 	for _, item := range items {
 		e := item.(*FlushRequest)
 		switch e.mode {
 		case flushRequestForce:
-			fromForce.Merge(e.tree)
+			fromForce = mergeEntry(fromForce, e.tree)
 		case flushRequestCheckpointBounded:
 			fromCheckpointBounded = append(fromCheckpointBounded, e.tree)
 		default:
-			fromCrons.Merge(e.tree)
+			fromCrons = mergeEntry(fromCrons, e.tree)
 		}
+	}
+	if fromCrons == nil {
+		fromCrons = logtail.NewEmptyDirtyTreeEntry()
+	}
+	if fromForce == nil {
+		fromForce = logtail.NewEmptyDirtyTreeEntry()
 	}
 	return
 }
