@@ -269,7 +269,11 @@ func (m mockCatalogHooks) ExperimentalFlag() string                             
 func (m mockCatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
 	return catalogplugin.AlterTableCloneBehavior{}
 }
-func (m mockCatalogHooks) ShouldTruncateHiddenTable(_ string) bool      { return false }
+func (m mockCatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
+	return catalogplugin.RestoreBehavior{}
+}
+func (m mockCatalogHooks) BuildSessionVars() []string              { return nil }
+func (m mockCatalogHooks) ShouldTruncateHiddenTable(_ string) bool { return false }
 func (m mockCatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor { return m.d }
 
 // alwaysUpdatable is the trivial idxcron hook the mock uses — runReindex

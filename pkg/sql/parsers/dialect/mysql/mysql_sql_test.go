@@ -273,6 +273,15 @@ var (
 		input:  "alter table t1 alter reindex idx1 CAGRA intermediate_graph_degree = 8 graph_degree = 4 force_sync",
 		output: "alter table t1 alter reindex idx1 cagra force_sync",
 	}, {
+		input:  "alter table t1 alter reindex idx1 HNSW",
+		output: "alter table t1 alter reindex idx1 hnsw",
+	}, {
+		// HNSW's REINDEX rule now takes an index_option_list (mysql_sql.y:
+		// REINDEX ident HNSW index_option_list) so restore's RestoreInitSQL
+		// can carry FORCE_SYNC, matching cagra/ivfpq/ivfflat.
+		input:  "alter table t1 alter reindex idx1 HNSW force_sync",
+		output: "alter table t1 alter reindex idx1 hnsw force_sync",
+	}, {
 		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = true day = 33 hour = 12",
 		output: "alter table t1 alter index idx1 ivfflat auto_update = true day = 33 hour = 12",
 	}, {
@@ -1732,6 +1741,15 @@ var (
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' async",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ASYNC ",
 		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' kmeans_train_percent 5 kmeans_max_iteration 30",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops KMEANS_TRAIN_PERCENT 5 KMEANS_MAX_ITERATION 30 ",
+		}, {
+			input:  "create index idx using hnsw on A (a) M 16 max_index_capacity = 500000",
+			output: "create index idx using hnsw on a (a) M 16 MAX_INDEX_CAPACITY 500000 ",
+		}, {
+			input:  "create index idx using ivfpq on A (a) LISTS 8 kmeans_train_percent 7 max_index_capacity 2000",
+			output: "create index idx using ivfpq on a (a) LISTS 8 KMEANS_TRAIN_PERCENT 7 MAX_INDEX_CAPACITY 2000 ",
+		}, {
 			input: "create index idx1 on a (a)",
 		}, {
 			input:  "create index idx using master on A (a,b,c)",
@@ -3154,7 +3172,7 @@ var (
 			output: "create view t2 as select * from t1",
 		}, {
 			input:  "insert into t1 values(_binary 0x123)",
-			output: "insert into t1 values (123)",
+			output: "insert into t1 values (0x123)",
 		}, {
 			input:  "backup '123' filesystem '/home/abc' parallelism '1'",
 			output: "backup 123 filesystem /home/abc parallelism 1",

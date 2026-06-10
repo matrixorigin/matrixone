@@ -50,7 +50,24 @@ func (CatalogHooks) ShouldTruncateHiddenTable(_ string) bool { return true }
 // (SyncDescriptor) rather than per table, so SkipWhenAsync stays empty
 // here.
 func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
-	return catalogplugin.AlterTableCloneBehavior{}
+	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
+}
+
+// RestoreBehavior — HNSW's hidden tables (usearch Storage + Metadata) are keyed,
+// so the restore's block-level clone overwrites the CreateTable seed rather than
+// appending — nothing needs delete-before-clone (empty DeleteBeforeClone). The
+// model is rebuilt post-clone by the compile hook's RestoreInitSQL (ALTER …
+// REINDEX … hnsw FORCE_SYNC), run by the CDC's first iteration.
+func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
+	return catalogplugin.RestoreBehavior{}
+}
+
+// BuildSessionVars returns nil — HNSW captures no session vars into
+// algo_params, keeping its algo_params byte-compatible with pre-session_vars
+// indexes. The index-defining max_index_capacity rides a flat algo_params key
+// written by ParamsFromTree only when explicitly set in CREATE INDEX.
+func (CatalogHooks) BuildSessionVars() []string {
+	return nil
 }
 
 func (CatalogHooks) DefaultOptions() map[string]string {
@@ -98,6 +115,11 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	}
 }
 
+// DefaultMaxIndexCapacity mirrors the hnsw_max_index_capacity session-var
+// default; the build path (hnsw_create) uses it when the flat algo_params key
+// is absent (a legacy index created before the param was promoted).
+const DefaultMaxIndexCapacity = int64(1000000)
+
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's
 // INDEX_TYPE_HNSW case (pkg/catalog/secondary_index_utils.go:341-375).
 func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
@@ -135,6 +157,10 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 
 	if idx.IndexOption.Async {
 		res[catalog.Async] = "true"
+	}
+
+	if idx.IndexOption.MaxIndexCapacity > 0 {
+		res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
 	}
 	return res, nil
 }

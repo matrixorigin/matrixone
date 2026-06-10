@@ -46,6 +46,13 @@ func TestCagraAlterTableCloneBehavior(t *testing.T) {
 	require.False(t, b.ContainsDelete(catalog.Cagra_TblType_Storage))
 	require.False(t, b.ContainsSkipWhenAsync(catalog.Cagra_TblType_Metadata))
 	require.False(t, b.ContainsSkipWhenAsync(catalog.Cagra_TblType_Storage))
+	// CAGRA leaves all hidden tables empty at CREATE and rebuilds via CDC, so
+	// the whole index is skipped on async clone (not per hidden table).
+	require.True(t, b.SkipWholeIndex)
+
+	// RestoreBehavior is the zero value today — restore rebuilds the index, no
+	// hidden table is restored directly.
+	require.Empty(t, CatalogHooks{}.RestoreBehavior().DeleteBeforeClone)
 }
 
 func TestCagraDefaultOptions(t *testing.T) {
@@ -97,6 +104,7 @@ func TestCagraParamsFromTree_AllOptions(t *testing.T) {
 		AlgoParamVectorOpType:   metric.OpType_CosineDistance,
 		Quantization:            metric.Quantization_INT8_Str,
 		Async:                   true,
+		MaxIndexCapacity:        500000,
 	}}
 	got, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.NoError(t, err)
@@ -106,6 +114,7 @@ func TestCagraParamsFromTree_AllOptions(t *testing.T) {
 	require.Equal(t, metric.OpType_CosineDistance, got[catalog.IndexAlgoParamOpType])
 	require.Equal(t, metric.Quantization_INT8_Str, got[catalog.Quantization])
 	require.Equal(t, "true", got[catalog.Async])
+	require.Equal(t, "500000", got[catalog.IndexAlgoParamMaxIndexCapacity])
 }
 
 func TestCagraParamsFromTree_NegativeIntermediate(t *testing.T) {

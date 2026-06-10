@@ -77,6 +77,13 @@ type CompileContext interface {
 	// executor.DefaultResolveVariable).
 	IsFrontend() bool
 
+	// IsTableClone reports whether this compile runs inside a table-clone scope
+	// (`create table … clone`) — which is how snapshot/restore replays a table.
+	// Lets an index plugin restore a prebuilt model verbatim instead of
+	// rebuilding it. IsFrontend cannot distinguish this (it is true for the
+	// restore backExec too).
+	IsTableClone() bool
+
 	// IsExperimentalEnabled checks whether an experimental-feature flag is
 	// set in the current session/system variables. Used by HNSW today
 	// (flag "experimental_hnsw_index"). Plugins gating on a flag should
@@ -149,6 +156,15 @@ type Hooks interface {
 	// existing IVF-FLAT semantics (run synchronously inside the txn) and is
 	// ignored by algorithms that do not support it.
 	HandleReindex(ctx CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error
+
+	// RestoreInitSQL returns (startFromNow, initSQL) for the restored index's
+	// CDC. initSQL rebuilds the index from the cloned rows — run post-commit by
+	// the CDC's first iteration (ProcessInitSQL), so it sees the committed clone
+	// and re-arms the CDC at the post-clone watermark (no replay); startFromNow
+	// is then true. initSQL=="" means no rebuild (the clone + CDC catch-up
+	// suffice, e.g. fulltext) and startFromNow is false (the CDC catches the
+	// cloned tables up from their watermark). See Scope.RestoreTable.
+	RestoreInitSQL(ctx CompileContext, indexDefs map[string]*plan.IndexDef) (startFromNow bool, initSQL string, err error)
 
 	// ValidateReindexParams checks a parameter update against the algorithm's
 	// schema and returns the merged params map. Replaces the inner switch

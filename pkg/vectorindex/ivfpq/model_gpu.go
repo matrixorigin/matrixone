@@ -27,6 +27,7 @@ import (
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -267,7 +268,7 @@ func (idx *IvfpqModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, err
 	logutil.Infof("IvfpqModel.ToSql idx %s, len = %d\n", idx.Id, idx.Len)
 
 	sqls := make([]string, 0, 5)
-	sqlPrefix := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", cfg.DbName, cfg.IndexTable)
+	sqlPrefix := fmt.Sprintf("INSERT INTO %s VALUES ", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable))
 	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(vectorindex.MaxChunkSize))))
 	n := 0
 	chunkid := int64(0)
@@ -461,8 +462,8 @@ func (idx *IvfpqModel[T]) LoadIndex(
 			return err
 		}
 
-		sql := fmt.Sprintf("SELECT chunk_id, data FROM `%s`.`%s` WHERE index_id = '%s' AND tag = %d",
-			tblcfg.DbName, tblcfg.IndexTable, idx.Id, vectorindex.Tag_ModelChunk)
+		sql := fmt.Sprintf("SELECT chunk_id, data FROM %s WHERE index_id = %s AND tag = %d",
+			sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id), vectorindex.Tag_ModelChunk)
 
 		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
 		defer cancel(nil)
@@ -529,7 +530,7 @@ func (idx *IvfpqModel[T]) LoadIndex(
 	}
 
 	gi, err := cuvs.NewGpuIvfPqEmpty[T](
-		uint64(tblcfg.IndexCapacity),
+		uint64(idxcfg.IndexCapacity),
 		uint32(idxcfg.CuvsIvfpq.Dimensions),
 		cuvsMetric,
 		bp,
@@ -688,7 +689,7 @@ func (idx *IvfpqModel[T]) Unload() error {
 
 // LoadMetadata loads IvfpqModel descriptors from the metadata table.
 func LoadMetadata[T cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*IvfpqModel[T], error) {
-	sql := fmt.Sprintf("SELECT * FROM `%s`.`%s` ORDER BY timestamp ASC", dbname, metatbl)
+	sql := fmt.Sprintf("SELECT * FROM %s ORDER BY timestamp ASC", sqlquote.QualifiedIdent(dbname, metatbl))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return nil, err
@@ -721,9 +722,9 @@ func LoadMetadata[T cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string,
 // ToDeleteSql generates DELETE SQL for storage and metadata tables.
 func (idx *IvfpqModel[T]) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
 	sqls := make([]string, 0, 2)
-	sqls = append(sqls, fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s = '%s'",
-		cfg.DbName, cfg.IndexTable, catalog.Ivfpq_TblCol_Storage_Index_Id, idx.Id))
-	sqls = append(sqls, fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s = '%s'",
-		cfg.DbName, cfg.MetadataTable, catalog.Ivfpq_TblCol_Metadata_Index_Id, idx.Id))
+	sqls = append(sqls, fmt.Sprintf("DELETE FROM %s WHERE %s = %s",
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), catalog.Ivfpq_TblCol_Storage_Index_Id, sqlquote.String(idx.Id)))
+	sqls = append(sqls, fmt.Sprintf("DELETE FROM %s WHERE %s = %s",
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable), catalog.Ivfpq_TblCol_Metadata_Index_Id, sqlquote.String(idx.Id)))
 	return sqls, nil
 }

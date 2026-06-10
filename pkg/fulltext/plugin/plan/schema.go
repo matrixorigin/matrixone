@@ -27,6 +27,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
+// buildFullTextParams builds the algo_params JSON for a fulltext index from its
+// parsed options (parser name + async). Moved from the former
+// catalog.fullTextIndexParamsToMap so fulltext owns its own param parsing, like
+// the vector plugins' BuildIndexParams hooks.
+func buildFullTextParams(idx *tree.FullTextIndex) (string, error) {
+	res := make(map[string]string)
+	if idx.IndexOption != nil {
+		parsername := strings.ToLower(idx.IndexOption.ParserName)
+		if len(parsername) > 0 {
+			switch parsername {
+			case "ngram", "default", "json", "json_value", "gojieba":
+			default:
+				return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid parser %s", parsername))
+			}
+			res["parser"] = parsername
+		}
+		if idx.IndexOption.Async {
+			res[catalog.Async] = "true"
+		}
+	}
+	if len(res) == 0 {
+		return "", nil
+	}
+	return catalog.IndexParamsMapToJsonString(res)
+}
+
 // BuildFullTextIndexDefs constructs the IndexDef + TableDef for one
 // fulltext index. Lifted from
 // pkg/sql/plan/build_ddl.go::buildFullTextIndexTable, but per-index
@@ -117,7 +143,7 @@ func (Hooks) BuildFullTextIndexDefs(
 		if indexInfo.IndexOption.ParserName != "" {
 			indexDef.Option = &plan.IndexOption{ParserName: indexInfo.IndexOption.ParserName, NgramTokenSize: int32(3)}
 		}
-		indexDef.IndexAlgoParams, err = catalog.IndexParamsToJsonString(indexInfo)
+		indexDef.IndexAlgoParams, err = buildFullTextParams(indexInfo)
 		if err != nil {
 			return nil, nil, err
 		}

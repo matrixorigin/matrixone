@@ -47,7 +47,28 @@ func (CatalogHooks) ShouldTruncateHiddenTable(_ string) bool { return true }
 // no DELETE before clone is needed. Async fulltext is skipped at the
 // whole-index level via SyncDescriptor, not per table.
 func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
-	return catalogplugin.AlterTableCloneBehavior{}
+	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
+}
+
+// RestoreBehavior — CreateTable populates fulltext's inverted-index hidden table
+// inline for a sync index (CROSS APPLY fulltext_index_tokenize), and the
+// restore's block-level clone APPENDS, so it must be emptied with DELETE …
+// WHERE TRUE before the clone re-supplies it — DeleteBeforeClone is the hidden
+// table. (For an async index the table is empty at CreateTable, so the delete is
+// a harmless no-op.) The compile hook's RestoreInitSQL returns "" — no reindex;
+// clone + CDC catch-up rebuild it.
+func (h CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
+	return catalogplugin.RestoreBehavior{DeleteBeforeClone: h.HiddenTableTypes()}
+}
+
+// BuildSessionVars — fulltext's tokenizing build reads no algorithm-specific
+// session vars and has no experimental flag; persist only the basic
+// lower_case_table_names (table-name resolution in the rebuild SQL).
+// BuildSessionVars returns nil — fulltext captures no session vars into
+// algo_params, keeping its algo_params byte-compatible with pre-session_vars
+// indexes.
+func (CatalogHooks) BuildSessionVars() []string {
+	return nil
 }
 
 // DefaultOptions — fulltext defaults are inferred at build time; no
@@ -76,9 +97,8 @@ func (CatalogHooks) SupportedOpTypes() map[string]string { return nil }
 // ParamsFromTree — fulltext parses to *tree.FullTextIndex, not
 // *tree.Index, so this hook is never reached for fulltext in
 // practice. The fulltext-specific parser lives at
-// pkg/catalog/secondary_index_utils.go::fullTextIndexParamsToMap
-// and is invoked through indexParamsToMap's *tree.FullTextIndex
-// type-assertion arm.
+// pkg/fulltext/plugin/plan/schema.go::buildFullTextParams and is
+// invoked from BuildFullTextIndexDefs.
 func (CatalogHooks) ParamsFromTree(_ *tree.Index) (map[string]string, error) {
 	return nil, moerr.NewNotSupportedNoCtx("fulltext index parses to *tree.FullTextIndex, not *tree.Index")
 }

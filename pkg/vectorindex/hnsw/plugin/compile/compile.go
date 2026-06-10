@@ -37,6 +37,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -47,7 +48,10 @@ import (
 
 // insertIntoHnswIndexTableFormat is the SQL template used to populate the
 // HNSW index storage table. Lifted from pkg/sql/compile/util.go:118.
-const insertIntoHnswIndexTableFormat = "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY hnsw_create('%s', '%s', %s, %s) AS f;"
+// The %s placeholders are pre-quoted/escaped via pkg/common/sqlquote: the
+// source table and alias are quoted identifiers, params + config are escaped
+// string literals, and the pk / part are quoted column references.
+const insertIntoHnswIndexTableFormat = "SELECT f.* from %s AS %s CROSS APPLY hnsw_create(%s, %s, %s, %s) AS f;"
 
 var _ compileplugin.Hooks = Hooks{}
 
@@ -55,8 +59,18 @@ type Hooks struct{}
 
 // HandleCreateIndex is lifted from Scope.handleVectorHnswIndex
 // (pkg/sql/compile/ddl_index_algo.go:627).
-func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
-	logutil.Infof("[plugin] hnsw HandleCreateIndex: isFrontend=%v defs=%d", ctx.IsFrontend(), len(indexDefs))
+func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	// Create never overrides the index's async param: the build is synchronous
+	// only if the index itself is sync (decided inside via !async).
+	return h.handleCreate(ctx, indexDefs, false)
+}
+
+// handleCreate is the shared body of HandleCreateIndex and HandleReindex.
+// forceSync=true routes to the inline (!async) build branch regardless of the
+// index's async param — used by ALTER REINDEX … FORCE_SYNC (e.g. restore's
+// RestoreTable) to rebuild an always-async HNSW index synchronously.
+func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+	logutil.Infof("[plugin] hnsw handleCreate: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
 	// Frontend-only: re-entry from background (idxcron ALTER REINDEX,
 	// ProcessInitSQL) must not re-check the flag, since (a) it may
 	// have been toggled off since the original CREATE INDEX, and (b)
@@ -122,12 +136,13 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
 	indexName := metaDef.IndexName
 
-	if !async {
+	if !async || forceSync {
 		// Build the index immediately, then register a CDC task that
 		// only consumes changes from now forward. Drop any prior CDC
 		// task first — on REINDEX re-entry the previous task would
 		// otherwise survive at its old watermark and replay historical
-		// events on top of the freshly built state.
+		// events on top of the freshly built state. forceSync (ALTER
+		// REINDEX … FORCE_SYNC) takes this branch even for an async index.
 		sqls, err := genBuildSQL(ctx, indexDefs)
 		if err != nil {
 			return err
@@ -153,9 +168,21 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 		indexName, sinkerType, false, "", originalTableDef)
 }
 
-// HandleReindex: same code path as create.
-func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, _ bool) error {
-	return h.HandleCreateIndex(ctx, indexDefs)
+// HandleReindex: same code path as create, but honors forceSync so an
+// ALTER REINDEX … FORCE_SYNC (e.g. restore's RestoreTable) rebuilds an
+// always-async HNSW index synchronously instead of deferring to CDC.
+func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+	return h.handleCreate(ctx, indexDefs, forceSync)
+}
+
+// RestoreInitSQL — see CAGRA. Rebuilds the HNSW index post-commit during restore.
+func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
+	metaDef, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
+	if !ok {
+		return false, "", moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
+	}
+	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` hnsw FORCE_SYNC",
+		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
 }
 
 // ValidateReindexParams: HNSW has no online parameter updates.
@@ -189,8 +216,8 @@ func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]st
 		return nil, moerr.NewInternalErrorNoCtx("hnsw_index index definition not found")
 	}
 	return []string{
-		fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, meta.IndexTableName),
-		fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, idx.IndexTableName),
+		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, meta.IndexTableName)),
+		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, idx.IndexTableName)),
 	}, nil
 }
 
@@ -199,7 +226,7 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 	originalTableDef := ctx.OriginalTableDef()
 	qryDatabase := ctx.QryDatabase()
 	const srcAlias = "src"
-	pkColName := srcAlias + "." + originalTableDef.Pkey.PkeyColName
+	pkCol := originalTableDef.Pkey.PkeyColName
 
 	meta, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
 	if !ok {
@@ -215,7 +242,7 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 		IndexTable:    idx.IndexTableName,
 		DbName:        qryDatabase,
 		SrcTable:      originalTableDef.Name,
-		PKey:          pkColName,
+		PKey:          srcAlias + "." + pkCol,
 		KeyPart:       idx.Parts[0],
 	}
 
@@ -225,26 +252,27 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 	}
 	cfg.ThreadsBuild = threads.(int64)
 
-	idxcap, err := ctx.ResolveVariable("hnsw_max_index_capacity", true, false)
-	if err != nil {
-		return nil, err
-	}
-	cfg.IndexCapacity = idxcap.(int64)
-
+	// max_index_capacity now rides algo_params as a flat key (written at
+	// CREATE INDEX); hnsw_create / sync read it from there.
 	cfgbytes, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	params := idx.IndexAlgoParams
-	part := srcAlias + "." + idx.Parts[0]
+
+	// Quoted column references for the hnsw_create CROSS APPLY args: `src`.`pk`
+	// and `src`.`vec`. Quoting via sqlquote keeps identifiers containing
+	// backticks or reserved words valid.
+	pkColExpr := sqlquote.QualifiedIdent(srcAlias, pkCol)
+	part := sqlquote.QualifiedIdent(srcAlias, idx.Parts[0])
 
 	sql := fmt.Sprintf(insertIntoHnswIndexTableFormat,
-		qryDatabase, originalTableDef.Name,
-		srcAlias,
-		params,
-		string(cfgbytes),
-		pkColName,
+		sqlquote.QualifiedIdent(qryDatabase, originalTableDef.Name),
+		sqlquote.Ident(srcAlias),
+		sqlquote.String(params),
+		sqlquote.String(string(cfgbytes)),
+		pkColExpr,
 		part)
 	return []string{sql}, nil
 }

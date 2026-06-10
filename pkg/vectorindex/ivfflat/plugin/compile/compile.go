@@ -70,6 +70,17 @@ func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[str
 	return runCreateOrReindex(ctx, indexDefs, forceSync)
 }
 
+// RestoreInitSQL — see CAGRA. Rebuilds the IVF-FLAT index post-commit during
+// restore (re-derives entries against the restored centroids).
+func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
+	metaDef, ok := indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
+	if !ok {
+		return false, "", moerr.NewInternalErrorNoCtx("ivfflat metadata index definition not found")
+	}
+	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` ivfflat FORCE_SYNC",
+		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
+}
+
 // ValidateReindexParams handles the IVF-FLAT `lists` update at ALTER
 // REINDEX time. The legacy switch at ddl.go:928 wrote new lists into
 // the AlgoParams map and persisted it via UPDATE mo_catalog.mo_indexes
@@ -103,12 +114,13 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*pl
 // ctx.IsFrontend() check.
 var ivfflatIdxcronSpec = compileplugin.IdxcronVarSpec{
 	FrontendProbeVar: "ivf_threads_search",
+	// kmeans_* are NOT captured here — they ride the index's algo_params
+	// (set via CREATE INDEX), which the idxcron reindex reads directly. The
+	// experimental flag is NOT captured either: the background reindex
+	// (IsFrontend=false) skips the experimental gate.
 	Capture: []string{
 		"ivf_threads_build",
-		"kmeans_train_percent",
-		"kmeans_max_iteration",
 		"lower_case_table_names",
-		"experimental_ivf_index",
 	},
 }
 
@@ -311,18 +323,8 @@ func ivfIndexCentroidsTable(
 		}
 		cfg.ThreadsBuild = threads.(int64)
 
-		trainPct, err := ctx.ResolveVariable("kmeans_train_percent", true, false)
-		if err != nil {
-			return err
-		}
-		cfg.KmeansTrainPercent = trainPct.(float64)
-
-		maxIter, err := ctx.ResolveVariable("kmeans_max_iteration", true, false)
-		if err != nil {
-			return err
-		}
-		cfg.KmeansMaxIteration = maxIter.(int64)
-
+		// kmeans_train_percent / kmeans_max_iteration now ride algo_params as
+		// flat keys (written at CREATE INDEX); ivf_create reads them from there.
 		cfgbytes, err := json.Marshal(cfg)
 		if err != nil {
 			return err

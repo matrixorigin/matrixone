@@ -112,6 +112,16 @@ func (Hooks) HandleReindex(_ compileplugin.CompileContext, _ map[string]*plan.In
 	return moerr.NewNotSupportedNoCtx("ALTER ... REINDEX is not supported for fulltext indexes")
 }
 
+// RestoreInitSQL — fulltext has no compact model to rebuild; the clone copies
+// the inverted-index hidden table and the CDC catch-up handles incremental
+// changes. Register the CDC with startFromNow=true so its watermark is the
+// post-clone TS (not the snapshot TS), avoiding a replay of the already-cloned
+// rows. A non-empty InitSQL is required for startFromNow to be honored, so hand
+// it a no-op "SELECT 1".
+func (Hooks) RestoreInitSQL(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) (bool, string, error) {
+	return true, "SELECT 1", nil
+}
+
 // ValidateReindexParams — no-op; fulltext has no reindex-time params.
 func (Hooks) ValidateReindexParams(old map[string]string, _ compileplugin.ReindexParamUpdate) (map[string]string, error) {
 	return old, nil

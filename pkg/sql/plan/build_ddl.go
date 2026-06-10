@@ -33,6 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -727,6 +729,48 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 	}, nil
 }
 
+// preserveIndexSessionVars re-attaches algo_params.session_vars from the source
+// table def onto a freshly-built CLONE/LIKE plan's matching index defs.
+// ConstructCreateTableSQL rebuilds each index from its flat options only and
+// drops session_vars (it isn't an index option), so without this the clone (the
+// restore mechanism) loses the captured build-time vars — e.g.
+// kmeans_train_percent — that the background restore reindex needs to reproduce
+// the original build instead of falling back to defaults.
+func preserveIndexSessionVars(p *Plan, src *plan.TableDef) error {
+	if p == nil || src == nil {
+		return nil
+	}
+	ct := p.GetDdl().GetCreateTable()
+	if ct == nil || ct.GetTableDef() == nil {
+		return nil
+	}
+	for _, ni := range ct.GetTableDef().Indexes {
+		for _, si := range src.Indexes {
+			if si.IndexName != ni.IndexName || si.IndexAlgoTableType != ni.IndexAlgoTableType {
+				continue
+			}
+			sv, err := catalog.IndexParamsSessionVars(si.IndexAlgoParams)
+			if err != nil {
+				return err
+			}
+			if len(sv) == 0 {
+				break // source carries no session_vars — nothing to preserve
+			}
+			flat, err := catalog.IndexParamsStringToMap(ni.IndexAlgoParams)
+			if err != nil {
+				return err
+			}
+			merged, err := catalog.IndexParamsMapToJsonStringWithSessionVars(flat, sv)
+			if err != nil {
+				return err
+			}
+			ni.IndexAlgoParams = merged
+			break
+		}
+	}
+	return nil
+}
+
 func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
@@ -782,7 +826,19 @@ func buildCreateTable(
 			return nil, err
 		}
 		if stmtLike, ok := newStmt.(*tree.CreateTable); ok {
-			return buildCreateTable(ctx, stmtLike, nil)
+			p, err := buildCreateTable(ctx, stmtLike, nil)
+			if err != nil {
+				return nil, err
+			}
+			// ConstructCreateTableSQL above rebuilds each index from its flat
+			// options only (session_vars is not an index option), so re-attach the
+			// source's algo_params.session_vars onto the clone — otherwise the
+			// restore reindex loses the captured build-time vars (e.g.
+			// kmeans_train_percent) and falls back to defaults.
+			if err := preserveIndexSessionVars(p, tableDef); err != nil {
+				return nil, err
+			}
+			return p, nil
 		}
 
 		return nil, moerr.NewInternalError(ctx.GetContext(), "rewrite for create table like failed")
@@ -1960,6 +2016,24 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 	return nil
 }
 
+// buildIndexAlgoParams converts the parsed CREATE INDEX options into the
+// algo_params JSON. Per-algo parameter rules live in each index plugin's
+// Catalog().ParamsFromTree hook; non-plugin algorithms (btree/rtree/master)
+// fall through to catalog (which produces no algo_params for them).
+func buildIndexAlgoParams(indexInfo *tree.Index) (string, error) {
+	if p, ok := indexplugin.Get(indexInfo.KeyType.ToString()); ok {
+		res, err := p.Catalog().ParamsFromTree(indexInfo)
+		if err != nil {
+			return "", err
+		}
+		if len(res) == 0 {
+			return "", nil
+		}
+		return catalog.IndexParamsMapToJsonString(res)
+	}
+	return catalog.IndexParamsToJsonString(indexInfo)
+}
+
 func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) (err error) {
 	if len(pkeyName) == 0 {
 		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for secondary index")
@@ -2135,7 +2209,7 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 	if indexInfo.IndexOption != nil {
 		indexDef.Comment = indexInfo.IndexOption.Comment
 
-		params, err := catalog.IndexParamsToJsonString(indexInfo)
+		params, err := buildIndexAlgoParams(indexInfo)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -2332,7 +2406,7 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	if indexInfo.IndexOption != nil {
 		indexDef.Comment = indexInfo.IndexOption.Comment
 
-		params, err := catalog.IndexParamsToJsonString(indexInfo)
+		params, err := buildIndexAlgoParams(indexInfo)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -2446,7 +2520,7 @@ func validateIncludeColumns(ctx CompilerContext,
 	return nil
 }
 
-func CreateIndexDef(indexInfo *tree.Index,
+func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 	indexTableName, indexAlgoTableType string,
 	indexParts []string, isUnique bool) (*plan.IndexDef, error) {
 
@@ -2468,7 +2542,7 @@ func CreateIndexDef(indexInfo *tree.Index,
 		indexDef.Comment = indexInfo.IndexOption.Comment
 
 		// Create params JSON string and set it
-		params, err := catalog.IndexParamsToJsonString(indexInfo)
+		params, err := buildIndexAlgoParams(indexInfo)
 		if err != nil {
 			return nil, err
 		}
@@ -2490,6 +2564,34 @@ func CreateIndexDef(indexInfo *tree.Index,
 			}
 		}
 
+	}
+
+	// Capture the plugin's build-time session vars (BuildSessionVars) into the
+	// typed algo_params.session_vars blob so background builds (restore reindex,
+	// idxcron, async create) reproduce the create-time config. Index-defining
+	// knobs (kmeans_*, max_index_capacity) are NOT auto-captured here: they ride
+	// flat algo_params keys written by ParamsFromTree only when explicitly set
+	// in CREATE INDEX (so an unset option never pollutes algo_params).
+	if ctx != nil {
+		if p, ok := indexplugin.Get(catalog.ToLower(indexDef.IndexAlgo)); ok {
+			if names := p.Catalog().BuildSessionVars(); len(names) > 0 {
+				sv, err := compileplugin.CaptureVars(ctx.ResolveVariable, names)
+				if err != nil {
+					return nil, err
+				}
+				if len(sv) > 0 {
+					flat := map[string]string{}
+					if indexDef.IndexAlgoParams != "" {
+						if flat, err = catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams); err != nil {
+							return nil, err
+						}
+					}
+					if indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonStringWithSessionVars(flat, sv); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
 	}
 
 	nameCount := make(map[string]int)

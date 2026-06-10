@@ -90,6 +90,24 @@ func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehav
 	}
 }
 
+// RestoreBehavior — IVF-FLAT seeds all three hidden tables non-empty at
+// CREATE-INDEX (a version=0 metadata row, an initial centroid, bootstrap
+// entries), and the restore's block-level clone APPENDS. So every hidden table
+// must be emptied with DELETE … WHERE TRUE before the clone re-supplies the
+// snapshot's metadata/centroids/entries — DeleteBeforeClone is the full
+// hidden-table set.
+func (h CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
+	return catalogplugin.RestoreBehavior{DeleteBeforeClone: h.HiddenTableTypes()}
+}
+
+// BuildSessionVars returns nil — IVF-FLAT captures no session vars into
+// algo_params, keeping its algo_params byte-compatible with pre-session_vars
+// indexes. Index-defining knobs (k-means) ride flat algo_params keys written by
+// ParamsFromTree only when explicitly set in CREATE INDEX.
+func (CatalogHooks) BuildSessionVars() []string {
+	return nil
+}
+
 // DefaultOptions mirrors the IVF-FLAT case of indexParamsToMap when the
 // statement carries no WITH(...) clause: lists=1, op_type=l2.
 func (CatalogHooks) DefaultOptions() map[string]string {
@@ -152,6 +170,14 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	}
 }
 
+// Build-param defaults mirror the frontend session-var defaults; the build
+// path (ivf_create) uses them when the flat algo_params key is absent (a
+// legacy index created before the param was promoted).
+const (
+	DefaultKmeansTrainPercent = float64(10)
+	DefaultKmeansMaxIteration = int64(20)
+)
+
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's
 // INDEX_TYPE_IVFFLAT case (pkg/catalog/secondary_index_utils.go:304-340).
 func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
@@ -188,6 +214,13 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	}
 	if idx.IndexOption.Hour > 0 {
 		res[catalog.Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
+	}
+
+	if idx.IndexOption.KmeansTrainPercent > 0 {
+		res[catalog.IndexAlgoParamKmeansTrainPercent] = strconv.FormatInt(idx.IndexOption.KmeansTrainPercent, 10)
+	}
+	if idx.IndexOption.KmeansMaxIteration > 0 {
+		res[catalog.IndexAlgoParamKmeansMaxIteration] = strconv.FormatInt(idx.IndexOption.KmeansMaxIteration, 10)
 	}
 	return res, nil
 }

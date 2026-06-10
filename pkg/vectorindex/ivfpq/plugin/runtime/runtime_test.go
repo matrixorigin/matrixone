@@ -49,6 +49,13 @@ func TestIvfpqAlterTableCloneBehavior(t *testing.T) {
 	require.False(t, b.ContainsDelete(catalog.Ivfpq_TblType_Storage))
 	require.False(t, b.ContainsSkipWhenAsync(catalog.Ivfpq_TblType_Metadata))
 	require.False(t, b.ContainsSkipWhenAsync(catalog.Ivfpq_TblType_Storage))
+	// IVF-PQ leaves all hidden tables empty at CREATE and rebuilds via CDC, so
+	// the whole index is skipped on async clone (not per hidden table).
+	require.True(t, b.SkipWholeIndex)
+
+	// RestoreBehavior is the zero value today — restore rebuilds the index, no
+	// hidden table is restored directly.
+	require.Empty(t, CatalogHooks{}.RestoreBehavior().DeleteBeforeClone)
 }
 
 func TestIvfpqDefaultOptions(t *testing.T) {
@@ -113,6 +120,9 @@ func TestIvfpqParamsFromTree_AllOptions(t *testing.T) {
 		AlgoParamVectorOpType: metric.OpType_CosineDistance,
 		Quantization:          metric.Quantization_INT8_Str,
 		DistributionMode:      vectorindex.DistributionMode_SINGLE_GPU_Str,
+		KmeansTrainPercent:    5,
+		KmeansMaxIteration:    30,
+		MaxIndexCapacity:      2000,
 	}}
 	got, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.NoError(t, err)
@@ -121,6 +131,9 @@ func TestIvfpqParamsFromTree_AllOptions(t *testing.T) {
 	require.Equal(t, "8", got[catalog.BitsPerCode])
 	require.Equal(t, metric.OpType_CosineDistance, got[catalog.IndexAlgoParamOpType])
 	require.Equal(t, metric.Quantization_INT8_Str, got[catalog.Quantization])
+	require.Equal(t, "5", got[catalog.IndexAlgoParamKmeansTrainPercent])
+	require.Equal(t, "30", got[catalog.IndexAlgoParamKmeansMaxIteration])
+	require.Equal(t, "2000", got[catalog.IndexAlgoParamMaxIndexCapacity])
 }
 
 func TestIvfpqParamsFromTree_InvalidOpType(t *testing.T) {

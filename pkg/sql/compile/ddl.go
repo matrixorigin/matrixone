@@ -898,7 +898,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					newAlgoParamsMap[catalog.AutoUpdate] = fmt.Sprintf("%v", tableAlterIndex.AutoUpdate)
 					newAlgoParamsMap[catalog.Day] = fmt.Sprintf("%d", tableAlterIndex.Day)
 					newAlgoParamsMap[catalog.Hour] = fmt.Sprintf("%d", tableAlterIndex.Hour)
-					newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
+					// Preserve the captured session_vars (skipped by the flat
+					// parser above) across the cadence rewrite.
+					sessionVars, err := catalog.IndexParamsSessionVars(alterIndex.IndexAlgoParams)
+					if err != nil {
+						return err
+					}
+					newAlgoParams, err := catalog.IndexParamsMapToJsonStringWithSessionVars(newAlgoParamsMap, sessionVars)
 					if err != nil {
 						return err
 					}
@@ -970,7 +976,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					if err != nil {
 						return err
 					}
-					newAlgoParams, err := catalog.IndexParamsMapToJsonString(newParamsMap)
+					// Preserve the captured session_vars (skipped by the flat
+					// parser above) across the param rewrite.
+					sessionVars, err := catalog.IndexParamsSessionVars(alterIndex.IndexAlgoParams)
+					if err != nil {
+						return err
+					}
+					newAlgoParams, err := catalog.IndexParamsMapToJsonStringWithSessionVars(newParamsMap, sessionVars)
 					if err != nil {
 						return err
 					}
@@ -3400,7 +3412,110 @@ func (s *Scope) TableClone(c *Compile) error {
 		}
 	}
 
-	return s.Run(c)
+	return s.RestoreTable(c, clonePlan)
+}
+
+// RestoreTable is the clone/restore-path twin of cloneUnaffectedIndexes
+// (pkg/sql/compile/alter.go). CreateTable (already run by TableClone) seeds the
+// index hidden tables and registers their CDC; the block-level clone in
+// table_clone APPENDS onto those tables. So, in place of a bare s.Run(c):
+//
+//	1. drop the index CDC tasks before cloning data;
+//	2. for each hidden table the plugin lists in DeleteBeforeClone (IVF-FLAT's
+//	   metadata/centroids/entries — seeded non-empty by CreateTable), empty the
+//	   seed with `DELETE … WHERE TRUE` (a content delete that keeps the table
+//	   and its id — NOT truncate, which re-creates the table);
+//	3. s.Run(c): clone the main table + index hidden tables (append onto empty);
+//	4. re-register each index's CDC startFromNow=true with a PLUGIN-PROVIDED
+//	   InitSQL. For a vector index that InitSQL is `ALTER … REINDEX … FORCE_SYNC`,
+//	   so the CDC's first iteration runs the reindex in its own post-commit txn —
+//	   rebuilding the model from the committed cloned rows and re-arming the CDC
+//	   at the post-clone watermark. Running it as InitSQL (not inline in this
+//	   clone txn) is what avoids the SnapshotTS replay that double-counts the
+//	   cloned rows.
+func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
+	tableDef := clonePlan.GetCreateTable().GetDdl().GetCreateTable().GetTableDef()
+	if tableDef == nil {
+		return s.Run(c)
+	}
+	dbName, tblName := clonePlan.GetDstDatabaseName(), clonePlan.GetDstTableName()
+	logutil.Infof("[RestoreTable] BEGIN %s.%s", dbName, tblName)
+
+	// 1. drop the CDC tasks CreateTable registered, before cloning data.
+	if err := DropAllIndexCdcTasks(c, tableDef, dbName, tblName); err != nil {
+		return err
+	}
+
+	// 2. empty the seeded hidden tables the plugin wants delete-before-clone
+	//    (IVF-FLAT) so the block-level clone appends onto empty tables.
+	for _, idx := range tableDef.GetIndexes() {
+		p, ok := indexplugin.Get(catalog.ToLower(idx.GetIndexAlgo()))
+		if !ok {
+			continue
+		}
+		if p.Catalog().RestoreBehavior().ContainsDeleteBeforeClone(idx.GetIndexAlgoTableType()) {
+			// content delete (keeps the table + id); WHERE TRUE avoids truncate.
+			sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE TRUE", dbName, idx.GetIndexTableName())
+			logutil.Infof("[RestoreTable] empty seed: %s", sql)
+			if err := c.runSql(sql); err != nil {
+				return err
+			}
+		}
+	}
+
+	// 3. clone main table + index hidden tables (append onto empty).
+	logutil.Infof("[RestoreTable] clone (s.Run): %s.%s", dbName, tblName)
+	if err := s.Run(c); err != nil {
+		return err
+	}
+
+	// 4. group plugin indexes, then re-register each index's CDC startFromNow=true
+	//    with a plugin-provided InitSQL (vector: ALTER REINDEX … FORCE_SYNC;
+	//    fulltext: "" — none). tblId comes from CreateTable's tableDef.
+	multiTableIndexes := make(map[string]*MultiTableIndex)
+	for _, idx := range tableDef.GetIndexes() {
+		valid, err := checkValidIndexCdcByIndexdef(idx)
+		if err != nil {
+			return err
+		}
+		if !valid {
+			continue
+		}
+		if _, ok := multiTableIndexes[idx.IndexName]; !ok {
+			multiTableIndexes[idx.IndexName] = &MultiTableIndex{
+				IndexAlgo: catalog.ToLower(idx.IndexAlgo),
+				IndexDefs: make(map[string]*plan.IndexDef),
+			}
+		}
+		multiTableIndexes[idx.IndexName].IndexDefs[catalog.ToLower(idx.IndexAlgoTableType)] = idx
+	}
+
+	var cctx *pluginCompileCtx
+	for name, mti := range multiTableIndexes {
+		p, ok := indexplugin.Get(mti.IndexAlgo)
+		if !ok {
+			continue
+		}
+		if cctx == nil {
+			cctx = newPluginCompileCtx(s, c, tableDef.GetTblId(), nil, nil, dbName, tableDef, nil)
+		}
+		startFromNow, initSQL, err := p.Compile().RestoreInitSQL(cctx, mti.IndexDefs)
+		if err != nil {
+			return err
+		}
+		if initSQL == "" {
+			// no rebuild → the CDC catches the cloned tables up from their
+			// watermark, so it must not start from now.
+			startFromNow = false
+		}
+		logutil.Infof("[RestoreTable] re-register CDC index=%s startFromNow=%v initSQL=%q", name, startFromNow, initSQL)
+		if err := CreateIndexCdcTask(c, dbName, tblName, tableDef.GetTblId(), name,
+			getSinkerTypeFromAlgo(mti.IndexAlgo), startFromNow, initSQL, tableDef); err != nil {
+			return err
+		}
+	}
+	logutil.Infof("[RestoreTable] DONE %s.%s", dbName, tblName)
+	return nil
 }
 
 /*

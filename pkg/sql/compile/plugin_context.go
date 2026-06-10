@@ -102,6 +102,17 @@ func (p *pluginCompileCtx) IsFrontend() bool {
 	return p.c.proc.Base.IsFrontend
 }
 
+// IsTableClone reports whether this compile runs inside a table-clone scope
+// (`create table … clone`) — which is how snapshot/restore replays a table,
+// and which `IsFrontend` cannot distinguish (it is true for the restore
+// backExec too). This is the same signal the experimental-flag gate keys on
+// (`isExperimentalEnabled`, ddl_index_algo.go). It lets an index plugin
+// restore a prebuilt model verbatim instead of rebuilding it. The sync-create
+// variant has no scope, so it reports false.
+func (p *pluginCompileCtx) IsTableClone() bool {
+	return p.scope != nil && p.scope.IsTableClone()
+}
+
 func (p *pluginCompileCtx) IsExperimentalEnabled(flag string) (bool, error) {
 	return p.scope.isExperimentalEnabled(p.c, flag)
 }

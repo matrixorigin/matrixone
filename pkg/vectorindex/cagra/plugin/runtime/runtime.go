@@ -55,7 +55,31 @@ func (CatalogHooks) ShouldTruncateHiddenTable(_ string) bool { return true }
 // AlterTableCloneBehavior — CAGRA leaves both hidden tables empty at
 // CREATE-INDEX time. Mirrors HNSW.
 func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
-	return catalogplugin.AlterTableCloneBehavior{}
+	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
+}
+
+// RestoreBehavior — CAGRA's hidden tables (Storage tag=0 model blob + Metadata)
+// are keyed by index_id, so the restore's block-level clone overwrites the
+// CreateTable seed rather than appending — nothing needs delete-before-clone
+// (empty DeleteBeforeClone). The model is rebuilt post-clone by the compile
+// hook's RestoreInitSQL (ALTER … REINDEX … cagra FORCE_SYNC), run by the CDC's
+// first iteration.
+func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
+	return catalogplugin.RestoreBehavior{}
+}
+
+// BuildSessionVars are the environmental/perf vars captured into
+// algo_params.session_vars at CREATE INDEX (cagra_* threads, lower_case for
+// name resolution). CAGRA does NOT train k-means; its index-defining
+// max_index_capacity rides a flat algo_params key written by ParamsFromTree
+// only when explicitly set in CREATE INDEX. The experimental flag is NOT
+// captured: the background reindex (ProcessInitSQL, IsFrontend=false) skips the
+// experimental gate, so its create-time value is never consulted.
+func (CatalogHooks) BuildSessionVars() []string {
+	return []string{
+		"cagra_threads_build",
+		"lower_case_table_names",
+	}
 }
 
 func (CatalogHooks) DefaultOptions() map[string]string {
@@ -116,6 +140,11 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 		IdxcronListsAware: false,
 	}
 }
+
+// DefaultMaxIndexCapacity mirrors the cagra_max_index_capacity session-var
+// default; the build path (cagra_create) uses it when the flat algo_params key
+// is absent (a legacy index). 0 means "auto-detect from source row count".
+const DefaultMaxIndexCapacity = int64(0)
 
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's
 // INDEX_TYPE_CAGRA case (pkg/catalog/secondary_index_utils.go:376-433).
@@ -192,6 +221,10 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 
 	if joined := joinIncludeColumns(idx.IndexOption.IncludeColumns); len(joined) > 0 {
 		res[catalog.IncludedColumns] = joined
+	}
+
+	if idx.IndexOption.MaxIndexCapacity > 0 {
+		res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
 	}
 	return res, nil
 }

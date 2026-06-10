@@ -36,6 +36,7 @@ package idxcron
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/bytedance/sonic"
@@ -46,13 +47,9 @@ import (
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	ivfflatrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
-
-// KmeansTrainPercentParam is the metadata key holding the current
-// k-means training-sample ratio (percentage of source rows). Read
-// every tick; rewritten when nsample exceeds the upper bound.
-const KmeansTrainPercentParam = "kmeans_train_percent"
 
 // RunGetCountSql is the SELECT used to count source-table rows.
 // Stubbed as a package-level var so tests can replace it.
@@ -86,21 +83,17 @@ func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (ok bool, reason string,
 		return false, fmt.Sprintf("source data size < Nlist (%d < %d)", dsize, nlist), nil
 	}
 
-	// Without metadata there's no kmeans_train_percent to consult;
-	// fall back to "reindex now" (matches the executor's previous
-	// listsAware=true / metadata==nil branch).
-	if in.Metadata == nil {
-		return true, "", nil
-	}
-
 	lower := float64(30 * nlist)
 	upper := float64(256 * nlist)
 
-	v, err := in.Metadata.ResolveVariableFunc(KmeansTrainPercentParam, false, true)
+	// kmeans_train_percent comes from the index's algo_params (set as a CREATE
+	// INDEX option), or the build default when absent — the same value
+	// ivf_create resolves at rebuild time, so nsample tracks the real training
+	// size. (Formerly read from, and clamped into, the idxcron task Metadata.)
+	ivfTrainPercent, err := lookupKmeansTrainPercent(in.TableDef.Indexes, in.IndexName)
 	if err != nil {
 		return false, "", err
 	}
-	ivfTrainPercent, _ := v.(float64)
 	nsample := float64(dsize) * (ivfTrainPercent / 100)
 
 	now := time.Now()
@@ -124,9 +117,8 @@ func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (ok bool, reason string,
 		return true, "", nil
 
 	default:
-		// nsample >= upper — reindex every 2*interval, and clamp
-		// kmeans_train_percent so future ticks land back in the
-		// "between bounds" band.
+		// nsample >= upper — k-means over a large training sample is
+		// expensive, so reindex on a slower 2*interval cadence.
 		if in.LastUpdateAt != nil {
 			ts := time.Unix(in.LastUpdateAt.Unix(), 0).Add(2 * in.Interval)
 			if ts.After(now) {
@@ -135,12 +127,31 @@ func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (ok bool, reason string,
 					nsample, upper, now.Format("2006-01-02 15:04:05"), ts.Format("2006-01-02 15:04:05")), nil
 			}
 		}
-		ratio := (upper / float64(dsize)) * 100
-		if err := in.Metadata.Modify(KmeansTrainPercentParam, ratio); err != nil {
-			return false, "", err
-		}
 		return true, "", nil
 	}
+}
+
+// lookupKmeansTrainPercent reads kmeans_train_percent from the named index's
+// algo_params (present only when given as a CREATE INDEX option), falling back
+// to the build default when absent — matching what ivf_create resolves at
+// rebuild time.
+func lookupKmeansTrainPercent(indexes []*plan.IndexDef, indexName string) (float64, error) {
+	for _, idx := range indexes {
+		if idx.IndexName != indexName {
+			continue
+		}
+		ast, err := sonic.Get([]byte(idx.IndexAlgoParams), catalog.IndexAlgoParamKmeansTrainPercent)
+		if err != nil {
+			// key absent → not set in CREATE INDEX; use the build default.
+			return ivfflatrt.DefaultKmeansTrainPercent, nil
+		}
+		s, err := ast.String()
+		if err != nil {
+			return 0, err
+		}
+		return strconv.ParseFloat(s, 64)
+	}
+	return ivfflatrt.DefaultKmeansTrainPercent, nil
 }
 
 // lookupNlist reads the "lists" key from the named index's

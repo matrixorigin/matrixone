@@ -46,6 +46,11 @@ import (
 // boundary.
 type CompilerContext interface {
 	GetContext() context.Context
+	// ResolveVariable forwards to the session's system-variable resolver so
+	// plan-time plugin code (e.g. CreateIndexDef capturing build-time session
+	// vars like kmeans_train_percent) can read session/system variables.
+	// Satisfied by pkg/sql/plan.CompilerContext.
+	ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 }
 
 // BindContext is opaque to plugins. It's a *plan.BindContext on the
@@ -162,7 +167,7 @@ type Hooks interface {
 // package load). Plugin schema.go and tablefunc.go call them as
 // planplugin.<X>.
 var (
-	CreateIndexDef         func(idx *tree.Index, indexTableName, indexAlgoTableType string, indexParts []string, isUnique bool) (*plan.IndexDef, error)
+	CreateIndexDef         func(ctx CompilerContext, idx *tree.Index, indexTableName, indexAlgoTableType string, indexParts []string, isUnique bool) (*plan.IndexDef, error)
 	MakeHiddenColDefByName func(name string) *plan.ColDef
 	// ValidateIncludeColumns checks the INCLUDE column list. supportedTypes is
 	// the plugin's accepted INCLUDE column types (catalog.Hooks.

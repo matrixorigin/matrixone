@@ -108,6 +108,26 @@ type Hooks interface {
 	// Consumed by pkg/sql/compile/alter.go::cloneUnaffectedIndex.
 	AlterTableCloneBehavior() AlterTableCloneBehavior
 
+	// RestoreBehavior declares how snapshot/restore should reconstruct this
+	// algorithm's hidden tables, the restore-path analogue of
+	// AlterTableCloneBehavior. The zero value means "rebuild every hidden
+	// table via the algorithm's normal mechanism from the restored
+	// main-table rows" — the historical behavior (the snapshot's prebuilt
+	// model is discarded and rebuilt: async CDC for async indexes, a
+	// synchronous k-means re-run for sync IVF-FLAT). The hook exists so a
+	// plugin can opt specific hidden tables into a direct restore of the
+	// prebuilt model. Every plugin returns the zero value today.
+	RestoreBehavior() RestoreBehavior
+
+	// BuildSessionVars returns the names of the session variables this
+	// algorithm's index build depends on (e.g. "kmeans_train_percent",
+	// "kmeans_max_iteration"). At CREATE INDEX these are read from the session
+	// resolver and captured — typed — into algo_params' reserved session_vars
+	// object, so every later background build (restore reindex, idxcron, async
+	// create) resolves them from the index def instead of the background
+	// defaults (DefaultResolveVariable). Empty/nil = none.
+	BuildSessionVars() []string
+
 	// ShouldTruncateHiddenTable reports whether the hidden table of the
 	// given IndexAlgoTableType (one of HiddenTableTypes()) should be
 	// included in a TRUNCATE TABLE on the source table.
@@ -259,11 +279,10 @@ type SyncDescriptor struct {
 //
 // The zero value means "no special behaviour" — the unaffected-index
 // loop clones each hidden table verbatim from source to the new copy.
-// Today only IVF-FLAT populates both fields; HNSW / CAGRA / IVF-PQ /
-// fulltext leave their hidden tables empty at CREATE-INDEX time, so
-// nothing needs deletion before clone, and their async-skip story is
-// "skip the whole index" (handled by SyncDescriptor.UsesCDC +
-// .AlwaysAsync at the top of cloneUnaffectedIndex), not per table.
+// IVF-FLAT populates the per-hidden-table fields; HNSW / CAGRA / IVF-PQ /
+// fulltext leave their hidden tables empty at CREATE-INDEX time, so nothing
+// needs deletion before clone — they set SkipWholeIndex instead, and the
+// whole index is skipped when async rather than handled per table.
 //
 // Field-by-field:
 //
@@ -279,6 +298,20 @@ type SyncDescriptor struct {
 type AlterTableCloneBehavior struct {
 	DeleteBeforeClone []string
 	SkipWhenAsync     []string
+
+	// SkipWholeIndex is the explicit "skip the entire index" clone policy.
+	// When true and the index is async, cloneUnaffectedIndex skips the whole
+	// index — none of its hidden tables are cloned — because the algorithm
+	// leaves every hidden table empty at CREATE-INDEX time and rebuilds all of
+	// them via CDC from ts=0 on the new table (HNSW / CAGRA / IVF-PQ / fulltext).
+	// IVF-FLAT leaves this false: its metadata + centroids must be cloned (the
+	// CDC pipeline only rebuilds entries), so it relies on the per-hidden-table
+	// DeleteBeforeClone / SkipWhenAsync fields above.
+	//
+	// This is intentionally NOT inferred from SyncDescriptor.UsesCDC: a CDC
+	// algorithm can still need its model tables cloned (IVF-FLAT), so the
+	// whole-index skip must be declared explicitly per algorithm.
+	SkipWholeIndex bool
 }
 
 // ContainsDelete reports whether algoTableType is in the
@@ -296,6 +329,39 @@ func (b AlterTableCloneBehavior) ContainsDelete(algoTableType string) bool {
 // SkipWhenAsync list.
 func (b AlterTableCloneBehavior) ContainsSkipWhenAsync(algoTableType string) bool {
 	for _, t := range b.SkipWhenAsync {
+		if t == algoTableType {
+			return true
+		}
+	}
+	return false
+}
+
+// RestoreBehavior declares how snapshot/restore should reconstruct an index's
+// hidden tables — the restore-path analogue of AlterTableCloneBehavior. The
+// restore replays `create table … clone`, whose table_clone operator copies
+// index hidden tables block-level — an APPEND, not an overwrite. So any hidden
+// table that CreateTable seeds non-empty (e.g. IVF-FLAT's metadata/centroids/
+// entries) must be emptied first, or the clone lays the source data on top of
+// the seed and duplicates it. The zero value (no tables to delete) is correct
+// for algorithms whose storage is keyed and overwrites on append (cuVS keys by
+// index_id).
+//
+// Consulted on the restore path — the `create table … clone` the restore
+// replays; see compileplugin.Context.IsTableClone().
+type RestoreBehavior struct {
+	// DeleteBeforeClone names the hidden tables (IndexAlgoTableType, members of
+	// HiddenTableTypes()) that CreateTable seeds non-empty and so must be
+	// emptied with `DELETE … WHERE TRUE` (a content delete that keeps the table
+	// and its id — not truncate) before the block-level clone appends the
+	// source's data. Mirrors AlterTableCloneBehavior.DeleteBeforeClone. Empty =
+	// nothing to delete (current behavior).
+	DeleteBeforeClone []string
+}
+
+// ContainsDeleteBeforeClone reports whether algoTableType is in the
+// DeleteBeforeClone list.
+func (b RestoreBehavior) ContainsDeleteBeforeClone(algoTableType string) bool {
+	for _, t := range b.DeleteBeforeClone {
 		if t == algoTableType {
 			return true
 		}

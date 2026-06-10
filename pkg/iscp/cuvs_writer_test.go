@@ -116,6 +116,56 @@ func TestNewCuvsCdcWriter_Success(t *testing.T) {
 	require.Empty(t, w.ColMetaJSON(), "no INCLUDE cols → empty colMetaJSON")
 }
 
+// TestCuvsCdcWriter_VectorTypeHandling pins the NULL-vs-wrong-type contract:
+// an absent vector (nil interface or typed-nil slice) maps to DELETE, but a
+// non-nil value of the WRONG type is a real error, never a silent DELETE.
+func TestCuvsCdcWriter_VectorTypeHandling(t *testing.T) {
+	td := newTestCuvsTableDef("pk", "v", 4)
+	ctx := context.Background()
+	newW := func() *CuvsCdcWriter {
+		w, err := NewCuvsCdcWriter("cagra", "test_db", "test_tbl", "cuvs_idx", td, newTestCuvsIndexDefs(td))
+		require.NoError(t, err)
+		return w
+	}
+
+	t.Run("valid float32 vector encodes a record", func(t *testing.T) {
+		w := newW()
+		require.NoError(t, w.Insert(ctx, []any{int64(1), []float32{1, 2, 3, 4}}))
+		out, _ := w.ToSql()
+		require.NotEmpty(t, out)
+	})
+
+	t.Run("nil-interface vector encodes a DELETE, no error", func(t *testing.T) {
+		w := newW()
+		require.NoError(t, w.Insert(ctx, []any{int64(2), nil}))
+		out, _ := w.ToSql()
+		require.NotEmpty(t, out)
+	})
+
+	t.Run("typed-nil float32 slice encodes a DELETE, no error", func(t *testing.T) {
+		w := newW()
+		require.NoError(t, w.Upsert(ctx, []any{int64(3), []float32(nil)}))
+		out, _ := w.ToSql()
+		require.NotEmpty(t, out)
+	})
+
+	t.Run("non-nil wrong-type vector returns an error, not a silent DELETE", func(t *testing.T) {
+		w := newW()
+		err := w.Insert(ctx, []any{int64(4), []float64{1, 2, 3, 4}})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid vector type")
+		out, _ := w.ToSql()
+		require.Empty(t, out, "wrong-type row must not have been encoded as a DELETE")
+	})
+
+	t.Run("non-nil non-slice vector returns an error", func(t *testing.T) {
+		w := newW()
+		err := w.Upsert(ctx, []any{int64(5), "not a vector"})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid vector type")
+	})
+}
+
 func TestNewCuvsCdcWriter_RejectsMultiPK(t *testing.T) {
 	td := newTestCuvsTableDef("pk", "v", 4)
 	td.Pkey.Names = []string{"pk", "pk2"}

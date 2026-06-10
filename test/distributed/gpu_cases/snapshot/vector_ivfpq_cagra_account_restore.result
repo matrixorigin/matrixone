@@ -1,0 +1,77 @@
+drop account if exists acc_vec;
+create account acc_vec ADMIN_NAME 'admin1' IDENTIFIED BY 'test123';
+set experimental_ivfpq_index = 1;
+set experimental_cagra_index = 1;
+create database vdb;
+use vdb;
+create table t_ivfpq (a bigint primary key, v vecf32(8));
+insert into t_ivfpq values
+( 1, '[1,1,1,1,1,1,1,1]'),         ( 2, '[2,2,2,2,2,2,2,2]'),
+( 3, '[3,3,3,3,3,3,3,3]'),         ( 4, '[4,4,4,4,4,4,4,4]'),
+( 5, '[5,5,5,5,5,5,5,5]'),         ( 6, '[6,6,6,6,6,6,6,6]'),
+( 7, '[7,7,7,7,7,7,7,7]'),         ( 8, '[8,8,8,8,8,8,8,8]'),
+( 9, '[9,9,9,9,9,9,9,9]'),         (10, '[10,10,10,10,10,10,10,10]'),
+(11, '[11,11,11,11,11,11,11,11]'), (12, '[12,12,12,12,12,12,12,12]'),
+(13, '[13,13,13,13,13,13,13,13]'), (14, '[14,14,14,14,14,14,14,14]'),
+(15, '[15,15,15,15,15,15,15,15]'), (16, '[16,16,16,16,16,16,16,16]'),
+(17, '[17,17,17,17,17,17,17,17]'), (18, '[18,18,18,18,18,18,18,18]'),
+(19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]');
+create index ix using ivfpq on t_ivfpq (v)
+op_type 'vector_l2_ops' lists=10 m=8 bits_per_code=8;
+create table t_cagra (a bigint primary key, v vecf32(8));
+insert into t_cagra values
+( 1, '[1,1,1,1,1,1,1,1]'),         ( 2, '[2,2,2,2,2,2,2,2]'),
+( 3, '[3,3,3,3,3,3,3,3]'),         ( 4, '[4,4,4,4,4,4,4,4]'),
+( 5, '[5,5,5,5,5,5,5,5]'),         ( 6, '[6,6,6,6,6,6,6,6]'),
+( 7, '[7,7,7,7,7,7,7,7]'),         ( 8, '[8,8,8,8,8,8,8,8]'),
+( 9, '[9,9,9,9,9,9,9,9]'),         (10, '[10,10,10,10,10,10,10,10]'),
+(11, '[11,11,11,11,11,11,11,11]'), (12, '[12,12,12,12,12,12,12,12]'),
+(13, '[13,13,13,13,13,13,13,13]'), (14, '[14,14,14,14,14,14,14,14]'),
+(15, '[15,15,15,15,15,15,15,15]'), (16, '[16,16,16,16,16,16,16,16]'),
+(17, '[17,17,17,17,17,17,17,17]'), (18, '[18,18,18,18,18,18,18,18]'),
+(19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]');
+create index ix using cagra on t_cagra (v)
+op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32;
+create snapshot vec_snap for account acc_vec;
+set experimental_ivfpq_index = 0;
+set experimental_cagra_index = 0;
+drop database vdb;
+restore account acc_vec{snapshot="vec_snap"} to account acc_vec;
+use vdb;
+select count(*) from t_ivfpq;
+➤ count(*)[-5,64,0]  𝄀
+20
+show create table t_ivfpq;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t_ivfpq  ¦  CREATE TABLE `t_ivfpq` (
+  `a` bigint NOT NULL,
+  `v` vecf32(8) DEFAULT NULL,
+  PRIMARY KEY (`a`),
+  KEY `ix` USING ivfpq (`v`) lists = 10  m = 8  op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  bits_per_code = 8 
+)
+select count(*) from t_cagra;
+➤ count(*)[-5,64,0]  𝄀
+20
+show create table t_cagra;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t_cagra  ¦  CREATE TABLE `t_cagra` (
+  `a` bigint NOT NULL,
+  `v` vecf32(8) DEFAULT NULL,
+  PRIMARY KEY (`a`),
+  KEY `ix` USING cagra (`v`) op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  intermediate_graph_degree = 16  graph_degree = 8  itopk_size = 32 
+)
+select sleep(30);
+➤ sleep(30)[-6,8,0]  𝄀
+0
+select a from t_ivfpq order by l2_distance(v, '[1,1,1,1,1,1,1,1]') asc limit 3;
+➤ a[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select a from t_cagra order by l2_distance(v, '[1,1,1,1,1,1,1,1]') asc limit 3;
+➤ a[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+drop snapshot if exists vec_snap;
+drop account if exists acc_vec;

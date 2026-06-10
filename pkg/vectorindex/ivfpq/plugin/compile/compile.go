@@ -52,6 +52,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -62,7 +63,10 @@ import (
 
 // insertIntoIvfpqIndexTableFormat is the SQL template used to populate the
 // IVF-PQ index storage table. Lifted from pkg/sql/compile/util.go:126.
-const insertIntoIvfpqIndexTableFormat = "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY ivfpq_create('%s', '%s', %s, %s) AS f;"
+// The %s placeholders are pre-quoted/escaped via pkg/common/sqlquote: the
+// source table and alias are quoted identifiers, params + config are escaped
+// string literals, and the pk / part are quoted column references.
+const insertIntoIvfpqIndexTableFormat = "SELECT f.* from %s AS %s CROSS APPLY ivfpq_create(%s, %s, %s, %s) AS f;"
 
 // actionIvfpqReindex mirrors idxcron.Action_*. Inlined to avoid an
 // import cycle through pkg/vectorindex/idxcron. Stays in lock-step with
@@ -119,6 +123,16 @@ func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map
 // IVF-FLAT and CAGRA.
 func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
 	return h.handleCreate(ctx, indexDefs, forceSync)
+}
+
+// RestoreInitSQL — see CAGRA. Rebuilds the IVF-PQ index post-commit during restore.
+func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
+	metaDef, ok := indexDefs[catalog.Ivfpq_TblType_Metadata]
+	if !ok {
+		return false, "", moerr.NewInternalErrorNoCtx("ivfpq_meta index definition not found")
+	}
+	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` ivfpq FORCE_SYNC",
+		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
 }
 
 // handleCreate is the shared body for HandleCreateIndex and
@@ -304,13 +318,13 @@ func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 	logutil.Infof("[plugin] ivfpq IdxcronMetadata: isFrontend=%v", ctx.IsFrontend())
 	return compileplugin.BuildIdxcronMetadata(ctx, compileplugin.IdxcronVarSpec{
 		FrontendProbeVar: "ivfpq_threads_search",
+		// kmeans_* / max_index_capacity are NOT captured here — they ride the
+		// index's algo_params (set via CREATE INDEX), read directly by the
+		// idxcron reindex. The experimental flag is NOT captured either: the
+		// background reindex (IsFrontend=false) skips the experimental gate.
 		Capture: []string{
 			"ivfpq_threads_build",
-			"ivfpq_max_index_capacity",
-			"kmeans_train_percent",
-			"kmeans_max_iteration",
 			"lower_case_table_names",
-			"experimental_ivfpq_index",
 		},
 	})
 }
@@ -329,8 +343,8 @@ func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]st
 		return nil, moerr.NewInternalErrorNoCtx("ivfpq_index index definition not found")
 	}
 	return []string{
-		fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, meta.IndexTableName),
-		fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, idx.IndexTableName),
+		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, meta.IndexTableName)),
+		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, idx.IndexTableName)),
 	}, nil
 }
 
@@ -339,7 +353,7 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 	originalTableDef := ctx.OriginalTableDef()
 	qryDatabase := ctx.QryDatabase()
 	const srcAlias = "src"
-	pkColName := srcAlias + "." + originalTableDef.Pkey.PkeyColName
+	pkCol := originalTableDef.Pkey.PkeyColName
 
 	meta, ok := indexDefs[catalog.Ivfpq_TblType_Metadata]
 	if !ok {
@@ -355,7 +369,7 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 		IndexTable:    idx.IndexTableName,
 		DbName:        qryDatabase,
 		SrcTable:      originalTableDef.Name,
-		PKey:          pkColName,
+		PKey:          srcAlias + "." + pkCol,
 		KeyPart:       idx.Parts[0],
 	}
 
@@ -365,12 +379,8 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 	}
 	cfg.ThreadsBuild = threads.(int64)
 
-	idxcap, err := ctx.ResolveVariable("ivfpq_max_index_capacity", true, false)
-	if err != nil {
-		return nil, err
-	}
-	cfg.IndexCapacity = idxcap.(int64)
-
+	// max_index_capacity now rides algo_params as a flat key (written at
+	// CREATE INDEX); ivfpq_create reads it from there.
 	gpusim, err := ctx.ResolveVariable("gpu_multi_simulation", true, false)
 	if err != nil {
 		return nil, err
@@ -383,14 +393,19 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 	}
 
 	params := idx.IndexAlgoParams
-	part := srcAlias + "." + idx.Parts[0] + filterColumnsFromParams(params, srcAlias)
+
+	// Quoted column references for the ivfpq_create CROSS APPLY args: `src`.`pk`
+	// and `src`.`vec`[, `src`.`inc`...]. Quoting via sqlquote keeps identifiers
+	// containing backticks or reserved words valid.
+	pkColExpr := sqlquote.QualifiedIdent(srcAlias, pkCol)
+	part := sqlquote.QualifiedIdent(srcAlias, idx.Parts[0]) + filterColumnsFromParams(params, srcAlias)
 
 	sql := fmt.Sprintf(insertIntoIvfpqIndexTableFormat,
-		qryDatabase, originalTableDef.Name,
-		srcAlias,
-		params,
-		string(cfgbytes),
-		pkColName,
+		sqlquote.QualifiedIdent(qryDatabase, originalTableDef.Name),
+		sqlquote.Ident(srcAlias),
+		sqlquote.String(params),
+		sqlquote.String(string(cfgbytes)),
+		pkColExpr,
 		part)
 	return []string{sql}, nil
 }
@@ -417,9 +432,7 @@ func filterColumnsFromParams(indexAlgoParams, srcAlias string) string {
 			continue
 		}
 		sb.WriteString(", ")
-		sb.WriteString(srcAlias)
-		sb.WriteByte('.')
-		sb.WriteString(name)
+		sb.WriteString(sqlquote.QualifiedIdent(srcAlias, name))
 	}
 	return sb.String()
 }

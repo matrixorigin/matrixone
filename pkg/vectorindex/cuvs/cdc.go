@@ -32,6 +32,7 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
@@ -357,7 +358,7 @@ func CdcAppendEventsSql(
 			"cdc: chunk header (%d bytes) leaves no room for records in a %d-byte chunk (overhead %d)",
 			len(headerBytes), vectorindex.MaxChunkSize, cdcFrameOverhead)
 	}
-	sqlPrefix := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tblcfg.DbName, tblcfg.IndexTable)
+	sqlPrefix := fmt.Sprintf("INSERT INTO %s VALUES ", sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable))
 	var sqls []string
 	var values []string
 	chunkId := startChunkId
@@ -421,8 +422,8 @@ func CdcAppendEventsSql(
 // matters for last-event-wins semantics.
 func CdcLoadEventsSql(tblcfg vectorindex.IndexTableConfig, indexId string) string {
 	return fmt.Sprintf(
-		"SELECT chunk_id, data FROM `%s`.`%s` WHERE index_id = '%s' AND tag = %d",
-		tblcfg.DbName, tblcfg.IndexTable, indexId, vectorindex.Tag_CdcEvents)
+		"SELECT chunk_id, data FROM %s WHERE index_id = %s AND tag = %d",
+		sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(indexId), vectorindex.Tag_CdcEvents)
 }
 
 // EventChunk is one row from CdcLoadEventsSql, wired up so the caller can
@@ -941,6 +942,6 @@ func SplitIncludeBytes(
 func NextChunkIdSql(tblcfg vectorindex.IndexTableConfig, indexId string, tag vectorindex.ChunkTag) string {
 	// COALESCE(MAX(chunk_id) + 1, 0): no ORDER BY (per repo convention).
 	return fmt.Sprintf(
-		"SELECT COALESCE(MAX(chunk_id) + 1, 0) FROM `%s`.`%s` WHERE index_id = '%s' AND tag = %d",
-		tblcfg.DbName, tblcfg.IndexTable, indexId, tag)
+		"SELECT COALESCE(MAX(chunk_id) + 1, 0) FROM %s WHERE index_id = %s AND tag = %d",
+		sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(indexId), tag)
 }

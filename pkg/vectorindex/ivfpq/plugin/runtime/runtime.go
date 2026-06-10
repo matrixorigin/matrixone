@@ -76,7 +76,30 @@ func (CatalogHooks) ShouldTruncateHiddenTable(_ string) bool { return true }
 // AlterTableCloneBehavior — IVF-PQ leaves both hidden tables empty at
 // CREATE-INDEX time. Mirrors HNSW.
 func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
-	return catalogplugin.AlterTableCloneBehavior{}
+	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
+}
+
+// RestoreBehavior — IVF-PQ's hidden tables (Storage tag=0 model blob + Metadata)
+// are keyed by index_id, so the restore's block-level clone overwrites the
+// CreateTable seed rather than appending — nothing needs delete-before-clone
+// (empty DeleteBeforeClone). The model is rebuilt post-clone by the compile
+// hook's RestoreInitSQL (ALTER … REINDEX … ivfpq FORCE_SYNC), run by the CDC's
+// first iteration.
+func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
+	return catalogplugin.RestoreBehavior{}
+}
+
+// BuildSessionVars are the environmental/perf vars captured into
+// algo_params.session_vars at CREATE INDEX. The index-defining k-means knobs
+// and max_index_capacity ride flat algo_params keys written by ParamsFromTree
+// only when explicitly set in CREATE INDEX. The experimental flag is NOT
+// captured: the background reindex (ProcessInitSQL, IsFrontend=false) skips the
+// experimental gate, so its create-time value is never consulted.
+func (CatalogHooks) BuildSessionVars() []string {
+	return []string{
+		"ivfpq_threads_build",
+		"lower_case_table_names",
+	}
 }
 
 // DefaultOptions is the params map produced when CREATE INDEX is issued
@@ -137,6 +160,15 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 		IdxcronListsAware: false,
 	}
 }
+
+// Build-param defaults mirror the frontend session-var defaults; the build
+// path (ivfpq_create) uses them when the flat algo_params key is absent (a
+// legacy index). Capacity 0 means "auto-detect from source row count".
+const (
+	DefaultKmeansTrainPercent = float64(10)
+	DefaultKmeansMaxIteration = int64(20)
+	DefaultMaxIndexCapacity   = int64(0)
+)
 
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's
 // INDEX_TYPE_IVFPQ case (pkg/catalog/secondary_index_utils.go:434-477).
@@ -201,6 +233,16 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	}
 	if idx.IndexOption.Hour > 0 {
 		res[catalog.Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
+	}
+
+	if idx.IndexOption.KmeansTrainPercent > 0 {
+		res[catalog.IndexAlgoParamKmeansTrainPercent] = strconv.FormatInt(idx.IndexOption.KmeansTrainPercent, 10)
+	}
+	if idx.IndexOption.KmeansMaxIteration > 0 {
+		res[catalog.IndexAlgoParamKmeansMaxIteration] = strconv.FormatInt(idx.IndexOption.KmeansMaxIteration, 10)
+	}
+	if idx.IndexOption.MaxIndexCapacity > 0 {
+		res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
 	}
 
 	return res, nil

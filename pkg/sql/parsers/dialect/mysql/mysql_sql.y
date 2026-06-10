@@ -381,6 +381,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
+%token <str> GEOMETRY32 GEOGRAPHY GEOGRAPHY32 POINT32 LINESTRING32 POLYGON32 GEOMETRYCOLLECTION32 MULTIPOINT32 MULTILINESTRING32 MULTIPOLYGON32
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION STAGEOPTION
 
 // Select option
@@ -415,7 +416,7 @@ func sqlTaskInt64(v any) int64 {
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -4098,12 +4099,16 @@ alter_table_alter:
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
-| REINDEX ident HNSW
+| REINDEX ident HNSW index_option_list
     {
-	
         var io *tree.IndexOption = nil
-        io = tree.NewIndexOption()
-        io.IType = tree.INDEX_TYPE_HNSW
+        if $4 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_HNSW
+        } else {
+            io = $4
+            io.IType = tree.INDEX_TYPE_HNSW
+        }
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
@@ -8269,6 +8274,12 @@ index_option_list:
               opt1.BitsPerCode = opt2.BitsPerCode
             } else if opt2.ITopkSize > 0 {
               opt1.ITopkSize = opt2.ITopkSize
+            } else if opt2.KmeansTrainPercent > 0 {
+              opt1.KmeansTrainPercent = opt2.KmeansTrainPercent
+            } else if opt2.KmeansMaxIteration > 0 {
+              opt1.KmeansMaxIteration = opt2.KmeansMaxIteration
+            } else if opt2.MaxIndexCapacity > 0 {
+              opt1.MaxIndexCapacity = opt2.MaxIndexCapacity
             } else if len(opt2.IncludeColumns) > 0 {
               opt1.IncludeColumns = opt2.IncludeColumns
             }
@@ -8418,6 +8429,39 @@ index_option:
 	}
 	io := tree.NewIndexOption()
 	io.BitsPerCode = val
+	$$ = io
+    }
+|   KMEANS_TRAIN_PERCENT equal_opt INTEGRAL
+    {
+	val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("KMEANS_TRAIN_PERCENT should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.KmeansTrainPercent = val
+	$$ = io
+    }
+|   KMEANS_MAX_ITERATION equal_opt INTEGRAL
+    {
+	val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("KMEANS_MAX_ITERATION should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.KmeansMaxIteration = val
+	$$ = io
+    }
+|   MAX_INDEX_CAPACITY equal_opt INTEGRAL
+    {
+	val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("MAX_INDEX_CAPACITY should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.MaxIndexCapacity = val
 	$$ = io
     }
 |    ASYNC
@@ -12779,10 +12823,7 @@ literal:
     }
 |   UNDERSCORE_BINARY HEXNUM
     {
-        if strings.HasPrefix($2, "0x") {
-            $2 = $2[2:]
-        }
-        $$ = tree.NewNumVal($2, $2, false, tree.P_bit)
+        $$ = tree.NewNumVal($2, $2, false, tree.P_hexnum)
     }
 |   DECIMAL_VALUE
     {
@@ -13556,15 +13597,7 @@ declare_stmt:
 spatial_type:
     spatial_type_name
     {
-        locale := ""
-        $$ = &tree.T{
-            InternalType: tree.InternalType{
-                Family: tree.GeometryFamily,
-                FamilyString: $1,
-                Locale: &locale,
-                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
-            },
-        }
+        $$ = tree.NewSpatialType($1)
     }
 
 spatial_type_name:
@@ -13576,6 +13609,16 @@ spatial_type_name:
 |   MULTIPOINT
 |   MULTILINESTRING
 |   MULTIPOLYGON
+|   GEOGRAPHY
+|   GEOMETRY32
+|   GEOGRAPHY32
+|   POINT32
+|   LINESTRING32
+|   POLYGON32
+|   GEOMETRYCOLLECTION32
+|   MULTIPOINT32
+|   MULTILINESTRING32
+|   MULTIPOLYGON32
 
 // TODO:
 // need to encode SQL string
@@ -13975,6 +14018,16 @@ non_reserved_keyword:
 |   GENERATED
 |   GEOMETRY
 |   GEOMETRYCOLLECTION
+|   GEOMETRY32
+|   GEOGRAPHY
+|   GEOGRAPHY32
+|   POINT32
+|   LINESTRING32
+|   POLYGON32
+|   GEOMETRYCOLLECTION32
+|   MULTIPOINT32
+|   MULTILINESTRING32
+|   MULTIPOLYGON32
 |   GLOBAL
 |   GRAPH_DEGREE
 |   HNSW
@@ -13995,6 +14048,9 @@ non_reserved_keyword:
 |   KEY_BLOCK_SIZE
 |   LISTS
 |   OP_TYPE
+|   KMEANS_TRAIN_PERCENT
+|   KMEANS_MAX_ITERATION
+|   MAX_INDEX_CAPACITY
 |   KEYS
 |   LANGUAGE
 |   LESS

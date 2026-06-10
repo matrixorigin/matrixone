@@ -46,7 +46,7 @@ where table_id = (select rel_id from mo_catalog.mo_tables
 where relname='t' and reldatabase='ivfpq_filter')
 and name='ix' and algo_table_type='ivfpq_index';
 ➤ algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
-ivfpq  ¦  ivfpq_index  ¦  {"bits_per_code":"8","distribution_mode":"single","included_columns":"c_i32,c_i64,c_f32,c_f64","lists":"2","m":"8","op_type":"vector_l2_ops","quantization":"float32"}
+ivfpq  ¦  ivfpq_index  ¦  {"bits_per_code":"8","distribution_mode":"single","included_columns":"c_i32,c_i64,c_f32,c_f64","lists":"2","m":"8","op_type":"vector_l2_ops","quantization":"float32","session_vars":{"cfg":{"experimental_ivfpq_index":{"t":"I8","v":1},"ivfpq_max_index_capacity":{"t":"I","v":99999},"ivfpq_threads_build":{"t":"I","v":6},"kmeans_max_iteration":{"t":"I","v":20},"kmeans_train_percent":{"t":"F","v":100},"lower_case_table_names":{"t":"I","v":1}}}}
 select id from t where c_i32 < 10 order by l2_distance(v, '[12,12,12,12,12,12,12,12]') asc limit 1;
 ➤ id[-5,64,0]  𝄀
 9

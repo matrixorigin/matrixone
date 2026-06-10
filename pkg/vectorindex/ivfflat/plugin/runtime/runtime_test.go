@@ -59,6 +59,16 @@ func TestIvfflatAlterTableCloneBehavior(t *testing.T) {
 	require.False(t, b.ContainsSkipWhenAsync(catalog.SystemSI_IVFFLAT_TblType_Centroids))
 	require.True(t, b.ContainsSkipWhenAsync(catalog.SystemSI_IVFFLAT_TblType_Entries))
 	require.False(t, b.ContainsSkipWhenAsync("unknown_table_type"))
+	// IVF-FLAT must NOT skip the whole index on async clone: its metadata +
+	// centroids are cloned (only entries are CDC-rebuilt), via the per-hidden-
+	// table policy above. This is the bug the explicit flag fixes — inferring
+	// the skip from UsesCDC would drop the cloned k-means model.
+	require.False(t, b.SkipWholeIndex)
+
+	// RestoreBehavior deletes all three hidden tables before the clone re-supplies
+	// them (CreateTable seeds them non-empty and the block-level clone appends).
+	require.Equal(t, CatalogHooks{}.HiddenTableTypes(),
+		CatalogHooks{}.RestoreBehavior().DeleteBeforeClone)
 }
 
 func TestIvfflatDefaultOptions(t *testing.T) {
