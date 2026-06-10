@@ -36,8 +36,10 @@ select name_const('bad_cast_expr', cast(14 as signed));
 invalid argument NAME_CONST, bad value 
 select name_const(null, 1);
 invalid argument NAME_CONST, bad value 
+select name_const(-123, -456);
+invalid argument NAME_CONST, bad value 
 select name_const('bad_args');
-invalid argument function name_const, bad value [VARCHAR]
+invalid argument NAME_CONST, bad value 
 select name_const('xxx_name', -18446744073709551616);
 ➤ xxx_name[3,39,0]  𝄀
 -18446744073709551616

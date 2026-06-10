@@ -171,10 +171,6 @@ func TestBindNameConstConstArgs(t *testing.T) {
 			name: "negative decimal value",
 			sql:  "select name_const('myname', -12.34)",
 		},
-		{
-			name: "negative string name",
-			sql:  "select name_const(-123, 'abc')",
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.NoError(t, bindNameConstSelect(tc.sql))
@@ -194,6 +190,10 @@ func TestBindNameConstInvalidArgs(t *testing.T) {
 		{
 			name: "null name",
 			sql:  "select name_const(null, 1)",
+		},
+		{
+			name: "unary minus name",
+			sql:  "select name_const(-123, -456)",
 		},
 		{
 			name: "column name",

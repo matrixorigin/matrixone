@@ -17,6 +17,7 @@ select name_const('bad_folded_expr', abs(-1));
 select name_const('bad_expr', now());
 select name_const('bad_cast_expr', cast(14 as signed));
 select name_const(null, 1);
+select name_const(-123, -456);
 select name_const('bad_args');
 select name_const('xxx_name', -18446744073709551616);
 

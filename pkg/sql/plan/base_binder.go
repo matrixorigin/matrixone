@@ -1315,6 +1315,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 		}
 	}
+	if name == "name_const" && !validNameConstNameAst(astArgs) {
+		return nil, moerr.NewInvalidArg(b.GetContext(), "NAME_CONST", "")
+	}
 
 	if b.builder != nil {
 		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
@@ -2970,6 +2973,22 @@ func validNameConstValueExpr(arg *plan.Expr) bool {
 		return false
 	}
 	return fn.Args[0].GetLit() != nil || isDecimalLiteralCast(fn.Args[0])
+}
+
+func validNameConstNameAst(args []tree.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	name := args[0]
+	for {
+		paren, ok := name.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		name = paren.Expr
+	}
+	nameLit, ok := name.(*tree.NumVal)
+	return ok && validNameConstNameLiteral(nameLit)
 }
 
 func isDecimalLiteralCast(arg *plan.Expr) bool {
