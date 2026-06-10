@@ -680,14 +680,6 @@ func (s *service) observeAllocatorState(source string, observed allocatorState) 
 	return s.observeAllocatorStateWithHolders(source, observed, s.tableGroups)
 }
 
-func (s *service) observeAllocatorVersionWithHolders(
-	source string,
-	observedVersion uint64,
-	holders *lockTableHolders,
-) int {
-	return s.observeAllocatorStateWithHolders(source, allocatorState{version: observedVersion}, holders)
-}
-
 func (s *service) observeAllocatorStateWithHolders(
 	source string,
 	observed allocatorState,
