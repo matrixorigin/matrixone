@@ -146,8 +146,33 @@ func TestEnqueueCronFlushEnqueuesNonEmptyEntries(t *testing.T) {
 	assert.Len(t, queue.items, 2)
 	assert.Same(t, first, queue.items[0].(*FlushRequest).tree)
 	assert.Same(t, second, queue.items[1].(*FlushRequest).tree)
-	assert.False(t, queue.items[0].(*FlushRequest).force)
-	assert.False(t, queue.items[1].(*FlushRequest).force)
+	assert.Equal(t, flushRequestCron, queue.items[0].(*FlushRequest).mode)
+	assert.Equal(t, flushRequestCron, queue.items[1].(*FlushRequest).mode)
+}
+
+func TestMergeFlushRequestsKeepsBoundedSeparateFromCron(t *testing.T) {
+	cron1 := newTestDirtyTreeEntry(types.BuildTS(1, 0), types.BuildTS(10, 0), 1)
+	cron2 := newTestDirtyTreeEntry(types.BuildTS(10, 0), types.BuildTS(20, 0), 2)
+	bounded := newTestDirtyTreeEntry(types.BuildTS(2, 0), types.BuildTS(5, 0), 3)
+	force := newTestDirtyTreeEntry(types.BuildTS(3, 0), types.BuildTS(8, 0), 4)
+
+	fromCrons, fromForce, fromCheckpointBounded := mergeFlushRequests(
+		&FlushRequest{mode: flushRequestCron, tree: cron1},
+		&FlushRequest{mode: flushRequestCheckpointBounded, tree: bounded},
+		&FlushRequest{mode: flushRequestCron, tree: cron2},
+		&FlushRequest{mode: flushRequestForce, tree: force},
+	)
+
+	assert.Len(t, fromCheckpointBounded, 1)
+	assert.Same(t, bounded, fromCheckpointBounded[0])
+	cronStart, cronEnd := fromCrons.GetTimeRange()
+	assert.Equal(t, types.BuildTS(1, 0), cronStart)
+	assert.Equal(t, types.BuildTS(20, 0), cronEnd)
+	assert.Equal(t, 2, fromCrons.GetTree().TableCount())
+	forceStart, forceEnd := fromForce.GetTimeRange()
+	assert.Equal(t, types.BuildTS(3, 0), forceStart)
+	assert.Equal(t, types.BuildTS(8, 0), forceEnd)
+	assert.Equal(t, 1, fromForce.GetTree().TableCount())
 }
 
 func TestTriggerJobFallsBackToNormalWhenBoundedEntryIsEmpty(t *testing.T) {
@@ -178,6 +203,39 @@ func TestTriggerJobFallsBackToNormalWhenBoundedEntryIsEmpty(t *testing.T) {
 	assert.True(t, scheduler.scheduleCalled)
 	_, normalEnd := normal.GetTimeRange()
 	assert.Equal(t, normalEnd, scheduler.scheduledTS)
+	assert.False(t, scheduler.force)
+}
+
+func TestTriggerJobEnqueuesBoundedFlushWhenStalledCheckpointHasDirtyEntry(t *testing.T) {
+	intentStart := types.BuildTS(2, 0)
+	intentEnd := types.BuildTS(5, 0)
+	intent := NewCheckpointEntry("", intentStart, intentEnd, ET_Incremental)
+	intent.bornTime = time.Now().Add(-stalledCheckpointFlushAge - time.Second)
+
+	sourcer := &triggerJobBoundedCollector{}
+	scheduler := &triggerJobCheckpointScheduler{pending: intent}
+	queue := newFlushRequestQueue()
+	flusher := &flushImpl{
+		sourcer:            sourcer,
+		checkpointSchduler: scheduler,
+		flushRequestQ:      queue,
+	}
+
+	flusher.triggerJob(context.Background())
+
+	assert.True(t, sourcer.runCalled)
+	assert.True(t, sourcer.scanCalled)
+	assert.Equal(t, intentStart, sourcer.scanFrom)
+	assert.Equal(t, intentEnd, sourcer.scanTo)
+	assert.False(t, sourcer.getMergedCalled)
+	assert.Len(t, queue.items, 1)
+	request := queue.items[0].(*FlushRequest)
+	assert.Equal(t, flushRequestCheckpointBounded, request.mode)
+	requestStart, requestEnd := request.tree.GetTimeRange()
+	assert.Equal(t, intentStart, requestStart)
+	assert.Equal(t, intentEnd, requestEnd)
+	assert.True(t, scheduler.scheduleCalled)
+	assert.Equal(t, intentEnd, scheduler.scheduledTS)
 	assert.False(t, scheduler.force)
 }
 
@@ -264,6 +322,39 @@ func (c *triggerJobFallbackCollector) Merge() *logtail.DirtyTreeEntry {
 }
 func (c *triggerJobFallbackCollector) GetMaxLSN(types.TS, types.TS) uint64 { return 0 }
 func (c *triggerJobFallbackCollector) Init(types.TS)                       {}
+
+type triggerJobBoundedCollector struct {
+	runCalled       bool
+	scanCalled      bool
+	getMergedCalled bool
+	scanFrom        types.TS
+	scanTo          types.TS
+}
+
+func (c *triggerJobBoundedCollector) String() string { return "" }
+func (c *triggerJobBoundedCollector) Run(time.Duration) {
+	c.runCalled = true
+}
+func (c *triggerJobBoundedCollector) ScanInRange(from, to types.TS) (*logtail.DirtyTreeEntry, int) {
+	return c.ScanInRangePruned(from, to), 1
+}
+func (c *triggerJobBoundedCollector) ScanInRangePruned(from, to types.TS) *logtail.DirtyTreeEntry {
+	c.scanCalled = true
+	c.scanFrom = from
+	c.scanTo = to
+	tree := model.NewTree()
+	tree.AddTable(1, 7)
+	return logtail.NewDirtyTreeEntry(from, to, tree)
+}
+func (c *triggerJobBoundedCollector) GetAndRefreshMerged() *logtail.DirtyTreeEntry {
+	c.getMergedCalled = true
+	return newTestDirtyTreeEntry(types.BuildTS(1, 0), types.BuildTS(10, 0), 8)
+}
+func (c *triggerJobBoundedCollector) Merge() *logtail.DirtyTreeEntry {
+	return logtail.NewEmptyDirtyTreeEntry()
+}
+func (c *triggerJobBoundedCollector) GetMaxLSN(types.TS, types.TS) uint64 { return 0 }
+func (c *triggerJobBoundedCollector) Init(types.TS)                       {}
 
 type triggerJobCheckpointScheduler struct {
 	pending        *CheckpointEntry
