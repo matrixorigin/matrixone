@@ -7533,6 +7533,93 @@ func TestUserLevelLockNameMaxLength(t *testing.T) {
 	})
 }
 
+func TestUserLevelLockEmptyName(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+
+		_, err := getUserLevelLock("", 0, proc1)
+		require.Error(t, err, "GET_LOCK with empty name should return error")
+
+		_, _, err = releaseUserLevelLock("", proc1)
+		require.Error(t, err, "RELEASE_LOCK with empty name should return error")
+
+		_, err = isUserLevelLockFree("", proc1)
+		require.Error(t, err, "IS_FREE_LOCK with empty name should return error")
+	})
+}
+
+func TestUserLevelLockCaseInsensitive(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+
+		// Session A acquires lock with mixed-case name.
+		v, err := getUserLevelLock("Case_Lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		// Session B attempts to acquire the same lock with different case —
+		// MySQL treats these as the same lock, so B should fail to acquire.
+		v, err = getUserLevelLock("CASE_LOCK", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v, "case-insensitive: session B should not acquire lock held by A")
+
+		// Session B should also fail with lowercase variant.
+		v, err = getUserLevelLock("case_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v, "case-insensitive: session B should not acquire lock held by A")
+
+		// IS_FREE_LOCK should also be case-insensitive: lock is held, so it's not free.
+		v, err = isUserLevelLockFree("case_lock", proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v, "case-insensitive IS_FREE_LOCK should see lock as held")
+
+		// Session A releases the lock.
+		v, isNull, err := releaseUserLevelLock("case_LOCK", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v, "case-insensitive release should succeed for lock owner")
+
+		// Now session B can acquire the lock.
+		v, err = getUserLevelLock("case_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v, "after release, session B should acquire the lock")
+
+		// Cleanup.
+		releaseUserLevelLock("CASE_LOCK", proc2)
+	})
+}
+
+func TestUserLevelLockMultibyteBoundary(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+
+		// 64 Chinese characters — each is 3 bytes in UTF-8, so 192 bytes total.
+		// MySQL enforces the limit in characters, not bytes, so this should be valid.
+		exact64chars := strings.Repeat("中", maxUserLevelLockNameLength)
+
+		v, err := getUserLevelLock(exact64chars, 0, proc1)
+		require.NoError(t, err, "64 Chinese characters should be valid")
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock(exact64chars, proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		// 65 Chinese characters — exceeds the 64-character limit.
+		overlongChars := strings.Repeat("中", maxUserLevelLockNameLength+1)
+		_, err = getUserLevelLock(overlongChars, 0, proc1)
+		require.Error(t, err, "65 Chinese characters should be rejected")
+
+		_, _, err = releaseUserLevelLock(overlongChars, proc1)
+		require.Error(t, err)
+
+		_, err = isUserLevelLockFree(overlongChars, proc1)
+		require.Error(t, err)
+	})
+}
+
 func initBitCastTestCase() []tcTemp {
 	return []tcTemp{
 		{
