@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -5234,6 +5236,524 @@ func initStDistanceTestCase() []tcTemp {
 	}
 }
 
+func TestStMeasuresGeodetic(t *testing.T) {
+	// geo.EarthRadiusMeters = 6371008.8; one degree of arc on the mean sphere.
+	oneDeg := (math.Pi / 180.0) * 6371008.8 // ~111194.93 m
+
+	// geodesic length of a one-degree equatorial segment.
+	l, err := geodeticLength(encodeGeometryPayload("LINESTRING(0 0,1 0)", 0, false))
+	require.NoError(t, err)
+	require.InDelta(t, oneDeg, l, 1.0)
+
+	// geodesic distance between two points one degree apart.
+	d, err := geodeticDistance(
+		encodeGeometryPayload("POINT(0 0)", 0, false),
+		encodeGeometryPayload("POINT(1 0)", 0, false))
+	require.NoError(t, err)
+	require.InDelta(t, oneDeg, d, 1.0)
+
+	// geodesic area of a ~1deg x 1deg cell near the equator (square meters).
+	a, err := geodeticArea(encodeGeometryPayload("POLYGON((0 0,1 0,1 1,0 1,0 0))", 0, false))
+	require.NoError(t, err)
+	require.InEpsilon(t, 1.2365e10, a, 0.02)
+
+	// Type validation is preserved on the geodetic path.
+	_, err = geodeticArea(encodeGeometryPayload("POINT(1 1)", 0, false))
+	require.Error(t, err)
+	_, err = geodeticLength(encodeGeometryPayload("POINT(1 1)", 0, false))
+	require.Error(t, err)
+
+	// Dispatch: ST_Area on a SRID-4326 typed input uses the geodesic kernel.
+	proc := testutil.NewProcess(t)
+	geom4326 := types.T_geometry.ToType()
+	geom4326.Width = 4327 // SRID 4326
+	wantArea, _ := geodeticArea(encodeGeometryPayload("POLYGON((0 0,1 0,1 1,0 1,0 0))", 0, false))
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(geom4326, []string{"POLYGON((0 0,1 0,1 1,0 1,0 0))"}, []bool{false})},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantArea}, []bool{false}),
+		StArea)
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
+}
+
+func TestGeometry32Distances(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	g32 := func(wkt string) string {
+		g, err := geo.ParseWKT(wkt)
+		require.NoError(t, err)
+		return string(geo.WriteWKBFloat32(g))
+	}
+	run := func(fn fEvalFn, a, b string, want float32) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32(a)}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32(b)}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_float32.ToType(), false, []float32{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	// ST_Distance / Frechet / Hausdorff on GEOMETRY32 return float32.
+	run(StDistance32, "POINT(0 0)", "POINT(3 4)", 5.0)
+	run(StFrechetDistance32, "LINESTRING(0 0, 10 0)", "LINESTRING(0 1, 10 1)", 1.0)
+	run(StHausdorffDistance32, "LINESTRING(0 0, 10 0)", "LINESTRING(0 1, 10 1)", 1.0)
+}
+
+func TestGeometry32ReturningBinary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	g32 := func(wkt string) string {
+		g, err := geo.ParseWKT(wkt)
+		require.NoError(t, err)
+		return string(geo.WriteWKBFloat32(g))
+	}
+	// out must be genuinely float32 WKB and round-trip to wantWKT.
+	assertF32 := func(tc FunctionTestCase, wantWKT string) {
+		t.Helper()
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+		raw := tc.GetResultVectorDirectly().GetBytesAt(0)
+		g, err := geo.ReadWKBFloat32(raw)
+		require.NoError(t, err, "output should be float32 WKB")
+		require.Equal(t, wantWKT, geo.WriteWKT(g))
+	}
+
+	// ST_Simplify(geom32, tol) -> geom32.
+	assertF32(NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32("LINESTRING(0 0, 5 0.0001, 10 0)")}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0.001}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"LINESTRING(0 0,10 0)"}, []bool{false}), StSimplify),
+		"LINESTRING(0 0,10 0)")
+
+	// ST_LineInterpolatePoint(geom32, frac) -> geom32 point.
+	assertF32(NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32("LINESTRING(0 0, 10 0)")}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0.5}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"POINT(5 0)"}, []bool{false}), StLineInterpolatePoint),
+		"POINT(5 0)")
+
+	// ST_Collect(geom32, geom32) -> geom32 multipoint.
+	assertF32(NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32("POINT(0 0)")}, []bool{false}),
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32("POINT(1 1)")}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"MULTIPOINT(0 0,1 1)"}, []bool{false}), StCollect),
+		"MULTIPOINT(0 0,1 1)")
+
+	// ST_Union(geom32, geom32) -> geom32 polygon. Expected computed via the same
+	// engine so the ring order matches; the value is checked to be float32 WKB.
+	ua, _ := geo.ParseWKT("POLYGON((0 0,4 0,4 4,0 4,0 0))")
+	ub, _ := geo.ParseWKT("POLYGON((4 0,8 0,8 4,4 4,4 0))")
+	uexp, err := geo.Overlay(ua, ub, geo.OpUnion)
+	require.NoError(t, err)
+	wantU := geo.WriteWKT(uexp)
+	assertF32(NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32("POLYGON((0 0,4 0,4 4,0 4,0 0))")}, []bool{false}),
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{g32("POLYGON((4 0,8 0,8 4,4 4,4 0))")}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{wantU}, []bool{false}), StUnion),
+		wantU)
+}
+
+func TestBufferOp(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Point buffer is a disc; compare the SQL output to the geo kernel's WKT.
+	g := "POINT(0 0)"
+	gp, _ := geo.ParseWKT(g)
+	want, err := geo.Buffer(gp, 2.0, 8)
+	require.NoError(t, err)
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{g}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{2.0}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{geo.WriteWKT(want)}, []bool{false}), StBuffer)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+
+	// With explicit segments-per-quarter.
+	want3, _ := geo.Buffer(gp, 2.0, 4)
+	tc3 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{g}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{2.0}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{4}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{geo.WriteWKT(want3)}, []bool{false}), StBufferQS)
+	ok, info = tc3.Run()
+	require.True(t, ok, info)
+}
+
+func TestOverlayOps(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	a := "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))"
+	b := "POLYGON((2 2, 6 2, 6 6, 2 6, 2 2))"
+
+	// The SQL function delegates to geo.Overlay; computing the expected value the
+	// same way makes the WKB output canonicalize to identical WKT, validating the
+	// full decode -> overlay -> WKB round-trip through the function framework.
+	expect := func(g1, g2 string, op geo.BoolOp) string {
+		ga, _ := geo.ParseWKT(g1)
+		gb, _ := geo.ParseWKT(g2)
+		r, err := geo.Overlay(ga, gb, op)
+		require.NoError(t, err)
+		return geo.WriteWKT(r)
+	}
+	run := func(fn fEvalFn, g1, g2 string, op geo.BoolOp, wantArea float64) {
+		t.Helper()
+		// Sanity-check the area at the geo level.
+		ga, _ := geo.ParseWKT(g1)
+		gb, _ := geo.ParseWKT(g2)
+		r, _ := geo.Overlay(ga, gb, op)
+		require.InDelta(t, wantArea, geo.CartesianArea(r), 1e-9)
+		// And exercise the SQL wiring.
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g1}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g2}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_geometry.ToType(), false, []string{expect(g1, g2, op)}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	run(StIntersection, a, b, geo.OpIntersection, 4.0)
+	run(StUnion, a, b, geo.OpUnion, 28.0)
+	run(StDifference, a, b, geo.OpDifference, 12.0)
+	run(StSymDifference, a, b, geo.OpXOR, 24.0)
+}
+
+func TestDiscreteDistances(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	run := func(fn fEvalFn, g1, g2 string, want float64) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g1}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g2}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	run(StHausdorffDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 1, 10 1)", 1.0)
+	run(StHausdorffDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 0, 10 0)", 0.0)
+	run(StFrechetDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 1, 10 1)", 1.0)
+	run(StFrechetDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 0, 10 5)", 5.0)
+}
+
+func TestLinearReferencing(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	geomFloat := func(fn fEvalFn, line string, f float64, wantWKT string) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{line}, []bool{false}),
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{f}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_geometry.ToType(), false, []string{wantWKT}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	geomFloat(StLineInterpolatePoint, "LINESTRING(0 0, 10 0)", 0.5, "POINT(5 0)")
+	geomFloat(StLineInterpolatePoint, "LINESTRING(0 0, 10 0, 10 10)", 0.75, "POINT(10 5)")
+	geomFloat(StLineInterpolatePoints, "LINESTRING(0 0, 10 0)", 0.25, "MULTIPOINT(2.5 0, 5 0, 7.5 0, 10 0)")
+	geomFloat(StPointAtDistance, "LINESTRING(0 0, 10 0)", 3, "POINT(3 0)")
+}
+
+func TestConstructiveOps(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// ST_ConvexHull(geometry).
+	tcHull := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(),
+				[]string{"MULTIPOINT(0 0, 4 0, 4 4, 0 4, 2 2)"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false,
+			[]string{"POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))"}, []bool{false}), StConvexHull)
+	ok, info := tcHull.Run()
+	require.True(t, ok, info)
+
+	// ST_Simplify(geometry, tolerance).
+	tcSimp := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(),
+				[]string{"LINESTRING(0 0, 5 0.0001, 10 0)"}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0.001}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false,
+			[]string{"LINESTRING(0 0, 10 0)"}, []bool{false}), StSimplify)
+	ok, info = tcSimp.Run()
+	require.True(t, ok, info)
+
+	// ST_Collect(geometry, geometry).
+	tcColl := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(0 0)"}, []bool{false}),
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 1)"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false,
+			[]string{"MULTIPOINT(0 0, 1 1)"}, []bool{false}), StCollect)
+	ok, info = tcColl.Run()
+	require.True(t, ok, info)
+}
+
+func TestGeoJSONFunctions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// ST_AsGeoJSON(geometry).
+	tcAs := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{`{"type":"Point","coordinates":[1,2]}`}, []bool{false}), StAsGeoJSON)
+	ok, info := tcAs.Run()
+	require.True(t, ok, info)
+
+	// ST_AsGeoJSON(geometry, maxdec).
+	tcAsP := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1.23456 2.34567)"}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{`{"type":"Point","coordinates":[1.23,2.35]}`}, []bool{false}), StAsGeoJSONPrec)
+	ok, info = tcAsP.Run()
+	require.True(t, ok, info)
+
+	// ST_GeomFromGeoJSON -> canonical WKT via geometry comparison.
+	tcFrom := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`{"type":"LineString","coordinates":[[0,0],[1,1],[2,2]]}`}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false,
+			[]string{"LINESTRING(0 0, 1 1, 2 2)"}, []bool{false}), StGeomFromGeoJSON)
+	ok, info = tcFrom.Run()
+	require.True(t, ok, info)
+
+	// ST_GeomFromGeoJSON(str, srid).
+	tcFromS := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`{"type":"Point","coordinates":[3,4]}`}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false,
+			[]string{"POINT(3 4)"}, []bool{false}), StGeomFromGeoJSONWithSRID)
+	ok, info = tcFromS.Run()
+	require.True(t, ok, info)
+}
+
+func TestMBRPredicates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	run := func(fn fEvalFn, g1, g2 string, want bool) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g1}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g2}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_bool.ToType(), false, []bool{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	outer := "POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))"
+	inner := "POLYGON((2 2, 4 2, 4 4, 2 4, 2 2))"
+	right := "POLYGON((10 0, 20 0, 20 10, 10 10, 10 0))"  // shares the x=10 edge
+	far := "POLYGON((20 20, 30 20, 30 30, 20 30, 20 20))" // disjoint
+	cross := "POLYGON((5 5, 15 5, 15 15, 5 15, 5 5))"     // partial overlap
+
+	run(MBRContains, outer, inner, true)
+	run(MBRContains, inner, outer, false)
+	run(MBRWithin, inner, outer, true)
+	run(MBRCovers, outer, inner, true)
+	run(MBRCoveredBy, inner, outer, true)
+
+	run(MBREquals, outer, outer, true)
+	run(MBREquals, outer, inner, false)
+
+	run(MBRDisjoint, outer, far, true)
+	run(MBRDisjoint, outer, inner, false)
+	run(MBRIntersects, outer, inner, true)
+	run(MBRIntersects, outer, far, false)
+
+	run(MBRTouches, outer, right, true)
+	run(MBRTouches, outer, cross, false)
+
+	run(MBROverlaps, outer, cross, true)
+	run(MBROverlaps, outer, inner, false) // containment is not overlap
+	run(MBROverlaps, outer, right, false) // edge touch is not overlap
+}
+
+func TestGeoHashFunctions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// ST_GeoHash(point, len) and ST_GeoHash(lon, lat, len) -> "ezs42".
+	tcP := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(-5.603 42.605)"}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{5}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"ezs42"}, []bool{false}), StGeoHashFromPoint)
+	ok, info := tcP.Run()
+	require.True(t, ok, info)
+
+	tcLL := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{-5.603}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{42.605}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{5}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"ezs42"}, []bool{false}), StGeoHashFromLonLat)
+	ok, info = tcLL.Run()
+	require.True(t, ok, info)
+
+	// Decode back.
+	wantLon, wantLat, _ := geo.DecodeGeoHash("ezs42")
+	tcLat := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"ezs42"}, []bool{false})},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantLat}, []bool{false}), StLatFromGeoHash)
+	ok, info = tcLat.Run()
+	require.True(t, ok, info)
+
+	tcLon := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"ezs42"}, []bool{false})},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantLon}, []bool{false}), StLongFromGeoHash)
+	ok, info = tcLon.Run()
+	require.True(t, ok, info)
+
+	// ST_PointFromGeoHash(geohash, srid) -> center point.
+	wantPt := geo.WriteWKT(geo.Point{X: wantLon, Y: wantLat})
+	tcPt := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"ezs42"}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{wantPt}, []bool{false}), StPointFromGeoHash)
+	ok, info = tcPt.Run()
+	require.True(t, ok, info)
+}
+
+func TestPointMiscFunctions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom := types.T_geometry.ToType()
+
+	runFloat := func(fn fEvalFn, wkt string, want float64) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(geom, []string{wkt}, []bool{false})},
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+	runFloat(StLongitude, "POINT(3 4)", 3)
+	runFloat(StLatitude, "POINT(3 4)", 4)
+
+	// ST_SwapXY
+	tcSwap := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(geom, []string{"LINESTRING(0 1,2 3)"}, []bool{false})},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"LINESTRING(1 0,3 2)"}, []bool{false}), StSwapXY)
+	ok, info := tcSwap.Run()
+	require.True(t, ok, info)
+
+	// ST_Validate: valid geometry passes through, invalid -> NULL.
+	tcValid := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(geom,
+			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0))", "POLYGON((0 0,4 4,4 0,0 4,0 0))"}, []bool{false, false})},
+		NewFunctionTestResult(types.T_geometry.ToType(), false,
+			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0))", ""}, []bool{false, true}), StValidate)
+	ok, info = tcValid.Run()
+	require.True(t, ok, info)
+
+	// ST_MakeEnvelope
+	tcEnv := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom, []string{"POINT(0 0)"}, []bool{false}),
+			NewFunctionTestInput(geom, []string{"POINT(2 3)"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"POLYGON((0 0,2 0,2 3,0 3,0 0))"}, []bool{false}), StMakeEnvelope)
+	ok, info = tcEnv.Run()
+	require.True(t, ok, info)
+
+	// ST_Distance_Sphere equals the S2 great-circle distance.
+	wantD, _ := geodeticDistance(
+		encodeGeometryPayload("POINT(0 0)", 0, false),
+		encodeGeometryPayload("POINT(1 0)", 0, false))
+	tcSphere := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom, []string{"POINT(0 0)"}, []bool{false}),
+			NewFunctionTestInput(geom, []string{"POINT(1 0)"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantD}, []bool{false}), StDistanceSphere)
+	ok, info = tcSphere.Run()
+	require.True(t, ok, info)
+}
+
+func TestStMeasuresWithSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom := types.T_geometry.ToType() // SRID-undefined type
+	poly := "POLYGON((0 0,1 0,1 1,0 1,0 0))"
+
+	wantGeo, _ := geodeticArea(encodeGeometryPayload(poly, 0, false))
+	wantCart, _ := geometryArea(encodeGeometryPayload(poly, 0, false))
+
+	// ST_Area(poly, 4326) forces geodesic even though the type SRID is 0.
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom, []string{poly}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantGeo}, []bool{false}),
+		StAreaWithSRID)
+	ok, info := fc.Run()
+	require.True(t, ok, info)
+
+	// ST_Area(poly, 0) forces Cartesian.
+	fc2 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom, []string{poly}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantCart}, []bool{false}),
+		StAreaWithSRID)
+	ok2, info2 := fc2.Run()
+	require.True(t, ok2, info2)
+
+	// ST_Distance(p1, p2, 4326) is geodesic.
+	wantDist, _ := geodeticDistance(
+		encodeGeometryPayload("POINT(0 0)", 0, false),
+		encodeGeometryPayload("POINT(1 0)", 0, false))
+	fc3 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom, []string{"POINT(0 0)"}, []bool{false}),
+			NewFunctionTestInput(geom, []string{"POINT(1 0)"}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantDist}, []bool{false}),
+		StDistanceWithSRID)
+	ok3, info3 := fc3.Run()
+	require.True(t, ok3, info3)
+}
+
 func TestStDistance(t *testing.T) {
 	testCases := initStDistanceTestCase()
 
@@ -7568,6 +8088,27 @@ func TestStCoveredByWithGeometryCollections(t *testing.T) {
 	}
 }
 
+// geomInputEWKT builds a geometry test input from an "SRID=n;WKT" string,
+// encoding the SRID into the input type's Width (srid+1) since SRID is no longer
+// stored in the payload.
+func geomInputEWKT(ewkt string) FunctionTestInput {
+	wkt := ewkt
+	srid := uint32(0)
+	if strings.HasPrefix(strings.ToUpper(ewkt), "SRID=") {
+		if sep := strings.IndexByte(ewkt, ';'); sep > 5 {
+			if v, err := strconv.ParseUint(ewkt[5:sep], 10, 32); err == nil {
+				srid = uint32(v)
+				wkt = ewkt[sep+1:]
+			}
+		}
+	}
+	typ := types.T_geometry.ToType()
+	if srid != 0 {
+		typ.Width = int32(srid + 1)
+	}
+	return NewFunctionTestInput(typ, []string{wkt}, []bool{false})
+}
+
 func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 	boolTests := []struct {
 		name  string
@@ -7651,9 +8192,10 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 	for _, tc := range boolTests {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
+			// SRID lives in the type now; encode it from the EWKT prefix.
 			inputs := []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(), []string{tc.left}, []bool{false}),
-				NewFunctionTestInput(types.T_geometry.ToType(), []string{tc.right}, []bool{false}),
+				geomInputEWKT(tc.left),
+				geomInputEWKT(tc.right),
 			}
 			expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
 			tcc := NewFunctionTestCase(proc, inputs, expect, tc.fn)
@@ -7667,8 +8209,8 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 	t.Run("distance", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		inputs := []FunctionTestInput{
-			NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=4326;MULTIPOINT((0 0),(3 0))"}, []bool{false}),
-			NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=3857;POINT(2 0)"}, []bool{false}),
+			geomInputEWKT("SRID=4326;MULTIPOINT((0 0),(3 0))"),
+			geomInputEWKT("SRID=3857;POINT(2 0)"),
 		}
 		expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
 		tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)

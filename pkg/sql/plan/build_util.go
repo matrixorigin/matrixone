@@ -225,14 +225,24 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			return plan.Type{Id: int32(types.T_json)}, nil
 		case defines.MYSQL_TYPE_GEOMETRY:
 			fstr := strings.ToUpper(n.InternalType.FamilyString)
-			typ := plan.Type{Id: int32(types.T_geometry)}
+			oid := types.T_geometry
 			srid := uint32(0)
 			sridDefined := false
 			if n.InternalType.GeoMetadata != nil {
 				srid = n.InternalType.GeoMetadata.SRID
 				sridDefined = n.InternalType.GeoMetadata.SRIDDefined
+				if n.InternalType.GeoMetadata.Float32 {
+					oid = types.T_geometry32
+				}
 			}
-			typ.Enumvalues = geometryMetadataString(fstr, srid, sridDefined)
+			if sridDefined {
+				if err := validateGeometrySRID(int64(srid)); err != nil {
+					return plan.Type{}, err
+				}
+			}
+			typ := plan.Type{Id: int32(oid)}
+			typ.Scale = int32(geometrySubtypeEnum(fstr))
+			typ.Width = encodeGeometrySRIDWidth(srid, sridDefined)
 			return typ, nil
 		case defines.MYSQL_TYPE_UUID:
 			return plan.Type{Id: int32(types.T_uuid)}, nil
@@ -274,7 +284,8 @@ func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs 
 		}
 		return nil
 	}
-	subtype := geometrySubtypeName(colType)
+	// Scale (subtype) is already set by getTypeFromAst; an SRID column attribute
+	// only overrides the SRID, which lives in Width.
 	srid, sridDefined := geometrySRIDValue(colType)
 	for _, attr := range attrs {
 		if sridAttr, ok := attr.(*tree.AttributeSRID); ok {
@@ -282,7 +293,7 @@ func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs 
 			sridDefined = true
 		}
 	}
-	colType.Enumvalues = geometryMetadataString(subtype, srid, sridDefined)
+	colType.Width = encodeGeometrySRIDWidth(srid, sridDefined)
 	return nil
 }
 
