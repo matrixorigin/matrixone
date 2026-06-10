@@ -46,6 +46,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2"
 	hll "github.com/axiomhq/hyperloglog"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -56,7 +57,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/geo"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
@@ -6964,6 +6968,306 @@ func Sleep[T uint64 | float64](ivecs []*vector.Vector, result vector.FunctionRes
 			if err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+const userLevelLockTableID uint64 = 1 << 62
+
+type userLevelLockKey struct {
+	owner string
+	name  string
+}
+
+var userLevelLocks = struct {
+	sync.Mutex
+	counts  map[userLevelLockKey]uint64
+	byOwner map[string]map[string]struct{}
+}{
+	counts:  make(map[userLevelLockKey]uint64),
+	byOwner: make(map[string]map[string]struct{}),
+}
+
+func userLevelLockOwner(proc *process.Process) string {
+	if proc == nil || proc.GetSessionInfo() == nil {
+		return ""
+	}
+	si := proc.GetSessionInfo()
+	if si.SessionId != uuid.Nil {
+		return si.SessionId.String()
+	}
+	if proc.GetLockService() != nil {
+		return fmt.Sprintf("%s:%d", proc.GetLockService().GetServiceID(), si.GetConnectionID())
+	}
+	return fmt.Sprintf("%d", si.GetConnectionID())
+}
+
+func userLevelLockTxnID(owner, name string) []byte {
+	return []byte("mo-user-level-lock\x00" + owner + "\x00" + name)
+}
+
+func userLevelLockRow(proc *process.Process, name string) []byte {
+	account := ""
+	if proc != nil && proc.GetSessionInfo() != nil {
+		account = proc.GetSessionInfo().Account
+	}
+	return []byte(account + "\x00" + name)
+}
+
+func userLevelLockService(proc *process.Process) (lockservice.LockService, error) {
+	if proc == nil || proc.GetLockService() == nil {
+		return nil, moerr.NewInternalErrorNoCtx("GET_LOCK requires lock service")
+	}
+	return proc.GetLockService(), nil
+}
+
+func userLevelLockOptions(policy lockpb.WaitPolicy) lockpb.LockOptions {
+	return lockpb.LockOptions{
+		Granularity: lockpb.Granularity_Row,
+		Mode:        lockpb.LockMode_Exclusive,
+		Policy:      policy,
+	}
+}
+
+func userLevelLockContext(proc *process.Process, timeout float64) (context.Context, context.CancelFunc, lockpb.WaitPolicy) {
+	ctx := context.Background()
+	if proc != nil && proc.Ctx != nil {
+		ctx = proc.Ctx
+	}
+	if timeout == 0 {
+		return ctx, func() {}, lockpb.WaitPolicy_FastFail
+	}
+	if timeout > 0 {
+		ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout*float64(time.Second)))
+		return ctx, cancel, lockpb.WaitPolicy_Wait
+	}
+	return ctx, func() {}, lockpb.WaitPolicy_Wait
+}
+
+func userLevelLockConflictOrTimeout(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrLockConflict) ||
+		errors.Is(err, lockservice.ErrLockConflict) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
+func trackUserLevelLock(owner, name string) {
+	key := userLevelLockKey{owner: owner, name: name}
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	userLevelLocks.counts[key]++
+	if userLevelLocks.byOwner[owner] == nil {
+		userLevelLocks.byOwner[owner] = make(map[string]struct{})
+	}
+	userLevelLocks.byOwner[owner][name] = struct{}{}
+}
+
+func userLevelLockRefCount(owner, name string) uint64 {
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+	return userLevelLocks.counts[userLevelLockKey{owner: owner, name: name}]
+}
+
+func untrackUserLevelLock(owner, name string) (uint64, bool) {
+	key := userLevelLockKey{owner: owner, name: name}
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	count := userLevelLocks.counts[key]
+	if count == 0 {
+		return 0, false
+	}
+	if count > 1 {
+		userLevelLocks.counts[key] = count - 1
+		return count - 1, true
+	}
+	delete(userLevelLocks.counts, key)
+	if names := userLevelLocks.byOwner[owner]; names != nil {
+		delete(names, name)
+		if len(names) == 0 {
+			delete(userLevelLocks.byOwner, owner)
+		}
+	}
+	return 0, true
+}
+
+func userLevelLocksForOwner(owner string) []string {
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	names := userLevelLocks.byOwner[owner]
+	if len(names) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(names))
+	for name := range names {
+		result = append(result, name)
+	}
+	return result
+}
+
+func getUserLevelLock(name string, timeout float64, proc *process.Process) (int64, error) {
+	ls, err := userLevelLockService(proc)
+	if err != nil {
+		return 0, err
+	}
+	owner := userLevelLockOwner(proc)
+	if userLevelLockRefCount(owner, name) > 0 {
+		trackUserLevelLock(owner, name)
+		return 1, nil
+	}
+
+	ctx, cancel, policy := userLevelLockContext(proc, timeout)
+	defer cancel()
+
+	_, err = ls.Lock(
+		ctx,
+		userLevelLockTableID,
+		[][]byte{userLevelLockRow(proc, name)},
+		userLevelLockTxnID(owner, name),
+		userLevelLockOptions(policy))
+	if err != nil {
+		if userLevelLockConflictOrTimeout(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	trackUserLevelLock(owner, name)
+	return 1, nil
+}
+
+func releaseUserLevelLock(name string, proc *process.Process) (int64, error) {
+	ls, err := userLevelLockService(proc)
+	if err != nil {
+		return 0, err
+	}
+	owner := userLevelLockOwner(proc)
+	count := userLevelLockRefCount(owner, name)
+	if count == 0 {
+		return 0, nil
+	}
+	if count > 1 {
+		untrackUserLevelLock(owner, name)
+		return 1, nil
+	}
+	if err := ls.Unlock(proc.Ctx, userLevelLockTxnID(owner, name), timestamp.Timestamp{}); err != nil {
+		return 0, err
+	}
+	untrackUserLevelLock(owner, name)
+	return 1, nil
+}
+
+func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
+	ls, err := userLevelLockService(proc)
+	if err != nil {
+		return 0, err
+	}
+	owner := userLevelLockOwner(proc)
+	probeOwner := owner + "\x00probe\x00" + name
+	_, err = ls.Lock(
+		proc.Ctx,
+		userLevelLockTableID,
+		[][]byte{userLevelLockRow(proc, name)},
+		userLevelLockTxnID(probeOwner, name),
+		userLevelLockOptions(lockpb.WaitPolicy_FastFail))
+	if err != nil {
+		if userLevelLockConflictOrTimeout(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if err := ls.Unlock(proc.Ctx, userLevelLockTxnID(probeOwner, name), timestamp.Timestamp{}); err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
+
+func ReleaseUserLevelLocks(proc *process.Process) {
+	if proc == nil || proc.GetLockService() == nil {
+		return
+	}
+	owner := userLevelLockOwner(proc)
+	for _, name := range userLevelLocksForOwner(owner) {
+		for {
+			count, held := untrackUserLevelLock(owner, name)
+			if !held {
+				break
+			}
+			if count == 0 {
+				_ = proc.GetLockService().Unlock(context.Background(), userLevelLockTxnID(owner, name), timestamp.Timestamp{})
+				break
+			}
+		}
+	}
+}
+
+func GetLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	timeouts := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+	rs := vector.MustFunctionResult[int64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		name, nameNull := names.GetStrValue(i)
+		timeout, timeoutNull := timeouts.GetValue(i)
+		if nameNull || timeoutNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, err := getUserLevelLock(string(name), timeout, proc)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ReleaseLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[int64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		name, null := names.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, err := releaseUserLevelLock(string(name), proc)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func IsFreeLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[int64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		name, null := names.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, err := isUserLevelLockFree(string(name), proc)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(value, false); err != nil {
+			return err
 		}
 	}
 	return nil

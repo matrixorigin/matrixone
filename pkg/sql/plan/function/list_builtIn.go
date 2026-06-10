@@ -10616,6 +10616,75 @@ var supportedControlBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `get_lock`
+	{
+		functionId: GET_LOCK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_float64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return GetLock
+				},
+			},
+		},
+	},
+
+	// function `release_lock`
+	{
+		functionId: RELEASE_LOCK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ReleaseLock
+				},
+			},
+		},
+	},
+
+	// function `is_free_lock`
+	{
+		functionId: IS_FREE_LOCK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsFreeLock
+				},
+			},
+		},
+	},
+
 	// function `trigger_fault_point`
 	{
 		functionId: TRIGGER_FAULT_POINT,
