@@ -156,3 +156,40 @@ func TestBindFuncExprImplByPlanExpr_JsonValid(t *testing.T) {
 		require.Equal(t, int32(types.T_bool), result.Typ.Id)
 	})
 }
+
+func TestBindFuncExprImplByAstExpr_IntervalDisambiguation(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	whereBinder := NewWhereBinder(builder, bindCtx)
+
+	t.Run("function style keeps interval builtin", func(t *testing.T) {
+		args := []tree.Expr{
+			tree.NewNumVal(int64(5), "5", false, tree.P_int64),
+			tree.NewNumVal("day", "day", false, tree.P_char),
+		}
+		result, err := whereBinder.bindFuncExprImplByAstExpr("interval", args, 0)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		f := result.GetF()
+		require.NotNil(t, f, "interval(5, 'day') should bind to the interval builtin")
+		require.Equal(t, "interval", f.Func.GetObjName())
+		require.Len(t, f.Args, 2)
+		require.NotEqual(t, int32(types.T_interval), result.Typ.Id)
+	})
+
+	t.Run("interval expression rewrites to interval list", func(t *testing.T) {
+		args := []tree.Expr{
+			tree.NewNumVal(int64(5), "5", false, tree.P_int64),
+			tree.NewTimeUnitExpr("day"),
+		}
+		result, err := whereBinder.bindFuncExprImplByAstExpr("interval", args, 0)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		require.Equal(t, int32(types.T_interval), result.Typ.Id)
+		list := result.GetList()
+		require.NotNil(t, list, "INTERVAL 5 DAY should bind as an interval expression list")
+		require.Len(t, list.List, 2)
+		require.Equal(t, "day", list.List[1].GetLit().GetSval())
+	})
+}

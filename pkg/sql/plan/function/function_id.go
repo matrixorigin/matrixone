@@ -877,6 +877,7 @@ var functionIdRegister = map[string]int32{
 	"from_days":         FROM_DAYS,
 	"from_unixtime":     FROM_UNIXTIME,
 	"get_format":        GET_FORMAT,
+	"interval":          INTERVAL,
 	"left":              LEFT,
 	"right":             RIGHT,
 	// unary functions
