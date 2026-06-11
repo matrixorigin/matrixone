@@ -161,6 +161,9 @@ func TestEncodeJSONLineAllTypes(t *testing.T) {
 	require.Contains(t, s, `"c_i64":-4`)
 	require.Contains(t, s, `"c_varchar":"hi"`)
 	require.Contains(t, s, `"c_json":{"a":1}`)
+	// bit columns are emitted as their raw big-endian bytes (here 0x05) so the
+	// external reader round-trips the value instead of reading the digits of "5".
+	require.Contains(t, s, `"c_bit":"\u0005"`)
 }
 
 // TestCSVValueUnsupportedType ensures an unsupported column type errors.

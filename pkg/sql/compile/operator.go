@@ -945,11 +945,21 @@ func constructExternalInsert(
 			}
 		}
 	}
+	// Evaluate WRITE_FILE_PATTERN against the statement start timestamp so that
+	// parallel pipelines / multiple CNs all resolve the same path even when the
+	// pattern contains time directives (e.g. %Y/%m/%d/%H). Fall back to time.Now()
+	// when the statement start is not carried on the context.
+	stmtAt := time.Now()
+	if v := proc.Ctx.Value(defines.StartTS{}); v != nil {
+		if t, ok := v.(time.Time); ok {
+			stmtAt = t
+		}
+	}
 	cfg := externalwrite.WriterConfig{
 		Pattern:  pattern,
 		Format:   format,
 		Attrs:    attrs,
-		Stmt:     time.Now(),
+		Stmt:     stmtAt,
 		TimeZone: proc.GetSessionInfo().TimeZone,
 	}
 	if cfg.Format == "" {

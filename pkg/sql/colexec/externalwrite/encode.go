@@ -124,7 +124,7 @@ func (w *externalWriter) csvValue(vec *vector.Vector, i int) (val []byte, quote 
 		if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
 			return []byte(strconv.FormatFloat(float64(v), 'f', -1, 32)), false, nil
 		}
-		return []byte(strconv.FormatFloat(float64(v), 'f', int(vec.GetType().Scale), 64)), false, nil
+		return []byte(strconv.FormatFloat(float64(v), 'f', int(vec.GetType().Scale), 32)), false, nil
 	case types.T_float64:
 		v := vector.GetFixedAtNoTypeCheck[float64](vec, i)
 		if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
@@ -211,7 +211,15 @@ func (w *externalWriter) jsonValue(vec *vector.Vector, i int) (interface{}, erro
 	case types.T_bool:
 		return vector.GetFixedAtNoTypeCheck[bool](vec, i), nil
 	case types.T_bit:
-		return vector.GetFixedAtNoTypeCheck[uint64](vec, i), nil
+		// The external reader parses bit columns from their raw big-endian byte
+		// representation (see external.go getColData T_bit), the same form the CSV
+		// writer emits. Emit those bytes as a JSON string so the value round-trips;
+		// a plain decimal number would be read back byte-by-byte and corrupt it.
+		v := vector.GetFixedAtNoTypeCheck[uint64](vec, i)
+		byteLength := (vec.GetType().Width + 7) / 8
+		b := slices.Clone(types.EncodeUint64(&v)[:byteLength])
+		slices.Reverse(b)
+		return string(b), nil
 	case types.T_int8:
 		return vector.GetFixedAtNoTypeCheck[int8](vec, i), nil
 	case types.T_int16:

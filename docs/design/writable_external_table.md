@@ -9,7 +9,7 @@ INSERT INTO T SELECT * FROM ...
 Insert into external table should be done in the same way as insert into a matrixone table.
 The query should be planned and optimized, and when insert rows, instead of inserting into
 matrixone table, it should just call a API and add rows into the table.  `LOAD` should load 
-data into the external table using same API.  The API should be invokes using Batches, to 
+data into the external table using same API.  The API should be invoked using batches, to 
 try to load multiple rows in one batch.
 
 When `INSERT` or `LOAD` a large amount of data, it should be able to run on multi CN in parallel.
@@ -21,7 +21,7 @@ At this moment, we do not support `UPDATE` and `DELETE`, we will add this featur
 As implementation, we will only support INSERT to csv files and jsonline files.   For external table,
 it must have an additional config option `WRITE_FILE_PATTERN=strftime_string`, such that newly inserted
 data is written to a new file, (or many new files if there are parallel writers, but each of the pipeline
-should only create one file).   The `strftime_string` can contain `%` formatting charaters as strftime.
+should only create one file).   The `strftime_string` can contain `%` formatting characters as strftime.
 We will extend strftime with the following.   
    1. `%nN` be replaced by n random digit numbers.  
    2. `%U` be replaced by a generated UUID

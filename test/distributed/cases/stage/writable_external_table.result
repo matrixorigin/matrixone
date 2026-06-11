@@ -73,8 +73,10 @@ c_dt date, c_bool bool, c_bit bit(8), c_json json)
 infile{'filepath'='stage://wstage/wext_widejl_*.jl', 'format'='jsonline', 'write_file_pattern'='stage://wstage/wext_widejl_%U.jl', 'jsondata'='object'}
 fields terminated by ',';
 insert into ext_wide_jl select * from wide_src;
-select c_i8, c_i64, c_u32, c_dec, c_vc, c_bool from ext_wide_jl order by c_i64;
-internal error: the input value 'hi,there' is invalid Decimal64 type for column 3
+select * from ext_wide_jl order by c_i64;
+c_i8    c_i64    c_u32    c_f32    c_dec    c_ch    c_vc    c_txt    c_dt    c_bool    c_bit    c_json
+null    null    null    null    null    null    null    null    null    null    null    null
+-1    9223372036854775807    4000000000    1.5    123.45    ab    hi,there    long text    2026-06-08    1    5    {"k": 1}
 drop table if exists ext_load;
 create external table ext_load(col1 date not null, col2 datetime, col3 timestamp, col4 bool)
 infile{'filepath'='stage://wstage/wext_load_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_load_%U.csv'}
