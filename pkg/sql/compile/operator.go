@@ -1559,8 +1559,8 @@ func constructShuffleOperatorForJoinV2(bucketNum int32, node *plan.Node, left bo
 	return arg
 }
 
-func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool) *shuffle.Shuffle {
-	arg := shuffle.NewArgument()
+func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool) *shuffleV2.ShuffleV2 {
+	arg := shuffleV2.NewArgument()
 	var expr *plan.Expr
 	cond := node.OnList[node.Stats.HashmapStats.ShuffleColIdx]
 	switch condImpl := cond.Expr.(type) {
@@ -1589,9 +1589,6 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
-	if left && len(node.RuntimeFilterProbeList) > 0 {
-		arg.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
-	}
 	return arg
 }
 
@@ -1612,8 +1609,8 @@ func constructShuffleArgForGroupV2(node *plan.Node, dop int32) *shuffleV2.Shuffl
 	return arg
 }
 
-func constructShuffleArgForGroup(ss []*Scope, node *plan.Node) *shuffle.Shuffle {
-	arg := shuffle.NewArgument()
+func constructShuffleArgForGroup(ss []*Scope, node *plan.Node) *shuffleV2.ShuffleV2 {
+	arg := shuffleV2.NewArgument()
 	hashCol, typ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
 	arg.ShuffleColIdx = hashCol.ColPos
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)

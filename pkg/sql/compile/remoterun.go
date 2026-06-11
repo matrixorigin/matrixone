@@ -70,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
@@ -521,6 +522,16 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Shuffle.ShuffleRangesUint64 = t.ShuffleRangeUint64
 		in.Shuffle.ShuffleRangesInt64 = t.ShuffleRangeInt64
 		in.Shuffle.RuntimeFilterSpec = t.RuntimeFilterSpec
+		in.Shuffle.ShuffleExpr = t.ShuffleExpr
+	case *shuffleV2.ShuffleV2:
+		in.Shuffle = &pipeline.Shuffle{}
+		in.Shuffle.ShuffleColIdx = t.ShuffleColIdx
+		in.Shuffle.ShuffleType = t.ShuffleType
+		in.Shuffle.ShuffleColMax = t.ShuffleColMax
+		in.Shuffle.ShuffleColMin = t.ShuffleColMin
+		in.Shuffle.AliveRegCnt = t.BucketNum
+		in.Shuffle.ShuffleRangesUint64 = t.ShuffleRangeUint64
+		in.Shuffle.ShuffleRangesInt64 = t.ShuffleRangeInt64
 		in.Shuffle.ShuffleExpr = t.ShuffleExpr
 	case *dispatch.Dispatch:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, ShuffleType: t.ShuffleType, RecSink: t.RecSink, RecCte: t.RecCTE, FuncId: int32(t.FuncId)}
@@ -981,6 +992,18 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ShuffleRangeInt64 = t.ShuffleRangesInt64
 		arg.ShuffleRangeUint64 = t.ShuffleRangesUint64
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
+		arg.ShuffleExpr = t.ShuffleExpr
+		op = arg
+	case vm.ShuffleV2:
+		t := opr.GetShuffle()
+		arg := shuffleV2.NewArgument()
+		arg.ShuffleColIdx = t.ShuffleColIdx
+		arg.ShuffleType = t.ShuffleType
+		arg.ShuffleColMin = t.ShuffleColMin
+		arg.ShuffleColMax = t.ShuffleColMax
+		arg.BucketNum = t.AliveRegCnt
+		arg.ShuffleRangeInt64 = t.ShuffleRangesInt64
+		arg.ShuffleRangeUint64 = t.ShuffleRangesUint64
 		arg.ShuffleExpr = t.ShuffleExpr
 		op = arg
 	case vm.Dispatch:

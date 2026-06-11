@@ -4004,6 +4004,7 @@ func (c *Compile) compileShuffleGroupV2(node *plan.Node, inputSS []*Scope, nodes
 }
 
 func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
+
 	if len(c.cnList) == 1 {
 		return c.compileShuffleGroupV2(node, inputSS, nodes)
 	}

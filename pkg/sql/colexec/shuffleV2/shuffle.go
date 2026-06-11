@@ -76,7 +76,25 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 		shuffle.ctr.buf = nil
 	}
 
-	tmpBat := shuffle.ctr.shufflePool.getFullBatch(shuffle.CurrentShuffleIdx)
+	// When the pool has only one holder (multi-CN source scope),
+	// serve full batches from all buckets so dispatch can route them
+	// to the correct target CNs.
+	serveAll := shuffle.ctr.shufflePool.maxHolders == 1
+
+	getFull := func() *batch.Batch {
+		if serveAll {
+			return shuffle.ctr.shufflePool.getAnyFullBatch()
+		}
+		return shuffle.ctr.shufflePool.getFullBatch(shuffle.CurrentShuffleIdx)
+	}
+	getLast := func() *batch.Batch {
+		if serveAll {
+			return shuffle.ctr.shufflePool.getAnyLastBatch()
+		}
+		return shuffle.ctr.shufflePool.getLastBatch(shuffle.CurrentShuffleIdx)
+	}
+
+	tmpBat := getFull()
 	if tmpBat != nil && tmpBat.RowCount() > 0 {
 		shuffle.ctr.buf = tmpBat
 		result.Batch = tmpBat
@@ -85,7 +103,7 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if shuffle.ctr.shufflePool.allStop() {
 		shuffle.ctr.ending = true
-		tmpBat := shuffle.ctr.shufflePool.getLastBatch(shuffle.CurrentShuffleIdx)
+		tmpBat := getLast()
 		if tmpBat != nil {
 			shuffle.ctr.buf = tmpBat
 			result.Batch = tmpBat
@@ -101,7 +119,7 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	for {
-		tmpBat := shuffle.ctr.shufflePool.getFullBatch(shuffle.CurrentShuffleIdx)
+		tmpBat := getFull()
 		if tmpBat != nil { // find a full batch
 			shuffle.ctr.buf = tmpBat
 			result.Batch = tmpBat
