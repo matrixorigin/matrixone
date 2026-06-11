@@ -280,6 +280,18 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		vecFromB64Fn = "vecf64_from_base64"
 	}
 
+	// Entry expression for the re-rank distance. Entries are stored in the narrow
+	// (quantization) type while the query here is f32 (centroids are f32 for narrow
+	// indexes), so dequantize the narrow entry to vecf32 to match — distance is
+	// computed at f32 precision over the stored narrow values. f32/f64 entries use
+	// the column directly.
+	entryExpr := fmt.Sprintf("`%s`", catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
+	switch types.T(idxcfg.Ivfflat.VectorType) {
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8:
+		entryExpr = fmt.Sprintf("cast(`%s` as vecf32(%d))",
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry, idxcfg.Ivfflat.Dimensions)
+	}
+
 	if sqlproc != nil && sqlproc.ExactPkFilter != "" {
 		// Exact PK path: WaitUniqueJoinKeys converted small key set into ExactPkFilter.
 		// Query entries directly by pk list, skip centroid-based filtering.
@@ -294,10 +306,10 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		// a plain filtered read that returns the full candidate set; the downstream
 		// Node_SORT + LIMIT k does the ranking and truncation.
 		sql = fmt.Sprintf(
-			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+			"SELECT `%s`, %s(%s, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			entryExpr,
 			vecFromB64Fn,
 			queryB64,
 			tblcfg.DbName, tblcfg.EntriesTable,
@@ -309,10 +321,10 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	} else {
 		// Standard centroid-based path with optional CBloomFilter pre-filtering.
 		sql = fmt.Sprintf(
-			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
+			"SELECT `%s`, %s(%s, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			entryExpr,
 			vecFromB64Fn,
 			queryB64,
 			tblcfg.DbName, tblcfg.EntriesTable,

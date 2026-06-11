@@ -127,9 +127,14 @@ func (CatalogHooks) ExperimentalFlag() string { return "" }
 
 // SupportedOpTypes returns IVF-FLAT's metric registry. IVF uses a
 // distinct metric table from HNSW/USearch (OpTypeToIvfMetric).
-// SupportedVectorTypes: IVF-FLAT indexes f32 or f64 vectors.
+// SupportedVectorTypes: IVF-FLAT indexes all vector element types. Entries are
+// stored in their own (narrow) type; centroids are f32 (decoupled). kmeans runs
+// in f32, narrow distances go through the float32 bridge / narrow kernels.
 func (CatalogHooks) SupportedVectorTypes() []types.T {
-	return []types.T{types.T_array_float32, types.T_array_float64}
+	return []types.T{
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8,
+	}
 }
 
 // SupportedPrimaryKeyTypes: IVF-FLAT imposes no PK-type constraint — the

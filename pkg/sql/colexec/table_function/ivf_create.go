@@ -329,10 +329,12 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 			return moerr.NewInvalidInput(proc.Ctx, "Second argument (vector must be a vecf32 or vecf64 type")
 		}
 
-		if embedvec.GetType().Oid == types.T_array_float32 {
-			u.data32 = make([][]float32, 0, u.nsample)
-		} else {
+		// kmeans always clusters in float32 (or float64). Narrow input types
+		// (bf16/f16/int8) decode to float32 -> data32; only native float64 uses data64.
+		if embedvec.GetType().Oid == types.T_array_float64 {
 			u.data64 = make([][]float64, 0, u.nsample)
+		} else {
+			u.data32 = make([][]float32, 0, u.nsample)
 		}
 
 		// dimension
@@ -343,20 +345,30 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		for _, bat := range res.Batches {
 			evec := bat.Vecs[0]
 			for i := 0; i < bat.RowCount(); i++ {
+				var f32a []float32
 				switch evec.GetType().Oid {
 				case types.T_array_float32:
-					f32a := types.BytesToArray[float32](evec.GetBytesAt(i))
-					if uint(len(f32a)) != u.idxcfg.Ivfflat.Dimensions {
-						return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
-					}
-					u.data32 = append(u.data32, append(make([]float32, 0, len(f32a)), f32a...))
+					f32a = types.BytesToArray[float32](evec.GetBytesAt(i))
 				case types.T_array_float64:
 					f64a := types.BytesToArray[float64](evec.GetBytesAt(i))
 					if uint(len(f64a)) != u.idxcfg.Ivfflat.Dimensions {
 						return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
 					}
 					u.data64 = append(u.data64, append(make([]float64, 0, len(f64a)), f64a...))
+					continue
+				case types.T_array_bf16:
+					f32a = types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](evec.GetBytesAt(i)))
+				case types.T_array_float16:
+					f32a = types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](evec.GetBytesAt(i)))
+				case types.T_array_int8:
+					f32a = types.Int8ToFloat32Slice(types.BytesToArray[int8](evec.GetBytesAt(i)))
+				default:
+					return moerr.NewInternalError(proc.Ctx, "unsupported ivfflat vector type")
 				}
+				if uint(len(f32a)) != u.idxcfg.Ivfflat.Dimensions {
+					return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
+				}
+				u.data32 = append(u.data32, append(make([]float32, 0, len(f32a)), f32a...))
 			}
 		}
 

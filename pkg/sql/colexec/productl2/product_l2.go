@@ -279,8 +279,20 @@ func newMat[T types.RealNumbers](ctr *container, ap *Productl2, probes [][]T, nu
 			probes[j] = nullvec
 			continue
 		}
-		v := types.BytesToArray[T](tblColVec.GetBytesAt(j))
-		probes[j] = v
+		b := tblColVec.GetBytesAt(j)
+		// Narrow base types decode to float32 (the centroid index type). The
+		// any().([]T) assertions are valid only because probe() routes narrow
+		// columns through probeRun[float32], so T == float32 here.
+		switch tblColVec.GetType().Oid {
+		case types.T_array_bf16:
+			probes[j] = any(types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](b))).([]T)
+		case types.T_array_float16:
+			probes[j] = any(types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](b))).([]T)
+		case types.T_array_int8:
+			probes[j] = any(types.Int8ToFloat32Slice(types.BytesToArray[int8](b))).([]T)
+		default:
+			probes[j] = types.BytesToArray[T](b)
+		}
 	}
 
 	return probes, nil
@@ -293,6 +305,10 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 		return probeRun[float32](ctr, ap, proc, result)
 	case types.T_array_float64:
 		return probeRun[float64](ctr, ap, proc, result)
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8:
+		// Narrow base vectors are assigned against f32 centroids: decode the base
+		// to float32 (in newMat) and search the f32 centroid index.
+		return probeRun[float32](ctr, ap, proc, result)
 	}
 	return nil
 }

@@ -186,6 +186,12 @@ type IvfflatIndexConfig struct {
 	Spherical          bool
 	Version            int64
 	VectorType         int32
+	// CentroidType is the element type the centroid hidden table is stored in.
+	// Entries always keep VectorType (the input/quantization type); centroids may
+	// be f32 (decoupled — best recall, fast f32 SIMD search, negligible RAM for
+	// few centroids) or follow VectorType (least RAM, narrow-native search). 0 ==
+	// unset is treated as T_array_float32. (cuVS allows the same choice.)
+	CentroidType       int32
 	KmeansTrainPercent float64
 	KmeansMaxIteration int64
 }
