@@ -386,6 +386,24 @@ func (r *CheckpointReader) ComposeAt(ts types.TS) (*ComposedView, error) {
 	return view, nil
 }
 
+// ValidateSnapshot checks that ts can compose a catalog-backed checkpoint view.
+func (r *CheckpointReader) ValidateSnapshot(ctx context.Context, ts types.TS) error {
+	view, err := r.ComposeAt(ts)
+	if err != nil {
+		return err
+	}
+	if len(view.Tables) == 0 {
+		return moerr.NewInternalErrorf(ctx, "checkpoint snapshot %s is not usable: no tables are available", ts.ToString())
+	}
+	if _, ok := view.Tables[moTablesID]; !ok {
+		return moerr.NewInternalErrorf(ctx, "checkpoint snapshot %s is not usable: mo_tables catalog is not available; wait for a global checkpoint or choose a later timestamp", ts.ToString())
+	}
+	if _, ok := view.Tables[moColumnsID]; !ok {
+		return moerr.NewInternalErrorf(ctx, "checkpoint snapshot %s is not usable: mo_columns catalog is not available; wait for a global checkpoint or choose a later timestamp", ts.ToString())
+	}
+	return nil
+}
+
 // isDataFileNotFound checks if err indicates a checkpoint data file was GC'd/missing.
 func isDataFileNotFound(err error) bool {
 	if err == nil {
@@ -467,16 +485,7 @@ func (r *CheckpointReader) ReadRangeData(entry *checkpoint.CheckpointEntry, rng 
 		return nil, nil, nil
 	}
 
-	// Use checkpoint schema for column names
-	columns := ckputil.TableObjectsAttrs
-	if len(columns) == 0 {
-		// Fallback: generate column names from vector count
-		bat := bats[0]
-		columns = make([]string, len(bat.Vecs))
-		for i := range columns {
-			columns[i] = fmt.Sprintf("col_%d", i)
-		}
-	}
+	columns := checkpointRangeColumns(len(bats[0].Vecs))
 
 	// Extract rows within the range
 	startRow := uint32(rng.Start.GetRowOffset())
@@ -495,12 +504,21 @@ func (r *CheckpointReader) ReadRangeData(entry *checkpoint.CheckpointEntry, rng 
 		}
 	}
 
-	// Trim columns to match actual vector count
-	if len(bats) > 0 && len(columns) > len(bats[0].Vecs) {
-		columns = columns[:len(bats[0].Vecs)]
-	}
-
 	return columns, rows, nil
+}
+
+func checkpointRangeColumns(width int) []string {
+	if width <= 0 {
+		return nil
+	}
+	columns := append([]string(nil), ckputil.TableObjectsAttrs...)
+	if len(columns) > width {
+		return columns[:width]
+	}
+	for len(columns) < width {
+		columns = append(columns, fmt.Sprintf("col_%d", len(columns)))
+	}
+	return columns
 }
 
 // vecValueToString converts a vector value at index to string

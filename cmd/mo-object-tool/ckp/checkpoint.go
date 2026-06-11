@@ -17,9 +17,15 @@ package ckp
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"text/tabwriter"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -48,6 +54,7 @@ func PrepareCommand() *cobra.Command {
 
 	cmd.AddCommand(infoCommand(&storage))
 	cmd.AddCommand(viewCommand(&storage))
+	cmd.AddCommand(listCommand(&storage))
 	cmd.AddCommand(dumpCommand(&storage))
 	cmd.AddCommand(showCreateTableCommand(&storage))
 
@@ -164,6 +171,132 @@ func viewCommand(storage *toolfs.StorageOptions) *cobra.Command {
 	}
 }
 
+func listCommand(storage *toolfs.StorageOptions) *cobra.Command {
+	var (
+		accountID    uint32
+		databaseID   uint64
+		tsStr        string
+		includeViews bool
+		listType     string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "list [directory]",
+		Short: "List checkpoint catalog tables",
+		Long: `List table metadata from the checkpoint catalog.
+
+By default this lists ordinary tables. Use --include-views to include views,
+and use --database-id or --account-id to narrow the result.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := "."
+			if len(args) == 1 {
+				dir = args[0]
+			}
+
+			logFile, err := setupLogFile()
+			if err != nil {
+				return fmt.Errorf("setup log file: %w", err)
+			}
+			defer logFile.Close()
+
+			ctx := context.Background()
+			reader, err := openReader(ctx, dir, *storage)
+			if err != nil {
+				return fmt.Errorf("open checkpoint dir: %w", err)
+			}
+			defer reader.Close()
+
+			snapshotTS, err := resolveSnapshotTS(ctx, reader, tsStr)
+			if err != nil {
+				return fmt.Errorf("resolve --ts: %w", err)
+			}
+
+			var accountFilter *uint32
+			if cmd.Flags().Changed("account-id") {
+				accountFilter = &accountID
+			}
+			var dbFilter *uint64
+			if cmd.Flags().Changed("database-id") {
+				dbFilter = &databaseID
+			}
+			tables, err := reader.ListCatalogTables(ctx, snapshotTS, checkpointtool.TableListOptions{
+				AccountID:    accountFilter,
+				DatabaseID:   dbFilter,
+				IncludeViews: includeViews,
+			})
+			if err != nil {
+				return fmt.Errorf("list checkpoint catalog tables: %w", err)
+			}
+			if err := printCatalogList(cmd.OutOrStdout(), tables, listType); err != nil {
+				return err
+			}
+			return nil
+		},
+	}
+	cmd.Flags().Uint32Var(&accountID, "account-id", 0, "Account ID to list")
+	cmd.Flags().Uint64Var(&databaseID, "database-id", 0, "Database ID to list")
+	cmd.Flags().BoolVar(&includeViews, "include-views", false, "Include views and non-table relations")
+	cmd.Flags().StringVar(&listType, "type", "tables", "List type: tables, databases, or accounts")
+	cmd.Flags().StringVar(&tsStr, "ts", "", "Snapshot timestamp: physical:logical, physical-logical, RFC3339, or local time (default: latest)")
+	return cmd
+}
+
+func printCatalogList(w io.Writer, tables []checkpointtool.TableCatalogEntry, listType string) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	switch listType {
+	case "", "tables":
+		fmt.Fprintln(tw, "ACCOUNT_ID\tDATABASE\tTABLE\tTABLE_ID\tREL_KIND")
+		for _, table := range tables {
+			fmt.Fprintf(tw, "%d\t%s\t%s\t%d\t%s\n", table.AccountID, table.DatabaseName, table.TableName, table.TableID, table.RelKind)
+		}
+	case "databases", "dbs":
+		type dbKey struct {
+			accountID uint32
+			name      string
+			id        uint64
+		}
+		seen := make(map[dbKey]struct{})
+		var dbs []dbKey
+		for _, table := range tables {
+			key := dbKey{accountID: table.AccountID, name: table.DatabaseName, id: table.DatabaseID}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			dbs = append(dbs, key)
+		}
+		sort.Slice(dbs, func(i, j int) bool {
+			if dbs[i].accountID != dbs[j].accountID {
+				return dbs[i].accountID < dbs[j].accountID
+			}
+			return dbs[i].name < dbs[j].name
+		})
+		fmt.Fprintln(tw, "ACCOUNT_ID\tDATABASE\tDATABASE_ID")
+		for _, db := range dbs {
+			fmt.Fprintf(tw, "%d\t%s\t%d\n", db.accountID, db.name, db.id)
+		}
+	case "accounts", "tenants":
+		seen := make(map[uint32]struct{})
+		var accounts []uint32
+		for _, table := range tables {
+			if _, ok := seen[table.AccountID]; ok {
+				continue
+			}
+			seen[table.AccountID] = struct{}{}
+			accounts = append(accounts, table.AccountID)
+		}
+		sort.Slice(accounts, func(i, j int) bool { return accounts[i] < accounts[j] })
+		fmt.Fprintln(tw, "ACCOUNT_ID")
+		for _, accountID := range accounts {
+			fmt.Fprintf(tw, "%d\n", accountID)
+		}
+	default:
+		return fmt.Errorf("unknown --type %q; expected tables, databases, or accounts", listType)
+	}
+	return tw.Flush()
+}
+
 func openReader(ctx context.Context, dir string, storage toolfs.StorageOptions) (*checkpointtool.CheckpointReader, error) {
 	if !storage.IsRemote() {
 		return checkpointtool.Open(ctx, dir)
@@ -186,10 +319,17 @@ func openReader(ctx context.Context, dir string, storage toolfs.StorageOptions) 
 func dumpCommand(storage *toolfs.StorageOptions) *cobra.Command {
 	var (
 		tableID      uint64
+		tableName    string
+		accountID    uint32
+		databaseID   uint64
 		tsStr        string
 		output       string
+		outputDir    string
+		jobs         int
 		metaComments bool
 		header       bool
+		loadScript   bool
+		noLoad       bool
 		rowOrder     string
 	)
 
@@ -207,7 +347,10 @@ Examples:
   mo-tool ckp dump --table-id=12345 /path/to/ckp          # dump to stdout
   mo-tool ckp dump --table-id=12345 -o users.csv .        # dump to file
   mo-tool ckp dump --table-id=12345 --ts=1749001234567890:1 .  # dump at specific TS
-  mo-tool ckp dump --table-id=12345 --header --meta-comments .`,
+  mo-tool ckp dump --table-id=12345 --load-script -o /tmp/ .
+  mo-tool ckp dump --database-id=9001 --table=users -o users.csv .
+  mo-tool ckp dump --database-id=9001 --output-dir=/tmp/test-dump --jobs=4 .
+  mo-tool ckp dump --database-id=9001 --load-script -o /tmp/test-dump .`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."
@@ -215,8 +358,36 @@ Examples:
 				dir = args[0]
 			}
 
-			if tableID == 0 {
-				return fmt.Errorf("--table-id is required")
+			accountIDSet := cmd.Flags().Changed("account-id")
+			tableName = strings.TrimSpace(tableName)
+			batchDump := tableID == 0 && tableName == ""
+			databaseIDSet := cmd.Flags().Changed("database-id")
+			if tableID == 0 && tableName == "" && !databaseIDSet && !accountIDSet {
+				return fmt.Errorf("--table-id, --table, or at least one of --database-id/--account-id is required")
+			}
+			if noLoad && !loadScript {
+				return fmt.Errorf("--no-load requires --load-script")
+			}
+			if tableID != 0 && tableName != "" {
+				return fmt.Errorf("--table-id cannot be combined with --table")
+			}
+			if tableID != 0 && (databaseIDSet || accountIDSet || (outputDir != "" && !loadScript)) {
+				return fmt.Errorf("--table-id cannot be combined with --database-id, --account-id, or --output-dir")
+			}
+			if tableName != "" && outputDir != "" && !loadScript {
+				return fmt.Errorf("--output-dir is only valid for --database-id/--account-id batch dumps")
+			}
+			if batchDump && output != "" && !loadScript {
+				return fmt.Errorf("--output cannot be used when dumping by --database-id or --account-id; use --output-dir")
+			}
+			if loadScript && output == "" {
+				return fmt.Errorf("--output/-o directory is required with --load-script")
+			}
+			if loadScript && outputDir == "" {
+				outputDir = output
+			}
+			if batchDump && outputDir == "" {
+				return fmt.Errorf("--output-dir is required when dumping by --database-id or --account-id")
 			}
 
 			logFile, err := setupLogFile()
@@ -232,25 +403,14 @@ Examples:
 			}
 			defer reader.Close()
 
-			// Determine snapshot TS
-			snapshotTS := types.TS{}
-			if tsStr != "" {
-				snapshotTS, err = parseTS(tsStr)
-				if err != nil {
-					return fmt.Errorf("parse --ts: %w", err)
-				}
-			} else {
-				// Use the latest available TS
-				info := reader.Info()
-				if !info.LatestTS.IsEmpty() {
-					snapshotTS = info.LatestTS
-				}
+			snapshotTS, err := resolveSnapshotTS(ctx, reader, tsStr)
+			if err != nil {
+				return fmt.Errorf("resolve --ts: %w", err)
 			}
 
-			// Open output writer
 			var w = cmd.OutOrStdout()
 			var outFile *os.File
-			if output != "" {
+			if output != "" && !loadScript {
 				outFile, err = os.Create(output)
 				if err != nil {
 					return fmt.Errorf("create output file: %w", err)
@@ -264,13 +424,96 @@ Examples:
 				return err
 			}
 
+			if tableName != "" {
+				var accountFilter *uint32
+				if accountIDSet {
+					accountFilter = &accountID
+				}
+				var dbFilter *uint64
+				if databaseIDSet {
+					dbFilter = &databaseID
+				}
+				table, err := resolveTableByName(ctx, reader, snapshotTS, tableName, dbFilter, accountFilter)
+				if err != nil {
+					return err
+				}
+				tableID = table.TableID
+			}
+			effectiveHeader := header || (loadScript && !noLoad)
+
+			if batchDump {
+				var accountFilter *uint32
+				if accountIDSet {
+					accountFilter = &accountID
+				}
+				var dbFilter *uint64
+				if databaseIDSet {
+					dbFilter = &databaseID
+				}
+				tables, err := reader.ListCatalogTables(ctx, snapshotTS, checkpointtool.TableListOptions{
+					AccountID:  accountFilter,
+					DatabaseID: dbFilter,
+				})
+				if err != nil {
+					return fmt.Errorf("list checkpoint catalog tables: %w", err)
+				}
+				if len(tables) == 0 {
+					return fmt.Errorf("no checkpoint tables match database-id-set=%v database-id=%d account-id-set=%v account-id=%d", databaseIDSet, databaseID, accountIDSet, accountID)
+				}
+				if err := os.MkdirAll(outputDir, 0o755); err != nil {
+					return fmt.Errorf("create output dir: %w", err)
+				}
+				if !noLoad {
+					if jobs < 1 {
+						jobs = 1
+					}
+					if jobs > len(tables) {
+						jobs = len(tables)
+					}
+					if err := dumpTablesConcurrently(ctx, reader, tables, snapshotTS, outputDir, jobs, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout()); err != nil {
+						return err
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "Dumped %d tables to %s\n", len(tables), outputDir)
+				}
+				if loadScript {
+					scriptPath, err := writeRestoreScript(ctx, reader, tables, snapshotTS, output, outputDir, !noLoad, effectiveHeader)
+					if err != nil {
+						return err
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "Restore script written to %s\n", scriptPath)
+				}
+				return nil
+			}
+
+			var tableEntry checkpointtool.TableCatalogEntry
+			if loadScript {
+				tableEntry, err = resolveTableByID(ctx, reader, snapshotTS, tableID)
+				if err != nil {
+					return err
+				}
+				if err := os.MkdirAll(outputDir, 0o755); err != nil {
+					return fmt.Errorf("create output dir: %w", err)
+				}
+				if !noLoad {
+					if err := dumpOneTable(ctx, reader, tableEntry, snapshotTS, outputDir, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout(), &sync.Mutex{}); err != nil {
+						return err
+					}
+				}
+				scriptPath, err := writeRestoreScript(ctx, reader, []checkpointtool.TableCatalogEntry{tableEntry}, snapshotTS, output, outputDir, !noLoad, effectiveHeader)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Restore script written to %s\n", scriptPath)
+				return nil
+			}
+
 			if err := reader.DumpTableCSVComposed(
 				ctx,
 				w,
 				tableID,
 				snapshotTS,
 				checkpointtool.WithCSVMetaComments(metaComments),
-				checkpointtool.WithCSVHeader(header),
+				checkpointtool.WithCSVHeader(effectiveHeader),
 				checkpointtool.WithCSVRowOrder(parsedRowOrder),
 			); err != nil {
 				return fmt.Errorf("dump table %d: %w", tableID, err)
@@ -283,20 +526,33 @@ Examples:
 		},
 	}
 
-	cmd.Flags().Uint64Var(&tableID, "table-id", 0, "Table ID to dump (required)")
-	cmd.Flags().StringVar(&tsStr, "ts", "", "Snapshot timestamp in 'physical:logical' format (default: latest)")
+	cmd.Flags().Uint64Var(&tableID, "table-id", 0, "Table ID to dump")
+	cmd.Flags().StringVar(&tableName, "table", "", "Table name to dump; use --database-id and/or --account-id to disambiguate")
+	cmd.Flags().Uint32Var(&accountID, "account-id", 0, "Account ID to dump tables for; combine with --database-id to narrow the result")
+	cmd.Flags().Uint64Var(&databaseID, "database-id", 0, "Database ID to dump tables for")
+	cmd.Flags().StringVar(&tsStr, "ts", "", "Snapshot timestamp: physical:logical, physical-logical, RFC3339, or '2006-01-02 15:04:05' in local time (default: latest)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output CSV file path (default: stdout)")
+	cmd.Flags().StringVar(&outputDir, "output-dir", "", "Output directory for database/account dumps")
+	cmd.Flags().IntVar(&jobs, "jobs", 1, "Concurrent table dumps for --database-id/--account-id batch dumps")
 	cmd.Flags().BoolVar(&metaComments, "meta-comments", false, "Prepend DDL and row-count comment lines (disabled by default so output can be loaded directly)")
 	cmd.Flags().BoolVar(&header, "header", false, "Include a CSV header row with column names")
+	cmd.Flags().BoolVar(&loadScript, "load-script", false, "Generate restore.sql with CREATE DATABASE, CREATE TABLE, and LOAD DATA statements; --output/-o is treated as a directory")
+	cmd.Flags().BoolVar(&noLoad, "no-load", false, "With --load-script, generate only DDL and skip CSV dump and LOAD DATA statements")
 	cmd.Flags().StringVar(&rowOrder, "row-order", string(checkpointtool.CSVRowOrderStorage), "CSV row order: storage (streaming, large-table friendly) or lexical (sort by visible CSV values in memory)")
 
 	return cmd
 }
 
-// parseTS parses a timestamp string in "physical:logical" format.
 func parseTS(s string) (types.TS, error) {
-	parts := strings.SplitN(s, ":", 2)
-	if len(parts) == 2 {
+	s = strings.TrimSpace(s)
+	for _, sep := range []string{":", "-"} {
+		parts := strings.SplitN(s, sep, 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if !allDigits(parts[0]) || !allDigits(parts[1]) {
+			continue
+		}
 		physical, err := strconv.ParseInt(parts[0], 10, 64)
 		if err != nil {
 			return types.TS{}, fmt.Errorf("invalid physical in timestamp: %w", err)
@@ -307,7 +563,340 @@ func parseTS(s string) (types.TS, error) {
 		}
 		return types.BuildTS(physical, uint32(logical)), nil
 	}
-	return types.TS{}, fmt.Errorf("timestamp must be in 'physical:logical' format, got %q", s)
+
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+		"2006-01-02",
+	} {
+		t, err := time.ParseInLocation(layout, s, time.Local)
+		if err == nil {
+			return types.BuildTS(t.UnixNano(), 0), nil
+		}
+	}
+	return types.TS{}, fmt.Errorf("timestamp must be physical:logical, physical-logical, RFC3339, or local time, got %q", s)
+}
+
+func resolveSnapshotTS(ctx context.Context, reader *checkpointtool.CheckpointReader, tsStr string) (types.TS, error) {
+	info := reader.Info()
+	if strings.TrimSpace(tsStr) == "" {
+		if info.LatestTS.IsEmpty() {
+			return types.TS{}, fmt.Errorf("no checkpoint timestamp is available")
+		}
+		if err := reader.ValidateSnapshot(ctx, info.LatestTS); err != nil {
+			return types.TS{}, err
+		}
+		return info.LatestTS, nil
+	}
+
+	ts, err := parseTS(tsStr)
+	if err != nil {
+		return types.TS{}, err
+	}
+	if ts.IsEmpty() {
+		return types.TS{}, fmt.Errorf("timestamp must not be empty")
+	}
+	if !info.EarliestTS.IsEmpty() && ts.LT(&info.EarliestTS) {
+		return types.TS{}, fmt.Errorf("timestamp %s is earlier than earliest checkpoint %s", ts.ToString(), info.EarliestTS.ToString())
+	}
+	if !info.LatestTS.IsEmpty() && info.LatestTS.LT(&ts) {
+		return types.TS{}, fmt.Errorf("timestamp %s is newer than latest checkpoint %s", ts.ToString(), info.LatestTS.ToString())
+	}
+	if err := reader.ValidateSnapshot(ctx, ts); err != nil {
+		return types.TS{}, err
+	}
+	return ts, nil
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func resolveTableByName(
+	ctx context.Context,
+	reader *checkpointtool.CheckpointReader,
+	snapshotTS types.TS,
+	tableName string,
+	databaseID *uint64,
+	accountID *uint32,
+) (checkpointtool.TableCatalogEntry, error) {
+	tables, err := reader.ListCatalogTables(ctx, snapshotTS, checkpointtool.TableListOptions{
+		AccountID:  accountID,
+		DatabaseID: databaseID,
+	})
+	if err != nil {
+		return checkpointtool.TableCatalogEntry{}, fmt.Errorf("list checkpoint catalog tables: %w", err)
+	}
+	var matches []checkpointtool.TableCatalogEntry
+	for _, table := range tables {
+		if table.TableName == tableName {
+			matches = append(matches, table)
+		}
+	}
+	if len(matches) == 0 {
+		return checkpointtool.TableCatalogEntry{}, fmt.Errorf("table %q not found in checkpoint catalog", tableName)
+	}
+	if len(matches) > 1 {
+		var names []string
+		for _, table := range matches {
+			names = append(names, fmt.Sprintf("account=%d database=%s table-id=%d", table.AccountID, table.DatabaseName, table.TableID))
+		}
+		return checkpointtool.TableCatalogEntry{}, fmt.Errorf("table %q is ambiguous; use --database-id/--account-id/--table-id (%s)", tableName, strings.Join(names, "; "))
+	}
+	return matches[0], nil
+}
+
+func resolveTableByID(
+	ctx context.Context,
+	reader *checkpointtool.CheckpointReader,
+	snapshotTS types.TS,
+	tableID uint64,
+) (checkpointtool.TableCatalogEntry, error) {
+	tables, err := reader.ListCatalogTables(ctx, snapshotTS, checkpointtool.TableListOptions{
+		IncludeViews: true,
+	})
+	if err != nil {
+		return checkpointtool.TableCatalogEntry{}, fmt.Errorf("list checkpoint catalog tables: %w", err)
+	}
+	for _, table := range tables {
+		if table.TableID == tableID {
+			return table, nil
+		}
+	}
+	return checkpointtool.TableCatalogEntry{}, fmt.Errorf("table %d not found in checkpoint catalog", tableID)
+}
+
+func writeRestoreScript(
+	ctx context.Context,
+	reader *checkpointtool.CheckpointReader,
+	tables []checkpointtool.TableCatalogEntry,
+	snapshotTS types.TS,
+	scriptDir string,
+	csvRoot string,
+	includeLoad bool,
+	csvHasHeader bool,
+) (string, error) {
+	if err := os.MkdirAll(scriptDir, 0o755); err != nil {
+		return "", fmt.Errorf("create script dir: %w", err)
+	}
+	scriptPath := filepath.Join(scriptDir, "restore.sql")
+	f, err := os.Create(scriptPath)
+	if err != nil {
+		return "", fmt.Errorf("create restore script: %w", err)
+	}
+	defer f.Close()
+
+	currentDB := ""
+	for _, table := range tables {
+		if table.DatabaseName == "" {
+			return "", fmt.Errorf("table %d has empty database name in checkpoint catalog", table.TableID)
+		}
+		if table.DatabaseName != currentDB {
+			if currentDB != "" {
+				if _, err := fmt.Fprintln(f); err != nil {
+					return "", err
+				}
+			}
+			if _, err := fmt.Fprintf(f, "CREATE DATABASE IF NOT EXISTS %s;\n", quoteSQLIdent(table.DatabaseName)); err != nil {
+				return "", err
+			}
+			if _, err := fmt.Fprintf(f, "USE %s;\n\n", quoteSQLIdent(table.DatabaseName)); err != nil {
+				return "", err
+			}
+			currentDB = table.DatabaseName
+		}
+
+		ddl, err := reader.ShowCreateTable(ctx, table.TableID, snapshotTS)
+		if err != nil {
+			return "", fmt.Errorf("show create table %d: %w", table.TableID, err)
+		}
+		if _, err := fmt.Fprintln(f, strings.TrimRight(ddl, " ;\n\t")); err != nil {
+			return "", err
+		}
+		if _, err := fmt.Fprintln(f, ";"); err != nil {
+			return "", err
+		}
+		if includeLoad {
+			if _, err := fmt.Fprintf(f, "\nLOAD DATA INFILE %s\n", quoteSQLString(tableCSVPath(csvRoot, table))); err != nil {
+				return "", err
+			}
+			if _, err := fmt.Fprintf(f, "INTO TABLE %s\n", quoteSQLIdent(table.TableName)); err != nil {
+				return "", err
+			}
+			if _, err := fmt.Fprintln(f, "FIELDS TERMINATED BY ','"); err != nil {
+				return "", err
+			}
+			if _, err := fmt.Fprintln(f, "ENCLOSED BY '\"'"); err != nil {
+				return "", err
+			}
+			if _, err := fmt.Fprintln(f, "LINES TERMINATED BY '\\n'"); err != nil {
+				return "", err
+			}
+			if csvHasHeader {
+				if _, err := fmt.Fprintln(f, "IGNORE 1 LINES"); err != nil {
+					return "", err
+				}
+			}
+			if _, err := fmt.Fprintln(f, ";"); err != nil {
+				return "", err
+			}
+		}
+		if _, err := fmt.Fprintln(f); err != nil {
+			return "", err
+		}
+	}
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("close restore script: %w", err)
+	}
+	return scriptPath, nil
+}
+
+func quoteSQLIdent(s string) string {
+	return "`" + strings.ReplaceAll(s, "`", "``") + "`"
+}
+
+func quoteSQLString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `'`, `''`)
+	return "'" + s + "'"
+}
+
+func dumpTablesConcurrently(
+	ctx context.Context,
+	reader *checkpointtool.CheckpointReader,
+	tables []checkpointtool.TableCatalogEntry,
+	snapshotTS types.TS,
+	outputDir string,
+	jobs int,
+	rowOrder checkpointtool.CSVRowOrder,
+	metaComments bool,
+	header bool,
+	out io.Writer,
+) error {
+	tableCh := make(chan checkpointtool.TableCatalogEntry)
+	errCh := make(chan error, 1)
+	var outMu sync.Mutex
+	var wg sync.WaitGroup
+
+	worker := func() {
+		defer wg.Done()
+		for table := range tableCh {
+			if err := dumpOneTable(ctx, reader, table, snapshotTS, outputDir, rowOrder, metaComments, header, out, &outMu); err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+				return
+			}
+		}
+	}
+	for i := 0; i < jobs; i++ {
+		wg.Add(1)
+		go worker()
+	}
+	for _, table := range tables {
+		select {
+		case err := <-errCh:
+			close(tableCh)
+			wg.Wait()
+			return err
+		case tableCh <- table:
+		}
+	}
+	close(tableCh)
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		return err
+	default:
+		return nil
+	}
+}
+
+func tableCSVPath(outputDir string, table checkpointtool.TableCatalogEntry) string {
+	return filepath.Join(
+		outputDir,
+		fmt.Sprintf("account_%d", table.AccountID),
+		fmt.Sprintf("db_%d", table.DatabaseID),
+		fmt.Sprintf("%s_%d.csv", safePathPart(table.TableName), table.TableID),
+	)
+}
+
+func dumpOneTable(
+	ctx context.Context,
+	reader *checkpointtool.CheckpointReader,
+	table checkpointtool.TableCatalogEntry,
+	snapshotTS types.TS,
+	outputDir string,
+	rowOrder checkpointtool.CSVRowOrder,
+	metaComments bool,
+	header bool,
+	out io.Writer,
+	outMu *sync.Mutex,
+) error {
+	filePath := tableCSVPath(outputDir, table)
+	tableDir := filepath.Dir(filePath)
+	if err := os.MkdirAll(tableDir, 0o755); err != nil {
+		return fmt.Errorf("create table output dir: %w", err)
+	}
+	outFile, err := os.Create(filePath)
+	if err != nil {
+		return fmt.Errorf("create output file for table %d: %w", table.TableID, err)
+	}
+	err = reader.DumpTableCSVComposed(
+		ctx,
+		outFile,
+		table.TableID,
+		snapshotTS,
+		checkpointtool.WithCSVMetaComments(metaComments),
+		checkpointtool.WithCSVHeader(header),
+		checkpointtool.WithCSVRowOrder(rowOrder),
+	)
+	closeErr := outFile.Close()
+	if err != nil {
+		return fmt.Errorf("dump table %d (%s.%s): %w", table.TableID, table.DatabaseName, table.TableName, err)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close output file for table %d: %w", table.TableID, closeErr)
+	}
+	outMu.Lock()
+	fmt.Fprintf(out, "Table %d %s.%s dumped to %s\n", table.TableID, table.DatabaseName, table.TableName, filePath)
+	outMu.Unlock()
+	return nil
+}
+
+func safePathPart(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "_"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '_' || r == '-' || r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
 }
 
 // showCreateTableCommand implements the "ckp show-create-table" subcommand
@@ -359,17 +948,9 @@ Examples:
 			}
 			defer reader.Close()
 
-			snapshotTS := types.TS{}
-			if tsStr != "" {
-				snapshotTS, err = parseTS(tsStr)
-				if err != nil {
-					return fmt.Errorf("parse --ts: %w", err)
-				}
-			} else {
-				info := reader.Info()
-				if !info.LatestTS.IsEmpty() {
-					snapshotTS = info.LatestTS
-				}
+			snapshotTS, err := resolveSnapshotTS(ctx, reader, tsStr)
+			if err != nil {
+				return fmt.Errorf("resolve --ts: %w", err)
 			}
 
 			ddl, err := reader.ShowCreateTable(ctx, tableID, snapshotTS)
@@ -383,7 +964,7 @@ Examples:
 	}
 
 	cmd.Flags().Uint64Var(&tableID, "table-id", 0, "Table ID to show CREATE TABLE for (required)")
-	cmd.Flags().StringVar(&tsStr, "ts", "", "Snapshot timestamp in 'physical:logical' format (default: latest)")
+	cmd.Flags().StringVar(&tsStr, "ts", "", "Snapshot timestamp: physical:logical, physical-logical, RFC3339, or local time (default: latest)")
 
 	return cmd
 }

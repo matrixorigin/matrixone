@@ -47,8 +47,9 @@ type ObjectInfo struct {
 
 // ColInfo contains column information
 type ColInfo struct {
-	Idx  uint16
-	Type types.Type
+	Idx    uint16
+	SeqNum uint16
+	Type   types.Type
 }
 
 // ObjectReader reads object files
@@ -142,8 +143,9 @@ func buildColInfo(meta objectio.ObjectDataMeta) []ColInfo {
 		for i := uint16(0); i < colCount; i++ {
 			colMeta := blockMeta.ColumnMeta(i)
 			cols[i] = ColInfo{
-				Idx:  i,
-				Type: types.T(colMeta.DataType()).ToType(),
+				Idx:    i,
+				SeqNum: i,
+				Type:   types.T(colMeta.DataType()).ToType(),
 			}
 		}
 	}
@@ -176,7 +178,7 @@ func (r *ObjectReader) ReadBlock(ctx context.Context, blockIdx uint32) (*batch.B
 	colIdxs := make([]uint16, len(r.cols))
 	colTypes := make([]types.Type, len(r.cols))
 	for i := range r.cols {
-		colIdxs[i] = uint16(i)
+		colIdxs[i] = r.cols[i].SeqNum
 		colTypes[i] = r.cols[i].Type
 	}
 
@@ -203,6 +205,45 @@ func (r *ObjectReader) ReadBlock(ctx context.Context, blockIdx uint32) (*batch.B
 	}
 
 	return bat, release, nil
+}
+
+// ReadBlockCommitTS reads the hidden commit timestamp column for a block.
+// Objects that do not carry commit timestamps return a nil vector.
+func (r *ObjectReader) ReadBlockCommitTS(ctx context.Context, blockIdx uint32) (*vector.Vector, func(), error) {
+	if blockIdx >= r.info.BlockCount {
+		return nil, nil, moerr.NewInternalErrorf(ctx, "block index %d out of range [0, %d)", blockIdx, r.info.BlockCount)
+	}
+
+	ioVectors, err := r.objReader.ReadOneBlock(
+		ctx,
+		[]uint16{objectio.SEQNUM_COMMITTS},
+		[]types.Type{types.T_TS.ToType()},
+		uint16(blockIdx),
+		r.mp,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	release := func() {
+		objectio.ReleaseIOVector(&ioVectors)
+	}
+
+	obj, err := objectio.Decode(ioVectors.Entries[0].CachedData.Bytes())
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	vec := obj.(*vector.Vector)
+	if vec.GetType().Oid != types.T_TS {
+		release()
+		return nil, nil, moerr.NewInternalErrorf(ctx, "commit TS column type mismatch: expected TS, got %s", vec.GetType().String())
+	}
+	if vec.GetNulls().GetCardinality() == vec.Length() {
+		release()
+		return nil, func() {}, nil
+	}
+	return vec, release, nil
 }
 
 // BlockCount returns block count

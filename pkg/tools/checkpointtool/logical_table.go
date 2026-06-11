@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	objectioutil "github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
@@ -39,13 +40,10 @@ func (r *CheckpointReader) BuildLogicalTableView(
 	dataEntries []*ObjectEntryInfo,
 	tombEntries []*ObjectEntryInfo,
 ) (*LogicalTableView, error) {
-	view := &LogicalTableView{
-		Headers: []string{"object", "block", "row"},
-		Rows:    make([][]string, 0),
-	}
+	view := newLogicalTableView()
 	stats, err := r.scanLogicalTable(ctx, snapshotTS, dataEntries, tombEntries,
 		func(cols []objecttool.ColInfo) error {
-			if len(view.Headers) != 3 {
+			if len(view.Headers) != view.MetaWidth() {
 				return nil
 			}
 			for _, col := range cols {
@@ -55,7 +53,7 @@ func (r *CheckpointReader) BuildLogicalTableView(
 			return nil
 		},
 		func(objShort string, blockIdx int, rowIdx int, values []string, _ []bool) error {
-			row := make([]string, 0, len(values)+3)
+			row := make([]string, 0, len(values)+view.MetaWidth())
 			row = append(row, objShort, fmt.Sprintf("%d", blockIdx), fmt.Sprintf("%d", rowIdx))
 			row = append(row, values...)
 			view.Rows = append(view.Rows, row)
@@ -127,14 +125,33 @@ func (r *CheckpointReader) scanLogicalTable(
 
 			stats.PhysicalRows += bat.RowCount()
 
+			commitTSVec, releaseCommitTS, err := reader.ReadBlockCommitTS(ctx, uint32(blockIdx))
+			if err != nil {
+				release()
+				_ = reader.Close()
+				return stats, err
+			}
+			var commitTSs []types.TS
+			if commitTSVec != nil {
+				commitTSs = vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
+			}
+
 			deleteMask, err := r.buildDeleteMaskForBlock(ctx, &snapshotTS, entry.ObjectStats, uint16(blockIdx), relevantTombstones)
 			if err != nil {
+				if releaseCommitTS != nil {
+					releaseCommitTS()
+				}
 				release()
 				_ = reader.Close()
 				return stats, err
 			}
 
 			for rowIdx := 0; rowIdx < bat.RowCount(); rowIdx++ {
+				if commitTSs != nil && rowIdx < len(commitTSs) &&
+					!commitTSVec.IsNull(uint64(rowIdx)) &&
+					commitTSs[rowIdx].GT(&snapshotTS) {
+					continue
+				}
 				if deleteMask.IsValid() && deleteMask.Contains(uint64(rowIdx)) {
 					stats.DeletedRows++
 					continue
@@ -150,6 +167,9 @@ func (r *CheckpointReader) scanLogicalTable(
 						if deleteMask.IsValid() {
 							deleteMask.Release()
 						}
+						if releaseCommitTS != nil {
+							releaseCommitTS()
+						}
 						release()
 						_ = reader.Close()
 						return stats, err
@@ -160,6 +180,9 @@ func (r *CheckpointReader) scanLogicalTable(
 
 			if deleteMask.IsValid() {
 				deleteMask.Release()
+			}
+			if releaseCommitTS != nil {
+				releaseCommitTS()
 			}
 			release()
 		}

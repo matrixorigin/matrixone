@@ -16,19 +16,21 @@ package toolfs
 
 import (
 	"context"
+	"io"
 	"iter"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
 type lazyCacheFS struct {
 	name   string
 	remote fileservice.FileService
-	local  fileservice.FileService
+	local  *fileservice.LocalFS
 	root   string
 
 	mu      sync.Mutex
@@ -60,21 +62,26 @@ func (l *lazyCacheFS) Write(ctx context.Context, vector fileservice.IOVector) er
 	if err := l.remote.Write(ctx, vector); err != nil {
 		return err
 	}
-	return l.local.Write(ctx, vector)
+	normalized := stripServiceName(vector.FilePath, l.name)
+	_ = os.Remove(filepath.Join(l.root, filepath.FromSlash(normalized)))
+	l.mu.Lock()
+	delete(l.caching, normalized)
+	l.mu.Unlock()
+	return nil
 }
 
 func (l *lazyCacheFS) Read(ctx context.Context, vector *fileservice.IOVector) error {
 	if err := l.ensureCached(ctx, vector.FilePath); err != nil {
 		return err
 	}
-	return l.local.Read(ctx, vector)
+	return l.readCachedFile(ctx, vector)
 }
 
 func (l *lazyCacheFS) ReadCache(ctx context.Context, vector *fileservice.IOVector) error {
 	if err := l.ensureCached(ctx, vector.FilePath); err != nil {
 		return err
 	}
-	return l.local.ReadCache(ctx, vector)
+	return l.readCachedFile(ctx, vector)
 }
 
 func (l *lazyCacheFS) List(ctx context.Context, dirPath string) iter.Seq2[*fileservice.DirEntry, error] {
@@ -165,6 +172,52 @@ func (l *lazyCacheFS) cacheFile(ctx context.Context, normalized string, localPat
 	}
 	if err := os.Rename(tmpName, localPath); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (l *lazyCacheFS) readCachedFile(ctx context.Context, vector *fileservice.IOVector) error {
+	normalized := stripServiceName(vector.FilePath, l.name)
+	localPath := filepath.Join(l.root, filepath.FromSlash(normalized))
+
+	file, err := os.Open(localPath)
+	if os.IsNotExist(err) {
+		return moerr.NewFileNotFoundNoCtx(normalized)
+	}
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	stat, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	fileSize := stat.Size()
+
+	for i, entry := range vector.Entries {
+		if entry.Size == 0 {
+			return moerr.NewEmptyRangeNoCtx(normalized)
+		}
+		if entry.Offset < 0 {
+			return moerr.NewUnexpectedEOFNoCtx(normalized)
+		}
+		if entry.Size < 0 {
+			entry.Size = fileSize - entry.Offset
+			if entry.Size < 0 {
+				return moerr.NewUnexpectedEOFNoCtx(normalized)
+			}
+		}
+		if _, err := file.Seek(entry.Offset, io.SeekStart); err != nil {
+			return err
+		}
+		if err := entry.ReadFromOSFile(ctx, file, l.local); err != nil {
+			if err == io.ErrUnexpectedEOF {
+				return moerr.NewUnexpectedEOFNoCtx(normalized)
+			}
+			return err
+		}
+		vector.Entries[i] = entry
 	}
 	return nil
 }

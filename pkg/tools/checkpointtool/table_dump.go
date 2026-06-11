@@ -44,11 +44,28 @@ type catalogLayout struct {
 	moColumnsSchema []string
 }
 
+type catalogLayoutMatch struct {
+	layout catalogLayout
+	offset int
+}
+
 var (
 	currentCatalogLayout = catalogLayout{
 		name:            "current",
 		moTablesSchema:  append([]string(nil), catalog.MoTablesSchema...),
 		moColumnsSchema: append([]string(nil), catalog.MoColumnsSchema...),
+	}
+	preCPKLayout = catalogLayout{
+		name: "pre-cpk",
+		moTablesSchema: catalogSchemaWithout(
+			catalog.MoTablesSchema,
+			catalog.SystemRelAttr_ExtraInfo,
+			catalog.SystemRelAttr_CPKey,
+		),
+		moColumnsSchema: catalogSchemaWithout(
+			catalog.MoColumnsSchema,
+			catalog.SystemColAttr_CPKey,
+		),
 	}
 	legacy3CatalogLayout = catalogLayout{
 		name:            "3.0-dev",
@@ -71,6 +88,21 @@ type TableSchema struct {
 	DatabaseName string
 	Columns      []TableColumn // sorted by Position
 	CreateSQL    string        // raw CREATE TABLE from mo_tables.rel_createsql
+}
+
+type TableCatalogEntry struct {
+	TableID      uint64
+	AccountID    uint32
+	DatabaseID   uint64
+	DatabaseName string
+	TableName    string
+	RelKind      string
+}
+
+type TableListOptions struct {
+	AccountID    *uint32
+	DatabaseID   *uint64
+	IncludeViews bool
 }
 
 type CSVRowOrder string
@@ -148,7 +180,7 @@ type builtinColumnDef struct {
 }
 
 func knownCatalogLayouts() []catalogLayout {
-	return []catalogLayout{currentCatalogLayout, legacy3CatalogLayout}
+	return []catalogLayout{preCPKLayout, currentCatalogLayout, legacy3CatalogLayout}
 }
 
 func schemaForLayout(layout catalogLayout, tableID uint64) []string {
@@ -160,6 +192,21 @@ func schemaForLayout(layout catalogLayout, tableID uint64) []string {
 	default:
 		return nil
 	}
+}
+
+func catalogSchemaWithout(schema []string, names ...string) []string {
+	excluded := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		excluded[name] = struct{}{}
+	}
+	filtered := make([]string, 0, len(schema))
+	for _, name := range schema {
+		if _, ok := excluded[name]; ok {
+			continue
+		}
+		filtered = append(filtered, name)
+	}
+	return filtered
 }
 
 func builtinColumnsForLayout(layout catalogLayout, tableID uint64) []builtinColumnDef {
@@ -225,11 +272,11 @@ func builtinColumnsForLayout(layout catalogLayout, tableID uint64) []builtinColu
 			{Name: "att_is_auto_increment", SQLType: "TINYINT", Position: 16},
 			{Name: "att_comment", SQLType: "VARCHAR(2048)", Position: 17},
 			{Name: "att_is_hidden", SQLType: "TINYINT", Position: 18},
-			{Name: "att_has_update", SQLType: "TINYINT", Position: 19},
-			{Name: "att_update", SQLType: "VARCHAR(2048)", Position: 20},
-			{Name: "att_is_clusterby", SQLType: "TINYINT", Position: 21},
-			{Name: "att_seqnum", SQLType: "SMALLINT UNSIGNED", Position: 22},
-			{Name: "att_enum", SQLType: "VARCHAR", Position: 23},
+			{Name: catalog.SystemColAttr_HasUpdate, SQLType: "TINYINT", Position: 19},
+			{Name: catalog.SystemColAttr_Update, SQLType: "VARCHAR(2048)", Position: 20},
+			{Name: catalog.SystemColAttr_IsClusterBy, SQLType: "TINYINT", Position: 21},
+			{Name: catalog.SystemColAttr_Seqnum, SQLType: "SMALLINT UNSIGNED", Position: 22},
+			{Name: catalog.SystemColAttr_EnumValues, SQLType: "VARCHAR", Position: 23},
 			{Name: catalog.SystemColAttr_CPKey, SQLType: "VARCHAR(65535)", Position: 24, Hidden: true},
 		}
 		if layout.name != legacy3CatalogLayout.name {
@@ -311,22 +358,26 @@ func inferBuiltinCatalogLayout(
 	switch tableID {
 	case moTablesID:
 		if moTablesView != nil {
-			layout, _ := inferCatalogLayout(len(moTablesView.Headers)-logicalViewMetaCols, moTablesID)
-			return layout
+			if layout, _, ok := inferCatalogLayout(len(moTablesView.Headers)-logicalViewMetaCols, moTablesID); ok {
+				return layout
+			}
 		}
 	case moColumnsID:
 		if moColumnsView != nil {
-			layout, _ := inferCatalogLayout(len(moColumnsView.Headers)-logicalViewMetaCols, moColumnsID)
-			return layout
+			if layout, _, ok := inferCatalogLayout(len(moColumnsView.Headers)-logicalViewMetaCols, moColumnsID); ok {
+				return layout
+			}
 		}
 	case catalog.MO_DATABASE_ID:
 		if moTablesView != nil {
-			layout, _ := inferCatalogLayout(len(moTablesView.Headers)-logicalViewMetaCols, moTablesID)
-			return layout
+			if layout, _, ok := inferCatalogLayout(len(moTablesView.Headers)-logicalViewMetaCols, moTablesID); ok {
+				return layout
+			}
 		}
 		if moColumnsView != nil {
-			layout, _ := inferCatalogLayout(len(moColumnsView.Headers)-logicalViewMetaCols, moColumnsID)
-			return layout
+			if layout, _, ok := inferCatalogLayout(len(moColumnsView.Headers)-logicalViewMetaCols, moColumnsID); ok {
+				return layout
+			}
 		}
 	}
 	return currentCatalogLayout
@@ -354,27 +405,57 @@ func mergeBuiltinSchemaFallback(schema *TableSchema, builtin *TableSchema, table
 	return schema
 }
 
-func inferCatalogLayout(dataWidth int, tableID uint64) (catalogLayout, int) {
+func inferCatalogLayout(dataWidth int, tableID uint64) (catalogLayout, int, bool) {
+	for _, offset := range []int{0, 1, 2} {
+		for _, layout := range knownCatalogLayouts() {
+			schema := schemaForLayout(layout, tableID)
+			if len(schema) == 0 {
+				continue
+			}
+			if dataWidth == len(schema)+offset {
+				return layout, offset, true
+			}
+		}
+	}
+	return catalogLayout{}, 0, false
+}
+
+func catalogLayoutMatches(dataWidth int, tableID uint64) []catalogLayoutMatch {
+	var matches []catalogLayoutMatch
 	for _, layout := range knownCatalogLayouts() {
 		schema := schemaForLayout(layout, tableID)
 		if len(schema) == 0 {
 			continue
 		}
-		switch dataWidth {
-		case len(schema):
-			return layout, 0
-		case len(schema) + 1:
-			return layout, 1
+		for _, offset := range []int{0, 1, 2} {
+			if dataWidth >= len(schema)+offset {
+				matches = append(matches, catalogLayoutMatch{
+					layout: layout,
+					offset: offset,
+				})
+			}
 		}
 	}
-	return currentCatalogLayout, 0
+	return matches
 }
 
 func fallbackCatalogColIndex(view *LogicalTableView, tableID uint64, colName string) int {
 	if idx := view.columnDataIndex(colName); idx >= 0 {
 		return idx
 	}
-	layout, offset := inferCatalogLayout(len(view.Headers)-logicalViewMetaCols, tableID)
+	layout, offset, ok := inferCatalogLayout(len(view.Headers)-logicalViewMetaCols, tableID)
+	if !ok {
+		return -1
+	}
+	for i, name := range schemaForLayout(layout, tableID) {
+		if name == colName {
+			return i + offset
+		}
+	}
+	return -1
+}
+
+func catalogColIndexForLayout(layout catalogLayout, tableID uint64, colName string, offset int) int {
 	for i, name := range schemaForLayout(layout, tableID) {
 		if name == colName {
 			return i + offset
@@ -548,6 +629,44 @@ func (r *CheckpointReader) DumpTableCSVComposed(
 		)
 	}
 	return r.streamTableCSV(ctx, w, schema, snapshotTS, dataEntries, tombEntries, resolveCSVExportOptions(opts))
+}
+
+func (r *CheckpointReader) ListCatalogTables(
+	ctx context.Context,
+	snapshotTS types.TS,
+	opts TableListOptions,
+) ([]TableCatalogEntry, error) {
+	moTablesView, err := r.getTableLogicalView(ctx, moTablesID, snapshotTS)
+	if err != nil {
+		return nil, err
+	}
+	tables := buildCatalogTablesFromMoTablesRows(moTablesView)
+	filtered := make([]TableCatalogEntry, 0, len(tables))
+	for _, table := range tables {
+		if opts.AccountID != nil && table.AccountID != *opts.AccountID {
+			continue
+		}
+		if opts.DatabaseID != nil && table.DatabaseID != *opts.DatabaseID {
+			continue
+		}
+		if !opts.IncludeViews && table.RelKind != "" && table.RelKind != "r" {
+			continue
+		}
+		filtered = append(filtered, table)
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].AccountID != filtered[j].AccountID {
+			return filtered[i].AccountID < filtered[j].AccountID
+		}
+		if filtered[i].DatabaseName != filtered[j].DatabaseName {
+			return filtered[i].DatabaseName < filtered[j].DatabaseName
+		}
+		if filtered[i].TableName != filtered[j].TableName {
+			return filtered[i].TableName < filtered[j].TableName
+		}
+		return filtered[i].TableID < filtered[j].TableID
+	})
+	return filtered, nil
 }
 
 func (r *CheckpointReader) streamTableCSV(
@@ -906,19 +1025,177 @@ func buildSchemaFromMoTablesRow(view *LogicalTableView, fullRow []string) *Table
 
 	relNameIdx := fallbackCatalogColIndex(view, moTablesID, "relname")
 	if relNameIdx < len(dataRow) {
-		schema.TableName = dataRow[relNameIdx]
+		schema.TableName = strings.Clone(dataRow[relNameIdx])
 	}
 
 	relDBIdx := fallbackCatalogColIndex(view, moTablesID, "reldatabase")
 	if relDBIdx < len(dataRow) {
-		schema.DatabaseName = dataRow[relDBIdx]
+		schema.DatabaseName = strings.Clone(dataRow[relDBIdx])
 	}
 
 	createSQLIdx := fallbackCatalogColIndex(view, moTablesID, "rel_createsql")
 	if createSQLIdx < len(dataRow) {
-		schema.CreateSQL = dataRow[createSQLIdx]
+		schema.CreateSQL = strings.Clone(dataRow[createSQLIdx])
 	}
 	return schema
+}
+
+func findCreateSQLFromMoTables(view *LogicalTableView, tableID uint64) string {
+	tableIDStr := fmt.Sprintf("%d", tableID)
+	try := func(relIDCol, createSQLCol int) string {
+		if relIDCol < 0 || createSQLCol < 0 {
+			return ""
+		}
+		for _, fullRow := range view.Rows {
+			row := fullRow[logicalViewMetaCols:]
+			if relIDCol >= len(row) || createSQLCol >= len(row) {
+				continue
+			}
+			if row[relIDCol] == tableIDStr && row[createSQLCol] != "" {
+				return strings.Clone(row[createSQLCol])
+			}
+		}
+		return ""
+	}
+
+	relIDCol := fallbackCatalogColIndex(view, moTablesID, "rel_id")
+	createSQLCol := fallbackCatalogColIndex(view, moTablesID, "rel_createsql")
+	if ddl := try(relIDCol, createSQLCol); ddl != "" {
+		return ddl
+	}
+
+	dataWidth := len(view.Headers) - logicalViewMetaCols
+	for _, match := range catalogLayoutMatches(dataWidth, moTablesID) {
+		relIDCol = catalogColIndexForLayout(match.layout, moTablesID, "rel_id", match.offset)
+		createSQLCol = catalogColIndexForLayout(match.layout, moTablesID, "rel_createsql", match.offset)
+		if ddl := try(relIDCol, createSQLCol); ddl != "" {
+			return ddl
+		}
+	}
+	return ""
+}
+
+func buildCatalogTablesFromMoTablesRows(view *LogicalTableView) []TableCatalogEntry {
+	var best []TableCatalogEntry
+	try := func(relIDCol, relNameCol, relDBCol, relDBIDCol, relKindCol, accountIDCol int) {
+		tables := buildCatalogTablesFromMoTablesRowsAt(
+			view,
+			relIDCol,
+			relNameCol,
+			relDBCol,
+			relDBIDCol,
+			relKindCol,
+			accountIDCol,
+		)
+		if len(tables) > len(best) {
+			best = tables
+		}
+	}
+
+	try(
+		fallbackCatalogColIndex(view, moTablesID, "rel_id"),
+		fallbackCatalogColIndex(view, moTablesID, "relname"),
+		fallbackCatalogColIndex(view, moTablesID, "reldatabase"),
+		fallbackCatalogColIndex(view, moTablesID, "reldatabase_id"),
+		fallbackCatalogColIndex(view, moTablesID, "relkind"),
+		fallbackCatalogColIndex(view, moTablesID, "account_id"),
+	)
+	dataWidth := len(view.Headers) - logicalViewMetaCols
+	for _, match := range catalogLayoutMatches(dataWidth, moTablesID) {
+		try(
+			catalogColIndexForLayout(match.layout, moTablesID, "rel_id", match.offset),
+			catalogColIndexForLayout(match.layout, moTablesID, "relname", match.offset),
+			catalogColIndexForLayout(match.layout, moTablesID, "reldatabase", match.offset),
+			catalogColIndexForLayout(match.layout, moTablesID, "reldatabase_id", match.offset),
+			catalogColIndexForLayout(match.layout, moTablesID, "relkind", match.offset),
+			catalogColIndexForLayout(match.layout, moTablesID, "account_id", match.offset),
+		)
+	}
+	return best
+}
+
+func buildCatalogTablesFromMoTablesRowsAt(
+	view *LogicalTableView,
+	relIDCol int,
+	relNameCol int,
+	relDBCol int,
+	relDBIDCol int,
+	relKindCol int,
+	accountIDCol int,
+) []TableCatalogEntry {
+	if relIDCol < 0 || relNameCol < 0 || relDBCol < 0 {
+		return nil
+	}
+
+	seen := make(map[uint64]struct{})
+	tables := make([]TableCatalogEntry, 0)
+	for _, fullRow := range view.Rows {
+		row := fullRow[logicalViewMetaCols:]
+		if relIDCol >= len(row) || relNameCol >= len(row) || relDBCol >= len(row) {
+			continue
+		}
+		tableID, err := strconv.ParseUint(row[relIDCol], 10, 64)
+		if err != nil || tableID == 0 {
+			continue
+		}
+		if _, ok := seen[tableID]; ok {
+			continue
+		}
+		entry := TableCatalogEntry{
+			TableID:      tableID,
+			AccountID:    0,
+			DatabaseName: strings.Clone(row[relDBCol]),
+			TableName:    strings.Clone(row[relNameCol]),
+		}
+		if !validCatalogName(entry.DatabaseName) || !validCatalogName(entry.TableName) {
+			continue
+		}
+		if relDBIDCol >= 0 && relDBIDCol < len(row) {
+			if dbID, err := strconv.ParseUint(row[relDBIDCol], 10, 64); err == nil {
+				entry.DatabaseID = dbID
+			}
+		}
+		if relKindCol >= 0 && relKindCol < len(row) {
+			entry.RelKind = strings.Clone(row[relKindCol])
+			if !validRelKind(entry.RelKind) {
+				continue
+			}
+		}
+		if accountIDCol >= 0 && accountIDCol < len(row) {
+			if accountID, err := strconv.ParseUint(row[accountIDCol], 10, 32); err == nil {
+				entry.AccountID = uint32(accountID)
+			}
+		}
+		seen[tableID] = struct{}{}
+		tables = append(tables, entry)
+	}
+	return tables
+}
+
+func validCatalogName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-' || r == '$':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validRelKind(s string) bool {
+	switch s {
+	case "", "r", "v", "e", "cluster", "external", "view":
+		return true
+	default:
+		return false
+	}
 }
 
 // buildColumnsFromMoColumnsRows builds a sorted column list from mo_columns data rows
@@ -926,15 +1203,46 @@ func buildSchemaFromMoTablesRow(view *LogicalTableView, fullRow []string) *Table
 // Uses column name lookup from view headers to handle hidden column offsets.
 // mo_columns columns: att_relname_id, att_relname, attname, atttyp, attnum, ..., att_is_hidden
 func buildColumnsFromMoColumnsRows(view *LogicalTableView, tableID uint64) []TableColumn {
-	tableIDStr := fmt.Sprintf("%d", tableID)
-
 	relnameIDCol := fallbackCatalogColIndex(view, moColumnsID, "att_relname_id")
 	nameCol := fallbackCatalogColIndex(view, moColumnsID, "attname")
 	typCol := fallbackCatalogColIndex(view, moColumnsID, "atttyp")
 	numCol := fallbackCatalogColIndex(view, moColumnsID, "attnum")
 	hiddenCol := fallbackCatalogColIndex(view, moColumnsID, "att_is_hidden")
-	seqNumCol := fallbackCatalogColIndex(view, moColumnsID, "att_seqnum")
+	seqNumCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Seqnum)
 
+	if relnameIDCol >= 0 && nameCol >= 0 && typCol >= 0 && numCol >= 0 {
+		if cols := buildColumnsFromMoColumnsRowsAt(view, tableID, relnameIDCol, nameCol, typCol, numCol, hiddenCol, seqNumCol); len(cols) > 0 {
+			return cols
+		}
+	}
+
+	dataWidth := len(view.Headers) - logicalViewMetaCols
+	for _, match := range catalogLayoutMatches(dataWidth, moColumnsID) {
+		relnameIDCol = catalogColIndexForLayout(match.layout, moColumnsID, "att_relname_id", match.offset)
+		nameCol = catalogColIndexForLayout(match.layout, moColumnsID, "attname", match.offset)
+		typCol = catalogColIndexForLayout(match.layout, moColumnsID, "atttyp", match.offset)
+		numCol = catalogColIndexForLayout(match.layout, moColumnsID, "attnum", match.offset)
+		hiddenCol = catalogColIndexForLayout(match.layout, moColumnsID, "att_is_hidden", match.offset)
+		seqNumCol = catalogColIndexForLayout(match.layout, moColumnsID, catalog.SystemColAttr_Seqnum, match.offset)
+		if cols := buildColumnsFromMoColumnsRowsAt(view, tableID, relnameIDCol, nameCol, typCol, numCol, hiddenCol, seqNumCol); len(cols) > 0 {
+			return cols
+		}
+	}
+
+	return nil
+}
+
+func buildColumnsFromMoColumnsRowsAt(
+	view *LogicalTableView,
+	tableID uint64,
+	relnameIDCol int,
+	nameCol int,
+	typCol int,
+	numCol int,
+	hiddenCol int,
+	seqNumCol int,
+) []TableColumn {
+	tableIDStr := fmt.Sprintf("%d", tableID)
 	var cols []TableColumn
 	for _, fullRow := range view.Rows {
 		row := fullRow[logicalViewMetaCols:]
@@ -1012,16 +1320,8 @@ func (r *CheckpointReader) ShowCreateTable(
 	// 1. Try mo_tables.rel_createsql
 	moTablesView, err := r.getTableLogicalView(ctx, moTablesID, snapshotTS)
 	if err == nil && moTablesView != nil {
-		relIDCol := fallbackCatalogColIndex(moTablesView, moTablesID, "rel_id")
-		createSQLCol := fallbackCatalogColIndex(moTablesView, moTablesID, "rel_createsql")
-		for _, fullRow := range moTablesView.Rows {
-			row := fullRow[logicalViewMetaCols:]
-			if relIDCol < len(row) && row[relIDCol] == fmt.Sprintf("%d", tableID) {
-				if createSQLCol < len(row) && row[createSQLCol] != "" {
-					return row[createSQLCol], nil
-				}
-				break
-			}
+		if ddl := findCreateSQLFromMoTables(moTablesView, tableID); ddl != "" {
+			return ddl, nil
 		}
 	}
 
@@ -1038,11 +1338,15 @@ func (r *CheckpointReader) ShowCreateTable(
 	switch tableID {
 	case moTablesID:
 		if moTablesView != nil {
-			layout, _ = inferCatalogLayout(len(moTablesView.Headers)-logicalViewMetaCols, moTablesID)
+			if inferred, _, ok := inferCatalogLayout(len(moTablesView.Headers)-logicalViewMetaCols, moTablesID); ok {
+				layout = inferred
+			}
 		}
 	case moColumnsID:
 		if moColumnsView != nil {
-			layout, _ = inferCatalogLayout(len(moColumnsView.Headers)-logicalViewMetaCols, moColumnsID)
+			if inferred, _, ok := inferCatalogLayout(len(moColumnsView.Headers)-logicalViewMetaCols, moColumnsID); ok {
+				layout = inferred
+			}
 		}
 	}
 	if ddl := hardcodedCreateTableForLayout(tableID, layout); ddl != "" {
@@ -1066,13 +1370,43 @@ func getTableName(view *LogicalTableView, tableID uint64) string {
 
 // buildCreateTableFromMoColumns reconstructs a CREATE TABLE DDL from mo_columns data.
 func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64) string {
-	tableIDStr := fmt.Sprintf("%d", tableID)
 	relnameIDCol := fallbackCatalogColIndex(view, moColumnsID, "att_relname_id")
 	nameCol := fallbackCatalogColIndex(view, moColumnsID, "attname")
 	typCol := fallbackCatalogColIndex(view, moColumnsID, "atttyp")
 	numCol := fallbackCatalogColIndex(view, moColumnsID, "attnum")
 	hiddenCol := fallbackCatalogColIndex(view, moColumnsID, "att_is_hidden")
 
+	if relnameIDCol >= 0 && nameCol >= 0 && typCol >= 0 && numCol >= 0 {
+		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
+			return ddl
+		}
+	}
+
+	dataWidth := len(view.Headers) - logicalViewMetaCols
+	for _, match := range catalogLayoutMatches(dataWidth, moColumnsID) {
+		relnameIDCol = catalogColIndexForLayout(match.layout, moColumnsID, "att_relname_id", match.offset)
+		nameCol = catalogColIndexForLayout(match.layout, moColumnsID, "attname", match.offset)
+		typCol = catalogColIndexForLayout(match.layout, moColumnsID, "atttyp", match.offset)
+		numCol = catalogColIndexForLayout(match.layout, moColumnsID, "attnum", match.offset)
+		hiddenCol = catalogColIndexForLayout(match.layout, moColumnsID, "att_is_hidden", match.offset)
+		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
+			return ddl
+		}
+	}
+
+	return ""
+}
+
+func buildCreateTableFromMoColumnsAt(
+	view *LogicalTableView,
+	tableID uint64,
+	relnameIDCol int,
+	nameCol int,
+	typCol int,
+	numCol int,
+	hiddenCol int,
+) string {
+	tableIDStr := fmt.Sprintf("%d", tableID)
 	type colInfo struct {
 		name     string
 		sqlType  string

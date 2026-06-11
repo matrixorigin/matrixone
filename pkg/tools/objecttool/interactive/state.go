@@ -1154,8 +1154,9 @@ func (s *State) Columns() []objecttool.ColInfo {
 	cols := make([]objecttool.ColInfo, len(s.metaCols))
 	for i, col := range s.metaCols {
 		cols[i] = objecttool.ColInfo{
-			Idx:  col.Idx,
-			Type: col.Type,
+			Idx:    col.Idx,
+			SeqNum: col.Idx,
+			Type:   col.Type,
 		}
 	}
 	return cols
@@ -1170,8 +1171,9 @@ func (s *State) expandColumns(cols []objecttool.ColInfo) []objecttool.ColInfo {
 			// Replace source column with expanded columns
 			for j := range exp.NewCols {
 				result = append(result, objecttool.ColInfo{
-					Idx:  uint16(len(result)),
-					Type: exp.NewTypes[j],
+					Idx:    uint16(len(result)),
+					SeqNum: uint16(len(result)),
+					Type:   exp.NewTypes[j],
 				})
 			}
 		} else {

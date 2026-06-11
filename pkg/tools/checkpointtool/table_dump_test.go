@@ -226,7 +226,7 @@ func TestBuildColumnsFromMoColumnsRows(t *testing.T) {
 			"att_relname_id", "att_relname", "attname", "atttyp", "attnum",
 			"col_9", "col_10", "col_11", "col_12", "col_13", "col_14", "col_15", "col_16", "col_17",
 			"att_is_hidden",
-			"col_19", "col_20", "col_21", "att_seqnum",
+			"col_19", "col_20", "col_21", "attr_seqnum",
 		},
 		Rows: [][]string{
 			{"obj1", "0", "0", "", "", "", "", "12345", "my_table", "id", "BIGINT", "1", "", "", "", "", "", "", "", "", "", "0", "", "", "", "0"},
@@ -270,6 +270,113 @@ func TestBuildColumnsFromMoColumnsRows_FallbackToAttnumWhenSeqnumMissing(t *test
 	assert.Equal(t, 1, cols[1].PhysicalPosition)
 }
 
+func TestBuildColumnsFromMoColumnsRows_GenericPreCPKWithPhysicalPrefix(t *testing.T) {
+	const (
+		tableID = uint64(12345)
+		offset  = 1
+	)
+
+	headers := []string{"object", "block", "row"}
+	for i := 0; i < len(preCPKLayout.moColumnsSchema)+offset; i++ {
+		headers = append(headers, fmt.Sprintf("col_%d", i))
+	}
+
+	row := func(metaRow, name, typ, attnum, hidden, seqnum string) []string {
+		data := make([]string, len(preCPKLayout.moColumnsSchema)+offset)
+		setCatalogValue := func(colName, value string) {
+			idx := catalogColIndexForLayout(preCPKLayout, moColumnsID, colName, offset)
+			require.GreaterOrEqual(t, idx, 0)
+			data[idx] = value
+		}
+		data[0] = "physical-prefix"
+		setCatalogValue("att_relname_id", fmt.Sprintf("%d", tableID))
+		setCatalogValue("attname", name)
+		setCatalogValue("atttyp", typ)
+		setCatalogValue("attnum", attnum)
+		setCatalogValue("att_is_hidden", hidden)
+		setCatalogValue("attr_seqnum", seqnum)
+		return append([]string{"obj1", "0", metaRow}, data...)
+	}
+
+	view := &LogicalTableView{
+		Headers: headers,
+		Rows: [][]string{
+			row("0", "id", "INT", "1", "0", "0"),
+			row("1", "name", "VARCHAR(100)", "2", "0", "1"),
+			row("2", "__mo_rowid", "ROWID", "0", "1", "2"),
+		},
+	}
+
+	cols := buildColumnsFromMoColumnsRows(view, tableID)
+	require.Len(t, cols, 2)
+	assert.Equal(t, "id", cols[0].Name)
+	assert.Equal(t, 0, cols[0].PhysicalPosition)
+	assert.Equal(t, "name", cols[1].Name)
+	assert.Equal(t, 1, cols[1].PhysicalPosition)
+
+	ddl := buildCreateTableFromMoColumns(view, tableID)
+	assert.Contains(t, ddl, "`id` INT")
+	assert.Contains(t, ddl, "`name` VARCHAR(100)")
+	assert.NotContains(t, ddl, "__mo_rowid")
+}
+
+func TestFindCreateSQLFromMoTables_GenericWithTrailingColumns(t *testing.T) {
+	headers := []string{"object", "block", "row"}
+	for i := 0; i < len(preCPKLayout.moTablesSchema)+2; i++ {
+		headers = append(headers, fmt.Sprintf("col_%d", i))
+	}
+	row := make([]string, len(headers))
+	row[0], row[1], row[2] = "obj1", "0", "0"
+	row[logicalViewMetaCols+0] = "12345"
+	row[logicalViewMetaCols+1] = "employees"
+	row[logicalViewMetaCols+2] = "test_ckp"
+	row[logicalViewMetaCols+7] = "CREATE TABLE employees (id INT)"
+	row[len(row)-2] = "tail-1"
+	row[len(row)-1] = "tail-2"
+
+	view := &LogicalTableView{
+		Headers: headers,
+		Rows:    [][]string{row},
+	}
+
+	assert.Equal(t, "CREATE TABLE employees (id INT)", findCreateSQLFromMoTables(view, 12345))
+}
+
+func TestBuildCatalogTablesFromMoTablesRows_GenericWithTrailingColumns(t *testing.T) {
+	headers := []string{"object", "block", "row"}
+	for i := 0; i < len(preCPKLayout.moTablesSchema)+2; i++ {
+		headers = append(headers, fmt.Sprintf("col_%d", i))
+	}
+	row := func(relID, relName, dbName, dbID, relKind, accountID string) []string {
+		data := make([]string, len(preCPKLayout.moTablesSchema)+2)
+		data[0] = relID
+		data[1] = relName
+		data[2] = dbName
+		data[3] = dbID
+		data[5] = relKind
+		data[11] = accountID
+		return append([]string{"obj1", "0", relID}, data...)
+	}
+	view := &LogicalTableView{
+		Headers: headers,
+		Rows: [][]string{
+			row("1001", "orders", "tpch_10g", "9001", "r", "7"),
+			row("1002", "revenue0", "tpch_10g", "9001", "v", "7"),
+		},
+	}
+
+	tables := buildCatalogTablesFromMoTablesRows(view)
+	require.Len(t, tables, 2)
+	assert.Equal(t, uint64(1001), tables[0].TableID)
+	assert.Equal(t, uint32(7), tables[0].AccountID)
+	assert.Equal(t, uint64(9001), tables[0].DatabaseID)
+	assert.Equal(t, "tpch_10g", tables[0].DatabaseName)
+	assert.Equal(t, "orders", tables[0].TableName)
+	assert.Equal(t, "r", tables[0].RelKind)
+	assert.Equal(t, "revenue0", tables[1].TableName)
+	assert.Equal(t, "v", tables[1].RelKind)
+}
+
 func TestInferCatalogLayout(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -277,20 +384,36 @@ func TestInferCatalogLayout(t *testing.T) {
 		tableID   uint64
 		layout    string
 		offset    int
+		ok        bool
 	}{
-		{name: "current_tables", dataWidth: len(catalog.MoTablesSchema), tableID: moTablesID, layout: currentCatalogLayout.name, offset: 0},
-		{name: "current_tables_fakepk", dataWidth: len(catalog.MoTablesSchema) + 1, tableID: moTablesID, layout: currentCatalogLayout.name, offset: 1},
-		{name: "legacy3_tables", dataWidth: len(legacy3CatalogLayout.moTablesSchema), tableID: moTablesID, layout: legacy3CatalogLayout.name, offset: 0},
-		{name: "legacy3_columns", dataWidth: len(legacy3CatalogLayout.moColumnsSchema), tableID: moColumnsID, layout: legacy3CatalogLayout.name, offset: 0},
+		{name: "current_tables", dataWidth: len(catalog.MoTablesSchema), tableID: moTablesID, layout: currentCatalogLayout.name, offset: 0, ok: true},
+		{name: "current_tables_fakepk", dataWidth: len(catalog.MoTablesSchema) + 1, tableID: moTablesID, layout: currentCatalogLayout.name, offset: 1, ok: true},
+		{name: "current_columns_fakepk", dataWidth: len(catalog.MoColumnsSchema) + 1, tableID: moColumnsID, layout: currentCatalogLayout.name, offset: 1, ok: true},
+		{name: "pre_cpk_tables", dataWidth: len(preCPKLayout.moTablesSchema), tableID: moTablesID, layout: preCPKLayout.name, offset: 0, ok: true},
+		{name: "pre_cpk_columns", dataWidth: len(preCPKLayout.moColumnsSchema), tableID: moColumnsID, layout: preCPKLayout.name, offset: 0, ok: true},
+		{name: "legacy3_tables", dataWidth: len(legacy3CatalogLayout.moTablesSchema), tableID: moTablesID, layout: legacy3CatalogLayout.name, offset: 0, ok: true},
+		{name: "legacy3_columns", dataWidth: len(legacy3CatalogLayout.moColumnsSchema), tableID: moColumnsID, layout: legacy3CatalogLayout.name, offset: 0, ok: true},
+		{name: "unknown_tables", dataWidth: 7, tableID: moTablesID, ok: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			layout, offset := inferCatalogLayout(tt.dataWidth, tt.tableID)
+			layout, offset, ok := inferCatalogLayout(tt.dataWidth, tt.tableID)
+			assert.Equal(t, tt.ok, ok)
+			if !tt.ok {
+				return
+			}
 			assert.Equal(t, tt.layout, layout.name)
 			assert.Equal(t, tt.offset, offset)
 		})
 	}
+}
+
+func TestFallbackCatalogColIndex_UnknownLayoutDoesNotGuessCurrent(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1", "col_2", "col_3", "col_4", "col_5", "col_6"},
+	}
+	assert.Equal(t, -1, fallbackCatalogColIndex(view, moTablesID, "rel_createsql"))
 }
 
 // TestLogicalTableViewWithSchema_mergeHeaders merges schema column names using position-based mapping.
@@ -484,7 +607,7 @@ func TestColumnSchemaRoundTrip(t *testing.T) {
 			"att_relname_id", "att_relname", "attname", "atttyp", "attnum",
 			"col_9", "col_10", "col_11", "col_12", "col_13", "col_14", "col_15", "col_16", "col_17",
 			"att_is_hidden",
-			"col_19", "col_20", "col_21", "att_seqnum",
+			"col_19", "col_20", "col_21", "attr_seqnum",
 		},
 		Rows: [][]string{
 			{"obj1", "0", "0", "", "", "", "", "12345", "my_table", "a", "INT", "1", "", "", "", "", "", "", "", "", "", "0", "", "", "", "0"},

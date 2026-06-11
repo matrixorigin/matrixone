@@ -91,3 +91,47 @@ type LogicalTableView struct {
 	DeletedRows  int
 	VisibleRows  int
 }
+
+var logicalTableViewMetaHeaders = []string{"object", "block", "row"}
+
+func newLogicalTableView() *LogicalTableView {
+	return &LogicalTableView{
+		Headers: append([]string(nil), logicalTableViewMetaHeaders...),
+		Rows:    make([][]string, 0),
+	}
+}
+
+func (v *LogicalTableView) MetaWidth() int {
+	if v == nil {
+		return len(logicalTableViewMetaHeaders)
+	}
+	limit := len(logicalTableViewMetaHeaders)
+	if len(v.Headers) < limit {
+		limit = len(v.Headers)
+	}
+	for i := 0; i < limit; i++ {
+		if v.Headers[i] != logicalTableViewMetaHeaders[i] {
+			return i
+		}
+	}
+	return limit
+}
+
+func (v *LogicalTableView) DataWidth() int {
+	if v == nil {
+		return 0
+	}
+	width := len(v.Headers) - v.MetaWidth()
+	if width < 0 {
+		return 0
+	}
+	return width
+}
+
+func (v *LogicalTableView) DataRow(fullRow []string) []string {
+	metaWidth := v.MetaWidth()
+	if len(fullRow) < metaWidth {
+		return nil
+	}
+	return fullRow[metaWidth:]
+}
