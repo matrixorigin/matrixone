@@ -209,6 +209,9 @@ SELECT id, COUNT(*) AS per_id_cnt FROM dup_no_fk_t GROUP BY id ORDER BY id;
 ➤ id[4,32,0]  ¦  per_id_cnt[-5,64,0]  𝄀
 1  ¦  1  𝄀
 2  ¦  1
+SELECT v FROM dup_no_fk_t WHERE id = 2;
+➤ v[12,-1,0]  𝄀
+only
 DROP TABLE dup_no_fk_t;
 DROP TABLE dup_no_fk_s;
 DROP TABLE IF EXISTS company;
