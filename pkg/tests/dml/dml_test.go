@@ -113,7 +113,7 @@ func TestDeleteAndSelect(t *testing.T) {
 func TestDataBranchDiffAsFile(t *testing.T) {
 	embed.RunBaseClusterTests(
 		func(c embed.Cluster) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*420)
 			defer cancel()
 
 			cn1, err := c.GetCNService(0)
@@ -151,6 +151,18 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 
 			t.Log("diff output handles mixed types and string edge cases")
 			runComplexTypeDiffAsFile(t, ctx, sqlDB)
+
+			t.Log("data branch diff covers remaining column type families")
+			runDataBranchColumnTypeMatrix(t, ctx, sqlDB)
+
+			t.Log("data branch preserves and enforces column constraints")
+			runDataBranchColumnConstraintMatrix(t, ctx, sqlDB)
+
+			t.Log("data branch covers supported table type behavior")
+			runDataBranchTableTypeMatrix(t, ctx, sqlDB)
+
+			t.Log("data branch rejects invalid unhappy-path operations")
+			runDataBranchUnhappyPathMatrix(t, ctx, sqlDB)
 
 			t.Log("sql diff handles rows containing NULL values")
 			runSQLDiffHandlesNulls(t, ctx, sqlDB)
@@ -1053,6 +1065,318 @@ create table %s (
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
 }
 
+func runDataBranchColumnTypeMatrix(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*150)
+	defer cancel()
+
+	dbName := testutils.GetDatabaseName(t)
+	base := "type_matrix_base"
+	branch := "type_matrix_branch"
+	diffDir := t.TempDir()
+	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
+	defer func() {
+		execSQLDB(t, ctx, db, "use mo_catalog")
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	}()
+	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf(`
+create table %s (
+	id int primary key,
+	b bit(10),
+	u8 tinyint unsigned,
+	u16 smallint unsigned,
+	u32 int unsigned,
+	u64 bigint unsigned,
+	d256 decimal(65,30),
+	y year,
+	uid uuid,
+	bin binary(4),
+	vbin varbinary(8),
+	e enum('red','blue','green'),
+	bl blob,
+	dl datalink,
+	g geometry,
+	vf vecf64(3)
+)`, base))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf(`
+insert into %s values
+	(1, b'101', 250, 65000, 4000000000, 9000000000000000000,
+		cast('12345678901234567890123456789012345.123456789012345678901234567890' as decimal(65,30)),
+		2024, '6d1b1f73-2dbf-11ed-940f-000c29847904', 'ab', x'01020304',
+		'red', 'blob-base', 'file:///tmp/mo_branch_type_base.csv', 'POINT(1 1)', '[1.1,2.2,3.3]'),
+	(2, b'010', 1, 2, 3, 4,
+		cast('-0.000000000000000000000000000001' as decimal(65,30)),
+		1999, 'ad9f809f-2dbd-11ed-940f-000c29847904', 'cd', x'05060708',
+		'blue', 'blob-two', 'file:///tmp/mo_branch_type_two.csv', 'LINESTRING(0 0,1 1)', '[4.4,5.5,6.6]')`, base))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table `%s` from `%s`", branch, base))
+	execSQLDB(t, ctx, db, fmt.Sprintf(`
+update %s set
+	b = b'111',
+	u8 = 251,
+	u16 = 65001,
+	u32 = 4000000001,
+	u64 = 9000000000000000001,
+	d256 = cast('42.000000000000000000000000000000' as decimal(65,30)),
+	y = 2025,
+	uid = '1b50c137-2dba-11ed-940f-000c29847904',
+	bin = 'ef',
+	vbin = x'090a0b0c',
+	e = 'green',
+	bl = 'blob-updated',
+	dl = 'file:///tmp/mo_branch_type_updated.csv',
+	g = 'POINT(2 2)',
+	vf = '[7.7,8.8,9.9]'
+where id = 1`, branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf(`
+insert into %s values
+	(3, b'001', 2, 3, 4, 5,
+		cast('7.000000000000000000000000000000' as decimal(65,30)),
+		2000, '3ddf7b28-2dba-11ed-940f-000c29847904', 'gh', x'0d0e0f10',
+		'red', 'blob-new', 'file:///tmp/mo_branch_type_new.csv', 'POINT(3 3)', '[0.1,0.2,0.3]')`, branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf("delete from `%s` where id = 2", branch))
+
+	summary := fetchDiffSummaryMetrics(t, ctx, db, fmt.Sprintf("data branch diff %s against %s output summary", branch, base))
+	assertSummaryMetrics(t, summary, [2]int64{1, 0}, [2]int64{1, 0}, [2]int64{1, 0})
+	assertSummaryMatchesCount(t, summary, fetchDiffCount(t, ctx, db, fmt.Sprintf("data branch diff %s against %s output count", branch, base)))
+
+	diffStmt := fmt.Sprintf("data branch diff %s against %s output file '%s'", branch, base, diffLiteral)
+	diffPath := execDiffAndFetchFile(t, ctx, db, diffStmt)
+	require.Equal(t, ".sql", filepath.Ext(diffPath))
+	require.True(t, strings.HasPrefix(diffPath, diffDir), "diff file %s not in dir %s", diffPath, diffDir)
+
+	sqlContent := readSQLFile(t, diffPath)
+	lowerContent := strings.ToLower(sqlContent)
+	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s", strings.ToLower(dbName), base))
+
+	applyDiffStatements(t, ctx, db, sqlContent)
+	assertTablesEqual(t, ctx, db, dbName, branch, base)
+}
+
+func runDataBranchColumnConstraintMatrix(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*120)
+	defer cancel()
+
+	dbName := testutils.GetDatabaseName(t)
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
+	defer func() {
+		execSQLDB(t, ctx, db, "use mo_catalog")
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	}()
+	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+
+	execSQLDB(t, ctx, db, "create table parent (id int primary key)")
+	execSQLDB(t, ctx, db, "insert into parent values (1), (2), (3)")
+	execSQLDB(t, ctx, db, `
+create table child (
+	id int auto_increment primary key,
+	parent_id int not null,
+	code varchar(20) not null default 'seed' comment 'branch code',
+	qty decimal(10,2) default 0.00,
+	constraint chk_qty CHECK (qty IS NULL OR qty >= 0),
+	unique key uq_code (code),
+	constraint fk_child_parent foreign key (parent_id) references parent(id)
+) comment = 'branch constraint table'`)
+	execSQLDB(t, ctx, db, "insert into child(parent_id, code, qty) values (1, 'base-a', 10.00), (2, 'base-b', 20.00)")
+
+	execSQLDB(t, ctx, db, "data branch create table child_branch from child")
+	execSQLDB(t, ctx, db, "update child_branch set qty = qty + 5 where code = 'base-a'")
+	execSQLDB(t, ctx, db, "insert into child_branch(parent_id, qty) values (2, 77.75)")
+
+	execSQLDBExpectError(t, ctx, db, "insert into child_branch(parent_id, code, qty) values (1, null, 1.00)")
+	execSQLDBExpectError(t, ctx, db, "insert into child_branch(parent_id, code, qty) values (1, 'base-a', 1.00)")
+	execSQLDBExpectError(t, ctx, db, "insert into child_branch(parent_id, code, qty) values (99, 'bad-fk', 1.00)")
+
+	createSQL := strings.ToLower(fetchShowCreateTable(t, ctx, db, "child_branch"))
+	require.Contains(t, createSQL, "branch code")
+	require.Contains(t, createSQL, "branch constraint table")
+	require.Contains(t, createSQL, "check")
+	require.Contains(t, createSQL, "foreign key")
+
+	execSQLDB(t, ctx, db, "data branch merge child_branch into child")
+	require.Equal(t, int64(3), fetchSingleInt64(t, ctx, db, "select count(*) from child"))
+	require.Equal(t, "seed", fetchSingleString(t, ctx, db, "select code from child where parent_id = 2 and qty = 77.75"))
+
+	execSQLDB(t, ctx, db, "create table clustered_base (tenant int not null comment 'cluster tenant', seq int default 0, payload varchar(20)) cluster by (tenant, seq)")
+	execSQLDB(t, ctx, db, "insert into clustered_base values (1, 1, 'base'), (1, 2, 'old'), (2, 1, 'keep')")
+	execSQLDB(t, ctx, db, "data branch create table clustered_branch from clustered_base")
+	execSQLDB(t, ctx, db, "update clustered_branch set payload = 'new' where tenant = 1 and seq = 2")
+	execSQLDB(t, ctx, db, "insert into clustered_branch(tenant, payload) values (3, 'default-seq')")
+	execSQLDB(t, ctx, db, "delete from clustered_branch where tenant = 2")
+
+	clusterCreateSQL := strings.ToLower(fetchShowCreateTable(t, ctx, db, "clustered_branch"))
+	require.Contains(t, clusterCreateSQL, "cluster by")
+	require.Contains(t, clusterCreateSQL, "cluster tenant")
+
+	diffDir := t.TempDir()
+	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
+	diffStmt := fmt.Sprintf("data branch diff clustered_branch against clustered_base output file '%s'", diffLiteral)
+	diffPath := execDiffAndFetchFile(t, ctx, db, diffStmt)
+	require.Equal(t, ".sql", filepath.Ext(diffPath))
+	require.True(t, strings.HasPrefix(diffPath, diffDir), "diff file %s not in dir %s", diffPath, diffDir)
+
+	applyDiffStatements(t, ctx, db, readSQLFile(t, diffPath))
+	assertTablesEqual(t, ctx, db, dbName, "clustered_branch", "clustered_base")
+}
+
+func runDataBranchTableTypeMatrix(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*150)
+	defer cancel()
+
+	dbName := testutils.GetDatabaseName(t)
+	copyDB := dbName + "_copy"
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
+	defer func() {
+		execSQLDB(t, ctx, db, "use mo_catalog")
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", copyDB))
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	}()
+	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+
+	execSQLDB(t, ctx, db, `
+create table part_base (
+	id int primary key,
+	val int,
+	note varchar(16)
+) partition by range columns(id) (
+	partition p0 values less than (10),
+	partition p1 values less than (MAXVALUE)
+)`)
+	execSQLDB(t, ctx, db, "insert into part_base values (1, 10, 'p0'), (11, 110, 'p1'), (12, 120, 'p1')")
+	execSQLDB(t, ctx, db, "data branch create table part_branch from part_base")
+	execSQLDB(t, ctx, db, "update part_branch set val = val + 1 where id = 11")
+	execSQLDB(t, ctx, db, "insert into part_branch values (2, 20, 'new-p0'), (21, 210, 'new-p1')")
+	execSQLDB(t, ctx, db, "delete from part_branch where id = 12")
+
+	partCreateSQL := strings.ToLower(fetchShowCreateTable(t, ctx, db, "part_branch"))
+	require.Contains(t, partCreateSQL, "partition by range")
+
+	diffDir := t.TempDir()
+	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
+	diffStmt := fmt.Sprintf("data branch diff part_branch against part_base output file '%s'", diffLiteral)
+	diffPath := execDiffAndFetchFile(t, ctx, db, diffStmt)
+	require.Equal(t, ".sql", filepath.Ext(diffPath))
+	applyDiffStatements(t, ctx, db, readSQLFile(t, diffPath))
+	assertTablesEqual(t, ctx, db, dbName, "part_branch", "part_base")
+
+	execSQLDB(t, ctx, db, "create table view_base (id int primary key, val int)")
+	execSQLDB(t, ctx, db, "insert into view_base values (1, 10), (2, 20), (3, 30)")
+	execSQLDB(t, ctx, db, "create view v_active as select id, val from view_base where val >= 20")
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create database `%s` from `%s`", copyDB, dbName))
+	execSQLDB(t, ctx, db, "insert into view_base values (4, 40)")
+	require.Equal(t, int64(2), fetchSingleInt64(t, ctx, db, fmt.Sprintf("select count(*) from `%s`.v_active", copyDB)))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s`.view_base values (5, 50)", copyDB))
+	require.Equal(t, int64(3), fetchSingleInt64(t, ctx, db, fmt.Sprintf("select count(*) from `%s`.v_active", copyDB)))
+
+	execSQLDB(t, ctx, db, "create temporary table temp_branch_base (id int primary key, val int)")
+	execSQLDB(t, ctx, db, "insert into temp_branch_base values (1, 10)")
+	if _, err := db.ExecContext(ctx, "data branch create table temp_branch_copy from temp_branch_base"); err == nil {
+		require.Equal(t, int64(1), fetchSingleInt64(t, ctx, db, "select count(*) from temp_branch_copy"))
+	}
+
+	externalPath := filepath.Join(t.TempDir(), "external.csv")
+	require.NoError(t, os.WriteFile(externalPath, []byte("1\n2\n"), 0o600))
+	externalPathLiteral := strings.ReplaceAll(externalPath, "'", "''")
+	execSQLDB(t, ctx, db, fmt.Sprintf("create external table ext_branch_base (id int) infile{\"filepath\"='%s'} fields terminated by ',' lines terminated by '\\n'", externalPathLiteral))
+	execSQLDBExpectError(t, ctx, db, "data branch create table ext_branch_copy from ext_branch_base")
+
+	execSQLDB(t, ctx, db, "use mo_catalog")
+	execSQLDB(t, ctx, db, "drop table if exists cluster_branch_base")
+	execSQLDB(t, ctx, db, "create cluster table cluster_branch_base(a int)")
+	defer execSQLDB(t, ctx, db, "drop table if exists mo_catalog.cluster_branch_base")
+	execSQLDB(t, ctx, db, "insert into cluster_branch_base values (1, 0), (2, 0)")
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table `%s`.cluster_branch_copy from mo_catalog.cluster_branch_base", dbName))
+	require.Equal(t, int64(2), fetchSingleInt64(t, ctx, db, fmt.Sprintf("select count(*) from `%s`.cluster_branch_copy", dbName)))
+}
+
+func runDataBranchUnhappyPathMatrix(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*120)
+	defer cancel()
+
+	dbName := testutils.GetDatabaseName(t)
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
+	defer func() {
+		execSQLDB(t, ctx, db, "use mo_catalog")
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	}()
+	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+
+	execSQLDB(t, ctx, db, "create table base(a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1, 10), (2, 20)")
+	execSQLDB(t, ctx, db, "create view v_base as select * from base")
+	execSQLDBExpectError(t, ctx, db, "data branch create table v_branch from v_base")
+	execSQLDBExpectError(t, ctx, db, "data branch create table missing_branch from missing_base")
+
+	execSQLDB(t, ctx, db, "data branch create table br from base")
+	execSQLDBExpectError(t, ctx, db, "data branch diff br against base columns (missing)")
+	execSQLDBExpectError(t, ctx, db, "data branch diff missing_branch against base")
+	execSQLDBExpectError(t, ctx, db, "data branch diff br against missing_base")
+	diffDir := strings.ReplaceAll(t.TempDir(), "'", "''")
+	execSQLDBExpectError(t, ctx, db, fmt.Sprintf("data branch diff br against base columns (a) output file '%s'", diffDir))
+	execSQLDB(t, ctx, db, "alter table br add column c int default 0")
+	execSQLDBExpectError(t, ctx, db, "data branch diff br against base")
+	execSQLDBExpectError(t, ctx, db, "data branch merge br into base")
+
+	execSQLDB(t, ctx, db, "create table no_pk(a int, b int)")
+	execSQLDB(t, ctx, db, "insert into no_pk values (1, 10), (2, 20)")
+	execSQLDB(t, ctx, db, "data branch create table no_pk_branch from no_pk")
+	execSQLDBExpectError(t, ctx, db, "data branch pick no_pk_branch into no_pk keys(1)")
+
+	execSQLDB(t, ctx, db, "create table single_pk(a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into single_pk values (1, 10), (2, 20)")
+	execSQLDB(t, ctx, db, "data branch create table single_left from single_pk")
+	execSQLDB(t, ctx, db, "data branch create table single_right from single_pk")
+	execSQLDB(t, ctx, db, "insert into single_right values (3, 30)")
+	execSQLDBExpectError(t, ctx, db, "data branch pick single_right into single_left")
+	execSQLDBExpectError(t, ctx, db, "data branch pick single_right into single_left keys((3, 3))")
+	execSQLDBExpectError(t, ctx, db, "data branch pick single_right into single_left keys(select cast(null as int))")
+	execSQLDBExpectError(t, ctx, db, "data branch pick single_right into single_left keys(select a, b from single_right)")
+	execSQLDB(t, ctx, db, fmt.Sprintf("create snapshot %s_single_sp for table `%s` single_left", dbName, dbName))
+	execSQLDBExpectError(t, ctx, db, fmt.Sprintf("data branch pick single_right into single_left{snapshot='%s_single_sp'} keys(3)", dbName))
+	execSQLDB(t, ctx, db, fmt.Sprintf("drop snapshot %s_single_sp", dbName))
+
+	execSQLDB(t, ctx, db, "create table comp_pk(a int, b int, c varchar(20), primary key(a, b))")
+	execSQLDB(t, ctx, db, "insert into comp_pk values (1, 1, 'base'), (2, 2, 'base')")
+	execSQLDB(t, ctx, db, "data branch create table comp_left from comp_pk")
+	execSQLDB(t, ctx, db, "data branch create table comp_right from comp_pk")
+	execSQLDB(t, ctx, db, "insert into comp_right values (3, 3, 'new')")
+	execSQLDBExpectError(t, ctx, db, "data branch pick comp_right into comp_left keys(3)")
+	execSQLDBExpectError(t, ctx, db, "data branch pick comp_right into comp_left keys((3, 3, 3))")
+	execSQLDBExpectError(t, ctx, db, "data branch pick single_right into single_left between snapshot missing_from and missing_to keys(3)")
+
+	execSQLDB(t, ctx, db, "create table exists_base(a int primary key)")
+	execSQLDB(t, ctx, db, "create table exists_target(a int primary key)")
+	execSQLDBExpectError(t, ctx, db, "data branch create table exists_target from exists_base")
+	execSQLDBExpectError(t, ctx, db, fmt.Sprintf("data branch create database `%s` from `%s`", dbName, dbName))
+
+	execSQLDB(t, ctx, db, "create table uniq_base(a int primary key, u int unique)")
+	execSQLDB(t, ctx, db, "insert into uniq_base values (1, 10), (2, 20)")
+	execSQLDB(t, ctx, db, "data branch create table uniq_left from uniq_base")
+	execSQLDB(t, ctx, db, "data branch create table uniq_right from uniq_base")
+	execSQLDB(t, ctx, db, "insert into uniq_left values (3, 30)")
+	execSQLDB(t, ctx, db, "insert into uniq_right values (4, 30)")
+	execSQLDBExpectError(t, ctx, db, "data branch merge uniq_right into uniq_left when conflict accept")
+
+	require.Equal(t, int64(2), fetchSingleInt64(t, ctx, db, "select count(*) from single_left"))
+	require.Equal(t, int64(2), fetchSingleInt64(t, ctx, db, "select count(*) from comp_left"))
+}
+
 func runBranchDatabaseMetadata(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	t.Helper()
 
@@ -1297,8 +1621,51 @@ func assertTablesEqual(t *testing.T, ctx context.Context, db *sql.DB, schema, le
 	check(fmt.Sprintf("select * from %s.%s except select * from %s.%s", schema, right, schema, left))
 }
 
+func fetchShowCreateTable(t *testing.T, ctx context.Context, db *sql.DB, table string) string {
+	t.Helper()
+
+	rows, err := db.QueryContext(ctx, fmt.Sprintf("show create table %s", table))
+	require.NoErrorf(t, err, "show create table %s", table)
+	defer rows.Close()
+
+	require.Truef(t, rows.Next(), "show create table %s returned no rows", table)
+	var (
+		tableName string
+		createSQL string
+	)
+	require.NoError(t, rows.Scan(&tableName, &createSQL))
+	require.Falsef(t, rows.Next(), "show create table %s returned unexpected extra rows", table)
+	require.NoErrorf(t, rows.Err(), "show create table %s", table)
+	require.NotEmpty(t, createSQL, "show create table %s returned empty create sql", table)
+	return createSQL
+}
+
+func fetchSingleInt64(t *testing.T, ctx context.Context, db *sql.DB, stmt string) int64 {
+	t.Helper()
+
+	var value int64
+	err := db.QueryRowContext(ctx, stmt).Scan(&value)
+	require.NoErrorf(t, err, "sql: %s", stmt)
+	return value
+}
+
+func fetchSingleString(t *testing.T, ctx context.Context, db *sql.DB, stmt string) string {
+	t.Helper()
+
+	var value string
+	err := db.QueryRowContext(ctx, stmt).Scan(&value)
+	require.NoErrorf(t, err, "sql: %s", stmt)
+	return value
+}
+
 func execSQLDB(t *testing.T, ctx context.Context, db *sql.DB, stmt string) {
 	t.Helper()
 	_, err := db.ExecContext(ctx, stmt)
 	require.NoErrorf(t, err, "sql: %s", stmt)
+}
+
+func execSQLDBExpectError(t *testing.T, ctx context.Context, db *sql.DB, stmt string) {
+	t.Helper()
+	_, err := db.ExecContext(ctx, stmt)
+	require.Errorf(t, err, "expected error for sql: %s", stmt)
 }
