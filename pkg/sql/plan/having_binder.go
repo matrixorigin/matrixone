@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"encoding/binary"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -139,13 +141,6 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "aggregate function %s calls cannot be nested", funcName)
 	}
 
-	// if funcName == NameGroupConcat {
-	// 	err := b.processForceWindows(funcName, astExpr, depth, isRoot)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// }
-
 	b.insideAgg = true
 	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 	if err != nil {
@@ -154,6 +149,12 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		if funcName != "max" && funcName != "min" && funcName != "any_value" {
 			expr.GetF().Func.Obj = int64(uint64(expr.GetF().Func.Obj) | function.Distinct)
+		}
+	}
+	if funcName == NameGroupConcat {
+		if err := b.bindGroupConcatOrderBy(astExpr, expr, depth, isRoot); err != nil {
+			b.insideAgg = false
+			return nil, err
 		}
 	}
 	b.insideAgg = false
@@ -228,26 +229,41 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 	return expr, nil
 }
 
-// processGroupConcatOrderBy processes the ORDER BY clause in group_concat.
-// Instead of converting to window function, it records the order by specs
-// so that a Sort node can be inserted before the Agg node.
-// This allows batch processing instead of requiring all data in memory.
-func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) error {
+func (b *HavingBinder) bindGroupConcatOrderBy(astExpr *tree.FuncExpr, expr *plan.Expr, depth int32, isRoot bool) error {
 	if len(astExpr.OrderBy) < 1 {
 		return nil
 	}
 
-	// Parse ORDER BY expressions and add to groupConcatOrderBys
+	fn := expr.GetF()
+	if fn == nil {
+		return moerr.NewInternalError(b.GetContext(), "invalid group_concat expression")
+	}
+	concatArgCnt := len(fn.Args) - 1 // last arg is separator
+	if concatArgCnt < 1 {
+		return moerr.NewSyntaxError(b.GetContext(), "group_concat requires arguments")
+	}
+
+	separatorLit := fn.Args[concatArgCnt].GetLit()
+	if separatorLit == nil {
+		return moerr.NewInternalError(b.GetContext(), "invalid group_concat separator")
+	}
+	separator := separatorLit.GetSval()
+
+	orderExprs := make([]*plan.Expr, 0, len(astExpr.OrderBy))
+	orderFlags := make([]byte, 0, len(astExpr.OrderBy))
 	for _, order := range astExpr.OrderBy {
 		orderExpr := order.Expr
 		if numVal, ok := order.Expr.(*tree.NumVal); ok {
 			switch numVal.Kind() {
 			case tree.Int:
-				colPos, _ := numVal.Int64()
 				if numVal.Negative() {
-					return moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is negative", colPos)
+					return moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %s is negative", numVal.String())
 				}
-				if colPos < 1 || int(colPos) > len(astExpr.Exprs)-1 {
+				colPos, ok := numVal.Uint64()
+				if !ok {
+					return moerr.NewSyntaxError(b.GetContext(), "non-integer constant in ORDER BY")
+				}
+				if colPos < 1 || colPos > uint64(concatArgCnt) {
 					return moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is not in group_concat arguments", colPos)
 				}
 				orderExpr = astExpr.Exprs[colPos-1]
@@ -260,38 +276,55 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
 		}
 
+		oldInsideAgg := b.insideAgg
 		b.insideAgg = true
 		expr, err := b.BindExpr(orderExpr, depth, isRoot)
-		b.insideAgg = false
+		b.insideAgg = oldInsideAgg
 
 		if err != nil {
 			return err
 		}
 
-		orderBy := &plan.OrderBySpec{
-			Expr: expr,
-			Flag: plan.OrderBySpec_INTERNAL,
-		}
-
 		switch order.Direction {
-		case tree.Ascending:
-			orderBy.Flag |= plan.OrderBySpec_ASC
 		case tree.Descending:
-			orderBy.Flag |= plan.OrderBySpec_DESC
+			orderFlags = append(orderFlags, 1)
+		case tree.Ascending:
+			orderFlags = append(orderFlags, 0)
+		default:
+			orderFlags = append(orderFlags, 0)
 		}
 
-		switch order.NullsPosition {
-		case tree.NullsFirst:
-			orderBy.Flag |= plan.OrderBySpec_NULLS_FIRST
-		case tree.NullsLast:
-			orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
-		}
-
-		// Add to groupConcatOrderBys for Sort node generation
-		b.ctx.groupConcatOrderBys = append(b.ctx.groupConcatOrderBys, orderBy)
+		orderExprs = append(orderExprs, expr)
 	}
+	config := encodeGroupConcatOrderConfig(concatArgCnt, orderFlags, separator)
+	args := make([]*plan.Expr, 0, concatArgCnt+len(orderExprs)+1)
+	args = append(args, fn.Args[:concatArgCnt]...)
+	args = append(args, orderExprs...)
+	args = append(args, &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar), Width: int32(len(config)), NotNullable: true},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Sval{Sval: string(config)},
+		}},
+	})
+	fn.Args = args
 
 	return nil
+}
+
+func encodeGroupConcatOrderConfig(concatArgCnt int, orderFlags []byte, separator string) []byte {
+	separatorBytes := []byte(separator)
+	config := make([]byte, 0, 16+len(orderFlags)+len(separatorBytes))
+	config = append(config, []byte("\x00GCORDER1")...)
+	var buf [4]byte
+	binary.BigEndian.PutUint32(buf[:], uint32(concatArgCnt))
+	config = append(config, buf[:]...)
+	binary.BigEndian.PutUint32(buf[:], uint32(len(orderFlags)))
+	config = append(config, buf[:]...)
+	config = append(config, orderFlags...)
+	binary.BigEndian.PutUint32(buf[:], uint32(len(separatorBytes)))
+	config = append(config, buf[:]...)
+	config = append(config, separatorBytes...)
+	return config
 }
 
 func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

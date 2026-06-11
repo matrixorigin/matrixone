@@ -65,12 +65,12 @@ SELECT grp,group_concat(c ORDER BY c) FROM group_concat_01 GROUP BY grp;
 ➤ grp[4,32,0]  ¦  group_concat(c, ,order by c)[12,0,0]  𝄀
 1  ¦  a  𝄀
 2  ¦  b,c  𝄀
-3  ¦  E,C,D,d,d,D
+3  ¦  C,D,D,E,d,d
 SELECT grp,group_concat(c ORDER BY c DESC) FROM group_concat_01 GROUP BY grp;
 ➤ grp[4,32,0]  ¦  group_concat(c, ,order by c desc)[12,0,0]  𝄀
 1  ¦  a  𝄀
-2  ¦  b,c  𝄀
-3  ¦  E,C,D,d,d,D
+2  ¦  c,b  𝄀
+3  ¦  d,d,E,D,D,C
 SELECT grp,group_concat(d ORDER BY a) FROM group_concat_01 GROUP BY grp;
 ➤ grp[4,32,0]  ¦  group_concat(d, ,order by a)[12,0,0]  𝄀
 1  ¦  a  𝄀
@@ -79,23 +79,23 @@ SELECT grp,group_concat(d ORDER BY a) FROM group_concat_01 GROUP BY grp;
 SELECT grp,group_concat(d ORDER BY a DESC) FROM group_concat_01 GROUP BY grp;
 ➤ grp[4,32,0]  ¦  group_concat(d, ,order by a desc)[12,0,0]  𝄀
 1  ¦  a  𝄀
-2  ¦  a,b  𝄀
-3  ¦  a,b,b,d,d,c
+2  ¦  b,a  𝄀
+3  ¦  c,d,d,b,b,a
 SELECT grp,group_concat(c ORDER BY 1) FROM group_concat_01 GROUP BY grp;
 ➤ grp[4,32,0]  ¦  group_concat(c, ,order by 1)[12,0,0]  𝄀
 1  ¦  a  𝄀
 2  ¦  b,c  𝄀
-3  ¦  E,C,D,d,d,D
+3  ¦  C,D,D,E,d,d
 SELECT grp,group_concat(c ORDER BY c separator ",") FROM group_concat_01 GROUP BY grp;
 ➤ grp[4,32,0]  ¦  group_concat(c, ,order by c)[12,0,0]  𝄀
 1  ¦  a  𝄀
 2  ¦  b,c  𝄀
-3  ¦  E,C,D,d,d,D
+3  ¦  C,D,D,E,d,d
 SELECT grp,group_concat(c ORDER BY c DESC separator ",") FROM group_concat_01 GROUP BY grp;
 ➤ grp[4,32,0]  ¦  group_concat(c, ,order by c desc)[12,0,0]  𝄀
 1  ¦  a  𝄀
-2  ¦  b,c  𝄀
-3  ¦  E,C,D,d,d,D
+2  ¦  c,b  𝄀
+3  ¦  d,d,E,D,D,C
 SELECT grp,group_concat(c ORDER BY grp DESC) FROM group_concat_01 GROUP BY grp ORDER BY grp;
 ➤ grp[4,32,0]  ¦  group_concat(c, ,order by grp desc)[12,0,0]  𝄀
 1  ¦  a  𝄀
@@ -216,8 +216,7 @@ SELECT group_concat_12.a,group_concat_12.c FROM group_concat_12,group_concat_11 
 3  ¦  3  𝄀
 3  ¦  3
 SELECT group_concat(c order by (SELECT mid(group_concat(c order by a),1,5) FROM group_concat_12 where group_concat_12.a=group_concat_11.a) desc) as grp FROM group_concat_11;
-➤ grp[12,0,0]  𝄀
-2,3,4,5
+not supported: subquery in group_concat ORDER BY
 DROP TABLE IF EXISTS group_concat_13;
 DROP TABLE IF EXISTS group_concat_14;
 CREATE TABLE group_concat_13 ( a int );
@@ -299,7 +298,7 @@ CREATE TABLE group_concat_24359 (g INT, k INT, a VARCHAR(10), b VARCHAR(10));
 INSERT INTO group_concat_24359 VALUES (1, 2, 'a2', 'b2'), (1, 1, 'a1', 'b1');
 SELECT g, GROUP_CONCAT(a, ':', b ORDER BY k) AS gc FROM group_concat_24359 GROUP BY g;
 ➤ g[4,32,0]  ¦  gc[12,0,0]  𝄀
-1  ¦  a2:b2,a1:b1
+1  ¦  a1:b1,a2:b2
 DROP TABLE IF EXISTS group_concat_order_bug;
 CREATE TABLE group_concat_order_bug (g INT, a VARCHAR(10), b VARCHAR(10), x INT, y INT);
 INSERT INTO group_concat_order_bug VALUES (1, 'a1', 'b1', 1, 2), (1, 'a2', 'b2', 2, 1);
@@ -310,4 +309,4 @@ GROUP_CONCAT(b ORDER BY y) AS by_y
 FROM group_concat_order_bug
 GROUP BY g;
 ➤ g[4,32,0]  ¦  by_x[12,0,0]  ¦  by_y[12,0,0]  𝄀
-1  ¦  a1,a2  ¦  b1,b2
+1  ¦  a1,a2  ¦  b2,b1
