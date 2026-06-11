@@ -29,6 +29,7 @@ func TestNewExternalWriterDefaults(t *testing.T) {
 	w := NewExternalWriter(nil, WriterConfig{}).(*externalWriter)
 	require.Equal(t, []byte(","), w.cfg.FieldTerminator)
 	require.Equal(t, []byte("\n"), w.cfg.LineTerminator)
+	require.Equal(t, byte('"'), w.cfg.EnclosedBy)
 	require.Equal(t, time.UTC, w.cfg.TimeZone)
 	require.Equal(t, FormatCSV, w.cfg.Format)
 
@@ -37,10 +38,12 @@ func TestNewExternalWriterDefaults(t *testing.T) {
 		Format:          FormatJSONLine,
 		FieldTerminator: []byte("|"),
 		LineTerminator:  []byte("\r\n"),
+		EnclosedBy:      '\'',
 		TimeZone:        time.FixedZone("X", 3600),
 	}).(*externalWriter)
 	require.Equal(t, []byte("|"), w2.cfg.FieldTerminator)
 	require.Equal(t, []byte("\r\n"), w2.cfg.LineTerminator)
+	require.Equal(t, byte('\''), w2.cfg.EnclosedBy)
 	require.Equal(t, FormatJSONLine, w2.cfg.Format)
 	require.Equal(t, "X", w2.cfg.TimeZone.String())
 }

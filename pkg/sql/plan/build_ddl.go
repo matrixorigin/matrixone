@@ -5943,6 +5943,17 @@ func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam) erro
 	if format != tree.CSV && format != tree.JSONLINE {
 		return moerr.NewBadConfigf(ctx, "writable external table only supports csv and jsonline formats, got '%s'", format)
 	}
+	if format == tree.JSONLINE {
+		jsondata := strings.ToLower(param.JsonData)
+		if jsondata == "" {
+			jsondata = strings.ToLower(getRawOption(param.Option, "jsondata"))
+		}
+		// The writer emits one JSON object per line; jsondata='array' tables would
+		// not be able to read back their own output.
+		if jsondata == tree.ARRAY {
+			return moerr.NewBadConfig(ctx, "writable external table does not support jsondata 'array', use 'object'")
+		}
+	}
 	// Dry-run the pattern against a fixed timestamp to reject bad directives at DDL time.
 	if _, err := externalwrite.ExpandFilePattern(pattern, time.Unix(0, 0).UTC()); err != nil {
 		return err

@@ -329,9 +329,14 @@ Option A is lower-risk and consistent with the codebase. **Go with A.**
     trailing merge only needs to sum affected-row counts.
 - Multi-CN: the same scope-distribution mechanism that spreads `LOAD`/`INSERT`
   across CNs (see `compile.go:4152` shuffle handling and
-  `colexec/dispatch`) carries the external-write operators to remote CNs. Since
-  each writer is independent, no cross-CN coordination is required — exactly the
-  spec's assumption.
+  `colexec/dispatch`) carries the external-write operators to remote CNs. The
+  remote-run encoding (`pipeline.Insert` in `proto/pipeline.proto`) carries
+  `to_external` plus the statement-start timestamp; the receiving CN rebuilds
+  the writer config from the serialized `TableDef`'s stored ExternParam
+  (`buildExternalInsertArg` in `pkg/sql/compile/operator.go`), so every CN
+  expands `WRITE_FILE_PATTERN` time directives against the same instant. Since
+  each writer is independent, no further cross-CN coordination is required —
+  exactly the spec's assumption.
 - `WriterID` must be **globally unique across CNs**: derive it from
   `(CN index/uuid, pipeline index)` so two CNs never expand to the same salt.
 

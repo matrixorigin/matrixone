@@ -61,4 +61,26 @@ func TestValidateWriteFilePattern(t *testing.T) {
 		Option: []string{"write_file_pattern", "stage://s/part-%Q.csv"},
 	}}
 	require.Error(t, validateWriteFilePattern(ctx, p))
+
+	// jsonline with jsondata 'array' is not writable (writer emits objects)
+	p = &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Option: []string{"format", "jsonline", "jsondata", "array", "write_file_pattern", "stage://s/part-%U.jl"},
+	}}
+	require.Error(t, validateWriteFilePattern(ctx, p))
+
+	// jsonline with jsondata from the materialized field
+	p = &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Format: tree.JSONLINE,
+			Option: []string{"write_file_pattern", "stage://s/part-%U.jl"},
+		},
+		ExParam: tree.ExParam{JsonData: tree.ARRAY},
+	}
+	require.Error(t, validateWriteFilePattern(ctx, p))
+
+	// jsonline with jsondata 'object' stays writable
+	p = &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Option: []string{"format", "jsonline", "jsondata", "object", "write_file_pattern", "stage://s/part-%U.jl"},
+	}}
+	require.NoError(t, validateWriteFilePattern(ctx, p))
 }

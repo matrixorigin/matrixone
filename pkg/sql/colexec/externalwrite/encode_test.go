@@ -55,7 +55,8 @@ func TestEncodeCSV(t *testing.T) {
 
 	out, err := w.encodeCSV(bat)
 	require.NoError(t, err)
-	require.Equal(t, "1,alice\n\\N,bob\n", string(out))
+	// Strings are quoted with the default '"' enclosure (the reader's default).
+	require.Equal(t, "1,\"alice\"\n\\N,\"bob\"\n", string(out))
 }
 
 func TestEncodeJSONLine(t *testing.T) {

@@ -125,6 +125,12 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 	if insert.ToExternal {
 		cfg := insert.InsertCtx.ExternalConfig
 		cfg.Attrs = insert.InsertCtx.Attrs
+		if cfg.TimeZone == nil {
+			// Resolved here rather than at compile time so that an operator rebuilt
+			// on a remote CN (whose process carries the session info) renders
+			// TIMESTAMP values in the session's time zone too.
+			cfg.TimeZone = proc.GetSessionInfo().TimeZone
+		}
 		insert.ctr.extWriter = externalwrite.NewExternalWriter(proc, cfg)
 		insert.ctr.affectedRows = 0
 		return nil

@@ -15,7 +15,9 @@
 package compile
 
 import (
+	"context"
 	"fmt"
+	"time"
 	"unsafe"
 
 	"github.com/google/uuid"
@@ -435,6 +437,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Attrs:           t.InsertCtx.Attrs,
 			AddAffectedRows: t.InsertCtx.AddAffectedRows,
 			TableDef:        t.InsertCtx.TableDef,
+			ToExternal:      t.ToExternal,
+		}
+		if t.ToExternal {
+			// The rest of the writer config is rebuilt from TableDef on the
+			// receiving CN; only the statement-start timestamp must travel so
+			// every CN expands WRITE_FILE_PATTERN time directives identically.
+			in.Insert.ExternalStmtUnixNano = t.InsertCtx.ExternalConfig.Stmt.UnixNano()
 		}
 	case *deletion.Deletion:
 		in.Delete = &pipeline.Deletion{
@@ -860,6 +869,18 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = arg
 	case vm.Insert:
 		t := opr.GetInsert()
+		if t.ToExternal {
+			// Writable external table: rebuild the external writer config from
+			// TableDef's stored ExternParam, against the sender's statement-start
+			// timestamp.
+			arg, err := buildExternalInsertArg(context.TODO(), t.Ref, t.TableDef,
+				t.AddAffectedRows, eng, time.Unix(0, t.ExternalStmtUnixNano))
+			if err != nil {
+				return nil, err
+			}
+			op = arg
+			break
+		}
 		arg := insert.NewArgument()
 		arg.ToWriteS3 = t.ToWriteS3
 		arg.InsertCtx = &insert.InsertCtx{

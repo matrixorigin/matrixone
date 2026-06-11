@@ -456,6 +456,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := insert.NewArgument()
 		op.InsertCtx = t.InsertCtx
 		op.ToWriteS3 = t.ToWriteS3
+		// External-write inserts must stay external when a scope is parallelized;
+		// each duplicated instance opens its own writer/file in Prepare.
+		op.ToExternal = t.ToExternal
 		op.SetInfo(&info)
 		return op
 	case vm.PartitionInsert:
@@ -912,19 +915,44 @@ func constructExternalInsert(
 	node *plan.Node,
 	eng engine.Engine,
 ) (vm.Operator, error) {
+	// Evaluate WRITE_FILE_PATTERN against the statement start timestamp so that
+	// parallel pipelines / multiple CNs all resolve the same path even when the
+	// pattern contains time directives (e.g. %Y/%m/%d/%H). Fall back to time.Now()
+	// when the statement start is not carried on the context.
+	stmtAt := time.Now()
+	if v := proc.Ctx.Value(defines.StartTS{}); v != nil {
+		if t, ok := v.(time.Time); ok {
+			stmtAt = t
+		}
+	}
 	oldCtx := node.InsertCtx
+	return buildExternalInsertArg(proc.Ctx, oldCtx.Ref, oldCtx.TableDef, oldCtx.AddAffectedRows, eng, stmtAt)
+}
 
+// buildExternalInsertArg builds the external-write insert operator from the
+// target's TableDef, whose Createsql stores the ExternParam (pattern, format,
+// FIELDS/LINES). Shared by local compile and remote-run decode; everything but
+// the statement-start timestamp is rebuilt from the TableDef. The writer's
+// session time zone is resolved later, in the operator's Prepare.
+func buildExternalInsertArg(
+	ctx context.Context,
+	ref *plan.ObjectRef,
+	tableDef *plan.TableDef,
+	addAffectedRows bool,
+	eng engine.Engine,
+	stmtAt time.Time,
+) (*insert.Insert, error) {
 	param := &tree.ExternParam{}
-	if err := json.Unmarshal([]byte(oldCtx.TableDef.Createsql), param); err != nil {
+	if err := json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
 		return nil, err
 	}
 	pattern, ok := plan2.GetWriteFilePattern(param)
 	if !ok {
-		return nil, moerr.NewNotSupportedf(proc.Ctx, "insert into read-only external table %s", oldCtx.TableDef.Name)
+		return nil, moerr.NewNotSupportedf(ctx, "insert into read-only external table %s", tableDef.Name)
 	}
 
-	attrs := make([]string, 0, len(oldCtx.TableDef.Cols))
-	for _, col := range oldCtx.TableDef.Cols {
+	attrs := make([]string, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
 		// Skip Row_ID and any hidden/synthetic columns (e.g. __mo_filepath that
 		// the resolver attaches to external tables) — only the declared columns
 		// are written to the output file.
@@ -945,22 +973,11 @@ func constructExternalInsert(
 			}
 		}
 	}
-	// Evaluate WRITE_FILE_PATTERN against the statement start timestamp so that
-	// parallel pipelines / multiple CNs all resolve the same path even when the
-	// pattern contains time directives (e.g. %Y/%m/%d/%H). Fall back to time.Now()
-	// when the statement start is not carried on the context.
-	stmtAt := time.Now()
-	if v := proc.Ctx.Value(defines.StartTS{}); v != nil {
-		if t, ok := v.(time.Time); ok {
-			stmtAt = t
-		}
-	}
 	cfg := externalwrite.WriterConfig{
-		Pattern:  pattern,
-		Format:   format,
-		Attrs:    attrs,
-		Stmt:     stmtAt,
-		TimeZone: proc.GetSessionInfo().TimeZone,
+		Pattern: pattern,
+		Format:  format,
+		Attrs:   attrs,
+		Stmt:    stmtAt,
 	}
 	if cfg.Format == "" {
 		cfg.Format = externalwrite.FormatCSV
@@ -981,11 +998,11 @@ func constructExternalInsert(
 	}
 
 	newCtx := &insert.InsertCtx{
-		Ref:             oldCtx.Ref,
-		AddAffectedRows: oldCtx.AddAffectedRows,
+		Ref:             ref,
+		AddAffectedRows: addAffectedRows,
 		Engine:          eng,
 		Attrs:           attrs,
-		TableDef:        oldCtx.TableDef,
+		TableDef:        tableDef,
 		ExternalConfig:  cfg,
 	}
 	arg := insert.NewArgument()

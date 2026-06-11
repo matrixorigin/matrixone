@@ -949,6 +949,9 @@ func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
 		"'FORMAT'=" + formatStrLit(param.Format),
 		"'JSONDATA'=" + formatStrLit(param.JsonData),
 	}
+	if pattern, ok := GetWriteFilePattern(param); ok {
+		parts = append(parts, "'WRITE_FILE_PATTERN'="+formatStrLit(pattern))
+	}
 	appendHivePartitionOptionsForShowCreate(&parts, param, true)
 	return " INFILE{" + strings.Join(parts, ",") + "}"
 }
@@ -975,6 +978,9 @@ func formatS3ExternalOptionsForShowCreate(param *tree.ExternParam) string {
 	appendExternalOptionForShowCreate(&parts, "compression", param.CompressType, false)
 	appendExternalOptionForShowCreate(&parts, "format", param.Format, false)
 	appendExternalOptionForShowCreate(&parts, "jsondata", param.JsonData, false)
+	if pattern, ok := GetWriteFilePattern(param); ok {
+		appendExternalOptionForShowCreate(&parts, ExternalWriteFilePatternKey, pattern, false)
+	}
 	appendHivePartitionOptionsForShowCreate(&parts, param, false)
 	return " URL s3option{" + strings.Join(parts, ",") + "}"
 }

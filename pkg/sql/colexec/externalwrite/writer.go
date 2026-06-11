@@ -49,7 +49,7 @@ type WriterConfig struct {
 	// CSV formatting. Defaults mirror LOAD/SELECT INTO OUTFILE defaults.
 	FieldTerminator []byte // default ","
 	LineTerminator  []byte // default "\n"
-	EnclosedBy      byte   // 0 = none
+	EnclosedBy      byte   // default '"' (the external reader's enclosure)
 	Header          bool   // write a CSV header line
 
 	// Stmt is the timestamp the pattern is evaluated against (statement start).
@@ -89,6 +89,13 @@ func NewExternalWriter(proc *process.Process, cfg WriterConfig) ExternalWriter {
 	}
 	if len(cfg.LineTerminator) == 0 {
 		cfg.LineTerminator = []byte("\n")
+	}
+	if cfg.EnclosedBy == 0 {
+		// The external CSV reader always parses with an enclosure, defaulting to
+		// '"' when ENCLOSED BY is absent (an explicit '' also falls back to '"').
+		// Write with the same enclosure so strings containing the field/line
+		// terminator or quotes round-trip.
+		cfg.EnclosedBy = '"'
 	}
 	if cfg.TimeZone == nil {
 		cfg.TimeZone = time.UTC
