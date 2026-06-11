@@ -1021,7 +1021,6 @@ func (builder *QueryBuilder) appendUpdateFromDedupNode(
 		GroupBy:     groupByExprs,
 		AggList:     aggList,
 		BindingTags: []int32{groupTag, aggregateTag},
-		SpillMem:    builder.aggSpillMem,
 	}
 	lastNodeID = builder.appendNode(aggNode, bindCtx)
 
