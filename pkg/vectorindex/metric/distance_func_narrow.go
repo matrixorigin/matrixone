@@ -186,6 +186,29 @@ func cosineDistanceBF16(a, b []types.BF16) (float64, error) {
 	return 1.0 - float64(dot)/denom, nil
 }
 
+// magic-multiply branchless half->float (Fabian Giesen / rygorous,
+// https://gist.github.com/rygorous/2156668). No loop and no fallback call, so it
+// inlines into the kernels — unlike types.Float16.ToFloat32, whose subnormal
+// normalization loop blocks inlining. The magic multiply rescales the exponent
+// and turns half subnormals into the right normal floats in one step; the single
+// branch only fixes up Inf/NaN. Verified EXHAUSTIVELY against ToFloat32 over all
+// 65536 inputs (TestF16FastExhaustive).
+var (
+	f16Magic     = math.Float32frombits(uint32(254-15) << 23)
+	f16WasInfNan = math.Float32frombits(uint32(127+16) << 23)
+)
+
+func f16fast(h types.Float16) float32 {
+	o := uint32(h&0x7fff) << 13              // exponent/mantissa bits, into f32 position
+	of := math.Float32frombits(o) * f16Magic // rescale exponent; subnormals -> normals
+	ou := math.Float32bits(of)
+	if of >= f16WasInfNan { // Inf/NaN -> max exponent
+		ou |= 255 << 23
+	}
+	ou |= uint32(h&0x8000) << 16 // sign
+	return math.Float32frombits(ou)
+}
+
 func resolveF16Kernel(metric MetricType) (func(a, b []types.Float16) (float64, error), error) {
 	switch metric {
 	case Metric_L2Distance, Metric_L2sqDistance:
@@ -211,18 +234,18 @@ func l2sqF16(a, b []types.Float16) (float64, error) {
 	for ; i <= n-8; i += 8 {
 		aa := a[i : i+8 : i+8]
 		bb := b[i : i+8 : i+8]
-		d0 := aa[0].ToFloat32() - bb[0].ToFloat32()
-		d1 := aa[1].ToFloat32() - bb[1].ToFloat32()
-		d2 := aa[2].ToFloat32() - bb[2].ToFloat32()
-		d3 := aa[3].ToFloat32() - bb[3].ToFloat32()
-		d4 := aa[4].ToFloat32() - bb[4].ToFloat32()
-		d5 := aa[5].ToFloat32() - bb[5].ToFloat32()
-		d6 := aa[6].ToFloat32() - bb[6].ToFloat32()
-		d7 := aa[7].ToFloat32() - bb[7].ToFloat32()
+		d0 := f16fast(aa[0]) - f16fast(bb[0])
+		d1 := f16fast(aa[1]) - f16fast(bb[1])
+		d2 := f16fast(aa[2]) - f16fast(bb[2])
+		d3 := f16fast(aa[3]) - f16fast(bb[3])
+		d4 := f16fast(aa[4]) - f16fast(bb[4])
+		d5 := f16fast(aa[5]) - f16fast(bb[5])
+		d6 := f16fast(aa[6]) - f16fast(bb[6])
+		d7 := f16fast(aa[7]) - f16fast(bb[7])
 		sum += (d0*d0 + d1*d1) + (d2*d2 + d3*d3) + (d4*d4 + d5*d5) + (d6*d6 + d7*d7)
 	}
 	for ; i < n; i++ {
-		d := a[i].ToFloat32() - b[i].ToFloat32()
+		d := f16fast(a[i]) - f16fast(b[i])
 		sum += d * d
 	}
 	return float64(sum), nil
@@ -238,13 +261,13 @@ func innerProductF16(a, b []types.Float16) (float64, error) {
 	for ; i <= n-8; i += 8 {
 		aa := a[i : i+8 : i+8]
 		bb := b[i : i+8 : i+8]
-		sum += (aa[0].ToFloat32()*bb[0].ToFloat32() + aa[1].ToFloat32()*bb[1].ToFloat32()) +
-			(aa[2].ToFloat32()*bb[2].ToFloat32() + aa[3].ToFloat32()*bb[3].ToFloat32()) +
-			(aa[4].ToFloat32()*bb[4].ToFloat32() + aa[5].ToFloat32()*bb[5].ToFloat32()) +
-			(aa[6].ToFloat32()*bb[6].ToFloat32() + aa[7].ToFloat32()*bb[7].ToFloat32())
+		sum += (f16fast(aa[0])*f16fast(bb[0]) + f16fast(aa[1])*f16fast(bb[1])) +
+			(f16fast(aa[2])*f16fast(bb[2]) + f16fast(aa[3])*f16fast(bb[3])) +
+			(f16fast(aa[4])*f16fast(bb[4]) + f16fast(aa[5])*f16fast(bb[5])) +
+			(f16fast(aa[6])*f16fast(bb[6]) + f16fast(aa[7])*f16fast(bb[7]))
 	}
 	for ; i < n; i++ {
-		sum += a[i].ToFloat32() * b[i].ToFloat32()
+		sum += f16fast(a[i]) * f16fast(b[i])
 	}
 	return float64(-sum), nil
 }
@@ -255,7 +278,7 @@ func l1DistanceF16(a, b []types.Float16) (float64, error) {
 	}
 	var sum float32
 	for i := range a {
-		d := a[i].ToFloat32() - b[i].ToFloat32()
+		d := f16fast(a[i]) - f16fast(b[i])
 		if d < 0 {
 			d = -d
 		}
@@ -273,8 +296,8 @@ func cosineDistanceF16(a, b []types.Float16) (float64, error) {
 	}
 	var dot, na2, nb2 float32
 	for i := range a {
-		ai := a[i].ToFloat32()
-		bi := b[i].ToFloat32()
+		ai := f16fast(a[i])
+		bi := f16fast(b[i])
 		dot += ai * bi
 		na2 += ai * ai
 		nb2 += bi * bi

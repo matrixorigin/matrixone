@@ -144,3 +144,21 @@ func f32to64(s []float32) []float64 {
 	}
 	return out
 }
+
+func TestF16FastExhaustive(t *testing.T) {
+	for u := 0; u < 65536; u++ {
+		h := types.Float16(uint16(u))
+		want := h.ToFloat32()
+		got := f16fast(h)
+		if math.IsNaN(float64(want)) {
+			if !math.IsNaN(float64(got)) {
+				t.Fatalf("h=0x%04x: want NaN, got %v", u, got)
+			}
+			continue
+		}
+		if math.Float32bits(got) != math.Float32bits(want) {
+			t.Fatalf("h=0x%04x: f16fast=%v (0x%08x) ToFloat32=%v (0x%08x)",
+				u, got, math.Float32bits(got), want, math.Float32bits(want))
+		}
+	}
+}
