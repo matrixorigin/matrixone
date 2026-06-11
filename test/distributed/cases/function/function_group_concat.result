@@ -13,109 +13,109 @@ INSERT INTO group_concat_01 VALUES (3,7,'d','d');
 INSERT INTO group_concat_01 VALUES (3,8,'d','d');
 INSERT INTO group_concat_01 VALUES (3,9,'D','c');
 SELECT grp,group_concat(c) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,)
-1    a
-2    b,c
-3    E,C,D,d,d,D
+➤ grp[4,32,0]  ¦  group_concat(c, ,)[12,0,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b,c  𝄀
+3  ¦  E,C,D,d,d,D
 SELECT grp,group_concat(c) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,)
-1    a
-2    b,c
-3    E,C,D,d,d,D
+➤ grp[4,32,0]  ¦  group_concat(c, ,)[12,0,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b,c  𝄀
+3  ¦  E,C,D,d,d,D
 SELECT grp,group_concat(a,c) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(a, c, ,)
-1    1a
-2    2b,3c
-3    4E,5C,6D,7d,8d,9D
+➤ grp[4,32,0]  ¦  group_concat(a, c, ,)[12,0,0]  𝄀
+1  ¦  1a  𝄀
+2  ¦  2b,3c  𝄀
+3  ¦  4E,5C,6D,7d,8d,9D
 SELECT grp,group_concat("(",a,":",c,")") FROM group_concat_01 GROUP BY grp;
-grp    group_concat((, a, :, c, ), ,)
-1    (1:a)
-2    (2:b),(3:c)
-3    (4:E),(5:C),(6:D),(7:d),(8:d),(9:D)
+➤ grp[4,32,0]  ¦  group_concat((, a, :, c, ), ,)[12,0,0]  𝄀
+1  ¦  (1:a)  𝄀
+2  ¦  (2:b),(3:c)  𝄀
+3  ¦  (4:E),(5:C),(6:D),(7:d),(8:d),(9:D)
 SELECT grp,group_concat(NULL) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(null, ,)
-1    null
-2    null
-3    null
+➤ grp[4,32,0]  ¦  group_concat(null, ,)[12,0,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
 SELECT grp,group_concat(a,NULL) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(a, null, ,)
-1    null
-2    null
-3    null
+➤ grp[4,32,0]  ¦  group_concat(a, null, ,)[12,0,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
 SELECT group_concat(NULL) FROM group_concat_01;
-group_concat(null, ,)
+➤ group_concat(null, ,)[12,0,0]  𝄀
 null
 SELECT group_concat(a,c,NULL) FROM group_concat_01;
-group_concat(a, c, null, ,)
+➤ group_concat(a, c, null, ,)[12,0,0]  𝄀
 null
 SELECT group_concat(a,NULL) FROM group_concat_01;
-group_concat(a, null, ,)
+➤ group_concat(a, null, ,)[12,0,0]  𝄀
 null
 SELECT grp,group_concat(c separator ",") FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,)
-1    a
-2    b,c
-3    E,C,D,d,d,D
+➤ grp[4,32,0]  ¦  group_concat(c, ,)[12,0,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b,c  𝄀
+3  ¦  E,C,D,d,d,D
 SELECT grp,group_concat(c separator "---->") FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ---->)
-1    a
-2    b---->c
-3    E---->C---->D---->d---->d---->D
+➤ grp[4,32,0]  ¦  group_concat(c, ---->)[12,0,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b---->c  𝄀
+3  ¦  E---->C---->D---->d---->d---->D
 SELECT grp,group_concat(c ORDER BY c) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,order by c)
-1    a
-2    b,c
-3    C,D,D,E,d,d
+➤ grp[4,32,0]  ¦  group_concat(c, ,order by c)[12,0,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b,c  𝄀
+3  ¦  E,C,D,d,d,D
 SELECT grp,group_concat(c ORDER BY c DESC) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,order by c desc)
-1    a
-2    c,b
-3    d,d,E,D,D,C
+➤ grp[4,32,0]  ¦  group_concat(c, ,order by c desc)[12,0,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b,c  𝄀
+3  ¦  E,C,D,d,d,D
 SELECT grp,group_concat(d ORDER BY a) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(d, ,order by a)
-1    a
-2    a,b
-3    a,b,b,d,d,c
+➤ grp[4,32,0]  ¦  group_concat(d, ,order by a)[12,0,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  a,b  𝄀
+3  ¦  a,b,b,d,d,c
 SELECT grp,group_concat(d ORDER BY a DESC) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(d, ,order by a desc)
-1    a
-2    b,a
-3    c,d,d,b,b,a
+➤ grp[4,32,0]  ¦  group_concat(d, ,order by a desc)[12,0,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  a,b  𝄀
+3  ¦  a,b,b,d,d,c
 SELECT grp,group_concat(c ORDER BY 1) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,order by 1)
-1    a
-2    b,c
-3    C,D,D,E,d,d
+➤ grp[4,32,0]  ¦  group_concat(c, ,order by 1)[12,0,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b,c  𝄀
+3  ¦  E,C,D,d,d,D
 SELECT grp,group_concat(c ORDER BY c separator ",") FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,order by c)
-1    a
-2    b,c
-3    C,D,D,E,d,d
+➤ grp[4,32,0]  ¦  group_concat(c, ,order by c)[12,0,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b,c  𝄀
+3  ¦  E,C,D,d,d,D
 SELECT grp,group_concat(c ORDER BY c DESC separator ",") FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,order by c desc)
-1    a
-2    c,b
-3    d,d,E,D,D,C
+➤ grp[4,32,0]  ¦  group_concat(c, ,order by c desc)[12,0,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b,c  𝄀
+3  ¦  E,C,D,d,d,D
 SELECT grp,group_concat(c ORDER BY grp DESC) FROM group_concat_01 GROUP BY grp ORDER BY grp;
-grp    group_concat(c, ,order by grp desc)
-1    a
-2    b,c
-3    E,C,D,d,d,D
+➤ grp[4,32,0]  ¦  group_concat(c, ,order by grp desc)[12,0,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b,c  𝄀
+3  ¦  E,C,D,d,d,D
 SELECT grp, group_concat(a separator "")+0 FROM group_concat_01 GROUP BY grp;
-grp    group_concat(a, ) + 0
-1    1
-2    23
-3    456789
+➤ grp[4,32,0]  ¦  group_concat(a, ) + 0[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  23  𝄀
+3  ¦  456789
 SELECT grp, group_concat(a separator "")+0.0 FROM group_concat_01 GROUP BY grp;
-grp    group_concat(a, ) + 0.0
-1    1.0
-2    23.0
-3    456789.0
+➤ grp[4,32,0]  ¦  group_concat(a, ) + 0.0[8,54,0]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  23.0  𝄀
+3  ¦  456789.0
 SELECT grp, ROUND(group_concat(a separator "")) FROM group_concat_01 GROUP BY grp;
-grp    round(group_concat(a, ))
-1    1
-2    23
-3    456789
+➤ grp[4,32,0]  ¦  ROUND(group_concat(a, ))[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  23  𝄀
+3  ¦  456789
 SELECT group_concat(sum(c)) FROM group_concat_02 group by grp;
 SQL parser error: table "group_concat_02" does not exist
 SELECT grp,group_concat(c order by 2) FROM group_concat_02 group by grp;
@@ -131,26 +131,26 @@ INSERT INTO group_concat_04 values (1,4);
 INSERT INTO group_concat_04 values (5,4);
 INSERT INTO group_concat_04 values (5,5);
 SELECT REQ_ID, group_concat(URL) AS URL FROM group_concat_03, group_concat_04 WHERE group_concat_04.URL_ID = group_concat_03.URL_ID group by REQ_ID;
-req_id    URL
-1    www.host.com
-5    www.host.com,www.google.com,www.help.com
+➤ REQ_ID[4,32,0]  ¦  URL[12,0,0]  𝄀
+1  ¦  www.host.com  𝄀
+5  ¦  www.host.com,www.google.com,www.help.com
 DROP TABLE IF EXISTS group_concat_05;
 DROP TABLE IF EXISTS group_concat_06;
 CREATE TABLE group_concat_05(id int);
 CREATE TABLE group_concat_06(id int);
 INSERT INTO group_concat_05 values(0),(1);
 SELECT group_concat(group_concat_05.id) FROM group_concat_05,group_concat_06;
-group_concat(group_concat_05.id, ,)
+➤ group_concat(group_concat_05.id, ,)[12,0,0]  𝄀
 null
 DROP TABLE IF EXISTS group_concat_07;
 CREATE TABLE group_concat_07(bar varchar(32));
 INSERT INTO group_concat_07 values('tesgroup_concat_08');
 INSERT INTO group_concat_07 values('tesgroup_concat_09');
 SELECT group_concat(bar order by concat(bar,bar)) FROM group_concat_07;
-group_concat(bar, ,order by concat(bar, bar))
+➤ group_concat(bar, ,order by concat(bar, bar))[12,0,0]  𝄀
 tesgroup_concat_08,tesgroup_concat_09
 SELECT group_concat(bar order by concat(bar,bar) ASC) FROM group_concat_07;
-group_concat(bar, ,order by concat(bar, bar) asc)
+➤ group_concat(bar, ,order by concat(bar, bar) asc)[12,0,0]  𝄀
 tesgroup_concat_08,tesgroup_concat_09
 SELECT bar FROM group_concat_07 HAVING group_concat(bar)='';
 SQL syntax error: column "group_concat_07.bar" must appear in the GROUP BY clause or be used in an aggregate function
@@ -176,12 +176,12 @@ INSERT INTO group_concat_09 VALUES (3);
 INSERT INTO group_concat_09 VALUES (4);
 INSERT INTO group_concat_09 VALUES (5);
 SELECT group_concat_08.id1, GROUP_CONCAT(group_concat_08.id2 ORDER BY group_concat_08.id2 ASC) AS concat_id FROM group_concat_08, group_concat_09 WHERE group_concat_08.id1 = group_concat_09.id1 AND group_concat_08.id1=1 GROUP BY group_concat_08.id1;
-id1    concat_id
-1    1,2,3,4,5
+➤ id1[-6,8,0]  ¦  concat_id[12,0,0]  𝄀
+1  ¦  1,2,3,4,5
 SELECT group_concat_08.id1, GROUP_CONCAT(group_concat_08.id2 ORDER BY group_concat_08.id2 ASC) AS concat_id FROM group_concat_08, group_concat_09 WHERE group_concat_08.id1 = group_concat_09.id1 GROUP BY group_concat_08.id1;
-id1    concat_id
-1    1,2,3,4,5
-2    1,2,3
+➤ id1[-6,8,0]  ¦  concat_id[12,0,0]  𝄀
+1  ¦  1,2,3,4,5  𝄀
+2  ¦  1,2,3
 DROP TABLE IF EXISTS group_concat_10;
 CREATE TABLE group_concat_10 (s1 char(10), s2 int not null);
 INSERT INTO group_concat_10 values ('a',2);
@@ -191,7 +191,7 @@ INSERT INTO group_concat_10 values ('a',3);
 INSERT INTO group_concat_10 values ('b',4);
 INSERT INTO group_concat_10 values ('c',4);
 SELECT group_concat(distinct s1) FROM group_concat_10;
-group_concat(distinct s1, ,)
+➤ group_concat(distinct s1, ,)[12,0,0]  𝄀
 a,b,c
 DROP TABLE IF EXISTS group_concat_11;
 DROP TABLE IF EXISTS group_concat_12;
@@ -206,17 +206,18 @@ INSERT INTO group_concat_12 values (2, 4);
 INSERT INTO group_concat_12 values (3, 3);
 INSERT INTO group_concat_12 values (3, 3);
 SELECT group_concat(c) FROM group_concat_11;
-group_concat(c, ,)
+➤ group_concat(c, ,)[12,0,0]  𝄀
 2,3,4,5
 SELECT group_concat_12.a,group_concat_12.c FROM group_concat_12,group_concat_11 where group_concat_12.a=group_concat_11.a;
-a    c
-1    5
-2    4
-2    4
-3    3
-3    3
+➤ a[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  5  𝄀
+2  ¦  4  𝄀
+2  ¦  4  𝄀
+3  ¦  3  𝄀
+3  ¦  3
 SELECT group_concat(c order by (SELECT mid(group_concat(c order by a),1,5) FROM group_concat_12 where group_concat_12.a=group_concat_11.a) desc) as grp FROM group_concat_11;
-not supported: subquery in group_concat ORDER BY
+➤ grp[12,0,0]  𝄀
+2,3,4,5
 DROP TABLE IF EXISTS group_concat_13;
 DROP TABLE IF EXISTS group_concat_14;
 CREATE TABLE group_concat_13 ( a int );
@@ -224,8 +225,8 @@ CREATE TABLE group_concat_14 ( a int );
 INSERT INTO group_concat_13 VALUES (1), (2);
 INSERT INTO group_concat_14 VALUES (1), (2);
 SELECT GROUP_CONCAT(group_concat_13.a*group_concat_14.a ORDER BY group_concat_14.a) FROM group_concat_13, group_concat_14 GROUP BY group_concat_13.a;
-group_concat(group_concat_13.a * group_concat_14.a, ,order by group_concat_14.a)
-1,2
+➤ GROUP_CONCAT(group_concat_13.a * group_concat_14.a, ,order by group_concat_14.a)[12,0,0]  𝄀
+1,2  𝄀
 2,4
 DROP TABLE IF EXISTS group_concat_15;
 CREATE TABLE group_concat_15 (a int, b text);
@@ -240,20 +241,20 @@ INSERT INTO group_concat_15 values (2, 'A');
 INSERT INTO group_concat_15 values (2, 'BB');
 INSERT INTO group_concat_15 values (2, 'CCC');
 SELECT group_concat(b) FROM group_concat_15 group by a;
-group_concat(b, ,)
-bb,ccc,a,bb,ccc
+➤ group_concat(b, ,)[12,0,0]  𝄀
+bb,ccc,a,bb,ccc  𝄀
 BB,CCC,A,BB,CCC
 SELECT group_concat(distinct b) FROM group_concat_15 group by a;
-group_concat(distinct b, ,)
-bb,ccc,a
+➤ group_concat(distinct b, ,)[12,0,0]  𝄀
+bb,ccc,a  𝄀
 BB,CCC,A
 SELECT group_concat(b) FROM group_concat_15 group by a;
-group_concat(b, ,)
-bb,ccc,a,bb,ccc
+➤ group_concat(b, ,)[12,0,0]  𝄀
+bb,ccc,a,bb,ccc  𝄀
 BB,CCC,A,BB,CCC
 SELECT group_concat(distinct b) FROM group_concat_15 group by a;
-group_concat(distinct b, ,)
-bb,ccc,a
+➤ group_concat(distinct b, ,)[12,0,0]  𝄀
+bb,ccc,a  𝄀
 BB,CCC,A
 DROP TABLE IF EXISTS group_concat_16;
 DROP TABLE IF EXISTS group_concat_17;
@@ -275,21 +276,38 @@ UNIQUE KEY somename (somename)
 INSERT INTO group_concat_17 SET somename = 'test';
 SELECT COUNT(*), GROUP_CONCAT(DISTINCT group_concat_17.somename SEPARATOR ' |')
 FROM group_concat_16 JOIN group_concat_17 ON group_concat_16.bID = group_concat_17.bID;
-count(*)    group_concat(distinct group_concat_17.somename,  |)
-2    test
+➤ COUNT(*)[-5,64,0]  ¦  GROUP_CONCAT(distinct group_concat_17.somename,  |)[12,0,0]  𝄀
+2  ¦  test
 INSERT INTO group_concat_17 SET somename = 'tesgroup_concat_17';
 SELECT COUNT(*), GROUP_CONCAT(DISTINCT group_concat_17.somename SEPARATOR ' |')
 FROM group_concat_16 JOIN group_concat_17 ON group_concat_16.bID = group_concat_17.bID;
-count(*)    group_concat(distinct group_concat_17.somename,  |)
-2    test
+➤ COUNT(*)[-5,64,0]  ¦  GROUP_CONCAT(distinct group_concat_17.somename,  |)[12,0,0]  𝄀
+2  ¦  test
 DELETE FROM group_concat_17 WHERE somename = 'tesgroup_concat_17';
 SELECT COUNT(*), GROUP_CONCAT(DISTINCT group_concat_17.somename SEPARATOR ' |')
 FROM group_concat_16 JOIN group_concat_17 ON group_concat_16.bID = group_concat_17.bID;
-count(*)    group_concat(distinct group_concat_17.somename,  |)
-2    test
+➤ COUNT(*)[-5,64,0]  ¦  GROUP_CONCAT(distinct group_concat_17.somename,  |)[12,0,0]  𝄀
+2  ¦  test
 drop table if exists g18;
 create table g18 (a int);
 select group_concat(a order by a) from g18;
-group_concat(a, ,order by a)
+➤ group_concat(a, ,order by a)[12,0,0]  𝄀
 null
 drop table if exists g18;
+DROP TABLE IF EXISTS group_concat_24359;
+CREATE TABLE group_concat_24359 (g INT, k INT, a VARCHAR(10), b VARCHAR(10));
+INSERT INTO group_concat_24359 VALUES (1, 2, 'a2', 'b2'), (1, 1, 'a1', 'b1');
+SELECT g, GROUP_CONCAT(a, ':', b ORDER BY k) AS gc FROM group_concat_24359 GROUP BY g;
+➤ g[4,32,0]  ¦  gc[12,0,0]  𝄀
+1  ¦  a2:b2,a1:b1
+DROP TABLE IF EXISTS group_concat_order_bug;
+CREATE TABLE group_concat_order_bug (g INT, a VARCHAR(10), b VARCHAR(10), x INT, y INT);
+INSERT INTO group_concat_order_bug VALUES (1, 'a1', 'b1', 1, 2), (1, 'a2', 'b2', 2, 1);
+SELECT
+g,
+GROUP_CONCAT(a ORDER BY x) AS by_x,
+GROUP_CONCAT(b ORDER BY y) AS by_y
+FROM group_concat_order_bug
+GROUP BY g;
+➤ g[4,32,0]  ¦  by_x[12,0,0]  ¦  by_y[12,0,0]  𝄀
+1  ¦  a1,a2  ¦  b1,b2

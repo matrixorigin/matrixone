@@ -237,3 +237,20 @@ drop table if exists g18;
 create table g18 (a int);
 select group_concat(a order by a) from g18;
 drop table if exists g18;
+
+-- regression for issue #24359: multi-argument group_concat with ORDER BY
+DROP TABLE IF EXISTS group_concat_24359;
+CREATE TABLE group_concat_24359 (g INT, k INT, a VARCHAR(10), b VARCHAR(10));
+INSERT INTO group_concat_24359 VALUES (1, 2, 'a2', 'b2'), (1, 1, 'a1', 'b1');
+SELECT g, GROUP_CONCAT(a, ':', b ORDER BY k) AS gc FROM group_concat_24359 GROUP BY g;
+
+-- regression: multiple group_concat functions can have independent orderings
+DROP TABLE IF EXISTS group_concat_order_bug;
+CREATE TABLE group_concat_order_bug (g INT, a VARCHAR(10), b VARCHAR(10), x INT, y INT);
+INSERT INTO group_concat_order_bug VALUES (1, 'a1', 'b1', 1, 2), (1, 'a2', 'b2', 2, 1);
+SELECT
+  g,
+  GROUP_CONCAT(a ORDER BY x) AS by_x,
+  GROUP_CONCAT(b ORDER BY y) AS by_y
+FROM group_concat_order_bug
+GROUP BY g;

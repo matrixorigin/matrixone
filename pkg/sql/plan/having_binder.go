@@ -139,12 +139,12 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "aggregate function %s calls cannot be nested", funcName)
 	}
 
-	if funcName == NameGroupConcat {
-		err := b.processForceWindows(funcName, astExpr, depth, isRoot)
-		if err != nil {
-			return nil, err
-		}
-	}
+	// if funcName == NameGroupConcat {
+	// 	err := b.processForceWindows(funcName, astExpr, depth, isRoot)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// }
 
 	b.insideAgg = true
 	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
