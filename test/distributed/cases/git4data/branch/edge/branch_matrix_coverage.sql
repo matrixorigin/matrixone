@@ -183,4 +183,5 @@ data branch create table `quote'dst` from `quote'src`;
 select count(*) as quoted_apostrophe_rows from `quote'dst`;
 -- @bvt:issue
 
+use mo_catalog;
 drop database br_matrix_quoted;
