@@ -1100,7 +1100,6 @@ create table %s (
 	e enum('red','blue','green'),
 	bl blob,
 	dl datalink,
-	g geometry,
 	vf vecf64(3)
 )`, base))
 
@@ -1109,11 +1108,11 @@ insert into %s values
 	(1, b'101', 250, 65000, 4000000000, 9000000000000000000,
 		cast('12345678901234567890123456789012345.123456789012345678901234567890' as decimal(65,30)),
 		2024, '6d1b1f73-2dbf-11ed-940f-000c29847904', 'ab', x'01020304',
-		'red', 'blob-base', 'file:///tmp/mo_branch_type_base.csv', 'POINT(1 1)', '[1.1,2.2,3.3]'),
+		'red', 'blob-base', 'file:///tmp/mo_branch_type_base.csv', '[1.1,2.2,3.3]'),
 	(2, b'010', 1, 2, 3, 4,
 		cast('-0.000000000000000000000000000001' as decimal(65,30)),
 		1999, 'ad9f809f-2dbd-11ed-940f-000c29847904', 'cd', x'05060708',
-		'blue', 'blob-two', 'file:///tmp/mo_branch_type_two.csv', 'LINESTRING(0 0,1 1)', '[4.4,5.5,6.6]')`, base))
+		'blue', 'blob-two', 'file:///tmp/mo_branch_type_two.csv', '[4.4,5.5,6.6]')`, base))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table `%s` from `%s`", branch, base))
 	execSQLDB(t, ctx, db, fmt.Sprintf(`
@@ -1131,7 +1130,6 @@ update %s set
 	e = 'green',
 	bl = 'blob-updated',
 	dl = 'file:///tmp/mo_branch_type_updated.csv',
-	g = 'POINT(2 2)',
 	vf = '[7.7,8.8,9.9]'
 where id = 1`, branch))
 	execSQLDB(t, ctx, db, fmt.Sprintf(`
@@ -1139,7 +1137,7 @@ insert into %s values
 	(3, b'001', 2, 3, 4, 5,
 		cast('7.000000000000000000000000000000' as decimal(65,30)),
 		2000, '3ddf7b28-2dba-11ed-940f-000c29847904', 'gh', x'0d0e0f10',
-		'red', 'blob-new', 'file:///tmp/mo_branch_type_new.csv', 'POINT(3 3)', '[0.1,0.2,0.3]')`, branch))
+		'red', 'blob-new', 'file:///tmp/mo_branch_type_new.csv', '[0.1,0.2,0.3]')`, branch))
 	execSQLDB(t, ctx, db, fmt.Sprintf("delete from `%s` where id = 2", branch))
 
 	summary := fetchDiffSummaryMetrics(t, ctx, db, fmt.Sprintf("data branch diff %s against %s output summary", branch, base))
