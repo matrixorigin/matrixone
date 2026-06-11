@@ -137,3 +137,27 @@ func TestIvfflatParamsFromTree_InvalidOpType(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid op_type")
 }
+
+func TestIvfflatParamsFromTree_Quantization(t *testing.T) {
+	for _, q := range []string{"int8", "float16", "bf16", "float32", "INT8", "Bf16"} {
+		idx := &tree.Index{IndexOption: &tree.IndexOption{Quantization: q}}
+		got, err := CatalogHooks{}.ParamsFromTree(idx)
+		require.NoErrorf(t, err, "quantization %q", q)
+		require.Equalf(t, catalog.ToLower(q), got[catalog.Quantization], "stored quantization %q", q)
+	}
+	// omitted -> not present in params
+	idx := &tree.Index{IndexOption: &tree.IndexOption{}}
+	got, err := CatalogHooks{}.ParamsFromTree(idx)
+	require.NoError(t, err)
+	_, present := got[catalog.Quantization]
+	require.False(t, present)
+}
+
+func TestIvfflatParamsFromTree_InvalidQuantization(t *testing.T) {
+	for _, q := range []string{"uint8", "float64", "f16", "garbage"} {
+		idx := &tree.Index{IndexOption: &tree.IndexOption{Quantization: q}}
+		_, err := CatalogHooks{}.ParamsFromTree(idx)
+		require.Errorf(t, err, "quantization %q should be rejected", q)
+		require.Contains(t, err.Error(), "unsupported quantization")
+	}
+}
