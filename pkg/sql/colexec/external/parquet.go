@@ -715,6 +715,23 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 		}
 	case types.T_datetime:
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to DATETIME conversion
+			scale := dt.Scale
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+					func(data []byte) (types.Datetime, error) {
+						datetimeVal, err := types.ParseDatetime(util.UnsafeBytesToString(data), scale)
+						if err != nil {
+							return 0, err
+						}
+						return datetimeVal, nil
+					},
+					types.Datetime(0),
+				)
+			}
+			break
+		}
 		lt := st.LogicalType()
 		if lt == nil {
 			break
