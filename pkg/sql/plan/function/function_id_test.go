@@ -571,9 +571,12 @@ var predefinedFunids = map[int]int{
 	IS_UUID:                       515,
 	UUID_TO_BIN:                   516,
 	BIN_TO_UUID:                   517,
+	VECBF16_FROM_BASE64:           518,
+	VECF16_FROM_BASE64:            519,
+	VECINT8_FROM_BASE64:           520,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 518,
+	FUNCTION_END_NUMBER: 521,
 }
 
 func Test_funids(t *testing.T) {

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	ivfflatrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
 )
 
@@ -231,14 +232,25 @@ func (Hooks) BuildSecondaryIndexDefs(
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
+		// Entry type follows the QUANTIZATION option: CREATE INDEX ... USING
+		// ivfflat ... QUANTIZATION='int8' stores entries as vecint8 (quantized from
+		// the base vectors), while the base column and the f32 centroids are
+		// unchanged. Without QUANTIZATION the entries keep the base column type.
+		entryTyp := plan.Type{
+			Id:    colMap[colName].Typ.Id,
+			Width: colMap[colName].Typ.Width,
+			Scale: colMap[colName].Typ.Scale,
+		}
+		if indexInfo.IndexOption != nil && indexInfo.IndexOption.Quantization != "" {
+			if qt, ok := vectorindex.QuantizationToVectorType(indexInfo.IndexOption.Quantization); ok {
+				entryTyp.Id = int32(qt)
+				entryTyp.Scale = 0
+			}
+		}
 		tableDefs[2].Cols[3] = &plan.ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    colMap[colName].Typ.Id,
-				Width: colMap[colName].Typ.Width,
-				Scale: colMap[colName].Typ.Scale,
-			},
+			Name:    catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			Alg:     plan.CompressType_Lz4,
+			Typ:     entryTyp,
 			Default: &plan.Default{NullAbility: true, Expr: nil, OriginString: ""},
 		}
 		tableDefs[2].Cols[4] = planplugin.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)

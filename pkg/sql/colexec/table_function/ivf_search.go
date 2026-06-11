@@ -214,6 +214,15 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 		default:
 			u.idxcfg.Ivfflat.CentroidType = u.tblcfg.KeyPartType
 		}
+		// QUANTIZATION: the entries are stored as the quantization type (the base
+		// column and the f32 centroids are unchanged). Set VectorType to the entry
+		// (quantization) type so the SQL re-rank casts the narrow entries to f32.
+		// The query is still the base type (f32) and centroids stay f32 (set above).
+		if u.param.Quantization != "" {
+			if qt, ok := vectorindex.QuantizationToVectorType(u.param.Quantization); ok {
+				u.idxcfg.Ivfflat.VectorType = int32(qt)
+			}
+		}
 
 		u.batch = tf.createResultBatch()
 		u.inited = true

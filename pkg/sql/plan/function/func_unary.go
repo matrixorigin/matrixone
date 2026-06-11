@@ -5691,7 +5691,7 @@ func FromBase64(parameters []*vector.Vector, result vector.FunctionResultWrapper
 // VecFromBase64 decodes a base64-encoded string into a vector (vecf32 or vecf64).
 // The base64 payload must be the raw little-endian bytes of the vector elements,
 // as produced by to_base64(vecf32_col) or to_base64(vecf64_col).
-func VecFromBase64[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
@@ -5701,6 +5701,10 @@ func VecFromBase64[T types.RealNumbers](parameters []*vector.Vector, result vect
 		elemSize = 4
 	case float64:
 		elemSize = 8
+	case types.BF16, types.Float16:
+		elemSize = 2
+	case int8:
+		elemSize = 1
 	}
 
 	// Pre-extend area: peek at the first non-null input to estimate per-row decoded size.
@@ -5734,11 +5738,11 @@ func VecFromBase64[T types.RealNumbers](parameters []*vector.Vector, result vect
 		}
 		n, err := base64.StdEncoding.Decode(buf, data)
 		if err != nil {
-			return moerr.NewInternalErrorNoCtxf("vecf%d_from_base64: invalid base64 input", elemSize*8)
+			return moerr.NewInternalErrorNoCtx("vec_from_base64: invalid base64 input")
 		}
 
 		if n%elemSize != 0 {
-			return moerr.NewInternalErrorNoCtxf("vecf%d_from_base64: decoded length %d is not a multiple of %d bytes", elemSize*8, n, elemSize)
+			return moerr.NewInternalErrorNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
 		}
 
 		if err = rs.AppendBytes(buf[:n], false); err != nil {

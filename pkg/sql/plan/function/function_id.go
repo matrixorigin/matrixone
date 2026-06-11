@@ -726,9 +726,19 @@ const (
 	UUID_TO_BIN = 516
 	BIN_TO_UUID = 517
 
+	// vec{bf16,f16,int8}_from_base64: decode a base64 payload of the narrow type's
+	// raw bytes into that narrow vector type — the narrow siblings of
+	// vecf32_from_base64 / vecf64_from_base64. Used by the ivfflat narrow re-rank,
+	// where the query must be a constant narrow vec literal matching the narrow
+	// entries (a cast of vecf32_from_base64 does not constant-fold, breaking the
+	// ORDER BY index pushdown).
+	VECBF16_FROM_BASE64 = 518
+	VECF16_FROM_BASE64  = 519
+	VECINT8_FROM_BASE64 = 520
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 518
+	FUNCTION_END_NUMBER = 521
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1038,6 +1048,9 @@ var functionIdRegister = map[string]int32{
 	"from_base64":                    FROM_BASE64,
 	"vecf32_from_base64":             VECF32_FROM_BASE64,
 	"vecf64_from_base64":             VECF64_FROM_BASE64,
+	"vecbf16_from_base64":            VECBF16_FROM_BASE64,
+	"vecf16_from_base64":             VECF16_FROM_BASE64,
+	"vecint8_from_base64":            VECINT8_FROM_BASE64,
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,

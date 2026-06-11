@@ -280,16 +280,27 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		vecFromB64Fn = "vecf64_from_base64"
 	}
 
-	// Entry expression for the re-rank distance. Entries are stored in the narrow
-	// (quantization) type while the query here is f32 (centroids are f32 for narrow
-	// indexes), so dequantize the narrow entry to vecf32 to match — distance is
-	// computed at f32 precision over the stored narrow values. f32/f64 entries use
-	// the column directly.
-	entryExpr := fmt.Sprintf("`%s`", catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
-	switch types.T(idxcfg.Ivfflat.VectorType) {
-	case types.T_array_bf16, types.T_array_float16, types.T_array_int8:
-		entryExpr = fmt.Sprintf("cast(`%s` as vecf32(%d))",
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry, idxcfg.Ivfflat.Dimensions)
+	// Re-rank distance. The ENTRY must stay a plain column so the ORDER BY
+	// index-param pushdown (readutil.SetIndexParam) can identify it — wrapping it
+	// in a CAST makes Args[0] a function and panics. The query must be a CONSTANT
+	// vec literal of the SAME (narrow) type as the entries, or the pushdown can't
+	// fold it and the pushed top-limit stays 0 ("top limit must be positive"). A
+	// cast of vecf32_from_base64(...) does NOT fold (vector casts aren't constant-
+	// folded), so for narrow entries quantize the f32 query to the entry type here
+	// and pass it via vec{bf16,f16,int8}_from_base64 — a STRICT decode that folds
+	// to a narrow literal, the narrow sibling of vecf32_from_base64. f32/f64 use
+	// the plain f32 base64 decode.
+	entryCol := fmt.Sprintf("`%s`", catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
+	queryExpr := fmt.Sprintf("%s('%s')", vecFromB64Fn, queryB64)
+	if qf32, ok := any(query).([]float32); ok {
+		switch types.T(idxcfg.Ivfflat.VectorType) {
+		case types.T_array_bf16:
+			queryExpr = fmt.Sprintf("vecbf16_from_base64('%s')", types.ArrayToBase64(types.Float32ToBF16Slice(qf32)))
+		case types.T_array_float16:
+			queryExpr = fmt.Sprintf("vecf16_from_base64('%s')", types.ArrayToBase64(types.Float32ToFloat16Slice(qf32)))
+		case types.T_array_int8:
+			queryExpr = fmt.Sprintf("vecint8_from_base64('%s')", types.ArrayToBase64(types.Float32ToInt8Slice(qf32)))
+		}
 	}
 
 	if sqlproc != nil && sqlproc.ExactPkFilter != "" {
@@ -306,12 +317,11 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		// a plain filtered read that returns the full candidate set; the downstream
 		// Node_SORT + LIMIT k does the ranking and truncation.
 		sql = fmt.Sprintf(
-			"SELECT `%s`, %s(%s, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+			"SELECT `%s`, %s(%s, %s) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			entryExpr,
-			vecFromB64Fn,
-			queryB64,
+			entryCol,
+			queryExpr,
 			tblcfg.DbName, tblcfg.EntriesTable,
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 			idx.Version,
@@ -321,12 +331,11 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	} else {
 		// Standard centroid-based path with optional CBloomFilter pre-filtering.
 		sql = fmt.Sprintf(
-			"SELECT `%s`, %s(%s, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
+			"SELECT `%s`, %s(%s, %s) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			entryExpr,
-			vecFromB64Fn,
-			queryB64,
+			entryCol,
+			queryExpr,
 			tblcfg.DbName, tblcfg.EntriesTable,
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 			idx.Version,
@@ -337,8 +346,6 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	}
 
 	//fmt.Println("IVFFlat SQL: ", sql)
-	//os.Stderr.WriteString(sql)
-	//os.Stderr.WriteString("\n")
 
 	res, err := runSql(sqlproc, sql)
 	if err != nil {

@@ -399,6 +399,26 @@ func ivfIndexEntriesTable(
 		return err
 	}
 
+	// QUANTIZATION: if set, entries are stored as the quantization type (the entry
+	// column was created with that type in schema.go), so the SELECT casts the
+	// base vectors to it. The CENTROIDX assignment still uses the f32 base column.
+	indexColName := indexDef.Parts[0]
+	entrySelectExpr := fmt.Sprintf("`%s`", indexColName)
+	if qv, qerr := sonic.Get([]byte(indexDef.IndexAlgoParams), catalog.Quantization); qerr == nil {
+		if qstr, serr := qv.String(); serr == nil && qstr != "" {
+			if qt, ok := vectorindex.QuantizationToVectorType(qstr); ok {
+				var dim int32
+				for _, c := range originalTableDef.Cols {
+					if c.Name == indexColName {
+						dim = c.Typ.Width
+						break
+					}
+				}
+				entrySelectExpr = fmt.Sprintf("cast(`%s` as %s(%d))", indexColName, vectorindex.QuantizationSQLTypeName(qt), dim)
+			}
+		}
+	}
+
 	var originalTblPkColsCommaSeparated, originalTblPkColMaySerial string
 	if originalTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 		for i, part := range originalTableDef.Pkey.Names {
@@ -437,14 +457,14 @@ func ivfIndexEntriesTable(
 
 	indexColumnName := indexDef.Parts[0]
 	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
-		"SELECT `%s`, `%s`,  %s, `%s`"+
+		"SELECT `%s`, `%s`,  %s, %s"+
 		" FROM `%s`.`%s` CENTROIDX ('%s') join %s "+
 		" using (`%s`, `%s`) ",
 		insertSQL,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		originalTblPkColMaySerial,
-		indexColumnName,
+		entrySelectExpr, // base column, or cast(base as <quant type>) under QUANTIZATION
 		qryDatabase,
 		originalTableDef.Name,
 		optype,

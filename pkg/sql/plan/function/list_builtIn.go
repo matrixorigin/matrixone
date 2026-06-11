@@ -3068,6 +3068,69 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// vecbf16_from_base64
+	{
+		functionId: VECBF16_FROM_BASE64,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_bf16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return VecFromBase64[types.BF16]
+				},
+			},
+		},
+	},
+
+	// vecf16_from_base64
+	{
+		functionId: VECF16_FROM_BASE64,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return VecFromBase64[types.Float16]
+				},
+			},
+		},
+	},
+
+	// vecint8_from_base64
+	{
+		functionId: VECINT8_FROM_BASE64,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_int8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return VecFromBase64[int8]
+				},
+			},
+		},
+	},
+
 	// compress
 	{
 		functionId: COMPRESS,

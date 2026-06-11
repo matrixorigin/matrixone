@@ -16,12 +16,50 @@ package vectorindex
 
 import (
 	"runtime"
+	"strings"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
+
+// QuantizationToVectorType maps a CREATE INDEX QUANTIZATION='...' value to the
+// vector element type the ivfflat ENTRIES are stored in (the base column and
+// centroids are unaffected). The accepted names are the predefined usearch/cuVS
+// quantization names (metric.Quantization_*_Str). Only the ones that map to a
+// narrow MO vector type quantize the entries: float16 -> vecf16, int8 -> vecint8.
+// float32/float64/uint8 (and "") mean no quantization -> ok=false (entries keep
+// the base type). bf16 is NOT a quantization name (usearch/cuVS have none); it is
+// only available as a narrow base-column type.
+func QuantizationToVectorType(q string) (types.T, bool) {
+	switch strings.ToLower(strings.TrimSpace(q)) {
+	case metric.Quantization_F16_Str:
+		return types.T_array_float16, true
+	case metric.Quantization_INT8_Str:
+		return types.T_array_int8, true
+	}
+	return 0, false
+}
+
+// QuantizationSQLTypeName returns the SQL type name for a vector element type,
+// for use in CAST(... AS <name>(dim)).
+func QuantizationSQLTypeName(t types.T) string {
+	switch t {
+	case types.T_array_float32:
+		return "vecf32"
+	case types.T_array_float64:
+		return "vecf64"
+	case types.T_array_bf16:
+		return "vecbf16"
+	case types.T_array_float16:
+		return "vecf16"
+	case types.T_array_int8:
+		return "vecint8"
+	}
+	return ""
+}
 
 /*
   HNSW vector index using usearch
@@ -179,13 +217,13 @@ type CagraParam struct {
 }
 
 type IvfflatIndexConfig struct {
-	Lists              uint
-	Metric             uint16
-	InitType           uint16
-	Dimensions         uint
-	Spherical          bool
-	Version            int64
-	VectorType         int32
+	Lists      uint
+	Metric     uint16
+	InitType   uint16
+	Dimensions uint
+	Spherical  bool
+	Version    int64
+	VectorType int32
 	// CentroidType is the element type the centroid hidden table is stored in.
 	// Entries always keep VectorType (the input/quantization type); centroids may
 	// be f32 (decoupled — best recall, fast f32 SIMD search, negligible RAM for

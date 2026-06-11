@@ -411,110 +411,82 @@ func HandleOrderByLimitOnIVFFlatIndex(
 		return nil, nil, err
 	}
 
+	// Per-type distance closure: returns the float64 distance between a row's raw
+	// column bytes and the query vector. Only the resolution differs by element
+	// type (f32/f64 reinterpret + generic kernel; narrow types use the byte-level
+	// narrow kernels). The bounds + top-k heap loop below is shared.
+	var distOf func(colBytes []byte) (float64, error)
 	switch orderByLimit.Typ {
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8:
+		distFunc, err := metric.ResolveNarrowDistanceFn(orderByLimit.Typ, orderByLimit.MetricType)
+		if err != nil {
+			return nil, nil, err
+		}
+		rhs := orderByLimit.NumVec
+		distOf = func(b []byte) (float64, error) { return distFunc(b, rhs) }
 	case types.T_array_float32:
 		distFunc, err := metric.ResolveDistanceFn[float32](orderByLimit.MetricType)
 		if err != nil {
 			return nil, nil, err
 		}
-
 		rhs := types.BytesToArray[float32](orderByLimit.NumVec)
-
-		for _, row := range selectRows {
-			dist, err := distFunc(types.BytesToArray[float32](vecCol.GetBytesAt(int(row))), rhs)
-			if err != nil {
-				return nil, nil, err
-			}
-			dist64 := float64(dist)
-
-			if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {
-				if dist64 < orderByLimit.LowerBound {
-					continue
-				}
-			} else if orderByLimit.LowerBoundType == plan.BoundType_EXCLUSIVE {
-				if dist64 <= orderByLimit.LowerBound {
-					continue
-				}
-			}
-			if orderByLimit.UpperBoundType == plan.BoundType_INCLUSIVE {
-				if dist64 > orderByLimit.UpperBound {
-					continue
-				}
-			} else if orderByLimit.UpperBoundType == plan.BoundType_EXCLUSIVE {
-				if dist64 >= orderByLimit.UpperBound {
-					continue
-				}
-			}
-
-			if len(orderByLimit.DistHeap) >= topLimit {
-				if dist64 < orderByLimit.DistHeap[0] {
-					orderByLimit.DistHeap[0] = dist64
-					heap.Fix(&orderByLimit.DistHeap, 0)
-				} else {
-					continue
-				}
-			} else {
-				heap.Push(&orderByLimit.DistHeap, dist64)
-			}
-
-			searchResults = append(searchResults, vectorindex.SearchResult{
-				Id:       row,
-				Distance: dist64,
-			})
+		distOf = func(b []byte) (float64, error) {
+			d, err := distFunc(types.BytesToArray[float32](b), rhs)
+			return float64(d), err
 		}
-
 	case types.T_array_float64:
 		distFunc, err := metric.ResolveDistanceFn[float64](orderByLimit.MetricType)
 		if err != nil {
 			return nil, nil, err
 		}
-
 		rhs := types.BytesToArray[float64](orderByLimit.NumVec)
+		distOf = func(b []byte) (float64, error) {
+			return distFunc(types.BytesToArray[float64](b), rhs)
+		}
+	default:
+		return nil, nil, moerr.NewInternalError(ctx, fmt.Sprintf("only support float32/float64/bf16/float16/int8 type for topn: %s", orderByLimit.Typ))
+	}
 
-		for _, row := range selectRows {
-			dist64, err := distFunc(types.BytesToArray[float64](vecCol.GetBytesAt(int(row))), rhs)
-			if err != nil {
-				return nil, nil, err
-			}
-
-			if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {
-				if dist64 < orderByLimit.LowerBound {
-					continue
-				}
-			} else if orderByLimit.LowerBoundType == plan.BoundType_EXCLUSIVE {
-				if dist64 <= orderByLimit.LowerBound {
-					continue
-				}
-			}
-			if orderByLimit.UpperBoundType == plan.BoundType_INCLUSIVE {
-				if dist64 > orderByLimit.UpperBound {
-					continue
-				}
-			} else if orderByLimit.UpperBoundType == plan.BoundType_EXCLUSIVE {
-				if dist64 >= orderByLimit.UpperBound {
-					continue
-				}
-			}
-
-			if len(orderByLimit.DistHeap) >= topLimit {
-				if dist64 < orderByLimit.DistHeap[0] {
-					orderByLimit.DistHeap[0] = dist64
-					heap.Fix(&orderByLimit.DistHeap, 0)
-				} else {
-					continue
-				}
-			} else {
-				heap.Push(&orderByLimit.DistHeap, dist64)
-			}
-
-			searchResults = append(searchResults, vectorindex.SearchResult{
-				Id:       row,
-				Distance: dist64,
-			})
+	for _, row := range selectRows {
+		dist64, err := distOf(vecCol.GetBytesAt(int(row)))
+		if err != nil {
+			return nil, nil, err
 		}
 
-	default:
-		return nil, nil, moerr.NewInternalError(ctx, fmt.Sprintf("only support float32/float64 type for topn: %s", orderByLimit.Typ))
+		if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {
+			if dist64 < orderByLimit.LowerBound {
+				continue
+			}
+		} else if orderByLimit.LowerBoundType == plan.BoundType_EXCLUSIVE {
+			if dist64 <= orderByLimit.LowerBound {
+				continue
+			}
+		}
+		if orderByLimit.UpperBoundType == plan.BoundType_INCLUSIVE {
+			if dist64 > orderByLimit.UpperBound {
+				continue
+			}
+		} else if orderByLimit.UpperBoundType == plan.BoundType_EXCLUSIVE {
+			if dist64 >= orderByLimit.UpperBound {
+				continue
+			}
+		}
+
+		if len(orderByLimit.DistHeap) >= topLimit {
+			if dist64 < orderByLimit.DistHeap[0] {
+				orderByLimit.DistHeap[0] = dist64
+				heap.Fix(&orderByLimit.DistHeap, 0)
+			} else {
+				continue
+			}
+		} else {
+			heap.Push(&orderByLimit.DistHeap, dist64)
+		}
+
+		searchResults = append(searchResults, vectorindex.SearchResult{
+			Id:       row,
+			Distance: dist64,
+		})
 	}
 
 	searchResults = slices.DeleteFunc(searchResults, func(res vectorindex.SearchResult) bool {

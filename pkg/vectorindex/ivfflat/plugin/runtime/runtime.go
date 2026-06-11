@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -226,6 +227,18 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	}
 	if idx.IndexOption.KmeansMaxIteration > 0 {
 		res[catalog.IndexAlgoParamKmeansMaxIteration] = strconv.FormatInt(idx.IndexOption.KmeansMaxIteration, 10)
+	}
+
+	// QUANTIZATION stores the ivfflat ENTRIES in a narrow type (float16/int8);
+	// the base column and f32 centroids are unchanged. Persist it in algo_params
+	// so the entries build (compile) and the search can read it back. Only the
+	// predefined names that map to a MO narrow vector type are accepted.
+	if q := idx.IndexOption.Quantization; q != "" {
+		if _, ok := vectorindex.QuantizationToVectorType(q); !ok {
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"ivfflat: unsupported quantization '%s' (supported: 'float16', 'int8')", q))
+		}
+		res[catalog.Quantization] = catalog.ToLower(q)
 	}
 	return res, nil
 }
