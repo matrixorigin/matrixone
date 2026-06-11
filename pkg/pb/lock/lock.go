@@ -111,7 +111,13 @@ func (m LockTable) Changed(v LockTable) bool {
 
 // Equal return true means same bind
 func (m LockTable) Equal(v LockTable) bool {
-	return m.Table == v.Table && m.Version == v.Version
+	return m.Group == v.Group &&
+		m.Table == v.Table &&
+		m.OriginTable == v.OriginTable &&
+		m.ServiceID == v.ServiceID &&
+		m.Version == v.Version &&
+		m.Sharding == v.Sharding &&
+		(m.AllocatorID == "" || v.AllocatorID == "" || m.AllocatorID == v.AllocatorID)
 }
 
 // DebugString returns the debug string
