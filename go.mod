@@ -14,7 +14,6 @@ require (
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.34
 	github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible
 	github.com/aliyun/credentials-go v1.3.10
-	github.com/ashvardanian/stringzilla/golang v0.0.0-20260505125223-1166b5b45646
 	github.com/aws/aws-sdk-go v1.55.5
 	github.com/aws/aws-sdk-go-v2 v1.32.5
 	github.com/aws/aws-sdk-go-v2/config v1.28.5
@@ -45,6 +44,7 @@ require (
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/gofrs/flock v0.8.1
 	github.com/gogo/protobuf v1.3.2
+	github.com/golang/geo v0.0.0-20260526120156-e21b7802b0ee
 	github.com/golang/mock v1.6.0
 	github.com/google/btree v1.1.2
 	github.com/google/gofuzz v1.2.0
