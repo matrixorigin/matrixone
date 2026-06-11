@@ -269,7 +269,25 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 		}
 
-		// Recompute generated columns (both STORED and VIRTUAL are computed on write)
+	}
+
+	if stmt.From != nil && len(stmt.From.Tables) > 0 {
+		lastNodeID, selectNode, selectNodeTag, err = builder.appendUpdateFromDedupNode(
+			bindCtx, lastNodeID, selectNode, selectNodeTag, dmlCtx, oldColName2Idx, newColName2Idx)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	for i, alias := range dmlCtx.aliases {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 {
+			continue
+		}
+
+		tableDef := dmlCtx.tableDefs[i]
+
+		// Recompute generated columns after UPDATE FROM dedup so generated
+		// expressions read the same deduped base values that will be written.
 		for _, col := range tableDef.Cols {
 			if col.GeneratedCol == nil {
 				continue
@@ -281,14 +299,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
 			selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
 			selectNode.ProjectList[oldPos] = genExpr
-		}
-	}
-
-	if stmt.From != nil && len(stmt.From.Tables) > 0 {
-		lastNodeID, selectNode, selectNodeTag, err = builder.appendUpdateFromDedupNode(
-			bindCtx, lastNodeID, selectNode, selectNodeTag, dmlCtx, oldColName2Idx, newColName2Idx)
-		if err != nil {
-			return 0, err
 		}
 	}
 

@@ -118,6 +118,22 @@ SELECT id, base, gen_col FROM gen_t ORDER BY id;
 3  ¦  30  ¦  60
 DROP TABLE gen_t;
 DROP TABLE gen_src;
+DROP TABLE IF EXISTS gen_dup_t;
+DROP TABLE IF EXISTS gen_dup_s;
+CREATE TABLE gen_dup_t (
+id INT PRIMARY KEY,
+base INT,
+gen_col INT AS (ifnull(base, 0)) STORED
+);
+INSERT INTO gen_dup_t (id, base) VALUES (1, 5);
+CREATE TABLE gen_dup_s (t_id INT, new_base INT);
+INSERT INTO gen_dup_s VALUES (1, NULL), (1, 7);
+UPDATE gen_dup_t SET base = s.new_base FROM gen_dup_s s WHERE s.t_id = gen_dup_t.id;
+SELECT id, base, gen_col FROM gen_dup_t ORDER BY id;
+➤ id[4,32,0]  ¦  base[4,32,0]  ¦  gen_col[4,32,0]  𝄀
+1  ¦  7  ¦  7
+DROP TABLE gen_dup_t;
+DROP TABLE gen_dup_s;
 DROP TABLE IF EXISTS fk_parent;
 DROP TABLE IF EXISTS fk_child;
 DROP TABLE IF EXISTS fk_src;

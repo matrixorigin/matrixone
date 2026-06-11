@@ -121,6 +121,23 @@ SELECT id, base, gen_col FROM gen_t ORDER BY id;
 DROP TABLE gen_t;
 DROP TABLE gen_src;
 
+-- Duplicate source rows must not make generated columns come from a different
+-- source row than their referenced base columns.
+DROP TABLE IF EXISTS gen_dup_t;
+DROP TABLE IF EXISTS gen_dup_s;
+CREATE TABLE gen_dup_t (
+    id INT PRIMARY KEY,
+    base INT,
+    gen_col INT AS (ifnull(base, 0)) STORED
+);
+INSERT INTO gen_dup_t (id, base) VALUES (1, 5);
+CREATE TABLE gen_dup_s (t_id INT, new_base INT);
+INSERT INTO gen_dup_s VALUES (1, NULL), (1, 7);
+UPDATE gen_dup_t SET base = s.new_base FROM gen_dup_s s WHERE s.t_id = gen_dup_t.id;
+SELECT id, base, gen_col FROM gen_dup_t ORDER BY id;
+DROP TABLE gen_dup_t;
+DROP TABLE gen_dup_s;
+
 -- FK target with a generated column: the FK forces the fallback planner
 -- (buildTableUpdate). Generated column protection must still apply there.
 DROP TABLE IF EXISTS fk_parent;

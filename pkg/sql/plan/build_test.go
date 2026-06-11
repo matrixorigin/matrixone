@@ -784,6 +784,37 @@ func TestUpdatePgStyleFromDedupAllowsVectorUpdateColumn(t *testing.T) {
 	}
 }
 
+func TestUpdatePgStyleFromDedupAllowsDecimal256AndEnumUpdateColumns(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  plan.Type
+		sql  string
+	}{
+		{
+			name: "decimal256",
+			typ:  plan.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 30},
+			sql:  "UPDATE NATION SET N_COMMENT = 1.23 FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY",
+		},
+		{
+			name: "enum",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "small,medium,large"},
+			sql:  "UPDATE NATION SET N_COMMENT = 'small' FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			setMockColumnType(t, mock, "nation", "n_comment", tt.typ)
+
+			_, err := runOneStmt(mock, t, tt.sql)
+			if err != nil {
+				t.Fatalf("UPDATE FROM should allow %s update columns through any_value dedup: %v", tt.name, err)
+			}
+		})
+	}
+}
+
 func TestUpdateFallbackMultiTargetGeneratedColumnsKeepProjectLayout(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
