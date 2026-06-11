@@ -1,0 +1,215 @@
+// Copyright 2023 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Distance kernels for the narrow vector element types: vecbf16 (types.BF16),
+// vecf16 (types.Float16), vecint8 (int8). Pure Go, loop-unrolled. Untagged so
+// it compiles in both the scalar and SIMD builds (a narrow SIMD variant can be
+// split out later as distance_func_narrow_amd64.go, with this as the fallback +
+// equivalence oracle).
+//
+// Semantics MATCH ResolveDistanceFn (the float32 path):
+//   - Metric_L2Distance / Metric_L2sqDistance -> squared L2 (caller sqrts L2)
+//   - Metric_InnerProduct                     -> -dot
+//   - Metric_CosineDistance                   -> 1 - similarity
+//   - Metric_L1Distance                       -> sum|a-b|
+//
+// bf16/f16 decode to float32 and reuse the float32 kernels (Go has no native
+// fp16 arithmetic). int8 uses INTEGER (int64-accumulated) kernels — no float
+// upcast in the inner loop — with only the cosine denominator going through
+// float for the sqrt/divide.
+
+package metric
+
+import (
+	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
+
+// NarrowDistanceFn computes a distance between two narrow-typed vectors given
+// their raw stored bytes.
+type NarrowDistanceFn func(a, b []byte) (float64, error)
+
+// ResolveNarrowDistanceFn returns the distance function for a narrow vector
+// element type (bf16/f16/int8), or an error for any other oid.
+func ResolveNarrowDistanceFn(oid types.T, metric MetricType) (NarrowDistanceFn, error) {
+	switch oid {
+	case types.T_array_bf16:
+		f32fn, err := ResolveDistanceFn[float32](metric)
+		if err != nil {
+			return nil, err
+		}
+		return func(a, b []byte) (float64, error) {
+			d, err := f32fn(
+				types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](a)),
+				types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](b)))
+			return float64(d), err
+		}, nil
+	case types.T_array_float16:
+		f32fn, err := ResolveDistanceFn[float32](metric)
+		if err != nil {
+			return nil, err
+		}
+		return func(a, b []byte) (float64, error) {
+			d, err := f32fn(
+				types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](a)),
+				types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](b)))
+			return float64(d), err
+		}, nil
+	case types.T_array_int8:
+		kern, err := resolveInt8Kernel(metric)
+		if err != nil {
+			return nil, err
+		}
+		return func(a, b []byte) (float64, error) {
+			return kern(types.BytesToArray[int8](a), types.BytesToArray[int8](b))
+		}, nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("ResolveNarrowDistanceFn: not a narrow vector type")
+	}
+}
+
+func resolveInt8Kernel(metric MetricType) (func(a, b []int8) (float64, error), error) {
+	switch metric {
+	case Metric_L2Distance, Metric_L2sqDistance:
+		return l2sqInt8, nil
+	case Metric_InnerProduct:
+		return innerProductInt8, nil
+	case Metric_CosineDistance:
+		return cosineDistanceInt8, nil
+	case Metric_L1Distance:
+		return l1DistanceInt8, nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
+	}
+}
+
+// ----------------------------------------------------------------------------
+// int8 integer kernels (unroll-8). Accumulate in int64: for int8 inputs the
+// per-element term is bounded (|d|<=255 -> d*d<=65025, a*b in [-16384,16129]),
+// and MaxArrayDimension is 65535, so int32 could overflow — int64 cannot.
+// ----------------------------------------------------------------------------
+
+func l2sqInt8(a, b []int8) (float64, error) {
+	if len(a) != len(b) {
+		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+	var sum int64
+	n := len(a)
+	i := 0
+	for ; i <= n-8; i += 8 {
+		aa := a[i : i+8 : i+8]
+		bb := b[i : i+8 : i+8]
+		d0 := int32(aa[0]) - int32(bb[0])
+		d1 := int32(aa[1]) - int32(bb[1])
+		d2 := int32(aa[2]) - int32(bb[2])
+		d3 := int32(aa[3]) - int32(bb[3])
+		d4 := int32(aa[4]) - int32(bb[4])
+		d5 := int32(aa[5]) - int32(bb[5])
+		d6 := int32(aa[6]) - int32(bb[6])
+		d7 := int32(aa[7]) - int32(bb[7])
+		sum += int64(d0*d0+d1*d1) + int64(d2*d2+d3*d3) + int64(d4*d4+d5*d5) + int64(d6*d6+d7*d7)
+	}
+	for ; i < n; i++ {
+		d := int32(a[i]) - int32(b[i])
+		sum += int64(d * d)
+	}
+	return float64(sum), nil
+}
+
+func innerProductInt8(a, b []int8) (float64, error) {
+	if len(a) != len(b) {
+		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+	var sum int64
+	n := len(a)
+	i := 0
+	for ; i <= n-8; i += 8 {
+		aa := a[i : i+8 : i+8]
+		bb := b[i : i+8 : i+8]
+		sum += int64(int32(aa[0])*int32(bb[0])+int32(aa[1])*int32(bb[1])) +
+			int64(int32(aa[2])*int32(bb[2])+int32(aa[3])*int32(bb[3])) +
+			int64(int32(aa[4])*int32(bb[4])+int32(aa[5])*int32(bb[5])) +
+			int64(int32(aa[6])*int32(bb[6])+int32(aa[7])*int32(bb[7]))
+	}
+	for ; i < n; i++ {
+		sum += int64(int32(a[i]) * int32(b[i]))
+	}
+	// matches metric.InnerProduct: returns -dot
+	return float64(-sum), nil
+}
+
+func l1DistanceInt8(a, b []int8) (float64, error) {
+	if len(a) != len(b) {
+		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+	var sum int64
+	n := len(a)
+	i := 0
+	abs := func(x int32) int32 {
+		if x < 0 {
+			return -x
+		}
+		return x
+	}
+	for ; i <= n-8; i += 8 {
+		aa := a[i : i+8 : i+8]
+		bb := b[i : i+8 : i+8]
+		sum += int64(abs(int32(aa[0])-int32(bb[0])) + abs(int32(aa[1])-int32(bb[1]))) +
+			int64(abs(int32(aa[2])-int32(bb[2]))+abs(int32(aa[3])-int32(bb[3]))) +
+			int64(abs(int32(aa[4])-int32(bb[4]))+abs(int32(aa[5])-int32(bb[5]))) +
+			int64(abs(int32(aa[6])-int32(bb[6]))+abs(int32(aa[7])-int32(bb[7])))
+	}
+	for ; i < n; i++ {
+		sum += int64(abs(int32(a[i]) - int32(b[i])))
+	}
+	return float64(sum), nil
+}
+
+func cosineDistanceInt8(a, b []int8) (float64, error) {
+	if len(a) == 0 {
+		return 0, nil
+	}
+	if len(a) != len(b) {
+		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+	var dot, na2, nb2 int64
+	n := len(a)
+	i := 0
+	for ; i <= n-8; i += 8 {
+		aa := a[i : i+8 : i+8]
+		bb := b[i : i+8 : i+8]
+		for k := 0; k < 8; k++ {
+			ai := int64(aa[k])
+			bi := int64(bb[k])
+			dot += ai * bi
+			na2 += ai * ai
+			nb2 += bi * bi
+		}
+	}
+	for ; i < n; i++ {
+		ai := int64(a[i])
+		bi := int64(b[i])
+		dot += ai * bi
+		na2 += ai * ai
+		nb2 += bi * bi
+	}
+	// matches metric.CosineDistance: denominator 0 -> distance 1.0
+	denom := math.Sqrt(float64(na2)) * math.Sqrt(float64(nb2))
+	if denom == 0 {
+		return 1.0, nil
+	}
+	return 1.0 - float64(dot)/denom, nil
+}
