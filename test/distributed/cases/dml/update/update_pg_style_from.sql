@@ -183,6 +183,7 @@ INSERT INTO dup_no_fk_s VALUES (1, 'first'), (1, 'second'), (2, 'only');
 UPDATE dup_no_fk_t SET v = s.v FROM dup_no_fk_s s WHERE s.t_id = dup_no_fk_t.id;
 SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM dup_no_fk_t;
 SELECT id, COUNT(*) AS per_id_cnt FROM dup_no_fk_t GROUP BY id ORDER BY id;
+SELECT v FROM dup_no_fk_t WHERE id = 2;
 DROP TABLE dup_no_fk_t;
 DROP TABLE dup_no_fk_s;
 

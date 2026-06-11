@@ -733,6 +733,128 @@ func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {
 	t.Fatalf("UPDATE FROM should dedup duplicate source matches with AGG any_value over update columns")
 }
 
+func TestUpdatePgStyleFromDedupExpandsDefaultBeforeAnyValue(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockDefaultExpr(t, mock, "nation", "n_name", "name-default")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = DEFAULT FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("build UPDATE FROM with DEFAULT: %v", err)
+	}
+
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+		for _, aggExpr := range node.AggList {
+			if exprContainsDefaultVal(aggExpr) {
+				t.Fatalf("dedup any_value should not wrap raw DEFAULT marker: %v", aggExpr)
+			}
+			if fn := aggExpr.GetF(); fn != nil && fn.Func.ObjName == "any_value" &&
+				exprContainsStringLiteral(aggExpr, "name-default") {
+				return
+			}
+		}
+	}
+	t.Fatalf("UPDATE FROM dedup should aggregate the expanded DEFAULT expression")
+}
+
+func TestUpdatePgStyleFromDedupAllowsVectorUpdateColumn(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	vecTyp := plan.Type{Id: int32(types.T_array_float32), Width: 4}
+	setMockColumnType(t, mock, "nation", "n_comment", vecTyp)
+	setMockColumnType(t, mock, "nation2", "n_comment", vecTyp)
+
+	_, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_COMMENT = NATION2.N_COMMENT FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("UPDATE FROM should allow vector update columns through any_value dedup: %v", err)
+	}
+}
+
+func setMockDefaultExpr(t *testing.T, mock *MockOptimizer, tableName, colName, value string) {
+	col := requireMockColumn(t, mock, tableName, colName)
+	col.Default = &plan.Default{
+		Expr:         makeStringConstExpr(col.Typ, value),
+		OriginString: value,
+		NullAbility:  true,
+	}
+}
+
+func setMockColumnType(t *testing.T, mock *MockOptimizer, tableName, colName string, typ plan.Type) {
+	col := requireMockColumn(t, mock, tableName, colName)
+	col.Typ = typ
+}
+
+func requireMockColumn(t *testing.T, mock *MockOptimizer, tableName, colName string) *ColDef {
+	tableDef := mock.ctxt.tables[tableName]
+	if tableDef == nil {
+		t.Fatalf("missing mock table %s", tableName)
+	}
+	for _, col := range tableDef.Cols {
+		if col.Name == colName {
+			return col
+		}
+	}
+	t.Fatalf("missing mock column %s.%s", tableName, colName)
+	return nil
+}
+
+func makeStringConstExpr(typ plan.Type, value string) *plan.Expr {
+	return &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Sval{Sval: value},
+			},
+		},
+	}
+}
+
+func exprContainsStringLiteral(expr *plan.Expr, value string) bool {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		if sval, ok := e.Lit.Value.(*plan.Literal_Sval); ok {
+			return sval.Sval == value
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if exprContainsStringLiteral(arg, value) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprContainsStringLiteral(item, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func exprContainsDefaultVal(expr *plan.Expr) bool {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		_, ok := e.Lit.Value.(*plan.Literal_Defaultval)
+		return ok
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if exprContainsDefaultVal(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprContainsDefaultVal(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestDelete(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// should pass

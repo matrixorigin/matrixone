@@ -146,6 +146,8 @@ var AnyValueSupportedTypes = []types.T{
 	types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink,
 	types.T_uuid,
 	types.T_binary, types.T_varbinary, types.T_json,
+	types.T_array_float32, types.T_array_float64,
+	types.T_geometry, types.T_geometry32,
 	types.T_Rowid,
 }
 
