@@ -20,10 +20,17 @@
 // archsimd exposes no f16 type (this CPU also lacks avx512_fp16, and F16C is not
 // surfaced). So we vectorize the same magic-multiply f16fast() the scalar path
 // uses (Fabian Giesen / rygorous): rescale the exponent via a float multiply and
-// fix up Inf/NaN with a masked Merge. Inputs are loaded as Uint32x16 (32 f16 per
-// load), even/odd 16-bit halves split out, decoded to Float32x16, then fed to the
-// existing AVX-512 float32 reduction (sumF32x16). Matches f16fast bit-for-bit, so
-// it agrees with the scalar oracle (which also uses f16fast).
+// fix up Inf/NaN with a masked Merge. Inputs load as Uint32x16 (32 f16/load),
+// even/odd 16-bit halves split out, decoded, then fed to the existing AVX-512
+// float32 reduction (sumF32x16). Matches f16fast bit-for-bit so it agrees with
+// the scalar oracle.
+//
+// PERF: the six decode constants are passed to f16dec as individual vector args,
+// NOT bundled in a struct. A by-value struct of vectors gets spilled to the stack
+// and reloaded on every field access (77 MOVUPS in the inner loop -> ~7x slower);
+// individual args stay in zmm registers. With that, f16 SIMD is ~8x over scalar
+// (was ~1.3x with the struct) — the difference between "not worth it" and "worth
+// it", so the swap below is ON.
 
 package metric
 
@@ -37,47 +44,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// NOTE: the f16 SIMD kernels are intentionally NOT swapped in. Unlike bf16
-// (decode = one shift) and int8 (decode = sign-extend shifts), the IEEE
-// half->float32 decode is a multi-op magic-multiply with no hardware support on
-// this stack (archsimd has no f16 type; the CPU lacks avx512_fp16; F16C is not
-// surfaced). Benchmarked at dim=1024 the vectorized decode only reaches ~1.3x
-// over the already-cheap scalar f16fast — and cosine is slower — so production
-// keeps the scalar path (f16*Fn defaults in distance_func_narrow.go). The
-// kernels below remain compiled as the head-to-head benchmark / equivalence
-// reference (Benchmark_Narrow_SIMDvsScalar, TestF16SIMDMatchesScalar); flip the
-// four assignments here back on if a future archsimd exposes VCVTPH2PS.
-func init() {}
-
-// f16consts holds the broadcast constant vectors for the magic-multiply decode,
-// built once per kernel call (cheap broadcasts) and passed into f16fastVec so it
-// inlines without recomputing them.
-type f16consts struct {
-	mask7fff, mask8000, maskLo, infBits archsimd.Uint32x16
-	magic, infNan                       archsimd.Float32x16
-}
-
-func newF16Consts() f16consts {
-	return f16consts{
-		mask7fff: archsimd.BroadcastUint32x16(0x7fff),
-		mask8000: archsimd.BroadcastUint32x16(0x8000),
-		maskLo:   archsimd.BroadcastUint32x16(0xffff),
-		infBits:  archsimd.BroadcastUint32x16(255 << 23),
-		magic:    archsimd.BroadcastFloat32x16(f16Magic),
-		infNan:   archsimd.BroadcastFloat32x16(f16WasInfNan),
+func init() {
+	if hasAVX512 {
+		f16L2sqFn = l2sqF16SIMD
+		f16IPFn = innerProductF16SIMD
+		f16CosineFn = cosineDistanceF16SIMD
+		f16L1Fn = l1DistanceF16SIMD
 	}
-}
-
-// f16fastVec decodes 16 half-floats (each in the low 16 bits of a uint32 lane) to
-// float32 — the SIMD form of f16fast(), Inf/NaN fixup included.
-func f16fastVec(h archsimd.Uint32x16, c f16consts) archsimd.Float32x16 {
-	o := h.And(c.mask7fff).ShiftAllLeft(13)
-	of := o.AsFloat32x16().Mul(c.magic)
-	ou := of.AsUint32x16()
-	ouInf := ou.Or(c.infBits)
-	ou = ouInf.Merge(ou, of.GreaterEqual(c.infNan)) // keep ouInf where >=infNan, else ou
-	ou = ou.Or(h.And(c.mask8000).ShiftAllLeft(16))  // sign
-	return ou.AsFloat32x16()
 }
 
 func f16AsU32(s []types.Float16) []uint32 {
@@ -87,20 +60,42 @@ func f16AsU32(s []types.Float16) []uint32 {
 	return unsafe.Slice((*uint32)(unsafe.Pointer(unsafe.SliceData(s))), len(s)/2)
 }
 
+// f16dec decodes 16 half-floats (each in the low 16 bits of a uint32 lane) to
+// float32 — the SIMD form of f16fast(), Inf/NaN fixup included. Constants are
+// individual args (see file header: a struct spills; args stay in registers).
+func f16dec(h, m7fff, m8000, mInf archsimd.Uint32x16, magic, infNan archsimd.Float32x16) archsimd.Float32x16 {
+	o := h.And(m7fff).ShiftAllLeft(13)
+	of := o.AsFloat32x16().Mul(magic)
+	ou := of.AsUint32x16()
+	ou = ou.Or(mInf).Merge(ou, of.GreaterEqual(infNan)) // ou|=inf where >=infNan
+	return ou.Or(h.And(m8000).ShiftAllLeft(16)).AsFloat32x16()
+}
+
+// f16Decode constants, built once per kernel as locals.
+func f16DecodeConsts() (m7fff, m8000, mLo, mInf archsimd.Uint32x16, magic, infNan archsimd.Float32x16) {
+	m7fff = archsimd.BroadcastUint32x16(0x7fff)
+	m8000 = archsimd.BroadcastUint32x16(0x8000)
+	mLo = archsimd.BroadcastUint32x16(0xffff)
+	mInf = archsimd.BroadcastUint32x16(255 << 23)
+	magic = archsimd.BroadcastFloat32x16(f16Magic)
+	infNan = archsimd.BroadcastFloat32x16(f16WasInfNan)
+	return
+}
+
 func l2sqF16SIMD(a, b []types.Float16) (float64, error) {
 	if len(a) != len(b) {
 		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
 	}
 	n := len(a)
 	au, bu := f16AsU32(a), f16AsU32(b)
-	c := newF16Consts()
+	m7fff, m8000, mLo, mInf, magic, infNan := f16DecodeConsts()
 	acc0, acc1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	np, j := len(au), 0
 	for ; j <= np-16; j += 16 {
 		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
 		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
-		dE := f16fastVec(ua.And(c.maskLo), c).Sub(f16fastVec(ub.And(c.maskLo), c))
-		dO := f16fastVec(ua.ShiftAllRight(16), c).Sub(f16fastVec(ub.ShiftAllRight(16), c))
+		dE := f16dec(ua.And(mLo), m7fff, m8000, mInf, magic, infNan).Sub(f16dec(ub.And(mLo), m7fff, m8000, mInf, magic, infNan))
+		dO := f16dec(ua.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan).Sub(f16dec(ub.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan))
 		acc0 = dE.MulAdd(dE, acc0)
 		acc1 = dO.MulAdd(dO, acc1)
 	}
@@ -118,14 +113,14 @@ func innerProductF16SIMD(a, b []types.Float16) (float64, error) {
 	}
 	n := len(a)
 	au, bu := f16AsU32(a), f16AsU32(b)
-	c := newF16Consts()
+	m7fff, m8000, mLo, mInf, magic, infNan := f16DecodeConsts()
 	acc0, acc1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	np, j := len(au), 0
 	for ; j <= np-16; j += 16 {
 		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
 		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
-		acc0 = f16fastVec(ua.And(c.maskLo), c).MulAdd(f16fastVec(ub.And(c.maskLo), c), acc0)
-		acc1 = f16fastVec(ua.ShiftAllRight(16), c).MulAdd(f16fastVec(ub.ShiftAllRight(16), c), acc1)
+		acc0 = f16dec(ua.And(mLo), m7fff, m8000, mInf, magic, infNan).MulAdd(f16dec(ub.And(mLo), m7fff, m8000, mInf, magic, infNan), acc0)
+		acc1 = f16dec(ua.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan).MulAdd(f16dec(ub.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan), acc1)
 	}
 	sum := sumF32x16(acc0.Add(acc1))
 	for i := j * 2; i < n; i++ {
@@ -140,15 +135,15 @@ func l1DistanceF16SIMD(a, b []types.Float16) (float64, error) {
 	}
 	n := len(a)
 	au, bu := f16AsU32(a), f16AsU32(b)
-	c := newF16Consts()
+	m7fff, m8000, mLo, mInf, magic, infNan := f16DecodeConsts()
 	absMask := archsimd.BroadcastUint32x16(0x7fffffff)
 	acc0, acc1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	np, j := len(au), 0
 	for ; j <= np-16; j += 16 {
 		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
 		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
-		dE := f16fastVec(ua.And(c.maskLo), c).Sub(f16fastVec(ub.And(c.maskLo), c))
-		dO := f16fastVec(ua.ShiftAllRight(16), c).Sub(f16fastVec(ub.ShiftAllRight(16), c))
+		dE := f16dec(ua.And(mLo), m7fff, m8000, mInf, magic, infNan).Sub(f16dec(ub.And(mLo), m7fff, m8000, mInf, magic, infNan))
+		dO := f16dec(ua.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan).Sub(f16dec(ub.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan))
 		acc0 = acc0.Add(dE.AsUint32x16().And(absMask).AsFloat32x16())
 		acc1 = acc1.Add(dO.AsUint32x16().And(absMask).AsFloat32x16())
 	}
@@ -172,7 +167,7 @@ func cosineDistanceF16SIMD(a, b []types.Float16) (float64, error) {
 	}
 	n := len(a)
 	au, bu := f16AsU32(a), f16AsU32(b)
-	c := newF16Consts()
+	m7fff, m8000, mLo, mInf, magic, infNan := f16DecodeConsts()
 	dot0, dot1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	na0, na1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	nb0, nb1 := archsimd.Float32x16{}, archsimd.Float32x16{}
@@ -180,10 +175,10 @@ func cosineDistanceF16SIMD(a, b []types.Float16) (float64, error) {
 	for ; j <= np-16; j += 16 {
 		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
 		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
-		aE := f16fastVec(ua.And(c.maskLo), c)
-		aO := f16fastVec(ua.ShiftAllRight(16), c)
-		bE := f16fastVec(ub.And(c.maskLo), c)
-		bO := f16fastVec(ub.ShiftAllRight(16), c)
+		aE := f16dec(ua.And(mLo), m7fff, m8000, mInf, magic, infNan)
+		aO := f16dec(ua.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan)
+		bE := f16dec(ub.And(mLo), m7fff, m8000, mInf, magic, infNan)
+		bO := f16dec(ub.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan)
 		dot0 = aE.MulAdd(bE, dot0)
 		dot1 = aO.MulAdd(bO, dot1)
 		na0 = aE.MulAdd(aE, na0)
