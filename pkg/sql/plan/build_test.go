@@ -782,12 +782,12 @@ func TestUpdatePgStyleFromDedupAllowsDecimal256AndEnumUpdateColumns(t *testing.T
 		{
 			name: "decimal256",
 			typ:  plan.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 30},
-			sql:  "UPDATE NATION SET N_COMMENT = 1.23 FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY",
+			sql:  "UPDATE NATION SET N_COMMENT = REGION.R_COMMENT FROM REGION WHERE NATION.N_REGIONKEY = REGION.R_REGIONKEY",
 		},
 		{
 			name: "enum",
 			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "small,medium,large"},
-			sql:  "UPDATE NATION SET N_COMMENT = 'small' FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY",
+			sql:  "UPDATE NATION SET N_COMMENT = CASE WHEN 1 > 0 THEN 'small' ELSE 'medium' END FROM REGION WHERE NATION.N_REGIONKEY = REGION.R_REGIONKEY",
 		},
 	}
 
@@ -795,6 +795,7 @@ func TestUpdatePgStyleFromDedupAllowsDecimal256AndEnumUpdateColumns(t *testing.T
 		t.Run(tt.name, func(t *testing.T) {
 			mock := NewMockOptimizer(true)
 			setMockColumnType(t, mock, "nation", "n_comment", tt.typ)
+			setMockColumnType(t, mock, "region", "r_comment", tt.typ)
 
 			_, err := runOneStmt(mock, t, tt.sql)
 			if err != nil {
