@@ -784,6 +784,27 @@ func TestUpdatePgStyleFromDedupAllowsVectorUpdateColumn(t *testing.T) {
 	}
 }
 
+func TestUpdatePgStyleFromDedupDoesNotAggregateGeneratedColumns(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "nation", "n_comment", "n_name")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = NATION2.N_NAME FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("build UPDATE FROM with generated column: %v", err)
+	}
+
+	aggNode := requireUpdateFromDedupAggNode(t, logicPlan.GetQuery(), len(mock.ctxt.tables["nation"].Cols))
+	if got := countFuncInExprs(aggNode.AggList, "any_value"); got != 1 {
+		t.Fatalf("dedup should aggregate only explicit update columns, got %d any_value exprs: %v", got, aggNode.AggList)
+	}
+	for _, aggExpr := range aggNode.AggList {
+		if exprContainsColName(aggExpr, "n_comment") {
+			t.Fatalf("generated column should be recomputed after dedup, not aggregated by dedup: %v", aggExpr)
+		}
+	}
+}
+
 func TestUpdatePgStyleFromDedupAllowsDecimal256AndEnumUpdateColumns(t *testing.T) {
 	tests := []struct {
 		name string
@@ -793,12 +814,12 @@ func TestUpdatePgStyleFromDedupAllowsDecimal256AndEnumUpdateColumns(t *testing.T
 		{
 			name: "decimal256",
 			typ:  plan.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 30},
-			sql:  "UPDATE NATION SET N_COMMENT = 1.23 FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY",
+			sql:  "UPDATE NATION SET N_COMMENT = REGION.R_COMMENT FROM REGION WHERE NATION.N_REGIONKEY = REGION.R_REGIONKEY",
 		},
 		{
 			name: "enum",
 			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "small,medium,large"},
-			sql:  "UPDATE NATION SET N_COMMENT = 'small' FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY",
+			sql:  "UPDATE NATION SET N_COMMENT = CASE WHEN 1 > 0 THEN 'small' ELSE 'medium' END FROM REGION WHERE NATION.N_REGIONKEY = REGION.R_REGIONKEY",
 		},
 	}
 
@@ -806,6 +827,7 @@ func TestUpdatePgStyleFromDedupAllowsDecimal256AndEnumUpdateColumns(t *testing.T
 		t.Run(tt.name, func(t *testing.T) {
 			mock := NewMockOptimizer(true)
 			setMockColumnType(t, mock, "nation", "n_comment", tt.typ)
+			setMockColumnType(t, mock, "region", "r_comment", tt.typ)
 
 			_, err := runOneStmt(mock, t, tt.sql)
 			if err != nil {
@@ -1006,6 +1028,21 @@ func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int
 	return nil
 }
 
+func requireUpdateFromDedupAggNode(t *testing.T, query *Query, groupByLen int) *Node {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG || len(node.GroupBy) != groupByLen {
+			continue
+		}
+		for _, aggExpr := range node.AggList {
+			if fn := aggExpr.GetF(); fn != nil && fn.Func.ObjName == "any_value" {
+				return node
+			}
+		}
+	}
+	t.Fatalf("missing UPDATE FROM dedup agg node with %d group keys", groupByLen)
+	return nil
+}
+
 func requireQueryExpr(t *testing.T, query *Query, accept func(*plan.Expr) bool, message string) *plan.Expr {
 	for _, node := range query.Nodes {
 		if isSinkScanProjectNode(query, node) {
@@ -1095,6 +1132,36 @@ func exprContainsDefaultVal(expr *plan.Expr) bool {
 		}
 	}
 	return false
+}
+
+func countFuncInExprs(exprs []*plan.Expr, funcName string) int {
+	count := 0
+	for _, expr := range exprs {
+		count += countFuncInExpr(expr, funcName)
+	}
+	return count
+}
+
+func countFuncInExpr(expr *plan.Expr, funcName string) int {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		count := 0
+		if e.F.Func.ObjName == funcName {
+			count++
+		}
+		for _, arg := range e.F.Args {
+			count += countFuncInExpr(arg, funcName)
+		}
+		return count
+	case *plan.Expr_List:
+		count := 0
+		for _, item := range e.List.List {
+			count += countFuncInExpr(item, funcName)
+		}
+		return count
+	default:
+		return 0
+	}
 }
 
 func exprContainsColName(expr *plan.Expr, name string) bool {
