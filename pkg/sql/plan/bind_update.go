@@ -200,6 +200,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectNodeTag := selectNode.BindingTags[0]
+	if stmt.From != nil && len(stmt.From.Tables) > 0 {
+		lastNodeID, selectNode, selectNodeTag, err = builder.appendUpdateFromDedupNode(
+			bindCtx, lastNodeID, selectNode, selectNodeTag, dmlCtx, oldColName2Idx, newColName2Idx)
+		if err != nil {
+			return 0, err
+		}
+	}
 
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
@@ -906,4 +913,124 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
 	return lastNodeID, err
+}
+
+func (builder *QueryBuilder) appendUpdateFromDedupNode(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	dmlCtx *DMLContext,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+) (int32, *plan.Node, int32, error) {
+	groupByExprs := make([]*plan.Expr, 0)
+	aggList := make([]*plan.Expr, 0)
+	groupPos := make(map[int32]int32)
+	aggPos := make(map[int32]int32)
+	groupTag := builder.genNewBindTag()
+	aggregateTag := builder.genNewBindTag()
+
+	childColExpr := func(pos int32) *plan.Expr {
+		e := selectNode.ProjectList[pos]
+		name := ""
+		if col, ok := e.Expr.(*plan.Expr_Col); ok {
+			name = col.Col.Name
+		}
+		return &plan.Expr{
+			Typ: e.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: selectNodeTag,
+					ColPos: pos,
+					Name:   name,
+				},
+			},
+		}
+	}
+
+	for i, alias := range dmlCtx.aliases {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 {
+			continue
+		}
+
+		for _, col := range dmlCtx.tableDefs[i].Cols {
+			key := alias + "." + col.Name
+			oldPos, ok := oldColName2Idx[key]
+			if !ok {
+				continue
+			}
+			if _, exists := groupPos[oldPos]; !exists {
+				groupPos[oldPos] = int32(len(groupByExprs))
+				groupByExprs = append(groupByExprs, childColExpr(oldPos))
+			}
+
+			updatePos, ok := newColName2Idx[key]
+			if !ok {
+				continue
+			}
+			if _, exists := aggPos[updatePos]; exists {
+				continue
+			}
+			aggExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "any_value", []*plan.Expr{childColExpr(updatePos)})
+			if err != nil {
+				return 0, nil, 0, err
+			}
+			aggPos[updatePos] = int32(len(aggList))
+			aggList = append(aggList, aggExpr)
+		}
+	}
+
+	projectList := make([]*plan.Expr, len(selectNode.ProjectList))
+	for pos, e := range selectNode.ProjectList {
+		colPos := int32(pos)
+		relPos := groupTag
+		if aggColPos, ok := aggPos[colPos]; ok {
+			colPos = aggColPos
+			relPos = aggregateTag
+		} else if groupColPos, ok := groupPos[colPos]; ok {
+			colPos = groupColPos
+		} else {
+			aggExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "any_value", []*plan.Expr{childColExpr(int32(pos))})
+			if err != nil {
+				return 0, nil, 0, err
+			}
+			colPos = int32(len(aggList))
+			relPos = aggregateTag
+			aggList = append(aggList, aggExpr)
+		}
+		name := ""
+		if col, ok := e.Expr.(*plan.Expr_Col); ok {
+			name = col.Col.Name
+		}
+		projectList[pos] = &plan.Expr{
+			Typ: e.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: relPos,
+					ColPos: colPos,
+					Name:   name,
+				},
+			},
+		}
+	}
+
+	aggNode := &plan.Node{
+		NodeType:    plan.Node_AGG,
+		Children:    []int32{lastNodeID},
+		GroupBy:     groupByExprs,
+		AggList:     aggList,
+		BindingTags: []int32{groupTag, aggregateTag},
+		SpillMem:    builder.aggSpillMem,
+	}
+	lastNodeID = builder.appendNode(aggNode, bindCtx)
+
+	projectNode := &plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeID},
+		ProjectList: projectList,
+		BindingTags: []int32{builder.genNewBindTag()},
+	}
+	lastNodeID = builder.appendNode(projectNode, bindCtx)
+	return lastNodeID, projectNode, projectNode.BindingTags[0], nil
 }
