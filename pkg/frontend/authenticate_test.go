@@ -7315,6 +7315,8 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 
 		err := doSetSecondaryRoleAll(ses.GetTxnHandler().GetTxnCtx(), ses)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
+		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
 	})
 
 	convey.Convey("do set secondary role succ", t, func() {
@@ -7354,6 +7356,8 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 
 		err := doSetSecondaryRoleAll(ses.GetTxnHandler().GetTxnCtx(), ses)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
+		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
 	})
 }
 
@@ -7393,6 +7397,8 @@ func TestDoSwitchRoleSecondaryRoleAllInvalidatesRuleCache(t *testing.T) {
 		})
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeTrue)
+		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
+		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
 
 		ses.ruleCacheMu.RLock()
 		cacheIsNil := ses.ruleCache == nil
@@ -7467,8 +7473,8 @@ func TestDoSwitchRoleSecondaryRoleNoneInvalidatesRuleCache(t *testing.T) {
 	})
 }
 
-func TestDoSwitchRoleNormalRoleInvalidatesRuleCache(t *testing.T) {
-	convey.Convey("set role invalidates rule cache after successful switch", t, func() {
+func TestDoSwitchRolePrimaryRoleInvalidatesCaches(t *testing.T) {
+	convey.Convey("set role invalidates privilege and rule cache", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -7490,6 +7496,7 @@ func TestDoSwitchRoleNormalRoleInvalidatesRuleCache(t *testing.T) {
 		tenant.SetUseSecondaryRole(true)
 		ses.SetTenantInfo(tenant)
 		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
+		ses.cache.add(objectTypeTable, privilegeLevelStarStar, "", "", PrivilegeTypeCreateAccount)
 
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
@@ -7515,6 +7522,7 @@ func TestDoSwitchRoleNormalRoleInvalidatesRuleCache(t *testing.T) {
 		cacheIsNil := ses.ruleCache == nil
 		ses.ruleCacheMu.RUnlock()
 		convey.So(cacheIsNil, convey.ShouldBeTrue)
+		convey.So(ses.cache.has(objectTypeTable, privilegeLevelStarStar, "", "", PrivilegeTypeCreateAccount), convey.ShouldBeFalse)
 	})
 }
 
