@@ -17,6 +17,7 @@ package checkpointtool
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"fmt"
 	"io"
 	"os"
@@ -461,7 +462,8 @@ func fallbackCatalogColIndex(view *LogicalTableView, tableID uint64, colName str
 	if idx := view.columnDataIndex(colName); idx >= 0 {
 		return idx
 	}
-	layout, offset, ok := inferCatalogLayout(len(view.Headers)-logicalViewMetaCols, tableID)
+	dataOffset := logicalViewDataOffset(view)
+	layout, offset, ok := inferCatalogLayout(len(view.Headers)-dataOffset, tableID)
 	if !ok {
 		return -1
 	}
@@ -512,7 +514,7 @@ func (r *CheckpointReader) ReadTableSchema(
 		// Resolve column positions by name (handles hidden column offset)
 		relIDCol := fallbackCatalogColIndex(moTablesView, moTablesID, "rel_id")
 		for _, row := range moTablesView.Rows {
-			dataRow := row[logicalViewMetaCols:]
+			dataRow := row[logicalViewDataOffset(moTablesView):]
 			if relIDCol < 0 || relIDCol >= len(dataRow) {
 				continue
 			}
@@ -654,11 +656,21 @@ func (r *CheckpointReader) ListCatalogTables(
 	snapshotTS types.TS,
 	opts TableListOptions,
 ) ([]TableCatalogEntry, error) {
+	tables, projectedErr := r.listCatalogTablesFromProjectedMoTables(ctx, snapshotTS)
 	moTablesView, err := r.getTableLogicalView(ctx, moTablesID, snapshotTS)
-	if err != nil {
+	if err != nil && projectedErr != nil {
 		return nil, err
 	}
-	tables := buildCatalogTablesFromMoTablesRows(moTablesView)
+	if projectedErr != nil || len(tables) == 0 {
+		tables = nil
+	}
+	if moTablesView != nil {
+		tables = mergeCatalogTableEntries(tables, buildCatalogTablesFromMoTablesRows(moTablesView))
+		if schema := r.ReadTableSchema(ctx, moTablesID, snapshotTS, moTablesView); len(schema.Columns) > 0 {
+			projected := MergeLogicalViewWithSchema(moTablesView, schema)
+			tables = mergeCatalogTableEntries(tables, buildCatalogTablesFromMoTablesRows(projected))
+		}
+	}
 	filtered := make([]TableCatalogEntry, 0, len(tables))
 	for _, table := range tables {
 		if opts.AccountID != nil && table.AccountID != *opts.AccountID {
@@ -685,6 +697,88 @@ func (r *CheckpointReader) ListCatalogTables(
 		return filtered[i].TableID < filtered[j].TableID
 	})
 	return filtered, nil
+}
+
+func (r *CheckpointReader) listCatalogTablesFromProjectedMoTables(
+	ctx context.Context,
+	snapshotTS types.TS,
+) ([]TableCatalogEntry, error) {
+	var buf bytes.Buffer
+	if err := r.DumpTableCSVComposed(ctx, &buf, moTablesID, snapshotTS, WithCSVHeader(true), WithCSVMetaComments(false)); err != nil {
+		return nil, err
+	}
+	reader := csv.NewReader(bytes.NewReader(buf.Bytes()))
+	reader.FieldsPerRecord = -1
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(records) == 0 {
+		return nil, nil
+	}
+	return buildCatalogTablesFromCSVRecords(records[0], records[1:]), nil
+}
+
+func buildCatalogTablesFromCSVRecords(header []string, rows [][]string) []TableCatalogEntry {
+	index := make(map[string]int, len(header))
+	for i, name := range header {
+		index[name] = i
+	}
+	col := func(name string) int {
+		if idx, ok := index[name]; ok {
+			return idx
+		}
+		return -1
+	}
+	return buildCatalogTablesFromMoTablesRowsAt(
+		&LogicalTableView{
+			Headers: header,
+			Rows:    rows,
+		},
+		col("rel_id"),
+		col("relname"),
+		col("reldatabase"),
+		col("reldatabase_id"),
+		col("relkind"),
+		col("account_id"),
+	)
+}
+
+func mergeCatalogTableEntries(base []TableCatalogEntry, extra []TableCatalogEntry) []TableCatalogEntry {
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[uint64]int, len(base)+len(extra))
+	for i, table := range base {
+		seen[table.TableID] = i
+	}
+	for _, table := range extra {
+		if idx, ok := seen[table.TableID]; ok {
+			if betterCatalogTableEntry(table, base[idx]) {
+				base[idx] = table
+			}
+			continue
+		}
+		seen[table.TableID] = len(base)
+		base = append(base, table)
+	}
+	return base
+}
+
+func betterCatalogTableEntry(candidate, current TableCatalogEntry) bool {
+	if !validCatalogName(current.TableName) && validCatalogName(candidate.TableName) {
+		return true
+	}
+	if !validCatalogName(current.DatabaseName) && validCatalogName(candidate.DatabaseName) {
+		return true
+	}
+	if current.DatabaseID == 0 && candidate.DatabaseID != 0 {
+		return true
+	}
+	if current.RelKind == "" && candidate.RelKind != "" {
+		return true
+	}
+	return false
 }
 
 func (r *CheckpointReader) streamTableCSV(
@@ -1694,7 +1788,7 @@ func writeCSVMetadata(w io.Writer, schema *TableSchema, stats logicalTableStats)
 // and filters data rows to only include visible (non-hidden) columns by their physical position.
 // Returns a new LogicalTableView with merged headers and filtered data rows.
 func MergeLogicalViewWithSchema(view *LogicalTableView, schema *TableSchema) *LogicalTableView {
-	dataWidth := len(view.Headers) - logicalViewMetaCols
+	dataWidth := len(view.Headers) - logicalViewDataOffset(view)
 	if dataWidth < 0 {
 		dataWidth = 0
 	}
@@ -1725,10 +1819,11 @@ func MergeLogicalViewWithSchema(view *LogicalTableView, schema *TableSchema) *Lo
 
 	// Extract data rows: pick only visible columns by their physical position
 	newRows := make([][]string, len(view.Rows))
+	dataOffset := logicalViewDataOffset(view)
 	for i, row := range view.Rows {
 		newRow := make([]string, len(colMap))
 		for j, pos := range colMap {
-			dataIdx := logicalViewMetaCols + pos
+			dataIdx := dataOffset + pos
 			if dataIdx < len(row) {
 				newRow[j] = row[dataIdx]
 			}
@@ -1750,7 +1845,7 @@ func MergeLogicalViewWithSchema(view *LogicalTableView, schema *TableSchema) *Lo
 // mo_tables columns: rel_id, relname, reldatabase, reldatabase_id, ..., rel_createsql
 func buildSchemaFromMoTablesRow(view *LogicalTableView, fullRow []string) *TableSchema {
 	schema := &TableSchema{}
-	dataRow := fullRow[logicalViewMetaCols:]
+	dataRow := fullRow[logicalViewDataOffset(view):]
 
 	relNameIdx := fallbackCatalogColIndex(view, moTablesID, "relname")
 	if relNameIdx < len(dataRow) {
@@ -1776,7 +1871,7 @@ func findCreateSQLFromMoTables(view *LogicalTableView, tableID uint64) string {
 			return ""
 		}
 		for _, fullRow := range view.Rows {
-			row := fullRow[logicalViewMetaCols:]
+			row := fullRow[logicalViewDataOffset(view):]
 			if relIDCol >= len(row) || createSQLCol >= len(row) {
 				continue
 			}
@@ -1793,7 +1888,7 @@ func findCreateSQLFromMoTables(view *LogicalTableView, tableID uint64) string {
 		return ddl
 	}
 
-	dataWidth := len(view.Headers) - logicalViewMetaCols
+	dataWidth := len(view.Headers) - logicalViewDataOffset(view)
 	for _, match := range catalogLayoutMatches(dataWidth, moTablesID) {
 		relIDCol = catalogColIndexForLayout(match.layout, moTablesID, "rel_id", match.offset)
 		createSQLCol = catalogColIndexForLayout(match.layout, moTablesID, "rel_createsql", match.offset)
@@ -1805,7 +1900,8 @@ func findCreateSQLFromMoTables(view *LogicalTableView, tableID uint64) string {
 }
 
 func buildCatalogTablesFromMoTablesRows(view *LogicalTableView) []TableCatalogEntry {
-	var best []TableCatalogEntry
+	seen := make(map[uint64]struct{})
+	merged := make([]TableCatalogEntry, 0)
 	try := func(relIDCol, relNameCol, relDBCol, relDBIDCol, relKindCol, accountIDCol int) {
 		tables := buildCatalogTablesFromMoTablesRowsAt(
 			view,
@@ -1816,8 +1912,12 @@ func buildCatalogTablesFromMoTablesRows(view *LogicalTableView) []TableCatalogEn
 			relKindCol,
 			accountIDCol,
 		)
-		if len(tables) > len(best) {
-			best = tables
+		for _, table := range tables {
+			if _, ok := seen[table.TableID]; ok {
+				continue
+			}
+			seen[table.TableID] = struct{}{}
+			merged = append(merged, table)
 		}
 	}
 
@@ -1829,7 +1929,7 @@ func buildCatalogTablesFromMoTablesRows(view *LogicalTableView) []TableCatalogEn
 		fallbackCatalogColIndex(view, moTablesID, "relkind"),
 		fallbackCatalogColIndex(view, moTablesID, "account_id"),
 	)
-	dataWidth := len(view.Headers) - logicalViewMetaCols
+	dataWidth := len(view.Headers) - logicalViewDataOffset(view)
 	for _, match := range catalogLayoutMatches(dataWidth, moTablesID) {
 		try(
 			catalogColIndexForLayout(match.layout, moTablesID, "rel_id", match.offset),
@@ -1840,7 +1940,7 @@ func buildCatalogTablesFromMoTablesRows(view *LogicalTableView) []TableCatalogEn
 			catalogColIndexForLayout(match.layout, moTablesID, "account_id", match.offset),
 		)
 	}
-	return best
+	return merged
 }
 
 func buildCatalogTablesFromMoTablesRowsAt(
@@ -1859,7 +1959,7 @@ func buildCatalogTablesFromMoTablesRowsAt(
 	seen := make(map[uint64]struct{})
 	tables := make([]TableCatalogEntry, 0)
 	for _, fullRow := range view.Rows {
-		row := fullRow[logicalViewMetaCols:]
+		row := fullRow[logicalViewDataOffset(view):]
 		if relIDCol >= len(row) || relNameCol >= len(row) || relDBCol >= len(row) {
 			continue
 		}
@@ -1945,7 +2045,7 @@ func buildColumnsFromMoColumnsRows(view *LogicalTableView, tableID uint64) []Tab
 		}
 	}
 
-	dataWidth := len(view.Headers) - logicalViewMetaCols
+	dataWidth := len(view.Headers) - logicalViewDataOffset(view)
 	for _, match := range catalogLayoutMatches(dataWidth, moColumnsID) {
 		relnameIDCol = catalogColIndexForLayout(match.layout, moColumnsID, "att_relname_id", match.offset)
 		nameCol = catalogColIndexForLayout(match.layout, moColumnsID, "attname", match.offset)
@@ -1974,7 +2074,7 @@ func buildColumnsFromMoColumnsRowsAt(
 	tableIDStr := fmt.Sprintf("%d", tableID)
 	var cols []TableColumn
 	for _, fullRow := range view.Rows {
-		row := fullRow[logicalViewMetaCols:]
+		row := fullRow[logicalViewDataOffset(view):]
 
 		// Skip hidden columns
 		if hiddenCol >= 0 && hiddenCol < len(row) {
@@ -2111,7 +2211,7 @@ func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64) strin
 		}
 	}
 
-	dataWidth := len(view.Headers) - logicalViewMetaCols
+	dataWidth := len(view.Headers) - logicalViewDataOffset(view)
 	for _, match := range catalogLayoutMatches(dataWidth, moColumnsID) {
 		relnameIDCol = catalogColIndexForLayout(match.layout, moColumnsID, "att_relname_id", match.offset)
 		nameCol = catalogColIndexForLayout(match.layout, moColumnsID, "attname", match.offset)
@@ -2144,7 +2244,7 @@ func buildCreateTableFromMoColumnsAt(
 	var cols []colInfo
 
 	for _, fullRow := range view.Rows {
-		row := fullRow[logicalViewMetaCols:]
+		row := fullRow[logicalViewDataOffset(view):]
 		if hiddenCol >= 0 && hiddenCol < len(row) {
 			if row[hiddenCol] == "1" || row[hiddenCol] == "true" {
 				continue
@@ -2215,10 +2315,23 @@ func hardcodedCreateTableForLayout(tableID uint64, layout catalogLayout) string 
 // columnDataIndex returns the data-column index (0-based, after stripping meta columns)
 // for the named column, or -1 if not found.
 func (v *LogicalTableView) columnDataIndex(colName string) int {
-	for i := logicalViewMetaCols; i < len(v.Headers); i++ {
+	dataOffset := logicalViewDataOffset(v)
+	for i := dataOffset; i < len(v.Headers); i++ {
 		if v.Headers[i] == colName {
-			return i - logicalViewMetaCols
+			return i - dataOffset
 		}
 	}
 	return -1
+}
+
+func logicalViewDataOffset(view *LogicalTableView) int {
+	if view == nil || len(view.Headers) < logicalViewMetaCols {
+		return 0
+	}
+	for i, h := range logicalTableViewMetaHeaders {
+		if view.Headers[i] != h {
+			return 0
+		}
+	}
+	return logicalViewMetaCols
 }

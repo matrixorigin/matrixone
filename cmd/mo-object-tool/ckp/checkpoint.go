@@ -721,6 +721,7 @@ func writeRestoreScript(
 		if err != nil {
 			return "", fmt.Errorf("show create table %d: %w", table.TableID, err)
 		}
+		ddl = normalizeCreateTableDDLName(ddl, table)
 		if _, err := fmt.Fprintln(f, strings.TrimRight(ddl, " ;\n\t")); err != nil {
 			return "", err
 		}
@@ -770,6 +771,106 @@ func quoteSQLString(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `'`, `''`)
 	return "'" + s + "'"
+}
+
+func normalizeCreateTableDDLName(ddl string, table checkpointtool.TableCatalogEntry) string {
+	nameStart, nameEnd, ok := createTableNameRange(ddl)
+	if !ok {
+		return ddl
+	}
+	target := quoteSQLIdent(table.TableName)
+	if table.DatabaseName != "" {
+		target = quoteSQLIdent(table.DatabaseName) + "." + target
+	}
+	return ddl[:nameStart] + target + ddl[nameEnd:]
+}
+
+func createTableNameRange(sql string) (int, int, bool) {
+	i, ok := consumeSQLKeyword(sql, 0, "create")
+	if !ok {
+		return 0, 0, false
+	}
+	i, ok = consumeSQLKeyword(sql, i, "table")
+	if !ok {
+		return 0, 0, false
+	}
+	if next, ok := consumeSQLKeyword(sql, i, "if"); ok {
+		if next, ok = consumeSQLKeyword(sql, next, "not"); ok {
+			if next, ok = consumeSQLKeyword(sql, next, "exists"); ok {
+				i = next
+			}
+		}
+	}
+	i = skipSQLSpace(sql, i)
+	nameStart := i
+	i, ok = consumeSQLIdentifier(sql, i)
+	if !ok {
+		return 0, 0, false
+	}
+	if j := skipSQLSpace(sql, i); j < len(sql) && sql[j] == '.' {
+		j = skipSQLSpace(sql, j+1)
+		if end, ok := consumeSQLIdentifier(sql, j); ok {
+			i = end
+		}
+	}
+	return nameStart, i, true
+}
+
+func consumeSQLKeyword(sql string, i int, keyword string) (int, bool) {
+	i = skipSQLSpace(sql, i)
+	if len(sql)-i < len(keyword) || !strings.EqualFold(sql[i:i+len(keyword)], keyword) {
+		return i, false
+	}
+	end := i + len(keyword)
+	if end < len(sql) && isSQLIdentByte(sql[end]) {
+		return i, false
+	}
+	return end, true
+}
+
+func skipSQLSpace(sql string, i int) int {
+	for i < len(sql) {
+		switch sql[i] {
+		case ' ', '\t', '\n', '\r':
+			i++
+		default:
+			return i
+		}
+	}
+	return i
+}
+
+func consumeSQLIdentifier(sql string, i int) (int, bool) {
+	if i >= len(sql) {
+		return i, false
+	}
+	if sql[i] == '`' {
+		i++
+		for i < len(sql) {
+			if sql[i] != '`' {
+				i++
+				continue
+			}
+			if i+1 < len(sql) && sql[i+1] == '`' {
+				i += 2
+				continue
+			}
+			return i + 1, true
+		}
+		return i, false
+	}
+	start := i
+	for i < len(sql) && isSQLIdentByte(sql[i]) {
+		i++
+	}
+	return i, i > start
+}
+
+func isSQLIdentByte(b byte) bool {
+	return b == '_' || b == '$' ||
+		(b >= '0' && b <= '9') ||
+		(b >= 'a' && b <= 'z') ||
+		(b >= 'A' && b <= 'Z')
 }
 
 func dumpTablesConcurrently(
