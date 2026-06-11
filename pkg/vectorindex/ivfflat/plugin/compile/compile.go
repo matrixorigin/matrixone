@@ -34,6 +34,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -414,7 +415,17 @@ func ivfIndexEntriesTable(
 						break
 					}
 				}
-				entrySelectExpr = fmt.Sprintf("cast(`%s` as %s(%d))", indexColName, vectorindex.QuantizationSQLTypeName(qt), dim)
+				if qt == types.T_array_int8 {
+					// Symmetric scalar quantizer: multiply by the trained inv_scale
+					// (stored in metadata by ivf_create) before casting, so int8 uses
+					// the full range. float16 needs no scale (it preserves range).
+					scaleSub := fmt.Sprintf("(SELECT CAST(`%s` AS DOUBLE) FROM `%s`.`%s` WHERE `%s` = '%s')",
+						catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, qryDatabase, metadataTableName,
+						catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, catalog.SystemSI_IVFFLAT_Metadata_QuantizeScale)
+					entrySelectExpr = fmt.Sprintf("cast(`%s` * %s as vecint8(%d))", indexColName, scaleSub, dim)
+				} else {
+					entrySelectExpr = fmt.Sprintf("cast(`%s` as %s(%d))", indexColName, vectorindex.QuantizationSQLTypeName(qt), dim)
+				}
 			}
 		}
 	}
