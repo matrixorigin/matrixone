@@ -15,17 +15,25 @@
 package checkpointtool
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 )
 
@@ -36,6 +44,16 @@ const (
 	// System table IDs
 	moTablesID  = uint64(catalog.MO_TABLES_ID)
 	moColumnsID = uint64(catalog.MO_COLUMNS_ID)
+)
+
+const (
+	csvPipelineQueueCapacity = 2
+	csvPipelineReaderMax     = 4
+	csvPipelineReportEvery   = 10 * time.Second
+	csvPipelineMinFreeMemory = 1 << 30
+	csvPipelineFreeRatio     = 10
+	csvPipelineMemoryPoll    = 200 * time.Millisecond
+	csvPipelineWorkerMemory  = 256 << 20
 )
 
 type catalogLayout struct {
@@ -677,13 +695,24 @@ func (r *CheckpointReader) streamTableCSV(
 	dataEntries, tombEntries []*ObjectEntryInfo,
 	options CSVExportOptions,
 ) error {
-	tmpFile, err := os.CreateTemp("", "mo-tool-table-dump-*.csv")
-	if err != nil {
-		return err
+	if !options.IncludeMetadata && options.RowOrder == CSVRowOrderStorage {
+		return r.streamTableCSVPipeline(ctx, w, schema, snapshotTS, dataEntries, tombEntries, options)
 	}
-	tmpName := tmpFile.Name()
-	defer os.Remove(tmpName)
-	defer tmpFile.Close()
+
+	needsBuffer := options.IncludeMetadata || options.RowOrder == CSVRowOrderLexical
+	var output io.Writer = w
+	var tmpFile *os.File
+	if needsBuffer {
+		var err error
+		tmpFile, err = os.CreateTemp("", "mo-tool-table-dump-*.csv")
+		if err != nil {
+			return err
+		}
+		tmpName := tmpFile.Name()
+		defer os.Remove(tmpName)
+		defer tmpFile.Close()
+		output = tmpFile
+	}
 
 	header := make([]string, 0, len(schema.Columns))
 	physicalPositions := make([]int, 0, len(schema.Columns))
@@ -698,7 +727,7 @@ func (r *CheckpointReader) streamTableCSV(
 	var projectedTypes []types.Type
 	if options.IncludeHeader {
 		// header is emitted after we know output mode but before rows
-		if err := writeSQLLoadCSVRow(tmpFile, nil, header, nil); err != nil {
+		if err := writeSQLLoadCSVRow(output, nil, header, nil); err != nil {
 			return err
 		}
 	}
@@ -711,7 +740,7 @@ func (r *CheckpointReader) streamTableCSV(
 			lexicalRows = append(lexicalRows, exportedCSVRow{values: row, nulls: rowNulls})
 			return nil
 		}
-		return writeSQLLoadCSVRow(tmpFile, projectedTypes, row, rowNulls)
+		return writeSQLLoadCSVRow(output, projectedTypes, row, rowNulls)
 	}
 
 	stats, err := r.scanLogicalTable(ctx, snapshotTS, dataEntries, tombEntries,
@@ -727,12 +756,15 @@ func (r *CheckpointReader) streamTableCSV(
 	if options.RowOrder == CSVRowOrderLexical {
 		sortCSVRowsLexical(lexicalRows)
 		for _, row := range lexicalRows {
-			if err := writeSQLLoadCSVRow(tmpFile, projectedTypes, row.values, row.nulls); err != nil {
+			if err := writeSQLLoadCSVRow(output, projectedTypes, row.values, row.nulls); err != nil {
 				return err
 			}
 		}
 	}
 
+	if !needsBuffer {
+		return nil
+	}
 	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
@@ -743,6 +775,670 @@ func (r *CheckpointReader) streamTableCSV(
 	}
 	_, err = io.Copy(w, tmpFile)
 	return err
+}
+
+type csvPipelineChunk struct {
+	objectIdx int
+	blockIdx  int
+	rows      int
+	data      []byte
+}
+
+type csvPipelineObjectJob struct {
+	objectIdx int
+	entry     *ObjectEntryInfo
+}
+
+type csvPipelineBlock struct {
+	objectIdx          int
+	blockIdx           int
+	entry              *ObjectEntryInfo
+	projectedTypes     []types.Type
+	relevantTombstones []objectio.ObjectStats
+	bat                *batch.Batch
+	release            func()
+	commitTSVec        *vector.Vector
+	releaseCommitTS    func()
+}
+
+func (b *csvPipelineBlock) releaseBlock() {
+	if b.releaseCommitTS != nil {
+		b.releaseCommitTS()
+		b.releaseCommitTS = nil
+	}
+	if b.release != nil {
+		b.release()
+		b.release = nil
+	}
+}
+
+type csvPipelineCounters struct {
+	totalObjects     int64
+	processedObjects atomic.Int64
+	readQueuedBlocks atomic.Int64
+	readQueuedRows   atomic.Int64
+	readBatches      atomic.Int64
+	readRows         atomic.Int64
+	processedBatches atomic.Int64
+	visibleRows      atomic.Int64
+	physicalRows     atomic.Int64
+	queuedBatches    atomic.Int64
+	queuedBytes      atomic.Int64
+	writtenBatches   atomic.Int64
+	writtenBytes     atomic.Int64
+	memoryWaits      atomic.Int64
+	memoryAvailable  atomic.Int64
+	memoryFloor      atomic.Int64
+	readNanos        atomic.Int64
+	processNanos     atomic.Int64
+	writeNanos       atomic.Int64
+}
+
+type csvPipelineWorkerPlan struct {
+	readerWorkers     int
+	processorWorkers  int
+	readQueueCapacity int
+	cpuLimit          int
+	memoryLimit       int
+	memoryTotal       uint64
+	memoryFree        uint64
+	memoryFloor       uint64
+	memoryPerWork     uint64
+}
+
+func (r *CheckpointReader) streamTableCSVPipeline(
+	ctx context.Context,
+	w io.Writer,
+	schema *TableSchema,
+	snapshotTS types.TS,
+	dataEntries, tombEntries []*ObjectEntryInfo,
+	options CSVExportOptions,
+) error {
+	header := make([]string, 0, len(schema.Columns))
+	physicalPositions := make([]int, 0, len(schema.Columns))
+	for _, col := range schema.Columns {
+		header = append(header, col.Name)
+		physicalPos := col.PhysicalPosition
+		if physicalPos < 0 {
+			physicalPos = col.Position
+		}
+		physicalPositions = append(physicalPositions, physicalPos)
+	}
+	if options.IncludeHeader {
+		if err := writeSQLLoadCSVRow(w, nil, header, nil); err != nil {
+			return err
+		}
+	}
+
+	visibleDataEntries := visibleObjectEntries(dataEntries, snapshotTS)
+	visibleTombEntries := visibleObjectEntries(tombEntries, snapshotTS)
+	tombstoneStats := dedupeObjectStats(visibleTombEntries)
+	counters := &csvPipelineCounters{totalObjects: int64(len(visibleDataEntries))}
+	workerPlan := csvPipelineWorkerCount(len(visibleDataEntries))
+	counters.memoryFloor.Store(int64(workerPlan.memoryFloor))
+	counters.memoryAvailable.Store(int64(workerPlan.memoryFree))
+
+	fmt.Fprintf(os.Stderr,
+		"csv pipeline: start objects=%d reader_mode=in_processor processor_workers=%d writer_workers=1 cpu_limit=%d memory_limit=%d memory_total=%d memory_free=%d memory_floor=%d memory_per_worker=%d write_queue_capacity=%d report_every=%s\n",
+		len(visibleDataEntries),
+		workerPlan.processorWorkers,
+		workerPlan.cpuLimit,
+		workerPlan.memoryLimit,
+		workerPlan.memoryTotal,
+		workerPlan.memoryFree,
+		workerPlan.memoryFloor,
+		workerPlan.memoryPerWork,
+		csvPipelineQueueCapacity,
+		csvPipelineReportEvery,
+	)
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	chunks := make(chan csvPipelineChunk, csvPipelineQueueCapacity)
+	writerDone := make(chan error, 1)
+	reportDone := make(chan struct{})
+	defer close(reportDone)
+	go reportCSVPipeline(ctx, reportDone, counters)
+	go writeCSVChunks(ctx, w, chunks, counters, cancel, writerDone)
+
+	producerErr := r.produceCSVChunks(ctx, chunks, counters, snapshotTS, visibleDataEntries, tombstoneStats, physicalPositions, workerPlan)
+	close(chunks)
+	writerErr := <-writerDone
+	printCSVPipelineReport("finish", counters)
+	if producerErr != nil {
+		return producerErr
+	}
+	return writerErr
+}
+
+func (r *CheckpointReader) produceCSVChunks(
+	ctx context.Context,
+	chunks chan<- csvPipelineChunk,
+	counters *csvPipelineCounters,
+	snapshotTS types.TS,
+	visibleDataEntries []*ObjectEntryInfo,
+	tombstoneStats []objectio.ObjectStats,
+	physicalPositions []int,
+	workerPlan csvPipelineWorkerPlan,
+) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	objectJobs := make(chan csvPipelineObjectJob, workerPlan.processorWorkers)
+	var processorWG sync.WaitGroup
+	var errOnce sync.Once
+	var workerErr error
+	setErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errOnce.Do(func() {
+			workerErr = err
+			cancel()
+		})
+	}
+
+	processorWG.Add(workerPlan.processorWorkers)
+	for workerID := 0; workerID < workerPlan.processorWorkers; workerID++ {
+		go func() {
+			defer processorWG.Done()
+			for job := range objectJobs {
+				if err := ctx.Err(); err != nil {
+					setErr(err)
+					return
+				}
+				if err := r.processCSVObjectChunks(ctx, chunks, counters, snapshotTS, tombstoneStats, physicalPositions, job); err != nil {
+					setErr(err)
+					return
+				}
+			}
+		}()
+	}
+
+	for objectIdx, entry := range visibleDataEntries {
+		select {
+		case objectJobs <- csvPipelineObjectJob{objectIdx: objectIdx, entry: entry}:
+		case <-ctx.Done():
+			close(objectJobs)
+			processorWG.Wait()
+			if workerErr != nil {
+				return workerErr
+			}
+			return ctx.Err()
+		}
+	}
+	close(objectJobs)
+	processorWG.Wait()
+	if workerErr != nil {
+		return workerErr
+	}
+	return ctx.Err()
+}
+
+func (r *CheckpointReader) processCSVObjectChunks(
+	ctx context.Context,
+	chunks chan<- csvPipelineChunk,
+	counters *csvPipelineCounters,
+	snapshotTS types.TS,
+	tombstoneStats []objectio.ObjectStats,
+	physicalPositions []int,
+	job csvPipelineObjectJob,
+) error {
+	entry := job.entry
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	objName := entry.ObjectStats.ObjectName().String()
+	reader, err := objecttool.OpenWithFS(ctx, r.fs, objName, objName)
+	if err != nil {
+		if isDataFileNotFound(err) {
+			counters.processedObjects.Add(1)
+			return nil
+		}
+		return err
+	}
+	defer reader.Close()
+
+	projectedTypes := buildProjectedTypes(reader.Columns(), physicalPositions)
+	relevantTombstones, err := r.filterTombstonesForObject(ctx, entry.ObjectStats.ObjectName().ObjectId(), tombstoneStats)
+	if err != nil {
+		return err
+	}
+
+	for blockIdx := 0; blockIdx < int(entry.ObjectStats.BlkCnt()); blockIdx++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := waitForCSVMemory(ctx, counters); err != nil {
+			return err
+		}
+
+		start := time.Now()
+		bat, release, err := reader.ReadBlock(ctx, uint32(blockIdx))
+		if err != nil {
+			return err
+		}
+		commitTSVec, releaseCommitTS, err := reader.ReadBlockCommitTS(ctx, uint32(blockIdx))
+		counters.readNanos.Add(time.Since(start).Nanoseconds())
+		if err != nil {
+			release()
+			return err
+		}
+		if bat.RowCount() == 0 {
+			if releaseCommitTS != nil {
+				releaseCommitTS()
+			}
+			release()
+			continue
+		}
+
+		block := csvPipelineBlock{
+			objectIdx:          job.objectIdx,
+			blockIdx:           blockIdx,
+			entry:              entry,
+			projectedTypes:     projectedTypes,
+			relevantTombstones: relevantTombstones,
+			bat:                bat,
+			release:            release,
+			commitTSVec:        commitTSVec,
+			releaseCommitTS:    releaseCommitTS,
+		}
+		counters.readBatches.Add(1)
+		counters.readRows.Add(int64(bat.RowCount()))
+		chunk, err := r.buildCSVChunkForBlock(ctx, block, snapshotTS, physicalPositions, counters)
+		if err != nil {
+			return err
+		}
+		if len(chunk.data) == 0 {
+			continue
+		}
+		counters.queuedBatches.Add(1)
+		counters.queuedBytes.Add(int64(len(chunk.data)))
+		select {
+		case chunks <- chunk:
+		case <-ctx.Done():
+			counters.queuedBatches.Add(-1)
+			counters.queuedBytes.Add(-int64(len(chunk.data)))
+			return ctx.Err()
+		}
+	}
+
+	counters.processedObjects.Add(1)
+	return nil
+}
+
+func (r *CheckpointReader) readCSVObjectBlocks(
+	ctx context.Context,
+	blocks chan<- csvPipelineBlock,
+	counters *csvPipelineCounters,
+	snapshotTS types.TS,
+	tombstoneStats []objectio.ObjectStats,
+	physicalPositions []int,
+	job csvPipelineObjectJob,
+) error {
+	entry := job.entry
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	objName := entry.ObjectStats.ObjectName().String()
+	reader, err := objecttool.OpenWithFS(ctx, r.fs, objName, objName)
+	if err != nil {
+		if isDataFileNotFound(err) {
+			counters.processedObjects.Add(1)
+			return nil
+		}
+		return err
+	}
+
+	projectedTypes := buildProjectedTypes(reader.Columns(), physicalPositions)
+	relevantTombstones, err := r.filterTombstonesForObject(ctx, entry.ObjectStats.ObjectName().ObjectId(), tombstoneStats)
+	if err != nil {
+		_ = reader.Close()
+		return err
+	}
+
+	for blockIdx := 0; blockIdx < int(entry.ObjectStats.BlkCnt()); blockIdx++ {
+		if err := ctx.Err(); err != nil {
+			_ = reader.Close()
+			return err
+		}
+		if err := waitForCSVMemory(ctx, counters); err != nil {
+			_ = reader.Close()
+			return err
+		}
+
+		start := time.Now()
+		bat, release, err := reader.ReadBlock(ctx, uint32(blockIdx))
+		if err != nil {
+			_ = reader.Close()
+			return err
+		}
+		commitTSVec, releaseCommitTS, err := reader.ReadBlockCommitTS(ctx, uint32(blockIdx))
+		counters.readNanos.Add(time.Since(start).Nanoseconds())
+		if err != nil {
+			release()
+			_ = reader.Close()
+			return err
+		}
+		if bat.RowCount() == 0 {
+			if releaseCommitTS != nil {
+				releaseCommitTS()
+			}
+			release()
+			continue
+		}
+
+		block := csvPipelineBlock{
+			objectIdx:          job.objectIdx,
+			blockIdx:           blockIdx,
+			entry:              entry,
+			projectedTypes:     projectedTypes,
+			relevantTombstones: relevantTombstones,
+			bat:                bat,
+			release:            release,
+			commitTSVec:        commitTSVec,
+			releaseCommitTS:    releaseCommitTS,
+		}
+		counters.readBatches.Add(1)
+		counters.readRows.Add(int64(bat.RowCount()))
+		counters.readQueuedBlocks.Add(1)
+		counters.readQueuedRows.Add(int64(bat.RowCount()))
+		select {
+		case blocks <- block:
+		case <-ctx.Done():
+			counters.readQueuedBlocks.Add(-1)
+			counters.readQueuedRows.Add(-int64(bat.RowCount()))
+			block.releaseBlock()
+			_ = reader.Close()
+			return ctx.Err()
+		}
+	}
+
+	if err := reader.Close(); err != nil {
+		return err
+	}
+	counters.processedObjects.Add(1)
+	return nil
+}
+
+func (r *CheckpointReader) processCSVBlockChunk(
+	ctx context.Context,
+	chunks chan<- csvPipelineChunk,
+	counters *csvPipelineCounters,
+	snapshotTS types.TS,
+	physicalPositions []int,
+	block csvPipelineBlock,
+) error {
+	if err := ctx.Err(); err != nil {
+		block.releaseBlock()
+		return err
+	}
+	chunk, err := r.buildCSVChunkForBlock(ctx, block, snapshotTS, physicalPositions, counters)
+	if err != nil {
+		return err
+	}
+	if len(chunk.data) == 0 {
+		return nil
+	}
+	counters.queuedBatches.Add(1)
+	counters.queuedBytes.Add(int64(len(chunk.data)))
+	select {
+	case chunks <- chunk:
+		return nil
+	case <-ctx.Done():
+		counters.queuedBatches.Add(-1)
+		counters.queuedBytes.Add(-int64(len(chunk.data)))
+		return ctx.Err()
+	}
+}
+
+func csvPipelineWorkerCount(objects int) csvPipelineWorkerPlan {
+	cpuLimit := runtime.GOMAXPROCS(0)
+	if cpuLimit < 1 {
+		cpuLimit = 1
+	}
+
+	total, free, ok := readSystemMemory()
+	floor := csvPipelineMemoryFloorFromTotal(total, ok)
+	memoryLimit := cpuLimit
+	if ok {
+		memoryLimit = 1
+		if free > floor {
+			budget := free - floor
+			memoryLimit = int(budget / csvPipelineWorkerMemory)
+			if memoryLimit < 1 {
+				memoryLimit = 1
+			}
+		}
+	}
+	processorWorkers := cpuLimit
+	if memoryLimit < processorWorkers {
+		processorWorkers = memoryLimit
+	}
+	if objects > 0 && objects < processorWorkers {
+		processorWorkers = objects
+	}
+	if processorWorkers < 1 {
+		processorWorkers = 1
+	}
+
+	readerWorkers := csvPipelineReaderMax
+	if objects > 0 && objects < readerWorkers {
+		readerWorkers = objects
+	}
+	if processorWorkers < readerWorkers {
+		readerWorkers = processorWorkers
+	}
+	if readerWorkers < 1 {
+		readerWorkers = 1
+	}
+	readQueueCapacity := readerWorkers * 2
+	if processorWorkers < readQueueCapacity {
+		readQueueCapacity = processorWorkers
+	}
+	if readQueueCapacity < 1 {
+		readQueueCapacity = 1
+	}
+	return csvPipelineWorkerPlan{
+		readerWorkers:     readerWorkers,
+		processorWorkers:  processorWorkers,
+		readQueueCapacity: readQueueCapacity,
+		cpuLimit:          cpuLimit,
+		memoryLimit:       memoryLimit,
+		memoryTotal:       total,
+		memoryFree:        free,
+		memoryFloor:       floor,
+		memoryPerWork:     csvPipelineWorkerMemory,
+	}
+}
+
+func csvPipelineMemoryFloorFromTotal(total uint64, ok bool) uint64 {
+	if !ok || total == 0 {
+		return csvPipelineMinFreeMemory
+	}
+	floor := total / csvPipelineFreeRatio
+	if floor < csvPipelineMinFreeMemory {
+		return csvPipelineMinFreeMemory
+	}
+	return floor
+}
+
+func waitForCSVMemory(ctx context.Context, counters *csvPipelineCounters) error {
+	floor := uint64(counters.memoryFloor.Load())
+	for {
+		_, available, ok := readSystemMemory()
+		if !ok {
+			return nil
+		}
+		counters.memoryAvailable.Store(int64(available))
+		if available >= floor {
+			return nil
+		}
+		counters.memoryWaits.Add(1)
+		timer := time.NewTimer(csvPipelineMemoryPoll)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
+	}
+}
+
+func readSystemMemory() (total uint64, available uint64, ok bool) {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, 0, false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		value, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		bytes := value * 1024
+		switch fields[0] {
+		case "MemTotal:":
+			total = bytes
+		case "MemAvailable:":
+			available = bytes
+		}
+	}
+	return total, available, total > 0 && available > 0
+}
+
+func (r *CheckpointReader) buildCSVChunkForBlock(
+	ctx context.Context,
+	block csvPipelineBlock,
+	snapshotTS types.TS,
+	physicalPositions []int,
+	counters *csvPipelineCounters,
+) (csvPipelineChunk, error) {
+	start := time.Now()
+	defer func() {
+		counters.processNanos.Add(time.Since(start).Nanoseconds())
+	}()
+	defer block.releaseBlock()
+
+	bat := block.bat
+	if bat.RowCount() == 0 {
+		return csvPipelineChunk{}, nil
+	}
+	counters.physicalRows.Add(int64(bat.RowCount()))
+
+	var commitTSs []types.TS
+	if block.commitTSVec != nil {
+		commitTSs = vector.MustFixedColWithTypeCheck[types.TS](block.commitTSVec)
+	}
+
+	deleteMask, err := r.buildDeleteMaskForBlock(ctx, &snapshotTS, block.entry.ObjectStats, uint16(block.blockIdx), block.relevantTombstones)
+	if err != nil {
+		return csvPipelineChunk{}, err
+	}
+	if deleteMask.IsValid() {
+		defer deleteMask.Release()
+	}
+
+	var buf bytes.Buffer
+	rows := 0
+	for rowIdx := 0; rowIdx < bat.RowCount(); rowIdx++ {
+		if commitTSs != nil && rowIdx < len(commitTSs) &&
+			!block.commitTSVec.IsNull(uint64(rowIdx)) &&
+			commitTSs[rowIdx].GT(&snapshotTS) {
+			continue
+		}
+		if deleteMask.IsValid() && deleteMask.Contains(uint64(rowIdx)) {
+			continue
+		}
+		if err := writeProjectedCSVRowFromVecs(&buf, block.projectedTypes, bat.Vecs, physicalPositions, rowIdx); err != nil {
+			return csvPipelineChunk{}, err
+		}
+		rows++
+	}
+
+	if rows == 0 {
+		return csvPipelineChunk{}, nil
+	}
+	counters.processedBatches.Add(1)
+	counters.visibleRows.Add(int64(rows))
+	return csvPipelineChunk{
+		objectIdx: block.objectIdx,
+		blockIdx:  block.blockIdx,
+		rows:      rows,
+		data:      buf.Bytes(),
+	}, nil
+}
+
+func writeCSVChunks(
+	ctx context.Context,
+	w io.Writer,
+	chunks <-chan csvPipelineChunk,
+	counters *csvPipelineCounters,
+	cancel context.CancelFunc,
+	done chan<- error,
+) {
+	for chunk := range chunks {
+		if err := ctx.Err(); err != nil {
+			done <- err
+			return
+		}
+		start := time.Now()
+		if _, err := w.Write(chunk.data); err != nil {
+			cancel()
+			done <- err
+			return
+		}
+		counters.writeNanos.Add(time.Since(start).Nanoseconds())
+		counters.queuedBatches.Add(-1)
+		counters.queuedBytes.Add(-int64(len(chunk.data)))
+		counters.writtenBatches.Add(1)
+		counters.writtenBytes.Add(int64(len(chunk.data)))
+	}
+	done <- nil
+}
+
+func reportCSVPipeline(ctx context.Context, done <-chan struct{}, counters *csvPipelineCounters) {
+	ticker := time.NewTicker(csvPipelineReportEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			printCSVPipelineReport("progress", counters)
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func printCSVPipelineReport(stage string, counters *csvPipelineCounters) {
+	fmt.Fprintf(os.Stderr,
+		"csv pipeline: %s objects=%d/%d read_batches=%d read_queue_blocks=%d read_queue_rows=%d processed_batches=%d write_queue_batches=%d write_queue_bytes=%d visible_rows=%d physical_rows=%d written_batches=%d written_bytes=%d read_ms=%d process_ms=%d write_ms=%d mem_available=%d mem_floor=%d mem_waits=%d\n",
+		stage,
+		counters.processedObjects.Load(),
+		counters.totalObjects,
+		counters.readBatches.Load(),
+		counters.readQueuedBlocks.Load(),
+		counters.readQueuedRows.Load(),
+		counters.processedBatches.Load(),
+		counters.queuedBatches.Load(),
+		counters.queuedBytes.Load(),
+		counters.visibleRows.Load(),
+		counters.physicalRows.Load(),
+		counters.writtenBatches.Load(),
+		counters.writtenBytes.Load(),
+		counters.readNanos.Load()/int64(time.Millisecond),
+		counters.processNanos.Load()/int64(time.Millisecond),
+		counters.writeNanos.Load()/int64(time.Millisecond),
+		counters.memoryAvailable.Load(),
+		counters.memoryFloor.Load(),
+		counters.memoryWaits.Load(),
+	)
 }
 
 // WriteCSV writes a LogicalTableView with the given schema as CSV to w.
@@ -837,6 +1533,39 @@ func writeSQLLoadCSVRow(w io.Writer, colTypes []types.Type, fields []string, nul
 			typ = colTypes[i]
 		}
 		isNull := i < len(nulls) && nulls[i]
+		if err := writeSQLLoadCSVField(w, typ, field, isNull); err != nil {
+			return err
+		}
+	}
+	_, err := io.WriteString(w, "\n")
+	return err
+}
+
+func writeProjectedCSVRowFromVecs(
+	w io.Writer,
+	colTypes []types.Type,
+	vecs []*vector.Vector,
+	physicalPositions []int,
+	rowIdx int,
+) error {
+	for i, pos := range physicalPositions {
+		if i > 0 {
+			if _, err := io.WriteString(w, ","); err != nil {
+				return err
+			}
+		}
+		typ := types.Type{}
+		if i < len(colTypes) {
+			typ = colTypes[i]
+		}
+		field := ""
+		isNull := true
+		if pos >= 0 && pos < len(vecs) && vecs[pos] != nil {
+			isNull = vecs[pos].IsNull(uint64(rowIdx))
+			if !isNull {
+				field = vecValueToString(vecs[pos], rowIdx)
+			}
+		}
 		if err := writeSQLLoadCSVField(w, typ, field, isNull); err != nil {
 			return err
 		}

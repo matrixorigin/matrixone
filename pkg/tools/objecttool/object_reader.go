@@ -188,7 +188,7 @@ func (r *ObjectReader) ReadBlock(ctx context.Context, blockIdx uint32) (*batch.B
 		return nil, nil, err
 	}
 
-	release := func() {
+	releaseIOVector := func() {
 		objectio.ReleaseIOVector(&ioVectors)
 	}
 
@@ -197,11 +197,16 @@ func (r *ObjectReader) ReadBlock(ctx context.Context, blockIdx uint32) (*batch.B
 	for i := range colIdxs {
 		obj, err := objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
 		if err != nil {
-			release()
+			releaseIOVector()
 			return nil, nil, err
 		}
 		bat.Vecs[i] = obj.(*vector.Vector)
 		bat.SetRowCount(bat.Vecs[i].Length())
+	}
+
+	release := func() {
+		bat.Clean(r.mp)
+		releaseIOVector()
 	}
 
 	return bat, release, nil
@@ -225,23 +230,28 @@ func (r *ObjectReader) ReadBlockCommitTS(ctx context.Context, blockIdx uint32) (
 		return nil, nil, err
 	}
 
-	release := func() {
+	releaseIOVector := func() {
 		objectio.ReleaseIOVector(&ioVectors)
 	}
 
 	obj, err := objectio.Decode(ioVectors.Entries[0].CachedData.Bytes())
 	if err != nil {
-		release()
+		releaseIOVector()
 		return nil, nil, err
 	}
 	vec := obj.(*vector.Vector)
 	if vec.GetType().Oid != types.T_TS {
-		release()
+		releaseIOVector()
 		return nil, nil, moerr.NewInternalErrorf(ctx, "commit TS column type mismatch: expected TS, got %s", vec.GetType().String())
 	}
 	if vec.GetNulls().GetCardinality() == vec.Length() {
-		release()
+		vec.Free(r.mp)
+		releaseIOVector()
 		return nil, func() {}, nil
+	}
+	release := func() {
+		vec.Free(r.mp)
+		releaseIOVector()
 	}
 	return vec, release, nil
 }

@@ -148,11 +148,18 @@ func (r *CheckpointReader) Info() *CheckpointInfo {
 		}
 		start := e.GetStart()
 		end := e.GetEnd()
-		if info.EarliestTS.IsEmpty() || start.LT(&info.EarliestTS) {
-			info.EarliestTS = start
+		if !start.IsEmpty() {
+			if info.EarliestTS.IsEmpty() || start.LT(&info.EarliestTS) {
+				info.EarliestTS = start
+			}
 		}
-		if end.GT(&info.LatestTS) {
-			info.LatestTS = end
+		if !end.IsEmpty() {
+			if info.LatestTS.IsEmpty() || end.GT(&info.LatestTS) {
+				info.LatestTS = end
+			}
+			if info.EarliestTS.IsEmpty() || end.LT(&info.EarliestTS) {
+				info.EarliestTS = end
+			}
 		}
 	}
 	return info
