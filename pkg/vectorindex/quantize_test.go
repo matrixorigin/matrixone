@@ -88,3 +88,34 @@ func TestInt8QuantizeParams(t *testing.T) {
 	require.Equal(t, 0.0, add)
 	require.False(t, math.IsInf(mul, 0))
 }
+
+func TestInt8QuantizeParamsEdgeCases(t *testing.T) {
+	// Across a variety of ranges, q(min) must hit -128 and q(max) must hit +127.
+	ranges := [][2]float64{
+		{-10, -2},     // all-negative
+		{-5, 5},       // symmetric about 0
+		{0.999, 1.001}, // tiny range near 1
+		{-1e6, 1e6},   // huge range
+		{0, 255},      // exactly the int8-span width
+	}
+	for _, r := range ranges {
+		mul, add := Int8QuantizeParams(r[0], r[1])
+		require.InDeltaf(t, -128.0, r[0]*mul+add, 1e-6, "min %v", r)
+		require.InDeltaf(t, 127.0, r[1]*mul+add, 1e-6, "max %v", r)
+		// a value inside the range stays inside [-128,127].
+		mid := (r[0] + r[1]) / 2
+		q := mid*mul + add
+		require.GreaterOrEqualf(t, q, -128.0-1e-6, "mid in range %v", r)
+		require.LessOrEqualf(t, q, 127.0+1e-6, "mid in range %v", r)
+	}
+
+	// dequant round-trip: x ~= (q - add) / mul within one quantization step.
+	min, max := -3.0, 7.0
+	mul, add := Int8QuantizeParams(min, max)
+	step := (max - min) / 255.0
+	for _, x := range []float64{-3, -1.5, 0, 2.2, 6.99} {
+		q := math.Round(x*mul + add)
+		deq := (q - add) / mul
+		require.InDeltaf(t, x, deq, step, "round-trip x=%v", x)
+	}
+}

@@ -58,3 +58,30 @@ func TestTrainInt8MinMax(t *testing.T) {
 	require.LessOrEqual(t, hi64, 3.0)
 	require.Less(t, lo64, hi64)
 }
+
+func TestTrainInt8MinMaxEdge(t *testing.T) {
+	// single value -> degenerate (v, v+1)
+	lo, hi := trainInt8MinMax([][]float32{{5}})
+	require.Equal(t, 5.0, lo)
+	require.Equal(t, 6.0, hi)
+
+	// all-negative data: bounds stay inside the data range and ordered.
+	lo, hi = trainInt8MinMax([][]float32{{-10, -8, -5, -3, -2}})
+	require.GreaterOrEqual(t, lo, -10.0)
+	require.LessOrEqual(t, hi, -2.0)
+	require.Less(t, lo, hi)
+
+	// subsampling path: > 2M values (stride > 1) must not panic and stays in range.
+	big := make([][]float32, 2500)
+	for i := range big {
+		v := make([]float32, 1000) // 2.5M values total
+		for j := range v {
+			v[j] = float32((i*1000 + j) % 1000) // cycles 0..999
+		}
+		big[i] = v
+	}
+	lo, hi = trainInt8MinMax(big)
+	require.GreaterOrEqual(t, lo, 0.0)
+	require.LessOrEqual(t, hi, 999.0)
+	require.Less(t, lo, hi)
+}
