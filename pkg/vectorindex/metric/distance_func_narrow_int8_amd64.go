@@ -37,11 +37,17 @@ import (
 )
 
 func init() {
-	if hasAVX512 {
+	switch {
+	case hasAVX512:
 		int8L2sqFn = l2sqInt8SIMD
 		int8IPFn = innerProductInt8SIMD
 		int8CosineFn = cosineDistanceInt8SIMD
 		int8L1Fn = l1DistanceInt8SIMD
+	case hasAVX2:
+		int8L2sqFn = l2sqInt8AVX2
+		int8IPFn = innerProductInt8AVX2
+		int8CosineFn = cosineDistanceInt8AVX2
+		int8L1Fn = l1DistanceInt8AVX2
 	}
 }
 

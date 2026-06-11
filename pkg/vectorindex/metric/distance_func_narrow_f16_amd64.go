@@ -45,11 +45,17 @@ import (
 )
 
 func init() {
-	if hasAVX512 {
+	switch {
+	case hasAVX512:
 		f16L2sqFn = l2sqF16SIMD
 		f16IPFn = innerProductF16SIMD
 		f16CosineFn = cosineDistanceF16SIMD
 		f16L1Fn = l1DistanceF16SIMD
+	case hasAVX2:
+		f16L2sqFn = l2sqF16AVX2
+		f16IPFn = innerProductF16AVX2
+		f16CosineFn = cosineDistanceF16AVX2
+		f16L1Fn = l1DistanceF16AVX2
 	}
 }
 
