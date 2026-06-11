@@ -214,13 +214,15 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 		default:
 			u.idxcfg.Ivfflat.CentroidType = u.tblcfg.KeyPartType
 		}
-		// QUANTIZATION: the entries are stored as the quantization type (the base
-		// column and the f32 centroids are unchanged). Set VectorType to the entry
-		// (quantization) type so the SQL re-rank casts the narrow entries to f32.
-		// The query is still the base type (f32) and centroids stay f32 (set above).
+		// QUANTIZATION: entries are stored as the quantization (down-cast) type,
+		// independent of the base column. The centroids are forced to f32 (decoupled
+		// — accurate assignment, fast f32 search) for ANY base type, including f64;
+		// the query is decoded to f32 for the centroid search and to the entry type
+		// for the re-rank. VectorType = the entry/quantization type.
 		if u.param.Quantization != "" {
 			if qt, ok := vectorindex.QuantizationToVectorType(u.param.Quantization); ok {
 				u.idxcfg.Ivfflat.VectorType = int32(qt)
+				u.idxcfg.Ivfflat.CentroidType = int32(types.T_array_float32)
 			}
 		}
 
@@ -241,18 +243,14 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 	faVec := tf.ctr.argVecs[1]
 
-	switch faVec.GetType().Oid {
-	case types.T_array_float32:
-		return runIvfSearchVector[float32](tf, u, proc, faVec, nthRow)
-	case types.T_array_float64:
+	// Dispatch on the CENTROID type, not the base type. Only a plain f64 index
+	// (f64 base, no quantization) keeps f64 centroids; every other case — f32 base,
+	// narrow base, or any base under QUANTIZATION — searches f32 centroids, so the
+	// query is decoded to float32 regardless of its column type.
+	if u.idxcfg.Ivfflat.CentroidType == int32(types.T_array_float64) {
 		return runIvfSearchVector[float64](tf, u, proc, faVec, nthRow)
-	case types.T_array_bf16, types.T_array_float16, types.T_array_int8:
-		// Narrow entries -> f32 centroids: decode the query to float32 and run the
-		// float32 centroid search. The SQL re-rank casts narrow entries to f32.
-		return runIvfSearchVectorNarrow(tf, u, proc, faVec, nthRow)
-	default:
-		return moerr.NewInternalError(proc.Ctx, "unsupported ivfflat vector type")
 	}
+	return runIvfSearchVectorToF32(tf, u, proc, faVec, nthRow)
 }
 
 func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchState, proc *process.Process, faVec *vector.Vector, nthRow int) (err error) {
@@ -262,15 +260,24 @@ func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchStat
 	return runIvfSearchQuery(tf, u, proc, types.BytesToArray[T](faVec.GetBytesAt(nthRow)))
 }
 
-// runIvfSearchVectorNarrow decodes a narrow (bf16/f16/int8) query to float32 and
-// runs the float32 centroid search (centroids are f32 for narrow entries).
-func runIvfSearchVectorNarrow(tf *TableFunction, u *ivfSearchState, proc *process.Process, faVec *vector.Vector, nthRow int) error {
+// runIvfSearchVectorToF32 decodes the query (of any vector column type: f32, f64,
+// or narrow bf16/f16/int8) to float32 and runs the float32 centroid search. The
+// SQL re-rank then encodes the query in the entry/quantization type.
+func runIvfSearchVectorToF32(tf *TableFunction, u *ivfSearchState, proc *process.Process, faVec *vector.Vector, nthRow int) error {
 	if faVec.IsNull(uint64(nthRow)) {
 		return nil
 	}
 	b := faVec.GetBytesAt(nthRow)
 	var fa []float32
 	switch faVec.GetType().Oid {
+	case types.T_array_float32:
+		fa = types.BytesToArray[float32](b)
+	case types.T_array_float64:
+		f64 := types.BytesToArray[float64](b)
+		fa = make([]float32, len(f64))
+		for i, x := range f64 {
+			fa[i] = float32(x)
+		}
 	case types.T_array_bf16:
 		fa = types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](b))
 	case types.T_array_float16:

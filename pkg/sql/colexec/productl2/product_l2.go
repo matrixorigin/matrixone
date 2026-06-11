@@ -274,43 +274,53 @@ func newMat[T types.RealNumbers](ctr *container, ap *Productl2, probes [][]T, nu
 		}
 	}
 
+	// T is the centroid (index) element type. T==float32 covers f32 centroids,
+	// which a base of any type (f32/f64/narrow) is decoded to; T==float64 is the
+	// plain f64 index where the base is f64 and reinterpreted directly.
+	_, toF32 := any(*new(T)).(float32)
+	oid := tblColVec.GetType().Oid
 	for j := 0; j < probeCount; j++ {
 		if tblColVec.IsNull(uint64(j)) {
 			probes[j] = nullvec
 			continue
 		}
 		b := tblColVec.GetBytesAt(j)
-		// Narrow base types decode to float32 (the centroid index type). The
-		// any().([]T) assertions are valid only because probe() routes narrow
-		// columns through probeRun[float32], so T == float32 here.
-		switch tblColVec.GetType().Oid {
-		case types.T_array_bf16:
-			probes[j] = any(types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](b))).([]T)
-		case types.T_array_float16:
-			probes[j] = any(types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](b))).([]T)
-		case types.T_array_int8:
-			probes[j] = any(types.Int8ToFloat32Slice(types.BytesToArray[int8](b))).([]T)
-		default:
-			probes[j] = types.BytesToArray[T](b)
+		if !toF32 {
+			probes[j] = types.BytesToArray[T](b) // f64 centroids: base is f64
+			continue
 		}
+		var f32 []float32
+		switch oid {
+		case types.T_array_float64:
+			f64 := types.BytesToArray[float64](b)
+			f32 = make([]float32, len(f64))
+			for i, x := range f64 {
+				f32[i] = float32(x)
+			}
+		case types.T_array_bf16:
+			f32 = types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](b))
+		case types.T_array_float16:
+			f32 = types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](b))
+		case types.T_array_int8:
+			f32 = types.Int8ToFloat32Slice(types.BytesToArray[int8](b))
+		default: // T_array_float32
+			f32 = types.BytesToArray[float32](b)
+		}
+		probes[j] = any(f32).([]T)
 	}
 
 	return probes, nil
 }
 
 func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.CallResult) error {
-	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
-	switch ctr.inBat.Vecs[tblColPos].GetType().Oid {
-	case types.T_array_float32:
-		return probeRun[float32](ctr, ap, proc, result)
-	case types.T_array_float64:
+	// Dispatch on the CENTROID (index) type, not the base type: under QUANTIZATION
+	// an f64/narrow base is assigned against f32 centroids, so the base must be
+	// decoded to f32 (in newMat) to match. Only a plain f64 index keeps f64.
+	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
+	if ctr.bat.Vecs[centroidColPos].GetType().Oid == types.T_array_float64 {
 		return probeRun[float64](ctr, ap, proc, result)
-	case types.T_array_bf16, types.T_array_float16, types.T_array_int8:
-		// Narrow base vectors are assigned against f32 centroids: decode the base
-		// to float32 (in newMat) and search the f32 centroid index.
-		return probeRun[float32](ctr, ap, proc, result)
 	}
-	return nil
+	return probeRun[float32](ctr, ap, proc, result)
 }
 
 func (ctr *container) release() {

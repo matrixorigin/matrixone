@@ -236,7 +236,7 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if q := idx.IndexOption.Quantization; q != "" {
 		if _, ok := vectorindex.QuantizationToVectorType(q); !ok {
 			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
-				"ivfflat: unsupported quantization '%s' (supported: 'float16', 'int8')", q))
+				"ivfflat: unsupported quantization '%s' (supported: 'float32', 'float16', 'bf16', 'int8')", q))
 		}
 		res[catalog.Quantization] = catalog.ToLower(q)
 	}

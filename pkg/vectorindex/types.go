@@ -26,17 +26,20 @@ import (
 )
 
 // QuantizationToVectorType maps a CREATE INDEX QUANTIZATION='...' value to the
-// vector element type the ivfflat ENTRIES are stored in (the base column and
-// centroids are unaffected). The accepted names are the predefined usearch/cuVS
-// quantization names (metric.Quantization_*_Str). Only the ones that map to a
-// narrow MO vector type quantize the entries: float16 -> vecf16, int8 -> vecint8.
-// float32/float64/uint8 (and "") mean no quantization -> ok=false (entries keep
-// the base type). bf16 is NOT a quantization name (usearch/cuVS have none); it is
-// only available as a narrow base-column type.
+// narrow vector element type the ivfflat ENTRIES are down-cast to (the base column
+// and centroids are unaffected). The accepted names are the canonical
+// metric.Quantization_*_Str constants (case-insensitive): float16 -> vecf16,
+// bf16 -> vecbf16, int8 -> vecint8. float16/bf16 are float formats (plain cast);
+// int8 uses the trained scalar quantizer. float32/float64/uint8/"" -> ok=false
+// (no quantization; entries keep the base type).
 func QuantizationToVectorType(q string) (types.T, bool) {
 	switch strings.ToLower(strings.TrimSpace(q)) {
+	case metric.Quantization_F32_Str:
+		return types.T_array_float32, true
 	case metric.Quantization_F16_Str:
 		return types.T_array_float16, true
+	case metric.Quantization_BF16_Str:
+		return types.T_array_bf16, true
 	case metric.Quantization_INT8_Str:
 		return types.T_array_int8, true
 	}

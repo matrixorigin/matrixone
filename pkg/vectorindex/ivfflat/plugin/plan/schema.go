@@ -147,22 +147,26 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Typ:     plan.Type{Id: int32(types.T_int64)},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
-		// Centroid type is decoupled from the input/quantization type. For narrow
-		// input (bf16/f16/int8) store centroids as f32 — best recall (no centroid
-		// quantization error), fast f32 SIMD centroid search, negligible RAM for
-		// the few centroids. Entries keep the narrow type (the memory win). Native
-		// f32/f64 inputs keep their own type. (cuVS allows the centroid type to
-		// optionally follow the quantization type; that mode is selected with the
-		// QUANTIZATION= option.)
+		// Centroid type is decoupled from the entry type. Centroids are f32 whenever
+		// the entries are NOT a plain f32/f64 column: i.e. for a narrow base
+		// (bf16/f16/int8) or for ANY base under QUANTIZATION (incl. f64). f32 gives
+		// accurate assignment, fast f32 search, and tiny RAM for the few centroids;
+		// the entries carry the memory win. A plain f32/f64 column keeps its type.
 		centroidTyp := plan.Type{
 			Id:    colMap[colName].Typ.Id,
 			Width: colMap[colName].Typ.Width,
 			Scale: colMap[colName].Typ.Scale,
 		}
+		quantized := indexInfo.IndexOption != nil && indexInfo.IndexOption.Quantization != ""
 		switch types.T(centroidTyp.Id) {
 		case types.T_array_bf16, types.T_array_float16, types.T_array_int8:
 			centroidTyp.Id = int32(types.T_array_float32)
 			centroidTyp.Scale = 0
+		default:
+			if quantized {
+				centroidTyp.Id = int32(types.T_array_float32)
+				centroidTyp.Scale = 0
+			}
 		}
 		tableDefs[1].Cols[2] = &plan.ColDef{
 			Name:    catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
