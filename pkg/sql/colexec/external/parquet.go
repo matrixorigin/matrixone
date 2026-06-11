@@ -1109,6 +1109,22 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				types.Enum(0),
 			)
 		}
+	case types.T_array_float32:
+		if !isPlainStringLikeType(st) {
+			break
+		}
+		width := int(dt.Width)
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToArray[float32](proc.Ctx, mp, page, proc, vec, width)
+		}
+	case types.T_array_float64:
+		if !isPlainStringLikeType(st) {
+			break
+		}
+		width := int(dt.Width)
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToArray[float64](proc.Ctx, mp, page, proc, vec, width)
+		}
 	}
 	if mp.mapper != nil {
 		return mp
@@ -1345,6 +1361,81 @@ func processStringToJson(
 			return wrapParseError(ctx, i, parseErr)
 		}
 		if err := vector.AppendByteJson(vec, val, false, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func processStringToArray[T types.RealNumbers](
+	ctx context.Context,
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	width int,
+) error {
+	numRows := int(page.NumRows())
+	if numRows == 0 {
+		return nil
+	}
+	if width <= 0 {
+		return moerr.NewInvalidInputf(ctx, "invalid vector dimension %d", width)
+	}
+
+	nc, err := prepareNullCheck(ctx, mp, page)
+	if err != nil {
+		return err
+	}
+
+	var loader strLoader
+	var indices []int32
+	dict := page.Dictionary()
+	if dict == nil {
+		loader.init(page.Data())
+		if err := validateStringDataCount(ctx, &loader, nc.actualNonNulls); err != nil {
+			return err
+		}
+	} else {
+		loader.init(dict.Page().Data())
+		data := page.Data()
+		indices = data.Int32()
+		if err := validateDictionaryIndicesCount(ctx, indices, nc.actualNonNulls); err != nil {
+			return err
+		}
+		if err := ensureDictionaryIndexes(ctx, int(dict.Len()), indices); err != nil {
+			return err
+		}
+	}
+
+	if err := vec.PreExtend(vec.Length()+numRows, proc.Mp()); err != nil {
+		return err
+	}
+	for i := 0; i < numRows; i++ {
+		if nc.isNull(i) {
+			if err := vector.AppendArray[T](vec, nil, true, proc.Mp()); err != nil {
+				return err
+			}
+			continue
+		}
+
+		var data []byte
+		if dict == nil {
+			data = loader.loadNext()
+		} else {
+			idx := indices[loader.next]
+			loader.next++
+			data = loader.loadAt(idx)
+		}
+
+		val, parseErr := types.StringToArray[T](util.UnsafeBytesToString(bytes.TrimSpace(data)))
+		if parseErr != nil {
+			return wrapParseError(ctx, i, parseErr)
+		}
+		if width != types.MaxArrayDimension && len(val) != width {
+			return moerr.NewArrayDefMismatchNoCtx(width, len(val))
+		}
+		if err := vector.AppendArray[T](vec, val, false, proc.Mp()); err != nil {
 			return err
 		}
 	}
@@ -2139,6 +2230,14 @@ func decodeDecimal256Values(ctx context.Context, kind parquet.Kind, data encodin
 
 func isDecimalLogicalType(lt *format.LogicalType) bool {
 	return lt != nil && lt.Decimal != nil
+}
+
+func isPlainStringLikeType(st parquet.Type) bool {
+	if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
+		return false
+	}
+	lt := st.LogicalType()
+	return lt == nil || lt.UTF8 != nil
 }
 
 func decimalBytesToDecimal64(ctx context.Context, b []byte) (types.Decimal64, error) {
