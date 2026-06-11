@@ -196,6 +196,26 @@ DROP TABLE dup_t;
 DROP TABLE dup_p;
 DROP TABLE dup_s;
 
+-- Duplicate-match on the new UPDATE path without FK constraints must still
+-- update each target row once instead of producing duplicate primary keys.
+DROP TABLE IF EXISTS dup_no_fk_t;
+DROP TABLE IF EXISTS dup_no_fk_s;
+CREATE TABLE dup_no_fk_t (
+    id INT PRIMARY KEY,
+    v VARCHAR(20)
+);
+CREATE TABLE dup_no_fk_s (
+    t_id INT,
+    v VARCHAR(20)
+);
+INSERT INTO dup_no_fk_t VALUES (1, 'orig'), (2, 'orig');
+INSERT INTO dup_no_fk_s VALUES (1, 'first'), (1, 'second'), (2, 'only');
+UPDATE dup_no_fk_t SET v = s.v FROM dup_no_fk_s s WHERE s.t_id = dup_no_fk_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM dup_no_fk_t;
+SELECT id, COUNT(*) AS per_id_cnt FROM dup_no_fk_t GROUP BY id ORDER BY id;
+DROP TABLE dup_no_fk_t;
+DROP TABLE dup_no_fk_s;
+
 DROP TABLE IF EXISTS company;
 DROP TABLE IF EXISTS vec_join_case;
 DROP TABLE IF EXISTS region;

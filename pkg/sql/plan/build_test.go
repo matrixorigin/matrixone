@@ -720,6 +720,30 @@ func TestUpdate(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = NATION2.N_NAME FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("build UPDATE FROM plan: %v", err)
+	}
+
+	tableDef := mock.ctxt.tables["nation"]
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+		if len(node.GroupBy) != len(tableDef.Cols) || len(node.AggList) != 1 {
+			continue
+		}
+		if fn := node.AggList[0].GetF(); fn != nil && fn.Func.ObjName == "any_value" {
+			return
+		}
+	}
+	t.Fatalf("UPDATE FROM should dedup duplicate source matches with AGG any_value over update columns")
+}
+
 func TestUpdateFallbackMultiTargetGeneratedColumnsKeepProjectLayout(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
