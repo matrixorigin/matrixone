@@ -59,6 +59,23 @@ insert into ext_big select * from big_src;
 select count(*), min(a), max(a) from ext_big;
 count(*)    min(a)    max(a)
 100000    1    100000
+drop table if exists remote_src;
+create table remote_src(a int, b varchar(30));
+insert into remote_src select result, concat('r-', result) from generate_series(1, 4400000) g;
+select mo_ctl('dn', 'flush', 'wext.remote_src');
+mo_ctl(dn, flush, wext.remote_src)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select sleep(1);
+sleep(1)
+0
+drop table if exists ext_remote;
+create external table ext_remote(a int, b varchar(30))
+infile{'filepath'='stage://wstage/wext_remote_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_remote_%U.csv'}
+fields terminated by ',';
+insert into ext_remote select * from remote_src;
+select count(*), min(a), max(a) from ext_remote;
+count(*)    min(a)    max(a)
+4400000    1    4400000
 drop table if exists ext_jl;
 create external table ext_jl(a int, b varchar(20), c double)
 infile{'filepath'='stage://wstage/wext_jl_*.jl', 'format'='jsonline', 'write_file_pattern'='stage://wstage/wext_jl_%U.jl', 'jsondata'='object'}
@@ -137,6 +154,8 @@ drop table if exists ext_tricky;
 drop table if exists tricky_src;
 drop table if exists ext_big;
 drop table if exists big_src;
+drop table if exists ext_remote;
+drop table if exists remote_src;
 drop table if exists ext_wide_csv;
 drop table if exists ext_wide_jl;
 drop table if exists wide_src;

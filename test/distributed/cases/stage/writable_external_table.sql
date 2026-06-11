@@ -63,6 +63,27 @@ fields terminated by ',';
 insert into ext_big select * from big_src;
 select count(*), min(a), max(a) from ext_big;
 
+-- ---------- remote run (multi-CN dispatch) ----------
+-- A flushed source above the multi-CN stats thresholds (>512 blocks, like the
+-- optimizer/shuffle cases) compiles the INSERT to a MULTICN plan: on a
+-- multi-CN cluster, source-scan scopes — with the external-write insert on
+-- top — are dispatched to remote CNs through the pipeline protocol,
+-- exercising the to_external encode/decode and the remote writer rebuild; on
+-- a single CN it degenerates to the parallel case. Results are identical
+-- either way.
+drop table if exists remote_src;
+create table remote_src(a int, b varchar(30));
+insert into remote_src select result, concat('r-', result) from generate_series(1, 4400000) g;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'wext.remote_src');
+select sleep(1);
+drop table if exists ext_remote;
+create external table ext_remote(a int, b varchar(30))
+infile{'filepath'='stage://wstage/wext_remote_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_remote_%U.csv'}
+fields terminated by ',';
+insert into ext_remote select * from remote_src;
+select count(*), min(a), max(a) from ext_remote;
+
 -- ---------- JSONLine writable external table ----------
 drop table if exists ext_jl;
 create external table ext_jl(a int, b varchar(20), c double)
@@ -146,6 +167,8 @@ drop table if exists ext_tricky;
 drop table if exists tricky_src;
 drop table if exists ext_big;
 drop table if exists big_src;
+drop table if exists ext_remote;
+drop table if exists remote_src;
 drop table if exists ext_wide_csv;
 drop table if exists ext_wide_jl;
 drop table if exists wide_src;
