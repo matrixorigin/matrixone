@@ -47,10 +47,11 @@ var runSql = sqlexec.RunSql
 type IvfflatSearchIndex[T types.RealNumbers] struct {
 	Version   int64
 	Centroids cache.VectorIndexSearchIf
-	// InvScale is the int8 scalar-quantizer multiplier (127/P99.9(|x|)) loaded
-	// from metadata; the query is multiplied by it before quantizing to vecint8,
-	// matching how the entries were quantized at build. 1.0 when not int8-quantized.
-	InvScale float64
+	// QuantMul/QuantAdd are the int8 scalar-quantizer params (q(x)=round(x*mul+add))
+	// derived from the trained [min,max] in metadata; the query uses the same
+	// transform as the entries. Defaults (1,0) = identity when not int8-quantized.
+	QuantMul float64
+	QuantAdd float64
 }
 
 // This is the Ivf search implementation that implement VectorIndexSearchIf interface
@@ -131,17 +132,18 @@ func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg
 func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) (err error) {
 
 	idx.Version = idxcfg.Ivfflat.Version
-	idx.InvScale = 1.0
+	idx.QuantMul = 1.0
+	idx.QuantAdd = 0.0
 
 	err = idx.LoadCentroids(proc, idxcfg, tblcfg, nthread)
 	if err != nil {
 		return err
 	}
 
-	// int8 QUANTIZATION: load the trained scalar-quantizer multiplier so the query
-	// is quantized the same way the entries were.
+	// int8 QUANTIZATION: load the trained [min,max] and derive the same transform
+	// the entries were quantized with, so the query maps identically.
 	if types.T(idxcfg.Ivfflat.VectorType) == types.T_array_int8 {
-		if err = idx.loadQuantizeScale(proc, tblcfg); err != nil {
+		if err = idx.loadQuantizeBounds(proc, tblcfg); err != nil {
 			return err
 		}
 	}
@@ -149,21 +151,31 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vec
 	return nil
 }
 
-func (idx *IvfflatSearchIndex[T]) loadQuantizeScale(proc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig) error {
-	sql := fmt.Sprintf("SELECT CAST(`%s` AS DOUBLE) FROM `%s`.`%s` WHERE `%s` = '%s'",
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, tblcfg.DbName, tblcfg.MetadataTable,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, catalog.SystemSI_IVFFLAT_Metadata_QuantizeScale)
-	res, err := runSql(proc, sql)
+func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig) error {
+	read := func(key string) (float64, bool, error) {
+		sql := fmt.Sprintf("SELECT CAST(`%s` AS DOUBLE) FROM `%s`.`%s` WHERE `%s` = '%s'",
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, tblcfg.DbName, tblcfg.MetadataTable,
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, key)
+		res, err := runSql(proc, sql)
+		if err != nil {
+			return 0, false, err
+		}
+		defer res.Close()
+		if len(res.Batches) == 0 || res.Batches[0].RowCount() == 0 {
+			return 0, false, nil
+		}
+		return vector.GetFixedAtNoTypeCheck[float64](res.Batches[0].Vecs[0], 0), true, nil
+	}
+	qmin, ok1, err := read(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin)
 	if err != nil {
 		return err
 	}
-	defer res.Close()
-	if len(res.Batches) == 0 || res.Batches[0].RowCount() == 0 {
-		return nil // no trained scale (e.g. pre-quantizer index) -> keep 1.0
+	qmax, ok2, err := read(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax)
+	if err != nil {
+		return err
 	}
-	v := vector.GetFixedAtNoTypeCheck[float64](res.Batches[0].Vecs[0], 0)
-	if v > 0 {
-		idx.InvScale = v
+	if ok1 && ok2 {
+		idx.QuantMul, idx.QuantAdd = vectorindex.Int8QuantizeParams(qmin, qmax)
 	}
 	return nil
 }
@@ -331,14 +343,14 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		case types.T_array_float16:
 			queryExpr = fmt.Sprintf("vecf16_from_base64('%s')", types.ArrayToBase64(types.Float32ToFloat16Slice(qf32)))
 		case types.T_array_int8:
-			// scale the query by the same trained multiplier as the entries, then
-			// quantize. InvScale==1.0 falls back to the raw cast (no quantizer).
+			// apply the same q(x)=x*mul+add transform as the entries, then round+clamp
+			// to int8. (mul,add)=(1,0) falls back to the raw cast (no quantizer).
 			sq := qf32
-			if idx.InvScale != 1.0 {
+			if idx.QuantMul != 1.0 || idx.QuantAdd != 0.0 {
 				sq = make([]float32, len(qf32))
-				s := float32(idx.InvScale)
+				mul, add := float32(idx.QuantMul), float32(idx.QuantAdd)
 				for i, x := range qf32 {
-					sq[i] = x * s
+					sq[i] = x*mul + add
 				}
 			}
 			queryExpr = fmt.Sprintf("vecint8_from_base64('%s')", types.ArrayToBase64(types.Float32ToInt8Slice(sq)))

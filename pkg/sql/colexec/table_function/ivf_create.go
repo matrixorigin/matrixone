@@ -154,73 +154,69 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	}
 	logutil.Infof("IVFFLAT END: After Kmeans clustering, insert centroids to table")
 
-	// int8 QUANTIZATION: train the symmetric global scalar quantizer over the
-	// sample and persist its multiplier in the metadata table. Entries (build) and
-	// the query (search) both multiply by this before casting to vecint8, so the
-	// int8 distance is a constant factor off the true distance — ranking exact, in
-	// pure integer arithmetic. (bf16/float16 are float formats and need no scale.)
+	// int8 QUANTIZATION (cuVS-style asymmetric scalar quantizer): train [min,max]
+	// over the sample and persist them in the metadata table. Entries (build) and
+	// the query (search) map [min,max] onto the full int8 range [-128,127] with the
+	// same q(x)=round(x*mul+add). Using both bounds (not a symmetric scale) uses the
+	// whole range for offset data. (bf16/float16 are float formats and need none.)
 	if qt, ok := vectorindex.QuantizationToVectorType(u.param.Quantization); ok && qt == types.T_array_int8 {
-		invScale := trainInt8InvScale(data)
-		delSQL := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` = '%s'",
-			u.tblcfg.DbName, u.tblcfg.MetadataTable,
-			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, catalog.SystemSI_IVFFLAT_Metadata_QuantizeScale)
-		insSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`) VALUES ('%s', '%.9g')",
+		qmin, qmax := trainInt8MinMax(data)
+		insSQL := fmt.Sprintf(
+			"INSERT INTO `%s`.`%s` (`%s`, `%s`) VALUES ('%s', '%.9g'), ('%s', '%.9g') "+
+				"ON DUPLICATE KEY UPDATE `%s` = VALUES(`%s`)",
 			u.tblcfg.DbName, u.tblcfg.MetadataTable,
 			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-			catalog.SystemSI_IVFFLAT_Metadata_QuantizeScale, invScale)
-		for _, s := range []string{delSQL, insSQL} {
-			res, err := ivf_runSql(sqlexec.NewSqlProcess(proc), s)
-			if err != nil {
-				return err
-			}
-			res.Close()
+			catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin, qmin,
+			catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax, qmax,
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, catalog.SystemSI_IVFFLAT_TblCol_Metadata_val)
+		res, err := ivf_runSql(sqlexec.NewSqlProcess(proc), insSQL)
+		if err != nil {
+			return err
 		}
-		logutil.Infof("IVFFLAT: int8 quantizer inv_scale=%g stored", invScale)
+		res.Close()
+		logutil.Infof("IVFFLAT: int8 quantizer min=%g max=%g stored", qmin, qmax)
 	}
 
 	return nil
 }
 
-// trainInt8InvScale returns 127 / P99.9(|x|) over the sample — the multiplier for
-// the symmetric global int8 scalar quantizer (q(x)=round(x*invScale), clamped to
-// int8). A high percentile (not max) clips outliers for better recall. Returns
-// 1.0 for empty / all-zero data. Subsamples to bound memory/time on large samples.
-func trainInt8InvScale[T types.RealNumbers](data [][]T) float64 {
+// trainInt8MinMax returns (P0.1, P99.9) of the sample values — the bounds for the
+// asymmetric int8 scalar quantizer. Percentiles (not raw min/max) clip outliers
+// so the quantization grid isn't wasted on a few extreme values. Returns (-1,1)
+// for empty data and widens a degenerate range. Subsamples to bound cost.
+func trainInt8MinMax[T types.RealNumbers](data [][]T) (float64, float64) {
 	const maxVals = 2_000_000
 	total := 0
 	for _, v := range data {
 		total += len(v)
 	}
 	if total == 0 {
-		return 1.0
+		return -1, 1
 	}
 	stride := 1
 	if total > maxVals {
 		stride = total/maxVals + 1
 	}
-	abs := make([]float64, 0, total/stride+1)
+	vals := make([]float64, 0, total/stride+1)
 	k := 0
 	for _, v := range data {
 		for _, x := range v {
 			if k%stride == 0 {
-				a := float64(x)
-				if a < 0 {
-					a = -a
-				}
-				abs = append(abs, a)
+				vals = append(vals, float64(x))
 			}
 			k++
 		}
 	}
-	if len(abs) == 0 {
-		return 1.0
+	if len(vals) == 0 {
+		return -1, 1
 	}
-	slices.Sort(abs)
-	p := abs[int(float64(len(abs)-1)*0.999)]
-	if p == 0 {
-		return 1.0
+	slices.Sort(vals)
+	lo := vals[int(float64(len(vals)-1)*0.001)]
+	hi := vals[int(float64(len(vals)-1)*0.999)]
+	if hi <= lo {
+		hi = lo + 1
 	}
-	return 127.0 / p
+	return lo, hi
 }
 
 func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {

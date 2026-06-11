@@ -386,10 +386,11 @@ const (
 	SystemSI_IVFFLAT_TblCol_Metadata_val = "__mo_index_val"
 
 	// IVF_FLAT MetadataTable - well-known keys (rows in the key/val metadata table)
-	// SystemSI_IVFFLAT_Metadata_QuantizeScale stores the int8 scalar-quantizer
-	// multiplier (127 / P99.9(|x|)); entries and the query multiply by it before
-	// casting to vecint8.
-	SystemSI_IVFFLAT_Metadata_QuantizeScale = "quantize_scale"
+	// QuantizeMin/QuantizeMax store the trained int8 scalar-quantizer bounds
+	// (cuVS-style asymmetric): [min,max] is mapped to the full int8 range [-128,127]
+	// via q(x)=round(x*mul+add). Entries and the query use the same transform.
+	SystemSI_IVFFLAT_Metadata_QuantizeMin = "quantize_min"
+	SystemSI_IVFFLAT_Metadata_QuantizeMax = "quantize_max"
 
 	// IVF_FLAT Centroids - Column names
 	SystemSI_IVFFLAT_TblCol_Centroids_version  = "__mo_index_centroid_version"

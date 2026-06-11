@@ -43,6 +43,24 @@ func QuantizationToVectorType(q string) (types.T, bool) {
 	return 0, false
 }
 
+// Int8QuantizeParams returns (mul, add) for the cuVS-style asymmetric int8 scalar
+// quantizer that maps [min,max] onto the full int8 range [-128,127]:
+//
+//	q(x) = round(x*mul + add), clamped to [-128,127]
+//
+// add folds the -min offset and the -128 int8 shift into one constant, so both
+// the build (cast(base*mul+add as vecint8)) and search apply it with a single
+// multiply-add. A degenerate range (max<=min) falls back to identity.
+func Int8QuantizeParams(min, max float64) (mul, add float64) {
+	rng := max - min
+	if rng <= 0 {
+		return 1.0, 0.0
+	}
+	mul = 255.0 / rng
+	add = -min*mul - 128.0
+	return mul, add
+}
+
 // QuantizationSQLTypeName returns the SQL type name for a vector element type,
 // for use in CAST(... AS <name>(dim)).
 func QuantizationSQLTypeName(t types.T) string {

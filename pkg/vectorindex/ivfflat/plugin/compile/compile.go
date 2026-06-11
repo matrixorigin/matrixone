@@ -250,6 +250,33 @@ func indexColCount(ctx compileplugin.CompileContext, indexDef *plan.IndexDef,
 	return n, nil
 }
 
+// readQuantizeBound reads a scalar DOUBLE metadata value (e.g. quantize_min /
+// quantize_max) by key. found=false when the row is absent (e.g. a pre-quantizer
+// index), in which case the caller falls back to a raw cast.
+func readQuantizeBound(ctx compileplugin.CompileContext, qryDatabase, metaTbl, key string) (val float64, found bool, err error) {
+	sql := fmt.Sprintf("SELECT CAST(`%s` AS DOUBLE) FROM `%s`.`%s` WHERE `%s` = '%s'",
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, qryDatabase, metaTbl,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, key)
+	rs, err := ctx.RunSqlWithResult(sql)
+	if err != nil {
+		return 0, false, err
+	}
+	defer rs.Close()
+	rs.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		if len(cols) == 0 {
+			return false
+		}
+		rows := executor.GetFixedRows[float64](cols[0])
+		if len(rows) == 0 {
+			return false
+		}
+		val = rows[0]
+		found = true
+		return false
+	})
+	return val, found, nil
+}
+
 // ivfIndexMetaTable is lifted from Scope.handleIvfIndexMetaTable
 // (pkg/sql/compile/ddl_index_algo.go:221).
 func ivfIndexMetaTable(ctx compileplugin.CompileContext, indexDef *plan.IndexDef, qryDatabase string) error {
@@ -416,13 +443,23 @@ func ivfIndexEntriesTable(
 					}
 				}
 				if qt == types.T_array_int8 {
-					// Symmetric scalar quantizer: multiply by the trained inv_scale
-					// (stored in metadata by ivf_create) before casting, so int8 uses
-					// the full range. float16 needs no scale (it preserves range).
-					scaleSub := fmt.Sprintf("(SELECT CAST(`%s` AS DOUBLE) FROM `%s`.`%s` WHERE `%s` = '%s')",
-						catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, qryDatabase, metadataTableName,
-						catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, catalog.SystemSI_IVFFLAT_Metadata_QuantizeScale)
-					entrySelectExpr = fmt.Sprintf("cast(`%s` * %s as vecint8(%d))", indexColName, scaleSub, dim)
+					// cuVS-style asymmetric scalar quantizer: map the trained
+					// [min,max] (stored in metadata by ivf_create) onto the full int8
+					// range via q(x)=round(x*mul+add). float16 needs no scale.
+					qmin, ok1, err := readQuantizeBound(ctx, qryDatabase, metadataTableName, catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin)
+					if err != nil {
+						return err
+					}
+					qmax, ok2, err := readQuantizeBound(ctx, qryDatabase, metadataTableName, catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax)
+					if err != nil {
+						return err
+					}
+					if ok1 && ok2 {
+						mul, add := vectorindex.Int8QuantizeParams(qmin, qmax)
+						entrySelectExpr = fmt.Sprintf("cast(`%s` * %.9g + (%.9g) as vecint8(%d))", indexColName, mul, add, dim)
+					} else {
+						entrySelectExpr = fmt.Sprintf("cast(`%s` as vecint8(%d))", indexColName, dim)
+					}
 				} else {
 					entrySelectExpr = fmt.Sprintf("cast(`%s` as %s(%d))", indexColName, vectorindex.QuantizationSQLTypeName(qt), dim)
 				}
