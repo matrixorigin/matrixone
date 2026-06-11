@@ -86,16 +86,27 @@ func ResolveNarrowDistanceFn(oid types.T, metric MetricType) (NarrowDistanceFn, 
 // float (bf16/f16 are floating-point; Go has no 16-bit-float ALU).
 // ----------------------------------------------------------------------------
 
+// bf16 kernel selection. The SIMD build (distance_func_narrow_amd64.go) swaps
+// these to its archsimd implementations in init() when AVX-512 is available;
+// otherwise they stay the pure-Go fallbacks defined below (which also remain the
+// equivalence oracle the SIMD tests compare against).
+var (
+	bf16L2sqFn   = l2sqBF16
+	bf16IPFn     = innerProductBF16
+	bf16CosineFn = cosineDistanceBF16
+	bf16L1Fn     = l1DistanceBF16
+)
+
 func resolveBF16Kernel(metric MetricType) (func(a, b []types.BF16) (float64, error), error) {
 	switch metric {
 	case Metric_L2Distance, Metric_L2sqDistance:
-		return l2sqBF16, nil
+		return bf16L2sqFn, nil
 	case Metric_InnerProduct:
-		return innerProductBF16, nil
+		return bf16IPFn, nil
 	case Metric_CosineDistance:
-		return cosineDistanceBF16, nil
+		return bf16CosineFn, nil
 	case Metric_L1Distance:
-		return l1DistanceBF16, nil
+		return bf16L1Fn, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
 	}
@@ -209,16 +220,24 @@ func f16fast(h types.Float16) float32 {
 	return math.Float32frombits(ou)
 }
 
+// f16 kernel selection — swapped to archsimd impls by distance_func_narrow_f16_amd64.go.
+var (
+	f16L2sqFn   = l2sqF16
+	f16IPFn     = innerProductF16
+	f16CosineFn = cosineDistanceF16
+	f16L1Fn     = l1DistanceF16
+)
+
 func resolveF16Kernel(metric MetricType) (func(a, b []types.Float16) (float64, error), error) {
 	switch metric {
 	case Metric_L2Distance, Metric_L2sqDistance:
-		return l2sqF16, nil
+		return f16L2sqFn, nil
 	case Metric_InnerProduct:
-		return innerProductF16, nil
+		return f16IPFn, nil
 	case Metric_CosineDistance:
-		return cosineDistanceF16, nil
+		return f16CosineFn, nil
 	case Metric_L1Distance:
-		return l1DistanceF16, nil
+		return f16L1Fn, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
 	}
@@ -309,16 +328,24 @@ func cosineDistanceF16(a, b []types.Float16) (float64, error) {
 	return 1.0 - float64(dot)/denom, nil
 }
 
+// int8 kernel selection — swapped to archsimd impls by distance_func_narrow_int8_amd64.go.
+var (
+	int8L2sqFn   = l2sqInt8
+	int8IPFn     = innerProductInt8
+	int8CosineFn = cosineDistanceInt8
+	int8L1Fn     = l1DistanceInt8
+)
+
 func resolveInt8Kernel(metric MetricType) (func(a, b []int8) (float64, error), error) {
 	switch metric {
 	case Metric_L2Distance, Metric_L2sqDistance:
-		return l2sqInt8, nil
+		return int8L2sqFn, nil
 	case Metric_InnerProduct:
-		return innerProductInt8, nil
+		return int8IPFn, nil
 	case Metric_CosineDistance:
-		return cosineDistanceInt8, nil
+		return int8CosineFn, nil
 	case Metric_L1Distance:
-		return l1DistanceInt8, nil
+		return int8L1Fn, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
 	}
