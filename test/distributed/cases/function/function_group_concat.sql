@@ -254,3 +254,93 @@ SELECT
   GROUP_CONCAT(b ORDER BY y) AS by_y
 FROM group_concat_order_bug
 GROUP BY g;
+
+-- regression: per-aggregate ORDER BY with multiple keys, directions, expressions, and concat fields
+DROP TABLE IF EXISTS group_concat_order_more;
+CREATE TABLE group_concat_order_more (
+  g INT,
+  a VARCHAR(10),
+  b VARCHAR(10),
+  c VARCHAR(10),
+  x INT,
+  y INT,
+  z INT
+);
+INSERT INTO group_concat_order_more VALUES
+  (1, 'a1', 'b1', 'c1', 1, 2, 30),
+  (1, 'a2', 'b2', 'c2', 1, 1, 20),
+  (1, 'a3', 'b3', 'c3', 2, 1, 10),
+  (2, 'a4', 'b4', 'c4', 2, 2, 40),
+  (2, 'a5', 'b5', 'c5', 1, 3, 50),
+  (2, 'a6', 'b6', 'c6', 1, 2, 60);
+
+SELECT
+  g,
+  GROUP_CONCAT(a ORDER BY x ASC, y DESC, z ASC) AS by_x_y_desc,
+  GROUP_CONCAT(b ORDER BY y ASC, x DESC, z DESC) AS by_y_x_desc,
+  GROUP_CONCAT(c ORDER BY z DESC) AS by_z_desc
+FROM group_concat_order_more
+GROUP BY g
+ORDER BY g;
+
+SELECT
+  g,
+  GROUP_CONCAT(a, ':', b ORDER BY x DESC, y ASC, z ASC SEPARATOR '|') AS pair_by_x_desc,
+  GROUP_CONCAT(a, ':', c ORDER BY y DESC, x ASC, z DESC SEPARATOR ';') AS pair_by_y_desc
+FROM group_concat_order_more
+GROUP BY g
+ORDER BY g;
+
+SELECT
+  g,
+  GROUP_CONCAT(a ORDER BY x + y DESC, z ASC) AS by_expr_desc,
+  GROUP_CONCAT(b ORDER BY z DIV 10 ASC, x DESC) AS by_expr_asc,
+  GROUP_CONCAT(c ORDER BY -x ASC, y DESC, z DESC) AS by_unary_expr
+FROM group_concat_order_more
+GROUP BY g
+ORDER BY g;
+
+SELECT
+  g,
+  GROUP_CONCAT(a ORDER BY x ASC, z ASC) AS a_asc,
+  GROUP_CONCAT(a ORDER BY x DESC, z DESC) AS a_desc,
+  GROUP_CONCAT(b ORDER BY y ASC, z ASC) AS b_asc,
+  GROUP_CONCAT(b ORDER BY y DESC, z DESC) AS b_desc
+FROM group_concat_order_more
+GROUP BY g
+ORDER BY g;
+
+SELECT
+  g,
+  GROUP_CONCAT(a, ':', b, ':', c ORDER BY 5 DESC, 1 ASC SEPARATOR '|') AS by_position,
+  GROUP_CONCAT(a, b ORDER BY 2 DESC, 1 ASC SEPARATOR ';') AS by_concat_arg_position
+FROM group_concat_order_more
+GROUP BY g
+ORDER BY g;
+
+-- regression: NULL ORDER BY keys are retained for ordering, while NULL concat values still skip the row
+DROP TABLE IF EXISTS group_concat_order_nulls;
+CREATE TABLE group_concat_order_nulls (
+  g INT,
+  a VARCHAR(10),
+  b VARCHAR(10),
+  x INT,
+  y INT
+);
+INSERT INTO group_concat_order_nulls VALUES
+  (1, 'n1', 'm1', NULL, 2),
+  (1, 'n2', 'm2', 1, NULL),
+  (1, 'n3', 'm3', 1, 1),
+  (1, NULL, 'm4', 0, 0),
+  (2, 'n5', 'm5', NULL, 1),
+  (2, 'n6', 'm6', 2, NULL),
+  (2, 'n7', 'm7', 1, 2);
+
+SELECT
+  g,
+  GROUP_CONCAT(a ORDER BY x ASC, y ASC) AS nulls_asc,
+  GROUP_CONCAT(a ORDER BY x DESC, y DESC) AS nulls_desc,
+  GROUP_CONCAT(a, ':', b ORDER BY y ASC, x DESC SEPARATOR '|') AS nulls_pair
+FROM group_concat_order_nulls
+GROUP BY g
+ORDER BY g;
