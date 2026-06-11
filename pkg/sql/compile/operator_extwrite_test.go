@@ -15,11 +15,13 @@
 package compile
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -72,6 +74,46 @@ func TestIsExternalWriteInsert(t *testing.T) {
 			Createsql: extWriteCreatesql(t, "stage://s/p-%U.csv"),
 		},
 	}}))
+}
+
+// TestConstructExternalInsertStmtTime ensures the writer evaluates
+// WRITE_FILE_PATTERN against the statement-start timestamp carried on the
+// process context (defines.StartTS), not the construction wall clock — that is
+// what keeps time-directive patterns consistent across parallel pipelines.
+func TestConstructExternalInsertStmtTime(t *testing.T) {
+	node := &plan.Node{InsertCtx: &plan.InsertCtx{
+		Ref: &plan.ObjectRef{ObjName: "wext"},
+		TableDef: &plan.TableDef{
+			Name:      "wext",
+			TableType: catalog.SystemExternalRel,
+			Createsql: extWriteCreatesql(t, "stage://s/p-%U.csv"),
+			Cols:      []*plan.ColDef{{Name: "a"}},
+		},
+	}}
+
+	want := time.Unix(1718000000, 0).UTC()
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	proc.Ctx = context.WithValue(context.Background(), defines.StartTS{}, want)
+
+	op, err := constructExternalInsert(proc, node, nil)
+	require.NoError(t, err)
+	arg := op.(*insert.Insert)
+	defer arg.Release()
+	require.True(t, arg.InsertCtx.ExternalConfig.Stmt.Equal(want))
+
+	// Without StartTS on the context it falls back to the wall clock.
+	proc2 := &process.Process{}
+	proc2.Base = &process.BaseProcess{}
+	proc2.Ctx = context.Background()
+	before := time.Now()
+	op2, err := constructExternalInsert(proc2, node, nil)
+	require.NoError(t, err)
+	arg2 := op2.(*insert.Insert)
+	defer arg2.Release()
+	stmt := arg2.InsertCtx.ExternalConfig.Stmt
+	require.False(t, stmt.Before(before))
+	require.False(t, stmt.After(time.Now()))
 }
 
 // TestExternalInsertDupOperator ensures parallelizing a scope keeps the

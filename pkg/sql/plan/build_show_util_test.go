@@ -419,3 +419,38 @@ func TestFormatColTypeArrayMetadata(t *testing.T) {
 		Enumvalues: "array(varchar(20))",
 	}))
 }
+
+// TestShowCreateExternalWriteFilePattern ensures SHOW CREATE TABLE formatting
+// keeps WRITE_FILE_PATTERN for writable external tables, in both the INFILE
+// and the URL s3option forms; without it the recreated table silently degrades
+// to read-only.
+func TestShowCreateExternalWriteFilePattern(t *testing.T) {
+	pattern := "stage://s/part-%U.csv"
+
+	// INFILE{...} form (ScanType != S3).
+	p := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format: tree.CSV,
+		Option: []string{"format", "csv", "write_file_pattern", pattern},
+	}}
+	out := formatInfileExternalOptionsForShowCreate(p)
+	require.Contains(t, out, "'WRITE_FILE_PATTERN'='"+pattern+"'")
+
+	// Read-only table: no WRITE_FILE_PATTERN key at all.
+	ro := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format: tree.CSV,
+		Option: []string{"format", "csv"},
+	}}
+	require.NotContains(t, formatInfileExternalOptionsForShowCreate(ro), "WRITE_FILE_PATTERN")
+
+	// URL s3option{...} form.
+	s3 := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Format:   tree.CSV,
+			Option:   []string{"format", "csv", "write_file_pattern", pattern},
+		},
+		ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "b"}},
+	}
+	out = formatS3ExternalOptionsForShowCreate(s3)
+	require.Contains(t, out, "'write_file_pattern'='"+pattern+"'")
+}
