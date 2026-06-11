@@ -47,26 +47,22 @@ type NarrowDistanceFn func(a, b []byte) (float64, error)
 func ResolveNarrowDistanceFn(oid types.T, metric MetricType) (NarrowDistanceFn, error) {
 	switch oid {
 	case types.T_array_bf16:
-		f32fn, err := ResolveDistanceFn[float32](metric)
+		kern, err := resolveBF16Kernel(metric)
 		if err != nil {
 			return nil, err
 		}
 		return func(a, b []byte) (float64, error) {
-			d, err := f32fn(
-				types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](a)),
-				types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](b)))
-			return float64(d), err
+			// BytesToArray is a zero-copy reinterpret; the kernel decodes each
+			// element to float32 inline (no []float32 slice materialized).
+			return kern(types.BytesToArray[types.BF16](a), types.BytesToArray[types.BF16](b))
 		}, nil
 	case types.T_array_float16:
-		f32fn, err := ResolveDistanceFn[float32](metric)
+		kern, err := resolveF16Kernel(metric)
 		if err != nil {
 			return nil, err
 		}
 		return func(a, b []byte) (float64, error) {
-			d, err := f32fn(
-				types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](a)),
-				types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](b)))
-			return float64(d), err
+			return kern(types.BytesToArray[types.Float16](a), types.BytesToArray[types.Float16](b))
 		}, nil
 	case types.T_array_int8:
 		kern, err := resolveInt8Kernel(metric)
@@ -79,6 +75,215 @@ func ResolveNarrowDistanceFn(oid types.T, metric MetricType) (NarrowDistanceFn, 
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("ResolveNarrowDistanceFn: not a narrow vector type")
 	}
+}
+
+// ----------------------------------------------------------------------------
+// bf16 / f16 CONCRETE fused kernels (unroll-8). NOT generic: a generic
+// A generic [T] would share the uint16 gcshape, so .ToFloat32() would become a
+// dictionary (virtual) call per element and never inlines. Concrete types let
+// .ToFloat32() inline (bf16 = one shift). Decode inline, accumulate in float32,
+// no slice materialized -> zero alloc. The multiply/add cannot be done without a
+// float (bf16/f16 are floating-point; Go has no 16-bit-float ALU).
+// ----------------------------------------------------------------------------
+
+func resolveBF16Kernel(metric MetricType) (func(a, b []types.BF16) (float64, error), error) {
+	switch metric {
+	case Metric_L2Distance, Metric_L2sqDistance:
+		return l2sqBF16, nil
+	case Metric_InnerProduct:
+		return innerProductBF16, nil
+	case Metric_CosineDistance:
+		return cosineDistanceBF16, nil
+	case Metric_L1Distance:
+		return l1DistanceBF16, nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
+	}
+}
+
+func l2sqBF16(a, b []types.BF16) (float64, error) {
+	if len(a) != len(b) {
+		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+	var sum float32
+	n := len(a)
+	i := 0
+	for ; i <= n-8; i += 8 {
+		aa := a[i : i+8 : i+8]
+		bb := b[i : i+8 : i+8]
+		d0 := aa[0].ToFloat32() - bb[0].ToFloat32()
+		d1 := aa[1].ToFloat32() - bb[1].ToFloat32()
+		d2 := aa[2].ToFloat32() - bb[2].ToFloat32()
+		d3 := aa[3].ToFloat32() - bb[3].ToFloat32()
+		d4 := aa[4].ToFloat32() - bb[4].ToFloat32()
+		d5 := aa[5].ToFloat32() - bb[5].ToFloat32()
+		d6 := aa[6].ToFloat32() - bb[6].ToFloat32()
+		d7 := aa[7].ToFloat32() - bb[7].ToFloat32()
+		sum += (d0*d0 + d1*d1) + (d2*d2 + d3*d3) + (d4*d4 + d5*d5) + (d6*d6 + d7*d7)
+	}
+	for ; i < n; i++ {
+		d := a[i].ToFloat32() - b[i].ToFloat32()
+		sum += d * d
+	}
+	return float64(sum), nil
+}
+
+func innerProductBF16(a, b []types.BF16) (float64, error) {
+	if len(a) != len(b) {
+		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+	var sum float32
+	n := len(a)
+	i := 0
+	for ; i <= n-8; i += 8 {
+		aa := a[i : i+8 : i+8]
+		bb := b[i : i+8 : i+8]
+		sum += (aa[0].ToFloat32()*bb[0].ToFloat32() + aa[1].ToFloat32()*bb[1].ToFloat32()) +
+			(aa[2].ToFloat32()*bb[2].ToFloat32() + aa[3].ToFloat32()*bb[3].ToFloat32()) +
+			(aa[4].ToFloat32()*bb[4].ToFloat32() + aa[5].ToFloat32()*bb[5].ToFloat32()) +
+			(aa[6].ToFloat32()*bb[6].ToFloat32() + aa[7].ToFloat32()*bb[7].ToFloat32())
+	}
+	for ; i < n; i++ {
+		sum += a[i].ToFloat32() * b[i].ToFloat32()
+	}
+	return float64(-sum), nil
+}
+
+func l1DistanceBF16(a, b []types.BF16) (float64, error) {
+	if len(a) != len(b) {
+		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+	var sum float32
+	for i := range a {
+		d := a[i].ToFloat32() - b[i].ToFloat32()
+		if d < 0 {
+			d = -d
+		}
+		sum += d
+	}
+	return float64(sum), nil
+}
+
+func cosineDistanceBF16(a, b []types.BF16) (float64, error) {
+	if len(a) == 0 {
+		return 0, nil
+	}
+	if len(a) != len(b) {
+		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+	var dot, na2, nb2 float32
+	for i := range a {
+		ai := a[i].ToFloat32()
+		bi := b[i].ToFloat32()
+		dot += ai * bi
+		na2 += ai * ai
+		nb2 += bi * bi
+	}
+	denom := math.Sqrt(float64(na2)) * math.Sqrt(float64(nb2))
+	if denom == 0 {
+		return 1.0, nil
+	}
+	return 1.0 - float64(dot)/denom, nil
+}
+
+func resolveF16Kernel(metric MetricType) (func(a, b []types.Float16) (float64, error), error) {
+	switch metric {
+	case Metric_L2Distance, Metric_L2sqDistance:
+		return l2sqF16, nil
+	case Metric_InnerProduct:
+		return innerProductF16, nil
+	case Metric_CosineDistance:
+		return cosineDistanceF16, nil
+	case Metric_L1Distance:
+		return l1DistanceF16, nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
+	}
+}
+
+func l2sqF16(a, b []types.Float16) (float64, error) {
+	if len(a) != len(b) {
+		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+	var sum float32
+	n := len(a)
+	i := 0
+	for ; i <= n-8; i += 8 {
+		aa := a[i : i+8 : i+8]
+		bb := b[i : i+8 : i+8]
+		d0 := aa[0].ToFloat32() - bb[0].ToFloat32()
+		d1 := aa[1].ToFloat32() - bb[1].ToFloat32()
+		d2 := aa[2].ToFloat32() - bb[2].ToFloat32()
+		d3 := aa[3].ToFloat32() - bb[3].ToFloat32()
+		d4 := aa[4].ToFloat32() - bb[4].ToFloat32()
+		d5 := aa[5].ToFloat32() - bb[5].ToFloat32()
+		d6 := aa[6].ToFloat32() - bb[6].ToFloat32()
+		d7 := aa[7].ToFloat32() - bb[7].ToFloat32()
+		sum += (d0*d0 + d1*d1) + (d2*d2 + d3*d3) + (d4*d4 + d5*d5) + (d6*d6 + d7*d7)
+	}
+	for ; i < n; i++ {
+		d := a[i].ToFloat32() - b[i].ToFloat32()
+		sum += d * d
+	}
+	return float64(sum), nil
+}
+
+func innerProductF16(a, b []types.Float16) (float64, error) {
+	if len(a) != len(b) {
+		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+	var sum float32
+	n := len(a)
+	i := 0
+	for ; i <= n-8; i += 8 {
+		aa := a[i : i+8 : i+8]
+		bb := b[i : i+8 : i+8]
+		sum += (aa[0].ToFloat32()*bb[0].ToFloat32() + aa[1].ToFloat32()*bb[1].ToFloat32()) +
+			(aa[2].ToFloat32()*bb[2].ToFloat32() + aa[3].ToFloat32()*bb[3].ToFloat32()) +
+			(aa[4].ToFloat32()*bb[4].ToFloat32() + aa[5].ToFloat32()*bb[5].ToFloat32()) +
+			(aa[6].ToFloat32()*bb[6].ToFloat32() + aa[7].ToFloat32()*bb[7].ToFloat32())
+	}
+	for ; i < n; i++ {
+		sum += a[i].ToFloat32() * b[i].ToFloat32()
+	}
+	return float64(-sum), nil
+}
+
+func l1DistanceF16(a, b []types.Float16) (float64, error) {
+	if len(a) != len(b) {
+		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+	var sum float32
+	for i := range a {
+		d := a[i].ToFloat32() - b[i].ToFloat32()
+		if d < 0 {
+			d = -d
+		}
+		sum += d
+	}
+	return float64(sum), nil
+}
+
+func cosineDistanceF16(a, b []types.Float16) (float64, error) {
+	if len(a) == 0 {
+		return 0, nil
+	}
+	if len(a) != len(b) {
+		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+	var dot, na2, nb2 float32
+	for i := range a {
+		ai := a[i].ToFloat32()
+		bi := b[i].ToFloat32()
+		dot += ai * bi
+		na2 += ai * ai
+		nb2 += bi * bi
+	}
+	denom := math.Sqrt(float64(na2)) * math.Sqrt(float64(nb2))
+	if denom == 0 {
+		return 1.0, nil
+	}
+	return 1.0 - float64(dot)/denom, nil
 }
 
 func resolveInt8Kernel(metric MetricType) (func(a, b []int8) (float64, error), error) {
@@ -167,7 +372,7 @@ func l1DistanceInt8(a, b []int8) (float64, error) {
 	for ; i <= n-8; i += 8 {
 		aa := a[i : i+8 : i+8]
 		bb := b[i : i+8 : i+8]
-		sum += int64(abs(int32(aa[0])-int32(bb[0])) + abs(int32(aa[1])-int32(bb[1]))) +
+		sum += int64(abs(int32(aa[0])-int32(bb[0]))+abs(int32(aa[1])-int32(bb[1]))) +
 			int64(abs(int32(aa[2])-int32(bb[2]))+abs(int32(aa[3])-int32(bb[3]))) +
 			int64(abs(int32(aa[4])-int32(bb[4]))+abs(int32(aa[5])-int32(bb[5]))) +
 			int64(abs(int32(aa[6])-int32(bb[6]))+abs(int32(aa[7])-int32(bb[7])))
