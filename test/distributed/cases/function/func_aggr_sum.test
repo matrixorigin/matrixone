@@ -154,3 +154,125 @@ select sum(distinct a),sum(distinct grp) from t1;
 insert into t1 values (null,null,'');
 select sum(distinct a),sum(distinct grp) from t1;
 drop table t1;
+
+#SUM over bool column: counts rows where flag is true
+create table t1 (flag bool);
+insert into t1 values (true), (false), (true), (true), (false);
+select sum(flag) from t1;
+select avg(flag) from t1;
+drop table t1;
+
+#SUM over bool column with DISTINCT
+create table t1 (flag bool);
+insert into t1 values (true), (true), (false), (true), (false);
+select sum(distinct flag) from t1;
+select avg(distinct flag) from t1;
+drop table t1;
+
+#SUM over comparison expressions: >, <, >=, <=, =, !=, <>
+create table t1 (val int);
+insert into t1 values (1), (3), (5), (7), (9);
+select sum(val > 4) from t1;
+select avg(val > 4) from t1;
+select sum(val = 3) from t1;
+select sum(val >= 5) from t1;
+select sum(val < 5) from t1;
+select sum(val <= 5) from t1;
+select sum(val != 5) from t1;
+select sum(val <> 5) from t1;
+drop table t1;
+
+#SUM over boolean expressions with AND/OR/NOT
+create table t1 (a int, b int);
+insert into t1 values (1, 10), (3, 5), (5, 3), (7, 1);
+select sum(a > 2 and b > 2) from t1;
+select sum(a > 2 or b > 2) from t1;
+select sum(not (a > 2)) from t1;
+drop table t1;
+
+#SUM over IS NULL / IS NOT NULL
+create table t1 (val int);
+insert into t1 values (1), (null), (3), (null), (5);
+select sum(val is null) from t1;
+select sum(val is not null) from t1;
+select avg(val is null) from t1;
+drop table t1;
+
+#SUM over BETWEEN / NOT BETWEEN
+create table t1 (val int);
+insert into t1 values (1), (2), (3), (4), (5);
+select sum(val between 2 and 4) from t1;
+select sum(val not between 2 and 4) from t1;
+drop table t1;
+
+#SUM over IN / NOT IN
+create table t1 (val int);
+insert into t1 values (1), (2), (3), (4), (5);
+select sum(val in (1, 3, 5)) from t1;
+select sum(val not in (2, 4)) from t1;
+drop table t1;
+
+#SUM over LIKE / NOT LIKE
+create table t1 (name varchar(20));
+insert into t1 values ('apple'), ('banana'), ('apricot'), ('cherry');
+select sum(name like 'a%') from t1;
+select sum(name like '%a%') from t1;
+drop table t1;
+
+#SUM/AVG bool with GROUP BY
+create table t1 (grp int, val int);
+insert into t1 values (1, 10), (1, 3), (2, 8), (2, 2), (2, 5);
+select grp, sum(val > 4) from t1 group by grp order by grp;
+select grp, avg(val > 4) from t1 group by grp order by grp;
+drop table t1;
+
+#SUM/AVG bool with WHERE
+create table t1 (status varchar(10), val int);
+insert into t1 values ('ERROR', 1), ('OK', 2), ('ERROR', 3), ('OK', 4), ('ERROR', 5);
+select sum(status = 'ERROR') from t1;
+select sum(status = 'ERROR') from t1 where val > 2;
+select sum(status = 'OK') from t1;
+drop table t1;
+
+#SUM/AVG bool with HAVING
+create table t1 (grp int, val int);
+insert into t1 values (1, 10), (1, 3), (1, 5), (2, 2), (2, 1);
+select grp, sum(val > 4) from t1 group by grp having sum(val > 4) > 0;
+drop table t1;
+
+#Multiple SUM bool expressions in one query
+create table t1 (status varchar(10), val int);
+insert into t1 values ('ERROR', 1), ('WARN', 2), ('ERROR', 3), ('INFO', 4), ('ERROR', 5);
+select sum(status = 'ERROR'), sum(status = 'WARN'), sum(status = 'INFO') from t1;
+drop table t1;
+
+#SUM/AVG bool edge cases: all true, all false, NULLs
+create table t1 (flag bool);
+insert into t1 values (true), (true), (true);
+select sum(flag), avg(flag) from t1;
+delete from t1;
+insert into t1 values (false), (false), (false);
+select sum(flag), avg(flag) from t1;
+insert into t1 values (null);
+select sum(flag), avg(flag) from t1;
+drop table t1;
+
+#VARIANCE/STDDEV should still reject bool input
+create table t1 (flag bool);
+insert into t1 values (true);
+select variance(flag) from t1;
+select stddev(flag) from t1;
+drop table t1;
+
+#SUM over nested boolean expressions
+create table t1 (a int, b int);
+insert into t1 values (1, 1), (2, 3), (3, 2), (4, 4), (5, 5);
+select sum(a > 2 and b > 2) from t1;
+select sum((a > 3) or (b < 3)) from t1;
+drop table t1;
+
+#SUM bool in subquery
+create table t1 (val int);
+insert into t1 values (1), (3), (5);
+select (select sum(val > 2) from t1) as cnt;
+drop table t1;

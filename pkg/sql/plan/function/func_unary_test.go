@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -1115,9 +1116,9 @@ func TestStGeomFromTextWithSRID(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 2)", "POINT EMPTY", "LINESTRING EMPTY"}, []bool{false, false, false}),
-		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326, math.MaxUint32, 0}, []bool{false, false, false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326, int64(geo.MaxSRID), 0}, []bool{false, false, false}),
 	}
-	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"SRID=4326;POINT(1 2)", "SRID=4294967295;POINT EMPTY", "SRID=0;LINESTRING EMPTY"}, []bool{false, false, false})
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"SRID=4326;POINT(1 2)", "SRID=2147483646;POINT EMPTY", "SRID=0;LINESTRING EMPTY"}, []bool{false, false, false})
 
 	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromTextWithSRID)
 	s, info := fcTC.Run()
@@ -1185,16 +1186,79 @@ func TestStGeomFromTextWithSRIDOutOfRange(t *testing.T) {
 	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
 }
 
+func TestTypedTextConstructors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	run := func(fn fEvalFn, wkt, want string, wantErr bool) {
+		inputs := []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{wkt}, []bool{false})}
+		expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{want}, []bool{false})
+		tc := NewFunctionTestCase(proc, inputs, expect, fn)
+		ok, info := tc.Run()
+		if wantErr {
+			require.False(t, ok, "%s should be rejected", wkt)
+		} else {
+			require.True(t, ok, info)
+		}
+	}
+	// Each constructor accepts its subtype and rejects others.
+	run(StPointFromText, "POINT(1 2)", "POINT(1 2)", false)
+	run(StPointFromText, "LINESTRING(0 0,1 1)", "", true)
+	run(StLineFromText, "LINESTRING(0 0,1 1,2 3)", "LINESTRING(0 0,1 1,2 3)", false)
+	run(StLineFromText, "POINT(1 2)", "", true)
+	run(StPolyFromText, "POLYGON((0 0,1 0,1 1,0 0))", "POLYGON((0 0,1 0,1 1,0 0))", false)
+	run(StPolyFromText, "POINT(1 2)", "", true)
+	run(StMPointFromText, "MULTIPOINT(1 1,2 2)", "MULTIPOINT(1 1,2 2)", false)
+	run(StMLineFromText, "MULTILINESTRING((0 0,1 1),(2 2,3 3))", "MULTILINESTRING((0 0,1 1),(2 2,3 3))", false)
+	run(StMPolyFromText, "MULTIPOLYGON(((0 0,1 0,1 1,0 0)))", "MULTIPOLYGON(((0 0,1 0,1 1,0 0)))", false)
+	run(StGeomCollFromText, "GEOMETRYCOLLECTION(POINT(1 1))", "GEOMETRYCOLLECTION(POINT(1 1))", false)
+	run(StGeomCollFromText, "POINT(1 1)", "", true)
+}
+
+func TestTypedWKBConstructors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	run := func(fn fEvalFn, wkt, want string, wantErr bool) {
+		wkb := string(encodeGeometryPayload(wkt, 0, false))
+		inputs := []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{wkb}, []bool{false})}
+		expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{want}, []bool{false})
+		tc := NewFunctionTestCase(proc, inputs, expect, fn)
+		ok, info := tc.Run()
+		if wantErr {
+			require.False(t, ok, "%s should be rejected", wkt)
+		} else {
+			require.True(t, ok, info)
+		}
+	}
+	run(StPointFromWKB, "POINT(1 2)", "POINT(1 2)", false)
+	run(StPointFromWKB, "LINESTRING(0 0,1 1)", "", true)
+	run(StLineFromWKB, "LINESTRING(0 0,1 1,2 3)", "LINESTRING(0 0,1 1,2 3)", false)
+	run(StPolyFromWKB, "POLYGON((0 0,1 0,1 1,0 0))", "POLYGON((0 0,1 0,1 1,0 0))", false)
+	run(StMPointFromWKB, "MULTIPOINT(1 1,2 2)", "MULTIPOINT(1 1,2 2)", false)
+	run(StGeomCollFromWKB, "GEOMETRYCOLLECTION(POINT(1 1))", "GEOMETRYCOLLECTION(POINT(1 1))", false)
+	run(StGeomCollFromWKB, "POINT(1 1)", "", true)
+}
+
 func TestStSRID(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=4326;POINT(1 2)", "POINT(3 4)"}, []bool{false, false}),
-	}
-	expect := NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{4326, 0}, []bool{false, false})
 
+	// SRID lives in the column/expression type (Width = srid+1), not in the
+	// payload, so every row of a vector shares the type's SRID.
+	geomType := types.T_geometry.ToType()
+	geomType.Width = 4327 // encodes SRID 4326
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{"POINT(1 2)", "POINT(3 4)"}, []bool{false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{4326, 4326}, []bool{false, false})
 	fcTC := NewFunctionTestCase(proc, inputs, expect, StSRID)
 	s, info := fcTC.Run()
 	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
+
+	// An undefined SRID (Width 0) reports SRID 0.
+	inputs2 := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+	}
+	expect2 := NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{0}, []bool{false})
+	fcTC2 := NewFunctionTestCase(proc, inputs2, expect2, StSRID)
+	s2, info2 := fcTC2.Run()
+	require.True(t, s2, fmt.Sprintf("err info is '%s'", info2))
 }
 
 func initStGeometryTypeTestCase() []tcTemp {
@@ -1297,6 +1361,95 @@ func TestStY(t *testing.T) {
 	fcTC = NewFunctionTestCase(proc, testCases[2].inputs, testCases[2].expect, StY)
 	s, info = fcTC.Run()
 	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", testCases[2].info, info))
+}
+
+// geom32WKB builds the float32-coordinate WKB payload a GEOMETRY32 cell stores.
+func geom32WKB(t *testing.T, wkt string) string {
+	t.Helper()
+	g, err := geo.ParseWKT(wkt)
+	require.NoError(t, err)
+	return string(geo.WriteWKBFloat32(g))
+}
+
+func TestStXY32(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// GEOMETRY32 ST_X / ST_Y return float32, for both text and float32-WKB input.
+	run := func(fn fEvalFn, input string, want float32) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{input}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_float32.ToType(), false, []float32{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	run(StX32, "POINT(1.5 2.5)", 1.5)
+	run(StY32, "POINT(1.5 2.5)", 2.5)
+	run(StLongitude32, "POINT(1.5 2.5)", 1.5)
+	run(StLatitude32, "POINT(1.5 2.5)", 2.5)
+	// Real float32 WKB payload.
+	run(StX32, geom32WKB(t, "POINT(1.5 2.5)"), 1.5)
+	run(StY32, geom32WKB(t, "POINT(1.5 2.5)"), 2.5)
+
+	// The float64 forms still return float64 on a GEOMETRY input.
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1.5 2.5)"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1.5}, []bool{false}), StX)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestGeometry32ReturningUnary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// For a GEOMETRY32 input, a geometry-returning function must emit float32 WKB
+	// (shorter than float64 WKB) and round-trip to the expected WKT.
+	check := func(fn fEvalFn, in, wantWKT string) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{geom32WKB(t, in)}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{wantWKT}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+		// The output must be float32 WKB (decodable by the float32 reader).
+		raw := tc.GetResultVectorDirectly().GetBytesAt(0)
+		g, ferr := geo.ReadWKBFloat32(raw)
+		require.NoError(t, ferr, "output should be float32 WKB")
+		require.Equal(t, wantWKT, geo.WriteWKT(g))
+	}
+
+	check(StSwapXY, "POINT(1.5 2.5)", "POINT(2.5 1.5)")
+	check(StConvexHull, "MULTIPOINT(0 0, 4 0, 4 4, 0 4, 2 2)", "POLYGON((0 0,4 0,4 4,0 4,0 0))")
+	check(StEnvelope, "LINESTRING(0 0, 2 3)", "POLYGON((0 0,2 0,2 3,0 3,0 0))")
+	check(StStartPoint, "LINESTRING(1 2, 3 4, 5 6)", "POINT(1 2)")
+	check(StEndPoint, "LINESTRING(1 2, 3 4, 5 6)", "POINT(5 6)")
+	check(StExteriorRing, "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", "LINESTRING(0 0,4 0,4 4,0 4,0 0)")
+}
+
+func TestGeometry32Measures(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	runF32 := func(fn fEvalFn, in string, want float32) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{geom32WKB(t, in)}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_float32.ToType(), false, []float32{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	// ST_Length32 / ST_Area32 return float32 for a GEOMETRY32 input.
+	runF32(StLength32, "LINESTRING(0 0, 3 4)", 5.0)
+	runF32(StArea32, "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", 16.0)
 }
 
 func TestStXYRejectNonPoint(t *testing.T) {

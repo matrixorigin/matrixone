@@ -707,7 +707,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		Proc:   proc,
 		RootOp: connector.NewArgument(),
 	}
-	_, withoutOut, _, err := prepareRemoteRunSendingData("", s1)
+	_, withoutOut, _, _, err := prepareRemoteRunSendingData("", s1, proc)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 	require.NotNil(t, s1.RootOp)
@@ -721,7 +721,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	}
 	s2.RootOp.AppendChild(value_scan.NewArgument())
 	originChild := s2.RootOp.GetOperatorBase().GetChildren(0)
-	_, withoutOut, _, err = prepareRemoteRunSendingData("", s2)
+	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s2, proc)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 	require.Equal(t, 1, s2.RootOp.GetOperatorBase().NumChildren())
@@ -734,7 +734,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		RootOp: value_scan.NewArgument(),
 	}
 	s3.RootOp.AppendChild(value_scan.NewArgument())
-	_, withoutOut, _, err = prepareRemoteRunSendingData("", s3)
+	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s3, proc)
 	require.NoError(t, err)
 	require.True(t, withoutOut)
 }
