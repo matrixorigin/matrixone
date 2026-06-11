@@ -131,6 +131,27 @@ data branch pick pick_src into pick_dst keys(3) when conflict accept;
 rollback;
 select count(*) as pick_dst_rows from pick_dst;
 
+data branch create table txn_merge_dst from base;
+data branch create table txn_merge_src from base;
+update txn_merge_src set b = 'two-txn' where a = 2;
+insert into txn_merge_src values (3, 'three');
+delete from txn_merge_src where a = 1;
+
+-- Regression for #24924: DIFF/MERGE should honor explicit transaction boundaries.
+-- @bvt:issue#24924
+begin;
+data branch diff txn_merge_src against txn_merge_dst output count;
+rollback;
+begin;
+data branch merge txn_merge_src into txn_merge_dst when conflict accept;
+rollback;
+select a, b from txn_merge_dst order by a;
+begin;
+data branch merge txn_merge_src into txn_merge_dst when conflict accept;
+commit;
+select a, b from txn_merge_dst order by a;
+-- @bvt:issue
+
 data branch create database br_txn_dst from br_txn_src;
 select count(*) as dst_tables
   from mo_catalog.mo_tables

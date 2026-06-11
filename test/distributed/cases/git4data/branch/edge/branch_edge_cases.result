@@ -130,6 +130,30 @@ rollback;
 select count(*) as pick_dst_rows from pick_dst;
 pick_dst_rows
 2
+data branch create table txn_merge_dst from base;
+data branch create table txn_merge_src from base;
+update txn_merge_src set b = 'two-txn' where a = 2;
+insert into txn_merge_src values (3, 'three');
+delete from txn_merge_src where a = 1;
+begin;
+data branch diff txn_merge_src against txn_merge_dst output count;
+COUNT(*)
+3
+rollback;
+begin;
+data branch merge txn_merge_src into txn_merge_dst when conflict accept;
+rollback;
+select a, b from txn_merge_dst order by a;
+a    b
+1    one
+2    two
+begin;
+data branch merge txn_merge_src into txn_merge_dst when conflict accept;
+commit;
+select a, b from txn_merge_dst order by a;
+a    b
+2    two-txn
+3    three
 data branch create database br_txn_dst from br_txn_src;
 select count(*) as dst_tables
 from mo_catalog.mo_tables
