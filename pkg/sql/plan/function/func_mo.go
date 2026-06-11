@@ -1143,66 +1143,41 @@ func CastSetIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResu
 	return nil
 }
 
+// CastGeometryToSubtype validates a geometry value against a column's subtype
+// constraint and normalizes the stored bytes to bare WKB. The first argument is
+// the column subtype name (e.g. "POINT", or empty for a generic GEOMETRY
+// column); SRID is enforced at bind time from the value/column types, not here,
+// because the WKB payload does not carry an SRID.
 func CastGeometryToSubtype(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(targetSubtype, payload []byte) ([]byte, error) {
-		columnMetadata := strings.TrimSpace(functionUtil.QuickBytesToStr(targetSubtype))
-		columnSubtype := ""
-		columnSRID := uint32(0)
-		columnSRIDDefined := false
-		if columnMetadata != "" {
-			parts := strings.Split(columnMetadata, ";")
-			head := strings.TrimSpace(parts[0])
-			if head != "" && !strings.HasPrefix(strings.ToUpper(head), "SRID=") {
-				columnSubtype = strings.ToUpper(head)
-			}
-			start := 0
-			if columnSubtype != "" {
-				start = 1
-			}
-			for _, part := range parts[start:] {
-				part = strings.TrimSpace(part)
-				if len(part) < len("SRID=") || !strings.EqualFold(part[:5], "SRID=") {
-					continue
-				}
-				parsed, err := strconv.ParseUint(strings.TrimSpace(part[5:]), 10, 32)
-				if err == nil {
-					columnSRID = uint32(parsed)
-					columnSRIDDefined = true
-					break
-				}
-			}
+		columnSubtype := strings.ToUpper(strings.TrimSpace(functionUtil.QuickBytesToStr(targetSubtype)))
+		// A "32:" prefix marks a GEOMETRY32 (float32-coordinate) column.
+		float32Column := false
+		if strings.HasPrefix(columnSubtype, "32:") {
+			float32Column = true
+			columnSubtype = strings.TrimPrefix(columnSubtype, "32:")
+		}
+		// Tolerate any legacy "SUBTYPE;SRID=n" metadata: keep only the subtype.
+		if idx := strings.IndexByte(columnSubtype, ';'); idx >= 0 {
+			columnSubtype = strings.TrimSpace(columnSubtype[:idx])
+		}
+		if strings.HasPrefix(columnSubtype, "SRID=") {
+			columnSubtype = ""
 		}
 
-		wkt, valueSubtype, valueSRID, valueSRIDDefined, err := validateGeometryPayload(payload, maxPointsInGeometryLimit(proc))
+		wkt, valueSubtype, _, _, err := validateGeometryPayload(payload, maxPointsInGeometryLimit(proc))
 		if err != nil {
 			return nil, err
 		}
 		if columnSubtype != "" && columnSubtype != "GEOMETRY" && valueSubtype != "GEOMETRY" && valueSubtype != columnSubtype {
 			return nil, moerr.NewInvalidInputNoCtxf("cannot store %s in %s column", valueSubtype, columnSubtype)
 		}
-
-		if !columnSRIDDefined {
-			return payload, nil
+		// Store bare WKB — float32 coordinates for a GEOMETRY32 column, float64
+		// otherwise — regardless of whether the input was WKB or (legacy) WKT.
+		if float32Column {
+			return encodeGeometryPayloadFloat32(wkt), nil
 		}
-		if !valueSRIDDefined {
-			valueSRID = 0
-		}
-		if valueSRID != columnSRID {
-			columnLabel := columnSubtype
-			if columnLabel == "" {
-				columnLabel = "GEOMETRY"
-			}
-			return nil, moerr.NewInvalidInputNoCtxf(
-				"The SRID of the geometry does not match the SRID of the column '%s'. The SRID of the geometry is %d, but the SRID of the column is %d. Consider changing the SRID of the geometry or the SRID property of the column.",
-				columnLabel,
-				valueSRID,
-				columnSRID,
-			)
-		}
-		if valueSRIDDefined {
-			return payload, nil
-		}
-		return encodeGeometryPayload(wkt, columnSRID, true), nil
+		return encodeGeometryPayload(wkt, 0, false), nil
 	}, selectList)
 }
 

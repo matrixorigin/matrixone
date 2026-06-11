@@ -86,22 +86,22 @@ func TestBuildNotNullColumnValGeometry(t *testing.T) {
 	}{
 		{
 			name: "point",
-			typ:  plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT"},
+			typ:  *geometryPlanType(types.T_geometry, "POINT", 0, false),
 			want: "st_geomfromtext('POINT EMPTY')",
 		},
 		{
 			name: "point with srid",
-			typ:  plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT;SRID=4326"},
+			typ:  *geometryPlanType(types.T_geometry, "POINT", 4326, true),
 			want: "st_geomfromtext('POINT EMPTY', 4326)",
 		},
 		{
 			name: "generic geometry",
-			typ:  plan.Type{Id: int32(types.T_geometry), Enumvalues: "GEOMETRY"},
+			typ:  *geometryPlanType(types.T_geometry, "GEOMETRY", 0, false),
 			want: "st_geomfromtext('GEOMETRYCOLLECTION EMPTY')",
 		},
 		{
 			name: "multipolygon with srid",
-			typ:  plan.Type{Id: int32(types.T_geometry), Enumvalues: "MULTIPOLYGON;SRID=0"},
+			typ:  *geometryPlanType(types.T_geometry, "MULTIPOLYGON", 0, true),
 			want: "st_geomfromtext('MULTIPOLYGON EMPTY', 0)",
 		},
 	}
@@ -166,8 +166,8 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 			name: "geometry subtype mismatch",
 			args: args{
 				ctx:    context.Background(),
-				origin: &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT"},
-				to:     &plan.Type{Id: int32(types.T_geometry), Enumvalues: "LINESTRING"},
+				origin: geometryPlanType(types.T_geometry, "POINT", 0, false),
+				to:     geometryPlanType(types.T_geometry, "LINESTRING", 0, false),
 			},
 			wantErr: assert.Error,
 		},
@@ -175,8 +175,8 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 			name: "geometry generic target accepts subtype",
 			args: args{
 				ctx:    context.Background(),
-				origin: &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT"},
-				to:     &plan.Type{Id: int32(types.T_geometry), Enumvalues: "GEOMETRY"},
+				origin: geometryPlanType(types.T_geometry, "POINT", 0, false),
+				to:     geometryPlanType(types.T_geometry, "GEOMETRY", 0, false),
 			},
 			wantErr: assert.NoError,
 		},
@@ -184,8 +184,8 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 			name: "geometry identical subtype",
 			args: args{
 				ctx:    context.Background(),
-				origin: &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT"},
-				to:     &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT"},
+				origin: geometryPlanType(types.T_geometry, "POINT", 0, false),
+				to:     geometryPlanType(types.T_geometry, "POINT", 0, false),
 			},
 			wantErr: assert.NoError,
 		},
@@ -193,8 +193,8 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 			name: "geometry srid mismatch",
 			args: args{
 				ctx:    context.Background(),
-				origin: &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT;SRID=4326"},
-				to:     &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT;SRID=0"},
+				origin: geometryPlanType(types.T_geometry, "POINT", 4326, true),
+				to:     geometryPlanType(types.T_geometry, "POINT", 0, true),
 			},
 			wantErr: assert.Error,
 		},
@@ -202,8 +202,8 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 			name: "geometry identical srid",
 			args: args{
 				ctx:    context.Background(),
-				origin: &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT;SRID=4326"},
-				to:     &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT;SRID=4326"},
+				origin: geometryPlanType(types.T_geometry, "POINT", 4326, true),
+				to:     geometryPlanType(types.T_geometry, "POINT", 4326, true),
 			},
 			wantErr: assert.NoError,
 		},
