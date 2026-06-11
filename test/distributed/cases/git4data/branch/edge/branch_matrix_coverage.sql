@@ -35,6 +35,7 @@ insert into wide_base values
    'blue', 'blob-two', 'file:///tmp/mo_branch_type_two.csv', 'LINESTRING(0 0,1 1)', '[4.4,5.5,6.6]');
 
 data branch create table wide_branch from wide_base;
+-- @bvt:issue#24924
 update wide_branch set
   b = b'111',
   u8 = 251,
@@ -61,6 +62,7 @@ delete from wide_branch where id = 2;
 data branch merge wide_branch into wide_base;
 select count(*) as wide_rows from wide_base;
 select id, cast(b as int) as bit_i, u8, u16, u32, u64, y, e from wide_base order by id;
+-- @bvt:issue
 drop database br_matrix_types;
 
 -- Case 2: core column constraints remain effective on a branch.
@@ -104,9 +106,11 @@ data branch create table clustered_branch from clustered_base;
 update clustered_branch set payload = 'new' where tenant = 1 and seq = 2;
 insert into clustered_branch(tenant, payload) values (3, 'default-seq');
 delete from clustered_branch where tenant = 2;
+-- @bvt:issue#24924
 data branch merge clustered_branch into clustered_base;
 select count(*) as clustered_rows from clustered_base;
 select tenant, seq, payload from clustered_base order by tenant, seq;
+-- @bvt:issue
 drop database br_matrix_constraints;
 
 -- Case 3: representative table types.
@@ -128,8 +132,10 @@ data branch create table part_branch from part_base;
 update part_branch set val = val + 1 where id = 11;
 insert into part_branch values (2, 20, 'new-p0'), (21, 210, 'new-p1');
 delete from part_branch where id = 12;
+-- @bvt:issue#24924
 data branch merge part_branch into part_base;
 select id, val, note from part_base order by id;
+-- @bvt:issue
 
 create table view_base(id int primary key, val int);
 insert into view_base values (1, 10), (2, 20), (3, 30);
@@ -170,9 +176,9 @@ select count(*) as quoted_space_rows from `branch table`;
 -- @bvt:issue
 
 -- Regression for #24924.
+-- @bvt:issue#24924
 create table `quote'src`(a int primary key, b varchar(20));
 insert into `quote'src` values (1, 'single-quote');
--- @bvt:issue#24924
 data branch create table `quote'dst` from `quote'src`;
 select count(*) as quoted_apostrophe_rows from `quote'dst`;
 -- @bvt:issue
