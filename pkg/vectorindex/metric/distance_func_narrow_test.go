@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/stretchr/testify/require"
 )
 
 // reference distance over float64, mirroring ResolveDistanceFn semantics.
@@ -160,5 +161,90 @@ func TestF16FastExhaustive(t *testing.T) {
 			t.Fatalf("h=0x%04x: f16fast=%v (0x%08x) ToFloat32=%v (0x%08x)",
 				u, got, math.Float32bits(got), want, math.Float32bits(want))
 		}
+	}
+}
+
+func TestNarrowKernelEdgeCases(t *testing.T) {
+	narrowOids := []types.T{types.T_array_bf16, types.T_array_float16, types.T_array_int8}
+
+	// dimension mismatch -> error on every metric/type.
+	for _, oid := range narrowOids {
+		for _, m := range narrowMetrics {
+			fn, err := ResolveNarrowDistanceFn(oid, m)
+			require.NoError(t, err)
+			var a, b []byte
+			switch oid {
+			case types.T_array_int8:
+				a = types.ArrayToBytes([]int8{1, 2, 3})
+				b = types.ArrayToBytes([]int8{1, 2})
+			case types.T_array_bf16:
+				a = types.ArrayToBytes(types.Float32ToBF16Slice([]float32{1, 2, 3}))
+				b = types.ArrayToBytes(types.Float32ToBF16Slice([]float32{1, 2}))
+			default:
+				a = types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{1, 2, 3}))
+				b = types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{1, 2}))
+			}
+			_, err = fn(a, b)
+			require.Errorf(t, err, "oid=%d metric=%d dim mismatch", oid, m)
+		}
+	}
+
+	// empty vectors: distance 0 for all metrics/types (cosine has an explicit
+	// empty guard; the rest sum nothing).
+	for _, oid := range narrowOids {
+		for _, m := range narrowMetrics {
+			fn, _ := ResolveNarrowDistanceFn(oid, m)
+			got, err := fn(nil, nil)
+			require.NoError(t, err)
+			require.InDeltaf(t, 0.0, got, 1e-9, "oid=%d metric=%d empty", oid, m)
+		}
+	}
+
+	// cosine of a zero vector -> 1.0 (denominator 0).
+	for _, oid := range narrowOids {
+		fn, _ := ResolveNarrowDistanceFn(oid, Metric_CosineDistance)
+		var z []byte
+		switch oid {
+		case types.T_array_int8:
+			z = types.ArrayToBytes([]int8{0, 0, 0, 0})
+		case types.T_array_bf16:
+			z = types.ArrayToBytes(types.Float32ToBF16Slice([]float32{0, 0, 0, 0}))
+		default:
+			z = types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{0, 0, 0, 0}))
+		}
+		got, err := fn(z, z)
+		require.NoError(t, err)
+		require.InDeltaf(t, 1.0, got, 1e-9, "oid=%d zero cosine", oid)
+	}
+
+	// int8 extremes over a large dimension: integer accumulation must not overflow.
+	// L2: dim * (127-(-128))^2 = 1000 * 255^2 = 65025000, exact in int64.
+	dim := 1000
+	amax := make([]int8, dim)
+	amin := make([]int8, dim)
+	for i := range amax {
+		amax[i] = 127
+		amin[i] = -128
+	}
+	fn, _ := ResolveNarrowDistanceFn(types.T_array_int8, Metric_L2sqDistance)
+	got, err := fn(types.ArrayToBytes(amax), types.ArrayToBytes(amin))
+	require.NoError(t, err)
+	require.InDelta(t, float64(dim)*255.0*255.0, got, 1e-6)
+
+	// single-element vectors work (loop-remainder path).
+	for _, oid := range narrowOids {
+		fn, _ := ResolveNarrowDistanceFn(oid, Metric_L2sqDistance)
+		var a, b []byte
+		switch oid {
+		case types.T_array_int8:
+			a, b = types.ArrayToBytes([]int8{3}), types.ArrayToBytes([]int8{1})
+		case types.T_array_bf16:
+			a, b = types.ArrayToBytes(types.Float32ToBF16Slice([]float32{3})), types.ArrayToBytes(types.Float32ToBF16Slice([]float32{1}))
+		default:
+			a, b = types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{3})), types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{1}))
+		}
+		got, err := fn(a, b)
+		require.NoError(t, err)
+		require.InDeltaf(t, 4.0, got, 1e-3, "oid=%d single elem", oid) // (3-1)^2
 	}
 }
