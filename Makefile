@@ -48,6 +48,12 @@
 #  % cd matrixone
 #  % MO_CL_CUDA=1 make
 
+# Go toolchain (override with `make GO=/path/to/go1.26rc1 ...` for the archsimd
+# SIMD build); defaults to `go`.
+ifeq ($(GO),)
+	GO=go
+endif
+
 # where am I
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BIN_NAME := mo-service
@@ -185,6 +191,16 @@ DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 TAGS :=
 
+# Env-var prefix for the build command. Pass GOEXPERIMENT/GOAMD64 here for the
+# archsimd SIMD build, e.g.:
+#   make GO=/path/go1.26rc1 GOEXPERIMENT_OPT="GOEXPERIMENT=simd" GOAMD64=v3 build
+GOEXPERIMENT_OPT ?=
+ifeq ("$(UNAME_M)", "x86_64")
+  ifneq ($(GOAMD64),)
+	GOEXPERIMENT_OPT += GOAMD64=$(GOAMD64)
+  endif
+endif
+
 ifeq ($(MO_CL_CUDA),1)
   ifeq ($(CONDA_PREFIX),)
     $(error CONDA_PREFIX env variable not found.)
@@ -235,7 +251,7 @@ jieba-dict:
 .PHONY: build
 build: config cgo thirdparties jieba-dict
 	$(info [Build binary])
-	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/
@@ -265,13 +281,13 @@ musl: override TAGS := -tags musl
 musl: musl-install musl-cgo config musl-thirdparties jieba-dict
 musl:
 	$(info [Build binary(musl)])
-	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # build mo-tool
 .PHONY: mo-tool
 mo-tool: config cgo thirdparties
 	$(info [Build mo-tool tool])
-	$(CGO_OPTS) go build $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
