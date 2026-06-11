@@ -178,6 +178,58 @@ func TestGroupConcatOrderByPerAggregate(t *testing.T) {
 	byY.Free()
 }
 
+func TestGroupConcatOrderByMultipleKeysDescAndNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID: 88,
+		argTypes: []types.Type{
+			types.T_varchar.ToType(),
+			types.T_int64.ToType(),
+			types.T_int64.ToType(),
+		},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.SetExtraInformation(testGroupConcatOrderConfig(1, []byte{0, 1}, ","), 0))
+	require.NoError(t, exec.GroupGrow(1))
+
+	vals := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(vals, []byte("n1"), false, mp))
+	require.NoError(t, vector.AppendBytes(vals, []byte("n2"), false, mp))
+	require.NoError(t, vector.AppendBytes(vals, []byte("n3"), false, mp))
+	require.NoError(t, vector.AppendBytes(vals, nil, true, mp))
+	x := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(x, []int64{0, 1, 1, 0}, []bool{true, false, false, false}, mp))
+	y := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(y, []int64{2, 1, 3, 9}, nil, mp))
+
+	require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1, 1}, []*vector.Vector{vals, x, y}))
+	vecs, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "n1,n3,n2", string(vecs[0].GetBytesAt(0)))
+
+	vals.Free(mp)
+	x.Free(mp)
+	y.Free(mp)
+	vecs[0].Free(mp)
+	exec.Free()
+}
+
+func TestGroupConcatOrderByKeepsTextReturnTypeWhenOrderKeyIsBinary(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     88,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_binary.ToType()},
+		retType:   types.T_blob.ToType(),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.SetExtraInformation(testGroupConcatOrderConfig(1, []byte{0}, ","), 0))
+	require.Equal(t, types.T_text, exec.retType.Oid)
+	exec.Free()
+}
+
 func testGroupConcatOrderConfig(concatArgCnt int, orderFlags []byte, separator string) []byte {
 	separatorBytes := []byte(separator)
 	config := make([]byte, 0, 16+len(orderFlags)+len(separatorBytes))
