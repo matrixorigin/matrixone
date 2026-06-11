@@ -164,24 +164,22 @@ drop database br_matrix_tables;
 
 -- Case 4: quoted identifiers must not break data branch bookkeeping.
 drop database if exists br_matrix_quoted;
+-- @bvt:issue#24924
 create database br_matrix_quoted;
 use br_matrix_quoted;
 
 -- Regression for #24924.
 create table `base table`(a int primary key, b varchar(20));
 insert into `base table` values (1, 'space-name'), (2, 'space-name');
--- @bvt:issue#24924
 data branch create table `branch table` from `base table`;
 select count(*) as quoted_space_rows from `branch table`;
--- @bvt:issue
 
 -- Regression for #24924.
--- @bvt:issue#24924
 create table `quote'src`(a int primary key, b varchar(20));
 insert into `quote'src` values (1, 'single-quote');
 data branch create table `quote'dst` from `quote'src`;
 select count(*) as quoted_apostrophe_rows from `quote'dst`;
--- @bvt:issue
 
 use mo_catalog;
-drop database br_matrix_quoted;
+drop database if exists br_matrix_quoted;
+-- @bvt:issue

@@ -183,4 +183,4 @@ select count(*) as quoted_apostrophe_rows from `quote'dst`;
 quoted_apostrophe_rows
 1
 use mo_catalog;
-drop database br_matrix_quoted;
+drop database if exists br_matrix_quoted;
