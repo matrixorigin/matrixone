@@ -1021,6 +1021,9 @@ func initFixed1() {
 		{types.T_varchar, types.T_text, types.T_varchar, types.T_varchar},
 		{types.T_varchar, types.T_array_float32, types.T_array_float32, types.T_array_float32},
 		{types.T_varchar, types.T_array_float64, types.T_array_float64, types.T_array_float64},
+		{types.T_varchar, types.T_array_bf16, types.T_array_bf16, types.T_array_bf16},
+		{types.T_varchar, types.T_array_float16, types.T_array_float16, types.T_array_float16},
+		{types.T_varchar, types.T_array_int8, types.T_array_int8, types.T_array_int8},
 		{types.T_json, types.T_any, types.T_json, types.T_json},
 		{types.T_json, types.T_bool, types.T_bool, types.T_bool},
 		{types.T_json, types.T_int8, types.T_int8, types.T_int8},
@@ -1160,6 +1163,18 @@ func initFixed1() {
 		{types.T_text, types.T_array_float32, types.T_array_float32, types.T_array_float32},
 		{types.T_array_float64, types.T_text, types.T_array_float64, types.T_array_float64},
 		{types.T_text, types.T_array_float64, types.T_array_float64, types.T_array_float64},
+		// narrow vector types: string<->narrow for comparison/equality only.
+		// (No scalar-arithmetic rules below are added for these types, so + - * /
+		// still fail to resolve — arithmetic requires an explicit CAST to vecf32.)
+		{types.T_array_bf16, types.T_varchar, types.T_array_bf16, types.T_array_bf16},
+		{types.T_array_bf16, types.T_text, types.T_array_bf16, types.T_array_bf16},
+		{types.T_text, types.T_array_bf16, types.T_array_bf16, types.T_array_bf16},
+		{types.T_array_float16, types.T_varchar, types.T_array_float16, types.T_array_float16},
+		{types.T_array_float16, types.T_text, types.T_array_float16, types.T_array_float16},
+		{types.T_text, types.T_array_float16, types.T_array_float16, types.T_array_float16},
+		{types.T_array_int8, types.T_varchar, types.T_array_int8, types.T_array_int8},
+		{types.T_array_int8, types.T_text, types.T_array_int8, types.T_array_int8},
+		{types.T_text, types.T_array_int8, types.T_array_int8, types.T_array_int8},
 
 		/** VEC <Op> Scalar => VEC **/
 		// VECF32 <Op> Scalar => VECF32
@@ -1703,6 +1718,9 @@ func initFixed2() {
 		//A
 		{types.T_varchar, types.T_array_float32, types.T_array_float32, types.T_array_float32},
 		{types.T_varchar, types.T_array_float64, types.T_array_float64, types.T_array_float64},
+		{types.T_varchar, types.T_array_bf16, types.T_array_bf16, types.T_array_bf16},
+		{types.T_varchar, types.T_array_float16, types.T_array_float16, types.T_array_float16},
+		{types.T_varchar, types.T_array_int8, types.T_array_int8, types.T_array_int8},
 		{types.T_binary, types.T_any, types.T_float64, types.T_float64},
 		{types.T_binary, types.T_int8, types.T_float64, types.T_float64},
 		{types.T_binary, types.T_int16, types.T_float64, types.T_float64},
@@ -1777,6 +1795,13 @@ func initFixed2() {
 		{types.T_array_float32, types.T_array_float32, types.T_array_float32, types.T_array_float32},
 		{types.T_array_float64, types.T_varchar, types.T_array_float64, types.T_array_float64},
 		{types.T_array_float64, types.T_array_float32, types.T_array_float64, types.T_array_float64},
+		// narrow vector types: narrow<->string for comparison/equality only.
+		{types.T_array_bf16, types.T_varchar, types.T_array_bf16, types.T_array_bf16},
+		{types.T_array_bf16, types.T_array_bf16, types.T_array_bf16, types.T_array_bf16},
+		{types.T_array_float16, types.T_varchar, types.T_array_float16, types.T_array_float16},
+		{types.T_array_float16, types.T_array_float16, types.T_array_float16, types.T_array_float16},
+		{types.T_array_int8, types.T_varchar, types.T_array_int8, types.T_array_int8},
+		{types.T_array_int8, types.T_array_int8, types.T_array_int8, types.T_array_int8},
 		/** VEC <Op> Scalar => VEC **/
 		// VECF32 <Op> Scalar => VECF32
 		{types.T_array_float32, types.T_int32, types.T_array_float32, types.T_float32},
@@ -2275,6 +2300,9 @@ func initFixed3() {
 				//C
 				{toType: types.T_array_float32, preferLevel: 2},
 				{toType: types.T_array_float64, preferLevel: 2},
+				{toType: types.T_array_bf16, preferLevel: 2},
+				{toType: types.T_array_float16, preferLevel: 2},
+				{toType: types.T_array_int8, preferLevel: 2},
 			},
 		},
 
@@ -2393,6 +2421,9 @@ func initFixed3() {
 				{toType: types.T_blob, preferLevel: 2},
 				{toType: types.T_array_float32, preferLevel: 2},
 				{toType: types.T_array_float64, preferLevel: 2},
+				{toType: types.T_array_bf16, preferLevel: 2},
+				{toType: types.T_array_float16, preferLevel: 2},
+				{toType: types.T_array_int8, preferLevel: 2},
 			},
 		},
 		{

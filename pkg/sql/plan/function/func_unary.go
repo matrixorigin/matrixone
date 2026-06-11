@@ -229,7 +229,7 @@ var (
 	}
 )
 
-func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
@@ -286,11 +286,28 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 
 			*outArrayF64Ptr = outArrayF64
 			arrayF64Pool.Put(outArrayF64Ptr)
+		case types.T_array_bf16:
+			_ = appendNormalizedNarrowArray[types.BF16](rs, data)
+		case types.T_array_float16:
+			_ = appendNormalizedNarrowArray[types.Float16](rs, data)
+		case types.T_array_int8:
+			_ = appendNormalizedNarrowArray[int8](rs, data)
 		}
 
 	}
 
 	return nil
+}
+
+// appendNormalizedNarrowArray normalizes a narrow-typed vector (bf16/f16/int8)
+// by upcasting to float32, normalizing in float32, then narrowing back to T.
+// int8 normalization is mostly degenerate (unit vectors round to 0/±1) but is
+// supported for completeness.
+func appendNormalizedNarrowArray[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
+	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
+	out := make([]float32, len(in))
+	_ = moarray.NormalizeL2(in, out)
+	return rs.AppendBytes(types.ArrayToBytes[T](types.FromFloat32Array[T](out)), false)
 }
 
 func L1NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -626,6 +643,12 @@ func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64,
 	}
 	if rounded >= ULLONG_MAX_DOUBLE {
 		return bitCountFromUint64(uint64(math.MaxUint64)), nil
+	}
+	// Converting a negative float directly to uint64 is undefined in Go (the
+	// result is implementation-specific: two's-complement on amd64, 0 on arm64),
+	// so route negatives through int64 first and reinterpret the bit pattern.
+	if rounded < 0 {
+		return bitCountFromSignedInt64Pattern(int64(rounded)), nil
 	}
 	return bitCountFromUint64(uint64(rounded)), nil
 }

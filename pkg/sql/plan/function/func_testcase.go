@@ -917,6 +917,15 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	case types.T_array_float64:
 		values := val.([][]float64)
 		vector.AppendArrayList[float64](vec, values, nil, mp)
+	case types.T_array_bf16:
+		values := val.([][]types.BF16)
+		vector.AppendArrayList[types.BF16](vec, values, nil, mp)
+	case types.T_array_float16:
+		values := val.([][]types.Float16)
+		vector.AppendArrayList[types.Float16](vec, values, nil, mp)
+	case types.T_array_int8:
+		values := val.([][]int8)
+		vector.AppendArrayList[int8](vec, values, nil, mp)
 	case types.T_uuid:
 		values := val.([]types.Uuid)
 		vector.AppendFixedList(vec, values, nil, mp)

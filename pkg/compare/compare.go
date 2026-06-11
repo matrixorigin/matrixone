@@ -156,7 +156,8 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 			vs:          make([]*vector.Vector, 2),
 			isConstNull: make([]bool, 2),
 		}
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8:
 		//NOTE: Used by merge_order, merge_top, top agg operators.
 		return &arrayCompare{
 			desc:        desc,

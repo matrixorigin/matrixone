@@ -122,7 +122,7 @@ func InefficientMustStrCol(v *Vector) []string {
 }
 
 // MustArrayCol  Converts Vector<[]T> to [][]T
-func MustArrayCol[T types.RealNumbers](v *Vector) [][]T {
+func MustArrayCol[T types.ArrayElement](v *Vector) [][]T {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}

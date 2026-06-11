@@ -471,6 +471,12 @@ func (mrs *MysqlResultSet) GetString(ctx context.Context, rindex, cindex uint64)
 		return types.ArrayToString[float32](v), nil
 	case []float64:
 		return types.ArrayToString[float64](v), nil
+	case []types.BF16:
+		return types.ArrayToString[types.BF16](v), nil
+	case []types.Float16:
+		return types.ArrayToString[types.Float16](v), nil
+	case []int8:
+		return types.ArrayToString[int8](v), nil
 	case int:
 		return strconv.FormatInt(int64(v), 10), nil
 	case uint:

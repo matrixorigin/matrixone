@@ -331,6 +331,33 @@ func ArrayGetMinMax[T types.RealNumbers](vec *Vector) (minv, maxv []T) {
 	return
 }
 
+// ArrayElementGetMinMax mirrors ArrayGetMinMax for the narrow vector element
+// types (bf16/f16/int8). Ordering goes through the float32 bridge via
+// ArrayElementCompare so that bf16/f16 sign bits don't corrupt the comparison.
+// The returned min/max are original stored values (no reconversion).
+func ArrayElementGetMinMax[T types.ArrayElement](vec *Vector) (minv, maxv []T) {
+	col, area := MustVarlenaRawData(vec)
+	first := true
+	for i, j := 0, vec.Length(); i < j; i++ {
+		if vec.HasNull() && vec.IsNull(uint64(i)) {
+			continue
+		}
+		val := types.GetArray[T](&col[i], area)
+		if first {
+			minv, maxv = val, val
+			first = false
+			continue
+		}
+		if types.ArrayElementCompare[T](minv, val) > 0 {
+			minv = val
+		}
+		if types.ArrayElementCompare[T](maxv, val) < 0 {
+			maxv = val
+		}
+	}
+	return
+}
+
 func typeCompatible[T any](typ types.Type) bool {
 	var t T
 	switch (any)(t).(type) {

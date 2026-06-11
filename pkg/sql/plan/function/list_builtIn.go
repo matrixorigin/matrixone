@@ -5909,6 +5909,24 @@ var supportedArrayOperations = []FuncNew{
 					return InnerProductArray[float64]
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_bf16, types.T_array_bf16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return InnerProductArrayViaF32[types.BF16] },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_array_float16, types.T_array_float16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return InnerProductArrayViaF32[types.Float16] },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_int8, types.T_array_int8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return InnerProductArrayViaF32[int8] },
+			},
 		},
 	},
 
@@ -5940,6 +5958,24 @@ var supportedArrayOperations = []FuncNew{
 					return CosineSimilarityArray[float64]
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_bf16, types.T_array_bf16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return CosineSimilarityArrayViaF32[types.BF16] },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_array_float16, types.T_array_float16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return CosineSimilarityArrayViaF32[types.Float16] },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_int8, types.T_array_int8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return CosineSimilarityArrayViaF32[int8] },
+			},
 		},
 	},
 
@@ -5970,6 +6006,24 @@ var supportedArrayOperations = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return L2DistanceArray[float64]
 				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_bf16, types.T_array_bf16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L2DistanceArrayViaF32[types.BF16] },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_array_float16, types.T_array_float16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L2DistanceArrayViaF32[types.Float16] },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_int8, types.T_array_int8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L2DistanceArrayViaF32[int8] },
 			},
 		},
 	},
@@ -6033,6 +6087,24 @@ var supportedArrayOperations = []FuncNew{
 					return L2DistanceSqArray[float64]
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_bf16, types.T_array_bf16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L2DistanceSqArrayViaF32[types.BF16] },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_array_float16, types.T_array_float16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L2DistanceSqArrayViaF32[types.Float16] },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_int8, types.T_array_int8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L2DistanceSqArrayViaF32[int8] },
+			},
 		},
 	},
 
@@ -6095,6 +6167,24 @@ var supportedArrayOperations = []FuncNew{
 					return CosineDistanceArray[float64]
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_bf16, types.T_array_bf16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return CosineDistanceArrayViaF32[types.BF16] },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_array_float16, types.T_array_float16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return CosineDistanceArrayViaF32[types.Float16] },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_int8, types.T_array_int8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return CosineDistanceArrayViaF32[int8] },
+			},
 		},
 	},
 	// function `normalize_l2`
@@ -6124,6 +6214,24 @@ var supportedArrayOperations = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return NormalizeL2Array[float64]
 				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_array_bf16},
+				retType:    func(parameters []types.Type) types.Type { return parameters[0] },
+				newOp:      func() executeLogicOfOverload { return NormalizeL2Array[types.BF16] },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_float16},
+				retType:    func(parameters []types.Type) types.Type { return parameters[0] },
+				newOp:      func() executeLogicOfOverload { return NormalizeL2Array[types.Float16] },
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_array_int8},
+				retType:    func(parameters []types.Type) types.Type { return parameters[0] },
+				newOp:      func() executeLogicOfOverload { return NormalizeL2Array[int8] },
 			},
 		},
 	},

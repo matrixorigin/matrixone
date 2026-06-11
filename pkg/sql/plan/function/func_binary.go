@@ -11543,6 +11543,40 @@ func CosineDistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vec
 	}, selectList)
 }
 
+// arrayDistanceViaF32 computes a binary vector distance for the narrow element
+// types (bf16/f16/int8). Both operands are upcast to []float32 and run through
+// the existing float32 kernel. It deliberately bypasses batchArrayDistanceSync
+// (the GPU/usearch path), which only supports native float element types.
+func arrayDistanceViaF32[T types.ArrayElement](
+	ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList,
+	kernel func(v1, v2 []float32) (float64, error)) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
+		f1 := types.ToFloat32Array[T](types.BytesToArray[T](v1))
+		f2 := types.ToFloat32Array[T](types.BytesToArray[T](v2))
+		return kernel(f1, f2)
+	}, selectList)
+}
+
+func L2DistanceArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceViaF32[T](ivecs, result, proc, length, selectList, moarray.L2Distance[float32])
+}
+
+func L2DistanceSqArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceViaF32[T](ivecs, result, proc, length, selectList, moarray.L2DistanceSq[float32])
+}
+
+func InnerProductArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceViaF32[T](ivecs, result, proc, length, selectList, moarray.InnerProduct[float32])
+}
+
+func CosineDistanceArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceViaF32[T](ivecs, result, proc, length, selectList, moarray.CosineDistance[float32])
+}
+
+func CosineSimilarityArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceViaF32[T](ivecs, result, proc, length, selectList, moarray.CosineSimilarity[float32])
+}
+
 func castBinaryArrayToInt(array []uint8) int64 {
 	var result int64
 	for i, value := range array {
