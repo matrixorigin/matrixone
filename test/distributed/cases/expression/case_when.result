@@ -285,3 +285,80 @@ CAST(1 AS DECIMAL(38,0)),
 CAST(0 AS DECIMAL(38,20))) AS iff_decimal256_false;
 iff_decimal256_false
 0E-20
+SELECT 7.01970 * CAST(-58140.00 AS DECIMAL(23,2)) AS direct_mul;
+direct_mul
+-408125.3580000
+SELECT COALESCE(
+CAST(NULL AS DECIMAL(23,2)),
+7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
+) AS coalesce_decimal_scale;
+coalesce_decimal_scale
+-408125.3580000
+SELECT COALESCE(
+CAST(1.23 AS DECIMAL(23,2)),
+7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
+) AS coalesce_first_non_null;
+coalesce_first_non_null
+1.2300000
+SELECT (CASE WHEN 1 = 1 THEN CAST(1 AS DECIMAL(38,0))
+ELSE CAST(0 AS DECIMAL(38,20)) END)
+= CAST(1 AS DECIMAL(38,20)) AS decimal256_eq_decimal128;
+decimal256_eq_decimal128
+1
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+ELSE CAST(0 AS DECIMAL(38,20)) END)
+> CAST(1 AS DECIMAL(38,20)) AS decimal256_gt_decimal128;
+decimal256_gt_decimal128
+1
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+ELSE CAST(0 AS DECIMAL(38,20)) END)
+< CAST(1 AS DECIMAL(38,20)) AS decimal256_lt_decimal128;
+decimal256_lt_decimal128
+0
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+ELSE CAST(0 AS DECIMAL(38,20)) END)
+!= CAST(1 AS DECIMAL(38,20)) AS decimal256_ne_decimal128;
+decimal256_ne_decimal128
+1
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+ELSE CAST(0 AS DECIMAL(38,20)) END)
+BETWEEN CAST(1 AS DECIMAL(38,20)) AND CAST(10 AS DECIMAL(38,20)) AS decimal256_between;
+decimal256_between
+1
+SELECT COALESCE(CAST(1 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_decimal256;
+coalesce_promote_decimal256
+1.000000000000000000000000000000
+SELECT COALESCE(CAST(12345678901234567890123456789012345678 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_bignum;
+coalesce_promote_bignum
+12345678901234567890123456789012345678.000000000000000000000000000000
+drop table if exists t_coalesce_col;
+create table t_coalesce_col (id int, a decimal(23,2), b decimal(38,7));
+insert into t_coalesce_col values (1, null, 7.01970 * cast(-58140.00 as decimal(23,2))), (2, 1.23, 7.01970 * cast(-58140.00 as decimal(23,2)));
+select id, coalesce(a, b) as col_coalesce from t_coalesce_col order by id;
+id    col_coalesce
+1    -408125.3580000
+2    1.2300000
+drop table t_coalesce_col;
+drop table if exists t_coalesce_mix;
+create table t_coalesce_mix (id int, i int, d decimal(20,5));
+insert into t_coalesce_mix values (1, null, 1.50000), (2, 10, 2.50000);
+select id, coalesce(i, d) as mix_coalesce from t_coalesce_mix order by id;
+id    mix_coalesce
+1    1.50000
+2    10.00000
+drop table t_coalesce_mix;
+select coalesce(null, 1, cast(0.5 as decimal(10,5))) as mix_const_coalesce;
+mix_const_coalesce
+1.00000
+select coalesce(null, cast(1.23 as decimal(23,2)), cast(4.56780 as decimal(38,7))) as three_branch;
+three_branch
+1.2300000
+select coalesce(cast(null as decimal(23,2)), cast(null as decimal(20,5)), 7.01970 * cast(-58140.00 as decimal(23,2))) as three_branch_all_decimal;
+three_branch_all_decimal
+-408125.3580000
+drop view if exists v_coalesce_meta;
+create view v_coalesce_meta as select coalesce(cast(null as decimal(23,2)), 7.01970 * cast(-58140.00 as decimal(23,2))) as c;
+desc v_coalesce_meta;
+Field    Type    Null    Key    Default    Extra    Comment
+c    DECIMAL(38,7)    YES        null        
+drop view v_coalesce_meta;
