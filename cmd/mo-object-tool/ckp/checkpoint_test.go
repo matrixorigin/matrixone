@@ -69,3 +69,18 @@ func TestNormalizeCreateTableDDLName(t *testing.T) {
 		})
 	}
 }
+
+func TestFilterExistingIndexDDLs(t *testing.T) {
+	createDDL := "CREATE TABLE `items_gist` (\n" +
+		"  `id` int NOT NULL,\n" +
+		"  `embedding` vecf32(960) DEFAULT NULL,\n" +
+		"  PRIMARY KEY (`id`),\n" +
+		"  KEY `ivf_2000` USING ivfflat(`embedding`) lists=2000 op_type 'vector_l2_ops'\n" +
+		")"
+	indexDDLs := []string{
+		"ALTER TABLE `items_gist` ADD KEY `ivf_2000` USING ivfflat(`embedding`) lists = 2000  op_type 'vector_l2_ops' ;",
+		"ALTER TABLE `items_gist` ADD KEY `new_idx`(`id`);",
+	}
+
+	assert.Equal(t, []string{"ALTER TABLE `items_gist` ADD KEY `new_idx`(`id`);"}, filterExistingIndexDDLs(createDDL, indexDDLs))
+}

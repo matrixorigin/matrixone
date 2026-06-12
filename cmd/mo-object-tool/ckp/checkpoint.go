@@ -484,7 +484,11 @@ Examples:
 					if jobs > len(tables) {
 						jobs = len(tables)
 					}
-					if err := dumpTablesConcurrently(ctx, reader, tables, snapshotTS, outputDir, jobs, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout()); err != nil {
+					dumpPlans, err := prepareTableDumpPlans(ctx, reader, tables, snapshotTS)
+					if err != nil {
+						return err
+					}
+					if err := dumpTablesConcurrently(ctx, reader, dumpPlans, snapshotTS, outputDir, jobs, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout()); err != nil {
 						return err
 					}
 					fmt.Fprintf(cmd.OutOrStdout(), "Dumped %d tables to %s\n", len(tables), outputDir)
@@ -509,7 +513,11 @@ Examples:
 					return fmt.Errorf("create output dir: %w", err)
 				}
 				if !noLoad {
-					if err := dumpOneTable(ctx, reader, tableEntry, snapshotTS, outputDir, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout(), &sync.Mutex{}); err != nil {
+					dumpData, err := reader.PrepareTableDumpData(ctx, tableEntry.TableID, snapshotTS)
+					if err != nil {
+						return fmt.Errorf("prepare table %d (%s.%s): %w", tableEntry.TableID, tableEntry.DatabaseName, tableEntry.TableName, err)
+					}
+					if err := dumpOneTable(ctx, reader, tableDumpPlan{table: tableEntry, data: dumpData}, snapshotTS, outputDir, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout(), &sync.Mutex{}); err != nil {
 						return err
 					}
 				}
@@ -743,6 +751,16 @@ func writeRestoreScript(
 		if _, err := fmt.Fprintln(f, ";"); err != nil {
 			return "", err
 		}
+		indexDDLs, err := reader.ShowCreateIndexStatements(ctx, table.TableID, table.TableName, snapshotTS)
+		if err != nil {
+			return "", fmt.Errorf("show create indexes for table %d: %w", table.TableID, err)
+		}
+		indexDDLs = filterExistingIndexDDLs(ddl, indexDDLs)
+		for _, indexDDL := range indexDDLs {
+			if _, err := fmt.Fprintln(f, strings.TrimRight(indexDDL, " \n\t")); err != nil {
+				return "", err
+			}
+		}
 		if includeLoad {
 			if _, err := fmt.Fprintf(f, "\nLOAD DATA INFILE %s\n", quoteSQLString(tableCSVPath(csvRoot, table))); err != nil {
 				return "", err
@@ -801,6 +819,106 @@ func normalizeCreateTableDDLName(ddl string, table checkpointtool.TableCatalogEn
 		target = quoteSQLIdent(table.DatabaseName) + "." + target
 	}
 	return ddl[:nameStart] + target + ddl[nameEnd:]
+}
+
+func ddlTableName(ddl string, tableID uint64) string {
+	nameStart, nameEnd, ok := createTableNameRange(ddl)
+	if !ok {
+		return strconv.FormatUint(tableID, 10)
+	}
+	name := strings.TrimSpace(ddl[nameStart:nameEnd])
+	if dot := strings.LastIndex(name, "."); dot >= 0 {
+		name = name[dot+1:]
+	}
+	if unquoted, ok := unquoteSQLIdent(name); ok && unquoted != "" {
+		return unquoted
+	}
+	return strings.Trim(name, "`")
+}
+
+func unquoteSQLIdent(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if len(s) < 2 || s[0] != '`' || s[len(s)-1] != '`' {
+		return s, false
+	}
+	return strings.ReplaceAll(s[1:len(s)-1], "``", "`"), true
+}
+
+func filterExistingIndexDDLs(createDDL string, indexDDLs []string) []string {
+	if len(indexDDLs) == 0 {
+		return nil
+	}
+	filtered := make([]string, 0, len(indexDDLs))
+	for _, indexDDL := range indexDDLs {
+		name := generatedIndexDDLName(indexDDL)
+		if name != "" && createTableHasIndex(createDDL, name) {
+			continue
+		}
+		filtered = append(filtered, indexDDL)
+	}
+	return filtered
+}
+
+func generatedIndexDDLName(indexDDL string) string {
+	upper := strings.ToUpper(indexDDL)
+	for _, marker := range []string{" ADD UNIQUE KEY ", " ADD KEY ", " ADD INDEX "} {
+		i := strings.Index(upper, marker)
+		if i < 0 {
+			continue
+		}
+		name := strings.TrimSpace(indexDDL[i+len(marker):])
+		if unquoted, ok := readLeadingSQLIdent(name); ok {
+			return unquoted
+		}
+	}
+	return ""
+}
+
+func createTableHasIndex(createDDL string, name string) bool {
+	quoted := quoteSQLIdent(name)
+	upper := strings.ToUpper(createDDL)
+	for _, marker := range []string{"KEY " + quoted, "INDEX " + quoted, "CONSTRAINT " + quoted} {
+		if strings.Contains(upper, strings.ToUpper(marker)) {
+			return true
+		}
+	}
+	lowerDDL := strings.ToLower(createDDL)
+	lowerName := strings.ToLower(name)
+	for _, marker := range []string{"key " + lowerName, "index " + lowerName, "constraint " + lowerName} {
+		if strings.Contains(lowerDDL, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func readLeadingSQLIdent(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", false
+	}
+	if s[0] == '`' {
+		end := 1
+		for end < len(s) {
+			if s[end] == '`' {
+				if end+1 < len(s) && s[end+1] == '`' {
+					end += 2
+					continue
+				}
+				return strings.ReplaceAll(s[1:end], "``", "`"), true
+			}
+			end++
+		}
+		return "", false
+	}
+	end := 0
+	for end < len(s) && isSQLIdentByte(s[end]) {
+		end++
+	}
+	if end == 0 {
+		return "", false
+	}
+	return s[:end], true
 }
 
 func createTableNameRange(sql string) (int, int, bool) {
@@ -891,10 +1009,41 @@ func isSQLIdentByte(b byte) bool {
 		(b >= 'A' && b <= 'Z')
 }
 
-func dumpTablesConcurrently(
+type tableDumpPlan struct {
+	table checkpointtool.TableCatalogEntry
+	data  *checkpointtool.TableDumpData
+}
+
+func prepareTableDumpPlans(
 	ctx context.Context,
 	reader *checkpointtool.CheckpointReader,
 	tables []checkpointtool.TableCatalogEntry,
+	snapshotTS types.TS,
+) ([]tableDumpPlan, error) {
+	tableIDs := make([]uint64, 0, len(tables))
+	for _, table := range tables {
+		tableIDs = append(tableIDs, table.TableID)
+	}
+	dumpDataByTable, err := reader.PrepareTableDumpDataForTables(ctx, tableIDs, snapshotTS)
+	if err != nil {
+		return nil, err
+	}
+
+	plans := make([]tableDumpPlan, 0, len(tables))
+	for _, table := range tables {
+		data := dumpDataByTable[table.TableID]
+		if data == nil {
+			return nil, fmt.Errorf("prepare table %d (%s.%s): missing object list", table.TableID, table.DatabaseName, table.TableName)
+		}
+		plans = append(plans, tableDumpPlan{table: table, data: data})
+	}
+	return plans, nil
+}
+
+func dumpTablesConcurrently(
+	ctx context.Context,
+	reader *checkpointtool.CheckpointReader,
+	plans []tableDumpPlan,
 	snapshotTS types.TS,
 	outputDir string,
 	jobs int,
@@ -903,15 +1052,16 @@ func dumpTablesConcurrently(
 	header bool,
 	out io.Writer,
 ) error {
-	tableCh := make(chan checkpointtool.TableCatalogEntry)
+	tableCh := make(chan tableDumpPlan)
 	errCh := make(chan error, 1)
 	var outMu sync.Mutex
 	var wg sync.WaitGroup
 
 	worker := func() {
 		defer wg.Done()
-		for table := range tableCh {
-			if err := dumpOneTable(ctx, reader, table, snapshotTS, outputDir, rowOrder, metaComments, header, out, &outMu); err != nil {
+		workerReader := reader.Fork(ctx)
+		for plan := range tableCh {
+			if err := dumpOneTable(ctx, workerReader, plan, snapshotTS, outputDir, rowOrder, metaComments, header, out, &outMu); err != nil {
 				select {
 				case errCh <- err:
 				default:
@@ -924,13 +1074,13 @@ func dumpTablesConcurrently(
 		wg.Add(1)
 		go worker()
 	}
-	for _, table := range tables {
+	for _, plan := range plans {
 		select {
 		case err := <-errCh:
 			close(tableCh)
 			wg.Wait()
 			return err
-		case tableCh <- table:
+		case tableCh <- plan:
 		}
 	}
 	close(tableCh)
@@ -955,7 +1105,7 @@ func tableCSVPath(outputDir string, table checkpointtool.TableCatalogEntry) stri
 func dumpOneTable(
 	ctx context.Context,
 	reader *checkpointtool.CheckpointReader,
-	table checkpointtool.TableCatalogEntry,
+	plan tableDumpPlan,
 	snapshotTS types.TS,
 	outputDir string,
 	rowOrder checkpointtool.CSVRowOrder,
@@ -964,6 +1114,7 @@ func dumpOneTable(
 	out io.Writer,
 	outMu *sync.Mutex,
 ) error {
+	table := plan.table
 	filePath := tableCSVPath(outputDir, table)
 	tableDir := filepath.Dir(filePath)
 	if err := os.MkdirAll(tableDir, 0o755); err != nil {
@@ -973,10 +1124,10 @@ func dumpOneTable(
 	if err != nil {
 		return fmt.Errorf("create output file for table %d: %w", table.TableID, err)
 	}
-	err = reader.DumpTableCSVComposed(
+	err = reader.DumpPreparedTableCSV(
 		ctx,
 		outFile,
-		table.TableID,
+		plan.data,
 		snapshotTS,
 		checkpointtool.WithCSVMetaComments(metaComments),
 		checkpointtool.WithCSVHeader(header),
@@ -1078,6 +1229,14 @@ Examples:
 			}
 
 			fmt.Fprintln(cmd.OutOrStdout(), ddl)
+			indexDDLs, err := reader.ShowCreateIndexStatements(ctx, tableID, ddlTableName(ddl, tableID), snapshotTS)
+			if err != nil {
+				return fmt.Errorf("show create indexes for table %d: %w", tableID, err)
+			}
+			indexDDLs = filterExistingIndexDDLs(ddl, indexDDLs)
+			for _, indexDDL := range indexDDLs {
+				fmt.Fprintln(cmd.OutOrStdout(), indexDDL)
+			}
 			return nil
 		},
 	}

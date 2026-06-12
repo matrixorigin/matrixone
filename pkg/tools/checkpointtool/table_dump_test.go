@@ -596,6 +596,28 @@ func TestMergeLogicalViewWithSchema_LargeSparsePhysicalPositions(t *testing.T) {
 	assert.Equal(t, []string{"v0", "v63", "v127"}, merged.Rows[0])
 }
 
+func TestBuildCreateIndexStatementsFromMoIndexes_IVFFlat(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{
+			"table_id", "name", "type", "algo", "algo_params", "comment",
+			"column_name", "ordinal_position", "hidden",
+		},
+		Rows: [][]string{
+			{"272535", "PRIMARY", "PRIMARY", "", "", "", "id", "1", "0"},
+			{"272535", "ivf_2000", "MULTIPLE", "ivfflat", `{"lists":"2000","op_type":"vector_l2_ops"}`, "", "embedding", "1", "0"},
+			{"272535", "ivf_2000", "MULTIPLE", "ivfflat", `{"lists":"2000","op_type":"vector_l2_ops"}`, "", "embedding", "1", "0"},
+			{"272535", "ivf_2000", "MULTIPLE", "ivfflat", `{"lists":"2000","op_type":"vector_l2_ops"}`, "", "__mo_alias_embedding", "1", "0"},
+			{"999999", "other_idx", "MULTIPLE", "", "", "", "v", "1", "0"},
+		},
+	}
+
+	stmts, err := buildCreateIndexStatementsFromMoIndexes(view, 272535, "items_gist")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"ALTER TABLE `items_gist` ADD KEY `ivf_2000` USING ivfflat(`embedding`) lists = 2000  op_type 'vector_l2_ops' ;",
+	}, stmts)
+}
+
 func TestWriteCSV_LexicalRowOrder(t *testing.T) {
 	schema := &TableSchema{
 		TableName: "sorted",

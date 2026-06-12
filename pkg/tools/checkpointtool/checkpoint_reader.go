@@ -95,6 +95,22 @@ func (r *CheckpointReader) FS() fileservice.FileService {
 	return r.fs
 }
 
+// Fork returns a lightweight reader that shares the file service and already
+// loaded checkpoint entries, but uses an independent memory pool and does not
+// own the file service.
+func (r *CheckpointReader) Fork(ctx context.Context) *CheckpointReader {
+	if ctx == nil {
+		ctx = r.ctx
+	}
+	return &CheckpointReader{
+		ctx:     ctx,
+		fs:      r.fs,
+		dir:     r.dir,
+		entries: r.entries,
+		mp:      mpool.MustNewZero(),
+	}
+}
+
 func (r *CheckpointReader) loadEntries() error {
 	names, err := ckputil.ListCKPMetaNames(r.ctx, r.fs)
 	if err != nil {
@@ -472,6 +488,61 @@ func (r *CheckpointReader) GetObjectEntries(entry *checkpoint.CheckpointEntry, t
 		return nil, nil, err
 	}
 	return dataEntries, tombEntries, nil
+}
+
+// GetObjectEntriesForTables reads detailed object entries for multiple tables
+// from one checkpoint entry in a single pass.
+func (r *CheckpointReader) GetObjectEntriesForTables(
+	entry *checkpoint.CheckpointEntry,
+	tableIDs map[uint64]struct{},
+) (map[uint64][]*ObjectEntryInfo, map[uint64][]*ObjectEntryInfo, error) {
+	loc := entry.GetLocation()
+	if loc.IsEmpty() {
+		return nil, nil, nil
+	}
+
+	_, err := r.fs.StatFile(r.ctx, loc.Name().String())
+	if err != nil {
+		if isDataFileNotFound(err) {
+			return nil, nil, moerr.NewFileNotFoundErrorf(r.ctx, "checkpoint data file not found (may have been GC'd): %s", loc.Name().String())
+		}
+		return nil, nil, err
+	}
+
+	dataByTable := make(map[uint64][]*ObjectEntryInfo)
+	tombByTable := make(map[uint64][]*ObjectEntryInfo)
+	reader := logtail.NewCKPReader(entry.GetVersion(), loc, r.mp, r.fs)
+	if err := reader.ReadMeta(r.ctx); err != nil {
+		return nil, nil, err
+	}
+	err = reader.ForEachRow(r.ctx, func(
+		_ uint32,
+		_, tid uint64,
+		objectType int8,
+		objectStats objectio.ObjectStats,
+		create, delete types.TS,
+		_ types.Rowid,
+	) error {
+		if _, ok := tableIDs[tid]; !ok {
+			return nil
+		}
+		info := &ObjectEntryInfo{
+			ObjectStats: objectStats,
+			CreateTime:  create,
+			DeleteTime:  delete,
+		}
+		switch objectType {
+		case ckputil.ObjectType_Data:
+			dataByTable[tid] = append(dataByTable[tid], info)
+		case ckputil.ObjectType_Tombstone:
+			tombByTable[tid] = append(tombByTable[tid], info)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return dataByTable, tombByTable, nil
 }
 
 // ReadRangeData reads actual data from a range and returns column names and row data as strings

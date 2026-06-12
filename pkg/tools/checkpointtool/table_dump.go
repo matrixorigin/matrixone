@@ -142,6 +142,28 @@ type exportedCSVRow struct {
 	nulls  []bool
 }
 
+// TableDumpData contains the checkpoint metadata needed to dump one table.
+type TableDumpData struct {
+	TableID     uint64
+	Schema      *TableSchema
+	DataEntries []*ObjectEntryInfo
+	TombEntries []*ObjectEntryInfo
+}
+
+type indexDDLColumn struct {
+	name    string
+	ordinal int
+}
+
+type indexDDLInfo struct {
+	name       string
+	indexType  string
+	algo       string
+	algoParams string
+	comment    string
+	columns    map[string]indexDDLColumn
+}
+
 type CSVExportOption func(*CSVExportOptions)
 
 func defaultCSVExportOptions() CSVExportOptions {
@@ -649,6 +671,141 @@ func (r *CheckpointReader) DumpTableCSVComposed(
 		)
 	}
 	return r.streamTableCSV(ctx, w, schema, snapshotTS, dataEntries, tombEntries, resolveCSVExportOptions(opts))
+}
+
+// PrepareTableDumpData resolves the table schema and object lists once so batch
+// dumps can avoid repeatedly composing checkpoint metadata per table worker.
+func (r *CheckpointReader) PrepareTableDumpData(
+	ctx context.Context,
+	tableID uint64,
+	snapshotTS types.TS,
+) (*TableDumpData, error) {
+	dataEntries, tombEntries, err := r.getTableEntriesAt(ctx, tableID, snapshotTS)
+	if err != nil {
+		return nil, err
+	}
+	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
+	if len(schema.Columns) == 0 {
+		return nil, moerr.NewInternalErrorf(
+			ctx,
+			"cannot resolve visible columns for table %d from checkpoint metadata; mo_columns data is unavailable or incomplete",
+			tableID,
+		)
+	}
+	return &TableDumpData{
+		TableID:     tableID,
+		Schema:      cloneTableSchema(schema),
+		DataEntries: dataEntries,
+		TombEntries: tombEntries,
+	}, nil
+}
+
+// PrepareTableDumpDataForTables resolves schemas and object lists for multiple
+// tables by composing the checkpoint once and scanning each selected checkpoint
+// entry once.
+func (r *CheckpointReader) PrepareTableDumpDataForTables(
+	ctx context.Context,
+	tableIDs []uint64,
+	snapshotTS types.TS,
+) (map[uint64]*TableDumpData, error) {
+	composed, err := r.ComposeAt(snapshotTS)
+	if err != nil {
+		return nil, err
+	}
+
+	tableSet := make(map[uint64]struct{}, len(tableIDs))
+	result := make(map[uint64]*TableDumpData, len(tableIDs))
+	for _, tableID := range tableIDs {
+		if _, ok := tableSet[tableID]; ok {
+			continue
+		}
+		tbl, ok := composed.Tables[tableID]
+		if !ok || (len(tbl.DataRanges) == 0 && len(tbl.TombRanges) == 0) {
+			return nil, moerr.NewInternalErrorf(ctx, "table %d not found in checkpoint at ts %s", tableID, snapshotTS.ToString())
+		}
+		tableSet[tableID] = struct{}{}
+		result[tableID] = &TableDumpData{TableID: tableID}
+	}
+
+	entryRefs := make([]*EntryInfo, 0, len(composed.Incrementals)+1)
+	if composed.BaseEntry != nil {
+		entryRefs = append(entryRefs, composed.BaseEntry)
+	}
+	entryRefs = append(entryRefs, composed.Incrementals...)
+
+	for _, ref := range entryRefs {
+		e := r.entries[ref.Index]
+		dataByTable, tombByTable, err := r.GetObjectEntriesForTables(e, tableSet)
+		if err != nil {
+			if isDataFileNotFound(err) {
+				continue
+			}
+			return nil, err
+		}
+		for tableID, entries := range dataByTable {
+			result[tableID].DataEntries = append(result[tableID].DataEntries, entries...)
+		}
+		for tableID, entries := range tombByTable {
+			result[tableID].TombEntries = append(result[tableID].TombEntries, entries...)
+		}
+	}
+
+	for tableID, data := range result {
+		if len(data.DataEntries) == 0 {
+			return nil, moerr.NewInternalErrorf(ctx, "no data entries for table %d", tableID)
+		}
+		schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
+		if len(schema.Columns) == 0 {
+			return nil, moerr.NewInternalErrorf(
+				ctx,
+				"cannot resolve visible columns for table %d from checkpoint metadata; mo_columns data is unavailable or incomplete",
+				tableID,
+			)
+		}
+		data.Schema = cloneTableSchema(schema)
+	}
+	return result, nil
+}
+
+// DumpPreparedTableCSV writes a table using metadata previously resolved by
+// PrepareTableDumpData.
+func (r *CheckpointReader) DumpPreparedTableCSV(
+	ctx context.Context,
+	w io.Writer,
+	data *TableDumpData,
+	snapshotTS types.TS,
+	opts ...CSVExportOption,
+) error {
+	if data == nil {
+		return moerr.NewInternalError(ctx, "missing prepared table dump data")
+	}
+	if data.Schema == nil || len(data.Schema.Columns) == 0 {
+		return moerr.NewInternalErrorf(ctx, "cannot resolve visible columns for table %d from checkpoint metadata", data.TableID)
+	}
+	return r.streamTableCSV(ctx, w, data.Schema, snapshotTS, data.DataEntries, data.TombEntries, resolveCSVExportOptions(opts))
+}
+
+func cloneTableSchema(schema *TableSchema) *TableSchema {
+	if schema == nil {
+		return nil
+	}
+	clone := &TableSchema{
+		TableName:    strings.Clone(schema.TableName),
+		DatabaseName: strings.Clone(schema.DatabaseName),
+		CreateSQL:    strings.Clone(schema.CreateSQL),
+	}
+	if len(schema.Columns) > 0 {
+		clone.Columns = make([]TableColumn, len(schema.Columns))
+		for i, col := range schema.Columns {
+			clone.Columns[i] = TableColumn{
+				Name:             strings.Clone(col.Name),
+				SQLType:          strings.Clone(col.SQLType),
+				Position:         col.Position,
+				PhysicalPosition: col.PhysicalPosition,
+			}
+		}
+	}
+	return clone
 }
 
 func (r *CheckpointReader) ListCatalogTables(
@@ -2394,6 +2551,208 @@ func (r *CheckpointReader) ShowCreateTable(
 		"cannot resolve exact schema for table %d from checkpoint metadata; mo_tables/mo_columns data is unavailable or incomplete",
 		tableID,
 	)
+}
+
+// ShowCreateIndexStatements returns ALTER TABLE statements for secondary indexes
+// recorded in mo_catalog.mo_indexes. CREATE TABLE reconstruction from mo_columns
+// cannot see these rows, so restore scripts need to apply them separately.
+func (r *CheckpointReader) ShowCreateIndexStatements(
+	ctx context.Context,
+	tableID uint64,
+	tableName string,
+	snapshotTS types.TS,
+) ([]string, error) {
+	moIndexesTableID, ok, err := r.findCatalogTableID(ctx, snapshotTS, catalog.MO_INDEXES)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+
+	view, err := r.getTableLogicalView(ctx, moIndexesTableID, snapshotTS)
+	if err != nil || view == nil {
+		return nil, err
+	}
+	schema := r.ReadTableSchema(ctx, moIndexesTableID, snapshotTS, view)
+	if len(schema.Columns) > 0 {
+		view = MergeLogicalViewWithSchema(view, schema)
+	}
+	return buildCreateIndexStatementsFromMoIndexes(view, tableID, tableName)
+}
+
+func (r *CheckpointReader) findCatalogTableID(
+	ctx context.Context,
+	snapshotTS types.TS,
+	tableName string,
+) (uint64, bool, error) {
+	tables, err := r.ListCatalogTables(ctx, snapshotTS, TableListOptions{IncludeViews: true})
+	if err != nil {
+		return 0, false, fmt.Errorf("list catalog tables: %w", err)
+	}
+	for _, table := range tables {
+		if table.TableName != tableName {
+			continue
+		}
+		if table.DatabaseName == "" || table.DatabaseName == catalog.MO_CATALOG {
+			return table.TableID, true, nil
+		}
+	}
+	return 0, false, nil
+}
+
+func buildCreateIndexStatementsFromMoIndexes(
+	view *LogicalTableView,
+	tableID uint64,
+	tableName string,
+) ([]string, error) {
+	if view == nil {
+		return nil, nil
+	}
+	tableIDCol := view.columnDataIndex("table_id")
+	nameCol := view.columnDataIndex("name")
+	typeCol := view.columnDataIndex("type")
+	algoCol := view.columnDataIndex(catalog.IndexAlgoName)
+	paramsCol := view.columnDataIndex(catalog.IndexAlgoParams)
+	commentCol := view.columnDataIndex("comment")
+	columnNameCol := view.columnDataIndex("column_name")
+	ordinalCol := view.columnDataIndex("ordinal_position")
+	hiddenCol := view.columnDataIndex("hidden")
+	if tableIDCol < 0 || nameCol < 0 || columnNameCol < 0 {
+		return nil, nil
+	}
+
+	byName := make(map[string]*indexDDLInfo)
+	tableIDStr := strconv.FormatUint(tableID, 10)
+	for _, row := range view.Rows {
+		if tableIDCol >= len(row) || row[tableIDCol] != tableIDStr {
+			continue
+		}
+		if hiddenCol >= 0 && hiddenCol < len(row) && isTruthyCatalogValue(row[hiddenCol]) {
+			continue
+		}
+		if nameCol >= len(row) || columnNameCol >= len(row) {
+			continue
+		}
+		name := row[nameCol]
+		colName := row[columnNameCol]
+		if name == "" || strings.EqualFold(name, "PRIMARY") || colName == "" || catalog.IsAlias(colName) {
+			continue
+		}
+		info := byName[name]
+		if info == nil {
+			info = &indexDDLInfo{name: name, columns: make(map[string]indexDDLColumn)}
+			byName[name] = info
+		}
+		if typeCol >= 0 && typeCol < len(row) && info.indexType == "" {
+			info.indexType = row[typeCol]
+		}
+		if algoCol >= 0 && algoCol < len(row) && info.algo == "" {
+			info.algo = row[algoCol]
+		}
+		if paramsCol >= 0 && paramsCol < len(row) && info.algoParams == "" {
+			info.algoParams = row[paramsCol]
+		}
+		if commentCol >= 0 && commentCol < len(row) && info.comment == "" {
+			info.comment = row[commentCol]
+		}
+		ordinal := len(info.columns) + 1
+		if ordinalCol >= 0 && ordinalCol < len(row) {
+			if parsed, err := strconv.Atoi(row[ordinalCol]); err == nil {
+				ordinal = parsed
+			}
+		}
+		if existing, ok := info.columns[colName]; !ok || ordinal < existing.ordinal {
+			info.columns[colName] = indexDDLColumn{name: colName, ordinal: ordinal}
+		}
+	}
+
+	names := make([]string, 0, len(byName))
+	for name, info := range byName {
+		if len(info.columns) > 0 {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
+	statements := make([]string, 0, len(names))
+	for _, name := range names {
+		stmt, err := renderCreateIndexStatement(tableName, byName[name])
+		if err != nil {
+			return nil, err
+		}
+		if stmt != "" {
+			statements = append(statements, stmt)
+		}
+	}
+	return statements, nil
+}
+
+func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, error) {
+	if info == nil || tableName == "" || len(info.columns) == 0 {
+		return "", nil
+	}
+	cols := make([]indexDDLColumn, 0, len(info.columns))
+	for _, col := range info.columns {
+		cols = append(cols, col)
+	}
+	sort.Slice(cols, func(i, j int) bool {
+		if cols[i].ordinal != cols[j].ordinal {
+			return cols[i].ordinal < cols[j].ordinal
+		}
+		return cols[i].name < cols[j].name
+	})
+
+	var sb strings.Builder
+	sb.WriteString("ALTER TABLE ")
+	sb.WriteString(quoteDDLIdent(tableName))
+	sb.WriteString(" ADD ")
+	if strings.EqualFold(info.indexType, "UNIQUE") {
+		sb.WriteString("UNIQUE ")
+	}
+	sb.WriteString("KEY ")
+	sb.WriteString(quoteDDLIdent(info.name))
+	if !catalog.IsNullIndexAlgo(info.algo) {
+		sb.WriteString(" USING ")
+		sb.WriteString(info.algo)
+	}
+	sb.WriteString("(")
+	for i, col := range cols {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(quoteDDLIdent(col.name))
+	}
+	sb.WriteString(")")
+	if strings.TrimSpace(info.algoParams) != "" {
+		params, err := catalog.IndexParamsToStringList(info.algoParams)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(params) != "" {
+			sb.WriteString(params)
+		}
+	}
+	if info.comment != "" {
+		sb.WriteString(" COMMENT ")
+		sb.WriteString(quoteDDLString(info.comment))
+	}
+	sb.WriteString(";")
+	return sb.String(), nil
+}
+
+func quoteDDLIdent(s string) string {
+	return "`" + strings.ReplaceAll(s, "`", "``") + "`"
+}
+
+func quoteDDLString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `'`, `''`)
+	return "'" + s + "'"
+}
+
+func isTruthyCatalogValue(s string) bool {
+	return s == "1" || strings.EqualFold(s, "true")
 }
 
 // getTableName tries to get the table name for a tableID from the LogicalTableView's
