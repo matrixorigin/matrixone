@@ -124,7 +124,7 @@ null    null    null    null    null    null    null    null    null    null    
 -1    9223372036854775807    4000000000    1.5    123.45    ab    hi,there    long text    2026-06-08    1    {"k": 1}
 drop table if exists bit_src;
 create table bit_src(a int, b bit(8));
-insert into bit_src values (1, 44), (2, 92), (3, 34), (4, 128), (5, 5);
+insert into bit_src values (1, 44), (2, 92), (3, 34), (4, 128), (5, 5), (6, 32), (7, 13), (8, 10);
 drop table if exists ext_bit;
 create external table ext_bit(a int, b bit(8))
 infile{'filepath'='stage://wstage/wext_bit_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_bit_%U.csv'}
@@ -137,6 +137,9 @@ a    cast(b as unsigned)
 3    34
 4    128
 5    5
+6    32
+7    13
+8    10
 drop table if exists ext_sb;
 create external table ext_sb(a int, b varchar(20))
 infile{'filepath'='stage://wstage/wext_sb_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_sb_%U.csv'}
@@ -206,6 +209,12 @@ drop table if exists ext_ro;
 create external table ext_ro(a int) infile 'stage://wstage/nonexist_*.csv';
 insert into ext_ro values (1);
 invalid input: cannot insert/update/delete from external table
+update ext_csv set b = 'x' where a = 1;
+invalid input: cannot insert/update/delete from external table
+delete from ext_csv where a = 1;
+invalid input: cannot insert/update/delete from external table
+truncate table ext_csv;
+not supported: truncate writable external table 'ext_csv'; its files in the stage are not managed by the table
 create external table ext_bad1(a int)
 infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='/tmp/part-%U.csv'};
 invalid configuration: WRITE_FILE_PATTERN must be a stage:// path, got '/tmp/part-%U.csv'
@@ -246,6 +255,17 @@ create external table ext_bad10(a int)
 infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
 fields terminated by ',' ignore 1 lines;
 invalid configuration: writable external table does not support IGNORE ... LINES
+create external table ext_bad11(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' enclosed by '\\';
+invalid configuration: writable external table cannot use FIELDS ESCAPED BY '\': it conflicts with the enclosure character
+create external table ext_bad12(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'write_file_pattern'='stage://wstage/x_%U.jl'}
+lines terminated by '#';
+invalid configuration: writable external table with format 'jsonline' only supports LINES TERMINATED BY '\n' or '\r\n'
+create external table ext_bad13(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%2N.csv'};
+invalid configuration: WRITE_FILE_PATTERN must contain a %U or %<n>N directive so parallel writers produce distinct files, got 'stage://wstage/x_%2N.csv'
 drop table if exists ext_rep;
 create external table ext_rep(a int)
 infile{'filepath'='stage://wstage/wext_rep_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_rep_%U.csv'};

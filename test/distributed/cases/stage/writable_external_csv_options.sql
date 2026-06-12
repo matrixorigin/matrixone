@@ -153,6 +153,44 @@ fields terminated by '.';
 insert into t_dot values (1, 1.5, 123.456), (2, -2.25, -0.001), (3, 42, 7);
 select * from t_dot order by a;
 
+-- ---------- multi-char terminator boundary overlap ----------
+-- A value whose suffix is a prefix of the terminator must be enclosed: with
+-- TERMINATED BY '00', an unenclosed 10 would otherwise scan as 1 + '00'.
+drop table if exists t_b00;
+create external table t_b00(a int, b int)
+infile{'filepath'='stage://cstage/copt_b00_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_b00_%U.csv'}
+fields terminated by '00';
+insert into t_b00 values (10, 5), (100, 200), (1, 2);
+select * from t_b00 order by a;
+
+-- ---------- enum labels are enclosed (a 'NULL' label is data, not NULL) ----------
+drop table if exists t_enum;
+create external table t_enum(a int, e enum('NULL','red','dark blue'))
+infile{'filepath'='stage://cstage/copt_enum_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_enum_%U.csv'}
+fields terminated by ',';
+insert into t_enum values (1, 'NULL'), (2, 'red'), (3, 'dark blue'), (4, null);
+select a, e, e is null from t_enum order by a;
+
+-- ---------- a trailing CR round-trips via escape ----------
+-- The reader strips one trailing CR from each record (even quoted), so the
+-- writer escapes CR bytes as \r when escaping is enabled.
+drop table if exists t_cr;
+create external table t_cr(a int, b varchar(20))
+infile{'filepath'='stage://cstage/copt_cr_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_cr_%U.csv'}
+fields terminated by ',';
+insert into t_cr values (1, 'abc\r'), (2, 'x\ry');
+select a, replace(b, '\r', '<CR>') as b from t_cr order by a;
+
+-- ---------- values no encoding can round-trip are rejected ----------
+-- a string of exactly \N null-matches on read outside the default escape
+insert into t_bang values (99, '\\N');
+-- and always under jsonline
+drop table if exists t_jln;
+create external table t_jln(a int, b varchar(20))
+infile{'filepath'='stage://cstage/copt_jln_*.jl', 'format'='jsonline', 'jsondata'='object', 'write_file_pattern'='stage://cstage/copt_jln_%U.jl'};
+insert into t_jln values (1, '\\N');
+drop table if exists t_jln;
+
 -- ---------- NULL vs empty string under custom options ----------
 drop table if exists t_null;
 create external table t_null(a int, b varchar(60))
@@ -191,6 +229,9 @@ drop table if exists t_all;
 drop table if exists t_time;
 drop table if exists t_dot;
 drop table if exists t_null;
+drop table if exists t_b00;
+drop table if exists t_enum;
+drop table if exists t_cr;
 drop table if exists t_load;
 drop table if exists src;
 drop stage if exists cstage;

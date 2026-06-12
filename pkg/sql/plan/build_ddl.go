@@ -3810,6 +3810,17 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not truncate source '%v' ", truncateTable.Table)
 		}
 
+		// TRUNCATE has always been a silent no-op for external tables; keep that
+		// for read-only ones, but a writable external table holds INSERTed data
+		// the user would expect TRUNCATE to remove — reject rather than report
+		// success while the stage files survive.
+		if tableDef.TableType == catalog.SystemExternalRel {
+			if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); ok {
+				return nil, moerr.NewNotSupportedf(ctx.GetContext(),
+					"truncate writable external table '%v'; its files in the stage are not managed by the table", truncateTable.Table)
+			}
+		}
+
 		if len(tableDef.RefChildTbls) > 0 {
 			// if all children tables are self reference, we can drop the table
 			if !HasFkSelfReferOnly(tableDef) {
@@ -5955,6 +5966,14 @@ func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam, tabl
 		if jsondata == tree.ARRAY {
 			return moerr.NewBadConfig(ctx, "writable external table does not support jsondata 'array', use 'object'")
 		}
+		// JSON strings have no enclosure mechanism: a printable line terminator
+		// occurring inside a value would split the record on readback. \n and
+		// \r\n are safe because the JSON encoder \u-escapes control characters.
+		if param.Tail != nil && param.Tail.Lines != nil && param.Tail.Lines.TerminatedBy != nil {
+			if v := param.Tail.Lines.TerminatedBy.Value; v != "" && v != "\n" && v != "\r\n" {
+				return moerr.NewBadConfig(ctx, "writable external table with format 'jsonline' only supports LINES TERMINATED BY '\\n' or '\\r\\n'")
+			}
+		}
 	}
 	// Dry-run the pattern against a fixed timestamp to reject bad directives at DDL time.
 	if _, err := externalwrite.ExpandFilePattern(pattern, time.Unix(0, 0).UTC()); err != nil {
@@ -6045,14 +6064,23 @@ func validateWritableEscape(ctx context.Context, tail *tree.TailParameter) error
 		startingBy = l.StartingBy
 	}
 
+	// The escape/enclosure conflict applies to the DEFAULT backslash escape
+	// too: ENCLOSED BY '\\' with the default escape makes the tokenizer's
+	// doubled-delimiter collapse and the unescaper both consume the same
+	// bytes, corrupting values on readback.
+	if esc != 0 && esc == enclosed {
+		return moerr.NewBadConfigf(ctx, "writable external table cannot use FIELDS ESCAPED BY '%c': it conflicts with the enclosure character", esc)
+	}
 	if esc != 0 && esc != '\\' {
 		// The reader's unescaper maps E+{0,b,n,r,t,Z} to control characters, so a
 		// doubled escape (E E) would decode to a control char instead of E itself.
 		if strings.IndexByte("0bnrtZ", esc) >= 0 {
 			return moerr.NewBadConfigf(ctx, "writable external table cannot use FIELDS ESCAPED BY '%c': the reader maps '%c'-sequences to control characters", esc, esc)
 		}
-		if esc == enclosed {
-			return moerr.NewBadConfigf(ctx, "writable external table cannot use FIELDS ESCAPED BY '%c': it conflicts with the enclosure character", esc)
+		// Control bytes as the escape would collide with the writer's own
+		// E+'r' CR encoding and the reader's record handling.
+		if esc < 0x20 || esc == 0x7f {
+			return moerr.NewBadConfig(ctx, "writable external table cannot use a control character as FIELDS ESCAPED BY")
 		}
 		for _, s := range []string{fieldTerm, lineTerm, startingBy} {
 			if strings.IndexByte(s, esc) >= 0 {

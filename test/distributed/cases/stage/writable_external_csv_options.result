@@ -237,6 +237,44 @@ a    f    d
 1    1.5    123.456
 2    -2.25    -0.001
 3    42.0    7.000
+drop table if exists t_b00;
+create external table t_b00(a int, b int)
+infile{'filepath'='stage://cstage/copt_b00_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_b00_%U.csv'}
+fields terminated by '00';
+insert into t_b00 values (10, 5), (100, 200), (1, 2);
+select * from t_b00 order by a;
+a    b
+1    2
+10    5
+100    200
+drop table if exists t_enum;
+create external table t_enum(a int, e enum('NULL','red','dark blue'))
+infile{'filepath'='stage://cstage/copt_enum_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_enum_%U.csv'}
+fields terminated by ',';
+insert into t_enum values (1, 'NULL'), (2, 'red'), (3, 'dark blue'), (4, null);
+select a, e, e is null from t_enum order by a;
+a    e    e is null
+1    NULL    0
+2    red    0
+3    dark blue    0
+4    null    1
+drop table if exists t_cr;
+create external table t_cr(a int, b varchar(20))
+infile{'filepath'='stage://cstage/copt_cr_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_cr_%U.csv'}
+fields terminated by ',';
+insert into t_cr values (1, 'abc\r'), (2, 'x\ry');
+select a, replace(b, '\r', '<CR>') as b from t_cr order by a;
+a    b
+1    abc<CR>
+2    x<CR>y
+insert into t_bang values (99, '\\N');
+not supported: external write (csv): a value of exactly \N cannot round-trip unless FIELDS ESCAPED BY is the default '\'
+drop table if exists t_jln;
+create external table t_jln(a int, b varchar(20))
+infile{'filepath'='stage://cstage/copt_jln_*.jl', 'format'='jsonline', 'jsondata'='object', 'write_file_pattern'='stage://cstage/copt_jln_%U.jl'};
+insert into t_jln values (1, '\\N');
+not supported: external write (jsonline): a string value of exactly \N reads back as NULL and cannot round-trip
+drop table if exists t_jln;
 drop table if exists t_null;
 create external table t_null(a int, b varchar(60))
 infile{'filepath'='stage://cstage/copt_null_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_null_%U.csv'}
@@ -277,6 +315,9 @@ drop table if exists t_all;
 drop table if exists t_time;
 drop table if exists t_dot;
 drop table if exists t_null;
+drop table if exists t_b00;
+drop table if exists t_enum;
+drop table if exists t_cr;
 drop table if exists t_load;
 drop table if exists src;
 drop stage if exists cstage;

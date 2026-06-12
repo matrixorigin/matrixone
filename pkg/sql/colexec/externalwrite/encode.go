@@ -21,6 +21,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -65,6 +66,21 @@ func (w *externalWriter) encodeCSV(bat *batch.Batch) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
+			// Values no encoding can round-trip are rejected rather than
+			// silently corrupted (see the reader's unescapeString / record-CR
+			// handling):
+			// - content exactly \N null-matches even when enclosed, and only
+			//   the default backslash escape flavor exempts the written \\N;
+			// - with escaping disabled, a CR as the record's last byte is eaten
+			//   by the reader's end-of-record CR strip.
+			if escape != '\\' && bytes.Equal(val, csvNull) {
+				return nil, moerr.NewNotSupported(context.Background(),
+					"external write (csv): a value of exactly \\N cannot round-trip unless FIELDS ESCAPED BY is the default '\\'")
+			}
+			if escape == 0 && last && bytes.HasSuffix(val, []byte{'\r'}) {
+				return nil, moerr.NewNotSupported(context.Background(),
+					"external write (csv): with ESCAPED BY '' a value ending in CR in the last column cannot round-trip")
+			}
 			// Values written unenclosed must not collide with the reader's
 			// tokenization: enclose them when they contain a structural byte
 			// (OPTIONALLY ENCLOSED semantics). E.g. FIELDS TERMINATED BY '-'
@@ -92,12 +108,21 @@ func (w *externalWriter) encodeCSV(bat *batch.Batch) ([]byte, error) {
 // scanner stops on the enclosure byte, the field-terminator sequence, and any
 // byte of the line terminator (a \r\n-style terminator accepts \r or \n alone
 // as a record end), so values containing them are written enclosed instead.
+// For a multi-char field terminator the reader also matches across the
+// value/terminator boundary (value '10' + terminator '00' scans as '1'+'00'),
+// so a value whose suffix is a proper prefix of the terminator is enclosed too.
 func (w *externalWriter) needsEnclosure(val []byte) bool {
 	if w.cfg.EnclosedBy != 0 && bytes.IndexByte(val, w.cfg.EnclosedBy) >= 0 {
 		return true
 	}
-	if len(w.cfg.FieldTerminator) > 0 && bytes.Contains(val, w.cfg.FieldTerminator) {
+	term := w.cfg.FieldTerminator
+	if len(term) > 0 && bytes.Contains(val, term) {
 		return true
+	}
+	for k := min(len(val), len(term)-1); k >= 1; k-- {
+		if bytes.HasSuffix(val, term[:k]) {
+			return true
+		}
 	}
 	for _, b := range w.cfg.LineTerminator {
 		if bytes.IndexByte(val, b) >= 0 {
@@ -216,7 +241,10 @@ func (w *externalWriter) csvValue(vec *vector.Vector, i int) (val []byte, quote 
 	case types.T_uuid:
 		return []byte(vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i).String()), false, nil
 	case types.T_enum:
-		return []byte(vector.GetFixedAtNoTypeCheck[types.Enum](vec, i).String()), false, nil
+		// quote=true: enum labels are user-defined strings; an unenclosed label
+		// 'NULL' would read back as SQL NULL (the reader maps a bare unquoted
+		// NULL token to null when an enclosure is configured).
+		return []byte(vector.GetFixedAtNoTypeCheck[types.Enum](vec, i).String()), true, nil
 	default:
 		return nil, false, moerr.NewInternalErrorf(context.Background(),
 			"external write (csv): unsupported column type %s", vec.GetType().String())
@@ -317,7 +345,21 @@ func (w *externalWriter) appendJSONValue(buf *bytes.Buffer, vec *vector.Vector, 
 	case types.T_float64:
 		return w.appendJSONFloat(buf, vector.GetFixedAtNoTypeCheck[float64](vec, i), 64)
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
-		appendJSONString(buf, vec.GetBytesAt(i))
+		b := vec.GetBytesAt(i)
+		// The jsonline reader compares every decoded string against the \N null
+		// token (reader_csv.go JsonNull), so that exact content cannot
+		// round-trip under any encoding; and its JSON tokenizer rewrites
+		// invalid UTF-8 bytes to U+FFFD, mutating the value. Reject both
+		// rather than corrupt silently.
+		if bytes.Equal(b, csvNull) {
+			return moerr.NewNotSupported(context.Background(),
+				"external write (jsonline): a string value of exactly \\N reads back as NULL and cannot round-trip")
+		}
+		if !utf8.Valid(b) {
+			return moerr.NewNotSupported(context.Background(),
+				"external write (jsonline): string value contains invalid UTF-8, which the jsonline reader rewrites; use csv format for raw bytes")
+		}
+		appendJSONString(buf, b)
 		return nil
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		// Binary payloads cannot round-trip: a base64 JSON string would be
@@ -418,8 +460,9 @@ func appendJSONFloatArray[T float32 | float64](w *externalWriter, buf *bytes.Buf
 
 // appendJSONString writes s to buf as a JSON string, escaping quotes,
 // backslashes and control characters. (Unlike encoding/json it does not
-// HTML-escape & < >, and it passes non-UTF-8 bytes through unchanged; the
-// reader parses with a standard JSON parser, which accepts both.)
+// HTML-escape & < >, which the reader's JSON parser does not require.
+// Callers must reject invalid UTF-8 first: the reader's tokenizer rewrites
+// such bytes to U+FFFD.)
 func appendJSONString(buf *bytes.Buffer, s []byte) {
 	const hexDigits = "0123456789abcdef"
 	buf.WriteByte('"')
@@ -465,14 +508,17 @@ func (w *externalWriter) colCount(bat *batch.Batch) int {
 
 // addEscape doubles the escape character and the enclosure character so the
 // reader's unescaping (E E -> E) and doubled-quote collapsing (Q Q -> Q)
-// reproduce the original bytes. escape == 0 means escaping is disabled
-// (ESCAPED BY ”), enclosed == 0 means the value is written unenclosed. The
-// common nothing-to-escape case returns s unchanged (no copy), preserving
-// GetBytesAt's zero-copy slice.
+// reproduce the original bytes, and rewrites 0x0D as E+'r' (the reader's
+// MySQL unescaper restores it; left raw, a trailing CR would be eaten by the
+// reader's end-of-record CR strip, which applies even to enclosed fields).
+// escape == 0 means escaping is disabled (ESCAPED BY ”), enclosed == 0 means
+// the value is written unenclosed. The common nothing-to-escape case returns
+// s unchanged (no copy), preserving GetBytesAt's zero-copy slice.
 func addEscape(s []byte, enclosed byte, escape byte) []byte {
 	needEscape := escape != 0 && bytes.IndexByte(s, escape) >= 0
 	needQuote := enclosed != 0 && enclosed != escape && bytes.IndexByte(s, enclosed) >= 0
-	if !needEscape && !needQuote {
+	needCR := escape != 0 && bytes.IndexByte(s, '\r') >= 0
+	if !needEscape && !needQuote && !needCR {
 		return s
 	}
 	if needEscape {
@@ -480,6 +526,9 @@ func addEscape(s []byte, enclosed byte, escape byte) []byte {
 	}
 	if needQuote {
 		s = bytes.ReplaceAll(s, []byte{enclosed}, []byte{enclosed, enclosed})
+	}
+	if needCR {
+		s = bytes.ReplaceAll(s, []byte{'\r'}, []byte{escape, 'r'})
 	}
 	return s
 }

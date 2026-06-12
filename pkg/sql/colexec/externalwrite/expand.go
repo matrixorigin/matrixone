@@ -104,11 +104,17 @@ func ExpandFilePattern(pattern string, t time.Time) (string, error) {
 	return b.String(), nil
 }
 
+// MinUniqueRandomDigits is the smallest %nN width that qualifies as a
+// per-writer uniqueness directive: fewer digits (e.g. %1N with 10 outcomes)
+// collide between parallel pipelines with realistic probability.
+const MinUniqueRandomDigits = 6
+
 // PatternHasUniqueDirective reports whether the pattern contains a directive
-// that yields a distinct value per writer (%U or %nN). Patterns without one
-// expand to the same path in every parallel pipeline of a statement (and in
-// every statement within the same time-directive granularity), so concurrent
-// writers would clobber each other; DDL validation rejects them.
+// that yields a distinct value per writer (%U, or %nN with n >=
+// MinUniqueRandomDigits). Patterns without one expand to the same path in
+// every parallel pipeline of a statement (and in every statement within the
+// same time-directive granularity), so concurrent writers would clobber each
+// other; DDL validation rejects them.
 func PatternHasUniqueDirective(pattern string) bool {
 	runes := []rune(pattern)
 	n := len(runes)
@@ -122,10 +128,12 @@ func PatternHasUniqueDirective(pattern string) bool {
 		}
 		if next >= '0' && next <= '9' {
 			j := i + 1
+			count := 0
 			for j < n && runes[j] >= '0' && runes[j] <= '9' {
+				count = count*10 + int(runes[j]-'0')
 				j++
 			}
-			if j < n && runes[j] == 'N' {
+			if j < n && runes[j] == 'N' && count >= MinUniqueRandomDigits {
 				return true
 			}
 		}

@@ -127,17 +127,33 @@ Field/line terminators, enclosure and escaping come from the table's
 `TailParameter` (`FIELDS`/`LINES`), defaulting to the same defaults as
 `SELECT ... INTO OUTFILE`. A custom `FIELDS ESCAPED BY` is honored: the writer
 doubles the escape character in every non-NULL field (the reader unescapes
-unquoted fields too), and `ESCAPED BY ''` disables escaping on both sides.
-DDL rejects escape characters that cannot round-trip: `0 b n r t Z` (the
-reader maps `E`+these to control characters, so a doubled escape would decode
-wrong), the enclosure character, and bytes of the terminators/`STARTING BY`.
-Caveat: with a non-`\` (or disabled) escape, a string whose content is exactly
-`\N` reads back as NULL — the reader matches the null sentinel after
-unescaping and only exempts `\\N` for the default backslash flavor.
-Other DDL-time restrictions: NOT NULL is checked at write time (the minimal
-plan runs no PreInsert), AUTO_INCREMENT columns are rejected, `IGNORE N LINES`
-is rejected, and `jsonline` writable tables reject `bit`/binary columns
-(raw bytes cannot round-trip through JSON strings; CSV encloses+escapes them).
+unquoted fields too), rewrites CR bytes as `E`+`r` (the reader strips one
+trailing CR per record, even from enclosed fields), and `ESCAPED BY ''`
+disables escaping on both sides. Unenclosed values are auto-enclosed when they
+contain a structural byte, including when their suffix is a prefix of a
+multi-char field terminator (the reader matches the terminator across the
+value boundary); enum labels are always enclosed (a bare `NULL` token would
+read back as SQL NULL).
+DDL rejects configurations that cannot round-trip: escape characters `0 b n r
+t Z` (the reader maps `E`+these to control characters), control characters as
+the escape, an escape equal to the enclosure (including the default `\`
+escape with `ENCLOSED BY '\'`), escape/enclosure bytes occurring in the
+terminators or `STARTING BY`, `IGNORE N LINES`, jsonline line terminators
+other than `\n`/`\r\n` (JSON strings have no enclosure to protect a printable
+terminator), and `%nN` uniqueness directives need n >= 6 (`%1N` collides
+between parallel writers). NOT NULL is checked at write time (the minimal
+plan runs no PreInsert), AUTO_INCREMENT columns are rejected, jsonline
+writable tables reject `bit`/binary columns, and TRUNCATE on a writable
+external table errors instead of silently succeeding without removing files.
+Values no encoding can round-trip are rejected at write time: a string of
+exactly `\N` under a non-default (or disabled) escape and always under
+jsonline, invalid UTF-8 strings under jsonline, and a trailing CR in the last
+column when escaping is disabled. The reader no longer TrimSpaces `bit`
+fields (raw bytes are data). The statement timestamp and session time zone
+are resolved per execution (prepared statements re-resolve at Prepare) and
+travel to remote CNs in `pipeline.Insert` (`external_stmt_unix_nano`,
+`external_tz_name`/`external_tz_offset_sec` — the generic session codec
+round-trips zones lossily).
 
 ### 2.5 Empty result → no file
 

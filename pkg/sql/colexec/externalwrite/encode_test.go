@@ -16,6 +16,8 @@ package externalwrite
 
 import (
 	"bytes"
+	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
@@ -196,4 +198,104 @@ func TestAddEscapeNoCopy(t *testing.T) {
 	s := []byte("nothing-to-escape")
 	out := addEscape(s, '"', '\\')
 	require.Equal(t, &s[0], &out[0])
+}
+
+// TestAppendJSONFloat pins json-compat float formatting: shortest 'f' form,
+// 'e' outside [1e-6, 1e21) with the exponent trimmed like encoding/json, the
+// float32 bits path, and the NaN/Inf error.
+func TestAppendJSONFloat(t *testing.T) {
+	w := NewExternalWriter(nil, WriterConfig{}).(*externalWriter)
+	enc := func(f float64, bits int) string {
+		var b bytes.Buffer
+		require.NoError(t, w.appendJSONFloat(&b, f, bits))
+		return b.String()
+	}
+
+	// property check: byte-identical with encoding/json across the regimes
+	for _, f := range []float64{0, 1.5, -2.25, 1e-9, -1e-9, 1e-6, 9.99e-7, 1e21, -3e21, 123456789.125, 1e20} {
+		ref, err := json.Marshal(f)
+		require.NoError(t, err)
+		require.Equal(t, string(ref), enc(f, 64), "float64 %v", f)
+	}
+	for _, f := range []float32{0, 1.5, -2.25, 1e-9, 1e21, 3.4e38} {
+		ref, err := json.Marshal(f)
+		require.NoError(t, err)
+		require.Equal(t, string(ref), enc(float64(f), 32), "float32 %v", f)
+	}
+
+	// the e-09 -> e-9 trim fires
+	require.Equal(t, "1e-9", enc(1e-9, 64))
+
+	// NaN / Inf are rejected like encoding/json
+	var b bytes.Buffer
+	require.Error(t, w.appendJSONFloat(&b, math.NaN(), 64))
+	require.Error(t, w.appendJSONFloat(&b, math.Inf(1), 64))
+}
+
+// TestEncodeRoundTripGuards: values no encoding can round-trip are rejected,
+// not silently corrupted.
+func TestEncodeRoundTripGuards(t *testing.T) {
+	mp := mpool.MustNewZero()
+	mkBat := func(s string) *batch.Batch {
+		bat := batch.New([]string{"b"})
+		vec := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(vec, []byte(s), false, mp))
+		bat.Vecs[0] = vec
+		bat.SetRowCount(1)
+		return bat
+	}
+
+	// CSV: literal \N is fine under the default escape (written \\N) ...
+	bat := mkBat(`\N`)
+	defer bat.Clean(mp)
+	w := NewExternalWriter(nil, WriterConfig{Format: FormatCSV, Attrs: []string{"b"}}).(*externalWriter)
+	out, err := w.encodeCSV(bat)
+	require.NoError(t, err)
+	require.Equal(t, "\"\\\\N\"\n", string(out))
+
+	// ... but errors under a custom or disabled escape (the reader null-matches
+	// even enclosed fields outside the backslash flavor)
+	w2 := NewExternalWriter(nil, WriterConfig{Format: FormatCSV, Attrs: []string{"b"}, EscapedBy: '!'}).(*externalWriter)
+	_, err = w2.encodeCSV(bat)
+	require.Error(t, err)
+	w3 := NewExternalWriter(nil, WriterConfig{Format: FormatCSV, Attrs: []string{"b"}, NoEscape: true}).(*externalWriter)
+	_, err = w3.encodeCSV(bat)
+	require.Error(t, err)
+
+	// jsonline: \N never round-trips (the reader compares decoded strings
+	// against the null token), and invalid UTF-8 would be rewritten to U+FFFD
+	wj := NewExternalWriter(nil, WriterConfig{Format: FormatJSONLine, Attrs: []string{"b"}}).(*externalWriter)
+	_, err = wj.encodeJSONLine(bat)
+	require.Error(t, err)
+	batBad := mkBat("x\xffy")
+	defer batBad.Clean(mp)
+	_, err = wj.encodeJSONLine(batBad)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "UTF-8")
+
+	// with ESCAPED BY '', a trailing CR in the last column cannot survive the
+	// reader's end-of-record CR strip
+	batCR := mkBat("abc\r")
+	defer batCR.Clean(mp)
+	_, err = w3.encodeCSV(batCR)
+	require.Error(t, err)
+	// with escaping enabled it is rewritten to E+'r' and round-trips
+	out, err = w.encodeCSV(batCR)
+	require.NoError(t, err)
+	require.Equal(t, "\"abc\\r\"\n", string(out))
+}
+
+// TestNeedsEnclosureBoundary: a value whose suffix is a proper prefix of a
+// multi-char field terminator must be enclosed (the reader matches the
+// terminator across the value/terminator boundary).
+func TestNeedsEnclosureBoundary(t *testing.T) {
+	w := NewExternalWriter(nil, WriterConfig{FieldTerminator: []byte("00")}).(*externalWriter)
+	require.True(t, w.needsEnclosure([]byte("10")))  // suffix '0' is a prefix of '00'
+	require.True(t, w.needsEnclosure([]byte("100"))) // contains '00'
+	require.False(t, w.needsEnclosure([]byte("12"))) // no overlap
+	require.False(t, w.needsEnclosure([]byte("01"))) // prefix at start is harmless
+
+	w2 := NewExternalWriter(nil, WriterConfig{FieldTerminator: []byte("||")}).(*externalWriter)
+	require.True(t, w2.needsEnclosure([]byte("pipe|")))
+	require.False(t, w2.needsEnclosure([]byte("plain")))
 }

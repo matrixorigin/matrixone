@@ -134,12 +134,11 @@ select * from ext_wide_jl order by c_i64;
 -- ---------- bit values with tricky bytes round-trip through CSV ----------
 -- bit bytes can collide with the field terminator or quote; the writer
 -- encloses and escapes them like binary values. 44=',' 34='"' 92='\' 128=high
--- byte. (Bytes that are pure whitespace, e.g. 10='\n', are written correctly
--- but read back as NULL: the external reader TrimSpaces non-string fields — a
--- pre-existing read-side limitation, not specific to writable tables.)
+-- byte; whitespace bytes (32=' ' 13='\r' 10='\n') round-trip too: the reader
+-- no longer TrimSpaces bit fields, and CR is escaped as \r in the file.
 drop table if exists bit_src;
 create table bit_src(a int, b bit(8));
-insert into bit_src values (1, 44), (2, 92), (3, 34), (4, 128), (5, 5);
+insert into bit_src values (1, 44), (2, 92), (3, 34), (4, 128), (5, 5), (6, 32), (7, 13), (8, 10);
 drop table if exists ext_bit;
 create external table ext_bit(a int, b bit(8))
 infile{'filepath'='stage://wstage/wext_bit_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_bit_%U.csv'}
@@ -214,6 +213,12 @@ drop table if exists ext_ro;
 create external table ext_ro(a int) infile 'stage://wstage/nonexist_*.csv';
 insert into ext_ro values (1);
 
+-- UPDATE/DELETE/TRUNCATE are rejected on writable external tables (TRUNCATE
+-- would otherwise report success while the stage files survive)
+update ext_csv set b = 'x' where a = 1;
+delete from ext_csv where a = 1;
+truncate table ext_csv;
+
 -- WRITE_FILE_PATTERN must resolve to a stage:// path
 create external table ext_bad1(a int)
 infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='/tmp/part-%U.csv'};
@@ -271,6 +276,20 @@ fields terminated by ',' enclosed by ',';
 create external table ext_bad10(a int)
 infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
 fields terminated by ',' ignore 1 lines;
+
+-- the escape/enclosure conflict applies to the default backslash escape too
+create external table ext_bad11(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' enclosed by '\\';
+
+-- jsonline has no enclosure: printable line terminators would split records
+create external table ext_bad12(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'write_file_pattern'='stage://wstage/x_%U.jl'}
+lines terminated by '#';
+
+-- %nN needs at least 6 digits to keep parallel writers apart
+create external table ext_bad13(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%2N.csv'};
 
 -- REPLACE has no external-table support and reports the user-facing error
 drop table if exists ext_rep;

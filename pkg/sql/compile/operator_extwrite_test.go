@@ -159,6 +159,8 @@ func TestExternalInsertRemoteRunRoundtrip(t *testing.T) {
 	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
 	proc := &process.Process{}
 	proc.Base = &process.BaseProcess{}
+	proc.Ctx = context.Background()
+	proc.Base.SessionInfo.TimeZone = time.UTC
 
 	_, pipeInstr, err := convertToPipelineInstruction(arg, proc, ctx, 1)
 	require.NoError(t, err)
@@ -175,4 +177,97 @@ func TestExternalInsertRemoteRunRoundtrip(t *testing.T) {
 	require.Equal(t, "csv", cfg.Format)
 	require.True(t, cfg.Stmt.Equal(stmtAt))
 	require.Equal(t, []string{"a"}, restoredOp.InsertCtx.Attrs)
+}
+
+// TestExternalInsertRemoteRunTailParity: remote CNs RE-DERIVE the writer
+// config from the serialized TableDef instead of receiving it, so every
+// FIELDS/LINES option the local path resolves must come out identical on
+// decode — and the session time zone must survive via the explicit proto
+// fields (the generic session codec round-trips zones lossily).
+func TestExternalInsertRemoteRunTailParity(t *testing.T) {
+	raw, err := json.Marshal(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Option: []string{"format", "csv", "write_file_pattern", "stage://s/p-%U.csv"},
+			Tail: &tree.TailParameter{
+				Fields: &tree.Fields{
+					Terminated: &tree.Terminated{Value: "||"},
+					EnclosedBy: &tree.EnclosedBy{Value: '\''},
+					EscapedBy:  &tree.EscapedBy{Value: '!'},
+				},
+				Lines: &tree.Lines{
+					StartingBy:   "R>",
+					TerminatedBy: &tree.Terminated{Value: "\r\n"},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	tableDef := &plan.TableDef{
+		Name:      "wext",
+		TableType: catalog.SystemExternalRel,
+		Createsql: string(raw),
+		Cols:      []*plan.ColDef{{Name: "a"}},
+	}
+
+	stmtAt := time.Unix(1718000000, 0).UTC()
+	local, err := buildExternalInsertArg(t.Context(), &plan.ObjectRef{ObjName: "wext"},
+		tableDef, true, nil, stmtAt)
+	require.NoError(t, err)
+	defer local.Release()
+
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	proc.Ctx = context.Background()
+	proc.Base.SessionInfo.TimeZone = time.UTC
+
+	_, pipeInstr, err := convertToPipelineInstruction(local, proc, ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, "UTC", pipeInstr.Insert.ExternalTzName)
+
+	restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+	require.NoError(t, err)
+	remote := restored.(*insert.Insert)
+	defer remote.Release()
+
+	lc, rc := local.InsertCtx.ExternalConfig, remote.InsertCtx.ExternalConfig
+	require.Equal(t, lc.Pattern, rc.Pattern)
+	require.Equal(t, lc.Format, rc.Format)
+	require.Equal(t, lc.FieldTerminator, rc.FieldTerminator)
+	require.Equal(t, lc.LineTerminator, rc.LineTerminator)
+	require.Equal(t, lc.LineStartingBy, rc.LineStartingBy)
+	require.Equal(t, lc.EnclosedBy, rc.EnclosedBy)
+	require.Equal(t, lc.EscapedBy, rc.EscapedBy)
+	require.Equal(t, lc.NoEscape, rc.NoEscape)
+	require.Equal(t, time.UTC, rc.TimeZone)
+
+	// ESCAPED BY '' (NoEscape) survives the round-trip too.
+	raw2, err := json.Marshal(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Option: []string{"format", "csv", "write_file_pattern", "stage://s/p-%U.csv"},
+			Tail: &tree.TailParameter{
+				Fields: &tree.Fields{EscapedBy: &tree.EscapedBy{Value: 0}},
+			},
+		},
+	})
+	require.NoError(t, err)
+	tableDef2 := &plan.TableDef{
+		Name:      "wext2",
+		TableType: catalog.SystemExternalRel,
+		Createsql: string(raw2),
+		Cols:      []*plan.ColDef{{Name: "a"}},
+	}
+	local2, err := buildExternalInsertArg(t.Context(), &plan.ObjectRef{ObjName: "wext2"},
+		tableDef2, true, nil, stmtAt)
+	require.NoError(t, err)
+	defer local2.Release()
+	require.True(t, local2.InsertCtx.ExternalConfig.NoEscape)
+
+	_, pipeInstr2, err := convertToPipelineInstruction(local2, proc, ctx, 1)
+	require.NoError(t, err)
+	restored2, err := convertToVmOperator(pipeInstr2, ctx, nil)
+	require.NoError(t, err)
+	remote2 := restored2.(*insert.Insert)
+	defer remote2.Release()
+	require.True(t, remote2.InsertCtx.ExternalConfig.NoEscape)
 }

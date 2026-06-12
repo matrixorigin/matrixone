@@ -80,6 +80,24 @@ func TestValidateWriteFilePattern(t *testing.T) {
 	}
 	require.Error(t, validateWriteFilePattern(ctx, p, nil))
 
+	// jsonline cannot use a printable line terminator: JSON strings have no
+	// enclosure, so data containing it would split records
+	p = &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Option: []string{"format", "jsonline", "jsondata", "object", "write_file_pattern", "stage://s/part-%U.jl"},
+		Tail: &tree.TailParameter{
+			Lines: &tree.Lines{TerminatedBy: &tree.Terminated{Value: "#"}},
+		},
+	}}
+	require.Error(t, validateWriteFilePattern(ctx, p, nil))
+	// ... while \r\n stays allowed (control chars are escaped in JSON strings)
+	p = &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Option: []string{"format", "jsonline", "jsondata", "object", "write_file_pattern", "stage://s/part-%U.jl"},
+		Tail: &tree.TailParameter{
+			Lines: &tree.Lines{TerminatedBy: &tree.Terminated{Value: "\r\n"}},
+		},
+	}}
+	require.NoError(t, validateWriteFilePattern(ctx, p, nil))
+
 	// jsonline with jsondata 'object' stays writable
 	p = &tree.ExternParam{ExParamConst: tree.ExParamConst{
 		Option: []string{"format", "jsonline", "jsondata", "object", "write_file_pattern", "stage://s/part-%U.jl"},
@@ -203,6 +221,16 @@ func TestValidateWriteFilePatternTail(t *testing.T) {
 			EscapedBy:  &tree.EscapedBy{Value: ';'},
 			Terminated: &tree.Terminated{Value: ";"},
 		},
+	}), nil))
+
+	// the enclosure conflict applies to the DEFAULT backslash escape too
+	require.Error(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+		Fields: &tree.Fields{EnclosedBy: &tree.EnclosedBy{Value: '\\'}},
+	}), nil))
+	// control characters cannot be the escape (they collide with the writer's
+	// own CR encoding and the reader's record handling)
+	require.Error(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+		Fields: &tree.Fields{EscapedBy: &tree.EscapedBy{Value: 0x01}},
 	}), nil))
 
 	// a custom enclosure is fine ...

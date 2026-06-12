@@ -915,9 +915,11 @@ func isExternalWriteInsert(node *plan.Node) bool {
 // startAt (set on every construction path, including the internal SQL
 // executor), then the wall clock as a last resort.
 func externalInsertStmtTime(proc *process.Process, startAt time.Time) time.Time {
-	if v := proc.Ctx.Value(defines.StartTS{}); v != nil {
-		if t, ok := v.(time.Time); ok {
-			return t
+	if proc != nil && proc.Ctx != nil {
+		if v := proc.Ctx.Value(defines.StartTS{}); v != nil {
+			if t, ok := v.(time.Time); ok {
+				return t
+			}
 		}
 	}
 	if !startAt.IsZero() {

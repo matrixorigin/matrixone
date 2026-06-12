@@ -114,6 +114,10 @@ func TestPatternHasUniqueDirective(t *testing.T) {
 	require.True(t, PatternHasUniqueDirective("part-%6N.csv"))
 	require.True(t, PatternHasUniqueDirective("%Y/%m/%d/p-%12N.jl"))
 
+	// too little entropy to keep parallel writers apart
+	require.False(t, PatternHasUniqueDirective("part-%1N.csv"))
+	require.False(t, PatternHasUniqueDirective("part-%5N.csv"))
+
 	require.False(t, PatternHasUniqueDirective("out-%Y%m%d.csv"))
 	require.False(t, PatternHasUniqueDirective("plain.csv"))
 	require.False(t, PatternHasUniqueDirective("p%%U.csv"))  // literal %U

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -127,6 +128,17 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 	if insert.ToExternal {
 		cfg := insert.InsertCtx.ExternalConfig
 		cfg.Attrs = insert.InsertCtx.Attrs
+		// Prefer the per-execution statement start over the compile-time value:
+		// prepared statements reuse the cached Compile across EXECUTEs, so the
+		// config's Stmt would otherwise stay frozen at the first execution and
+		// time-directive patterns would keep writing into the first day's path.
+		// (Remote CNs lack StartTS on the context and keep the proto-carried
+		// value, which the sender resolves the same way at encode time.)
+		if v := proc.Ctx.Value(defines.StartTS{}); v != nil {
+			if t, ok := v.(time.Time); ok {
+				cfg.Stmt = t
+			}
+		}
 		if cfg.TimeZone == nil {
 			// Resolved here rather than at compile time so that an operator rebuilt
 			// on a remote CN (whose process carries the session info) renders
