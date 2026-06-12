@@ -14,6 +14,8 @@
 
 package tree
 
+import "strings"
+
 // IdentifierName is referenced in the expression
 type IdentifierName interface {
 	Expr
@@ -42,6 +44,16 @@ func (node *IdentifierList) Format(ctx *FmtCtx) {
 		}
 		ctx.WriteString(string((*node)[i]))
 	}
+}
+
+func (ctx *FmtCtx) WriteIdentifier(identifier Identifier) {
+	if ctx.quoteIdentifier {
+		ctx.WriteByte('`')
+		ctx.WriteString(strings.ReplaceAll(string(identifier), "`", "``"))
+		ctx.WriteByte('`')
+		return
+	}
+	ctx.WriteString(string(identifier))
 }
 
 type ColumnItem struct {
