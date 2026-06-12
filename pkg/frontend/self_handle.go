@@ -700,7 +700,16 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 
 		ses.EnterFPrint(FPDataBranch)
 		defer ses.ExitFPrint(FPDataBranch)
-		if err = handleDataBranch(execCtx, ses, st); err != nil {
+		authStats, authErr := authenticateDataBranchStatement(execCtx.reqCtx, ses, st)
+		stats.Add(&authStats)
+		if authErr != nil {
+			err = authErr
+			return
+		}
+		handleStats, handleErr := handleDataBranch(execCtx, ses, st)
+		stats.Add(&handleStats)
+		if handleErr != nil {
+			err = handleErr
 			return
 		}
 	}

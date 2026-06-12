@@ -1337,11 +1337,6 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
 	}
 
-	// Cloud policy: forbid setting global wait_timeout/interactive_timeout.
-	if name == "wait_timeout" || name == "interactive_timeout" {
-		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
-	}
-
 	if def.Scope == ScopeSession {
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
 	}
@@ -1371,6 +1366,12 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 
 	if val, err = def.GetType().Convert(val); err != nil {
 		return err
+	}
+
+	if name == "wait_timeout" || name == "interactive_timeout" {
+		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
+			return err
+		}
 	}
 
 	// save to table first
@@ -1435,7 +1436,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	}
 
 	if name == "wait_timeout" || name == "interactive_timeout" {
-		if err = validateSessionTimeoutLimits(ctx, ses, name, val); err != nil {
+		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
 			return err
 		}
 	}
@@ -1467,7 +1468,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	return
 }
 
-func validateSessionTimeoutLimits(ctx context.Context, ses *Session, name string, val interface{}) error {
+func validateTimeoutLimits(ctx context.Context, ses *Session, name string, val interface{}) error {
 	v, ok := val.(int64)
 	if !ok {
 		return moerr.NewInvalidInputf(ctx, "invalid %s value type", name)

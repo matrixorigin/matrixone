@@ -19,10 +19,44 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 )
+
+type sysVarSet struct {
+	name  string
+	value interface{}
+}
+
+func initTestSessionSysVars(ses *Session) {
+	sysVars := make(map[string]interface{}, len(gSysVarsDefs))
+	for name, sysVar := range gSysVarsDefs {
+		sysVars[name] = sysVar.Default
+	}
+	ses.gSysVars = &SystemVariables{mp: sysVars}
+	ses.sesSysVars = ses.gSysVars.Clone()
+}
+
+func stubGlobalSysVarPersistence(t *testing.T, vars ...sysVarSet) *backgroundExecTest {
+	t.Helper()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result["begin;"] = nil
+	bh.sql2result["commit;"] = nil
+	bh.sql2result["rollback;"] = nil
+
+	for _, v := range vars {
+		bh.sql2result[getSqlForGetSysVarWithAccount(sysAccountID, v.name)] = newMrsForSystemVariableNameOfAccount([][]interface{}{})
+		bh.sql2result[getSqlForInsertSysVarWithAccount(sysAccountID, sysAccountName, v.name, getVariableValue(v.value))] = nil
+	}
+
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	t.Cleanup(stub.Reset)
+	return bh
+}
 
 func newTestServerWithRoutine(t *testing.T, cap uint32) (*MOServer, *Conn, *Session, *MysqlProtocolImpl) {
 	t.Helper()
@@ -53,6 +87,8 @@ func newTestServerWithRoutine(t *testing.T, cap uint32) (*MOServer, *Conn, *Sess
 
 	ses := NewSession(ctx, "", proto, nil)
 	proto.ses = ses
+	ses.SetTenantInfo(getDefaultAccount())
+	initTestSessionSysVars(ses)
 
 	rt := &Routine{}
 	rt.protocol.Store(&holder[MysqlRrWr]{value: proto})
@@ -97,14 +133,96 @@ func TestNonInteractiveNoOverride(t *testing.T) {
 	require.Equal(t, 5*time.Second, rs.timeout)
 }
 
-func TestGlobalTimeoutsForbidden(t *testing.T) {
+func TestGlobalTimeoutsAllowed(t *testing.T) {
 	_, _, ses, _ := newTestServerWithRoutine(t, 0)
+	stubGlobalSysVarPersistence(t,
+		sysVarSet{"wait_timeout", int64(10)},
+		sysVarSet{"interactive_timeout", int64(20)},
+	)
 
-	err := ses.SetGlobalSysVar(context.Background(), "wait_timeout", int64(10))
-	require.Error(t, err)
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "wait_timeout", int64(5)))
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "interactive_timeout", int64(6)))
 
-	err = ses.SetGlobalSysVar(context.Background(), "interactive_timeout", int64(10))
-	require.Error(t, err)
+	require.NoError(t, ses.SetGlobalSysVar(context.Background(), "wait_timeout", int64(10)))
+	require.NoError(t, ses.SetGlobalSysVar(context.Background(), "interactive_timeout", int64(20)))
+
+	val, err := ses.GetGlobalSysVar("wait_timeout")
+	require.NoError(t, err)
+	require.Equal(t, int64(10), val)
+
+	val, err = ses.GetGlobalSysVar("interactive_timeout")
+	require.NoError(t, err)
+	require.Equal(t, int64(20), val)
+
+	val, err = ses.GetSessionSysVar("wait_timeout")
+	require.NoError(t, err)
+	require.Equal(t, int64(5), val)
+
+	val, err = ses.GetSessionSysVar("interactive_timeout")
+	require.NoError(t, err)
+	require.Equal(t, int64(6), val)
+}
+
+func TestGlobalTimeoutBounds(t *testing.T) {
+	_, _, ses, _ := newTestServerWithRoutine(t, 0)
+	pu := getPu("")
+	pu.SV.WaitTimeoutMin = 5
+	pu.SV.WaitTimeoutMax = 10
+	pu.SV.InteractiveTimeoutMin = 5
+	pu.SV.InteractiveTimeoutMax = 10
+
+	require.Error(t, ses.SetGlobalSysVar(context.Background(), "wait_timeout", int64(4)))
+	require.Error(t, ses.SetGlobalSysVar(context.Background(), "wait_timeout", int64(11)))
+	require.Error(t, ses.SetGlobalSysVar(context.Background(), "interactive_timeout", int64(4)))
+	require.Error(t, ses.SetGlobalSysVar(context.Background(), "interactive_timeout", int64(11)))
+
+	stubGlobalSysVarPersistence(t,
+		sysVarSet{"wait_timeout", int64(5)},
+		sysVarSet{"wait_timeout", int64(10)},
+		sysVarSet{"interactive_timeout", int64(5)},
+		sysVarSet{"interactive_timeout", int64(10)},
+	)
+
+	require.NoError(t, ses.SetGlobalSysVar(context.Background(), "wait_timeout", int64(5)))
+	require.NoError(t, ses.SetGlobalSysVar(context.Background(), "wait_timeout", int64(10)))
+	require.NoError(t, ses.SetGlobalSysVar(context.Background(), "interactive_timeout", int64(5)))
+	require.NoError(t, ses.SetGlobalSysVar(context.Background(), "interactive_timeout", int64(10)))
+}
+
+func TestNewSessionTimeoutsFromGlobal(t *testing.T) {
+	server, rs, ses, proto := newTestServerWithRoutine(t, 0)
+	ses.gSysVars.Set("wait_timeout", int64(12))
+	ses.gSysVars.Set("interactive_timeout", int64(21))
+	ses.sesSysVars = ses.gSysVars.Clone()
+
+	server.applyInteractiveWaitTimeout(context.Background(), ses, proto)
+
+	val, err := ses.GetSessionSysVar("wait_timeout")
+	require.NoError(t, err)
+	require.Equal(t, int64(12), val)
+
+	server.applyIdleTimeout(rs)
+	require.Equal(t, 12*time.Second, rs.timeout)
+}
+
+func TestNewInteractiveSessionWaitTimeoutFromGlobalInteractiveTimeout(t *testing.T) {
+	server, rs, ses, proto := newTestServerWithRoutine(t, CLIENT_INTERACTIVE)
+	ses.gSysVars.Set("wait_timeout", int64(12))
+	ses.gSysVars.Set("interactive_timeout", int64(21))
+	ses.sesSysVars = ses.gSysVars.Clone()
+
+	server.applyInteractiveWaitTimeout(context.Background(), ses, proto)
+
+	val, err := ses.GetSessionSysVar("wait_timeout")
+	require.NoError(t, err)
+	require.Equal(t, int64(21), val)
+
+	server.applyIdleTimeout(rs)
+	require.Equal(t, 21*time.Second, rs.timeout)
+
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "wait_timeout", int64(7)))
+	server.applyIdleTimeout(rs)
+	require.Equal(t, 7*time.Second, rs.timeout)
 }
 
 func TestSessionTimeoutBounds(t *testing.T) {
