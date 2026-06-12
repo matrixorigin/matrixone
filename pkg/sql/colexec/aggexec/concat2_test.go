@@ -230,6 +230,98 @@ func TestGroupConcatOrderByKeepsTextReturnTypeWhenOrderKeyIsBinary(t *testing.T)
 	exec.Free()
 }
 
+func TestGroupConcatCompareOrderValueCoversNumericBranches(t *testing.T) {
+	require.Less(t, compareGroupConcatOrderValue(int8(-128), int8(127)), 0)
+	require.Greater(t, compareGroupConcatOrderValue(int8(127), int8(-128)), 0)
+	require.Zero(t, compareGroupConcatOrderValue(int8(7), int8(7)))
+
+	require.Less(t, compareGroupConcatOrderValue(int16(-32768), int16(32767)), 0)
+	require.Greater(t, compareGroupConcatOrderValue(int32(2147483647), int32(-2147483648)), 0)
+	require.Less(t, compareGroupConcatOrderValue(int64(-9223372036854775808), int64(9223372036854775807)), 0)
+
+	require.Less(t, compareGroupConcatOrderValue(uint8(0), uint8(255)), 0)
+	require.Greater(t, compareGroupConcatOrderValue(uint16(65535), uint16(0)), 0)
+	require.Less(t, compareGroupConcatOrderValue(uint32(0), uint32(4294967295)), 0)
+	require.Greater(t, compareGroupConcatOrderValue(uint64(18446744073709551615), uint64(0)), 0)
+
+	require.Less(t, compareGroupConcatOrderValue(float32(-1.5), float32(2.5)), 0)
+	require.Greater(t, compareGroupConcatOrderValue(float64(3.5), float64(-2.5)), 0)
+	require.Less(t, compareGroupConcatOrderValue(types.Date(0), types.Date(365)), 0)
+	require.Greater(t, compareGroupConcatOrderValue(types.Time(9223372036854775807), types.Time(-9223372036854775808)), 0)
+	require.Less(t, compareGroupConcatOrderValue(types.Timestamp(0), types.Timestamp(1)), 0)
+	require.Less(t, compareGroupConcatOrderValue(types.Datetime(0), types.Datetime(1)), 0)
+	require.Less(t, compareGroupConcatOrderValue(types.MoYear(1901), types.MoYear(2155)), 0)
+	require.Less(t, compareGroupConcatOrderValue(types.Enum(0), types.Enum(65535)), 0)
+	require.Less(t, compareGroupConcatOrderValue(nil, int64(1)), 0)
+	require.Zero(t, compareGroupConcatOrderValue([]byte("a"), []byte("a")))
+}
+
+func TestGroupConcatOrderConfigAndPayloadErrors(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     88,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.Error(t, exec.SetExtraInformation([]byte(groupConcatOrderConfigMagic), 0))
+	require.Error(t, exec.SetExtraInformation(testGroupConcatOrderConfig(1, []byte{2}, ","), 0))
+	require.Error(t, exec.SetExtraInformation(testGroupConcatOrderConfig(2, []byte{0}, ","), 0))
+
+	goodConfig := testGroupConcatOrderConfig(1, []byte{0}, ",")
+	badLenConfig := append([]byte(nil), goodConfig...)
+	separatorLenOffset := len(groupConcatOrderConfigMagic) + 4 + 4 + 1
+	binary.BigEndian.PutUint32(badLenConfig[separatorLenOffset:separatorLenOffset+4], 9)
+	require.Error(t, exec.SetExtraInformation(badLenConfig, 0))
+
+	_, _, err := splitGroupConcatOrderedPayload([]byte{1, 2, 3})
+	require.Error(t, err)
+	_, _, err = splitGroupConcatOrderedPayload([]byte{0, 0, 0, 10, 1})
+	require.Error(t, err)
+	exec.Free()
+}
+
+func TestGroupConcatOrderedMergeAndEmptyGroup(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     88,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	left := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	right := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	cfg := testGroupConcatOrderConfig(1, []byte{0}, "|")
+	require.NoError(t, left.SetExtraInformation(cfg, 0))
+	require.NoError(t, right.SetExtraInformation(cfg, 0))
+	require.NoError(t, left.GroupGrow(2))
+	require.NoError(t, right.GroupGrow(1))
+
+	leftVal := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"a2"})
+	leftKey := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(leftKey, []int64{2}, nil, mp))
+	rightVal := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"a1"})
+	rightKey := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(rightKey, []int64{1}, nil, mp))
+
+	require.NoError(t, left.BatchFill(0, []uint64{1}, []*vector.Vector{leftVal, leftKey}))
+	require.NoError(t, right.BatchFill(0, []uint64{1}, []*vector.Vector{rightVal, rightKey}))
+	require.NoError(t, left.BatchMerge(right, 0, []uint64{1}))
+	vecs, err := left.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "a1|a2", string(vecs[0].GetBytesAt(0)))
+	require.True(t, vecs[0].IsNull(1))
+
+	leftVal.Free(mp)
+	leftKey.Free(mp)
+	rightVal.Free(mp)
+	rightKey.Free(mp)
+	vecs[0].Free(mp)
+	left.Free()
+	right.Free()
+}
+
 func testGroupConcatOrderConfig(concatArgCnt int, orderFlags []byte, separator string) []byte {
 	separatorBytes := []byte(separator)
 	config := make([]byte, 0, 16+len(orderFlags)+len(separatorBytes))

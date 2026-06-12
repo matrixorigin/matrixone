@@ -411,8 +411,68 @@ func compareGroupConcatOrderValue(left, right any) int {
 		return types.CompareValue(left, right)
 	}
 	switch l := left.(type) {
+	case int8:
+		r := right.(int8)
+		switch {
+		case l < r:
+			return -1
+		case l > r:
+			return 1
+		default:
+			return 0
+		}
+	case int16:
+		r := right.(int16)
+		switch {
+		case l < r:
+			return -1
+		case l > r:
+			return 1
+		default:
+			return 0
+		}
+	case int32:
+		r := right.(int32)
+		switch {
+		case l < r:
+			return -1
+		case l > r:
+			return 1
+		default:
+			return 0
+		}
 	case int64:
 		r := right.(int64)
+		switch {
+		case l < r:
+			return -1
+		case l > r:
+			return 1
+		default:
+			return 0
+		}
+	case uint8:
+		r := right.(uint8)
+		switch {
+		case l < r:
+			return -1
+		case l > r:
+			return 1
+		default:
+			return 0
+		}
+	case uint16:
+		r := right.(uint16)
+		switch {
+		case l < r:
+			return -1
+		case l > r:
+			return 1
+		default:
+			return 0
+		}
+	case uint32:
+		r := right.(uint32)
 		switch {
 		case l < r:
 			return -1
@@ -443,6 +503,66 @@ func compareGroupConcatOrderValue(left, right any) int {
 		}
 	case float64:
 		r := right.(float64)
+		switch {
+		case l < r:
+			return -1
+		case l > r:
+			return 1
+		default:
+			return 0
+		}
+	case types.Date:
+		r := right.(types.Date)
+		switch {
+		case l < r:
+			return -1
+		case l > r:
+			return 1
+		default:
+			return 0
+		}
+	case types.Time:
+		r := right.(types.Time)
+		switch {
+		case l < r:
+			return -1
+		case l > r:
+			return 1
+		default:
+			return 0
+		}
+	case types.Timestamp:
+		r := right.(types.Timestamp)
+		switch {
+		case l < r:
+			return -1
+		case l > r:
+			return 1
+		default:
+			return 0
+		}
+	case types.Datetime:
+		r := right.(types.Datetime)
+		switch {
+		case l < r:
+			return -1
+		case l > r:
+			return 1
+		default:
+			return 0
+		}
+	case types.MoYear:
+		r := right.(types.MoYear)
+		switch {
+		case l < r:
+			return -1
+		case l > r:
+			return 1
+		default:
+			return 0
+		}
+	case types.Enum:
+		r := right.(types.Enum)
 		switch {
 		case l < r:
 			return -1
