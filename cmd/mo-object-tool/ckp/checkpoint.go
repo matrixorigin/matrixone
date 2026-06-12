@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -331,6 +332,7 @@ func dumpCommand(storage *toolfs.StorageOptions) *cobra.Command {
 		loadScript   bool
 		noLoad       bool
 		rowOrder     string
+		cpuProfile   string
 	)
 
 	cmd := &cobra.Command{
@@ -356,6 +358,18 @@ Examples:
 			dir := "."
 			if len(args) == 1 {
 				dir = args[0]
+			}
+
+			if cpuProfile != "" {
+				f, err := os.Create(cpuProfile)
+				if err != nil {
+					return fmt.Errorf("create cpuprofile: %w", err)
+				}
+				defer f.Close()
+				if err := pprof.StartCPUProfile(f); err != nil {
+					return fmt.Errorf("start cpuprofile: %w", err)
+				}
+				defer pprof.StopCPUProfile()
 			}
 
 			accountIDSet := cmd.Flags().Changed("account-id")
@@ -539,6 +553,7 @@ Examples:
 	cmd.Flags().BoolVar(&loadScript, "load-script", false, "Generate restore.sql with CREATE DATABASE, CREATE TABLE, and LOAD DATA statements; --output/-o is treated as a directory")
 	cmd.Flags().BoolVar(&noLoad, "no-load", false, "With --load-script, generate only DDL and skip CSV dump and LOAD DATA statements")
 	cmd.Flags().StringVar(&rowOrder, "row-order", string(checkpointtool.CSVRowOrderStorage), "CSV row order: storage (streaming, large-table friendly) or lexical (sort by visible CSV values in memory)")
+	cmd.Flags().StringVar(&cpuProfile, "cpuprofile", "", "Write CPU profile to file")
 
 	return cmd
 }
@@ -744,13 +759,13 @@ func writeRestoreScript(
 			if _, err := fmt.Fprintln(f, "LINES TERMINATED BY '\\n'"); err != nil {
 				return "", err
 			}
-			if _, err := fmt.Fprintln(f, "parallel 'true'"); err != nil {
-				return "", err
-			}
 			if csvHasHeader {
 				if _, err := fmt.Fprintln(f, "IGNORE 1 LINES"); err != nil {
 					return "", err
 				}
+			}
+			if _, err := fmt.Fprintln(f, "parallel 'true'"); err != nil {
+				return "", err
 			}
 			if _, err := fmt.Fprintln(f, ";"); err != nil {
 				return "", err
