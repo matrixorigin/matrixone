@@ -14,42 +14,42 @@ create index xf using ivfflat on qf(v) lists=2 op_type 'vector_l2_ops' quantizat
 select sleep(30);
 sleep(30)
 0
-select a from qi8 order by l2_distance(v,'[1,1,1,1]'), a limit 3;
+select a from qi8 order by l2_distance(v,'[1,1,1,1]') limit 3;
 a
 1
 2
 3
-select a from qi8 order by l2_distance(v,'[54,54,54,54]'), a limit 3;
+select a from qi8 order by l2_distance(v,'[54,54,54,54]') limit 3;
 a
 6
 5
 4
-select a from qu8 order by l2_distance(v,'[1,1,1,1]'), a limit 3;
+select a from qu8 order by l2_distance(v,'[1,1,1,1]') limit 3;
 a
 1
 2
 3
-select a from qu8 order by l2_distance(v,'[54,54,54,54]'), a limit 3;
+select a from qu8 order by l2_distance(v,'[54,54,54,54]') limit 3;
 a
 6
 5
 4
-select a from qbf order by l2_distance(v,'[1,1,1,1]'), a limit 3;
+select a from qbf order by l2_distance(v,'[1,1,1,1]') limit 3;
 a
 1
 2
 3
-select a from qbf order by l2_distance(v,'[54,54,54,54]'), a limit 3;
+select a from qbf order by l2_distance(v,'[54,54,54,54]') limit 3;
 a
 6
 5
 4
-select a from qf order by l2_distance(v,'[1,1,1,1]'), a limit 3;
+select a from qf order by l2_distance(v,'[1,1,1,1]') limit 3;
 a
 1
 2
 3
-select a from qf order by l2_distance(v,'[54,54,54,54]'), a limit 3;
+select a from qf order by l2_distance(v,'[54,54,54,54]') limit 3;
 a
 6
 5
@@ -61,46 +61,46 @@ insert into qf values (7,'[2,2,2,2]'),(8,'[53,53,53,53]');
 select sleep(30);
 sleep(30)
 0
-select a from qi8 order by l2_distance(v,'[2,2,2,2]'), a limit 3;
+select a from qi8 order by l2_distance(v,'[1,1,1,1]') limit 3;
 a
-7
 1
+7
 2
-select a from qi8 order by l2_distance(v,'[53,53,53,53]'), a limit 3;
+select a from qi8 order by l2_distance(v,'[54,54,54,54]') limit 3;
 a
+6
 8
 5
-6
-select a from qu8 order by l2_distance(v,'[2,2,2,2]'), a limit 3;
+select a from qu8 order by l2_distance(v,'[1,1,1,1]') limit 3;
 a
-7
 1
+7
 2
-select a from qu8 order by l2_distance(v,'[53,53,53,53]'), a limit 3;
+select a from qu8 order by l2_distance(v,'[54,54,54,54]') limit 3;
 a
+6
 8
 5
-6
-select a from qbf order by l2_distance(v,'[2,2,2,2]'), a limit 3;
+select a from qbf order by l2_distance(v,'[1,1,1,1]') limit 3;
 a
-7
 1
+7
 2
-select a from qbf order by l2_distance(v,'[53,53,53,53]'), a limit 3;
+select a from qbf order by l2_distance(v,'[54,54,54,54]') limit 3;
 a
+6
 8
 5
-6
-select a from qf order by l2_distance(v,'[2,2,2,2]'), a limit 3;
+select a from qf order by l2_distance(v,'[1,1,1,1]') limit 3;
 a
-7
 1
+7
 2
-select a from qf order by l2_distance(v,'[53,53,53,53]'), a limit 3;
+select a from qf order by l2_distance(v,'[54,54,54,54]') limit 3;
 a
+6
 8
 5
-6
 update qi8 set v = '[55,55,55,55]' where a = 1;
 update qu8 set v = '[55,55,55,55]' where a = 1;
 update qbf set v = '[55,55,55,55]' where a = 1;
@@ -108,26 +108,26 @@ update qf set v = '[55,55,55,55]' where a = 1;
 select sleep(30);
 sleep(30)
 0
-select a from qi8 order by l2_distance(v,'[54,54,54,54]'), a limit 3;
+select a from qi8 order by l2_distance(v,'[1,1,1,1]') limit 3;
 a
-6
-1
-8
-select a from qu8 order by l2_distance(v,'[54,54,54,54]'), a limit 3;
+7
+2
+3
+select a from qu8 order by l2_distance(v,'[1,1,1,1]') limit 3;
 a
-6
-1
-8
-select a from qbf order by l2_distance(v,'[54,54,54,54]'), a limit 3;
+7
+2
+3
+select a from qbf order by l2_distance(v,'[1,1,1,1]') limit 3;
 a
-6
-1
-8
-select a from qf order by l2_distance(v,'[54,54,54,54]'), a limit 3;
+7
+2
+3
+select a from qf order by l2_distance(v,'[1,1,1,1]') limit 3;
 a
-6
-1
-8
+7
+2
+3
 drop table qi8;
 drop table qu8;
 drop table qbf;
