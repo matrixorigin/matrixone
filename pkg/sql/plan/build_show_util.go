@@ -589,17 +589,26 @@ func ConstructCreateTableSQL(
 				if param.Tail.Fields.Terminated.Value == "" {
 					fields += " TERMINATED BY \"\""
 				} else {
-					fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
+					fields += fmt.Sprintf(" TERMINATED BY '%s'", formatStrInSingleQuotes(param.Tail.Fields.Terminated.Value))
 				}
 			}
 
 			escape := func(value byte) string {
-				if value == byte(0) {
+				switch value {
+				case 0:
 					return ""
-				} else if value == byte('\\') {
+				case '\\':
 					return "\\\\"
+				case '\'':
+					// The byte sits inside a single-quoted SQL literal. Use quote
+					// doubling rather than a backslash escape: the SHOW CREATE
+					// result embeds this string in a double-quoted SELECT literal
+					// that consumes one level of backslashes, and '' survives that
+					// round-trip displayable and re-executable.
+					return "''"
+				default:
+					return fmt.Sprintf("%c", value)
 				}
-				return fmt.Sprintf("%c", value)
 			}
 			if param.Tail.Fields.EnclosedBy != nil {
 				fields += " ENCLOSED BY '" + escape(param.Tail.Fields.EnclosedBy.Value) + "'"
@@ -612,13 +621,13 @@ func ConstructCreateTableSQL(
 		line := ""
 		if param.Tail != nil && param.Tail.Lines != nil {
 			if param.Tail.Lines.StartingBy != "" {
-				line += fmt.Sprintf(" STARTING BY '%s'", param.Tail.Lines.StartingBy)
+				line += fmt.Sprintf(" STARTING BY '%s'", formatStrInSingleQuotes(param.Tail.Lines.StartingBy))
 			}
 			if param.Tail.Lines.TerminatedBy != nil {
 				if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
 					line += " TERMINATED BY '\\\\n'"
 				} else {
-					line += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
+					line += fmt.Sprintf(" TERMINATED BY '%s'", formatStrInSingleQuotes(param.Tail.Lines.TerminatedBy.Value))
 				}
 			}
 		}
@@ -929,6 +938,16 @@ func FormatColType(colType plan.Type) string {
 
 	}
 	return ts + suffix
+}
+
+// formatStrInSingleQuotes escapes s for emission inside a single-quoted SQL
+// string literal. Quotes are doubled (” ) rather than backslash-escaped: the
+// SHOW CREATE result embeds the DDL in a double-quoted SELECT literal that
+// consumes one level of backslashes, and quote doubling survives that
+// round-trip both displayable and re-executable.
+func formatStrInSingleQuotes(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, `'`, `''`)
 }
 
 func formatExternalTableOptionsForShowCreate(param *tree.ExternParam) string {
