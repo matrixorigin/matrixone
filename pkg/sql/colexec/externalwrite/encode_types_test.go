@@ -15,6 +15,7 @@
 package externalwrite
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -153,7 +154,26 @@ func TestEncodeJSONLineAllTypes(t *testing.T) {
 		Stmt:   time.Now(),
 	}).(*externalWriter)
 
-	out, err := w.encodeJSONLine(bat)
+	// bit cannot round-trip through JSON strings (DDL rejects it for writable
+	// jsonline tables); the encoder guards the unreachable path with an error.
+	_, err := w.encodeJSONLine(bat)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bit")
+
+	// drop the bit column: every other branch must encode.
+	bitIdx := slices.Index(names, "c_bit")
+	require.GreaterOrEqual(t, bitIdx, 0)
+	jnames := append(slices.Clone(names[:bitIdx]), names[bitIdx+1:]...)
+	jbat := batch.New(jnames)
+	jbat.Vecs = append(append([]*vector.Vector{}, bat.Vecs[:bitIdx]...), bat.Vecs[bitIdx+1:]...)
+	jbat.SetRowCount(bat.RowCount())
+
+	w2 := NewExternalWriter(nil, WriterConfig{
+		Format: FormatJSONLine,
+		Attrs:  jnames,
+		Stmt:   time.Now(),
+	}).(*externalWriter)
+	out, err := w2.encodeJSONLine(jbat)
 	require.NoError(t, err)
 	s := string(out)
 	require.True(t, strings.HasSuffix(s, "\n"))
@@ -161,9 +181,7 @@ func TestEncodeJSONLineAllTypes(t *testing.T) {
 	require.Contains(t, s, `"c_i64":-4`)
 	require.Contains(t, s, `"c_varchar":"hi"`)
 	require.Contains(t, s, `"c_json":{"a":1}`)
-	// bit columns are emitted as their raw big-endian bytes (here 0x05) so the
-	// external reader round-trips the value instead of reading the digits of "5".
-	require.Contains(t, s, `"c_bit":"\u0005"`)
+	require.Contains(t, s, `"c_f32":1.5`)
 }
 
 // TestCSVValueUnsupportedType ensures an unsupported column type errors.
@@ -215,20 +233,21 @@ func TestColCount(t *testing.T) {
 	require.Equal(t, 2, w.colCount(bat))
 }
 
-// TestCellIsNull covers constant and constant-null vectors.
-func TestCellIsNull(t *testing.T) {
+// TestConstNullVector covers constant and constant-null vectors through the
+// vec.IsNull check the encoders rely on.
+func TestConstNullVector(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	cn := vector.NewConstNull(types.T_int64.ToType(), 3, mp)
 	defer cn.Free(mp)
-	require.True(t, cellIsNull(cn, 0))
-	require.True(t, cellIsNull(cn, 2))
+	require.True(t, cn.IsNull(0))
+	require.True(t, cn.IsNull(2))
 
 	cf, err := vector.NewConstFixed[int64](types.T_int64.ToType(), 7, 3, mp)
 	require.NoError(t, err)
 	defer cf.Free(mp)
-	require.False(t, cellIsNull(cf, 0))
-	require.False(t, cellIsNull(cf, 2))
+	require.False(t, cf.IsNull(0))
+	require.False(t, cf.IsNull(2))
 }
 
 // TestEncodeCSVConstVector confirms const vectors expand to every row.

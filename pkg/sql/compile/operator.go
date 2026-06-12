@@ -908,23 +908,34 @@ func isExternalWriteInsert(node *plan.Node) bool {
 	return ok
 }
 
+// externalInsertStmtTime resolves the statement-start timestamp that
+// WRITE_FILE_PATTERN time directives are evaluated against, so that every
+// parallel pipeline / CN resolves the same path. Preference order: the
+// frontend's per-statement defines.StartTS on the context, then the Compile's
+// startAt (set on every construction path, including the internal SQL
+// executor), then the wall clock as a last resort.
+func externalInsertStmtTime(proc *process.Process, startAt time.Time) time.Time {
+	if v := proc.Ctx.Value(defines.StartTS{}); v != nil {
+		if t, ok := v.(time.Time); ok {
+			return t
+		}
+	}
+	if !startAt.IsZero() {
+		return startAt
+	}
+	return time.Now()
+}
+
 // constructExternalInsert builds an INSERT operator that writes into a writable
 // external table's backing files. Each parallel instance owns one writer/file.
+// stmtAt is the statement-start timestamp (externalInsertStmtTime), resolved
+// once per statement by the caller so all scopes share it.
 func constructExternalInsert(
 	proc *process.Process,
 	node *plan.Node,
 	eng engine.Engine,
+	stmtAt time.Time,
 ) (vm.Operator, error) {
-	// Evaluate WRITE_FILE_PATTERN against the statement start timestamp so that
-	// parallel pipelines / multiple CNs all resolve the same path even when the
-	// pattern contains time directives (e.g. %Y/%m/%d/%H). Fall back to time.Now()
-	// when the statement start is not carried on the context.
-	stmtAt := time.Now()
-	if v := proc.Ctx.Value(defines.StartTS{}); v != nil {
-		if t, ok := v.(time.Time); ok {
-			stmtAt = t
-		}
-	}
 	oldCtx := node.InsertCtx
 	return buildExternalInsertArg(proc.Ctx, oldCtx.Ref, oldCtx.TableDef, oldCtx.AddAffectedRows, eng, stmtAt)
 }

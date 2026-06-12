@@ -4108,8 +4108,11 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 	// source scope, with no shuffle.
 	if isExternalWriteInsert(node) {
 		currentFirstFlag := c.anal.isFirst
+		// One timestamp per statement: all scopes must expand WRITE_FILE_PATTERN
+		// time directives against the same instant.
+		stmtAt := externalInsertStmtTime(c.proc, c.startAt)
 		for i := range ss {
-			insertArg, err := constructExternalInsert(c.proc, node, c.e)
+			insertArg, err := constructExternalInsert(c.proc, node, c.e, stmtAt)
 			if err != nil {
 				return nil, err
 			}

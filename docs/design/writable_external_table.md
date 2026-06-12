@@ -26,6 +26,9 @@ We will extend strftime with the following.
    1. `%nN` be replaced by n random digit numbers.  
    2. `%U` be replaced by a generated UUID
 
+The pattern must contain `%U` or `%nN` (enforced at CREATE time) so parallel
+writers expand to distinct files; time directives are rendered in UTC.
+
 For CSV and jsonline file, the `strftime_string` should point to a valid, writable stage, `stage://...` 
 
 

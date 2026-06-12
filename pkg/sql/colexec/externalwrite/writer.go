@@ -19,6 +19,7 @@
 package externalwrite
 
 import (
+	"bytes"
 	"context"
 	"time"
 
@@ -67,6 +68,10 @@ type ExternalWriter interface {
 	// Close flushes and finalizes the output file and returns the number of
 	// rows written. It is a no-op (rowsWritten == 0) if no file was opened.
 	Close(ctx context.Context) (rowsWritten uint64, err error)
+	// Abort discards the output file instead of finalizing it. Used on pipeline
+	// failure so a half-written file never becomes visible to readers of the
+	// external table. Best-effort; a no-op if no file was opened.
+	Abort(ctx context.Context)
 }
 
 type externalWriter struct {
@@ -77,6 +82,13 @@ type externalWriter struct {
 	rowsWritten  uint64
 	opened       bool
 	expandedPath string
+
+	// Encoding scratch space, reused across batches: buf holds one encoded
+	// batch (fw.Write fully consumes it before returning), scratch holds one
+	// strconv-formatted value, jsonKeys are the pre-encoded `"name":` prefixes.
+	buf      bytes.Buffer
+	scratch  []byte
+	jsonKeys [][]byte
 }
 
 var _ ExternalWriter = (*externalWriter)(nil)
@@ -118,11 +130,7 @@ func (w *externalWriter) open(ctx context.Context) error {
 	}
 	w.expandedPath = stageURL
 
-	sdef, err := stageutil.UrlToStageDef(stageURL, w.proc)
-	if err != nil {
-		return err
-	}
-	moPath, _, err := sdef.ToPath()
+	moPath, _, err := stageutil.UrlToPath(stageURL, w.proc)
 	if err != nil {
 		return err
 	}
@@ -180,4 +188,12 @@ func (w *externalWriter) Close(ctx context.Context) (uint64, error) {
 	err := w.fw.Close()
 	w.fw = nil
 	return w.rowsWritten, err
+}
+
+func (w *externalWriter) Abort(ctx context.Context) {
+	if !w.opened || w.fw == nil {
+		return
+	}
+	w.fw.Abort(moerr.NewInternalError(ctx, "external table write aborted"))
+	w.fw = nil
 }

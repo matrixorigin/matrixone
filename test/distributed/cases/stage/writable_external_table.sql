@@ -115,19 +115,47 @@ fields terminated by ',' enclosed by '"';
 insert into ext_wide_csv select * from wide_src;
 select c_i8, c_i64, c_u32, c_dec, c_vc, c_bool from ext_wide_csv order by c_i64;
 
+-- jsonline writable tables reject bit columns (raw bytes cannot round-trip
+-- through JSON strings), so the jsonline wide table omits c_bit.
 drop table if exists ext_wide_jl;
 create external table ext_wide_jl(
   c_i8 tinyint, c_i64 bigint, c_u32 int unsigned,
   c_f32 float, c_dec decimal(10,2),
   c_ch char(4), c_vc varchar(20), c_txt text,
-  c_dt date, c_bool bool, c_bit bit(8), c_json json)
+  c_dt date, c_bool bool, c_json json)
 infile{'filepath'='stage://wstage/wext_widejl_*.jl', 'format'='jsonline', 'write_file_pattern'='stage://wstage/wext_widejl_%U.jl', 'jsondata'='object'}
 fields terminated by ',';
-insert into ext_wide_jl select * from wide_src;
+insert into ext_wide_jl select c_i8, c_i64, c_u32, c_f32, c_dec, c_ch, c_vc, c_txt, c_dt, c_bool, c_json from wide_src;
 -- jsonline-object reads map fields by name, so validate the full round-trip with
 -- "select *" (a projected column subset hits an unrelated pre-existing limitation
 -- in the jsonline-object reader).
 select * from ext_wide_jl order by c_i64;
+
+-- ---------- bit values with tricky bytes round-trip through CSV ----------
+-- bit bytes can collide with the field terminator or quote; the writer
+-- encloses and escapes them like binary values. 44=',' 34='"' 92='\' 128=high
+-- byte. (Bytes that are pure whitespace, e.g. 10='\n', are written correctly
+-- but read back as NULL: the external reader TrimSpaces non-string fields — a
+-- pre-existing read-side limitation, not specific to writable tables.)
+drop table if exists bit_src;
+create table bit_src(a int, b bit(8));
+insert into bit_src values (1, 44), (2, 92), (3, 34), (4, 128), (5, 5);
+drop table if exists ext_bit;
+create external table ext_bit(a int, b bit(8))
+infile{'filepath'='stage://wstage/wext_bit_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_bit_%U.csv'}
+fields terminated by ',';
+insert into ext_bit select * from bit_src;
+select a, cast(b as unsigned) from ext_bit order by a;
+
+-- ---------- NOT NULL is enforced ----------
+drop table if exists ext_nn;
+create external table ext_nn(a int not null, b varchar(10))
+infile{'filepath'='stage://wstage/wext_nn_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_nn_%U.csv'}
+fields terminated by ',';
+insert into ext_nn values (1, 'ok');
+insert into ext_nn values (null, 'boom');
+insert into ext_nn select null, 'boom2';
+select * from ext_nn order by a;
 
 -- ---------- LOAD into a writable external table ----------
 drop table if exists ext_load;
@@ -161,6 +189,26 @@ infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'
 create external table ext_bad4(a int)
 infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='array', 'write_file_pattern'='stage://wstage/x_%U.jl'};
 
+-- the pattern must contain %U or %nN: without one, parallel writers would all
+-- expand to the same path and clobber each other
+create external table ext_bad5(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/out-%Y%m%d.csv'};
+
+-- AUTO_INCREMENT needs the PreInsert operator, which the external plan skips
+create external table ext_bad6(id int auto_increment, v int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+
+-- bit columns cannot round-trip through JSON strings
+create external table ext_bad7(b bit(8))
+infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'write_file_pattern'='stage://wstage/x_%U.jl'};
+
+-- REPLACE has no external-table support and reports the user-facing error
+drop table if exists ext_rep;
+create external table ext_rep(a int)
+infile{'filepath'='stage://wstage/wext_rep_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_rep_%U.csv'};
+replace into ext_rep values (1);
+drop table if exists ext_rep;
+
 drop table if exists ext_csv;
 drop table if exists ext_jl;
 drop table if exists ext_tricky;
@@ -169,6 +217,9 @@ drop table if exists ext_big;
 drop table if exists big_src;
 drop table if exists ext_remote;
 drop table if exists remote_src;
+drop table if exists ext_bit;
+drop table if exists bit_src;
+drop table if exists ext_nn;
 drop table if exists ext_wide_csv;
 drop table if exists ext_wide_jl;
 drop table if exists wide_src;

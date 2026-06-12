@@ -15,6 +15,7 @@
 package externalwrite
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
@@ -73,4 +74,45 @@ func TestEncodeJSONLine(t *testing.T) {
 	out, err := w.encodeJSONLine(bat)
 	require.NoError(t, err)
 	require.Equal(t, "{\"id\":1,\"name\":\"alice\"}\n{\"id\":null,\"name\":\"bob\"}\n", string(out))
+}
+
+// TestEncodeJSONLineLineTerminator: the configured LINES TERMINATED BY value
+// separates records (the reader parses jsonline with the same terminator).
+func TestEncodeJSONLineLineTerminator(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := testBatch(t, mp)
+	defer bat.Clean(mp)
+
+	w := NewExternalWriter(nil, WriterConfig{
+		Format:         FormatJSONLine,
+		Attrs:          []string{"id", "name"},
+		LineTerminator: []byte("\r\n"),
+		Stmt:           time.Now(),
+	}).(*externalWriter)
+
+	out, err := w.encodeJSONLine(bat)
+	require.NoError(t, err)
+	require.Equal(t, "{\"id\":1,\"name\":\"alice\"}\r\n{\"id\":null,\"name\":\"bob\"}\r\n", string(out))
+}
+
+// TestAppendJSONString covers the escaping rules of the direct JSON encoder.
+func TestAppendJSONString(t *testing.T) {
+	enc := func(s string) string {
+		var b bytes.Buffer
+		appendJSONString(&b, []byte(s))
+		return b.String()
+	}
+	require.Equal(t, `"plain"`, enc("plain"))
+	require.Equal(t, `"a\"b"`, enc(`a"b`))
+	require.Equal(t, `"a\\b"`, enc(`a\b`))
+	require.Equal(t, `"x\ny\r\t"`, enc("x\ny\r\t"))
+	require.Equal(t, `"c\u0001d"`, enc("c\x01d"))
+	require.Equal(t, `"héllo"`, enc("héllo")) // multi-byte UTF-8 passes through
+}
+
+// TestAddEscapeNoCopy: the no-escape fast path returns the input slice itself.
+func TestAddEscapeNoCopy(t *testing.T) {
+	s := []byte("nothing-to-escape")
+	out := addEscape(s, '"')
+	require.Equal(t, &s[0], &out[0])
 }

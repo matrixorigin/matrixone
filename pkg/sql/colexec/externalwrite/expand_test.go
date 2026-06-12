@@ -96,6 +96,31 @@ func TestStrftimeDirectives(t *testing.T) {
 	require.Equal(t, "12PM", got)
 }
 
+func TestExpandFilePattern_UTC(t *testing.T) {
+	// Time directives render in UTC regardless of the input time's zone, so
+	// every CN expands the same instant to the same path.
+	utc := time.Date(2026, 6, 11, 23, 30, 0, 0, time.UTC)
+	plus8 := utc.In(time.FixedZone("UTC+8", 8*3600)) // 2026-06-12 07:30 local
+	a, err := ExpandFilePattern("dt=%Y-%m-%d/h%H", utc)
+	require.NoError(t, err)
+	b, err := ExpandFilePattern("dt=%Y-%m-%d/h%H", plus8)
+	require.NoError(t, err)
+	require.Equal(t, "dt=2026-06-11/h23", a)
+	require.Equal(t, a, b)
+}
+
+func TestPatternHasUniqueDirective(t *testing.T) {
+	require.True(t, PatternHasUniqueDirective("part-%U.csv"))
+	require.True(t, PatternHasUniqueDirective("part-%6N.csv"))
+	require.True(t, PatternHasUniqueDirective("%Y/%m/%d/p-%12N.jl"))
+
+	require.False(t, PatternHasUniqueDirective("out-%Y%m%d.csv"))
+	require.False(t, PatternHasUniqueDirective("plain.csv"))
+	require.False(t, PatternHasUniqueDirective("p%%U.csv"))  // literal %U
+	require.False(t, PatternHasUniqueDirective("p-%3X.csv")) // digits without N
+	require.False(t, PatternHasUniqueDirective("trailing%"))
+}
+
 func TestExpandFilePattern_Errors(t *testing.T) {
 	ts := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
 	cases := []string{

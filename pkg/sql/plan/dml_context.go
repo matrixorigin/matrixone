@@ -208,11 +208,16 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	// External tables are not handled by the modern DML binder. Defer to the
-	// legacy planner (buildInsert/buildLoad), which supports INSERT/LOAD into
-	// writable external tables and rejects the rest with a precise error.
+	// External tables are not handled by the modern DML binder. Writable ones
+	// (WRITE_FILE_PATTERN) defer to the legacy planner, whose buildInsert /
+	// buildLoad implement INSERT/LOAD into them; read-only ones reject all DML
+	// directly with the user-facing error, so statement kinds without a legacy
+	// fallback (REPLACE) don't leak the internal fallback sentinel.
 	if tableDef.TableType == catalog.SystemExternalRel {
-		return moerr.NewUnsupportedDML(ctx.GetContext(), "external table")
+		if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); ok {
+			return moerr.NewUnsupportedDML(ctx.GetContext(), "external table")
+		}
+		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
 	}
 
 	if err := checkTableType(ctx.GetContext(), tableDef, ""); err != nil {

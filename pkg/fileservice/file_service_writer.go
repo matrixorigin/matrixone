@@ -94,3 +94,17 @@ func (w *FileServiceWriter) Close() error {
 	w.Group = nil
 	return err
 }
+
+// Abort terminates the write without finalizing the target file: the pipe is
+// closed with cause, so the in-flight FileService.Write fails and discards its
+// partial output (local: the temp file is removed; object stores: the put is
+// not completed) instead of persisting a truncated file the way Close would.
+func (w *FileServiceWriter) Abort(cause error) {
+	_ = w.Writer.CloseWithError(cause)
+	_ = w.Group.Wait()
+	_ = w.Reader.Close()
+
+	w.Reader = nil
+	w.Writer = nil
+	w.Group = nil
+}

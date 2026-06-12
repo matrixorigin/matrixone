@@ -99,11 +99,13 @@ each pipeline instance:
 - expands `WRITE_FILE_PATTERN` **independently**, and
 - writes a single file.
 
-Uniqueness is the user's responsibility via the pattern. The recommended
-pattern includes `%U` or `%nN` so concurrent writers never collide. To make
-collisions effectively impossible even without `%U`/`%nN`, the expander also
-mixes a per-pipeline writer id into the random/UUID sources (see §4.2). Per the
-upstream spec, writers are assumed to not race with each other.
+Uniqueness comes from the pattern: DDL validation **requires** `%U` or `%nN`
+(`PatternHasUniqueDirective`), because every pipeline expands the pattern
+against the same statement-start timestamp and a directive-free pattern would
+make all parallel writers (and same-granularity statements) open the identical
+path and clobber each other. Time directives render in **UTC** so local and
+remote CNs expand the same instant to the same path regardless of host OS
+time zones.
 
 ### 2.3 Batch API
 
@@ -120,7 +122,10 @@ to its file. No per-row API.
 
 Field/line terminators, enclosure and escaping come from the table's
 `TailParameter` (`FIELDS`/`LINES`), defaulting to the same defaults as
-`SELECT ... INTO OUTFILE`.
+`SELECT ... INTO OUTFILE`. Restrictions enforced at DDL time: NOT NULL is
+checked at write time (the minimal plan runs no PreInsert), AUTO_INCREMENT
+columns are rejected, and `jsonline` writable tables reject `bit` columns
+(raw bytes cannot round-trip through JSON strings; CSV encloses+escapes them).
 
 ### 2.5 Empty result → no file
 
@@ -130,10 +135,13 @@ non-empty batch). This avoids littering stages with empty parts.
 ### 2.6 Consistency / failure semantics (documented limitation)
 
 External writes are **not** transactional. Files are streamed to the stage and
-finalized when the pipeline closes. If the statement aborts after some pipelines
-have finalized files, those files remain. This matches the spec's "assume the
-writer will be able to write without race condition" stance and is acceptable
-for v1. A future improvement could write to a temp prefix and rename-on-commit.
+finalized when the pipeline's input ends cleanly. On pipeline failure or
+cancellation the operator **aborts** its in-flight file (the fileservice write
+is failed, discarding the partial output) instead of finalizing it, so a
+failed statement does not leave partial rows visible. A statement that fails
+after *some* pipelines already finalized complete files still leaves those
+files behind; a future improvement could write to a temp prefix and
+rename-on-commit.
 
 ---
 

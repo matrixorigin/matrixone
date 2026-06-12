@@ -26,8 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
@@ -132,6 +134,16 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 			cfg.TimeZone = proc.GetSessionInfo().TimeZone
 		}
 		insert.ctr.extWriter = externalwrite.NewExternalWriter(proc, cfg)
+		// ColDefs aligned with Attrs, for the NOT NULL check (the minimal
+		// external-insert plan runs no PreInsert, which normally enforces it).
+		byName := make(map[string]*plan.ColDef, len(insert.InsertCtx.TableDef.Cols))
+		for _, col := range insert.InsertCtx.TableDef.Cols {
+			byName[col.GetOriginCaseName()] = col
+		}
+		insert.ctr.extCols = make([]*plan.ColDef, len(insert.InsertCtx.Attrs))
+		for j, attr := range insert.InsertCtx.Attrs {
+			insert.ctr.extCols[j] = byName[attr]
+		}
 		insert.ctr.affectedRows = 0
 		return nil
 	}
@@ -208,6 +220,21 @@ func (insert *Insert) Call(proc *process.Process) (vm.CallResult, error) {
 	return insert.insert_table(proc, analyzer)
 }
 
+// checkExternalNotNull rejects NULLs in NOT NULL columns. ctr.extCols is
+// aligned with InsertCtx.Attrs (and therefore with the leading batch vectors).
+func (insert *Insert) checkExternalNotNull(proc *process.Process, bat *batch.Batch) error {
+	for j, col := range insert.ctr.extCols {
+		if col == nil || col.Default == nil || col.Default.NullAbility || j >= len(bat.Vecs) {
+			continue
+		}
+		vec := bat.Vecs[j]
+		if vec.IsConstNull() || nulls.Any(vec.GetNulls()) {
+			return moerr.NewConstraintViolationf(proc.Ctx, "Column '%s' cannot be null", insert.InsertCtx.Attrs[j])
+		}
+	}
+	return nil
+}
+
 // insert_external writes a batch into a writable external table's backing file.
 // One operator instance owns one ExternalWriter and therefore one output file.
 // The file is finalized when the input stream ends (nil batch).
@@ -231,6 +258,11 @@ func (insert *Insert) insert_external(proc *process.Process, analyzer process.An
 		return input, nil
 	}
 
+	// NOT NULL enforcement normally happens in the PreInsert operator, which the
+	// minimal external-insert plan does not run.
+	if err = insert.checkExternalNotNull(proc, input.Batch); err != nil {
+		return input, err
+	}
 	if err = insert.ctr.extWriter.WriteBatch(proc.Ctx, input.Batch); err != nil {
 		return input, err
 	}

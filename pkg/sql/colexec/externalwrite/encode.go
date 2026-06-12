@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"math"
 	"slices"
 	"strconv"
 
@@ -28,11 +29,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+var (
+	csvNull   = []byte("\\N")
+	csvTrue   = []byte("true")
+	csvFalse  = []byte("false")
+	jsonNull  = []byte("null")
+	jsonTrue  = []byte("true")
+	jsonFalse = []byte("false")
+)
+
 // encodeCSV renders every row of bat as a CSV record. The per-type formatting
 // mirrors the SELECT INTO OUTFILE encoder (pkg/frontend/export.go constructByte)
 // so the output round-trips through the external-table CSV reader.
+// The returned slice aliases w.buf and is only valid until the next encode.
 func (w *externalWriter) encodeCSV(bat *batch.Batch) ([]byte, error) {
-	buf := &bytes.Buffer{}
+	buf := &w.buf
+	buf.Reset()
 	enclosed := w.cfg.EnclosedBy
 	// Only the table's columns are written; the pipeline may carry trailing
 	// hidden vectors (mirrors insert_table, which copies only InsertCtx.Attrs).
@@ -42,8 +54,8 @@ func (w *externalWriter) encodeCSV(bat *batch.Batch) ([]byte, error) {
 		for j := 0; j < ncol; j++ {
 			vec := bat.Vecs[j]
 			last := j == ncol-1
-			if cellIsNull(vec, i) {
-				w.writeCSVField(buf, []byte("\\N"), false, last)
+			if vec.IsNull(uint64(i)) {
+				w.writeCSVField(buf, csvNull, false, last)
 				continue
 			}
 			val, quote, err := w.csvValue(vec, i)
@@ -92,9 +104,9 @@ func (w *externalWriter) csvValue(vec *vector.Vector, i int) (val []byte, quote 
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		if vector.GetFixedAtNoTypeCheck[bool](vec, i) {
-			return []byte("true"), false, nil
+			return csvTrue, false, nil
 		}
-		return []byte("false"), false, nil
+		return csvFalse, false, nil
 	case types.T_bit:
 		v := vector.GetFixedAtNoTypeCheck[uint64](vec, i)
 		bitLength := vec.GetType().Width
@@ -102,7 +114,9 @@ func (w *externalWriter) csvValue(vec *vector.Vector, i int) (val []byte, quote 
 		b := types.EncodeUint64(&v)[:byteLength]
 		b = slices.Clone(b)
 		slices.Reverse(b)
-		return b, false, nil
+		// quote=true: the raw bytes can contain the field/line terminator or the
+		// enclosure char, so they must be enclosed and escaped like binary values.
+		return b, true, nil
 	case types.T_int8:
 		return []byte(strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int8](vec, i)), 10)), false, nil
 	case types.T_int16:
@@ -173,111 +187,226 @@ func (w *externalWriter) csvValue(vec *vector.Vector, i int) (val []byte, quote 
 	}
 }
 
-// encodeJSONLine renders every row of bat as a JSONLine record (one JSON object
-// per line). Mirrors pkg/frontend/export.go constructJSONLine / vectorValueToJSON.
+// encodeJSONLine renders every row of bat as a JSONLine record: one JSON
+// object per line, keys in declared-column order, lines separated by the
+// configured line terminator. Values are appended directly to the buffer (no
+// per-row map, boxing, or reflection — this runs per cell on the bulk
+// INSERT/LOAD path). The returned slice aliases w.buf and is only valid until
+// the next encode.
 func (w *externalWriter) encodeJSONLine(bat *batch.Batch) ([]byte, error) {
-	buf := &bytes.Buffer{}
+	buf := &w.buf
+	buf.Reset()
 	ncol := w.colCount(bat)
+	if w.jsonKeys == nil {
+		w.jsonKeys = make([][]byte, len(w.cfg.Attrs))
+		var kb bytes.Buffer
+		for j, name := range w.cfg.Attrs {
+			kb.Reset()
+			appendJSONString(&kb, []byte(name))
+			kb.WriteByte(':')
+			w.jsonKeys[j] = bytes.Clone(kb.Bytes())
+		}
+	}
 	for i := 0; i < bat.RowCount(); i++ {
-		row := make(map[string]interface{}, ncol)
+		buf.WriteByte('{')
 		for j := 0; j < ncol; j++ {
+			if j > 0 {
+				buf.WriteByte(',')
+			}
+			buf.Write(w.jsonKeys[j])
 			vec := bat.Vecs[j]
-			name := w.cfg.Attrs[j]
-			if cellIsNull(vec, i) {
-				row[name] = nil
+			if vec.IsNull(uint64(i)) {
+				buf.Write(jsonNull)
 				continue
 			}
-			v, err := w.jsonValue(vec, i)
-			if err != nil {
+			if err := w.appendJSONValue(buf, vec, i); err != nil {
 				return nil, err
 			}
-			row[name] = v
 		}
-		jb, err := json.Marshal(row)
-		if err != nil {
-			return nil, moerr.NewInternalErrorf(context.Background(), "external write (jsonline): %v", err)
-		}
-		buf.Write(jb)
-		buf.WriteByte('\n')
+		buf.WriteByte('}')
+		buf.Write(w.cfg.LineTerminator)
 	}
 	return buf.Bytes(), nil
 }
 
-func (w *externalWriter) jsonValue(vec *vector.Vector, i int) (interface{}, error) {
+// appendJSONValue appends row i of vec to buf as a JSON value.
+func (w *externalWriter) appendJSONValue(buf *bytes.Buffer, vec *vector.Vector, i int) error {
 	switch vec.GetType().Oid {
 	case types.T_json:
+		// Compact to match the reader's (and the previous json.Marshal
+		// round-trip's) canonical form.
 		val := types.DecodeJson(vec.GetBytesAt(i))
-		return json.RawMessage(val.String()), nil
+		if err := json.Compact(buf, []byte(val.String())); err != nil {
+			return moerr.NewInternalErrorf(context.Background(), "external write (jsonline): %v", err)
+		}
+		return nil
 	case types.T_bool:
-		return vector.GetFixedAtNoTypeCheck[bool](vec, i), nil
+		if vector.GetFixedAtNoTypeCheck[bool](vec, i) {
+			buf.Write(jsonTrue)
+		} else {
+			buf.Write(jsonFalse)
+		}
+		return nil
 	case types.T_bit:
-		// The external reader parses bit columns from their raw big-endian byte
-		// representation (see external.go getColData T_bit), the same form the CSV
-		// writer emits. Emit those bytes as a JSON string so the value round-trips;
-		// a plain decimal number would be read back byte-by-byte and corrupt it.
-		v := vector.GetFixedAtNoTypeCheck[uint64](vec, i)
-		byteLength := (vec.GetType().Width + 7) / 8
-		b := slices.Clone(types.EncodeUint64(&v)[:byteLength])
-		slices.Reverse(b)
-		return string(b), nil
+		// bit values are raw bytes; bytes >= 0x80 are invalid UTF-8 and cannot
+		// round-trip through a JSON string. DDL rejects bit columns on writable
+		// jsonline tables; this guards the unreachable path.
+		return moerr.NewNotSupported(context.Background(),
+			"external write (jsonline): bit column cannot round-trip through JSON")
 	case types.T_int8:
-		return vector.GetFixedAtNoTypeCheck[int8](vec, i), nil
+		w.scratch = strconv.AppendInt(w.scratch[:0], int64(vector.GetFixedAtNoTypeCheck[int8](vec, i)), 10)
 	case types.T_int16:
-		return vector.GetFixedAtNoTypeCheck[int16](vec, i), nil
+		w.scratch = strconv.AppendInt(w.scratch[:0], int64(vector.GetFixedAtNoTypeCheck[int16](vec, i)), 10)
 	case types.T_int32:
-		return vector.GetFixedAtNoTypeCheck[int32](vec, i), nil
+		w.scratch = strconv.AppendInt(w.scratch[:0], int64(vector.GetFixedAtNoTypeCheck[int32](vec, i)), 10)
 	case types.T_int64:
-		return vector.GetFixedAtNoTypeCheck[int64](vec, i), nil
+		w.scratch = strconv.AppendInt(w.scratch[:0], vector.GetFixedAtNoTypeCheck[int64](vec, i), 10)
 	case types.T_uint8:
-		return vector.GetFixedAtNoTypeCheck[uint8](vec, i), nil
+		w.scratch = strconv.AppendUint(w.scratch[:0], uint64(vector.GetFixedAtNoTypeCheck[uint8](vec, i)), 10)
 	case types.T_uint16:
-		return vector.GetFixedAtNoTypeCheck[uint16](vec, i), nil
+		w.scratch = strconv.AppendUint(w.scratch[:0], uint64(vector.GetFixedAtNoTypeCheck[uint16](vec, i)), 10)
 	case types.T_uint32:
-		return vector.GetFixedAtNoTypeCheck[uint32](vec, i), nil
+		w.scratch = strconv.AppendUint(w.scratch[:0], uint64(vector.GetFixedAtNoTypeCheck[uint32](vec, i)), 10)
 	case types.T_uint64:
-		return vector.GetFixedAtNoTypeCheck[uint64](vec, i), nil
+		w.scratch = strconv.AppendUint(w.scratch[:0], vector.GetFixedAtNoTypeCheck[uint64](vec, i), 10)
 	case types.T_float32:
-		return vector.GetFixedAtNoTypeCheck[float32](vec, i), nil
+		return w.appendJSONFloat(buf, float64(vector.GetFixedAtNoTypeCheck[float32](vec, i)), 32)
 	case types.T_float64:
-		return vector.GetFixedAtNoTypeCheck[float64](vec, i), nil
+		return w.appendJSONFloat(buf, vector.GetFixedAtNoTypeCheck[float64](vec, i), 64)
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
-		return string(vec.GetBytesAt(i)), nil
+		appendJSONString(buf, vec.GetBytesAt(i))
+		return nil
 	case types.T_binary, types.T_varbinary, types.T_blob:
-		return base64.StdEncoding.EncodeToString(vec.GetBytesAt(i)), nil
+		// base64 output is ASCII-safe: no JSON escaping needed.
+		w.scratch = base64.StdEncoding.AppendEncode(w.scratch[:0], vec.GetBytesAt(i))
+		buf.WriteByte('"')
+		buf.Write(w.scratch)
+		buf.WriteByte('"')
+		return nil
 	case types.T_array_float32:
-		return types.BytesToArray[float32](vec.GetBytesAt(i)), nil
+		return appendJSONFloatArray(w, buf, types.BytesToArray[float32](vec.GetBytesAt(i)), 32)
 	case types.T_array_float64:
-		return types.BytesToArray[float64](vec.GetBytesAt(i)), nil
+		return appendJSONFloatArray(w, buf, types.BytesToArray[float64](vec.GetBytesAt(i)), 64)
 	case types.T_date:
-		return vector.GetFixedAtNoTypeCheck[types.Date](vec, i).String(), nil
+		appendJSONString(buf, []byte(vector.GetFixedAtNoTypeCheck[types.Date](vec, i).String()))
+		return nil
 	case types.T_datetime:
 		scale := vec.GetType().Scale
-		return vector.GetFixedAtNoTypeCheck[types.Datetime](vec, i).String2(scale), nil
+		appendJSONString(buf, []byte(vector.GetFixedAtNoTypeCheck[types.Datetime](vec, i).String2(scale)))
+		return nil
 	case types.T_time:
 		scale := vec.GetType().Scale
-		return vector.GetFixedAtNoTypeCheck[types.Time](vec, i).String2(scale), nil
+		appendJSONString(buf, []byte(vector.GetFixedAtNoTypeCheck[types.Time](vec, i).String2(scale)))
+		return nil
 	case types.T_timestamp:
 		scale := vec.GetType().Scale
-		return vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, i).String2(w.cfg.TimeZone, scale), nil
+		appendJSONString(buf, []byte(vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, i).String2(w.cfg.TimeZone, scale)))
+		return nil
 	case types.T_year:
-		return vector.GetFixedAtNoTypeCheck[types.MoYear](vec, i).String(), nil
+		appendJSONString(buf, []byte(vector.GetFixedAtNoTypeCheck[types.MoYear](vec, i).String()))
+		return nil
 	case types.T_decimal64:
 		scale := vec.GetType().Scale
-		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, i).Format(scale), nil
+		appendJSONString(buf, []byte(vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, i).Format(scale)))
+		return nil
 	case types.T_decimal128:
 		scale := vec.GetType().Scale
-		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, i).Format(scale), nil
+		appendJSONString(buf, []byte(vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, i).Format(scale)))
+		return nil
 	case types.T_decimal256:
 		scale := vec.GetType().Scale
-		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, i).Format(scale), nil
+		appendJSONString(buf, []byte(vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, i).Format(scale)))
+		return nil
 	case types.T_uuid:
-		return vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i).String(), nil
+		appendJSONString(buf, []byte(vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i).String()))
+		return nil
 	case types.T_enum:
-		return vector.GetFixedAtNoTypeCheck[types.Enum](vec, i).String(), nil
+		appendJSONString(buf, []byte(vector.GetFixedAtNoTypeCheck[types.Enum](vec, i).String()))
+		return nil
 	default:
-		return nil, moerr.NewInternalErrorf(context.Background(),
+		return moerr.NewInternalErrorf(context.Background(),
 			"external write (jsonline): unsupported column type %s", vec.GetType().String())
 	}
+	buf.Write(w.scratch)
+	return nil
+}
+
+// appendJSONFloat appends f formatted exactly as encoding/json formats floats
+// (shortest 'f' form, switching to 'e' outside [1e-6, 1e21) with a trimmed
+// exponent), so the rewrite keeps byte-identical output.
+func (w *externalWriter) appendJSONFloat(buf *bytes.Buffer, f float64, bits int) error {
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		return moerr.NewInternalErrorf(context.Background(),
+			"external write (jsonline): unsupported float value %v", f)
+	}
+	abs := math.Abs(f)
+	format := byte('f')
+	if abs != 0 {
+		if bits == 64 && (abs < 1e-6 || abs >= 1e21) ||
+			bits == 32 && (float32(abs) < 1e-6 || float32(abs) >= 1e21) {
+			format = 'e'
+		}
+	}
+	w.scratch = strconv.AppendFloat(w.scratch[:0], f, format, -1, bits)
+	if format == 'e' {
+		// clean up e-09 to e-9, as encoding/json does
+		if n := len(w.scratch); n >= 4 && w.scratch[n-4] == 'e' && w.scratch[n-3] == '-' && w.scratch[n-2] == '0' {
+			w.scratch[n-2] = w.scratch[n-1]
+			w.scratch = w.scratch[:n-1]
+		}
+	}
+	buf.Write(w.scratch)
+	return nil
+}
+
+func appendJSONFloatArray[T float32 | float64](w *externalWriter, buf *bytes.Buffer, vals []T, bits int) error {
+	buf.WriteByte('[')
+	for k, v := range vals {
+		if k > 0 {
+			buf.WriteByte(',')
+		}
+		if err := w.appendJSONFloat(buf, float64(v), bits); err != nil {
+			return err
+		}
+	}
+	buf.WriteByte(']')
+	return nil
+}
+
+// appendJSONString writes s to buf as a JSON string, escaping quotes,
+// backslashes and control characters. (Unlike encoding/json it does not
+// HTML-escape & < >, and it passes non-UTF-8 bytes through unchanged; the
+// reader parses with a standard JSON parser, which accepts both.)
+func appendJSONString(buf *bytes.Buffer, s []byte) {
+	const hexDigits = "0123456789abcdef"
+	buf.WriteByte('"')
+	start := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 0x20 && c != '"' && c != '\\' {
+			continue
+		}
+		buf.Write(s[start:i])
+		switch c {
+		case '"':
+			buf.WriteString(`\"`)
+		case '\\':
+			buf.WriteString(`\\`)
+		case '\n':
+			buf.WriteString(`\n`)
+		case '\r':
+			buf.WriteString(`\r`)
+		case '\t':
+			buf.WriteString(`\t`)
+		default:
+			buf.WriteString(`\u00`)
+			buf.WriteByte(hexDigits[c>>4])
+			buf.WriteByte(hexDigits[c&0xF])
+		}
+		start = i + 1
+	}
+	buf.Write(s[start:])
+	buf.WriteByte('"')
 }
 
 // colCount is the number of leading batch columns to write: the table's
@@ -291,22 +420,13 @@ func (w *externalWriter) colCount(bat *batch.Batch) int {
 	return n
 }
 
-// cellIsNull reports whether row i of vec is NULL, handling constant and
-// constant-null vectors (whose physical data lives at index 0, or is absent).
-func cellIsNull(vec *vector.Vector, i int) bool {
-	if vec.IsConstNull() {
-		return true
-	}
-	idx := i
-	if vec.IsConst() {
-		idx = 0
-	}
-	return vec.GetNulls().Contains(uint64(idx))
-}
-
 // addEscape escapes backslashes and (doubled) the enclosure character, matching
-// pkg/frontend/export.go addEscapeToString.
+// pkg/frontend/export.go addEscapeToString. The common no-escape case returns s
+// unchanged (no copy), preserving GetBytesAt's zero-copy slice.
 func addEscape(s []byte, escape byte) []byte {
+	if bytes.IndexByte(s, '\\') < 0 && (escape == 0 || bytes.IndexByte(s, escape) < 0) {
+		return s
+	}
 	s = bytes.ReplaceAll(s, []byte{'\\'}, []byte{'\\', '\\'})
 	if escape != 0 && escape != '\\' {
 		s = bytes.ReplaceAll(s, []byte{escape}, []byte{escape, escape})

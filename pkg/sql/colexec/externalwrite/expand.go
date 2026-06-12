@@ -34,10 +34,13 @@ import (
 //	%U   -> a freshly generated UUID
 //
 // t is the timestamp the pattern is evaluated against (typically the statement
-// start time). It is the caller's responsibility to make the pattern produce
-// unique names across parallel writers (use %U or %nN); the standard directives
-// alone are not unique.
+// start time). Time directives are rendered in UTC, so every pipeline — local
+// or on a remote CN whose host may run in a different OS time zone — expands
+// the same instant to the same path. It is the caller's responsibility to make
+// the pattern produce unique names across parallel writers (use %U or %nN);
+// the standard directives alone are not unique.
 func ExpandFilePattern(pattern string, t time.Time) (string, error) {
+	t = t.UTC()
 	var b strings.Builder
 	runes := []rune(pattern)
 	n := len(runes)
@@ -99,6 +102,36 @@ func ExpandFilePattern(pattern string, t time.Time) (string, error) {
 	}
 
 	return b.String(), nil
+}
+
+// PatternHasUniqueDirective reports whether the pattern contains a directive
+// that yields a distinct value per writer (%U or %nN). Patterns without one
+// expand to the same path in every parallel pipeline of a statement (and in
+// every statement within the same time-directive granularity), so concurrent
+// writers would clobber each other; DDL validation rejects them.
+func PatternHasUniqueDirective(pattern string) bool {
+	runes := []rune(pattern)
+	n := len(runes)
+	for i := 0; i < n-1; i++ {
+		if runes[i] != '%' {
+			continue
+		}
+		next := runes[i+1]
+		if next == 'U' {
+			return true
+		}
+		if next >= '0' && next <= '9' {
+			j := i + 1
+			for j < n && runes[j] >= '0' && runes[j] <= '9' {
+				j++
+			}
+			if j < n && runes[j] == 'N' {
+				return true
+			}
+		}
+		i++ // skip the directive character (also handles %%)
+	}
+	return false
 }
 
 // strftimeDirective maps a single strftime directive to its rendered value.
