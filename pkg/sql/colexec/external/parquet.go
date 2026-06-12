@@ -313,7 +313,9 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		if !col.Leaf() {
 			targetType := types.T(def.Typ.Id)
 			switch targetType {
-			case types.T_array_float32, types.T_array_float64:
+			case types.T_array_float32, types.T_array_float64,
+				types.T_array_bf16, types.T_array_float16,
+				types.T_array_int8, types.T_array_uint8:
 				physicalCol, fn = h.getNestedListMapper(col, def.Typ)
 			default:
 				if !isNestedTargetTypeSupported(targetType) {
@@ -432,6 +434,53 @@ func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*p
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (float64, error) {
 				return v.Double(), nil
+			})
+		}
+	case types.T_array_bf16:
+		// bf16/f16 vectors are stored in parquet as FLOAT leaves and narrowed on load.
+		if leaf.Type().Kind() != parquet.Float {
+			return nil, nil
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (types.BF16, error) {
+				return types.BF16FromFloat32(v.Float()), nil
+			})
+		}
+	case types.T_array_float16:
+		if leaf.Type().Kind() != parquet.Float {
+			return nil, nil
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (types.Float16, error) {
+				return types.Float16FromFloat32(v.Float()), nil
+			})
+		}
+	case types.T_array_int8:
+		// int8/uint8 vectors are stored in parquet as INT32 leaves; load is strict
+		// (out-of-range values are rejected, mirroring the int8 string parse).
+		if leaf.Type().Kind() != parquet.Int32 {
+			return nil, nil
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (int8, error) {
+				x := v.Int32()
+				if x < math.MinInt8 || x > math.MaxInt8 {
+					return 0, moerr.NewOutOfRangeNoCtxf("vecint8", "value %d out of range [-128,127]", x)
+				}
+				return int8(x), nil
+			})
+		}
+	case types.T_array_uint8:
+		if leaf.Type().Kind() != parquet.Int32 {
+			return nil, nil
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (uint8, error) {
+				x := v.Int32()
+				if x < 0 || x > math.MaxUint8 {
+					return 0, moerr.NewOutOfRangeNoCtxf("vecuint8", "value %d out of range [0,255]", x)
+				}
+				return uint8(x), nil
 			})
 		}
 	default:
@@ -1765,7 +1814,7 @@ func readParquetPageAllValues(ctx context.Context, page parquet.Page) ([]parquet
 	return values, nil
 }
 
-func processParquetListToArray[T types.RealNumbers](
+func processParquetListToArray[T types.ArrayElement](
 	ctx context.Context,
 	mp *columnMapper,
 	page parquet.Page,
