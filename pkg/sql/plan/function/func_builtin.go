@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
@@ -195,6 +196,40 @@ const (
 	generatedExprExtra   uint8 = 6 // generated column Extra: "STORED GENERATED" or "VIRTUAL GENERATED"
 )
 
+// Geometry subtype and SRID live in the column type's Scale and Width (see
+// pkg/sql/plan/mysql_special_types.go): Scale holds the geo.Subtype enum and
+// Width holds srid+1 when an SRID is declared (0 means undeclared). These two
+// helpers mirror that rendering for information_schema.COLUMNS / desc, matching
+// what SHOW CREATE TABLE produces via plan.FormatColType.
+
+// geometryShowDataType renders the DATA_TYPE of a geometry column: the subtype
+// name (POINT, LINESTRING, ...) or the base family when the subtype is generic.
+func geometryShowDataType(typ *types.Type) string {
+	base := "GEOMETRY"
+	if typ.Oid == types.T_geometry32 {
+		base = "GEOMETRY32"
+	}
+	sub := geo.Subtype(typ.Scale)
+	if sub == geo.GENERIC {
+		return base
+	}
+	name := sub.String()
+	if typ.Oid == types.T_geometry32 {
+		name += "32"
+	}
+	return name
+}
+
+// geometryShowColumnType is geometryShowDataType plus a " SRID n" suffix when
+// the column declares an SRID (Width holds srid+1; 0 means undeclared).
+func geometryShowColumnType(typ *types.Type) string {
+	ts := geometryShowDataType(typ)
+	if typ.Width > 0 {
+		ts = fmt.Sprintf("%s SRID %d", ts, uint32(typ.Width-1))
+	}
+	return ts
+}
+
 func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[1])
@@ -240,8 +275,8 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
 			}
-			if typ.Oid == types.T_geometry {
-				return functionUtil.QuickStrToBytes("GEOMETRY"), nil
+			if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
+				return functionUtil.QuickStrToBytes(geometryShowDataType(typ)), nil
 			}
 
 			return functionUtil.QuickStrToBytes(ts), nil
@@ -260,8 +295,8 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
 				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
-			} else if typ.Oid == types.T_geometry {
-				ret = "GEOMETRY"
+			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
+				ret = geometryShowColumnType(typ)
 			} else {
 				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 			}
@@ -683,6 +718,276 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		}
 	}
 	return nil
+}
+
+func builtInIntervalCheck(_ []overload, inputs []types.Type) checkResult {
+	if len(inputs) < 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	for _, source := range inputs {
+		if !intervalTypeSupported(source) {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+	}
+	return newCheckResultWithSuccess(0)
+}
+
+func intervalTypeSupported(source types.Type) bool {
+	return source.IsIntOrUint() ||
+		source.IsFloat() ||
+		source.Oid == types.T_decimal64 ||
+		source.Oid == types.T_decimal128 ||
+		source.Oid.IsMySQLString() ||
+		source.Oid == types.T_any
+}
+
+func builtInInterval(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	args := make([]intervalParam, len(parameters))
+	for i := range parameters {
+		var err error
+		args[i], err = makeIntervalParam(parameters[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		n, null, err := args[0].float(i)
+		if err != nil {
+			return err
+		}
+		if null {
+			if err := rs.Append(-1, false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		var nDec types.Decimal128
+		useDecimalComparison := args[0].useDecimalComparison()
+		if useDecimalComparison {
+			nDec, _, err = args[0].decimal(i)
+			if err != nil {
+				return err
+			}
+		}
+
+		ret := len(args) - 1
+		for j := 1; j < len(args); j++ {
+			var cmp int
+			if useDecimalComparison && args[j].canCompareAsDecimal() {
+				var vDec types.Decimal128
+				vDec, null, err = args[j].decimal(i)
+				if err != nil {
+					return err
+				}
+				if null {
+					continue
+				}
+				cmp = types.CompareDecimal128WithScale(vDec, nDec, args[j].decimalScale(), args[0].decimalScale())
+			} else {
+				var v float64
+				v, null, err = args[j].float(i)
+				if err != nil {
+					return err
+				}
+				if null {
+					continue
+				}
+				switch {
+				case v > n:
+					cmp = 1
+				case v < n:
+					cmp = -1
+				default:
+					cmp = 0
+				}
+			}
+			if cmp > 0 {
+				ret = j - 1
+				break
+			}
+		}
+
+		if err := rs.Append(int64(ret), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type intervalParam struct {
+	float             func(uint64) (float64, bool, error)
+	decimal           func(uint64) (types.Decimal128, bool, error)
+	useDecimalCompare bool
+	canDecimalCompare bool
+	decScale          int32
+}
+
+func makeIntervalParam(v *vector.Vector) (intervalParam, error) {
+	typ := *v.GetType()
+	p := intervalParam{
+		useDecimalCompare: typ.IsIntOrUint() || typ.IsDecimal(),
+		canDecimalCompare: typ.IsIntOrUint() || typ.Oid == types.T_decimal64 || typ.Oid == types.T_decimal128,
+	}
+	if typ.Oid == types.T_decimal64 || typ.Oid == types.T_decimal128 {
+		p.decScale = typ.Scale
+	}
+
+	switch typ.Oid {
+	case types.T_float64:
+		fp := vector.GenerateFunctionFixedTypeParameter[float64](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return v, null, nil
+		}
+	case types.T_float32:
+		fp := vector.GenerateFunctionFixedTypeParameter[float32](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+	case types.T_int64:
+		fp := vector.GenerateFunctionFixedTypeParameter[int64](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(v), null, nil
+		}
+	case types.T_int32:
+		fp := vector.GenerateFunctionFixedTypeParameter[int32](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
+	case types.T_int16:
+		fp := vector.GenerateFunctionFixedTypeParameter[int16](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
+	case types.T_int8:
+		fp := vector.GenerateFunctionFixedTypeParameter[int8](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
+	case types.T_uint64:
+		fp := vector.GenerateFunctionFixedTypeParameter[uint64](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			if v <= math.MaxInt64 {
+				return types.Decimal128FromInt64(int64(v)), null, nil
+			}
+			d, err := types.ParseDecimal128(strconv.FormatUint(v, 10), 38, 0)
+			return d, null, err
+		}
+	case types.T_uint32:
+		fp := vector.GenerateFunctionFixedTypeParameter[uint32](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
+	case types.T_uint16:
+		fp := vector.GenerateFunctionFixedTypeParameter[uint16](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
+	case types.T_uint8:
+		fp := vector.GenerateFunctionFixedTypeParameter[uint8](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
+	case types.T_decimal64:
+		fp := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal64ToFloat64(v, typ.Scale), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromDecimal64(v, typ.Scale), null, nil
+		}
+	case types.T_decimal128:
+		fp := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128ToFloat64(v, typ.Scale), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return v, null, nil
+		}
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+		fp := vector.GenerateFunctionStrParameter(v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetStrValue(idx)
+			if null {
+				return 0, true, nil
+			}
+			f, err := strconv.ParseFloat(string(v), 64)
+			if err != nil {
+				return 0, false, moerr.NewInvalidArgNoCtx("cast to double", fmt.Sprintf("bad value %s", string(v)))
+			}
+			return f, false, nil
+		}
+	case types.T_any:
+		fp := vector.GenerateFunctionFixedTypeParameter[int64](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+	default:
+		return p, moerr.NewInvalidInputNoCtxf("interval function have invalid input args type %s", typ.Oid.String())
+	}
+	return p, nil
+}
+
+func (p intervalParam) useDecimalComparison() bool {
+	return p.useDecimalCompare
+}
+
+func (p intervalParam) canCompareAsDecimal() bool {
+	return p.canDecimalCompare
+}
+
+func (p intervalParam) decimalScale() int32 {
+	return p.decScale
 }
 
 func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
@@ -1229,6 +1534,292 @@ func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *
 		}
 	}
 	return nil
+}
+
+func builtInIsUUID(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[bool](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetStrValue(i)
+		if null {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.Append(isUUIDString(functionUtil.QuickBytesToStr(v)), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInUUIDToBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	var getSwapFlag func(uint64) (bool, bool, error)
+	if len(parameters) == 2 {
+		getSwapFlag = makeBoolParamGetter(parameters[1])
+	}
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		uuidBytes, null := p1.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		swapFlag := false
+		if getSwapFlag != nil {
+			var null2 bool
+			var err error
+			swapFlag, null2, err = getSwapFlag(i)
+			if err != nil {
+				return err
+			}
+			if null2 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		u, err := parseUUIDString(functionUtil.QuickBytesToStr(uuidBytes))
+		if err != nil {
+			return moerr.NewInvalidArg(proc.Ctx, "uuid_to_bin", functionUtil.QuickBytesToStr(uuidBytes))
+		}
+		out := uuidToBin(u, swapFlag)
+		if err := rs.AppendBytes(out[:], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInBinToUUID(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	var getSwapFlag func(uint64) (bool, bool, error)
+	if len(parameters) == 2 {
+		getSwapFlag = makeBoolParamGetter(parameters[1])
+	}
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		bin, null := p1.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		swapFlag := false
+		if getSwapFlag != nil {
+			var null2 bool
+			var err error
+			swapFlag, null2, err = getSwapFlag(i)
+			if err != nil {
+				return err
+			}
+			if null2 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if len(bin) != 16 {
+			return moerr.NewInvalidArg(proc.Ctx, "bin_to_uuid", len(bin))
+		}
+		var u types.Uuid
+		copy(u[:], bin)
+		if swapFlag {
+			u = unswapUUIDTimeParts(u)
+		}
+		if err := rs.AppendBytes([]byte(u.String()), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func makeBoolParamGetter(param *vector.Vector) func(uint64) (bool, bool, error) {
+	switch param.GetType().Oid {
+	case types.T_bool:
+		p := vector.GenerateFunctionFixedTypeParameter[bool](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v, null, nil
+		}
+	case types.T_int8:
+		p := vector.GenerateFunctionFixedTypeParameter[int8](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_int16:
+		p := vector.GenerateFunctionFixedTypeParameter[int16](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_int32:
+		p := vector.GenerateFunctionFixedTypeParameter[int32](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_int64:
+		p := vector.GenerateFunctionFixedTypeParameter[int64](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_uint8:
+		p := vector.GenerateFunctionFixedTypeParameter[uint8](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_uint16:
+		p := vector.GenerateFunctionFixedTypeParameter[uint16](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_uint32:
+		p := vector.GenerateFunctionFixedTypeParameter[uint32](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_uint64:
+		p := vector.GenerateFunctionFixedTypeParameter[uint64](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_float32:
+		p := vector.GenerateFunctionFixedTypeParameter[float32](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_float64:
+		p := vector.GenerateFunctionFixedTypeParameter[float64](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_decimal64:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_decimal128:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v.Compare(types.Decimal128{}) != 0, null, nil
+		}
+	case types.T_decimal256:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v.Compare(types.Decimal256{}) != 0, null, nil
+		}
+	default:
+		p := vector.GenerateFunctionStrParameter(param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetStrValue(idx)
+			if null {
+				return false, true, nil
+			}
+			f, err := strconv.ParseFloat(strings.TrimSpace(functionUtil.QuickBytesToStr(v)), 64)
+			if err != nil {
+				return false, false, moerr.NewInvalidInputNoCtxf("'%s' cannot be converted into boolean value", v)
+			}
+			return f != 0, false, nil
+		}
+	}
+}
+
+func isUUIDString(s string) bool {
+	_, err := parseUUIDString(s)
+	return err == nil
+}
+
+func parseUUIDString(s string) (types.Uuid, error) {
+	if !isMySQLUUIDFormat(s) {
+		return types.Uuid{}, moerr.NewInvalidInputNoCtx("invalid uuid")
+	}
+	if len(s) == 38 {
+		s = s[1:37]
+	}
+	return types.ParseUuid(s)
+}
+
+func isMySQLUUIDFormat(s string) bool {
+	switch len(s) {
+	case 32:
+		return allUUIDHex(s)
+	case 36:
+		return isDashedUUIDFormat(s)
+	case 38:
+		return s[0] == '{' && s[37] == '}' && isDashedUUIDFormat(s[1:37])
+	default:
+		return false
+	}
+}
+
+func isDashedUUIDFormat(s string) bool {
+	if s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' {
+		return false
+	}
+	return allUUIDHex(s[:8]) &&
+		allUUIDHex(s[9:13]) &&
+		allUUIDHex(s[14:18]) &&
+		allUUIDHex(s[19:23]) &&
+		allUUIDHex(s[24:])
+}
+
+func allUUIDHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isUUIDHex(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isUUIDHex(c byte) bool {
+	return ('0' <= c && c <= '9') ||
+		('a' <= c && c <= 'f') ||
+		('A' <= c && c <= 'F')
+}
+
+func uuidToBin(u types.Uuid, swap bool) [16]byte {
+	if !swap {
+		return [16]byte(u)
+	}
+	return swapUUIDTimeParts(u)
+}
+
+func swapUUIDTimeParts(u types.Uuid) [16]byte {
+	return [16]byte{
+		u[6], u[7],
+		u[4], u[5],
+		u[0], u[1], u[2], u[3],
+		u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15],
+	}
+}
+
+func unswapUUIDTimeParts(u types.Uuid) types.Uuid {
+	return types.Uuid{
+		u[4], u[5], u[6], u[7],
+		u[2], u[3],
+		u[0], u[1],
+		u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15],
+	}
 }
 
 func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
