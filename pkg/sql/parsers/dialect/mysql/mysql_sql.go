@@ -21746,6 +21746,8 @@ yydefault:
 //line mysql_sql.y:8601
 		{
 			t := tree.NewCloneTable()
+			t.CreateTable.Temporary = yyDollar[2].boolValUnion()
+			t.CreateTable.IfNotExists = yyDollar[4].ifNotExistsUnion()
 			t.CreateTable.Table = *yyDollar[5].tableNameUnion()
 			t.CreateTable.LikeTableName = *yyDollar[7].tableNameUnion()
 			t.CreateTable.IsAsLike = true
