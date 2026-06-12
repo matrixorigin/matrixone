@@ -14978,7 +14978,7 @@ func Test_determineUserHasPrivilegeSet(t *testing.T) {
 		}
 		ses.SetTenantInfo(tenant)
 
-		priv := determinePrivilegeSetOfStatement(&tree.CreateTable{})
+		priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
 		_, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
@@ -15048,7 +15048,7 @@ func Test_determineUserHasPrivilegeSet(t *testing.T) {
 		}
 		ses.SetTenantInfo(tenant)
 
-		priv := determinePrivilegeSetOfStatement(&tree.CreateTable{})
+		priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
 		ret, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 		convey.ShouldBeFalse(ret, false)
 		convey.So(err, convey.ShouldBeNil)
