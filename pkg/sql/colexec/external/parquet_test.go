@@ -1673,6 +1673,34 @@ func TestParquet_prepare_missingColumn(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestParquetFindColumnIgnoreCaseExactMatchWins(t *testing.T) {
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"Name": parquet.Leaf(parquet.Int32Type),
+		"name": parquet.Leaf(parquet.Int64Type),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+
+	h := &ParquetHandler{file: f}
+	col, err := h.findColumnIgnoreCase(context.Background(), "Name")
+	require.NoError(t, err)
+	require.NotNil(t, col)
+	require.Equal(t, "Name", col.Name())
+
+	col, err = h.findColumnIgnoreCase(context.Background(), "name")
+	require.NoError(t, err)
+	require.NotNil(t, col)
+	require.Equal(t, "name", col.Name())
+
+	col, err = h.findColumnIgnoreCase(context.Background(), "NAME")
+	require.Nil(t, col)
+	require.ErrorContains(t, err, "ambiguous column name NAME")
+}
+
 func TestParquet_prepare_optionalToNotNull(t *testing.T) {
 	// Test that optional column can be prepared to map to NOT NULL column
 	// The NULL constraint violation will be checked at runtime when actual NULLs are encountered
@@ -1704,6 +1732,48 @@ func TestParquet_prepare_optionalToNotNull(t *testing.T) {
 	// prepare should succeed - NULL constraint is checked at runtime, not prepare time
 	err = h.prepare(param)
 	require.NoError(t, err)
+}
+
+func TestParquetCopyDictPageToVecRejectsNullForNotNull(t *testing.T) {
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"c": parquet.Optional(parquet.Encoded(parquet.Leaf(parquet.Int32Type), &parquet.RLEDictionary)),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	_, err := w.WriteRows([]parquet.Row{
+		{parquet.Int32Value(10).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+		{parquet.Int32Value(20).Level(0, 1, 0)},
+	})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	col := f.Root().Column("c")
+	page, err := col.Pages().ReadPage()
+	require.NoError(t, err)
+	require.NotNil(t, page.Dictionary())
+	require.Equal(t, int64(1), page.NumNulls())
+
+	dictData := page.Dictionary().Page().Data()
+	dictValues := dictData.Int32()
+	data := page.Data()
+	indexes := data.Int32()
+	require.Len(t, indexes, 2)
+
+	proc := testutil.NewProc(t)
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	mp := &columnMapper{
+		srcNull:            true,
+		dstNull:            false,
+		maxDefinitionLevel: byte(col.MaxDefinitionLevel()),
+	}
+	err = copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) int32 {
+		return dictValues[int(idx)]
+	})
+	require.ErrorContains(t, err, "cannot load NULL value into NOT NULL column")
+	require.Equal(t, 0, vec.Length())
 }
 
 func TestParquet_ensureDictionaryIndexes_outOfRange(t *testing.T) {

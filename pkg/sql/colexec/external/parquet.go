@@ -175,22 +175,17 @@ func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) 
 	for _, col := range root.Columns() {
 		if col.Name() == name {
 			exactMatch = col
-			caseInsensitiveMatches = append(caseInsensitiveMatches, col)
 		} else if strings.ToLower(col.Name()) == nameLower {
 			caseInsensitiveMatches = append(caseInsensitiveMatches, col)
 		}
 	}
-
-	// Check for ambiguity: multiple columns match case-insensitively
+	if exactMatch != nil {
+		return exactMatch, nil
+	}
 	if len(caseInsensitiveMatches) > 1 {
 		return nil, moerr.NewInvalidInputf(ctx,
 			"ambiguous column name %s: multiple columns match case-insensitively (%s and %s)",
 			name, caseInsensitiveMatches[0].Name(), caseInsensitiveMatches[1].Name())
-	}
-
-	// Return exact match if found, otherwise the single case-insensitive match
-	if exactMatch != nil {
-		return exactMatch, nil
 	}
 	if len(caseInsensitiveMatches) == 1 {
 		return caseInsensitiveMatches[0], nil
@@ -2278,28 +2273,22 @@ func copyPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process.Pro
 }
 
 func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, data []T, itee func(t T) U) error {
+	nc, err := prepareNullCheck(proc.Ctx, mp, page)
+	if err != nil {
+		return err
+	}
 	n := int(page.NumRows())
 
-	// Only skip NULL check if source doesn't allow null OR page has no nulls
-	noNulls := !mp.srcNull || page.NumNulls() == 0
-
-	// Fail early: if page has NULLs and destination doesn't allow them
-	if !noNulls && !mp.dstNull {
-		return moerr.NewConstraintViolationf(proc.Ctx,
-			"cannot load NULL value into NOT NULL column")
-	}
-
 	length := vec.Length()
-	err := vec.PreExtend(n+length, proc.Mp())
+	err = vec.PreExtend(n+length, proc.Mp())
 	if err != nil {
 		return err
 	}
 	vec.SetLength(n + length)
 	ret := vector.MustFixedColWithTypeCheck[U](vec)
-	levels := page.DefinitionLevels()
 	j := 0
 	for i := 0; i < n; i++ {
-		if !noNulls && levels[i] != mp.maxDefinitionLevel {
+		if nc.isNull(i) {
 			nulls.Add(vec.GetNulls(), uint64(i+length))
 		} else {
 			ret[i+length] = itee(data[j])
