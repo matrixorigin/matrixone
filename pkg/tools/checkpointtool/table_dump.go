@@ -1636,7 +1636,7 @@ func writeSQLLoadCSVRow(w io.Writer, colTypes []types.Type, fields []string, nul
 }
 
 func writeProjectedCSVRowFromVecs(
-	w io.Writer,
+	w *bytes.Buffer,
 	colTypes []types.Type,
 	vecs []*vector.Vector,
 	physicalPositions []int,
@@ -1652,20 +1652,227 @@ func writeProjectedCSVRowFromVecs(
 		if i < len(colTypes) {
 			typ = colTypes[i]
 		}
-		field := ""
-		isNull := true
-		if pos >= 0 && pos < len(vecs) && vecs[pos] != nil {
-			isNull = vecs[pos].IsNull(uint64(rowIdx))
-			if !isNull {
-				field = vecValueToString(vecs[pos], rowIdx)
-			}
-		}
-		if err := writeSQLLoadCSVField(w, typ, field, isNull); err != nil {
+		if err := writeSQLLoadCSVFieldFromVec(w, typ, vecs, pos, rowIdx); err != nil {
 			return err
 		}
 	}
-	_, err := io.WriteString(w, "\n")
-	return err
+	w.WriteByte('\n')
+	return nil
+}
+
+func writeSQLLoadCSVFieldFromVec(
+	w *bytes.Buffer,
+	typ types.Type,
+	vecs []*vector.Vector,
+	pos int,
+	rowIdx int,
+) error {
+	if pos < 0 || pos >= len(vecs) || vecs[pos] == nil || vecs[pos].IsNull(uint64(rowIdx)) {
+		_, err := io.WriteString(w, `\N`)
+		return err
+	}
+	vec := vecs[pos]
+	rowIdx = vectorRowIndex(vec, rowIdx)
+	if shouldQuoteSQLLoadType(typ) {
+		w.WriteByte('"')
+		appendCSVQuotedVecValue(w, vec, rowIdx)
+		w.WriteByte('"')
+		return nil
+	}
+	appendCSVUnquotedVecValue(w, typ, vec, rowIdx)
+	return nil
+}
+
+func vectorRowIndex(vec *vector.Vector, rowIdx int) int {
+	if vec.IsConst() {
+		return 0
+	}
+	return rowIdx
+}
+
+func appendCSVQuotedVecValue(w *bytes.Buffer, vec *vector.Vector, rowIdx int) {
+	switch vec.GetType().Oid {
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_datalink, types.T_json:
+		appendEscapedSQLLoadBytes(w, vec.GetBytesAt(rowIdx), '"')
+	default:
+		appendEscapedSQLLoadString(w, vecValueToString(vec, rowIdx), '"')
+	}
+}
+
+func appendCSVUnquotedVecValue(w *bytes.Buffer, typ types.Type, vec *vector.Vector, rowIdx int) {
+	switch vec.GetType().Oid {
+	case types.T_bool:
+		if vector.MustFixedColWithTypeCheck[bool](vec)[rowIdx] {
+			w.WriteString("true")
+		} else {
+			w.WriteString("false")
+		}
+	case types.T_int8:
+		appendCSVInt(w, int64(vector.MustFixedColWithTypeCheck[int8](vec)[rowIdx]))
+	case types.T_int16:
+		appendCSVInt(w, int64(vector.MustFixedColWithTypeCheck[int16](vec)[rowIdx]))
+	case types.T_int32:
+		appendCSVInt(w, int64(vector.MustFixedColWithTypeCheck[int32](vec)[rowIdx]))
+	case types.T_int64:
+		appendCSVInt(w, vector.MustFixedColWithTypeCheck[int64](vec)[rowIdx])
+	case types.T_uint8:
+		appendCSVUint(w, uint64(vector.MustFixedColWithTypeCheck[uint8](vec)[rowIdx]))
+	case types.T_uint16:
+		appendCSVUint(w, uint64(vector.MustFixedColWithTypeCheck[uint16](vec)[rowIdx]))
+	case types.T_uint32:
+		appendCSVUint(w, uint64(vector.MustFixedColWithTypeCheck[uint32](vec)[rowIdx]))
+	case types.T_uint64:
+		appendCSVUint(w, vector.MustFixedColWithTypeCheck[uint64](vec)[rowIdx])
+	case types.T_float32:
+		appendCSVFloat(w, float64(vector.MustFixedColWithTypeCheck[float32](vec)[rowIdx]), 32)
+	case types.T_float64:
+		appendCSVFloat(w, vector.MustFixedColWithTypeCheck[float64](vec)[rowIdx], 64)
+	case types.T_decimal64:
+		appendDecimal64(w, vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[rowIdx], vec.GetType().Scale)
+	case types.T_decimal128:
+		appendDecimal128(w, vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[rowIdx], vec.GetType().Scale)
+	case types.T_date:
+		appendDate(w, vector.MustFixedColWithTypeCheck[types.Date](vec)[rowIdx])
+	default:
+		w.WriteString(vecValueToString(vec, rowIdx))
+	}
+}
+
+func appendEscapedSQLLoadString(w *bytes.Buffer, s string, enclosed byte) {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			w.WriteByte('\\')
+			w.WriteByte('\\')
+		case enclosed:
+			if enclosed != 0 && enclosed != '\\' {
+				w.WriteByte(enclosed)
+				w.WriteByte(enclosed)
+			} else {
+				w.WriteByte(s[i])
+			}
+		default:
+			w.WriteByte(s[i])
+		}
+	}
+}
+
+func appendEscapedSQLLoadBytes(w *bytes.Buffer, data []byte, enclosed byte) {
+	for _, b := range data {
+		switch b {
+		case '\\':
+			w.WriteByte('\\')
+			w.WriteByte('\\')
+		case enclosed:
+			if enclosed != 0 && enclosed != '\\' {
+				w.WriteByte(enclosed)
+				w.WriteByte(enclosed)
+			} else {
+				w.WriteByte(b)
+			}
+		default:
+			w.WriteByte(b)
+		}
+	}
+}
+
+func appendDecimal64(w *bytes.Buffer, value types.Decimal64, scale int32) {
+	if value.Sign() {
+		w.WriteByte('-')
+		value = value.Minus()
+	}
+	v := uint64(value)
+	if scale <= 0 {
+		appendCSVUint(w, v)
+		return
+	}
+	pow := uint64(1)
+	for i := int32(0); i < scale; i++ {
+		pow *= 10
+	}
+	intPart := v / pow
+	fracPart := v % pow
+	appendCSVUint(w, intPart)
+	w.WriteByte('.')
+	var scratch [32]byte
+	frac := strconv.AppendUint(scratch[:0], fracPart, 10)
+	for i := len(frac); i < int(scale); i++ {
+		w.WriteByte('0')
+	}
+	w.Write(frac)
+}
+
+func appendDecimal128(w *bytes.Buffer, value types.Decimal128, scale int32) {
+	if value.Sign() {
+		w.WriteByte('-')
+		value = value.Minus()
+	}
+	var scratch [80]byte
+	i := len(scratch)
+	ten := types.Decimal128{B0_63: types.Pow10[1]}
+	one := types.Decimal128{B0_63: 1}
+	for value.B64_127 != 0 || value.B0_63 != 0 {
+		digit, _ := value.Mod128(ten)
+		i--
+		scratch[i] = byte(digit.B0_63) + '0'
+		value, _ = value.Div128(ten)
+		if digit.B0_63 >= 5 {
+			value, _ = value.Sub128(one)
+		}
+		scale--
+		if scale == 0 {
+			i--
+			scratch[i] = '.'
+		}
+	}
+	for scale > 0 {
+		i--
+		scratch[i] = '0'
+		scale--
+		if scale == 0 {
+			i--
+			scratch[i] = '.'
+		}
+	}
+	if scale == 0 {
+		i--
+		scratch[i] = '0'
+	}
+	w.Write(scratch[i:])
+}
+
+func appendDate(w *bytes.Buffer, value types.Date) {
+	year, month, day, _ := value.Calendar(true)
+	appendZeroPaddedInt(w, int64(year), 4)
+	w.WriteByte('-')
+	appendZeroPaddedInt(w, int64(month), 2)
+	w.WriteByte('-')
+	appendZeroPaddedInt(w, int64(day), 2)
+}
+
+func appendZeroPaddedInt(w *bytes.Buffer, value int64, width int) {
+	var scratch [32]byte
+	buf := strconv.AppendInt(scratch[:0], value, 10)
+	for i := len(buf); i < width; i++ {
+		w.WriteByte('0')
+	}
+	w.Write(buf)
+}
+
+func appendCSVInt(w *bytes.Buffer, value int64) {
+	var scratch [32]byte
+	w.Write(strconv.AppendInt(scratch[:0], value, 10))
+}
+
+func appendCSVUint(w *bytes.Buffer, value uint64) {
+	var scratch [32]byte
+	w.Write(strconv.AppendUint(scratch[:0], value, 10))
+}
+
+func appendCSVFloat(w *bytes.Buffer, value float64, bitSize int) {
+	var scratch [32]byte
+	w.Write(strconv.AppendFloat(scratch[:0], value, 'g', -1, bitSize))
 }
 
 func writeSQLLoadCSVField(w io.Writer, typ types.Type, field string, isNull bool) error {

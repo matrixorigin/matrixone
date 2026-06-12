@@ -22,7 +22,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -105,6 +107,51 @@ func TestWriteCSV_withData(t *testing.T) {
 	assert.Equal(t, `2,"Bob",25`, dataLines[2])
 	assert.Equal(t, `3,"Charlie, Jr.",35`, dataLines[3])
 	assert.Equal(t, `4,"NULL",NULL`, dataLines[4])
+}
+
+func TestWriteProjectedCSVRowFromVecsFastPath(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vecInt := vector.NewVec(types.T_int64.ToType())
+	vecDecimal := vector.NewVec(types.T_decimal64.ToTypeWithScale(2))
+	vecDecimal128 := vector.NewVec(types.T_decimal128.ToTypeWithScale(5))
+	vecDate := vector.NewVec(types.T_date.ToType())
+	vecString := vector.NewVec(types.T_varchar.ToType())
+	vecNull := vector.NewVec(types.T_int32.ToType())
+	defer vecInt.Free(mp)
+	defer vecDecimal.Free(mp)
+	defer vecDecimal128.Free(mp)
+	defer vecDate.Free(mp)
+	defer vecString.Free(mp)
+	defer vecNull.Free(mp)
+
+	require.NoError(t, vector.AppendFixed(vecInt, int64(-42), false, mp))
+	decimal, err := types.ParseDecimal64("-123.40", 18, 2)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixed(vecDecimal, decimal, false, mp))
+	decimal128, err := types.ParseDecimal128("123456789012345.67890", 30, 5)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixed(vecDecimal128, decimal128, false, mp))
+	require.NoError(t, vector.AppendFixed(vecDate, types.DateFromCalendar(2024, 6, 1), false, mp))
+	require.NoError(t, vector.AppendBytes(vecString, []byte(`a"b\c`), false, mp))
+	require.NoError(t, vector.AppendFixed(vecNull, int32(0), true, mp))
+
+	var buf bytes.Buffer
+	err = writeProjectedCSVRowFromVecs(
+		&buf,
+		[]types.Type{
+			types.T_int64.ToType(),
+			types.T_decimal64.ToTypeWithScale(2),
+			types.T_decimal128.ToTypeWithScale(5),
+			types.T_date.ToType(),
+			types.T_varchar.ToType(),
+			types.T_int32.ToType(),
+		},
+		[]*vector.Vector{vecInt, vecDecimal, vecDecimal128, vecDate, vecString, vecNull},
+		[]int{0, 1, 2, 3, 4, 5},
+		0,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "-42,-123.40,123456789012345.67890,2024-06-01,\"a\"\"b\\\\c\",\\N\n", buf.String())
 }
 
 // TestWriteCSV_withCreateSQLHeader tests the header comment from CreateSQL.
