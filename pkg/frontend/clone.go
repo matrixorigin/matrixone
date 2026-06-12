@@ -335,28 +335,28 @@ func handleCloneDatabase(
 	bh BackgroundExec,
 	stmt *tree.CloneDatabase,
 ) (receipts []cloneReceipt, err error) {
+	return handleCloneDatabaseWithSource(execCtx, ses, bh, stmt, nil)
+}
+
+func handleCloneDatabaseWithSource(
+	execCtx *ExecCtx,
+	ses *Session,
+	bh BackgroundExec,
+	stmt *tree.CloneDatabase,
+	resolvedSource *cloneDatabaseSource,
+) (receipts []cloneReceipt, err error) {
 
 	var (
 		reqCtx = execCtx.reqCtx
 
 		deferred func(error) error
 
-		toAccountId uint32
-		opAccountId uint32
-
 		ctx1 context.Context
 
-		srcTblInfos []*tableInfo
-		snapshot    *plan2.Snapshot
-
-		viewMap = make(map[string]*tableInfo)
-
-		sortedViews  []string
-		sortedFkTbls []string
-		fkTableMap   map[string]*tableInfo
+		sortedViews []string
 
 		snapshotTS int64
-		subMeta    *plan2.SubscriptionMeta
+		source     cloneDatabaseSource
 	)
 
 	oldDefault := ses.GetTxnCompileCtx().DefaultDatabase()
@@ -380,61 +380,17 @@ func handleCloneDatabase(
 		}()
 	}
 
-	if opAccountId, toAccountId, snapshot, err = getOpAndToAccountId(
-		reqCtx, ses, bh, stmt.ToAccountOpt, stmt.AtTsExpr,
-	); err != nil {
-		return
-	}
-
-	if snapshot == nil && opAccountId != toAccountId {
-		err = moerr.NewInternalErrorNoCtxf("clone database between different accounts need a snapshot")
-		return
-	}
-
-	if opAccountId != sysAccountID && opAccountId != toAccountId {
-		err = moerr.NewInternalError(reqCtx, "only sys can clone table to another account")
-		return
-	}
-
-	ctx1 = defines.AttachAccountId(reqCtx, toAccountId)
-	if err = bh.Exec(ctx1,
-		fmt.Sprintf("create database `%s`", stmt.DstDatabase),
-	); err != nil {
-		return
-	}
-
-	if subMeta, err = ses.GetTxnCompileCtx().GetSubscriptionMeta(
-		string(stmt.SrcDatabase), snapshot,
-	); err != nil {
-		return
-	}
-
-	srcDBName := stmt.SrcDatabase.String()
-	if subMeta != nil {
-		srcDBName = subMeta.DbName
-		if snapshot != nil {
-			snapshot.Tenant = &plan.SnapshotTenant{TenantID: uint32(subMeta.AccountId)}
-		} else {
-			snapshot = &plan.Snapshot{
-				Tenant: &plan.SnapshotTenant{TenantID: uint32(subMeta.AccountId)},
-			}
+	if resolvedSource != nil {
+		source = *resolvedSource
+	} else {
+		if source, err = collectCloneDatabaseSource(reqCtx, ses, bh, stmt); err != nil {
+			return
 		}
 	}
 
-	if srcTblInfos, err = getTableInfos(
-		reqCtx, ses.GetService(), bh, snapshot, srcDBName, "",
-	); err != nil {
-		return
-	}
-
-	if sortedFkTbls, err = fkTablesTopoSort(
-		reqCtx, bh, snapshot, srcDBName, "",
-	); err != nil {
-		return
-	}
-
-	if fkTableMap, err = getTableInfoMap(
-		reqCtx, ses.GetService(), bh, snapshot, srcDBName, "", sortedFkTbls,
+	ctx1 = defines.AttachAccountId(reqCtx, source.toAccountId)
+	if err = bh.Exec(ctx1,
+		fmt.Sprintf("create database %s", quoteIdentifierForSQL(stmt.DstDatabase.String())),
 	); err != nil {
 		return
 	}
@@ -492,15 +448,14 @@ func handleCloneDatabase(
 		return nil
 	}
 
-	for _, srcTbl := range srcTblInfos {
+	for _, srcTbl := range source.srcTblInfos {
 
 		key := genKey(srcTbl.dbName, srcTbl.tblName)
-		if _, ok := fkTableMap[key]; ok {
+		if _, ok := source.fkTableMap[key]; ok {
 			continue
 		}
 
 		if srcTbl.typ == view {
-			viewMap[key] = srcTbl
 			continue
 		}
 
@@ -513,8 +468,8 @@ func handleCloneDatabase(
 	}
 
 	// clone foreign key related table
-	for _, key := range sortedFkTbls {
-		if tblInfo := fkTableMap[key]; tblInfo != nil {
+	for _, key := range source.sortedFkTbls {
+		if tblInfo := source.fkTableMap[key]; tblInfo != nil {
 			if err = cloneTable(
 				stmt.DstDatabase.String(), tblInfo.tblName,
 				stmt.SrcDatabase.String(), tblInfo.tblName,
@@ -525,24 +480,24 @@ func handleCloneDatabase(
 	}
 
 	// clone view table
-	if len(viewMap) != 0 {
-		viewSnapshot := prepareCloneViewSnapshot(snapshot, snapshotTS)
-		fromAccount := opAccountId
+	if len(source.viewMap) != 0 {
+		viewSnapshot := prepareCloneViewSnapshot(source.snapshot, snapshotTS)
+		fromAccount := source.opAccountId
 		if viewSnapshot != nil && viewSnapshot.Tenant != nil {
 			fromAccount = viewSnapshot.Tenant.TenantID
 		}
 
 		if sortedViews, err = sortedViewInfos(
-			reqCtx, ses, bh, "", viewSnapshot, viewMap, fromAccount, toAccountId,
+			reqCtx, ses, bh, "", viewSnapshot, source.viewMap, fromAccount, source.toAccountId,
 		); err != nil {
 			return
 		}
 
 		rewrittenViewMap, rewrittenViews := rewriteCloneViewInfos(
-			viewMap, sortedViews, srcDBName, stmt.DstDatabase.String(),
+			source.viewMap, sortedViews, source.srcResolveDBName, stmt.DstDatabase.String(),
 		)
 
-		if err = restoreViews(reqCtx, ses, bh, "", rewrittenViewMap, toAccountId, rewrittenViews, true); err != nil {
+		if err = restoreViews(reqCtx, ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
 			return
 		}
 	}
