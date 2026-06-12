@@ -261,6 +261,7 @@ func sqlTaskInt64(v any) int64 {
     showType tree.ShowType
     checkTableOption tree.CheckTableOption
     analyzeTableEntries []*tree.AnalyzeTableEntry
+    analyzeTableEntry *tree.AnalyzeTableEntry
     joinTableExpr *tree.JoinTableExpr
     applyTableExpr *tree.ApplyTableExpr
 
@@ -651,6 +652,7 @@ func sqlTaskInt64(v any) int64 {
 %type <selectLockInfo> select_lock_opt
 %type <upgrade_target> target
 %type <analyzeTableEntries> analyze_table_list
+%type <analyzeTableEntry> analyze_table_entry
 %type <checkTableOption> check_table_option_opt
 %type <int64Val> for_query_opt
 
@@ -3488,13 +3490,23 @@ analyze_stmt:
     }
 
 analyze_table_list:
-    table_name '(' column_list ')'
+    analyze_table_entry
     {
-        $$ = []*tree.AnalyzeTableEntry{{Table: $1, Cols: $3}}
+        $$ = []*tree.AnalyzeTableEntry{$1}
     }
-|   analyze_table_list ',' table_name '(' column_list ')'
+|   analyze_table_list ',' analyze_table_entry
     {
-        $$ = append($1, &tree.AnalyzeTableEntry{Table: $3, Cols: $5})
+        $$ = append($1, $3)
+    }
+
+analyze_table_entry:
+    table_name
+    {
+        $$ = &tree.AnalyzeTableEntry{Table: $1}
+    }
+|   table_name '(' column_list ')'
+    {
+        $$ = &tree.AnalyzeTableEntry{Table: $1, Cols: $3}
     }
 
 check_table_stmt:

@@ -45,9 +45,11 @@ func (node *AnalyzeStmt) Format(ctx *FmtCtx) {
 		if entry.Table != nil {
 			entry.Table.Format(ctx)
 		}
-		ctx.WriteString("(")
-		entry.Cols.Format(ctx)
-		ctx.WriteString(")")
+		if len(entry.Cols) > 0 {
+			ctx.WriteString("(")
+			entry.Cols.Format(ctx)
+			ctx.WriteString(")")
+		}
 	}
 }
 

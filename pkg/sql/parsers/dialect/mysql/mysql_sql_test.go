@@ -3533,6 +3533,14 @@ var (
 			input:  "analyze table t1 (a, b), t2 (c, d)",
 			output: "analyze table t1(a, b), t2(c, d)",
 		},
+		{
+			input:  "analyze table company, company_patent",
+			output: "analyze table company, company_patent",
+		},
+		{
+			input:  "analyze table t1",
+			output: "analyze table t1",
+		},
 		// Issue #23122: CHECK TABLE
 		{
 			input:  "check table t1",
