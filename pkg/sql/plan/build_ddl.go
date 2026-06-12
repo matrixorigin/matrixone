@@ -1287,7 +1287,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				name := key.ColName.ColName()
 
 				if col, ok := colMap[name]; ok {
-					if err := checkIndexColumnSupportability(ctx.GetContext(), col, key, "secondary"); err != nil {
+					if err := checkIndexColumnSupportability(ctx.GetContext(), col, key, indexColumnCheckKind(def.KeyType)); err != nil {
 						return err
 					}
 				}

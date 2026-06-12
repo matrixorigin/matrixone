@@ -170,6 +170,17 @@ func indexTableKeyTypeForPrefix(colType Type) (Type, bool) {
 	}
 }
 
+func indexColumnCheckKind(indexType tree.IndexType) string {
+	switch indexType {
+	case tree.INDEX_TYPE_IVFFLAT:
+		return "ivfflat"
+	case tree.INDEX_TYPE_HNSW:
+		return "hnsw"
+	default:
+		return "secondary"
+	}
+}
+
 func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *tree.KeyPart, indexKind string) error {
 	if col == nil || keyPart == nil || keyPart.ColName == nil {
 		return moerr.NewInternalError(ctx, "index column definition is nil")
@@ -193,6 +204,9 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 	case int32(types.T_json):
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in index", colName))
 	case int32(types.T_array_float32), int32(types.T_array_float64):
+		if indexKind == "ivfflat" || indexKind == "hnsw" {
+			return nil
+		}
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("VECTOR column '%s' cannot be in index", colName))
 	}
 

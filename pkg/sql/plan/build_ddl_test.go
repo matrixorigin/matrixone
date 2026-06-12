@@ -516,6 +516,21 @@ func TestBuildIndexRejectsTextBlobPlainIndex(t *testing.T) {
 	runTestShouldError(mock, t, sqlerrs)
 }
 
+func TestBuildVectorIndexAllowsIvfFlatOnly(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE TABLE vec_idx_ok1 (id INT PRIMARY KEY, embedding VECF32(3), KEY idx_emb USING ivfflat (embedding) lists = 2 op_type 'vector_l2_ops');",
+		"CREATE TABLE vec_idx_ok2 (id INT PRIMARY KEY, embedding VECF64(3), KEY idx_emb USING ivfflat (embedding) lists = 2 op_type 'vector_l2_ops');",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	sqlerrs := []string{
+		"CREATE TABLE vec_idx_err1 (id INT PRIMARY KEY, embedding VECF32(3), KEY idx_emb (embedding));",
+		"CREATE TABLE vec_idx_err2 (id INT PRIMARY KEY, embedding VECF64(3), KEY idx_emb (embedding));",
+	}
+	runTestShouldError(mock, t, sqlerrs)
+}
+
 func TestGeometryDDLGuardsSQLPaths(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	rt := moruntime.DefaultRuntime()
