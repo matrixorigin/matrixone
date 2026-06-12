@@ -16,10 +16,13 @@ package plan
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -69,6 +72,51 @@ func TestBindFuncExprImplByPlanExpr_PowAlias(t *testing.T) {
 		require.NotNil(t, f)
 		require.Equal(t, "power", f.Func.GetObjName())
 	})
+}
+
+func TestBindUnaryMinusUint64MinInt64Boundary(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	whereBinder := NewWhereBinder(builder, bindCtx)
+
+	testCases := []struct {
+		name       string
+		sql        string
+		checkValue func(t *testing.T, expr *plan.Expr)
+	}{
+		{
+			name: "min int64 boundary",
+			sql:  "-9223372036854775808",
+			checkValue: func(t *testing.T, expr *plan.Expr) {
+				require.Equal(t, int32(types.T_int64), expr.Typ.Id)
+				require.Equal(t, int64(math.MinInt64), expr.GetLit().GetI64Val())
+			},
+		},
+		{
+			name: "below min int64 keeps decimal",
+			sql:  "-9223372036854775809",
+			checkValue: func(t *testing.T, expr *plan.Expr) {
+				require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
+				require.NotNil(t, expr.GetLit().GetDecimal128Val())
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select "+tc.sql+" from bind_select", 1)
+			require.NoError(t, err)
+
+			selectStmt := stmts[0].(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			unaryExpr, ok := selectClause.Exprs[0].Expr.(*tree.UnaryExpr)
+			require.True(t, ok)
+
+			expr, err := whereBinder.bindUnaryExpr(unaryExpr, 0, false)
+			require.NoError(t, err)
+			require.NotNil(t, expr.GetLit())
+			tc.checkValue(t, expr)
+		})
+	}
 }
 
 // TestBindFuncExprImplByPlanExpr_JsonValid tests that json_valid binds
