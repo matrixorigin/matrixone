@@ -104,6 +104,27 @@ func TestFormatValIntoString_UnsupportedType(t *testing.T) {
 	require.Contains(t, err.Error(), "not support type")
 }
 
+func TestExtractDataBranchSQLRowValueDecimal256(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	typ := types.New(types.T_decimal256, 39, 4)
+	vec := vector.NewVec(typ)
+	defer vec.Free(mp)
+
+	val, err := types.ParseDecimal256("12345678901234567890123456789012345.6789", typ.Width, typ.Scale)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+
+	row := make([]any, 1)
+	require.NoError(t, extractDataBranchSQLRowValue(context.Background(), nil, vec, 0, row, 0))
+	require.Equal(t, val, row[0])
+
+	var buf bytes.Buffer
+	require.NoError(t, formatValIntoString(nil, row[0], typ, &buf))
+	require.Equal(t, "12345678901234567890123456789012345.6789", buf.String())
+}
+
 func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)

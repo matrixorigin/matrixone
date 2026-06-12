@@ -491,6 +491,29 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 	return nil
 }
 
+func extractDataBranchSQLRowValue(
+	ctx context.Context,
+	ses *Session,
+	vec *vector.Vector,
+	colIdx int,
+	row []any,
+	rowIdx int,
+) error {
+	if vec.GetNulls().Contains(uint64(rowIdx)) {
+		row[colIdx] = nil
+		return nil
+	}
+
+	switch vec.GetType().Oid {
+	case types.T_datetime, types.T_timestamp, types.T_decimal64,
+		types.T_decimal128, types.T_decimal256, types.T_time:
+		row[colIdx] = types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
+		return nil
+	default:
+		return extractRowFromVector(ctx, ses, vec, colIdx, row, rowIdx, false)
+	}
+}
+
 // writeEscapedSQLString escapes special and control characters for SQL literal output.
 func writeEscapedSQLString(buf *bytes.Buffer, b []byte) {
 	buf.WriteByte('\'')
