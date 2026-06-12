@@ -924,7 +924,7 @@ func FormatColType(colType plan.Type) string {
 	case types.T_bit, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
 		suffix = fmt.Sprintf("(%d)", colType.Width)
 
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8:
 		suffix = fmt.Sprintf("(%d)", colType.Width)
 
 	}

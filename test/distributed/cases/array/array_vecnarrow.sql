@@ -12,6 +12,7 @@ drop table if exists nvec;
 -- standard: one column of each new type
 create table nvec(a int, bf vecbf16(3), f16 vecf16(3), i8 vecint8(3));
 desc nvec;
+show create table nvec;
 insert into nvec values(1, "[1,2,3]", "[1,2,3]", "[1,2,3]");
 insert into nvec values(2, "[4,5,6]", "[4,5,6]", "[4,5,6]");
 select * from nvec;
