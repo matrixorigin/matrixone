@@ -94,6 +94,58 @@ func TestPositionFunctionSyntax(t *testing.T) {
 	}
 }
 
+func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create temporary table if not exists dst clone src to account acc",
+		1,
+	)
+	require.NoError(t, err)
+
+	cloneStmt, ok := stmt.(*tree.CloneTable)
+	require.True(t, ok)
+	require.True(t, cloneStmt.CreateTable.Temporary)
+	require.True(t, cloneStmt.CreateTable.IfNotExists)
+	require.Equal(t, tree.Identifier("dst"), cloneStmt.CreateTable.Table.ObjectName)
+	require.Equal(t, tree.Identifier("src"), cloneStmt.SrcTable.ObjectName)
+	require.NotNil(t, cloneStmt.ToAccountOpt)
+	require.Equal(t, tree.Identifier("acc"), cloneStmt.ToAccountOpt.AccountName)
+
+	require.Equal(
+		t,
+		"create temporary table if not exists `dst` clone `src` to account `acc`",
+		tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()),
+	)
+}
+
+func TestCloneTableParseFormattedMoTimestamp(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create table dst clone src{MO_TS = 123}",
+		1,
+	)
+	require.NoError(t, err)
+
+	cloneStmt, ok := stmt.(*tree.CloneTable)
+	require.True(t, ok)
+	require.NotNil(t, cloneStmt.SrcTable.AtTsExpr)
+	require.Equal(t, tree.ATMOTIMESTAMP, cloneStmt.SrcTable.AtTsExpr.Type)
+}
+
+func TestDataBranchCreateTableParsesWithLeadingComment(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"/* cloud_user */\n  data branch create table dst from src",
+		1,
+	)
+	require.NoError(t, err)
+
+	branchStmt, ok := stmt.(*tree.DataBranchCreateTable)
+	require.True(t, ok)
+	require.Equal(t, tree.Identifier("dst"), branchStmt.CreateTable.Table.ObjectName)
+	require.Equal(t, tree.Identifier("src"), branchStmt.SrcTable.ObjectName)
+}
+
 func TestDataBranchDiffOutputModes(t *testing.T) {
 	stmt, err := ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} output summary`, 1)
 	require.NoError(t, err)
