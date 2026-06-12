@@ -65,6 +65,13 @@ func (w *externalWriter) encodeCSV(bat *batch.Batch) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
+			// Values written unenclosed must not collide with the reader's
+			// tokenization: enclose them when they contain a structural byte
+			// (OPTIONALLY ENCLOSED semantics). E.g. FIELDS TERMINATED BY '-'
+			// would otherwise split an unenclosed DATE into three fields.
+			if !quote && w.needsEnclosure(val) {
+				quote = true
+			}
 			// The reader unescapes UNQUOTED fields too, so every value must be
 			// escaped — with a non-default escape char like '-', even a date
 			// would otherwise lose bytes to the reader's E-sequence collapsing.
@@ -78,6 +85,26 @@ func (w *externalWriter) encodeCSV(bat *batch.Batch) ([]byte, error) {
 		}
 	}
 	return buf.Bytes(), nil
+}
+
+// needsEnclosure reports whether an otherwise-unenclosed value must be
+// enclosed to survive the reader's tokenization. The reader's unquoted-field
+// scanner stops on the enclosure byte, the field-terminator sequence, and any
+// byte of the line terminator (a \r\n-style terminator accepts \r or \n alone
+// as a record end), so values containing them are written enclosed instead.
+func (w *externalWriter) needsEnclosure(val []byte) bool {
+	if w.cfg.EnclosedBy != 0 && bytes.IndexByte(val, w.cfg.EnclosedBy) >= 0 {
+		return true
+	}
+	if len(w.cfg.FieldTerminator) > 0 && bytes.Contains(val, w.cfg.FieldTerminator) {
+		return true
+	}
+	for _, b := range w.cfg.LineTerminator {
+		if bytes.IndexByte(val, b) >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *externalWriter) writeCSVField(buf *bytes.Buffer, value []byte, quote bool, last bool) {

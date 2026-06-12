@@ -205,6 +205,23 @@ func TestValidateWriteFilePatternTail(t *testing.T) {
 		},
 	}), nil))
 
+	// a custom enclosure is fine ...
+	require.NoError(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+		Fields: &tree.Fields{EnclosedBy: &tree.EnclosedBy{Value: '|'}},
+	}), nil))
+	// ... unless it occurs in a terminator (tokenizer ambiguity no quoting
+	// fixes): explicit enclosure inside the explicit field terminator,
+	require.Error(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+		Fields: &tree.Fields{
+			EnclosedBy: &tree.EnclosedBy{Value: 'x'},
+			Terminated: &tree.Terminated{Value: "x-"},
+		},
+	}), nil))
+	// or the default '"' enclosure inside a custom terminator.
+	require.Error(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+		Fields: &tree.Fields{Terminated: &tree.Terminated{Value: `"`}},
+	}), nil))
+
 	// IGNORE N LINES would discard real data rows on readback
 	require.Error(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
 		IgnoredLines: 1,

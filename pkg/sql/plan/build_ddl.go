@@ -6004,38 +6004,37 @@ func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam, tabl
 	return nil
 }
 
-// validateWritableEscape checks that a custom FIELDS ESCAPED BY character can
-// round-trip: the writer escapes by doubling the character, and the reader
-// unescapes E-sequences in BOTH quoted and unquoted fields. A custom escape
-// must therefore not collide with bytes the reader treats specially.
-// ESCAPED BY ” (escaping disabled) is allowed; the writer disables escaping
-// too. Note: with any non-'\' escape (including disabled), a string whose
-// content is exactly `\N` reads back as NULL — the reader matches the null
-// sentinel after unescaping and only exempts it for the default backslash.
+// validateWritableEscape checks that the FIELDS/LINES configuration can
+// round-trip through the writer + reader pair.
+//
+// Escape: the writer escapes by doubling the character, and the reader
+// unescapes E-sequences in BOTH quoted and unquoted fields, so a custom escape
+// must not collide with bytes the reader treats specially. ESCAPED BY ”
+// (escaping disabled) is allowed; the writer disables escaping too. Note: with
+// any non-'\\' escape (including disabled), a string whose content is exactly
+// `\N` reads back as NULL — the reader matches the null sentinel after
+// unescaping and only exempts it for the default backslash.
+//
+// Enclosure: values containing structural bytes are written enclosed
+// (OPTIONALLY ENCLOSED semantics), which requires the enclosure byte itself
+// to be distinguishable from the terminators — no quoting discipline can fix
+// an enclosure byte that also begins a field or record boundary.
 func validateWritableEscape(ctx context.Context, tail *tree.TailParameter) error {
 	f := tail.Fields
-	if f == nil || f.EscapedBy == nil {
-		return nil
-	}
-	esc := f.EscapedBy.Value
-	if esc == 0 || esc == '\\' {
-		return nil
-	}
-	// The reader's unescaper maps E+{0,b,n,r,t,Z} to control characters, so a
-	// doubled escape (E E) would decode to a control char instead of E itself.
-	if strings.IndexByte("0bnrtZ", esc) >= 0 {
-		return moerr.NewBadConfigf(ctx, "writable external table cannot use FIELDS ESCAPED BY '%c': the reader maps '%c'-sequences to control characters", esc, esc)
-	}
-	enclosed := byte('"')
-	if f.EnclosedBy != nil && f.EnclosedBy.Value != 0 {
-		enclosed = f.EnclosedBy.Value
-	}
-	if esc == enclosed {
-		return moerr.NewBadConfigf(ctx, "writable external table cannot use FIELDS ESCAPED BY '%c': it conflicts with the enclosure character", esc)
-	}
+
 	fieldTerm := ","
-	if f.Terminated != nil && f.Terminated.Value != "" {
-		fieldTerm = f.Terminated.Value
+	enclosed := byte('"')
+	var esc byte = '\\'
+	if f != nil {
+		if f.Terminated != nil && f.Terminated.Value != "" {
+			fieldTerm = f.Terminated.Value
+		}
+		if f.EnclosedBy != nil && f.EnclosedBy.Value != 0 {
+			enclosed = f.EnclosedBy.Value
+		}
+		if f.EscapedBy != nil {
+			esc = f.EscapedBy.Value // 0 = escaping disabled
+		}
 	}
 	lineTerm := "\n"
 	startingBy := ""
@@ -6045,9 +6044,28 @@ func validateWritableEscape(ctx context.Context, tail *tree.TailParameter) error
 		}
 		startingBy = l.StartingBy
 	}
+
+	if esc != 0 && esc != '\\' {
+		// The reader's unescaper maps E+{0,b,n,r,t,Z} to control characters, so a
+		// doubled escape (E E) would decode to a control char instead of E itself.
+		if strings.IndexByte("0bnrtZ", esc) >= 0 {
+			return moerr.NewBadConfigf(ctx, "writable external table cannot use FIELDS ESCAPED BY '%c': the reader maps '%c'-sequences to control characters", esc, esc)
+		}
+		if esc == enclosed {
+			return moerr.NewBadConfigf(ctx, "writable external table cannot use FIELDS ESCAPED BY '%c': it conflicts with the enclosure character", esc)
+		}
+		for _, s := range []string{fieldTerm, lineTerm, startingBy} {
+			if strings.IndexByte(s, esc) >= 0 {
+				return moerr.NewBadConfigf(ctx, "writable external table cannot use FIELDS ESCAPED BY '%c': it occurs in a field/line terminator or LINES STARTING BY", esc)
+			}
+		}
+	}
+
+	// The writer encloses values containing structural bytes; the enclosure
+	// byte must not itself be part of a terminator or the record prefix.
 	for _, s := range []string{fieldTerm, lineTerm, startingBy} {
-		if strings.IndexByte(s, esc) >= 0 {
-			return moerr.NewBadConfigf(ctx, "writable external table cannot use FIELDS ESCAPED BY '%c': it occurs in a field/line terminator or LINES STARTING BY", esc)
+		if strings.IndexByte(s, enclosed) >= 0 {
+			return moerr.NewBadConfigf(ctx, "writable external table cannot use ENCLOSED BY '%c': it occurs in a field/line terminator or LINES STARTING BY", enclosed)
 		}
 	}
 	return nil

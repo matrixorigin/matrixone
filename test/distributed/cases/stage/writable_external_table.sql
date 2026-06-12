@@ -178,6 +178,17 @@ fields terminated by ',' escaped by '';
 insert into ext_noesc select * from esc_src;
 select * from ext_noesc order by a;
 
+-- ---------- structural bytes inside unenclosed values ----------
+-- A field terminator that occurs inside a date/number forces the writer to
+-- enclose those values (OPTIONALLY ENCLOSED semantics) so the reader's
+-- tokenizer cannot split them.
+drop table if exists ext_dash;
+create external table ext_dash(a int, d date, f double)
+infile{'filepath'='stage://wstage/wext_dash_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_dash_%U.csv'}
+fields terminated by '-';
+insert into ext_dash values (1, '2026-06-12', 1.5), (2, '1999-12-31', -2.25);
+select * from ext_dash order by a;
+
 -- ---------- NOT NULL is enforced ----------
 drop table if exists ext_nn;
 create external table ext_nn(a int not null, b varchar(10))
@@ -249,6 +260,12 @@ create external table ext_bad9b(a varchar(10))
 infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
 fields terminated by ',' escaped by '"';
 
+-- ... and the enclosure must not occur in a terminator: no quoting discipline
+-- can disambiguate that
+create external table ext_bad9c(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' enclosed by ',';
+
 -- IGNORE N LINES would discard real data rows on readback (the writer emits
 -- no header lines)
 create external table ext_bad10(a int)
@@ -276,6 +293,7 @@ drop table if exists ext_sb;
 drop table if exists ext_esc;
 drop table if exists ext_noesc;
 drop table if exists esc_src;
+drop table if exists ext_dash;
 drop table if exists ext_nn;
 drop table if exists ext_wide_csv;
 drop table if exists ext_wide_jl;

@@ -284,3 +284,54 @@ func TestEncodeCSVConstVector(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "42\n42\n42\n", string(out))
 }
+
+// TestEncodeCSVMinimalQuoting: unenclosed values that collide with structural
+// bytes are written enclosed (OPTIONALLY ENCLOSED semantics) so the reader's
+// tokenizer cannot split them.
+func TestEncodeCSVMinimalQuoting(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"c_dt", "c_f"})
+	bat.Vecs[0] = fixedCol(t, mp, types.T_date.ToType(), must(types.ParseDateCast("2026-06-08")))
+	bat.Vecs[1] = fixedCol(t, mp, types.T_float64.ToType(), 1.5)
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	// FIELDS TERMINATED BY '-': the date contains '-', so it must be enclosed;
+	// the float does not and stays bare.
+	w := NewExternalWriter(nil, WriterConfig{
+		Format:          FormatCSV,
+		Attrs:           []string{"c_dt", "c_f"},
+		FieldTerminator: []byte("-"),
+		Stmt:            time.Now(),
+	}).(*externalWriter)
+	out, err := w.encodeCSV(bat)
+	require.NoError(t, err)
+	require.Equal(t, "\"2026-06-08\"-1.5\n", string(out))
+
+	// FIELDS TERMINATED BY '.': now the float needs enclosing instead.
+	w2 := NewExternalWriter(nil, WriterConfig{
+		Format:          FormatCSV,
+		Attrs:           []string{"c_dt", "c_f"},
+		FieldTerminator: []byte("."),
+		Stmt:            time.Now(),
+	}).(*externalWriter)
+	out, err = w2.encodeCSV(bat)
+	require.NoError(t, err)
+	require.Equal(t, "2026-06-08.\"1.5\"\n", string(out))
+
+	// An enclosure byte occurring inside an unenclosed value forces enclosing
+	// (with doubling); the reader's doubled-quote collapsing restores it.
+	ibat := batch.New([]string{"v"})
+	ibat.Vecs[0] = fixedCol(t, mp, types.T_int64.ToType(), int64(55))
+	ibat.SetRowCount(1)
+	defer ibat.Clean(mp)
+	w3 := NewExternalWriter(nil, WriterConfig{
+		Format:     FormatCSV,
+		Attrs:      []string{"v"},
+		EnclosedBy: '5',
+		Stmt:       time.Now(),
+	}).(*externalWriter)
+	out, err = w3.encodeCSV(ibat)
+	require.NoError(t, err)
+	require.Equal(t, "555555\n", string(out))
+}
