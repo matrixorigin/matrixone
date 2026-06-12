@@ -183,18 +183,17 @@ func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) 
 	for _, col := range root.Columns() {
 		if col.Name() == name {
 			exactMatch = col
-			caseInsensitiveMatches = append(caseInsensitiveMatches, col)
 		} else if strings.ToLower(col.Name()) == nameLower {
 			caseInsensitiveMatches = append(caseInsensitiveMatches, col)
 		}
+	}
+	if exactMatch != nil {
+		return exactMatch, nil
 	}
 	if len(caseInsensitiveMatches) > 1 {
 		return nil, moerr.NewInvalidInputf(ctx,
 			"ambiguous column name %s: multiple columns match case-insensitively (%s and %s)",
 			name, caseInsensitiveMatches[0].Name(), caseInsensitiveMatches[1].Name())
-	}
-	if exactMatch != nil {
-		return exactMatch, nil
 	}
 	if len(caseInsensitiveMatches) == 1 {
 		return caseInsensitiveMatches[0], nil
@@ -1951,20 +1950,22 @@ func copyPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process.Pro
 }
 
 func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, data []T, itee func(t T) U) error {
-	noNulls := !mp.srcNull || !mp.dstNull || page.NumNulls() == 0
+	nc, err := prepareNullCheck(proc.Ctx, mp, page)
+	if err != nil {
+		return err
+	}
 	n := int(page.NumRows())
 
 	length := vec.Length()
-	err := vec.PreExtend(n+length, proc.Mp())
+	err = vec.PreExtend(n+length, proc.Mp())
 	if err != nil {
 		return err
 	}
 	vec.SetLength(n + length)
 	ret := vector.MustFixedColWithTypeCheck[U](vec)
-	levels := page.DefinitionLevels()
 	j := 0
 	for i := 0; i < n; i++ {
-		if !noNulls && levels[i] != mp.maxDefinitionLevel {
+		if nc.isNull(i) {
 			nulls.Add(vec.GetNulls(), uint64(i+length))
 		} else {
 			ret[i+length] = itee(data[j])
