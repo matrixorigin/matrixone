@@ -223,7 +223,8 @@ func stripFirstEmptyBlock(relData engine.RelData) engine.RelData {
 		if rd == nil {
 			return nil
 		}
-		relData = rd.DataSlice(0, rd.DataCnt())
+		rd.expand()
+		relData = &rd.blocklistRelData
 	case *BlockListRelData:
 		if rd == nil {
 			return nil
