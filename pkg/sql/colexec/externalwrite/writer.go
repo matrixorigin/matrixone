@@ -50,9 +50,15 @@ type WriterConfig struct {
 	// CSV formatting. Defaults mirror LOAD/SELECT INTO OUTFILE defaults.
 	FieldTerminator []byte // default ","
 	LineTerminator  []byte // default "\n"
-	LineStartingBy  []byte // LINES STARTING BY prefix, written before each record
+	LineStartingBy  []byte // LINES STARTED BY prefix, written before each record
 	EnclosedBy      byte   // default '"' (the external reader's enclosure)
-	Header          bool   // write a CSV header line
+	// EscapedBy is the FIELDS ESCAPED BY character (default '\\'). The writer
+	// doubles it wherever it appears in a value, matching the reader's
+	// unescaping. NoEscape disables escaping entirely (ESCAPED BY ''), which
+	// the reader mirrors by skipping unescape processing.
+	EscapedBy byte
+	NoEscape  bool
+	Header    bool // write a CSV header line
 
 	// Stmt is the timestamp the pattern is evaluated against (statement start).
 	Stmt time.Time
@@ -110,6 +116,10 @@ func NewExternalWriter(proc *process.Process, cfg WriterConfig) ExternalWriter {
 		// terminator or quotes round-trip.
 		cfg.EnclosedBy = '"'
 	}
+	if !cfg.NoEscape && cfg.EscapedBy == 0 {
+		// Match the reader's default FIELDS ESCAPED BY.
+		cfg.EscapedBy = '\\'
+	}
 	if cfg.TimeZone == nil {
 		cfg.TimeZone = time.UTC
 	}
@@ -117,6 +127,14 @@ func NewExternalWriter(proc *process.Process, cfg WriterConfig) ExternalWriter {
 		cfg.Format = FormatCSV
 	}
 	return &externalWriter{proc: proc, cfg: cfg}
+}
+
+// escapeChar is the effective escape byte: 0 when escaping is disabled.
+func (cfg *WriterConfig) escapeChar() byte {
+	if cfg.NoEscape {
+		return 0
+	}
+	return cfg.EscapedBy
 }
 
 // open lazily resolves the destination file and starts the streaming write.

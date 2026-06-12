@@ -1002,6 +1002,15 @@ func buildExternalInsertArg(
 			if f.EnclosedBy != nil {
 				cfg.EnclosedBy = f.EnclosedBy.Value
 			}
+			// Mirror the reader: nil -> default '\\', explicit '' -> escaping
+			// disabled, anything else -> that character.
+			if f.EscapedBy != nil {
+				if f.EscapedBy.Value == 0 {
+					cfg.NoEscape = true
+				} else {
+					cfg.EscapedBy = f.EscapedBy.Value
+				}
+			}
 		}
 		if l := param.Tail.Lines; l != nil {
 			if l.TerminatedBy != nil {

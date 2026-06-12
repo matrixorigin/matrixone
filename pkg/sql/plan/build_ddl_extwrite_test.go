@@ -173,13 +173,36 @@ func TestValidateWriteFilePatternTail(t *testing.T) {
 	}), nil))
 	require.NoError(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{}), nil))
 
-	// a custom or disabled escape char: the writer always emits backslash
-	// escaping, which such a table could not read back
-	require.Error(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+	// custom escape chars are supported by the writer (doubled on write)
+	require.NoError(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
 		Fields: &tree.Fields{EscapedBy: &tree.EscapedBy{Value: '!'}},
 	}), nil))
-	require.Error(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+	// ... as is explicitly disabled escaping (ESCAPED BY '')
+	require.NoError(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
 		Fields: &tree.Fields{EscapedBy: &tree.EscapedBy{Value: 0}},
+	}), nil))
+
+	// but not characters the reader's unescaper maps to control characters
+	// (E+E would decode to \n, not E) ...
+	require.Error(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+		Fields: &tree.Fields{EscapedBy: &tree.EscapedBy{Value: 'n'}},
+	}), nil))
+	// ... or the enclosure character (explicit or the '"' default) ...
+	require.Error(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+		Fields: &tree.Fields{EscapedBy: &tree.EscapedBy{Value: '"'}},
+	}), nil))
+	require.Error(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+		Fields: &tree.Fields{
+			EscapedBy:  &tree.EscapedBy{Value: '|'},
+			EnclosedBy: &tree.EnclosedBy{Value: '|'},
+		},
+	}), nil))
+	// ... or a byte of the field/line terminator
+	require.Error(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+		Fields: &tree.Fields{
+			EscapedBy:  &tree.EscapedBy{Value: ';'},
+			Terminated: &tree.Terminated{Value: ";"},
+		},
 	}), nil))
 
 	// IGNORE N LINES would discard real data rows on readback

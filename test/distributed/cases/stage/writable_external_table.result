@@ -146,6 +146,31 @@ select * from ext_sb order by a;
 a    b
 1    alpha
 2    beta
+drop table if exists esc_src;
+create table esc_src(a int, b varchar(40));
+insert into esc_src values (1,'with!bang'), (2,'back\\slash'), (3,'quo"te'), (4,'com,ma');
+drop table if exists ext_esc;
+create external table ext_esc(a int, b varchar(40))
+infile{'filepath'='stage://wstage/wext_esc_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_esc_%U.csv'}
+fields terminated by ',' escaped by '!';
+insert into ext_esc select * from esc_src;
+select * from ext_esc order by a;
+a    b
+1    with!bang
+2    back\slash
+3    quo"te
+4    com,ma
+drop table if exists ext_noesc;
+create external table ext_noesc(a int, b varchar(40))
+infile{'filepath'='stage://wstage/wext_noesc_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_noesc_%U.csv'}
+fields terminated by ',' escaped by '';
+insert into ext_noesc select * from esc_src;
+select * from ext_noesc order by a;
+a    b
+1    with!bang
+2    back\slash
+3    quo"te
+4    com,ma
 drop table if exists ext_nn;
 create external table ext_nn(a int not null, b varchar(10))
 infile{'filepath'='stage://wstage/wext_nn_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_nn_%U.csv'}
@@ -198,8 +223,12 @@ infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='obje
 invalid configuration: writable external table with format 'jsonline' does not support blob column 'b'
 create external table ext_bad9(a varchar(10))
 infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
-fields terminated by ',' escaped by '!';
-invalid configuration: writable external table only supports the default FIELDS ESCAPED BY '\'
+fields terminated by ',' escaped by 'n';
+invalid configuration: writable external table cannot use FIELDS ESCAPED BY 'n': the reader maps 'n'-sequences to control characters
+create external table ext_bad9b(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' escaped by '"';
+invalid configuration: writable external table cannot use FIELDS ESCAPED BY '"': it conflicts with the enclosure character
 create external table ext_bad10(a int)
 infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
 fields terminated by ',' ignore 1 lines;
@@ -221,6 +250,9 @@ drop table if exists remote_src;
 drop table if exists ext_bit;
 drop table if exists bit_src;
 drop table if exists ext_sb;
+drop table if exists ext_esc;
+drop table if exists ext_noesc;
+drop table if exists esc_src;
 drop table if exists ext_nn;
 drop table if exists ext_wide_csv;
 drop table if exists ext_wide_jl;

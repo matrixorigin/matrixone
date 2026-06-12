@@ -156,6 +156,28 @@ fields terminated by ',' lines starting by 'row:';
 insert into ext_sb values (1, 'alpha'), (2, 'beta');
 select * from ext_sb order by a;
 
+-- ---------- custom FIELDS ESCAPED BY round-trips ----------
+-- The writer doubles the configured escape char in every field (the reader
+-- unescapes unquoted fields too); backslash is no longer special.
+drop table if exists esc_src;
+create table esc_src(a int, b varchar(40));
+insert into esc_src values (1,'with!bang'), (2,'back\\slash'), (3,'quo"te'), (4,'com,ma');
+drop table if exists ext_esc;
+create external table ext_esc(a int, b varchar(40))
+infile{'filepath'='stage://wstage/wext_esc_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_esc_%U.csv'}
+fields terminated by ',' escaped by '!';
+insert into ext_esc select * from esc_src;
+select * from ext_esc order by a;
+
+-- ESCAPED BY '' disables escaping on both sides; enclosure doubling still
+-- protects quotes and separators.
+drop table if exists ext_noesc;
+create external table ext_noesc(a int, b varchar(40))
+infile{'filepath'='stage://wstage/wext_noesc_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_noesc_%U.csv'}
+fields terminated by ',' escaped by '';
+insert into ext_noesc select * from esc_src;
+select * from ext_noesc order by a;
+
 -- ---------- NOT NULL is enforced ----------
 drop table if exists ext_nn;
 create external table ext_nn(a int not null, b varchar(10))
@@ -216,11 +238,16 @@ infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='obje
 create external table ext_bad8(b blob)
 infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'write_file_pattern'='stage://wstage/x_%U.jl'};
 
--- a custom (or disabled) FIELDS ESCAPED BY would not unescape what the writer
--- emits (the writer always escapes with the reader's default backslash)
+-- escape characters the reader's unescaper maps to control characters cannot
+-- round-trip (E+E would decode to '\n', not E) ...
 create external table ext_bad9(a varchar(10))
 infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
-fields terminated by ',' escaped by '!';
+fields terminated by ',' escaped by 'n';
+
+-- ... nor can the enclosure character double as the escape
+create external table ext_bad9b(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' escaped by '"';
 
 -- IGNORE N LINES would discard real data rows on readback (the writer emits
 -- no header lines)
@@ -246,6 +273,9 @@ drop table if exists remote_src;
 drop table if exists ext_bit;
 drop table if exists bit_src;
 drop table if exists ext_sb;
+drop table if exists ext_esc;
+drop table if exists ext_noesc;
+drop table if exists esc_src;
 drop table if exists ext_nn;
 drop table if exists ext_wide_csv;
 drop table if exists ext_wide_jl;

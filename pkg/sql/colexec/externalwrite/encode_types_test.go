@@ -212,14 +212,24 @@ func TestCSVValueUnsupportedType(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestAddEscape covers backslash and enclosure-char doubling.
+// TestAddEscape covers escape-char and enclosure-char doubling.
 func TestAddEscape(t *testing.T) {
-	require.Equal(t, `a\\b`, string(addEscape([]byte(`a\b`), '"')))
-	require.Equal(t, `a""b`, string(addEscape([]byte(`a"b`), '"')))
-	// escape == '\\' should not double the backslash a second time
-	require.Equal(t, `x\\y`, string(addEscape([]byte(`x\y`), '\\')))
-	// no enclosure char
-	require.Equal(t, `plain`, string(addEscape([]byte(`plain`), 0)))
+	// default escape '\\' with '"' enclosure
+	require.Equal(t, `a\\b`, string(addEscape([]byte(`a\b`), '"', '\\')))
+	require.Equal(t, `a""b`, string(addEscape([]byte(`a"b`), '"', '\\')))
+	// enclosure == escape: doubled once, not twice
+	require.Equal(t, `x\\y`, string(addEscape([]byte(`x\y`), '\\', '\\')))
+	// nothing to escape
+	require.Equal(t, `plain`, string(addEscape([]byte(`plain`), 0, '\\')))
+
+	// custom escape char: it is doubled, backslash is left alone
+	require.Equal(t, `a!!b`, string(addEscape([]byte(`a!b`), '"', '!')))
+	require.Equal(t, `a\b`, string(addEscape([]byte(`a\b`), '"', '!')))
+	require.Equal(t, `a""!!`, string(addEscape([]byte(`a"!`), '"', '!')))
+
+	// escaping disabled (ESCAPED BY ''): only the enclosure is doubled
+	require.Equal(t, `a\b`, string(addEscape([]byte(`a\b`), '"', 0)))
+	require.Equal(t, `a""b`, string(addEscape([]byte(`a"b`), '"', 0)))
 }
 
 // TestColCount validates the leading-column accounting.

@@ -5966,14 +5966,10 @@ func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam, tabl
 	if !externalwrite.PatternHasUniqueDirective(pattern) {
 		return moerr.NewBadConfigf(ctx, "WRITE_FILE_PATTERN must contain a %%U or %%<n>N directive so parallel writers produce distinct files, got '%s'", pattern)
 	}
-	// Reject FIELDS/LINES options the writer does not honor: a table whose own
-	// reads cannot parse its writes must not be created.
+	// Reject FIELDS/LINES combinations the writer cannot make round-trip.
 	if param.Tail != nil {
-		// The writer always escapes with backslash (matching the reader's
-		// default); a different or disabled escape char would not unescape what
-		// the writer emits.
-		if f := param.Tail.Fields; f != nil && f.EscapedBy != nil && f.EscapedBy.Value != '\\' {
-			return moerr.NewBadConfig(ctx, "writable external table only supports the default FIELDS ESCAPED BY '\\'")
+		if err := validateWritableEscape(ctx, param.Tail); err != nil {
+			return err
 		}
 		// The reader skips IGNORE N LINES per file, but the writer emits no
 		// header lines, so real data rows would be discarded on readback.
@@ -6003,6 +5999,55 @@ func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam, tabl
 						strings.ToLower(types.T(col.Typ.Id).String()), col.Name)
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// validateWritableEscape checks that a custom FIELDS ESCAPED BY character can
+// round-trip: the writer escapes by doubling the character, and the reader
+// unescapes E-sequences in BOTH quoted and unquoted fields. A custom escape
+// must therefore not collide with bytes the reader treats specially.
+// ESCAPED BY ” (escaping disabled) is allowed; the writer disables escaping
+// too. Note: with any non-'\' escape (including disabled), a string whose
+// content is exactly `\N` reads back as NULL — the reader matches the null
+// sentinel after unescaping and only exempts it for the default backslash.
+func validateWritableEscape(ctx context.Context, tail *tree.TailParameter) error {
+	f := tail.Fields
+	if f == nil || f.EscapedBy == nil {
+		return nil
+	}
+	esc := f.EscapedBy.Value
+	if esc == 0 || esc == '\\' {
+		return nil
+	}
+	// The reader's unescaper maps E+{0,b,n,r,t,Z} to control characters, so a
+	// doubled escape (E E) would decode to a control char instead of E itself.
+	if strings.IndexByte("0bnrtZ", esc) >= 0 {
+		return moerr.NewBadConfigf(ctx, "writable external table cannot use FIELDS ESCAPED BY '%c': the reader maps '%c'-sequences to control characters", esc, esc)
+	}
+	enclosed := byte('"')
+	if f.EnclosedBy != nil && f.EnclosedBy.Value != 0 {
+		enclosed = f.EnclosedBy.Value
+	}
+	if esc == enclosed {
+		return moerr.NewBadConfigf(ctx, "writable external table cannot use FIELDS ESCAPED BY '%c': it conflicts with the enclosure character", esc)
+	}
+	fieldTerm := ","
+	if f.Terminated != nil && f.Terminated.Value != "" {
+		fieldTerm = f.Terminated.Value
+	}
+	lineTerm := "\n"
+	startingBy := ""
+	if l := tail.Lines; l != nil {
+		if l.TerminatedBy != nil && l.TerminatedBy.Value != "" {
+			lineTerm = l.TerminatedBy.Value
+		}
+		startingBy = l.StartingBy
+	}
+	for _, s := range []string{fieldTerm, lineTerm, startingBy} {
+		if strings.IndexByte(s, esc) >= 0 {
+			return moerr.NewBadConfigf(ctx, "writable external table cannot use FIELDS ESCAPED BY '%c': it occurs in a field/line terminator or LINES STARTING BY", esc)
 		}
 	}
 	return nil

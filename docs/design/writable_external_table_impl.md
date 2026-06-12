@@ -125,9 +125,18 @@ to its file. No per-row API.
 
 Field/line terminators, enclosure and escaping come from the table's
 `TailParameter` (`FIELDS`/`LINES`), defaulting to the same defaults as
-`SELECT ... INTO OUTFILE`. Restrictions enforced at DDL time: NOT NULL is
-checked at write time (the minimal plan runs no PreInsert), AUTO_INCREMENT
-columns are rejected, and `jsonline` writable tables reject `bit` columns
+`SELECT ... INTO OUTFILE`. A custom `FIELDS ESCAPED BY` is honored: the writer
+doubles the escape character in every non-NULL field (the reader unescapes
+unquoted fields too), and `ESCAPED BY ''` disables escaping on both sides.
+DDL rejects escape characters that cannot round-trip: `0 b n r t Z` (the
+reader maps `E`+these to control characters, so a doubled escape would decode
+wrong), the enclosure character, and bytes of the terminators/`STARTING BY`.
+Caveat: with a non-`\` (or disabled) escape, a string whose content is exactly
+`\N` reads back as NULL — the reader matches the null sentinel after
+unescaping and only exempts `\\N` for the default backslash flavor.
+Other DDL-time restrictions: NOT NULL is checked at write time (the minimal
+plan runs no PreInsert), AUTO_INCREMENT columns are rejected, `IGNORE N LINES`
+is rejected, and `jsonline` writable tables reject `bit`/binary columns
 (raw bytes cannot round-trip through JSON strings; CSV encloses+escapes them).
 
 ### 2.5 Empty result → no file

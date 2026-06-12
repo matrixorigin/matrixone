@@ -45,6 +45,7 @@ func (w *externalWriter) encodeCSV(bat *batch.Batch) ([]byte, error) {
 	buf := &w.buf
 	buf.Reset()
 	enclosed := w.cfg.EnclosedBy
+	escape := w.cfg.escapeChar()
 	// Only the table's columns are written; the pipeline may carry trailing
 	// hidden vectors (mirrors insert_table, which copies only InsertCtx.Attrs).
 	ncol := w.colCount(bat)
@@ -55,6 +56,8 @@ func (w *externalWriter) encodeCSV(bat *batch.Batch) ([]byte, error) {
 			vec := bat.Vecs[j]
 			last := j == ncol-1
 			if vec.IsNull(uint64(i)) {
+				// The NULL sentinel is written verbatim (never escaped): the
+				// reader matches it as the raw token \N.
 				w.writeCSVField(buf, csvNull, false, last)
 				continue
 			}
@@ -62,9 +65,15 @@ func (w *externalWriter) encodeCSV(bat *batch.Batch) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
+			// The reader unescapes UNQUOTED fields too, so every value must be
+			// escaped — with a non-default escape char like '-', even a date
+			// would otherwise lose bytes to the reader's E-sequence collapsing.
+			// Enclosure doubling only matters inside an enclosed field.
+			encloseFor := byte(0)
 			if quote {
-				val = addEscape(val, enclosed)
+				encloseFor = enclosed
 			}
+			val = addEscape(val, encloseFor, escape)
 			w.writeCSVField(buf, val, quote, last)
 		}
 	}
@@ -427,16 +436,23 @@ func (w *externalWriter) colCount(bat *batch.Batch) int {
 	return n
 }
 
-// addEscape escapes backslashes and (doubled) the enclosure character, matching
-// pkg/frontend/export.go addEscapeToString. The common no-escape case returns s
-// unchanged (no copy), preserving GetBytesAt's zero-copy slice.
-func addEscape(s []byte, escape byte) []byte {
-	if bytes.IndexByte(s, '\\') < 0 && (escape == 0 || bytes.IndexByte(s, escape) < 0) {
+// addEscape doubles the escape character and the enclosure character so the
+// reader's unescaping (E E -> E) and doubled-quote collapsing (Q Q -> Q)
+// reproduce the original bytes. escape == 0 means escaping is disabled
+// (ESCAPED BY ”), enclosed == 0 means the value is written unenclosed. The
+// common nothing-to-escape case returns s unchanged (no copy), preserving
+// GetBytesAt's zero-copy slice.
+func addEscape(s []byte, enclosed byte, escape byte) []byte {
+	needEscape := escape != 0 && bytes.IndexByte(s, escape) >= 0
+	needQuote := enclosed != 0 && enclosed != escape && bytes.IndexByte(s, enclosed) >= 0
+	if !needEscape && !needQuote {
 		return s
 	}
-	s = bytes.ReplaceAll(s, []byte{'\\'}, []byte{'\\', '\\'})
-	if escape != 0 && escape != '\\' {
+	if needEscape {
 		s = bytes.ReplaceAll(s, []byte{escape}, []byte{escape, escape})
+	}
+	if needQuote {
+		s = bytes.ReplaceAll(s, []byte{enclosed}, []byte{enclosed, enclosed})
 	}
 	return s
 }
