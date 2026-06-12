@@ -148,13 +148,19 @@ func TestNewRemoteDataSource_StripsOnlyEmptyBlock(t *testing.T) {
 }
 
 func TestNewRemoteDataSource_StripsObjListFirstEmptyBlock(t *testing.T) {
+	objID := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&objID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 2))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, objectio.BlockMaxRows*2))
 	relData := &ObjListRelData{
 		NeedFirstEmpty: true,
-		TotalBlocks:    1,
 	}
+	relData.AppendObj(stats)
 
 	ds := NewRemoteDataSource(context.Background(), nil, timestamp.Timestamp{}, relData)
-	require.Equal(t, 0, ds.data.DataCnt())
+	require.Equal(t, 2, ds.data.DataCnt())
+	require.Equal(t, stats.ConstructBlockInfo(0).BlockID, ds.data.GetBlockInfo(0).BlockID)
+	require.Equal(t, stats.ConstructBlockInfo(1).BlockID, ds.data.GetBlockInfo(1).BlockID)
 }
 
 func TestStripFirstEmptyBlock_EdgeCases(t *testing.T) {
