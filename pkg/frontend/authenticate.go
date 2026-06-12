@@ -7778,7 +7778,10 @@ func setDDLOwnerRoleFromPrivilege(ses *Session, stmt tree.Statement, priv *privi
 func getRoleNameByID(ctx context.Context, ses *Session, roleID uint32) (string, error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
+	return getRoleNameByIDWithBackgroundExec(ctx, bh, roleID)
+}
 
+func getRoleNameByIDWithBackgroundExec(ctx context.Context, bh BackgroundExec, roleID uint32) (string, error) {
 	bh.ClearExecResultSet()
 	if err := bh.Exec(ctx, getSqlForRoleNameOfRoleId(int64(roleID))); err != nil {
 		return "", err
@@ -7791,6 +7794,36 @@ func getRoleNameByID(ctx context.Context, ses *Session, roleID uint32) (string, 
 		return "", moerr.NewInternalErrorf(ctx, "there is no role id %d", roleID)
 	}
 	return erArray[0].GetString(ctx, 0, 0)
+}
+
+func getObjectOwnerRoleName(ctx context.Context, bh BackgroundExec, sql string) (string, error) {
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return "", err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return "", err
+	}
+	if !execResultArrayHasData(erArray) {
+		return "", nil
+	}
+	owner, err := erArray[0].GetInt64(ctx, 0, 0)
+	if err != nil {
+		return "", err
+	}
+	if owner < 0 {
+		return "", moerr.NewInternalErrorf(ctx, "invalid owner role id %d", owner)
+	}
+	return getRoleNameByIDWithBackgroundExec(ctx, bh, uint32(owner))
+}
+
+func getDatabaseOwnerRoleName(ctx context.Context, bh BackgroundExec, dbName string) (string, error) {
+	return getObjectOwnerRoleName(ctx, bh, getSqlForGetOwnerOfDatabase(dbName))
+}
+
+func getTableOwnerRoleName(ctx context.Context, bh BackgroundExec, dbName, tableName string) (string, error) {
+	return getObjectOwnerRoleName(ctx, bh, getSqlForGetOwnerOfTable(dbName, tableName))
 }
 
 func authenticateMultiDropTableTargets(ctx context.Context, ses *Session, st *tree.DropTable) (bool, statistic.StatsArray, error) {
@@ -10879,13 +10912,8 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 
 func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
-	var sql string
 	tenantInfo := ses.GetTenantInfo()
 	if tenantInfo == nil || tenantInfo.IsAdminRole() {
-		return err
-	}
-	curRole := tenantInfo.GetDefaultRole()
-	if len(curRole) == 0 {
 		return err
 	}
 
@@ -10899,37 +10927,51 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 		tenantCtx = defines.AttachAccount(ctx, tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 	}
 
-	// 2.grant database privilege
-	switch st := stmt.(type) {
-	case *tree.DropDatabase:
-		sql = getSqlForRevokeOwnershipFromDatabase(string(st.Name), curRole)
-	case *tree.DropTable:
-		// get database name
-		var dbName string
-		if len(st.Names[0].SchemaName) == 0 {
-			dbName = ses.GetDatabaseName()
-		} else {
-			dbName = string(st.Names[0].SchemaName)
-		}
-		// get table name
-		tableName := string(st.Names[0].ObjectName)
-		sql = getSqlForRevokeOwnershipFromTable(dbName, tableName, curRole)
-	}
-
-	rp, err := mysql.Parse(tenantCtx, sql, 1)
-	if err != nil {
-		return err
-	}
-
 	bh := ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
 
-	err = doRevokePrivilege(tenantCtx, ses, &rp[0].(*tree.Revoke).RevokePrivilege, bh)
-	if err != nil {
-		return err
-	}
+	// 2.grant database privilege
+	switch st := stmt.(type) {
+	case *tree.DropDatabase:
+		curRole, err := getDatabaseOwnerRoleName(tenantCtx, bh, string(st.Name))
+		if err != nil || len(curRole) == 0 {
+			return err
+		}
+		sql := getSqlForRevokeOwnershipFromDatabase(string(st.Name), curRole)
+		rp, err := mysql.Parse(tenantCtx, sql, 1)
+		if err != nil {
+			return err
+		}
+		return doRevokePrivilege(tenantCtx, ses, &rp[0].(*tree.Revoke).RevokePrivilege, bh)
+	case *tree.DropTable:
+		sqls := make([]string, 0, len(st.Names))
+		for _, name := range st.Names {
+			dbName := string(name.SchemaName)
+			if len(dbName) == 0 {
+				dbName = ses.GetDatabaseName()
+			}
+			curRole, err := getTableOwnerRoleName(tenantCtx, bh, dbName, string(name.ObjectName))
+			if err != nil {
+				return err
+			}
+			if len(curRole) == 0 {
+				continue
+			}
+			sqls = append(sqls, getSqlForRevokeOwnershipFromTable(dbName, string(name.ObjectName), curRole))
+		}
 
-	return err
+		for _, sql := range sqls {
+			rp, err := mysql.Parse(tenantCtx, sql, 1)
+			if err != nil {
+				return err
+			}
+			if err = doRevokePrivilege(tenantCtx, ses, &rp[0].(*tree.Revoke).RevokePrivilege, bh); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return nil
 }
 
 func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) (err error) {

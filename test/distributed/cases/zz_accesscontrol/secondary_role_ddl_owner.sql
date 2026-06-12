@@ -19,6 +19,16 @@ select * from ddl_owner_db.t1;
 -- @session
 select r.role_name from mo_catalog.mo_tables t join mo_catalog.mo_role r on t.owner = r.role_id where t.reldatabase = 'ddl_owner_db' and t.relname = 't1';
 select role_name, privilege_name, privilege_level from mo_catalog.mo_role_privs where role_name in ('ddl_owner_primary','ddl_owner_secondary') and privilege_name = 'table ownership' order by role_name, privilege_level;
+-- @session:id=2&user=sys:ddl_owner_user&password=123456
+set secondary role all;
+prepare ddl_owner_stmt from 'create table ddl_owner_db.t_prepare(a int)';
+execute ddl_owner_stmt;
+-- @session
+select r.role_name from mo_catalog.mo_tables t join mo_catalog.mo_role r on t.owner = r.role_id where t.reldatabase = 'ddl_owner_db' and t.relname = 't_prepare';
+-- @session:id=2&user=sys:ddl_owner_user&password=123456
+drop table ddl_owner_db.t_prepare;
+-- @session
+select count(*) from mo_catalog.mo_role_privs where role_name = 'ddl_owner_secondary' and privilege_name = 'table ownership' and privilege_level = 'ddl_owner_db.t_prepare';
 revoke ddl_owner_secondary from ddl_owner_user;
 -- @session:id=2&user=sys:ddl_owner_user&password=123456
 set secondary role all;
