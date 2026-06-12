@@ -686,6 +686,17 @@ func TestMergeRewriteRules(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "select a from db1.t1 where (a = 1) or (a = 2)", merged)
 
+	// Role rule merging is a base-row visibility union, not UNION DISTINCT over
+	// projected values. Partial projections are intentionally OR-merged so two
+	// visible rows with the same projected value are not collapsed here.
+	rowUnionMerged, err := mergeRewriteRules(
+		ctx,
+		"select a from db1.t1 where role_marker = 1",
+		"select a from db1.t1 where role_marker = 2",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "select a from db1.t1 where (role_marker = 1) or (role_marker = 2)", rowUnionMerged)
+
 	merged, err = mergeRewriteRules(ctx, merged, "select a from db1.t1 where a = 3")
 	require.NoError(t, err)
 	require.Equal(t, "select a from db1.t1 where ((a = 1) or (a = 2)) or (a = 3)", merged)
@@ -776,7 +787,7 @@ func TestMergeRewriteRules(t *testing.T) {
 
 	merged, err = mergeRewriteRules(ctx, "select a + 1 as b from db1.t1 where age > 28", "select a + 1 as b from db1.t1 where age < 3")
 	require.NoError(t, err)
-	require.Equal(t, "select a + 1 as b from db1.t1 where age < 3", merged)
+	require.Equal(t, "select a + 1 as b from db1.t1 where (age > 28) or (age < 3)", merged)
 
 	_, err = mergeRewriteRules(ctx, "select a from", "select a from db1.t1")
 	require.Error(t, err)
@@ -883,9 +894,11 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 			table:      "db1.t1",
 		},
 		{
-			name: "scalar expression",
-			rule: "select a + 1 from db1.t1 where age > 28",
-			ok:   false,
+			name:       "scalar expression",
+			rule:       "select a + 1 from db1.t1 where age > 28",
+			ok:         true,
+			selectList: "a + 1",
+			table:      "db1.t1",
 		},
 		{
 			name: "aggregate",

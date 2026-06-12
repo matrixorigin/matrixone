@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 const (
@@ -338,8 +339,12 @@ type rewriteRuleMergeShape struct {
 	table      string
 }
 
-// Rewrite rules are merged by OR-ing filters only for simple row-preserving
-// single-table SELECTs with exactly matching select lists and source tables.
+// Rewrite rules from active roles are a source-row visibility union: if any
+// role allows a base row, that row should remain visible. For simple
+// single-table SELECTs with matching select lists and source tables, OR-ing the
+// filters expresses that row union directly. This is intentionally not a
+// UNION DISTINCT equivalent for partial projections; two visible base rows that
+// project to the same values should both remain visible.
 func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string) (string, bool, error) {
 	leftShape, ok, err := rewriteRuleMergeShapeForRule(ctx, leftRule)
 	if err != nil {
@@ -427,25 +432,25 @@ func rewriteRuleSelectClauseIsMergeable(clause *tree.SelectClause) bool {
 
 func rewriteRuleSelectExprsAreMergeable(exprs tree.SelectExprs) bool {
 	for _, expr := range exprs {
-		switch e := expr.Expr.(type) {
-		case tree.UnqualifiedStar:
-			if expr.As != nil && !expr.As.Empty() {
-				return false
-			}
-			continue
-		case *tree.UnresolvedName:
-			if e.Star && expr.As != nil && !expr.As.Empty() {
-				return false
-			}
-			if e.Star || e.NumParts > 0 {
-				continue
-			}
+		if rewriteRuleSelectExprIsStar(expr.Expr) && expr.As != nil && !expr.As.Empty() {
 			return false
-		default:
+		}
+		if !rewriteExprIsMergeSafe(expr.Expr) {
 			return false
 		}
 	}
 	return true
+}
+
+func rewriteRuleSelectExprIsStar(expr tree.Expr) bool {
+	switch e := expr.(type) {
+	case tree.UnqualifiedStar:
+		return true
+	case *tree.UnresolvedName:
+		return e.Star
+	default:
+		return false
+	}
 }
 
 func rewriteRuleSingleTableSource(from *tree.From) (string, bool) {
@@ -504,6 +509,120 @@ func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {
 
 func normalizeRewriteSQL(sql string) string {
 	return strings.ToLower(strings.TrimSpace(sql))
+}
+
+func rewriteExprIsMergeSafe(expr tree.Expr) bool {
+	if expr == nil {
+		return true
+	}
+
+	switch e := expr.(type) {
+	case *tree.UnresolvedName, tree.UnqualifiedStar, *tree.NumVal, *tree.StrVal:
+		return true
+	case *tree.BinaryExpr:
+		return rewriteExprIsMergeSafe(e.Left) && rewriteExprIsMergeSafe(e.Right)
+	case *tree.UnaryExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.ComparisonExpr:
+		return rewriteExprIsMergeSafe(e.Left) &&
+			rewriteExprIsMergeSafe(e.Right) &&
+			rewriteExprIsMergeSafe(e.Escape)
+	case *tree.AndExpr:
+		return rewriteExprIsMergeSafe(e.Left) && rewriteExprIsMergeSafe(e.Right)
+	case *tree.XorExpr:
+		return rewriteExprIsMergeSafe(e.Left) && rewriteExprIsMergeSafe(e.Right)
+	case *tree.OrExpr:
+		return rewriteExprIsMergeSafe(e.Left) && rewriteExprIsMergeSafe(e.Right)
+	case *tree.NotExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsNullExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsNotNullExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsUnknownExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsNotUnknownExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsTrueExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsNotTrueExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsFalseExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsNotFalseExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.ParenExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.FuncExpr:
+		name := rewriteFuncExprName(e)
+		if name == "" || e.Type == tree.FUNC_TYPE_TABLE ||
+			e.WindowSpec != nil ||
+			function.GetFunctionIsAggregateByName(name) ||
+			function.GetFunctionIsWinFunByName(name) {
+			return false
+		}
+		return rewriteExprsAreMergeSafe(e.Exprs) && rewriteOrderByIsMergeSafe(e.OrderBy)
+	case *tree.SerialExtractExpr:
+		return rewriteExprIsMergeSafe(e.SerialExpr) && rewriteExprIsMergeSafe(e.IndexExpr)
+	case *tree.CastExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.BitCastExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.Tuple:
+		return rewriteExprsAreMergeSafe(e.Exprs)
+	case *tree.RangeCond:
+		return rewriteExprIsMergeSafe(e.Left) &&
+			rewriteExprIsMergeSafe(e.From) &&
+			rewriteExprIsMergeSafe(e.To)
+	case *tree.CaseExpr:
+		if !rewriteExprIsMergeSafe(e.Expr) || !rewriteExprIsMergeSafe(e.Else) {
+			return false
+		}
+		for _, when := range e.Whens {
+			if when == nil {
+				continue
+			}
+			if !rewriteExprIsMergeSafe(when.Cond) || !rewriteExprIsMergeSafe(when.Val) {
+				return false
+			}
+		}
+		return true
+	case *tree.IntervalExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	default:
+		return false
+	}
+}
+
+func rewriteExprsAreMergeSafe(exprs tree.Exprs) bool {
+	for _, expr := range exprs {
+		if !rewriteExprIsMergeSafe(expr) {
+			return false
+		}
+	}
+	return true
+}
+
+func rewriteOrderByIsMergeSafe(orderBy tree.OrderBy) bool {
+	for _, order := range orderBy {
+		if order == nil {
+			continue
+		}
+		if !rewriteExprIsMergeSafe(order.Expr) {
+			return false
+		}
+	}
+	return true
+}
+
+func rewriteFuncExprName(fn *tree.FuncExpr) string {
+	if fn.FuncName != nil {
+		return strings.ToLower(fn.FuncName.Origin())
+	}
+	if name, ok := fn.Func.FunctionReference.(*tree.UnresolvedName); ok {
+		return strings.ToLower(name.ColName())
+	}
+	return ""
 }
 
 func validateRewriteRuleSQL(ctx context.Context, rule string) error {
