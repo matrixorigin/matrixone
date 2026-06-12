@@ -735,9 +735,6 @@ func writeRestoreScript(
 			if _, err := fmt.Fprintf(f, "INTO TABLE %s\n", quoteSQLIdent(table.TableName)); err != nil {
 				return "", err
 			}
-			if _, err := fmt.Fprintln(f, "parallel 'true'"); err != nil {
-				return "", err
-			}
 			if _, err := fmt.Fprintln(f, "FIELDS TERMINATED BY ','"); err != nil {
 				return "", err
 			}
@@ -745,6 +742,9 @@ func writeRestoreScript(
 				return "", err
 			}
 			if _, err := fmt.Fprintln(f, "LINES TERMINATED BY '\\n'"); err != nil {
+				return "", err
+			}
+			if _, err := fmt.Fprintln(f, "parallel 'true'"); err != nil {
 				return "", err
 			}
 			if csvHasHeader {
