@@ -726,6 +726,17 @@ func TestMergeRewriteRules(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "select a from db1.t1 where (a = 1) or (a = 2)", merged)
 
+	// Role rule merging is a base-row visibility union, not UNION DISTINCT over
+	// projected values. Partial projections are intentionally OR-merged so two
+	// visible rows with the same projected value are not collapsed here.
+	rowUnionMerged, err := mergeRewriteRules(
+		ctx,
+		"select a from db1.t1 where role_marker = 1",
+		"select a from db1.t1 where role_marker = 2",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "select a from db1.t1 where (role_marker = 1) or (role_marker = 2)", rowUnionMerged)
+
 	merged, err = mergeRewriteRules(ctx, merged, "select a from db1.t1 where a = 3")
 	require.NoError(t, err)
 	require.Equal(t, "select a from db1.t1 where ((a = 1) or (a = 2)) or (a = 3)", merged)
@@ -778,6 +789,12 @@ func TestMergeRewriteRules(t *testing.T) {
 			right: "select a from db1.t1 where age < 3",
 			want:  "select a from db1.t1 where (a in (select a from db1.t2 order by a limit 1)) or (age < 3)",
 		},
+		{
+			name:  "same scalar expressions",
+			left:  "select a + 1 as b from db1.t1 where age > 28",
+			right: "select a + 1 as b from db1.t1 where age < 3",
+			want:  "select a + 1 as b from db1.t1 where (age > 28) or (age < 3)",
+		},
 	}
 	for _, tc := range mergeCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -801,11 +818,6 @@ func TestMergeRewriteRules(t *testing.T) {
 			name:  "same alias with different expressions",
 			left:  "select a + 1 as b from db1.t1 where age > 28",
 			right: "select a + 2 as b from db1.t1 where age < 3",
-		},
-		{
-			name:  "same scalar expressions",
-			left:  "select a + 1 from db1.t1 where age > 28",
-			right: "select a + 1 from db1.t1 where age < 3",
 		},
 		{
 			name:  "aggregate",
@@ -926,9 +938,11 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 			table:      "db1.t1",
 		},
 		{
-			name: "scalar expression",
-			rule: "select a + 1 from db1.t1 where age > 28",
-			ok:   false,
+			name:       "scalar expression",
+			rule:       "select a + 1 from db1.t1 where age > 28",
+			ok:         true,
+			selectList: "a + 1",
+			table:      "db1.t1",
 		},
 		{
 			name: "aggregate",
