@@ -210,7 +210,7 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 		// Centroid type is decoupled: f32 for narrow entries (must match the f32
 		// centroid hidden table from schema.go), else same as the entry type.
 		switch types.T(u.tblcfg.KeyPartType) {
-		case types.T_array_bf16, types.T_array_float16, types.T_array_int8:
+		case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 			u.idxcfg.Ivfflat.CentroidType = int32(types.T_array_float32)
 		default:
 			u.idxcfg.Ivfflat.CentroidType = u.tblcfg.KeyPartType
@@ -285,6 +285,8 @@ func runIvfSearchVectorToF32(tf *TableFunction, u *ivfSearchState, proc *process
 		fa = types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](b))
 	case types.T_array_int8:
 		fa = types.Int8ToFloat32Slice(types.BytesToArray[int8](b))
+	case types.T_array_uint8:
+		fa = types.Uint8ToFloat32Slice(types.BytesToArray[uint8](b))
 	default:
 		return moerr.NewInternalError(proc.Ctx, "unsupported ivfflat vector type")
 	}

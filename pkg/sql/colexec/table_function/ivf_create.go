@@ -154,12 +154,15 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	}
 	logutil.Infof("IVFFLAT END: After Kmeans clustering, insert centroids to table")
 
-	// int8 QUANTIZATION (cuVS-style asymmetric scalar quantizer): train [min,max]
-	// over the sample and persist them in the metadata table. Entries (build) and
-	// the query (search) map [min,max] onto the full int8 range [-128,127] with the
-	// same q(x)=round(x*mul+add). Using both bounds (not a symmetric scale) uses the
-	// whole range for offset data. (bf16/float16 are float formats and need none.)
-	if qt, ok := quantizer.ToVectorType(u.param.Quantization); ok && qt == types.T_array_int8 {
+	// int8/uint8 QUANTIZATION (cuVS-style asymmetric scalar quantizer): train
+	// [min,max] over the sample and persist them in the metadata table. Entries
+	// (build) and the query (search) map [min,max] onto the full int8 range
+	// [-128,127] (or uint8 [0,255]) with the same q(x)=round(x*mul+add). Using both
+	// bounds (not a symmetric scale) uses the whole range for offset data. The
+	// percentile bound-training is identical for int8 and uint8 (only the target
+	// range differs, applied later by compile/search). (bf16/float16 are float
+	// formats and need none.)
+	if qt, ok := quantizer.ToVectorType(u.param.Quantization); ok && (qt == types.T_array_int8 || qt == types.T_array_uint8) {
 		qmin, qmax := quantizer.TrainInt8(data)
 		insSQL := fmt.Sprintf(
 			"INSERT INTO `%s`.`%s` (`%s`, `%s`) VALUES ('%s', '%.9g'), ('%s', '%.9g') "+
@@ -386,6 +389,8 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 					f32a = types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](evec.GetBytesAt(i)))
 				case types.T_array_int8:
 					f32a = types.Int8ToFloat32Slice(types.BytesToArray[int8](evec.GetBytesAt(i)))
+				case types.T_array_uint8:
+					f32a = types.Uint8ToFloat32Slice(types.BytesToArray[uint8](evec.GetBytesAt(i)))
 				default:
 					return moerr.NewInternalError(proc.Ctx, "unsupported ivfflat vector type")
 				}

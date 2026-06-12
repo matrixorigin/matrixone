@@ -861,6 +861,8 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 				vec, err = vector.NewConstArray(typ, types.BytesToArray[types.Float16]([]byte(val.VecVal)), 1, proc.Mp())
 			case types.T_array_int8:
 				vec, err = vector.NewConstArray(typ, types.BytesToArray[int8]([]byte(val.VecVal)), 1, proc.Mp())
+			case types.T_array_uint8:
+				vec, err = vector.NewConstArray(typ, types.BytesToArray[uint8]([]byte(val.VecVal)), 1, proc.Mp())
 			}
 		default:
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))

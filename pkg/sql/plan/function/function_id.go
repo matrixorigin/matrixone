@@ -732,13 +732,14 @@ const (
 	// where the query must be a constant narrow vec literal matching the narrow
 	// entries (a cast of vecf32_from_base64 does not constant-fold, breaking the
 	// ORDER BY index pushdown).
-	VECBF16_FROM_BASE64 = 518
-	VECF16_FROM_BASE64  = 519
-	VECINT8_FROM_BASE64 = 520
+	VECBF16_FROM_BASE64  = 518
+	VECF16_FROM_BASE64   = 519
+	VECINT8_FROM_BASE64  = 520
+	VECUINT8_FROM_BASE64 = 521
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 521
+	FUNCTION_END_NUMBER = 522
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1051,6 +1052,7 @@ var functionIdRegister = map[string]int32{
 	"vecbf16_from_base64":            VECBF16_FROM_BASE64,
 	"vecf16_from_base64":             VECF16_FROM_BASE64,
 	"vecint8_from_base64":            VECINT8_FROM_BASE64,
+	"vecuint8_from_base64":           VECUINT8_FROM_BASE64,
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,

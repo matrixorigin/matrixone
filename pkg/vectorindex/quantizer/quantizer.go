@@ -39,16 +39,23 @@ const (
 	Int8Hi = 127.0
 	// int8Span is the number of quantization steps (Int8Hi-Int8Lo = 255).
 	int8Span = Int8Hi - Int8Lo
+
+	// Uint8Lo/Uint8Hi are the unsigned uint8 range the quantizer maps [min,max]
+	// onto (same step count as int8, just shifted to start at 0 — no -128 offset).
+	Uint8Lo = 0.0
+	Uint8Hi = 255.0
+	// uint8Span is the number of quantization steps (Uint8Hi-Uint8Lo = 255).
+	uint8Span = Uint8Hi - Uint8Lo
 )
 
 // ToVectorType maps a CREATE INDEX QUANTIZATION='...' value to the vector element
 // type the ivfflat ENTRIES are down-cast to (the base column and centroids are
 // unaffected). The accepted names are the canonical metric.Quantization_*_Str
 // constants (case-insensitive): float32 -> vecf32, float16 -> vecf16,
-// bf16 -> vecbf16, int8 -> vecint8. float32/float16/bf16 are float formats (plain
-// cast); int8 uses the trained scalar quantizer. float32 is accepted because it is
-// a real down-cast for an f64 base; float64 (an up-cast) and uint8 / "" return
-// ok=false (no quantization; entries keep the base type).
+// bf16 -> vecbf16, int8 -> vecint8, uint8 -> vecuint8. float32/float16/bf16 are
+// float formats (plain cast); int8/uint8 use the trained scalar quantizer. float32
+// is accepted because it is a real down-cast for an f64 base; float64 (an up-cast)
+// and "" return ok=false (no quantization; entries keep the base type).
 func ToVectorType(q string) (types.T, bool) {
 	switch strings.ToLower(strings.TrimSpace(q)) {
 	case metric.Quantization_F32_Str:
@@ -59,6 +66,8 @@ func ToVectorType(q string) (types.T, bool) {
 		return types.T_array_bf16, true
 	case metric.Quantization_INT8_Str:
 		return types.T_array_int8, true
+	case metric.Quantization_UINT8_Str:
+		return types.T_array_uint8, true
 	}
 	return 0, false
 }
@@ -184,4 +193,54 @@ func Int8EntrySQLFromBounds(colExpr, minExpr, maxExpr string, dim int32) string 
 	mul := fmt.Sprintf("COALESCE(255.0 / %s, 1.0)", rng)
 	add := fmt.Sprintf("COALESCE(0.0 - %s * 255.0 / %s - 128.0, 0.0)", minExpr, rng)
 	return fmt.Sprintf("cast(%s * %s + %s as vecint8(%d))", colExpr, mul, add, dim)
+}
+
+// Uint8Params returns (mul, add) for the cuVS-style asymmetric uint8 scalar
+// quantizer that maps [min,max] onto the full uint8 range [Uint8Lo,Uint8Hi]:
+//
+//	q(x) = round(x*mul + add), clamped to [0,255]
+//
+// It is the int8 quantizer shifted to start at 0 (add folds only the -min offset;
+// there is no -128 shift). A degenerate range (max<=min) falls back to identity.
+// The trained bounds come from TrainInt8 (the percentile training is the same).
+func Uint8Params(min, max float64) (mul, add float64) {
+	rng := max - min
+	if !(rng > 0) || math.IsInf(rng, 0) {
+		return 1.0, 0.0
+	}
+	mul = uint8Span / rng
+	add = -min*mul + Uint8Lo
+	return mul, add
+}
+
+// ApplyUint8 is the uint8 analog of ApplyInt8: applies q(x)=x*mul+add to a float32
+// query vector and narrows to uint8 (round+clamp to [0,255]). (mul,add)=(1,0) is
+// identity. The multiply-add is done in float64 to match the build side. qf32 is
+// never mutated.
+func ApplyUint8(qf32 []float32, mul, add float64) []uint8 {
+	if mul == 1.0 && add == 0.0 {
+		return types.Float32ToUint8Slice(qf32)
+	}
+	sq := make([]float32, len(qf32))
+	for i, x := range qf32 {
+		sq[i] = float32(float64(x)*mul + add)
+	}
+	return types.Float32ToUint8Slice(sq)
+}
+
+// Uint8EntrySQL is the uint8 analog of Int8EntrySQL: the build-side entry
+// projection `cast(<colExpr> * mul + add as vecuint8(dim))` from literal bounds.
+func Uint8EntrySQL(colExpr string, mul, add float64, dim int32) string {
+	return fmt.Sprintf("cast(%s * %.9g + (%.9g) as vecuint8(%d))", colExpr, mul, add, dim)
+}
+
+// Uint8EntrySQLFromBounds is the uint8 analog of Int8EntrySQLFromBounds (CDC delta
+// path). q(x)=x*mul+add with mul=255/(max-min) and add=-min*255/(max-min) — no -128
+// shift — wrapped in COALESCE for identity fallback when a bound is absent.
+func Uint8EntrySQLFromBounds(colExpr, minExpr, maxExpr string, dim int32) string {
+	// 255.0 == uint8Span; no offset term since Uint8Lo == 0.
+	rng := fmt.Sprintf("(%s - %s)", maxExpr, minExpr)
+	mul := fmt.Sprintf("COALESCE(255.0 / %s, 1.0)", rng)
+	add := fmt.Sprintf("COALESCE(0.0 - %s * 255.0 / %s, 0.0)", minExpr, rng)
+	return fmt.Sprintf("cast(%s * %s + %s as vecuint8(%d))", colExpr, mul, add, dim)
 }

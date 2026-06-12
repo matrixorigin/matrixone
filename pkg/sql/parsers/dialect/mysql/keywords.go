@@ -691,6 +691,7 @@ func init() {
 		"vecbf16":                    VECBF16,
 		"vecf16":                     VECF16,
 		"vecint8":                    VECINT8,
+		"vecuint8":                   VECUINT8,
 		"backup":                     BACKUP,
 		"filesystem":                 FILESYSTEM,
 		"handler":                    HANDLER,

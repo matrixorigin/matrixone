@@ -32,12 +32,13 @@ func TestToVectorType(t *testing.T) {
 		{"float16", types.T_array_float16, true},
 		{"bf16", types.T_array_bf16, true},
 		{"int8", types.T_array_int8, true},
+		{"uint8", types.T_array_uint8, true},
 		// case-insensitive + surrounding space
 		{"FLOAT16", types.T_array_float16, true},
 		{"BF16", types.T_array_bf16, true},
 		{"  Int8  ", types.T_array_int8, true},
+		{"UINT8", types.T_array_uint8, true},
 		// not quantization targets
-		{"uint8", 0, false},
 		{"float64", 0, false},
 		{"f16", 0, false}, // only canonical names
 		{"bfloat16", 0, false},
@@ -230,4 +231,57 @@ func TestEntrySQLBuilders(t *testing.T) {
 	// plain narrowing cast (float formats / untrained int8).
 	require.Equal(t, "cast(`v` as vecf16(8))", CastSQL("`v`", types.T_array_float16, 8))
 	require.Equal(t, "cast(`v` as vecint8(8))", CastSQL("`v`", types.T_array_int8, 8))
+	require.Equal(t, "cast(`v` as vecuint8(8))", CastSQL("`v`", types.T_array_uint8, 8))
+}
+
+func TestUint8Params(t *testing.T) {
+	// q(x)=round(x*mul+add) must map min -> 0 and max -> 255 (unsigned range).
+	min, max := -2.0, 6.0
+	mul, add := Uint8Params(min, max)
+	require.InDelta(t, 0.0, min*mul+add, 1e-6)
+	require.InDelta(t, 255.0, max*mul+add, 1e-6)
+	// midpoint maps near the center 127.5.
+	require.InDelta(t, 127.5, (min+max)/2*mul+add, 1e-6)
+
+	// all-positive range still spans the full grid.
+	mul, add = Uint8Params(0.07, 0.83)
+	require.InDelta(t, 0.0, 0.07*mul+add, 1e-6)
+	require.InDelta(t, 255.0, 0.83*mul+add, 1e-6)
+
+	// degenerate range -> identity.
+	mul, add = Uint8Params(1.0, 1.0)
+	require.Equal(t, 1.0, mul)
+	require.Equal(t, 0.0, add)
+}
+
+func TestApplyUint8(t *testing.T) {
+	// identity: round+clamp to [0,255], input unchanged.
+	in := []float32{-5, 0.6, 5, 254.5, 300}
+	got := ApplyUint8(in, 1.0, 0.0)
+	require.Equal(t, []uint8{0, 1, 5, 255, 255}, got)
+	require.Equal(t, []float32{-5, 0.6, 5, 254.5, 300}, in, "input must not be mutated")
+
+	// trained transform maps [0.1,0.99] -> [0,255].
+	mul, add := Uint8Params(0.10, 0.99)
+	q := ApplyUint8([]float32{0.10, 0.99, 0.50}, mul, add)
+	require.Equal(t, uint8(0), q[0])
+	require.Equal(t, uint8(255), q[1])
+	require.Equal(t, uint8(math.Round(0.50*mul+add)), q[2])
+
+	require.Empty(t, ApplyUint8([]float32{}, mul, add))
+}
+
+func TestUint8EntrySQLBuilders(t *testing.T) {
+	// literal-bounds (build) projection -> vecuint8.
+	require.Equal(t,
+		"cast(`v` * 286.516854 + (28.6516854) as vecuint8(4))",
+		Uint8EntrySQL("`v`", 286.516854, 28.6516854, 4))
+
+	// metadata-subquery (CDC) projection: no -128 offset, identity COALESCE fallback.
+	min := "(SELECT m FROM meta WHERE k='quantize_min')"
+	max := "(SELECT m FROM meta WHERE k='quantize_max')"
+	require.Equal(t,
+		"cast(src1 * COALESCE(255.0 / ("+max+" - "+min+"), 1.0) + "+
+			"COALESCE(0.0 - "+min+" * 255.0 / ("+max+" - "+min+"), 0.0) as vecuint8(4))",
+		Uint8EntrySQLFromBounds("src1", min, max, 4))
 }

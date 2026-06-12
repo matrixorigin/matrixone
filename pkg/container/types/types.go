@@ -100,7 +100,8 @@ const (
 	T_array_float64 T = 225 // In SQL , it is vecf64
 	T_array_bf16    T = 226 // In SQL , it is vecbf16 (bfloat16)
 	T_array_float16 T = 227 // In SQL , it is vecf16  (IEEE fp16/half)
-	T_array_int8    T = 228 // In SQL , it is veci8   (int8)
+	T_array_int8    T = 228 // In SQL , it is vecint8  (int8)
+	T_array_uint8   T = 229 // In SQL , it is vecuint8 (uint8)
 
 	//note: max value of uint8 is 255
 )
@@ -115,6 +116,7 @@ const (
 	ArrayBF16SQLName    = "vecbf16"
 	ArrayFloat16SQLName = "vecf16"
 	ArrayInt8SQLName    = "vecint8"
+	ArrayUint8SQLName   = "vecuint8"
 )
 
 // ArraySQLName returns the lowercase SQL type name for an array element type
@@ -131,6 +133,8 @@ func (t T) ArraySQLName() string {
 		return ArrayFloat16SQLName
 	case T_array_int8:
 		return ArrayInt8SQLName
+	case T_array_uint8:
+		return ArrayUint8SQLName
 	}
 	return ""
 }
@@ -405,7 +409,7 @@ type RealNumbers interface {
 // Do NOT widen RealNumbers to include these — int8 is not a float and
 // BF16/Float16 have no native arithmetic.
 type ArrayElement interface {
-	~float32 | ~float64 | BF16 | Float16 | int8
+	~float32 | ~float64 | BF16 | Float16 | int8 | uint8
 }
 
 type FixedSizeTExceptStrType interface {
@@ -472,6 +476,7 @@ var Types = map[string]T{
 	"array bf16":    T_array_bf16,
 	"array float16": T_array_float16,
 	"array int8":    T_array_int8,
+	"array uint8":   T_array_uint8,
 }
 
 func New(oid T, width, scale int32) Type {
@@ -621,6 +626,8 @@ func (t Type) DescString() string {
 		return fmt.Sprintf("VECF16(%d)", t.Width)
 	case T_array_int8:
 		return fmt.Sprintf("VECINT8(%d)", t.Width)
+	case T_array_uint8:
+		return fmt.Sprintf("VECUINT8(%d)", t.Width)
 	}
 	return t.Oid.String()
 }
@@ -636,6 +643,8 @@ func (t Type) GetArrayElementSize() int {
 	case T_array_float16:
 		return 2
 	case T_array_int8:
+		return 1
+	case T_array_uint8:
 		return 1
 	}
 	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown array type %d", t)))
@@ -709,7 +718,7 @@ func (t T) ToType() Type {
 	case T_varchar:
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarcharLen
-	case T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8:
+	case T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8:
 		typ.Size = VarlenaSize
 		typ.Width = MaxArrayDimension
 	case T_binary:
@@ -823,6 +832,8 @@ func (t T) String() string {
 		return "VECF16"
 	case T_array_int8:
 		return "VECINT8"
+	case T_array_uint8:
+		return "VECUINT8"
 	case T_enum:
 		return "ENUM"
 	}
@@ -914,6 +925,8 @@ func (t T) OidString() string {
 		return "T_array_float16"
 	case T_array_int8:
 		return "T_array_int8"
+	case T_array_uint8:
+		return "T_array_uint8"
 	}
 	return "unknown_type"
 }
@@ -947,7 +960,7 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_datalink, T_geometry, T_geometry32:
+	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
 		return VarlenaSize
 	case T_decimal64:
 		return 8
@@ -1002,7 +1015,7 @@ func (t T) FixedLength() int {
 		return RowidSize
 	case T_Blockid:
 		return BlockidSize
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_datalink, T_geometry, T_geometry32:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
 		return -24
 	case T_enum:
 		return 2
@@ -1084,7 +1097,7 @@ func (t T) IsDateRelate() bool {
 
 func (t T) IsArrayRelate() bool {
 	if t == T_array_float32 || t == T_array_float64 ||
-		t == T_array_bf16 || t == T_array_float16 || t == T_array_int8 {
+		t == T_array_bf16 || t == T_array_float16 || t == T_array_int8 || t == T_array_uint8 {
 		return true
 	}
 	return false

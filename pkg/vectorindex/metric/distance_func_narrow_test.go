@@ -96,6 +96,34 @@ func TestNarrowInt8KernelsExact(t *testing.T) {
 	}
 }
 
+func TestNarrowUint8KernelsExact(t *testing.T) {
+	// uint8 values (0..255) -> exact integer arithmetic, must match float64 reference.
+	a := []uint8{1, 2, 3, 4, 5, 250, 7, 8, 9, 10, 255}
+	b := []uint8{255, 2, 0, 4, 100, 6, 7, 200, 9, 1, 2}
+	af := make([]float64, len(a))
+	bf := make([]float64, len(b))
+	for i := range a {
+		af[i] = float64(a[i])
+		bf[i] = float64(b[i])
+	}
+	ab := types.ArrayToBytes(a)
+	bb := types.ArrayToBytes(b)
+	for _, m := range narrowMetrics {
+		fn, err := ResolveNarrowDistanceFn(types.T_array_uint8, m)
+		if err != nil {
+			t.Fatalf("resolve uint8 m=%d: %v", m, err)
+		}
+		got, err := fn(ab, bb)
+		if err != nil {
+			t.Fatalf("uint8 dist m=%d: %v", m, err)
+		}
+		want := refDist(m, af, bf)
+		if math.Abs(got-want) > 1e-9 {
+			t.Errorf("uint8 m=%d: got %v want %v", m, got, want)
+		}
+	}
+}
+
 func TestNarrowBF16F16Kernels(t *testing.T) {
 	src1 := []float32{1, 2, 3, 0.5, -4, 6, 7.5, -8, 9, 10, 11}
 	src2 := []float32{-1, 2, 0.25, 4, 5, 6, -7, 8, -9, 1, 2}

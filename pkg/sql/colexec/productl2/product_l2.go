@@ -303,6 +303,8 @@ func newMat[T types.RealNumbers](ctr *container, ap *Productl2, probes [][]T, nu
 			f32 = types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](b))
 		case types.T_array_int8:
 			f32 = types.Int8ToFloat32Slice(types.BytesToArray[int8](b))
+		case types.T_array_uint8:
+			f32 = types.Uint8ToFloat32Slice(types.BytesToArray[uint8](b))
 		default: // T_array_float32
 			f32 = types.BytesToArray[float32](b)
 		}

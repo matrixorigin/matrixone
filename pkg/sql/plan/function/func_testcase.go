@@ -716,7 +716,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					i+1, types.BytesToArray[float64](want), types.BytesToArray[float64](get))
 			}
 		}
-	case types.T_array_bf16, types.T_array_float16, types.T_array_int8:
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		// Narrow vector types compare byte-exact (their stored representation is
 		// the comparison ground truth; ArrayCompare only covers float32/float64).
 		r := vector.GenerateFunctionStrParameter(v)
@@ -948,6 +948,9 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	case types.T_array_int8:
 		values := val.([][]int8)
 		vector.AppendArrayList[int8](vec, values, nil, mp)
+	case types.T_array_uint8:
+		values := val.([][]uint8)
+		vector.AppendArrayList[uint8](vec, values, nil, mp)
 	case types.T_uuid:
 		values := val.([]types.Uuid)
 		vector.AppendFixedList(vec, values, nil, mp)

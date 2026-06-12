@@ -134,7 +134,7 @@ func (CatalogHooks) ExperimentalFlag() string { return "" }
 func (CatalogHooks) SupportedVectorTypes() []types.T {
 	return []types.T{
 		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 	}
 }
 
@@ -236,7 +236,7 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if q := idx.IndexOption.Quantization; q != "" {
 		if _, ok := quantizer.ToVectorType(q); !ok {
 			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
-				"ivfflat: unsupported quantization '%s' (supported: 'float32', 'float16', 'bf16', 'int8')", q))
+				"ivfflat: unsupported quantization '%s' (supported: 'float32', 'float16', 'bf16', 'int8', 'uint8')", q))
 		}
 		res[catalog.Quantization] = catalog.ToLower(q)
 	}

@@ -367,6 +367,8 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 		return vector.GetArrayAt[types.Float16](vec, 0), nil
 	case types.T_array_int8:
 		return vector.GetArrayAt[int8](vec, 0), nil
+	case types.T_array_uint8:
+		return vector.GetArrayAt[uint8](vec, 0), nil
 	case types.T_decimal64:
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0)
 		return val.Format(expr.Typ.Scale), nil

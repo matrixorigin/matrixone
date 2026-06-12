@@ -65,6 +65,8 @@ func (c arrayCompare) Compare(veci, vecj int, vi, vj int64) int {
 		return types.CompareArrayElementFromBytes[types.Float16](_x, _y, c.desc)
 	case types.T_array_int8:
 		return types.CompareArrayElementFromBytes[int8](_x, _y, c.desc)
+	case types.T_array_uint8:
+		return types.CompareArrayElementFromBytes[uint8](_x, _y, c.desc)
 	default:
 		panic("Compare Not supported")
 	}

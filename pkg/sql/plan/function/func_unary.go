@@ -292,6 +292,8 @@ func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result 
 			_ = appendNormalizedNarrowArray[types.Float16](rs, data)
 		case types.T_array_int8:
 			_ = appendNormalizedNarrowArray[int8](rs, data)
+		case types.T_array_uint8:
+			_ = appendNormalizedNarrowArray[uint8](rs, data)
 		}
 
 	}

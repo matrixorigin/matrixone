@@ -302,6 +302,17 @@ func stringToT[T ArrayElement](str string) (t T, err error) {
 		}
 		i8 := int8(num)
 		return *(*T)(unsafe.Pointer(&i8)), nil
+	case uint8:
+		// Strict: a vecuint8 string literal must be an integer in [0,255].
+		// Non-integer ("1.4") or out-of-range ("300") values error rather than
+		// silently rounding/clamping. (The vecf32 -> vecuint8 CAST path does
+		// round+clamp; only direct string parsing is strict.)
+		num, err := strconv.ParseUint(str, 10, 8)
+		if err != nil {
+			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_array_uint8.String())
+		}
+		u8 := uint8(num)
+		return *(*T)(unsafe.Pointer(&u8)), nil
 	default:
 		panic(moerr.NewInternalErrorNoCtx("not implemented"))
 	}

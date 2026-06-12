@@ -72,6 +72,14 @@ func ResolveNarrowDistanceFn(oid types.T, metric MetricType) (NarrowDistanceFn, 
 		return func(a, b []byte) (float64, error) {
 			return kern(types.BytesToArray[int8](a), types.BytesToArray[int8](b))
 		}, nil
+	case types.T_array_uint8:
+		kern, err := resolveUint8Kernel(metric)
+		if err != nil {
+			return nil, err
+		}
+		return func(a, b []byte) (float64, error) {
+			return kern(types.BytesToArray[uint8](a), types.BytesToArray[uint8](b))
+		}, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("ResolveNarrowDistanceFn: not a narrow vector type")
 	}

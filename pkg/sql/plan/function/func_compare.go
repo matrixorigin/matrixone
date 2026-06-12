@@ -44,7 +44,7 @@ func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_uuid:
 	case types.T_Rowid:
 	case types.T_array_float32, types.T_array_float64:
-	case types.T_array_bf16, types.T_array_float16, types.T_array_int8:
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 	case types.T_year:
 	default:
 		return false
@@ -83,7 +83,7 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_uuid:
 	case types.T_Rowid:
 	case types.T_array_float32, types.T_array_float64:
-	case types.T_array_bf16, types.T_array_float16, types.T_array_int8:
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 	case types.T_enum:
 	case types.T_year:
 	default:
@@ -257,6 +257,12 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 			_v2 := types.BytesToArray[int8](v2)
 			return types.ArrayElementCompare[int8](_v1, _v2) == 0
 		}, selectList)
+	case types.T_array_uint8:
+		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[uint8](v1)
+			_v2 := types.BytesToArray[uint8](v2)
+			return types.ArrayElementCompare[uint8](_v1, _v2) == 0
+		}, selectList)
 	case types.T_date:
 		return opBinaryFixedFixedToFixedNullSafe[types.Date](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a == b
@@ -406,6 +412,10 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_array_int8:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			return types.ArrayElementCompare[int8](types.BytesToArray[int8](v1), types.BytesToArray[int8](v2)) == 0
+		}, selectList)
+	case types.T_array_uint8:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			return types.ArrayElementCompare[uint8](types.BytesToArray[uint8](v1), types.BytesToArray[uint8](v2)) == 0
 		}, selectList)
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
@@ -811,6 +821,12 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			_v2 := types.BytesToArray[int8](v2)
 			return types.ArrayElementCompare[int8](_v1, _v2) > 0
 		}, selectList)
+	case types.T_array_uint8:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[uint8](v1)
+			_v2 := types.BytesToArray[uint8](v2)
+			return types.ArrayElementCompare[uint8](_v1, _v2) > 0
+		}, selectList)
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a > b
@@ -955,6 +971,12 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 			_v1 := types.BytesToArray[int8](v1)
 			_v2 := types.BytesToArray[int8](v2)
 			return types.ArrayElementCompare[int8](_v1, _v2) >= 0
+		}, selectList)
+	case types.T_array_uint8:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[uint8](v1)
+			_v2 := types.BytesToArray[uint8](v2)
+			return types.ArrayElementCompare[uint8](_v1, _v2) >= 0
 		}, selectList)
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
@@ -1101,6 +1123,12 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			_v2 := types.BytesToArray[int8](v2)
 			return types.ArrayElementCompare[int8](_v1, _v2) != 0
 		}, selectList)
+	case types.T_array_uint8:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[uint8](v1)
+			_v2 := types.BytesToArray[uint8](v2)
+			return types.ArrayElementCompare[uint8](_v1, _v2) != 0
+		}, selectList)
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a != b
@@ -1246,6 +1274,12 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			_v2 := types.BytesToArray[int8](v2)
 			return types.ArrayElementCompare[int8](_v1, _v2) < 0
 		}, selectList)
+	case types.T_array_uint8:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[uint8](v1)
+			_v2 := types.BytesToArray[uint8](v2)
+			return types.ArrayElementCompare[uint8](_v1, _v2) < 0
+		}, selectList)
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a < b
@@ -1390,6 +1424,12 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			_v1 := types.BytesToArray[int8](v1)
 			_v2 := types.BytesToArray[int8](v2)
 			return types.ArrayElementCompare[int8](_v1, _v2) <= 0
+		}, selectList)
+	case types.T_array_uint8:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[uint8](v1)
+			_v2 := types.BytesToArray[uint8](v2)
+			return types.ArrayElementCompare[uint8](_v1, _v2) <= 0
 		}, selectList)
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {

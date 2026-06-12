@@ -41,7 +41,7 @@ type sortType interface {
 		~[]types.Decimal64 | ~[]types.Decimal128 | ~[]types.Decimal256 |
 		~[]types.Rowid | ~[]types.Blockid | ~[]types.Uuid |
 		~[][]float32 | ~[][]float64 |
-		~[][]types.BF16 | ~[][]types.Float16 | ~[][]int8
+		~[][]types.BF16 | ~[][]types.Float16 | ~[][]int8 | ~[][]uint8
 }
 
 type xorshift uint64
@@ -308,6 +308,13 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 			genericSort(col, os, arrayElementLess[int8])
 		} else {
 			genericSort(col, os, arrayElementGreater[int8])
+		}
+	case types.T_array_uint8:
+		col := vector.MustArrayCol[uint8](vec)
+		if !desc {
+			genericSort(col, os, arrayElementLess[uint8])
+		} else {
+			genericSort(col, os, arrayElementGreater[uint8])
 		}
 	case types.T_TS:
 		col := vector.MustFixedColNoTypeCheck[types.TS](vec)

@@ -188,6 +188,14 @@ func Int8ToFloat32Slice(src []int8) []float32 {
 	return dst
 }
 
+func Uint8ToFloat32Slice(src []uint8) []float32 {
+	dst := make([]float32, len(src))
+	for i, v := range src {
+		dst[i] = float32(v)
+	}
+	return dst
+}
+
 func Float32ToBF16Slice(src []float32) []BF16 {
 	dst := make([]BF16, len(src))
 	for i, v := range src {
@@ -230,6 +238,32 @@ func Float32ToInt8(v float32) int8 {
 	return int8(r)
 }
 
+// Float32ToUint8Slice rounds to nearest and clamps to the uint8 range
+// [0, 255]. NaN maps to 0.
+func Float32ToUint8Slice(src []float32) []uint8 {
+	dst := make([]uint8, len(src))
+	for i, v := range src {
+		dst[i] = Float32ToUint8(v)
+	}
+	return dst
+}
+
+// Float32ToUint8 rounds to nearest (ties away from zero, via math.Round) and
+// clamps to [0, 255]. NaN maps to 0.
+func Float32ToUint8(v float32) uint8 {
+	if v != v { // NaN
+		return 0
+	}
+	r := math.Round(float64(v))
+	if r > 255 {
+		return 255
+	}
+	if r < 0 {
+		return 0
+	}
+	return uint8(r)
+}
+
 // ----------------------------------------------------------------------------
 // Generic float32 bridge. This is THE boundary between the storage tier
 // (ArrayElement) and the compute tier (RealNumbers). Any math on a narrow type
@@ -255,6 +289,8 @@ func ToFloat32Array[T ArrayElement](in []T) []float32 {
 		return Float16ToFloat32Slice(v)
 	case []int8:
 		return Int8ToFloat32Slice(v)
+	case []uint8:
+		return Uint8ToFloat32Slice(v)
 	default:
 		panic(moerr.NewInternalErrorNoCtx("ToFloat32Array: unsupported element type"))
 	}
@@ -281,6 +317,8 @@ func FromFloat32Array[T ArrayElement](in []float32) []T {
 		return any(Float32ToFloat16Slice(in)).([]T)
 	case int8:
 		return any(Float32ToInt8Slice(in)).([]T)
+	case uint8:
+		return any(Float32ToUint8Slice(in)).([]T)
 	default:
 		panic(moerr.NewInternalErrorNoCtx("FromFloat32Array: unsupported element type"))
 	}

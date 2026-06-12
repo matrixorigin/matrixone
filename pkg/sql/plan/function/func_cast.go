@@ -51,7 +51,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_year,
 		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_datalink, types.T_geometry, types.T_geometry32,
 	},
 
@@ -296,7 +296,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_datalink, types.T_geometry, types.T_geometry32,
 		types.T_TS,
 	},
@@ -345,7 +345,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_datalink, types.T_geometry, types.T_geometry32,
 	},
 
@@ -364,7 +364,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_datalink, types.T_geometry, types.T_geometry32,
 	},
 	types.T_geometry: {
@@ -427,23 +427,27 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_array_float32: {
 		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 	},
 	types.T_array_float64: {
 		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 	},
 	types.T_array_bf16: {
 		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 	},
 	types.T_array_float16: {
 		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 	},
 	types.T_array_int8: {
 		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+	},
+	types.T_array_uint8: {
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 	},
 }
 
@@ -534,7 +538,7 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = strTypeToOthers(proc, s, *toType, result, length, selectList)
-	case types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8:
+	case types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		//NOTE: Don't mix T_array and T_varchar.
 		// T_varchar will have "[1,2,3]" string
 		// T_array will have "@@@#@!#@!@#!" binary.
@@ -653,7 +657,7 @@ func scalarNullToOthers(ctx context.Context,
 		return appendNulls[uint64](result, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_json,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_datalink, types.T_geometry:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry:
 		return appendNulls[types.Varlena](result, length, selectList)
 	case types.T_float32:
 		return appendNulls[float32](result, length, selectList)
@@ -1903,6 +1907,9 @@ func strTypeToOthers(proc *process.Process,
 		case types.T_array_int8:
 			rs := vector.MustFunctionResult[types.Varlena](result)
 			return blobToArray[int8](ctx, source, rs, length, toType)
+		case types.T_array_uint8:
+			rs := vector.MustFunctionResult[types.Varlena](result)
+			return blobToArray[uint8](ctx, source, rs, length, toType)
 			// NOTE 1: don't add `switch default` and panic here. If `T_blob` to `ARRAY` is not required,
 			// then continue to the `str` to `Other` code.
 			// NOTE 2: don't create a switch T_blob case in NewCast() as
@@ -1994,6 +2001,9 @@ func strTypeToOthers(proc *process.Process,
 	case types.T_array_int8:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[int8](ctx, source, rs, length, toType)
+	case types.T_array_uint8:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return strToArray[uint8](ctx, source, rs, length, toType)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
 		return strToYear(ctx, source, rs, length, selectList)
@@ -2019,6 +2029,8 @@ func arrayTypeToOthers(proc *process.Process,
 		return arrayToArrayDispatch[types.Float16](proc, source, rs, length, toType)
 	case types.T_array_int8:
 		return arrayToArrayDispatch[int8](proc, source, rs, length, toType)
+	case types.T_array_uint8:
+		return arrayToArrayDispatch[uint8](proc, source, rs, length, toType)
 	}
 
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", fromType, toType))
@@ -2041,6 +2053,8 @@ func arrayToArrayDispatch[I types.ArrayElement](proc *process.Process,
 		return arrayToArray[I, types.Float16](proc.Ctx, source, rs, length, toType)
 	case types.T_array_int8:
 		return arrayToArray[I, int8](proc.Ctx, source, rs, length, toType)
+	case types.T_array_uint8:
+		return arrayToArray[I, uint8](proc.Ctx, source, rs, length, toType)
 	}
 	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast to %s", toType))
 }

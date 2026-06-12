@@ -574,6 +574,7 @@ var predefinedFunids = map[int]int{
 	VECBF16_FROM_BASE64:           518,
 	VECF16_FROM_BASE64:            519,
 	VECINT8_FROM_BASE64:           520,
+	VECUINT8_FROM_BASE64:          521,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER: 521,

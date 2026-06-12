@@ -33,6 +33,14 @@ select a from q64 order by l2_distance(v,'[1,1,1,1]'), a limit 3;
 alter table q64 drop index q64f32;
 create index q64i8 using ivfflat on q64(v) lists=2 op_type 'vector_l2_ops' quantization 'int8';
 select a from q64 order by l2_distance(v,'[1,1,1,1]'), a limit 3;
+-- uint8 QUANTIZATION (unsigned [0,255]) on f32 and f64 bases
+alter table q32 drop index q32i8;
+create index q32u8 using ivfflat on q32(v) lists=2 op_type 'vector_l2_ops' quantization 'uint8';
+select a from q32 order by l2_distance(v,'[1,1,1,1]'), a limit 3;
+alter table q64 drop index q64i8;
+create index q64u8 using ivfflat on q64(v) lists=2 op_type 'vector_l2_ops' quantization 'uint8';
+select a from q64 order by l2_distance(v,'[1,1,1,1]'), a limit 3;
+-- an unsupported quantization name still errors
 create table qbad(a int primary key, v vecf32(4));
-create index qb using ivfflat on qbad(v) lists=1 op_type 'vector_l2_ops' quantization 'uint8';
+create index qb using ivfflat on qbad(v) lists=1 op_type 'vector_l2_ops' quantization 'int16';
 drop database ivfq;

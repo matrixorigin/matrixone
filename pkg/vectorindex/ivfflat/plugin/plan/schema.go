@@ -159,7 +159,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 		}
 		quantized := indexInfo.IndexOption != nil && indexInfo.IndexOption.Quantization != ""
 		switch types.T(centroidTyp.Id) {
-		case types.T_array_bf16, types.T_array_float16, types.T_array_int8:
+		case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 			centroidTyp.Id = int32(types.T_array_float32)
 			centroidTyp.Scale = 0
 		default:

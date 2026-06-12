@@ -70,6 +70,8 @@ func ArrayToString[T ArrayElement](input []T) string {
 			_, _ = io.WriteString(&buffer, strconv.FormatFloat(float64(value.ToFloat32()), 'f', -1, 32))
 		case int8:
 			_, _ = io.WriteString(&buffer, strconv.FormatInt(int64(value), 10))
+		case uint8:
+			_, _ = io.WriteString(&buffer, strconv.FormatUint(uint64(value), 10))
 		}
 	}
 	_, _ = io.WriteString(&buffer, "]")

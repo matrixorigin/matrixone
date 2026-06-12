@@ -443,10 +443,11 @@ func ivfIndexEntriesTable(
 						break
 					}
 				}
-				if qt == types.T_array_int8 {
+				if qt == types.T_array_int8 || qt == types.T_array_uint8 {
 					// cuVS-style asymmetric scalar quantizer: map the trained
 					// [min,max] (stored in metadata by ivf_create) onto the full int8
-					// range via q(x)=round(x*mul+add). float16 needs no scale.
+					// range [-128,127] (or uint8 [0,255]) via q(x)=round(x*mul+add).
+					// float16 needs no scale.
 					qmin, ok1, err := readQuantizeBound(ctx, qryDatabase, metadataTableName, catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin)
 					if err != nil {
 						return err
@@ -455,11 +456,15 @@ func ivfIndexEntriesTable(
 					if err != nil {
 						return err
 					}
-					if ok1 && ok2 {
+					col := fmt.Sprintf("`%s`", indexColName)
+					if ok1 && ok2 && qt == types.T_array_int8 {
 						mul, add := quantizer.Int8Params(qmin, qmax)
-						entrySelectExpr = quantizer.Int8EntrySQL(fmt.Sprintf("`%s`", indexColName), mul, add, dim)
+						entrySelectExpr = quantizer.Int8EntrySQL(col, mul, add, dim)
+					} else if ok1 && ok2 {
+						mul, add := quantizer.Uint8Params(qmin, qmax)
+						entrySelectExpr = quantizer.Uint8EntrySQL(col, mul, add, dim)
 					} else {
-						entrySelectExpr = quantizer.CastSQL(fmt.Sprintf("`%s`", indexColName), types.T_array_int8, dim)
+						entrySelectExpr = quantizer.CastSQL(col, qt, dim)
 					}
 				} else {
 					entrySelectExpr = quantizer.CastSQL(fmt.Sprintf("`%s`", indexColName), qt, dim)

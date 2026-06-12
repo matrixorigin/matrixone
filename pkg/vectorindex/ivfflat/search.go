@@ -141,10 +141,10 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vec
 		return err
 	}
 
-	// int8 QUANTIZATION: load the trained [min,max] and derive the same transform
-	// the entries were quantized with, so the query maps identically.
-	if types.T(idxcfg.Ivfflat.VectorType) == types.T_array_int8 {
-		if err = idx.loadQuantizeBounds(proc, tblcfg); err != nil {
+	// int8/uint8 QUANTIZATION: load the trained [min,max] and derive the same
+	// transform the entries were quantized with, so the query maps identically.
+	if vt := types.T(idxcfg.Ivfflat.VectorType); vt == types.T_array_int8 || vt == types.T_array_uint8 {
+		if err = idx.loadQuantizeBounds(proc, tblcfg, vt); err != nil {
 			return err
 		}
 	}
@@ -152,7 +152,7 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vec
 	return nil
 }
 
-func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig) error {
+func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig, vt types.T) error {
 	read := func(key string) (float64, bool, error) {
 		sql := fmt.Sprintf("SELECT CAST(`%s` AS DOUBLE) FROM `%s`.`%s` WHERE `%s` = '%s'",
 			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, tblcfg.DbName, tblcfg.MetadataTable,
@@ -176,7 +176,11 @@ func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, t
 		return err
 	}
 	if ok1 && ok2 {
-		idx.QuantMul, idx.QuantAdd = quantizer.Int8Params(qmin, qmax)
+		if vt == types.T_array_uint8 {
+			idx.QuantMul, idx.QuantAdd = quantizer.Uint8Params(qmin, qmax)
+		} else {
+			idx.QuantMul, idx.QuantAdd = quantizer.Int8Params(qmin, qmax)
+		}
 	}
 	return nil
 }
@@ -348,6 +352,10 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			// to int8. (mul,add)=(1,0) falls back to the raw cast (no quantizer).
 			sq := quantizer.ApplyInt8(qf32, idx.QuantMul, idx.QuantAdd)
 			queryExpr = fmt.Sprintf("vecint8_from_base64('%s')", types.ArrayToBase64(sq))
+		case types.T_array_uint8:
+			// same transform as int8, narrowed to the unsigned [0,255] range.
+			sq := quantizer.ApplyUint8(qf32, idx.QuantMul, idx.QuantAdd)
+			queryExpr = fmt.Sprintf("vecuint8_from_base64('%s')", types.ArrayToBase64(sq))
 		}
 	}
 

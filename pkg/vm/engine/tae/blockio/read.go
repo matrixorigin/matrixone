@@ -417,7 +417,7 @@ func HandleOrderByLimitOnIVFFlatIndex(
 	// narrow kernels). The bounds + top-k heap loop below is shared.
 	var distOf func(colBytes []byte) (float64, error)
 	switch orderByLimit.Typ {
-	case types.T_array_bf16, types.T_array_float16, types.T_array_int8:
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		distFunc, err := metric.ResolveNarrowDistanceFn(orderByLimit.Typ, orderByLimit.MetricType)
 		if err != nil {
 			return nil, nil, err

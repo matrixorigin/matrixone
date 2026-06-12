@@ -420,8 +420,8 @@ func BenchmarkTypesCompare(b *testing.B) {
 
 func TestArraySQLName(t *testing.T) {
 	// every array/vector type maps to its lowercase SQL name.
-	arrayTypes := []T{T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8}
-	wantNames := []string{"vecf32", "vecf64", "vecbf16", "vecf16", "vecint8"}
+	arrayTypes := []T{T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8}
+	wantNames := []string{"vecf32", "vecf64", "vecbf16", "vecf16", "vecint8", "vecuint8"}
 	for i, at := range arrayTypes {
 		require.Equal(t, wantNames[i], at.ArraySQLName())
 	}
