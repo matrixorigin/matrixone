@@ -157,6 +157,26 @@ func TestNewRemoteDataSource_StripsObjListFirstEmptyBlock(t *testing.T) {
 	require.Equal(t, 0, ds.data.DataCnt())
 }
 
+func TestStripFirstEmptyBlock_EdgeCases(t *testing.T) {
+	require.Nil(t, stripFirstEmptyBlock(nil))
+
+	var objList *ObjListRelData
+	require.Nil(t, stripFirstEmptyBlock(objList))
+
+	var blockList *BlockListRelData
+	require.Nil(t, stripFirstEmptyBlock(blockList))
+
+	emptyRelData := BuildEmptyRelData()
+	require.True(t, emptyRelData == stripFirstEmptyBlock(emptyRelData))
+
+	relData := NewBlockListRelationData(0)
+	realBlock := objectio.BlockInfo{BlockID: types.Blockid{2}}
+	relData.AppendBlockInfo(&realBlock)
+	stripped := stripFirstEmptyBlock(relData)
+	require.Equal(t, 1, stripped.DataCnt())
+	require.Equal(t, realBlock.BlockID, stripped.GetBlockInfo(0).BlockID)
+}
+
 func TestObjListRelData(t *testing.T) { // for test coverage
 	objlistRelData := &ObjListRelData{
 		NeedFirstEmpty: true,

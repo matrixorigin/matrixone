@@ -245,6 +245,47 @@ func TestParquetStringToVectorMapping(t *testing.T) {
 		require.Equal(t, []float32{7, 8, 9}, vector.GetArrayAt[float32](vec, 0))
 	})
 
+	t.Run("fixed len byte array to vecf64", func(t *testing.T) {
+		f, page := writeColumnAndGetPage(t, parquet.Leaf(parquet.FixedLenByteArrayType(7)), []parquet.Row{
+			{parquet.FixedLenByteArrayValue([]byte("[1,2,3]")).Level(0, 0, 0)},
+		})
+
+		vec := vector.NewVec(types.New(types.T_array_float64, 3, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float64), Width: 3, NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []float64{1, 2, 3}, vector.GetArrayAt[float64](vec, 0))
+	})
+
+	t.Run("empty page", func(t *testing.T) {
+		page := parquet.ByteArrayType.NewPage(0, 0, encoding.ByteArrayValues(nil, []uint32{0}))
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		require.NoError(t, processStringToArray[float32](context.Background(), &columnMapper{}, page, proc, vec, 3))
+		require.Equal(t, 0, vec.Length())
+	})
+
+	t.Run("invalid target width", func(t *testing.T) {
+		f, page := writeColumnAndGetPage(t, parquet.String(), []parquet.Row{
+			{parquet.ByteArrayValue([]byte("[1,2,3]")).Level(0, 0, 0)},
+		})
+
+		vec := vector.NewVec(types.T_array_float32.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), NotNullable: true})
+		require.NotNil(t, mp)
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "invalid vector dimension 0")
+	})
+
+	t.Run("non string source is not vector input", func(t *testing.T) {
+		f, _ := writeColumnAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
+			{parquet.Int32Value(1).Level(0, 0, 0)},
+		})
+
+		var h ParquetHandler
+		require.Nil(t, h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float64), Width: 3, NotNullable: true}))
+	})
+
 	t.Run("dimension mismatch", func(t *testing.T) {
 		f, page := writeColumnAndGetPage(t, parquet.String(), []parquet.Row{
 			{parquet.ByteArrayValue([]byte("[1,2]")).Level(0, 0, 0)},
