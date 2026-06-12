@@ -757,6 +757,24 @@ func TestUpdatePgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
 	}
 }
 
+func TestUpdateFallbackPgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback UPDATE FROM plan: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["emp"].Cols)) {
+		t.Fatalf("fallback UPDATE FROM dedup must pick a whole source row, not aggregate each update column with any_value")
+	}
+	if !hasUpdateFromDedupWindow(query, len(mock.ctxt.tables["emp"].Cols)) {
+		t.Fatalf("fallback UPDATE FROM dedup should use row_number window partitioned by target old columns")
+	}
+}
+
 func TestUpdatePgStyleFromDedupExpandsDefaultBeforeDedup(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockDefaultExpr(t, mock, "nation", "n_name", "name-default")

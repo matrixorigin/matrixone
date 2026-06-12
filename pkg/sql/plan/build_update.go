@@ -47,6 +47,22 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
+	if stmt.From != nil && len(stmt.From.Tables) > 0 && tblInfo.needAggFilter {
+		lastNode := builder.qry.Nodes[lastNodeId]
+		lastNodeId, _, _, err = builder.appendRowNumberDedupNode(
+			queryBindCtx,
+			lastNodeId,
+			lastNode,
+			lastNode.BindingTags[0],
+			fallbackUpdateFromDedupPartitionCols(updatePlanCtxs),
+		)
+		if err != nil {
+			return nil, err
+		}
+		for _, updatePlanCtx := range updatePlanCtxs {
+			updatePlanCtx.needAggFilter = false
+		}
+	}
 
 	sourceStep := builder.appendStep(lastNodeId)
 	query, err := builder.createQuery()
@@ -254,6 +270,20 @@ func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlan
 	}
 
 	return nil
+}
+
+func fallbackUpdateFromDedupPartitionCols(planCtxs []*dmlPlanCtx) []int32 {
+	partitionCols := make([]int32, 0)
+	offset := int32(0)
+	for _, planCtx := range planCtxs {
+		if planCtx.updateColLength > 0 {
+			for i := range planCtx.tableDef.Cols {
+				partitionCols = append(partitionCols, offset+int32(i))
+			}
+		}
+		offset += int32(len(planCtx.tableDef.Cols) + planCtx.updateColLength)
+	}
+	return partitionCols
 }
 
 func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableInfo *dmlTableInfo) (int32, []*dmlPlanCtx, error) {

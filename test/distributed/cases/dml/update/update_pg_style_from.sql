@@ -215,9 +215,8 @@ DROP TABLE ob_s;
 
 -- Duplicate-match on the fallback path: target row 1 is matched by both
 -- (10,1,...) and (11,1,...) source rows. Because dup_t has a FK the fallback
--- planner (buildTableUpdate) handles this, and needAggFilter must be set so
--- the AGG any_value() dedup runs. Without v3's needAggFilter wiring for
--- stmt.From, this would silently double-write target row 1.
+-- planner (buildTableUpdate) handles this. It must still dedup duplicate
+-- matches instead of silently double-writing target row 1.
 DROP TABLE IF EXISTS dup_t;
 DROP TABLE IF EXISTS dup_p;
 DROP TABLE IF EXISTS dup_s;
@@ -237,6 +236,35 @@ SELECT id, p_id, v FROM dup_t ORDER BY id;
 DROP TABLE dup_t;
 DROP TABLE dup_p;
 DROP TABLE dup_s;
+
+-- Fallback UPDATE ... FROM dedup must also pick a whole source row. FK on the
+-- target forces buildTableUpdate instead of the new bindUpdate path.
+DROP TABLE IF EXISTS fk_whole_row_t;
+DROP TABLE IF EXISTS fk_whole_row_p;
+DROP TABLE IF EXISTS fk_whole_row_s;
+CREATE TABLE fk_whole_row_p (id INT PRIMARY KEY);
+INSERT INTO fk_whole_row_p VALUES (1);
+CREATE TABLE fk_whole_row_t (
+    id INT PRIMARY KEY,
+    p_id INT,
+    a INT,
+    b VARCHAR(20),
+    FOREIGN KEY (p_id) REFERENCES fk_whole_row_p(id)
+);
+CREATE TABLE fk_whole_row_s (
+    t_id INT,
+    new_a INT,
+    new_b VARCHAR(20)
+);
+INSERT INTO fk_whole_row_t VALUES (1, 1, 0, 'orig');
+INSERT INTO fk_whole_row_s VALUES (1, NULL, 'from-null-a'), (1, 7, NULL);
+UPDATE fk_whole_row_t SET a = s.new_a, b = s.new_b FROM fk_whole_row_s s WHERE s.t_id = fk_whole_row_t.id;
+SELECT COUNT(*) AS valid_whole_row FROM fk_whole_row_t
+WHERE (a IS NULL AND b = 'from-null-a') OR (a = 7 AND b IS NULL);
+SELECT COUNT(*) AS synthesized_row FROM fk_whole_row_t WHERE a = 7 AND b = 'from-null-a';
+DROP TABLE fk_whole_row_t;
+DROP TABLE fk_whole_row_p;
+DROP TABLE fk_whole_row_s;
 
 -- Duplicate-match on the new UPDATE path without FK constraints must still
 -- update each target row once instead of producing duplicate primary keys.

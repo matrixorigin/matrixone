@@ -986,8 +986,37 @@ func (builder *QueryBuilder) appendUpdateFromDedupNode(
 	oldColName2Idx map[string]int32,
 	newColName2Idx map[string]int32,
 ) (int32, *plan.Node, int32, error) {
-	partitionByExprs := make([]*plan.Expr, 0)
+	partitionColPositions := make([]int32, 0)
 	partitionPos := make(map[int32]struct{})
+	for i, alias := range dmlCtx.aliases {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 {
+			continue
+		}
+
+		for _, col := range dmlCtx.tableDefs[i].Cols {
+			key := alias + "." + col.Name
+			oldPos, ok := oldColName2Idx[key]
+			if !ok {
+				continue
+			}
+			if _, exists := partitionPos[oldPos]; !exists {
+				partitionPos[oldPos] = struct{}{}
+				partitionColPositions = append(partitionColPositions, oldPos)
+			}
+		}
+	}
+
+	return builder.appendRowNumberDedupNode(bindCtx, lastNodeID, selectNode, selectNodeTag, partitionColPositions)
+}
+
+func (builder *QueryBuilder) appendRowNumberDedupNode(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	partitionColPositions []int32,
+) (int32, *plan.Node, int32, error) {
+	partitionByExprs := make([]*plan.Expr, 0, len(partitionColPositions))
 	childColExpr := func(pos int32) *plan.Expr {
 		e := selectNode.ProjectList[pos]
 		name := ""
@@ -1005,25 +1034,9 @@ func (builder *QueryBuilder) appendUpdateFromDedupNode(
 			},
 		}
 	}
-
-	for i, alias := range dmlCtx.aliases {
-		if len(dmlCtx.updateCol2Expr[i]) == 0 {
-			continue
-		}
-
-		for _, col := range dmlCtx.tableDefs[i].Cols {
-			key := alias + "." + col.Name
-			oldPos, ok := oldColName2Idx[key]
-			if !ok {
-				continue
-			}
-			if _, exists := partitionPos[oldPos]; !exists {
-				partitionPos[oldPos] = struct{}{}
-				partitionByExprs = append(partitionByExprs, childColExpr(oldPos))
-			}
-		}
+	for _, pos := range partitionColPositions {
+		partitionByExprs = append(partitionByExprs, childColExpr(pos))
 	}
-
 	if len(partitionByExprs) == 0 {
 		return lastNodeID, selectNode, selectNodeTag, nil
 	}
