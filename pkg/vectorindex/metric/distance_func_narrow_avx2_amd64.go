@@ -28,6 +28,7 @@ package metric
 
 import (
 	"math"
+	"os"
 
 	"simd/archsimd"
 
@@ -37,7 +38,9 @@ import (
 
 // hasAVX2 gates the middle tier. AVX512 implies AVX2, so init() checks hasAVX512
 // first; this only decides AVX2-vs-scalar on non-AVX512 CPUs.
-var hasAVX2 = archsimd.X86.AVX2()
+// TESTING-ONLY override: set MO_METRIC_NO_AVX2=1 (typically with
+// MO_METRIC_NO_AVX512=1) to force the pure-Go scalar fallback for coverage.
+var hasAVX2 = archsimd.X86.AVX2() && os.Getenv("MO_METRIC_NO_AVX2") == ""
 
 func sumF32x8(v archsimd.Float32x8) float32 {
 	var a [8]float32

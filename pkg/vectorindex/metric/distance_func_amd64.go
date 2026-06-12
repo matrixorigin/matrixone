@@ -18,14 +18,20 @@ package metric
 
 import (
 	"math"
+	"os"
 	"simd/archsimd"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+// hasAVX512 gates the top kernel tier. TESTING-ONLY override: set
+// MO_METRIC_NO_AVX512=1 to force AVX512-capable CPUs down to the AVX2 (and
+// then scalar) path, so the lower tiers get real coverage on this hardware.
+// Package-level var initializers run before every init() selector, so the
+// override is seen by all kernel-selection init() funcs in this package.
 var (
-	hasAVX512 = archsimd.X86.AVX512()
+	hasAVX512 = archsimd.X86.AVX512() && os.Getenv("MO_METRIC_NO_AVX512") == ""
 )
 
 // Reduction Helpers - Simple Store and Tree Sum for maximum throughput
