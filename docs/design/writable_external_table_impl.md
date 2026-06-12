@@ -13,10 +13,13 @@ Implemented and verified end-to-end (BVT `test/distributed/cases/stage/writable_
 passes 37/37; unit tests in `pkg/sql/colexec/externalwrite`). Key decisions that
 firmed up or differed from the original plan below:
 
-- **No proto change.** The write config is carried on the Go `insert.InsertCtx`
-  struct (`ExternalConfig externalwrite.WriterConfig`) + `Insert.ToExternal`,
-  populated at compile time from `TableDef.Createsql`. The plan `InsertCtx`
-  (proto) is untouched.
+- **Plan proto unchanged; pipeline proto extended.** The write config is carried
+  on the Go `insert.InsertCtx` struct (`ExternalConfig externalwrite.WriterConfig`)
+  + `Insert.ToExternal`, populated at compile time from `TableDef.Createsql`. The
+  plan `InsertCtx` (proto) is untouched, but `pipeline.Insert` (proto) gained
+  `to_external` + `external_stmt_unix_nano` so remote-run rebuilds the operator
+  on the receiving CN (everything else is re-derived from the serialized
+  TableDef).
 - **Operator: Option A** — extended the existing `insert` operator with a third
   mode (`ToExternal` → `insert_external`), alongside `ToWriteS3`/`insert_table`.
 - **Modern vs legacy binder.** INSERT/LOAD now go through the *modern* binder

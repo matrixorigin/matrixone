@@ -142,4 +142,53 @@ func TestValidateWriteFilePatternColumns(t *testing.T) {
 
 	// bit is fine for csv (enclosed + escaped like binary)
 	require.NoError(t, validateWriteFilePattern(ctx, csvParam(), td))
+
+	// binary/varbinary/blob cannot round-trip through jsonline either: the
+	// writer would base64 them but the reader does not decode
+	for _, typ := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+		jl := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+			Option: []string{"format", "jsonline", "jsondata", "object", "write_file_pattern", "stage://s/part-%U.jl"},
+		}}
+		btd := &TableDef{Cols: []*ColDef{{Name: "x", Typ: plan.Type{Id: int32(typ)}}}}
+		err = validateWriteFilePattern(ctx, jl, btd)
+		require.Error(t, err, typ.String())
+		// same columns are fine for csv (raw bytes enclosed + escaped)
+		require.NoError(t, validateWriteFilePattern(ctx, csvParam(), btd), typ.String())
+	}
+}
+
+func TestValidateWriteFilePatternTail(t *testing.T) {
+	ctx := context.Background()
+	withTail := func(tail *tree.TailParameter) *tree.ExternParam {
+		return &tree.ExternParam{ExParamConst: tree.ExParamConst{
+			Format: tree.CSV,
+			Option: []string{"write_file_pattern", "stage://s/part-%U.csv"},
+			Tail:   tail,
+		}}
+	}
+
+	// default escape ('\') explicit or absent is fine
+	require.NoError(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+		Fields: &tree.Fields{EscapedBy: &tree.EscapedBy{Value: '\\'}},
+	}), nil))
+	require.NoError(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{}), nil))
+
+	// a custom or disabled escape char: the writer always emits backslash
+	// escaping, which such a table could not read back
+	require.Error(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+		Fields: &tree.Fields{EscapedBy: &tree.EscapedBy{Value: '!'}},
+	}), nil))
+	require.Error(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+		Fields: &tree.Fields{EscapedBy: &tree.EscapedBy{Value: 0}},
+	}), nil))
+
+	// IGNORE N LINES would discard real data rows on readback
+	require.Error(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+		IgnoredLines: 1,
+	}), nil))
+
+	// LINES STARTING BY is supported: the writer emits the prefix
+	require.NoError(t, validateWriteFilePattern(ctx, withTail(&tree.TailParameter{
+		Lines: &tree.Lines{StartingBy: "row:"},
+	}), nil))
 }

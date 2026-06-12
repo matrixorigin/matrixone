@@ -129,6 +129,16 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 	return nil
 }
 
+// externalTableUnsupportedDMLCause is the cause string of the fallback sentinel
+// ResolveSingleTable raises for writable external tables; entry points without
+// a legacy fallback (REPLACE) match the full message to convert it into a
+// user-facing error.
+const externalTableUnsupportedDMLCause = "external table"
+
+// externalTableUnsupportedDMLMsg is the full message of that sentinel, as
+// moerr.NewUnsupportedDML formats it ("unsupported DML: %s").
+const externalTableUnsupportedDMLMsg = "unsupported DML: " + externalTableUnsupportedDMLCause
+
 func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
 	cteMap := make(map[string]bool)
 	if with != nil {
@@ -215,7 +225,7 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 	// fallback (REPLACE) don't leak the internal fallback sentinel.
 	if tableDef.TableType == catalog.SystemExternalRel {
 		if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); ok {
-			return moerr.NewUnsupportedDML(ctx.GetContext(), "external table")
+			return moerr.NewUnsupportedDML(ctx.GetContext(), externalTableUnsupportedDMLCause)
 		}
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
 	}

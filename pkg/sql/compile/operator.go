@@ -1003,8 +1003,15 @@ func buildExternalInsertArg(
 				cfg.EnclosedBy = f.EnclosedBy.Value
 			}
 		}
-		if l := param.Tail.Lines; l != nil && l.TerminatedBy != nil {
-			cfg.LineTerminator = []byte(l.TerminatedBy.Value)
+		if l := param.Tail.Lines; l != nil {
+			if l.TerminatedBy != nil {
+				cfg.LineTerminator = []byte(l.TerminatedBy.Value)
+			}
+			// The reader strips (and requires) this prefix per line; emit it so
+			// the table can read back its own files.
+			if l.StartingBy != "" {
+				cfg.LineStartingBy = []byte(l.StartingBy)
+			}
 		}
 	}
 

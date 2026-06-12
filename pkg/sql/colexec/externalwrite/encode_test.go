@@ -95,6 +95,46 @@ func TestEncodeJSONLineLineTerminator(t *testing.T) {
 	require.Equal(t, "{\"id\":1,\"name\":\"alice\"}\r\n{\"id\":null,\"name\":\"bob\"}\r\n", string(out))
 }
 
+// TestEncodeLineStartingBy: LINES STARTING BY prefixes every record in both
+// formats (the reader strips the prefix when parsing).
+func TestEncodeLineStartingBy(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := testBatch(t, mp)
+	defer bat.Clean(mp)
+
+	w := NewExternalWriter(nil, WriterConfig{
+		Format:         FormatCSV,
+		Attrs:          []string{"id", "name"},
+		LineStartingBy: []byte("row:"),
+		Stmt:           time.Now(),
+	}).(*externalWriter)
+	out, err := w.encodeCSV(bat)
+	require.NoError(t, err)
+	require.Equal(t, "row:1,\"alice\"\nrow:\\N,\"bob\"\n", string(out))
+
+	w2 := NewExternalWriter(nil, WriterConfig{
+		Format:         FormatJSONLine,
+		Attrs:          []string{"id", "name"},
+		LineStartingBy: []byte("row:"),
+		Stmt:           time.Now(),
+	}).(*externalWriter)
+	out, err = w2.encodeJSONLine(bat)
+	require.NoError(t, err)
+	require.Equal(t, "row:{\"id\":1,\"name\":\"alice\"}\nrow:{\"id\":null,\"name\":\"bob\"}\n", string(out))
+}
+
+// TestEncodeJSONLineNoAttrs: jsonline cannot emit objects without key names.
+func TestEncodeJSONLineNoAttrs(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := testBatch(t, mp)
+	defer bat.Clean(mp)
+
+	w := NewExternalWriter(nil, WriterConfig{Format: FormatJSONLine}).(*externalWriter)
+	_, err := w.encodeJSONLine(bat)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "column names")
+}
+
 // TestAppendJSONString covers the escaping rules of the direct JSON encoder.
 func TestAppendJSONString(t *testing.T) {
 	enc := func(s string) string {

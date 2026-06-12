@@ -50,6 +50,7 @@ type WriterConfig struct {
 	// CSV formatting. Defaults mirror LOAD/SELECT INTO OUTFILE defaults.
 	FieldTerminator []byte // default ","
 	LineTerminator  []byte // default "\n"
+	LineStartingBy  []byte // LINES STARTING BY prefix, written before each record
 	EnclosedBy      byte   // default '"' (the external reader's enclosure)
 	Header          bool   // write a CSV header line
 

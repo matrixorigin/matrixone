@@ -224,7 +224,13 @@ func (insert *Insert) Call(proc *process.Process) (vm.CallResult, error) {
 // aligned with InsertCtx.Attrs (and therefore with the leading batch vectors).
 func (insert *Insert) checkExternalNotNull(proc *process.Process, bat *batch.Batch) error {
 	for j, col := range insert.ctr.extCols {
-		if col == nil || col.Default == nil || col.Default.NullAbility || j >= len(bat.Vecs) {
+		if col == nil || j >= len(bat.Vecs) {
+			continue
+		}
+		// Either signal marks the column NOT NULL: the explicit flag, or the
+		// default-value descriptor PreInsert's check relies on.
+		notNull := col.NotNull || (col.Default != nil && !col.Default.NullAbility)
+		if !notNull {
 			continue
 		}
 		vec := bat.Vecs[j]

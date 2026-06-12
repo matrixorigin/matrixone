@@ -17,7 +17,6 @@ package externalwrite
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"math"
 	"slices"
@@ -51,6 +50,7 @@ func (w *externalWriter) encodeCSV(bat *batch.Batch) ([]byte, error) {
 	ncol := w.colCount(bat)
 
 	for i := 0; i < bat.RowCount(); i++ {
+		buf.Write(w.cfg.LineStartingBy)
 		for j := 0; j < ncol; j++ {
 			vec := bat.Vecs[j]
 			last := j == ncol-1
@@ -194,6 +194,12 @@ func (w *externalWriter) csvValue(vec *vector.Vector, i int) (val []byte, quote 
 // INSERT/LOAD path). The returned slice aliases w.buf and is only valid until
 // the next encode.
 func (w *externalWriter) encodeJSONLine(bat *batch.Batch) ([]byte, error) {
+	// JSON objects need key names; without Attrs there is nothing to emit (and
+	// colCount's all-vectors fallback would index past jsonKeys).
+	if len(w.cfg.Attrs) == 0 {
+		return nil, moerr.NewInternalError(context.Background(),
+			"external write (jsonline): writer configured without column names")
+	}
 	buf := &w.buf
 	buf.Reset()
 	ncol := w.colCount(bat)
@@ -208,6 +214,7 @@ func (w *externalWriter) encodeJSONLine(bat *batch.Batch) ([]byte, error) {
 		}
 	}
 	for i := 0; i < bat.RowCount(); i++ {
+		buf.Write(w.cfg.LineStartingBy)
 		buf.WriteByte('{')
 		for j := 0; j < ncol; j++ {
 			if j > 0 {
@@ -277,12 +284,12 @@ func (w *externalWriter) appendJSONValue(buf *bytes.Buffer, vec *vector.Vector, 
 		appendJSONString(buf, vec.GetBytesAt(i))
 		return nil
 	case types.T_binary, types.T_varbinary, types.T_blob:
-		// base64 output is ASCII-safe: no JSON escaping needed.
-		w.scratch = base64.StdEncoding.AppendEncode(w.scratch[:0], vec.GetBytesAt(i))
-		buf.WriteByte('"')
-		buf.Write(w.scratch)
-		buf.WriteByte('"')
-		return nil
+		// Binary payloads cannot round-trip: a base64 JSON string would be
+		// appended verbatim by the jsonline READER (it does not decode), and raw
+		// bytes are not valid JSON. DDL rejects these columns on writable
+		// jsonline tables; this guards the unreachable path.
+		return moerr.NewNotSupportedf(context.Background(),
+			"external write (jsonline): %s column cannot round-trip through JSON", vec.GetType().Oid.String())
 	case types.T_array_float32:
 		return appendJSONFloatArray(w, buf, types.BytesToArray[float32](vec.GetBytesAt(i)), 32)
 	case types.T_array_float64:

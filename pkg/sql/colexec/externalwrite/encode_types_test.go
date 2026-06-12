@@ -15,7 +15,6 @@
 package externalwrite
 
 import (
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -160,12 +159,21 @@ func TestEncodeJSONLineAllTypes(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bit")
 
-	// drop the bit column: every other branch must encode.
-	bitIdx := slices.Index(names, "c_bit")
-	require.GreaterOrEqual(t, bitIdx, 0)
-	jnames := append(slices.Clone(names[:bitIdx]), names[bitIdx+1:]...)
+	// drop the binary-payload columns (bit/binary/varbinary/blob, which DDL
+	// rejects for writable jsonline tables): every other branch must encode.
+	excluded := map[string]bool{"c_bit": true, "c_binary": true, "c_varbinary": true, "c_blob": true}
+	jnames := make([]string, 0, len(names))
+	jvecs := make([]*vector.Vector, 0, len(names))
+	for k, name := range names {
+		if excluded[name] {
+			continue
+		}
+		jnames = append(jnames, name)
+		jvecs = append(jvecs, bat.Vecs[k])
+	}
+	require.Len(t, jnames, len(names)-len(excluded))
 	jbat := batch.New(jnames)
-	jbat.Vecs = append(append([]*vector.Vector{}, bat.Vecs[:bitIdx]...), bat.Vecs[bitIdx+1:]...)
+	jbat.Vecs = jvecs
 	jbat.SetRowCount(bat.RowCount())
 
 	w2 := NewExternalWriter(nil, WriterConfig{

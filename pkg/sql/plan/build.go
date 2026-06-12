@@ -17,7 +17,6 @@ package plan
 import (
 	"context"
 	gotrace "runtime/trace"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -113,7 +112,7 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		// map the resolver's external-table fallback sentinel (raised for
 		// writable external tables) to the user-facing error every other DML
 		// kind produces, instead of leaking the internal signal to the client.
-		if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) && strings.HasSuffix(err.Error(), "external table") {
+		if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) && err.Error() == externalTableUnsupportedDMLMsg {
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
 		}
 		return nil, err

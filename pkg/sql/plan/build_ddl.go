@@ -5966,6 +5966,21 @@ func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam, tabl
 	if !externalwrite.PatternHasUniqueDirective(pattern) {
 		return moerr.NewBadConfigf(ctx, "WRITE_FILE_PATTERN must contain a %%U or %%<n>N directive so parallel writers produce distinct files, got '%s'", pattern)
 	}
+	// Reject FIELDS/LINES options the writer does not honor: a table whose own
+	// reads cannot parse its writes must not be created.
+	if param.Tail != nil {
+		// The writer always escapes with backslash (matching the reader's
+		// default); a different or disabled escape char would not unescape what
+		// the writer emits.
+		if f := param.Tail.Fields; f != nil && f.EscapedBy != nil && f.EscapedBy.Value != '\\' {
+			return moerr.NewBadConfig(ctx, "writable external table only supports the default FIELDS ESCAPED BY '\\'")
+		}
+		// The reader skips IGNORE N LINES per file, but the writer emits no
+		// header lines, so real data rows would be discarded on readback.
+		if param.Tail.IgnoredLines > 0 {
+			return moerr.NewBadConfig(ctx, "writable external table does not support IGNORE ... LINES")
+		}
+	}
 	if tableDef != nil {
 		for _, col := range tableDef.Cols {
 			// Hidden/synthetic columns (e.g. the fake-PK column added to tables
@@ -5978,10 +5993,15 @@ func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam, tabl
 			if col.Typ.AutoIncr {
 				return moerr.NewBadConfigf(ctx, "writable external table does not support AUTO_INCREMENT column '%s'", col.Name)
 			}
-			// bit values are raw bytes; arbitrary bytes cannot round-trip through a
-			// JSON string (invalid UTF-8 is replaced during marshaling).
-			if format == tree.JSONLINE && col.Typ.Id == int32(types.T_bit) {
-				return moerr.NewBadConfigf(ctx, "writable external table with format 'jsonline' does not support bit column '%s'", col.Name)
+			// Binary payloads cannot round-trip through JSON strings: bit bytes
+			// >= 0x80 are invalid UTF-8, and binary/varbinary/blob would need a
+			// base64 encoding the jsonline READER does not decode.
+			if format == tree.JSONLINE {
+				switch types.T(col.Typ.Id) {
+				case types.T_bit, types.T_binary, types.T_varbinary, types.T_blob:
+					return moerr.NewBadConfigf(ctx, "writable external table with format 'jsonline' does not support %s column '%s'",
+						strings.ToLower(types.T(col.Typ.Id).String()), col.Name)
+				}
 			}
 		}
 	}

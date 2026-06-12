@@ -147,6 +147,15 @@ fields terminated by ',';
 insert into ext_bit select * from bit_src;
 select a, cast(b as unsigned) from ext_bit order by a;
 
+-- ---------- LINES STARTING BY round-trips ----------
+-- The writer emits the prefix before every record; the reader strips it.
+drop table if exists ext_sb;
+create external table ext_sb(a int, b varchar(20))
+infile{'filepath'='stage://wstage/wext_sb_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_sb_%U.csv'}
+fields terminated by ',' lines starting by 'row:';
+insert into ext_sb values (1, 'alpha'), (2, 'beta');
+select * from ext_sb order by a;
+
 -- ---------- NOT NULL is enforced ----------
 drop table if exists ext_nn;
 create external table ext_nn(a int not null, b varchar(10))
@@ -202,6 +211,23 @@ infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'
 create external table ext_bad7(b bit(8))
 infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'write_file_pattern'='stage://wstage/x_%U.jl'};
 
+-- neither can binary payloads: the writer would base64 them but the jsonline
+-- reader does not decode
+create external table ext_bad8(b blob)
+infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'write_file_pattern'='stage://wstage/x_%U.jl'};
+
+-- a custom (or disabled) FIELDS ESCAPED BY would not unescape what the writer
+-- emits (the writer always escapes with the reader's default backslash)
+create external table ext_bad9(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' escaped by '!';
+
+-- IGNORE N LINES would discard real data rows on readback (the writer emits
+-- no header lines)
+create external table ext_bad10(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' ignore 1 lines;
+
 -- REPLACE has no external-table support and reports the user-facing error
 drop table if exists ext_rep;
 create external table ext_rep(a int)
@@ -219,6 +245,7 @@ drop table if exists ext_remote;
 drop table if exists remote_src;
 drop table if exists ext_bit;
 drop table if exists bit_src;
+drop table if exists ext_sb;
 drop table if exists ext_nn;
 drop table if exists ext_wide_csv;
 drop table if exists ext_wide_jl;

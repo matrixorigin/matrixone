@@ -137,6 +137,15 @@ a    cast(b as unsigned)
 3    34
 4    128
 5    5
+drop table if exists ext_sb;
+create external table ext_sb(a int, b varchar(20))
+infile{'filepath'='stage://wstage/wext_sb_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_sb_%U.csv'}
+fields terminated by ',' lines starting by 'row:';
+insert into ext_sb values (1, 'alpha'), (2, 'beta');
+select * from ext_sb order by a;
+a    b
+1    alpha
+2    beta
 drop table if exists ext_nn;
 create external table ext_nn(a int not null, b varchar(10))
 infile{'filepath'='stage://wstage/wext_nn_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_nn_%U.csv'}
@@ -184,6 +193,17 @@ invalid configuration: writable external table does not support AUTO_INCREMENT c
 create external table ext_bad7(b bit(8))
 infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'write_file_pattern'='stage://wstage/x_%U.jl'};
 invalid configuration: writable external table with format 'jsonline' does not support bit column 'b'
+create external table ext_bad8(b blob)
+infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'write_file_pattern'='stage://wstage/x_%U.jl'};
+invalid configuration: writable external table with format 'jsonline' does not support blob column 'b'
+create external table ext_bad9(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' escaped by '!';
+invalid configuration: writable external table only supports the default FIELDS ESCAPED BY '\'
+create external table ext_bad10(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' ignore 1 lines;
+invalid configuration: writable external table does not support IGNORE ... LINES
 drop table if exists ext_rep;
 create external table ext_rep(a int)
 infile{'filepath'='stage://wstage/wext_rep_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_rep_%U.csv'};
@@ -200,6 +220,7 @@ drop table if exists ext_remote;
 drop table if exists remote_src;
 drop table if exists ext_bit;
 drop table if exists bit_src;
+drop table if exists ext_sb;
 drop table if exists ext_nn;
 drop table if exists ext_wide_csv;
 drop table if exists ext_wide_jl;
