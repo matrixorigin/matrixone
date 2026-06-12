@@ -1,0 +1,41 @@
+SET probe_limit=10;
+create table q(a int primary key, v vecf32(4));
+insert into q values (1,'[1,1,1,1]'),(2,'[3,3,3,3]'),(3,'[5,5,5,5]'),(4,'[50,50,50,50]'),(5,'[52,52,52,52]'),(6,'[54,54,54,54]');
+create index qi8 using ivfflat on q(v) lists=2 op_type 'vector_l2_ops' quantization 'int8' ASYNC;
+select sleep(30);
+sleep(30)
+0
+select a from q order by l2_distance(v,'[1,1,1,1]'), a limit 3;
+a
+1
+2
+3
+select a from q order by l2_distance(v,'[54,54,54,54]'), a limit 3;
+a
+6
+5
+4
+insert into q values (7,'[2,2,2,2]'),(8,'[53,53,53,53]');
+select sleep(30);
+sleep(30)
+0
+select a from q order by l2_distance(v,'[2,2,2,2]'), a limit 3;
+a
+7
+1
+2
+select a from q order by l2_distance(v,'[53,53,53,53]'), a limit 3;
+a
+8
+5
+6
+update q set v = '[55,55,55,55]' where a = 1;
+select sleep(30);
+sleep(30)
+0
+select a from q order by l2_distance(v,'[54,54,54,54]'), a limit 3;
+a
+6
+1
+8
+drop table q;
