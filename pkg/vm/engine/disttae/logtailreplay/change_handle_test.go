@@ -201,6 +201,30 @@ func TestUpdateCNDataBatch_NoTSVector(t *testing.T) {
 	bat.Clean(mp)
 }
 
+func TestAppendFromEntryDecimal256(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	typ := types.New(types.T_decimal256, 39, 4)
+	src := vector.NewVec(typ)
+	dst := vector.NewVec(typ)
+	defer src.Free(mp)
+	defer dst.Free(mp)
+
+	val, err := types.ParseDecimal256("12345678901234567890123456789012345.6789", typ.Width, typ.Scale)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixed(src, val, false, mp))
+	require.NoError(t, vector.AppendFixed(src, types.Decimal256{}, true, mp))
+
+	appendFromEntry(src, dst, 0, mp)
+	appendFromEntry(src, dst, 1, mp)
+
+	require.Equal(t, 2, dst.Length())
+	require.Equal(t, val, vector.GetFixedAtNoTypeCheck[types.Decimal256](dst, 0))
+	require.False(t, dst.GetNulls().Contains(0))
+	require.True(t, dst.GetNulls().Contains(1))
+}
+
 func TestUpdateDataBatch_PreservesTrailingColumnsWithoutRowid(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
