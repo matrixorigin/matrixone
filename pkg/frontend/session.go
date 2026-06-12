@@ -145,6 +145,8 @@ type Session struct {
 
 	priv *privilege
 
+	ddlOwnerRoleID uint32
+
 	errInfo *errInfo
 
 	cache       *privilegeCache
@@ -1740,6 +1742,22 @@ func (ses *Session) SetPrivilege(priv *privilege) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.priv = priv
+}
+
+func (ses *Session) SetDDLOwnerRoleID(roleID uint32) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.ddlOwnerRoleID = roleID
+}
+
+func (ses *Session) GetDDLOwnerRoleID() uint32 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.ddlOwnerRoleID
+}
+
+func (ses *Session) ClearDDLOwnerRoleID() {
+	ses.SetDDLOwnerRoleID(0)
 }
 
 func (ses *Session) SetFromRealUser(b bool) {
