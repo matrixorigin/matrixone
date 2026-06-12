@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -202,7 +203,13 @@ func trainInt8MinMax[T types.RealNumbers](data [][]T) (float64, float64) {
 	for _, v := range data {
 		for _, x := range v {
 			if k%stride == 0 {
-				vals = append(vals, float64(x))
+				f := float64(x)
+				// Skip NaN/Inf: they make slices.Sort's order undefined (so a
+				// percentile pick could land on NaN) and would poison the trained
+				// bounds and the SQL literal.
+				if !math.IsNaN(f) && !math.IsInf(f, 0) {
+					vals = append(vals, f)
+				}
 			}
 			k++
 		}

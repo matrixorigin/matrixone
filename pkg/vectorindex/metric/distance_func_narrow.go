@@ -175,6 +175,20 @@ func l1DistanceBF16(a, b []types.BF16) (float64, error) {
 	return float64(sum), nil
 }
 
+// cosineDistClamped mirrors metric.CosineDistance: clamp the cosine similarity to
+// [-1,1] (float32 accumulation / fp16 decode can push it a hair outside) before
+// distance = 1 - sim, so a near-parallel pair never yields a tiny negative
+// distance that would mis-sort in a top-k scan.
+func cosineDistClamped(dot, denom float64) float64 {
+	sim := dot / denom
+	if sim > 1 {
+		sim = 1
+	} else if sim < -1 {
+		sim = -1
+	}
+	return 1.0 - sim
+}
+
 func cosineDistanceBF16(a, b []types.BF16) (float64, error) {
 	if len(a) == 0 {
 		return 0, nil
@@ -194,7 +208,7 @@ func cosineDistanceBF16(a, b []types.BF16) (float64, error) {
 	if denom == 0 {
 		return 1.0, nil
 	}
-	return 1.0 - float64(dot)/denom, nil
+	return cosineDistClamped(float64(dot), denom), nil
 }
 
 // magic-multiply branchless half->float (Fabian Giesen / rygorous,
@@ -325,7 +339,7 @@ func cosineDistanceF16(a, b []types.Float16) (float64, error) {
 	if denom == 0 {
 		return 1.0, nil
 	}
-	return 1.0 - float64(dot)/denom, nil
+	return cosineDistClamped(float64(dot), denom), nil
 }
 
 // int8 kernel selection — swapped to archsimd impls by distance_func_narrow_int8_amd64.go.
@@ -466,5 +480,5 @@ func cosineDistanceInt8(a, b []int8) (float64, error) {
 	if denom == 0 {
 		return 1.0, nil
 	}
-	return 1.0 - float64(dot)/denom, nil
+	return cosineDistClamped(float64(dot), denom), nil
 }

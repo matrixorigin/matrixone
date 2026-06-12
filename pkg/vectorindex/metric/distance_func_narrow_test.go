@@ -55,7 +55,13 @@ func refDist(metric MetricType, a, b []float64) float64 {
 		if den == 0 {
 			return 1.0
 		}
-		return 1.0 - dot/den
+		sim := dot / den
+		if sim > 1 {
+			sim = 1
+		} else if sim < -1 {
+			sim = -1
+		}
+		return 1.0 - sim
 	}
 	return 0
 }

@@ -348,9 +348,12 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			sq := qf32
 			if idx.QuantMul != 1.0 || idx.QuantAdd != 0.0 {
 				sq = make([]float32, len(qf32))
-				mul, add := float32(idx.QuantMul), float32(idx.QuantAdd)
+				// Compute the multiply-add in float64 (then narrow) to match the
+				// build side: the entry SQL `cast(base*mul+add as vecint8)` evaluates
+				// mul/add (f64 literals) in the base column's arithmetic, so doing it
+				// in float32 here could bucket a boundary component differently.
 				for i, x := range qf32 {
-					sq[i] = x*mul + add
+					sq[i] = float32(float64(x)*idx.QuantMul + idx.QuantAdd)
 				}
 			}
 			queryExpr = fmt.Sprintf("vecint8_from_base64('%s')", types.ArrayToBase64(types.Float32ToInt8Slice(sq)))

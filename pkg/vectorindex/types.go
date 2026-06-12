@@ -15,6 +15,7 @@
 package vectorindex
 
 import (
+	"math"
 	"runtime"
 	"strings"
 
@@ -26,12 +27,13 @@ import (
 )
 
 // QuantizationToVectorType maps a CREATE INDEX QUANTIZATION='...' value to the
-// narrow vector element type the ivfflat ENTRIES are down-cast to (the base column
-// and centroids are unaffected). The accepted names are the canonical
-// metric.Quantization_*_Str constants (case-insensitive): float16 -> vecf16,
-// bf16 -> vecbf16, int8 -> vecint8. float16/bf16 are float formats (plain cast);
-// int8 uses the trained scalar quantizer. float32/float64/uint8/"" -> ok=false
-// (no quantization; entries keep the base type).
+// vector element type the ivfflat ENTRIES are down-cast to (the base column and
+// centroids are unaffected). The accepted names are the canonical
+// metric.Quantization_*_Str constants (case-insensitive): float32 -> vecf32,
+// float16 -> vecf16, bf16 -> vecbf16, int8 -> vecint8. float32/float16/bf16 are
+// float formats (plain cast); int8 uses the trained scalar quantizer. float32 is
+// accepted because it is a real down-cast for an f64 base; float64 (an up-cast)
+// and uint8 / "" return ok=false (no quantization; entries keep the base type).
 func QuantizationToVectorType(q string) (types.T, bool) {
 	switch strings.ToLower(strings.TrimSpace(q)) {
 	case metric.Quantization_F32_Str:
@@ -56,7 +58,10 @@ func QuantizationToVectorType(q string) (types.T, bool) {
 // multiply-add. A degenerate range (max<=min) falls back to identity.
 func Int8QuantizeParams(min, max float64) (mul, add float64) {
 	rng := max - min
-	if rng <= 0 {
+	// !(rng > 0) also rejects NaN (every NaN comparison is false), and the IsInf
+	// guard rejects a non-finite range — either would otherwise yield NaN/Inf mul
+	// that poisons the build SQL and the query transform.
+	if !(rng > 0) || math.IsInf(rng, 0) {
 		return 1.0, 0.0
 	}
 	mul = 255.0 / rng
