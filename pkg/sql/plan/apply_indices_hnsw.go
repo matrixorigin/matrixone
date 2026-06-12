@@ -305,7 +305,10 @@ func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPo
 	}
 
 	distFnArgs := distFnExpr.Args
-	if distFnArgs[0].Typ.GetId() != int32(types.T_array_float32) && distFnArgs[0].Typ.GetId() != int32(types.T_array_float64) {
+	// Accept any vector element type (f32/f64 and the narrow bf16/f16/int8/uint8),
+	// so a direct ivf index on a narrow-base column also pushes down rather than
+	// brute-forcing.
+	if !types.T(distFnArgs[0].Typ.GetId()).IsArrayRelate() {
 		return
 	}
 
