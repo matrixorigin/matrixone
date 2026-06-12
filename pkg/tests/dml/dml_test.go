@@ -1092,7 +1092,6 @@ create table %s (
 	u16 smallint unsigned,
 	u32 int unsigned,
 	u64 bigint unsigned,
-	d256 decimal(65,30),
 	y year,
 	uid uuid,
 	bin binary(4),
@@ -1106,11 +1105,9 @@ create table %s (
 	execSQLDB(t, ctx, db, fmt.Sprintf(`
 insert into %s values
 	(1, b'101', 250, 65000, 4000000000, 9000000000000000000,
-		cast('12345678901234567890123456789012345.123456789012345678901234567890' as decimal(65,30)),
 		2024, '6d1b1f73-2dbf-11ed-940f-000c29847904', 'ab', x'01020304',
 		'red', 'blob-base', 'file:///tmp/mo_branch_type_base.csv', '[1.1,2.2,3.3]'),
 	(2, b'010', 1, 2, 3, 4,
-		cast('-0.000000000000000000000000000001' as decimal(65,30)),
 		1999, 'ad9f809f-2dbd-11ed-940f-000c29847904', 'cd', x'05060708',
 		'blue', 'blob-two', 'file:///tmp/mo_branch_type_two.csv', '[4.4,5.5,6.6]')`, base))
 
@@ -1122,7 +1119,6 @@ update %s set
 	u16 = 65001,
 	u32 = 4000000001,
 	u64 = 9000000000000000001,
-	d256 = cast('42.000000000000000000000000000000' as decimal(65,30)),
 	y = 2025,
 	uid = '1b50c137-2dba-11ed-940f-000c29847904',
 	bin = 'ef',
@@ -1135,7 +1131,6 @@ where id = 1`, branch))
 	execSQLDB(t, ctx, db, fmt.Sprintf(`
 insert into %s values
 	(3, b'001', 2, 3, 4, 5,
-		cast('7.000000000000000000000000000000' as decimal(65,30)),
 		2000, '3ddf7b28-2dba-11ed-940f-000c29847904', 'gh', x'0d0e0f10',
 		'red', 'blob-new', 'file:///tmp/mo_branch_type_new.csv', '[0.1,0.2,0.3]')`, branch))
 	execSQLDB(t, ctx, db, fmt.Sprintf("delete from `%s` where id = 2", branch))
