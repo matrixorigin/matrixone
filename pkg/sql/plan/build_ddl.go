@@ -1262,14 +1262,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				}
 
 				if col, ok := colMap[name]; ok {
-					if isEnumPlanType(&col.Typ) {
-						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in primary key", name))
-					}
-					if isSetPlanType(&col.Typ) {
-						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in primary key", name))
-					}
-					if isGeometryPlanType(&col.Typ) {
-						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in primary key", name))
+					if err := checkIndexColumnSupportability(ctx.GetContext(), col, key, "primary"); err != nil {
+						return err
 					}
 				}
 
