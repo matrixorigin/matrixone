@@ -7306,6 +7306,9 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	roleSetOfVisited := &btree.Set[int64]{}
 	// simple mo_role_grant cache
 	cacheOfMoRoleGrant := &btree.Map[int64, *btree.Set[int64]]{}
+	// roleRoot maps each visited inherited role back to the active role that brought it
+	// into the privilege search. DDL ownership should follow that active role.
+	roleRoot := make(map[int64]int64)
 
 	// step 1: The Set R1 {default role id}
 	// The primary role (in use)
@@ -7329,6 +7332,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	// init RVisited = Rk
 	roleSetOfKthIteration.Scan(func(roleId int64) bool {
 		roleSetOfVisited.Insert(roleId)
+		roleRoot[roleId] = roleId
 		return true
 	})
 
@@ -7339,6 +7343,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		return false, stats, err
 	}
 	if yes {
+		matchedRoleID = matchedActiveRoleID(priv, matchedRoleID, roleRoot)
 		priv.matchedRoleID = matchedRoleID
 		ret = true
 		return ret, stats, err
@@ -7375,10 +7380,17 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		roleSetOfKPlusOneThIteration.Clear()
 
 		// get roleB of roleA
-		for _, roleA := range roleSetOfKthIteration.Keys() {
+		for _, roleA := range orderedRoleIDsForPrivilegeCheck(ses, roleSetOfKthIteration, priv.needMatchedRole) {
+			rootRoleID := roleRoot[roleA]
+			if rootRoleID == 0 {
+				rootRoleID = roleA
+			}
 			if grantedIds, ok = cacheOfMoRoleGrant.Get(roleA); ok {
 				for _, grantedId := range grantedIds.Keys() {
 					roleSetOfKPlusOneThIteration.Insert(grantedId)
+					if _, exists := roleRoot[grantedId]; !exists {
+						roleRoot[grantedId] = rootRoleID
+					}
 				}
 				continue
 			}
@@ -7407,6 +7419,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 						roleSetOfVisited.Insert(roleB)
 						roleSetOfKPlusOneThIteration.Insert(roleB)
 						grantedIds.Insert(roleB)
+						roleRoot[roleB] = rootRoleID
 					}
 				}
 			}
@@ -7426,6 +7439,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		}
 
 		if yes {
+			matchedRoleID = matchedActiveRoleID(priv, matchedRoleID, roleRoot)
 			priv.matchedRoleID = matchedRoleID
 			ret = true
 			return ret, stats, err
@@ -7433,6 +7447,16 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		roleSetOfKthIteration, roleSetOfKPlusOneThIteration = roleSetOfKPlusOneThIteration, roleSetOfKthIteration
 	}
 	return ret, stats, err
+}
+
+func matchedActiveRoleID(priv *privilege, matchedRoleID int64, roleRoot map[int64]int64) int64 {
+	if priv == nil || !priv.needMatchedRole || matchedRoleID <= 0 {
+		return matchedRoleID
+	}
+	if rootRoleID, ok := roleRoot[matchedRoleID]; ok && rootRoleID > 0 {
+		return rootRoleID
+	}
+	return matchedRoleID
 }
 
 const (
