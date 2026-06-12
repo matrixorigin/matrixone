@@ -2570,15 +2570,35 @@ func (r *CheckpointReader) ShowCreateIndexStatements(
 		return nil, nil
 	}
 
-	view, err := r.getTableLogicalView(ctx, moIndexesTableID, snapshotTS)
-	if err != nil || view == nil {
+	view, err := r.dumpCatalogTableView(ctx, moIndexesTableID, snapshotTS)
+	if err != nil {
 		return nil, err
 	}
-	schema := r.ReadTableSchema(ctx, moIndexesTableID, snapshotTS, view)
-	if len(schema.Columns) > 0 {
-		view = MergeLogicalViewWithSchema(view, schema)
-	}
 	return buildCreateIndexStatementsFromMoIndexes(view, tableID, tableName)
+}
+
+func (r *CheckpointReader) dumpCatalogTableView(
+	ctx context.Context,
+	tableID uint64,
+	snapshotTS types.TS,
+) (*LogicalTableView, error) {
+	var buf bytes.Buffer
+	if err := r.DumpTableCSVComposed(ctx, &buf, tableID, snapshotTS, WithCSVHeader(true), WithCSVMetaComments(false)); err != nil {
+		return nil, err
+	}
+	reader := csv.NewReader(bytes.NewReader(buf.Bytes()))
+	reader.FieldsPerRecord = -1
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(records) == 0 {
+		return &LogicalTableView{}, nil
+	}
+	return &LogicalTableView{
+		Headers: records[0],
+		Rows:    records[1:],
+	}, nil
 }
 
 func (r *CheckpointReader) findCatalogTableID(

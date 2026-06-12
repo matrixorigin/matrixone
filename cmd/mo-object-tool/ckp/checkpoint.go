@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime/pprof"
 	"sort"
@@ -29,6 +30,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool/interactive"
@@ -67,6 +69,13 @@ func addStorageFlags(cmd *cobra.Command, storage *toolfs.StorageOptions) {
 	cmd.PersistentFlags().StringVar(&storage.FSName, "fs-name", "SHARED", "fileservice name to use from --fs-config")
 	cmd.PersistentFlags().StringVar(&storage.S3, "s3", "", "S3 arguments, for example bucket=...,endpoint=...,region=...,key-prefix=...,key-id=...,key-secret=...")
 	cmd.PersistentFlags().StringVar(&storage.Backend, "backend", "", "remote backend for --s3: S3 or MINIO")
+}
+
+func addOutputStorageFlags(cmd *cobra.Command, storage *toolfs.StorageOptions) {
+	cmd.Flags().StringVar(&storage.FSConfig, "out-fs-config", "", "MO config TOML containing fileservice settings for dump output")
+	cmd.Flags().StringVar(&storage.FSName, "out-fs-name", "SHARED", "fileservice name to use from --out-fs-config")
+	cmd.Flags().StringVar(&storage.S3, "out-s3", "", "S3 arguments for dump output, for example bucket=...,endpoint=...,region=...,key-prefix=...,key-id=...,key-secret=...")
+	cmd.Flags().StringVar(&storage.Backend, "out-backend", "", "remote backend for --out-s3: S3 or MINIO")
 }
 
 func setupLogFile() (*os.File, error) {
@@ -312,6 +321,101 @@ func openReader(ctx context.Context, dir string, storage toolfs.StorageOptions) 
 	return checkpointtool.OpenWithFS(ctx, fs, display, checkpointtool.WithCloseFS())
 }
 
+type dumpOutput struct {
+	fs     fileservice.FileService
+	remote bool
+}
+
+func openDumpOutput(ctx context.Context, storage toolfs.StorageOptions) (*dumpOutput, error) {
+	if !storage.IsRemote() {
+		return &dumpOutput{}, nil
+	}
+	fs, display, err := toolfs.Open(ctx, storage)
+	if err != nil {
+		return nil, err
+	}
+	logutil.Infof("using fileservice %s for dump output", display)
+	return &dumpOutput{fs: fs, remote: true}, nil
+}
+
+func (o *dumpOutput) Close(ctx context.Context) {
+	if o != nil && o.fs != nil {
+		o.fs.Close(ctx)
+	}
+}
+
+func (o *dumpOutput) MkdirAll(dir string) error {
+	if o == nil || !o.remote {
+		return os.MkdirAll(dir, 0o755)
+	}
+	return nil
+}
+
+func (o *dumpOutput) Create(ctx context.Context, filePath string) (io.WriteCloser, error) {
+	if o == nil || !o.remote {
+		return os.Create(filePath)
+	}
+	return newFileServiceWriteCloser(ctx, o.fs, filePath)
+}
+
+type fileServiceWriteCloser struct {
+	pw        *io.PipeWriter
+	done      chan error
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func newFileServiceWriteCloser(ctx context.Context, fs fileservice.FileService, filePath string) (io.WriteCloser, error) {
+	pr, pw := io.Pipe()
+	w := &fileServiceWriteCloser{
+		pw:   pw,
+		done: make(chan error, 1),
+	}
+	go func() {
+		var err error
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("write object %s panic: %v", filePath, recovered)
+				_ = pr.CloseWithError(err)
+			}
+			w.done <- err
+		}()
+		err = fs.Write(ctx, fileservice.IOVector{
+			FilePath: cleanObjectPath(filePath),
+			Entries: []fileservice.IOEntry{{
+				ReaderForWrite: pr,
+				Size:           -1,
+			}},
+		})
+		if err != nil {
+			_ = pr.CloseWithError(err)
+		}
+	}()
+	return w, nil
+}
+
+func (w *fileServiceWriteCloser) Write(p []byte) (int, error) {
+	return w.pw.Write(p)
+}
+
+func (w *fileServiceWriteCloser) Close() error {
+	w.closeOnce.Do(func() {
+		err := w.pw.Close()
+		writeErr := <-w.done
+		if err != nil {
+			w.closeErr = err
+			return
+		}
+		w.closeErr = writeErr
+	})
+	return w.closeErr
+}
+
+func cleanObjectPath(filePath string) string {
+	filePath = filepath.ToSlash(filePath)
+	return strings.TrimPrefix(path.Clean(filePath), "/")
+}
+
 // dumpCommand implements the "ckp dump" subcommand for offline CSV export.
 //
 // Usage:
@@ -319,20 +423,21 @@ func openReader(ctx context.Context, dir string, storage toolfs.StorageOptions) 
 //	mo-tool ckp dump --table-id=12345 [--ts=...] [--output=table.csv] [directory]
 func dumpCommand(storage *toolfs.StorageOptions) *cobra.Command {
 	var (
-		tableID      uint64
-		tableName    string
-		accountID    uint32
-		databaseID   uint64
-		tsStr        string
-		output       string
-		outputDir    string
-		jobs         int
-		metaComments bool
-		header       bool
-		loadScript   bool
-		noLoad       bool
-		rowOrder     string
-		cpuProfile   string
+		tableID       uint64
+		tableName     string
+		accountID     uint32
+		databaseID    uint64
+		tsStr         string
+		output        string
+		outputDir     string
+		jobs          int
+		metaComments  bool
+		header        bool
+		loadScript    bool
+		noLoad        bool
+		rowOrder      string
+		cpuProfile    string
+		outputStorage toolfs.StorageOptions
 	)
 
 	cmd := &cobra.Command{
@@ -352,7 +457,8 @@ Examples:
   mo-tool ckp dump --table-id=12345 --load-script -o /tmp/ .
   mo-tool ckp dump --database-id=9001 --table=users -o users.csv .
   mo-tool ckp dump --database-id=9001 --output-dir=/tmp/test-dump --jobs=4 .
-  mo-tool ckp dump --database-id=9001 --load-script -o /tmp/test-dump .`,
+  mo-tool ckp dump --database-id=9001 --load-script -o /tmp/test-dump .
+  mo-tool ckp dump --table-id=12345 -o dump/users.csv --out-s3='endpoint=...,bucket=...,key-prefix=...,key-id=...,key-secret=...' .`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."
@@ -416,6 +522,11 @@ Examples:
 				return fmt.Errorf("open checkpoint dir: %w", err)
 			}
 			defer reader.Close()
+			dumpOut, err := openDumpOutput(ctx, outputStorage)
+			if err != nil {
+				return fmt.Errorf("open dump output fileservice: %w", err)
+			}
+			defer dumpOut.Close(ctx)
 
 			snapshotTS, err := resolveSnapshotTS(ctx, reader, tsStr)
 			if err != nil {
@@ -423,9 +534,9 @@ Examples:
 			}
 
 			var w = cmd.OutOrStdout()
-			var outFile *os.File
+			var outFile io.WriteCloser
 			if output != "" && !loadScript {
-				outFile, err = os.Create(output)
+				outFile, err = dumpOut.Create(ctx, output)
 				if err != nil {
 					return fmt.Errorf("create output file: %w", err)
 				}
@@ -474,7 +585,7 @@ Examples:
 				if len(tables) == 0 {
 					return fmt.Errorf("no checkpoint tables match database-id-set=%v database-id=%d account-id-set=%v account-id=%d", databaseIDSet, databaseID, accountIDSet, accountID)
 				}
-				if err := os.MkdirAll(outputDir, 0o755); err != nil {
+				if err := dumpOut.MkdirAll(outputDir); err != nil {
 					return fmt.Errorf("create output dir: %w", err)
 				}
 				if !noLoad {
@@ -488,13 +599,13 @@ Examples:
 					if err != nil {
 						return err
 					}
-					if err := dumpTablesConcurrently(ctx, reader, dumpPlans, snapshotTS, outputDir, jobs, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout()); err != nil {
+					if err := dumpTablesConcurrently(ctx, reader, dumpOut, dumpPlans, snapshotTS, outputDir, jobs, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout()); err != nil {
 						return err
 					}
 					fmt.Fprintf(cmd.OutOrStdout(), "Dumped %d tables to %s\n", len(tables), outputDir)
 				}
 				if loadScript {
-					scriptPath, err := writeRestoreScript(ctx, reader, tables, snapshotTS, output, outputDir, !noLoad, effectiveHeader)
+					scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, tables, snapshotTS, output, outputDir, !noLoad, effectiveHeader)
 					if err != nil {
 						return err
 					}
@@ -509,7 +620,7 @@ Examples:
 				if err != nil {
 					return err
 				}
-				if err := os.MkdirAll(outputDir, 0o755); err != nil {
+				if err := dumpOut.MkdirAll(outputDir); err != nil {
 					return fmt.Errorf("create output dir: %w", err)
 				}
 				if !noLoad {
@@ -517,11 +628,11 @@ Examples:
 					if err != nil {
 						return fmt.Errorf("prepare table %d (%s.%s): %w", tableEntry.TableID, tableEntry.DatabaseName, tableEntry.TableName, err)
 					}
-					if err := dumpOneTable(ctx, reader, tableDumpPlan{table: tableEntry, data: dumpData}, snapshotTS, outputDir, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout(), &sync.Mutex{}); err != nil {
+					if err := dumpOneTable(ctx, reader, dumpOut, tableDumpPlan{table: tableEntry, data: dumpData}, snapshotTS, outputDir, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout(), &sync.Mutex{}); err != nil {
 						return err
 					}
 				}
-				scriptPath, err := writeRestoreScript(ctx, reader, []checkpointtool.TableCatalogEntry{tableEntry}, snapshotTS, output, outputDir, !noLoad, effectiveHeader)
+				scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, []checkpointtool.TableCatalogEntry{tableEntry}, snapshotTS, output, outputDir, !noLoad, effectiveHeader)
 				if err != nil {
 					return err
 				}
@@ -562,6 +673,7 @@ Examples:
 	cmd.Flags().BoolVar(&noLoad, "no-load", false, "With --load-script, generate only DDL and skip CSV dump and LOAD DATA statements")
 	cmd.Flags().StringVar(&rowOrder, "row-order", string(checkpointtool.CSVRowOrderStorage), "CSV row order: storage (streaming, large-table friendly) or lexical (sort by visible CSV values in memory)")
 	cmd.Flags().StringVar(&cpuProfile, "cpuprofile", "", "Write CPU profile to file")
+	addOutputStorageFlags(cmd, &outputStorage)
 
 	return cmd
 }
@@ -703,6 +815,7 @@ func resolveTableByID(
 func writeRestoreScript(
 	ctx context.Context,
 	reader *checkpointtool.CheckpointReader,
+	dumpOut *dumpOutput,
 	tables []checkpointtool.TableCatalogEntry,
 	snapshotTS types.TS,
 	scriptDir string,
@@ -710,11 +823,11 @@ func writeRestoreScript(
 	includeLoad bool,
 	csvHasHeader bool,
 ) (string, error) {
-	if err := os.MkdirAll(scriptDir, 0o755); err != nil {
+	if err := dumpOut.MkdirAll(scriptDir); err != nil {
 		return "", fmt.Errorf("create script dir: %w", err)
 	}
-	scriptPath := filepath.Join(scriptDir, "restore.sql")
-	f, err := os.Create(scriptPath)
+	scriptPath := outputPathJoin(scriptDir, "restore.sql")
+	f, err := dumpOut.Create(ctx, scriptPath)
 	if err != nil {
 		return "", fmt.Errorf("create restore script: %w", err)
 	}
@@ -1043,6 +1156,7 @@ func prepareTableDumpPlans(
 func dumpTablesConcurrently(
 	ctx context.Context,
 	reader *checkpointtool.CheckpointReader,
+	dumpOut *dumpOutput,
 	plans []tableDumpPlan,
 	snapshotTS types.TS,
 	outputDir string,
@@ -1061,7 +1175,7 @@ func dumpTablesConcurrently(
 		defer wg.Done()
 		workerReader := reader.Fork(ctx)
 		for plan := range tableCh {
-			if err := dumpOneTable(ctx, workerReader, plan, snapshotTS, outputDir, rowOrder, metaComments, header, out, &outMu); err != nil {
+			if err := dumpOneTable(ctx, workerReader, dumpOut, plan, snapshotTS, outputDir, rowOrder, metaComments, header, out, &outMu); err != nil {
 				select {
 				case errCh <- err:
 				default:
@@ -1094,7 +1208,7 @@ func dumpTablesConcurrently(
 }
 
 func tableCSVPath(outputDir string, table checkpointtool.TableCatalogEntry) string {
-	return filepath.Join(
+	return outputPathJoin(
 		outputDir,
 		fmt.Sprintf("account_%d", table.AccountID),
 		fmt.Sprintf("db_%d", table.DatabaseID),
@@ -1102,9 +1216,14 @@ func tableCSVPath(outputDir string, table checkpointtool.TableCatalogEntry) stri
 	)
 }
 
+func outputPathJoin(elem ...string) string {
+	return path.Join(elem...)
+}
+
 func dumpOneTable(
 	ctx context.Context,
 	reader *checkpointtool.CheckpointReader,
+	dumpOut *dumpOutput,
 	plan tableDumpPlan,
 	snapshotTS types.TS,
 	outputDir string,
@@ -1116,11 +1235,11 @@ func dumpOneTable(
 ) error {
 	table := plan.table
 	filePath := tableCSVPath(outputDir, table)
-	tableDir := filepath.Dir(filePath)
-	if err := os.MkdirAll(tableDir, 0o755); err != nil {
+	tableDir := path.Dir(filePath)
+	if err := dumpOut.MkdirAll(tableDir); err != nil {
 		return fmt.Errorf("create table output dir: %w", err)
 	}
-	outFile, err := os.Create(filePath)
+	outFile, err := dumpOut.Create(ctx, filePath)
 	if err != nil {
 		return fmt.Errorf("create output file for table %d: %w", table.TableID, err)
 	}

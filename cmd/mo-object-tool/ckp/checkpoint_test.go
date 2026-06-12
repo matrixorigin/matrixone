@@ -84,3 +84,9 @@ func TestFilterExistingIndexDDLs(t *testing.T) {
 
 	assert.Equal(t, []string{"ALTER TABLE `items_gist` ADD KEY `new_idx`(`id`);"}, filterExistingIndexDDLs(createDDL, indexDDLs))
 }
+
+func TestCleanObjectPath(t *testing.T) {
+	assert.Equal(t, "dump/account_1/t.csv", cleanObjectPath("dump/account_1/t.csv"))
+	assert.Equal(t, "tmp/dump/t.csv", cleanObjectPath("/tmp/dump/t.csv"))
+	assert.Equal(t, "dump/t.csv", cleanObjectPath("dump//nested/../t.csv"))
+}
