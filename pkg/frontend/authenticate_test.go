@@ -8185,6 +8185,8 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 
 		err := doSetSecondaryRoleAll(ses.GetTxnHandler().GetTxnCtx(), ses)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
+		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
 	})
 
 	convey.Convey("do set secondary role succ", t, func() {
@@ -8224,6 +8226,8 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 
 		err := doSetSecondaryRoleAll(ses.GetTxnHandler().GetTxnCtx(), ses)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
+		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
 	})
 }
 
@@ -8263,6 +8267,8 @@ func TestDoSwitchRoleSecondaryRoleAllInvalidatesRuleCache(t *testing.T) {
 		})
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeTrue)
+		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
+		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
 
 		ses.ruleCacheMu.RLock()
 		cacheIsNil := ses.ruleCache == nil
@@ -8328,6 +8334,56 @@ func TestDoSwitchRoleSecondaryRoleNoneInvalidatesRuleCache(t *testing.T) {
 			SecondaryRoleType: tree.SecondaryRoleTypeNone,
 		})
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeFalse)
+
+		ses.ruleCacheMu.RLock()
+		cacheIsNil := ses.ruleCache == nil
+		ses.ruleCacheMu.RUnlock()
+		convey.So(cacheIsNil, convey.ShouldBeTrue)
+	})
+}
+
+func TestDoSwitchRolePrimaryRoleInvalidatesRuleCache(t *testing.T) {
+	convey.Convey("set role switches current role and invalidates rule cache", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ses := newSes(&privilege{}, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "role1",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		tenant.SetUseSecondaryRole(true)
+		ses.SetTenantInfo(tenant)
+		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
+
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		roleSQL, err := getSqlForRoleIdOfRole(context.Background(), "role2")
+		convey.So(err, convey.ShouldBeNil)
+		bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(6)}})
+		bh.sql2result[getSqlForCheckUserGrant(6, int64(tenant.UserID))] = newMrsForCheckUserGrant([][]interface{}{
+			{int64(6), int64(tenant.UserID), false},
+		})
+
+		err = doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
+			Role: &tree.Role{UserName: "role2"},
+		})
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(6))
+		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role2")
 		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeFalse)
 
 		ses.ruleCacheMu.RLock()
