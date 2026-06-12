@@ -11774,6 +11774,17 @@ function_call_generic:
             Exprs: $3,
         }
     }
+|   INTERVAL '(' bit_expr ',' expression_list ')'
+    {
+        name := tree.NewUnresolvedColName($1)
+        exprs := tree.Exprs{$3}
+        exprs = append(exprs, $5...)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: exprs,
+        }
+    }
 |   substr_option '(' expression_list_opt ')'
     {
         name := tree.NewUnresolvedColName($1)
@@ -12487,7 +12498,7 @@ predicate:
     {
         $$ = tree.NewRangeCond(true, $1, $4, $6)
     }
-|   bit_expr
+|   bit_expr %prec LOWER_THAN_COMMA
 
 like_escape_opt:
     {
@@ -12636,10 +12647,7 @@ literal:
     }
 |   UNDERSCORE_BINARY HEXNUM
     {
-        if strings.HasPrefix($2, "0x") {
-            $2 = $2[2:]
-        }
-        $$ = tree.NewNumVal($2, $2, false, tree.P_bit)
+        $$ = tree.NewNumVal($2, $2, false, tree.P_hexnum)
     }
 |   DECIMAL_VALUE
     {
