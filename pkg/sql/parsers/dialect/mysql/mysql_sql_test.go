@@ -3188,7 +3188,7 @@ var (
 			output: "create view t2 as select * from t1",
 		}, {
 			input:  "insert into t1 values(_binary 0x123)",
-			output: "insert into t1 values (123)",
+			output: "insert into t1 values (0x123)",
 		}, {
 			input:  "backup '123' filesystem '/home/abc' parallelism '1'",
 			output: "backup 123 filesystem /home/abc parallelism 1",
