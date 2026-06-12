@@ -1,417 +1,418 @@
 select hex(123);
-hex(123)
+➤ hex(123)[12,-1,0]  𝄀
 7B
 select hex(32432);
-hex(32432)
+➤ hex(32432)[12,-1,0]  𝄀
 7EB0
 select hex(2178342143);
-hex(2178342143)
+➤ hex(2178342143)[12,-1,0]  𝄀
 81D6DCFF
 select hex(2147483649);
-hex(2147483649)
+➤ hex(2147483649)[12,-1,0]  𝄀
 80000001
 select hex(456.789);
-hex(456.789)
+➤ hex(456.789)[12,-1,0]  𝄀
 1C9
 select hex(321354.21321);
-hex(321354.21321)
+➤ hex(321354.21321)[12,-1,0]  𝄀
 4E74A
 select hex(1092);
-hex(1092)
+➤ hex(1092)[12,-1,0]  𝄀
 444
 select hex(3215133.214321432);
-hex(3215133.214321432)
+➤ hex(3215133.214321432)[12,-1,0]  𝄀
 310F1D
 select hex('abc');
-hex(abc)
+➤ hex(abc)[12,-1,0]  𝄀
 616263
 select hex('qqqqq');
-hex(qqqqq)
+➤ hex(qqqqq)[12,-1,0]  𝄀
 7171717171
 select hex('abcdefghijklmnopqrstuvwxyz');
-hex(abcdefghijklmnopqrstuvwxyz)
+➤ hex(abcdefghijklmnopqrstuvwxyz)[12,-1,0]  𝄀
 6162636465666768696A6B6C6D6E6F707172737475767778797A
 select hex('edwrgewgrewrwe');
-hex(edwrgewgrewrwe)
+➤ hex(edwrgewgrewrwe)[12,-1,0]  𝄀
 6564777267657767726577727765
 select hex('123');
-hex(123)
+➤ hex(123)[12,-1,0]  𝄀
 313233
 select hex('4321413432');
-hex(4321413432)
+➤ hex(4321413432)[12,-1,0]  𝄀
 34333231343133343332
 select hex('325324213');
-hex(325324213)
+➤ hex(325324213)[12,-1,0]  𝄀
 333235333234323133
 select hex('0000000000000');
-hex(0000000000000)
+➤ hex(0000000000000)[12,-1,0]  𝄀
 30303030303030303030303030
 select hex('A');
-hex(A)
+➤ hex(A)[12,-1,0]  𝄀
 41
 select hex('a');
-hex(a)
+➤ hex(a)[12,-1,0]  𝄀
 61
 select hex('V');
-hex(V)
+➤ hex(V)[12,-1,0]  𝄀
 56
 select hex('M');
-hex(M)
+➤ hex(M)[12,-1,0]  𝄀
 4D
 select hex('m');
-hex(m)
+➤ hex(m)[12,-1,0]  𝄀
 6D
 select hex('');
-hex()
+➤ hex()[12,-1,0]  𝄀
 
 select hex('!@#');
-hex(!@#)
+➤ hex(!@#)[12,-1,0]  𝄀
 214023
 select hex('@##%%&^^&#$#%^&^*(()#^&**(*(');
-hex(@##%%&^^&#$#%^&^*(()#^&**(*()
+➤ hex(@##%%&^^&#$#%^&^*(()#^&**(*()[12,-1,0]  𝄀
 4023232525265E5E26232423255E265E2A282829235E262A2A282A28
 select hex('}}}{:"{:""');
-hex(}}}{:"{:"")
+➤ hex(}}}{:"{:"")[12,-1,0]  𝄀
 7D7D7D7B3A227B3A2222
 select hex('%');
-hex(%)
+➤ hex(%)[12,-1,0]  𝄀
 25
 select hex(' ');
-hex( )
+➤ hex( )[12,-1,0]  𝄀
 20
 select hex('你好');
-hex(你好)
+➤ hex(你好)[12,-1,0]  𝄀
 E4BDA0E5A5BD
 select hex('数据库');
-hex(数据库)
+➤ hex(数据库)[12,-1,0]  𝄀
 E695B0E68DAEE5BA93
 select hex('数据库云平台');
-hex(数据库云平台)
+➤ hex(数据库云平台)[12,-1,0]  𝄀
 E695B0E68DAEE5BA93E4BA91E5B9B3E58FB0
 select hex('欢迎来到 MatrixOne！');
-hex(欢迎来到 MatrixOne！)
+➤ hex(欢迎来到 MatrixOne！)[12,-1,0]  𝄀
 E6ACA2E8BF8EE69DA5E588B0204D61747269784F6E65EFBC81
 select hex('😀');
-hex(😀)
+➤ hex(😀)[12,-1,0]  𝄀
 F09F9880
 select hex(CAST(NULL AS UNSIGNED));
-hex(cast(null as unsigned))
+➤ hex(cast(null as unsigned))[12,-1,0]  𝄀
 null
 select hex(-1);
-hex(-1)
+➤ hex(-1)[12,-1,0]  𝄀
 FFFFFFFFFFFFFFFF
 select hex(-3489234);
-hex(-3489234)
+➤ hex(-3489234)[12,-1,0]  𝄀
 FFFFFFFFFFCAC22E
 select hex(-2147483648);
-hex(-2147483648)
+➤ hex(-2147483648)[12,-1,0]  𝄀
 FFFFFFFF80000000
 select hex(-3243123138294343);
-hex(-3243123138294343)
+➤ hex(-3243123138294343)[12,-1,0]  𝄀
 FFF47A658D610DB9
 select hex(0);
-hex(0)
+➤ hex(0)[12,-1,0]  𝄀
 0
 select hex(2147483647);
-hex(2147483647)
+➤ hex(2147483647)[12,-1,0]  𝄀
 7FFFFFFF
 select hex(3278990242);
-hex(3278990242)
+➤ hex(3278990242)[12,-1,0]  𝄀
 C3716BA2
 select hex(9223372036854775807);
-hex(9223372036854775807)
+➤ hex(9223372036854775807)[12,-1,0]  𝄀
 7FFFFFFFFFFFFFFF
 select hex(3280483902382984924);
-hex(3280483902382984924)
+➤ hex(3280483902382984924)[12,-1,0]  𝄀
 2D869EBA7CECCEDC
 select hex('a1b2c3d4');
-hex(a1b2c3d4)
+➤ hex(a1b2c3d4)[12,-1,0]  𝄀
 6131623263336434
 select hex('12345678');
-hex(12345678)
+➤ hex(12345678)[12,-1,0]  𝄀
 3132333435363738
 select hex('AABBCCDD');
-hex(AABBCCDD)
+➤ hex(AABBCCDD)[12,-1,0]  𝄀
 4141424243434444
 select hex('ZZZ999');
-hex(ZZZ999)
+➤ hex(ZZZ999)[12,-1,0]  𝄀
 5A5A5A393939
 select hex('0123456789abcdef');
-hex(0123456789abcdef)
+➤ hex(0123456789abcdef)[12,-1,0]  𝄀
 30313233343536373839616263646566
 select hex('!"#$%&/()=?`~''_+-*^');
-hex(!"#$%&/()=?`~'_+-*^)
+➤ hex(!"#$%&/()=?`~'_+-*^)[12,-1,0]  𝄀
 2122232425262F28293D3F607E275F2B2D2A5E
 select hex(' 2543g4365435    423532543254&&*32grde5y43');
-hex( 2543g4365435    423532543254&&*32grde5y43)
+➤ hex( 2543g4365435    423532543254&&*32grde5y43)[12,-1,0]  𝄀
 203235343367343336353433352020202034323335333235343332353426262A33326772646535793433
 select hex('');
-hex()
+➤ hex()[12,-1,0]  𝄀
 
 select unhex('7B');
-unhex(7B)
+➤ unhex(7B)[12,0,0]  𝄀
 {
 select unhex('7D');
-unhex(7D)
+➤ unhex(7D)[12,0,0]  𝄀
 }
 select unhex('30');
-unhex(30)
+➤ unhex(30)[12,0,0]  𝄀
 0
 select unhex('31');
-unhex(31)
+➤ unhex(31)[12,0,0]  𝄀
 1
 select unhex('32');
-unhex(32)
+➤ unhex(32)[12,0,0]  𝄀
 2
 select unhex('33');
-unhex(33)
+➤ unhex(33)[12,0,0]  𝄀
 3
 select unhex('34');
-unhex(34)
+➤ unhex(34)[12,0,0]  𝄀
 4
 select unhex('35');
-unhex(35)
+➤ unhex(35)[12,0,0]  𝄀
 5
 select unhex('36');
-unhex(36)
+➤ unhex(36)[12,0,0]  𝄀
 6
 select unhex('37');
-unhex(37)
+➤ unhex(37)[12,0,0]  𝄀
 7
 select unhex('38');
-unhex(38)
+➤ unhex(38)[12,0,0]  𝄀
 8
 select unhex('39');
-unhex(39)
+➤ unhex(39)[12,0,0]  𝄀
 9
 select unhex('41');
-unhex(41)
+➤ unhex(41)[12,0,0]  𝄀
 A
 select unhex('42');
-unhex(42)
+➤ unhex(42)[12,0,0]  𝄀
 B
 select unhex('43');
-unhex(43)
+➤ unhex(43)[12,0,0]  𝄀
 C
 select unhex('44');
-unhex(44)
+➤ unhex(44)[12,0,0]  𝄀
 D
 select unhex('45');
-unhex(45)
+➤ unhex(45)[12,0,0]  𝄀
 E
 select unhex('46');
-unhex(46)
+➤ unhex(46)[12,0,0]  𝄀
 F
 select unhex('61');
-unhex(61)
+➤ unhex(61)[12,0,0]  𝄀
 a
 select unhex('62');
-unhex(62)
+➤ unhex(62)[12,0,0]  𝄀
 b
 select unhex('63');
-unhex(63)
+➤ unhex(63)[12,0,0]  𝄀
 c
 select unhex('64');
-unhex(64)
+➤ unhex(64)[12,0,0]  𝄀
 d
 select unhex('65');
-unhex(65)
+➤ unhex(65)[12,0,0]  𝄀
 e
 select unhex('66');
-unhex(66)
+➤ unhex(66)[12,0,0]  𝄀
 f
 select unhex('2E');
-unhex(2E)
+➤ unhex(2E)[12,0,0]  𝄀
 .
 select unhex('2C');
-unhex(2C)
+➤ unhex(2C)[12,0,0]  𝄀
 ,
 select unhex('21');
-unhex(21)
+➤ unhex(21)[12,0,0]  𝄀
 !
 select unhex('22');
-unhex(22)
+➤ unhex(22)[12,0,0]  𝄀
 "
 select unhex('25');
-unhex(25)
+➤ unhex(25)[12,0,0]  𝄀
 %
 select unhex('26');
-unhex(26)
+➤ unhex(26)[12,0,0]  𝄀
 &
 select unhex('2F');
-unhex(2F)
+➤ unhex(2F)[12,0,0]  𝄀
 /
 select unhex('3D');
-unhex(3D)
+➤ unhex(3D)[12,0,0]  𝄀
 =
 select unhex('40');
-unhex(40)
+➤ unhex(40)[12,0,0]  𝄀
 @
 select unhex('5F');
-unhex(5F)
+➤ unhex(5F)[12,0,0]  𝄀
 _
 select unhex('23');
-unhex(23)
+➤ unhex(23)[12,0,0]  𝄀
 #
 select unhex('24');
-unhex(24)
+➤ unhex(24)[12,0,0]  𝄀
 $
 select unhex('2A');
-unhex(2A)
+➤ unhex(2A)[12,0,0]  𝄀
 *
 select unhex('28');
-unhex(28)
+➤ unhex(28)[12,0,0]  𝄀
 (
 select unhex('29');
-unhex(29)
+➤ unhex(29)[12,0,0]  𝄀
 )
 select unhex('3A');
-unhex(3A)
+➤ unhex(3A)[12,0,0]  𝄀
 :
 select unhex('3B');
-unhex(3B)
+➤ unhex(3B)[12,0,0]  𝄀
 ;
 select unhex('3F');
-unhex(3F)
+➤ unhex(3F)[12,0,0]  𝄀
 ?
 select unhex('5E');
-unhex(5E)
+➤ unhex(5E)[12,0,0]  𝄀
 ^
 select unhex('60');
-unhex(60)
+➤ unhex(60)[12,0,0]  𝄀
 `
 select unhex('7C');
-unhex(7C)
+➤ unhex(7C)[12,0,0]  𝄀
 |
 select unhex('2D');
-unhex(2D)
+➤ unhex(2D)[12,0,0]  𝄀
 -
 select unhex('5F');
-unhex(5F)
+➤ unhex(5F)[12,0,0]  𝄀
 _
 select unhex('7E');
-unhex(7E)
+➤ unhex(7E)[12,0,0]  𝄀
 ~
 select unhex('5C');
-unhex(5C)
+➤ unhex(5C)[12,0,0]  𝄀
 \
 select unhex('0A');
-unhex(0A)
-\n
+➤ unhex(0A)[12,0,0]  𝄀
+
+
 select unhex('7F');
-unhex(7F)
+➤ unhex(7F)[12,0,0]  𝄀
 
 select unhex('C3A9');
-unhex(C3A9)
-é
+➤ unhex(C3A9)[12,0,0]  𝄀
+Ã©
 select unhex('C383');
-unhex(C383)
-Ã
+➤ unhex(C383)[12,0,0]  𝄀
+Ã
 select unhex('E28C85');
-unhex(E28C85)
-⌅
+➤ unhex(E28C85)[12,0,0]  𝄀
+â
 select unhex('F09F98A2');
-unhex(F09F98A2)
-😢
+➤ unhex(F09F98A2)[12,0,0]  𝄀
+ð¢
 select unhex('2032353433673433363534333534323335333235343332353426262a33326772646535793433');
-unhex(2032353433673433363534333534323335333235343332353426262a33326772646535793433)
+➤ unhex(2032353433673433363534333534323335333235343332353426262a33326772646535793433)[12,0,0]  𝄀
  2543g4365435423532543254&&*32grde5y43
 select unhex('');
-unhex()
+➤ unhex()[12,0,0]  𝄀
 
 select unhex('2122232425262f28293d3f607e275f2b2d2a5e');
-unhex(2122232425262f28293d3f607e275f2b2d2a5e)
+➤ unhex(2122232425262f28293d3f607e275f2b2d2a5e)[12,0,0]  𝄀
 !"#$%&/()=?`~'_+-*^
 select unhex('30313233343536373839616263646566');
-unhex(30313233343536373839616263646566)
+➤ unhex(30313233343536373839616263646566)[12,0,0]  𝄀
 0123456789abcdef
 select unhex('4141424243434444');
-unhex(4141424243434444)
+➤ unhex(4141424243434444)[12,0,0]  𝄀
 AABBCCDD
 select unhex('3132333435363738');
-unhex(3132333435363738)
+➤ unhex(3132333435363738)[12,0,0]  𝄀
 12345678
 select unhex('5a5a5a393939');
-unhex(5a5a5a393939)
+➤ unhex(5a5a5a393939)[12,0,0]  𝄀
 ZZZ999
 select unhex('6131623263336434');
-unhex(6131623263336434)
+➤ unhex(6131623263336434)[12,0,0]  𝄀
 a1b2c3d4
 select unhex('33323830343833393032333832393834393031323833343234');
-unhex(33323830343833393032333832393834393031323833343234)
+➤ unhex(33323830343833393032333832393834393031323833343234)[12,0,0]  𝄀
 3280483902382984901283424
 select unhex('41');
-unhex(41)
+➤ unhex(41)[12,0,0]  𝄀
 A
 select unhex('61');
-unhex(61)
+➤ unhex(61)[12,0,0]  𝄀
 a
 select unhex('56');
-unhex(56)
+➤ unhex(56)[12,0,0]  𝄀
 V
 select unhex('4d');
-unhex(4d)
+➤ unhex(4d)[12,0,0]  𝄀
 M
 select unhex('6d');
-unhex(6d)
+➤ unhex(6d)[12,0,0]  𝄀
 m
 select unhex('313233');
-unhex(313233)
+➤ unhex(313233)[12,0,0]  𝄀
 123
 select unhex('34333231343133343332');
-unhex(34333231343133343332)
+➤ unhex(34333231343133343332)[12,0,0]  𝄀
 4321413432
 select unhex('333235333234323133');
-unhex(333235333234323133)
+➤ unhex(333235333234323133)[12,0,0]  𝄀
 325324213
 select unhex('30303030303030303030303030');
-unhex(30303030303030303030303030)
+➤ unhex(30303030303030303030303030)[12,0,0]  𝄀
 0000000000000
 select unhex('333231353133332e323134333231343332');
-unhex(333231353133332e323134333231343332)
+➤ unhex(333231353133332e323134333231343332)[12,0,0]  𝄀
 3215133.214321432
 select unhex('3332313335342e3231333231');
-unhex(3332313335342e3231333231)
+➤ unhex(3332313335342e3231333231)[12,0,0]  𝄀
 321354.21321
 select unhex('3435362e373839');
-unhex(3435362e373839)
+➤ unhex(3435362e373839)[12,0,0]  𝄀
 456.789
 select unhex('616263');
-unhex(616263)
+➤ unhex(616263)[12,0,0]  𝄀
 abc
 select unhex('7171717171');
-unhex(7171717171)
+➤ unhex(7171717171)[12,0,0]  𝄀
 qqqqq
 select unhex('6162636465666768696a6b6c6d6e6f707172737475767778797a');
-unhex(6162636465666768696a6b6c6d6e6f707172737475767778797a)
+➤ unhex(6162636465666768696a6b6c6d6e6f707172737475767778797a)[12,0,0]  𝄀
 abcdefghijklmnopqrstuvwxyz
 select unhex('6564777267657767726577727765');
-unhex(6564777267657767726577727765)
+➤ unhex(6564777267657767726577727765)[12,0,0]  𝄀
 edwrgewgrewrwe
 select unhex('e4bda0e5a5bd');
-unhex(e4bda0e5a5bd)
-你好
+➤ unhex(e4bda0e5a5bd)[12,0,0]  𝄀
+ä½ å¥½
 select unhex('e695b0e68daee5ba93');
-unhex(e695b0e68daee5ba93)
-数据库
+➤ unhex(e695b0e68daee5ba93)[12,0,0]  𝄀
+æ°æ®åº
 select unhex('e695b0e68daee5ba93e4ba91e5b9b3e58fb0');
-unhex(e695b0e68daee5ba93e4ba91e5b9b3e58fb0)
-数据库云平台
+➤ unhex(e695b0e68daee5ba93e4ba91e5b9b3e58fb0)[12,0,0]  𝄀
+æ°æ®åºäºå¹³å°
 select unhex('e6aca2e8bf8ee69da5e588b0204d61747269784f6e65efbc81');
-unhex(e6aca2e8bf8ee69da5e588b0204d61747269784f6e65efbc81)
-欢迎来到 MatrixOne！
+➤ unhex(e6aca2e8bf8ee69da5e588b0204d61747269784f6e65efbc81)[12,0,0]  𝄀
+æ¬¢è¿æ¥å° MatrixOneï¼
 select unhex('48656c6c6f20576f726c6421');
-unhex(48656c6c6f20576f726c6421)
+➤ unhex(48656c6c6f20576f726c6421)[12,0,0]  𝄀
 Hello World!
 select unhex('214023');
-unhex(214023)
+➤ unhex(214023)[12,0,0]  𝄀
 !@#
 select unhex('4023232525265e5e26232423255e265e2a282829235e262a2a282a28');
-unhex(4023232525265e5e26232423255e265e2a282829235e262a2a282a28)
+➤ unhex(4023232525265e5e26232423255e265e2a282829235e262a2a282a28)[12,0,0]  𝄀
 @##%%&^^&#$#%^&^*(()#^&**(*(
 select unhex('7d7d7d7b3a227b3a2222');
-unhex(7d7d7d7b3a227b3a2222)
+➤ unhex(7d7d7d7b3a227b3a2222)[12,0,0]  𝄀
 }}}{:"{:""
 select unhex('25');
-unhex(25)
+➤ unhex(25)[12,0,0]  𝄀
 %
