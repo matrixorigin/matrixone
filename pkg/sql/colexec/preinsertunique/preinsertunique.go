@@ -71,11 +71,10 @@ func (preInsertUnique *PreInsertUnique) initBuf(bat *batch.Batch, uniqueColumnPo
 
 	if len(uniqueColumnPos) == 1 {
 		ukType := preInsertUnique.PreInsertCtx.UkType
-		preInsertUnique.ctr.buf.Vecs[0] = vector.NewVec(types.Type{
-			Oid:   types.T(ukType.Id),
-			Width: ukType.Width,
-			Scale: ukType.Scale,
-		})
+		keyType := types.T(ukType.Id).ToType()
+		keyType.Width = ukType.Width
+		keyType.Scale = ukType.Scale
+		preInsertUnique.ctr.buf.Vecs[0] = vector.NewVec(keyType)
 	} else {
 		preInsertUnique.ctr.buf.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	}
