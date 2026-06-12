@@ -244,6 +244,12 @@ show create table enum_idx03;
 Table    Create Table
 enum_idx03    CREATE TABLE `enum_idx03` (\n  `id` varchar(191) NOT NULL,\n  `name` varchar(191) DEFAULT NULL,\n  `role` enum('a','b','c') DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_name_role` (`name`,`role`)\n)
 drop table enum_idx03;
+drop table if exists enum_idx04;
+create table enum_idx04 (id varchar(191) primary key, name varchar(191), role enum('a','b','c'), unique index uq_role_name(role, name));
+show create table enum_idx04;
+Table    Create Table
+enum_idx04    CREATE TABLE `enum_idx04` (\n  `id` varchar(191) NOT NULL,\n  `name` varchar(191) DEFAULT NULL,\n  `role` enum('a','b','c') DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uq_role_name` (`role`,`name`)\n)
+drop table enum_idx04;
 drop table if exists inert01;
 create table insert01 (id int primary key,
 order_number VARCHAR(20),

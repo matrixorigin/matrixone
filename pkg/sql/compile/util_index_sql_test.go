@@ -52,7 +52,8 @@ func TestGenInsertIndexTableSql_QuotesReservedKeywordColumn(t *testing.T) {
 		Unique:         false,
 	}
 
-	sql := genInsertIndexTableSql(originTableDef, indexDef, "test", false)
+	sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", false)
+	require.NoError(t, err)
 
 	require.Contains(t, sql, "serial_full(`order`,`id`)")
 	require.Contains(t, sql, "select serial_full(`order`,`id`), `id` from `test`.`files_related_mph`;")
@@ -73,7 +74,8 @@ func TestGenInsertIndexTableSql_UsesPrefixExpression(t *testing.T) {
 		IndexAlgoParams: `{"prefix_lengths":"order:5"}`,
 	}
 
-	sql := genInsertIndexTableSql(originTableDef, indexDef, "test", true)
+	sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", true)
+	require.NoError(t, err)
 
 	require.Equal(t, "insert into  `test`.`__mo_index_unique_test` select (substring(`order`, 1, 5)), `id` from `test`.`orders` where (substring(`order`, 1, 5)) is not null;", sql)
 }
@@ -93,7 +95,8 @@ func TestGenInsertIndexTableSql_SpatialIndexUsesRawGeometryColumn(t *testing.T) 
 		IndexAlgo:      "rtree",
 	}
 
-	sql := genInsertIndexTableSql(originTableDef, indexDef, "test", false)
+	sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", false)
+	require.NoError(t, err)
 
 	require.Contains(t, sql, "select (`g`), `id` from `test`.`geo_t` where (`g`) is not null;")
 	require.NotContains(t, sql, "serial_full")
@@ -110,7 +113,8 @@ func TestBuildCreateUniqueIndexDuplicateCheckSQL(t *testing.T) {
 			Unique:         true,
 		}
 
-		sql := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		sql, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		require.NoError(t, err)
 
 		require.Equal(t, "SELECT `order` FROM `test`.`orders` WHERE `order` IS NOT NULL GROUP BY `order` HAVING count(*) > 1 LIMIT 1", sql)
 	})
@@ -123,7 +127,8 @@ func TestBuildCreateUniqueIndexDuplicateCheckSQL(t *testing.T) {
 			Unique:         true,
 		}
 
-		sql := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		sql, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		require.NoError(t, err)
 
 		require.Equal(t, "SELECT `order`,`id` FROM `test`.`orders` WHERE `order` IS NOT NULL AND `id` IS NOT NULL GROUP BY `order`,`id` HAVING count(*) > 1 LIMIT 1", sql)
 	})
@@ -137,10 +142,43 @@ func TestBuildCreateUniqueIndexDuplicateCheckSQL(t *testing.T) {
 			IndexAlgoParams: `{"prefix_lengths":"order:5"}`,
 		}
 
-		sql := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		sql, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		require.NoError(t, err)
 
 		require.Equal(t, "SELECT substring(`order`, 1, 5) FROM `test`.`orders` WHERE substring(`order`, 1, 5) IS NOT NULL GROUP BY substring(`order`, 1, 5) HAVING count(*) > 1 LIMIT 1", sql)
 	})
+
+	t.Run("invalid prefix params", func(t *testing.T) {
+		indexDef := &planpb.IndexDef{
+			IndexName:       "u_order",
+			IndexTableName:  "__mo_index_unique_test",
+			Parts:           []string{"order"},
+			Unique:          true,
+			IndexAlgoParams: `{"prefix_lengths":"order:bad"}`,
+		}
+
+		_, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		require.Error(t, err)
+	})
+}
+
+func TestGenInsertIndexTableSqlRejectsInvalidPrefixParams(t *testing.T) {
+	originTableDef := &planpb.TableDef{
+		Name: "orders",
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+	}
+	indexDef := &planpb.IndexDef{
+		IndexTableName:  "__mo_index_unique_test",
+		Parts:           []string{"order"},
+		Unique:          true,
+		IndexAlgoParams: `{"prefix_lengths":"order:bad"}`,
+	}
+
+	_, err := genInsertIndexTableSql(originTableDef, indexDef, "test", true)
+	require.Error(t, err)
 }
 
 func TestPrecheckAndInsertUniqueIndexTableUsesSkipDedupAndPipelineFlush(t *testing.T) {

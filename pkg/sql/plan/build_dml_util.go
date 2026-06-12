@@ -2195,7 +2195,10 @@ func appendPreInsertPlan(
 	var useColumns []int32
 	idxDef := tableDef.Indexes[indexIdx]
 	colsMap := make(map[string]int)
-	prefixLengths := catalog.IndexPrefixLengthsFromParams(idxDef.IndexAlgoParams)
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil {
+		return 0, err
+	}
 
 	for i, col := range tableDef.Cols {
 		colsMap[col.Name] = i
@@ -2213,7 +2216,7 @@ func appendPreInsertPlan(
 
 	pkColumn, originPkType := getPkPos(tableDef, false)
 	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, pkColumn)
-	lastNodeId, useColumns, err := appendIndexPrefixProjection(builder, bindCtx, tableDef, lastNodeId, keyParts, colsMap, useColumns, prefixLengths)
+	lastNodeId, useColumns, err = appendIndexPrefixProjection(builder, bindCtx, tableDef, lastNodeId, keyParts, colsMap, useColumns, prefixLengths)
 	if err != nil {
 		return -1, err
 	}

@@ -71,15 +71,21 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
 		return nil
 	}
-	insertSQL := genInsertIndexTableSql(originalTableDef, indexDef, qryDatabase, indexDef.Unique)
+	insertSQL, err := genInsertIndexTableSql(originalTableDef, indexDef, qryDatabase, indexDef.Unique)
+	if err != nil {
+		return err
+	}
 	if indexDef.Unique {
 		return c.precheckAndInsertUniqueIndexTable(qryDatabase, originalTableDef, indexDef, insertSQL)
 	}
 	return c.runSql(insertSQL)
 }
 
-func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.TableDef, indexDef *plan.IndexDef) string {
-	prefixLengths := catalog.IndexPrefixLengthsFromParams(indexDef.IndexAlgoParams)
+func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.TableDef, indexDef *plan.IndexDef) (string, error) {
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexDef.IndexAlgoParams)
+	if err != nil {
+		return "", err
+	}
 	groupExpr := partsToIndexExprStr(indexDef.Parts, prefixLengths)
 	nullCheckExpr := fmt.Sprintf("%s IS NOT NULL", groupExpr)
 	if len(indexDef.Parts) > 1 {
@@ -100,7 +106,7 @@ func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.Table
 		quoteMySQLIdent(tableDef.Name),
 		nullCheckExpr,
 		groupExpr,
-	)
+	), nil
 }
 
 func (c *Compile) precheckAndInsertUniqueIndexTable(
@@ -111,7 +117,10 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 ) error {
 	// Unique indexes allow NULL keys, so the check mirrors the hidden-index
 	// backfill filter and only groups non-NULL keys.
-	duplicateCheckSQL := buildCreateUniqueIndexDuplicateCheckSQL(dbName, tableDef, indexDef)
+	duplicateCheckSQL, err := buildCreateUniqueIndexDuplicateCheckSQL(dbName, tableDef, indexDef)
+	if err != nil {
+		return err
+	}
 	duplicateCheckRes, err := c.runSqlWithResultAndOptions(duplicateCheckSQL, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "create unique index duplicate check failed, sql is %s", duplicateCheckSQL)

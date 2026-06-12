@@ -352,7 +352,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// Materialize lock keys for composite and prefix unique indexes in advance.
 	// This guarantees the lock target can find __mo_index_idx_col in colName2Idx.
 	for i, idxDef := range tableDef.Indexes {
-		prefixLengths := catalog.IndexPrefixLengthsFromParams(idxDef.IndexAlgoParams)
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil {
+			return 0, err
+		}
 		if !idxDef.Unique || skipUniqueIdx[i] || (len(idxDef.Parts) <= 1 && len(prefixLengths) == 0) {
 			continue
 		}
@@ -421,7 +424,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 		var pkIdxInBat int32
 
-		prefixLengths := catalog.IndexPrefixLengthsFromParams(idxDef.IndexAlgoParams)
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil {
+			return 0, err
+		}
 		if len(idxDef.Parts) == 1 && len(prefixLengths) == 0 {
 			var ok bool
 			pkIdxInBat, ok = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
@@ -548,7 +554,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		// __mo_index_idx_col projection for index columns
 		argsLen := len(idxDef.Parts)
 		var idxIndexColExpr *plan.Expr
-		prefixLengths := catalog.IndexPrefixLengthsFromParams(idxDef.IndexAlgoParams)
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil {
+			return 0, err
+		}
 		if argsLen == 1 {
 			idxIndexColExpr, err = builder.makeInsertIndexPartExpr(selectNode, selectTag, tableDef, colName2Idx, idxDef.Parts[0], prefixLengths)
 			if err != nil {
@@ -869,7 +878,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			idxTableName := idxDef.IndexTableName
 
 			serialIdxPkExpr := func(idxDef *plan.IndexDef) (*plan.Expr, error) {
-				prefixLengths := catalog.IndexPrefixLengthsFromParams(idxDef.IndexAlgoParams)
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+				if err != nil {
+					return nil, err
+				}
 				if !indexTableStoresSerializedKey(idxDef) {
 					return builder.makeInsertIndexPartExpr(selectNode, selectTag, tableDef, colName2Idx, indexPrimaryPartName(idxDef), prefixLengths)
 				}
@@ -925,7 +937,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				*/
 
 				var delIdxExpr *plan.Expr
-				prefixLengths := catalog.IndexPrefixLengthsFromParams(idxDef.IndexAlgoParams)
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+				if err != nil {
+					return 0, err
+				}
 				if !indexTableStoresSerializedKey(idxDef) {
 					colPos, ok := tableDef.Name2ColIndex[indexPrimaryPartName(idxDef)]
 					if !ok {

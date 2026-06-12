@@ -118,10 +118,13 @@ var (
 )
 
 // genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
-func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string, isUnique bool) string {
+func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string, isUnique bool) (string, error) {
 	// insert data into index table
 	var insertSQL string
-	prefixLengths := catalog.IndexPrefixLengthsFromParams(indexDef.IndexAlgoParams)
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexDef.IndexAlgoParams)
+	if err != nil {
+		return "", err
+	}
 	temp := partsToIndexExprStr(indexDef.Parts, prefixLengths)
 	spatialIndex := catalog.IsRTreeIndexAlgo(indexDef.IndexAlgo)
 	if spatialIndex && len(indexDef.Parts) > 0 {
@@ -159,7 +162,7 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 			}
 		}
 	}
-	return insertSQL
+	return insertSQL, nil
 }
 
 // genInsertIndexTableSqlForMasterIndex: Create inserts for master index table

@@ -516,6 +516,44 @@ func TestBuildIndexRejectsTextBlobPlainIndex(t *testing.T) {
 	runTestShouldError(mock, t, sqlerrs)
 }
 
+func TestBuildRegularSecondaryIndexPersistsPrefixLengths(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name   string
+		sql    string
+		column string
+		length int
+	}{
+		{
+			name:   "text",
+			sql:    "CREATE TABLE text_prefix_secondary_ok (id INT PRIMARY KEY, t TEXT, INDEX idx_t(t(100)));",
+			column: "t",
+			length: 100,
+		},
+		{
+			name:   "blob",
+			sql:    "CREATE TABLE blob_prefix_secondary_ok (id INT PRIMARY KEY, b BLOB, INDEX idx_b(b(100)));",
+			column: "b",
+			length: 100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tt.sql)
+			require.NoError(t, err)
+
+			createTable := logicPlan.GetDdl().GetCreateTable()
+			require.NotNil(t, createTable)
+			require.Len(t, createTable.GetTableDef().GetIndexes(), 1)
+
+			indexDef := createTable.GetTableDef().GetIndexes()[0]
+			prefixLengths := catalog.IndexPrefixLengthsFromParams(indexDef.IndexAlgoParams)
+			require.Equal(t, tt.length, prefixLengths[tt.column])
+		})
+	}
+}
+
 func TestBuildVectorIndexAllowsIvfFlatOnly(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{

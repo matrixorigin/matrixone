@@ -232,32 +232,40 @@ func IndexPrefixLengthsToString(keyParts []*tree.KeyPart) string {
 }
 
 func IndexPrefixLengthsFromParams(indexParams string) map[string]int {
-	if indexParams == "" {
+	prefixLengths, err := IndexPrefixLengthsFromParamsWithError(indexParams)
+	if err != nil {
 		return nil
+	}
+	return prefixLengths
+}
+
+func IndexPrefixLengthsFromParamsWithError(indexParams string) (map[string]int, error) {
+	if indexParams == "" {
+		return nil, nil
 	}
 	params, err := IndexParamsStringToMap(indexParams)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	encoded := params[IndexAlgoParamPrefixLengths]
 	if encoded == "" {
-		return nil
+		return nil, nil
 	}
 
 	prefixLengths := make(map[string]int)
 	for _, item := range strings.Split(encoded, ",") {
 		part, lengthText, ok := strings.Cut(item, ":")
 		if !ok || part == "" || lengthText == "" {
-			continue
+			return nil, moerr.NewInvalidInputNoCtxf("invalid index prefix length item %q", item)
 		}
 		length, err := strconv.Atoi(lengthText)
 		if err != nil || length <= 0 {
-			continue
+			return nil, moerr.NewInvalidInputNoCtxf("invalid index prefix length %q", item)
 		}
 		prefixLengths[part] = length
 	}
-	return prefixLengths
+	return prefixLengths, nil
 }
 
 /* 2. ToMap Functions */

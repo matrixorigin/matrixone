@@ -47,3 +47,61 @@ func TestIsIndexAsync(t *testing.T) {
 	_, err = IsIndexAsync(json)
 	require.NotNil(t, err)
 }
+
+func TestIndexPrefixLengthsFromParamsWithError(t *testing.T) {
+	tests := []struct {
+		name      string
+		params    string
+		want      map[string]int
+		wantError bool
+	}{
+		{
+			name:   "empty params",
+			params: "",
+		},
+		{
+			name:   "no prefix lengths",
+			params: `{"lists":"1"}`,
+		},
+		{
+			name:   "valid prefix lengths",
+			params: `{"prefix_lengths":"b:20,t:10"}`,
+			want: map[string]int{
+				"b": 20,
+				"t": 10,
+			},
+		},
+		{
+			name:      "invalid json",
+			params:    "{bad json",
+			wantError: true,
+		},
+		{
+			name:      "missing separator",
+			params:    `{"prefix_lengths":"t"}`,
+			wantError: true,
+		},
+		{
+			name:      "non numeric length",
+			params:    `{"prefix_lengths":"t:abc"}`,
+			wantError: true,
+		},
+		{
+			name:      "non positive length",
+			params:    `{"prefix_lengths":"t:0"}`,
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := IndexPrefixLengthsFromParamsWithError(tt.params)
+			if tt.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}

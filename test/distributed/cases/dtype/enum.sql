@@ -170,6 +170,11 @@ create table enum_idx03 (id varchar(191) primary key, name varchar(191), role en
 show create table enum_idx03;
 drop table enum_idx03;
 
+drop table if exists enum_idx04;
+create table enum_idx04 (id varchar(191) primary key, name varchar(191), role enum('a','b','c'), unique index uq_role_name(role, name));
+show create table enum_idx04;
+drop table enum_idx04;
+
 -- insert into table,  either use a number to represent a number or insert a specific value
 -- query, update, or delete data, can also use numeric numbers or specific values
 drop table if exists inert01;

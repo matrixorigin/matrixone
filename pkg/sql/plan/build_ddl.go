@@ -2459,6 +2459,10 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		indexDef.Comment = ""
 		indexDef.IndexAlgoParams = ""
 	}
+	indexDef.IndexAlgoParams, err = catalog.AddIndexPrefixLengthsToParams(indexDef.IndexAlgoParams, indexInfo.KeyParts)
+	if err != nil {
+		return nil, nil, err
+	}
 	return []*plan.IndexDef{indexDef}, []*TableDef{tableDef}, nil
 }
 
