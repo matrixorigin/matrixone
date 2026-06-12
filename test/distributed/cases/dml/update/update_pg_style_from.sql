@@ -134,9 +134,34 @@ INSERT INTO gen_dup_t (id, base) VALUES (1, 5);
 CREATE TABLE gen_dup_s (t_id INT, new_base INT);
 INSERT INTO gen_dup_s VALUES (1, NULL), (1, 7);
 UPDATE gen_dup_t SET base = s.new_base FROM gen_dup_s s WHERE s.t_id = gen_dup_t.id;
-SELECT id, base, gen_col FROM gen_dup_t ORDER BY id;
+SELECT COUNT(*) AS valid_generated_row FROM gen_dup_t
+WHERE (base IS NULL AND gen_col = 0) OR (base = 7 AND gen_col = 7);
 DROP TABLE gen_dup_t;
 DROP TABLE gen_dup_s;
+
+-- Duplicate source rows must be deduped as whole rows. Per-column any_value()
+-- can synthesize (new_a = 7, new_b = 'from-null-a'), which is not present in
+-- the source.
+DROP TABLE IF EXISTS whole_row_t;
+DROP TABLE IF EXISTS whole_row_s;
+CREATE TABLE whole_row_t (
+    id INT PRIMARY KEY,
+    a INT,
+    b VARCHAR(20)
+);
+CREATE TABLE whole_row_s (
+    t_id INT,
+    new_a INT,
+    new_b VARCHAR(20)
+);
+INSERT INTO whole_row_t VALUES (1, 0, 'orig');
+INSERT INTO whole_row_s VALUES (1, NULL, 'from-null-a'), (1, 7, NULL);
+UPDATE whole_row_t SET a = s.new_a, b = s.new_b FROM whole_row_s s WHERE s.t_id = whole_row_t.id;
+SELECT COUNT(*) AS valid_whole_row FROM whole_row_t
+WHERE (a IS NULL AND b = 'from-null-a') OR (a = 7 AND b IS NULL);
+SELECT COUNT(*) AS synthesized_row FROM whole_row_t WHERE a = 7 AND b = 'from-null-a';
+DROP TABLE whole_row_t;
+DROP TABLE whole_row_s;
 
 -- FK target with a generated column: the FK forces the fallback planner
 -- (buildTableUpdate). Generated column protection must still apply there.

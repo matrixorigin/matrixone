@@ -129,11 +129,36 @@ INSERT INTO gen_dup_t (id, base) VALUES (1, 5);
 CREATE TABLE gen_dup_s (t_id INT, new_base INT);
 INSERT INTO gen_dup_s VALUES (1, NULL), (1, 7);
 UPDATE gen_dup_t SET base = s.new_base FROM gen_dup_s s WHERE s.t_id = gen_dup_t.id;
-SELECT id, base, gen_col FROM gen_dup_t ORDER BY id;
-➤ id[4,32,0]  ¦  base[4,32,0]  ¦  gen_col[4,32,0]  𝄀
-1  ¦  7  ¦  7
+SELECT COUNT(*) AS valid_generated_row FROM gen_dup_t
+WHERE (base IS NULL AND gen_col = 0) OR (base = 7 AND gen_col = 7);
+➤ valid_generated_row[-5,64,0]  𝄀
+1
 DROP TABLE gen_dup_t;
 DROP TABLE gen_dup_s;
+DROP TABLE IF EXISTS whole_row_t;
+DROP TABLE IF EXISTS whole_row_s;
+CREATE TABLE whole_row_t (
+id INT PRIMARY KEY,
+a INT,
+b VARCHAR(20)
+);
+CREATE TABLE whole_row_s (
+t_id INT,
+new_a INT,
+new_b VARCHAR(20)
+);
+INSERT INTO whole_row_t VALUES (1, 0, 'orig');
+INSERT INTO whole_row_s VALUES (1, NULL, 'from-null-a'), (1, 7, NULL);
+UPDATE whole_row_t SET a = s.new_a, b = s.new_b FROM whole_row_s s WHERE s.t_id = whole_row_t.id;
+SELECT COUNT(*) AS valid_whole_row FROM whole_row_t
+WHERE (a IS NULL AND b = 'from-null-a') OR (a = 7 AND b IS NULL);
+➤ valid_whole_row[-5,64,0]  𝄀
+1
+SELECT COUNT(*) AS synthesized_row FROM whole_row_t WHERE a = 7 AND b = 'from-null-a';
+➤ synthesized_row[-5,64,0]  𝄀
+0
+DROP TABLE whole_row_t;
+DROP TABLE whole_row_s;
 DROP TABLE IF EXISTS fk_parent;
 DROP TABLE IF EXISTS fk_child;
 DROP TABLE IF EXISTS fk_src;

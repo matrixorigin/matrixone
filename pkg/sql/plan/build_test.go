@@ -729,22 +729,35 @@ func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {
 		t.Fatalf("build UPDATE FROM plan: %v", err)
 	}
 
+	query := logicPlan.GetQuery()
 	tableDef := mock.ctxt.tables["nation"]
-	for _, node := range logicPlan.GetQuery().Nodes {
-		if node.NodeType != plan.Node_AGG {
-			continue
-		}
-		if len(node.GroupBy) != len(tableDef.Cols) || len(node.AggList) != 1 {
-			continue
-		}
-		if fn := node.AggList[0].GetF(); fn != nil && fn.Func.ObjName == "any_value" {
-			return
-		}
+	if hasUpdateFromDedupAnyValueAgg(query, len(tableDef.Cols)) {
+		t.Fatalf("UPDATE FROM dedup should not aggregate update columns with any_value")
 	}
-	t.Fatalf("UPDATE FROM should dedup duplicate source matches with AGG any_value over update columns")
+	if !hasUpdateFromDedupWindow(query, len(tableDef.Cols)) {
+		t.Fatalf("UPDATE FROM should dedup duplicate source matches with row_number window")
+	}
 }
 
-func TestUpdatePgStyleFromDedupExpandsDefaultBeforeAnyValue(t *testing.T) {
+func TestUpdatePgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = NATION2.N_NAME, N_COMMENT = NATION2.N_COMMENT FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("build UPDATE FROM plan: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["nation"].Cols)) {
+		t.Fatalf("UPDATE FROM dedup must pick a whole source row, not aggregate each update column with any_value")
+	}
+	if !hasUpdateFromDedupWindow(query, len(mock.ctxt.tables["nation"].Cols)) {
+		t.Fatalf("UPDATE FROM dedup should use row_number window partitioned by target old columns")
+	}
+}
+
+func TestUpdatePgStyleFromDedupExpandsDefaultBeforeDedup(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockDefaultExpr(t, mock, "nation", "n_name", "name-default")
 
@@ -754,21 +767,16 @@ func TestUpdatePgStyleFromDedupExpandsDefaultBeforeAnyValue(t *testing.T) {
 		t.Fatalf("build UPDATE FROM with DEFAULT: %v", err)
 	}
 
-	for _, node := range logicPlan.GetQuery().Nodes {
-		if node.NodeType != plan.Node_AGG {
-			continue
-		}
-		for _, aggExpr := range node.AggList {
-			if exprContainsDefaultVal(aggExpr) {
-				t.Fatalf("dedup any_value should not wrap raw DEFAULT marker: %v", aggExpr)
-			}
-			if fn := aggExpr.GetF(); fn != nil && fn.Func.ObjName == "any_value" &&
-				exprContainsStringLiteral(aggExpr, "name-default") {
-				return
-			}
-		}
+	query := logicPlan.GetQuery()
+	if queryContainsDefaultVal(query) {
+		t.Fatalf("UPDATE FROM dedup should run after DEFAULT expansion")
 	}
-	t.Fatalf("UPDATE FROM dedup should aggregate the expanded DEFAULT expression")
+	if !queryContainsStringLiteral(query, "name-default") {
+		t.Fatalf("UPDATE FROM dedup should retain the expanded DEFAULT expression")
+	}
+	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["nation"].Cols)) {
+		t.Fatalf("UPDATE FROM dedup should not wrap DEFAULT with any_value")
+	}
 }
 
 func TestUpdatePgStyleFromDedupAllowsVectorUpdateColumn(t *testing.T) {
@@ -780,11 +788,11 @@ func TestUpdatePgStyleFromDedupAllowsVectorUpdateColumn(t *testing.T) {
 	_, err := runOneStmt(mock, t,
 		"UPDATE NATION SET N_COMMENT = NATION2.N_COMMENT FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
 	if err != nil {
-		t.Fatalf("UPDATE FROM should allow vector update columns through any_value dedup: %v", err)
+		t.Fatalf("UPDATE FROM should allow vector update columns through row-level dedup: %v", err)
 	}
 }
 
-func TestUpdatePgStyleFromDedupDoesNotAggregateGeneratedColumns(t *testing.T) {
+func TestUpdatePgStyleFromDedupKeepsGeneratedColumnsAfterDedup(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockGeneratedColumn(t, mock, "nation", "n_comment", "n_name")
 
@@ -794,14 +802,12 @@ func TestUpdatePgStyleFromDedupDoesNotAggregateGeneratedColumns(t *testing.T) {
 		t.Fatalf("build UPDATE FROM with generated column: %v", err)
 	}
 
-	aggNode := requireUpdateFromDedupAggNode(t, logicPlan.GetQuery(), len(mock.ctxt.tables["nation"].Cols))
-	if got := countFuncInExprs(aggNode.AggList, "any_value"); got != 1 {
-		t.Fatalf("dedup should aggregate only explicit update columns, got %d any_value exprs: %v", got, aggNode.AggList)
+	query := logicPlan.GetQuery()
+	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["nation"].Cols)) {
+		t.Fatalf("dedup should not aggregate generated or update columns with any_value")
 	}
-	for _, aggExpr := range aggNode.AggList {
-		if exprContainsColName(aggExpr, "n_comment") {
-			t.Fatalf("generated column should be recomputed after dedup, not aggregated by dedup: %v", aggExpr)
-		}
+	if !hasUpdateFromDedupWindow(query, len(mock.ctxt.tables["nation"].Cols)) {
+		t.Fatalf("UPDATE FROM with generated column should still use row-level dedup")
 	}
 }
 
@@ -831,7 +837,7 @@ func TestUpdatePgStyleFromDedupAllowsDecimal256AndEnumUpdateColumns(t *testing.T
 
 			_, err := runOneStmt(mock, t, tt.sql)
 			if err != nil {
-				t.Fatalf("UPDATE FROM should allow %s update columns through any_value dedup: %v", tt.name, err)
+				t.Fatalf("UPDATE FROM should allow %s update columns through row-level dedup: %v", tt.name, err)
 			}
 		})
 	}
@@ -1028,19 +1034,70 @@ func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int
 	return nil
 }
 
-func requireUpdateFromDedupAggNode(t *testing.T, query *Query, groupByLen int) *Node {
+func hasUpdateFromDedupAnyValueAgg(query *Query, groupByLen int) bool {
 	for _, node := range query.Nodes {
 		if node.NodeType != plan.Node_AGG || len(node.GroupBy) != groupByLen {
 			continue
 		}
 		for _, aggExpr := range node.AggList {
 			if fn := aggExpr.GetF(); fn != nil && fn.Func.ObjName == "any_value" {
-				return node
+				return true
 			}
 		}
 	}
-	t.Fatalf("missing UPDATE FROM dedup agg node with %d group keys", groupByLen)
-	return nil
+	return false
+}
+
+func hasUpdateFromDedupWindow(query *Query, partitionByLen int) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_WINDOW {
+			continue
+		}
+		for _, winExpr := range node.WinSpecList {
+			spec := winExpr.GetW()
+			if spec == nil || spec.Name != "row_number" || len(spec.PartitionBy) != partitionByLen {
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func queryContainsStringLiteral(query *Query, value string) bool {
+	return queryContainsExpr(query, func(expr *plan.Expr) bool {
+		return exprContainsStringLiteral(expr, value)
+	})
+}
+
+func queryContainsDefaultVal(query *Query) bool {
+	return queryContainsExpr(query, exprContainsDefaultVal)
+}
+
+func queryContainsExpr(query *Query, accept func(*plan.Expr) bool) bool {
+	for _, node := range query.Nodes {
+		exprLists := [][]*plan.Expr{
+			node.ProjectList,
+			node.OnList,
+			node.FilterList,
+			node.GroupBy,
+			node.AggList,
+			node.WinSpecList,
+		}
+		for _, exprList := range exprLists {
+			for _, expr := range exprList {
+				if accept(expr) {
+					return true
+				}
+			}
+		}
+		for _, order := range node.OrderBy {
+			if accept(order.Expr) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func requireQueryExpr(t *testing.T, query *Query, accept func(*plan.Expr) bool, message string) *plan.Expr {
@@ -1109,6 +1166,20 @@ func exprContainsStringLiteral(expr *plan.Expr, value string) bool {
 				return true
 			}
 		}
+	case *plan.Expr_W:
+		if exprContainsStringLiteral(e.W.WindowFunc, value) {
+			return true
+		}
+		for _, partition := range e.W.PartitionBy {
+			if exprContainsStringLiteral(partition, value) {
+				return true
+			}
+		}
+		for _, order := range e.W.OrderBy {
+			if exprContainsStringLiteral(order.Expr, value) {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -1130,38 +1201,22 @@ func exprContainsDefaultVal(expr *plan.Expr) bool {
 				return true
 			}
 		}
+	case *plan.Expr_W:
+		if exprContainsDefaultVal(e.W.WindowFunc) {
+			return true
+		}
+		for _, partition := range e.W.PartitionBy {
+			if exprContainsDefaultVal(partition) {
+				return true
+			}
+		}
+		for _, order := range e.W.OrderBy {
+			if exprContainsDefaultVal(order.Expr) {
+				return true
+			}
+		}
 	}
 	return false
-}
-
-func countFuncInExprs(exprs []*plan.Expr, funcName string) int {
-	count := 0
-	for _, expr := range exprs {
-		count += countFuncInExpr(expr, funcName)
-	}
-	return count
-}
-
-func countFuncInExpr(expr *plan.Expr, funcName string) int {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_F:
-		count := 0
-		if e.F.Func.ObjName == funcName {
-			count++
-		}
-		for _, arg := range e.F.Args {
-			count += countFuncInExpr(arg, funcName)
-		}
-		return count
-	case *plan.Expr_List:
-		count := 0
-		for _, item := range e.List.List {
-			count += countFuncInExpr(item, funcName)
-		}
-		return count
-	default:
-		return 0
-	}
 }
 
 func exprContainsColName(expr *plan.Expr, name string) bool {
