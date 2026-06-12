@@ -3261,6 +3261,14 @@ var (
 			output: "create table t1 (a vecbf16(128), b vecf16(65535), c vecint8(1))",
 		},
 		{
+			input:  "create table t1(a vecuint8(3))",
+			output: "create table t1 (a vecuint8(3))",
+		},
+		{
+			input:  "create table t1(a vecuint8(128), b vecuint8(65535), c vecuint8(1))",
+			output: "create table t1 (a vecuint8(128), b vecuint8(65535), c vecuint8(1))",
+		},
+		{
 			input:  "select cast('[1,2,3]' as vecbf16(3))",
 			output: "select cast([1,2,3] as vecbf16(3))",
 		},
@@ -3275,6 +3283,14 @@ var (
 		{
 			input:  "select cast(b as vecint8(3)) from t1",
 			output: "select cast(b as vecint8(3)) from t1",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecuint8(3))",
+			output: "select cast([1,2,3] as vecuint8(3))",
+		},
+		{
+			input:  "select cast(b as vecuint8(3)) from t1",
+			output: "select cast(b as vecuint8(3)) from t1",
 		},
 		{
 			input:  "select l2_distance(a, b) from t1",

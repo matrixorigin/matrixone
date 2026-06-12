@@ -428,4 +428,5 @@ func TestFormatColTypeVector(t *testing.T) {
 	require.Equal(t, "VECBF16(3)", FormatColType(plan.Type{Id: int32(types.T_array_bf16), Width: 3}))
 	require.Equal(t, "VECF16(3)", FormatColType(plan.Type{Id: int32(types.T_array_float16), Width: 3}))
 	require.Equal(t, "VECINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_int8), Width: 3}))
+	require.Equal(t, "VECUINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_uint8), Width: 3}))
 }
