@@ -25,6 +25,16 @@ ddl_owner_secondary
 select role_name, privilege_name, privilege_level from mo_catalog.mo_role_privs where role_name in ('ddl_owner_primary','ddl_owner_secondary') and privilege_name = 'table ownership' order by role_name, privilege_level;
 role_name    privilege_name    privilege_level
 ddl_owner_secondary    table ownership    ddl_owner_db.t1
+set secondary role all;
+prepare ddl_owner_stmt from 'create table ddl_owner_db.t_prepare(a int)';
+execute ddl_owner_stmt;
+select r.role_name from mo_catalog.mo_tables t join mo_catalog.mo_role r on t.owner = r.role_id where t.reldatabase = 'ddl_owner_db' and t.relname = 't_prepare';
+role_name
+ddl_owner_secondary
+drop table ddl_owner_db.t_prepare;
+select count(*) from mo_catalog.mo_role_privs where role_name = 'ddl_owner_secondary' and privilege_name = 'table ownership' and privilege_level = 'ddl_owner_db.t_prepare';
+count(*)
+0
 revoke ddl_owner_secondary from ddl_owner_user;
 set secondary role all;
 select * from ddl_owner_db.t1;

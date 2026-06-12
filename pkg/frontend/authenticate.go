@@ -11008,7 +11008,6 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 		}
 		return nil
 	}
-
 	return nil
 }
 
