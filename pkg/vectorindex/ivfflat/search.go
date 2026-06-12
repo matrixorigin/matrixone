@@ -185,7 +185,7 @@ func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, t
 	return nil
 }
 
-func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, distfn metric.DistanceFunction[T], idxcfg vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
+func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, idxcfg vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
 
 	if idx.Centroids == nil {
 		// empty index has id = 1
@@ -293,12 +293,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	nthread int64,
 ) (keys any, distances []float64, err error) {
 
-	distfn, err := metric.ResolveDistanceFn[T](metric.MetricType(idxcfg.Ivfflat.Metric))
-	if err != nil {
-		return
-	}
-
-	centroids_ids, err := idx.findCentroids(sqlproc, query, distfn, idxcfg, rt.Probe, nthread)
+	centroids_ids, err := idx.findCentroids(sqlproc, query, idxcfg, rt.Probe, nthread)
 	if err != nil {
 		return
 	}

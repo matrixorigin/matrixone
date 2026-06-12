@@ -105,15 +105,15 @@ func Benchmark_NarrowVsFloat(b *testing.B) {
 		b.Run(m.name, func(b *testing.B) {
 			b.Run("f64", func(b *testing.B) { benchFloatFromBytes[float64](b, m.mt, f64b) })
 			b.Run("f32", func(b *testing.B) { benchFloatFromBytes[float32](b, m.mt, f32b) })
-			b.Run("bf16", func(b *testing.B) { benchNarrowFromBytes(b, types.T_array_bf16, m.mt, bf16b) })
-			b.Run("f16", func(b *testing.B) { benchNarrowFromBytes(b, types.T_array_float16, m.mt, f16b) })
-			b.Run("int8", func(b *testing.B) { benchNarrowFromBytes(b, types.T_array_int8, m.mt, i8b) })
+			b.Run("bf16", func(b *testing.B) { benchNarrowFromBytes[types.BF16](b, m.mt, bf16b) })
+			b.Run("f16", func(b *testing.B) { benchNarrowFromBytes[types.Float16](b, m.mt, f16b) })
+			b.Run("int8", func(b *testing.B) { benchNarrowFromBytes[int8](b, m.mt, i8b) })
 		})
 	}
 }
 
 func benchFloatFromBytes[T float32 | float64](b *testing.B, m MetricType, pool [][]byte) {
-	fn, err := ResolveDistanceFn[T](m)
+	fn, err := ResolveDistanceFn[T, T](m)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -125,13 +125,15 @@ func benchFloatFromBytes[T float32 | float64](b *testing.B, m MetricType, pool [
 	}
 }
 
-func benchNarrowFromBytes(b *testing.B, oid types.T, m MetricType, pool [][]byte) {
-	fn, err := ResolveNarrowDistanceFn(oid, m)
+func benchNarrowFromBytes[T types.ArrayElement](b *testing.B, m MetricType, pool [][]byte) {
+	fn, err := ResolveDistanceFn[T, float32](m)
 	if err != nil {
 		b.Fatal(err)
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = fn(pool[i%len(pool)], pool[(i+1)%len(pool)])
+		a := types.BytesToArray[T](pool[i%len(pool)])
+		c := types.BytesToArray[T](pool[(i+1)%len(pool)])
+		_, _ = fn(a, c)
 	}
 }

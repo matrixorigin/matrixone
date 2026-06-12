@@ -94,35 +94,118 @@ func ResolveKmeansDistanceFnForSparse[T types.RealNumbers](metric MetricType) (D
 	return distanceFunction, normalize, nil
 }
 
-// ResolveDistanceFn is used for similarity score for search and assign vector to centroids (CENTROIDX JOIN / ProductL2).
-// IMPORTANT: Don't use it for Elkans Kmeans.
-// NOTE: Metric_L2Distance returns L2DistanceSq (squared distance). Callers that need true L2
-// must apply sqrt to each result afterwards (as GoPairWiseDistance does).
-func ResolveDistanceFn[T types.RealNumbers](metric MetricType) (DistanceFunction[T], error) {
-	var distanceFunction DistanceFunction[T]
+// resolveRealKernel picks the float32/float64 metric kernel (returning the value
+// in its own type T). It is the f32/f64 half of ResolveDistanceFn.
+func resolveRealKernel[T types.RealNumbers](metric MetricType) (DistanceFunction[T], error) {
 	switch metric {
 	case Metric_L2Distance:
-		distanceFunction = L2DistanceSq[T] // caller must sqrt; see function doc above
+		return L2DistanceSq[T], nil // caller must sqrt; squared distance
 	case Metric_L2sqDistance:
-		distanceFunction = L2DistanceSq[T]
+		return L2DistanceSq[T], nil
 	case Metric_InnerProduct:
-		distanceFunction = InnerProduct[T]
+		return InnerProduct[T], nil
 	case Metric_CosineDistance:
-		distanceFunction = CosineDistance[T]
+		return CosineDistance[T], nil
 	case Metric_L1Distance:
-		distanceFunction = L1Distance[T]
+		return L1Distance[T], nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
 	}
-	return distanceFunction, nil
 }
 
-func GoPairWiseDistance[T types.RealNumbers](
+// ResolveDistanceFn is the single distance resolver for search / assign-to-
+// centroid (CENTROIDX JOIN / ProductL2), brute force, pairwise and topn. It
+// works for any storage element type T (types.ArrayElement) and returns the
+// distance in a caller-chosen result type R (types.RealNumbers): pass
+// R=float32 for the common path and R=float64 only where f64 precision is
+// needed (f64 input, topn ordering values). f32/f64 use the metric kernels;
+// bf16/f16/int8/uint8 use the native narrow kernels (which compute in
+// float32/int64 and are cast to R — casting their float64 down to float32 is
+// bit-identical to a native-float32 kernel, since the intermediate is exact).
+//
+// IMPORTANT: Don't use it for Elkans Kmeans (use ResolveKmeansDistanceFn).
+// NOTE: Metric_L2Distance returns squared L2; callers needing true L2 sqrt the
+// result (as GoPairWiseDistance does).
+func ResolveDistanceFn[T types.ArrayElement, R types.RealNumbers](metric MetricType) (func(a, b []T) (R, error), error) {
+	// Each case resolves the CONCRETE element kernel, then rebinds it to
+	// func([]T,...)(R,error) ONCE here (not per call). When R already equals the
+	// kernel's native result type (e.g. f32 input with R=float32, or a narrow
+	// kernel's float64 with R=float64), the kernel IS that type — return it
+	// directly, so the hot loop is a single direct call exactly like before. Only
+	// when R differs (a cast is genuinely needed, e.g. narrow float64 -> float32)
+	// do we add a thin casting wrapper.
+	switch any(*new(T)).(type) {
+	case float32:
+		fn, err := resolveRealKernel[float32](metric)
+		if err != nil {
+			return nil, err
+		}
+		if f, ok := any(fn).(func(a, b []T) (R, error)); ok {
+			return f, nil
+		}
+		w := func(a, b []float32) (R, error) { d, e := fn(a, b); return R(d), e }
+		return any(w).(func(a, b []T) (R, error)), nil
+	case float64:
+		fn, err := resolveRealKernel[float64](metric)
+		if err != nil {
+			return nil, err
+		}
+		if f, ok := any(fn).(func(a, b []T) (R, error)); ok {
+			return f, nil
+		}
+		w := func(a, b []float64) (R, error) { d, e := fn(a, b); return R(d), e }
+		return any(w).(func(a, b []T) (R, error)), nil
+	case types.BF16:
+		k, err := resolveBF16Kernel(metric)
+		if err != nil {
+			return nil, err
+		}
+		if f, ok := any(k).(func(a, b []T) (R, error)); ok {
+			return f, nil
+		}
+		w := func(a, b []types.BF16) (R, error) { d, e := k(a, b); return R(d), e }
+		return any(w).(func(a, b []T) (R, error)), nil
+	case types.Float16:
+		k, err := resolveF16Kernel(metric)
+		if err != nil {
+			return nil, err
+		}
+		if f, ok := any(k).(func(a, b []T) (R, error)); ok {
+			return f, nil
+		}
+		w := func(a, b []types.Float16) (R, error) { d, e := k(a, b); return R(d), e }
+		return any(w).(func(a, b []T) (R, error)), nil
+	case int8:
+		k, err := resolveInt8Kernel(metric)
+		if err != nil {
+			return nil, err
+		}
+		if f, ok := any(k).(func(a, b []T) (R, error)); ok {
+			return f, nil
+		}
+		w := func(a, b []int8) (R, error) { d, e := k(a, b); return R(d), e }
+		return any(w).(func(a, b []T) (R, error)), nil
+	case uint8:
+		k, err := resolveUint8Kernel(metric)
+		if err != nil {
+			return nil, err
+		}
+		if f, ok := any(k).(func(a, b []T) (R, error)); ok {
+			return f, nil
+		}
+		w := func(a, b []uint8) (R, error) { d, e := k(a, b); return R(d), e }
+		return any(w).(func(a, b []T) (R, error)), nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("ResolveDistanceFn: unsupported element type")
+	}
+}
+
+func GoPairWiseDistance[T types.ArrayElement](
 	x [][]T,
 	y [][]T,
 	metric MetricType,
 ) ([]float32, error) {
-	distFn, err := ResolveDistanceFn[T](metric)
+	distFn, err := ResolveDistanceFn[T, float32](metric)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +219,7 @@ func GoPairWiseDistance[T types.RealNumbers](
 			if err != nil {
 				return nil, err
 			}
-			res[i*nY+j] = float32(d)
+			res[i*nY+j] = d
 		}
 	}
 

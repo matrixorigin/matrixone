@@ -18,9 +18,53 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+// resolveNarrowBytes mirrors the (removed) byte-keyed narrow resolver for these
+// tests: an oid-keyed, raw-bytes-in, float64-out distance fn built on the merged
+// ResolveDistanceFn. R=float64 keeps int8's int64 sum exact (the exact-match
+// oracle), and errors for non-narrow oids / invalid metrics exactly as before.
+func resolveNarrowBytes(oid types.T, m MetricType) (func(a, b []byte) (float64, error), error) {
+	switch oid {
+	case types.T_array_bf16:
+		fn, err := ResolveDistanceFn[types.BF16, float64](m)
+		if err != nil {
+			return nil, err
+		}
+		return func(a, b []byte) (float64, error) {
+			return fn(types.BytesToArray[types.BF16](a), types.BytesToArray[types.BF16](b))
+		}, nil
+	case types.T_array_float16:
+		fn, err := ResolveDistanceFn[types.Float16, float64](m)
+		if err != nil {
+			return nil, err
+		}
+		return func(a, b []byte) (float64, error) {
+			return fn(types.BytesToArray[types.Float16](a), types.BytesToArray[types.Float16](b))
+		}, nil
+	case types.T_array_int8:
+		fn, err := ResolveDistanceFn[int8, float64](m)
+		if err != nil {
+			return nil, err
+		}
+		return func(a, b []byte) (float64, error) {
+			return fn(types.BytesToArray[int8](a), types.BytesToArray[int8](b))
+		}, nil
+	case types.T_array_uint8:
+		fn, err := ResolveDistanceFn[uint8, float64](m)
+		if err != nil {
+			return nil, err
+		}
+		return func(a, b []byte) (float64, error) {
+			return fn(types.BytesToArray[uint8](a), types.BytesToArray[uint8](b))
+		}, nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("resolveNarrowBytes: not a narrow vector type")
+	}
+}
 
 // reference distance over float64, mirroring ResolveDistanceFn semantics.
 func refDist(metric MetricType, a, b []float64) float64 {
@@ -81,7 +125,7 @@ func TestNarrowInt8KernelsExact(t *testing.T) {
 	ab := types.ArrayToBytes(a)
 	bb := types.ArrayToBytes(b)
 	for _, m := range narrowMetrics {
-		fn, err := ResolveNarrowDistanceFn(types.T_array_int8, m)
+		fn, err := resolveNarrowBytes(types.T_array_int8, m)
 		if err != nil {
 			t.Fatalf("resolve int8 m=%d: %v", m, err)
 		}
@@ -109,7 +153,7 @@ func TestNarrowUint8KernelsExact(t *testing.T) {
 	ab := types.ArrayToBytes(a)
 	bb := types.ArrayToBytes(b)
 	for _, m := range narrowMetrics {
-		fn, err := ResolveNarrowDistanceFn(types.T_array_uint8, m)
+		fn, err := resolveNarrowBytes(types.T_array_uint8, m)
 		if err != nil {
 			t.Fatalf("resolve uint8 m=%d: %v", m, err)
 		}
@@ -135,7 +179,7 @@ func TestNarrowBF16F16Kernels(t *testing.T) {
 	af64 := f32to64(af)
 	bf64 := f32to64(bf)
 	for _, m := range narrowMetrics {
-		fn, _ := ResolveNarrowDistanceFn(types.T_array_bf16, m)
+		fn, _ := resolveNarrowBytes(types.T_array_bf16, m)
 		got, err := fn(types.ArrayToBytes(bf1), types.ArrayToBytes(bf2))
 		if err != nil {
 			t.Fatalf("bf16 m=%d: %v", m, err)
@@ -151,7 +195,7 @@ func TestNarrowBF16F16Kernels(t *testing.T) {
 	haf := f32to64(types.Float16ToFloat32Slice(h1))
 	hbf := f32to64(types.Float16ToFloat32Slice(h2))
 	for _, m := range narrowMetrics {
-		fn, _ := ResolveNarrowDistanceFn(types.T_array_float16, m)
+		fn, _ := resolveNarrowBytes(types.T_array_float16, m)
 		got, err := fn(types.ArrayToBytes(h1), types.ArrayToBytes(h2))
 		if err != nil {
 			t.Fatalf("f16 m=%d: %v", m, err)
@@ -164,10 +208,10 @@ func TestNarrowBF16F16Kernels(t *testing.T) {
 }
 
 func TestNarrowResolveErrors(t *testing.T) {
-	if _, err := ResolveNarrowDistanceFn(types.T_array_float32, Metric_L2Distance); err == nil {
+	if _, err := resolveNarrowBytes(types.T_array_float32, Metric_L2Distance); err == nil {
 		t.Errorf("expected error for non-narrow oid")
 	}
-	if _, err := ResolveNarrowDistanceFn(types.T_array_int8, MetricType(999)); err == nil {
+	if _, err := resolveNarrowBytes(types.T_array_int8, MetricType(999)); err == nil {
 		t.Errorf("expected error for invalid metric")
 	}
 }
@@ -204,7 +248,7 @@ func TestNarrowKernelEdgeCases(t *testing.T) {
 	// dimension mismatch -> error on every metric/type.
 	for _, oid := range narrowOids {
 		for _, m := range narrowMetrics {
-			fn, err := ResolveNarrowDistanceFn(oid, m)
+			fn, err := resolveNarrowBytes(oid, m)
 			require.NoError(t, err)
 			var a, b []byte
 			switch oid {
@@ -227,7 +271,7 @@ func TestNarrowKernelEdgeCases(t *testing.T) {
 	// empty guard; the rest sum nothing).
 	for _, oid := range narrowOids {
 		for _, m := range narrowMetrics {
-			fn, _ := ResolveNarrowDistanceFn(oid, m)
+			fn, _ := resolveNarrowBytes(oid, m)
 			got, err := fn(nil, nil)
 			require.NoError(t, err)
 			require.InDeltaf(t, 0.0, got, 1e-9, "oid=%d metric=%d empty", oid, m)
@@ -236,7 +280,7 @@ func TestNarrowKernelEdgeCases(t *testing.T) {
 
 	// cosine of a zero vector -> 1.0 (denominator 0).
 	for _, oid := range narrowOids {
-		fn, _ := ResolveNarrowDistanceFn(oid, Metric_CosineDistance)
+		fn, _ := resolveNarrowBytes(oid, Metric_CosineDistance)
 		var z []byte
 		switch oid {
 		case types.T_array_int8:
@@ -260,14 +304,14 @@ func TestNarrowKernelEdgeCases(t *testing.T) {
 		amax[i] = 127
 		amin[i] = -128
 	}
-	fn, _ := ResolveNarrowDistanceFn(types.T_array_int8, Metric_L2sqDistance)
+	fn, _ := resolveNarrowBytes(types.T_array_int8, Metric_L2sqDistance)
 	got, err := fn(types.ArrayToBytes(amax), types.ArrayToBytes(amin))
 	require.NoError(t, err)
 	require.InDelta(t, float64(dim)*255.0*255.0, got, 1e-6)
 
 	// single-element vectors work (loop-remainder path).
 	for _, oid := range narrowOids {
-		fn, _ := ResolveNarrowDistanceFn(oid, Metric_L2sqDistance)
+		fn, _ := resolveNarrowBytes(oid, Metric_L2sqDistance)
 		var a, b []byte
 		switch oid {
 		case types.T_array_int8:

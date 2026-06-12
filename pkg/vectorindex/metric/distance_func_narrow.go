@@ -38,52 +38,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// NarrowDistanceFn computes a distance between two narrow-typed vectors given
-// their raw stored bytes.
-type NarrowDistanceFn func(a, b []byte) (float64, error)
-
-// ResolveNarrowDistanceFn returns the distance function for a narrow vector
-// element type (bf16/f16/int8), or an error for any other oid.
-func ResolveNarrowDistanceFn(oid types.T, metric MetricType) (NarrowDistanceFn, error) {
-	switch oid {
-	case types.T_array_bf16:
-		kern, err := resolveBF16Kernel(metric)
-		if err != nil {
-			return nil, err
-		}
-		return func(a, b []byte) (float64, error) {
-			// BytesToArray is a zero-copy reinterpret; the kernel decodes each
-			// element to float32 inline (no []float32 slice materialized).
-			return kern(types.BytesToArray[types.BF16](a), types.BytesToArray[types.BF16](b))
-		}, nil
-	case types.T_array_float16:
-		kern, err := resolveF16Kernel(metric)
-		if err != nil {
-			return nil, err
-		}
-		return func(a, b []byte) (float64, error) {
-			return kern(types.BytesToArray[types.Float16](a), types.BytesToArray[types.Float16](b))
-		}, nil
-	case types.T_array_int8:
-		kern, err := resolveInt8Kernel(metric)
-		if err != nil {
-			return nil, err
-		}
-		return func(a, b []byte) (float64, error) {
-			return kern(types.BytesToArray[int8](a), types.BytesToArray[int8](b))
-		}, nil
-	case types.T_array_uint8:
-		kern, err := resolveUint8Kernel(metric)
-		if err != nil {
-			return nil, err
-		}
-		return func(a, b []byte) (float64, error) {
-			return kern(types.BytesToArray[uint8](a), types.BytesToArray[uint8](b))
-		}, nil
-	default:
-		return nil, moerr.NewInternalErrorNoCtx("ResolveNarrowDistanceFn: not a narrow vector type")
-	}
-}
+// The native narrow kernels return float32 — bf16/f16 accumulate in float32, and
+// int8/uint8 cast their int64 accumulator down at the end. The merged
+// ResolveDistanceFn[T, R] in resolve.go dispatches to resolveBF16Kernel /
+// resolveF16Kernel / resolveInt8Kernel / resolveUint8Kernel and casts to R.
 
 // ----------------------------------------------------------------------------
 // bf16 / f16 CONCRETE fused kernels (unroll-8). NOT generic: a generic
