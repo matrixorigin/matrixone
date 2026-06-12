@@ -4264,6 +4264,63 @@ func Test_determineCreateDatabase(t *testing.T) {
 	})
 }
 
+func TestCreateDatabaseOwnerRoleFollowsActiveInheritedRoleRoot(t *testing.T) {
+	convey.Convey("create database owner role follows active inherited role root", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateDatabase{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.GetTenantInfo().SetDefaultRoleID(5)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{5, false},
+		}
+		roleIdsInMoRolePrivs := []int{5, 7}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{{7, false}}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+
+		roleIdsInMoRoleGrant := []int{5, 7}
+		rowsOfMoRoleGrant := [][][]interface{}{
+			{{7, false}},
+			{},
+		}
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
+
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roleIdsInMoRolePrivs {
+					sql, err := getSqlForPrivilege(context.TODO(), int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					rows := [][]interface{}{}
+					if roleId == 7 && entry.privilegeId == PrivilegeTypeCreateDatabase {
+						rows = [][]interface{}{{roleId, false}}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(ses.GetDDLOwnerRoleID(), convey.ShouldEqual, uint32(5))
+	})
+}
+
 func Test_determineDropDatabase(t *testing.T) {
 	convey.Convey("drop/alter database succ", t, func() {
 		ctrl := gomock.NewController(t)
@@ -4993,6 +5050,63 @@ func TestCreateTableOwnerRoleFollowsPrivilegeRole(t *testing.T) {
 		}
 		sql2result[getSqlForInheritedRoleIdOfRoleId(5)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
 		sql2result[getSqlForInheritedRoleIdOfRoleId(7)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(ses.GetDDLOwnerRoleID(), convey.ShouldEqual, uint32(5))
+	})
+
+	convey.Convey("create table owner role follows active inherited role root", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateTable{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.GetTenantInfo().SetDefaultRoleID(5)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{5, false},
+		}
+		roleIdsInMoRolePrivs := []int{5, 7}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][2] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{{7, false}}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][2] = [][]interface{}{}
+
+		roleIdsInMoRoleGrant := []int{5, 7}
+		rowsOfMoRoleGrant := [][][]interface{}{
+			{{7, false}},
+			{},
+		}
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
+
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roleIdsInMoRolePrivs {
+					sql, err := getSqlForPrivilege(context.TODO(), int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					rows := [][]interface{}{}
+					if roleId == 7 && entry.privilegeId == PrivilegeTypeCreateTable {
+						rows = [][]interface{}{{roleId, false}}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
 
 		bh := newBh(ctrl, sql2result)
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
