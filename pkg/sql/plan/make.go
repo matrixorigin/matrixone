@@ -407,6 +407,20 @@ func makePlan2VecInt8ConstExprWithType(v string, l int32) *plan.Expr {
 	}
 }
 
+var MakePlan2VecUint8ConstExprWithType = makePlan2VecUint8ConstExprWithType
+
+// makePlan2VecUint8ConstExprWithType makes a vecuint8 const expr.
+func makePlan2VecUint8ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_uint8),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
 var MakePlan2StringVecExprWithType = makePlan2StringVecExprWithType
 
 func makePlan2StringVecExprWithType(mp *mpool.MPool, vals ...string) *plan.Expr {

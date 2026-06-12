@@ -40,6 +40,19 @@ func TestL2DistanceNarrowArray(t *testing.T) {
 		require.True(t, s, info)
 	})
 
+	// uint8: exact unsigned integer values, distance matches the float reference.
+	t.Run("uint8", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_array_uint8.ToType(), [][]uint8{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_array_uint8.ToType(), [][]uint8{{4, 6, 8}}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{7.071067810058594}, []bool{false}),
+			L2DistanceArrayViaF32[uint8])
+		s, info := tc.Run()
+		require.True(t, s, info)
+	})
+
 	// bf16: small integers are exactly representable in bf16, so still exact.
 	t.Run("bf16", func(t *testing.T) {
 		mk := func(vs ...float32) []types.BF16 {
@@ -93,4 +106,15 @@ func TestInnerProductNarrowArray(t *testing.T) {
 		InnerProductArrayViaF32[int8])
 	s, info := tc.Run()
 	require.True(t, s, fmt.Sprintf("inner_product int8: %s", info))
+
+	// uint8 sibling: same dot product over unsigned values.
+	tc = NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_array_uint8.ToType(), [][]uint8{{1, 2, 3}}, []bool{false}),
+			NewFunctionTestInput(types.T_array_uint8.ToType(), [][]uint8{{4, 5, 6}}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{-32}, []bool{false}),
+		InnerProductArrayViaF32[uint8])
+	s, info = tc.Run()
+	require.True(t, s, fmt.Sprintf("inner_product uint8: %s", info))
 }

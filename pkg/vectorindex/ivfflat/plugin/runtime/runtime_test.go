@@ -139,7 +139,7 @@ func TestIvfflatParamsFromTree_InvalidOpType(t *testing.T) {
 }
 
 func TestIvfflatParamsFromTree_Quantization(t *testing.T) {
-	for _, q := range []string{"int8", "float16", "bf16", "float32", "INT8", "Bf16"} {
+	for _, q := range []string{"int8", "uint8", "float16", "bf16", "float32", "INT8", "Bf16", "UINT8"} {
 		idx := &tree.Index{IndexOption: &tree.IndexOption{Quantization: q}}
 		got, err := CatalogHooks{}.ParamsFromTree(idx)
 		require.NoErrorf(t, err, "quantization %q", q)
@@ -154,7 +154,7 @@ func TestIvfflatParamsFromTree_Quantization(t *testing.T) {
 }
 
 func TestIvfflatParamsFromTree_InvalidQuantization(t *testing.T) {
-	for _, q := range []string{"uint8", "float64", "f16", "garbage"} {
+	for _, q := range []string{"float64", "f16", "garbage"} {
 		idx := &tree.Index{IndexOption: &tree.IndexOption{Quantization: q}}
 		_, err := CatalogHooks{}.ParamsFromTree(idx)
 		require.Errorf(t, err, "quantization %q should be rejected", q)

@@ -40,6 +40,7 @@ func TestGetConstantValueNarrowVec(t *testing.T) {
 		{types.T_array_bf16, types.ArrayToBytes(types.Float32ToBF16Slice([]float32{1, 2, 3}))},
 		{types.T_array_float16, types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{1, 2, 3}))},
 		{types.T_array_int8, types.ArrayToBytes([]int8{1, 2, 3})},
+		{types.T_array_uint8, types.ArrayToBytes([]uint8{1, 2, 3})},
 	}
 	for _, c := range cases {
 		vec := vector.NewVec(c.oid.ToType())

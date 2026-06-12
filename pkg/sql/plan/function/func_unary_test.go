@@ -4519,6 +4519,13 @@ func TestVecFromBase64Narrow(t *testing.T) {
 		NewFunctionTestResult(types.T_array_int8.ToType(), false, [][]int8{i8}, []bool{}), VecFromBase64[int8])
 	require.Truef(t, ok, "vecint8 roundtrip: %s", info)
 
+	// uint8 roundtrip (elemSize 1). Regression: with the uint8 case missing from
+	// the decoder, elemSize was 0 and `n % elemSize` panicked (divide by zero).
+	u8 := []uint8{0, 255, 128, 1}
+	ok, info = runCase(mkInput(types.ArrayToBase64(u8)),
+		NewFunctionTestResult(types.T_array_uint8.ToType(), false, [][]uint8{u8}, []bool{}), VecFromBase64[uint8])
+	require.Truef(t, ok, "vecuint8 roundtrip: %s", info)
+
 	// bf16 roundtrip (elemSize 2).
 	bf := types.Float32ToBF16Slice([]float32{1.5, -2.25, 0, 8})
 	ok, info = runCase(mkInput(types.ArrayToBase64(bf)),
