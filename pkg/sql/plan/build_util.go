@@ -157,7 +157,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
 				if fstr == "char" || fstr == "binary" {
 					width = 1
-				} else if fstr == "vecf32" || fstr == "vecf64" || fstr == "vecbf16" || fstr == "vecf16" || fstr == "vecint8" {
+				} else if fstr == types.ArrayFloat32SQLName || fstr == types.ArrayFloat64SQLName || fstr == types.ArrayBF16SQLName || fstr == types.ArrayFloat16SQLName || fstr == types.ArrayInt8SQLName {
 					width = types.MaxArrayDimension
 				} else {
 					width = types.MaxVarcharLen
@@ -168,7 +168,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 				return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if (fstr == "varchar" || fstr == "varbinary") && width > types.MaxVarcharLen {
 				return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
-			} else if fstr == "vecf32" || fstr == "vecf64" || fstr == "vecbf16" || fstr == "vecf16" || fstr == "vecint8" {
+			} else if fstr == types.ArrayFloat32SQLName || fstr == types.ArrayFloat64SQLName || fstr == types.ArrayBF16SQLName || fstr == types.ArrayFloat16SQLName || fstr == types.ArrayInt8SQLName {
 				if width > types.MaxArrayDimension {
 					return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxVectorLen : %v", types.MaxArrayDimension)
 				}
@@ -183,15 +183,15 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 				return plan.Type{Id: int32(types.T_binary), Width: width}, nil
 			case "varchar":
 				return plan.Type{Id: int32(types.T_varchar), Width: width}, nil
-			case "vecf32":
+			case types.ArrayFloat32SQLName:
 				return plan.Type{Id: int32(types.T_array_float32), Width: width}, nil
-			case "vecf64":
+			case types.ArrayFloat64SQLName:
 				return plan.Type{Id: int32(types.T_array_float64), Width: width}, nil
-			case "vecbf16":
+			case types.ArrayBF16SQLName:
 				return plan.Type{Id: int32(types.T_array_bf16), Width: width}, nil
-			case "vecf16":
+			case types.ArrayFloat16SQLName:
 				return plan.Type{Id: int32(types.T_array_float16), Width: width}, nil
-			case "vecint8":
+			case types.ArrayInt8SQLName:
 				return plan.Type{Id: int32(types.T_array_int8), Width: width}, nil
 			}
 			// varbinary

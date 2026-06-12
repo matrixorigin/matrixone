@@ -105,6 +105,36 @@ const (
 	//note: max value of uint8 is 255
 )
 
+// Canonical lowercase SQL type names for the array/vector types — the spelling
+// used in DDL and CAST (`col vecf32(4)`, `cast(x as vecint8(4))`) and recognized
+// by the parser keyword table. T.String() returns the uppercase display form;
+// these are the single source of truth for the lowercase SQL spelling.
+const (
+	ArrayFloat32SQLName = "vecf32"
+	ArrayFloat64SQLName = "vecf64"
+	ArrayBF16SQLName    = "vecbf16"
+	ArrayFloat16SQLName = "vecf16"
+	ArrayInt8SQLName    = "vecint8"
+)
+
+// ArraySQLName returns the lowercase SQL type name for an array element type
+// (e.g. T_array_float32 -> "vecf32"), or "" if t is not an array/vector type.
+func (t T) ArraySQLName() string {
+	switch t {
+	case T_array_float32:
+		return ArrayFloat32SQLName
+	case T_array_float64:
+		return ArrayFloat64SQLName
+	case T_array_bf16:
+		return ArrayBF16SQLName
+	case T_array_float16:
+		return ArrayFloat16SQLName
+	case T_array_int8:
+		return ArrayInt8SQLName
+	}
+	return ""
+}
+
 const (
 	TxnTsSize     = 12
 	SegmentidSize = 16

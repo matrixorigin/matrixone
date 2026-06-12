@@ -64,21 +64,10 @@ func ToVectorType(q string) (types.T, bool) {
 }
 
 // SQLTypeName returns the SQL type name for a vector element type, for use in
-// CAST(... AS <name>(dim)).
+// CAST(... AS <name>(dim)). Thin alias over types.T.ArraySQLName (the canonical
+// source of the lowercase SQL spellings).
 func SQLTypeName(t types.T) string {
-	switch t {
-	case types.T_array_float32:
-		return "vecf32"
-	case types.T_array_float64:
-		return "vecf64"
-	case types.T_array_bf16:
-		return "vecbf16"
-	case types.T_array_float16:
-		return "vecf16"
-	case types.T_array_int8:
-		return "vecint8"
-	}
-	return ""
+	return t.ArraySQLName()
 }
 
 // Int8Params returns (mul, add) for the cuVS-style asymmetric int8 scalar
