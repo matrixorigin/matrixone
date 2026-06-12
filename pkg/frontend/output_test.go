@@ -45,6 +45,79 @@ func TestExtractRowFromVector(t *testing.T) {
 	}
 }
 
+// TestExtractRowFromVectorNarrowVec guards the row-based (GetValue) display path
+// for the narrow vector types. vecuint8 in particular must NOT be stored as
+// []uint8: that is the same Go type as a raw []byte (binary/varbinary) value once
+// the column is mapped to MYSQL_TYPE_VARCHAR, so every value-based consumer
+// (GetString, the legacy row encoders, CSV export) would emit raw bytes / corrupt
+// output. It is stored as its display string instead. bf16/f16/int8 stay as their
+// distinct slice types (GetString renders them via ArrayToString). Every type must
+// render as the human-readable "[1, 2, 3]" form, never raw bytes.
+func TestExtractRowFromVectorNarrowVec(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	f32 := []float32{1, 2, 3}
+	bf16 := types.Float32ToBF16Slice(f32)
+	f16 := types.Float32ToFloat16Slice(f32)
+	i8 := []int8{1, 2, 3}
+	u8 := []uint8{1, 2, 3}
+
+	cases := []struct {
+		name    string
+		oid     types.T
+		bytes   []byte
+		display string
+		assert  func(t *testing.T, v any)
+	}{
+		{
+			name: "bf16", oid: types.T_array_bf16,
+			bytes:   types.ArrayToBytes[types.BF16](bf16),
+			display: types.ArrayToString[types.BF16](bf16),
+			assert:  func(t *testing.T, v any) { _, ok := v.([]types.BF16); require.Truef(t, ok, "got %T", v) },
+		},
+		{
+			name: "f16", oid: types.T_array_float16,
+			bytes:   types.ArrayToBytes[types.Float16](f16),
+			display: types.ArrayToString[types.Float16](f16),
+			assert:  func(t *testing.T, v any) { _, ok := v.([]types.Float16); require.Truef(t, ok, "got %T", v) },
+		},
+		{
+			name: "int8", oid: types.T_array_int8,
+			bytes:   types.ArrayToBytes[int8](i8),
+			display: types.ArrayToString[int8](i8),
+			assert:  func(t *testing.T, v any) { _, ok := v.([]int8); require.Truef(t, ok, "got %T", v) },
+		},
+		{
+			name: "uint8", oid: types.T_array_uint8,
+			bytes:   types.ArrayToBytes[uint8](u8),
+			display: types.ArrayToString[uint8](u8),
+			assert: func(t *testing.T, v any) {
+				s, ok := v.(string)
+				require.Truef(t, ok, "vecuint8 must be stored as a string (not []uint8/[]byte), got %T", v)
+				require.Equal(t, types.ArrayToString[uint8](u8), s)
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			vec := vector.NewVec(c.oid.ToType())
+			require.NoError(t, vector.AppendAny(vec, c.bytes, false, mp))
+
+			row := make([]any, 1)
+			require.NoError(t, extractRowFromVector(context.TODO(), nil, vec, 0, row, 0, false))
+			c.assert(t, row[0])
+
+			mrs := &MysqlResultSet{}
+			mrs.Data = [][]any{{row[0]}}
+			mrs.Columns = make([]Column, 1)
+			got, err := mrs.GetString(context.TODO(), 0, 0)
+			require.NoError(t, err)
+			require.Equal(t, c.display, got)
+		})
+	}
+}
+
 func BenchmarkName(b *testing.B) {
 
 	mp := mpool.MustNewZero()

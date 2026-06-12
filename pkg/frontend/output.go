@@ -139,12 +139,14 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 			row[i] = append([]int8(nil), arr...)
 		}
 	case types.T_array_uint8:
-		arr := vector.GetArrayAt[uint8](vec, rowIndex)
-		if safeRefSlice {
-			row[i] = arr
-		} else {
-			row[i] = append([]uint8(nil), arr...)
-		}
+		// vecuint8's element slice is []uint8, which is indistinguishable from a
+		// raw []byte (binary/varbinary) value once the column is mapped to
+		// MYSQL_TYPE_VARCHAR. Every value-based consumer of mrs.Data (GetString,
+		// the legacy row encoders, CSV export) would then treat it as raw bytes
+		// and emit corrupt output. Store the display string instead so it is
+		// unambiguous; the main SELECT path (extractRowFromVector2/GetStringBased)
+		// is oid-aware and renders directly from the vector, unaffected by this.
+		row[i] = types.ArrayToString[uint8](vector.GetArrayAt[uint8](vec, rowIndex))
 	case types.T_date:
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIndex)
 	case types.T_datetime:

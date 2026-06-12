@@ -718,6 +718,20 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			} else if arr, ok := value.([]float64); ok {
 				// this is for T_array_float64 type
 				value = []byte(types.ArrayToString[float64](arr))
+			} else if arr, ok := value.([]types.BF16); ok {
+				// this is for T_array_bf16 type
+				value = []byte(types.ArrayToString[types.BF16](arr))
+			} else if arr, ok := value.([]types.Float16); ok {
+				// this is for T_array_float16 type
+				value = []byte(types.ArrayToString[types.Float16](arr))
+			} else if arr, ok := value.([]int8); ok {
+				// this is for T_array_int8 type
+				value = []byte(types.ArrayToString[int8](arr))
+			} else if s, ok := value.(string); ok {
+				// this is for T_array_uint8 (stored as its display string in
+				// extractRowFromVector, since []uint8 is indistinguishable from
+				// raw []byte) and any other string-valued varchar column
+				value = []byte(s)
 			}
 
 			if err = formatOutputString(oq, value.([]byte), symbol[i], closeby, true, buffer); err != nil {
