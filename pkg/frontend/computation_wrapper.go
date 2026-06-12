@@ -343,13 +343,6 @@ func authenticatePreparedDDLOwnerStatement(reqCtx context.Context, ses *Session,
 	}
 }
 
-func updateTempStorageInCtx(execCtx *ExecCtx, proc *process.Process, tempStorage *memorystorage.Storage) {
-	if execCtx != nil && execCtx.reqCtx != nil {
-		execCtx.reqCtx = attachValue(execCtx.reqCtx, defines.TemporaryTN{}, tempStorage)
-		proc.ReplaceTopCtx(execCtx.reqCtx)
-	}
-}
-
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
 	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		waitActiveCost := time.Duration(0)
