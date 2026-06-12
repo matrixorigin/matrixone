@@ -116,4 +116,10 @@ cast(v as vecf32(4)) + cast(v as vecf32(4))
 [0, 2, 4, 6]
 [510, 508, 0, 256]
 [20, 40, 60, 80]
+select vecuint8_from_base64('ChQeKA==');
+vecuint8_from_base64(ChQeKA==)
+[10, 20, 30, 40]
+select vecuint8_from_base64('AP+AAQ==');
+vecuint8_from_base64(AP+AAQ==)
+[0, 255, 128, 1]
 drop database if exists vecu8db;

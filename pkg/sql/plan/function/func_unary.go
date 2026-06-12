@@ -5705,8 +5705,12 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 		elemSize = 8
 	case types.BF16, types.Float16:
 		elemSize = 2
-	case int8:
+	case int8, uint8:
 		elemSize = 1
+	default:
+		// Guard: an unhandled element type would leave elemSize==0 and panic at
+		// the `n % elemSize` check below. Fail explicitly instead.
+		return moerr.NewInternalErrorNoCtx("vec_from_base64: unsupported vector element type")
 	}
 
 	// Pre-extend area: peek at the first non-null input to estimate per-row decoded size.

@@ -65,4 +65,11 @@ select summation(v) from u8t;
 -- arithmetic IS allowed after an explicit cast to vecf32
 select cast(v as vecf32(4)) + cast(v as vecf32(4)) from u8t order by a;
 
+-- vecuint8_from_base64: decode raw little-endian uint8 bytes. This is the builtin
+-- the ivf search re-rank emits for the (quantized) query vector. A constant
+-- argument constant-folds, so this is a direct regression for the elemSize
+-- divide-by-zero panic that hid when the uint8 case was missing from the decoder.
+select vecuint8_from_base64('ChQeKA==');
+select vecuint8_from_base64('AP+AAQ==');
+
 drop database if exists vecu8db;
