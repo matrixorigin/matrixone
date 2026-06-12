@@ -247,6 +247,37 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag in
 	return
 }
 
+func getJoinSideWithOuterScope(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag int32) (side int8) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			side |= getJoinSideWithOuterScope(arg, leftTags, rightTags, markTag)
+		}
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			side |= getJoinSideWithOuterScope(arg, leftTags, rightTags, markTag)
+		}
+
+	case *plan.Expr_Col:
+		tag := exprImpl.Col.RelPos
+		if leftTags[tag] {
+			side = JoinSideLeft
+		} else if rightTags[tag] {
+			side = JoinSideRight
+		} else if tag == markTag {
+			side = JoinSideMark
+		} else {
+			side = JoinSideOuter
+		}
+
+	case *plan.Expr_Corr:
+		side = JoinSideCorrelated
+	}
+
+	return
+}
+
 func containsTag(expr *plan.Expr, tag int32) bool {
 	if expr == nil {
 		return false
@@ -291,6 +322,36 @@ func containsTag(expr *plan.Expr, tag int32) bool {
 	}
 
 	return false
+}
+
+func containsOnlyTags(expr *plan.Expr, tags map[int32]bool) bool {
+	if expr == nil {
+		return true
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if !containsOnlyTags(arg, tags) {
+				return false
+			}
+		}
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if !containsOnlyTags(arg, tags) {
+				return false
+			}
+		}
+
+	case *plan.Expr_Col:
+		return tags[exprImpl.Col.RelPos]
+
+	case *plan.Expr_Corr, *plan.Expr_Sub:
+		return false
+	}
+
+	return true
 }
 
 func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {
