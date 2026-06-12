@@ -265,15 +265,12 @@ func TestParquetStringToVectorMapping(t *testing.T) {
 	})
 
 	t.Run("invalid target width", func(t *testing.T) {
-		f, page := writeColumnAndGetPage(t, parquet.String(), []parquet.Row{
+		_, page := writeColumnAndGetPage(t, parquet.String(), []parquet.Row{
 			{parquet.ByteArrayValue([]byte("[1,2,3]")).Level(0, 0, 0)},
 		})
 
 		vec := vector.NewVec(types.T_array_float32.ToType())
-		var h ParquetHandler
-		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), NotNullable: true})
-		require.NotNil(t, mp)
-		require.ErrorContains(t, mp.mapping(page, proc, vec), "invalid vector dimension 0")
+		require.ErrorContains(t, processStringToArray[float32](context.Background(), &columnMapper{}, page, proc, vec, 0), "invalid vector dimension 0")
 	})
 
 	t.Run("non string source is not vector input", func(t *testing.T) {
@@ -309,14 +306,33 @@ func TestParquetStringToVectorMapping(t *testing.T) {
 		require.ErrorContains(t, mp.mapping(page, proc, vec), "malformed vector input")
 	})
 
-	t.Run("json logical type is not string vector input", func(t *testing.T) {
-		f, _ := writeColumnAndGetPage(t, parquet.JSON(), []parquet.Row{
+	t.Run("json logical type vector text", func(t *testing.T) {
+		f, page := writeColumnAndGetPage(t, parquet.JSON(), []parquet.Row{
 			{parquet.ByteArrayValue([]byte("[1,2,3]")).Level(0, 0, 0)},
 		})
 
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3, NotNullable: true})
-		require.Nil(t, mp)
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []float32{1, 2, 3}, vector.GetArrayAt[float32](vec, 0))
+	})
+
+	t.Run("empty vector text with variable width", func(t *testing.T) {
+		f, page := writeColumnAndGetPage(t, parquet.String(), []parquet.Row{
+			{parquet.ByteArrayValue([]byte("[]")).Level(0, 0, 0)},
+			{parquet.ByteArrayValue([]byte("[1,2]")).Level(0, 0, 0)},
+		})
+
+		vec := vector.NewVec(types.T_array_float64.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float64), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		rows := vector.MustArrayCol[float64](vec)
+		require.Empty(t, rows[0])
+		require.Equal(t, []float64{1, 2}, rows[1])
 	})
 }
 

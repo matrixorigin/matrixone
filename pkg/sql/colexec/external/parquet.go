@@ -1378,6 +1378,9 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		width := int(dt.Width)
+		if width <= 0 {
+			width = types.MaxArrayDimension
+		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processStringToArray[float32](proc.Ctx, mp, page, proc, vec, width)
 		}
@@ -1386,6 +1389,9 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		width := int(dt.Width)
+		if width <= 0 {
+			width = types.MaxArrayDimension
+		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processStringToArray[float64](proc.Ctx, mp, page, proc, vec, width)
 		}
@@ -1755,7 +1761,7 @@ func processStringToArray[T types.RealNumbers](
 			data = loader.loadAt(idx)
 		}
 
-		val, parseErr := types.StringToArray[T](util.UnsafeBytesToString(bytes.TrimSpace(data)))
+		val, parseErr := parseStringArrayValue[T](data)
 		if parseErr != nil {
 			return wrapParseError(ctx, i, parseErr)
 		}
@@ -1767,6 +1773,21 @@ func processStringToArray[T types.RealNumbers](
 		}
 	}
 	return nil
+}
+
+func parseStringArrayValue[T types.RealNumbers](data []byte) ([]T, error) {
+	text := strings.TrimSpace(util.UnsafeBytesToString(data))
+	if isEmptyArrayText(text) {
+		return []T{}, nil
+	}
+	return types.StringToArray[T](text)
+}
+
+func isEmptyArrayText(text string) bool {
+	if len(text) < 2 || text[0] != '[' || text[len(text)-1] != ']' {
+		return false
+	}
+	return strings.TrimSpace(text[1:len(text)-1]) == ""
 }
 
 func readParquetPageValues(ctx context.Context, page parquet.Page) ([]parquet.Value, error) {
@@ -2481,7 +2502,7 @@ func isPlainStringLikeType(st parquet.Type) bool {
 		return false
 	}
 	lt := st.LogicalType()
-	return lt == nil || lt.UTF8 != nil
+	return lt == nil || lt.UTF8 != nil || lt.Json != nil
 }
 
 func parquetDecimalScale(st parquet.Type) int32 {
