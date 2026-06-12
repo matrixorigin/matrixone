@@ -796,6 +796,100 @@ func Test_handleShowVariables(t *testing.T) {
 	})
 }
 
+func TestShowGlobalVariablesRefreshesGlobalSysVarCache(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newSes(nil, ctrl)
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+	ses.gSysVars.Set("long_query_time", float64(10))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "interactive_timeout", int64(30100)))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "enable_remap_hint", "on"))
+	require.True(t, ses.rewriteEnabled.Load())
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	sql := getSqlForGetSystemVariablesWithAccount(sysAccountID)
+	bh.sql2result[sql] = newMrsForGlobalSystemVariables([][]interface{}{
+		{"long_query_time", "1.1"},
+	})
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "show global variables like 'long_query_time'", 1)
+	require.NoError(t, err)
+	showVars, ok := stmt.(*tree.ShowVariables)
+	require.True(t, ok)
+
+	ec := newTestExecCtx(ctx, ctrl)
+	require.NoError(t, doShowVariables(ses, ec, showVars))
+
+	mrs := ses.GetMysqlResultSet()
+	require.Equal(t, uint64(1), mrs.GetRowCount())
+	row, err := mrs.GetRow(ctx, 0)
+	require.NoError(t, err)
+	require.Equal(t, "long_query_time", row[0])
+	require.Equal(t, float64(1.1), row[1])
+	require.Contains(t, bh.executedSQLs, sql)
+
+	sessionTimeout, err := ses.GetSessionSysVar("interactive_timeout")
+	require.NoError(t, err)
+	require.Equal(t, int64(30100), sessionTimeout)
+	enableRemapHint, err := ses.GetSessionSysVar("enable_remap_hint")
+	require.NoError(t, err)
+	require.Equal(t, int8(1), enableRemapHint)
+	require.True(t, ses.rewriteEnabled.Load())
+}
+
+func TestShowGlobalVariablesReturnsRefreshError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newSes(nil, ctrl)
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	sql := getSqlForGetSystemVariablesWithAccount(sysAccountID)
+	bh.sql2err[sql] = moerr.NewInternalErrorNoCtx("refresh global sysvars failed")
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "show global variables like 'long_query_time'", 1)
+	require.NoError(t, err)
+	showVars, ok := stmt.(*tree.ShowVariables)
+	require.True(t, ok)
+
+	err = doShowVariables(ses, newTestExecCtx(ctx, ctrl), showVars)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "refresh global sysvars failed")
+	require.Contains(t, bh.executedSQLs, sql)
+}
+
+func newMrsForGlobalSystemVariables(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("variable_name")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col1)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("variable_value")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func Test_GetColumns(t *testing.T) {
 	convey.Convey("GetColumns succ", t, func() {
 		//cw := &ComputationWrapperImpl{exec: &compile.Exec{}}
