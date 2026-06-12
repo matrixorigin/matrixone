@@ -16,8 +16,6 @@ package table_function
 
 import (
 	"fmt"
-	"math"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -38,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/device"
 	ivfflatrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -160,8 +159,8 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	// the query (search) map [min,max] onto the full int8 range [-128,127] with the
 	// same q(x)=round(x*mul+add). Using both bounds (not a symmetric scale) uses the
 	// whole range for offset data. (bf16/float16 are float formats and need none.)
-	if qt, ok := vectorindex.QuantizationToVectorType(u.param.Quantization); ok && qt == types.T_array_int8 {
-		qmin, qmax := trainInt8MinMax(data)
+	if qt, ok := quantizer.ToVectorType(u.param.Quantization); ok && qt == types.T_array_int8 {
+		qmin, qmax := quantizer.TrainInt8(data)
 		insSQL := fmt.Sprintf(
 			"INSERT INTO `%s`.`%s` (`%s`, `%s`) VALUES ('%s', '%.9g'), ('%s', '%.9g') "+
 				"ON DUPLICATE KEY UPDATE `%s` = VALUES(`%s`)",
@@ -179,51 +178,6 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	}
 
 	return nil
-}
-
-// trainInt8MinMax returns (P0.1, P99.9) of the sample values — the bounds for the
-// asymmetric int8 scalar quantizer. Percentiles (not raw min/max) clip outliers
-// so the quantization grid isn't wasted on a few extreme values. Returns (-1,1)
-// for empty data and widens a degenerate range. Subsamples to bound cost.
-func trainInt8MinMax[T types.RealNumbers](data [][]T) (float64, float64) {
-	const maxVals = 2_000_000
-	total := 0
-	for _, v := range data {
-		total += len(v)
-	}
-	if total == 0 {
-		return -1, 1
-	}
-	stride := 1
-	if total > maxVals {
-		stride = total/maxVals + 1
-	}
-	vals := make([]float64, 0, total/stride+1)
-	k := 0
-	for _, v := range data {
-		for _, x := range v {
-			if k%stride == 0 {
-				f := float64(x)
-				// Skip NaN/Inf: they make slices.Sort's order undefined (so a
-				// percentile pick could land on NaN) and would poison the trained
-				// bounds and the SQL literal.
-				if !math.IsNaN(f) && !math.IsInf(f, 0) {
-					vals = append(vals, f)
-				}
-			}
-			k++
-		}
-	}
-	if len(vals) == 0 {
-		return -1, 1
-	}
-	slices.Sort(vals)
-	lo := vals[int(float64(len(vals)-1)*0.001)]
-	hi := vals[int(float64(len(vals)-1)*0.999)]
-	if hi <= lo {
-		hi = lo + 1
-	}
-	return lo, hi
 }
 
 func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {

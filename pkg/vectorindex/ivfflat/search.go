@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -175,7 +176,7 @@ func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, t
 		return err
 	}
 	if ok1 && ok2 {
-		idx.QuantMul, idx.QuantAdd = vectorindex.Int8QuantizeParams(qmin, qmax)
+		idx.QuantMul, idx.QuantAdd = quantizer.Int8Params(qmin, qmax)
 	}
 	return nil
 }
@@ -345,18 +346,8 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		case types.T_array_int8:
 			// apply the same q(x)=x*mul+add transform as the entries, then round+clamp
 			// to int8. (mul,add)=(1,0) falls back to the raw cast (no quantizer).
-			sq := qf32
-			if idx.QuantMul != 1.0 || idx.QuantAdd != 0.0 {
-				sq = make([]float32, len(qf32))
-				// Compute the multiply-add in float64 (then narrow) to match the
-				// build side: the entry SQL `cast(base*mul+add as vecint8)` evaluates
-				// mul/add (f64 literals) in the base column's arithmetic, so doing it
-				// in float32 here could bucket a boundary component differently.
-				for i, x := range qf32 {
-					sq[i] = float32(float64(x)*idx.QuantMul + idx.QuantAdd)
-				}
-			}
-			queryExpr = fmt.Sprintf("vecint8_from_base64('%s')", types.ArrayToBase64(types.Float32ToInt8Slice(sq)))
+			sq := quantizer.ApplyInt8(qf32, idx.QuantMul, idx.QuantAdd)
+			queryExpr = fmt.Sprintf("vecint8_from_base64('%s')", types.ArrayToBase64(sq))
 		}
 	}
 

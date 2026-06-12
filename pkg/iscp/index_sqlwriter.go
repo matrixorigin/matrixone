@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -680,7 +681,7 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 	// there, so the two stay consistent). float16/bf16 narrow losslessly via the
 	// implicit cast, so only int8 needs this.
 	entryProj := cnames[len(cnames)-1]
-	if qt, ok := vectorindex.QuantizationToVectorType(w.ivfparam.Quantization); ok && qt == types.T_array_int8 {
+	if qt, ok := quantizer.ToVectorType(w.ivfparam.Quantization); ok && qt == types.T_array_int8 {
 		metaTbl := sqlquote.QualifiedIdent(w.info.DBName, w.meta_tbl)
 		sub := func(k string) string {
 			return fmt.Sprintf("(SELECT CAST(`%s` AS DOUBLE) FROM %s WHERE `%s` = '%s')",
@@ -688,11 +689,8 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 				catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, k)
 		}
 		minS := sub(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin)
-		rng := fmt.Sprintf("(%s - %s)", sub(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax), minS)
-		mul := fmt.Sprintf("COALESCE(255.0 / %s, 1.0)", rng)
-		add := fmt.Sprintf("COALESCE(0.0 - %s * 255.0 / %s - 128.0, 0.0)", minS, rng)
-		entryProj = fmt.Sprintf("cast(%s * %s + %s as vecint8(%d))",
-			cnames[len(cnames)-1], mul, add, w.partsType[0].Width)
+		maxS := sub(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax)
+		entryProj = quantizer.Int8EntrySQLFromBounds(cnames[len(cnames)-1], minS, maxS, w.partsType[0].Width)
 	}
 	projCols := append([]string(nil), cnames...)
 	projCols[len(projCols)-1] = entryProj

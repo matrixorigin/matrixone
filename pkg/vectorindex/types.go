@@ -15,77 +15,16 @@
 package vectorindex
 
 import (
-	"math"
 	"runtime"
-	"strings"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
-// QuantizationToVectorType maps a CREATE INDEX QUANTIZATION='...' value to the
-// vector element type the ivfflat ENTRIES are down-cast to (the base column and
-// centroids are unaffected). The accepted names are the canonical
-// metric.Quantization_*_Str constants (case-insensitive): float32 -> vecf32,
-// float16 -> vecf16, bf16 -> vecbf16, int8 -> vecint8. float32/float16/bf16 are
-// float formats (plain cast); int8 uses the trained scalar quantizer. float32 is
-// accepted because it is a real down-cast for an f64 base; float64 (an up-cast)
-// and uint8 / "" return ok=false (no quantization; entries keep the base type).
-func QuantizationToVectorType(q string) (types.T, bool) {
-	switch strings.ToLower(strings.TrimSpace(q)) {
-	case metric.Quantization_F32_Str:
-		return types.T_array_float32, true
-	case metric.Quantization_F16_Str:
-		return types.T_array_float16, true
-	case metric.Quantization_BF16_Str:
-		return types.T_array_bf16, true
-	case metric.Quantization_INT8_Str:
-		return types.T_array_int8, true
-	}
-	return 0, false
-}
-
-// Int8QuantizeParams returns (mul, add) for the cuVS-style asymmetric int8 scalar
-// quantizer that maps [min,max] onto the full int8 range [-128,127]:
-//
-//	q(x) = round(x*mul + add), clamped to [-128,127]
-//
-// add folds the -min offset and the -128 int8 shift into one constant, so both
-// the build (cast(base*mul+add as vecint8)) and search apply it with a single
-// multiply-add. A degenerate range (max<=min) falls back to identity.
-func Int8QuantizeParams(min, max float64) (mul, add float64) {
-	rng := max - min
-	// !(rng > 0) also rejects NaN (every NaN comparison is false), and the IsInf
-	// guard rejects a non-finite range — either would otherwise yield NaN/Inf mul
-	// that poisons the build SQL and the query transform.
-	if !(rng > 0) || math.IsInf(rng, 0) {
-		return 1.0, 0.0
-	}
-	mul = 255.0 / rng
-	add = -min*mul - 128.0
-	return mul, add
-}
-
-// QuantizationSQLTypeName returns the SQL type name for a vector element type,
-// for use in CAST(... AS <name>(dim)).
-func QuantizationSQLTypeName(t types.T) string {
-	switch t {
-	case types.T_array_float32:
-		return "vecf32"
-	case types.T_array_float64:
-		return "vecf64"
-	case types.T_array_bf16:
-		return "vecbf16"
-	case types.T_array_float16:
-		return "vecf16"
-	case types.T_array_int8:
-		return "vecint8"
-	}
-	return ""
-}
+// QUANTIZATION lives in pkg/vectorindex/quantizer: ToVectorType, Int8Params,
+// SQLTypeName, TrainInt8, ApplyInt8, and the SQL entry-projection builders.
 
 /*
   HNSW vector index using usearch

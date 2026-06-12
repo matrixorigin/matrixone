@@ -30,6 +30,7 @@ import (
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -220,7 +221,7 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 		// the query is decoded to f32 for the centroid search and to the entry type
 		// for the re-rank. VectorType = the entry/quantization type.
 		if u.param.Quantization != "" {
-			if qt, ok := vectorindex.QuantizationToVectorType(u.param.Quantization); ok {
+			if qt, ok := quantizer.ToVectorType(u.param.Quantization); ok {
 				u.idxcfg.Ivfflat.VectorType = int32(qt)
 				u.idxcfg.Ivfflat.CentroidType = int32(types.T_array_float32)
 			}

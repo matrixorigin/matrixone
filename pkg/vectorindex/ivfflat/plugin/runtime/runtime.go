@@ -29,8 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 // actionIvfflatReindex mirrors idxcron.Action_Ivfflat_Reindex. Inlined
@@ -234,7 +234,7 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	// so the entries build (compile) and the search can read it back. Only the
 	// predefined names that map to a MO narrow vector type are accepted.
 	if q := idx.IndexOption.Quantization; q != "" {
-		if _, ok := vectorindex.QuantizationToVectorType(q); !ok {
+		if _, ok := quantizer.ToVectorType(q); !ok {
 			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
 				"ivfflat: unsupported quantization '%s' (supported: 'float32', 'float16', 'bf16', 'int8')", q))
 		}

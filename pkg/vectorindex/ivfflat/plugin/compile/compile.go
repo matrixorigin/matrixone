@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 // actionIvfflatReindex mirrors idxcron.Action_Ivfflat_Reindex. Inlined
@@ -434,7 +435,7 @@ func ivfIndexEntriesTable(
 	entrySelectExpr := fmt.Sprintf("`%s`", indexColName)
 	if qv, qerr := sonic.Get([]byte(indexDef.IndexAlgoParams), catalog.Quantization); qerr == nil {
 		if qstr, serr := qv.String(); serr == nil && qstr != "" {
-			if qt, ok := vectorindex.QuantizationToVectorType(qstr); ok {
+			if qt, ok := quantizer.ToVectorType(qstr); ok {
 				var dim int32
 				for _, c := range originalTableDef.Cols {
 					if c.Name == indexColName {
@@ -455,13 +456,13 @@ func ivfIndexEntriesTable(
 						return err
 					}
 					if ok1 && ok2 {
-						mul, add := vectorindex.Int8QuantizeParams(qmin, qmax)
-						entrySelectExpr = fmt.Sprintf("cast(`%s` * %.9g + (%.9g) as vecint8(%d))", indexColName, mul, add, dim)
+						mul, add := quantizer.Int8Params(qmin, qmax)
+						entrySelectExpr = quantizer.Int8EntrySQL(fmt.Sprintf("`%s`", indexColName), mul, add, dim)
 					} else {
-						entrySelectExpr = fmt.Sprintf("cast(`%s` as vecint8(%d))", indexColName, dim)
+						entrySelectExpr = quantizer.CastSQL(fmt.Sprintf("`%s`", indexColName), types.T_array_int8, dim)
 					}
 				} else {
-					entrySelectExpr = fmt.Sprintf("cast(`%s` as %s(%d))", indexColName, vectorindex.QuantizationSQLTypeName(qt), dim)
+					entrySelectExpr = quantizer.CastSQL(fmt.Sprintf("`%s`", indexColName), qt, dim)
 				}
 			}
 		}

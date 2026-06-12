@@ -23,8 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	ivfflatrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 // ivfflatCatalogHooks is the shared (stateless) catalog-hooks instance used for
@@ -246,7 +246,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Scale: colMap[colName].Typ.Scale,
 		}
 		if indexInfo.IndexOption != nil && indexInfo.IndexOption.Quantization != "" {
-			if qt, ok := vectorindex.QuantizationToVectorType(indexInfo.IndexOption.Quantization); ok {
+			if qt, ok := quantizer.ToVectorType(indexInfo.IndexOption.Quantization); ok {
 				entryTyp.Id = int32(qt)
 				entryTyp.Scale = 0
 			}
