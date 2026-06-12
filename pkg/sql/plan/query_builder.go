@@ -4485,7 +4485,16 @@ func nameConstHeading(expr tree.Expr) (string, bool) {
 		return "", false
 	}
 
-	name, ok := fn.Exprs[0].(*tree.NumVal)
+	nameExpr := fn.Exprs[0]
+	for {
+		paren, ok := nameExpr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		nameExpr = paren.Expr
+	}
+
+	name, ok := nameExpr.(*tree.NumVal)
 	if !ok || !validNameConstNameLiteral(name) {
 		return "", false
 	}

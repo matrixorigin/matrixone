@@ -11,13 +11,18 @@ select name_const('null_name', null);
 select name_const('decimal_name', 12.34);
 select name_const('neg_decimal_name', -12.34);
 select name_const(123, -456);
+select name_const(('paren_name'), (14));
+select name_const(((123)), ((-456)));
 select name_const('myname', 14) as alias_name;
+select name_const(('paren_alias_name'), (14)) as paren_alias;
 select name_const('expr_name', 14) + 1;
 select name_const('bad_folded_expr', abs(-1));
 select name_const('bad_expr', now());
 select name_const('bad_cast_expr', cast(14 as signed));
 select name_const(null, 1);
+select name_const((null), 1);
 select name_const(-123, -456);
+select name_const((-123), -456);
 select name_const('bad_args');
 select name_const('xxx_name', -18446744073709551616);
 

@@ -22,8 +22,17 @@ select name_const('neg_decimal_name', -12.34);
 select name_const(123, -456);
 ➤ 123[-5,64,0]  𝄀
 -456
+select name_const(('paren_name'), (14));
+➤ paren_name[-5,64,0]  𝄀
+14
+select name_const(((123)), ((-456)));
+➤ 123[-5,64,0]  𝄀
+-456
 select name_const('myname', 14) as alias_name;
 ➤ alias_name[-5,64,0]  𝄀
+14
+select name_const(('paren_alias_name'), (14)) as paren_alias;
+➤ paren_alias[-5,64,0]  𝄀
 14
 select name_const('expr_name', 14) + 1;
 ➤ name_const(expr_name, 14) + 1[-5,64,0]  𝄀
@@ -36,7 +45,11 @@ select name_const('bad_cast_expr', cast(14 as signed));
 invalid argument NAME_CONST, bad value 
 select name_const(null, 1);
 invalid argument NAME_CONST, bad value 
+select name_const((null), 1);
+invalid argument NAME_CONST, bad value 
 select name_const(-123, -456);
+invalid argument NAME_CONST, bad value 
+select name_const((-123), -456);
 invalid argument NAME_CONST, bad value 
 select name_const('bad_args');
 invalid argument NAME_CONST, bad value 

@@ -222,6 +222,19 @@ func TestBindNameConstInvalidArgs(t *testing.T) {
 	}
 }
 
+func TestBindNameConstNilProcReturnsError(t *testing.T) {
+	args := []*plan.Expr{
+		makePlan2StringConstExprWithType("myname"),
+		makePlan2Int64ConstExprWithType(14),
+	}
+
+	require.NotPanics(t, func() {
+		_, err := bindFuncExprAndConstFold(context.Background(), nil, "name_const", args)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "name_const")
+	})
+}
+
 func bindNameConstSelect(sql string) error {
 	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 1)
 	if err != nil {

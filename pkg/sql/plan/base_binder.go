@@ -1448,7 +1448,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 
 	case "name_const":
 		if proc == nil {
-			goto between_fallback
+			return nil, moerr.NewInvalidInput(ctx, "can't use name_const without proc")
 		}
 		if err := foldNameConstArgs(ctx, proc, retExpr.GetF().Args); err != nil {
 			return nil, err

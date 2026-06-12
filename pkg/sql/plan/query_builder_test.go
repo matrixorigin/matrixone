@@ -272,13 +272,13 @@ func TestAppendSelectListNameConstHeading(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select name_const('myname', 14), name_const(123, -456), name_const('myname', 14) as alias_name", 1)
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select name_const('myname', 14), name_const(123, -456), name_const('myname', 14) as alias_name, name_const(('paren_name'), (14))", 1)
 	require.NoError(t, err)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
 	_, err = appendSelectList(builder, bindCtx, nil, selectClause.Exprs...)
 	require.NoError(t, err)
-	require.Equal(t, []string{"myname", "123", "alias_name"}, bindCtx.headings)
+	require.Equal(t, []string{"myname", "123", "alias_name", "paren_name"}, bindCtx.headings)
 }
 
 func genBuilderAndCtx() (builder *QueryBuilder, bindCtx *BindContext) {
