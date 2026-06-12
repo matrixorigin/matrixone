@@ -416,7 +416,6 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	if !checkPipelineStandaloneExecutableAtRemote(s) {
 		return s.MergeRun(c)
 	}
-
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
 			zap.String("local-address", c.addr),
@@ -1098,23 +1097,23 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
 		hint := engine.FilterHint{}
-		// Pass runtime BloomFilter to reader via FilterHint (only for ivf entries table).
+		// Pass runtime membership filter bytes to reader via FilterHint (only for ivf entries table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if len(s.DataSource.BloomFilter) > 0 {
-				hint.BloomFilter = s.DataSource.BloomFilter
-			} else if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+			if len(s.DataSource.MembershipFilterBytes) > 0 {
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			} else if bfVal := c.proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.BloomFilter = bf
+					hint.MembershipFilterBytes = bf
 				}
 			}
 		}
-		// Pass runtime BloomFilter to reader via FilterHint (for fulltext index table).
+		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if bfVal := c.proc.Ctx.Value(defines.FulltextBloomFilter{}); bfVal != nil {
+			if bfVal := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.BloomFilter = bf
+					hint.MembershipFilterBytes = bf
 				}
 			}
 		}
@@ -1185,20 +1184,20 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		hint := engine.FilterHint{}
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if len(s.DataSource.BloomFilter) > 0 {
-				hint.BloomFilter = s.DataSource.BloomFilter
-			} else if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+			if len(s.DataSource.MembershipFilterBytes) > 0 {
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			} else if bfVal := c.proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.BloomFilter = bf
+					hint.MembershipFilterBytes = bf
 				}
 			}
 		}
-		// Pass runtime BloomFilter to reader via FilterHint (for fulltext index table).
+		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if bfVal := c.proc.Ctx.Value(defines.FulltextBloomFilter{}); bfVal != nil {
+			if bfVal := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.BloomFilter = bf
+					hint.MembershipFilterBytes = bf
 				}
 			}
 		}

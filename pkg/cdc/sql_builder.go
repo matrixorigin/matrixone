@@ -26,6 +26,7 @@ const (
 	CDCWatermarkErrMsgMaxLen = 256
 
 	CDCState_Running = "running"
+	CDCState_Pausing = "pausing"
 	CDCState_Paused  = "paused"
 	CDCState_Failed  = "failed"
 )
@@ -116,6 +117,18 @@ const (
 		"SET state = '%s', err_msg = '%s' " +
 		"WHERE " +
 		"1=1 AND account_id = %d AND task_id = '%s'"
+
+	CDCUpdateTaskStateByTaskIdSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_task` " +
+		"SET state = '%s' " +
+		"WHERE " +
+		"1=1 AND account_id = %d AND task_id = '%s'"
+
+	CDCUpdateTaskStateByTaskIdAndStateSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_task` " +
+		"SET state = '%s' " +
+		"WHERE " +
+		"1=1 AND account_id = %d AND task_id = '%s' AND state = '%s'"
 
 	CDCGetDataKeySqlTemplate = "SELECT " +
 		"encrypted_key " +
@@ -333,8 +346,10 @@ const (
 	CDCSelectMOISCPLogByTableSqlTemplate_Idx        = 27
 	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx        = 28
 	CDCGetTableIDTemplate_Idx                       = 29
+	CDCUpdateTaskStateByTaskIdSQL_Idx               = 30
+	CDCUpdateTaskStateByTaskIdAndStateSQL_Idx       = 31
 
-	CDCSqlTemplateCount = 30
+	CDCSqlTemplateCount = 32
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -381,6 +396,12 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	},
 	CDCUpdateTaskStateAndErrMsgSQL_Idx: {
 		SQL: CDCUpdateTaskStateAndErrMsgSqlTemplate,
+	},
+	CDCUpdateTaskStateByTaskIdSQL_Idx: {
+		SQL: CDCUpdateTaskStateByTaskIdSqlTemplate,
+	},
+	CDCUpdateTaskStateByTaskIdAndStateSQL_Idx: {
+		SQL: CDCUpdateTaskStateByTaskIdAndStateSqlTemplate,
 	},
 	CDCInsertWatermarkSqlTemplate_Idx: {
 		SQL: CDCInsertWatermarkSqlTemplate,
@@ -632,6 +653,34 @@ func (b cdcSQLBuilder) UpdateTaskStateAndErrMsgSQL(
 		errMsg,
 		accountId,
 		taskId,
+	)
+}
+
+func (b cdcSQLBuilder) UpdateTaskStateByTaskIdSQL(
+	accountId uint64,
+	taskId string,
+	state string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateTaskStateByTaskIdSQL_Idx].SQL,
+		state,
+		accountId,
+		taskId,
+	)
+}
+
+func (b cdcSQLBuilder) UpdateTaskStateByTaskIdAndStateSQL(
+	accountId uint64,
+	taskId string,
+	state string,
+	currentState string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateTaskStateByTaskIdAndStateSQL_Idx].SQL,
+		state,
+		accountId,
+		taskId,
+		currentState,
 	)
 }
 

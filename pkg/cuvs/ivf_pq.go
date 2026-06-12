@@ -33,11 +33,11 @@ import (
 
 // GpuIvfPq represents the C++ gpu_ivf_pq_t object.
 type GpuIvfPq[T VectorType] struct {
-	cIvfPq        C.gpu_ivf_pq_c
-	dimension     uint32
-	nthread       uint32
-	distMode      DistributionMode
-	batchWindowUs int64
+	cIvfPq                   C.gpu_ivf_pq_c
+	dimension                uint32
+	nthread                  uint32
+	distMode                 DistributionMode
+	batchWindowUs            int64
 	dynbConservativeDispatch bool
 }
 

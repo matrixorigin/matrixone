@@ -236,6 +236,20 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldCast: false,
 			requireRet: types.T_varchar.ToType(),
 		},
+		{
+			name: "uuid_to_bin", args: []types.Type{types.T_varchar.ToType(), types.T_float64.ToType()},
+			shouldErr:  false,
+			requireFid: UUID_TO_BIN, requireOid: 0,
+			shouldCast: false,
+			requireRet: types.T_varbinary.ToType(),
+		},
+		{
+			name: "bin_to_uuid", args: []types.Type{types.T_varbinary.ToType(), types.T_float64.ToType()},
+			shouldErr:  false,
+			requireFid: BIN_TO_UUID, requireOid: 0,
+			shouldCast: false,
+			requireRet: types.T_varchar.ToType(),
+		},
 	}
 
 	proc := testutil.NewProcess(t)
@@ -314,6 +328,25 @@ func TestGetFunctionByNameAESDecryptReturnsBlob(t *testing.T) {
 func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, true, GetFunctionIsWinFunByName("rank"))
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
+}
+
+func TestRunPositionCharFunctionDirectly(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []*vector.Vector{
+		testutil.NewVector(2, types.T_char.ToType(), proc.Mp(), false, []string{"y", "a"}),
+		testutil.NewVector(2, types.T_char.ToType(), proc.Mp(), false, []string{"xyz", "bbb"}),
+	}
+	startMp := proc.Mp().CurrNB()
+
+	v, err := RunFunctionDirectly(proc, EncodeOverloadID(POSITION, 1), inputs, 2)
+	require.NoError(t, err)
+	require.Equal(t, types.T_int64, v.GetType().Oid)
+	require.Equal(t, 2, v.Length())
+	require.Equal(t, []int64{2, 0}, vector.MustFixedColNoTypeCheck[int64](v))
+
+	v.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, startMp, proc.Mp().CurrNB())
 }
 
 func TestRunFunctionDirectly(t *testing.T) {

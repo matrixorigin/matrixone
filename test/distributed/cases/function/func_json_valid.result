@@ -1,0 +1,102 @@
+select json_valid('{"a": 1}');
+json_valid({"a": 1})
+1
+select json_valid('[1, 2, 3]');
+json_valid([1, 2, 3])
+1
+select json_valid('"hello"');
+json_valid("hello")
+1
+select json_valid('null');
+json_valid(null)
+1
+select json_valid('true');
+json_valid(true)
+1
+select json_valid('false');
+json_valid(false)
+1
+select json_valid('42');
+json_valid(42)
+1
+select json_valid('3.14');
+json_valid(3.14)
+1
+select json_valid('{}');
+json_valid({})
+1
+select json_valid('[]');
+json_valid([])
+1
+select json_valid('hello');
+json_valid(hello)
+0
+select json_valid('');
+json_valid()
+0
+select json_valid(null);
+json_valid(null)
+null
+select json_valid('{"a": {"b": [1,2,3]}, "c": "hello"}');
+json_valid({"a": {"b": [1,2,3]}, "c": "hello"})
+1
+select json_valid('[{"a":1}, [2,3], "str"]');
+json_valid([{"a":1}, [2,3], "str"])
+1
+select json_valid('{invalid');
+json_valid({invalid)
+0
+select json_valid('[1,2,');
+json_valid([1,2,)
+0
+select json_valid('{"a":}');
+json_valid({"a":})
+0
+select json_valid('{key: "no_quotes"}');
+json_valid({key: "no_quotes"})
+0
+select json_valid("'single quote'");
+json_valid('single quote')
+0
+select json_valid(json_object('a', 1, 'b', 2));
+json_valid(json_object(a, 1, b, 2))
+1
+select json_valid(json_array(1, 2, 3));
+json_valid(json_array(1, 2, 3))
+1
+drop table if exists t1;
+create table t1 (a varchar(100));
+insert into t1 values ('{"a":1}'), ('[1,2,3]'), ('"hello"'), ('{}'), ('invalid'), (null), ('');
+select a, json_valid(a) from t1;
+a    json_valid(a)
+{"a":1}    1
+[1,2,3]    1
+"hello"    1
+{}    1
+invalid    0
+null    null
+    0
+drop table if exists t2;
+create table t2 (a json);
+insert into t2 values ('{"a":1}'), ('[1,2,3]'), ('"hello"'), ('{}'), ('[]'), (null);
+select a, json_valid(a) from t2;
+a    json_valid(a)
+{"a": 1}    1
+[1, 2, 3]    1
+"hello"    1
+{}    1
+[]    1
+null    null
+select * from t1 where json_valid(a);
+a
+{"a":1}
+[1,2,3]
+"hello"
+{}
+select json_valid(a), count(*) from t1 group by json_valid(a) order by 1;
+json_valid(a)    count(*)
+null    1
+0    2
+1    4
+drop table t1;
+drop table t2;

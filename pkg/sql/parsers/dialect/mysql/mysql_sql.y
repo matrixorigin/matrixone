@@ -381,6 +381,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
+%token <str> GEOMETRY32 GEOGRAPHY GEOGRAPHY32 POINT32 LINESTRING32 POLYGON32 GEOMETRYCOLLECTION32 MULTIPOINT32 MULTILINESTRING32 MULTIPOLYGON32
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION STAGEOPTION
 
 // Select option
@@ -887,6 +888,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> BACKUP FILESYSTEM PARALLELISM RESTORE
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
+%token <str> ARRAY
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -11911,6 +11913,17 @@ function_call_generic:
             Exprs: $3,
         }
     }
+|   INTERVAL '(' bit_expr ',' expression_list ')'
+    {
+        name := tree.NewUnresolvedColName($1)
+        exprs := tree.Exprs{$3}
+        exprs = append(exprs, $5...)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: exprs,
+        }
+    }
 |   substr_option '(' expression_list_opt ')'
     {
         name := tree.NewUnresolvedColName($1)
@@ -11947,6 +11960,15 @@ function_call_generic:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{timeUinit, $5},
+        }
+    }
+|   POSITION '(' bit_expr IN bit_expr ')'
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
         }
     }
 |   func_not_keyword '(' expression_list_opt ')'
@@ -12615,7 +12637,7 @@ predicate:
     {
         $$ = tree.NewRangeCond(true, $1, $4, $6)
     }
-|   bit_expr
+|   bit_expr %prec LOWER_THAN_COMMA
 
 like_escape_opt:
     {
@@ -12764,10 +12786,7 @@ literal:
     }
 |   UNDERSCORE_BINARY HEXNUM
     {
-        if strings.HasPrefix($2, "0x") {
-            $2 = $2[2:]
-        }
-        $$ = tree.NewNumVal($2, $2, false, tree.P_bit)
+        $$ = tree.NewNumVal($2, $2, false, tree.P_hexnum)
     }
 |   DECIMAL_VALUE
     {
@@ -12796,6 +12815,19 @@ column_type:
 |   char_type
 |   time_type
 |   spatial_type
+|   ARRAY '(' column_type ')'
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_TYPED_ARRAY),
+                ArrayContents: $3,
+            },
+        }
+    }
 
 numeric_type:
     int_type length_opt
@@ -13528,15 +13560,7 @@ declare_stmt:
 spatial_type:
     spatial_type_name
     {
-        locale := ""
-        $$ = &tree.T{
-            InternalType: tree.InternalType{
-                Family: tree.GeometryFamily,
-                FamilyString: $1,
-                Locale: &locale,
-                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
-            },
-        }
+        $$ = tree.NewSpatialType($1)
     }
 
 spatial_type_name:
@@ -13548,6 +13572,16 @@ spatial_type_name:
 |   MULTIPOINT
 |   MULTILINESTRING
 |   MULTIPOLYGON
+|   GEOGRAPHY
+|   GEOMETRY32
+|   GEOGRAPHY32
+|   POINT32
+|   LINESTRING32
+|   POLYGON32
+|   GEOMETRYCOLLECTION32
+|   MULTIPOINT32
+|   MULTILINESTRING32
+|   MULTIPOLYGON32
 
 // TODO:
 // need to encode SQL string
@@ -13873,6 +13907,7 @@ non_reserved_keyword:
 |   ACCOUNTS
 |   AGAINST
 |   ALWAYS
+|   ARRAY
 |   AVG_ROW_LENGTH
 |   AUTO_RANDOM
 |   ATTRIBUTE
@@ -13946,6 +13981,16 @@ non_reserved_keyword:
 |   GENERATED
 |   GEOMETRY
 |   GEOMETRYCOLLECTION
+|   GEOMETRY32
+|   GEOGRAPHY
+|   GEOGRAPHY32
+|   POINT32
+|   LINESTRING32
+|   POLYGON32
+|   GEOMETRYCOLLECTION32
+|   MULTIPOINT32
+|   MULTILINESTRING32
+|   MULTIPOLYGON32
 |   GLOBAL
 |   GRAPH_DEGREE
 |   HNSW
@@ -14276,7 +14321,6 @@ func_not_keyword:
 |   NOW
 |    ADDDATE
 |   CURDATE
-|   POSITION
 |   SESSION_USER
 |   SUBDATE
 |   SYSTEM_USER

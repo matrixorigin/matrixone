@@ -135,6 +135,16 @@ func Test_buildTestShowCreateTable(t *testing.T) {
                                 FULLTEXT idx02(json1,json2) WITH PARSER json)`,
 			want: "CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `idx01`(`json1`) WITH PARSER json ASYNC,\n FULLTEXT `idx02`(`json1`,`json2`) WITH PARSER json\n)",
 		},
+		{
+			name: "array column metadata",
+			sql: `CREATE TABLE vec_json_case (
+				doc_id BIGINT PRIMARY KEY,
+				embedding VECF32(3),
+				payload JSON,
+				tags ARRAY(VARCHAR(20))
+			)`,
+			want: "CREATE TABLE `vec_json_case` (\n  `doc_id` bigint NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  `payload` json DEFAULT NULL,\n  `tags` array(varchar(20)) DEFAULT NULL,\n  PRIMARY KEY (`doc_id`)\n)",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -372,9 +382,10 @@ func TestShowCreateS3HiveExternalTableUsesS3Options(t *testing.T) {
 }
 
 func TestFormatColTypeGeometrySubtype(t *testing.T) {
+	// Subtype lives in Scale, SRID in Width (srid+1 when defined).
 	require.Equal(t, "POINT", FormatColType(plan.Type{
-		Id:         int32(types.T_geometry),
-		Enumvalues: "POINT",
+		Id:    int32(types.T_geometry),
+		Scale: int32(geometrySubtypeEnum("POINT")),
 	}))
 
 	require.Equal(t, "GEOMETRY", FormatColType(plan.Type{
@@ -382,12 +393,29 @@ func TestFormatColTypeGeometrySubtype(t *testing.T) {
 	}))
 
 	require.Equal(t, "POINT SRID 4326", FormatColType(plan.Type{
-		Id:         int32(types.T_geometry),
-		Enumvalues: "POINT;SRID=4326",
+		Id:    int32(types.T_geometry),
+		Scale: int32(geometrySubtypeEnum("POINT")),
+		Width: encodeGeometrySRIDWidth(4326, true),
 	}))
 
 	require.Equal(t, "GEOMETRY SRID 0", FormatColType(plan.Type{
-		Id:         int32(types.T_geometry),
-		Enumvalues: "SRID=0",
+		Id:    int32(types.T_geometry),
+		Width: encodeGeometrySRIDWidth(0, true),
+	}))
+
+	// GEOMETRY32 family renders with the "32" suffix.
+	require.Equal(t, "GEOMETRY32", FormatColType(plan.Type{
+		Id: int32(types.T_geometry32),
+	}))
+	require.Equal(t, "POINT32", FormatColType(plan.Type{
+		Id:    int32(types.T_geometry32),
+		Scale: int32(geometrySubtypeEnum("POINT")),
+	}))
+}
+
+func TestFormatColTypeArrayMetadata(t *testing.T) {
+	require.Equal(t, "ARRAY(varchar(20))", FormatColType(plan.Type{
+		Id:         int32(types.T_json),
+		Enumvalues: "array(varchar(20))",
 	}))
 }
