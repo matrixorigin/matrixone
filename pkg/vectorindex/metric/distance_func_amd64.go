@@ -387,7 +387,7 @@ func CosineDistanceF32(a, b []float32) (float32, error) {
 	if den == 0 {
 		return 1.0, nil
 	}
-	return float32(1.0 - float64(dot)/den), nil
+	return float32(cosineDistClamped(float64(dot), den)), nil
 }
 
 func CosineDistanceF64(a, b []float64) (float64, error) {
@@ -426,7 +426,7 @@ func CosineDistanceF64(a, b []float64) (float64, error) {
 	if den == 0 {
 		return 1.0, nil
 	}
-	return 1.0 - dot/den, nil
+	return cosineDistClamped(dot, den), nil
 }
 
 func CosineDistance[T types.RealNumbers](p, q []T) (T, error) {

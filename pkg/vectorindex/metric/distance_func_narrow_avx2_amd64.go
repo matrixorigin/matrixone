@@ -177,7 +177,7 @@ func cosineDistanceBF16AVX2(a, b []types.BF16) (float64, error) {
 	if denom == 0 {
 		return 1.0, nil
 	}
-	return 1.0 - float64(dot)/denom, nil
+	return cosineDistClamped(float64(dot), denom), nil
 }
 
 // ---- int8 (AVX2), integer-exact ----
@@ -287,7 +287,7 @@ func cosineDistanceInt8AVX2(a, b []int8) (float64, error) {
 	if denom == 0 {
 		return 1.0, nil
 	}
-	return 1.0 - float64(dot)/denom, nil
+	return cosineDistClamped(float64(dot), denom), nil
 }
 
 // ---- f16 (AVX2) ----
@@ -427,5 +427,5 @@ func cosineDistanceF16AVX2(a, b []types.Float16) (float64, error) {
 	if denom == 0 {
 		return 1.0, nil
 	}
-	return 1.0 - float64(dot)/denom, nil
+	return cosineDistClamped(float64(dot), denom), nil
 }

@@ -178,5 +178,5 @@ func cosineDistanceInt8SIMD(a, b []int8) (float64, error) {
 	if denom == 0 {
 		return 1.0, nil
 	}
-	return 1.0 - float64(dot)/denom, nil
+	return cosineDistClamped(float64(dot), denom), nil
 }

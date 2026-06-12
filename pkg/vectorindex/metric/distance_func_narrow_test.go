@@ -16,6 +16,7 @@ package metric
 
 import (
 	"math"
+	"math/rand"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -324,5 +325,79 @@ func TestNarrowKernelEdgeCases(t *testing.T) {
 		got, err := fn(a, b)
 		require.NoError(t, err)
 		require.InDeltaf(t, 4.0, got, 1e-3, "oid=%d single elem", oid) // (3-1)^2
+	}
+}
+
+// TestCosineDistanceClampNonNegative guards the [-1,1] similarity clamp. For two
+// identical vectors the true cosine similarity is exactly 1, but sqrt(n)*sqrt(n)
+// rounds a hair below n for many inputs, so dot/denom lands slightly above 1 and
+// an unclamped kernel returns a tiny NEGATIVE distance (outside cosine's [0,2]
+// domain). This exercises whichever kernel is active in the build (scalar in the
+// default build, AVX512/AVX2 SIMD under GOEXPERIMENT=simd) — every one must clamp
+// to >= 0. Random non-parallel vectors never reach sim>1, so the existing
+// equivalence tests miss this; here we sample many identical vectors (fixed seed,
+// several dims) so the unclamped path reliably produces negatives and fails.
+func TestCosineDistanceClampNonNegative(t *testing.T) {
+	r := rand.New(rand.NewSource(42))
+	const samplesPerDim = 400
+	dims := []int{4, 7, 16, 17, 31, 64} // cover SIMD-block (>=16) and tail paths
+
+	genF32 := func(dim int) []float32 {
+		v := make([]float32, dim)
+		for i := range v {
+			v[i] = float32(r.Float64()*16 - 8)
+		}
+		return v
+	}
+
+	bf16, err := ResolveDistanceFn[types.BF16, float32](Metric_CosineDistance)
+	require.NoError(t, err)
+	f16, err := ResolveDistanceFn[types.Float16, float32](Metric_CosineDistance)
+	require.NoError(t, err)
+	i8, err := ResolveDistanceFn[int8, float32](Metric_CosineDistance)
+	require.NoError(t, err)
+	u8, err := ResolveDistanceFn[uint8, float32](Metric_CosineDistance)
+	require.NoError(t, err)
+
+	for _, dim := range dims {
+		for s := 0; s < samplesPerDim; s++ {
+			f := genF32(dim)
+
+			// f32 / f64 native
+			d32, err := CosineDistance(f, f)
+			require.NoError(t, err)
+			require.GreaterOrEqualf(t, d32, float32(0), "f32 cosine of identical vector must be >= 0 (dim=%d)", dim)
+
+			f64v := make([]float64, dim)
+			i8v := make([]int8, dim)
+			u8v := make([]uint8, dim)
+			for i, x := range f {
+				f64v[i] = float64(x)
+				i8v[i] = int8(x * 8)         // [-64,64)
+				u8v[i] = uint8(x*8 + 128)    // [0,256)
+			}
+			d64, err := CosineDistance(f64v, f64v)
+			require.NoError(t, err)
+			require.GreaterOrEqualf(t, d64, float64(0), "f64 cosine of identical vector must be >= 0 (dim=%d)", dim)
+
+			// narrow types
+			bv := types.Float32ToBF16Slice(f)
+			db, err := bf16(bv, bv)
+			require.NoError(t, err)
+			require.GreaterOrEqualf(t, db, float32(0), "bf16 cosine of identical vector must be >= 0 (dim=%d)", dim)
+
+			hv := types.Float32ToFloat16Slice(f)
+			dh, err := f16(hv, hv)
+			require.NoError(t, err)
+			require.GreaterOrEqualf(t, dh, float32(0), "f16 cosine of identical vector must be >= 0 (dim=%d)", dim)
+
+			di, err := i8(i8v, i8v)
+			require.NoError(t, err)
+			require.GreaterOrEqualf(t, di, float32(0), "int8 cosine of identical vector must be >= 0 (dim=%d)", dim)
+
+			du, err := u8(u8v, u8v)
+			require.NoError(t, err)
+			require.GreaterOrEqualf(t, du, float32(0), "uint8 cosine of identical vector must be >= 0 (dim=%d)", dim)
+		}
 	}
 }
