@@ -155,17 +155,18 @@ insert into ext_wide_jl select c_i8, c_i64, c_u32, c_f32, c_dec, c_ch, c_vc, c_t
 -- in the jsonline-object reader).
 select * from ext_wide_jl order by c_i64;
 
--- ---------- '#'-leading values, all-empty rows, '#' separator ----------
--- Writable reads disable the CSV reader's '#' comment marker, so a first
--- column value starting with '#' is data (not a dropped comment), an all-empty
--- row round-trips (no comment-check panic), and '#' is a usable separator.
+-- ---------- '#'-leading values and all-empty rows round-trip ----------
+-- The CSV reader uses no comment marker by default (Comment defaults to the
+-- empty string), so every line is data — a '#'-leading first-column value and
+-- an all-empty row both round-trip. (Even with a marker configured, the check
+-- is on the line's raw prefix, and string values are written enclosed.)
 drop table if exists hash_src;
 create table hash_src(a varchar(20), b varchar(20));
 insert into hash_src values ('#lead','x'), ('','') , ('plain','#also');
 drop table if exists ext_hash;
 create external table ext_hash(a varchar(20), b varchar(20))
 infile{'filepath'='stage://wstage/wext_hash_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_hash_%U.csv'}
-fields terminated by '#';
+fields terminated by ',';
 insert into ext_hash select * from hash_src;
 select a, b, a is null, b is null from ext_hash order by a;
 

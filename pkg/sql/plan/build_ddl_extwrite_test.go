@@ -186,7 +186,7 @@ func TestValidateWriteFilePatternFieldTerminator(t *testing.T) {
 	require.Error(t, validateWriteFilePattern(ctx, mk("\""), nil))
 	require.Error(t, validateWriteFilePattern(ctx, mk("\r"), nil))
 	require.Error(t, validateWriteFilePattern(ctx, mk("\n"), nil))
-	// '#' is fine now (comment marker is disabled for writable reads)
+	// '#' is a valid separator (no comment marker is configured by default)
 	require.NoError(t, validateWriteFilePattern(ctx, mk("#"), nil))
 	require.NoError(t, validateWriteFilePattern(ctx, mk("|"), nil))
 }

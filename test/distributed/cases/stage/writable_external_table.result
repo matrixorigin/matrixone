@@ -167,7 +167,7 @@ insert into hash_src values ('#lead','x'), ('','') , ('plain','#also');
 drop table if exists ext_hash;
 create external table ext_hash(a varchar(20), b varchar(20))
 infile{'filepath'='stage://wstage/wext_hash_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_hash_%U.csv'}
-fields terminated by '#';
+fields terminated by ',';
 insert into ext_hash select * from hash_src;
 select a, b, a is null, b is null from ext_hash order by a;
 ➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  a is null[-7,1,0]  ¦  b is null[-7,1,0]  𝄀

@@ -160,7 +160,9 @@ func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser) (*csvpars
 		NotNull:            false,
 		Null:               []string{`\N`},
 		UnescapedQuote:     true,
-		Comment:            '#',
+		// Comment defaults to 0 (no comment marker): every line is data, matching
+		// MySQL LOAD DATA, which does not treat '#' lines as comments.
+		Comment: "",
 	}
 
 	return csvparser.NewCSVParser(&config, bufio.NewReader(reader), csvparser.ReadBlockSize, false)

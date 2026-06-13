@@ -6105,7 +6105,7 @@ func validateWritableEscape(ctx context.Context, tail *tree.TailParameter) error
 
 	// The CSV reader rejects a field terminator whose first byte is a quote,
 	// CR, LF or NUL (csvparser.validDelim / NewCSVParser), so such a table
-	// could be created and written but never read back. Mirror that check.
+	// could be created and written but never read back.
 	if b := fieldTerm[0]; b == 0 || b == '"' || b == '\r' || b == '\n' {
 		return moerr.NewBadConfig(ctx, "writable external table FIELDS TERMINATED BY cannot start with a quote, CR, LF or NUL byte")
 	}

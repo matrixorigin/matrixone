@@ -297,16 +297,10 @@ func newCSVParserFromReader(extern *tree.ExternParam, r io.Reader) (*csvparser.C
 		NotNull:            false,
 		Null:               []string{`\N`},
 		UnescapedQuote:     true,
-		Comment:            '#',
-	}
-
-	// Writable external tables produce their own data files where '#' is not a
-	// comment marker, so a first-column value starting with '#' must not be
-	// dropped (and the reader's comment '#' would otherwise also reject a valid
-	// '#' field terminator). Read-only external tables keep '#' for backward
-	// compatibility.
-	if _, writable := plan.GetWriteFilePattern(extern); writable {
-		config.Comment = 0
+		// Comment defaults to 0 (no comment marker): every line is data. A '#'
+		// here would have dropped any line whose first raw byte is '#', which
+		// MySQL LOAD/external reads do not do.
+		Comment: "",
 	}
 
 	return csvparser.NewCSVParser(&config, bufio.NewReader(r), csvparser.ReadBlockSize, false)
