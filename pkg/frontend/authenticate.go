@@ -7929,6 +7929,13 @@ func getTableOwnerRoleName(ctx context.Context, bh BackgroundExec, dbName, table
 	return getObjectOwnerRoleName(ctx, bh, getSqlForGetOwnerOfTable(dbName, tableName))
 }
 
+func shouldSkipImplicitOwnershipRevoke(ses *Session, roleName string) bool {
+	if ses == nil || len(roleName) == 0 {
+		return true
+	}
+	return ses.GetTenantInfo().IsNameOfAdminRoles(roleName)
+}
+
 func authenticateMultiDropTableTargets(ctx context.Context, ses *Session, st *tree.DropTable) (bool, statistic.StatsArray, error) {
 	var stats statistic.StatsArray
 	stats.Reset()
@@ -10718,7 +10725,7 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 	switch st := stmt.(type) {
 	case *tree.DropDatabase:
 		curRole, err := getDatabaseOwnerRoleName(tenantCtx, bh, string(st.Name))
-		if err != nil || len(curRole) == 0 {
+		if err != nil || shouldSkipImplicitOwnershipRevoke(ses, curRole) {
 			return err
 		}
 		sql := getSqlForRevokeOwnershipFromDatabase(string(st.Name), curRole)
@@ -10738,7 +10745,7 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 			if err != nil {
 				return err
 			}
-			if len(curRole) == 0 {
+			if shouldSkipImplicitOwnershipRevoke(ses, curRole) {
 				continue
 			}
 			sqls = append(sqls, getSqlForRevokeOwnershipFromTable(dbName, string(name.ObjectName), curRole))
