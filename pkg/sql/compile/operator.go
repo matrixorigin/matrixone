@@ -992,6 +992,12 @@ func buildExternalInsertArg(
 		Attrs:   attrs,
 		Stmt:    stmtAt,
 	}
+	// The reader skips lines whose raw prefix matches the COMMENT marker; the
+	// writer uses it to enclose the first field of any row that would otherwise
+	// collide, so a row written here always reads back.
+	if c := plan2.GetCSVComment(param); c != "" {
+		cfg.Comment = []byte(c)
+	}
 	if cfg.Format == "" {
 		cfg.Format = externalwrite.FormatCSV
 	}

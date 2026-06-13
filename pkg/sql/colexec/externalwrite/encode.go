@@ -88,6 +88,15 @@ func (w *externalWriter) encodeCSV(bat *batch.Batch) ([]byte, error) {
 			if !quote && w.needsEnclosure(val) {
 				quote = true
 			}
+			// COMMENT guard (first column only): the reader skips a line whose raw
+			// prefix matches the marker. If leaving this field unenclosed would
+			// make the line start with the marker, enclose it — the line then
+			// begins with the enclosure byte and is read as data. Only the first
+			// field can begin the line, and we enclose only on a real collision.
+			if j == 0 && !quote && len(w.cfg.Comment) > 0 &&
+				w.firstFieldStartsComment(addEscape(val, 0, escape), ncol == 1) {
+				quote = true
+			}
 			// The reader unescapes UNQUOTED fields too, so every value must be
 			// escaped — with a non-default escape char like '-', even a date
 			// would otherwise lose bytes to the reader's E-sequence collapsing.
@@ -130,6 +139,32 @@ func (w *externalWriter) needsEnclosure(val []byte) bool {
 		}
 	}
 	return false
+}
+
+// firstFieldStartsComment reports whether writing field (the escaped, unenclosed
+// first-column bytes) would make the line's raw prefix match the COMMENT marker,
+// so the reader would skip the row. The marker is matched at the very start of
+// the line, before LINES STARTING BY is consumed, so the candidate prefix is
+// LINES STARTING BY then the field bytes then the byte that follows the field
+// (the field terminator, or the line terminator when it is the only column).
+// A marker no longer than LINES STARTING BY is matched entirely within that
+// fixed prefix, which enclosing the field cannot change — so there is nothing to
+// guard and we return false (never quote when it would not help).
+func (w *externalWriter) firstFieldStartsComment(field []byte, onlyColumn bool) bool {
+	c := w.cfg.Comment
+	lsb := w.cfg.LineStartingBy
+	if len(c) <= len(lsb) {
+		return false
+	}
+	prefix := make([]byte, 0, len(lsb)+len(field)+len(w.cfg.FieldTerminator))
+	prefix = append(prefix, lsb...)
+	prefix = append(prefix, field...)
+	if onlyColumn {
+		prefix = append(prefix, w.cfg.LineTerminator...)
+	} else {
+		prefix = append(prefix, w.cfg.FieldTerminator...)
+	}
+	return bytes.HasPrefix(prefix, c)
 }
 
 func (w *externalWriter) writeCSVField(buf *bytes.Buffer, value []byte, quote bool, last bool) {

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/stretchr/testify/require"
 )
 
@@ -123,6 +125,76 @@ func TestEncodeLineStartingBy(t *testing.T) {
 	out, err = w2.encodeJSONLine(bat)
 	require.NoError(t, err)
 	require.Equal(t, "row:{\"id\":1,\"name\":\"alice\"}\nrow:{\"id\":null,\"name\":\"bob\"}\n", string(out))
+}
+
+// TestEncodeCSVCommentGuard: when a COMMENT marker is configured, the writer
+// encloses the first field of any row whose unenclosed line prefix would match
+// the marker (so the reader does not skip it as a comment) — and ONLY then.
+// The collision matters for UNENCLOSED types (string-like columns are always
+// enclosed, so they can never begin a line with a bare marker), matching the
+// reviewer's comment='1' / first-field-serializes-as-1 example. The encoded
+// output must round-trip through the reader with all rows preserved.
+func TestEncodeCSVCommentGuard(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	// first column is an integer (written unenclosed); 13 and 135 begin with the
+	// marker '13', while 1 and 99 do not.
+	bat := batch.New([]string{"a", "b"})
+	aVec := vector.NewVec(types.T_int64.ToType())
+	for _, v := range []int64{13, 1, 135, 99} {
+		require.NoError(t, vector.AppendFixed[int64](aVec, v, false, mp))
+	}
+	bat.Vecs[0] = aVec
+	bVec := vector.NewVec(types.T_int64.ToType())
+	for _, v := range []int64{1, 2, 3, 4} {
+		require.NoError(t, vector.AppendFixed[int64](bVec, v, false, mp))
+	}
+	bat.Vecs[1] = bVec
+	bat.SetRowCount(4)
+	defer bat.Clean(mp)
+
+	w := NewExternalWriter(nil, WriterConfig{
+		Format:  FormatCSV,
+		Attrs:   []string{"a", "b"},
+		Comment: []byte("13"),
+		Stmt:    time.Now(),
+	}).(*externalWriter)
+	out, err := w.encodeCSV(bat)
+	require.NoError(t, err)
+	// 13 and 135 start with the marker '13' and are enclosed; 1 and 99 are left
+	// bare — only the real collisions are quoted.
+	require.Equal(t, "\"13\",1\n1,2\n\"135\",3\n99,4\n", string(out))
+
+	// round-trip: every written row must read back through the parser
+	requireRoundTrip(t, "13", out, []string{"13", "1", "135", "99"})
+
+	// no marker => never quote the integer column (regression guard)
+	w2 := NewExternalWriter(nil, WriterConfig{
+		Format: FormatCSV,
+		Attrs:  []string{"a", "b"},
+		Stmt:   time.Now(),
+	}).(*externalWriter)
+	out, err = w2.encodeCSV(bat)
+	require.NoError(t, err)
+	require.Equal(t, "13,1\n1,2\n135,3\n99,4\n", string(out))
+}
+
+// requireRoundTrip parses encoded CSV with the given comment marker and asserts
+// the first-column values match want in order (no row dropped as a comment).
+func requireRoundTrip(t *testing.T, comment string, encoded []byte, want []string) {
+	t.Helper()
+	cfg := csvparser.CSVConfig{FieldsTerminatedBy: ",", FieldsEnclosedBy: `"`, FieldsEscapedBy: `\`, Comment: comment}
+	p, err := csvparser.NewCSVParser(&cfg, strings.NewReader(string(encoded)), csvparser.ReadBlockSize, false)
+	require.NoError(t, err)
+	var got []string
+	for {
+		row, rerr := p.Read(nil)
+		if rerr != nil {
+			break
+		}
+		got = append(got, string(append([]byte(nil), row[0].Val...)))
+	}
+	require.Equal(t, want, got)
 }
 
 // TestEncodeJSONLineNoAttrs: jsonline cannot emit objects without key names.

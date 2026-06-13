@@ -965,12 +965,16 @@ func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
 		// read FILEPATH (or emitting empty optional keys, which the read-side
 		// option validator rejects — e.g. 'JSONDATA'='') would silently
 		// produce a table that can write but not read its files.
-		parts := make([]string, 0, 5)
+		parts := make([]string, 0, 6)
 		appendInfileOptionForShowCreate(&parts, "FILEPATH", param.Filepath)
 		appendInfileOptionForShowCreate(&parts, "COMPRESSION", param.CompressType)
 		appendInfileOptionForShowCreate(&parts, "FORMAT", param.Format)
 		appendInfileOptionForShowCreate(&parts, "JSONDATA", param.JsonData)
 		appendInfileOptionForShowCreate(&parts, "WRITE_FILE_PATTERN", pattern)
+		// The CSV reader skips lines whose raw prefix matches COMMENT (the writer
+		// encloses colliding first fields), so the marker affects readback and
+		// must round-trip; omitted when unset.
+		appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param))
 		return " INFILE{" + strings.Join(parts, ",") + "}"
 	}
 	filepath := ""
@@ -983,6 +987,9 @@ func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
 		"'FORMAT'=" + formatStrLit(param.Format),
 		"'JSONDATA'=" + formatStrLit(param.JsonData),
 	}
+	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
+	// changes which rows are returned; round-trip it (omitted when unset).
+	appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param))
 	appendHivePartitionOptionsForShowCreate(&parts, param, true)
 	return " INFILE{" + strings.Join(parts, ",") + "}"
 }
@@ -1022,6 +1029,9 @@ func formatS3ExternalOptionsForShowCreate(param *tree.ExternParam) string {
 	if pattern, ok := GetWriteFilePattern(param); ok {
 		appendExternalOptionForShowCreate(&parts, ExternalWriteFilePatternKey, pattern, false)
 	}
+	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
+	// changes which rows are returned; round-trip it (omitted when unset).
+	appendExternalOptionForShowCreate(&parts, CSVCommentKey, GetCSVComment(param), false)
 	appendHivePartitionOptionsForShowCreate(&parts, param, false)
 	return " URL s3option{" + strings.Join(parts, ",") + "}"
 }

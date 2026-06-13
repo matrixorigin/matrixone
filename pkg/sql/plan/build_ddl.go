@@ -6047,6 +6047,13 @@ func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam, tabl
 			if col.Typ.AutoIncr {
 				return moerr.NewBadConfigf(ctx, "writable external table does not support AUTO_INCREMENT column '%s'", col.Name)
 			}
+			// Generated columns are recomputed (and explicit writes rejected) only
+			// by the normal insert/load binders. The external INSERT/LOAD path uses
+			// the minimal legacy builder, which neither filters nor recomputes them,
+			// so a generated column would store arbitrary or NULL/default values.
+			if col.GeneratedCol != nil {
+				return moerr.NewBadConfigf(ctx, "writable external table does not support generated column '%s'", col.Name)
+			}
 			// Binary payloads cannot round-trip through JSON strings: bit bytes
 			// >= 0x80 are invalid UTF-8, and binary/varbinary/blob would need a
 			// base64 encoding the jsonline READER does not decode.

@@ -468,6 +468,40 @@ func TestShowCreateExternalWriteFilePattern(t *testing.T) {
 	require.Contains(t, out, "'write_file_pattern'='"+pattern+"'")
 }
 
+// TestShowCreateExternalCommentRoundTrip: the CSV reader skips lines whose raw
+// prefix matches the COMMENT marker, so SHOW CREATE must round-trip it for
+// read-only external tables (writable tables reject a non-empty marker, so they
+// never carry one). Omitted entirely when unset.
+func TestShowCreateExternalCommentRoundTrip(t *testing.T) {
+	// INFILE read-only table with a comment marker
+	ro := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format:   tree.CSV,
+		Filepath: "/local/path.csv",
+		Option:   []string{"format", "csv", "comment", "#"},
+	}}
+	out := formatInfileExternalOptionsForShowCreate(ro)
+	require.Contains(t, out, "'COMMENT'='#'")
+
+	// no comment option => no COMMENT key
+	noComment := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format:   tree.CSV,
+		Filepath: "/local/path.csv",
+		Option:   []string{"format", "csv"},
+	}}
+	require.NotContains(t, formatInfileExternalOptionsForShowCreate(noComment), "COMMENT")
+
+	// S3 read-only table with a comment marker
+	s3 := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Format:   tree.CSV,
+			Option:   []string{"format", "csv", "comment", "REM"},
+		},
+		ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "b"}},
+	}
+	require.Contains(t, formatS3ExternalOptionsForShowCreate(s3), "'comment'='REM'")
+}
+
 // TestFormatStrInSingleQuotes: FIELDS/LINES values emitted by SHOW CREATE must
 // be valid inside single-quoted SQL literals (a custom LINES TERMINATED BY
 // used to render as the Go struct '&{#EOL#}', and a single-quote enclosure as

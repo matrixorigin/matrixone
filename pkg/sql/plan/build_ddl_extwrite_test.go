@@ -244,6 +244,49 @@ func TestValidateWriteFilePatternColumns(t *testing.T) {
 	}
 }
 
+func TestValidateWriteFilePatternComment(t *testing.T) {
+	ctx := context.Background()
+	mk := func(opt ...string) *tree.ExternParam {
+		return &tree.ExternParam{ExParamConst: tree.ExParamConst{
+			Format: tree.CSV,
+			Option: append([]string{"write_file_pattern", "stage://s/part-%U.csv"}, opt...),
+		}}
+	}
+
+	// A COMMENT marker is accepted on writable tables: the writer encloses the
+	// first field of any colliding row so it reads back as data (see the
+	// externalwrite encoder's firstFieldStartsComment guard).
+	require.NoError(t, validateWriteFilePattern(ctx, mk(), nil))
+	require.NoError(t, validateWriteFilePattern(ctx, mk("comment", ""), nil))
+	require.NoError(t, validateWriteFilePattern(ctx, mk("comment", "#"), nil))
+	require.NoError(t, validateWriteFilePattern(ctx, mk("comment", "REM"), nil))
+}
+
+func TestValidateWriteFilePatternGeneratedColumn(t *testing.T) {
+	ctx := context.Background()
+	csvParam := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format: tree.CSV,
+		Option: []string{"write_file_pattern", "stage://s/part-%U.csv"},
+	}}
+
+	// a generated column is rejected: the minimal external INSERT/LOAD plan does
+	// not run the generated-column rewrite, so it would store arbitrary or
+	// NULL/default values instead of the computed expression.
+	td := &TableDef{Cols: []*ColDef{
+		{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}},
+		{Name: "g", Typ: plan.Type{Id: int32(types.T_int32)}, GeneratedCol: &plan.GeneratedCol{}},
+	}}
+	err := validateWriteFilePattern(ctx, csvParam, td)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "generated column")
+
+	// plain columns alone are fine
+	td = &TableDef{Cols: []*ColDef{
+		{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}},
+	}}
+	require.NoError(t, validateWriteFilePattern(ctx, csvParam, td))
+}
+
 func TestValidateWriteFilePatternTail(t *testing.T) {
 	ctx := context.Background()
 	withTail := func(tail *tree.TailParameter) *tree.ExternParam {

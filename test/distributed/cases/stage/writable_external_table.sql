@@ -346,6 +346,11 @@ create external table ext_bad17(a int, b int)
 infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
 fields terminated by '"';
 
+-- generated columns are recomputed only by the normal insert/load binders; the
+-- minimal external plan would store arbitrary or NULL/default values
+create external table ext_bad19(a int, g int as (a+1) stored)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+
 -- REPLACE has no external-table support and reports the user-facing error
 drop table if exists ext_rep;
 create external table ext_rep(a int)

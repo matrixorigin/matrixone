@@ -51,7 +51,12 @@ type WriterConfig struct {
 	FieldTerminator []byte // default ","
 	LineTerminator  []byte // default "\n"
 	LineStartingBy  []byte // LINES STARTED BY prefix, written before each record
-	EnclosedBy      byte   // default '"' (the external reader's enclosure)
+	// Comment is the table's COMMENT marker. The reader skips a line whose raw
+	// prefix matches it (before LINES STARTING BY is consumed), so when set the
+	// writer encloses the first field of any row whose unenclosed line prefix
+	// would match — only then, never otherwise. Empty disables the marker.
+	Comment    []byte
+	EnclosedBy byte // default '"' (the external reader's enclosure)
 	// EscapedBy is the FIELDS ESCAPED BY character (default '\\'). The writer
 	// doubles it wherever it appears in a value, matching the reader's
 	// unescaping. NoEscape disables escaping entirely (ESCAPED BY ''), which
