@@ -16,8 +16,10 @@ package pSpool
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"sync/atomic"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
 const (
@@ -115,15 +117,35 @@ func (ps *PipelineSpool) ReceiveBatch(idx int) (data *batch.Batch, info error) {
 
 // Close the sender and receivers, and do memory clean.
 func (ps *PipelineSpool) Close() {
+	ps.CloseWithTimeout(0)
+}
+
+func (ps *PipelineSpool) CloseWithTimeout(timeout time.Duration) bool {
+	timer := (*time.Timer)(nil)
+	if timeout > 0 {
+		timer = time.NewTimer(timeout)
+		defer timer.Stop()
+	}
+
 	// wait for all receivers done its work first.
 	requireEndingReceiver := len(ps.rs)
 	for requireEndingReceiver > 0 {
 		requireEndingReceiver--
 
-		<-ps.csDoneSignal
+		if timer == nil {
+			<-ps.csDoneSignal
+			continue
+		}
+
+		select {
+		case <-ps.csDoneSignal:
+		case <-timer.C:
+			return false
+		}
 	}
 
 	ps.cache.free()
+	return true
 }
 
 func (ps *PipelineSpool) getFreeIdFromSharedPool(

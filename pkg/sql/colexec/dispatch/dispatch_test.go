@@ -16,6 +16,7 @@ package dispatch
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
@@ -78,6 +79,71 @@ func TestDispatchAdoptCleanupState_NilSafe(t *testing.T) {
 		target.AdoptCleanupState(nil)
 	})
 	require.Nil(t, target.ctr)
+}
+
+func TestDispatchResetDoesNotBlockWhenRemoteErrChannelIsFull(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	proc := testutil.NewProcess(t)
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+
+	errCh := make(chan error, 1)
+	errCh <- moerr.NewInternalErrorNoCtx("already notified")
+	d := &Dispatch{
+		ctr: &container{
+			isRemote: true,
+			remoteReceivers: []*process.WrapCs{
+				{Err: errCh, Uid: uid, MsgId: 1},
+			},
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		d.Reset(proc, true, moerr.NewInternalErrorNoCtx("cleanup"))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Dispatch.Reset blocked on a full remote receiver error channel")
+	}
+}
+
+func TestDispatchResetSendsHealthyLocalRegWhenEarlierRegIsFull(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	fullReg := &process.WaitRegister{Ch2: make(chan process.PipelineSignal, 1)}
+	fullReg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+	healthyReg := &process.WaitRegister{Ch2: make(chan process.PipelineSignal, 1)}
+
+	d := &Dispatch{
+		LocalRegs: []*process.WaitRegister{fullReg, healthyReg},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		d.Reset(nil, true, moerr.NewInternalErrorNoCtx("cleanup"))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Dispatch.Reset blocked on a full local receiver channel")
+	}
+
+	select {
+	case <-healthyReg.Ch2:
+	default:
+		t.Fatal("Dispatch.Reset did not notify a healthy local receiver after an earlier receiver channel was full")
+	}
 }
 
 // TestReceiverDone_OldBehavior tests the old behavior (kept for backward compatibility verification)
