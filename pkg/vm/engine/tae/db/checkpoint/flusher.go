@@ -42,6 +42,10 @@ import (
 
 var ErrFlusherStopped = moerr.NewInternalErrorNoCtx("flusher stopped")
 
+const (
+	stalledCheckpointFlushAge = checkpointIntentOldAge
+)
+
 type FlushCfg struct {
 	ForceFlushTimeout       time.Duration
 	ForceFlushCheckInterval time.Duration
@@ -76,9 +80,33 @@ type Flusher interface {
 
 var _ Flusher = (*flusher)(nil)
 
+type flushRequestMode uint8
+
+const (
+	flushRequestCron flushRequestMode = iota
+	flushRequestCheckpointBounded
+	flushRequestForce
+)
+
+type flushScheduleMode uint8
+
+const (
+	flushScheduleCron flushScheduleMode = iota
+	flushScheduleCheckpointBounded
+	flushScheduleForce
+)
+
+func (mode flushScheduleMode) bypassFlushReady() bool {
+	return mode == flushScheduleCheckpointBounded || mode == flushScheduleForce
+}
+
+func (mode flushScheduleMode) resetFlushDeadline() bool {
+	return mode != flushScheduleCheckpointBounded
+}
+
 type FlushRequest struct {
-	force bool
-	tree  *logtail.DirtyTreeEntry
+	mode flushRequestMode
+	tree *logtail.DirtyTreeEntry
 }
 
 type FlusherOption func(*flushImpl)
@@ -303,6 +331,8 @@ type flushImpl struct {
 
 	objMemSizeList []tableAndSize
 
+	stalledCheckpointPickBounded bool
+
 	// Log throttling for collectTableMemUsage
 	logThrottleMu   sync.Mutex
 	lastLogTime     time.Time
@@ -385,34 +415,93 @@ func (flusher *flushImpl) triggerJob(ctx context.Context) {
 		return
 	}
 	flusher.sourcer.Run(flusher.flushLag)
-	entry := flusher.sourcer.GetAndRefreshMerged()
-	if !entry.IsEmpty() {
-		request := new(FlushRequest)
-		request.tree = entry
-		flusher.flushRequestQ.Enqueue(request)
+	var entry *logtail.DirtyTreeEntry
+	mode := flushRequestCron
+	intent := flusher.checkpointSchduler.PendingIncrementalCheckpoint()
+	if bounded := flusher.pickStalledCheckpointFlushEntry(intent); bounded {
+		entry = flusher.makeStalledCheckpointFlushEntry()
+		if entry == nil {
+			entry = flusher.sourcer.GetAndRefreshMerged()
+		} else {
+			mode = flushRequestCheckpointBounded
+		}
+	} else {
+		entry = flusher.sourcer.GetAndRefreshMerged()
 	}
+	flusher.enqueueFlush(entry, mode)
 	_, ts := entry.GetTimeRange()
 	flusher.checkpointSchduler.TryScheduleCheckpoint(ts, false)
 }
 
+func (flusher *flushImpl) pickStalledCheckpointFlushEntry(intent *CheckpointEntry) bool {
+	if !shouldScheduleStalledCheckpointFlush(intent, stalledCheckpointFlushAge) {
+		flusher.stalledCheckpointPickBounded = false
+		return false
+	}
+	flusher.stalledCheckpointPickBounded = !flusher.stalledCheckpointPickBounded
+	return flusher.stalledCheckpointPickBounded
+}
+
+func (flusher *flushImpl) enqueueCronFlush(entry *logtail.DirtyTreeEntry) {
+	flusher.enqueueFlush(entry, flushRequestCron)
+}
+
+func (flusher *flushImpl) enqueueFlush(entry *logtail.DirtyTreeEntry, mode flushRequestMode) {
+	if entry == nil || entry.IsEmpty() {
+		return
+	}
+	request := &FlushRequest{
+		mode: mode,
+		tree: entry,
+	}
+	flusher.flushRequestQ.Enqueue(request)
+}
+
 func (flusher *flushImpl) onFlushRequest(items ...any) {
-	fromCrons := logtail.NewEmptyDirtyTreeEntry()
-	fromForce := logtail.NewEmptyDirtyTreeEntry()
+	fromCrons, fromForce, fromCheckpointBounded := mergeFlushRequests(items...)
+	flusher.scheduleFlush(fromForce, flushScheduleForce)
+	for _, entry := range fromCheckpointBounded {
+		flusher.scheduleFlush(entry, flushScheduleCheckpointBounded)
+	}
+	flusher.scheduleFlush(fromCrons, flushScheduleCron)
+}
+
+func mergeFlushRequests(items ...any) (
+	fromCrons *logtail.DirtyTreeEntry,
+	fromForce *logtail.DirtyTreeEntry,
+	fromCheckpointBounded []*logtail.DirtyTreeEntry,
+) {
+	mergeEntry := func(merged, entry *logtail.DirtyTreeEntry) *logtail.DirtyTreeEntry {
+		if merged == nil {
+			start, end := entry.GetTimeRange()
+			merged = logtail.NewDirtyTreeEntry(start, end, model.NewTree())
+		}
+		merged.Merge(entry)
+		return merged
+	}
 	for _, item := range items {
 		e := item.(*FlushRequest)
-		if e.force {
-			fromForce.Merge(e.tree)
-		} else {
-			fromCrons.Merge(e.tree)
+		switch e.mode {
+		case flushRequestForce:
+			fromForce = mergeEntry(fromForce, e.tree)
+		case flushRequestCheckpointBounded:
+			fromCheckpointBounded = append(fromCheckpointBounded, e.tree)
+		default:
+			fromCrons = mergeEntry(fromCrons, e.tree)
 		}
 	}
-	flusher.scheduleFlush(fromForce, true)
-	flusher.scheduleFlush(fromCrons, false)
+	if fromCrons == nil {
+		fromCrons = logtail.NewEmptyDirtyTreeEntry()
+	}
+	if fromForce == nil {
+		fromForce = logtail.NewEmptyDirtyTreeEntry()
+	}
+	return
 }
 
 func (flusher *flushImpl) scheduleFlush(
 	entry *logtail.DirtyTreeEntry,
-	force bool,
+	mode flushScheduleMode,
 ) {
 	if _, injected := objectio.PrintFlushEntryInjected(); injected {
 		logutil.Infof("scheduleFlush: %v", entry.String())
@@ -429,7 +518,45 @@ func (flusher *flushImpl) scheduleFlush(
 		}
 	}
 	pressure := flusher.collectTableMemUsage(entry, lastCkp)
-	flusher.checkFlushConditionAndFire(entry, force, pressure, lastCkp)
+	flusher.checkFlushConditionAndFire(entry, mode, pressure, lastCkp)
+}
+
+func (flusher *flushImpl) makeStalledCheckpointFlushEntry() *logtail.DirtyTreeEntry {
+	if flusher.sourcer == nil || flusher.checkpointSchduler == nil {
+		return nil
+	}
+	intent := flusher.checkpointSchduler.PendingIncrementalCheckpoint()
+	return makeStalledCheckpointFlushEntry(flusher.sourcer, intent, stalledCheckpointFlushAge)
+}
+
+func makeStalledCheckpointFlushEntry(
+	sourcer logtail.Collector,
+	intent *CheckpointEntry,
+	threshold time.Duration,
+) *logtail.DirtyTreeEntry {
+	if sourcer == nil || !shouldScheduleStalledCheckpointFlush(intent, threshold) {
+		return nil
+	}
+	start, end := intent.GetStart(), intent.GetEnd()
+	entry := sourcer.ScanInRangePruned(start, end)
+	if entry.IsEmpty() {
+		return nil
+	}
+	logutil.Info(
+		"flusher.ckp.bounded",
+		zap.String("start", start.ToString()),
+		zap.String("end", end.ToString()),
+		zap.Duration("age", intent.Age()),
+		zap.Int("tables", entry.GetTree().TableCount()),
+	)
+	return entry
+}
+
+func shouldScheduleStalledCheckpointFlush(intent *CheckpointEntry, threshold time.Duration) bool {
+	if intent == nil || !intent.IsPendding() || intent.IsFlushChecked() {
+		return false
+	}
+	return intent.Age() > threshold
 }
 
 func foreachAobjBefore(_ context.Context,
@@ -663,20 +790,24 @@ nextChunk:
 }
 
 func (flusher *flushImpl) checkFlushConditionAndFire(
-	entry *logtail.DirtyTreeEntry, force bool, pressure float64, lastCkp types.TS,
+	entry *logtail.DirtyTreeEntry, mode flushScheduleMode, pressure float64, lastCkp types.TS,
 ) {
 	count := 0
 	_, end := entry.GetTimeRange()
 	for _, ticket := range flusher.objMemSizeList {
 		table, asize, dsize := ticket.tbl, ticket.asize, ticket.dsize
 
-		if force {
+		if mode.bypassFlushReady() {
+			logName := "flusher.force"
+			if mode == flushScheduleCheckpointBounded {
+				logName = "flusher.ckp.bounded.flush"
+			}
 			logutil.Info(
-				"flusher.force",
+				logName,
 				zap.Uint64("id", table.ID),
 				zap.String("name", table.GetLastestSchemaLocked(false).Name),
 			)
-			if err := flusher.fireFlushTabletail(table, end, lastCkp); err == nil {
+			if err := flusher.fireFlushTabletail(table, end, lastCkp); err == nil && mode.resetFlushDeadline() {
 				table.Stats.ResetDeadline(flusher.flushInterval)
 			}
 			continue
@@ -756,9 +887,10 @@ func (flusher *flushImpl) ForceFlushWithInterval(
 			return nil
 		}
 		entry := logtail.NewDirtyTreeEntry(types.TS{}, ts, tree.GetTree())
-		request := new(FlushRequest)
-		request.tree = entry
-		request.force = true
+		request := &FlushRequest{
+			mode: flushRequestForce,
+			tree: entry,
+		}
 		// logutil.Infof("try flush %v",tree.String())
 		return request
 	}
@@ -822,9 +954,10 @@ func (flusher *flushImpl) FlushTable(
 		nTree := model.NewTree()
 		nTree.Tables[tableID] = tableTree
 		entry := logtail.NewDirtyTreeEntry(types.TS{}, ts, nTree)
-		request := new(FlushRequest)
-		request.tree = entry
-		request.force = true
+		request := &FlushRequest{
+			mode: flushRequestForce,
+			tree: entry,
+		}
 		return request
 	}
 
