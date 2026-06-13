@@ -35,6 +35,18 @@ insert into ext_csv select a+10, b, c from src;
 select * from ext_csv order by a;
 select count(*) from ext_csv;
 
+-- The emitted DDL is re-executable: recreate the table from it (verbatim from
+-- the SHOW CREATE output above), and the new table reads the existing files
+-- and accepts new writes.
+drop table ext_csv;
+CREATE EXTERNAL TABLE `ext_csv` (
+  `a` int DEFAULT NULL,
+  `b` varchar(20) DEFAULT NULL,
+  `c` double DEFAULT NULL
+) INFILE{'FILEPATH'='stage://wstage/wext_csv_*.csv','FORMAT'='csv','WRITE_FILE_PATTERN'='stage://wstage/wext_csv_%U.csv'} FIELDS TERMINATED BY ',';
+insert into ext_csv select a+20, b, c from src;
+select count(*) from ext_csv;
+
 -- ---------- CSV default-enclosure round-trip ----------
 -- No ENCLOSED BY on the table: the writer quotes strings with the reader's
 -- default '"' so values containing the field terminator, quotes, newlines or
@@ -91,6 +103,18 @@ infile{'filepath'='stage://wstage/wext_jl_*.jl', 'format'='jsonline', 'write_fil
 fields terminated by ',';
 insert into ext_jl select * from src;
 select * from ext_jl order by a;
+
+-- jsonline tables are recreatable from their emitted DDL too (JSONDATA is a
+-- real value here; empty optional keys are omitted from SHOW CREATE).
+show create table ext_jl;
+drop table ext_jl;
+CREATE EXTERNAL TABLE `ext_jl` (
+  `a` int DEFAULT NULL,
+  `b` varchar(20) DEFAULT NULL,
+  `c` double DEFAULT NULL
+) INFILE{'FILEPATH'='stage://wstage/wext_jl_*.jl','FORMAT'='jsonline','JSONDATA'='object','WRITE_FILE_PATTERN'='stage://wstage/wext_jl_%U.jl'} FIELDS TERMINATED BY ',';
+insert into ext_jl select a+10, b, c from src;
+select count(*) from ext_jl;
 
 -- ---------- wide column-type coverage (CSV + JSONLine), incl. NULLs ----------
 drop table if exists wide_src;

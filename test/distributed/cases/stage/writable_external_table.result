@@ -12,7 +12,7 @@ infile{'filepath'='stage://wstage/wext_csv_*.csv', 'format'='csv', 'write_file_p
 fields terminated by ',';
 show create table ext_csv;
 Table    Create Table
-ext_csv    CREATE EXTERNAL TABLE `ext_csv` (\n  `a` int DEFAULT NULL,\n  `b` varchar(20) DEFAULT NULL,\n  `c` double DEFAULT NULL\n) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='csv','JSONDATA'='','WRITE_FILE_PATTERN'='stage://wstage/wext_csv_%U.csv'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
+ext_csv    CREATE EXTERNAL TABLE `ext_csv` (\n  `a` int DEFAULT NULL,\n  `b` varchar(20) DEFAULT NULL,\n  `c` double DEFAULT NULL\n) INFILE{'FILEPATH'='stage://wstage/wext_csv_*.csv','FORMAT'='csv','WRITE_FILE_PATTERN'='stage://wstage/wext_csv_%U.csv'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
 insert into ext_csv select * from src;
 select * from ext_csv order by a;
 a    b    c
@@ -34,6 +34,16 @@ a    b    c
 select count(*) from ext_csv;
 count(*)
 6
+drop table ext_csv;
+CREATE EXTERNAL TABLE `ext_csv` (
+`a` int DEFAULT NULL,
+`b` varchar(20) DEFAULT NULL,
+`c` double DEFAULT NULL
+) INFILE{'FILEPATH'='stage://wstage/wext_csv_*.csv','FORMAT'='csv','WRITE_FILE_PATTERN'='stage://wstage/wext_csv_%U.csv'} FIELDS TERMINATED BY ',';
+insert into ext_csv select a+20, b, c from src;
+select count(*) from ext_csv;
+count(*)
+9
 drop table if exists tricky_src;
 create table tricky_src(a int, b varchar(50));
 insert into tricky_src values (1,'with,comma'),(2,'with"quote'),(3,'with\nnewline'),(4,'with\\backslash');
@@ -86,6 +96,19 @@ a    b    c
 1    alice    1.5
 2    bob    2.5
 3    carol    3.5
+show create table ext_jl;
+Table    Create Table
+ext_jl    CREATE EXTERNAL TABLE `ext_jl` (\n  `a` int DEFAULT NULL,\n  `b` varchar(20) DEFAULT NULL,\n  `c` double DEFAULT NULL\n) INFILE{'FILEPATH'='stage://wstage/wext_jl_*.jl','FORMAT'='jsonline','JSONDATA'='object','WRITE_FILE_PATTERN'='stage://wstage/wext_jl_%U.jl'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
+drop table ext_jl;
+CREATE EXTERNAL TABLE `ext_jl` (
+`a` int DEFAULT NULL,
+`b` varchar(20) DEFAULT NULL,
+`c` double DEFAULT NULL
+) INFILE{'FILEPATH'='stage://wstage/wext_jl_*.jl','FORMAT'='jsonline','JSONDATA'='object','WRITE_FILE_PATTERN'='stage://wstage/wext_jl_%U.jl'} FIELDS TERMINATED BY ',';
+insert into ext_jl select a+10, b, c from src;
+select count(*) from ext_jl;
+count(*)
+6
 drop table if exists wide_src;
 create table wide_src(
 c_i8 tinyint, c_i64 bigint, c_u32 int unsigned,

@@ -427,20 +427,33 @@ func TestFormatColTypeArrayMetadata(t *testing.T) {
 func TestShowCreateExternalWriteFilePattern(t *testing.T) {
 	pattern := "stage://s/part-%U.csv"
 
-	// INFILE{...} form (ScanType != S3).
+	// INFILE{...} form (ScanType != S3). Writable tables must be recreatable
+	// from the emitted DDL: the read FILEPATH is preserved (not masked) and
+	// empty optional keys are omitted (the read-side validator rejects
+	// 'JSONDATA'='').
 	p := &tree.ExternParam{ExParamConst: tree.ExParamConst{
-		Format: tree.CSV,
-		Option: []string{"format", "csv", "write_file_pattern", pattern},
+		Format:   tree.CSV,
+		Filepath: "stage://s/part-*.csv",
+		Option:   []string{"format", "csv", "write_file_pattern", pattern},
 	}}
 	out := formatInfileExternalOptionsForShowCreate(p)
 	require.Contains(t, out, "'WRITE_FILE_PATTERN'='"+pattern+"'")
+	require.Contains(t, out, "'FILEPATH'='stage://s/part-*.csv'")
+	require.NotContains(t, out, "JSONDATA")
+	require.NotContains(t, out, "''")
 
-	// Read-only table: no WRITE_FILE_PATTERN key at all.
+	// Read-only table: legacy output unchanged — no WRITE_FILE_PATTERN key,
+	// FILEPATH masked, empty keys present.
 	ro := &tree.ExternParam{ExParamConst: tree.ExParamConst{
-		Format: tree.CSV,
-		Option: []string{"format", "csv"},
+		Format:   tree.CSV,
+		Filepath: "/local/path.csv",
+		Option:   []string{"format", "csv"},
 	}}
-	require.NotContains(t, formatInfileExternalOptionsForShowCreate(ro), "WRITE_FILE_PATTERN")
+	roOut := formatInfileExternalOptionsForShowCreate(ro)
+	require.NotContains(t, roOut, "WRITE_FILE_PATTERN")
+	require.Contains(t, roOut, "'FILEPATH'=''")
+	require.NotContains(t, roOut, "/local/path.csv")
+	require.Contains(t, roOut, "'JSONDATA'=''")
 
 	// URL s3option{...} form.
 	s3 := &tree.ExternParam{

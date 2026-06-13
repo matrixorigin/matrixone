@@ -958,6 +958,20 @@ func formatExternalTableOptionsForShowCreate(param *tree.ExternParam) string {
 }
 
 func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
+	if pattern, writable := GetWriteFilePattern(param); writable {
+		// Writable external tables must be recreatable from their own DDL:
+		// snapshot/PITR restore replays SHOW CREATE output, so masking the
+		// read FILEPATH (or emitting empty optional keys, which the read-side
+		// option validator rejects — e.g. 'JSONDATA'='') would silently
+		// produce a table that can write but not read its files.
+		parts := make([]string, 0, 5)
+		appendInfileOptionForShowCreate(&parts, "FILEPATH", param.Filepath)
+		appendInfileOptionForShowCreate(&parts, "COMPRESSION", param.CompressType)
+		appendInfileOptionForShowCreate(&parts, "FORMAT", param.Format)
+		appendInfileOptionForShowCreate(&parts, "JSONDATA", param.JsonData)
+		appendInfileOptionForShowCreate(&parts, "WRITE_FILE_PATTERN", pattern)
+		return " INFILE{" + strings.Join(parts, ",") + "}"
+	}
 	filepath := ""
 	if param.HivePartitioning {
 		filepath = param.Filepath
@@ -968,11 +982,18 @@ func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
 		"'FORMAT'=" + formatStrLit(param.Format),
 		"'JSONDATA'=" + formatStrLit(param.JsonData),
 	}
-	if pattern, ok := GetWriteFilePattern(param); ok {
-		parts = append(parts, "'WRITE_FILE_PATTERN'="+formatStrLit(pattern))
-	}
 	appendHivePartitionOptionsForShowCreate(&parts, param, true)
 	return " INFILE{" + strings.Join(parts, ",") + "}"
+}
+
+// appendInfileOptionForShowCreate appends 'KEY'='value' when the value is
+// non-empty (the read-side option validators reject empty values for keys
+// like jsondata, so omitted is the recreatable form of "unset").
+func appendInfileOptionForShowCreate(parts *[]string, key, value string) {
+	if value == "" {
+		return
+	}
+	*parts = append(*parts, "'"+key+"'="+formatStrLit(value))
 }
 
 func formatS3ExternalOptionsForShowCreate(param *tree.ExternParam) string {
