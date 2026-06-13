@@ -152,14 +152,14 @@ checked at write time (the minimal plan runs no PreInsert), AUTO_INCREMENT
 columns are rejected, jsonline writable tables reject `bit`/binary columns,
 and TRUNCATE on a writable external table errors instead of silently
 succeeding without removing files. The CSV parser's comment marker
-(`CSVConfig.Comment`) is now a string defaulting to empty — no comment
-marker, so every line is data (matching MySQL LOAD, which does not comment
-on `#`); both the external-read and LOAD callers default it empty. When a
-marker is configured it is matched against the line's RAW prefix before
-unquoting (so an enclosed `"#x"` is data, only an unquoted line beginning
-with the marker is skipped) — fixing the former post-unquote check that
-would have dropped quoted values. `#` is therefore a usable field
-terminator.
+(`CSVConfig.Comment`) is a string defaulting to empty — no comment marker,
+so every line is data (matching MySQL LOAD, which does not comment on `#`).
+External tables expose it as the `COMMENT` table option (e.g.
+`INFILE{... 'comment'='#'}` or `'comment'='REM'`); when set, the marker is
+matched against the line's RAW prefix before unquoting (so an enclosed
+`"#x"` is data, only an unquoted line beginning with the marker is skipped) —
+fixing the former post-unquote check that would have dropped quoted values.
+With no marker configured by default, `#` is a usable field terminator.
 Values no encoding can round-trip are rejected at write time: a string of
 exactly `\N` under a non-default (or disabled) escape and always under
 jsonline, invalid UTF-8 strings under jsonline, and a trailing CR in the last

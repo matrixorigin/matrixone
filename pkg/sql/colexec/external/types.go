@@ -297,10 +297,10 @@ func newCSVParserFromReader(extern *tree.ExternParam, r io.Reader) (*csvparser.C
 		NotNull:            false,
 		Null:               []string{`\N`},
 		UnescapedQuote:     true,
-		// Comment defaults to 0 (no comment marker): every line is data. A '#'
-		// here would have dropped any line whose first raw byte is '#', which
-		// MySQL LOAD/external reads do not do.
-		Comment: "",
+		// Comment marker comes from the table's COMMENT option; empty (the
+		// default) means no marker, so every line is data. A configured marker
+		// skips lines whose raw prefix matches it (checked before unquoting).
+		Comment: plan.GetCSVComment(extern),
 	}
 
 	return csvparser.NewCSVParser(&config, bufio.NewReader(r), csvparser.ReadBlockSize, false)
