@@ -127,11 +127,13 @@ select a, concat('[', b, ']') from t_sb order by a;
 
 -- ---------- everything at once ----------
 -- custom separator + single-quote enclosure + '!' escape + STARTING BY +
--- custom line terminator, against the full tricky data set.
+-- custom line terminator, against the full tricky data set. (The separator is
+-- '^' because mo-tester's statement splitter trips on a quoted semicolon
+-- inside SQL text.)
 drop table if exists t_all;
 create external table t_all(a int, b varchar(60))
 infile{'filepath'='stage://cstage/copt_all_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_all_%U.csv'}
-fields terminated by ';' enclosed by '\'' escaped by '!' lines starting by 'R>' terminated by '#EOL#';
+fields terminated by '^' enclosed by '\'' escaped by '!' lines starting by 'R>' terminated by '#EOL#';
 insert into t_all select * from src;
 select a, concat('[', b, ']') from t_all order by a;
 select count(*), count(b) from t_all;

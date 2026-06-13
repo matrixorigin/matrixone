@@ -200,7 +200,7 @@ a    concat([, b, ])
 drop table if exists t_all;
 create external table t_all(a int, b varchar(60))
 infile{'filepath'='stage://cstage/copt_all_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_all_%U.csv'}
-fields terminated by ';' enclosed by '\'' escaped by '!' lines starting by 'R>' terminated by '#EOL#';
+fields terminated by '^' enclosed by '\'' escaped by '!' lines starting by 'R>' terminated by '#EOL#';
 insert into t_all select * from src;
 select a, concat('[', b, ']') from t_all order by a;
 a    concat([, b, ])
@@ -297,7 +297,7 @@ col1    col2    col3    col4
 9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    1
 show create table t_all;
 Table    Create Table
-t_all    CREATE EXTERNAL TABLE `t_all` (\n  `a` int DEFAULT NULL,\n  `b` varchar(60) DEFAULT NULL\n) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='csv','JSONDATA'='','WRITE_FILE_PATTERN'='stage://cstage/copt_all_%U.csv'} FIELDS TERMINATED BY ';' ENCLOSED BY '''' ESCAPED BY '!' LINES STARTING BY 'R>' TERMINATED BY '#EOL#'
+t_all    CREATE EXTERNAL TABLE `t_all` (\n  `a` int DEFAULT NULL,\n  `b` varchar(60) DEFAULT NULL\n) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='csv','JSONDATA'='','WRITE_FILE_PATTERN'='stage://cstage/copt_all_%U.csv'} FIELDS TERMINATED BY '^' ENCLOSED BY '''' ESCAPED BY '!' LINES STARTING BY 'R>' TERMINATED BY '#EOL#'
 drop table if exists t_pipe;
 drop table if exists t_tab;
 drop table if exists t_multi;
