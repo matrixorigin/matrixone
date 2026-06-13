@@ -329,3 +329,32 @@ func TestValidateWriteFilePatternTail(t *testing.T) {
 		Lines: &tree.Lines{StartingBy: "row:"},
 	}), nil))
 }
+
+// TestEffectiveWriteCompression covers the compression detection helper: an
+// explicit non-auto type wins; otherwise the type is auto-detected from any
+// path suffix; empty/auto/none with a plain suffix means uncompressed.
+func TestEffectiveWriteCompression(t *testing.T) {
+	// explicit compression wins regardless of suffix
+	eff, yes := effectiveWriteCompression("gzip", "x.csv", "y.csv")
+	require.True(t, yes)
+	require.Equal(t, "gzip", eff)
+
+	// explicit none is uncompressed even with a .gz suffix
+	_, yes = effectiveWriteCompression("none", "x.csv.gz")
+	require.False(t, yes)
+
+	// auto-detect from suffix on any of the paths
+	for _, suf := range []string{".gz", ".gzip", ".bz2", ".bzip2", ".lz4", ".tar.gz", ".tar.bz2"} {
+		_, yes := effectiveWriteCompression("", "plain.csv", "out"+suf)
+		require.True(t, yes, suf)
+	}
+
+	// auto keyword falls through to suffix detection
+	_, yes = effectiveWriteCompression("auto", "x.csv.bz2")
+	require.True(t, yes)
+
+	// no compression: empty option, plain suffixes
+	eff, yes = effectiveWriteCompression("", "a.csv", "b.csv")
+	require.False(t, yes)
+	require.Equal(t, "none", eff)
+}
