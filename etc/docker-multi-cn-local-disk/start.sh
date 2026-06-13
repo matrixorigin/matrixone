@@ -204,6 +204,17 @@ fi
 # Handle extra mounts by creating a temporary docker-compose override
 COMPOSE_FILES=(-f docker-compose.yml)
 
+# Temporary compose fragments must live where the Docker daemon can read them.
+# A snap-confined Docker daemon cannot access /tmp, so write them in the project
+# directory (which is under $HOME) and clean them all up via a single trap. The
+# files use relative paths so docker compose keeps this directory as the project
+# directory (the first -f file, docker-compose.yml, is here too).
+TMP_COMPOSE_FILES=()
+cleanup_tmp_compose() {
+    [ ${#TMP_COMPOSE_FILES[@]} -gt 0 ] && rm -f "${TMP_COMPOSE_FILES[@]}"
+}
+trap cleanup_tmp_compose EXIT
+
 # Generate default memory limits
 # Detect available memory (works on both macOS and Linux)
 if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -226,7 +237,7 @@ if [ -n "$TOTAL_MEM_KB" ] && [ "$TOTAL_MEM_KB" -gt 0 ]; then
     MEM_30="${MEM_30_VAL}M"
     MEM_5="${MEM_5_VAL}M"
     
-    DEFAULT_LIMITS="/tmp/docker-compose.default-limits.$$.yml"
+    DEFAULT_LIMITS="./docker-compose.default-limits.$$.yml"
     cat > "$DEFAULT_LIMITS" << EOF
 services:
   mo-cn1:
@@ -256,7 +267,7 @@ services:
           memory: $MEM_5
 EOF
     COMPOSE_FILES+=(-f "$DEFAULT_LIMITS")
-    trap "rm -f $DEFAULT_LIMITS" EXIT
+    TMP_COMPOSE_FILES+=("$DEFAULT_LIMITS")
     echo "Using default memory limits: TN/CN1/CN2=${MEM_30}, Log/Proxy=${MEM_5}"
 fi
 
@@ -266,7 +277,7 @@ if [ -f "docker-compose.override.yml" ]; then
 fi
 
 if [ -n "$EXTRA_MOUNTS" ]; then
-    TEMP_OVERRIDE="/tmp/docker-compose.override.$$.yml"
+    TEMP_OVERRIDE="./docker-compose.extra-mounts.$$.yml"
     cat > "$TEMP_OVERRIDE" << EOF
 services:
   mo-cn1:
@@ -279,7 +290,7 @@ services:
     volumes:
       - $EXTRA_MOUNTS
 EOF
-    trap "rm -f $TEMP_OVERRIDE" EXIT
+    TMP_COMPOSE_FILES+=("$TEMP_OVERRIDE")
     COMPOSE_FILES+=(-f "$TEMP_OVERRIDE")
 fi
 
