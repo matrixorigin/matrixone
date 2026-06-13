@@ -636,8 +636,9 @@ outside:
 					continue
 				}
 			}
-			// skip lines start with comment
-			if err == nil && parser.comment != 0 && parser.recordBuffer[0] == parser.comment {
+			// skip lines start with comment (guard the empty-record case: an
+			// all-empty-string row leaves recordBuffer empty)
+			if err == nil && parser.comment != 0 && len(parser.recordBuffer) > 0 && parser.recordBuffer[0] == parser.comment {
 				parser.recordBuffer = parser.recordBuffer[:0]
 				parser.fieldIndexes = parser.fieldIndexes[:0]
 				parser.fieldIsQuoted = parser.fieldIsQuoted[:0]

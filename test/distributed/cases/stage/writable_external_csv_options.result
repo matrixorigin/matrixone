@@ -23,155 +23,155 @@ infile{'filepath'='stage://cstage/copt_pipe_*.csv', 'format'='csv', 'write_file_
 fields terminated by '|';
 insert into t_pipe select * from src;
 select a, concat('[', b, ']') from t_pipe order by a;
-a    concat([, b, ])
-1    [plain]
-2    [comma,inside]
-3    [double"quote]
-4    [single'quote]
-5    [back\slash]
-6    [bang!mark]
-7    [pipe|char]
-8    []
-9    null
-10    [中文, déjà vu]
-11    [  padded  ]
+➤ a[4,32,0]  ¦  concat([, b, ])[12,-1,0]  𝄀
+1  ¦  [plain]  𝄀
+2  ¦  [comma,inside]  𝄀
+3  ¦  [double"quote]  𝄀
+4  ¦  [single'quote]  𝄀
+5  ¦  [back\slash]  𝄀
+6  ¦  [bang!mark]  𝄀
+7  ¦  [pipe|char]  𝄀
+8  ¦  []  𝄀
+9  ¦  null  𝄀
+10  ¦  [中文, déjà vu]  𝄀
+11  ¦  [  padded  ]
 select count(*), count(b) from t_pipe;
-count(*)    count(b)
-11    10
+➤ count(*)[-5,64,0]  ¦  count(b)[-5,64,0]  𝄀
+11  ¦  10
 drop table if exists t_tab;
 create external table t_tab(a int, b varchar(60))
 infile{'filepath'='stage://cstage/copt_tab_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_tab_%U.csv'}
 fields terminated by '\t';
 insert into t_tab select * from src;
 select count(*), count(b), min(a), max(a) from t_tab;
-count(*)    count(b)    min(a)    max(a)
-11    10    1    11
+➤ count(*)[-5,64,0]  ¦  count(b)[-5,64,0]  ¦  min(a)[4,32,0]  ¦  max(a)[4,32,0]  𝄀
+11  ¦  10  ¦  1  ¦  11
 drop table if exists t_multi;
 create external table t_multi(a int, b varchar(60))
 infile{'filepath'='stage://cstage/copt_multi_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_multi_%U.csv'}
 fields terminated by '||';
 insert into t_multi select * from src;
 select a, concat('[', b, ']') from t_multi order by a;
-a    concat([, b, ])
-1    [plain]
-2    [comma,inside]
-3    [double"quote]
-4    [single'quote]
-5    [back\slash]
-6    [bang!mark]
-7    [pipe|char]
-8    []
-9    null
-10    [中文, déjà vu]
-11    [  padded  ]
+➤ a[4,32,0]  ¦  concat([, b, ])[12,-1,0]  𝄀
+1  ¦  [plain]  𝄀
+2  ¦  [comma,inside]  𝄀
+3  ¦  [double"quote]  𝄀
+4  ¦  [single'quote]  𝄀
+5  ¦  [back\slash]  𝄀
+6  ¦  [bang!mark]  𝄀
+7  ¦  [pipe|char]  𝄀
+8  ¦  []  𝄀
+9  ¦  null  𝄀
+10  ¦  [中文, déjà vu]  𝄀
+11  ¦  [  padded  ]
 drop table if exists t_squote;
 create external table t_squote(a int, b varchar(60))
 infile{'filepath'='stage://cstage/copt_sq_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_sq_%U.csv'}
 fields terminated by ',' enclosed by '\'';
 insert into t_squote select * from src;
 select a, concat('[', b, ']') from t_squote order by a;
-a    concat([, b, ])
-1    [plain]
-2    [comma,inside]
-3    [double"quote]
-4    [single'quote]
-5    [back\slash]
-6    [bang!mark]
-7    [pipe|char]
-8    []
-9    null
-10    [中文, déjà vu]
-11    [  padded  ]
+➤ a[4,32,0]  ¦  concat([, b, ])[12,-1,0]  𝄀
+1  ¦  [plain]  𝄀
+2  ¦  [comma,inside]  𝄀
+3  ¦  [double"quote]  𝄀
+4  ¦  [single'quote]  𝄀
+5  ¦  [back\slash]  𝄀
+6  ¦  [bang!mark]  𝄀
+7  ¦  [pipe|char]  𝄀
+8  ¦  []  𝄀
+9  ¦  null  𝄀
+10  ¦  [中文, déjà vu]  𝄀
+11  ¦  [  padded  ]
 drop table if exists t_noql;
 create external table t_noql(a int, b varchar(60))
 infile{'filepath'='stage://cstage/copt_noq_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_noq_%U.csv'}
 fields terminated by ',' enclosed by '';
 insert into t_noql select * from src;
 select a, concat('[', b, ']') from t_noql order by a;
-a    concat([, b, ])
-1    [plain]
-2    [comma,inside]
-3    [double"quote]
-4    [single'quote]
-5    [back\slash]
-6    [bang!mark]
-7    [pipe|char]
-8    []
-9    null
-10    [中文, déjà vu]
-11    [  padded  ]
+➤ a[4,32,0]  ¦  concat([, b, ])[12,-1,0]  𝄀
+1  ¦  [plain]  𝄀
+2  ¦  [comma,inside]  𝄀
+3  ¦  [double"quote]  𝄀
+4  ¦  [single'quote]  𝄀
+5  ¦  [back\slash]  𝄀
+6  ¦  [bang!mark]  𝄀
+7  ¦  [pipe|char]  𝄀
+8  ¦  []  𝄀
+9  ¦  null  𝄀
+10  ¦  [中文, déjà vu]  𝄀
+11  ¦  [  padded  ]
 drop table if exists t_bang;
 create external table t_bang(a int, b varchar(60))
 infile{'filepath'='stage://cstage/copt_bang_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_bang_%U.csv'}
 fields terminated by ',' escaped by '!';
 insert into t_bang select * from src;
 select a, concat('[', b, ']') from t_bang order by a;
-a    concat([, b, ])
-1    [plain]
-2    [comma,inside]
-3    [double"quote]
-4    [single'quote]
-5    [back\slash]
-6    [bang!mark]
-7    [pipe|char]
-8    []
-9    null
-10    [中文, déjà vu]
-11    [  padded  ]
+➤ a[4,32,0]  ¦  concat([, b, ])[12,-1,0]  𝄀
+1  ¦  [plain]  𝄀
+2  ¦  [comma,inside]  𝄀
+3  ¦  [double"quote]  𝄀
+4  ¦  [single'quote]  𝄀
+5  ¦  [back\slash]  𝄀
+6  ¦  [bang!mark]  𝄀
+7  ¦  [pipe|char]  𝄀
+8  ¦  []  𝄀
+9  ¦  null  𝄀
+10  ¦  [中文, déjà vu]  𝄀
+11  ¦  [  padded  ]
 drop table if exists t_noesc;
 create external table t_noesc(a int, b varchar(60))
 infile{'filepath'='stage://cstage/copt_noesc_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_noesc_%U.csv'}
 fields terminated by ',' escaped by '';
 insert into t_noesc select * from src;
 select a, concat('[', b, ']') from t_noesc order by a;
-a    concat([, b, ])
-1    [plain]
-2    [comma,inside]
-3    [double"quote]
-4    [single'quote]
-5    [back\slash]
-6    [bang!mark]
-7    [pipe|char]
-8    []
-9    null
-10    [中文, déjà vu]
-11    [  padded  ]
+➤ a[4,32,0]  ¦  concat([, b, ])[12,-1,0]  𝄀
+1  ¦  [plain]  𝄀
+2  ¦  [comma,inside]  𝄀
+3  ¦  [double"quote]  𝄀
+4  ¦  [single'quote]  𝄀
+5  ¦  [back\slash]  𝄀
+6  ¦  [bang!mark]  𝄀
+7  ¦  [pipe|char]  𝄀
+8  ¦  []  𝄀
+9  ¦  null  𝄀
+10  ¦  [中文, déjà vu]  𝄀
+11  ¦  [  padded  ]
 drop table if exists t_crlf;
 create external table t_crlf(a int, b varchar(60))
 infile{'filepath'='stage://cstage/copt_crlf_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_crlf_%U.csv'}
 fields terminated by ',' lines terminated by '\r\n';
 insert into t_crlf select * from src;
 select a, concat('[', b, ']') from t_crlf order by a;
-a    concat([, b, ])
-1    [plain]
-2    [comma,inside]
-3    [double"quote]
-4    [single'quote]
-5    [back\slash]
-6    [bang!mark]
-7    [pipe|char]
-8    []
-9    null
-10    [中文, déjà vu]
-11    [  padded  ]
+➤ a[4,32,0]  ¦  concat([, b, ])[12,-1,0]  𝄀
+1  ¦  [plain]  𝄀
+2  ¦  [comma,inside]  𝄀
+3  ¦  [double"quote]  𝄀
+4  ¦  [single'quote]  𝄀
+5  ¦  [back\slash]  𝄀
+6  ¦  [bang!mark]  𝄀
+7  ¦  [pipe|char]  𝄀
+8  ¦  []  𝄀
+9  ¦  null  𝄀
+10  ¦  [中文, déjà vu]  𝄀
+11  ¦  [  padded  ]
 drop table if exists t_eol;
 create external table t_eol(a int, b varchar(60))
 infile{'filepath'='stage://cstage/copt_eol_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_eol_%U.csv'}
 fields terminated by ',' lines terminated by '#EOL#';
 insert into t_eol select * from src;
 select a, concat('[', b, ']') from t_eol order by a;
-a    concat([, b, ])
-1    [plain]
-2    [comma,inside]
-3    [double"quote]
-4    [single'quote]
-5    [back\slash]
-6    [bang!mark]
-7    [pipe|char]
-8    []
-9    null
-10    [中文, déjà vu]
-11    [  padded  ]
+➤ a[4,32,0]  ¦  concat([, b, ])[12,-1,0]  𝄀
+1  ¦  [plain]  𝄀
+2  ¦  [comma,inside]  𝄀
+3  ¦  [double"quote]  𝄀
+4  ¦  [single'quote]  𝄀
+5  ¦  [back\slash]  𝄀
+6  ¦  [bang!mark]  𝄀
+7  ¦  [pipe|char]  𝄀
+8  ¦  []  𝄀
+9  ¦  null  𝄀
+10  ¦  [中文, déjà vu]  𝄀
+11  ¦  [  padded  ]
 drop table if exists nl_src;
 create table nl_src(a int, b varchar(60));
 insert into nl_src values (1, 'first\nsecond'), (2, 'plain');
@@ -181,9 +181,9 @@ infile{'filepath'='stage://cstage/copt_eolnl_*.csv', 'format'='csv', 'write_file
 fields terminated by ',' lines terminated by '#EOL#';
 insert into t_eolnl select * from nl_src;
 select a, replace(b, '\n', '<NL>') as b from t_eolnl order by a;
-a    b
-1    first<NL>second
-2    plain
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  first<NL>second  𝄀
+2  ¦  plain
 drop table if exists sb_src;
 create table sb_src(a int, b varchar(60));
 insert into sb_src values (1, 'plain'), (2, 'contains row: inside'), (3, 'row:starts');
@@ -193,80 +193,80 @@ infile{'filepath'='stage://cstage/copt_sb_*.csv', 'format'='csv', 'write_file_pa
 fields terminated by ',' lines starting by 'row:';
 insert into t_sb select * from sb_src;
 select a, concat('[', b, ']') from t_sb order by a;
-a    concat([, b, ])
-1    [plain]
-2    [contains row: inside]
-3    [row:starts]
+➤ a[4,32,0]  ¦  concat([, b, ])[12,-1,0]  𝄀
+1  ¦  [plain]  𝄀
+2  ¦  [contains row: inside]  𝄀
+3  ¦  [row:starts]
 drop table if exists t_all;
 create external table t_all(a int, b varchar(60))
 infile{'filepath'='stage://cstage/copt_all_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_all_%U.csv'}
 fields terminated by '^' enclosed by '@' escaped by '!' lines starting by 'R>' terminated by 'qEOLq';
 insert into t_all select * from src;
 select a, concat('[', b, ']') from t_all order by a;
-a    concat([, b, ])
-1    [plain]
-2    [comma,inside]
-3    [double"quote]
-4    [single'quote]
-5    [back\slash]
-6    [bang!mark]
-7    [pipe|char]
-8    []
-9    null
-10    [中文, déjà vu]
-11    [  padded  ]
+➤ a[4,32,0]  ¦  concat([, b, ])[12,-1,0]  𝄀
+1  ¦  [plain]  𝄀
+2  ¦  [comma,inside]  𝄀
+3  ¦  [double"quote]  𝄀
+4  ¦  [single'quote]  𝄀
+5  ¦  [back\slash]  𝄀
+6  ¦  [bang!mark]  𝄀
+7  ¦  [pipe|char]  𝄀
+8  ¦  []  𝄀
+9  ¦  null  𝄀
+10  ¦  [中文, déjà vu]  𝄀
+11  ¦  [  padded  ]
 select count(*), count(b) from t_all;
-count(*)    count(b)
-11    10
+➤ count(*)[-5,64,0]  ¦  count(b)[-5,64,0]  𝄀
+11  ¦  10
 drop table if exists t_time;
 create external table t_time(a int, t time, d datetime)
 infile{'filepath'='stage://cstage/copt_time_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_time_%U.csv'}
 fields terminated by ':';
 insert into t_time values (1, '12:34:56', '2026-06-12 08:09:10'), (2, '00:00:01', '1999-01-02 03:04:05');
 select * from t_time order by a;
-a    t    d
-1    12:34:56    2026-06-12 08:09:10
-2    00:00:01    1999-01-02 03:04:05
+➤ a[4,32,0]  ¦  t[92,64,0]  ¦  d[93,64,0]  𝄀
+1  ¦  12:34:56  ¦  2026-06-12 08:09:10  𝄀
+2  ¦  00:00:01  ¦  1999-01-02 03:04:05
 drop table if exists t_dot;
 create external table t_dot(a int, f double, d decimal(10,3))
 infile{'filepath'='stage://cstage/copt_dot_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_dot_%U.csv'}
 fields terminated by '.';
 insert into t_dot values (1, 1.5, 123.456), (2, -2.25, -0.001), (3, 42, 7);
 select * from t_dot order by a;
-a    f    d
-1    1.5    123.456
-2    -2.25    -0.001
-3    42.0    7.000
+➤ a[4,32,0]  ¦  f[8,54,0]  ¦  d[3,10,3]  𝄀
+1  ¦  1.5  ¦  123.456  𝄀
+2  ¦  -2.25  ¦  -0.001  𝄀
+3  ¦  42.0  ¦  7.000
 drop table if exists t_b00;
 create external table t_b00(a int, b int)
 infile{'filepath'='stage://cstage/copt_b00_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_b00_%U.csv'}
 fields terminated by '00';
 insert into t_b00 values (10, 5), (100, 200), (1, 2);
 select * from t_b00 order by a;
-a    b
-1    2
-10    5
-100    200
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  2  𝄀
+10  ¦  5  𝄀
+100  ¦  200
 drop table if exists t_enum;
 create external table t_enum(a int, e enum('NULL','red','dark blue'))
 infile{'filepath'='stage://cstage/copt_enum_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_enum_%U.csv'}
 fields terminated by ',';
 insert into t_enum values (1, 'NULL'), (2, 'red'), (3, 'dark blue'), (4, null);
 select a, e, e is null from t_enum order by a;
-a    e    e is null
-1    NULL    0
-2    red    0
-3    dark blue    0
-4    null    1
+➤ a[4,32,0]  ¦  e[12,-1,0]  ¦  e is null[-7,1,0]  𝄀
+1  ¦  NULL  ¦  0  𝄀
+2  ¦  red  ¦  0  𝄀
+3  ¦  dark blue  ¦  0  𝄀
+4  ¦  null  ¦  1
 drop table if exists t_cr;
 create external table t_cr(a int, b varchar(20))
 infile{'filepath'='stage://cstage/copt_cr_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_cr_%U.csv'}
 fields terminated by ',';
 insert into t_cr values (1, 'abc\r'), (2, 'x\ry');
 select a, replace(b, '\r', '<CR>') as b from t_cr order by a;
-a    b
-1    abc<CR>
-2    x<CR>y
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  abc<CR>  𝄀
+2  ¦  x<CR>y
 insert into t_bang values (99, '\\N');
 not supported: external write (csv): a value of exactly \N cannot round-trip unless FIELDS ESCAPED BY is the default '\'
 drop table if exists t_jln;
@@ -281,10 +281,10 @@ infile{'filepath'='stage://cstage/copt_null_*.csv', 'format'='csv', 'write_file_
 fields terminated by '|' escaped by '!';
 insert into t_null values (1, null), (2, ''), (3, 'x');
 select a, b is null, length(b) from t_null order by a;
-a    b is null    length(b)
-1    1    null
-2    0    0
-3    0    1
+➤ a[4,32,0]  ¦  b is null[-7,1,0]  ¦  length(b)[-5,64,0]  𝄀
+1  ¦  1  ¦  null  𝄀
+2  ¦  0  ¦  0  𝄀
+3  ¦  0  ¦  1
 drop table if exists t_load;
 create external table t_load(col1 date not null, col2 datetime, col3 timestamp, col4 bool)
 infile{'filepath'='stage://cstage/copt_load_*.csv', 'format'='csv', 'write_file_pattern'='stage://cstage/copt_load_%U.csv'}
@@ -292,12 +292,15 @@ fields terminated by '|';
 set time_zone = 'SYSTEM';
 load data infile '$resources/load_data/time_date_1.csv' into table t_load fields terminated by ',';
 select * from t_load order by col1;
-col1    col2    col3    col4
-1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    0
-9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    1
+➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[-7,1,0]  𝄀
+1000-01-01  ¦  0001-01-01 00:00:00  ¦  1970-01-01 00:00:01  ¦  0  𝄀
+9999-12-31  ¦  9999-12-31 00:00:00  ¦  2038-01-19 00:00:00  ¦  1
 show create table t_all;
-Table    Create Table
-t_all    CREATE EXTERNAL TABLE `t_all` (\n  `a` int DEFAULT NULL,\n  `b` varchar(60) DEFAULT NULL\n) INFILE{'FILEPATH'='stage://cstage/copt_all_*.csv','FORMAT'='csv','WRITE_FILE_PATTERN'='stage://cstage/copt_all_%U.csv'} FIELDS TERMINATED BY '^' ENCLOSED BY '@' ESCAPED BY '!' LINES STARTING BY 'R>' TERMINATED BY 'qEOLq'
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t_all  ¦  CREATE EXTERNAL TABLE `t_all` (
+  `a` int DEFAULT NULL,
+  `b` varchar(60) DEFAULT NULL
+) INFILE{'FILEPATH'='stage://cstage/copt_all_*.csv','FORMAT'='csv','WRITE_FILE_PATTERN'='stage://cstage/copt_all_%U.csv'} FIELDS TERMINATED BY '^' ENCLOSED BY '@' ESCAPED BY '!' LINES STARTING BY 'R>' TERMINATED BY 'qEOLq'
 drop table if exists t_pipe;
 drop table if exists t_tab;
 drop table if exists t_multi;

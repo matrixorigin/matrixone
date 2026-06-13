@@ -11,28 +11,32 @@ create external table ext_csv(a int, b varchar(20), c double)
 infile{'filepath'='stage://wstage/wext_csv_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_csv_%U.csv'}
 fields terminated by ',';
 show create table ext_csv;
-Table    Create Table
-ext_csv    CREATE EXTERNAL TABLE `ext_csv` (\n  `a` int DEFAULT NULL,\n  `b` varchar(20) DEFAULT NULL,\n  `c` double DEFAULT NULL\n) INFILE{'FILEPATH'='stage://wstage/wext_csv_*.csv','FORMAT'='csv','WRITE_FILE_PATTERN'='stage://wstage/wext_csv_%U.csv'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+ext_csv  ¦  CREATE EXTERNAL TABLE `ext_csv` (
+  `a` int DEFAULT NULL,
+  `b` varchar(20) DEFAULT NULL,
+  `c` double DEFAULT NULL
+) INFILE{'FILEPATH'='stage://wstage/wext_csv_*.csv','FORMAT'='csv','WRITE_FILE_PATTERN'='stage://wstage/wext_csv_%U.csv'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
 insert into ext_csv select * from src;
 select * from ext_csv order by a;
-a    b    c
-1    alice    1.5
-2    bob    2.5
-3    carol    3.5
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+1  ¦  alice  ¦  1.5  𝄀
+2  ¦  bob  ¦  2.5  𝄀
+3  ¦  carol  ¦  3.5
 select count(*) from ext_csv;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 insert into ext_csv select a+10, b, c from src;
 select * from ext_csv order by a;
-a    b    c
-1    alice    1.5
-2    bob    2.5
-3    carol    3.5
-11    alice    1.5
-12    bob    2.5
-13    carol    3.5
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+1  ¦  alice  ¦  1.5  𝄀
+2  ¦  bob  ¦  2.5  𝄀
+3  ¦  carol  ¦  3.5  𝄀
+11  ¦  alice  ¦  1.5  𝄀
+12  ¦  bob  ¦  2.5  𝄀
+13  ¦  carol  ¦  3.5
 select count(*) from ext_csv;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 6
 drop table ext_csv;
 CREATE EXTERNAL TABLE `ext_csv` (
@@ -42,7 +46,7 @@ CREATE EXTERNAL TABLE `ext_csv` (
 ) INFILE{'FILEPATH'='stage://wstage/wext_csv_*.csv','FORMAT'='csv','WRITE_FILE_PATTERN'='stage://wstage/wext_csv_%U.csv'} FIELDS TERMINATED BY ',';
 insert into ext_csv select a+20, b, c from src;
 select count(*) from ext_csv;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 9
 drop table if exists tricky_src;
 create table tricky_src(a int, b varchar(50));
@@ -53,11 +57,11 @@ infile{'filepath'='stage://wstage/wext_tricky_*.csv', 'format'='csv', 'write_fil
 fields terminated by ',';
 insert into ext_tricky select * from tricky_src;
 select a, replace(b, '\n', '<NL>') as b from ext_tricky order by a;
-a    b
-1    with,comma
-2    with"quote
-3    with<NL>newline
-4    with\backslash
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  with,comma  𝄀
+2  ¦  with"quote  𝄀
+3  ¦  with<NL>newline  𝄀
+4  ¦  with\backslash
 drop table if exists big_src;
 create table big_src(a int, b varchar(30));
 insert into big_src select result, concat('row-', result) from generate_series(1, 100000) g;
@@ -67,16 +71,24 @@ infile{'filepath'='stage://wstage/wext_big_*.csv', 'format'='csv', 'write_file_p
 fields terminated by ',';
 insert into ext_big select * from big_src;
 select count(*), min(a), max(a) from ext_big;
-count(*)    min(a)    max(a)
-100000    1    100000
+➤ count(*)[-5,64,0]  ¦  min(a)[4,32,0]  ¦  max(a)[4,32,0]  𝄀
+100000  ¦  1  ¦  100000
 drop table if exists remote_src;
 create table remote_src(a int, b varchar(30));
 insert into remote_src select result, concat('r-', result) from generate_series(1, 4400000) g;
 select mo_ctl('dn', 'flush', 'wext.remote_src');
-mo_ctl(dn, flush, wext.remote_src)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, wext.remote_src)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select sleep(1);
-sleep(1)
+➤ sleep(1)[-6,8,0]  𝄀
 0
 drop table if exists ext_remote;
 create external table ext_remote(a int, b varchar(30))
@@ -84,21 +96,25 @@ infile{'filepath'='stage://wstage/wext_remote_*.csv', 'format'='csv', 'write_fil
 fields terminated by ',';
 insert into ext_remote select * from remote_src;
 select count(*), min(a), max(a) from ext_remote;
-count(*)    min(a)    max(a)
-4400000    1    4400000
+➤ count(*)[-5,64,0]  ¦  min(a)[4,32,0]  ¦  max(a)[4,32,0]  𝄀
+4400000  ¦  1  ¦  4400000
 drop table if exists ext_jl;
 create external table ext_jl(a int, b varchar(20), c double)
 infile{'filepath'='stage://wstage/wext_jl_*.jl', 'format'='jsonline', 'write_file_pattern'='stage://wstage/wext_jl_%U.jl', 'jsondata'='object'}
 fields terminated by ',';
 insert into ext_jl select * from src;
 select * from ext_jl order by a;
-a    b    c
-1    alice    1.5
-2    bob    2.5
-3    carol    3.5
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+1  ¦  alice  ¦  1.5  𝄀
+2  ¦  bob  ¦  2.5  𝄀
+3  ¦  carol  ¦  3.5
 show create table ext_jl;
-Table    Create Table
-ext_jl    CREATE EXTERNAL TABLE `ext_jl` (\n  `a` int DEFAULT NULL,\n  `b` varchar(20) DEFAULT NULL,\n  `c` double DEFAULT NULL\n) INFILE{'FILEPATH'='stage://wstage/wext_jl_*.jl','FORMAT'='jsonline','JSONDATA'='object','WRITE_FILE_PATTERN'='stage://wstage/wext_jl_%U.jl'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+ext_jl  ¦  CREATE EXTERNAL TABLE `ext_jl` (
+  `a` int DEFAULT NULL,
+  `b` varchar(20) DEFAULT NULL,
+  `c` double DEFAULT NULL
+) INFILE{'FILEPATH'='stage://wstage/wext_jl_*.jl','FORMAT'='jsonline','JSONDATA'='object','WRITE_FILE_PATTERN'='stage://wstage/wext_jl_%U.jl'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
 drop table ext_jl;
 CREATE EXTERNAL TABLE `ext_jl` (
 `a` int DEFAULT NULL,
@@ -107,7 +123,7 @@ CREATE EXTERNAL TABLE `ext_jl` (
 ) INFILE{'FILEPATH'='stage://wstage/wext_jl_*.jl','FORMAT'='jsonline','JSONDATA'='object','WRITE_FILE_PATTERN'='stage://wstage/wext_jl_%U.jl'} FIELDS TERMINATED BY ',';
 insert into ext_jl select a+10, b, c from src;
 select count(*) from ext_jl;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 6
 drop table if exists wide_src;
 create table wide_src(
@@ -129,9 +145,9 @@ infile{'filepath'='stage://wstage/wext_wide_*.csv', 'format'='csv', 'write_file_
 fields terminated by ',' enclosed by '"';
 insert into ext_wide_csv select * from wide_src;
 select c_i8, c_i64, c_u32, c_dec, c_vc, c_bool from ext_wide_csv order by c_i64;
-c_i8    c_i64    c_u32    c_dec    c_vc    c_bool
-null    null    null    null    null    null
--1    9223372036854775807    4000000000    123.45    hi,there    1
+➤ c_i8[-6,8,0]  ¦  c_i64[-5,64,0]  ¦  c_u32[4,32,0]  ¦  c_dec[3,10,2]  ¦  c_vc[12,-1,0]  ¦  c_bool[-7,1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+-1  ¦  9223372036854775807  ¦  4000000000  ¦  123.45  ¦  hi,there  ¦  1
 drop table if exists ext_wide_jl;
 create external table ext_wide_jl(
 c_i8 tinyint, c_i64 bigint, c_u32 int unsigned,
@@ -142,9 +158,22 @@ infile{'filepath'='stage://wstage/wext_widejl_*.jl', 'format'='jsonline', 'write
 fields terminated by ',';
 insert into ext_wide_jl select c_i8, c_i64, c_u32, c_f32, c_dec, c_ch, c_vc, c_txt, c_dt, c_bool, c_json from wide_src;
 select * from ext_wide_jl order by c_i64;
-c_i8    c_i64    c_u32    c_f32    c_dec    c_ch    c_vc    c_txt    c_dt    c_bool    c_json
-null    null    null    null    null    null    null    null    null    null    null
--1    9223372036854775807    4000000000    1.5    123.45    ab    hi,there    long text    2026-06-08    1    {"k": 1}
+➤ c_i8[-6,8,0]  ¦  c_i64[-5,64,0]  ¦  c_u32[4,32,0]  ¦  c_f32[7,24,0]  ¦  c_dec[3,10,2]  ¦  c_ch[1,4,0]  ¦  c_vc[12,-1,0]  ¦  c_txt[12,0,0]  ¦  c_dt[91,64,0]  ¦  c_bool[-7,1,0]  ¦  c_json[-1,2147483647,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+-1  ¦  9223372036854775807  ¦  4000000000  ¦  1.5  ¦  123.45  ¦  ab  ¦  hi,there  ¦  long text  ¦  2026-06-08  ¦  1  ¦  {"k": 1}
+drop table if exists hash_src;
+create table hash_src(a varchar(20), b varchar(20));
+insert into hash_src values ('#lead','x'), ('','') , ('plain','#also');
+drop table if exists ext_hash;
+create external table ext_hash(a varchar(20), b varchar(20))
+infile{'filepath'='stage://wstage/wext_hash_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_hash_%U.csv'}
+fields terminated by '#';
+insert into ext_hash select * from hash_src;
+select a, b, a is null, b is null from ext_hash order by a;
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  a is null[-7,1,0]  ¦  b is null[-7,1,0]  𝄀
+  ¦    ¦  0  ¦  0  𝄀
+#lead  ¦  x  ¦  0  ¦  0  𝄀
+plain  ¦  #also  ¦  0  ¦  0
 drop table if exists bit_src;
 create table bit_src(a int, b bit(8));
 insert into bit_src values (1, 44), (2, 92), (3, 34), (4, 128), (5, 5), (6, 32), (7, 13), (8, 10);
@@ -154,24 +183,24 @@ infile{'filepath'='stage://wstage/wext_bit_*.csv', 'format'='csv', 'write_file_p
 fields terminated by ',';
 insert into ext_bit select * from bit_src;
 select a, cast(b as unsigned) from ext_bit order by a;
-a    cast(b as unsigned)
-1    44
-2    92
-3    34
-4    128
-5    5
-6    32
-7    13
-8    10
+➤ a[4,32,0]  ¦  cast(b as unsigned)[-5,64,0]  𝄀
+1  ¦  44  𝄀
+2  ¦  92  𝄀
+3  ¦  34  𝄀
+4  ¦  128  𝄀
+5  ¦  5  𝄀
+6  ¦  32  𝄀
+7  ¦  13  𝄀
+8  ¦  10
 drop table if exists ext_sb;
 create external table ext_sb(a int, b varchar(20))
 infile{'filepath'='stage://wstage/wext_sb_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_sb_%U.csv'}
 fields terminated by ',' lines starting by 'row:';
 insert into ext_sb values (1, 'alpha'), (2, 'beta');
 select * from ext_sb order by a;
-a    b
-1    alpha
-2    beta
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  beta
 drop table if exists esc_src;
 create table esc_src(a int, b varchar(40));
 insert into esc_src values (1,'with!bang'), (2,'back\\slash'), (3,'quo"te'), (4,'com,ma');
@@ -181,31 +210,31 @@ infile{'filepath'='stage://wstage/wext_esc_*.csv', 'format'='csv', 'write_file_p
 fields terminated by ',' escaped by '!';
 insert into ext_esc select * from esc_src;
 select * from ext_esc order by a;
-a    b
-1    with!bang
-2    back\slash
-3    quo"te
-4    com,ma
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  with!bang  𝄀
+2  ¦  back\slash  𝄀
+3  ¦  quo"te  𝄀
+4  ¦  com,ma
 drop table if exists ext_noesc;
 create external table ext_noesc(a int, b varchar(40))
 infile{'filepath'='stage://wstage/wext_noesc_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_noesc_%U.csv'}
 fields terminated by ',' escaped by '';
 insert into ext_noesc select * from esc_src;
 select * from ext_noesc order by a;
-a    b
-1    with!bang
-2    back\slash
-3    quo"te
-4    com,ma
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  with!bang  𝄀
+2  ¦  back\slash  𝄀
+3  ¦  quo"te  𝄀
+4  ¦  com,ma
 drop table if exists ext_dash;
 create external table ext_dash(a int, d date, f double)
 infile{'filepath'='stage://wstage/wext_dash_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_dash_%U.csv'}
 fields terminated by '-';
 insert into ext_dash values (1, '2026-06-12', 1.5), (2, '1999-12-31', -2.25);
 select * from ext_dash order by a;
-a    d    f
-1    2026-06-12    1.5
-2    1999-12-31    -2.25
+➤ a[4,32,0]  ¦  d[91,64,0]  ¦  f[8,54,0]  𝄀
+1  ¦  2026-06-12  ¦  1.5  𝄀
+2  ¦  1999-12-31  ¦  -2.25
 drop table if exists ext_nn;
 create external table ext_nn(a int not null, b varchar(10))
 infile{'filepath'='stage://wstage/wext_nn_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_nn_%U.csv'}
@@ -216,8 +245,8 @@ constraint violation: Column 'a' cannot be null
 insert into ext_nn select null, 'boom2';
 constraint violation: Column 'a' cannot be null
 select * from ext_nn order by a;
-a    b
-1    ok
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  ok
 drop table if exists ext_load;
 create external table ext_load(col1 date not null, col2 datetime, col3 timestamp, col4 bool)
 infile{'filepath'='stage://wstage/wext_load_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_load_%U.csv'}
@@ -225,9 +254,9 @@ fields terminated by ',';
 set time_zone = 'SYSTEM';
 load data infile '$resources/load_data/time_date_1.csv' into table ext_load fields terminated by ',';
 select * from ext_load order by col1;
-col1    col2    col3    col4
-1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    0
-9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    1
+➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[-7,1,0]  𝄀
+1000-01-01  ¦  0001-01-01 00:00:00  ¦  1970-01-01 00:00:01  ¦  0  𝄀
+9999-12-31  ¦  9999-12-31 00:00:00  ¦  2038-01-19 00:00:00  ¦  1
 drop table if exists ext_ro;
 create external table ext_ro(a int) infile 'stage://wstage/nonexist_*.csv';
 insert into ext_ro values (1);
@@ -289,6 +318,19 @@ invalid configuration: writable external table with format 'jsonline' only suppo
 create external table ext_bad13(a int)
 infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%2N.csv'};
 invalid configuration: WRITE_FILE_PATTERN must contain a %U or %<n>N directive so parallel writers produce distinct files, got 'stage://wstage/x_%2N.csv'
+create external table ext_bad14(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'compression'='gzip', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+invalid configuration: writable external table does not support compression (effective 'gzip'); the writer emits uncompressed files
+create external table ext_bad15(a int)
+infile{'filepath'='stage://wstage/x_*.csv.gz', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+invalid configuration: writable external table does not support compression (effective 'gz'); the writer emits uncompressed files
+create external table ext_bad16(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'format'='parquet', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+invalid configuration: duplicate option key 'format'
+create external table ext_bad17(a int, b int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by '"';
+invalid configuration: writable external table FIELDS TERMINATED BY cannot start with a quote, CR, LF or NUL byte
 drop table if exists ext_rep;
 create external table ext_rep(a int)
 infile{'filepath'='stage://wstage/wext_rep_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_rep_%U.csv'};

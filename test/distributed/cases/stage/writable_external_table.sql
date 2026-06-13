@@ -155,6 +155,20 @@ insert into ext_wide_jl select c_i8, c_i64, c_u32, c_f32, c_dec, c_ch, c_vc, c_t
 -- in the jsonline-object reader).
 select * from ext_wide_jl order by c_i64;
 
+-- ---------- '#'-leading values, all-empty rows, '#' separator ----------
+-- Writable reads disable the CSV reader's '#' comment marker, so a first
+-- column value starting with '#' is data (not a dropped comment), an all-empty
+-- row round-trips (no comment-check panic), and '#' is a usable separator.
+drop table if exists hash_src;
+create table hash_src(a varchar(20), b varchar(20));
+insert into hash_src values ('#lead','x'), ('','') , ('plain','#also');
+drop table if exists ext_hash;
+create external table ext_hash(a varchar(20), b varchar(20))
+infile{'filepath'='stage://wstage/wext_hash_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_hash_%U.csv'}
+fields terminated by '#';
+insert into ext_hash select * from hash_src;
+select a, b, a is null, b is null from ext_hash order by a;
+
 -- ---------- bit values with tricky bytes round-trip through CSV ----------
 -- bit bytes can collide with the field terminator or quote; the writer
 -- encloses and escapes them like binary values. 44=',' 34='"' 92='\' 128=high
@@ -314,6 +328,22 @@ lines terminated by '#';
 -- %nN needs at least 6 digits to keep parallel writers apart
 create external table ext_bad13(a int)
 infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%2N.csv'};
+
+-- compression: the writer emits plain bytes, so a compressed config (option or
+-- file suffix) could never read back
+create external table ext_bad14(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'compression'='gzip', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+create external table ext_bad15(a int)
+infile{'filepath'='stage://wstage/x_*.csv.gz', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+
+-- duplicate option keys: validation and the read-side init could disagree
+create external table ext_bad16(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'format'='parquet', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+
+-- a field terminator the CSV reader rejects (first byte is the quote char)
+create external table ext_bad17(a int, b int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by '"';
 
 -- REPLACE has no external-table support and reports the user-facing error
 drop table if exists ext_rep;

@@ -140,11 +140,22 @@ the escape, an escape equal to the enclosure (including the default `\`
 escape with `ENCLOSED BY '\'`), escape/enclosure bytes occurring in the
 terminators or `STARTING BY`, `IGNORE N LINES`, jsonline line terminators
 other than `\n`/`\r\n` (JSON strings have no enclosure to protect a printable
-terminator), and `%nN` uniqueness directives need n >= 6 (`%1N` collides
-between parallel writers). NOT NULL is checked at write time (the minimal
-plan runs no PreInsert), AUTO_INCREMENT columns are rejected, jsonline
-writable tables reject `bit`/binary columns, and TRUNCATE on a writable
-external table errors instead of silently succeeding without removing files.
+terminator), `%nN` uniqueness directives with n < 6 (`%1N` collides between
+parallel writers), any effective compression (the writer emits plain bytes,
+but the reader decompresses by the COMPRESSION option or the file suffix, so
+a `gzip` option or a `.gz`/`.bz2`/`.lz4` read-filepath/write-pattern suffix
+is rejected), duplicate option keys (validation would inspect a different
+value than the read-side init keeps — last wins — so a table could validate
+as csv and run as parquet), and a `FIELDS TERMINATED BY` whose first byte is a
+quote, CR, LF or NUL (the CSV reader rejects those at open). NOT NULL is
+checked at write time (the minimal plan runs no PreInsert), AUTO_INCREMENT
+columns are rejected, jsonline writable tables reject `bit`/binary columns,
+and TRUNCATE on a writable external table errors instead of silently
+succeeding without removing files. The CSV reader's `#` comment marker is
+disabled for writable-table reads (a first-column value starting with `#`
+is data, not a dropped comment, and `#` is a usable field terminator); the
+parser's comment skip is also guarded against an empty record (an all-empty
+row would otherwise index `recordBuffer[0]` out of range).
 Values no encoding can round-trip are rejected at write time: a string of
 exactly `\N` under a non-default (or disabled) escape and always under
 jsonline, invalid UTF-8 strings under jsonline, and a trailing CR in the last

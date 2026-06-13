@@ -5941,6 +5941,27 @@ func constructAddedPartitionDefs(
 // external table writable, plus the column restrictions writability implies.
 // No-op for read-only external tables (option absent). tableDef may be nil when
 // only the param-level options need checking.
+// effectiveWriteCompression mirrors crt.GetCompressType's decision (inlined to
+// avoid the plan<-crt import cycle): an explicit non-auto compression wins,
+// otherwise the type is auto-detected from any of the given file paths'
+// suffixes. Returns the effective type and whether it is compressed.
+func effectiveWriteCompression(comp string, paths ...string) (string, bool) {
+	comp = strings.ToLower(strings.TrimSpace(comp))
+	if comp != "" && comp != tree.AUTO {
+		return comp, comp != tree.NOCOMPRESS
+	}
+	suffixes := []string{".tar.gz", ".tar.gzip", ".tar.bz2", ".tar.bzip2", ".gz", ".gzip", ".bz2", ".bzip2", ".lz4"}
+	for _, p := range paths {
+		p = strings.ToLower(p)
+		for _, suf := range suffixes {
+			if strings.HasSuffix(p, suf) {
+				return strings.TrimPrefix(suf, "."), true
+			}
+		}
+	}
+	return tree.NOCOMPRESS, false
+}
+
 func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam, tableDef *TableDef) error {
 	pattern, ok := GetWriteFilePattern(param)
 	if !ok {
@@ -5948,6 +5969,24 @@ func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam, tabl
 	}
 	if !strings.HasPrefix(pattern, "stage://") {
 		return moerr.NewBadConfigf(ctx, "WRITE_FILE_PATTERN must be a stage:// path, got '%s'", pattern)
+	}
+	// Duplicate option keys would let validation inspect a different value than
+	// the one the read-side init later keeps (it walks the whole slice, last
+	// wins) — so a table could validate as csv and run as parquet.
+	if err := rejectDuplicateKeys(ctx, param.Option,
+		[]string{"format", "jsondata", "compression", "filepath", ExternalWriteFilePatternKey}); err != nil {
+		return err
+	}
+	// The writer streams plain bytes; the read path decompresses based on the
+	// COMPRESSION option (or, when unset/auto, the file suffix), so any
+	// effective compression — from the option, the read FILEPATH glob, or the
+	// write pattern itself — would make the produced files unreadable.
+	comp := param.CompressType
+	if comp == "" {
+		comp = getRawOption(param.Option, "compression")
+	}
+	if eff, compressed := effectiveWriteCompression(comp, getRawOption(param.Option, "filepath"), pattern); compressed {
+		return moerr.NewBadConfigf(ctx, "writable external table does not support compression (effective '%s'); the writer emits uncompressed files", eff)
 	}
 	format := strings.ToLower(param.Format)
 	if format == "" {
@@ -6062,6 +6101,13 @@ func validateWritableEscape(ctx context.Context, tail *tree.TailParameter) error
 			lineTerm = l.TerminatedBy.Value
 		}
 		startingBy = l.StartingBy
+	}
+
+	// The CSV reader rejects a field terminator whose first byte is a quote,
+	// CR, LF or NUL (csvparser.validDelim / NewCSVParser), so such a table
+	// could be created and written but never read back. Mirror that check.
+	if b := fieldTerm[0]; b == 0 || b == '"' || b == '\r' || b == '\n' {
+		return moerr.NewBadConfig(ctx, "writable external table FIELDS TERMINATED BY cannot start with a quote, CR, LF or NUL byte")
 	}
 
 	// The escape/enclosure conflict applies to the DEFAULT backslash escape

@@ -300,6 +300,15 @@ func newCSVParserFromReader(extern *tree.ExternParam, r io.Reader) (*csvparser.C
 		Comment:            '#',
 	}
 
+	// Writable external tables produce their own data files where '#' is not a
+	// comment marker, so a first-column value starting with '#' must not be
+	// dropped (and the reader's comment '#' would otherwise also reject a valid
+	// '#' field terminator). Read-only external tables keep '#' for backward
+	// compatibility.
+	if _, writable := plan.GetWriteFilePattern(extern); writable {
+		config.Comment = 0
+	}
+
 	return csvparser.NewCSVParser(&config, bufio.NewReader(r), csvparser.ReadBlockSize, false)
 }
 

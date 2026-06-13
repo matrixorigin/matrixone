@@ -530,3 +530,40 @@ func TestCustomEscapeChar(t *testing.T) {
 		newStringField(`{"itemRangeType":0,"itemContainType":0,"shopRangeType":1,"shopJson":"[{\"id\":\"A1234\",\"shopName\":\"AAAAAA\"}]"}`, false, true),
 	}, row)
 }
+
+// TestCommentEmptyRecordNoPanic: an all-empty-string row (e.g. `""\n` or
+// `"",""\n`) leaves recordBuffer empty; the comment check must not index
+// recordBuffer[0] out of range.
+func TestCommentEmptyRecordNoPanic(t *testing.T) {
+	cfg := CSVConfig{
+		FieldsTerminatedBy: ",",
+		FieldsEnclosedBy:   `"`,
+		Comment:            '#',
+	}
+	parser, err := NewCSVParser(&cfg, NewStringReader("\"\",\"\"\n1,2\n"), int64(ReadBlockSize), false)
+	require.NoError(t, err)
+
+	row, err := parser.Read(nil)
+	require.NoError(t, err)
+	require.Len(t, row, 2)
+	require.Equal(t, "", row[0].Val)
+	require.Equal(t, "", row[1].Val)
+
+	row, err = parser.Read(nil)
+	require.NoError(t, err)
+	require.Equal(t, "1", row[0].Val)
+	require.Equal(t, "2", row[1].Val)
+}
+
+// TestCommentDisabled: with Comment unset, a first field starting with '#' is
+// data, not a skipped comment.
+func TestCommentDisabled(t *testing.T) {
+	cfg := CSVConfig{FieldsTerminatedBy: ",", FieldsEnclosedBy: `"`} // Comment == 0
+	parser, err := NewCSVParser(&cfg, NewStringReader("#lost,1\nkept,2\n"), int64(ReadBlockSize), false)
+	require.NoError(t, err)
+
+	row, err := parser.Read(nil)
+	require.NoError(t, err)
+	require.Equal(t, "#lost", row[0].Val)
+	require.Equal(t, "1", row[1].Val)
+}

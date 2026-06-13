@@ -122,6 +122,75 @@ func TestValidateWriteFilePattern(t *testing.T) {
 	require.Error(t, validateWriteFilePattern(ctx, p, nil))
 }
 
+func TestValidateWriteFilePatternCompression(t *testing.T) {
+	ctx := context.Background()
+
+	// explicit gzip compression: the writer emits plain bytes, rejected
+	p := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format: tree.CSV,
+		Option: []string{"compression", "gzip", "filepath", "stage://s/f_*.csv", "write_file_pattern", "stage://s/f_%U.csv"},
+	}}
+	err := validateWriteFilePattern(ctx, p, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "compression")
+
+	// compression auto-detected from the read FILEPATH suffix
+	p = &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format: tree.CSV,
+		Option: []string{"filepath", "stage://s/f_*.csv.gz", "write_file_pattern", "stage://s/f_%U.csv"},
+	}}
+	require.Error(t, validateWriteFilePattern(ctx, p, nil))
+
+	// ... and from the write pattern's own suffix
+	p = &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format: tree.CSV,
+		Option: []string{"filepath", "stage://s/f_*.csv", "write_file_pattern", "stage://s/f_%U.csv.gz"},
+	}}
+	require.Error(t, validateWriteFilePattern(ctx, p, nil))
+
+	// explicit 'none' is fine
+	p = &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format: tree.CSV,
+		Option: []string{"compression", "none", "filepath", "stage://s/f_*.csv", "write_file_pattern", "stage://s/f_%U.csv"},
+	}}
+	require.NoError(t, validateWriteFilePattern(ctx, p, nil))
+}
+
+func TestValidateWriteFilePatternDuplicateKeys(t *testing.T) {
+	ctx := context.Background()
+	// duplicate format: validation would see the first, the read init keeps the
+	// last — rejected so the two can't disagree
+	p := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format: tree.CSV,
+		Option: []string{"format", "csv", "format", "parquet", "write_file_pattern", "stage://s/f_%U.csv"},
+	}}
+	require.Error(t, validateWriteFilePattern(ctx, p, nil))
+
+	// duplicate jsondata
+	p = &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Option: []string{"format", "jsonline", "jsondata", "object", "jsondata", "array", "write_file_pattern", "stage://s/f_%U.jl"},
+	}}
+	require.Error(t, validateWriteFilePattern(ctx, p, nil))
+}
+
+func TestValidateWriteFilePatternFieldTerminator(t *testing.T) {
+	ctx := context.Background()
+	mk := func(term string) *tree.ExternParam {
+		return &tree.ExternParam{ExParamConst: tree.ExParamConst{
+			Format: tree.CSV,
+			Option: []string{"write_file_pattern", "stage://s/f_%U.csv"},
+			Tail:   &tree.TailParameter{Fields: &tree.Fields{Terminated: &tree.Terminated{Value: term}}},
+		}}
+	}
+	// the reader rejects a field terminator starting with quote/CR/LF
+	require.Error(t, validateWriteFilePattern(ctx, mk("\""), nil))
+	require.Error(t, validateWriteFilePattern(ctx, mk("\r"), nil))
+	require.Error(t, validateWriteFilePattern(ctx, mk("\n"), nil))
+	// '#' is fine now (comment marker is disabled for writable reads)
+	require.NoError(t, validateWriteFilePattern(ctx, mk("#"), nil))
+	require.NoError(t, validateWriteFilePattern(ctx, mk("|"), nil))
+}
+
 func TestValidateWriteFilePatternColumns(t *testing.T) {
 	ctx := context.Background()
 	csvParam := func() *tree.ExternParam {
