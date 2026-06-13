@@ -116,6 +116,9 @@ create index x2 on t12(a);
 not supported: TEXT column 'a' cannot be in index
 create index x3 on t12(a(100));
 create unique index x4 on t12(a(100));
+show create table t12;
+Table    Create Table
+t12    CREATE TABLE `t12` (\n  `a` text DEFAULT NULL,\n  UNIQUE KEY `x4` (`a`(100)),\n  KEY `x3` (`a`(100))\n)
 drop table t12;
 create table t13(a blob);
 create unique index x on t13(a);
@@ -123,6 +126,9 @@ not supported: BLOB column 'a' cannot be in index
 create index x2 on t13(a);
 not supported: BLOB column 'a' cannot be in index
 create index x3 on t13(a(100));
+show create table t13;
+Table    Create Table
+t13    CREATE TABLE `t13` (\n  `a` blob DEFAULT NULL,\n  KEY `x3` (`a`(100))\n)
 drop table t13;
 create table t14(a json);
 create unique index x on t14(a);
