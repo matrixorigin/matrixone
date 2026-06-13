@@ -511,7 +511,8 @@ func (w *externalWriter) colCount(bat *batch.Batch) int {
 // reproduce the original bytes, and rewrites 0x0D as E+'r' (the reader's
 // MySQL unescaper restores it; left raw, a trailing CR would be eaten by the
 // reader's end-of-record CR strip, which applies even to enclosed fields).
-// escape == 0 means escaping is disabled (ESCAPED BY ”), enclosed == 0 means
+// escape == 0 means escaping is disabled (an empty FIELDS ESCAPED BY),
+// enclosed == 0 means
 // the value is written unenclosed. The common nothing-to-escape case returns
 // s unchanged (no copy), preserving GetBytesAt's zero-copy slice.
 func addEscape(s []byte, enclosed byte, escape byte) []byte {

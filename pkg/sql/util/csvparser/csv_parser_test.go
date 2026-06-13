@@ -184,7 +184,7 @@ func TestTPCHMultiBytes(t *testing.T) {
 
 		reader := NewStringReader(inputStr)
 		parser, err := NewCSVParser(&cfg, reader, int64(ReadBlockSize), false)
-		if fmt.Sprint(err) == "invalid input: invalid field or comment delimiter" {
+		if fmt.Sprint(err) == "invalid input: invalid field delimiter" {
 			continue
 		}
 		require.NoError(t, err)
@@ -555,10 +555,10 @@ func TestCommentEmptyRecordNoPanic(t *testing.T) {
 	require.Equal(t, "2", row[1].Val)
 }
 
-// TestCommentDisabled: with Comment unset, a first field starting with '#' is
-// data, not a skipped comment.
+// TestCommentDisabled: with no comment marker (empty Comment, the default), a
+// first field starting with '#' is data, not a skipped comment.
 func TestCommentDisabled(t *testing.T) {
-	cfg := CSVConfig{FieldsTerminatedBy: ",", FieldsEnclosedBy: `"`} // Comment == 0
+	cfg := CSVConfig{FieldsTerminatedBy: ",", FieldsEnclosedBy: `"`} // Comment == ""
 	parser, err := NewCSVParser(&cfg, NewStringReader("#lost,1\nkept,2\n"), int64(ReadBlockSize), false)
 	require.NoError(t, err)
 

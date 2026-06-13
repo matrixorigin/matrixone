@@ -6067,7 +6067,8 @@ func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam, tabl
 //
 // Escape: the writer escapes by doubling the character, and the reader
 // unescapes E-sequences in BOTH quoted and unquoted fields, so a custom escape
-// must not collide with bytes the reader treats specially. ESCAPED BY ”
+// must not collide with bytes the reader treats specially. An empty FIELDS
+// ESCAPED BY
 // (escaping disabled) is allowed; the writer disables escaping too. Note: with
 // any non-'\\' escape (including disabled), a string whose content is exactly
 // `\N` reads back as NULL — the reader matches the null sentinel after

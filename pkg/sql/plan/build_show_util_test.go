@@ -471,7 +471,7 @@ func TestShowCreateExternalWriteFilePattern(t *testing.T) {
 // TestFormatStrInSingleQuotes: FIELDS/LINES values emitted by SHOW CREATE must
 // be valid inside single-quoted SQL literals (a custom LINES TERMINATED BY
 // used to render as the Go struct '&{#EOL#}', and a single-quote enclosure as
-// an unescaped ”').
+// an unescaped single quote).
 func TestFormatStrInSingleQuotes(t *testing.T) {
 	require.Equal(t, "#EOL#", formatStrInSingleQuotes("#EOL#"))
 	require.Equal(t, `a''b`, formatStrInSingleQuotes("a'b"))

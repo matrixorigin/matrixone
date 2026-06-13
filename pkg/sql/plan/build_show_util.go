@@ -941,7 +941,8 @@ func FormatColType(colType plan.Type) string {
 }
 
 // formatStrInSingleQuotes escapes s for emission inside a single-quoted SQL
-// string literal. Quotes are doubled (” ) rather than backslash-escaped: the
+// string literal. A single quote is written as two single quotes (doubling)
+// rather than backslash-escaped: the
 // SHOW CREATE result embeds the DDL in a double-quoted SELECT literal that
 // consumes one level of backslashes, and quote doubling survives that
 // round-trip both displayable and re-executable.

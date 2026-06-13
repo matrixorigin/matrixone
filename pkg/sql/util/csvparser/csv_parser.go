@@ -134,7 +134,7 @@ type CSVParser struct {
 	isLastChunk      bool
 
 	// see csv.Reader
-	comment string
+	comment []byte
 
 	reader io.Reader
 	// stores data that has NOT been parsed yet, it shares same memory as appendBuf.
@@ -166,7 +166,7 @@ func NewCSVParser(
 ) (*CSVParser, error) {
 	// see csv.Reader
 	if !validDelim(rune(cfg.FieldsTerminatedBy[0])) {
-		return nil, moerr.NewInvalidInputNoCtx("invalid field or comment delimiter")
+		return nil, moerr.NewInvalidInputNoCtx("invalid field delimiter")
 	}
 	// The comment marker is matched as a raw line prefix (see readRecord), so it
 	// no longer shares the tokenizer's byte stop-sets and cannot collide with
@@ -233,7 +233,7 @@ func NewCSVParser(
 		escapedBy:         cfg.FieldsEscapedBy,
 		unescapeRegexp:    r,
 		escFlavor:         escFlavor,
-		comment:           cfg.Comment,
+		comment:           []byte(cfg.Comment),
 		quoteByteSet:      makeByteSet(quoteStopSet),
 		unquoteByteSet:    makeByteSet(unquoteStopSet),
 		newLineByteSet:    makeByteSet(newLineStopSet),
@@ -567,7 +567,7 @@ outside:
 		// (the default) disables comments entirely.
 		if len(parser.comment) > 0 && prevToken == csvTokenNewLine &&
 			len(parser.recordBuffer) == 0 && !foundStartingByThisLine {
-			if bs, perr := parser.peekBytes(len(parser.comment)); perr == nil && string(bs) == parser.comment {
+			if bs, perr := parser.peekBytes(len(parser.comment)); perr == nil && bytes.Equal(bs, parser.comment) {
 				if _, _, rerr := parser.readUntilTerminator(); rerr != nil && rerr != io.EOF {
 					return rerr
 				}
