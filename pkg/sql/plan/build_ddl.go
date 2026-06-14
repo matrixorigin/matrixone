@@ -6013,6 +6013,14 @@ func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam, tabl
 				return moerr.NewBadConfig(ctx, "writable external table with format 'jsonline' only supports LINES TERMINATED BY '\\n' or '\\r\\n'")
 			}
 		}
+		// COMMENT is unsafe for jsonline: the reader matches the marker against the
+		// raw line prefix before LINES STARTING BY is consumed, but every jsonline
+		// record deterministically begins with LINES STARTING BY + '{' and JSON has
+		// no enclosure mechanism to hide it. A marker such as '{' would skip every
+		// row the writer produced, so reject COMMENT on writable jsonline tables.
+		if GetCSVComment(param) != "" {
+			return moerr.NewBadConfig(ctx, "writable external table with format 'jsonline' does not support the COMMENT option")
+		}
 	}
 	// Dry-run the pattern against a fixed timestamp to reject bad directives at DDL time.
 	if _, err := externalwrite.ExpandFilePattern(pattern, time.Unix(0, 0).UTC()); err != nil {

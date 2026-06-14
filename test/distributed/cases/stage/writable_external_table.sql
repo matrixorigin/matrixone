@@ -351,6 +351,12 @@ fields terminated by '"';
 create external table ext_bad19(a int, g int as (a+1) stored)
 infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'};
 
+-- jsonline rejects COMMENT: every record begins with '{', which the reader
+-- matches as a comment marker on the raw line prefix (JSON has no enclosure to
+-- hide it), so a marker like '{' would skip every written row
+create external table ext_bad20(a int)
+infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'comment'='{', 'write_file_pattern'='stage://wstage/x_%U.jl'};
+
 -- REPLACE has no external-table support and reports the user-facing error
 drop table if exists ext_rep;
 create external table ext_rep(a int)

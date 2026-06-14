@@ -334,6 +334,9 @@ invalid configuration: writable external table FIELDS TERMINATED BY cannot start
 create external table ext_bad19(a int, g int as (a+1) stored)
 infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'};
 invalid configuration: writable external table does not support generated column 'g'
+create external table ext_bad20(a int)
+infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'comment'='{', 'write_file_pattern'='stage://wstage/x_%U.jl'};
+invalid configuration: writable external table with format 'jsonline' does not support the COMMENT option
 drop table if exists ext_rep;
 create external table ext_rep(a int)
 infile{'filepath'='stage://wstage/wext_rep_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_rep_%U.csv'};

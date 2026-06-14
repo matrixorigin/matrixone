@@ -98,6 +98,24 @@ func TestValidateWriteFilePattern(t *testing.T) {
 	}}
 	require.NoError(t, validateWriteFilePattern(ctx, p, nil))
 
+	// jsonline does not accept a COMMENT marker: every record begins with '{'
+	// (the reader matches the marker on the raw line prefix), so a marker like
+	// '{' would skip every written row and JSON has no enclosure to hide it
+	p = &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Option: []string{"format", "jsonline", "jsondata", "object", "comment", "{", "write_file_pattern", "stage://s/part-%U.jl"},
+	}}
+	require.Error(t, validateWriteFilePattern(ctx, p, nil))
+	// any non-empty comment is rejected for jsonline, not just '{'
+	p = &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Option: []string{"format", "jsonline", "jsondata", "object", "comment", "#", "write_file_pattern", "stage://s/part-%U.jl"},
+	}}
+	require.Error(t, validateWriteFilePattern(ctx, p, nil))
+	// an empty comment (the default — no marker) stays allowed for jsonline
+	p = &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Option: []string{"format", "jsonline", "jsondata", "object", "comment", "", "write_file_pattern", "stage://s/part-%U.jl"},
+	}}
+	require.NoError(t, validateWriteFilePattern(ctx, p, nil))
+
 	// jsonline with jsondata 'object' stays writable
 	p = &tree.ExternParam{ExParamConst: tree.ExParamConst{
 		Option: []string{"format", "jsonline", "jsondata", "object", "write_file_pattern", "stage://s/part-%U.jl"},
