@@ -624,11 +624,7 @@ func ConstructCreateTableSQL(
 				line += fmt.Sprintf(" STARTING BY '%s'", formatStrInSingleQuotes(param.Tail.Lines.StartingBy))
 			}
 			if param.Tail.Lines.TerminatedBy != nil {
-				if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
-					line += " TERMINATED BY '\\\\n'"
-				} else {
-					line += fmt.Sprintf(" TERMINATED BY '%s'", formatStrInSingleQuotes(param.Tail.Lines.TerminatedBy.Value))
-				}
+				line += fmt.Sprintf(" TERMINATED BY '%s'", formatLinesTerminatedBy(param.Tail.Lines.TerminatedBy.Value))
 			}
 		}
 
@@ -949,6 +945,25 @@ func FormatColType(colType plan.Type) string {
 func formatStrInSingleQuotes(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	return strings.ReplaceAll(s, `'`, `''`)
+}
+
+// formatLinesTerminatedBy renders a LINES TERMINATED BY value for SHOW CREATE.
+// TerminatedBy.Value holds the raw bytes, so the newline (\n) and CRLF (\r\n)
+// defaults must be emitted as escape sequences — a literal CR/LF byte in the DDL
+// would be an unparseable embedded newline. The backslashes are doubled because
+// the SHOW CREATE result is delivered through a double-quoted SELECT literal that
+// consumes one backslash level before the DDL is re-parsed (mirrors the \n case
+// that already shipped). \n and \r\n must stay distinct so a CRLF table is
+// recreatable as CRLF, not silently downgraded to LF.
+func formatLinesTerminatedBy(value string) string {
+	switch value {
+	case "\n":
+		return `\\n`
+	case "\r\n":
+		return `\\r\\n`
+	default:
+		return formatStrInSingleQuotes(value)
+	}
 }
 
 func formatExternalTableOptionsForShowCreate(param *tree.ExternParam) string {

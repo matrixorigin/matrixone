@@ -512,3 +512,14 @@ func TestFormatStrInSingleQuotes(t *testing.T) {
 	require.Equal(t, `a\\b`, formatStrInSingleQuotes(`a\b`))
 	require.Equal(t, `\\''`, formatStrInSingleQuotes(`\'`))
 }
+
+// TestFormatLinesTerminatedBy: SHOW CREATE must keep \n and \r\n distinct so a
+// CRLF writable external table recreates as CRLF (not silently downgraded to
+// LF). Both render as doubled-backslash escape sequences; other values flow
+// through formatStrInSingleQuotes.
+func TestFormatLinesTerminatedBy(t *testing.T) {
+	require.Equal(t, `\\n`, formatLinesTerminatedBy("\n"))
+	require.Equal(t, `\\r\\n`, formatLinesTerminatedBy("\r\n"))
+	require.NotEqual(t, formatLinesTerminatedBy("\n"), formatLinesTerminatedBy("\r\n"))
+	require.Equal(t, "#EOL#", formatLinesTerminatedBy("#EOL#"))
+}
