@@ -557,6 +557,7 @@ message SessionInfo {
   bytes time_zone = 7;
   string account = 8;
   repeated string query_id = 9;
+  int64 lock_wait_timeout = 10;
 }
 
 message SessionLoggerInfo {

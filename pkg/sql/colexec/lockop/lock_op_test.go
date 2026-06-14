@@ -105,7 +105,31 @@ func TestLockWaitTimeoutUsesCurrentSessionValue(t *testing.T) {
 	require.Equal(t, 2*time.Second, lockWaitTimeout(proc, txnOp))
 
 	proc.SetResolveVariableFunc(nil)
+	proc.GetSessionInfo().LockWaitTimeout = 3
+	require.Equal(t, 3*time.Second, lockWaitTimeout(proc, txnOp))
+
+	proc.GetSessionInfo().LockWaitTimeout = 0
 	require.Equal(t, 60*time.Second, lockWaitTimeout(proc, txnOp))
+}
+
+func TestRefreshLockWaitOptionsUsesRemainingDeadline(t *testing.T) {
+	options := lock.LockOptions{
+		LockWaitDeadline: time.Now().Add(1500 * time.Millisecond).UnixNano(),
+		LockWaitTimeout:  60,
+	}
+
+	refreshed, err := refreshLockWaitOptions(options)
+	require.NoError(t, err)
+	require.Greater(t, refreshed.LockWaitTimeout, int64(0))
+	require.LessOrEqual(t, refreshed.LockWaitTimeout, int64(2))
+	require.Equal(t, options.LockWaitDeadline, refreshed.LockWaitDeadline)
+}
+
+func TestRefreshLockWaitOptionsReturnsTimeoutAfterDeadline(t *testing.T) {
+	options := lock.LockOptions{LockWaitDeadline: time.Now().Add(-time.Second).UnixNano()}
+
+	_, err := refreshLockWaitOptions(options)
+	require.ErrorIs(t, err, lockservice.ErrLockTimeout)
 }
 
 func TestLockWithRetryReturnsBackendErrorWhenDeadlineExceededStopsBoundedRetry(t *testing.T) {
