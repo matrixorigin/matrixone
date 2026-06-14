@@ -271,6 +271,12 @@ func TestValidateWriteFilePatternComment(t *testing.T) {
 		}}
 	}
 
+	mkTail := func(comment string, tail *tree.TailParameter) *tree.ExternParam {
+		p := mk("comment", comment)
+		p.Tail = tail
+		return p
+	}
+
 	// A COMMENT marker is accepted on writable tables: the writer encloses the
 	// first field of any colliding row so it reads back as data (see the
 	// externalwrite encoder's firstFieldStartsComment guard).
@@ -278,6 +284,53 @@ func TestValidateWriteFilePatternComment(t *testing.T) {
 	require.NoError(t, validateWriteFilePattern(ctx, mk("comment", ""), nil))
 	require.NoError(t, validateWriteFilePattern(ctx, mk("comment", "#"), nil))
 	require.NoError(t, validateWriteFilePattern(ctx, mk("comment", "REM"), nil))
+
+	// COMMENT and LINES STARTING BY are mutually exclusive: the reader matches the
+	// marker on the raw prefix before consuming STARTING BY, so 'REM' + 'REM:'
+	// would skip every row.
+	require.Error(t, validateWriteFilePattern(ctx, mkTail("REM", &tree.TailParameter{
+		Lines: &tree.Lines{StartingBy: "REM:"},
+	}), nil))
+
+	// COMMENT must not begin with the enclosure byte: an enclosed first field
+	// starts the line with it, so '"' would skip those rows (enclosing is the
+	// collision, not the fix).
+	require.Error(t, validateWriteFilePattern(ctx, mk("comment", `"`), nil))
+	// ... including a custom ENCLOSED BY.
+	require.Error(t, validateWriteFilePattern(ctx, mkTail("|", &tree.TailParameter{
+		Fields: &tree.Fields{EnclosedBy: &tree.EnclosedBy{Value: '|'}},
+	}), nil))
+
+	// COMMENT must not begin with the escape byte (default '\\'): the writer can
+	// emit an unenclosed first field starting with a doubled escape.
+	require.Error(t, validateWriteFilePattern(ctx, mk("comment", `\`), nil))
+	// ... including a custom FIELDS ESCAPED BY.
+	require.Error(t, validateWriteFilePattern(ctx, mkTail("!x", &tree.TailParameter{
+		Fields: &tree.Fields{EscapedBy: &tree.EscapedBy{Value: '!'}},
+	}), nil))
+	// a non-structural marker byte stays valid alongside a custom escape.
+	require.NoError(t, validateWriteFilePattern(ctx, mkTail("@", &tree.TailParameter{
+		Fields: &tree.Fields{EscapedBy: &tree.EscapedBy{Value: '!'}},
+	}), nil))
+
+	// COMMENT must not begin with the field terminator: an empty first field
+	// makes the line start with it.
+	require.Error(t, validateWriteFilePattern(ctx, mk("comment", ","), nil))
+	// ... including a custom FIELDS TERMINATED BY.
+	require.Error(t, validateWriteFilePattern(ctx, mkTail("|x", &tree.TailParameter{
+		Fields: &tree.Fields{Terminated: &tree.Terminated{Value: "|"}},
+	}), nil))
+	// '#' stays a valid marker with the default ',' terminator (the main use case).
+	require.NoError(t, validateWriteFilePattern(ctx, mkTail("#", &tree.TailParameter{
+		Fields: &tree.Fields{Terminated: &tree.Terminated{Value: ","}},
+	}), nil))
+
+	// COMMENT must not collide with the NULL sentinel \N (written verbatim for a
+	// NULL first column, with a literal backslash regardless of the escape).
+	require.Error(t, validateWriteFilePattern(ctx, mk("comment", `\N`), nil))
+	require.Error(t, validateWriteFilePattern(ctx, mkTail(`\N`, &tree.TailParameter{
+		Fields: &tree.Fields{EscapedBy: &tree.EscapedBy{Value: '!'}},
+	}), nil))
 }
 
 func TestValidateWriteFilePatternGeneratedColumn(t *testing.T) {

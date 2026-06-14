@@ -6022,6 +6022,11 @@ func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam, tabl
 			return moerr.NewBadConfig(ctx, "writable external table with format 'jsonline' does not support the COMMENT option")
 		}
 	}
+	if format == tree.CSV {
+		if err := validateWritableComment(ctx, param); err != nil {
+			return err
+		}
+	}
 	// Dry-run the pattern against a fixed timestamp to reject bad directives at DDL time.
 	if _, err := externalwrite.ExpandFilePattern(pattern, time.Unix(0, 0).UTC()); err != nil {
 		return err
@@ -6073,6 +6078,73 @@ func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam, tabl
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// validateWritableComment rejects CSV COMMENT markers the writer cannot make
+// round-trip. The reader skips a line whose RAW prefix (before unquoting)
+// matches the marker, so the writer must never produce such a line. The writer
+// guards a non-NULL, unenclosed first field by enclosing it (the line then
+// begins with the enclosure byte), but three structural cases cannot be guarded
+// that way and are rejected here:
+//
+//  1. LINES STARTING BY: the marker is matched on the raw prefix BEFORE the
+//     starting-by prefix is consumed, so a marker contained in that fixed prefix
+//     (e.g. COMMENT 'REM' with LINES STARTING BY 'REM:') skips every row. COMMENT
+//     and LINES STARTING BY are therefore mutually exclusive for writable tables.
+//  2. The enclosure byte: a first field that must be enclosed (or the writer's
+//     own guard) makes the line begin with the enclosure byte, so a marker that
+//     begins with it would skip those rows. Enclosing cannot help — it is the
+//     collision. Reject a marker whose first byte is the enclosure byte.
+//  3. The escape byte: the writer escapes the (unenclosed) first field, so a
+//     value can be written starting with the escape byte (e.g. a doubled escape),
+//     which a marker beginning with that byte would skip. Reject it too.
+//  4. The field terminator: an empty first field makes the line begin with the
+//     terminator, so a marker beginning with it would skip such rows. Reject it.
+//  5. The NULL sentinel: a NULL first column is written verbatim as `\N` (it
+//     cannot be enclosed without reading back as the string), so a marker that is
+//     a prefix of `\N` (or vice-versa) skips every row with a leading NULL. The
+//     sentinel uses a literal backslash regardless of the configured escape, so
+//     this is checked independently of rule 3.
+func validateWritableComment(ctx context.Context, param *tree.ExternParam) error {
+	comment := GetCSVComment(param)
+	if comment == "" {
+		return nil
+	}
+	var fields *tree.Fields
+	if param.Tail != nil {
+		if param.Tail.Lines != nil && param.Tail.Lines.StartingBy != "" {
+			return moerr.NewBadConfig(ctx, "writable external table does not support COMMENT together with LINES STARTING BY")
+		}
+		fields = param.Tail.Fields
+	}
+	enclosed := byte('"')
+	if fields != nil && fields.EnclosedBy != nil && fields.EnclosedBy.Value != 0 {
+		enclosed = fields.EnclosedBy.Value
+	}
+	if comment[0] == enclosed {
+		return moerr.NewBadConfigf(ctx, "writable external table COMMENT must not start with the enclosure byte '%c'", enclosed)
+	}
+	// Escape byte: default '\\'; an explicit empty FIELDS ESCAPED BY disables it.
+	escape := byte('\\')
+	if fields != nil && fields.EscapedBy != nil {
+		escape = fields.EscapedBy.Value // 0 means escaping disabled
+	}
+	if escape != 0 && comment[0] == escape {
+		return moerr.NewBadConfigf(ctx, "writable external table COMMENT must not start with the escape byte '%c'", escape)
+	}
+	// Field terminator: default ','; an empty first field starts the line with it.
+	fieldTerm := ","
+	if fields != nil && fields.Terminated != nil && fields.Terminated.Value != "" {
+		fieldTerm = fields.Terminated.Value
+	}
+	if comment[0] == fieldTerm[0] {
+		return moerr.NewBadConfigf(ctx, "writable external table COMMENT must not start with the field terminator byte '%c'", fieldTerm[0])
+	}
+	csvNull := `\N`
+	if strings.HasPrefix(comment, csvNull) || strings.HasPrefix(csvNull, comment) {
+		return moerr.NewBadConfig(ctx, "writable external table COMMENT must not collide with the NULL sentinel \\N")
 	}
 	return nil
 }

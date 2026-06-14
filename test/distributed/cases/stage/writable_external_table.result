@@ -337,6 +337,24 @@ invalid configuration: writable external table does not support generated column
 create external table ext_bad20(a int)
 infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'comment'='{', 'write_file_pattern'='stage://wstage/x_%U.jl'};
 invalid configuration: writable external table with format 'jsonline' does not support the COMMENT option
+create external table ext_bad21(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'comment'='REM', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+lines starting by 'REM:';
+invalid configuration: writable external table does not support COMMENT together with LINES STARTING BY
+create external table ext_bad22(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'comment'='"', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+invalid configuration: writable external table COMMENT must not start with the enclosure byte '"'
+create external table ext_bad23(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'comment'='\\', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+invalid configuration: writable external table COMMENT must not start with the escape byte '\'
+create external table ext_bad24(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'comment'='\\N', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' escaped by '!';
+invalid configuration: writable external table COMMENT must not collide with the NULL sentinel \N
+create external table ext_bad25(a varchar(10), b int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'comment'=',', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',';
+invalid configuration: writable external table COMMENT must not start with the field terminator byte ','
 drop table if exists ext_rep;
 create external table ext_rep(a int)
 infile{'filepath'='stage://wstage/wext_rep_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_rep_%U.csv'};

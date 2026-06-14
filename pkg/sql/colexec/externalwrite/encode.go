@@ -143,21 +143,19 @@ func (w *externalWriter) needsEnclosure(val []byte) bool {
 
 // firstFieldStartsComment reports whether writing field (the escaped, unenclosed
 // first-column bytes) would make the line's raw prefix match the COMMENT marker,
-// so the reader would skip the row. The marker is matched at the very start of
-// the line, before LINES STARTING BY is consumed, so the candidate prefix is
-// LINES STARTING BY then the field bytes then the byte that follows the field
-// (the field terminator, or the line terminator when it is the only column).
-// A marker no longer than LINES STARTING BY is matched entirely within that
-// fixed prefix, which enclosing the field cannot change — so there is nothing to
-// guard and we return false (never quote when it would not help).
+// so the reader would skip the row. The candidate prefix is the field bytes then
+// the byte that follows it (the field terminator, or the line terminator when it
+// is the only column). COMMENT is mutually exclusive with LINES STARTING BY for
+// writable tables (rejected at DDL by validateWritableComment), so there is no
+// starting-by prefix to account for here; the other unprotectable cases (the
+// enclosure byte, the NULL sentinel) are likewise rejected at DDL, so this guard
+// only handles a non-NULL unenclosed first value that itself begins the marker.
 func (w *externalWriter) firstFieldStartsComment(field []byte, onlyColumn bool) bool {
 	c := w.cfg.Comment
-	lsb := w.cfg.LineStartingBy
-	if len(c) <= len(lsb) {
+	if len(c) == 0 {
 		return false
 	}
-	prefix := make([]byte, 0, len(lsb)+len(field)+len(w.cfg.FieldTerminator))
-	prefix = append(prefix, lsb...)
+	prefix := make([]byte, 0, len(field)+len(w.cfg.FieldTerminator))
 	prefix = append(prefix, field...)
 	if onlyColumn {
 		prefix = append(prefix, w.cfg.LineTerminator...)

@@ -357,6 +357,33 @@ infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'
 create external table ext_bad20(a int)
 infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'comment'='{', 'write_file_pattern'='stage://wstage/x_%U.jl'};
 
+-- CSV COMMENT and LINES STARTING BY are mutually exclusive: the marker matches
+-- the raw prefix before STARTING BY is consumed, so 'REM' + 'REM:' skips all rows
+create external table ext_bad21(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'comment'='REM', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+lines starting by 'REM:';
+
+-- CSV COMMENT must not collide with the enclosure byte: an enclosed first field
+-- begins the line with it, so '"' would skip those rows
+create external table ext_bad22(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'comment'='"', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+
+-- ... nor the escape byte (default backslash): the writer can emit an unenclosed
+-- first field starting with a doubled escape
+create external table ext_bad23(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'comment'='\\', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+
+-- ... nor the NULL sentinel \N, written verbatim for a NULL first column (uses a
+-- custom escape so the sentinel rule fires rather than the escape-byte rule)
+create external table ext_bad24(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'comment'='\\N', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' escaped by '!';
+
+-- ... nor the field terminator: an empty first field starts the line with it
+create external table ext_bad25(a varchar(10), b int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'comment'=',', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',';
+
 -- REPLACE has no external-table support and reports the user-facing error
 drop table if exists ext_rep;
 create external table ext_rep(a int)
