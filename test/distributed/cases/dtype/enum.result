@@ -249,6 +249,16 @@ create table enum_idx04 (id varchar(191) primary key, name varchar(191), role en
 show create table enum_idx04;
 Table    Create Table
 enum_idx04    CREATE TABLE `enum_idx04` (\n  `id` varchar(191) NOT NULL,\n  `name` varchar(191) DEFAULT NULL,\n  `role` enum('a','b','c') DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uq_role_name` (`role`,`name`)\n)
+insert into enum_idx04 values ('1','alice','a'),('2','bob','b'),('3','carol','c');
+select * from enum_idx04 where role = 'b';
+id    name    role
+2    bob    b
+update enum_idx04 set role = 'c' where id = '2';
+delete from enum_idx04 where role = 'a';
+select * from enum_idx04 order by id;
+id    name    role
+2    bob    c
+3    carol    c
 drop table enum_idx04;
 drop table if exists inert01;
 create table insert01 (id int primary key,

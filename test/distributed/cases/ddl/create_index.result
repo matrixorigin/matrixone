@@ -119,6 +119,15 @@ create unique index x4 on t12(a(100));
 show create table t12;
 Table    Create Table
 t12    CREATE TABLE `t12` (\n  `a` text DEFAULT NULL,\n  KEY `x3` (`a`(100)),\n  UNIQUE KEY `x4` (`a`(100))\n)
+insert into t12 values ('alpha'),('beta');
+select * from t12 where a = 'alpha';
+a
+alpha
+update t12 set a = 'gamma' where a = 'alpha';
+delete from t12 where a = 'beta';
+select * from t12;
+a
+gamma
 drop table t12;
 create table t13(a blob);
 create unique index x on t13(a);
@@ -129,6 +138,15 @@ create index x3 on t13(a(100));
 show create table t13;
 Table    Create Table
 t13    CREATE TABLE `t13` (\n  `a` blob DEFAULT NULL,\n  KEY `x3` (`a`(100))\n)
+insert into t13 values ('alpha'),('beta');
+select * from t13 where a = 'alpha';
+a
+alpha
+update t13 set a = 'gamma' where a = 'alpha';
+delete from t13 where a = 'beta';
+select * from t13;
+a
+gamma
 drop table t13;
 create table t14(a json);
 create unique index x on t14(a);

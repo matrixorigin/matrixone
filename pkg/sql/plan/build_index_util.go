@@ -176,6 +176,8 @@ func indexColumnCheckKind(indexType tree.IndexType) string {
 		return "ivfflat"
 	case tree.INDEX_TYPE_HNSW:
 		return "hnsw"
+	case tree.INDEX_TYPE_RTREE:
+		return "rtree"
 	default:
 		return "secondary"
 	}

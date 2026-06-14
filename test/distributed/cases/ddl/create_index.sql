@@ -88,6 +88,11 @@ create index x2 on t12(a);
 create index x3 on t12(a(100));
 create unique index x4 on t12(a(100));
 show create table t12;
+insert into t12 values ('alpha'),('beta');
+select * from t12 where a = 'alpha';
+update t12 set a = 'gamma' where a = 'alpha';
+delete from t12 where a = 'beta';
+select * from t12;
 drop table t12;
 
 create table t13(a blob);
@@ -95,6 +100,11 @@ create unique index x on t13(a);
 create index x2 on t13(a);
 create index x3 on t13(a(100));
 show create table t13;
+insert into t13 values ('alpha'),('beta');
+select * from t13 where a = 'alpha';
+update t13 set a = 'gamma' where a = 'alpha';
+delete from t13 where a = 'beta';
+select * from t13;
 drop table t13;
 
 create table t14(a json);

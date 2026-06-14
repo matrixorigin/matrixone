@@ -571,6 +571,14 @@ func TestBuildVectorIndexAllowsIvfFlatOnly(t *testing.T) {
 	runTestShouldError(mock, t, sqlerrs)
 }
 
+func TestBuildIndexAllowsRTreeGeometry(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE TABLE geo_spatial_ok (id INT PRIMARY KEY, g POINT NOT NULL, KEY idx_g USING RTREE (g));",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
 func TestGeometryDDLGuardsSQLPaths(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	rt := moruntime.DefaultRuntime()

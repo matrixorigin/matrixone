@@ -173,6 +173,11 @@ drop table enum_idx03;
 drop table if exists enum_idx04;
 create table enum_idx04 (id varchar(191) primary key, name varchar(191), role enum('a','b','c'), unique index uq_role_name(role, name));
 show create table enum_idx04;
+insert into enum_idx04 values ('1','alice','a'),('2','bob','b'),('3','carol','c');
+select * from enum_idx04 where role = 'b';
+update enum_idx04 set role = 'c' where id = '2';
+delete from enum_idx04 where role = 'a';
+select * from enum_idx04 order by id;
 drop table enum_idx04;
 
 -- insert into table,  either use a number to represent a number or insert a specific value
