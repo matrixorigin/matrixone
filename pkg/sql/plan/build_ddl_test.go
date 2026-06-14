@@ -575,6 +575,7 @@ func TestBuildIndexAllowsRTreeGeometry(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{
 		"CREATE TABLE geo_spatial_ok (id INT PRIMARY KEY, g POINT NOT NULL, KEY idx_g USING RTREE (g));",
+		"CREATE TABLE geo_spatial_nullable_ok (id INT PRIMARY KEY, g POINT, KEY idx_g USING RTREE (g));",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 }
@@ -592,7 +593,6 @@ func TestGeometryDDLGuardsSQLPaths(t *testing.T) {
 		"CREATE TABLE geo_pk_err (g GEOMETRY PRIMARY KEY);",
 		"CREATE TABLE geo_uk_err (g GEOMETRY UNIQUE KEY);",
 		"CREATE TABLE geo_idx_err (g GEOMETRY, KEY(g));",
-		"CREATE TABLE geo_spatial_nullable_err (id INT PRIMARY KEY, g POINT, KEY idx_g USING RTREE (g));",
 		"ALTER TABLE emp ADD COLUMN g GEOMETRY UNIQUE KEY;",
 		"ALTER TABLE emp ADD COLUMN g GEOMETRY PRIMARY KEY;",
 	}

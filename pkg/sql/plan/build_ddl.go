@@ -2142,9 +2142,6 @@ func checkSpatialIndexColumnSupport(ctx CompilerContext, indexInfo *tree.Index, 
 	if !isGeometryPlanType(&col.Typ) {
 		return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SPATIAL INDEX can only be created on GEOMETRY column '%s'", nameOrigin))
 	}
-	if col.Default == nil || col.Default.NullAbility {
-		return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SPATIAL INDEX column '%s' cannot be null", nameOrigin))
-	}
 	return nil
 }
 
