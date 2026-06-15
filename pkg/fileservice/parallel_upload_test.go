@@ -310,6 +310,39 @@ func TestS3FSWriteContextParallelModeOverridesFSMode(t *testing.T) {
 	}
 }
 
+func TestS3FSWriteContextParallelAutoEnablesUnknownSize(t *testing.T) {
+	storage := &mockParallelStorage{supports: true}
+	fs := &S3FS{
+		name:         "s3",
+		storage:      storage,
+		ioMerger:     NewIOMerger(),
+		asyncUpdate:  true,
+		parallelMode: ParallelOff,
+	}
+
+	reader := strings.NewReader("streamed-data")
+	vector := IOVector{
+		FilePath: "unknown-context-auto",
+		Entries: []IOEntry{
+			{Offset: 0, Size: -1, ReaderForWrite: reader},
+		},
+	}
+
+	ctx := WithParallelMode(context.Background(), ParallelAuto)
+	if err := fs.Write(ctx, vector); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if storage.mpCalled != 1 {
+		t.Fatalf("parallel write should be enabled by context auto override")
+	}
+	if storage.writeCalled != 0 {
+		t.Fatalf("unexpected single write")
+	}
+	if storage.lastSize != nil {
+		t.Fatalf("size hint should be nil for unknown-size stream")
+	}
+}
+
 func TestS3FSSmallSizeSkipsParallel(t *testing.T) {
 	storage := &mockParallelStorage{supports: true}
 	fs := &S3FS{

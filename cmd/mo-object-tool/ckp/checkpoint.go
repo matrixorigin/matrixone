@@ -380,6 +380,8 @@ func newFileServiceWriteCloser(ctx context.Context, fs fileservice.FileService, 
 			}
 			w.done <- err
 		}()
+		ctx = fileservice.WithParallelMode(ctx, fileservice.ParallelAuto)
+		logutil.Infof("streaming dump output to fileservice with parallel-mode=auto: %s", cleanObjectPath(filePath))
 		err = fs.Write(ctx, fileservice.IOVector{
 			FilePath: cleanObjectPath(filePath),
 			Entries: []fileservice.IOEntry{{
@@ -736,7 +738,6 @@ func allDigits(s string) bool {
 	}
 	return true
 }
-
 
 func resolveTableByID(
 	ctx context.Context,

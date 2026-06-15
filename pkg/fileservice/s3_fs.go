@@ -473,6 +473,13 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 			enableParallel = true
 		}
 	}
+	if size == nil {
+		logutil.Info("s3 write unknown-size stream",
+			zap.String("key", key),
+			zap.Uint8("parallel-mode", uint8(parallelMode)),
+			zap.Bool("parallel-enabled", enableParallel),
+		)
+	}
 
 	if pmw, ok := s.storage.(ParallelMultipartWriter); ok && pmw.SupportsParallelMultipart() &&
 		enableParallel {
