@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -88,6 +89,57 @@ func TestTruncationExportSnapshot(t *testing.T) {
 		assert.NoError(t, err)
 	}
 	runServiceTest(t, false, true, fn)
+}
+
+func TestTruncationSkipsStaleReplicaMetadata(t *testing.T) {
+	const (
+		shardID       = uint64(1)
+		staleReplica  = uint64(99)
+		activeReplica = uint64(1)
+	)
+
+	tests := []struct {
+		name   string
+		shards []metadata.LogShard
+	}{
+		{
+			name: "stale before active",
+			shards: []metadata.LogShard{
+				{ShardID: shardID, ReplicaID: staleReplica},
+				{ShardID: shardID, ReplicaID: activeReplica},
+			},
+		},
+		{
+			name: "stale after active",
+			shards: []metadata.LogShard{
+				{ShardID: shardID, ReplicaID: activeReplica},
+				{ShardID: shardID, ReplicaID: staleReplica},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := func(t *testing.T, s *Service) {
+				nid := nodeID{shardID: shardID, replicaID: staleReplica}
+				testPrepareSnapshot(t, s.store.snapshotMgr, nid, snapshotIndex(100))
+				assert.NoError(t, s.store.snapshotMgr.Init(shardID, staleReplica))
+				assert.Equal(t, 1, s.store.snapshotMgr.Count(shardID, staleReplica))
+
+				s.store.mu.Lock()
+				s.store.mu.metadata.Shards = append([]metadata.LogShard(nil), tc.shards...)
+				s.store.mu.Unlock()
+
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+				defer cancel()
+				assert.NoError(t, s.store.processTruncateLog(ctx))
+
+				assert.Equal(t, int64(activeReplica), s.store.getReplicaID(shardID))
+				assert.Equal(t, 0, s.store.snapshotMgr.Count(shardID, staleReplica))
+			}
+			runServiceTest(t, false, true, fn)
+		})
+	}
 }
 
 func TestTruncationImportSnapshot(t *testing.T) {
