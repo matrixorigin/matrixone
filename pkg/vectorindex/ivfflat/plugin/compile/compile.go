@@ -201,18 +201,33 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 		return err
 	}
 
-	// 4.b populate centroids table
-	if err = ivfIndexCentroidsTable(ctx, centroidsDef, qryDatabase, originalTableDef,
-		totalCnt, metaDef.IndexTableName, forceSync); err != nil {
-		return err
-	}
-
-	if !async || forceSync {
-		// 4.c populate entries table
-		if err = ivfIndexEntriesTable(ctx, entriesDef, qryDatabase, originalTableDef,
-			metaDef.IndexTableName, centroidsDef.IndexTableName); err != nil {
+	// 4.b + 4.c: build the index. Both kmeans (4.b) and entry assignment (4.c)
+	// scan the source table, but queries never re-read it (re-rank fetches only a
+	// handful of rows), so run the build's reads with SkipMemoryCacheWrites — this
+	// one-shot source scan must not evict the index-entry working set the queries
+	// actually hit from the fileservice cache. The optional-interface keeps the
+	// CompileContext interface (and its plugin mocks) untouched; non-supporting
+	// contexts just build directly.
+	buildIndex := func() error {
+		if err := ivfIndexCentroidsTable(ctx, centroidsDef, qryDatabase, originalTableDef,
+			totalCnt, metaDef.IndexTableName, forceSync); err != nil {
 			return err
 		}
+		if !async || forceSync {
+			if err := ivfIndexEntriesTable(ctx, entriesDef, qryDatabase, originalTableDef,
+				metaDef.IndexTableName, centroidsDef.IndexTableName); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if r, ok := ctx.(interface{ RunWithSourceReadCacheSkip(func() error) error }); ok {
+		err = r.RunWithSourceReadCacheSkip(buildIndex)
+	} else {
+		err = buildIndex()
+	}
+	if err != nil {
+		return err
 	}
 
 	// 4.d delete older entries in index table.
