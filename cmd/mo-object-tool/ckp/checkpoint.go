@@ -893,7 +893,11 @@ func mergeCreateTableIndexDDLs(createDDL string, indexDDLs []string) (string, er
 		}
 		clauses = append(clauses, clause)
 	}
-	return injectCreateTableClauses(createDDL, clauses)
+	ddl, err := injectCreateTableClauses(createDDL, clauses)
+	if err == nil {
+		return ddl, nil
+	}
+	return appendIndexDDLsAfterCreateTable(createDDL, indexDDLs), nil
 }
 
 func alterTableAddClause(sql string) (string, bool) {
@@ -955,6 +959,16 @@ func injectCreateTableClauses(createDDL string, clauses []string) (string, error
 		separator = ""
 	}
 	return createDDL[:close] + separator + strings.Join(clauses, ", ") + createDDL[close:], nil
+}
+
+func appendIndexDDLsAfterCreateTable(createDDL string, indexDDLs []string) string {
+	var sb strings.Builder
+	sb.WriteString(strings.TrimRight(createDDL, " ;\n\t"))
+	for _, indexDDL := range indexDDLs {
+		sb.WriteString(";\n")
+		sb.WriteString(strings.TrimRight(strings.TrimSpace(indexDDL), " ;\n\t"))
+	}
+	return sb.String()
 }
 
 func inferCreateTableClauseIndent(body string) string {
@@ -1131,6 +1145,19 @@ func createTableNameRange(sql string) (int, int, bool) {
 	i, ok := consumeSQLKeyword(sql, 0, "create")
 	if !ok {
 		return 0, 0, false
+	}
+	for {
+		next, ok := consumeSQLKeyword(sql, i, "temporary")
+		if ok {
+			i = next
+			continue
+		}
+		next, ok = consumeSQLKeyword(sql, i, "cluster")
+		if ok {
+			i = next
+			continue
+		}
+		break
 	}
 	i, ok = consumeSQLKeyword(sql, i, "table")
 	if !ok {

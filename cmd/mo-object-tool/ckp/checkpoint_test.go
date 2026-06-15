@@ -136,6 +136,59 @@ func TestMergeCreateTableIndexDDLsSkipsExistingIndex(t *testing.T) {
 	assert.Equal(t, createDDL, got)
 }
 
+func TestMergeCreateTableIndexDDLsWithConstraintsAndComments(t *testing.T) {
+	createDDL := "CREATE TABLE `ckp_constraints`.`parent` (\n" +
+		"  `id` INT NOT NULL PRIMARY KEY,\n" +
+		"  `code` VARCHAR(20) NOT NULL UNIQUE,\n" +
+		"  `note` VARCHAR(100) DEFAULT 'parent-default' COMMENT 'parent note'\n" +
+		") COMMENT='parent table comment'"
+	indexDDLs := []string{
+		"ALTER TABLE `parent` ADD KEY `idx_parent_note`(`note`);",
+	}
+
+	got, err := mergeCreateTableIndexDDLs(createDDL, indexDDLs)
+	require.NoError(t, err)
+	assert.Contains(t, got, "KEY `idx_parent_note`(`note`)")
+	assert.Contains(t, got, ") COMMENT='parent table comment'")
+}
+
+func TestMergeCreateTableIndexDDLsWithAutoIncrementAndClusterTable(t *testing.T) {
+	createDDL := "CREATE CLUSTER TABLE `ckp_constraints`.`t_auto_inc` (\n" +
+		"  `id` BIGINT NOT NULL AUTO_INCREMENT,\n" +
+		"  `note` VARCHAR(64) COMMENT 'note (with parens)',\n" +
+		"  PRIMARY KEY (`id`)\n" +
+		") COMMENT='auto increment table'"
+	indexDDLs := []string{
+		"ALTER TABLE `t_auto_inc` ADD KEY `idx_auto_inc_note`(`note`);",
+	}
+
+	got, err := mergeCreateTableIndexDDLs(createDDL, indexDDLs)
+	require.NoError(t, err)
+	assert.Contains(t, got, "KEY `idx_auto_inc_note`(`note`)")
+	assert.Contains(t, got, "COMMENT='auto increment table'")
+}
+
+func TestMergeCreateTableIndexDDLsFallsBackToSeparateAlter(t *testing.T) {
+	createDDL := "CREATE TABLE `parent` LIKE `parent_template`"
+	indexDDLs := []string{
+		"ALTER TABLE `parent` ADD KEY `idx_parent_note`(`note`);",
+	}
+
+	got, err := mergeCreateTableIndexDDLs(createDDL, indexDDLs)
+	require.NoError(t, err)
+	assert.Equal(t, "CREATE TABLE `parent` LIKE `parent_template`;\nALTER TABLE `parent` ADD KEY `idx_parent_note`(`note`)", got)
+}
+
+func TestNormalizeCreateTableDDLNameWithCreateTableModifiers(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		DatabaseName: "ckp_constraints",
+		TableName:    "parent",
+	}
+
+	got := normalizeCreateTableDDLName("CREATE CLUSTER TABLE old_parent (id INT)", table)
+	assert.Equal(t, "CREATE CLUSTER TABLE `ckp_constraints`.`parent` (id INT)", got)
+}
+
 func TestCleanObjectPath(t *testing.T) {
 	assert.Equal(t, "dump/account_1/t.csv", cleanObjectPath("dump/account_1/t.csv"))
 	assert.Equal(t, "tmp/dump/t.csv", cleanObjectPath("/tmp/dump/t.csv"))
