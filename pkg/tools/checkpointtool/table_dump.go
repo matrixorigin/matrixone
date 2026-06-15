@@ -658,10 +658,6 @@ func (r *CheckpointReader) DumpTableCSVComposed(
 	snapshotTS types.TS,
 	opts ...CSVExportOption,
 ) error {
-	dataEntries, tombEntries, err := r.getTableEntriesAt(ctx, tableID, snapshotTS)
-	if err != nil {
-		return err
-	}
 	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
 	if len(schema.Columns) == 0 {
 		return moerr.NewInternalErrorf(
@@ -669,6 +665,14 @@ func (r *CheckpointReader) DumpTableCSVComposed(
 			"cannot resolve visible columns for table %d from checkpoint metadata; mo_columns data is unavailable or incomplete",
 			tableID,
 		)
+	}
+	dataEntries, tombEntries, err := r.getTableEntriesAt(ctx, tableID, snapshotTS)
+	if err != nil {
+		if !isTableDataUnavailable(err) {
+			return err
+		}
+		dataEntries = nil
+		tombEntries = nil
 	}
 	return r.streamTableCSV(ctx, w, schema, snapshotTS, dataEntries, tombEntries, resolveCSVExportOptions(opts))
 }
@@ -680,10 +684,6 @@ func (r *CheckpointReader) PrepareTableDumpData(
 	tableID uint64,
 	snapshotTS types.TS,
 ) (*TableDumpData, error) {
-	dataEntries, tombEntries, err := r.getTableEntriesAt(ctx, tableID, snapshotTS)
-	if err != nil {
-		return nil, err
-	}
 	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
 	if len(schema.Columns) == 0 {
 		return nil, moerr.NewInternalErrorf(
@@ -691,6 +691,14 @@ func (r *CheckpointReader) PrepareTableDumpData(
 			"cannot resolve visible columns for table %d from checkpoint metadata; mo_columns data is unavailable or incomplete",
 			tableID,
 		)
+	}
+	dataEntries, tombEntries, err := r.getTableEntriesAt(ctx, tableID, snapshotTS)
+	if err != nil {
+		if !isTableDataUnavailable(err) {
+			return nil, err
+		}
+		dataEntries = nil
+		tombEntries = nil
 	}
 	return &TableDumpData{
 		TableID:     tableID,
@@ -719,12 +727,19 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 		if _, ok := tableSet[tableID]; ok {
 			continue
 		}
-		tbl, ok := composed.Tables[tableID]
-		if !ok || (len(tbl.DataRanges) == 0 && len(tbl.TombRanges) == 0) {
-			return nil, moerr.NewInternalErrorf(ctx, "table %d not found in checkpoint at ts %s", tableID, snapshotTS.ToString())
+		schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
+		if len(schema.Columns) == 0 {
+			return nil, moerr.NewInternalErrorf(
+				ctx,
+				"cannot resolve visible columns for table %d from checkpoint metadata; mo_columns data is unavailable or incomplete",
+				tableID,
+			)
 		}
 		tableSet[tableID] = struct{}{}
-		result[tableID] = &TableDumpData{TableID: tableID}
+		result[tableID] = &TableDumpData{
+			TableID: tableID,
+			Schema:  cloneTableSchema(schema),
+		}
 	}
 
 	entryRefs := make([]*EntryInfo, 0, len(composed.Incrementals)+1)
@@ -751,20 +766,20 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 	}
 
 	for tableID, data := range result {
-		if len(data.DataEntries) == 0 {
-			return nil, moerr.NewInternalErrorf(ctx, "no data entries for table %d", tableID)
+		if data.Schema == nil || len(data.Schema.Columns) == 0 {
+			return nil, moerr.NewInternalErrorf(ctx, "cannot resolve visible columns for table %d from checkpoint metadata", tableID)
 		}
-		schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
-		if len(schema.Columns) == 0 {
-			return nil, moerr.NewInternalErrorf(
-				ctx,
-				"cannot resolve visible columns for table %d from checkpoint metadata; mo_columns data is unavailable or incomplete",
-				tableID,
-			)
-		}
-		data.Schema = cloneTableSchema(schema)
 	}
 	return result, nil
+}
+
+func isTableDataUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "not found in checkpoint") ||
+		strings.Contains(msg, "no data entries for table")
 }
 
 // DumpPreparedTableCSV writes a table using metadata previously resolved by

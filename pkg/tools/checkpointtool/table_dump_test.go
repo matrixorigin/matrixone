@@ -63,6 +63,41 @@ func TestWriteCSV_empty(t *testing.T) {
 	assert.Equal(t, "id,name", lines[csvStart])
 }
 
+func TestDumpPreparedTableCSV_EmptyTableWritesHeader(t *testing.T) {
+	reader := &CheckpointReader{}
+	data := &TableDumpData{
+		TableID: 334019,
+		Schema: &TableSchema{
+			TableName:    "t_empty",
+			DatabaseName: "ckp_tables",
+			Columns: []TableColumn{
+				{Name: "id", SQLType: "INT", Position: 1, PhysicalPosition: 0},
+				{Name: "name", SQLType: "VARCHAR(64)", Position: 2, PhysicalPosition: 1},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := reader.DumpPreparedTableCSV(
+		context.Background(),
+		&buf,
+		data,
+		types.TS{},
+		WithCSVMetaComments(false),
+		WithCSVHeader(true),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "id,name\n", buf.String())
+}
+
+func TestIsTableDataUnavailable(t *testing.T) {
+	assert.False(t, isTableDataUnavailable(assert.AnError))
+	assert.False(t, isTableDataUnavailable(nil))
+	assert.True(t, isTableDataUnavailable(fmt.Errorf("internal error: table 334019 not found in checkpoint at ts 1-0")))
+	assert.True(t, isTableDataUnavailable(fmt.Errorf("internal error: no data entries for table 334019")))
+	assert.False(t, isTableDataUnavailable(fmt.Errorf("compose checkpoint failed")))
+}
+
 // TestWriteCSV_withData tests writing data rows to CSV.
 func TestWriteCSV_withData(t *testing.T) {
 	schema := &TableSchema{
