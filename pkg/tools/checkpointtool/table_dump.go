@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -2450,8 +2451,23 @@ func buildColumnsFromMoColumnsRows(view *LogicalTableView, tableID uint64) []Tab
 	hiddenCol := fallbackCatalogColIndex(view, moColumnsID, "att_is_hidden")
 	seqNumCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Seqnum)
 
+	ckpDebugSchemaf(
+		"mo_columns schema resolve start table=%d rows=%d headers=%d data_width=%d fallback_cols relname_id=%d name=%d typ=%d num=%d hidden=%d seqnum=%d",
+		tableID,
+		len(view.Rows),
+		len(view.Headers),
+		len(view.Headers)-logicalViewDataOffset(view),
+		relnameIDCol,
+		nameCol,
+		typCol,
+		numCol,
+		hiddenCol,
+		seqNumCol,
+	)
+
 	if relnameIDCol >= 0 && nameCol >= 0 && typCol >= 0 && numCol >= 0 {
 		if cols := buildColumnsFromMoColumnsRowsAt(view, tableID, relnameIDCol, nameCol, typCol, numCol, hiddenCol, seqNumCol); len(cols) > 0 {
+			ckpDebugSchemaf("mo_columns schema resolve success table=%d source=fallback cols=%d", tableID, len(cols))
 			return cols
 		}
 	}
@@ -2464,11 +2480,25 @@ func buildColumnsFromMoColumnsRows(view *LogicalTableView, tableID uint64) []Tab
 		numCol = catalogColIndexForLayout(match.layout, moColumnsID, "attnum", match.offset)
 		hiddenCol = catalogColIndexForLayout(match.layout, moColumnsID, "att_is_hidden", match.offset)
 		seqNumCol = catalogColIndexForLayout(match.layout, moColumnsID, catalog.SystemColAttr_Seqnum, match.offset)
+		ckpDebugSchemaf(
+			"mo_columns schema try table=%d layout=%s offset=%d relname_id=%d name=%d typ=%d num=%d hidden=%d seqnum=%d",
+			tableID,
+			match.layout.name,
+			match.offset,
+			relnameIDCol,
+			nameCol,
+			typCol,
+			numCol,
+			hiddenCol,
+			seqNumCol,
+		)
 		if cols := buildColumnsFromMoColumnsRowsAt(view, tableID, relnameIDCol, nameCol, typCol, numCol, hiddenCol, seqNumCol); len(cols) > 0 {
+			ckpDebugSchemaf("mo_columns schema resolve success table=%d source=%s offset=%d cols=%d", tableID, match.layout.name, match.offset, len(cols))
 			return cols
 		}
 	}
 
+	ckpDebugSchemaf("mo_columns schema resolve failed table=%d", tableID)
 	return nil
 }
 
@@ -2484,6 +2514,7 @@ func buildColumnsFromMoColumnsRowsAt(
 ) []TableColumn {
 	tableIDStr := fmt.Sprintf("%d", tableID)
 	var cols []TableColumn
+	matchedRows := 0
 	for _, fullRow := range view.Rows {
 		row := fullRow[logicalViewDataOffset(view):]
 
@@ -2501,6 +2532,7 @@ func buildColumnsFromMoColumnsRowsAt(
 		if row[relnameIDCol] != tableIDStr {
 			continue
 		}
+		matchedRows++
 
 		pos := len(cols)
 		if numCol >= 0 && numCol < len(row) {
@@ -2526,6 +2558,20 @@ func buildColumnsFromMoColumnsRowsAt(
 		if typCol >= 0 && typCol < len(row) {
 			sqlType, ok := decodeMoColumnSQLType(row[typCol])
 			if !ok {
+				ckpDebugSchemaf(
+					"mo_columns type decode failed table=%d matched_rows=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d seqnum_col=%d column=%q raw_len=%d raw_hex=%s",
+					tableID,
+					matchedRows,
+					relnameIDCol,
+					nameCol,
+					typCol,
+					numCol,
+					hiddenCol,
+					seqNumCol,
+					col.Name,
+					len(row[typCol]),
+					debugHexPrefix(row[typCol], 32),
+				)
 				return nil
 			}
 			col.SQLType = sqlType
@@ -2539,6 +2585,19 @@ func buildColumnsFromMoColumnsRowsAt(
 		return cols[i].Position < cols[j].Position
 	})
 
+	if matchedRows > 0 && len(cols) == 0 {
+		ckpDebugSchemaf(
+			"mo_columns matched rows but produced no visible columns table=%d matched_rows=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d seqnum_col=%d",
+			tableID,
+			matchedRows,
+			relnameIDCol,
+			nameCol,
+			typCol,
+			numCol,
+			hiddenCol,
+			seqNumCol,
+		)
+	}
 	return cols
 }
 
@@ -2913,6 +2972,18 @@ func buildCreateTableFromMoColumnsAt(
 		if typCol >= 0 && typCol < len(row) {
 			sqlType, ok := decodeMoColumnSQLType(row[typCol])
 			if !ok {
+				ckpDebugSchemaf(
+					"mo_columns ddl type decode failed table=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d column=%q raw_len=%d raw_hex=%s",
+					tableID,
+					relnameIDCol,
+					nameCol,
+					typCol,
+					numCol,
+					hiddenCol,
+					c.name,
+					len(row[typCol]),
+					debugHexPrefix(row[typCol], 32),
+				)
 				return ""
 			}
 			c.sqlType = sqlType
@@ -2988,6 +3059,20 @@ func decodeMoColumnSQLType(raw string) (string, bool) {
 		return raw, true
 	}
 	return "", false
+}
+
+func ckpDebugSchemaf(format string, args ...any) {
+	if os.Getenv("MO_TOOL_CKP_DEBUG_SCHEMA") == "" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "ckp schema debug: "+format+"\n", args...)
+}
+
+func debugHexPrefix(s string, limit int) string {
+	if limit > 0 && len(s) > limit {
+		s = s[:limit]
+	}
+	return hex.EncodeToString([]byte(s))
 }
 
 func isPrintableCreateTableSQL(ddl string) bool {
