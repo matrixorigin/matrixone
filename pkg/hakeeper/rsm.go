@@ -787,6 +787,12 @@ func (s *stateMachine) handleRepairLogShardUpdate(cmd []byte) sm.Result {
 	if repair.Shard.NonVotingReplicas == nil {
 		repair.Shard.NonVotingReplicas = make(map[uint64]string)
 	}
+	if repair.Shard.LeaderID == 0 {
+		repair.Shard.LeaderID = recorded.LeaderID
+	}
+	if repair.Shard.Term == 0 {
+		repair.Shard.Term = recorded.Term
+	}
 	s.state.LogState.Shards[shardID] = repair.Shard
 	if s.state.LogShardRepairs == nil {
 		s.state.LogShardRepairs = make(map[uint64]pb.LogShardRepairState)

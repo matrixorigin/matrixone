@@ -134,6 +134,12 @@ func handleLogShardRepair(
 			return Result{}, moerr.NewInvalidInput(proc.Ctx, "repair shardID is required")
 		}
 		result.Before = beforeState.LogState.Shards[repair.Shard.ShardID]
+		if repair.Shard.LeaderID == 0 {
+			repair.Shard.LeaderID = result.Before.LeaderID
+		}
+		if repair.Shard.Term == 0 {
+			repair.Shard.Term = result.Before.Term
+		}
 		result.After = repair.Shard
 		result.BlockedStores = sortedStrings(req.BlockedStores)
 		if !req.DryRun {

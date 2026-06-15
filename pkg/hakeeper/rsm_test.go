@@ -198,6 +198,39 @@ func TestHandleRepairLogShardUpdateBlocksHeartbeat(t *testing.T) {
 	assert.Equal(t, uint64(2), tsm.state.LogState.Stores["log3"].Replicas[0].ShardID)
 }
 
+func TestHandleRepairLogShardUpdatePreservesLeaderAndTerm(t *testing.T) {
+	tsm := NewStateMachine(0, 1).(*stateMachine)
+	tsm.state.ClusterInfo.LogShards = []metadata.LogShardRecord{
+		{ShardID: 1, NumberOfReplicas: 3},
+	}
+	tsm.state.LogState.Shards[1] = pb.LogShardInfo{
+		ShardID:  1,
+		Replicas: map[uint64]string{10: "log1", 20: "log2"},
+		Epoch:    5,
+		LeaderID: 10,
+		Term:     4,
+	}
+	for _, uuid := range []string{"log1", "log2", "log3"} {
+		tsm.state.LogState.Stores[uuid] = pb.LogStoreInfo{}
+	}
+	result, err := tsm.Update(sm.Entry{Cmd: GetRepairLogShardCmd(pb.RepairLogShard{
+		Shard: pb.LogShardInfo{
+			ShardID:           1,
+			Replicas:          map[uint64]string{10: "log1", 20: "log2", 30: "log3"},
+			NonVotingReplicas: map[uint64]string{},
+			Epoch:             5,
+		},
+		BlockedStores: []string{"log3"},
+	})})
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), result.Value)
+
+	repaired := tsm.state.LogState.Shards[1]
+	assert.Equal(t, uint64(10), repaired.LeaderID)
+	assert.Equal(t, uint64(4), repaired.Term)
+	assert.Equal(t, repaired, tsm.state.LogShardRepairs[1].Shard)
+}
+
 func TestHandleUnblockLogShardStoresUpdate(t *testing.T) {
 	tsm := NewStateMachine(0, 1).(*stateMachine)
 	tsm.state.LogShardRepairs[1] = pb.LogShardRepairState{
