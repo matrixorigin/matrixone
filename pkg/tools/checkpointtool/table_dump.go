@@ -130,6 +130,7 @@ type TableSchema struct {
 	CreateSQL    string        // raw CREATE TABLE from mo_tables.rel_createsql
 	Comment      string
 	UniqueKeys   []TableUniqueKey
+	PrimaryKey   []string
 	Partition    string
 }
 
@@ -420,16 +421,16 @@ func renderCreateTableDDL(tableName string, cols []TableColumn) string {
 }
 
 func renderCreateTableDDLWithComment(tableName string, cols []TableColumn, comment string, uniqueKeys ...TableUniqueKey) string {
-	return renderCreateTableDDLFull(tableName, cols, comment, "", uniqueKeys...)
+	return renderCreateTableDDLFull(tableName, cols, comment, "", nil, uniqueKeys...)
 }
 
-func renderCreateTableDDLFull(tableName string, cols []TableColumn, comment string, partition string, uniqueKeys ...TableUniqueKey) string {
+func renderCreateTableDDLFull(tableName string, cols []TableColumn, comment string, partition string, primaryKey []string, uniqueKeys ...TableUniqueKey) string {
 	if tableName == "" || len(cols) == 0 {
 		return ""
 	}
 
 	var sb strings.Builder
-	primaryCols := primaryKeyColumns(cols)
+	primaryCols := primaryKeyColumns(cols, primaryKey)
 	uniqueKeys = normalizedUniqueKeys(uniqueKeys)
 	sb.WriteString("CREATE TABLE ")
 	sb.WriteString(quoteDDLIdent(tableName))
@@ -550,16 +551,22 @@ func appendColumnDDLAttributes(sb *strings.Builder, col TableColumn) {
 	}
 }
 
-func primaryKeyColumns(cols []TableColumn) []TableColumn {
-	primary := make([]TableColumn, 0, 1)
-	for _, col := range cols {
-		if strings.EqualFold(col.ConstraintType, "p") {
-			primary = append(primary, col)
-		}
+func primaryKeyColumns(cols []TableColumn, primaryKey []string) []TableColumn {
+	if len(primaryKey) == 0 {
+		return nil
 	}
-	sort.Slice(primary, func(i, j int) bool {
-		return primary[i].Position < primary[j].Position
-	})
+	byName := make(map[string]TableColumn, len(cols))
+	for _, col := range cols {
+		byName[strings.ToLower(col.Name)] = col
+	}
+	primary := make([]TableColumn, 0, 1)
+	for i, name := range primaryKey {
+		col, ok := byName[strings.ToLower(name)]
+		if !ok {
+			col = TableColumn{Name: name, Position: i + 1}
+		}
+		primary = append(primary, col)
+	}
 	return primary
 }
 
@@ -651,7 +658,7 @@ func RenderCreateTableDDLFromSchema(schema *TableSchema) string {
 			return ""
 		}
 	}
-	return renderCreateTableDDLFull(schema.TableName, schema.Columns, schema.Comment, schema.Partition, schema.UniqueKeys...)
+	return renderCreateTableDDLFull(schema.TableName, schema.Columns, schema.Comment, schema.Partition, schema.PrimaryKey, schema.UniqueKeys...)
 }
 
 func inferBuiltinCatalogLayout(
@@ -1101,6 +1108,12 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 		CreateSQL:    strings.Clone(schema.CreateSQL),
 		Comment:      strings.Clone(schema.Comment),
 		Partition:    strings.Clone(schema.Partition),
+	}
+	if len(schema.PrimaryKey) > 0 {
+		clone.PrimaryKey = make([]string, len(schema.PrimaryKey))
+		for i, col := range schema.PrimaryKey {
+			clone.PrimaryKey[i] = strings.Clone(col)
+		}
 	}
 	if len(schema.Columns) > 0 {
 		clone.Columns = make([]TableColumn, len(schema.Columns))
@@ -2600,6 +2613,7 @@ func buildSchemaFromMoTablesRow(view *LogicalTableView, fullRow []string) *Table
 	constraintIdx := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint)
 	if constraintIdx >= 0 && constraintIdx < len(dataRow) {
 		schema.UniqueKeys = decodeUniqueKeysFromMoTablesConstraint(dataRow[constraintIdx])
+		schema.PrimaryKey = decodePrimaryKeyFromMoTablesConstraint(dataRow[constraintIdx])
 	}
 	return schema
 }
@@ -2677,21 +2691,42 @@ func findUniqueKeysFromMoTables(view *LogicalTableView, tableID uint64) []TableU
 	return nil
 }
 
+func findPrimaryKeyFromMoTables(view *LogicalTableView, tableID uint64) []string {
+	tableIDStr := fmt.Sprintf("%d", tableID)
+	relIDCol := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_ID)
+	constraintCol := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint)
+	if relIDCol < 0 || constraintCol < 0 {
+		return nil
+	}
+	for _, fullRow := range view.Rows {
+		row := fullRow[logicalViewDataOffset(view):]
+		if relIDCol >= len(row) || constraintCol >= len(row) {
+			continue
+		}
+		if row[relIDCol] == tableIDStr {
+			return decodePrimaryKeyFromMoTablesConstraint(row[constraintCol])
+		}
+	}
+	return nil
+}
+
 func createTableDDLFromCatalogViews(tableID uint64, moTablesView, moColumnsView *LogicalTableView, partitionMetadataView ...*LogicalTableView) string {
 	tableName := ""
 	tableComment := ""
 	uniqueKeys := []TableUniqueKey(nil)
+	primaryKey := []string(nil)
 	partition := ""
 	if moTablesView != nil {
 		tableName = findTableNameFromMoTables(moTablesView, tableID)
 		tableComment = findTableCommentFromMoTables(moTablesView, tableID)
 		uniqueKeys = findUniqueKeysFromMoTables(moTablesView, tableID)
+		primaryKey = findPrimaryKeyFromMoTables(moTablesView, tableID)
 	}
 	if len(partitionMetadataView) > 0 && partitionMetadataView[0] != nil {
 		partition = buildPartitionClauseFromMetadata(partitionMetadataView[0], tableID)
 	}
 	if moColumnsView != nil {
-		if ddl := buildCreateTableFromMoColumnsWithOptions(moColumnsView, tableID, tableName, tableComment, partition, uniqueKeys); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsWithOptions(moColumnsView, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys); ddl != "" {
 			return ddl
 		}
 	}
@@ -3504,6 +3539,50 @@ func decodeUniqueKeysFromMoTablesConstraint(raw string) (keys []TableUniqueKey) 
 	return keys
 }
 
+func decodePrimaryKeyFromMoTablesConstraint(raw string) (cols []string) {
+	if raw == "" {
+		return nil
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			ckpDebugSchemaf("mo_tables primary key decode panic len=%d hex=%s panic=%v", len(raw), debugHexPrefix(raw, 64), r)
+			cols = nil
+		}
+	}()
+	c := &engine.ConstraintDef{}
+	if err := c.UnmarshalBinary([]byte(raw)); err != nil {
+		ckpDebugSchemaf("mo_tables primary key decode failed len=%d hex=%s err=%v", len(raw), debugHexPrefix(raw, 64), err)
+		return nil
+	}
+	for _, ct := range c.Cts {
+		pkDef, ok := ct.(*engine.PrimaryKeyDef)
+		if !ok || pkDef == nil || pkDef.Pkey == nil {
+			continue
+		}
+		pk := pkDef.Pkey
+		if catalog.IsFakePkName(pk.PkeyColName) {
+			continue
+		}
+		for _, name := range pk.Names {
+			name = strings.TrimSpace(name)
+			if name != "" && !catalog.IsAlias(name) && !catalog.IsFakePkName(name) && name != catalog.CPrimaryKeyColName {
+				cols = append(cols, name)
+			}
+		}
+		if len(cols) == 0 {
+			name := strings.TrimSpace(pk.PkeyColName)
+			if name != "" && !catalog.IsAlias(name) && !catalog.IsFakePkName(name) && name != catalog.CPrimaryKeyColName {
+				cols = append(cols, name)
+			}
+		}
+		if len(cols) > 0 {
+			ckpDebugSchemaf("mo_tables primary key decoded cols=%v", cols)
+			return cols
+		}
+	}
+	return nil
+}
+
 func quoteDDLIdent(s string) string {
 	return "`" + strings.ReplaceAll(s, "`", "``") + "`"
 }
@@ -3536,7 +3615,7 @@ func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64, table
 	if len(tableNames) > 1 && tableNames[1] != "" {
 		tableComment = tableNames[1]
 	}
-	return buildCreateTableFromMoColumnsWithOptions(view, tableID, tableName, tableComment, "", nil)
+	return buildCreateTableFromMoColumnsWithOptions(view, tableID, tableName, tableComment, "", nil, nil)
 }
 
 func buildCreateTableFromMoColumnsWithOptions(
@@ -3545,6 +3624,7 @@ func buildCreateTableFromMoColumnsWithOptions(
 	tableName string,
 	tableComment string,
 	partition string,
+	primaryKey []string,
 	uniqueKeys []TableUniqueKey,
 ) string {
 	relnameIDCol := fallbackCatalogColIndex(view, moColumnsID, "att_relname_id")
@@ -3554,7 +3634,7 @@ func buildCreateTableFromMoColumnsWithOptions(
 	hiddenCol := fallbackCatalogColIndex(view, moColumnsID, "att_is_hidden")
 
 	if relnameIDCol >= 0 && nameCol >= 0 && typCol >= 0 && numCol >= 0 {
-		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, partition, uniqueKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
 			return ddl
 		}
 	}
@@ -3566,7 +3646,7 @@ func buildCreateTableFromMoColumnsWithOptions(
 		typCol = catalogColIndexForLayout(match.layout, moColumnsID, "atttyp", match.offset)
 		numCol = catalogColIndexForLayout(match.layout, moColumnsID, "attnum", match.offset)
 		hiddenCol = catalogColIndexForLayout(match.layout, moColumnsID, "att_is_hidden", match.offset)
-		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, partition, uniqueKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
 			return ddl
 		}
 	}
@@ -3580,6 +3660,7 @@ func buildCreateTableFromMoColumnsAt(
 	tableName string,
 	tableComment string,
 	partition string,
+	primaryKey []string,
 	uniqueKeys []TableUniqueKey,
 	relnameIDCol int,
 	nameCol int,
@@ -3592,7 +3673,7 @@ func buildCreateTableFromMoColumnsAt(
 	if len(cols) == 0 {
 		return ""
 	}
-	return renderCreateTableDDLFull(tableName, cols, tableComment, partition, uniqueKeys...)
+	return renderCreateTableDDLFull(tableName, cols, tableComment, partition, primaryKey, uniqueKeys...)
 }
 
 func isPrintableSQLType(sqlType string) bool {

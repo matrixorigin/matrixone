@@ -46,18 +46,35 @@ func encodedDefault(t *testing.T, origin string, nullable bool) string {
 	return string(data)
 }
 
-func encodedIndexConstraint(t *testing.T, indexes ...*plan.IndexDef) string {
+func encodedConstraint(t *testing.T, constraints ...engine.Constraint) string {
 	t.Helper()
 	def := &engine.ConstraintDef{
-		Cts: []engine.Constraint{
-			&engine.IndexDef{
-				Indexes: indexes,
-			},
-		},
+		Cts: constraints,
 	}
 	data, err := def.MarshalBinary()
 	require.NoError(t, err)
 	return string(data)
+}
+
+func encodedIndexConstraint(t *testing.T, indexes ...*plan.IndexDef) string {
+	t.Helper()
+	return encodedConstraint(t, &engine.IndexDef{Indexes: indexes})
+}
+
+func encodedPrimaryKeyConstraint(t *testing.T, names ...string) engine.Constraint {
+	t.Helper()
+	pkeyColName := ""
+	if len(names) == 1 {
+		pkeyColName = names[0]
+	} else if len(names) > 1 {
+		pkeyColName = catalog.CPrimaryKeyColName
+	}
+	return &engine.PrimaryKeyDef{
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: pkeyColName,
+			Names:       names,
+		},
+	}
 }
 
 // TestWriteCSV_empty tests writing an empty logical view to CSV.
@@ -522,10 +539,13 @@ func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *test
 			{
 				"obj1", "0", "0",
 				"333999", "parent", "ckp_constraints", "333997",
-				"", "r", "parent table comment", "CREATE TABLE `ckp_constraints`.`parent` (`old` INT)", encodedIndexConstraint(
+				"", "r", "parent table comment", "CREATE TABLE `ckp_constraints`.`parent` (`old` INT)", encodedConstraint(
 					t,
-					&plan.IndexDef{IndexName: "code", Parts: []string{"code"}, Unique: true},
-					&plan.IndexDef{IndexName: "idx_parent_note", Parts: []string{"note"}},
+					encodedPrimaryKeyConstraint(t, "id"),
+					&engine.IndexDef{Indexes: []*plan.IndexDef{
+						{IndexName: "code", Parts: []string{"code"}, Unique: true},
+						{IndexName: "idx_parent_note", Parts: []string{"note"}},
+					}},
 				),
 			},
 		},
@@ -589,6 +609,61 @@ func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *test
 	assert.Contains(t, ddl, "COMMENT='parent table comment'")
 	assert.Contains(t, ddl, "partition by key algorithm = 2 (`id`, `tenant_id`) partitions 4")
 	assert.NotContains(t, ddl, "`old`")
+}
+
+func TestCreateTableDDLFromCatalogViews_IgnoresMoColumnsPrimaryWithoutConstraint(t *testing.T) {
+	moTablesView := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"rel_id", "relname", "reldatabase", "reldatabase_id",
+			"relpersistence", "relkind", "rel_comment", "rel_createsql", "constraint",
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"334100", "t_int_signed", "ckp_types", "334099",
+				"", "r", "", "", "",
+			},
+		},
+	}
+
+	headers := append([]string{"object", "block", "row"}, catalog.MoColumnsSchema...)
+	row := func(name, typ, attnum, notNull, constraintType, seqnum string) []string {
+		data := make([]string, len(catalog.MoColumnsSchema))
+		set := func(colName, value string) {
+			for i, header := range catalog.MoColumnsSchema {
+				if header == colName {
+					data[i] = value
+					return
+				}
+			}
+			t.Fatalf("missing mo_columns header %s", colName)
+		}
+		set(catalog.SystemColAttr_RelID, "334100")
+		set(catalog.SystemColAttr_RelName, "t_int_signed")
+		set(catalog.SystemColAttr_Name, name)
+		set(catalog.SystemColAttr_Type, typ)
+		set(catalog.SystemColAttr_Num, attnum)
+		set(catalog.SystemColAttr_NullAbility, notNull)
+		set(catalog.SystemColAttr_ConstraintType, constraintType)
+		set(catalog.SystemColAttr_IsHidden, "0")
+		set(catalog.SystemColAttr_Seqnum, seqnum)
+		return append([]string{"obj1", "0", attnum}, data...)
+	}
+	moColumnsView := &LogicalTableView{
+		Headers: headers,
+		Rows: [][]string{
+			row("id", encodedSQLType(t, types.T_int32.ToType()), "1", "1", "p", "0"),
+			row("c_tiny", encodedSQLType(t, types.T_int8.ToType()), "2", "0", "", "1"),
+			row("c_small", encodedSQLType(t, types.T_int16.ToType()), "3", "0", "", "2"),
+			row("c_int", encodedSQLType(t, types.T_int32.ToType()), "4", "0", "", "3"),
+			row("c_big", encodedSQLType(t, types.T_int64.ToType()), "5", "0", "", "4"),
+		},
+	}
+
+	ddl := createTableDDLFromCatalogViews(334100, moTablesView, moColumnsView)
+	assert.Contains(t, ddl, "`id` INT NOT NULL")
+	assert.NotContains(t, ddl, "PRIMARY KEY")
 }
 
 func TestRenderCreateTableDDLFromSchema_PrefersColumnsOverCreateSQL(t *testing.T) {
