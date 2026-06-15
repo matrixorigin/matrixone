@@ -1001,6 +1001,40 @@ func (l *store) updateNonVotingLocality(ctx context.Context, locality pb.Localit
 	return nil
 }
 
+func (l *store) repairLogShard(ctx context.Context, repair pb.RepairLogShard) error {
+	cmd := hakeeper.GetRepairLogShardCmd(repair)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		l.runtime.Logger().Error("failed to propose repair log shard",
+			zap.Uint64("shard ID", repair.Shard.ShardID),
+			zap.Any("blocked stores", repair.BlockedStores),
+			zap.Error(err))
+		return handleNotHAKeeperError(ctx, err)
+	}
+	if result.Value != 0 {
+		return moerr.NewInternalError(ctx, string(result.Data))
+	}
+	return nil
+}
+
+func (l *store) unblockLogShardStores(ctx context.Context, unblock pb.UnblockLogShardStores) error {
+	cmd := hakeeper.GetUnblockLogShardStoresCmd(unblock)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		l.runtime.Logger().Error("failed to propose unblock log shard stores",
+			zap.Uint64("shard ID", unblock.ShardID),
+			zap.Strings("stores", unblock.Stores),
+			zap.Error(err))
+		return handleNotHAKeeperError(ctx, err)
+	}
+	if result.Value != 0 {
+		return moerr.NewInternalError(ctx, string(result.Data))
+	}
+	return nil
+}
+
 func (l *store) getLatestLsn(ctx context.Context, shardID uint64) (uint64, error) {
 	v, err := l.read(ctx, shardID, indexQuery{})
 	if err != nil {

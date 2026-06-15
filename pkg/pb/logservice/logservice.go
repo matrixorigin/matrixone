@@ -103,6 +103,7 @@ func NewRSMState() HAKeeperRSMState {
 		LogState:         NewLogState(),
 		ProxyState:       NewProxyState(),
 		ClusterInfo:      newClusterInfo(),
+		LogShardRepairs:  make(map[uint64]LogShardRepairState),
 	}
 }
 

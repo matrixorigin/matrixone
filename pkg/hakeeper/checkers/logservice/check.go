@@ -35,6 +35,7 @@ type logServiceChecker struct {
 	executingNonVoting  operator.ExecutingReplicas
 	nonVotingReplicaNum uint64
 	nonVotingLocality   pb.Locality
+	repairs             map[uint64]pb.LogShardRepairState
 	workingStores       map[string]pb.Locality
 	expiredStores       []string
 	standbyEnabled      bool
@@ -48,6 +49,7 @@ func NewLogServiceChecker(
 	executingNonVoting operator.ExecutingReplicas,
 	nonVotingReplicaNum uint64,
 	nonVotingLocality pb.Locality,
+	repairs map[uint64]pb.LogShardRepairState,
 	standbyEnabled bool,
 ) hakeeper.ModuleChecker {
 	working, expired := parseLogStores(commonFields.Cfg, logState, commonFields.CurrentTick)
@@ -64,6 +66,7 @@ func NewLogServiceChecker(
 		executingNonVoting:  executingNonVoting,
 		nonVotingReplicaNum: nonVotingReplicaNum,
 		nonVotingLocality:   nonVotingLocality,
+		repairs:             repairs,
 		workingStores:       working,
 		expiredStores:       expired,
 		standbyEnabled:      standbyEnabled,
@@ -127,6 +130,7 @@ func (cb *checkToBootstrap) check() []*operator.Operator {
 
 		initialMembers := make(map[uint64]string)
 		working := deepcopy.Copy(cb.lc.workingStores).(map[string]pb.Locality)
+		working = filterBlockedWorkingStores(working, cb.lc.repairs, shardID)
 		var ordered []struct {
 			store     string
 			replicaID uint64
@@ -224,10 +228,11 @@ func (ca *checkToAdd) check() []*operator.Operator {
 			}
 
 			working := deepcopy.Copy(ca.lc.workingStores).(map[string]pb.Locality)
+			working = filterBlockedWorkingStores(working, ca.lc.repairs, shardID)
 			for replicasToAdd > uint32(len(adding[shardID])) {
 				bestStore := selectStore(
 					ca.lc.logState.Shards[shardID],
-					ca.lc.workingStores,
+					working,
 					locality,
 				)
 				if bestStore == "" {
@@ -461,6 +466,7 @@ func (c *logServiceChecker) Check() (operators []*operator.Operator) {
 		c.logState,
 		c.expiredStores,
 		c.nonVotingReplicaNum,
+		c.repairs,
 	)
 	commonChecker := checker{
 		lc: c,

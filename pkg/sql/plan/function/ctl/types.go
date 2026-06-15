@@ -61,6 +61,7 @@ var (
 	TableExtra               = strings.ToUpper("table-extra")
 	PrefetchOnSubscribed     = strings.ToUpper("prefetch-on-subscribed")
 	GCCatalogCacheMethod     = strings.ToUpper("GCCatalogCache")
+	LogShardRepairMethod     = strings.ToUpper("LogShardRepair")
 )
 
 var (
@@ -106,6 +107,7 @@ var (
 		TableExtra:               handleTableExtra,
 		PrefetchOnSubscribed:     handlePrefetchOnSubscribed,
 		GCCatalogCacheMethod:     handleGCCatalogCache,
+		LogShardRepairMethod:     handleLogShardRepair,
 	}
 )
 

@@ -203,6 +203,61 @@ func TestFixedLogShardInfo(t *testing.T) {
 	}
 }
 
+func TestParseLogShardsSkipsBlockedStores(t *testing.T) {
+	cluster := pb.ClusterInfo{
+		LogShards: []metadata.LogShardRecord{{
+			ShardID:          1,
+			NumberOfReplicas: 1,
+		}},
+	}
+	shard := pb.LogShardInfo{
+		ShardID:  1,
+		Replicas: map[uint64]string{1: "a", 2: "b"},
+		Epoch:    10,
+		LeaderID: 1,
+	}
+	infos := pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{1: shard},
+		Stores: map[string]pb.LogStoreInfo{
+			"a": {
+				Tick:     1,
+				Replicas: []pb.LogReplicaInfo{},
+			},
+			"b": {
+				Tick: 1,
+				Replicas: []pb.LogReplicaInfo{{
+					LogShardInfo: shard,
+					ReplicaID:    2,
+				}},
+			},
+			"c": {
+				Tick: 1,
+				Replicas: []pb.LogReplicaInfo{{
+					LogShardInfo: pb.LogShardInfo{
+						ShardID:  1,
+						Replicas: map[uint64]string{1: "a", 3: "c"},
+						Epoch:    9,
+					},
+					ReplicaID: 3,
+				}},
+			},
+		},
+	}
+
+	normal, _ := parseLogShards(cluster, infos, nil, 0, nil)
+	assert.Equal(t, []replica{{uuid: "a", shardID: 1, replicaID: 1}}, normal.toStart)
+	assert.Equal(t, []replica{{uuid: "b", shardID: 1, replicaID: 2}}, normal.toRemove[1])
+	assert.Equal(t, []replica{{uuid: "c", shardID: 1, replicaID: 3}}, normal.zombies)
+
+	repairs := map[uint64]pb.LogShardRepairState{
+		1: {BlockedStores: map[string]bool{"a": true, "b": true, "c": true}},
+	}
+	normal, _ = parseLogShards(cluster, infos, nil, 0, repairs)
+	assert.Empty(t, normal.toStart)
+	assert.Empty(t, normal.toRemove)
+	assert.Empty(t, normal.zombies)
+}
+
 func TestCollectStats(t *testing.T) {
 	cases := []struct {
 		desc              string
@@ -1038,7 +1093,7 @@ func TestCollectStats(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		normal, nonVoting := parseLogShards(c.cluster, c.infos, c.expired, c.nonVotingReplicaNum)
+		normal, nonVoting := parseLogShards(c.cluster, c.infos, c.expired, c.nonVotingReplicaNum, nil)
 		assert.Equal(t, c.expectedNormal, normal)
 		assert.Equal(t, c.expectedNonVoting, nonVoting)
 	}

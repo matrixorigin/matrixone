@@ -143,10 +143,17 @@ func fixedLogShardInfo(
 		fixedLogShardInfoNonVoting(nonVotingReplicaNum, info, expiredStores)
 }
 
-func getReplicasToRemove(shardID uint64, current, left map[uint64]string) []replica {
+func getReplicasToRemove(
+	shardID uint64,
+	current, left map[uint64]string,
+	repairs map[uint64]pb.LogShardRepairState,
+) []replica {
 	toRemove := make([]replica, 0, len(current)-len(left))
 	for id, uuid := range current {
 		if _, ok := left[id]; ok {
+			continue
+		}
+		if isBlockedLogShardStore(repairs, uuid, shardID) {
 			continue
 		}
 		rep := replica{
@@ -160,10 +167,16 @@ func getReplicasToRemove(shardID uint64, current, left map[uint64]string) []repl
 }
 
 func getReplicasToStart(
-	shardID uint64, replicas map[uint64]string, stores map[string]pb.LogStoreInfo,
+	shardID uint64,
+	replicas map[uint64]string,
+	stores map[string]pb.LogStoreInfo,
+	repairs map[uint64]pb.LogShardRepairState,
 ) []replica {
 	toStart := make([]replica, 0)
 	for id, uuid := range replicas {
+		if isBlockedLogShardStore(repairs, uuid, shardID) {
+			continue
+		}
 		store := stores[uuid]
 		if !replicaStarted(shardID, store.Replicas) {
 			rep := replica{
@@ -181,7 +194,11 @@ func getReplicasToStart(
 // It returns two stats, the first is the stats for normal replicas
 // and the second one is for the non-voting replicas.
 func parseLogShards(
-	cluster pb.ClusterInfo, infos pb.LogState, expired []string, nonVotingReplicaNum uint64,
+	cluster pb.ClusterInfo,
+	infos pb.LogState,
+	expired []string,
+	nonVotingReplicaNum uint64,
+	repairs map[uint64]pb.LogShardRepairState,
 ) (*stats, *stats) {
 	normalStats, nonVotingStats := newStats(false), newStats(true)
 	for _, shardInfo := range infos.Shards {
@@ -190,12 +207,22 @@ func parseLogShards(
 		fixingNormal, fixingNonVoting := fixedLogShardInfo(record, nonVotingReplicaNum, shardInfo, expired)
 
 		// cal the toRemove field.
-		toRemoveNormal := getReplicasToRemove(shardID, shardInfo.Replicas, fixingNormal.replicas)
-		toRemoveNonVoting := getReplicasToRemove(shardID, shardInfo.NonVotingReplicas, fixingNonVoting.replicas)
+		toRemoveNormal := getReplicasToRemove(shardID, shardInfo.Replicas, fixingNormal.replicas, repairs)
+		toRemoveNonVoting := getReplicasToRemove(
+			shardID,
+			shardInfo.NonVotingReplicas,
+			fixingNonVoting.replicas,
+			repairs,
+		)
 
 		// cal the toStart field.
-		toStartNormal := getReplicasToStart(shardID, shardInfo.Replicas, infos.Stores)
-		toStartNonVoting := getReplicasToStart(shardID, shardInfo.NonVotingReplicas, infos.Stores)
+		toStartNormal := getReplicasToStart(shardID, shardInfo.Replicas, infos.Stores, repairs)
+		toStartNonVoting := getReplicasToStart(
+			shardID,
+			shardInfo.NonVotingReplicas,
+			infos.Stores,
+			repairs,
+		)
 
 		if fixingNormal.toAdd > 0 {
 			normalStats.toAdd[shardID] = fixingNormal.toAdd
@@ -219,6 +246,9 @@ func parseLogShards(
 		}
 		zombie := make([]replica, 0)
 		for _, replicaInfo := range storeInfo.Replicas {
+			if isBlockedLogShardStore(repairs, uuid, replicaInfo.ShardID) {
+				continue
+			}
 			_, ok := infos.Shards[replicaInfo.ShardID].Replicas[replicaInfo.ReplicaID]
 			if ok || replicaInfo.Epoch >= infos.Shards[replicaInfo.ShardID].Epoch {
 				continue

@@ -360,6 +360,10 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleCheckHealth(ctx, req), pb.LogRecordResponse{}
 	case pb.READ_LSN:
 		return s.handleReadLsn(ctx, req)
+	case pb.REPAIR_LOG_SHARD:
+		return s.handleRepairLogShard(ctx, req), pb.LogRecordResponse{}
+	case pb.UNBLOCK_LOG_SHARD_STORES:
+		return s.handleUnblockLogShardStores(ctx, req), pb.LogRecordResponse{}
 	default:
 		resp := getResponse(req)
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
@@ -644,6 +648,32 @@ func (s *Service) handleUpdateNonVotingReplicaNum(ctx context.Context, req pb.Re
 func (s *Service) handleUpdateNonVotingLocality(ctx context.Context, req pb.Request) pb.Response {
 	resp := getResponse(req)
 	if err := s.store.updateNonVotingLocality(ctx, *req.NonVotingLocality); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	return resp
+}
+
+func (s *Service) handleRepairLogShard(ctx context.Context, req pb.Request) pb.Response {
+	resp := getResponse(req)
+	if req.RepairLogShard == nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(moerr.NewInvalidInput(ctx, "nil repair log shard request"))
+		return resp
+	}
+	if err := s.store.repairLogShard(ctx, *req.RepairLogShard); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	return resp
+}
+
+func (s *Service) handleUnblockLogShardStores(ctx context.Context, req pb.Request) pb.Response {
+	resp := getResponse(req)
+	if req.UnblockLogShardStores == nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(moerr.NewInvalidInput(ctx, "nil unblock log shard stores request"))
+		return resp
+	}
+	if err := s.store.unblockLogShardStores(ctx, *req.UnblockLogShardStores); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	}

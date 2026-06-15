@@ -248,6 +248,8 @@ enum MethodType {
   CHECK_HEALTH = 26;
   READ_LSN = 27;
   UPDATE_LEASEHOLDER_ID = 28;
+  REPAIR_LOG_SHARD = 29;
+  UNBLOCK_LOG_SHARD_STORES = 30;
 };
 
 enum RecordType {
@@ -327,6 +329,8 @@ message Request {
   uint64 NonVotingReplicaNum     = 14;
   Locality NonVotingLocality     = 15;
   CheckHealth CheckHealth        = 16;
+  RepairLogShard RepairLogShard  = 17;
+  UnblockLogShardStores UnblockLogShardStores = 18;
 };
 
 message LogResponse {
@@ -386,6 +390,8 @@ enum HAKeeperUpdateType {
   UpdateNonVotingReplicaNum = 15;
   UpdateNonVotingLocality = 16;
   LogShardUpdate = 17;
+  RepairLogShardUpdate = 18;
+  UnblockLogShardStoresUpdate = 19;
 }
 
 // HAKeeperState state transition diagram
@@ -650,6 +656,27 @@ message LogStoreInfo {
   Locality Locality = 8 [(gogoproto.nullable) = false];
 }
 
+message RepairLogShard {
+  LogShardInfo Shard = 1 [(gogoproto.nullable) = false];
+  repeated string BlockedStores = 2;
+  string Reason = 3;
+  bool Force = 4;
+}
+
+message UnblockLogShardStores {
+  uint64 ShardID = 1;
+  repeated string Stores = 2;
+  string Reason = 3;
+}
+
+message LogShardRepairState {
+  LogShardInfo Shard = 1 [(gogoproto.nullable) = false];
+  map<string, bool> BlockedStores = 2 [(gogoproto.nullable) = false];
+  string Reason = 3;
+  uint64 CreatedTick = 4;
+  uint64 UpdatedTick = 5;
+}
+
 message LogState {
   // Shards is keyed by ShardID, it contains details aggregated from all Log
   // stores. Each pb.LogShardInfo here contains data aggregated from
@@ -679,6 +706,7 @@ message CheckerState {
   Resource Resource = 12 [(gogoproto.nullable) = false];
   uint64 NonVotingReplicaNum = 13;
   Locality NonVotingLocality = 14 [(gogoproto.nullable) = false];
+  map<uint64, LogShardRepairState> LogShardRepairs = 15 [(gogoproto.nullable) = false];
 }
 
 message DeletedStore {
@@ -721,6 +749,7 @@ message HAKeeperRSMState {
   // If it is set, that is strongly recommended, the non-voting replicas will
   // be scheduled to the stores which has such localities.
   Locality NonVotingLocality = 18 [(gogoproto.nullable) = false];
+  map<uint64, LogShardRepairState> LogShardRepairs = 19 [(gogoproto.nullable) = false];
 }
 
 // ReplicaInfo contains details of a replica
