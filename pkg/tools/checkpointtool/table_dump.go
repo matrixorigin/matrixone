@@ -2263,6 +2263,59 @@ func findCreateSQLFromMoTables(view *LogicalTableView, tableID uint64) string {
 	return ""
 }
 
+func findTableNameFromMoTables(view *LogicalTableView, tableID uint64) string {
+	tableIDStr := fmt.Sprintf("%d", tableID)
+	try := func(relIDCol, relNameCol int) string {
+		if relIDCol < 0 || relNameCol < 0 {
+			return ""
+		}
+		for _, fullRow := range view.Rows {
+			row := fullRow[logicalViewDataOffset(view):]
+			if relIDCol >= len(row) || relNameCol >= len(row) {
+				continue
+			}
+			if row[relIDCol] == tableIDStr && row[relNameCol] != "" {
+				return strings.Clone(row[relNameCol])
+			}
+		}
+		return ""
+	}
+
+	relIDCol := fallbackCatalogColIndex(view, moTablesID, "rel_id")
+	relNameCol := fallbackCatalogColIndex(view, moTablesID, "relname")
+	if name := try(relIDCol, relNameCol); name != "" {
+		return name
+	}
+
+	dataWidth := len(view.Headers) - logicalViewDataOffset(view)
+	for _, match := range catalogLayoutMatches(dataWidth, moTablesID) {
+		relIDCol = catalogColIndexForLayout(match.layout, moTablesID, "rel_id", match.offset)
+		relNameCol = catalogColIndexForLayout(match.layout, moTablesID, "relname", match.offset)
+		if name := try(relIDCol, relNameCol); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+func createTableDDLFromCatalogViews(tableID uint64, moTablesView, moColumnsView *LogicalTableView) string {
+	tableName := ""
+	if moTablesView != nil {
+		tableName = findTableNameFromMoTables(moTablesView, tableID)
+	}
+	if moColumnsView != nil {
+		if ddl := buildCreateTableFromMoColumns(moColumnsView, tableID, tableName); ddl != "" {
+			return ddl
+		}
+	}
+	if moTablesView != nil {
+		if ddl := findCreateSQLFromMoTables(moTablesView, tableID); ddl != "" {
+			return ddl
+		}
+	}
+	return ""
+}
+
 func buildCatalogTablesFromMoTablesRows(view *LogicalTableView) []TableCatalogEntry {
 	seen := make(map[uint64]struct{})
 	merged := make([]TableCatalogEntry, 0)
@@ -2496,9 +2549,12 @@ func buildColumnsFromMoColumnsRowsAt(
 // the checkpoint's mo_tables and mo_columns system tables (GCKP + following ICKPs).
 //
 // Priority:
-//  1. mo_tables.rel_createsql — the original CREATE TABLE SQL (most accurate)
-//  2. Reconstructed from mo_columns (attname, atttyp, attnum, att_is_hidden)
+//  1. Reconstructed from mo_columns (attname, atttyp, attnum, att_is_hidden)
+//  2. mo_tables.rel_createsql — fallback when mo_columns metadata is unavailable
 //  3. Hardcoded built-in table schemas (for core system tables like mo_tables, mo_columns, etc.)
+//
+// ALTER TABLE updates mo_columns but does not rewrite mo_tables.rel_createsql, so
+// mo_columns is the authoritative source for the current visible column set.
 //
 // NOTE:
 // We intentionally do not synthesize a CREATE TABLE from raw physical object column
@@ -2510,20 +2566,21 @@ func (r *CheckpointReader) ShowCreateTable(
 	tableID uint64,
 	snapshotTS types.TS,
 ) (string, error) {
-	// 1. Try mo_tables.rel_createsql
+	// Read mo_tables first so the mo_columns path can still render the table name
+	// while taking the current column set from mo_columns.
 	moTablesView, err := r.getTableLogicalView(ctx, moTablesID, snapshotTS)
-	if err == nil && moTablesView != nil {
-		if ddl := findCreateSQLFromMoTables(moTablesView, tableID); ddl != "" {
-			return ddl, nil
-		}
+	if err != nil {
+		moTablesView = nil
 	}
 
-	// 2. Reconstruct from mo_columns
+	// 1. Reconstruct from mo_columns.
 	moColumnsView, err := r.getTableLogicalView(ctx, moColumnsID, snapshotTS)
-	if err == nil && moColumnsView != nil {
-		if ddl := buildCreateTableFromMoColumns(moColumnsView, tableID); ddl != "" {
-			return ddl, nil
-		}
+	if err != nil {
+		moColumnsView = nil
+	}
+
+	if ddl := createTableDDLFromCatalogViews(tableID, moTablesView, moColumnsView); ddl != "" {
+		return ddl, nil
 	}
 
 	// 3. Hardcoded built-in table schemas
@@ -2785,7 +2842,12 @@ func getTableName(view *LogicalTableView, tableID uint64) string {
 }
 
 // buildCreateTableFromMoColumns reconstructs a CREATE TABLE DDL from mo_columns data.
-func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64) string {
+func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64, tableNames ...string) string {
+	tableName := fmt.Sprintf("%d", tableID)
+	if len(tableNames) > 0 && tableNames[0] != "" {
+		tableName = tableNames[0]
+	}
+
 	relnameIDCol := fallbackCatalogColIndex(view, moColumnsID, "att_relname_id")
 	nameCol := fallbackCatalogColIndex(view, moColumnsID, "attname")
 	typCol := fallbackCatalogColIndex(view, moColumnsID, "atttyp")
@@ -2793,7 +2855,7 @@ func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64) strin
 	hiddenCol := fallbackCatalogColIndex(view, moColumnsID, "att_is_hidden")
 
 	if relnameIDCol >= 0 && nameCol >= 0 && typCol >= 0 && numCol >= 0 {
-		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
 			return ddl
 		}
 	}
@@ -2805,7 +2867,7 @@ func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64) strin
 		typCol = catalogColIndexForLayout(match.layout, moColumnsID, "atttyp", match.offset)
 		numCol = catalogColIndexForLayout(match.layout, moColumnsID, "attnum", match.offset)
 		hiddenCol = catalogColIndexForLayout(match.layout, moColumnsID, "att_is_hidden", match.offset)
-		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
 			return ddl
 		}
 	}
@@ -2816,6 +2878,7 @@ func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64) strin
 func buildCreateTableFromMoColumnsAt(
 	view *LogicalTableView,
 	tableID uint64,
+	tableName string,
 	relnameIDCol int,
 	nameCol int,
 	typCol int,
@@ -2864,16 +2927,16 @@ func buildCreateTableFromMoColumnsAt(
 
 	var sb strings.Builder
 	sb.WriteString("CREATE TABLE ")
-	sb.WriteString(fmt.Sprintf("`%d`", tableID))
+	sb.WriteString(quoteDDLIdent(tableName))
 	sb.WriteString(" (\n")
 	for i, c := range cols {
-		sb.WriteString("  `")
 		if c.name != "" {
-			sb.WriteString(c.name)
+			sb.WriteString("  ")
+			sb.WriteString(quoteDDLIdent(c.name))
 		} else {
-			sb.WriteString(fmt.Sprintf("col_%d", i))
+			sb.WriteString("  ")
+			sb.WriteString(quoteDDLIdent(fmt.Sprintf("col_%d", i)))
 		}
-		sb.WriteString("`")
 		if c.sqlType != "" {
 			sb.WriteString(" ")
 			sb.WriteString(c.sqlType)

@@ -389,6 +389,55 @@ func TestFindCreateSQLFromMoTables_GenericWithTrailingColumns(t *testing.T) {
 	assert.Equal(t, "CREATE TABLE employees (id INT)", findCreateSQLFromMoTables(view, 12345))
 }
 
+func TestCreateTableDDLFromCatalogViews_PrefersMoColumnsOverStaleCreateSQL(t *testing.T) {
+	moTablesView := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"rel_id", "relname", "reldatabase", "reldatabase_id",
+			"col_4", "col_5", "col_6", "rel_createsql",
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"12345", "t", "db", "100",
+				"", "", "", "CREATE TABLE t (a INT, b VARCHAR(100))",
+			},
+		},
+	}
+	moColumnsView := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "att_relname_id", "attname", "atttyp", "attnum", "att_is_hidden"},
+		Rows: [][]string{
+			{"obj1", "0", "0", "12345", "a", "INT", "1", "0"},
+			{"obj1", "0", "1", "12345", "c", "BIGINT", "2", "0"},
+		},
+	}
+
+	ddl := createTableDDLFromCatalogViews(12345, moTablesView, moColumnsView)
+	assert.Contains(t, ddl, "CREATE TABLE `t`")
+	assert.Contains(t, ddl, "`a` INT")
+	assert.Contains(t, ddl, "`c` BIGINT")
+	assert.NotContains(t, ddl, "`b`")
+}
+
+func TestCreateTableDDLFromCatalogViews_FallsBackToRelCreateSQL(t *testing.T) {
+	moTablesView := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"rel_id", "relname", "reldatabase", "reldatabase_id",
+			"col_4", "col_5", "col_6", "rel_createsql",
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"12345", "employees", "db", "100",
+				"", "", "", "CREATE TABLE employees (id INT)",
+			},
+		},
+	}
+
+	assert.Equal(t, "CREATE TABLE employees (id INT)", createTableDDLFromCatalogViews(12345, moTablesView, nil))
+}
+
 func TestBuildCatalogTablesFromMoTablesRows_GenericWithTrailingColumns(t *testing.T) {
 	headers := []string{"object", "block", "row"}
 	for i := 0; i < len(preCPKLayout.moTablesSchema)+2; i++ {
