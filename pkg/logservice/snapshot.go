@@ -355,8 +355,11 @@ func (sm *snapshotManager) Remove(shardID uint64, replicaID uint64, index uint64
 // already been superseded on this store.
 func (sm *snapshotManager) RemoveReplica(shardID uint64, replicaID uint64) error {
 	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	if err := sm.cfg.FS.RemoveAll(sm.exportPath(shardID, replicaID)); err != nil {
+		return err
+	}
 	delete(sm.snapshots, nid)
-	return sm.cfg.FS.RemoveAll(sm.exportPath(shardID, replicaID))
+	return nil
 }
 
 // NewestIndex returns the index of the newest exported snapshot tracked

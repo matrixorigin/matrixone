@@ -169,18 +169,19 @@ func (l *store) startedReplicaIDs() map[uint64]map[uint64]struct{} {
 }
 
 func (l *store) cleanupStaleReplica(shardID uint64, replicaID uint64) {
-	l.runtime.Logger().Info("remove stale log replica metadata",
-		zap.Uint64("shardID", shardID),
-		zap.Uint64("replicaID", replicaID),
-	)
-	l.removeMetadata(shardID, replicaID)
 	if err := l.snapshotMgr.RemoveReplica(shardID, replicaID); err != nil {
 		l.runtime.Logger().Error("remove stale exported snapshots failed",
 			zap.Uint64("shardID", shardID),
 			zap.Uint64("replicaID", replicaID),
 			zap.Error(err),
 		)
+		return
 	}
+	l.runtime.Logger().Info("remove stale log replica metadata",
+		zap.Uint64("shardID", shardID),
+		zap.Uint64("replicaID", replicaID),
+	)
+	l.removeMetadata(shardID, replicaID)
 }
 
 // exportSnapshot just export the snapshot but do NOT truncate logs.
