@@ -469,8 +469,8 @@ func (t *tunnel) transfer(ctx context.Context) error {
 	// Must check if it is safe to start the transfer.
 	if ok := t.canStartTransfer(false); !ok {
 		t.logger.Info("cannot start transfer safely")
-		t.setTransferIntent(true)
 		t.finishTransferAttempt()
+		t.setTransferIntent(true)
 		t.counterSet.connMigrationCannotStart.Add(1)
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
