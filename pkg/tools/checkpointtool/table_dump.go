@@ -2238,7 +2238,9 @@ func buildSchemaFromMoTablesRow(view *LogicalTableView, fullRow []string) *Table
 
 	createSQLIdx := fallbackCatalogColIndex(view, moTablesID, "rel_createsql")
 	if createSQLIdx < len(dataRow) {
-		schema.CreateSQL = strings.Clone(dataRow[createSQLIdx])
+		if isPrintableCreateTableSQL(dataRow[createSQLIdx]) {
+			schema.CreateSQL = strings.Clone(dataRow[createSQLIdx])
+		}
 	}
 	return schema
 }
@@ -2254,7 +2256,7 @@ func findCreateSQLFromMoTables(view *LogicalTableView, tableID uint64) string {
 			if relIDCol >= len(row) || createSQLCol >= len(row) {
 				continue
 			}
-			if row[relIDCol] == tableIDStr && row[createSQLCol] != "" {
+			if row[relIDCol] == tableIDStr && isPrintableCreateTableSQL(row[createSQLCol]) {
 				return strings.Clone(row[createSQLCol])
 			}
 		}
@@ -2988,6 +2990,25 @@ func isPrintableSQLType(sqlType string) bool {
 		}
 	}
 	return hasLetter
+}
+
+func isPrintableCreateTableSQL(ddl string) bool {
+	ddl = strings.TrimSpace(ddl)
+	if ddl == "" {
+		return false
+	}
+	for _, r := range ddl {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+		case r >= 0x20 && r <= 0x7e:
+		default:
+			return false
+		}
+	}
+	upper := strings.ToUpper(ddl)
+	return strings.HasPrefix(upper, "CREATE TABLE ") ||
+		strings.HasPrefix(upper, "CREATE TEMPORARY TABLE ") ||
+		strings.HasPrefix(upper, "CREATE CLUSTER TABLE ")
 }
 
 // hardcodedCreateTable returns the CREATE TABLE DDL for core built-in system tables.

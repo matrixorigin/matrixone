@@ -424,6 +424,42 @@ func TestFindCreateSQLFromMoTables_GenericWithTrailingColumns(t *testing.T) {
 	assert.Equal(t, "CREATE TABLE employees (id INT)", findCreateSQLFromMoTables(view, 12345))
 }
 
+func TestFindCreateSQLFromMoTables_SkipsBinaryCreateSQLCandidates(t *testing.T) {
+	headers := []string{"object", "block", "row"}
+	for i := 0; i < len(currentCatalogLayout.moTablesSchema)+2; i++ {
+		headers = append(headers, fmt.Sprintf("col_%d", i))
+	}
+	headers[logicalViewMetaCols+0] = "rel_id"
+	headers[logicalViewMetaCols+7] = "rel_createsql"
+	row := make([]string, len(headers))
+	row[0], row[1], row[2] = "obj1", "0", "0"
+
+	row[logicalViewMetaCols+0] = "334019"
+	row[logicalViewMetaCols+7] = string([]byte{0xff, '/', 0, 0xfe, '0'})
+
+	offset := 2
+	row[logicalViewMetaCols+offset+0] = "334019"
+	row[logicalViewMetaCols+offset+7] = "CREATE TABLE `ckp_tables`.`t_empty` (`id` INT)"
+
+	view := &LogicalTableView{
+		Headers: headers,
+		Rows:    [][]string{row},
+	}
+
+	assert.Equal(t, "CREATE TABLE `ckp_tables`.`t_empty` (`id` INT)", findCreateSQLFromMoTables(view, 334019))
+}
+
+func TestFindCreateSQLFromMoTables_RejectsBinaryCreateSQL(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "rel_id", "relname", "reldatabase", "reldatabase_id", "col_4", "col_5", "col_6", "rel_createsql"},
+		Rows: [][]string{
+			{"obj1", "0", "0", "334019", "t_empty", "ckp_tables", "334017", "", "", "", string([]byte{0xff, '/', 0, 0xfe, '0'})},
+		},
+	}
+
+	assert.Empty(t, findCreateSQLFromMoTables(view, 334019))
+}
+
 func TestCreateTableDDLFromCatalogViews_PrefersMoColumnsOverStaleCreateSQL(t *testing.T) {
 	moTablesView := &LogicalTableView{
 		Headers: []string{
