@@ -184,8 +184,11 @@ func TestAwsParallelMultipartSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write failed: %v, parts=%d, complete=%s", err, len(state.parts), string(state.completeBody))
 	}
-	if len(state.parts) != 2 {
-		t.Fatalf("expected 2 parts, got %d", len(state.parts))
+	if len(state.parts) != 1 {
+		t.Fatalf("expected merged final part, got %d parts", len(state.parts))
+	}
+	if len(state.parts[1]) != len(data) {
+		t.Fatalf("expected final part size %d, got %d", len(data), len(state.parts[1]))
 	}
 	if len(state.completeBody) == 0 {
 		t.Fatalf("complete body not recorded")
@@ -294,8 +297,11 @@ func TestAwsParallelMultipartUnknownSize(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
-	if len(state.parts) != 2 {
-		t.Fatalf("expected multipart upload with unknown size")
+	if len(state.parts) != 1 {
+		t.Fatalf("expected multipart upload with merged final part, got %d parts", len(state.parts))
+	}
+	if len(state.parts[1]) != len(data) {
+		t.Fatalf("expected final part size %d, got %d", len(data), len(state.parts[1]))
 	}
 }
 
@@ -353,8 +359,11 @@ func TestAwsWriteLargeNonSeekableFallsBackToMultipart(t *testing.T) {
 	if state.putCount != 0 {
 		t.Fatalf("expected multipart fallback instead of raw put, got %d put requests", state.putCount)
 	}
-	if len(state.parts) != 2 {
-		t.Fatalf("expected 2 multipart parts, got %d", len(state.parts))
+	if len(state.parts) != 1 {
+		t.Fatalf("expected merged multipart part, got %d", len(state.parts))
+	}
+	if len(state.parts[1]) != len(data) {
+		t.Fatalf("expected final part size %d, got %d", len(data), len(state.parts[1]))
 	}
 	if len(state.completeBody) == 0 {
 		t.Fatalf("expected multipart complete request")
@@ -575,8 +584,11 @@ func TestCOSParallelMultipartSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write failed: %v, parts=%d, complete=%s", err, len(state.parts), string(state.completeBody))
 	}
-	if len(state.parts) != 2 {
-		t.Fatalf("expected 2 parts, got %d", len(state.parts))
+	if len(state.parts) != 1 {
+		t.Fatalf("expected merged final part, got %d parts", len(state.parts))
+	}
+	if len(state.parts[1]) != len(data) {
+		t.Fatalf("expected final part size %d, got %d", len(data), len(state.parts[1]))
 	}
 	if len(state.completeBody) == 0 {
 		t.Fatalf("complete body not recorded")
@@ -683,8 +695,11 @@ func TestCOSParallelMultipartUnknownSize(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
-	if len(state.parts) != 2 {
-		t.Fatalf("expected multipart upload with unknown size")
+	if len(state.parts) != 1 {
+		t.Fatalf("expected multipart upload with merged final part, got %d parts", len(state.parts))
+	}
+	if len(state.parts[1]) != len(data) {
+		t.Fatalf("expected final part size %d, got %d", len(data), len(state.parts[1]))
 	}
 }
 
