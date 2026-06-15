@@ -85,6 +85,55 @@ func TestFilterExistingIndexDDLs(t *testing.T) {
 	assert.Equal(t, []string{"ALTER TABLE `items_gist` ADD KEY `new_idx`(`id`);"}, filterExistingIndexDDLs(createDDL, indexDDLs))
 }
 
+func TestMergeCreateTableIndexDDLs(t *testing.T) {
+	createDDL := "CREATE TABLE `ann`.`items_gist` (\n" +
+		"  `id` int NOT NULL,\n" +
+		"  `embedding` vecf32(960) DEFAULT NULL,\n" +
+		"  PRIMARY KEY (`id`)\n" +
+		")"
+	indexDDLs := []string{
+		"ALTER TABLE `items_gist` ADD KEY `ivf_2000` USING ivfflat(`embedding`) lists = 2000  op_type 'vector_l2_ops' ;",
+	}
+	want := "CREATE TABLE `ann`.`items_gist` (\n" +
+		"  `id` int NOT NULL,\n" +
+		"  `embedding` vecf32(960) DEFAULT NULL,\n" +
+		"  PRIMARY KEY (`id`),\n" +
+		"  KEY `ivf_2000` USING ivfflat(`embedding`) lists = 2000  op_type 'vector_l2_ops'\n" +
+		")"
+
+	got, err := mergeCreateTableIndexDDLs(createDDL, indexDDLs)
+	assert.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+func TestMergeCreateTableIndexDDLsSingleLine(t *testing.T) {
+	createDDL := "CREATE TABLE `ann`.`items_sift` (id int primary key, embedding vecf32(128))"
+	indexDDLs := []string{
+		"ALTER TABLE `items_sift` ADD KEY `ivf_500` USING ivfflat(`embedding`) lists = 500  op_type 'vector_l2_ops' ;",
+	}
+	want := "CREATE TABLE `ann`.`items_sift` (id int primary key, embedding vecf32(128), KEY `ivf_500` USING ivfflat(`embedding`) lists = 500  op_type 'vector_l2_ops')"
+
+	got, err := mergeCreateTableIndexDDLs(createDDL, indexDDLs)
+	assert.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+func TestMergeCreateTableIndexDDLsSkipsExistingIndex(t *testing.T) {
+	createDDL := "CREATE TABLE `items_gist` (\n" +
+		"  `id` int NOT NULL,\n" +
+		"  `embedding` vecf32(960) DEFAULT NULL,\n" +
+		"  PRIMARY KEY (`id`),\n" +
+		"  KEY `ivf_2000` USING ivfflat(`embedding`) lists=2000 op_type 'vector_l2_ops'\n" +
+		")"
+	indexDDLs := []string{
+		"ALTER TABLE `items_gist` ADD KEY `ivf_2000` USING ivfflat(`embedding`) lists = 2000  op_type 'vector_l2_ops' ;",
+	}
+
+	got, err := mergeCreateTableIndexDDLs(createDDL, indexDDLs)
+	assert.NoError(t, err)
+	assert.Equal(t, createDDL, got)
+}
+
 func TestCleanObjectPath(t *testing.T) {
 	assert.Equal(t, "dump/account_1/t.csv", cleanObjectPath("dump/account_1/t.csv"))
 	assert.Equal(t, "tmp/dump/t.csv", cleanObjectPath("/tmp/dump/t.csv"))

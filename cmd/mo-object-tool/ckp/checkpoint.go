@@ -858,21 +858,19 @@ func writeRestoreScript(
 			return "", fmt.Errorf("show create table %d: %w", table.TableID, err)
 		}
 		ddl = normalizeCreateTableDDLName(ddl, table)
+		indexDDLs, err := reader.ShowCreateIndexStatements(ctx, table.TableID, table.TableName, snapshotTS)
+		if err != nil {
+			return "", fmt.Errorf("show create indexes for table %d: %w", table.TableID, err)
+		}
+		ddl, err = mergeCreateTableIndexDDLs(ddl, indexDDLs)
+		if err != nil {
+			return "", fmt.Errorf("merge create table indexes for table %d: %w", table.TableID, err)
+		}
 		if _, err := fmt.Fprintln(f, strings.TrimRight(ddl, " ;\n\t")); err != nil {
 			return "", err
 		}
 		if _, err := fmt.Fprintln(f, ";"); err != nil {
 			return "", err
-		}
-		indexDDLs, err := reader.ShowCreateIndexStatements(ctx, table.TableID, table.TableName, snapshotTS)
-		if err != nil {
-			return "", fmt.Errorf("show create indexes for table %d: %w", table.TableID, err)
-		}
-		indexDDLs = filterExistingIndexDDLs(ddl, indexDDLs)
-		for _, indexDDL := range indexDDLs {
-			if _, err := fmt.Fprintln(f, strings.TrimRight(indexDDL, " \n\t")); err != nil {
-				return "", err
-			}
 		}
 		if includeLoad {
 			if _, err := fmt.Fprintf(f, "\nLOAD DATA INFILE %s\n", quoteSQLString(tableCSVPath(csvRoot, table))); err != nil {
@@ -932,6 +930,153 @@ func normalizeCreateTableDDLName(ddl string, table checkpointtool.TableCatalogEn
 		target = quoteSQLIdent(table.DatabaseName) + "." + target
 	}
 	return ddl[:nameStart] + target + ddl[nameEnd:]
+}
+
+func mergeCreateTableIndexDDLs(createDDL string, indexDDLs []string) (string, error) {
+	indexDDLs = filterExistingIndexDDLs(createDDL, indexDDLs)
+	if len(indexDDLs) == 0 {
+		return createDDL, nil
+	}
+	clauses := make([]string, 0, len(indexDDLs))
+	for _, indexDDL := range indexDDLs {
+		clause, ok := alterTableAddClause(indexDDL)
+		if !ok {
+			return "", fmt.Errorf("unsupported index DDL %q", indexDDL)
+		}
+		clauses = append(clauses, clause)
+	}
+	return injectCreateTableClauses(createDDL, clauses)
+}
+
+func alterTableAddClause(sql string) (string, bool) {
+	i, ok := consumeSQLKeyword(sql, 0, "alter")
+	if !ok {
+		return "", false
+	}
+	i, ok = consumeSQLKeyword(sql, i, "table")
+	if !ok {
+		return "", false
+	}
+	i = skipSQLSpace(sql, i)
+	i, ok = consumeSQLIdentifier(sql, i)
+	if !ok {
+		return "", false
+	}
+	if j := skipSQLSpace(sql, i); j < len(sql) && sql[j] == '.' {
+		j = skipSQLSpace(sql, j+1)
+		if end, ok := consumeSQLIdentifier(sql, j); ok {
+			i = end
+		}
+	}
+	i, ok = consumeSQLKeyword(sql, i, "add")
+	if !ok {
+		return "", false
+	}
+	clause := trimSQLStatementTerminator(sql[i:])
+	_, hasUnique := consumeSQLKeyword(clause, 0, "unique")
+	_, hasKey := consumeSQLKeyword(clause, 0, "key")
+	_, hasIndex := consumeSQLKeyword(clause, 0, "index")
+	if !hasUnique && !hasKey && !hasIndex {
+		return "", false
+	}
+	return clause, clause != ""
+}
+
+func trimSQLStatementTerminator(sql string) string {
+	sql = strings.TrimSpace(sql)
+	for strings.HasSuffix(sql, ";") {
+		sql = strings.TrimSpace(strings.TrimSuffix(sql, ";"))
+	}
+	return sql
+}
+
+func injectCreateTableClauses(createDDL string, clauses []string) (string, error) {
+	open, close, ok := createTableDefinitionParens(createDDL)
+	if !ok {
+		return "", fmt.Errorf("cannot locate CREATE TABLE definition")
+	}
+	body := createDDL[open+1 : close]
+	multiline := strings.Contains(body, "\n")
+	if multiline {
+		indent := inferCreateTableClauseIndent(body)
+		insert := ",\n" + indent + strings.Join(clauses, ",\n"+indent)
+		return createDDL[:close] + insert + createDDL[close:], nil
+	}
+	separator := ", "
+	if strings.TrimSpace(body) == "" {
+		separator = ""
+	}
+	return createDDL[:close] + separator + strings.Join(clauses, ", ") + createDDL[close:], nil
+}
+
+func inferCreateTableClauseIndent(body string) string {
+	lines := strings.Split(body, "\n")
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		return line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+	}
+	return "  "
+}
+
+func createTableDefinitionParens(sql string) (int, int, bool) {
+	_, nameEnd, ok := createTableNameRange(sql)
+	if !ok {
+		return 0, 0, false
+	}
+	open := skipSQLSpace(sql, nameEnd)
+	if open >= len(sql) || sql[open] != '(' {
+		return 0, 0, false
+	}
+	depth := 0
+	inBacktick := false
+	inString := byte(0)
+	for i := open; i < len(sql); i++ {
+		ch := sql[i]
+		if inBacktick {
+			if ch == '`' {
+				if i+1 < len(sql) && sql[i+1] == '`' {
+					i++
+					continue
+				}
+				inBacktick = false
+			}
+			continue
+		}
+		if inString != 0 {
+			if ch == '\\' && i+1 < len(sql) {
+				i++
+				continue
+			}
+			if ch == inString {
+				if i+1 < len(sql) && sql[i+1] == inString {
+					i++
+					continue
+				}
+				inString = 0
+			}
+			continue
+		}
+		switch ch {
+		case '`':
+			inBacktick = true
+		case '\'', '"':
+			inString = ch
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return open, i, true
+			}
+			if depth < 0 {
+				return 0, 0, false
+			}
+		}
+	}
+	return 0, 0, false
 }
 
 func ddlTableName(ddl string, tableID uint64) string {
@@ -1347,15 +1492,15 @@ Examples:
 				return fmt.Errorf("show create table %d: %w", tableID, err)
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), ddl)
 			indexDDLs, err := reader.ShowCreateIndexStatements(ctx, tableID, ddlTableName(ddl, tableID), snapshotTS)
 			if err != nil {
 				return fmt.Errorf("show create indexes for table %d: %w", tableID, err)
 			}
-			indexDDLs = filterExistingIndexDDLs(ddl, indexDDLs)
-			for _, indexDDL := range indexDDLs {
-				fmt.Fprintln(cmd.OutOrStdout(), indexDDL)
+			ddl, err = mergeCreateTableIndexDDLs(ddl, indexDDLs)
+			if err != nil {
+				return fmt.Errorf("merge create table indexes for table %d: %w", tableID, err)
 			}
+			fmt.Fprintln(cmd.OutOrStdout(), ddl)
 			return nil
 		},
 	}

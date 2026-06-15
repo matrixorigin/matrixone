@@ -2555,7 +2555,8 @@ func (r *CheckpointReader) ShowCreateTable(
 
 // ShowCreateIndexStatements returns ALTER TABLE statements for secondary indexes
 // recorded in mo_catalog.mo_indexes. CREATE TABLE reconstruction from mo_columns
-// cannot see these rows, so restore scripts need to apply them separately.
+// cannot see these rows, so callers that need complete DDL should merge or apply
+// these definitions.
 func (r *CheckpointReader) ShowCreateIndexStatements(
 	ctx context.Context,
 	tableID uint64,
