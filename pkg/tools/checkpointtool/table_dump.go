@@ -151,6 +151,24 @@ type TableDumpData struct {
 	TombEntries []*ObjectEntryInfo
 }
 
+var moIndexesHeaders = []string{
+	"id",
+	"table_id",
+	"database_id",
+	"name",
+	"type",
+	catalog.IndexAlgoName,
+	catalog.IndexAlgoTableType,
+	catalog.IndexAlgoParams,
+	"is_visible",
+	"hidden",
+	"comment",
+	"column_name",
+	"ordinal_position",
+	"options",
+	"index_table_name",
+}
+
 type indexDDLColumn struct {
 	name    string
 	ordinal int
@@ -585,6 +603,68 @@ func (r *CheckpointReader) ReadTableSchema(
 	return schema
 }
 
+func (r *CheckpointReader) applyObjectColumnTypes(
+	ctx context.Context,
+	snapshotTS types.TS,
+	schema *TableSchema,
+	dataEntries []*ObjectEntryInfo,
+) {
+	if schema == nil || len(schema.Columns) == 0 || len(dataEntries) == 0 {
+		return
+	}
+	visibleEntries := visibleObjectEntries(dataEntries, snapshotTS)
+	for _, entry := range visibleEntries {
+		objName := entry.ObjectStats.ObjectName().String()
+		reader, err := objecttool.OpenWithFS(ctx, r.fs, objName, objName)
+		if err != nil {
+			continue
+		}
+		cols := reader.Columns()
+		_ = reader.Close()
+		if len(cols) == 0 {
+			continue
+		}
+		typeBySeqNum := make(map[int]string, len(cols))
+		for i, col := range cols {
+			sqlType := col.Type.DescString()
+			if !isPrintableSQLType(sqlType) {
+				continue
+			}
+			typeBySeqNum[int(col.SeqNum)] = sqlType
+			if _, ok := typeBySeqNum[int(col.Idx)]; !ok {
+				typeBySeqNum[int(col.Idx)] = sqlType
+			}
+			if _, ok := typeBySeqNum[i]; !ok {
+				typeBySeqNum[i] = sqlType
+			}
+		}
+		filled := 0
+		for i := range schema.Columns {
+			if isPrintableSQLType(schema.Columns[i].SQLType) {
+				continue
+			}
+			if sqlType, ok := typeBySeqNum[schema.Columns[i].PhysicalPosition]; ok {
+				schema.Columns[i].SQLType = sqlType
+				filled++
+			}
+		}
+		ckpDebugSchemaf("object column types applied table=%s object=%s filled=%d cols=%d", schema.TableName, objName, filled, len(schema.Columns))
+		return
+	}
+}
+
+func schemaHasColumnTypes(schema *TableSchema) bool {
+	if schema == nil || len(schema.Columns) == 0 {
+		return false
+	}
+	for _, col := range schema.Columns {
+		if !isPrintableSQLType(col.SQLType) {
+			return false
+		}
+	}
+	return true
+}
+
 // getTableLogicalView composes the checkpoint view at snapshotTS and builds a logical
 // table view for the given tableID by aggregating data/tomb entries across all
 // relevant checkpoint entries (GCKP + ICKPs).
@@ -656,7 +736,8 @@ func (r *CheckpointReader) DumpTableCSV(
 	opts ...CSVExportOption,
 ) error {
 	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
-	if len(schema.Columns) == 0 {
+	r.applyObjectColumnTypes(ctx, snapshotTS, schema, dataEntries)
+	if !schemaHasColumnTypes(schema) {
 		return moerr.NewInternalErrorf(
 			ctx,
 			"cannot resolve visible columns for table %d from checkpoint metadata; mo_columns data is unavailable or incomplete",
@@ -676,14 +757,6 @@ func (r *CheckpointReader) DumpTableCSVComposed(
 	snapshotTS types.TS,
 	opts ...CSVExportOption,
 ) error {
-	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
-	if len(schema.Columns) == 0 {
-		return moerr.NewInternalErrorf(
-			ctx,
-			"cannot resolve visible columns for table %d from checkpoint metadata; mo_columns data is unavailable or incomplete",
-			tableID,
-		)
-	}
 	dataEntries, tombEntries, err := r.getTableEntriesAt(ctx, tableID, snapshotTS)
 	if err != nil {
 		if !isTableDataUnavailable(err) {
@@ -691,6 +764,15 @@ func (r *CheckpointReader) DumpTableCSVComposed(
 		}
 		dataEntries = nil
 		tombEntries = nil
+	}
+	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
+	r.applyObjectColumnTypes(ctx, snapshotTS, schema, dataEntries)
+	if !schemaHasColumnTypes(schema) {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"cannot resolve visible columns for table %d from checkpoint metadata; mo_columns data is unavailable or incomplete",
+			tableID,
+		)
 	}
 	return r.streamTableCSV(ctx, w, schema, snapshotTS, dataEntries, tombEntries, resolveCSVExportOptions(opts))
 }
@@ -702,14 +784,6 @@ func (r *CheckpointReader) PrepareTableDumpData(
 	tableID uint64,
 	snapshotTS types.TS,
 ) (*TableDumpData, error) {
-	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
-	if len(schema.Columns) == 0 {
-		return nil, moerr.NewInternalErrorf(
-			ctx,
-			"cannot resolve visible columns for table %d from checkpoint metadata; mo_columns data is unavailable or incomplete",
-			tableID,
-		)
-	}
 	dataEntries, tombEntries, err := r.getTableEntriesAt(ctx, tableID, snapshotTS)
 	if err != nil {
 		if !isTableDataUnavailable(err) {
@@ -717,6 +791,15 @@ func (r *CheckpointReader) PrepareTableDumpData(
 		}
 		dataEntries = nil
 		tombEntries = nil
+	}
+	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
+	r.applyObjectColumnTypes(ctx, snapshotTS, schema, dataEntries)
+	if !schemaHasColumnTypes(schema) {
+		return nil, moerr.NewInternalErrorf(
+			ctx,
+			"cannot resolve visible columns for table %d from checkpoint metadata; mo_columns data is unavailable or incomplete",
+			tableID,
+		)
 	}
 	return &TableDumpData{
 		TableID:     tableID,
@@ -784,7 +867,8 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 	}
 
 	for tableID, data := range result {
-		if data.Schema == nil || len(data.Schema.Columns) == 0 {
+		r.applyObjectColumnTypes(ctx, snapshotTS, data.Schema, data.DataEntries)
+		if !schemaHasColumnTypes(data.Schema) {
 			return nil, moerr.NewInternalErrorf(ctx, "cannot resolve visible columns for table %d from checkpoint metadata", tableID)
 		}
 	}
@@ -812,7 +896,7 @@ func (r *CheckpointReader) DumpPreparedTableCSV(
 	if data == nil {
 		return moerr.NewInternalError(ctx, "missing prepared table dump data")
 	}
-	if data.Schema == nil || len(data.Schema.Columns) == 0 {
+	if !schemaHasColumnTypes(data.Schema) {
 		return moerr.NewInternalErrorf(ctx, "cannot resolve visible columns for table %d from checkpoint metadata", data.TableID)
 	}
 	return r.streamTableCSV(ctx, w, data.Schema, snapshotTS, data.DataEntries, data.TombEntries, resolveCSVExportOptions(opts))
@@ -2556,13 +2640,11 @@ func buildColumnsFromMoColumnsRowsAt(
 			col.Name = row[nameCol]
 		}
 		if typCol >= 0 && typCol < len(row) {
-			sqlType, ok := decodeMoColumnSQLType(row[typCol])
-			if !ok {
-				sqlType, ok = detectMoColumnSQLType(row)
-			}
-			if !ok {
+			if sqlType, ok := decodeMoColumnSQLType(row[typCol]); ok {
+				col.SQLType = sqlType
+			} else {
 				ckpDebugSchemaf(
-					"mo_columns type decode failed table=%d matched_rows=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d seqnum_col=%d column=%q raw_len=%d raw_hex=%s row=%s",
+					"mo_columns type decode unavailable table=%d matched_rows=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d seqnum_col=%d column=%q raw_len=%d raw_hex=%s",
 					tableID,
 					matchedRows,
 					relnameIDCol,
@@ -2574,14 +2656,8 @@ func buildColumnsFromMoColumnsRowsAt(
 					col.Name,
 					len(row[typCol]),
 					debugHexPrefix(row[typCol], 32),
-					debugRowCells(row, 40),
 				)
-				return nil
 			}
-			if typCol >= 0 && typCol < len(row) && row[typCol] != "" && !isDecodedMoColumnSQLType(row[typCol]) {
-				ckpDebugSchemaf("mo_columns type detected from alternate cell table=%d column=%q declared_typ_col=%d sql_type=%s row=%s", tableID, col.Name, typCol, sqlType, debugRowCells(row, 40))
-			}
-			col.SQLType = sqlType
 		}
 
 		cols = append(cols, col)
@@ -2642,7 +2718,12 @@ func (r *CheckpointReader) ShowCreateTable(
 		moColumnsView = nil
 	}
 
-	if ddl := createTableDDLFromCatalogViews(tableID, moTablesView, moColumnsView); ddl != "" {
+	dataEntries, _, dataErr := r.getTableEntriesAt(ctx, tableID, snapshotTS)
+	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
+	if dataErr == nil {
+		r.applyObjectColumnTypes(ctx, snapshotTS, schema, dataEntries)
+	}
+	if ddl := RenderCreateTableDDLFromSchema(schema); ddl != "" {
 		return ddl, nil
 	}
 
@@ -2691,11 +2772,35 @@ func (r *CheckpointReader) ShowCreateIndexStatements(
 		return nil, nil
 	}
 
-	view, err := r.dumpCatalogTableView(ctx, moIndexesTableID, snapshotTS)
+	view, err := r.dumpCatalogTableViewWithHeaders(ctx, moIndexesTableID, snapshotTS, moIndexesHeaders)
 	if err != nil {
 		return nil, err
 	}
 	return buildCreateIndexStatementsFromMoIndexes(view, tableID, tableName)
+}
+
+func (r *CheckpointReader) dumpCatalogTableViewWithHeaders(
+	ctx context.Context,
+	tableID uint64,
+	snapshotTS types.TS,
+	headers []string,
+) (*LogicalTableView, error) {
+	view, err := r.getTableLogicalView(ctx, tableID, snapshotTS)
+	if err != nil {
+		return nil, err
+	}
+	if view == nil {
+		return &LogicalTableView{}, nil
+	}
+	fixedHeaders := append([]string(nil), logicalTableViewMetaHeaders...)
+	fixedHeaders = append(fixedHeaders, headers...)
+	if len(view.Headers) > len(fixedHeaders) {
+		for i := len(fixedHeaders); i < len(view.Headers); i++ {
+			fixedHeaders = append(fixedHeaders, fmt.Sprintf("col_%d", i-len(logicalTableViewMetaHeaders)))
+		}
+	}
+	view.Headers = fixedHeaders
+	return view, nil
 }
 
 func (r *CheckpointReader) dumpCatalogTableView(
@@ -2979,11 +3084,8 @@ func buildCreateTableFromMoColumnsAt(
 		if typCol >= 0 && typCol < len(row) {
 			sqlType, ok := decodeMoColumnSQLType(row[typCol])
 			if !ok {
-				sqlType, ok = detectMoColumnSQLType(row)
-			}
-			if !ok {
 				ckpDebugSchemaf(
-					"mo_columns ddl type decode failed table=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d column=%q raw_len=%d raw_hex=%s row=%s",
+					"mo_columns ddl type decode failed table=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d column=%q raw_len=%d raw_hex=%s",
 					tableID,
 					relnameIDCol,
 					nameCol,
@@ -2993,12 +3095,8 @@ func buildCreateTableFromMoColumnsAt(
 					c.name,
 					len(row[typCol]),
 					debugHexPrefix(row[typCol], 32),
-					debugRowCells(row, 40),
 				)
 				return ""
-			}
-			if typCol >= 0 && typCol < len(row) && row[typCol] != "" && !isDecodedMoColumnSQLType(row[typCol]) {
-				ckpDebugSchemaf("mo_columns ddl type detected from alternate cell table=%d column=%q declared_typ_col=%d sql_type=%s row=%s", tableID, c.name, typCol, sqlType, debugRowCells(row, 40))
 			}
 			c.sqlType = sqlType
 		}
@@ -3085,33 +3183,6 @@ func decodeMoColumnEncodedSQLType(raw string) (string, bool) {
 	return "", false
 }
 
-func isDecodedMoColumnSQLType(raw string) bool {
-	_, ok := decodeMoColumnEncodedSQLType(raw)
-	return ok
-}
-
-func detectMoColumnSQLType(row []string) (string, bool) {
-	found := ""
-	foundCol := -1
-	for i, cell := range row {
-		sqlType, ok := decodeMoColumnEncodedSQLType(cell)
-		if !ok {
-			continue
-		}
-		if found != "" {
-			ckpDebugSchemaf("mo_columns alternate type detection ambiguous first_col=%d first_type=%s next_col=%d next_type=%s row=%s", foundCol, found, i, sqlType, debugRowCells(row, 40))
-			return "", false
-		}
-		found = sqlType
-		foundCol = i
-	}
-	if found == "" {
-		return "", false
-	}
-	ckpDebugSchemaf("mo_columns alternate type detected col=%d sql_type=%s", foundCol, found)
-	return found, true
-}
-
 func ckpDebugSchemaf(format string, args ...any) {
 	if os.Getenv("MO_TOOL_CKP_DEBUG_SCHEMA") == "" {
 		return
@@ -3124,21 +3195,6 @@ func debugHexPrefix(s string, limit int) string {
 		s = s[:limit]
 	}
 	return hex.EncodeToString([]byte(s))
-}
-
-func debugRowCells(row []string, limit int) string {
-	parts := make([]string, 0, len(row))
-	for i, cell := range row {
-		parts = append(parts, fmt.Sprintf("%d:len=%d hex=%s text=%q", i, len(cell), debugHexPrefix(cell, limit), debugTextPrefix(cell, limit)))
-	}
-	return strings.Join(parts, " | ")
-}
-
-func debugTextPrefix(s string, limit int) string {
-	if limit > 0 && len(s) > limit {
-		s = s[:limit]
-	}
-	return s
 }
 
 func isPrintableCreateTableSQL(ddl string) bool {
