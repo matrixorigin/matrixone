@@ -1,0 +1,386 @@
+drop database if exists wext;
+create database wext;
+use wext;
+drop stage if exists wstage;
+create stage wstage url = 'file:///$resources/into_outfile/stage';
+drop table if exists src;
+create table src(a int, b varchar(20), c double);
+insert into src values (1,'alice',1.5),(2,'bob',2.5),(3,'carol',3.5);
+drop table if exists ext_csv;
+create external table ext_csv(a int, b varchar(20), c double)
+infile{'filepath'='stage://wstage/wext_csv_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_csv_%U.csv'}
+fields terminated by ',';
+show create table ext_csv;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+ext_csv  ¦  CREATE EXTERNAL TABLE `ext_csv` (
+  `a` int DEFAULT NULL,
+  `b` varchar(20) DEFAULT NULL,
+  `c` double DEFAULT NULL
+) INFILE{'FILEPATH'='stage://wstage/wext_csv_*.csv','FORMAT'='csv','WRITE_FILE_PATTERN'='stage://wstage/wext_csv_%U.csv'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
+insert into ext_csv select * from src;
+select * from ext_csv order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+1  ¦  alice  ¦  1.5  𝄀
+2  ¦  bob  ¦  2.5  𝄀
+3  ¦  carol  ¦  3.5
+select count(*) from ext_csv;
+➤ count(*)[-5,64,0]  𝄀
+3
+insert into ext_csv select a+10, b, c from src;
+select * from ext_csv order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+1  ¦  alice  ¦  1.5  𝄀
+2  ¦  bob  ¦  2.5  𝄀
+3  ¦  carol  ¦  3.5  𝄀
+11  ¦  alice  ¦  1.5  𝄀
+12  ¦  bob  ¦  2.5  𝄀
+13  ¦  carol  ¦  3.5
+select count(*) from ext_csv;
+➤ count(*)[-5,64,0]  𝄀
+6
+drop table ext_csv;
+CREATE EXTERNAL TABLE `ext_csv` (
+`a` int DEFAULT NULL,
+`b` varchar(20) DEFAULT NULL,
+`c` double DEFAULT NULL
+) INFILE{'FILEPATH'='stage://wstage/wext_csv_*.csv','FORMAT'='csv','WRITE_FILE_PATTERN'='stage://wstage/wext_csv_%U.csv'} FIELDS TERMINATED BY ',';
+insert into ext_csv select a+20, b, c from src;
+select count(*) from ext_csv;
+➤ count(*)[-5,64,0]  𝄀
+9
+drop table if exists tricky_src;
+create table tricky_src(a int, b varchar(50));
+insert into tricky_src values (1,'with,comma'),(2,'with"quote'),(3,'with\nnewline'),(4,'with\\backslash');
+drop table if exists ext_tricky;
+create external table ext_tricky(a int, b varchar(50))
+infile{'filepath'='stage://wstage/wext_tricky_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_tricky_%U.csv'}
+fields terminated by ',';
+insert into ext_tricky select * from tricky_src;
+select a, replace(b, '\n', '<NL>') as b from ext_tricky order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  with,comma  𝄀
+2  ¦  with"quote  𝄀
+3  ¦  with<NL>newline  𝄀
+4  ¦  with\backslash
+drop table if exists big_src;
+create table big_src(a int, b varchar(30));
+insert into big_src select result, concat('row-', result) from generate_series(1, 100000) g;
+drop table if exists ext_big;
+create external table ext_big(a int, b varchar(30))
+infile{'filepath'='stage://wstage/wext_big_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_big_%U.csv'}
+fields terminated by ',';
+insert into ext_big select * from big_src;
+select count(*), min(a), max(a) from ext_big;
+➤ count(*)[-5,64,0]  ¦  min(a)[4,32,0]  ¦  max(a)[4,32,0]  𝄀
+100000  ¦  1  ¦  100000
+drop table if exists remote_src;
+create table remote_src(a int, b varchar(30));
+insert into remote_src select result, concat('r-', result) from generate_series(1, 4400000) g;
+select mo_ctl('dn', 'flush', 'wext.remote_src');
+➤ mo_ctl(dn, flush, wext.remote_src)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select sleep(1);
+➤ sleep(1)[-6,8,0]  𝄀
+0
+drop table if exists ext_remote;
+create external table ext_remote(a int, b varchar(30))
+infile{'filepath'='stage://wstage/wext_remote_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_remote_%U.csv'}
+fields terminated by ',';
+insert into ext_remote select * from remote_src;
+select count(*), min(a), max(a) from ext_remote;
+➤ count(*)[-5,64,0]  ¦  min(a)[4,32,0]  ¦  max(a)[4,32,0]  𝄀
+4400000  ¦  1  ¦  4400000
+drop table if exists ext_jl;
+create external table ext_jl(a int, b varchar(20), c double)
+infile{'filepath'='stage://wstage/wext_jl_*.jl', 'format'='jsonline', 'write_file_pattern'='stage://wstage/wext_jl_%U.jl', 'jsondata'='object'}
+fields terminated by ',';
+insert into ext_jl select * from src;
+select * from ext_jl order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+1  ¦  alice  ¦  1.5  𝄀
+2  ¦  bob  ¦  2.5  𝄀
+3  ¦  carol  ¦  3.5
+show create table ext_jl;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+ext_jl  ¦  CREATE EXTERNAL TABLE `ext_jl` (
+  `a` int DEFAULT NULL,
+  `b` varchar(20) DEFAULT NULL,
+  `c` double DEFAULT NULL
+) INFILE{'FILEPATH'='stage://wstage/wext_jl_*.jl','FORMAT'='jsonline','JSONDATA'='object','WRITE_FILE_PATTERN'='stage://wstage/wext_jl_%U.jl'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
+drop table ext_jl;
+CREATE EXTERNAL TABLE `ext_jl` (
+`a` int DEFAULT NULL,
+`b` varchar(20) DEFAULT NULL,
+`c` double DEFAULT NULL
+) INFILE{'FILEPATH'='stage://wstage/wext_jl_*.jl','FORMAT'='jsonline','JSONDATA'='object','WRITE_FILE_PATTERN'='stage://wstage/wext_jl_%U.jl'} FIELDS TERMINATED BY ',';
+insert into ext_jl select a+10, b, c from src;
+select count(*) from ext_jl;
+➤ count(*)[-5,64,0]  𝄀
+6
+drop table if exists wide_src;
+create table wide_src(
+c_i8 tinyint, c_i64 bigint, c_u32 int unsigned,
+c_f32 float, c_dec decimal(10,2),
+c_ch char(4), c_vc varchar(20), c_txt text,
+c_dt date, c_bool bool, c_bit bit(8), c_json json);
+insert into wide_src values
+(-1, 9223372036854775807, 4000000000, 1.5, 123.45,
+'ab', 'hi,there', 'long text', '2026-06-08', true, b'101', '{"k":1}'),
+(null, null, null, null, null, null, null, null, null, null, null, null);
+drop table if exists ext_wide_csv;
+create external table ext_wide_csv(
+c_i8 tinyint, c_i64 bigint, c_u32 int unsigned,
+c_f32 float, c_dec decimal(10,2),
+c_ch char(4), c_vc varchar(20), c_txt text,
+c_dt date, c_bool bool, c_bit bit(8), c_json json)
+infile{'filepath'='stage://wstage/wext_wide_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_wide_%U.csv'}
+fields terminated by ',' enclosed by '"';
+insert into ext_wide_csv select * from wide_src;
+select c_i8, c_i64, c_u32, c_dec, c_vc, c_bool from ext_wide_csv order by c_i64;
+➤ c_i8[-6,8,0]  ¦  c_i64[-5,64,0]  ¦  c_u32[4,32,0]  ¦  c_dec[3,10,2]  ¦  c_vc[12,-1,0]  ¦  c_bool[-7,1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+-1  ¦  9223372036854775807  ¦  4000000000  ¦  123.45  ¦  hi,there  ¦  1
+drop table if exists ext_wide_jl;
+create external table ext_wide_jl(
+c_i8 tinyint, c_i64 bigint, c_u32 int unsigned,
+c_f32 float, c_dec decimal(10,2),
+c_ch char(4), c_vc varchar(20), c_txt text,
+c_dt date, c_bool bool, c_json json)
+infile{'filepath'='stage://wstage/wext_widejl_*.jl', 'format'='jsonline', 'write_file_pattern'='stage://wstage/wext_widejl_%U.jl', 'jsondata'='object'}
+fields terminated by ',';
+insert into ext_wide_jl select c_i8, c_i64, c_u32, c_f32, c_dec, c_ch, c_vc, c_txt, c_dt, c_bool, c_json from wide_src;
+select * from ext_wide_jl order by c_i64;
+➤ c_i8[-6,8,0]  ¦  c_i64[-5,64,0]  ¦  c_u32[4,32,0]  ¦  c_f32[7,24,0]  ¦  c_dec[3,10,2]  ¦  c_ch[1,4,0]  ¦  c_vc[12,-1,0]  ¦  c_txt[12,0,0]  ¦  c_dt[91,64,0]  ¦  c_bool[-7,1,0]  ¦  c_json[-1,2147483647,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+-1  ¦  9223372036854775807  ¦  4000000000  ¦  1.5  ¦  123.45  ¦  ab  ¦  hi,there  ¦  long text  ¦  2026-06-08  ¦  1  ¦  {"k": 1}
+drop table if exists hash_src;
+create table hash_src(a varchar(20), b varchar(20));
+insert into hash_src values ('#lead','x'), ('','') , ('plain','#also');
+drop table if exists ext_hash;
+create external table ext_hash(a varchar(20), b varchar(20))
+infile{'filepath'='stage://wstage/wext_hash_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_hash_%U.csv'}
+fields terminated by ',';
+insert into ext_hash select * from hash_src;
+select a, b, a is null, b is null from ext_hash order by a;
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  a is null[-7,1,0]  ¦  b is null[-7,1,0]  𝄀
+  ¦    ¦  0  ¦  0  𝄀
+#lead  ¦  x  ¦  0  ¦  0  𝄀
+plain  ¦  #also  ¦  0  ¦  0
+drop table if exists bit_src;
+create table bit_src(a int, b bit(8));
+insert into bit_src values (1, 44), (2, 92), (3, 34), (4, 128), (5, 5), (6, 32), (7, 13), (8, 10);
+drop table if exists ext_bit;
+create external table ext_bit(a int, b bit(8))
+infile{'filepath'='stage://wstage/wext_bit_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_bit_%U.csv'}
+fields terminated by ',';
+insert into ext_bit select * from bit_src;
+select a, cast(b as unsigned) from ext_bit order by a;
+➤ a[4,32,0]  ¦  cast(b as unsigned)[-5,64,0]  𝄀
+1  ¦  44  𝄀
+2  ¦  92  𝄀
+3  ¦  34  𝄀
+4  ¦  128  𝄀
+5  ¦  5  𝄀
+6  ¦  32  𝄀
+7  ¦  13  𝄀
+8  ¦  10
+drop table if exists ext_sb;
+create external table ext_sb(a int, b varchar(20))
+infile{'filepath'='stage://wstage/wext_sb_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_sb_%U.csv'}
+fields terminated by ',' lines starting by 'row:';
+insert into ext_sb values (1, 'alpha'), (2, 'beta');
+select * from ext_sb order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  beta
+drop table if exists esc_src;
+create table esc_src(a int, b varchar(40));
+insert into esc_src values (1,'with!bang'), (2,'back\\slash'), (3,'quo"te'), (4,'com,ma');
+drop table if exists ext_esc;
+create external table ext_esc(a int, b varchar(40))
+infile{'filepath'='stage://wstage/wext_esc_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_esc_%U.csv'}
+fields terminated by ',' escaped by '!';
+insert into ext_esc select * from esc_src;
+select * from ext_esc order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  with!bang  𝄀
+2  ¦  back\slash  𝄀
+3  ¦  quo"te  𝄀
+4  ¦  com,ma
+drop table if exists ext_noesc;
+create external table ext_noesc(a int, b varchar(40))
+infile{'filepath'='stage://wstage/wext_noesc_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_noesc_%U.csv'}
+fields terminated by ',' escaped by '';
+insert into ext_noesc select * from esc_src;
+select * from ext_noesc order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  with!bang  𝄀
+2  ¦  back\slash  𝄀
+3  ¦  quo"te  𝄀
+4  ¦  com,ma
+drop table if exists ext_dash;
+create external table ext_dash(a int, d date, f double)
+infile{'filepath'='stage://wstage/wext_dash_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_dash_%U.csv'}
+fields terminated by '-';
+insert into ext_dash values (1, '2026-06-12', 1.5), (2, '1999-12-31', -2.25);
+select * from ext_dash order by a;
+➤ a[4,32,0]  ¦  d[91,64,0]  ¦  f[8,54,0]  𝄀
+1  ¦  2026-06-12  ¦  1.5  𝄀
+2  ¦  1999-12-31  ¦  -2.25
+drop table if exists ext_nn;
+create external table ext_nn(a int not null, b varchar(10))
+infile{'filepath'='stage://wstage/wext_nn_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_nn_%U.csv'}
+fields terminated by ',';
+insert into ext_nn values (1, 'ok');
+insert into ext_nn values (null, 'boom');
+constraint violation: Column 'a' cannot be null
+insert into ext_nn select null, 'boom2';
+constraint violation: Column 'a' cannot be null
+select * from ext_nn order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  ok
+drop table if exists ext_load;
+create external table ext_load(col1 date not null, col2 datetime, col3 timestamp, col4 bool)
+infile{'filepath'='stage://wstage/wext_load_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_load_%U.csv'}
+fields terminated by ',';
+set time_zone = 'SYSTEM';
+load data infile '$resources/load_data/time_date_1.csv' into table ext_load fields terminated by ',';
+select * from ext_load order by col1;
+➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[-7,1,0]  𝄀
+1000-01-01  ¦  0001-01-01 00:00:00  ¦  1970-01-01 00:00:01  ¦  0  𝄀
+9999-12-31  ¦  9999-12-31 00:00:00  ¦  2038-01-19 00:00:00  ¦  1
+drop table if exists ext_ro;
+create external table ext_ro(a int) infile 'stage://wstage/nonexist_*.csv';
+insert into ext_ro values (1);
+invalid input: cannot insert/update/delete from external table
+update ext_csv set b = 'x' where a = 1;
+invalid input: cannot insert/update/delete from external table
+delete from ext_csv where a = 1;
+invalid input: cannot insert/update/delete from external table
+truncate table ext_csv;
+not supported: truncate writable external table 'ext_csv'; its files in the stage are not managed by the table
+create external table ext_bad1(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='/tmp/part-%U.csv'};
+invalid configuration: WRITE_FILE_PATTERN must be a stage:// path, got '/tmp/part-%U.csv'
+create external table ext_bad2(a int)
+infile{'filepath'='stage://wstage/x_*.pq', 'format'='parquet', 'write_file_pattern'='stage://wstage/x_%U.pq'};
+invalid configuration: writable external table only supports csv and jsonline formats, got 'parquet'
+create external table ext_bad3(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%Q.csv'};
+invalid configuration: WRITE_FILE_PATTERN: unsupported directive %Q in pattern "stage://wstage/x_%Q.csv"
+create external table ext_bad4(a int)
+infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='array', 'write_file_pattern'='stage://wstage/x_%U.jl'};
+invalid configuration: writable external table does not support jsondata 'array', use 'object'
+create external table ext_bad5(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/out-%Y%m%d.csv'};
+invalid configuration: WRITE_FILE_PATTERN must contain a %U or %<n>N directive so parallel writers produce distinct files, got 'stage://wstage/out-%Y%m%d.csv'
+create external table ext_bad6(id int auto_increment, v int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+invalid configuration: writable external table does not support AUTO_INCREMENT column 'id'
+create external table ext_bad7(b bit(8))
+infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'write_file_pattern'='stage://wstage/x_%U.jl'};
+invalid configuration: writable external table with format 'jsonline' does not support bit column 'b'
+create external table ext_bad8(b blob)
+infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'write_file_pattern'='stage://wstage/x_%U.jl'};
+invalid configuration: writable external table with format 'jsonline' does not support blob column 'b'
+create external table ext_bad9(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' escaped by 'n';
+invalid configuration: writable external table cannot use FIELDS ESCAPED BY 'n': the reader maps 'n'-sequences to control characters
+create external table ext_bad9b(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' escaped by '"';
+invalid configuration: writable external table cannot use FIELDS ESCAPED BY '"': it conflicts with the enclosure character
+create external table ext_bad9c(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' enclosed by ',';
+invalid configuration: writable external table cannot use ENCLOSED BY ',': it occurs in a field/line terminator or LINES STARTING BY
+create external table ext_bad10(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' ignore 1 lines;
+invalid configuration: writable external table does not support IGNORE ... LINES
+create external table ext_bad11(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' enclosed by '\\';
+invalid configuration: writable external table cannot use FIELDS ESCAPED BY '\': it conflicts with the enclosure character
+create external table ext_bad12(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'write_file_pattern'='stage://wstage/x_%U.jl'}
+lines terminated by '#';
+invalid configuration: writable external table with format 'jsonline' only supports LINES TERMINATED BY '\n' or '\r\n'
+create external table ext_bad13(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%2N.csv'};
+invalid configuration: WRITE_FILE_PATTERN must contain a %U or %<n>N directive so parallel writers produce distinct files, got 'stage://wstage/x_%2N.csv'
+create external table ext_bad14(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'compression'='gzip', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+invalid configuration: writable external table does not support compression (effective 'gzip'); the writer emits uncompressed files
+create external table ext_bad15(a int)
+infile{'filepath'='stage://wstage/x_*.csv.gz', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+invalid configuration: writable external table does not support compression (effective 'gz'); the writer emits uncompressed files
+create external table ext_bad16(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'format'='parquet', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+invalid configuration: duplicate option key 'format'
+create external table ext_bad17(a int, b int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by '"';
+invalid configuration: writable external table FIELDS TERMINATED BY cannot start with a quote, CR, LF or NUL byte
+create external table ext_bad19(a int, g int as (a+1) stored)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+invalid configuration: writable external table does not support generated column 'g'
+create external table ext_bad20(a int)
+infile{'filepath'='stage://wstage/x_*.jl', 'format'='jsonline', 'jsondata'='object', 'comment'='{', 'write_file_pattern'='stage://wstage/x_%U.jl'};
+invalid configuration: writable external table with format 'jsonline' does not support the COMMENT option
+create external table ext_bad21(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'comment'='REM', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+lines starting by 'REM:';
+invalid configuration: writable external table does not support COMMENT together with LINES STARTING BY
+create external table ext_bad22(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'comment'='"', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+invalid configuration: writable external table COMMENT must not start with the enclosure byte '"'
+create external table ext_bad23(a varchar(10))
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'comment'='\\', 'write_file_pattern'='stage://wstage/x_%U.csv'};
+invalid configuration: writable external table COMMENT must not start with the escape byte '\'
+create external table ext_bad24(a int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'comment'='\\N', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',' escaped by '!';
+invalid configuration: writable external table COMMENT must not collide with the NULL sentinel \N
+create external table ext_bad25(a varchar(10), b int)
+infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'comment'=',', 'write_file_pattern'='stage://wstage/x_%U.csv'}
+fields terminated by ',';
+invalid configuration: writable external table COMMENT must not start with the field terminator byte ','
+drop table if exists ext_rep;
+create external table ext_rep(a int)
+infile{'filepath'='stage://wstage/wext_rep_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_rep_%U.csv'};
+replace into ext_rep values (1);
+invalid input: cannot insert/update/delete from external table
+drop table if exists ext_rep;
+drop table if exists ext_csv;
+drop table if exists ext_jl;
+drop table if exists ext_tricky;
+drop table if exists tricky_src;
+drop table if exists ext_big;
+drop table if exists big_src;
+drop table if exists ext_remote;
+drop table if exists remote_src;
+drop table if exists ext_bit;
+drop table if exists bit_src;
+drop table if exists ext_sb;
+drop table if exists ext_esc;
+drop table if exists ext_noesc;
+drop table if exists esc_src;
+drop table if exists ext_dash;
+drop table if exists ext_nn;
+drop table if exists ext_wide_csv;
+drop table if exists ext_wide_jl;
+drop table if exists wide_src;
+drop table if exists ext_load;
+drop table if exists src;
+drop stage if exists wstage;
+drop database if exists wext;
