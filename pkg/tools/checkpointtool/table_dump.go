@@ -36,7 +36,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
@@ -100,6 +102,23 @@ type TableColumn struct {
 	SQLType          string // SQL type string (e.g. "BIGINT", "VARCHAR(100)")
 	Position         int    // SQL ordinal position
 	PhysicalPosition int    // physical/object column position
+	Unsigned         bool
+	NotNull          bool
+	Default          string
+	HasDefault       bool
+	OnUpdate         string
+	Generated        string
+	GeneratedStored  bool
+	Comment          string
+	ConstraintType   string
+	AutoIncrement    bool
+	ClusterBy        bool
+	EnumValues       string
+}
+
+type TableUniqueKey struct {
+	Name    string
+	Columns []string
 }
 
 // TableSchema holds the decoded schema for one user table.
@@ -108,6 +127,8 @@ type TableSchema struct {
 	DatabaseName string
 	Columns      []TableColumn // sorted by Position
 	CreateSQL    string        // raw CREATE TABLE from mo_tables.rel_createsql
+	Comment      string
+	UniqueKeys   []TableUniqueKey
 }
 
 type TableCatalogEntry struct {
@@ -384,30 +405,198 @@ func builtinTableSchemaForLayout(layout catalogLayout, tableID uint64) *TableSch
 }
 
 func renderCreateTableDDL(tableName string, cols []TableColumn) string {
+	return renderCreateTableDDLWithComment(tableName, cols, "")
+}
+
+func renderCreateTableDDLWithComment(tableName string, cols []TableColumn, comment string, uniqueKeys ...TableUniqueKey) string {
 	if tableName == "" || len(cols) == 0 {
 		return ""
 	}
 
 	var sb strings.Builder
-	sb.WriteString("CREATE TABLE `")
-	sb.WriteString(tableName)
-	sb.WriteString("` (\n")
+	primaryCols := primaryKeyColumns(cols)
+	uniqueKeys = normalizedUniqueKeys(uniqueKeys)
+	sb.WriteString("CREATE TABLE ")
+	sb.WriteString(quoteDDLIdent(tableName))
+	sb.WriteString(" (\n")
 	for i, col := range cols {
-		sb.WriteString("  `")
-		sb.WriteString(col.Name)
-		sb.WriteString("`")
+		sb.WriteString("  ")
+		sb.WriteString(quoteDDLIdent(col.Name))
 		if col.SQLType != "" {
 			sb.WriteString(" ")
 			sb.WriteString(col.SQLType)
+			if col.Unsigned && !strings.Contains(strings.ToUpper(col.SQLType), "UNSIGNED") {
+				sb.WriteString(" UNSIGNED")
+			}
 		}
-		if i < len(cols)-1 {
+		appendColumnDDLAttributes(&sb, col)
+		if i < len(cols)-1 || len(primaryCols) > 0 || len(uniqueKeys) > 0 {
 			sb.WriteString(",\n")
 		} else {
 			sb.WriteString("\n")
 		}
 	}
-	sb.WriteString(");")
+	if len(primaryCols) > 0 {
+		sb.WriteString("  PRIMARY KEY (")
+		for i, col := range primaryCols {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(quoteDDLIdent(col.Name))
+		}
+		if len(uniqueKeys) > 0 {
+			sb.WriteString("),\n")
+		} else {
+			sb.WriteString(")\n")
+		}
+	}
+	for i, key := range uniqueKeys {
+		if len(key.Columns) == 0 {
+			continue
+		}
+		sb.WriteString("  UNIQUE KEY ")
+		sb.WriteString(quoteDDLIdent(key.Name))
+		sb.WriteString("(")
+		for i, col := range key.Columns {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(quoteDDLIdent(col))
+		}
+		if i < len(uniqueKeys)-1 {
+			sb.WriteString("),\n")
+		} else {
+			sb.WriteString(")\n")
+		}
+	}
+	sb.WriteString(")")
+	if comment != "" {
+		sb.WriteString(" COMMENT=")
+		sb.WriteString(quoteDDLString(comment))
+	}
+	if clusterCols := clusterByColumns(cols); len(clusterCols) > 0 {
+		sb.WriteString(" CLUSTER BY (")
+		for i, col := range clusterCols {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(quoteDDLIdent(col.Name))
+		}
+		sb.WriteString(")")
+	}
+	sb.WriteString(";")
 	return sb.String()
+}
+
+func appendColumnDDLAttributes(sb *strings.Builder, col TableColumn) {
+	if col.Generated != "" {
+		if col.NotNull {
+			sb.WriteString(" NOT NULL")
+		}
+		sb.WriteString(" GENERATED ALWAYS AS (")
+		sb.WriteString(col.Generated)
+		sb.WriteString(")")
+		if col.GeneratedStored {
+			sb.WriteString(" STORED")
+		} else {
+			sb.WriteString(" VIRTUAL")
+		}
+	} else {
+		if col.NotNull || col.AutoIncrement {
+			sb.WriteString(" NOT NULL")
+		}
+		if col.AutoIncrement {
+			sb.WriteString(" AUTO_INCREMENT")
+		}
+		if col.HasDefault {
+			if strings.TrimSpace(col.Default) == "" {
+				sb.WriteString(" DEFAULT NULL")
+			} else {
+				sb.WriteString(" DEFAULT ")
+				sb.WriteString(formatDDLDefault(col.Default))
+			}
+		}
+		if col.OnUpdate != "" {
+			sb.WriteString(" ON UPDATE ")
+			sb.WriteString(formatDDLDefault(col.OnUpdate))
+		}
+	}
+	if col.Comment != "" {
+		sb.WriteString(" COMMENT ")
+		sb.WriteString(quoteDDLString(col.Comment))
+	}
+}
+
+func primaryKeyColumns(cols []TableColumn) []TableColumn {
+	primary := make([]TableColumn, 0, 1)
+	for _, col := range cols {
+		if strings.EqualFold(col.ConstraintType, "p") {
+			primary = append(primary, col)
+		}
+	}
+	sort.Slice(primary, func(i, j int) bool {
+		return primary[i].Position < primary[j].Position
+	})
+	return primary
+}
+
+func clusterByColumns(cols []TableColumn) []TableColumn {
+	clusterBy := make([]TableColumn, 0, 1)
+	for _, col := range cols {
+		if col.ClusterBy {
+			clusterBy = append(clusterBy, col)
+		}
+	}
+	sort.Slice(clusterBy, func(i, j int) bool {
+		return clusterBy[i].Position < clusterBy[j].Position
+	})
+	return clusterBy
+}
+
+func normalizedUniqueKeys(keys []TableUniqueKey) []TableUniqueKey {
+	seen := make(map[string]struct{}, len(keys))
+	out := make([]TableUniqueKey, 0, len(keys))
+	for _, key := range keys {
+		cols := make([]string, 0, len(key.Columns))
+		for _, col := range key.Columns {
+			col = strings.TrimSpace(col)
+			if col == "" {
+				continue
+			}
+			cols = append(cols, col)
+		}
+		if len(cols) == 0 {
+			continue
+		}
+		name := strings.TrimSpace(key.Name)
+		if name == "" {
+			name = cols[0]
+		}
+		signature := strings.ToLower(name) + "\x00" + strings.ToLower(strings.Join(cols, "\x00"))
+		if _, ok := seen[signature]; ok {
+			continue
+		}
+		seen[signature] = struct{}{}
+		out = append(out, TableUniqueKey{Name: name, Columns: cols})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return strings.Join(out[i].Columns, "\x00") < strings.Join(out[j].Columns, "\x00")
+	})
+	return out
+}
+
+func formatDDLDefault(defaultExpr string) string {
+	defaultExpr = strings.TrimSpace(defaultExpr)
+	if defaultExpr == "" {
+		return "NULL"
+	}
+	if len(defaultExpr) >= 2 && defaultExpr[0] == '\'' && defaultExpr[len(defaultExpr)-1] == '\'' {
+		return "'" + strings.ReplaceAll(defaultExpr[1:len(defaultExpr)-1], "'", "''") + "'"
+	}
+	return defaultExpr
 }
 
 // RenderCreateTableDDLFromSchema renders a CREATE TABLE statement from resolved
@@ -419,12 +608,27 @@ func RenderCreateTableDDLFromSchema(schema *TableSchema) string {
 	if schema.TableName == "" || len(schema.Columns) == 0 {
 		return ""
 	}
+	if schema.Comment != "" && !isPrintableSQLText(schema.Comment) {
+		return ""
+	}
 	for _, col := range schema.Columns {
 		if col.Name == "" || !isPrintableSQLType(col.SQLType) {
 			return ""
 		}
+		if col.Default != "" && !isPrintableDDLExpression(col.Default) {
+			return ""
+		}
+		if col.OnUpdate != "" && !isPrintableDDLExpression(col.OnUpdate) {
+			return ""
+		}
+		if col.Generated != "" && !isPrintableDDLExpression(col.Generated) {
+			return ""
+		}
+		if col.Comment != "" && !isPrintableSQLText(col.Comment) {
+			return ""
+		}
 	}
-	return renderCreateTableDDL(schema.TableName, schema.Columns)
+	return renderCreateTableDDLWithComment(schema.TableName, schema.Columns, schema.Comment, schema.UniqueKeys...)
 }
 
 func inferBuiltinCatalogLayout(
@@ -867,6 +1071,7 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 		TableName:    strings.Clone(schema.TableName),
 		DatabaseName: strings.Clone(schema.DatabaseName),
 		CreateSQL:    strings.Clone(schema.CreateSQL),
+		Comment:      strings.Clone(schema.Comment),
 	}
 	if len(schema.Columns) > 0 {
 		clone.Columns = make([]TableColumn, len(schema.Columns))
@@ -876,6 +1081,30 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 				SQLType:          strings.Clone(col.SQLType),
 				Position:         col.Position,
 				PhysicalPosition: col.PhysicalPosition,
+				Unsigned:         col.Unsigned,
+				NotNull:          col.NotNull,
+				Default:          strings.Clone(col.Default),
+				HasDefault:       col.HasDefault,
+				OnUpdate:         strings.Clone(col.OnUpdate),
+				Generated:        strings.Clone(col.Generated),
+				GeneratedStored:  col.GeneratedStored,
+				Comment:          strings.Clone(col.Comment),
+				ConstraintType:   strings.Clone(col.ConstraintType),
+				AutoIncrement:    col.AutoIncrement,
+				ClusterBy:        col.ClusterBy,
+				EnumValues:       strings.Clone(col.EnumValues),
+			}
+		}
+	}
+	if len(schema.UniqueKeys) > 0 {
+		clone.UniqueKeys = make([]TableUniqueKey, len(schema.UniqueKeys))
+		for i, key := range schema.UniqueKeys {
+			clone.UniqueKeys[i].Name = strings.Clone(key.Name)
+			if len(key.Columns) > 0 {
+				clone.UniqueKeys[i].Columns = make([]string, len(key.Columns))
+				for j, col := range key.Columns {
+					clone.UniqueKeys[i].Columns[j] = strings.Clone(col)
+				}
 			}
 		}
 	}
@@ -2319,20 +2548,28 @@ func buildSchemaFromMoTablesRow(view *LogicalTableView, fullRow []string) *Table
 	dataRow := fullRow[logicalViewDataOffset(view):]
 
 	relNameIdx := fallbackCatalogColIndex(view, moTablesID, "relname")
-	if relNameIdx < len(dataRow) {
+	if relNameIdx >= 0 && relNameIdx < len(dataRow) {
 		schema.TableName = strings.Clone(dataRow[relNameIdx])
 	}
 
 	relDBIdx := fallbackCatalogColIndex(view, moTablesID, "reldatabase")
-	if relDBIdx < len(dataRow) {
+	if relDBIdx >= 0 && relDBIdx < len(dataRow) {
 		schema.DatabaseName = strings.Clone(dataRow[relDBIdx])
 	}
 
 	createSQLIdx := fallbackCatalogColIndex(view, moTablesID, "rel_createsql")
-	if createSQLIdx < len(dataRow) {
+	if createSQLIdx >= 0 && createSQLIdx < len(dataRow) {
 		if isPrintableCreateTableSQL(dataRow[createSQLIdx]) {
 			schema.CreateSQL = strings.Clone(dataRow[createSQLIdx])
 		}
+	}
+	commentIdx := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Comment)
+	if commentIdx >= 0 && commentIdx < len(dataRow) && isPrintableSQLText(dataRow[commentIdx]) {
+		schema.Comment = strings.Clone(dataRow[commentIdx])
+	}
+	constraintIdx := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint)
+	if constraintIdx >= 0 && constraintIdx < len(dataRow) {
+		schema.UniqueKeys = decodeUniqueKeysFromMoTablesConstraint(dataRow[constraintIdx])
 	}
 	return schema
 }
@@ -2372,13 +2609,55 @@ func findTableNameFromMoTables(view *LogicalTableView, tableID uint64) string {
 	return ""
 }
 
+func findTableCommentFromMoTables(view *LogicalTableView, tableID uint64) string {
+	tableIDStr := fmt.Sprintf("%d", tableID)
+	relIDCol := fallbackCatalogColIndex(view, moTablesID, "rel_id")
+	commentCol := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Comment)
+	if relIDCol < 0 || commentCol < 0 {
+		return ""
+	}
+	for _, fullRow := range view.Rows {
+		row := fullRow[logicalViewDataOffset(view):]
+		if relIDCol >= len(row) || commentCol >= len(row) {
+			continue
+		}
+		if row[relIDCol] == tableIDStr && isPrintableSQLText(row[commentCol]) {
+			return strings.Clone(row[commentCol])
+		}
+	}
+	return ""
+}
+
+func findUniqueKeysFromMoTables(view *LogicalTableView, tableID uint64) []TableUniqueKey {
+	tableIDStr := fmt.Sprintf("%d", tableID)
+	relIDCol := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_ID)
+	constraintCol := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint)
+	if relIDCol < 0 || constraintCol < 0 {
+		return nil
+	}
+	for _, fullRow := range view.Rows {
+		row := fullRow[logicalViewDataOffset(view):]
+		if relIDCol >= len(row) || constraintCol >= len(row) {
+			continue
+		}
+		if row[relIDCol] == tableIDStr {
+			return decodeUniqueKeysFromMoTablesConstraint(row[constraintCol])
+		}
+	}
+	return nil
+}
+
 func createTableDDLFromCatalogViews(tableID uint64, moTablesView, moColumnsView *LogicalTableView) string {
 	tableName := ""
+	tableComment := ""
+	uniqueKeys := []TableUniqueKey(nil)
 	if moTablesView != nil {
 		tableName = findTableNameFromMoTables(moTablesView, tableID)
+		tableComment = findTableCommentFromMoTables(moTablesView, tableID)
+		uniqueKeys = findUniqueKeysFromMoTables(moTablesView, tableID)
 	}
 	if moColumnsView != nil {
-		if ddl := buildCreateTableFromMoColumns(moColumnsView, tableID, tableName); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsWithOptions(moColumnsView, tableID, tableName, tableComment, uniqueKeys); ddl != "" {
 			return ddl
 		}
 	}
@@ -2590,6 +2869,19 @@ func buildColumnsFromMoColumnsRowsAt(
 	var cols []TableColumn
 	matchedRows := 0
 	typeDecodeFailures := 0
+	notNullCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_NullAbility)
+	hasDefaultCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_HasExpr)
+	defaultCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_DefaultExpr)
+	constraintCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_ConstraintType)
+	unsignedCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsUnsigned)
+	autoIncrementCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsAutoIncrement)
+	commentCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Comment)
+	hasUpdateCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_HasUpdate)
+	updateCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Update)
+	clusterByCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsClusterBy)
+	enumCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_EnumValues)
+	hasGeneratedCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_HasGenerated)
+	generatedCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Generated)
 	for _, fullRow := range view.Rows {
 		row := fullRow[logicalViewDataOffset(view):]
 
@@ -2649,6 +2941,43 @@ func buildColumnsFromMoColumnsRowsAt(
 					debugMoColumnTypeCell(row[typCol], fullRow),
 				)
 			}
+		}
+		if notNullCol >= 0 && notNullCol < len(row) {
+			col.NotNull = isTruthyCatalogValue(row[notNullCol])
+		}
+		if hasDefaultCol >= 0 && hasDefaultCol < len(row) {
+			col.HasDefault = isTruthyCatalogValue(row[hasDefaultCol])
+		}
+		if defaultCol >= 0 && defaultCol < len(row) {
+			if defaultExpr := decodeMoColumnDefault(row[defaultCol]); defaultExpr != "" {
+				col.Default = defaultExpr
+			}
+		}
+		if constraintCol >= 0 && constraintCol < len(row) {
+			col.ConstraintType = row[constraintCol]
+		}
+		if unsignedCol >= 0 && unsignedCol < len(row) {
+			col.Unsigned = isTruthyCatalogValue(row[unsignedCol])
+		}
+		if autoIncrementCol >= 0 && autoIncrementCol < len(row) {
+			col.AutoIncrement = isTruthyCatalogValue(row[autoIncrementCol])
+		}
+		if commentCol >= 0 && commentCol < len(row) {
+			col.Comment = row[commentCol]
+		}
+		if hasUpdateCol >= 0 && hasUpdateCol < len(row) && isTruthyCatalogValue(row[hasUpdateCol]) &&
+			updateCol >= 0 && updateCol < len(row) {
+			col.OnUpdate = decodeMoColumnOnUpdate(row[updateCol])
+		}
+		if clusterByCol >= 0 && clusterByCol < len(row) {
+			col.ClusterBy = isTruthyCatalogValue(row[clusterByCol])
+		}
+		if enumCol >= 0 && enumCol < len(row) {
+			col.EnumValues = row[enumCol]
+		}
+		if hasGeneratedCol >= 0 && hasGeneratedCol < len(row) && isTruthyCatalogValue(row[hasGeneratedCol]) &&
+			generatedCol >= 0 && generatedCol < len(row) {
+			col.Generated, col.GeneratedStored = decodeMoColumnGenerated(row[generatedCol])
 		}
 		cols = append(cols, col)
 	}
@@ -2866,17 +3195,28 @@ func buildCreateIndexStatementsFromMoIndexes(
 	ordinalCol := view.columnDataIndex("ordinal_position")
 	hiddenCol := view.columnDataIndex("hidden")
 	if tableIDCol < 0 || nameCol < 0 || columnNameCol < 0 {
+		ckpDebugSchemaf(
+			"mo_indexes headers unavailable table=%d headers=%v table_id_col=%d name_col=%d column_name_col=%d",
+			tableID,
+			view.Headers,
+			tableIDCol,
+			nameCol,
+			columnNameCol,
+		)
 		return nil, nil
 	}
 
 	byName := make(map[string]*indexDDLInfo)
 	tableIDStr := strconv.FormatUint(tableID, 10)
+	matchedRows := 0
+	hiddenRows := 0
 	for _, row := range view.Rows {
 		if tableIDCol >= len(row) || row[tableIDCol] != tableIDStr {
 			continue
 		}
+		matchedRows++
 		if hiddenCol >= 0 && hiddenCol < len(row) && isTruthyCatalogValue(row[hiddenCol]) {
-			continue
+			hiddenRows++
 		}
 		if nameCol >= len(row) || columnNameCol >= len(row) {
 			continue
@@ -2932,6 +3272,15 @@ func buildCreateIndexStatementsFromMoIndexes(
 			statements = append(statements, stmt)
 		}
 	}
+	ckpDebugSchemaf(
+		"mo_indexes resolved table=%d rows=%d hidden_rows=%d indexes=%d names=%v statements=%d",
+		tableID,
+		matchedRows,
+		hiddenRows,
+		len(byName),
+		names,
+		len(statements),
+	)
 	return statements, nil
 }
 
@@ -2988,6 +3337,53 @@ func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, e
 	return sb.String(), nil
 }
 
+func decodeUniqueKeysFromMoTablesConstraint(raw string) (keys []TableUniqueKey) {
+	if raw == "" {
+		return nil
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			ckpDebugSchemaf("mo_tables constraint decode panic len=%d hex=%s panic=%v", len(raw), debugHexPrefix(raw, 64), r)
+			keys = nil
+		}
+	}()
+	c := &engine.ConstraintDef{}
+	if err := c.UnmarshalBinary([]byte(raw)); err != nil {
+		ckpDebugSchemaf("mo_tables constraint decode failed len=%d hex=%s err=%v", len(raw), debugHexPrefix(raw, 64), err)
+		return nil
+	}
+	for _, ct := range c.Cts {
+		indexDef, ok := ct.(*engine.IndexDef)
+		if !ok || indexDef == nil {
+			continue
+		}
+		for _, index := range indexDef.Indexes {
+			if index == nil || !index.Unique || strings.EqualFold(index.IndexName, "PRIMARY") {
+				continue
+			}
+			cols := make([]string, 0, len(index.Parts))
+			for _, part := range index.Parts {
+				part = strings.TrimSpace(part)
+				if part == "" || catalog.IsAlias(part) {
+					continue
+				}
+				cols = append(cols, part)
+			}
+			if len(cols) == 0 {
+				continue
+			}
+			name := index.IndexName
+			if name == "" {
+				name = cols[0]
+			}
+			keys = append(keys, TableUniqueKey{Name: name, Columns: cols})
+		}
+	}
+	keys = normalizedUniqueKeys(keys)
+	ckpDebugSchemaf("mo_tables constraint unique keys decoded count=%d", len(keys))
+	return keys
+}
+
 func quoteDDLIdent(s string) string {
 	return "`" + strings.ReplaceAll(s, "`", "``") + "`"
 }
@@ -3016,7 +3412,20 @@ func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64, table
 	if len(tableNames) > 0 && tableNames[0] != "" {
 		tableName = tableNames[0]
 	}
+	tableComment := ""
+	if len(tableNames) > 1 && tableNames[1] != "" {
+		tableComment = tableNames[1]
+	}
+	return buildCreateTableFromMoColumnsWithOptions(view, tableID, tableName, tableComment, nil)
+}
 
+func buildCreateTableFromMoColumnsWithOptions(
+	view *LogicalTableView,
+	tableID uint64,
+	tableName string,
+	tableComment string,
+	uniqueKeys []TableUniqueKey,
+) string {
 	relnameIDCol := fallbackCatalogColIndex(view, moColumnsID, "att_relname_id")
 	nameCol := fallbackCatalogColIndex(view, moColumnsID, "attname")
 	typCol := fallbackCatalogColIndex(view, moColumnsID, "atttyp")
@@ -3024,7 +3433,7 @@ func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64, table
 	hiddenCol := fallbackCatalogColIndex(view, moColumnsID, "att_is_hidden")
 
 	if relnameIDCol >= 0 && nameCol >= 0 && typCol >= 0 && numCol >= 0 {
-		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, uniqueKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
 			return ddl
 		}
 	}
@@ -3036,7 +3445,7 @@ func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64, table
 		typCol = catalogColIndexForLayout(match.layout, moColumnsID, "atttyp", match.offset)
 		numCol = catalogColIndexForLayout(match.layout, moColumnsID, "attnum", match.offset)
 		hiddenCol = catalogColIndexForLayout(match.layout, moColumnsID, "att_is_hidden", match.offset)
-		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, uniqueKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
 			return ddl
 		}
 	}
@@ -3048,91 +3457,20 @@ func buildCreateTableFromMoColumnsAt(
 	view *LogicalTableView,
 	tableID uint64,
 	tableName string,
+	tableComment string,
+	uniqueKeys []TableUniqueKey,
 	relnameIDCol int,
 	nameCol int,
 	typCol int,
 	numCol int,
 	hiddenCol int,
 ) string {
-	tableIDStr := fmt.Sprintf("%d", tableID)
-	type colInfo struct {
-		name     string
-		sqlType  string
-		position int
-	}
-	var cols []colInfo
-
-	for _, fullRow := range view.Rows {
-		row := fullRow[logicalViewDataOffset(view):]
-		if hiddenCol >= 0 && hiddenCol < len(row) {
-			if row[hiddenCol] == "1" || row[hiddenCol] == "true" {
-				continue
-			}
-		}
-		if relnameIDCol < 0 || relnameIDCol >= len(row) || row[relnameIDCol] != tableIDStr {
-			continue
-		}
-		pos := len(cols)
-		if numCol >= 0 && numCol < len(row) {
-			if n, err := strconv.Atoi(row[numCol]); err == nil {
-				pos = n
-			}
-		}
-		c := colInfo{position: pos}
-		if nameCol >= 0 && nameCol < len(row) {
-			c.name = row[nameCol]
-		}
-		if typCol >= 0 && typCol < len(row) {
-			sqlType, ok := decodeMoColumnSQLType(row[typCol])
-			if !ok {
-				ckpDebugSchemaf(
-					"mo_columns ddl atttyp decode failed table=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d column=%q %s",
-					tableID,
-					relnameIDCol,
-					nameCol,
-					typCol,
-					numCol,
-					hiddenCol,
-					c.name,
-					debugMoColumnTypeCell(row[typCol], fullRow),
-				)
-				return ""
-			}
-			c.sqlType = sqlType
-		}
-		cols = append(cols, c)
-	}
-
+	seqNumCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Seqnum)
+	cols := buildColumnsFromMoColumnsRowsAt(view, tableID, relnameIDCol, nameCol, typCol, numCol, hiddenCol, seqNumCol)
 	if len(cols) == 0 {
 		return ""
 	}
-
-	sort.Slice(cols, func(i, j int) bool { return cols[i].position < cols[j].position })
-
-	var sb strings.Builder
-	sb.WriteString("CREATE TABLE ")
-	sb.WriteString(quoteDDLIdent(tableName))
-	sb.WriteString(" (\n")
-	for i, c := range cols {
-		if c.name != "" {
-			sb.WriteString("  ")
-			sb.WriteString(quoteDDLIdent(c.name))
-		} else {
-			sb.WriteString("  ")
-			sb.WriteString(quoteDDLIdent(fmt.Sprintf("col_%d", i)))
-		}
-		if c.sqlType != "" {
-			sb.WriteString(" ")
-			sb.WriteString(c.sqlType)
-		}
-		if i < len(cols)-1 {
-			sb.WriteString(",\n")
-		} else {
-			sb.WriteString("\n")
-		}
-	}
-	sb.WriteString(");")
-	return sb.String()
+	return renderCreateTableDDLWithComment(tableName, cols, tableComment, uniqueKeys...)
 }
 
 func isPrintableSQLType(sqlType string) bool {
@@ -3169,6 +3507,48 @@ func decodeMoColumnSQLType(raw string) (string, bool) {
 	return "", false
 }
 
+func decodeMoColumnDefault(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	var def plan.Default
+	if err := types.Decode([]byte(raw), &def); err == nil {
+		return strings.TrimSpace(def.OriginString)
+	}
+	if isPrintableDDLExpression(raw) {
+		return strings.TrimSpace(raw)
+	}
+	return ""
+}
+
+func decodeMoColumnOnUpdate(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	var update plan.OnUpdate
+	if err := types.Decode([]byte(raw), &update); err == nil {
+		return strings.TrimSpace(update.OriginString)
+	}
+	if isPrintableDDLExpression(raw) {
+		return strings.TrimSpace(raw)
+	}
+	return ""
+}
+
+func decodeMoColumnGenerated(raw string) (string, bool) {
+	if raw == "" {
+		return "", false
+	}
+	var generated plan.GeneratedCol
+	if err := types.Decode([]byte(raw), &generated); err == nil {
+		return strings.TrimSpace(generated.OriginString), generated.IsStored
+	}
+	if isPrintableDDLExpression(raw) {
+		return strings.TrimSpace(raw), false
+	}
+	return "", false
+}
+
 func decodeMoColumnEncodedSQLType(raw string) (string, bool) {
 	var typ types.Type
 	if len(raw) < typ.ProtoSize() {
@@ -3181,6 +3561,26 @@ func decodeMoColumnEncodedSQLType(raw string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func isPrintableDDLExpression(expr string) bool {
+	expr = strings.TrimSpace(expr)
+	if expr == "" {
+		return true
+	}
+	return isPrintableSQLText(expr)
+}
+
+func isPrintableSQLText(s string) bool {
+	for _, r := range s {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+		case r >= 0x20 && r <= 0x7e:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func ckpDebugSchemaf(format string, args ...any) {

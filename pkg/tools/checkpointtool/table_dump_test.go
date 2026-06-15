@@ -25,7 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,6 +35,33 @@ import (
 func encodedSQLType(t *testing.T, typ types.Type) string {
 	t.Helper()
 	data, err := types.Encode(&typ)
+	require.NoError(t, err)
+	return string(data)
+}
+
+func encodedDefault(t *testing.T, origin string, nullable bool) string {
+	t.Helper()
+	data, err := types.Encode(&plan.Default{OriginString: origin, NullAbility: nullable})
+	require.NoError(t, err)
+	return string(data)
+}
+
+func encodedUniqueConstraint(t *testing.T, name string, columns ...string) string {
+	t.Helper()
+	def := &engine.ConstraintDef{
+		Cts: []engine.Constraint{
+			&engine.IndexDef{
+				Indexes: []*plan.IndexDef{
+					{
+						IndexName: name,
+						Parts:     columns,
+						Unique:    true,
+					},
+				},
+			},
+		},
+	}
+	data, err := def.MarshalBinary()
 	require.NoError(t, err)
 	return string(data)
 }
@@ -485,6 +514,68 @@ func TestCreateTableDDLFromCatalogViews_DecodesMoColumnTypes(t *testing.T) {
 	assert.Contains(t, ddl, "CREATE TABLE `parent`")
 	assert.Contains(t, ddl, "`id` INT")
 	assert.Contains(t, ddl, "`code` VARCHAR(20)")
+	assert.NotContains(t, ddl, "`old`")
+}
+
+func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *testing.T) {
+	moTablesView := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"rel_id", "relname", "reldatabase", "reldatabase_id",
+			"relpersistence", "relkind", "rel_comment", "rel_createsql", "constraint",
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"333999", "parent", "ckp_constraints", "333997",
+				"", "r", "parent table comment", "CREATE TABLE `ckp_constraints`.`parent` (`old` INT)", encodedUniqueConstraint(t, "code", "code"),
+			},
+		},
+	}
+
+	headers := append([]string{"object", "block", "row"}, catalog.MoColumnsSchema...)
+	row := func(name, typ, attnum, notNull, hasDefault, defaultExpr, constraintType, comment, seqnum string) []string {
+		data := make([]string, len(catalog.MoColumnsSchema))
+		set := func(colName, value string) {
+			for i, header := range catalog.MoColumnsSchema {
+				if header == colName {
+					data[i] = value
+					return
+				}
+			}
+			t.Fatalf("missing mo_columns header %s", colName)
+		}
+		set(catalog.SystemColAttr_RelID, "333999")
+		set(catalog.SystemColAttr_RelName, "parent")
+		set(catalog.SystemColAttr_Name, name)
+		set(catalog.SystemColAttr_Type, typ)
+		set(catalog.SystemColAttr_Num, attnum)
+		set(catalog.SystemColAttr_NullAbility, notNull)
+		set(catalog.SystemColAttr_HasExpr, hasDefault)
+		set(catalog.SystemColAttr_DefaultExpr, defaultExpr)
+		set(catalog.SystemColAttr_ConstraintType, constraintType)
+		set(catalog.SystemColAttr_Comment, comment)
+		set(catalog.SystemColAttr_IsHidden, "0")
+		set(catalog.SystemColAttr_Seqnum, seqnum)
+		return append([]string{"obj1", "0", attnum}, data...)
+	}
+	moColumnsView := &LogicalTableView{
+		Headers: headers,
+		Rows: [][]string{
+			row("id", encodedSQLType(t, types.T_int32.ToType()), "1", "1", "0", "", "p", "", "0"),
+			row("code", encodedSQLType(t, types.New(types.T_varchar, 20, 0)), "2", "1", "0", "", "", "", "1"),
+			row("note", encodedSQLType(t, types.New(types.T_varchar, 100, 0)), "3", "0", "1", encodedDefault(t, "'parent-default'", true), "", "parent note", "2"),
+		},
+	}
+
+	ddl := createTableDDLFromCatalogViews(333999, moTablesView, moColumnsView)
+	assert.Contains(t, ddl, "CREATE TABLE `parent`")
+	assert.Contains(t, ddl, "`id` INT NOT NULL")
+	assert.Contains(t, ddl, "`code` VARCHAR(20) NOT NULL")
+	assert.Contains(t, ddl, "`note` VARCHAR(100) DEFAULT 'parent-default' COMMENT 'parent note'")
+	assert.Contains(t, ddl, "PRIMARY KEY (`id`)")
+	assert.Contains(t, ddl, "UNIQUE KEY `code`(`code`)")
+	assert.Contains(t, ddl, "COMMENT='parent table comment'")
 	assert.NotContains(t, ddl, "`old`")
 }
 
