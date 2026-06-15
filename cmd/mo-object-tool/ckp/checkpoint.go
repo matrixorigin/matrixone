@@ -424,7 +424,6 @@ func cleanObjectPath(filePath string) string {
 func dumpCommand(storage *toolfs.StorageOptions) *cobra.Command {
 	var (
 		tableID       uint64
-		tableName     string
 		accountID     uint32
 		databaseID    uint64
 		tsStr         string
@@ -455,7 +454,6 @@ Examples:
   mo-tool ckp dump --table-id=12345 -o users.csv .        # dump to file
   mo-tool ckp dump --table-id=12345 --ts=1749001234567890:1 .  # dump at specific TS
   mo-tool ckp dump --table-id=12345 --load-script -o /tmp/ .
-  mo-tool ckp dump --database-id=9001 --table=users -o users.csv .
   mo-tool ckp dump --database-id=9001 --output-dir=/tmp/test-dump --jobs=4 .
   mo-tool ckp dump --database-id=9001 --load-script -o /tmp/test-dump .
   mo-tool ckp dump --table-id=12345 -o dump/users.csv --out-s3='endpoint=...,bucket=...,key-prefix=...,key-id=...,key-secret=...' .`,
@@ -479,23 +477,16 @@ Examples:
 			}
 
 			accountIDSet := cmd.Flags().Changed("account-id")
-			tableName = strings.TrimSpace(tableName)
-			batchDump := tableID == 0 && tableName == ""
+			batchDump := tableID == 0
 			databaseIDSet := cmd.Flags().Changed("database-id")
-			if tableID == 0 && tableName == "" && !databaseIDSet && !accountIDSet {
-				return fmt.Errorf("--table-id, --table, or at least one of --database-id/--account-id is required")
+			if tableID == 0 && !databaseIDSet && !accountIDSet {
+				return fmt.Errorf("--table-id, or at least one of --database-id/--account-id is required")
 			}
 			if noLoad && !loadScript {
 				return fmt.Errorf("--no-load requires --load-script")
 			}
-			if tableID != 0 && tableName != "" {
-				return fmt.Errorf("--table-id cannot be combined with --table")
-			}
 			if tableID != 0 && (databaseIDSet || accountIDSet || (outputDir != "" && !loadScript)) {
 				return fmt.Errorf("--table-id cannot be combined with --database-id, --account-id, or --output-dir")
-			}
-			if tableName != "" && outputDir != "" && !loadScript {
-				return fmt.Errorf("--output-dir is only valid for --database-id/--account-id batch dumps")
 			}
 			if batchDump && output != "" && !loadScript {
 				return fmt.Errorf("--output cannot be used when dumping by --database-id or --account-id; use --output-dir")
@@ -553,21 +544,6 @@ Examples:
 				return err
 			}
 
-			if tableName != "" {
-				var accountFilter *uint32
-				if accountIDSet {
-					accountFilter = &accountID
-				}
-				var dbFilter *uint64
-				if databaseIDSet {
-					dbFilter = &databaseID
-				}
-				table, err := resolveTableByName(ctx, reader, snapshotTS, tableName, dbFilter, accountFilter)
-				if err != nil {
-					return err
-				}
-				tableID = table.TableID
-			}
 			effectiveHeader := header || (loadScript && !noLoad)
 
 			if batchDump {
@@ -664,13 +640,12 @@ Examples:
 	}
 
 	cmd.Flags().Uint64Var(&tableID, "table-id", 0, "Table ID to dump")
-	cmd.Flags().StringVar(&tableName, "table", "", "Table name to dump; use --database-id and/or --account-id to disambiguate")
 	cmd.Flags().Uint32Var(&accountID, "account-id", 0, "Account ID to dump tables for; combine with --database-id to narrow the result")
 	cmd.Flags().Uint64Var(&databaseID, "database-id", 0, "Database ID to dump tables for")
 	cmd.Flags().StringVar(&tsStr, "ts", "", "Snapshot timestamp: physical:logical, physical-logical, RFC3339, or '2006-01-02 15:04:05' in local time (default: latest)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output CSV file path (default: stdout)")
 	cmd.Flags().StringVar(&outputDir, "output-dir", "", "Output directory for database/account dumps")
-	cmd.Flags().IntVar(&jobs, "jobs", 1, "Concurrent table dumps for --database-id/--account-id batch dumps")
+	cmd.Flags().IntVar(&jobs, "jobs", 5, "Concurrent table dumps for --database-id/--account-id batch dumps")
 	cmd.Flags().BoolVar(&metaComments, "meta-comments", false, "Prepend DDL and row-count comment lines (disabled by default so output can be loaded directly)")
 	cmd.Flags().BoolVar(&header, "header", false, "Include a CSV header row with column names")
 	cmd.Flags().BoolVar(&loadScript, "load-script", false, "Generate restore.sql with CREATE DATABASE, CREATE TABLE, and LOAD DATA statements; --output/-o is treated as a directory")
@@ -762,39 +737,6 @@ func allDigits(s string) bool {
 	return true
 }
 
-func resolveTableByName(
-	ctx context.Context,
-	reader *checkpointtool.CheckpointReader,
-	snapshotTS types.TS,
-	tableName string,
-	databaseID *uint64,
-	accountID *uint32,
-) (checkpointtool.TableCatalogEntry, error) {
-	tables, err := reader.ListCatalogTables(ctx, snapshotTS, checkpointtool.TableListOptions{
-		AccountID:  accountID,
-		DatabaseID: databaseID,
-	})
-	if err != nil {
-		return checkpointtool.TableCatalogEntry{}, fmt.Errorf("list checkpoint catalog tables: %w", err)
-	}
-	var matches []checkpointtool.TableCatalogEntry
-	for _, table := range tables {
-		if table.TableName == tableName {
-			matches = append(matches, table)
-		}
-	}
-	if len(matches) == 0 {
-		return checkpointtool.TableCatalogEntry{}, fmt.Errorf("table %q not found in checkpoint catalog", tableName)
-	}
-	if len(matches) > 1 {
-		var names []string
-		for _, table := range matches {
-			names = append(names, fmt.Sprintf("account=%d database=%s table-id=%d", table.AccountID, table.DatabaseName, table.TableID))
-		}
-		return checkpointtool.TableCatalogEntry{}, fmt.Errorf("table %q is ambiguous; use --database-id/--account-id/--table-id (%s)", tableName, strings.Join(names, "; "))
-	}
-	return matches[0], nil
-}
 
 func resolveTableByID(
 	ctx context.Context,
