@@ -138,6 +138,7 @@ select clo1,clo5,clo7,col12,col13,col16 from ex_table_6a;
 --异常值分隔符封闭符#，\r,\n
 create external table ex_table_7(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_4.csv'} fields terminated by '#' enclosed by '\"' lines terminated by '\n';
+-- @separator:table
 select * from ex_table_7;
 create external table ex_table_8(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_5.csv'} fields terminated by '\n' enclosed by '\"' lines terminated by '\n';

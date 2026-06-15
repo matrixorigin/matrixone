@@ -24,7 +24,6 @@ drop table db1.t3;
 drop table db1.t2;
 -- @session
 -- @session:id=5&user=default_1:user1:role1&password=123456
-drop table db1.t3;
 drop database db1;
 -- @session
 drop account default_1;
