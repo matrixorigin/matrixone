@@ -1,0 +1,17 @@
+-- @suit
+-- @case
+-- @desc:test for MySQL-compatible user-level lock functions
+-- @label:bvt
+
+SELECT IS_FREE_LOCK('prisma_migrate_lock') AS free_before;
+SELECT GET_LOCK('prisma_migrate_lock', 0) AS acquire_lock;
+SELECT IS_FREE_LOCK('PRISMA_MIGRATE_LOCK') AS free_after_acquire;
+SELECT RELEASE_LOCK('PrIsMa_MiGrAtE_LoCk') AS release_held;
+SELECT IS_FREE_LOCK('prisma_migrate_lock') AS free_after_release;
+SELECT RELEASE_LOCK('prisma_migrate_lock_never_created') AS release_never_created;
+
+SELECT
+    GET_LOCK(NULL, 0) AS get_null_name,
+    GET_LOCK('prisma_migrate_lock_null_timeout', NULL) AS get_null_timeout,
+    RELEASE_LOCK(NULL) AS release_null_name,
+    IS_FREE_LOCK(NULL) AS is_free_null_name;
