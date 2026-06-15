@@ -3262,10 +3262,11 @@ func (r *CheckpointReader) findCatalogTableID(
 	snapshotTS types.TS,
 	tableName string,
 ) (uint64, bool, error) {
-	tables, err := r.ListCatalogTables(ctx, snapshotTS, TableListOptions{IncludeViews: true})
+	moTablesView, err := r.getTableLogicalView(ctx, moTablesID, snapshotTS)
 	if err != nil {
-		return 0, false, fmt.Errorf("list catalog tables: %w", err)
+		return 0, false, fmt.Errorf("read mo_tables: %w", err)
 	}
+	tables := buildCatalogTablesFromMoTablesRows(moTablesView)
 	for _, table := range tables {
 		if table.TableName != tableName {
 			continue
