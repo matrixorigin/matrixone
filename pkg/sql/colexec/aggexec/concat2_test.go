@@ -95,6 +95,32 @@ func TestGroupConcatDistinctMergeError(t *testing.T) {
 	right.Free()
 }
 
+func TestGroupConcatInputOrderNoDistinctAndEmptyGroup(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     90,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   GroupConcatReturnType([]types.Type{types.T_varchar.ToType()}),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ";").(*groupConcatExec)
+	require.False(t, exec.IsDistinct())
+	require.Nil(t, exec.orderTypes())
+	require.NoError(t, exec.PreAllocateGroups(1))
+	require.NoError(t, exec.GroupGrow(1))
+
+	vec := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"b", "skip", "a"})
+	require.NoError(t, exec.BatchFill(0, []uint64{1, GroupNotMatched, 1}, []*vector.Vector{vec}))
+
+	vecs, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "b;a", string(vecs[0].GetBytesAt(0)))
+
+	vec.Free(mp)
+	vecs[0].Free(mp)
+	exec.Free()
+}
+
 func TestGroupConcatOrderByMultiArgument(t *testing.T) {
 	mp := mpool.MustNewZero()
 	info := multiAggInfo{
