@@ -765,3 +765,94 @@ func Test_CaseWhen_WithNullAndStringComparison(t *testing.T) {
 	succeed, info := tcc.Run()
 	require.True(t, succeed, tc.info, info)
 }
+
+// issue #24565: COALESCE over decimal branches with different scales must align
+// scale/width across all branches, otherwise the result inherits the first
+// branch's scale while carrying another branch's raw value (magnified result).
+func Test_CoalesceCheck_DecimalScaleAlignment(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_decimal64}},
+		{args: []types.T{types.T_decimal128}},
+	}
+	inputs := []types.Type{
+		types.New(types.T_decimal128, 23, 2),
+		types.New(types.T_decimal128, 38, 7),
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, 1, result.idx) // decimal128 overload
+	require.Len(t, result.finalType, len(inputs))
+	for _, typ := range result.finalType {
+		require.Equal(t, types.T_decimal128, typ.Oid)
+		require.Equal(t, int32(7), typ.Scale)
+		require.Equal(t, int32(38), typ.Width)
+	}
+}
+
+func Test_CoalesceCheck_DecimalAligned_NoCast(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_decimal64}},
+		{args: []types.T{types.T_decimal128}},
+	}
+	inputs := []types.Type{
+		types.New(types.T_decimal128, 20, 4),
+		types.New(types.T_decimal128, 20, 4),
+	}
+	result := coalesceCheck(overloads, inputs)
+	// Already aligned -> no alignment cast needed, plain direct match.
+	require.Equal(t, succeedMatched, result.status)
+	require.Equal(t, 1, result.idx)
+}
+
+// issue #24565 review: when the combined integral width + scale overflows
+// decimal128, coalesce must promote the common type to decimal256 instead of
+// keeping decimal128 (which would drop integer capacity and overflow on cast).
+func Test_CoalesceCheck_DecimalPromoteToDecimal256(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_decimal64}},
+		{args: []types.T{types.T_decimal128}},
+		{args: []types.T{types.T_decimal256}},
+	}
+	inputs := []types.Type{
+		types.New(types.T_decimal128, 38, 0),  // 38 integral digits
+		types.New(types.T_decimal128, 38, 38), // 38 fractional digits
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, 2, result.idx) // decimal256 overload
+	require.Len(t, result.finalType, len(inputs))
+	for _, typ := range result.finalType {
+		require.Equal(t, types.T_decimal256, typ.Oid)
+		require.Equal(t, int32(38), typ.Scale)
+		require.Equal(t, int32(76), typ.Width) // 38 integral + 38 scale
+	}
+}
+
+// required precision overflows decimal256 -> coalesce fails instead of
+// silently truncating.
+func Test_CoalesceCheck_DecimalOverflowFails(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_decimal128}},
+		{args: []types.T{types.T_decimal256}},
+	}
+	inputs := []types.Type{
+		types.New(types.T_decimal256, 76, 0),
+		types.New(types.T_decimal256, 76, 76), // 76 integral + 76 scale = 152 > 76
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, failedFunctionParametersWrong, result.status)
+}
+
+// the aligned decimal type has no matching overload -> coalesce fails.
+func Test_CoalesceCheck_DecimalNoOverloadFails(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_decimal64}},
+		{args: []types.T{types.T_decimal128}},
+	} // no decimal256 overload
+	inputs := []types.Type{
+		types.New(types.T_decimal128, 38, 0),
+		types.New(types.T_decimal128, 38, 38), // requires decimal256
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, failedFunctionParametersWrong, result.status)
+}

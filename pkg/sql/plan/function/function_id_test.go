@@ -567,12 +567,14 @@ var predefinedFunids = map[int]int{
 	ST_SYMDIFFERENCE:              511,
 	ST_BUFFER:                     512,
 	CAST_JSON_TO_ARRAY:            513,
-	GET_LOCK:                      514,
-	RELEASE_LOCK:                  515,
-	IS_FREE_LOCK:                  516,
+	BIT_COUNT:                     514,
+	GET_LOCK:                      515,
+	RELEASE_LOCK:                  516,
+	IS_FREE_LOCK:                  517,
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 517,
+	FUNCTION_END_NUMBER: 518,
 }
 
 func Test_funids(t *testing.T) {

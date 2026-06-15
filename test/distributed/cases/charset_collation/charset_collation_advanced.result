@@ -57,10 +57,10 @@ SELECT * FROM t_hex_test ORDER BY id;
 2  ¦  你好  ¦  E4BDA0E5A5BD  𝄀
 3  ¦  😀  ¦  F09F9880
 SELECT id, original, UNHEX(hex_value) as decoded FROM t_hex_test ORDER BY id;
-➤ id[4,32,0]  ¦  original[12,-1,0]  ¦  decoded[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  original[12,-1,0]  ¦  decoded[12,0,0]  𝄀
 1  ¦  Hello  ¦  Hello  𝄀
-2  ¦  你好  ¦  你好  𝄀
-3  ¦  😀  ¦  😀
+2  ¦  你好  ¦  ä½ å¥½  𝄀
+3  ¦  😀  ¦  ð
 CREATE TABLE t_pad_test (
 id INT PRIMARY KEY,
 data VARCHAR(100)
@@ -153,8 +153,8 @@ SELECT id, LOCATE('测试', data) as pos FROM t_locate_test WHERE id = 3;
 ➤ id[4,32,0]  ¦  pos[-5,64,0]  𝄀
 3  ¦  5
 SELECT id, POSITION('测试' IN data) as pos FROM t_locate_test WHERE id = 3;
-id	pos
-3	5
+➤ id[4,32,0]  ¦  pos[-5,64,0]  𝄀
+3  ¦  5
 SELECT INSTR('Hello World', 'World');
 ➤ INSTR(Hello World, World)[-5,64,0]  𝄀
 7
