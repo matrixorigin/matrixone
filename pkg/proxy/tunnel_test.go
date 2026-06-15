@@ -29,11 +29,13 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func TestTunnelClientToServer(t *testing.T) {
@@ -693,6 +695,96 @@ func TestCanStartTransfer(t *testing.T) {
 		can := tu.canStartTransfer(false)
 		require.True(t, can)
 	})
+}
+
+func TestTransferCannotStartClearsInTransferForRetry(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+
+	ctx := context.Background()
+	tun := newTunnel(ctx, logger, newCounterSet())
+	tun.cc = &clientConn{connID: 1}
+	tun.mu.started = true
+	tun.mu.csp = &pipe{}
+	tun.mu.scp = &pipe{}
+	tun.mu.scp.src = newMySQLConn("", nil, 0, nil, nil, false, 0)
+	tun.mu.scp.mu.inTxn = true
+
+	queue := make(chan *tunnel, 1)
+	deliver := newTunnelDeliver(queue, logger)
+	deliver.Deliver(tun, transferByScaling)
+	require.Equal(t, 1, deliver.Count())
+
+	queued := <-queue
+	require.Same(t, tun, queued)
+	require.Error(t, queued.transfer(ctx))
+	require.True(t, tun.transferIntent.Load())
+	defer tun.setTransferIntent(false)
+
+	tun.mu.Lock()
+	require.False(t, tun.mu.inTransfer)
+	tun.mu.Unlock()
+
+	deliver.Deliver(tun, transferByScaling)
+	require.Equal(t, 1, deliver.Count())
+}
+
+func TestTransferSyncInTransferLatch(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+	ctx := context.Background()
+
+	t.Run("skip_when_async_transfer_in_progress", func(t *testing.T) {
+		tun := newTunnel(ctx, logger, newCounterSet())
+		tun.mu.inTransfer = true
+
+		require.NoError(t, tun.transferSync(ctx))
+
+		tun.mu.Lock()
+		require.True(t, tun.mu.inTransfer)
+		tun.mu.Unlock()
+	})
+
+	t.Run("release_when_cannot_start", func(t *testing.T) {
+		tun := newTunnel(ctx, logger, newCounterSet())
+		tun.mu.started = true
+		tun.mu.csp = &pipe{}
+		tun.mu.scp = &pipe{}
+		tun.mu.scp.src = newMySQLConn("", nil, 0, nil, nil, false, 0)
+		tun.mu.scp.mu.inTxn = true
+		tun.setTransferIntent(true)
+		defer tun.setTransferIntent(false)
+
+		require.Error(t, tun.transferSync(ctx))
+		require.True(t, tun.transferIntent.Load())
+
+		tun.mu.Lock()
+		require.False(t, tun.mu.inTransfer)
+		tun.mu.Unlock()
+	})
+}
+
+func TestSetTransferIntentUpdatesGaugeOnStateChange(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+
+	tun := newTunnel(context.Background(), logger, newCounterSet())
+	before := testutil.ToFloat64(v2.ProxyConnectionsTransferIntentGauge)
+
+	tun.setTransferIntent(true)
+	require.Equal(t, before+1, testutil.ToFloat64(v2.ProxyConnectionsTransferIntentGauge))
+
+	tun.setTransferIntent(true)
+	require.Equal(t, before+1, testutil.ToFloat64(v2.ProxyConnectionsTransferIntentGauge))
+
+	tun.setTransferIntent(false)
+	require.Equal(t, before, testutil.ToFloat64(v2.ProxyConnectionsTransferIntentGauge))
+
+	tun.setTransferIntent(false)
+	require.Equal(t, before, testutil.ToFloat64(v2.ProxyConnectionsTransferIntentGauge))
 }
 
 func TestReplaceServerConn(t *testing.T) {
