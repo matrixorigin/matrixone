@@ -201,6 +201,102 @@ func TestLogStateUpdateStores(t *testing.T) {
 	state.Update(hb3, tick3)
 }
 
+func TestLogStateUpdateSkipsSelfExcludingReplica(t *testing.T) {
+	state := LogState{
+		Shards: map[uint64]LogShardInfo{},
+		Stores: map[string]LogStoreInfo{},
+	}
+
+	goodHB := LogStoreHeartbeat{
+		UUID:           "log-b",
+		RaftAddress:    "raft-b",
+		ServiceAddress: "addr-b",
+		GossipAddress:  "gossip-b",
+		Replicas: []LogReplicaInfo{{
+			LogShardInfo: LogShardInfo{
+				ShardID:  1,
+				Replicas: map[uint64]string{2: "log-b", 3: "log-c", 4: "log-a"},
+				Epoch:    10,
+				LeaderID: 2,
+				Term:     1,
+			},
+			ReplicaID: 2,
+		}},
+	}
+	state.Update(goodHB, 100)
+
+	staleHB := LogStoreHeartbeat{
+		UUID:           "log-c",
+		RaftAddress:    "raft-c",
+		ServiceAddress: "addr-c",
+		GossipAddress:  "gossip-c",
+		Replicas: []LogReplicaInfo{{
+			LogShardInfo: LogShardInfo{
+				ShardID:  1,
+				Replicas: map[uint64]string{1: "log-a", 2: "log-b"},
+				Epoch:    100,
+				LeaderID: 1,
+				Term:     2,
+			},
+			ReplicaID: 3,
+		}},
+	}
+	state.Update(staleHB, 200)
+
+	assert.Equal(t, uint64(10), state.Shards[1].Epoch)
+	assert.Equal(t, goodHB.Replicas[0].Replicas, state.Shards[1].Replicas)
+	assert.Equal(t, staleHB.Replicas, state.Stores["log-c"].Replicas)
+}
+
+func TestLogStateUpdateReplacesUnsupportedShardInfo(t *testing.T) {
+	state := LogState{
+		Shards: map[uint64]LogShardInfo{
+			1: {
+				ShardID:  1,
+				Replicas: map[uint64]string{1: "log-a", 2: "log-b"},
+				Epoch:    100,
+				LeaderID: 1,
+				Term:     2,
+			},
+		},
+		Stores: map[string]LogStoreInfo{
+			"log-c": {
+				Replicas: []LogReplicaInfo{{
+					LogShardInfo: LogShardInfo{
+						ShardID:  1,
+						Replicas: map[uint64]string{1: "log-a", 2: "log-b"},
+						Epoch:    100,
+						LeaderID: 1,
+						Term:     2,
+					},
+					ReplicaID: 3,
+				}},
+			},
+		},
+	}
+
+	goodHB := LogStoreHeartbeat{
+		UUID:           "log-b",
+		RaftAddress:    "raft-b",
+		ServiceAddress: "addr-b",
+		GossipAddress:  "gossip-b",
+		Replicas: []LogReplicaInfo{{
+			LogShardInfo: LogShardInfo{
+				ShardID:  1,
+				Replicas: map[uint64]string{2: "log-b", 3: "log-c", 4: "log-a"},
+				Epoch:    10,
+				LeaderID: 2,
+				Term:     1,
+			},
+			ReplicaID: 2,
+		}},
+	}
+	state.Update(goodHB, 200)
+
+	assert.Equal(t, uint64(10), state.Shards[1].Epoch)
+	assert.Equal(t, goodHB.Replicas[0].Replicas, state.Shards[1].Replicas)
+}
+
 func TestLogString(t *testing.T) {
 	cases := []struct {
 		desc string
