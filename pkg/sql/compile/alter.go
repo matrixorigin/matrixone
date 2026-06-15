@@ -1012,6 +1012,18 @@ func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldT
 	return fatherRelation.UpdateConstraint(c.proc.Ctx, oldCt)
 }
 
+type unaffectedIndexTypeInfo struct {
+	IndexTableName string
+	AlgoTableType  string
+}
+
+type unaffectedIndexTableInfo struct {
+	Unique          bool
+	IndexAlgo       string
+	IndexAlgoParams string
+	Indexes         []unaffectedIndexTypeInfo
+}
+
 func cloneUnaffectedIndexes(
 	c *Compile,
 	dbName string,
@@ -1022,18 +1034,6 @@ func cloneUnaffectedIndexes(
 	cloneSnapshot *plan.Snapshot,
 ) (err error) {
 
-	type IndexTypeInfo struct {
-		IndexTableName string
-		AlgoTableType  string
-	}
-
-	type IndexTableInfo struct {
-		Unique          bool
-		IndexAlgo       string
-		IndexAlgoParams string
-		Indexes         []IndexTypeInfo
-	}
-
 	var (
 		clone *table_clone.TableClone
 
@@ -1042,8 +1042,8 @@ func cloneUnaffectedIndexes(
 
 		newTblDef = newRel.GetTableDef(c.proc.Ctx)
 
-		oriIdxColNameToTblName = make(map[string]*IndexTableInfo)
-		newIdxColNameToTblName = make(map[string]*IndexTableInfo)
+		oriIdxColNameToTblName = make(map[string]*unaffectedIndexTableInfo)
+		newIdxColNameToTblName = make(map[string]*unaffectedIndexTableInfo)
 	)
 
 	logutil.Infof("cloneUnaffectedIndex: affected cols %v\n", affectedCols)
@@ -1109,17 +1109,17 @@ func cloneUnaffectedIndexes(
 
 		m, ok := oriIdxColNameToTblName[idxTbl.IndexName]
 		if !ok {
-			m = &IndexTableInfo{
+			m = &unaffectedIndexTableInfo{
 				Unique:          idxTbl.Unique,
 				IndexAlgo:       idxTbl.IndexAlgo,
 				IndexAlgoParams: idxTbl.IndexAlgoParams,
-				Indexes:         make([]IndexTypeInfo, 0, 3),
+				Indexes:         make([]unaffectedIndexTypeInfo, 0, 3),
 			}
 
 		}
 
 		m.Indexes = append(m.Indexes,
-			IndexTypeInfo{IndexTableName: idxTbl.IndexTableName,
+			unaffectedIndexTypeInfo{IndexTableName: idxTbl.IndexTableName,
 				AlgoTableType: idxTbl.IndexAlgoTableType})
 		oriIdxColNameToTblName[idxTbl.IndexName] = m
 	}
@@ -1131,16 +1131,16 @@ func cloneUnaffectedIndexes(
 
 		m, ok := newIdxColNameToTblName[idxTbl.IndexName]
 		if !ok {
-			m = &IndexTableInfo{
+			m = &unaffectedIndexTableInfo{
 				Unique:          idxTbl.Unique,
 				IndexAlgo:       idxTbl.IndexAlgo,
 				IndexAlgoParams: idxTbl.IndexAlgoParams,
-				Indexes:         make([]IndexTypeInfo, 0, 3),
+				Indexes:         make([]unaffectedIndexTypeInfo, 0, 3),
 			}
 		}
 
 		m.Indexes = append(m.Indexes,
-			IndexTypeInfo{IndexTableName: idxTbl.IndexTableName,
+			unaffectedIndexTypeInfo{IndexTableName: idxTbl.IndexTableName,
 				AlgoTableType: idxTbl.IndexAlgoTableType})
 		newIdxColNameToTblName[idxTbl.IndexName] = m
 		logutil.Infof("cloneUnaffectedIndex: new %s parts %v\n", idxTbl.IndexTableName, idxTbl.Parts)
@@ -1151,6 +1151,10 @@ func cloneUnaffectedIndexes(
 		defaultDB: dbName,
 		engine:    c.e,
 		proc:      c.proc,
+	}
+	var txnLocalChecker txnLocalTableChecker
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		txnLocalChecker, _ = txnOp.GetWorkspace().(txnLocalTableChecker)
 	}
 
 	for idxName, oriIdxTblNames := range oriIdxColNameToTblName {
@@ -1174,7 +1178,7 @@ func cloneUnaffectedIndexes(
 
 		for _, oriIdxTblName := range oriIdxTblNames.Indexes {
 
-			var newIdxTblName IndexTypeInfo
+			var newIdxTblName unaffectedIndexTypeInfo
 			found := false
 			for _, idxinfo := range newIdxTblNames.Indexes {
 				if oriIdxTblName.AlgoTableType == idxinfo.AlgoTableType {
@@ -1215,6 +1219,32 @@ func cloneUnaffectedIndexes(
 				return err
 			}
 
+			if shouldRebuildTxnLocalIndexClone(txnLocalChecker, oriIdxTblDef, oriIdxTblNames) {
+				sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE TRUE", dbName, newIdxTblName.IndexTableName)
+				if err = c.runSql(sql); err != nil {
+					return err
+				}
+				newIdxDef := findIndexDefByName(newTblDef, idxName)
+				if newIdxDef == nil {
+					return moerr.NewInternalErrorNoCtxf("missing cloned index definition for %s", idxName)
+				}
+				logutil.Infof("cloneUnaffectedIndex: rebuild txn-local index %s into %s\n", idxName, newIdxTblName.IndexTableName)
+				if catalog.IsMasterIndexAlgo(oriIdxTblNames.IndexAlgo) {
+					insertSQLs := genInsertIndexTableSqlForMasterIndex(newTblDef, newIdxDef, dbName)
+					for _, insertSQL := range insertSQLs {
+						if err = c.runSql(insertSQL); err != nil {
+							return err
+						}
+					}
+				} else {
+					insertSQL := genInsertIndexTableSql(newTblDef, newIdxDef, dbName, oriIdxTblNames.Unique)
+					if err = c.runSql(insertSQL); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+
 			clonePlan := plan.CloneTable{
 				CreateTable:     nil,
 				ScanSnapshot:    cloneSnapshot,
@@ -1243,5 +1273,34 @@ func cloneUnaffectedIndexes(
 		}
 	}
 
+	return nil
+}
+
+type txnLocalTableChecker interface {
+	IsTableCreatedInTxn(tableID uint64) bool
+	HasTableWritesInTxn(tableID uint64) bool
+}
+
+func shouldRebuildTxnLocalIndexClone(checker txnLocalTableChecker, idxTblDef *plan.TableDef, idxInfo *unaffectedIndexTableInfo) bool {
+	if checker == nil || idxTblDef == nil || idxInfo == nil {
+		return false
+	}
+	if !(idxInfo.Unique ||
+		catalog.IsMasterIndexAlgo(idxInfo.IndexAlgo) ||
+		(catalog.IsRegularIndexAlgo(idxInfo.IndexAlgo) && !catalog.IsRTreeIndexAlgo(idxInfo.IndexAlgo))) {
+		return false
+	}
+	return checker.IsTableCreatedInTxn(idxTblDef.TblId) || checker.HasTableWritesInTxn(idxTblDef.TblId)
+}
+
+func findIndexDefByName(tableDef *plan.TableDef, idxName string) *plan.IndexDef {
+	if tableDef == nil {
+		return nil
+	}
+	for _, idxDef := range tableDef.Indexes {
+		if idxDef.IndexName == idxName {
+			return idxDef
+		}
+	}
 	return nil
 }

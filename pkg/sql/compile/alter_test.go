@@ -55,6 +55,115 @@ func TestShouldEnableAlterCopyPipelineFlush(t *testing.T) {
 	assert.True(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterCopyOpt{SkipPkDedup: true}))
 }
 
+type alterCopyTxnLocalIndexChecker struct {
+	created map[uint64]bool
+	written map[uint64]bool
+}
+
+func (c alterCopyTxnLocalIndexChecker) IsTableCreatedInTxn(tableID uint64) bool {
+	return c.created[tableID]
+}
+
+func (c alterCopyTxnLocalIndexChecker) HasTableWritesInTxn(tableID uint64) bool {
+	return c.written[tableID]
+}
+
+func TestShouldRebuildTxnLocalIndexClone(t *testing.T) {
+	const idxTableID uint64 = 42
+
+	for _, tc := range []struct {
+		name    string
+		checker txnLocalTableChecker
+		idxDef  *plan.TableDef
+		idxInfo *unaffectedIndexTableInfo
+		want    bool
+	}{
+		{
+			name: "nil checker",
+			idxDef: &plan.TableDef{
+				TblId: idxTableID,
+			},
+			idxInfo: &unaffectedIndexTableInfo{},
+		},
+		{
+			name:    "nil table def",
+			checker: alterCopyTxnLocalIndexChecker{created: map[uint64]bool{idxTableID: true}},
+			idxInfo: &unaffectedIndexTableInfo{},
+		},
+		{
+			name:    "nil index info",
+			checker: alterCopyTxnLocalIndexChecker{created: map[uint64]bool{idxTableID: true}},
+			idxDef: &plan.TableDef{
+				TblId: idxTableID,
+			},
+		},
+		{
+			name:    "regular index table created in txn",
+			checker: alterCopyTxnLocalIndexChecker{created: map[uint64]bool{idxTableID: true}},
+			idxDef: &plan.TableDef{
+				TblId: idxTableID,
+			},
+			idxInfo: &unaffectedIndexTableInfo{},
+			want:    true,
+		},
+		{
+			name:    "regular index table written in txn",
+			checker: alterCopyTxnLocalIndexChecker{written: map[uint64]bool{idxTableID: true}},
+			idxDef: &plan.TableDef{
+				TblId: idxTableID,
+			},
+			idxInfo: &unaffectedIndexTableInfo{},
+			want:    true,
+		},
+		{
+			name:    "regular index table has no txn local state",
+			checker: alterCopyTxnLocalIndexChecker{},
+			idxDef: &plan.TableDef{
+				TblId: idxTableID,
+			},
+			idxInfo: &unaffectedIndexTableInfo{},
+		},
+		{
+			name:    "unique index table created in txn",
+			checker: alterCopyTxnLocalIndexChecker{created: map[uint64]bool{idxTableID: true}},
+			idxDef: &plan.TableDef{
+				TblId: idxTableID,
+			},
+			idxInfo: &unaffectedIndexTableInfo{Unique: true},
+			want:    true,
+		},
+		{
+			name:    "rtree index keeps clone path",
+			checker: alterCopyTxnLocalIndexChecker{created: map[uint64]bool{idxTableID: true}},
+			idxDef: &plan.TableDef{
+				TblId: idxTableID,
+			},
+			idxInfo: &unaffectedIndexTableInfo{IndexAlgo: catalog.MoIndexRTreeAlgo.ToString()},
+		},
+		{
+			name:    "master index table created in txn",
+			checker: alterCopyTxnLocalIndexChecker{created: map[uint64]bool{idxTableID: true}},
+			idxDef: &plan.TableDef{
+				TblId: idxTableID,
+			},
+			idxInfo: &unaffectedIndexTableInfo{IndexAlgo: catalog.MOIndexMasterAlgo.ToString()},
+			want:    true,
+		},
+		{
+			name:    "fulltext index keeps clone path",
+			checker: alterCopyTxnLocalIndexChecker{created: map[uint64]bool{idxTableID: true}},
+			idxDef: &plan.TableDef{
+				TblId: idxTableID,
+			},
+			idxInfo: &unaffectedIndexTableInfo{IndexAlgo: catalog.MOIndexFullTextAlgo.ToString()},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, shouldRebuildTxnLocalIndexClone(tc.checker, tc.idxDef, tc.idxInfo))
+		})
+	}
+}
+
 type alterCopyInsertSpyExecutor struct {
 	insertSQL    string
 	insertErr    error

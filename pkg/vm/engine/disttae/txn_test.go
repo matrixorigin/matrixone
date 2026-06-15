@@ -446,6 +446,44 @@ func TestTransactionGetTableNilGuards(t *testing.T) {
 	require.Contains(t, err.Error(), "disttae txn operator is nil")
 }
 
+func TestTransactionIsTableCreatedInTxn(t *testing.T) {
+	var nilTxn *Transaction
+	require.False(t, nilTxn.IsTableCreatedInTxn(42))
+
+	txn := &Transaction{}
+	require.False(t, txn.IsTableCreatedInTxn(42))
+
+	txn.tableOps = newTableOps()
+	require.False(t, txn.IsTableCreatedInTxn(42))
+
+	txn.tableOps.addCreatedInTxn(42, 1)
+	require.True(t, txn.IsTableCreatedInTxn(42))
+	require.False(t, txn.IsTableCreatedInTxn(43))
+}
+
+func TestTransactionHasTableWritesInTxn(t *testing.T) {
+	var nilTxn *Transaction
+	require.False(t, nilTxn.HasTableWritesInTxn(42))
+
+	proc := testutil.NewProc(t)
+	emptyBat := batch.NewWithSize(1)
+	emptyBat.SetRowCount(0)
+	writtenBat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 2})
+	defer writtenBat.Clean(proc.Mp())
+
+	txn := &Transaction{
+		writes: []Entry{
+			{tableId: 42},
+			{tableId: 42, bat: emptyBat},
+			{tableId: 43, bat: writtenBat},
+		},
+	}
+	require.False(t, txn.HasTableWritesInTxn(42))
+
+	txn.writes = append(txn.writes, Entry{tableId: 42, bat: writtenBat})
+	require.True(t, txn.HasTableWritesInTxn(42))
+}
+
 func TestResolvePKCheckPosForWriteEarlyExit(t *testing.T) {
 	txn := &Transaction{}
 

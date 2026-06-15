@@ -2372,6 +2372,31 @@ func (c *tableOpsChain) existCreatedInTxn(tid uint64) bool {
 	return exist
 }
 
+// IsTableCreatedInTxn reports whether the table id belongs to a table created
+// in the current transaction.
+func (txn *Transaction) IsTableCreatedInTxn(tid uint64) bool {
+	if txn == nil || txn.tableOps == nil {
+		return false
+	}
+	return txn.tableOps.existCreatedInTxn(tid)
+}
+
+// HasTableWritesInTxn reports whether the table has uncommitted workspace
+// writes in the current transaction.
+func (txn *Transaction) HasTableWritesInTxn(tid uint64) bool {
+	if txn == nil {
+		return false
+	}
+	txn.Lock()
+	defer txn.Unlock()
+	for _, entry := range txn.writes {
+		if entry.tableId == tid && entry.bat != nil && entry.bat.RowCount() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *tableOpsChain) addCreateTable(key tableKey, statementId int, t *txnTable) {
 	c.Lock()
 	defer c.Unlock()

@@ -1,0 +1,54 @@
+drop table if exists alter_copy_secondary_index_txn_t;
+create table alter_copy_secondary_index_txn_t (
+    k varchar(32) not null,
+    s varchar(32) not null,
+    body text not null,
+    key idx_k_s (k, s)
+);
+insert into alter_copy_secondary_index_txn_t (k, s, body) values ('a', 'x', '{}');
+select count(*) from alter_copy_secondary_index_txn_t where k = 'a' and s = 'x';
+begin;
+alter table alter_copy_secondary_index_txn_t add column c int not null default 0;
+alter table alter_copy_secondary_index_txn_t modify column body longtext not null;
+commit;
+select count(*) from alter_copy_secondary_index_txn_t where k = 'a' and s = 'x';
+select count(*) from alter_copy_secondary_index_txn_t where binary k = binary 'a' and binary s = binary 'x';
+insert into alter_copy_secondary_index_txn_t (k, s, body) values ('a', 'x', '{new}');
+select count(*) from alter_copy_secondary_index_txn_t where k = 'a' and s = 'x';
+drop table alter_copy_secondary_index_txn_t;
+
+drop table if exists alter_copy_master_index_txn_t;
+create table alter_copy_master_index_txn_t (
+    k varchar(32) not null,
+    s varchar(32) not null,
+    pk varchar(32) primary key,
+    body text not null,
+    index idx_k_s using master (k, s)
+);
+insert into alter_copy_master_index_txn_t (k, s, pk, body) values ('a', 'x', '1', '{}');
+begin;
+alter table alter_copy_master_index_txn_t add column c int not null default 0;
+alter table alter_copy_master_index_txn_t modify column body longtext not null;
+commit;
+select count(*) from alter_copy_master_index_txn_t where k = 'a' and s = 'x';
+select count(*) from alter_copy_master_index_txn_t where binary k = binary 'a' and binary s = binary 'x';
+insert into alter_copy_master_index_txn_t (k, s, pk, body) values ('a', 'x', '2', '{new}');
+select count(*) from alter_copy_master_index_txn_t where k = 'a' and s = 'x';
+drop table alter_copy_master_index_txn_t;
+
+drop table if exists alter_copy_secondary_index_txn_write_t;
+create table alter_copy_secondary_index_txn_write_t (
+    k varchar(32) not null,
+    s varchar(32) not null,
+    body text not null,
+    key idx_k_s (k, s)
+);
+insert into alter_copy_secondary_index_txn_write_t (k, s, body) values ('a', 'x', '{}');
+begin;
+insert into alter_copy_secondary_index_txn_write_t (k, s, body) values ('b', 'y', '{txn}');
+alter table alter_copy_secondary_index_txn_write_t add column c int not null default 0;
+commit;
+select count(*) from alter_copy_secondary_index_txn_write_t where k = 'a' and s = 'x';
+select count(*) from alter_copy_secondary_index_txn_write_t where k = 'b' and s = 'y';
+select count(*) from alter_copy_secondary_index_txn_write_t where binary k = binary 'b' and binary s = binary 'y';
+drop table alter_copy_secondary_index_txn_write_t;
