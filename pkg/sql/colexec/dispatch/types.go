@@ -72,7 +72,8 @@ type container struct {
 }
 
 type Dispatch struct {
-	ctr *container
+	ctr          *container
+	cleanupSpool *pSpool.PipelineSpool
 
 	// IsSink means this is a Sink Node
 	IsSink bool
@@ -182,8 +183,9 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 
 	// told the local receiver to stop if it is still running.
 	if dispatch.ctr != nil && dispatch.ctr.sp != nil {
+		sp := dispatch.ctr.sp
 		sendCtx, cancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
-		queryDone, sendErr := dispatch.ctr.sp.SendBatch(sendCtx, pSpool.SendToAllLocal, nil, err)
+		queryDone, sendErr := sp.SendBatch(sendCtx, pSpool.SendToAllLocal, nil, err)
 		cancel()
 
 		terminalSignalName := "direct"
@@ -204,7 +206,7 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		for i, reg := range dispatch.LocalRegs {
 			terminalSignal := newDirectSignal()
 			if terminalSignalName == "spool" {
-				terminalSignal = process.NewPipelineSignalToGetFromSpool(dispatch.ctr.sp, i)
+				terminalSignal = process.NewPipelineSignalToGetFromSpool(sp, i)
 			}
 			if process.TrySendPipelineSignal(reg, terminalSignal) {
 				continue
@@ -216,7 +218,7 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		for _, i := range pendingLocalRegs {
 			terminalSignal := newDirectSignal()
 			if terminalSignalName == "spool" {
-				terminalSignal = process.NewPipelineSignalToGetFromSpool(dispatch.ctr.sp, i)
+				terminalSignal = process.NewPipelineSignalToGetFromSpool(sp, i)
 			}
 			sentTerminalSignal := process.SendPipelineSignalWithContext(signalCtx, dispatch.LocalRegs[i], terminalSignal)
 			if !sentTerminalSignal {
@@ -239,8 +241,10 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		}
 		signalCancel()
 
+		spoolClosed := false
 		if terminalSignalName == "spool" && allTerminalSignalsSent {
-			if !dispatch.ctr.sp.CloseWithTimeout(process.PipelineSignalSendTimeout) {
+			spoolClosed = sp.CloseWithTimeout(process.PipelineSignalSendTimeout)
+			if !spoolClosed {
 				process.WarnPipelineCleanupf(
 					proc,
 					"dispatch_cleanup_close_spool",
@@ -258,6 +262,9 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 				allTerminalSignalsSent,
 				pipelineFailed,
 				err)
+		}
+		if !spoolClosed {
+			dispatch.cleanupSpool = sp
 		}
 		dispatch.ctr.sp = nil
 	} else {
@@ -291,6 +298,14 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		signalCancel()
 	}
 	dispatch.ctr = nil
+}
+
+func (dispatch *Dispatch) CleanupDeferredSpool() {
+	if dispatch.cleanupSpool == nil {
+		return
+	}
+	dispatch.cleanupSpool.ForceCleanup()
+	dispatch.cleanupSpool = nil
 }
 
 func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err error) {

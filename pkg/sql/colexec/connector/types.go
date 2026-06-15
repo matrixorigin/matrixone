@@ -30,7 +30,8 @@ var _ vm.Operator = new(Connector)
 type Connector struct {
 	ctr container
 
-	Reg *process.WaitRegister
+	Reg          *process.WaitRegister
+	cleanupSpool *pSpool.PipelineSpool
 	vm.OperatorBase
 }
 
@@ -87,14 +88,15 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 	}
 
 	if connector.ctr.sp != nil {
+		sp := connector.ctr.sp
 		sendCtx, cancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
-		queryDone, sendErr := connector.ctr.sp.SendBatch(sendCtx, pSpool.SendToAllLocal, nil, err)
+		queryDone, sendErr := sp.SendBatch(sendCtx, pSpool.SendToAllLocal, nil, err)
 		cancel()
 
 		terminalSignal := newDirectSignal()
 		terminalSignalName := "direct"
 		if sendErr == nil && !queryDone {
-			terminalSignal = process.NewPipelineSignalToGetFromSpool(connector.ctr.sp, 0)
+			terminalSignal = process.NewPipelineSignalToGetFromSpool(sp, 0)
 			terminalSignalName = "spool"
 		} else {
 			process.WarnPipelineCleanupf(
@@ -121,8 +123,10 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 				err)
 		}
 
+		spoolClosed := false
 		if terminalSignalName == "spool" && sentTerminalSignal {
-			if !connector.ctr.sp.CloseWithTimeout(process.PipelineSignalSendTimeout) {
+			spoolClosed = sp.CloseWithTimeout(process.PipelineSignalSendTimeout)
+			if !spoolClosed {
 				process.WarnPipelineCleanupf(
 					proc,
 					"connector_cleanup_close_spool",
@@ -140,6 +144,9 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 				sentTerminalSignal,
 				pipelineFailed,
 				err)
+		}
+		if !spoolClosed {
+			connector.cleanupSpool = sp
 		}
 		connector.ctr.sp = nil
 	} else {
@@ -159,6 +166,14 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 				err)
 		}
 	}
+}
+
+func (connector *Connector) CleanupDeferredSpool() {
+	if connector.cleanupSpool == nil {
+		return
+	}
+	connector.cleanupSpool.ForceCleanup()
+	connector.cleanupSpool = nil
 }
 
 func (connector *Connector) Free(proc *process.Process, pipelineFailed bool, err error) {

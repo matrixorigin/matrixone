@@ -16,6 +16,7 @@ package pSpool
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -47,6 +48,8 @@ type PipelineSpool struct {
 	//
 	// the data producer should wait all consumers done before its close.
 	csDoneSignal chan struct{}
+
+	cleanupOnce sync.Once
 }
 
 // pipelineSpoolMessage is the element of PipelineSpool.
@@ -144,8 +147,41 @@ func (ps *PipelineSpool) CloseWithTimeout(timeout time.Duration) bool {
 		}
 	}
 
-	ps.cache.free()
+	ps.ForceCleanup()
 	return true
+}
+
+// ForceCleanup releases any spool-owned batch memory without waiting for
+// receivers. It is intended for query teardown after pipeline cleanup has
+// already stopped making progress.
+func (ps *PipelineSpool) ForceCleanup() {
+	if ps == nil {
+		return
+	}
+	ps.cleanupOnce.Do(ps.forceCleanup)
+}
+
+func (ps *PipelineSpool) forceCleanup() {
+	freeSlots := make([]bool, len(ps.shardPool))
+	for i := len(ps.freeShardPool); i > 0; i-- {
+		slot := <-ps.freeShardPool
+		freeSlots[slot] = true
+	}
+
+	for i := range ps.shardPool {
+		if freeSlots[i] {
+			continue
+		}
+
+		msg := &ps.shardPool[i]
+		ps.cache.CacheBatch(msg.useCache, msg.cacheID, msg.dataContent)
+		msg.dataContent = nil
+		msg.errContent = nil
+		msg.useCache = false
+		msg.cacheID = 0
+	}
+
+	ps.cache.free()
 }
 
 func (ps *PipelineSpool) getFreeIdFromSharedPool(

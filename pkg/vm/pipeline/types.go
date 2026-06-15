@@ -32,6 +32,26 @@ type Pipeline struct {
 	rootOp vm.Operator
 }
 
+type deferredSpoolCleaner interface {
+	CleanupDeferredSpool()
+}
+
+func cleanupDeferredSpool(op vm.Operator) {
+	if cleaner, ok := op.(deferredSpoolCleaner); ok {
+		cleaner.CleanupDeferredSpool()
+	}
+}
+
+func cleanupDeferredSpools(root vm.Operator) {
+	if root == nil {
+		return
+	}
+	_ = vm.HandleAllOp(root, func(_ vm.Operator, op vm.Operator) error {
+		cleanupDeferredSpool(op)
+		return nil
+	})
+}
+
 func IsCtePipelineAtLoop(rootOp vm.Operator) (isMergeCte bool, atLoop bool) {
 	// required:
 	// 1. it is a linked tree.
@@ -75,6 +95,7 @@ func (p *Pipeline) CleanRootOperator(proc *process.Process, pipelineFailed bool,
 		return
 	}
 	p.rootOp.Reset(proc, pipelineFailed, err)
+	cleanupDeferredSpool(p.rootOp)
 	if !isPrepare {
 		p.rootOp.Free(proc, pipelineFailed, err)
 	}
@@ -112,6 +133,7 @@ func (p *Pipeline) cleanupInOrder(proc *process.Process, pipelineFailed bool, is
 			op.Reset(proc, pipelineFailed, err)
 			return nil
 		})
+		cleanupDeferredSpools(root)
 
 		if !isPrepare {
 			_ = vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {
@@ -148,6 +170,7 @@ func (p *Pipeline) cleanupSenderReceiverPipeline(
 		p.rootOp.Free(proc, pipelineFailed, err)
 	}
 	wg.Wait()
+	cleanupDeferredSpool(p.rootOp)
 
 	p.cleanupChildrenExceptMerge(proc, pipelineFailed, isPrepare, err, mergeOperator)
 }
@@ -166,6 +189,7 @@ func (p *Pipeline) cleanupChildrenExceptMerge(
 			op.Reset(proc, pipelineFailed, err)
 			return nil
 		})
+		cleanupDeferredSpools(child)
 		if !isPrepare {
 			_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
 				if op == skip {
@@ -215,6 +239,7 @@ func (p *Pipeline) cleanupLoopPipeline(proc *process.Process, pipelineFailed boo
 		dispatchOperator.Free(proc, pipelineFailed, err)
 	}
 	wg.Wait()
+	cleanupDeferredSpool(dispatchOperator)
 
 	// from first to last to clean up the left operators.
 
