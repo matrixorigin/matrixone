@@ -78,6 +78,19 @@ func mockMoIndexes() []*plan.IndexDef {
 
 }
 
+func hnswSyncTestResolveVariableFunc(indexCapacity int64) func(string, bool, bool) (any, error) {
+	return func(key string, b1 bool, b2 bool) (any, error) {
+		switch key {
+		case "hnsw_max_index_capacity":
+			return indexCapacity, nil
+		case "hnsw_threads_build":
+			return int64(1), nil
+		default:
+			return int64(0), nil
+		}
+	}
+}
+
 type MockTxnExecutor struct {
 }
 
@@ -136,6 +149,7 @@ func TestSyncEmptyCatalogError(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	proc.SetResolveVariableFunc(hnswSyncTestResolveVariableFunc(100))
 
 	runSql = mock_runSql_empty
 	runSql_streaming = mock_runSql_streaming
@@ -166,6 +180,7 @@ func TestSyncUpsertWithEmpty(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	proc.SetResolveVariableFunc(hnswSyncTestResolveVariableFunc(100))
 
 	runSql = mock_runSql_empty
 	runSql_streaming = mock_runSql_streaming
@@ -252,6 +267,7 @@ func TestSyncUpsert(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	proc.SetResolveVariableFunc(hnswSyncTestResolveVariableFunc(100))
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -284,6 +300,7 @@ func TestSyncDelete(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	proc.SetResolveVariableFunc(hnswSyncTestResolveVariableFunc(100))
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -312,6 +329,7 @@ func TestSyncDeleteAndInsert(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	proc.SetResolveVariableFunc(hnswSyncTestResolveVariableFunc(100))
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -349,6 +367,7 @@ func TestSyncUpdate(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	proc.SetResolveVariableFunc(hnswSyncTestResolveVariableFunc(100))
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -378,6 +397,7 @@ func TestSyncDeleteAndUpsert(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	proc.SetResolveVariableFunc(hnswSyncTestResolveVariableFunc(100))
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -447,6 +467,7 @@ func TestSyncDelete2Files(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	proc.SetResolveVariableFunc(hnswSyncTestResolveVariableFunc(100))
 
 	runSql = mock_runSql_2files
 	runSql_streaming = mock_runSql_streaming_2files
@@ -475,6 +496,7 @@ func TestSyncDeleteShuffle2Files(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	proc.SetResolveVariableFunc(hnswSyncTestResolveVariableFunc(100))
 
 	runSql = mock_runSql_2files
 	runSql_streaming = mock_runSql_streaming_2files
@@ -506,6 +528,7 @@ func TestSyncUpdateShuffle2Files(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	proc.SetResolveVariableFunc(hnswSyncTestResolveVariableFunc(100))
 
 	runSql = mock_runSql_2files
 	runSql_streaming = mock_runSql_streaming_2files
@@ -538,6 +561,7 @@ func runSyncUpdateInsertShuffle2Files[T types.RealNumbers](t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	proc.SetResolveVariableFunc(hnswSyncTestResolveVariableFunc(100))
 
 	runSql = mock_runSql_2files
 	runSql_streaming = mock_runSql_streaming_2files
