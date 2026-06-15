@@ -19,12 +19,66 @@ import (
 	"context"
 	"crypto/rand"
 	"io"
+	mrand "math/rand"
 	"os"
 	"testing"
 	"testing/iotest"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// TestFileWithChecksumReadAtCoalesce exercises the read-coalescing ReadAt on the
+// large / multi-chunk path (reads spanning many on-disk blocks and crossing the
+// _ReadCoalesceSize cap), at the production block size (_BlockContentSize=2044)
+// and a tiny custom size, over random (offset,length) windows incl. past-EOF.
+func TestFileWithChecksumReadAtCoalesce(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+
+	for _, bcs := range []int{_BlockContentSize, 64} {
+		dataSize := 5 << 20 // 5 MiB > 2 MiB coalesce cap -> multi-chunk for 2044 blocks
+		if bcs == 64 {
+			dataSize = 256 << 10
+		}
+		f, err := os.CreateTemp(tempDir, "*")
+		require.NoError(t, err)
+		t.Cleanup(func() { f.Close() })
+
+		fw := NewFileWithChecksum(ctx, f, bcs, nil)
+		src := make([]byte, dataSize)
+		_, err = rand.Read(src)
+		require.NoError(t, err)
+		_, err = fw.WriteAt(src, 0)
+		require.NoError(t, err)
+
+		rng := mrand.New(mrand.NewSource(42))
+		for it := 0; it < 3000; it++ {
+			off := rng.Intn(dataSize + 4096) // sometimes at/past EOF
+			length := rng.Intn(3<<20) + 1    // up to 3 MiB -> crosses the 2 MiB cap
+			got := make([]byte, length)
+			n, rerr := fw.ReadAt(got, int64(off))
+
+			avail := 0
+			if off < dataSize {
+				if avail = dataSize - off; avail > length {
+					avail = length
+				}
+			}
+			start := off
+			if start > dataSize {
+				start = dataSize
+			}
+			require.Equalf(t, avail, n, "bcs=%d off=%d len=%d", bcs, off, length)
+			require.Equalf(t, src[start:start+avail], got[:n], "bcs=%d off=%d len=%d", bcs, off, length)
+			if off+length > dataSize {
+				require.ErrorIsf(t, rerr, io.EOF, "bcs=%d off=%d len=%d", bcs, off, length)
+			} else {
+				require.NoErrorf(t, rerr, "bcs=%d off=%d len=%d", bcs, off, length)
+			}
+		}
+	}
+}
 
 func TestFileWithChecksumOffsets(t *testing.T) {
 	ctx := context.Background()
@@ -245,3 +299,57 @@ func BenchmarkFileWithChecksumWrite(b *testing.B) {
 		}
 	}
 }
+
+// readAtPerBlock mimics the pre-coalescing ReadAt: one underlying ReadAt (syscall)
+// per on-disk block. Used only to benchmark the speedup of the coalesced path.
+func (f *FileWithChecksum[T]) readAtPerBlock(buf []byte, offset int64) (n int, err error) {
+	for len(buf) > 0 {
+		blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(offset)
+		data, putback, rerr := f.readBlock(blockOffset)
+		if rerr != nil && rerr != io.EOF {
+			putback.Put()
+			return n, rerr
+		}
+		data = data[offsetInBlock:]
+		c := copy(buf, data)
+		buf = buf[c:]
+		putback.Put()
+		offset += int64(c)
+		n += c
+		if rerr == io.EOF {
+			break
+		}
+	}
+	return n, err
+}
+
+func BenchmarkFileWithChecksumReadAt(b *testing.B) {
+	ctx := context.Background()
+	f, err := os.CreateTemp(b.TempDir(), "*")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer f.Close()
+	fw := NewFileWithChecksum(ctx, f, _BlockContentSize, nil)
+	const dataSize = 24 << 20 // 24 MiB ~ one column block
+	src := make([]byte, dataSize)
+	rand.Read(src)
+	if _, err := fw.WriteAt(src, 0); err != nil {
+		b.Fatal(err)
+	}
+	out := make([]byte, dataSize)
+
+	b.Run("coalesced", func(b *testing.B) {
+		b.SetBytes(dataSize)
+		for i := 0; i < b.N; i++ {
+			fw.ReadAt(out, 0)
+		}
+	})
+	b.Run("perblock", func(b *testing.B) {
+		b.SetBytes(dataSize)
+		for i := 0; i < b.N; i++ {
+			fw.readAtPerBlock(out, 0)
+		}
+	})
+}
+
