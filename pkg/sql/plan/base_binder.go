@@ -1316,7 +1316,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	if name == "name_const" {
-		if !validNameConstNameAst(astArgs) {
+		if !validNameConstNameAst(astArgs) || !validNameConstValueAst(astArgs) {
 			return nil, moerr.NewInvalidArg(b.GetContext(), "NAME_CONST", "")
 		}
 		if err := validateNameConstArgs(b.GetContext(), args); err != nil {
@@ -2994,16 +2994,43 @@ func validNameConstNameAst(args []tree.Expr) bool {
 	if len(args) != 2 {
 		return false
 	}
-	name := args[0]
+	name := stripNameConstParens(args[0])
+	nameLit, ok := name.(*tree.NumVal)
+	return ok && validNameConstNameLiteral(nameLit)
+}
+
+func validNameConstValueAst(args []tree.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	return validNameConstLiteralValueAst(args[1])
+}
+
+func validNameConstLiteralValueAst(expr tree.Expr) bool {
+	expr = stripNameConstParens(expr)
+	switch value := expr.(type) {
+	case *tree.NumVal:
+		return true
+	case *tree.UnaryExpr:
+		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
+			return false
+		}
+		_, ok := stripNameConstParens(value.Expr).(*tree.NumVal)
+		return ok
+	default:
+		return false
+	}
+}
+
+func stripNameConstParens(expr tree.Expr) tree.Expr {
 	for {
-		paren, ok := name.(*tree.ParenExpr)
+		paren, ok := expr.(*tree.ParenExpr)
 		if !ok {
 			break
 		}
-		name = paren.Expr
+		expr = paren.Expr
 	}
-	nameLit, ok := name.(*tree.NumVal)
-	return ok && validNameConstNameLiteral(nameLit)
+	return expr
 }
 
 func isDecimalLiteralCast(arg *plan.Expr) bool {

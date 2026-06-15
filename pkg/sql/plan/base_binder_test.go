@@ -216,6 +216,10 @@ func TestBindNameConstInvalidArgs(t *testing.T) {
 			sql:  "select name_const('myname', cast(14 as signed))",
 		},
 		{
+			name: "decimal cast function value",
+			sql:  "select name_const('myname', cast('12.34' as decimal(10,2)))",
+		},
+		{
 			name: "foldable function value",
 			sql:  "select name_const('myname', abs(-1))",
 		},
