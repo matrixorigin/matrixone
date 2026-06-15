@@ -603,68 +603,6 @@ func (r *CheckpointReader) ReadTableSchema(
 	return schema
 }
 
-func (r *CheckpointReader) applyObjectColumnTypes(
-	ctx context.Context,
-	snapshotTS types.TS,
-	schema *TableSchema,
-	dataEntries []*ObjectEntryInfo,
-) {
-	if schema == nil || len(schema.Columns) == 0 || len(dataEntries) == 0 {
-		return
-	}
-	visibleEntries := visibleObjectEntries(dataEntries, snapshotTS)
-	for _, entry := range visibleEntries {
-		objName := entry.ObjectStats.ObjectName().String()
-		reader, err := objecttool.OpenWithFS(ctx, r.fs, objName, objName)
-		if err != nil {
-			continue
-		}
-		cols := reader.Columns()
-		_ = reader.Close()
-		if len(cols) == 0 {
-			continue
-		}
-		typeBySeqNum := make(map[int]string, len(cols))
-		for i, col := range cols {
-			sqlType := col.Type.DescString()
-			if !isPrintableSQLType(sqlType) {
-				continue
-			}
-			typeBySeqNum[int(col.SeqNum)] = sqlType
-			if _, ok := typeBySeqNum[int(col.Idx)]; !ok {
-				typeBySeqNum[int(col.Idx)] = sqlType
-			}
-			if _, ok := typeBySeqNum[i]; !ok {
-				typeBySeqNum[i] = sqlType
-			}
-		}
-		filled := 0
-		for i := range schema.Columns {
-			if isPrintableSQLType(schema.Columns[i].SQLType) {
-				continue
-			}
-			if sqlType, ok := typeBySeqNum[schema.Columns[i].PhysicalPosition]; ok {
-				schema.Columns[i].SQLType = sqlType
-				filled++
-			}
-		}
-		ckpDebugSchemaf("object column types applied table=%s object=%s filled=%d cols=%d", schema.TableName, objName, filled, len(schema.Columns))
-		return
-	}
-}
-
-func schemaHasColumnTypes(schema *TableSchema) bool {
-	if schema == nil || len(schema.Columns) == 0 {
-		return false
-	}
-	for _, col := range schema.Columns {
-		if !isPrintableSQLType(col.SQLType) {
-			return false
-		}
-	}
-	return true
-}
-
 // getTableLogicalView composes the checkpoint view at snapshotTS and builds a logical
 // table view for the given tableID by aggregating data/tomb entries across all
 // relevant checkpoint entries (GCKP + ICKPs).
@@ -736,8 +674,7 @@ func (r *CheckpointReader) DumpTableCSV(
 	opts ...CSVExportOption,
 ) error {
 	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
-	r.applyObjectColumnTypes(ctx, snapshotTS, schema, dataEntries)
-	if !schemaHasColumnTypes(schema) {
+	if len(schema.Columns) == 0 {
 		return moerr.NewInternalErrorf(
 			ctx,
 			"cannot resolve visible columns for table %d from checkpoint metadata; mo_columns data is unavailable or incomplete",
@@ -766,8 +703,7 @@ func (r *CheckpointReader) DumpTableCSVComposed(
 		tombEntries = nil
 	}
 	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
-	r.applyObjectColumnTypes(ctx, snapshotTS, schema, dataEntries)
-	if !schemaHasColumnTypes(schema) {
+	if len(schema.Columns) == 0 {
 		return moerr.NewInternalErrorf(
 			ctx,
 			"cannot resolve visible columns for table %d from checkpoint metadata; mo_columns data is unavailable or incomplete",
@@ -793,8 +729,7 @@ func (r *CheckpointReader) PrepareTableDumpData(
 		tombEntries = nil
 	}
 	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
-	r.applyObjectColumnTypes(ctx, snapshotTS, schema, dataEntries)
-	if !schemaHasColumnTypes(schema) {
+	if len(schema.Columns) == 0 {
 		return nil, moerr.NewInternalErrorf(
 			ctx,
 			"cannot resolve visible columns for table %d from checkpoint metadata; mo_columns data is unavailable or incomplete",
@@ -867,8 +802,7 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 	}
 
 	for tableID, data := range result {
-		r.applyObjectColumnTypes(ctx, snapshotTS, data.Schema, data.DataEntries)
-		if !schemaHasColumnTypes(data.Schema) {
+		if data.Schema == nil || len(data.Schema.Columns) == 0 {
 			return nil, moerr.NewInternalErrorf(ctx, "cannot resolve visible columns for table %d from checkpoint metadata", tableID)
 		}
 	}
@@ -896,7 +830,7 @@ func (r *CheckpointReader) DumpPreparedTableCSV(
 	if data == nil {
 		return moerr.NewInternalError(ctx, "missing prepared table dump data")
 	}
-	if !schemaHasColumnTypes(data.Schema) {
+	if data.Schema == nil || len(data.Schema.Columns) == 0 {
 		return moerr.NewInternalErrorf(ctx, "cannot resolve visible columns for table %d from checkpoint metadata", data.TableID)
 	}
 	return r.streamTableCSV(ctx, w, data.Schema, snapshotTS, data.DataEntries, data.TombEntries, resolveCSVExportOptions(opts))
@@ -2599,6 +2533,7 @@ func buildColumnsFromMoColumnsRowsAt(
 	tableIDStr := fmt.Sprintf("%d", tableID)
 	var cols []TableColumn
 	matchedRows := 0
+	typeDecodeFailures := 0
 	for _, fullRow := range view.Rows {
 		row := fullRow[logicalViewDataOffset(view):]
 
@@ -2643,8 +2578,9 @@ func buildColumnsFromMoColumnsRowsAt(
 			if sqlType, ok := decodeMoColumnSQLType(row[typCol]); ok {
 				col.SQLType = sqlType
 			} else {
+				typeDecodeFailures++
 				ckpDebugSchemaf(
-					"mo_columns type decode unavailable table=%d matched_rows=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d seqnum_col=%d column=%q raw_len=%d raw_hex=%s",
+					"mo_columns atttyp decode failed table=%d matched_rows=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d seqnum_col=%d column=%q %s",
 					tableID,
 					matchedRows,
 					relnameIDCol,
@@ -2654,13 +2590,27 @@ func buildColumnsFromMoColumnsRowsAt(
 					hiddenCol,
 					seqNumCol,
 					col.Name,
-					len(row[typCol]),
-					debugHexPrefix(row[typCol], 32),
+					debugMoColumnTypeCell(row[typCol], fullRow),
 				)
 			}
 		}
-
 		cols = append(cols, col)
+	}
+
+	if typeDecodeFailures > 0 {
+		ckpDebugSchemaf(
+			"mo_columns schema rejected table=%d matched_rows=%d type_decode_failures=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d seqnum_col=%d",
+			tableID,
+			matchedRows,
+			typeDecodeFailures,
+			relnameIDCol,
+			nameCol,
+			typCol,
+			numCol,
+			hiddenCol,
+			seqNumCol,
+		)
+		return nil
 	}
 
 	// Sort by position
@@ -2718,12 +2668,7 @@ func (r *CheckpointReader) ShowCreateTable(
 		moColumnsView = nil
 	}
 
-	dataEntries, _, dataErr := r.getTableEntriesAt(ctx, tableID, snapshotTS)
-	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
-	if dataErr == nil {
-		r.applyObjectColumnTypes(ctx, snapshotTS, schema, dataEntries)
-	}
-	if ddl := RenderCreateTableDDLFromSchema(schema); ddl != "" {
+	if ddl := createTableDDLFromCatalogViews(tableID, moTablesView, moColumnsView); ddl != "" {
 		return ddl, nil
 	}
 
@@ -3085,7 +3030,7 @@ func buildCreateTableFromMoColumnsAt(
 			sqlType, ok := decodeMoColumnSQLType(row[typCol])
 			if !ok {
 				ckpDebugSchemaf(
-					"mo_columns ddl type decode failed table=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d column=%q raw_len=%d raw_hex=%s",
+					"mo_columns ddl atttyp decode failed table=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d column=%q %s",
 					tableID,
 					relnameIDCol,
 					nameCol,
@@ -3093,8 +3038,7 @@ func buildCreateTableFromMoColumnsAt(
 					numCol,
 					hiddenCol,
 					c.name,
-					len(row[typCol]),
-					debugHexPrefix(row[typCol], 32),
+					debugMoColumnTypeCell(row[typCol], fullRow),
 				)
 				return ""
 			}
@@ -3195,6 +3139,51 @@ func debugHexPrefix(s string, limit int) string {
 		s = s[:limit]
 	}
 	return hex.EncodeToString([]byte(s))
+}
+
+func debugMoColumnTypeCell(raw string, fullRow []string) string {
+	var typ types.Type
+	decodeErr := "<not-run>"
+	oid := ""
+	width := int32(0)
+	scale := int32(0)
+	desc := ""
+	if len(raw) >= typ.ProtoSize() {
+		if err := types.Decode([]byte(raw), &typ); err != nil {
+			decodeErr = err.Error()
+		} else {
+			decodeErr = "<nil>"
+			oid = typ.Oid.String()
+			width = typ.Width
+			scale = typ.Scale
+			desc = typ.DescString()
+		}
+	}
+	objectName := ""
+	blockIdx := ""
+	rowIdx := ""
+	if len(fullRow) > 0 {
+		objectName = fullRow[0]
+	}
+	if len(fullRow) > 1 {
+		blockIdx = fullRow[1]
+	}
+	if len(fullRow) > 2 {
+		rowIdx = fullRow[2]
+	}
+	return fmt.Sprintf(
+		"raw_len=%d raw_hex=%s decode_err=%s oid=%s width=%d scale=%d desc=%q object=%s block=%s row=%s",
+		len(raw),
+		debugHexPrefix(raw, 64),
+		decodeErr,
+		oid,
+		width,
+		scale,
+		desc,
+		objectName,
+		blockIdx,
+		rowIdx,
+	)
 }
 
 func isPrintableCreateTableSQL(ddl string) bool {

@@ -615,6 +615,11 @@ func vecValueToString(vec *vector.Vector, idx int) string {
 			return values[rowIdx].String2(vec.GetType().Scale)
 		}
 	}
+	switch vec.GetType().Oid {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_json, types.T_blob, types.T_text, types.T_datalink, types.T_geometry:
+		return string(vec.GetBytesAt(idx))
+	}
 	value := vec.RowToString(idx)
 	if value == "null" {
 		return "NULL"
