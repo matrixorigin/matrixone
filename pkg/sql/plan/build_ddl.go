@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -922,10 +923,14 @@ func buildCreateTable(
 	if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
-			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns":
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns", ExternalWriteFilePatternKey, CSVCommentKey:
 			default:
 				return nil, moerr.NewBadConfigf(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
 			}
+		}
+
+		if err := validateWriteFilePattern(ctx.GetContext(), stmt.Param, createTable.TableDef); err != nil {
+			return nil, err
 		}
 
 		if err := validateAndSetHivePartitionOptions(ctx.GetContext(), stmt, createTable); err != nil {
@@ -3805,6 +3810,17 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not truncate source '%v' ", truncateTable.Table)
 		}
 
+		// TRUNCATE has always been a silent no-op for external tables; keep that
+		// for read-only ones, but a writable external table holds INSERTed data
+		// the user would expect TRUNCATE to remove — reject rather than report
+		// success while the stage files survive.
+		if tableDef.TableType == catalog.SystemExternalRel {
+			if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); ok {
+				return nil, moerr.NewNotSupportedf(ctx.GetContext(),
+					"truncate writable external table '%v'; its files in the stage are not managed by the table", truncateTable.Table)
+			}
+		}
+
 		if len(tableDef.RefChildTbls) > 0 {
 			// if all children tables are self reference, we can drop the table
 			if !HasFkSelfReferOnly(tableDef) {
@@ -5127,7 +5143,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				return nil, err
 			}
 		case *tree.AlterTableRenameColumnClause:
-			if err := checkTableType(ctx.GetContext(), tableDef); err != nil {
+			if err := checkTableType(ctx.GetContext(), tableDef, ""); err != nil {
 				return nil, err
 			}
 
@@ -5919,6 +5935,302 @@ func constructAddedPartitionDefs(
 	default:
 		return nil, moerr.NewNotSupportedNoCtx("unsupported partition method in ADD PARTITION")
 	}
+}
+
+// validateWriteFilePattern validates the WRITE_FILE_PATTERN option that makes an
+// external table writable, plus the column restrictions writability implies.
+// No-op for read-only external tables (option absent). tableDef may be nil when
+// only the param-level options need checking.
+// effectiveWriteCompression mirrors crt.GetCompressType's decision (inlined to
+// avoid the plan<-crt import cycle): an explicit non-auto compression wins,
+// otherwise the type is auto-detected from any of the given file paths'
+// suffixes. Returns the effective type and whether it is compressed.
+func effectiveWriteCompression(comp string, paths ...string) (string, bool) {
+	comp = strings.ToLower(strings.TrimSpace(comp))
+	if comp != "" && comp != tree.AUTO {
+		return comp, comp != tree.NOCOMPRESS
+	}
+	suffixes := []string{".tar.gz", ".tar.gzip", ".tar.bz2", ".tar.bzip2", ".gz", ".gzip", ".bz2", ".bzip2", ".lz4"}
+	for _, p := range paths {
+		p = strings.ToLower(p)
+		for _, suf := range suffixes {
+			if strings.HasSuffix(p, suf) {
+				return strings.TrimPrefix(suf, "."), true
+			}
+		}
+	}
+	return tree.NOCOMPRESS, false
+}
+
+func validateWriteFilePattern(ctx context.Context, param *tree.ExternParam, tableDef *TableDef) error {
+	pattern, ok := GetWriteFilePattern(param)
+	if !ok {
+		return nil
+	}
+	if !strings.HasPrefix(pattern, "stage://") {
+		return moerr.NewBadConfigf(ctx, "WRITE_FILE_PATTERN must be a stage:// path, got '%s'", pattern)
+	}
+	// Duplicate option keys would let validation inspect a different value than
+	// the one the read-side init later keeps (it walks the whole slice, last
+	// wins) — so a table could validate as csv and run as parquet.
+	if err := rejectDuplicateKeys(ctx, param.Option,
+		[]string{"format", "jsondata", "compression", "filepath", ExternalWriteFilePatternKey}); err != nil {
+		return err
+	}
+	// The writer streams plain bytes; the read path decompresses based on the
+	// COMPRESSION option (or, when unset/auto, the file suffix), so any
+	// effective compression — from the option, the read FILEPATH glob, or the
+	// write pattern itself — would make the produced files unreadable.
+	comp := param.CompressType
+	if comp == "" {
+		comp = getRawOption(param.Option, "compression")
+	}
+	if eff, compressed := effectiveWriteCompression(comp, getRawOption(param.Option, "filepath"), pattern); compressed {
+		return moerr.NewBadConfigf(ctx, "writable external table does not support compression (effective '%s'); the writer emits uncompressed files", eff)
+	}
+	format := strings.ToLower(param.Format)
+	if format == "" {
+		format = strings.ToLower(getRawOption(param.Option, "format"))
+	}
+	if format != tree.CSV && format != tree.JSONLINE {
+		return moerr.NewBadConfigf(ctx, "writable external table only supports csv and jsonline formats, got '%s'", format)
+	}
+	if format == tree.JSONLINE {
+		jsondata := strings.ToLower(param.JsonData)
+		if jsondata == "" {
+			jsondata = strings.ToLower(getRawOption(param.Option, "jsondata"))
+		}
+		// The writer emits one JSON object per line; jsondata='array' tables would
+		// not be able to read back their own output.
+		if jsondata == tree.ARRAY {
+			return moerr.NewBadConfig(ctx, "writable external table does not support jsondata 'array', use 'object'")
+		}
+		// JSON strings have no enclosure mechanism: a printable line terminator
+		// occurring inside a value would split the record on readback. \n and
+		// \r\n are safe because the JSON encoder \u-escapes control characters.
+		if param.Tail != nil && param.Tail.Lines != nil && param.Tail.Lines.TerminatedBy != nil {
+			if v := param.Tail.Lines.TerminatedBy.Value; v != "" && v != "\n" && v != "\r\n" {
+				return moerr.NewBadConfig(ctx, "writable external table with format 'jsonline' only supports LINES TERMINATED BY '\\n' or '\\r\\n'")
+			}
+		}
+		// COMMENT is unsafe for jsonline: the reader matches the marker against the
+		// raw line prefix before LINES STARTING BY is consumed, but every jsonline
+		// record deterministically begins with LINES STARTING BY + '{' and JSON has
+		// no enclosure mechanism to hide it. A marker such as '{' would skip every
+		// row the writer produced, so reject COMMENT on writable jsonline tables.
+		if GetCSVComment(param) != "" {
+			return moerr.NewBadConfig(ctx, "writable external table with format 'jsonline' does not support the COMMENT option")
+		}
+	}
+	if format == tree.CSV {
+		if err := validateWritableComment(ctx, param); err != nil {
+			return err
+		}
+	}
+	// Dry-run the pattern against a fixed timestamp to reject bad directives at DDL time.
+	if _, err := externalwrite.ExpandFilePattern(pattern, time.Unix(0, 0).UTC()); err != nil {
+		return err
+	}
+	// Every parallel pipeline owns one writer and expands the pattern against the
+	// same statement timestamp, so without a per-writer-unique directive all
+	// pipelines would open the identical path and clobber each other.
+	if !externalwrite.PatternHasUniqueDirective(pattern) {
+		return moerr.NewBadConfigf(ctx, "WRITE_FILE_PATTERN must contain a %%U or %%<n>N directive so parallel writers produce distinct files, got '%s'", pattern)
+	}
+	// Reject FIELDS/LINES combinations the writer cannot make round-trip.
+	if param.Tail != nil {
+		if err := validateWritableEscape(ctx, param.Tail); err != nil {
+			return err
+		}
+		// The reader skips IGNORE N LINES per file, but the writer emits no
+		// header lines, so real data rows would be discarded on readback.
+		if param.Tail.IgnoredLines > 0 {
+			return moerr.NewBadConfig(ctx, "writable external table does not support IGNORE ... LINES")
+		}
+	}
+	if tableDef != nil {
+		for _, col := range tableDef.Cols {
+			// Hidden/synthetic columns (e.g. the fake-PK column added to tables
+			// without a primary key) are never written to the output file.
+			if col.Hidden {
+				continue
+			}
+			// AUTO_INCREMENT values are generated by the PreInsert operator, which
+			// the minimal external-insert plan does not run.
+			if col.Typ.AutoIncr {
+				return moerr.NewBadConfigf(ctx, "writable external table does not support AUTO_INCREMENT column '%s'", col.Name)
+			}
+			// Generated columns are recomputed (and explicit writes rejected) only
+			// by the normal insert/load binders. The external INSERT/LOAD path uses
+			// the minimal legacy builder, which neither filters nor recomputes them,
+			// so a generated column would store arbitrary or NULL/default values.
+			if col.GeneratedCol != nil {
+				return moerr.NewBadConfigf(ctx, "writable external table does not support generated column '%s'", col.Name)
+			}
+			// Binary payloads cannot round-trip through JSON strings: bit bytes
+			// >= 0x80 are invalid UTF-8, and binary/varbinary/blob would need a
+			// base64 encoding the jsonline READER does not decode.
+			if format == tree.JSONLINE {
+				switch types.T(col.Typ.Id) {
+				case types.T_bit, types.T_binary, types.T_varbinary, types.T_blob:
+					return moerr.NewBadConfigf(ctx, "writable external table with format 'jsonline' does not support %s column '%s'",
+						strings.ToLower(types.T(col.Typ.Id).String()), col.Name)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// validateWritableComment rejects CSV COMMENT markers the writer cannot make
+// round-trip. The reader skips a line whose RAW prefix (before unquoting)
+// matches the marker, so the writer must never produce such a line. The writer
+// guards a non-NULL, unenclosed first field by enclosing it (the line then
+// begins with the enclosure byte), but three structural cases cannot be guarded
+// that way and are rejected here:
+//
+//  1. LINES STARTING BY: the marker is matched on the raw prefix BEFORE the
+//     starting-by prefix is consumed, so a marker contained in that fixed prefix
+//     (e.g. COMMENT 'REM' with LINES STARTING BY 'REM:') skips every row. COMMENT
+//     and LINES STARTING BY are therefore mutually exclusive for writable tables.
+//  2. The enclosure byte: a first field that must be enclosed (or the writer's
+//     own guard) makes the line begin with the enclosure byte, so a marker that
+//     begins with it would skip those rows. Enclosing cannot help — it is the
+//     collision. Reject a marker whose first byte is the enclosure byte.
+//  3. The escape byte: the writer escapes the (unenclosed) first field, so a
+//     value can be written starting with the escape byte (e.g. a doubled escape),
+//     which a marker beginning with that byte would skip. Reject it too.
+//  4. The field terminator: an empty first field makes the line begin with the
+//     terminator, so a marker beginning with it would skip such rows. Reject it.
+//  5. The NULL sentinel: a NULL first column is written verbatim as `\N` (it
+//     cannot be enclosed without reading back as the string), so a marker that is
+//     a prefix of `\N` (or vice-versa) skips every row with a leading NULL. The
+//     sentinel uses a literal backslash regardless of the configured escape, so
+//     this is checked independently of rule 3.
+func validateWritableComment(ctx context.Context, param *tree.ExternParam) error {
+	comment := GetCSVComment(param)
+	if comment == "" {
+		return nil
+	}
+	var fields *tree.Fields
+	if param.Tail != nil {
+		if param.Tail.Lines != nil && param.Tail.Lines.StartingBy != "" {
+			return moerr.NewBadConfig(ctx, "writable external table does not support COMMENT together with LINES STARTING BY")
+		}
+		fields = param.Tail.Fields
+	}
+	enclosed := byte('"')
+	if fields != nil && fields.EnclosedBy != nil && fields.EnclosedBy.Value != 0 {
+		enclosed = fields.EnclosedBy.Value
+	}
+	if comment[0] == enclosed {
+		return moerr.NewBadConfigf(ctx, "writable external table COMMENT must not start with the enclosure byte '%c'", enclosed)
+	}
+	// Escape byte: default '\\'; an explicit empty FIELDS ESCAPED BY disables it.
+	escape := byte('\\')
+	if fields != nil && fields.EscapedBy != nil {
+		escape = fields.EscapedBy.Value // 0 means escaping disabled
+	}
+	if escape != 0 && comment[0] == escape {
+		return moerr.NewBadConfigf(ctx, "writable external table COMMENT must not start with the escape byte '%c'", escape)
+	}
+	// Field terminator: default ','; an empty first field starts the line with it.
+	fieldTerm := ","
+	if fields != nil && fields.Terminated != nil && fields.Terminated.Value != "" {
+		fieldTerm = fields.Terminated.Value
+	}
+	if comment[0] == fieldTerm[0] {
+		return moerr.NewBadConfigf(ctx, "writable external table COMMENT must not start with the field terminator byte '%c'", fieldTerm[0])
+	}
+	csvNull := `\N`
+	if strings.HasPrefix(comment, csvNull) || strings.HasPrefix(csvNull, comment) {
+		return moerr.NewBadConfig(ctx, "writable external table COMMENT must not collide with the NULL sentinel \\N")
+	}
+	return nil
+}
+
+// validateWritableEscape checks that the FIELDS/LINES configuration can
+// round-trip through the writer + reader pair.
+//
+// Escape: the writer escapes by doubling the character, and the reader
+// unescapes E-sequences in BOTH quoted and unquoted fields, so a custom escape
+// must not collide with bytes the reader treats specially. An empty FIELDS
+// ESCAPED BY
+// (escaping disabled) is allowed; the writer disables escaping too. Note: with
+// any non-'\\' escape (including disabled), a string whose content is exactly
+// `\N` reads back as NULL — the reader matches the null sentinel after
+// unescaping and only exempts it for the default backslash.
+//
+// Enclosure: values containing structural bytes are written enclosed
+// (OPTIONALLY ENCLOSED semantics), which requires the enclosure byte itself
+// to be distinguishable from the terminators — no quoting discipline can fix
+// an enclosure byte that also begins a field or record boundary.
+func validateWritableEscape(ctx context.Context, tail *tree.TailParameter) error {
+	f := tail.Fields
+
+	fieldTerm := ","
+	enclosed := byte('"')
+	var esc byte = '\\'
+	if f != nil {
+		if f.Terminated != nil && f.Terminated.Value != "" {
+			fieldTerm = f.Terminated.Value
+		}
+		if f.EnclosedBy != nil && f.EnclosedBy.Value != 0 {
+			enclosed = f.EnclosedBy.Value
+		}
+		if f.EscapedBy != nil {
+			esc = f.EscapedBy.Value // 0 = escaping disabled
+		}
+	}
+	lineTerm := "\n"
+	startingBy := ""
+	if l := tail.Lines; l != nil {
+		if l.TerminatedBy != nil && l.TerminatedBy.Value != "" {
+			lineTerm = l.TerminatedBy.Value
+		}
+		startingBy = l.StartingBy
+	}
+
+	// The CSV reader rejects a field terminator whose first byte is a quote,
+	// CR, LF or NUL (csvparser.validDelim / NewCSVParser), so such a table
+	// could be created and written but never read back.
+	if b := fieldTerm[0]; b == 0 || b == '"' || b == '\r' || b == '\n' {
+		return moerr.NewBadConfig(ctx, "writable external table FIELDS TERMINATED BY cannot start with a quote, CR, LF or NUL byte")
+	}
+
+	// The escape/enclosure conflict applies to the DEFAULT backslash escape
+	// too: ENCLOSED BY '\\' with the default escape makes the tokenizer's
+	// doubled-delimiter collapse and the unescaper both consume the same
+	// bytes, corrupting values on readback.
+	if esc != 0 && esc == enclosed {
+		return moerr.NewBadConfigf(ctx, "writable external table cannot use FIELDS ESCAPED BY '%c': it conflicts with the enclosure character", esc)
+	}
+	if esc != 0 && esc != '\\' {
+		// The reader's unescaper maps E+{0,b,n,r,t,Z} to control characters, so a
+		// doubled escape (E E) would decode to a control char instead of E itself.
+		if strings.IndexByte("0bnrtZ", esc) >= 0 {
+			return moerr.NewBadConfigf(ctx, "writable external table cannot use FIELDS ESCAPED BY '%c': the reader maps '%c'-sequences to control characters", esc, esc)
+		}
+		// Control bytes as the escape would collide with the writer's own
+		// E+'r' CR encoding and the reader's record handling.
+		if esc < 0x20 || esc == 0x7f {
+			return moerr.NewBadConfig(ctx, "writable external table cannot use a control character as FIELDS ESCAPED BY")
+		}
+		for _, s := range []string{fieldTerm, lineTerm, startingBy} {
+			if strings.IndexByte(s, esc) >= 0 {
+				return moerr.NewBadConfigf(ctx, "writable external table cannot use FIELDS ESCAPED BY '%c': it occurs in a field/line terminator or LINES STARTING BY", esc)
+			}
+		}
+	}
+
+	// The writer encloses values containing structural bytes; the enclosure
+	// byte must not itself be part of a terminator or the record prefix.
+	for _, s := range []string{fieldTerm, lineTerm, startingBy} {
+		if strings.IndexByte(s, enclosed) >= 0 {
+			return moerr.NewBadConfigf(ctx, "writable external table cannot use ENCLOSED BY '%c': it occurs in a field/line terminator or LINES STARTING BY", enclosed)
+		}
+	}
+	return nil
 }
 
 // validateAndSetHivePartitionOptions parses and validates hive_partitioning options from the DDL,
