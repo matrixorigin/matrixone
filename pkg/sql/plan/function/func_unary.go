@@ -27,11 +27,13 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"hash/crc32"
 	"io"
 	"math"
+	"math/bits"
 	"net"
 	"runtime"
 	"sort"
@@ -531,6 +533,177 @@ func BinFloat[T constraints.Float](ivecs []*vector.Vector, result vector.Functio
 		}
 		return val, err
 	}, selectList)
+}
+
+func bitCountFromUint64(v uint64) uint64 {
+	return uint64(bits.OnesCount64(v))
+}
+
+const minInt64BitPattern = uint64(1) << 63
+
+func bitCountFromSignedInt64Pattern(v int64) uint64 {
+	return bitCountFromUint64(uint64(v))
+}
+
+func bitCountFromMysqlIntegerString(s string) (uint64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+
+	if strings.HasPrefix(s, "-") {
+		val, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			if errors.Is(err, strconv.ErrRange) {
+				return bitCountFromUint64(minInt64BitPattern), nil
+			}
+			return 0, err
+		}
+		return bitCountFromUint64(uint64(val)), nil
+	}
+
+	s = strings.TrimPrefix(s, "+")
+	val, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		if errors.Is(err, strconv.ErrRange) {
+			return bitCountFromUint64(math.MaxUint64), nil
+		}
+		return 0, err
+	}
+	return bitCountFromUint64(val), nil
+}
+
+func bitCountFromDecimalIntegerString(s string) (uint64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+
+	if strings.HasPrefix(s, "-") {
+		val, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			if errors.Is(err, strconv.ErrRange) {
+				return bitCountFromUint64(minInt64BitPattern), nil
+			}
+			return 0, err
+		}
+		return bitCountFromUint64(uint64(val)), nil
+	}
+
+	s = strings.TrimPrefix(s, "+")
+	val, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		if errors.Is(err, strconv.ErrRange) {
+			return 0, moerr.NewInvalidInputNoCtx("The input value is out of range")
+		}
+		return 0, err
+	}
+	return bitCountFromUint64(val), nil
+}
+
+func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64, error) {
+	val := float64(v)
+	if math.IsNaN(val) {
+		return 0, moerr.NewInvalidInput(proc.Ctx, "The input value is out of range")
+	}
+	if val <= float64(math.MinInt64) {
+		return bitCountFromUint64(minInt64BitPattern), nil
+	}
+	//2^63 - 1 = 9223372036854775807
+	//2^64 - 1 = 18446744073709551615
+	// The largest longlong that will fix into a double (LLONG_MAX is not
+	// exactly convertible to double, so for large double x, the test
+	// x <= LLONG_MAX does not guarantee x will fit in a longlong,
+	// and may give a compiler warning). LLONG_MIN is exact.
+
+	// Similar, for ulonglong.
+	const ULLONG_MAX_DOUBLE = 18446744073709549568.0
+
+	rounded := math.RoundToEven(val)
+	if rounded <= float64(math.MinInt64) {
+		return bitCountFromUint64(minInt64BitPattern), nil
+	}
+	if rounded >= ULLONG_MAX_DOUBLE {
+		return bitCountFromUint64(uint64(math.MaxUint64)), nil
+	}
+	return bitCountFromUint64(uint64(rounded)), nil
+}
+
+func bitCountFromDecimal64(v types.Decimal64, scale int32) (uint64, error) {
+	v = v.Round(scale, 0, true)
+	if v.Less(types.Decimal64Min) {
+		return bitCountFromUint64(minInt64BitPattern), nil
+	}
+	if types.Decimal64Max.Less(v) {
+		return bitCountFromUint64(uint64(math.MaxInt64)), nil
+	}
+	return bitCountFromSignedInt64Pattern(int64(v)), nil
+}
+
+func bitCountFromDecimal128(v types.Decimal128, scale int32) (uint64, error) {
+	v = v.Round(scale, 0, true)
+	return bitCountFromDecimalIntegerString(v.Format(0))
+}
+
+func bitCountFromDecimal256(v types.Decimal256, scale int32) (uint64, error) {
+	v = v.Round(scale, 0, true)
+	return bitCountFromDecimalIntegerString(v.Format(0))
+}
+
+func bitCountFromNonBinaryString(v []byte) (uint64, error) {
+	return bitCountFromMysqlIntegerString(convertByteSliceToString(v))
+}
+
+func bitCountFromBinaryString(v []byte) uint64 {
+	var cnt uint64
+	for _, b := range v {
+		cnt += uint64(bits.OnesCount8(b))
+	}
+	return cnt
+}
+
+func BitCountInteger[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[T, uint64](ivecs, result, proc, length, func(v T) uint64 {
+		return bitCountFromUint64(uint64(v))
+	}, selectList)
+}
+
+func BitCountFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithErrorCheck[T, uint64](ivecs, result, proc, length, func(v T) (uint64, error) {
+		return bitCountFromFloat(v, proc)
+	}, selectList)
+}
+
+func BitCountDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToFixedWithErrorCheck[types.Decimal64, uint64](ivecs, result, proc, length, func(v types.Decimal64) (uint64, error) {
+		return bitCountFromDecimal64(v, scale)
+	}, selectList)
+}
+
+func BitCountDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToFixedWithErrorCheck[types.Decimal128, uint64](ivecs, result, proc, length, func(v types.Decimal128) (uint64, error) {
+		return bitCountFromDecimal128(v, scale)
+	}, selectList)
+}
+
+func BitCountDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToFixedWithErrorCheck[types.Decimal256, uint64](ivecs, result, proc, length, func(v types.Decimal256) (uint64, error) {
+		return bitCountFromDecimal256(v, scale)
+	}, selectList)
+}
+
+func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if ivecs[0].GetIsBin() {
+		return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
+	}
+	return opUnaryBytesToFixedWithErrorCheck[uint64](ivecs, result, proc, length, bitCountFromNonBinaryString, selectList)
+}
+
+func BitCountBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
 }
 
 func BitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
