@@ -3498,21 +3498,15 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	return err
 }
 
-// doSetSecondaryRoleAll set the session role of the user with smallness role_id
+// doSetSecondaryRoleAll validates user role metadata before enabling all secondary roles.
+// The current primary role must not change; SET SECONDARY ROLE ALL only affects secondary roles.
 func doSetSecondaryRoleAll(ctx context.Context, ses *Session) (err error) {
 	var sql string
 	var userId uint32
-	var erArray []ExecResult
-	var roleId int64
-	var roleName string
 
 	account := ses.GetTenantInfo()
 	// get current user_id
 	userId = account.GetUserID()
-
-	// init role_id and role_name
-	roleId = publicRoleID
-	roleName = publicRoleName
 
 	// step1:get all roles expect public
 	bh := ses.GetBackgroundExec(ctx)
@@ -3533,26 +3527,7 @@ func doSetSecondaryRoleAll(ctx context.Context, ses *Session) (err error) {
 		return err
 	}
 
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return err
-	}
-	if execResultArrayHasData(erArray) {
-		roleId, err = erArray[0].GetInt64(ctx, 0, 0)
-		if err != nil {
-			return err
-		}
-
-		roleName, err = erArray[0].GetString(ctx, 0, 1)
-		if err != nil {
-			return err
-		}
-	}
-
-	// step2 : switch the default role and role id;
-	account.SetDefaultRoleID(uint32(roleId))
-	account.SetDefaultRole(roleName)
-
+	_, err = getResultSet(ctx, bh)
 	return err
 }
 
@@ -3649,6 +3624,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		account.SetDefaultRole(sr.Role.UserName)
 		// then, reset secondary role to none
 		account.SetUseSecondaryRole(false)
+		ses.InvalidatePrivilegeCache()
 
 		return err
 	}
@@ -6452,19 +6428,23 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
-	case *tree.CloneTable,
-		*tree.DataBranchCreateTable,
-		*tree.DataBranchDeleteTable,
-		*tree.DataBranchMerge,
-		*tree.DataBranchDiff,
-		*tree.DataBranchPick:
+	case *tree.CloneTable:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
-	case *tree.CloneDatabase, *tree.DataBranchCreateDatabase, *tree.DataBranchDeleteDatabase:
+	case *tree.CloneDatabase:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeAccountAll)
 		writeDatabaseAndTableDirectly = true
+	case *tree.DataBranchCreateTable,
+		*tree.DataBranchDeleteTable,
+		*tree.DataBranchMerge,
+		*tree.DataBranchDiff,
+		*tree.DataBranchPick,
+		*tree.DataBranchCreateDatabase,
+		*tree.DataBranchDeleteDatabase:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
@@ -7727,10 +7707,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 			}
 			tbName := string(st.Names[0].ObjectName)
 			return checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
-		case *tree.CloneTable, *tree.CloneDatabase,
-			*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
-			*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
-			*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
+		case *tree.CloneTable, *tree.CloneDatabase:
 			return true, stats, nil
 		}
 	}
