@@ -473,6 +473,36 @@ func TestCreateTableDDLFromCatalogViews_FallsBackToRelCreateSQL(t *testing.T) {
 	assert.Equal(t, "CREATE TABLE employees (id INT)", createTableDDLFromCatalogViews(12345, moTablesView, nil))
 }
 
+func TestCreateTableDDLFromCatalogViews_FallsBackToRelCreateSQLWhenMoColumnTypesAreBinary(t *testing.T) {
+	const relCreateSQL = "CREATE TABLE `ckp_constraints`.`parent` (`id` INT NOT NULL PRIMARY KEY, `code` VARCHAR(20) NOT NULL UNIQUE, `note` VARCHAR(100) DEFAULT 'parent-default' COMMENT 'parent note') COMMENT='parent table comment'"
+	moTablesView := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"rel_id", "relname", "reldatabase", "reldatabase_id",
+			"col_4", "col_5", "col_6", "rel_createsql",
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"333999", "parent", "ckp_constraints", "333997",
+				"", "", "", relCreateSQL,
+			},
+		},
+	}
+	moColumnsView := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "att_relname_id", "attname", "atttyp", "attnum", "att_is_hidden"},
+		Rows: [][]string{
+			{"obj1", "0", "0", "333999", "id", string([]byte{'A', 'L', 0, 0xff, 'X'}), "1", "0"},
+			{"obj1", "0", "1", "333999", "code", "VARCHAR(20)", "2", "0"},
+		},
+	}
+
+	ddl := createTableDDLFromCatalogViews(333999, moTablesView, moColumnsView)
+	assert.Equal(t, relCreateSQL, ddl)
+	assert.NotContains(t, ddl, "\x00")
+	assert.NotContains(t, ddl, "\ufffd")
+}
+
 func TestBuildCatalogTablesFromMoTablesRows_GenericWithTrailingColumns(t *testing.T) {
 	headers := []string{"object", "block", "row"}
 	for i := 0; i < len(preCPKLayout.moTablesSchema)+2; i++ {

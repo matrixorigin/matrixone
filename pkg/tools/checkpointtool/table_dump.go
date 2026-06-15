@@ -2931,6 +2931,9 @@ func buildCreateTableFromMoColumnsAt(
 		if typCol >= 0 && typCol < len(row) {
 			c.sqlType = row[typCol]
 		}
+		if !isPrintableSQLType(c.sqlType) {
+			return ""
+		}
 		cols = append(cols, c)
 	}
 
@@ -2964,6 +2967,27 @@ func buildCreateTableFromMoColumnsAt(
 	}
 	sb.WriteString(");")
 	return sb.String()
+}
+
+func isPrintableSQLType(sqlType string) bool {
+	sqlType = strings.TrimSpace(sqlType)
+	if sqlType == "" {
+		return false
+	}
+	hasLetter := false
+	for _, r := range sqlType {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			hasLetter = true
+		case r >= 'a' && r <= 'z':
+			hasLetter = true
+		case r >= '0' && r <= '9':
+		case strings.ContainsRune(" ()_,'+-.", r):
+		default:
+			return false
+		}
+	}
+	return hasLetter
 }
 
 // hardcodedCreateTable returns the CREATE TABLE DDL for core built-in system tables.
