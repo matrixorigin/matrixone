@@ -570,6 +570,13 @@ Examples:
 				if err := dumpOut.MkdirAll(outputDir); err != nil {
 					return fmt.Errorf("create output dir: %w", err)
 				}
+				var dumpPlans []tableDumpPlan
+				if loadScript || !noLoad {
+					dumpPlans, err = prepareTableDumpPlans(ctx, reader, tables, snapshotTS)
+					if err != nil {
+						return err
+					}
+				}
 				if !noLoad {
 					if jobs < 1 {
 						jobs = 1
@@ -577,17 +584,13 @@ Examples:
 					if jobs > len(tables) {
 						jobs = len(tables)
 					}
-					dumpPlans, err := prepareTableDumpPlans(ctx, reader, tables, snapshotTS)
-					if err != nil {
-						return err
-					}
 					if err := dumpTablesConcurrently(ctx, reader, dumpOut, dumpPlans, snapshotTS, outputDir, jobs, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout()); err != nil {
 						return err
 					}
 					fmt.Fprintf(cmd.OutOrStdout(), "Dumped %d tables to %s\n", len(tables), outputDir)
 				}
 				if loadScript {
-					scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, tables, snapshotTS, output, outputDir, loadPathResolver, !noLoad, effectiveHeader)
+					scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, tables, dumpDataByTableID(dumpPlans), snapshotTS, output, outputDir, loadPathResolver, !noLoad, effectiveHeader)
 					if err != nil {
 						return err
 					}
@@ -605,16 +608,16 @@ Examples:
 				if err := dumpOut.MkdirAll(outputDir); err != nil {
 					return fmt.Errorf("create output dir: %w", err)
 				}
+				dumpData, err := reader.PrepareTableDumpData(ctx, tableEntry.TableID, snapshotTS)
+				if err != nil {
+					return fmt.Errorf("prepare table %d (%s.%s): %w", tableEntry.TableID, tableEntry.DatabaseName, tableEntry.TableName, err)
+				}
 				if !noLoad {
-					dumpData, err := reader.PrepareTableDumpData(ctx, tableEntry.TableID, snapshotTS)
-					if err != nil {
-						return fmt.Errorf("prepare table %d (%s.%s): %w", tableEntry.TableID, tableEntry.DatabaseName, tableEntry.TableName, err)
-					}
 					if err := dumpOneTable(ctx, reader, dumpOut, tableDumpPlan{table: tableEntry, data: dumpData}, snapshotTS, outputDir, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout(), &sync.Mutex{}); err != nil {
 						return err
 					}
 				}
-				scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, []checkpointtool.TableCatalogEntry{tableEntry}, snapshotTS, output, outputDir, loadPathResolver, !noLoad, effectiveHeader)
+				scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, []checkpointtool.TableCatalogEntry{tableEntry}, map[uint64]*checkpointtool.TableDumpData{tableEntry.TableID: dumpData}, snapshotTS, output, outputDir, loadPathResolver, !noLoad, effectiveHeader)
 				if err != nil {
 					return err
 				}
@@ -764,6 +767,7 @@ func writeRestoreScript(
 	reader *checkpointtool.CheckpointReader,
 	dumpOut *dumpOutput,
 	tables []checkpointtool.TableCatalogEntry,
+	dumpDataByTable map[uint64]*checkpointtool.TableDumpData,
 	snapshotTS types.TS,
 	scriptDir string,
 	csvRoot string,
@@ -801,9 +805,22 @@ func writeRestoreScript(
 			currentDB = table.DatabaseName
 		}
 
-		ddl, err := reader.ShowCreateTable(ctx, table.TableID, snapshotTS)
-		if err != nil {
-			return "", fmt.Errorf("show create table %d: %w", table.TableID, err)
+		ddl := ""
+		if dumpData := dumpDataByTable[table.TableID]; dumpData != nil {
+			schema := dumpData.Schema
+			if schema != nil {
+				schemaCopy := *schema
+				schemaCopy.TableName = table.TableName
+				schemaCopy.DatabaseName = table.DatabaseName
+				ddl = checkpointtool.RenderCreateTableDDLFromSchema(&schemaCopy)
+			}
+		}
+		if ddl == "" {
+			var err error
+			ddl, err = reader.ShowCreateTable(ctx, table.TableID, snapshotTS)
+			if err != nil {
+				return "", fmt.Errorf("show create table %d: %w", table.TableID, err)
+			}
 		}
 		ddl = normalizeCreateTableDDLName(ddl, table)
 		indexDDLs, err := reader.ShowCreateIndexStatements(ctx, table.TableID, table.TableName, snapshotTS)
@@ -1245,6 +1262,17 @@ func isSQLIdentByte(b byte) bool {
 type tableDumpPlan struct {
 	table checkpointtool.TableCatalogEntry
 	data  *checkpointtool.TableDumpData
+}
+
+func dumpDataByTableID(plans []tableDumpPlan) map[uint64]*checkpointtool.TableDumpData {
+	if len(plans) == 0 {
+		return nil
+	}
+	byID := make(map[uint64]*checkpointtool.TableDumpData, len(plans))
+	for _, plan := range plans {
+		byID[plan.table.TableID] = plan.data
+	}
+	return byID
 }
 
 func prepareTableDumpPlans(

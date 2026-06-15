@@ -391,6 +391,31 @@ func renderCreateTableDDL(tableName string, cols []TableColumn) string {
 	return sb.String()
 }
 
+// RenderCreateTableDDLFromSchema renders a CREATE TABLE statement from resolved
+// checkpoint schema metadata. Visible columns are preferred because ALTER TABLE
+// updates mo_columns but does not rewrite mo_tables.rel_createsql.
+func RenderCreateTableDDLFromSchema(schema *TableSchema) string {
+	if schema == nil {
+		return ""
+	}
+	if schema.TableName != "" && len(schema.Columns) > 0 {
+		canRenderColumns := true
+		for _, col := range schema.Columns {
+			if col.Name == "" || !isPrintableSQLType(col.SQLType) {
+				canRenderColumns = false
+				break
+			}
+		}
+		if canRenderColumns {
+			return renderCreateTableDDL(schema.TableName, schema.Columns)
+		}
+	}
+	if isPrintableCreateTableSQL(schema.CreateSQL) {
+		return strings.Clone(schema.CreateSQL)
+	}
+	return ""
+}
+
 func inferBuiltinCatalogLayout(
 	tableID uint64,
 	moTablesView *LogicalTableView,

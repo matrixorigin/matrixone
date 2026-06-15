@@ -539,6 +539,34 @@ func TestCreateTableDDLFromCatalogViews_FallsBackToRelCreateSQLWhenMoColumnTypes
 	assert.NotContains(t, ddl, "\ufffd")
 }
 
+func TestRenderCreateTableDDLFromSchema_PrefersColumnsOverCreateSQL(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "t",
+		CreateSQL: "CREATE TABLE t (a INT, b VARCHAR(100))",
+		Columns: []TableColumn{
+			{Name: "a", SQLType: "INT", Position: 1},
+			{Name: "c", SQLType: "BIGINT", Position: 2},
+		},
+	})
+
+	assert.Contains(t, ddl, "`a` INT")
+	assert.Contains(t, ddl, "`c` BIGINT")
+	assert.NotContains(t, ddl, "`b`")
+}
+
+func TestRenderCreateTableDDLFromSchema_FallsBackToCreateSQLWhenColumnTypesAreBinary(t *testing.T) {
+	const relCreateSQL = "CREATE TABLE t (a INT)"
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "t",
+		CreateSQL: relCreateSQL,
+		Columns: []TableColumn{
+			{Name: "a", SQLType: string([]byte{'A', 0, 0xff})},
+		},
+	})
+
+	assert.Equal(t, relCreateSQL, ddl)
+}
+
 func TestBuildCatalogTablesFromMoTablesRows_GenericWithTrailingColumns(t *testing.T) {
 	headers := []string{"object", "block", "row"}
 	for i := 0; i < len(preCPKLayout.moTablesSchema)+2; i++ {
