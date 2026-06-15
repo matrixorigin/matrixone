@@ -256,3 +256,83 @@ Tests:
    insert `'[1,2,3,4]'`, `SELECT a, l2_distance(a, '[0,0,0,0]'), CAST(a AS vecf32)`, and
    `CREATE INDEX ... USING ivfflat` on a `vecbf16` column + `USING hnsw` on `vecf16`/`vecint8`.
 4. Run the cloned BVT cases under `test/distributed/cases/.../vector/`.
+
+---
+
+## Benchmark — wiki_all 1M, ivfflat (4-way build matrix)
+
+End-to-end benchmark via `mo_vector_benchmark/run_matrix.py` to quantify the GPU and
+archsimd(SIMD) impact across all base column types and index quantizations.
+
+**Setup.** Dataset: cuVS wiki_all 1M (1,000,000 × 768-dim float32). One table per **base
+column type** (`vecf32/vecf16/vecbf16/vecint8/vecuint8`), each loaded from the same source via
+`LOAD DATA` (int8/uint8 base use NN-order-preserving integer-scaled CSVs — `v*127` / `v*127+128`
+— since MO rejects fractional casts to `VECINT8`/`VECUINT8`). Index: `ivfflat`, `lists=1000`,
+`op_type vector_l2_ops`, `kmeans_train_percent=10`, `kmeans_max_iteration=20`. Search: `probe_limit=8`,
+200 queries, k=10, concurrency=8, recall vs the L2 groundtruth ibin. Matrix = **base sweep**
+(5 base types @ `quantization=float32`) + **quant sweep** (`vecf32` base @
+`quantization=float16/bf16/int8/uint8`). The four build configs (`MO_CL_CUDA` × `GOEXPERIMENT=simd
+GOAMD64=v3`): **GPU+SIMD**, **GPU·noSIMD**, **noGPU+SIMD**, **noGPU·noSIMD**. Data does **not**
+survive a rebuild/restart (mo-data bootstraps fresh), so each config re-imports before its matrix.
+
+### Index build time (seconds) — compute-dominated, the cleanest signal
+
+| cell | GPU+SIMD | GPU·noSIMD | noGPU+SIMD | noGPU·noSIMD |
+|---|---|---|---|---|
+| base f32 | **25** | 128 | 160 | 146 |
+| base f16 | **31** | 70 | 92 | 180 |
+| base bf16 | **22** | 77 | 62 | 67 |
+| base int8 | **17** | 23 | 26 | 50 |
+| base uint8 | **15** | 22 | 26 | 49 |
+| quant float16 | **17** | 40 | 31 | 47 |
+| quant bf16 | **15** | 21 | 27 | 44 |
+| quant int8 | **13** | 16 | 24 | 47 |
+| quant uint8 | **17** | 26 | 27 | 51 |
+
+**GPU+SIMD is fastest in all 9 cells.** geomean across cells: SIMD ≈ **2×** build speedup overall
+but **~5× on the f32 path** (25s→128s); GPU kmeans ≈ 1.8–2.2×. The ivfflat build is dominated by the
+**CPU entry-assignment distance** (which SIMD accelerates), so SIMD matters more than GPU; GPU only
+speeds the centroid step. SIMD gain shrinks with element width / type: f32 5.1× > bf16 3.5× (upcast
+overhead) > int8 1.3× (integer distance isn't the float SIMD path).
+
+### Recall@10 — GPU kmeans yields better centroids
+
+| config | recall@10 range |
+|---|---|
+| GPU+SIMD / GPU·noSIMD | **0.85 – 0.89** |
+| noGPU+SIMD / noGPU·noSIMD | 0.80 – 0.84 |
+
+Consistent ~0.04 recall advantage for **GPU-built** indexes. SIMD does not change results
+(correctness preserved across the cosine-clamp SIMD fix).
+
+### Search latency p50 (ms) / throughput QPS (concurrency 8)
+
+| cell | GPU+SIMD | GPU·noSIMD | noGPU+SIMD | noGPU·noSIMD |
+|---|---|---|---|---|
+| base f32 | **1127** / 3.5 | 7382 / 0.8 | 7069 / 0.8 | 8716 / 0.8 |
+| base f16 | **631** / 2.9 | 2608 / 1.2 | 6471 / 1.1 | 4766 / 1.2 |
+| base bf16 | 475 / 4.7 | 467 / 3.5 | 502 / 3.8 | 577 / 3.0 |
+| base int8 | 362 / 5.6 | 417 / 5.2 | 343 / 5.6 | 360 / 5.7 |
+| base uint8 | 361 / 6.6 | 1197 / 2.8 | 288 / 5.6 | 347 / 5.5 |
+| quant float16 | 472 / 7.8 | 411 / 5.4 | 689 / 6.5 | 993 / 6.7 |
+| quant bf16 | 327 / 8.4 | 460 / 6.3 | 485 / 7.1 | 361 / 9.5 |
+| quant int8 | **168** / 39.1 | 188 / 33.8 | 214 / 27.2 | 219 / 24.1 |
+| quant uint8 | 428 / 14.2 | 263 / 25.5 | 375 / 18.4 | 291 / 18.8 |
+
+**Two regimes:** (1) **heavy cells** (f32/f16 base — wide full-precision vectors) — GPU+SIMD is
+decisively fastest (f32 ≈ **4× QPS** vs the rest); (2) **light cells** (narrow base + all quant) — all
+four configs land within ~20%, dominated by index traversal + I/O, not the distance kernel.
+**Most robust search finding: int8/uint8 *index quantization* is the fastest search in every config**
+(quant int8 ≈ 170–220ms / 24–39 QPS, ~2–8× faster than float32) — smaller entries, independent of
+GPU/SIMD.
+
+### Caveats
+- **Single run per cell → ±~30% variance** (kmeans randomness, cache warmth). **Build time and recall
+  trends are robust** (GPU+SIMD wins all 9 builds; GPU recall consistently higher); **search latency is
+  the noisiest dimension** — absolute p50 on heavy cells is cache-state-dominated (e.g. f32-base p50
+  swung 485ms↔1127ms across two GPU+SIMD runs), and a few light bf16/uint8 cells show noSIMD edging
+  SIMD by a couple % (noise — the sign flips across cells). Trust QPS averages and direction over exact
+  multipliers.
+- **Storage:** WSL2 vhdx, native ext4, ~1.1 GB/s O_DIRECT / 4–9 GB/s cached — SSD-class; search is
+  CPU/SIMD-bound, not I/O-bound (same disk gave 1.1s vs 7.4s for the identical query under SIMD vs
+  noSIMD).
