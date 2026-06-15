@@ -350,6 +350,15 @@ func (sm *snapshotManager) Remove(shardID uint64, replicaID uint64, index uint64
 	return nil
 }
 
+// RemoveReplica removes all exported snapshots tracked for the specified
+// replica. It is used when local metadata still references a replica that has
+// already been superseded on this store.
+func (sm *snapshotManager) RemoveReplica(shardID uint64, replicaID uint64) error {
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	delete(sm.snapshots, nid)
+	return sm.cfg.FS.RemoveAll(sm.exportPath(shardID, replicaID))
+}
+
 // NewestIndex returns the index of the newest exported snapshot tracked
 // by the manager for (shardID, replicaID), or 0 if no items exist.
 // Callers use this to realign shardSnapshotInfo.snapshotIndex after an
