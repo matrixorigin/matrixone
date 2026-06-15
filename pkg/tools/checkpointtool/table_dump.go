@@ -2558,8 +2558,11 @@ func buildColumnsFromMoColumnsRowsAt(
 		if typCol >= 0 && typCol < len(row) {
 			sqlType, ok := decodeMoColumnSQLType(row[typCol])
 			if !ok {
+				sqlType, ok = detectMoColumnSQLType(row)
+			}
+			if !ok {
 				ckpDebugSchemaf(
-					"mo_columns type decode failed table=%d matched_rows=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d seqnum_col=%d column=%q raw_len=%d raw_hex=%s",
+					"mo_columns type decode failed table=%d matched_rows=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d seqnum_col=%d column=%q raw_len=%d raw_hex=%s row=%s",
 					tableID,
 					matchedRows,
 					relnameIDCol,
@@ -2571,8 +2574,12 @@ func buildColumnsFromMoColumnsRowsAt(
 					col.Name,
 					len(row[typCol]),
 					debugHexPrefix(row[typCol], 32),
+					debugRowCells(row, 40),
 				)
 				return nil
+			}
+			if typCol >= 0 && typCol < len(row) && row[typCol] != "" && !isDecodedMoColumnSQLType(row[typCol]) {
+				ckpDebugSchemaf("mo_columns type detected from alternate cell table=%d column=%q declared_typ_col=%d sql_type=%s row=%s", tableID, col.Name, typCol, sqlType, debugRowCells(row, 40))
 			}
 			col.SQLType = sqlType
 		}
@@ -2972,8 +2979,11 @@ func buildCreateTableFromMoColumnsAt(
 		if typCol >= 0 && typCol < len(row) {
 			sqlType, ok := decodeMoColumnSQLType(row[typCol])
 			if !ok {
+				sqlType, ok = detectMoColumnSQLType(row)
+			}
+			if !ok {
 				ckpDebugSchemaf(
-					"mo_columns ddl type decode failed table=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d column=%q raw_len=%d raw_hex=%s",
+					"mo_columns ddl type decode failed table=%d relname_id_col=%d name_col=%d typ_col=%d num_col=%d hidden_col=%d column=%q raw_len=%d raw_hex=%s row=%s",
 					tableID,
 					relnameIDCol,
 					nameCol,
@@ -2983,8 +2993,12 @@ func buildCreateTableFromMoColumnsAt(
 					c.name,
 					len(row[typCol]),
 					debugHexPrefix(row[typCol], 32),
+					debugRowCells(row, 40),
 				)
 				return ""
+			}
+			if typCol >= 0 && typCol < len(row) && row[typCol] != "" && !isDecodedMoColumnSQLType(row[typCol]) {
+				ckpDebugSchemaf("mo_columns ddl type detected from alternate cell table=%d column=%q declared_typ_col=%d sql_type=%s row=%s", tableID, c.name, typCol, sqlType, debugRowCells(row, 40))
 			}
 			c.sqlType = sqlType
 		}
@@ -3048,17 +3062,54 @@ func decodeMoColumnSQLType(raw string) (string, bool) {
 	if raw == "" {
 		return "", false
 	}
+	if sqlType, ok := decodeMoColumnEncodedSQLType(raw); ok {
+		return sqlType, true
+	}
+	if isPrintableSQLType(raw) {
+		return raw, true
+	}
+	return "", false
+}
+
+func decodeMoColumnEncodedSQLType(raw string) (string, bool) {
 	var typ types.Type
+	if len(raw) < typ.ProtoSize() {
+		return "", false
+	}
 	if err := types.Decode([]byte(raw), &typ); err == nil && typ.Oid != types.T_any {
 		sqlType := typ.DescString()
 		if isPrintableSQLType(sqlType) {
 			return sqlType, true
 		}
 	}
-	if isPrintableSQLType(raw) {
-		return raw, true
-	}
 	return "", false
+}
+
+func isDecodedMoColumnSQLType(raw string) bool {
+	_, ok := decodeMoColumnEncodedSQLType(raw)
+	return ok
+}
+
+func detectMoColumnSQLType(row []string) (string, bool) {
+	found := ""
+	foundCol := -1
+	for i, cell := range row {
+		sqlType, ok := decodeMoColumnEncodedSQLType(cell)
+		if !ok {
+			continue
+		}
+		if found != "" {
+			ckpDebugSchemaf("mo_columns alternate type detection ambiguous first_col=%d first_type=%s next_col=%d next_type=%s row=%s", foundCol, found, i, sqlType, debugRowCells(row, 40))
+			return "", false
+		}
+		found = sqlType
+		foundCol = i
+	}
+	if found == "" {
+		return "", false
+	}
+	ckpDebugSchemaf("mo_columns alternate type detected col=%d sql_type=%s", foundCol, found)
+	return found, true
 }
 
 func ckpDebugSchemaf(format string, args ...any) {
@@ -3073,6 +3124,21 @@ func debugHexPrefix(s string, limit int) string {
 		s = s[:limit]
 	}
 	return hex.EncodeToString([]byte(s))
+}
+
+func debugRowCells(row []string, limit int) string {
+	parts := make([]string, 0, len(row))
+	for i, cell := range row {
+		parts = append(parts, fmt.Sprintf("%d:len=%d hex=%s text=%q", i, len(cell), debugHexPrefix(cell, limit), debugTextPrefix(cell, limit)))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func debugTextPrefix(s string, limit int) string {
+	if limit > 0 && len(s) > limit {
+		s = s[:limit]
+	}
+	return s
 }
 
 func isPrintableCreateTableSQL(ddl string) bool {
