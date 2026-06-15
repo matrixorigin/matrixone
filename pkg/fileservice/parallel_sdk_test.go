@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,6 +36,28 @@ import (
 	"github.com/panjf2000/ants/v2"
 	costypes "github.com/tencentyun/cos-go-sdk-v5"
 )
+
+// failAfterBytesReader wraps an io.Reader and returns errAfter once
+// totalBytes have been read. Reads up to failAfter bytes succeed normally.
+type failAfterBytesReader struct {
+	r         io.Reader
+	readSoFar int64
+	failAfter int64
+	errAfter  error
+}
+
+func (r *failAfterBytesReader) Read(p []byte) (int, error) {
+	if r.readSoFar >= r.failAfter {
+		return 0, r.errAfter
+	}
+	remaining := r.failAfter - r.readSoFar
+	if int64(len(p)) > remaining {
+		p = p[:remaining]
+	}
+	n, err := r.r.Read(p)
+	r.readSoFar += int64(n)
+	return n, err
+}
 
 func newMockAWSServer(t *testing.T, failPart int32) (*httptest.Server, *awsServerState) {
 	t.Helper()
@@ -723,5 +746,75 @@ func TestCOSMultipartCreateFail(t *testing.T) {
 	size := int64(len(data))
 	if err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil); err == nil {
 		t.Fatalf("expected create multipart error")
+	}
+}
+
+// TestAwsParallelMultipartAbortOnReadError verifies that AbortMultipartUpload
+// is sent when a read error occurs after multipart upload has been initiated.
+// This covers the case where setErr cancels the derived context and the abort
+// defer must use a non-canceled context.
+func TestAwsParallelMultipartAbortOnReadError(t *testing.T) {
+	server, state := newMockAWSServer(t, 0)
+	defer server.Close()
+	state.uploadID = "uid-read-err"
+
+	sdk := newTestAWSClient(t, server)
+
+	// Provide enough data for the first readChunk to succeed (triggering
+	// multipart initiation), then fail on the next read.
+	data := bytes.Repeat([]byte("x"), int(minMultipartPartSize*2))
+	r := &failAfterBytesReader{
+		r:         bytes.NewReader(data),
+		failAfter: minMultipartPartSize,
+		errAfter:  errors.New("size does not match"),
+	}
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(context.Background(), "object", r, &size, &ParallelMultipartOption{
+		PartSize:    minMultipartPartSize,
+		Concurrency: 2,
+	})
+	if err == nil {
+		t.Fatal("expected read error")
+	}
+	if len(state.completeBody) > 0 {
+		t.Fatal("expected no complete body")
+	}
+	if !state.aborted.Load() {
+		t.Fatal("expected abort request to be sent for size mismatch read error")
+	}
+}
+
+// TestCOSParallelMultipartAbortOnReadError verifies that AbortMultipartUpload
+// is sent when a read error occurs after multipart upload has been initiated
+// for the COS SDK.
+func TestCOSParallelMultipartAbortOnReadError(t *testing.T) {
+	server, state := newMockCOSServer(t, 0)
+	defer server.Close()
+	state.uploadID = "cos-uid-read-err"
+
+	sdk := newTestCOSClient(t, server)
+
+	data := bytes.Repeat([]byte("y"), int(minMultipartPartSize*2))
+	r := &failAfterBytesReader{
+		r:         bytes.NewReader(data),
+		failAfter: minMultipartPartSize,
+		errAfter:  errors.New("size does not match"),
+	}
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(context.Background(), "object", r, &size, &ParallelMultipartOption{
+		PartSize:    minMultipartPartSize,
+		Concurrency: 2,
+	})
+	if err == nil {
+		t.Fatal("expected read error")
+	}
+	if state.completed.Load() {
+		t.Fatal("expected no complete multipart upload")
+	}
+	if len(state.completeBody) > 0 {
+		t.Fatal("expected no complete body")
+	}
+	if !state.aborted.Load() {
+		t.Fatal("expected abort request to be sent for size mismatch read error")
 	}
 }
