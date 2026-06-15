@@ -520,6 +520,15 @@ func newMockCOSServer(t *testing.T, failPart int) (*httptest.Server, *cosServerS
 			}
 			state.mu.Lock()
 			state.completeBody = append([]byte{}, body...)
+			for partNum := 1; partNum < len(state.parts); partNum++ {
+				if len(state.parts[partNum]) < int(minMultipartPartSize) {
+					state.mu.Unlock()
+					w.WriteHeader(http.StatusBadRequest)
+					w.Header().Set("Content-Type", "application/xml")
+					_, _ = w.Write([]byte(`<Error><Code>EntityTooSmall</Code><Message>Your proposed upload is smaller than the minimum allowed object size.</Message></Error>`))
+					return
+				}
+			}
 			state.mu.Unlock()
 			w.Header().Set("Content-Type", "application/xml")
 			state.respBody = `<CompleteMultipartUploadResult><Location>loc</Location><Bucket>bucket</Bucket><Key>object</Key><ETag>etag</ETag></CompleteMultipartUploadResult>`
@@ -703,6 +712,50 @@ func TestCOSParallelMultipartUnknownSize(t *testing.T) {
 	}
 }
 
+func TestCOSParallelMultipartPipeSmallTail(t *testing.T) {
+	server, state := newMockCOSServer(t, 0)
+	defer server.Close()
+	state.uploadID = "cos-pipe-small-tail"
+
+	sdk := newTestCOSClient(t, server)
+	pr, pw := io.Pipe()
+	writeErrCh := make(chan error, 1)
+	go func() {
+		chunk := bytes.Repeat([]byte("x"), 1<<20)
+		for i := 0; i < 10; i++ {
+			if _, err := pw.Write(chunk); err != nil {
+				writeErrCh <- err
+				return
+			}
+		}
+		if _, err := pw.Write([]byte("tail")); err != nil {
+			writeErrCh <- err
+			return
+		}
+		writeErrCh <- pw.Close()
+	}()
+
+	err := sdk.WriteMultipartParallel(context.Background(), "object", pr, nil, &ParallelMultipartOption{
+		PartSize:    minMultipartPartSize,
+		Concurrency: 2,
+	})
+	if writeErr := <-writeErrCh; writeErr != nil {
+		t.Fatalf("pipe writer failed: %v", writeErr)
+	}
+	if err != nil {
+		t.Fatalf("write failed: %v, parts=%d, complete=%s", err, len(state.parts), string(state.completeBody))
+	}
+	if len(state.parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(state.parts))
+	}
+	if len(state.parts[1]) != int(minMultipartPartSize) {
+		t.Fatalf("expected first part size %d, got %d", minMultipartPartSize, len(state.parts[1]))
+	}
+	if len(state.parts[2]) != int(minMultipartPartSize)+len("tail") {
+		t.Fatalf("expected merged final part size %d, got %d", int(minMultipartPartSize)+len("tail"), len(state.parts[2]))
+	}
+}
+
 func TestCOSMultipartEmptyReader(t *testing.T) {
 	server, state := newMockCOSServer(t, 0)
 	defer server.Close()
@@ -738,5 +791,53 @@ func TestCOSMultipartCreateFail(t *testing.T) {
 	size := int64(len(data))
 	if err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil); err == nil {
 		t.Fatalf("expected create multipart error")
+	}
+}
+
+func TestCOSParallelMultipartDoesNotDeadlockOnTinyGlobalPool(t *testing.T) {
+	server, state := newMockCOSServer(t, 0)
+	defer server.Close()
+	state.uploadID = "cos-no-deadlock"
+
+	sdk := newTestCOSClient(t, server)
+	data := bytes.Repeat([]byte("n"), int(minMultipartPartSize*2))
+	size := int64(len(data))
+
+	oldPool := parallelUploadPool
+	tinyPool, err := ants.NewPool(1)
+	if err != nil {
+		t.Fatalf("create ants pool: %v", err)
+	}
+	parallelUploadPool = tinyPool
+	defer func() {
+		tinyPool.Release()
+		parallelUploadPool = oldPool
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
+			PartSize:    minMultipartPartSize,
+			Concurrency: 2,
+		})
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("write failed: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("multipart upload timed out, likely deadlocked")
+	}
+
+	if len(state.parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(state.parts))
+	}
+	if len(state.completeBody) == 0 {
+		t.Fatalf("expected multipart complete request")
 	}
 }

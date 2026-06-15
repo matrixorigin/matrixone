@@ -404,9 +404,11 @@ func (a *QCloudSDK) WriteMultipartParallel(
 
 	jobCh := make(chan partJob, options.Concurrency*2)
 
-	startWorker := func() error {
+	startWorker := func() {
 		wg.Add(1)
-		return getParallelUploadPool().Submit(func() {
+		// Use per-upload goroutines so concurrent multipart uploads do not starve
+		// each other on the small global parallelUploadPool.
+		go func() {
 			defer wg.Done()
 			for job := range jobCh {
 				if ctx.Err() != nil {
@@ -442,14 +444,11 @@ func (a *QCloudSDK) WriteMultipartParallel(
 				})
 				partsLock.Unlock()
 			}
-		})
+		}()
 	}
 
 	for i := 0; i < options.Concurrency; i++ {
-		if submitErr := startWorker(); submitErr != nil {
-			setErr(submitErr)
-			break
-		}
+		startWorker()
 	}
 
 	sendJob := func(bufPtr *[]byte, buf []byte, n int) bool {

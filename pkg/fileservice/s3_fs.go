@@ -461,7 +461,11 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	}
 	key := s.pathToKey(path.File)
 	enableParallel := false
-	switch s.parallelMode {
+	parallelMode := s.parallelMode
+	if mode, ok := parallelModeFromContext(ctx); ok {
+		parallelMode = mode
+	}
+	switch parallelMode {
 	case ParallelForce:
 		enableParallel = true
 	case ParallelAuto:
