@@ -567,6 +567,7 @@ const (
 	SaveQueryResult    = "save_query_result"
 	QueryResultMaxsize = "query_result_maxsize"
 	QueryResultTimeout = "query_result_timeout"
+	ProtectedDatabases = "protected_databases"
 )
 
 type objectType int
@@ -6468,6 +6469,220 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	}
 }
 
+func canWriteProtectedDatabase(ses *Session) bool {
+	if ses == nil || ses.GetTenantInfo() == nil {
+		return false
+	}
+	tenant := ses.GetTenantInfo()
+	return tenant.IsAccountAdminRole() || tenant.IsMoAdminRole()
+}
+
+func normalizeProtectedDatabaseName(ses *Session, dbName string) string {
+	dbName = strings.TrimSpace(dbName)
+	if dbName == "" && ses != nil {
+		dbName = ses.GetDatabaseName()
+	}
+	return strings.ToLower(dbName)
+}
+
+func getProtectedDatabaseSet(ses *Session) map[string]struct{} {
+	if ses == nil {
+		return nil
+	}
+	value, err := ses.GetGlobalSysVar(ProtectedDatabases)
+	if err != nil {
+		return nil
+	}
+	raw, ok := value.(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	protected := make(map[string]struct{})
+	for _, part := range strings.Split(raw, ",") {
+		dbName := strings.ToLower(strings.TrimSpace(part))
+		if dbName != "" {
+			protected[dbName] = struct{}{}
+		}
+	}
+	return protected
+}
+
+func isProtectedDatabase(ses *Session, dbName string) bool {
+	dbName = normalizeProtectedDatabaseName(ses, dbName)
+	if dbName == "" {
+		return false
+	}
+	_, ok := getProtectedDatabaseSet(ses)[dbName]
+	return ok
+}
+
+func checkProtectedDatabaseWrite(ctx context.Context, ses *Session, dbNames ...string) error {
+	if ses == nil || !ses.GetFromRealUser() {
+		return nil
+	}
+	if canWriteProtectedDatabase(ses) {
+		return nil
+	}
+	protectedDatabases := getProtectedDatabaseSet(ses)
+	if len(protectedDatabases) == 0 {
+		return nil
+	}
+	for _, dbName := range dbNames {
+		dbName = normalizeProtectedDatabaseName(ses, dbName)
+		if dbName == "" {
+			continue
+		}
+		if _, ok := protectedDatabases[dbName]; ok {
+			return moerr.NewInternalErrorf(ctx, "database %s is protected", dbName)
+		}
+	}
+	return nil
+}
+
+func appendTableNameDatabaseName(dbNames []string, name *tree.TableName) []string {
+	if name == nil {
+		return dbNames
+	}
+	return append(dbNames, string(name.SchemaName))
+}
+
+func appendTableNamesDatabaseNames(dbNames []string, names tree.TableNames) []string {
+	for _, name := range names {
+		dbNames = appendTableNameDatabaseName(dbNames, name)
+	}
+	return dbNames
+}
+
+func functionNameDatabaseName(name *tree.FunctionName) string {
+	if name == nil {
+		return ""
+	}
+	return string(name.Name.SchemaName)
+}
+
+func procedureNameDatabaseName(name *tree.ProcedureName) string {
+	if name == nil {
+		return ""
+	}
+	return string(name.Name.SchemaName)
+}
+
+func protectedDatabaseWriteTargetsFromStmt(stmt tree.Statement) []string {
+	dbNames := make([]string, 0, 2)
+	switch st := stmt.(type) {
+	case *tree.CreateDatabase:
+		dbNames = append(dbNames, string(st.Name))
+	case *tree.DropDatabase:
+		dbNames = append(dbNames, string(st.Name))
+	case *tree.AlterDataBaseConfig:
+		if !st.IsAccountLevel {
+			dbNames = append(dbNames, st.DbName)
+		}
+	case *tree.CreateTable:
+		dbNames = appendTableNameDatabaseName(dbNames, &st.Table)
+	case *tree.CreateView:
+		dbNames = appendTableNameDatabaseName(dbNames, st.Name)
+	case *tree.CreateSource:
+		dbNames = appendTableNameDatabaseName(dbNames, st.SourceName)
+	case *tree.CreateConnector:
+		dbNames = appendTableNameDatabaseName(dbNames, st.TableName)
+	case *tree.CreateSequence:
+		dbNames = appendTableNameDatabaseName(dbNames, st.Name)
+	case *tree.AlterSequence:
+		dbNames = appendTableNameDatabaseName(dbNames, st.Name)
+	case *tree.AlterView:
+		dbNames = appendTableNameDatabaseName(dbNames, st.Name)
+	case *tree.AlterTable:
+		dbNames = appendTableNameDatabaseName(dbNames, st.Table)
+	case *tree.RenameTable:
+		for _, alter := range st.AlterTables {
+			if alter == nil {
+				continue
+			}
+			dbNames = appendTableNameDatabaseName(dbNames, alter.Table)
+			for _, opt := range alter.Options {
+				if renameOpt, ok := opt.(*tree.AlterOptionTableName); ok && renameOpt.Name != nil {
+					target := renameOpt.Name.ToTableName()
+					dbNames = append(dbNames, string(target.SchemaName))
+				}
+			}
+		}
+	case *tree.CreateFunction:
+		dbNames = append(dbNames, functionNameDatabaseName(st.Name))
+	case *tree.DropFunction:
+		dbNames = append(dbNames, functionNameDatabaseName(st.Name))
+	case *tree.CreateProcedure:
+		dbNames = append(dbNames, procedureNameDatabaseName(st.Name))
+	case *tree.DropProcedure:
+		dbNames = append(dbNames, procedureNameDatabaseName(st.Name))
+	case *tree.DropTable:
+		dbNames = appendTableNamesDatabaseNames(dbNames, st.Names)
+	case *tree.DropView:
+		dbNames = appendTableNamesDatabaseNames(dbNames, st.Names)
+	case *tree.DropSequence:
+		dbNames = appendTableNamesDatabaseNames(dbNames, st.Names)
+	case *tree.Load:
+		dbNames = appendTableNameDatabaseName(dbNames, st.Table)
+	case *tree.CreateIndex:
+		dbNames = appendTableNameDatabaseName(dbNames, st.Table)
+	case *tree.DropIndex:
+		dbNames = appendTableNameDatabaseName(dbNames, st.TableName)
+	case *tree.TruncateTable:
+		dbNames = appendTableNameDatabaseName(dbNames, st.Name)
+	case *tree.CloneTable:
+		dbNames = appendTableNameDatabaseName(dbNames, &st.CreateTable.Table)
+	case *tree.CloneDatabase:
+		dbNames = append(dbNames, string(st.DstDatabase))
+	case *tree.RestoreSnapShot:
+		if st.Level == tree.RESTORELEVELDATABASE || st.Level == tree.RESTORELEVELTABLE {
+			dbNames = append(dbNames, string(st.DatabaseName))
+		}
+	case *tree.RestorePitr:
+		if st.Level == tree.RESTORELEVELDATABASE || st.Level == tree.RESTORELEVELTABLE {
+			dbNames = append(dbNames, string(st.DatabaseName))
+		}
+	case *tree.DataBranchCreateTable:
+		dbNames = appendTableNameDatabaseName(dbNames, &st.CreateTable.Table)
+	case *tree.DataBranchDeleteTable:
+		dbNames = appendTableNameDatabaseName(dbNames, &st.TableName)
+	case *tree.DataBranchCreateDatabase:
+		dbNames = append(dbNames, string(st.DstDatabase))
+	case *tree.DataBranchDeleteDatabase:
+		dbNames = append(dbNames, string(st.DatabaseName))
+	case *tree.DataBranchMerge:
+		dbNames = appendTableNameDatabaseName(dbNames, &st.DstTable)
+	case *tree.DataBranchPick:
+		dbNames = appendTableNameDatabaseName(dbNames, &st.DstTable)
+	}
+	return dbNames
+}
+
+func checkProtectedDatabaseWriteByStmt(ctx context.Context, ses *Session, stmt tree.Statement) error {
+	return checkProtectedDatabaseWrite(ctx, ses, protectedDatabaseWriteTargetsFromStmt(stmt)...)
+}
+
+func privilegeTipWritesDatabase(tip privilegeTips) bool {
+	switch tip.typ {
+	case PrivilegeTypeSelect, PrivilegeTypeValues:
+		return false
+	default:
+		return true
+	}
+}
+
+func checkProtectedDatabaseWriteByPrivilegeTips(ctx context.Context, ses *Session, tips privilegeTipsArray) error {
+	if canWriteProtectedDatabase(ses) {
+		return nil
+	}
+	dbNames := make([]string, 0, len(tips))
+	for _, tip := range tips {
+		if privilegeTipWritesDatabase(tip) {
+			dbNames = append(dbNames, tip.databaseName)
+		}
+	}
+	return checkProtectedDatabaseWrite(ctx, ses, dbNames...)
+}
+
 // privilege will be done on the table
 type privilegeTips struct {
 	typ                   PrivilegeType
@@ -7642,6 +7857,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	if priv.objectType() != objectTypeAccount && priv.objectType() != objectTypeDatabase { // do nothing
 		return true, stats, nil
 	}
+	if err = checkProtectedDatabaseWriteByStmt(ctx, ses, stmt); err != nil {
+		return false, stats, err
+	}
 	ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 	if err != nil {
 		return false, stats, err
@@ -7886,6 +8104,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 	stats.Reset()
 
 	if st, ok := stmt.(*tree.CreateTable); ok && st.IsAsSelect {
+		if err := checkProtectedDatabaseWrite(ctx, ses, string(st.Table.SchemaName)); err != nil {
+			return false, stats, err
+		}
 		// CTAS needs source-query SELECT privilege even when target-table CREATE
 		// is valid, so we check the source plan explicitly here.
 		ok, delta, err := authenticateCreateTableAsSelectSourcePrivilege(ctx, ses, st)
@@ -7925,6 +8146,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		}
 		if len(arr) == 0 {
 			return true, stats, nil
+		}
+		if err := checkProtectedDatabaseWriteByPrivilegeTips(ctx, ses, arr); err != nil {
+			return false, stats, err
 		}
 		convertPrivilegeTipsToPrivilege(priv, arr)
 		ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, priv)
@@ -8874,6 +9098,10 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		return true, stats, nil
 	}
 	tenant := ses.GetTenantInfo()
+
+	if err := checkProtectedDatabaseWriteByStmt(ctx, ses, stmt); err != nil {
+		return false, stats, err
+	}
 
 	if priv.privilegeKind() == privilegeKindNone { // do nothing
 		return true, stats, nil

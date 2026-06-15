@@ -61,6 +61,9 @@ func verifyLightPrivilege(ses *Session,
 			dbName = ses.GetDatabaseName()
 		}
 		dbName = strings.ToLower(dbName)
+		if isProtectedDatabase(ses, dbName) && !canWriteProtectedDatabase(ses) {
+			return false
+		}
 		if ok2 := isBannedDatabase(dbName); ok2 {
 			if isClusterTable {
 				ok = verifyAccountCanOperateClusterTable(ses.GetTenantInfo(), dbName, clusterTableOperation)
