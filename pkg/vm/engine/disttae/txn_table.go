@@ -1338,12 +1338,13 @@ func (tbl *txnTable) collectUnCommittedDataObjs(txnOffset int) ([]objectio.Objec
 		txnOffset,
 		func(entry Entry) {
 			stats := objectio.ObjectStats{}
-			if entry.bat == nil || entry.bat.IsEmpty() {
-				return
-			}
 			if entry.typ != INSERT ||
+				entry.bat == nil ||
 				len(entry.bat.Attrs) < 2 ||
 				entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
+				return
+			}
+			if entry.bat.IsEmpty() {
 				return
 			}
 			for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
