@@ -1315,8 +1315,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 		}
 	}
-	if name == "name_const" && !validNameConstNameAst(astArgs) {
-		return nil, moerr.NewInvalidArg(b.GetContext(), "NAME_CONST", "")
+	if name == "name_const" {
+		if !validNameConstNameAst(astArgs) {
+			return nil, moerr.NewInvalidArg(b.GetContext(), "NAME_CONST", "")
+		}
+		if err := validateNameConstArgs(b.GetContext(), args); err != nil {
+			return nil, err
+		}
 	}
 
 	if b.builder != nil {
@@ -2937,13 +2942,8 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 }
 
 func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
-	if len(args) != 2 {
-		return moerr.NewInvalidArg(ctx, "NAME_CONST", len(args))
-	}
-
-	nameLit := args[0].GetLit()
-	if nameLit == nil || nameLit.Isnull || !validNameConstValueExpr(args[1]) {
-		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
+	if err := validateNameConstArgs(ctx, args); err != nil {
+		return err
 	}
 
 	foldedArg, err := ConstantFold(batch.EmptyForConstFoldBatch, args[1], proc, false, true)
@@ -2953,6 +2953,18 @@ func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.
 	args[1] = foldedArg
 
 	if args[1].GetLit() == nil {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
+	}
+	return nil
+}
+
+func validateNameConstArgs(ctx context.Context, args []*plan.Expr) error {
+	if len(args) != 2 {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", len(args))
+	}
+
+	nameLit := args[0].GetLit()
+	if nameLit == nil || nameLit.Isnull || !validNameConstValueExpr(args[1]) {
 		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
 	}
 	return nil
@@ -2969,7 +2981,10 @@ func validNameConstValueExpr(arg *plan.Expr) bool {
 		return true
 	}
 	fn := arg.GetF()
-	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "unary_minus" || len(fn.Args) != 1 {
+	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
+		return false
+	}
+	if fn.Func.GetObjName() != "unary_minus" && fn.Func.GetObjName() != "unary_plus" {
 		return false
 	}
 	return fn.Args[0].GetLit() != nil || isDecimalLiteralCast(fn.Args[0])

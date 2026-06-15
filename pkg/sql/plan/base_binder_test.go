@@ -171,6 +171,14 @@ func TestBindNameConstConstArgs(t *testing.T) {
 			name: "negative decimal value",
 			sql:  "select name_const('myname', -12.34)",
 		},
+		{
+			name: "positive signed integer value",
+			sql:  "select name_const('myname', +1)",
+		},
+		{
+			name: "positive signed decimal value",
+			sql:  "select name_const('myname', +12.34)",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.NoError(t, bindNameConstSelect(tc.sql))
@@ -233,6 +241,35 @@ func TestBindNameConstNilProcReturnsError(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "name_const")
 	})
+}
+
+func TestGeneratedColBinderRejectsNameConstColumnValue(t *testing.T) {
+	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, "select name_const('x', a)", 1)
+	require.NoError(t, err)
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	funcExpr := selectClause.Exprs[0].Expr
+
+	binder := NewGeneratedColBinder(
+		context.Background(),
+		[]string{"a"},
+		[]plan.Type{{Id: int32(types.T_int64), Width: 64}},
+	)
+	_, err = binder.BindExpr(funcExpr, 0, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "NAME_CONST")
+}
+
+func TestGeneratedColBinderAcceptsNameConstUnaryPlusLiteral(t *testing.T) {
+	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, "select name_const('x', +1)", 1)
+	require.NoError(t, err)
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	funcExpr := selectClause.Exprs[0].Expr
+
+	binder := NewGeneratedColBinder(context.Background(), nil, nil)
+	_, err = binder.BindExpr(funcExpr, 0, false)
+	require.NoError(t, err)
 }
 
 func bindNameConstSelect(sql string) error {
