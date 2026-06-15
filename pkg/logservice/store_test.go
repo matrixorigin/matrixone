@@ -1873,3 +1873,15 @@ func TestStartReplicas_SkipsZombie(t *testing.T) {
 	assert.True(t, started[zombieKey{shardID: 1, replicaID: 2}], "legit replica must be started")
 	assert.False(t, started[zombieKey{shardID: 1, replicaID: 99}], "zombie replica must be skipped")
 }
+
+func TestDecodeLogShardRepairReason(t *testing.T) {
+	encoded := logShardRepairReasonPrefix +
+		`{"reason":"repair","cleanupReplicasByStore":{"log1":[262145,282825]}}`
+	decoded := decodeLogShardRepairReason(encoded)
+	require.Equal(t, "repair", decoded.Reason)
+	require.Equal(t, []uint64{262145, 282825}, decoded.CleanupReplicasByStore["log1"])
+
+	decoded = decodeLogShardRepairReason("plain")
+	require.Equal(t, "plain", decoded.Reason)
+	require.Nil(t, decoded.CleanupReplicasByStore)
+}

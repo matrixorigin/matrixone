@@ -400,6 +400,14 @@ func (l *store) startReplicas(ctx context.Context) error {
 	shards = append(shards, l.mu.metadata.Shards...)
 	l.mu.Unlock()
 
+	if err := l.cleanRequestedReplicasFromRepairState(ctx, shards); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	shards = shards[:0]
+	shards = append(shards, l.mu.metadata.Shards...)
+	l.mu.Unlock()
+
 	zombies := l.checkZombieReplicas(ctx, shards)
 	if err := ctx.Err(); err != nil {
 		return err

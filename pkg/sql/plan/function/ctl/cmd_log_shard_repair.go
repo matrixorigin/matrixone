@@ -32,14 +32,15 @@ type logShardRepairClient interface {
 }
 
 type logShardRepairCtlRequest struct {
-	Op            string                   `json:"op"`
-	Shard         logShardRepairShardInput `json:"shard"`
-	ShardID       uint64                   `json:"shardID"`
-	BlockedStores []string                 `json:"blockedStores"`
-	Stores        []string                 `json:"stores"`
-	Reason        string                   `json:"reason"`
-	Force         bool                     `json:"force"`
-	DryRun        bool                     `json:"dryRun"`
+	Op                     string                   `json:"op"`
+	Shard                  logShardRepairShardInput `json:"shard"`
+	ShardID                uint64                   `json:"shardID"`
+	BlockedStores          []string                 `json:"blockedStores"`
+	Stores                 []string                 `json:"stores"`
+	Reason                 string                   `json:"reason"`
+	CleanupReplicasByStore map[string][]uint64      `json:"cleanupReplicasByStore"`
+	Force                  bool                     `json:"force"`
+	DryRun                 bool                     `json:"dryRun"`
 }
 
 type logShardRepairShardInput struct {
@@ -61,6 +62,27 @@ type logShardRepairCtlResult struct {
 	BlockedStores  []string                             `json:"blockedStores"`
 	Request        logShardRepairCtlRequest             `json:"request"`
 	AllRepairs     map[uint64]logpb.LogShardRepairState `json:"allRepairs"`
+}
+
+const logShardRepairReasonPrefix = "__mo_log_shard_repair__:"
+
+type logShardRepairReason struct {
+	Reason                 string              `json:"reason,omitempty"`
+	CleanupReplicasByStore map[string][]uint64 `json:"cleanupReplicasByStore,omitempty"`
+}
+
+func encodeLogShardRepairReason(reason string, cleanup map[string][]uint64) (string, error) {
+	if len(cleanup) == 0 {
+		return reason, nil
+	}
+	data, err := json.Marshal(logShardRepairReason{
+		Reason:                 reason,
+		CleanupReplicasByStore: cleanup,
+	})
+	if err != nil {
+		return "", err
+	}
+	return logShardRepairReasonPrefix + string(data), nil
 }
 
 func handleLogShardRepair(
@@ -98,10 +120,14 @@ func handleLogShardRepair(
 	}
 	switch op {
 	case "repair":
+		reason, err := encodeLogShardRepairReason(req.Reason, req.CleanupReplicasByStore)
+		if err != nil {
+			return Result{}, err
+		}
 		repair := logpb.RepairLogShard{
 			Shard:         req.Shard.toLogShardInfo(),
 			BlockedStores: req.BlockedStores,
-			Reason:        req.Reason,
+			Reason:        reason,
 			Force:         req.Force,
 		}
 		if repair.Shard.ShardID == 0 {
