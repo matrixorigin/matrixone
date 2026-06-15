@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -69,4 +71,94 @@ func TestLazyCacheFSReadsMagicPrefixedRemoteObjectsWithoutLocalChecksum(t *testi
 	}
 	require.NoError(t, fs.ReadCache(ctx, cacheVec))
 	require.Equal(t, payload[4:14], buf.Bytes())
+}
+
+func TestLazyCacheFSEvictsOldEntriesWhenOverLimit(t *testing.T) {
+	t.Setenv("MO_TOOL_REMOTE_CACHE_SIZE", "32")
+
+	ctx := context.Background()
+	remote, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	first := bytes.Repeat([]byte("a"), 24)
+	second := bytes.Repeat([]byte("b"), 24)
+	require.NoError(t, remote.Write(ctx, fileservice.IOVector{
+		FilePath: "ckp/first",
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   int64(len(first)),
+			Data:   first,
+		}},
+	}))
+	require.NoError(t, remote.Write(ctx, fileservice.IOVector{
+		FilePath: "ckp/second",
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   int64(len(second)),
+			Data:   second,
+		}},
+	}))
+
+	fs, root, err := newLazyCacheFS(ctx, remote)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+
+	readAll := func(path string) []byte {
+		vec := &fileservice.IOVector{
+			FilePath: path,
+			Entries: []fileservice.IOEntry{{
+				Offset: 0,
+				Size:   -1,
+			}},
+		}
+		require.NoError(t, fs.Read(ctx, vec))
+		return vec.Entries[0].Data
+	}
+
+	require.Equal(t, first, readAll("ckp/first"))
+	require.FileExists(t, filepath.Join(root, "ckp/first"))
+
+	require.Equal(t, second, readAll("ckp/second"))
+	require.NoFileExists(t, filepath.Join(root, "ckp/first"))
+	require.FileExists(t, filepath.Join(root, "ckp/second"))
+
+	require.Equal(t, first, readAll("ckp/first"))
+	require.FileExists(t, filepath.Join(root, "ckp/first"))
+	require.NoFileExists(t, filepath.Join(root, "ckp/second"))
+}
+
+func TestParseLazyCacheSize(t *testing.T) {
+	tests := []struct {
+		value string
+		want  int64
+		ok    bool
+	}{
+		{value: "42", want: 42, ok: true},
+		{value: "2k", want: 2 << 10, ok: true},
+		{value: "3MB", want: 3 << 20, ok: true},
+		{value: "4GiB", want: 4 << 30, ok: true},
+		{value: "", ok: false},
+		{value: "bad", ok: false},
+	}
+
+	for _, tt := range tests {
+		got, ok := parseLazyCacheSize(tt.value)
+		require.Equal(t, tt.ok, ok)
+		if tt.ok {
+			require.Equal(t, tt.want, got)
+		}
+	}
+}
+
+func TestLazyCacheMaxBytesFromEnvDefault(t *testing.T) {
+	old := os.Getenv("MO_TOOL_REMOTE_CACHE_SIZE")
+	t.Cleanup(func() {
+		if old == "" {
+			_ = os.Unsetenv("MO_TOOL_REMOTE_CACHE_SIZE")
+		} else {
+			_ = os.Setenv("MO_TOOL_REMOTE_CACHE_SIZE", old)
+		}
+	})
+	_ = os.Unsetenv("MO_TOOL_REMOTE_CACHE_SIZE")
+	require.Equal(t, defaultLazyCacheMaxBytes, lazyCacheMaxBytesFromEnv())
 }
