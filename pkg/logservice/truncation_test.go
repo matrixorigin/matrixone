@@ -21,6 +21,7 @@ import (
 
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
+	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -146,6 +147,45 @@ func TestTruncationSkipsStaleReplicaMetadata(t *testing.T) {
 			runServiceTest(t, false, true, fn)
 		})
 	}
+}
+
+func TestTruncationKeepsStaleReplicaMetadataOnSnapshotCleanupFailure(t *testing.T) {
+	const (
+		shardID      = uint64(1)
+		staleReplica = uint64(99)
+	)
+	logShard := metadata.LogShard{
+		LogShardRecord: metadata.LogShardRecord{ShardID: shardID},
+		ReplicaID:      staleReplica,
+	}
+
+	fn := func(t *testing.T, s *Service) {
+		nid := nodeID{shardID: shardID, replicaID: staleReplica}
+		testPrepareSnapshot(t, s.store.snapshotMgr, nid, snapshotIndex(100))
+		assert.NoError(t, s.store.snapshotMgr.Init(shardID, staleReplica))
+		assert.Equal(t, 1, s.store.snapshotMgr.Count(shardID, staleReplica))
+
+		s.store.mu.Lock()
+		s.store.mu.metadata.Shards = []metadata.LogShard{logShard}
+		s.store.mu.Unlock()
+
+		originalSnapshotCfg := s.store.snapshotMgr.cfg
+		failingSnapshotCfg := *originalSnapshotCfg
+		failingSnapshotCfg.FS = vfs.Wrap(originalSnapshotCfg.FS, vfs.OnIndex(0, vfs.OpWrite))
+		s.store.snapshotMgr.cfg = &failingSnapshotCfg
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		defer cancel()
+		assert.NoError(t, s.store.processTruncateLog(ctx))
+		assert.Equal(t, int64(staleReplica), s.store.getReplicaID(shardID))
+		assert.Equal(t, 1, s.store.snapshotMgr.Count(shardID, staleReplica))
+
+		s.store.snapshotMgr.cfg = originalSnapshotCfg
+		assert.NoError(t, s.store.processTruncateLog(ctx))
+		assert.Equal(t, int64(-1), s.store.getReplicaID(shardID))
+		assert.Equal(t, 0, s.store.snapshotMgr.Count(shardID, staleReplica))
+	}
+	runServiceTest(t, false, true, fn)
 }
 
 func TestTruncationImportSnapshot(t *testing.T) {
