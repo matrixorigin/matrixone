@@ -70,3 +70,32 @@ select count(*) from alter_copy_secondary_index_txn_write_t where binary k = bin
 count(*)
 1
 drop table alter_copy_secondary_index_txn_write_t;
+drop table if exists alter_copy_fulltext_index_txn_t;
+create table alter_copy_fulltext_index_txn_t (
+    id int primary key,
+    title varchar(200) not null,
+    body text not null,
+    fulltext index ftx_title(title)
+);
+insert into alter_copy_fulltext_index_txn_t values (1, 'database tutorial', '{}');
+select count(*) from alter_copy_fulltext_index_txn_t where match(title) against('database' in natural language mode);
+count(*)
+1
+begin;
+alter table alter_copy_fulltext_index_txn_t add column c int not null default 0;
+alter table alter_copy_fulltext_index_txn_t modify column body longtext not null;
+commit;
+select count(*) from alter_copy_fulltext_index_txn_t where match(title) against('database' in natural language mode);
+count(*)
+1
+select count(*) from alter_copy_fulltext_index_txn_t where title like '%database%';
+count(*)
+1
+insert into alter_copy_fulltext_index_txn_t values (2, 'database guide', '{new}', 0);
+select count(*) from alter_copy_fulltext_index_txn_t where match(title) against('database' in natural language mode);
+count(*)
+2
+select count(*) from alter_copy_fulltext_index_txn_t where title like '%database%';
+count(*)
+2
+drop table alter_copy_fulltext_index_txn_t;

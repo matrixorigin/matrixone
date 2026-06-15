@@ -52,3 +52,23 @@ select count(*) from alter_copy_secondary_index_txn_write_t where k = 'a' and s 
 select count(*) from alter_copy_secondary_index_txn_write_t where k = 'b' and s = 'y';
 select count(*) from alter_copy_secondary_index_txn_write_t where binary k = binary 'b' and binary s = binary 'y';
 drop table alter_copy_secondary_index_txn_write_t;
+
+drop table if exists alter_copy_fulltext_index_txn_t;
+create table alter_copy_fulltext_index_txn_t (
+    id int primary key,
+    title varchar(200) not null,
+    body text not null,
+    fulltext index ftx_title(title)
+);
+insert into alter_copy_fulltext_index_txn_t values (1, 'database tutorial', '{}');
+select count(*) from alter_copy_fulltext_index_txn_t where match(title) against('database' in natural language mode);
+begin;
+alter table alter_copy_fulltext_index_txn_t add column c int not null default 0;
+alter table alter_copy_fulltext_index_txn_t modify column body longtext not null;
+commit;
+select count(*) from alter_copy_fulltext_index_txn_t where match(title) against('database' in natural language mode);
+select count(*) from alter_copy_fulltext_index_txn_t where title like '%database%';
+insert into alter_copy_fulltext_index_txn_t values (2, 'database guide', '{new}', 0);
+select count(*) from alter_copy_fulltext_index_txn_t where match(title) against('database' in natural language mode);
+select count(*) from alter_copy_fulltext_index_txn_t where title like '%database%';
+drop table alter_copy_fulltext_index_txn_t;

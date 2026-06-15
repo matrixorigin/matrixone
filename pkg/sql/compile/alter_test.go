@@ -150,18 +150,45 @@ func TestShouldRebuildTxnLocalIndexClone(t *testing.T) {
 			want:    true,
 		},
 		{
-			name:    "fulltext index keeps clone path",
+			name:    "fulltext index table created in txn",
 			checker: alterCopyTxnLocalIndexChecker{created: map[uint64]bool{idxTableID: true}},
 			idxDef: &plan.TableDef{
 				TblId: idxTableID,
 			},
 			idxInfo: &unaffectedIndexTableInfo{IndexAlgo: catalog.MOIndexFullTextAlgo.ToString()},
+			want:    true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, shouldRebuildTxnLocalIndexClone(tc.checker, tc.idxDef, tc.idxInfo))
 		})
 	}
+}
+
+func TestGenRebuildTxnLocalIndexCloneSQLsFullText(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name: "ft_src",
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+		},
+	}
+	idxDef := &plan.IndexDef{
+		IndexTableName:  "__mo_index_fulltext_ft",
+		IndexAlgo:       catalog.MOIndexFullTextAlgo.ToString(),
+		IndexAlgoParams: `{"parser":"ngram"}`,
+		Parts:           []string{"title", "body"},
+	}
+	idxInfo := &unaffectedIndexTableInfo{IndexAlgo: catalog.MOIndexFullTextAlgo.ToString()}
+
+	sqls, err := genRebuildTxnLocalIndexCloneSQLs(tableDef, idxDef, "test_db", idxInfo)
+	require.NoError(t, err)
+	require.Len(t, sqls, 1)
+	assert.Contains(t, sqls[0], "fulltext_index_tokenize")
+	assert.Contains(t, sqls[0], "`test_db`.`__mo_index_fulltext_ft`")
+	assert.Contains(t, sqls[0], "`test_db`.`ft_src`")
+	assert.Contains(t, sqls[0], "src.id")
+	assert.Contains(t, sqls[0], "src.title,src.body")
+	assert.NotContains(t, sqls[0], "serial_full")
 }
 
 type alterCopyInsertSpyExecutor struct {

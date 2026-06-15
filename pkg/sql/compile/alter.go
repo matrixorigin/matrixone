@@ -1229,15 +1229,11 @@ func cloneUnaffectedIndexes(
 					return moerr.NewInternalErrorNoCtxf("missing cloned index definition for %s", idxName)
 				}
 				logutil.Infof("cloneUnaffectedIndex: rebuild txn-local index %s into %s\n", idxName, newIdxTblName.IndexTableName)
-				if catalog.IsMasterIndexAlgo(oriIdxTblNames.IndexAlgo) {
-					insertSQLs := genInsertIndexTableSqlForMasterIndex(newTblDef, newIdxDef, dbName)
-					for _, insertSQL := range insertSQLs {
-						if err = c.runSql(insertSQL); err != nil {
-							return err
-						}
-					}
-				} else {
-					insertSQL := genInsertIndexTableSql(newTblDef, newIdxDef, dbName, oriIdxTblNames.Unique)
+				insertSQLs, err := genRebuildTxnLocalIndexCloneSQLs(newTblDef, newIdxDef, dbName, oriIdxTblNames)
+				if err != nil {
+					return err
+				}
+				for _, insertSQL := range insertSQLs {
 					if err = c.runSql(insertSQL); err != nil {
 						return err
 					}
@@ -1287,10 +1283,24 @@ func shouldRebuildTxnLocalIndexClone(checker txnLocalTableChecker, idxTblDef *pl
 	}
 	if !(idxInfo.Unique ||
 		catalog.IsMasterIndexAlgo(idxInfo.IndexAlgo) ||
+		catalog.IsFullTextIndexAlgo(idxInfo.IndexAlgo) ||
 		(catalog.IsRegularIndexAlgo(idxInfo.IndexAlgo) && !catalog.IsRTreeIndexAlgo(idxInfo.IndexAlgo))) {
 		return false
 	}
 	return checker.IsTableCreatedInTxn(idxTblDef.TblId) || checker.HasTableWritesInTxn(idxTblDef.TblId)
+}
+
+func genRebuildTxnLocalIndexCloneSQLs(tableDef *plan.TableDef, idxDef *plan.IndexDef, dbName string, idxInfo *unaffectedIndexTableInfo) ([]string, error) {
+	if idxInfo == nil {
+		return nil, moerr.NewInternalErrorNoCtx("missing txn-local index clone info")
+	}
+	if catalog.IsMasterIndexAlgo(idxInfo.IndexAlgo) {
+		return genInsertIndexTableSqlForMasterIndex(tableDef, idxDef, dbName), nil
+	}
+	if catalog.IsFullTextIndexAlgo(idxInfo.IndexAlgo) {
+		return genInsertIndexTableSqlForFullTextIndex(tableDef, idxDef, dbName)
+	}
+	return []string{genInsertIndexTableSql(tableDef, idxDef, dbName, idxInfo.Unique)}, nil
 }
 
 func findIndexDefByName(tableDef *plan.TableDef, idxName string) *plan.IndexDef {
