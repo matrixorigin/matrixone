@@ -1,0 +1,25 @@
+SELECT IS_FREE_LOCK('prisma_migrate_lock') AS free_before;
+➤ free_before[-5,64,0]  𝄀
+1
+SELECT GET_LOCK('prisma_migrate_lock', 0) AS acquire_lock;
+➤ acquire_lock[-5,64,0]  𝄀
+1
+SELECT IS_FREE_LOCK('PRISMA_MIGRATE_LOCK') AS free_after_acquire;
+➤ free_after_acquire[-5,64,0]  𝄀
+0
+SELECT RELEASE_LOCK('PrIsMa_MiGrAtE_LoCk') AS release_held;
+➤ release_held[-5,64,0]  𝄀
+1
+SELECT IS_FREE_LOCK('prisma_migrate_lock') AS free_after_release;
+➤ free_after_release[-5,64,0]  𝄀
+1
+SELECT RELEASE_LOCK('prisma_migrate_lock_never_created') AS release_never_created;
+➤ release_never_created[-5,64,0]  𝄀
+null
+SELECT
+    GET_LOCK(NULL, 0) AS get_null_name,
+    GET_LOCK('prisma_migrate_lock_null_timeout', NULL) AS get_null_timeout,
+    RELEASE_LOCK(NULL) AS release_null_name,
+    IS_FREE_LOCK(NULL) AS is_free_null_name;
+➤ get_null_name[-5,64,0]  ¦  get_null_timeout[-5,64,0]  ¦  release_null_name[-5,64,0]  ¦  is_free_null_name[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null
