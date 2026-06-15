@@ -264,6 +264,12 @@ func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 
 func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 	for _, incoming := range hb.Replicas {
+		// A replica restored from an old snapshot can report a membership
+		// that no longer contains itself. Keep its store heartbeat, but do
+		// not let that stale view advance global shard metadata.
+		if !logReplicaInfoSelfReported(incoming, hb.UUID) {
+			continue
+		}
 		recorded, ok := s.Shards[incoming.ShardID]
 		if !ok {
 			recorded = LogShardInfo{
@@ -273,7 +279,8 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 			}
 		}
 
-		if incoming.Epoch > recorded.Epoch {
+		if incoming.Epoch > recorded.Epoch ||
+			(incoming.Epoch < recorded.Epoch && !s.logShardInfoSupported(recorded)) {
 			recorded.Epoch = incoming.Epoch
 			recorded.Replicas = incoming.Replicas
 			recorded.NonVotingReplicas = incoming.NonVotingReplicas
@@ -292,6 +299,54 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 
 		s.Shards[incoming.ShardID] = recorded
 	}
+}
+
+func logReplicaInfoSelfReported(incoming LogReplicaInfo, uuid string) bool {
+	if incoming.IsNonVoting {
+		target, ok := incoming.NonVotingReplicas[incoming.ReplicaID]
+		return ok && target == uuid
+	}
+	target, ok := incoming.Replicas[incoming.ReplicaID]
+	return ok && target == uuid
+}
+
+func (s *LogState) logShardInfoSupported(shard LogShardInfo) bool {
+	for replicaID, uuid := range shard.Replicas {
+		if s.logReplicaInfoSupportsShard(shard, replicaID, uuid, false) {
+			return true
+		}
+	}
+	for replicaID, uuid := range shard.NonVotingReplicas {
+		if s.logReplicaInfoSupportsShard(shard, replicaID, uuid, true) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *LogState) logReplicaInfoSupportsShard(
+	shard LogShardInfo, replicaID uint64, uuid string, nonVoting bool,
+) bool {
+	store, ok := s.Stores[uuid]
+	if !ok {
+		return false
+	}
+	for _, replica := range store.Replicas {
+		if replica.ShardID != shard.ShardID ||
+			replica.ReplicaID != replicaID ||
+			replica.IsNonVoting != nonVoting {
+			continue
+		}
+		if !logReplicaInfoSelfReported(replica, uuid) {
+			continue
+		}
+		if replica.Epoch == shard.Epoch &&
+			reflect.DeepEqual(replica.Replicas, shard.Replicas) &&
+			reflect.DeepEqual(replica.NonVotingReplicas, shard.NonVotingReplicas) {
+			return true
+		}
+	}
+	return false
 }
 
 // LogString returns "ServiceType/ConfigChangeType UUID RepUuid:RepShardID:RepID InitialMembers".
