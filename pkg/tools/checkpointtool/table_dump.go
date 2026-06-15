@@ -130,6 +130,7 @@ type TableSchema struct {
 	CreateSQL    string        // raw CREATE TABLE from mo_tables.rel_createsql
 	Comment      string
 	UniqueKeys   []TableUniqueKey
+	Partition    string
 }
 
 type TableCatalogEntry struct {
@@ -189,6 +190,15 @@ var moIndexesHeaders = []string{
 	"ordinal_position",
 	"options",
 	"index_table_name",
+}
+
+var moPartitionMetadataHeaders = []string{
+	"table_id",
+	"table_name",
+	"database_name",
+	"partition_method",
+	"partition_description",
+	"partition_count",
 }
 
 type indexDDLColumn struct {
@@ -410,6 +420,10 @@ func renderCreateTableDDL(tableName string, cols []TableColumn) string {
 }
 
 func renderCreateTableDDLWithComment(tableName string, cols []TableColumn, comment string, uniqueKeys ...TableUniqueKey) string {
+	return renderCreateTableDDLFull(tableName, cols, comment, "", uniqueKeys...)
+}
+
+func renderCreateTableDDLFull(tableName string, cols []TableColumn, comment string, partition string, uniqueKeys ...TableUniqueKey) string {
 	if tableName == "" || len(cols) == 0 {
 		return ""
 	}
@@ -478,6 +492,10 @@ func renderCreateTableDDLWithComment(tableName string, cols []TableColumn, comme
 	if comment != "" {
 		sb.WriteString(" COMMENT=")
 		sb.WriteString(quoteDDLString(comment))
+	}
+	if partition != "" {
+		sb.WriteString(" ")
+		sb.WriteString(partition)
 	}
 	if clusterCols := clusterByColumns(cols); len(clusterCols) > 0 {
 		sb.WriteString(" CLUSTER BY (")
@@ -633,7 +651,7 @@ func RenderCreateTableDDLFromSchema(schema *TableSchema) string {
 			return ""
 		}
 	}
-	return renderCreateTableDDLWithComment(schema.TableName, schema.Columns, schema.Comment, schema.UniqueKeys...)
+	return renderCreateTableDDLFull(schema.TableName, schema.Columns, schema.Comment, schema.Partition, schema.UniqueKeys...)
 }
 
 func inferBuiltinCatalogLayout(
@@ -807,6 +825,11 @@ func (r *CheckpointReader) ReadTableSchema(
 	if len(schema.Columns) == 0 {
 		layout := inferBuiltinCatalogLayout(tableID, moTablesView, moColumnsView)
 		schema = mergeBuiltinSchemaFallback(schema, builtinTableSchemaForLayout(layout, tableID), tableID)
+	}
+	if schema.Partition == "" {
+		if partitionClause := r.readPartitionClause(ctx, tableID, snapshotTS); partitionClause != "" {
+			schema.Partition = partitionClause
+		}
 	}
 
 	return schema
@@ -1077,6 +1100,7 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 		DatabaseName: strings.Clone(schema.DatabaseName),
 		CreateSQL:    strings.Clone(schema.CreateSQL),
 		Comment:      strings.Clone(schema.Comment),
+		Partition:    strings.Clone(schema.Partition),
 	}
 	if len(schema.Columns) > 0 {
 		clone.Columns = make([]TableColumn, len(schema.Columns))
@@ -2653,17 +2677,21 @@ func findUniqueKeysFromMoTables(view *LogicalTableView, tableID uint64) []TableU
 	return nil
 }
 
-func createTableDDLFromCatalogViews(tableID uint64, moTablesView, moColumnsView *LogicalTableView) string {
+func createTableDDLFromCatalogViews(tableID uint64, moTablesView, moColumnsView *LogicalTableView, partitionMetadataView ...*LogicalTableView) string {
 	tableName := ""
 	tableComment := ""
 	uniqueKeys := []TableUniqueKey(nil)
+	partition := ""
 	if moTablesView != nil {
 		tableName = findTableNameFromMoTables(moTablesView, tableID)
 		tableComment = findTableCommentFromMoTables(moTablesView, tableID)
 		uniqueKeys = findUniqueKeysFromMoTables(moTablesView, tableID)
 	}
+	if len(partitionMetadataView) > 0 && partitionMetadataView[0] != nil {
+		partition = buildPartitionClauseFromMetadata(partitionMetadataView[0], tableID)
+	}
 	if moColumnsView != nil {
-		if ddl := buildCreateTableFromMoColumnsWithOptions(moColumnsView, tableID, tableName, tableComment, uniqueKeys); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsWithOptions(moColumnsView, tableID, tableName, tableComment, partition, uniqueKeys); ddl != "" {
 			return ddl
 		}
 	}
@@ -3059,7 +3087,12 @@ func (r *CheckpointReader) ShowCreateTable(
 		moColumnsView = nil
 	}
 
-	if ddl := createTableDDLFromCatalogViews(tableID, moTablesView, moColumnsView); ddl != "" {
+	var partitionMetadataView *LogicalTableView
+	if view, err := r.getPartitionMetadataView(ctx, snapshotTS); err == nil {
+		partitionMetadataView = view
+	}
+
+	if ddl := createTableDDLFromCatalogViews(tableID, moTablesView, moColumnsView, partitionMetadataView); ddl != "" {
 		return ddl, nil
 	}
 
@@ -3113,6 +3146,32 @@ func (r *CheckpointReader) ShowCreateIndexStatements(
 		return nil, err
 	}
 	return buildCreateIndexStatementsFromMoIndexes(view, tableID, tableName)
+}
+
+func (r *CheckpointReader) getPartitionMetadataView(
+	ctx context.Context,
+	snapshotTS types.TS,
+) (*LogicalTableView, error) {
+	partitionMetadataTableID, ok, err := r.findCatalogTableID(ctx, snapshotTS, catalog.MOPartitionMetadata)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return r.dumpCatalogTableViewWithHeaders(ctx, partitionMetadataTableID, snapshotTS, moPartitionMetadataHeaders)
+}
+
+func (r *CheckpointReader) readPartitionClause(
+	ctx context.Context,
+	tableID uint64,
+	snapshotTS types.TS,
+) string {
+	view, err := r.getPartitionMetadataView(ctx, snapshotTS)
+	if err != nil || view == nil {
+		return ""
+	}
+	return buildPartitionClauseFromMetadata(view, tableID)
 }
 
 func (r *CheckpointReader) dumpCatalogTableViewWithHeaders(
@@ -3290,6 +3349,61 @@ func buildCreateIndexStatementsFromMoIndexes(
 	return statements, nil
 }
 
+func buildPartitionClauseFromMetadata(view *LogicalTableView, tableID uint64) string {
+	if view == nil {
+		return ""
+	}
+	tableIDCol := view.columnDataIndex("table_id")
+	methodCol := view.columnDataIndex("partition_method")
+	descriptionCol := view.columnDataIndex("partition_description")
+	countCol := view.columnDataIndex("partition_count")
+	if tableIDCol < 0 || methodCol < 0 || descriptionCol < 0 {
+		ckpDebugSchemaf(
+			"partition metadata headers unavailable table=%d headers=%v table_id_col=%d method_col=%d description_col=%d count_col=%d",
+			tableID,
+			view.Headers,
+			tableIDCol,
+			methodCol,
+			descriptionCol,
+			countCol,
+		)
+		return ""
+	}
+	tableIDStr := strconv.FormatUint(tableID, 10)
+	for _, row := range view.Rows {
+		if tableIDCol >= len(row) || row[tableIDCol] != tableIDStr {
+			continue
+		}
+		if methodCol >= len(row) || descriptionCol >= len(row) {
+			continue
+		}
+		method := strings.TrimSpace(row[methodCol])
+		description := strings.TrimSpace(row[descriptionCol])
+		if description == "" || !isPrintableSQLText(description) {
+			return ""
+		}
+		clause := "partition by " + description
+		if isAutoPartitionCountMethod(method) && countCol >= 0 && countCol < len(row) {
+			if count, err := strconv.Atoi(strings.TrimSpace(row[countCol])); err == nil && count > 0 {
+				clause += fmt.Sprintf(" partitions %d", count)
+			}
+		}
+		ckpDebugSchemaf("partition metadata resolved table=%d method=%q description=%q clause=%q", tableID, method, description, clause)
+		return clause
+	}
+	ckpDebugSchemaf("partition metadata not found table=%d rows=%d", tableID, len(view.Rows))
+	return ""
+}
+
+func isAutoPartitionCountMethod(method string) bool {
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "key", "linearkey", "hash", "linearhash":
+		return true
+	default:
+		return false
+	}
+}
+
 func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, error) {
 	if info == nil || tableName == "" || len(info.columns) == 0 {
 		return "", nil
@@ -3422,7 +3536,7 @@ func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64, table
 	if len(tableNames) > 1 && tableNames[1] != "" {
 		tableComment = tableNames[1]
 	}
-	return buildCreateTableFromMoColumnsWithOptions(view, tableID, tableName, tableComment, nil)
+	return buildCreateTableFromMoColumnsWithOptions(view, tableID, tableName, tableComment, "", nil)
 }
 
 func buildCreateTableFromMoColumnsWithOptions(
@@ -3430,6 +3544,7 @@ func buildCreateTableFromMoColumnsWithOptions(
 	tableID uint64,
 	tableName string,
 	tableComment string,
+	partition string,
 	uniqueKeys []TableUniqueKey,
 ) string {
 	relnameIDCol := fallbackCatalogColIndex(view, moColumnsID, "att_relname_id")
@@ -3439,7 +3554,7 @@ func buildCreateTableFromMoColumnsWithOptions(
 	hiddenCol := fallbackCatalogColIndex(view, moColumnsID, "att_is_hidden")
 
 	if relnameIDCol >= 0 && nameCol >= 0 && typCol >= 0 && numCol >= 0 {
-		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, uniqueKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, partition, uniqueKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
 			return ddl
 		}
 	}
@@ -3451,7 +3566,7 @@ func buildCreateTableFromMoColumnsWithOptions(
 		typCol = catalogColIndexForLayout(match.layout, moColumnsID, "atttyp", match.offset)
 		numCol = catalogColIndexForLayout(match.layout, moColumnsID, "attnum", match.offset)
 		hiddenCol = catalogColIndexForLayout(match.layout, moColumnsID, "att_is_hidden", match.offset)
-		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, uniqueKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, partition, uniqueKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
 			return ddl
 		}
 	}
@@ -3464,6 +3579,7 @@ func buildCreateTableFromMoColumnsAt(
 	tableID uint64,
 	tableName string,
 	tableComment string,
+	partition string,
 	uniqueKeys []TableUniqueKey,
 	relnameIDCol int,
 	nameCol int,
@@ -3476,7 +3592,7 @@ func buildCreateTableFromMoColumnsAt(
 	if len(cols) == 0 {
 		return ""
 	}
-	return renderCreateTableDDLWithComment(tableName, cols, tableComment, uniqueKeys...)
+	return renderCreateTableDDLFull(tableName, cols, tableComment, partition, uniqueKeys...)
 }
 
 func isPrintableSQLType(sqlType string) bool {

@@ -565,8 +565,20 @@ func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *test
 			row("note", encodedSQLType(t, types.New(types.T_varchar, 100, 0)), "3", "0", "1", encodedDefault(t, "'parent-default'", true), "", "parent note", "2"),
 		},
 	}
+	partitionMetadataView := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"table_id", "table_name", "database_name", "partition_method", "partition_description", "partition_count",
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"333999", "parent", "ckp_constraints", "Key", "key algorithm = 2 (`id`, `tenant_id`)", "4",
+			},
+		},
+	}
 
-	ddl := createTableDDLFromCatalogViews(333999, moTablesView, moColumnsView)
+	ddl := createTableDDLFromCatalogViews(333999, moTablesView, moColumnsView, partitionMetadataView)
 	assert.Contains(t, ddl, "CREATE TABLE `parent`")
 	assert.Contains(t, ddl, "`id` INT NOT NULL")
 	assert.Contains(t, ddl, "`code` VARCHAR(20) NOT NULL")
@@ -575,6 +587,7 @@ func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *test
 	assert.Contains(t, ddl, "UNIQUE KEY `code`(`code`)")
 	assert.Contains(t, ddl, "KEY `idx_parent_note`(`note`)")
 	assert.Contains(t, ddl, "COMMENT='parent table comment'")
+	assert.Contains(t, ddl, "partition by key algorithm = 2 (`id`, `tenant_id`) partitions 4")
 	assert.NotContains(t, ddl, "`old`")
 }
 
