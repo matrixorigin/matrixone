@@ -561,6 +561,8 @@ func (t Type) DescString() string {
 		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
 	case T_decimal128:
 		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
+	case T_decimal256:
+		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
 	}
 	return t.Oid.String()
 }
