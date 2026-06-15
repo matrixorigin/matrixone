@@ -132,6 +132,16 @@ message Insert {
   int32 partition_idx = 8;
   bool is_end = 9;
   plan.TableDef table_def = 10;
+  // Writable external table: this insert writes stage files instead of an
+  // engine relation. The writer config is rebuilt on the receiving CN from
+  // table_def's stored ExternParam; the statement-start timestamp (used to
+  // expand WRITE_FILE_PATTERN time directives consistently) and the session
+  // time zone (name + offset-at-statement-time fallback; the generic session
+  // codec round-trips zones lossily) travel here.
+  bool to_external = 11;
+  int64 external_stmt_unix_nano = 12;
+  string external_tz_name = 13;
+  int32 external_tz_offset_sec = 14;
 }
 
 message MultiUpdate {

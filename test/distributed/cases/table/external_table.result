@@ -183,15 +183,17 @@ clo1    clo5    clo7    col12    col13    col16
 create external table ex_table_7(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_4.csv'} fields terminated by '#' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_7;
-invalid input: invalid field or comment delimiter
+➤ clo1[-6,8,0]  ¦  clo2[5,16,0]  ¦  clo3[4,32,0]  ¦  clo4[-5,64,0]  ¦  clo5[-6,8,0]  ¦  clo6[5,16,0]  ¦  clo7[4,32,0]  ¦  clo8[-5,64,0]  ¦  col9[7,24,0]  ¦  col10[8,54,0]  ¦  col11[12,-1,0]  ¦  col12[91,64,0]  ¦  col13[93,64,0]  ¦  col14[93,64,0]  ¦  col15[-7,1,0]  ¦  col16[3,5,2]  ¦  col17[12,0,0]  ¦  col18[12,-1,0]  ¦  col19[12,-1,0]  ¦  col20[12,-1,0]  𝄀
+91  ¦  19514  ¦  -179559641  ¦  1234138289513302348  ¦  122  ¦  44115  ¦  625429347  ¦  6204822205090614210  ¦  7.2914  ¦  6.5836  ¦  R.STU-_+=VWXYZabcdefghigklmno  ¦  2865-02-22  ¦  9976-06-04 00:00:00  ¦  1985-01-12 23:59:59  ¦  0  ¦  878.09  ¦  HI#G;KL/MN?OPQR.STU-_+=VWXYZabcd  ¦  QR.STU-_+=VWXYZabcdefghigklmnopqrstu  ¦  R.STU-_+=VWXYZabcdefghigklmnopqrstuvw  ¦  -_+=VWXYZabcdefgh    igklmnopqr  𝄀
+33  ¦  4300  ¦  1287532466  ¦  -3038428195984464330  ¦  104  ¦  9233  ¦  3258037690  ¦  17397115807377870895  ¦  1.1559  ¦  6.5635  ¦  +=VWXYZabcdefghigklmnopqrstuvwxyz012  ¦  6316-02-16  ¦  3647-01-21 23:59:59  ¦  2034-02-10 00:00:00  ¦  1  ¦  439.95  ¦  EF#GHI#G;KL/MN?OPQR.STU-_+=VWXYZabcdefgh  ¦  OPQR.STU-_+=VWXYZa  ¦  U-_+=VWXYZabcdefghigklmno  ¦  .STU-_+=VWXYZab
 create external table ex_table_8(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_5.csv'} fields terminated by '\n' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_8;
-invalid input: invalid field or comment delimiter
+invalid input: invalid field delimiter
 create external table ex_table_9(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_6.csv'} fields terminated by '\r' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_9;
-invalid input: invalid field or comment delimiter
+invalid input: invalid field delimiter
 create external table ex_table_10(clo1 tinyint,clo2 smallint,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,
 col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 varchar(255))infile{"filepath"='$resources/external_table_file/ex_table_sep_7.csv'} fields terminated by ''  lines terminated by '\n';
 select * from ex_table_10;
