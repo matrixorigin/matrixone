@@ -1531,9 +1531,8 @@ func showCreateTableCommand(storage *toolfs.StorageOptions) *cobra.Command {
 		Long: `Display the CREATE TABLE SQL for a given table by reading the checkpoint's
 mo_tables and mo_columns system tables (GCKP + following ICKPs).
 
-The DDL is resolved from mo_tables.rel_createsql if available, otherwise
-reconstructed from mo_columns visible column definitions, with hardcoded
-fallbacks for core built-in system tables.
+The DDL is reconstructed from mo_columns visible column definitions, with
+hardcoded fallbacks for core built-in system tables.
 
 Examples:
   mo-tool ckp show-create-table --table-id=12345 /path/to/ckp

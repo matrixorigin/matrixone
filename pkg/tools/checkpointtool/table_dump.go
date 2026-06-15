@@ -392,28 +392,20 @@ func renderCreateTableDDL(tableName string, cols []TableColumn) string {
 }
 
 // RenderCreateTableDDLFromSchema renders a CREATE TABLE statement from resolved
-// checkpoint schema metadata. Visible columns are preferred because ALTER TABLE
-// updates mo_columns but does not rewrite mo_tables.rel_createsql.
+// checkpoint column metadata.
 func RenderCreateTableDDLFromSchema(schema *TableSchema) string {
 	if schema == nil {
 		return ""
 	}
-	if schema.TableName != "" && len(schema.Columns) > 0 {
-		canRenderColumns := true
-		for _, col := range schema.Columns {
-			if col.Name == "" || !isPrintableSQLType(col.SQLType) {
-				canRenderColumns = false
-				break
-			}
-		}
-		if canRenderColumns {
-			return renderCreateTableDDL(schema.TableName, schema.Columns)
+	if schema.TableName == "" || len(schema.Columns) == 0 {
+		return ""
+	}
+	for _, col := range schema.Columns {
+		if col.Name == "" || !isPrintableSQLType(col.SQLType) {
+			return ""
 		}
 	}
-	if isPrintableCreateTableSQL(schema.CreateSQL) {
-		return strings.Clone(schema.CreateSQL)
-	}
-	return ""
+	return renderCreateTableDDL(schema.TableName, schema.Columns)
 }
 
 func inferBuiltinCatalogLayout(
@@ -2270,41 +2262,6 @@ func buildSchemaFromMoTablesRow(view *LogicalTableView, fullRow []string) *Table
 	return schema
 }
 
-func findCreateSQLFromMoTables(view *LogicalTableView, tableID uint64) string {
-	tableIDStr := fmt.Sprintf("%d", tableID)
-	try := func(relIDCol, createSQLCol int) string {
-		if relIDCol < 0 || createSQLCol < 0 {
-			return ""
-		}
-		for _, fullRow := range view.Rows {
-			row := fullRow[logicalViewDataOffset(view):]
-			if relIDCol >= len(row) || createSQLCol >= len(row) {
-				continue
-			}
-			if row[relIDCol] == tableIDStr && isPrintableCreateTableSQL(row[createSQLCol]) {
-				return strings.Clone(row[createSQLCol])
-			}
-		}
-		return ""
-	}
-
-	relIDCol := fallbackCatalogColIndex(view, moTablesID, "rel_id")
-	createSQLCol := fallbackCatalogColIndex(view, moTablesID, "rel_createsql")
-	if ddl := try(relIDCol, createSQLCol); ddl != "" {
-		return ddl
-	}
-
-	dataWidth := len(view.Headers) - logicalViewDataOffset(view)
-	for _, match := range catalogLayoutMatches(dataWidth, moTablesID) {
-		relIDCol = catalogColIndexForLayout(match.layout, moTablesID, "rel_id", match.offset)
-		createSQLCol = catalogColIndexForLayout(match.layout, moTablesID, "rel_createsql", match.offset)
-		if ddl := try(relIDCol, createSQLCol); ddl != "" {
-			return ddl
-		}
-	}
-	return ""
-}
-
 func findTableNameFromMoTables(view *LogicalTableView, tableID uint64) string {
 	tableIDStr := fmt.Sprintf("%d", tableID)
 	try := func(relIDCol, relNameCol int) string {
@@ -2347,11 +2304,6 @@ func createTableDDLFromCatalogViews(tableID uint64, moTablesView, moColumnsView 
 	}
 	if moColumnsView != nil {
 		if ddl := buildCreateTableFromMoColumns(moColumnsView, tableID, tableName); ddl != "" {
-			return ddl
-		}
-	}
-	if moTablesView != nil {
-		if ddl := findCreateSQLFromMoTables(moTablesView, tableID); ddl != "" {
 			return ddl
 		}
 	}
@@ -2572,7 +2524,11 @@ func buildColumnsFromMoColumnsRowsAt(
 			col.Name = row[nameCol]
 		}
 		if typCol >= 0 && typCol < len(row) {
-			col.SQLType = row[typCol]
+			sqlType, ok := decodeMoColumnSQLType(row[typCol])
+			if !ok {
+				return nil
+			}
+			col.SQLType = sqlType
 		}
 
 		cols = append(cols, col)
@@ -2591,9 +2547,8 @@ func buildColumnsFromMoColumnsRowsAt(
 // the checkpoint's mo_tables and mo_columns system tables (GCKP + following ICKPs).
 //
 // Priority:
-//  1. Reconstructed from mo_columns (attname, atttyp, attnum, att_is_hidden)
-//  2. mo_tables.rel_createsql — fallback when mo_columns metadata is unavailable
-//  3. Hardcoded built-in table schemas (for core system tables like mo_tables, mo_columns, etc.)
+//  1. Reconstructed from mo_columns (attname, decoded atttyp, attnum, att_is_hidden)
+//  2. Hardcoded built-in table schemas (for core system tables like mo_tables, mo_columns, etc.)
 //
 // ALTER TABLE updates mo_columns but does not rewrite mo_tables.rel_createsql, so
 // mo_columns is the authoritative source for the current visible column set.
@@ -2956,10 +2911,11 @@ func buildCreateTableFromMoColumnsAt(
 			c.name = row[nameCol]
 		}
 		if typCol >= 0 && typCol < len(row) {
-			c.sqlType = row[typCol]
-		}
-		if !isPrintableSQLType(c.sqlType) {
-			return ""
+			sqlType, ok := decodeMoColumnSQLType(row[typCol])
+			if !ok {
+				return ""
+			}
+			c.sqlType = sqlType
 		}
 		cols = append(cols, c)
 	}
@@ -3015,6 +2971,23 @@ func isPrintableSQLType(sqlType string) bool {
 		}
 	}
 	return hasLetter
+}
+
+func decodeMoColumnSQLType(raw string) (string, bool) {
+	if raw == "" {
+		return "", false
+	}
+	var typ types.Type
+	if err := types.Decode([]byte(raw), &typ); err == nil && typ.Oid != types.T_any {
+		sqlType := typ.DescString()
+		if isPrintableSQLType(sqlType) {
+			return sqlType, true
+		}
+	}
+	if isPrintableSQLType(raw) {
+		return raw, true
+	}
+	return "", false
 }
 
 func isPrintableCreateTableSQL(ddl string) bool {

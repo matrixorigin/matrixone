@@ -30,6 +30,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func encodedSQLType(t *testing.T, typ types.Type) string {
+	t.Helper()
+	data, err := types.Encode(&typ)
+	require.NoError(t, err)
+	return string(data)
+}
+
 // TestWriteCSV_empty tests writing an empty logical view to CSV.
 func TestWriteCSV_empty(t *testing.T) {
 	schema := &TableSchema{
@@ -402,64 +409,6 @@ func TestBuildColumnsFromMoColumnsRows_GenericPreCPKWithPhysicalPrefix(t *testin
 	assert.NotContains(t, ddl, "__mo_rowid")
 }
 
-func TestFindCreateSQLFromMoTables_GenericWithTrailingColumns(t *testing.T) {
-	headers := []string{"object", "block", "row"}
-	for i := 0; i < len(preCPKLayout.moTablesSchema)+2; i++ {
-		headers = append(headers, fmt.Sprintf("col_%d", i))
-	}
-	row := make([]string, len(headers))
-	row[0], row[1], row[2] = "obj1", "0", "0"
-	row[logicalViewMetaCols+0] = "12345"
-	row[logicalViewMetaCols+1] = "employees"
-	row[logicalViewMetaCols+2] = "test_ckp"
-	row[logicalViewMetaCols+7] = "CREATE TABLE employees (id INT)"
-	row[len(row)-2] = "tail-1"
-	row[len(row)-1] = "tail-2"
-
-	view := &LogicalTableView{
-		Headers: headers,
-		Rows:    [][]string{row},
-	}
-
-	assert.Equal(t, "CREATE TABLE employees (id INT)", findCreateSQLFromMoTables(view, 12345))
-}
-
-func TestFindCreateSQLFromMoTables_SkipsBinaryCreateSQLCandidates(t *testing.T) {
-	headers := []string{"object", "block", "row"}
-	for i := 0; i < len(currentCatalogLayout.moTablesSchema)+2; i++ {
-		headers = append(headers, fmt.Sprintf("col_%d", i))
-	}
-	headers[logicalViewMetaCols+0] = "rel_id"
-	headers[logicalViewMetaCols+7] = "rel_createsql"
-	row := make([]string, len(headers))
-	row[0], row[1], row[2] = "obj1", "0", "0"
-
-	row[logicalViewMetaCols+0] = "334019"
-	row[logicalViewMetaCols+7] = string([]byte{0xff, '/', 0, 0xfe, '0'})
-
-	offset := 2
-	row[logicalViewMetaCols+offset+0] = "334019"
-	row[logicalViewMetaCols+offset+7] = "CREATE TABLE `ckp_tables`.`t_empty` (`id` INT)"
-
-	view := &LogicalTableView{
-		Headers: headers,
-		Rows:    [][]string{row},
-	}
-
-	assert.Equal(t, "CREATE TABLE `ckp_tables`.`t_empty` (`id` INT)", findCreateSQLFromMoTables(view, 334019))
-}
-
-func TestFindCreateSQLFromMoTables_RejectsBinaryCreateSQL(t *testing.T) {
-	view := &LogicalTableView{
-		Headers: []string{"object", "block", "row", "rel_id", "relname", "reldatabase", "reldatabase_id", "col_4", "col_5", "col_6", "rel_createsql"},
-		Rows: [][]string{
-			{"obj1", "0", "0", "334019", "t_empty", "ckp_tables", "334017", "", "", "", string([]byte{0xff, '/', 0, 0xfe, '0'})},
-		},
-	}
-
-	assert.Empty(t, findCreateSQLFromMoTables(view, 334019))
-}
-
 func TestCreateTableDDLFromCatalogViews_PrefersMoColumnsOverStaleCreateSQL(t *testing.T) {
 	moTablesView := &LogicalTableView{
 		Headers: []string{
@@ -478,8 +427,8 @@ func TestCreateTableDDLFromCatalogViews_PrefersMoColumnsOverStaleCreateSQL(t *te
 	moColumnsView := &LogicalTableView{
 		Headers: []string{"object", "block", "row", "att_relname_id", "attname", "atttyp", "attnum", "att_is_hidden"},
 		Rows: [][]string{
-			{"obj1", "0", "0", "12345", "a", "INT", "1", "0"},
-			{"obj1", "0", "1", "12345", "c", "BIGINT", "2", "0"},
+			{"obj1", "0", "0", "12345", "a", encodedSQLType(t, types.T_int32.ToType()), "1", "0"},
+			{"obj1", "0", "1", "12345", "c", encodedSQLType(t, types.T_int64.ToType()), "2", "0"},
 		},
 	}
 
@@ -490,7 +439,7 @@ func TestCreateTableDDLFromCatalogViews_PrefersMoColumnsOverStaleCreateSQL(t *te
 	assert.NotContains(t, ddl, "`b`")
 }
 
-func TestCreateTableDDLFromCatalogViews_FallsBackToRelCreateSQL(t *testing.T) {
+func TestCreateTableDDLFromCatalogViews_DoesNotFallbackToRelCreateSQL(t *testing.T) {
 	moTablesView := &LogicalTableView{
 		Headers: []string{
 			"object", "block", "row",
@@ -506,11 +455,10 @@ func TestCreateTableDDLFromCatalogViews_FallsBackToRelCreateSQL(t *testing.T) {
 		},
 	}
 
-	assert.Equal(t, "CREATE TABLE employees (id INT)", createTableDDLFromCatalogViews(12345, moTablesView, nil))
+	assert.Empty(t, createTableDDLFromCatalogViews(12345, moTablesView, nil))
 }
 
-func TestCreateTableDDLFromCatalogViews_FallsBackToRelCreateSQLWhenMoColumnTypesAreBinary(t *testing.T) {
-	const relCreateSQL = "CREATE TABLE `ckp_constraints`.`parent` (`id` INT NOT NULL PRIMARY KEY, `code` VARCHAR(20) NOT NULL UNIQUE, `note` VARCHAR(100) DEFAULT 'parent-default' COMMENT 'parent note') COMMENT='parent table comment'"
+func TestCreateTableDDLFromCatalogViews_DecodesMoColumnTypes(t *testing.T) {
 	moTablesView := &LogicalTableView{
 		Headers: []string{
 			"object", "block", "row",
@@ -521,22 +469,23 @@ func TestCreateTableDDLFromCatalogViews_FallsBackToRelCreateSQLWhenMoColumnTypes
 			{
 				"obj1", "0", "0",
 				"333999", "parent", "ckp_constraints", "333997",
-				"", "", "", relCreateSQL,
+				"", "", "", "CREATE TABLE `ckp_constraints`.`parent` (`old` INT)",
 			},
 		},
 	}
 	moColumnsView := &LogicalTableView{
 		Headers: []string{"object", "block", "row", "att_relname_id", "attname", "atttyp", "attnum", "att_is_hidden"},
 		Rows: [][]string{
-			{"obj1", "0", "0", "333999", "id", string([]byte{'A', 'L', 0, 0xff, 'X'}), "1", "0"},
-			{"obj1", "0", "1", "333999", "code", "VARCHAR(20)", "2", "0"},
+			{"obj1", "0", "0", "333999", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "0"},
+			{"obj1", "0", "1", "333999", "code", encodedSQLType(t, types.New(types.T_varchar, 20, 0)), "2", "0"},
 		},
 	}
 
 	ddl := createTableDDLFromCatalogViews(333999, moTablesView, moColumnsView)
-	assert.Equal(t, relCreateSQL, ddl)
-	assert.NotContains(t, ddl, "\x00")
-	assert.NotContains(t, ddl, "\ufffd")
+	assert.Contains(t, ddl, "CREATE TABLE `parent`")
+	assert.Contains(t, ddl, "`id` INT")
+	assert.Contains(t, ddl, "`code` VARCHAR(20)")
+	assert.NotContains(t, ddl, "`old`")
 }
 
 func TestRenderCreateTableDDLFromSchema_PrefersColumnsOverCreateSQL(t *testing.T) {
@@ -554,17 +503,16 @@ func TestRenderCreateTableDDLFromSchema_PrefersColumnsOverCreateSQL(t *testing.T
 	assert.NotContains(t, ddl, "`b`")
 }
 
-func TestRenderCreateTableDDLFromSchema_FallsBackToCreateSQLWhenColumnTypesAreBinary(t *testing.T) {
-	const relCreateSQL = "CREATE TABLE t (a INT)"
+func TestRenderCreateTableDDLFromSchema_DoesNotFallbackToCreateSQLWhenColumnTypesAreBinary(t *testing.T) {
 	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
 		TableName: "t",
-		CreateSQL: relCreateSQL,
+		CreateSQL: "CREATE TABLE t (a INT)",
 		Columns: []TableColumn{
 			{Name: "a", SQLType: string([]byte{'A', 0, 0xff})},
 		},
 	})
 
-	assert.Equal(t, relCreateSQL, ddl)
+	assert.Empty(t, ddl)
 }
 
 func TestBuildCatalogTablesFromMoTablesRows_GenericWithTrailingColumns(t *testing.T) {
