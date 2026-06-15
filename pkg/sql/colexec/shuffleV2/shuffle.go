@@ -49,7 +49,7 @@ func (shuffle *ShuffleV2) Prepare(proc *process.Process) error {
 		shuffle.ctr.sels = make([][]int32, shuffle.BucketNum)
 	}
 	if shuffle.GetShufflePool() == nil {
-		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, shuffle.BucketNum))
+		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, 1))
 	}
 	shuffle.ctr.shufflePool.hold()
 	shuffle.ctr.ending = false
@@ -381,13 +381,12 @@ func getShuffledSelsByHashWithoutNull(ap *ShuffleV2, bat *batch.Batch) [][]int32
 func hashShuffle(ap *ShuffleV2, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	if groupByVec.IsConstNull() {
-		err := ap.ctr.shufflePool.putAllBatchIntoPoolByShuffleIdx(bat, proc, 0)
-		return nil, err
+		bat.ShuffleIDX = 0
+		return bat, nil
 	}
 	if groupByVec.IsConst() {
 		bat.ShuffleIDX = int32(shuffleConstVectorByHash(ap, bat))
-		err := ap.ctr.shufflePool.putAllBatchIntoPoolByShuffleIdx(bat, proc, bat.ShuffleIDX)
-		return nil, err
+		return bat, nil
 	}
 
 	var sels [][]int32

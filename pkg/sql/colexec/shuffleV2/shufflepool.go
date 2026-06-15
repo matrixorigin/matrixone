@@ -70,6 +70,12 @@ type ShufflePoolV2 struct {
 	batchPoolLock sync.Mutex
 }
 
+func (sp *ShufflePoolV2) SetMaxHolders(n int32) {
+	sp.holderLock.Lock()
+	defer sp.holderLock.Unlock()
+	sp.maxHolders = n
+}
+
 func NewShufflePool(bucketNum int32, maxHolders int32) *ShufflePoolV2 {
 	sp := &ShufflePoolV2{bucketNum: bucketNum, maxHolders: maxHolders}
 	sp.holders = 0
@@ -121,7 +127,7 @@ func (sp *ShufflePoolV2) stopWriting() {
 func (sp *ShufflePoolV2) allStop() bool {
 	sp.holderLock.Lock()
 	defer sp.holderLock.Unlock()
-	return sp.stoppers == sp.maxHolders
+	return sp.stoppers >= sp.holders
 }
 
 func (sp *ShufflePoolV2) Reset(m *mpool.MPool) {

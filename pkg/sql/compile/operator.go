@@ -400,6 +400,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		if sourceArg.GetShufflePool() == nil {
 			sourceArg.SetShufflePool(shuffleV2.NewShufflePool(sourceArg.BucketNum, int32(maxParallel)))
 		}
+			sourceArg.GetShufflePool().SetMaxHolders(int32(maxParallel))
 		op := shuffleV2.NewArgument()
 		op.SetShufflePool(sourceArg.GetShufflePool())
 		op.ShuffleType = sourceArg.ShuffleType
