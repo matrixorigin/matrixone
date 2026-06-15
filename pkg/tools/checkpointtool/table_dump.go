@@ -119,6 +119,7 @@ type TableColumn struct {
 type TableUniqueKey struct {
 	Name    string
 	Columns []string
+	Unique  bool
 }
 
 // TableSchema holds the decoded schema for one user table.
@@ -454,7 +455,11 @@ func renderCreateTableDDLWithComment(tableName string, cols []TableColumn, comme
 		if len(key.Columns) == 0 {
 			continue
 		}
-		sb.WriteString("  UNIQUE KEY ")
+		sb.WriteString("  ")
+		if key.Unique {
+			sb.WriteString("UNIQUE ")
+		}
+		sb.WriteString("KEY ")
 		sb.WriteString(quoteDDLIdent(key.Name))
 		sb.WriteString("(")
 		for i, col := range key.Columns {
@@ -572,12 +577,12 @@ func normalizedUniqueKeys(keys []TableUniqueKey) []TableUniqueKey {
 		if name == "" {
 			name = cols[0]
 		}
-		signature := strings.ToLower(name) + "\x00" + strings.ToLower(strings.Join(cols, "\x00"))
+		signature := strconv.FormatBool(key.Unique) + "\x00" + strings.ToLower(name) + "\x00" + strings.ToLower(strings.Join(cols, "\x00"))
 		if _, ok := seen[signature]; ok {
 			continue
 		}
 		seen[signature] = struct{}{}
-		out = append(out, TableUniqueKey{Name: name, Columns: cols})
+		out = append(out, TableUniqueKey{Name: name, Columns: cols, Unique: key.Unique})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Name != out[j].Name {
@@ -1100,6 +1105,7 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 		clone.UniqueKeys = make([]TableUniqueKey, len(schema.UniqueKeys))
 		for i, key := range schema.UniqueKeys {
 			clone.UniqueKeys[i].Name = strings.Clone(key.Name)
+			clone.UniqueKeys[i].Unique = key.Unique
 			if len(key.Columns) > 0 {
 				clone.UniqueKeys[i].Columns = make([]string, len(key.Columns))
 				for j, col := range key.Columns {
@@ -3358,7 +3364,7 @@ func decodeUniqueKeysFromMoTablesConstraint(raw string) (keys []TableUniqueKey) 
 			continue
 		}
 		for _, index := range indexDef.Indexes {
-			if index == nil || !index.Unique || strings.EqualFold(index.IndexName, "PRIMARY") {
+			if index == nil || strings.EqualFold(index.IndexName, "PRIMARY") {
 				continue
 			}
 			cols := make([]string, 0, len(index.Parts))
@@ -3376,11 +3382,11 @@ func decodeUniqueKeysFromMoTablesConstraint(raw string) (keys []TableUniqueKey) 
 			if name == "" {
 				name = cols[0]
 			}
-			keys = append(keys, TableUniqueKey{Name: name, Columns: cols})
+			keys = append(keys, TableUniqueKey{Name: name, Columns: cols, Unique: index.Unique})
 		}
 	}
 	keys = normalizedUniqueKeys(keys)
-	ckpDebugSchemaf("mo_tables constraint unique keys decoded count=%d", len(keys))
+	ckpDebugSchemaf("mo_tables constraint indexes decoded count=%d", len(keys))
 	return keys
 }
 

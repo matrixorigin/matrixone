@@ -46,18 +46,12 @@ func encodedDefault(t *testing.T, origin string, nullable bool) string {
 	return string(data)
 }
 
-func encodedUniqueConstraint(t *testing.T, name string, columns ...string) string {
+func encodedIndexConstraint(t *testing.T, indexes ...*plan.IndexDef) string {
 	t.Helper()
 	def := &engine.ConstraintDef{
 		Cts: []engine.Constraint{
 			&engine.IndexDef{
-				Indexes: []*plan.IndexDef{
-					{
-						IndexName: name,
-						Parts:     columns,
-						Unique:    true,
-					},
-				},
+				Indexes: indexes,
 			},
 		},
 	}
@@ -528,7 +522,11 @@ func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *test
 			{
 				"obj1", "0", "0",
 				"333999", "parent", "ckp_constraints", "333997",
-				"", "r", "parent table comment", "CREATE TABLE `ckp_constraints`.`parent` (`old` INT)", encodedUniqueConstraint(t, "code", "code"),
+				"", "r", "parent table comment", "CREATE TABLE `ckp_constraints`.`parent` (`old` INT)", encodedIndexConstraint(
+					t,
+					&plan.IndexDef{IndexName: "code", Parts: []string{"code"}, Unique: true},
+					&plan.IndexDef{IndexName: "idx_parent_note", Parts: []string{"note"}},
+				),
 			},
 		},
 	}
@@ -575,6 +573,7 @@ func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *test
 	assert.Contains(t, ddl, "`note` VARCHAR(100) DEFAULT 'parent-default' COMMENT 'parent note'")
 	assert.Contains(t, ddl, "PRIMARY KEY (`id`)")
 	assert.Contains(t, ddl, "UNIQUE KEY `code`(`code`)")
+	assert.Contains(t, ddl, "KEY `idx_parent_note`(`note`)")
 	assert.Contains(t, ddl, "COMMENT='parent table comment'")
 	assert.NotContains(t, ddl, "`old`")
 }
