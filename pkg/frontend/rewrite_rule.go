@@ -307,30 +307,24 @@ func getSqlForRoleRulesOfRoleIDs(roleIDs []int64) string {
 }
 
 func mergeRewriteRules(ctx context.Context, leftRule, rightRule string) (string, error) {
-	leftRule = trimRewriteRuleForUnion(leftRule)
-	rightRule = trimRewriteRuleForUnion(rightRule)
+	leftRule = trimRewriteRuleForMerge(leftRule)
+	rightRule = trimRewriteRuleForMerge(rightRule)
 
-	leftColumns, ok, err := rewriteRuleOutputColumns(ctx, leftRule)
+	if leftRule == rightRule {
+		return leftRule, nil
+	}
+
+	mergedRule, ok, err := mergeRewriteRulesSafely(ctx, leftRule, rightRule)
 	if err != nil {
 		return "", err
 	}
 	if !ok {
 		return rightRule, nil
 	}
-	rightColumns, ok, err := rewriteRuleOutputColumns(ctx, rightRule)
-	if err != nil {
-		return "", err
-	}
-	if !ok {
-		return rightRule, nil
-	}
-	if !sameRewriteOutputColumns(leftColumns, rightColumns) {
-		return rightRule, nil
-	}
-	return fmt.Sprintf("(%s) union distinct (%s)", leftRule, rightRule), nil
+	return mergedRule, nil
 }
 
-func trimRewriteRuleForUnion(rule string) string {
+func trimRewriteRuleForMerge(rule string) string {
 	rule = strings.TrimSpace(rule)
 	for strings.HasSuffix(rule, ";") {
 		rule = strings.TrimSpace(strings.TrimSuffix(rule, ";"))
@@ -338,95 +332,109 @@ func trimRewriteRuleForUnion(rule string) string {
 	return rule
 }
 
-type rewriteRuleOutputColumn struct {
-	name string
-	expr string
+type rewriteRuleMergeShape struct {
+	stmt       *tree.Select
+	clause     *tree.SelectClause
+	selectList string
+	table      string
 }
 
-func rewriteRuleOutputColumns(ctx context.Context, rule string) ([]rewriteRuleOutputColumn, bool, error) {
+// Rewrite rules from active roles are a source-row visibility union: if any
+// role allows a base row, that row should remain visible. For simple
+// single-table SELECTs with matching select lists and source tables, OR-ing the
+// filters expresses that row union directly. This is intentionally not a
+// UNION DISTINCT equivalent for partial projections; two visible base rows that
+// project to the same values should both remain visible.
+func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string) (string, bool, error) {
+	leftShape, ok, err := rewriteRuleMergeShapeForRule(ctx, leftRule)
+	if err != nil {
+		return "", false, err
+	}
+	if !ok {
+		return "", false, nil
+	}
+
+	rightShape, ok, err := rewriteRuleMergeShapeForRule(ctx, rightRule)
+	if err != nil {
+		return "", false, err
+	}
+	if !ok {
+		return "", false, nil
+	}
+
+	if leftShape.selectList != rightShape.selectList || leftShape.table != rightShape.table {
+		return "", false, nil
+	}
+
+	merged := *leftShape.stmt
+	mergedClause := *leftShape.clause
+	mergedClause.Where = mergeRewriteRuleWhere(leftShape.clause.Where, rightShape.clause.Where)
+	merged.Select = &mergedClause
+
+	return tree.String(&merged, dialect.MYSQL), true, nil
+}
+
+func rewriteRuleMergeShapeForRule(ctx context.Context, rule string) (*rewriteRuleMergeShape, bool, error) {
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
 	if err != nil {
 		return nil, false, moerr.NewInternalErrorf(ctx, "failed to parse rewrite rule %q while merging rewrite rules: %v", rule, err)
 	}
-	columns, ok := outputColumnsFromRewriteStatement(stmt)
-	return columns, ok, nil
+	shape, ok := rewriteRuleMergeShapeForStatement(stmt)
+	return shape, ok, nil
 }
 
-func validateRewriteRuleSQL(ctx context.Context, rule string) error {
-	if strings.TrimSpace(rule) == "" {
-		return moerr.NewInvalidInput(ctx, "rewrite rule SQL is empty")
-	}
-
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
-	if err != nil {
-		return moerr.NewInvalidInputf(ctx, "invalid rewrite rule SQL %q: %v", rule, err)
-	}
-
-	switch stmt.(type) {
-	case *tree.Select, *tree.ParenSelect:
-		return nil
-	default:
-		return moerr.NewInvalidInputf(ctx, "invalid rewrite rule SQL %q: only accept SELECT-like statements as rewrites", rule)
-	}
-}
-
-func outputColumnsFromRewriteStatement(stmt tree.Statement) ([]rewriteRuleOutputColumn, bool) {
+func rewriteRuleMergeShapeForStatement(stmt tree.Statement) (*rewriteRuleMergeShape, bool) {
 	switch s := stmt.(type) {
 	case *tree.Select:
-		if len(s.OrderBy) > 0 || s.Limit != nil {
-			return nil, false
-		}
-		return outputColumnsFromRewriteSelectStatement(s.Select)
+		return rewriteRuleMergeShapeForSelect(s)
 	case *tree.ParenSelect:
 		if s.Select == nil {
 			return nil, false
 		}
-		return outputColumnsFromRewriteStatement(s.Select)
+		return rewriteRuleMergeShapeForStatement(s.Select)
 	default:
 		return nil, false
 	}
 }
 
-func outputColumnsFromRewriteSelectStatement(stmt tree.SelectStatement) ([]rewriteRuleOutputColumn, bool) {
-	switch s := stmt.(type) {
-	case *tree.SelectClause:
-		if !mergeableRewriteSelectClause(s) {
-			return nil, false
-		}
-		columns := make([]rewriteRuleOutputColumn, 0, len(s.Exprs))
-		for _, expr := range s.Exprs {
-			column, ok := outputColumnFromRewriteSelectExpr(expr)
-			if !ok {
-				return nil, false
-			}
-			columns = append(columns, column)
-		}
-		return columns, true
-	case *tree.UnionClause:
-		return outputColumnsFromRewriteSelectStatement(s.Left)
-	case *tree.ParenSelect:
-		if s.Select == nil {
-			return nil, false
-		}
-		return outputColumnsFromRewriteStatement(s.Select)
-	case *tree.Select:
-		if len(s.OrderBy) > 0 || s.Limit != nil {
-			return nil, false
-		}
-		return outputColumnsFromRewriteSelectStatement(s.Select)
-	default:
+func rewriteRuleMergeShapeForSelect(stmt *tree.Select) (*rewriteRuleMergeShape, bool) {
+	if stmt == nil || len(stmt.OrderBy) > 0 || stmt.Limit != nil || stmt.With != nil ||
+		stmt.TimeWindow != nil || stmt.RankOption != nil || stmt.Ep != nil || stmt.SelectLockInfo != nil {
 		return nil, false
 	}
+
+	clause, ok := stmt.Select.(*tree.SelectClause)
+	if !ok || !rewriteRuleSelectClauseIsMergeable(clause) {
+		return nil, false
+	}
+
+	table, ok := rewriteRuleSingleTableSource(clause.From)
+	if !ok {
+		return nil, false
+	}
+
+	return &rewriteRuleMergeShape{
+		stmt:       stmt,
+		clause:     clause,
+		selectList: normalizeRewriteSQL(tree.String(&clause.Exprs, dialect.MYSQL)),
+		table:      table,
+	}, true
 }
 
-func mergeableRewriteSelectClause(stmt *tree.SelectClause) bool {
-	if stmt.Distinct || stmt.Option&(tree.QuerySpecOptionDistinct|tree.QuerySpecOptionDistinctRow) != 0 {
-		return false
-	}
-	if stmt.GroupBy != nil || stmt.Having != nil {
-		return false
-	}
-	for _, expr := range stmt.Exprs {
+func rewriteRuleSelectClauseIsMergeable(clause *tree.SelectClause) bool {
+	return clause != nil &&
+		!clause.Distinct &&
+		clause.Option == 0 &&
+		clause.GroupBy == nil &&
+		clause.Having == nil &&
+		rewriteRuleSelectExprsAreMergeable(clause.Exprs)
+}
+
+func rewriteRuleSelectExprsAreMergeable(exprs tree.SelectExprs) bool {
+	for _, expr := range exprs {
+		if rewriteRuleSelectExprIsStar(expr.Expr) && expr.As != nil && !expr.As.Empty() {
+			return false
+		}
 		if !rewriteExprIsMergeSafe(expr.Expr) {
 			return false
 		}
@@ -434,55 +442,73 @@ func mergeableRewriteSelectClause(stmt *tree.SelectClause) bool {
 	return true
 }
 
-func outputColumnFromRewriteSelectExpr(expr tree.SelectExpr) (rewriteRuleOutputColumn, bool) {
-	if expr.As != nil && !expr.As.Empty() {
-		return rewriteRuleOutputColumn{
-			name: normalizeRewriteOutputColumn(expr.As.Compare()),
-			expr: normalizeRewriteOutputExpr(expr.Expr),
-		}, true
-	}
-
-	switch e := expr.Expr.(type) {
+func rewriteRuleSelectExprIsStar(expr tree.Expr) bool {
+	switch e := expr.(type) {
 	case tree.UnqualifiedStar:
-		return rewriteRuleOutputColumn{}, false
+		return true
 	case *tree.UnresolvedName:
-		if e.Star {
-			return rewriteRuleOutputColumn{}, false
-		}
-		return rewriteRuleOutputColumn{
-			name: normalizeRewriteOutputColumn(e.ColName()),
-			expr: normalizeRewriteOutputColumn(tree.String(expr.Expr, dialect.MYSQL)),
-		}, true
+		return e.Star
 	default:
-		exprText := normalizeRewriteOutputExpr(expr.Expr)
-		return rewriteRuleOutputColumn{
-			name: normalizeRewriteOutputColumn(tree.String(expr.Expr, dialect.MYSQL)),
-			expr: exprText,
-		}, true
-	}
-}
-
-func normalizeRewriteOutputColumn(column string) string {
-	return strings.ToLower(strings.TrimSpace(column))
-}
-
-func normalizeRewriteOutputExpr(expr tree.Expr) string {
-	if _, ok := expr.(*tree.UnresolvedName); ok {
-		return normalizeRewriteOutputColumn(tree.String(expr, dialect.MYSQL))
-	}
-	return strings.TrimSpace(tree.String(expr, dialect.MYSQL))
-}
-
-func sameRewriteOutputColumns(leftColumns, rightColumns []rewriteRuleOutputColumn) bool {
-	if len(leftColumns) != len(rightColumns) {
 		return false
 	}
-	for i := range leftColumns {
-		if leftColumns[i] != rightColumns[i] {
-			return false
+}
+
+func rewriteRuleSingleTableSource(from *tree.From) (string, bool) {
+	if from == nil || len(from.Tables) != 1 {
+		return "", false
+	}
+
+	tableExpr, ok := rewriteRuleSingleTableExpr(from.Tables[0])
+	if !ok {
+		return "", false
+	}
+
+	return normalizeRewriteSQL(tree.String(tableExpr, dialect.MYSQL)), true
+}
+
+func rewriteRuleSingleTableExpr(expr tree.TableExpr) (*tree.AliasedTableExpr, bool) {
+	if joinExpr, ok := expr.(*tree.JoinTableExpr); ok {
+		// The MySQL parser wraps a lone table reference as a CROSS JoinTableExpr.
+		if joinExpr.Right != nil || joinExpr.Cond != nil || joinExpr.Option != "" {
+			return nil, false
+		}
+		expr = joinExpr.Left
+	}
+
+	tableExpr, ok := expr.(*tree.AliasedTableExpr)
+	if !ok || tableExpr.As.Cols != nil || len(tableExpr.IndexHints) > 0 {
+		return nil, false
+	}
+
+	tableName, ok := tableExpr.Expr.(*tree.TableName)
+	if !ok || tableName.AtTsExpr != nil {
+		return nil, false
+	}
+
+	return tableExpr, true
+}
+
+func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {
+	// Mergeability is decided from the top-level SELECT shape only. Predicate
+	// internals, including subqueries, stay opaque and are only OR-ed together.
+	switch {
+	case left == nil || left.Expr == nil:
+		return nil
+	case right == nil || right.Expr == nil:
+		return nil
+	default:
+		return &tree.Where{
+			Type: tree.AstWhere,
+			Expr: tree.NewOrExpr(
+				tree.NewParentExpr(left.Expr),
+				tree.NewParentExpr(right.Expr),
+			),
 		}
 	}
-	return true
+}
+
+func normalizeRewriteSQL(sql string) string {
+	return strings.ToLower(strings.TrimSpace(sql))
 }
 
 func rewriteExprIsMergeSafe(expr tree.Expr) bool {
@@ -597,6 +623,24 @@ func rewriteFuncExprName(fn *tree.FuncExpr) string {
 		return strings.ToLower(name.ColName())
 	}
 	return ""
+}
+
+func validateRewriteRuleSQL(ctx context.Context, rule string) error {
+	if strings.TrimSpace(rule) == "" {
+		return moerr.NewInvalidInput(ctx, "rewrite rule SQL is empty")
+	}
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
+	if err != nil {
+		return moerr.NewInvalidInputf(ctx, "invalid rewrite rule SQL %q: %v", rule, err)
+	}
+
+	switch stmt.(type) {
+	case *tree.Select, *tree.ParenSelect:
+		return nil
+	default:
+		return moerr.NewInvalidInputf(ctx, "invalid rewrite rule SQL %q: only accept SELECT-like statements as rewrites", rule)
+	}
 }
 
 // escapeSQLString escapes a string for safe use in SQL literals using writeEscapedSQLString.
