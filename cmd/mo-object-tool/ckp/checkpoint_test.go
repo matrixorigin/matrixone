@@ -18,7 +18,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
+	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNormalizeCreateTableDDLName(t *testing.T) {
@@ -138,4 +140,40 @@ func TestCleanObjectPath(t *testing.T) {
 	assert.Equal(t, "dump/account_1/t.csv", cleanObjectPath("dump/account_1/t.csv"))
 	assert.Equal(t, "tmp/dump/t.csv", cleanObjectPath("/tmp/dump/t.csv"))
 	assert.Equal(t, "dump/t.csv", cleanObjectPath("dump//nested/../t.csv"))
+}
+
+func TestLoadDataPathResolverLocal(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		AccountID:  0,
+		DatabaseID: 272577,
+		TableID:    272578,
+		TableName:  "bmsql_config",
+	}
+
+	resolver, err := newLoadDataPathResolver(toolfs.StorageOptions{})
+	require.NoError(t, err)
+	assert.Equal(t,
+		"LOAD DATA INFILE 'bmsql_config/account_0/db_272577/bmsql_config_272578.csv'",
+		resolver.loadDataSource("bmsql_config", table),
+	)
+}
+
+func TestLoadDataPathResolverS3(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		AccountID:  0,
+		DatabaseID: 272577,
+		TableID:    272578,
+		TableName:  "bmsql_config",
+	}
+
+	resolver, err := newLoadDataPathResolver(toolfs.StorageOptions{
+		S3: "bucket=mo-nightly-gz-1308875761,endpoint=https://cos.ap-guangzhou.myqcloud.com,region=ap-guangzhou," +
+			"key-prefix=/ckp-dump-test/tpcc_100_20260612_174916/bmsql_config/,key-id=xxx,key-secret=yyy",
+		Backend: "S3",
+	})
+	require.NoError(t, err)
+	assert.Equal(t,
+		"LOAD DATA URL s3option{'bucket'='mo-nightly-gz-1308875761', 'filepath'='ckp-dump-test/tpcc_100_20260612_174916/bmsql_config/bmsql_config/account_0/db_272577/bmsql_config_272578.csv', 'endpoint'='https://cos.ap-guangzhou.myqcloud.com', 'region'='ap-guangzhou', 'access_key_id'='xxx', 'secret_access_key'='yyy'}",
+		resolver.loadDataSource("bmsql_config", table),
+	)
 }

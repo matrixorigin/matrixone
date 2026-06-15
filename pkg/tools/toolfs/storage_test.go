@@ -75,6 +75,18 @@ func TestOpenFromConfigFallsBackToDataDir(t *testing.T) {
 	assert.Contains(t, display, dir)
 }
 
+func TestParseS3Arguments(t *testing.T) {
+	args, err := ParseS3Arguments("bucket=b,endpoint=http://minio:9000,prefix=/dump/,key-id=k,key-secret=s", "OUT")
+	require.NoError(t, err)
+
+	assert.Equal(t, "OUT", args.Name)
+	assert.Equal(t, "b", args.Bucket)
+	assert.Equal(t, "http://minio:9000", args.Endpoint)
+	assert.Equal(t, "/dump/", args.KeyPrefix)
+	assert.Equal(t, "k", args.KeyID)
+	assert.Equal(t, "s", args.KeySecret)
+}
+
 func writeConfig(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "tn.toml")

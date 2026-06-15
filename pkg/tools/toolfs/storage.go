@@ -60,8 +60,8 @@ func Open(ctx context.Context, opts StorageOptions) (fileservice.FileService, st
 		return nil, "", moerr.NewInvalidInputNoCtx("missing --s3 arguments")
 	}
 
-	args := fileservice.ObjectStorageArguments{Name: opts.FSName}
-	if err := args.SetFromString(splitArgs(opts.S3)); err != nil {
+	args, err := ParseS3Arguments(opts.S3, opts.FSName)
+	if err != nil {
 		return nil, "", err
 	}
 	cfg := fileservice.Config{
@@ -143,6 +143,14 @@ func openFromConfig(ctx context.Context, path string, fsName string) (fileservic
 		"fileservice %q not found in %s; available: %s",
 		fsName, path, strings.Join(names, ","),
 	)
+}
+
+func ParseS3Arguments(s string, fsName string) (fileservice.ObjectStorageArguments, error) {
+	args := fileservice.ObjectStorageArguments{Name: fsName}
+	if err := args.SetFromString(splitArgs(s)); err != nil {
+		return fileservice.ObjectStorageArguments{}, err
+	}
+	return args, nil
 }
 
 func splitArgs(s string) []string {

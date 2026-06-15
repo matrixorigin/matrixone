@@ -527,6 +527,10 @@ Examples:
 				return fmt.Errorf("open dump output fileservice: %w", err)
 			}
 			defer dumpOut.Close(ctx)
+			loadPathResolver, err := newLoadDataPathResolver(outputStorage)
+			if err != nil {
+				return err
+			}
 
 			snapshotTS, err := resolveSnapshotTS(ctx, reader, tsStr)
 			if err != nil {
@@ -605,7 +609,7 @@ Examples:
 					fmt.Fprintf(cmd.OutOrStdout(), "Dumped %d tables to %s\n", len(tables), outputDir)
 				}
 				if loadScript {
-					scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, tables, snapshotTS, output, outputDir, !noLoad, effectiveHeader)
+					scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, tables, snapshotTS, output, outputDir, loadPathResolver, !noLoad, effectiveHeader)
 					if err != nil {
 						return err
 					}
@@ -632,7 +636,7 @@ Examples:
 						return err
 					}
 				}
-				scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, []checkpointtool.TableCatalogEntry{tableEntry}, snapshotTS, output, outputDir, !noLoad, effectiveHeader)
+				scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, []checkpointtool.TableCatalogEntry{tableEntry}, snapshotTS, output, outputDir, loadPathResolver, !noLoad, effectiveHeader)
 				if err != nil {
 					return err
 				}
@@ -820,6 +824,7 @@ func writeRestoreScript(
 	snapshotTS types.TS,
 	scriptDir string,
 	csvRoot string,
+	loadPathResolver loadDataPathResolver,
 	includeLoad bool,
 	csvHasHeader bool,
 ) (string, error) {
@@ -873,7 +878,7 @@ func writeRestoreScript(
 			return "", err
 		}
 		if includeLoad {
-			if _, err := fmt.Fprintf(f, "\nLOAD DATA INFILE %s\n", quoteSQLString(tableCSVPath(csvRoot, table))); err != nil {
+			if _, err := fmt.Fprintf(f, "\n%s\n", loadPathResolver.loadDataSource(csvRoot, table)); err != nil {
 				return "", err
 			}
 			if _, err := fmt.Fprintf(f, "INTO TABLE %s\n", quoteSQLIdent(table.TableName)); err != nil {
@@ -1359,6 +1364,83 @@ func tableCSVPath(outputDir string, table checkpointtool.TableCatalogEntry) stri
 		fmt.Sprintf("db_%d", table.DatabaseID),
 		fmt.Sprintf("%s_%d.csv", safePathPart(table.TableName), table.TableID),
 	)
+}
+
+type loadDataPathResolver struct {
+	s3Args    fileservice.ObjectStorageArguments
+	s3Backend string
+}
+
+func newLoadDataPathResolver(storage toolfs.StorageOptions) (loadDataPathResolver, error) {
+	if storage.S3 == "" {
+		return loadDataPathResolver{}, nil
+	}
+	backend := strings.ToUpper(storage.Backend)
+	if backend == "" {
+		backend = "S3"
+	}
+	if backend != "S3" && backend != "MINIO" {
+		return loadDataPathResolver{}, nil
+	}
+	args, err := toolfs.ParseS3Arguments(storage.S3, storage.FSName)
+	if err != nil {
+		return loadDataPathResolver{}, fmt.Errorf("parse output S3 arguments: %w", err)
+	}
+	if args.Bucket == "" {
+		return loadDataPathResolver{}, fmt.Errorf("parse output S3 arguments: missing bucket")
+	}
+	return loadDataPathResolver{s3Args: args, s3Backend: backend}, nil
+}
+
+func (r loadDataPathResolver) loadDataSource(outputDir string, table checkpointtool.TableCatalogEntry) string {
+	csvPath := tableCSVPath(outputDir, table)
+	if r.s3Args.Bucket == "" {
+		return "LOAD DATA INFILE " + quoteSQLString(csvPath)
+	}
+
+	options := []string{
+		"bucket", r.s3Args.Bucket,
+		"filepath", outputS3ObjectKey(r.s3Args.KeyPrefix, csvPath),
+	}
+	if r.s3Args.Endpoint != "" {
+		options = append(options, "endpoint", r.s3Args.Endpoint)
+	}
+	if r.s3Args.Region != "" {
+		options = append(options, "region", r.s3Args.Region)
+	}
+	if r.s3Args.KeyID != "" {
+		options = append(options, "access_key_id", r.s3Args.KeyID)
+	}
+	if r.s3Args.KeySecret != "" {
+		options = append(options, "secret_access_key", r.s3Args.KeySecret)
+	}
+	if r.s3Args.RoleARN != "" {
+		options = append(options, "role_arn", r.s3Args.RoleARN)
+	}
+	if r.s3Args.ExternalID != "" {
+		options = append(options, "external_id", r.s3Args.ExternalID)
+	}
+	if r.s3Args.IsMinio || r.s3Backend == "MINIO" {
+		options = append(options, "provider", "minio")
+	}
+	return "LOAD DATA URL s3option{" + formatLoadDataOptions(options) + "}"
+}
+
+func outputS3ObjectKey(keyPrefix string, csvPath string) string {
+	keyPrefix = strings.Trim(keyPrefix, "/")
+	csvPath = strings.TrimLeft(csvPath, "/")
+	if keyPrefix == "" {
+		return csvPath
+	}
+	return path.Join(keyPrefix, csvPath)
+}
+
+func formatLoadDataOptions(options []string) string {
+	parts := make([]string, 0, len(options)/2)
+	for i := 0; i+1 < len(options); i += 2 {
+		parts = append(parts, quoteSQLString(options[i])+"="+quoteSQLString(options[i+1]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func outputPathJoin(elem ...string) string {
