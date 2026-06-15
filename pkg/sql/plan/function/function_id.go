@@ -721,12 +721,12 @@ const (
 	// merged from upstream/main (renumbered to avoid colliding with the GIS block above)
 	CAST_JSON_TO_ARRAY = 513
 
-	BIT_COUNT   = 514
-	IS_UUID     = 515
-	UUID_TO_BIN = 516
-	BIN_TO_UUID = 517
-	NAME_CONST  = 518
-	GET_LOCK    = 519
+	BIT_COUNT    = 514
+	IS_UUID      = 515
+	UUID_TO_BIN  = 516
+	BIN_TO_UUID  = 517
+	NAME_CONST   = 518
+	GET_LOCK     = 519
 	RELEASE_LOCK = 520
 	IS_FREE_LOCK = 521
 
