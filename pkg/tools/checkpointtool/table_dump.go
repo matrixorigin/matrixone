@@ -615,7 +615,30 @@ func (r *CheckpointReader) getTableLogicalView(
 	if err != nil {
 		return nil, err
 	}
-	return r.BuildLogicalTableView(ctx, snapshotTS, allData, allTomb)
+	view, err := r.BuildLogicalTableView(ctx, snapshotTS, allData, allTomb)
+	if err != nil {
+		return nil, err
+	}
+	applyCatalogColumnHeaders(view, tableID)
+	return view, nil
+}
+
+func applyCatalogColumnHeaders(view *LogicalTableView, tableID uint64) {
+	if view == nil || len(view.ColSeqNums) == 0 {
+		return
+	}
+	schema := schemaForLayout(currentCatalogLayout, tableID)
+	if len(schema) == 0 {
+		return
+	}
+	offset := logicalViewDataOffset(view)
+	for dataIdx, seqNum := range view.ColSeqNums {
+		headerIdx := offset + dataIdx
+		if headerIdx >= len(view.Headers) || int(seqNum) >= len(schema) {
+			continue
+		}
+		view.Headers[headerIdx] = schema[seqNum]
+	}
 }
 
 func (r *CheckpointReader) getTableEntriesAt(
@@ -1017,15 +1040,16 @@ func (r *CheckpointReader) streamTableCSV(
 	}
 
 	header := make([]string, 0, len(schema.Columns))
-	physicalPositions := make([]int, 0, len(schema.Columns))
+	columnSeqNums := make([]int, 0, len(schema.Columns))
 	for _, col := range schema.Columns {
 		header = append(header, col.Name)
-		physicalPos := col.PhysicalPosition
-		if physicalPos < 0 {
-			physicalPos = col.Position
+		seqNum := col.PhysicalPosition
+		if seqNum < 0 {
+			seqNum = col.Position
 		}
-		physicalPositions = append(physicalPositions, physicalPos)
+		columnSeqNums = append(columnSeqNums, seqNum)
 	}
+	physicalPositions := append([]int(nil), columnSeqNums...)
 	var projectedTypes []types.Type
 	if options.IncludeHeader {
 		// header is emitted after we know output mode but before rows
@@ -1047,6 +1071,7 @@ func (r *CheckpointReader) streamTableCSV(
 
 	stats, err := r.scanLogicalTable(ctx, snapshotTS, dataEntries, tombEntries,
 		func(cols []objecttool.ColInfo) error {
+			physicalPositions = dataIndexesForSeqNums(cols, columnSeqNums)
 			projectedTypes = buildProjectedTypes(cols, physicalPositions)
 			return nil
 		},
@@ -1157,14 +1182,14 @@ func (r *CheckpointReader) streamTableCSVPipeline(
 	options CSVExportOptions,
 ) error {
 	header := make([]string, 0, len(schema.Columns))
-	physicalPositions := make([]int, 0, len(schema.Columns))
+	columnSeqNums := make([]int, 0, len(schema.Columns))
 	for _, col := range schema.Columns {
 		header = append(header, col.Name)
-		physicalPos := col.PhysicalPosition
-		if physicalPos < 0 {
-			physicalPos = col.Position
+		seqNum := col.PhysicalPosition
+		if seqNum < 0 {
+			seqNum = col.Position
 		}
-		physicalPositions = append(physicalPositions, physicalPos)
+		columnSeqNums = append(columnSeqNums, seqNum)
 	}
 	if options.IncludeHeader {
 		if err := writeSQLLoadCSVRow(w, nil, header, nil); err != nil {
@@ -1204,7 +1229,7 @@ func (r *CheckpointReader) streamTableCSVPipeline(
 	go reportCSVPipeline(ctx, reportDone, counters)
 	go writeCSVChunks(ctx, w, chunks, counters, cancel, writerDone)
 
-	producerErr := r.produceCSVChunks(ctx, chunks, counters, snapshotTS, visibleDataEntries, tombstoneStats, physicalPositions, workerPlan)
+	producerErr := r.produceCSVChunks(ctx, chunks, counters, snapshotTS, visibleDataEntries, tombstoneStats, columnSeqNums, workerPlan)
 	close(chunks)
 	writerErr := <-writerDone
 	printCSVPipelineReport("finish", counters)
@@ -1221,7 +1246,7 @@ func (r *CheckpointReader) produceCSVChunks(
 	snapshotTS types.TS,
 	visibleDataEntries []*ObjectEntryInfo,
 	tombstoneStats []objectio.ObjectStats,
-	physicalPositions []int,
+	columnSeqNums []int,
 	workerPlan csvPipelineWorkerPlan,
 ) error {
 	ctx, cancel := context.WithCancel(ctx)
@@ -1250,7 +1275,7 @@ func (r *CheckpointReader) produceCSVChunks(
 					setErr(err)
 					return
 				}
-				if err := r.processCSVObjectChunks(ctx, chunks, counters, snapshotTS, tombstoneStats, physicalPositions, job); err != nil {
+				if err := r.processCSVObjectChunks(ctx, chunks, counters, snapshotTS, tombstoneStats, columnSeqNums, job); err != nil {
 					setErr(err)
 					return
 				}
@@ -1284,7 +1309,7 @@ func (r *CheckpointReader) processCSVObjectChunks(
 	counters *csvPipelineCounters,
 	snapshotTS types.TS,
 	tombstoneStats []objectio.ObjectStats,
-	physicalPositions []int,
+	columnSeqNums []int,
 	job csvPipelineObjectJob,
 ) error {
 	entry := job.entry
@@ -1302,6 +1327,7 @@ func (r *CheckpointReader) processCSVObjectChunks(
 	}
 	defer reader.Close()
 
+	physicalPositions := dataIndexesForSeqNums(reader.Columns(), columnSeqNums)
 	projectedTypes := buildProjectedTypes(reader.Columns(), physicalPositions)
 	relevantTombstones, err := r.filterTombstonesForObject(ctx, entry.ObjectStats.ObjectName().ObjectId(), tombstoneStats)
 	if err != nil {
@@ -1376,7 +1402,7 @@ func (r *CheckpointReader) readCSVObjectBlocks(
 	counters *csvPipelineCounters,
 	snapshotTS types.TS,
 	tombstoneStats []objectio.ObjectStats,
-	physicalPositions []int,
+	columnSeqNums []int,
 	job csvPipelineObjectJob,
 ) error {
 	entry := job.entry
@@ -1393,6 +1419,7 @@ func (r *CheckpointReader) readCSVObjectBlocks(
 		return err
 	}
 
+	physicalPositions := dataIndexesForSeqNums(reader.Columns(), columnSeqNums)
 	projectedTypes := buildProjectedTypes(reader.Columns(), physicalPositions)
 	relevantTombstones, err := r.filterTombstonesForObject(ctx, entry.ObjectStats.ObjectName().ObjectId(), tombstoneStats)
 	if err != nil {
@@ -1823,6 +1850,20 @@ func buildProjectedTypes(cols []objecttool.ColInfo, physicalPositions []int) []t
 	return projected
 }
 
+func dataIndexesForSeqNums(cols []objecttool.ColInfo, seqNums []int) []int {
+	indexes := make([]int, len(seqNums))
+	for i, seqNum := range seqNums {
+		indexes[i] = seqNum
+		for dataIdx, col := range cols {
+			if int(col.SeqNum) == seqNum {
+				indexes[i] = dataIdx
+				break
+			}
+		}
+	}
+	return indexes
+}
+
 func writeSQLLoadCSVRow(w io.Writer, colTypes []types.Type, fields []string, nulls []bool) error {
 	for i, field := range fields {
 		if i > 0 {
@@ -2225,11 +2266,14 @@ func MergeLogicalViewWithSchema(view *LogicalTableView, schema *TableSchema) *Lo
 
 	for _, col := range schema.Columns {
 		newHeaders = append(newHeaders, col.Name)
-		physicalPos := col.PhysicalPosition
-		if physicalPos < 0 {
-			physicalPos = col.Position
+		dataPos := dataIndexForSeqNum(view, col.PhysicalPosition)
+		if dataPos < 0 {
+			dataPos = col.PhysicalPosition
 		}
-		colMap = append(colMap, physicalPos)
+		if dataPos < 0 {
+			dataPos = col.Position
+		}
+		colMap = append(colMap, dataPos)
 	}
 
 	// Extract data rows: pick only visible columns by their physical position
@@ -2253,6 +2297,18 @@ func MergeLogicalViewWithSchema(view *LogicalTableView, schema *TableSchema) *Lo
 		DeletedRows:  view.DeletedRows,
 		PhysicalRows: view.PhysicalRows,
 	}
+}
+
+func dataIndexForSeqNum(view *LogicalTableView, seqNum int) int {
+	if view == nil || seqNum < 0 {
+		return -1
+	}
+	for idx, candidate := range view.ColSeqNums {
+		if int(candidate) == seqNum {
+			return idx
+		}
+	}
+	return -1
 }
 
 // buildSchemaFromMoTablesRow extracts a TableSchema from a mo_tables data row.

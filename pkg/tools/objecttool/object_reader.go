@@ -120,9 +120,10 @@ func OpenWithFS(ctx context.Context, fs fileservice.FileService, fileName string
 
 func buildObjectInfo(path string, meta objectio.ObjectDataMeta) *ObjectInfo {
 	info := &ObjectInfo{
-		Path:       path,
-		BlockCount: meta.BlockCount(),
-		ColCount:   meta.BlockHeader().ColumnCount(),
+		Path:         path,
+		BlockCount:   meta.BlockCount(),
+		ColCount:     meta.BlockHeader().ColumnCount(),
+		IsAppendable: meta.BlockHeader().Appendable(),
 	}
 
 	// Calculate total row count
@@ -136,17 +137,35 @@ func buildObjectInfo(path string, meta objectio.ObjectDataMeta) *ObjectInfo {
 func buildColInfo(meta objectio.ObjectDataMeta) []ColInfo {
 	colCount := meta.BlockHeader().ColumnCount()
 	cols := make([]ColInfo, colCount)
+	filled := make([]bool, colCount)
 
 	// Get column types from first block
 	if meta.BlockCount() > 0 {
 		blockMeta := meta.GetBlockMeta(0)
-		for i := uint16(0); i < colCount; i++ {
-			colMeta := blockMeta.ColumnMeta(i)
-			cols[i] = ColInfo{
-				Idx:    i,
-				SeqNum: i,
+		metaColCount := blockMeta.GetMetaColumnCount()
+		for seqNum := uint16(0); seqNum < metaColCount; seqNum++ {
+			colMeta := blockMeta.ColumnMeta(seqNum)
+			idx := colMeta.Idx()
+			if idx >= colCount || colMeta.Location().OriginSize() == 0 {
+				continue
+			}
+			cols[idx] = ColInfo{
+				Idx:    idx,
+				SeqNum: seqNum,
 				Type:   types.T(colMeta.DataType()).ToType(),
 			}
+			filled[idx] = true
+		}
+	}
+
+	for i := uint16(0); i < colCount; i++ {
+		if filled[i] {
+			continue
+		}
+		cols[i] = ColInfo{
+			Idx:    i,
+			SeqNum: i,
+			Type:   types.T_any.ToType(),
 		}
 	}
 

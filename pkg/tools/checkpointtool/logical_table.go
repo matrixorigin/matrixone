@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -49,6 +50,7 @@ func (r *CheckpointReader) BuildLogicalTableView(
 			for _, col := range cols {
 				view.Headers = append(view.Headers, fmt.Sprintf("col_%d", col.Idx))
 				view.ColTypes = append(view.ColTypes, col.Type)
+				view.ColSeqNums = append(view.ColSeqNums, col.SeqNum)
 			}
 			return nil
 		},
@@ -86,6 +88,7 @@ func (r *CheckpointReader) scanLogicalTable(
 	visibleTombEntries := visibleObjectEntries(tombEntries, snapshotTS)
 	tombstoneStats := dedupeObjectStats(visibleTombEntries)
 	columnsSent := false
+	var canonicalSeqNums []uint16
 
 	for _, entry := range visibleDataEntries {
 		objName := entry.ObjectStats.ObjectName().String()
@@ -96,9 +99,12 @@ func (r *CheckpointReader) scanLogicalTable(
 			}
 			return stats, err
 		}
+		debugLogicalObjectColumns(entry.ObjectStats, reader)
+		cols := reader.Columns()
 
 		if !columnsSent && onColumns != nil {
-			if err := onColumns(reader.Columns()); err != nil {
+			canonicalSeqNums = columnSeqNums(cols)
+			if err := onColumns(cols); err != nil {
 				_ = reader.Close()
 				return stats, err
 			}
@@ -163,6 +169,9 @@ func (r *CheckpointReader) scanLogicalTable(
 						nulls[i] = vec.IsNull(uint64(rowIdx))
 						values[i] = vecValueToString(vec, rowIdx)
 					}
+					if len(canonicalSeqNums) > 0 {
+						values, nulls = alignRowValuesBySeqNums(cols, canonicalSeqNums, values, nulls)
+					}
 					if err := onRow(entry.ObjectStats.ObjectName().Short().ShortString(), blockIdx, rowIdx, values, nulls); err != nil {
 						if deleteMask.IsValid() {
 							deleteMask.Release()
@@ -193,6 +202,71 @@ func (r *CheckpointReader) scanLogicalTable(
 	}
 
 	return stats, nil
+}
+
+func columnSeqNums(cols []objecttool.ColInfo) []uint16 {
+	seqNums := make([]uint16, len(cols))
+	for i, col := range cols {
+		seqNums[i] = col.SeqNum
+	}
+	return seqNums
+}
+
+func alignRowValuesBySeqNums(
+	cols []objecttool.ColInfo,
+	targetSeqNums []uint16,
+	values []string,
+	nulls []bool,
+) ([]string, []bool) {
+	if len(cols) == 0 || len(targetSeqNums) == 0 {
+		return values, nulls
+	}
+	indexBySeqNum := make(map[uint16]int, len(cols))
+	for idx, col := range cols {
+		indexBySeqNum[col.SeqNum] = idx
+	}
+	alignedValues := make([]string, len(targetSeqNums))
+	alignedNulls := make([]bool, len(targetSeqNums))
+	for targetIdx, seqNum := range targetSeqNums {
+		sourceIdx, ok := indexBySeqNum[seqNum]
+		if !ok || sourceIdx >= len(values) {
+			alignedNulls[targetIdx] = true
+			continue
+		}
+		alignedValues[targetIdx] = values[sourceIdx]
+		if sourceIdx < len(nulls) {
+			alignedNulls[targetIdx] = nulls[sourceIdx]
+		}
+	}
+	return alignedValues, alignedNulls
+}
+
+func debugLogicalObjectColumns(stats objectio.ObjectStats, reader *objecttool.ObjectReader) {
+	if reader == nil {
+		return
+	}
+	info := reader.Info()
+	meta := reader.Meta()
+	header := meta.BlockHeader()
+	var cols strings.Builder
+	for i, col := range reader.Columns() {
+		if i > 0 {
+			cols.WriteString(",")
+		}
+		cols.WriteString(fmt.Sprintf("%d->seq%d:%s", col.Idx, col.SeqNum, col.Type.Oid.String()))
+	}
+	ckpDebugSchemaf(
+		"object columns object=%s stats_appendable=%v meta_appendable=%v blocks=%d rows=%d column_count=%d meta_column_count=%d max_seqnum=%d columns=[%s]",
+		stats.ObjectName().Short().ShortString(),
+		stats.GetAppendable(),
+		info != nil && info.IsAppendable,
+		meta.BlockCount(),
+		header.Rows(),
+		header.ColumnCount(),
+		header.MetaColumnCount(),
+		header.MaxSeqnum(),
+		cols.String(),
+	)
 }
 
 func dedupeObjectStats(entries []*ObjectEntryInfo) []objectio.ObjectStats {

@@ -87,6 +87,7 @@ type LogicalTableView struct {
 	Headers      []string
 	Rows         [][]string
 	ColTypes     []types.Type // column types for data columns (after meta cols)
+	ColSeqNums   []uint16     // object seqnums for data columns (after meta cols)
 	PhysicalRows int
 	DeletedRows  int
 	VisibleRows  int
