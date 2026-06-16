@@ -275,6 +275,11 @@ column type** (`vecf32/vecf16/vecbf16/vecint8/vecuint8`), each loaded from the s
 GOAMD64=v3`): **GPU+SIMD**, **GPU·noSIMD**, **noGPU+SIMD**, **noGPU·noSIMD**. Data does **not**
 survive a rebuild/restart (mo-data bootstraps fresh), so each config re-imports before its matrix.
 
+> ⚠️ **The three tables in this section are the ORIGINAL run and are superseded** by
+> the clean re-run in **"Re-run — corrected methodology & 4-quadrant (clean)"** below.
+> They built `base` cells with f32 entries (not narrow) and used single-pass QPS
+> (noisy). Kept for history; trust the re-run for numbers.
+
 ### Index build time (seconds) — compute-dominated, the cleanest signal
 
 | cell | GPU+SIMD | GPU·noSIMD | noGPU+SIMD | noGPU·noSIMD |
@@ -327,6 +332,29 @@ four configs land within ~20%, dominated by index traversal + I/O, not the dista
 GPU/SIMD.
 
 ### Caveats
+- **int8/uint8 base cells use a separate search client (`recall_narrow.py`), not the standard
+  `recall` harness** — the f32 query literal can't be cast into a narrow integer column, so it is
+  pre-scaled (`v*127` / `v*127+128`) and sent as a bare-integer literal. **The first `nogpu_simd`
+  numbers for these cells were a measurement artifact**: that client opened a *fresh DB connection
+  per query* and re-ran `SET probe_limit` each time, while timing only the `SELECT`. Per-query p50
+  stayed ~14ms (identical to f32), but the QPS denominator (wall-clock) absorbed 200× connect/auth/
+  session-init churn, collapsing warm QPS to int8 **99** / uint8 **250**. Fixed by giving
+  `recall_narrow.py` a thread-local persistent connection per worker (matching
+  `eval_vector_search_from_table.py`'s `get_thread_conn`) with `probe_limit` set once. Re-measured
+  warm QPS: **int8 99 → 594**, **uint8 250 → 550** (recall unchanged 0.83/0.82) — now the *fastest*
+  base types, as expected for the narrowest storage. The cold pass-1 tail (int8 p99 2.3s, uint8 p99
+  10s) is legitimate first-touch entry-block I/O and isolated to pass 1.
+- **`base` cells were measuring FLOAT32-entry indexes, not narrow ones.** The matrix built every base
+  cell with `quantization='float32'`, which (schema.go) overrides the ivfflat **entries column** to f32 —
+  so a `vecint8`/`vecbf16` base stored f32 entries and the re-rank ran the f32 distance kernel
+  (`topnDistOf[float32]`) over upcast data. The re-rank distance is the ORDER-BY-LIMIT *index pushdown*
+  (`tae/blockio.topnDistOf[T]` → `metric.ResolveDistanceFn[T,float64]`), keyed on the entries-column type
+  — NOT the SQL `l2_distance` builtin. Fix: base cells now omit `QUANTIZATION` (entries keep the base
+  type → `topnDistOf[int8]`/integer kernel + 4× smaller entries), and schema.go now **rejects upcasting**
+  quantization (e.g. bf16 base + `QUANTIZATION='float32'`). Re-measured on the narrow-entry index
+  (probe=8, persistent-conn harness): **int8 594 → ~830 QPS** (p50 14→7.5 ms, recall 0.838),
+  **uint8 550 → ~790 QPS** (p50 8 ms, recall 0.823); at probe=64 int8 went 140 → 429 QPS and the distance
+  kernel dropped off the CPU profile entirely. The earlier 594/550 numbers were the f32-entry index.
 - **Single run per cell → ±~30% variance** (kmeans randomness, cache warmth). **Build time and recall
   trends are robust** (GPU+SIMD wins all 9 builds; GPU recall consistently higher); **search latency is
   the noisiest dimension** — absolute p50 on heavy cells is cache-state-dominated (e.g. f32-base p50
@@ -336,3 +364,108 @@ GPU/SIMD.
 - **Storage:** WSL2 vhdx, native ext4, ~1.1 GB/s O_DIRECT / 4–9 GB/s cached — SSD-class; search is
   CPU/SIMD-bound, not I/O-bound (same disk gave 1.1s vs 7.4s for the identical query under SIMD vs
   noSIMD).
+
+---
+
+## Re-run — corrected methodology & 4-quadrant (clean)
+
+Full re-run of all four build configs after fixing two methodology bugs and adding vector
+materialization optimizations. **This supersedes the original tables above.**
+
+**Methodology fixes (in `run_matrix.py`):**
+1. **`base` cells now build NARROW entries** (`quantization=none`, not `'float32'`). The old run
+   stored f32 entries for every base type, so it measured an f32-entry index regardless of base.
+   The narrow path also needs `schema.go` to **reject upcasting `QUANTIZATION`** (e.g. bf16 base +
+   `'float32'`), now enforced.
+2. **4 passes/cell; warm = MEDIAN(pass 2..4)** (pass 1 = cold, dropped). The old "last-pass" rule
+   let a single transient tank a cell — e.g. f32-base GPU+SIMD once read **61 QPS**; the median is
+   **466**. Build time and cold QPS are still single-shot and noisy.
+
+**Code under test:** `pkg/container/vector/vector.go` UnionBatch varlena **full-append fast path**
+(2 memmoves + unsafe offset rebase, incl. null/grouping rows) + union-path area **pre-grow** +
+const-broadcast **doubling fill**; narrow SQL distance routed through the native `metric` integer
+kernel. The fast path is a **~3× table-scan** win (materialization memmove was ~50% of a scan).
+
+### Build time (s) — 4-pass run
+
+| cell | GPU+SIMD | GPU·noSIMD | noGPU+SIMD¹ | noGPU·noSIMD |
+|---|---|---|---|---|
+| base f32 | **18.3** | 122.2 | 80.6 | 131.0 |
+| base f16 | **22.4** | 60.3 | 44.7 | 87.3 |
+| base bf16 | **17.8** | 49.0 | 38.1 | 58.7 |
+| base int8 | **13.9** | 33.3 | 29.2 | 62.0 |
+| base uint8 | **14.9** | 23.0 | 26.7 | 59.2 |
+| quant float16 | **23.6** | 38.0 | 39.5 | 67.9 |
+| quant bf16 | **21.2** | 32.5 | 33.2 | 66.5 |
+| quant int8 | **18.7** | 34.3 | 45.2 | 66.8 |
+| quant uint8 | **18.9** | 36.5 | 32.6 | 65.5 |
+
+### Recall@10 (stable across passes; the trustworthy correctness signal)
+
+| GPU+SIMD | GPU·noSIMD | noGPU+SIMD | noGPU·noSIMD |
+|---|---|---|---|
+| 0.86–0.88 | 0.85–0.89 | 0.80–0.85 | 0.81–0.84 |
+
+### Search — warm QPS and p50 latency (median of passes 2–4, probe=8, concurrency 8)
+
+Warm QPS:
+
+| cell | GPU+SIMD | GPU·noSIMD | noGPU+SIMD¹ | noGPU·noSIMD |
+|---|---|---|---|---|
+| base f32 | 466 | 332 | 433 | 268 |
+| base f16 | 511 | 197 | 474 | 224 |
+| base bf16 | 568 | 345 | 572 | 443 |
+| base int8 | 687 | 405 | 889¹ | 327 |
+| base uint8 | 709 | 418 | 649 | 384 |
+| quant float16 | 509 | 175 | 524 | 222 |
+| quant bf16 | 571 | 375 | 366 | 420 |
+| quant int8 | 559 | 407 | 447 | 432 |
+| quant uint8 | 576 | 324 | 440 | 572 |
+
+p50 latency (ms):
+
+| cell | GPU+SIMD | GPU·noSIMD | noGPU+SIMD¹ | noGPU·noSIMD |
+|---|---|---|---|---|
+| base f32 | 15.5 | 22.8 | 15.9 | 17.9 |
+| base f16 | 13.8 | **35.7** | 14.0 | 33.8 |
+| base bf16 | 12.0 | 20.9 | 11.6 | 15.5 |
+| base int8 | 9.3 | 16.5 | 7.5¹ | 21.5 |
+| base uint8 | **8.7** | 14.7 | 9.6 | 16.4 |
+| quant float16 | 13.9 | **36.0** | 12.8 | 33.1 |
+| quant bf16 | 12.0 | 19.1 | 20.5 | 16.1 |
+| quant int8 | 12.0 | 18.0 | 16.4 | 16.3 |
+| quant uint8 | 11.9 | 22.4 | 16.2 | 12.6 |
+
+¹ `noGPU+SIMD` is the earlier 3-pass "last-pass" run (`bench_matrix_vecopt.json`); its build/recall
+are fine but QPS carries single-pass noise (e.g. int8 `889`/7.5ms is a likely outlier). Not re-run.
+
+**Search-time reading:** SIMD's search win is concentrated on **f16** (base + quant-float16): p50
+**~14 → ~36 ms (2.5×)** when SIMD is off — the IEEE-half decode is the cost. **bf16 barely moves**
+(12 → 21 ms, one-shift decode), so bf16 out-searches f16 whenever SIMD is weak. **int8/uint8 base
+are the fastest search** (p50 7–9 ms, ~700 QPS — narrow 1-byte entries + integer kernel). GPU+SIMD
+is best-or-tied on p50 in every cell; the noGPU·noSIMD floor is ~2× slower on the decode-heavy cells.
+
+### GPU vs SIMD decomposition (the point of the 4-quadrant)
+
+- **GPU → recall.** GPU configs are **+0.03–0.05 recall** over noGPU, independent of SIMD. SIMD does
+  not change correctness.
+- **SIMD → build speed (dominant lever).** Build is bottlenecked on the **CPU entry-assignment
+  distance**; SIMD alone gives f32 **6.7×** (18→122), int8 2.4×. Tellingly, **GPU·noSIMD (122s) is
+  *slower* than noGPU+SIMD (80s)** for f32 → **SIMD matters more than GPU for the build** (GPU only
+  speeds the centroid kmeans step). Full stack vs floor: f32 **7.2×** (131→18), int8 4.5×.
+- **SIMD → search** too: GPU+SIMD vs GPU·noSIMD ≈ **1.4–2.6×** warm QPS; **f16 is hardest hit (2.6×,
+  511→197)** — its IEEE-half decode leans most on SIMD.
+- **int8/uint8 base = fastest search** (687/709 GPU+SIMD) — narrow 1-byte entries; the native int8
+  integer kernel + 4× smaller entries.
+
+### Findings on the optimizations themselves (profiled, same-binary A/B)
+
+- **UnionBatch fast path → 3× table scans** (f32 673→215 ms via runtime toggle A/B; 1.75× on int8).
+  It accelerates *scans/materialization*, **not ANN search** (search materializes only the ~8k
+  probed entries → <1% of the table) and **not index build** (build is **distance-bound**: profile
+  showed `L2DistanceSqFloat32` ≈ 51%, varlena materialization only ~5%). So the build-time wins
+  above are SIMD (distance) + GPU (kmeans), not the vector opts.
+- **CRC is a cold-first-touch cost only.** A same-binary CRC on/off A/B (runtime toggle, fresh-built
+  index) moved warm QPS ~0% and cold ~0% (59.6 vs 55.0) — warm reads are cache-served and never call
+  `FileWithChecksum`. The big cross-binary "cold QPS" deltas seen during the sweep are **OS-page-cache
+  state**, not code. Treat cold QPS as cache noise.
