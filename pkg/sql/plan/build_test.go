@@ -734,8 +734,8 @@ func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {
 	if hasUpdateFromDedupAnyValueAgg(query, len(tableDef.Cols)) {
 		t.Fatalf("UPDATE FROM dedup should not aggregate update columns with any_value")
 	}
-	if !hasUpdateFromDedupWindow(query, len(tableDef.Cols)) {
-		t.Fatalf("UPDATE FROM should dedup duplicate source matches with row_number window")
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("UPDATE FROM should dedup duplicate source matches with row_number window partitioned by row_id")
 	}
 }
 
@@ -752,8 +752,8 @@ func TestUpdatePgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
 	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["nation"].Cols)) {
 		t.Fatalf("UPDATE FROM dedup must pick a whole source row, not aggregate each update column with any_value")
 	}
-	if !hasUpdateFromDedupWindow(query, len(mock.ctxt.tables["nation"].Cols)) {
-		t.Fatalf("UPDATE FROM dedup should use row_number window partitioned by target old columns")
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("UPDATE FROM dedup should use row_number window partitioned by target row_id")
 	}
 }
 
@@ -770,8 +770,57 @@ func TestUpdateFallbackPgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
 	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["emp"].Cols)) {
 		t.Fatalf("fallback UPDATE FROM dedup must pick a whole source row, not aggregate each update column with any_value")
 	}
-	if !hasUpdateFromDedupWindow(query, len(mock.ctxt.tables["emp"].Cols)) {
-		t.Fatalf("fallback UPDATE FROM dedup should use row_number window partitioned by target old columns")
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("fallback UPDATE FROM dedup should use row_number window partitioned by target row_id")
+	}
+}
+
+// TestUpdatePgStyleFromDedupPartitionsByRowIDNotGeometry32 guards the new
+// bindUpdate path against the GEOMETRY32 partition-key crash: T_geometry32 has
+// no comparator in pkg/compare, so a row_number window partitioned on a
+// GEOMETRY32 target column would build a nil comparator and crash at runtime.
+// The dedup key must be row_id, never the geometry column.
+func TestUpdatePgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	geoTyp := plan.Type{Id: int32(types.T_geometry32)}
+	setMockColumnType(t, mock, "nation", "n_comment", geoTyp)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = NATION2.N_NAME FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("build UPDATE FROM with GEOMETRY32 column: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("UPDATE FROM dedup must partition by row_id, not by a GEOMETRY32 target column")
+	}
+	if updateFromDedupPartitionsColName(query, "n_comment") {
+		t.Fatalf("UPDATE FROM dedup must not include the GEOMETRY32 column in the partition key")
+	}
+}
+
+// TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32 guards the
+// fallback (buildTableUpdate) path against the same GEOMETRY32 partition-key
+// crash. emp has a foreign key, so UPDATE ... FROM routes through the fallback
+// planner.
+func TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	geoTyp := plan.Type{Id: int32(types.T_geometry32)}
+	setMockColumnType(t, mock, "emp", "hiredate", geoTyp)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback UPDATE FROM with GEOMETRY32 column: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("fallback UPDATE FROM dedup must partition by row_id, not by a GEOMETRY32 target column")
+	}
+	if updateFromDedupPartitionsColName(query, "hiredate") {
+		t.Fatalf("fallback UPDATE FROM dedup must not include the GEOMETRY32 column in the partition key")
 	}
 }
 
@@ -824,7 +873,7 @@ func TestUpdatePgStyleFromDedupKeepsGeneratedColumnsAfterDedup(t *testing.T) {
 	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["nation"].Cols)) {
 		t.Fatalf("dedup should not aggregate generated or update columns with any_value")
 	}
-	if !hasUpdateFromDedupWindow(query, len(mock.ctxt.tables["nation"].Cols)) {
+	if !hasUpdateFromDedupWindow(query, 1) {
 		t.Fatalf("UPDATE FROM with generated column should still use row-level dedup")
 	}
 }
@@ -1066,6 +1115,10 @@ func hasUpdateFromDedupAnyValueAgg(query *Query, groupByLen int) bool {
 	return false
 }
 
+// hasUpdateFromDedupWindow reports whether the plan contains a row_number window
+// used for UPDATE ... FROM dedup, partitioned on exactly partitionByLen row_id
+// columns. The dedup key must be the target row's physical identity (row_id),
+// not the whole old target row, so every partition expr must reference row_id.
 func hasUpdateFromDedupWindow(query *Query, partitionByLen int) bool {
 	for _, node := range query.Nodes {
 		if node.NodeType != plan.Node_WINDOW {
@@ -1076,7 +1129,39 @@ func hasUpdateFromDedupWindow(query *Query, partitionByLen int) bool {
 			if spec == nil || spec.Name != "row_number" || len(spec.PartitionBy) != partitionByLen {
 				continue
 			}
-			return true
+			allRowID := true
+			for _, partExpr := range spec.PartitionBy {
+				if !exprContainsColName(partExpr, catalog.Row_ID) {
+					allRowID = false
+					break
+				}
+			}
+			if allRowID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// updateFromDedupPartitionsColName reports whether any row_number dedup window
+// partitions on the given column name. Used to assert that columns without a
+// stable comparator (e.g. GEOMETRY32) never end up in the dedup partition key.
+func updateFromDedupPartitionsColName(query *Query, colName string) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_WINDOW {
+			continue
+		}
+		for _, winExpr := range node.WinSpecList {
+			spec := winExpr.GetW()
+			if spec == nil || spec.Name != "row_number" {
+				continue
+			}
+			for _, partExpr := range spec.PartitionBy {
+				if exprContainsColName(partExpr, colName) {
+					return true
+				}
+			}
 		}
 	}
 	return false

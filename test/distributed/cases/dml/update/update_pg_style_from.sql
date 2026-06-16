@@ -287,6 +287,63 @@ SELECT v FROM dup_no_fk_t WHERE id = 2;
 DROP TABLE dup_no_fk_t;
 DROP TABLE dup_no_fk_s;
 
+-- A GEOMETRY32 target column has no comparator, so a dedup key built from the
+-- whole old target row would crash Node_PARTITION. Dedup now partitions on the
+-- target row_id, so UPDATE ... FROM with duplicate source matches succeeds on
+-- the new bindUpdate path (no FK) and updates each target row exactly once.
+DROP TABLE IF EXISTS geo_dedup_t;
+DROP TABLE IF EXISTS geo_dedup_s;
+CREATE TABLE geo_dedup_t (
+    id INT PRIMARY KEY,
+    g GEOMETRY32,
+    v VARCHAR(20)
+);
+CREATE TABLE geo_dedup_s (
+    t_id INT,
+    v VARCHAR(20)
+);
+INSERT INTO geo_dedup_t VALUES
+    (1, ST_GeomFromText('POINT(1 2)'), 'orig'),
+    (2, ST_GeomFromText('POINT(3 4)'), 'orig');
+INSERT INTO geo_dedup_s VALUES (1, 'first'), (1, 'second'), (2, 'only');
+UPDATE geo_dedup_t SET v = s.v FROM geo_dedup_s s WHERE s.t_id = geo_dedup_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM geo_dedup_t;
+SELECT id, COUNT(*) AS per_id_cnt FROM geo_dedup_t GROUP BY id ORDER BY id;
+SELECT v FROM geo_dedup_t WHERE id = 2;
+DROP TABLE geo_dedup_t;
+DROP TABLE geo_dedup_s;
+
+-- Same GEOMETRY32 guard on the fallback path: a foreign key on the target
+-- forces buildTableUpdate, which must also dedup on row_id instead of the
+-- whole old row.
+DROP TABLE IF EXISTS geo_fk_dedup_t;
+DROP TABLE IF EXISTS geo_fk_dedup_p;
+DROP TABLE IF EXISTS geo_fk_dedup_s;
+CREATE TABLE geo_fk_dedup_p (id INT PRIMARY KEY);
+INSERT INTO geo_fk_dedup_p VALUES (1), (2);
+CREATE TABLE geo_fk_dedup_t (
+    id INT PRIMARY KEY,
+    p_id INT,
+    g GEOMETRY32,
+    v VARCHAR(20),
+    FOREIGN KEY (p_id) REFERENCES geo_fk_dedup_p(id)
+);
+CREATE TABLE geo_fk_dedup_s (
+    t_id INT,
+    v VARCHAR(20)
+);
+INSERT INTO geo_fk_dedup_t VALUES
+    (1, 1, ST_GeomFromText('POINT(1 2)'), 'orig'),
+    (2, 2, ST_GeomFromText('POINT(3 4)'), 'orig');
+INSERT INTO geo_fk_dedup_s VALUES (1, 'first'), (1, 'second'), (2, 'only');
+UPDATE geo_fk_dedup_t SET v = s.v FROM geo_fk_dedup_s s WHERE s.t_id = geo_fk_dedup_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM geo_fk_dedup_t;
+SELECT id, COUNT(*) AS per_id_cnt FROM geo_fk_dedup_t GROUP BY id ORDER BY id;
+SELECT v FROM geo_fk_dedup_t WHERE id = 2;
+DROP TABLE geo_fk_dedup_t;
+DROP TABLE geo_fk_dedup_p;
+DROP TABLE geo_fk_dedup_s;
+
 DROP TABLE IF EXISTS company;
 DROP TABLE IF EXISTS vec_join_case;
 DROP TABLE IF EXISTS region;

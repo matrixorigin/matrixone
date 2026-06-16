@@ -272,14 +272,18 @@ func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlan
 	return nil
 }
 
+// fallbackUpdateFromDedupPartitionCols returns the projection positions used to
+// dedup duplicate source matches on the fallback (buildTableUpdate) path. The
+// key is each updated target table's row_id, a stable row identity, rather than
+// the whole old target row: partitioning on every old column would crash on
+// GEOMETRY32 (no comparator), miss dedup on float columns holding NaN
+// (NaN != NaN), and wrongly merge distinct rows whose columns happen to match.
 func fallbackUpdateFromDedupPartitionCols(planCtxs []*dmlPlanCtx) []int32 {
 	partitionCols := make([]int32, 0)
 	offset := int32(0)
 	for _, planCtx := range planCtxs {
-		if planCtx.updateColLength > 0 {
-			for i := range planCtx.tableDef.Cols {
-				partitionCols = append(partitionCols, offset+int32(i))
-			}
+		if planCtx.updateColLength > 0 && planCtx.rowIdPos >= 0 {
+			partitionCols = append(partitionCols, offset+int32(planCtx.rowIdPos))
 		}
 		offset += int32(len(planCtx.tableDef.Cols) + planCtx.updateColLength)
 	}

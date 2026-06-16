@@ -986,23 +986,23 @@ func (builder *QueryBuilder) appendUpdateFromDedupNode(
 	oldColName2Idx map[string]int32,
 	newColName2Idx map[string]int32,
 ) (int32, *plan.Node, int32, error) {
+	// Dedup duplicate source matches by partitioning on the target row's
+	// physical identity (row_id), not on the whole old target row. Partitioning
+	// on every old column is unsafe: GEOMETRY32 (T_geometry32) has no comparator
+	// in pkg/compare so Node_PARTITION would build a nil comparator and crash,
+	// float columns compare NaN != NaN so duplicate matches against a target row
+	// holding NaN stop being recognized as duplicates, and two distinct rows
+	// whose columns happen to be equal would be wrongly merged into one. row_id
+	// is stable, unique, and always comparable. For multi-target UPDATE ... FROM
+	// the key is the combination of every updated target table's row_id.
 	partitionColPositions := make([]int32, 0)
-	partitionPos := make(map[int32]struct{})
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
 			continue
 		}
 
-		for _, col := range dmlCtx.tableDefs[i].Cols {
-			key := alias + "." + col.Name
-			oldPos, ok := oldColName2Idx[key]
-			if !ok {
-				continue
-			}
-			if _, exists := partitionPos[oldPos]; !exists {
-				partitionPos[oldPos] = struct{}{}
-				partitionColPositions = append(partitionColPositions, oldPos)
-			}
+		if pos, ok := oldColName2Idx[alias+"."+catalog.Row_ID]; ok {
+			partitionColPositions = append(partitionColPositions, pos)
 		}
 	}
 
