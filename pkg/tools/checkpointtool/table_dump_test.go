@@ -616,6 +616,26 @@ func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *test
 	assert.NotContains(t, ddl, "`old`")
 }
 
+func TestBuildPartitionClauseFromMetadata_UsesSeqNumsWithHiddenColumn(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, "col_0", "col_1", "col_2", "col_3", "col_4", "col_5", "col_6"),
+		ColSeqNums: []uint16{
+			6, // hidden/cpkey column before visible catalog columns
+			0, 1, 2, 3, 4, 5,
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"hidden-key",
+				"334023", "t_hash_partition", "ckp_tables", "Hash", "hash (`id`)", "4",
+			},
+		},
+	}
+	applyCatalogHeadersBySeqNums(view, moPartitionMetadataHeaders)
+
+	assert.Equal(t, "partition by hash (`id`) partitions 4", buildPartitionClauseFromMetadata(view, 334023))
+}
+
 func TestCreateTableDDLFromCatalogViews_IgnoresMoColumnsPrimaryWithoutConstraint(t *testing.T) {
 	moTablesView := &LogicalTableView{
 		Headers: []string{

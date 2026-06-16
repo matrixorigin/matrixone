@@ -3240,15 +3240,47 @@ func (r *CheckpointReader) dumpCatalogTableViewWithHeaders(
 	if view == nil {
 		return &LogicalTableView{}, nil
 	}
-	fixedHeaders := append([]string(nil), logicalTableViewMetaHeaders...)
-	fixedHeaders = append(fixedHeaders, headers...)
-	if len(view.Headers) > len(fixedHeaders) {
-		for i := len(fixedHeaders); i < len(view.Headers); i++ {
-			fixedHeaders = append(fixedHeaders, fmt.Sprintf("col_%d", i-len(logicalTableViewMetaHeaders)))
+	applyCatalogHeadersBySeqNums(view, headers)
+	return view, nil
+}
+
+func applyCatalogHeadersBySeqNums(view *LogicalTableView, headers []string) {
+	if view == nil {
+		return
+	}
+	dataOffset := logicalViewDataOffset(view)
+	if dataOffset == 0 && len(view.Headers) < logicalViewMetaCols {
+		dataOffset = logicalViewMetaCols
+	}
+	fixedHeaders := make([]string, len(view.Headers))
+	if len(fixedHeaders) < dataOffset {
+		fixedHeaders = make([]string, dataOffset)
+	}
+	copy(fixedHeaders, logicalTableViewMetaHeaders)
+	for i := dataOffset; i < len(fixedHeaders); i++ {
+		fixedHeaders[i] = fmt.Sprintf("col_%d", i-dataOffset)
+	}
+
+	mapped := 0
+	for dataIdx, seqNum := range view.ColSeqNums {
+		headerIdx := dataOffset + dataIdx
+		if headerIdx >= len(fixedHeaders) || int(seqNum) >= len(headers) {
+			continue
+		}
+		fixedHeaders[headerIdx] = headers[seqNum]
+		mapped++
+	}
+	if mapped == 0 {
+		for i, header := range headers {
+			headerIdx := dataOffset + i
+			if headerIdx >= len(fixedHeaders) {
+				fixedHeaders = append(fixedHeaders, header)
+				continue
+			}
+			fixedHeaders[headerIdx] = header
 		}
 	}
 	view.Headers = fixedHeaders
-	return view, nil
 }
 
 func (r *CheckpointReader) dumpCatalogTableView(
