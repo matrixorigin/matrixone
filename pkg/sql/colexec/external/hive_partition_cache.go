@@ -116,22 +116,13 @@ func listHivePartitionDir(
 		recordHivePartitionDirectPrefixHit(result, options)
 		return entries, nil
 	}
-
-	leader, flight, entries, ok := globalHivePartitionListCache.getOrStartInflight(key)
-	if ok {
-		recordHivePartitionCacheHit(result, options)
-		recordHivePartitionDirectPrefixHit(result, options)
-		return entries, nil
-	}
 	recordHivePartitionCacheMiss(result, options)
 	recordHivePartitionDirectPrefixMiss(result, options)
 
+	leader, flight := globalHivePartitionListCache.startInflight(key)
 	if !leader {
 		select {
 		case <-flight.done:
-			if entries, ok := globalHivePartitionListCache.get(key); ok {
-				return entries, nil
-			}
 			return cloneDirEntries(flight.entries), flight.err
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -254,25 +245,15 @@ func (c *hivePartitionListCache) set(key string, entries []fileservice.DirEntry,
 	c.evictLocked(maxEntries, maxBytes)
 }
 
-func (c *hivePartitionListCache) getOrStartInflight(key string) (bool, *hivePartitionInflight, []fileservice.DirEntry, bool) {
-	now := time.Now()
+func (c *hivePartitionListCache) startInflight(key string) (bool, *hivePartitionInflight) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if entry, ok := c.entries[key]; ok {
-		if now.After(entry.ExpireAt) {
-			c.bytes -= entry.SizeHint
-			delete(c.entries, key)
-		} else {
-			entry.lastUsed = now
-			return false, nil, cloneDirEntries(entry.Entries), true
-		}
-	}
 	if flight, ok := c.inflight[key]; ok {
-		return false, flight, nil, false
+		return false, flight
 	}
 	flight := &hivePartitionInflight{done: make(chan struct{})}
 	c.inflight[key] = flight
-	return true, flight, nil, false
+	return true, flight
 }
 
 func (c *hivePartitionListCache) finishInflight(key string, flight *hivePartitionInflight, entries []fileservice.DirEntry, err error) {
