@@ -117,9 +117,12 @@ type TableColumn struct {
 }
 
 type TableUniqueKey struct {
-	Name    string
-	Columns []string
-	Unique  bool
+	Name       string
+	Columns    []string
+	Unique     bool
+	Algo       string
+	AlgoParams string
+	Comment    string
 }
 
 // TableSchema holds the decoded schema for one user table.
@@ -476,6 +479,7 @@ func renderCreateTableDDLFull(tableName string, cols []TableColumn, comment stri
 		}
 		sb.WriteString("KEY ")
 		sb.WriteString(quoteDDLIdent(key.Name))
+		appendIndexAlgorithmDDL(&sb, key.Algo)
 		sb.WriteString("(")
 		for i, col := range key.Columns {
 			if i > 0 {
@@ -483,10 +487,14 @@ func renderCreateTableDDLFull(tableName string, cols []TableColumn, comment stri
 			}
 			sb.WriteString(quoteDDLIdent(col))
 		}
+		sb.WriteString(")")
+		if err := appendIndexTrailingOptionsDDL(&sb, key.AlgoParams, key.Comment); err != nil {
+			ckpDebugSchemaf("mo_tables constraint index options skipped index=%s algo=%q params=%q err=%v", key.Name, key.Algo, key.AlgoParams, err)
+		}
 		if i < len(uniqueKeys)-1 {
-			sb.WriteString("),\n")
+			sb.WriteString(",\n")
 		} else {
-			sb.WriteString(")\n")
+			sb.WriteString("\n")
 		}
 	}
 	sb.WriteString(")")
@@ -607,7 +615,14 @@ func normalizedUniqueKeys(keys []TableUniqueKey) []TableUniqueKey {
 			continue
 		}
 		seen[signature] = struct{}{}
-		out = append(out, TableUniqueKey{Name: name, Columns: cols, Unique: key.Unique})
+		out = append(out, TableUniqueKey{
+			Name:       name,
+			Columns:    cols,
+			Unique:     key.Unique,
+			Algo:       strings.TrimSpace(key.Algo),
+			AlgoParams: strings.TrimSpace(key.AlgoParams),
+			Comment:    strings.TrimSpace(key.Comment),
+		})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Name != out[j].Name {
@@ -1143,6 +1158,9 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 		for i, key := range schema.UniqueKeys {
 			clone.UniqueKeys[i].Name = strings.Clone(key.Name)
 			clone.UniqueKeys[i].Unique = key.Unique
+			clone.UniqueKeys[i].Algo = strings.Clone(key.Algo)
+			clone.UniqueKeys[i].AlgoParams = strings.Clone(key.AlgoParams)
+			clone.UniqueKeys[i].Comment = strings.Clone(key.Comment)
 			if len(key.Columns) > 0 {
 				clone.UniqueKeys[i].Columns = make([]string, len(key.Columns))
 				for j, col := range key.Columns {
@@ -3464,10 +3482,7 @@ func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, e
 	}
 	sb.WriteString("KEY ")
 	sb.WriteString(quoteDDLIdent(info.name))
-	if !catalog.IsNullIndexAlgo(info.algo) {
-		sb.WriteString(" USING ")
-		sb.WriteString(info.algo)
-	}
+	appendIndexAlgorithmDDL(&sb, info.algo)
 	sb.WriteString("(")
 	for i, col := range cols {
 		if i > 0 {
@@ -3476,21 +3491,36 @@ func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, e
 		sb.WriteString(quoteDDLIdent(col.name))
 	}
 	sb.WriteString(")")
-	if strings.TrimSpace(info.algoParams) != "" {
-		params, err := catalog.IndexParamsToStringList(info.algoParams)
+	if err := appendIndexTrailingOptionsDDL(&sb, info.algoParams, info.comment); err != nil {
+		return "", err
+	}
+	sb.WriteString(";")
+	return sb.String(), nil
+}
+
+func appendIndexAlgorithmDDL(sb *strings.Builder, algo string) {
+	algo = strings.TrimSpace(algo)
+	if !catalog.IsNullIndexAlgo(algo) {
+		sb.WriteString(" USING ")
+		sb.WriteString(algo)
+	}
+}
+
+func appendIndexTrailingOptionsDDL(sb *strings.Builder, algoParams, comment string) error {
+	if strings.TrimSpace(algoParams) != "" {
+		params, err := catalog.IndexParamsToStringList(algoParams)
 		if err != nil {
-			return "", err
+			return err
 		}
 		if strings.TrimSpace(params) != "" {
 			sb.WriteString(params)
 		}
 	}
-	if info.comment != "" {
+	if comment != "" {
 		sb.WriteString(" COMMENT ")
-		sb.WriteString(quoteDDLString(info.comment))
+		sb.WriteString(quoteDDLString(comment))
 	}
-	sb.WriteString(";")
-	return sb.String(), nil
+	return nil
 }
 
 func decodeUniqueKeysFromMoTablesConstraint(raw string) (keys []TableUniqueKey) {
@@ -3532,7 +3562,14 @@ func decodeUniqueKeysFromMoTablesConstraint(raw string) (keys []TableUniqueKey) 
 			if name == "" {
 				name = cols[0]
 			}
-			keys = append(keys, TableUniqueKey{Name: name, Columns: cols, Unique: index.Unique})
+			keys = append(keys, TableUniqueKey{
+				Name:       name,
+				Columns:    cols,
+				Unique:     index.Unique,
+				Algo:       index.IndexAlgo,
+				AlgoParams: index.IndexAlgoParams,
+				Comment:    index.Comment,
+			})
 		}
 	}
 	keys = normalizedUniqueKeys(keys)

@@ -545,6 +545,8 @@ func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *test
 					&engine.IndexDef{Indexes: []*plan.IndexDef{
 						{IndexName: "code", Parts: []string{"code"}, Unique: true},
 						{IndexName: "idx_parent_note", Parts: []string{"note"}},
+						{IndexName: "ivf_500", Parts: []string{"embedding"}, IndexAlgo: "ivfflat", IndexAlgoParams: `{"lists":"500","op_type":"vector_l2_ops"}`},
+						{IndexName: "ivf_2000", Parts: []string{"embedding"}, IndexAlgo: "ivfflat", IndexAlgoParams: `{"lists":"2000","op_type":"vector_l2_ops"}`},
 					}},
 				),
 			},
@@ -583,6 +585,7 @@ func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *test
 			row("id", encodedSQLType(t, types.T_int32.ToType()), "1", "1", "0", "", "p", "", "0"),
 			row("code", encodedSQLType(t, types.New(types.T_varchar, 20, 0)), "2", "1", "0", "", "", "", "1"),
 			row("note", encodedSQLType(t, types.New(types.T_varchar, 100, 0)), "3", "0", "1", encodedDefault(t, "'parent-default'", true), "", "parent note", "2"),
+			row("embedding", encodedSQLType(t, types.New(types.T_array_float32, 128, 0)), "4", "0", "0", "", "", "", "3"),
 		},
 	}
 	partitionMetadataView := &LogicalTableView{
@@ -606,6 +609,8 @@ func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *test
 	assert.Contains(t, ddl, "PRIMARY KEY (`id`)")
 	assert.Contains(t, ddl, "UNIQUE KEY `code`(`code`)")
 	assert.Contains(t, ddl, "KEY `idx_parent_note`(`note`)")
+	assert.Contains(t, ddl, "KEY `ivf_500` USING ivfflat(`embedding`) lists = 500  op_type 'vector_l2_ops'")
+	assert.Contains(t, ddl, "KEY `ivf_2000` USING ivfflat(`embedding`) lists = 2000  op_type 'vector_l2_ops'")
 	assert.Contains(t, ddl, "COMMENT='parent table comment'")
 	assert.Contains(t, ddl, "partition by key algorithm = 2 (`id`, `tenant_id`) partitions 4")
 	assert.NotContains(t, ddl, "`old`")
