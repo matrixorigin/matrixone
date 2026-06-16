@@ -201,6 +201,41 @@ func TestLogStateUpdateStores(t *testing.T) {
 	state.Update(hb3, tick3)
 }
 
+func TestLogStateUpdateTreatsNilAndEmptyNonVotingReplicasAsEqual(t *testing.T) {
+	state := LogState{
+		Shards: map[uint64]LogShardInfo{
+			1: {
+				ShardID:           1,
+				Replicas:          map[uint64]string{1: "log-a", 2: "log-b"},
+				NonVotingReplicas: map[uint64]string{},
+				Epoch:             2,
+				LeaderID:          1,
+				Term:              2,
+			},
+		},
+		Stores: map[string]LogStoreInfo{},
+	}
+
+	state.Update(LogStoreHeartbeat{
+		UUID:           "log-a",
+		RaftAddress:    "raft-a",
+		ServiceAddress: "addr-a",
+		GossipAddress:  "gossip-a",
+		Replicas: []LogReplicaInfo{{
+			LogShardInfo: LogShardInfo{
+				ShardID:  1,
+				Replicas: map[uint64]string{1: "log-a", 2: "log-b"},
+				Epoch:    2,
+				LeaderID: 1,
+				Term:     2,
+			},
+			ReplicaID: 1,
+		}},
+	}, 100)
+
+	assert.Equal(t, uint64(2), state.Shards[1].Epoch)
+}
+
 func TestLogString(t *testing.T) {
 	cases := []struct {
 		desc string

@@ -280,7 +280,7 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 			recorded.NonVotingReplicas = incoming.NonVotingReplicas
 		} else if incoming.Epoch == recorded.Epoch && incoming.Epoch > 0 {
 			if !reflect.DeepEqual(recorded.Replicas, incoming.Replicas) ||
-				!reflect.DeepEqual(recorded.NonVotingReplicas, incoming.NonVotingReplicas) {
+				!equalLogShardReplicaMap(recorded.NonVotingReplicas, incoming.NonVotingReplicas) {
 				panic(fmt.Sprintf("inconsistent replicas, recorded: %+v, incoming: %+v",
 					recorded, incoming))
 			}
@@ -293,6 +293,13 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 
 		s.Shards[incoming.ShardID] = recorded
 	}
+}
+
+func equalLogShardReplicaMap(left, right map[uint64]string) bool {
+	if len(left) == 0 && len(right) == 0 {
+		return true
+	}
+	return reflect.DeepEqual(left, right)
 }
 
 // LogString returns "ServiceType/ConfigChangeType UUID RepUuid:RepShardID:RepID InitialMembers".
