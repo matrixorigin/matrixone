@@ -36,6 +36,7 @@ func Check(
 	tnState pb.TNState,
 	logState pb.LogState,
 	currTick uint64,
+	repairs map[uint64]pb.LogShardRepairState,
 ) ([]*operator.Operator, bool) {
 	sysHealthy := true
 
@@ -46,7 +47,7 @@ func Check(
 	}
 
 	// check system healthy or not
-	expiredShards := listExpiredShards(logStores.expired, logStores.working, logState, cluster)
+	expiredShards := listExpiredShards(logStores.expired, logStores.working, logState, cluster, repairs)
 	for _, shard := range expiredShards {
 		// if one of log shards wasn't healthy, the entire system wasn't healthy.
 		if !shard.healthy() {
@@ -118,6 +119,7 @@ func listExpiredShards(
 	workingStores map[string]struct{},
 	logState pb.LogState,
 	cluster pb.ClusterInfo,
+	repairs map[uint64]pb.LogShardRepairState,
 ) logShardMap {
 	expired := newLogShardMap()
 
@@ -125,6 +127,9 @@ func listExpiredShards(
 	for id := range expiredStores {
 		expiredReplicas := logState.Stores[id].Replicas
 		for _, replica := range expiredReplicas {
+			if isBlockedByLogShardRepair(repairs, id, replica.ShardID) {
+				continue
+			}
 			expired.registerExpiredReplica(replica, cluster)
 		}
 	}
@@ -141,6 +146,21 @@ func listExpiredShards(
 	}
 
 	return expired
+}
+
+func isBlockedByLogShardRepair(
+	repairs map[uint64]pb.LogShardRepairState,
+	uuid string,
+	shardID uint64,
+) bool {
+	if len(repairs) == 0 {
+		return false
+	}
+	repair, ok := repairs[shardID]
+	if !ok {
+		return false
+	}
+	return repair.BlockedStores[uuid]
 }
 
 // getLogShardSize gets raft group size for the specified shard.

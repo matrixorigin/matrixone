@@ -15,16 +15,21 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	dragonboat "github.com/lni/dragonboat/v4"
 	"github.com/lni/dragonboat/v4/config"
 	"github.com/lni/dragonboat/v4/plugin/tan"
 	"github.com/lni/dragonboat/v4/tools"
@@ -32,9 +37,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 const repairReasonPrefix = "__mo_log_shard_repair__:"
+const logMetadataFilename = "mo-logservice.metadata"
 
 type repairPayload struct {
 	Op                     string              `json:"op"`
@@ -102,6 +109,7 @@ func usage() error {
   mo-logservice-repair hakeeper repair --addresses host:port[,host:port] --payload JSON
   mo-logservice-repair hakeeper unblock --addresses host:port[,host:port] --payload JSON
   mo-logservice-repair local import-snapshot --deployment-id ID --node-host-id ID --node-host-dir DIR --raft-address ADDR --replica-id ID --snapshot-dir DIR --members JSON
+  mo-logservice-repair local clean-replica --deployment-id ID --node-host-id ID --node-host-dir DIR --raft-address ADDR --gossip-address ADDR --shard-id ID --replica-id ID
 
 K8s/local plan/apply/verify commands are intentionally reserved for the next phase.`)
 }
@@ -127,6 +135,8 @@ func runLocal(args []string) error {
 		return fmt.Errorf("local %s is not implemented yet", args[0])
 	case "import-snapshot":
 		return runImportSnapshot(args[1:])
+	case "clean-replica":
+		return runCleanReplica(args[1:])
 	default:
 		return usage()
 	}
@@ -353,6 +363,176 @@ func importSnapshot(
 	return tools.ImportSnapshot(cfg, snapshotDir, members, replicaID)
 }
 
+func runCleanReplica(args []string) error {
+	fs := flag.NewFlagSet("local clean-replica", flag.ExitOnError)
+	var deploymentID uint64
+	var nodeHostID string
+	var nodeHostDir string
+	var raftAddress string
+	var listenAddress string
+	var gossipAddress string
+	var shardID uint64
+	var replicaID uint64
+	var rtt uint64
+
+	fs.Uint64Var(&deploymentID, "deployment-id", 0, "dragonboat deployment id")
+	fs.StringVar(&nodeHostID, "node-host-id", "", "dragonboat nodehost id")
+	fs.StringVar(&nodeHostDir, "node-host-dir", "", "dragonboat nodehost data dir")
+	fs.StringVar(&raftAddress, "raft-address", "", "raft service address")
+	fs.StringVar(&listenAddress, "listen-address", "", "raft listen address")
+	fs.StringVar(&gossipAddress, "gossip-address", "", "gossip address")
+	fs.Uint64Var(&shardID, "shard-id", 0, "shard id to clean")
+	fs.Uint64Var(&replicaID, "replica-id", 0, "replica id to clean")
+	fs.Uint64Var(&rtt, "rtt-ms", 200, "dragonboat rtt in milliseconds")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	shardIDSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "shard-id" {
+			shardIDSet = true
+		}
+	})
+	if !shardIDSet {
+		return fmt.Errorf("missing -shard-id")
+	}
+	if err := cleanReplica(deploymentID, nodeHostID, nodeHostDir, raftAddress, listenAddress, gossipAddress, shardID, replicaID, rtt); err != nil {
+		return fmt.Errorf("clean replica: %w", err)
+	}
+	return nil
+}
+
+func cleanReplica(
+	deploymentID uint64,
+	nodeHostID string,
+	nodeHostDir string,
+	raftAddress string,
+	listenAddress string,
+	gossipAddress string,
+	shardID uint64,
+	replicaID uint64,
+	rtt uint64,
+) error {
+	if deploymentID == 0 {
+		return fmt.Errorf("missing -deployment-id")
+	}
+	if nodeHostID == "" {
+		return fmt.Errorf("missing -node-host-id")
+	}
+	if nodeHostDir == "" {
+		return fmt.Errorf("missing -node-host-dir")
+	}
+	if raftAddress == "" {
+		return fmt.Errorf("missing -raft-address")
+	}
+	if listenAddress == "" {
+		listenAddress = raftAddress
+	}
+	if gossipAddress == "" {
+		return fmt.Errorf("missing -gossip-address")
+	}
+	if replicaID == 0 {
+		return fmt.Errorf("missing -replica-id")
+	}
+	metadataPath := filepath.Join(nodeHostDir, logMetadataFilename)
+	md, err := readLogMetadata(metadataPath)
+	if err != nil {
+		return err
+	}
+	changed := false
+	shards := md.Shards[:0]
+	for _, rec := range md.Shards {
+		if rec.ShardID == shardID && rec.ReplicaID == replicaID {
+			changed = true
+			continue
+		}
+		shards = append(shards, rec)
+	}
+	md.Shards = shards
+	if changed {
+		if err := writeLogMetadata(metadataPath, md); err != nil {
+			return err
+		}
+	}
+	logdb := config.GetTinyMemLogDBConfig()
+	cfg := config.NodeHostConfig{
+		DeploymentID:        deploymentID,
+		NodeHostID:          nodeHostID,
+		NodeHostDir:         nodeHostDir,
+		RTTMillisecond:      rtt,
+		AddressByNodeHostID: true,
+		RaftAddress:         raftAddress,
+		ListenAddress:       listenAddress,
+		Expert: config.ExpertConfig{
+			LogDBFactory: tan.Factory,
+			LogDB:        logdb,
+		},
+		Gossip: config.GossipConfig{
+			BindAddress:      gossipAddress,
+			AdvertiseAddress: gossipAddress,
+			Seed:             []string{gossipAddress},
+			CanUseSelfAsSeed: true,
+		},
+	}
+	nh, err := dragonboat.NewNodeHost(cfg)
+	if err != nil {
+		return err
+	}
+	removeErr := nh.RemoveData(shardID, replicaID)
+	nh.Close()
+	if removeErr != nil &&
+		removeErr != dragonboat.ErrShardNotFound {
+		return removeErr
+	}
+	removedResiduals, err := removeReplicaResiduals(nodeHostDir, deploymentID, shardID, replicaID)
+	if err != nil {
+		return err
+	}
+	return printJSON(map[string]any{
+		"nodeHostDir":       nodeHostDir,
+		"shardID":           shardID,
+		"replicaID":         replicaID,
+		"metadataUpdated":   changed,
+		"metadataRemaining": md.Shards,
+		"removedResiduals":  removedResiduals,
+	})
+}
+
+func removeReplicaResiduals(
+	nodeHostDir string,
+	deploymentID uint64,
+	shardID uint64,
+	replicaID uint64,
+) ([]string, error) {
+	deploymentDir := fmt.Sprintf("%020d", deploymentID)
+	roots, err := filepath.Glob(filepath.Join(nodeHostDir, "*", deploymentDir))
+	if err != nil {
+		return nil, err
+	}
+	removed := make([]string, 0)
+	for _, root := range roots {
+		candidates := []string{
+			filepath.Join(root, fmt.Sprintf("snapshot-part-%d", shardID), fmt.Sprintf("snapshot-%d-%d", shardID, replicaID)),
+			filepath.Join(root, "exported-snapshot", fmt.Sprintf("shard-%d", shardID), fmt.Sprintf("replica-%d", replicaID)),
+			filepath.Join(root, "tandb", fmt.Sprintf("node-%d-%d", shardID, replicaID)),
+			filepath.Join(root, "tandb", "bootstrap", fmt.Sprintf("BOOTSTRAP-%d-%d", shardID, replicaID)),
+		}
+		for _, candidate := range candidates {
+			if _, err := os.Stat(candidate); err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return nil, err
+			}
+			if err := os.RemoveAll(candidate); err != nil {
+				return nil, err
+			}
+			removed = append(removed, candidate)
+		}
+	}
+	return removed, nil
+}
+
 type rpcRequest struct {
 	logpb.Request
 	payload []byte
@@ -517,6 +697,64 @@ func splitAddresses(s string) []string {
 		}
 	}
 	return out
+}
+
+func readLogMetadata(path string) (metadata.LogStore, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return metadata.LogStore{}, err
+	}
+	if len(data) < 8 {
+		return metadata.LogStore{}, fmt.Errorf("%s is too small", path)
+	}
+	hash := data[:8]
+	payload := data[8:]
+	if expected := metadataHash(payload); !bytes.Equal(hash, expected) {
+		return metadata.LogStore{}, fmt.Errorf("%s has invalid checksum", path)
+	}
+	var md metadata.LogStore
+	if err := md.Unmarshal(payload); err != nil {
+		return metadata.LogStore{}, err
+	}
+	return md, nil
+}
+
+func writeLogMetadata(path string, md metadata.LogStore) error {
+	payload, err := md.Marshal()
+	if err != nil {
+		return err
+	}
+	data := append(metadataHash(payload), payload...)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0640); err != nil {
+		return err
+	}
+	if err := syncFile(tmp); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func metadataHash(data []byte) []byte {
+	hash := md5.New()
+	if _, err := hash.Write(data); err != nil {
+		panic(err)
+	}
+	return hash.Sum(nil)[8:]
+}
+
+func syncFile(path string) error {
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	return file.Sync()
 }
 
 func encodeReason(reason string, cleanup map[string][]uint64) string {

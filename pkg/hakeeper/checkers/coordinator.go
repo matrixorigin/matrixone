@@ -77,13 +77,18 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, stand
 
 	c.OperatorController.RemoveFinishedOperator(logState, tnState, cnState, proxyState)
 
+	if c.teardown && len(state.LogShardRepairs) > 0 {
+		c.teardown = false
+		c.teardownOps = nil
+	}
+
 	// if we've discovered unhealthy already, no need to keep alive anymore.
 	if c.teardown {
 		return c.OperatorController.Dispatch(c.teardownOps, logState, tnState, cnState, proxyState)
 	}
 
 	// check whether system health or not.
-	if operators, health := syshealth.Check(c.cfg, cluster, tnState, logState, currentTick); !health {
+	if operators, health := syshealth.Check(c.cfg, cluster, tnState, logState, currentTick, state.LogShardRepairs); !health {
 		c.teardown = true
 		c.teardownOps = operators
 		return c.OperatorController.Dispatch(c.teardownOps, logState, tnState, cnState, proxyState)

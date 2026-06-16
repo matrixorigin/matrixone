@@ -815,7 +815,42 @@ func (s *stateMachine) handleRepairLogShardUpdate(cmd []byte) sm.Result {
 	state.BlockedStores = blockedStores
 	state.Reason = repair.Reason
 	s.state.LogShardRepairs[shardID] = state
+	s.clearLogShardRepairCommands(repair.Shard, blockedStores)
 	return sm.Result{}
+}
+
+func (s *stateMachine) clearLogShardRepairCommands(
+	shard pb.LogShardInfo,
+	blockedStores map[string]bool,
+) {
+	logStores := make(map[string]struct{})
+	for _, uuid := range shard.Replicas {
+		logStores[uuid] = struct{}{}
+	}
+	for _, uuid := range shard.NonVotingReplicas {
+		logStores[uuid] = struct{}{}
+	}
+	for uuid := range blockedStores {
+		logStores[uuid] = struct{}{}
+	}
+	for uuid := range logStores {
+		delete(s.state.ScheduleCommands, uuid)
+	}
+	for uuid, batch := range s.state.ScheduleCommands {
+		commands := batch.Commands[:0]
+		for _, command := range batch.Commands {
+			if command.ShutdownStore != nil {
+				continue
+			}
+			commands = append(commands, command)
+		}
+		if len(commands) == 0 {
+			delete(s.state.ScheduleCommands, uuid)
+			continue
+		}
+		batch.Commands = commands
+		s.state.ScheduleCommands[uuid] = batch
+	}
 }
 
 func (s *stateMachine) handleUnblockLogShardStoresUpdate(cmd []byte) sm.Result {
