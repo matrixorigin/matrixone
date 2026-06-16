@@ -9072,13 +9072,15 @@ create_table_stmt:
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name to_account_opt
     {
-	t := tree.NewCloneTable()
-	t.CreateTable.Table = *$5
-	t.CreateTable.LikeTableName = *$7
-	t.CreateTable.IsAsLike = true
-	t.SrcTable = *$7
-	t.ToAccountOpt = $8
-	$$ = t
+        t := tree.NewCloneTable()
+        t.CreateTable.Temporary = $2
+        t.CreateTable.IfNotExists = $4
+        t.CreateTable.Table = *$5
+        t.CreateTable.LikeTableName = *$7
+        t.CreateTable.IsAsLike = true
+        t.SrcTable = *$7
+        t.ToAccountOpt = $8
+        $$ = t
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name FROM STRING ident PUBLICATION ident sync_interval_opt
     {

@@ -261,6 +261,21 @@ func (mr *MockLockServiceMockRecorder) GetLockTableBind(group, tableID any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLockTableBind", reflect.TypeOf((*MockLockService)(nil).GetLockTableBind), group, tableID)
 }
 
+// GetLatestLockTableBind mocks base method.
+func (m *MockLockService) GetLatestLockTableBind(bind lock.LockTable) (lock.LockTable, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLatestLockTableBind", bind)
+	ret0, _ := ret[0].(lock.LockTable)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetLatestLockTableBind indicates an expected call of GetLatestLockTableBind.
+func (mr *MockLockServiceMockRecorder) GetLatestLockTableBind(bind any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLatestLockTableBind", reflect.TypeOf((*MockLockService)(nil).GetLatestLockTableBind), bind)
+}
+
 // GetServiceID mocks base method.
 func (m *MockLockService) GetServiceID() string {
 	m.ctrl.T.Helper()

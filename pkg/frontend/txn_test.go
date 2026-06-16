@@ -787,9 +787,11 @@ const (
 )
 
 type testTxnOp struct {
-	meta txn.TxnMeta
-	wp   *testWorkspace
-	mod  int
+	meta                 txn.TxnMeta
+	wp                   *testWorkspace
+	mod                  int
+	checkLockTableBinds  func(context.Context) error
+	checkLockTableChecks int
 }
 
 func newTestTxnOp() *testTxnOp {
@@ -897,6 +899,14 @@ func (txnop *testTxnOp) AddLockTable(locktable lock.LockTable) error {
 func (txnop *testTxnOp) HasLockTable(table uint64) bool {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (txnop *testTxnOp) CheckLockTableBinds(ctx context.Context) error {
+	txnop.checkLockTableChecks++
+	if txnop.checkLockTableBinds != nil {
+		return txnop.checkLockTableBinds(ctx)
+	}
+	return nil
 }
 
 func (txnop *testTxnOp) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
