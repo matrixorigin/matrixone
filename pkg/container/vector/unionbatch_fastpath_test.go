@@ -265,3 +265,62 @@ func TestUnionBatchNullFastPath(t *testing.T) {
 	v.Free(mp)
 	ref.Free(mp)
 }
+
+// TestUnionBatchFastPathStaleBitmapBits is the regression guard for the fast-path
+// bug where w carried nsp/gsp bits at index >= w.length — a normal reused state,
+// since SetLength shrinks length without clearing the bitmaps. The buggy code
+// propagated bits via Foreach (which walks every set bit), so a stale nsp bit
+// panicked on the header clear (vCol[oldLen+i] out of range) and a stale gsp bit
+// leaked a phantom grouping bit. The fix bounds propagation to [0,cnt), matching
+// the per-row UnionOne path which only consults [0,cnt). Pre-fix this test panics
+// at UnionBatch; post-fix it matches UnionOne with no phantom bits.
+func TestUnionBatchFastPathStaleBitmapBits(t *testing.T) {
+	mp := mpool.MustNewZero()
+	build := func() *Vector {
+		w := NewVec(types.T_varchar.ToType())
+		for i := 0; i < 20; i++ {
+			require.NoError(t, AppendBytes(w, []byte(fmt.Sprintf("r%d", i)), false, mp))
+		}
+		// in-range bits (must propagate) plus stale bits >= the shrunk length
+		// (must be ignored, exactly as the per-row path ignores them).
+		nulls.Add(&w.nsp, 3, 15, 18)
+		nulls.Add(&w.gsp, 5, 12, 17)
+		w.SetLength(10) // length 10; bits 12,15,17,18 are now stale (>= length)
+		return w
+	}
+	w := build()
+	require.Equal(t, 10, w.Length())
+
+	// fast path into a non-empty target (baseOff != 0 so the rebase runs too).
+	v := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(v, []byte("seed"), false, mp))
+	require.NoError(t, v.UnionBatch(w, 0, w.Length(), nil, mp)) // panics pre-fix
+
+	// reference: per-row UnionOne, which only consults [0,cnt).
+	ref := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(ref, []byte("seed"), false, mp))
+	for i := 0; i < w.Length(); i++ {
+		require.NoError(t, ref.UnionOne(w, int64(i), mp))
+	}
+
+	require.Equal(t, ref.Length(), v.Length())
+	for i := 0; i < v.Length(); i++ {
+		rn := ref.GetNulls().Contains(uint64(i))
+		require.Equalf(t, rn, v.GetNulls().Contains(uint64(i)), "nsp row %d", i)
+		require.Equalf(t, ref.GetGrouping().Contains(uint64(i)), v.GetGrouping().Contains(uint64(i)), "gsp row %d", i)
+		if !rn {
+			require.Equalf(t, string(ref.GetBytesAt(i)), string(v.GetBytesAt(i)), "value row %d", i)
+		}
+	}
+
+	// stale source bits must not leak as phantom bits past the appended range
+	// (oldLen == 1 for the single seed row).
+	for _, stale := range []uint64{12, 15, 17, 18} {
+		require.Falsef(t, v.GetNulls().Contains(1+stale), "phantom nsp bit at %d", 1+stale)
+		require.Falsef(t, v.GetGrouping().Contains(1+stale), "phantom gsp bit at %d", 1+stale)
+	}
+
+	w.Free(mp)
+	v.Free(mp)
+	ref.Free(mp)
+}

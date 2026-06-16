@@ -2831,20 +2831,31 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				}
 			}
 			// propagate grouping bits (value is still real for these rows).
+			// Bound to [0,cnt): Foreach walks every set bit in the underlying
+			// bitmap, but w may carry stale bits at index >= w.length (SetLength
+			// shrinks length without clearing nsp/gsp, and vectors are reused).
+			// The per-row path only consults [0,cnt) via Contains, so we must skip
+			// stale bits here too — otherwise they pollute v.gsp / index past vCol.
 			if !w.gsp.EmptyByFlag() {
-				base := uint64(oldLen)
+				base, ucnt := uint64(oldLen), uint64(cnt)
 				w.gsp.Foreach(func(i uint64) bool {
-					nulls.Add(&v.gsp, base+i)
+					if i < ucnt {
+						nulls.Add(&v.gsp, base+i)
+					}
 					return true
 				})
 			}
 			// propagate null bits and clear those (never-read) headers so a copied
 			// big-header offset can't linger as a dangling reference into v.area.
+			// Same [0,cnt) bound as gsp above: a stale nsp bit at i >= cnt would
+			// index vCol (len oldLen+cnt) out of range and panic.
 			if !w.nsp.EmptyByFlag() {
-				base := uint64(oldLen)
+				base, ucnt := uint64(oldLen), uint64(cnt)
 				w.nsp.Foreach(func(i uint64) bool {
-					nulls.Add(&v.nsp, base+i)
-					vCol[oldLen+int(i)] = types.Varlena{}
+					if i < ucnt {
+						nulls.Add(&v.nsp, base+i)
+						vCol[oldLen+int(i)] = types.Varlena{}
+					}
 					return true
 				})
 			}
