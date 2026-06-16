@@ -22,6 +22,8 @@ INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score
 INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id03','[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]','it stores high dimensional vectors','what is vector db?','file02',0.0,0);
 INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id04','[-0.5,0.3,-0.4,0.6,-0.2,0.1,-0.3,0.7]','mysql is a relational database','what is mysql?','file02',0.0,0);
 INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id05','[0.1,-0.8,0.2,-0.5,0.3,-0.4,0.6,-0.1]','an ai assistant by openai','what is chatgpt?','file01',0.0,0);
+-- DESC requests the farthest rows. ANN rewrite is disabled for this shape so the
+-- query falls back to the original exact path, matching mode=force semantics.
 SELECT mini_embed_data.id, mini_embed_data.content, mini_embed_data.description, mini_embed_data.embedding, mini_embed_data.file_id, mini_embed_data.disabled FROM mini_embed_data WHERE mini_embed_data.file_id IN ('file01','file02') AND mini_embed_data.embedding IS NOT NULL AND (mini_embed_data.disabled IS NULL OR mini_embed_data.disabled = false) ORDER BY cosine_distance(mini_embed_data.embedding,"[0.12,0.55,0.33,0.88,0.22,0.44,0.66,0.11]") DESC LIMIT 10 by rank with option 'mode=pre';
 SELECT mini_embed_data.id, mini_embed_data.content, mini_embed_data.description, mini_embed_data.embedding, mini_embed_data.file_id, mini_embed_data.disabled FROM mini_embed_data WHERE mini_embed_data.file_id IN ('file01','file02') AND mini_embed_data.embedding IS NOT NULL AND (mini_embed_data.disabled IS NULL OR mini_embed_data.disabled = false) ORDER BY cosine_distance(mini_embed_data.embedding,"[0.12,0.55,0.33,0.88,0.22,0.44,0.66,0.11]") DESC LIMIT 10 by rank with option 'mode=post';
 SELECT mini_embed_data.id, mini_embed_data.content, mini_embed_data.description, mini_embed_data.embedding, mini_embed_data.file_id, mini_embed_data.disabled FROM mini_embed_data WHERE mini_embed_data.file_id IN ('file01','file02') AND mini_embed_data.embedding IS NOT NULL AND (mini_embed_data.disabled IS NULL OR mini_embed_data.disabled = false) ORDER BY cosine_distance(mini_embed_data.embedding,"[0.12,0.55,0.33,0.88,0.22,0.44,0.66,0.11]") DESC LIMIT 10 by rank with option 'mode=force';
@@ -57,7 +59,7 @@ SELECT id, text FROM mini_vector_data ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0
 -- Test Case: ASC ordering with mode=pre
 WITH q AS (SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist FROM mini_vector_data) SELECT * FROM q ORDER BY dist ASC LIMIT 3 by rank with option 'mode=pre';
 
--- Test Case: DESC ordering with cosine_distance and mode=pre
+-- Test Case: DESC ordering with cosine_distance and mode=pre should fall back to exact search
 WITH q AS (SELECT id, text, cosine_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist FROM mini_vector_data) SELECT * FROM q ORDER BY dist DESC LIMIT 3 by rank with option 'mode=pre';
 
 -- Test Case: LIMIT 1 (edge case for smallest limit)
@@ -364,7 +366,7 @@ UNION ALL
 ORDER BY id
 LIMIT 3;
 
--- Test Case: UNION with mode=pre and DESC ordering
+-- Test Case: UNION with mode=pre and DESC ordering should fall back to exact search
 (SELECT id, text, l2_distance(vec, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]') AS dist 
  FROM mini_vector_data 
  WHERE id LIKE 'id1%'

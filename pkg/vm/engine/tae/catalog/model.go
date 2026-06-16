@@ -117,6 +117,12 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *Schema, err erro
 					schema.Createsql = property.Value
 				case pkgcatalog.PropSchemaExtra:
 					schema.Extra = api.MustUnmarshalTblExtra([]byte(property.Value))
+				case pkgcatalog.PropFromPublication:
+					// Check if table is created by publication
+					// Property value should be "true" (case-insensitive)
+					if strings.ToLower(property.Value) == "true" {
+						schema.FromPublication = true
+					}
 				default:
 				}
 			}
@@ -136,6 +142,10 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *Schema, err erro
 		default:
 			// We will not deal with other cases for the time being
 		}
+	}
+	// Read FromPublication from Extra if set (stored via extraInfo in mo_tables)
+	if schema.Extra != nil && schema.Extra.FromPublication {
+		schema.FromPublication = true
 	}
 	if err = schema.Finalize(false); err != nil {
 		return
@@ -190,6 +200,12 @@ func SchemaToDefs(schema *Schema) (defs []engine.TableDef, err error) {
 		pro.Properties = append(pro.Properties, engine.Property{
 			Key:   pkgcatalog.SystemRelAttr_CreateSQL,
 			Value: schema.Createsql,
+		})
+	}
+	if schema.FromPublication {
+		pro.Properties = append(pro.Properties, engine.Property{
+			Key:   pkgcatalog.PropFromPublication,
+			Value: "true",
 		})
 	}
 	pro.Properties = append(pro.Properties, engine.Property{

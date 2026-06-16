@@ -359,18 +359,123 @@ func TestHAKeeperTruncation2(t *testing.T) {
 	runServiceTest(t, true, true, fn)
 }
 
+// TestTruncationPurgeWhenFull covers the escape valve in
+// processShardTruncateLog for issue #24315: once the exported-snapshot
+// quota is full and the log-shard state machine's TruncatedLsn has
+// advanced past the oldest items, those items must be purged from disk
+// so that the loop can make progress on the next tick. Without this
+// behavior a transient failure in the import path causes the WAL to
+// grow without bound.
+
+// TestTruncationDropNewestOnTimeout covers the escape valve that runs
+// when getTruncatedLsn times out while the exported-snapshot quota is
+// full. Without this path the loop wedges permanently: no quota ->
+// no export -> no import -> no WAL compaction, while the replica keeps
+// receiving AppendEntries. See issue #24315.
+//
+// Also asserts the "drop newest, preserve oldest" policy: the oldest
+// tracked item is what EvalImportSnapshot will pick once SyncRead
+// recovers, so we preferentially delete newer speculative exports.
+func TestTruncationDropNewestOnTimeout(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		defer cancel()
+
+		tnID := uint64(100)
+		req := pb.Request{
+			Method: pb.CONNECT_RO,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				TNID:    tnID,
+			},
+		}
+		resp := s.handleConnect(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		for i := 0; i < 10; i++ {
+			data := make([]byte, 8)
+			cmd := getTestAppendCmd(tnID, data)
+			req = pb.Request{
+				Method:     pb.APPEND,
+				LogRequest: pb.LogRequest{ShardID: 1},
+			}
+			resp = s.handleAppend(ctx, req, cmd)
+			assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		}
+
+		// Shrink the quota so we can fill it with two exports.
+		s.store.cfg.MaxExportedSnapshot = 2
+
+		// Export twice to fill the quota at distinct indices.
+		req = pb.Request{
+			Method: pb.TRUNCATE,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				Lsn:     4,
+			},
+		}
+		resp = s.handleTruncate(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NoError(t, s.store.processShardTruncateLog(ctx, 1))
+		assert.Equal(t, 1, s.store.snapshotMgr.Count(1, 1))
+		oldest := s.store.snapshotMgr.snapshots[nodeID{1, 1}].first().index
+
+		req.LogRequest.Lsn = 6
+		resp = s.handleTruncate(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NoError(t, s.store.processShardTruncateLog(ctx, 1))
+		assert.Equal(t, 2, s.store.snapshotMgr.Count(1, 1))
+		// shardSnapshotInfo.snapshotIndex should be tracking the newest
+		// exported snapshot after the second tick.
+		snapshotIndexBefore := s.store.shardSnapshotInfo.getSnapshotIndex(1)
+		newestBefore := s.store.snapshotMgr.NewestIndex(1, 1)
+		assert.Equal(t, newestBefore, snapshotIndexBefore)
+
+		// Directly exercise the timeout-path helper. This is what the
+		// production loop calls when getTruncatedLsn returns ErrTimeout.
+		s.store.dropNewestOnTimeout(1, 1)
+		assert.Equal(t, 1, s.store.snapshotMgr.Count(1, 1),
+			"dropNewestOnTimeout must free exactly one quota slot")
+		// The oldest item -- the one EvalImportSnapshot would have
+		// returned -- must survive.
+		assert.Equal(t, oldest,
+			s.store.snapshotMgr.snapshots[nodeID{1, 1}].first().index,
+			"dropNewestOnTimeout must preserve the oldest tracked item")
+		// snapshotIndex must be realigned downward to the now-newest
+		// remaining item so shouldDoExport does not suppress a needed
+		// re-export on a quiescent shard. See issue #24315.
+		assert.Equal(t, uint64(oldest),
+			s.store.shardSnapshotInfo.getSnapshotIndex(1),
+			"dropNewestOnTimeout must realign snapshotIndex to the "+
+				"new newest item")
+
+		// Second invocation must be a no-op: the sole remaining item
+		// is the last importable candidate and must not be dropped.
+		// Under MaxExportedSnapshot=1 this rule means the escape valve
+		// is fully disabled; see issue #24315.
+		s.store.dropNewestOnTimeout(1, 1)
+		assert.Equal(t, 1, s.store.snapshotMgr.Count(1, 1),
+			"dropNewestOnTimeout must preserve the sole importable candidate")
+
+		// Safe when there is no (shard, replica) entry.
+		s.store.dropNewestOnTimeout(999, 999)
+	}
+	runServiceTest(t, false, true, fn)
+}
+
 func TestShouldDoImport(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	t.Run("dir is null, do no import", func(t *testing.T) {
 		st := &store{}
-		assert.False(t, st.shouldDoImport(ctx, 1, 0, ""))
+		st.runtime = runtime.DefaultRuntime()
+		assert.False(t, st.shouldDoImport(ctx, 1, 0, 0, ""))
 	})
 
 	t.Run("no hakeeper, failed", func(t *testing.T) {
 		fn := func(t *testing.T, s *Service) {
-			assert.False(t, s.store.shouldDoImport(ctx, 1, 0, "test-dir"))
+			assert.False(t, s.store.shouldDoImport(ctx, 1, 0, 0, "test-dir"))
 		}
 		runServiceTest(t, false, true, fn)
 	})
@@ -391,7 +496,7 @@ func TestShouldDoImport(t *testing.T) {
 			_, err := s.store.addTNStoreHeartbeat(ctx, hb)
 			assert.NoError(t, err)
 
-			assert.False(t, s.store.shouldDoImport(ctx, 1, 0, "test-dir"))
+			assert.False(t, s.store.shouldDoImport(ctx, 1, 0, 0, "test-dir"))
 		}
 		runServiceTest(t, false, true, fn)
 	})
@@ -412,7 +517,7 @@ func TestShouldDoImport(t *testing.T) {
 			_, err := s.store.addTNStoreHeartbeat(ctx, hb)
 			assert.NoError(t, err)
 
-			assert.False(t, s.store.shouldDoImport(ctx, 1, 100, "test-dir"))
+			assert.False(t, s.store.shouldDoImport(ctx, 1, 100, 100, "test-dir"))
 		}
 		runServiceTest(t, false, true, fn)
 	})
@@ -440,7 +545,7 @@ func TestShouldDoImport(t *testing.T) {
 			_, err = s.store.addTNStoreHeartbeat(ctx, hb)
 			assert.NoError(t, err)
 
-			assert.False(t, s.store.shouldDoImport(ctx, 1, 100, "test-dir"))
+			assert.False(t, s.store.shouldDoImport(ctx, 1, 100, 100, "test-dir"))
 		}
 		runServiceTest(t, false, true, fn)
 	})
@@ -461,7 +566,7 @@ func TestShouldDoImport(t *testing.T) {
 			_, err := s.store.addTNStoreHeartbeat(ctx, hb)
 			assert.NoError(t, err)
 
-			assert.True(t, s.store.shouldDoImport(ctx, 1, 10, "test-dir"))
+			assert.True(t, s.store.shouldDoImport(ctx, 1, 10, 10, "test-dir"))
 		}
 		runServiceTest(t, false, true, fn)
 	})

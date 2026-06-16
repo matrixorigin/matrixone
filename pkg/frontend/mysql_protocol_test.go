@@ -1146,6 +1146,32 @@ func makeMysqlStringResultSet() *MysqlResultSet {
 	return rs
 }
 
+func makeMysqlGeometryResultSet() *MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Geometry"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_GEOMETRY)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+
+	rs.AddColumn(mysqlCol)
+
+	var cases = []string{"POINT(1 1)", "POINT(2 2)", "LINESTRING(0 0,1 1)"}
+	for _, v := range cases {
+		var data = make([]interface{}, 1)
+		data[0] = []byte(v)
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
 func makeMysqlFloatResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -1693,6 +1719,10 @@ func TestMysqlResultSet(t *testing.T) {
 			mrs: makeMysqlStringResultSet(),
 		},
 		{
+			sql: "select geometry",
+			mrs: makeMysqlGeometryResultSet(),
+		},
+		{
 			sql: "select date",
 			mrs: makeMysqlDateResultSet(),
 		},
@@ -2001,7 +2031,7 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 							require.NoError(t, err)
 							data = strconv.AppendInt(data, value, 10)
 						}
-					case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING:
+					case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_GEOMETRY:
 						value, err := mrs.GetString(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
 						data = []byte(value)
@@ -3882,6 +3912,16 @@ func makeKases() []kase {
 					vecData = append(vecData, string(mrs.Data[i][colIdx].([]uint8)))
 				}
 				bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_char.ToType(), mp, false, nil, vecData)
+			case defines.MYSQL_TYPE_GEOMETRY:
+				vec := vector.NewVec(types.T_geometry.ToType())
+				vecData := make([][]byte, 0, len(mrs.Data))
+				for i := 0; i < len(mrs.Data); i++ {
+					vecData = append(vecData, mrs.Data[i][colIdx].([]byte))
+				}
+				if err := vector.AppendBytesList(vec, vecData, nil, mp); err != nil {
+					panic(err)
+				}
+				bat.Vecs[colIdx] = vec
 			case defines.MYSQL_TYPE_DATE:
 				vecData := make([]string, 0)
 				for i := 0; i < len(mrs.Data); i++ {
@@ -4129,7 +4169,7 @@ func Test_appendResultSet4(t *testing.T) {
 						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
 					})
 					defer bhStub2.Reset()
-				case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+				case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_GEOMETRY:
 					bhStub := gostub.Stub(&GetBytesBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) ([]byte, error) {
 						return nil, moerr.NewInternalError(context.TODO(), "invalid []byte slice")
 					})
@@ -4328,7 +4368,7 @@ func Test_appendResultSet5(t *testing.T) {
 						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
 					})
 					defer bhStub2.Reset()
-				case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+				case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_GEOMETRY:
 					bhStub := gostub.Stub(&GetBytesBased, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) ([]byte, error) {
 						return nil, moerr.NewInternalError(context.TODO(), "invalid []byte slice")
 					})

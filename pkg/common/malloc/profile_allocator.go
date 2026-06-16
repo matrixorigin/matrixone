@@ -42,25 +42,25 @@ func (h *HeapSampleValues) Init() {
 }
 
 func (h *HeapSampleValues) DefaultSampleType() string {
-	return "inuse_bytes"
+	return "inuse_space"
 }
 
 func (h *HeapSampleValues) SampleTypes() []*profile.ValueType {
 	return []*profile.ValueType{
 		{
-			Type: "allocated_objects",
-			Unit: "object",
+			Type: "alloc_objects",
+			Unit: "count",
 		},
 		{
-			Type: "allocated_bytes",
+			Type: "alloc_space",
 			Unit: "bytes",
 		},
 		{
 			Type: "inuse_objects",
-			Unit: "object",
+			Unit: "count",
 		},
 		{
-			Type: "inuse_bytes",
+			Type: "inuse_space",
 			Unit: "bytes",
 		},
 	}

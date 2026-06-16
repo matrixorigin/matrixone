@@ -117,13 +117,18 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 	if entry.isTombstone {
 		return nil
 	}
+	type transferPageStatus struct {
+		page      *model.TransferHashPage
+		persisted bool
+	}
 	k := 0
-	pagesToSet := make([][]*model.TransferHashPage, 0, len(entry.droppedObjs))
+	pagesToSet := make([]transferPageStatus, 0, len(entry.droppedObjs))
 	bts := time.Now().Add(time.Hour)
 	createdObjIDs := make([]*objectio.ObjectId, 0, len(entry.createdObjs))
 	for _, obj := range entry.createdObjs {
 		createdObjIDs = append(createdObjIDs, obj.ID())
 	}
+	writeDisabled := false
 	for _, obj := range entry.droppedObjs {
 		ioVector := model.InitTransferPageIO()
 		pages := make([]*model.TransferHashPage, 0, obj.BlockCnt())
@@ -155,26 +160,42 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 		}
 
 		start = time.Now()
-		transferFS, err := model.GetTransferFS(entry.rt.TmpFS)
-		if err != nil {
-			return err
+		persisted := false
+		if !writeDisabled {
+			transferFS, err := model.GetTransferFS(entry.rt.TmpFS)
+			if err != nil {
+				return err
+			}
+			if writeErr := model.WriteTransferPage(ctx, transferFS, pages, *ioVector, marshalBufs); writeErr != nil {
+				writeDisabled = true
+				logutil.Warnf("[MergeObjects] persist transfer page failed (page count %d), keeping in-memory pages for remaining objects: %v",
+					len(pages), writeErr)
+			} else {
+				persisted = true
+			}
+		} else {
+			model.ReleaseMarshalBufs(marshalBufs)
 		}
-		model.WriteTransferPage(ctx, transferFS, pages, *ioVector, marshalBufs)
-		pagesToSet = append(pagesToSet, pages)
+		for _, page := range pages {
+			pagesToSet = append(pagesToSet, transferPageStatus{
+				page:      page,
+				persisted: persisted,
+			})
+		}
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
 	}
 
 	now := time.Now()
-	for _, pages := range pagesToSet {
-		for _, page := range pages {
-			if page.BornTS() != bts {
-				page.SetBornTS(now.Add(time.Minute))
-			} else {
-				page.SetBornTS(now)
-			}
-			entry.rt.TransferTable.AddPage(page)
+	for _, status := range pagesToSet {
+		if status.persisted {
+			status.page.SetBornTS(now)
+		} else {
+			// Extend bornTS so in-memory hashmap survives the full diskTTL
+			// window instead of being evicted after the short ttl (5s).
+			status.page.SetBornTS(now.Add(model.GetDiskTTL() - model.GetTTL()))
 		}
+		entry.rt.TransferTable.AddPage(status.page)
 	}
 
 	if k != entry.transferTable.Len() {

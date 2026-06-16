@@ -50,6 +50,18 @@ type testWorkspace struct {
 
 func (txn *testWorkspace) SetCloneTxn(snapshot int64) {}
 
+func (txn *testWorkspace) SetCCPRTxn() {}
+
+func (txn *testWorkspace) IsCCPRTxn() bool { return false }
+
+func (txn *testWorkspace) SetCCPRTaskID(taskID string) {}
+
+func (txn *testWorkspace) GetCCPRTaskID() string { return "" }
+
+func (txn *testWorkspace) SetSyncProtectionJobID(jobID string) {}
+
+func (txn *testWorkspace) GetSyncProtectionJobID() string { return "" }
+
 func (txn *testWorkspace) Readonly() bool {
 	panic("implement me")
 }
@@ -775,9 +787,11 @@ const (
 )
 
 type testTxnOp struct {
-	meta txn.TxnMeta
-	wp   *testWorkspace
-	mod  int
+	meta                 txn.TxnMeta
+	wp                   *testWorkspace
+	mod                  int
+	checkLockTableBinds  func(context.Context) error
+	checkLockTableChecks int
 }
 
 func newTestTxnOp() *testTxnOp {
@@ -826,6 +840,11 @@ func (txnop *testTxnOp) UpdateSnapshot(ctx context.Context, ts timestamp.Timesta
 }
 
 func (txnop *testTxnOp) SnapshotTS() timestamp.Timestamp {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (txnop *testTxnOp) SetSnapshotTS(ts timestamp.Timestamp) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -880,6 +899,14 @@ func (txnop *testTxnOp) AddLockTable(locktable lock.LockTable) error {
 func (txnop *testTxnOp) HasLockTable(table uint64) bool {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (txnop *testTxnOp) CheckLockTableBinds(ctx context.Context) error {
+	txnop.checkLockTableChecks++
+	if txnop.checkLockTableBinds != nil {
+		return txnop.checkLockTableBinds(ctx)
+	}
+	return nil
 }
 
 func (txnop *testTxnOp) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {

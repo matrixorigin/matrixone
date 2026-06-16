@@ -17,6 +17,7 @@ package function
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -99,7 +100,7 @@ func Test_Decimal128ScaleOverflow(t *testing.T) {
 	require.NoError(t, err)
 
 	rs := make([]types.Decimal128, 1)
-	err = decimal128ScaleArray([]types.Decimal128{d128}, rs, 1, 19)
+	err = d128ScaleIntoRs([]types.Decimal128{d128}, rs, 1, 19, &nulls.Nulls{})
 	require.Error(t, err)
 }
 

@@ -15,6 +15,8 @@
 package onduplicatekey
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -33,9 +35,14 @@ const (
 
 type container struct {
 	state            int
-	checkConflictBat *batch.Batch // batch to check conflict
+	checkConflictBat *batch.Batch // deprecated: kept for cleanup safety
 	rbat             *batch.Batch // return batch
 	uniqueCheckExes  []colexec.ExpressionExecutor
+
+	// Hash-based conflict detection (replaces O(N²) linear scan)
+	uniqueKeyColIndices [][]int32        // column indices for each unique constraint
+	conflictMaps        []map[string]int // serialized_unique_key → row_index in rbat
+	keyBuf              bytes.Buffer     // reusable buffer for serializeUniqueKey
 }
 
 type OnDuplicatekey struct {
@@ -102,6 +109,9 @@ func (onDuplicatekey *OnDuplicatekey) Reset(proc *process.Process, pipelineFaile
 			exe.ResetForNextQuery()
 		}
 	}
+	for i := range onDuplicatekey.ctr.conflictMaps {
+		clear(onDuplicatekey.ctr.conflictMaps[i])
+	}
 	onDuplicatekey.ctr.state = Build
 }
 
@@ -120,6 +130,8 @@ func (onDuplicatekey *OnDuplicatekey) Free(proc *process.Process, pipelineFailed
 		}
 	}
 	onDuplicatekey.ctr.uniqueCheckExes = nil
+	onDuplicatekey.ctr.conflictMaps = nil
+	onDuplicatekey.ctr.uniqueKeyColIndices = nil
 }
 
 func (onDuplicatekey *OnDuplicatekey) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

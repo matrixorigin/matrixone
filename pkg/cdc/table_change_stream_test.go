@@ -1860,6 +1860,11 @@ func (n *noopTxnOperator) SnapshotTS() timestamp.Timestamp {
 	return n.snapshot
 }
 
+func (n *noopTxnOperator) SetSnapshotTS(ts timestamp.Timestamp) {
+	n.snapshot = ts
+	n.meta.SnapshotTS = ts
+}
+
 func (n *noopTxnOperator) CreateTS() timestamp.Timestamp {
 	return timestamp.Timestamp{}
 }
@@ -1898,6 +1903,10 @@ func (n *noopTxnOperator) AddLockTable(locktable lock.LockTable) error {
 
 func (n *noopTxnOperator) HasLockTable(table uint64) bool {
 	return false
+}
+
+func (n *noopTxnOperator) CheckLockTableBinds(ctx context.Context) error {
+	return nil
 }
 
 func (n *noopTxnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {

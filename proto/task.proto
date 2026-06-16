@@ -78,6 +78,10 @@ option (gogoproto.protosizer_all) = true;
    ISCPExecutor = 9;
    // Index Update task
    IndexUpdateTaskExecutor = 10;
+   // Publication task
+   PublicationExecutor = 11;
+   // SQL task
+   SQLTask = 12;
  }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.
@@ -90,6 +94,23 @@ option (gogoproto.protosizer_all) = true;
      bytes       Context  = 3;
      // Options options for execute task
      TaskOptions Options  = 4 [(gogoproto.nullable) = false];
+ }
+
+ message SQLTaskContext {
+     uint64 TaskId = 1;
+     string TaskName = 2;
+     uint32 AccountId = 3;
+     string DatabaseName = 4;
+     string SQLBody = 5;
+     string GateCondition = 6;
+     uint32 RetryLimit = 7;
+     uint32 TimeoutSeconds = 8;
+     string Creator = 9;
+     uint32 CreatorUserId = 10;
+     uint32 CreatorRoleId = 11;
+     string TriggerType = 12;
+     int64 ScheduledAt = 13;
+     uint64 TriggerCount = 14;
  }
  
  // TaskOptions task options
@@ -180,6 +201,7 @@ enum TaskType {
   reserved 2;
   CreateCdc = 3 [(gogoproto.enumvalue_customname) = "CreateCdc"];
   ISCP = 4 [(gogoproto.enumvalue_customname) = "ISCP"];
+  Publication = 5 [(gogoproto.enumvalue_customname) = "Publication"];
 }
 
 message ConnectorDetails {
@@ -210,6 +232,13 @@ message ISCPDetails {
   string TaskName = 2;
 }
 
+message PublicationDetails {
+  // publication task uuid
+  string TaskId = 1;
+  // publication task name
+  string TaskName = 2;
+}
+
 message Details {
   string Description = 1;
   uint32 AccountID = 2;
@@ -221,6 +250,7 @@ message Details {
     ConnectorDetails Connector = 10;
     CreateCdcDetails CreateCdc = 12;
     ISCPDetails ISCP = 13;
+    PublicationDetails Publication = 14;
   }
 }
 

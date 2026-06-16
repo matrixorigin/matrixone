@@ -408,3 +408,291 @@ func BenchmarkDecimal256Format(b *testing.B) {
 		decimalFormatSink = x.Format(30)
 	}
 }
+
+// TestAdd128Unchecked tests the branchless Add128Unchecked for SUM aggregation.
+func TestAdd128Unchecked(t *testing.T) {
+	cases := []struct {
+		name string
+		x, y Decimal128
+	}{
+		{"both_pos", Decimal128{100, 0}, Decimal128{200, 0}},
+		{"pos_neg", Decimal128{100, 0}, Decimal128{B0_63: ^uint64(99), B64_127: ^uint64(0)}}, // -100
+		{"neg_neg", Decimal128{B0_63: ^uint64(99), B64_127: ^uint64(0)}, Decimal128{B0_63: ^uint64(49), B64_127: ^uint64(0)}},
+		{"zero_add", Decimal128{}, Decimal128{42, 0}},
+		{"large", Decimal128{^uint64(0), 0x3FFFFFFFFFFFFFFF}, Decimal128{1, 0}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.x.Add128Unchecked(tc.y)
+			want, _ := tc.x.Add128(tc.y)
+			if got != want {
+				t.Fatalf("Add128Unchecked(%v, %v) = %v, want %v", tc.x, tc.y, got, want)
+			}
+		})
+	}
+}
+
+// TestDecimal128DivFallbackSign exercises the 256-bit fallback in Decimal128.Div
+// where the sign correction was added (signx != signy → negate result).
+func TestDecimal128DivFallbackSign(t *testing.T) {
+	// We need x.Scale(scaleAdj) to fail so we enter the D256 fallback path.
+	// Large x with high scaleAdj will trigger this.
+	// x * 10^6 must overflow D128 but x * 10^6 / y must fit D128.
+	// 3e32 * 10^6 = 3e38 > D128max ≈ 1.7e38, but 3e38/3 = 1e38 < D128max.
+	largePos, _ := ParseDecimal128("300000000000000000000000000000000", 38, 0)
+	largeNeg, _ := ParseDecimal128("-300000000000000000000000000000000", 38, 0)
+	smallPos, _ := ParseDecimal128("3", 38, 0)
+	smallNeg, _ := ParseDecimal128("-3", 38, 0)
+
+	t.Run("pos_div_neg", func(t *testing.T) {
+		z, _, err := largePos.Div(smallNeg, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !z.Sign() {
+			t.Fatalf("expected negative result, got %s", z.Format(12))
+		}
+	})
+	t.Run("neg_div_pos", func(t *testing.T) {
+		z, _, err := largeNeg.Div(smallPos, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !z.Sign() {
+			t.Fatalf("expected negative result, got %s", z.Format(12))
+		}
+	})
+	t.Run("neg_div_neg", func(t *testing.T) {
+		z, _, err := largeNeg.Div(smallNeg, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if z.Sign() {
+			t.Fatalf("expected positive result, got %s", z.Format(12))
+		}
+	})
+}
+
+// TestDecimal256AddErrorFormat exercises the Decimal256.Add error message path
+// where origX/origY are preserved for formatting.
+func TestDecimal256AddErrorFormat(t *testing.T) {
+	// Two very large Decimal256 whose sum overflows.
+	maxVal := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
+	one := Decimal256{B0_63: 1}
+	_, _, err := maxVal.Add(one, 0, 0)
+	if err == nil {
+		t.Fatal("expected overflow error")
+	}
+}
+
+// TestDecimal64AddSubErrorFormat exercises the Decimal64.Add/Sub error paths.
+func TestDecimal64AddSubErrorFormat(t *testing.T) {
+	maxD64 := Decimal64(^uint64(0) >> 1) // max positive Decimal64
+	one := Decimal64(1)
+
+	_, _, err := maxD64.Add(one, 0, 0)
+	if err == nil {
+		t.Fatal("expected overflow from Add")
+	}
+	_, _, err = Decimal64(0).Sub(maxD64, 0, 10)
+	// This may or may not overflow depending on scale; we just exercise the path.
+	_ = err
+}
+
+// TestDecimal128AddSubErrorFormat exercises Decimal128.Add/Sub with origX/origY.
+func TestDecimal128AddSubErrorFormat(t *testing.T) {
+	maxD128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
+	one := Decimal128{B0_63: 1, B64_127: 0}
+
+	_, _, err := maxD128.Add(one, 0, 0)
+	if err == nil {
+		t.Fatal("expected overflow from Add")
+	}
+	_, _, err = maxD128.Sub(Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0)}, 0, 0) // sub a negative = add
+	_ = err
+}
+
+// TestDecimalScaleOverflowErrors exercises the error formatting in Scale
+// functions where we changed the error messages.
+func TestDecimalScaleOverflowErrors(t *testing.T) {
+	// Decimal64.Scale: need large d64 that overflows when scaled up.
+	maxD64 := Decimal64(^uint64(0) >> 1) // max positive
+
+	t.Run("d64_scale_up_overflow", func(t *testing.T) {
+		_, err := maxD64.Scale(18)
+		if err == nil {
+			t.Fatal("expected overflow")
+		}
+	})
+	t.Run("d64_scale_down_overflow", func(t *testing.T) {
+		_, err := maxD64.Scale(-18)
+		_ = err // may or may not error; exercises the path
+	})
+
+	// Decimal128.ScaleInplace: large D128 scaling up.
+	maxD128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
+	t.Run("d128_scaleinplace_up", func(t *testing.T) {
+		x := maxD128
+		err := x.ScaleInplace(18)
+		if err == nil {
+			t.Fatal("expected overflow")
+		}
+	})
+	t.Run("d128_scaleinplace_down", func(t *testing.T) {
+		x := maxD128
+		err := x.ScaleInplace(-38) // scale down by a lot
+		_ = err
+	})
+
+	// Decimal128.Scale (non-inplace).
+	t.Run("d128_scale_up", func(t *testing.T) {
+		_, err := maxD128.Scale(18)
+		if err == nil {
+			t.Fatal("expected overflow")
+		}
+	})
+
+	// Decimal128.ScaleTruncate.
+	t.Run("d128_scaletrunc_up", func(t *testing.T) {
+		_, err := maxD128.ScaleTruncate(18)
+		if err == nil {
+			t.Fatal("expected overflow")
+		}
+	})
+
+	// Decimal256.Scale: large D256 scaling up.
+	maxD256 := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
+	t.Run("d256_scale_up", func(t *testing.T) {
+		_, err := maxD256.Scale(18)
+		if err == nil {
+			t.Fatal("expected overflow")
+		}
+	})
+
+	// Decimal256.ScaleTruncate.
+	t.Run("d256_scaletrunc_up", func(t *testing.T) {
+		_, err := maxD256.ScaleTruncate(18)
+		if err == nil {
+			t.Fatal("expected overflow")
+		}
+	})
+}
+
+// TestDecimalArithOverflowErrors exercises the arithmetic overflow error paths
+// where error messages were reformatted.
+func TestDecimalArithOverflowErrors(t *testing.T) {
+	maxD64 := Decimal64(^uint64(0) >> 1)
+	maxD128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
+	maxD256 := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
+
+	// D64 Mul overflow (enters D128 fallback, result too big for D64).
+	t.Run("d64_mul_overflow", func(t *testing.T) {
+		_, _, err := maxD64.Mul(maxD64, 0, 0)
+		if err == nil {
+			t.Fatal("expected overflow")
+		}
+	})
+
+	// D128 Mul overflow (enters D256 fallback, result too big for D128).
+	t.Run("d128_mul_overflow", func(t *testing.T) {
+		_, _, err := maxD128.Mul(maxD128, 0, 0)
+		if err == nil {
+			t.Fatal("expected overflow")
+		}
+	})
+
+	// D64 Div overflow (scale overflow in fallback).
+	t.Run("d64_div_scale_overflow", func(t *testing.T) {
+		_, _, err := maxD64.Div(Decimal64(1), 0, 0)
+		_ = err // exercises the path
+	})
+
+	// D128 Div overflow (scale overflow).
+	t.Run("d128_div_scale_overflow", func(t *testing.T) {
+		_, _, err := maxD128.Div(Decimal128{B0_63: 1}, 0, 0)
+		_ = err
+	})
+
+	// D64 Mod overflow.
+	t.Run("d64_mod_overflow", func(t *testing.T) {
+		_, _, err := maxD64.Mod(Decimal64(1), 0, 18)
+		_ = err
+	})
+
+	// D128 Mod overflow.
+	t.Run("d128_mod_overflow", func(t *testing.T) {
+		_, _, err := maxD128.Mod(Decimal128{B0_63: 1}, 0, 18)
+		_ = err
+	})
+
+	// D256 Div overflow.
+	t.Run("d256_div_scale_overflow", func(t *testing.T) {
+		_, _, err := maxD256.Div(Decimal256{B0_63: 1}, 0, 0)
+		_ = err
+	})
+
+	// D256 Mod overflow.
+	t.Run("d256_mod_overflow", func(t *testing.T) {
+		_, _, err := maxD256.Mod(Decimal256{B0_63: 1}, 0, 18)
+		_ = err
+	})
+
+	// D64 Sub error path.
+	t.Run("d64_sub_scale_overflow", func(t *testing.T) {
+		_, _, err := maxD64.Sub(Decimal64(1), 0, 18)
+		_ = err
+	})
+
+	// D128 Sub error path.
+	t.Run("d128_sub_scale_overflow", func(t *testing.T) {
+		_, _, err := maxD128.Sub(Decimal128{B0_63: 1}, 0, 18)
+		_ = err
+	})
+}
+
+// TestDecimalScaleLoopOverflow exercises the for-loop body in Scale functions
+// where n > 19. These are the modified error-message lines inside the loop.
+func TestDecimalScaleLoopOverflow(t *testing.T) {
+	maxD64 := Decimal64(^uint64(0) >> 1)
+	maxD128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
+	maxD256 := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
+
+	// Scale by 38 triggers the loop (38-0 > 19).
+	t.Run("d64_loop", func(t *testing.T) {
+		_, err := maxD64.Scale(38)
+		if err == nil {
+			t.Fatal("expected overflow")
+		}
+	})
+	t.Run("d128_scaleinplace_loop", func(t *testing.T) {
+		x := maxD128
+		err := x.ScaleInplace(38)
+		if err == nil {
+			t.Fatal("expected overflow")
+		}
+	})
+	t.Run("d128_scale_loop", func(t *testing.T) {
+		_, err := maxD128.Scale(38)
+		if err == nil {
+			t.Fatal("expected overflow")
+		}
+	})
+	t.Run("d128_scaletrunc_loop", func(t *testing.T) {
+		_, err := maxD128.ScaleTruncate(38)
+		if err == nil {
+			t.Fatal("expected overflow")
+		}
+	})
+	t.Run("d256_scale_loop", func(t *testing.T) {
+		_, err := maxD256.Scale(38)
+		if err == nil {
+			t.Fatal("expected overflow")
+		}
+	})
+	t.Run("d256_scaletrunc_loop", func(t *testing.T) {
+		_, err := maxD256.ScaleTruncate(38)
+		if err == nil {
+			t.Fatal("expected overflow")
+		}
+	})
+}

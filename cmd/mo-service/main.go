@@ -117,6 +117,7 @@ func main() {
 		logutil.Infof("Mutex profiling enabled with fraction: %d", *mutexProfileFraction)
 	}
 	if *httpListenAddr != "" {
+		frontend.SetDebugHTTPAddr(*httpListenAddr)
 		go func() {
 			http.ListenAndServe(*httpListenAddr, nil)
 		}()

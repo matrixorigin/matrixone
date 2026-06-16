@@ -2199,7 +2199,11 @@ func appendPreInsertPlan(
 	for i, col := range tableDef.Cols {
 		colsMap[col.Name] = i
 	}
-	for _, part := range idxDef.Parts {
+	keyParts := idxDef.Parts
+	if isSpatialIndexDef(idxDef) && len(idxDef.Parts) > 0 {
+		keyParts = idxDef.Parts[:1]
+	}
+	for _, part := range keyParts {
 		part = catalog.ResolveAlias(part)
 		if i, ok := colsMap[part]; ok {
 			useColumns = append(useColumns, int32(i))
@@ -2210,7 +2214,7 @@ func appendPreInsertPlan(
 	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, pkColumn)
 
 	var ukType Type
-	if len(idxDef.Parts) == 1 {
+	if len(idxDef.Parts) == 1 || isSpatialIndexDef(idxDef) {
 		ukType = tableDef.Cols[useColumns[0]].Typ
 	} else {
 		ukType = Type{

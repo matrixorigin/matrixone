@@ -44,6 +44,30 @@ type rowsIter struct {
 
 var _ RowsIter = new(rowsIter)
 
+type rawReplayRowsIter struct {
+	iter   btree.IterG[*RowEntry]
+	curRow *RowEntry
+}
+
+var _ RowsIter = new(rawReplayRowsIter)
+
+func (p *rawReplayRowsIter) Next() bool {
+	if !p.iter.Next() {
+		return false
+	}
+	p.curRow = p.iter.Item()
+	return true
+}
+
+func (p *rawReplayRowsIter) Entry() *RowEntry {
+	return p.curRow
+}
+
+func (p *rawReplayRowsIter) Close() error {
+	p.iter.Release()
+	return nil
+}
+
 func (p *rowsIter) Next() bool {
 	for {
 		if !p.firstCalled {
@@ -120,6 +144,73 @@ type PrimaryKeyMatchSpec struct {
 	Move      func(p *primaryKeyIter) bool
 	Name      string
 	moveInner func(p *primaryKeyIter) bool
+}
+
+type primaryKeyReplayIter struct {
+	iter        btree.IterG[*PrimaryIndexEntry]
+	rows        *btree.BTreeG[*RowEntry]
+	key         []byte
+	start       types.TS
+	end         types.TS
+	iterDeleted bool
+	curRow      *RowEntry
+	firstCalled bool
+}
+
+var _ RowsIter = new(primaryKeyReplayIter)
+
+func (p *primaryKeyReplayIter) Next() bool {
+	for {
+		var ok bool
+		if !p.firstCalled {
+			p.firstCalled = true
+			ok = p.iter.Seek(&PrimaryIndexEntry{
+				Bytes:      p.key,
+				Time:       p.end,
+				RowEntryID: math.MaxInt64,
+			})
+		} else {
+			ok = p.iter.Next()
+		}
+		if !ok {
+			return false
+		}
+
+		entry := p.iter.Item()
+		if !bytes.Equal(entry.Bytes, p.key) {
+			return false
+		}
+		if entry.Time.GT(&p.end) {
+			continue
+		}
+		if entry.Time.LT(&p.start) {
+			return false
+		}
+		if entry.Deleted != p.iterDeleted {
+			continue
+		}
+
+		row, ok := p.rows.Get(&RowEntry{
+			ID:      entry.RowEntryID,
+			BlockID: entry.BlockID,
+			RowID:   entry.RowID,
+			Time:    entry.Time,
+		})
+		if !ok {
+			continue
+		}
+		p.curRow = row
+		return true
+	}
+}
+
+func (p *primaryKeyReplayIter) Entry() *RowEntry {
+	return p.curRow
+}
+
+func (p *primaryKeyReplayIter) Close() error {
+	p.iter.Release()
+	return nil
 }
 
 func Exact(key []byte) PrimaryKeyMatchSpec {
@@ -602,6 +693,25 @@ func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDe
 		ret.blockID = *blockID
 	}
 	return ret
+}
+
+func (p *PartitionState) NewRawReplayRowsIter() RowsIter {
+	return &rawReplayRowsIter{iter: p.rows.Iter()}
+}
+
+func (p *PartitionState) NewExactPrimaryKeyReplayIter(
+	start, end types.TS,
+	key []byte,
+	iterDeleted bool,
+) RowsIter {
+	return &primaryKeyReplayIter{
+		iter:        p.rowPrimaryKeyIndex.Iter(),
+		rows:        p.rows,
+		key:         key,
+		start:       start,
+		end:         end,
+		iterDeleted: iterDeleted,
+	}
 }
 
 func buildSpec(op int, keys [][]byte) PrimaryKeyMatchSpec {

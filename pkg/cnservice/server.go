@@ -19,6 +19,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -72,6 +73,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+const (
+	rssCacheFamilyEvictTimeout   = 10 * time.Second
+	rssCacheAdmissionPressureTTL = 2 * time.Minute
+	rssCachePressureTargetOwner  = "cn-rss"
+)
+
+var (
+	evictMemoryCachesToCapacityPercent = fileservice.EvictMemoryCachesToCapacityPercent
+)
+
+func makeRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
+	return func(ctx context.Context, targetPercent int64) {
+		memoryCtx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseRSSCacheEvict)
+		defer cancel()
+		evictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
+	}
+}
+
+func setRSSCachePressureTarget(targetPercent int64) {
+	fileservice.SetMemoryCachePressureTargetPercentByOwner(
+		rssCachePressureTargetOwner,
+		targetPercent,
+		time.Now().Add(rssCacheAdmissionPressureTTL),
+	)
+}
+
+func clearRSSCachePressureTarget() {
+	fileservice.ClearMemoryCachePressureTargetByOwner(rssCachePressureTargetOwner)
+}
 
 func NewService(
 	cfg *Config,
@@ -202,6 +233,12 @@ func NewService(
 		"CNFlushS3",
 		90.0/100.0,
 		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
+		rscthrottler.WithRSSScavenging(),
+		rscthrottler.WithRSSCachePressureTarget(
+			setRSSCachePressureTarget,
+			clearRSSCachePressureTarget,
+		),
+		rscthrottler.WithRSSCacheEvictor(makeRSSCacheEvictor(rssCacheFamilyEvictTimeout)),
 	)
 
 	srv.pu.LockService = srv.lockService
@@ -269,7 +306,13 @@ func (s *service) Start() error {
 		return err
 	}
 
-	return s.server.Start()
+	if err := s.server.Start(); err != nil {
+		return err
+	}
+
+	s.task.runnerReady.Store(true)
+	s.startTaskRunner()
+	return nil
 }
 
 func (s *service) Close() error {
@@ -942,7 +985,7 @@ func (s *service) bootstrap() error {
 	// bootstrap cannot fail. We panic here to make sure the service can not start.
 	// If bootstrap failed, need clean all data to retry.
 	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
-		panic(moerr.AttachCause(ctx, err))
+		return handleBootstrapErr(ctx, err)
 	}
 
 	trace.GetService(s.cfg.UUID).EnableFlush()
@@ -961,6 +1004,18 @@ func (s *service) bootstrap() error {
 		})
 	}
 	return nil
+}
+
+// handleBootstrapErr decides whether a bootstrap error should be returned
+// gracefully (for context cancellation during shutdown) or trigger a panic
+// (for real bootstrap failures).  Only context.Canceled is treated as a
+// graceful shutdown signal; DeadlineExceeded from the 5-minute bootstrap
+// timeout is a legitimate failure that should still panic.
+func handleBootstrapErr(ctx context.Context, err error) error {
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	panic(moerr.AttachCause(ctx, err))
 }
 
 func (s *service) initTxnTraceService() {

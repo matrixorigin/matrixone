@@ -954,8 +954,25 @@ type FuncExpr struct {
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
+	funcName := ""
 	if node.FuncName != nil {
-		ctx.WriteString(node.FuncName.Origin())
+		funcName = node.FuncName.Origin()
+	}
+
+	if strings.ToLower(funcName) == "interval" && len(node.Exprs) == 2 {
+		ctx.WriteString("INTERVAL ")
+		node.Exprs[0].Format(ctx)
+		ctx.WriteByte(' ')
+		if nv, ok := node.Exprs[1].(*NumVal); ok {
+			ctx.WriteString(nv.String())
+		} else {
+			node.Exprs[1].Format(ctx)
+		}
+		return
+	}
+
+	if funcName != "" {
+		ctx.WriteString(funcName)
 	} else {
 		node.Func.Format(ctx)
 	}
@@ -968,7 +985,7 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	if node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
 		trimExprsFormat(ctx, node.Exprs)
 	} else {
-		node.Exprs.Format(ctx)
+		formatFuncExprs(ctx, node)
 	}
 
 	if node.OrderBy != nil {
@@ -981,6 +998,63 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.WriteString(" ")
 		node.WindowSpec.Format(ctx)
 	}
+}
+
+func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
+	if !ctx.singleQuoteString || len(node.Exprs) == 0 || node.FuncName == nil {
+		node.Exprs.Format(ctx)
+		return
+	}
+
+	switch strings.ToLower(node.FuncName.Origin()) {
+	case "timestampdiff", "extract":
+		formatExprWithSingleQuoteDisabled(ctx, node.Exprs[0])
+		if len(node.Exprs) > 1 {
+			ctx.WriteString(", ")
+			node.Exprs[1:].Format(ctx)
+		}
+	case "interval":
+		node.Exprs[0].Format(ctx)
+		if len(node.Exprs) > 1 {
+			ctx.WriteString(", ")
+			formatExprWithSingleQuoteDisabled(ctx, node.Exprs[1])
+			if len(node.Exprs) > 2 {
+				ctx.WriteString(", ")
+				node.Exprs[2:].Format(ctx)
+			}
+		}
+	default:
+		node.Exprs.Format(ctx)
+	}
+}
+
+func formatExprWithSingleQuoteDisabled(ctx *FmtCtx, expr Expr) {
+	clone := *ctx
+	clone.singleQuoteString = false
+	expr.Format(&clone)
+}
+
+// TimeUnitExpr preserves SQL time-unit keywords such as HOUR and MINUTE
+// without routing them through string-literal formatting.
+type TimeUnitExpr struct {
+	exprImpl
+	Unit string
+}
+
+func NewTimeUnitExpr(unit string) *TimeUnitExpr {
+	return &TimeUnitExpr{Unit: strings.ToLower(unit)}
+}
+
+func (node *TimeUnitExpr) Format(ctx *FmtCtx) {
+	ctx.WriteString(node.Unit)
+}
+
+func (node *TimeUnitExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	return v.Exit(newNode)
 }
 
 // Accept implements NodeChecker interface

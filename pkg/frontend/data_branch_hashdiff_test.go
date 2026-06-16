@@ -22,6 +22,8 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -30,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -182,7 +185,6 @@ func TestDiffDataHelper_Basic(t *testing.T) {
 	err := diffDataHelper(
 		context.Background(),
 		ses,
-		0,
 		compositeOption{},
 		tblStuff,
 		func(w batchWithKind) (bool, error) {
@@ -240,7 +242,6 @@ func TestDiffDataHelper_ConflictAcceptExpandUpdate(t *testing.T) {
 	err := diffDataHelper(
 		context.Background(),
 		ses,
-		0,
 		compositeOption{
 			conflictOpt:  &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT},
 			expandUpdate: true,
@@ -819,7 +820,7 @@ func TestHashDiff_NoLCAWithStubHandles(t *testing.T) {
 		ses,
 		nil,
 		tblStuff,
-		branchMetaInfo{lcaType: lcaEmpty},
+		branchMetaInfo{},
 		compositeOption{},
 		func(w batchWithKind) (bool, error) {
 			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
@@ -847,6 +848,7 @@ func TestHashDiff_NoLCAWithStubHandles(t *testing.T) {
 				data: baseData,
 			}},
 		}},
+		nil, // no pickKeyHashmap for DIFF test
 	)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
@@ -856,6 +858,51 @@ func TestHashDiff_NoLCAWithStubHandles(t *testing.T) {
 	require.Equal(t, diffInsert, got[1].kind)
 	require.Equal(t, diffSideBase, got[1].side)
 	require.Equal(t, [][]any{{int64(3), "base-only", "hb"}}, got[1].rows)
+}
+
+func TestHashDiff_FakePKClosesMigratedHashmaps(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.pkKind = fakeKind
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+	tblStuff.maxTombstoneBatchCnt = 1
+	alloc := &trackingHashmapAllocator{}
+	tblStuff.hashmapAllocator = &branchHashmapAllocator{upstream: alloc}
+
+	tarData := buildHashDiffDataBatch(t, ses.proc.Mp(), [][]any{
+		{int64(1), "target", "h1", commitTSBytes(types.BuildTS(15, 0))},
+	})
+	baseData := buildHashDiffDataBatch(t, ses.proc.Mp(), [][]any{
+		{int64(2), "base", "h2", commitTSBytes(types.BuildTS(12, 0))},
+	})
+
+	err = hashDiff(
+		context.Background(),
+		ses,
+		nil,
+		tblStuff,
+		branchMetaInfo{},
+		compositeOption{},
+		func(w batchWithKind) (bool, error) {
+			tblStuff.retPool.releaseRetBatch(w.batch, false)
+			return false, nil
+		},
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{data: tarData}},
+		}},
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{data: baseData}},
+		}},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Zero(t, alloc.outstanding.Load())
 }
 
 func buildVisibleComparisonBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {
@@ -922,20 +969,56 @@ func (s *stubEngineChangesHandle) Close() error {
 	return nil
 }
 
-func buildHashDiffDataBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {
-	t.Helper()
+type trackingHashmapAllocator struct {
+	outstanding atomic.Int64
+}
 
-	bat := batch.NewWithSize(4)
-	bat.SetAttributes([]string{"id", "name", "hidden", "__commit_ts"})
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+func (a *trackingHashmapAllocator) Allocate(size uint64, _ malloc.Hints) ([]byte, malloc.Deallocator, error) {
+	a.outstanding.Add(int64(size))
+	return make([]byte, int(size)), &trackingHashmapDeallocator{
+		allocator: a,
+		size:      size,
+	}, nil
+}
+
+type trackingHashmapDeallocator struct {
+	allocator *trackingHashmapAllocator
+	size      uint64
+}
+
+func (d *trackingHashmapDeallocator) Deallocate() {
+	d.allocator.outstanding.Add(-int64(d.size))
+}
+
+func (d *trackingHashmapDeallocator) As(malloc.Trait) bool {
+	return false
+}
+
+func buildHashDiffDataBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {
+	rowIDs := make([]types.Rowid, len(rows))
+	for i := range rows {
+		rowIDs[i] = buildHashDiffRowID(t, i)
+	}
+	return buildHashDiffDataBatchWithRowIDs(t, mp, rowIDs, rows)
+}
+
+func buildHashDiffDataBatchWithRowIDs(t *testing.T, mp *mpool.MPool, rowIDs []types.Rowid, rows [][]any) *batch.Batch {
+	t.Helper()
+	require.Len(t, rowIDs, len(rows))
+
+	bat := batch.NewWithSize(5)
+	bat.SetAttributes([]string{catalog.Row_ID, "id", "name", "hidden", "__commit_ts"})
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
 	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 	bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
 
-	for _, row := range rows {
+	for rowIdx, row := range rows {
 		require.Len(t, row, 4)
+		require.NoError(t, appendTestVectorValue(bat.Vecs[0], rowIDs[rowIdx], mp))
 		for i, val := range row {
-			require.NoError(t, appendTestVectorValue(bat.Vecs[i], val, mp))
+			require.NoError(t, appendTestVectorValue(bat.Vecs[i+1], val, mp))
 		}
 	}
 	bat.SetRowCount(len(rows))
@@ -943,25 +1026,155 @@ func buildHashDiffDataBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.
 }
 
 func buildHashDiffTombstoneBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {
+	rowIDs := make([]types.Rowid, len(rows))
+	for i := range rows {
+		rowIDs[i] = buildHashDiffRowID(t, i)
+	}
+	return buildHashDiffTombstoneBatchWithRowIDs(t, mp, rowIDs, rows)
+}
+
+func buildHashDiffTombstoneBatchWithRowIDs(t *testing.T, mp *mpool.MPool, rowIDs []types.Rowid, rows [][]any) *batch.Batch {
 	t.Helper()
+	require.Len(t, rowIDs, len(rows))
 
-	bat := batch.NewWithSize(2)
-	bat.SetAttributes([]string{"id", "__commit_ts"})
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat := batch.NewWithSize(3)
+	bat.SetAttributes([]string{catalog.Row_ID, "id", "__commit_ts"})
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 
-	for _, row := range rows {
+	for rowIdx, row := range rows {
 		require.Len(t, row, 2)
+		require.NoError(t, appendTestVectorValue(bat.Vecs[0], rowIDs[rowIdx], mp))
 		for i, val := range row {
-			require.NoError(t, appendTestVectorValue(bat.Vecs[i], val, mp))
+			require.NoError(t, appendTestVectorValue(bat.Vecs[i+1], val, mp))
 		}
 	}
 	bat.SetRowCount(len(rows))
 	return bat
 }
 
+func buildHashDiffRowID(t *testing.T, rowIdx int) types.Rowid {
+	t.Helper()
+	var uid types.Uuid
+	uid[0] = byte(rowIdx + 1)
+	uid[15] = byte(rowIdx + 1)
+	blkID := objectio.NewBlockid(&uid, 0, 1)
+	return types.NewRowid(blkID, uint32(rowIdx))
+}
+
 func commitTSBytes(ts types.TS) []byte {
 	buf := make([]byte, len(ts))
 	copy(buf, ts[:])
 	return buf
+}
+
+func TestLCAProbeJoinCastType(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  types.Type
+		want string
+		ok   bool
+	}{
+		{name: "bit", typ: types.T_bit.ToType(), want: types.T_bit.ToType().DescString(), ok: true},
+		{name: "int32", typ: types.T_int32.ToType(), want: "INT", ok: true},
+		{name: "int64", typ: types.T_int64.ToType(), want: "BIGINT", ok: true},
+		{name: "uint32", typ: types.T_uint32.ToType(), want: "INT UNSIGNED", ok: true},
+		{name: "uint64", typ: types.T_uint64.ToType(), want: "BIGINT UNSIGNED", ok: true},
+		{name: "float32", typ: types.T_float32.ToType(), want: "FLOAT", ok: true},
+		{name: "float64", typ: types.T_float64.ToType(), want: "DOUBLE", ok: true},
+		{name: "varchar", typ: types.T_varchar.ToType(), want: "VARCHAR", ok: true},
+		{name: "varbinary", typ: types.T_varbinary.ToType(), want: "VARBINARY", ok: true},
+		{name: "decimal64", typ: types.New(types.T_decimal64, 12, 2), want: types.New(types.T_decimal64, 12, 2).DescString(), ok: true},
+		{name: "timestamp", typ: types.New(types.T_timestamp, 0, 6), want: types.New(types.T_timestamp, 0, 6).String(), ok: true},
+		{name: "unsupported", typ: types.T_bool.ToType(), want: "", ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := lcaProbeJoinCastType(tt.typ)
+			require.Equal(t, tt.ok, ok)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestValidateLeadingRowID(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	makeBatchWithLeadingType := func(t *testing.T, oid types.T) *batch.Batch {
+		t.Helper()
+		bat := batch.NewWithSize(2)
+		bat.SetAttributes([]string{catalog.Row_ID, "id"})
+		bat.Vecs[0] = vector.NewVec(oid.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, mp))
+		bat.SetRowCount(1)
+		return bat
+	}
+
+	t.Run("nil and empty pass", func(t *testing.T) {
+		require.NoError(t, validateLeadingRowID("base", "t", false, nil))
+		bat := batch.NewWithSize(0)
+		bat.SetRowCount(0)
+		require.NoError(t, validateLeadingRowID("base", "t", false, bat))
+	})
+
+	t.Run("missing rowid vector", func(t *testing.T) {
+		bat := batch.NewWithSize(0)
+		bat.SetRowCount(1)
+		err := validateLeadingRowID("base", "t", false, bat)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "DataBranch-CollectChanges-MissingRowID")
+	})
+
+	t.Run("wrong leading type", func(t *testing.T) {
+		bat := makeBatchWithLeadingType(t, types.T_int64)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+		err := validateLeadingRowID("base", "t", false, bat)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "DataBranch-CollectChanges-InvalidRowIDVector")
+	})
+
+	t.Run("length mismatch", func(t *testing.T) {
+		bat := batch.NewWithSize(2)
+		bat.SetAttributes([]string{catalog.Row_ID, "id"})
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
+		uid, err := types.BuildUuid()
+		require.NoError(t, err)
+		blkID := objectio.NewBlockid(&uid, 0, 1)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(blkID, 0), false, mp))
+		bat.SetRowCount(2)
+		err = validateLeadingRowID("base", "t", false, bat)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "DataBranch-CollectChanges-RowIDLenMismatch")
+	})
+
+	t.Run("null rowid", func(t *testing.T) {
+		bat := makeBatchWithLeadingType(t, types.T_Rowid)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Rowid{}, true, mp))
+		err := validateLeadingRowID("base", "t", false, bat)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "DataBranch-CollectChanges-NullRowID")
+	})
+
+	t.Run("empty rowid", func(t *testing.T) {
+		bat := makeBatchWithLeadingType(t, types.T_Rowid)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.EmptyRowid, false, mp))
+		err := validateLeadingRowID("base", "t", false, bat)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "DataBranch-CollectChanges-InvalidRowID")
+	})
+
+	t.Run("valid rowid passes", func(t *testing.T) {
+		bat := makeBatchWithLeadingType(t, types.T_Rowid)
+		uid, err := types.BuildUuid()
+		require.NoError(t, err)
+		blkID := objectio.NewBlockid(&uid, 0, 1)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(blkID, 0), false, mp))
+		require.NoError(t, validateLeadingRowID("base", "t", false, bat))
+	})
 }

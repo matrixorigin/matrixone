@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -42,12 +41,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
+
+const dataBranchMetadataIDBatchSize = 512
 
 func newBranchHashmapAllocator(limitRate float64) *branchHashmapAllocator {
 	throttler := rscthrottler.NewMemThrottler(
@@ -117,11 +120,6 @@ func (d *branchHashmapDeallocator) As(target malloc.Trait) bool {
 	return false
 }
 
-//type retBatchDebug struct {
-//	acquire string
-//	release string
-//}
-
 func typeMatched(vec *vector.Vector, typ types.Type) bool {
 	if vec == nil {
 		return false
@@ -142,21 +140,22 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 	if retBatchPool.pinned == nil {
 		retBatchPool.pinned = make(map[*batch.Batch]struct{})
 	}
-	//if retBatchPool.debug == nil {
-	//	retBatchPool.debug = make(map[*batch.Batch]retBatchDebug)
-	//}
 
 	if retBatchPool.dataVecCnt == 0 {
 		retBatchPool.dataVecCnt = len(tblStuff.def.colNames)
-		retBatchPool.tombVecCnt = 1
+		retBatchPool.tombVecCnt = 3
 		retBatchPool.dataTypes = tblStuff.def.colTypes
 		retBatchPool.tombstoneType = tblStuff.def.colTypes[tblStuff.def.pkColIdx]
+		retBatchPool.tombRowIDType = types.T_Rowid.ToType()
+		retBatchPool.tombKeyType = types.T_varbinary.ToType()
 	}
 
 	if forTombstone {
 		if len(retBatchPool.tList) == 0 {
 			bat = batch.NewWithSize(retBatchPool.tombVecCnt)
 			bat.Vecs[0] = vector.NewVec(retBatchPool.tombstoneType)
+			bat.Vecs[1] = vector.NewVec(retBatchPool.tombRowIDType)
+			bat.Vecs[2] = vector.NewVec(retBatchPool.tombKeyType)
 			goto done
 		}
 
@@ -168,6 +167,12 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 		}
 		if !typeMatched(bat.Vecs[0], retBatchPool.tombstoneType) {
 			panic(moerr.NewInternalErrorNoCtxf("retBatchPool: tombstone vec type mismatch, got %v expect %v", bat.Vecs[0].GetType(), retBatchPool.tombstoneType))
+		}
+		if !typeMatched(bat.Vecs[1], retBatchPool.tombRowIDType) {
+			panic(moerr.NewInternalErrorNoCtxf("retBatchPool: tombstone rowid vec type mismatch, got %v expect %v", bat.Vecs[1].GetType(), retBatchPool.tombRowIDType))
+		}
+		if !typeMatched(bat.Vecs[2], retBatchPool.tombKeyType) {
+			panic(moerr.NewInternalErrorNoCtxf("retBatchPool: tombstone key vec type mismatch, got %v expect %v", bat.Vecs[2].GetType(), retBatchPool.tombKeyType))
 		}
 
 		bat.CleanOnlyData()
@@ -201,7 +206,6 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 
 done:
 	retBatchPool.pinned[bat] = struct{}{}
-	//retBatchPool.debug[bat] = retBatchDebug{acquire: string(debug.Stack())}
 	return bat
 }
 
@@ -213,13 +217,8 @@ func (retBatchPool *retBatchList) releaseRetBatch(bat *batch.Batch, forTombstone
 	retBatchPool.mu.Lock()
 	defer retBatchPool.mu.Unlock()
 
-	//trace := retBatchPool.debug[bat]
-
 	if _, ok := retBatchPool.pinned[bat]; !ok {
 		msg := "retBatchPool: release unknown or already released batch"
-		//if trace.acquire != "" || trace.release != "" {
-		//	msg = fmt.Sprintf("%s (acquired at: %s) (last release at: %s)", msg, trace.acquire, trace.release)
-		//}
 		panic(moerr.NewInternalErrorNoCtx(msg))
 	}
 
@@ -238,11 +237,6 @@ func (retBatchPool *retBatchList) releaseRetBatch(bat *batch.Batch, forTombstone
 	} else {
 		retBatchPool.dList = append(retBatchPool.dList, bat)
 	}
-
-	//retBatchPool.debug[bat] = retBatchDebug{
-	//	acquire: trace.acquire,
-	//	release: string(debug.Stack()),
-	//}
 
 	delete(retBatchPool.pinned, bat)
 }
@@ -270,7 +264,6 @@ func (retBatchPool *retBatchList) freeAllRetBatches(mp *mpool.MPool) {
 	retBatchPool.dList = nil
 	retBatchPool.tList = nil
 	retBatchPool.pinned = nil
-	//retBatchPool.debug = nil
 
 }
 
@@ -278,23 +271,27 @@ func handleDataBranch(
 	execCtx *ExecCtx,
 	ses *Session,
 	stmt tree.Statement,
-) error {
+) (statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
 
 	switch st := stmt.(type) {
 	case *tree.DataBranchCreateTable:
-		return dataBranchCreateTable(execCtx, ses, st)
+		return stats, dataBranchCreateTable(execCtx, ses, st)
 	case *tree.DataBranchCreateDatabase:
 		return dataBranchCreateDatabase(execCtx, ses, st)
 	case *tree.DataBranchDeleteTable:
-		return dataBranchDeleteTable(execCtx, ses, st)
+		return stats, dataBranchDeleteTable(execCtx, ses, st)
 	case *tree.DataBranchDeleteDatabase:
-		return dataBranchDeleteDatabase(execCtx, ses, st)
+		return stats, dataBranchDeleteDatabase(execCtx, ses, st)
 	case *tree.DataBranchDiff:
-		return handleBranchDiff(execCtx, ses, st)
+		return stats, handleBranchDiff(execCtx, ses, st)
 	case *tree.DataBranchMerge:
-		return handleBranchMerge(execCtx, ses, st)
+		return stats, handleBranchMerge(execCtx, ses, st)
+	case *tree.DataBranchPick:
+		return stats, handleBranchPick(execCtx, ses, st)
 	default:
-		return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
+		return stats, moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
 	}
 }
 
@@ -304,11 +301,10 @@ func dataBranchCreateTable(
 	stmt *tree.DataBranchCreateTable,
 ) (err error) {
 	var (
-		bh          BackgroundExec
-		deferred    func(error) error
-		receipt     cloneReceipt
-		cloneStmt   *tree.CloneTable
-		tempExecCtx *ExecCtx
+		bh        BackgroundExec
+		deferred  func(error) error
+		receipt   cloneReceipt
+		cloneStmt *tree.CloneTable
 	)
 
 	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
@@ -336,27 +332,17 @@ func dataBranchCreateTable(
 		ses.GetTxnCompileCtx().SetDatabase(oldDefault)
 	}()
 
-	//data branch create table xxx from yyy snap_opt to_account_op;
-	re := regexp.MustCompile(`(?i)^DATA\s+BRANCH\s+CREATE\s+TABLE\s+(\S+)\s+FROM\s+(.+?);?$`)
-	srcAndDst := re.FindStringSubmatch(execCtx.input.sql)
-	if srcAndDst == nil {
-		return moerr.NewInternalErrorNoCtxf("cannot find src and dst table: %s", execCtx.input.sql)
-	}
-
-	sql := fmt.Sprintf("CREATE TABLE %s CLONE %s", srcAndDst[1], srcAndDst[2])
-
 	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
 
-	tempExecCtx = &ExecCtx{
-		reqCtx: execCtx.reqCtx,
-		input:  &UserInput{sql: sql},
-	}
-
-	if receipt, err = handleCloneTable(tempExecCtx, ses, cloneStmt, bh); err != nil {
+	if receipt, err = handleCloneTable(execCtx, ses, cloneStmt, bh); err != nil {
 		return
 	}
 
-	if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, receipt); err != nil {
+	if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, &receipt); err != nil {
+		return
+	}
+
+	if err = createBranchProtectSnapshot(execCtx.reqCtx, ses, bh, &receipt); err != nil {
 		return
 	}
 
@@ -367,12 +353,15 @@ func dataBranchCreateDatabase(
 	execCtx *ExecCtx,
 	ses *Session,
 	stmt *tree.DataBranchCreateDatabase,
-) (err error) {
+) (stats statistic.StatsArray, err error) {
 	var (
-		bh       BackgroundExec
-		deferred func(error) error
-		receipts []cloneReceipt
+		bh        BackgroundExec
+		deferred  func(error) error
+		receipts  []cloneReceipt
+		source    cloneDatabaseSource
+		authStats statistic.StatsArray
 	)
+	stats.Reset()
 
 	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
 		return
@@ -388,21 +377,42 @@ func dataBranchCreateDatabase(
 		execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelDatabase,
 	)
 
-	if receipts, err = handleCloneDatabase(execCtx, ses, bh, &stmt.CloneDatabase); err != nil {
+	if !skipDataBranchPrivilegeCheck(ses) {
+		if authStats, err = authenticateDataBranchCreateDatabase(execCtx.reqCtx, ses, stmt); err != nil {
+			stats.Add(&authStats)
+			return
+		}
+		stats.Add(&authStats)
+	}
+
+	if source, err = collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase); err != nil {
+		return
+	}
+
+	if authStats, err = authenticateDataBranchCreateDatabaseSourceTables(execCtx.reqCtx, ses, stmt, source); err != nil {
+		stats.Add(&authStats)
+		return
+	}
+	stats.Add(&authStats)
+
+	if receipts, err = handleCloneDatabaseWithSource(execCtx, ses, bh, &stmt.CloneDatabase, &source); err != nil {
 		return
 	}
 
 	if err = checkBranchQuota(execCtx.reqCtx, ses, bh, int64(len(receipts))); err != nil {
-		return err
+		return
 	}
 
-	for _, rcpt := range receipts {
-		if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, rcpt); err != nil {
+	for i := range receipts {
+		if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, &receipts[i]); err != nil {
+			return
+		}
+		if err = createBranchProtectSnapshot(execCtx.reqCtx, ses, bh, &receipts[i]); err != nil {
 			return
 		}
 	}
 
-	return nil
+	return
 }
 
 func markBranchTablesDeleted(
@@ -417,9 +427,8 @@ func markBranchTablesDeleted(
 		updateCtx = defines.AttachAccountId(updateCtx, sysAccountID)
 	}
 
-	const batchSize = 512
-	for start := 0; start < len(tableIDs); start += batchSize {
-		end := start + batchSize
+	for start := 0; start < len(tableIDs); start += dataBranchMetadataIDBatchSize {
+		end := start + dataBranchMetadataIDBatchSize
 		if end > len(tableIDs) {
 			end = len(tableIDs)
 		}
@@ -471,40 +480,23 @@ func dataBranchDeleteTable(
 	}()
 
 	var (
-		dbName  = stmt.TableName.SchemaName
-		tblName = stmt.TableName.ObjectName
+		dbName  string
+		tblName string
 		accId   uint32
-		sqlRet  executor.Result
 		tblID   uint64
-		found   bool
 	)
 
-	if len(dbName) == 0 {
-		dbName = tree.Identifier(ses.GetTxnCompileCtx().DefaultDatabase())
+	if dbName, tblName, err = branchTableName(execCtx.reqCtx, ses, stmt.TableName); err != nil {
+		return
 	}
 
 	if accId, err = defines.GetAccountId(execCtx.reqCtx); err != nil {
 		return
 	}
 
-	if sqlRet, err = runSql(
-		execCtx.reqCtx, ses, bh, fmt.Sprintf(
-			"select rel_id from %s.%s where account_id = %d and reldatabase = '%s' and relname = '%s'",
-			catalog.MO_CATALOG, catalog.MO_TABLES, accId, dbName, tblName,
-		), nil, nil,
-	); err != nil {
+	if tblID, err = validateDataBranchDeleteTableTarget(execCtx.reqCtx, ses, bh, dbName, tblName); err != nil {
 		return
 	}
-
-	sqlRet.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows == 0 {
-			return false
-		}
-		tblID = vector.GetFixedAtWithTypeCheck[uint64](cols[0], 0)
-		found = true
-		return false
-	})
-	sqlRet.Close()
 
 	{
 		var dropRet executor.Result
@@ -512,17 +504,21 @@ func dataBranchDeleteTable(
 			dropRet.Close()
 		}()
 
-		dropSQL := fmt.Sprintf("drop table if exists `%s`.`%s`", dbName, tblName)
+		dropSQL := fmt.Sprintf(
+			"drop table %s.%s",
+			quoteIdentifierForSQL(dbName),
+			quoteIdentifierForSQL(tblName),
+		)
 		if dropRet, err = runSql(execCtx.reqCtx, ses, bh, dropSQL, nil, nil); err != nil {
 			return
 		}
 	}
 
-	if !found {
-		return nil
+	if err = markBranchTablesDeleted(execCtx.reqCtx, ses, bh, accId, []uint64{tblID}); err != nil {
+		return
 	}
 
-	if err = markBranchTablesDeleted(execCtx.reqCtx, ses, bh, accId, []uint64{tblID}); err != nil {
+	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, []uint64{tblID}); err != nil {
 		return
 	}
 
@@ -552,7 +548,6 @@ func dataBranchDeleteDatabase(
 	var (
 		dbName   = stmt.DatabaseName
 		accId    uint32
-		sqlRet   executor.Result
 		tableIDs []uint64
 	)
 
@@ -560,23 +555,9 @@ func dataBranchDeleteDatabase(
 		return
 	}
 
-	if sqlRet, err = runSql(
-		execCtx.reqCtx, ses, bh, fmt.Sprintf(
-			"select rel_id from %s.%s where account_id = %d and reldatabase = '%s'",
-			catalog.MO_CATALOG, catalog.MO_TABLES, accId, dbName,
-		), nil, nil,
-	); err != nil {
+	if tableIDs, err = validateDataBranchDeleteDatabaseTarget(execCtx.reqCtx, ses, bh, dbName.String()); err != nil {
 		return
 	}
-
-	sqlRet.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows == 0 {
-			return true
-		}
-		tableIDs = append(tableIDs, executor.GetFixedRows[uint64](cols[0])...)
-		return true
-	})
-	sqlRet.Close()
 
 	{
 		var dropRet executor.Result
@@ -584,13 +565,17 @@ func dataBranchDeleteDatabase(
 			dropRet.Close()
 		}()
 
-		dropSQL := fmt.Sprintf("drop database if exists `%s`", dbName)
+		dropSQL := fmt.Sprintf("drop database %s", quoteIdentifierForSQL(dbName.String()))
 		if dropRet, err = runSql(execCtx.reqCtx, ses, bh, dropSQL, nil, nil); err != nil {
 			return
 		}
 	}
 
 	if err = markBranchTablesDeleted(execCtx.reqCtx, ses, bh, accId, tableIDs); err != nil {
+		return
+	}
+
+	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, tableIDs); err != nil {
 		return
 	}
 
@@ -629,7 +614,6 @@ func diffMergeAgency(
 		cancel context.CancelFunc
 	)
 
-	//ctx = fileservice.WithParallelMode(execCtx.reqCtx, fileservice.ParallelForce)
 	ctx, cancel = context.WithCancel(execCtx.reqCtx)
 
 	var (
@@ -639,6 +623,7 @@ func diffMergeAgency(
 		ok        bool
 		diffStmt  *tree.DataBranchDiff
 		mergeStmt *tree.DataBranchMerge
+		pickStmt  *tree.DataBranchPick
 	)
 
 	defer func() {
@@ -647,7 +632,9 @@ func diffMergeAgency(
 
 	if diffStmt, ok = stmt.(*tree.DataBranchDiff); !ok {
 		if mergeStmt, ok = stmt.(*tree.DataBranchMerge); !ok {
-			return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", stmt)
+			if pickStmt, ok = stmt.(*tree.DataBranchPick); !ok {
+				return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", stmt)
+			}
 		}
 	}
 
@@ -664,12 +651,34 @@ func diffMergeAgency(
 		); err != nil {
 			return
 		}
-	} else {
+		if err = validateProjectedColumns(diffStmt, tblStuff); err != nil {
+			return
+		}
+	} else if mergeStmt != nil {
 		copt.conflictOpt = mergeStmt.ConflictOpt
 		copt.expandUpdate = true
 		if tblStuff, err = getTableStuff(
 			ctx, ses, bh, mergeStmt.SrcTable, mergeStmt.DstTable,
 		); err != nil {
+			return
+		}
+	} else {
+		// Always use ACCEPT at hashDiff level for PICK so that conflicts on
+		// non-picked keys do not abort the operation. The user's actual
+		// conflict choice (FAIL/SKIP/ACCEPT) is enforced in the PICK pipeline
+		// via synthetic base-delete conflict markers plus the consumer logic.
+		copt.conflictOpt = &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT}
+		copt.expandUpdate = true
+		copt.preservePickConflicts = true
+		if tblStuff, err = getTableStuff(
+			ctx, ses, bh, pickStmt.SrcTable, pickStmt.DstTable,
+		); err != nil {
+			return
+		}
+		if tblStuff.def.pkKind == fakeKind {
+			err = moerr.NewNotSupportedNoCtxf(
+				"DATA BRANCH PICK requires a table with a primary key; table %s has no primary key",
+				pickStmt.SrcTable.ObjectName)
 			return
 		}
 	}
@@ -724,7 +733,41 @@ func diffMergeAgency(
 		}
 	}
 
+	// Materialize PICK keys and build PK filter in one unified pass.
+	// Both pickKeyHashmap (for producer-side precise batch filtering in
+	// buildHashmapForTable) and pkFilter (for object/block ZoneMap pruning
+	// inside CollectChanges) are produced here, BEFORE the goroutines are
+	// launched.
+	var pkFilter *engine.PKFilter
+	var pickKeyHashmap databranchutils.BranchHashmap
+	if pickStmt != nil && pickStmt.Keys != nil {
+		var err2 error
+		pickKeyHashmap, pkFilter, err2 = materializePickKeysAndFilter(ctx, ses, bh, pickStmt, tblStuff)
+		if err2 != nil {
+			err = err2
+			return
+		}
+	}
+	defer freePKFilter(pkFilter, ses.proc.Mp())
+	defer func() {
+		if pickKeyHashmap != nil {
+			pickKeyHashmap.Close()
+		}
+	}()
+
+	// Resolve BETWEEN SNAPSHOT timestamps for PICK.
+	// These are passed to constructChangeHandle which intersects them with the
+	// target collect range computed by decideCollectRange.
+	var betweenFrom, betweenTo *types.TS
+	if pickStmt != nil && pickStmt.BetweenFrom != "" && pickStmt.BetweenTo != "" {
+		betweenFrom, betweenTo, err = resolveBetweenSnapshots(ses, pickStmt.BetweenFrom, pickStmt.BetweenTo)
+		if err != nil {
+			return
+		}
+	}
+
 	wg.Add(2)
+	outputCh := retBatCh
 
 	go func() {
 		defer wg.Done()
@@ -736,13 +779,19 @@ func diffMergeAgency(
 			// 5. as file
 
 			if err2 := satisfyDiffOutputOpt(
-				ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, retBatCh,
+				ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, outputCh,
+			); err2 != nil {
+				outputErr.Store(err2)
+			}
+		} else if pickStmt != nil {
+			if err2 := pickMergeDiffs(
+				ctx, cancel, ses, bh, pickStmt, dagInfo, tblStuff, outputCh,
 			); err2 != nil {
 				outputErr.Store(err2)
 			}
 		} else {
 			if err2 := mergeDiffs(
-				ctx, cancel, ses, bh, mergeStmt, dagInfo, tblStuff, retBatCh,
+				ctx, cancel, ses, bh, mergeStmt, dagInfo, tblStuff, outputCh,
 			); err2 != nil {
 				outputErr.Store(err2)
 			}
@@ -750,8 +799,20 @@ func diffMergeAgency(
 	}()
 
 	if err = diffOnBase(
-		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit,
+		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit, pkFilter, pickKeyHashmap,
+		betweenFrom, betweenTo,
 	); err != nil {
+		// If the consumer cancelled the context (e.g., PICK conflict FAIL),
+		// wait for it to finish and prefer its real error over context.Canceled.
+		if retBatCh != nil {
+			close(retBatCh)
+			retBatCh = nil
+		}
+		waited = true
+		wg.Wait()
+		if outputErr.Load() != nil {
+			err = outputErr.Load().(error)
+		}
 		return
 	}
 
@@ -807,6 +868,10 @@ func validate(
 
 	if diffStmt, ok = stmt.(*tree.DataBranchDiff); !ok {
 		return nil
+	}
+
+	if diffStmt.OutputOpt != nil && diffStmt.OutputOpt.As.ObjectName != "" {
+		return moerr.NewNotSupportedNoCtx("DATA BRANCH DIFF OUTPUT AS")
 	}
 
 	if diffStmt.OutputOpt != nil && len(diffStmt.OutputOpt.DirPath) > 0 {
@@ -875,6 +940,7 @@ func getTableStuff(
 	}
 
 	tblStuff.def.pkColIdx = int(baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName])
+	tblStuff.def.pkSeqnum = int(baseTblDef.Cols[tblStuff.def.pkColIdx].Seqnum)
 
 	for i, col := range tarTblDef.Cols {
 		if col.Name == catalog.Row_ID {
@@ -916,6 +982,9 @@ func diffOnBase(
 	tblStuff tableStuff,
 	copt compositeOption,
 	emit emitFunc,
+	pkFilter *engine.PKFilter,
+	pickKeyHashmap databranchutils.BranchHashmap,
+	betweenFrom, betweenTo *types.TS,
 ) (err error) {
 
 	defer func() {
@@ -946,38 +1015,35 @@ func diffOnBase(
 		closeHandle()
 	}()
 
-	if dagInfo.lcaType != lcaEmpty {
-		if dagInfo.lcaTableId == tblStuff.tarRel.GetTableID(ctx) {
+	if dagInfo.hasLCA() {
+		switch dagInfo.lcaTableId {
+		case tblStuff.tarRel.GetTableID(ctx):
 			tblStuff.lcaRel = tblStuff.tarRel
-		} else if dagInfo.lcaTableId == tblStuff.baseRel.GetTableID(ctx) {
+		case tblStuff.baseRel.GetTableID(ctx):
 			tblStuff.lcaRel = tblStuff.baseRel
-		} else {
+		default:
+			tarSp, baseSp := tblStuff.resolvedSnapshots(ses)
+			probe := dagInfo.lcaProbeSnapshot(tarSp, baseSp)
 			lcaSnapshot := &plan2.Snapshot{
-				Tenant: &plan.SnapshotTenant{
-					TenantID: ses.GetAccountId(),
-				},
+				Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()},
+				TS:     &timestamp.Timestamp{PhysicalTime: probe.Physical()},
 			}
-			lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.tarBranchTS.Physical()}
-			if dagInfo.baseBranchTS.LT(&dagInfo.tarBranchTS) {
-				lcaSnapshot.TS.PhysicalTime = dagInfo.baseBranchTS.Physical()
-			}
-
 			if tblStuff.lcaRel, err = getRelationById(
 				ctx, ses, bh, dagInfo.lcaTableId, lcaSnapshot); err != nil {
 				return
 			}
 		}
 	}
-	// has no lca
+
 	if tarHandle, baseHandle, err = constructChangeHandle(
-		ctx, ses, bh, tblStuff, &dagInfo,
+		ctx, ses, bh, tblStuff, &dagInfo, pkFilter, betweenFrom, betweenTo,
 	); err != nil {
 		return
 	}
 
 	if err = hashDiff(
 		ctx, ses, bh, tblStuff, dagInfo,
-		copt, emit, tarHandle, baseHandle,
+		copt, emit, tarHandle, baseHandle, pickKeyHashmap,
 	); err != nil {
 		return
 	}
@@ -1206,6 +1272,8 @@ func constructChangeHandle(
 	bh BackgroundExec,
 	tables tableStuff,
 	branchInfo *branchMetaInfo,
+	pkFilter *engine.PKFilter,
+	betweenFrom, betweenTo *types.TS,
 ) (
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
@@ -1237,9 +1305,54 @@ func constructChangeHandle(
 	); err != nil {
 		return
 	}
+
+	// BETWEEN SNAPSHOT: intersect the target collect range with [betweenFrom.Next(), betweenTo].
+	// This narrows the time window on the source side so only changes within the
+	// snapshot range are collected.  The base (destination) side is not narrowed.
+	if betweenFrom != nil && betweenTo != nil {
+		bFrom := betweenFrom.Next()
+		bTo := *betweenTo
+		j := 0
+		for i := range tarRange.rel {
+			// Intersect: from = max(original, bFrom), end = min(original, bTo)
+			f := tarRange.from[i]
+			e := tarRange.end[i]
+			if bFrom.GT(&f) {
+				f = bFrom
+			}
+			if bTo.LT(&e) {
+				e = bTo
+			}
+			if f.LE(&e) {
+				tarRange.from[j] = f
+				tarRange.end[j] = e
+				tarRange.rel[j] = tarRange.rel[i]
+				j++
+			}
+		}
+		tarRange.from = tarRange.from[:j]
+		tarRange.end = tarRange.end[:j]
+		tarRange.rel = tarRange.rel[:j]
+	}
+
+	// collectFn dispatches to the PK-filtered or plain CollectChanges variant.
+	collectFn := func(
+		ctx context.Context,
+		rel engine.Relation,
+		from, end types.TS,
+		mp *mpool.MPool,
+	) (engine.ChangesHandle, error) {
+		if pkFilter != nil && pkFilter.Valid() {
+			return databranchutils.CollectChangesWithPKFilter(
+				ctx, rel, from, end, mp, pkFilter,
+			)
+		}
+		return databranchutils.CollectChanges(ctx, rel, from, end, mp)
+	}
+
 	for i := range tarRange.rel {
 		collectStart := time.Now()
-		if handle, err = databranchutils.CollectChanges(
+		if handle, err = collectFn(
 			ctx,
 			tarRange.rel[i],
 			tarRange.from[i],
@@ -1264,7 +1377,7 @@ func constructChangeHandle(
 
 	for i := range baseRange.rel {
 		collectStart := time.Now()
-		if handle, err = databranchutils.CollectChanges(
+		if handle, err = collectFn(
 			ctx,
 			baseRange.rel[i],
 			baseRange.from[i],
@@ -1303,11 +1416,6 @@ func decideCollectRange(
 ) {
 
 	var (
-		lcaRel engine.Relation
-
-		tarSp  types.TS
-		baseSp types.TS
-
 		tarCTS  types.TS
 		baseCTS types.TS
 
@@ -1315,19 +1423,9 @@ func decideCollectRange(
 
 		tarTableID  = tables.tarRel.GetTableID(ctx)
 		baseTableID = tables.baseRel.GetTableID(ctx)
-
-		txnSnapshot = types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
 	)
 
-	tarSp = txnSnapshot
-	if tables.tarSnap != nil && tables.tarSnap.TS != nil {
-		tarSp = types.TimestampToTS(*tables.tarSnap.TS)
-	}
-
-	baseSp = txnSnapshot
-	if tables.baseSnap != nil && tables.baseSnap.TS != nil {
-		baseSp = types.TimestampToTS(*tables.baseSnap.TS)
-	}
+	tarSp, baseSp := tables.resolvedSnapshots(ses)
 
 	if tblCommitTS, err = getTablesCreationCommitTS(
 		ctx, ses, tables.tarRel, tables.baseRel,
@@ -1339,25 +1437,52 @@ func decideCollectRange(
 	tarCTS = tblCommitTS[0]
 	baseCTS = tblCommitTS[1]
 
-	// Boundary semantics:
-	// 1. childCreateCommitTS marks when the child table itself becomes visible.
-	//    The cloned rows are materialized by that DDL, so child-owned change collection
-	//    must start from childCreateCommitTS.Next() to avoid re-reading inherited rows.
-	// 2. branchTS marks the source snapshot on the parent/LCA side used by the clone.
-	//    Parent-side incremental comparison must start from branchTS.Next() because the
-	//    snapshot at branchTS is already included in the cloned contents.
-
-	// now we got the t1.snapshot, t1.branchTS, t2.snapshot, t2.branchTS and txnSnapshot,
-	// and then we need to decide the range that t1 and t2 should collect.
+	// ============================================================
+	// Running example used throughout the comments below.
 	//
-	// case 0: special cases:
-	//	i. tar = base
-	//   -|------------|-------------|----
-	//   cts          sp1           sp2
-	//	diff t(sp1) against t(sp2)
-	// 		diff empty against (sp1, sp2]
-	//	diff t(sp2) against t(sp2)
-	//		diff (sp1, sp2] against empty
+	// A multi-fork branch tree (depth 4, 19 nodes, 10 leaves):
+	//
+	//                          t0  (root)
+	//                       /   |   \
+	//                     t1   t2   t3
+	//                    /  \   |   /  \
+	//                  t4   t5 t6  t7   t8
+	//                 / \   /\ /\  /\   /\
+	//                t9 t10 ... t15 t16 ... t18
+	//
+	// Every non-root node was cloned from its parent at some
+	// CloneTS, then performed its own insert/update/delete writes.
+	// The root t0 also performed extra writes after the whole tree
+	// was built. The `data branch diff` query we need to answer:
+	//
+	//     data branch diff t9 against t0
+	//
+	// `t9 against t0` exercises a 3-edge skip: the LCA of (t9, t0)
+	// is t0 itself; the path from LCA down to the target endpoint
+	// is path[LCA → tar] = [t0, t1, t4, t9]; the path on the base
+	// side is path[LCA → base] = [t0]. With this geometry, the
+	// invariants below let us derive the correct collect ranges
+	// for any pair of nodes in any tree shape.
+	//
+	// Boundary semantics:
+	// 1. childCreateCommitTS (child.CTS) marks when the child table
+	//    itself becomes visible. The cloned rows are materialized
+	//    by that DDL, so child-owned change collection must start
+	//    from child.CTS.Next() to avoid re-reading inherited rows.
+	// 2. CloneTS marks the source snapshot on the parent side used
+	//    by the clone. Parent-side incremental comparison ending at
+	//    the next child's CloneTS captures every parent write that
+	//    is still observable on this side (later parent writes are
+	//    invisible — the fork already happened).
+	// ============================================================
+
+	// case 0: tar and base resolve to the same table id.
+	// Diff degenerates into a snapshot-vs-snapshot comparison on
+	// that single relation; the DAG model does not apply.
+	//   -|-----------|------------|----
+	//   cts          sp1          sp2
+	//   diff t(sp1) against t(sp2) → diff empty against (sp1, sp2]
+	//   diff t(sp2) against t(sp1) → diff (sp1, sp2] against empty
 	if tarTableID == baseTableID {
 		if tarSp.LE(&baseSp) {
 			// tar collect nothing
@@ -1366,28 +1491,22 @@ func decideCollectRange(
 				end:  []types.TS{baseSp},
 				rel:  []engine.Relation{tables.baseRel},
 			}
-			dagInfo.tarBranchTS = tarSp
-			dagInfo.baseBranchTS = tarSp
 		} else {
 			tarCollectRange = collectRange{
 				from: []types.TS{baseSp.Next()},
 				end:  []types.TS{tarSp},
 				rel:  []engine.Relation{tables.tarRel},
 			}
-
-			dagInfo.tarBranchTS = baseSp
-			dagInfo.baseBranchTS = baseSp
 			// base collect nothing
 		}
-
-		dagInfo.lcaTableId = baseTableID
-
 		return
 	}
 
-	//
-	// case 1: t1 and t2 have no LCA
-	//	==> t1 collect [0, sp], t2 collect [0, sp]
+	// case 1: tar and base have no LCA (two unrelated tables).
+	// Whole-history diff: each side reads everything it has from
+	// the start of time up to its snapshot. There is no shared
+	// ancestor to anchor the comparison, so the DAG model does
+	// not apply either.
 	if dagInfo.lcaTableId == 0 {
 		tarCollectRange = collectRange{
 			from: []types.TS{types.MinTs()},
@@ -1402,123 +1521,252 @@ func decideCollectRange(
 		return
 	}
 
-	// case 2: t1 and t2 have the LCA t0 (not t1 nor t2)
-	// 	i. t1 and t2 branched from to at the same ts
-	//		==> t1 collect [branchTS+1, sp], t2 collect [branchTS+1, sp]
-	//	ii. t1 and t2 have different branchTS
-	//                             seg2  sp2
-	//		  common    seg1  t2 --------|--->
-	//   t0 |-------|---------|-------------->
-	//             t1 ----------------|----->
-	//					seg3		 sp1
-	// the diff between	(t0.seg1 ∩ t2.seg2)	 and t1.seg3
-	if dagInfo.lcaTableId != tarTableID && dagInfo.lcaTableId != baseTableID {
-		tarCollectRange = collectRange{
-			from: []types.TS{tarCTS.Next()},
-			end:  []types.TS{tarSp},
-			rel:  []engine.Relation{tables.tarRel},
-		}
-		baseCollectRange = collectRange{
-			from: []types.TS{baseCTS.Next()},
-			end:  []types.TS{baseSp},
-			rel:  []engine.Relation{tables.baseRel},
-		}
-		if dagInfo.tarBranchTS.EQ(&dagInfo.baseBranchTS) {
-			// do nothing
-		} else {
-			if lcaRel, err = getRelationById(
-				ctx, ses, bh, dagInfo.lcaTableId, &plan2.Snapshot{
+	// ============================================================
+	// case 2: tar and base share an LCA in the DAG. This is the
+	// general path that must work uniformly for any tree shape and
+	// any depth. We unify what used to be three separate sub-cases
+	// (LCA == base, LCA == tar, LCA == third node) into one model
+	// driven by the LCA→endpoint paths captured in dagInfo.
+	//
+	// Logical state of an endpoint X at some snapshot tX:
+	//
+	//     state(X, tX) = ⋃ over each ancestor A on path[root, X] of
+	//                       writes_on(A) within window_for(A, X, tX)
+	//
+	// Two sides of the diff therefore differ only in writes that
+	// happen on path[LCA, endpoint] of each side — every ancestor
+	// strictly above LCA is shared and contributes the same rows
+	// (folded into both sides' clone-materialization), so it
+	// cancels out and never needs to be read.
+	//
+	// For each ancestor A on path[LCA, endpoint] this side's own
+	// "mutation window" is:
+	//
+	//     windowFrom_A = A.CTS + 1                        (A's own
+	//                                                      writes,
+	//                                                      excluding
+	//                                                      clone)
+	//     windowEnd_A  = nextChildOnPath.CloneTS          (A is on
+	//                                                      the path
+	//                                                      but is not
+	//                                                      the
+	//                                                      endpoint)
+	//                  | endpointSP                       (A is the
+	//                                                      endpoint)
+	//
+	// Walked through on the running example for `diff t9 against t0`:
+	//
+	//   path[LCA → tar]  = [t0, t1, t4, t9]
+	//   path[LCA → base] = [t0]
+	//
+	//   For tar (t9):
+	//     A = t0 (LCA): own writes that *t9* sees =
+	//         (t0.CTS, t1.CloneTS]  ← t0 writes BEFORE t1 was
+	//                                  forked are the ones t9
+	//                                  inherits via the t0→t1→t4→t9
+	//                                  clone chain. After t1 was
+	//                                  forked, t0 mutations are
+	//                                  invisible to t9.
+	//     A = t1 (intermediate): (t1.CTS, t4.CloneTS]
+	//     A = t4 (intermediate): (t4.CTS, t9.CloneTS]
+	//     A = t9 (endpoint):     (t9.CTS, tarSP]
+	//
+	//   For base (t0): A = t0 (endpoint = LCA): (t0.CTS, baseSP]
+	//
+	// Symmetric prefix on the LCA. Both endpoints inherit the LCA's
+	// state cloned at *their* fork moment. The prefix
+	// (LCA.CTS, min(thisFirstChildCloneTS, otherFirstChildCloneTS)]
+	// is therefore identical on both sides and would simply cancel
+	// inside the hash-diff. We clamp this side's LCA window lower
+	// bound up to otherFork.Next() so the IO is skipped entirely.
+	//
+	// Concretely for `diff t9 against t0`: tar's LCA window is
+	// (t0.CTS, t1.CloneTS]. Base IS the LCA, so otherFork = baseSP
+	// (= "now"); since baseSP > t1.CloneTS, the clamp does not move
+	// windowFrom and the full window is collected. Conversely for
+	// base (which is the LCA), tar's first child is t1, so
+	// otherFork = t1.CloneTS and base collects only
+	// (t1.CloneTS, baseSP] — t0's pre-fork writes that t9 already
+	// inherits are not collected on either side.
+	//
+	// The two sides' segment lists feed the hash-diff algorithm,
+	// which still reconciles whatever remaining symmetric writes
+	// reach both sides (e.g. the LCA's own post-fork writes that
+	// some descendants share). The unified model thus generalizes
+	// the historical case-2/3/4 logic into a single walk regardless
+	// of depth or which side hosts the LCA.
+	// ============================================================
+	tarPath := dagInfo.pathFromLCAToTar
+	tarPathTS := dagInfo.pathFromLCAToTarTS
+	basePath := dagInfo.pathFromLCAToBase
+	basePathTS := dagInfo.pathFromLCAToBaseTS
+	if len(tarPath) == 0 || len(basePath) == 0 {
+		err = moerr.NewInternalErrorNoCtxf(
+			"data branch diff: missing DAG path (tar=%d base=%d lca=%d)",
+			tarTableID, baseTableID, dagInfo.lcaTableId,
+		)
+		return
+	}
+
+	if tarCollectRange, err = buildSideCollectRange(
+		ctx, ses, bh, tables, tarSp, tarCTS,
+		tarPath, tarPathTS, basePathTS, baseSp,
+	); err != nil {
+		return
+	}
+	if baseCollectRange, err = buildSideCollectRange(
+		ctx, ses, bh, tables, baseSp, baseCTS,
+		basePath, basePathTS, tarPathTS, tarSp,
+	); err != nil {
+		return
+	}
+	return
+}
+
+// buildSideCollectRange materializes one side of `data branch diff`
+// using the unified ancestor-walk described above. It walks selfPath
+// (LCA → endpoint, top-down) and emits one collect segment per
+// ancestor.
+//
+// Per-ancestor window (A is the i-th node on selfPath):
+//
+//	windowFrom_A = A.CTS.Next()
+//	windowEnd_A  = selfPath[i+1].CloneTS  if A is intermediate
+//	             | endpointSP             if A is endpoint
+//
+// LCA prune (i == 0):
+//
+//	windowFrom_A = max(windowFrom_A, otherFork.Next())
+//	where otherFork = otherPath[1].CloneTS if otherEndpoint != LCA
+//	                | otherSP              if otherEndpoint == LCA
+//
+// Walked through on the running example `diff t9 against t0` for the
+// tar side (selfPath = [t0, t1, t4, t9], otherPath = [t0]):
+//
+//	i=0  A = t0 (LCA)
+//	     windowFrom = t0.CTS + 1
+//	     windowEnd  = t1.CloneTS                       (selfPath[1])
+//	     LCA prune:  otherEndpoint == LCA, so otherFork = otherSP
+//	                 (= baseSP). baseSP > t1.CloneTS so no clamp.
+//	     emit (t0_rel, t0.CTS+1, t1.CloneTS]
+//
+//	i=1  A = t1 (intermediate)
+//	     windowFrom = t1.CTS + 1
+//	     windowEnd  = t4.CloneTS                       (selfPath[2])
+//	     emit (t1_rel, t1.CTS+1, t4.CloneTS]
+//
+//	i=2  A = t4 (intermediate)
+//	     windowFrom = t4.CTS + 1
+//	     windowEnd  = t9.CloneTS                       (selfPath[3])
+//	     emit (t4_rel, t4.CTS+1, t9.CloneTS]
+//
+//	i=3  A = t9 (endpoint)
+//	     windowFrom = t9.CTS + 1
+//	     windowEnd  = tarSP
+//	     emit (t9_rel, t9.CTS+1, tarSP]
+//
+// Empty windows (windowFrom > windowEnd) are dropped silently.
+//
+// Relations are looked up once per node (cache-hit on tar/base/lca,
+// one fresh fetch per intermediate). CTSes are resolved lazily and
+// reuse the already-known endpointCTS for the endpoint.
+func buildSideCollectRange(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	tables tableStuff,
+	endpointSP types.TS,
+	endpointCTS types.TS,
+	selfPath []uint64,
+	selfPathTS []types.TS,
+	otherPathTS []types.TS,
+	otherSP types.TS,
+) (cr collectRange, err error) {
+
+	endpointID := selfPath[len(selfPath)-1]
+	for i, nodeID := range selfPath {
+		var (
+			rel        engine.Relation
+			windowFrom types.TS
+			windowEnd  types.TS
+			nodeCTS    types.TS
+		)
+
+		// Resolve the relation handle for this node.
+		switch {
+		case nodeID == tables.tarRel.GetTableID(ctx):
+			rel = tables.tarRel
+		case nodeID == tables.baseRel.GetTableID(ctx):
+			rel = tables.baseRel
+		case tables.lcaRel != nil && nodeID == tables.lcaRel.GetTableID(ctx):
+			rel = tables.lcaRel
+		default:
+			if rel, err = getRelationById(
+				ctx, ses, bh, nodeID, &plan2.Snapshot{
 					Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()},
-					TS:     &timestamp.Timestamp{PhysicalTime: tarSp.Physical()},
-				}); err != nil {
+					TS:     &timestamp.Timestamp{PhysicalTime: endpointSP.Physical()},
+				},
+			); err != nil {
 				return
 			}
-
-			if dagInfo.tarBranchTS.GT(&dagInfo.baseBranchTS) {
-				tarCollectRange.rel = append(tarCollectRange.rel, lcaRel)
-				tarCollectRange.from = append(tarCollectRange.from, dagInfo.baseBranchTS.Next())
-				tarCollectRange.end = append(tarCollectRange.end, dagInfo.tarBranchTS)
-				dagInfo.tarBranchTS = dagInfo.baseBranchTS
-			} else {
-				baseCollectRange.rel = append(baseCollectRange.rel, lcaRel)
-				baseCollectRange.from = append(baseCollectRange.from, dagInfo.tarBranchTS.Next())
-				baseCollectRange.end = append(baseCollectRange.end, dagInfo.baseBranchTS)
-				dagInfo.baseBranchTS = dagInfo.tarBranchTS
-			}
 		}
-		return
-	}
 
-	// case 3: t1 is the LCA of t1 and t2
-	//	i. t1.sp < t2.branchTS
-	//		t1 -----sp1--------|-------------->
-	//				    seg1  t2-------sp2---->
-	//							  seg2
-	//		==> the diff between null and (t1.seg1 ∩ t2.seg2)
-	//  ii. t1.sp == t2.branchTS
-	//		==> t1 collect nothing, t2 collect [branchTS+1, sp]
-	// iii. t1.sp > t2.branchTS
-	//		==> t1 collect [branchTS+1, sp], t2 collect [branchTS+1, sp]
-	if dagInfo.lcaTableId == baseTableID {
-		// base is the lca
-		if baseSp.LT(&dagInfo.tarBranchTS) {
-			tarCollectRange = collectRange{
-				from: []types.TS{tarCTS.Next(), baseSp.Next()},
-				end:  []types.TS{tarSp, dagInfo.tarBranchTS},
-				rel:  []engine.Relation{tables.tarRel, tables.baseRel},
-			}
-			// base collect nothing
-		} else if baseSp.EQ(&dagInfo.tarBranchTS) {
-			tarCollectRange = collectRange{
-				from: []types.TS{tarCTS.Next()},
-				end:  []types.TS{tarSp},
-				rel:  []engine.Relation{tables.tarRel},
-			}
-			// base collect nothing
+		// Resolve creation commit TS so the window starts after the
+		// clone-materialization commit. Reuse endpointCTS for the
+		// endpoint to avoid a redundant lookup.
+		if nodeID == endpointID {
+			nodeCTS = endpointCTS
 		} else {
-			tarCollectRange = collectRange{
-				from: []types.TS{tarCTS.Next()},
-				end:  []types.TS{tarSp},
-				rel:  []engine.Relation{tables.tarRel},
+			ctsList, err2 := getTablesCreationCommitTS(
+				ctx, ses, rel, rel,
+				[]types.TS{endpointSP, endpointSP},
+			)
+			if err2 != nil {
+				err = err2
+				return
 			}
-			baseCollectRange = collectRange{
-				from: []types.TS{dagInfo.tarBranchTS.Next()},
-				end:  []types.TS{baseSp},
-				rel:  []engine.Relation{tables.baseRel},
+			if len(ctsList) == 0 {
+				err = moerr.NewInternalErrorNoCtxf(
+					"data branch: failed to resolve creation TS for table %d", nodeID)
+				return
+			}
+			nodeCTS = ctsList[0]
+		}
+
+		// Window upper bound.
+		if i == len(selfPath)-1 {
+			windowEnd = endpointSP
+		} else {
+			windowEnd = selfPathTS[i+1]
+		}
+
+		// Window lower bound.
+		windowFrom = nodeCTS.Next()
+
+		// LCA prune (i == 0): clamp to skip the prefix that the
+		// other side inherits identically via clone.
+		if i == 0 {
+			var otherFork types.TS
+			if len(otherPathTS) > 1 {
+				otherFork = otherPathTS[1]
+			} else {
+				// Other endpoint IS the LCA; observation goes up to
+				// otherSP.
+				otherFork = otherSP
+			}
+			otherForkNext := otherFork.Next()
+			if otherForkNext.GT(&windowFrom) {
+				windowFrom = otherForkNext
 			}
 		}
-		return
-	}
 
-	// case 4: t2 is the LCA of t1 and t2
-	// tar is the lca
-	if tarSp.LT(&dagInfo.baseBranchTS) {
-		baseCollectRange = collectRange{
-			from: []types.TS{baseCTS.Next(), tarSp.Next()},
-			end:  []types.TS{baseSp, dagInfo.baseBranchTS},
-			rel:  []engine.Relation{tables.baseRel, tables.tarRel},
+		if windowFrom.GT(&windowEnd) {
+			continue
 		}
-		// tar collect nothing
-	} else if tarSp.EQ(&dagInfo.baseBranchTS) {
-		baseCollectRange = collectRange{
-			from: []types.TS{baseCTS.Next()},
-			end:  []types.TS{baseSp},
-			rel:  []engine.Relation{tables.baseRel},
-		}
-		// tar collect nothing
-	} else {
-		baseCollectRange = collectRange{
-			from: []types.TS{baseCTS.Next()},
-			end:  []types.TS{baseSp},
-			rel:  []engine.Relation{tables.baseRel},
-		}
-		tarCollectRange = collectRange{
-			from: []types.TS{dagInfo.baseBranchTS.Next()},
-			end:  []types.TS{tarSp},
-			rel:  []engine.Relation{tables.tarRel},
-		}
+		cr.rel = append(cr.rel, rel)
+		cr.from = append(cr.from, windowFrom)
+		cr.end = append(cr.end, windowEnd)
 	}
-
 	return
 }
 
@@ -1534,6 +1782,8 @@ func getTablesCreationCommitTS(
 	snapshot []types.TS,
 ) ([]types.TS, error) {
 	txnSnap := types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
+	dbLowerBounds := make(map[dbCreatedTimeLowerBoundKey]types.TS)
+	tableCTS := make(map[tableCreationCommitTSKey]types.TS)
 
 	snapFor := func(idx int) types.TS {
 		if idx < len(snapshot) && !snapshot[idx].IsEmpty() {
@@ -1542,14 +1792,35 @@ func getTablesCreationCommitTS(
 		return txnSnap
 	}
 
-	resolve := func(tableID uint64, snap types.TS) (types.TS, error) {
+	resolve := func(targetRel engine.Relation, snap types.TS) (types.TS, error) {
 		totalStart := time.Now()
+		tableID := targetRel.GetTableID(ctx)
+		lowerBound, err := getDatabaseCreatedTimeLowerBound(
+			ctx, ses, targetRel, snap, dbLowerBounds,
+		)
+		if err != nil {
+			return types.TS{}, err
+		}
+
+		key := tableCreationCommitTSKey{
+			tableID:    tableID,
+			snapshot:   snap,
+			lowerBound: lowerBound,
+		}
+		if ts, ok := tableCTS[key]; ok {
+			return ts, nil
+		}
+
 		collectStart := time.Now()
-		ts, err := getTableCreationCommitTSByCollectChanges(ctx, ses, tableID, snap)
+		ts, err := getTableCreationCommitTSByCollectChanges(
+			ctx, ses, targetRel, tableID, snap, lowerBound,
+		)
 		if err == nil {
+			tableCTS[key] = ts
 			logutil.Info("DataBranch-TableCTS-Resolve-Done",
 				zap.Uint64("table-id", tableID),
 				zap.String("snapshot", snap.ToString()),
+				zap.String("lower-bound", lowerBound.ToString()),
 				zap.String("path", "CollectChanges"),
 				zap.String("commit-ts", ts.ToString()),
 				zap.Duration("collectchanges-cost", time.Since(collectStart)),
@@ -1561,6 +1832,7 @@ func getTablesCreationCommitTS(
 		logutil.Warn("getTablesCreationCommitTS: CollectChanges failed, trying Reader fallback",
 			zap.Uint64("table-id", tableID),
 			zap.String("snapshot", snap.ToString()),
+			zap.String("lower-bound", lowerBound.ToString()),
 			zap.Duration("collectchanges-cost", collectCost),
 			zap.Error(err),
 		)
@@ -1571,6 +1843,7 @@ func getTablesCreationCommitTS(
 				zap.Uint64("table-id", tableID),
 				zap.String("snapshot", snap.ToString()),
 				zap.String("path", "ReaderFallback"),
+				zap.String("lower-bound", lowerBound.ToString()),
 				zap.Duration("collectchanges-cost", collectCost),
 				zap.Duration("reader-cost", time.Since(readerStart)),
 				zap.Duration("total-cost", time.Since(totalStart)),
@@ -1583,22 +1856,157 @@ func getTablesCreationCommitTS(
 			zap.String("snapshot", snap.ToString()),
 			zap.String("path", "ReaderFallback"),
 			zap.String("commit-ts", ts.ToString()),
+			zap.String("lower-bound", lowerBound.ToString()),
 			zap.Duration("collectchanges-cost", collectCost),
 			zap.Duration("reader-cost", time.Since(readerStart)),
 			zap.Duration("total-cost", time.Since(totalStart)),
 		)
+		tableCTS[key] = ts
 		return ts, nil
 	}
 
-	tarCTS, err := resolve(tar.GetTableID(ctx), snapFor(0))
+	tarCTS, err := resolve(tar, snapFor(0))
 	if err != nil {
 		return nil, err
 	}
-	baseCTS, err := resolve(base.GetTableID(ctx), snapFor(1))
+	baseCTS, err := resolve(base, snapFor(1))
 	if err != nil {
 		return nil, err
 	}
 	return []types.TS{tarCTS, baseCTS}, nil
+}
+
+type dbCreatedTimeLowerBoundKey struct {
+	accountID  uint32
+	databaseID uint64
+	database   string
+	snapshot   types.TS
+}
+
+type tableCreationCommitTSKey struct {
+	tableID    uint64
+	snapshot   types.TS
+	lowerBound types.TS
+}
+
+func getDatabaseCreatedTimeLowerBound(
+	ctx context.Context,
+	ses *Session,
+	targetRel engine.Relation,
+	snapshotTS types.TS,
+	cache map[dbCreatedTimeLowerBoundKey]types.TS,
+) (types.TS, error) {
+	if targetRel == nil {
+		return types.TS{}, moerr.NewInternalErrorNoCtx(
+			"getDatabaseCreatedTimeLowerBound: missing target relation",
+		)
+	}
+	targetDef := targetRel.GetTableDef(ctx)
+	if targetDef == nil || targetDef.DbName == "" {
+		return types.TS{}, moerr.NewInternalErrorNoCtx(
+			"getDatabaseCreatedTimeLowerBound: missing target database name",
+		)
+	}
+	accountID := ses.GetAccountId()
+	databaseID := targetRel.GetDBID(ctx)
+	key := dbCreatedTimeLowerBoundKey{
+		accountID:  accountID,
+		databaseID: databaseID,
+		database:   targetDef.DbName,
+		snapshot:   snapshotTS,
+	}
+	if cache != nil {
+		if lowerBound, ok := cache[key]; ok {
+			return lowerBound, nil
+		}
+	}
+
+	lowerBound, err := getDatabaseCreatedTimeLowerBoundByPK(
+		ctx, ses, accountID, databaseID, targetDef.DbName, snapshotTS,
+	)
+	if err != nil {
+		return types.TS{}, err
+	}
+	if cache != nil {
+		cache[key] = lowerBound
+	}
+	return lowerBound, nil
+}
+
+func getDatabaseCreatedTimeLowerBoundByPK(
+	ctx context.Context,
+	ses *Session,
+	accountID uint32,
+	databaseID uint64,
+	databaseName string,
+	snapshotTS types.TS,
+) (types.TS, error) {
+	mp := ses.proc.Mp()
+
+	cpKey := packMoDatabaseCPKey(accountID, databaseName)
+	filterVec := vector.NewVec(types.T_varchar.ToType())
+	defer filterVec.Free(mp)
+	if err := vector.AppendBytes(filterVec, cpKey, false, mp); err != nil {
+		return types.TS{}, err
+	}
+
+	attrs := []string{catalog.SystemDBAttr_ID, catalog.SystemDBAttr_CreateAt}
+	colTypes := []types.Type{types.T_uint64.ToType(), types.T_timestamp.ToType()}
+	filterExpr := readutil.ConstructInExpr(ctx, catalog.SystemDBAttr_CPKey, filterVec)
+
+	found := false
+	result := types.TS{}
+
+	err := scanSnapshotRelationByID(
+		ctx, "database-created-time-lower-bound", ses,
+		catalog.MO_DATABASE_ID, snapshotTS,
+		attrs, colTypes, filterExpr, 1,
+		func(bat *batch.Batch) error {
+			dbIDs := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0])
+			createdTimes := vector.MustFixedColWithTypeCheck[types.Timestamp](bat.Vecs[1])
+			for i, dbID := range dbIDs {
+				if dbID != databaseID || bat.Vecs[1].IsNull(uint64(i)) {
+					continue
+				}
+				lowerBound, err := databaseCreatedTimeToCollectLowerBound(createdTimes[i])
+				if err != nil {
+					return err
+				}
+				if !found || lowerBound.LT(&result) {
+					result = lowerBound
+				}
+				found = true
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		return types.TS{}, err
+	}
+	if !found {
+		return types.TS{}, moerr.NewInternalErrorNoCtxf(
+			"cannot find database %d (%s) created_time at snapshot %s",
+			databaseID, databaseName, snapshotTS.ToString(),
+		)
+	}
+	logutil.Info("DataBranch-DBCreatedTime-LowerBound-Done",
+		zap.Uint32("account-id", accountID),
+		zap.Uint64("database-id", databaseID),
+		zap.String("database-name", databaseName),
+		zap.String("snapshot", snapshotTS.ToString()),
+		zap.String("lower-bound", result.ToString()),
+	)
+	return result, nil
+}
+
+func databaseCreatedTimeToCollectLowerBound(createdTime types.Timestamp) (types.TS, error) {
+	unixMicros := int64(createdTime) - types.GetUnixEpochSecs()
+	if unixMicros <= 0 {
+		return types.TS{}, moerr.NewInternalErrorNoCtxf(
+			"invalid database created_time %s", createdTime.String(),
+		)
+	}
+	return types.BuildTS(unixMicros*int64(time.Microsecond), 0).Prev(), nil
 }
 
 // getTableCreationCommitTSByID scans the mo_tables snapshot at the given
@@ -1656,13 +2064,16 @@ func getTableCreationCommitTSByID(
 }
 
 // getTableCreationCommitTSByCollectChanges uses CollectChanges on mo_tables
-// to find the creation commit_ts.  BuildTS(0,1) forces the partition-state
-// path which preserves real per-row commit timestamps.
+// to find the creation commit_ts.  The caller supplies a lower bound derived
+// from the owning database's created_time to avoid scanning the whole catalog
+// history from BuildTS(0,1).
 func getTableCreationCommitTSByCollectChanges(
 	ctx context.Context,
 	ses *Session,
+	targetRel engine.Relation,
 	tableID uint64,
 	snapshotTS types.TS,
+	lowerBound types.TS,
 ) (types.TS, error) {
 	storage := ses.GetTxnHandler().GetStorage()
 	txnOp := ses.GetTxnHandler().GetTxn()
@@ -1671,6 +2082,8 @@ func getTableCreationCommitTSByCollectChanges(
 	var (
 		found             bool
 		result            types.TS
+		pkFilter          *engine.PKFilter
+		pkFilterFallback  string
 		dataBatchCnt      int
 		dataRowCnt        int
 		tombstoneBatchCnt int
@@ -1681,12 +2094,17 @@ func getTableCreationCommitTSByCollectChanges(
 		fields := []zap.Field{
 			zap.Uint64("table-id", tableID),
 			zap.String("snapshot", snapshotTS.ToString()),
+			zap.String("lower-bound", lowerBound.ToString()),
 			zap.Bool("found", found),
+			zap.Bool("has-pk-filter", pkFilter != nil),
 			zap.Int("data-batch-cnt", dataBatchCnt),
 			zap.Int("data-row-cnt", dataRowCnt),
 			zap.Int("tombstone-batch-cnt", tombstoneBatchCnt),
 			zap.Int("tombstone-row-cnt", tombstoneRowCnt),
 			zap.Duration("duration", time.Since(start)),
+		}
+		if pkFilterFallback != "" {
+			fields = append(fields, zap.String("pk-filter-fallback", pkFilterFallback))
 		}
 		if found {
 			fields = append(fields, zap.String("commit-ts", result.ToString()))
@@ -1699,7 +2117,18 @@ func getTableCreationCommitTSByCollectChanges(
 		return types.TS{}, err
 	}
 
-	handle, err := rel.CollectChanges(ctx, types.BuildTS(0, 1), snapshotTS, true, mp)
+	pkFilter, pkFilterFallback, err = tryBuildCurrentMoTablesCPKeyFilter(
+		ctx, ses.GetAccountId(), targetRel, rel, mp,
+	)
+	if err != nil {
+		return types.TS{}, err
+	}
+	if pkFilter != nil {
+		ctx = engine.WithPKFilter(ctx, pkFilter)
+	}
+	ctx = engine.WithCollectChangesDebugLabel(ctx, "data-branch-table-cts")
+
+	handle, err := rel.CollectChanges(ctx, lowerBound, snapshotTS, true, mp)
 	if err != nil {
 		return types.TS{}, err
 	}
@@ -1753,6 +2182,85 @@ func getTableCreationCommitTSByCollectChanges(
 	)
 }
 
+func tryBuildCurrentMoTablesCPKeyFilter(
+	ctx context.Context,
+	accountID uint32,
+	targetRel engine.Relation,
+	moTablesRel engine.Relation,
+	mp *mpool.MPool,
+) (*engine.PKFilter, string, error) {
+	switch {
+	case targetRel == nil:
+		return nil, "missing-target-rel", nil
+	case moTablesRel == nil:
+		return nil, "missing-mo-tables-rel", nil
+	}
+
+	targetDef := targetRel.GetTableDef(ctx)
+	if targetDef == nil {
+		return nil, "missing-target-table-def", nil
+	}
+	if targetDef.DbName == "" {
+		return nil, "missing-target-db-name", nil
+	}
+	tableName := targetRel.GetTableName()
+	if tableName == "" {
+		return nil, "missing-target-table-name", nil
+	}
+
+	moTablesDef := moTablesRel.GetTableDef(ctx)
+	if moTablesDef == nil {
+		return nil, "missing-mo-tables-table-def", nil
+	}
+
+	cpkeyIdx, ok := moTablesDef.Name2ColIndex[strings.ToLower(catalog.SystemRelAttr_CPKey)]
+	if !ok {
+		cpkeyIdx, ok = moTablesDef.Name2ColIndex[catalog.SystemRelAttr_CPKey]
+	}
+	if !ok || cpkeyIdx < 0 || int(cpkeyIdx) >= len(moTablesDef.Cols) {
+		return nil, "missing-mo-tables-cpkey-col", nil
+	}
+
+	packedKey := packMoTablesCPKey(accountID, targetDef.DbName, tableName)
+	replayPacker := types.NewPacker()
+	defer replayPacker.Close()
+	replayKey := append([]byte(nil), readutil.EncodePrimaryKey(packedKey, replayPacker)...)
+
+	filterVec := vector.NewVec(types.T_varchar.ToType())
+	defer filterVec.Free(mp)
+	if err := vector.AppendBytes(filterVec, packedKey, false, mp); err != nil {
+		return nil, "", err
+	}
+
+	pkFilter := buildPKFilterFromVec(filterVec, types.T_varchar.ToType(), int(moTablesDef.Cols[cpkeyIdx].Seqnum))
+	if pkFilter == nil {
+		return nil, "empty-mo-tables-cpkey-filter", nil
+	}
+	pkFilter.ReplaySpec = &engine.PKReplaySpec{
+		Op:   function.EQUAL,
+		Keys: [][]byte{replayKey},
+	}
+	return pkFilter, "", nil
+}
+
+func packMoDatabaseCPKey(accountID uint32, databaseName string) []byte {
+	return packCatalogCPKey(accountID, databaseName)
+}
+
+func packMoTablesCPKey(accountID uint32, databaseName, tableName string) []byte {
+	return packCatalogCPKey(accountID, databaseName, tableName)
+}
+
+func packCatalogCPKey(accountID uint32, values ...string) []byte {
+	packer := types.NewPacker()
+	defer packer.Close()
+	packer.EncodeUint32(accountID)
+	for _, value := range values {
+		packer.EncodeStringType([]byte(value))
+	}
+	return append([]byte(nil), packer.Bytes()...)
+}
+
 // locateColumnsInChangeBatch finds rel_id and commit_ts column indices
 // in a CollectChanges data batch.  Named attrs are tried first; when
 // absent (aobj path), positional access is used.
@@ -1775,6 +2283,25 @@ func locateColumnsInChangeBatch(data *batch.Batch) (relIDIdx, commitTSIdx int) {
 	return
 }
 
+// decideLCABranchTSFromBranchDAG resolves the lineage relationship
+// between tar and base by consulting the branch DAG. It populates
+// branchMetaInfo.lcaTableId and the pathFromLCAToTar /
+// pathFromLCAToBase chains. All downstream consumers (collect-range
+// builder, hash-diff, tombstone resolver) derive whatever per-side
+// snapshot or LCA classification they need from these paths via the
+// helper methods on branchMetaInfo.
+//
+// The DAG only answers lineage questions: the CloneTS attached to an
+// outgoing edge is the *source* snapshot used by the clone operation
+// on the parent, not the creation commit timestamp of the child.
+//
+// Special case: when tar and base resolve to the same table id (so
+// the diff is purely snapshot-vs-snapshot on a single relation), no
+// DAG-derived chain is needed but tombstone resolution still wants
+// to probe the table at the earlier of the two snapshots. We model
+// that with synthetic single-node paths so the LCA-snapshot helpers
+// uniformly fall back to the other side's SP, matching the historic
+// case-0 semantics.
 func decideLCABranchTSFromBranchDAG(
 	ctx context.Context,
 	ses *Session,
@@ -1785,97 +2312,59 @@ func decideLCABranchTSFromBranchDAG(
 	err error,
 ) {
 
-	var (
-		dag *databranchutils.DataBranchDAG
+	tarTableID := tblStuff.tarRel.GetTableID(ctx)
+	baseTableID := tblStuff.baseRel.GetTableID(ctx)
 
-		tarBranchTableID  uint64
-		baseBranchTableID uint64
-		hasLca            bool
-		lcaType           int
-
-		lcaTableID   uint64
-		tarBranchTS  types.TS
-		baseBranchTS types.TS
-	)
-
-	defer func() {
-		branchInfo = branchMetaInfo{
-			lcaType:      lcaType,
-			lcaTableId:   lcaTableID,
-			tarBranchTS:  tarBranchTS,
-			baseBranchTS: baseBranchTS,
-		}
-	}()
-
-	if dag, err = constructBranchDAG(ctx, ses, bh); err != nil {
+	dag, err := constructBranchDAG(ctx, ses, bh)
+	if err != nil {
 		return
 	}
 
-	// 1. has no lca
-	//		[0, now] join [0, now]
-	// 2. t1 and t2 has lca
-	//		1. t0 is the lca
-	//			t1's [branch_t1_ts + 1, now] join t2's [branch_t2_ts + 1, now]
-	// 		2. t1 is the lca
-	//			t1's [branch_t2_ts + 1, now] join t2's [branch_t2_ts + 1, now]
-	//      3. t2 is the lca
-	//			t1's [branch_t1_ts + 1, now] join t2's [branch_t1_ts + 1, now]
-	//
-	// The DAG only answers lineage questions. The branch timestamp attached to an
-	// outgoing edge is the source snapshot used by the clone operation, not the
-	// creation commit timestamp of the child table.
-	if lcaTableID, tarBranchTableID, baseBranchTableID, hasLca = dag.FindLCA(
-		tblStuff.tarRel.GetTableID(ctx), tblStuff.baseRel.GetTableID(ctx),
-	); hasLca {
-		if lcaTableID == tblStuff.baseRel.GetTableID(ctx) {
-			lcaType = lcaRight
-			var ts int64
-			if ts, hasLca = dag.GetCloneTS(tarBranchTableID); !hasLca {
-				err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", tarBranchTableID)
-				return
-			}
-			tarBranchTS = types.BuildTS(ts, 0)
-			baseBranchTS = tarBranchTS
-		} else if lcaTableID == tblStuff.tarRel.GetTableID(ctx) {
-			lcaType = lcaLeft
-			var ts int64
-			if ts, hasLca = dag.GetCloneTS(baseBranchTableID); !hasLca {
-				err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", baseBranchTableID)
-				return
-			}
-			baseBranchTS = types.BuildTS(ts, 0)
-			tarBranchTS = baseBranchTS
-		} else {
-			lcaType = lcaOther
-			var ts int64
-			if ts, hasLca = dag.GetCloneTS(tarBranchTableID); !hasLca {
-				err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", tarBranchTableID)
-				return
-			}
-			tarBranchTS = types.BuildTS(ts, 0)
-			if ts, hasLca = dag.GetCloneTS(baseBranchTableID); !hasLca {
-				err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", baseBranchTableID)
-				return
-			}
-			baseBranchTS = types.BuildTS(ts, 0)
+	if lcaTableID, _, _, hasLca := dag.FindLCA(tarTableID, baseTableID); hasLca {
+		tarIDs, tarTSs, ok := dag.PathFromAncestor(tarTableID, lcaTableID)
+		if !ok {
+			err = moerr.NewInternalErrorNoCtxf(
+				"data branch: DAG path broken from LCA %d to tar %d",
+				lcaTableID, tarTableID)
+			return
 		}
-	} else if tblStuff.tarRel.GetTableID(ctx) == tblStuff.baseRel.GetTableID(ctx) {
-		lcaTableID = tblStuff.tarRel.GetTableID(ctx)
-		if tblStuff.tarSnap == nil && tblStuff.baseSnap == nil {
-			lcaType = lcaRight
-		} else if tblStuff.tarSnap == nil {
-			// diff tar{now} against base{sp}
-			lcaType = lcaRight
-		} else if tblStuff.baseSnap == nil {
-			// diff tar{sp} against base{now}
-			lcaType = lcaLeft
-		} else if tblStuff.tarSnap.TS.LessEq(*tblStuff.baseSnap.TS) {
-			lcaType = lcaLeft
-		} else {
-			lcaType = lcaRight
+		baseIDs, baseTSs, ok := dag.PathFromAncestor(baseTableID, lcaTableID)
+		if !ok {
+			err = moerr.NewInternalErrorNoCtxf(
+				"data branch: DAG path broken from LCA %d to base %d",
+				lcaTableID, baseTableID)
+			return
 		}
+		branchInfo.lcaTableId = lcaTableID
+		branchInfo.pathFromLCAToTar = tarIDs
+		branchInfo.pathFromLCAToTarTS = buildTSs(tarTSs)
+		branchInfo.pathFromLCAToBase = baseIDs
+		branchInfo.pathFromLCAToBaseTS = buildTSs(baseTSs)
+		return
+	}
+
+	// No DAG-derived LCA, but if tar and base resolve to the same
+	// table id we still need to feed downstream tombstone resolution
+	// with a probe snapshot. Synthetic single-node paths give the
+	// branchMetaInfo helpers exactly that.
+	if tarTableID == baseTableID {
+		branchInfo.lcaTableId = tarTableID
+		branchInfo.pathFromLCAToTar = []uint64{tarTableID}
+		branchInfo.pathFromLCAToTarTS = []types.TS{{}}
+		branchInfo.pathFromLCAToBase = []uint64{baseTableID}
+		branchInfo.pathFromLCAToBaseTS = []types.TS{{}}
 	}
 	return
+}
+
+// buildTSs lifts a slice of int64 physical timestamps into the
+// types.TS form expected by branchMetaInfo.
+func buildTSs(in []int64) []types.TS {
+	out := make([]types.TS, len(in))
+	for i, ts := range in {
+		out[i] = types.BuildTS(ts, 0)
+	}
+	return out
 }
 
 func constructBranchDAG(

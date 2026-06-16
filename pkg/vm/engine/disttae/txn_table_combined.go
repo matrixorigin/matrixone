@@ -286,6 +286,15 @@ func (t *combinedTxnTable) CollectChanges(
 	panic("not implemented")
 }
 
+func (t *combinedTxnTable) CollectObjectList(
+	ctx context.Context,
+	from, to types.TS,
+	bat *batch.Batch,
+	mp *mpool.MPool,
+) error {
+	panic("not implemented")
+}
+
 func (t *combinedTxnTable) ApproxObjectsNum(ctx context.Context) int {
 	tables, err := t.tablesFunc()
 	if err != nil {
@@ -485,6 +494,12 @@ func (t *combinedTxnTable) PrimaryKeysMayBeUpserted(
 
 func (t *combinedTxnTable) Reset(op client.TxnOperator) error {
 	return t.primary.Reset(op)
+}
+
+func (t *combinedTxnTable) GetFlushTS(
+	ctx context.Context,
+) (types.TS, error) {
+	return t.primary.GetFlushTS(ctx)
 }
 
 func (t *combinedTxnTable) GetExtraInfo() *api.SchemaExtra {

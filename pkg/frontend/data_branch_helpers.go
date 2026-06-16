@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +38,68 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"go.uber.org/zap"
 )
+
+var snapConditionRegex = regexp.MustCompile(`\{[^}]+}`)
+
+func containsDataBranchTempTableName(sqlLower string) bool {
+	return containsTempTableMarker(sqlLower, "__mo_diff_del_") ||
+		containsTempTableMarker(sqlLower, "__mo_diff_ins_")
+}
+
+func dataBranchTempSQLNeedsBackExec(sqlLower string) bool {
+	if !containsDataBranchTempTableName(sqlLower) {
+		return false
+	}
+
+	switch {
+	case strings.HasPrefix(sqlLower, "drop table"):
+		return true
+	case strings.HasPrefix(sqlLower, "create table"):
+		return true
+	case strings.HasPrefix(sqlLower, "truncate table"):
+		return true
+	case strings.HasPrefix(sqlLower, "insert into "):
+		return containsDataBranchTempTableName(firstSQLTableToken(sqlLower[len("insert into "):]))
+	case strings.HasPrefix(sqlLower, "replace into "):
+		return containsDataBranchTempTableName(firstSQLTableToken(sqlLower[len("replace into "):]))
+	case strings.HasPrefix(sqlLower, "delete from "):
+		return containsDataBranchTempTableName(firstSQLTableToken(sqlLower[len("delete from "):]))
+	case strings.HasPrefix(sqlLower, "update "):
+		return containsDataBranchTempTableName(firstSQLTableToken(sqlLower[len("update "):]))
+	default:
+		return true
+	}
+}
+
+func firstSQLTableToken(sqlLower string) string {
+	sqlLower = strings.TrimSpace(sqlLower)
+	for i := 0; i < len(sqlLower); i++ {
+		switch sqlLower[i] {
+		case ' ', '\t', '\n', '\r', '(':
+			return sqlLower[:i]
+		}
+	}
+	return sqlLower
+}
+
+func containsTempTableMarker(sqlLower, marker string) bool {
+	searchFrom := 0
+	for {
+		offset := strings.Index(sqlLower[searchFrom:], marker)
+		if offset < 0 {
+			return false
+		}
+		idx := searchFrom + offset
+		if idx == 0 {
+			return true
+		}
+		switch sqlLower[idx-1] {
+		case ' ', '\t', '\n', '\r', '.', '(', ',':
+			return true
+		}
+		searchFrom = idx + len(marker)
+	}
+}
 
 func acquireBuffer(pool *sync.Pool) *bytes.Buffer {
 	if pool == nil {
@@ -100,6 +163,11 @@ func runSql(
 	trimmedLower := strings.ToLower(strings.TrimSpace(sql))
 	if strings.HasPrefix(trimmedLower, "drop database") {
 		// Internal executor does not support DROP DATABASE (IsPublishing panics).
+		useBackExec = true
+	} else if dataBranchTempSQLNeedsBackExec(trimmedLower) {
+		// Branch diff/merge/pick temp tables do repeated DDL/DML in one shared txn.
+		// The internal SQL fast path skips per-statement workspace increments and can
+		// hit ErrTxnNeedRetryWithDefChanged in RC mode while these temp definitions churn.
 		useBackExec = true
 	} else if strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
 		// SQLExecutor cannot resolve snapshot by name.
@@ -168,7 +236,8 @@ func runSql(
 		WithDisableIncrStatement().
 		WithTxn(backSes.GetTxnHandler().GetTxn()).
 		WithKeepTxnAlive().
-		WithTimeZone(ses.GetTimeZone())
+		WithTimeZone(ses.GetTimeZone()).
+		WithDatabase(ses.GetDatabaseName())
 
 	if streamChan != nil && errChan != nil {
 		opts = opts.WithStreaming(streamChan, errChan)
@@ -624,7 +693,7 @@ func compareSingleValInVector(
 			vector.GetFixedAtNoTypeCheck[float64](vec1, rowIdx1),
 			vector.GetFixedAtNoTypeCheck[float64](vec2, rowIdx2),
 		), nil
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
 		return bytes.Compare(
 			vec1.GetBytesAt(rowIdx1),
 			vec2.GetBytesAt(rowIdx2),

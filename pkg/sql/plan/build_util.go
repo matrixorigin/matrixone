@@ -223,6 +223,39 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			return plan.Type{Id: int32(types.T_text)}, nil
 		case defines.MYSQL_TYPE_JSON:
 			return plan.Type{Id: int32(types.T_json)}, nil
+		case defines.MYSQL_TYPE_TYPED_ARRAY:
+			if n.InternalType.ArrayContents == nil {
+				return plan.Type{}, moerr.NewInternalError(ctx, "array type missing element type")
+			}
+			if _, err := getTypeFromAst(ctx, n.InternalType.ArrayContents); err != nil {
+				return plan.Type{}, err
+			}
+			if err := validateTypedArrayElementType(ctx, n.InternalType.ArrayContents); err != nil {
+				return plan.Type{}, err
+			}
+			arrayType := tree.String(&n.InternalType, dialect.MYSQL)
+			return plan.Type{Id: int32(types.T_json), Enumvalues: arrayType}, nil
+		case defines.MYSQL_TYPE_GEOMETRY:
+			fstr := strings.ToUpper(n.InternalType.FamilyString)
+			oid := types.T_geometry
+			srid := uint32(0)
+			sridDefined := false
+			if n.InternalType.GeoMetadata != nil {
+				srid = n.InternalType.GeoMetadata.SRID
+				sridDefined = n.InternalType.GeoMetadata.SRIDDefined
+				if n.InternalType.GeoMetadata.Float32 {
+					oid = types.T_geometry32
+				}
+			}
+			if sridDefined {
+				if err := validateGeometrySRID(int64(srid)); err != nil {
+					return plan.Type{}, err
+				}
+			}
+			typ := plan.Type{Id: int32(oid)}
+			typ.Scale = int32(geometrySubtypeEnum(fstr))
+			typ.Width = encodeGeometrySRIDWidth(srid, sridDefined)
+			return typ, nil
 		case defines.MYSQL_TYPE_UUID:
 			return plan.Type{Id: int32(types.T_uuid)}, nil
 		case defines.MYSQL_TYPE_TINY_BLOB:
@@ -254,6 +287,28 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 	return plan.Type{}, moerr.NewInternalError(ctx, "unknown data type")
 }
 
+func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs []tree.ColumnAttribute) error {
+	if !isGeometryPlanType(colType) {
+		for _, attr := range attrs {
+			if _, ok := attr.(*tree.AttributeSRID); ok {
+				return moerr.NewInvalidInputf(ctx, "SRID is only supported for GEOMETRY columns")
+			}
+		}
+		return nil
+	}
+	// Scale (subtype) is already set by getTypeFromAst; an SRID column attribute
+	// only overrides the SRID, which lives in Width.
+	srid, sridDefined := geometrySRIDValue(colType)
+	for _, attr := range attrs {
+		if sridAttr, ok := attr.(*tree.AttributeSRID); ok {
+			srid = sridAttr.Value
+			sridDefined = true
+		}
+	}
+	colType.Width = encodeGeometrySRIDWidth(srid, sridDefined)
+	return nil
+}
+
 func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil
@@ -271,13 +326,21 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 		}
 	}
 
+	originExpr := expr
+	semanticExpr := unwrapParenExpr(expr)
+
 	colNameOrigin := col.Name.ColNameOrigin()
 	if typ.Id == int32(types.T_json) {
-		if expr != nil && !isNullAstExpr(expr) {
+		if semanticExpr != nil && !isNullAstExpr(semanticExpr) {
 			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("JSON column '%s' cannot have default value", colNameOrigin))
 		}
 	}
-	if !nullAbility && isNullAstExpr(expr) {
+	if isGeometryPlanType(&typ) {
+		if semanticExpr != nil && !isNullAstExpr(semanticExpr) {
+			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("GEOMETRY column '%s' cannot have default value", colNameOrigin))
+		}
+	}
+	if !nullAbility && isNullAstExpr(semanticExpr) {
 		return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
 	}
 
@@ -288,15 +351,16 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 			OriginString: "",
 		}, nil
 	}
+	_, isExpressionDefault := originExpr.(*tree.ParenExpr)
 
 	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
-	planExpr, err := binder.BindExpr(expr, 0, false)
+	planExpr, err := binder.BindExpr(semanticExpr, 0, false)
 	if err != nil {
 		return nil, err
 	}
 
 	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
-		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" {
+		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" && !isExpressionDefault {
 			return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
 		}
 	}
@@ -313,7 +377,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	}
 
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
-	fmtCtx.PrintExpr(expr, expr, false)
+	fmtCtx.PrintExpr(originExpr, originExpr, false)
 	return &plan.Default{
 		NullAbility:  nullAbility,
 		Expr:         newExpr,
@@ -964,6 +1028,127 @@ func genSqlsForCheckFKSelfRefer(ctx context.Context,
 		if err != nil {
 			return nil, err
 		}
+		ret = append(ret, sql)
+	}
+	return ret, nil
+}
+
+// genPreCheckSqlsForReplaceFKSelfRefer generates pre-check SQLs that verify
+// no other row references the PK values being replaced (parent→child safety).
+// These run BEFORE the REPLACE execution to enforce RESTRICT semantics.
+func genPreCheckSqlsForReplaceFKSelfRefer(
+	ctx context.Context,
+	dbName, tblName string,
+	cols []*plan.ColDef,
+	fkeys []*plan.ForeignKeyDef,
+	stmt *tree.Replace,
+) ([]string, error) {
+	if stmt.Rows == nil {
+		return nil, nil
+	}
+	valuesClause, ok := stmt.Rows.Select.(*tree.ValuesClause)
+	if !ok {
+		return nil, nil
+	}
+
+	ret := make([]string, 0, len(fkeys))
+	for _, fkey := range fkeys {
+		if fkey.ForeignTbl != 0 {
+			continue
+		}
+		// Only RESTRICT / NO_ACTION need a parent→child pre-check.
+		// CASCADE / SET_NULL / SET_DEFAULT semantics allow the operation to
+		// proceed and let the cascading action handle the children, so a
+		// pre-check would incorrectly block valid REPLACEs.
+		if fkey.OnDelete != plan.ForeignKeyDef_RESTRICT &&
+			fkey.OnDelete != plan.ForeignKeyDef_NO_ACTION {
+			continue
+		}
+		fkCols, err := colIdsToNames(ctx, fkey.Cols, cols)
+		if err != nil {
+			return nil, err
+		}
+		referCols, err := colIdsToNames(ctx, fkey.ForeignCols, cols)
+		if err != nil {
+			return nil, err
+		}
+		if len(referCols) != 1 || len(fkCols) != 1 {
+			continue
+		}
+
+		// Build column name → position in the Replace column list.
+		// Names are stored lower-cased in ColDef.Name; the user-supplied
+		// AST identifiers may use any casing, so normalize both sides.
+		colNameToPos := make(map[string]int)
+		if len(stmt.Columns) > 0 {
+			for i, col := range stmt.Columns {
+				colNameToPos[strings.ToLower(string(col))] = i
+			}
+		} else {
+			// Implicit column list: same visible-column rule as
+			// getInsertColsFromStmt — skip hidden cols (e.g. composite PK
+			// helper, fake PK, cluster-by composite, Row_ID), since the
+			// user VALUES list never supplies them.
+			pos := 0
+			for _, col := range cols {
+				if col.Hidden {
+					continue
+				}
+				colNameToPos[col.Name] = pos
+				pos++
+			}
+		}
+
+		refPos, ok := colNameToPos[referCols[0]]
+		if !ok {
+			continue
+		}
+
+		// The pre-check SQL embeds referenced PK values directly into a
+		// background statement. That is only semantics-preserving for
+		// static literals (NumVal/StrVal, including NULL via NumVal
+		// P_null). Non-literals such as prepared-statement parameters
+		// (ParamExpr "?"), function calls (rand(), uuid(), now()),
+		// subqueries, arithmetic, etc. would be re-evaluated when the
+		// pre-check runs and may not match the value actually written
+		// by REPLACE — skip pre-check generation in those cases.
+		//
+		// Trade-off: prepared REPLACE on RESTRICT self-ref FK tables and
+		// REPLACE with non-literal PK expressions lose the parent-row
+		// safety check. The full fix needs to defer pre-check generation
+		// to compile time after parameters/expressions are evaluated,
+		// which is a larger change left for follow-up work.
+		isSimpleLiteralExpr := func(expr tree.Expr) bool {
+			switch expr.(type) {
+			case *tree.NumVal, *tree.StrVal:
+				return true
+			default:
+				return false
+			}
+		}
+
+		hasUnsafeRefExpr := false
+		var valStrs []string
+		for _, row := range valuesClause.Rows {
+			if refPos >= len(row) {
+				continue
+			}
+			if !isSimpleLiteralExpr(row[refPos]) {
+				hasUnsafeRefExpr = true
+				break
+			}
+			valStrs = append(valStrs, tree.String(row[refPos], dialect.MYSQL))
+		}
+		if hasUnsafeRefExpr || len(valStrs) == 0 {
+			continue
+		}
+
+		inList := strings.Join(valStrs, ",")
+		tableClause := fmt.Sprintf("`%s`.`%s`", dbName, tblName)
+		sql := fmt.Sprintf(
+			"select count(*) = 0 from %s where `%s` in (%s) and `%s` is not null and `%s` not in (%s)",
+			tableClause, fkCols[0], inList, fkCols[0], referCols[0], inList,
+		)
 		ret = append(ret, sql)
 	}
 	return ret, nil

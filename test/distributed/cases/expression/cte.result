@@ -2,18 +2,18 @@ drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values(null,null,null),(2,3,4);
 WITH qn AS (SELECT a FROM t1) SELECT * FROM qn;
-a
-null
+➤ a[4,32,0]  𝄀
+null  𝄀
 2
 WITH qn AS (SELECT a FROM t1), qn2 as (select b from t1)
 SELECT * FROM qn;
-a
-null
+➤ a[4,32,0]  𝄀
+null  𝄀
 2
 WITH qn AS (SELECT a FROM t1), qn2 as (select b from t1)
 SELECT * FROM qn2;
-b
-null
+➤ b[4,32,0]  𝄀
+null  𝄀
 3
 WITH qn AS (SELECT a FROM t1), qn as (select b from t1)
 SELECT 1 FROM qn;
@@ -32,50 +32,50 @@ qnea as (select a from t1),
 qnma as (select a from t1)
 select qne.a,qnm.a,alias1.a,alias2.a
 from qne, qnm, qnea as alias1, qnma as alias2 limit 2;
-a	a	a	a
-null    null    null    null
-2    null    null    null
+➤ a[4,32,0]  ¦  a[4,32,0]  ¦  a[4,32,0]  ¦  a[4,32,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+2  ¦  null  ¦  null  ¦  null
 drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values(null,null,null),(2,3,4);
 WITH qn AS (SELECT b as a FROM t1)
 SELECT qn.a, qn2.a  FROM qn, qn as qn2;
-a	a
-3	null
-null	null
-3	3
-null	3
+➤ a[4,32,0]  ¦  a[4,32,0]  𝄀
+null  ¦  null  𝄀
+3  ¦  null  𝄀
+null  ¦  3  𝄀
+3  ¦  3
 WITH qn AS (SELECT b as a FROM t1),
 qn2 AS (SELECT c FROM t1 WHERE a IS NULL or a>0)
 SELECT qn.a, qn2.c  FROM qn, qn2;
-a	c
-null	4
-null	null
-3	4
-3	null
+➤ a[4,32,0]  ¦  c[4,32,0]  𝄀
+null  ¦  null  𝄀
+3  ¦  null  𝄀
+null  ¦  4  𝄀
+3  ¦  4
 drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values(null,null,null),(2,3,4);
 WITH qn AS (SELECT 10*a as a FROM t1),qn2 AS (SELECT 3*a FROM qn)
 SELECT * from qn2;
-3*a
-null
+➤ 3 * qn.a[-5,64,0]  𝄀
+null  𝄀
 60
 WITH qn AS (SELECT a FROM t1), qn2 AS (SELECT a FROM qn)
 SELECT * from qn2;
-a
-null
+➤ a[4,32,0]  𝄀
+null  𝄀
 2
 WITH qn AS (SELECT b as a FROM t1),
 qn2 AS (SELECT a FROM qn WHERE a IS NULL or a>0)
 SELECT qn.a, qn2.a  FROM qn, qn2;
-a	a
-null	3
-null	null
-3	3
-3	null
+➤ a[4,32,0]  ¦  a[4,32,0]  𝄀
+null  ¦  null  𝄀
+3  ¦  null  𝄀
+null  ¦  3  𝄀
+3  ¦  3
 with qn0 as (select 1), qn1 as (select * from qn0), qn2 as (select 1), qn3 as (select 1 from qn1, qn2) select 1 from qn3;
-1
+➤ 1[-5,64,0]  𝄀
 1
 WITH qn2 AS (SELECT a FROM qn WHERE a IS NULL or a>0),
 qn AS (SELECT b as a FROM t1)
@@ -93,36 +93,36 @@ drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values(null,null,null),(2,3,4);
 with qn as (select 1) select 2;
-2
+➤ 2[-5,64,0]  𝄀
 2
 drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values(null,null,null),(2,3,4),(4,5,6);
 with qn as (select * from t1) select (select max(a) from qn);
-(select max(a) from qn)
+➤ (select max(a) from qn)[4,32,0]  𝄀
 4
 SELECT (WITH qn AS (SELECT 10*a as a FROM t1),
 qn2 AS (SELECT 3*a AS b FROM qn)
 SELECT * from qn2 LIMIT 1)
 FROM t1;
-(with qn as (select 10 * a as a from t1), qn2 as (select 3 * a as b from qn) select * from qn2 limit 1)
-null
-null
+➤ (with qn as (select 10 * a as a from t1), qn2 as (select 3 * a as b from qn) select * from qn2 limit 1)[-5,64,0]  𝄀
+null  𝄀
+null  𝄀
 null
 SELECT *
 FROM (WITH qn AS (SELECT 10*a as a FROM t1),
 qn2 AS (SELECT 3*a AS b FROM qn)
 SELECT * from qn2)
 AS dt;
-b
-null
-60
+➤ b[-5,64,0]  𝄀
+null  𝄀
+60  𝄀
 120
 with qn as (select * from t1 limit 10)
 select (select max(a) from qn where a=0),
 (select min(b) from qn where b=3);
-(select max(a) from qn where a=0)	(select min(b) from qn where b=3)
-null	3
+➤ (select max(a) from qn where a = 0)[4,32,0]  ¦  (select min(b) from qn where b = 3)[4,32,0]  𝄀
+null  ¦  3
 drop table if exists sales_days;
 create table sales_days(day_of_sale DATE, amount INT);
 insert into sales_days values('2015-01-02', 100), ('2015-01-05', 200),('2015-02-02', 10),  ('2015-02-10', 100),('2015-03-02', 10),  ('2015-03-18', 1);
@@ -137,39 +137,36 @@ worst_month(month, total, award) as
 (select month, total, "worst" from sales_by_month
 where total=(select min(total) from sales_by_month))
 select * from best_month union all select * from worst_month;
-month	total	award
-1	300	best
-3	11	worst
+➤ month[-6,8,0]  ¦  total[-5,64,0]  ¦  award[12,-1,0]  𝄀
+1  ¦  300  ¦  best  𝄀
+3  ¦  11  ¦  worst
 drop table if exists sales_days;
 drop table if exists t1;
 create table t1(a int);
 insert into t1 values(1),(2);
 with qn(a) as (select 1 from t1 limit 2)
 select * from qn where qn.a=(select * from qn qn1 limit 1) union select 2;
-a
+➤ a[-5,64,0]  𝄀
+2  𝄀
 1
-2
 drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values(null,null,null),(2,3,4),(4,5,6);
 with qn as
 (with qn2 as (select "qn2" as a from t1) select "qn", a from qn2)
 select * from qn;
-qn	a
-qn	qn2
-qn	qn2
-qn	qn2
+➤ qn[12,-1,0]  ¦  a[12,-1,0]  𝄀
+qn  ¦  qn2  𝄀
+qn  ¦  qn2  𝄀
+qn  ¦  qn2
 SELECT (WITH qn AS (SELECT t2.a*a as a FROM t1),
 qn2 AS (SELECT 3*a AS b FROM qn)
 SELECT * from qn2 LIMIT 1)
 FROM t1 as t2;
-(WITH qn AS (SELECT t2.a*a as a FROM t1),
-qn2 AS (SELECT 3*a AS b FROM qn)
-SELECT * from qn2 LIMIT 1)
-null
-null
-null
-WITH qn AS (SELECT b as a FROM t1)
+unsupported expression executor for typ:<id:22 width:32 scale:-1 > corr:<rel_pos:6 depth:1 >  now is not yet implemented
+drop table if exists qn;
+create table qn(a int);
+insert into qn values (1), (2), (3);
 SELECT (WITH qn2 AS (SELECT a FROM qn WHERE a IS NULL or a>0)
 SELECT qn2.a FROM qn2) FROM qn;
 internal error: scalar subquery returns more than 1 row
@@ -177,8 +174,8 @@ WITH qn AS (select "outer" as a)
 SELECT (WITH qn AS (SELECT "inner" as a) SELECT a from qn),
 qn.a
 FROM qn;
-(WITH qn AS (SELECT "inner" as a) SELECT a from qn)	a
-inner	outer
+➤ (with qn as (select inner as a) select a from qn)[12,-1,0]  ¦  a[12,-1,0]  𝄀
+inner  ¦  outer
 drop table if exists t1;
 drop table if exists t2;
 create table t1(a int, b int, c int);
@@ -189,9 +186,9 @@ WITH qn AS (SELECT 10*a as a FROM t1),
 qn2 AS (SELECT 3*a AS b FROM qn)
 SELECT * from qn2;
 SELECT * FROM t2;
-a
-null
-60
+➤ a[4,32,0]  𝄀
+null  𝄀
+60  𝄀
 120
 drop table if exists t1;
 drop table if exists t2;
@@ -201,33 +198,33 @@ create table t1(a int, b int, c int);
 insert into t1 values(null,null,null),(2,3,4),(4,5,6);
 with qn as (select a from t1 order by 1)
 select a from qn;
-a
-null
-2
+➤ a[4,32,0]  𝄀
+null  𝄀
+2  𝄀
 4
 with qn as (select a from t1 order by 1)
 select qn.a from qn, t1 as t2;
-a
-null
-null
-null
-2
-2
-2
-4
-4
+➤ a[4,32,0]  𝄀
+null  𝄀
+2  𝄀
+4  𝄀
+null  𝄀
+2  𝄀
+4  𝄀
+null  𝄀
+2  𝄀
 4
 with qn as (select a from t1 order by 1 limit 10)
 select qn.a from qn, t1 as t2;
-a
-null
-null
-null
-2
-2
-2
-4
-4
+➤ a[4,32,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+2  𝄀
+2  𝄀
+2  𝄀
+4  𝄀
+4  𝄀
 4
 drop table if exists t1;
 drop table if exists t2;
@@ -257,39 +254,39 @@ invalid input: ambiguous column reference 'qn.1'
 with qn (foo, foo) as (select 1,2) select * from qn;
 invalid input: ambiguous column reference 'qn.foo'
 with qn (foo, bar) as (select 1,1 from t1) select * from qn;
-foo	bar
-1	1
-1	1
-1	1
-1	1
-1	1
+➤ foo[-5,64,0]  ¦  bar[-5,64,0]  𝄀
+1  ¦  1  𝄀
+1  ¦  1  𝄀
+1  ¦  1  𝄀
+1  ¦  1  𝄀
+1  ¦  1
 with qn (foo, bar) as (select 1,1) select * from qn;
-foo	bar
-1	1
+➤ foo[-5,64,0]  ¦  bar[-5,64,0]  𝄀
+1  ¦  1
 with qn (foo, bar) as (select 1, 2 from t1 limit 2) select * from qn, qn qn1;
-foo	bar	foo	bar
-1	2	1	2
-1	2	1	2
-1	2	1	2
-1	2	1	2
+➤ foo[-5,64,0]  ¦  bar[-5,64,0]  ¦  foo[-5,64,0]  ¦  bar[-5,64,0]  𝄀
+1  ¦  2  ¦  1  ¦  2  𝄀
+1  ¦  2  ¦  1  ¦  2  𝄀
+1  ¦  2  ¦  1  ¦  2  𝄀
+1  ¦  2  ¦  1  ¦  2
 with qn (foo, bar) as (select 1 as col, 2 as coll from t1 limit 2) select * from qn, qn qn1;
-foo	bar	foo	bar
-1	2	1	2
-1	2	1	2
-1	2	1	2
-1	2	1	2
+➤ foo[-5,64,0]  ¦  bar[-5,64,0]  ¦  foo[-5,64,0]  ¦  bar[-5,64,0]  𝄀
+1  ¦  2  ¦  1  ¦  2  𝄀
+1  ¦  2  ¦  1  ¦  2  𝄀
+1  ¦  2  ¦  1  ¦  2  𝄀
+1  ¦  2  ¦  1  ¦  2
 with qn (foo, bar) as (select 1 as col, 2 as coll union
 select a,b from t1 order by col) select qn1.bar from qn qn1;
-bar
-null
-2
-3
-5
+➤ bar[-5,64,0]  𝄀
+null  𝄀
+2  𝄀
+3  𝄀
+5  𝄀
 9
 with qn (foo, bar) as (select a, b from t1 limit 2) select qn.bar,foo from qn;
-bar	foo
-null	null
-3	2
+➤ bar[4,32,0]  ¦  foo[4,32,0]  𝄀
+null  ¦  null  𝄀
+3  ¦  2
 drop table if exists t1;
 drop table if exists t2;
 DROP TABLE IF EXISTS t3;
@@ -299,22 +296,22 @@ insert into t1 values ('a1'),('a2'),('a3');
 insert into t2 values ('a1'),('a2');
 with qn as (SELECT s1 FROM t2)
 select s1, s1 = ANY (select * from qn) from t1;
-s1	s1 = ANY (select * from qn)
-a1	1
-a2	1
-a3	0
+➤ s1[1,5,0]  ¦  s1 = any (select * from qn)[-7,1,0]  𝄀
+a1  ¦  1  𝄀
+a2  ¦  1  𝄀
+a3  ¦  0
 with qn as (SELECT s1 FROM t2)
 select s1, s1 < ANY (select * from qn) from t1;
-s1	s1 < ANY (select * from qn)
-a1	1
-a2	0
-a3	0
+➤ s1[1,5,0]  ¦  s1 < any (select * from qn)[-7,1,0]  𝄀
+a1  ¦  1  𝄀
+a2  ¦  0  𝄀
+a3  ¦  0
 with qn as (SELECT s1 FROM t2)
 select s1, s1 = ANY (select * from qn) from t1;
-s1	s1 = ANY (select * from qn)
-a1	1
-a2	1
-a3	0
+➤ s1[1,5,0]  ¦  s1 = any (select * from qn)[-7,1,0]  𝄀
+a1  ¦  1  𝄀
+a2  ¦  1  𝄀
+a3  ¦  0
 drop table if exists t1;
 drop table if exists t2;
 DROP TABLE IF EXISTS t3;
@@ -329,17 +326,17 @@ insert into t3 values(1),(0),(2),(9);
 insert into t2 values (100, 5);
 with qn as (select b from t2)
 select * from t3 where a in (select * from qn);
-a
+➤ a[4,32,0]  𝄀
 9
 with qn as (select b from t2 where b > 7)
 select * from t3 where a in (select * from qn);
-a
+➤ a[4,32,0]  𝄀
 9
 with qn as (select b from t2 where b > 7)
 select * from t3 where a not in (select * from qn);
-a
-1
-0
+➤ a[4,32,0]  𝄀
+1  𝄀
+0  𝄀
 2
 drop table if exists t1;
 drop table if exists t2;
@@ -436,5 +433,5 @@ select
 (select max(c29) from qn where qn.c29=1),
 (select max(c30) from qn where qn.c30=1),
 (select max(c31) from qn where qn.c31=1) from qn;
-(select max(c1) from qn where qn.c1=1)	(select max(c2) from qn where qn.c2=1)	(select max(c3) from qn where qn.c3=1)	(select max(c4) from qn where qn.c4=1)	(select max(c5) from qn where qn.c5=1)	(select max(c6) from qn where qn.c6=1)	(select max(c7) from qn where qn.c7=1)	(select max(c8) from qn where qn.c8=1)	(select max(c9) from qn where qn.c9=1)	(select max(c10) from qn where qn.c10=1)	(select max(c11) from qn where qn.c11=1)	(select max(c12) from qn where qn.c12=1)	(select max(c13) from qn where qn.c13=1)	(select max(c14) from qn where qn.c14=1)	(select max(c15) from qn where qn.c15=1)	(select max(c16) from qn where qn.c16=1)	(select max(c17) from qn where qn.c17=1)	(select max(c18) from qn where qn.c18=1)	(select max(c19) from qn where qn.c19=1)	(select max(c20) from qn where qn.c20=1)	(select max(c21) from qn where qn.c21=1)	(select max(c22) from qn where qn.c22=1)	(select max(c23) from qn where qn.c23=1)	(select max(c24) from qn where qn.c24=1)	(select max(c25) from qn where qn.c25=1)	(select max(c26) from qn where qn.c26=1)	(select max(c27) from qn where qn.c27=1)	(select max(c28) from qn where qn.c28=1)	(select max(c29) from qn where qn.c29=1)	(select max(c30) from qn where qn.c30=1)	(select max(c31) from qn where qn.c31=1)
+➤ (select max(c1) from qn where qn.c1 = 1)[4,32,0]  ¦  (select max(c2) from qn where qn.c2 = 1)[4,32,0]  ¦  (select max(c3) from qn where qn.c3 = 1)[4,32,0]  ¦  (select max(c4) from qn where qn.c4 = 1)[4,32,0]  ¦  (select max(c5) from qn where qn.c5 = 1)[4,32,0]  ¦  (select max(c6) from qn where qn.c6 = 1)[4,32,0]  ¦  (select max(c7) from qn where qn.c7 = 1)[4,32,0]  ¦  (select max(c8) from qn where qn.c8 = 1)[4,32,0]  ¦  (select max(c9) from qn where qn.c9 = 1)[4,32,0]  ¦  (select max(c10) from qn where qn.c10 = 1)[4,32,0]  ¦  (select max(c11) from qn where qn.c11 = 1)[4,32,0]  ¦  (select max(c12) from qn where qn.c12 = 1)[4,32,0]  ¦  (select max(c13) from qn where qn.c13 = 1)[4,32,0]  ¦  (select max(c14) from qn where qn.c14 = 1)[4,32,0]  ¦  (select max(c15) from qn where qn.c15 = 1)[4,32,0]  ¦  (select max(c16) from qn where qn.c16 = 1)[4,32,0]  ¦  (select max(c17) from qn where qn.c17 = 1)[4,32,0]  ¦  (select max(c18) from qn where qn.c18 = 1)[4,32,0]  ¦  (select max(c19) from qn where qn.c19 = 1)[4,32,0]  ¦  (select max(c20) from qn where qn.c20 = 1)[4,32,0]  ¦  (select max(c21) from qn where qn.c21 = 1)[4,32,0]  ¦  (select max(c22) from qn where qn.c22 = 1)[4,32,0]  ¦  (select max(c23) from qn where qn.c23 = 1)[4,32,0]  ¦  (select max(c24) from qn where qn.c24 = 1)[4,32,0]  ¦  (select max(c25) from qn where qn.c25 = 1)[4,32,0]  ¦  (select max(c26) from qn where qn.c26 = 1)[4,32,0]  ¦  (select max(c27) from qn where qn.c27 = 1)[4,32,0]  ¦  (select max(c28) from qn where qn.c28 = 1)[4,32,0]  ¦  (select max(c29) from qn where qn.c29 = 1)[4,32,0]  ¦  (select max(c30) from qn where qn.c30 = 1)[4,32,0]  ¦  (select max(c31) from qn where qn.c31 = 1)[4,32,0]
 drop table if exists `t`;

@@ -1039,6 +1039,9 @@ var (
 		MoCatalogMoISCPLogDDL,
 		MoCatalogMoIndexUpdateDDL,
 		MoCatalogBranchMetadataDDL,
+		MoCatalogMoCcprLogDDL,
+		MoCatalogMoCcprTablesDDL,
+		MoCatalogMoCcprDbsDDL,
 		MoCatalogFeatureLimitDDL,
 		MoCatalogFeatureRegistryDDL,
 		MoCatalogFeatureRegistryInitData,
@@ -1315,6 +1318,18 @@ const (
 	checkRoleHasPrivilegeWGOFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d;`
 
 	checkRoleHasPrivilegeWGOOrWithOwnershipFormat = `select distinct role_id from mo_catalog.mo_role_privs where (with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d;`
+
+	// obj-scoped WGO check: for table/view grants that must not leak across different objects.
+	checkRoleHasPrivilegeWGOWithObjFormat         = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s" and obj_id = %d;`
+	checkRoleHasPrivilegeWGOWithObjAndLevelFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s" and obj_id = %d and privilege_level in (%s);`
+
+	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjFormat         = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s" and obj_id = %d;`
+	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevelFormat = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s" and obj_id = %d and privilege_level in (%s);`
+
+	// obj_type-only WGO check: for wildcard grants (*.*) that still need table vs view distinction.
+	checkRoleHasPrivilegeWGOWithObjTypeFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s";`
+
+	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjTypeFormat = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s";`
 
 	updateRolePrivsFormat = `update mo_catalog.mo_role_privs set operation_user_id = %d, granted_time = "%s", with_grant_option = %v where role_id = %d and obj_type = "%s" and obj_id = %d and privilege_id = %d;`
 
@@ -1882,8 +1897,53 @@ func getSqlForCheckRoleHasPrivilegeWGO(privilegeId int64) string {
 	return fmt.Sprintf(checkRoleHasPrivilegeWGOFormat, privilegeId)
 }
 
-func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(privilegeId, allPrivId, ownershipPrivId int64) string {
+func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(privilegeId, allPrivId, ownershipPrivId int64) string {
 	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipFormat, privilegeId, allPrivId, ownershipPrivId)
+}
+
+func getSqlForCheckRoleHasPrivilegeWGOWithObj(privilegeId int64, objType objectType, objId int64) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOWithObjFormat, privilegeId, objType, objId)
+}
+
+func getSqlForCheckRoleHasPrivilegeWGOWithObjAndLevel(privilegeId int64, objType objectType, objId int64, privilegeLevel privilegeLevelType) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOWithObjAndLevelFormat, privilegeId, objType, objId, scopedGrantOptionPrivilegeLevelsSQL(privilegeLevel))
+}
+
+func getSqlForCheckRoleHasPrivilegeWGOWithObjAndExactLevel(privilegeId int64, objType objectType, objId int64, privilegeLevel privilegeLevelType) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOWithObjAndLevelFormat, privilegeId, objType, objId, exactGrantOptionPrivilegeLevelSQL(privilegeLevel))
+}
+
+func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(privilegeId, allPrivId, ownershipPrivId int64, objType objectType, objId int64) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipWithObjFormat, privilegeId, allPrivId, ownershipPrivId, objType, objId)
+}
+
+func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(privilegeId, allPrivId, ownershipPrivId int64, objType objectType, objId int64, privilegeLevel privilegeLevelType) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevelFormat, privilegeId, allPrivId, ownershipPrivId, objType, objId, scopedGrantOptionPrivilegeLevelsSQL(privilegeLevel))
+}
+
+func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndExactLevel(privilegeId, allPrivId, ownershipPrivId int64, objType objectType, objId int64, privilegeLevel privilegeLevelType) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevelFormat, privilegeId, allPrivId, ownershipPrivId, objType, objId, exactGrantOptionPrivilegeLevelSQL(privilegeLevel))
+}
+
+func scopedGrantOptionPrivilegeLevelsSQL(privilegeLevel privilegeLevelType) string {
+	levels := append([]privilegeLevelType{privilegeLevel}, equivalentScopedGrantOptionPrivilegeLevels(privilegeLevel)...)
+	parts := make([]string, 0, len(levels))
+	for _, level := range levels {
+		parts = append(parts, fmt.Sprintf(`"%s"`, level))
+	}
+	return strings.Join(parts, ",")
+}
+
+func exactGrantOptionPrivilegeLevelSQL(privilegeLevel privilegeLevelType) string {
+	return fmt.Sprintf(`"%s"`, privilegeLevel)
+}
+
+func getSqlForCheckRoleHasPrivilegeWGOWithObjType(privilegeId int64, objType objectType) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOWithObjTypeFormat, privilegeId, objType)
+}
+
+func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjType(privilegeId, allPrivId, ownershipPrivId int64, objType objectType) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipWithObjTypeFormat, privilegeId, allPrivId, ownershipPrivId, objType)
 }
 
 func getSqlForUpdateRolePrivs(userId int64, timestamp string, withGrantOption bool, roleId int64, objType objectType, objId, privilegeId int64) string {
@@ -3438,21 +3498,15 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	return err
 }
 
-// doSetSecondaryRoleAll set the session role of the user with smallness role_id
+// doSetSecondaryRoleAll validates user role metadata before enabling all secondary roles.
+// The current primary role must not change; SET SECONDARY ROLE ALL only affects secondary roles.
 func doSetSecondaryRoleAll(ctx context.Context, ses *Session) (err error) {
 	var sql string
 	var userId uint32
-	var erArray []ExecResult
-	var roleId int64
-	var roleName string
 
 	account := ses.GetTenantInfo()
 	// get current user_id
 	userId = account.GetUserID()
-
-	// init role_id and role_name
-	roleId = publicRoleID
-	roleName = publicRoleName
 
 	// step1:get all roles expect public
 	bh := ses.GetBackgroundExec(ctx)
@@ -3473,26 +3527,7 @@ func doSetSecondaryRoleAll(ctx context.Context, ses *Session) (err error) {
 		return err
 	}
 
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return err
-	}
-	if execResultArrayHasData(erArray) {
-		roleId, err = erArray[0].GetInt64(ctx, 0, 0)
-		if err != nil {
-			return err
-		}
-
-		roleName, err = erArray[0].GetString(ctx, 0, 1)
-		if err != nil {
-			return err
-		}
-	}
-
-	// step2 : switch the default role and role id;
-	account.SetDefaultRoleID(uint32(roleId))
-	account.SetDefaultRole(roleName)
-
+	_, err = getResultSet(ctx, bh)
 	return err
 }
 
@@ -3508,10 +3543,14 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		// use secondary role all or none
 		switch sr.SecondaryRoleType {
 		case tree.SecondaryRoleTypeAll:
-			doSetSecondaryRoleAll(ctx, ses)
+			if err = doSetSecondaryRoleAll(ctx, ses); err != nil {
+				return err
+			}
 			account.SetUseSecondaryRole(true)
+			ses.InvalidatePrivilegeCache()
 		case tree.SecondaryRoleTypeNone:
 			account.SetUseSecondaryRole(false)
+			ses.InvalidatePrivilegeCache()
 		}
 	} else if sr.Role != nil {
 		err = normalizeNameOfRole(ctx, sr.Role)
@@ -3585,6 +3624,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		account.SetDefaultRole(sr.Role.UserName)
 		// then, reset secondary role to none
 		account.SetUseSecondaryRole(false)
+		ses.InvalidatePrivilegeCache()
 
 		return err
 	}
@@ -4069,6 +4109,15 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			if rtnErr = dropPublication(deleteCtx, bh, true, pubInfo.PubAccountName, pubInfo.PubName); rtnErr != nil {
 				return
 			}
+		}
+
+		// mark all ccpr subscriptions of this account as dropped by setting drop_at and state = 3
+		// this must be done before dropping databases to allow dropping CCPR shared databases
+		sql = fmt.Sprintf("UPDATE mo_catalog.mo_ccpr_log SET drop_at = now(), state = 3 WHERE account_id = %d AND drop_at IS NULL", accountId)
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		// drop databases created by user
@@ -5057,7 +5106,6 @@ func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbN
 	if isDb {
 		return 0, moerr.NewInternalErrorf(ctx, `there is no database "%s"`, dbName)
 	} else {
-		// TODO: check the database exists or not first
 		return 0, moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
 	}
 }
@@ -5085,7 +5133,6 @@ func getViewId(ctx context.Context, bh BackgroundExec, dbName, viewName string) 
 		}
 		return id, nil
 	}
-	//TODO: check the database exists or not first
 	return 0, moerr.NewInternalErrorf(ctx, `there is no view "%s" in database "%s"`, viewName, dbName)
 }
 
@@ -6241,12 +6288,18 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
-		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions,
+		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions, *tree.ShowCcprSubscriptions, *tree.ShowPublicationCoverage,
 		*tree.ShowBackendServers, *tree.ShowStages, *tree.ShowConnectors, *tree.DropConnector,
 		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
+		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
 		*tree.ShowRules:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+		canExecInRestricted = true
+	case *tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
 		canExecInRestricted = true
 	case *tree.AlterRoleAddRule, *tree.AlterRoleDropRule:
 		typs = append(typs, PrivilegeTypeAlterRole, PrivilegeTypeAccountAll)
@@ -6291,6 +6344,27 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *InternalCmdFieldList:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *InternalCmdGetSnapshotTs:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *InternalCmdGetDatabases:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *InternalCmdGetMoIndexes:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *InternalCmdGetDdl:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *InternalCmdGetObject:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *InternalCmdObjectList:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *InternalCmdCheckSnapshotFlushed:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	case *tree.ValuesStatement:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeValues, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -6326,7 +6400,11 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.LockTableStmt, *tree.UnLockTableStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.CreatePublication, *tree.DropPublication, *tree.AlterPublication:
+	case *tree.CreatePublication, *tree.DropPublication, *tree.AlterPublication, *tree.DropCcprSubscription, *tree.PauseCcprSubscription, *tree.ResumeCcprSubscription:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
+		kind = privilegeKindNone
+	case *tree.CreateSubscription:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
@@ -6350,18 +6428,23 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
-	case *tree.CloneTable,
-		*tree.DataBranchCreateTable,
-		*tree.DataBranchDeleteTable,
-		*tree.DataBranchMerge,
-		*tree.DataBranchDiff:
+	case *tree.CloneTable:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
-	case *tree.CloneDatabase, *tree.DataBranchCreateDatabase, *tree.DataBranchDeleteDatabase:
+	case *tree.CloneDatabase:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeAccountAll)
 		writeDatabaseAndTableDirectly = true
+	case *tree.DataBranchCreateTable,
+		*tree.DataBranchDeleteTable,
+		*tree.DataBranchMerge,
+		*tree.DataBranchDiff,
+		*tree.DataBranchPick,
+		*tree.DataBranchCreateDatabase,
+		*tree.DataBranchDeleteDatabase:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
@@ -7624,10 +7707,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 			}
 			tbName := string(st.Names[0].ObjectName)
 			return checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
-		case *tree.CloneTable, *tree.CloneDatabase,
-			*tree.DataBranchDiff, *tree.DataBranchMerge,
-			*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
-			*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
+		case *tree.CloneTable, *tree.CloneDatabase:
 			return true, stats, nil
 		}
 	}
@@ -7973,77 +8053,77 @@ func getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType PrivilegeType) 
 	switch privType {
 	// account level privleges
 	case PrivilegeTypeCreateAccount:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeDropAccount:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeAlterAccount:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeUpgradeAccount:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeCreateUser:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeDropUser:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeAlterUser:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeCreateRole:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeDropRole:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeAlterRole:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeCreateDatabase:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeDropDatabase:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeShowDatabases:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeConnect:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeManageGrants:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeAccountAll:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeAccountOwnership:
 		return getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
 
 	// database level privileges
 	case PrivilegeTypeShowTables:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
 	case PrivilegeTypeCreateTable:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
 	case PrivilegeTypeDropTable:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
 	case PrivilegeTypeCreateView:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
 	case PrivilegeTypeDropView:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
 	case PrivilegeTypeAlterView:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
 	case PrivilegeTypeAlterTable:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
 	case PrivilegeTypeDatabaseAll:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
 	case PrivilegeTypeDatabaseOwnership:
 		return getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
 
 	// table level privileges
 	case PrivilegeTypeSelect:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
 	case PrivilegeTypeInsert:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
 	case PrivilegeTypeUpdate:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
 	case PrivilegeTypeTruncate:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
 	case PrivilegeTypeDelete:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
 	case PrivilegeTypeReference:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
 	case PrivilegeTypeIndex:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
 	case PrivilegeTypeTableAll:
-		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnership(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
 	case PrivilegeTypeTableOwnership:
 		return getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
 
@@ -8091,6 +8171,422 @@ func getRoleSetThatPrivilegeGrantedToWGO(ctx context.Context, bh BackgroundExec,
 	return rset, err
 }
 
+// getRoleSetThatPrivilegeGrantedToWGOScoped is like getRoleSetThatPrivilegeGrantedToWGO but
+// for table/view/database privileges with a specific object target, it adds obj_type/obj_id filtering.
+// Other privileges fall back to the unscoped version.
+func getRoleSetThatPrivilegeGrantedToWGOScoped(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	astObjType tree.ObjectType,
+	level tree.PrivilegeLevel,
+) (*btree.Set[int64], error) {
+	scope := privType.Scope()
+	if scope == PrivilegeScopeDatabase && astObjType == tree.OBJECT_TYPE_DATABASE {
+		return getRoleSetThatDatabasePrivilegeGrantedToWGOScoped(ctx, ses, bh, privType, level)
+	}
+	if scope != PrivilegeScopeTable ||
+		(astObjType != tree.OBJECT_TYPE_TABLE && astObjType != tree.OBJECT_TYPE_VIEW) {
+		return getRoleSetThatPrivilegeGrantedToWGO(ctx, bh, privType)
+	}
+
+	if astObjType == tree.OBJECT_TYPE_VIEW {
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
+			ctx, ses, bh, privType, astObjType, objectTypeView, level)
+		if err != nil {
+			return nil, err
+		}
+		legacyRoleSet, err := getRoleSetThatViewPrivilegeGrantedToWGOLegacyExact(
+			ctx, ses, bh, privType, level)
+		if err != nil {
+			return nil, err
+		}
+		mergeRoleSets(roleSet, legacyRoleSet)
+		return roleSet, nil
+	}
+
+	objType, err := convertAstObjectTypeToObjectType(ctx, astObjType)
+	if err != nil {
+		return nil, err
+	}
+	return getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(ctx, ses, bh, privType, astObjType, objType, level)
+}
+
+func getRoleSetThatViewPrivilegeGrantedToWGOLegacyExact(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	level tree.PrivilegeLevel,
+) (*btree.Set[int64], error) {
+	switch level.Level {
+	case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+		tree.PRIVILEGE_LEVEL_TYPE_TABLE:
+		privilegeLevel, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, tree.OBJECT_TYPE_VIEW, level)
+		if err != nil {
+			if !isMissingPrivilegeObjectError(err) {
+				return nil, err
+			}
+			return &btree.Set[int64]{}, nil
+		}
+		return getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(ctx, bh, privType, objectTypeTable, objId, privilegeLevel)
+	default:
+		return &btree.Set[int64]{}, nil
+	}
+}
+
+func getRoleSetThatDatabasePrivilegeGrantedToWGOScoped(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	level tree.PrivilegeLevel,
+) (*btree.Set[int64], error) {
+	switch level.Level {
+	case tree.PRIVILEGE_LEVEL_TYPE_STAR:
+		return broaderDatabaseScopeRoleSet(ctx, bh, privType)
+	case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
+		return broaderDatabaseScopeRoleSet(ctx, bh, privType)
+	case tree.PRIVILEGE_LEVEL_TYPE_DATABASE,
+		tree.PRIVILEGE_LEVEL_TYPE_TABLE:
+		privilegeLevel, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, tree.OBJECT_TYPE_DATABASE, level)
+		if err != nil {
+			if !isMissingPrivilegeObjectError(err) {
+				return nil, err
+			}
+			return broaderDatabaseScopeRoleSet(ctx, bh, privType)
+		}
+		roleSet, err := getRoleSetThatDatabasePrivilegeGrantedToWGOWithObjAndLevel(
+			ctx, bh, privType, objId, privilegeLevel)
+		if err != nil {
+			return nil, err
+		}
+		broaderRoleSet, err := broaderDatabaseScopeRoleSet(ctx, bh, privType)
+		if err != nil {
+			return nil, err
+		}
+		mergeRoleSets(roleSet, broaderRoleSet)
+		return roleSet, nil
+	}
+
+	return nil, moerr.NewInternalErrorf(
+		ctx,
+		`in the object type "%s" the privilege level "%s" is unsupported`,
+		"database",
+		level.String(),
+	)
+}
+
+func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	astObjType tree.ObjectType,
+	objType objectType,
+	level tree.PrivilegeLevel,
+) (*btree.Set[int64], error) {
+	// astObjType drives object-name resolution. objType drives mo_role_privs
+	// matching, so view grants can check both new view entries and legacy table entries.
+	switch level.Level {
+	case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
+		return getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(ctx, bh, privType, objType, objectIDAll, privilegeLevelStarStar)
+	case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+		tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+		tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+		tree.PRIVILEGE_LEVEL_TYPE_STAR:
+		privilegeLevel, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, astObjType, level)
+		if err != nil {
+			if !isMissingPrivilegeObjectError(err) {
+				return nil, err
+			}
+			// The target object does not exist, so we cannot match on its obj_id.
+			// Fall back to only the broader, object-id-independent scopes (global
+			// *.* and, when resolvable, the database-wide db.*). This still honors
+			// holders of global/db-wide grant option while preventing grants on
+			// unrelated specific objects of the same type from satisfying the check.
+			return broaderScopeRoleSetForLevel(ctx, ses, bh, privType, objType, level)
+		}
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(ctx, bh, privType, objType, objId, privilegeLevel)
+		if err != nil {
+			return nil, err
+		}
+		broaderRoleSet, err := broaderScopeRoleSetForLevel(ctx, ses, bh, privType, objType, level)
+		if err != nil {
+			return nil, err
+		}
+		mergeRoleSets(roleSet, broaderRoleSet)
+		return roleSet, nil
+	}
+
+	return getRoleSetThatPrivilegeGrantedToWGOWithObjType(ctx, bh, privType, objType)
+}
+
+// broaderScopeRoleSetForLevel collects roles whose grant option covers the target
+// through a scope that does not depend on the target object's own obj_id: the global
+// *.* scope always, plus the database-wide db.* scope when the grant targets a table
+// (DATABASE_TABLE/TABLE) and the database itself still resolves. A missing database is
+// skipped rather than treated as an error, mirroring the object-missing fallback.
+func broaderScopeRoleSetForLevel(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	objType objectType,
+	level tree.PrivilegeLevel,
+) (*btree.Set[int64], error) {
+	roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(ctx, bh, privType, objType, objectIDAll, privilegeLevelStarStar)
+	if err != nil {
+		return nil, err
+	}
+	if level.Level != tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE &&
+		level.Level != tree.PRIVILEGE_LEVEL_TYPE_TABLE {
+		return roleSet, nil
+	}
+	dbName := level.DbName
+	if dbName == "" {
+		dbName = ses.GetDatabaseName()
+	}
+	dbId, err := getDatabaseOrTableId(ctx, bh, true, dbName, "")
+	if err != nil {
+		if !isMissingPrivilegeObjectError(err) {
+			return nil, err
+		}
+		return roleSet, nil
+	}
+	dbRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(ctx, bh, privType, objType, dbId, privilegeLevelDatabaseStar)
+	if err != nil {
+		return nil, err
+	}
+	mergeRoleSets(roleSet, dbRoleSet)
+	return roleSet, nil
+}
+
+func broaderDatabaseScopeRoleSet(
+	ctx context.Context,
+	bh BackgroundExec,
+	privType PrivilegeType,
+) (*btree.Set[int64], error) {
+	roleSet, err := getRoleSetThatDatabasePrivilegeGrantedToWGOWithObjAndLevel(
+		ctx, bh, privType, objectIDAll, privilegeLevelStar)
+	if err != nil {
+		return nil, err
+	}
+	starStarRoleSet, err := getRoleSetThatDatabasePrivilegeGrantedToWGOWithObjAndLevel(
+		ctx, bh, privType, objectIDAll, privilegeLevelStarStar)
+	if err != nil {
+		return nil, err
+	}
+	mergeRoleSets(roleSet, starStarRoleSet)
+	return roleSet, nil
+}
+
+func equivalentScopedGrantOptionPrivilegeLevels(privilegeLevel privilegeLevelType) []privilegeLevelType {
+	switch privilegeLevel {
+	case privilegeLevelDatabaseStar:
+		return []privilegeLevelType{privilegeLevelStar}
+	case privilegeLevelStar:
+		return []privilegeLevelType{privilegeLevelDatabaseStar}
+	case privilegeLevelDatabaseTable:
+		return []privilegeLevelType{privilegeLevelTable}
+	case privilegeLevelTable:
+		return []privilegeLevelType{privilegeLevelDatabaseTable}
+	}
+	return nil
+}
+
+func isMissingPrivilegeObjectError(err error) bool {
+	if moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return true
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "there is no database ") ||
+		strings.Contains(errStr, "there is no table ") ||
+		strings.Contains(errStr, "there is no view ")
+}
+
+func mergeRoleSets(dst, src *btree.Set[int64]) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, id := range src.Keys() {
+		dst.Insert(id)
+	}
+}
+
+func getRoleSetThatPrivilegeGrantedToWGOWithObj(
+	ctx context.Context,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	objType objectType,
+	objId int64,
+) (*btree.Set[int64], error) {
+	var sql string
+	switch privType {
+	case PrivilegeTypeSelect, PrivilegeTypeInsert, PrivilegeTypeUpdate,
+		PrivilegeTypeTruncate, PrivilegeTypeDelete, PrivilegeTypeReference,
+		PrivilegeTypeIndex, PrivilegeTypeValues, PrivilegeTypeTableAll:
+		sql = getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objType, objId)
+	case PrivilegeTypeTableOwnership:
+		sql = getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(privType), objType, objId)
+	default:
+		sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
+	}
+
+	rset := &btree.Set[int64]{}
+	bh.ClearExecResultSet()
+	err := bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			id, err := erArray[0].GetInt64(ctx, i, 0)
+			if err != nil {
+				return nil, err
+			}
+			rset.Insert(id)
+		}
+	}
+	return rset, err
+}
+
+func getRoleSetThatDatabasePrivilegeGrantedToWGOWithObjAndLevel(
+	ctx context.Context,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	objId int64,
+	privilegeLevel privilegeLevelType,
+) (*btree.Set[int64], error) {
+	var sql string
+	switch privType {
+	case PrivilegeTypeShowTables,
+		PrivilegeTypeCreateObject, PrivilegeTypeCreateTable, PrivilegeTypeCreateView,
+		PrivilegeTypeDropObject, PrivilegeTypeDropTable, PrivilegeTypeDropView,
+		PrivilegeTypeAlterObject, PrivilegeTypeAlterTable, PrivilegeTypeAlterView,
+		PrivilegeTypeDatabaseAll:
+		sql = getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndExactLevel(
+			int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership),
+			objectTypeDatabase, objId, privilegeLevel)
+	case PrivilegeTypeDatabaseOwnership:
+		sql = getSqlForCheckRoleHasPrivilegeWGOWithObjAndExactLevel(
+			int64(privType), objectTypeDatabase, objId, privilegeLevel)
+	default:
+		return nil, moerr.NewInternalErrorf(ctx, `the privilege "%s" can not be checked as database scoped`, privType)
+	}
+
+	rset := &btree.Set[int64]{}
+	bh.ClearExecResultSet()
+	err := bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			id, err := erArray[0].GetInt64(ctx, i, 0)
+			if err != nil {
+				return nil, err
+			}
+			rset.Insert(id)
+		}
+	}
+	return rset, err
+}
+
+func getRoleSetThatPrivilegeGrantedToWGOWithObjAndLevel(
+	ctx context.Context,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	objType objectType,
+	objId int64,
+	privilegeLevel privilegeLevelType,
+) (*btree.Set[int64], error) {
+	var sql string
+	switch privType {
+	case PrivilegeTypeSelect, PrivilegeTypeInsert, PrivilegeTypeUpdate,
+		PrivilegeTypeTruncate, PrivilegeTypeDelete, PrivilegeTypeReference,
+		PrivilegeTypeIndex, PrivilegeTypeValues, PrivilegeTypeTableAll:
+		sql = getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndLevel(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objType, objId, privilegeLevel)
+	case PrivilegeTypeTableOwnership:
+		sql = getSqlForCheckRoleHasPrivilegeWGOWithObjAndLevel(int64(privType), objType, objId, privilegeLevel)
+	default:
+		sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
+	}
+
+	rset := &btree.Set[int64]{}
+	bh.ClearExecResultSet()
+	err := bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			id, err := erArray[0].GetInt64(ctx, i, 0)
+			if err != nil {
+				return nil, err
+			}
+			rset.Insert(id)
+		}
+	}
+	return rset, err
+}
+
+func getRoleSetThatPrivilegeGrantedToWGOWithObjType(
+	ctx context.Context,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	objType objectType,
+) (*btree.Set[int64], error) {
+	var sql string
+	switch privType {
+	case PrivilegeTypeSelect, PrivilegeTypeInsert, PrivilegeTypeUpdate,
+		PrivilegeTypeTruncate, PrivilegeTypeDelete, PrivilegeTypeReference,
+		PrivilegeTypeIndex, PrivilegeTypeValues, PrivilegeTypeTableAll:
+		sql = getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjType(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objType)
+	case PrivilegeTypeTableOwnership:
+		sql = getSqlForCheckRoleHasPrivilegeWGOWithObjType(int64(privType), objType)
+	default:
+		sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
+	}
+
+	rset := &btree.Set[int64]{}
+	bh.ClearExecResultSet()
+	err := bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			id, err := erArray[0].GetInt64(ctx, i, 0)
+			if err != nil {
+				return nil, err
+			}
+			rset.Insert(id)
+		}
+	}
+	return rset, err
+}
+
 // setIsIntersected decides the A is intersecting the B.
 func setIsIntersected(A, B *btree.Set[int64]) bool {
 	if A.Len() > B.Len() {
@@ -8105,9 +8601,69 @@ func setIsIntersected(A, B *btree.Set[int64]) bool {
 	return false
 }
 
+func expandRoleSetWithInheritedRoles(ctx context.Context, bh BackgroundExec, roleSet *btree.Set[int64]) error {
+	roleSetOfKthIteration := &btree.Set[int64]{}
+	roleSetOfKPlusOneThIteration := &btree.Set[int64]{}
+	roleSetOfVisited := &btree.Set[int64]{}
+
+	for _, roleID := range roleSet.Keys() {
+		roleSetOfKthIteration.Insert(roleID)
+		roleSetOfVisited.Insert(roleID)
+	}
+
+	for roleSetOfKthIteration.Len() != 0 {
+		roleSetOfKPlusOneThIteration.Clear()
+		for _, roleID := range roleSetOfKthIteration.Keys() {
+			sqlForInheritedRoleIdOfRoleId := getSqlForInheritedRoleIdOfRoleId(roleID)
+			bh.ClearExecResultSet()
+			if err := bh.Exec(ctx, sqlForInheritedRoleIdOfRoleId); err != nil {
+				return moerr.NewInternalErrorf(ctx, "get inherited role id of the role id. error:%v", err)
+			}
+
+			erArray, err := getResultSet(ctx, bh)
+			if err != nil {
+				return err
+			}
+
+			if execResultArrayHasData(erArray) {
+				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+					inheritedRoleID, err := erArray[0].GetInt64(ctx, i, 0)
+					if err != nil {
+						return err
+					}
+					if roleSetOfVisited.Contains(inheritedRoleID) {
+						continue
+					}
+					roleSetOfVisited.Insert(inheritedRoleID)
+					roleSet.Insert(inheritedRoleID)
+					roleSetOfKPlusOneThIteration.Insert(inheritedRoleID)
+				}
+			}
+		}
+
+		roleSetOfKthIteration, roleSetOfKPlusOneThIteration = roleSetOfKPlusOneThIteration, roleSetOfKthIteration
+	}
+
+	return nil
+}
+
+func shouldExpandCurrentUserRolesForPrivilegeGrant(privType PrivilegeType, astObjType tree.ObjectType) bool {
+	switch privType.Scope() {
+	case PrivilegeScopeDatabase:
+		return astObjType == tree.OBJECT_TYPE_DATABASE
+	case PrivilegeScopeTable:
+		return astObjType == tree.OBJECT_TYPE_TABLE || astObjType == tree.OBJECT_TYPE_VIEW
+	default:
+		return false
+	}
+}
+
 // determineUserCanGrantPrivilegesToOthers decides the privileges can be granted to others.
 func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) (ret bool, stats statistic.StatsArray, err error) {
 	stats.Reset()
+	if gp == nil || gp.Level == nil {
+		return false, stats, moerr.NewInternalError(ctx, "grant privilege level is missing")
+	}
 
 	// step1: normalize the names of roles and users
 	// step2: decide the current user
@@ -8133,6 +8689,7 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 	roleSetOfVisited := &btree.Set[int64]{}
 	// the set of roles of the current user that executes this statement or function
 	roleSetOfCurrentUser := &btree.Set[int64]{}
+	currentUserRoleSetExpanded := false
 
 	roleSetOfCurrentUser.Insert(int64(account.GetDefaultRoleID()))
 
@@ -8159,13 +8716,24 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 		}
 
 		// call the algorithm 3.
-		roleSetOfPrivilegeGrantedToWGO, err = getRoleSetThatPrivilegeGrantedToWGO(ctx, bh, privType)
+		roleSetOfPrivilegeGrantedToWGO, err = getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx, ses, bh, privType, gp.ObjType, *gp.Level)
 		if err != nil {
 			return false, stats, err
 		}
 
 		if setIsIntersected(roleSetOfPrivilegeGrantedToWGO, roleSetOfCurrentUser) {
 			continue
+		}
+		if !currentUserRoleSetExpanded && shouldExpandCurrentUserRolesForPrivilegeGrant(privType, gp.ObjType) {
+			err = expandRoleSetWithInheritedRoles(ctx, bh, roleSetOfCurrentUser)
+			if err != nil {
+				return false, stats, err
+			}
+			currentUserRoleSetExpanded = true
+			if setIsIntersected(roleSetOfPrivilegeGrantedToWGO, roleSetOfCurrentUser) {
+				continue
+			}
 		}
 
 		riResult := goOn
@@ -8346,6 +8914,10 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			// only the moAdmin or accountAdmin can execute the Cdc statement
 			return tenant.IsAdminRole(), nil
 		}
+		checkSQLTaskPrivilege := func() (bool, error) {
+			// SQL tasks execute later as a stored definer, so V1 task management is admin only.
+			return tenant.IsAdminRole(), nil
+		}
 
 		switch gp := stmt.(type) {
 		case *tree.Grant:
@@ -8392,6 +8964,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return yes, stats, err
 		case *tree.CreateCDC, *tree.ShowCDC, *tree.PauseCDC, *tree.DropCDC, *tree.ResumeCDC, *tree.RestartCDC:
 			yes, err := checkCdcTaskPrivilege()
+			return yes, stats, err
+		case *tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask:
+			yes, err := checkSQLTaskPrivilege()
 			return yes, stats, err
 		}
 	}
@@ -8763,6 +9338,15 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_ISCP_LOG)) {
+			return true
+		}
+		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_CCPR_LOG)) {
+			return true
+		}
+		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE %s.%s", catalog.MO_CATALOG, catalog.MO_CCPR_TABLES)) {
+			return true
+		}
+		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE %s.%s", catalog.MO_CATALOG, catalog.MO_CCPR_DBS)) {
 			return true
 		}
 		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_INDEX_UPDATE)) {

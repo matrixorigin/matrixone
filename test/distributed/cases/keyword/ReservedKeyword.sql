@@ -32,7 +32,7 @@ show create table `distinct`;
 drop table `distinct`;
 
 drop table if exists `except`;
-create table `except` (`exists` int, `explain` bigint, `false` smallint, `for` decimal, `force` char, `foreign` varchar, `from` int, `fulltext` float);
+create table `except` (`exists` int, `explain` bigint, `false` smallint, `for` decimal, `force` char, `foreign` varchar, `from` int, `full` float, `fulltext` double);
 show create table `except`;
 drop table `except`;
 

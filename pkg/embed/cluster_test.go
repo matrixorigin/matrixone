@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -285,4 +286,71 @@ func TestCreateDB(t *testing.T) {
 			}
 		},
 	)
+}
+
+// TestDoStartLockedErrorPaths exercises the error-handling branches in
+// doStartLocked that are not reached by normal cluster startup tests.
+func TestDoStartLockedErrorPaths(t *testing.T) {
+	t.Run("non-CN service error returns immediately", func(t *testing.T) {
+		// A non-CN operator whose state is already 'started' will return
+		// an error from Start(), exercising the direct-return path at
+		// cluster.go line 119-121.
+		op := &operator{
+			serviceType: metadata.ServiceType_LOG,
+			state:       started, // forces Start() to return error
+		}
+		c := &cluster{
+			services: []*operator{op},
+		}
+		err := c.doStartLocked(0)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "already started")
+	})
+
+	t.Run("CN service error captured via atomic.Value", func(t *testing.T) {
+		// A CN operator whose state is already 'started' will return an
+		// error from Start(), exercising the goroutine error-capture path
+		// at cluster.go lines 128-133 and the error-return at 138-140.
+		op := &operator{
+			serviceType: metadata.ServiceType_CN,
+			state:       started,
+		}
+		c := &cluster{
+			services: []*operator{op},
+		}
+		err := c.doStartLocked(0)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "already started")
+	})
+
+	t.Run("Start propagates doStartLocked error", func(t *testing.T) {
+		// Exercises the error propagation in Start() at line 107-109.
+		op := &operator{
+			serviceType: metadata.ServiceType_LOG,
+			state:       started,
+		}
+		c := &cluster{
+			state:    stopped,
+			services: []*operator{op},
+		}
+		err := c.Start()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "already started")
+	})
+
+	t.Run("Start rejects double start", func(t *testing.T) {
+		c := &cluster{state: started}
+		err := c.Start()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "embed mo cluster already started")
+	})
+
+	t.Run("happy path with no services", func(t *testing.T) {
+		c := &cluster{
+			state:    stopped,
+			services: []*operator{},
+		}
+		err := c.doStartLocked(0)
+		assert.NoError(t, err)
+	})
 }

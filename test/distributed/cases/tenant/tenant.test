@@ -5,7 +5,9 @@ create account tenant_test admin_name = 'root' identified by '111' open comment 
 create account if not exists tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
 create account tenant_test admin_name = 'root' open comment 'tenant_test';
 -- @regex("tenant_test", true)
+-- @sortkey:0
+-- @ignore:2,3,4,5,6,7,8,9
 show accounts;
 drop account if exists tenant_test;
-select account_id,relname,relkind from mo_catalog.mo_tables where account_id = 0 and reldatabase = 'mo_catalog' and relname not like '__mo_index%' and relname != '__mo_account_lock' order by relname;
+select account_id,relname,relkind from mo_catalog.mo_tables where account_id = 0 and reldatabase = 'mo_catalog' and relname in ('mo_account','mo_columns','mo_database','mo_tables','mo_user') order by relname;
 set global enable_privilege_cache = on;

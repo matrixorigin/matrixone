@@ -53,6 +53,7 @@ func init() {
 	initLogServiceMetrics()
 	initShardingMetrics()
 	initGCMetrics()
+	initCCPRMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -85,6 +86,7 @@ func initTaskMetrics() {
 	registry.MustRegister(TaskMergeTransferPageLengthGauge)
 	registry.MustRegister(transferDurationHistogram)
 	registry.MustRegister(transferShortDurationHistogram)
+	registry.MustRegister(transferPageWriteCounter)
 
 	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
 
@@ -95,6 +97,8 @@ func initTaskMetrics() {
 func initFileServiceMetrics() {
 	registry.MustRegister(fsReadCounter)
 	registry.MustRegister(fsCacheBytes)
+	registry.MustRegister(fsCachePressureCounter)
+	registry.MustRegister(fsCachePressureEvictDuration)
 
 	registry.MustRegister(s3IOBytesHistogram)
 	registry.MustRegister(s3ConnDurationHistogram)
@@ -267,6 +271,62 @@ func initShardingMetrics() {
 	registry.MustRegister(replicaReadCounter)
 	registry.MustRegister(ReplicaCountGauge)
 	registry.MustRegister(ReplicaFreezeCNCountGauge)
+}
+
+func initCCPRMetrics() {
+	// Task and iteration counters
+	registry.MustRegister(ccprTaskCounter)
+	registry.MustRegister(ccprIterationCounter)
+
+	// Object processing counters
+	registry.MustRegister(ccprObjectCounter)
+	registry.MustRegister(ccprObjectBytesCounter)
+
+	// Job counters
+	registry.MustRegister(ccprJobCounter)
+
+	// Error and retry counters
+	registry.MustRegister(ccprErrorCounter)
+	registry.MustRegister(CCPRRetryCounter)
+
+	// DDL counters
+	registry.MustRegister(ccprDDLCounter)
+
+	// Duration histograms
+	registry.MustRegister(ccprIterationDurationHistogram)
+	registry.MustRegister(ccprJobDurationHistogram)
+	registry.MustRegister(CCPRObjectSizeBytesHistogram)
+	registry.MustRegister(CCPRChunkSizeBytesHistogram)
+
+	// Queue size gauges
+	registry.MustRegister(ccprQueueSizeGauge)
+
+	// Running gauges
+	registry.MustRegister(ccprRunningGauge)
+	registry.MustRegister(CCPRAObjectMapSizeGauge)
+
+	// Snapshot counters
+	registry.MustRegister(ccprSnapshotCounter)
+
+	// GC metrics
+	registry.MustRegister(CCPRGCRunCounter)
+	registry.MustRegister(CCPRGCDurationHistogram)
+
+	// Sync protection counters
+	registry.MustRegister(ccprSyncProtectionCounter)
+
+	// Memory metrics
+	registry.MustRegister(ccprMemoryGauge)
+	registry.MustRegister(ccprMemoryAllocCounter)
+	registry.MustRegister(ccprMemoryAllocBytesCounter)
+	registry.MustRegister(ccprMemoryFreeCounter)
+	registry.MustRegister(ccprPoolCounter)
+	registry.MustRegister(CCPRMemoryAllocSizeHistogram)
+	registry.MustRegister(CCPRMemoryWaitDurationHistogram)
+	registry.MustRegister(CCPRMemoryLimitGauge)
+
+	// Replication lag gauge
+	registry.MustRegister(CCPRReplicationLagGauge)
 }
 
 var (

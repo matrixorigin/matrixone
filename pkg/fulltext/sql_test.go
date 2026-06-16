@@ -22,11 +22,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestEscape(t *testing.T) {
+	assert.Equal(t, `ma\'trix`, escape("ma'trix"))
+	assert.Equal(t, `back\\slash`, escape(`back\slash`))
+	assert.Equal(t, `back\\slash\'s`, escape(`back\slash's`))
+	assert.Equal(t, `normal`, escape("normal"))
+}
+
 func TestSqlPhraseBM25(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "\"Ma'trix Origin\"",
-			expect:  "select a.*, b.pos as doc_len from (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'ma\\'trix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 8 GROUP BY kw0.doc_id) a left join `__mo_index_secondary_` b on a.doc_id = b.doc_id and b.word = '__DocLen'",
+			expect:  "select a.*, CAST(COALESCE(dl.pos, 0) AS INT) as doc_len from (SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = 'ma\\'trix' UNION ALL SELECT doc_id, pos - 8 AS anchor FROM `__mo_index_secondary_` WHERE word = 'origin') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 2) phrase GROUP BY doc_id) a LEFT JOIN `__mo_index_secondary_` dl ON a.doc_id = dl.doc_id AND dl.word = '__DocLen'",
 		},
 	}
 
@@ -44,11 +51,11 @@ func TestSqlPhrase(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "\"Ma'trix Origin\"",
-			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'ma\\'trix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 8 GROUP BY kw0.doc_id",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = 'ma\\'trix' UNION ALL SELECT doc_id, pos - 8 AS anchor FROM `__mo_index_secondary_` WHERE word = 'origin') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 2) phrase GROUP BY doc_id",
 		},
 		{
 			pattern: "\"Matrix Origin\"",
-			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'matrix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 7 GROUP BY kw0.doc_id",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = 'matrix' UNION ALL SELECT doc_id, pos - 7 AS anchor FROM `__mo_index_secondary_` WHERE word = 'origin') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 2) phrase GROUP BY doc_id",
 		},
 		{
 			pattern: "\"Matrix\"",
@@ -60,11 +67,11 @@ func TestSqlPhrase(t *testing.T) {
 		},
 		{
 			pattern: "\"Matrix     Origin\"",
-			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'matrix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 11 GROUP BY kw0.doc_id",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = 'matrix' UNION ALL SELECT doc_id, pos - 11 AS anchor FROM `__mo_index_secondary_` WHERE word = 'origin') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 2) phrase GROUP BY doc_id",
 		},
 		{
 			pattern: "\"  你好嗎? Hello World  在一起  Happy  再见  \"",
-			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '你好嗎?'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'hello'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'world'), kw3 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '在一起'), kw4 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'happy'), kw5 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '再见') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2, kw3, kw4, kw5 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 11 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 17 AND kw0.doc_id = kw3.doc_id AND kw3.pos - kw0.pos = 24 AND kw0.doc_id = kw4.doc_id AND kw4.pos - kw0.pos = 35 AND kw0.doc_id = kw5.doc_id AND kw5.pos - kw0.pos = 42 GROUP BY kw0.doc_id",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = '你好嗎?' UNION ALL SELECT doc_id, pos - 11 AS anchor FROM `__mo_index_secondary_` WHERE word = 'hello' UNION ALL SELECT doc_id, pos - 17 AS anchor FROM `__mo_index_secondary_` WHERE word = 'world' UNION ALL SELECT doc_id, pos - 24 AS anchor FROM `__mo_index_secondary_` WHERE word = '在一起' UNION ALL SELECT doc_id, pos - 35 AS anchor FROM `__mo_index_secondary_` WHERE word = 'happy' UNION ALL SELECT doc_id, pos - 42 AS anchor FROM `__mo_index_secondary_` WHERE word = '再见') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 6) phrase GROUP BY doc_id",
 		},
 	}
 
@@ -84,7 +91,7 @@ func TestSqlBoolean(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "Ma'trix Origin",
-			expect:  "WITH t0 AS (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma')), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'trix') SELECT kw0.doc_id FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 GROUP BY kw0.doc_id), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin' GROUP BY doc_id) SELECT doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT doc_id, CAST(1 as int) FROM t1",
+			expect:  "WITH t0 AS (SELECT doc_id FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma') UNION ALL SELECT doc_id, pos - 3 AS anchor FROM `__mo_index_secondary_` WHERE word = 'trix') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 2) phrase GROUP BY doc_id), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin' GROUP BY doc_id) SELECT doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT doc_id, CAST(1 as int) FROM t1",
 		},
 		{
 			pattern: "Matrix Origin",
@@ -112,7 +119,7 @@ func TestSqlBoolean(t *testing.T) {
 		},
 		{
 			pattern: "\"Matrix origin\"",
-			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'matrix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 7 GROUP BY kw0.doc_id",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = 'matrix' UNION ALL SELECT doc_id, pos - 7 AS anchor FROM `__mo_index_secondary_` WHERE word = 'origin') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 2) phrase GROUP BY doc_id",
 		},
 		{
 			pattern: "Matrix Origin*",
@@ -128,11 +135,11 @@ func TestSqlBoolean(t *testing.T) {
 		},
 		{
 			pattern: "+读写汉字 -学中文",
-			expect:  "WITH t0 AS (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '读写汉'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '写汉字') SELECT kw0.doc_id FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 GROUP BY kw0.doc_id), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = '学中文' GROUP BY doc_id) SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM t1, t0 WHERE t0.doc_id = t1.doc_id",
+			expect:  "WITH t0 AS (SELECT doc_id FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = '读写汉' UNION ALL SELECT doc_id, pos - 3 AS anchor FROM `__mo_index_secondary_` WHERE word = '写汉字') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 2) phrase GROUP BY doc_id), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = '学中文' GROUP BY doc_id) SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM t1, t0 WHERE t0.doc_id = t1.doc_id",
 		},
 		{
 			pattern: "+SGB11型号的检验报告",
-			expect:  "WITH t0 AS (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'sgb11'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '型号的'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '检验报'), kw3 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '验报告') SELECT kw0.doc_id FROM kw0, kw1, kw2, kw3 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 5 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 14 AND kw0.doc_id = kw3.doc_id AND kw3.pos - kw0.pos = 17 GROUP BY kw0.doc_id) SELECT doc_id, CAST(0 as int) FROM t0",
+			expect:  "WITH t0 AS (SELECT doc_id FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = 'sgb11' UNION ALL SELECT doc_id, pos - 5 AS anchor FROM `__mo_index_secondary_` WHERE word = '型号的' UNION ALL SELECT doc_id, pos - 14 AS anchor FROM `__mo_index_secondary_` WHERE word = '检验报' UNION ALL SELECT doc_id, pos - 17 AS anchor FROM `__mo_index_secondary_` WHERE word = '验报告') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 4) phrase GROUP BY doc_id) SELECT doc_id, CAST(0 as int) FROM t0",
 		},
 		{
 			pattern: "+读书会 +提效 +社群 +案例 +运营",
@@ -157,7 +164,7 @@ func TestSqlBooleanBM25(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "Ma'trix Origin",
-			expect:  "select a.*, b.pos as doc_len from (WITH t0 AS (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma')), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'trix') SELECT kw0.doc_id FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 GROUP BY kw0.doc_id), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin' GROUP BY doc_id) SELECT doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT doc_id, CAST(1 as int) FROM t1) a left join `__mo_index_secondary_` b on a.doc_id = b.doc_id and b.word = '__DocLen'",
+			expect:  "select a.*, CAST(COALESCE(dl.pos, 0) AS INT) as doc_len from (WITH t0 AS (SELECT doc_id FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma') UNION ALL SELECT doc_id, pos - 3 AS anchor FROM `__mo_index_secondary_` WHERE word = 'trix') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 2) phrase GROUP BY doc_id), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin' GROUP BY doc_id) SELECT doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT doc_id, CAST(1 as int) FROM t1) a LEFT JOIN `__mo_index_secondary_` dl ON a.doc_id = dl.doc_id AND dl.word = '__DocLen'",
 		},
 	}
 
@@ -176,15 +183,15 @@ func TestSqlNL(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "Ma'trix Origin",
-			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma')), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'trix'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 8",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma') UNION ALL SELECT doc_id, pos - 3 AS anchor FROM `__mo_index_secondary_` WHERE word = 'trix' UNION ALL SELECT doc_id, pos - 8 AS anchor FROM `__mo_index_secondary_` WHERE word = 'origin') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 3",
 		},
 		{
 			pattern: "Matrix Origin",
-			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'matrix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 7",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = 'matrix' UNION ALL SELECT doc_id, pos - 7 AS anchor FROM `__mo_index_secondary_` WHERE word = 'origin') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 2",
 		},
 		{
 			pattern: "读写汉字 学中文",
-			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '读写汉'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '写汉字'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '学中文') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 13",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = '读写汉' UNION ALL SELECT doc_id, pos - 3 AS anchor FROM `__mo_index_secondary_` WHERE word = '写汉字' UNION ALL SELECT doc_id, pos - 13 AS anchor FROM `__mo_index_secondary_` WHERE word = '学中文') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 3",
 		},
 		{
 			pattern: "读写",
@@ -192,11 +199,11 @@ func TestSqlNL(t *testing.T) {
 		},
 		{
 			pattern: "肥胖的原因都是因为摄入脂肪多导致的吗",
-			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '肥胖的'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '原因都'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '是因为'), kw3 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '摄入脂'), kw4 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '肪多导'), kw5 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '致的吗') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2, kw3, kw4, kw5 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 9 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 18 AND kw0.doc_id = kw3.doc_id AND kw3.pos - kw0.pos = 27 AND kw0.doc_id = kw4.doc_id AND kw4.pos - kw0.pos = 36 AND kw0.doc_id = kw5.doc_id AND kw5.pos - kw0.pos = 45",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = '肥胖的' UNION ALL SELECT doc_id, pos - 9 AS anchor FROM `__mo_index_secondary_` WHERE word = '原因都' UNION ALL SELECT doc_id, pos - 18 AS anchor FROM `__mo_index_secondary_` WHERE word = '是因为' UNION ALL SELECT doc_id, pos - 27 AS anchor FROM `__mo_index_secondary_` WHERE word = '摄入脂' UNION ALL SELECT doc_id, pos - 36 AS anchor FROM `__mo_index_secondary_` WHERE word = '肪多导' UNION ALL SELECT doc_id, pos - 45 AS anchor FROM `__mo_index_secondary_` WHERE word = '致的吗') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 6",
 		},
 		{
 			pattern: "肥胖的原因都是因为摄入fat多导致的吗",
-			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '肥胖的'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '原因都'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '是因为'), kw3 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '为摄入'), kw4 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'fat'), kw5 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '多导致'), kw6 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '致的吗') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2, kw3, kw4, kw5, kw6 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 9 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 18 AND kw0.doc_id = kw3.doc_id AND kw3.pos - kw0.pos = 24 AND kw0.doc_id = kw4.doc_id AND kw4.pos - kw0.pos = 33 AND kw0.doc_id = kw5.doc_id AND kw5.pos - kw0.pos = 36 AND kw0.doc_id = kw6.doc_id AND kw6.pos - kw0.pos = 42",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = '肥胖的' UNION ALL SELECT doc_id, pos - 9 AS anchor FROM `__mo_index_secondary_` WHERE word = '原因都' UNION ALL SELECT doc_id, pos - 18 AS anchor FROM `__mo_index_secondary_` WHERE word = '是因为' UNION ALL SELECT doc_id, pos - 24 AS anchor FROM `__mo_index_secondary_` WHERE word = '为摄入' UNION ALL SELECT doc_id, pos - 33 AS anchor FROM `__mo_index_secondary_` WHERE word = 'fat' UNION ALL SELECT doc_id, pos - 36 AS anchor FROM `__mo_index_secondary_` WHERE word = '多导致' UNION ALL SELECT doc_id, pos - 42 AS anchor FROM `__mo_index_secondary_` WHERE word = '致的吗') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 7",
 		},
 	}
 
@@ -216,7 +223,7 @@ func TestSqlNLBM25(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "Ma'trix Origin",
-			expect:  "select a.*, b.pos as doc_len from (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma')), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'trix'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 8) a left join `__mo_index_secondary_` b on a.doc_id = b.doc_id and b.word = '__DocLen'",
+			expect:  "select a.*, CAST(COALESCE(dl.pos, 0) AS INT) as doc_len from (SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma') UNION ALL SELECT doc_id, pos - 3 AS anchor FROM `__mo_index_secondary_` WHERE word = 'trix' UNION ALL SELECT doc_id, pos - 8 AS anchor FROM `__mo_index_secondary_` WHERE word = 'origin') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 3) a LEFT JOIN `__mo_index_secondary_` dl ON a.doc_id = dl.doc_id AND dl.word = '__DocLen'",
 		},
 	}
 
@@ -229,4 +236,109 @@ func TestSqlNLBM25(t *testing.T) {
 		//fmt.Println(result)
 		assert.Equal(t, c.expect, result)
 	}
+}
+
+func TestSingleKeywordTopKSQL(t *testing.T) {
+	tests := []struct {
+		pattern    string
+		mode       int64
+		expectOK   bool
+		expectTopK string
+	}{
+		{
+			pattern:    "Matrix",
+			mode:       int64(tree.FULLTEXT_NL),
+			expectOK:   true,
+			expectTopK: "SELECT doc_id, tf, nmatch FROM (SELECT doc_id, tf, COUNT(*) OVER() AS nmatch FROM (SELECT doc_id, CASE WHEN COUNT(*) > 255 THEN 255 ELSE COUNT(*) END AS tf FROM `__mo_index_secondary_` WHERE word = 'matrix' GROUP BY doc_id) a) ranked ORDER BY tf DESC LIMIT 5",
+		},
+		{
+			pattern:    "Matrix",
+			mode:       int64(tree.FULLTEXT_DEFAULT),
+			expectOK:   true,
+			expectTopK: "SELECT doc_id, tf, nmatch FROM (SELECT doc_id, tf, COUNT(*) OVER() AS nmatch FROM (SELECT doc_id, CASE WHEN COUNT(*) > 255 THEN 255 ELSE COUNT(*) END AS tf FROM `__mo_index_secondary_` WHERE word = 'matrix' GROUP BY doc_id) a) ranked ORDER BY tf DESC LIMIT 5",
+		},
+		{
+			pattern:  "+Matrix",
+			mode:     int64(tree.FULLTEXT_BOOLEAN),
+			expectOK: false,
+		},
+		{
+			pattern:    "读写",
+			mode:       int64(tree.FULLTEXT_NL),
+			expectOK:   true,
+			expectTopK: "SELECT doc_id, tf, nmatch FROM (SELECT doc_id, tf, COUNT(*) OVER() AS nmatch FROM (SELECT doc_id, CASE WHEN COUNT(*) > 255 THEN 255 ELSE COUNT(*) END AS tf FROM `__mo_index_secondary_` WHERE prefix_eq(word,'读写') GROUP BY doc_id) a) ranked ORDER BY tf DESC LIMIT 5",
+		},
+	}
+
+	idxTable := "`__mo_index_secondary_`"
+	for _, tc := range tests {
+		s, err := NewSearchAccum("src", "index", tc.pattern, tc.mode, "", ALGO_TFIDF)
+		require.NoError(t, err)
+
+		topKSQL, ok, err := SingleKeywordTopKSQL(s.Pattern, tc.mode, idxTable, 5)
+		require.NoError(t, err)
+		require.Equal(t, tc.expectOK, ok)
+		if !tc.expectOK {
+			assert.Empty(t, topKSQL)
+			continue
+		}
+		assert.Equal(t, tc.expectTopK, topKSQL)
+	}
+}
+
+func TestSingleKeywordTopKBM25SQL(t *testing.T) {
+	idxTable := "`__mo_index_secondary_`"
+	s, err := NewSearchAccum("src", "index", "Matrix", int64(tree.FULLTEXT_NL), "", ALGO_BM25)
+	require.NoError(t, err)
+
+	sql, ok, err := SingleKeywordTopKBM25SQL(s.Pattern, int64(tree.FULLTEXT_NL), idxTable, 10.5, 5)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t,
+		"SELECT doc_id, score, nmatch FROM (SELECT a.doc_id, (a.tf * (1.5 + 1) / (a.tf + 1.5 * (1 - 0.75 + 0.75 * (CAST(COALESCE(dl.pos, 0) AS INT) / 10.5)))) AS score, COUNT(*) OVER() AS nmatch FROM (SELECT doc_id, CASE WHEN COUNT(*) > 255 THEN 255 ELSE COUNT(*) END AS tf FROM `__mo_index_secondary_` WHERE word = 'matrix' GROUP BY doc_id) a LEFT JOIN `__mo_index_secondary_` dl ON a.doc_id = dl.doc_id AND dl.word = '__DocLen') ranked ORDER BY score DESC LIMIT 5",
+		sql,
+	)
+
+	booleanAccum, err := NewSearchAccum("src", "index", "+Matrix", int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
+	require.NoError(t, err)
+
+	sql, ok, err = SingleKeywordTopKBM25SQL(booleanAccum.Pattern, int64(tree.FULLTEXT_BOOLEAN), idxTable, 10.5, 5)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Empty(t, sql)
+}
+
+func TestPhraseTopKSQL(t *testing.T) {
+	idxTable := "`__mo_index_secondary_`"
+	s, err := NewSearchAccum("src", "index", "Matrix Origin", int64(tree.FULLTEXT_NL), "", ALGO_TFIDF)
+	require.NoError(t, err)
+
+	countSQL, ok, err := PhraseCountSQL(s.Pattern, int64(tree.FULLTEXT_NL), idxTable)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "SELECT COUNT(DISTINCT doc_id) FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = 'matrix' UNION ALL SELECT doc_id, pos - 7 AS anchor FROM `__mo_index_secondary_` WHERE word = 'origin') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 2) ft", countSQL)
+
+	topKSQL, ok, err := PhraseTopKSQL(s.Pattern, int64(tree.FULLTEXT_NL), idxTable, 5)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "SELECT doc_id, CASE WHEN COUNT(*) > 255 THEN 255 ELSE COUNT(*) END AS tf FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = 'matrix' UNION ALL SELECT doc_id, pos - 7 AS anchor FROM `__mo_index_secondary_` WHERE word = 'origin') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 2) ft GROUP BY doc_id ORDER BY tf DESC LIMIT 5", topKSQL)
+}
+
+func TestPhraseTopKBM25SQL(t *testing.T) {
+	idxTable := "`__mo_index_secondary_`"
+	s, err := NewSearchAccum("src", "index", "Matrix Origin", int64(tree.FULLTEXT_NL), "", ALGO_BM25)
+	require.NoError(t, err)
+
+	sql, ok, err := PhraseTopKBM25SQL(s.Pattern, int64(tree.FULLTEXT_NL), idxTable, 1.2345, 10.5, s.Nkeywords, 5)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "SELECT a.doc_id, 2 * 1.2344999999999999 * (a.tf * (1.5 + 1) / (a.tf + 1.5 * (1 - 0.75 + 0.75 * (CAST(COALESCE(dl.pos, 0) AS INT) / 10.5)))) AS score FROM (SELECT doc_id, CASE WHEN COUNT(*) > 255 THEN 255 ELSE COUNT(*) END AS tf FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = 'matrix' UNION ALL SELECT doc_id, pos - 7 AS anchor FROM `__mo_index_secondary_` WHERE word = 'origin') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 2) ft GROUP BY doc_id) a LEFT JOIN `__mo_index_secondary_` dl ON a.doc_id = dl.doc_id AND dl.word = '__DocLen' ORDER BY score DESC LIMIT 5", sql)
+
+	single, err := NewSearchAccum("src", "index", "Matrix", int64(tree.FULLTEXT_NL), "", ALGO_BM25)
+	require.NoError(t, err)
+
+	sql, ok, err = PhraseTopKBM25SQL(single.Pattern, int64(tree.FULLTEXT_NL), idxTable, 1.2345, 10.5, single.Nkeywords, 5)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Empty(t, sql)
 }

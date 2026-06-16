@@ -25,8 +25,14 @@ import (
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{
+	upg_create_mo_task_sql_task,
+	upg_create_mo_task_sql_task_run,
 	upg_mo_iscp_log_new,
 	upg_mo_iscp_task,
+	upg_mo_publication_task,
+	upg_mo_ccpr_log_new,
+	upg_mo_ccpr_tables_new,
+	upg_mo_ccpr_dbs_new,
 	upg_mo_index_update_new,
 	upg_create_mo_branch_metadata,
 	upg_rename_system_stmt_info_4000,
@@ -39,6 +45,26 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_init_mo_feature_registry,
 	upg_mo_columns_add_attr_has_generated,
 	upg_mo_columns_add_attr_generated,
+}
+
+var upg_create_mo_task_sql_task = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSQLTask,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoTaskSQLTaskDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSQLTask)
+	},
+}
+
+var upg_create_mo_task_sql_task_run = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSQLTaskRun,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoTaskSQLTaskRunDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSQLTaskRun)
+	},
 }
 
 var upg_mo_iscp_log_new = versions.UpgradeEntry{
@@ -58,6 +84,47 @@ var upg_mo_iscp_task = versions.UpgradeEntry{
 	UpgSql:    predefine.GenInitISCPTaskSQL(),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		ok, err := versions.CheckTableDataExist(txn, accountId, predefine.GenISCPTaskCheckSQL())
+		return ok, err
+	},
+}
+
+var upg_mo_ccpr_log_new = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_CCPR_LOG,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoCcprLogDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_CCPR_LOG)
+	},
+}
+
+var upg_mo_ccpr_tables_new = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_CCPR_TABLES,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoCcprTablesDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_CCPR_TABLES)
+	},
+}
+
+var upg_mo_ccpr_dbs_new = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_CCPR_DBS,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoCcprDbsDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_CCPR_DBS)
+	},
+}
+
+var upg_mo_publication_task = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSysDaemonTask,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    predefine.GenInitPublicationTaskSQL(),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		ok, err := versions.CheckTableDataExist(txn, accountId, predefine.GenPublicationTaskCheckSQL())
 		return ok, err
 	},
 }

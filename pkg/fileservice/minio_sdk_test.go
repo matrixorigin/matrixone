@@ -40,7 +40,9 @@ func TestMinioSDK(t *testing.T) {
 			if cmd == nil {
 				t.SkipNow()
 			}
-			defer cmd.Process.Kill()
+			t.Cleanup(func() {
+				cmd.Process.Kill()
+			})
 
 			ret, err := NewMinioSDK(
 				context.Background(),
@@ -87,7 +89,9 @@ func TestMinioSDK(t *testing.T) {
 				true,
 				false,
 			)
-			assert.Nil(t, err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			return fs
 		})
 	})
@@ -120,7 +124,8 @@ func startMinio(dir string) (*exec.Cmd, error) {
 	}
 
 	// create bucket
-	for {
+	var lastErr error
+	for i := 0; i < 30; i++ {
 		endpoint := "localhost:9007"
 		client, err := minio.New(endpoint, &minio.Options{
 			Creds: credentials.NewStaticV4("minioadmin", "minioadmin", ""),
@@ -128,13 +133,17 @@ func startMinio(dir string) (*exec.Cmd, error) {
 		if err != nil {
 			return nil, err
 		}
-		err = client.MakeBucket(context.Background(), "test", minio.MakeBucketOptions{})
-		if err != nil {
-			logutil.Warn("minio error", zap.Any("error", err))
+		lastErr = client.MakeBucket(context.Background(), "test", minio.MakeBucketOptions{})
+		if lastErr != nil {
+			logutil.Warn("minio error", zap.Any("error", lastErr))
 			time.Sleep(time.Second)
 			continue
 		}
 		break
+	}
+	if lastErr != nil {
+		cmd.Process.Kill()
+		return nil, lastErr
 	}
 
 	return cmd, nil

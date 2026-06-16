@@ -72,3 +72,57 @@ func TestVectorsUnmarshalFromReader(t *testing.T) {
 	exec.Free()
 	exec2.Free()
 }
+
+func TestAggStateInitSaveArgCleanup(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+
+	t.Run("normal_init_and_free", func(t *testing.T) {
+		ag := &aggState{}
+		info := &aggInfo{saveArg: true}
+		err := ag.init(mp, 0, 100, info, false)
+		require.NoError(t, err)
+		require.NotNil(t, ag.argCnt)
+		require.NotNil(t, ag.argbuf)
+		require.NotNil(t, ag.argSkl)
+		ag.free(mp)
+		require.Nil(t, ag.argCnt)
+		require.Nil(t, ag.argSkl)
+	})
+
+	t.Run("error_path_argCnt_cleanup", func(t *testing.T) {
+		// Create a limited mpool and pre-fill it so MakeSlice succeeds
+		// but the subsequent Alloc(16KB) fails — exercising the real fix path.
+		limitedMp, err := mpool.NewMPool("limited", 1024*1024, mpool.NoFixed)
+		require.NoError(t, err)
+
+		// Pre-fill to leave only ~4KB free (16KB Alloc will fail)
+		filler, err := limitedMp.Alloc(1024*1024-4*1024, true)
+		require.NoError(t, err)
+
+		ag := &aggState{}
+		info := &aggInfo{saveArg: true}
+		err = ag.init(limitedMp, 0, 100, info, false)
+		require.Error(t, err, "Alloc should fail due to mpool capacity")
+		require.Nil(t, ag.argCnt, "argCnt must be freed on Alloc failure")
+
+		limitedMp.Free(filler)
+		mpool.DeleteMPool(limitedMp)
+	})
+
+	t.Run("non_savearg_path", func(t *testing.T) {
+		ag := &aggState{}
+		info := &aggInfo{
+			saveArg:    false,
+			stateTypes: []types.Type{types.T_int64.ToType()},
+			emptyNull:  true,
+		}
+		err := ag.init(mp, 0, 100, info, true)
+		require.NoError(t, err)
+		require.Nil(t, ag.argCnt)
+		require.NotNil(t, ag.vecs)
+		ag.free(mp)
+	})
+}

@@ -643,6 +643,9 @@ func storageAgnosticType(
 	if err != nil {
 		return
 	}
+	if err = applyColumnAttributesToType(ctx, &nTy, nCol.Attributes); err != nil {
+		return
+	}
 
 	oTy := oCol.Typ
 
@@ -722,6 +725,8 @@ func buildNotNullColumnVal(col *ColDef) string {
 	// the integer branch below to avoid treating SET columns as plain uint64.
 	if isSetPlanType(&col.Typ) {
 		defaultValue = "''"
+	} else if isGeometryPlanType(&col.Typ) {
+		defaultValue = buildGeometryNotNullColumnVal(col)
 	} else if col.Typ.Id == int32(types.T_int8) ||
 		col.Typ.Id == int32(types.T_int16) ||
 		col.Typ.Id == int32(types.T_int32) ||
@@ -771,4 +776,35 @@ func buildNotNullColumnVal(col *ColDef) string {
 		defaultValue = "null"
 	}
 	return defaultValue
+}
+
+func buildGeometryNotNullColumnVal(col *ColDef) string {
+	emptyWKT := geometryEmptyWKTForSubtype(geometrySubtypeName(&col.Typ))
+	srid, ok := geometrySRIDValue(&col.Typ)
+	if ok {
+		return fmt.Sprintf("st_geomfromtext('%s', %d)", emptyWKT, srid)
+	}
+	return fmt.Sprintf("st_geomfromtext('%s')", emptyWKT)
+}
+
+func geometryEmptyWKTForSubtype(subtype string) string {
+	subtype = normalizeGeometrySubtype(subtype)
+	switch subtype {
+	case "", "GEOMETRY", "GEOMETRYCOLLECTION":
+		return "GEOMETRYCOLLECTION EMPTY"
+	case "POINT":
+		return "POINT EMPTY"
+	case "LINESTRING":
+		return "LINESTRING EMPTY"
+	case "POLYGON":
+		return "POLYGON EMPTY"
+	case "MULTIPOINT":
+		return "MULTIPOINT EMPTY"
+	case "MULTILINESTRING":
+		return "MULTILINESTRING EMPTY"
+	case "MULTIPOLYGON":
+		return "MULTIPOLYGON EMPTY"
+	default:
+		return subtype + " EMPTY"
+	}
 }

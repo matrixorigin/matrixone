@@ -15,8 +15,10 @@
 package rscthrottler
 
 import (
+	"context"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -167,5 +169,326 @@ func TestAcquirePolicyForDataBranch(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, int64(70), left)
 		require.Equal(t, int64(10), throttler.reserved.Load())
+	})
+}
+
+func TestMemThrottlerRSSScavenging(t *testing.T) {
+	oldFreeOSMemory := freeOSMemory
+	defer func() { freeOSMemory = oldFreeOSMemory }()
+
+	var calls atomic.Int32
+	freeOSMemory = func() {
+		calls.Add(1)
+	}
+
+	now := time.Now().UnixNano()
+	throttler := &memThrottler{limitRate: 0.90}
+	throttler.options.enableRSSScavenging = true
+	throttler.actualTotalMemory.Store(1000 * mpool.GB)
+	throttler.limit.Store(900 * mpool.GB)
+	throttler.rss.Store(900 * mpool.GB)
+	throttler.lastRSSScavenge.Store(now - int64(rssScavengeInterval) - int64(time.Second))
+
+	throttler.tryScavengeRSS(now, 900*mpool.GB)
+	require.Equal(t, int32(1), calls.Load())
+
+	throttler.tryScavengeRSS(now+int64(time.Second), 900*mpool.GB)
+	require.Equal(t, int32(1), calls.Load())
+}
+
+func TestMemThrottlerRSSCacheEvictionByRSSRate(t *testing.T) {
+	oldFreeOSMemory := freeOSMemory
+	defer func() { freeOSMemory = oldFreeOSMemory }()
+
+	var freeCalls atomic.Int32
+	freeOSMemory = func() {
+		freeCalls.Add(1)
+	}
+
+	targets := make(chan int64, 4)
+	now := time.Now().UnixNano()
+	throttler := &memThrottler{limitRate: 0.90}
+	throttler.options.enableRSSScavenging = true
+	throttler.options.rssCacheEvictor = func(_ context.Context, targetPercent int64) {
+		targets <- targetPercent
+	}
+	throttler.actualTotalMemory.Store(1000 * mpool.GB)
+	throttler.limit.Store(900 * mpool.GB)
+	throttler.reserved.Store(800 * mpool.GB)
+	throttler.lastRSSScavenge.Store(now - int64(rssScavengeInterval) - int64(time.Second))
+
+	throttler.tryScavengeRSS(now, 840*mpool.GB)
+	select {
+	case target := <-targets:
+		t.Fatalf("unexpected cache evict target %d", target)
+	default:
+	}
+	require.Equal(t, int32(0), freeCalls.Load())
+
+	throttler.tryScavengeRSS(now+int64(time.Second), 850*mpool.GB)
+	require.Eventually(t, func() bool {
+		return recvTarget(targets) == rssCacheSoftTarget
+	}, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool {
+		return freeCalls.Load() == 1
+	}, time.Second, time.Millisecond)
+
+	throttler.tryScavengeRSS(now+2*int64(time.Second), 920*mpool.GB)
+	require.Eventually(t, func() bool {
+		return recvTarget(targets) == rssCacheHardTarget
+	}, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool {
+		return freeCalls.Load() == 2
+	}, time.Second, time.Millisecond)
+
+	throttler.tryScavengeRSS(now+3*int64(time.Second), 920*mpool.GB)
+	select {
+	case target := <-targets:
+		t.Fatalf("unexpected duplicate cache evict target %d", target)
+	default:
+	}
+	require.Equal(t, int64(rssCacheHardTarget), throttler.lastRSSCacheTarget.Load())
+}
+
+func TestMemThrottlerRSSPressureStateTargetLifecycle(t *testing.T) {
+	oldFreeOSMemory := freeOSMemory
+	defer func() { freeOSMemory = oldFreeOSMemory }()
+	freeOSMemory = func() {}
+
+	var setTargets []int64
+	var clearCalls int
+	evictTargets := make(chan int64, 4)
+
+	now := time.Now().UnixNano()
+	throttler := &memThrottler{limitRate: 0.90}
+	throttler.options.enableRSSScavenging = true
+	throttler.options.rssCacheTargetSetter = func(targetPercent int64) {
+		setTargets = append(setTargets, targetPercent)
+	}
+	throttler.options.rssCacheTargetClearer = func() {
+		clearCalls++
+	}
+	throttler.options.rssCacheEvictor = func(_ context.Context, targetPercent int64) {
+		evictTargets <- targetPercent
+	}
+	throttler.actualTotalMemory.Store(1000 * mpool.GB)
+	throttler.limit.Store(900 * mpool.GB)
+	throttler.reserved.Store(800 * mpool.GB)
+
+	throttler.tryScavengeRSS(now, 850*mpool.GB)
+	require.Equal(t, rssPressureSoft, rssPressureState(throttler.rssPressureState.Load()))
+	require.Equal(t, []int64{rssCacheSoftTarget}, setTargets)
+	require.Eventually(t, func() bool {
+		return recvTarget(evictTargets) == rssCacheSoftTarget
+	}, time.Second, time.Millisecond)
+
+	throttler.tryScavengeRSS(now+int64(time.Second), 920*mpool.GB)
+	require.Equal(t, rssPressureHard, rssPressureState(throttler.rssPressureState.Load()))
+	require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget}, setTargets)
+	require.Eventually(t, func() bool {
+		return recvTarget(evictTargets) == rssCacheHardTarget
+	}, time.Second, time.Millisecond)
+
+	throttler.tryScavengeRSS(now+2*int64(time.Second), 870*mpool.GB)
+	require.Equal(t, rssPressureSoft, rssPressureState(throttler.rssPressureState.Load()))
+	require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget, rssCacheSoftTarget}, setTargets)
+	require.Equal(t, 1, clearCalls)
+	select {
+	case target := <-evictTargets:
+		t.Fatalf("unexpected downgrade cache evict target %d", target)
+	default:
+	}
+
+	throttler.tryScavengeRSS(now+3*int64(time.Second), 920*mpool.GB)
+	require.Equal(t, rssPressureHard, rssPressureState(throttler.rssPressureState.Load()))
+	require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget, rssCacheSoftTarget, rssCacheHardTarget}, setTargets)
+	require.Eventually(t, func() bool {
+		return recvTarget(evictTargets) == rssCacheHardTarget
+	}, time.Second, time.Millisecond)
+
+	throttler.tryScavengeRSS(now+4*int64(time.Second), 800*mpool.GB)
+	require.Equal(t, rssPressureNone, rssPressureState(throttler.rssPressureState.Load()))
+	require.Equal(t, 2, clearCalls)
+}
+
+func TestMemThrottlerRSSCacheEvictionConcurrentEscalation(t *testing.T) {
+	oldFreeOSMemory := freeOSMemory
+	defer func() { freeOSMemory = oldFreeOSMemory }()
+
+	var freeCalls atomic.Int32
+	freeOSMemory = func() {
+		freeCalls.Add(1)
+	}
+
+	var minTarget atomic.Int64
+	minTarget.Store(100)
+
+	now := time.Now().UnixNano()
+	throttler := &memThrottler{limitRate: 0.90}
+	throttler.options.enableRSSScavenging = true
+	throttler.options.rssCacheEvictor = func(_ context.Context, targetPercent int64) {
+		for {
+			old := minTarget.Load()
+			if targetPercent >= old || minTarget.CompareAndSwap(old, targetPercent) {
+				return
+			}
+		}
+	}
+	throttler.actualTotalMemory.Store(1000 * mpool.GB)
+	throttler.limit.Store(900 * mpool.GB)
+	throttler.reserved.Store(800 * mpool.GB)
+	throttler.lastRSSScavenge.Store(now - int64(rssScavengeInterval) - int64(time.Second))
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		throttler.tryScavengeRSS(now, 890*mpool.GB)
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		throttler.tryScavengeRSS(now, 920*mpool.GB)
+	}()
+
+	close(start)
+	wg.Wait()
+
+	require.Eventually(t, func() bool {
+		return minTarget.Load() == rssCacheHardTarget
+	}, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool {
+		return freeCalls.Load() >= 1
+	}, time.Second, time.Millisecond)
+	require.Equal(t, int64(rssCacheHardTarget), throttler.lastRSSCacheTarget.Load())
+}
+
+func recvTarget(ch <-chan int64) int64 {
+	select {
+	case target := <-ch:
+		return target
+	default:
+		return 0
+	}
+}
+
+func TestMemThrottlerRSSScavengingDisabled(t *testing.T) {
+	oldFreeOSMemory := freeOSMemory
+	defer func() { freeOSMemory = oldFreeOSMemory }()
+
+	var calls atomic.Int32
+	freeOSMemory = func() {
+		calls.Add(1)
+	}
+
+	throttler := &memThrottler{limitRate: 0.90}
+	throttler.actualTotalMemory.Store(1000 * mpool.GB)
+	throttler.limit.Store(900 * mpool.GB)
+
+	throttler.tryScavengeRSS(time.Now().UnixNano(), 900*mpool.GB)
+	require.Equal(t, int32(0), calls.Load())
+}
+
+func TestAcquirePolicyForCNFlushS3(t *testing.T) {
+	t.Run("allow under high rss when pool has headroom", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(91)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 1)
+		require.True(t, ok)
+		require.Equal(t, int64(89), left)
+		require.Equal(t, int64(1), throttler.reserved.Load())
+	})
+
+	t.Run("deny when reserved plus ask exceeds pool limit", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(50)
+		throttler.reserved.Store(60)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 31)
+		require.False(t, ok)
+		require.Equal(t, int64(30), left)
+		require.Equal(t, int64(60), throttler.reserved.Load())
+	})
+
+	t.Run("deny when large ask alone exceeds pool limit", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(50)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 100)
+		require.False(t, ok)
+		require.Equal(t, int64(90), left)
+		require.Equal(t, int64(0), throttler.reserved.Load())
+	})
+
+	t.Run("allow when rss and pool both within limits", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(70)
+		throttler.reserved.Store(9)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 2)
+		require.True(t, ok)
+		require.Equal(t, int64(79), left)
+		require.Equal(t, int64(11), throttler.reserved.Load())
+	})
+
+	t.Run("allow small write under high rss when pool has headroom", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(88)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 1)
+		require.True(t, ok)
+		require.Equal(t, int64(89), left)
+		require.Equal(t, int64(1), throttler.reserved.Load())
+	})
+
+	t.Run("allow under rss limit and reserve memory", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(80)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 10)
+		require.True(t, ok)
+		require.Equal(t, int64(80), left)
+		require.Equal(t, int64(10), throttler.reserved.Load())
+	})
+
+	t.Run("allow when reserved exceeds rss", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(30)
+		throttler.reserved.Store(40)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 10)
+		require.True(t, ok)
+		require.Equal(t, int64(40), left)
+		require.Equal(t, int64(50), throttler.reserved.Load())
+	})
+
+	t.Run("deny when reserved plus ask overflows pool", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(30)
+		throttler.reserved.Store(60)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 31)
+		require.False(t, ok)
+		require.Equal(t, int64(30), left)
+		require.Equal(t, int64(60), throttler.reserved.Load())
 	})
 }

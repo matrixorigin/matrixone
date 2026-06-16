@@ -63,6 +63,7 @@ func Test_Upgrade(t *testing.T) {
 
 			metadata := Handler.Metadata()
 			t.Logf("version metadata:%v", metadata)
+			assert.Equal(t, versions.Yes, metadata.UpgradeCluster)
 
 			if err := Handler.Prepare(context.Background(), executor, true); err != nil {
 				t.Errorf("Prepare() error = %v", err)
@@ -84,7 +85,11 @@ func Test_Upgrade(t *testing.T) {
 }
 
 func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
-	clusterUpgEntries = []versions.UpgradeEntry{}
+	originalEntries := clusterUpgEntries
+	clusterUpgEntries = nil
+	defer func() {
+		clusterUpgEntries = originalEntries
+	}()
 
 	v := &versionHandle{
 		metadata: versions.Version{
@@ -104,6 +109,34 @@ func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
 	assert.Nil(t, err)
 }
 
+func Test_upg_create_mo_task_sql_task_check_exists(t *testing.T) {
+	stubs := gostub.Stub(&versions.CheckTableDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, table string) (bool, error) {
+		assert.Equal(t, uint32(0), accountId)
+		assert.Equal(t, "mo_task", schema)
+		assert.Equal(t, "sql_task", table)
+		return true, nil
+	})
+	defer stubs.Reset()
+
+	ok, err := upg_create_mo_task_sql_task.CheckFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+}
+
+func Test_upg_create_mo_task_sql_task_run_check_missing(t *testing.T) {
+	stubs := gostub.Stub(&versions.CheckTableDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, table string) (bool, error) {
+		assert.Equal(t, uint32(0), accountId)
+		assert.Equal(t, "mo_task", schema)
+		assert.Equal(t, "sql_task_run", table)
+		return false, nil
+	})
+	defer stubs.Reset()
+
+	ok, err := upg_create_mo_task_sql_task_run.CheckFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.False(t, ok)
+}
+
 func Test_upg_statistics_view_check_error(t *testing.T) {
 	stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
 		return true, "", moerr.NewInternalErrorNoCtx("return error")
@@ -120,6 +153,10 @@ func Test_upg_columns_view_check_error(t *testing.T) {
 	defer stubs.Reset()
 	_, err := upg_information_schema_columns.CheckFunc(nil, 0)
 	assert.Error(t, err)
+	_, err = upg_information_schema_columns_geometry_srid.CheckFunc(nil, 0)
+	assert.Error(t, err)
+	_, err = upg_information_schema_columns_srs_id_from_type.CheckFunc(nil, 0)
+	assert.Error(t, err)
 }
 
 func Test_upg_columns_view_check_match(t *testing.T) {
@@ -128,6 +165,12 @@ func Test_upg_columns_view_check_match(t *testing.T) {
 	})
 	defer stubs.Reset()
 	ok, err := upg_information_schema_columns.CheckFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+	ok, err = upg_information_schema_columns_geometry_srid.CheckFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+	ok, err = upg_information_schema_columns_srs_id_from_type.CheckFunc(nil, 0)
 	assert.NoError(t, err)
 	assert.True(t, ok)
 }
@@ -148,6 +191,12 @@ func Test_upg_columns_view_check_mismatch(t *testing.T) {
 	})
 	defer stubs.Reset()
 	ok, err := upg_information_schema_columns.CheckFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.False(t, ok)
+	ok, err = upg_information_schema_columns_geometry_srid.CheckFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.False(t, ok)
+	ok, err = upg_information_schema_columns_srs_id_from_type.CheckFunc(nil, 0)
 	assert.NoError(t, err)
 	assert.False(t, ok)
 }

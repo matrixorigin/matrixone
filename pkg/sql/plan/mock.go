@@ -119,6 +119,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	}
 
 	vars["foreign_key_checks"] = int64(1)
+	vars["sort_spill_mem"] = int64(0)
 
 	if result, ok := vars[varName]; ok {
 		return result, nil
@@ -524,6 +525,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"database_name", types.T_varchar, false, 50, 0},
 			{"table_name", types.T_varchar, false, 50, 0},
 			{"obj_id", types.T_uint64, false, 100, 0},
+			{"kind", types.T_varchar, false, 32, 0},
 		},
 		pks: []int{0},
 	}
@@ -631,6 +633,45 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	/*
+		create table single_idx_t(
+			id int primary key,
+			val int,
+			index idx_val(val)
+		);
+	*/
+	constraintTestSchema["single_idx_t"] = &Schema{
+		tblId: 88900,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"val", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks: []int{0},
+		idxs: []index{
+			{
+				indexName: "idx_val",
+				tableName: catalog.SecondaryIndexTableNamePrefix + "single-idx-t-idx-val",
+				parts:     []string{"val"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+				},
+				tableExist: true,
+				unique:     false,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.SecondaryIndexTableNamePrefix+"single-idx-t-idx-val"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+			{catalog.IndexTablePrimaryColName, types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
 		create table dept(
 			deptno int unsigned auto_increment,
 			dname varchar(15),
@@ -692,6 +733,149 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		pks:    []int{0},
 		outcnt: 4,
 	}
+
+	/*
+		create table dept_composite_uk(
+			deptno int unsigned auto_increment,
+			dname varchar(15),
+			loc varchar(50),
+			primary key(deptno),
+			unique key uk_dname_loc(dname, loc)
+		);
+	*/
+	constraintTestSchema["dept_composite_uk"] = &Schema{
+		tblId: 88889,
+		cols: []col{
+			{"deptno", types.T_uint32, true, 32, 0},
+			{"dname", types.T_varchar, true, 15, 0},
+			{"loc", types.T_varchar, true, 50, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks: []int{0},
+		idxs: []index{
+			{
+				indexName: "uk_dname_loc",
+				tableName: catalog.UniqueIndexTableNamePrefix + "dept-composite-uk-idx",
+				parts:     []string{"dname", "loc"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+				},
+				tableExist: true,
+				unique:     true,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"dept-composite-uk-idx"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
+		create table fake_pk_t (
+			a int,
+			b varchar(64),
+			unique key(a)
+		);
+		-- table with no real PK, only a unique key ("fake PK" table)
+	*/
+	constraintTestSchema["fake_pk_t"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, true, 32, 0},
+			{"b", types.T_varchar, true, 64, 0},
+			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{2}, // fake PK column
+		idxs: []index{
+			{
+				indexName: "uk_a",
+				tableName: catalog.UniqueIndexTableNamePrefix + "fake-pk-t-uk-a",
+				parts:     []string{"a"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+				},
+				tableExist: true,
+				unique:     true,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"fake-pk-t-uk-a"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint64, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
+		create table self_ref (
+			id int primary key,
+			parent_id int,
+			name varchar(64),
+			foreign key (parent_id) references self_ref(id) on delete restrict on update restrict
+		);
+		-- self-referencing FK table for testing REPLACE FK constraint checks
+	*/
+	constraintTestSchema["self_ref"] = &Schema{
+		tblId: 99999,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},            // ColId=0
+			{"parent_id", types.T_int32, true, 32, 0},     // ColId=1
+			{"name", types.T_varchar, true, 64, 0},        // ColId=2
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0}, // ColId=3
+		},
+		pks: []int{0}, // primary key "id"
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_self_parent",
+				Cols:        []uint64{1}, // parent_id (ColId=1)
+				ForeignTbl:  0,           // 0 = self-referencing
+				ForeignCols: []uint64{0}, // id (ColId=0)
+				OnDelete:    plan.ForeignKeyDef_RESTRICT,
+				OnUpdate:    plan.ForeignKeyDef_RESTRICT,
+			},
+		},
+		outcnt: 10,
+	}
+
+	/*
+		create table self_ref_cascade (
+			id int primary key,
+			parent_id int,
+			foreign key (parent_id) references self_ref_cascade(id) on delete cascade
+		);
+		-- self-referencing FK with CASCADE (should NOT generate assert checks)
+	*/
+	constraintTestSchema["self_ref_cascade"] = &Schema{
+		tblId: 99998,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"parent_id", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_self_cascade",
+				Cols:        []uint64{1},
+				ForeignTbl:  0,
+				ForeignCols: []uint64{0},
+				OnDelete:    plan.ForeignKeyDef_CASCADE,
+				OnUpdate:    plan.ForeignKeyDef_CASCADE,
+			},
+		},
+		outcnt: 10,
+	}
+
 	/*
 		create table products (
 			pid int not null,
@@ -1012,6 +1196,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			colDefs := make([]*ColDef, 0, len(table.cols))
 
 			for idx, col := range table.cols {
+				isFakePK := col.Name == catalog.FakePrimaryKeyColName
 				colDefs = append(colDefs, &ColDef{
 					ColId: uint64(idx),
 					Typ: plan.Type{
@@ -1019,11 +1204,12 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 						NotNullable: !col.Nullable,
 						Width:       col.Width,
 						Scale:       col.Scale,
+						AutoIncr:    isFakePK,
 					},
 					Name:       strings.ToLower(col.Name),
 					OriginName: col.Name,
 					Primary:    idx == 0,
-					Hidden:     col.Name == catalog.Row_ID || col.Name == catalog.CPrimaryKeyColName,
+					Hidden:     col.Name == catalog.Row_ID || col.Name == catalog.CPrimaryKeyColName || isFakePK,
 					Pkidx:      1,
 					Default: &plan.Default{
 						NullAbility: col.Nullable,

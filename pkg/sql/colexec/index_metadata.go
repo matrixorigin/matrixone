@@ -83,7 +83,22 @@ const (
 	INDEX_TYPE_PRIMARY  = "PRIMARY"
 	INDEX_TYPE_UNIQUE   = "UNIQUE"
 	INDEX_TYPE_MULTIPLE = "MULTIPLE"
+	INDEX_TYPE_FULLTEXT = "FULLTEXT"
+	INDEX_TYPE_SPATIAL  = "SPATIAL"
 )
+
+func indexMetadataType(unique bool, algo string) string {
+	switch {
+	case unique:
+		return INDEX_TYPE_UNIQUE
+	case catalog.IsRTreeIndexAlgo(algo):
+		return INDEX_TYPE_SPATIAL
+	case catalog.IsFullTextIndexAlgo(algo):
+		return INDEX_TYPE_FULLTEXT
+	default:
+		return INDEX_TYPE_MULTIPLE
+	}
+}
 
 // InsertIndexMetadata :Synchronize the index metadata information of the table to the index metadata table
 func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Database, proc *process.Process, tblName string) error {
@@ -288,11 +303,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 					if err != nil {
 						return nil, err
 					}
-					if index.Unique {
-						err = vector.AppendBytes(vec_type, []byte(INDEX_TYPE_UNIQUE), false, proc.Mp())
-					} else {
-						err = vector.AppendBytes(vec_type, []byte(INDEX_TYPE_MULTIPLE), false, proc.Mp())
-					}
+					err = vector.AppendBytes(vec_type, []byte(indexMetadataType(index.Unique, index.IndexAlgo)), false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}

@@ -15,10 +15,12 @@
 package types
 
 import (
+	"encoding/base64"
 	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBytesToArray(t *testing.T) {
@@ -189,6 +191,36 @@ func TestArraysToString(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestArrayToBase64Roundtrip(t *testing.T) {
+	// float32 roundtrip
+	f32 := []float32{1.5, -2.25, 0, 3.14159}
+	b64 := ArrayToBase64(f32)
+	decoded := BytesToArray[float32](mustBase64Decode(t, b64))
+	require.Equal(t, f32, decoded)
+
+	// float64 roundtrip
+	f64 := []float64{1.5, -2.25, 0, 3.141592653589793}
+	b64 = ArrayToBase64(f64)
+	decoded64 := BytesToArray[float64](mustBase64Decode(t, b64))
+	require.Equal(t, f64, decoded64)
+
+	// base64 is more compact than string for large vectors
+	big := make([]float32, 768)
+	for i := range big {
+		big[i] = float32(i) * 0.001
+	}
+	strLen := len(ArrayToString(big))
+	b64Len := len(ArrayToBase64(big))
+	require.Less(t, b64Len, strLen, "base64 should be shorter than text for 768-dim")
+}
+
+func mustBase64Decode(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := base64.StdEncoding.DecodeString(s)
+	require.NoError(t, err)
+	return b
 }
 
 func TestStringToArray(t *testing.T) {

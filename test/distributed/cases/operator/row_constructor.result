@@ -505,12 +505,12 @@ select (col1,col2,to_date(col3,'%Y-%m-%d %H:%i:%s')) <= (col1,col2,'2023-01-02 0
 1
 null
 select (date_add(col1,interval 45 day),col2) > ('1999-01-01','1999-01-04 00:00:09') from row04;
-(date_add(col1, interval(45, day)), col2) > (1999-01-01, 1999-01-04 00:00:09)
+(date_add(col1, interval 45 day), col2) > (1999-01-01, 1999-01-04 00:00:09)
 1
 1
 null
 select (date_sub(col1,interval 45 day),col3) < ('1970-01-01','2055-01-01 10:10:10') from row04;
-(date_sub(col1, interval(45, day)), col3) < (1970-01-01, 2055-01-01 10:10:10)
+(date_sub(col1, interval 45 day), col3) < (1970-01-01, 2055-01-01 10:10:10)
 0
 0
 null
@@ -540,13 +540,13 @@ create table row05(col1 blob,col2 json,col3 binary(10) not null);
 insert into row05 values('abcdef','{"t1":"a"}',456);
 insert into row05 values('_bcdef','{"t1":"c"}',100000);
 insert into row05 values('__cdef',null,0);
-select (col1,col2) = ('abcdef','{"t1":"a"}') from row05;
-(col1, col2) = (abcdef, {"t1":"a"})
+select (col1,col2) = ('abcdef','{"t1": "a"}') from row05;
+(col1, col2) = (abcdef, {"t1": "a"})
 1
 0
 0
-select (col1,col2) != ('abcdef','{"ehyiuwqnve":"ashyiujewv"}') from row05;
-(col1, col2) != (abcdef, {"ehyiuwqnve":"ashyiujewv"})
+select (col1,col2) != ('abcdef','{"ehyiuwqnve": "ashyiujewv"}') from row05;
+(col1, col2) != (abcdef, {"ehyiuwqnve": "ashyiujewv"})
 1
 1
 1

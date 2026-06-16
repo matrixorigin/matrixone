@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -94,6 +95,146 @@ func TestTop(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestTopCopiesNullVarlenaRow(t *testing.T) {
+	tc := newTestCase(
+		t,
+		mpool.MustNewZero(),
+		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+		1,
+		[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}},
+	)
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixedList(bat.Vecs[0], []int64{2, 1}, nil, tc.proc.Mp())
+	require.NoError(t, err)
+
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	err = vector.AppendBytes(bat.Vecs[1], []byte("seed"), false, tc.proc.Mp())
+	require.NoError(t, err)
+	err = vector.AppendBytes(bat.Vecs[1], nil, true, tc.proc.Mp())
+	require.NoError(t, err)
+	ws := vector.MustFixedColNoTypeCheck[types.Varlena](bat.Vecs[1])
+	ws[1].SetOffsetLen(25, 8)
+	bat.SetRowCount(2)
+
+	resetChildren(tc.arg, []*batch.Batch{bat, batch.EmptyBatch})
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, int64(1), vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])[0])
+	require.True(t, result.Batch.Vecs[1].GetNulls().Contains(0))
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestTopSpill(t *testing.T) {
+	limit := int64(topSpillThreshold + 1000)
+	batchRows := 8192
+
+	tcs := []testCase{
+		newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType()}, limit,
+			[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+		newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType()}, limit,
+			[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: plan.OrderBySpec_DESC}}),
+		newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType(), types.T_int32.ToType()}, limit,
+			[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}, {Expr: newExpression(1), Flag: plan.OrderBySpec_DESC}}),
+	}
+
+	for _, tc := range tcs {
+		err := tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		require.True(t, tc.arg.ctr.spilling)
+
+		inputBats := []*batch.Batch{
+			newBatch(tc.types, tc.proc, int64(batchRows)),
+			newBatch(tc.types, tc.proc, int64(batchRows)),
+			newBatch(tc.types, tc.proc, int64(batchRows)),
+			batch.EmptyBatch,
+		}
+		resetChildren(tc.arg, inputBats)
+
+		var totalRows int
+		for {
+			result, err := vm.Exec(tc.arg, tc.proc)
+			require.NoError(t, err)
+			if result.Batch == nil || result.Status == vm.ExecStop {
+				break
+			}
+			totalRows += result.Batch.RowCount()
+		}
+		require.Equal(t, int(limit), totalRows)
+
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.arg.Reset(tc.proc, false, nil)
+
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		inputBats = []*batch.Batch{
+			newBatch(tc.types, tc.proc, int64(batchRows)),
+			newBatch(tc.types, tc.proc, int64(batchRows)),
+			newBatch(tc.types, tc.proc, int64(batchRows)),
+			batch.EmptyBatch,
+		}
+		resetChildren(tc.arg, inputBats)
+
+		totalRows = 0
+		for {
+			result, err := vm.Exec(tc.arg, tc.proc)
+			require.NoError(t, err)
+			if result.Batch == nil || result.Status == vm.ExecStop {
+				break
+			}
+			totalRows += result.Batch.RowCount()
+		}
+		require.Equal(t, int(limit), totalRows)
+
+		tc.arg.Free(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.proc.Free()
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+	}
+}
+
+func TestTopSpillInsufficientRows(t *testing.T) {
+	limit := int64(topSpillThreshold + 1000)
+	batchRows := 4096
+
+	tc := newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType()}, limit,
+		[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}})
+
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	inputBats := []*batch.Batch{
+		newBatch(tc.types, tc.proc, int64(batchRows)),
+		newBatch(tc.types, tc.proc, int64(batchRows)),
+		batch.EmptyBatch,
+	}
+	resetChildren(tc.arg, inputBats)
+
+	var totalRows int
+	for {
+		result, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		if result.Batch == nil || result.Status == vm.ExecStop {
+			break
+		}
+		totalRows += result.Batch.RowCount()
+	}
+	require.Equal(t, batchRows*2, totalRows)
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
 
 func BenchmarkTop(b *testing.B) {

@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,4 +38,39 @@ func TestDropColumnWithIndex(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, 1, len(def.Indexes[0].Parts))
 	require.Equal(t, "title", def.Indexes[0].Parts[0])
+}
+
+func TestCheckGeometryKeyPartTypes(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_geometry)}
+
+	err := checkPrimaryKeyPartType(context.Background(), typ, "g")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "GEOMETRY column 'g' cannot be in primary key")
+
+	err = checkUniqueKeyPartType(context.Background(), typ, "g")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "GEOMETRY column 'g' cannot be in unique index")
+}
+
+func TestCheckIndexedColumnTypeChangeGeometry(t *testing.T) {
+	tableDef := &TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Indexes: []*plan.IndexDef{
+			{IndexName: "u_g", Unique: true, Parts: []string{"g"}},
+			{IndexName: "idx_g", Parts: []string{"g"}},
+		},
+	}
+
+	oldCol := &ColDef{Name: "g", OriginName: "g", Typ: plan.Type{Id: int32(types.T_varchar)}}
+	newCol := &ColDef{Name: "g", OriginName: "g", Typ: plan.Type{Id: int32(types.T_geometry)}}
+
+	err := checkIndexedColumnTypeChange(context.Background(), tableDef, oldCol, newCol)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "GEOMETRY column 'g' cannot be in unique index")
+
+	pkOldCol := &ColDef{Name: "id", OriginName: "id", Typ: plan.Type{Id: int32(types.T_int64)}}
+	pkNewCol := &ColDef{Name: "id", OriginName: "id", Typ: plan.Type{Id: int32(types.T_geometry)}}
+	err = checkIndexedColumnTypeChange(context.Background(), tableDef, pkOldCol, pkNewCol)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "GEOMETRY column 'id' cannot be in primary key")
 }

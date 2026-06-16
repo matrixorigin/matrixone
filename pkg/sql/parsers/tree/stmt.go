@@ -192,6 +192,18 @@ func (node *DropPublication) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
+func (node *DropCcprSubscription) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *ResumeCcprSubscription) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *PauseCcprSubscription) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
 func (node *ShowSubscriptions) StmtKind() StmtKind {
 	return compositeResRowType
 }
@@ -450,6 +462,14 @@ func (node *ShowPublications) StmtKind() StmtKind {
 	return compositeResRowType
 }
 
+func (node *ShowPublicationCoverage) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (node *ShowCcprSubscriptions) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
 func (node *ShowTableSize) StmtKind() StmtKind {
 	return defaultResRowTyp
 }
@@ -604,6 +624,30 @@ func (node *CancelDaemonTask) StmtKind() StmtKind {
 
 func (node *PauseDaemonTask) StmtKind() StmtKind {
 	return frontendStatusTyp
+}
+
+func (node *CreateSQLTask) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *AlterSQLTask) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *DropSQLTask) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *ExecuteSQLTask) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *ShowSQLTasks) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (node *ShowSQLTaskRuns) StmtKind() StmtKind {
+	return compositeResRowType
 }
 
 func (node *PrepareString) StmtKind() StmtKind {

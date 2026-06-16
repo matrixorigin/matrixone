@@ -103,7 +103,15 @@ func NeedToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
 	if stmt == nil {
 		return false
 	}
-	return IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt)
+	return IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt) || isLockTableStatement(stmt)
+}
+
+func isLockTableStatement(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.LockTableStmt:
+		return true
+	}
+	return false
 }
 
 /*
@@ -181,7 +189,9 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.ShowAccounts,
 		*tree.ShowPublications,
 		*tree.ShowSubscriptions,
+		*tree.ShowCcprSubscriptions,
 		*tree.ShowCreatePublications,
+		*tree.ShowPublicationCoverage,
 		*tree.ShowBackendServers,
 		*tree.ShowAccountUpgrade,
 		*tree.ShowConnectors,
@@ -191,7 +201,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.SetLogserviceSettings:
 		return true, nil
 		//others
-	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
+	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList, *InternalCmdGetSnapshotTs, *InternalCmdGetDatabases, *InternalCmdGetMoIndexes, *InternalCmdGetDdl, *InternalCmdGetObject, *InternalCmdObjectList, *InternalCmdCheckSnapshotFlushed:
 		return true, nil
 	case *tree.PrepareStmt:
 		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, st.Stmt)
@@ -217,6 +227,8 @@ func statementCanBeExecutedInUncommittedTransaction(
 		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, preStmt.PrepareStmt)
 	case *tree.Deallocate, *tree.Reset:
 		return true, nil
+	case *tree.LockTableStmt, *tree.UnLockTableStmt:
+		return true, nil
 	case *tree.Use:
 		/*
 			These statements can not be executed in an uncommitted transaction:
@@ -238,6 +250,8 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.DataBranchDeleteTable,
 		*tree.DataBranchDeleteDatabase:
 		return true, nil
+	case *tree.DataBranchPick:
+		return false, nil
 	case *tree.CallStmt:
 		// Call procedure can be executed in an uncommitted transaction, usually used in
 		// nested procedure call.

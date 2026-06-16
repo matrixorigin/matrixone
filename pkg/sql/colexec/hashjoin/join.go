@@ -57,6 +57,8 @@ func (hashJoin *HashJoin) String(buf *bytes.Buffer) {
 		}
 	case plan.Node_SINGLE:
 		buf.WriteString(": single join ")
+	case plan.Node_OUTER:
+		buf.WriteString(": full outer join ")
 	}
 }
 
@@ -113,7 +115,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			if ctr.mp == nil && len(ctr.spillQueue) == 0 && !hashJoin.IsLeftOuter() && !hashJoin.IsLeftSingle() && !hashJoin.IsLeftAnti() {
+			if ctr.mp == nil && len(ctr.spillQueue) == 0 && !hashJoin.EmitUnmatchedProbe() {
 				// TODO: early terminate the probe side for shuffle join
 				if !hashJoin.IsShuffle {
 					ctr.state = End
@@ -136,7 +138,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				bat := input.Batch
 
 				if bat == nil {
-					if hashJoin.IsRightJoin {
+					if hashJoin.EmitUnmatchedBuild() {
 						ctr.state = SyncBitmap
 					} else {
 						ctr.state = End
@@ -154,7 +156,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 
-				if ctr.mp == nil && !hashJoin.IsLeftOuter() && !hashJoin.IsLeftSingle() && !hashJoin.IsLeftAnti() {
+				if ctr.mp == nil && !hashJoin.EmitUnmatchedProbe() {
 					continue
 				}
 
@@ -298,7 +300,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 			if err != nil {
 				return err
 			}
-			needsProbeForEmpty := hashJoin.IsLeftOuter() || hashJoin.IsLeftSingle() || hashJoin.IsLeftAnti()
+			needsProbeForEmpty := hashJoin.EmitUnmatchedProbe()
 			if !needsProbeForEmpty {
 				for i := range spilledBuildFds {
 					if spilledBuildFds[i] == nil {
@@ -356,7 +358,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 	ctr.rightBats = ctr.mp.GetBatches()
 	ctr.rightRowCnt = ctr.mp.GetRowCount()
 
-	if hashJoin.IsRightJoin {
+	if hashJoin.EmitUnmatchedBuild() {
 		if ctr.rightRowCnt > 0 {
 			ctr.rightRowsMatched = &bitmap.Bitmap{}
 			ctr.rightRowsMatched.InitWithSize(ctr.rightRowCnt)
@@ -427,7 +429,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			ctr.vsIdx++
 
 			if z == 0 || v == 0 {
-				if hashJoin.IsLeftOuter() || hashJoin.IsLeftSingle() || hashJoin.IsLeftAnti() {
+				if hashJoin.EmitUnmatchedProbe() {
 					ctr.appendOneNotMatch(hashJoin, proc, row)
 					resRowCnt++
 				}
@@ -486,7 +488,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 							ctr.rightRowsMatched.Add(uint64(idx))
 						}
-					} else if hashJoin.IsLeftOuter() || hashJoin.IsLeftSingle() || hashJoin.IsLeftAnti() {
+					} else if hashJoin.EmitUnmatchedProbe() {
 						err = ctr.appendOneNotMatch(hashJoin, proc, row)
 						if err != nil {
 							return err
@@ -602,7 +604,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				}
 
 				if len(ctr.sels) == 0 &&
-					!ctr.leftRowMatched && (hashJoin.IsLeftOuter() || hashJoin.IsLeftSingle() || hashJoin.IsLeftAnti()) {
+					!ctr.leftRowMatched && hashJoin.EmitUnmatchedProbe() {
 					ctr.appendOneNotMatch(hashJoin, proc, int64(row))
 					resRowCnt++
 				}
@@ -634,8 +636,9 @@ func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, resu
 				return err
 			}
 		} else {
-			ctr.resBat.Vecs[i].SetClass(vector.CONSTANT)
-			ctr.resBat.Vecs[i].SetLength(rowCnt)
+			if err := vector.SetConstNull(ctr.resBat.Vecs[i], rowCnt, proc.Mp()); err != nil {
+				return err
+			}
 		}
 	}
 	ctr.resBat.AddRowCount(rowCnt)
@@ -795,6 +798,10 @@ func (hashJoin *HashJoin) resetResultBat() {
 	ctr := &hashJoin.ctr
 	if ctr.resBat != nil {
 		ctr.resBat.CleanOnlyData()
+		for i := range ctr.resBat.Vecs {
+			ctr.resBat.Vecs[i].SetClass(vector.FLAT)
+			ctr.resBat.Vecs[i].SetLength(0)
+		}
 	} else {
 		ctr.resBat = batch.NewOffHeapWithSize(len(hashJoin.ResultCols))
 

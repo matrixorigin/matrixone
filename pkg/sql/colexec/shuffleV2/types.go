@@ -17,6 +17,8 @@ package shuffleV2
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -33,6 +35,7 @@ type ShuffleV2 struct {
 	ShuffleColMax      int64
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
+	ShuffleExpr        *plan.Expr
 	IsDebug            bool //used for unit test
 	vm.OperatorBase
 }
@@ -73,6 +76,7 @@ type container struct {
 	sels        [][]int32
 	buf         *batch.Batch
 	shufflePool *ShufflePoolV2
+	exprExec    colexec.ExpressionExecutor
 }
 
 func (shuffle *ShuffleV2) SetShufflePool(sp *ShufflePoolV2) {
@@ -99,6 +103,10 @@ func (shuffle *ShuffleV2) Reset(proc *process.Process, pipelineFailed bool, err 
 func (shuffle *ShuffleV2) Free(proc *process.Process, pipelineFailed bool, err error) {
 	shuffle.ctr.buf = nil
 	shuffle.ctr.shufflePool = nil
+	if shuffle.ctr.exprExec != nil {
+		shuffle.ctr.exprExec.Free()
+		shuffle.ctr.exprExec = nil
+	}
 }
 
 func (shuffle *ShuffleV2) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

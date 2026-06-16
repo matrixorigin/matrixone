@@ -137,7 +137,8 @@ type Session struct {
 	tempTables map[string]string
 	// tempTablesRev records the reverse relationship.
 	// Key: realName, Value: dbName.alias
-	tempTablesRev map[string]string
+	tempTablesRev   map[string]string
+	hasLockedTables atomic.Bool
 
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
@@ -1715,6 +1716,17 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 		}
 	}
 
+	return
+}
+
+func (ses *Session) refreshGlobalSysVars(ctx context.Context, bh BackgroundExec) (err error) {
+	var sv *SystemVariables
+	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx, bh); err != nil {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.gSysVars = sv
 	return
 }
 

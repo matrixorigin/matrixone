@@ -18,12 +18,14 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -51,6 +53,222 @@ func convertDBEOBToNoSuchTable(ctx context.Context, e error, dbName, tblName str
 		return moerr.NewNoSuchTable(ctx, dbName, tblName)
 	}
 	return e
+}
+
+func shouldEnableAlterCopyPipelineFlush(opt *plan.AlterCopyOpt) bool {
+	return opt != nil && opt.SkipPkDedup
+}
+
+func alterCopyStatementOption(alterOpt *plan.AlterCopyOpt) executor.StatementOption {
+	opt := executor.StatementOption{}
+	if alterOpt != nil &&
+		(alterOpt.SkipPkDedup || len(alterOpt.SkipUniqueIdxDedup) > 0) {
+		opt = opt.WithAlterCopyOpt(alterOpt)
+	}
+	return opt
+}
+
+func alterCopyPkPrecheckColumns(tableDef *plan.TableDef) []string {
+	if tableDef == nil || tableDef.GetPkey() == nil {
+		return nil
+	}
+	pk := tableDef.GetPkey()
+	if len(pk.GetNames()) > 0 {
+		return slices.DeleteFunc(slices.Clone(pk.GetNames()), func(name string) bool { return name == "" })
+	}
+
+	pkColName := pk.GetPkeyColName()
+	if pkColName == "" || catalog.IsFakePkName(pkColName) || pkColName == catalog.CPrimaryKeyColName {
+		return nil
+	}
+	return []string{pkColName}
+}
+
+func alterCopyPkColumnValueUnchanged(oldCol, newCol *plan.ColDef) bool {
+	if oldCol == nil || newCol == nil {
+		return false
+	}
+	oldTyp := oldCol.GetTyp()
+	newTyp := newCol.GetTyp()
+	return oldTyp.GetId() == newTyp.GetId() &&
+		oldTyp.GetAutoIncr() == newTyp.GetAutoIncr() &&
+		oldTyp.GetWidth() == newTyp.GetWidth() &&
+		oldTyp.GetScale() == newTyp.GetScale() &&
+		oldTyp.GetTable() == newTyp.GetTable() &&
+		oldTyp.GetEnumvalues() == newTyp.GetEnumvalues()
+}
+
+// Only precheck source rows when the copied PK columns keep value-preserving
+// definitions. If ALTER changes the key value during copy, insert-time dedup
+// must remain enabled for the target table.
+func getAlterCopyPkPrecheck(qry *plan.AlterTable) (pkCols []string, checkNotNull bool) {
+	if qry == nil || qry.Options == nil || qry.Options.GetSkipPkDedup() {
+		return nil, false
+	}
+
+	pkCols = alterCopyPkPrecheckColumns(qry.CopyTableDef)
+	if len(pkCols) == 0 {
+		return nil, false
+	}
+	for _, colName := range pkCols {
+		oldCol := plan2.FindColumn(qry.GetTableDef().GetCols(), colName)
+		newCol := plan2.FindColumn(qry.CopyTableDef.GetCols(), colName)
+		if !alterCopyPkColumnValueUnchanged(oldCol, newCol) {
+			return nil, false
+		}
+		if !oldCol.GetNotNull() && !oldCol.GetTyp().NotNullable {
+			checkNotNull = true
+		}
+	}
+	return pkCols, checkNotNull
+}
+
+func quoteAlterCopyIdentifier(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
+func quoteAlterCopyTableName(dbName, tblName string) string {
+	return quoteAlterCopyIdentifier(dbName) + "." + quoteAlterCopyIdentifier(tblName)
+}
+
+func buildAlterCopyPkNullCheckSQL(dbName, tblName string, pkCols []string) string {
+	selectCols := make([]string, 0, len(pkCols))
+	nullPredicates := make([]string, 0, len(pkCols))
+	for _, col := range pkCols {
+		quotedCol := quoteAlterCopyIdentifier(col)
+		selectCols = append(selectCols, quotedCol)
+		nullPredicates = append(nullPredicates, quotedCol+" IS NULL")
+	}
+	return fmt.Sprintf("SELECT %s FROM %s WHERE %s LIMIT 1",
+		strings.Join(selectCols, ", "),
+		quoteAlterCopyTableName(dbName, tblName),
+		strings.Join(nullPredicates, " OR "),
+	)
+}
+
+func buildAlterCopyPkDuplicateCheckSQL(dbName, tblName string, pkCols []string) string {
+	groupByCols := make([]string, 0, len(pkCols))
+	for _, col := range pkCols {
+		groupByCols = append(groupByCols, quoteAlterCopyIdentifier(col))
+	}
+	groupBy := strings.Join(groupByCols, ", ")
+	return fmt.Sprintf("SELECT %s FROM %s GROUP BY %s HAVING count(*) > 1 LIMIT 1",
+		groupBy,
+		quoteAlterCopyTableName(dbName, tblName),
+		groupBy,
+	)
+}
+
+func firstAlterCopyResultRow(res executor.Result, colCount int) ([]string, []bool, bool) {
+	for _, bat := range res.Batches {
+		if bat == nil || bat.RowCount() == 0 {
+			continue
+		}
+
+		values := make([]string, colCount)
+		nulls := make([]bool, colCount)
+		for i := 0; i < colCount; i++ {
+			if i >= len(bat.Vecs) || bat.Vecs[i] == nil || bat.Vecs[i].Length() == 0 {
+				continue
+			}
+			nulls[i] = bat.Vecs[i].IsNull(0)
+			if nulls[i] {
+				values[i] = "null"
+				continue
+			}
+			values[i] = bat.Vecs[i].RowToString(0)
+		}
+		return values, nulls, true
+	}
+	return nil, nil, false
+}
+
+func formatAlterCopyPkValue(values []string) string {
+	if len(values) == 1 {
+		return values[0]
+	}
+	return "(" + strings.Join(values, ",") + ")"
+}
+
+func alterCopyDedupColName(pkCols []string) string {
+	if len(pkCols) == 1 {
+		return pkCols[0]
+	}
+	return "(" + strings.Join(pkCols, ",") + ")"
+}
+
+func cloneAlterCopyOpt(opt *plan.AlterCopyOpt) *plan.AlterCopyOpt {
+	if opt == nil {
+		return nil
+	}
+	clone := *opt
+	if opt.SkipUniqueIdxDedup != nil {
+		clone.SkipUniqueIdxDedup = make(map[string]bool, len(opt.SkipUniqueIdxDedup))
+		for k, v := range opt.SkipUniqueIdxDedup {
+			clone.SkipUniqueIdxDedup[k] = v
+		}
+	}
+	if opt.SkipIndexesCopy != nil {
+		clone.SkipIndexesCopy = make(map[string]bool, len(opt.SkipIndexesCopy))
+		for k, v := range opt.SkipIndexesCopy {
+			clone.SkipIndexesCopy[k] = v
+		}
+	}
+	return &clone
+}
+
+func (c *Compile) precheckAlterCopyPkDedup(dbName, tblName string, qry *plan.AlterTable) (*plan.AlterCopyOpt, error) {
+	if qry == nil || qry.Options == nil {
+		return nil, nil
+	}
+	if qry.Options.GetSkipPkDedup() {
+		return qry.Options, nil
+	}
+
+	pkCols, checkNotNull := getAlterCopyPkPrecheck(qry)
+	if len(pkCols) == 0 {
+		return qry.Options, nil
+	}
+
+	// Prove PK validity on the source snapshot first, then let insert-copy avoid
+	// building the target-side PK dedup hash table for the full backfill.
+	if checkNotNull {
+		nullCheckSQL := buildAlterCopyPkNullCheckSQL(dbName, tblName, pkCols)
+		nullCheckRes, err := c.runSqlWithResultAndOptions(nullCheckSQL, NoAccountId, executor.StatementOption{}.WithDisableLog())
+		if err != nil {
+			c.proc.Errorf(c.proc.Ctx, "alter copy primary key null check failed, sql is %s", nullCheckSQL)
+			return nil, err
+		}
+		defer nullCheckRes.Close()
+
+		if _, nulls, ok := firstAlterCopyResultRow(nullCheckRes, len(pkCols)); ok {
+			for i, isNull := range nulls {
+				if isNull {
+					return nil, moerr.NewConstraintViolation(c.proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", pkCols[i]))
+				}
+			}
+			return nil, moerr.NewConstraintViolation(c.proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", pkCols[0]))
+		}
+	}
+
+	duplicateCheckSQL := buildAlterCopyPkDuplicateCheckSQL(dbName, tblName, pkCols)
+	duplicateCheckRes, err := c.runSqlWithResultAndOptions(duplicateCheckSQL, NoAccountId, executor.StatementOption{}.WithDisableLog())
+	if err != nil {
+		c.proc.Errorf(c.proc.Ctx, "alter copy primary key duplicate check failed, sql is %s", duplicateCheckSQL)
+		return nil, err
+	}
+	defer duplicateCheckRes.Close()
+
+	if values, _, ok := firstAlterCopyResultRow(duplicateCheckRes, len(pkCols)); ok {
+		return nil, moerr.NewDuplicateEntry(c.proc.Ctx, formatAlterCopyPkValue(values), alterCopyDedupColName(pkCols))
+	}
+
+	opt := cloneAlterCopyOpt(qry.Options)
+	if opt.TargetTableName == "" {
+		opt.TargetTableName = qry.CopyTableDef.GetName()
+	}
+	opt.SkipPkDedup = true
+	return opt, nil
 }
 
 func (s *Scope) AlterTableCopy(c *Compile) error {
@@ -160,10 +378,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			zap.Error(err))
 		return err
 	}
-	opt := executor.StatementOption{}
-	if qry.Options.SkipPkDedup || len(qry.Options.SkipUniqueIdxDedup) > 0 {
-		opt = opt.WithAlterCopyOpt(qry.Options)
-	}
 
 	//4. obtain relation for new tables
 	newRel, err := dbSource.Relation(c.proc.Ctx, qry.CopyTableDef.Name, nil)
@@ -191,7 +405,37 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 
 	// 6. copy the original table data to the temporary replica table
-	err = c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
+	alterCopyOpt, err := c.precheckAlterCopyPkDedup(dbName, tblName, qry)
+	if err != nil {
+		c.proc.Error(c.proc.Ctx, "precheck primary key for alter table copy",
+			zap.String("databaseName", dbName),
+			zap.String("origin tableName", qry.GetTableDef().Name),
+			zap.String("copy tableName", qry.CopyTableDef.Name),
+			zap.Error(err))
+		return err
+	}
+	opt := alterCopyStatementOption(alterCopyOpt)
+	err = func() error {
+		if !shouldEnableAlterCopyPipelineFlush(alterCopyOpt) {
+			return c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
+		}
+
+		// Enable pipeline flush only when PK dedup can be skipped or was proven safe
+		// by the alter-copy precheck.
+		origCtx := c.proc.Ctx
+		restoreCtx := origCtx
+		if restoreCtx == nil {
+			restoreCtx = c.proc.GetTopContext()
+			if restoreCtx == nil {
+				restoreCtx = context.Background()
+			}
+		}
+		c.proc.Ctx = context.WithValue(restoreCtx, ioutil.PipelineFlushKey, true)
+		defer func() {
+			c.proc.Ctx = restoreCtx
+		}()
+		return c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
+	}()
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "insert data to copy table for alter table",
 			zap.String("databaseName", dbName),
@@ -300,7 +544,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 							// clone index table (with ISCP) may not be a complete clone
 							// so register ISCP job with startFromNow = false
 							sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
-							err = CreateIndexCdcTask(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, false, "")
+							err = CreateIndexCdcTask(c, dbName, newTableDef.Name, newTableDef.TblId, indexDef.IndexName, sinker_type, false, "", newTableDef)
 							if err != nil {
 								return err
 							}
@@ -470,6 +714,11 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetAlterTable()
+
+	// Check if target table is a CCPR shared table (from publication)
+	if c.shouldBlockCCPRReadOnly(qry.TableDef) {
+		return moerr.NewCCPRReadOnly(c.proc.Ctx)
+	}
 
 	ps := c.proc.GetPartitionService()
 	if !ps.Enabled() ||

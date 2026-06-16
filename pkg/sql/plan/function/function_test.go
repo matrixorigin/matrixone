@@ -124,7 +124,7 @@ func Test_fixedTypeCastRule2(t *testing.T) {
 		// we just cast it as float64 / float64
 		{
 			shouldCast: true,
-			in:         [2]types.Type{types.T_int64.ToType(), types.T_int32.ToType()},
+			in:         [2]types.Type{types.T_any.ToType(), types.T_any.ToType()},
 			want:       [2]types.Type{types.T_float64.ToType(), types.T_float64.ToType()},
 		},
 	}
@@ -138,6 +138,17 @@ func Test_fixedTypeCastRule2(t *testing.T) {
 			require.Equal(t, in.want[0], t1, msg)
 			require.Equal(t, in.want[1], t2, msg)
 		}
+	}
+}
+
+func Test_fixedImplicitTypeCast_Decimal256MirrorsDecimal128(t *testing.T) {
+	for _, target := range []types.T{types.T_bool, types.T_timestamp} {
+		can128, cost128 := fixedImplicitTypeCast(types.T_decimal128.ToType(), target)
+		require.True(t, can128)
+
+		can256, cost256 := fixedImplicitTypeCast(types.T_decimal256.ToType(), target)
+		require.Equal(t, can128, can256, target.String())
+		require.Equal(t, cost128, cost256, target.String())
 	}
 }
 
@@ -184,6 +195,14 @@ func Test_GetFunctionByName(t *testing.T) {
 		},
 
 		{
+			name: "from_unixtime", args: []types.Type{types.New(types.T_decimal256, 65, 0)},
+			shouldErr:  false,
+			requireFid: FROM_UNIXTIME, requireOid: 3,
+			shouldCast: false,
+			requireRet: types.T_datetime.ToType(),
+		},
+
+		{
 			name: "internal_numeric_scale", args: []types.Type{types.T_char.ToType()},
 			shouldErr:  false,
 			requireFid: INTERNAL_NUMERIC_SCALE, requireOid: 0,
@@ -217,6 +236,20 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldCast: false,
 			requireRet: types.T_varchar.ToType(),
 		},
+		{
+			name: "uuid_to_bin", args: []types.Type{types.T_varchar.ToType(), types.T_float64.ToType()},
+			shouldErr:  false,
+			requireFid: UUID_TO_BIN, requireOid: 0,
+			shouldCast: false,
+			requireRet: types.T_varbinary.ToType(),
+		},
+		{
+			name: "bin_to_uuid", args: []types.Type{types.T_varbinary.ToType(), types.T_float64.ToType()},
+			shouldErr:  false,
+			requireFid: BIN_TO_UUID, requireOid: 0,
+			shouldCast: false,
+			requireRet: types.T_varchar.ToType(),
+		},
 	}
 
 	proc := testutil.NewProcess(t)
@@ -242,9 +275,78 @@ func Test_GetFunctionByName(t *testing.T) {
 	}
 }
 
+func TestGetFunctionByNameAESDecryptReturnsBlob(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name string
+		args []types.Type
+	}{
+		{
+			name: "blob input",
+			args: []types.Type{types.T_blob.ToType(), types.T_varchar.ToType()},
+		},
+		{
+			name: "varchar input",
+			args: []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+		},
+		{
+			name: "char input",
+			args: []types.Type{types.T_char.ToType(), types.T_varchar.ToType()},
+		},
+		{
+			name: "text input",
+			args: []types.Type{types.T_text.ToType(), types.T_varchar.ToType()},
+		},
+		{
+			name: "blob input with iv",
+			args: []types.Type{types.T_blob.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+		},
+		{
+			name: "varchar input with iv",
+			args: []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+		},
+		{
+			name: "char input with iv",
+			args: []types.Type{types.T_char.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+		},
+		{
+			name: "text input with iv",
+			args: []types.Type{types.T_text.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			get, err := GetFunctionByName(proc.Ctx, "aes_decrypt", tc.args)
+			require.NoError(t, err)
+			require.Equal(t, int32(AES_DECRYPT), get.fid)
+			require.Equal(t, types.T_blob.ToType(), get.retType)
+		})
+	}
+}
+
 func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, true, GetFunctionIsWinFunByName("rank"))
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
+}
+
+func TestRunPositionCharFunctionDirectly(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []*vector.Vector{
+		testutil.NewVector(2, types.T_char.ToType(), proc.Mp(), false, []string{"y", "a"}),
+		testutil.NewVector(2, types.T_char.ToType(), proc.Mp(), false, []string{"xyz", "bbb"}),
+	}
+	startMp := proc.Mp().CurrNB()
+
+	v, err := RunFunctionDirectly(proc, EncodeOverloadID(POSITION, 1), inputs, 2)
+	require.NoError(t, err)
+	require.Equal(t, types.T_int64, v.GetType().Oid)
+	require.Equal(t, 2, v.Length())
+	require.Equal(t, []int64{2, 0}, vector.MustFixedColNoTypeCheck[int64](v))
+
+	v.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, startMp, proc.Mp().CurrNB())
 }
 
 func TestRunFunctionDirectly(t *testing.T) {

@@ -100,6 +100,10 @@ func (external *External) Prepare(proc *process.Process) error {
 	if !loadFormatIsValid(param.Extern) {
 		return moerr.NewNYIf(proc.Ctx, "load format '%s'", param.Extern.Format)
 	}
+	if param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
+		(param.Extern.Parallel || param.Extern.ParallelLoadRequested) {
+		param.LoadEmptyNumericAsZero = true
+	}
 
 	// File list check
 	if len(param.FileList) == 0 && param.Extern.ScanType != tree.INLINE {
@@ -181,20 +185,36 @@ func (external *External) Prepare(proc *process.Process) error {
 	return nil
 }
 
+func (external *External) checkLoadLockTableBinds(proc *process.Process) error {
+	param := external.Es
+	if param == nil ||
+		param.Extern == nil ||
+		param.Extern.ExternType != int32(plan.ExternType_LOAD) {
+		return nil
+	}
+
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return nil
+	}
+	return txnOp.CheckLockTableBinds(proc.Ctx)
+}
+
 func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	t := time.Now()
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	t1 := time.Now()
 
 	analyzer := external.OpAnalyzer
+	param := external.Es
 	defer func() {
 		analyzer.AddScanTime(t1)
+		param.flushParquetProfile(analyzer)
 		span.End()
 		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
 
 	result := vm.NewCallResult()
-	param := external.Es
 	if param.Fileparam.End {
 		result.Status = vm.ExecStop
 		return result, nil
@@ -236,6 +256,10 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 
+	if err := external.checkLoadLockTableBinds(proc); err != nil {
+		return result, err
+	}
+
 	if external.ctr.buf != nil {
 		external.ctr.buf.CleanOnlyData()
 	}
@@ -258,6 +282,7 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	result.Batch = external.ctr.buf
 	if external.ctr.buf != nil {
 		external.ctr.maxAllocSize = max(external.ctr.maxAllocSize, external.ctr.buf.Size())
+		param.addParquetProfile(process.ParquetProfileStats{PeakBatchBytes: int64(external.ctr.buf.Size())})
 		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
 
@@ -541,8 +566,11 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 	for idx, col := range cols {
 		field := fields[idx]
 		id := types.T(col.Typ.Id)
+		// T_bit carries raw bytes (parsed byte-by-byte, not as text), so
+		// whitespace bytes are data and must not be trimmed.
 		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
-			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink {
+			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
+			id != types.T_bit {
 			field.Val = strings.TrimSpace(field.Val)
 		}
 		isNullOrEmpty := field.IsNull || (getNullFlag(param.NullMap, col.Name, field.Val))
@@ -841,6 +869,8 @@ func checkLineStrict(param *ExternalParam) bool {
 
 const JsonNull = "\\N"
 
+var loadZeroBytes = []byte("0")
+
 func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 	if nullMap == nil || len(nullMap[attr]) == 0 {
 		return false
@@ -851,6 +881,60 @@ func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 		}
 	}
 	return false
+}
+
+func shouldLoadEmptyNumericAsZero(param *ExternalParam, id types.T) bool {
+	if param == nil || param.Extern == nil ||
+		param.Extern.ExternType != int32(plan.ExternType_LOAD) ||
+		(!param.ParallelLoad && !param.LoadEmptyNumericAsZero) {
+		return false
+	}
+	switch id {
+	case types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128:
+		return true
+	default:
+		return false
+	}
+}
+
+func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp *mpool.MPool) error {
+	if asBytes {
+		return vector.AppendBytes(vec, loadZeroBytes, false, mp)
+	}
+	switch id {
+	case types.T_bool:
+		return vector.AppendFixed(vec, false, false, mp)
+	case types.T_int8:
+		return vector.AppendFixed(vec, int8(0), false, mp)
+	case types.T_int16:
+		return vector.AppendFixed(vec, int16(0), false, mp)
+	case types.T_int32:
+		return vector.AppendFixed(vec, int32(0), false, mp)
+	case types.T_int64:
+		return vector.AppendFixed(vec, int64(0), false, mp)
+	case types.T_uint8:
+		return vector.AppendFixed(vec, uint8(0), false, mp)
+	case types.T_uint16:
+		return vector.AppendFixed(vec, uint16(0), false, mp)
+	case types.T_uint32:
+		return vector.AppendFixed(vec, uint32(0), false, mp)
+	case types.T_uint64:
+		return vector.AppendFixed(vec, uint64(0), false, mp)
+	case types.T_float32:
+		return vector.AppendFixed(vec, float32(0), false, mp)
+	case types.T_float64:
+		return vector.AppendFixed(vec, float64(0), false, mp)
+	case types.T_decimal64:
+		return vector.AppendFixed(vec, types.Decimal64(0), false, mp)
+	case types.T_decimal128:
+		return vector.AppendFixed(vec, types.Decimal128{}, false, mp)
+	default:
+		return moerr.NewInternalErrorNoCtxf("unsupported type %v for empty numeric LOAD DATA zero-fill", id)
+	}
 }
 
 func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam, fieldIdx int32) csvparser.Field {
@@ -907,14 +991,23 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	field := getFieldFromLine(line, colName, param, fieldIdx)
 	id := types.T(col.Typ.Id)
 	trimSpace := false
+	// T_bit carries raw bytes (parsed byte-by-byte, not as text), so whitespace
+	// bytes are data and must not be trimmed (a whitespace-only bit value would
+	// otherwise even be converted to NULL below).
 	if id != types.T_char && id != types.T_varchar && id != types.T_json &&
-		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink {
+		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
+		id != types.T_bit {
 		field.Val = strings.TrimSpace(field.Val)
 		trimSpace = true
 	}
-	isNullOrEmpty := field.IsNull || (getNullFlag(param.Extern.NullMap, colName, field.Val))
-	if trimSpace {
-		isNullOrEmpty = isNullOrEmpty || len(field.Val) == 0
+	mappedNull := getNullFlag(param.Extern.NullMap, colName, field.Val)
+	isNullOrEmpty := field.IsNull || mappedNull
+	emptyNumericField := len(field.Val) == 0 && !mappedNull && shouldLoadEmptyNumericAsZero(param, id)
+	if emptyNumericField {
+		field.Val = "0"
+		isNullOrEmpty = false
+	} else if trimSpace && len(field.Val) == 0 && !isNullOrEmpty {
+		isNullOrEmpty = true
 	}
 	if isNullOrEmpty {
 		vector.AppendBytes(vec, nil, true, mp)

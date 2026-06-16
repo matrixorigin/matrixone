@@ -61,6 +61,40 @@ func TestLockBlockedOnRemote(t *testing.T) {
 	)
 }
 
+func TestRemoteLockResponseLogFieldsDoNotRetainRequest(t *testing.T) {
+	req := &pb.Request{
+		LockTable: pb.LockTable{
+			Group:       1,
+			Table:       2,
+			OriginTable: 3,
+			ServiceID:   "bind-service",
+			Version:     4,
+		},
+		Lock: pb.LockRequest{
+			TxnID:     []byte{0x01, 0x02},
+			ServiceID: "caller-service",
+			Rows:      [][]byte{{1}, {2}},
+		},
+	}
+	logFields := remoteLockResponseLogFields(req)
+
+	req.Reset()
+	fields := logFields()
+	values := make(map[string]any, len(fields))
+	for _, field := range fields {
+		if field.String != "" {
+			values[field.Key] = field.String
+			continue
+		}
+		values[field.Key] = field.Integer
+	}
+
+	require.Equal(t, "0102", values["txn"])
+	require.Equal(t, "1-2(3)-bind-service-4", values["bind"])
+	require.Equal(t, "caller-service", values["caller-service"])
+	require.Equal(t, int64(2), values["row-count"])
+}
+
 func TestLockResultWithNoConflictOnRemote(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -183,6 +217,37 @@ func TestLockResultWithConflictAndTxnAbortedOnRemote(t *testing.T) {
 	)
 }
 
+func TestHandleForwardLockRejectsWhenServiceCannotLock(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			s.setStatus(pb.Status_ServiceCanRestart)
+
+			req := &pb.Request{
+				RequestID: 1,
+				Method:    pb.Method_ForwardLock,
+				LockTable: pb.LockTable{Table: 10},
+				Lock: pb.LockRequest{
+					TxnID:     []byte("txn1"),
+					ServiceID: "remote-service",
+					Rows:      [][]byte{{1}},
+					Options:   newTestRowExclusiveOptions(),
+				},
+			}
+			resp := acquireResponse()
+			defer releaseResponse(resp)
+			cs := &testClientSession{ctx: context.Background()}
+
+			s.handleForwardLock(context.Background(), nil, req, resp, cs)
+			require.True(t, cs.writeCalled)
+			require.False(t, cs.closeCalled)
+			require.True(t, moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrRetryForCNRollingRestart))
+		},
+	)
+}
+
 func TestGetActiveTxnWithRemote(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(
@@ -281,10 +346,15 @@ func TestUnlockWithBindIsStable(t *testing.T) {
 			txnID2 := []byte("txn2")
 			l2.Unlock(ctx, txnID2, timestamp.Timestamp{})
 
-			checkBind(
-				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version, Table: table, OriginTable: table, Valid: true},
-				l2)
+			bind := l2.tableGroups.get(0, table).getBind()
+			require.Equal(t, l1.serviceID, bind.ServiceID)
+			require.Equal(t, table, bind.Table)
+			require.Equal(t, table, bind.OriginTable)
+			require.True(t, bind.Valid)
+			require.True(t,
+				bind.Version == alloc.version || bind.Version == alloc.version+1,
+				"bind can stay unchanged or be refreshed asynchronously by keepRemoteLock, got %s",
+				bind.DebugString())
 		},
 	)
 }
@@ -327,21 +397,34 @@ func TestLockWithBindTimeout(t *testing.T) {
 			waitBindDisabled(t, alloc, l1.serviceID)
 
 			txnID2 := []byte("txn2")
-			// l2 hold the old bind, and can not connect to s1, and wait bind changed
-			for {
-				_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, pb.LockOptions{
-					Granularity: pb.Granularity_Row,
-					Mode:        pb.LockMode_Exclusive,
-					Policy:      pb.WaitPolicy_Wait,
-				})
-				if err == nil {
-					// l2 get the bind
-					l := l2.tableGroups.get(0, table)
-					assert.Equal(t, l2.serviceID, l.getBind().ServiceID)
-					return
-				}
-				time.Sleep(time.Millisecond * 100)
-			}
+			// l2 holds the old bind. Once bind change is detected, the old txn is fenced
+			// and the caller must retry with a new txn.
+			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			})
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+
+			_, err = l2.Lock(ctx, table, [][]byte{{3}}, txnID2, pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			})
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+
+			txnID3 := []byte("txn3")
+			_, err = l2.Lock(ctx, table, [][]byte{{3}}, txnID3, pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			})
+			require.NoError(t, err)
+			require.NoError(t, l2.Unlock(ctx, txnID2, timestamp.Timestamp{}))
+			require.NoError(t, l2.Unlock(ctx, txnID3, timestamp.Timestamp{}))
+
+			l := l2.tableGroups.get(0, table)
+			assert.Equal(t, l2.serviceID, l.getBind().ServiceID)
 		},
 	)
 }
@@ -417,10 +500,29 @@ func TestLockWithBindNotFound(t *testing.T) {
 			// to signal that the caller should retry with the new bind
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 
+			txnID3 := []byte("txn3")
+			_, err = l2.Lock(ctx, table, [][]byte{{3}}, txnID3, pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			})
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+
 			checkBind(
 				t,
 				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version, Table: table, OriginTable: table, Valid: true},
 				l2)
+
+			txnID4 := []byte("txn4")
+			_, err = l2.Lock(ctx, table, [][]byte{{3}}, txnID4, pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			})
+			require.NoError(t, err)
+			require.NoError(t, l2.Unlock(ctx, txnID2, timestamp.Timestamp{}))
+			require.NoError(t, l2.Unlock(ctx, txnID3, timestamp.Timestamp{}))
+			require.NoError(t, l2.Unlock(ctx, txnID4, timestamp.Timestamp{}))
 		},
 	)
 }

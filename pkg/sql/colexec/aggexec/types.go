@@ -63,6 +63,26 @@ func (ag *AggFuncExecExpression) GetArgExpressions() []*plan.Expr {
 	return ag.argExpressions
 }
 
+func (ag *AggFuncExecExpression) RewriteArgExpressions(rewrite func(*plan.Expr) (*plan.Expr, bool, error)) (bool, error) {
+	folded := false
+	args := make([]*plan.Expr, len(ag.argExpressions))
+	copy(args, ag.argExpressions)
+	for i := range args {
+		expr, exprFolded, err := rewrite(args[i])
+		if err != nil {
+			return false, err
+		}
+		if exprFolded {
+			args[i] = expr
+			folded = true
+		}
+	}
+	if folded {
+		ag.argExpressions = args
+	}
+	return folded, nil
+}
+
 func (ag *AggFuncExecExpression) GetExtraConfig() []byte {
 	return ag.extraConfig
 }
@@ -190,6 +210,10 @@ func makeSpecialAggExec(
 			return makeGroupConcat(mp, id, isDistinct, params, getGroupConcatRet(params...), groupConcatSep), true, nil
 		case AggIdOfApproxCount:
 			return makeApproxCount(mp, id, params[0]), true, nil
+		case AggIdOfHllAdd:
+			return makeHllAdd(mp, id, params[0]), true, nil
+		case AggIdOfHllMerge:
+			return makeHllMerge(mp, id, params[0]), true, nil
 		case AggIdOfJsonArrayAgg:
 			exec, err := makeJsonArrayAgg(mp, id, isDistinct, params)
 			return exec, true, err

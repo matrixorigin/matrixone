@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -356,6 +357,86 @@ func TestReset(t *testing.T) {
 func TestPrint(t *testing.T) {
 	sp := NewShufflePool(4, 1)
 	sp.DebugPrint()
+}
+
+// TestEvalAndShuffle covers the ShuffleExpr branch (evalAndShuffle) for
+// hash-shuffle cases, exercising hashShuffleVecWith[Null|outNull] for
+// every supported type.
+func TestEvalAndShuffle(t *testing.T) {
+	for _, tc := range makeTestCases(t) {
+		if tc.arg.ShuffleType != int32(plan.ShuffleType_Hash) {
+			tc.proc.Free()
+			continue
+		}
+		tc.arg.ShuffleExpr = &plan.Expr{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+			Typ:  plan.Type{Id: int32(tc.types[0].Oid)},
+		}
+		runShuffleCase(t, tc, true)
+		runShuffleCase(t, tc, false)
+		tc.proc.Free()
+	}
+}
+
+// TestEvalAndShuffleConst exercises the IsConst / IsConstNull branches
+// of evalAndShuffle and the helper shuffleConstVecByHash for every
+// supported type. ShuffleV2 only supports hash shuffle.
+func TestEvalAndShuffleConst(t *testing.T) {
+	type constCase struct {
+		name      string
+		expr      *plan.Expr
+		colType   types.Type
+		bucketNum int32
+	}
+	mkInt64 := func(v int64) *plan.Expr { return plan2.MakePlan2Int64ConstExprWithType(v) }
+	mkInt32 := func(v int32) *plan.Expr { return plan2.MakePlan2Int32ConstExprWithType(v) }
+	mkInt16 := func(v int16) *plan.Expr { return plan2.MakePlan2Int16ConstExprWithType(v) }
+	mkU64 := func(v uint64) *plan.Expr { return plan2.MakePlan2Uint64ConstExprWithType(v) }
+	mkU32 := func(v uint32) *plan.Expr { return plan2.MakePlan2Uint32ConstExprWithType(v) }
+	mkU16 := func(v uint16) *plan.Expr { return plan2.MakePlan2Uint16ConstExprWithType(v) }
+	mkVarchar := func(s string) *plan.Expr {
+		return &plan.Expr{
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: s}}},
+			Typ:  plan.Type{Id: int32(types.T_varchar), Width: int32(len(s) + 8)},
+		}
+	}
+	nullExpr := &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+	}
+
+	cases := []constCase{
+		{"hash_int64", mkInt64(42), types.T_int64.ToType(), 8},
+		{"hash_int32", mkInt32(42), types.T_int32.ToType(), 8},
+		{"hash_int16", mkInt16(42), types.T_int16.ToType(), 8},
+		{"hash_uint64", mkU64(42), types.T_uint64.ToType(), 8},
+		{"hash_uint32", mkU32(42), types.T_uint32.ToType(), 8},
+		{"hash_uint16", mkU16(42), types.T_uint16.ToType(), 8},
+		{"hash_varchar", mkVarchar("hello"), types.T_varchar.ToType(), 8},
+		{"hash_const_null", nullExpr, types.T_int64.ToType(), 8},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			arg := &ShuffleV2{
+				ctr:           container{},
+				ShuffleColIdx: 0,
+				ShuffleType:   int32(plan.ShuffleType_Hash),
+				BucketNum:     c.bucketNum,
+				ShuffleExpr:   c.expr,
+			}
+			require.NoError(t, arg.Prepare(proc))
+			defer arg.Free(proc, false, nil)
+
+			bat := testutil.NewBatch([]types.Type{c.colType}, false, 4, proc.Mp())
+			defer bat.Clean(proc.Mp())
+			out, err := arg.evalAndShuffle(bat, proc)
+			require.NoError(t, err)
+			require.NotNil(t, out)
+			require.True(t, out.ShuffleIDX >= 0 && out.ShuffleIDX < c.bucketNum)
+		})
+	}
 }
 
 func TestTypeName(t *testing.T) {

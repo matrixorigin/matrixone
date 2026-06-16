@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -105,9 +106,18 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if err != nil {
 		return nil, err
 	}
+	if tableDef.TableType == catalog.SystemExternalRel {
+		if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); !ok {
+			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "insert into read-only external table %s", tblName)
+		}
+		if len(stmt.OnDuplicateUpdate) > 0 {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "ON DUPLICATE KEY UPDATE on external table")
+		}
+	}
+
 	replaceStmt := getRewriteToReplaceStmt(tableDef, stmt, rewriteInfo, isPrepareStmt)
 	if replaceStmt != nil {
-		return buildReplace(replaceStmt, ctx, isPrepareStmt, true)
+		return bindAndOptimizeReplaceQuery(ctx, replaceStmt, isPrepareStmt, false)
 	}
 	lastNodeId := rewriteInfo.rootId
 	sourceStep := builder.appendStep(lastNodeId)
@@ -252,6 +262,12 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		}
 
 		query.StmtType = plan.Query_UPDATE
+	} else if tableDef.TableType == catalog.SystemExternalRel {
+		// Writable external table: minimal plan, no preinsert/lock/pk-dedup/index.
+		if err = appendExternalInsertPlan(builder, bindCtx, objRef, tableDef, rewriteInfo.rootId); err != nil {
+			return nil, err
+		}
+		query.StmtType = plan.Query_INSERT
 	} else {
 		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap)
 		if err != nil {
@@ -274,6 +290,43 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 			Query: query,
 		},
 	}, err
+}
+
+// getExternParamFromTableDef deserializes the external-table ExternParam stored
+// in the catalog (TableDef.Createsql) for an external table. Returns an empty
+// param if there is nothing to parse.
+func getExternParamFromTableDef(tableDef *TableDef) *tree.ExternParam {
+	param := &tree.ExternParam{}
+	if tableDef == nil {
+		return param
+	}
+	_ = json.Unmarshal([]byte(tableDef.Createsql), param)
+	return param
+}
+
+// appendExternalInsertPlan appends a minimal INSERT node for a writable external
+// table. The source (lastNodeId) has already been bound, cast to the table
+// column types and projected by initInsertStmt, so we only attach the INSERT.
+func appendExternalInsertPlan(builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, lastNodeId int32) error {
+	insertProjection := getProjectionByLastNode(builder, lastNodeId)
+	if len(insertProjection) > len(tableDef.Cols) {
+		insertProjection = insertProjection[:len(tableDef.Cols)]
+	}
+	insertNode := &Node{
+		NodeType: plan.Node_INSERT,
+		Children: []int32{lastNodeId},
+		ObjRef:   objRef,
+		TableDef: tableDef,
+		InsertCtx: &plan.InsertCtx{
+			Ref:             objRef,
+			AddAffectedRows: true,
+			TableDef:        tableDef,
+		},
+		ProjectList: insertProjection,
+	}
+	lastNodeId = builder.appendNode(insertNode, bindCtx)
+	builder.appendStep(lastNodeId)
+	return nil
 }
 
 var buildInsertGetDmlPlanCtx = getDmlPlanCtx

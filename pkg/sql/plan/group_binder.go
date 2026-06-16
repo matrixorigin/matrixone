@@ -44,6 +44,11 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 
 				astExpr = b.selectList[colPos-1].Expr
 
+			case tree.Unknown:
+				if numVal.ValType != tree.P_null {
+					return nil, moerr.NewSyntaxError(b.GetContext(), "non-integer constant in GROUP BY")
+				}
+
 			default:
 				return nil, moerr.NewSyntaxError(b.GetContext(), "non-integer constant in GROUP BY")
 			}
@@ -53,10 +58,6 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	expr, err := b.baseBindExpr(astExpr, depth, isRoot)
 	if err != nil {
 		return nil, err
-	}
-
-	if isNullExpr(expr) {
-		return nil, moerr.NewInternalErrorNoCtx("Invalid GROUP BY NULL")
 	}
 
 	if isRoot && !b.ctx.isGroupingSet {

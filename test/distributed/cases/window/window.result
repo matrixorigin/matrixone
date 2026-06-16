@@ -2,7 +2,7 @@ drop table if exists t1;
 create table t1 (a int, b datetime);
 insert into t1 values(1, '2020-11-11'), (2, '2020-11-12'), (3, '2020-11-13');
 select sum(a) over(partition by a order by b range between interval 1 day preceding and interval 2 day following) from t1;
-sum(a) over (partition by a order by b range between interval(1, day) preceding and interval(2, day) following)
+sum(a) over (partition by a order by b range between interval 1 day preceding and interval 2 day following)
 1
 2
 3
@@ -11,7 +11,7 @@ drop table if exists t1;
 create table t1 (a int, b date);
 insert into t1 values(1, '2020-11-11'), (2, '2020-11-12'), (3, '2020-11-13'), (1, '2020-11-11'), (2, '2020-11-12'), (3, '2020-11-13'), (1, '2020-11-11'), (2, '2020-11-12'), (3, '2020-11-13');
 select max(a) over(order by b range between interval 1 day preceding and interval 2 day following) from t1;
-max(a) over (order by b range between interval(1, day) preceding and interval(2, day) following)
+max(a) over (order by b range between interval 1 day preceding and interval 2 day following)
 3
 3
 3
@@ -26,7 +26,7 @@ drop table if exists t1;
 create table t1 (a int, b time);
 insert into t1 values(1, 112233), (2, 122233), (3, 132233), (1, 112233), (2, 122233), (3, 132233), (1, 112233), (2, 122233), (3, 132233);
 select min(a) over(order by b range between interval 1 hour preceding and current row) from t1;
-min(a) over (order by b range between interval(1, hour) preceding and current row)
+min(a) over (order by b range between interval 1 hour preceding and current row)
 1
 1
 1
@@ -1620,7 +1620,7 @@ id    max(id) over (order by id rows 2 preceding)
 2015-08-01    2015-08-01
 2015-08-01    2015-08-01
 select min(id) over (partition by id order by id range interval 2 day preceding) from date01;
-min(id) over (partition by id order by id range interval(2, day) preceding)
+min(id) over (partition by id order by id range interval 2 day preceding)
 2002-06-09
 2002-06-09
 2002-06-09
@@ -1638,7 +1638,7 @@ id    count(id) over (order by id rows between 2 preceding and 1 following)
 2015-08-01    4
 2015-08-01    3
 select id, count(id) over (order by date_add(id,interval 3 day) rows between 2 preceding and 1 following) from date01;
-id    count(id) over (order by date_add(id, interval(3, day)) rows between 2 preceding and 1 following)
+id    count(id) over (order by date_add(id, interval 3 day) rows between 2 preceding and 1 following)
 2002-06-09    2
 2002-06-09    3
 2002-06-09    4
@@ -2078,7 +2078,7 @@ null
 1997-01-13 00:00:00
 1997-01-13 00:00:00
 select rank() over (order by col1 range interval 2 day preceding) from date02;
-rank() over (order by col1 range interval(2, day) preceding)
+rank() over (order by col1 range interval 2 day preceding)
 1
 1
 1
@@ -2087,7 +2087,7 @@ rank() over (order by col1 range interval(2, day) preceding)
 6
 6
 select max(col3) over (order by date_add(col2,interval 2 minute) rows  between 2 preceding and 1 following) from date02;
-max(col3) over (order by date_add(col2, interval(2, minute)) rows between 2 preceding and 1 following)
+max(col3) over (order by date_add(col2, interval 2 minute) rows between 2 preceding and 1 following)
 01:01:01
 01:01:01
 12:00:59
@@ -2096,7 +2096,7 @@ max(col3) over (order by date_add(col2, interval(2, minute)) rows between 2 prec
 12:00:59
 12:00:59
 select min(col3) over (partition by col4 order by date_sub(col2,interval 2 minute) rows  between 2 preceding and 1 following) from date02;
-min(col3) over (partition by col4 order by date_sub(col2, interval(2, minute)) rows between 2 preceding and 1 following)
+min(col3) over (partition by col4 order by date_sub(col2, interval 2 minute) rows between 2 preceding and 1 following)
 01:01:01
 01:01:01
 12:00:59
@@ -2369,7 +2369,7 @@ value    sum(id) over (partition by id order by id rows unbounded preceding)
 11    77
 select id value,
 sum(id) over (partition by id order by id rows unbounded preceding)
-from dense_rank01 full join dense_rank02;
+from dense_rank01 `full` join dense_rank02;
 value    sum(id) over (partition by id order by id rows unbounded preceding)
 1    1
 1    2

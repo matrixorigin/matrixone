@@ -251,6 +251,15 @@ const (
 	// ErrSchedulerClosed scheduler has been closed, cannot schedule new jobs
 	ErrSchedulerClosed uint16 = 20641
 
+	// GC sync protection errors
+	ErrGCIsRunning              uint16 = 20642
+	ErrSyncProtectionNotFound   uint16 = 20643
+	ErrSyncProtectionExists     uint16 = 20644
+	ErrSyncProtectionMaxCount   uint16 = 20645
+	ErrSyncProtectionSoftDelete uint16 = 20646
+	ErrSyncProtectionInvalid    uint16 = 20647
+	ErrSyncProtectionExpired    uint16 = 20648
+
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
 	ErrDeadLockDetected uint16 = 20701
@@ -323,6 +332,8 @@ const (
 
 	// Group 15: Vector Search
 	ErrVectorNeedRetryWithPreMode uint16 = 22301
+	// Group 16: CCPR
+	ErrCCPRReadOnly uint16 = 22401
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -508,6 +519,15 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrOfflineTxnWrite:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "write offline txn: %s"},
 	ErrSchedulerClosed:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "scheduler closed"},
 
+	// GC sync protection errors
+	ErrGCIsRunning:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "GC is running, please retry later"},
+	ErrSyncProtectionNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection not found: %s"},
+	ErrSyncProtectionExists:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection already exists: %s"},
+	ErrSyncProtectionMaxCount:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection max count reached: %d"},
+	ErrSyncProtectionSoftDelete: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection is soft deleted: %s"},
+	ErrSyncProtectionInvalid:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid sync protection request"},
+	ErrSyncProtectionExpired:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection expired: job %s validTS %d < prepareTS %d"},
+
 	// Group 7: lock service
 	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
 	ErrLockTableBindChanged:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind changed"},
@@ -572,6 +592,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 
 	// Group 15: Vector Search
 	ErrVectorNeedRetryWithPreMode: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector search need retry with pre mode"},
+
+	// Group 16: CCPR
+	ErrCCPRReadOnly: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "ccpr shared object is read-only"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -1141,6 +1164,17 @@ func IsRPCClientClosed(err error) bool {
 	return IsMoErrCode(err, ErrClientClosed)
 }
 
+// IsSyncProtectionValidationError checks if error is any sync protection validation error.
+// This allows CN to easily distinguish sync protection validation errors from other commit errors.
+func IsSyncProtectionValidationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return IsMoErrCode(err, ErrSyncProtectionNotFound) ||
+		IsMoErrCode(err, ErrSyncProtectionSoftDelete) ||
+		IsMoErrCode(err, ErrSyncProtectionExpired)
+}
+
 func NewTxnClosed(ctx context.Context, txnID []byte) *Error {
 	id := "unknown"
 	if len(txnID) > 0 {
@@ -1688,6 +1722,10 @@ func NewErrExecutorRunning(ctx context.Context, executor string) *Error {
 
 func NewErrTooBigPrecision(ctx context.Context, precision int32, funcName string, maxPrecision uint64) *Error {
 	return newError(ctx, ErrTooBigPrecision, precision, funcName, maxPrecision)
+}
+
+func NewCCPRReadOnly(ctx context.Context) *Error {
+	return newError(ctx, ErrCCPRReadOnly)
 }
 
 var contextFunc atomic.Value

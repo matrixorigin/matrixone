@@ -194,6 +194,15 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		return nil, nil
 	}
 
+	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "force" {
+		return nil, nil
+	}
+
+	rewriteAllowed, err := builder.validateVectorIndexSortRewrite(vecCtx)
+	if err != nil || !rewriteAllowed {
+		return nil, err
+	}
+
 	// Check if vector pre-filter pushdown should be enabled by default
 	// This session variable changes the default vector search behavior
 	var enableVectorPrefilterByDefault bool
@@ -258,7 +267,17 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 
 	keyPart := idxDef.Parts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
-	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	var vecLitArg *plan.Expr
+	var found bool
+	if vecCtx.vecArgExpr != nil {
+		_, vecLitArg, found = builder.getArgsFromDistFnForJoin(
+			vecCtx.distFnExpr,
+			partPos,
+			vecCtx.scanNode.BindingTags[0],
+		)
+	} else {
+		_, vecLitArg, found = builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	}
 	if !found {
 		return nil, nil
 	}
@@ -318,82 +337,6 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		isAutoMode:      isAutoMode,
 		initialStrategy: mode,
 	}, nil
-}
-
-func (builder *QueryBuilder) getDistRangeFromFilters(filters []*plan.Expr, ivfCtx *ivfIndexContext) ([]*plan.Expr, *plan.DistRange) {
-	var distRange *plan.DistRange
-
-	currIdx := 0
-	for _, filter := range filters {
-		var (
-			vecLit string
-			fdist  *plan.Function
-		)
-
-		f := filter.GetF()
-		if f == nil || len(f.Args) != 2 {
-			goto NO_RANGE
-		}
-
-		fdist = f.Args[0].GetF()
-		if fdist == nil || len(fdist.Args) != 2 {
-			goto NO_RANGE
-		}
-
-		if partCol := fdist.Args[0].GetCol(); partCol == nil || partCol.ColPos != ivfCtx.partPos {
-			goto NO_RANGE
-		}
-
-		if fdist.Func.ObjName != ivfCtx.origFuncName {
-			goto NO_RANGE
-		}
-
-		vecLit = fdist.Args[1].GetLit().GetVecVal()
-		if vecLit == "" || vecLit != ivfCtx.vecLitArg.GetLit().GetVecVal() {
-			goto NO_RANGE
-		}
-
-		switch f.Func.ObjName {
-		case "<":
-			if distRange == nil {
-				distRange = &plan.DistRange{}
-			}
-			distRange.UpperBoundType = plan.BoundType_EXCLUSIVE
-			distRange.UpperBound = f.Args[1]
-
-		case "<=":
-			if distRange == nil {
-				distRange = &plan.DistRange{}
-			}
-			distRange.UpperBoundType = plan.BoundType_INCLUSIVE
-			distRange.UpperBound = f.Args[1]
-
-		case ">":
-			if distRange == nil {
-				distRange = &plan.DistRange{}
-			}
-			distRange.LowerBoundType = plan.BoundType_EXCLUSIVE
-			distRange.LowerBound = f.Args[1]
-
-		case ">=":
-			if distRange == nil {
-				distRange = &plan.DistRange{}
-			}
-			distRange.LowerBoundType = plan.BoundType_INCLUSIVE
-			distRange.LowerBound = f.Args[1]
-
-		default:
-			goto NO_RANGE
-		}
-
-		continue
-
-	NO_RANGE:
-		filters[currIdx] = filter
-		currIdx++
-	}
-
-	return filters[:currIdx], distRange
 }
 
 func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
@@ -465,6 +408,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			Cols: DeepCopyColDefList(kIVFSearchColDefs),
 		},
 		BindingTags: []int32{tableFuncTag},
+		Children:    vectorSearchProviderChildren(vecCtx),
 		TblFuncExprList: []*plan.Expr{
 			{
 				Typ: plan.Type{
@@ -491,45 +435,38 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// change doc_id type to the primary type here
 	tableFuncNode.TableDef.Cols[0].Typ = ivfCtx.pkType
 
-	newFilterList, distRange := builder.getDistRangeFromFilters(scanNode.FilterList, ivfCtx)
+	newFilterList, distRange := builder.getDistRangeFromFilters(scanNode.FilterList, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
 	scanNode.FilterList = newFilterList
 
 	// pushdown limit to Table Function
 	// When there are filters, over-fetch to get more candidates
 	// This ensures we have enough candidates after filtering
 	limitExpr := DeepCopyExpr(limit)
-	if len(scanNode.FilterList) > 0 {
+	if len(scanNode.FilterList) > 0 && !ivfCtx.pushdownEnabled {
 		// Over-fetch strategy: dynamically adjust factor based on limit size
 		// Smaller limits need more over-fetching due to higher variance
 		if limitConst := limit.GetLit(); limitConst != nil {
 			originalLimit := limitConst.GetU64Val()
 
-			// Choose over-fetch strategy based on mode
-			var overFetchFactor float64
-			if ivfCtx.isAutoMode {
-				// Auto mode: use enhanced over-fetch strategy
-				overFetchFactor = calculateAutoModeOverFetchFactor(
-					originalLimit,
-					scanNode.Stats,
-				)
+			// Filtered post mode needs a larger candidate budget than the historical
+			// default, but we keep it as fixed buckets so the plan is predictable.
+			overFetchFactor := calculateFilteredPostModeOverFetchFactor(originalLimit)
 
-				// Log auto mode over-fetch calculation
+			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
+
+			if ivfCtx.isAutoMode {
 				logutil.Debugf(
 					"Auto mode over-fetch: original_limit=%d, factor=%.2f, filter_count=%d",
 					originalLimit, overFetchFactor, len(scanNode.FilterList),
 				)
-			} else {
-				// Non-auto mode: use conservative default strategy
-				overFetchFactor = calculatePostFilterOverFetchFactor(originalLimit)
-			}
-
-			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
-
-			// Log final over-fetch result for auto mode
-			if ivfCtx.isAutoMode {
 				logutil.Debugf(
 					"Auto mode over-fetch result: original_limit=%d, new_limit=%d",
 					originalLimit, newLimit,
+				)
+			} else {
+				logutil.Debugf(
+					"Vector mode over-fetch: mode=post, original_limit=%d, factor=%.2f, filter_count=%d, new_limit=%d",
+					originalLimit, overFetchFactor, len(scanNode.FilterList), newLimit,
 				)
 			}
 
@@ -670,7 +607,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			},
 		}
 		buildSpec := MakeRuntimeFilter(rfTag, false, 0, buildExpr, false)
-		buildSpec.UseBloomFilter = true
+		buildSpec.UseMembershipFilter = true
 		innerJoinNode := builder.qry.Nodes[innerJoinNodeID]
 		innerJoinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
 
@@ -685,7 +622,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			},
 		}
 		probeSpec := MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)
-		probeSpec.UseBloomFilter = true
+		probeSpec.UseMembershipFilter = true
 		tableFuncNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
 
 		// The original scan was guarded during the recursive planner pass so the vector rewrite
@@ -835,6 +772,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		Limit:      limit,                         // Apply LIMIT after sorting
 		Offset:     DeepCopyExpr(sortNode.Offset), // Apply OFFSET after sorting
 		RankOption: DeepCopyRankOption(vecCtx.rankOption),
+		SpillMem:   builder.sortSpillMem,
 	}, ctx)
 
 	projNode.Children[0] = sortByID

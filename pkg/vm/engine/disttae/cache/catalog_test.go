@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -31,6 +32,20 @@ import (
 const (
 	Rows = 10
 )
+
+func TestCatalogCacheConcurrentGC(t *testing.T) {
+	cc := NewCatalog()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(ts int64) {
+			defer wg.Done()
+			cc.GC(timestamp.Timestamp{PhysicalTime: ts})
+		}(int64(i + 1))
+	}
+	wg.Wait()
+}
 
 func TestCrossDBGet(t *testing.T) {
 	cc := NewCatalog()

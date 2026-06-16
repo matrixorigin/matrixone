@@ -87,3 +87,40 @@ func TestExecutorDistribution(t *testing.T) {
 
 	require.Equal(t, 9, count)
 }
+
+func TestExecutorSingleThread(t *testing.T) {
+	ctx := context.Background()
+	nitems := 10
+	nthreads := 1
+
+	e := NewThreadPoolExecutor(nthreads)
+
+	called := false
+	err := e.Execute(ctx, nitems, func(ctx context.Context, thread_id int, start, end int) error {
+		called = true
+		require.Equal(t, 0, thread_id)
+		require.Equal(t, 0, start)
+		require.Equal(t, nitems, end)
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.True(t, called)
+}
+
+func TestExecutorZeroItems(t *testing.T) {
+	ctx := context.Background()
+	nitems := 0
+	nthreads := 4
+
+	e := NewThreadPoolExecutor(nthreads)
+
+	called := false
+	err := e.Execute(ctx, nitems, func(ctx context.Context, thread_id int, start, end int) error {
+		called = true
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.False(t, called)
+}

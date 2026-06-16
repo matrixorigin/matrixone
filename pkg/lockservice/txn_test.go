@@ -66,9 +66,37 @@ func TestLockAddedThatShouldFail(t *testing.T) {
 	})
 }
 
+func TestLockTableBindTouchedTracksFenceIntentOnly(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		id := []byte("t1")
+		fsp := newFixedSlicePool(2)
+		txn := newActiveTxn(id, string(id), fsp, "")
+		defer reuse.Free(txn, nil)
+
+		bind := pb.LockTable{Group: 0, Table: 1, ServiceID: "s1", Version: 1}
+		txn.lockTableBindTouched(bind)
+
+		h := txn.getHoldLocksLocked(bind.Group)
+		assert.Empty(t, h.tableBinds)
+		assert.Equal(t, bind, h.tableBindIntents[bind.Table])
+
+		refs := make(map[uint32]map[uint64]uint64)
+		txn.incLockTableRef(refs, bind.ServiceID)
+		assert.Empty(t, refs)
+
+		changed := bind
+		changed.Version++
+		assert.True(t, txn.fenceByBindChanged(changed, getLogger("")))
+		assert.True(t, txn.bindChanged)
+
+		txn.reset()
+		assert.Empty(t, txn.lockHolders)
+	})
+}
+
 func TestClose(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		events := newWaiterEvents(1, nil, nil, nil, getLogger(""))
+		events := newWaiterEvents(1, nil, nil, time.Second, nil, getLogger(""))
 		defer events.close()
 
 		id := []byte("t1")

@@ -90,4 +90,8 @@ type TaskScheduler interface {
 	StartScheduleCronTask()
 	// StopScheduleCronTask stop schedule cron tasks.
 	StopScheduleCronTask()
+	// StartScheduleSQLTask starts SQL task cron scheduling.
+	StartScheduleSQLTask()
+	// StopScheduleSQLTask stops SQL task cron scheduling.
+	StopScheduleSQLTask()
 }

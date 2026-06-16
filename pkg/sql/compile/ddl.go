@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
@@ -123,6 +124,21 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
 	}
 
+	// Check if the database is a CCPR shared database
+	if !db.IsSubscription(c.proc.Ctx) {
+		dbIDStr := db.GetDatabaseId(c.proc.Ctx)
+		dbID, err := strconv.ParseUint(dbIDStr, 10, 64)
+		if err == nil {
+			canDrop, err := checkCCPRDbBeforeDrop(c, dbID)
+			if err != nil {
+				return err
+			}
+			if !canDrop {
+				return moerr.NewCCPRReadOnly(c.proc.Ctx)
+			}
+		}
+	}
+
 	if err = lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
@@ -151,7 +167,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	defer func() {
 		// Restore SnapshotTS so that tombstone transfer in subsequent
 		// statements is not affected by the temporary advancement.
-		txnOp.TxnRef().SnapshotTS = origSnapshotTS
+		txnOp.SetSnapshotTS(origSnapshotTS)
 	}()
 
 	// handle sub
@@ -176,11 +192,16 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 	var ignoreTables []string
+	existingRelations := make([]string, 0, len(relations))
 	for _, r := range relations {
 		t, err := database.Relation(c.proc.Ctx, r, nil)
 		if err != nil {
+			if logAndSkipMissingRelationByNameForDropDatabase(c, dbName, r, "cannot open relation when collecting tables for drop database", err) {
+				continue
+			}
 			return err
 		}
+		existingRelations = append(existingRelations, r)
 
 		if features.IsPartition(t.GetExtraInfo().FeatureFlag) ||
 			features.IsIndexTable(t.GetExtraInfo().FeatureFlag) {
@@ -203,8 +224,8 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
-	deleteTables := make([]string, 0, len(relations))
-	for _, r := range relations {
+	deleteTables := make([]string, 0, len(existingRelations))
+	for _, r := range existingRelations {
 		isIndexTable := false
 		for _, d := range ignoreTables {
 			if d == r {
@@ -288,6 +309,19 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	return err
 }
 
+func logAndSkipMissingRelationByNameForDropDatabase(c *Compile, dbName, rel, msg string, err error) bool {
+	if !isMissingTableByNameForDropDatabase(err) {
+		return false
+	}
+	logutil.Warn(
+		msg,
+		zap.String("table", fmt.Sprintf("%s-%s", dbName, rel)),
+		zap.String("txn info", c.proc.GetTxnOperator().Txn().DebugString()),
+		zap.Error(err),
+	)
+	return true
+}
+
 func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 	database, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
@@ -301,13 +335,7 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 	for _, rel := range relations {
 		relation, err := database.Relation(c.proc.Ctx, rel, nil)
 		if err != nil {
-			if isMissingTableForFkCleanup(err) {
-				logutil.Warn(
-					"cannot open relation when drop database fk cleanup",
-					zap.String("table", fmt.Sprintf("%s-%s", dbName, rel)),
-					zap.String("txn info", c.proc.GetTxnOperator().Txn().DebugString()),
-					zap.Error(err),
-				)
+			if logAndSkipMissingRelationByNameForDropDatabase(c, dbName, rel, "cannot open relation when drop database fk cleanup", err) {
 				continue
 			}
 			return err
@@ -335,7 +363,7 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 				// a table refer to it?
 				// the FOREIGN_KEY_CHECKS disabled !!!
 				// so this inexistence is expected, no need to return an error.
-				if isMissingTableForFkCleanup(err) {
+				if isMissingTableByIdForFkCleanup(err) {
 					logutil.Warn(
 						"cannot find the referred table when drop database",
 						zap.String("table", fmt.Sprintf("%s-%s", dbName, rel)),
@@ -360,7 +388,7 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 			}
 			_, _, childTable, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childId)
 			if err != nil {
-				if isMissingTableForFkCleanup(err) {
+				if isMissingTableByIdForFkCleanup(err) {
 					logutil.Warn(
 						"cannot find child table when drop database fk cleanup",
 						zap.String("table", fmt.Sprintf("%s-%s", dbName, rel)),
@@ -381,7 +409,11 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 	return nil
 }
 
-func isMissingTableForFkCleanup(err error) bool {
+func isMissingTableByNameForDropDatabase(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable)
+}
+
+func isMissingTableByIdForFkCleanup(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
 		(moerr.IsMoErrCode(err, moerr.ErrInternal) &&
 			strings.Contains(err.Error(), "can not find table by id"))
@@ -742,10 +774,20 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			multiTableIndexes := make(map[string]*MultiTableIndex)
 			for _, indexDef := range indexTableDef.Indexes {
 
+				// Check for duplicate index names
+				// For vector indexes (IVFFLAT/HNSW), multiple indexDefs share the same IndexName
+				// but have different IndexAlgoTableType (metadata, centroids, entries).
+				// We need to check both IndexName and IndexAlgoTableType for duplicates.
+				isDuplicate := false
 				for i := range addIndex {
-					if indexDef.IndexName == addIndex[i].IndexName {
-						return moerr.NewDuplicateKey(c.proc.Ctx, indexDef.IndexName)
+					if indexDef.IndexName == addIndex[i].IndexName &&
+						indexDef.IndexAlgoTableType == addIndex[i].IndexAlgoTableType {
+						isDuplicate = true
+						break
 					}
+				}
+				if isDuplicate {
+					return moerr.NewDuplicateKey(c.proc.Ctx, indexDef.IndexName)
 				}
 				addIndex = append(addIndex, indexDef)
 
@@ -762,8 +804,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					// 3. FullText index
 					err = s.handleFullTextIndexTable(c, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
 				} else if !indexDef.Unique &&
-					(catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) || catalog.IsHnswIndexAlgo(indexDef.IndexAlgo)) {
-					// 4. IVF and HNSW indexDefs are aggregated and handled later
+					(catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) || catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) ||
+						catalog.IsCagraIndexAlgo(indexDef.IndexAlgo) || catalog.IsIvfpqIndexAlgo(indexDef.IndexAlgo)) {
+					// 4. IVF, CAGRA, IVFPQ and HNSW indexDefs are aggregated and handled later
 					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 						multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 							IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -783,6 +826,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo, false)
 				case catalog.MoIndexHnswAlgo.ToString():
 					err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
+
+				case catalog.MoIndexCagraAlgo.ToString():
+					err = s.handleVectorCagraIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
+
+				case catalog.MoIndexIvfpqAlgo.ToString():
+					err = s.handleVectorIvfpqIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
 				}
 
 				if err != nil {
@@ -924,6 +973,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 							}
 						}
 					case catalog.MoIndexHnswAlgo.ToString():
+					case catalog.MoIndexCagraAlgo.ToString():
+					case catalog.MoIndexIvfpqAlgo.ToString():
 						// PASS
 					default:
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
@@ -946,8 +997,11 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				case catalog.MoIndexIvfFlatAlgo.ToString():
 					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil, tableAlterIndex.ForceSync)
 				case catalog.MoIndexHnswAlgo.ToString():
-					// TODO: we should call refresh Hnsw Index function instead of CreateHnswIndex function
 					err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
+				case catalog.MoIndexCagraAlgo.ToString():
+					err = s.handleVectorCagraIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
+				case catalog.MoIndexIvfpqAlgo.ToString():
+					err = s.handleVectorIvfpqIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
 				}
 
 				if err != nil {
@@ -1704,13 +1758,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		for _, constraint := range ct.Cts {
 			if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
-				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, false)
+				tableID := newRelation.GetTableID(c.proc.Ctx)
+				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, tableID, false, qry.GetTableDef())
 				if err != nil {
 					return err
 				}
 
 				// register index update for IVFFLAT
-				err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, newRelation.GetTableID(c.proc.Ctx))
+				err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, tableID)
 				if err != nil {
 					return err
 				}
@@ -1823,6 +1878,98 @@ func (c *Compile) runSqlWithSystemTenant(sql string) error {
 	return c.runSqlWithOptions(
 		sql, executor.StatementOption{}.WithDisableLog(),
 	)
+}
+
+// reclaimBranchProtectSnapshots is the compile-layer entry point for branch
+// protect snapshot reclaim. It loads mo_branch_metadata as sys, runs the
+// shared reclaim core from the databranchutils package, and submits the
+// resulting DELETE via a sys-tenant executor.
+//
+// Called synchronously by the plain `DROP TABLE` path after flipping
+// table_deleted=true for the affected tid (design §9.2 / §10).
+func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
+	if len(deadTIDs) == 0 {
+		return nil
+	}
+	// Fast path: the vast majority of DROP TABLE operations are on tables
+	// that have nothing to do with data branch. Skip the `FOR UPDATE`
+	// reclaim scan entirely unless at least one of the dead tids actually
+	// participates in mo_branch_metadata (as a child row or as a parent
+	// referenced by some child). This keeps DROP TABLE fast and, more
+	// importantly, avoids lock-contention with unrelated drops that
+	// stacked up in `restore account` / `drop database` cascades.
+	var idList strings.Builder
+	for i, tid := range deadTIDs {
+		if i > 0 {
+			idList.WriteByte(',')
+		}
+		idList.WriteString(strconv.FormatUint(tid, 10))
+	}
+	probeSQL := fmt.Sprintf(
+		"select 1 from %s.%s where table_id in (%s) or p_table_id in (%s) limit 1",
+		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
+		idList.String(), idList.String(),
+	)
+	probeRes, err := c.runSqlWithResult(probeSQL, int32(catalog.System_Account))
+	if err != nil {
+		return err
+	}
+	hasBranchRow := false
+	probeRes.ReadRows(func(n int, _ []*vector.Vector) bool {
+		if n > 0 {
+			hasBranchRow = true
+		}
+		return true
+	})
+	probeRes.Close()
+	if !hasBranchRow {
+		return nil
+	}
+
+	loadDAG := func() (databranchutils.BranchReclaimDag, error) {
+		// `FOR UPDATE` serialises sibling reclaim paths: two concurrent
+		// drops from the same parent would otherwise each miss the
+		// other's table_deleted flip and both skip the ancestor
+		// reclaim, leaking the parent snapshot forever (review PR#24313
+		// blocking issue #1). Only reached when the fast-path probe
+		// above already confirmed the drop touches mo_branch_metadata,
+		// so the lock scope is limited to real branch drops.
+		querySql := fmt.Sprintf(
+			"select table_id, p_table_id, clone_ts, table_deleted from %s.%s for update",
+			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
+		)
+		res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
+		if err != nil {
+			return databranchutils.BranchReclaimDag{}, err
+		}
+		defer res.Close()
+		var rows []databranchutils.DataBranchMetadata
+		res.ReadRows(func(n int, cols []*vector.Vector) bool {
+			if n == 0 {
+				return true
+			}
+			tableIDs := vector.MustFixedColWithTypeCheck[uint64](cols[0])
+			parentIDs := vector.MustFixedColWithTypeCheck[uint64](cols[1])
+			cloneTSs := vector.MustFixedColWithTypeCheck[int64](cols[2])
+			for i := 0; i < n; i++ {
+				deleted := !cols[3].IsNull(uint64(i)) &&
+					vector.GetFixedAtWithTypeCheck[bool](cols[3], i)
+				rows = append(rows, databranchutils.DataBranchMetadata{
+					TableID:      tableIDs[i],
+					CloneTS:      cloneTSs[i],
+					PTableID:     parentIDs[i],
+					TableDeleted: deleted,
+				})
+			}
+			return true
+		})
+		return databranchutils.NewBranchReclaimDag(rows), nil
+	}
+	execDelete := func(snames []string) error {
+		sql := databranchutils.BuildBranchSnapshotDeleteSQL(snames)
+		return c.runSqlWithSystemTenant(sql)
+	}
+	return databranchutils.ReclaimBranchSnapshotsCore(deadTIDs, loadDAG, execDelete)
 }
 
 func (s *Scope) CreateView(c *Compile) error {
@@ -2074,7 +2221,8 @@ func (s *Scope) doCreateIndex(
 			// 3. Master index
 			err = s.handleMasterIndexTable(c, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
 		} else if !indexDef.Unique &&
-			(catalog.IsIvfIndexAlgo(indexAlgo) || catalog.IsHnswIndexAlgo(indexAlgo)) {
+			(catalog.IsIvfIndexAlgo(indexAlgo) || catalog.IsHnswIndexAlgo(indexAlgo) ||
+				catalog.IsIvfpqIndexAlgo(indexAlgo) || catalog.IsCagraIndexAlgo(indexAlgo)) {
 			// 4. IVF indexDefs are aggregated and handled later
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
@@ -2098,6 +2246,10 @@ func (s *Scope) doCreateIndex(
 			err = s.handleVectorIvfFlatIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo, false)
 		case catalog.MoIndexHnswAlgo.ToString():
 			err = s.handleVectorHnswIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+		case catalog.MoIndexCagraAlgo.ToString():
+			err = s.handleVectorCagraIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+		case catalog.MoIndexIvfpqAlgo.ToString():
+			err = s.handleVectorIvfpqIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		}
 
 		if err != nil {
@@ -2232,6 +2384,12 @@ func (s *Scope) handleVectorIvfFlatIndex(
 				return err
 			}
 		}
+	}
+
+	// Skip index data population for CCPR tables when this is a CCPR task transaction.
+	// The index data will be synced via CCPR data synchronization instead.
+	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
+		return nil
 	}
 
 	async, err := catalog.IsIndexAsync(indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
@@ -2600,6 +2758,11 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return err
 	}
 
+	// Check if target table is a CCPR shared table (from publication)
+	if c.shouldBlockCCPRReadOnly(rel.GetTableDef(c.proc.Ctx)) {
+		return moerr.NewCCPRReadOnly(c.proc.Ctx)
+	}
+
 	if rel.GetTableDef(c.proc.Ctx).TableType == catalog.SystemExternalRel {
 		return nil
 	}
@@ -2865,6 +3028,18 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		return err
 	}
 
+	// Check if the table is a CCPR shared table
+	if !isTemp && !isView && !isSource {
+		tableID := rel.GetTableID(c.proc.Ctx)
+		canDrop, err := checkCCPRTableBeforeDrop(c, tableID)
+		if err != nil {
+			return err
+		}
+		if !canDrop {
+			return moerr.NewCCPRReadOnly(c.proc.Ctx)
+		}
+	}
+
 	if !c.disableLock &&
 		!isTemp &&
 		!isView &&
@@ -2926,7 +3101,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			// a table refer to it?
 			// the FOREIGN_KEY_CHECKS disabled !!!
 			// so this inexistence is expected, no need to return an error.
-			if strings.Contains(err.Error(), "can not find table by id") {
+			if isMissingTableByIdForFkCleanup(err) {
 				logutil.Warn(
 					"cannot find the referred table when drop table",
 					zap.String("table", fmt.Sprintf("%s-%s", dbName, tblName)),
@@ -2954,6 +3129,16 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		}
 		_, _, childRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childTblId)
 		if err != nil {
+			if isMissingTableByIdForFkCleanup(err) {
+				logutil.Warn(
+					"cannot find child table when drop table fk cleanup",
+					zap.String("table", fmt.Sprintf("%s-%s", dbName, tblName)),
+					zap.Int("child table id", int(childTblId)),
+					zap.String("txn info", c.proc.GetTxnOperator().Txn().DebugString()),
+					zap.Error(err),
+				)
+				continue
+			}
 			return err
 		}
 		err = s.removeParentTblIdFromChildTable(c, childRelation, tblID)
@@ -3096,6 +3281,19 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			)
 			return err
 		}
+	}
+
+	// Branch Protect Snapshot reclaim: after flipping table_deleted=true for
+	// this tid, check whether any subtree has become fully deleted and if so
+	// release the corresponding `__mo_branch_*` snapshots. This must run
+	// synchronously so drop paths have identical semantics in the frontend
+	// and compile-layer paths (design §5.3 / §9.2).
+	if err = c.reclaimBranchProtectSnapshots([]uint64{tblID}); err != nil {
+		logutil.Error("reclaim branch protect snapshots failed",
+			zap.Uint64("tblID", tblID),
+			zap.Error(err),
+		)
+		return err
 	}
 
 	ps := partitionservice.GetService(c.proc.GetService())
@@ -4648,7 +4846,7 @@ func onPreUpdateCDCTasks(
 	// Step2: update or cancel cdc task
 	var targetCDCStatus string
 	if targetTaskStatus == task.TaskStatus_PauseRequested {
-		targetCDCStatus = cdc.CDCState_Paused
+		targetCDCStatus = cdc.CDCState_Pausing
 	} else {
 		targetCDCStatus = cdc.CDCState_Running
 	}
@@ -5532,4 +5730,182 @@ func isLegal(name string, sqls []string) bool {
 		break
 	}
 	return yes
+}
+
+// checkCCPRTableBeforeDrop checks if a table can be dropped based on CCPR rules.
+// Returns:
+//   - true if the table can be dropped
+//   - false if the table is a CCPR shared object and cannot be dropped
+//   - error if any error occurs
+func checkCCPRTableBeforeDrop(c *Compile, tableID uint64) (bool, error) {
+	// Query mo_ccpr_tables to check if this table is a CCPR shared table
+	querySql := fmt.Sprintf(
+		"SELECT taskid FROM `%s`.`%s` WHERE tableid = %d",
+		catalog.MO_CATALOG,
+		catalog.MO_CCPR_TABLES,
+		tableID,
+	)
+
+	res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+
+	var taskID string
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 0 {
+			// taskid is UUID type, use GetFixedAtWithTypeCheck to read it properly
+			taskID = vector.GetFixedAtWithTypeCheck[types.Uuid](cols[0], 0).String()
+		}
+		return false
+	})
+
+	// If not found in mo_ccpr_tables, allow deletion
+	if taskID == "" {
+		return true, nil
+	}
+
+	// Check if the task exists and is not dropped in mo_ccpr_log
+	checkTaskSql := fmt.Sprintf(
+		"SELECT task_id, drop_at FROM `%s`.`%s` WHERE task_id = '%s'",
+		catalog.MO_CATALOG,
+		catalog.MO_CCPR_LOG,
+		taskID,
+	)
+
+	taskRes, err := c.runSqlWithResult(checkTaskSql, int32(catalog.System_Account))
+	if err != nil {
+		return false, err
+	}
+	defer taskRes.Close()
+
+	var foundTask bool
+	var isDropped bool
+	taskRes.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 0 {
+			foundTask = true
+			// Check if drop_at is null (task not dropped)
+			if !cols[1].IsNull(0) {
+				isDropped = true
+			}
+		}
+		return false
+	})
+
+	// If task doesn't exist or is dropped, allow deletion and log it
+	if !foundTask || isDropped {
+		logutil.Info("CCPR: allowing drop of shared table because task is dropped or not found",
+			zap.Uint64("tableID", tableID),
+			zap.String("taskID", taskID),
+			zap.Bool("taskFound", foundTask),
+			zap.Bool("isDropped", isDropped))
+
+		// Delete the record from mo_ccpr_tables
+		deleteSql := fmt.Sprintf(
+			"DELETE FROM `%s`.`%s` WHERE tableid = %d",
+			catalog.MO_CATALOG,
+			catalog.MO_CCPR_TABLES,
+			tableID,
+		)
+		if err := c.runSqlWithSystemTenant(deleteSql); err != nil {
+			logutil.Warn("CCPR: failed to delete record from mo_ccpr_tables",
+				zap.Uint64("tableID", tableID),
+				zap.Error(err))
+		}
+
+		return true, nil
+	}
+
+	// Task exists and is not dropped, deny deletion
+	return false, nil
+}
+
+// checkCCPRDbBeforeDrop checks if a database can be dropped based on CCPR rules.
+// Returns:
+//   - true if the database can be dropped
+//   - false if the database is a CCPR shared object and cannot be dropped
+//   - error if any error occurs
+func checkCCPRDbBeforeDrop(c *Compile, dbID uint64) (bool, error) {
+	// Query mo_ccpr_dbs to check if this database is a CCPR shared database
+	querySql := fmt.Sprintf(
+		"SELECT taskid FROM `%s`.`%s` WHERE dbid = %d",
+		catalog.MO_CATALOG,
+		catalog.MO_CCPR_DBS,
+		dbID,
+	)
+
+	res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+
+	var taskID string
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 0 {
+			// taskid is UUID type, use GetFixedAtWithTypeCheck to read it properly
+			taskID = vector.GetFixedAtWithTypeCheck[types.Uuid](cols[0], 0).String()
+		}
+		return false
+	})
+
+	// If not found in mo_ccpr_dbs, allow deletion
+	if taskID == "" {
+		return true, nil
+	}
+
+	// Check if the task exists and is not dropped in mo_ccpr_log
+	checkTaskSql := fmt.Sprintf(
+		"SELECT task_id, drop_at FROM `%s`.`%s` WHERE task_id = '%s'",
+		catalog.MO_CATALOG,
+		catalog.MO_CCPR_LOG,
+		taskID,
+	)
+
+	taskRes, err := c.runSqlWithResult(checkTaskSql, int32(catalog.System_Account))
+	if err != nil {
+		return false, err
+	}
+	defer taskRes.Close()
+
+	var foundTask bool
+	var isDropped bool
+	taskRes.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 0 {
+			foundTask = true
+			// Check if drop_at is null (task not dropped)
+			if !cols[1].IsNull(0) {
+				isDropped = true
+			}
+		}
+		return false
+	})
+
+	// If task doesn't exist or is dropped, allow deletion and log it
+	if !foundTask || isDropped {
+		logutil.Info("CCPR: allowing drop of shared database because task is dropped or not found",
+			zap.Uint64("dbID", dbID),
+			zap.String("taskID", taskID),
+			zap.Bool("taskFound", foundTask),
+			zap.Bool("isDropped", isDropped))
+
+		// Delete the record from mo_ccpr_dbs
+		deleteSql := fmt.Sprintf(
+			"DELETE FROM `%s`.`%s` WHERE dbid = %d",
+			catalog.MO_CATALOG,
+			catalog.MO_CCPR_DBS,
+			dbID,
+		)
+		if err := c.runSqlWithSystemTenant(deleteSql); err != nil {
+			logutil.Warn("CCPR: failed to delete record from mo_ccpr_dbs",
+				zap.Uint64("dbID", dbID),
+				zap.Error(err))
+		}
+
+		return true, nil
+	}
+
+	// Task exists and is not dropped, deny deletion
+	return false, nil
 }

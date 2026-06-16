@@ -1,0 +1,27 @@
+SELECT stddev_samp(x), var_samp(x) FROM (SELECT 5 AS x) t;
+➤ stddev_samp(x)[8,54,0]  ¦  var_samp(x)[8,54,0]  𝄀
+null  ¦  null
+SELECT stddev_samp(x), var_samp(x) FROM (SELECT 5 AS x union select 6 as x) t;
+➤ stddev_samp(x)[8,54,0]  ¦  var_samp(x)[8,54,0]  𝄀
+0.7071067811865476  ¦  0.5
+SELECT stddev_samp(x), var_samp(x) FROM (SELECT 5 AS x union select 5 as x) t;
+➤ stddev_samp(x)[8,54,0]  ¦  var_samp(x)[8,54,0]  𝄀
+null  ¦  null
+SELECT stddev_samp(x), var_samp(x) FROM (SELECT 5 AS x union all select 6 as x) t;
+➤ stddev_samp(x)[8,54,0]  ¦  var_samp(x)[8,54,0]  𝄀
+0.7071067811865476  ¦  0.5
+SELECT stddev_samp(x), var_samp(x) FROM (SELECT 5 AS x union all select 5 as x) t;
+➤ stddev_samp(x)[8,54,0]  ¦  var_samp(x)[8,54,0]  𝄀
+0.0  ¦  0.0
+SELECT stddev_samp(DISTINCT x), var_samp(DISTINCT x) FROM (SELECT 5 AS x union select 6 as x) t;
+➤ stddev_samp(distinct x)[8,54,0]  ¦  var_samp(distinct x)[8,54,0]  𝄀
+0.7071067811865476  ¦  0.5
+SELECT stddev_samp(DISTINCT x), var_samp(DISTINCT x) FROM (SELECT 5 AS x union select 5 as x) t;
+➤ stddev_samp(distinct x)[8,54,0]  ¦  var_samp(distinct x)[8,54,0]  𝄀
+null  ¦  null
+SELECT stddev_samp(DISTINCT x), var_samp(DISTINCT x) FROM (SELECT 5 AS x union all select 6 as x) t;
+➤ stddev_samp(distinct x)[8,54,0]  ¦  var_samp(distinct x)[8,54,0]  𝄀
+0.7071067811865476  ¦  0.5
+SELECT stddev_samp(DISTINCT x), var_samp(DISTINCT x) FROM (SELECT 5 AS x union all select 5 as x) t;
+➤ stddev_samp(distinct x)[8,54,0]  ¦  var_samp(distinct x)[8,54,0]  𝄀
+null  ¦  null

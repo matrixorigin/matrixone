@@ -37,27 +37,33 @@ ALTER TABLE t1 MODIFY COLUMN a int DEFAULT NULL;
 
 SET @inner_sql = (
     SELECT GROUP_CONCAT(
-                   DISTINCT CONCAT(
-                    'SELECT ''', mi.index_table_name,
-                    ''' AS index_table_name, COUNT(*) AS cnt FROM `',
-                    mi.index_table_name, '`'
-                            ) SEPARATOR ' UNION ALL '
+                   CONCAT(
+                    'SELECT ''', meta.index_key,
+                    ''' AS index_key, COUNT(*) AS cnt FROM `',
+                    meta.index_table_name, '`'
+                            ) ORDER BY meta.index_key SEPARATOR ' UNION ALL '
            )
-    FROM mo_catalog.mo_indexes mi
-             JOIN mo_catalog.mo_tables mt ON mi.table_id = mt.rel_id
-    WHERE mt.relname = 't1'
-      AND mt.reldatabase = 'db'
-      AND mi.type IN ('MULTIPLE', 'UNIQUE')
-      AND mi.index_table_name IS NOT NULL
-      AND mi.index_table_name != ''
-      AND mi.column_name <> 'question'
-      AND mi.column_name <> 'keyword'
+    FROM (
+             SELECT mi.index_table_name,
+                    CONCAT(mi.type, ':', MIN(mi.column_name)) AS index_key
+             FROM mo_catalog.mo_indexes mi
+                      JOIN mo_catalog.mo_tables mt ON mi.table_id = mt.rel_id
+             WHERE mt.relname = 't1'
+               AND mt.reldatabase = 'db'
+               AND mi.type IN ('MULTIPLE', 'UNIQUE', 'FULLTEXT')
+               AND mi.index_table_name IS NOT NULL
+               AND mi.index_table_name != ''
+               AND mi.column_name <> 'question'
+               AND mi.column_name <> 'keyword'
+               AND mi.column_name <> '__mo_alias_id'
+             GROUP BY mi.index_table_name, mi.type
+         ) meta
 );
 
 SET @sql = CONCAT(
         'SELECT * FROM (',
         @inner_sql,
-        ') AS t ORDER BY cnt DESC'
+        ') AS t ORDER BY index_key'
            );
 
 PREPARE stmt FROM @sql;
@@ -76,27 +82,33 @@ ALTER TABLE t2 MODIFY COLUMN c int DEFAULT NULL;
 
 SET @inner_sql = (
     SELECT GROUP_CONCAT(
-                   DISTINCT CONCAT(
-                    'SELECT ''', mi.index_table_name,
-                    ''' AS index_table_name, COUNT(*) AS cnt FROM `',
-                    mi.index_table_name, '`'
-                            ) SEPARATOR ' UNION ALL '
+                   CONCAT(
+                    'SELECT ''', meta.index_key,
+                    ''' AS index_key, COUNT(*) AS cnt FROM `',
+                    meta.index_table_name, '`'
+                            ) ORDER BY meta.index_key SEPARATOR ' UNION ALL '
            )
-    FROM mo_catalog.mo_indexes mi
-             JOIN mo_catalog.mo_tables mt ON mi.table_id = mt.rel_id
-    WHERE mt.relname = 't2'
-      AND mt.reldatabase = 'db'
-      AND mi.type IN ('MULTIPLE', 'UNIQUE')
-      AND mi.index_table_name IS NOT NULL
-      AND mi.index_table_name != ''
-      AND mi.column_name <> 'question'
-      AND mi.column_name <> 'keyword'
+    FROM (
+             SELECT mi.index_table_name,
+                    CONCAT(mi.type, ':', MIN(mi.column_name)) AS index_key
+             FROM mo_catalog.mo_indexes mi
+                      JOIN mo_catalog.mo_tables mt ON mi.table_id = mt.rel_id
+             WHERE mt.relname = 't2'
+               AND mt.reldatabase = 'db'
+               AND mi.type IN ('MULTIPLE', 'UNIQUE', 'FULLTEXT')
+               AND mi.index_table_name IS NOT NULL
+               AND mi.index_table_name != ''
+               AND mi.column_name <> 'question'
+               AND mi.column_name <> 'keyword'
+               AND mi.column_name <> '__mo_alias_id'
+             GROUP BY mi.index_table_name, mi.type
+         ) meta
 );
 
 SET @sql = CONCAT(
         'SELECT * FROM (',
         @inner_sql,
-        ') AS t ORDER BY cnt DESC'
+        ') AS t ORDER BY index_key'
            );
 
 PREPARE stmt FROM @sql;

@@ -91,7 +91,10 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 		if err != nil {
 			return nil, err
 		}
-		idxtblcfg.ThreadsBuild = vectorindex.GetConcurrencyForBuild(val.(int64))
+		// Force single-thread build until USearch #735 is fixed (concurrent add()
+		// orphans HNSW graph nodes -> flaky recall@1). See
+		// vectorindex.GetConcurrencyForSingleThreadBuild for the one-line revert.
+		idxtblcfg.ThreadsBuild = vectorindex.GetConcurrencyForSingleThreadBuild(val.(int64))
 
 		idxcap, err := sqlproc.GetResolveVariableFunc()("hnsw_max_index_capacity", true, false)
 		if err != nil {
@@ -100,7 +103,10 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 		idxtblcfg.IndexCapacity = idxcap.(int64)
 	} else {
 
-		idxtblcfg.ThreadsBuild = vectorindex.GetConcurrencyForBuild(0)
+		// Force single-thread build until USearch #735 is fixed (concurrent add()
+		// orphans HNSW graph nodes -> flaky recall@1). See
+		// vectorindex.GetConcurrencyForSingleThreadBuild for the one-line revert.
+		idxtblcfg.ThreadsBuild = vectorindex.GetConcurrencyForSingleThreadBuild(0)
 		idxtblcfg.IndexCapacity = 1000000
 	}
 

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -187,6 +188,17 @@ func TestTunnelClientToServer(t *testing.T) {
 		t.Fatalf("require no error, but got %v", err)
 	default:
 	}
+}
+
+func TestWrapPipeSendError(t *testing.T) {
+	err := wrapPipeSendError(pipeServerToClient, net.ErrClosed)
+	require.Equal(t, codeClientDisconnect, getErrorCode(err))
+	require.True(t, errors.Is(err, net.ErrClosed))
+	require.True(t, isConnEndErr(err))
+
+	err = wrapPipeSendError(pipeClientToServer, net.ErrClosed)
+	require.Equal(t, codeNone, getErrorCode(err))
+	require.True(t, errors.Is(err, net.ErrClosed))
 }
 
 func TestTunnelServerClient(t *testing.T) {

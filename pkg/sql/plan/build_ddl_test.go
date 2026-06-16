@@ -433,6 +433,55 @@ func TestBuildAlterTable(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestBuildCreateIndexOnExternalTableError(t *testing.T) {
+	mock := NewEmptyMockOptimizer()
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.objects["ext_idx"] = &plan.ObjectRef{
+		SchemaName: "tpch",
+		ObjName:    "ext_idx",
+	}
+	ctx.tables["ext_idx"] = &plan.TableDef{
+		Name:      "ext_idx",
+		TableType: catalog.SystemExternalRel,
+		Cols: []*plan.ColDef{
+			{Name: "col_int32", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "col_varchar", Typ: plan.Type{Id: int32(types.T_varchar), Width: 100}},
+			{Name: "part_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+	}
+
+	sqls := []string{
+		"CREATE INDEX idx_ext ON ext_idx(col_int32);",
+		"CREATE UNIQUE INDEX uidx_ext ON ext_idx(col_int32);",
+		"CREATE FULLTEXT INDEX fidx_ext ON ext_idx(col_varchar);",
+		"ALTER TABLE ext_idx ADD INDEX idx_ext2 (col_int32);",
+		"ALTER TABLE ext_idx ADD UNIQUE (col_varchar);",
+		"ALTER TABLE ext_idx ADD FULLTEXT INDEX fidx_ext2 (col_varchar);",
+	}
+	for _, sql := range sqls {
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+		require.Contains(t, err.Error(), "cannot create index on external table", sql)
+	}
+}
+
+func TestBuildCreateExternalTableInlineIndexError(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE EXTERNAL TABLE ext_inline_col_key (id INT KEY) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_col_unique (id INT UNIQUE) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_col_pk (id INT PRIMARY KEY) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_table_key (id INT, KEY (id)) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_table_unique (id INT, UNIQUE KEY uk_id (id)) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_table_fulltext (doc VARCHAR(100), FULLTEXT ft_doc (doc)) INFILE {'filepath'='data.txt', 'format'='csv'};",
+	}
+	for _, sql := range sqls {
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+		require.Contains(t, err.Error(), "cannot create index on external table", sql)
+	}
+}
+
 func TestBuildAlterTableError(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	// should pass
@@ -442,6 +491,41 @@ func TestBuildAlterTableError(t *testing.T) {
 		"ALTER TABLE emp ADD UNIQUE INDEX idx1 ((empno+20), (sal*30));",
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func TestGeometryDDLGuardsSQLPaths(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime("", rt)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
+
+	sqlerrs := []string{
+		"CREATE TABLE geo_default_err (g GEOMETRY DEFAULT 'POINT(1 1)');",
+		"CREATE TABLE geo_pk_err (g GEOMETRY PRIMARY KEY);",
+		"CREATE TABLE geo_uk_err (g GEOMETRY UNIQUE KEY);",
+		"CREATE TABLE geo_idx_err (g GEOMETRY, KEY(g));",
+		"CREATE TABLE geo_spatial_nullable_err (id INT PRIMARY KEY, g POINT, KEY idx_g USING RTREE (g));",
+		"ALTER TABLE emp ADD COLUMN g GEOMETRY UNIQUE KEY;",
+		"ALTER TABLE emp ADD COLUMN g GEOMETRY PRIMARY KEY;",
+	}
+	runTestShouldError(mock, t, sqlerrs)
+}
+
+func TestGeometryColumnValidationSQLPaths(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime("", rt)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
+
+	sqls := []string{
+		"CREATE TABLE geo_point_ok (g POINT);",
+		"CREATE TABLE geo_any_ok (g GEOMETRY);",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
 }
 
 func TestCreateSingleTable(t *testing.T) {
@@ -458,6 +542,16 @@ func TestCreateTableAsSelect(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{"CREATE TABLE t1 (a int, b char(5)); CREATE TABLE t2 (c float) as select b, a from t1"}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestCreateTableAsSelectPreservesIntervalSyntax(t *testing.T) {
+	got := restoreIntervalSyntaxForCTAS(
+		"select date_add(col2, interval(45, day)), date_sub(col2, interval(5, day)) from time01",
+	)
+	require.Contains(t, got, "interval 45 day")
+	require.Contains(t, got, "interval 5 day")
+	require.NotContains(t, got, "interval(45, day)")
+	require.NotContains(t, got, "interval(5, day)")
 }
 
 func TestParseDuration(t *testing.T) {

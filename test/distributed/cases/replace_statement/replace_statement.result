@@ -106,7 +106,7 @@ unique key(a, b)
 replace into t5 values (1, 1, '');
 select * from t5;
 a    b    c
-1    1
+1    1    
 replace into t5 values (1, 1, 'replace');
 select * from t5;
 a    b    c
@@ -115,7 +115,7 @@ replace into t5 values (1, 2, '');
 select * from t5;
 a    b    c
 1    1    replace
-1    2
+1    2    
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

@@ -20,6 +20,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -173,4 +174,21 @@ func TestBuildInsertOnDuplicateUpdatePlansReleasesDmlPlanCtxOnError(t *testing.T
 	)
 	require.ErrorIs(t, err, wantErr)
 	require.True(t, putCalled)
+}
+
+func TestMakeInsertValueConstExprGeometry(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	colType := types.T_geometry.ToType()
+	numVal := tree.NewNumVal("POINT(1 1)", "POINT(1 1)", false, tree.P_char)
+
+	expr, err := MakeInsertValueConstExpr(proc, numVal, &colType)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_geometry), expr.Typ.Id)
+
+	fn := expr.GetF()
+	require.NotNil(t, fn)
+	require.Equal(t, "cast", fn.Func.ObjName)
+	require.Equal(t, int32(types.T_varchar), fn.Args[0].Typ.Id)
+	require.Equal(t, "POINT(1 1)", fn.Args[0].GetLit().GetSval())
+	require.Equal(t, int32(types.T_geometry), fn.Args[1].Typ.Id)
 }

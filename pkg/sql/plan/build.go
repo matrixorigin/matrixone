@@ -108,8 +108,12 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 
 	rootId, err := builder.bindReplace(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
-			return buildReplace(stmt, ctx, false, isPrepareStmt)
+		// REPLACE is the one DML entry point with no legacy-planner fallback:
+		// map the resolver's external-table fallback sentinel (raised for
+		// writable external tables) to the user-facing error every other DML
+		// kind produces, instead of leaking the internal signal to the client.
+		if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) && err.Error() == externalTableUnsupportedDMLMsg {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
 		}
 		return nil, err
 	}
@@ -121,6 +125,42 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 	if err != nil {
 		return nil, err
 	}
+
+	// Generate DetectSqls for self-referencing FK constraint checks.
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "replace")
+	if err != nil {
+		return nil, err
+	}
+	if len(tblInfo.tableDefs) == 1 {
+		sqls, err := genSqlsForCheckFKSelfRefer(
+			ctx.GetContext(),
+			tblInfo.objRef[0].SchemaName,
+			tblInfo.tableDefs[0].Name,
+			tblInfo.tableDefs[0].Cols,
+			tblInfo.tableDefs[0].Fkeys,
+		)
+		if err != nil {
+			return nil, err
+		}
+		query.DetectSqls = sqls
+
+		// Generate pre-check SQLs for parent→child safety (RESTRICT).
+		preCheckSqls, err := genPreCheckSqlsForReplaceFKSelfRefer(
+			ctx.GetContext(),
+			tblInfo.objRef[0].SchemaName,
+			tblInfo.tableDefs[0].Name,
+			tblInfo.tableDefs[0].Cols,
+			tblInfo.tableDefs[0].Fkeys,
+			stmt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for _, sql := range preCheckSqls {
+			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_CHK:"+sql)
+		}
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -402,6 +442,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildUnLockTables(stmt, ctx)
 	case *tree.ShowCreatePublications:
 		return buildShowCreatePublications(stmt, ctx)
+	case *tree.ShowPublicationCoverage:
+		return buildShowPublicationCoverage(stmt, ctx)
 	case *tree.ShowStages:
 		return buildShowStages(stmt, ctx)
 	case *tree.ShowSnapShots:

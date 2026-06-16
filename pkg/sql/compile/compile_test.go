@@ -26,13 +26,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -40,12 +47,16 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -67,6 +78,18 @@ type Ws struct {
 }
 
 func (w *Ws) SetCloneTxn(snapshot int64) {}
+
+func (w *Ws) SetCCPRTxn() {}
+
+func (w *Ws) IsCCPRTxn() bool { return false }
+
+func (w *Ws) SetCCPRTaskID(taskID string) {}
+
+func (w *Ws) GetCCPRTaskID() string { return "" }
+
+func (w *Ws) SetSyncProtectionJobID(jobID string) {}
+
+func (w *Ws) GetSyncProtectionJobID() string { return "" }
 
 func (w *Ws) Readonly() bool {
 	return false
@@ -133,6 +156,105 @@ func NewMockCompile(t *testing.T) *Compile {
 	}
 }
 
+func TestShouldPrePipelineLockTable(t *testing.T) {
+	c := NewMockCompile(t)
+	target := &plan.LockTarget{LockTable: true}
+
+	c.pn = &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{StmtType: plan.Query_INSERT},
+		},
+	}
+	require.False(t, c.shouldPrePipelineLockTable(target))
+	require.True(t, target.LockTableAtTheEnd)
+
+	target = &plan.LockTarget{LockTable: true}
+	c.pn = &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{StmtType: plan.Query_INSERT, LoadTag: true},
+		},
+	}
+	require.True(t, c.shouldPrePipelineLockTable(target))
+	require.False(t, target.LockTableAtTheEnd)
+
+	target = &plan.LockTarget{LockTable: true}
+	c.pn = &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{StmtType: plan.Query_UPDATE},
+		},
+	}
+	require.True(t, c.shouldPrePipelineLockTable(target))
+	require.False(t, target.LockTableAtTheEnd)
+
+	target = &plan.LockTarget{LockTable: true}
+	c.pn = &plan.Plan{}
+	require.True(t, c.shouldPrePipelineLockTable(target))
+	require.False(t, target.LockTableAtTheEnd)
+
+	target = &plan.LockTarget{LockTable: false, LockTableAtTheEnd: true}
+	require.False(t, c.shouldPrePipelineLockTable(target))
+	require.False(t, target.LockTableAtTheEnd)
+}
+
+func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			runtime.SetupServiceBasedRuntime("s1", rt)
+			lockservice.RunLockServicesForTest(
+				zap.DebugLevel,
+				[]string{"s1"},
+				time.Second,
+				func(_ lockservice.LockTableAllocator, services []lockservice.LockService) {
+					rt.SetGlobalVariables(runtime.LockService, services[0])
+
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					defer cancel()
+
+					sender, err := rpc.NewSender(rpc.Config{}, rt)
+					require.NoError(t, err)
+
+					txnClient := client.NewTxnClient("", sender, client.WithLockService(services[0]))
+					txnClient.Resume()
+					defer func() {
+						require.NoError(t, txnClient.Close())
+					}()
+
+					txnOp, err := txnClient.New(ctx, timestamp.Timestamp{})
+					require.NoError(t, err)
+					defer func() {
+						require.NoError(t, txnOp.Rollback(ctx))
+					}()
+
+					proc := process.NewTopProcess(
+						ctx,
+						mpool.MustNewZero(),
+						txnClient,
+						txnOp,
+						nil,
+						services[0],
+						nil,
+						nil,
+						nil,
+						nil,
+						nil)
+					c := &Compile{
+						proc: proc,
+						lockTables: map[uint64]*plan.LockTarget{
+							10: {TableId: 10, PrimaryColTyp: plan.Type{Id: int32(types.T_int32)}},
+							11: {TableId: 11, PrimaryColTyp: plan.Type{Id: int32(types.T_int32)}},
+						},
+					}
+
+					require.NoError(t, c.lockTable())
+					require.True(t, txnOp.HasLockTable(10))
+					require.True(t, txnOp.HasLockTable(11))
+				},
+				nil,
+			)
+		},
+	)
+}
 func TestCompile(t *testing.T) {
 	c, err := cnclient.NewPipelineClient("", "test", &cnclient.PipelineConfig{})
 	require.NoError(t, err)
@@ -256,6 +378,7 @@ func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.Tx
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+	txnOperator.EXPECT().CheckLockTableBinds(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -275,6 +398,7 @@ func newTestTxnClientAndOpWithPessimistic(ctrl *gomock.Controller) (client.TxnCl
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+	txnOperator.EXPECT().CheckLockTableBinds(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -415,4 +539,109 @@ func TestLockMeta_doLock(t *testing.T) {
 	eng := mock_frontend.NewMockEngine(ctrl)
 
 	assert.Error(t, lm.doLock(eng, proc))
+}
+
+func TestCompileShuffleGroupV2FallbackWhenScopeMcpuDiffersFromDop(t *testing.T) {
+	c := newCompileForShuffleGroupV2Test(t)
+	aggNode, nodes := newShuffleGroupV2TestNodes(16)
+	scope := newShuffleGroupV2InputScope(t, 1)
+
+	result := c.compileShuffleGroupV2(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 1)
+	require.Same(t, scope, result[0])
+	require.IsType(t, &group.Group{}, result[0].RootOp)
+	require.False(t, hasOperatorType(result[0].RootOp, vm.ShuffleV2))
+}
+
+func TestCompileShuffleGroupV2FallbackToMergeGroupWhenInputScopesNotSingle(t *testing.T) {
+	c := newCompileForShuffleGroupV2Test(t)
+	aggNode, nodes := newShuffleGroupV2TestNodes(16)
+	scope1 := newShuffleGroupV2InputScope(t, 1)
+	scope2 := newShuffleGroupV2InputScope(t, 1)
+
+	result := c.compileShuffleGroupV2(aggNode, []*Scope{scope1, scope2}, nodes)
+
+	require.Len(t, result, 1)
+	require.IsType(t, &group.MergeGroup{}, result[0].RootOp)
+	require.False(t, hasOperatorType(result[0].RootOp, vm.ShuffleV2))
+}
+
+func TestCompileShuffleGroupV2UsesShuffleWhenScopeMcpuMatchesDop(t *testing.T) {
+	c := newCompileForShuffleGroupV2Test(t)
+	aggNode, nodes := newShuffleGroupV2TestNodes(16)
+	scope := newShuffleGroupV2InputScope(t, 16)
+
+	result := c.compileShuffleGroupV2(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 1)
+	require.Same(t, scope, result[0])
+	require.IsType(t, &group.Group{}, result[0].RootOp)
+	shuffleOp, ok := result[0].RootOp.GetOperatorBase().GetChildren(0).(*shuffleV2.ShuffleV2)
+	require.True(t, ok)
+	require.Equal(t, int32(16), shuffleOp.BucketNum)
+	require.Equal(t, int32(0), shuffleOp.CurrentShuffleIdx)
+}
+
+func newCompileForShuffleGroupV2Test(t *testing.T) *Compile {
+	c := NewMockCompile(t)
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.anal = &AnalyzeModule{}
+	return c
+}
+
+func newShuffleGroupV2InputScope(t *testing.T, mcpu int) *Scope {
+	scope := newScope(Merge)
+	scope.NodeInfo = engine.Node{Addr: "127.0.0.1:18000", Mcpu: mcpu}
+	scope.Proc = testutil.NewProcess(t)
+	scope.setRootOperator(colexec.NewMockOperator())
+	return scope
+}
+
+func newShuffleGroupV2TestNodes(dop int32) (*plan.Node, []*plan.Node) {
+	col := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{ColPos: 0},
+		},
+	}
+	child := &plan.Node{
+		NodeId:   3,
+		NodeType: plan.Node_SORT,
+		Stats:    &plan.Stats{Dop: dop},
+		ProjectList: []*plan.Expr{
+			col,
+		},
+	}
+	agg := &plan.Node{
+		NodeId:   4,
+		NodeType: plan.Node_AGG,
+		Stats: &plan.Stats{
+			Dop: dop,
+			HashmapStats: &plan.HashMapStats{
+				Shuffle:       true,
+				ShuffleColIdx: 0,
+				ShuffleType:   plan.ShuffleType_Range,
+				ShuffleMethod: plan.ShuffleMethod_Normal,
+			},
+		},
+		Children: []int32{0},
+		GroupBy:  []*plan.Expr{col},
+	}
+	return agg, []*plan.Node{child}
+}
+
+func hasOperatorType(op vm.Operator, opType vm.OpType) bool {
+	if op == nil {
+		return false
+	}
+	if op.OpType() == opType {
+		return true
+	}
+	for i := 0; i < op.GetOperatorBase().NumChildren(); i++ {
+		if hasOperatorType(op.GetOperatorBase().GetChildren(i), opType) {
+			return true
+		}
+	}
+	return false
 }

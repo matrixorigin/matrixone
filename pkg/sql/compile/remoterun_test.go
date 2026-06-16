@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -303,6 +304,49 @@ func Test_convertToVmInstruction(t *testing.T) {
 	}
 }
 
+func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
+	ctx := &scopeContext{
+		id:     1,
+		root:   &scopeContext{},
+		parent: &scopeContext{},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+
+	shards := []*pipeline.ParquetRowGroupShard{
+		{
+			FileIndex:     2,
+			RowGroupStart: 3,
+			RowGroupEnd:   5,
+			NumRows:       1024,
+			Bytes:         4096,
+		},
+	}
+	op := external.NewArgument().WithEs(
+		&external.ExternalParam{
+			ExParamConst: external.ExParamConst{
+				FileList:              []string{"s3://bucket/part.parquet"},
+				FileSize:              []int64{8192},
+				FileOffsetTotal:       []*pipeline.FileOffset{{Offset: []int64{0, -1}}},
+				ParquetRowGroupShards: shards,
+			},
+			ExParam: external.ExParam{
+				Fileparam: &external.ExFileparam{},
+				Filter:    &external.FilterParam{},
+			},
+		},
+	)
+
+	_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, shards, pipeInstr.ExternalScan.ParquetRowGroupShards)
+
+	restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+	require.NoError(t, err)
+	restoredExternal := restored.(*external.External)
+	require.Equal(t, shards, restoredExternal.Es.ParquetRowGroupShards)
+}
+
 func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,
@@ -349,11 +393,12 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
 				{
-					ObjRef:        &plan.ObjectRef{ObjName: "t1"},
-					TableDef:      &plan.TableDef{Name: "t1"},
-					InsertCols:    []int{0, 1, 2},
-					DeleteCols:    []int{3, 4},
-					PartitionCols: []int{5, 6},
+					ObjRef:         &plan.ObjectRef{ObjName: "t1"},
+					TableDef:       &plan.TableDef{Name: "t1"},
+					InsertCols:     []int{0, 1, 2},
+					DeleteCols:     []int{3, 4},
+					PartitionCols:  []int{5, 6},
+					InsertPkColIdx: 1,
 				},
 			},
 			Action: multi_update.UpdateWriteTable,
@@ -368,7 +413,40 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, []int{5, 6}, restoredOp.MultiUpdateCtx[0].PartitionCols)
 		require.Equal(t, []int{0, 1, 2}, restoredOp.MultiUpdateCtx[0].InsertCols)
 		require.Equal(t, []int{3, 4}, restoredOp.MultiUpdateCtx[0].DeleteCols)
+		require.Equal(t, 1, restoredOp.MultiUpdateCtx[0].InsertPkColIdx)
 		require.True(t, restoredOp.IsRemote)
+	})
+
+	t.Run("DedupJoin_DedupBuildKeepLast", func(t *testing.T) {
+		op := &dedupjoin.DedupJoin{
+			Conditions:         [][]*plan.Expr{nil, nil},
+			DedupBuildKeepLast: true,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.DedupJoin.DedupBuildKeepLast)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		require.True(t, restored.(*dedupjoin.DedupJoin).DedupBuildKeepLast)
+	})
+
+	t.Run("MergeOrder_SpillThreshold", func(t *testing.T) {
+		op := &mergeorder.MergeOrder{
+			OrderBySpecs:   []*planpb.OrderBySpec{{Flag: planpb.OrderBySpec_DESC}},
+			SpillThreshold: 4096,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, int64(4096), pipeInstr.SpillMem)
+		require.Len(t, pipeInstr.OrderBy, 1)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*mergeorder.MergeOrder)
+		require.Equal(t, int64(4096), restoredOp.SpillThreshold)
+		require.Len(t, restoredOp.OrderBySpecs, 1)
+		require.Equal(t, planpb.OrderBySpec_DESC, restoredOp.OrderBySpecs[0].Flag)
 	})
 
 	t.Run("Deletion_Engine", func(t *testing.T) {
@@ -514,7 +592,7 @@ func Test_GetProcByUuid(t *testing.T) {
 		colexec.Get().DeleteUuids([]uuid.UUID{uid})
 
 		// get a nil p and c.
-		p, c, err := receiver.GetProcByUuid(uid, time.Second)
+		p, c, err := receiver.GetProcByUuid(uid)
 		require.Nil(t, err)
 		require.Nil(t, p)
 		require.Nil(t, c)
@@ -531,25 +609,11 @@ func Test_GetProcByUuid(t *testing.T) {
 			connectionCtx: cctx,
 		}
 		ccancel()
-		p, _, err := receiver.GetProcByUuid(uuid.UUID{}, time.Second)
+		p, _, err := receiver.GetProcByUuid(uuid.UUID{})
 		require.Nil(t, err)
 		require.Nil(t, p)
 
 		// two action to delete the uuid can make sure the producer and consumer flag uuid done.
-		colexec.Get().DeleteUuids([]uuid.UUID{{}})
-		colexec.Get().DeleteUuids([]uuid.UUID{{}})
-	}
-
-	{
-		// if receiver gets proc timeout, should exit.
-		// 1. return error.
-		receiver := &messageReceiverOnServer{
-			connectionCtx: context.TODO(),
-		}
-		p, _, err := receiver.GetProcByUuid(uuid.UUID{}, time.Second)
-		require.NotNil(t, err)
-		require.Nil(t, p)
-
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
 	}
@@ -567,7 +631,7 @@ func Test_GetProcByUuid(t *testing.T) {
 		c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
 		require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
 
-		p, c, err := receiver.GetProcByUuid(uid, time.Second)
+		p, c, err := receiver.GetProcByUuid(uid)
 		require.Nil(t, err)
 		require.Equal(t, p0, p)
 		require.Equal(t, c0, c)
@@ -585,6 +649,51 @@ func Test_GetProcByUuid(t *testing.T) {
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
 	}
+}
+
+func Test_GetProcByUuid_ConcurrentWake(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	uid, err := uuid.NewV7()
+	require.Nil(t, err)
+
+	receiver := &messageReceiverOnServer{
+		connectionCtx: context.TODO(),
+		messageCtx:    context.TODO(),
+	}
+
+	// Start GetProcByUuid in a goroutine BEFORE PutProcIntoUuidMap.
+	// This tests the wait-then-wake path: the receiver must block on the
+	// changed channel and wake exactly once when the UUID is inserted.
+	type result struct {
+		proc *process.Process
+		ch   process.RemotePipelineInformationChannel
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		p, c, e := receiver.GetProcByUuid(uid)
+		done <- result{p, c, e}
+	}()
+
+	// Give the goroutine time to enter the wait.
+	time.Sleep(10 * time.Millisecond)
+
+	p0 := &process.Process{}
+	c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
+	require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
+
+	select {
+	case r := <-done:
+		require.Nil(t, r.err)
+		require.Equal(t, p0, r.proc)
+		require.Equal(t, c0, r.ch)
+	case <-time.After(3 * time.Second):
+		t.Fatal("GetProcByUuid did not wake after PutProcIntoUuidMap")
+	}
+
+	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+	colexec.Get().DeleteUuids([]uuid.UUID{uid})
 }
 
 var _ morpc.Stream = &fakeStreamSender{}
@@ -641,7 +750,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		Proc:   proc,
 		RootOp: connector.NewArgument(),
 	}
-	_, withoutOut, _, err := prepareRemoteRunSendingData("", s1)
+	_, withoutOut, _, _, err := prepareRemoteRunSendingData("", s1, proc)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 	require.NotNil(t, s1.RootOp)
@@ -655,7 +764,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	}
 	s2.RootOp.AppendChild(value_scan.NewArgument())
 	originChild := s2.RootOp.GetOperatorBase().GetChildren(0)
-	_, withoutOut, _, err = prepareRemoteRunSendingData("", s2)
+	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s2, proc)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 	require.Equal(t, 1, s2.RootOp.GetOperatorBase().NumChildren())
@@ -668,7 +777,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		RootOp: value_scan.NewArgument(),
 	}
 	s3.RootOp.AppendChild(value_scan.NewArgument())
-	_, withoutOut, _, err = prepareRemoteRunSendingData("", s3)
+	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s3, proc)
 	require.NoError(t, err)
 	require.True(t, withoutOut)
 }

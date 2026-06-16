@@ -568,6 +568,100 @@ func TestPrefixIn(t *testing.T) {
 	require.Equal(t, []byte{4}, pkIter.iter.Item().Bytes)
 }
 
+func TestExactPrimaryKeyReplayIter(t *testing.T) {
+	state := NewPartitionState("", false, 42, false)
+	ctx := context.Background()
+	pool := mpool.MustNewZero()
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	sid := objectio.NewSegmentid()
+	buildRowID := func(i int) types.Rowid {
+		blk := objectio.NewBlockid(sid, uint16(i), 0)
+		return objectio.NewRowid(blk, uint32(0))
+	}
+
+	insertRowIDs := vector.NewVec(types.T_Rowid.ToType())
+	insertTS := vector.NewVec(types.T_TS.ToType())
+	insertPK := vector.NewVec(types.T_int64.ToType())
+
+	vector.AppendFixed(insertRowIDs, buildRowID(1), false, pool)
+	vector.AppendFixed(insertTS, types.BuildTS(10, 0), false, pool)
+	vector.AppendFixed(insertPK, int64(1), false, pool)
+
+	vector.AppendFixed(insertRowIDs, buildRowID(2), false, pool)
+	vector.AppendFixed(insertTS, types.BuildTS(30, 0), false, pool)
+	vector.AppendFixed(insertPK, int64(1), false, pool)
+
+	vector.AppendFixed(insertRowIDs, buildRowID(3), false, pool)
+	vector.AppendFixed(insertTS, types.BuildTS(25, 0), false, pool)
+	vector.AppendFixed(insertPK, int64(2), false, pool)
+
+	state.HandleRowsInsert(ctx, &api.Batch{
+		Attrs: []string{"rowid", "time", "a"},
+		Vecs: []api.Vector{
+			mustVectorToProto(insertRowIDs),
+			mustVectorToProto(insertTS),
+			mustVectorToProto(insertPK),
+		},
+	}, 0, packer, pool)
+
+	deleteRowIDs := vector.NewVec(types.T_Rowid.ToType())
+	deleteTS := vector.NewVec(types.T_TS.ToType())
+	deletePK := vector.NewVec(types.T_int64.ToType())
+	deleteTBRowIDs := vector.NewVec(types.T_Rowid.ToType())
+
+	vector.AppendFixed(deleteRowIDs, buildRowID(1), false, pool)
+	vector.AppendFixed(deleteTS, types.BuildTS(20, 0), false, pool)
+	vector.AppendFixed(deletePK, int64(1), false, pool)
+	vector.AppendFixed(deleteTBRowIDs, types.RandomRowid(), false, pool)
+
+	vector.AppendFixed(deleteRowIDs, buildRowID(2), false, pool)
+	vector.AppendFixed(deleteTS, types.BuildTS(40, 0), false, pool)
+	vector.AppendFixed(deletePK, int64(1), false, pool)
+	vector.AppendFixed(deleteTBRowIDs, types.RandomRowid(), false, pool)
+
+	state.HandleRowsDelete(ctx, &api.Batch{
+		Attrs: []string{"rowid", "time"},
+		Vecs: []api.Vector{
+			mustVectorToProto(deleteRowIDs),
+			mustVectorToProto(deleteTS),
+			mustVectorToProto(deletePK),
+			mustVectorToProto(deleteTBRowIDs),
+		},
+	}, packer, pool)
+
+	collectTimes := func(iter RowsIter) []types.TS {
+		defer iter.Close()
+		var times []types.TS
+		for iter.Next() {
+			times = append(times, iter.Entry().Time)
+		}
+		return times
+	}
+
+	key1 := readutil.EncodePrimaryKey(int64(1), packer)
+	require.Equal(
+		t,
+		[]types.TS{types.BuildTS(30, 0), types.BuildTS(10, 0)},
+		collectTimes(state.NewExactPrimaryKeyReplayIter(types.BuildTS(0, 0), types.BuildTS(50, 0), key1, false)),
+	)
+	require.Equal(
+		t,
+		[]types.TS{types.BuildTS(40, 0), types.BuildTS(20, 0)},
+		collectTimes(state.NewExactPrimaryKeyReplayIter(types.BuildTS(0, 0), types.BuildTS(50, 0), key1, true)),
+	)
+	require.Equal(
+		t,
+		[]types.TS{types.BuildTS(30, 0)},
+		collectTimes(state.NewExactPrimaryKeyReplayIter(types.BuildTS(21, 0), types.BuildTS(35, 0), key1, false)),
+	)
+	require.Empty(
+		t,
+		collectTimes(state.NewExactPrimaryKeyReplayIter(types.BuildTS(21, 0), types.BuildTS(35, 0), key1, true)),
+	)
+}
+
 func BenchmarkPrimaryKeyIter(b *testing.B) {
 	tree := btree.NewBTreeGOptions((*PrimaryIndexEntry).Less,
 		btree.Options{

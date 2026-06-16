@@ -196,8 +196,8 @@ create table row05(col1 blob,col2 json,col3 binary(10) not null);
 insert into row05 values('abcdef','{"t1":"a"}',456);
 insert into row05 values('_bcdef','{"t1":"c"}',100000);
 insert into row05 values('__cdef',null,0);
-select (col1,col2) = ('abcdef','{"t1":"a"}') from row05;
-select (col1,col2) != ('abcdef','{"ehyiuwqnve":"ashyiujewv"}') from row05;
+select (col1,col2) = ('abcdef','{"t1": "a"}') from row05;
+select (col1,col2) != ('abcdef','{"ehyiuwqnve": "ashyiujewv"}') from row05;
 drop table row05;
 
 drop database test;

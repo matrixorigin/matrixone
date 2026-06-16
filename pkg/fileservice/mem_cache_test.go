@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -157,6 +159,246 @@ func TestHighConcurrency(t *testing.T) {
 	wg.Wait()
 }
 
+type blockingReleaseData struct {
+	bytes   []byte
+	started chan struct{}
+	unblock chan struct{}
+}
+
+var _ fscache.Data = (*blockingReleaseData)(nil)
+
+func (d *blockingReleaseData) Bytes() []byte {
+	return d.bytes
+}
+
+func (d *blockingReleaseData) Slice(length int) fscache.Data {
+	return &blockingReleaseData{
+		bytes:   d.bytes[:length],
+		started: d.started,
+		unblock: d.unblock,
+	}
+}
+
+func (d *blockingReleaseData) Retain() {}
+
+func (d *blockingReleaseData) Release() {
+	select {
+	case <-d.started:
+	default:
+		close(d.started)
+	}
+	<-d.unblock
+}
+
+type staticTestData []byte
+
+var _ fscache.Data = staticTestData{}
+
+func (d staticTestData) Bytes() []byte {
+	return d
+}
+
+func (d staticTestData) Slice(length int) fscache.Data {
+	return d[:length]
+}
+
+func (d staticTestData) Retain() {}
+
+func (d staticTestData) Release() {}
+
+type blockingRetainData struct {
+	bytes               []byte
+	retainStarted       chan struct{}
+	unblockRetain       chan struct{}
+	releaseCalled       chan struct{}
+	retainDone          atomic.Bool
+	releaseBeforeRetain atomic.Bool
+}
+
+var _ fscache.Data = (*blockingRetainData)(nil)
+
+func (d *blockingRetainData) Bytes() []byte {
+	return d.bytes
+}
+
+func (d *blockingRetainData) Slice(length int) fscache.Data {
+	return &blockingRetainData{
+		bytes:         d.bytes[:length],
+		retainStarted: d.retainStarted,
+		unblockRetain: d.unblockRetain,
+		releaseCalled: d.releaseCalled,
+	}
+}
+
+func (d *blockingRetainData) Retain() {
+	select {
+	case <-d.retainStarted:
+	default:
+		close(d.retainStarted)
+	}
+	<-d.unblockRetain
+	d.retainDone.Store(true)
+}
+
+func (d *blockingRetainData) Release() {
+	if !d.retainDone.Load() {
+		d.releaseBeforeRetain.Store(true)
+	}
+	select {
+	case <-d.releaseCalled:
+	default:
+		close(d.releaseCalled)
+	}
+}
+
+func TestMemCacheRetainsBeforeSetVisible(t *testing.T) {
+	ctx := context.Background()
+	cache := NewMemCache(fscache.ConstCapacity(1), nil, nil, "")
+	defer cache.Close(ctx)
+
+	data := &blockingRetainData{
+		bytes:         []byte("a"),
+		retainStarted: make(chan struct{}),
+		unblockRetain: make(chan struct{}),
+		releaseCalled: make(chan struct{}),
+	}
+	key := fscache.CacheKey{Path: "foo", Offset: 0, Sz: 1}
+	setDone := make(chan error, 1)
+	go func() {
+		setDone <- cache.cache.Set(ctx, key, data)
+	}()
+
+	<-data.retainStarted
+	cache.DeletePaths(ctx, []string{"foo"})
+	select {
+	case <-data.releaseCalled:
+		t.Fatal("cache value was released before cache ownership was retained")
+	default:
+	}
+	close(data.unblockRetain)
+	assert.NoError(t, <-setDone)
+	assert.False(t, data.releaseBeforeRetain.Load())
+}
+
+func TestMemCacheSkipsStalePostEvictAfterReinsert(t *testing.T) {
+	ctx := context.Background()
+	releaseStarted := make(chan struct{})
+	releaseUnblock := make(chan struct{})
+
+	var mu sync.Mutex
+	evicted := make(map[fscache.CacheKey]int)
+	cache := NewMemCache(
+		fscache.ConstCapacity(1),
+		&CacheCallbacks{
+			PostEvict: []CacheCallbackFunc{
+				func(key fscache.CacheKey, _ fscache.Data) {
+					mu.Lock()
+					evicted[key]++
+					mu.Unlock()
+				},
+			},
+		},
+		nil,
+		"",
+	)
+	defer cache.Close(ctx)
+
+	key1 := fscache.CacheKey{Path: "foo", Offset: 0, Sz: 1}
+	key2 := fscache.CacheKey{Path: "bar", Offset: 0, Sz: 1}
+	assert.NoError(t, cache.cache.Set(ctx, key1, &blockingReleaseData{
+		bytes:   []byte("a"),
+		started: releaseStarted,
+		unblock: releaseUnblock,
+	}))
+
+	setDone := make(chan error, 1)
+	go func() {
+		setDone <- cache.cache.Set(ctx, key2, staticTestData([]byte("b")))
+	}()
+
+	<-releaseStarted
+	assert.NoError(t, cache.cache.Set(ctx, key1, staticTestData([]byte("c"))))
+	close(releaseUnblock)
+	assert.NoError(t, <-setDone)
+
+	_, ok := cache.cache.Get(ctx, key1)
+	assert.True(t, ok)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Zero(t, evicted[key1])
+	assert.Equal(t, 1, evicted[key2])
+}
+
+func TestMemCacheSerializesSameKeyCallbacks(t *testing.T) {
+	ctx := context.Background()
+	evictStarted := make(chan struct{})
+	evictUnblock := make(chan struct{})
+	events := make(chan string, 4)
+	var evictOnce sync.Once
+	cache := NewMemCache(
+		fscache.ConstCapacity(1),
+		&CacheCallbacks{
+			PostSet: []CacheCallbackFunc{
+				func(key fscache.CacheKey, _ fscache.Data) {
+					if key.Path == "foo" {
+						events <- "set"
+					}
+				},
+			},
+			PostEvict: []CacheCallbackFunc{
+				func(key fscache.CacheKey, _ fscache.Data) {
+					if key.Path != "foo" {
+						return
+					}
+					triggered := false
+					evictOnce.Do(func() {
+						triggered = true
+						close(evictStarted)
+						<-evictUnblock
+						events <- "evict"
+					})
+					if !triggered {
+						return
+					}
+				},
+			},
+		},
+		nil,
+		"",
+	)
+	defer cache.Close(ctx)
+
+	key1 := fscache.CacheKey{Path: "foo", Offset: 0, Sz: 1}
+	key2 := fscache.CacheKey{Path: "bar", Offset: 0, Sz: 1}
+	assert.NoError(t, cache.cache.Set(ctx, key1, staticTestData([]byte("a"))))
+	assert.Equal(t, "set", <-events)
+
+	firstSetDone := make(chan error, 1)
+	go func() {
+		firstSetDone <- cache.cache.Set(ctx, key2, staticTestData([]byte("b")))
+	}()
+
+	<-evictStarted
+	secondSetDone := make(chan error, 1)
+	go func() {
+		secondSetDone <- cache.cache.Set(ctx, key1, staticTestData([]byte("c")))
+	}()
+
+	select {
+	case err := <-secondSetDone:
+		assert.NoError(t, err)
+		t.Fatal("same-key post-set callback was not serialized behind post-evict")
+	default:
+	}
+
+	close(evictUnblock)
+	assert.NoError(t, <-firstSetDone)
+	assert.NoError(t, <-secondSetDone)
+	assert.Equal(t, "evict", <-events)
+	assert.Equal(t, "set", <-events)
+}
+
 func BenchmarkMemoryCacheUpdate(b *testing.B) {
 	ctx := context.Background()
 
@@ -274,4 +516,199 @@ func TestMemoryCacheGlobalSizeHint(t *testing.T) {
 		t.Fatalf("got %v", ret)
 	}
 
+}
+
+func TestMemoryCacheEvictToCapacityPercent(t *testing.T) {
+	ctx := context.Background()
+	cache := NewMemCache(
+		fscache.ConstCapacity(10),
+		nil,
+		nil,
+		"test-target-evict",
+	)
+	defer cache.Close(ctx)
+
+	for i := 0; i < 10; i++ {
+		key := fscache.CacheKey{Path: fmt.Sprintf("key-%d", i), Offset: int64(i), Sz: 1}
+		assert.NoError(t, cache.cache.Set(ctx, key, staticTestData([]byte{byte(i)})))
+	}
+	assert.Equal(t, int64(10), cache.cache.Used())
+
+	ret := EvictMemoryCachesToCapacityPercent(ctx, 50)
+	assert.Equal(t, int64(5), ret["test-target-evict"])
+	assert.LessOrEqual(t, cache.cache.Used(), int64(5))
+}
+
+func TestMemoryCachePressureAdmissionSkipsWritesAboveTarget(t *testing.T) {
+	ctx := context.Background()
+	clearMemoryCachePressureTargetForTest()
+	defer clearMemoryCachePressureTargetForTest()
+
+	cache := NewMemCache(
+		fscache.ConstCapacity(10),
+		nil,
+		nil,
+		"",
+	)
+	defer cache.Close(ctx)
+
+	SetMemoryCachePressureTargetPercent(50, time.Now().Add(time.Minute))
+
+	for i := 0; i < 5; i++ {
+		vec := &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{{
+				Offset:     int64(i),
+				Size:       1,
+				CachedData: staticTestData([]byte{byte(i)}),
+			}},
+		}
+		assert.NoError(t, cache.Update(ctx, vec, false))
+	}
+	assert.Equal(t, int64(5), cache.cache.Used())
+
+	vec := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Offset:     5,
+			Size:       1,
+			CachedData: staticTestData([]byte{5}),
+		}},
+	}
+	assert.NoError(t, cache.Update(ctx, vec, false))
+	assert.Equal(t, int64(5), cache.cache.Used())
+
+	_, ok := cache.cache.Get(ctx, fscache.CacheKey{Path: "foo", Offset: 5, Sz: 1})
+	assert.False(t, ok)
+}
+
+func TestClearMemoryCachePressureTarget(t *testing.T) {
+	clearMemoryCachePressureTargetForTest()
+	defer clearMemoryCachePressureTargetForTest()
+
+	SetMemoryCachePressureTargetPercent(50, time.Now().Add(time.Minute))
+	target, ok := memoryCachePressureTarget(10)
+	assert.True(t, ok)
+	assert.Equal(t, int64(5), target)
+
+	ClearMemoryCachePressureTarget()
+	_, ok = memoryCachePressureTarget(10)
+	assert.False(t, ok)
+}
+
+func TestMemoryCachePressureTargetOwnerIsolation(t *testing.T) {
+	clearMemoryCachePressureTargetForTest()
+	defer clearMemoryCachePressureTargetForTest()
+
+	SetMemoryCachePressureTargetPercentByOwner("cn-rss", 50, time.Now().Add(time.Minute))
+	SetMemoryCachePressureTargetPercentByOwner("workspace-rss", 80, time.Now().Add(time.Minute))
+
+	target, ok := memoryCachePressureTarget(100)
+	assert.True(t, ok)
+	assert.Equal(t, int64(50), target)
+
+	ClearMemoryCachePressureTargetByOwner("workspace-rss")
+	target, ok = memoryCachePressureTarget(100)
+	assert.True(t, ok)
+	assert.Equal(t, int64(50), target)
+
+	ClearMemoryCachePressureTargetByOwner("cn-rss")
+	_, ok = memoryCachePressureTarget(100)
+	assert.False(t, ok)
+}
+
+func TestMemoryCachePressureAdmissionAdmitsGhostEntry(t *testing.T) {
+	ctx := context.Background()
+	clearMemoryCachePressureTargetForTest()
+	defer clearMemoryCachePressureTargetForTest()
+
+	cache := NewMemCache(
+		fscache.ConstCapacity(4),
+		nil,
+		nil,
+		"",
+	)
+	defer cache.Close(ctx)
+
+	for i := 0; i < 3; i++ {
+		vec := &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{{
+				Offset:     int64(i),
+				Size:       1,
+				CachedData: staticTestData([]byte{byte(i)}),
+			}},
+		}
+		assert.NoError(t, cache.Update(ctx, vec, false))
+	}
+
+	assert.Equal(t, int64(2), cache.cache.EvictToTargetWithWait(ctx, 2))
+	assert.Equal(t, int64(2), cache.cache.Used())
+	key0 := fscache.CacheKey{Path: "foo", Offset: 0, Sz: 1}
+	key1 := fscache.CacheKey{Path: "foo", Offset: 1, Sz: 1}
+	key2 := fscache.CacheKey{Path: "foo", Offset: 2, Sz: 1}
+	key3 := fscache.CacheKey{Path: "foo", Offset: 3, Sz: 1}
+	_, ok := cache.cache.Get(ctx, key0)
+	assert.False(t, ok)
+	_, ok = cache.cache.Get(ctx, key1)
+	assert.True(t, ok)
+	_, ok = cache.cache.Get(ctx, key2)
+	assert.True(t, ok)
+
+	SetMemoryCachePressureTargetPercent(50, time.Now().Add(time.Minute))
+
+	coldVec := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Offset:     3,
+			Size:       1,
+			CachedData: staticTestData([]byte{3}),
+		}},
+	}
+	assert.NoError(t, cache.Update(ctx, coldVec, false))
+	assert.Equal(t, int64(2), cache.cache.Used())
+	_, ok = cache.cache.Get(ctx, key3)
+	assert.False(t, ok)
+
+	ghostVec := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Offset:     0,
+			Size:       1,
+			CachedData: staticTestData([]byte{0}),
+		}},
+	}
+	assert.NoError(t, cache.Update(ctx, ghostVec, false))
+	assert.Equal(t, int64(2), cache.cache.Used())
+	_, ok = cache.cache.Get(ctx, key0)
+	assert.True(t, ok)
+	_, ok = cache.cache.Get(ctx, key1)
+	assert.False(t, ok)
+}
+
+func TestMemoryCachePressureAdmissionExpires(t *testing.T) {
+	ctx := context.Background()
+	clearMemoryCachePressureTargetForTest()
+	defer clearMemoryCachePressureTargetForTest()
+
+	cache := NewMemCache(
+		fscache.ConstCapacity(10),
+		nil,
+		nil,
+		"",
+	)
+	defer cache.Close(ctx)
+
+	SetMemoryCachePressureTargetPercent(50, time.Now().Add(-time.Second))
+
+	vec := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Offset:     0,
+			Size:       1,
+			CachedData: staticTestData([]byte{1}),
+		}},
+	}
+	assert.NoError(t, cache.Update(ctx, vec, false))
+	assert.Equal(t, int64(1), cache.cache.Used())
 }

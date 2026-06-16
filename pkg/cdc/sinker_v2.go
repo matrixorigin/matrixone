@@ -342,6 +342,8 @@ func (s *mysqlSinker2) processCommand(ctx context.Context, cmd *Command) {
 			zap.String("table", s.dbTblInfo.String()),
 			zap.String("command", cmd.String()),
 			zap.Error(err))
+		// Clean up batch data in skipped commands to prevent memory leaks
+		cmd.Close()
 		return
 	}
 
@@ -544,6 +546,9 @@ func (s *mysqlSinker2) recordSQLFailure(sqlType string, duration time.Duration) 
 
 // handleInsertBatch handles INSERT batch command (snapshot data)
 func (s *mysqlSinker2) handleInsertBatch(ctx context.Context, cmd *Command) error {
+	// Ensure snapshot batch is cleaned up after processing
+	defer cmd.Close()
+
 	// start := time.Now()
 	rows := 0
 	if cmd.InsertBatch != nil {
@@ -608,6 +613,9 @@ func (s *mysqlSinker2) handleInsertBatch(ctx context.Context, cmd *Command) erro
 
 // handleInsertDeleteBatch handles INSERT/DELETE batch command (tail data)
 func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command) error {
+	// Ensure atomic batches are cleaned up on all paths (including error returns)
+	defer cmd.Close()
+
 	start := time.Now()
 	insertRows := 0
 	deleteRows := 0
@@ -771,14 +779,6 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 		logutil.Debug("cdc.mysql_sinker2.insert_delete_batch_complete", completeFields...)
 	}
 
-	// Clean up atomic batches after processing
-	if cmd.InsertAtmBatch != nil {
-		cmd.InsertAtmBatch.Close()
-	}
-	if cmd.DeleteAtmBatch != nil {
-		cmd.DeleteAtmBatch.Close()
-	}
-
 	return nil
 }
 
@@ -800,6 +800,10 @@ func (s *mysqlSinker2) handleFlush(ctx context.Context, cmd *Command) error {
 // This method is called by the producer (reader) to sink data.
 // It validates watermark and queues appropriate commands for the consumer goroutine.
 func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
+	// Ensure batch data is freed if we return before transferring ownership to a Command.
+	// Once ownership transfers, we nil out data's batch fields to prevent double-free.
+	defer data.Close()
+
 	// Check if sinker is closed
 	s.closeMutex.RLock()
 	if s.closed {
@@ -844,12 +848,17 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 		return
 	}
 
-	// Queue data command
+	// Queue data command — transfer ownership of batch data to the Command.
+	// Nil out data's fields so the deferred data.Close() won't double-free.
 	var cmd *Command
 	if data.outputTyp == OutputTypeSnapshot {
-		cmd = NewInsertBatchCommand(data.checkpointBat, data.fromTs, data.toTs)
+		cmd = NewInsertBatchCommand(data.checkpointBat, data.mp, data.fromTs, data.toTs)
+		data.checkpointBat = nil
+		data.mp = nil
 	} else if data.outputTyp == OutputTypeTail {
 		cmd = NewInsertDeleteBatchCommand(data.insertAtmBatch, data.deleteAtmBatch, data.fromTs, data.toTs)
+		data.insertAtmBatch = nil
+		data.deleteAtmBatch = nil
 	} else {
 		logutil.Error("cdc.mysql_sinker2.unknown_output_type",
 			zap.String("table", s.dbTblInfo.String()),
@@ -865,6 +874,8 @@ func (s *mysqlSinker2) sendCommand(cmd *Command) {
 	s.closeMutex.RLock()
 	if s.closed {
 		s.closeMutex.RUnlock()
+		// Clean up batch data in dropped commands
+		cmd.Close()
 		return
 	}
 	cmdCh := s.cmdCh
@@ -877,6 +888,8 @@ func (s *mysqlSinker2) sendCommand(cmd *Command) {
 	select {
 	case cmdCh <- cmd:
 	case <-closeCh:
+		// Clean up batch data in dropped commands
+		cmd.Close()
 		return
 	}
 }

@@ -6,6 +6,9 @@ relname    relkind
 mo_account    r
 mo_branch_metadata    r
 mo_cache    v
+mo_ccpr_dbs    r
+mo_ccpr_log    r
+mo_ccpr_tables    r
 mo_cdc_task    r
 mo_cdc_watermark    r
 mo_columns    r

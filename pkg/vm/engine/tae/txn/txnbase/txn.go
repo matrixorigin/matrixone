@@ -86,6 +86,8 @@ type Txn struct {
 	isReplay                 bool
 	DedupType                txnif.DedupPolicy
 
+	syncProtectionJobID string // Job ID for CCPR sync protection validation
+
 	FreezeFn          func(txnif.AsyncTxn) error
 	PrepareCommitFn   func(txnif.AsyncTxn) error
 	PrepareRollbackFn func(txnif.AsyncTxn) error
@@ -153,6 +155,9 @@ func (txn *Txn) SetApplyCommitFn(fn func(txnif.AsyncTxn) error)     { txn.ApplyC
 func (txn *Txn) SetApplyRollbackFn(fn func(txnif.AsyncTxn) error)   { txn.ApplyRollbackFn = fn }
 func (txn *Txn) SetDedupType(dedupType txnif.DedupPolicy)           { txn.DedupType = dedupType }
 func (txn *Txn) GetDedupType() txnif.DedupPolicy                    { return txn.DedupType }
+
+func (txn *Txn) SetSyncProtectionJobID(jobID string) { txn.syncProtectionJobID = jobID }
+func (txn *Txn) GetSyncProtectionJobID() string      { return txn.syncProtectionJobID }
 
 //The state transition of transaction is as follows:
 // 1PC: TxnStateActive--->TxnStatePreparing--->TxnStateCommitted/TxnStateRollbacked

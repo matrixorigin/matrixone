@@ -16,9 +16,7 @@ package compile
 
 import (
 	"context"
-	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -418,7 +416,6 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	if !checkPipelineStandaloneExecutableAtRemote(s) {
 		return s.MergeRun(c)
 	}
-
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
 			zap.String("local-address", c.addr),
@@ -900,50 +897,6 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.
 	}
 }
 
-func (s *Scope) replace(c *Compile) error {
-	dbName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.DbName
-	tblName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.Name
-	deleteCond := s.Plan.GetQuery().Nodes[0].ReplaceCtx.DeleteCond
-	rewriteFromOnDuplicateKey := s.Plan.GetQuery().Nodes[0].ReplaceCtx.RewriteFromOnDuplicateKey
-
-	delAffectedRows := uint64(0)
-	if deleteCond != "" {
-		result, err := c.runSqlWithResult(fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s", dbName, tblName, deleteCond), NoAccountId)
-		if err != nil {
-			return err
-		}
-		delAffectedRows = result.AffectedRows
-	}
-	var sql string
-	if rewriteFromOnDuplicateKey {
-		idx := strings.Index(strings.ToLower(c.sql), "on duplicate key update")
-		sql = c.sql[:idx]
-	} else {
-		removed := removeStringBetween(c.sql, "/*", "*/")
-		sql = "insert " + strings.TrimSpace(removed)[7:]
-	}
-	result, err := c.runSqlWithResult(sql, NoAccountId)
-	if err != nil {
-		return err
-	}
-	c.addAffectedRows(result.AffectedRows + delAffectedRows)
-	return nil
-}
-
-func removeStringBetween(s, start, end string) string {
-	startIndex := strings.Index(s, start)
-	for startIndex != -1 {
-		endIndex := strings.Index(s, end)
-		if endIndex == -1 || startIndex > endIndex {
-			return s
-		}
-
-		s = s[:startIndex] + s[endIndex+len(end):]
-		startIndex = strings.Index(s, start)
-	}
-	return s
-}
-
 // defaultStarCountTombstoneThreshold: when estimated tombstone rows exceed this, skip StarCount
 // and use per-block aggOptimize (only scan blocks with tombstones). Avoids CollectTombstoneStats
 // Merge path taking seconds for large tombstone sets.
@@ -1144,23 +1097,23 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
 		hint := engine.FilterHint{}
-		// Pass runtime BloomFilter to reader via FilterHint (only for ivf entries table).
+		// Pass runtime membership filter bytes to reader via FilterHint (only for ivf entries table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if len(s.DataSource.BloomFilter) > 0 {
-				hint.BloomFilter = s.DataSource.BloomFilter
-			} else if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+			if len(s.DataSource.MembershipFilterBytes) > 0 {
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			} else if bfVal := c.proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.BloomFilter = bf
+					hint.MembershipFilterBytes = bf
 				}
 			}
 		}
-		// Pass runtime BloomFilter to reader via FilterHint (for fulltext index table).
+		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if bfVal := c.proc.Ctx.Value(defines.FulltextBloomFilter{}); bfVal != nil {
+			if bfVal := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.BloomFilter = bf
+					hint.MembershipFilterBytes = bf
 				}
 			}
 		}
@@ -1231,20 +1184,20 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		hint := engine.FilterHint{}
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if len(s.DataSource.BloomFilter) > 0 {
-				hint.BloomFilter = s.DataSource.BloomFilter
-			} else if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+			if len(s.DataSource.MembershipFilterBytes) > 0 {
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			} else if bfVal := c.proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.BloomFilter = bf
+					hint.MembershipFilterBytes = bf
 				}
 			}
 		}
-		// Pass runtime BloomFilter to reader via FilterHint (for fulltext index table).
+		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if bfVal := c.proc.Ctx.Value(defines.FulltextBloomFilter{}); bfVal != nil {
+			if bfVal := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.BloomFilter = bf
+					hint.MembershipFilterBytes = bf
 				}
 			}
 		}

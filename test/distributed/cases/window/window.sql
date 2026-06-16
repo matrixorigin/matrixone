@@ -832,7 +832,7 @@ from dense_rank01 natural join dense_rank02;
 
 select id value,
        sum(id) over (partition by id order by id rows unbounded preceding)
-from dense_rank01 full join dense_rank02;
+from dense_rank01 `full` join dense_rank02;
 
 
 -- aggregate with group by in window's order by clause

@@ -201,3 +201,11 @@ message FaultInjectReq {
     string method = 1;
     string parameter = 2;
 }
+
+message SyncProtection {
+    option (gogoproto.typedecl)     = false;
+    string JobID                    = 1;  // Sync job ID
+    string BF                       = 2;  // Base64 encoded BloomFilter data (for register)
+    int64 ValidTS                   = 3;  // Valid timestamp in nanoseconds (for register and renew)
+    string TestObject               = 4;  // Test object name for debugging (optional)
+}

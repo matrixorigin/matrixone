@@ -68,13 +68,60 @@ func UpdateUpgradeTenantTaskState(
 	return nil
 }
 
+func ReconcileDeletedUpgradeTenantTasks(
+	upgradeID uint64,
+	txn executor.TxnExecutor) (int64, error) {
+	sql := fmt.Sprintf(`update %s set ready = %d, update_at = current_timestamp()
+		where upgrade_id = %d and ready != %d
+		and not exists (
+			select 1 from mo_account
+			where account_id >= %s.from_account_id
+			  and account_id <= %s.to_account_id
+		)`,
+		catalog.MOUpgradeTenantTable,
+		Yes,
+		upgradeID,
+		Yes,
+		catalog.MOUpgradeTenantTable,
+		catalog.MOUpgradeTenantTable)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return 0, err
+	}
+	res.Close()
+	return int64(res.AffectedRows), nil
+}
+
+func HasUnreadyUpgradeTenantTasks(
+	upgradeID uint64,
+	txn executor.TxnExecutor) (bool, error) {
+	sql := fmt.Sprintf("select 1 from %s where upgrade_id = %d and ready = %d limit 1",
+		catalog.MOUpgradeTenantTable,
+		upgradeID,
+		No)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+
+	hasUnready := false
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		hasUnready = true
+		return false
+	})
+	return hasUnready, nil
+}
+
 func GetUpgradeTenantTasks(
 	upgradeID uint64,
-	txn executor.TxnExecutor) (uint64, []int32, []string, error) {
+	txn executor.TxnExecutor) (uint64, []int32, []string, bool, bool, error) {
 	taskID := uint64(0)
 	tenants := make([]int32, 0)
 	versions := make([]string, 0)
 	after := int32(0)
+	hasDeletedTenantTasks := false
+	hasConflictTenantTasks := false
 	for {
 		sql := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
 			catalog.MOUpgradeTenantTable,
@@ -83,7 +130,7 @@ func GetUpgradeTenantTasks(
 			No)
 		res, err := txn.Exec(sql, executor.StatementOption{})
 		if err != nil {
-			return 0, nil, nil, err
+			return 0, nil, nil, hasDeletedTenantTasks, hasConflictTenantTasks, err
 		}
 		from := int32(-1)
 		to := int32(-1)
@@ -95,18 +142,25 @@ func GetUpgradeTenantTasks(
 		})
 		res.Close()
 		if from == -1 {
-			return 0, nil, nil, nil
+			return 0, nil, nil, hasDeletedTenantTasks, hasConflictTenantTasks, nil
 		}
 
+		tenants = tenants[:0]
+		versions = versions[:0]
 		sql = fmt.Sprintf("select account_id, create_version from mo_account where account_id >= %d and account_id <= %d for update",
 			from, to)
 		res, err = txn.Exec(sql, executor.StatementOption{}.WithWaitPolicy(lock.WaitPolicy_FastFail))
 		if err != nil {
 			if isConflictError(err) {
-				after = to + 1
+				hasConflictTenantTasks = true
+				next, ok := nextUpgradeTenantTaskAfter(to)
+				if !ok {
+					return 0, nil, nil, hasDeletedTenantTasks, hasConflictTenantTasks, nil
+				}
+				after = next
 				continue
 			}
-			return 0, nil, nil, err
+			return 0, nil, nil, hasDeletedTenantTasks, hasConflictTenantTasks, err
 		}
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
@@ -116,8 +170,25 @@ func GetUpgradeTenantTasks(
 			return true
 		})
 		res.Close()
-		return taskID, tenants, versions, nil
+		if len(tenants) == 0 {
+			hasDeletedTenantTasks = true
+			next, ok := nextUpgradeTenantTaskAfter(to)
+			if !ok {
+				return 0, nil, nil, hasDeletedTenantTasks, hasConflictTenantTasks, nil
+			}
+			after = next
+			continue
+		}
+		return taskID, tenants, versions, hasDeletedTenantTasks, hasConflictTenantTasks, nil
 	}
+}
+
+func nextUpgradeTenantTaskAfter(accountID int32) (int32, bool) {
+	const maxInt32 = int32(^uint32(0) >> 1)
+	if accountID == maxInt32 {
+		return 0, false
+	}
+	return accountID + 1, true
 }
 
 func GetTenantCreateVersionForUpdate(
