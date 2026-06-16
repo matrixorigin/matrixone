@@ -13,6 +13,8 @@ drop table prefix_idx_dml_sk;
 drop table if exists prefix_idx_dml_uk;
 create table prefix_idx_dml_uk(id int primary key, a varchar(32), b int, unique index uq_a(a(4)));
 insert into prefix_idx_dml_uk values (1, 'abcdef-long', 10);
+insert into prefix_idx_dml_uk values (2, 'abcdzz-conflict', 20);
+Duplicate entry 'abcd' for key 'a'
 update prefix_idx_dml_uk set a = 'uvwxyz-long' where id = 1;
 insert into prefix_idx_dml_uk values (2, 'abcdef-new', 20);
 delete from prefix_idx_dml_uk where id = 1;
@@ -22,3 +24,29 @@ select id, a, b from prefix_idx_dml_uk order by id;
 2  ¦  abcdef-new  ¦  20  𝄀
 3  ¦  uvwxyz-new  ¦  30
 drop table prefix_idx_dml_uk;
+drop table if exists prefix_idx_dml_create_backfill;
+create table prefix_idx_dml_create_backfill(id int primary key, a varchar(32), b int);
+insert into prefix_idx_dml_create_backfill values (1, 'abcdef-long', 10), (2, 'lmnopq-long', 20);
+create index idx_a on prefix_idx_dml_create_backfill(a(4));
+update prefix_idx_dml_create_backfill set a = 'uvwxyz-long' where id = 1;
+select id, a, b from prefix_idx_dml_create_backfill where a = 'uvwxyz-long';
+➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  b[4,32,0]  𝄀
+1  ¦  uvwxyz-long  ¦  10
+delete from prefix_idx_dml_create_backfill where id = 2;
+select count(*) from prefix_idx_dml_create_backfill where a = 'lmnopq-long';
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table prefix_idx_dml_create_backfill;
+drop table if exists prefix_idx_dml_alter_add;
+create table prefix_idx_dml_alter_add(id int primary key, a varchar(32), b int);
+insert into prefix_idx_dml_alter_add values (1, 'abcdef-long', 10), (2, 'lmnopq-long', 20);
+alter table prefix_idx_dml_alter_add add index idx_a(a(4));
+update prefix_idx_dml_alter_add set a = 'uvwxyz-long' where id = 1;
+select id, a, b from prefix_idx_dml_alter_add where a = 'uvwxyz-long';
+➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  b[4,32,0]  𝄀
+1  ¦  uvwxyz-long  ¦  10
+delete from prefix_idx_dml_alter_add where id = 2;
+select count(*) from prefix_idx_dml_alter_add where a = 'lmnopq-long';
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table prefix_idx_dml_alter_add;
