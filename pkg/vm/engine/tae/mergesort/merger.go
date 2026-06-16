@@ -465,6 +465,12 @@ func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) err
 				cols:        make([][]types.Decimal128, size),
 			}
 			merger = newMerger(mergeHost, sort.Decimal128Less, sortKeyPos, df)
+		case types.T_decimal256:
+			df := &fixedDataFetcher[types.Decimal256]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Decimal256],
+				cols:        make([][]types.Decimal256, size),
+			}
+			merger = newMerger(mergeHost, sort.Decimal256Less, sortKeyPos, df)
 		case types.T_uuid:
 			df := &fixedDataFetcher[types.Uuid]{
 				mustColFunc: vector.MustFixedColNoTypeCheck[types.Uuid],
