@@ -126,6 +126,14 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		return nil, err
 	}
 
+	// Build the synchronous ivfflat index-maintenance sub-plans (issue #25000)
+	// AFTER createQuery, mirroring the legacy insert sequencing: these sink-based
+	// sub-plans use positional column references and must not be re-run through
+	// createQuery's optimize/remap pipeline.
+	if err = builder.drainDeferredReplaceIvf(); err != nil {
+		return nil, err
+	}
+
 	// Generate DetectSqls for self-referencing FK constraint checks.
 	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "replace")
 	if err != nil {

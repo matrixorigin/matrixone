@@ -1,0 +1,37 @@
+drop database if exists ft_replace;
+create database ft_replace;
+use ft_replace;
+create table t(id int primary key, body text);
+insert into t values(1,'apple banana'),(2,'cherry date'),(3,'elderberry fig');
+create fulltext index ftidx on t(body);
+replace into t values(5,'grape kiwi');
+select id from t where match(body) against('grape') order by id;
+➤ id[4,32,0]
+select id from t where match(body) against('kiwi') order by id;
+➤ id[4,32,0]
+replace into t values(1,'mango melon');
+select id from t where match(body) against('mango') order by id;
+➤ id[4,32,0]
+select id from t where match(body) against('apple') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from t where match(body) against('banana') order by id;
+➤ id[4,32,0]  𝄀
+1
+replace into t values(2,'mango pear'),(7,'apple quince'),(3,'mango plum');
+select id from t where match(body) against('mango') order by id;
+➤ id[4,32,0]
+select id from t where match(body) against('apple') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from t where match(body) against('cherry') order by id;
+➤ id[4,32,0]  𝄀
+2
+select id, body from t order by id;
+➤ id[4,32,0]  ¦  body[12,0,0]  𝄀
+1  ¦  mango melon  𝄀
+2  ¦  mango pear  𝄀
+3  ¦  mango plum  𝄀
+5  ¦  grape kiwi  𝄀
+7  ¦  apple quince
+drop database if exists ft_replace;

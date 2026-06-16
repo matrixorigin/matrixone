@@ -200,6 +200,13 @@ type QueryBuilder struct {
 
 	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
+	// deferredReplaceIvf carries the synchronous ivfflat index maintenance for a
+	// REPLACE statement (issue #25000). It is populated while binding REPLACE and
+	// consumed AFTER createQuery, mirroring the legacy insert sequencing: the
+	// index sub-plans are hand-built with positional column references and must
+	// not be re-run through createQuery's per-step optimize/remap pipeline.
+	deferredReplaceIvf []*deferredReplaceIvfCtx
+
 	// spill memory for aggregate function
 	aggSpillMem int64
 

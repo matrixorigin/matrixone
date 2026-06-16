@@ -24,6 +24,76 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestCollectSyncIvfMultiIndexes verifies that REPLACE collects only the
+// synchronously-maintained ivfflat index groups: async ivf indexes, regular
+// secondary indexes and not-yet-created index tables are excluded, and the three
+// ivf table-type defs of one index are grouped under that index name.
+func TestCollectSyncIvfMultiIndexes(t *testing.T) {
+	ivfAlgo := catalog.MoIndexIvfFlatAlgo.ToString()
+	mkIvf := func(name, tblType, params string) *planpb.IndexDef {
+		return &planpb.IndexDef{
+			IndexName:          name,
+			IndexAlgo:          ivfAlgo,
+			IndexAlgoTableType: tblType,
+			IndexAlgoParams:    params,
+			TableExist:         true,
+		}
+	}
+
+	tableDef := &planpb.TableDef{
+		Indexes: []*planpb.IndexDef{
+			mkIvf("idx", catalog.SystemSI_IVFFLAT_TblType_Metadata, ""),
+			mkIvf("idx", catalog.SystemSI_IVFFLAT_TblType_Centroids, ""),
+			mkIvf("idx", catalog.SystemSI_IVFFLAT_TblType_Entries, ""),
+			// async ivf index -> maintained by cron, excluded
+			mkIvf("idx_async", catalog.SystemSI_IVFFLAT_TblType_Metadata, `{"async":"true"}`),
+			// regular secondary index -> handled by MULTI_UPDATE, excluded
+			{IndexName: "reg", IndexAlgo: "", TableExist: true},
+			// ivf index whose hidden table is not created yet -> excluded
+			{IndexName: "idx_notbl", IndexAlgo: ivfAlgo, IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata, TableExist: false},
+		},
+	}
+
+	res, err := collectSyncIvfMultiIndexes(tableDef)
+	require.NoError(t, err)
+	require.Len(t, res, 1)
+	require.Contains(t, res, "idx")
+	require.Len(t, res["idx"].IndexDefs, 3)
+	require.NotContains(t, res, "idx_async")
+	require.NotContains(t, res, "reg")
+	require.NotContains(t, res, "idx_notbl")
+
+	// A table without any ivf index yields an empty (non-nil) map.
+	empty, err := collectSyncIvfMultiIndexes(&planpb.TableDef{})
+	require.NoError(t, err)
+	require.Empty(t, empty)
+}
+
+// TestCollectSyncFulltextIndexes verifies that REPLACE collects only the
+// synchronously-maintained fulltext indexes: async fulltext indexes, non-fulltext
+// indexes and not-yet-created index tables are excluded.
+func TestCollectSyncFulltextIndexes(t *testing.T) {
+	ftAlgo := catalog.MOIndexFullTextAlgo.ToString()
+	tableDef := &planpb.TableDef{
+		Indexes: []*planpb.IndexDef{
+			{IndexName: "ft", IndexAlgo: ftAlgo, TableExist: true},
+			{IndexName: "ft_async", IndexAlgo: ftAlgo, TableExist: true, IndexAlgoParams: `{"async":"true"}`},
+			{IndexName: "ft_notbl", IndexAlgo: ftAlgo, TableExist: false},
+			{IndexName: "ivf", IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), TableExist: true},
+			{IndexName: "reg", IndexAlgo: "", TableExist: true},
+		},
+	}
+
+	res, err := collectSyncFulltextIndexes(tableDef)
+	require.NoError(t, err)
+	require.Len(t, res, 1)
+	require.Equal(t, "ft", res[0].IndexName)
+
+	empty, err := collectSyncFulltextIndexes(&planpb.TableDef{})
+	require.NoError(t, err)
+	require.Empty(t, empty)
+}
+
 // only use in developing
 func TestSingleSQLQuery(t *testing.T) {
 	//sql := "update emp set comm = 1200 where deptno = 10"
@@ -449,7 +519,7 @@ func TestBindReplaceWithUniqueSecondaryIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	rootID, err := builder.appendDedupAndMultiUpdateNodesForBindReplace(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
 	)
 	require.NoError(t, err)
 	require.NotZero(t, rootID)
@@ -503,7 +573,7 @@ func TestBindReplaceWithCompositeUniqueIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	rootID, err := builder.appendDedupAndMultiUpdateNodesForBindReplace(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
 	)
 	require.NoError(t, err)
 	require.NotZero(t, rootID)

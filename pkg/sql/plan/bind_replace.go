@@ -39,12 +39,258 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 		return 0, err
 	}
 
+	// Collect the irregular (vector) indexes that must be maintained synchronously
+	// BEFORE initInsertReplaceStmt strips them from tableDef.Indexes. The modern
+	// REPLACE path otherwise drops these indexes silently, leaving newly inserted /
+	// replaced rows unsearchable until the next cron reindex (issue #25000).
+	syncIvfIndexes, err := collectSyncIvfMultiIndexes(dmlCtx.tableDefs[0])
+	if err != nil {
+		return 0, err
+	}
+	syncFulltextIndexes, err := collectSyncFulltextIndexes(dmlCtx.tableDefs[0])
+	if err != nil {
+		return 0, err
+	}
+
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true)
 	if err != nil {
 		return 0, err
 	}
 
-	return builder.appendDedupAndMultiUpdateNodesForBindReplace(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx)
+	return builder.appendDedupAndMultiUpdateNodesForBindReplace(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, syncIvfIndexes, syncFulltextIndexes)
+}
+
+// deferredReplaceIvfCtx captures everything needed to build the synchronous
+// ivfflat entries maintenance sub-plans for a REPLACE, deferred until after
+// createQuery. A REPLACE inserts new entries for every incoming row (insert side)
+// and deletes the old entries of every conflicting row (delete side). Both sides
+// read the same processed-new-rows sink: on a primary-key conflict the new PK
+// equals the replaced row's PK, so deleting the entries whose org_pk matches an
+// incoming PK removes exactly the stale entries; a brand-new PK matches no entry
+// and deletes nothing.
+type deferredReplaceIvfCtx struct {
+	objRef            *plan.ObjectRef
+	tableDef          *plan.TableDef
+	multiTableIndexes map[string]*MultiTableIndex
+	fulltextIndexes   []*plan.IndexDef
+	newRowsSourceStep int32
+}
+
+// drainDeferredReplaceIvf builds the ivfflat entries-insert sub-plans collected
+// while binding REPLACE. It must be called AFTER createQuery: the sub-plans use
+// the legacy sink-based builders (positional column references, hand-optimized),
+// which would panic / be mis-rewritten if run through createQuery's per-step
+// optimize+remap pipeline — the same reason the legacy insert path builds its
+// index plans after createQuery.
+func (builder *QueryBuilder) drainDeferredReplaceIvf() error {
+	if len(builder.deferredReplaceIvf) == 0 {
+		return nil
+	}
+
+	stepCountBefore := len(builder.qry.Steps)
+	for _, ivf := range builder.deferredReplaceIvf {
+		if len(ivf.multiTableIndexes) > 0 {
+			// delete side: remove the stale entries of the conflicting rows first.
+			if err := builder.buildReplaceIvfDelete(ivf); err != nil {
+				return err
+			}
+			// insert side: add entries for every incoming row.
+			ivfBindCtx := NewBindContext(builder, nil)
+			if err := buildPreInsertMultiTableIndexes(builder.compCtx, builder, ivfBindCtx,
+				ivf.objRef, ivf.tableDef, ivf.newRowsSourceStep, ivf.multiTableIndexes); err != nil {
+				return err
+			}
+		}
+
+		// fulltext: one POSTDML node per index deletes the conflicting rows' stale
+		// inverted entries (by doc id = the incoming PK) and re-tokenizes the new
+		// rows, all reading the same processed-new-rows sink.
+		if err := builder.buildReplaceFulltext(ivf); err != nil {
+			return err
+		}
+	}
+	builder.deferredReplaceIvf = nil
+
+	// Finalize ONLY the newly appended index steps, the same lightweight pass the
+	// legacy DML paths apply via tempOptimizeForDML (stats + hash-map / joinmap
+	// message tags). The main REPLACE step was already fully finalized by
+	// createQuery and must not be reprocessed.
+	for i := stepCountBefore; i < len(builder.qry.Steps); i++ {
+		rootID := builder.qry.Steps[i]
+		ReCalcNodeStats(rootID, builder, true, false, true)
+		builder.handleHashMapMessages(rootID)
+	}
+	return nil
+}
+
+// buildReplaceIvfDelete appends the ivfflat entries-delete sub-plan that removes
+// the stale index entries of the rows a REPLACE conflicts on. It reads the
+// processed new rows (the same sink the insert side uses) and projects them into a
+// tableDef.Cols layout carrying the incoming primary key (NULL for the other
+// columns), then feeds the legacy buildDeleteMultiTableIndexes (isUpdate=false),
+// which joins the entries table on org_pk = the incoming PK and deletes the match.
+//
+// On a primary-key conflict the incoming PK equals the replaced row's PK, so its
+// old entry (org_pk == that PK) is deleted; the insert side then re-adds the entry
+// for the new vector. A brand-new PK matches no entry and deletes nothing.
+func (builder *QueryBuilder) buildReplaceIvfDelete(ivf *deferredReplaceIvfCtx) error {
+	tableDef := ivf.tableDef
+	delBindCtx := NewBindContext(builder, nil)
+
+	// SINK_SCAN the processed new rows (projList2 layout: tableDef.Cols order with
+	// Row_ID dropped, so the primary key sits at its tableDef.Cols index).
+	scanID := appendSinkScanNode(builder, delBindCtx, ivf.newRowsSourceStep)
+
+	pkColIdx := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+	oldRowProj := make([]*plan.Expr, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		if int32(i) == pkColIdx {
+			oldRowProj[i] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{RelPos: 0, ColPos: pkColIdx},
+				},
+			}
+		} else {
+			oldRowProj[i] = &plan.Expr{
+				Typ:  col.Typ,
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+			}
+		}
+	}
+	projID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{scanID},
+		ProjectList: oldRowProj,
+	}, delBindCtx)
+
+	sinkID := appendSinkNode(builder, delBindCtx, projID)
+	oldRowsStep := builder.appendStep(sinkID)
+
+	delCtx := &dmlPlanCtx{
+		objRef:          ivf.objRef,
+		tableDef:        tableDef,
+		sourceStep:      oldRowsStep,
+		updateColLength: 0,
+	}
+	return buildDeleteMultiTableIndexes(builder.compCtx, builder, delBindCtx, delCtx, ivf.multiTableIndexes)
+}
+
+// buildReplaceFulltext appends, for each synchronously-maintained fulltext index,
+// a single POSTDML node that maintains the inverted-index table for the REPLACE.
+// It reads the processed new rows and, with both delete and insert enabled,
+// removes each row's stale inverted entries keyed by the incoming primary key
+// (doc id) and then re-tokenizes the new row. For a brand-new PK the delete part
+// matches nothing and only the insert part takes effect.
+func (builder *QueryBuilder) buildReplaceFulltext(ivf *deferredReplaceIvfCtx) error {
+	for idx, indexdef := range ivf.fulltextIndexes {
+		ftBindCtx := NewBindContext(builder, nil)
+		indexObjRef, indexTableDef, err := builder.compCtx.ResolveIndexTableByRef(ivf.objRef, indexdef.IndexTableName, nil)
+		if err != nil {
+			return err
+		}
+		if indexTableDef == nil {
+			return moerr.NewNoSuchTable(builder.GetContext(), ivf.objRef.SchemaName, indexdef.IndexName)
+		}
+		const (
+			isDelete               = true
+			isInsert               = true
+			isDeleteWithoutFilters = false
+		)
+		if err := buildPostDmlFullTextIndex(builder.compCtx, builder, ftBindCtx,
+			indexObjRef, indexTableDef, ivf.tableDef, ivf.newRowsSourceStep,
+			indexdef, idx, isDelete, isInsert, isDeleteWithoutFilters); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// collectSyncIvfMultiIndexes groups the non-async ivfflat index definitions of a
+// table by index name (metadata / centroids / entries), mirroring the grouping in
+// buildInsertPlansWithRelatedHiddenTable. These are the irregular indexes the
+// modern REPLACE path must maintain synchronously. Async-maintained indexes
+// (catalog.IsIndexAsync) are left to the cron and excluded here, exactly as the
+// legacy insert/update paths do.
+func collectSyncIvfMultiIndexes(tableDef *plan.TableDef) (map[string]*MultiTableIndex, error) {
+	res := make(map[string]*MultiTableIndex)
+	for _, indexdef := range tableDef.Indexes {
+		if !indexdef.TableExist || !catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
+			continue
+		}
+		async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+		if err != nil {
+			return nil, err
+		}
+		if async {
+			continue
+		}
+		if _, ok := res[indexdef.IndexName]; !ok {
+			res[indexdef.IndexName] = &MultiTableIndex{
+				IndexAlgo:       catalog.ToLower(indexdef.IndexAlgo),
+				IndexAlgoParams: indexdef.IndexAlgoParams,
+				IndexDefs:       make(map[string]*IndexDef),
+			}
+		}
+		res[indexdef.IndexName].IndexDefs[catalog.ToLower(indexdef.IndexAlgoTableType)] = indexdef
+	}
+	return res, nil
+}
+
+// collectSyncFulltextIndexes returns the non-async fulltext index definitions of a
+// table that the modern REPLACE path must maintain synchronously. Async indexes
+// are left to the cron, exactly as the legacy insert/update paths do.
+func collectSyncFulltextIndexes(tableDef *plan.TableDef) ([]*plan.IndexDef, error) {
+	var res []*plan.IndexDef
+	for _, indexdef := range tableDef.Indexes {
+		if !indexdef.TableExist || !catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+			continue
+		}
+		async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+		if err != nil {
+			return nil, err
+		}
+		if async {
+			continue
+		}
+		res = append(res, indexdef)
+	}
+	return res, nil
+}
+
+// sinkNewRowsForReplace materializes the processed new-row projection into a SINK
+// step and returns the step id together with a SINK_SCAN node that re-exposes the
+// rows under the original binding tag. The caller keeps using the same tag for the
+// main conflict-resolution branch, while index-maintenance sub-plans read the same
+// step via their own SINK_SCAN — guaranteeing the new rows are computed once.
+func (builder *QueryBuilder) sinkNewRowsForReplace(bindCtx *BindContext, nodeID, tag int32) (int32, int32) {
+	sinkProj := getProjectionByLastNode(builder, nodeID)
+	sinkID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_SINK,
+		Children:    []int32{nodeID},
+		ProjectList: sinkProj,
+	}, bindCtx)
+	sourceStep := builder.appendStep(sinkID)
+
+	scanProj := make([]*plan.Expr, len(sinkProj))
+	for i, e := range sinkProj {
+		scanProj[i] = &plan.Expr{
+			Typ: e.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: tag,
+					ColPos: int32(i),
+				},
+			},
+		}
+	}
+	scanID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_SINK_SCAN,
+		SourceStep:  []int32{sourceStep},
+		ProjectList: scanProj,
+		BindingTags: []int32{tag},
+	}, bindCtx)
+	return sourceStep, scanID
 }
 
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
@@ -53,6 +299,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	lastNodeID int32,
 	colName2Idx map[string]int32,
 	skipUniqueIdx []bool,
+	syncIvfIndexes map[string]*MultiTableIndex,
+	syncFulltextIndexes []*plan.IndexDef,
 ) (int32, error) {
 	objRef := dmlCtx.objRefs[0]
 	tableDef := dmlCtx.tableDefs[0]
@@ -62,6 +310,31 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectTag := selectNode.BindingTags[0]
+
+	// Synchronous ivfflat maintenance (issue #25000): the processed new-row
+	// projection must be materialized once and shared, so that auto-increment /
+	// generated columns are evaluated a single time and the same values flow into
+	// both the main conflict-resolution branch and the index-entries insert branch.
+	// Sink it and point the main branch at a SINK_SCAN carrying the same binding
+	// tag (so every downstream ColRef on selectTag stays valid). The main branch
+	// copies the entire new-row projection into fullProjList below, so remap keeps
+	// all sink columns and the tableDef.Cols layout the entries sub-plan relies on
+	// is preserved. The entries-insert sub-plan itself is built AFTER createQuery
+	// (see drainDeferredReplaceIvf), exactly like the legacy insert path, because
+	// it is hand-built with positional column refs and must not be re-optimized.
+	if len(syncIvfIndexes) > 0 || len(syncFulltextIndexes) > 0 {
+		newRowsStep, newScanID := builder.sinkNewRowsForReplace(bindCtx, lastNodeID, selectTag)
+		lastNodeID = newScanID
+		selectNode = builder.qry.Nodes[lastNodeID]
+
+		builder.deferredReplaceIvf = append(builder.deferredReplaceIvf, &deferredReplaceIvfCtx{
+			objRef:            objRef,
+			tableDef:          tableDef,
+			newRowsSourceStep: newRowsStep,
+			multiTableIndexes: syncIvfIndexes,
+			fulltextIndexes:   syncFulltextIndexes,
+		})
+	}
 
 	fullProjTag := builder.genNewBindTag()
 	fullProjList := make([]*plan.Expr, 0, len(selectNode.ProjectList)+len(tableDef.Cols))
