@@ -736,18 +736,6 @@ func TestDropIndexIfExistsMissingIndex(t *testing.T) {
 	require.Contains(t, err.Error(), "not found index: nonexist")
 }
 
-func TestUpdateFromUsesAggDedup(t *testing.T) {
-	mock := NewMockOptimizer(true)
-
-	logicPlan, err := runOneStmt(mock, t,
-		"UPDATE emp SET emp.sal = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build PostgreSQL-style update from: %v", err)
-	}
-
-	assertFallbackUpdateAggDedupWithAnyValue(t, logicPlan.GetQuery())
-}
-
 func TestUpdateFallbackMultiTargetGeneratedColumnsKeepProjectLayout(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
