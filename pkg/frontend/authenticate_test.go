@@ -10144,6 +10144,50 @@ func Test_shouldSkipImplicitOwnershipRevoke(t *testing.T) {
 	})
 }
 
+func TestGetObjectOwnerRoleNameSkipsDeletedOwnerRole(t *testing.T) {
+	ctx := context.TODO()
+
+	for _, tc := range []struct {
+		name     string
+		ownerSQL string
+	}{
+		{
+			name:     "database",
+			ownerSQL: getSqlForGetOwnerOfDatabase("db1"),
+		},
+		{
+			name:     "table",
+			ownerSQL: getSqlForGetOwnerOfTable("db1", "t1"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+
+			bh.sql2result[tc.ownerSQL] = newMrsForOwner([][]interface{}{{int64(100)}})
+			bh.sql2result[getSqlForRoleNameOfRoleId(100)] = newMrsForRoleName([][]interface{}{})
+
+			roleName, err := getObjectOwnerRoleName(ctx, bh, tc.ownerSQL)
+			require.NoError(t, err)
+			require.Empty(t, roleName)
+		})
+	}
+}
+
+func TestGetObjectOwnerRoleNameReturnsExistingOwnerRole(t *testing.T) {
+	ctx := context.TODO()
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	ownerSQL := getSqlForGetOwnerOfTable("db1", "t1")
+	bh.sql2result[ownerSQL] = newMrsForOwner([][]interface{}{{int64(100)}})
+	bh.sql2result[getSqlForRoleNameOfRoleId(100)] = newMrsForRoleName([][]interface{}{{"r1"}})
+
+	roleName, err := getObjectOwnerRoleName(ctx, bh, ownerSQL)
+	require.NoError(t, err)
+	require.Equal(t, "r1", roleName)
+}
+
 func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
@@ -10349,6 +10393,38 @@ func newMrsForRoleIdOfRole(rows [][]interface{}) *MysqlResultSet {
 
 	col1 := &MysqlColumn{}
 	col1.SetName("role_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForRoleName(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("role_name")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForOwner(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("owner")
 	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	mrs.AddColumn(col1)
