@@ -7899,6 +7899,21 @@ func getRoleNameByIDWithBackgroundExec(ctx context.Context, bh BackgroundExec, r
 	return erArray[0].GetString(ctx, 0, 0)
 }
 
+func getRoleNameByIDIfExistsWithBackgroundExec(ctx context.Context, bh BackgroundExec, roleID uint32) (string, error) {
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, getSqlForRoleNameOfRoleId(int64(roleID))); err != nil {
+		return "", err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return "", err
+	}
+	if !execResultArrayHasData(erArray) {
+		return "", nil
+	}
+	return erArray[0].GetString(ctx, 0, 0)
+}
+
 func getObjectOwnerRoleName(ctx context.Context, bh BackgroundExec, sql string) (string, error) {
 	bh.ClearExecResultSet()
 	if err := bh.Exec(ctx, sql); err != nil {
@@ -7918,7 +7933,7 @@ func getObjectOwnerRoleName(ctx context.Context, bh BackgroundExec, sql string) 
 	if owner < 0 {
 		return "", moerr.NewInternalErrorf(ctx, "invalid owner role id %d", owner)
 	}
-	return getRoleNameByIDWithBackgroundExec(ctx, bh, uint32(owner))
+	return getRoleNameByIDIfExistsWithBackgroundExec(ctx, bh, uint32(owner))
 }
 
 func getDatabaseOwnerRoleName(ctx context.Context, bh BackgroundExec, dbName string) (string, error) {
