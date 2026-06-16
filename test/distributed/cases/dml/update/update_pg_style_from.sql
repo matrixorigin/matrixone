@@ -344,11 +344,12 @@ DROP TABLE geo_fk_dedup_t;
 DROP TABLE geo_fk_dedup_p;
 DROP TABLE geo_fk_dedup_s;
 
--- Joined-target UPDATE ... FROM on the fallback path must still drop NULL rows
--- of left-join targets. jt1.id=2 has no jt2 match, so jt2's row_id is NULL for
--- that row; it must be filtered out of jt2's update pipeline while jt1.id=2 is
--- still updated. Replacing the any_value dedup with a row_number() window must
--- not lose this NULL-row safeguard.
+-- Fallback multi-target UPDATE ... FROM with LEFT JOIN target must still drop
+-- NULL rows of unmatched left-join targets. jt1.id=2 has no jt2 match, so
+-- jt2's row_id is NULL for that row; it must be filtered out of jt2's update
+-- pipeline while jt1.id=2 is still updated. Replacing the any_value dedup with
+-- a row_number() window must not lose this NULL-row safeguard.
+-- (Multi-target routes through the fallback buildTableUpdate path.)
 DROP TABLE IF EXISTS jt1;
 DROP TABLE IF EXISTS jt2;
 DROP TABLE IF EXISTS js;
@@ -365,6 +366,41 @@ SELECT COUNT(*) AS jt2_cnt FROM jt2;
 DROP TABLE jt1;
 DROP TABLE jt2;
 DROP TABLE js;
+
+-- Single-target UPDATE ... FROM with a LEFT JOIN on the source side routes
+-- through the new bindUpdate path. The target is always INNER-joined so its
+-- row_id is never NULL, and dedup on row_id must succeed for duplicate source
+-- matches even when the source uses LEFT JOIN.
+DROP TABLE IF EXISTS left_src_t;
+DROP TABLE IF EXISTS left_src_s1;
+DROP TABLE IF EXISTS left_src_s2;
+CREATE TABLE left_src_t (id INT PRIMARY KEY, v VARCHAR(20));
+CREATE TABLE left_src_s1 (t_id INT, v VARCHAR(20));
+CREATE TABLE left_src_s2 (t_id INT, tag VARCHAR(10));
+INSERT INTO left_src_t VALUES (1, 'orig'), (2, 'orig');
+INSERT INTO left_src_s1 VALUES (1, 'first'), (1, 'second'), (2, 'only');
+INSERT INTO left_src_s2 VALUES (1, 'tag1');
+UPDATE left_src_t SET v = s1.v FROM left_src_s1 s1 LEFT JOIN left_src_s2 s2 ON s1.t_id = s2.t_id WHERE s1.t_id = left_src_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM left_src_t;
+SELECT id, COUNT(*) AS per_id_cnt FROM left_src_t GROUP BY id ORDER BY id;
+SELECT v FROM left_src_t WHERE id = 2;
+DROP TABLE left_src_t;
+DROP TABLE left_src_s1;
+DROP TABLE left_src_s2;
+
+-- UPDATE ... FROM dedup via row_id must also work on tables without an
+-- explicit PRIMARY KEY (fake-PK / hidden row_id only).
+DROP TABLE IF EXISTS no_pk_t;
+DROP TABLE IF EXISTS no_pk_s;
+CREATE TABLE no_pk_t (v VARCHAR(20));
+CREATE TABLE no_pk_s (t_id INT, v VARCHAR(20));
+INSERT INTO no_pk_t VALUES ('orig');
+INSERT INTO no_pk_s VALUES (1, 'first'), (1, 'second');
+UPDATE no_pk_t SET v = s.v FROM no_pk_s s;
+SELECT COUNT(*) AS row_cnt FROM no_pk_t;
+SELECT v FROM no_pk_t;
+DROP TABLE no_pk_t;
+DROP TABLE no_pk_s;
 
 DROP TABLE IF EXISTS company;
 DROP TABLE IF EXISTS vec_join_case;

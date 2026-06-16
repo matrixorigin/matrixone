@@ -357,53 +357,57 @@ INSERT INTO jt1 VALUES (1, 'a'), (2, 'b');
 INSERT INTO jt2 VALUES (10, 1, 'x');
 INSERT INTO js VALUES (1, 'new1'), (2, 'new2');
 UPDATE jt1 LEFT JOIN jt2 ON jt2.k = jt1.id SET jt1.v = s.v, jt2.v = s.v FROM js s WHERE s.t_id = jt1.id;
-not supported: ROWID: 
-
-github.com/matrixorigin/matrixone/pkg/partition.Partition
-	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/partition/partition.go:177
-github.com/matrixorigin/matrixone/pkg/sql/colexec/order.(*container).sortAndSend
-	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/colexec/order/order.go:81
-github.com/matrixorigin/matrixone/pkg/sql/colexec/order.(*Order).Call
-	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/colexec/order/order.go:206
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/vm/types.go:358
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/vm/types.go:369
-github.com/matrixorigin/matrixone/pkg/sql/colexec/connector.(*Connector).Call
-	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/colexec/connector/connector.go:47
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/vm/types.go:358
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).Run
-	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/vm/pipeline/pipeline.go:71
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).RunWithReader
-	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/vm/pipeline/pipeline.go:59
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
-	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/compile/scope.go:203
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).ParallelRun
-	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/compile/scope.go:492
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
-	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/compile/scope.go:348
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).RemoteRun
-	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/compile/scope.go:400
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun.func1
-	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/compile/scope.go:304
-github.com/panjf2000/ants/v2.(*goWorker).run.func1
-	/Users/LoveYY/Develop/go/pkg/mod/github.com/panjf2000/ants/v2@v2.12.0/worker.go:72
-runtime.goexit
-	/opt/homebrew/opt/go/libexec/src/runtime/asm_arm64.s:1268
 SELECT id, v FROM jt1 ORDER BY id;
 ➤ id[4,32,0]  ¦  v[12,-1,0]  𝄀
-1  ¦  a  𝄀
-2  ¦  b
+1  ¦  new1  𝄀
+2  ¦  new2
 SELECT id, k, v FROM jt2 ORDER BY id;
 ➤ id[4,32,0]  ¦  k[4,32,0]  ¦  v[12,-1,0]  𝄀
-10  ¦  1  ¦  x
+10  ¦  1  ¦  new1
 SELECT COUNT(*) AS jt2_cnt FROM jt2;
 ➤ jt2_cnt[-5,64,0]  𝄀
 1
 DROP TABLE jt1;
 DROP TABLE jt2;
 DROP TABLE js;
+DROP TABLE IF EXISTS left_src_t;
+DROP TABLE IF EXISTS left_src_s1;
+DROP TABLE IF EXISTS left_src_s2;
+CREATE TABLE left_src_t (id INT PRIMARY KEY, v VARCHAR(20));
+CREATE TABLE left_src_s1 (t_id INT, v VARCHAR(20));
+CREATE TABLE left_src_s2 (t_id INT, tag VARCHAR(10));
+INSERT INTO left_src_t VALUES (1, 'orig'), (2, 'orig');
+INSERT INTO left_src_s1 VALUES (1, 'first'), (1, 'second'), (2, 'only');
+INSERT INTO left_src_s2 VALUES (1, 'tag1');
+UPDATE left_src_t SET v = s1.v FROM left_src_s1 s1 LEFT JOIN left_src_s2 s2 ON s1.t_id = s2.t_id WHERE s1.t_id = left_src_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM left_src_t;
+➤ row_cnt[-5,64,0]  ¦  id_cnt[-5,64,0]  𝄀
+2  ¦  2
+SELECT id, COUNT(*) AS per_id_cnt FROM left_src_t GROUP BY id ORDER BY id;
+➤ id[4,32,0]  ¦  per_id_cnt[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+SELECT v FROM left_src_t WHERE id = 2;
+➤ v[12,-1,0]  𝄀
+only
+DROP TABLE left_src_t;
+DROP TABLE left_src_s1;
+DROP TABLE left_src_s2;
+DROP TABLE IF EXISTS no_pk_t;
+DROP TABLE IF EXISTS no_pk_s;
+CREATE TABLE no_pk_t (v VARCHAR(20));
+CREATE TABLE no_pk_s (t_id INT, v VARCHAR(20));
+INSERT INTO no_pk_t VALUES ('orig');
+INSERT INTO no_pk_s VALUES (1, 'first'), (1, 'second');
+UPDATE no_pk_t SET v = s.v FROM no_pk_s s;
+SELECT COUNT(*) AS row_cnt FROM no_pk_t;
+➤ row_cnt[-5,64,0]  𝄀
+1
+SELECT v FROM no_pk_t;
+➤ v[12,-1,0]  𝄀
+first
+DROP TABLE no_pk_t;
+DROP TABLE no_pk_s;
 DROP TABLE IF EXISTS company;
 DROP TABLE IF EXISTS vec_join_case;
 DROP TABLE IF EXISTS region;
