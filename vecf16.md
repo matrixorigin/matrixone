@@ -469,3 +469,53 @@ is best-or-tied on p50 in every cell; the noGPU·noSIMD floor is ~2× slower on 
   index) moved warm QPS ~0% and cold ~0% (59.6 vs 55.0) — warm reads are cache-served and never call
   `FileWithChecksum`. The big cross-binary "cold QPS" deltas seen during the sweep are **OS-page-cache
   state**, not code. Treat cold QPS as cache noise.
+
+### Cold-scan profile — where cold time goes (read + decode, NOT materialize)
+
+CPU profile of an f32 table scan (`SELECT COUNT(*) … WHERE l2_distance(embedding,'[…]')≥0`) with the
+SHARED cache reverted to the default ~512 MB (the 3 GB column ≫ cache, so scans stay cold), vs the
+warm scan. `runtime.memmove` (46% of cold CPU) splits cleanly: **46% lz4 decode + 45% FileWithChecksum
+de-interleave + 8% UnionBatch**.
+
+| stage | cold scan | warm scan |
+|---|---|---|
+| **read path** (`FileWithChecksum.ReadAt`): pread + de-interleave + CRC | **~51%** | 0 (cache-served) |
+|  ├ pread syscall (kernel copy from page cache) | ~27% | — |
+|  ├ de-interleave memmove (2 KB CRC-block → contiguous) | ~21% | — |
+|  └ CRC verify | ~3% | — |
+| **lz4 decode** (`decodeBlock`) | **~21%** | 0 |
+| materialize (`UnionBatch` memmove) | ~4% | **~56%** |
+| distance | ~3% | ~33% |
+
+- **Cold is read-path + decode bound (~72%); materialize is ~4%.** Warm is the mirror — pure
+  materialize + distance, with zero read/CRC/lz4 (decoded data served from cache).
+- **lz4 runs ONLY on the cold (miss) path** — the cache stores *decoded* data, so a warm hit never
+  decompresses. The UnionBatch materialization fix is therefore a *warm*-scan win (~4% of cold vs ~56% of warm).
+- For *bulk cold scans* the FileWithChecksum de-interleave is **~21%** (vs ~1.85% in point search) — it
+  scales with bytes pushed through the per-2 KB-CRC on-disk format.
+
+**Measured raw throughput (this WSL2 SSD; raw bytes, no CRC/lz4):**
+
+| | rate |
+|---|---|
+| cold disk, single-stream O_DIRECT bs=1M (QD=1) | 1.4 GB/s |
+| cold disk, big-IO (bs=16M) or 4-parallel | **3.2 GB/s** |
+| warm page cache | **13.5 GB/s** |
+
+End-to-end f32 scan (3 GB logical column): warm ≈ 207 ms (**~15 GB/s**, materialize-bound); cold ≈ 8.5 s
+(**~0.36 GB/s** effective) — but raw disk is only ~0.6–1.3 s of that, so cold is dominated by decode +
+per-block copies, **not** I/O (the SSD does 3 GB/s; it isn't the bottleneck). Supersedes the
+"~1.1 GB/s O_DIRECT / 4–9 GB/s cached" figure in the Caveats above.
+
+**S3-FIFO double-miss:** cold passes were `[8520, 6782, 263, 209, 206] ms` — TWO slow passes before
+warming. A fresh miss is admitted to the *small* queue (`queue1` in `fifocache`); a scan whose working
+set ≫ queue1 churns its own blocks to the ghost queue before reuse, so the *second* pass (ghost-hit)
+is what promotes them to the main queue (`queue2`). Net: the whole read+decode path is paid ~2× before
+the decoded data sticks — this is S3-FIFO's scan-resistance working as designed.
+
+**Cold-start levers (data-ranked):** (1) **eliminate the double-miss** — route operational/point reads
+straight to `queue2` (mirror of the existing `SkipMemoryCacheWrites` scan hint); ~halves cold since the
+whole path is paid twice. (2) **shrink the read path** — bigger on-disk CRC blocks cut the de-interleave
+(~21%) + CRC; mmap'ing the cache file removes the pread copy (~27%). (3) **parallelize lz4** (~21%).
+Caveat: this profile is mo-cold / OS-page-cache-**warm**, so pread shows as on-CPU memcpy; on a truly
+cold machine that ~27% becomes off-CPU disk-wait and the on-CPU mix tilts further toward de-interleave + lz4.
