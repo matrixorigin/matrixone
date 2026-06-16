@@ -2793,16 +2793,17 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		vCol = toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length+addCnt)
 		ToSliceNoTypeCheck(w, &wCol)
 
-		// Fast path: appending an entire in-order source varlen vector with no nulls
-		// and no grouping — the block-scan materialization path. The general loop
-		// below calls BuildVarlenaFromVarlena per row, which copies each row's content
-		// and writes each header individually: N small memmoves plus incremental area
-		// growth, which the scan CPU profile showed is ~50% of a table scan. Here we
-		// instead copy the whole source area in ONE memmove and the whole header array
-		// in another, then rebase the non-inline offsets with an unsafe walk (no
-		// per-row bounds checks). Semantically identical to the loop for this case.
-		if flags == nil && offset == 0 && cnt == w.length &&
-			w.nsp.EmptyByFlag() && w.gsp.EmptyByFlag() {
+		// Fast path: appending an entire in-order source varlen vector — the block-scan
+		// materialization path. The general loop below calls BuildVarlenaFromVarlena
+		// per row, which copies each row's content and writes each header individually:
+		// N small memmoves plus incremental area growth, which the scan CPU profile
+		// showed is ~50% of a table scan. Here we instead copy the whole source area in
+		// ONE memmove and the whole header array in another, then rebase the non-inline
+		// offsets with an unsafe walk. Nulls are fine: a null row's content is not in
+		// w.area, and its header is never read — we just propagate w's null/grouping
+		// bitmaps (shifted by oldLen) and zero the null rows' copied headers so no
+		// rebased garbage offset lingers. Semantically identical to the loop.
+		if flags == nil && offset == 0 && cnt == w.length {
 			oldLen := v.length
 			baseOff := len(v.area)
 			if len(w.area) > 0 {
@@ -2828,6 +2829,24 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					}
 					p = unsafe.Add(p, types.VarlenaSize)
 				}
+			}
+			// propagate grouping bits (value is still real for these rows).
+			if !w.gsp.EmptyByFlag() {
+				base := uint64(oldLen)
+				w.gsp.Foreach(func(i uint64) bool {
+					nulls.Add(&v.gsp, base+i)
+					return true
+				})
+			}
+			// propagate null bits and clear those (never-read) headers so a copied
+			// big-header offset can't linger as a dangling reference into v.area.
+			if !w.nsp.EmptyByFlag() {
+				base := uint64(oldLen)
+				w.nsp.Foreach(func(i uint64) bool {
+					nulls.Add(&v.nsp, base+i)
+					vCol[oldLen+int(i)] = types.Varlena{}
+					return true
+				})
 			}
 			v.length += cnt
 			return nil
