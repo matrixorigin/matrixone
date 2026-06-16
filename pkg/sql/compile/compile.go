@@ -4111,6 +4111,13 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		// One timestamp per statement: all scopes must expand WRITE_FILE_PATTERN
 		// time directives against the same instant.
 		stmtAt := externalInsertStmtTime(c.proc, c.startAt)
+		localFileStage, err := externalInsertTargetIsLocalFile(c.proc, node, stmtAt)
+		if err != nil {
+			return nil, err
+		}
+		if localFileStage && (len(ss) != 1 || ss[0].NodeInfo.Mcpu != 1 || !isSameCN(ss[0].NodeInfo.Addr, c.addr)) {
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
 		for i := range ss {
 			insertArg, err := constructExternalInsert(c.proc, node, c.e, stmtAt)
 			if err != nil {
