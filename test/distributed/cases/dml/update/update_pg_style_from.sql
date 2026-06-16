@@ -344,6 +344,28 @@ DROP TABLE geo_fk_dedup_t;
 DROP TABLE geo_fk_dedup_p;
 DROP TABLE geo_fk_dedup_s;
 
+-- Joined-target UPDATE ... FROM on the fallback path must still drop NULL rows
+-- of left-join targets. jt1.id=2 has no jt2 match, so jt2's row_id is NULL for
+-- that row; it must be filtered out of jt2's update pipeline while jt1.id=2 is
+-- still updated. Replacing the any_value dedup with a row_number() window must
+-- not lose this NULL-row safeguard.
+DROP TABLE IF EXISTS jt1;
+DROP TABLE IF EXISTS jt2;
+DROP TABLE IF EXISTS js;
+CREATE TABLE jt1 (id INT PRIMARY KEY, v VARCHAR(20));
+CREATE TABLE jt2 (id INT PRIMARY KEY, k INT, v VARCHAR(20));
+CREATE TABLE js (t_id INT, v VARCHAR(20));
+INSERT INTO jt1 VALUES (1, 'a'), (2, 'b');
+INSERT INTO jt2 VALUES (10, 1, 'x');
+INSERT INTO js VALUES (1, 'new1'), (2, 'new2');
+UPDATE jt1 LEFT JOIN jt2 ON jt2.k = jt1.id SET jt1.v = s.v, jt2.v = s.v FROM js s WHERE s.t_id = jt1.id;
+SELECT id, v FROM jt1 ORDER BY id;
+SELECT id, k, v FROM jt2 ORDER BY id;
+SELECT COUNT(*) AS jt2_cnt FROM jt2;
+DROP TABLE jt1;
+DROP TABLE jt2;
+DROP TABLE js;
+
 DROP TABLE IF EXISTS company;
 DROP TABLE IF EXISTS vec_join_case;
 DROP TABLE IF EXISTS region;

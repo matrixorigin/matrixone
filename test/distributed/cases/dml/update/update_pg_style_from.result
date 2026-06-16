@@ -347,6 +347,63 @@ only
 DROP TABLE geo_fk_dedup_t;
 DROP TABLE geo_fk_dedup_p;
 DROP TABLE geo_fk_dedup_s;
+DROP TABLE IF EXISTS jt1;
+DROP TABLE IF EXISTS jt2;
+DROP TABLE IF EXISTS js;
+CREATE TABLE jt1 (id INT PRIMARY KEY, v VARCHAR(20));
+CREATE TABLE jt2 (id INT PRIMARY KEY, k INT, v VARCHAR(20));
+CREATE TABLE js (t_id INT, v VARCHAR(20));
+INSERT INTO jt1 VALUES (1, 'a'), (2, 'b');
+INSERT INTO jt2 VALUES (10, 1, 'x');
+INSERT INTO js VALUES (1, 'new1'), (2, 'new2');
+UPDATE jt1 LEFT JOIN jt2 ON jt2.k = jt1.id SET jt1.v = s.v, jt2.v = s.v FROM js s WHERE s.t_id = jt1.id;
+not supported: ROWID: 
+
+github.com/matrixorigin/matrixone/pkg/partition.Partition
+	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/partition/partition.go:177
+github.com/matrixorigin/matrixone/pkg/sql/colexec/order.(*container).sortAndSend
+	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/colexec/order/order.go:81
+github.com/matrixorigin/matrixone/pkg/sql/colexec/order.(*Order).Call
+	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/colexec/order/order.go:206
+github.com/matrixorigin/matrixone/pkg/vm.Exec
+	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/vm/types.go:358
+github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
+	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/vm/types.go:369
+github.com/matrixorigin/matrixone/pkg/sql/colexec/connector.(*Connector).Call
+	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/colexec/connector/connector.go:47
+github.com/matrixorigin/matrixone/pkg/vm.Exec
+	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/vm/types.go:358
+github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).Run
+	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/vm/pipeline/pipeline.go:71
+github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).RunWithReader
+	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/vm/pipeline/pipeline.go:59
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
+	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/compile/scope.go:203
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).ParallelRun
+	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/compile/scope.go:492
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
+	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/compile/scope.go:348
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).RemoteRun
+	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/compile/scope.go:400
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun.func1
+	/Users/LoveYY/Develop/matrixorigin/matrixone/.worktrees/issue-23137/pkg/sql/compile/scope.go:304
+github.com/panjf2000/ants/v2.(*goWorker).run.func1
+	/Users/LoveYY/Develop/go/pkg/mod/github.com/panjf2000/ants/v2@v2.12.0/worker.go:72
+runtime.goexit
+	/opt/homebrew/opt/go/libexec/src/runtime/asm_arm64.s:1268
+SELECT id, v FROM jt1 ORDER BY id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b
+SELECT id, k, v FROM jt2 ORDER BY id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  v[12,-1,0]  𝄀
+10  ¦  1  ¦  x
+SELECT COUNT(*) AS jt2_cnt FROM jt2;
+➤ jt2_cnt[-5,64,0]  𝄀
+1
+DROP TABLE jt1;
+DROP TABLE jt2;
+DROP TABLE js;
 DROP TABLE IF EXISTS company;
 DROP TABLE IF EXISTS vec_join_case;
 DROP TABLE IF EXISTS region;

@@ -824,6 +824,30 @@ func TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing
 	}
 }
 
+// TestUpdateFallbackPgStyleFromKeepsRowIdNullFilter guards the fallback path
+// against losing the join-target NULL-row safeguard. The fallback path's
+// needAggFilter drives both the any_value dedup AND an isnotnull(row_id) filter
+// that drops NULL rows from left/right-join targets. Replacing the dedup with a
+// row_number() window must still keep that NULL filter, otherwise a joined-target
+// NULL row could leak into the update pipeline.
+func TestUpdateFallbackPgStyleFromKeepsRowIdNullFilter(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback UPDATE FROM plan: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if hasAnyValueAgg(query) {
+		t.Fatalf("fallback UPDATE FROM dedup must not use any_value aggregation")
+	}
+	if !hasRowIdIsNotNullFilter(query) {
+		t.Fatalf("fallback UPDATE FROM must keep the isnotnull(row_id) join-target NULL-row filter")
+	}
+}
+
 func TestUpdatePgStyleFromDedupExpandsDefaultBeforeDedup(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockDefaultExpr(t, mock, "nation", "n_name", "name-default")
@@ -1108,6 +1132,43 @@ func hasUpdateFromDedupAnyValueAgg(query *Query, groupByLen int) bool {
 		}
 		for _, aggExpr := range node.AggList {
 			if fn := aggExpr.GetF(); fn != nil && fn.Func.ObjName == "any_value" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasAnyValueAgg reports whether the plan contains any AGG node aggregating with
+// any_value, regardless of GROUP BY shape.
+func hasAnyValueAgg(query *Query) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+		for _, aggExpr := range node.AggList {
+			if fn := aggExpr.GetF(); fn != nil && fn.Func.ObjName == "any_value" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasRowIdIsNotNullFilter reports whether the plan filters out joined-target
+// NULL rows via isnotnull(row_id). This safeguard must survive on the fallback
+// UPDATE ... FROM path even after duplicate matches are deduped by row_number().
+func hasRowIdIsNotNullFilter(query *Query) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_FILTER {
+			continue
+		}
+		for _, f := range node.FilterList {
+			fn := f.GetF()
+			if fn == nil || fn.Func.ObjName != "isnotnull" || len(fn.Args) != 1 {
+				continue
+			}
+			if exprContainsColName(fn.Args[0], catalog.Row_ID) {
 				return true
 			}
 		}

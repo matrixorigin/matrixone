@@ -59,8 +59,13 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 		if err != nil {
 			return nil, err
 		}
+		// Duplicate source matches are now deduped by the row_number() window
+		// above, so the per-table plan must skip the any_value aggregation. Keep
+		// needAggFilter set, though: it also drives the join-target NULL-row
+		// filter (row_id IS NOT NULL) that must survive for joined-target
+		// UPDATE ... FROM.
 		for _, updatePlanCtx := range updatePlanCtxs {
-			updatePlanCtx.needAggFilter = false
+			updatePlanCtx.dedupByRowNumber = true
 		}
 	}
 
