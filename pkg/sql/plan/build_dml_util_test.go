@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -301,5 +302,174 @@ func TestAppendIndexPrefixProjection(t *testing.T) {
 		require.Equal(t, lastNodeID, gotNodeID)
 		require.Equal(t, useColumns, gotUseColumns)
 		require.Len(t, builder.qry.Nodes, 1)
+	})
+}
+
+func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
+	newBuilder := func(t *testing.T) (*QueryBuilder, *BindContext, int32) {
+		t.Helper()
+
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		bindCtx := NewBindContext(builder, nil)
+		lastNodeID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT,
+			Stats:    &plan.Stats{Selectivity: 1, Outcnt: 1, Cost: 1, TableCnt: 1},
+			ProjectList: []*plan.Expr{
+				{
+					Typ: plan.Type{Id: int32(types.T_int64)},
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{Name: "id", ColPos: 0},
+					},
+				},
+				{
+					Typ: plan.Type{Id: int32(types.T_text), Width: types.MaxVarcharLen},
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{Name: "body", ColPos: 1},
+					},
+				},
+				{
+					Typ: plan.Type{Id: int32(types.T_varchar), Width: 32},
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{Name: "tenant", ColPos: 2},
+					},
+				},
+			},
+		}, bindCtx)
+		return builder, bindCtx, lastNodeID
+	}
+
+	indexTableDef := &plan.TableDef{
+		Name: "idx_body",
+		Cols: []*plan.ColDef{
+			{
+				Name: catalog.Row_ID,
+				Typ:  plan.Type{Id: int32(types.T_Rowid), Width: 16},
+			},
+			{
+				Name: catalog.IndexTableIndexColName,
+				Typ:  plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+			},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.IndexTableIndexColName},
+	}
+	typMap := map[string]plan.Type{
+		"id":     {Id: int32(types.T_int64)},
+		"body":   {Id: int32(types.T_text), Width: types.MaxVarcharLen},
+		"tenant": {Id: int32(types.T_varchar), Width: 32},
+	}
+	posMap := map[string]int{
+		"id":     0,
+		"body":   1,
+		"tenant": 2,
+	}
+
+	extractLookupExpr := func(t *testing.T, joinNode *plan.Node) *plan.Expr {
+		t.Helper()
+		require.Equal(t, plan.Node_JOIN, joinNode.NodeType)
+		require.Len(t, joinNode.OnList, 1)
+
+		joinFn := joinNode.OnList[0].GetF()
+		require.NotNil(t, joinFn)
+		require.Equal(t, "=", joinFn.Func.ObjName)
+		require.Len(t, joinFn.Args, 2)
+		return joinFn.Args[1]
+	}
+	requirePrefixExpr := func(t *testing.T, expr *plan.Expr, colName string, length int64) {
+		t.Helper()
+
+		castFn := expr.GetF()
+		require.NotNil(t, castFn)
+		require.Equal(t, "cast", castFn.Func.ObjName)
+		require.Len(t, castFn.Args, 2)
+
+		substringFn := castFn.Args[0].GetF()
+		require.NotNil(t, substringFn)
+		require.Equal(t, "substring", substringFn.Func.ObjName)
+		require.Len(t, substringFn.Args, 3)
+		require.Equal(t, colName, substringFn.Args[0].GetCol().Name)
+		require.Equal(t, int32(1), substringFn.Args[0].GetCol().RelPos)
+		require.Equal(t, int64(1), substringFn.Args[1].GetLit().GetI64Val())
+		require.Equal(t, length, substringFn.Args[2].GetLit().GetI64Val())
+	}
+
+	t.Run("single prefix part", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+
+		gotNodeID, err := appendDeleteIndexTablePlan(
+			builder,
+			bindCtx,
+			&plan.ObjectRef{ObjName: "idx_body"},
+			indexTableDef,
+			&plan.IndexDef{
+				Parts:           []string{"body"},
+				IndexAlgoParams: `{"prefix_lengths":"body:8"}`,
+			},
+			typMap,
+			posMap,
+			lastNodeID,
+			true,
+		)
+
+		require.NoError(t, err)
+		lookupExpr := extractLookupExpr(t, builder.qry.Nodes[gotNodeID])
+		requirePrefixExpr(t, lookupExpr, "body", 8)
+	})
+
+	t.Run("composite prefix part", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+
+		gotNodeID, err := appendDeleteIndexTablePlan(
+			builder,
+			bindCtx,
+			&plan.ObjectRef{ObjName: "idx_body_tenant"},
+			indexTableDef,
+			&plan.IndexDef{
+				Parts:           []string{"body", "tenant"},
+				IndexAlgoParams: `{"prefix_lengths":"body:8"}`,
+			},
+			typMap,
+			posMap,
+			lastNodeID,
+			false,
+		)
+
+		require.NoError(t, err)
+		lookupExpr := extractLookupExpr(t, builder.qry.Nodes[gotNodeID])
+
+		serialFn := lookupExpr.GetF()
+		require.NotNil(t, serialFn)
+		require.Equal(t, "serial_full", serialFn.Func.ObjName)
+		require.Len(t, serialFn.Args, 2)
+		requirePrefixExpr(t, serialFn.Args[0], "body", 8)
+		require.Equal(t, "tenant", serialFn.Args[1].GetCol().Name)
+	})
+
+	t.Run("composite unique prefix part", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+
+		gotNodeID, err := appendDeleteIndexTablePlan(
+			builder,
+			bindCtx,
+			&plan.ObjectRef{ObjName: "idx_body_tenant"},
+			indexTableDef,
+			&plan.IndexDef{
+				Parts:           []string{"body", "tenant"},
+				IndexAlgoParams: `{"prefix_lengths":"body:8"}`,
+			},
+			typMap,
+			posMap,
+			lastNodeID,
+			true,
+		)
+
+		require.NoError(t, err)
+		lookupExpr := extractLookupExpr(t, builder.qry.Nodes[gotNodeID])
+
+		serialFn := lookupExpr.GetF()
+		require.NotNil(t, serialFn)
+		require.Equal(t, "serial", serialFn.Func.ObjName)
+		require.Len(t, serialFn.Args, 2)
+		requirePrefixExpr(t, serialFn.Args[0], "body", 8)
+		require.Equal(t, "tenant", serialFn.Args[1].GetCol().Name)
 	})
 }

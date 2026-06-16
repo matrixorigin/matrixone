@@ -2415,34 +2415,36 @@ func appendDeleteIndexTablePlan(
 	// append join node
 	var joinConds []*Expr
 	var leftExpr *Expr
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexdef.IndexAlgoParams)
+	if err != nil {
+		return -1, err
+	}
 	partsLength := len(indexdef.Parts)
 	if partsLength == 1 {
-		orginIndexColumnName := indexdef.Parts[0]
-		typ := typMap[orginIndexColumnName]
-		leftExpr = &Expr{
-			Typ: typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 1,
-					ColPos: int32(posMap[orginIndexColumnName]),
-					Name:   orginIndexColumnName,
-				},
-			},
+		originIndexColumnName := catalog.ResolveAlias(indexdef.Parts[0])
+		leftExpr, err = builder.makeIndexPartExpr(
+			1,
+			int32(posMap[originIndexColumnName]),
+			originIndexColumnName,
+			typMap[originIndexColumnName],
+			prefixLengths,
+		)
+		if err != nil {
+			return -1, err
 		}
 	} else {
 		args := make([]*Expr, partsLength)
 		for i, column := range indexdef.Parts {
 			column = catalog.ResolveAlias(column)
-			typ := typMap[column]
-			args[i] = &plan.Expr{
-				Typ: typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 1,
-						ColPos: int32(posMap[column]),
-						Name:   column,
-					},
-				},
+			args[i], err = builder.makeIndexPartExpr(
+				1,
+				int32(posMap[column]),
+				column,
+				typMap[column],
+				prefixLengths,
+			)
+			if err != nil {
+				return -1, err
 			}
 		}
 		if isUK {
