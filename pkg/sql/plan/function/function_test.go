@@ -236,6 +236,20 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldCast: false,
 			requireRet: types.T_varchar.ToType(),
 		},
+		{
+			name: "uuid_to_bin", args: []types.Type{types.T_varchar.ToType(), types.T_float64.ToType()},
+			shouldErr:  false,
+			requireFid: UUID_TO_BIN, requireOid: 0,
+			shouldCast: false,
+			requireRet: types.T_varbinary.ToType(),
+		},
+		{
+			name: "bin_to_uuid", args: []types.Type{types.T_varbinary.ToType(), types.T_float64.ToType()},
+			shouldErr:  false,
+			requireFid: BIN_TO_UUID, requireOid: 0,
+			shouldCast: false,
+			requireRet: types.T_varchar.ToType(),
+		},
 	}
 
 	proc := testutil.NewProcess(t)

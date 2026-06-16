@@ -353,6 +353,9 @@ func buildBlockPKSearchFuncs(
 		case types.T_decimal128:
 			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory([]types.Decimal128{types.DecodeDecimal128(basePKFilter.LB)}, types.CompareDecimal128)
 			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory([]types.Decimal128{types.DecodeDecimal128(basePKFilter.LB)}, types.CompareDecimal128)
+		case types.T_decimal256:
+			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory([]types.Decimal256{types.DecodeDecimal256(basePKFilter.LB)}, types.CompareDecimal256)
+			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory([]types.Decimal256{types.DecodeDecimal256(basePKFilter.LB)}, types.CompareDecimal256)
 		case types.T_varchar, types.T_char, types.T_binary, types.T_json:
 			sortedSearchFunc = vector.VarlenBinarySearchOffsetByValFactory([][]byte{basePKFilter.LB})
 			unSortedSearchFunc = vector.VarlenLinearSearchOffsetByValFactory([][]byte{basePKFilter.LB})
@@ -441,6 +444,9 @@ func buildBlockPKSearchFuncs(
 		case types.T_decimal128:
 			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Decimal128](vec), types.CompareDecimal128)
 			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Decimal128](vec), types.CompareDecimal128)
+		case types.T_decimal256:
+			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Decimal256](vec), types.CompareDecimal256)
+			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Decimal256](vec), types.CompareDecimal256)
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 			types.T_array_float32, types.T_array_float64, types.T_datalink:
 			sortedSearchFunc = vector.VarlenBinarySearchOffsetByValFactory(vector.InefficientMustBytesCol(vec))
@@ -511,6 +517,9 @@ func buildBlockPKSearchFuncs(
 		case types.T_decimal128:
 			sortedSearchFunc = vector.FixedSizeSearchOffsetsByLessTypeChecked(types.DecodeDecimal128(basePKFilter.LB), closed, true, types.CompareDecimal128)
 			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByLessTypeChecked(types.DecodeDecimal128(basePKFilter.LB), closed, false, types.CompareDecimal128)
+		case types.T_decimal256:
+			sortedSearchFunc = vector.FixedSizeSearchOffsetsByLessTypeChecked(types.DecodeDecimal256(basePKFilter.LB), closed, true, types.CompareDecimal256)
+			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByLessTypeChecked(types.DecodeDecimal256(basePKFilter.LB), closed, false, types.CompareDecimal256)
 		case types.T_varchar, types.T_char, types.T_binary, types.T_json:
 			sortedSearchFunc = vector.VarlenSearchOffsetByLess(basePKFilter.LB, closed, true)
 			unSortedSearchFunc = vector.VarlenSearchOffsetByLess(basePKFilter.LB, closed, false)
@@ -574,6 +583,9 @@ func buildBlockPKSearchFuncs(
 		case types.T_decimal128:
 			sortedSearchFunc = vector.FixedSizeSearchOffsetsByGTTypeChecked(types.DecodeDecimal128(basePKFilter.LB), closed, true, types.CompareDecimal128)
 			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByGTTypeChecked(types.DecodeDecimal128(basePKFilter.LB), closed, false, types.CompareDecimal128)
+		case types.T_decimal256:
+			sortedSearchFunc = vector.FixedSizeSearchOffsetsByGTTypeChecked(types.DecodeDecimal256(basePKFilter.LB), closed, true, types.CompareDecimal256)
+			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByGTTypeChecked(types.DecodeDecimal256(basePKFilter.LB), closed, false, types.CompareDecimal256)
 		case types.T_varchar, types.T_char, types.T_json, types.T_binary:
 			sortedSearchFunc = vector.VarlenSearchOffsetByGreat(basePKFilter.LB, closed, true)
 			unSortedSearchFunc = vector.VarlenSearchOffsetByGreat(basePKFilter.LB, closed, false)
@@ -679,6 +691,12 @@ func buildBlockPKSearchFuncs(
 
 			sortedSearchFunc = vector.CollectOffsetsByBetweenWithCompareFactory(val1, val2, types.CompareDecimal128)
 			unSortedSearchFunc = vector.FixedSizedLinearCollectOffsetsByBetweenFactory(val1, val2, types.CompareDecimal128)
+		case types.T_decimal256:
+			val1 := types.DecodeDecimal256(basePKFilter.LB)
+			val2 := types.DecodeDecimal256(basePKFilter.UB)
+
+			sortedSearchFunc = vector.CollectOffsetsByBetweenWithCompareFactory(val1, val2, types.CompareDecimal256)
+			unSortedSearchFunc = vector.FixedSizedLinearCollectOffsetsByBetweenFactory(val1, val2, types.CompareDecimal256)
 		case types.T_text, types.T_datalink, types.T_varchar, types.T_char, types.T_binary, types.T_json:
 			lb := string(basePKFilter.LB)
 			ub := string(basePKFilter.UB)
@@ -870,6 +888,17 @@ func mergeBaseFilterInKind(
 		} else {
 			err = vector.Intersection2VectorOrdered(a, b, ret.Vec, mp,
 				func(x, y types.Decimal128) int { return types.CompareDecimal128(x, y) })
+		}
+
+	case types.T_decimal256:
+		a := vector.MustFixedColNoTypeCheck[types.Decimal256](va)
+		b := vector.MustFixedColNoTypeCheck[types.Decimal256](vb)
+		if isOR {
+			err = vector.Union2VectorOrdered(a, b, ret.Vec, mp,
+				func(x, y types.Decimal256) int { return types.CompareDecimal256(x, y) })
+		} else {
+			err = vector.Intersection2VectorOrdered(a, b, ret.Vec, mp,
+				func(x, y types.Decimal256) int { return types.CompareDecimal256(x, y) })
 		}
 
 	case types.T_varchar, types.T_char, types.T_json, types.T_binary, types.T_text, types.T_datalink:
