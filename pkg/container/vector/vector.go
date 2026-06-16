@@ -2655,11 +2655,17 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		var vCol, wCol []types.Varlena
 		ToSliceNoTypeCheck(v, &vCol)
 		ToSliceNoTypeCheck(w, &wCol)
-		// pre-grow the area once for all selected non-inline rows so the per-row
-		// BuildVarlenaNoInline appends below never realloc (counts may include null
-		// rows that are skipped — over-reserving is harmless).
+		// pre-grow the area once for the selected non-inline, non-null rows so the
+		// per-row BuildVarlenaNoInline appends below never realloc. Null rows are NOT
+		// copied (the loop below skips them via w.nsp), and a reused vector can retain
+		// a stale non-inline header in a null slot — counting those would reserve area
+		// for dead payload (large needless mp.Grow / alloc failure), so exclude them.
 		total := 0
+		hasNull := !w.GetNulls().EmptyByFlag()
 		for _, sel := range sels {
+			if hasNull && w.nsp.Contains(uint64(sel)) {
+				continue
+			}
 			if !wCol[sel].IsSmall() {
 				_, l := wCol[sel].OffsetLen()
 				total += int(l)
@@ -2863,13 +2869,20 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			return nil
 		}
 
-		// pre-grow the area once for all non-inline source rows in this append so the
-		// per-row BuildVarlenaNoInline calls below never realloc (over-counting null
-		// rows that are skipped is harmless).
+		// pre-grow the area once for the non-inline, non-null source rows in this
+		// append so the per-row BuildVarlenaNoInline calls below never realloc. Null
+		// rows are NOT copied (the loops below skip them via w.nsp), and a reused
+		// vector can retain a stale non-inline header in a null slot — counting those
+		// would reserve area for dead payload (large needless mp.Grow / alloc
+		// failure), so exclude them to match what's actually appended.
 		{
 			total := 0
+			hasNull := !w.nsp.EmptyByFlag()
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
+					if hasNull && w.nsp.Contains(uint64(offset)+uint64(i)) {
+						continue
+					}
 					if s := &wCol[int(offset)+i]; !s.IsSmall() {
 						_, l := s.OffsetLen()
 						total += int(l)
@@ -2877,11 +2890,15 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				}
 			} else {
 				for i := range flags {
-					if flags[i] != 0 {
-						if s := &wCol[int(offset)+i]; !s.IsSmall() {
-							_, l := s.OffsetLen()
-							total += int(l)
-						}
+					if flags[i] == 0 {
+						continue
+					}
+					if hasNull && w.nsp.Contains(uint64(offset)+uint64(i)) {
+						continue
+					}
+					if s := &wCol[int(offset)+i]; !s.IsSmall() {
+						_, l := s.OffsetLen()
+						total += int(l)
 					}
 				}
 			}
