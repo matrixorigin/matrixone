@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -71,6 +72,42 @@ func TestPrivilegeTipWritesDatabase(t *testing.T) {
 	require.True(t, privilegeTipWritesDatabase(privilegeTips{typ: PrivilegeTypeInsert}))
 	require.True(t, privilegeTipWritesDatabase(privilegeTips{typ: PrivilegeTypeUpdate}))
 	require.True(t, privilegeTipWritesDatabase(privilegeTips{typ: PrivilegeTypeDelete}))
+}
+
+func TestProtectedDatabaseNameKeepsOriginalCase(t *testing.T) {
+	protectedDatabases := map[string]struct{}{"CamelDB": {}}
+
+	require.False(t, checkProtectedDatabaseWriteWithSet(context.Background(), nil, protectedDatabases, "CamelDB"))
+	require.True(t, checkProtectedDatabaseWriteWithSet(context.Background(), nil, protectedDatabases, "camedb"))
+}
+
+func TestCheckProtectedDatabaseWriteWithSet(t *testing.T) {
+	ctx := context.Background()
+	protectedDatabases := map[string]struct{}{"protected_db": {}, "CamelDB": {}}
+
+	require.True(t, checkProtectedDatabaseWriteWithSet(ctx, nil, nil, "protected_db"))
+	require.True(t, checkProtectedDatabaseWriteWithSet(ctx, nil, protectedDatabases))
+	require.True(t, checkProtectedDatabaseWriteWithSet(ctx, nil, protectedDatabases, "normal_db"))
+	require.False(t, checkProtectedDatabaseWriteWithSet(ctx, nil, protectedDatabases, "normal_db", "protected_db"))
+	require.False(t, checkProtectedDatabaseWriteWithSet(ctx, nil, protectedDatabases, " CamelDB "))
+	require.True(t, checkProtectedDatabaseWriteWithSet(ctx, nil, protectedDatabases, "cameldb"))
+}
+
+func TestCanWriteProtectedDatabase(t *testing.T) {
+	require.False(t, canWriteProtectedDatabase(nil))
+	require.False(t, canWriteProtectedDatabase(&Session{}))
+
+	accountAdminSession := &Session{}
+	accountAdminSession.SetTenantInfo(&TenantInfo{Tenant: "account1", DefaultRole: accountAdminRoleName})
+	require.True(t, canWriteProtectedDatabase(accountAdminSession))
+
+	moAdminSession := &Session{}
+	moAdminSession.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, DefaultRole: moAdminRoleName})
+	require.True(t, canWriteProtectedDatabase(moAdminSession))
+
+	normalSession := &Session{}
+	normalSession.SetTenantInfo(&TenantInfo{Tenant: "account1", DefaultRole: "normal_role"})
+	require.False(t, canWriteProtectedDatabase(normalSession))
 }
 
 func ptrTo[T any](v T) *T {
