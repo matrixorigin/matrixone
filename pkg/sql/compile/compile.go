@@ -4103,6 +4103,26 @@ func (c *Compile) compilePreInsert(nodes []*plan.Node, node *plan.Node, ss []*Sc
 }
 
 func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	// Writable external table: each parallel pipeline owns one writer/file.
+	// Reuse the simple (non-S3, no merge-block) layout: one insert operator per
+	// source scope, with no shuffle.
+	if isExternalWriteInsert(node) {
+		currentFirstFlag := c.anal.isFirst
+		// One timestamp per statement: all scopes must expand WRITE_FILE_PATTERN
+		// time directives against the same instant.
+		stmtAt := externalInsertStmtTime(c.proc, c.startAt)
+		for i := range ss {
+			insertArg, err := constructExternalInsert(c.proc, node, c.e, stmtAt)
+			if err != nil {
+				return nil, err
+			}
+			insertArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			ss[i].setRootOperator(insertArg)
+		}
+		c.anal.isFirst = false
+		return ss, nil
+	}
+
 	// Determine whether to Write S3
 	toWriteS3 := node.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) >
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3

@@ -11989,6 +11989,34 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `name_const`
+	{
+		functionId: NAME_CONST,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(_ []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 2 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					if parameters[1].Oid == types.T_any {
+						return types.T_varchar.ToType()
+					}
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInNameConst
+				},
+			},
+		},
+	},
+
 	// function `icu_version`
 	{
 		functionId: ICULIBVERSION,

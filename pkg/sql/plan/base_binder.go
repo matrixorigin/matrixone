@@ -1315,6 +1315,14 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 		}
 	}
+	if name == "name_const" {
+		if !validNameConstNameAst(astArgs) || !validNameConstValueAst(astArgs) {
+			return nil, moerr.NewInvalidArg(b.GetContext(), "NAME_CONST", "")
+		}
+		if err := validateNameConstArgs(b.GetContext(), args); err != nil {
+			return nil, err
+		}
+	}
 
 	if b.builder != nil {
 		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
@@ -1441,6 +1449,14 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 			if tmpexpr != nil {
 				retExpr = tmpexpr
 			}
+		}
+
+	case "name_const":
+		if proc == nil {
+			return nil, moerr.NewInvalidInput(ctx, "can't use name_const without proc")
+		}
+		if err := foldNameConstArgs(ctx, proc, retExpr.GetF().Args); err != nil {
+			return nil, err
 		}
 
 	case "between":
@@ -2923,4 +2939,117 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 		return BindFuncExprImplByPlanExpr(ctx, "not", []*plan.Expr{newExpr})
 	}
 	return newExpr, nil
+}
+
+func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
+	if err := validateNameConstArgs(ctx, args); err != nil {
+		return err
+	}
+
+	foldedArg, err := ConstantFold(batch.EmptyForConstFoldBatch, args[1], proc, false, true)
+	if err != nil {
+		return err
+	}
+	args[1] = foldedArg
+
+	if args[1].GetLit() == nil {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
+	}
+	return nil
+}
+
+func validateNameConstArgs(ctx context.Context, args []*plan.Expr) error {
+	if len(args) != 2 {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", len(args))
+	}
+
+	nameLit := args[0].GetLit()
+	if nameLit == nil || nameLit.Isnull || !validNameConstValueExpr(args[1]) {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
+	}
+	return nil
+}
+
+func validNameConstValueExpr(arg *plan.Expr) bool {
+	if arg == nil {
+		return false
+	}
+	if arg.GetLit() != nil {
+		return true
+	}
+	if isDecimalLiteralCast(arg) {
+		return true
+	}
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
+		return false
+	}
+	if fn.Func.GetObjName() != "unary_minus" && fn.Func.GetObjName() != "unary_plus" {
+		return false
+	}
+	return fn.Args[0].GetLit() != nil || isDecimalLiteralCast(fn.Args[0])
+}
+
+func validNameConstNameAst(args []tree.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	name := stripNameConstParens(args[0])
+	nameLit, ok := name.(*tree.NumVal)
+	return ok && validNameConstNameLiteral(nameLit)
+}
+
+func validNameConstValueAst(args []tree.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	return validNameConstLiteralValueAst(args[1])
+}
+
+func validNameConstLiteralValueAst(expr tree.Expr) bool {
+	expr = stripNameConstParens(expr)
+	switch value := expr.(type) {
+	case *tree.NumVal:
+		return true
+	case *tree.UnaryExpr:
+		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
+			return false
+		}
+		_, ok := stripNameConstParens(value.Expr).(*tree.NumVal)
+		return ok
+	default:
+		return false
+	}
+}
+
+func stripNameConstParens(expr tree.Expr) tree.Expr {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	return expr
+}
+
+func isDecimalLiteralCast(arg *plan.Expr) bool {
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return false
+	}
+	if !types.T(arg.Typ.Id).IsDecimal() || fn.Args[0].GetLit() == nil || fn.Args[1].GetT() == nil {
+		return false
+	}
+	lit := fn.Args[0].GetLit()
+	if lit.Isnull || lit.GetSval() == "" {
+		return false
+	}
+	if _, _, err := types.Parse128(lit.GetSval()); err == nil {
+		return true
+	}
+	if _, _, err := types.Parse256(lit.GetSval()); err == nil {
+		return true
+	}
+	return false
 }

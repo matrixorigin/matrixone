@@ -430,3 +430,107 @@ func TestFormatColTypeVector(t *testing.T) {
 	require.Equal(t, "VECINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_int8), Width: 3}))
 	require.Equal(t, "VECUINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_uint8), Width: 3}))
 }
+
+// TestShowCreateExternalWriteFilePattern ensures SHOW CREATE TABLE formatting
+// keeps WRITE_FILE_PATTERN for writable external tables, in both the INFILE
+// and the URL s3option forms; without it the recreated table silently degrades
+// to read-only.
+func TestShowCreateExternalWriteFilePattern(t *testing.T) {
+	pattern := "stage://s/part-%U.csv"
+
+	// INFILE{...} form (ScanType != S3). Writable tables must be recreatable
+	// from the emitted DDL: the read FILEPATH is preserved (not masked) and
+	// empty optional keys are omitted (the read-side validator rejects
+	// 'JSONDATA'='').
+	p := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format:   tree.CSV,
+		Filepath: "stage://s/part-*.csv",
+		Option:   []string{"format", "csv", "write_file_pattern", pattern},
+	}}
+	out := formatInfileExternalOptionsForShowCreate(p)
+	require.Contains(t, out, "'WRITE_FILE_PATTERN'='"+pattern+"'")
+	require.Contains(t, out, "'FILEPATH'='stage://s/part-*.csv'")
+	require.NotContains(t, out, "JSONDATA")
+	require.NotContains(t, out, "''")
+
+	// Read-only table: legacy output unchanged — no WRITE_FILE_PATTERN key,
+	// FILEPATH masked, empty keys present.
+	ro := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format:   tree.CSV,
+		Filepath: "/local/path.csv",
+		Option:   []string{"format", "csv"},
+	}}
+	roOut := formatInfileExternalOptionsForShowCreate(ro)
+	require.NotContains(t, roOut, "WRITE_FILE_PATTERN")
+	require.Contains(t, roOut, "'FILEPATH'=''")
+	require.NotContains(t, roOut, "/local/path.csv")
+	require.Contains(t, roOut, "'JSONDATA'=''")
+
+	// URL s3option{...} form.
+	s3 := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Format:   tree.CSV,
+			Option:   []string{"format", "csv", "write_file_pattern", pattern},
+		},
+		ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "b"}},
+	}
+	out = formatS3ExternalOptionsForShowCreate(s3)
+	require.Contains(t, out, "'write_file_pattern'='"+pattern+"'")
+}
+
+// TestShowCreateExternalCommentRoundTrip: the CSV reader skips lines whose raw
+// prefix matches the COMMENT marker, so SHOW CREATE must round-trip it for
+// read-only external tables (writable tables reject a non-empty marker, so they
+// never carry one). Omitted entirely when unset.
+func TestShowCreateExternalCommentRoundTrip(t *testing.T) {
+	// INFILE read-only table with a comment marker
+	ro := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format:   tree.CSV,
+		Filepath: "/local/path.csv",
+		Option:   []string{"format", "csv", "comment", "#"},
+	}}
+	out := formatInfileExternalOptionsForShowCreate(ro)
+	require.Contains(t, out, "'COMMENT'='#'")
+
+	// no comment option => no COMMENT key
+	noComment := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format:   tree.CSV,
+		Filepath: "/local/path.csv",
+		Option:   []string{"format", "csv"},
+	}}
+	require.NotContains(t, formatInfileExternalOptionsForShowCreate(noComment), "COMMENT")
+
+	// S3 read-only table with a comment marker
+	s3 := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Format:   tree.CSV,
+			Option:   []string{"format", "csv", "comment", "REM"},
+		},
+		ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "b"}},
+	}
+	require.Contains(t, formatS3ExternalOptionsForShowCreate(s3), "'comment'='REM'")
+}
+
+// TestFormatStrInSingleQuotes: FIELDS/LINES values emitted by SHOW CREATE must
+// be valid inside single-quoted SQL literals (a custom LINES TERMINATED BY
+// used to render as the Go struct '&{#EOL#}', and a single-quote enclosure as
+// an unescaped single quote).
+func TestFormatStrInSingleQuotes(t *testing.T) {
+	require.Equal(t, "#EOL#", formatStrInSingleQuotes("#EOL#"))
+	require.Equal(t, `a''b`, formatStrInSingleQuotes("a'b"))
+	require.Equal(t, `a\\b`, formatStrInSingleQuotes(`a\b`))
+	require.Equal(t, `\\''`, formatStrInSingleQuotes(`\'`))
+}
+
+// TestFormatLinesTerminatedBy: SHOW CREATE must keep \n and \r\n distinct so a
+// CRLF writable external table recreates as CRLF (not silently downgraded to
+// LF). Both render as doubled-backslash escape sequences; other values flow
+// through formatStrInSingleQuotes.
+func TestFormatLinesTerminatedBy(t *testing.T) {
+	require.Equal(t, `\\n`, formatLinesTerminatedBy("\n"))
+	require.Equal(t, `\\r\\n`, formatLinesTerminatedBy("\r\n"))
+	require.NotEqual(t, formatLinesTerminatedBy("\n"), formatLinesTerminatedBy("\r\n"))
+	require.Equal(t, "#EOL#", formatLinesTerminatedBy("#EOL#"))
+}
