@@ -4512,6 +4512,19 @@ func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return err
 }
 
+func builtInNameConst(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	fromVec := parameters[1]
+	toVec := result.GetResultVector()
+	toVec.Reset(*toVec.GetType())
+
+	for i := 0; i < length; i++ {
+		if err := toVec.UnionOne(fromVec, int64(i), proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func TimestampToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
 		return uint8(v.ToDatetime(proc.GetSessionInfo().TimeZone).Hour())
