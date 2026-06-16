@@ -2774,6 +2774,23 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		}
 	}
 
+	checkLockTableBinds := func() error {
+		if execCtx == nil || execCtx.proc == nil || execCtx.proc.GetTxnOperator() == nil {
+			return nil
+		}
+		ctx := execCtx.reqCtx
+		if ctx == nil && execCtx.proc.Ctx != nil {
+			ctx = execCtx.proc.Ctx
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		return execCtx.proc.GetTxnOperator().CheckLockTableBinds(ctx)
+	}
+
+	if err = checkLockTableBinds(); err != nil {
+		return
+	}
 	skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRwer, skipWrite, epoch)
 	if err != nil {
 		if errors.Is(err, errorInvalidLength0) {
@@ -2792,6 +2809,9 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	consecutiveLoopStartTime := time.Now()
 
 	for {
+		if err = checkLockTableBinds(); err != nil {
+			return
+		}
 		skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRwer, skipWrite, epoch)
 		if err != nil {
 			if errors.Is(err, errorInvalidLength0) {
