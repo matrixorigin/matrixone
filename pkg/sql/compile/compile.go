@@ -4115,8 +4115,20 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		if err != nil {
 			return nil, err
 		}
-		if localFileStage && (len(ss) != 1 || ss[0].NodeInfo.Mcpu != 1 || !isSameCN(ss[0].NodeInfo.Addr, c.addr)) {
-			ss = []*Scope{c.newMergeScope(ss)}
+		if localFileStage {
+			// Only merge scopes that would execute on a remote CN.
+			// Same-CN parallel writers share the same filesystem and
+			// use unique filename directives (%U / %<n>N), so they are safe.
+			hasRemote := false
+			for _, s := range ss {
+				if !isSameCN(s.NodeInfo.Addr, c.addr) {
+					hasRemote = true
+					break
+				}
+			}
+			if hasRemote {
+				ss = []*Scope{c.newMergeScope(ss)}
+			}
 		}
 		for i := range ss {
 			insertArg, err := constructExternalInsert(c.proc, node, c.e, stmtAt)
