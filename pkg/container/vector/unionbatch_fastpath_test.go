@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
@@ -190,4 +191,77 @@ func BenchmarkConstBroadcastFill(b *testing.B) {
 			fillSlice(dst, 0, cnt, va)
 		}
 	})
+}
+
+// TestUnionBatchNullFastPath exercises the UnionBatch full-append fast path with
+// nulls and grouping bits, appended into a non-empty target (baseOff != 0 so the
+// offset-rebase and null-header-clear interact), cross-checked against per-row
+// UnionOne (which handles nulls/grouping correctly).
+func TestUnionBatchNullFastPath(t *testing.T) {
+	mp := mpool.MustNewZero()
+	const n = 300
+	build := func() *Vector {
+		w := NewVec(types.T_varchar.ToType())
+		for i := 0; i < n; i++ {
+			var b []byte
+			null := false
+			switch i % 5 {
+			case 0:
+				b = []byte(fmt.Sprintf("s%d", i)) // inline
+			case 1:
+				b = append([]byte(fmt.Sprintf("L%d-", i)), make([]byte, 600)...) // non-inline
+			case 2:
+				null = true // null
+			default:
+				b = []byte(fmt.Sprintf("m%d", i))
+			}
+			require.NoError(t, AppendBytes(w, b, null, mp))
+		}
+		// set a few grouping bits (independent of nulls)
+		nulls.Add(&w.gsp, 3, 7, 100, 299)
+		return w
+	}
+	w := build()
+
+	// fast path: append all of w into a seeded (non-empty) target.
+	v := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(v, append([]byte("seed-"), make([]byte, 500)...), false, mp))
+	require.NoError(t, v.UnionBatch(w, 0, w.Length(), nil, mp))
+
+	// reference via per-row UnionOne.
+	ref := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(ref, append([]byte("seed-"), make([]byte, 500)...), false, mp))
+	for i := 0; i < w.Length(); i++ {
+		require.NoError(t, ref.UnionOne(w, int64(i), mp))
+	}
+
+	require.Equal(t, ref.Length(), v.Length())
+	for i := 0; i < v.Length(); i++ {
+		rn := ref.GetNulls().Contains(uint64(i))
+		vn := v.GetNulls().Contains(uint64(i))
+		require.Equalf(t, rn, vn, "nsp row %d", i)
+		require.Equalf(t, ref.GetGrouping().Contains(uint64(i)), v.GetGrouping().Contains(uint64(i)), "gsp row %d", i)
+		if !rn {
+			require.Equalf(t, string(ref.GetBytesAt(i)), string(v.GetBytesAt(i)), "value row %d", i)
+		}
+	}
+
+	// edge: all-null source.
+	{
+		aw := NewVec(types.T_varchar.ToType())
+		for i := 0; i < 50; i++ {
+			require.NoError(t, AppendBytes(aw, nil, true, mp))
+		}
+		av := NewVec(types.T_varchar.ToType())
+		require.NoError(t, av.UnionBatch(aw, 0, aw.Length(), nil, mp))
+		require.Equal(t, 50, av.Length())
+		for i := 0; i < 50; i++ {
+			require.True(t, av.GetNulls().Contains(uint64(i)))
+		}
+		aw.Free(mp)
+		av.Free(mp)
+	}
+	w.Free(mp)
+	v.Free(mp)
+	ref.Free(mp)
 }
