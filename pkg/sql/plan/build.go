@@ -108,6 +108,13 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 
 	rootId, err := builder.bindReplace(stmt, bindCtx)
 	if err != nil {
+		// REPLACE is the one DML entry point with no legacy-planner fallback:
+		// map the resolver's external-table fallback sentinel (raised for
+		// writable external tables) to the user-facing error every other DML
+		// kind produces, instead of leaking the internal signal to the client.
+		if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) && err.Error() == externalTableUnsupportedDMLMsg {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
+		}
 		return nil, err
 	}
 	ctx.SetViews(bindCtx.views)

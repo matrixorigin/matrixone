@@ -184,7 +184,7 @@ func TestTPCHMultiBytes(t *testing.T) {
 
 		reader := NewStringReader(inputStr)
 		parser, err := NewCSVParser(&cfg, reader, int64(ReadBlockSize), false)
-		if fmt.Sprint(err) == "invalid input: invalid field or comment delimiter" {
+		if fmt.Sprint(err) == "invalid input: invalid field delimiter" {
 			continue
 		}
 		require.NoError(t, err)
@@ -529,4 +529,68 @@ func TestCustomEscapeChar(t *testing.T) {
 	require.Equal(t, []Field{
 		newStringField(`{"itemRangeType":0,"itemContainType":0,"shopRangeType":1,"shopJson":"[{\"id\":\"A1234\",\"shopName\":\"AAAAAA\"}]"}`, false, true),
 	}, row)
+}
+
+// TestCommentEmptyRecordNoPanic: an all-empty-string row (e.g. `""\n` or
+// `"",""\n`) leaves recordBuffer empty; the comment check must not index
+// recordBuffer[0] out of range.
+func TestCommentEmptyRecordNoPanic(t *testing.T) {
+	cfg := CSVConfig{
+		FieldsTerminatedBy: ",",
+		FieldsEnclosedBy:   `"`,
+		Comment:            "#",
+	}
+	parser, err := NewCSVParser(&cfg, NewStringReader("\"\",\"\"\n1,2\n"), int64(ReadBlockSize), false)
+	require.NoError(t, err)
+
+	row, err := parser.Read(nil)
+	require.NoError(t, err)
+	require.Len(t, row, 2)
+	require.Equal(t, "", row[0].Val)
+	require.Equal(t, "", row[1].Val)
+
+	row, err = parser.Read(nil)
+	require.NoError(t, err)
+	require.Equal(t, "1", row[0].Val)
+	require.Equal(t, "2", row[1].Val)
+}
+
+// TestCommentDisabled: with no comment marker (empty Comment, the default), a
+// first field starting with '#' is data, not a skipped comment.
+func TestCommentDisabled(t *testing.T) {
+	cfg := CSVConfig{FieldsTerminatedBy: ",", FieldsEnclosedBy: `"`} // Comment == ""
+	parser, err := NewCSVParser(&cfg, NewStringReader("#lost,1\nkept,2\n"), int64(ReadBlockSize), false)
+	require.NoError(t, err)
+
+	row, err := parser.Read(nil)
+	require.NoError(t, err)
+	require.Equal(t, "#lost", row[0].Val)
+	require.Equal(t, "1", row[1].Val)
+}
+
+// TestCommentRawFirstByte: the comment marker is matched on the line's first
+// RAW byte (before unquoting). An enclosed "#x" value begins with the quote
+// char, so it is data; only an unquoted line literally starting with '#' is a
+// skipped comment.
+func TestCommentRawFirstByte(t *testing.T) {
+	cfg := CSVConfig{FieldsTerminatedBy: ",", FieldsEnclosedBy: `"`, Comment: "#"}
+	parser, err := NewCSVParser(&cfg,
+		NewStringReader("\"#x\",1\n# a real comment\nkept,2\n"),
+		int64(ReadBlockSize), false)
+	require.NoError(t, err)
+
+	// quoted "#x" is data, not a comment
+	row, err := parser.Read(nil)
+	require.NoError(t, err)
+	require.Equal(t, "#x", row[0].Val)
+	require.Equal(t, "1", row[1].Val)
+
+	// the unquoted '# a real comment' line is skipped; the next data row follows
+	row, err = parser.Read(nil)
+	require.NoError(t, err)
+	require.Equal(t, "kept", row[0].Val)
+	require.Equal(t, "2", row[1].Val)
+
+	_, err = parser.Read(nil)
+	require.ErrorIs(t, err, io.EOF)
 }
