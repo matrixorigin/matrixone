@@ -205,6 +205,16 @@ var moPartitionMetadataHeaders = []string{
 	"partition_count",
 }
 
+var moPartitionTablesHeaders = []string{
+	"partition_id",
+	"partition_table_name",
+	"primary_table_id",
+	"partition_name",
+	"partition_ordinal_position",
+	"partition_expression_str",
+	"partition_expression",
+}
+
 type indexDDLColumn struct {
 	name    string
 	ordinal int
@@ -971,23 +981,11 @@ func (r *CheckpointReader) DumpTableCSVComposed(
 	snapshotTS types.TS,
 	opts ...CSVExportOption,
 ) error {
-	dataEntries, tombEntries, err := r.getTableEntriesAt(ctx, tableID, snapshotTS)
+	data, err := r.PrepareTableDumpData(ctx, tableID, snapshotTS)
 	if err != nil {
-		if !isTableDataUnavailable(err) {
-			return err
-		}
-		dataEntries = nil
-		tombEntries = nil
+		return err
 	}
-	schema := r.ReadTableSchema(ctx, tableID, snapshotTS, nil)
-	if len(schema.Columns) == 0 {
-		return moerr.NewInternalErrorf(
-			ctx,
-			"cannot resolve visible columns for table %d from checkpoint metadata; mo_columns data is unavailable or incomplete",
-			tableID,
-		)
-	}
-	return r.streamTableCSV(ctx, w, schema, snapshotTS, dataEntries, tombEntries, resolveCSVExportOptions(opts))
+	return r.DumpPreparedTableCSV(ctx, w, data, snapshotTS, opts...)
 }
 
 // PrepareTableDumpData resolves the table schema and object lists once so batch
@@ -1013,6 +1011,25 @@ func (r *CheckpointReader) PrepareTableDumpData(
 			tableID,
 		)
 	}
+	partitionTableIDs, err := r.readPartitionTableIDs(ctx, snapshotTS, tableID)
+	if err != nil {
+		return nil, err
+	}
+	for _, partitionTableID := range partitionTableIDs {
+		partitionData, partitionTomb, err := r.getTableEntriesAt(ctx, partitionTableID, snapshotTS)
+		if err != nil {
+			if !isTableDataUnavailable(err) {
+				return nil, err
+			}
+			ckpDebugSchemaf("partition table data unavailable primary=%d partition=%d err=%v", tableID, partitionTableID, err)
+			continue
+		}
+		dataEntries = append(dataEntries, partitionData...)
+		tombEntries = append(tombEntries, partitionTomb...)
+	}
+	if len(partitionTableIDs) > 0 {
+		ckpDebugSchemaf("partition table dump data resolved primary=%d partitions=%v data_entries=%d tomb_entries=%d", tableID, partitionTableIDs, len(dataEntries), len(tombEntries))
+	}
 	return &TableDumpData{
 		TableID:     tableID,
 		Schema:      cloneTableSchema(schema),
@@ -1036,6 +1053,8 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 
 	tableSet := make(map[uint64]struct{}, len(tableIDs))
 	result := make(map[uint64]*TableDumpData, len(tableIDs))
+	partitionToPrimary := make(map[uint64]uint64)
+	partitionIDsByPrimary := make(map[uint64][]uint64)
 	for _, tableID := range tableIDs {
 		if _, ok := tableSet[tableID]; ok {
 			continue
@@ -1054,6 +1073,17 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 			Schema:  cloneTableSchema(schema),
 		}
 	}
+	partitionTableMap, err := r.readPartitionTableIDsForPrimaries(ctx, snapshotTS, tableSet)
+	if err != nil {
+		return nil, err
+	}
+	for primaryID, partitionIDs := range partitionTableMap {
+		for _, partitionID := range partitionIDs {
+			tableSet[partitionID] = struct{}{}
+			partitionToPrimary[partitionID] = primaryID
+		}
+		partitionIDsByPrimary[primaryID] = append(partitionIDsByPrimary[primaryID], partitionIDs...)
+	}
 
 	entryRefs := make([]*EntryInfo, 0, len(composed.Incrementals)+1)
 	if composed.BaseEntry != nil {
@@ -1071,16 +1101,33 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 			return nil, err
 		}
 		for tableID, entries := range dataByTable {
-			result[tableID].DataEntries = append(result[tableID].DataEntries, entries...)
+			targetID := tableID
+			if primaryID, ok := partitionToPrimary[tableID]; ok {
+				targetID = primaryID
+			}
+			if result[targetID] == nil {
+				continue
+			}
+			result[targetID].DataEntries = append(result[targetID].DataEntries, entries...)
 		}
 		for tableID, entries := range tombByTable {
-			result[tableID].TombEntries = append(result[tableID].TombEntries, entries...)
+			targetID := tableID
+			if primaryID, ok := partitionToPrimary[tableID]; ok {
+				targetID = primaryID
+			}
+			if result[targetID] == nil {
+				continue
+			}
+			result[targetID].TombEntries = append(result[targetID].TombEntries, entries...)
 		}
 	}
 
 	for tableID, data := range result {
 		if data.Schema == nil || len(data.Schema.Columns) == 0 {
 			return nil, moerr.NewInternalErrorf(ctx, "cannot resolve visible columns for table %d from checkpoint metadata", tableID)
+		}
+		if partitionIDs := partitionIDsByPrimary[tableID]; len(partitionIDs) > 0 {
+			ckpDebugSchemaf("partition table dump data resolved primary=%d partitions=%v data_entries=%d tomb_entries=%d", tableID, partitionIDs, len(data.DataEntries), len(data.TombEntries))
 		}
 	}
 	return result, nil
@@ -3215,6 +3262,48 @@ func (r *CheckpointReader) getPartitionMetadataView(
 	return r.dumpCatalogTableViewWithHeaders(ctx, partitionMetadataTableID, snapshotTS, moPartitionMetadataHeaders)
 }
 
+func (r *CheckpointReader) getPartitionTablesView(
+	ctx context.Context,
+	snapshotTS types.TS,
+) (*LogicalTableView, error) {
+	partitionTablesID, ok, err := r.findCatalogTableID(ctx, snapshotTS, catalog.MOPartitionTables)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return r.dumpCatalogTableViewWithHeaders(ctx, partitionTablesID, snapshotTS, moPartitionTablesHeaders)
+}
+
+func (r *CheckpointReader) readPartitionTableIDs(
+	ctx context.Context,
+	snapshotTS types.TS,
+	primaryTableID uint64,
+) ([]uint64, error) {
+	view, err := r.getPartitionTablesView(ctx, snapshotTS)
+	if err != nil || view == nil {
+		return nil, err
+	}
+	primarySet := map[uint64]struct{}{primaryTableID: {}}
+	return buildPartitionTableIDMap(view, primarySet)[primaryTableID], nil
+}
+
+func (r *CheckpointReader) readPartitionTableIDsForPrimaries(
+	ctx context.Context,
+	snapshotTS types.TS,
+	primaryTableIDs map[uint64]struct{},
+) (map[uint64][]uint64, error) {
+	if len(primaryTableIDs) == 0 {
+		return nil, nil
+	}
+	view, err := r.getPartitionTablesView(ctx, snapshotTS)
+	if err != nil || view == nil {
+		return nil, err
+	}
+	return buildPartitionTableIDMap(view, primaryTableIDs), nil
+}
+
 func (r *CheckpointReader) readPartitionClause(
 	ctx context.Context,
 	tableID uint64,
@@ -3465,6 +3554,118 @@ func buildPartitionClauseFromMetadata(view *LogicalTableView, tableID uint64) st
 	return ""
 }
 
+type partitionTableRef struct {
+	id      uint64
+	ordinal int
+	name    string
+}
+
+func buildPartitionTableIDMap(view *LogicalTableView, primaryTableIDs map[uint64]struct{}) map[uint64][]uint64 {
+	result := make(map[uint64][]uint64)
+	if view == nil || len(primaryTableIDs) == 0 {
+		return result
+	}
+	partitionIDCol := view.columnDataIndex("partition_id")
+	partitionNameCol := view.columnDataIndex("partition_table_name")
+	primaryIDCol := view.columnDataIndex("primary_table_id")
+	ordinalCol := view.columnDataIndex("partition_ordinal_position")
+	byPrimary := make(map[uint64][]partitionTableRef)
+	if partitionIDCol >= 0 && primaryIDCol >= 0 {
+		addPartitionTableRefsAt(view, primaryTableIDs, byPrimary, partitionIDCol, primaryIDCol, partitionNameCol, ordinalCol)
+	}
+	if len(byPrimary) == 0 {
+		addPartitionTableRefsByRowShape(view, primaryTableIDs, byPrimary)
+	}
+	for primaryID, refs := range byPrimary {
+		sort.Slice(refs, func(i, j int) bool {
+			if refs[i].ordinal != refs[j].ordinal {
+				return refs[i].ordinal < refs[j].ordinal
+			}
+			if refs[i].name != refs[j].name {
+				return refs[i].name < refs[j].name
+			}
+			return refs[i].id < refs[j].id
+		})
+		ids := make([]uint64, 0, len(refs))
+		seen := make(map[uint64]struct{}, len(refs))
+		for _, ref := range refs {
+			if ref.id == 0 {
+				continue
+			}
+			if _, ok := seen[ref.id]; ok {
+				continue
+			}
+			seen[ref.id] = struct{}{}
+			ids = append(ids, ref.id)
+		}
+		if len(ids) > 0 {
+			result[primaryID] = ids
+			ckpDebugSchemaf("partition table ids resolved primary=%d partitions=%v", primaryID, ids)
+		}
+	}
+	return result
+}
+
+func addPartitionTableRefsAt(view *LogicalTableView, primaryTableIDs map[uint64]struct{}, out map[uint64][]partitionTableRef, partitionIDCol, primaryIDCol, partitionNameCol, ordinalCol int) {
+	dataOffset := logicalViewDataOffset(view)
+	for _, row := range view.Rows {
+		if len(row) < dataOffset {
+			continue
+		}
+		dataRow := row[dataOffset:]
+		if partitionIDCol >= len(dataRow) || primaryIDCol >= len(dataRow) {
+			continue
+		}
+		partitionID, ok := parseUintCell(dataRow[partitionIDCol])
+		if !ok {
+			continue
+		}
+		primaryID, ok := parseUintCell(dataRow[primaryIDCol])
+		if !ok {
+			continue
+		}
+		if _, wanted := primaryTableIDs[primaryID]; !wanted {
+			continue
+		}
+		out[primaryID] = append(out[primaryID], partitionTableRef{
+			id:      partitionID,
+			ordinal: parseIntCellDefault(cellAt(dataRow, ordinalCol), len(out[primaryID])),
+			name:    cellAt(dataRow, partitionNameCol),
+		})
+	}
+}
+
+func addPartitionTableRefsByRowShape(view *LogicalTableView, primaryTableIDs map[uint64]struct{}, out map[uint64][]partitionTableRef) {
+	dataOffset := logicalViewDataOffset(view)
+	for _, row := range view.Rows {
+		if len(row) < dataOffset {
+			continue
+		}
+		dataRow := row[dataOffset:]
+		for primaryIDCol, cell := range dataRow {
+			primaryID, ok := parseUintCell(cell)
+			if !ok {
+				continue
+			}
+			if _, wanted := primaryTableIDs[primaryID]; !wanted {
+				continue
+			}
+			partitionIDCol := primaryIDCol - 2
+			partitionNameCol := primaryIDCol - 1
+			ordinalCol := primaryIDCol + 2
+			partitionID, ok := parseUintCell(cellAt(dataRow, partitionIDCol))
+			if !ok {
+				continue
+			}
+			out[primaryID] = append(out[primaryID], partitionTableRef{
+				id:      partitionID,
+				ordinal: parseIntCellDefault(cellAt(dataRow, ordinalCol), len(out[primaryID])),
+				name:    cellAt(dataRow, partitionNameCol),
+			})
+		}
+	}
+}
+
 func buildPartitionClauseFromMetadataAt(view *LogicalTableView, tableIDStr string, tableIDCol, methodCol, descriptionCol, countCol int) string {
 	if tableIDCol < 0 || methodCol < 0 || descriptionCol < 0 {
 		return ""
@@ -3532,6 +3733,19 @@ func cellAt(row []string, idx int) string {
 		return ""
 	}
 	return row[idx]
+}
+
+func parseUintCell(cell string) (uint64, bool) {
+	value, err := strconv.ParseUint(strings.TrimSpace(cell), 10, 64)
+	return value, err == nil && value != 0
+}
+
+func parseIntCellDefault(cell string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(cell))
+	if err != nil {
+		return fallback
+	}
+	return value
 }
 
 func isAutoPartitionCountMethod(method string) bool {

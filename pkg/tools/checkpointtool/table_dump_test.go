@@ -650,6 +650,33 @@ func TestBuildPartitionClauseFromMetadata_FallsBackToRowShape(t *testing.T) {
 	assert.Equal(t, "partition by hash (`id`) partitions 4", buildPartitionClauseFromMetadata(view, 272577))
 }
 
+func TestBuildPartitionTableIDMap(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, moPartitionTablesHeaders...),
+		Rows: [][]string{
+			{"obj1", "0", "0", "272578", "%!%p0%!%t_hash_partition", "272577", "p0", "0", "", ""},
+			{"obj1", "0", "1", "272579", "%!%p1%!%t_hash_partition", "272577", "p1", "1", "", ""},
+			{"obj1", "0", "2", "272580", "%!%p0%!%other", "999999", "p0", "0", "", ""},
+		},
+	}
+
+	got := buildPartitionTableIDMap(view, map[uint64]struct{}{272577: {}})
+	assert.Equal(t, []uint64{272578, 272579}, got[272577])
+}
+
+func TestBuildPartitionTableIDMap_FallsBackToRowShape(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1", "col_2", "col_3", "col_4", "col_5"},
+		Rows: [][]string{
+			{"obj1", "0", "1", "334040", "%!%p1%!%t_hash_partition", "334039", "p1", "1", "", ""},
+			{"obj1", "0", "0", "334041", "%!%p0%!%t_hash_partition", "334039", "p0", "0", "", ""},
+		},
+	}
+
+	got := buildPartitionTableIDMap(view, map[uint64]struct{}{334039: {}})
+	assert.Equal(t, []uint64{334041, 334040}, got[334039])
+}
+
 func TestCreateTableDDLFromCatalogViews_IgnoresMoColumnsPrimaryWithoutConstraint(t *testing.T) {
 	moTablesView := &LogicalTableView{
 		Headers: []string{
