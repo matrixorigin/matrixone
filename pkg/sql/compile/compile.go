@@ -3161,9 +3161,9 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 		if len(c.cnList) == 1 {
 			if probeScopes[0].NodeInfo.Mcpu != int(left.Stats.Dop) || buildScopes[0].NodeInfo.Mcpu != int(right.Stats.Dop) {
 				logutil.Infof("not support shuffle v2 after merge")
-			} else {
-				return c.compileShuffleJoinV2(node, left, right, probeScopes, buildScopes)
+				return c.compileShuffleJoin(node, left, right, probeScopes, buildScopes)
 			}
+			return c.compileShuffleJoinV2(node, left, right, probeScopes, buildScopes)
 		}
 		return c.compileShuffleJoin(node, left, right, probeScopes, buildScopes)
 	}
@@ -4003,10 +4003,6 @@ func (c *Compile) compileShuffleGroupV2(node *plan.Node, inputSS []*Scope, nodes
 
 func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
 
-	if len(c.cnList) == 1 {
-		return c.compileShuffleGroupV2(node, inputSS, nodes)
-	}
-
 	if node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
 		currentFirstFlag := c.anal.isFirst
 		for i := range inputSS {
@@ -4042,7 +4038,7 @@ func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes [
 
 	j := 0
 	for i := range inputSS {
-		shuffleArg := constructShuffleArgForGroup(shuffleGroups, node)
+		shuffleArg := constructShuffleArgForGroupV2(node, int32(len(shuffleGroups)))
 		shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		inputSS[i].setRootOperator(shuffleArg)
 		if len(c.cnList) > 1 && inputSS[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
@@ -4792,9 +4788,14 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 	currentFirstFlag := c.anal.isFirst
 	if !reuse {
 		for i := range probeScopes {
-			shuffleProbeOp := constructShuffleOperatorForJoin(int32(bucketNum), node, true)
+			var shuffleProbeOp vm.Operator
+			if len(cnlist) > 1 {
+				shuffleProbeOp = constructShuffleOperatorForJoinV2(int32(bucketNum), node, true)
+			} else {
+				shuffleProbeOp = constructShuffleOperatorForJoin(int32(bucketNum), node, true)
+			}
 			//shuffleProbeOp.SetIdx(c.anal.curNodeIdx)
-			shuffleProbeOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			shuffleProbeOp.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			probeScopes[i].setRootOperator(shuffleProbeOp)
 
 			if len(cnlist) > 1 && probeScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
@@ -4817,9 +4818,14 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 
 	c.anal.isFirst = currentFirstFlag
 	for i := range buildScopes {
-		shuffleBuildOp := constructShuffleOperatorForJoin(int32(bucketNum), node, false)
+		var shuffleBuildOp vm.Operator
+		if len(cnlist) > 1 {
+			shuffleBuildOp = constructShuffleOperatorForJoinV2(int32(bucketNum), node, false)
+		} else {
+			shuffleBuildOp = constructShuffleOperatorForJoin(int32(bucketNum), node, false)
+		}
 		//shuffleBuildOp.SetIdx(c.anal.curNodeIdx)
-		shuffleBuildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		shuffleBuildOp.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		buildScopes[i].setRootOperator(shuffleBuildOp)
 
 		if len(cnlist) > 1 && buildScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
