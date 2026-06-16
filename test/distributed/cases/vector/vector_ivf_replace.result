@@ -9,43 +9,43 @@ replace into t values(7,'[5,5,6]');
 select id from t order by l2_distance(b,'[5,5,5]') limit 3;
 ➤ id[4,32,0]  𝄀
 5  𝄀
-4  𝄀
-3
+7  𝄀
+4
 insert into t values(8,'[5,4,5]');
 select id from t order by l2_distance(b,'[5,5,5]') limit 4;
 ➤ id[4,32,0]  𝄀
 5  𝄀
+7  𝄀
 8  𝄀
-4  𝄀
-3
+4
 replace into t values(1,'[5,5,4]');
 select id from t where id=1;
 ➤ id[4,32,0]  𝄀
 1
 select id from t order by l2_distance(b,'[1,1,1]') limit 3;
 ➤ id[4,32,0]  𝄀
-1  𝄀
 2  𝄀
-3
+3  𝄀
+4
 select id from t order by l2_distance(b,'[5,5,5]') limit 5;
 ➤ id[4,32,0]  𝄀
 5  𝄀
+1  𝄀
+7  𝄀
 8  𝄀
-4  𝄀
-3  𝄀
-2
+4
 replace into t values(2,'[5,5,3]'),(9,'[5,6,5]'),(3,'[0,0,0]');
 select id from t order by l2_distance(b,'[5,5,5]') limit 6;
 ➤ id[4,32,0]  𝄀
 5  𝄀
+9  𝄀
+7  𝄀
 8  𝄀
-4  𝄀
-3  𝄀
-2  𝄀
-1
+1  𝄀
+4
 select id from t order by l2_distance(b,'[3,3,3]') limit 3;
 ➤ id[4,32,0]  𝄀
-3  𝄀
 4  𝄀
-2
+2  𝄀
+1
 drop database if exists vec_ivf_replace;
