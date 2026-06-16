@@ -520,7 +520,7 @@ func newMockCOSServer(t *testing.T, failPart int) (*httptest.Server, *cosServerS
 			pn, _ := strconv.Atoi(partStr)
 			body, _ := io.ReadAll(r.Body)
 			if state.failPart > 0 && pn == state.failPart {
-				w.WriteHeader(http.StatusInternalServerError)
+				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
 			state.mu.Lock()

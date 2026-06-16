@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -25,6 +26,10 @@ import (
 )
 
 func IsRetryableError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+
 	// unexpected EOF
 	if errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
