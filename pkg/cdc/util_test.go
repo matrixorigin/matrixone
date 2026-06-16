@@ -838,7 +838,7 @@ func Test_tryConn(t *testing.T) {
 	mock.ExpectPing()
 
 	stub := gostub.Stub(&openDbWithConnector, func(_ driver.Connector) *sql.DB {
-		return db, nil
+		return db
 	})
 	defer stub.Reset()
 
