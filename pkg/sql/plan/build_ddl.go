@@ -5859,6 +5859,7 @@ func buildDropCDC(stmt *tree.DropCDC, ctx CompilerContext) (*Plan, error) {
 				DdlType: plan.DataDefinition_DROP_CDC,
 				Definition: &plan.DataDefinition_DropCdc{
 					DropCdc: &plan.DropCDC{
+						IfExists:  stmt.IfExists,
 						AccountId: accountId,
 						All:       stmt.Option.All,
 						TaskName:  string(stmt.Option.TaskName),

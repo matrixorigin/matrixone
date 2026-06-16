@@ -4774,6 +4774,7 @@ func (s *Scope) DropCDC(c *Compile) error {
 		targetTaskStatus,
 		uint64(accountId),
 		taskName,
+		planCDC.IfExists,
 		conds...,
 	)
 }
@@ -4783,6 +4784,7 @@ func doUpdateCDCTask(
 	targetTaskStatus task.TaskStatus,
 	accountId uint64,
 	taskName string,
+	ifExists bool,
 	conds ...taskservice.Condition,
 ) (err error) {
 	ts := proc.GetTaskService()
@@ -4804,6 +4806,7 @@ func doUpdateCDCTask(
 				tx,
 				accountId,
 				taskName,
+				ifExists,
 			)
 		},
 		conds...,
@@ -4818,11 +4821,12 @@ func onPreUpdateCDCTasks(
 	tx taskservice.SqlExecutor,
 	accountId uint64,
 	taskName string,
+	ifExists bool,
 ) (affectedCdcRow int, err error) {
 	var cnt int64
 
 	// Get task keys count
-	if cnt, err = getTaskKeysCount(ctx, tx, accountId, taskName, keys); err != nil {
+	if cnt, err = getTaskKeysCount(ctx, tx, accountId, taskName, keys, ifExists); err != nil {
 		return
 	}
 	affectedCdcRow = int(cnt)
@@ -4874,6 +4878,7 @@ func getTaskKeysCount(
 	accountId uint64,
 	taskName string,
 	keys map[taskservice.CDCTaskKey]struct{},
+	ifExists bool,
 ) (cnt int64, err error) {
 	var (
 		rows *sql.Rows
@@ -4902,7 +4907,7 @@ func getTaskKeysCount(
 		cnt++
 	}
 
-	if cnt == 0 && taskName != "" {
+	if cnt == 0 && taskName != "" && !ifExists {
 		err = moerr.NewInternalErrorf(
 			ctx,
 			"no cdc task found, accountId: %d, taskName: %s",
