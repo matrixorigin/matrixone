@@ -373,3 +373,15 @@ func SimulateDevices(devices []int, n int64) []int {
 	// all zeros -> every logical rank maps to physical device 0
 	return sim
 }
+
+// GetConcurrencyForSingleThreadBuild returns the build concurrency for the HNSW
+// write paths (CDC/sync). While MatrixOne #24849 / USearch #735 (open) is
+// unresolved, concurrent USearch add() can orphan graph nodes — the vector is
+// stored (contains() is true) but never linked into the HNSW graph, so search()
+// can never reach it, producing flaky recall@1. So every HNSW build/sync path
+// must add from a single thread (the model is likewise pinned to
+// ChangeThreadsAdd(1) in NewHnswModelForBuild). When usearch fixes the race,
+// this is a one-line revert: `return GetConcurrencyForBuild(nthread)`.
+func GetConcurrencyForSingleThreadBuild(nthread int64) int64 {
+	return 1
+}
