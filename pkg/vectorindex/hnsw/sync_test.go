@@ -409,24 +409,36 @@ func TestSyncDeleteAndUpsert(t *testing.T) {
 	require.Nil(t, err)
 }
 
-// total 1000100 items and should have two models
+// hnsw0.bin has 100 rows. Add 11 more rows with capacity 110 so the sync path
+// fills the existing model and creates one more model without building 1M rows.
 func TestSyncAddOneModel(t *testing.T) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
+	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {
+		switch key {
+		case "hnsw_max_index_capacity":
+			return int64(110), nil
+		case "hnsw_threads_build":
+			return int64(1), nil
+		default:
+			return int64(0), nil
+		}
+	})
+
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
 	runTxn = mock_runTxn
 	indexes := mockMoIndexes()
 
-	cdc := vectorindex.VectorIndexCdc[float32]{Data: make([]vectorindex.VectorIndexCdcEntry[float32], 0, 1000000)}
+	cdc := vectorindex.VectorIndexCdc[float32]{Data: make([]vectorindex.VectorIndexCdcEntry[float32], 0, 11)}
 
 	key := int64(1000)
 	v := []float32{0.1, 0.2, 0.3}
 
-	for i := 0; i < 1000000; i++ {
+	for i := 0; i < 11; i++ {
 		e := vectorindex.VectorIndexCdcEntry[float32]{Type: vectorindex.CDC_UPSERT, PKey: key, Vec: v}
 		cdc.Data = append(cdc.Data, e)
 		key += 1
@@ -437,7 +449,13 @@ func TestSyncAddOneModel(t *testing.T) {
 
 	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
 	require.Nil(t, err)
-	err = sync.RunOnce(sqlproc, &cdc)
+	defer sync.Destroy()
+
+	err = sync.Update(sqlproc, &cdc)
+	require.Nil(t, err)
+	require.Len(t, sync.indexes, 2)
+
+	err = sync.Save(sqlproc)
 	require.Nil(t, err)
 }
 
