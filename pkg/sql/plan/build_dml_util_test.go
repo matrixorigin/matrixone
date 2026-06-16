@@ -192,3 +192,114 @@ func TestMakeInsertValueConstExprGeometry(t *testing.T) {
 	require.Equal(t, "POINT(1 1)", fn.Args[0].GetLit().GetSval())
 	require.Equal(t, int32(types.T_geometry), fn.Args[1].Typ.Id)
 }
+
+func TestAppendIndexPrefixProjection(t *testing.T) {
+	newBuilder := func(t *testing.T) (*QueryBuilder, *BindContext, int32) {
+		t.Helper()
+
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		bindCtx := NewBindContext(builder, nil)
+		lastNodeID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT,
+			ProjectList: []*plan.Expr{
+				{
+					Typ: plan.Type{Id: int32(types.T_int64)},
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{Name: "id", ColPos: 0},
+					},
+				},
+				{
+					Typ: plan.Type{Id: int32(types.T_text), Width: types.MaxVarcharLen},
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{Name: "body", ColPos: 1},
+					},
+				},
+			},
+		}, bindCtx)
+		return builder, bindCtx, lastNodeID
+	}
+
+	t.Run("empty prefix lengths keeps original projection", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+		useColumns := []int32{1}
+
+		gotNodeID, gotUseColumns, err := appendIndexPrefixProjection(
+			builder,
+			bindCtx,
+			&plan.TableDef{Name: "t"},
+			lastNodeID,
+			[]string{"body"},
+			map[string]int{"body": 1},
+			useColumns,
+			nil,
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, lastNodeID, gotNodeID)
+		require.Equal(t, useColumns, gotUseColumns)
+		require.Len(t, builder.qry.Nodes, 1)
+	})
+
+	t.Run("prefix key appends substring projection", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+
+		gotNodeID, gotUseColumns, err := appendIndexPrefixProjection(
+			builder,
+			bindCtx,
+			&plan.TableDef{Name: "t"},
+			lastNodeID,
+			[]string{"body"},
+			map[string]int{"id": 0, "body": 1},
+			[]int32{1},
+			map[string]int{"body": 8},
+		)
+
+		require.NoError(t, err)
+		require.NotEqual(t, lastNodeID, gotNodeID)
+		require.Equal(t, []int32{2}, gotUseColumns)
+		require.Len(t, builder.qry.Nodes, 2)
+
+		projectNode := builder.qry.Nodes[gotNodeID]
+		require.Equal(t, plan.Node_PROJECT, projectNode.NodeType)
+		require.Equal(t, []int32{lastNodeID}, projectNode.Children)
+		require.Len(t, projectNode.ProjectList, 3)
+
+		prefixExpr := projectNode.ProjectList[2]
+		require.Equal(t, int32(types.T_varchar), prefixExpr.Typ.Id)
+		require.Equal(t, int32(types.MaxVarcharLen), prefixExpr.Typ.Width)
+
+		castFn := prefixExpr.GetF()
+		require.NotNil(t, castFn)
+		require.Equal(t, "cast", castFn.Func.ObjName)
+		require.Len(t, castFn.Args, 2)
+
+		substringFn := castFn.Args[0].GetF()
+		require.NotNil(t, substringFn)
+		require.Equal(t, "substring", substringFn.Func.ObjName)
+		require.Len(t, substringFn.Args, 3)
+		require.Equal(t, "body", substringFn.Args[0].GetCol().Name)
+		require.Equal(t, int64(1), substringFn.Args[1].GetLit().GetI64Val())
+		require.Equal(t, int64(8), substringFn.Args[2].GetLit().GetI64Val())
+	})
+
+	t.Run("missing and non-positive prefix parts do not append projection", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+		useColumns := []int32{0}
+
+		gotNodeID, gotUseColumns, err := appendIndexPrefixProjection(
+			builder,
+			bindCtx,
+			&plan.TableDef{Name: "t"},
+			lastNodeID,
+			[]string{"missing", "id"},
+			map[string]int{"id": 0, "body": 1},
+			useColumns,
+			map[string]int{"missing": 4, "id": 0},
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, lastNodeID, gotNodeID)
+		require.Equal(t, useColumns, gotUseColumns)
+		require.Len(t, builder.qry.Nodes, 1)
+	})
+}
