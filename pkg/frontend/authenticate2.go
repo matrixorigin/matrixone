@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -405,8 +404,11 @@ func checkProtectedDatabaseWriteWithSet(ctx context.Context, ses *Session, prote
 	return true
 }
 
-func checkProtectedDatabaseWriteByStmt(ctx context.Context, ses *Session, stmt tree.Statement) bool {
+func checkProtectedDatabaseWriteByPrivilege(ctx context.Context, ses *Session, priv *privilege) bool {
 	if ses == nil || !ses.GetFromRealUser() {
+		return true
+	}
+	if priv == nil || len(priv.writeDatabaseTargets) == 0 {
 		return true
 	}
 	if canWriteProtectedDatabase(ses) {
@@ -416,7 +418,7 @@ func checkProtectedDatabaseWriteByStmt(ctx context.Context, ses *Session, stmt t
 	if len(protectedDatabases) == 0 {
 		return true
 	}
-	return checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, protectedDatabaseWriteTargetsFromStmt(stmt)...)
+	return checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, priv.writeDatabaseTargets...)
 }
 
 func privilegeTipWritesDatabase(tip privilegeTips) bool {
@@ -446,122 +448,4 @@ func checkProtectedDatabaseWriteByPrivilegeTips(ctx context.Context, ses *Sessio
 		}
 	}
 	return checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, dbNames...)
-}
-
-func appendTableNameDatabaseName(dbNames []string, name *tree.TableName) []string {
-	if name == nil {
-		return dbNames
-	}
-	return append(dbNames, string(name.SchemaName))
-}
-
-func appendTableNamesDatabaseNames(dbNames []string, names tree.TableNames) []string {
-	for _, name := range names {
-		dbNames = appendTableNameDatabaseName(dbNames, name)
-	}
-	return dbNames
-}
-
-func functionNameDatabaseName(name *tree.FunctionName) string {
-	if name == nil {
-		return ""
-	}
-	return string(name.Name.SchemaName)
-}
-
-func procedureNameDatabaseName(name *tree.ProcedureName) string {
-	if name == nil {
-		return ""
-	}
-	return string(name.Name.SchemaName)
-}
-
-func protectedDatabaseWriteTargetsFromStmt(stmt tree.Statement) []string {
-	dbNames := make([]string, 0, 2)
-	switch st := stmt.(type) {
-	case *tree.CreateDatabase:
-		dbNames = append(dbNames, string(st.Name))
-	case *tree.DropDatabase:
-		dbNames = append(dbNames, string(st.Name))
-	case *tree.AlterDataBaseConfig:
-		if !st.IsAccountLevel {
-			dbNames = append(dbNames, st.DbName)
-		}
-	case *tree.CreateTable:
-		dbNames = appendTableNameDatabaseName(dbNames, &st.Table)
-	case *tree.CreateView:
-		dbNames = appendTableNameDatabaseName(dbNames, st.Name)
-	case *tree.CreateSource:
-		dbNames = appendTableNameDatabaseName(dbNames, st.SourceName)
-	case *tree.CreateConnector:
-		dbNames = appendTableNameDatabaseName(dbNames, st.TableName)
-	case *tree.CreateSequence:
-		dbNames = appendTableNameDatabaseName(dbNames, st.Name)
-	case *tree.AlterSequence:
-		dbNames = appendTableNameDatabaseName(dbNames, st.Name)
-	case *tree.AlterView:
-		dbNames = appendTableNameDatabaseName(dbNames, st.Name)
-	case *tree.AlterTable:
-		dbNames = appendTableNameDatabaseName(dbNames, st.Table)
-	case *tree.RenameTable:
-		for _, alter := range st.AlterTables {
-			if alter == nil {
-				continue
-			}
-			dbNames = appendTableNameDatabaseName(dbNames, alter.Table)
-			for _, opt := range alter.Options {
-				if renameOpt, ok := opt.(*tree.AlterOptionTableName); ok && renameOpt.Name != nil {
-					target := renameOpt.Name.ToTableName()
-					dbNames = append(dbNames, string(target.SchemaName))
-				}
-			}
-		}
-	case *tree.CreateFunction:
-		dbNames = append(dbNames, functionNameDatabaseName(st.Name))
-	case *tree.DropFunction:
-		dbNames = append(dbNames, functionNameDatabaseName(st.Name))
-	case *tree.CreateProcedure:
-		dbNames = append(dbNames, procedureNameDatabaseName(st.Name))
-	case *tree.DropProcedure:
-		dbNames = append(dbNames, procedureNameDatabaseName(st.Name))
-	case *tree.DropTable:
-		dbNames = appendTableNamesDatabaseNames(dbNames, st.Names)
-	case *tree.DropView:
-		dbNames = appendTableNamesDatabaseNames(dbNames, st.Names)
-	case *tree.DropSequence:
-		dbNames = appendTableNamesDatabaseNames(dbNames, st.Names)
-	case *tree.Load:
-		dbNames = appendTableNameDatabaseName(dbNames, st.Table)
-	case *tree.CreateIndex:
-		dbNames = appendTableNameDatabaseName(dbNames, st.Table)
-	case *tree.DropIndex:
-		dbNames = appendTableNameDatabaseName(dbNames, st.TableName)
-	case *tree.TruncateTable:
-		dbNames = appendTableNameDatabaseName(dbNames, st.Name)
-	case *tree.CloneTable:
-		dbNames = appendTableNameDatabaseName(dbNames, &st.CreateTable.Table)
-	case *tree.CloneDatabase:
-		dbNames = append(dbNames, string(st.DstDatabase))
-	case *tree.RestoreSnapShot:
-		if st.Level == tree.RESTORELEVELDATABASE || st.Level == tree.RESTORELEVELTABLE {
-			dbNames = append(dbNames, string(st.DatabaseName))
-		}
-	case *tree.RestorePitr:
-		if st.Level == tree.RESTORELEVELDATABASE || st.Level == tree.RESTORELEVELTABLE {
-			dbNames = append(dbNames, string(st.DatabaseName))
-		}
-	case *tree.DataBranchCreateTable:
-		dbNames = appendTableNameDatabaseName(dbNames, &st.CreateTable.Table)
-	case *tree.DataBranchDeleteTable:
-		dbNames = appendTableNameDatabaseName(dbNames, &st.TableName)
-	case *tree.DataBranchCreateDatabase:
-		dbNames = append(dbNames, string(st.DstDatabase))
-	case *tree.DataBranchDeleteDatabase:
-		dbNames = append(dbNames, string(st.DatabaseName))
-	case *tree.DataBranchMerge:
-		dbNames = appendTableNameDatabaseName(dbNames, &st.DstTable)
-	case *tree.DataBranchPick:
-		dbNames = appendTableNameDatabaseName(dbNames, &st.DstTable)
-	}
-	return dbNames
 }

@@ -12,11 +12,12 @@ drop account if exists protected_bvt_acc;
 create account protected_bvt_acc ADMIN_NAME 'admin' IDENTIFIED BY '111';
 
 -- @session:id=1&user=protected_bvt_acc:admin&password=111
-set global protected_databases = 'protected_bvt_db,protected_bvt_new,CamelDB';
+set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB';
 set global protected_databases = '';
 create database protected_bvt_db;
 create table protected_bvt_db.t1(a int);
 insert into protected_bvt_db.t1 values(1);
+create view protected_bvt_db.v1 as select * from protected_bvt_db.t1;
 create role protected_bvt_writer;
 grant create database,drop database on account * to protected_bvt_writer;
 grant all on database protected_bvt_db to protected_bvt_writer;
@@ -30,6 +31,12 @@ create database protected_bvt_normal;
 drop database protected_bvt_normal;
 create database protected_bvt_new;
 create table protected_bvt_db.t2(a int);
+create view protected_bvt_db.v2 as select * from protected_bvt_db.t1;
+drop view protected_bvt_db.v1;
+alter table protected_bvt_db.t1 add column b int;
+rename table protected_bvt_db.t1 to protected_bvt_db.t2;
+create table protected_bvt_db.t_clone clone protected_bvt_db.t1;
+create database protected_bvt_clone clone protected_bvt_db;
 insert into protected_bvt_db.t1 values(2);
 truncate table protected_bvt_db.t1;
 drop table protected_bvt_db.t1;

@@ -26,16 +26,20 @@ func testTableName(dbName, tableName string) tree.TableName {
 	return tree.NewUnresolvedObjectName(dbName, tableName).ToTableName()
 }
 
+func protectedTargetsFromStatement(stmt tree.Statement) []string {
+	return determinePrivilegeSetOfStatement(stmt).writeDatabaseTargets
+}
+
 func TestProtectedDatabaseWriteTargetsFromClone(t *testing.T) {
 	cloneTable := tree.NewCloneTable()
 	cloneTable.CreateTable.Table = testTableName("dst_db", "dst_tbl")
 	cloneTable.SrcTable = testTableName("src_db", "src_tbl")
-	require.Equal(t, []string{"dst_db"}, protectedDatabaseWriteTargetsFromStmt(cloneTable))
+	require.Equal(t, []string{"dst_db"}, protectedTargetsFromStatement(cloneTable))
 
 	cloneDatabase := tree.NewCloneDatabase()
 	cloneDatabase.DstDatabase = tree.Identifier("dst_db")
 	cloneDatabase.SrcDatabase = tree.Identifier("src_db")
-	require.Equal(t, []string{"dst_db"}, protectedDatabaseWriteTargetsFromStmt(cloneDatabase))
+	require.Equal(t, []string{"dst_db"}, protectedTargetsFromStatement(cloneDatabase))
 }
 
 func TestProtectedDatabaseWriteTargetsFromMultipleObjects(t *testing.T) {
@@ -43,7 +47,7 @@ func TestProtectedDatabaseWriteTargetsFromMultipleObjects(t *testing.T) {
 		ptrTo(testTableName("protected_db", "t1")),
 		ptrTo(testTableName("normal_db", "t2")),
 	})
-	require.Equal(t, []string{"protected_db", "normal_db"}, protectedDatabaseWriteTargetsFromStmt(dropTable))
+	require.Equal(t, []string{"protected_db", "normal_db"}, protectedTargetsFromStatement(dropTable))
 
 	renameTable := tree.NewRenameTable([]*tree.AlterTable{
 		{
@@ -53,14 +57,14 @@ func TestProtectedDatabaseWriteTargetsFromMultipleObjects(t *testing.T) {
 			},
 		},
 	})
-	require.Equal(t, []string{"src_db", "dst_db"}, protectedDatabaseWriteTargetsFromStmt(renameTable))
+	require.Equal(t, []string{"src_db", "dst_db"}, protectedTargetsFromStatement(renameTable))
 }
 
 func TestProtectedDatabaseWriteTargetsFromRestore(t *testing.T) {
-	require.Empty(t, protectedDatabaseWriteTargetsFromStmt(&tree.RestoreSnapShot{
+	require.Empty(t, protectedTargetsFromStatement(&tree.RestoreSnapShot{
 		Level: tree.RESTORELEVELACCOUNT,
 	}))
-	require.Equal(t, []string{"dst_db"}, protectedDatabaseWriteTargetsFromStmt(&tree.RestoreSnapShot{
+	require.Equal(t, []string{"dst_db"}, protectedTargetsFromStatement(&tree.RestoreSnapShot{
 		Level:        tree.RESTORELEVELDATABASE,
 		DatabaseName: tree.Identifier("dst_db"),
 	}))
