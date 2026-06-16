@@ -725,6 +725,21 @@ func TestUpdate(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestDropIndexIfExistsMissingIndex(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "drop index if exists nonexist on test_idx")
+	require.NoError(t, err)
+	testDeepCopy(logicPlan)
+	dropIndex := logicPlan.GetDdl().GetDropIndex()
+	require.NotNil(t, dropIndex)
+	require.Equal(t, "", dropIndex.GetIndexName())
+
+	_, err = runOneStmt(mock, t, "drop index nonexist on test_idx")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found index: nonexist")
+}
+
 func TestUpdateFromUsesAggDedup(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
