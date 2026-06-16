@@ -636,6 +636,20 @@ func TestBuildPartitionClauseFromMetadata_UsesSeqNumsWithHiddenColumn(t *testing
 	assert.Equal(t, "partition by hash (`id`) partitions 4", buildPartitionClauseFromMetadata(view, 334023))
 }
 
+func TestBuildPartitionClauseFromMetadata_FallsBackToRowShape(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1", "col_2", "col_3", "col_4", "col_5"},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"272577", "t_hash_partition", "ckp_tables", "Hash", "hash (`id`)", "4",
+			},
+		},
+	}
+
+	assert.Equal(t, "partition by hash (`id`) partitions 4", buildPartitionClauseFromMetadata(view, 272577))
+}
+
 func TestCreateTableDDLFromCatalogViews_IgnoresMoColumnsPrimaryWithoutConstraint(t *testing.T) {
 	moTablesView := &LogicalTableView{
 		Headers: []string{

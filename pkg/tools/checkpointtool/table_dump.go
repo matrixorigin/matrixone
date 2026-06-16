@@ -3453,32 +3453,85 @@ func buildPartitionClauseFromMetadata(view *LogicalTableView, tableID uint64) st
 			descriptionCol,
 			countCol,
 		)
-		return ""
 	}
 	tableIDStr := strconv.FormatUint(tableID, 10)
-	for _, row := range view.Rows {
-		if tableIDCol >= len(row) || row[tableIDCol] != tableIDStr {
-			continue
-		}
-		if methodCol >= len(row) || descriptionCol >= len(row) {
-			continue
-		}
-		method := strings.TrimSpace(row[methodCol])
-		description := strings.TrimSpace(row[descriptionCol])
-		if description == "" || !isPrintableSQLText(description) {
-			return ""
-		}
-		clause := "partition by " + description
-		if isAutoPartitionCountMethod(method) && countCol >= 0 && countCol < len(row) {
-			if count, err := strconv.Atoi(strings.TrimSpace(row[countCol])); err == nil && count > 0 {
-				clause += fmt.Sprintf(" partitions %d", count)
-			}
-		}
-		ckpDebugSchemaf("partition metadata resolved table=%d method=%q description=%q clause=%q", tableID, method, description, clause)
+	if clause := buildPartitionClauseFromMetadataAt(view, tableIDStr, tableIDCol, methodCol, descriptionCol, countCol); clause != "" {
 		return clause
 	}
-	ckpDebugSchemaf("partition metadata not found table=%d rows=%d", tableID, len(view.Rows))
+	if clause := buildPartitionClauseFromMetadataByRowShape(view, tableIDStr); clause != "" {
+		return clause
+	}
+	ckpDebugSchemaf("partition metadata not found table=%d rows=%d headers=%v", tableID, len(view.Rows), view.Headers)
 	return ""
+}
+
+func buildPartitionClauseFromMetadataAt(view *LogicalTableView, tableIDStr string, tableIDCol, methodCol, descriptionCol, countCol int) string {
+	if tableIDCol < 0 || methodCol < 0 || descriptionCol < 0 {
+		return ""
+	}
+	dataOffset := logicalViewDataOffset(view)
+	for _, row := range view.Rows {
+		if len(row) < dataOffset {
+			continue
+		}
+		dataRow := row[dataOffset:]
+		if tableIDCol >= len(dataRow) || dataRow[tableIDCol] != tableIDStr {
+			continue
+		}
+		if methodCol >= len(dataRow) || descriptionCol >= len(dataRow) {
+			continue
+		}
+		return renderPartitionClauseFromMetadataCells(tableIDStr, strings.TrimSpace(dataRow[methodCol]), strings.TrimSpace(dataRow[descriptionCol]), cellAt(dataRow, countCol))
+	}
+	return ""
+}
+
+func buildPartitionClauseFromMetadataByRowShape(view *LogicalTableView, tableIDStr string) string {
+	dataOffset := logicalViewDataOffset(view)
+	for _, row := range view.Rows {
+		if len(row) < dataOffset {
+			continue
+		}
+		dataRow := row[dataOffset:]
+		for tableIDCol, cell := range dataRow {
+			if cell != tableIDStr {
+				continue
+			}
+			methodCol := tableIDCol + 3
+			descriptionCol := tableIDCol + 4
+			countCol := tableIDCol + 5
+			if descriptionCol >= len(dataRow) {
+				continue
+			}
+			clause := renderPartitionClauseFromMetadataCells(tableIDStr, strings.TrimSpace(cellAt(dataRow, methodCol)), strings.TrimSpace(cellAt(dataRow, descriptionCol)), cellAt(dataRow, countCol))
+			if clause != "" {
+				ckpDebugSchemaf("partition metadata resolved by row shape table=%s table_id_col=%d clause=%q", tableIDStr, tableIDCol, clause)
+				return clause
+			}
+		}
+	}
+	return ""
+}
+
+func renderPartitionClauseFromMetadataCells(tableIDStr, method, description, countText string) string {
+	if description == "" || !isPrintableSQLText(description) {
+		return ""
+	}
+	clause := "partition by " + description
+	if isAutoPartitionCountMethod(method) {
+		if count, err := strconv.Atoi(strings.TrimSpace(countText)); err == nil && count > 0 {
+			clause += fmt.Sprintf(" partitions %d", count)
+		}
+	}
+	ckpDebugSchemaf("partition metadata resolved table=%s method=%q description=%q clause=%q", tableIDStr, method, description, clause)
+	return clause
+}
+
+func cellAt(row []string, idx int) string {
+	if idx < 0 || idx >= len(row) {
+		return ""
+	}
+	return row[idx]
 }
 
 func isAutoPartitionCountMethod(method string) bool {
