@@ -316,6 +316,71 @@ func (gi *GpuIvfPq[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []i
 	return nil
 }
 
+// AddChunkQuantizeHalf adds a chunk of vecf16 (half) data, quantizing natively
+// to the 1-byte storage type T (int8/uint8) via the half-source quantizer.
+// No f32 detour. Requires T to be int8/uint8.
+func (gi *GpuIvfPq[T]) AddChunkQuantizeHalf(chunk []Float16, chunkCount uint64, ids []int64) error {
+	if gi.cIvfPq == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	if len(chunk) == 0 || chunkCount == 0 {
+		return nil
+	}
+
+	var errmsg *C.char
+	var cIds *C.int64_t
+	if len(ids) > 0 {
+		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
+	}
+	C.gpu_ivf_pq_add_chunk_quantize_half(
+		gi.cIvfPq,
+		unsafe.Pointer(&chunk[0]),
+		C.uint64_t(chunkCount),
+		cIds,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(chunk)
+	runtime.KeepAlive(ids)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// QuantizeHalf quantizes a vecf16 (half) query to the 1-byte storage type T
+// (int8/uint8) via the half-source quantizer, returning numQueries*dimension
+// values. The caller then runs the normal native Search([]T). Requires int8/uint8.
+func (gi *GpuIvfPq[T]) QuantizeHalf(queries []Float16, numQueries uint64, dimension uint32) ([]T, error) {
+	if gi.cIvfPq == nil {
+		return nil, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	out := make([]T, numQueries*uint64(dimension))
+	if len(queries) == 0 {
+		return out, nil
+	}
+
+	var errmsg *C.char
+	C.gpu_ivf_pq_quantize_half(
+		gi.cIvfPq,
+		unsafe.Pointer(&queries[0]),
+		C.uint64_t(numQueries),
+		unsafe.Pointer(&out[0]),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+	runtime.KeepAlive(out)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return out, nil
+}
+
 // TrainQuantizer trains the scalar quantizer (if T is 1-byte)
 func (gi *GpuIvfPq[T]) TrainQuantizer(trainData []float32, nSamples uint64) error {
 	if gi.cIvfPq == nil {

@@ -133,6 +133,20 @@ func (mi *MultiGpuIvfPq[T]) Search(queries []T, numQueries uint64, dimension uin
 	}, nil, nil, nil)
 }
 
+// SearchQuantizeHalf quantizes a vecf16 (half) query to the 1-byte storage type
+// T (int8/uint8) via the first index's half-source quantizer, then runs the
+// normal native Search([]T) (sharding/overflow/merge reused). Unfiltered.
+func (mi *MultiGpuIvfPq[T]) SearchQuantizeHalf(queries []Float16, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) ([]int64, []float32, error) {
+	if len(mi.indices) == 0 {
+		return nil, nil, moerr.NewInternalErrorNoCtx("MultiGpuIvfPq.SearchQuantizeHalf: no main index (small-data f16->int8/uint8 overflow not yet supported)")
+	}
+	qT, err := mi.indices[0].QuantizeHalf(queries, numQueries, dimension)
+	if err != nil {
+		return nil, nil, err
+	}
+	return mi.Search(qT, numQueries, dimension, limit, sp)
+}
+
 func (mi *MultiGpuIvfPq[T]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) ([]int64, []float32, error) {
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
 	for i, idx := range mi.indices {
@@ -164,6 +178,20 @@ func (mi *MultiGpuCagra[T]) Search(queries []T, numQueries uint64, dimension uin
 	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, queries, nil, numQueries, dimension, limit, func(idx GpuIndex[T], q []T, nQ uint64, d uint32, l uint32) (uint64, error) {
 		return idx.(*GpuCagra[T]).SearchAsyncWithParams(q, nQ, d, l, sp)
 	}, nil, nil, nil)
+}
+
+// SearchQuantizeHalf quantizes a vecf16 (half) query to the 1-byte storage type
+// T (int8/uint8) via the first index's half-source quantizer, then runs the
+// normal native Search([]T) (sharding/overflow/merge reused). Unfiltered.
+func (mi *MultiGpuCagra[T]) SearchQuantizeHalf(queries []Float16, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) ([]int64, []float32, error) {
+	if len(mi.indices) == 0 {
+		return nil, nil, moerr.NewInternalErrorNoCtx("MultiGpuCagra.SearchQuantizeHalf: no main index (small-data f16->int8/uint8 overflow not yet supported)")
+	}
+	qT, err := mi.indices[0].QuantizeHalf(queries, numQueries, dimension)
+	if err != nil {
+		return nil, nil, err
+	}
+	return mi.Search(qT, numQueries, dimension, limit, sp)
 }
 
 func (mi *MultiGpuCagra[T]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) ([]int64, []float32, error) {
