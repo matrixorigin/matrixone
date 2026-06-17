@@ -760,6 +760,10 @@ func TestRenderCreateTableDDLFromSchema_DoesNotFallbackToCreateSQLWhenColumnType
 	assert.Empty(t, ddl)
 }
 
+func TestIsPrintableCreateTableSQLAcceptsExternalTable(t *testing.T) {
+	assert.True(t, isPrintableCreateTableSQL("CREATE EXTERNAL TABLE ext_csv (id INT) INFILE {'filepath'='/tmp/ext.csv','format'='csv'}"))
+}
+
 func TestRenderCreateTableDDLFromSchema_EnumSetValues(t *testing.T) {
 	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
 		TableName: "t_enum_set",

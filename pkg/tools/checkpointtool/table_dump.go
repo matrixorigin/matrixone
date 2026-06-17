@@ -4297,7 +4297,8 @@ func isPrintableCreateTableSQL(ddl string) bool {
 	upper := strings.ToUpper(ddl)
 	return strings.HasPrefix(upper, "CREATE TABLE ") ||
 		strings.HasPrefix(upper, "CREATE TEMPORARY TABLE ") ||
-		strings.HasPrefix(upper, "CREATE CLUSTER TABLE ")
+		strings.HasPrefix(upper, "CREATE CLUSTER TABLE ") ||
+		strings.HasPrefix(upper, "CREATE EXTERNAL TABLE ")
 }
 
 // hardcodedCreateTable returns the CREATE TABLE DDL for core built-in system tables.

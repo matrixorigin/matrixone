@@ -805,24 +805,10 @@ func writeRestoreScript(
 			currentDB = table.DatabaseName
 		}
 
-		ddl := ""
-		if dumpData := dumpDataByTable[table.TableID]; dumpData != nil {
-			schema := dumpData.Schema
-			if schema != nil {
-				schemaCopy := *schema
-				schemaCopy.TableName = table.TableName
-				schemaCopy.DatabaseName = table.DatabaseName
-				ddl = checkpointtool.RenderCreateTableDDLFromSchema(&schemaCopy)
-			}
+		ddl, err := restoreCreateTableDDL(ctx, reader, table, dumpDataByTable[table.TableID], snapshotTS)
+		if err != nil {
+			return "", err
 		}
-		if ddl == "" {
-			var err error
-			ddl, err = reader.ShowCreateTable(ctx, table.TableID, snapshotTS)
-			if err != nil {
-				return "", fmt.Errorf("show create table %d: %w", table.TableID, err)
-			}
-		}
-		ddl = normalizeCreateTableDDLName(ddl, table)
 		indexDDLs, err := reader.ShowCreateIndexStatements(ctx, table.TableID, table.TableName, snapshotTS)
 		if err != nil {
 			return "", fmt.Errorf("show create indexes for table %d: %w", table.TableID, err)
@@ -837,7 +823,7 @@ func writeRestoreScript(
 		if _, err := fmt.Fprintln(f, ";"); err != nil {
 			return "", err
 		}
-		if includeLoad {
+		if shouldWriteLoadData(includeLoad, table) {
 			if _, err := fmt.Fprintf(f, "\n%s\n", loadPathResolver.loadDataSource(csvRoot, table)); err != nil {
 				return "", err
 			}
@@ -873,6 +859,48 @@ func writeRestoreScript(
 		return "", fmt.Errorf("close restore script: %w", err)
 	}
 	return scriptPath, nil
+}
+
+func restoreCreateTableDDL(
+	ctx context.Context,
+	reader *checkpointtool.CheckpointReader,
+	table checkpointtool.TableCatalogEntry,
+	dumpData *checkpointtool.TableDumpData,
+	snapshotTS types.TS,
+) (string, error) {
+	ddl := ""
+	if dumpData != nil && dumpData.Schema != nil {
+		schema := dumpData.Schema
+		if isExternalRelation(table) && strings.TrimSpace(schema.CreateSQL) != "" {
+			ddl = schema.CreateSQL
+		} else {
+			schemaCopy := *schema
+			schemaCopy.TableName = table.TableName
+			schemaCopy.DatabaseName = table.DatabaseName
+			ddl = checkpointtool.RenderCreateTableDDLFromSchema(&schemaCopy)
+		}
+	}
+	if ddl == "" {
+		var err error
+		ddl, err = reader.ShowCreateTable(ctx, table.TableID, snapshotTS)
+		if err != nil {
+			return "", fmt.Errorf("show create table %d: %w", table.TableID, err)
+		}
+	}
+	return normalizeCreateTableDDLName(ddl, table), nil
+}
+
+func shouldWriteLoadData(includeLoad bool, table checkpointtool.TableCatalogEntry) bool {
+	return includeLoad && !isExternalRelation(table)
+}
+
+func isExternalRelation(table checkpointtool.TableCatalogEntry) bool {
+	switch strings.ToLower(strings.TrimSpace(table.RelKind)) {
+	case "e", "external":
+		return true
+	default:
+		return false
+	}
 }
 
 func quoteSQLIdent(s string) string {
@@ -1170,6 +1198,11 @@ func createTableNameRange(sql string) (int, int, bool) {
 			continue
 		}
 		next, ok = consumeSQLKeyword(sql, i, "cluster")
+		if ok {
+			i = next
+			continue
+		}
+		next, ok = consumeSQLKeyword(sql, i, "external")
 		if ok {
 			i = next
 			continue

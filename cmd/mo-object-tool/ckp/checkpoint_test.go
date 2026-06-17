@@ -15,10 +15,12 @@
 package ckp
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
 	"github.com/stretchr/testify/assert"
@@ -52,15 +54,20 @@ func TestNormalizeCreateTableDDLName(t *testing.T) {
 			want: "CREATE TABLE IF NOT EXISTS `compat_ckp`.`employees` (id INT)",
 		},
 		{
+			name: "external table",
+			ddl:  "CREATE EXTERNAL TABLE old_name (id INT) INFILE {'filepath'='/tmp/data.csv','format'='csv'}",
+			want: "CREATE EXTERNAL TABLE `compat_ckp`.`employees` (id INT) INFILE {'filepath'='/tmp/data.csv','format'='csv'}",
+		},
+		{
 			name: "escaped target name",
 			ddl:  "CREATE TABLE old_name (id INT)",
 			want: "CREATE TABLE `compat``ckp`.`employees` (id INT)",
 		},
 	}
 
-	tests[3].want = "CREATE TABLE `compat``ckp`.`employees` (id INT)"
-	tests[3].ddl = "CREATE TABLE old_name (id INT)"
-	tests[3].name = "escaped database name"
+	tests[4].want = "CREATE TABLE `compat``ckp`.`employees` (id INT)"
+	tests[4].ddl = "CREATE TABLE old_name (id INT)"
+	tests[4].name = "escaped database name"
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -72,6 +79,32 @@ func TestNormalizeCreateTableDDLName(t *testing.T) {
 			assert.Equal(t, tt.want, normalizeCreateTableDDLName(tt.ddl, table))
 		})
 	}
+}
+
+func TestRestoreCreateTableDDLUsesExternalCreateSQL(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		DatabaseName: "ckp_external",
+		TableName:    "ext_csv_local",
+		RelKind:      "e",
+	}
+	dumpData := &checkpointtool.TableDumpData{
+		Schema: &checkpointtool.TableSchema{
+			TableName: "stale_name",
+			CreateSQL: "CREATE EXTERNAL TABLE stale_name (id INT) INFILE {'filepath'='/tmp/ext.csv','format'='csv'}",
+			Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
+		},
+	}
+
+	ddl, err := restoreCreateTableDDL(context.Background(), nil, table, dumpData, types.TS{})
+	require.NoError(t, err)
+	assert.Equal(t, "CREATE EXTERNAL TABLE `ckp_external`.`ext_csv_local` (id INT) INFILE {'filepath'='/tmp/ext.csv','format'='csv'}", ddl)
+}
+
+func TestShouldWriteLoadDataSkipsExternalRelations(t *testing.T) {
+	assert.False(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "e"}))
+	assert.False(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "external"}))
+	assert.True(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "r"}))
+	assert.False(t, shouldWriteLoadData(false, checkpointtool.TableCatalogEntry{RelKind: "r"}))
 }
 
 func TestFilterExistingIndexDDLs(t *testing.T) {
