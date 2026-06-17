@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,4 +74,17 @@ func TestVecValueToString_SQLLikeFormatting(t *testing.T) {
 	defer nullVec.Free(mp)
 	require.NoError(t, vector.AppendFixed(nullVec, int64(0), true, mp))
 	require.Equal(t, "NULL", vecValueToString(nullVec, 0))
+}
+
+func TestShouldIncludeIncrementalCheckpointWithoutBase(t *testing.T) {
+	zero := types.TS{}
+	ts1 := types.BuildTS(1, 0)
+	ts2 := types.BuildTS(2, 0)
+
+	assert.True(t, shouldIncludeIncrementalCheckpoint(zero, ts1, zero, ts1, false))
+	assert.True(t, shouldIncludeIncrementalCheckpoint(ts1, ts2, zero, ts2, false))
+	assert.False(t, shouldIncludeIncrementalCheckpoint(ts1, ts2, zero, ts1, false))
+
+	assert.False(t, shouldIncludeIncrementalCheckpoint(zero, ts1, zero, ts1, true))
+	assert.True(t, shouldIncludeIncrementalCheckpoint(ts1, ts2, zero, ts2, true))
 }

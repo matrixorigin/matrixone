@@ -387,7 +387,7 @@ func (r *CheckpointReader) ComposeAt(ts types.TS) (*ComposedView, error) {
 	for i, e := range r.entries {
 		start := e.GetStart()
 		end := e.GetEnd()
-		if e.IsIncremental() && start.GT(&baseEnd) && end.LE(&ts) {
+		if e.IsIncremental() && shouldIncludeIncrementalCheckpoint(start, end, baseEnd, ts, baseEntry != nil) {
 			tables, err := r.GetTables(e)
 			if err != nil {
 				if isDataFileNotFound(err) {
@@ -407,6 +407,16 @@ func (r *CheckpointReader) ComposeAt(ts types.TS) (*ComposedView, error) {
 		}
 	}
 	return view, nil
+}
+
+func shouldIncludeIncrementalCheckpoint(start, end, baseEnd, ts types.TS, hasBase bool) bool {
+	if !end.LE(&ts) {
+		return false
+	}
+	if hasBase {
+		return start.GT(&baseEnd)
+	}
+	return start.GE(&baseEnd)
 }
 
 // ValidateSnapshot checks that ts can compose a catalog-backed checkpoint view.
