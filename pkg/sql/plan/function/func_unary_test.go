@@ -7157,6 +7157,7 @@ func resetUserLevelLocksForTest(t *testing.T) {
 	userLevelLocks.Lock()
 	userLevelLocks.counts = make(map[userLevelLockKey]uint64)
 	userLevelLocks.byOwner = make(map[string]map[string]struct{})
+	userLevelLocks.holders = make(map[string]uint64)
 	userLevelLocks.Unlock()
 }
 
@@ -7289,6 +7290,14 @@ func TestUserLevelLockFunctions(t *testing.T) {
 				},
 				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
 				fn:     IsFreeLock,
+			},
+			{
+				name: "used lock returns holder connection id",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"prisma_migrate_lock"}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{proc.GetSessionInfo().ConnectionID}, []bool{false}),
+				fn:     IsUsedLock,
 			},
 			{
 				name: "release held lock",
@@ -7449,6 +7458,67 @@ func TestReleaseUserLevelLocksCleanup(t *testing.T) {
 		v, err = getUserLevelLock("cleanup_lock", 0, proc2)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestIsUsedLockReturnsHolderConnectionID(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		proc1.GetSessionInfo().ConnectionID = 1001
+		proc2.GetSessionInfo().ConnectionID = 1002
+
+		v, err := getUserLevelLock("holder_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		holder, isNull, err := isUserLevelLockUsed("holder_lock", proc2)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, uint64(1001), holder)
+
+		holder, isNull, err = isUserLevelLockUsed("missing_holder_lock", proc2)
+		require.NoError(t, err)
+		require.True(t, isNull)
+		require.Equal(t, uint64(0), holder)
+	})
+}
+
+func TestReleaseAllUserLevelLocksReturnsReleasedCount(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+
+		v, err := getUserLevelLock("release_all_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_b", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		released := releaseAllUserLevelLocks(proc1)
+		require.Equal(t, int64(3), released)
+		require.Equal(t, int64(0), releaseAllUserLevelLocks(proc1))
+
+		v, err = getUserLevelLock("release_all_a", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, isNull, err := releaseUserLevelLock("release_all_a", proc2)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		fcTC := NewFunctionTestCase(
+			proc1,
+			nil,
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+			ReleaseAllLocks,
+		)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
 	})
 }
 

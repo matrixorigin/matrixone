@@ -6981,11 +6981,16 @@ type userLevelLockKey struct {
 
 var userLevelLocks = struct {
 	sync.Mutex
-	counts  map[userLevelLockKey]uint64
+	//owner, lockname -> count
+	counts map[userLevelLockKey]uint64
+	//owner -> lockername
 	byOwner map[string]map[string]struct{}
+	//account:lockname -> connectionid
+	holders map[string]uint64
 }{
 	counts:  make(map[userLevelLockKey]uint64),
 	byOwner: make(map[string]map[string]struct{}),
+	holders: make(map[string]uint64),
 }
 
 func userLevelLockOwner(proc *process.Process) string {
@@ -7002,8 +7007,15 @@ func userLevelLockOwner(proc *process.Process) string {
 	return fmt.Sprintf("%d", si.GetConnectionID())
 }
 
+func userLevelLockConnectionID(proc *process.Process) uint64 {
+	if proc == nil || proc.GetSessionInfo() == nil {
+		return 0
+	}
+	return proc.GetSessionInfo().GetConnectionID()
+}
+
 // maxUserLevelLockNameLength is the MySQL-compatible maximum length for
-// user-level lock names (GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK).
+// user-level lock names (GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK, IS_USED_LOCK).
 const maxUserLevelLockNameLength = 64
 
 // normalizeUserLevelLockName validates and normalizes a MySQL user-level lock name.
@@ -7023,8 +7035,20 @@ func normalizeUserLevelLockName(name string) (string, error) {
 	return normalized, nil
 }
 
-func userLevelLockTxnID(owner, name string) []byte {
-	return []byte("mo-user-level-lock\x00" + owner + "\x00" + name)
+func userLevelLockTxnID(owner string, connID uint64, name string) []byte {
+	return []byte(fmt.Sprintf("mo-user-level-lock\x00%s\x00%d\x00%s", owner, connID, name))
+}
+
+func userLevelLockConnectionIDFromTxnID(txnID []byte) (uint64, bool) {
+	parts := strings.SplitN(string(txnID), "\x00", 4)
+	if len(parts) != 4 || parts[0] != "mo-user-level-lock" {
+		return 0, false
+	}
+	connID, err := strconv.ParseUint(parts[2], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return connID, true
 }
 
 func userLevelLockRow(proc *process.Process, name string) []byte {
@@ -7033,6 +7057,10 @@ func userLevelLockRow(proc *process.Process, name string) []byte {
 		account = proc.GetSessionInfo().Account
 	}
 	return []byte(account + "\x00" + name)
+}
+
+func userLevelLockStateKey(proc *process.Process, name string) string {
+	return string(userLevelLockRow(proc, name))
 }
 
 func userLevelLockService(proc *process.Process) (lockservice.LockService, error) {
@@ -7071,7 +7099,7 @@ func userLevelLockConflictOrTimeout(err error) bool {
 		errors.Is(err, context.DeadlineExceeded)
 }
 
-func trackUserLevelLock(owner, name string) {
+func trackUserLevelLock(owner, name, stateKey string, connID uint64) {
 	key := userLevelLockKey{owner: owner, name: name}
 	userLevelLocks.Lock()
 	defer userLevelLocks.Unlock()
@@ -7081,6 +7109,14 @@ func trackUserLevelLock(owner, name string) {
 		userLevelLocks.byOwner[owner] = make(map[string]struct{})
 	}
 	userLevelLocks.byOwner[owner][name] = struct{}{}
+	userLevelLocks.holders[stateKey] = connID
+}
+
+func getUserLevelLockHolder(stateKey string) (uint64, bool) {
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+	connID, ok := userLevelLocks.holders[stateKey]
+	return connID, ok
 }
 
 func userLevelLockRefCount(owner, name string) uint64 {
@@ -7089,7 +7125,7 @@ func userLevelLockRefCount(owner, name string) uint64 {
 	return userLevelLocks.counts[userLevelLockKey{owner: owner, name: name}]
 }
 
-func untrackUserLevelLock(owner, name string) (uint64, bool) {
+func untrackUserLevelLock(owner, name, stateKey string) (uint64, bool) {
 	key := userLevelLockKey{owner: owner, name: name}
 	userLevelLocks.Lock()
 	defer userLevelLocks.Unlock()
@@ -7103,6 +7139,7 @@ func untrackUserLevelLock(owner, name string) (uint64, bool) {
 		return count - 1, true
 	}
 	delete(userLevelLocks.counts, key)
+	delete(userLevelLocks.holders, stateKey)
 	if names := userLevelLocks.byOwner[owner]; names != nil {
 		delete(names, name)
 		if len(names) == 0 {
@@ -7136,9 +7173,18 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 	if err != nil {
 		return 0, err
 	}
+	//owner = sessionid or serviceid:connectionid  or  connectionid
 	owner := userLevelLockOwner(proc)
+	//connectionid
+	connID := userLevelLockConnectionID(proc)
+	//account:lockname
+	stateKey := userLevelLockStateKey(proc, name)
+	//owner+lockname -> count
+	//serviceid:connectionid + lockname -> count
 	if userLevelLockRefCount(owner, name) > 0 {
-		trackUserLevelLock(owner, name)
+		//count++
+		//owner -> lockname
+		trackUserLevelLock(owner, name, stateKey, connID)
 		return 1, nil
 	}
 
@@ -7149,7 +7195,7 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 		ctx,
 		userLevelLockTableID,
 		[][]byte{userLevelLockRow(proc, name)},
-		userLevelLockTxnID(owner, name),
+		userLevelLockTxnID(owner, connID, name),
 		userLevelLockOptions(policy))
 	if err != nil {
 		if userLevelLockConflictOrTimeout(err) {
@@ -7157,7 +7203,7 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 		}
 		return 0, err
 	}
-	trackUserLevelLock(owner, name)
+	trackUserLevelLock(owner, name, stateKey, connID)
 	return 1, nil
 }
 
@@ -7176,6 +7222,8 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 		return 0, false, err
 	}
 	owner := userLevelLockOwner(proc)
+	connID := userLevelLockConnectionID(proc)
+	stateKey := userLevelLockStateKey(proc, name)
 	count := userLevelLockRefCount(owner, name)
 	if count == 0 {
 		// Probe the lockservice to distinguish "lock does not exist" (NULL)
@@ -7185,7 +7233,7 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 			proc.Ctx,
 			userLevelLockTableID,
 			[][]byte{userLevelLockRow(proc, name)},
-			userLevelLockTxnID(probeOwner, name),
+			userLevelLockTxnID(probeOwner, connID, name),
 			userLevelLockOptions(lockpb.WaitPolicy_FastFail))
 		if probeErr != nil {
 			if userLevelLockConflictOrTimeout(probeErr) {
@@ -7196,19 +7244,19 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 		}
 		// Lock did not exist — we acquired it via the probe. Release it and
 		// return NULL to signal the lock was already free.
-		if err := ls.Unlock(proc.Ctx, userLevelLockTxnID(probeOwner, name), timestamp.Timestamp{}); err != nil {
+		if err := ls.Unlock(proc.Ctx, userLevelLockTxnID(probeOwner, connID, name), timestamp.Timestamp{}); err != nil {
 			return 0, false, err
 		}
 		return 0, true, nil
 	}
 	if count > 1 {
-		untrackUserLevelLock(owner, name)
+		untrackUserLevelLock(owner, name, stateKey)
 		return 1, false, nil
 	}
-	if err := ls.Unlock(proc.Ctx, userLevelLockTxnID(owner, name), timestamp.Timestamp{}); err != nil {
+	if err := ls.Unlock(proc.Ctx, userLevelLockTxnID(owner, connID, name), timestamp.Timestamp{}); err != nil {
 		return 0, false, err
 	}
-	untrackUserLevelLock(owner, name)
+	untrackUserLevelLock(owner, name, stateKey)
 	return 1, false, nil
 }
 
@@ -7222,12 +7270,13 @@ func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
 		return 0, err
 	}
 	owner := userLevelLockOwner(proc)
+	connID := userLevelLockConnectionID(proc)
 	probeOwner := owner + "\x00probe\x00" + name
 	_, err = ls.Lock(
 		proc.Ctx,
 		userLevelLockTableID,
 		[][]byte{userLevelLockRow(proc, name)},
-		userLevelLockTxnID(probeOwner, name),
+		userLevelLockTxnID(probeOwner, connID, name),
 		userLevelLockOptions(lockpb.WaitPolicy_FastFail))
 	if err != nil {
 		if userLevelLockConflictOrTimeout(err) {
@@ -7235,29 +7284,71 @@ func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
 		}
 		return 0, err
 	}
-	if err := ls.Unlock(proc.Ctx, userLevelLockTxnID(probeOwner, name), timestamp.Timestamp{}); err != nil {
+	if err := ls.Unlock(proc.Ctx, userLevelLockTxnID(probeOwner, connID, name), timestamp.Timestamp{}); err != nil {
 		return 0, err
 	}
 	return 1, nil
 }
 
-func ReleaseUserLevelLocks(proc *process.Process) {
+func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, error) {
+	name, err := normalizeUserLevelLockName(name)
+	if err != nil {
+		return 0, false, err
+	}
+	ls, err := userLevelLockService(proc)
+	if err != nil {
+		return 0, false, err
+	}
+
+	stateKey := userLevelLockStateKey(proc, name)
+	if holderConnID, ok := getUserLevelLockHolder(stateKey); ok {
+		return holderConnID, false, nil
+	}
+
+	row := userLevelLockRow(proc, name)
+	var holderConnID uint64
+	ls.IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool {
+		if tableID != userLevelLockTableID || len(keys) != 1 || !bytes.Equal(keys[0], row) {
+			return true
+		}
+		lock.IterHolders(func(holder lockpb.WaitTxn) bool {
+			holderConnID, _ = userLevelLockConnectionIDFromTxnID(holder.TxnID)
+			return false
+		})
+		return false
+	})
+	if holderConnID == 0 {
+		return 0, true, nil
+	}
+	return holderConnID, false, nil
+}
+
+func releaseAllUserLevelLocks(proc *process.Process) int64 {
 	if proc == nil || proc.GetLockService() == nil {
-		return
+		return 0
 	}
 	owner := userLevelLockOwner(proc)
+	connID := userLevelLockConnectionID(proc)
+	var released int64
 	for _, name := range userLevelLocksForOwner(owner) {
+		stateKey := userLevelLockStateKey(proc, name)
 		for {
-			count, held := untrackUserLevelLock(owner, name)
+			count, held := untrackUserLevelLock(owner, name, stateKey)
 			if !held {
 				break
 			}
+			released++
 			if count == 0 {
-				_ = proc.GetLockService().Unlock(context.Background(), userLevelLockTxnID(owner, name), timestamp.Timestamp{})
+				_ = proc.GetLockService().Unlock(context.Background(), userLevelLockTxnID(owner, connID, name), timestamp.Timestamp{})
 				break
 			}
 		}
 	}
+	return released
+}
+
+func ReleaseUserLevelLocks(proc *process.Process) {
+	_ = releaseAllUserLevelLocks(proc)
 }
 
 func GetLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -7329,6 +7420,35 @@ func IsFreeLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		}
 	}
 	return nil
+}
+
+func IsUsedLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[uint64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		name, null := names.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, isNull, err := isUserLevelLockUsed(string(name), proc)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(value, isNull); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ReleaseAllLocks(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opNoneParamToFixed[int64](result, proc, length, func() int64 {
+		return releaseAllUserLevelLocks(proc)
+	})
 }
 
 func Version(
