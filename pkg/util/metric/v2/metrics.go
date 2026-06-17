@@ -262,6 +262,7 @@ func initFrontendMetrics() {
 func initPipelineMetrics() {
 	registry.MustRegister(PipelineServerDurationHistogram)
 	registry.MustRegister(pipelineStreamGauge)
+	registry.MustRegister(PipelineCleanupEventCounter)
 }
 
 func initLogServiceMetrics() {
