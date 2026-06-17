@@ -255,7 +255,12 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			if err != nil {
 				return nil, err
 			}
-			authStats, err := checkResultQueryPrivilege(cwft.proc, plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session))
+			authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, cwft.ses.(*Session), stmt, plan)
+			if err != nil {
+				return nil, err
+			}
+			stats.PermissionAuth.Add(&authStats)
+			authStats, err = checkResultQueryPrivilege(cwft.proc, plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session))
 			if err != nil {
 				return nil, err
 			}
@@ -267,10 +272,21 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			cwft.stmt = stmt
 		} else {
 			// binary protocol execute
-			retComp, _, _, sql, err = initExecuteStmtParam(execCtx, cwft.ses.(*Session), cwft, nil, execCtx.input.stmtName)
+			retComp, plan, stmt, sql, err = initExecuteStmtParam(execCtx, cwft.ses.(*Session), cwft, nil, execCtx.input.stmtName)
 			if err != nil {
 				return nil, err
 			}
+			if plan != nil {
+				cwft.plan = plan
+			}
+			if stmt != nil {
+				cwft.stmt = stmt
+			}
+			authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, cwft.ses.(*Session), cwft.stmt, cwft.plan)
+			if err != nil {
+				return nil, err
+			}
+			stats.PermissionAuth.Add(&authStats)
 		}
 		originSQL = sql
 		cwft.ifIsExeccute = true
@@ -313,6 +329,17 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	}
 
 	return cwft.compile, err
+}
+
+func authenticatePreparedDDLOwnerStatement(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+	switch stmt.(type) {
+	case *tree.CreateDatabase, *tree.CreateTable:
+		return authenticateUserCanExecutePrepareOrExecute(reqCtx, ses, stmt, p)
+	default:
+		return stats, nil
+	}
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {

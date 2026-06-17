@@ -18,20 +18,46 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"regexp"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/tencentyun/cos-go-sdk-v5"
 )
 
 func IsRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var cosRetryErr *cos.RetryError
+	if errors.As(err, &cosRetryErr) && len(cosRetryErr.Errs) > 0 {
+		for _, innerErr := range cosRetryErr.Errs {
+			if IsRetryableError(innerErr) {
+				return true
+			}
+		}
+		return false
+	}
+
+	var cosErr *cos.ErrorResponse
+	if errors.As(err, &cosErr) && cosErr.Response != nil {
+		statusCode := cosErr.Response.StatusCode
+		if statusCode >= http.StatusInternalServerError ||
+			statusCode == http.StatusTooManyRequests {
+			return true
+		}
+	}
+
 	// unexpected EOF
 	if errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
 
 	// net timeout
-	if e, ok := err.(net.Error); ok && e.Timeout() {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
 

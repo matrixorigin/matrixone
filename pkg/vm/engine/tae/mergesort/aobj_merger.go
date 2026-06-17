@@ -184,6 +184,12 @@ func MergeAObj(
 				cols:        make([][]types.Decimal128, size),
 			}
 			merger = newAObjMerger(vpool, batches, sort.Decimal128Less, sortKeyPos, df, toLayout)
+		case types.T_decimal256:
+			df := &fixedDataFetcher[types.Decimal256]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Decimal256],
+				cols:        make([][]types.Decimal256, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.Decimal256Less, sortKeyPos, df, toLayout)
 		case types.T_uuid:
 			df := &fixedDataFetcher[types.Uuid]{
 				mustColFunc: vector.MustFixedColNoTypeCheck[types.Uuid],
