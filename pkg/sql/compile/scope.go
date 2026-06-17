@@ -327,7 +327,21 @@ func (s *Scope) MergeRun(c *Compile) error {
 	// step 3.
 	defer func() {
 		// should wait all the notify-message-routine and preScopes done.
-		wg.Wait()
+		// Use a goroutine + select to make wg.Wait() cancelable.
+		// sync.WaitGroup.Wait() does not observe context cancellation,
+		// so if a sub-routine fails to call wg.Done(), MergeRun blocks
+		// forever and the query becomes unkillable (issue #25025).
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-s.Proc.Ctx.Done():
+			// Context cancelled. Sub-routines that haven't completed
+			// will be cleaned up by the upper-layer MarkQueryDone.
+		}
 
 		// not necessary, but we still clean the preScope error channel here.
 		for len(preScopeResultReceiveChan) > 0 {
@@ -817,7 +831,15 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
 		err = suppressRemoteRunCancelError(s.Proc.Ctx, err)
-		reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, err, s.Proc.Mp())
+		// Use select to avoid blocking forever on Ch2 when the pipeline
+		// consumer has already stopped (e.g. due to context cancellation).
+		// Without this, closeWithError blocks -> resultChan never receives
+		// -> wg.Done() never called -> MergeRun wg.Wait() blocks forever,
+		// making the query unkillable (issue #25025).
+		select {
+		case reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, err, s.Proc.Mp()):
+		case <-s.Proc.Ctx.Done():
+		}
 		resultChan <- notifyMessageResult{err: err, sender: sender}
 		wg.Done()
 	}

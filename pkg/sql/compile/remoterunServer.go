@@ -117,7 +117,13 @@ func CnServerMessageHandler(
 		// to prevent some strange handle order between 'stop sending message' and others.
 		// todo: it is tcp connection now. should be very careful, we should listen to stream context next day.
 		if err == nil {
-			<-receiver.connectionCtx.Done()
+			// Also observe messageCtx cancellation so a killed query
+			// doesn't leave this handler blocked forever waiting for
+			// the TCP connection to close (issue #25025).
+			select {
+			case <-receiver.connectionCtx.Done():
+			case <-receiver.messageCtx.Done():
+			}
 		}
 		colexec.Get().RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
 	}
