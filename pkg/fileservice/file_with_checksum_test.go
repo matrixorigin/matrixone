@@ -352,4 +352,3 @@ func BenchmarkFileWithChecksumReadAt(b *testing.B) {
 		}
 	})
 }
-

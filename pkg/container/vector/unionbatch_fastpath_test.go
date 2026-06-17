@@ -324,3 +324,54 @@ func TestUnionBatchFastPathStaleBitmapBits(t *testing.T) {
 	v.Free(mp)
 	ref.Free(mp)
 }
+
+// TestUnionPregrowSkipsNullRows guards the varlena area pre-grow against counting
+// null rows. A reused varlen vector can retain a stale non-inline header in a null
+// slot (a null append does not overwrite the slot). The union skips null rows, so
+// the pre-grow must too — otherwise it reserves area for dead payload, triggering a
+// large needless mp.Grow (or an alloc failure) on null-heavy inputs the union path
+// would mostly skip. Output is identical with/without the fix, so this asserts on
+// the reservation: the only copied (non-null) rows are inline, so v.area must stay
+// tiny rather than be grown to fit the stale null-slot headers.
+func TestUnionPregrowSkipsNullRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	const n = 32
+	w := NewVec(types.T_varchar.ToType())
+	for i := 0; i < n; i++ {
+		require.NoError(t, AppendBytes(w, []byte("x"), false, mp)) // inline: uses no area
+	}
+	// Plant a stale BIG header claiming a large length in each null slot (as a
+	// reused vector would), then mark the row null without clearing the header.
+	var wCol []types.Varlena
+	ToSliceNoTypeCheck(w, &wCol)
+	const staleLen = 1 << 20 // 1 MiB of dead payload per null row
+	for i := 1; i < n; i += 2 {
+		wCol[i].SetOffsetLen(0, staleLen)
+		nulls.Add(&w.nsp, uint64(i))
+	}
+
+	// Union all rows (sels-gather -> the pre-grow path). Pre-fix this reserves
+	// ~(n/2)*staleLen of area for the dead null-slot payload.
+	v := NewVec(types.T_varchar.ToType())
+	sels := make([]int64, n)
+	for i := range sels {
+		sels[i] = int64(i)
+	}
+	require.NoError(t, v.Union(w, sels, mp))
+
+	require.Lessf(t, cap(v.area), staleLen,
+		"pre-grow over-reserved area (cap=%d) from stale null-row headers", cap(v.area))
+
+	// correctness is unchanged: odd rows null, even rows carry "x".
+	require.Equal(t, n, v.Length())
+	for i := 0; i < n; i++ {
+		if i%2 == 1 {
+			require.Truef(t, v.GetNulls().Contains(uint64(i)), "row %d should be null", i)
+		} else {
+			require.Falsef(t, v.GetNulls().Contains(uint64(i)), "row %d should not be null", i)
+			require.Equalf(t, "x", string(v.GetBytesAt(i)), "row %d value", i)
+		}
+	}
+	w.Free(mp)
+	v.Free(mp)
+}
