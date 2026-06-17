@@ -17,7 +17,10 @@
 package cagra
 
 import (
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -25,6 +28,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
+
+// cagraHalfToFloat32 widens a []cuvs.Float16 query to []float32 (bit-exact; both
+// uint16 IEEE half). Used for the filtered vecf16-direct path (half-cast back to
+// the half index inside cuVS — exact, no quantizer).
+func cagraHalfToFloat32(q []cuvs.Float16) []float32 {
+	h := *(*[]types.Float16)(unsafe.Pointer(&q))
+	return types.Float16ToFloat32Slice(h)
+}
 
 // CagraSearch implements cache.VectorIndexSearchIf for GPU CAGRA indexes.
 // Unlike HnswSearch, there is no concurrency gate (Cond/Mutex) because CAGRA
@@ -51,11 +62,6 @@ func NewCagraSearch[T cuvs.VectorType](idxcfg vectorindex.IndexConfig, tblcfg ve
 
 // Search implements cache.VectorIndexSearchIf.
 func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
-	query, ok := anyquery.([]float32)
-	if !ok {
-		return nil, nil, moerr.NewInternalErrorNoCtx("CagraSearch: query type mismatch")
-	}
-
 	limit := rt.Limit
 
 	if s.MultiIndex == nil {
@@ -71,10 +77,31 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 		neighbors64 []int64
 		dists32     []float32
 	)
-	if rt.FilterJSON != "" {
-		neighbors64, dists32, err = s.MultiIndex.SearchFloat32WithFilter(query, 1, dim, uint32(limit), sp, rt.FilterJSON)
+	if query, ok := anyquery.([]float32); ok {
+		// f32 base (direct), or f32 base + QUANTIZATION (query quantized to T).
+		if rt.FilterJSON != "" {
+			neighbors64, dists32, err = s.MultiIndex.SearchFloat32WithFilter(query, 1, dim, uint32(limit), sp, rt.FilterJSON)
+		} else {
+			neighbors64, dists32, err = s.MultiIndex.SearchFloat32(query, 1, dim, uint32(limit), sp)
+		}
+	} else if qh, ok := anyquery.([]cuvs.Float16); ok {
+		// vecf16 base.
+		if qt, isT := anyquery.([]T); isT {
+			// f16-direct (storage T==Float16): native half search.
+			if rt.FilterJSON != "" {
+				neighbors64, dists32, err = s.MultiIndex.SearchFloat32WithFilter(cagraHalfToFloat32(qh), 1, dim, uint32(limit), sp, rt.FilterJSON)
+			} else {
+				neighbors64, dists32, err = s.MultiIndex.Search(qt, 1, dim, uint32(limit), sp)
+			}
+		} else if rt.FilterJSON != "" {
+			// f16 -> int8/uint8 quantized + filter: not yet supported.
+			return nil, nil, moerr.NewInternalErrorNoCtx("CagraSearch: filtered f16->int8/uint8 search not yet supported")
+		} else {
+			// f16 -> int8/uint8 quantized: quantize the half query to T, native search.
+			neighbors64, dists32, err = s.MultiIndex.SearchQuantizeHalf(qh, 1, dim, uint32(limit), sp)
+		}
 	} else {
-		neighbors64, dists32, err = s.MultiIndex.SearchFloat32(query, 1, dim, uint32(limit), sp)
+		return nil, nil, moerr.NewInternalErrorNoCtx("CagraSearch: query type mismatch")
 	}
 	if err != nil {
 		return nil, nil, err
