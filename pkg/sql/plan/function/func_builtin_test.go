@@ -134,6 +134,57 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 	}
 }
 
+func TestBuiltInNameConst(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+	}{
+		{
+			name: "int values",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"col_a", "col_a", "col_a"}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2, 3}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1, 2, 3}, nil),
+		},
+		{
+			name: "string values with null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"col_b", "col_b", "col_b"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "", "c"}, []bool{false, true, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "", "c"}, []bool{false, true, false}),
+		},
+		{
+			name: "const value repeats",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"col_c", "col_c", "col_c"}, nil),
+				NewFunctionTestConstInput(types.T_int32.ToType(), []int32{7}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false, []int32{7, 7, 7}, nil),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcase := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInNameConst)
+			succeed, info := tcase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	nameVec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("col_null"), 3, proc.Mp())
+	require.NoError(t, err)
+	valueVec := vector.NewConstNull(types.T_int64.ToType(), 3, proc.Mp())
+	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, builtInNameConst([]*vector.Vector{nameVec, valueVec}, result, proc, 3, nil))
+	require.True(t, nulls.Contains(result.GetResultVector().GetNulls(), 0))
+	require.True(t, nulls.Contains(result.GetResultVector().GetNulls(), 1))
+	require.True(t, nulls.Contains(result.GetResultVector().GetNulls(), 2))
+}
+
 func Test_BuiltIn_Rpad(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	{
