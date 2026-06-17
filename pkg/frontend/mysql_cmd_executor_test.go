@@ -1705,6 +1705,110 @@ func TestProcessLoadLocal(t *testing.T) {
 	})
 }
 
+func TestProcessLoadLocalCheckLockTableBindsErrorBeforeRead(t *testing.T) {
+	convey.Convey("processLoadLocal returns lock table bind check error before first read", t, func() {
+		param := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: "test.csv",
+			},
+		}
+		proc := testutil.NewProc(t)
+		var writer *io.PipeWriter
+		proc.Base.LoadLocalReader, writer = io.Pipe()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		tConn := &testConn{}
+		writeExceptResult(tConn, []*Packet{{Length: 5, Payload: []byte("hello"), SequenceID: 1}})
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		convey.So(err, convey.ShouldBeNil)
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		ioses, err := NewIOSession(tConn, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		ses := &Session{
+			feSessionImpl: feSessionImpl{
+				respr: NewMysqlResp(&testMysqlWriter{ioses: ioses}),
+			},
+		}
+		ctx := context.Background()
+		ec := newTestExecCtx(ctx, ctrl)
+		op := newTestTxnOp()
+		expected := moerr.NewLockTableBindChangedNoCtx()
+		op.checkLockTableBinds = func(context.Context) error {
+			return expected
+		}
+		proc.Base.TxnOperator = op
+		proc.Ctx = ctx
+		ec.proc = proc
+
+		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		convey.So(err, convey.ShouldEqual, expected)
+		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 1)
+	})
+}
+
+func TestProcessLoadLocalCheckLockTableBindsErrorInLoop(t *testing.T) {
+	convey.Convey("processLoadLocal returns lock table bind check error after one packet", t, func() {
+		param := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: "test.csv",
+			},
+		}
+		proc := testutil.NewProc(t)
+		var writer *io.PipeWriter
+		proc.Base.LoadLocalReader, writer = io.Pipe()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		tConn := &testConn{}
+		pkts := []*Packet{{Length: 5, Payload: []byte("hello"), SequenceID: 1},
+			{Length: 5, Payload: []byte("world"), SequenceID: 2},
+			{Length: 0, Payload: []byte(""), SequenceID: 3}}
+		writeExceptResult(tConn, pkts)
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		convey.So(err, convey.ShouldBeNil)
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		ioses, err := NewIOSession(tConn, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		ses := &Session{
+			feSessionImpl: feSessionImpl{
+				respr: NewMysqlResp(&testMysqlWriter{ioses: ioses}),
+			},
+		}
+		buffer := make([]byte, 4096)
+		go func(buf []byte) {
+			tmp := buf
+			for {
+				n, err := proc.Base.LoadLocalReader.Read(tmp)
+				if err != nil {
+					break
+				}
+				tmp = tmp[n:]
+			}
+		}(buffer)
+		ctx := context.Background()
+		ec := newTestExecCtx(ctx, ctrl)
+		op := newTestTxnOp()
+		expected := moerr.NewLockTableBindChangedNoCtx()
+		op.checkLockTableBinds = func(context.Context) error {
+			if op.checkLockTableChecks == 2 {
+				return expected
+			}
+			return nil
+		}
+		proc.Base.TxnOperator = op
+		proc.Ctx = ctx
+		ec.proc = proc
+
+		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		convey.So(err, convey.ShouldEqual, expected)
+		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 2)
+		convey.So(buffer[:5], convey.ShouldResemble, []byte("hello"))
+	})
+}
+
 // networkTimeoutError implements net.Error interface for testing network timeout
 type networkTimeoutError struct {
 	msg string

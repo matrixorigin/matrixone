@@ -4,6 +4,7 @@
 /CLAUDE.md
 *.o
 *.a
+*.so
 *.exe
 *.lib
 *.swp

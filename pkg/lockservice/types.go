@@ -120,6 +120,8 @@ type LockService interface {
 	ForceRefreshLockTableBinds(targets []uint64, matcher func(bind pb.LockTable) bool)
 	// GetLockTableBind returns lock table bind
 	GetLockTableBind(group uint32, tableID uint64) (pb.LockTable, error)
+	// GetLatestLockTableBind returns the latest lock table bind from lock table allocator.
+	GetLatestLockTableBind(bind pb.LockTable) (pb.LockTable, error)
 	// IterLocks iter all locks on current lock service. len(keys) == 2 if is range lock,
 	// len(keys) == 1 if is row lock. And keys only valid in current iter func call.
 	IterLocks(func(tableID uint64, keys [][]byte, lock Lock) bool)

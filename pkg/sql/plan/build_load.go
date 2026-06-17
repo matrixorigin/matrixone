@@ -160,7 +160,9 @@ func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser) (*csvpars
 		NotNull:            false,
 		Null:               []string{`\N`},
 		UnescapedQuote:     true,
-		Comment:            '#',
+		// Comment defaults to 0 (no comment marker): every line is data, matching
+		// MySQL LOAD DATA, which does not treat '#' lines as comments.
+		Comment: "",
 	}
 
 	return csvparser.NewCSVParser(&config, bufio.NewReader(reader), csvparser.ReadBlockSize, false)
@@ -503,6 +505,19 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	tableDef := tblInfo.tableDefs[0]
 	objRef := tblInfo.objRef[0]
 	originTableDef := tableDef
+
+	// If the LOAD target is a writable external table, capture its
+	// WRITE_FILE_PATTERN config now: tableDef.Createsql below is reused to carry
+	// the LOAD *source* param, which would otherwise clobber the target's.
+	externalWriteTarget := false
+	externalWriteTargetCreatesql := ""
+	if originTableDef.TableType == catalog.SystemExternalRel {
+		if _, ok := GetWriteFilePattern(getExternParamFromTableDef(originTableDef)); ok {
+			externalWriteTarget = true
+			externalWriteTargetCreatesql = originTableDef.Createsql
+		}
+	}
+
 	// load with columnlist will copy a new tableDef
 	externalProject, colToIndex, tbColToDataCol, tableDef, err := getExternalProject(stmt, ctx, tableDef, tblName)
 	if err != nil {
@@ -604,34 +619,47 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 	builder.qry.LoadTag = true
 
-	//append lock node
-	if lockNodeId, ok := appendLockNode(
-		builder,
-		bindCtx,
-		lastNodeId,
-		originTableDef,
-		true,
-		false,
-		false,
-	); ok {
-		lastNodeId = lockNodeId
+	// External write target: no lock (no engine relation to lock).
+	if !externalWriteTarget {
+		//append lock node
+		if lockNodeId, ok := appendLockNode(
+			builder,
+			bindCtx,
+			lastNodeId,
+			originTableDef,
+			true,
+			false,
+			false,
+		); ok {
+			lastNodeId = lockNodeId
+		}
 	}
 
 	// append hidden column to tableDef
 	newTableDef := DeepCopyTableDef(originTableDef, true)
-	err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	// use shuffle for load if parallel and no compress
-	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS) {
-		for i := range builder.qry.Nodes {
-			node := builder.qry.Nodes[i]
-			if node.NodeType == plan.Node_INSERT {
-				if node.Stats.HashmapStats == nil {
-					node.Stats.HashmapStats = &plan.HashMapStats{}
+	if externalWriteTarget {
+		// Restore the target external table's WRITE_FILE_PATTERN config so the
+		// executor can build the writer, then attach a minimal external insert.
+		// Each parallel scan pipeline writes its own file; no shuffle.
+		newTableDef.Createsql = externalWriteTargetCreatesql
+		if err = appendExternalInsertPlan(builder, bindCtx, objRef, newTableDef, lastNodeId); err != nil {
+			return nil, err
+		}
+	} else {
+		err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		// use shuffle for load if parallel and no compress
+		if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS) {
+			for i := range builder.qry.Nodes {
+				node := builder.qry.Nodes[i]
+				if node.NodeType == plan.Node_INSERT {
+					if node.Stats.HashmapStats == nil {
+						node.Stats.HashmapStats = &plan.HashMapStats{}
+					}
+					node.Stats.HashmapStats.Shuffle = true
 				}
-				node.Stats.HashmapStats.Shuffle = true
 			}
 		}
 	}

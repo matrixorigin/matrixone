@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -44,6 +45,13 @@ type container struct {
 	s3MemNoThresholdCap bool
 
 	source engine.Relation
+
+	// extWriter is used when ToExternal is set: it encodes batches and appends
+	// them to a single file in a stage (writable external table).
+	extWriter externalwrite.ExternalWriter
+	// extCols are the ColDefs aligned with InsertCtx.Attrs, for the external
+	// path's NOT NULL check.
+	extCols []*plan.ColDef
 }
 
 type Insert struct {
@@ -51,7 +59,10 @@ type Insert struct {
 	input     vm.CallResult
 	ctr       container
 	ToWriteS3 bool // mark if this insert's target is S3 or not.
-	InsertCtx *InsertCtx
+	// ToExternal marks that this insert writes into a writable external table's
+	// backing files (CSV/JSONLine in a stage) instead of an engine relation.
+	ToExternal bool
+	InsertCtx  *InsertCtx
 
 	vm.OperatorBase
 }
@@ -94,6 +105,10 @@ type InsertCtx struct {
 	AddAffectedRows bool     // for hidden table, should not update affect Rows
 	Attrs           []string // letter case: origin
 	TableDef        *plan.TableDef
+
+	// ExternalConfig is populated at compile time when the target is a writable
+	// external table; consumed by the operator to build an ExternalWriter.
+	ExternalConfig externalwrite.WriterConfig
 }
 
 func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -108,6 +123,14 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 			writer.Close()
 		}
 		insert.ctr.partitionS3Writers = nil
+	}
+	// A non-nil extWriter here means the input stream never reached its clean
+	// end (insert_external nils it after a successful Close), i.e. the pipeline
+	// failed or was cancelled: discard the half-written file rather than
+	// finalizing it into the stage where readers would see partial rows.
+	if insert.ctr.extWriter != nil {
+		insert.ctr.extWriter.Abort(proc.Ctx)
+		insert.ctr.extWriter = nil
 	}
 	insert.ctr.state = vm.Build
 
@@ -132,6 +155,14 @@ func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error
 		}
 		insert.ctr.partitionS3Writers = nil
 	}
+
+	// See Reset: a writer still alive at Free means the stream did not end
+	// cleanly; abort instead of persisting a partial file.
+	if insert.ctr.extWriter != nil {
+		insert.ctr.extWriter.Abort(proc.Ctx)
+		insert.ctr.extWriter = nil
+	}
+	insert.ctr.extCols = nil
 
 	if insert.ctr.buf != nil {
 		insert.ctr.buf.Clean(proc.Mp())
