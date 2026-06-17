@@ -424,3 +424,19 @@ func TestCagraValidateReindexParams_MergesGraphDegree(t *testing.T) {
 	_, had := old[catalog.GraphDegree]
 	require.False(t, had)
 }
+
+// TestCagraValidateReindexParams_Quantization: CAGRA (cuvs) accepts the
+// cuvs-supported quantization names and rejects others (e.g. bf16, which the
+// cuvs backend does not support even though IVF-FLAT does).
+func TestCagraValidateReindexParams_Quantization(t *testing.T) {
+	got, err := Hooks{}.ValidateReindexParams(nil, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.Quantization: "float16"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "float16", got[catalog.Quantization])
+
+	_, err = Hooks{}.ValidateReindexParams(nil, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.Quantization: "bf16"},
+	})
+	require.Error(t, err)
+}

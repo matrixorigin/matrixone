@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	cagraruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 // insertIntoCagraIndexTableFormat is the SQL template used to populate the
@@ -234,11 +235,21 @@ func registerIdxcronUpdate(
 }
 
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	// quantization, when specified, must be a cuvs-supported name — same gate
+	// as CREATE INDEX (metric.ValidQuantization). Already lower-cased by
+	// reindexSpecifiedParams.
+	if q, ok := alter.Params[catalog.Quantization]; ok {
+		if !metric.ValidQuantization(q) {
+			return nil, moerr.NewNotSupportedNoCtxf(
+				"cagra quantization %q (supported: float32, float16, int8, uint8)", q)
+		}
+	}
 	return compileplugin.MergeReindexParams(old, alter, "cagra",
 		catalog.IndexAlgoParamMaxIndexCapacity,
 		catalog.IntermediateGraphDegree,
 		catalog.GraphDegree,
 		catalog.ITopkSize,
+		catalog.Quantization,
 	)
 }
 

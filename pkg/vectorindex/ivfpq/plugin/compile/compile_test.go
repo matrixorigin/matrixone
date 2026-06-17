@@ -254,6 +254,21 @@ func TestIvfpqValidateReindexParams_Unsupported(t *testing.T) {
 	require.Contains(t, err.Error(), catalog.HnswEfConstruction)
 }
 
+// TestIvfpqValidateReindexParams_Quantization: IVF-PQ (cuvs) accepts the
+// cuvs-supported quantization names and rejects others (e.g. bf16).
+func TestIvfpqValidateReindexParams_Quantization(t *testing.T) {
+	got, err := Hooks{}.ValidateReindexParams(nil, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.Quantization: "int8"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "int8", got[catalog.Quantization])
+
+	_, err = Hooks{}.ValidateReindexParams(nil, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.Quantization: "bf16"},
+	})
+	require.Error(t, err)
+}
+
 func TestIvfpqHandleDropIndex(t *testing.T) {
 	require.NoError(t, Hooks{}.HandleDropIndex(nil, nil))
 }

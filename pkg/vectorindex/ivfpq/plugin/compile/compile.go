@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	ivfpqruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 // insertIntoIvfpqIndexTableFormat is the SQL template used to populate the
@@ -279,6 +280,15 @@ func registerIdxcronUpdate(
 // IVF-PQ supports updating `lists` at REINDEX time — mirrors IVF-FLAT
 // since both algorithms key on the inverted-list count for their build.
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	// quantization, when specified, must be a cuvs-supported name — same gate
+	// as CREATE INDEX (metric.ValidQuantization). Already lower-cased by
+	// reindexSpecifiedParams.
+	if q, ok := alter.Params[catalog.Quantization]; ok {
+		if !metric.ValidQuantization(q) {
+			return nil, moerr.NewNotSupportedNoCtxf(
+				"ivfpq quantization %q (supported: float32, float16, int8, uint8)", q)
+		}
+	}
 	return compileplugin.MergeReindexParams(old, alter, "ivfpq",
 		catalog.IndexAlgoParamLists,
 		catalog.IndexAlgoParamKmeansTrainPercent,
@@ -286,6 +296,7 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 		catalog.IndexAlgoParamMaxIndexCapacity,
 		catalog.HnswM,
 		catalog.BitsPerCode,
+		catalog.Quantization,
 	)
 }
 

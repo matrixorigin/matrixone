@@ -517,9 +517,13 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	addInt(catalog.IndexAlgoParamKmeansTrainPercent, opt.KmeansTrainPercent)
 	addInt(catalog.IndexAlgoParamKmeansMaxIteration, opt.KmeansMaxIteration)
 	addInt(catalog.IndexAlgoParamMaxIndexCapacity, opt.MaxIndexCapacity)
-	// NOTE: quantization is intentionally NOT handled by reindex. The vecf16
-	// branch owns the quantization work (per-backend validity, BF16, ...), so
-	// reindex neither merges nor rejects it here — revisit once that lands.
+	// quantization is normalized to lowercase here (matching the CREATE INDEX
+	// path) so case-sensitive consumers (GPU build switch / quantizer) behave
+	// identically; the per-backend VALUE check (which names a given algorithm
+	// accepts) is done in each plugin's ValidateReindexParams.
+	if opt.Quantization != "" {
+		m[catalog.Quantization] = catalog.ToLower(opt.Quantization)
+	}
 	return m
 }
 
