@@ -814,13 +814,15 @@ func writeRestoreScript(
 				return "", err
 			}
 		}
-		indexDDLs, err := reader.ShowCreateIndexStatements(ctx, table.TableID, table.TableName, snapshotTS)
-		if err != nil {
-			return "", fmt.Errorf("show create indexes for table %d: %w", table.TableID, err)
-		}
-		ddl, err = mergeCreateTableIndexDDLs(ddl, indexDDLs)
-		if err != nil {
-			return "", fmt.Errorf("merge create table indexes for table %d: %w", table.TableID, err)
+		if !isViewRelation(table) {
+			indexDDLs, err := reader.ShowCreateIndexStatements(ctx, table.TableID, table.TableName, snapshotTS)
+			if err != nil {
+				return "", fmt.Errorf("show create indexes for table %d: %w", table.TableID, err)
+			}
+			ddl, err = mergeCreateTableIndexDDLs(ddl, indexDDLs)
+			if err != nil {
+				return "", fmt.Errorf("merge create table indexes for table %d: %w", table.TableID, err)
+			}
 		}
 		if _, err := fmt.Fprintln(&script, strings.TrimRight(ddl, " ;\n\t")); err != nil {
 			return "", err
@@ -885,7 +887,15 @@ func restoreCreateTableDDL(
 	ddl := ""
 	if dumpData != nil && dumpData.Schema != nil {
 		schema := dumpData.Schema
-		if isExternalRelation(table) {
+		if isViewRelation(table) {
+			ddl = strings.TrimSpace(schema.CreateSQL)
+			if ddl == "" {
+				return "", fmt.Errorf("view %d (%s.%s): missing CREATE VIEW SQL in checkpoint metadata", table.TableID, table.DatabaseName, table.TableName)
+			}
+			if !isCreateViewSQL(ddl) {
+				return "", fmt.Errorf("view %d (%s.%s): rel_createsql is not CREATE VIEW: %s", table.TableID, table.DatabaseName, table.TableName, summarizeSQLForError(ddl))
+			}
+		} else if isExternalRelation(table) {
 			if strings.TrimSpace(schema.CreateSQL) == "" {
 				return "", fmt.Errorf("external table %d (%s.%s): missing external table parameter JSON in checkpoint metadata", table.TableID, table.DatabaseName, table.TableName)
 			}
@@ -1103,7 +1113,7 @@ func byteSQLString(value byte) string {
 }
 
 func shouldWriteLoadData(includeLoad bool, table checkpointtool.TableCatalogEntry) bool {
-	return includeLoad && !isExternalRelation(table)
+	return includeLoad && !isExternalRelation(table) && !isViewRelation(table)
 }
 
 func isExternalRelation(table checkpointtool.TableCatalogEntry) bool {
@@ -1113,6 +1123,20 @@ func isExternalRelation(table checkpointtool.TableCatalogEntry) bool {
 	default:
 		return false
 	}
+}
+
+func isViewRelation(table checkpointtool.TableCatalogEntry) bool {
+	switch strings.ToLower(strings.TrimSpace(table.RelKind)) {
+	case "v", "view":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCreateViewSQL(ddl string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(ddl))
+	return strings.HasPrefix(upper, "CREATE VIEW ") || strings.HasPrefix(upper, "CREATE OR REPLACE VIEW ")
 }
 
 func packageExternalTableSource(
@@ -1555,6 +1579,11 @@ func createTableNameRange(sql string) (int, int, bool) {
 	if !ok {
 		return 0, 0, false
 	}
+	if next, ok := consumeSQLKeyword(sql, i, "or"); ok {
+		if next, ok = consumeSQLKeyword(sql, next, "replace"); ok {
+			i = next
+		}
+	}
 	for {
 		next, ok := consumeSQLKeyword(sql, i, "temporary")
 		if ok {
@@ -1573,11 +1602,24 @@ func createTableNameRange(sql string) (int, int, bool) {
 		}
 		break
 	}
-	i, ok = consumeSQLKeyword(sql, i, "table")
-	if !ok {
+	isTable := false
+	if next, ok := consumeSQLKeyword(sql, i, "table"); ok {
+		i = next
+		isTable = true
+	} else if next, ok := consumeSQLKeyword(sql, i, "view"); ok {
+		i = next
+	} else {
 		return 0, 0, false
 	}
-	if next, ok := consumeSQLKeyword(sql, i, "if"); ok {
+	if isTable {
+		if next, ok := consumeSQLKeyword(sql, i, "if"); ok {
+			if next, ok = consumeSQLKeyword(sql, next, "not"); ok {
+				if next, ok = consumeSQLKeyword(sql, next, "exists"); ok {
+					i = next
+				}
+			}
+		}
+	} else if next, ok := consumeSQLKeyword(sql, i, "if"); ok {
 		if next, ok = consumeSQLKeyword(sql, next, "not"); ok {
 			if next, ok = consumeSQLKeyword(sql, next, "exists"); ok {
 				i = next
@@ -1859,6 +1901,12 @@ func dumpOneTable(
 	outMu *sync.Mutex,
 ) error {
 	table := plan.table
+	if isViewRelation(table) {
+		outMu.Lock()
+		fmt.Fprintf(out, "View %d %s.%s skipped CSV dump\n", table.TableID, table.DatabaseName, table.TableName)
+		outMu.Unlock()
+		return nil
+	}
 	filePath := tableCSVPath(outputDir, table)
 	tableDir := path.Dir(filePath)
 	if err := dumpOut.MkdirAll(tableDir); err != nil {

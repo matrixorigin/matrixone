@@ -4768,7 +4768,9 @@ func isPrintableCreateTableSQL(ddl string) bool {
 	return strings.HasPrefix(upper, "CREATE TABLE ") ||
 		strings.HasPrefix(upper, "CREATE TEMPORARY TABLE ") ||
 		strings.HasPrefix(upper, "CREATE CLUSTER TABLE ") ||
-		strings.HasPrefix(upper, "CREATE EXTERNAL TABLE ")
+		strings.HasPrefix(upper, "CREATE EXTERNAL TABLE ") ||
+		strings.HasPrefix(upper, "CREATE VIEW ") ||
+		strings.HasPrefix(upper, "CREATE OR REPLACE VIEW ")
 }
 
 func isPrintableExternalParamJSON(raw string) bool {

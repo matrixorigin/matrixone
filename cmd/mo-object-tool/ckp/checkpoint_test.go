@@ -62,15 +62,25 @@ func TestNormalizeCreateTableDDLName(t *testing.T) {
 			want: "CREATE EXTERNAL TABLE `compat_ckp`.`employees` (id INT) INFILE {'filepath'='/tmp/data.csv','format'='csv'}",
 		},
 		{
+			name: "view",
+			ddl:  "CREATE VIEW old_view AS SELECT id FROM src",
+			want: "CREATE VIEW `compat_ckp`.`employees` AS SELECT id FROM src",
+		},
+		{
+			name: "or replace view",
+			ddl:  "CREATE OR REPLACE VIEW `old_db`.`old_view` AS SELECT id FROM src",
+			want: "CREATE OR REPLACE VIEW `compat_ckp`.`employees` AS SELECT id FROM src",
+		},
+		{
 			name: "escaped target name",
 			ddl:  "CREATE TABLE old_name (id INT)",
 			want: "CREATE TABLE `compat``ckp`.`employees` (id INT)",
 		},
 	}
 
-	tests[4].want = "CREATE TABLE `compat``ckp`.`employees` (id INT)"
-	tests[4].ddl = "CREATE TABLE old_name (id INT)"
-	tests[4].name = "escaped database name"
+	tests[len(tests)-1].want = "CREATE TABLE `compat``ckp`.`employees` (id INT)"
+	tests[len(tests)-1].ddl = "CREATE TABLE old_name (id INT)"
+	tests[len(tests)-1].name = "escaped database name"
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -137,9 +147,49 @@ func TestRestoreCreateTableDDLExternalRequiresCreateSQL(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing external table parameter JSON")
 }
 
-func TestShouldWriteLoadDataSkipsExternalRelations(t *testing.T) {
+func TestRestoreCreateTableDDLUsesViewCreateSQL(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		DatabaseName: "ckp_views",
+		TableName:    "v_normal",
+		RelKind:      "v",
+	}
+	dumpData := &checkpointtool.TableDumpData{
+		Schema: &checkpointtool.TableSchema{
+			TableName: "stale_name",
+			CreateSQL: "CREATE VIEW `old_db`.`old_view` AS SELECT id, name FROM `ckp_tables`.`t_normal`",
+			Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
+		},
+	}
+
+	ddl, err := restoreCreateTableDDL(context.Background(), nil, table, dumpData, types.TS{})
+	require.NoError(t, err)
+	assert.Equal(t, "CREATE VIEW `ckp_views`.`v_normal` AS SELECT id, name FROM `ckp_tables`.`t_normal`", ddl)
+}
+
+func TestRestoreCreateTableDDLViewRequiresCreateViewSQL(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		DatabaseName: "ckp_views",
+		TableName:    "v_normal",
+		RelKind:      "v",
+	}
+	dumpData := &checkpointtool.TableDumpData{
+		Schema: &checkpointtool.TableSchema{
+			TableName: "v_normal",
+			CreateSQL: "CREATE TABLE `v_normal` (`id` INT)",
+			Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
+		},
+	}
+
+	_, err := restoreCreateTableDDL(context.Background(), nil, table, dumpData, types.TS{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rel_createsql is not CREATE VIEW")
+}
+
+func TestShouldWriteLoadDataSkipsExternalAndViewRelations(t *testing.T) {
 	assert.False(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "e"}))
 	assert.False(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "external"}))
+	assert.False(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "v"}))
+	assert.False(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "view"}))
 	assert.True(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "r"}))
 	assert.False(t, shouldWriteLoadData(false, checkpointtool.TableCatalogEntry{RelKind: "r"}))
 }

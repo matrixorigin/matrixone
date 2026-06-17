@@ -839,6 +839,10 @@ func TestIsPrintableCreateTableSQLAcceptsExternalTable(t *testing.T) {
 	assert.True(t, isPrintableCreateTableSQL("CREATE EXTERNAL TABLE ext_csv (id INT) INFILE {'filepath'='/tmp/ext.csv','format'='csv'}"))
 }
 
+func TestIsPrintableCreateTableSQLAcceptsView(t *testing.T) {
+	assert.True(t, isPrintableCreateTableSQL("CREATE VIEW `ckp_views`.`v_normal` AS SELECT id FROM `ckp_tables`.`t_normal`"))
+}
+
 func TestIsPrintableExternalParamJSON(t *testing.T) {
 	assert.True(t, isPrintableExternalParamJSON(`{"ExParamConst":{"Option":["filepath","/tmp/ext.csv","format","csv"]}}`))
 	assert.False(t, isPrintableExternalParamJSON(`CREATE EXTERNAL TABLE ext_csv (id INT)`))
