@@ -531,6 +531,7 @@ func TestPrefixIndexDMLPlansMaterializePrefixKeys(t *testing.T) {
 	singleIdxIndexTable := mock.ctxt.tables[singleIdx.Indexes[0].IndexTableName]
 	require.NotNil(t, singleIdxIndexTable)
 	singleIdxIndexTable.Cols[0].Typ = plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	assertPlanHasPrefixCount(t, "insert into constraint_test.single_idx_t values (1, 'abcdef-long') on duplicate key update val = values(val)", "val", 2)
 	assertPlanHasPrefixCount(t, "update constraint_test.single_idx_t set val = 'abcdef-long' where id = 1", "val", 2)
 	assertPlanHasPrefixCount(t, "delete from constraint_test.single_idx_t where id = 1", "val", 1)
 }
@@ -549,20 +550,12 @@ func countQueryPrefixSubstrings(query *plan.Query, colName string, length int64)
 	return count
 }
 
-func exprListHasPrefixSubstring(exprs []*plan.Expr, colName string, length int64) bool {
-	return countExprListPrefixSubstrings(exprs, colName, length) > 0
-}
-
 func countExprListPrefixSubstrings(exprs []*plan.Expr, colName string, length int64) int {
 	count := 0
 	for _, expr := range exprs {
 		count += countExprPrefixSubstrings(expr, colName, length)
 	}
 	return count
-}
-
-func exprHasPrefixSubstring(expr *plan.Expr, colName string, length int64) bool {
-	return countExprPrefixSubstrings(expr, colName, length) > 0
 }
 
 func countExprPrefixSubstrings(expr *plan.Expr, colName string, length int64) int {
