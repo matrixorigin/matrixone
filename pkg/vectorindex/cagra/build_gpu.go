@@ -144,6 +144,36 @@ func (b *CagraBuild[T]) AddFloat(id int64, vec []float32) error {
 	return nil
 }
 
+// Add appends one native storage-type (T) vector — used when the base column
+// type equals the storage type (no quantization, e.g. vecf16 base -> half).
+func (b *CagraBuild[T]) Add(id int64, vec []T) error {
+	idx, err := b.getOrCreateCurrent()
+	if err != nil {
+		return err
+	}
+	b.idBuf[0] = id
+	if err = idx.AddChunk(vec, 1, b.idBuf[:]); err != nil {
+		return err
+	}
+	b.count++
+	return nil
+}
+
+// AddQuantizeHalf appends one vecf16 (half) vector, quantizing natively to the
+// 1-byte storage type T (int8/uint8). Used for a vecf16 base + QUANTIZATION.
+func (b *CagraBuild[T]) AddQuantizeHalf(id int64, vec []cuvs.Float16) error {
+	idx, err := b.getOrCreateCurrent()
+	if err != nil {
+		return err
+	}
+	b.idBuf[0] = id
+	if err = idx.AddChunkQuantizeHalf(vec, 1, b.idBuf[:]); err != nil {
+		return err
+	}
+	b.count++
+	return nil
+}
+
 // ToInsertSql finalizes any in-progress sub-index, serializes all sub-indexes to the
 // storage table, and returns INSERT SQL statements (storage chunks + single metadata row).
 func (b *CagraBuild[T]) ToInsertSql(ts int64) ([]string, error) {

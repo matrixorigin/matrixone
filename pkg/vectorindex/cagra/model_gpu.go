@@ -175,6 +175,20 @@ func (idx *CagraModel[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) er
 	return nil
 }
 
+// AddChunkQuantizeHalf appends a chunk of vecf16 (half) vectors, quantizing
+// natively to the 1-byte storage type T (int8/uint8). Used for a vecf16 base
+// with QUANTIZATION=int8/uint8 — no f32 detour.
+func (idx *CagraModel[T]) AddChunkQuantizeHalf(chunk []cuvs.Float16, chunkCount uint64, ids []int64) error {
+	if idx.Index == nil {
+		return moerr.NewInternalErrorNoCtx("CagraModel: index not initialized; call InitEmpty first")
+	}
+	if err := idx.Index.AddChunkQuantizeHalf(chunk, chunkCount, ids); err != nil {
+		return err
+	}
+	idx.Len += int64(chunkCount)
+	return nil
+}
+
 // AddChunkFloat appends a chunk of float32 vectors, quantizing on the fly when T is a 1-byte type.
 func (idx *CagraModel[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
 	if idx.Index == nil {

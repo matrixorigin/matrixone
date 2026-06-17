@@ -170,6 +170,34 @@ func (idx *IvfpqModel[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids 
 	return nil
 }
 
+// AddChunk appends a chunk of native storage-type (T) vectors with no
+// quantization — used when the base column type equals the storage type
+// (e.g. a vecf16 base stored as half). Mirrors AddChunkFloat but raw.
+func (idx *IvfpqModel[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) error {
+	if idx.Index == nil {
+		return moerr.NewInternalErrorNoCtx("IvfpqModel: index not initialized; call InitEmpty first")
+	}
+	if err := idx.Index.AddChunk(chunk, chunkCount, ids); err != nil {
+		return err
+	}
+	idx.Len += int64(chunkCount)
+	return nil
+}
+
+// AddChunkQuantizeHalf appends a chunk of vecf16 (half) vectors, quantizing
+// natively to the 1-byte storage type T (int8/uint8). Used for a vecf16 base
+// with QUANTIZATION=int8/uint8 — no f32 detour.
+func (idx *IvfpqModel[T]) AddChunkQuantizeHalf(chunk []cuvs.Float16, chunkCount uint64, ids []int64) error {
+	if idx.Index == nil {
+		return moerr.NewInternalErrorNoCtx("IvfpqModel: index not initialized; call InitEmpty first")
+	}
+	if err := idx.Index.AddChunkQuantizeHalf(chunk, chunkCount, ids); err != nil {
+		return err
+	}
+	idx.Len += int64(chunkCount)
+	return nil
+}
+
 func (idx *IvfpqModel[T]) Build() error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("IvfpqModel: index not initialized")
