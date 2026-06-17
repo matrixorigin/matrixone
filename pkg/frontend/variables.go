@@ -1127,6 +1127,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("testsessionvar_nodyn", 0, 100, false),
 		Default:           int64(0),
 	},
+	ProtectedDatabases: {
+		Name:              ProtectedDatabases,
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType(ProtectedDatabases),
+		Default:           "",
+	},
 	"testbothvar_dyn": {
 		Name:              "testbothvar_dyn",
 		Scope:             ScopeBoth,
