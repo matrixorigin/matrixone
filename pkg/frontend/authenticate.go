@@ -567,6 +567,7 @@ const (
 	SaveQueryResult    = "save_query_result"
 	QueryResultMaxsize = "query_result_maxsize"
 	QueryResultTimeout = "query_result_timeout"
+	ProtectedDatabases = "protected_databases"
 )
 
 type objectType int
@@ -2356,6 +2357,8 @@ type privilege struct {
 	canExecInPasswordExpired bool
 	needMatchedRole          bool
 	matchedRoleID            int64
+	// databases that may be written by statement-level DDL or account/database operations
+	writeDatabaseTargets []string
 }
 
 func (p *privilege) objectType() objectType {
@@ -6013,6 +6016,29 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	var clusterTableOperation clusterTableOperationType
 	needMatchedRole := false
 	dbName := ""
+	writeDatabaseTargets := make([]string, 0, 2)
+	appendWriteTableNameDatabaseName := func(name *tree.TableName) {
+		if name != nil {
+			writeDatabaseTargets = append(writeDatabaseTargets, string(name.SchemaName))
+		}
+	}
+	appendWriteTableNamesDatabaseNames := func(names tree.TableNames) {
+		for _, name := range names {
+			appendWriteTableNameDatabaseName(name)
+		}
+	}
+	writeFunctionNameDatabaseName := func(name *tree.FunctionName) string {
+		if name == nil {
+			return ""
+		}
+		return string(name.Name.SchemaName)
+	}
+	writeProcedureNameDatabaseName := func(name *tree.ProcedureName) string {
+		if name == nil {
+			return ""
+		}
+		return string(name.Name.SchemaName)
+	}
 	switch st := stmt.(type) {
 	case *tree.CreateAccount:
 		typs = append(typs, PrivilegeTypeCreateAccount)
@@ -6098,10 +6124,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.CreateDatabase:
 		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		needMatchedRole = true
+		writeDatabaseTargets = append(writeDatabaseTargets, string(st.Name))
 	case *tree.DropDatabase:
 		typs = append(typs, PrivilegeTypeDropDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		writeDatabaseAndTableDirectly = true
 		dbName = string(st.Name)
+		writeDatabaseTargets = append(writeDatabaseTargets, string(st.Name))
 	case *tree.ShowDatabases:
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		canExecInRestricted = true
@@ -6121,6 +6149,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeCreateTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		needMatchedRole = true
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(&st.Table)
 		if st.IsClusterTable {
 			clusterTable = true
 			clusterTableOperation = clusterTableCreate
@@ -6130,6 +6159,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Name)
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
@@ -6137,6 +6167,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.SourceName)
 		if st.SourceName != nil {
 			dbName = string(st.SourceName.SchemaName)
 		}
@@ -6144,6 +6175,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.TableName)
 		if st.TableName != nil {
 			dbName = string(st.TableName.SchemaName)
 		}
@@ -6151,6 +6183,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Name)
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
@@ -6158,6 +6191,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Name)
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
@@ -6165,21 +6199,27 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeAlterView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Name)
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
 	case *tree.AlterDataBaseConfig:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+		if !st.IsAccountLevel {
+			writeDatabaseTargets = append(writeDatabaseTargets, st.DbName)
+		}
 	case *tree.CreateFunction:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		writeDatabaseTargets = append(writeDatabaseTargets, writeFunctionNameDatabaseName(st.Name))
 
 	case *tree.AlterTable:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeAlterTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Table)
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
@@ -6191,10 +6231,23 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeAlterTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		for _, alter := range st.AlterTables {
+			if alter == nil {
+				continue
+			}
+			appendWriteTableNameDatabaseName(alter.Table)
+			for _, opt := range alter.Options {
+				if renameOpt, ok := opt.(*tree.AlterOptionTableName); ok && renameOpt.Name != nil {
+					target := renameOpt.Name.ToTableName()
+					writeDatabaseTargets = append(writeDatabaseTargets, string(target.SchemaName))
+				}
+			}
+		}
 	case *tree.CreateProcedure:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		writeDatabaseTargets = append(writeDatabaseTargets, writeProcedureNameDatabaseName(st.Name))
 	case *tree.CallStmt: // TODO: redesign privilege for calling a procedure
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -6203,6 +6256,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropTable, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNamesDatabaseNames(st.Names)
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
 		}
@@ -6214,6 +6268,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropView, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNamesDatabaseNames(st.Names)
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
 		}
@@ -6221,6 +6276,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNamesDatabaseNames(st.Names)
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
 		}
@@ -6228,10 +6284,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		writeDatabaseTargets = append(writeDatabaseTargets, writeFunctionNameDatabaseName(st.Name))
 	case *tree.DropProcedure:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		writeDatabaseTargets = append(writeDatabaseTargets, writeProcedureNameDatabaseName(st.Name))
 	case *tree.Select:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -6262,6 +6320,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Table)
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
@@ -6278,6 +6337,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Table)
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
@@ -6285,6 +6345,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.TableName)
 		if st.TableName != nil {
 			dbName = string(st.TableName.SchemaName)
 		}
@@ -6385,14 +6446,21 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
+		if st.Level == tree.RESTORELEVELDATABASE || st.Level == tree.RESTORELEVELTABLE {
+			writeDatabaseTargets = append(writeDatabaseTargets, string(st.DatabaseName))
+		}
 	case *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr, *tree.RestorePitr:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
+		if st, ok := stmt.(*tree.RestorePitr); ok && (st.Level == tree.RESTORELEVELDATABASE || st.Level == tree.RESTORELEVELTABLE) {
+			writeDatabaseTargets = append(writeDatabaseTargets, string(st.DatabaseName))
+		}
 	case *tree.TruncateTable:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeTruncate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Name)
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
@@ -6437,10 +6505,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(&st.CreateTable.Table)
 	case *tree.CloneDatabase:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeAccountAll)
 		writeDatabaseAndTableDirectly = true
+		writeDatabaseTargets = append(writeDatabaseTargets, string(st.DstDatabase))
 	case *tree.DataBranchCreateTable,
 		*tree.DataBranchDeleteTable,
 		*tree.DataBranchMerge,
@@ -6450,6 +6520,20 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.DataBranchDeleteDatabase:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+		switch st := stmt.(type) {
+		case *tree.DataBranchCreateTable:
+			appendWriteTableNameDatabaseName(&st.CreateTable.Table)
+		case *tree.DataBranchDeleteTable:
+			appendWriteTableNameDatabaseName(&st.TableName)
+		case *tree.DataBranchCreateDatabase:
+			writeDatabaseTargets = append(writeDatabaseTargets, string(st.DstDatabase))
+		case *tree.DataBranchDeleteDatabase:
+			writeDatabaseTargets = append(writeDatabaseTargets, string(st.DatabaseName))
+		case *tree.DataBranchMerge:
+			appendWriteTableNameDatabaseName(&st.DstTable)
+		case *tree.DataBranchPick:
+			appendWriteTableNameDatabaseName(&st.DstTable)
+		}
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
@@ -6470,6 +6554,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		clusterTableOperation:         clusterTableOperation,
 		canExecInRestricted:           canExecInRestricted,
 		canExecInPasswordExpired:      canExecInPasswordExpired,
+		writeDatabaseTargets:          writeDatabaseTargets,
 		needMatchedRole:               needMatchedRole,
 	}
 }
@@ -7709,6 +7794,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	if priv.objectType() != objectTypeAccount && priv.objectType() != objectTypeDatabase { // do nothing
 		return true, stats, nil
 	}
+	if !checkProtectedDatabaseWriteByPrivilege(ctx, ses, priv) {
+		return false, stats, nil
+	}
 	ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 	if err != nil {
 		return false, stats, err
@@ -8095,6 +8183,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 	stats.Reset()
 
 	if st, ok := stmt.(*tree.CreateTable); ok && st.IsAsSelect {
+		if !checkProtectedDatabaseWrite(ctx, ses, string(st.Table.SchemaName)) {
+			return false, stats, nil
+		}
 		// CTAS needs source-query SELECT privilege even when target-table CREATE
 		// is valid, so we check the source plan explicitly here.
 		ok, delta, err := authenticateCreateTableAsSelectSourcePrivilege(ctx, ses, st)
@@ -8134,6 +8225,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		}
 		if len(arr) == 0 {
 			return true, stats, nil
+		}
+		if !checkProtectedDatabaseWriteByPrivilegeTips(ctx, ses, arr) {
+			return false, stats, nil
 		}
 		convertPrivilegeTipsToPrivilege(priv, arr)
 		ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, priv)
@@ -9083,6 +9177,10 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		return true, stats, nil
 	}
 	tenant := ses.GetTenantInfo()
+
+	if !checkProtectedDatabaseWriteByPrivilege(ctx, ses, priv) {
+		return false, stats, nil
+	}
 
 	if priv.privilegeKind() == privilegeKindNone { // do nothing
 		return true, stats, nil
