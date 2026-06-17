@@ -103,22 +103,20 @@ func TestFindColumnIgnoreCase(t *testing.T) {
 
 	t.Run("ambiguous_with_exact_match", func(t *testing.T) {
 		// Create parquet file with both "col" and "COL"
-		// Even if query "col" matches exactly, it should still be ambiguous
 		f := createAmbiguousParquetFile(t)
 		h := &ParquetHandler{file: f}
 
-		// Query "col" exactly matches "col", but "COL" also matches case-insensitively
-		// This should return an error, not silently return "col"
+		// Exact matches win over case-insensitive ambiguity.
 		col, err := h.findColumnIgnoreCase(ctx, "col")
-		require.Error(t, err)
-		require.Nil(t, col)
-		require.Contains(t, err.Error(), "ambiguous")
+		require.NoError(t, err)
+		require.NotNil(t, col)
+		require.Equal(t, "col", col.Name())
 
 		// Same for "COL"
 		col, err = h.findColumnIgnoreCase(ctx, "COL")
-		require.Error(t, err)
-		require.Nil(t, col)
-		require.Contains(t, err.Error(), "ambiguous")
+		require.NoError(t, err)
+		require.NotNil(t, col)
+		require.Equal(t, "COL", col.Name())
 	})
 }
 

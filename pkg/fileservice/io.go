@@ -17,6 +17,8 @@ package fileservice
 import (
 	"io"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type readCloser struct {
@@ -44,6 +46,36 @@ var _ io.Reader = new(countingReader)
 func (c *countingReader) Read(data []byte) (int, error) {
 	n, err := c.R.Read(data)
 	c.C.Add(int64(n))
+	return n, err
+}
+
+type exactSizeReader struct {
+	R        io.Reader
+	Expected int64
+	Key      string
+}
+
+var _ io.Reader = new(exactSizeReader)
+
+func (r *exactSizeReader) Read(data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	if r.Expected == 0 {
+		n, err := r.R.Read(data[:1])
+		if n > 0 {
+			return 0, moerr.NewSizeNotMatchNoCtx(r.Key)
+		}
+		return 0, err
+	}
+	if int64(len(data)) > r.Expected {
+		data = data[:r.Expected]
+	}
+	n, err := r.R.Read(data)
+	r.Expected -= int64(n)
+	if err == io.EOF && r.Expected > 0 {
+		return n, moerr.NewSizeNotMatchNoCtx(r.Key)
+	}
 	return n, err
 }
 
