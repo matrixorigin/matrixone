@@ -765,6 +765,41 @@ func TestIsPrintableCreateTableSQLAcceptsExternalTable(t *testing.T) {
 	assert.True(t, isPrintableCreateTableSQL("CREATE EXTERNAL TABLE ext_csv (id INT) INFILE {'filepath'='/tmp/ext.csv','format'='csv'}"))
 }
 
+func TestIsPrintableExternalParamJSON(t *testing.T) {
+	assert.True(t, isPrintableExternalParamJSON(`{"ExParamConst":{"Option":["filepath","/tmp/ext.csv","format","csv"]}}`))
+	assert.False(t, isPrintableExternalParamJSON(`CREATE EXTERNAL TABLE ext_csv (id INT)`))
+}
+
+func TestFindTableSchemaFromMoTablesUsesCatalogLayoutFallback(t *testing.T) {
+	schema := schemaForLayout(currentCatalogLayout, moTablesID)
+	headers := append([]string{}, logicalTableViewMetaHeaders...)
+	for range schema {
+		headers = append(headers, "")
+	}
+	row := make([]string, len(headers))
+	row[0], row[1], row[2] = "obj", "0", "0"
+	data := row[logicalViewMetaCols:]
+	for i, name := range schema {
+		switch name {
+		case "rel_id":
+			data[i] = "272746"
+		case "relname":
+			data[i] = "ext_csv_local"
+		case "reldatabase":
+			data[i] = "ckp25010_external"
+		case "rel_createsql":
+			data[i] = `{"ExParamConst":{"Option":["filepath","/tmp/ext.csv","format","csv"]}}`
+		}
+	}
+
+	got := findTableSchemaFromMoTables(&LogicalTableView{Headers: headers, Rows: [][]string{row}}, 272746)
+	require.NotNil(t, got)
+	assert.Equal(t, "ext_csv_local", got.TableName)
+	assert.Equal(t, "ckp25010_external", got.DatabaseName)
+	assert.Contains(t, got.CreateSQL, "ExParamConst")
+	assert.Contains(t, got.CreateSQL, "filepath")
+}
+
 func TestRenderCreateTableDDLFromSchema_EnumSetValues(t *testing.T) {
 	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
 		TableName: "t_enum_set",

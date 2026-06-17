@@ -16,12 +16,14 @@ package ckp
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
 	"github.com/stretchr/testify/assert"
@@ -88,17 +90,51 @@ func TestRestoreCreateTableDDLUsesExternalCreateSQL(t *testing.T) {
 		TableName:    "ext_csv_local",
 		RelKind:      "e",
 	}
+	paramJSON, err := json.Marshal(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Option: []string{"filepath", "/tmp/ext.csv", "format", "csv", "compression", "none"},
+			Tail: &tree.TailParameter{
+				Fields: &tree.Fields{
+					Terminated: &tree.Terminated{Value: ","},
+					EnclosedBy: &tree.EnclosedBy{Value: '"'},
+				},
+				Lines: &tree.Lines{
+					TerminatedBy: &tree.Terminated{Value: "\n"},
+				},
+				IgnoredLines: 1,
+			},
+		},
+	})
+	require.NoError(t, err)
 	dumpData := &checkpointtool.TableDumpData{
 		Schema: &checkpointtool.TableSchema{
 			TableName: "stale_name",
-			CreateSQL: "CREATE EXTERNAL TABLE stale_name (id INT) INFILE {'filepath'='/tmp/ext.csv','format'='csv'}",
+			CreateSQL: string(paramJSON),
 			Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
 		},
 	}
 
 	ddl, err := restoreCreateTableDDL(context.Background(), nil, table, dumpData, types.TS{})
 	require.NoError(t, err)
-	assert.Equal(t, "CREATE EXTERNAL TABLE `ckp_external`.`ext_csv_local` (id INT) INFILE {'filepath'='/tmp/ext.csv','format'='csv'}", ddl)
+	assert.Equal(t, "CREATE EXTERNAL TABLE `ckp_external`.`ext_csv_local` (\n  `id` INT\n) INFILE {'filepath'='/tmp/ext.csv', 'compression'='none', 'format'='csv'} FIELDS TERMINATED BY ',' ENCLOSED BY '\"' LINES TERMINATED BY '\\\\n' IGNORE 1 LINES", ddl)
+}
+
+func TestRestoreCreateTableDDLExternalRequiresCreateSQL(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		DatabaseName: "ckp_external",
+		TableName:    "ext_csv_local",
+		RelKind:      "e",
+	}
+	dumpData := &checkpointtool.TableDumpData{
+		Schema: &checkpointtool.TableSchema{
+			TableName: "ext_csv_local",
+			Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
+		},
+	}
+
+	_, err := restoreCreateTableDDL(context.Background(), nil, table, dumpData, types.TS{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing external table parameter JSON")
 }
 
 func TestShouldWriteLoadDataSkipsExternalRelations(t *testing.T) {

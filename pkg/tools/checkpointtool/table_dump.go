@@ -861,17 +861,8 @@ func (r *CheckpointReader) ReadTableSchema(
 	if err != nil {
 		// Don't log - expected for system tables or when mo_tables not in checkpoint
 	} else if moTablesView != nil {
-		// Resolve column positions by name (handles hidden column offset)
-		relIDCol := fallbackCatalogColIndex(moTablesView, moTablesID, "rel_id")
-		for _, row := range moTablesView.Rows {
-			dataRow := row[logicalViewDataOffset(moTablesView):]
-			if relIDCol < 0 || relIDCol >= len(dataRow) {
-				continue
-			}
-			if dataRow[relIDCol] == fmt.Sprintf("%d", tableID) {
-				schema = buildSchemaFromMoTablesRow(moTablesView, row)
-				break
-			}
+		if moTablesSchema := findTableSchemaFromMoTables(moTablesView, tableID); moTablesSchema != nil {
+			schema = moTablesSchema
 		}
 	}
 
@@ -2730,35 +2721,93 @@ func dataIndexForSeqNum(view *LogicalTableView, seqNum int) int {
 // Uses column name lookup from view headers to handle hidden column offsets.
 // mo_tables columns: rel_id, relname, reldatabase, reldatabase_id, ..., rel_createsql
 func buildSchemaFromMoTablesRow(view *LogicalTableView, fullRow []string) *TableSchema {
+	return buildSchemaFromMoTablesRowAt(
+		view,
+		fullRow,
+		fallbackCatalogColIndex(view, moTablesID, "relname"),
+		fallbackCatalogColIndex(view, moTablesID, "reldatabase"),
+		fallbackCatalogColIndex(view, moTablesID, "rel_createsql"),
+		fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Comment),
+		fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint),
+	)
+}
+
+func buildSchemaFromMoTablesRowAt(
+	view *LogicalTableView,
+	fullRow []string,
+	relNameIdx int,
+	relDBIdx int,
+	createSQLIdx int,
+	commentIdx int,
+	constraintIdx int,
+) *TableSchema {
 	schema := &TableSchema{}
 	dataRow := fullRow[logicalViewDataOffset(view):]
 
-	relNameIdx := fallbackCatalogColIndex(view, moTablesID, "relname")
 	if relNameIdx >= 0 && relNameIdx < len(dataRow) {
 		schema.TableName = strings.Clone(dataRow[relNameIdx])
 	}
 
-	relDBIdx := fallbackCatalogColIndex(view, moTablesID, "reldatabase")
 	if relDBIdx >= 0 && relDBIdx < len(dataRow) {
 		schema.DatabaseName = strings.Clone(dataRow[relDBIdx])
 	}
 
-	createSQLIdx := fallbackCatalogColIndex(view, moTablesID, "rel_createsql")
 	if createSQLIdx >= 0 && createSQLIdx < len(dataRow) {
-		if isPrintableCreateTableSQL(dataRow[createSQLIdx]) {
+		if isPrintableCreateTableSQL(dataRow[createSQLIdx]) || isPrintableExternalParamJSON(dataRow[createSQLIdx]) {
 			schema.CreateSQL = strings.Clone(dataRow[createSQLIdx])
 		}
 	}
-	commentIdx := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Comment)
 	if commentIdx >= 0 && commentIdx < len(dataRow) && isPrintableSQLText(dataRow[commentIdx]) {
 		schema.Comment = strings.Clone(dataRow[commentIdx])
 	}
-	constraintIdx := fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint)
 	if constraintIdx >= 0 && constraintIdx < len(dataRow) {
 		schema.UniqueKeys = decodeUniqueKeysFromMoTablesConstraint(dataRow[constraintIdx])
 		schema.PrimaryKey = decodePrimaryKeyFromMoTablesConstraint(dataRow[constraintIdx])
 	}
 	return schema
+}
+
+func findTableSchemaFromMoTables(view *LogicalTableView, tableID uint64) *TableSchema {
+	tableIDStr := fmt.Sprintf("%d", tableID)
+	try := func(relIDCol, relNameCol, relDBCol, createSQLCol, commentCol, constraintCol int) *TableSchema {
+		if relIDCol < 0 {
+			return nil
+		}
+		for _, fullRow := range view.Rows {
+			row := fullRow[logicalViewDataOffset(view):]
+			if relIDCol >= len(row) || row[relIDCol] != tableIDStr {
+				continue
+			}
+			return buildSchemaFromMoTablesRowAt(view, fullRow, relNameCol, relDBCol, createSQLCol, commentCol, constraintCol)
+		}
+		return nil
+	}
+
+	if schema := try(
+		fallbackCatalogColIndex(view, moTablesID, "rel_id"),
+		fallbackCatalogColIndex(view, moTablesID, "relname"),
+		fallbackCatalogColIndex(view, moTablesID, "reldatabase"),
+		fallbackCatalogColIndex(view, moTablesID, "rel_createsql"),
+		fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Comment),
+		fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint),
+	); schema != nil {
+		return schema
+	}
+
+	dataWidth := len(view.Headers) - logicalViewDataOffset(view)
+	for _, match := range catalogLayoutMatches(dataWidth, moTablesID) {
+		if schema := try(
+			catalogColIndexForLayout(match.layout, moTablesID, "rel_id", match.offset),
+			catalogColIndexForLayout(match.layout, moTablesID, "relname", match.offset),
+			catalogColIndexForLayout(match.layout, moTablesID, "reldatabase", match.offset),
+			catalogColIndexForLayout(match.layout, moTablesID, "rel_createsql", match.offset),
+			catalogColIndexForLayout(match.layout, moTablesID, catalog.SystemRelAttr_Comment, match.offset),
+			catalogColIndexForLayout(match.layout, moTablesID, catalog.SystemRelAttr_Constraint, match.offset),
+		); schema != nil {
+			return schema
+		}
+	}
+	return nil
 }
 
 func findTableNameFromMoTables(view *LogicalTableView, tableID uint64) string {
@@ -4343,6 +4392,17 @@ func isPrintableCreateTableSQL(ddl string) bool {
 		strings.HasPrefix(upper, "CREATE TEMPORARY TABLE ") ||
 		strings.HasPrefix(upper, "CREATE CLUSTER TABLE ") ||
 		strings.HasPrefix(upper, "CREATE EXTERNAL TABLE ")
+}
+
+func isPrintableExternalParamJSON(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw[0] != '{' || raw[len(raw)-1] != '}' {
+		return false
+	}
+	if !isPrintableSQLText(raw) {
+		return false
+	}
+	return strings.Contains(raw, `"ExParamConst"`) || strings.Contains(raw, `"Filepath"`) || strings.Contains(raw, `"Option"`)
 }
 
 // hardcodedCreateTable returns the CREATE TABLE DDL for core built-in system tables.

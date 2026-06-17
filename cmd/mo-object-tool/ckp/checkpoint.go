@@ -15,7 +15,9 @@
 package ckp
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -32,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool/interactive"
 	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
@@ -779,12 +782,8 @@ func writeRestoreScript(
 		return "", fmt.Errorf("create script dir: %w", err)
 	}
 	scriptPath := outputPathJoin(scriptDir, "restore.sql")
-	f, err := dumpOut.Create(ctx, scriptPath)
-	if err != nil {
-		return "", fmt.Errorf("create restore script: %w", err)
-	}
-	defer f.Close()
 
+	var script bytes.Buffer
 	currentDB := ""
 	for _, table := range tables {
 		if table.DatabaseName == "" {
@@ -792,14 +791,14 @@ func writeRestoreScript(
 		}
 		if table.DatabaseName != currentDB {
 			if currentDB != "" {
-				if _, err := fmt.Fprintln(f); err != nil {
+				if _, err := fmt.Fprintln(&script); err != nil {
 					return "", err
 				}
 			}
-			if _, err := fmt.Fprintf(f, "CREATE DATABASE IF NOT EXISTS %s;\n", quoteSQLIdent(table.DatabaseName)); err != nil {
+			if _, err := fmt.Fprintf(&script, "CREATE DATABASE IF NOT EXISTS %s;\n", quoteSQLIdent(table.DatabaseName)); err != nil {
 				return "", err
 			}
-			if _, err := fmt.Fprintf(f, "USE %s;\n\n", quoteSQLIdent(table.DatabaseName)); err != nil {
+			if _, err := fmt.Fprintf(&script, "USE %s;\n\n", quoteSQLIdent(table.DatabaseName)); err != nil {
 				return "", err
 			}
 			currentDB = table.DatabaseName
@@ -823,46 +822,55 @@ func writeRestoreScript(
 		if err != nil {
 			return "", fmt.Errorf("merge create table indexes for table %d: %w", table.TableID, err)
 		}
-		if _, err := fmt.Fprintln(f, strings.TrimRight(ddl, " ;\n\t")); err != nil {
+		if _, err := fmt.Fprintln(&script, strings.TrimRight(ddl, " ;\n\t")); err != nil {
 			return "", err
 		}
-		if _, err := fmt.Fprintln(f, ";"); err != nil {
+		if _, err := fmt.Fprintln(&script, ";"); err != nil {
 			return "", err
 		}
 		if shouldWriteLoadData(includeLoad, table) {
-			if _, err := fmt.Fprintf(f, "\n%s\n", loadPathResolver.loadDataSource(csvRoot, table)); err != nil {
+			if _, err := fmt.Fprintf(&script, "\n%s\n", loadPathResolver.loadDataSource(csvRoot, table)); err != nil {
 				return "", err
 			}
-			if _, err := fmt.Fprintf(f, "INTO TABLE %s\n", quoteSQLIdent(table.TableName)); err != nil {
+			if _, err := fmt.Fprintf(&script, "INTO TABLE %s\n", quoteSQLIdent(table.TableName)); err != nil {
 				return "", err
 			}
-			if _, err := fmt.Fprintln(f, "FIELDS TERMINATED BY ','"); err != nil {
+			if _, err := fmt.Fprintln(&script, "FIELDS TERMINATED BY ','"); err != nil {
 				return "", err
 			}
-			if _, err := fmt.Fprintln(f, "ENCLOSED BY '\"'"); err != nil {
+			if _, err := fmt.Fprintln(&script, "ENCLOSED BY '\"'"); err != nil {
 				return "", err
 			}
-			if _, err := fmt.Fprintln(f, "LINES TERMINATED BY '\\n'"); err != nil {
+			if _, err := fmt.Fprintln(&script, "LINES TERMINATED BY '\\n'"); err != nil {
 				return "", err
 			}
 			if csvHasHeader {
-				if _, err := fmt.Fprintln(f, "IGNORE 1 LINES"); err != nil {
+				if _, err := fmt.Fprintln(&script, "IGNORE 1 LINES"); err != nil {
 					return "", err
 				}
 			}
-			if _, err := fmt.Fprintln(f, "parallel 'true'"); err != nil {
+			if _, err := fmt.Fprintln(&script, "parallel 'true'"); err != nil {
 				return "", err
 			}
-			if _, err := fmt.Fprintln(f, ";"); err != nil {
+			if _, err := fmt.Fprintln(&script, ";"); err != nil {
 				return "", err
 			}
 		}
-		if _, err := fmt.Fprintln(f); err != nil {
+		if _, err := fmt.Fprintln(&script); err != nil {
 			return "", err
 		}
 	}
+
+	f, err := dumpOut.Create(ctx, scriptPath)
+	if err != nil {
+		return "", fmt.Errorf("create restore script: %w", err)
+	}
+	_, writeErr := io.Copy(f, &script)
 	if err := f.Close(); err != nil {
 		return "", fmt.Errorf("close restore script: %w", err)
+	}
+	if writeErr != nil {
+		return "", fmt.Errorf("write restore script: %w", writeErr)
 	}
 	return scriptPath, nil
 }
@@ -877,8 +885,15 @@ func restoreCreateTableDDL(
 	ddl := ""
 	if dumpData != nil && dumpData.Schema != nil {
 		schema := dumpData.Schema
-		if isExternalRelation(table) && strings.TrimSpace(schema.CreateSQL) != "" {
-			ddl = schema.CreateSQL
+		if isExternalRelation(table) {
+			if strings.TrimSpace(schema.CreateSQL) == "" {
+				return "", fmt.Errorf("external table %d (%s.%s): missing external table parameter JSON in checkpoint metadata", table.TableID, table.DatabaseName, table.TableName)
+			}
+			var err error
+			ddl, err = renderExternalCreateTableDDLFromParamJSON(table, schema)
+			if err != nil {
+				return "", err
+			}
 		} else {
 			schemaCopy := *schema
 			schemaCopy.TableName = table.TableName
@@ -894,6 +909,197 @@ func restoreCreateTableDDL(
 		}
 	}
 	return normalizeCreateTableDDLName(ddl, table), nil
+}
+
+func renderExternalCreateTableDDLFromParamJSON(table checkpointtool.TableCatalogEntry, schema *checkpointtool.TableSchema) (string, error) {
+	var param tree.ExternParam
+	if err := json.Unmarshal([]byte(schema.CreateSQL), &param); err != nil {
+		return "", fmt.Errorf("external table %d (%s.%s): decode external table parameter JSON: %w", table.TableID, table.DatabaseName, table.TableName, err)
+	}
+	applyExternalParamOptions(&param)
+
+	schemaCopy := *schema
+	schemaCopy.TableName = table.TableName
+	schemaCopy.DatabaseName = table.DatabaseName
+	schemaCopy.CreateSQL = ""
+	base := checkpointtool.RenderCreateTableDDLFromSchema(&schemaCopy)
+	if base == "" {
+		return "", fmt.Errorf("external table %d (%s.%s): cannot render external table columns from checkpoint metadata", table.TableID, table.DatabaseName, table.TableName)
+	}
+	base = strings.TrimRight(base, " ;\n\t")
+	if strings.HasPrefix(strings.ToUpper(base), "CREATE TABLE ") {
+		base = "CREATE EXTERNAL TABLE " + strings.TrimSpace(base[len("CREATE TABLE "):])
+	} else {
+		return "", fmt.Errorf("external table %d (%s.%s): unexpected generated DDL: %s", table.TableID, table.DatabaseName, table.TableName, summarizeSQLForError(base))
+	}
+	return base + renderExternalParamClause(&param), nil
+}
+
+func applyExternalParamOptions(param *tree.ExternParam) {
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		key := strings.ToLower(param.Option[i])
+		value := param.Option[i+1]
+		switch key {
+		case "filepath":
+			param.Filepath = value
+		case "compression":
+			param.CompressType = value
+		case "format":
+			param.Format = strings.ToLower(value)
+		case "jsondata":
+			param.JsonData = strings.ToLower(value)
+		case "hive_partitioning":
+			param.HivePartitioning = strings.EqualFold(value, "true")
+		case "hive_partition_columns":
+			if value != "" {
+				param.HivePartitionCols = strings.Split(value, ",")
+			}
+		case "endpoint":
+			ensureExternalS3Param(param).Endpoint = value
+		case "region":
+			ensureExternalS3Param(param).Region = value
+		case "access_key_id":
+			ensureExternalS3Param(param).APIKey = value
+		case "secret_access_key":
+			ensureExternalS3Param(param).APISecret = value
+		case "bucket":
+			ensureExternalS3Param(param).Bucket = value
+		case "provider":
+			ensureExternalS3Param(param).Provider = value
+		case "role_arn":
+			ensureExternalS3Param(param).RoleArn = value
+		case "external_id":
+			ensureExternalS3Param(param).ExternalId = value
+		}
+	}
+	if param.CompressType == "" {
+		param.CompressType = "auto"
+	}
+	if param.Format == "" {
+		param.Format = "csv"
+	}
+}
+
+func ensureExternalS3Param(param *tree.ExternParam) *tree.S3Parameter {
+	if param.S3Param == nil {
+		param.S3Param = &tree.S3Parameter{}
+	}
+	return param.S3Param
+}
+
+func renderExternalParamClause(param *tree.ExternParam) string {
+	if param.ScanType == tree.S3 {
+		return renderExternalS3Clause(param)
+	}
+	return renderExternalInfileClause(param)
+}
+
+func renderExternalInfileClause(param *tree.ExternParam) string {
+	options := []string{
+		"filepath", param.Filepath,
+		"compression", param.CompressType,
+		"format", param.Format,
+	}
+	if param.JsonData != "" {
+		options = append(options, "jsondata", param.JsonData)
+	}
+	if param.HivePartitioning {
+		options = append(options, "hive_partitioning", "true")
+		if len(param.HivePartitionCols) > 0 {
+			options = append(options, "hive_partition_columns", strings.Join(param.HivePartitionCols, ","))
+		}
+	}
+	return " INFILE {" + formatExternalOptions(options) + "}" + renderExternalTailClause(param)
+}
+
+func renderExternalS3Clause(param *tree.ExternParam) string {
+	options := make([]string, 0, 20)
+	if param.S3Param != nil {
+		options = appendExternalOptionIfSet(options, "endpoint", param.S3Param.Endpoint)
+		options = appendExternalOptionIfSet(options, "region", param.S3Param.Region)
+		options = appendExternalOptionIfSet(options, "access_key_id", param.S3Param.APIKey)
+		options = appendExternalOptionIfSet(options, "secret_access_key", param.S3Param.APISecret)
+		options = appendExternalOptionIfSet(options, "bucket", param.S3Param.Bucket)
+	}
+	options = appendExternalOptionIfSet(options, "filepath", param.Filepath)
+	if param.S3Param != nil {
+		options = appendExternalOptionIfSet(options, "provider", param.S3Param.Provider)
+		options = appendExternalOptionIfSet(options, "role_arn", param.S3Param.RoleArn)
+		options = appendExternalOptionIfSet(options, "external_id", param.S3Param.ExternalId)
+	}
+	options = appendExternalOptionIfSet(options, "compression", param.CompressType)
+	options = appendExternalOptionIfSet(options, "format", param.Format)
+	options = appendExternalOptionIfSet(options, "jsondata", param.JsonData)
+	return " URL s3option {" + formatExternalOptions(options) + "}" + renderExternalTailClause(param)
+}
+
+func appendExternalOptionIfSet(options []string, key, value string) []string {
+	if value == "" {
+		return options
+	}
+	return append(options, key, value)
+}
+
+func formatExternalOptions(options []string) string {
+	parts := make([]string, 0, len(options)/2)
+	for i := 0; i+1 < len(options); i += 2 {
+		parts = append(parts, quoteSQLString(options[i])+"="+quoteSQLString(options[i+1]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func renderExternalTailClause(param *tree.ExternParam) string {
+	if param.Tail == nil {
+		return ""
+	}
+	var sb strings.Builder
+	if param.Tail.Fields != nil {
+		var fields []string
+		if param.Tail.Fields.Terminated != nil {
+			fields = append(fields, "TERMINATED BY "+quoteExternalLiteral(param.Tail.Fields.Terminated.Value))
+		}
+		if param.Tail.Fields.EnclosedBy != nil {
+			fields = append(fields, "ENCLOSED BY "+quoteExternalLiteral(byteSQLString(param.Tail.Fields.EnclosedBy.Value)))
+		}
+		if param.Tail.Fields.EscapedBy != nil {
+			fields = append(fields, "ESCAPED BY "+quoteExternalLiteral(byteSQLString(param.Tail.Fields.EscapedBy.Value)))
+		}
+		if len(fields) > 0 {
+			sb.WriteString(" FIELDS ")
+			sb.WriteString(strings.Join(fields, " "))
+		}
+	}
+	if param.Tail.Lines != nil {
+		var lines []string
+		if param.Tail.Lines.StartingBy != "" {
+			lines = append(lines, "STARTING BY "+quoteExternalLiteral(param.Tail.Lines.StartingBy))
+		}
+		if param.Tail.Lines.TerminatedBy != nil {
+			lines = append(lines, "TERMINATED BY "+quoteExternalLiteral(param.Tail.Lines.TerminatedBy.Value))
+		}
+		if len(lines) > 0 {
+			sb.WriteString(" LINES ")
+			sb.WriteString(strings.Join(lines, " "))
+		}
+	}
+	if param.Tail.IgnoredLines > 0 {
+		fmt.Fprintf(&sb, " IGNORE %d LINES", param.Tail.IgnoredLines)
+	}
+	return sb.String()
+}
+
+func quoteExternalLiteral(s string) string {
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	s = strings.ReplaceAll(s, "\r", `\r`)
+	s = strings.ReplaceAll(s, "\t", `\t`)
+	return quoteSQLString(s)
+}
+
+func byteSQLString(value byte) string {
+	if value == 0 {
+		return ""
+	}
+	return string([]byte{value})
 }
 
 func shouldWriteLoadData(includeLoad bool, table checkpointtool.TableCatalogEntry) bool {
@@ -918,7 +1124,7 @@ func packageExternalTableSource(
 ) (string, error) {
 	sourcePath, valueStart, valueEnd, ok := externalTableFilepathValueRange(ddl)
 	if !ok {
-		return "", fmt.Errorf("external table %d (%s.%s): CREATE SQL does not contain INFILE filepath", table.TableID, table.DatabaseName, table.TableName)
+		return "", fmt.Errorf("external table %d (%s.%s): CREATE EXTERNAL TABLE SQL does not contain INFILE filepath: %s", table.TableID, table.DatabaseName, table.TableName, summarizeSQLForError(ddl))
 	}
 	if dumpOut != nil && dumpOut.remote {
 		return "", fmt.Errorf("external table %d (%s.%s): packaging local external source is not supported for remote dump output", table.TableID, table.DatabaseName, table.TableName)
@@ -1040,6 +1246,14 @@ func readSQLStringOrBareValue(sql string, start int) (string, int, bool) {
 	}
 	value := strings.TrimSpace(sql[start:end])
 	return value, end, value != ""
+}
+
+func summarizeSQLForError(sql string) string {
+	sql = strings.Join(strings.Fields(sql), " ")
+	if len(sql) > 240 {
+		return sql[:240] + "..."
+	}
+	return sql
 }
 
 func quoteSQLIdent(s string) string {
