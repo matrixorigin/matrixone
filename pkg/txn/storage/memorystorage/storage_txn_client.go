@@ -350,6 +350,10 @@ func (s *StorageTxnOperator) HasLockTable(table uint64) bool {
 	panic("should not call")
 }
 
+func (s *StorageTxnOperator) CheckLockTableBinds(ctx context.Context) error {
+	panic("should not call")
+}
+
 func (s *StorageTxnOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("should not call")
 }
