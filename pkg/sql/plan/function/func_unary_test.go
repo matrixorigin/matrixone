@@ -7345,6 +7345,52 @@ func TestUserLevelLockFunctions(t *testing.T) {
 	})
 }
 
+func TestUserLevelLockFunctionNullInputs(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+
+		cases := []struct {
+			name   string
+			inputs []FunctionTestInput
+			expect FunctionTestResult
+			fn     fEvalFn
+		}{
+			{
+				name: "release lock returns null for null name",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+				fn:     ReleaseLock,
+			},
+			{
+				name: "is free lock returns null for null name",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+				fn:     IsFreeLock,
+			},
+			{
+				name: "is used lock returns null for null name",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+				},
+				expect: NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0}, []bool{true}),
+				fn:     IsUsedLock,
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, tc.fn)
+				s, info := fcTC.Run()
+				require.True(t, s, info)
+			})
+		}
+	})
+}
+
 func TestUserLevelLockContention(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
@@ -7487,6 +7533,21 @@ func TestIsUsedLockReturnsHolderConnectionID(t *testing.T) {
 		require.Equal(t, uint64(1001), holder)
 
 		holder, isNull, err = isUserLevelLockUsed("missing_holder_lock", proc2)
+		require.NoError(t, err)
+		require.True(t, isNull)
+		require.Equal(t, uint64(0), holder)
+	})
+}
+
+func TestIsUsedLockReturnsNullForMalformedHolderTxnID(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		state := services[0].(*userLevelLockTestService).state
+		state.Lock()
+		state.locks[string(userLevelLockRow(proc, "bad_holder"))] = "not-a-user-level-lock-txn"
+		state.Unlock()
+
+		holder, isNull, err := isUserLevelLockUsed("bad_holder", proc)
 		require.NoError(t, err)
 		require.True(t, isNull)
 		require.Equal(t, uint64(0), holder)
