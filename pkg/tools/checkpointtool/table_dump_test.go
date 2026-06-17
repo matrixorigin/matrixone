@@ -794,15 +794,21 @@ func TestBuildCatalogTablesFromMoTablesRows_GenericWithTrailingColumns(t *testin
 	assert.Equal(t, "v", tables[1].RelKind)
 }
 
-func TestIsViewRelKind(t *testing.T) {
-	assert.False(t, isViewRelKind(""))
-	assert.False(t, isViewRelKind("r"))
-	assert.False(t, isViewRelKind("e"))
-	assert.False(t, isViewRelKind("external"))
-	assert.False(t, isViewRelKind("cluster"))
-	assert.True(t, isViewRelKind("v"))
-	assert.True(t, isViewRelKind("view"))
-	assert.True(t, isViewRelKind(" VIEW "))
+func TestListCatalogTablesDoesNotFilterRelKinds(t *testing.T) {
+	tables := []TableCatalogEntry{
+		{TableID: 1, TableName: "orders", DatabaseName: "db1", RelKind: "r"},
+		{TableID: 2, TableName: "ext_orders", DatabaseName: "db1", RelKind: "e"},
+		{TableID: 3, TableName: "orders_v", DatabaseName: "db1", RelKind: "v"},
+		{TableID: 4, TableName: "cluster_orders", DatabaseName: "db1", RelKind: "cluster"},
+	}
+	filtered := filterCatalogTablesForList(tables, TableListOptions{})
+
+	require.Len(t, filtered, 4)
+	names := make([]string, 0, len(filtered))
+	for _, table := range filtered {
+		names = append(names, table.TableName)
+	}
+	assert.ElementsMatch(t, []string{"orders", "ext_orders", "orders_v", "cluster_orders"}, names)
 }
 
 func TestInferCatalogLayout(t *testing.T) {

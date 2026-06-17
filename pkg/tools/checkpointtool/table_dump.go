@@ -1239,15 +1239,16 @@ func (r *CheckpointReader) ListCatalogTables(
 			tables = mergeCatalogTableEntries(tables, buildCatalogTablesFromMoTablesRows(projected))
 		}
 	}
+	return filterCatalogTablesForList(tables, opts), nil
+}
+
+func filterCatalogTablesForList(tables []TableCatalogEntry, opts TableListOptions) []TableCatalogEntry {
 	filtered := make([]TableCatalogEntry, 0, len(tables))
 	for _, table := range tables {
 		if opts.AccountID != nil && table.AccountID != *opts.AccountID {
 			continue
 		}
 		if opts.DatabaseID != nil && table.DatabaseID != *opts.DatabaseID {
-			continue
-		}
-		if !opts.IncludeViews && isViewRelKind(table.RelKind) {
 			continue
 		}
 		filtered = append(filtered, table)
@@ -1264,7 +1265,7 @@ func (r *CheckpointReader) ListCatalogTables(
 		}
 		return filtered[i].TableID < filtered[j].TableID
 	})
-	return filtered, nil
+	return filtered
 }
 
 func (r *CheckpointReader) listCatalogTablesFromProjectedMoTables(
@@ -2920,15 +2921,6 @@ func validCatalogName(s string) bool {
 func validRelKind(s string) bool {
 	switch s {
 	case "", "r", "v", "e", "cluster", "external", "view":
-		return true
-	default:
-		return false
-	}
-}
-
-func isViewRelKind(s string) bool {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "v", "view":
 		return true
 	default:
 		return false

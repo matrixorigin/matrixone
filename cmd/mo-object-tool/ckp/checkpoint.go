@@ -195,8 +195,8 @@ func listCommand(storage *toolfs.StorageOptions) *cobra.Command {
 		Short: "List checkpoint catalog tables",
 		Long: `List table metadata from the checkpoint catalog.
 
-By default this lists tables and external tables. Use --include-views to include views,
-and use --database-id or --account-id to narrow the result.`,
+By default this lists all catalog relations. Use --database-id or --account-id
+to narrow the result.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."
@@ -246,7 +246,7 @@ and use --database-id or --account-id to narrow the result.`,
 	}
 	cmd.Flags().Uint32Var(&accountID, "account-id", 0, "Account ID to list")
 	cmd.Flags().Uint64Var(&databaseID, "database-id", 0, "Database ID to list")
-	cmd.Flags().BoolVar(&includeViews, "include-views", false, "Include views")
+	cmd.Flags().BoolVar(&includeViews, "include-views", false, "Deprecated no-op; views are listed by default")
 	cmd.Flags().StringVar(&listType, "type", "tables", "List type: tables, databases, or accounts")
 	cmd.Flags().StringVar(&tsStr, "ts", "", "Snapshot timestamp: physical:logical, physical-logical, RFC3339, or local time (default: latest)")
 	return cmd
