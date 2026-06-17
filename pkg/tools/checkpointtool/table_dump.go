@@ -3142,13 +3142,13 @@ func mapTablesByID(view *LogicalTableView) map[uint64]TableCatalogEntry {
 
 func mapColumnNamesByTableIDAndColID(view *LogicalTableView) map[uint64]map[uint64]string {
 	result := make(map[uint64]map[uint64]string)
-	add := func(relIDCol, uniqNameCol, nameCol, hiddenCol int) {
-		if relIDCol < 0 || uniqNameCol < 0 || nameCol < 0 {
+	add := func(relIDCol, uniqNameCol, numCol, nameCol, hiddenCol int) {
+		if relIDCol < 0 || nameCol < 0 {
 			return
 		}
 		for _, fullRow := range view.Rows {
 			row := fullRow[logicalViewDataOffset(view):]
-			if relIDCol >= len(row) || uniqNameCol >= len(row) || nameCol >= len(row) {
+			if relIDCol >= len(row) || nameCol >= len(row) {
 				continue
 			}
 			if hiddenCol >= 0 && hiddenCol < len(row) && isTruthyCatalogValue(row[hiddenCol]) {
@@ -3158,10 +3158,6 @@ func mapColumnNamesByTableIDAndColID(view *LogicalTableView) map[uint64]map[uint
 			if !ok {
 				continue
 			}
-			colID, err := strconv.ParseUint(strings.TrimSpace(row[uniqNameCol]), 10, 64)
-			if err != nil {
-				continue
-			}
 			name := strings.TrimSpace(row[nameCol])
 			if name == "" || catalog.IsAlias(name) {
 				continue
@@ -3169,13 +3165,25 @@ func mapColumnNamesByTableIDAndColID(view *LogicalTableView) map[uint64]map[uint
 			if result[tableID] == nil {
 				result[tableID] = make(map[uint64]string)
 			}
-			result[tableID][colID] = name
+			addColumnNameID := func(col string) {
+				colID, err := strconv.ParseUint(strings.TrimSpace(col), 10, 64)
+				if err == nil {
+					result[tableID][colID] = name
+				}
+			}
+			if uniqNameCol >= 0 && uniqNameCol < len(row) {
+				addColumnNameID(row[uniqNameCol])
+			}
+			if numCol >= 0 && numCol < len(row) {
+				addColumnNameID(row[numCol])
+			}
 		}
 	}
 
 	add(
 		fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_RelID),
 		fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_UniqName),
+		fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Num),
 		fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Name),
 		fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsHidden),
 	)
@@ -3184,6 +3192,7 @@ func mapColumnNamesByTableIDAndColID(view *LogicalTableView) map[uint64]map[uint
 		add(
 			catalogColIndexForLayout(match.layout, moColumnsID, catalog.SystemColAttr_RelID, match.offset),
 			catalogColIndexForLayout(match.layout, moColumnsID, catalog.SystemColAttr_UniqName, match.offset),
+			catalogColIndexForLayout(match.layout, moColumnsID, catalog.SystemColAttr_Num, match.offset),
 			catalogColIndexForLayout(match.layout, moColumnsID, catalog.SystemColAttr_Name, match.offset),
 			catalogColIndexForLayout(match.layout, moColumnsID, catalog.SystemColAttr_IsHidden, match.offset),
 		)
@@ -4444,19 +4453,24 @@ func decodeForeignKeysFromMoTablesConstraint(
 	for _, ct := range c.Cts {
 		fkDef, ok := ct.(*engine.ForeignKeyDef)
 		if !ok || fkDef == nil {
+			ckpDebugSchemaf("mo_tables foreign key skip table=%d constraint_type=%T", tableID, ct)
 			continue
 		}
+		ckpDebugSchemaf("mo_tables foreign key scan table=%d fkeys=%d", tableID, len(fkDef.Fkeys))
 		for _, fk := range fkDef.Fkeys {
 			if fk == nil || len(fk.Cols) == 0 || len(fk.Cols) != len(fk.ForeignCols) {
+				ckpDebugSchemaf("mo_tables foreign key skip table=%d invalid fk=%v", tableID, fk)
 				continue
 			}
 			parent, ok := tableByID[fk.ForeignTbl]
 			if !ok || parent.TableName == "" {
+				ckpDebugSchemaf("mo_tables foreign key skip table=%d missing parent=%d", tableID, fk.ForeignTbl)
 				continue
 			}
 			cols := namesForColumnIDs(childColsByID, fk.Cols)
 			referCols := namesForColumnIDs(colNamesByTableID[fk.ForeignTbl], fk.ForeignCols)
 			if len(cols) == 0 || len(cols) != len(referCols) {
+				ckpDebugSchemaf("mo_tables foreign key skip table=%d cols=%v resolved=%v foreign_table=%d foreign_cols=%v resolved_foreign=%v child_cols_by_id=%v foreign_cols_by_id=%v", tableID, fk.Cols, cols, fk.ForeignTbl, fk.ForeignCols, referCols, childColsByID, colNamesByTableID[fk.ForeignTbl])
 				continue
 			}
 			name := strings.TrimSpace(fk.Name)

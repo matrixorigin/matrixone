@@ -785,7 +785,7 @@ func writeRestoreScript(
 
 	var script bytes.Buffer
 	currentDB := ""
-	for _, table := range tables {
+	for _, table := range orderTablesForRestore(tables, dumpDataByTable) {
 		if table.DatabaseName == "" {
 			return "", fmt.Errorf("table %d has empty database name in checkpoint catalog", table.TableID)
 		}
@@ -875,6 +875,69 @@ func writeRestoreScript(
 		return "", fmt.Errorf("write restore script: %w", writeErr)
 	}
 	return scriptPath, nil
+}
+
+func orderTablesForRestore(
+	tables []checkpointtool.TableCatalogEntry,
+	dumpDataByTable map[uint64]*checkpointtool.TableDumpData,
+) []checkpointtool.TableCatalogEntry {
+	if len(tables) <= 1 {
+		return tables
+	}
+	type tableKey struct {
+		database string
+		table    string
+	}
+	keyFor := func(table checkpointtool.TableCatalogEntry) tableKey {
+		return tableKey{database: table.DatabaseName, table: table.TableName}
+	}
+	tableByKey := make(map[tableKey]checkpointtool.TableCatalogEntry, len(tables))
+	orderByID := make(map[uint64]int, len(tables))
+	for i, table := range tables {
+		tableByKey[keyFor(table)] = table
+		orderByID[table.TableID] = i
+	}
+	ordered := make([]checkpointtool.TableCatalogEntry, 0, len(tables))
+	visiting := make(map[uint64]bool, len(tables))
+	visited := make(map[uint64]bool, len(tables))
+	var visit func(checkpointtool.TableCatalogEntry)
+	visit = func(table checkpointtool.TableCatalogEntry) {
+		if visited[table.TableID] {
+			return
+		}
+		if visiting[table.TableID] {
+			return
+		}
+		visiting[table.TableID] = true
+		if dumpData := dumpDataByTable[table.TableID]; dumpData != nil && dumpData.Schema != nil {
+			refs := append([]checkpointtool.TableForeignKey(nil), dumpData.Schema.ForeignKeys...)
+			sort.SliceStable(refs, func(i, j int) bool {
+				left, leftOK := tableByKey[tableKey{database: refs[i].ReferDatabase, table: refs[i].ReferTable}]
+				right, rightOK := tableByKey[tableKey{database: refs[j].ReferDatabase, table: refs[j].ReferTable}]
+				if leftOK != rightOK {
+					return leftOK
+				}
+				if !leftOK {
+					return false
+				}
+				return orderByID[left.TableID] < orderByID[right.TableID]
+			})
+			for _, fk := range refs {
+				parent, ok := tableByKey[tableKey{database: fk.ReferDatabase, table: fk.ReferTable}]
+				if !ok {
+					continue
+				}
+				visit(parent)
+			}
+		}
+		visiting[table.TableID] = false
+		visited[table.TableID] = true
+		ordered = append(ordered, table)
+	}
+	for _, table := range tables {
+		visit(table)
+	}
+	return ordered
 }
 
 func restoreCreateTableDDL(

@@ -646,9 +646,9 @@ func TestCreateTableDDLFromCatalogViews_IncludesForeignKeys(t *testing.T) {
 			tableRow("101", "child_cascade", "ckp_constraints", "10", encodedConstraint(t,
 				&engine.ForeignKeyDef{Fkeys: []*plan.ForeignKeyDef{{
 					Name:        "fk_child_cascade_parent",
-					Cols:        []uint64{1},
+					Cols:        []uint64{2},
 					ForeignTbl:  100,
-					ForeignCols: []uint64{0},
+					ForeignCols: []uint64{1},
 					OnDelete:    plan.ForeignKeyDef_CASCADE,
 					OnUpdate:    plan.ForeignKeyDef_RESTRICT,
 				}}},
@@ -682,9 +682,9 @@ func TestCreateTableDDLFromCatalogViews_IncludesForeignKeys(t *testing.T) {
 	moColumnsView := &LogicalTableView{
 		Headers: moColumnsHeaders,
 		Rows: [][]string{
-			columnRow("100", "parent", "0", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "1"),
-			columnRow("101", "child_cascade", "0", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "1"),
-			columnRow("101", "child_cascade", "1", "parent_id", encodedSQLType(t, types.T_int32.ToType()), "2", "0"),
+			columnRow("100", "parent", "100-id", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "1"),
+			columnRow("101", "child_cascade", "101-id", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "1"),
+			columnRow("101", "child_cascade", "101-parent_id", "parent_id", encodedSQLType(t, types.T_int32.ToType()), "2", "0"),
 		},
 	}
 
