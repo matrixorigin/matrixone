@@ -216,6 +216,14 @@ func (u *cagraSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 		u.idxcfg.CuvsCagra.Dimensions = uint(faVec.GetType().Width)
 		u.idxcfg.Type = vectorindex.CAGRA
 
+		// A vecf16 base with no QUANTIZATION stores natively as half: derive the
+		// storage qtype from the (f16) query/base type so newCagraAlgo dispatches
+		// NewCagraSearch[cuvs.Float16]. (vecf16 + QUANTIZATION keeps int8/uint8.)
+		if faVec.GetType().Oid == types.T_array_float16 &&
+			metric.QuantizationType(u.idxcfg.CuvsCagra.Quantization) == metric.Quantization_F32 {
+			u.idxcfg.CuvsCagra.Quantization = uint16(metric.Quantization_F16)
+		}
+
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
@@ -245,6 +253,13 @@ func (u *cagraSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 
 	veccache.Cache.Once()
 
+	// A vecf16 query is decoded natively to half. CagraSearch.Search dispatches:
+	// f16-direct (T==Float16) searches the half index natively; a quantized
+	// f16->int8/uint8 index quantizes the half query to T via the half quantizer.
+	if faVec.GetType().Oid == types.T_array_float16 {
+		return runCagraSearchHalf(proc, u, faVec, nthRow)
+	}
+
 	return runCagraSearch[float32](proc, u, faVec, nthRow)
 }
 
@@ -253,7 +268,20 @@ func runCagraSearch[T types.RealNumbers](proc *process.Process, u *cagraSearchSt
 	if uint(len(fa)) != u.idxcfg.CuvsCagra.Dimensions {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.CuvsCagra.Dimensions, len(fa)))
 	}
+	return cagraRunSearchQuery(proc, u, fa)
+}
 
+// runCagraSearchHalf decodes a vecf16 query natively to []cuvs.Float16 (no f32
+// detour) for a half-storage index.
+func runCagraSearchHalf(proc *process.Process, u *cagraSearchState, faVec *vector.Vector, nthRow int) (err error) {
+	h := types.BytesToArray[types.Float16](faVec.GetBytesAt(nthRow))
+	if uint(len(h)) != u.idxcfg.CuvsCagra.Dimensions {
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.CuvsCagra.Dimensions, len(h)))
+	}
+	return cagraRunSearchQuery(proc, u, f16ToCuvs(h))
+}
+
+func cagraRunSearchQuery(proc *process.Process, u *cagraSearchState, fa any) (err error) {
 	algo := newCagraAlgo(u.idxcfg, u.tblcfg)
 
 	rt := vectorindex.RuntimeConfig{

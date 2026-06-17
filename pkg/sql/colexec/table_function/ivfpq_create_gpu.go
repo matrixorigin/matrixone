@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+	"unsafe"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -48,6 +49,17 @@ var ivfpqCatalogHooks = ivfpqrt.CatalogHooks{}
 
 var ivfpq_runSql = sqlexec.RunSql
 
+// f16ToCuvs reinterprets a []types.Float16 as []cuvs.Float16. Both are uint16
+// with identical layout; this is a zero-copy view (the caller does not retain it
+// past the GPU add, which copies to device). Shared by the ivfpq/cagra GPU
+// table functions for the native f16 (half) path.
+func f16ToCuvs(s []types.Float16) []cuvs.Float16 {
+	if len(s) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*cuvs.Float16)(unsafe.Pointer(&s[0])), len(s))
+}
+
 type ivfpqCreateState struct {
 	inited   bool
 	buildf32 *ivfpqPkg.IvfpqBuild[float32]
@@ -58,6 +70,11 @@ type ivfpqCreateState struct {
 	tblcfg   vectorindex.IndexTableConfig
 	idxcfg   vectorindex.IndexConfig
 	offset   int
+
+	// baseOid is the base (source) vector column element type — f32 or f16.
+	// The storage/quantization type (which builder is non-nil) may differ:
+	// f16 base is stored as half (direct) or quantized to int8/uint8.
+	baseOid types.T
 
 	// filterCols is the INCLUDE column metadata derived at start() from
 	// param.IncludedColumns (names) + argVecs[3:] (types). Empty when the
@@ -350,7 +367,16 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 
 		faVec := tf.ctr.argVecs[2]
 		if !catalogplugin.SupportsVectorType(ivfpqCatalogHooks, faVec.GetType().Oid) {
-			return moerr.NewInvalidInput(proc.Ctx, "third argument (vector) must be a float32 array")
+			return moerr.NewInvalidInput(proc.Ctx, "third argument (vector) must be a float32 / float16 array")
+		}
+		u.baseOid = faVec.GetType().Oid
+
+		// Derive the storage qtype from the base column type when no QUANTIZATION
+		// was given: a vecf16 base with no quantization is stored natively as half.
+		// (vecf16 + QUANTIZATION=int8/uint8 keeps qt = int8/uint8 — quantize path.)
+		if u.baseOid == types.T_array_float16 && qt == metric.Quantization_F32 {
+			qt = metric.Quantization_F16
+			u.idxcfg.CuvsIvfpq.Quantization = uint16(qt)
 		}
 
 		// dimension
@@ -422,10 +448,27 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 	u.rowsSeen++
 
 	id := vector.GetFixedAtNoTypeCheck[int64](tf.ctr.argVecs[1], nthRow)
-	fa := types.BytesToArray[float32](faVec.GetBytesAt(nthRow))
 
-	if uint(len(fa)) != u.idxcfg.CuvsIvfpq.Dimensions {
-		return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
+	// Decode the base vector to its native type. f32 base -> []float32 (used by
+	// the f32 path and the CDC tail). f16 base -> native []cuvs.Float16 for the
+	// direct (half-storage) add; the CDC tail still transports f32 (exact widen)
+	// until the CDC pipeline is made native (step 5).
+	var fa []float32
+	var hf []cuvs.Float16
+	if u.baseOid == types.T_array_float16 {
+		h := types.BytesToArray[types.Float16](faVec.GetBytesAt(nthRow))
+		if uint(len(h)) != u.idxcfg.CuvsIvfpq.Dimensions {
+			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
+		}
+		hf = f16ToCuvs(h)
+		if srcPos >= u.cdcCutoff {
+			fa = types.Float16ToFloat32Slice(h)
+		}
+	} else {
+		fa = types.BytesToArray[float32](faVec.GetBytesAt(nthRow))
+		if uint(len(fa)) != u.idxcfg.CuvsIvfpq.Dimensions {
+			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
+		}
 	}
 
 	// Trailing rows below the cuvs k-means threshold (lists) route to
@@ -452,11 +495,23 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 	case u.buildf32 != nil:
 		err = u.buildf32.AddFloat(id, fa)
 	case u.buildf16 != nil:
-		err = u.buildf16.AddFloat(id, fa)
+		if u.baseOid == types.T_array_float16 {
+			err = u.buildf16.Add(id, hf) // vecf16 base -> native half storage
+		} else {
+			err = u.buildf16.AddFloat(id, fa) // f32 base + QUANTIZATION=f16 -> half-cast
+		}
 	case u.buildi8 != nil:
-		err = u.buildi8.AddFloat(id, fa)
+		if u.baseOid == types.T_array_float16 {
+			err = u.buildi8.AddQuantizeHalf(id, hf) // vecf16 base -> native half->int8 quantize
+		} else {
+			err = u.buildi8.AddFloat(id, fa)
+		}
 	case u.buildui8 != nil:
-		err = u.buildui8.AddFloat(id, fa)
+		if u.baseOid == types.T_array_float16 {
+			err = u.buildui8.AddQuantizeHalf(id, hf) // vecf16 base -> native half->uint8 quantize
+		} else {
+			err = u.buildui8.AddFloat(id, fa)
+		}
 	}
 	if err != nil {
 		return err
