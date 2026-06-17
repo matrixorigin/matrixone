@@ -7157,7 +7157,6 @@ func resetUserLevelLocksForTest(t *testing.T) {
 	userLevelLocks.Lock()
 	userLevelLocks.counts = make(map[userLevelLockKey]uint64)
 	userLevelLocks.byOwner = make(map[string]map[string]struct{})
-	userLevelLocks.holders = make(map[string]uint64)
 	userLevelLocks.Unlock()
 }
 
@@ -7237,6 +7236,16 @@ func (s *userLevelLockTestService) Close() error {
 
 func (s *userLevelLockTestService) GetWaitingList(ctx context.Context, txnID []byte) (bool, []lockpb.WaitTxn, error) {
 	return false, nil, nil
+}
+
+func (s *userLevelLockTestService) GetLockHolder(ctx context.Context, tableID uint64, row []byte, options lockpb.LockOptions) (lockpb.WaitTxn, bool, error) {
+	s.state.Lock()
+	defer s.state.Unlock()
+	holder := s.state.locks[string(row)]
+	if holder == "" {
+		return lockpb.WaitTxn{}, false, nil
+	}
+	return lockpb.WaitTxn{TxnID: []byte(holder)}, true, nil
 }
 
 func (s *userLevelLockTestService) ForceRefreshLockTableBinds(targets []uint64, matcher func(bind lockpb.LockTable) bool) {

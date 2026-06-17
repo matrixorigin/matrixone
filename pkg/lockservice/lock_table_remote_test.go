@@ -352,7 +352,9 @@ func TestGetLockRemoteWithRetry(t *testing.T) {
 						writeResponse(getLogger(""), cancel, resp, moerr.NewRPCTimeout(ctx), cs)
 						return
 					}
+					resp.GetTxnLock.Found = true
 					resp.GetTxnLock.Value = int32(pb.Granularity_Row)
+					resp.GetTxnLock.Holder = pb.WaitTxn{TxnID: []byte("txn1")}
 					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				},
 			)

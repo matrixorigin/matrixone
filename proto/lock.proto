@@ -206,6 +206,8 @@ message GetTxnLockRequest {
 message GetTxnLockResponse {
   int32            Value       = 1;
   repeated WaitTxn WaitingList = 2 [(gogoproto.nullable) = false];
+  WaitTxn          Holder      = 3 [(gogoproto.nullable) = false];
+  bool             Found       = 4;
 }
 
 // GetWaitingListRequest get a waiting txn list on a specical txn request. CN -> CN

@@ -90,6 +90,53 @@ func TestGetWaitingList(t *testing.T) {
 	)
 }
 
+func TestGetLockHolder(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			table := uint64(10)
+			row := []byte{1}
+			txnID := []byte("txn1")
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				table,
+				[][]byte{row},
+				txnID,
+				option)
+			require.NoError(t, err)
+
+			holder, ok, err := l2.GetLockHolder(ctx, table, row, option)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, txnID, holder.TxnID)
+
+			_, ok, err = l2.GetLockHolder(ctx, table, []byte{2}, option)
+			require.NoError(t, err)
+			require.False(t, ok)
+
+			require.NoError(t, l1.Unlock(
+				ctx,
+				txnID,
+				timestamp.Timestamp{PhysicalTime: 1}))
+		},
+	)
+}
+
 func TestForceRefreshLockTableBinds(t *testing.T) {
 	runBindChangedTests(
 		t,

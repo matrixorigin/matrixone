@@ -49,6 +49,28 @@ func (s *service) GetWaitingList(
 	return true, waitingList, nil
 }
 
+func (s *service) GetLockHolder(
+	ctx context.Context,
+	tableID uint64,
+	row []byte,
+	options pb.LockOptions) (pb.WaitTxn, bool, error) {
+	s.wait()
+	l, err := s.getLockTableWithCreate(options.Group, tableID, [][]byte{row}, options.Sharding)
+	if err != nil {
+		return pb.WaitTxn{}, false, err
+	}
+	var holder pb.WaitTxn
+	var found bool
+	l.getLock(row, pb.WaitTxn{}, func(lock Lock) {
+		lock.IterHolders(func(v pb.WaitTxn) bool {
+			holder = v
+			found = true
+			return false
+		})
+	})
+	return holder, found, nil
+}
+
 func (s *service) ForceRefreshLockTableBinds(
 	targets []uint64,
 	matcher func(bind pb.LockTable) bool) {

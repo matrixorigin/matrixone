@@ -301,6 +301,9 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 		if err := l.maybeHandleBindChanged(resp); err != nil {
 			return Lock{}, false, err
 		}
+		if !resp.GetTxnLock.Found {
+			return Lock{}, false, nil
+		}
 
 		wq := newWaiterQueue()
 		wq.init(l.logger)
@@ -309,7 +312,9 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 			waiters: wq,
 			value:   byte(resp.GetTxnLock.Value),
 		}
-		lock.holders.add(txn)
+		if len(resp.GetTxnLock.Holder.TxnID) > 0 {
+			lock.holders.add(resp.GetTxnLock.Holder)
+		}
 		for _, v := range resp.GetTxnLock.WaitingList {
 			w := acquireWaiter(v, "doGetLock", l.logger)
 			lock.addWaiter(l.logger, w)
