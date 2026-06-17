@@ -3792,11 +3792,15 @@ func (r *CheckpointReader) readPartitionClause(
 	tableID uint64,
 	snapshotTS types.TS,
 ) string {
-	view, err := r.getPartitionMetadataView(ctx, snapshotTS)
-	if err != nil || view == nil {
+	metadataView, err := r.getPartitionMetadataView(ctx, snapshotTS)
+	if err != nil || metadataView == nil {
 		return ""
 	}
-	return buildPartitionClauseFromMetadata(view, tableID)
+	tablesView, err := r.getPartitionTablesView(ctx, snapshotTS)
+	if err != nil {
+		tablesView = nil
+	}
+	return buildPartitionClauseFromMetadata(metadataView, tableID, tablesView)
 }
 
 func (r *CheckpointReader) dumpCatalogTableViewWithHeaders(
@@ -4017,9 +4021,13 @@ func buildCreateIndexStatementsFromMoIndexes(
 	return statements, nil
 }
 
-func buildPartitionClauseFromMetadata(view *LogicalTableView, tableID uint64) string {
+func buildPartitionClauseFromMetadata(view *LogicalTableView, tableID uint64, partitionTablesView ...*LogicalTableView) string {
 	if view == nil {
 		return ""
+	}
+	var tablesView *LogicalTableView
+	if len(partitionTablesView) > 0 {
+		tablesView = partitionTablesView[0]
 	}
 	tableIDCol := view.columnDataIndex("table_id")
 	methodCol := view.columnDataIndex("partition_method")
@@ -4037,10 +4045,10 @@ func buildPartitionClauseFromMetadata(view *LogicalTableView, tableID uint64) st
 		)
 	}
 	tableIDStr := strconv.FormatUint(tableID, 10)
-	if clause := buildPartitionClauseFromMetadataAt(view, tableIDStr, tableIDCol, methodCol, descriptionCol, countCol); clause != "" {
+	if clause := buildPartitionClauseFromMetadataAt(view, tableIDStr, tableIDCol, methodCol, descriptionCol, countCol, tablesView); clause != "" {
 		return clause
 	}
-	if clause := buildPartitionClauseFromMetadataByRowShape(view, tableIDStr); clause != "" {
+	if clause := buildPartitionClauseFromMetadataByRowShape(view, tableIDStr, tablesView); clause != "" {
 		return clause
 	}
 	ckpDebugSchemaf("partition metadata not found table=%d rows=%d headers=%v", tableID, len(view.Rows), view.Headers)
@@ -4048,9 +4056,11 @@ func buildPartitionClauseFromMetadata(view *LogicalTableView, tableID uint64) st
 }
 
 type partitionTableRef struct {
-	id      uint64
-	ordinal int
-	name    string
+	id             uint64
+	ordinal        int
+	name           string
+	partitionName  string
+	expressionText string
 }
 
 func buildPartitionTableIDMap(view *LogicalTableView, primaryTableIDs map[uint64]struct{}) map[uint64][]uint64 {
@@ -4059,12 +4069,14 @@ func buildPartitionTableIDMap(view *LogicalTableView, primaryTableIDs map[uint64
 		return result
 	}
 	partitionIDCol := view.columnDataIndex("partition_id")
-	partitionNameCol := view.columnDataIndex("partition_table_name")
+	partitionTableNameCol := view.columnDataIndex("partition_table_name")
 	primaryIDCol := view.columnDataIndex("primary_table_id")
+	partitionNameCol := view.columnDataIndex("partition_name")
 	ordinalCol := view.columnDataIndex("partition_ordinal_position")
+	expressionCol := view.columnDataIndex("partition_expression_str")
 	byPrimary := make(map[uint64][]partitionTableRef)
 	if partitionIDCol >= 0 && primaryIDCol >= 0 {
-		addPartitionTableRefsAt(view, primaryTableIDs, byPrimary, partitionIDCol, primaryIDCol, partitionNameCol, ordinalCol)
+		addPartitionTableRefsAt(view, primaryTableIDs, byPrimary, partitionIDCol, primaryIDCol, partitionTableNameCol, partitionNameCol, ordinalCol, expressionCol)
 	}
 	if len(byPrimary) == 0 {
 		addPartitionTableRefsByRowShape(view, primaryTableIDs, byPrimary)
@@ -4099,7 +4111,12 @@ func buildPartitionTableIDMap(view *LogicalTableView, primaryTableIDs map[uint64
 	return result
 }
 
-func addPartitionTableRefsAt(view *LogicalTableView, primaryTableIDs map[uint64]struct{}, out map[uint64][]partitionTableRef, partitionIDCol, primaryIDCol, partitionNameCol, ordinalCol int) {
+func addPartitionTableRefsAt(
+	view *LogicalTableView,
+	primaryTableIDs map[uint64]struct{},
+	out map[uint64][]partitionTableRef,
+	partitionIDCol, primaryIDCol, partitionTableNameCol, partitionNameCol, ordinalCol, expressionCol int,
+) {
 	dataOffset := logicalViewDataOffset(view)
 	for _, row := range view.Rows {
 		if len(row) < dataOffset {
@@ -4121,9 +4138,11 @@ func addPartitionTableRefsAt(view *LogicalTableView, primaryTableIDs map[uint64]
 			continue
 		}
 		out[primaryID] = append(out[primaryID], partitionTableRef{
-			id:      partitionID,
-			ordinal: parseIntCellDefault(cellAt(dataRow, ordinalCol), len(out[primaryID])),
-			name:    cellAt(dataRow, partitionNameCol),
+			id:             partitionID,
+			ordinal:        parseIntCellDefault(cellAt(dataRow, ordinalCol), len(out[primaryID])),
+			name:           cellAt(dataRow, partitionTableNameCol),
+			partitionName:  cellAt(dataRow, partitionNameCol),
+			expressionText: cellAt(dataRow, expressionCol),
 		})
 	}
 }
@@ -4144,22 +4163,26 @@ func addPartitionTableRefsByRowShape(view *LogicalTableView, primaryTableIDs map
 				continue
 			}
 			partitionIDCol := primaryIDCol - 2
-			partitionNameCol := primaryIDCol - 1
+			partitionTableNameCol := primaryIDCol - 1
+			partitionNameCol := primaryIDCol + 1
 			ordinalCol := primaryIDCol + 2
+			expressionCol := primaryIDCol + 3
 			partitionID, ok := parseUintCell(cellAt(dataRow, partitionIDCol))
 			if !ok {
 				continue
 			}
 			out[primaryID] = append(out[primaryID], partitionTableRef{
-				id:      partitionID,
-				ordinal: parseIntCellDefault(cellAt(dataRow, ordinalCol), len(out[primaryID])),
-				name:    cellAt(dataRow, partitionNameCol),
+				id:             partitionID,
+				ordinal:        parseIntCellDefault(cellAt(dataRow, ordinalCol), len(out[primaryID])),
+				name:           cellAt(dataRow, partitionTableNameCol),
+				partitionName:  cellAt(dataRow, partitionNameCol),
+				expressionText: cellAt(dataRow, expressionCol),
 			})
 		}
 	}
 }
 
-func buildPartitionClauseFromMetadataAt(view *LogicalTableView, tableIDStr string, tableIDCol, methodCol, descriptionCol, countCol int) string {
+func buildPartitionClauseFromMetadataAt(view *LogicalTableView, tableIDStr string, tableIDCol, methodCol, descriptionCol, countCol int, partitionTablesView *LogicalTableView) string {
 	if tableIDCol < 0 || methodCol < 0 || descriptionCol < 0 {
 		return ""
 	}
@@ -4175,12 +4198,12 @@ func buildPartitionClauseFromMetadataAt(view *LogicalTableView, tableIDStr strin
 		if methodCol >= len(dataRow) || descriptionCol >= len(dataRow) {
 			continue
 		}
-		return renderPartitionClauseFromMetadataCells(tableIDStr, strings.TrimSpace(dataRow[methodCol]), strings.TrimSpace(dataRow[descriptionCol]), cellAt(dataRow, countCol))
+		return renderPartitionClauseFromMetadataCells(tableIDStr, strings.TrimSpace(dataRow[methodCol]), strings.TrimSpace(dataRow[descriptionCol]), cellAt(dataRow, countCol), partitionTablesView)
 	}
 	return ""
 }
 
-func buildPartitionClauseFromMetadataByRowShape(view *LogicalTableView, tableIDStr string) string {
+func buildPartitionClauseFromMetadataByRowShape(view *LogicalTableView, tableIDStr string, partitionTablesView *LogicalTableView) string {
 	dataOffset := logicalViewDataOffset(view)
 	for _, row := range view.Rows {
 		if len(row) < dataOffset {
@@ -4197,7 +4220,7 @@ func buildPartitionClauseFromMetadataByRowShape(view *LogicalTableView, tableIDS
 			if descriptionCol >= len(dataRow) {
 				continue
 			}
-			clause := renderPartitionClauseFromMetadataCells(tableIDStr, strings.TrimSpace(cellAt(dataRow, methodCol)), strings.TrimSpace(cellAt(dataRow, descriptionCol)), cellAt(dataRow, countCol))
+			clause := renderPartitionClauseFromMetadataCells(tableIDStr, strings.TrimSpace(cellAt(dataRow, methodCol)), strings.TrimSpace(cellAt(dataRow, descriptionCol)), cellAt(dataRow, countCol), partitionTablesView)
 			if clause != "" {
 				ckpDebugSchemaf("partition metadata resolved by row shape table=%s table_id_col=%d clause=%q", tableIDStr, tableIDCol, clause)
 				return clause
@@ -4207,7 +4230,7 @@ func buildPartitionClauseFromMetadataByRowShape(view *LogicalTableView, tableIDS
 	return ""
 }
 
-func renderPartitionClauseFromMetadataCells(tableIDStr, method, description, countText string) string {
+func renderPartitionClauseFromMetadataCells(tableIDStr, method, description, countText string, partitionTablesView *LogicalTableView) string {
 	if description == "" || !isPrintableSQLText(description) {
 		return ""
 	}
@@ -4217,8 +4240,61 @@ func renderPartitionClauseFromMetadataCells(tableIDStr, method, description, cou
 			clause += fmt.Sprintf(" partitions %d", count)
 		}
 	}
+	if definitions := renderPartitionDefinitions(tableIDStr, method, partitionTablesView); definitions != "" {
+		clause += definitions
+	}
 	ckpDebugSchemaf("partition metadata resolved table=%s method=%q description=%q clause=%q", tableIDStr, method, description, clause)
 	return clause
+}
+
+func renderPartitionDefinitions(tableIDStr, method string, view *LogicalTableView) string {
+	if view == nil || !needsExplicitPartitionDefinitions(method) {
+		return ""
+	}
+	primaryID, err := strconv.ParseUint(strings.TrimSpace(tableIDStr), 10, 64)
+	if err != nil {
+		return ""
+	}
+	refsByPrimary := make(map[uint64][]partitionTableRef)
+	primarySet := map[uint64]struct{}{primaryID: {}}
+	partitionIDCol := view.columnDataIndex("partition_id")
+	partitionTableNameCol := view.columnDataIndex("partition_table_name")
+	primaryIDCol := view.columnDataIndex("primary_table_id")
+	partitionNameCol := view.columnDataIndex("partition_name")
+	ordinalCol := view.columnDataIndex("partition_ordinal_position")
+	expressionCol := view.columnDataIndex("partition_expression_str")
+	if partitionIDCol >= 0 && primaryIDCol >= 0 {
+		addPartitionTableRefsAt(view, primarySet, refsByPrimary, partitionIDCol, primaryIDCol, partitionTableNameCol, partitionNameCol, ordinalCol, expressionCol)
+	}
+	if len(refsByPrimary) == 0 {
+		addPartitionTableRefsByRowShape(view, primarySet, refsByPrimary)
+	}
+	refs := refsByPrimary[primaryID]
+	if len(refs) == 0 {
+		return ""
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].ordinal != refs[j].ordinal {
+			return refs[i].ordinal < refs[j].ordinal
+		}
+		if refs[i].partitionName != refs[j].partitionName {
+			return refs[i].partitionName < refs[j].partitionName
+		}
+		return refs[i].id < refs[j].id
+	})
+	parts := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		name := strings.TrimSpace(ref.partitionName)
+		expr := strings.TrimSpace(ref.expressionText)
+		if name == "" || expr == "" || !isPrintableSQLText(name) || !isPrintableSQLText(expr) {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("partition %s %s", quoteDDLIdent(name), expr))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (\n  " + strings.Join(parts, ",\n  ") + "\n)"
 }
 
 func cellAt(row []string, idx int) string {
@@ -4244,6 +4320,15 @@ func parseIntCellDefault(cell string, fallback int) int {
 func isAutoPartitionCountMethod(method string) bool {
 	switch strings.ToLower(strings.TrimSpace(method)) {
 	case "key", "linearkey", "hash", "linearhash":
+		return true
+	default:
+		return false
+	}
+}
+
+func needsExplicitPartitionDefinitions(method string) bool {
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "range", "list":
 		return true
 	default:
 		return false

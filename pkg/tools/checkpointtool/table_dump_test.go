@@ -748,6 +748,43 @@ func TestBuildPartitionClauseFromMetadata_FallsBackToRowShape(t *testing.T) {
 	assert.Equal(t, "partition by hash (`id`) partitions 4", buildPartitionClauseFromMetadata(view, 272577))
 }
 
+func TestBuildPartitionClauseFromMetadata_IncludesRangePartitionDefinitions(t *testing.T) {
+	metadataView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, moPartitionMetadataHeaders...),
+		Rows: [][]string{
+			{"obj1", "0", "0", "272882", "t_range_partition", "ckp_partition_options", "Range", "range (`id`)", "4"},
+		},
+	}
+	tablesView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, moPartitionTablesHeaders...),
+		Rows: [][]string{
+			{"obj1", "0", "0", "272883", "%!%p0%!%t_range_partition", "272882", "p0", "0", "values less than (100)", ""},
+			{"obj1", "0", "1", "272884", "%!%p1%!%t_range_partition", "272882", "p1", "1", "values less than (200)", ""},
+			{"obj1", "0", "2", "272885", "%!%pmax%!%t_range_partition", "272882", "pmax", "2", "values less than MAXVALUE", ""},
+		},
+	}
+
+	assert.Equal(t, "partition by range (`id`) (\n  partition `p0` values less than (100),\n  partition `p1` values less than (200),\n  partition `pmax` values less than MAXVALUE\n)", buildPartitionClauseFromMetadata(metadataView, 272882, tablesView))
+}
+
+func TestBuildPartitionClauseFromMetadata_IncludesListPartitionDefinitions(t *testing.T) {
+	metadataView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, moPartitionMetadataHeaders...),
+		Rows: [][]string{
+			{"obj1", "0", "0", "272895", "t_list_columns_partition", "ckp_partition_options", "List", "list columns (`category`)", "3"},
+		},
+	}
+	tablesView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, moPartitionTablesHeaders...),
+		Rows: [][]string{
+			{"obj1", "0", "1", "272897", "%!%p_b%!%t_list_columns_partition", "272895", "p_b", "1", "values in ('b')", ""},
+			{"obj1", "0", "0", "272896", "%!%p_a%!%t_list_columns_partition", "272895", "p_a", "0", "values in ('a')", ""},
+		},
+	}
+
+	assert.Equal(t, "partition by list columns (`category`) (\n  partition `p_a` values in ('a'),\n  partition `p_b` values in ('b')\n)", buildPartitionClauseFromMetadata(metadataView, 272895, tablesView))
+}
+
 func TestBuildPartitionTableIDMap(t *testing.T) {
 	view := &LogicalTableView{
 		Headers: append([]string{"object", "block", "row"}, moPartitionTablesHeaders...),
