@@ -3325,6 +3325,9 @@ func (r *CheckpointReader) dumpCatalogTableViewWithHeaders(
 ) (*LogicalTableView, error) {
 	view, err := r.getTableLogicalView(ctx, tableID, snapshotTS)
 	if err != nil {
+		if isMissingCheckpointTableError(err, tableID) {
+			return &LogicalTableView{}, nil
+		}
 		return nil, err
 	}
 	if view == nil {
@@ -3332,6 +3335,13 @@ func (r *CheckpointReader) dumpCatalogTableViewWithHeaders(
 	}
 	applyCatalogHeadersBySeqNums(view, headers)
 	return view, nil
+}
+
+func isMissingCheckpointTableError(err error, tableID uint64) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), fmt.Sprintf("table %d not found in checkpoint", tableID))
 }
 
 func applyCatalogHeadersBySeqNums(view *LogicalTableView, headers []string) {

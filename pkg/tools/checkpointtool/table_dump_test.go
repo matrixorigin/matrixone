@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -809,6 +810,13 @@ func TestListCatalogTablesDoesNotFilterRelKinds(t *testing.T) {
 		names = append(names, table.TableName)
 	}
 	assert.ElementsMatch(t, []string{"orders", "ext_orders", "orders_v", "cluster_orders"}, names)
+}
+
+func TestIsMissingCheckpointTableError(t *testing.T) {
+	err := moerr.NewInternalErrorf(context.Background(), "table %d not found in checkpoint at ts %s", uint64(272419), "1-0")
+	assert.True(t, isMissingCheckpointTableError(err, 272419))
+	assert.False(t, isMissingCheckpointTableError(err, 272420))
+	assert.False(t, isMissingCheckpointTableError(nil, 272419))
 }
 
 func TestInferCatalogLayout(t *testing.T) {
