@@ -18,10 +18,7 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 type Hooks struct{}
@@ -34,18 +31,4 @@ func (Hooks) CanApply(pb planplugin.PlanBuilder, vctx *planplugin.VectorSortCont
 
 func (Hooks) ApplyForSort(pb planplugin.PlanBuilder, vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, opts planplugin.ApplyForSortOpts) (int32, bool, error) {
 	return pb.ApplyIndicesForSortUsingIvfflat(vctx, mti, nodeID, opts)
-}
-
-// BuildAlterReIndex validates AlgoParamList (the centroid count) and
-// copies AlgoParamList + ForceSync into the plan proto. Lifted from
-// the IVFFLAT branch of pkg/sql/plan/build_ddl.go's
-// AlterOptionAlterReIndex switch.
-func (Hooks) BuildAlterReIndex(ctx planplugin.CompilerContext, opt *tree.AlterOptionAlterReIndex, out *plan.AlterTableAlterReIndex) error {
-	if opt.AlgoParamList < 0 {
-		return moerr.NewInternalErrorf(ctx.GetContext(),
-			"lists should be >= 0. lists = 0 will keep the original configuration.")
-	}
-	out.IndexAlgoParamList = opt.AlgoParamList
-	out.ForceSync = opt.ForceSync
-	return nil
 }

@@ -19,8 +19,6 @@ package plan
 
 import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 type Hooks struct{}
@@ -33,13 +31,4 @@ func (Hooks) CanApply(pb planplugin.PlanBuilder, vctx *planplugin.VectorSortCont
 
 func (Hooks) ApplyForSort(pb planplugin.PlanBuilder, vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, opts planplugin.ApplyForSortOpts) (int32, bool, error) {
 	return pb.ApplyIndicesForSortUsingCagra(vctx, mti, nodeID, opts)
-}
-
-// BuildAlterReIndex copies the ForceSync flag from the tree option to
-// the plan proto. CAGRA has no list/centroid param to validate; the
-// rebuild behavior is fully controlled by ForceSync (sync build inside
-// txn vs. async build deferred to CDC InitSQL — see compile.go).
-func (Hooks) BuildAlterReIndex(_ planplugin.CompilerContext, opt *tree.AlterOptionAlterReIndex, out *plan.AlterTableAlterReIndex) error {
-	out.ForceSync = opt.ForceSync
-	return nil
 }

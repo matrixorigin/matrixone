@@ -3795,23 +3795,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			alterTableReIndex := new(plan.AlterTableAlterReIndex)
 			constraintName := string(opt.Name)
 			alterTableReIndex.IndexName = constraintName
-
-			// Per-algo handling via plan plugin. Each algorithm
-			// validates and populates the fields it cares about
-			// (IndexAlgoParamList, ForceSync). Replaces the hardcoded
-			// switch arms for IVFFLAT/HNSW and unblocks REINDEX for
-			// CAGRA / IVF-PQ.
-			p, ok := indexplugin.Get(opt.KeyType.ToString())
-			if !ok {
-				return nil, moerr.NewInternalErrorf(
-					ctx.GetContext(),
-					unsupportedErrFmt,
-					opt.KeyType.ToString(),
-				)
-			}
-			if err := p.Plan().BuildAlterReIndex(ctx, opt, alterTableReIndex); err != nil {
-				return nil, err
-			}
+			// ForceSync (sync vs async rebuild) is the only build-time flag the
+			// plan node carries. The shared index_option_list grammar already
+			// restricts the algo (REINDEX rules cover only ivfflat/hnsw/ivfpq/
+			// cagra) and validates option values (> 0); the per-index option
+			// merge + reject happens at compile in Compile.ValidateReindexParams,
+			// reading the options straight off the parse tree.
+			alterTableReIndex.ForceSync = opt.ForceSync
 
 			name_not_found := true
 			// check index

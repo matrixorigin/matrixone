@@ -389,16 +389,38 @@ func TestCagraHandleReindex_DelegatesToCreate(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestCagraValidateReindexParams_IgnoresLists: CAGRA has no `lists`
-// param — a non-zero IndexAlgoParamList from the parser must be
-// dropped, not merged into the algo params.
-func TestCagraValidateReindexParams_IgnoresLists(t *testing.T) {
+// TestCagraValidateReindexParams_RejectsLists: CAGRA has no `lists` param,
+// so a `lists` option on ALTER … REINDEX … CAGRA must be rejected (not
+// silently dropped).
+func TestCagraValidateReindexParams_RejectsLists(t *testing.T) {
 	old := map[string]string{
 		catalog.IndexAlgoParamOpType: "vector_l2_ops",
 	}
-	got, err := Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{IndexAlgoParamList: 16})
+	_, err := Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.IndexAlgoParamLists: "16"},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), catalog.IndexAlgoParamLists)
+}
+
+// TestCagraValidateReindexParams_MergesGraphDegree: CAGRA honors its build
+// params (graph_degree, itopk_size) on a rebuild, merging them into the algo
+// params without mutating the original.
+func TestCagraValidateReindexParams_MergesGraphDegree(t *testing.T) {
+	old := map[string]string{
+		catalog.IndexAlgoParamOpType: "vector_l2_ops",
+	}
+	got, err := Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{
+			catalog.GraphDegree: "64",
+			catalog.ITopkSize:   "256",
+		},
+	})
 	require.NoError(t, err)
-	require.Equal(t, old, got, "CAGRA must ignore IndexAlgoParamList")
-	_, hasLists := got[catalog.IndexAlgoParamLists]
-	require.False(t, hasLists, "CAGRA params must not gain a lists key")
+	require.Equal(t, "64", got[catalog.GraphDegree])
+	require.Equal(t, "256", got[catalog.ITopkSize])
+	require.Equal(t, "vector_l2_ops", got[catalog.IndexAlgoParamOpType])
+	// Original untouched.
+	_, had := old[catalog.GraphDegree]
+	require.False(t, had)
 }

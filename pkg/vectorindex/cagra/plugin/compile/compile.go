@@ -233,10 +233,13 @@ func registerIdxcronUpdate(
 	)
 }
 
-// ValidateReindexParams is a no-op for CAGRA (matches ddl.go:960
-// fall-through).
-func (Hooks) ValidateReindexParams(old map[string]string, _ compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	return old, nil
+func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	return compileplugin.MergeReindexParams(old, alter, "cagra",
+		catalog.IndexAlgoParamMaxIndexCapacity,
+		catalog.IntermediateGraphDegree,
+		catalog.GraphDegree,
+		catalog.ITopkSize,
+	)
 }
 
 // HandleDropIndex is a no-op: generic hidden-table cleanup is sufficient.

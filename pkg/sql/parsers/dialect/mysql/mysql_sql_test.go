@@ -319,11 +319,12 @@ var (
 		input:  "alter table t1 alter reindex idx1 CAGRA force_sync",
 		output: "alter table t1 alter reindex idx1 cagra force_sync",
 	}, {
-		// intermediate_graph_degree/graph_degree parse but the AST only
-		// retains force_sync (AlterOptionAlterReIndex has no fields for
-		// graph degrees — the cron emits CAGRA FORCE_SYNC only).
+		// The REINDEX rule shares index_option_list with CREATE INDEX, so the
+		// AST node carries the full option set and Format now reproduces it
+		// (lowercase) for a lossless round-trip — the graph-degree options are
+		// emitted, not dropped. force_sync is emitted last.
 		input:  "alter table t1 alter reindex idx1 CAGRA intermediate_graph_degree = 8 graph_degree = 4 force_sync",
-		output: "alter table t1 alter reindex idx1 cagra force_sync",
+		output: "alter table t1 alter reindex idx1 cagra intermediate_graph_degree = 8 graph_degree = 4 force_sync",
 	}, {
 		input:  "alter table t1 alter reindex idx1 HNSW",
 		output: "alter table t1 alter reindex idx1 hnsw",
@@ -333,6 +334,19 @@ var (
 		// can carry FORCE_SYNC, matching cagra/ivfpq/ivfflat.
 		input:  "alter table t1 alter reindex idx1 HNSW force_sync",
 		output: "alter table t1 alter reindex idx1 hnsw force_sync",
+	}, {
+		// Lossless round-trip of the per-index build options merged on reindex.
+		input:  "alter table t1 alter reindex idx1 IVFFLAT lists = 4 kmeans_train_percent = 80 kmeans_max_iteration = 50",
+		output: "alter table t1 alter reindex idx1 ivfflat lists = 4 kmeans_train_percent = 80 kmeans_max_iteration = 50",
+	}, {
+		input:  "alter table t1 alter reindex idx1 HNSW m = 32 ef_construction = 128 ef_search = 100 max_index_capacity = 100000",
+		output: "alter table t1 alter reindex idx1 hnsw m = 32 ef_construction = 128 ef_search = 100 max_index_capacity = 100000",
+	}, {
+		// String options must round-trip quoted (the grammar takes a STRING);
+		// op_type itself is rejected at compile for reindex, but Format stays
+		// re-parseable. (Parses, formats, re-parses to the same tree.)
+		input:  "alter table t1 alter reindex idx1 IVFFLAT op_type 'vector_l2_ops'",
+		output: "alter table t1 alter reindex idx1 ivfflat op_type 'vector_l2_ops'",
 	}, {
 		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = true day = 33 hour = 12",
 		output: "alter table t1 alter index idx1 ivfflat auto_update = true day = 33 hour = 12",

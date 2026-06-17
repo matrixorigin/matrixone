@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Unit coverage for plan.go (Hooks redirects + BuildAlterReIndex) and
+// Unit coverage for plan.go (Hooks redirects) and
 // schema.go (BuildSecondaryIndexDefs / BuildFullTextIndexDefs). These
 // CPU-side plan-construction paths were previously exercised only by the
 // GPU-gated BVT suite, so they read 0% in non-GPU CI; the tests below run
@@ -86,16 +86,6 @@ func indexOn(colName string) *tree.Index {
 }
 
 // --- plan.go ---------------------------------------------------------------
-
-func TestBuildAlterReIndex_CopiesForceSync(t *testing.T) {
-	for _, force := range []bool{true, false} {
-		out := &plan.AlterTableAlterReIndex{}
-		err := Hooks{}.BuildAlterReIndex(newStubCompilerContext(),
-			&tree.AlterOptionAlterReIndex{ForceSync: force}, out)
-		require.NoError(t, err)
-		require.Equal(t, force, out.ForceSync)
-	}
-}
 
 func TestCanApply_Redirects(t *testing.T) {
 	// CanApplyCagra on the shared stub panics; recover confirms the

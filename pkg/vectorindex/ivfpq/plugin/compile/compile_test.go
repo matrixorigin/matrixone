@@ -233,12 +233,25 @@ func TestIvfpqValidateReindexParams_ListsMerge(t *testing.T) {
 		catalog.IndexAlgoParamLists:  "4",
 		catalog.IndexAlgoParamOpType: "vector_l2_ops",
 	}
-	got, err := Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{IndexAlgoParamList: 16})
+	got, err := Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.IndexAlgoParamLists: "16"},
+	})
 	require.NoError(t, err)
 	require.Equal(t, "16", got[catalog.IndexAlgoParamLists])
 	require.Equal(t, "vector_l2_ops", got[catalog.IndexAlgoParamOpType])
 	// Original map untouched.
 	require.Equal(t, "4", old[catalog.IndexAlgoParamLists])
+}
+
+// TestIvfpqValidateReindexParams_Unsupported: IVF-PQ rejects an option it
+// does not honor on a rebuild (e.g. an HNSW-only ef_construction).
+func TestIvfpqValidateReindexParams_Unsupported(t *testing.T) {
+	old := map[string]string{catalog.IndexAlgoParamLists: "4"}
+	_, err := Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.HnswEfConstruction: "200"},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), catalog.HnswEfConstruction)
 }
 
 func TestIvfpqHandleDropIndex(t *testing.T) {

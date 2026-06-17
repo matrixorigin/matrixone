@@ -20,6 +20,7 @@
 package compile
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -192,6 +193,42 @@ type Hooks interface {
 // Defined here (rather than passing the planner's AlterTable_Action_AlterIndex
 // type) so this package stays free of plan-package internals.
 type ReindexParamUpdate struct {
-	// IndexAlgoParamList — IVF-FLAT's `lists` setting. Zero means unset.
-	IndexAlgoParamList int64
+	// Params holds the build options the user specified on
+	// `ALTER TABLE ... ALTER REINDEX idx <algo> <options>`, keyed by the
+	// catalog IndexAlgoParam* name (e.g. catalog.IndexAlgoParamLists,
+	// catalog.HnswM, catalog.Quantization). The REINDEX rule shares
+	// index_option_list with CREATE INDEX, so every option parses; only the
+	// ones a given algorithm honors on a rebuild are merged into
+	// IndexAlgoParams by ValidateReindexParams, the rest are rejected.
+	// Sourced from the parse tree (c.stmt) at the compile site, so no plan
+	// proto field is needed to carry them. nil/empty means none specified.
+	Params map[string]string
+}
+
+// MergeReindexParams is the shared body for a plugin's
+// Compile.ValidateReindexParams. It copies old and overlays each specified
+// reindex param onto it, returning an error that names the first param the
+// algorithm does not support. supported lists the catalog IndexAlgoParam*
+// keys this algorithm honors on a rebuild. quantization is honored by every
+// vector index, so plugins pass catalog.Quantization in supported.
+func MergeReindexParams(old map[string]string, update ReindexParamUpdate, algo string, supported ...string) (map[string]string, error) {
+	if len(update.Params) == 0 {
+		return old, nil
+	}
+	allowed := make(map[string]struct{}, len(supported))
+	for _, s := range supported {
+		allowed[s] = struct{}{}
+	}
+	out := make(map[string]string, len(old)+len(update.Params))
+	for k, v := range old {
+		out[k] = v
+	}
+	for k, v := range update.Params {
+		if _, ok := allowed[k]; !ok {
+			return nil, moerr.NewNotSupportedNoCtxf(
+				"ALTER REINDEX option %q on a %s index", k, algo)
+		}
+		out[k] = v
+	}
+	return out, nil
 }

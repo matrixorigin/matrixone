@@ -87,15 +87,11 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 // inline — that persistence stays at the SQL-layer call site, so this
 // hook only performs the map merge.
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	if alter.IndexAlgoParamList > 0 {
-		out := make(map[string]string, len(old)+1)
-		for k, v := range old {
-			out[k] = v
-		}
-		out[catalog.IndexAlgoParamLists] = strconv.FormatInt(alter.IndexAlgoParamList, 10)
-		return out, nil
-	}
-	return old, nil
+	return compileplugin.MergeReindexParams(old, alter, "ivfflat",
+		catalog.IndexAlgoParamLists,
+		catalog.IndexAlgoParamKmeansTrainPercent,
+		catalog.IndexAlgoParamKmeansMaxIteration,
+	)
 }
 
 // HandleDropIndex: IVF-FLAT generic hidden-table deletion is performed
