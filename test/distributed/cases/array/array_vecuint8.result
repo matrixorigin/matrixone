@@ -45,11 +45,11 @@ cast(cast([1,2,3] as vecuint8(3)) as vecint8(3))
 select cast(cast("[1,2,3]" as vecuint8(3)) as vecbf16(3));
 cast(cast([1,2,3] as vecuint8(3)) as vecbf16(3))
 [1, 2, 3]
-select a, l2_distance(v, "[0,1,2,3]") from u8t order by a;
-a    l2_distance(v, [0,1,2,3])
+select a, round(l2_distance(v, "[0,1,2,3]"), 4) from u8t order by a;
+a    round(l2_distance(v, [0,1,2,3]), 4)
 1    0.0
-2    380.34588623046875
-3    51.12729263305664
+2    380.3459
+3    51.1273
 select a, l2_distance_sq(v, "[0,1,2,3]") from u8t order by a;
 a    l2_distance_sq(v, [0,1,2,3])
 1    0.0
@@ -60,25 +60,25 @@ a    inner_product(v, [1,1,1,1])
 1    -6.0
 2    -637.0
 3    -100.0
-select a, cosine_distance(v, "[0,1,2,3]") from u8t order by a;
-a    cosine_distance(v, [0,1,2,3])
+select a, round(cosine_distance(v, "[0,1,2,3]"), 4) from u8t order by a;
+a    round(cosine_distance(v, [0,1,2,3]), 4)
 1    0.0
-2    0.5536332726478577
-3    0.0240999273955822
-select a, cosine_similarity(v, "[0,1,2,3]") from u8t order by a;
-a    cosine_similarity(v, [0,1,2,3])
+2    0.5536
+3    0.0241
+select a, round(cosine_similarity(v, "[0,1,2,3]"), 4) from u8t order by a;
+a    round(cosine_similarity(v, [0,1,2,3]), 4)
 1    1.0
-2    0.44636672735214233
-3    0.9759000539779663
+2    0.4464
+3    0.9759
 select normalize_l2(v) from u8t order by a;
 normalize_l2(v)
 [0, 0, 1, 1]
 [1, 1, 0, 0]
 [0, 0, 1, 1]
-select a, l2_distance(v, cast("[10,20,30,40]" as vecuint8(4))) from u8t order by a;
-a    l2_distance(v, cast([10,20,30,40] as vecuint8(4)))
-1    51.12729263305664
-2    351.3189392089844
+select a, round(l2_distance(v, cast("[10,20,30,40]" as vecuint8(4))), 4) from u8t order by a;
+a    round(l2_distance(v, cast([10,20,30,40] as vecuint8(4))), 4)
+1    51.1273
+2    351.3189
 3    0.0
 select a from u8t order by l2_distance(v, '[0,1,2,3]') limit 3;
 a

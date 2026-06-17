@@ -4,13 +4,13 @@ use load_narrow_vec;
 create table nvec(id int, a vecbf16(3), b vecf16(3), c vecint8(3), d vecuint8(3));
 load data infile '$resources/load_data/narrow_vec_array.csv' into table nvec fields terminated by ',' ignore 1 lines;
 select * from nvec order by id;
-id	a	b	c	d
-1	[1, 2, 3]	[0.5, 0.25, -0.5]	[-128, 0, 127]	[0, 128, 255]
-2	[0.5, -0.25, 4]	[1, 2, 3]	[10, -10, 5]	[1, 2, 3]
-select id, l2_distance(c, '[0,0,0]') as dist from nvec order by id;
-id	dist
-1	180.31361389160156
-2	15
+id    a    b    c    d
+1    [1, 2, 3]    [0.5, 0.25, -0.5]    [-128, 0, 127]    [0, 128, 255]
+2    [0.5, -0.25, 4]    [1, 2, 3]    [10, -10, 5]    [1, 2, 3]
+select id, round(l2_distance(c, '[0,0,0]'), 4) as dist from nvec order by id;
+id    dist
+1    180.3136
+2    15.0
 create table nvec_oor(id int, c vecint8(3));
 load data infile '$resources/load_data/narrow_vec_int8_oor.csv' into table nvec_oor fields terminated by ',' ignore 1 lines;
 internal error: error while casting 200 to VECINT8
