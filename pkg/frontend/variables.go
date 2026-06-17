@@ -1853,7 +1853,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemSystemEnumType("event_scheduler", "ON", "OFF", "DISABLED"),
-		Default:           "ON",
+		Default:           "DISABLED",
 	},
 	"explain_format": {
 		Name:              "explain_format",
