@@ -17,7 +17,6 @@ package fileservice
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -128,6 +127,94 @@ func TestQCloudSDKWriteRetriesSeekablePut(t *testing.T) {
 	}
 }
 
+func TestQCloudCOSHTTPStatusRetryable(t *testing.T) {
+	for _, status := range []int{
+		http.StatusInternalServerError,
+		http.StatusNotImplemented,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout,
+		http.StatusTooManyRequests,
+	} {
+		err := newTestCOSError(status)
+		if !IsRetryableError(err) {
+			t.Fatalf("expected COS status %d to be retryable", status)
+		}
+	}
+
+	for _, status := range []int{
+		http.StatusBadRequest,
+		http.StatusNotFound,
+		http.StatusConflict,
+	} {
+		err := newTestCOSError(status)
+		if IsRetryableError(err) {
+			t.Fatalf("expected COS status %d to be non-retryable", status)
+		}
+	}
+}
+
+func TestQCloudCOSRetryErrorRetryable(t *testing.T) {
+	err := &cos.RetryError{
+		Errs: []error{
+			newTestCOSError(http.StatusInternalServerError),
+		},
+	}
+	if !IsRetryableError(err) {
+		t.Fatalf("expected COS RetryError to be retryable")
+	}
+}
+
+func TestQCloudCOSRetryErrorNonRetryable(t *testing.T) {
+	err := &cos.RetryError{
+		Errs: []error{
+			newTestCOSError(http.StatusBadRequest),
+		},
+	}
+	if IsRetryableError(err) {
+		t.Fatalf("expected COS RetryError with non-retryable inner error to be non-retryable")
+	}
+}
+
+func TestWrappedNetTimeoutRetryable(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", timeoutError{})
+	if !IsRetryableError(err) {
+		t.Fatalf("expected wrapped net timeout to be retryable")
+	}
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string {
+	return "timeout"
+}
+
+func (timeoutError) Timeout() bool {
+	return true
+}
+
+func (timeoutError) Temporary() bool {
+	return true
+}
+
+func newTestCOSError(status int) error {
+	req := &http.Request{
+		Method: http.MethodPut,
+		URL: &url.URL{
+			Scheme: "http",
+			Host:   "cos.local",
+			Path:   "/object",
+		},
+	}
+	return &cos.ErrorResponse{
+		Response: &http.Response{
+			StatusCode: status,
+			Header:     make(http.Header),
+			Request:    req,
+		},
+	}
+}
+
 type qcloudRetryPutTransport struct {
 	calls  int
 	bodies [][]byte
@@ -141,7 +228,13 @@ func (t *qcloudRetryPutTransport) RoundTrip(req *http.Request) (*http.Response, 
 	}
 	t.bodies = append(t.bodies, body)
 	if t.calls == 1 {
-		return nil, errors.New("write: connection reset by peer")
+		return &http.Response{
+			StatusCode: http.StatusBadGateway,
+			Status:     "502 Bad Gateway",
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Request:    req,
+		}, nil
 	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
