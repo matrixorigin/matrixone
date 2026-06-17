@@ -1,9 +1,9 @@
 show variables like 'event_scheduler';
-➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
-event_scheduler  ¦  DISABLED
+Variable_name    Value
+event_scheduler    DISABLED
 select @@event_scheduler;
-➤ @@event_scheduler[12,0,0]  𝄀
+@@event_scheduler
 DISABLED
 select @@global.event_scheduler;
-➤ @@event_scheduler[12,0,0]  𝄀
+@@event_scheduler
 DISABLED
