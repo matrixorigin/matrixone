@@ -149,6 +149,64 @@ func TestTruncationSkipsStaleReplicaMetadata(t *testing.T) {
 	}
 }
 
+func TestTruncationCleansSkippedZombieReplicaMetadata(t *testing.T) {
+	const (
+		shardID      = uint64(1)
+		staleReplica = uint64(99)
+	)
+	logShard := metadata.LogShard{
+		LogShardRecord: metadata.LogShardRecord{ShardID: shardID},
+		ReplicaID:      staleReplica,
+	}
+
+	tests := []struct {
+		name    string
+		skipped bool
+	}{
+		{
+			name:    "skipped zombie without active replacement",
+			skipped: true,
+		},
+		{
+			name: "ordinary metadata without active replica",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := func(t *testing.T, s *Service) {
+				nid := nodeID{shardID: shardID, replicaID: staleReplica}
+				testPrepareSnapshot(t, s.store.snapshotMgr, nid, snapshotIndex(100))
+				assert.NoError(t, s.store.snapshotMgr.Init(shardID, staleReplica))
+				assert.Equal(t, 1, s.store.snapshotMgr.Count(shardID, staleReplica))
+
+				s.store.mu.Lock()
+				s.store.mu.metadata.Shards = []metadata.LogShard{logShard}
+				if tc.skipped {
+					s.store.mu.skippedZombies = map[zombieKey]struct{}{
+						{shardID: shardID, replicaID: staleReplica}: {},
+					}
+				}
+				s.store.mu.Unlock()
+
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+				defer cancel()
+				assert.NoError(t, s.store.processTruncateLog(ctx))
+
+				if tc.skipped {
+					assert.Equal(t, int64(-1), s.store.getReplicaID(shardID))
+					assert.Equal(t, 0, s.store.snapshotMgr.Count(shardID, staleReplica))
+					assert.False(t, s.store.isSkippedZombie(shardID, staleReplica))
+					return
+				}
+				assert.Equal(t, int64(staleReplica), s.store.getReplicaID(shardID))
+				assert.Equal(t, 1, s.store.snapshotMgr.Count(shardID, staleReplica))
+			}
+			runServiceTest(t, false, false, fn)
+		})
+	}
+}
+
 func TestTruncationRealignsSnapshotIndexAfterStaleReplicaCleanup(t *testing.T) {
 	const (
 		shardID       = uint64(1)
