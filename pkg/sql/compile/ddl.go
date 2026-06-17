@@ -36,6 +36,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -465,6 +466,61 @@ func (s *Scope) AlterView(c *Compile) error {
 	}
 
 	return dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...))
+}
+
+// reindexSpecifiedParams extracts the build options the user wrote on
+// `ALTER TABLE ... ALTER REINDEX <indexName> <algo> <options>` from the parse
+// tree, keyed by the catalog IndexAlgoParam* name. The REINDEX rule shares
+// index_option_list with CREATE INDEX, so every option parses and is carried
+// on the tree node (which mirrors tree.IndexOption); the plan node only
+// carries lists/force_sync, so the full set is read here off c.stmt rather
+// than the plan. Each plugin's Compile.ValidateReindexParams then merges the
+// options it honors on a rebuild and rejects the rest. Returns nil when the
+// statement is not an ALTER TABLE carrying a matching REINDEX option (e.g. an
+// unexpected statement shape); an empty/zero option set yields an empty map.
+func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]string {
+	at, ok := stmt.(*tree.AlterTable)
+	if !ok {
+		return nil
+	}
+	var opt *tree.AlterOptionAlterReIndex
+	for _, o := range at.Options {
+		if ro, ok := o.(*tree.AlterOptionAlterReIndex); ok && string(ro.Name) == indexName {
+			opt = ro
+			break
+		}
+	}
+	if opt == nil {
+		return nil
+	}
+	m := make(map[string]string)
+	addInt := func(key string, v int64) {
+		if v != 0 {
+			m[key] = strconv.FormatInt(v, 10)
+		}
+	}
+	addStr := func(key, v string) {
+		if v != "" {
+			m[key] = v
+		}
+	}
+	addInt(catalog.IndexAlgoParamLists, opt.AlgoParamList)
+	addStr(catalog.IndexAlgoParamOpType, opt.AlgoParamVectorOpType)
+	addInt(catalog.HnswM, opt.AlgoParamM)
+	addInt(catalog.HnswEfConstruction, opt.HnswEfConstruction)
+	addInt(catalog.HnswEfSearch, opt.HnswEfSearch)
+	addInt(catalog.BitsPerCode, opt.BitsPerCode)
+	addInt(catalog.IntermediateGraphDegree, opt.IntermediateGraphDegree)
+	addInt(catalog.GraphDegree, opt.GraphDegree)
+	addInt(catalog.ITopkSize, opt.ITopkSize)
+	addStr(catalog.DistributionMode, opt.DistributionMode)
+	addInt(catalog.IndexAlgoParamKmeansTrainPercent, opt.KmeansTrainPercent)
+	addInt(catalog.IndexAlgoParamKmeansMaxIteration, opt.KmeansMaxIteration)
+	addInt(catalog.IndexAlgoParamMaxIndexCapacity, opt.MaxIndexCapacity)
+	// NOTE: quantization is intentionally NOT handled by reindex. The vecf16
+	// branch owns the quantization work (per-backend validity, BF16, ...), so
+	// reindex neither merges nor rejects it here — revisit once that lands.
+	return m
 }
 
 func (s *Scope) AlterTableInplace(c *Compile) error {
@@ -961,9 +1017,16 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 					}
 					// Each algorithm's plugin owns parameter-update
-					// semantics via Compile.ValidateReindexParams. For
-					// IVF-FLAT that merges `lists`; for HNSW/CAGRA/
-					// IVF-PQ today it's a passthrough.
+					// semantics via Compile.ValidateReindexParams: it
+					// merges the build options it honors on a rebuild
+					// (e.g. IVF-FLAT's `lists`, HNSW's `m`/`ef_*`, CAGRA's
+					// graph degrees) into the algo params and rejects any
+					// other option it does not support. (quantization is left
+					// entirely to the vecf16 quantization work — reindexSpecified
+					// Params does not extract it, so reindex ignores it.) The
+					// REINDEX rule shares index_option_list with CREATE INDEX, so
+					// the specified options are read straight off the parse tree
+					// (c.stmt) here — no plan proto field is needed to carry them.
 					oldParams, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
 					if err != nil {
 						return err
@@ -971,7 +1034,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					p, _ := indexplugin.Get(indexAlgo)
 					newParamsMap, err := p.Compile().ValidateReindexParams(oldParams,
 						compileplugin.ReindexParamUpdate{
-							IndexAlgoParamList: tableAlterIndex.IndexAlgoParamList,
+							Params: reindexSpecifiedParams(c.stmt, constraintName),
 						})
 					if err != nil {
 						return err
@@ -989,7 +1052,15 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					if newAlgoParams != alterIndex.IndexAlgoParams {
 						alterIndex.IndexAlgoParams = newAlgoParams
 						oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
-						updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
+						// Escape the SQL string literals: algo_params can carry
+						// user-supplied option values and JSON encoding does not
+						// escape single quotes, so an unescaped value could break
+						// out of algo_params = '...' (SQL injection). Defense in
+						// depth for any future string option (none reach here
+						// today). sqlquote.EscapeString doubles quotes.
+						updateSql := fmt.Sprintf(updateMoIndexesAlgoParams,
+							sqlquote.EscapeString(newAlgoParams), oTableDef.TblId,
+							sqlquote.EscapeString(alterIndex.IndexName))
 						if err = c.runSqlWithOptions(
 							updateSql, executor.StatementOption{}.WithDisableLog(),
 						); err != nil {

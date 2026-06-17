@@ -185,9 +185,13 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
 }
 
-// ValidateReindexParams: HNSW has no online parameter updates.
-func (Hooks) ValidateReindexParams(old map[string]string, _ compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	return old, nil
+func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	return compileplugin.MergeReindexParams(old, alter, "hnsw",
+		catalog.HnswM,
+		catalog.HnswEfConstruction,
+		catalog.HnswEfSearch,
+		catalog.IndexAlgoParamMaxIndexCapacity,
+	)
 }
 
 // HandleDropIndex is a no-op: the generic CDC unregister path in

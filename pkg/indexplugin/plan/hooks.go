@@ -143,18 +143,6 @@ type Hooks interface {
 		colMap map[string]*plan.ColDef, existedIndexes []*plan.IndexDef,
 		pkeyName string) ([]*plan.IndexDef, []*plan.TableDef, error)
 
-	// BuildAlterReIndex populates the plan-level AlterTableAlterReIndex
-	// from the parsed tree option for `ALTER TABLE ... ALTER REINDEX
-	// idx_name <algo>` statements. Each algorithm decides which fields
-	// (IndexAlgoParamList, ForceSync) it honors and validates inputs.
-	// Algorithms that don't support ALTER REINDEX (e.g. fulltext)
-	// return an error here.
-	//
-	// Replaces the hardcoded per-algo switch in pkg/sql/plan/build_ddl.go's
-	// AlterOptionAlterReIndex handler.
-	BuildAlterReIndex(ctx CompilerContext, opt *tree.AlterOptionAlterReIndex,
-		out *plan.AlterTableAlterReIndex) error
-
 	// CanApply / ApplyForSort are thin redirects implemented in the
 	// plugin's plan.go. Body lives on *plan.QueryBuilder in
 	// pkg/sql/plan/apply_indices_<algo>.go.

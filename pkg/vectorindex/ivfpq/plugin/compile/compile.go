@@ -46,7 +46,6 @@ package compile
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/bytedance/sonic"
@@ -280,15 +279,14 @@ func registerIdxcronUpdate(
 // IVF-PQ supports updating `lists` at REINDEX time — mirrors IVF-FLAT
 // since both algorithms key on the inverted-list count for their build.
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	if alter.IndexAlgoParamList > 0 {
-		out := make(map[string]string, len(old)+1)
-		for k, v := range old {
-			out[k] = v
-		}
-		out[catalog.IndexAlgoParamLists] = strconv.FormatInt(alter.IndexAlgoParamList, 10)
-		return out, nil
-	}
-	return old, nil
+	return compileplugin.MergeReindexParams(old, alter, "ivfpq",
+		catalog.IndexAlgoParamLists,
+		catalog.IndexAlgoParamKmeansTrainPercent,
+		catalog.IndexAlgoParamKmeansMaxIteration,
+		catalog.IndexAlgoParamMaxIndexCapacity,
+		catalog.HnswM,
+		catalog.BitsPerCode,
+	)
 }
 
 // HandleDropIndex runs algorithm-specific cleanup beyond the generic
