@@ -302,6 +302,8 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 			return Lock{}, false, err
 		}
 		if !resp.GetTxnLock.Found {
+			// Keep the same semantics as localLockTable.getLock: no callback
+			// when the row lock does not exist on the lock table owner.
 			return Lock{}, false, nil
 		}
 
@@ -312,6 +314,9 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 			waiters: wq,
 			value:   byte(resp.GetTxnLock.Value),
 		}
+		// Use the holder reported by the lock table owner. The txn argument is
+		// only the lookup context and may be empty, for example when IS_USED_LOCK
+		// probes the current holder.
 		if len(resp.GetTxnLock.Holder.TxnID) > 0 {
 			lock.holders.add(resp.GetTxnLock.Holder)
 		}
