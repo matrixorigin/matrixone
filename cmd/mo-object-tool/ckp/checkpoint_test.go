@@ -16,6 +16,7 @@ package ckp
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -105,6 +106,42 @@ func TestShouldWriteLoadDataSkipsExternalRelations(t *testing.T) {
 	assert.False(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "external"}))
 	assert.True(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "r"}))
 	assert.False(t, shouldWriteLoadData(false, checkpointtool.TableCatalogEntry{RelKind: "r"}))
+}
+
+func TestPackageExternalTableSourceCopiesAndRewritesFilepath(t *testing.T) {
+	tmpDir := t.TempDir()
+	sourcePath := filepath.Join(tmpDir, "local_ext_people.csv")
+	require.NoError(t, os.WriteFile(sourcePath, []byte("id,name\n1,a\n"), 0o644))
+
+	table := checkpointtool.TableCatalogEntry{
+		AccountID:    0,
+		DatabaseID:   272731,
+		TableID:      272732,
+		DatabaseName: "ckp_external",
+		TableName:    "ext_csv_local",
+		RelKind:      "e",
+	}
+	ddl := "CREATE EXTERNAL TABLE ext_csv_local (id INT, name VARCHAR(50)) INFILE {'filepath'='" + sourcePath + "', 'format'='csv'}"
+
+	got, err := packageExternalTableSource(context.Background(), &dumpOutput{}, filepath.Join(tmpDir, "dump"), table, ddl)
+	require.NoError(t, err)
+	assert.NotContains(t, got, sourcePath)
+
+	copiedPath, _, _, ok := externalTableFilepathValueRange(got)
+	require.True(t, ok)
+	assert.True(t, filepath.IsAbs(copiedPath))
+	assert.Contains(t, copiedPath, filepath.Join("external_sources", "account_0", "db_272731"))
+	data, err := os.ReadFile(copiedPath)
+	require.NoError(t, err)
+	assert.Equal(t, "id,name\n1,a\n", string(data))
+}
+
+func TestExternalTableFilepathValueRange(t *testing.T) {
+	ddl := "CREATE EXTERNAL TABLE t (id INT) INFILE {'format'='csv', 'filepath'='/tmp/a.csv'}"
+	value, start, end, ok := externalTableFilepathValueRange(ddl)
+	require.True(t, ok)
+	assert.Equal(t, "/tmp/a.csv", value)
+	assert.Equal(t, "CREATE EXTERNAL TABLE t (id INT) INFILE {'format'='csv', 'filepath'='/new.csv'}", ddl[:start]+quoteSQLString("/new.csv")+ddl[end:])
 }
 
 func TestFilterExistingIndexDDLs(t *testing.T) {

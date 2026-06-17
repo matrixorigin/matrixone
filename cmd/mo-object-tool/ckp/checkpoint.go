@@ -809,6 +809,12 @@ func writeRestoreScript(
 		if err != nil {
 			return "", err
 		}
+		if isExternalRelation(table) {
+			ddl, err = packageExternalTableSource(ctx, dumpOut, csvRoot, table, ddl)
+			if err != nil {
+				return "", err
+			}
+		}
 		indexDDLs, err := reader.ShowCreateIndexStatements(ctx, table.TableID, table.TableName, snapshotTS)
 		if err != nil {
 			return "", fmt.Errorf("show create indexes for table %d: %w", table.TableID, err)
@@ -901,6 +907,139 @@ func isExternalRelation(table checkpointtool.TableCatalogEntry) bool {
 	default:
 		return false
 	}
+}
+
+func packageExternalTableSource(
+	ctx context.Context,
+	dumpOut *dumpOutput,
+	outputDir string,
+	table checkpointtool.TableCatalogEntry,
+	ddl string,
+) (string, error) {
+	sourcePath, valueStart, valueEnd, ok := externalTableFilepathValueRange(ddl)
+	if !ok {
+		return "", fmt.Errorf("external table %d (%s.%s): CREATE SQL does not contain INFILE filepath", table.TableID, table.DatabaseName, table.TableName)
+	}
+	if dumpOut != nil && dumpOut.remote {
+		return "", fmt.Errorf("external table %d (%s.%s): packaging local external source is not supported for remote dump output", table.TableID, table.DatabaseName, table.TableName)
+	}
+
+	destPath := externalSourcePath(outputDir, table, filepath.Base(sourcePath))
+	if err := dumpOut.MkdirAll(path.Dir(destPath)); err != nil {
+		return "", fmt.Errorf("create external source output dir: %w", err)
+	}
+	if err := copyLocalFileToDumpOutput(ctx, dumpOut, sourcePath, destPath); err != nil {
+		return "", fmt.Errorf("copy external source for table %d (%s.%s): %w", table.TableID, table.DatabaseName, table.TableName, err)
+	}
+	restorePath := destPath
+	if absPath, err := filepath.Abs(destPath); err == nil {
+		restorePath = absPath
+	}
+	return ddl[:valueStart] + quoteSQLString(restorePath) + ddl[valueEnd:], nil
+}
+
+func copyLocalFileToDumpOutput(ctx context.Context, dumpOut *dumpOutput, sourcePath, destPath string) error {
+	in, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := dumpOut.Create(ctx, destPath)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
+func externalSourcePath(outputDir string, table checkpointtool.TableCatalogEntry, sourceName string) string {
+	sourceName = safePathPart(sourceName)
+	if sourceName == "_" || sourceName == "." || sourceName == string(filepath.Separator) {
+		sourceName = safePathPart(table.TableName) + ".data"
+	}
+	return outputPathJoin(
+		outputDir,
+		"external_sources",
+		fmt.Sprintf("account_%d", table.AccountID),
+		fmt.Sprintf("db_%d", table.DatabaseID),
+		fmt.Sprintf("%s_%d_%s", safePathPart(table.TableName), table.TableID, sourceName),
+	)
+}
+
+func externalTableFilepathValueRange(sql string) (string, int, int, bool) {
+	lower := strings.ToLower(sql)
+	searchFrom := 0
+	for {
+		idx := strings.Index(lower[searchFrom:], "filepath")
+		if idx < 0 {
+			return "", 0, 0, false
+		}
+		idx += searchFrom
+		i := idx + len("filepath")
+		for i < len(sql) {
+			ch := sql[i]
+			if ch == '=' {
+				break
+			}
+			if ch != ' ' && ch != '\t' && ch != '\n' && ch != '\r' && ch != '\'' && ch != '"' {
+				searchFrom = i + 1
+				break
+			}
+			i++
+		}
+		if searchFrom > idx {
+			continue
+		}
+		if i >= len(sql) || sql[i] != '=' {
+			return "", 0, 0, false
+		}
+		i = skipSQLSpace(sql, i+1)
+		valueStart := i
+		value, valueEnd, ok := readSQLStringOrBareValue(sql, i)
+		if !ok {
+			return "", 0, 0, false
+		}
+		return value, valueStart, valueEnd, true
+	}
+}
+
+func readSQLStringOrBareValue(sql string, start int) (string, int, bool) {
+	if start >= len(sql) {
+		return "", 0, false
+	}
+	if sql[start] == '\'' || sql[start] == '"' {
+		quote := sql[start]
+		var b strings.Builder
+		for i := start + 1; i < len(sql); i++ {
+			ch := sql[i]
+			if ch == quote {
+				if i+1 < len(sql) && sql[i+1] == quote {
+					b.WriteByte(quote)
+					i++
+					continue
+				}
+				return b.String(), i + 1, true
+			}
+			if ch == '\\' && i+1 < len(sql) {
+				i++
+				b.WriteByte(sql[i])
+				continue
+			}
+			b.WriteByte(ch)
+		}
+		return "", 0, false
+	}
+	end := start
+	for end < len(sql) && sql[end] != ',' && sql[end] != '}' && sql[end] != ')' && sql[end] != ' ' && sql[end] != '\t' && sql[end] != '\n' && sql[end] != '\r' {
+		end++
+	}
+	value := strings.TrimSpace(sql[start:end])
+	return value, end, value != ""
 }
 
 func quoteSQLIdent(s string) string {
