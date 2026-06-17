@@ -17,6 +17,9 @@ package compile
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -141,4 +144,42 @@ func TestDupOperatorShuffleV2SharesPoolAcrossWorkers(t *testing.T) {
 	require.NotNil(t, op.GetShufflePool())
 	require.Same(t, op.GetShufflePool(), dup1.GetShufflePool())
 	require.Same(t, op.GetShufflePool(), dup2.GetShufflePool())
+}
+
+func TestGetPercentileConfig(t *testing.T) {
+	mp, err := mpool.NewMPool("test_pct_config", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	t.Run("float64", func(t *testing.T) {
+		vec := vector.NewVec(types.T_float64.ToType())
+		defer vec.Free(mp)
+		require.NoError(t, vector.AppendFixed(vec, float64(0.95), false, mp))
+		cfg := getPercentileConfig(vec)
+		require.Equal(t, "0.95", string(cfg))
+	})
+
+	t.Run("float32", func(t *testing.T) {
+		vec := vector.NewVec(types.T_float32.ToType())
+		defer vec.Free(mp)
+		require.NoError(t, vector.AppendFixed(vec, float32(0.5), false, mp))
+		cfg := getPercentileConfig(vec)
+		require.Equal(t, "0.5", string(cfg))
+	})
+
+	t.Run("int64", func(t *testing.T) {
+		vec := vector.NewVec(types.T_int64.ToType())
+		defer vec.Free(mp)
+		require.NoError(t, vector.AppendFixed(vec, int64(0), false, mp))
+		cfg := getPercentileConfig(vec)
+		require.Equal(t, "0", string(cfg))
+	})
+
+	t.Run("int32", func(t *testing.T) {
+		vec := vector.NewVec(types.T_int32.ToType())
+		defer vec.Free(mp)
+		require.NoError(t, vector.AppendFixed(vec, int32(1), false, mp))
+		cfg := getPercentileConfig(vec)
+		require.Equal(t, "1", string(cfg))
+	})
 }
