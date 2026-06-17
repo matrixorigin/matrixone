@@ -23,9 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -128,6 +130,35 @@ func TestPreInsertUnique(t *testing.T) {
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
 	}
 
+}
+
+func TestPreInsertUniqueSingleVarcharUsesSizedUkType(t *testing.T) {
+	proc := testutil.NewProc(t)
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("CODE001"), false, proc.Mp()))
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	arg := &PreInsertUnique{
+		PreInsertCtx: &plan.PreInsertUkCtx{
+			Columns:  []int32{1},
+			PkColumn: 0,
+			UkType: plan.Type{
+				Id:    int32(types.T_varchar),
+				Width: 50,
+			},
+		},
+	}
+	arg.initBuf(bat, arg.PreInsertCtx.Columns, int(arg.PreInsertCtx.PkColumn), false)
+	defer arg.Free(proc, false, nil)
+
+	require.NotZero(t, arg.ctr.buf.Vecs[indexColPos].GetType().TypeSize())
+	_, err := util.CompactSingleIndexCol(bat.Vecs[1], arg.ctr.buf.Vecs[indexColPos], proc)
+	require.NoError(t, err)
+	require.Equal(t, 1, arg.ctr.buf.Vecs[indexColPos].Length())
 }
 
 func resetChildren(arg *PreInsertUnique, m *mpool.MPool) {

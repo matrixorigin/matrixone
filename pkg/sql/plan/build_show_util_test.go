@@ -171,6 +171,27 @@ func Test_buildShowCreateTableSpatialIndex(t *testing.T) {
 	require.Equal(t, "CREATE TABLE `spatial_src` (\n  `id` int NOT NULL,\n  `g` point NOT NULL,\n  PRIMARY KEY (`id`),\n  SPATIAL KEY `idx_g` (`g`)\n)", got)
 }
 
+func TestShowCreateTablePreservesIndexPrefixLengths(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE prefix_show_src (
+		id INT PRIMARY KEY,
+		name VARCHAR(191),
+		t TEXT,
+		b BLOB,
+		KEY idx_t(t(100)),
+		UNIQUE KEY uq_b(b(20)),
+		KEY idx_mix(name, t(30))
+	)`)
+	require.NoError(t, err)
+
+	var snapshot *plan.Snapshot
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "KEY `idx_t` (`t`(100))")
+	require.Contains(t, got, "UNIQUE KEY `uq_b` (`b`(20))")
+	require.Contains(t, got, "KEY `idx_mix` (`name`,`t`(30))")
+}
+
 func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
 	const sql = `CREATE TABLE t_numeric_types (
 		id BIGINT NOT NULL AUTO_INCREMENT,
