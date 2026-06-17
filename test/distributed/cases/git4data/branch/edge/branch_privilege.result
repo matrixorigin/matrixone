@@ -1,0 +1,87 @@
+set global enable_privilege_cache = off;
+drop account if exists br_priv_bypass_acc;
+create account br_priv_bypass_acc admin_name "admin" identified by "111";
+drop database if exists br_priv_src;
+create database br_priv_src;
+use br_priv_src;
+create table base_tbl(a int primary key, b varchar(20));
+insert into base_tbl values (1, 'one'), (2, 'two');
+create snapshot br_priv_tbl_sp for table br_priv_src base_tbl;
+create snapshot br_priv_db_sp for database br_priv_src;
+create role r_tbl_select_only;
+create role r_tbl_create_only;
+create role r_tbl_both;
+grant select on table br_priv_src.base_tbl to r_tbl_select_only;
+grant create table on database br_priv_src to r_tbl_create_only;
+grant select on table br_priv_src.base_tbl to r_tbl_both;
+grant create table on database br_priv_src to r_tbl_both;
+create user u_tbl_select_only identified by '111' default role r_tbl_select_only;
+create user u_tbl_create_only identified by '111' default role r_tbl_create_only;
+create user u_tbl_both identified by '111' default role r_tbl_both;
+create role r_db_select_only;
+create role r_db_create_only;
+create role r_db_both;
+grant select on table br_priv_src.base_tbl to r_db_select_only;
+grant create database on account * to r_db_create_only;
+grant select on table br_priv_src.base_tbl to r_db_both;
+grant create database on account * to r_db_both;
+create user u_db_select_only identified by '111' default role r_db_select_only;
+create user u_db_create_only identified by '111' default role r_db_create_only;
+create user u_db_both identified by '111' default role r_db_both;
+data branch create table br_priv_src.br_tbl_select_only
+from br_priv_src.base_tbl{snapshot='br_priv_tbl_sp'};
+
+select count(*) as br_tbl_select_only_exists
+from mo_catalog.mo_tables
+where reldatabase = 'br_priv_src'
+and relname = 'br_tbl_select_only';
+br_tbl_select_only_exists
+1
+data branch create table br_priv_src.br_tbl_create_only
+from br_priv_src.base_tbl{snapshot='br_priv_tbl_sp'};
+
+select count(*) as br_tbl_create_only_exists
+from mo_catalog.mo_tables
+where reldatabase = 'br_priv_src'
+and relname = 'br_tbl_create_only';
+br_tbl_create_only_exists
+1
+data branch create table br_priv_src.br_tbl_both
+from br_priv_src.base_tbl{snapshot='br_priv_tbl_sp'};
+select count(*) as br_tbl_both_exists
+from mo_catalog.mo_tables
+where reldatabase = 'br_priv_src'
+and relname = 'br_tbl_both';
+br_tbl_both_exists
+1
+data branch create database br_db_select_only
+from br_priv_src{snapshot='br_priv_db_sp'};
+
+select count(*) as br_db_select_only_exists
+from mo_catalog.mo_database
+where datname = 'br_db_select_only';
+br_db_select_only_exists
+1
+data branch create database br_db_create_only
+from br_priv_src{snapshot='br_priv_db_sp'};
+
+select count(*) as br_db_create_only_exists
+from mo_catalog.mo_database
+where datname = 'br_db_create_only';
+br_db_create_only_exists
+1
+data branch create database br_db_both
+from br_priv_src{snapshot='br_priv_db_sp'};
+select count(*) as br_db_both_exists
+from mo_catalog.mo_database
+where datname = 'br_db_both';
+br_db_both_exists
+1
+drop snapshot br_priv_tbl_sp;
+drop snapshot br_priv_db_sp;
+drop database if exists br_priv_src;
+drop database if exists br_db_select_only;
+drop database if exists br_db_create_only;
+drop database if exists br_db_both;
+drop account if exists br_priv_bypass_acc;
+set global enable_privilege_cache = on;
