@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -269,7 +270,25 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 		}
 
-		// Recompute generated columns (both STORED and VIRTUAL are computed on write)
+	}
+
+	if stmt.From != nil && len(stmt.From.Tables) > 0 {
+		lastNodeID, selectNode, selectNodeTag, err = builder.appendUpdateFromDedupNode(
+			bindCtx, lastNodeID, selectNode, selectNodeTag, dmlCtx, oldColName2Idx, newColName2Idx)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	for i, alias := range dmlCtx.aliases {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 {
+			continue
+		}
+
+		tableDef := dmlCtx.tableDefs[i]
+
+		// Recompute generated columns after UPDATE FROM dedup so generated
+		// expressions read the same deduped base values that will be written.
 		for _, col := range tableDef.Cols {
 			if col.GeneratedCol == nil {
 				continue
@@ -1024,4 +1043,189 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
 	return lastNodeID, err
+}
+
+func (builder *QueryBuilder) appendUpdateFromDedupNode(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	dmlCtx *DMLContext,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+) (int32, *plan.Node, int32, error) {
+	// Dedup duplicate source matches by partitioning on the target row's
+	// physical identity (row_id), not on the whole old target row. Partitioning
+	// on every old column is unsafe: GEOMETRY32 (T_geometry32) has no comparator
+	// in pkg/compare so Node_PARTITION would build a nil comparator and crash,
+	// float columns compare NaN != NaN so duplicate matches against a target row
+	// holding NaN stop being recognized as duplicates, and two distinct rows
+	// whose columns happen to be equal would be wrongly merged into one. row_id
+	// is stable, unique, and always comparable. For multi-target UPDATE ... FROM
+	// the key is the combination of every updated target table's row_id.
+	partitionColPositions := make([]int32, 0)
+	for i, alias := range dmlCtx.aliases {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 {
+			continue
+		}
+
+		if pos, ok := oldColName2Idx[alias+"."+catalog.Row_ID]; ok {
+			partitionColPositions = append(partitionColPositions, pos)
+		}
+	}
+
+	return builder.appendRowNumberDedupNode(bindCtx, lastNodeID, selectNode, selectNodeTag, partitionColPositions)
+}
+
+func (builder *QueryBuilder) appendRowNumberDedupNode(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	partitionColPositions []int32,
+) (int32, *plan.Node, int32, error) {
+	partitionByExprs := make([]*plan.Expr, 0, len(partitionColPositions))
+	childColExpr := func(pos int32) *plan.Expr {
+		e := selectNode.ProjectList[pos]
+		name := ""
+		if col, ok := e.Expr.(*plan.Expr_Col); ok {
+			name = col.Col.Name
+		}
+		return &plan.Expr{
+			Typ: e.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: selectNodeTag,
+					ColPos: pos,
+					Name:   name,
+				},
+			},
+		}
+	}
+	for _, pos := range partitionColPositions {
+		partitionByExprs = append(partitionByExprs, childColExpr(pos))
+	}
+	if len(partitionByExprs) == 0 {
+		return lastNodeID, selectNode, selectNodeTag, nil
+	}
+
+	windowTag := builder.genNewBindTag()
+	partitionBy := make([]*plan.OrderBySpec, 0, len(partitionByExprs))
+	for _, expr := range partitionByExprs {
+		partitionBy = append(partitionBy, &plan.OrderBySpec{
+			Expr: expr,
+			Flag: plan.OrderBySpec_INTERNAL,
+		})
+	}
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PARTITION,
+		Children:    []int32{lastNodeID},
+		OrderBy:     partitionBy,
+		BindingTags: []int32{windowTag},
+	}, bindCtx)
+
+	rowNumberFunc, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "row_number", nil)
+	if err != nil {
+		return 0, nil, 0, err
+	}
+	rowNumberExpr := &plan.Expr{
+		Typ: rowNumberFunc.Typ,
+		Expr: &plan.Expr_W{
+			W: &plan.WindowSpec{
+				WindowFunc:  rowNumberFunc,
+				Name:        "row_number",
+				PartitionBy: partitionByExprs,
+				Frame: &plan.FrameClause{
+					Type: plan.FrameClause_ROWS,
+					Start: &plan.FrameBound{
+						Type:      plan.FrameBound_PRECEDING,
+						UnBounded: true,
+					},
+					End: &plan.FrameBound{
+						Type:      plan.FrameBound_FOLLOWING,
+						UnBounded: true,
+					},
+				},
+			},
+		},
+	}
+	rowNumberIdx := int32(0)
+	rowNumberProjectPos := int32(len(selectNode.ProjectList))
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_WINDOW,
+		Children:    []int32{lastNodeID},
+		WinSpecList: []*plan.Expr{rowNumberExpr},
+		WindowIdx:   rowNumberIdx,
+		BindingTags: []int32{windowTag},
+	}, bindCtx)
+
+	windowProjectTag := builder.genNewBindTag()
+	windowProjectList := make([]*plan.Expr, 0, len(selectNode.ProjectList)+1)
+	for pos := range selectNode.ProjectList {
+		windowProjectList = append(windowProjectList, childColExpr(int32(pos)))
+	}
+	windowProjectList = append(windowProjectList, &plan.Expr{
+		Typ: rowNumberFunc.Typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: windowTag,
+				ColPos: rowNumberIdx,
+				Name:   "__mo_update_from_dedup_row_number",
+			},
+		},
+	})
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeID},
+		ProjectList: windowProjectList,
+		BindingTags: []int32{windowProjectTag},
+	}, bindCtx)
+
+	rowNumberCol := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: windowProjectTag,
+				ColPos: rowNumberProjectPos,
+				Name:   "__mo_update_from_dedup_row_number",
+			},
+		},
+	}
+	keepFirstRowExpr, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "=", []*plan.Expr{rowNumberCol, makePlan2Int64ConstExprWithType(1)})
+	if err != nil {
+		return 0, nil, 0, err
+	}
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:   plan.Node_FILTER,
+		Children:   []int32{lastNodeID},
+		FilterList: []*plan.Expr{keepFirstRowExpr},
+	}, bindCtx)
+
+	projectList := make([]*plan.Expr, len(selectNode.ProjectList))
+	for pos, e := range selectNode.ProjectList {
+		name := ""
+		if col, ok := e.Expr.(*plan.Expr_Col); ok {
+			name = col.Col.Name
+		}
+		projectList[pos] = &plan.Expr{
+			Typ: e.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: windowProjectTag,
+					ColPos: int32(pos),
+					Name:   name,
+				},
+			},
+		}
+	}
+
+	projectNode := &plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeID},
+		ProjectList: projectList,
+		BindingTags: []int32{builder.genNewBindTag()},
+	}
+	lastNodeID = builder.appendNode(projectNode, bindCtx)
+	return lastNodeID, projectNode, projectNode.BindingTags[0], nil
 }

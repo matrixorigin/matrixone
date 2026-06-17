@@ -81,12 +81,17 @@ func putDeleteNodeInfo(info *deleteNodeInfo) {
 }
 
 type dmlPlanCtx struct {
-	objRef                 *ObjectRef
-	tableDef               *TableDef
-	beginIdx               int
-	sourceStep             int32
-	isMulti                bool
+	objRef     *ObjectRef
+	tableDef   *TableDef
+	beginIdx   int
+	sourceStep int32
+	isMulti    bool
+	// needAggFilter drives two behaviours: an any_value aggregation for dedup
+	// and an isnotnull(row_id) filter for join-target NULL-row protection. After
+	// an upstream row_number() window handles the dedup (dedupByRowNumber) only
+	// the aggregation is skipped; the NULL-row filter must stay.
 	needAggFilter          bool
+	dedupByRowNumber       bool
 	updateColLength        int
 	rowIdPos               int
 	insertColPos           []int
@@ -2964,7 +2969,7 @@ func makePreUpdateDeletePlan(
 	//when update multi table. we append agg node:
 	//eg: update t1, t2 set t1.a= t1.a+1 where t2.b >10
 	//eg: update t2, (select a from t2) as tt set t2.a= t2.a+1 where t2.b >10
-	if delCtx.needAggFilter {
+	if delCtx.needAggFilter && !delCtx.dedupByRowNumber {
 		lastNode := builder.qry.Nodes[lastNodeId]
 		groupByExprs := make([]*Expr, len(delCtx.tableDef.Cols))
 		aggNodeProjection := make([]*Expr, len(lastNode.ProjectList))
@@ -3040,12 +3045,17 @@ func makePreUpdateDeletePlan(
 			SpillMem:    builder.aggSpillMem,
 		}
 		lastNodeId = builder.appendNode(aggNode, bindCtx)
+	}
 
-		// we need filter null in left join/right join
-		// eg: UPDATE stu s LEFT JOIN class c ON s.class_id = c.id SET s.class_name = 'test22', c.stu_name = 'test22';
-		// we can not let null rows in batch go to insert Node
+	// we need filter null in left join/right join
+	// eg: UPDATE stu s LEFT JOIN class c ON s.class_id = c.id SET s.class_name = 'test22', c.stu_name = 'test22';
+	// we can not let null rows in batch go to insert Node.
+	// This NULL-row safeguard is independent of the any_value dedup above: it must
+	// still run for joined-target UPDATE ... FROM even when duplicate matches were
+	// already deduped by an upstream row_number() window (dedupByRowNumber).
+	if delCtx.needAggFilter {
 		rowIdExpr := &plan.Expr{
-			Typ: aggNodeProjection[delCtx.rowIdPos].Typ,
+			Typ: delCtx.tableDef.Cols[delCtx.rowIdPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,

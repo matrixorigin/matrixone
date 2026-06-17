@@ -4264,6 +4264,63 @@ func Test_determineCreateDatabase(t *testing.T) {
 	})
 }
 
+func TestCreateDatabaseOwnerRoleFollowsActiveInheritedRoleRoot(t *testing.T) {
+	convey.Convey("create database owner role follows active inherited role root", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateDatabase{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.GetTenantInfo().SetDefaultRoleID(5)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{5, false},
+		}
+		roleIdsInMoRolePrivs := []int{5, 7}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{{7, false}}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+
+		roleIdsInMoRoleGrant := []int{5, 7}
+		rowsOfMoRoleGrant := [][][]interface{}{
+			{{7, false}},
+			{},
+		}
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
+
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roleIdsInMoRolePrivs {
+					sql, err := getSqlForPrivilege(context.TODO(), int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					rows := [][]interface{}{}
+					if roleId == 7 && entry.privilegeId == PrivilegeTypeCreateDatabase {
+						rows = [][]interface{}{{roleId, false}}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(ses.GetDDLOwnerRoleID(), convey.ShouldEqual, uint32(5))
+	})
+}
+
 func Test_determineDropDatabase(t *testing.T) {
 	convey.Convey("drop/alter database succ", t, func() {
 		ctrl := gomock.NewController(t)
@@ -4888,6 +4945,177 @@ func Test_determineCreateTable(t *testing.T) {
 		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
+	})
+}
+
+func TestCreateTableOwnerRoleFollowsPrivilegeRole(t *testing.T) {
+	convey.Convey("create table owner role follows secondary role privilege", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateTable{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.GetTenantInfo().SetDefaultRoleID(5)
+		ses.GetTenantInfo().SetUseSecondaryRole(true)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{5, false},
+			{7, false},
+		}
+		roleIdsInMoRolePrivs := []int{5, 7}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][2] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{{7, false}}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][2] = [][]interface{}{}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, nil, nil, nil, nil)
+
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roleIdsInMoRolePrivs {
+					sql, err := getSqlForPrivilege(context.TODO(), int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					rows := [][]interface{}{}
+					if roleId == 7 && entry.privilegeId == PrivilegeTypeCreateTable {
+						rows = [][]interface{}{{7, false}}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+		sql2result[getSqlForInheritedRoleIdOfRoleId(5)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+		sql2result[getSqlForInheritedRoleIdOfRoleId(7)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(ses.GetDDLOwnerRoleID(), convey.ShouldEqual, uint32(7))
+	})
+
+	convey.Convey("create table owner role prefers primary role privilege", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateTable{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.GetTenantInfo().SetDefaultRoleID(5)
+		ses.GetTenantInfo().SetUseSecondaryRole(true)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{5, false},
+			{7, false},
+		}
+		roleIdsInMoRolePrivs := []int{5, 7}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{{5, false}}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][2] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{{7, false}}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][2] = [][]interface{}{}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, nil, nil, nil, nil)
+
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roleIdsInMoRolePrivs {
+					sql, err := getSqlForPrivilege(context.TODO(), int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					rows := [][]interface{}{}
+					if entry.privilegeId == PrivilegeTypeCreateTable {
+						rows = [][]interface{}{{roleId, false}}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+		sql2result[getSqlForInheritedRoleIdOfRoleId(5)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+		sql2result[getSqlForInheritedRoleIdOfRoleId(7)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(ses.GetDDLOwnerRoleID(), convey.ShouldEqual, uint32(5))
+	})
+
+	convey.Convey("create table owner role follows active inherited role root", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateTable{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.GetTenantInfo().SetDefaultRoleID(5)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{5, false},
+		}
+		roleIdsInMoRolePrivs := []int{5, 7}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][2] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{{7, false}}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][2] = [][]interface{}{}
+
+		roleIdsInMoRoleGrant := []int{5, 7}
+		rowsOfMoRoleGrant := [][][]interface{}{
+			{{7, false}},
+			{},
+		}
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
+
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roleIdsInMoRolePrivs {
+					sql, err := getSqlForPrivilege(context.TODO(), int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					rows := [][]interface{}{}
+					if roleId == 7 && entry.privilegeId == PrivilegeTypeCreateTable {
+						rows = [][]interface{}{{roleId, false}}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(ses.GetDDLOwnerRoleID(), convey.ShouldEqual, uint32(5))
 	})
 }
 
@@ -9891,6 +10119,75 @@ func Test_genRevokeCases(t *testing.T) {
 	}
 }
 
+func Test_shouldSkipImplicitOwnershipRevoke(t *testing.T) {
+	convey.Convey("skip implicit ownership revoke for admin owner roles", t, func() {
+		sysSes := &Session{}
+		sysSes.SetTenantInfo(&TenantInfo{
+			Tenant:      sysAccountName,
+			DefaultRole: "r1",
+			TenantID:    sysAccountID,
+		})
+		convey.So(shouldSkipImplicitOwnershipRevoke(sysSes, moAdminRoleName), convey.ShouldBeTrue)
+		convey.So(shouldSkipImplicitOwnershipRevoke(sysSes, "r1"), convey.ShouldBeFalse)
+
+		accountSes := &Session{}
+		accountSes.SetTenantInfo(&TenantInfo{
+			Tenant:      "acc1",
+			DefaultRole: "r1",
+			TenantID:    1,
+		})
+		convey.So(shouldSkipImplicitOwnershipRevoke(accountSes, accountAdminRoleName), convey.ShouldBeTrue)
+		convey.So(shouldSkipImplicitOwnershipRevoke(accountSes, "r1"), convey.ShouldBeFalse)
+
+		convey.So(shouldSkipImplicitOwnershipRevoke(nil, "r1"), convey.ShouldBeTrue)
+		convey.So(shouldSkipImplicitOwnershipRevoke(sysSes, ""), convey.ShouldBeTrue)
+	})
+}
+
+func TestGetObjectOwnerRoleNameSkipsDeletedOwnerRole(t *testing.T) {
+	ctx := context.TODO()
+
+	for _, tc := range []struct {
+		name     string
+		ownerSQL string
+	}{
+		{
+			name:     "database",
+			ownerSQL: getSqlForGetOwnerOfDatabase("db1"),
+		},
+		{
+			name:     "table",
+			ownerSQL: getSqlForGetOwnerOfTable("db1", "t1"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+
+			bh.sql2result[tc.ownerSQL] = newMrsForOwner([][]interface{}{{int64(100)}})
+			bh.sql2result[getSqlForRoleNameOfRoleId(100)] = newMrsForRoleName([][]interface{}{})
+
+			roleName, err := getObjectOwnerRoleName(ctx, bh, tc.ownerSQL)
+			require.NoError(t, err)
+			require.Empty(t, roleName)
+		})
+	}
+}
+
+func TestGetObjectOwnerRoleNameReturnsExistingOwnerRole(t *testing.T) {
+	ctx := context.TODO()
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	ownerSQL := getSqlForGetOwnerOfTable("db1", "t1")
+	bh.sql2result[ownerSQL] = newMrsForOwner([][]interface{}{{int64(100)}})
+	bh.sql2result[getSqlForRoleNameOfRoleId(100)] = newMrsForRoleName([][]interface{}{{"r1"}})
+
+	roleName, err := getObjectOwnerRoleName(ctx, bh, ownerSQL)
+	require.NoError(t, err)
+	require.Equal(t, "r1", roleName)
+}
+
 func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
@@ -10096,6 +10393,38 @@ func newMrsForRoleIdOfRole(rows [][]interface{}) *MysqlResultSet {
 
 	col1 := &MysqlColumn{}
 	col1.SetName("role_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForRoleName(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("role_name")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForOwner(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("owner")
 	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	mrs.AddColumn(col1)
@@ -14829,7 +15158,7 @@ func Test_determineUserHasPrivilegeSet(t *testing.T) {
 		}
 		ses.SetTenantInfo(tenant)
 
-		priv := determinePrivilegeSetOfStatement(&tree.CreateTable{})
+		priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
 		_, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
@@ -14899,7 +15228,7 @@ func Test_determineUserHasPrivilegeSet(t *testing.T) {
 		}
 		ses.SetTenantInfo(tenant)
 
-		priv := determinePrivilegeSetOfStatement(&tree.CreateTable{})
+		priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
 		ret, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 		convey.ShouldBeFalse(ret, false)
 		convey.So(err, convey.ShouldBeNil)

@@ -2539,6 +2539,15 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 			err = moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
 			return stats, err
 		}
+
+		//!!!note: clone table executed in the frontend.
+		//handle privilege check here for it
+		priv := ses.GetPrivilege()
+		if priv.objectType() == objectTypeTable {
+			if !checkProtectedDatabaseWriteByPrivilege(reqCtx, ses, priv) {
+				return stats, moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+			}
+		}
 	}
 	return stats, nil
 }
@@ -3245,6 +3254,7 @@ func executeStmt(ses *Session,
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
 	ses.EnterFPrint(FPDoComQuery)
 	defer ses.ExitFPrint(FPDoComQuery)
+	defer ses.ClearDDLOwnerRoleID()
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	// set the batch buf for stream scan
 	var inMemStreamScan []*kafka.Message
@@ -3255,6 +3265,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	beginInstant := time.Now()
 	execCtx.reqCtx = appendStatementAt(execCtx.reqCtx, beginInstant)
+	execCtx.reqCtx = defines.AttachDDLOwnerRoleIDProvider(execCtx.reqCtx, ses)
 	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
 	resper := ses.GetResponser()
@@ -3419,6 +3430,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
+			ses.ClearDDLOwnerRoleID()
 			authStats, err := authenticateUserCanExecuteStatement(execCtx.reqCtx, ses, stmt)
 			if err != nil {
 				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
@@ -3467,6 +3479,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.input = input
 
 		err = executeStmtWithResponse(ses, execCtx)
+		ses.ClearDDLOwnerRoleID()
 		if err != nil {
 			return err
 		}

@@ -10562,6 +10562,75 @@ var supportedControlBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `get_lock`
+	{
+		functionId: GET_LOCK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_float64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return GetLock
+				},
+			},
+		},
+	},
+
+	// function `release_lock`
+	{
+		functionId: RELEASE_LOCK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ReleaseLock
+				},
+			},
+		},
+	},
+
+	// function `is_free_lock`
+	{
+		functionId: IS_FREE_LOCK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsFreeLock
+				},
+			},
+		},
+	},
+
 	// function `trigger_fault_point`
 	{
 		functionId: TRIGGER_FAULT_POINT,
@@ -11702,6 +11771,34 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInHashPartition
+				},
+			},
+		},
+	},
+
+	// function `name_const`
+	{
+		functionId: NAME_CONST,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(_ []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 2 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					if parameters[1].Oid == types.T_any {
+						return types.T_varchar.ToType()
+					}
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInNameConst
 				},
 			},
 		},
