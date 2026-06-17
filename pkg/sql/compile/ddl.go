@@ -2443,6 +2443,10 @@ func (s *Scope) DropIndex(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetDropIndex()
+	if qry.GetIndexName() == "" {
+		// Planner uses an empty index name for DROP INDEX IF EXISTS no-op plans.
+		return nil
+	}
 
 	// resolve temporary table real name if needed
 	if session := c.proc.GetSession(); session != nil {
