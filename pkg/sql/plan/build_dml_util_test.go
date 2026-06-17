@@ -473,3 +473,79 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		require.Equal(t, "tenant", serialFn.Args[1].GetCol().Name)
 	})
 }
+
+func TestPrefixIndexDMLPlansMaterializePrefixKeys(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	emp := mock.ctxt.tables["emp"]
+	require.NotNil(t, emp)
+	require.NotEmpty(t, emp.Indexes)
+	for _, idxDef := range emp.Indexes {
+		idxDef.IndexAlgoParams = `{"prefix_lengths":"ename:4"}`
+	}
+
+	assertPlanHasEnamePrefix := func(t *testing.T, sql string) {
+		t.Helper()
+
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err)
+		require.NotNil(t, logicPlan.GetQuery())
+
+		require.True(
+			t,
+			queryHasPrefixSubstring(logicPlan.GetQuery(), "ename", 4),
+			"expected plan for %q to materialize prefix index key with substring(ename, 1, 4)",
+			sql,
+		)
+	}
+
+	assertPlanHasEnamePrefix(t, "update constraint_test.emp set ename = 'abcdef-long' where empno = 1")
+	assertPlanHasEnamePrefix(t, "delete from constraint_test.emp where empno = 1")
+}
+
+func queryHasPrefixSubstring(query *plan.Query, colName string, length int64) bool {
+	for _, node := range query.Nodes {
+		if exprListHasPrefixSubstring(node.ProjectList, colName, length) ||
+			exprListHasPrefixSubstring(node.OnList, colName, length) ||
+			exprListHasPrefixSubstring(node.FilterList, colName, length) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprListHasPrefixSubstring(exprs []*plan.Expr, colName string, length int64) bool {
+	for _, expr := range exprs {
+		if exprHasPrefixSubstring(expr, colName, length) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprHasPrefixSubstring(expr *plan.Expr, colName string, length int64) bool {
+	if expr == nil {
+		return false
+	}
+
+	fn := expr.GetF()
+	if fn == nil {
+		list := expr.GetList()
+		if list == nil {
+			return false
+		}
+		return exprListHasPrefixSubstring(list.List, colName, length)
+	}
+
+	if fn.Func.ObjName == "substring" && len(fn.Args) == 3 {
+		col := fn.Args[0].GetCol()
+		start := fn.Args[1].GetLit()
+		prefixLen := fn.Args[2].GetLit()
+		if col != nil && col.Name == colName &&
+			start != nil && start.GetI64Val() == 1 &&
+			prefixLen != nil && prefixLen.GetI64Val() == length {
+			return true
+		}
+	}
+
+	return exprListHasPrefixSubstring(fn.Args, colName, length)
+}

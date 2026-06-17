@@ -14,7 +14,7 @@ drop table if exists prefix_idx_dml_uk;
 create table prefix_idx_dml_uk(id int primary key, a varchar(32), b int, unique index uq_a(a(4)));
 insert into prefix_idx_dml_uk values (1, 'abcdef-long', 10);
 insert into prefix_idx_dml_uk values (2, 'abcdzz-conflict', 20);
-Duplicate entry 'abcd' for key 'a'
+Duplicate entry 'abcd' for key '(a|__mo_index_idx_col)'
 update prefix_idx_dml_uk set a = 'uvwxyz-long' where id = 1;
 insert into prefix_idx_dml_uk values (2, 'abcdef-new', 20);
 delete from prefix_idx_dml_uk where id = 1;
