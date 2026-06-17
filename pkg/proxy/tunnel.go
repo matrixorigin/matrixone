@@ -398,7 +398,8 @@ func (t *tunnel) setTransferIntent(i bool) {
 }
 
 func (t *tunnel) setTransferIntentForType(i bool, typ transferType) {
-	if t.rebalancePolicy == RebalancePolicyPassive &&
+	if i &&
+		t.rebalancePolicy == RebalancePolicyPassive &&
 		typ == transferByRebalance {
 		return
 	}

@@ -806,7 +806,8 @@ func TestSetTransferIntentUsesAttemptedTransferType(t *testing.T) {
 	require.True(t, tun.transferIntent.Load())
 	require.Equal(t, before+1, testutil.ToFloat64(v2.ProxyConnectionsTransferIntentGauge))
 
-	tun.setTransferIntentForType(false, attemptedType)
+	tun.setTransferType(transferByRebalance)
+	tun.setTransferIntent(false)
 	require.False(t, tun.transferIntent.Load())
 	require.Equal(t, before, testutil.ToFloat64(v2.ProxyConnectionsTransferIntentGauge))
 }
