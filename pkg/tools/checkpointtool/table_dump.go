@@ -2313,8 +2313,12 @@ func vectorRowIndex(vec *vector.Vector, rowIdx int) int {
 func appendCSVQuotedVecValue(w *bytes.Buffer, vec *vector.Vector, rowIdx int) {
 	switch vec.GetType().Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_datalink, types.T_json:
+		types.T_binary, types.T_varbinary, types.T_datalink:
 		appendEscapedSQLLoadBytes(w, vec.GetBytesAt(rowIdx), '"')
+	case types.T_json:
+		appendEscapedSQLLoadString(w, types.DecodeJson(vec.GetBytesAt(rowIdx)).String(), '"')
+	case types.T_bit:
+		appendEscapedSQLLoadBytes(w, bitValueToLoadBytes(vector.MustFixedColWithTypeCheck[uint64](vec)[rowIdx], vec.GetType().Width), '"')
 	default:
 		appendEscapedSQLLoadString(w, vecValueToString(vec, rowIdx), '"')
 	}
@@ -2354,6 +2358,12 @@ func appendCSVUnquotedVecValue(w *bytes.Buffer, typ types.Type, vec *vector.Vect
 		appendDecimal128(w, vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[rowIdx], vec.GetType().Scale)
 	case types.T_date:
 		appendDate(w, vector.MustFixedColWithTypeCheck[types.Date](vec)[rowIdx])
+	case types.T_time:
+		w.WriteString(vector.MustFixedColWithTypeCheck[types.Time](vec)[rowIdx].String2(vec.GetType().Scale))
+	case types.T_datetime:
+		w.WriteString(vector.MustFixedColWithTypeCheck[types.Datetime](vec)[rowIdx].String2(vec.GetType().Scale))
+	case types.T_timestamp:
+		w.WriteString(vector.MustFixedColWithTypeCheck[types.Timestamp](vec)[rowIdx].String2(time.Local, vec.GetType().Scale))
 	default:
 		w.WriteString(vecValueToString(vec, rowIdx))
 	}
@@ -2381,6 +2391,24 @@ func appendEscapedSQLLoadString(w *bytes.Buffer, s string, enclosed byte) {
 func appendEscapedSQLLoadBytes(w *bytes.Buffer, data []byte, enclosed byte) {
 	for _, b := range data {
 		switch b {
+		case 0:
+			w.WriteByte('\\')
+			w.WriteByte('0')
+		case '\b':
+			w.WriteByte('\\')
+			w.WriteByte('b')
+		case '\n':
+			w.WriteByte('\\')
+			w.WriteByte('n')
+		case '\r':
+			w.WriteByte('\\')
+			w.WriteByte('r')
+		case '\t':
+			w.WriteByte('\\')
+			w.WriteByte('t')
+		case 0x1a:
+			w.WriteByte('\\')
+			w.WriteByte('Z')
 		case '\\':
 			w.WriteByte('\\')
 			w.WriteByte('\\')
@@ -2395,6 +2423,22 @@ func appendEscapedSQLLoadBytes(w *bytes.Buffer, data []byte, enclosed byte) {
 			w.WriteByte(b)
 		}
 	}
+}
+
+func bitValueToLoadBytes(value uint64, width int32) []byte {
+	byteLen := int((width + 7) / 8)
+	if byteLen <= 0 {
+		byteLen = 1
+	}
+	if byteLen > 8 {
+		byteLen = 8
+	}
+	out := make([]byte, byteLen)
+	for i := byteLen - 1; i >= 0; i-- {
+		out[i] = byte(value)
+		value >>= 8
+	}
+	return out
 }
 
 func appendDecimal64(w *bytes.Buffer, value types.Decimal64, scale int32) {
@@ -2529,7 +2573,7 @@ func shouldQuoteSQLLoadType(typ types.Type) bool {
 	switch typ.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_datalink, types.T_json,
-		types.T_geometry, types.T_array_float32, types.T_array_float64:
+		types.T_geometry, types.T_array_float32, types.T_array_float64, types.T_bit:
 		return true
 	default:
 		return false

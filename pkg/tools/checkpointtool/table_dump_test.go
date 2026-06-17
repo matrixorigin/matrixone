@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1374,6 +1375,60 @@ func TestWriteSQLLoadCSVRow_RoundTripsThroughCSVParser(t *testing.T) {
 	assert.Equal(t, `{"x":"y"}`, row[2].Val)
 	assert.False(t, row[2].IsNull)
 	assert.True(t, row[2].HasStringQuote)
+}
+
+func TestWriteSQLLoadCSVFieldFromVec_BitUsesPackedBytes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.New(types.T_bit, 1, 0))
+	require.NoError(t, vector.AppendFixed(vec, uint64(1), false, mp))
+
+	var buf bytes.Buffer
+	require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *vec.GetType(), []*vector.Vector{vec}, 0, 0))
+	assert.Equal(t, "\"\x01\"", buf.String())
+}
+
+func TestWriteSQLLoadCSVFieldFromVec_JSONUsesVisibleText(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_json.ToType())
+	bj, err := types.ParseStringToByteJson(`{"name":"mo","n":1}`)
+	require.NoError(t, err)
+	stored, err := types.EncodeJson(bj)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendBytes(vec, stored, false, mp))
+
+	var buf bytes.Buffer
+	require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *vec.GetType(), []*vector.Vector{vec}, 0, 0))
+	assert.Equal(t, `"{""n"": 1, ""name"": ""mo""}"`, buf.String())
+}
+
+func TestWriteSQLLoadCSVFieldFromVec_TemporalKeepsScale(t *testing.T) {
+	mp := mpool.MustNewZero()
+	timeVec := vector.NewVec(types.New(types.T_time, 0, 6))
+	datetimeVec := vector.NewVec(types.New(types.T_datetime, 0, 3))
+	timestampVec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+	require.NoError(t, vector.AppendFixed(timeVec, types.TimeFromClock(false, 11, 22, 33, 123456), false, mp))
+	require.NoError(t, vector.AppendFixed(datetimeVec, types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 123000), false, mp))
+	require.NoError(t, vector.AppendFixed(timestampVec, types.FromClockZone(time.Local, 2024, 1, 2, 3, 4, 5, 123456), false, mp))
+
+	var buf bytes.Buffer
+	require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *timeVec.GetType(), []*vector.Vector{timeVec}, 0, 0))
+	assert.Equal(t, "11:22:33.123456", buf.String())
+	buf.Reset()
+	require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *datetimeVec.GetType(), []*vector.Vector{datetimeVec}, 0, 0))
+	assert.Equal(t, "2024-01-02 03:04:05.123", buf.String())
+	buf.Reset()
+	require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *timestampVec.GetType(), []*vector.Vector{timestampVec}, 0, 0))
+	assert.Equal(t, "2024-01-02 03:04:05.123456", buf.String())
+}
+
+func TestWriteSQLLoadCSVFieldFromVec_BinaryEscapesControlBytes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_blob.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte{'a', '\n', 0, '\r', '\t', 0x1a, '"', '\\'}, false, mp))
+
+	var buf bytes.Buffer
+	require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *vec.GetType(), []*vector.Vector{vec}, 0, 0))
+	assert.Equal(t, `"a\n\0\r\t\Z""\\"`, buf.String())
 }
 
 func TestParseCSVRowOrder(t *testing.T) {
