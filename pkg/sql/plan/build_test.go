@@ -1336,7 +1336,6 @@ func queryContainsExpr(query *Query, accept func(*plan.Expr) bool) bool {
 	return false
 }
 
-
 func nodeContainsStringLiteral(node *Node, value string) bool {
 	for _, expr := range node.ProjectList {
 		if exprContainsStringLiteral(expr, value) {
