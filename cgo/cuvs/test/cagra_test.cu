@@ -21,8 +21,39 @@
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
+#include <cuda_fp16.h>
 
 using namespace matrixone;
+
+// Native half (f16) build + search — validates the direct vecf16-base path
+// (gpu_cagra_t<half> native add_chunk/search, no quantizer). Linking this proves
+// cuVS supports cagra over half.
+TEST(GpuCagraTest, BasicLoadAndSearchHalf) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<half> dataset(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = __float2half((float)rand() / RAND_MAX);
+        ids[i] = (int64_t)(i + 1000);
+    }
+
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<half> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
+    index.start();
+    index.build();
+
+    std::vector<half> queries(dataset.begin(), dataset.begin() + dimension);
+    cagra_search_params_t sp = cagra_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 1000LL);
+
+    index.destroy();
+}
 
 TEST(GpuCagraTest, BasicLoadAndSearch) {
     const uint32_t dimension = 16;

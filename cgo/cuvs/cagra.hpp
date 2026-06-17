@@ -420,7 +420,7 @@ public:
                 this->flattened_host_dataset.resize((size_t)this->current_offset_ * this->dimension);
         }
         if (this->count == 0) {
-            if (this->pending_total_count_ == 0) {
+            if (this->pending_total_count_ == 0 && this->pending_half_total_count_ == 0) {
                 this->is_loaded_ = true;
                 return;
             }
@@ -428,7 +428,13 @@ public:
 
         // std::cout << "[DEBUG] CAGRA build: Starting build count=" << this->count << " dim=" << this->dimension << " metric=" << (int)this->metric << std::endl;
 
-        this->train_quantizer_if_needed();
+        // vecf16 base + 1-byte T: train half_quantizer_ on the buffered vecf16
+        // sample, transform half->T natively, and store via add_chunk(T). For a
+        // float base, this is a no-op and the float quantizer trains as before.
+        this->flush_pending_half_chunks_if_needed();
+        if (!this->uses_half_quantizer_) {
+            this->train_quantizer_if_needed();
+        }
         if (!this->worker) throw std::runtime_error("Worker not initialized");
 
         // Validate build params against effective per-shard row count before
@@ -739,6 +745,31 @@ public:
                                        const std::string& preds_json) {
         uint64_t job_id = this->search_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
         return this->search_wait(job_id);
+    }
+
+    // Quantize a vecf16 (half) query to the 1-byte storage type T via the
+    // half-source quantizer, writing num_queries*dimension T values into `out`.
+    // The caller then runs the normal native search(const T*) path. No f32 detour.
+    void quantize_half_query(const half* queries_data, uint64_t num_queries, T* out) {
+        if constexpr (sizeof(T) != 1) {
+            throw std::runtime_error("quantize_half_query requires a 1-byte storage type (int8/uint8)");
+        } else {
+            uint64_t job = this->worker->submit_main(
+                [this, queries_data, num_queries, out](raft_handle_wrapper_t& handle) -> std::any {
+                    auto res = handle.get_raft_resources();
+                    auto q_half_host = raft::make_host_matrix_view<const half, int64_t>(queries_data, num_queries, this->dimension);
+                    auto q_half_dev = raft::make_device_matrix<half, int64_t>(*res, num_queries, this->dimension);
+                    raft::copy(*res, q_half_dev.view(), q_half_host);
+                    if (!this->half_quantizer_.is_trained()) throw std::runtime_error("half quantizer not trained");
+                    auto q_t_dev = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
+                    this->half_quantizer_.template transform<T>(*res, q_half_dev.view(), q_t_dev.data_handle(), true);
+                    raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(out, num_queries, this->dimension), q_t_dev.view());
+                    handle.sync();
+                    return std::any();
+                });
+            auto r = this->worker->wait(job).get();
+            if (r.error) std::rethrow_exception(r.error);
+        }
     }
 
     // Async T-typed filtered search. Mirrors search_float_with_filter_async

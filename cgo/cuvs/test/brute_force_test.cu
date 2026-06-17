@@ -490,3 +490,10 @@ TEST(GpuBruteForceTest, MultiQueryKExceedsIndexSize) {
 
     index.destroy();
 }
+
+// NOTE: cuVS brute force does NOT support int8_t/uint8_t. cuvs::neighbors::brute_force::search
+// only provides index<float,float> and index<half,float> overloads (verified: compiling
+// gpu_brute_force_t<int8_t>/<uint8_t>.search fails with "no matching search overload"). The
+// header's "Supported T: ... int8_t, uint8_t" claim does not hold for search. For direct
+// narrow-base ivfpq/cagra, the int8/uint8 overflow tier therefore uses the pure-Go brute force
+// (pkg/vectorindex/brute_force, native int8/uint8 kernels), NOT a cuVS C++ brute force.

@@ -66,6 +66,14 @@ void gpu_cagra_add_chunk(gpu_cagra_c index_c, const void* chunk_data, uint64_t c
 // Add chunk of data (from float, with on-the-fly quantization if needed)
 void gpu_cagra_add_chunk_float(gpu_cagra_c index_c, const float* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
 
+// Add chunk of vecf16 (half) data, quantizing natively to a 1-byte storage type
+// (int8/uint8) via the half-source quantizer. Requires int8/uint8 storage.
+void gpu_cagra_add_chunk_quantize_half(gpu_cagra_c index_c, const void* half_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
+
+// Quantize a vecf16 (half) query to the 1-byte storage type via the half-source
+// quantizer, writing num_queries*dimension bytes into out. Requires int8/uint8 storage.
+void gpu_cagra_quantize_half(gpu_cagra_c index_c, const void* half_data, uint64_t num_queries, void* out, void* errmsg);
+
 // Trains the scalar quantizer (if T is 1-byte)
 void gpu_cagra_train_quantizer(gpu_cagra_c index_c, const float* train_data, uint64_t n_samples, void* errmsg);
 

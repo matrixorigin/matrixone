@@ -337,6 +337,44 @@ void gpu_ivf_pq_add_chunk_float(gpu_ivf_pq_c index_c, const float* chunk_data, u
     }
 }
 
+void gpu_ivf_pq_add_chunk_quantize_half(gpu_ivf_pq_c index_c, const void* half_data, uint64_t chunk_count, const int64_t* ids, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
+        const half* hd = static_cast<const half*>(half_data);
+        switch (any->qtype) {
+            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->add_chunk_quantize_half(hd, chunk_count, -1, ids); break;
+            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->add_chunk_quantize_half(hd, chunk_count, -1, ids); break;
+            default: throw std::runtime_error("gpu_ivf_pq_add_chunk_quantize_half: requires int8/uint8 storage");
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_ivf_pq_add_chunk_quantize_half", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_ivf_pq_add_chunk_quantize_half", "unknown C++ exception");
+    }
+}
+
+void gpu_ivf_pq_quantize_half(gpu_ivf_pq_c index_c, const void* half_data, uint64_t num_queries, void* out, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
+        const half* hd = static_cast<const half*>(half_data);
+        switch (any->qtype) {
+            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->quantize_half_query(hd, num_queries, static_cast<int8_t*>(out)); break;
+            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->quantize_half_query(hd, num_queries, static_cast<uint8_t*>(out)); break;
+            default: throw std::runtime_error("gpu_ivf_pq_quantize_half: requires int8/uint8 storage");
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_ivf_pq_quantize_half", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_ivf_pq_quantize_half", "unknown C++ exception");
+    }
+}
+
 void gpu_ivf_pq_train_quantizer(gpu_ivf_pq_c index_c, const float* train_data, uint64_t n_samples, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {

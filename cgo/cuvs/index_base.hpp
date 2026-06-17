@@ -1368,6 +1368,114 @@ public:
         *max = quantizer_.max();
     }
 
+    // ---- Native half-source quantization (vecf16 base -> 1-byte T) ----
+    // add_chunk_quantize_half buffers a vecf16 chunk; the actual half->T quantize
+    // is deferred to build time (flush_pending_half_chunks_if_needed), where
+    // half_quantizer_ is trained on the accumulated vecf16 sample and each chunk
+    // is transformed half->T and stored via the existing native add_chunk(T).
+    // Native half source throughout — no f32 detour. Build-only (1-byte T).
+    void add_chunk_quantize_half(const half* chunk_data, uint64_t chunk_count, int64_t offset = -1, const IdT* ids = nullptr) {
+        if constexpr (sizeof(T) != 1) {
+            throw std::runtime_error("add_chunk_quantize_half requires a 1-byte storage type (int8/uint8)");
+        } else {
+            {
+                std::shared_lock<std::shared_mutex> lock(mutex_);
+                if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
+            }
+            pending_half_chunk_t c;
+            c.data.assign(chunk_data, chunk_data + chunk_count * dimension);
+            c.count  = chunk_count;
+            c.offset = offset;
+            if (ids) c.ids.assign(ids, ids + chunk_count);
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            pending_half_total_count_ += chunk_count;
+            pending_half_chunks_.push_back(std::move(c));
+            uses_half_quantizer_ = true;
+        }
+    }
+
+    // Explicitly train the half-source quantizer on a vecf16 sample (mirrors
+    // train_quantizer for the float source). Used on load/deserialize paths.
+    void train_quantizer_half(const half* train_data, uint64_t n_samples) {
+        uint64_t job_id = worker->submit_main(
+            [this, train_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
+                auto res = handle.get_raft_resources();
+                auto train_host_view = raft::make_host_matrix_view<const half, int64_t>(train_data, n_samples, dimension);
+                auto train_device = raft::make_device_matrix<half, int64_t>(*res, n_samples, dimension);
+                raft::copy(*res, train_device.view(), train_host_view);
+                half_quantizer_.train(*res, train_device.view());
+                handle.sync();
+                return std::any();
+            });
+        auto res = worker->wait(job_id).get();
+        if (res.error) std::rethrow_exception(res.error);
+        uses_half_quantizer_ = true;
+    }
+
+    // Train half_quantizer_ on the buffered vecf16 sample and transform every
+    // buffered chunk half->T, storing it via the native add_chunk(T). Called at
+    // build time. No-op unless T is 1-byte and half chunks were buffered. Runs at
+    // build (no concurrent searches), so quantizer access needs no extra locking.
+    void flush_pending_half_chunks_if_needed() {
+        if constexpr (sizeof(T) == 1) {
+            std::vector<pending_half_chunk_t> chunks;
+            uint64_t total;
+            {
+                std::unique_lock<std::shared_mutex> lock(mutex_);
+                if (pending_half_chunks_.empty()) return;
+                chunks = std::move(pending_half_chunks_);
+                total = pending_half_total_count_;
+                pending_half_total_count_ = 0;
+                pending_half_chunks_.clear();
+            }
+
+            // One worker task: train half_quantizer_ on a sample, then transform
+            // each buffered chunk half->T into a host buffer.
+            std::vector<std::vector<T>> t_chunks(chunks.size());
+            uint64_t job_id = worker->submit_main(
+                [this, &chunks, &t_chunks, total](raft_handle_wrapper_t& handle) -> std::any {
+                    auto res = handle.get_raft_resources();
+
+                    uint64_t n_train = std::min<uint64_t>(kQuantizerTrainThreshold, total);
+                    std::vector<half> sample;
+                    sample.reserve(n_train * dimension);
+                    for (auto& c : chunks) {
+                        uint64_t have = static_cast<uint64_t>(sample.size() / dimension);
+                        if (have >= n_train) break;
+                        uint64_t take = std::min<uint64_t>(c.count, n_train - have);
+                        sample.insert(sample.end(), c.data.begin(), c.data.begin() + take * dimension);
+                    }
+                    uint64_t n_rows = static_cast<uint64_t>(sample.size() / dimension);
+                    auto train_host = raft::make_host_matrix_view<const half, int64_t>(sample.data(), n_rows, dimension);
+                    auto train_dev = raft::make_device_matrix<half, int64_t>(*res, n_rows, dimension);
+                    raft::copy(*res, train_dev.view(), train_host);
+                    half_quantizer_.train(*res, train_dev.view());
+
+                    for (size_t i = 0; i < chunks.size(); ++i) {
+                        auto& c = chunks[i];
+                        auto h_host = raft::make_host_matrix_view<const half, int64_t>(c.data.data(), c.count, dimension);
+                        auto h_dev = raft::make_device_matrix<half, int64_t>(*res, c.count, dimension);
+                        raft::copy(*res, h_dev.view(), h_host);
+                        auto t_dev = raft::make_device_matrix<T, int64_t>(*res, c.count, dimension);
+                        half_quantizer_.template transform<T>(*res, h_dev.view(), t_dev.data_handle(), true);
+                        t_chunks[i].resize(c.count * dimension);
+                        raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(t_chunks[i].data(), c.count, dimension), t_dev.view());
+                    }
+                    handle.sync();
+                    return std::any();
+                });
+            auto r = worker->wait(job_id).get();
+            if (r.error) std::rethrow_exception(r.error);
+
+            // Store each transformed chunk via the existing native add_chunk(T).
+            // (Separate submit_main per chunk — never nested inside the task above.)
+            for (size_t i = 0; i < chunks.size(); ++i) {
+                const IdT* cids = chunks[i].ids.empty() ? nullptr : chunks[i].ids.data();
+                add_chunk(t_chunks[i].data(), chunks[i].count, chunks[i].offset, cids);
+            }
+        }
+    }
+
     // Returns a snapshot of host_ids by value. The previous signature
     // (const IdT*) released the shared_lock before the caller could read,
     // so a concurrent extend() resize would invalidate the pointer.
@@ -1498,38 +1606,42 @@ public:
     struct manifest_data_t {
         std::string raw;          // full manifest.json content
         std::string comp_json;    // "components" sub-object
-        bool has_ids       = false;
-        bool has_quantizer = false;
-        bool has_bitset    = false;
-        bool has_filter    = false;
+        bool has_ids            = false;
+        bool has_quantizer      = false;
+        bool has_half_quantizer = false;
+        bool has_bitset         = false;
+        bool has_filter         = false;
     };
 
     // Saves ids, quantizer, bitset, and filter data (when present) to dir.
     // Returns comp_entry strings for each saved file.
     std::vector<std::string> save_common_components(const std::string& dir) const {
-        bool has_ids, has_quantizer, has_bitset, has_filter;
+        bool has_ids, has_quantizer, has_half_quantizer, has_bitset, has_filter;
         // Snapshot the filter data under the lock; writing to disk happens without
         // holding the lock since FilterStore::save only reads from its buffers.
         FilterStore filter_snapshot;
         {
             std::shared_lock<std::shared_mutex> lock(mutex_);
-            has_ids       = !this->host_ids.empty();
-            has_quantizer = this->quantizer_.is_trained();
-            has_bitset    = !this->deleted_bitset_.empty();
-            has_filter    = !this->filter_host_.empty();
+            has_ids            = !this->host_ids.empty();
+            has_quantizer      = this->quantizer_.is_trained();
+            has_half_quantizer = this->uses_half_quantizer_ && this->half_quantizer_.is_trained();
+            has_bitset         = !this->deleted_bitset_.empty();
+            has_filter         = !this->filter_host_.empty();
             if (has_filter) filter_snapshot = this->filter_host_;  // copy
         }
 
-        if (has_ids)       this->save_ids(dir + "/ids.bin");
-        if (has_quantizer) this->quantizer_.save_to_file(dir + "/quantizer.bin");
-        if (has_bitset)    this->save_bitset(dir);
-        if (has_filter)    filter_snapshot.save(dir + "/filter_data.bin");
+        if (has_ids)            this->save_ids(dir + "/ids.bin");
+        if (has_quantizer)      this->quantizer_.save_to_file(dir + "/quantizer.bin");
+        if (has_half_quantizer) this->half_quantizer_.save_to_file(dir + "/half_quantizer.bin");
+        if (has_bitset)         this->save_bitset(dir);
+        if (has_filter)         filter_snapshot.save(dir + "/filter_data.bin");
 
         std::vector<std::string> entries;
-        if (has_ids)       entries.push_back("    \"ids\": \"ids.bin\"");
-        if (has_quantizer) entries.push_back("    \"quantizer\": \"quantizer.bin\"");
-        if (has_bitset)    entries.push_back("    \"bitset\": \"bitset.bin\"");
-        if (has_filter)    entries.push_back("    \"filter_data\": \"filter_data.bin\"");
+        if (has_ids)            entries.push_back("    \"ids\": \"ids.bin\"");
+        if (has_quantizer)      entries.push_back("    \"quantizer\": \"quantizer.bin\"");
+        if (has_half_quantizer) entries.push_back("    \"half_quantizer\": \"half_quantizer.bin\"");
+        if (has_bitset)         entries.push_back("    \"bitset\": \"bitset.bin\"");
+        if (has_filter)         entries.push_back("    \"filter_data\": \"filter_data.bin\"");
         return entries;
     }
 
@@ -1550,14 +1662,15 @@ public:
     void write_manifest(const std::string& dir, const std::string& index_type,
                         const std::string& build_params_json,
                         const std::vector<std::string>& comp_entries) const {
-        bool has_ids, has_quantizer, has_bitset, has_filter;
+        bool has_ids, has_quantizer, has_half_quantizer, has_bitset, has_filter;
         uint64_t cap_val, len_val, del_count, bs_ver;
         {
             std::shared_lock<std::shared_mutex> lock(mutex_);
-            has_ids       = !this->host_ids.empty();
-            has_quantizer = this->quantizer_.is_trained();
-            has_bitset    = !this->deleted_bitset_.empty();
-            has_filter    = !this->filter_host_.empty();
+            has_ids            = !this->host_ids.empty();
+            has_quantizer      = this->quantizer_.is_trained();
+            has_half_quantizer = this->uses_half_quantizer_ && this->half_quantizer_.is_trained();
+            has_bitset         = !this->deleted_bitset_.empty();
+            has_filter         = !this->filter_host_.empty();
             cap_val       = this->count;
             len_val       = this->current_offset_;
             del_count     = this->deleted_count_;
@@ -1578,6 +1691,7 @@ public:
         mf << "  \"length\": "          << len_val                       << ",\n";
         mf << "  \"has_ids\": "         << (has_ids       ? "true" : "false") << ",\n";
         mf << "  \"has_quantizer\": "   << (has_quantizer ? "true" : "false") << ",\n";
+        mf << "  \"has_half_quantizer\": " << (has_half_quantizer ? "true" : "false") << ",\n";
         mf << "  \"has_bitset\": "      << (has_bitset    ? "true" : "false") << ",\n";
         mf << "  \"has_filter\": "      << (has_filter    ? "true" : "false") << ",\n";
         mf << "  \"deleted_count\": "   << del_count                     << ",\n";
@@ -1624,11 +1738,12 @@ public:
 
         manifest_data_t m;
         m.raw           = raw;
-        m.comp_json     = json_object(raw, "components");
-        m.has_ids       = json_bool(raw, "has_ids");
-        m.has_quantizer = json_bool(raw, "has_quantizer");
-        m.has_bitset    = json_bool(raw, "has_bitset");
-        m.has_filter    = json_bool(raw, "has_filter");
+        m.comp_json          = json_object(raw, "components");
+        m.has_ids            = json_bool(raw, "has_ids");
+        m.has_quantizer      = json_bool(raw, "has_quantizer");
+        m.has_half_quantizer = json_bool(raw, "has_half_quantizer");
+        m.has_bitset         = json_bool(raw, "has_bitset");
+        m.has_filter         = json_bool(raw, "has_filter");
         return m;
     }
 
@@ -1639,6 +1754,10 @@ public:
         }
         if (m.has_quantizer) {
             this->quantizer_.load_from_file(dir + "/" + json_value(m.comp_json, "quantizer"));
+        }
+        if (m.has_half_quantizer) {
+            this->half_quantizer_.load_from_file(dir + "/" + json_value(m.comp_json, "half_quantizer"));
+            this->uses_half_quantizer_ = true;
         }
         if (m.has_bitset) {
             this->load_bitset_from_file(dir + "/" + json_value(m.comp_json, "bitset"));
@@ -1671,6 +1790,13 @@ public:
 
 protected:
     scalar_quantizer_t<float> quantizer_;
+    // Half-source quantizer for a vecf16 base column quantized to a 1-byte T
+    // (int8/uint8). Distinct from quantizer_ (float source) so the half query/
+    // data is quantized natively without an f32 detour. uses_half_quantizer_
+    // records which quantizer the index was built with (serialized) so search
+    // quantizes the query through the matching source type.
+    scalar_quantizer_t<half> half_quantizer_;
+    bool uses_half_quantizer_ = false;
     uint64_t current_offset_ = 0;
     // Serializes concurrent extend() calls. Held across GPU work and count update so that
     // set_ids() offsets always match the GPU execution order. Does NOT block searches.
@@ -1841,6 +1967,16 @@ protected:
     static constexpr uint64_t kQuantizerTrainThreshold = 1000;
     std::vector<pending_float_chunk_t> pending_float_chunks_;
     uint64_t pending_total_count_ = 0;
+
+    // Half-source counterpart of pending_float_chunk_t (vecf16 base -> 1-byte T).
+    struct pending_half_chunk_t {
+        std::vector<half> data;    ///< count * dimension halfs
+        uint64_t          count;
+        int64_t           offset;  ///< -1 = append; >= 0 = explicit position
+        std::vector<IdT>  ids;     ///< empty if caller supplied no IDs
+    };
+    std::vector<pending_half_chunk_t> pending_half_chunks_;
+    uint64_t pending_half_total_count_ = 0;
 };
 
 } // namespace matrixone

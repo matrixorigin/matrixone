@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
+#include <cuda_fp16.h>
 
 using namespace matrixone;
 
@@ -83,6 +84,75 @@ TEST(GpuIvfPqTest, BasicLoadAndSearchWithIds) {
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
     ASSERT_EQ(result.neighbors[0], 2000);
+
+    index.destroy();
+}
+
+// Native half (f16) build + search — validates the direct vecf16-base path
+// (gpu_ivf_pq_t<half> native add_chunk/search, no quantizer). Linking this proves
+// cuVS supports ivf_pq over half (unlike brute force over int8/uint8).
+TEST(GpuIvfPqTest, BasicLoadAndSearchHalf) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<half> dataset(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = __float2half((float)rand() / RAND_MAX);
+        ids[i] = (int64_t)(i + 2000);
+    }
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 100;
+    gpu_ivf_pq_t<half> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
+    index.start();
+    index.build();
+
+    // Query == row 0, so the nearest neighbour must be its id (2000).
+    std::vector<half> queries(dataset.begin(), dataset.begin() + dimension);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 2000);
+
+    index.destroy();
+}
+
+// vecf16 base -> int8 storage via the native half-source quantizer
+// (add_chunk_quantize_half). Verifies the quantize-build path: train
+// half_quantizer_ on the buffered vecf16 sample, transform half->int8, store via
+// add_chunk(int8), and build a searchable int8 index. No f32 detour.
+TEST(GpuIvfPqTest, HalfQuantizeToInt8Build) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 2000;
+    std::vector<half> dataset(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = __float2half((float)(rand() % 256) / 255.0f);
+        ids[i] = (int64_t)(i + 5000);
+    }
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 50;
+    gpu_ivf_pq_t<int8_t> index(count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.add_chunk_quantize_half(dataset.data(), count, -1, ids.data());
+    index.build();
+
+    // The resulting int8 index is searchable with a native int8 query.
+    std::vector<int8_t> q(dimension, 0);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 50;
+    auto result = index.search(q.data(), 1, dimension, 5, sp);
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    for (auto n : result.neighbors) {
+        ASSERT_GE(n, (int64_t)5000);
+        ASSERT_LT(n, (int64_t)(5000 + count));
+    }
 
     index.destroy();
 }

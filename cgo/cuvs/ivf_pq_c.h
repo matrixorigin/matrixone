@@ -72,6 +72,16 @@ void gpu_ivf_pq_extend_float(gpu_ivf_pq_c index_c, const float* new_data, uint64
 // Add chunk of data (from float, with on-the-fly quantization if needed)
 void gpu_ivf_pq_add_chunk_float(gpu_ivf_pq_c index_c, const float* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
 
+// Add chunk of vecf16 (half) data, quantizing natively to a 1-byte storage type
+// (int8/uint8) via the half-source quantizer. half_data is a host buffer of
+// chunk_count*dimension IEEE-fp16 values (passed as raw bytes). Requires int8/uint8 storage.
+void gpu_ivf_pq_add_chunk_quantize_half(gpu_ivf_pq_c index_c, const void* half_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
+
+// Quantize a vecf16 (half) query to the 1-byte storage type via the half-source
+// quantizer, writing num_queries*dimension bytes into out. The caller then runs
+// the normal native search with the quantized query. Requires int8/uint8 storage.
+void gpu_ivf_pq_quantize_half(gpu_ivf_pq_c index_c, const void* half_data, uint64_t num_queries, void* out, void* errmsg);
+
 // Trains the scalar quantizer (if T is 1-byte)
 void gpu_ivf_pq_train_quantizer(gpu_ivf_pq_c index_c, const float* train_data, uint64_t n_samples, void* errmsg);
 
