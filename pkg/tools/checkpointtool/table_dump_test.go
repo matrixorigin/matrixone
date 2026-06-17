@@ -618,6 +618,80 @@ func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *test
 	assert.NotContains(t, ddl, "`old`")
 }
 
+func TestCreateTableDDLFromCatalogViews_IncludesForeignKeys(t *testing.T) {
+	moTablesHeaders := append([]string{"object", "block", "row"}, catalog.MoTablesSchema...)
+	tableRow := func(relID, relName, dbName, dbID, constraint string) []string {
+		data := make([]string, len(catalog.MoTablesSchema))
+		set := func(colName, value string) {
+			for i, header := range catalog.MoTablesSchema {
+				if header == colName {
+					data[i] = value
+					return
+				}
+			}
+			t.Fatalf("missing mo_tables header %s", colName)
+		}
+		set(catalog.SystemRelAttr_ID, relID)
+		set(catalog.SystemRelAttr_Name, relName)
+		set(catalog.SystemRelAttr_DBName, dbName)
+		set(catalog.SystemRelAttr_DBID, dbID)
+		set(catalog.SystemRelAttr_Kind, "r")
+		set(catalog.SystemRelAttr_Constraint, constraint)
+		return append([]string{"obj", "0", relID}, data...)
+	}
+	moTablesView := &LogicalTableView{
+		Headers: moTablesHeaders,
+		Rows: [][]string{
+			tableRow("100", "parent", "ckp_constraints", "10", encodedConstraint(t, encodedPrimaryKeyConstraint(t, "id"))),
+			tableRow("101", "child_cascade", "ckp_constraints", "10", encodedConstraint(t,
+				&engine.ForeignKeyDef{Fkeys: []*plan.ForeignKeyDef{{
+					Name:        "fk_child_cascade_parent",
+					Cols:        []uint64{1},
+					ForeignTbl:  100,
+					ForeignCols: []uint64{0},
+					OnDelete:    plan.ForeignKeyDef_CASCADE,
+					OnUpdate:    plan.ForeignKeyDef_RESTRICT,
+				}}},
+			)),
+		},
+	}
+
+	moColumnsHeaders := append([]string{"object", "block", "row"}, catalog.MoColumnsSchema...)
+	columnRow := func(relID, relName, colID, name, typ, attnum, notNull string) []string {
+		data := make([]string, len(catalog.MoColumnsSchema))
+		set := func(colName, value string) {
+			for i, header := range catalog.MoColumnsSchema {
+				if header == colName {
+					data[i] = value
+					return
+				}
+			}
+			t.Fatalf("missing mo_columns header %s", colName)
+		}
+		set(catalog.SystemColAttr_UniqName, colID)
+		set(catalog.SystemColAttr_RelID, relID)
+		set(catalog.SystemColAttr_RelName, relName)
+		set(catalog.SystemColAttr_Name, name)
+		set(catalog.SystemColAttr_Type, typ)
+		set(catalog.SystemColAttr_Num, attnum)
+		set(catalog.SystemColAttr_NullAbility, notNull)
+		set(catalog.SystemColAttr_IsHidden, "0")
+		set(catalog.SystemColAttr_Seqnum, attnum)
+		return append([]string{"obj", "0", attnum}, data...)
+	}
+	moColumnsView := &LogicalTableView{
+		Headers: moColumnsHeaders,
+		Rows: [][]string{
+			columnRow("100", "parent", "0", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "1"),
+			columnRow("101", "child_cascade", "0", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "1"),
+			columnRow("101", "child_cascade", "1", "parent_id", encodedSQLType(t, types.T_int32.ToType()), "2", "0"),
+		},
+	}
+
+	ddl := createTableDDLFromCatalogViews(101, moTablesView, moColumnsView)
+	assert.Contains(t, ddl, "CONSTRAINT `fk_child_cascade_parent` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT")
+}
+
 func TestBuildPartitionClauseFromMetadata_UsesSeqNumsWithHiddenColumn(t *testing.T) {
 	view := &LogicalTableView{
 		Headers: append([]string{"object", "block", "row"}, "col_0", "col_1", "col_2", "col_3", "col_4", "col_5", "col_6"),

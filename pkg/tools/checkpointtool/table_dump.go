@@ -126,6 +126,16 @@ type TableUniqueKey struct {
 	Comment    string
 }
 
+type TableForeignKey struct {
+	Name          string
+	Columns       []string
+	ReferDatabase string
+	ReferTable    string
+	ReferColumns  []string
+	OnDelete      plan.ForeignKeyDef_RefAction
+	OnUpdate      plan.ForeignKeyDef_RefAction
+}
+
 // TableSchema holds the decoded schema for one user table.
 type TableSchema struct {
 	TableName    string
@@ -135,6 +145,7 @@ type TableSchema struct {
 	Comment      string
 	UniqueKeys   []TableUniqueKey
 	PrimaryKey   []string
+	ForeignKeys  []TableForeignKey
 	Partition    string
 }
 
@@ -439,6 +450,10 @@ func renderCreateTableDDLWithComment(tableName string, cols []TableColumn, comme
 }
 
 func renderCreateTableDDLFull(tableName string, cols []TableColumn, comment string, partition string, primaryKey []string, uniqueKeys ...TableUniqueKey) string {
+	return renderCreateTableDDLFullWithForeignKeys(tableName, cols, comment, partition, primaryKey, uniqueKeys, nil)
+}
+
+func renderCreateTableDDLFullWithForeignKeys(tableName string, cols []TableColumn, comment string, partition string, primaryKey []string, uniqueKeys []TableUniqueKey, foreignKeys []TableForeignKey) string {
 	if tableName == "" || len(cols) == 0 {
 		return ""
 	}
@@ -446,6 +461,12 @@ func renderCreateTableDDLFull(tableName string, cols []TableColumn, comment stri
 	var sb strings.Builder
 	primaryCols := primaryKeyColumns(cols, primaryKey)
 	uniqueKeys = normalizedUniqueKeys(uniqueKeys)
+	foreignKeys = normalizedForeignKeys(foreignKeys)
+	extraClauses := 0
+	if len(primaryCols) > 0 {
+		extraClauses++
+	}
+	extraClauses += len(uniqueKeys) + len(foreignKeys)
 	sb.WriteString("CREATE TABLE ")
 	sb.WriteString(quoteDDLIdent(tableName))
 	sb.WriteString(" (\n")
@@ -460,7 +481,7 @@ func renderCreateTableDDLFull(tableName string, cols []TableColumn, comment stri
 			}
 		}
 		appendColumnDDLAttributes(&sb, col)
-		if i < len(cols)-1 || len(primaryCols) > 0 || len(uniqueKeys) > 0 {
+		if i < len(cols)-1 || extraClauses > 0 {
 			sb.WriteString(",\n")
 		} else {
 			sb.WriteString("\n")
@@ -474,7 +495,7 @@ func renderCreateTableDDLFull(tableName string, cols []TableColumn, comment stri
 			}
 			sb.WriteString(quoteDDLIdent(col.Name))
 		}
-		if len(uniqueKeys) > 0 {
+		if len(uniqueKeys) > 0 || len(foreignKeys) > 0 {
 			sb.WriteString("),\n")
 		} else {
 			sb.WriteString(")\n")
@@ -507,7 +528,16 @@ func renderCreateTableDDLFull(tableName string, cols []TableColumn, comment stri
 		if err := appendIndexTrailingOptionsDDL(&sb, key.AlgoParams, key.Comment); err != nil {
 			ckpDebugSchemaf("mo_tables constraint index options skipped index=%s algo=%q params=%q err=%v", key.Name, key.Algo, key.AlgoParams, err)
 		}
-		if i < len(uniqueKeys)-1 {
+		if i < len(uniqueKeys)-1 || len(foreignKeys) > 0 {
+			sb.WriteString(",\n")
+		} else {
+			sb.WriteString("\n")
+		}
+	}
+	for i, key := range foreignKeys {
+		sb.WriteString("  ")
+		sb.WriteString(renderForeignKeyClause(key))
+		if i < len(foreignKeys)-1 {
 			sb.WriteString(",\n")
 		} else {
 			sb.WriteString("\n")
@@ -743,6 +773,98 @@ func normalizedUniqueKeys(keys []TableUniqueKey) []TableUniqueKey {
 	return out
 }
 
+func normalizedForeignKeys(keys []TableForeignKey) []TableForeignKey {
+	seen := make(map[string]struct{}, len(keys))
+	out := make([]TableForeignKey, 0, len(keys))
+	for _, key := range keys {
+		cols := normalizedNameList(key.Columns)
+		referCols := normalizedNameList(key.ReferColumns)
+		if len(cols) == 0 || len(cols) != len(referCols) || strings.TrimSpace(key.ReferTable) == "" {
+			continue
+		}
+		name := strings.TrimSpace(key.Name)
+		if name == "" {
+			name = cols[0]
+		}
+		signature := strings.ToLower(name) + "\x00" + strings.ToLower(strings.Join(cols, "\x00")) + "\x00" +
+			strings.ToLower(key.ReferDatabase) + "\x00" + strings.ToLower(key.ReferTable) + "\x00" +
+			strings.ToLower(strings.Join(referCols, "\x00"))
+		if _, ok := seen[signature]; ok {
+			continue
+		}
+		seen[signature] = struct{}{}
+		out = append(out, TableForeignKey{
+			Name:          name,
+			Columns:       cols,
+			ReferDatabase: strings.TrimSpace(key.ReferDatabase),
+			ReferTable:    strings.TrimSpace(key.ReferTable),
+			ReferColumns:  referCols,
+			OnDelete:      key.OnDelete,
+			OnUpdate:      key.OnUpdate,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return strings.Join(out[i].Columns, "\x00") < strings.Join(out[j].Columns, "\x00")
+	})
+	return out
+}
+
+func normalizedNameList(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name != "" && !catalog.IsAlias(name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func renderForeignKeyClause(key TableForeignKey) string {
+	var sb strings.Builder
+	sb.WriteString("CONSTRAINT ")
+	sb.WriteString(quoteDDLIdent(key.Name))
+	sb.WriteString(" FOREIGN KEY (")
+	appendDDLIdentList(&sb, key.Columns)
+	sb.WriteString(") REFERENCES ")
+	sb.WriteString(quoteDDLIdent(key.ReferTable))
+	sb.WriteString(" (")
+	appendDDLIdentList(&sb, key.ReferColumns)
+	sb.WriteString(")")
+	sb.WriteString(" ON DELETE ")
+	sb.WriteString(renderFKAction(key.OnDelete))
+	sb.WriteString(" ON UPDATE ")
+	sb.WriteString(renderFKAction(key.OnUpdate))
+	return sb.String()
+}
+
+func appendDDLIdentList(sb *strings.Builder, names []string) {
+	for i, name := range names {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(quoteDDLIdent(name))
+	}
+}
+
+func renderFKAction(action plan.ForeignKeyDef_RefAction) string {
+	switch action {
+	case plan.ForeignKeyDef_CASCADE:
+		return "CASCADE"
+	case plan.ForeignKeyDef_SET_NULL:
+		return "SET NULL"
+	case plan.ForeignKeyDef_SET_DEFAULT:
+		return "SET DEFAULT"
+	case plan.ForeignKeyDef_NO_ACTION:
+		return "NO ACTION"
+	default:
+		return "RESTRICT"
+	}
+}
+
 func formatDDLDefault(defaultExpr string) string {
 	defaultExpr = strings.TrimSpace(defaultExpr)
 	if defaultExpr == "" {
@@ -783,7 +905,7 @@ func RenderCreateTableDDLFromSchema(schema *TableSchema) string {
 			return ""
 		}
 	}
-	return renderCreateTableDDLFull(schema.TableName, schema.Columns, schema.Comment, schema.Partition, schema.PrimaryKey, schema.UniqueKeys...)
+	return renderCreateTableDDLFullWithForeignKeys(schema.TableName, schema.Columns, schema.Comment, schema.Partition, schema.PrimaryKey, schema.UniqueKeys, schema.ForeignKeys)
 }
 
 func inferBuiltinCatalogLayout(
@@ -942,6 +1064,9 @@ func (r *CheckpointReader) ReadTableSchema(
 		cols := buildColumnsFromMoColumnsRows(moColumnsView, tableID)
 		if len(cols) > 0 {
 			schema.Columns = cols
+		}
+		if moTablesView != nil {
+			schema.ForeignKeys = findForeignKeysFromCatalogViews(moTablesView, moColumnsView, tableID)
 		}
 	}
 
@@ -2969,23 +3094,132 @@ func findPrimaryKeyFromMoTables(view *LogicalTableView, tableID uint64) []string
 	return nil
 }
 
+func findForeignKeysFromCatalogViews(moTablesView, moColumnsView *LogicalTableView, tableID uint64) []TableForeignKey {
+	if moTablesView == nil || moColumnsView == nil {
+		return nil
+	}
+	tableByID := mapTablesByID(moTablesView)
+	colNamesByTableID := mapColumnNamesByTableIDAndColID(moColumnsView)
+	constraint := findMoTablesConstraint(moTablesView, tableID)
+	return decodeForeignKeysFromMoTablesConstraint(constraint, tableID, tableByID, colNamesByTableID)
+}
+
+func mapTablesByID(view *LogicalTableView) map[uint64]TableCatalogEntry {
+	entries := buildCatalogTablesFromMoTablesRows(view)
+	out := make(map[uint64]TableCatalogEntry, len(entries))
+	for _, entry := range entries {
+		out[entry.TableID] = entry
+	}
+	return out
+}
+
+func mapColumnNamesByTableIDAndColID(view *LogicalTableView) map[uint64]map[uint64]string {
+	result := make(map[uint64]map[uint64]string)
+	add := func(relIDCol, uniqNameCol, nameCol, hiddenCol int) {
+		if relIDCol < 0 || uniqNameCol < 0 || nameCol < 0 {
+			return
+		}
+		for _, fullRow := range view.Rows {
+			row := fullRow[logicalViewDataOffset(view):]
+			if relIDCol >= len(row) || uniqNameCol >= len(row) || nameCol >= len(row) {
+				continue
+			}
+			if hiddenCol >= 0 && hiddenCol < len(row) && isTruthyCatalogValue(row[hiddenCol]) {
+				continue
+			}
+			tableID, ok := parseUintCell(row[relIDCol])
+			if !ok {
+				continue
+			}
+			colID, err := strconv.ParseUint(strings.TrimSpace(row[uniqNameCol]), 10, 64)
+			if err != nil {
+				continue
+			}
+			name := strings.TrimSpace(row[nameCol])
+			if name == "" || catalog.IsAlias(name) {
+				continue
+			}
+			if result[tableID] == nil {
+				result[tableID] = make(map[uint64]string)
+			}
+			result[tableID][colID] = name
+		}
+	}
+
+	add(
+		fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_RelID),
+		fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_UniqName),
+		fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Name),
+		fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsHidden),
+	)
+	dataWidth := len(view.Headers) - logicalViewDataOffset(view)
+	for _, match := range catalogLayoutMatches(dataWidth, moColumnsID) {
+		add(
+			catalogColIndexForLayout(match.layout, moColumnsID, catalog.SystemColAttr_RelID, match.offset),
+			catalogColIndexForLayout(match.layout, moColumnsID, catalog.SystemColAttr_UniqName, match.offset),
+			catalogColIndexForLayout(match.layout, moColumnsID, catalog.SystemColAttr_Name, match.offset),
+			catalogColIndexForLayout(match.layout, moColumnsID, catalog.SystemColAttr_IsHidden, match.offset),
+		)
+	}
+	return result
+}
+
+func findMoTablesConstraint(view *LogicalTableView, tableID uint64) string {
+	tableIDStr := fmt.Sprintf("%d", tableID)
+	try := func(relIDCol, constraintCol int) string {
+		if relIDCol < 0 || constraintCol < 0 {
+			return ""
+		}
+		for _, fullRow := range view.Rows {
+			row := fullRow[logicalViewDataOffset(view):]
+			if relIDCol >= len(row) || constraintCol >= len(row) {
+				continue
+			}
+			if row[relIDCol] == tableIDStr {
+				return row[constraintCol]
+			}
+		}
+		return ""
+	}
+	if raw := try(
+		fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_ID),
+		fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint),
+	); raw != "" {
+		return raw
+	}
+	dataWidth := len(view.Headers) - logicalViewDataOffset(view)
+	for _, match := range catalogLayoutMatches(dataWidth, moTablesID) {
+		if raw := try(
+			catalogColIndexForLayout(match.layout, moTablesID, catalog.SystemRelAttr_ID, match.offset),
+			catalogColIndexForLayout(match.layout, moTablesID, catalog.SystemRelAttr_Constraint, match.offset),
+		); raw != "" {
+			return raw
+		}
+	}
+	return ""
+}
+
 func createTableDDLFromCatalogViews(tableID uint64, moTablesView, moColumnsView *LogicalTableView, partitionMetadataView ...*LogicalTableView) string {
 	tableName := ""
 	tableComment := ""
 	uniqueKeys := []TableUniqueKey(nil)
 	primaryKey := []string(nil)
+	foreignKeys := []TableForeignKey(nil)
 	partition := ""
 	if moTablesView != nil {
 		tableName = findTableNameFromMoTables(moTablesView, tableID)
 		tableComment = findTableCommentFromMoTables(moTablesView, tableID)
 		uniqueKeys = findUniqueKeysFromMoTables(moTablesView, tableID)
 		primaryKey = findPrimaryKeyFromMoTables(moTablesView, tableID)
+		if moColumnsView != nil {
+			foreignKeys = findForeignKeysFromCatalogViews(moTablesView, moColumnsView, tableID)
+		}
 	}
 	if len(partitionMetadataView) > 0 && partitionMetadataView[0] != nil {
 		partition = buildPartitionClauseFromMetadata(partitionMetadataView[0], tableID)
 	}
 	if moColumnsView != nil {
-		if ddl := buildCreateTableFromMoColumnsWithOptions(moColumnsView, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsWithOptions(moColumnsView, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys, foreignKeys); ddl != "" {
 			return ddl
 		}
 	}
@@ -4159,6 +4393,80 @@ func decodePrimaryKeyFromMoTablesConstraint(raw string) (cols []string) {
 	return nil
 }
 
+func decodeForeignKeysFromMoTablesConstraint(
+	raw string,
+	tableID uint64,
+	tableByID map[uint64]TableCatalogEntry,
+	colNamesByTableID map[uint64]map[uint64]string,
+) (keys []TableForeignKey) {
+	if raw == "" {
+		return nil
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			ckpDebugSchemaf("mo_tables foreign key decode panic len=%d hex=%s panic=%v", len(raw), debugHexPrefix(raw, 64), r)
+			keys = nil
+		}
+	}()
+	c := &engine.ConstraintDef{}
+	if err := c.UnmarshalBinary([]byte(raw)); err != nil {
+		ckpDebugSchemaf("mo_tables foreign key decode failed len=%d hex=%s err=%v", len(raw), debugHexPrefix(raw, 64), err)
+		return nil
+	}
+	childColsByID := colNamesByTableID[tableID]
+	for _, ct := range c.Cts {
+		fkDef, ok := ct.(*engine.ForeignKeyDef)
+		if !ok || fkDef == nil {
+			continue
+		}
+		for _, fk := range fkDef.Fkeys {
+			if fk == nil || len(fk.Cols) == 0 || len(fk.Cols) != len(fk.ForeignCols) {
+				continue
+			}
+			parent, ok := tableByID[fk.ForeignTbl]
+			if !ok || parent.TableName == "" {
+				continue
+			}
+			cols := namesForColumnIDs(childColsByID, fk.Cols)
+			referCols := namesForColumnIDs(colNamesByTableID[fk.ForeignTbl], fk.ForeignCols)
+			if len(cols) == 0 || len(cols) != len(referCols) {
+				continue
+			}
+			name := strings.TrimSpace(fk.Name)
+			if name == "" {
+				name = cols[0]
+			}
+			keys = append(keys, TableForeignKey{
+				Name:          name,
+				Columns:       cols,
+				ReferDatabase: parent.DatabaseName,
+				ReferTable:    parent.TableName,
+				ReferColumns:  referCols,
+				OnDelete:      fk.OnDelete,
+				OnUpdate:      fk.OnUpdate,
+			})
+		}
+	}
+	keys = normalizedForeignKeys(keys)
+	ckpDebugSchemaf("mo_tables foreign keys decoded count=%d", len(keys))
+	return keys
+}
+
+func namesForColumnIDs(byID map[uint64]string, ids []uint64) []string {
+	if len(byID) == 0 || len(ids) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(ids))
+	for _, id := range ids {
+		name := strings.TrimSpace(byID[id])
+		if name == "" {
+			return nil
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
 func quoteDDLIdent(s string) string {
 	return "`" + strings.ReplaceAll(s, "`", "``") + "`"
 }
@@ -4191,7 +4499,7 @@ func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64, table
 	if len(tableNames) > 1 && tableNames[1] != "" {
 		tableComment = tableNames[1]
 	}
-	return buildCreateTableFromMoColumnsWithOptions(view, tableID, tableName, tableComment, "", nil, nil)
+	return buildCreateTableFromMoColumnsWithOptions(view, tableID, tableName, tableComment, "", nil, nil, nil)
 }
 
 func buildCreateTableFromMoColumnsWithOptions(
@@ -4202,6 +4510,7 @@ func buildCreateTableFromMoColumnsWithOptions(
 	partition string,
 	primaryKey []string,
 	uniqueKeys []TableUniqueKey,
+	foreignKeys []TableForeignKey,
 ) string {
 	relnameIDCol := fallbackCatalogColIndex(view, moColumnsID, "att_relname_id")
 	nameCol := fallbackCatalogColIndex(view, moColumnsID, "attname")
@@ -4210,7 +4519,7 @@ func buildCreateTableFromMoColumnsWithOptions(
 	hiddenCol := fallbackCatalogColIndex(view, moColumnsID, "att_is_hidden")
 
 	if relnameIDCol >= 0 && nameCol >= 0 && typCol >= 0 && numCol >= 0 {
-		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys, foreignKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
 			return ddl
 		}
 	}
@@ -4222,7 +4531,7 @@ func buildCreateTableFromMoColumnsWithOptions(
 		typCol = catalogColIndexForLayout(match.layout, moColumnsID, "atttyp", match.offset)
 		numCol = catalogColIndexForLayout(match.layout, moColumnsID, "attnum", match.offset)
 		hiddenCol = catalogColIndexForLayout(match.layout, moColumnsID, "att_is_hidden", match.offset)
-		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys, foreignKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
 			return ddl
 		}
 	}
@@ -4238,6 +4547,7 @@ func buildCreateTableFromMoColumnsAt(
 	partition string,
 	primaryKey []string,
 	uniqueKeys []TableUniqueKey,
+	foreignKeys []TableForeignKey,
 	relnameIDCol int,
 	nameCol int,
 	typCol int,
@@ -4249,7 +4559,7 @@ func buildCreateTableFromMoColumnsAt(
 	if len(cols) == 0 {
 		return ""
 	}
-	return renderCreateTableDDLFull(tableName, cols, tableComment, partition, primaryKey, uniqueKeys...)
+	return renderCreateTableDDLFullWithForeignKeys(tableName, cols, tableComment, partition, primaryKey, uniqueKeys, foreignKeys)
 }
 
 func isPrintableSQLType(sqlType string) bool {
