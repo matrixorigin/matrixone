@@ -240,6 +240,7 @@ func (ss *snapshotRecord) remove(index snapshotIndex) error {
 // external directory, the snapshot would be imported to system. And then,
 // the log entries can be removed safely.
 type snapshotManager struct {
+	mu        sync.RWMutex
 	cfg       *Config
 	snapshots map[nodeID]*snapshotRecord // shardID => *snapshotRecord
 }
@@ -311,9 +312,11 @@ func (sm *snapshotManager) Init(shardID uint64, replicaID uint64) error {
 	}
 	// The snapshots in the manager must be sorted.
 	sort.Ints(indexes)
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	for _, idx := range indexes {
 		if idx > 0 {
-			_ = sm.Add(shardID, replicaID, uint64(idx))
+			_ = sm.addLocked(shardID, replicaID, uint64(idx))
 		}
 	}
 	return nil
@@ -321,6 +324,8 @@ func (sm *snapshotManager) Init(shardID uint64, replicaID uint64) error {
 
 // Count implements the ISnapshotManager interface.
 func (sm *snapshotManager) Count(shardID uint64, replicaID uint64) int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 	nid := nodeID{shardID: shardID, replicaID: replicaID}
 	if s, ok := sm.snapshots[nid]; ok {
 		return len(s.items)
@@ -330,6 +335,12 @@ func (sm *snapshotManager) Count(shardID uint64, replicaID uint64) int {
 
 // Add implements the ISnapshotManager interface.
 func (sm *snapshotManager) Add(shardID uint64, replicaID uint64, index uint64) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	return sm.addLocked(shardID, replicaID, index)
+}
+
+func (sm *snapshotManager) addLocked(shardID uint64, replicaID uint64, index uint64) error {
 	si := snapshotIndex(index)
 	nid := nodeID{shardID: shardID, replicaID: replicaID}
 	dir := sm.snapshotPath(nid, si)
@@ -342,6 +353,8 @@ func (sm *snapshotManager) Add(shardID uint64, replicaID uint64, index uint64) e
 
 // Remove implements the ISnapshotManager interface.
 func (sm *snapshotManager) Remove(shardID uint64, replicaID uint64, index uint64) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	si := snapshotIndex(index)
 	nid := nodeID{shardID: shardID, replicaID: replicaID}
 	if ss, ok := sm.snapshots[nid]; ok {
@@ -354,6 +367,8 @@ func (sm *snapshotManager) Remove(shardID uint64, replicaID uint64, index uint64
 // replica. It is used when local metadata still references a replica that has
 // already been superseded on this store.
 func (sm *snapshotManager) RemoveReplica(shardID uint64, replicaID uint64) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	nid := nodeID{shardID: shardID, replicaID: replicaID}
 	if err := sm.cfg.FS.RemoveAll(sm.exportPath(shardID, replicaID)); err != nil {
 		return err
@@ -368,6 +383,8 @@ func (sm *snapshotManager) RemoveReplica(shardID uint64, replicaID uint64) error
 // escape-valve deletion so shouldDoExport does not suppress a needed
 // re-export on a quiescent shard. See issue #24315.
 func (sm *snapshotManager) NewestIndex(shardID uint64, replicaID uint64) uint64 {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 	nid := nodeID{shardID: shardID, replicaID: replicaID}
 	ss, ok := sm.snapshots[nid]
 	if !ok {
@@ -395,6 +412,8 @@ func (sm *snapshotManager) NewestIndex(shardID uint64, replicaID uint64) uint64 
 // direct path back to a successful import. The cost is at most one
 // redundant export round. See issue #24315.
 func (sm *snapshotManager) DropNewest(shardID uint64, replicaID uint64) (uint64, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	nid := nodeID{shardID: shardID, replicaID: replicaID}
 	ss, ok := sm.snapshots[nid]
 	if !ok {
@@ -413,6 +432,8 @@ func (sm *snapshotManager) DropNewest(shardID uint64, replicaID uint64) (uint64,
 
 // EvalImportSnapshot implements the ISnapshotManager interface.
 func (sm *snapshotManager) EvalImportSnapshot(shardID uint64, replicaID uint64, index uint64) (string, uint64) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 	nid := nodeID{shardID: shardID, replicaID: replicaID}
 	ss, ok := sm.snapshots[nid]
 	if !ok {

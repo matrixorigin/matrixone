@@ -138,6 +138,14 @@ func (l *store) processTruncateLog(ctx context.Context) error {
 		if _, ok := replicas[shard.ReplicaID]; !ok {
 			if len(replicas) > 0 ||
 				l.isSkippedZombie(shard.ShardID, shard.ReplicaID) {
+				replicas = l.startedReplicaIDs()[shard.ShardID]
+				if _, ok := replicas[shard.ReplicaID]; ok {
+					continue
+				}
+				if len(replicas) == 0 &&
+					!l.isSkippedZombie(shard.ShardID, shard.ReplicaID) {
+					continue
+				}
 				l.cleanupStaleReplica(shard.ShardID, shard.ReplicaID,
 					l.newestActiveSnapshotIndex(shard.ShardID, replicas))
 			}
