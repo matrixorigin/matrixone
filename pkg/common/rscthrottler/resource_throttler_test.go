@@ -491,4 +491,34 @@ func TestAcquirePolicyForCNFlushS3(t *testing.T) {
 		require.Equal(t, int64(30), left)
 		require.Equal(t, int64(60), throttler.reserved.Load())
 	})
+	t.Run("deny when mpool plus ask exceeds physical limit", func(t *testing.T) {
+		oldMpool := mpool.GlobalStats().NumCurrBytes.Load()
+		defer mpool.GlobalStats().NumCurrBytes.Store(oldMpool)
+
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		mpool.GlobalStats().NumCurrBytes.Store(89)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 2)
+		require.False(t, ok)
+		require.Equal(t, int64(0), left)
+		require.Equal(t, int64(0), throttler.reserved.Load())
+	})
+
+	t.Run("allow when mpool plus ask is at physical boundary", func(t *testing.T) {
+		oldMpool := mpool.GlobalStats().NumCurrBytes.Load()
+		defer mpool.GlobalStats().NumCurrBytes.Store(oldMpool)
+
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		mpool.GlobalStats().NumCurrBytes.Store(88)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 2)
+		require.True(t, ok)
+		require.Equal(t, int64(88), left)
+		require.Equal(t, int64(2), throttler.reserved.Load())
+	})
+
 }
