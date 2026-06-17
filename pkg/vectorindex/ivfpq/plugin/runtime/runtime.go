@@ -126,8 +126,12 @@ func (CatalogHooks) ExperimentalFlag() string { return IvfpqIndexFlag }
 // "vector_l2_ops") to a stable internal identifier. Used by plan-side
 // op_type validation when matching an ORDER BY distance function against
 // the index's declared op_type.
-// SupportedVectorTypes: IVF-PQ (cuvs) indexes f32 vectors only.
-func (CatalogHooks) SupportedVectorTypes() []types.T { return []types.T{types.T_array_float32} }
+// SupportedVectorTypes: IVF-PQ (cuvs) accepts f32 and f16 base columns. f16 is
+// stored natively as half, or downcast-quantized to int8/uint8 via QUANTIZATION.
+// int8/uint8 base columns are unsupported (the CDC overflow brute force is f32/f16-only).
+func (CatalogHooks) SupportedVectorTypes() []types.T {
+	return []types.T{types.T_array_float32, types.T_array_float16}
+}
 
 // SupportedPrimaryKeyTypes: requires an int64 primary key.
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return []types.T{types.T_int64} }
