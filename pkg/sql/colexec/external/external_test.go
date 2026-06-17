@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
@@ -63,6 +65,36 @@ type externalTestCase struct {
 var (
 	defaultOption = []string{"filepath", "abc", "format", "jsonline", "jsondata", "array"}
 )
+
+type checkLockTableBindsTxnOp struct {
+	client.TxnOperator
+	err   error
+	calls int
+}
+
+func (op *checkLockTableBindsTxnOp) CheckLockTableBinds(context.Context) error {
+	op.calls++
+	return op.err
+}
+
+type checkLockTableBindsReader struct{}
+
+func (r *checkLockTableBindsReader) Open(*ExternalParam, *process.Process) (bool, error) {
+	return false, nil
+}
+
+func (r *checkLockTableBindsReader) ReadBatch(
+	context.Context,
+	*batch.Batch,
+	*process.Process,
+	process.Analyzer,
+) (bool, error) {
+	return false, nil
+}
+
+func (r *checkLockTableBindsReader) Close() error {
+	return nil
+}
 
 func newTestCase(t *testing.T, format, jsondata string) externalTestCase {
 	proc := testutil.NewProcess(t)
@@ -102,6 +134,36 @@ func makeCases(t *testing.T) []externalTestCase {
 		newTestCase(t, tree.JSONLINE, tree.OBJECT),
 		newTestCase(t, tree.JSONLINE, tree.ARRAY),
 	}
+}
+
+func TestCallPropagatesLoadLockTableBindCheckError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Ctx = context.Background()
+	expected := moerr.NewLockTableBindChangedNoCtx()
+	op := &checkLockTableBindsTxnOp{err: expected}
+	proc.Base.TxnOperator = op
+
+	arg := &External{
+		ctr:    container{},
+		reader: &checkLockTableBindsReader{},
+		Es: &ExternalParam{
+			ExParamConst: ExParamConst{
+				FileList: []string{"test.csv"},
+				Extern: &tree.ExternParam{
+					ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)},
+				},
+			},
+			ExParam: ExParam{Fileparam: &ExFileparam{}},
+		},
+		OperatorBase: vm.OperatorBase{
+			OpAnalyzer: process.NewAnalyzer(0, false, false, "external"),
+		},
+	}
+
+	_, err := arg.Call(proc)
+	require.Equal(t, expected, err)
+	require.Equal(t, 1, op.calls)
 }
 
 func TestGetColDataParallelLoadEmptyNumericAsZero(t *testing.T) {
