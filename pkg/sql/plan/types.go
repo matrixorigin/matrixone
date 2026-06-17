@@ -34,6 +34,7 @@ const (
 	JoinSideBoth            = JoinSideLeft | JoinSideRight
 	JoinSideMark            = 1 << 3
 	JoinSideCorrelated      = 1 << 4
+	JoinSideOuter           = 1 << 5
 )
 
 type ExpandAliasMode int8
