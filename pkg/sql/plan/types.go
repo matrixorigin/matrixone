@@ -34,6 +34,7 @@ const (
 	JoinSideBoth            = JoinSideLeft | JoinSideRight
 	JoinSideMark            = 1 << 3
 	JoinSideCorrelated      = 1 << 4
+	JoinSideOuter           = 1 << 5
 )
 
 type ExpandAliasMode int8
@@ -214,6 +215,18 @@ type QueryBuilder struct {
 	// optimizationHistory records key optimization steps for debugging remap errors
 	// Only records when optimizations actually change the plan structure
 	optimizationHistory []string
+
+	// Irregular index (IVF/fulltext) synchronous maintenance for the modern DML
+	// path. The modern dedup+MULTI_UPDATE handles the base table and regular
+	// indexes (1:1 row mapping); irregular indexes need computed 1:N maintenance
+	// (tokenize / nearest-centroid) that cannot fit the UpdateCtx model. So the
+	// new-row image is materialized into irregularMaintSourceStep, and the
+	// maintenance sub-plans are appended after createQuery() (post-optimizer
+	// form), mirroring how regular insert maintenance is built.
+	irregularMaintSourceStep int32
+	irregularMaintIndexes    []*plan.IndexDef
+	irregularMaintTableDef   *plan.TableDef
+	irregularMaintObjRef     *plan.ObjectRef
 }
 
 type OptimizerHints struct {

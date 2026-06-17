@@ -30,10 +30,18 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 		return -1, err
 	}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.appendNodesForInsertStmt(bindCtx, lastNodeID, dmlCtx.tableDefs[0], dmlCtx.objRefs[0], insertColToExpr)
+	// Capture irregular (IVF/fulltext) indexes before appendNodesForInsertStmt
+	// strips them from the 1:1 dedup+MULTI_UPDATE plan; LOAD maintains them with
+	// the same modern sink-fanout the INSERT path uses (see bindInsert).
+	tableDef := dmlCtx.tableDefs[0]
+	irregularIndexes := getIrregularIndexes(tableDef)
+
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, dmlCtx.objRefs[0], insertColToExpr)
 	if err != nil {
 		return -1, err
 	}
+
+	lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, irregularIndexes, tableDef, dmlCtx.objRefs[0])
 
 	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil)
 }

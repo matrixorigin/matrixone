@@ -2376,16 +2376,6 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 					return true, err
 				}
 			}
-			if ctx := p.Query.Nodes[i].OnDuplicateKey; ctx != nil {
-				flag, err := checkFn(p.Query.Nodes[i].ObjRef, &plan.TableDef{
-					Name:    ctx.TableName,
-					TblId:   ctx.TableId,
-					Version: ctx.TableVersion,
-				})
-				if err != nil || flag {
-					return true, err
-				}
-			}
 		}
 	default:
 	}
@@ -3294,6 +3284,7 @@ func executeStmt(ses *Session,
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
 	ses.EnterFPrint(FPDoComQuery)
 	defer ses.ExitFPrint(FPDoComQuery)
+	defer ses.ClearDDLOwnerRoleID()
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	// set the batch buf for stream scan
 	var inMemStreamScan []*kafka.Message
@@ -3304,6 +3295,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	beginInstant := time.Now()
 	execCtx.reqCtx = appendStatementAt(execCtx.reqCtx, beginInstant)
+	execCtx.reqCtx = defines.AttachDDLOwnerRoleIDProvider(execCtx.reqCtx, ses)
 	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
 	resper := ses.GetResponser()
@@ -3468,6 +3460,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
+			ses.ClearDDLOwnerRoleID()
 			authStats, err := authenticateUserCanExecuteStatement(execCtx.reqCtx, ses, stmt)
 			if err != nil {
 				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
@@ -3516,6 +3509,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.input = input
 
 		err = executeStmtWithResponse(ses, execCtx)
+		ses.ClearDDLOwnerRoleID()
 		if err != nil {
 			return err
 		}

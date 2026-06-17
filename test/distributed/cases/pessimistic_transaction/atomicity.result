@@ -5,15 +5,15 @@ Insert into test_11 values(1,1);
 Insert into test_11 values(2,2);
 Rollback;
 select * from test_11 ;
-c    d
+➤ c[4,32,0]  ¦  d[4,32,0]
 begin;
 Insert into test_11 values(1,1);
 Insert into test_11 values(2,2);
 commit;
 select * from test_11 ;
-c    d
-1    1
-2    2
+➤ c[4,32,0]  ¦  d[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
 drop table if exists test_11;
 create table test_11 (c int primary key,d int);
 Insert into test_11 values(1,1);
@@ -25,19 +25,19 @@ delete from test_11 where c < 3;
 update test_11 set d = c + 1 where c >= 3;
 rollback;
 select * from test_11 ;
-c    d
-1    1
-2    2
-3    1
-4    2
+➤ c[4,32,0]  ¦  d[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  1  𝄀
+4  ¦  2
 begin;
 delete from test_11 where c <3;
 update test_11 set d = c + 1 where c >= 3;
 commit;
 select * from test_11 ;
-c    d
-3    4
-4    5
+➤ c[4,32,0]  ¦  d[4,32,0]  𝄀
+3  ¦  4  𝄀
+4  ¦  5
 drop table if exists test_11;
 begin;
 create table test_11 (c int primary key,d int);
@@ -58,9 +58,9 @@ delete from test_11 where c <3;
 update test_11 set d = c + 1 where c >= 3;
 commit;
 select * from test_11;
-c    d
-3    4
-4    5
+➤ c[4,32,0]  ¦  d[4,32,0]  𝄀
+3  ¦  4  𝄀
+4  ¦  5
 drop table if exists test_11;
 create table test_11 (c int primary key,d int);
 Insert into test_11 values(1,1);
@@ -70,9 +70,9 @@ Insert into test_11 values(3,1);
 Insert into test_11 values(4,2);
 rollback;
 select * from test_11;
-c    d
-1    1
-2    2
+➤ c[4,32,0]  ¦  d[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
 drop table if exists test_11;
 create table test_11 (c int primary key,d int);
 Insert into test_11 values(1,1);
@@ -88,10 +88,15 @@ begin;
 create table test_12(col1 int primary key,col2 varchar(25));
 create unique index id_01 on test_12(col2);
 select * from test_12;
-col1    col2
+➤ col1[4,32,0]  ¦  col2[12,-1,0]
 show create table test_12;
-Table    Create Table
-test_12    CREATE TABLE `test_12` (\n  `col1` int NOT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `id_01` (`col2`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+test_12  ¦  CREATE TABLE `test_12` (
+  `col1` int NOT NULL,
+  `col2` varchar(25) DEFAULT NULL,
+  PRIMARY KEY (`col1`),
+  UNIQUE KEY `id_01` (`col2`)
+)
 show create table test_12;
 No database selected
 rollback ;
@@ -109,44 +114,62 @@ create table test_12(col1 int,col2 varchar(25));
 table test_12 already exists
 insert into test_12 values (90,'tt');
 select * from test_12;
-col1    col2
-1    a
-2    b
-90    tt
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b  𝄀
+90  ¦  tt
 show create table test_12;
-Table    Create Table
-test_12    CREATE TABLE `test_12` (\n  `col1` int NOT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+test_12  ¦  CREATE TABLE `test_12` (
+  `col1` int NOT NULL,
+  `col2` varchar(25) DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 commit;
 show create table test_12;
-Table    Create Table
-test_12    CREATE TABLE `test_12` (\n  `col1` int NOT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+test_12  ¦  CREATE TABLE `test_12` (
+  `col1` int NOT NULL,
+  `col2` varchar(25) DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 select * from test_12;
-col1    col2
-1    a
-2    b
-90    tt
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b  𝄀
+90  ¦  tt
 drop table test_12;
 start transaction;
 create table test_12(col1 int primary key auto_increment,col2 varchar(25));
 insert into test_12(col2) values('c'),('d'),('e');
 create index id_01 on test_12(col2);
 select * from test_12;
-col1    col2
-1    c
-2    d
-3    e
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+1  ¦  c  𝄀
+2  ¦  d  𝄀
+3  ¦  e
 show create table test_12;
-Table    Create Table
-test_12    CREATE TABLE `test_12` (\n  `col1` int NOT NULL AUTO_INCREMENT,\n  `col2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  KEY `id_01` (`col2`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+test_12  ¦  CREATE TABLE `test_12` (
+  `col1` int NOT NULL AUTO_INCREMENT,
+  `col2` varchar(25) DEFAULT NULL,
+  PRIMARY KEY (`col1`),
+  KEY `id_01` (`col2`)
+)
 commit;
 show create table test_12;
-Table    Create Table
-test_12    CREATE TABLE `test_12` (\n  `col1` int NOT NULL AUTO_INCREMENT,\n  `col2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  KEY `id_01` (`col2`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+test_12  ¦  CREATE TABLE `test_12` (
+  `col1` int NOT NULL AUTO_INCREMENT,
+  `col2` varchar(25) DEFAULT NULL,
+  PRIMARY KEY (`col1`),
+  KEY `id_01` (`col2`)
+)
 select * from test_12;
-col1    col2
-1    c
-2    d
-3    e
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+1  ¦  c  𝄀
+2  ¦  d  𝄀
+3  ¦  e
 create database s_db_1;
 begin;
 use s_db_1;
@@ -174,12 +197,17 @@ use atomicity;
 select * from test_view_1;
 SQL parser error: table "test_view_1" does not exist
 show create table test_14;
-Table    Create Table
-test_14    CREATE TABLE `test_14` (\n  `col1` int NOT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `col2` (`col2`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+test_14  ¦  CREATE TABLE `test_14` (
+  `col1` int NOT NULL,
+  `col2` varchar(25) DEFAULT NULL,
+  PRIMARY KEY (`col1`),
+  UNIQUE KEY `col2` (`col2`)
+)
 select  * from test_view_1;
-col1    col2
-1    a
-2    b
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b
 rollback ;
 select * from test_14;
 SQL parser error: table "test_14" does not exist
@@ -195,9 +223,9 @@ use atomicity;
 select * from test_15;
 SQL parser error: table "test_15" does not exist
 select * from test_15;
-col1    col2
-1    20.98
-2    30.34
+➤ col1[4,32,0]  ¦  col2[7,24,0]  𝄀
+1  ¦  20.98  𝄀
+2  ¦  30.34
 rollback ;
 select * from test_15;
 SQL parser error: table "test_15" does not exist
@@ -205,11 +233,7 @@ start transaction ;
 use atomicity;
 create external table test_ex_table_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select num_col1 ,num_col2 from test_ex_table_1;
-num_col1    num_col2
-60    -1000
--128    -32768
-127    32767
-null    null
+➤ num_col1[-6,8,0]  ¦  num_col2[5,16,0]
 create table test_16(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19));
 insert into test_16 select * from test_ex_table_1;
 rollback ;
@@ -221,11 +245,7 @@ begin;
 use atomicity;
 create external table test_ex_table_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select num_col1 ,num_col2 from test_ex_table_1;
-num_col1    num_col2
-60    -1000
--128    -32768
-127    32767
-null    null
+➤ num_col1[-6,8,0]  ¦  num_col2[5,16,0]
 create table test_16(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19));
 insert into test_16 select * from test_ex_table_1;
 use atomicity;
@@ -233,70 +253,84 @@ select num_col1 ,num_col2 from test_ex_table_1;
 SQL parser error: table "test_ex_table_1" does not exist
 commit;
 select num_col1 ,num_col2 from test_ex_table_1;
-num_col1    num_col2
-60    -1000
--128    -32768
-127    32767
-null    null
+➤ num_col1[-6,8,0]  ¦  num_col2[5,16,0]
 select num_col1 ,num_col2 from test_16;
-num_col1    num_col2
-60    -1000
--128    -32768
-127    32767
-null    null
+➤ num_col1[-6,8,0]  ¦  num_col2[5,16,0]
 drop table if exists alter01;
 create table alter01 (col1 int, col2 decimal);
 show create table alter01;
-Table    Create Table
-alter01    CREATE TABLE `alter01` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+alter01  ¦  CREATE TABLE `alter01` (
+  `col1` int DEFAULT NULL,
+  `col2` decimal(38,0) DEFAULT NULL
+)
 insert into alter01 values(1, 3412.324);
 insert into alter01 values (-10, 323943.2343);
 begin;
 alter table alter01 change col1 col1New float;
 rollback;
 show create table alter01;
-Table    Create Table
-alter01    CREATE TABLE `alter01` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+alter01  ¦  CREATE TABLE `alter01` (
+  `col1` int DEFAULT NULL,
+  `col2` decimal(38,0) DEFAULT NULL
+)
 select * from alter01;
-col1    col2
-1    3412
--10    323943
+➤ col1[4,32,0]  ¦  col2[3,39,0]  𝄀
+1  ¦  3412  𝄀
+-10  ¦  323943
 drop table alter01;
 drop table if exists alter01;
 create table alter01 (col1 int primary key, col2 decimal);
 show create table alter01;
-Table    Create Table
-alter01    CREATE TABLE `alter01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+alter01  ¦  CREATE TABLE `alter01` (
+  `col1` int NOT NULL,
+  `col2` decimal(38,0) DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 insert into alter01 values(1, 3412.324);
 insert into alter01 values (-10, 323943.2343);
 begin;
 alter table alter01 modify col1 float not null;
 rollback;
 show create table alter01;
-Table    Create Table
-alter01    CREATE TABLE `alter01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+alter01  ¦  CREATE TABLE `alter01` (
+  `col1` int NOT NULL,
+  `col2` decimal(38,0) DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 select * from alter01;
-col1    col2
-1    3412
--10    323943
+➤ col1[4,32,0]  ¦  col2[3,39,0]  𝄀
+1  ¦  3412  𝄀
+-10  ¦  323943
 drop table alter01;
 drop table if exists alter01;
 create table alter01 (col1 int primary key, col2 decimal);
 show create table alter01;
-Table    Create Table
-alter01    CREATE TABLE `alter01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+alter01  ¦  CREATE TABLE `alter01` (
+  `col1` int NOT NULL,
+  `col2` decimal(38,0) DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 insert into alter01 values(1, 3412.324);
 insert into alter01 values (-10, 323943.2343);
 begin;
 alter table alter01 change col1 col1New float not null;
 rollback;
 show create table alter01;
-Table    Create Table
-alter01    CREATE TABLE `alter01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+alter01  ¦  CREATE TABLE `alter01` (
+  `col1` int NOT NULL,
+  `col2` decimal(38,0) DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 select * from alter01;
-col1    col2
-1    3412
--10    323943
+➤ col1[4,32,0]  ¦  col2[3,39,0]  𝄀
+1  ¦  3412  𝄀
+-10  ¦  323943
 drop table alter01;
 drop table if exists rename01;
 create table rename01(c int primary key,d int);
@@ -306,10 +340,14 @@ insert into rename01 values(2,2);
 alter table rename01 rename column c to `euwhbnfew`;
 rollback;
 select * from rename01;
-c    d
+➤ c[4,32,0]  ¦  d[4,32,0]
 show create table rename01;
-Table    Create Table
-rename01    CREATE TABLE `rename01` (\n  `c` int NOT NULL,\n  `d` int DEFAULT NULL,\n  PRIMARY KEY (`c`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+rename01  ¦  CREATE TABLE `rename01` (
+  `c` int NOT NULL,
+  `d` int DEFAULT NULL,
+  PRIMARY KEY (`c`)
+)
 drop table rename01;
 drop table if exists pri01;
 create table pri01(col1 int ,col2 int);
@@ -318,14 +356,21 @@ insert into pri01 values(1,1);
 insert into pri01 values(2,2);
 alter table pri01 add constraint primary key(col1);
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` int NOT NULL,\n  `col2` int DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+pri01  ¦  CREATE TABLE `pri01` (
+  `col1` int NOT NULL,
+  `col2` int DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 rollback;
 select * from pri01;
-col1    col2
+➤ col1[4,32,0]  ¦  col2[4,32,0]
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` int DEFAULT NULL,\n  `col2` int DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+pri01  ¦  CREATE TABLE `pri01` (
+  `col1` int DEFAULT NULL,
+  `col2` int DEFAULT NULL
+)
 drop table pri01;
 CREATE TABLE IF NOT EXISTS indup_07(
 col1 INT primary key,
@@ -334,44 +379,28 @@ col3 VARCHAR(30) NOT NULL,
 col4 BIGINT default 30
 );
 insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(24,'66','77',1),(25,'99','88',1),(22,'11','33',1) on duplicate key update col1=col1+col2;
-internal error: do not support update primary key/unique key for on duplicate key update
+unsupported DML: update primary key on duplicate
 select * from indup_07;
-col1    col2    col3    col4
-23    22    55    2
-24    66    77    1
-25    99    88    1
-33    11    33    1
+[unknown result because it is related to issue#4423]
 insert into indup_07 values(24,'1','1',100) on duplicate key update col1=2147483649;
-Data truncation: data out of range: data type int32, value '2147483649'
+[unknown result because it is related to issue#4423]
 begin;
+[unknown result because it is related to issue#4423]
 insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(33,'66','77',1) on duplicate key update col1=col1+1,col2='888';
-Duplicate entry '24' for key 'col1'
+[unknown result because it is related to issue#4423]
 select * from indup_07;
-col1    col2    col3    col4
-23    22    55    2
-24    66    77    1
-25    99    88    1
-33    11    33    1
+[unknown result because it is related to issue#4423]
 rollback ;
+[unknown result because it is related to issue#4423]
 select * from indup_07;
-col1    col2    col3    col4
-23    22    55    2
-24    66    77    1
-25    99    88    1
-33    11    33    1
+[unknown result because it is related to issue#4423]
 start transaction ;
+[unknown result because it is related to issue#4423]
 insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(33,'66','77',1) on duplicate key update col1=col1+1,col2='888';
-Duplicate entry '24' for key 'col1'
+[unknown result because it is related to issue#4423]
 select * from indup_07;
-col1    col2    col3    col4
-23    22    55    2
-24    66    77    1
-25    99    88    1
-33    11    33    1
+[unknown result because it is related to issue#4423]
 commit;
+[unknown result because it is related to issue#4423]
 select * from indup_07;
-col1    col2    col3    col4
-23    22    55    2
-24    66    77    1
-25    99    88    1
-33    11    33    1
+[unknown result because it is related to issue#4423]

@@ -65,7 +65,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
@@ -93,6 +92,8 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -653,19 +654,6 @@ func constructDeletion(
 	return deletion.NewPartitionDelete(op, oldCtx.TableDef.TblId), nil
 }
 
-func constructOnduplicateKey(node *plan.Node, _ engine.Engine) *onduplicatekey.OnDuplicatekey {
-	oldCtx := node.OnDuplicateKey
-	op := onduplicatekey.NewArgument()
-	op.OnDuplicateIdx = oldCtx.OnDuplicateIdx
-	op.OnDuplicateExpr = oldCtx.OnDuplicateExpr
-	op.Attrs = oldCtx.Attrs
-	op.InsertColCount = oldCtx.InsertColCount
-	op.UniqueCols = oldCtx.UniqueCols
-	op.UniqueColCheckExpr = oldCtx.UniqueColCheckExpr
-	op.IsIgnore = oldCtx.IsIgnore
-	return op
-}
-
 func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.FuzzyFilter {
 	pkName := node.TableDef.Pkey.PkeyColName
 	var pkTyp plan.Type
@@ -940,6 +928,33 @@ func constructExternalInsert(
 ) (vm.Operator, error) {
 	oldCtx := node.InsertCtx
 	return buildExternalInsertArg(proc.Ctx, oldCtx.Ref, oldCtx.TableDef, oldCtx.AddAffectedRows, eng, stmtAt)
+}
+
+// externalInsertTargetIsLocalFile reports whether WRITE_FILE_PATTERN resolves
+// through a stage backed by file://. Such paths are local to the CN that writes
+// them, so remote CN writers would make files invisible to the coordinator's
+// follow-up external-table scan.
+func externalInsertTargetIsLocalFile(proc *process.Process, node *plan.Node, stmtAt time.Time) (bool, error) {
+	if node == nil || node.InsertCtx == nil || node.InsertCtx.TableDef == nil {
+		return false, nil
+	}
+	param := &tree.ExternParam{}
+	if err := json.Unmarshal([]byte(node.InsertCtx.TableDef.Createsql), param); err != nil {
+		return false, err
+	}
+	pattern, ok := plan2.GetWriteFilePattern(param)
+	if !ok {
+		return false, nil
+	}
+	expanded, err := externalwrite.ExpandFilePattern(pattern, stmtAt)
+	if err != nil {
+		return false, err
+	}
+	sdef, err := stageutil.UrlToStageDef(expanded, proc)
+	if err != nil {
+		return false, err
+	}
+	return sdef.Url.Scheme == stage.FILE_PROTOCOL, nil
 }
 
 // buildExternalInsertArg builds the external-write insert operator from the

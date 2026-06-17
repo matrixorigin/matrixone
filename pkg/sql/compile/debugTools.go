@@ -76,7 +76,6 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.TableScan:               "tablescan",
 	vm.ValueScan:               "valuescan",
 	vm.TableFunction:           "tablefunction",
-	vm.OnDuplicateKey:          "on duplicate key",
 	vm.DedupJoin:               "dedup join",
 	vm.RightDedupJoin:          "right dedup join",
 	vm.Apply:                   "apply",

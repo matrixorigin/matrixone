@@ -1280,18 +1280,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		node.NotCacheable = true
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileDelete(node, ss)
-	case plan.Node_ON_DUPLICATE_KEY:
-		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
-		if err != nil {
-			return nil, err
-		}
-
-		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss, err = c.compileOnduplicateKey(node, ss)
-		if err != nil {
-			return nil, err
-		}
-		return ss, nil
 	case plan.Node_FUZZY_FILTER:
 		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -4111,6 +4099,29 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		// One timestamp per statement: all scopes must expand WRITE_FILE_PATTERN
 		// time directives against the same instant.
 		stmtAt := externalInsertStmtTime(c.proc, c.startAt)
+		localFileStage, err := externalInsertTargetIsLocalFile(c.proc, node, stmtAt)
+		if err != nil {
+			return nil, err
+		}
+		if localFileStage {
+			// Only merge scopes on remote CNs onto the current CN.
+			// Same-CN parallel writers share the same filesystem and
+			// use unique filename directives (%U / %<n>N), so they are safe
+			// to keep unmerged.
+			var localSS, remoteSS []*Scope
+			for _, s := range ss {
+				if isSameCN(s.NodeInfo.Addr, c.addr) {
+					localSS = append(localSS, s)
+				} else {
+					remoteSS = append(remoteSS, s)
+				}
+			}
+			if len(remoteSS) > 0 {
+				mergedRemote := c.newMergeScope(remoteSS)
+				localSS = append(localSS, mergedRemote)
+			}
+			ss = localSS
+		}
 		for i := range ss {
 			insertArg, err := constructExternalInsert(c.proc, node, c.e, stmtAt)
 			if err != nil {
@@ -4500,18 +4511,6 @@ func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*
 	dispatchLocal := constructDispatchLocal(true, true, node.RecursiveSink, node.RecursiveCte, receivers)
 	dispatchLocal.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(dispatchLocal)
-	c.anal.isFirst = false
-
-	ss = []*Scope{rs}
-	return ss, nil
-}
-func (c *Compile) compileOnduplicateKey(node *plan.Node, ss []*Scope) ([]*Scope, error) {
-	rs := c.newMergeScope(ss)
-
-	currentFirstFlag := c.anal.isFirst
-	arg := constructOnduplicateKey(node, c.e)
-	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs.setRootOperator(arg)
 	c.anal.isFirst = false
 
 	ss = []*Scope{rs}

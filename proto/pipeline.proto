@@ -229,16 +229,7 @@ message PreInsertSecondaryIndex {
   plan.PreInsertUkCtx pre_insert_sk_ctx = 1;
 }
 
-message OnDuplicateKey {
-  // letter case: origin
-  repeated string attrs = 1;
-  int32 insert_col_count = 2;
-  repeated plan.Expr unique_col_check_expr = 3;
-  repeated string unique_cols = 4;
-  repeated int32 on_duplicate_idx = 5;
-  map<string, plan.Expr> on_duplicate_expr = 6;
-  bool is_ignore = 7;
-}
+// OnDuplicateKey removed: legacy ON DUPLICATE KEY operator path eliminated.
 
 message FuzzyFilter {
   float N = 1;
@@ -460,7 +451,8 @@ message Instruction {
   TableFunction table_function = 14;
   ExternalScan external_scan = 15;
   Insert insert = 16;
-  OnDuplicateKey on_duplicate_key = 17;
+  // OnDuplicateKey on_duplicate_key = 17; // removed: legacy ON DUPLICATE KEY operator path eliminated
+  reserved 17;
   PreInsert pre_insert = 18;
   PreInsertUnique pre_insert_unique = 19;
   repeated plan.OrderBySpec order_by = 20;

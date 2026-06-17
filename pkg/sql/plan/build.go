@@ -73,7 +73,10 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 
 	rootId, err := builder.bindInsert(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		// ON DUPLICATE KEY UPDATE is fully handled by the modern path; it must
+		// never fall back to the legacy ODKU operator. Only plain INSERT may
+		// still fall back (e.g. inserting into a system index table).
+		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML && len(stmt.OnDuplicateUpdate) == 0 {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
 		}
 		return nil, err
@@ -86,6 +89,34 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	if err != nil {
 		return nil, err
 	}
+
+	// Append synchronous IVF/fulltext index maintenance (modern path, no legacy
+	// fallback) from the materialized new-row image; no-op without such indexes.
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+
+	// Enforce foreign key constraints for the modern insert path via DetectSqls
+	// (parent-existence check), the same runtime mechanism used elsewhere for FK.
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, stmt.With, nil, "insert")
+	if err != nil {
+		return nil, err
+	}
+	if len(tblInfo.tableDefs) == 1 && len(tblInfo.tableDefs[0].Fkeys) > 0 {
+		enabled, err := IsForeignKeyChecksEnabled(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if enabled {
+			sqls, err := genSqlsForCheckFKConstraints(ctx, tblInfo.objRef[0].SchemaName,
+				tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0].Cols, tblInfo.tableDefs[0].Fkeys)
+			if err != nil {
+				return nil, err
+			}
+			query.DetectSqls = sqls
+		}
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -196,6 +227,13 @@ func bindAndOptimizeLoadQuery(ctx CompilerContext, stmt *tree.Load, isPrepareStm
 	if err != nil {
 		return nil, err
 	}
+
+	// Append synchronous IVF/fulltext index maintenance (modern path, no legacy
+	// fallback) from the materialized new-row image; no-op without such indexes.
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
