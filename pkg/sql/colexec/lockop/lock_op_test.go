@@ -735,6 +735,8 @@ func TestLockWithRetryFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
 }
 
 func TestLockWithRetryRetriesInsideLoopAndReturnsSecondResult(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 

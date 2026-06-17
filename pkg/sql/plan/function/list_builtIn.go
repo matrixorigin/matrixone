@@ -47,6 +47,14 @@ func jsonConstructorSupportsType(oid types.T) bool {
 	}
 }
 
+func uuidSwapFlagTypeSupported(typ types.Type) bool {
+	return typ.Oid == types.T_bool ||
+		typ.IsIntOrUint() ||
+		typ.IsFloat() ||
+		typ.IsDecimal() ||
+		typ.Oid.IsMySQLString()
+}
+
 // wkbConstructor builds a typed WKB geometry constructor function definition
 // (ST_PointFromWKB, ...) accepting varchar/blob/varbinary input.
 func wkbConstructor(id int, fn executeLogicOfOverload) FuncNew {
@@ -10554,6 +10562,75 @@ var supportedControlBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `get_lock`
+	{
+		functionId: GET_LOCK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_float64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return GetLock
+				},
+			},
+		},
+	},
+
+	// function `release_lock`
+	{
+		functionId: RELEASE_LOCK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ReleaseLock
+				},
+			},
+		},
+	},
+
+	// function `is_free_lock`
+	{
+		functionId: IS_FREE_LOCK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsFreeLock
+				},
+			},
+		},
+	},
+
 	// function `trigger_fault_point`
 	{
 		functionId: TRIGGER_FAULT_POINT,
@@ -11699,6 +11776,34 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `name_const`
+	{
+		functionId: NAME_CONST,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(_ []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 2 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					if parameters[1].Oid == types.T_any {
+						return types.T_varchar.ToType()
+					}
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInNameConst
+				},
+			},
+		},
+	},
+
 	// function `icu_version`
 	{
 		functionId: ICULIBVERSION,
@@ -12680,6 +12785,117 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInUUID
+				},
+			},
+		},
+	},
+
+	// function `is_uuid`
+	{
+		functionId: IS_UUID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInIsUUID
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInIsUUID
+				},
+			},
+		},
+	},
+
+	// function `uuid_to_bin`
+	{
+		functionId: UUID_TO_BIN,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 1 && len(inputs) != 2 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			castTypes := make([]types.Type, len(inputs))
+			copy(castTypes, inputs)
+			needCast := false
+			if !inputs[0].Oid.IsMySQLString() {
+				castTypes[0] = types.T_varchar.ToType()
+				needCast = true
+			}
+			if len(inputs) == 2 && !uuidSwapFlagTypeSupported(inputs[1]) {
+				castTypes[1] = types.T_float64.ToType()
+				needCast = true
+			}
+			if needCast {
+				return newCheckResultWithCast(0, castTypes)
+			}
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varbinary.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInUUIDToBin
+				},
+			},
+		},
+	},
+
+	// function `bin_to_uuid`
+	{
+		functionId: BIN_TO_UUID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 1 && len(inputs) != 2 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			castTypes := make([]types.Type, len(inputs))
+			copy(castTypes, inputs)
+			needCast := false
+			switch inputs[0].Oid {
+			case types.T_binary, types.T_varbinary, types.T_blob:
+			default:
+				castTypes[0] = types.T_varbinary.ToType()
+				needCast = true
+			}
+			if len(inputs) == 2 && !uuidSwapFlagTypeSupported(inputs[1]) {
+				castTypes[1] = types.T_float64.ToType()
+				needCast = true
+			}
+			if needCast {
+				return newCheckResultWithCast(0, castTypes)
+			}
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInBinToUUID
 				},
 			},
 		},

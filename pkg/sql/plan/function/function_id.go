@@ -720,14 +720,21 @@ const (
 	// GIS buffer
 	ST_BUFFER = 512
 
-	// merged from upstream/main (renumbered to avoid colliding with the GIS block above)
 	CAST_JSON_TO_ARRAY = 513
 
-	BIT_COUNT = 514
+	BIT_COUNT   = 514
+	IS_UUID     = 515
+	UUID_TO_BIN = 516
+	BIN_TO_UUID = 517
+
+	GET_LOCK     = 518
+	RELEASE_LOCK = 519
+	IS_FREE_LOCK = 520
+	NAME_CONST   = 521
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 515
+	FUNCTION_END_NUMBER = 522
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1022,6 +1029,9 @@ var functionIdRegister = map[string]int32{
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,
 	"mo_win_truncate":                MO_WIN_TRUNCATE,
 	"uuid":                           UUID,
+	"is_uuid":                        IS_UUID,
+	"uuid_to_bin":                    UUID_TO_BIN,
+	"bin_to_uuid":                    BIN_TO_UUID,
 	"load_file":                      LOAD_FILE,
 	"save_file":                      SAVE_FILE,
 	"hex":                            HEX,
@@ -1067,6 +1077,9 @@ var functionIdRegister = map[string]int32{
 	"field":                          FIELD,
 	"format":                         FORMAT,
 	"sleep":                          SLEEP,
+	"get_lock":                       GET_LOCK,
+	"release_lock":                   RELEASE_LOCK,
+	"is_free_lock":                   IS_FREE_LOCK,
 	"split_part":                     SPLIT_PART,
 	"insert":                         INSERT,
 	"instr":                          INSTR,
@@ -1098,6 +1111,7 @@ var functionIdRegister = map[string]int32{
 	"mo_explain_phy":                 MO_EXPLAIN_PHY,
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,
+	"name_const":                     NAME_CONST,
 	"values":                         VALUES,
 	"binary":                         BINARY,
 	"internal_char_length":           INTERNAL_CHAR_LENGTH,
