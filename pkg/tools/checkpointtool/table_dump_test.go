@@ -795,6 +795,35 @@ func TestBuildCatalogTablesFromMoTablesRows_GenericWithTrailingColumns(t *testin
 	assert.Equal(t, "v", tables[1].RelKind)
 }
 
+func TestBuildCatalogTablesFromMoTablesRows_UsesTemporaryDisplayName(t *testing.T) {
+	headers := []string{"object", "block", "row"}
+	for i := 0; i < len(preCPKLayout.moTablesSchema); i++ {
+		headers = append(headers, fmt.Sprintf("col_%d", i))
+	}
+	data := make([]string, len(preCPKLayout.moTablesSchema))
+	data[0] = "1003"
+	data[1] = "__mo_tmp_123e4567e89b12d3a456426614174000_ckp_temp_t_session_only"
+	data[2] = "ckp_temp"
+	data[3] = "9002"
+	data[5] = "r"
+	data[11] = "7"
+	view := &LogicalTableView{
+		Headers: headers,
+		Rows:    [][]string{append([]string{"obj1", "0", "0"}, data...)},
+	}
+
+	tables := buildCatalogTablesFromMoTablesRows(view)
+	require.Len(t, tables, 1)
+	assert.Equal(t, "t_session_only", tables[0].TableName)
+}
+
+func TestDisplayTableName(t *testing.T) {
+	assert.Equal(t, "orders", displayTableName("db1", "orders"))
+	assert.Equal(t, "t1", displayTableName("db1", "__mo_tmp_123e4567e89b12d3a456426614174000_db1_t1"))
+	assert.Equal(t, "__mo_tmp_123e4567e89b12d3a456426614174000_other_t1", displayTableName("db1", "__mo_tmp_123e4567e89b12d3a456426614174000_other_t1"))
+	assert.Equal(t, "__mo_tmp_bad", displayTableName("db1", "__mo_tmp_bad"))
+}
+
 func TestListCatalogTablesDoesNotFilterRelKinds(t *testing.T) {
 	tables := []TableCatalogEntry{
 		{TableID: 1, TableName: "orders", DatabaseName: "db1", RelKind: "r"},

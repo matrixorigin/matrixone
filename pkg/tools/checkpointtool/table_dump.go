@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
@@ -2895,10 +2896,29 @@ func buildCatalogTablesFromMoTablesRowsAt(
 				entry.AccountID = uint32(accountID)
 			}
 		}
+		entry.TableName = displayTableName(entry.DatabaseName, entry.TableName)
 		seen[tableID] = struct{}{}
 		tables = append(tables, entry)
 	}
 	return tables
+}
+
+func displayTableName(databaseName, tableName string) string {
+	if !defines.IsTempTableName(tableName) {
+		return tableName
+	}
+	prefix := defines.TempTableNamePrefix
+	rest := strings.TrimPrefix(tableName, prefix)
+	sessionEnd := strings.IndexByte(rest, '_')
+	if sessionEnd <= 0 || sessionEnd+1 >= len(rest) {
+		return tableName
+	}
+	afterSession := rest[sessionEnd+1:]
+	dbPrefix := databaseName + "_"
+	if strings.HasPrefix(afterSession, dbPrefix) && len(afterSession) > len(dbPrefix) {
+		return afterSession[len(dbPrefix):]
+	}
+	return tableName
 }
 
 func validCatalogName(s string) bool {
