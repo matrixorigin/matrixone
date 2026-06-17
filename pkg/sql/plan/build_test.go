@@ -736,6 +736,220 @@ func TestDropIndexIfExistsMissingIndex(t *testing.T) {
 	require.Contains(t, err.Error(), "not found index: nonexist")
 }
 
+func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = NATION2.N_NAME FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("build UPDATE FROM plan: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	tableDef := mock.ctxt.tables["nation"]
+	if hasUpdateFromDedupAnyValueAgg(query, len(tableDef.Cols)) {
+		t.Fatalf("UPDATE FROM dedup should not aggregate update columns with any_value")
+	}
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("UPDATE FROM should dedup duplicate source matches with row_number window partitioned by row_id")
+	}
+}
+
+func TestUpdatePgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = NATION2.N_NAME, N_COMMENT = NATION2.N_COMMENT FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("build UPDATE FROM plan: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["nation"].Cols)) {
+		t.Fatalf("UPDATE FROM dedup must pick a whole source row, not aggregate each update column with any_value")
+	}
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("UPDATE FROM dedup should use row_number window partitioned by target row_id")
+	}
+}
+
+func TestUpdateFallbackPgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback UPDATE FROM plan: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["emp"].Cols)) {
+		t.Fatalf("fallback UPDATE FROM dedup must pick a whole source row, not aggregate each update column with any_value")
+	}
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("fallback UPDATE FROM dedup should use row_number window partitioned by target row_id")
+	}
+}
+
+// TestUpdatePgStyleFromDedupPartitionsByRowIDNotGeometry32 guards the new
+// bindUpdate path against the GEOMETRY32 partition-key crash: T_geometry32 has
+// no comparator in pkg/compare, so a row_number window partitioned on a
+// GEOMETRY32 target column would build a nil comparator and crash at runtime.
+// The dedup key must be row_id, never the geometry column.
+func TestUpdatePgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	geoTyp := plan.Type{Id: int32(types.T_geometry32)}
+	setMockColumnType(t, mock, "nation", "n_comment", geoTyp)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = NATION2.N_NAME FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("build UPDATE FROM with GEOMETRY32 column: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("UPDATE FROM dedup must partition by row_id, not by a GEOMETRY32 target column")
+	}
+	if updateFromDedupPartitionsColName(query, "n_comment") {
+		t.Fatalf("UPDATE FROM dedup must not include the GEOMETRY32 column in the partition key")
+	}
+}
+
+// TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32 guards the
+// fallback (buildTableUpdate) path against the same GEOMETRY32 partition-key
+// crash. emp has a foreign key, so UPDATE ... FROM routes through the fallback
+// planner.
+func TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	geoTyp := plan.Type{Id: int32(types.T_geometry32)}
+	setMockColumnType(t, mock, "emp", "hiredate", geoTyp)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback UPDATE FROM with GEOMETRY32 column: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("fallback UPDATE FROM dedup must partition by row_id, not by a GEOMETRY32 target column")
+	}
+	if updateFromDedupPartitionsColName(query, "hiredate") {
+		t.Fatalf("fallback UPDATE FROM dedup must not include the GEOMETRY32 column in the partition key")
+	}
+}
+
+// TestUpdateFallbackPgStyleFromKeepsRowIdNullFilter guards the fallback path
+// against losing the join-target NULL-row safeguard. The fallback path's
+// needAggFilter drives both the any_value dedup AND an isnotnull(row_id) filter
+// that drops NULL rows from left/right-join targets. Replacing the dedup with a
+// row_number() window must still keep that NULL filter, otherwise a joined-target
+// NULL row could leak into the update pipeline.
+func TestUpdateFallbackPgStyleFromKeepsRowIdNullFilter(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback UPDATE FROM plan: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if hasAnyValueAgg(query) {
+		t.Fatalf("fallback UPDATE FROM dedup must not use any_value aggregation")
+	}
+	if !hasRowIdIsNotNullFilter(query) {
+		t.Fatalf("fallback UPDATE FROM must keep the isnotnull(row_id) join-target NULL-row filter")
+	}
+}
+
+func TestUpdatePgStyleFromDedupExpandsDefaultBeforeDedup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockDefaultExpr(t, mock, "nation", "n_name", "name-default")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = DEFAULT FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("build UPDATE FROM with DEFAULT: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if queryContainsDefaultVal(query) {
+		t.Fatalf("UPDATE FROM dedup should run after DEFAULT expansion")
+	}
+	if !queryContainsStringLiteral(query, "name-default") {
+		t.Fatalf("UPDATE FROM dedup should retain the expanded DEFAULT expression")
+	}
+	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["nation"].Cols)) {
+		t.Fatalf("UPDATE FROM dedup should not wrap DEFAULT with any_value")
+	}
+}
+
+func TestUpdatePgStyleFromDedupAllowsVectorUpdateColumn(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	vecTyp := plan.Type{Id: int32(types.T_array_float32), Width: 4}
+	setMockColumnType(t, mock, "nation", "n_comment", vecTyp)
+	setMockColumnType(t, mock, "nation2", "n_comment", vecTyp)
+
+	_, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_COMMENT = NATION2.N_COMMENT FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("UPDATE FROM should allow vector update columns through row-level dedup: %v", err)
+	}
+}
+
+func TestUpdatePgStyleFromDedupKeepsGeneratedColumnsAfterDedup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "nation", "n_comment", "n_name")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = NATION2.N_NAME FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("build UPDATE FROM with generated column: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["nation"].Cols)) {
+		t.Fatalf("dedup should not aggregate generated or update columns with any_value")
+	}
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("UPDATE FROM with generated column should still use row-level dedup")
+	}
+}
+
+func TestUpdatePgStyleFromDedupAllowsDecimal256AndEnumUpdateColumns(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  plan.Type
+		sql  string
+	}{
+		{
+			name: "decimal256",
+			typ:  plan.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 30},
+			sql:  "UPDATE NATION SET N_COMMENT = REGION.R_COMMENT FROM REGION WHERE NATION.N_REGIONKEY = REGION.R_REGIONKEY",
+		},
+		{
+			name: "enum",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "small,medium,large"},
+			sql:  "UPDATE NATION SET N_COMMENT = CASE WHEN 1 > 0 THEN 'small' ELSE 'medium' END FROM REGION WHERE NATION.N_REGIONKEY = REGION.R_REGIONKEY",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			setMockColumnType(t, mock, "nation", "n_comment", tt.typ)
+			setMockColumnType(t, mock, "region", "r_comment", tt.typ)
+
+			_, err := runOneStmt(mock, t, tt.sql)
+			if err != nil {
+				t.Fatalf("UPDATE FROM should allow %s update columns through row-level dedup: %v", tt.name, err)
+			}
+		})
+	}
+}
+
 func TestUpdateFallbackMultiTargetGeneratedColumnsKeepProjectLayout(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
@@ -876,6 +1090,11 @@ func setMockOnUpdateExpr(t *testing.T, mock *MockOptimizer, tableName, colName, 
 	}
 }
 
+func setMockColumnType(t *testing.T, mock *MockOptimizer, tableName, colName string, typ plan.Type) {
+	col := requireMockColumn(t, mock, tableName, colName)
+	col.Typ = typ
+}
+
 func requireMockColumn(t *testing.T, mock *MockOptimizer, tableName, colName string) *ColDef {
 	tableDef := mock.ctxt.tables[tableName]
 	if tableDef == nil {
@@ -920,6 +1139,145 @@ func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int
 	}
 	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
 	return nil
+}
+
+func hasUpdateFromDedupAnyValueAgg(query *Query, groupByLen int) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG || len(node.GroupBy) != groupByLen {
+			continue
+		}
+		for _, aggExpr := range node.AggList {
+			if fn := aggExpr.GetF(); fn != nil && fn.Func.ObjName == "any_value" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasAnyValueAgg reports whether the plan contains any AGG node aggregating with
+// any_value, regardless of GROUP BY shape.
+func hasAnyValueAgg(query *Query) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+		for _, aggExpr := range node.AggList {
+			if fn := aggExpr.GetF(); fn != nil && fn.Func.ObjName == "any_value" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasRowIdIsNotNullFilter reports whether the plan filters out joined-target
+// NULL rows via isnotnull(row_id). This safeguard must survive on the fallback
+// UPDATE ... FROM path even after duplicate matches are deduped by row_number().
+func hasRowIdIsNotNullFilter(query *Query) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_FILTER {
+			continue
+		}
+		for _, f := range node.FilterList {
+			fn := f.GetF()
+			if fn == nil || fn.Func.ObjName != "isnotnull" || len(fn.Args) != 1 {
+				continue
+			}
+			if exprContainsColName(fn.Args[0], catalog.Row_ID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasUpdateFromDedupWindow reports whether the plan contains a row_number window
+// used for UPDATE ... FROM dedup, partitioned on exactly partitionByLen row_id
+// columns. The dedup key must be the target row's physical identity (row_id),
+// not the whole old target row, so every partition expr must reference row_id.
+func hasUpdateFromDedupWindow(query *Query, partitionByLen int) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_WINDOW {
+			continue
+		}
+		for _, winExpr := range node.WinSpecList {
+			spec := winExpr.GetW()
+			if spec == nil || spec.Name != "row_number" || len(spec.PartitionBy) != partitionByLen {
+				continue
+			}
+			allRowID := true
+			for _, partExpr := range spec.PartitionBy {
+				if !exprContainsColName(partExpr, catalog.Row_ID) {
+					allRowID = false
+					break
+				}
+			}
+			if allRowID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// updateFromDedupPartitionsColName reports whether any row_number dedup window
+// partitions on the given column name. Used to assert that columns without a
+// stable comparator (e.g. GEOMETRY32) never end up in the dedup partition key.
+func updateFromDedupPartitionsColName(query *Query, colName string) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_WINDOW {
+			continue
+		}
+		for _, winExpr := range node.WinSpecList {
+			spec := winExpr.GetW()
+			if spec == nil || spec.Name != "row_number" {
+				continue
+			}
+			for _, partExpr := range spec.PartitionBy {
+				if exprContainsColName(partExpr, colName) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func queryContainsStringLiteral(query *Query, value string) bool {
+	return queryContainsExpr(query, func(expr *plan.Expr) bool {
+		return exprContainsStringLiteral(expr, value)
+	})
+}
+
+func queryContainsDefaultVal(query *Query) bool {
+	return queryContainsExpr(query, exprContainsDefaultVal)
+}
+
+func queryContainsExpr(query *Query, accept func(*plan.Expr) bool) bool {
+	for _, node := range query.Nodes {
+		exprLists := [][]*plan.Expr{
+			node.ProjectList,
+			node.OnList,
+			node.FilterList,
+			node.GroupBy,
+			node.AggList,
+			node.WinSpecList,
+		}
+		for _, exprList := range exprLists {
+			for _, expr := range exprList {
+				if accept(expr) {
+					return true
+				}
+			}
+		}
+		for _, order := range node.OrderBy {
+			if accept(order.Expr) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func requireQueryExpr(t *testing.T, query *Query, accept func(*plan.Expr) bool, message string) *plan.Expr {
@@ -985,6 +1343,55 @@ func exprContainsStringLiteral(expr *plan.Expr, value string) bool {
 	case *plan.Expr_List:
 		for _, item := range e.List.List {
 			if exprContainsStringLiteral(item, value) {
+				return true
+			}
+		}
+	case *plan.Expr_W:
+		if exprContainsStringLiteral(e.W.WindowFunc, value) {
+			return true
+		}
+		for _, partition := range e.W.PartitionBy {
+			if exprContainsStringLiteral(partition, value) {
+				return true
+			}
+		}
+		for _, order := range e.W.OrderBy {
+			if exprContainsStringLiteral(order.Expr, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func exprContainsDefaultVal(expr *plan.Expr) bool {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		_, ok := e.Lit.Value.(*plan.Literal_Defaultval)
+		return ok
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if exprContainsDefaultVal(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprContainsDefaultVal(item) {
+				return true
+			}
+		}
+	case *plan.Expr_W:
+		if exprContainsDefaultVal(e.W.WindowFunc) {
+			return true
+		}
+		for _, partition := range e.W.PartitionBy {
+			if exprContainsDefaultVal(partition) {
+				return true
+			}
+		}
+		for _, order := range e.W.OrderBy {
+			if exprContainsDefaultVal(order.Expr) {
 				return true
 			}
 		}
