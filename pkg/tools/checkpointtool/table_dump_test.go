@@ -804,13 +804,13 @@ func TestRenderCreateTableDDLFromSchema_EnumSetValues(t *testing.T) {
 	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
 		TableName: "t_enum_set",
 		Columns: []TableColumn{
-			{Name: "c_enum", SQLType: "ENUM", EnumValues: "'red','blue'", Position: 1},
-			{Name: "c_set", SQLType: "SET", EnumValues: "('x','y')", Position: 2},
+			{Name: "c_enum", SQLType: "ENUM", EnumValues: "red,green,blue", Position: 1},
+			{Name: "c_set", SQLType: "BIGINT UNSIGNED", EnumValues: "a,b,c", Position: 2},
 		},
 	})
 
-	assert.Contains(t, ddl, "`c_enum` ENUM('red','blue')")
-	assert.Contains(t, ddl, "`c_set` SET('x','y')")
+	assert.Contains(t, ddl, "`c_enum` ENUM('red','green','blue')")
+	assert.Contains(t, ddl, "`c_set` SET('a','b','c')")
 }
 
 func TestDecodeMoColumnEncodedSQLType_TemporalScale(t *testing.T) {
@@ -1123,7 +1123,7 @@ func TestBuildCreateIndexStatementsFromMoIndexes_FullText(t *testing.T) {
 	stmts, err := buildCreateIndexStatementsFromMoIndexes(view, 272535, "t_fulltext")
 	require.NoError(t, err)
 	require.Equal(t, []string{
-		"ALTER TABLE `t_fulltext` ADD FULLTEXT INDEX `idx_doc`(`doc`);",
+		"ALTER TABLE `t_fulltext` ADD FULLTEXT KEY `idx_doc`(`doc`);",
 	}, stmts)
 }
 

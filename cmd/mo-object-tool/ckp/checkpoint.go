@@ -1326,6 +1326,9 @@ func alterTableAddClause(sql string) (string, bool) {
 	_, hasUnique := consumeSQLKeyword(clause, 0, "unique")
 	_, hasKey := consumeSQLKeyword(clause, 0, "key")
 	_, hasIndex := consumeSQLKeyword(clause, 0, "index")
+	if _, hasFullText := consumeSQLKeyword(clause, 0, "fulltext"); hasFullText {
+		hasKey = true
+	}
 	if !hasUnique && !hasKey && !hasIndex {
 		return "", false
 	}
@@ -1350,7 +1353,15 @@ func injectCreateTableClauses(createDDL string, clauses []string) (string, error
 	if multiline {
 		indent := inferCreateTableClauseIndent(body)
 		insert := ",\n" + indent + strings.Join(clauses, ",\n"+indent)
-		return createDDL[:close] + insert + createDDL[close:], nil
+		insertAt := close
+		for insertAt > open+1 {
+			ch := createDDL[insertAt-1]
+			if ch != ' ' && ch != '\t' && ch != '\n' && ch != '\r' {
+				break
+			}
+			insertAt--
+		}
+		return createDDL[:insertAt] + insert + createDDL[insertAt:], nil
 	}
 	separator := ", "
 	if strings.TrimSpace(body) == "" {
@@ -1479,7 +1490,7 @@ func filterExistingIndexDDLs(createDDL string, indexDDLs []string) []string {
 
 func generatedIndexDDLName(indexDDL string) string {
 	upper := strings.ToUpper(indexDDL)
-	for _, marker := range []string{" ADD UNIQUE KEY ", " ADD KEY ", " ADD INDEX "} {
+	for _, marker := range []string{" ADD FULLTEXT KEY ", " ADD FULLTEXT INDEX ", " ADD UNIQUE KEY ", " ADD KEY ", " ADD INDEX "} {
 		i := strings.Index(upper, marker)
 		if i < 0 {
 			continue

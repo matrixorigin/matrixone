@@ -216,6 +216,40 @@ func TestMergeCreateTableIndexDDLs(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
+func TestMergeCreateTableIndexDDLsFullText(t *testing.T) {
+	createDDL := "CREATE TABLE `ckp_constraints`.`t_fulltext` (\n" +
+		"  `id` BIGINT NOT NULL,\n" +
+		"  `doc` TEXT DEFAULT NULL,\n" +
+		"  PRIMARY KEY (`id`)\n" +
+		")"
+	indexDDLs := []string{
+		"ALTER TABLE `t_fulltext` ADD FULLTEXT KEY `idx_doc`(`doc`);",
+	}
+	want := "CREATE TABLE `ckp_constraints`.`t_fulltext` (\n" +
+		"  `id` BIGINT NOT NULL,\n" +
+		"  `doc` TEXT DEFAULT NULL,\n" +
+		"  PRIMARY KEY (`id`),\n" +
+		"  FULLTEXT KEY `idx_doc`(`doc`)\n" +
+		")"
+
+	got, err := mergeCreateTableIndexDDLs(createDDL, indexDDLs)
+	assert.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+func TestFilterExistingIndexDDLsFullText(t *testing.T) {
+	createDDL := "CREATE TABLE `ckp_constraints`.`t_fulltext` (\n" +
+		"  `id` BIGINT NOT NULL,\n" +
+		"  `doc` TEXT DEFAULT NULL,\n" +
+		"  FULLTEXT KEY `idx_doc`(`doc`)\n" +
+		")"
+	indexDDLs := []string{
+		"ALTER TABLE `t_fulltext` ADD FULLTEXT KEY `idx_doc`(`doc`);",
+	}
+
+	assert.Empty(t, filterExistingIndexDDLs(createDDL, indexDDLs))
+}
+
 func TestMergeCreateTableIndexDDLsSingleLine(t *testing.T) {
 	createDDL := "CREATE TABLE `ann`.`items_sift` (id int primary key, embedding vecf32(128))"
 	indexDDLs := []string{
