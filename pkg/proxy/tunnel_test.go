@@ -787,6 +787,30 @@ func TestSetTransferIntentUpdatesGaugeOnStateChange(t *testing.T) {
 	require.Equal(t, before, testutil.ToFloat64(v2.ProxyConnectionsTransferIntentGauge))
 }
 
+func TestSetTransferIntentUsesAttemptedTransferType(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+
+	tun := newTunnel(
+		context.Background(),
+		logger,
+		newCounterSet(),
+		withRebalancePolicy(RebalancePolicyPassive),
+	)
+	before := testutil.ToFloat64(v2.ProxyConnectionsTransferIntentGauge)
+
+	attemptedType := transferByScaling
+	tun.setTransferType(transferByRebalance)
+	tun.setTransferIntentForType(true, attemptedType)
+	require.True(t, tun.transferIntent.Load())
+	require.Equal(t, before+1, testutil.ToFloat64(v2.ProxyConnectionsTransferIntentGauge))
+
+	tun.setTransferIntentForType(false, attemptedType)
+	require.False(t, tun.transferIntent.Load())
+	require.Equal(t, before, testutil.ToFloat64(v2.ProxyConnectionsTransferIntentGauge))
+}
+
 func TestReplaceServerConn(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
