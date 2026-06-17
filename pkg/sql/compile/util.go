@@ -127,13 +127,17 @@ var (
 )
 
 // genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
-func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string, isUnique bool) string {
+func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string, isUnique bool) (string, error) {
 	// insert data into index table
 	var insertSQL string
-	temp := partsToColsStr(indexDef.Parts)
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexDef.IndexAlgoParams)
+	if err != nil {
+		return "", err
+	}
+	temp := partsToIndexExprStr(indexDef.Parts, prefixLengths)
 	spatialIndex := catalog.IsRTreeIndexAlgo(indexDef.IndexAlgo)
 	if spatialIndex && len(indexDef.Parts) > 0 {
-		temp = partsToColsStr(indexDef.Parts[:1])
+		temp = partsToIndexExprStr(indexDef.Parts[:1], prefixLengths)
 	}
 	if len(originTableDef.Pkey.PkeyColName) == 0 {
 		if len(indexDef.Parts) == 1 || spatialIndex {
@@ -167,7 +171,7 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 			}
 		}
 	}
-	return insertSQL
+	return insertSQL, nil
 }
 
 // genInsertIndexTableSqlForMasterIndex: Create inserts for master index table
@@ -468,15 +472,18 @@ func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation)
 	return nil
 }
 
-func partsToColsStr(parts []string) string {
+func partsToIndexExprStr(parts []string, prefixLengths map[string]int) string {
 	var temp string
 	for i, part := range parts {
 		part = catalog.ResolveAlias(part)
-		part = quoteMySQLQualifiedIdent(part)
+		partExpr := quoteMySQLQualifiedIdent(part)
+		if length := prefixLengths[part]; length > 0 {
+			partExpr = fmt.Sprintf("substring(%s, 1, %d)", partExpr, length)
+		}
 		if i == 0 {
-			temp += part
+			temp += partExpr
 		} else {
-			temp += "," + part
+			temp += "," + partExpr
 		}
 	}
 	return temp

@@ -38,9 +38,7 @@ import (
 )
 
 const (
-	hnswIndexFlag  = "experimental_hnsw_index"
-	cagraIndexFlag = "experimental_cagra_index"
-	ivfpqIndexFlag = "experimental_ivfpq_index"
+	hnswIndexFlag = "experimental_hnsw_index"
 )
 
 func (s *Scope) handleUniqueIndexTable(
@@ -73,21 +71,32 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
 		return nil
 	}
-	insertSQL := genInsertIndexTableSql(originalTableDef, indexDef, qryDatabase, indexDef.Unique)
+	insertSQL, err := genInsertIndexTableSql(originalTableDef, indexDef, qryDatabase, indexDef.Unique)
+	if err != nil {
+		return err
+	}
 	if indexDef.Unique {
 		return c.precheckAndInsertUniqueIndexTable(qryDatabase, originalTableDef, indexDef, insertSQL)
 	}
 	return c.runSql(insertSQL)
 }
 
-func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.TableDef, indexDef *plan.IndexDef) string {
-	groupExpr := partsToColsStr(indexDef.Parts)
+func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.TableDef, indexDef *plan.IndexDef) (string, error) {
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexDef.IndexAlgoParams)
+	if err != nil {
+		return "", err
+	}
+	groupExpr := partsToIndexExprStr(indexDef.Parts, prefixLengths)
 	nullCheckExpr := fmt.Sprintf("%s IS NOT NULL", groupExpr)
 	if len(indexDef.Parts) > 1 {
 		nullChecks := make([]string, 0, len(indexDef.Parts))
 		for _, part := range indexDef.Parts {
 			part = catalog.ResolveAlias(part)
-			nullChecks = append(nullChecks, fmt.Sprintf("%s IS NOT NULL", quoteMySQLQualifiedIdent(part)))
+			partExpr := quoteMySQLQualifiedIdent(part)
+			if length := prefixLengths[part]; length > 0 {
+				partExpr = fmt.Sprintf("substring(%s, 1, %d)", partExpr, length)
+			}
+			nullChecks = append(nullChecks, fmt.Sprintf("%s IS NOT NULL", partExpr))
 		}
 		nullCheckExpr = strings.Join(nullChecks, " AND ")
 	}
@@ -97,7 +106,7 @@ func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.Table
 		quoteMySQLIdent(tableDef.Name),
 		nullCheckExpr,
 		groupExpr,
-	)
+	), nil
 }
 
 func (c *Compile) precheckAndInsertUniqueIndexTable(
@@ -108,7 +117,10 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 ) error {
 	// Unique indexes allow NULL keys, so the check mirrors the hidden-index
 	// backfill filter and only groups non-NULL keys.
-	duplicateCheckSQL := buildCreateUniqueIndexDuplicateCheckSQL(dbName, tableDef, indexDef)
+	duplicateCheckSQL, err := buildCreateUniqueIndexDuplicateCheckSQL(dbName, tableDef, indexDef)
+	if err != nil {
+		return err
+	}
 	duplicateCheckRes, err := c.runSqlWithResultAndOptions(duplicateCheckSQL, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "create unique index duplicate check failed, sql is %s", duplicateCheckSQL)
@@ -786,136 +798,6 @@ func (s *Scope) handleVectorHnswIndex(
 		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
 		err := CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type, false, "", originalTableDef)
 		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (s *Scope) handleVectorCagraIndex(
-	c *Compile,
-	mainTableID uint64,
-	mainExtra *api.SchemaExtra,
-	dbSource engine.Database,
-	indexDefs map[string]*plan.IndexDef,
-	qryDatabase string,
-	originalTableDef *plan.TableDef,
-	indexInfo *plan.CreateTable,
-) error {
-	/*
-		if ok, err := s.isExperimentalEnabled(c, cagraIndexFlag); err != nil {
-			return err
-		} else if !ok {
-			return moerr.NewInternalErrorNoCtx("experimental_cagra_index is not enabled")
-		}
-	*/
-
-	// 1. static check
-	if len(indexDefs) != 2 {
-		return moerr.NewInternalErrorNoCtx("invalid cagra index table definition")
-	}
-	if len(indexDefs[catalog.Cagra_TblType_Metadata].Parts) != 1 {
-		return moerr.NewInternalErrorNoCtx("invalid hnsw index part must be 1.")
-	}
-
-	// 2. create hidden tables
-	if indexInfo != nil {
-		for _, table := range indexInfo.GetIndexTables() {
-			if err := indexTableBuild(c, mainTableID, mainExtra, table, dbSource); err != nil {
-				return err
-			}
-		}
-	}
-
-	// clear the cache (it only work in standalone mode though)
-	key := indexDefs[catalog.Cagra_TblType_Storage].IndexTableName
-	cache.Cache.Remove(key)
-
-	// delete old data first
-	{
-		sqls, err := genDeleteCagraIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
-		if err != nil {
-			return err
-		}
-
-		for _, sql := range sqls {
-			err = c.runSql(sql)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	// 3. build hnsw index
-	sqls, err := genBuildCagraIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
-	if err != nil {
-		return err
-	}
-
-	for _, sql := range sqls {
-		err = c.runSql(sql)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (s *Scope) handleVectorIvfpqIndex(
-	c *Compile,
-	mainTableID uint64,
-	mainExtra *api.SchemaExtra,
-	dbSource engine.Database,
-	indexDefs map[string]*plan.IndexDef,
-	qryDatabase string,
-	originalTableDef *plan.TableDef,
-	indexInfo *plan.CreateTable,
-) error {
-	// 1. static check
-	if len(indexDefs) != 2 {
-		return moerr.NewInternalErrorNoCtx("invalid ivfpq index table definition")
-	}
-	if len(indexDefs[catalog.Ivfpq_TblType_Metadata].Parts) != 1 {
-		return moerr.NewInternalErrorNoCtx("invalid ivfpq index part must be 1.")
-	}
-
-	// 2. create hidden tables
-	if indexInfo != nil {
-		for _, table := range indexInfo.GetIndexTables() {
-			if err := indexTableBuild(c, mainTableID, mainExtra, table, dbSource); err != nil {
-				return err
-			}
-		}
-	}
-
-	// clear the cache
-	key := indexDefs[catalog.Ivfpq_TblType_Storage].IndexTableName
-	cache.Cache.Remove(key)
-
-	// delete old data first
-	{
-		sqls, err := genDeleteIvfpqIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
-		if err != nil {
-			return err
-		}
-
-		for _, sql := range sqls {
-			if err = c.runSql(sql); err != nil {
-				return err
-			}
-		}
-	}
-
-	// 3. build ivfpq index
-	sqls, err := genBuildIvfpqIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
-	if err != nil {
-		return err
-	}
-
-	for _, sql := range sqls {
-		if err = c.runSql(sql); err != nil {
 			return err
 		}
 	}
