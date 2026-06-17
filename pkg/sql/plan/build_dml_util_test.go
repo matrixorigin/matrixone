@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -500,52 +501,130 @@ func TestPrefixIndexDMLPlansMaterializePrefixKeys(t *testing.T) {
 
 	assertPlanHasEnamePrefix(t, "update constraint_test.emp set ename = 'abcdef-long' where empno = 1")
 	assertPlanHasEnamePrefix(t, "delete from constraint_test.emp where empno = 1")
+
+	assertPlanHasPrefixCount := func(t *testing.T, sql, colName string, minCount int) {
+		t.Helper()
+
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err)
+		require.NotNil(t, logicPlan.GetQuery())
+
+		got := countQueryPrefixSubstrings(logicPlan.GetQuery(), colName, 4)
+		require.GreaterOrEqual(t, got, minCount, "expected plan for %q to materialize at least %d prefix keys", sql, minCount)
+	}
+
+	dept := mock.ctxt.tables["dept"]
+	require.NotNil(t, dept)
+	for _, idxDef := range dept.Indexes {
+		if len(idxDef.Parts) == 1 && idxDef.Parts[0] == "dname" {
+			idxDef.IndexAlgoParams = `{"prefix_lengths":"dname:4"}`
+		}
+	}
+	assertPlanHasPrefixCount(t, "update constraint_test.dept set dname = 'abcdef-long' where deptno = 1", "dname", 1)
+	assertPlanHasPrefixCount(t, "delete from constraint_test.dept where deptno = 1", "dname", 1)
+
+	singleIdx := mock.ctxt.tables["single_idx_t"]
+	require.NotNil(t, singleIdx)
+	require.Len(t, singleIdx.Indexes, 1)
+	singleIdx.Cols[1].Typ = plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	singleIdx.Indexes[0].IndexAlgoParams = `{"prefix_lengths":"val:4"}`
+	singleIdxIndexTable := mock.ctxt.tables[singleIdx.Indexes[0].IndexTableName]
+	require.NotNil(t, singleIdxIndexTable)
+	singleIdxIndexTable.Cols[0].Typ = plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	assertPlanHasPrefixCount(t, "update constraint_test.single_idx_t set val = 'abcdef-long' where id = 1", "val", 2)
+	assertPlanHasPrefixCount(t, "delete from constraint_test.single_idx_t where id = 1", "val", 1)
 }
 
 func queryHasPrefixSubstring(query *plan.Query, colName string, length int64) bool {
+	return countQueryPrefixSubstrings(query, colName, length) > 0
+}
+
+func countQueryPrefixSubstrings(query *plan.Query, colName string, length int64) int {
+	count := 0
 	for _, node := range query.Nodes {
-		if exprListHasPrefixSubstring(node.ProjectList, colName, length) ||
-			exprListHasPrefixSubstring(node.OnList, colName, length) ||
-			exprListHasPrefixSubstring(node.FilterList, colName, length) {
-			return true
-		}
+		count += countExprListPrefixSubstrings(node.ProjectList, colName, length)
+		count += countExprListPrefixSubstrings(node.OnList, colName, length)
+		count += countExprListPrefixSubstrings(node.FilterList, colName, length)
 	}
-	return false
+	return count
 }
 
 func exprListHasPrefixSubstring(exprs []*plan.Expr, colName string, length int64) bool {
+	return countExprListPrefixSubstrings(exprs, colName, length) > 0
+}
+
+func countExprListPrefixSubstrings(exprs []*plan.Expr, colName string, length int64) int {
+	count := 0
 	for _, expr := range exprs {
-		if exprHasPrefixSubstring(expr, colName, length) {
-			return true
-		}
+		count += countExprPrefixSubstrings(expr, colName, length)
 	}
-	return false
+	return count
 }
 
 func exprHasPrefixSubstring(expr *plan.Expr, colName string, length int64) bool {
+	return countExprPrefixSubstrings(expr, colName, length) > 0
+}
+
+func countExprPrefixSubstrings(expr *plan.Expr, colName string, length int64) int {
 	if expr == nil {
-		return false
+		return 0
 	}
 
 	fn := expr.GetF()
 	if fn == nil {
 		list := expr.GetList()
 		if list == nil {
-			return false
+			return 0
 		}
-		return exprListHasPrefixSubstring(list.List, colName, length)
+		return countExprListPrefixSubstrings(list.List, colName, length)
 	}
 
+	count := 0
 	if fn.Func.ObjName == "substring" && len(fn.Args) == 3 {
-		col := fn.Args[0].GetCol()
 		start := fn.Args[1].GetLit()
 		prefixLen := fn.Args[2].GetLit()
-		if col != nil && col.Name == colName &&
+		if exprContainsColumn(fn.Args[0], colName) &&
 			start != nil && start.GetI64Val() == 1 &&
 			prefixLen != nil && prefixLen.GetI64Val() == length {
-			return true
+			count++
 		}
 	}
 
-	return exprListHasPrefixSubstring(fn.Args, colName, length)
+	return count + countExprListPrefixSubstrings(fn.Args, colName, length)
+}
+
+func exprContainsColumn(expr *plan.Expr, colName string) bool {
+	if expr == nil {
+		return false
+	}
+
+	if col := expr.GetCol(); col != nil {
+		if col.Name == "" {
+			return true
+		}
+		return columnNameMatches(col.Name, colName)
+	}
+
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if exprContainsColumn(arg, colName) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if exprContainsColumn(item, colName) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func columnNameMatches(got, want string) bool {
+	return got == want || strings.HasSuffix(got, "."+want)
 }
