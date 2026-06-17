@@ -794,6 +794,17 @@ func TestBuildCatalogTablesFromMoTablesRows_GenericWithTrailingColumns(t *testin
 	assert.Equal(t, "v", tables[1].RelKind)
 }
 
+func TestIsViewRelKind(t *testing.T) {
+	assert.False(t, isViewRelKind(""))
+	assert.False(t, isViewRelKind("r"))
+	assert.False(t, isViewRelKind("e"))
+	assert.False(t, isViewRelKind("external"))
+	assert.False(t, isViewRelKind("cluster"))
+	assert.True(t, isViewRelKind("v"))
+	assert.True(t, isViewRelKind("view"))
+	assert.True(t, isViewRelKind(" VIEW "))
+}
+
 func TestInferCatalogLayout(t *testing.T) {
 	tests := []struct {
 		name      string

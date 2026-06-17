@@ -1247,7 +1247,7 @@ func (r *CheckpointReader) ListCatalogTables(
 		if opts.DatabaseID != nil && table.DatabaseID != *opts.DatabaseID {
 			continue
 		}
-		if !opts.IncludeViews && table.RelKind != "" && table.RelKind != "r" {
+		if !opts.IncludeViews && isViewRelKind(table.RelKind) {
 			continue
 		}
 		filtered = append(filtered, table)
@@ -2920,6 +2920,15 @@ func validCatalogName(s string) bool {
 func validRelKind(s string) bool {
 	switch s {
 	case "", "r", "v", "e", "cluster", "external", "view":
+		return true
+	default:
+		return false
+	}
+}
+
+func isViewRelKind(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "v", "view":
 		return true
 	default:
 		return false
