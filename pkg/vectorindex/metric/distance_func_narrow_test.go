@@ -373,8 +373,8 @@ func TestCosineDistanceClampNonNegative(t *testing.T) {
 			u8v := make([]uint8, dim)
 			for i, x := range f {
 				f64v[i] = float64(x)
-				i8v[i] = int8(x * 8)         // [-64,64)
-				u8v[i] = uint8(x*8 + 128)    // [0,256)
+				i8v[i] = int8(x * 8)      // [-64,64)
+				u8v[i] = uint8(x*8 + 128) // [0,256)
 			}
 			d64, err := CosineDistance(f64v, f64v)
 			require.NoError(t, err)

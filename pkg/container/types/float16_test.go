@@ -32,10 +32,10 @@ func TestFloat16ReferenceValues(t *testing.T) {
 		{2.0, 0x4000, 2.0},
 		{0.5, 0x3800, 0.5},
 		{-0.5, 0xb800, -0.5},
-		{65504.0, 0x7bff, 65504.0},      // largest normal half
+		{65504.0, 0x7bff, 65504.0},                   // largest normal half
 		{0.00006103515625, 0x0400, 0.00006103515625}, // smallest normal half (2^-14)
-		{0.00006097555, 0x03ff, 0.000060975552},       // largest subnormal half
-		{5.9604645e-08, 0x0001, 5.9604645e-08},         // smallest positive subnormal (2^-24)
+		{0.00006097555, 0x03ff, 0.000060975552},      // largest subnormal half
+		{5.9604645e-08, 0x0001, 5.9604645e-08},       // smallest positive subnormal (2^-24)
 	}
 	for _, c := range cases {
 		got := Float16FromFloat32(c.in)
@@ -118,8 +118,8 @@ func TestInt8Clamp(t *testing.T) {
 		{1.6, 2},
 		{-1.6, -2},
 		{127.0, 127},
-		{128.0, 127},  // clamp high
-		{200.0, 127},  // clamp high
+		{128.0, 127}, // clamp high
+		{200.0, 127}, // clamp high
 		{-128.0, -128},
 		{-129.0, -128}, // clamp low
 		{-500.0, -128}, // clamp low

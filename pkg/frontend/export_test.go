@@ -287,10 +287,10 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		}
 		f32 := []float32{1, 2, 3}
 		data := make([]interface{}, len(col))
-		data[0] = types.Float32ToBF16Slice(f32)                          // bf16 slice
-		data[1] = types.Float32ToFloat16Slice(f32)                       // f16 slice
-		data[2] = []int8{1, 2, 3}                                        // int8 slice
-		data[3] = types.ArrayToString[uint8]([]uint8{1, 2, 3})           // uint8 display string
+		data[0] = types.Float32ToBF16Slice(f32)                // bf16 slice
+		data[1] = types.Float32ToFloat16Slice(f32)             // f16 slice
+		data[2] = []int8{1, 2, 3}                              // int8 slice
+		data[3] = types.ArrayToString[uint8]([]uint8{1, 2, 3}) // uint8 display string
 		ep.mrs.AddRow(data)
 		ep.Symbol = make([][]byte, len(col))
 		ep.ColumnFlag = make([]bool, len(col))
