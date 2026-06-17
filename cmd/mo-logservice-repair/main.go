@@ -47,6 +47,7 @@ type repairPayload struct {
 	Op                     string              `json:"op"`
 	Shard                  shardInput          `json:"shard"`
 	ShardID                uint64              `json:"shardID"`
+	ShardIDSet             bool                `json:"-"`
 	BlockedStores          []string            `json:"blockedStores"`
 	Stores                 []string            `json:"stores"`
 	Reason                 string              `json:"reason"`
@@ -57,6 +58,7 @@ type repairPayload struct {
 
 type shardInput struct {
 	ShardID           uint64            `json:"shardID"`
+	ShardIDSet        bool              `json:"-"`
 	Replicas          map[uint64]string `json:"replicas"`
 	NonVotingReplicas map[uint64]string `json:"nonVotingReplicas"`
 	Epoch             uint64            `json:"epoch"`
@@ -67,6 +69,20 @@ type shardInput struct {
 type reasonPayload struct {
 	Reason                 string              `json:"reason,omitempty"`
 	CleanupReplicasByStore map[string][]uint64 `json:"cleanupReplicasByStore,omitempty"`
+}
+
+func markExplicitShardIDs(payload string, req *repairPayload) {
+	var raw struct {
+		ShardID *json.RawMessage `json:"shardID"`
+		Shard   *struct {
+			ShardID *json.RawMessage `json:"shardID"`
+		} `json:"shard"`
+	}
+	if err := json.Unmarshal([]byte(payload), &raw); err != nil {
+		return
+	}
+	req.ShardIDSet = raw.ShardID != nil
+	req.Shard.ShardIDSet = raw.Shard != nil && raw.Shard.ShardID != nil
 }
 
 type repairResult struct {
@@ -180,6 +196,7 @@ func runHAKeeper(args []string) error {
 		if err := json.Unmarshal([]byte(payload), &req); err != nil {
 			return fmt.Errorf("invalid payload: %w", err)
 		}
+		markExplicitShardIDs(payload, &req)
 		req.Op = args[0]
 		ret, err := applyHAKeeperPayload(ctx, client, addr, req)
 		if err != nil {
@@ -215,7 +232,7 @@ func applyHAKeeperPayload(
 			Reason:        encodeReason(req.Reason, req.CleanupReplicasByStore),
 			Force:         req.Force,
 		}
-		if repair.Shard.ShardID == 0 {
+		if !req.Shard.ShardIDSet {
 			return repairResult{}, fmt.Errorf("repair shardID is required")
 		}
 		ret.Before = before.LogState.Shards[repair.Shard.ShardID]
@@ -244,7 +261,7 @@ func applyHAKeeperPayload(
 		ret.AllRepairs = after.LogShardRepairs
 		return ret, nil
 	case "unblock":
-		if req.ShardID == 0 {
+		if !req.ShardIDSet {
 			return repairResult{}, fmt.Errorf("unblock shardID is required")
 		}
 		unblock := logpb.UnblockLogShardStores{
