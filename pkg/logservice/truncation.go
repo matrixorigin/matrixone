@@ -138,6 +138,9 @@ func (l *store) processTruncateLog(ctx context.Context) error {
 		if _, ok := replicas[shard.ReplicaID]; !ok {
 			if len(replicas) > 0 ||
 				l.isSkippedZombie(shard.ShardID, shard.ReplicaID) {
+				// NodeHost state and local metadata are independent snapshots.
+				// Re-read NodeHost immediately before cleanup so a replica that
+				// became active after the outer snapshot is never classified as stale.
 				replicas = l.startedReplicaIDs()[shard.ShardID]
 				if _, ok := replicas[shard.ReplicaID]; ok {
 					continue
