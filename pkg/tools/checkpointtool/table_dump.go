@@ -452,10 +452,10 @@ func renderCreateTableDDLFull(tableName string, cols []TableColumn, comment stri
 	for i, col := range cols {
 		sb.WriteString("  ")
 		sb.WriteString(quoteDDLIdent(col.Name))
-		if col.SQLType != "" {
+		if sqlType := renderColumnSQLType(col); sqlType != "" {
 			sb.WriteString(" ")
-			sb.WriteString(col.SQLType)
-			if col.Unsigned && !strings.Contains(strings.ToUpper(col.SQLType), "UNSIGNED") {
+			sb.WriteString(sqlType)
+			if col.Unsigned && !strings.Contains(strings.ToUpper(sqlType), "UNSIGNED") {
 				sb.WriteString(" UNSIGNED")
 			}
 		}
@@ -529,6 +529,38 @@ func renderCreateTableDDLFull(tableName string, cols []TableColumn, comment stri
 	}
 	sb.WriteString(";")
 	return sb.String()
+}
+
+func renderColumnSQLType(col TableColumn) string {
+	sqlType := strings.TrimSpace(col.SQLType)
+	enumValues := strings.TrimSpace(col.EnumValues)
+	if enumValues == "" {
+		return sqlType
+	}
+	upperType := strings.ToUpper(sqlType)
+	switch {
+	case upperType == "ENUM":
+		return renderEnumSetSQLType("ENUM", enumValues)
+	case upperType == "SET":
+		return renderEnumSetSQLType("SET", enumValues)
+	default:
+		return sqlType
+	}
+}
+
+func renderEnumSetSQLType(kind string, enumValues string) string {
+	values := strings.TrimSpace(enumValues)
+	if values == "" {
+		return kind
+	}
+	upper := strings.ToUpper(values)
+	if strings.HasPrefix(upper, kind+"(") {
+		return values
+	}
+	if strings.HasPrefix(values, "(") {
+		return kind + values
+	}
+	return kind + "(" + values + ")"
 }
 
 func appendColumnDDLAttributes(sb *strings.Builder, col TableColumn) {
@@ -3807,12 +3839,21 @@ func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, e
 	sb.WriteString("ALTER TABLE ")
 	sb.WriteString(quoteDDLIdent(tableName))
 	sb.WriteString(" ADD ")
-	if strings.EqualFold(info.indexType, "UNIQUE") {
+	fullText := isFullTextIndex(info)
+	if fullText {
+		sb.WriteString("FULLTEXT ")
+	} else if strings.EqualFold(info.indexType, "UNIQUE") {
 		sb.WriteString("UNIQUE ")
 	}
-	sb.WriteString("KEY ")
+	if fullText {
+		sb.WriteString("INDEX ")
+	} else {
+		sb.WriteString("KEY ")
+	}
 	sb.WriteString(quoteDDLIdent(info.name))
-	appendIndexAlgorithmDDL(&sb, info.algo)
+	if !fullText {
+		appendIndexAlgorithmDDL(&sb, info.algo)
+	}
 	sb.WriteString("(")
 	for i, col := range cols {
 		if i > 0 {
@@ -3826,6 +3867,13 @@ func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, e
 	}
 	sb.WriteString(";")
 	return sb.String(), nil
+}
+
+func isFullTextIndex(info *indexDDLInfo) bool {
+	if info == nil {
+		return false
+	}
+	return catalog.IsFullTextIndexAlgo(info.algo) || strings.EqualFold(info.indexType, "FULLTEXT")
 }
 
 func appendIndexAlgorithmDDL(sb *strings.Builder, algo string) {
@@ -4126,12 +4174,32 @@ func decodeMoColumnEncodedSQLType(raw string) (string, bool) {
 		return "", false
 	}
 	if err := types.Decode([]byte(raw), &typ); err == nil && typ.Oid != types.T_any {
-		sqlType := typ.DescString()
+		sqlType := sqlTypeFromMOType(typ)
 		if isPrintableSQLType(sqlType) {
 			return sqlType, true
 		}
 	}
 	return "", false
+}
+
+func sqlTypeFromMOType(typ types.Type) string {
+	switch typ.Oid {
+	case types.T_time:
+		return scaledSQLType("TIME", typ.Scale)
+	case types.T_datetime:
+		return scaledSQLType("DATETIME", typ.Scale)
+	case types.T_timestamp:
+		return scaledSQLType("TIMESTAMP", typ.Scale)
+	default:
+		return typ.DescString()
+	}
+}
+
+func scaledSQLType(name string, scale int32) string {
+	if scale <= 0 {
+		return name
+	}
+	return fmt.Sprintf("%s(%d)", name, scale)
 }
 
 func isPrintableDDLExpression(expr string) bool {

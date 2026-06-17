@@ -760,6 +760,33 @@ func TestRenderCreateTableDDLFromSchema_DoesNotFallbackToCreateSQLWhenColumnType
 	assert.Empty(t, ddl)
 }
 
+func TestRenderCreateTableDDLFromSchema_EnumSetValues(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "t_enum_set",
+		Columns: []TableColumn{
+			{Name: "c_enum", SQLType: "ENUM", EnumValues: "'red','blue'", Position: 1},
+			{Name: "c_set", SQLType: "SET", EnumValues: "('x','y')", Position: 2},
+		},
+	})
+
+	assert.Contains(t, ddl, "`c_enum` ENUM('red','blue')")
+	assert.Contains(t, ddl, "`c_set` SET('x','y')")
+}
+
+func TestDecodeMoColumnEncodedSQLType_TemporalScale(t *testing.T) {
+	sqlType, ok := decodeMoColumnEncodedSQLType(encodedSQLType(t, types.New(types.T_time, 0, 6)))
+	require.True(t, ok)
+	assert.Equal(t, "TIME(6)", sqlType)
+
+	sqlType, ok = decodeMoColumnEncodedSQLType(encodedSQLType(t, types.New(types.T_datetime, 0, 3)))
+	require.True(t, ok)
+	assert.Equal(t, "DATETIME(3)", sqlType)
+
+	sqlType, ok = decodeMoColumnEncodedSQLType(encodedSQLType(t, types.New(types.T_timestamp, 0, 6)))
+	require.True(t, ok)
+	assert.Equal(t, "TIMESTAMP(6)", sqlType)
+}
+
 func TestBuildCatalogTablesFromMoTablesRows_GenericWithTrailingColumns(t *testing.T) {
 	headers := []string{"object", "block", "row"}
 	for i := 0; i < len(preCPKLayout.moTablesSchema)+2; i++ {
@@ -1039,6 +1066,24 @@ func TestBuildCreateIndexStatementsFromMoIndexes_IVFFlat(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"ALTER TABLE `items_gist` ADD KEY `ivf_2000` USING ivfflat(`embedding`) lists = 2000  op_type 'vector_l2_ops' ;",
+	}, stmts)
+}
+
+func TestBuildCreateIndexStatementsFromMoIndexes_FullText(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{
+			"table_id", "name", "type", "algo", "algo_params", "comment",
+			"column_name", "ordinal_position", "hidden",
+		},
+		Rows: [][]string{
+			{"272535", "idx_doc", "MULTIPLE", "fulltext", "", "", "doc", "1", "0"},
+		},
+	}
+
+	stmts, err := buildCreateIndexStatementsFromMoIndexes(view, 272535, "t_fulltext")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"ALTER TABLE `t_fulltext` ADD FULLTEXT INDEX `idx_doc`(`doc`);",
 	}, stmts)
 }
 
