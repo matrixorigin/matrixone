@@ -36,6 +36,9 @@ drop view if exists v1;
 No database selected
 use db1;
 drop index if exists idx1 on t1;
+drop index if exists idx1 on t1;
+drop index idx1 on t1;
+internal error: not found index: idx1
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 t1    0    PRIMARY    1    empno    A    0    NULL    NULL                        YES    empno

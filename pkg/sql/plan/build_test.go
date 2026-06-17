@@ -24,6 +24,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -718,6 +719,21 @@ func TestUpdate(t *testing.T) {
 		"UPDATE NATION a SET a.N_NAME = 'x' FROM NATION2 b WHERE a.N_REGIONKEY = b.NOT_A_COL",    // FROM column not exist
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func TestDropIndexIfExistsMissingIndex(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "drop index if exists nonexist on test_idx")
+	require.NoError(t, err)
+	testDeepCopy(logicPlan)
+	dropIndex := logicPlan.GetDdl().GetDropIndex()
+	require.NotNil(t, dropIndex)
+	require.Equal(t, "", dropIndex.GetIndexName())
+
+	_, err = runOneStmt(mock, t, "drop index nonexist on test_idx")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found index: nonexist")
 }
 
 func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {
