@@ -1393,6 +1393,9 @@ func newLoadDataPathResolver(storage toolfs.StorageOptions) (loadDataPathResolve
 func (r loadDataPathResolver) loadDataSource(outputDir string, table checkpointtool.TableCatalogEntry) string {
 	csvPath := tableCSVPath(outputDir, table)
 	if r.s3Args.Bucket == "" {
+		if absPath, err := filepath.Abs(csvPath); err == nil {
+			csvPath = absPath
+		}
 		return "LOAD DATA INFILE " + quoteSQLString(csvPath)
 	}
 

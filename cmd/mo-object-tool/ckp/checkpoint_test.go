@@ -15,6 +15,8 @@
 package ckp
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
@@ -205,10 +207,10 @@ func TestLoadDataPathResolverLocal(t *testing.T) {
 
 	resolver, err := newLoadDataPathResolver(toolfs.StorageOptions{})
 	require.NoError(t, err)
-	assert.Equal(t,
-		"LOAD DATA INFILE 'bmsql_config/account_0/db_272577/bmsql_config_272578.csv'",
-		resolver.loadDataSource("bmsql_config", table),
-	)
+	loadSource := resolver.loadDataSource("bmsql_config", table)
+	assert.True(t, strings.HasPrefix(loadSource, "LOAD DATA INFILE '"))
+	assert.Contains(t, loadSource, "/bmsql_config/account_0/db_272577/bmsql_config_272578.csv'")
+	assert.True(t, filepath.IsAbs(strings.TrimSuffix(strings.TrimPrefix(loadSource, "LOAD DATA INFILE '"), "'")))
 }
 
 func TestLoadDataPathResolverS3(t *testing.T) {
