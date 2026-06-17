@@ -692,6 +692,28 @@ func TestCreateTableDDLFromCatalogViews_IncludesForeignKeys(t *testing.T) {
 	assert.Contains(t, ddl, "CONSTRAINT `fk_child_cascade_parent` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT")
 }
 
+func TestCloneTableSchemaCopiesForeignKeys(t *testing.T) {
+	schema := &TableSchema{
+		TableName: "child_restrict",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "INT", Position: 1, NotNull: true},
+			{Name: "parent_id", SQLType: "INT", Position: 2, NotNull: true},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []TableForeignKey{{
+			Name:         "fk_child_restrict_parent",
+			Columns:      []string{"parent_id"},
+			ReferTable:   "parent",
+			ReferColumns: []string{"id"},
+			OnDelete:     plan.ForeignKeyDef_RESTRICT,
+			OnUpdate:     plan.ForeignKeyDef_RESTRICT,
+		}},
+	}
+
+	ddl := RenderCreateTableDDLFromSchema(cloneTableSchema(schema))
+	assert.Contains(t, ddl, "CONSTRAINT `fk_child_restrict_parent` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT")
+}
+
 func TestBuildPartitionClauseFromMetadata_UsesSeqNumsWithHiddenColumn(t *testing.T) {
 	view := &LogicalTableView{
 		Headers: append([]string{"object", "block", "row"}, "col_0", "col_1", "col_2", "col_3", "col_4", "col_5", "col_6"),

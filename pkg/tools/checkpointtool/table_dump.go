@@ -1432,6 +1432,30 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 			}
 		}
 	}
+	if len(schema.ForeignKeys) > 0 {
+		clone.ForeignKeys = make([]TableForeignKey, len(schema.ForeignKeys))
+		for i, key := range schema.ForeignKeys {
+			clone.ForeignKeys[i] = TableForeignKey{
+				Name:          strings.Clone(key.Name),
+				ReferDatabase: strings.Clone(key.ReferDatabase),
+				ReferTable:    strings.Clone(key.ReferTable),
+				OnDelete:      key.OnDelete,
+				OnUpdate:      key.OnUpdate,
+			}
+			if len(key.Columns) > 0 {
+				clone.ForeignKeys[i].Columns = make([]string, len(key.Columns))
+				for j, col := range key.Columns {
+					clone.ForeignKeys[i].Columns[j] = strings.Clone(col)
+				}
+			}
+			if len(key.ReferColumns) > 0 {
+				clone.ForeignKeys[i].ReferColumns = make([]string, len(key.ReferColumns))
+				for j, col := range key.ReferColumns {
+					clone.ForeignKeys[i].ReferColumns[j] = strings.Clone(col)
+				}
+			}
+		}
+	}
 	return clone
 }
 
