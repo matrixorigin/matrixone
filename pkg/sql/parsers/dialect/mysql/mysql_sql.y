@@ -259,6 +259,9 @@ func sqlTaskInt64(v any) int64 {
     userIdentified *tree.AccountIdentified
     accountRole *tree.Role
     showType tree.ShowType
+    checkTableOption tree.CheckTableOption
+    analyzeTableEntries []*tree.AnalyzeTableEntry
+    analyzeTableEntry *tree.AnalyzeTableEntry
     joinTableExpr *tree.JoinTableExpr
     applyTableExpr *tree.ApplyTableExpr
 
@@ -441,7 +444,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> MAX_QUERIES_PER_HOUR MAX_UPDATES_PER_HOUR MAX_CONNECTIONS_PER_HOUR MAX_USER_CONNECTIONS
 
 // Explain
-%token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
+%token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES PROFILE
 
 // Load
 %token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD JSONTYPE
@@ -575,7 +578,7 @@ func sqlTaskInt64(v any) int64 {
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt
-%type <statement> analyze_stmt
+%type <statement> analyze_stmt check_table_stmt show_profile_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt
 %type <statement> replace_stmt
 %type <statement> do_stmt
@@ -648,6 +651,10 @@ func sqlTaskInt64(v any) int64 {
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 %type <selectLockInfo> select_lock_opt
 %type <upgrade_target> target
+%type <analyzeTableEntries> analyze_table_list
+%type <analyzeTableEntry> analyze_table_entry
+%type <checkTableOption> check_table_option_opt
+%type <int64Val> for_query_opt
 
 %type <functionName> func_name
 %type <funcArgs> func_args_list_opt func_args_list
@@ -1003,6 +1010,8 @@ normal_stmt:
 |   show_stmt
 |   alter_stmt
 |   analyze_stmt
+|   check_table_stmt
+|   show_profile_stmt
 |   update_stmt
 |   use_stmt
 |   set_stmt
@@ -3475,9 +3484,65 @@ utility_option_arg:
 |   STRING                      { $$ = $1 }
 
 analyze_stmt:
-    ANALYZE TABLE table_name '(' column_list ')'
+    ANALYZE TABLE analyze_table_list
     {
-        $$ = tree.NewAnalyzeStmt($3, $5)
+        $$ = tree.NewAnalyzeStmt($3)
+    }
+
+analyze_table_list:
+    analyze_table_entry
+    {
+        $$ = []*tree.AnalyzeTableEntry{$1}
+    }
+|   analyze_table_list ',' analyze_table_entry
+    {
+        $$ = append($1, $3)
+    }
+
+analyze_table_entry:
+    table_name
+    {
+        $$ = &tree.AnalyzeTableEntry{Table: $1}
+    }
+|   table_name '(' column_list ')'
+    {
+        $$ = &tree.AnalyzeTableEntry{Table: $1, Cols: $3}
+    }
+
+check_table_stmt:
+    CHECK TABLE table_name_list check_table_option_opt
+    {
+        $$ = tree.NewCheckTableStmt($3, $4)
+    }
+
+check_table_option_opt:
+    /* empty */
+    {
+        $$ = tree.CheckTableOptionNone
+    }
+|   EXTENDED
+    {
+        $$ = tree.CheckTableOptionExtended
+    }
+|   FOR UPGRADE
+    {
+        $$ = tree.CheckTableOptionForUpgrade
+    }
+
+show_profile_stmt:
+    SHOW PROFILE for_query_opt limit_opt
+    {
+        $$ = tree.NewShowProfileStmt($3, $4)
+    }
+
+for_query_opt:
+    /* empty */
+    {
+        $$ = 0
+    }
+|   FOR QUERY INTEGRAL
+    {
+        $$ = $3.(int64)
     }
 
 upgrade_stmt:
@@ -14065,6 +14130,7 @@ non_reserved_keyword:
 |   QUERY
 |   PAUSE
 |   PROFILES
+|   PROFILE
 |   ROLE
 |   RULE
 |   RULES

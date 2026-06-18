@@ -1171,31 +1171,62 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 	// IMO, this approach is simple and future-proof
 	// Although this rewriting processing could have been handled in rewrite module,
 	// `handleAnalyzeStmt` can be easily managed by cron jobs in the future
-	ctx := tree.NewFmtCtx(dialect.MYSQL)
-	ctx.WriteString("select ")
-	for i, ident := range stmt.Cols {
-		if i > 0 {
-			ctx.WriteByte(',')
-		}
-		ctx.WriteString("approx_count_distinct(")
-		ctx.WriteString(string(ident))
-		ctx.WriteByte(')')
-	}
-	ctx.WriteString(" from ")
-	stmt.Table.Format(ctx)
-	sql := ctx.String()
+
 	//backup the inside statement
 	prevInsideStmt := ses.ReplaceDerivedStmt(true)
 	defer func() {
 		//restore the inside statement
 		ses.ReplaceDerivedStmt(prevInsideStmt)
 	}()
-	tempExecCtx := ExecCtx{
-		ses:    ses,
-		reqCtx: execCtx.reqCtx,
+
+	if len(stmt.Entries) == 0 {
+		return moerr.NewInternalError(execCtx.reqCtx, "ANALYZE TABLE requires at least one table")
 	}
-	defer tempExecCtx.Close()
-	return doComQuery(ses, &tempExecCtx, &UserInput{sql: sql})
+
+	for _, entry := range stmt.Entries {
+		ctx := tree.NewFmtCtx(dialect.MYSQL)
+		ctx.WriteString("select ")
+		for i, ident := range entry.Cols {
+			if i > 0 {
+				ctx.WriteByte(',')
+			}
+			ctx.WriteString("approx_count_distinct(")
+			ctx.WriteString(string(ident))
+			ctx.WriteByte(')')
+		}
+		ctx.WriteString(" from ")
+		entry.Table.Format(ctx)
+		sql := ctx.String()
+		tempExecCtx := ExecCtx{
+			ses:    ses,
+			reqCtx: execCtx.reqCtx,
+		}
+		err := doComQuery(ses, &tempExecCtx, &UserInput{sql: sql})
+		tempExecCtx.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func handleCheckTableStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.CheckTableStmt) error {
+	msg := "CHECK TABLE is not supported in MatrixOne"
+	switch stmt.Option {
+	case tree.CheckTableOptionExtended:
+		msg = "CHECK TABLE ... EXTENDED is not supported in MatrixOne"
+	case tree.CheckTableOptionForUpgrade:
+		msg = "CHECK TABLE ... FOR UPGRADE is not supported in MatrixOne"
+	}
+	return moerr.NewNotSupported(execCtx.reqCtx, msg)
+}
+
+func handleShowProfileStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ShowProfileStmt) error {
+	msg := "SHOW PROFILE is not supported in MatrixOne"
+	if stmt.ForQuery > 0 {
+		msg = fmt.Sprintf("SHOW PROFILE FOR QUERY %d is not supported in MatrixOne", stmt.ForQuery)
+	}
+	return moerr.NewNotSupported(execCtx.reqCtx, msg)
 }
 
 func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt) error {

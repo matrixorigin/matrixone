@@ -207,6 +207,18 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleAnalyzeStmt(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.CheckTableStmt:
+		ses.EnterFPrint(FPCheckTableStmt)
+		defer ses.ExitFPrint(FPCheckTableStmt)
+		if err = handleCheckTableStmt(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.ShowProfileStmt:
+		ses.EnterFPrint(FPShowProfileStmt)
+		defer ses.ExitFPrint(FPShowProfileStmt)
+		if err = handleShowProfileStmt(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.ExplainStmt:
 		ses.EnterFPrint(FPExplainStmt)
 		defer ses.ExitFPrint(FPExplainStmt)
