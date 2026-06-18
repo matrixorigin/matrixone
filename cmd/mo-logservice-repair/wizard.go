@@ -265,14 +265,21 @@ func runApply(args []string) error {
 	if opts.planPath == "" {
 		return fmt.Errorf("--plan is required")
 	}
-	plan, err := readPlanFile(opts.planPath)
+	plans, err := readPlanFiles(opts.planPath)
 	if err != nil {
 		return err
 	}
-	printPlanSummary(plan)
+	for i, plan := range plans {
+		if len(plans) > 1 {
+			fmt.Printf("=== Plan %d/%d ===\n", i+1, len(plans))
+		}
+		printPlanSummary(plan)
+	}
 	if !opts.yes {
-		if err := confirmPlanDetails(plan); err != nil {
-			return err
+		for _, plan := range plans {
+			if err := confirmPlanDetails(plan); err != nil {
+				return err
+			}
 		}
 		confirm, err := askLine("This may stop/restart LogService and edit local replica data. Type APPLY to continue")
 		if err != nil {
@@ -282,7 +289,7 @@ func runApply(args []string) error {
 			return fmt.Errorf("apply cancelled")
 		}
 	}
-	return applyRepairPlan(context.Background(), plan, opts)
+	return applyRepairPlans(context.Background(), plans, opts)
 }
 
 func parseWizardFlags(name string, args []string) (wizardOptions, error) {
@@ -1255,6 +1262,147 @@ func buildLocalActions(plan *repairPlan) []planAction {
 }
 
 func applyRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOptions) error {
+	return applyRepairPlans(ctx, []*repairPlan{plan}, opts)
+}
+
+func applyRepairPlans(ctx context.Context, plans []*repairPlan, opts wizardOptions) error {
+	if len(plans) == 0 {
+		return fmt.Errorf("no repair plans to apply")
+	}
+	if len(plans) == 1 {
+		return applySingleRepairPlan(ctx, plans[0], opts)
+	}
+	if err := validateCombinedRepairPlans(plans); err != nil {
+		return err
+	}
+	timeout := opts.timeout
+	if timeout == 0 {
+		timeout = 10 * time.Second
+	}
+	tasks := cleanupTasksForPlans(plans)
+	rebuildStores := storesFromCleanupTasks(tasks)
+	if err := validateCombinedPlannedLocalCleanupCompleteness(plans); err != nil {
+		return err
+	}
+
+	fmt.Println("step 1: write repair states and block stale/dirty stores")
+	if err := confirmApplyStep(opts, "step 1", fmt.Sprintf("block stores for shards %v", planShardIDs(plans))); err != nil {
+		return err
+	}
+	for _, plan := range plans {
+		if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddressesForApply(plan), timeout, repairPayloadForPlan(plan, plan.InitialBlockedStores, "wizard: block stale/dirty stores before combined cleanup")); err != nil {
+			return fmt.Errorf("shard %d repair state: %w", plan.ShardID, err)
+		}
+	}
+
+	fmt.Println("step 2: stop LogService stores that need local cleanup")
+	if err := confirmApplyStep(opts, "step 2", fmt.Sprintf("stop stores %v", storesWithCleanup(rebuildStores))); err != nil {
+		return err
+	}
+	if opts.manualServiceControl {
+		fmt.Printf("manual service control enabled; stop these stores before continuing: %v\n", storesWithCleanup(rebuildStores))
+	} else {
+		for _, store := range rebuildStores {
+			if err := stopStore(store); err != nil {
+				return err
+			}
+		}
+	}
+
+	fmt.Println("step 3: back up local logservice-data")
+	backupDir := combinedBackupDir(plans)
+	if err := confirmApplyStep(opts, "step 3", fmt.Sprintf("backup store data to %s", backupDir)); err != nil {
+		return err
+	}
+	for _, store := range rebuildStores {
+		if err := backupStore(backupDir, store); err != nil {
+			return err
+		}
+	}
+
+	fmt.Println("step 4: clean dirty local replicas")
+	if err := confirmApplyStep(opts, "step 4", combinedCleanupSummary(tasks)); err != nil {
+		return err
+	}
+	for _, task := range tasks {
+		if err := cleanReplica(
+			task.Store.DeploymentID,
+			task.Store.UUID,
+			task.Store.NodeHostDir,
+			task.Store.RaftAddress,
+			task.Store.ListenAddress,
+			task.Store.GossipAddress,
+			task.Plan.ShardID,
+			task.ReplicaID,
+			200,
+		); err != nil {
+			return err
+		}
+	}
+	if err := validateNoDuplicateLocalShards(rebuildStores); err != nil {
+		return err
+	}
+
+	fmt.Println("step 5: restart cleaned LogService stores")
+	if err := confirmApplyStep(opts, "step 5", fmt.Sprintf("restart stores %v", storesWithCleanup(rebuildStores))); err != nil {
+		return err
+	}
+	if opts.manualServiceControl {
+		fmt.Printf("manual service control enabled; start these stores and wait until their HAKeeper service addresses are reachable: %v\n", storesWithCleanup(rebuildStores))
+	} else {
+		for _, store := range rebuildStores {
+			if err := startStore(plans[0], store); err != nil {
+				return err
+			}
+		}
+	}
+
+	fmt.Println("step 6: unblock cleaned stores one shard at a time")
+	for _, plan := range plans {
+		for _, store := range storesByUUID(plan.Stores, plan.RebuildStores) {
+			if len(store.CleanupReplicas) == 0 {
+				continue
+			}
+			if err := confirmApplyStep(opts, "step 6", fmt.Sprintf("unblock cleaned store %s for shard %d", store.UUID, plan.ShardID)); err != nil {
+				return err
+			}
+			req := repairPayload{
+				Op:         "unblock",
+				ShardID:    plan.ShardID,
+				ShardIDSet: true,
+				Stores:     []string{store.UUID},
+				Reason:     fmt.Sprintf("wizard: combined cleanup shard %d store %s", plan.ShardID, store.UUID),
+			}
+			if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddressesForApply(plan), timeout, req); err != nil {
+				return fmt.Errorf("unblock shard %d store %s: %w", plan.ShardID, store.UUID, err)
+			}
+			fmt.Printf("unblocked %s for shard %d; wait 30s for L/Start/snapshot restore\n", store.UUID, plan.ShardID)
+			time.Sleep(30 * time.Second)
+		}
+	}
+
+	fmt.Println("step 7: write final repair states")
+	for _, plan := range plans {
+		if err := confirmApplyStep(opts, "step 7", fmt.Sprintf("shard %d keep persistent blocked stores %v", plan.ShardID, plan.PersistentBlockedStores)); err != nil {
+			return err
+		}
+		if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddressesForApply(plan), timeout, repairPayloadForPlan(plan, plan.PersistentBlockedStores, "wizard: combined repair complete")); err != nil {
+			return fmt.Errorf("final repair state shard %d: %w", plan.ShardID, err)
+		}
+	}
+
+	fmt.Println("step 8: final HAKeeper state")
+	state, err := getHAKeeperStateWithNewConnection(ctx, stableHAKeeperAddressesForApply(plans[0]), timeout)
+	if err != nil {
+		return err
+	}
+	return printJSON(map[string]any{
+		"logShards": state.LogState.Shards,
+		"repairs":   state.LogShardRepairs,
+	})
+}
+
+func applySingleRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOptions) error {
 	if !plan.ApplySupported {
 		return fmt.Errorf("%s mode apply is not supported yet; use the generated actions as a runbook", plan.Mode)
 	}
@@ -1426,6 +1574,148 @@ func stableHAKeeperAddressesForApply(plan *repairPlan) []string {
 		return ret[i] < ret[j]
 	})
 	return uniqueStringsKeepOrder(ret)
+}
+
+type cleanupTask struct {
+	Plan      *repairPlan
+	Store     planStore
+	ReplicaID uint64
+}
+
+func validateCombinedRepairPlans(plans []*repairPlan) error {
+	seenShards := make(map[uint64]bool)
+	for _, plan := range plans {
+		if !plan.ApplySupported {
+			return fmt.Errorf("%s mode apply is not supported yet; use the generated actions as a runbook", plan.Mode)
+		}
+		if plan.Mode != modeLocal {
+			return fmt.Errorf("unsupported apply mode %q", plan.Mode)
+		}
+		if seenShards[plan.ShardID] {
+			return fmt.Errorf("duplicate repair plan for shard %d", plan.ShardID)
+		}
+		seenShards[plan.ShardID] = true
+		if plan.Local == nil {
+			return fmt.Errorf("shard %d has no local plan settings", plan.ShardID)
+		}
+	}
+	return nil
+}
+
+func cleanupTasksForPlans(plans []*repairPlan) []cleanupTask {
+	tasks := make([]cleanupTask, 0)
+	for _, plan := range plans {
+		for _, store := range storesByUUID(plan.Stores, plan.RebuildStores) {
+			for _, replicaID := range store.CleanupReplicas {
+				tasks = append(tasks, cleanupTask{
+					Plan:      plan,
+					Store:     store,
+					ReplicaID: replicaID,
+				})
+			}
+		}
+	}
+	sort.Slice(tasks, func(i, j int) bool {
+		if tasks[i].Store.UUID != tasks[j].Store.UUID {
+			return tasks[i].Store.UUID < tasks[j].Store.UUID
+		}
+		if tasks[i].Plan.ShardID != tasks[j].Plan.ShardID {
+			return tasks[i].Plan.ShardID < tasks[j].Plan.ShardID
+		}
+		return tasks[i].ReplicaID < tasks[j].ReplicaID
+	})
+	return tasks
+}
+
+func storesFromCleanupTasks(tasks []cleanupTask) []planStore {
+	byUUID := make(map[string]planStore)
+	for _, task := range tasks {
+		store := byUUID[task.Store.UUID]
+		if store.UUID == "" {
+			store = task.Store
+			store.CleanupReplicas = nil
+		}
+		store.CleanupReplicas = append(store.CleanupReplicas, task.ReplicaID)
+		store.CleanupReplicas = uniqueUint64s(store.CleanupReplicas)
+		byUUID[store.UUID] = store
+	}
+	ids := make([]string, 0, len(byUUID))
+	for uuid := range byUUID {
+		ids = append(ids, uuid)
+	}
+	sort.Strings(ids)
+	ret := make([]planStore, 0, len(ids))
+	for _, uuid := range ids {
+		ret = append(ret, byUUID[uuid])
+	}
+	return ret
+}
+
+func validateCombinedPlannedLocalCleanupCompleteness(plans []*repairPlan) error {
+	tasks := cleanupTasksForPlans(plans)
+	byStore := make(map[string]planStore)
+	replicasByStore := make(map[string]map[uint64][]uint64)
+	for _, task := range tasks {
+		byStore[task.Store.UUID] = task.Store
+		if replicasByStore[task.Store.UUID] == nil {
+			replicasByStore[task.Store.UUID] = localReplicasByShard(task.Store.NodeHostDir, task.Store.DeploymentID)
+		}
+		byShard := replicasByStore[task.Store.UUID]
+		byShard[task.Plan.ShardID] = removeUint64(byShard[task.Plan.ShardID], task.ReplicaID)
+	}
+	messages := make([]string, 0)
+	storeIDs := make([]string, 0, len(replicasByStore))
+	for uuid := range replicasByStore {
+		storeIDs = append(storeIDs, uuid)
+	}
+	sort.Strings(storeIDs)
+	for _, uuid := range storeIDs {
+		store := byStore[uuid]
+		byShard := replicasByStore[uuid]
+		shardIDs := make([]uint64, 0, len(byShard))
+		for shardID := range byShard {
+			shardIDs = append(shardIDs, shardID)
+		}
+		sort.Slice(shardIDs, func(i, j int) bool { return shardIDs[i] < shardIDs[j] })
+		for _, shardID := range shardIDs {
+			replicas := byShard[shardID]
+			if len(replicas) <= 1 {
+				continue
+			}
+			messages = append(messages, fmt.Sprintf("- store %s would still have duplicate local replicas for shard %d after combined plans: %v", store.UUID, shardID, replicas))
+		}
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	return fmt.Errorf("combined repair plans are incomplete; refusing to start apply before mutating HAKeeper or local data:\n%s", strings.Join(messages, "\n"))
+}
+
+func combinedCleanupSummary(tasks []cleanupTask) string {
+	parts := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		parts = append(parts, fmt.Sprintf("%s shard %d replica %d", task.Store.UUID, task.Plan.ShardID, task.ReplicaID))
+	}
+	if len(parts) == 0 {
+		return "no local replicas need cleanup"
+	}
+	return "delete local data for " + strings.Join(parts, "; ")
+}
+
+func combinedBackupDir(plans []*repairPlan) string {
+	if len(plans) == 0 || plans[0].Local == nil {
+		return ""
+	}
+	return plans[0].Local.BackupDir
+}
+
+func planShardIDs(plans []*repairPlan) []uint64 {
+	ret := make([]uint64, 0, len(plans))
+	for _, plan := range plans {
+		ret = append(ret, plan.ShardID)
+	}
+	sort.Slice(ret, func(i, j int) bool { return ret[i] < ret[j] })
+	return ret
 }
 
 func confirmApplyStep(opts wizardOptions, step string, description string) error {
@@ -1817,6 +2107,26 @@ func readPlanFile(path string) (*repairPlan, error) {
 		return nil, fmt.Errorf("unsupported plan version %q", plan.Version)
 	}
 	return &plan, nil
+}
+
+func readPlanFiles(paths string) ([]*repairPlan, error) {
+	parts := strings.Split(paths, ",")
+	plans := make([]*repairPlan, 0, len(parts))
+	for _, part := range parts {
+		path := strings.TrimSpace(part)
+		if path == "" {
+			continue
+		}
+		plan, err := readPlanFile(path)
+		if err != nil {
+			return nil, err
+		}
+		plans = append(plans, plan)
+	}
+	if len(plans) == 0 {
+		return nil, fmt.Errorf("no plan files specified")
+	}
+	return plans, nil
 }
 
 func askChoice(prompt string, choices []string, def string) (string, error) {

@@ -282,6 +282,55 @@ func TestValidatePlannedLocalCleanupCompletenessCatchesBeforeApply(t *testing.T)
 	}
 }
 
+func TestValidateCombinedPlannedLocalCleanupCompletenessAllowsCrossShardCleanup(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeLogMetadata(filepath.Join(dir, logMetadataFilename), metadata.LogStore{
+		Shards: []metadata.LogShard{
+			{LogShardRecord: metadata.LogShardRecord{ShardID: 0}, ReplicaID: 131074},
+			{LogShardRecord: metadata.LogShardRecord{ShardID: 0}, ReplicaID: 272588},
+			{LogShardRecord: metadata.LogShardRecord{ShardID: 1}, ReplicaID: 262146},
+			{LogShardRecord: metadata.LogShardRecord{ShardID: 1}, ReplicaID: 272587},
+		},
+	}); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	store := planStore{
+		UUID:            "00000000-0000-0000-0000-000000000d01",
+		NodeHostDir:     dir,
+		DeploymentID:    8850055262063090202,
+		RaftAddress:     "127.0.0.1:65200",
+		ListenAddress:   "127.0.0.1:65200",
+		GossipAddress:   "127.0.0.1:65202",
+		CleanupReplicas: []uint64{131074},
+	}
+	shard0 := &repairPlan{
+		Version:        repairPlanVersion,
+		Mode:           modeLocal,
+		ShardID:        0,
+		ApplySupported: true,
+		RebuildStores:  []string{store.UUID},
+		Local:          &localPlanSettings{BackupDir: filepath.Join(dir, "backup")},
+		Stores:         []planStore{store},
+	}
+	store.CleanupReplicas = []uint64{272587}
+	shard1 := &repairPlan{
+		Version:        repairPlanVersion,
+		Mode:           modeLocal,
+		ShardID:        1,
+		ApplySupported: true,
+		RebuildStores:  []string{store.UUID},
+		Local:          &localPlanSettings{BackupDir: filepath.Join(dir, "backup")},
+		Stores:         []planStore{store},
+	}
+	if err := validateCombinedPlannedLocalCleanupCompleteness([]*repairPlan{shard0, shard1}); err != nil {
+		t.Fatalf("combined cleanup should be complete: %v", err)
+	}
+	tasks := cleanupTasksForPlans([]*repairPlan{shard0, shard1})
+	if len(tasks) != 2 || tasks[0].Plan.ShardID != 0 || tasks[1].Plan.ShardID != 1 {
+		t.Fatalf("unexpected cleanup tasks: %+v", tasks)
+	}
+}
+
 func TestBuildK8sPlanStoreRebuildsDirtyTarget(t *testing.T) {
 	shard := logpb.LogShardInfo{
 		ShardID:  1,
