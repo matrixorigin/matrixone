@@ -51,6 +51,21 @@ import (
 
 const dataBranchMetadataIDBatchSize = 512
 
+func isDataBranchUserVisibleColumn(col *plan.ColDef) bool {
+	if col == nil {
+		return false
+	}
+	if col.Hidden {
+		return false
+	}
+	switch col.Name {
+	case catalog.Row_ID, catalog.FakePrimaryKeyColName, catalog.CPrimaryKeyColName:
+		return false
+	default:
+		return true
+	}
+}
+
 func newBranchHashmapAllocator(limitRate float64) *branchHashmapAllocator {
 	throttler := rscthrottler.NewMemThrottler(
 		"DataBranchHashmap",
@@ -951,12 +966,9 @@ func getTableStuff(
 		tblStuff.def.colNames = append(tblStuff.def.colNames, col.Name)
 		tblStuff.def.colTypes = append(tblStuff.def.colTypes, t)
 
-		if col.Name == catalog.FakePrimaryKeyColName ||
-			col.Name == catalog.CPrimaryKeyColName {
-			continue
+		if isDataBranchUserVisibleColumn(col) {
+			tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, i)
 		}
-
-		tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, i)
 	}
 
 	tblStuff.retPool = &retBatchList{}
