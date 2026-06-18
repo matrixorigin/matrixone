@@ -968,7 +968,14 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					// 2. Update IndexDef and mo_catalog.mo_indexes.
 					alterIndex.IndexAlgoParams = newAlgoParams
 					oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
-					updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
+					// Escape the SQL string literals, same as the REINDEX branch
+					// below: algo_params is a JSON blob (JSON does not escape SQL
+					// quotes/backslashes) and the index name is user-supplied, so
+					// an unescaped quote or backslash could corrupt or break out of
+					// algo_params = '...' / name = '...'.
+					updateSql := fmt.Sprintf(updateMoIndexesAlgoParams,
+						sqlquote.EscapeString(newAlgoParams), oTableDef.TblId,
+						sqlquote.EscapeString(alterIndex.IndexName))
 					if err = c.runSqlWithOptions(
 						updateSql, executor.StatementOption{}.WithDisableLog(),
 					); err != nil {
