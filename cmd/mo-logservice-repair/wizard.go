@@ -41,26 +41,27 @@ const (
 )
 
 type wizardOptions struct {
-	mode           string
-	baseDir        string
-	confDir        string
-	shardID        uint64
-	shardIDSet     bool
-	addresses      string
-	output         string
-	planPath       string
-	apply          bool
-	yes            bool
-	timeout        time.Duration
-	moServicePath  string
-	namespace      string
-	kubeContext    string
-	k8sLogSelector string
-	pvcMountPath   string
-	pvcDataDir     string
-	repairImage    string
-	repairBinary   string
-	deploymentID   uint64
+	mode                 string
+	baseDir              string
+	confDir              string
+	shardID              uint64
+	shardIDSet           bool
+	addresses            string
+	output               string
+	planPath             string
+	apply                bool
+	yes                  bool
+	timeout              time.Duration
+	moServicePath        string
+	namespace            string
+	kubeContext          string
+	k8sLogSelector       string
+	pvcMountPath         string
+	pvcDataDir           string
+	repairImage          string
+	repairBinary         string
+	deploymentID         uint64
+	manualServiceControl bool
 }
 
 type repairPlan struct {
@@ -306,6 +307,7 @@ func parseWizardFlags(name string, args []string) (wizardOptions, error) {
 	fs.StringVar(&opts.repairImage, "repair-image", "matrixorigin/matrixone:latest", "image used by the temporary k8s repair pod")
 	fs.StringVar(&opts.repairBinary, "repair-binary", "/tmp/mo-logservice-repair", "mo-logservice-repair path inside the temporary repair pod")
 	fs.Uint64Var(&opts.deploymentID, "deployment-id", 0, "dragonboat deployment id; required for exact k8s PVC clean-replica commands")
+	fs.BoolVar(&opts.manualServiceControl, "manual-service-control", false, "do not stop or restart local mo-service processes; require the operator to do it")
 	if err := fs.Parse(args); err != nil {
 		return opts, err
 	}
@@ -1042,30 +1044,93 @@ func formatReplicaMap(m map[uint64]string) string {
 }
 
 func localShardReplicas(nodeHostDir string, deploymentID uint64, shardID uint64) []uint64 {
-	seen := make(map[uint64]bool)
+	byShard := localReplicasByShard(nodeHostDir, deploymentID)
+	return byShard[shardID]
+}
+
+func localReplicasByShard(nodeHostDir string, deploymentID uint64) map[uint64][]uint64 {
+	seen := make(map[uint64]map[uint64]bool)
 	metadataPath := filepath.Join(nodeHostDir, logMetadataFilename)
 	if md, err := readLogMetadata(metadataPath); err == nil {
 		for _, rec := range md.Shards {
-			if rec.ShardID == shardID {
-				seen[rec.ReplicaID] = true
+			if seen[rec.ShardID] == nil {
+				seen[rec.ShardID] = make(map[uint64]bool)
 			}
+			seen[rec.ShardID][rec.ReplicaID] = true
 		}
 	}
 	deploymentDir := fmt.Sprintf("%020d", deploymentID)
-	matches, _ := filepath.Glob(filepath.Join(nodeHostDir, "*", deploymentDir, "tandb", fmt.Sprintf("node-%d-*", shardID)))
+	matches, _ := filepath.Glob(filepath.Join(nodeHostDir, "*", deploymentDir, "tandb", "node-*-*"))
 	for _, match := range matches {
 		name := filepath.Base(match)
-		idText := strings.TrimPrefix(name, fmt.Sprintf("node-%d-", shardID))
-		if id, err := strconv.ParseUint(idText, 10, 64); err == nil {
-			seen[id] = true
+		parts := strings.Split(name, "-")
+		if len(parts) != 3 || parts[0] != "node" {
+			continue
+		}
+		shardID, shardErr := strconv.ParseUint(parts[1], 10, 64)
+		replicaID, replicaErr := strconv.ParseUint(parts[2], 10, 64)
+		if shardErr != nil || replicaErr != nil {
+			continue
+		}
+		if seen[shardID] == nil {
+			seen[shardID] = make(map[uint64]bool)
+		}
+		seen[shardID][replicaID] = true
+	}
+	ret := make(map[uint64][]uint64, len(seen))
+	for shardID, replicas := range seen {
+		ids := make([]uint64, 0, len(replicas))
+		for id := range replicas {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		ret[shardID] = ids
+	}
+	return ret
+}
+
+func validateNoDuplicateLocalShards(stores []planStore) error {
+	messages := make([]string, 0)
+	for _, store := range stores {
+		if len(store.CleanupReplicas) == 0 || store.NodeHostDir == "" || store.DeploymentID == 0 {
+			continue
+		}
+		byShard := localReplicasByShard(store.NodeHostDir, store.DeploymentID)
+		shardIDs := make([]uint64, 0, len(byShard))
+		for shardID := range byShard {
+			shardIDs = append(shardIDs, shardID)
+		}
+		sort.Slice(shardIDs, func(i, j int) bool { return shardIDs[i] < shardIDs[j] })
+		for _, shardID := range shardIDs {
+			replicas := byShard[shardID]
+			if len(replicas) <= 1 {
+				continue
+			}
+			messages = append(messages, duplicateLocalShardMessage(store, shardID, replicas))
 		}
 	}
-	ret := make([]uint64, 0, len(seen))
-	for id := range seen {
-		ret = append(ret, id)
+	if len(messages) == 0 {
+		return nil
 	}
-	sort.Slice(ret, func(i, j int) bool { return ret[i] < ret[j] })
-	return ret
+	return fmt.Errorf("local cleanup is incomplete; refusing to restart stores with duplicate local shard replicas:\n%s", strings.Join(messages, "\n"))
+}
+
+func duplicateLocalShardMessage(store planStore, shardID uint64, replicas []uint64) string {
+	commands := make([]string, 0, len(replicas))
+	for _, replicaID := range replicas {
+		commands = append(commands, fmt.Sprintf(
+			"mo-logservice-repair local clean-replica --deployment-id %d --node-host-id %s --node-host-dir %s --raft-address %s --listen-address %s --gossip-address %s --shard-id %d --replica-id %d",
+			store.DeploymentID,
+			shellQuote(store.UUID),
+			shellQuote(store.NodeHostDir),
+			shellQuote(store.RaftAddress),
+			shellQuote(store.ListenAddress),
+			shellQuote(store.GossipAddress),
+			shardID,
+			replicaID,
+		))
+	}
+	return fmt.Sprintf("- store %s shard %d still has local replicas %v; inspect them and clean stale replicas before restart. Candidate commands:\n  %s", store.UUID, shardID, replicas, strings.Join(commands, "\n  "))
 }
 
 func buildLocalActions(plan *repairPlan) []planAction {
@@ -1174,12 +1239,16 @@ func applyRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOptions) 
 	if err := confirmApplyStep(opts, "step 2", fmt.Sprintf("stop stores %v", storesWithCleanup(rebuildStores))); err != nil {
 		return err
 	}
-	for _, store := range rebuildStores {
-		if len(store.CleanupReplicas) == 0 {
-			continue
-		}
-		if err := stopStore(store); err != nil {
-			return err
+	if opts.manualServiceControl {
+		fmt.Printf("manual service control enabled; stop these stores before continuing: %v\n", storesWithCleanup(rebuildStores))
+	} else {
+		for _, store := range rebuildStores {
+			if len(store.CleanupReplicas) == 0 {
+				continue
+			}
+			if err := stopStore(store); err != nil {
+				return err
+			}
 		}
 	}
 	fmt.Println("step 3: back up local logservice-data")
@@ -1215,16 +1284,23 @@ func applyRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOptions) 
 			}
 		}
 	}
+	if err := validateNoDuplicateLocalShards(rebuildStores); err != nil {
+		return err
+	}
 	fmt.Println("step 5: restart cleaned LogService stores")
 	if err := confirmApplyStep(opts, "step 5", fmt.Sprintf("restart stores %v", storesWithCleanup(rebuildStores))); err != nil {
 		return err
 	}
-	for _, store := range rebuildStores {
-		if len(store.CleanupReplicas) == 0 {
-			continue
-		}
-		if err := startStore(plan, store); err != nil {
-			return err
+	if opts.manualServiceControl {
+		fmt.Printf("manual service control enabled; start these stores and wait until their HAKeeper service addresses are reachable: %v\n", storesWithCleanup(rebuildStores))
+	} else {
+		for _, store := range rebuildStores {
+			if len(store.CleanupReplicas) == 0 {
+				continue
+			}
+			if err := startStore(plan, store); err != nil {
+				return err
+			}
 		}
 	}
 	fmt.Println("step 6: unblock cleaned stores one by one")

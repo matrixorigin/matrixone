@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 func TestParseLogConfigForWizard(t *testing.T) {
@@ -214,6 +215,38 @@ func TestStableHAKeeperAddressesForApplyRanksCleanupStoresLast(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("unexpected addresses: got %v want %v", got, want)
+		}
+	}
+}
+
+func TestValidateNoDuplicateLocalShardsCatchesOtherShardResidue(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeLogMetadata(filepath.Join(dir, logMetadataFilename), metadata.LogStore{
+		Shards: []metadata.LogShard{
+			{LogShardRecord: metadata.LogShardRecord{ShardID: 0}, ReplicaID: 131074},
+			{LogShardRecord: metadata.LogShardRecord{ShardID: 0}, ReplicaID: 272587},
+			{LogShardRecord: metadata.LogShardRecord{ShardID: 1}, ReplicaID: 272588},
+		},
+	}); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	store := planStore{
+		UUID:            "00000000-0000-0000-0000-000000000d01",
+		NodeHostDir:     dir,
+		DeploymentID:    8850055262063090202,
+		RaftAddress:     "127.0.0.1:65200",
+		ListenAddress:   "127.0.0.1:65200",
+		GossipAddress:   "127.0.0.1:65202",
+		CleanupReplicas: []uint64{272588},
+	}
+	err := validateNoDuplicateLocalShards([]planStore{store})
+	if err == nil {
+		t.Fatalf("expected duplicate local shard error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"shard 0", "131074", "272587", "--shard-id 0"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("expected %q in error: %s", want, msg)
 		}
 	}
 }
