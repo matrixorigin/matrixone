@@ -50,11 +50,11 @@ func TestBuildMulti(t *testing.T) {
 	idxcfg.Usearch.Connectivity = 48 // default 16
 	//idxcfg.Usearch.ExpansionAdd = 128   // default 128
 	//idxcfg.Usearch.ExpansionSearch = 30 // default 64
+	idxcfg.IndexCapacity = MaxIndexCapacity
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
 		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
 		ThreadsSearch: int64(nthread),
-		ThreadsBuild:  int64(nthread),
-		IndexCapacity: MaxIndexCapacity}
+		ThreadsBuild:  int64(nthread)}
 
 	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
 	build, err := NewHnswBuild[float32](sqlproc, uid, 1, idxcfg, tblcfg)
@@ -224,11 +224,11 @@ func runBuildSingleThread[T types.RealNumbers](t *testing.T) {
 	idxcfg.Usearch.Connectivity = 48    // default 16
 	idxcfg.Usearch.ExpansionAdd = 128   // default 128
 	idxcfg.Usearch.ExpansionSearch = 30 // default 64
+	idxcfg.IndexCapacity = MaxIndexCapacity
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
 		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
 		ThreadsSearch: 0,
-		ThreadsBuild:  1,
-		IndexCapacity: MaxIndexCapacity}
+		ThreadsBuild:  1}
 
 	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
 	build, err := NewHnswBuild[T](sqlproc, uid, 1, idxcfg, tblcfg)

@@ -302,6 +302,31 @@ func (opts Options) ResolveVariableFunc() func(varName string, isSystemVar, isGl
 	return opts.resolveVariableFunc
 }
 
+// WithFrontend marks the SQL execution as a frontend session-bound
+// invocation (b=true) versus a background / internal one (b=false).
+// Consumed by pkg/sql/compile/sql_executor.go's NewTopProcess which
+// sets proc.Base.IsFrontend = opts.IsFrontend().
+//
+// The default — `executor.Options{}` with no setter — is background
+// (IsFrontend()=false). Frontend code that uses the internal SQL
+// executor for session-bound queries opts in by calling
+// WithFrontend(true). Background callers (idxcron, ProcessInitSQL,
+// bootstrap, cron tasks, task service, …) don't need to call this —
+// they inherit the default.
+//
+// Takes a bool (rather than a no-arg setter) so callers that wrap an
+// existing proc and re-invoke the executor can carry the flag forward
+// via opts.WithFrontend(proc.Base.IsFrontend) — same shape as
+// WithResolveVariableFunc(proc.GetResolveVariableFunc()).
+func (opts Options) WithFrontend(b bool) Options {
+	opts.isFrontend = b
+	return opts
+}
+
+func (opts Options) IsFrontend() bool {
+	return opts.isFrontend
+}
+
 func (opts StatementOption) HasParams() bool {
 	return len(opts.params) > 0
 }

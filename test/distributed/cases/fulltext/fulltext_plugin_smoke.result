@@ -1,0 +1,28 @@
+drop database if exists fulltext_plugin_smoke;
+create database fulltext_plugin_smoke;
+use fulltext_plugin_smoke;
+set experimental_fulltext_index = 1;
+create table d (id int primary key, body text);
+insert into d values (1, 'hello world'), (2, 'foo bar baz'), (3, 'hello again');
+create fulltext index ftidx on d (body);
+select algo, algo_table_type from mo_catalog.mo_indexes
+where table_id = (select rel_id from mo_catalog.mo_tables
+where relname = 'd' and reldatabase = 'fulltext_plugin_smoke')
+order by algo_table_type;
+➤ algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  𝄀
+  ¦    𝄀
+fulltext  ¦  
+show create table d;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+d  ¦  CREATE TABLE `d` (
+  `id` int NOT NULL,
+  `body` text DEFAULT NULL,
+  PRIMARY KEY (`id`),
+ FULLTEXT `ftidx`(`body`)
+)
+select id from d where match(body) against('hello');
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+set experimental_fulltext_index = 0;
+drop database fulltext_plugin_smoke;

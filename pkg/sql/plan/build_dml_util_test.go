@@ -56,30 +56,6 @@ func Test_runSql(t *testing.T) {
 	require.Error(t, err, "internal error: no account id in context")
 }
 
-func Test_buildPostDmlFullTextIndexAsync(t *testing.T) {
-	{
-		//invalid json
-		idxdef := &plan.IndexDef{
-			IndexAlgoParams: `{"async":1}`,
-		}
-
-		err := buildPostDmlFullTextIndex(nil, nil, nil, nil, nil, nil, 0, idxdef, 0, false, false, false)
-		require.NotNil(t, err)
-	}
-
-	{
-
-		// async true
-		idxdef := &plan.IndexDef{
-			IndexAlgoParams: `{"async":"true"}`,
-		}
-
-		err := buildPostDmlFullTextIndex(nil, nil, nil, nil, nil, nil, 0, idxdef, 0, false, false, false)
-		require.Nil(t, err)
-	}
-
-}
-
 func Test_buildPreDeleteFullTextIndexAsync(t *testing.T) {
 	{
 		//invalid json

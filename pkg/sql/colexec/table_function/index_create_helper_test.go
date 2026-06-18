@@ -49,10 +49,23 @@ func TestFetchSrcTableRowCount(t *testing.T) {
 			return executor.Result{Mp: sp.Proc.Mp(), Batches: []*batch.Batch{makeCountBatch(sp.Proc, 42)}}, nil
 		}
 
-		got, err := fetchSrcTableRowCount(proc, runSql, "mydb", "mytbl")
+		got, err := fetchSrcTableRowCount(proc, runSql, "mydb", "mytbl", "")
 		require.NoError(t, err)
 		require.Equal(t, int64(42), got)
 		require.Equal(t, "SELECT count(*) FROM `mydb`.`mytbl`", capturedSQL)
+	})
+
+	t.Run("vec column filters NULLs onto a non-NULL basis", func(t *testing.T) {
+		var capturedSQL string
+		runSql := func(sp *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+			capturedSQL = sql
+			return executor.Result{Mp: sp.Proc.Mp(), Batches: []*batch.Batch{makeCountBatch(sp.Proc, 7)}}, nil
+		}
+
+		got, err := fetchSrcTableRowCount(proc, runSql, "mydb", "mytbl", "vec")
+		require.NoError(t, err)
+		require.Equal(t, int64(7), got)
+		require.Equal(t, "SELECT count(*) FROM `mydb`.`mytbl` WHERE `vec` IS NOT NULL", capturedSQL)
 	})
 
 	t.Run("zero count is returned as zero", func(t *testing.T) {
@@ -60,7 +73,7 @@ func TestFetchSrcTableRowCount(t *testing.T) {
 			return executor.Result{Mp: sp.Proc.Mp(), Batches: []*batch.Batch{makeCountBatch(sp.Proc, 0)}}, nil
 		}
 
-		got, err := fetchSrcTableRowCount(proc, runSql, "mydb", "mytbl")
+		got, err := fetchSrcTableRowCount(proc, runSql, "mydb", "mytbl", "")
 		require.NoError(t, err)
 		require.Equal(t, int64(0), got)
 	})
@@ -70,7 +83,7 @@ func TestFetchSrcTableRowCount(t *testing.T) {
 			return executor.Result{}, fmt.Errorf("boom")
 		}
 
-		_, err := fetchSrcTableRowCount(proc, runSql, "mydb", "mytbl")
+		_, err := fetchSrcTableRowCount(proc, runSql, "mydb", "mytbl", "")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "boom")
 	})
@@ -80,7 +93,7 @@ func TestFetchSrcTableRowCount(t *testing.T) {
 			return executor.Result{Mp: sp.Proc.Mp(), Batches: []*batch.Batch{}}, nil
 		}
 
-		_, err := fetchSrcTableRowCount(proc, runSql, "mydb", "mytbl")
+		_, err := fetchSrcTableRowCount(proc, runSql, "mydb", "mytbl", "")
 		require.Error(t, err)
 	})
 
@@ -92,7 +105,7 @@ func TestFetchSrcTableRowCount(t *testing.T) {
 			return executor.Result{Mp: sp.Proc.Mp(), Batches: []*batch.Batch{bat}}, nil
 		}
 
-		_, err := fetchSrcTableRowCount(proc, runSql, "mydb", "mytbl")
+		_, err := fetchSrcTableRowCount(proc, runSql, "mydb", "mytbl", "")
 		require.Error(t, err)
 	})
 }

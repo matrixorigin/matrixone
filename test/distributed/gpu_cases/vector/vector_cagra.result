@@ -1,0 +1,78 @@
+SET experimental_cagra_index = 1;
+SET cagra_threads_build = 7;
+SET cagra_max_index_capacity = 99999;
+drop database if exists cagra_sync;
+create database cagra_sync;
+use cagra_sync;
+create table t (id bigint primary key, v vecf32(8));
+insert into t values
+( 1, '[1,1,1,1,1,1,1,1]'),     ( 2, '[2,2,2,2,2,2,2,2]'),
+( 3, '[3,3,3,3,3,3,3,3]'),     ( 4, '[4,4,4,4,4,4,4,4]'),
+( 5, '[5,5,5,5,5,5,5,5]'),     ( 6, '[6,6,6,6,6,6,6,6]'),
+( 7, '[7,7,7,7,7,7,7,7]'),     ( 8, '[8,8,8,8,8,8,8,8]'),
+( 9, '[9,9,9,9,9,9,9,9]'),     (10, '[10,10,10,10,10,10,10,10]'),
+(11, '[11,11,11,11,11,11,11,11]'), (12, '[12,12,12,12,12,12,12,12]'),
+(13, '[13,13,13,13,13,13,13,13]'), (14, '[14,14,14,14,14,14,14,14]'),
+(15, '[15,15,15,15,15,15,15,15]'), (16, '[16,16,16,16,16,16,16,16]'),
+(17, '[17,17,17,17,17,17,17,17]'), (18, '[18,18,18,18,18,18,18,18]'),
+(19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]');
+create index ix using cagra on t (v)
+op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32;
+show create table t;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `id` bigint NOT NULL,
+  `v` vecf32(8) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `ix` USING cagra (`v`) op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  intermediate_graph_degree = 16  graph_degree = 8  itopk_size = 32 
+)
+desc t;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+v  ¦  VECF32(8)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  
+select name, type, algo, algo_table_type from mo_catalog.mo_indexes
+where table_id = (select rel_id from mo_catalog.mo_tables
+where relname='t' and reldatabase='cagra_sync')
+order by algo_table_type;
+➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  𝄀
+PRIMARY  ¦  PRIMARY  ¦    ¦    𝄀
+ix  ¦  MULTIPLE  ¦  cagra  ¦  cagra_index  𝄀
+ix  ¦  MULTIPLE  ¦  cagra  ¦  cagra_meta
+set @stbl = (select index_table_name from mo_catalog.mo_indexes
+where table_id=(select rel_id from mo_catalog.mo_tables
+where relname='t' and reldatabase='cagra_sync')
+and name='ix' and algo_table_type='cagra_index');
+set @q = concat('select distinct tag from `', @stbl, '` order by tag');
+prepare s from @q; execute s; deallocate prepare s;
+select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
+➤ id[-5,64,0]  𝄀
+1
+select id from t order by l2_distance(v, '[10,10,10,10,10,10,10,10]') limit 1;
+➤ id[-5,64,0]  𝄀
+10
+select id from t order by l2_distance(v, '[15,15,15,15,15,15,15,15]') limit 1;
+➤ id[-5,64,0]  𝄀
+15
+select id from t order by l2_distance(v, '[20,20,20,20,20,20,20,20]') limit 1;
+➤ id[-5,64,0]  𝄀
+20
+drop index ix on t;
+show create table t;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `id` bigint NOT NULL,
+  `v` vecf32(8) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+select count(*) from mo_catalog.mo_indexes
+where table_id = (select rel_id from mo_catalog.mo_tables
+where relname='t' and reldatabase='cagra_sync')
+and algo='cagra';
+➤ count(*)[-5,64,0]  𝄀
+0
+create index ix using cagra on t (v)
+op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32;
+select id from t order by l2_distance(v, '[7,7,7,7,7,7,7,7]') limit 1;
+➤ id[-5,64,0]  𝄀
+7
+drop database cagra_sync;
