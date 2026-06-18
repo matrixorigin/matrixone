@@ -56,6 +56,9 @@ func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := h.initRowGroupSelection(param); err != nil {
+		return nil, err
+	}
 
 	// Empty file handling (0 rows): only check column count, skip column name and type checks.
 	if h.file.NumRows() == 0 {
@@ -77,6 +80,9 @@ func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 		// Caller treats (nil, nil) as "empty file, advance to next".
 		return nil, nil
 	}
+	if h.rowGroupRows == 0 {
+		return nil, nil
+	}
 
 	err = h.prepare(param)
 	if err != nil {
@@ -84,6 +90,39 @@ func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	}
 
 	return &h, nil
+}
+
+func (h *ParquetHandler) initRowGroupSelection(param *ExternalParam) error {
+	all := h.file.RowGroups()
+	if len(param.ParquetRowGroupShards) == 0 {
+		h.rowGroups = all
+	} else {
+		currentFileIndex := int32(0)
+		if param.Fileparam != nil && param.Fileparam.FileIndex > 0 {
+			currentFileIndex = int32(param.Fileparam.FileIndex - 1)
+		}
+		for _, shard := range param.ParquetRowGroupShards {
+			if shard.FileIndex != currentFileIndex {
+				continue
+			}
+			start := int(shard.RowGroupStart)
+			end := int(shard.RowGroupEnd)
+			if start < 0 || end <= start || end > len(all) {
+				return moerr.NewInvalidInputf(param.Ctx,
+					"invalid parquet row group shard [%d,%d) for file index %d with %d row groups",
+					start, end, currentFileIndex, len(all))
+			}
+			h.rowGroups = append(h.rowGroups, all[start:end]...)
+		}
+	}
+	if len(h.rowGroups) == 0 {
+		h.rowGroup = parquet.MultiRowGroup()
+		h.rowGroupRows = 0
+		return nil
+	}
+	h.rowGroup = parquet.MultiRowGroup(h.rowGroups...)
+	h.rowGroupRows = h.rowGroup.NumRows()
+	return nil
 }
 
 func hasPhysicalParquetAttrs(param *ExternalParam) bool {
@@ -114,6 +153,7 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 		data := util.UnsafeStringToBytes(param.Extern.Data)
 		r = bytes.NewReader(data)
 		fileSize = int64(len(data))
+		param.addParquetProfile(process.ParquetProfileStats{BytesRead: fileSize})
 	case param.Extern.Local:
 		return moerr.NewNYI(param.Ctx, "load parquet local")
 	default:
@@ -128,7 +168,7 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 		}
 		fileSize = param.FileSize[param.Fileparam.FileIndex-1]
 
-		if shouldPrefetchS3Parquet(param.Extern.ScanType, prefetchS3, fileSize) {
+		if shouldPrefetchS3Parquet(param.Extern.ScanType, prefetchS3, fileSize, len(param.ParquetRowGroupShards) > 0) {
 			data := make([]byte, int(fileSize))
 			vec := fileservice.IOVector{
 				FilePath: readPath,
@@ -143,12 +183,17 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 			if err := fs.Read(param.Ctx, &vec); err != nil {
 				return err
 			}
+			param.addParquetProfile(process.ParquetProfileStats{
+				BytesRead:     fileSize,
+				PrefetchBytes: fileSize,
+			})
 			r = bytes.NewReader(data)
 		} else {
 			r = &fsReaderAt{
 				fs:       fs,
 				readPath: readPath,
 				ctx:      param.Ctx,
+				param:    param,
 			}
 		}
 	}
@@ -157,30 +202,37 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 	return moerr.ConvertGoError(param.Ctx, err)
 }
 
-func shouldPrefetchS3Parquet(scanType int, prefetchS3 bool, fileSize int64) bool {
-	return scanType == tree.S3 && prefetchS3 && fileSize >= 0 && fileSize <= maxParquetS3PrefetchSize
+func shouldPrefetchS3Parquet(scanType int, prefetchS3 bool, fileSize int64, hasRowGroupShards bool) bool {
+	return scanType == tree.S3 &&
+		prefetchS3 &&
+		!hasRowGroupShards &&
+		fileSize >= 0 &&
+		fileSize <= maxParquetS3PrefetchSize
 }
 
-// findColumnIgnoreCase finds a column in the Parquet schema with case-insensitive matching.
-// It first tries exact match for performance, then falls back to case-insensitive match.
-// Returns error if multiple columns match case-insensitively (ambiguous), even if one is an exact match.
-func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) (*parquet.Column, error) {
-	root := h.file.Root()
-	nameLower := strings.ToLower(name)
+type parquetColumnLookup struct {
+	exact  map[string]*parquet.Column
+	folded map[string][]*parquet.Column
+}
 
-	// Single pass: find all columns that match case-insensitively
-	var exactMatch *parquet.Column
-	var caseInsensitiveMatches []*parquet.Column
-
-	for _, col := range root.Columns() {
-		if col.Name() == name {
-			exactMatch = col
-			caseInsensitiveMatches = append(caseInsensitiveMatches, col)
-		} else if strings.ToLower(col.Name()) == nameLower {
-			caseInsensitiveMatches = append(caseInsensitiveMatches, col)
-		}
+func newParquetColumnLookup(root *parquet.Column) parquetColumnLookup {
+	lookup := parquetColumnLookup{
+		exact:  make(map[string]*parquet.Column),
+		folded: make(map[string][]*parquet.Column),
 	}
+	for _, col := range root.Columns() {
+		lookup.exact[col.Name()] = col
+		nameLower := strings.ToLower(col.Name())
+		lookup.folded[nameLower] = append(lookup.folded[nameLower], col)
+	}
+	return lookup
+}
 
+// find finds a column in the Parquet schema with case-insensitive matching.
+// It returns an ambiguity error if multiple columns match case-insensitively,
+// even when one of them is an exact match.
+func (lookup parquetColumnLookup) find(ctx context.Context, name string) (*parquet.Column, error) {
+	caseInsensitiveMatches := lookup.folded[strings.ToLower(name)]
 	// Check for ambiguity: multiple columns match case-insensitively
 	if len(caseInsensitiveMatches) > 1 {
 		return nil, moerr.NewInvalidInputf(ctx,
@@ -189,7 +241,7 @@ func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) 
 	}
 
 	// Return exact match if found, otherwise the single case-insensitive match
-	if exactMatch != nil {
+	if exactMatch := lookup.exact[name]; exactMatch != nil {
 		return exactMatch, nil
 	}
 	if len(caseInsensitiveMatches) == 1 {
@@ -199,12 +251,33 @@ func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) 
 	return nil, nil
 }
 
+// findColumnIgnoreCase is kept for direct unit tests; prepare() builds the
+// lookup once and uses it for all target columns.
+func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) (*parquet.Column, error) {
+	return newParquetColumnLookup(h.file.Root()).find(ctx, name)
+}
+
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
+	if h.rowGroup == nil && h.file != nil {
+		if len(h.rowGroups) == 0 {
+			h.rowGroups = h.file.RowGroups()
+		}
+		if len(h.rowGroups) > 0 {
+			h.rowGroup = parquet.MultiRowGroup(h.rowGroups...)
+			h.rowGroupRows = h.rowGroup.NumRows()
+		}
+	}
+
 	h.cols = make([]*parquet.Column, len(param.Cols))
 	h.mappers = make([]*columnMapper, len(param.Cols))
 	h.pages = make([]parquet.Pages, len(param.Cols))
 	h.currentPage = make([]parquet.Page, len(param.Cols))
 	h.pageOffset = make([]int64, len(param.Cols))
+	columnLookup := newParquetColumnLookup(h.file.Root())
+	var rowGroupChunks []parquet.ColumnChunk
+	if h.rowGroup != nil {
+		rowGroupChunks = h.rowGroup.ColumnChunks()
+	}
 	for _, attr := range param.Attrs {
 		colIdx := int(attr.ColIndex)
 		if colIdx < 0 || colIdx >= len(param.Cols) {
@@ -228,7 +301,7 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		h.hasPhysicalCol = true
 
 		// Use case-insensitive column lookup (fix for issue #15621)
-		col, err := h.findColumnIgnoreCase(param.Ctx, attr.ColName)
+		col, err := columnLookup.find(param.Ctx, attr.ColName)
 		if err != nil {
 			return err
 		}
@@ -272,7 +345,12 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		h.cols[colIdx] = physicalCol
 		h.mappers[colIdx] = fn
 		if physicalCol.Leaf() {
-			h.pages[colIdx] = physicalCol.Pages()
+			leafIdx := int(physicalCol.Index())
+			if leafIdx < 0 || leafIdx >= len(rowGroupChunks) {
+				return moerr.NewInvalidInputf(param.Ctx,
+					"invalid parquet leaf column index %d for column %s", leafIdx, attr.ColName)
+			}
+			h.pages[colIdx] = rowGroupChunks[leafIdx].Pages()
 		}
 	}
 
@@ -282,7 +360,7 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 
 	// init row reader if has nested columns
 	if h.hasNestedCols {
-		h.rowReader = parquet.NewReader(h.file)
+		h.rowReader = h.rowGroup.Rows()
 	}
 
 	return nil
@@ -687,6 +765,24 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				return parquetValueToUint64(proc.Ctx, st, v)
 			})
 		}
+	case types.T_bit:
+		if !isParquetIntegerSource(st, true) {
+			break
+		}
+		bitWidth := parquetBitWidth(dt)
+		maxValue := maxParquetBitValue(bitWidth)
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, uint64(0), func(v parquet.Value) (uint64, error) {
+				val, err := parquetValueToUint64(proc.Ctx, st, v)
+				if err != nil {
+					return 0, err
+				}
+				if val > maxValue {
+					return 0, moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows BIT(%d)", val, bitWidth)
+				}
+				return val, nil
+			})
+		}
 	case types.T_float32:
 		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(st.LogicalType()) {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
@@ -924,6 +1020,23 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 		}
 	case types.T_datetime:
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			// Support STRING to DATETIME conversion
+			scale := dt.Scale
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+					func(data []byte) (types.Datetime, error) {
+						datetimeVal, err := types.ParseDatetime(util.UnsafeBytesToString(data), scale)
+						if err != nil {
+							return 0, err
+						}
+						return datetimeVal, nil
+					},
+					types.Datetime(0),
+				)
+			}
+			break
+		}
 		lt := st.LogicalType()
 		if lt == nil {
 			break
@@ -1025,6 +1138,16 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					},
 					types.Time(0),
 				)
+			}
+		} else if isParquetIntegerSource(st, false) {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Time(0), func(v parquet.Value) (types.Time, error) {
+					val, err := parquetValueToInt64(proc.Ctx, st, v)
+					if err != nil {
+						return 0, err
+					}
+					return types.Time(val), nil
+				})
 			}
 		} else {
 			// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#time
@@ -1302,6 +1425,53 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processStringToJson(proc.Ctx, mp, page, proc, vec)
+		}
+	case types.T_uuid:
+		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+				func(data []byte) (types.Uuid, error) {
+					return types.ParseUuid(util.UnsafeBytesToString(data))
+				},
+				types.Uuid{},
+			)
+		}
+	case types.T_enum:
+		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
+			break
+		}
+		enumValues := dt.Enumvalues
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+				func(data []byte) (types.Enum, error) {
+					return types.ParseEnum(enumValues, util.UnsafeBytesToString(data))
+				},
+				types.Enum(0),
+			)
+		}
+	case types.T_array_float32:
+		if !isPlainStringLikeType(st) {
+			break
+		}
+		width := int(dt.Width)
+		if width <= 0 {
+			width = types.MaxArrayDimension
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToArray[float32](proc.Ctx, mp, page, proc, vec, width)
+		}
+	case types.T_array_float64:
+		if !isPlainStringLikeType(st) {
+			break
+		}
+		width := int(dt.Width)
+		if width <= 0 {
+			width = types.MaxArrayDimension
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToArray[float64](proc.Ctx, mp, page, proc, vec, width)
 		}
 	}
 	if mp.mapper != nil {
@@ -1608,6 +1778,96 @@ func processStringToJson(
 	return nil
 }
 
+func processStringToArray[T types.RealNumbers](
+	ctx context.Context,
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	width int,
+) error {
+	numRows := int(page.NumRows())
+	if numRows == 0 {
+		return nil
+	}
+	if width <= 0 {
+		return moerr.NewInvalidInputf(ctx, "invalid vector dimension %d", width)
+	}
+
+	nc, err := prepareNullCheck(ctx, mp, page)
+	if err != nil {
+		return err
+	}
+
+	var loader strLoader
+	var indices []int32
+	dict := page.Dictionary()
+	if dict == nil {
+		loader.init(page.Data())
+		if err := validateStringDataCount(ctx, &loader, nc.actualNonNulls); err != nil {
+			return err
+		}
+	} else {
+		loader.init(dict.Page().Data())
+		data := page.Data()
+		indices = data.Int32()
+		if err := validateDictionaryIndicesCount(ctx, indices, nc.actualNonNulls); err != nil {
+			return err
+		}
+		if err := ensureDictionaryIndexes(ctx, int(dict.Len()), indices); err != nil {
+			return err
+		}
+	}
+
+	if err := vec.PreExtend(vec.Length()+numRows, proc.Mp()); err != nil {
+		return err
+	}
+	for i := 0; i < numRows; i++ {
+		if nc.isNull(i) {
+			if err := vector.AppendArray[T](vec, nil, true, proc.Mp()); err != nil {
+				return err
+			}
+			continue
+		}
+
+		var data []byte
+		if dict == nil {
+			data = loader.loadNext()
+		} else {
+			idx := indices[loader.next]
+			loader.next++
+			data = loader.loadAt(idx)
+		}
+
+		val, parseErr := parseStringArrayValue[T](data)
+		if parseErr != nil {
+			return wrapParseError(ctx, i, parseErr)
+		}
+		if width != types.MaxArrayDimension && len(val) != width {
+			return moerr.NewArrayDefMismatchNoCtx(width, len(val))
+		}
+		if err := vector.AppendArray[T](vec, val, false, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func parseStringArrayValue[T types.RealNumbers](data []byte) ([]T, error) {
+	text := strings.TrimSpace(util.UnsafeBytesToString(data))
+	if isEmptyArrayText(text) {
+		return []T{}, nil
+	}
+	return types.StringToArray[T](text)
+}
+
+func isEmptyArrayText(text string) bool {
+	if len(text) < 2 || text[0] != '[' || text[len(text)-1] != ']' {
+		return false
+	}
+	return strings.TrimSpace(text[1:len(text)-1]) == ""
+}
+
 func readParquetPageValues(ctx context.Context, page parquet.Page) ([]parquet.Value, error) {
 	n := int(page.NumRows())
 	values := make([]parquet.Value, n)
@@ -1807,6 +2067,21 @@ func processParquetValuesToBytes(
 		}
 	}
 	return nil
+}
+
+func parquetBitWidth(dt plan.Type) int {
+	width := int(dt.Width)
+	if width <= 0 || width > types.MaxBitLen {
+		return types.MaxBitLen
+	}
+	return width
+}
+
+func maxParquetBitValue(width int) uint64 {
+	if width >= types.MaxBitLen {
+		return math.MaxUint64
+	}
+	return (uint64(1) << width) - 1
 }
 
 func isParquetIntegerSource(st parquet.Type, includeBoolean bool) bool {
@@ -2300,6 +2575,14 @@ func isDecimalLogicalType(lt *format.LogicalType) bool {
 	return lt != nil && lt.Decimal != nil
 }
 
+func isPlainStringLikeType(st parquet.Type) bool {
+	if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
+		return false
+	}
+	lt := st.LogicalType()
+	return lt == nil || lt.UTF8 != nil || lt.Json != nil
+}
+
 func parquetDecimalScale(st parquet.Type) int32 {
 	if lt := st.LogicalType(); lt != nil && lt.Decimal != nil {
 		return lt.Decimal.Scale
@@ -2425,6 +2708,10 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 	return h.getDataByPage(bat, param, proc)
 }
 
+func (h *ParquetHandler) isFinished() bool {
+	return h == nil || h.offset >= h.rowGroupRows
+}
+
 func (h *ParquetHandler) closePages(ctx context.Context) error {
 	var firstErr error
 	for i, pages := range h.pages {
@@ -2455,12 +2742,11 @@ func (h *ParquetHandler) getDataRowCountOnly(bat *batch.Batch) error {
 		rowCount = min(h.rowCountRemaining, batchLimit)
 		h.rowCountRemaining -= rowCount
 	} else {
-		rgs := h.file.RowGroups()
-		if h.currentRowGroup >= len(rgs) {
+		if h.currentRowGroup >= len(h.rowGroups) {
 			bat.SetRowCount(0)
 			return nil
 		}
-		total := int(rgs[h.currentRowGroup].NumRows())
+		total := int(h.rowGroups[h.currentRowGroup].NumRows())
 		h.currentRowGroup++
 		rowCount = min(total, batchLimit)
 		h.rowCountRemaining = total - rowCount
@@ -2496,7 +2782,11 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 			page := h.currentPage[colIdx]
 			if page == nil {
 				var err error
+				readStart := time.Now()
 				page, err = pages.ReadPage()
+				param.addParquetProfile(process.ParquetProfileStats{
+					ReadPageTime: time.Since(readStart).Nanoseconds(),
+				})
 				switch {
 				case errors.Is(err, io.EOF):
 					finish = true
@@ -2539,7 +2829,11 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 				h.pageOffset[colIdx] = 0
 			}
 
+			mapStart := time.Now()
 			err := h.mappers[colIdx].mapping(slicedPage, proc, vec)
+			param.addParquetProfile(process.ParquetProfileStats{
+				MapTime: time.Since(mapStart).Nanoseconds(),
+			})
 			if err != nil {
 				return h.closePagesOnError(param.Ctx, err)
 			}
@@ -2550,7 +2844,7 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 	bat.SetRowCount(length)
 
 	h.offset += int64(length)
-	if h.file != nil && h.offset >= h.file.NumRows() {
+	if h.isFinished() {
 		finish = true
 	}
 
@@ -2572,6 +2866,7 @@ type fsReaderAt struct {
 	fs       fileservice.ETLFileService
 	readPath string
 	ctx      context.Context
+	param    *ExternalParam
 }
 
 func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
@@ -2591,7 +2886,11 @@ func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 	if err != nil {
 		return 0, err
 	}
-	return int(vec.Entries[0].Size), nil
+	n = int(vec.Entries[0].Size)
+	if n > 0 {
+		r.param.addParquetProfile(process.ParquetProfileStats{BytesRead: int64(n)})
+	}
+	return n, nil
 }
 
 // parseStringToDecimal64 converts a string to DECIMAL64 with given precision and scale.

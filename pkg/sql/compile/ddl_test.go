@@ -164,6 +164,20 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
 	})
 
+	t.Run("DropIndexIfExistsNoop", func(t *testing.T) {
+		s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			Definition: &plan2.DataDefinition_DropIndex{
+				DropIndex: &plan2.DropIndex{
+					Database: "db1",
+					Table:    "t2",
+				},
+			},
+		}}}}
+
+		err := s.DropIndex(newCompileWithStubEngine(t, newStubEngine(), "drop index if exists t2_idx on t2"))
+		require.NoError(t, err)
+	})
+
 	t.Run("DropTableSingle", func(t *testing.T) {
 		eng := newStubEngine()
 		eng.dbErr = moerr.GetOkExpectedEOB()
@@ -1185,6 +1199,7 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	txnOp.EXPECT().SetSnapshotTS(gomock.Any()).AnyTimes()
 	txnOp.EXPECT().TxnRef().Return(&txnMeta).AnyTimes()
 	txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 	proc.Base.TxnOperator = txnOp
@@ -1259,6 +1274,7 @@ func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	txnOp.EXPECT().SetSnapshotTS(gomock.Any()).AnyTimes()
 	txnOp.EXPECT().TxnRef().Return(&txnMeta).AnyTimes()
 	txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 	proc.Base.TxnOperator = txnOp

@@ -19,10 +19,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/parquet-go/parquet-go"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -1597,6 +1601,9 @@ func (c *Compile) getReadWriteParallelFlag(param *tree.ExternParam, fileList []s
 	if !param.Parallel {
 		return false, false
 	}
+	if param.Format == tree.PARQUET {
+		return false, true
+	}
 	if param.Local || crt.GetCompressType(param.CompressType, fileList[0]) != tree.NOCOMPRESS {
 		return false, true
 	}
@@ -1636,8 +1643,15 @@ func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.Extern
 			return nil, nil, err
 		}
 	case int32(plan.ExternType_LOAD):
-		fileList = []string{param.Filepath}
-		fileSize = []int64{param.FileSize}
+		if param.Format == tree.PARQUET && strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[") {
+			fileList, fileSize, err = plan2.ReadDir(param)
+			if err != nil {
+				return nil, nil, err
+			}
+		} else {
+			fileList = []string{param.Filepath}
+			fileSize = []int64{param.FileSize}
+		}
 	}
 	return fileList, fileSize, nil
 }
@@ -1647,12 +1661,16 @@ func (c *Compile) getHivePartitionFileList(node *plan.Node, param *tree.ExternPa
 	partFilters, fpFilters, rowFilters := external.ClassifyFilters(
 		node.TableDef, node.FilterList, partColSet)
 
-	preds := external.ExtractPartitionPredicatesFromExprs(node.TableDef, partFilters, partColSet)
+	pruneExpr := external.ExtractPartitionPruneExprFromExprs(node.TableDef, partFilters, partColSet)
 
 	listDir := external.NewListDirFunc(param)
-	result, err := external.DiscoverHivePartitions(
+	options, err := c.getHivePartitionDiscoverOptions(param)
+	if err != nil {
+		return nil, nil, err
+	}
+	result, err := external.DiscoverHivePartitionsWithPruneExpr(
 		c.proc.Ctx, listDir, param.Filepath,
-		param.HivePartitionCols, param.HivePartitionColTypes, preds)
+		param.HivePartitionCols, param.HivePartitionColTypes, pruneExpr, options)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1673,8 +1691,132 @@ func (c *Compile) getHivePartitionFileList(node *plan.Node, param *tree.ExternPa
 		rowFilters = append(rowFilters, leftover...)
 	}
 
+	updateHivePartitionScanStats(node, param.Filepath, result, fileSize)
 	node.FilterList = rowFilters
 	return fileList, fileSize, nil
+}
+
+const (
+	hivePartitionCacheTTLVar        = "hive_partition_cache_ttl"
+	hivePartitionCacheMaxEntriesVar = "hive_partition_cache_max_entries"
+	hivePartitionCacheMaxBytesVar   = "hive_partition_cache_max_bytes"
+	hivePartitionListConcurrencyVar = "hive_partition_list_concurrency"
+)
+
+func (c *Compile) getHivePartitionDiscoverOptions(param *tree.ExternParam) (*external.DiscoverOptions, error) {
+	resolve := c.proc.GetResolveVariableFunc()
+	if resolve == nil {
+		return nil, nil
+	}
+	cacheTTLSeconds, err := resolveHivePartitionIntVar(resolve, hivePartitionCacheTTLVar)
+	if err != nil {
+		return nil, err
+	}
+	cacheMaxEntries, err := resolveHivePartitionIntVar(resolve, hivePartitionCacheMaxEntriesVar)
+	if err != nil {
+		return nil, err
+	}
+	cacheMaxBytes, err := resolveHivePartitionIntVar(resolve, hivePartitionCacheMaxBytesVar)
+	if err != nil {
+		return nil, err
+	}
+	listConcurrency, err := resolveHivePartitionIntVar(resolve, hivePartitionListConcurrencyVar)
+	if err != nil {
+		return nil, err
+	}
+
+	if cacheTTLSeconds <= 0 && cacheMaxEntries <= 0 && cacheMaxBytes <= 0 && listConcurrency <= 0 {
+		return nil, nil
+	}
+	opts := &external.DiscoverOptions{}
+	if listConcurrency > 0 {
+		opts.ListConcurrency = int(listConcurrency)
+	}
+	if cacheTTLSeconds > 0 {
+		accountID := uint32(0)
+		if id, err := defines.GetAccountId(c.proc.Ctx); err == nil {
+			accountID = id
+		}
+		opts.CacheTTL = time.Duration(cacheTTLSeconds) * time.Second
+		opts.CacheKeyPrefix = external.BuildHivePartitionListCacheKeyPrefix(param, accountID, param.Filepath)
+	}
+	if cacheMaxEntries > 0 {
+		opts.CacheMaxEntries = int(cacheMaxEntries)
+	}
+	if cacheMaxBytes > 0 {
+		opts.CacheMaxBytes = cacheMaxBytes
+	}
+	return opts, nil
+}
+
+func resolveHivePartitionIntVar(
+	resolve func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error),
+	name string,
+) (int64, error) {
+	v, err := resolve(name, true, false)
+	if err != nil {
+		return 0, err
+	}
+	switch x := v.(type) {
+	case nil:
+		return 0, nil
+	case int:
+		return int64(x), nil
+	case int8:
+		return int64(x), nil
+	case int16:
+		return int64(x), nil
+	case int32:
+		return int64(x), nil
+	case int64:
+		return x, nil
+	case uint:
+		return int64(x), nil
+	case uint8:
+		return int64(x), nil
+	case uint16:
+		return int64(x), nil
+	case uint32:
+		return int64(x), nil
+	case uint64:
+		if x > uint64(^uint64(0)>>1) {
+			return 0, moerr.NewInvalidInputNoCtxf("%s is too large: %d", name, x)
+		}
+		return int64(x), nil
+	case string:
+		if strings.TrimSpace(x) == "" {
+			return 0, nil
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(x), 10, 64)
+		if err != nil {
+			return 0, moerr.NewInvalidInputNoCtxf("invalid %s value %q: %v", name, x, err)
+		}
+		return n, nil
+	default:
+		return 0, moerr.NewInvalidInputNoCtxf("invalid %s type %T", name, v)
+	}
+}
+
+func updateHivePartitionScanStats(node *plan.Node, basePath string, result *external.PartitionDiscoveryResult, fileSize []int64) {
+	if node.Stats == nil {
+		node.Stats = &plan.Stats{}
+	}
+	var prunedBytes int64
+	for _, size := range fileSize {
+		prunedBytes += size
+	}
+	node.Stats.BlockNum = int32(len(fileSize))
+	node.Stats.Cost = float64(prunedBytes)
+	if node.Stats.TableCnt == 0 {
+		node.Stats.TableCnt = float64(len(fileSize))
+	}
+	if node.Stats.Outcnt == 0 {
+		node.Stats.Outcnt = float64(len(fileSize))
+	}
+	logutil.Debugf("hive partition discovery summary: base=%s files=%d bytes=%d pruned_files=%d pruned_bytes=%d partitions=%d pruned=%d list_calls=%d cache_hits=%d cache_misses=%d direct_prefix_hits=%d direct_prefix_misses=%d duration=%s",
+		basePath, len(fileSize), prunedBytes, result.PrunedFiles, result.PrunedBytes,
+		result.PartitionCount, result.PrunedCount, result.ListCalls, result.CacheHits, result.CacheMisses,
+		result.DirectPrefixHits, result.DirectPrefixMisses, result.DiscoveryDuration)
 }
 
 func runFilePathFilters(
@@ -1757,6 +1899,23 @@ func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 
 	if param.HivePartitioning {
 		return c.compileExternScanHiveFileFanout(node, param, fileList, fileSize, strictSqlMode)
+	}
+	if param.ExternType == int32(plan.ExternType_LOAD) &&
+		param.Format == tree.PARQUET &&
+		param.Parallel {
+		rowGroups, footerStats, err := c.readLoadParquetRowGroupMetadata(param, fileList, fileSize)
+		if err != nil {
+			return nil, err
+		}
+		logutil.Debugf("parquet load footer metadata: files=%d row_groups=%d rows=%d read_calls=%d read_bytes=%d duration=%s",
+			footerStats.Files, footerStats.RowGroups, footerStats.Rows,
+			footerStats.ReadCalls, footerStats.ReadBytes, footerStats.Duration)
+		if footerStats.RowGroups > len(fileList) {
+			return c.compileExternScanParquetRowGroupFanout(node, param, fileList, fileSize, rowGroups, strictSqlMode)
+		}
+		if len(fileList) > 1 {
+			return c.compileExternScanParquetLoadFileFanout(node, param, fileList, fileSize, strictSqlMode)
+		}
 	}
 
 	readParallel, writeParallel := c.getReadWriteParallelFlag(param, fileList)
@@ -1855,7 +2014,40 @@ type hiveFileShard struct {
 	fileSize []int64
 }
 
+type parquetRowGroupMeta struct {
+	fileIndex     int32
+	rowGroupIndex int32
+	numRows       int64
+	bytes         int64
+}
+
+type parquetFooterStats struct {
+	Files     int
+	RowGroups int
+	Rows      int64
+	Bytes     int64
+	ReadCalls int64
+	ReadBytes int64
+	Duration  time.Duration
+}
+
+type parquetRowGroupScopeShard struct {
+	node            engine.Node
+	fileList        []string
+	fileSize        []int64
+	rowGroupShards  []*pipeline.ParquetRowGroupShard
+	originalToLocal map[int32]int32
+}
+
 func (c *Compile) compileExternScanHiveFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode)
+}
+
+func (c *Compile) compileExternScanParquetLoadFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode)
+}
+
+func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	nodes := c.getHiveFileFanoutNodes(param, len(fileList))
 	shards := splitHiveFileShards(fileList, fileSize, nodes)
 	if len(shards) <= 1 {
@@ -1891,6 +2083,171 @@ func (c *Compile) compileExternScanHiveFileFanout(node *plan.Node, param *tree.E
 	}
 	c.anal.isFirst = false
 	return ss, nil
+}
+
+func (c *Compile) compileExternScanParquetRowGroupFanout(
+	node *plan.Node,
+	param *tree.ExternParam,
+	fileList []string,
+	fileSize []int64,
+	rowGroups []parquetRowGroupMeta,
+	strictSqlMode bool,
+) ([]*Scope, error) {
+	nodes := c.getHiveFileFanoutNodes(param, len(rowGroups))
+	shards, err := splitParquetRowGroupShards(fileList, fileSize, rowGroups, nodes)
+	if err != nil {
+		return nil, err
+	}
+	if len(shards) <= 1 {
+		serialParam := *param
+		serialParam.Parallel = false
+		return c.compileExternScanSerialReadWrite(node, &serialParam, fileList, fileSize, strictSqlMode)
+	}
+
+	ss := make([]*Scope, 0, len(shards))
+	currentFirstFlag := c.anal.isFirst
+	for i := range shards {
+		shard := shards[i]
+		shardParam := new(tree.ExternParam)
+		*shardParam = *param
+		shardParam.Parallel = false
+
+		remote := param.ScanType == tree.S3 && len(c.cnList) > 0
+		scope := c.constructScopeForExternal(shard.node.Addr, remote)
+		scope.NodeInfo.Mcpu = 1
+		scope.IsLoad = true
+		op := constructExternal(
+			node, shardParam, c.proc.Ctx,
+			shard.fileList, shard.fileSize,
+			makeWholeFileOffsets(len(shard.fileList)),
+			strictSqlMode,
+		)
+		op.Es.ParquetRowGroupShards = shard.rowGroupShards
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		scope.setRootOperator(op)
+		ss = append(ss, scope)
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) readLoadParquetRowGroupMetadata(
+	param *tree.ExternParam,
+	fileList []string,
+	fileSize []int64,
+) ([]parquetRowGroupMeta, parquetFooterStats, error) {
+	ctx := param.Ctx
+	if ctx == nil && c.proc != nil {
+		ctx = c.proc.Ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	start := time.Now()
+	stats := parquetFooterStats{Files: len(fileList)}
+	metas := make([]parquetRowGroupMeta, 0)
+	for fileIdx, filePath := range fileList {
+		size := hiveFileSizeAt(fileSize, fileIdx)
+		var reader io.ReaderAt
+		var footerReader *compileParquetFooterReaderAt
+		if param.ScanType == tree.INLINE {
+			reader = strings.NewReader(param.Data)
+			size = int64(len(param.Data))
+		} else {
+			fs, readPath, err := plan2.GetForETLWithType(param, filePath)
+			if err != nil {
+				return nil, stats, err
+			}
+			if size <= 0 {
+				st, err := fs.StatFile(ctx, readPath)
+				if err != nil {
+					return nil, stats, err
+				}
+				size = st.Size
+			}
+			footerReader = &compileParquetFooterReaderAt{
+				fs:       fs,
+				readPath: readPath,
+				ctx:      ctx,
+			}
+			reader = footerReader
+		}
+		stats.Bytes += size
+
+		f, err := parquet.OpenFile(reader, size)
+		if footerReader != nil {
+			stats.ReadCalls += footerReader.readCalls
+			stats.ReadBytes += footerReader.readBytes
+		}
+		if err != nil {
+			return nil, stats, moerr.ConvertGoError(ctx, err)
+		}
+		rowGroups := f.RowGroups()
+		stats.RowGroups += len(rowGroups)
+		totalRows := f.NumRows()
+		for rowGroupIdx, rowGroup := range rowGroups {
+			rows := rowGroup.NumRows()
+			stats.Rows += rows
+			metas = append(metas, parquetRowGroupMeta{
+				fileIndex:     int32(fileIdx),
+				rowGroupIndex: int32(rowGroupIdx),
+				numRows:       rows,
+				bytes:         estimateParquetRowGroupBytes(size, totalRows, rows, len(rowGroups)),
+			})
+		}
+	}
+	stats.Duration = time.Since(start)
+	return metas, stats, nil
+}
+
+type compileParquetFooterReaderAt struct {
+	fs        fileservice.ETLFileService
+	readPath  string
+	ctx       context.Context
+	readCalls int64
+	readBytes int64
+}
+
+func (r *compileParquetFooterReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
+	vec := fileservice.IOVector{
+		FilePath: r.readPath,
+		Policy:   fileservice.SkipFullFilePreloads,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: off,
+				Size:   int64(len(p)),
+				Data:   p,
+			},
+		},
+	}
+	if err := r.fs.Read(r.ctx, &vec); err != nil {
+		return 0, err
+	}
+	size := vec.Entries[0].Size
+	r.readCalls++
+	r.readBytes += size
+	return int(size), nil
+}
+
+func estimateParquetRowGroupBytes(fileSize, totalRows, rowGroupRows int64, rowGroupCount int) int64 {
+	if fileSize <= 0 {
+		return 1
+	}
+	if totalRows > 0 && rowGroupRows > 0 {
+		size := int64(float64(fileSize) * float64(rowGroupRows) / float64(totalRows))
+		if size > 0 {
+			return size
+		}
+		return 1
+	}
+	if rowGroupCount > 0 {
+		size := fileSize / int64(rowGroupCount)
+		if size > 0 {
+			return size
+		}
+	}
+	return 1
 }
 
 func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int) []engine.Node {
@@ -1980,6 +2337,134 @@ func splitHiveFileShards(fileList []string, fileSize []int64, nodes []engine.Nod
 	return nonEmpty
 }
 
+func splitParquetRowGroupShards(
+	fileList []string,
+	fileSize []int64,
+	rowGroups []parquetRowGroupMeta,
+	nodes []engine.Node,
+) ([]parquetRowGroupScopeShard, error) {
+	if len(rowGroups) == 0 || len(nodes) == 0 {
+		return nil, nil
+	}
+	shardCount := len(nodes)
+	if shardCount > len(rowGroups) {
+		shardCount = len(rowGroups)
+	}
+	shards := make([]parquetRowGroupScopeShard, shardCount)
+	loads := make([]int64, shardCount)
+	for i := range shards {
+		shards[i].node = nodes[i]
+		shards[i].originalToLocal = make(map[int32]int32)
+	}
+
+	indices := make([]int, len(rowGroups))
+	for i := range indices {
+		indices[i] = i
+	}
+	sort.SliceStable(indices, func(i, j int) bool {
+		left := rowGroups[indices[i]]
+		right := rowGroups[indices[j]]
+		if parquetRowGroupLoad(left) != parquetRowGroupLoad(right) {
+			return parquetRowGroupLoad(left) > parquetRowGroupLoad(right)
+		}
+		if left.fileIndex != right.fileIndex {
+			return left.fileIndex < right.fileIndex
+		}
+		return left.rowGroupIndex < right.rowGroupIndex
+	})
+
+	for _, rowGroupIdx := range indices {
+		meta := rowGroups[rowGroupIdx]
+		if meta.fileIndex < 0 || int(meta.fileIndex) >= len(fileList) {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"invalid parquet row group file index %d for %d files",
+				meta.fileIndex, len(fileList),
+			)
+		}
+		if meta.rowGroupIndex < 0 {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"invalid parquet row group index %d for file index %d",
+				meta.rowGroupIndex, meta.fileIndex,
+			)
+		}
+
+		shardIdx := 0
+		for i := 1; i < shardCount; i++ {
+			if loads[i] < loads[shardIdx] ||
+				(loads[i] == loads[shardIdx] && len(shards[i].rowGroupShards) < len(shards[shardIdx].rowGroupShards)) {
+				shardIdx = i
+			}
+		}
+
+		localFileIndex := appendParquetShardFile(&shards[shardIdx], fileList, fileSize, meta.fileIndex)
+		shards[shardIdx].rowGroupShards = append(shards[shardIdx].rowGroupShards, &pipeline.ParquetRowGroupShard{
+			FileIndex:     localFileIndex,
+			RowGroupStart: meta.rowGroupIndex,
+			RowGroupEnd:   meta.rowGroupIndex + 1,
+			NumRows:       meta.numRows,
+			Bytes:         meta.bytes,
+		})
+		loads[shardIdx] += parquetRowGroupLoad(meta)
+	}
+
+	nonEmpty := shards[:0]
+	for _, shard := range shards {
+		if len(shard.rowGroupShards) == 0 {
+			continue
+		}
+		sort.SliceStable(shard.rowGroupShards, func(i, j int) bool {
+			left := shard.rowGroupShards[i]
+			right := shard.rowGroupShards[j]
+			if left.FileIndex != right.FileIndex {
+				return left.FileIndex < right.FileIndex
+			}
+			return left.RowGroupStart < right.RowGroupStart
+		})
+		shard.rowGroupShards = mergeAdjacentParquetRowGroupShards(shard.rowGroupShards)
+		shard.originalToLocal = nil
+		nonEmpty = append(nonEmpty, shard)
+	}
+	return nonEmpty, nil
+}
+
+func appendParquetShardFile(shard *parquetRowGroupScopeShard, fileList []string, fileSize []int64, originalFileIndex int32) int32 {
+	if localFileIndex, ok := shard.originalToLocal[originalFileIndex]; ok {
+		return localFileIndex
+	}
+	localFileIndex := int32(len(shard.fileList))
+	shard.originalToLocal[originalFileIndex] = localFileIndex
+	shard.fileList = append(shard.fileList, fileList[originalFileIndex])
+	shard.fileSize = append(shard.fileSize, hiveFileSizeAt(fileSize, int(originalFileIndex)))
+	return localFileIndex
+}
+
+func mergeAdjacentParquetRowGroupShards(shards []*pipeline.ParquetRowGroupShard) []*pipeline.ParquetRowGroupShard {
+	merged := shards[:0]
+	for _, shard := range shards {
+		if len(merged) > 0 {
+			last := merged[len(merged)-1]
+			if last.FileIndex == shard.FileIndex && last.RowGroupEnd == shard.RowGroupStart {
+				last.RowGroupEnd = shard.RowGroupEnd
+				last.NumRows += shard.NumRows
+				last.Bytes += shard.Bytes
+				continue
+			}
+		}
+		merged = append(merged, shard)
+	}
+	return merged
+}
+
+func parquetRowGroupLoad(meta parquetRowGroupMeta) int64 {
+	if meta.bytes > 0 {
+		return meta.bytes
+	}
+	if meta.numRows > 0 {
+		return meta.numRows
+	}
+	return 1
+}
+
 func hiveFileSizeAt(fileSize []int64, idx int) int64 {
 	if idx >= 0 && idx < len(fileSize) {
 		return fileSize[idx]
@@ -1996,6 +2481,9 @@ func makeWholeFileOffsets(count int) []*pipeline.FileOffset {
 }
 
 func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	if param.Format == tree.PARQUET {
+		return nil, moerr.NewInternalError(c.proc.Ctx, "parquet load cannot use byte-offset parallel read")
+	}
 	visibleCols := make([]*plan.ColDef, 0)
 	if param.Strict {
 		for _, col := range node.TableDef.Cols {
@@ -3615,6 +4103,49 @@ func (c *Compile) compilePreInsert(nodes []*plan.Node, node *plan.Node, ss []*Sc
 }
 
 func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	// Writable external table: each parallel pipeline owns one writer/file.
+	// Reuse the simple (non-S3, no merge-block) layout: one insert operator per
+	// source scope, with no shuffle.
+	if isExternalWriteInsert(node) {
+		currentFirstFlag := c.anal.isFirst
+		// One timestamp per statement: all scopes must expand WRITE_FILE_PATTERN
+		// time directives against the same instant.
+		stmtAt := externalInsertStmtTime(c.proc, c.startAt)
+		localFileStage, err := externalInsertTargetIsLocalFile(c.proc, node, stmtAt)
+		if err != nil {
+			return nil, err
+		}
+		if localFileStage {
+			// Only merge scopes on remote CNs onto the current CN.
+			// Same-CN parallel writers share the same filesystem and
+			// use unique filename directives (%U / %<n>N), so they are safe
+			// to keep unmerged.
+			var localSS, remoteSS []*Scope
+			for _, s := range ss {
+				if isSameCN(s.NodeInfo.Addr, c.addr) {
+					localSS = append(localSS, s)
+				} else {
+					remoteSS = append(remoteSS, s)
+				}
+			}
+			if len(remoteSS) > 0 {
+				mergedRemote := c.newMergeScope(remoteSS)
+				localSS = append(localSS, mergedRemote)
+			}
+			ss = localSS
+		}
+		for i := range ss {
+			insertArg, err := constructExternalInsert(c.proc, node, c.e, stmtAt)
+			if err != nil {
+				return nil, err
+			}
+			insertArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			ss[i].setRootOperator(insertArg)
+		}
+		c.anal.isFirst = false
+		return ss, nil
+	}
+
 	// Determine whether to Write S3
 	toWriteS3 := node.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) >
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3

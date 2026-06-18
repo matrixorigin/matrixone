@@ -16,8 +16,11 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -38,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
@@ -89,6 +93,8 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -292,6 +298,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*mergeorder.MergeOrder)
 		op := mergeorder.NewArgument()
 		op.OrderBySpecs = t.OrderBySpecs
+		op.SpillThreshold = t.SpillThreshold
 		op.SetInfo(&info)
 		return op
 	case vm.Intersect:
@@ -352,6 +359,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 					FileList:               t.Es.FileList,
 					FileSize:               t.Es.FileSize,
 					FileOffsetTotal:        t.Es.FileOffsetTotal,
+					ParquetRowGroupShards:  t.Es.ParquetRowGroupShards,
 					Extern:                 t.Es.Extern,
 					StrictSqlMode:          t.Es.StrictSqlMode,
 					ParallelLoad:           t.Es.ParallelLoad,
@@ -450,6 +458,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := insert.NewArgument()
 		op.InsertCtx = t.InsertCtx
 		op.ToWriteS3 = t.ToWriteS3
+		// External-write inserts must stay external when a scope is parallelized;
+		// each duplicated instance opens its own writer/file in Prepare.
+		op.ToExternal = t.ToExternal
 		op.SetInfo(&info)
 		return op
 	case vm.PartitionInsert:
@@ -879,6 +890,189 @@ func constructInsert(
 	}
 
 	return insert.NewPartitionInsert(arg, oldCtx.TableDef.TblId), nil
+}
+
+// isExternalWriteInsert reports whether an INSERT node targets a writable
+// external table (TableType == external and a WRITE_FILE_PATTERN is set).
+func isExternalWriteInsert(node *plan.Node) bool {
+	if node.InsertCtx == nil || node.InsertCtx.TableDef == nil {
+		return false
+	}
+	td := node.InsertCtx.TableDef
+	if td.TableType != catalog.SystemExternalRel {
+		return false
+	}
+	param := &tree.ExternParam{}
+	if err := json.Unmarshal([]byte(td.Createsql), param); err != nil {
+		return false
+	}
+	_, ok := plan2.GetWriteFilePattern(param)
+	return ok
+}
+
+// externalInsertStmtTime resolves the statement-start timestamp that
+// WRITE_FILE_PATTERN time directives are evaluated against, so that every
+// parallel pipeline / CN resolves the same path. Preference order: the
+// frontend's per-statement defines.StartTS on the context, then the Compile's
+// startAt (set on every construction path, including the internal SQL
+// executor), then the wall clock as a last resort.
+func externalInsertStmtTime(proc *process.Process, startAt time.Time) time.Time {
+	if proc != nil && proc.Ctx != nil {
+		if v := proc.Ctx.Value(defines.StartTS{}); v != nil {
+			if t, ok := v.(time.Time); ok {
+				return t
+			}
+		}
+	}
+	if !startAt.IsZero() {
+		return startAt
+	}
+	return time.Now()
+}
+
+// constructExternalInsert builds an INSERT operator that writes into a writable
+// external table's backing files. Each parallel instance owns one writer/file.
+// stmtAt is the statement-start timestamp (externalInsertStmtTime), resolved
+// once per statement by the caller so all scopes share it.
+func constructExternalInsert(
+	proc *process.Process,
+	node *plan.Node,
+	eng engine.Engine,
+	stmtAt time.Time,
+) (vm.Operator, error) {
+	oldCtx := node.InsertCtx
+	return buildExternalInsertArg(proc.Ctx, oldCtx.Ref, oldCtx.TableDef, oldCtx.AddAffectedRows, eng, stmtAt)
+}
+
+// externalInsertTargetIsLocalFile reports whether WRITE_FILE_PATTERN resolves
+// through a stage backed by file://. Such paths are local to the CN that writes
+// them, so remote CN writers would make files invisible to the coordinator's
+// follow-up external-table scan.
+func externalInsertTargetIsLocalFile(proc *process.Process, node *plan.Node, stmtAt time.Time) (bool, error) {
+	if node == nil || node.InsertCtx == nil || node.InsertCtx.TableDef == nil {
+		return false, nil
+	}
+	param := &tree.ExternParam{}
+	if err := json.Unmarshal([]byte(node.InsertCtx.TableDef.Createsql), param); err != nil {
+		return false, err
+	}
+	pattern, ok := plan2.GetWriteFilePattern(param)
+	if !ok {
+		return false, nil
+	}
+	expanded, err := externalwrite.ExpandFilePattern(pattern, stmtAt)
+	if err != nil {
+		return false, err
+	}
+	sdef, err := stageutil.UrlToStageDef(expanded, proc)
+	if err != nil {
+		return false, err
+	}
+	return sdef.Url.Scheme == stage.FILE_PROTOCOL, nil
+}
+
+// buildExternalInsertArg builds the external-write insert operator from the
+// target's TableDef, whose Createsql stores the ExternParam (pattern, format,
+// FIELDS/LINES). Shared by local compile and remote-run decode; everything but
+// the statement-start timestamp is rebuilt from the TableDef. The writer's
+// session time zone is resolved later, in the operator's Prepare.
+func buildExternalInsertArg(
+	ctx context.Context,
+	ref *plan.ObjectRef,
+	tableDef *plan.TableDef,
+	addAffectedRows bool,
+	eng engine.Engine,
+	stmtAt time.Time,
+) (*insert.Insert, error) {
+	param := &tree.ExternParam{}
+	if err := json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
+		return nil, err
+	}
+	pattern, ok := plan2.GetWriteFilePattern(param)
+	if !ok {
+		return nil, moerr.NewNotSupportedf(ctx, "insert into read-only external table %s", tableDef.Name)
+	}
+
+	attrs := make([]string, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		// Skip Row_ID and any hidden/synthetic columns (e.g. __mo_filepath that
+		// the resolver attaches to external tables) — only the declared columns
+		// are written to the output file.
+		if col.Name == catalog.Row_ID || col.Hidden || col.Name == catalog.ExternalFilePath {
+			continue
+		}
+		attrs = append(attrs, col.GetOriginCaseName())
+	}
+
+	// Format is stored in the option list; param.Format is only materialized by
+	// the read-side init, which we do not run here.
+	format := strings.ToLower(param.Format)
+	if format == "" {
+		for i := 0; i+1 < len(param.Option); i += 2 {
+			if strings.ToLower(param.Option[i]) == "format" {
+				format = strings.ToLower(param.Option[i+1])
+				break
+			}
+		}
+	}
+	cfg := externalwrite.WriterConfig{
+		Pattern: pattern,
+		Format:  format,
+		Attrs:   attrs,
+		Stmt:    stmtAt,
+	}
+	// The reader skips lines whose raw prefix matches the COMMENT marker; the
+	// writer uses it to enclose the first field of any row that would otherwise
+	// collide, so a row written here always reads back.
+	if c := plan2.GetCSVComment(param); c != "" {
+		cfg.Comment = []byte(c)
+	}
+	if cfg.Format == "" {
+		cfg.Format = externalwrite.FormatCSV
+	}
+	// CSV delimiters from the external table's FIELDS/LINES config, if present.
+	if param.Tail != nil {
+		if f := param.Tail.Fields; f != nil {
+			if f.Terminated != nil {
+				cfg.FieldTerminator = []byte(f.Terminated.Value)
+			}
+			if f.EnclosedBy != nil {
+				cfg.EnclosedBy = f.EnclosedBy.Value
+			}
+			// Mirror the reader: nil -> default '\\', explicit '' -> escaping
+			// disabled, anything else -> that character.
+			if f.EscapedBy != nil {
+				if f.EscapedBy.Value == 0 {
+					cfg.NoEscape = true
+				} else {
+					cfg.EscapedBy = f.EscapedBy.Value
+				}
+			}
+		}
+		if l := param.Tail.Lines; l != nil {
+			if l.TerminatedBy != nil {
+				cfg.LineTerminator = []byte(l.TerminatedBy.Value)
+			}
+			// The reader strips (and requires) this prefix per line; emit it so
+			// the table can read back its own files.
+			if l.StartingBy != "" {
+				cfg.LineStartingBy = []byte(l.StartingBy)
+			}
+		}
+	}
+
+	newCtx := &insert.InsertCtx{
+		Ref:             ref,
+		AddAffectedRows: addAffectedRows,
+		Engine:          eng,
+		Attrs:           attrs,
+		TableDef:        tableDef,
+		ExternalConfig:  cfg,
+	}
+	arg := insert.NewArgument()
+	arg.InsertCtx = newCtx
+	arg.ToExternal = true
+	return arg, nil
 }
 
 func constructProjection(node *plan.Node) *projection.Projection {
@@ -1507,6 +1701,7 @@ func constructMergeTop(node *plan.Node, topN *plan.Expr) *mergetop.MergeTop {
 func constructMergeOrder(node *plan.Node) *mergeorder.MergeOrder {
 	arg := mergeorder.NewArgument()
 	arg.OrderBySpecs = node.OrderBy
+	arg.SpillThreshold = node.SpillMem
 	return arg
 }
 

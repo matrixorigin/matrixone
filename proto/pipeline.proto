@@ -132,6 +132,16 @@ message Insert {
   int32 partition_idx = 8;
   bool is_end = 9;
   plan.TableDef table_def = 10;
+  // Writable external table: this insert writes stage files instead of an
+  // engine relation. The writer config is rebuilt on the receiving CN from
+  // table_def's stored ExternParam; the statement-start timestamp (used to
+  // expand WRITE_FILE_PATTERN time directives consistently) and the session
+  // time zone (name + offset-at-statement-time fallback; the generic session
+  // codec round-trips zones lossily) travel here.
+  bool to_external = 11;
+  int64 external_stmt_unix_nano = 12;
+  string external_tz_name = 13;
+  int32 external_tz_offset_sec = 14;
 }
 
 message MultiUpdate {
@@ -353,6 +363,14 @@ message file_offset {
   repeated int64 offset = 1;
 }
 
+message parquet_row_group_shard {
+  int32 file_index = 1;
+  int32 row_group_start = 2;
+  int32 row_group_end = 3;
+  int64 num_rows = 4;
+  int64 bytes = 5;
+}
+
 message ExternalScan {
   repeated plan.ExternAttr attrs = 1 [(gogoproto.nullable) = false];
   repeated int64 file_size = 2;
@@ -366,6 +384,7 @@ message ExternalScan {
   int32 column_list_len = 10;
   bool parallel_load = 11;
   bool load_empty_numeric_as_zero = 12;
+  repeated parquet_row_group_shard parquet_row_group_shards = 13;
 }
 
 message StreamScan {
@@ -478,6 +497,7 @@ message Instruction {
   Apply apply = 51;
   MultiUpdate multi_update = 52;
   PostDml post_dml = 53;
+  int64 spill_mem = 54;
 }
 
 message AnalysisList {
@@ -498,7 +518,7 @@ message Source {
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 11;
   bool is_const = 12;
   repeated plan.msgHeader recv_msg_list = 13 [(gogoproto.nullable) = false];
-  bytes bloom_filter = 14;
+  bytes membership_filter = 14;
 }
 
 message NodeInfo {

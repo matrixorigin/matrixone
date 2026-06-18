@@ -16,10 +16,15 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/stage"
@@ -561,6 +566,34 @@ func TestInitInfileParam_Plain(t *testing.T) {
 	param.Option = []string{"filepath", "/csv"}
 	require.NoError(t, InitInfileParam(param))
 	assert.Equal(t, "csv", param.Format)
+
+	// the write_file_pattern and comment keys are accepted (no-op on the read
+	// init) and the comment value remains retrievable from Option.
+	param = &tree.ExternParam{}
+	param.Option = []string{"filepath", "/csv", "comment", "REM", "write_file_pattern", "stage://s/p-%U.csv"}
+	require.NoError(t, InitInfileParam(param))
+	assert.Equal(t, "csv", param.Format)
+	assert.Equal(t, "REM", GetCSVComment(param))
+}
+
+// TestGetCSVComment covers the COMMENT option accessor.
+func TestGetCSVComment(t *testing.T) {
+	assert.Equal(t, "", GetCSVComment(nil))
+	assert.Equal(t, "", GetCSVComment(&tree.ExternParam{}))
+
+	p := &tree.ExternParam{}
+	p.Option = []string{"format", "csv", "comment", "#"}
+	assert.Equal(t, "#", GetCSVComment(p))
+
+	// case-insensitive key, multi-char value
+	p = &tree.ExternParam{}
+	p.Option = []string{"COMMENT", "REM"}
+	assert.Equal(t, "REM", GetCSVComment(p))
+
+	// absent -> empty (no comment marker)
+	p = &tree.ExternParam{}
+	p.Option = []string{"format", "csv"}
+	assert.Equal(t, "", GetCSVComment(p))
 }
 
 // TestInitInfileParam_HiveLegacyOption exercises parseHiveOptionKV via
@@ -850,6 +883,23 @@ func makeHivePlan(cols ...*plan.ColDef) *plan.CreateTable {
 	}
 }
 
+func makeHiveMemoryFS(t *testing.T, paths ...string) fileservice.FileService {
+	t.Helper()
+	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	for _, p := range paths {
+		require.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
+			FilePath: fileservice.JoinPath(fs.Name(), p),
+			Entries: []fileservice.IOEntry{{
+				Offset: 0,
+				Size:   1,
+				Data:   []byte("x"),
+			}},
+		}))
+	}
+	return fs
+}
+
 func TestValidateAndSetHivePartitionOptions_Disabled(t *testing.T) {
 	// hive_partitioning absent → returns nil, does not touch stmt.Param.
 	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
@@ -919,13 +969,233 @@ func TestValidateAndSetHivePartitionOptions_HappyPath(t *testing.T) {
 	}
 }
 
-func TestValidateAndSetHivePartitionOptions_MissingCols(t *testing.T) {
+func TestValidateAndSetHivePartitionOptions_MissingColsAutoInferenceNoHiveDirs(t *testing.T) {
 	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
-	stmt.Param.Option = []string{"format", "parquet", "hive_partitioning", "true"}
+	stmt.Param.Filepath = fileservice.JoinPath("memory", "data")
+	stmt.Param.FileService = makeHiveMemoryFS(t, "data/plain/file.parquet")
+	stmt.Param.Option = []string{"filepath", stmt.Param.Filepath, "format", "parquet", "hive_partitioning", "true"}
 	ct := makeHivePlan()
 	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "hive_partition_columns is required")
+	assert.Contains(t, err.Error(), "auto inference found no hive-style partition directories")
+}
+
+func TestValidateAndSetHivePartitionOptions_AutoInference(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Filepath = fileservice.JoinPath("memory", "data")
+	stmt.Param.FileService = makeHiveMemoryFS(t,
+		"data/year=2024/month=01/f.parquet",
+		"data/year=2025/month=02/f.parquet",
+		"data/_SUCCESS",
+	)
+	stmt.Param.Option = []string{"filepath", stmt.Param.Filepath, "format", "parquet", "hive_partitioning", "true"}
+	ct := makeHivePlan(
+		&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}},
+		&plan.ColDef{Name: "month", Typ: plan.Type{Id: int32(types.T_int32)}},
+	)
+
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	assert.True(t, stmt.Param.HivePartitioning)
+	assert.Equal(t, []string{"year", "month"}, stmt.Param.HivePartitionCols)
+	require.Equal(t, 2, len(stmt.Param.HivePartitionColTypes))
+	assert.Equal(t, int32(types.T_int32), stmt.Param.HivePartitionColTypes[0].Id)
+	for i := 0; i < len(stmt.Param.Option); i += 2 {
+		assert.NotEqual(t, "hive_partitioning", stmt.Param.Option[i])
+		assert.NotEqual(t, "hive_partition_columns", stmt.Param.Option[i])
+	}
+}
+
+func TestValidateAndSetHivePartitionOptions_AutoInferenceFromRawFilepath(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "year=2024"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "year=2024", "f.parquet"), []byte("x"), 0644))
+
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{"filepath", dir, "format", "parquet", "hive_partitioning", "true"}
+	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
+
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	assert.Equal(t, dir, stmt.Param.Filepath)
+	assert.Equal(t, []string{"year"}, stmt.Param.HivePartitionCols)
+}
+
+func TestValidateAndSetHivePartitionOptions_AutoInferenceExplicitAuto(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Filepath = fileservice.JoinPath("memory", "data")
+	stmt.Param.FileService = makeHiveMemoryFS(t, "data/Year=2024/f.parquet")
+	stmt.Param.Option = []string{
+		"filepath", stmt.Param.Filepath,
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "auto",
+	}
+	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
+
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	assert.Equal(t, []string{"year"}, stmt.Param.HivePartitionCols)
+}
+
+func TestValidateAndSetHivePartitionOptions_AutoInferenceMixedKeys(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Filepath = fileservice.JoinPath("memory", "data")
+	stmt.Param.FileService = makeHiveMemoryFS(t,
+		"data/year=2024/f.parquet",
+		"data/dt=2025/f.parquet",
+	)
+	stmt.Param.Option = []string{"filepath", stmt.Param.Filepath, "format", "parquet", "hive_partitioning", "true"}
+	ct := makeHivePlan(
+		&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}},
+		&plan.ColDef{Name: "dt", Typ: plan.Type{Id: int32(types.T_int32)}},
+	)
+
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mixed keys")
+}
+
+func TestValidateAndSetHivePartitionOptions_AutoInferenceUndeclaredColumn(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Filepath = fileservice.JoinPath("memory", "data")
+	stmt.Param.FileService = makeHiveMemoryFS(t, "data/year=2024/f.parquet")
+	stmt.Param.Option = []string{"filepath", stmt.Param.Filepath, "format", "parquet", "hive_partitioning", "true"}
+	ct := makeHivePlan(&plan.ColDef{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}})
+
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "partition column 'year' not found")
+}
+
+func TestValidateAndSetHivePartitionOptions_AutoInferenceMaxListCalls(t *testing.T) {
+	paths := make([]string, 0, hivePartitionInferMaxSampleDirs)
+	for i := 0; i < hivePartitionInferMaxSampleDirs; i++ {
+		paths = append(paths, fmt.Sprintf("data/year=%04d/month=01/f.parquet", i))
+	}
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Filepath = fileservice.JoinPath("memory", "data")
+	stmt.Param.FileService = makeHiveMemoryFS(t, paths...)
+	stmt.Param.Option = []string{"filepath", stmt.Param.Filepath, "format", "parquet", "hive_partitioning", "true"}
+	ct := makeHivePlan(
+		&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}},
+		&plan.ColDef{Name: "month", Typ: plan.Type{Id: int32(types.T_int32)}},
+	)
+
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auto inference exceeded")
+	assert.Contains(t, err.Error(), "specify hive_partition_columns explicitly")
+}
+
+func TestPrepareHiveInferenceParamS3Backfill(t *testing.T) {
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.S3}}
+	options := []string{
+		"filepath", "s3://bucket/prefix/",
+		"format", "PARQUET",
+		"endpoint", "https://s3.example.com",
+		"region", "us-west-2",
+		"access_key_id", "ak",
+		"secret_access_key", "sk",
+		"bucket", "bucket",
+		"provider", "minio",
+		"role_arn", "role",
+		"external_id", "external",
+	}
+
+	prepareHiveInferenceParam(param, options)
+
+	assert.Equal(t, "s3://bucket/prefix/", param.Filepath)
+	assert.Equal(t, "parquet", param.Format)
+	require.NotNil(t, param.S3Param)
+	assert.Equal(t, "https://s3.example.com", param.S3Param.Endpoint)
+	assert.Equal(t, "us-west-2", param.S3Param.Region)
+	assert.Equal(t, "ak", param.S3Param.APIKey)
+	assert.Equal(t, "sk", param.S3Param.APISecret)
+	assert.Equal(t, "bucket", param.S3Param.Bucket)
+	assert.Equal(t, "minio", param.S3Param.Provider)
+	assert.Equal(t, "role", param.S3Param.RoleArn)
+	assert.Equal(t, "external", param.S3Param.ExternalId)
+
+	prepareHiveInferenceParam(param, []string{
+		"filepath", "other",
+		"format", "csv",
+		"endpoint", "changed",
+		"region", "changed",
+		"access_key_id", "changed",
+		"secret_access_key", "changed",
+		"bucket", "changed",
+		"provider", "changed",
+		"role_arn", "changed",
+		"external_id", "changed",
+	})
+	assert.Equal(t, "s3://bucket/prefix/", param.Filepath)
+	assert.Equal(t, "parquet", param.Format)
+	assert.Equal(t, "https://s3.example.com", param.S3Param.Endpoint)
+	assert.Equal(t, "ak", param.S3Param.APIKey)
+
+	local := &tree.ExternParam{}
+	prepareHiveInferenceParam(local, []string{"filepath", "/data", "format", "PARQUET"})
+	assert.Equal(t, "/data", local.Filepath)
+	assert.Equal(t, "parquet", local.Format)
+	assert.Nil(t, local.S3Param)
+}
+
+func TestHiveInferencePathHelpersCoverage(t *testing.T) {
+	assert.Equal(t, "etl:/tmp/data", normalizeHiveInferPath(" etl:/tmp/data/ "))
+	assert.Equal(t, "svc:arg/data", normalizeHiveInferPath("svc:arg/data"))
+	assert.Equal(t, "/warehouse/table", normalizeHiveInferPath("warehouse/table"))
+
+	assert.Equal(t, "root", deriveHiveInferReadPath("/warehouse/table", "root", "/warehouse/table"))
+	assert.Equal(t, "/outside", deriveHiveInferReadPath("/warehouse/table", "root", "/outside"))
+	assert.Equal(t, "year=2024", deriveHiveInferReadPath("/warehouse/table", ".", "/warehouse/table/year=2024"))
+	assert.Equal(t, "root/year=2024/month=01", deriveHiveInferReadPath("/warehouse/table", "root", "/warehouse/table/year=2024/month=01"))
+	assert.Equal(t, "year=2024", deriveHiveInferReadPath("/warehouse/table", "", "/warehouse/table/year=2024"))
+
+	key, isHive, err := parseHiveInferSegmentKey("Year=2024")
+	require.NoError(t, err)
+	assert.True(t, isHive)
+	assert.Equal(t, "year", key)
+
+	key, isHive, err = parseHiveInferSegmentKey("plain")
+	require.NoError(t, err)
+	assert.False(t, isHive)
+	assert.Empty(t, key)
+
+	for _, segment := range []string{".=x", "..=x", "bad-key=x"} {
+		_, isHive, err = parseHiveInferSegmentKey(segment)
+		require.Error(t, err)
+		assert.True(t, isHive)
+	}
+
+	assert.True(t, isHiveInferHidden(".spark"))
+	assert.True(t, isHiveInferHidden("_temporary"))
+	assert.False(t, isHiveInferHidden("year=2024"))
+}
+
+func TestHivePartitionCatalogRoundTripUsesPersistedInference(t *testing.T) {
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType:          tree.INFILE,
+			Filepath:          "/unreachable/external/root",
+			Format:            "parquet",
+			HivePartitioning:  true,
+			HivePartitionCols: []string{"year", "month"},
+			HivePartitionColTypes: []tree.HivePartColType{
+				{Id: int32(types.T_int32), NullAbility: true},
+				{Id: int32(types.T_varchar), Width: 2, NullAbility: true},
+			},
+		},
+	}
+
+	data, err := json.Marshal(param)
+	require.NoError(t, err)
+	var restored tree.ExternParam
+	require.NoError(t, json.Unmarshal(data, &restored))
+
+	assert.True(t, restored.HivePartitioning)
+	assert.Equal(t, []string{"year", "month"}, restored.HivePartitionCols)
+	require.Len(t, restored.HivePartitionColTypes, 2)
+	assert.Equal(t, int32(types.T_int32), restored.HivePartitionColTypes[0].Id)
+	assert.Equal(t, int32(types.T_varchar), restored.HivePartitionColTypes[1].Id)
+	assert.Equal(t, int32(2), restored.HivePartitionColTypes[1].Width)
 }
 
 func TestValidateAndSetHivePartitionOptions_DuplicateHiveKey(t *testing.T) {
@@ -1202,6 +1472,21 @@ func TestInitStageS3Param_HappyAndErrors(t *testing.T) {
 			Credentials: baseCreds,
 		}
 		require.Error(t, InitStageS3Param(param, sd))
+	})
+
+	t.Run("stage_filepath_option_ignored", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Ctx = context.Background()
+		param.Option = []string{"filepath", "stage://pq_stage/data.parquet", "format", "parquet"}
+		sd := stage.StageDef{
+			Url:         parse("s3://b/prefix/data.parquet"),
+			Credentials: baseCreds,
+		}
+		require.NoError(t, InitStageS3Param(param, sd))
+		assert.Equal(t, tree.S3, param.ScanType)
+		assert.Equal(t, "parquet", param.Format)
+		assert.Equal(t, "b", param.S3Param.Bucket)
+		assert.Equal(t, "/prefix/data.parquet", param.Filepath)
 	})
 
 	t.Run("jsonline_without_jsondata", func(t *testing.T) {

@@ -1039,7 +1039,7 @@ message RuntimeFilterSpec {
   int32 upper_limit = 3;
   Expr expr = 4;
   bool not_on_pk = 5;
-  bool use_bloom_filter = 6;
+  bool use_membership_filter = 6;
 }
 
 message IdList {

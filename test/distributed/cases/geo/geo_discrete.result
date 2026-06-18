@@ -1,0 +1,18 @@
+select st_hausdorffdistance(st_geomfromtext('LINESTRING(0 0, 10 0)'), st_geomfromtext('LINESTRING(0 1, 10 1)')) as hd_parallel;
+hd_parallel
+1.0
+select st_frechetdistance(st_geomfromtext('LINESTRING(0 0, 10 0)'), st_geomfromtext('LINESTRING(0 1, 10 1)')) as fd_parallel;
+fd_parallel
+1.0
+select st_hausdorffdistance(st_geomfromtext('LINESTRING(0 0, 10 0)'), st_geomfromtext('LINESTRING(0 0, 10 0)')) as hd_same;
+hd_same
+0.0
+select st_frechetdistance(st_geomfromtext('LINESTRING(0 0, 10 0)'), st_geomfromtext('LINESTRING(0 0, 10 0)')) as fd_same;
+fd_same
+0.0
+select st_frechetdistance(st_geomfromtext('LINESTRING(0 0, 10 0)'), st_geomfromtext('LINESTRING(0 0, 10 5)')) as fd_diverge;
+fd_diverge
+5.0
+select st_hausdorffdistance(st_geomfromtext('MULTIPOINT(0 0, 0 3)'), st_geomfromtext('MULTIPOINT(4 0, 4 3)')) as hd_points;
+hd_points
+4.0

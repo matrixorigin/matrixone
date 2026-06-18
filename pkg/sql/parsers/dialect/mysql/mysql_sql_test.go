@@ -83,6 +83,69 @@ func TestOriginSQL(t *testing.T) {
 	}
 }
 
+func TestPositionFunctionSyntax(t *testing.T) {
+	tests := []string{
+		"select position('y' in 'xyz')",
+		"select position(substr in str) from t1",
+	}
+	for _, sql := range tests {
+		_, err := ParseOne(context.TODO(), sql, 1)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create temporary table if not exists dst clone src to account acc",
+		1,
+	)
+	require.NoError(t, err)
+
+	cloneStmt, ok := stmt.(*tree.CloneTable)
+	require.True(t, ok)
+	require.True(t, cloneStmt.CreateTable.Temporary)
+	require.True(t, cloneStmt.CreateTable.IfNotExists)
+	require.Equal(t, tree.Identifier("dst"), cloneStmt.CreateTable.Table.ObjectName)
+	require.Equal(t, tree.Identifier("src"), cloneStmt.SrcTable.ObjectName)
+	require.NotNil(t, cloneStmt.ToAccountOpt)
+	require.Equal(t, tree.Identifier("acc"), cloneStmt.ToAccountOpt.AccountName)
+
+	require.Equal(
+		t,
+		"create temporary table if not exists `dst` clone `src` to account `acc`",
+		tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()),
+	)
+}
+
+func TestCloneTableParseFormattedMoTimestamp(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create table dst clone src{MO_TS = 123}",
+		1,
+	)
+	require.NoError(t, err)
+
+	cloneStmt, ok := stmt.(*tree.CloneTable)
+	require.True(t, ok)
+	require.NotNil(t, cloneStmt.SrcTable.AtTsExpr)
+	require.Equal(t, tree.ATMOTIMESTAMP, cloneStmt.SrcTable.AtTsExpr.Type)
+}
+
+func TestDataBranchCreateTableParsesWithLeadingComment(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"/* cloud_user */\n  data branch create table dst from src",
+		1,
+	)
+	require.NoError(t, err)
+
+	branchStmt, ok := stmt.(*tree.DataBranchCreateTable)
+	require.True(t, ok)
+	require.Equal(t, tree.Identifier("dst"), branchStmt.CreateTable.Table.ObjectName)
+	require.Equal(t, tree.Identifier("src"), branchStmt.SrcTable.ObjectName)
+}
+
 func TestDataBranchDiffOutputModes(t *testing.T) {
 	stmt, err := ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} output summary`, 1)
 	require.NoError(t, err)
@@ -3125,7 +3188,7 @@ var (
 			output: "create view t2 as select * from t1",
 		}, {
 			input:  "insert into t1 values(_binary 0x123)",
-			output: "insert into t1 values (123)",
+			output: "insert into t1 values (0x123)",
 		}, {
 			input:  "backup '123' filesystem '/home/abc' parallelism '1'",
 			output: "backup 123 filesystem /home/abc parallelism 1",
@@ -3200,6 +3263,10 @@ var (
 		{
 			input:  "create table t1(a vecf32(3), b vecf64(3), c int)",
 			output: "create table t1 (a vecf32(3), b vecf64(3), c int)",
+		},
+		{
+			input:  "create table t1 (id bigint primary key, embedding vecf32(3), payload json, tags array(varchar(20)))",
+			output: "create table t1 (id bigint primary key, embedding vecf32(3), payload json, tags array(varchar(20)))",
 		},
 		{
 			input:  "alter table tbl1 drop constraint fk_name",
@@ -3488,6 +3555,30 @@ var (
 		{
 			input:  "select get_format(timestamp, 'ISO')",
 			output: "select get_format(TIMESTAMP, ISO)",
+		},
+		{
+			input:  "create index idx using cagra on A (a) intermediate_graph_degree = 4 graph_degree = 100 OP_TYPE 'VECTOR_L2_OPS' QUANTIZATION 'F16' DISTRIBUTION_MODE 'SINGLE_GPU' itopk_size = 512",
+			output: "create index idx using cagra on a (a) OP_TYPE VECTOR_L2_OPS INTERMEDIATE_GRAPH_DEGREE 4 GRAPH_DEGREE 100 QUANTIZATION F16 DISTRIBUTION_MODE SINGLE_GPU ITOPK_SIZE 512 ",
+		},
+		{
+			input:  "create index idx using ivfpq on A (a) LISTS 4 BITS_PER_CODE 8 OP_TYPE 'VECTOR_L2_OPS' QUANTIZATION 'INT8' M 4",
+			output: "create index idx using ivfpq on a (a) LISTS 4 M 4 OP_TYPE VECTOR_L2_OPS QUANTIZATION INT8 BITS_PER_CODE 8 ",
+		},
+		{
+			input:  "create index idx using cagra on A (a) INCLUDE (price)",
+			output: "create index idx using cagra on a (a) INCLUDE (price) ",
+		},
+		{
+			input:  "create index idx using cagra on A (a) INCLUDE (price, category_id)",
+			output: "create index idx using cagra on a (a) INCLUDE (price, category_id) ",
+		},
+		{
+			input:  "create index idx using cagra on A (a) OP_TYPE 'VECTOR_L2_OPS' INCLUDE (price, category_id)",
+			output: "create index idx using cagra on a (a) OP_TYPE VECTOR_L2_OPS INCLUDE (price, category_id) ",
+		},
+		{
+			input:  "create index idx using ivfpq on A (a) LISTS 4 BITS_PER_CODE 8 INCLUDE (price)",
+			output: "create index idx using ivfpq on a (a) LISTS 4 BITS_PER_CODE 8 INCLUDE (price) ",
 		},
 	}
 )

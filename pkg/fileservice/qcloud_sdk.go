@@ -106,6 +106,11 @@ func NewQCloudSDK(
 		httpClient,
 	)
 
+	// Disable COS SDK built-in retry — MatrixOne wraps all operations in
+	// its own DoWithRetry, and SDK retry would double the request count
+	// and stretch failure latency.
+	client.Conf.RetryOpt.Count = 0
+
 	logutil.Info("new object storage",
 		zap.Any("sdk", "qcloud"),
 		zap.Any("arguments", args),
@@ -113,7 +118,9 @@ func NewQCloudSDK(
 
 	if !args.NoBucketValidation {
 		// validate bucket
-		_, err := client.Bucket.Head(ctx, &cos.BucketHeadOptions{})
+		_, err := DoWithRetry("cos bucket head", func() (*cos.Response, error) {
+			return client.Bucket.Head(ctx, &cos.BucketHeadOptions{})
+		}, maxRetryAttemps, IsRetryableError)
 		if err != nil {
 			return nil, err
 		}
@@ -268,13 +275,34 @@ func (a *QCloudSDK) Write(
 		}
 
 	} else {
-		err = a.putObject(
-			ctx,
-			key,
-			r,
-			sizeHint,
-			expire,
-		)
+		seeker, ok := r.(io.Seeker)
+		if !ok {
+			err := a.WriteMultipartParallel(ctx, key, r, sizeHint, &ParallelMultipartOption{
+				PartSize:    defaultParallelMultipartPartSize,
+				Concurrency: 1,
+				Expire:      expire,
+			})
+			if err != nil {
+				return err
+			}
+			return nil
+		}
+		offset, err := seeker.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+		_, err = DoWithRetry("write", func() (int, error) {
+			if _, err := seeker.Seek(offset, io.SeekStart); err != nil {
+				return 0, err
+			}
+			return 0, a.putObject(
+				ctx,
+				key,
+				r,
+				sizeHint,
+				expire,
+			)
+		}, maxRetryAttemps, IsRetryableError)
 		if err != nil {
 			return err
 		}
@@ -297,16 +325,22 @@ func (a *QCloudSDK) WriteMultipartParallel(
 	defer wrapSizeMismatchErr(&err)
 
 	options := normalizeParallelOption(opt)
-	if sizeHint != nil && *sizeHint < minMultipartPartSize {
-		return a.Write(ctx, key, r, sizeHint, options.Expire)
-	}
 	if sizeHint != nil {
+		r = &exactSizeReader{
+			R:        r,
+			Expected: *sizeHint,
+			Key:      key,
+		}
+		if *sizeHint < minMultipartPartSize {
+			return a.Write(ctx, key, r, sizeHint, options.Expire)
+		}
 		expectedParts := (*sizeHint + options.PartSize - 1) / options.PartSize
 		if expectedParts > maxMultipartParts {
 			return moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", expectedParts)
 		}
 	}
 
+	parentCtx := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -372,7 +406,10 @@ func (a *QCloudSDK) WriteMultipartParallel(
 
 	defer func() {
 		if err != nil {
-			_, _ = a.client.Object.AbortMultipartUpload(ctx, key, output.UploadID)
+			_, _ = DoWithRetry("cos abort multipart upload", func() (*cos.Response, error) {
+				return a.client.Object.AbortMultipartUpload(
+					context.WithoutCancel(parentCtx), key, output.UploadID)
+			}, maxRetryAttemps, IsRetryableError)
 		}
 	}()
 

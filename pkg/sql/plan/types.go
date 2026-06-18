@@ -34,6 +34,7 @@ const (
 	JoinSideBoth            = JoinSideLeft | JoinSideRight
 	JoinSideMark            = 1 << 3
 	JoinSideCorrelated      = 1 << 4
+	JoinSideOuter           = 1 << 5
 )
 
 type ExpandAliasMode int8
@@ -205,6 +206,9 @@ type QueryBuilder struct {
 
 	// spill memory for join
 	joinSpillMem int64
+
+	// spill memory for sort / merge order
+	sortSpillMem int64
 
 	optimizerHints *OptimizerHints
 

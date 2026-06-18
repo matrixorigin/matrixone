@@ -438,7 +438,7 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap), nil
 
 	case plan.Node_JOIN:
-		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap), nil
+		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap)
 
 	case plan.Node_PROJECT:
 		//NOTE: This is the entry point for vector index rule on SORT NODE.
@@ -453,6 +453,9 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
+		return nodeID
+	}
+	if builder.scanHasMatchedFullTextFilter(node) {
 		return nodeID
 	}
 	if builder.isScanProtected(node.NodeId) {
@@ -618,6 +621,18 @@ END_FULLTEXT:
 
 			case catalog.MoIndexHnswAlgo.ToString():
 				newNodeID, err := builder.applyIndicesForSortUsingHnsw(nodeID, vecCtx, multiTableIndex)
+				if err != nil || newNodeID != nodeID {
+					return newNodeID, err
+				}
+
+			case catalog.MoIndexCagraAlgo.ToString():
+				newNodeID, err := builder.applyIndicesForSortUsingCagra(nodeID, vecCtx, multiTableIndex)
+				if err != nil || newNodeID != nodeID {
+					return newNodeID, err
+				}
+
+			case catalog.MoIndexIvfpqAlgo.ToString():
+				newNodeID, err := builder.applyIndicesForSortUsingIvfpq(nodeID, vecCtx, multiTableIndex)
 				if err != nil || newNodeID != nodeID {
 					return newNodeID, err
 				}
@@ -846,6 +861,18 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 			} else if err != nil {
 				return nil
 			}
+		case catalog.MoIndexCagraAlgo.ToString():
+			if ctx, err := builder.prepareCagraIndexContext(vecCtx, multi); err == nil && ctx != nil {
+				return []int32{vecCtx.scanNode.NodeId}
+			} else if err != nil {
+				return nil
+			}
+		case catalog.MoIndexIvfpqAlgo.ToString():
+			if ctx, err := builder.prepareIvfpqIndexContext(vecCtx, multi); err == nil && ctx != nil {
+				return []int32{vecCtx.scanNode.NodeId}
+			} else if err != nil {
+				return nil
+			}
 		}
 	}
 	return nil
@@ -858,7 +885,8 @@ func (builder *QueryBuilder) collectVectorIndexes(scanNode *plan.Node) map[strin
 	}
 
 	for _, indexDef := range scanNode.TableDef.Indexes {
-		if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) || catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) {
+		if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) || catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) ||
+			catalog.IsCagraIndexAlgo(indexDef.IndexAlgo) || catalog.IsIvfpqIndexAlgo(indexDef.IndexAlgo) {
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 					IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -1805,20 +1833,24 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 	return currentIdx, savedFilterIdx
 }
 
-func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	sid := builder.compCtx.GetProcess().GetService()
+
+	if changed, err := builder.applyFullTextFiltersForJoinChildren(nodeID, node, colRefCnt, idxColMap); err != nil || changed {
+		return nodeID, err
+	}
 
 	if node.JoinType != plan.Node_INNER && node.JoinType != plan.Node_RIGHT && node.JoinType != plan.Node_SEMI &&
 		(node.JoinType != plan.Node_ANTI || !node.IsRightJoin) {
-		return nodeID
+		return nodeID, nil
 	}
 
 	leftChild := builder.qry.Nodes[node.Children[0]]
 	if leftChild.NodeType != plan.Node_TABLE_SCAN {
-		return nodeID
+		return nodeID, nil
 	}
 	if builder.isScanProtected(leftChild.NodeId) {
-		return nodeID
+		return nodeID, nil
 	}
 
 	//----------------------------------------------------------------------
@@ -1833,11 +1865,11 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	rightChild := builder.qry.Nodes[node.Children[1]]
 
 	if rightChild.Stats.Selectivity > 0.5 {
-		return nodeID
+		return nodeID, nil
 	}
 
 	if rightChild.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)) || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
-		return nodeID
+		return nodeID, nil
 	}
 
 	leftTags := make(map[int32]bool)
@@ -1875,7 +1907,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	}
 
 	if joinOnPK {
-		return nodeID
+		return nodeID, nil
 	}
 
 	indexes := leftChild.TableDef.Indexes
@@ -2021,5 +2053,5 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		break
 	}
 
-	return nodeID
+	return nodeID, nil
 }
