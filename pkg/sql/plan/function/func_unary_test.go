@@ -7285,10 +7285,6 @@ func runUserLevelLockTest(t *testing.T, fn func([]lockservice.LockService)) {
 	resetUserLevelLocksForTest(t)
 }
 
-func userLevelLockTxnIDOld(owner, name string) []byte {
-	return []byte("mo-user-level-lock\x00" + owner + "\x00" + name)
-}
-
 func TestUserLevelLockConnectionIDFromProbeTxnID(t *testing.T) {
 	txnID := userLevelLockProbeTxnID("owner-1", 1001, "probe_lock", "is_free")
 	connID, ok := userLevelLockConnectionIDFromTxnID(txnID)
@@ -7539,6 +7535,105 @@ func TestReleaseUserLevelLocksCleanup(t *testing.T) {
 	})
 }
 
+func TestUserLevelLockConcurrentSessionOperations(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		const (
+			workers    = 8
+			iterations = 40
+		)
+
+		lockName := "concurrent_lock"
+		procs := make([]*process.Process, 0, workers)
+		for i := 0; i < workers; i++ {
+			procs = append(procs, newUserLevelLockTestProcess(t, services[i%len(services)], "acc"))
+		}
+
+		start := make(chan struct{})
+		errCh := make(chan error, workers)
+		var wg sync.WaitGroup
+
+		for idx, proc := range procs {
+			wg.Add(1)
+			go func(worker int, proc *process.Process) {
+				defer wg.Done()
+				<-start
+
+				for iter := 0; iter < iterations; iter++ {
+					value, err := getUserLevelLock(lockName, 0, proc)
+					if err != nil {
+						errCh <- fmt.Errorf("worker %d iter %d get lock: %w", worker, iter, err)
+						return
+					}
+					if value == 1 {
+						if iter%3 == 0 {
+							reentrant, err := getUserLevelLock(lockName, 0, proc)
+							if err != nil {
+								errCh <- fmt.Errorf("worker %d iter %d reentrant get: %w", worker, iter, err)
+								return
+							}
+							if reentrant != 1 {
+								errCh <- fmt.Errorf("worker %d iter %d expected reentrant get to succeed, got %d", worker, iter, reentrant)
+								return
+							}
+						}
+
+						if iter%2 == 0 {
+							released, isNull, err := releaseUserLevelLock(lockName, proc)
+							if err != nil {
+								errCh <- fmt.Errorf("worker %d iter %d release lock: %w", worker, iter, err)
+								return
+							}
+							if isNull || released != 1 {
+								errCh <- fmt.Errorf("worker %d iter %d unexpected release result: released=%d isNull=%v", worker, iter, released, isNull)
+								return
+							}
+						} else {
+							released := releaseAllUserLevelLocks(proc)
+							if released < 1 {
+								errCh <- fmt.Errorf("worker %d iter %d expected release_all to release at least one lock, got %d", worker, iter, released)
+								return
+							}
+						}
+					} else {
+						_, _, err := isUserLevelLockUsed(lockName, proc)
+						if err != nil {
+							errCh <- fmt.Errorf("worker %d iter %d is_used_lock: %w", worker, iter, err)
+							return
+						}
+						if iter%5 == 0 {
+							released := releaseAllUserLevelLocks(proc)
+							if released != 0 {
+								errCh <- fmt.Errorf("worker %d iter %d expected release_all to release 0 locks, got %d", worker, iter, released)
+								return
+							}
+						}
+					}
+				}
+			}(idx, proc)
+		}
+
+		close(start)
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			require.NoError(t, err)
+		}
+
+		for _, proc := range procs {
+			require.Equal(t, int64(0), releaseAllUserLevelLocks(proc))
+		}
+
+		finalProc := newUserLevelLockTestProcess(t, services[0], "acc")
+		value, err := getUserLevelLock(lockName, 0, finalProc)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), value)
+		released, isNull, err := releaseUserLevelLock(lockName, finalProc)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), released)
+	})
+}
+
 func TestIsUsedLockReturnsHolderConnectionID(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
@@ -7584,6 +7679,21 @@ func TestIsUsedLockReturnsNullWhenHolderLookupNotSupported(t *testing.T) {
 		holder, isNull, err := isUserLevelLockUsed("holder_lookup_not_supported", proc)
 		require.NoError(t, err)
 		require.True(t, isNull)
+		require.Equal(t, uint64(0), holder)
+	})
+}
+
+func TestIsUsedLockReturnsZeroConnectionID(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		state := services[0].(*userLevelLockTestService).state
+		state.Lock()
+		state.locks[string(userLevelLockRow(proc, "zero_conn_holder"))] = string(userLevelLockTxnID(userLevelLockOwner(proc), 0, "zero_conn_holder"))
+		state.Unlock()
+
+		holder, isNull, err := isUserLevelLockUsed("zero_conn_holder", proc)
+		require.NoError(t, err)
+		require.False(t, isNull)
 		require.Equal(t, uint64(0), holder)
 	})
 }
@@ -7658,12 +7768,64 @@ func TestReleaseAllUserLevelLocksReturnsCountWhenUnlockFails(t *testing.T) {
 		require.Equal(t, int64(1), v)
 
 		released := releaseAllUserLevelLocks(proc1)
-		require.Equal(t, int64(2), released)
+		require.Equal(t, int64(0), released)
 		require.Equal(t, int64(0), releaseAllUserLevelLocks(proc1))
 
 		v, err = getUserLevelLock("release_all_fail_a", 0, proc2)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), v)
+	})
+}
+
+func TestReleaseLockLegacyTxnIDCompatible(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		owner := userLevelLockOwner(proc1)
+		state := services[0].(*userLevelLockTestService).state
+		name := "legacy_release"
+
+		state.Lock()
+		state.locks[string(userLevelLockRow(proc1, name))] = string(userLevelLockTxnIDOld(owner, name))
+		state.Unlock()
+		trackUserLevelLock(owner, name)
+
+		v, isNull, err := releaseUserLevelLock(name, proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		v, err = getUserLevelLock(name, 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseAllUserLevelLocksLegacyTxnIDCompatible(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		owner := userLevelLockOwner(proc1)
+		state := services[0].(*userLevelLockTestService).state
+
+		state.Lock()
+		state.locks[string(userLevelLockRow(proc1, "legacy_all_a"))] = string(userLevelLockTxnIDOld(owner, "legacy_all_a"))
+		state.locks[string(userLevelLockRow(proc1, "legacy_all_b"))] = string(userLevelLockTxnIDOld(owner, "legacy_all_b"))
+		state.Unlock()
+		trackUserLevelLock(owner, "legacy_all_a")
+		trackUserLevelLock(owner, "legacy_all_a")
+		trackUserLevelLock(owner, "legacy_all_b")
+
+		released := releaseAllUserLevelLocks(proc1)
+		require.Equal(t, int64(2), released)
+
+		v, err := getUserLevelLock("legacy_all_a", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, err = getUserLevelLock("legacy_all_b", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
 	})
 }
 

@@ -7039,6 +7039,10 @@ func userLevelLockTxnID(owner string, connID uint64, name string) []byte {
 	return []byte(fmt.Sprintf("mo-user-level-lock\x00%s\x00%s\x00%d", owner, name, connID))
 }
 
+func userLevelLockTxnIDOld(owner, name string) []byte {
+	return []byte("mo-user-level-lock\x00" + owner + "\x00" + name)
+}
+
 func userLevelLockProbeTxnID(owner string, connID uint64, name, probeType string) []byte {
 	return []byte(fmt.Sprintf("mo-user-level-lock-probe\x00%s\x00%s\x00%s\x00%d", probeType, owner, name, connID))
 }
@@ -7071,6 +7075,13 @@ func userLevelLockService(proc *process.Process) (lockservice.LockService, error
 		return nil, moerr.NewInternalErrorNoCtx("GET_LOCK requires lock service")
 	}
 	return proc.GetLockService(), nil
+}
+
+func unlockUserLevelLockTxnIDs(ctx context.Context, ls lockservice.LockService, owner string, connID uint64, name string) error {
+	if err := ls.Unlock(ctx, userLevelLockTxnID(owner, connID, name), timestamp.Timestamp{}); err != nil {
+		return err
+	}
+	return ls.Unlock(ctx, userLevelLockTxnIDOld(owner, name), timestamp.Timestamp{})
 }
 
 func userLevelLockOptions(policy lockpb.WaitPolicy) lockpb.LockOptions {
@@ -7243,7 +7254,7 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 		untrackUserLevelLock(owner, name)
 		return 1, false, nil
 	}
-	if err := ls.Unlock(proc.Ctx, userLevelLockTxnID(owner, connID, name), timestamp.Timestamp{}); err != nil {
+	if err := unlockUserLevelLockTxnIDs(proc.Ctx, ls, owner, connID, name); err != nil {
 		return 0, false, err
 	}
 	untrackUserLevelLock(owner, name)
@@ -7318,15 +7329,16 @@ func releaseAllUserLevelLocks(proc *process.Process) int64 {
 	connID := userLevelLockConnectionID(proc)
 	var released int64
 	for _, name := range userLevelLocksForOwner(owner) {
-		released++
 		for {
 			count, held := untrackUserLevelLock(owner, name)
 			if !held {
 				break
 			}
 			if count == 0 {
-				if err := proc.GetLockService().Unlock(context.Background(), userLevelLockTxnID(owner, connID, name), timestamp.Timestamp{}); err != nil {
+				if err := unlockUserLevelLockTxnIDs(context.Background(), proc.GetLockService(), owner, connID, name); err != nil {
 					logutil.Warn(fmt.Sprintf("releaseAllUserLevelLocks unlock failed: owner=%s lock=%s err=%v", owner, name, err))
+				} else {
+					released++
 				}
 				break
 			}
