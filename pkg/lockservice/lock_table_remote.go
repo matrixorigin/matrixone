@@ -344,7 +344,7 @@ func (l *remoteLockTable) doGetLockHolder(key []byte) (pb.WaitTxn, bool, error) 
 
 	req.Method = pb.Method_GetLockHolder
 	req.LockTable = l.bind
-	req.GetTxnLock.Row = key
+	req.GetLockHolder.Row = key
 
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
@@ -352,10 +352,10 @@ func (l *remoteLockTable) doGetLockHolder(key []byte) (pb.WaitTxn, bool, error) 
 		if err := l.maybeHandleBindChanged(resp); err != nil {
 			return pb.WaitTxn{}, false, err
 		}
-		if !resp.GetTxnLock.Found {
+		if len(resp.GetLockHolder.Holder.TxnID) == 0 {
 			return pb.WaitTxn{}, false, nil
 		}
-		return resp.GetTxnLock.Holder, true, nil
+		return resp.GetLockHolder.Holder, true, nil
 	}
 	return pb.WaitTxn{}, false, moerr.AttachCause(ctx, err)
 }

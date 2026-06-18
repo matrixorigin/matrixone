@@ -419,12 +419,7 @@ func (s *service) handleRemoteGetLock(
 		req.GetTxnLock.Row,
 		pb.WaitTxn{TxnID: req.GetTxnLock.TxnID},
 		func(lock Lock) {
-			resp.GetTxnLock.Found = true
 			resp.GetTxnLock.Value = int32(lock.value)
-			lock.IterHolders(func(holder pb.WaitTxn) bool {
-				resp.GetTxnLock.Holder = holder
-				return false
-			})
 			values := make([]pb.WaitTxn, 0)
 			lock.waiters.iter(func(w *waiter) bool {
 				values = append(values, w.txn)
@@ -447,10 +442,9 @@ func (s *service) handleRemoteGetLockHolder(
 		return
 	}
 
-	holder, found, err := l.getLockHolder(req.GetTxnLock.Row)
+	holder, found, err := l.getLockHolder(req.GetLockHolder.Row)
 	if err == nil && found {
-		resp.GetTxnLock.Holder = holder
-		resp.GetTxnLock.Found = true
+		resp.GetLockHolder.Holder = holder
 	}
 	writeResponse(s.logger, cancel, resp, err, cs)
 }
