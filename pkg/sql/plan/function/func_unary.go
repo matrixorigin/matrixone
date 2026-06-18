@@ -7321,13 +7321,14 @@ func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, erro
 	return holderConnID, false, nil
 }
 
-func releaseAllUserLevelLocks(proc *process.Process) int64 {
+func releaseAllUserLevelLocks(proc *process.Process) (int64, error) {
 	if proc == nil || proc.GetLockService() == nil {
-		return 0
+		return 0, nil
 	}
 	owner := userLevelLockOwner(proc)
 	connID := userLevelLockConnectionID(proc)
 	var released int64
+	var firstErr error
 	for _, name := range userLevelLocksForOwner(owner) {
 		for {
 			count, held := untrackUserLevelLock(owner, name)
@@ -7337,6 +7338,9 @@ func releaseAllUserLevelLocks(proc *process.Process) int64 {
 			if count == 0 {
 				if err := unlockUserLevelLockTxnIDs(context.Background(), proc.GetLockService(), owner, connID, name); err != nil {
 					logutil.Warn(fmt.Sprintf("releaseAllUserLevelLocks unlock failed: owner=%s lock=%s err=%v", owner, name, err))
+					if firstErr == nil {
+						firstErr = err
+					}
 				} else {
 					released++
 				}
@@ -7344,11 +7348,11 @@ func releaseAllUserLevelLocks(proc *process.Process) int64 {
 			}
 		}
 	}
-	return released
+	return released, firstErr
 }
 
 func ReleaseUserLevelLocks(proc *process.Process) {
-	_ = releaseAllUserLevelLocks(proc)
+	_, _ = releaseAllUserLevelLocks(proc)
 }
 
 func GetLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -7446,9 +7450,18 @@ func IsUsedLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func ReleaseAllLocks(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opNoneParamToFixed[int64](result, proc, length, func() int64 {
-		return releaseAllUserLevelLocks(proc)
-	})
+	rs := vector.MustFunctionResult[int64](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+
+	for i := 0; i < length; i++ {
+		released, err := releaseAllUserLevelLocks(proc)
+		if err != nil {
+			return err
+		}
+		rss[i] = released
+	}
+	return nil
 }
 
 func Version(

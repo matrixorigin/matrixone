@@ -7588,7 +7588,11 @@ func TestUserLevelLockConcurrentSessionOperations(t *testing.T) {
 								return
 							}
 						} else {
-							released := releaseAllUserLevelLocks(proc)
+							released, err := releaseAllUserLevelLocks(proc)
+							if err != nil {
+								errCh <- fmt.Errorf("worker %d iter %d release_all: %w", worker, iter, err)
+								return
+							}
 							if released < 1 {
 								errCh <- fmt.Errorf("worker %d iter %d expected release_all to release at least one lock, got %d", worker, iter, released)
 								return
@@ -7601,7 +7605,11 @@ func TestUserLevelLockConcurrentSessionOperations(t *testing.T) {
 							return
 						}
 						if iter%5 == 0 {
-							released := releaseAllUserLevelLocks(proc)
+							released, err := releaseAllUserLevelLocks(proc)
+							if err != nil {
+								errCh <- fmt.Errorf("worker %d iter %d release_all: %w", worker, iter, err)
+								return
+							}
 							if released != 0 {
 								errCh <- fmt.Errorf("worker %d iter %d expected release_all to release 0 locks, got %d", worker, iter, released)
 								return
@@ -7620,7 +7628,9 @@ func TestUserLevelLockConcurrentSessionOperations(t *testing.T) {
 		}
 
 		for _, proc := range procs {
-			require.Equal(t, int64(0), releaseAllUserLevelLocks(proc))
+			released, err := releaseAllUserLevelLocks(proc)
+			require.NoError(t, err)
+			require.Equal(t, int64(0), released)
 		}
 
 		finalProc := newUserLevelLockTestProcess(t, services[0], "acc")
@@ -7728,9 +7738,12 @@ func TestReleaseAllUserLevelLocksReturnsReleasedCount(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
 
-		released := releaseAllUserLevelLocks(proc1)
+		released, err := releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
 		require.Equal(t, int64(2), released)
-		require.Equal(t, int64(0), releaseAllUserLevelLocks(proc1))
+		released, err = releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), released)
 
 		v, err = getUserLevelLock("release_all_a", 0, proc2)
 		require.NoError(t, err)
@@ -7767,9 +7780,12 @@ func TestReleaseAllUserLevelLocksReturnsCountWhenUnlockFails(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
 
-		released := releaseAllUserLevelLocks(proc1)
+		released, err := releaseAllUserLevelLocks(proc1)
+		require.Error(t, err)
 		require.Equal(t, int64(0), released)
-		require.Equal(t, int64(0), releaseAllUserLevelLocks(proc1))
+		released, err = releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), released)
 
 		v, err = getUserLevelLock("release_all_fail_a", 0, proc2)
 		require.NoError(t, err)
@@ -7816,7 +7832,8 @@ func TestReleaseAllUserLevelLocksLegacyTxnIDCompatible(t *testing.T) {
 		trackUserLevelLock(owner, "legacy_all_a")
 		trackUserLevelLock(owner, "legacy_all_b")
 
-		released := releaseAllUserLevelLocks(proc1)
+		released, err := releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
 		require.Equal(t, int64(2), released)
 
 		v, err := getUserLevelLock("legacy_all_a", 0, proc2)
