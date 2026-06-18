@@ -3189,7 +3189,12 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	}
 
 	if !found {
-		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "not found index: %s", dropIndex.IndexName)
+		if stmt.IfExists {
+			// An empty index name represents the no-op path for DROP INDEX IF EXISTS.
+			dropIndex.IndexName = ""
+		} else {
+			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "not found index: %s", dropIndex.IndexName)
+		}
 	}
 
 	return &Plan{

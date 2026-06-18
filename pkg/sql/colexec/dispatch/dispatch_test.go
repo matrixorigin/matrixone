@@ -15,14 +15,19 @@
 package dispatch
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -78,6 +83,112 @@ func TestDispatchAdoptCleanupState_NilSafe(t *testing.T) {
 		target.AdoptCleanupState(nil)
 	})
 	require.Nil(t, target.ctr)
+}
+
+func TestDispatchResetDoesNotBlockWhenRemoteErrChannelIsFull(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	proc := testutil.NewProcess(t)
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+
+	errCh := make(chan error, 1)
+	errCh <- moerr.NewInternalErrorNoCtx("already notified")
+	d := &Dispatch{
+		ctr: &container{
+			isRemote: true,
+			remoteReceivers: []*process.WrapCs{
+				{Err: errCh, Uid: uid, MsgId: 1},
+			},
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		d.Reset(proc, true, moerr.NewInternalErrorNoCtx("cleanup"))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Dispatch.Reset blocked on a full remote receiver error channel")
+	}
+}
+
+func TestDispatchResetSendsHealthyLocalRegWhenEarlierRegIsFull(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	fullReg := &process.WaitRegister{Ch2: make(chan process.PipelineSignal, 1)}
+	fullReg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+	healthyReg := &process.WaitRegister{Ch2: make(chan process.PipelineSignal, 1)}
+
+	d := &Dispatch{
+		LocalRegs: []*process.WaitRegister{fullReg, healthyReg},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		d.Reset(nil, true, moerr.NewInternalErrorNoCtx("cleanup"))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Dispatch.Reset blocked on a full local receiver channel")
+	}
+
+	select {
+	case <-healthyReg.Ch2:
+	default:
+		t.Fatal("Dispatch.Reset did not notify a healthy local receiver after an earlier receiver channel was full")
+	}
+}
+
+func TestDispatchResetReleasesDeferredSpoolMemoryAfterCleanupBarrier(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	proc := testutil.NewProcess(t)
+	dispatch := &Dispatch{
+		FuncId: SendToAllLocalFunc,
+		LocalRegs: []*process.WaitRegister{
+			{Ch2: make(chan process.PipelineSignal, 1)},
+			{Ch2: make(chan process.PipelineSignal, 1)},
+		},
+	}
+	require.NoError(t, dispatch.Prepare(proc))
+
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := testutil.NewBatch([]types.Type{types.New(types.T_int64, 0, 0)}, true, 1024, srcMP)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	for i := 0; i < 2; i++ {
+		queryDone, err := dispatch.ctr.sp.SendBatch(context.Background(), pSpool.SendToAllLocal, src, nil)
+		require.NoError(t, err)
+		require.False(t, queryDone)
+	}
+
+	require.Greater(t, proc.Mp().CurrNB(), int64(0))
+
+	dispatch.Reset(proc, true, moerr.NewInternalErrorNoCtx("cleanup"))
+	require.Greater(t, proc.Mp().CurrNB(), int64(0))
+
+	dispatch.CleanupDeferredSpool()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 // TestReceiverDone_OldBehavior tests the old behavior (kept for backward compatibility verification)
