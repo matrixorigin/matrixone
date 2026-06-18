@@ -7179,6 +7179,14 @@ type userLevelLockTestService struct {
 	state *userLevelLockTestState
 }
 
+type userLevelLockNotSupportedService struct {
+	lockservice.LockService
+}
+
+func (s *userLevelLockNotSupportedService) GetLockHolder(context.Context, uint64, []byte, lockpb.LockOptions) (lockpb.WaitTxn, bool, error) {
+	return lockpb.WaitTxn{}, false, moerr.NewNotSupportedNoCtx("GetLockHolder")
+}
+
 func (s *userLevelLockTestService) GetServiceID() string {
 	return s.id
 }
@@ -7558,6 +7566,17 @@ func TestIsUsedLockReturnsNullForLegacyHolderTxnID(t *testing.T) {
 	})
 }
 
+func TestIsUsedLockReturnsNullWhenHolderLookupNotSupported(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, &userLevelLockNotSupportedService{LockService: services[0]}, "acc")
+
+		holder, isNull, err := isUserLevelLockUsed("holder_lookup_not_supported", proc)
+		require.NoError(t, err)
+		require.True(t, isNull)
+		require.Equal(t, uint64(0), holder)
+	})
+}
+
 func TestIsUsedLockReturnsNullForMalformedHolderTxnID(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		proc := newUserLevelLockTestProcess(t, services[0], "acc")
@@ -7704,6 +7723,25 @@ func TestUserLevelLockEmptyName(t *testing.T) {
 
 		_, err = isUserLevelLockFree("", proc1)
 		require.Error(t, err, "IS_FREE_LOCK with empty name should return error")
+	})
+}
+
+func TestUserLevelLockNameContainsNUL(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		name := "bad\x00lock"
+
+		_, err := getUserLevelLock(name, 0, proc1)
+		require.Error(t, err)
+
+		_, _, err = releaseUserLevelLock(name, proc1)
+		require.Error(t, err)
+
+		_, err = isUserLevelLockFree(name, proc1)
+		require.Error(t, err)
+
+		_, _, err = isUserLevelLockUsed(name, proc1)
+		require.Error(t, err)
 	})
 }
 

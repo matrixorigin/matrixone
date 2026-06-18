@@ -242,6 +242,21 @@ func (l *remoteLockTable) getLock(
 	}
 }
 
+func (l *remoteLockTable) getLockHolder(key []byte) (pb.WaitTxn, bool, error) {
+	backoff := remoteRetryInitialBackoff
+	for {
+		holder, ok, err := l.doGetLockHolder(key)
+		if err == nil {
+			return holder, ok, nil
+		}
+		if err = l.handleError(err, false); err == nil {
+			return pb.WaitTxn{}, false, nil
+		}
+		waitRemoteRetryBackoff(backoff)
+		backoff = nextRemoteRetryBackoff(backoff)
+	}
+}
+
 func waitRemoteRetryBackoff(backoff time.Duration) {
 	if backoff > 0 {
 		time.Sleep(backoff)
@@ -301,11 +316,6 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 		if err := l.maybeHandleBindChanged(resp); err != nil {
 			return Lock{}, false, err
 		}
-		if !resp.GetTxnLock.Found {
-			// Keep the same semantics as localLockTable.getLock: no callback
-			// when the row lock does not exist on the lock table owner.
-			return Lock{}, false, nil
-		}
 
 		wq := newWaiterQueue()
 		wq.init(l.logger)
@@ -314,12 +324,7 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 			waiters: wq,
 			value:   byte(resp.GetTxnLock.Value),
 		}
-		// Use the holder reported by the lock table owner. The txn argument is
-		// only the lookup context and may be empty, for example when IS_USED_LOCK
-		// probes the current holder.
-		if len(resp.GetTxnLock.Holder.TxnID) > 0 {
-			lock.holders.add(resp.GetTxnLock.Holder)
-		}
+		lock.holders.add(txn)
 		for _, v := range resp.GetTxnLock.WaitingList {
 			w := acquireWaiter(v, "doGetLock", l.logger)
 			lock.addWaiter(l.logger, w)
@@ -328,6 +333,31 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 		return lock, true, nil
 	}
 	return Lock{}, false, moerr.AttachCause(ctx, err)
+}
+
+func (l *remoteLockTable) doGetLockHolder(key []byte) (pb.WaitTxn, bool, error) {
+	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseDoGetLock)
+	defer cancel()
+
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.Method = pb.Method_GetLockHolder
+	req.LockTable = l.bind
+	req.GetTxnLock.Row = key
+
+	resp, err := l.client.Send(ctx, req)
+	if err == nil {
+		defer releaseResponse(resp)
+		if err := l.maybeHandleBindChanged(resp); err != nil {
+			return pb.WaitTxn{}, false, err
+		}
+		if !resp.GetTxnLock.Found {
+			return pb.WaitTxn{}, false, nil
+		}
+		return resp.GetTxnLock.Holder, true, nil
+	}
+	return pb.WaitTxn{}, false, moerr.AttachCause(ctx, err)
 }
 
 func (l *remoteLockTable) getBind() pb.LockTable {

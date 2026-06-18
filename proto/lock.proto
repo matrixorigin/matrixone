@@ -117,6 +117,8 @@ enum Method {
   ResumeInvalidCN    = 16;
   // AbortRemoteDeadlockTxn abort remote txn for deadlock
   AbortRemoteDeadlockTxn = 17;
+  // GetLockHolder get current holder on a special lock
+  GetLockHolder      = 18;
 }
 
 enum Status {

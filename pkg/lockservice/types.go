@@ -158,6 +158,8 @@ type lockTable interface {
 	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation)
 	// getLock get a lock
 	getLock(key []byte, txn pb.WaitTxn, fn func(Lock))
+	// getLockHolder returns the current holder if the lock is actively held.
+	getLockHolder(key []byte) (pb.WaitTxn, bool, error)
 	// getBind returns lock table binding
 	getBind() pb.LockTable
 	// close close the locktable

@@ -35,6 +35,7 @@ var methodVersions = map[pb.Method]int64{
 	pb.Method_ForwardLock:            defines.MORPCVersion1,
 	pb.Method_Unlock:                 defines.MORPCVersion1,
 	pb.Method_GetTxnLock:             defines.MORPCVersion1,
+	pb.Method_GetLockHolder:          defines.MORPCVersion2,
 	pb.Method_GetWaitingList:         defines.MORPCVersion1,
 	pb.Method_KeepRemoteLock:         defines.MORPCVersion1,
 	pb.Method_GetBind:                defines.MORPCVersion1,
@@ -166,6 +167,8 @@ func (s *service) initRemoteHandler() {
 		s.handleRemoteUnlock)
 	s.remote.server.RegisterMethodHandler(pb.Method_GetTxnLock,
 		s.handleRemoteGetLock)
+	s.remote.server.RegisterMethodHandler(pb.Method_GetLockHolder,
+		s.handleRemoteGetLockHolder)
 	s.remote.server.RegisterMethodHandler(pb.Method_GetWaitingList,
 		s.handleRemoteGetWaitingList)
 	s.remote.server.RegisterMethodHandler(pb.Method_KeepRemoteLock,
@@ -429,6 +432,26 @@ func (s *service) handleRemoteGetLock(
 			})
 			resp.GetTxnLock.WaitingList = values
 		})
+	writeResponse(s.logger, cancel, resp, err, cs)
+}
+
+func (s *service) handleRemoteGetLockHolder(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	l, err := s.getLocalLockTable(req, resp)
+	if err != nil || l == nil {
+		writeResponse(s.logger, cancel, resp, err, cs)
+		return
+	}
+
+	holder, found, err := l.getLockHolder(req.GetTxnLock.Row)
+	if err == nil && found {
+		resp.GetTxnLock.Holder = holder
+		resp.GetTxnLock.Found = true
+	}
 	writeResponse(s.logger, cancel, resp, err, cs)
 }
 

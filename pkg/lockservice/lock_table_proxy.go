@@ -202,6 +202,10 @@ func (lp *localLockTableProxy) getLock(
 	lp.remote.getLock(key, txn, fn)
 }
 
+func (lp *localLockTableProxy) getLockHolder(key []byte) (pb.WaitTxn, bool, error) {
+	return lp.remote.getLockHolder(key)
+}
+
 func (lp *localLockTableProxy) getBind() pb.LockTable {
 	return lp.remote.getBind()
 }

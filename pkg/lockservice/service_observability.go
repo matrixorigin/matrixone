@@ -59,16 +59,7 @@ func (s *service) GetLockHolder(
 	if err != nil {
 		return pb.WaitTxn{}, false, err
 	}
-	var holder pb.WaitTxn
-	var found bool
-	l.getLock(row, pb.WaitTxn{}, func(lock Lock) {
-		lock.IterHolders(func(v pb.WaitTxn) bool {
-			holder = v
-			found = true
-			return false
-		})
-	})
-	return holder, found, nil
+	return l.getLockHolder(row)
 }
 
 func (s *service) ForceRefreshLockTableBinds(

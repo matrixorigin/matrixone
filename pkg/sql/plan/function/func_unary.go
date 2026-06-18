@@ -7022,6 +7022,9 @@ func normalizeUserLevelLockName(name string) (string, error) {
 	if len(name) == 0 {
 		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not be empty")
 	}
+	if strings.IndexByte(name, 0) >= 0 {
+		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not contain NUL bytes")
+	}
 	normalized := strings.ToLower(name)
 	if utf8.RuneCountInString(normalized) > maxUserLevelLockNameLength {
 		return "", moerr.NewInternalErrorNoCtxf(
@@ -7030,6 +7033,10 @@ func normalizeUserLevelLockName(name string) (string, error) {
 		)
 	}
 	return normalized, nil
+}
+
+func userLevelLockProbeOwner(owner, probeType string) string {
+	return "probe:" + probeType + ":" + owner
 }
 
 func userLevelLockTxnID(owner string, connID uint64, name string) []byte {
@@ -7212,7 +7219,7 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 	if count == 0 {
 		// Probe the lockservice to distinguish "lock does not exist" (NULL)
 		// from "lock exists but held by another session" (0).
-		probeOwner := owner + "\x00release_probe\x00" + name
+		probeOwner := userLevelLockProbeOwner(owner, "release")
 		_, probeErr := ls.Lock(
 			proc.Ctx,
 			userLevelLockTableID,
@@ -7255,7 +7262,7 @@ func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
 	}
 	owner := userLevelLockOwner(proc)
 	connID := userLevelLockConnectionID(proc)
-	probeOwner := owner + "\x00probe\x00" + name
+	probeOwner := userLevelLockProbeOwner(owner, "is_free")
 	_, err = ls.Lock(
 		proc.Ctx,
 		userLevelLockTableID,
@@ -7290,6 +7297,9 @@ func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, erro
 		userLevelLockRow(proc, name),
 		userLevelLockOptions(lockpb.WaitPolicy_FastFail))
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+			return 0, true, nil
+		}
 		return 0, false, err
 	}
 	if !ok {
