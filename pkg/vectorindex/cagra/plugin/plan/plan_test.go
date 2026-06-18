@@ -168,6 +168,51 @@ func TestBuildSecondaryIndexDefs_OK(t *testing.T) {
 	require.NotNil(t, tblDefs[1].Pkey)
 }
 
+// indexOnQuant builds a single-column *tree.Index over colName with a
+// QUANTIZATION option.
+func indexOnQuant(colName, quant string) *tree.Index {
+	idx := indexOn(colName)
+	idx.IndexOption = &tree.IndexOption{Quantization: quant}
+	return idx
+}
+
+// f16ColMap returns a colMap with an int64 pk and a vecf16 base column.
+func f16ColMap(pkName, vecName string) map[string]*plan.ColDef {
+	m := vecColMap(pkName, vecName)
+	m[vecName].Typ.Id = int32(types.T_array_float16)
+	return m
+}
+
+// TestBuildSecondaryIndexDefs_F16Base: a vecf16 base column is accepted.
+func TestBuildSecondaryIndexDefs_F16Base(t *testing.T) {
+	idxDefs, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), f16ColMap("id", "vec"), nil, "id")
+	require.NoError(t, err)
+	require.Len(t, idxDefs, 2)
+}
+
+// TestBuildSecondaryIndexDefs_UnsupportedBase: only vecf32 / vecf16 are valid
+// base columns; vecf64 / vecbf16 / vecint8 / vecuint8 are rejected.
+func TestBuildSecondaryIndexDefs_UnsupportedBase(t *testing.T) {
+	for _, oid := range []types.T{
+		types.T_array_float64, types.T_array_bf16, types.T_array_int8, types.T_array_uint8,
+	} {
+		colMap := vecColMap("id", "vec")
+		colMap["vec"].Typ.Id = int32(oid)
+		_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), colMap, nil, "id")
+		require.Error(t, err, "base type %s must be rejected", oid)
+	}
+}
+
+// TestBuildSecondaryIndexDefs_F16UpcastRejected: vecf16 base + QUANTIZATION
+// float32 is an upcast (4 > 2 bytes) and must be rejected by the downcast
+// guard. (The accepted downcast path — f16 -> int8/uint8 — is exercised
+// end-to-end by the GPU functional BVT, since the full def build past the
+// guard needs a richer compiler context than this stub provides.)
+func TestBuildSecondaryIndexDefs_F16UpcastRejected(t *testing.T) {
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOnQuant("vec", "float32"), f16ColMap("id", "vec"), nil, "id")
+	require.Error(t, err)
+}
+
 // --- schema.go: BuildFullTextIndexDefs -------------------------------------
 
 func TestBuildFullTextIndexDefs_Unsupported(t *testing.T) {
