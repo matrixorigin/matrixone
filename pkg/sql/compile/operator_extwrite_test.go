@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"testing"
 	"time"
 
@@ -25,6 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -117,6 +121,152 @@ func TestExternalInsertStmtTime(t *testing.T) {
 	arg := op.(*insert.Insert)
 	defer arg.Release()
 	require.True(t, arg.InsertCtx.ExternalConfig.Stmt.Equal(want))
+}
+
+func TestExternalInsertTargetIsLocalFile(t *testing.T) {
+	proc := process.NewTopProcess(context.Background(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	fileURL, err := url.Parse("file:///tmp/wext")
+	require.NoError(t, err)
+	s3URL, err := url.Parse("s3://bucket/wext")
+	require.NoError(t, err)
+	proc.GetStageCache().Set("local_stage", stage.StageDef{Name: "local_stage", Url: fileURL})
+	proc.GetStageCache().Set("s3_stage", stage.StageDef{Name: "s3_stage", Url: s3URL})
+
+	node := &plan.Node{InsertCtx: &plan.InsertCtx{TableDef: &plan.TableDef{
+		TableType: catalog.SystemExternalRel,
+		Createsql: extWriteCreatesql(t, "stage://local_stage/p-%U.csv"),
+	}}}
+	isLocal, err := externalInsertTargetIsLocalFile(proc, node, time.Unix(1, 0).UTC())
+	require.NoError(t, err)
+	require.True(t, isLocal)
+
+	node.InsertCtx.TableDef.Createsql = extWriteCreatesql(t, "stage://s3_stage/p-%U.csv")
+	isLocal, err = externalInsertTargetIsLocalFile(proc, node, time.Unix(1, 0).UTC())
+	require.NoError(t, err)
+	require.False(t, isLocal)
+
+	isLocal, err = externalInsertTargetIsLocalFile(proc, nil, time.Unix(1, 0).UTC())
+	require.NoError(t, err)
+	require.False(t, isLocal)
+
+	node.InsertCtx.TableDef.Createsql = "{not json"
+	isLocal, err = externalInsertTargetIsLocalFile(proc, node, time.Unix(1, 0).UTC())
+	require.Error(t, err)
+	require.False(t, isLocal)
+
+	node.InsertCtx.TableDef.Createsql = extWriteCreatesql(t, "")
+	isLocal, err = externalInsertTargetIsLocalFile(proc, node, time.Unix(1, 0).UTC())
+	require.NoError(t, err)
+	require.False(t, isLocal)
+
+	node.InsertCtx.TableDef.Createsql = extWriteCreatesql(t, "stage://local_stage/p-%.csv")
+	isLocal, err = externalInsertTargetIsLocalFile(proc, node, time.Unix(1, 0).UTC())
+	require.Error(t, err)
+	require.False(t, isLocal)
+
+	node.InsertCtx.TableDef.Createsql = extWriteCreatesql(t, "file:///tmp/wext/p-%U.csv")
+	isLocal, err = externalInsertTargetIsLocalFile(proc, node, time.Unix(1, 0).UTC())
+	require.Error(t, err)
+	require.False(t, isLocal)
+}
+
+func TestCompileExternalInsertFileStageMergesToCurrentCN(t *testing.T) {
+	proc := process.NewTopProcess(context.Background(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	fileURL, err := url.Parse("file:///tmp/wext")
+	require.NoError(t, err)
+	proc.GetStageCache().Set("local_stage", stage.StageDef{Name: "local_stage", Url: fileURL})
+
+	c := NewCompile("127.0.0.1:6001", "db", "insert into wext select * from src", "tenant", "uid", nil, proc, nil, false, nil, time.Unix(1, 0).UTC())
+	c.anal = &AnalyzeModule{isFirst: true}
+	node := &plan.Node{InsertCtx: &plan.InsertCtx{
+		Ref:             &plan.ObjectRef{ObjName: "wext"},
+		AddAffectedRows: true,
+		TableDef: &plan.TableDef{
+			Name:      "wext",
+			TableType: catalog.SystemExternalRel,
+			Createsql: extWriteCreatesql(t, "stage://local_stage/p-%U.csv"),
+			Cols:      []*plan.ColDef{{Name: "a"}},
+		},
+	}}
+	input := []*Scope{
+		{Magic: Remote, NodeInfo: engine.Node{Addr: "127.0.0.2:6001", Mcpu: 1}, Proc: proc.NewNoContextChildProc(1)},
+		{Magic: Remote, NodeInfo: engine.Node{Addr: "127.0.0.3:6001", Mcpu: 1}, Proc: proc.NewNoContextChildProc(1)},
+	}
+
+	out, err := c.compileInsert(nil, node, input)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Equal(t, "127.0.0.1:6001", out[0].NodeInfo.Addr)
+	require.Len(t, out[0].PreScopes, 2)
+	require.IsType(t, &insert.Insert{}, out[0].RootOp)
+	require.Equal(t, vm.Insert, out[0].RootOp.OpType())
+
+	c.anal = &AnalyzeModule{isFirst: true}
+	input = []*Scope{
+		{Magic: Remote, NodeInfo: engine.Node{Addr: "127.0.0.2:6001", Mcpu: 1}, Proc: proc.NewNoContextChildProc(1)},
+	}
+	out, err = c.compileInsert(nil, node, input)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Equal(t, "127.0.0.1:6001", out[0].NodeInfo.Addr)
+	require.Len(t, out[0].PreScopes, 1)
+}
+
+func TestCompileExternalInsertReturnsFileStageResolveError(t *testing.T) {
+	proc := process.NewTopProcess(context.Background(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	c := NewCompile("127.0.0.1:6001", "db", "insert into wext select * from src", "tenant", "uid", nil, proc, nil, false, nil, time.Unix(1, 0).UTC())
+	c.anal = &AnalyzeModule{isFirst: true}
+	node := &plan.Node{InsertCtx: &plan.InsertCtx{
+		TableDef: &plan.TableDef{
+			Name:      "wext",
+			TableType: catalog.SystemExternalRel,
+			Createsql: extWriteCreatesql(t, "file:///tmp/wext/p-%U.csv"),
+			Cols:      []*plan.ColDef{{Name: "a"}},
+		},
+	}}
+	input := []*Scope{
+		{Magic: Remote, NodeInfo: engine.Node{Addr: "127.0.0.2:6001", Mcpu: 1}, Proc: proc.NewNoContextChildProc(1)},
+	}
+
+	out, err := c.compileInsert(nil, node, input)
+	require.Error(t, err)
+	require.Nil(t, out)
+}
+
+func TestCompileExternalInsertS3StageKeepsRemoteScopes(t *testing.T) {
+	proc := process.NewTopProcess(context.Background(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	s3URL, err := url.Parse("s3://bucket/wext")
+	require.NoError(t, err)
+	proc.GetStageCache().Set("s3_stage", stage.StageDef{Name: "s3_stage", Url: s3URL})
+
+	c := NewCompile("127.0.0.1:6001", "db", "insert into wext select * from src", "tenant", "uid", nil, proc, nil, false, nil, time.Unix(1, 0).UTC())
+	c.anal = &AnalyzeModule{isFirst: true}
+	node := &plan.Node{InsertCtx: &plan.InsertCtx{
+		Ref:             &plan.ObjectRef{ObjName: "wext"},
+		AddAffectedRows: true,
+		TableDef: &plan.TableDef{
+			Name:      "wext",
+			TableType: catalog.SystemExternalRel,
+			Createsql: extWriteCreatesql(t, "stage://s3_stage/p-%U.csv"),
+			Cols:      []*plan.ColDef{{Name: "a"}},
+		},
+	}}
+	input := []*Scope{
+		{Magic: Remote, NodeInfo: engine.Node{Addr: "127.0.0.2:6001", Mcpu: 1}, Proc: proc.NewNoContextChildProc(1)},
+		{Magic: Remote, NodeInfo: engine.Node{Addr: "127.0.0.3:6001", Mcpu: 1}, Proc: proc.NewNoContextChildProc(1)},
+	}
+
+	out, err := c.compileInsert(nil, node, input)
+	require.NoError(t, err)
+	require.Len(t, out, 2)
+	require.Equal(t, "127.0.0.2:6001", out[0].NodeInfo.Addr)
+	require.Equal(t, "127.0.0.3:6001", out[1].NodeInfo.Addr)
+	require.Empty(t, out[0].PreScopes)
+	require.Empty(t, out[1].PreScopes)
+	require.IsType(t, &insert.Insert{}, out[0].RootOp)
+	require.Equal(t, vm.Insert, out[0].RootOp.OpType())
+	require.IsType(t, &insert.Insert{}, out[1].RootOp)
+	require.Equal(t, vm.Insert, out[1].RootOp.OpType())
 }
 
 // TestExternalInsertDupOperator ensures parallelizing a scope keeps the
