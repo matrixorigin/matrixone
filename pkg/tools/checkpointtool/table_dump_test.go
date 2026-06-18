@@ -894,7 +894,7 @@ func TestRenderCreateTableDDLFromSchema_DoesNotFallbackToCreateSQLWhenColumnType
 	assert.Empty(t, ddl)
 }
 
-func TestRenderCreateTableDDLFromSchema_MapsUnsupportedArrayTypeToJSON(t *testing.T) {
+func TestRenderCreateTableDDLFromSchema_PreservesArrayType(t *testing.T) {
 	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
 		TableName: "t_array",
 		Columns: []TableColumn{
@@ -903,8 +903,8 @@ func TestRenderCreateTableDDLFromSchema_MapsUnsupportedArrayTypeToJSON(t *testin
 		},
 	})
 
-	assert.Contains(t, ddl, "`tags` JSON")
-	assert.NotContains(t, ddl, "ARRAY(VARCHAR(20))")
+	assert.Contains(t, ddl, "`tags` ARRAY(VARCHAR(20))")
+	assert.NotContains(t, ddl, "`tags` JSON")
 }
 
 func TestIsPrintableCreateTableSQLAcceptsExternalTable(t *testing.T) {

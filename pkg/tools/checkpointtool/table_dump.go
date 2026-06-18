@@ -569,9 +569,6 @@ func renderCreateTableDDLFullWithForeignKeys(tableName string, cols []TableColum
 func renderColumnSQLType(col TableColumn) string {
 	sqlType := strings.TrimSpace(col.SQLType)
 	upperType := strings.ToUpper(sqlType)
-	if strings.HasPrefix(upperType, "ARRAY(") {
-		return "JSON"
-	}
 	enumValues := strings.TrimSpace(col.EnumValues)
 	if enumValues == "" {
 		return sqlType
