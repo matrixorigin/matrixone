@@ -137,6 +137,14 @@ commit;
 select count(*) from t3 where k = 'a' and s = 'x';
 select count(*) from t3 where binary k = binary 'a' and binary s = binary 'x';
 
+begin;
+alter table t3 add column rollback_flag int not null default 9;
+alter table t3 modify column body text not null;
+rollback;
+
+select count(*) from t3 where k = 'a' and s = 'x';
+select count(*) from t3 where binary k = binary 'a' and binary s = binary 'x';
+
 insert into t3 (k, s, body, c) values ('a', 'x', '{new}', 0);
 select count(*) from t3 where k = 'a' and s = 'x';
 select count(*) from t3 where binary k = binary 'a' and binary s = binary 'x';
