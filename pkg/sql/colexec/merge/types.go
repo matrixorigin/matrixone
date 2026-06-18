@@ -84,7 +84,20 @@ func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error)
 	if merge.ctr.receiver == nil {
 		_ = merge.Prepare(proc)
 	}
-	merge.ctr.receiver.WaitingEnd()
+	if !merge.ctr.receiver.WaitingEndWithTimeout(process.PipelineCleanupWaitTimeout) {
+		state := merge.ctr.receiver.State()
+		process.WarnPipelineCleanupf(
+			proc,
+			"merge_cleanup_wait_end_timeout",
+			"merge cleanup timed out waiting for pipeline end signals: timeout=%s alive=%d nil_batch_count=%v channel_len=%v channel_cap=%v pipeline_failed=%t err=%v",
+			process.PipelineCleanupWaitTimeout,
+			state.Alive,
+			state.NilBatches,
+			state.ChannelLen,
+			state.ChannelCap,
+			pipelineFailed,
+			err)
+	}
 }
 
 func (merge *Merge) Free(proc *process.Process, pipelineFailed bool, err error) {
