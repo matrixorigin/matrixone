@@ -45,7 +45,7 @@ var runSql_streaming = sqlexec.RunStreamingSql
 // IvfpqModel wraps a GpuIvfPq index and handles load/save to secondary index tables.
 type IvfpqModel[B, Q cuvs.VectorType] struct {
 	Id          string
-	Index       *cuvs.GpuIvfPq[Q]
+	Index       *cuvs.GpuIvfPq[B, Q]
 	Path        string
 	FileSize    int64
 	MaxCapacity uint64
@@ -139,7 +139,7 @@ func (idx *IvfpqModel[B, Q]) InitEmpty(totalCount uint64) error {
 	if buildMode == cuvs.Replicated {
 		buildMode = cuvs.SingleGpu
 	}
-	gi, err := cuvs.NewGpuIvfPqEmpty[Q](
+	gi, err := cuvs.NewGpuIvfPqEmpty[B, Q](
 		totalCount,
 		uint32(idx.Idxcfg.CuvsIvfpq.Dimensions),
 		cuvsMetric,
@@ -185,14 +185,14 @@ func (idx *IvfpqModel[B, Q]) AddChunk(chunk []Q, chunkCount uint64, ids []int64)
 	return nil
 }
 
-// AddChunkQuantizeHalf appends a chunk of vecf16 (half) vectors, quantizing
-// natively to the 1-byte storage type T (int8/uint8). Used for a vecf16 base
+// AddChunkQuantize appends a chunk of base-typed (B) vectors, quantizing
+// natively to the 1-byte storage type Q (int8/uint8). Used for a vecf16 base
 // with QUANTIZATION=int8/uint8 — no f32 detour.
-func (idx *IvfpqModel[B, Q]) AddChunkQuantizeHalf(chunk []cuvs.Float16, chunkCount uint64, ids []int64) error {
+func (idx *IvfpqModel[B, Q]) AddChunkQuantize(chunk []B, chunkCount uint64, ids []int64) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("IvfpqModel: index not initialized; call InitEmpty first")
 	}
-	if err := idx.Index.AddChunkQuantizeHalf(chunk, chunkCount, ids); err != nil {
+	if err := idx.Index.AddChunkQuantize(chunk, chunkCount, ids); err != nil {
 		return err
 	}
 	idx.Len += int64(chunkCount)
@@ -558,7 +558,7 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 		return err
 	}
 
-	gi, err := cuvs.NewGpuIvfPqEmpty[Q](
+	gi, err := cuvs.NewGpuIvfPqEmpty[B, Q](
 		uint64(idxcfg.IndexCapacity),
 		uint32(idxcfg.CuvsIvfpq.Dimensions),
 		cuvsMetric,

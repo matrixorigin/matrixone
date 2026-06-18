@@ -31,17 +31,28 @@ import (
 // When the current sub-index reaches IndexCapacity, it is finalized (Build called) and a
 // new sub-index is created, mirroring the HnswBuild pattern.
 //
+// CagraBuild carries two element types: base/quantizer-source B (the decoded
+// source column type — f32 or f16) and storage Q (the cuVS sub-index storage
+// type). For a direct index B==Q; for a quantized index (e.g. vecf16 base ->
+// int8 storage) B is the base type and Q the 1-byte storage type.
+//
 // CagraBuild is single-threaded; the cagra_create table function runs with IsSingle=true.
-type CagraBuild[Q cuvs.VectorType] struct {
+type CagraBuild[B, Q cuvs.VectorType] struct {
 	uid     string
 	idxcfg  vectorindex.IndexConfig
 	tblcfg  vectorindex.IndexTableConfig
-	indexes []*CagraModel[float32, Q] // completed sub-indexes (Build already called)
-	current *CagraModel[float32, Q]   // sub-index currently being filled
+	indexes []*CagraModel[B, Q] // completed sub-indexes (Build already called)
+	current *CagraModel[B, Q]   // sub-index currently being filled
 	nthread uint32
 	devices []int
 	count   int64    // vectors in current sub-index
-	idBuf   [1]int64 // reusable buffer for AddFloat to avoid per-call heap allocation
+	idBuf   [1]int64 // reusable buffer for AddRow to avoid per-call heap allocation
+
+	// (B, Q) routing tags computed once at construction. bIsHalf: the base
+	// type is f16. qIsHalf: the storage type is f16 (so a half base goes
+	// native rather than quantized).
+	bIsHalf bool
+	qIsHalf bool
 
 	// Filter column metadata (INCLUDE columns). Stashed once via SetFilterColumns
 	// and re-applied to every new sub-index allocated by getOrCreateCurrent, so
@@ -49,31 +60,33 @@ type CagraBuild[Q cuvs.VectorType] struct {
 	filterColMetaJSON string
 }
 
-// NewCagraBuild creates a new CagraBuild ready for AddFloat calls.
-func NewCagraBuild[Q cuvs.VectorType](
+// NewCagraBuild creates a new CagraBuild ready for AddRow calls.
+func NewCagraBuild[B, Q cuvs.VectorType](
 	uid string,
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
 	nthread uint32,
 	devices []int,
-) (*CagraBuild[Q], error) {
-	return &CagraBuild[Q]{
+) (*CagraBuild[B, Q], error) {
+	return &CagraBuild[B, Q]{
 		uid:     uid,
 		idxcfg:  idxcfg,
 		tblcfg:  tblcfg,
-		indexes: make([]*CagraModel[float32, Q], 0, 4),
+		indexes: make([]*CagraModel[B, Q], 0, 4),
 		nthread: nthread,
 		devices: devices,
+		bIsHalf: cuvs.GetQuantization[B]() == cuvs.F16,
+		qIsHalf: cuvs.GetQuantization[Q]() == cuvs.F16,
 	}, nil
 }
 
-func (b *CagraBuild[Q]) createKey(n int) string {
+func (b *CagraBuild[B, Q]) createKey(n int) string {
 	return fmt.Sprintf("%s:%d", b.uid, n)
 }
 
 // getOrCreateCurrent returns the current sub-index, creating a new one if needed.
 // When the current sub-index is full it is finalized (Build called) and a new one is started.
-func (b *CagraBuild[Q]) getOrCreateCurrent() (*CagraModel[float32, Q], error) {
+func (b *CagraBuild[B, Q]) getOrCreateCurrent() (*CagraModel[B, Q], error) {
 	capacity := b.idxcfg.IndexCapacity
 
 	if b.current != nil && b.count >= capacity {
@@ -88,7 +101,7 @@ func (b *CagraBuild[Q]) getOrCreateCurrent() (*CagraModel[float32, Q], error) {
 
 	if b.current == nil {
 		key := b.createKey(len(b.indexes))
-		m, err := NewCagraModelForBuild[float32, Q](key, b.idxcfg, b.nthread, b.devices)
+		m, err := NewCagraModelForBuild[B, Q](key, b.idxcfg, b.nthread, b.devices)
 		if err != nil {
 			return nil, err
 		}
@@ -111,63 +124,52 @@ func (b *CagraBuild[Q]) getOrCreateCurrent() (*CagraModel[float32, Q], error) {
 
 // SetFilterColumns registers pre-filter (INCLUDE column) metadata. The JSON
 // is re-applied to each new sub-index allocated during the build. Must be
-// called before the first AddFloat.
-func (b *CagraBuild[Q]) SetFilterColumns(colMetaJSON string) {
+// called before the first AddRow.
+func (b *CagraBuild[B, Q]) SetFilterColumns(colMetaJSON string) {
 	b.filterColMetaJSON = colMetaJSON
 }
 
 // AddFilterChunk appends nrows raw filter-column bytes to the *current*
 // sub-index being filled. Call once per filter column per row batch, in the
-// same cadence as AddFloat (which drives sub-index rotation).
+// same cadence as AddRow (which drives sub-index rotation).
 // nullBitmap is a packed []uint32 (LSB-first, bit i = 1 means row i IS NULL)
 // of ceil(nrows/32) entries, or nil when the chunk has no nulls.
-func (b *CagraBuild[Q]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
+func (b *CagraBuild[B, Q]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
 	if b.current == nil {
-		return moerr.NewInternalErrorNoCtx("CagraBuild.AddFilterChunk: no current sub-index (call AddFloat first)")
+		return moerr.NewInternalErrorNoCtx("CagraBuild.AddFilterChunk: no current sub-index (call AddRow first)")
 	}
 	return b.current.Index.AddFilterChunk(colIdx, data, nullBitmap, nrows)
 }
 
-// AddFloat appends one float32 vector with the given int64 id.
-// The internal quantization (T) is handled by AddChunkFloat.
+// AddRow buffers one source row. The create passes fa (decoded f32) for an
+// f32 base, or hf (decoded half) for an f16 base; the unused one is nil.
+// Routing by (B, Q):
+//   - B is f32: feed fa through AddChunkFloat (the C add_chunk_float path
+//     handles f32 -> Q identity/cast/quantize).
+//   - B is f16, Q is f16 (direct, Q==B): native AddChunk([]Q).
+//   - B is f16, Q is int8/uint8: quantize via AddChunkQuantize([]B).
+//
 // idBuf is reused across calls to avoid a per-call heap allocation.
-func (b *CagraBuild[Q]) AddFloat(id int64, vec []float32) error {
+func (b *CagraBuild[B, Q]) AddRow(id int64, fa []float32, hf []cuvs.Float16) error {
 	idx, err := b.getOrCreateCurrent()
 	if err != nil {
 		return err
 	}
 	b.idBuf[0] = id
-	if err = idx.AddChunkFloat(vec, 1, b.idBuf[:]); err != nil {
-		return err
-	}
-	b.count++
-	return nil
-}
 
-// Add appends one native storage-type (T) vector — used when the base column
-// type equals the storage type (no quantization, e.g. vecf16 base -> half).
-func (b *CagraBuild[Q]) Add(id int64, vec []Q) error {
-	idx, err := b.getOrCreateCurrent()
+	if !b.bIsHalf {
+		// f32 base.
+		err = idx.AddChunkFloat(fa, 1, b.idBuf[:])
+	} else if b.qIsHalf {
+		// f16 base, f16 storage (direct, Q == B == Float16).
+		vec, _ := any(hf).([]Q)
+		err = idx.AddChunk(vec, 1, b.idBuf[:])
+	} else {
+		// f16 base, int8/uint8 storage: native half-source quantize.
+		vec, _ := any(hf).([]B)
+		err = idx.AddChunkQuantize(vec, 1, b.idBuf[:])
+	}
 	if err != nil {
-		return err
-	}
-	b.idBuf[0] = id
-	if err = idx.AddChunk(vec, 1, b.idBuf[:]); err != nil {
-		return err
-	}
-	b.count++
-	return nil
-}
-
-// AddQuantizeHalf appends one vecf16 (half) vector, quantizing natively to the
-// 1-byte storage type T (int8/uint8). Used for a vecf16 base + QUANTIZATION.
-func (b *CagraBuild[Q]) AddQuantizeHalf(id int64, vec []cuvs.Float16) error {
-	idx, err := b.getOrCreateCurrent()
-	if err != nil {
-		return err
-	}
-	b.idBuf[0] = id
-	if err = idx.AddChunkQuantizeHalf(vec, 1, b.idBuf[:]); err != nil {
 		return err
 	}
 	b.count++
@@ -176,7 +178,7 @@ func (b *CagraBuild[Q]) AddQuantizeHalf(id int64, vec []cuvs.Float16) error {
 
 // ToInsertSql finalizes any in-progress sub-index, serializes all sub-indexes to the
 // storage table, and returns INSERT SQL statements (storage chunks + single metadata row).
-func (b *CagraBuild[Q]) ToInsertSql(ts int64) ([]string, error) {
+func (b *CagraBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 	// Finalize the current sub-index if it contains vectors.
 	if b.current != nil && b.count > 0 {
 		if err := b.current.Build(); err != nil {
@@ -211,7 +213,7 @@ func (b *CagraBuild[Q]) ToInsertSql(ts int64) ([]string, error) {
 }
 
 // Destroy frees all GPU memory and removes any temporary files.
-func (b *CagraBuild[Q]) Destroy() error {
+func (b *CagraBuild[B, Q]) Destroy() error {
 	var errs error
 	if b.current != nil {
 		if err := b.current.Destroy(); err != nil {
@@ -229,6 +231,6 @@ func (b *CagraBuild[Q]) Destroy() error {
 }
 
 // GetIndexes returns the completed sub-indexes (for testing).
-func (b *CagraBuild[Q]) GetIndexes() []*CagraModel[float32, Q] {
+func (b *CagraBuild[B, Q]) GetIndexes() []*CagraModel[B, Q] {
 	return b.indexes
 }

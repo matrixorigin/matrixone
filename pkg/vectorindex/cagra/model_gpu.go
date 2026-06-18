@@ -48,7 +48,7 @@ var runSql_streaming = sqlexec.RunStreamingSql
 // T must satisfy cuvs.VectorType (float32 | Float16 | int8 | uint8).
 type CagraModel[B, Q cuvs.VectorType] struct {
 	Id          string
-	Index       *cuvs.GpuCagra[Q]
+	Index       *cuvs.GpuCagra[B, Q]
 	Path        string // local tar file path; empty when index is in GPU memory only
 	FileSize    int64
 	MaxCapacity uint64
@@ -138,7 +138,7 @@ func (idx *CagraModel[B, Q]) InitEmpty(totalCount uint64) error {
 	if err != nil {
 		return err
 	}
-	gi, err := cuvs.NewGpuCagraEmpty[Q](
+	gi, err := cuvs.NewGpuCagraEmpty[B, Q](
 		totalCount,
 		uint32(idx.Idxcfg.CuvsCagra.Dimensions),
 		cuvsMetric,
@@ -176,14 +176,14 @@ func (idx *CagraModel[B, Q]) AddChunk(chunk []Q, chunkCount uint64, ids []int64)
 	return nil
 }
 
-// AddChunkQuantizeHalf appends a chunk of vecf16 (half) vectors, quantizing
-// natively to the 1-byte storage type T (int8/uint8). Used for a vecf16 base
+// AddChunkQuantize appends a chunk of base-typed (B) vectors, quantizing
+// natively to the 1-byte storage type Q (int8/uint8). Used for a vecf16 base
 // with QUANTIZATION=int8/uint8 — no f32 detour.
-func (idx *CagraModel[B, Q]) AddChunkQuantizeHalf(chunk []cuvs.Float16, chunkCount uint64, ids []int64) error {
+func (idx *CagraModel[B, Q]) AddChunkQuantize(chunk []B, chunkCount uint64, ids []int64) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("CagraModel: index not initialized; call InitEmpty first")
 	}
-	if err := idx.Index.AddChunkQuantizeHalf(chunk, chunkCount, ids); err != nil {
+	if err := idx.Index.AddChunkQuantize(chunk, chunkCount, ids); err != nil {
 		return err
 	}
 	idx.Len += int64(chunkCount)
@@ -565,7 +565,7 @@ func (idx *CagraModel[B, Q]) LoadIndex(
 		return err
 	}
 
-	gi, err := cuvs.NewGpuCagraEmpty[Q](
+	gi, err := cuvs.NewGpuCagraEmpty[B, Q](
 		uint64(idxcfg.IndexCapacity),
 		uint32(idxcfg.CuvsCagra.Dimensions),
 		cuvsMetric,

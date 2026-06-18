@@ -1,4 +1,4 @@
-/* 
+/*
  * Copyright 2021 Matrix Origin
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,7 +16,15 @@
 
 /*
  * IVF-PQ C Wrapper Implementation
- * Supported data types (via quantization_t): Quantization_F32, Quantization_F16, Quantization_INT8, Quantization_UINT8
+ *
+ * Two type axes via quantization_t:
+ *   btype = base / query / quantizer-SOURCE element type (Quantization_F32 or F16)
+ *   qtype = storage element type (Quantization_F32, F16, INT8, UINT8)
+ *
+ * Wired (btype, qtype) combinations:
+ *   F32 base: F32, F16, INT8, UINT8 storage
+ *   F16 base: F16, INT8, UINT8 storage
+ * Any other combination throws "unsupported (base,storage) type combination".
  */
 
 #include "ivf_pq_c.h"
@@ -27,181 +35,175 @@
 #include <memory>
 #include <limits>
 #include <algorithm>
+#include <type_traits>
 
 using namespace matrixone;
 
 struct gpu_ivf_pq_any_t {
-    quantization_t qtype;
+    quantization_t btype;   // base / query / quantizer-source element type
+    quantization_t qtype;   // storage element type
     void* ptr;
 
-    gpu_ivf_pq_any_t(quantization_t q, void* p) : qtype(q), ptr(p) {}
-    ~gpu_ivf_pq_any_t() {
-        switch (qtype) {
-            case Quantization_F32: {
-                auto* p = static_cast<gpu_ivf_pq_t<float>*>(ptr);
-                p->destroy();
-                delete p;
-                break;
-            }
-            case Quantization_F16: {
-                auto* p = static_cast<gpu_ivf_pq_t<half>*>(ptr);
-                p->destroy();
-                delete p;
-                break;
-            }
-            case Quantization_INT8: {
-                auto* p = static_cast<gpu_ivf_pq_t<int8_t>*>(ptr);
-                p->destroy();
-                delete p;
-                break;
-            }
-            case Quantization_UINT8: {
-                auto* p = static_cast<gpu_ivf_pq_t<uint8_t>*>(ptr);
-                p->destroy();
-                delete p;
-                break;
-            }
-            default: break;
-        }
-    }
+    gpu_ivf_pq_any_t(quantization_t b, quantization_t q, void* p)
+        : btype(b), qtype(q), ptr(p) {}
+    ~gpu_ivf_pq_any_t();
 };
+
+// Static dispatch: resolves the concrete gpu_ivf_pq_t<B,Q> for (btype,qtype) and
+// invokes fn with a typed pointer. fn is a generic lambda; recover B/Q inside it
+// via decltype(idx)::base_type / ::storage_type. Throws on unsupported combos.
+template <typename Fn>
+static auto ivf_pq_dispatch(const gpu_ivf_pq_any_t* a, Fn&& fn) {
+    switch (a->btype) {
+    case Quantization_F32:
+        switch (a->qtype) {
+        case Quantization_F32:   return fn(static_cast<gpu_ivf_pq_t<float, float  >*>(a->ptr));
+        case Quantization_F16:   return fn(static_cast<gpu_ivf_pq_t<float, half   >*>(a->ptr));
+        case Quantization_INT8:  return fn(static_cast<gpu_ivf_pq_t<float, int8_t >*>(a->ptr));
+        case Quantization_UINT8: return fn(static_cast<gpu_ivf_pq_t<float, uint8_t>*>(a->ptr));
+        default: break;
+        }
+        break;
+    case Quantization_F16:
+        switch (a->qtype) {
+        case Quantization_F16:   return fn(static_cast<gpu_ivf_pq_t<half, half   >*>(a->ptr));
+        case Quantization_INT8:  return fn(static_cast<gpu_ivf_pq_t<half, int8_t >*>(a->ptr));
+        case Quantization_UINT8: return fn(static_cast<gpu_ivf_pq_t<half, uint8_t>*>(a->ptr));
+        default: break;
+        }
+        break;
+    default: break;
+    }
+    throw std::runtime_error("gpu_ivf_pq: unsupported (base,storage) type combination");
+}
+
+gpu_ivf_pq_any_t::~gpu_ivf_pq_any_t() {
+    if (!ptr) return;
+    try {
+        ivf_pq_dispatch(this, [](auto* idx) {
+            idx->destroy();
+            delete idx;
+        });
+    } catch (...) {
+        // unsupported combo never gets a live ptr — nothing to free
+    }
+}
+
+// Construct a new gpu_ivf_pq_t<B,Q> for the wired (btype,qtype) combos.
+// Maker is a generic lambda invoked as maker(static type tag) -> void*; it
+// receives a null typed pointer purely to recover B and Q.
+template <typename Maker>
+static void* ivf_pq_construct(quantization_t btype, quantization_t qtype, Maker&& maker) {
+    switch (btype) {
+    case Quantization_F32:
+        switch (qtype) {
+        case Quantization_F32:   return maker(static_cast<gpu_ivf_pq_t<float, float  >*>(nullptr));
+        case Quantization_F16:   return maker(static_cast<gpu_ivf_pq_t<float, half   >*>(nullptr));
+        case Quantization_INT8:  return maker(static_cast<gpu_ivf_pq_t<float, int8_t >*>(nullptr));
+        case Quantization_UINT8: return maker(static_cast<gpu_ivf_pq_t<float, uint8_t>*>(nullptr));
+        default: break;
+        }
+        break;
+    case Quantization_F16:
+        switch (qtype) {
+        case Quantization_F16:   return maker(static_cast<gpu_ivf_pq_t<half, half   >*>(nullptr));
+        case Quantization_INT8:  return maker(static_cast<gpu_ivf_pq_t<half, int8_t >*>(nullptr));
+        case Quantization_UINT8: return maker(static_cast<gpu_ivf_pq_t<half, uint8_t>*>(nullptr));
+        default: break;
+        }
+        break;
+    default: break;
+    }
+    throw std::runtime_error("gpu_ivf_pq: unsupported (base,storage) type combination");
+}
 
 extern "C" {
 
-gpu_ivf_pq_c gpu_ivf_pq_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
+gpu_ivf_pq_c gpu_ivf_pq_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension,
                                  distance_type_t metric_c, ivf_pq_build_params_t build_params,
-                                 const int* devices, int device_count, uint32_t nthread, 
-                                 distribution_mode_t dist_mode, quantization_t qtype, 
+                                 const int* devices, int device_count, uint32_t nthread,
+                                 distribution_mode_t dist_mode, quantization_t btype, quantization_t qtype,
                                  const int64_t* ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
-        void* ptr = nullptr;
-        switch (qtype) {
-            case Quantization_F32:
-                ptr = new gpu_ivf_pq_t<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
-                break;
-            case Quantization_F16:
-                ptr = new gpu_ivf_pq_t<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
-                break;
-            case Quantization_INT8:
-                ptr = new gpu_ivf_pq_t<int8_t>(static_cast<const int8_t*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
-                break;
-            case Quantization_UINT8:
-                ptr = new gpu_ivf_pq_t<uint8_t>(static_cast<const uint8_t*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
-                break;
-            default: return nullptr;
-        }
-        return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(qtype, ptr));
+        void* ptr = ivf_pq_construct(btype, qtype, [&](auto* tag) -> void* {
+            using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
+            using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
+            // The dataset-providing constructor takes storage-typed (Q) data and
+            // copies it directly into flattened_host_dataset (no quantization here;
+            // quantization happens via add_chunk_quantize / add_chunk_float).
+            return new gpu_ivf_pq_t<B, Q>(static_cast<const Q*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
+        });
+        return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(btype, qtype, ptr));
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_new", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_new", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_new", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_new", "unknown C++ exception");
     }
     return nullptr;
 }
 
-gpu_ivf_pq_c gpu_ivf_pq_new_from_data_file(const char* data_filename, distance_type_t metric_c, 
+gpu_ivf_pq_c gpu_ivf_pq_new_from_data_file(const char* data_filename, distance_type_t metric_c,
                                                 ivf_pq_build_params_t build_params,
-                                                const int* devices, int device_count, uint32_t nthread, 
-                                                distribution_mode_t dist_mode, quantization_t qtype, void* errmsg) {
+                                                const int* devices, int device_count, uint32_t nthread,
+                                                distribution_mode_t dist_mode, quantization_t btype, quantization_t qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
-        void* ptr = nullptr;
-        switch (qtype) {
-            case Quantization_F32:
-                ptr = new gpu_ivf_pq_t<float>(std::string(data_filename), metric_c, build_params, devs, nthread, dist_mode);
-                break;
-            case Quantization_F16:
-                ptr = new gpu_ivf_pq_t<half>(std::string(data_filename), metric_c, build_params, devs, nthread, dist_mode);
-                break;
-            case Quantization_INT8:
-                ptr = new gpu_ivf_pq_t<int8_t>(std::string(data_filename), metric_c, build_params, devs, nthread, dist_mode);
-                break;
-            case Quantization_UINT8:
-                ptr = new gpu_ivf_pq_t<uint8_t>(std::string(data_filename), metric_c, build_params, devs, nthread, dist_mode);
-                break;
-            default: return nullptr;
-        }
-        return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(qtype, ptr));
+        void* ptr = ivf_pq_construct(btype, qtype, [&](auto* tag) -> void* {
+            using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
+            using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
+            return new gpu_ivf_pq_t<B, Q>(std::string(data_filename), metric_c, build_params, devs, nthread, dist_mode);
+        });
+        return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(btype, qtype, ptr));
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_new_from_data_file", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_new_from_data_file", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_new_from_data_file", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_new_from_data_file", "unknown C++ exception");
     }
     return nullptr;
 }
 
-gpu_ivf_pq_c gpu_ivf_pq_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric_c, 
+gpu_ivf_pq_c gpu_ivf_pq_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric_c,
                                        ivf_pq_build_params_t build_params,
-                                       const int* devices, int device_count, uint32_t nthread, 
-                                       distribution_mode_t dist_mode, quantization_t qtype, 
+                                       const int* devices, int device_count, uint32_t nthread,
+                                       distribution_mode_t dist_mode, quantization_t btype, quantization_t qtype,
                                        const int64_t* ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
-        void* ptr = nullptr;
-        switch (qtype) {
-            case Quantization_F32:
-                ptr = new gpu_ivf_pq_t<float>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
-                break;
-            case Quantization_F16:
-                ptr = new gpu_ivf_pq_t<half>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
-                break;
-            case Quantization_INT8:
-                ptr = new gpu_ivf_pq_t<int8_t>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
-                break;
-            case Quantization_UINT8:
-                ptr = new gpu_ivf_pq_t<uint8_t>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
-                break;
-            default: return nullptr;
-        }
-        return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(qtype, ptr));
+        void* ptr = ivf_pq_construct(btype, qtype, [&](auto* tag) -> void* {
+            using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
+            using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
+            return new gpu_ivf_pq_t<B, Q>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
+        });
+        return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(btype, qtype, ptr));
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_new_empty", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_new_empty", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_new_empty", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_new_empty", "unknown C++ exception");
     }
     return nullptr;
 }
 
 gpu_ivf_pq_c gpu_ivf_pq_load_file(const char* filename, uint32_t dimension, distance_type_t metric_c,
                                     ivf_pq_build_params_t build_params,
-                                    const int* devices, int device_count, uint32_t nthread, 
-                                    distribution_mode_t dist_mode, quantization_t qtype, void* errmsg) {
+                                    const int* devices, int device_count, uint32_t nthread,
+                                    distribution_mode_t dist_mode, quantization_t btype, quantization_t qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
-        void* ptr = nullptr;
-        switch (qtype) {
-            case Quantization_F32:
-                ptr = new gpu_ivf_pq_t<float>(std::string(filename), dimension, metric_c, build_params, devs, nthread, dist_mode);
-                break;
-            case Quantization_F16:
-                ptr = new gpu_ivf_pq_t<half>(std::string(filename), dimension, metric_c, build_params, devs, nthread, dist_mode);
-                break;
-            case Quantization_INT8:
-                ptr = new gpu_ivf_pq_t<int8_t>(std::string(filename), dimension, metric_c, build_params, devs, nthread, dist_mode);
-                break;
-            case Quantization_UINT8:
-                ptr = new gpu_ivf_pq_t<uint8_t>(std::string(filename), dimension, metric_c, build_params, devs, nthread, dist_mode);
-                break;
-            default: return nullptr;
-        }
-        return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(qtype, ptr));
+        void* ptr = ivf_pq_construct(btype, qtype, [&](auto* tag) -> void* {
+            using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
+            using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
+            return new gpu_ivf_pq_t<B, Q>(std::string(filename), dimension, metric_c, build_params, devs, nthread, dist_mode);
+        });
+        return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(btype, qtype, ptr));
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_load_file", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_load_file", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_load_file", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_load_file", "unknown C++ exception");
     }
     return nullptr;
 }
@@ -211,51 +213,31 @@ void gpu_ivf_pq_destroy(gpu_ivf_pq_c index_c, void* errmsg) {
     try {
         delete static_cast<gpu_ivf_pq_any_t*>(index_c);
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_destroy", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_destroy", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_destroy", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_destroy", "unknown C++ exception");
     }
 }
 
 void gpu_ivf_pq_start(gpu_ivf_pq_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->start(); break;
-            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->start(); break;
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->start(); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->start(); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [](auto* idx) { idx->start(); });
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_start", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_start", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_start", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_start", "unknown C++ exception");
     }
 }
 
 void gpu_ivf_pq_build(gpu_ivf_pq_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->build(); break;
-            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->build(); break;
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->build(); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->build(); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [](auto* idx) { idx->build(); });
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_build", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_build", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_build", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_build", "unknown C++ exception");
     }
 }
 
@@ -263,14 +245,10 @@ void gpu_ivf_pq_extend(gpu_ivf_pq_c index_c, const void* new_data, uint64_t n_ro
                        const int64_t* new_ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32:  static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->extend(static_cast<const float*>(new_data), n_rows, new_ids); break;
-            case Quantization_F16:  static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->extend(static_cast<const half*>(new_data), n_rows, new_ids); break;
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->extend(static_cast<const int8_t*>(new_data), n_rows, new_ids); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->extend(static_cast<const uint8_t*>(new_data), n_rows, new_ids); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            using Q = typename std::remove_pointer_t<decltype(idx)>::storage_type;
+            idx->extend(static_cast<const Q*>(new_data), n_rows, new_ids);
+        });
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_extend", e.what());
     } catch (...) {
@@ -282,14 +260,9 @@ void gpu_ivf_pq_extend_float(gpu_ivf_pq_c index_c, const float* new_data, uint64
                              const int64_t* new_ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32:  static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->extend_float(new_data, n_rows, new_ids); break;
-            case Quantization_F16:  static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->extend_float(new_data, n_rows, new_ids); break;
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->extend_float(new_data, n_rows, new_ids); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->extend_float(new_data, n_rows, new_ids); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            idx->extend_float(new_data, n_rows, new_ids);
+        });
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_extend_float", e.what());
     } catch (...) {
@@ -300,212 +273,132 @@ void gpu_ivf_pq_extend_float(gpu_ivf_pq_c index_c, const float* new_data, uint64
 void gpu_ivf_pq_add_chunk(gpu_ivf_pq_c index_c, const void* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->add_chunk(static_cast<const float*>(chunk_data), chunk_count, -1, ids); break;
-            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->add_chunk(static_cast<const half*>(chunk_data), chunk_count, -1, ids); break;
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->add_chunk(static_cast<const int8_t*>(chunk_data), chunk_count, -1, ids); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->add_chunk(static_cast<const uint8_t*>(chunk_data), chunk_count, -1, ids); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            using Q = typename std::remove_pointer_t<decltype(idx)>::storage_type;
+            idx->add_chunk(static_cast<const Q*>(chunk_data), chunk_count, -1, ids);
+        });
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_add_chunk", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_add_chunk", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_add_chunk", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_add_chunk", "unknown C++ exception");
     }
 }
 
 void gpu_ivf_pq_add_chunk_float(gpu_ivf_pq_c index_c, const float* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, -1, ids); break;
-            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, -1, ids); break;
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, -1, ids); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, -1, ids); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            idx->add_chunk_float(chunk_data, chunk_count, -1, ids);
+        });
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_add_chunk_float", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_add_chunk_float", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_add_chunk_float", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_add_chunk_float", "unknown C++ exception");
     }
 }
 
-void gpu_ivf_pq_add_chunk_quantize_half(gpu_ivf_pq_c index_c, const void* half_data, uint64_t chunk_count, const int64_t* ids, void* errmsg) {
+void gpu_ivf_pq_add_chunk_quantize(gpu_ivf_pq_c index_c, const void* base_data, uint64_t chunk_count, const int64_t* ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        const half* hd = static_cast<const half*>(half_data);
-        switch (any->qtype) {
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->add_chunk_quantize_half(hd, chunk_count, -1, ids); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->add_chunk_quantize_half(hd, chunk_count, -1, ids); break;
-            default: throw std::runtime_error("gpu_ivf_pq_add_chunk_quantize_half: requires int8/uint8 storage");
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            using B = typename std::remove_pointer_t<decltype(idx)>::base_type;
+            idx->add_chunk_quantize(static_cast<const B*>(base_data), chunk_count, -1, ids);
+        });
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_add_chunk_quantize_half", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_add_chunk_quantize", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_add_chunk_quantize_half", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_add_chunk_quantize", "unknown C++ exception");
     }
 }
 
-void gpu_ivf_pq_quantize_half(gpu_ivf_pq_c index_c, const void* half_data, uint64_t num_queries, void* out, void* errmsg) {
+void gpu_ivf_pq_quantize_query(gpu_ivf_pq_c index_c, const void* base_data, uint64_t num_queries, void* out, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        const half* hd = static_cast<const half*>(half_data);
-        switch (any->qtype) {
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->quantize_half_query(hd, num_queries, static_cast<int8_t*>(out)); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->quantize_half_query(hd, num_queries, static_cast<uint8_t*>(out)); break;
-            default: throw std::runtime_error("gpu_ivf_pq_quantize_half: requires int8/uint8 storage");
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            using B = typename std::remove_pointer_t<decltype(idx)>::base_type;
+            using Q = typename std::remove_pointer_t<decltype(idx)>::storage_type;
+            idx->quantize_query(static_cast<const B*>(base_data), num_queries, static_cast<Q*>(out));
+        });
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_quantize_half", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_quantize_query", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_quantize_half", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_quantize_query", "unknown C++ exception");
     }
 }
 
-void gpu_ivf_pq_train_quantizer(gpu_ivf_pq_c index_c, const float* train_data, uint64_t n_samples, void* errmsg) {
+void gpu_ivf_pq_train_quantizer(gpu_ivf_pq_c index_c, const void* train_data, uint64_t n_samples, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->train_quantizer(train_data, n_samples); break;
-            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->train_quantizer(train_data, n_samples); break;
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->train_quantizer(train_data, n_samples); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->train_quantizer(train_data, n_samples); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            using B = typename std::remove_pointer_t<decltype(idx)>::base_type;
+            idx->train_quantizer(static_cast<const B*>(train_data), n_samples);
+        });
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_train_quantizer", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_train_quantizer", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_train_quantizer", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_train_quantizer", "unknown C++ exception");
     }
 }
 
 void gpu_ivf_pq_set_batch_window(gpu_ivf_pq_c index_c, int64_t window_us, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->set_batch_window(window_us); break;
-            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->set_batch_window(window_us); break;
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->set_batch_window(window_us); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->set_batch_window(window_us); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) { idx->set_batch_window(window_us); });
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_set_batch_window", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_set_batch_window", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_set_batch_window", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_set_batch_window", "unknown C++ exception");
     }
 }
 
 void gpu_ivf_pq_set_dynb_conservative_dispatch(gpu_ivf_pq_c index_c, bool enable, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->set_dynb_conservative_dispatch(enable); break;
-            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->set_dynb_conservative_dispatch(enable); break;
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->set_dynb_conservative_dispatch(enable); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->set_dynb_conservative_dispatch(enable); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) { idx->set_dynb_conservative_dispatch(enable); });
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_set_dynb_conservative_dispatch", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_set_dynb_conservative_dispatch", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_set_dynb_conservative_dispatch", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_set_dynb_conservative_dispatch", "unknown C++ exception");
     }
 }
 
 void gpu_ivf_pq_set_quantizer(gpu_ivf_pq_c index_c, float min, float max, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->set_quantizer(min, max); break;
-            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->set_quantizer(min, max); break;
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->set_quantizer(min, max); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->set_quantizer(min, max); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) { idx->set_quantizer(min, max); });
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_set_quantizer", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_set_quantizer", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_set_quantizer", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_set_quantizer", "unknown C++ exception");
     }
 }
 
 void gpu_ivf_pq_get_quantizer(gpu_ivf_pq_c index_c, float* min, float* max, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->get_quantizer(min, max); break;
-            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->get_quantizer(min, max); break;
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->get_quantizer(min, max); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->get_quantizer(min, max); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) { idx->get_quantizer(min, max); });
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_get_quantizer", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_get_quantizer", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_get_quantizer", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_get_quantizer", "unknown C++ exception");
     }
 }
 
 void gpu_ivf_pq_save(gpu_ivf_pq_c index_c, const char* filename, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->save(filename); break;
-            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->save(filename); break;
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->save(filename); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->save(filename); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) { idx->save(filename); });
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_save", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_save", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_save", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_save", "unknown C++ exception");
     }
 }
 
 void gpu_ivf_pq_save_dir(gpu_ivf_pq_c index_c, const char* dir, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32:   static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->save_dir(dir); break;
-            case Quantization_F16:   static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->save_dir(dir); break;
-            case Quantization_INT8:  static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->save_dir(dir); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->save_dir(dir); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) { idx->save_dir(dir); });
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_save_dir", e.what());
     } catch (...) {
@@ -516,14 +409,7 @@ void gpu_ivf_pq_save_dir(gpu_ivf_pq_c index_c, const char* dir, void* errmsg) {
 void gpu_ivf_pq_delete_id(gpu_ivf_pq_c index_c, int64_t id, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32:   static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->delete_id(id); break;
-            case Quantization_F16:   static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->delete_id(id); break;
-            case Quantization_INT8:  static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->delete_id(id); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->delete_id(id); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) { idx->delete_id(id); });
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_delete_id", e.what());
     } catch (...) {
@@ -535,14 +421,7 @@ void gpu_ivf_pq_load_dir(gpu_ivf_pq_c index_c, const char* dir,
                           distribution_mode_t target_mode, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32:   static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->load_dir(dir, target_mode); break;
-            case Quantization_F16:   static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->load_dir(dir, target_mode); break;
-            case Quantization_INT8:  static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->load_dir(dir, target_mode); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->load_dir(dir, target_mode); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) { idx->load_dir(dir, target_mode); });
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_load_dir", e.what());
     } catch (...) {
@@ -550,47 +429,36 @@ void gpu_ivf_pq_load_dir(gpu_ivf_pq_c index_c, const char* dir,
     }
 }
 
-gpu_ivf_pq_search_res_t gpu_ivf_pq_search(gpu_ivf_pq_c index_c, const void* queries_data, uint64_t num_queries, 
-                                             uint32_t query_dimension, uint32_t limit, 
+gpu_ivf_pq_search_res_t gpu_ivf_pq_search(gpu_ivf_pq_c index_c, const void* queries_data, uint64_t num_queries,
+                                             uint32_t query_dimension, uint32_t limit,
                                              ivf_pq_search_params_t search_params, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     gpu_ivf_pq_search_res_t result = {nullptr};
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
         auto cpp_res = std::make_unique<ivf_pq_search_result_t>();
-        switch (any->qtype) {
-            case Quantization_F32: *cpp_res = static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->search(static_cast<const float*>(queries_data), num_queries, query_dimension, limit, search_params); break;
-            case Quantization_F16: *cpp_res = static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->search(static_cast<const half*>(queries_data), num_queries, query_dimension, limit, search_params); break;
-            case Quantization_INT8: *cpp_res = static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->search(static_cast<const int8_t*>(queries_data), num_queries, query_dimension, limit, search_params); break;
-            case Quantization_UINT8: *cpp_res = static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->search(static_cast<const uint8_t*>(queries_data), num_queries, query_dimension, limit, search_params); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            using Q = typename std::remove_pointer_t<decltype(idx)>::storage_type;
+            *cpp_res = idx->search(static_cast<const Q*>(queries_data), num_queries, query_dimension, limit, search_params);
+        });
         result.result_ptr = static_cast<gpu_ivf_pq_result_c>(cpp_res.release());
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_search", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_search", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search", "unknown C++ exception");
     }
     return result;
 }
 
-gpu_ivf_pq_search_res_t gpu_ivf_pq_search_float(gpu_ivf_pq_c index_c, const float* queries_data, uint64_t num_queries, 
-                                                   uint32_t query_dimension, uint32_t limit, 
+gpu_ivf_pq_search_res_t gpu_ivf_pq_search_float(gpu_ivf_pq_c index_c, const float* queries_data, uint64_t num_queries,
+                                                   uint32_t query_dimension, uint32_t limit,
                                                    ivf_pq_search_params_t search_params, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     gpu_ivf_pq_search_res_t result = {nullptr};
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
         auto cpp_res = std::make_unique<ivf_pq_search_result_t>();
-        switch (any->qtype) {
-            case Quantization_F32: *cpp_res = static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit, search_params); break;
-            case Quantization_F16: *cpp_res = static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit, search_params); break;
-            case Quantization_INT8: *cpp_res = static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit, search_params); break;
-            case Quantization_UINT8: *cpp_res = static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit, search_params); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            *cpp_res = idx->search_float(queries_data, num_queries, query_dimension, limit, search_params);
+        });
         result.result_ptr = static_cast<gpu_ivf_pq_result_c>(cpp_res.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_float", e.what());
@@ -600,19 +468,15 @@ gpu_ivf_pq_search_res_t gpu_ivf_pq_search_float(gpu_ivf_pq_c index_c, const floa
     return result;
 }
 
-uint64_t gpu_ivf_pq_search_async(gpu_ivf_pq_c index_c, const void* queries_data, uint64_t num_queries, 
-                                    uint32_t query_dimension, uint32_t limit, 
+uint64_t gpu_ivf_pq_search_async(gpu_ivf_pq_c index_c, const void* queries_data, uint64_t num_queries,
+                                    uint32_t query_dimension, uint32_t limit,
                                     ivf_pq_search_params_t search_params, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32:   return static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->search_async(static_cast<const float*>(queries_data), num_queries, query_dimension, limit, search_params);
-            case Quantization_F16:   return static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->search_async(static_cast<const half*>(queries_data), num_queries, query_dimension, limit, search_params);
-            case Quantization_INT8:  return static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->search_async(static_cast<const int8_t*>(queries_data), num_queries, query_dimension, limit, search_params);
-            case Quantization_UINT8: return static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->search_async(static_cast<const uint8_t*>(queries_data), num_queries, query_dimension, limit, search_params);
-            default: return 0;
-        }
+        return ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) -> uint64_t {
+            using Q = typename std::remove_pointer_t<decltype(idx)>::storage_type;
+            return idx->search_async(static_cast<const Q*>(queries_data), num_queries, query_dimension, limit, search_params);
+        });
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_async", e.what());
         return 0;
@@ -627,14 +491,9 @@ uint64_t gpu_ivf_pq_search_float_async(gpu_ivf_pq_c index_c, const float* querie
                                           ivf_pq_search_params_t search_params, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32:   return static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->search_float_async(queries_data, num_queries, query_dimension, limit, search_params);
-            case Quantization_F16:   return static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->search_float_async(queries_data, num_queries, query_dimension, limit, search_params);
-            case Quantization_INT8:  return static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->search_float_async(queries_data, num_queries, query_dimension, limit, search_params);
-            case Quantization_UINT8: return static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->search_float_async(queries_data, num_queries, query_dimension, limit, search_params);
-            default: return 0;
-        }
+        return ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) -> uint64_t {
+            return idx->search_float_async(queries_data, num_queries, query_dimension, limit, search_params);
+        });
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_float_async", e.what());
         return 0;
@@ -648,15 +507,10 @@ gpu_ivf_pq_search_res_t gpu_ivf_pq_search_wait(gpu_ivf_pq_c index_c, uint64_t jo
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     gpu_ivf_pq_search_res_t result = {nullptr};
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
         auto cpp_res = std::make_unique<ivf_pq_search_result_t>();
-        switch (any->qtype) {
-            case Quantization_F32: *cpp_res = static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->search_wait(job_id); break;
-            case Quantization_F16: *cpp_res = static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->search_wait(job_id); break;
-            case Quantization_INT8: *cpp_res = static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->search_wait(job_id); break;
-            case Quantization_UINT8: *cpp_res = static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->search_wait(job_id); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            *cpp_res = idx->search_wait(job_id);
+        });
         result.result_ptr = static_cast<gpu_ivf_pq_result_c>(cpp_res.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_wait", e.what());
@@ -715,14 +569,7 @@ void gpu_ivf_pq_free_result(gpu_ivf_pq_result_c result_c) {
 uint64_t gpu_ivf_pq_cap(gpu_ivf_pq_c index_c) {
     try {
         if (!index_c) return 0;
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: return static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->cap();
-            case Quantization_F16: return static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->cap();
-            case Quantization_INT8: return static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->cap();
-            case Quantization_UINT8: return static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->cap();
-            default: return 0;
-        }
+        return ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [](auto* idx) -> uint64_t { return idx->cap(); });
     } catch (...) {
         return 0;
     }
@@ -731,14 +578,7 @@ uint64_t gpu_ivf_pq_cap(gpu_ivf_pq_c index_c) {
 uint64_t gpu_ivf_pq_len(gpu_ivf_pq_c index_c) {
     try {
         if (!index_c) return 0;
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: return static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->len();
-            case Quantization_F16: return static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->len();
-            case Quantization_INT8: return static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->len();
-            case Quantization_UINT8: return static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->len();
-            default: return 0;
-        }
+        return ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [](auto* idx) -> uint64_t { return idx->len(); });
     } catch (...) {
         return 0;
     }
@@ -751,15 +591,9 @@ char* gpu_ivf_pq_get_filter_col_meta_json(gpu_ivf_pq_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     if (!index_c) return strdup("");
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        std::string json;
-        switch (any->qtype) {
-            case Quantization_F32:   json = matrixone::format_filter_col_meta(static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->filter_host_.columns); break;
-            case Quantization_F16:   json = matrixone::format_filter_col_meta(static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->filter_host_.columns); break;
-            case Quantization_INT8:  json = matrixone::format_filter_col_meta(static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->filter_host_.columns); break;
-            case Quantization_UINT8: json = matrixone::format_filter_col_meta(static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->filter_host_.columns); break;
-            default: return strdup("");
-        }
+        std::string json = ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [](auto* idx) -> std::string {
+            return matrixone::format_filter_col_meta(idx->filter_host_.columns);
+        });
         return strdup(json.c_str());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_get_filter_col_meta_json", e.what());
@@ -774,23 +608,13 @@ char* gpu_ivf_pq_info(gpu_ivf_pq_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     if (!index_c) return nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        std::string info;
-        switch (any->qtype) {
-            case Quantization_F32: info = static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->info(); break;
-            case Quantization_F16: info = static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->info(); break;
-            case Quantization_INT8: info = static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->info(); break;
-            case Quantization_UINT8: info = static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->info(); break;
-            default: return nullptr;
-        }
+        std::string info = ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [](auto* idx) -> std::string { return idx->info(); });
         return strdup(info.c_str());
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_info", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_info", e.what());
         return nullptr;
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_info", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_info", "unknown C++ exception");
         return nullptr;
     }
 }
@@ -806,34 +630,20 @@ void gpu_ivf_pq_get_centers(gpu_ivf_pq_c index_c, void* centers, uint64_t count,
         std::copy(src.begin(), src.begin() + n, static_cast<elem_t*>(dst));
     };
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32:   copy_clamped(static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->get_centers(),   centers); break;
-            case Quantization_F16:   copy_clamped(static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->get_centers(),    centers); break;
-            case Quantization_INT8:  copy_clamped(static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->get_centers(),  centers); break;
-            case Quantization_UINT8: copy_clamped(static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->get_centers(), centers); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            copy_clamped(idx->get_centers(), centers);
+        });
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_get_centers", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_get_centers", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg,
- "Error in gpu_ivf_pq_get_centers", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_get_centers", "unknown C++ exception");
     }
 }
 
 uint32_t gpu_ivf_pq_get_n_list(gpu_ivf_pq_c index_c) {
     try {
         if (!index_c) return 0;
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: return static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->get_n_list();
-            case Quantization_F16: return static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->get_n_list();
-            case Quantization_INT8: return static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->get_n_list();
-            case Quantization_UINT8: return static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->get_n_list();
-            default: return 0;
-        }
+        return ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [](auto* idx) -> uint32_t { return idx->get_n_list(); });
     } catch (...) {
         return 0;
     }
@@ -842,14 +652,7 @@ uint32_t gpu_ivf_pq_get_n_list(gpu_ivf_pq_c index_c) {
 uint32_t gpu_ivf_pq_get_dim(gpu_ivf_pq_c index_c) {
     try {
         if (!index_c) return 0;
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: return static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->get_dim();
-            case Quantization_F16: return static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->get_dim();
-            case Quantization_INT8: return static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->get_dim();
-            case Quantization_UINT8: return static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->get_dim();
-            default: return 0;
-        }
+        return ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [](auto* idx) -> uint32_t { return idx->get_dim(); });
     } catch (...) {
         return 0;
     }
@@ -858,14 +661,7 @@ uint32_t gpu_ivf_pq_get_dim(gpu_ivf_pq_c index_c) {
 uint32_t gpu_ivf_pq_get_rot_dim(gpu_ivf_pq_c index_c) {
     try {
         if (!index_c) return 0;
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: return static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->get_rot_dim();
-            case Quantization_F16: return static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->get_rot_dim();
-            case Quantization_INT8: return static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->get_rot_dim();
-            case Quantization_UINT8: return static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->get_rot_dim();
-            default: return 0;
-        }
+        return ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [](auto* idx) -> uint32_t { return idx->get_rot_dim(); });
     } catch (...) {
         return 0;
     }
@@ -874,14 +670,7 @@ uint32_t gpu_ivf_pq_get_rot_dim(gpu_ivf_pq_c index_c) {
 uint32_t gpu_ivf_pq_get_dim_ext(gpu_ivf_pq_c index_c) {
     try {
         if (!index_c) return 0;
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: return static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->get_dim_ext();
-            case Quantization_F16: return static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->get_dim_ext();
-            case Quantization_INT8: return static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->get_dim_ext();
-            case Quantization_UINT8: return static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->get_dim_ext();
-            default: return 0;
-        }
+        return ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [](auto* idx) -> uint32_t { return idx->get_dim_ext(); });
     } catch (...) {
         return 0;
     }
@@ -891,30 +680,11 @@ void gpu_ivf_pq_get_dataset(gpu_ivf_pq_c index_c, void* out_data) {
     // This is for debugging, we just copy the host dataset if it exists
     try {
         if (!index_c) return;
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: {
-                auto& ds = static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->flattened_host_dataset;
-                if (!ds.empty()) std::copy(ds.begin(), ds.end(), static_cast<float*>(out_data));
-                break;
-            }
-            case Quantization_F16: {
-                auto& ds = static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->flattened_host_dataset;
-                if (!ds.empty()) std::copy(ds.begin(), ds.end(), static_cast<half*>(out_data));
-                break;
-            }
-            case Quantization_INT8: {
-                auto& ds = static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->flattened_host_dataset;
-                if (!ds.empty()) std::copy(ds.begin(), ds.end(), static_cast<int8_t*>(out_data));
-                break;
-            }
-            case Quantization_UINT8: {
-                auto& ds = static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->flattened_host_dataset;
-                if (!ds.empty()) std::copy(ds.begin(), ds.end(), static_cast<uint8_t*>(out_data));
-                break;
-            }
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            using Q = typename std::remove_pointer_t<decltype(idx)>::storage_type;
+            auto& ds = idx->flattened_host_dataset;
+            if (!ds.empty()) std::copy(ds.begin(), ds.end(), static_cast<Q*>(out_data));
+        });
     } catch (...) {
         matrixone::log_err("gpu_ivf_pq_get_dataset: unknown C++ exception (swallowed)");
     }
@@ -926,15 +696,10 @@ void gpu_ivf_pq_set_filter_columns(gpu_ivf_pq_c index_c, const char* col_meta_js
                                     uint64_t total_count, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
         std::string s = col_meta_json ? col_meta_json : "";
-        switch (any->qtype) {
-            case Quantization_F32:   static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->set_filter_columns(s, total_count); break;
-            case Quantization_F16:   static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->set_filter_columns(s, total_count); break;
-            case Quantization_INT8:  static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->set_filter_columns(s, total_count); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->set_filter_columns(s, total_count); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            idx->set_filter_columns(s, total_count);
+        });
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_set_filter_columns", e.what());
     } catch (...) {
@@ -947,14 +712,9 @@ void gpu_ivf_pq_add_filter_chunk(gpu_ivf_pq_c index_c, uint32_t col_idx,
                                   uint64_t nrows, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32:   static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->add_filter_chunk(col_idx, data, null_bitmap, nrows); break;
-            case Quantization_F16:   static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->add_filter_chunk(col_idx, data, null_bitmap, nrows); break;
-            case Quantization_INT8:  static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->add_filter_chunk(col_idx, data, null_bitmap, nrows); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->add_filter_chunk(col_idx, data, null_bitmap, nrows); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            idx->add_filter_chunk(col_idx, data, null_bitmap, nrows);
+        });
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_add_filter_chunk", e.what());
     } catch (...) {
@@ -969,16 +729,12 @@ gpu_ivf_pq_search_res_t gpu_ivf_pq_search_with_filter(gpu_ivf_pq_c index_c, cons
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     gpu_ivf_pq_search_res_t result = {nullptr};
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
         auto cpp_res = std::make_unique<ivf_pq_search_result_t>();
         std::string preds = preds_json ? preds_json : "";
-        switch (any->qtype) {
-            case Quantization_F32:   *cpp_res = static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->search_with_filter(static_cast<const float*>(queries_data), num_queries, query_dimension, limit, sp, preds); break;
-            case Quantization_F16:   *cpp_res = static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->search_with_filter(static_cast<const half*>(queries_data), num_queries, query_dimension, limit, sp, preds); break;
-            case Quantization_INT8:  *cpp_res = static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->search_with_filter(static_cast<const int8_t*>(queries_data), num_queries, query_dimension, limit, sp, preds); break;
-            case Quantization_UINT8: *cpp_res = static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->search_with_filter(static_cast<const uint8_t*>(queries_data), num_queries, query_dimension, limit, sp, preds); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            using Q = typename std::remove_pointer_t<decltype(idx)>::storage_type;
+            *cpp_res = idx->search_with_filter(static_cast<const Q*>(queries_data), num_queries, query_dimension, limit, sp, preds);
+        });
         result.result_ptr = static_cast<gpu_ivf_pq_result_c>(cpp_res.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_with_filter", e.what());
@@ -995,16 +751,11 @@ gpu_ivf_pq_search_res_t gpu_ivf_pq_search_float_with_filter(gpu_ivf_pq_c index_c
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     gpu_ivf_pq_search_res_t result = {nullptr};
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
         auto cpp_res = std::make_unique<ivf_pq_search_result_t>();
         std::string preds = preds_json ? preds_json : "";
-        switch (any->qtype) {
-            case Quantization_F32:   *cpp_res = static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->search_float_with_filter(queries_data, num_queries, query_dimension, limit, sp, preds); break;
-            case Quantization_F16:   *cpp_res = static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->search_float_with_filter(queries_data, num_queries, query_dimension, limit, sp, preds); break;
-            case Quantization_INT8:  *cpp_res = static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->search_float_with_filter(queries_data, num_queries, query_dimension, limit, sp, preds); break;
-            case Quantization_UINT8: *cpp_res = static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->search_float_with_filter(queries_data, num_queries, query_dimension, limit, sp, preds); break;
-            default: break;
-        }
+        ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
+            *cpp_res = idx->search_float_with_filter(queries_data, num_queries, query_dimension, limit, sp, preds);
+        });
         result.result_ptr = static_cast<gpu_ivf_pq_result_c>(cpp_res.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_float_with_filter", e.what());
@@ -1020,15 +771,10 @@ uint64_t gpu_ivf_pq_search_float_with_filter_async(gpu_ivf_pq_c index_c, const f
                                                     const char* preds_json, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
         std::string preds = preds_json ? preds_json : "";
-        switch (any->qtype) {
-            case Quantization_F32:   return static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds);
-            case Quantization_F16:   return static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds);
-            case Quantization_INT8:  return static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds);
-            case Quantization_UINT8: return static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds);
-            default: return 0;
-        }
+        return ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) -> uint64_t {
+            return idx->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds);
+        });
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_float_with_filter_async", e.what());
         return 0;
@@ -1041,8 +787,11 @@ uint64_t gpu_ivf_pq_search_float_with_filter_async(gpu_ivf_pq_c index_c, const f
 } // extern "C"
 
 namespace matrixone {
-template class gpu_ivf_pq_t<float>;
-template class gpu_ivf_pq_t<half>;
-template class gpu_ivf_pq_t<int8_t>;
-template class gpu_ivf_pq_t<uint8_t>;
+template class gpu_ivf_pq_t<float, float>;
+template class gpu_ivf_pq_t<float, half>;
+template class gpu_ivf_pq_t<float, int8_t>;
+template class gpu_ivf_pq_t<float, uint8_t>;
+template class gpu_ivf_pq_t<half, half>;
+template class gpu_ivf_pq_t<half, int8_t>;
+template class gpu_ivf_pq_t<half, uint8_t>;
 } // namespace matrixone

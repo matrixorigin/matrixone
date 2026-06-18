@@ -37,7 +37,6 @@ func cagraHalfToFloat32(q []cuvs.Float16) []float32 {
 	return types.Float16ToFloat32Slice(h)
 }
 
-
 // CagraSearch implements cache.VectorIndexSearchIf for GPU CAGRA indexes.
 // Unlike HnswSearch, there is no concurrency gate (Cond/Mutex) because CAGRA
 // manages GPU thread concurrency internally via its worker pool.
@@ -46,7 +45,7 @@ type CagraSearch[B, Q cuvs.VectorType] struct {
 	Tblcfg        vectorindex.IndexTableConfig
 	Indexes       []*CagraModel[B, Q]
 	MultiIndex    *cuvs.MultiGpuCagra[B, Q] // built once in Load; nil until indexes are loaded
-	Overflow      *cuvs.GpuBruteForce[B] // CDC insert overflow; nil when no overflow records exist
+	Overflow      *cuvs.GpuBruteForce[B]    // CDC insert overflow; nil when no overflow records exist
 	Devices       []int
 	ThreadsSearch int64
 }
@@ -395,7 +394,7 @@ func (s *CagraSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuCagra[B, Q], error)
 		// nil index, which Search would treat as an (empty) success.
 		return nil, moerr.NewInternalErrorNoCtxf("CagraSearch: unsupported metric type %v", s.Idxcfg.CuvsCagra.Metric)
 	}
-	gpuIndices := make([]*cuvs.GpuCagra[Q], 0, len(s.Indexes))
+	gpuIndices := make([]*cuvs.GpuCagra[B, Q], 0, len(s.Indexes))
 	for _, model := range s.Indexes {
 		if model.Index != nil {
 			gpuIndices = append(gpuIndices, model.Index)

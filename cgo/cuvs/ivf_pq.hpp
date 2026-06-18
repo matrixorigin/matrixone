@@ -177,14 +177,16 @@ struct ivf_pq_search_result_t {
 /**
  * @brief gpu_ivf_pq_t implements an IVF-PQ index that can run on a single GPU or sharded/replicated across multiple GPUs.
  */
-template <typename T>
-class gpu_ivf_pq_t : public gpu_index_base_t<T, ivf_pq_build_params_t, int64_t> {
+template <typename B, typename T>
+class gpu_ivf_pq_t : public gpu_index_base_t<B, T, ivf_pq_build_params_t, int64_t> {
 public:
+    using base_type    = B;
+    using storage_type = T;
     using ivf_pq_index = cuvs::neighbors::ivf_pq::index<int64_t>;
     using search_result_t = ivf_pq_search_result_t;
     // Inherited dependent type — bring into scope so search_internal can take a
     // const host_mask_bundle_t* parameter without `typename Base::...` everywhere.
-    using host_mask_bundle_t = typename gpu_index_base_t<T, ivf_pq_build_params_t, int64_t>::host_mask_bundle_t;
+    using host_mask_bundle_t = typename gpu_index_base_t<B, T, ivf_pq_build_params_t, int64_t>::host_mask_bundle_t;
 
     // Internal index storage
     std::unique_ptr<ivf_pq_index> index_;
@@ -360,7 +362,7 @@ public:
         }
 
         if (this->count == 0) {
-            if (this->pending_total_count_ == 0 && this->pending_half_total_count_ == 0) {
+            if (this->pending_total_count_ == 0) {
                 std::cerr << "[IVFPQ build] EARLY RETURN count=0 && pending_total_count_=0"
                           << " -> is_loaded_=true but NO index populated (save_dir will fail)"
                           << std::endl;
@@ -368,13 +370,10 @@ public:
                 return;
             }
         }
-        // vecf16 base + 1-byte T: train half_quantizer_ on the buffered vecf16
-        // sample, transform half->T natively, and store via add_chunk(T). For a
-        // float base, this is a no-op and the float quantizer trains as before.
-        this->flush_pending_half_chunks_if_needed();
-        if (!this->uses_half_quantizer_) {
-            this->train_quantizer_if_needed();
-        }
+        // 1-byte storage T: train the B-source quantizer on the buffered B
+        // sample, transform B->T, and store as T. For float/half storage this
+        // is a no-op.
+        this->train_quantizer_if_needed();
         if (!this->worker) throw std::runtime_error("Worker not initialized");
 
         if (this->dist_mode == DistributionMode_SHARDED) {
@@ -811,23 +810,23 @@ public:
         return this->search_wait(job_id);
     }
 
-    // Quantize a vecf16 (half) query to the 1-byte storage type T via the
-    // half-source quantizer, writing num_queries*dimension T values into `out`.
-    // The caller then runs the normal native search(const T*) path — so sharding,
-    // overflow and result merge are reused unchanged. No f32 detour.
-    void quantize_half_query(const half* queries_data, uint64_t num_queries, T* out) {
+    // Quantize a B-source query to the 1-byte storage type T via the B-source
+    // quantizer, writing num_queries*dimension T values into `out`. The caller
+    // then runs the normal native search(const T*) path — so sharding, overflow
+    // and result merge are reused unchanged. No f32 detour.
+    void quantize_query(const B* queries_data, uint64_t num_queries, T* out) {
         if constexpr (sizeof(T) != 1) {
-            throw std::runtime_error("quantize_half_query requires a 1-byte storage type (int8/uint8)");
+            throw std::runtime_error("quantize_query requires a 1-byte storage type (int8/uint8)");
         } else {
             uint64_t job = this->worker->submit_main(
                 [this, queries_data, num_queries, out](raft_handle_wrapper_t& handle) -> std::any {
                     auto res = handle.get_raft_resources();
-                    auto q_half_host = raft::make_host_matrix_view<const half, int64_t>(queries_data, num_queries, this->dimension);
-                    auto q_half_dev = raft::make_device_matrix<half, int64_t>(*res, num_queries, this->dimension);
-                    raft::copy(*res, q_half_dev.view(), q_half_host);
-                    if (!this->half_quantizer_.is_trained()) throw std::runtime_error("half quantizer not trained");
+                    auto q_b_host = raft::make_host_matrix_view<const B, int64_t>(queries_data, num_queries, this->dimension);
+                    auto q_b_dev = raft::make_device_matrix<B, int64_t>(*res, num_queries, this->dimension);
+                    raft::copy(*res, q_b_dev.view(), q_b_host);
+                    if (!this->quantizer_.is_trained()) throw std::runtime_error("quantizer not trained");
                     auto q_t_dev = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
-                    this->half_quantizer_.template transform<T>(*res, q_half_dev.view(), q_t_dev.data_handle(), true);
+                    this->quantizer_.template transform<T>(*res, q_b_dev.view(), q_t_dev.data_handle(), true);
                     raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(out, num_queries, this->dimension), q_t_dev.view());
                     handle.sync();
                     return std::any();
@@ -1400,7 +1399,15 @@ public:
             raft::copy(*res, q_dev_f, raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
 
             if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
-            this->quantizer_.template transform<T>(*res, q_dev_f, q_buf_t.data(), true);
+            if constexpr (std::is_same_v<B, float>) {
+                this->quantizer_.template transform<T>(*res, q_dev_f, q_buf_t.data(), true);
+            } else {
+                // B == half: quantizer is half-source. Cast the f32 query to half
+                // on-device, then transform half -> T.
+                auto q_dev_b = raft::make_device_matrix<B, int64_t>(*res, num_queries, this->dimension);
+                raft::copy(*res, q_dev_b.view(), q_dev_f);
+                this->quantizer_.template transform<T>(*res, q_dev_b.view(), q_buf_t.data(), true);
+            }
         }
         // Legacy path syncs to drain queries DMA before the stack-local host
         // bitmap inside build_search_bitset goes through its own sync. Prebuilt
@@ -1623,7 +1630,14 @@ public:
                 if constexpr (sizeof(T) == 1) {
                     if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
                     auto centers_float_view = raft::make_device_matrix_view<const float, int64_t>(centers_view.data_handle(), n_centers, dim_ext);
-                    this->quantizer_.template transform<T>(*res, centers_float_view, centers_device_target.data_handle(), true);
+                    if constexpr (std::is_same_v<B, float>) {
+                        this->quantizer_.template transform<T>(*res, centers_float_view, centers_device_target.data_handle(), true);
+                    } else {
+                        // B == half: cast cuVS's float centers to half, then transform.
+                        auto centers_b = raft::make_device_matrix<B, int64_t>(*res, n_centers, dim_ext);
+                        raft::copy(*res, centers_b.view(), centers_float_view);
+                        this->quantizer_.template transform<T>(*res, centers_b.view(), centers_device_target.data_handle(), true);
+                    }
                 } else {
                     raft::copy(*res, centers_device_target.view(), centers_view);
                 }
@@ -1647,7 +1661,7 @@ public:
     }
 
     std::string info() const override {
-        std::string json = gpu_index_base_t<T, ivf_pq_build_params_t, int64_t>::info();
+        std::string json = gpu_index_base_t<B, T, ivf_pq_build_params_t, int64_t>::info();
         json += ", \"type\": \"IVF-PQ\", \"ivf_pq\": {";
         if (index_) json += "\"mode\": \"Single-GPU\", \"size\": " + std::to_string(index_->size());
         else if (!this->replicated_indices_.empty()) json += "\"mode\": \"Local-Indices\", \"ranks\": " + std::to_string(this->replicated_indices_.size());

@@ -32,7 +32,7 @@ import (
 )
 
 // GpuCagra represents the C++ gpu_cagra_t object.
-type GpuCagra[T VectorType] struct {
+type GpuCagra[B, Q VectorType] struct {
 	cCagra                   C.gpu_cagra_c
 	dimension                uint32
 	nthread                  uint32
@@ -43,7 +43,7 @@ type GpuCagra[T VectorType] struct {
 
 // SetBatchWindow sets the batching window in microseconds for search operations.
 // A window of 0 disables batching; any positive value enables batching with that delay.
-func (gi *GpuCagra[T]) SetBatchWindow(windowUs int64) error {
+func (gi *GpuCagra[B, Q]) SetBatchWindow(windowUs int64) error {
 	gi.batchWindowUs = windowUs
 	if gi.cCagra != nil {
 		var errmsg *C.char
@@ -61,7 +61,7 @@ func (gi *GpuCagra[T]) SetBatchWindow(windowUs int64) error {
 // flag. false (default): dispatch eagerly at the full batch size. true: wait for
 // the batch to fill or the window to elapse, then dispatch at the real size.
 // Has no effect unless the batch window is > 0.
-func (gi *GpuCagra[T]) SetDynbConservativeDispatch(enable bool) error {
+func (gi *GpuCagra[B, Q]) SetDynbConservativeDispatch(enable bool) error {
 	gi.dynbConservativeDispatch = enable
 	if gi.cCagra != nil {
 		var errmsg *C.char
@@ -77,13 +77,14 @@ func (gi *GpuCagra[T]) SetDynbConservativeDispatch(enable bool) error {
 
 // NewGpuCagra creates a new GpuCagra instance from a dataset.
 // ids may be nil to use internal sequential IDs (0..count-1).
-func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metric DistanceType,
-	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode, ids []int64) (*GpuCagra[T], error) {
+func NewGpuCagra[B, Q VectorType](dataset []Q, count uint64, dimension uint32, metric DistanceType,
+	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode, ids []int64) (*GpuCagra[B, Q], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
 
-	qtype := GetQuantization[T]()
+	btype := GetQuantization[B]()
+	qtype := GetQuantization[Q]()
 	var errmsg *C.char
 	cDevices := make([]C.int, len(devices))
 	for i, d := range devices {
@@ -111,6 +112,7 @@ func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metr
 		C.int(len(devices)),
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
+		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		cIds,
 		unsafe.Pointer(&errmsg),
@@ -129,7 +131,7 @@ func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metr
 		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuCagra")
 	}
 
-	return &GpuCagra[T]{
+	return &GpuCagra[B, Q]{
 		cCagra:    cCagra,
 		dimension: dimension,
 		nthread:   nthread,
@@ -138,13 +140,14 @@ func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metr
 }
 
 // NewGpuCagraFromFile creates a new GpuCagra instance by loading from a file.
-func NewGpuCagraFromFile[T VectorType](filename string, dimension uint32, metric DistanceType,
-	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[T], error) {
+func NewGpuCagraFromFile[B, Q VectorType](filename string, dimension uint32, metric DistanceType,
+	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[B, Q], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
 
-	qtype := GetQuantization[T]()
+	btype := GetQuantization[B]()
+	qtype := GetQuantization[Q]()
 	var errmsg *C.char
 	cFilename := C.CString(filename)
 	defer C.free(unsafe.Pointer(cFilename))
@@ -169,6 +172,7 @@ func NewGpuCagraFromFile[T VectorType](filename string, dimension uint32, metric
 		C.int(len(devices)),
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
+		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		unsafe.Pointer(&errmsg),
 	)
@@ -184,7 +188,7 @@ func NewGpuCagraFromFile[T VectorType](filename string, dimension uint32, metric
 		return nil, moerr.NewInternalErrorNoCtx("failed to load GpuCagra from file")
 	}
 
-	return &GpuCagra[T]{
+	return &GpuCagra[B, Q]{
 		cCagra:    cCagra,
 		dimension: dimension,
 		nthread:   nthread,
@@ -196,8 +200,8 @@ func NewGpuCagraFromFile[T VectorType](filename string, dimension uint32, metric
 // For Sharded loads we peek manifest.json to learn the saved shard count and
 // truncate `devices` to that count, so the C++ worker only spawns threads /
 // RMM pools on devices that will actually host a shard.
-func NewGpuCagraFromDataDirectory[T VectorType](dir string, dimension uint32, metric DistanceType,
-	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[T], error) {
+func NewGpuCagraFromDataDirectory[B, Q VectorType](dir string, dimension uint32, metric DistanceType,
+	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[B, Q], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
@@ -208,7 +212,8 @@ func NewGpuCagraFromDataDirectory[T VectorType](dir string, dimension uint32, me
 		return nil, err
 	}
 
-	qtype := GetQuantization[T]()
+	btype := GetQuantization[B]()
+	qtype := GetQuantization[Q]()
 	cDevices := make([]C.int, len(devices))
 	for i, d := range devices {
 		cDevices[i] = C.int(d)
@@ -230,6 +235,7 @@ func NewGpuCagraFromDataDirectory[T VectorType](dir string, dimension uint32, me
 		C.int(len(devices)),
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
+		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		nil,
 		unsafe.Pointer(&errmsg),
@@ -264,7 +270,7 @@ func NewGpuCagraFromDataDirectory[T VectorType](dir string, dimension uint32, me
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
-	return &GpuCagra[T]{
+	return &GpuCagra[B, Q]{
 		cCagra:    cCagra,
 		dimension: dimension,
 		nthread:   nthread,
@@ -273,7 +279,7 @@ func NewGpuCagraFromDataDirectory[T VectorType](dir string, dimension uint32, me
 }
 
 // Destroy frees the C++ gpu_cagra_t instance
-func (gi *GpuCagra[T]) Destroy() error {
+func (gi *GpuCagra[B, Q]) Destroy() error {
 	if gi.cCagra == nil {
 		return nil
 	}
@@ -289,7 +295,7 @@ func (gi *GpuCagra[T]) Destroy() error {
 }
 
 // Start initializes the worker and resources
-func (gi *GpuCagra[T]) Start() error {
+func (gi *GpuCagra[B, Q]) Start() error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -317,7 +323,7 @@ func (gi *GpuCagra[T]) Start() error {
 }
 
 // Build triggers the build or file loading process
-func (gi *GpuCagra[T]) Build() error {
+func (gi *GpuCagra[B, Q]) Build() error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -332,13 +338,14 @@ func (gi *GpuCagra[T]) Build() error {
 }
 
 // NewGpuCagraEmpty creates a new GpuCagra instance with pre-allocated buffer but no data yet.
-func NewGpuCagraEmpty[T VectorType](totalCount uint64, dimension uint32, metric DistanceType,
-	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[T], error) {
+func NewGpuCagraEmpty[B, Q VectorType](totalCount uint64, dimension uint32, metric DistanceType,
+	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[B, Q], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
 
-	qtype := GetQuantization[T]()
+	btype := GetQuantization[B]()
+	qtype := GetQuantization[Q]()
 	var errmsg *C.char
 	cDevices := make([]C.int, len(devices))
 	for i, d := range devices {
@@ -360,6 +367,7 @@ func NewGpuCagraEmpty[T VectorType](totalCount uint64, dimension uint32, metric 
 		C.int(len(devices)),
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
+		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		nil,
 		unsafe.Pointer(&errmsg),
@@ -376,7 +384,7 @@ func NewGpuCagraEmpty[T VectorType](totalCount uint64, dimension uint32, metric 
 		return nil, moerr.NewInternalErrorNoCtx("failed to create empty GpuCagra")
 	}
 
-	return &GpuCagra[T]{
+	return &GpuCagra[B, Q]{
 		cCagra:    cCagra,
 		dimension: dimension,
 		nthread:   nthread,
@@ -385,7 +393,7 @@ func NewGpuCagraEmpty[T VectorType](totalCount uint64, dimension uint32, metric 
 }
 
 // AddChunk adds a chunk of data to the pre-allocated buffer.
-func (gi *GpuCagra[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) error {
+func (gi *GpuCagra[B, Q]) AddChunk(chunk []Q, chunkCount uint64, ids []int64) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -417,7 +425,7 @@ func (gi *GpuCagra[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) error
 }
 
 // AddChunkFloat adds a chunk of float32 data, performing on-the-fly quantization if needed.
-func (gi *GpuCagra[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
+func (gi *GpuCagra[B, Q]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -448,10 +456,10 @@ func (gi *GpuCagra[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []i
 	return nil
 }
 
-// AddChunkQuantizeHalf adds a chunk of vecf16 (half) data, quantizing natively
-// to the 1-byte storage type T (int8/uint8) via the half-source quantizer.
-// No f32 detour. Requires T to be int8/uint8.
-func (gi *GpuCagra[T]) AddChunkQuantizeHalf(chunk []Float16, chunkCount uint64, ids []int64) error {
+// AddChunkQuantize adds a chunk of base-typed (B) data, quantizing natively to
+// the storage type Q (int8/uint8) via the B-source quantizer. base_data is the
+// raw bytes of chunkCount*dim B-typed elements. No f32 detour.
+func (gi *GpuCagra[B, Q]) AddChunkQuantize(chunk []B, chunkCount uint64, ids []int64) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -464,7 +472,7 @@ func (gi *GpuCagra[T]) AddChunkQuantizeHalf(chunk []Float16, chunkCount uint64, 
 	if len(ids) > 0 {
 		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
 	}
-	C.gpu_cagra_add_chunk_quantize_half(
+	C.gpu_cagra_add_chunk_quantize(
 		gi.cCagra,
 		unsafe.Pointer(&chunk[0]),
 		C.uint64_t(chunkCount),
@@ -482,20 +490,19 @@ func (gi *GpuCagra[T]) AddChunkQuantizeHalf(chunk []Float16, chunkCount uint64, 
 	return nil
 }
 
-// QuantizeHalf quantizes a vecf16 (half) query to the 1-byte storage type T
-// (int8/uint8) via the half-source quantizer, returning numQueries*dimension
-// values. The caller then runs the normal native Search([]T). Requires int8/uint8.
-func (gi *GpuCagra[T]) QuantizeHalf(queries []Float16, numQueries uint64, dimension uint32) ([]T, error) {
+// QuantizeQuery quantizes a base-typed (B) query to the storage type Q
+// (int8/uint8) via the B-source quantizer, writing numQueries*dimension values
+// into out. The caller then runs the normal native Search([]Q).
+func (gi *GpuCagra[B, Q]) QuantizeQuery(queries []B, numQueries uint64, out []Q) error {
 	if gi.cCagra == nil {
-		return nil, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
-	out := make([]T, numQueries*uint64(dimension))
 	if len(queries) == 0 {
-		return out, nil
+		return nil
 	}
 
 	var errmsg *C.char
-	C.gpu_cagra_quantize_half(
+	C.gpu_cagra_quantize_query(
 		gi.cCagra,
 		unsafe.Pointer(&queries[0]),
 		C.uint64_t(numQueries),
@@ -508,13 +515,14 @@ func (gi *GpuCagra[T]) QuantizeHalf(queries []Float16, numQueries uint64, dimens
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
-		return nil, moerr.NewInternalErrorNoCtx(errStr)
+		return moerr.NewInternalErrorNoCtx(errStr)
 	}
-	return out, nil
+	return nil
 }
 
-// TrainQuantizer trains the scalar quantizer (if T is 1-byte)
-func (gi *GpuCagra[T]) TrainQuantizer(trainData []float32, nSamples uint64) error {
+// TrainQuantizer trains the scalar quantizer (if Q is 1-byte) from base-typed
+// (B) training data.
+func (gi *GpuCagra[B, Q]) TrainQuantizer(trainData []B, nSamples uint64) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -525,7 +533,7 @@ func (gi *GpuCagra[T]) TrainQuantizer(trainData []float32, nSamples uint64) erro
 	var errmsg *C.char
 	C.gpu_cagra_train_quantizer(
 		gi.cCagra,
-		(*C.float)(&trainData[0]),
+		unsafe.Pointer(&trainData[0]),
 		C.uint64_t(nSamples),
 		unsafe.Pointer(&errmsg),
 	)
@@ -540,7 +548,7 @@ func (gi *GpuCagra[T]) TrainQuantizer(trainData []float32, nSamples uint64) erro
 }
 
 // SetQuantizer sets the scalar quantizer parameters (if T is 1-byte)
-func (gi *GpuCagra[T]) SetQuantizer(min, max float32) error {
+func (gi *GpuCagra[B, Q]) SetQuantizer(min, max float32) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -562,7 +570,7 @@ func (gi *GpuCagra[T]) SetQuantizer(min, max float32) error {
 }
 
 // GetQuantizer gets the scalar quantizer parameters (if T is 1-byte)
-func (gi *GpuCagra[T]) GetQuantizer() (float32, float32, error) {
+func (gi *GpuCagra[B, Q]) GetQuantizer() (float32, float32, error) {
 	if gi.cCagra == nil {
 		return 0, 0, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -585,7 +593,7 @@ func (gi *GpuCagra[T]) GetQuantizer() (float32, float32, error) {
 }
 
 // Save serializes the index to a file
-func (gi *GpuCagra[T]) Save(filename string) error {
+func (gi *GpuCagra[B, Q]) Save(filename string) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -603,7 +611,7 @@ func (gi *GpuCagra[T]) Save(filename string) error {
 }
 
 // Pack saves the index to a .tar or .tar.gz file using save_dir.
-func (gi *GpuCagra[T]) Pack(filename string) error {
+func (gi *GpuCagra[B, Q]) Pack(filename string) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -632,7 +640,7 @@ func (gi *GpuCagra[T]) Pack(filename string) error {
 // mode overrides the distribution mode at load time — pass Replicated to broadcast
 // a SINGLE_GPU .tar to all GPUs without rebuilding.
 // The index must already be initialized and started before calling Unpack.
-func (gi *GpuCagra[T]) Unpack(filename string, mode DistributionMode) error {
+func (gi *GpuCagra[B, Q]) Unpack(filename string, mode DistributionMode) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -661,7 +669,7 @@ func (gi *GpuCagra[T]) Unpack(filename string, mode DistributionMode) error {
 }
 
 // DeleteId removes an ID from the index (soft delete).
-func (gi *GpuCagra[T]) DeleteId(id int64) error {
+func (gi *GpuCagra[B, Q]) DeleteId(id int64) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -679,7 +687,7 @@ func (gi *GpuCagra[T]) DeleteId(id int64) error {
 // path; if profiling shows the cgo crossing dominates we can swap to a
 // single batched cgo entry (the C++ side already does the host-side
 // id_to_index_ lookup; the loop is per-id).
-func (gi *GpuCagra[T]) DeleteIds(ids []int64) error {
+func (gi *GpuCagra[B, Q]) DeleteIds(ids []int64) error {
 	for _, id := range ids {
 		if err := gi.DeleteId(id); err != nil {
 			return err
@@ -688,8 +696,8 @@ func (gi *GpuCagra[T]) DeleteIds(ids []int64) error {
 	return nil
 }
 
-func (gi *GpuCagra[T]) adjustSearchParams(sp CagraSearchParams, limit uint32) CagraSearchParams {
-	qtype := GetQuantization[T]()
+func (gi *GpuCagra[B, Q]) adjustSearchParams(sp CagraSearchParams, limit uint32) CagraSearchParams {
+	qtype := GetQuantization[Q]()
 	isByteType := (qtype == INT8 || qtype == UINT8)
 
 	if isByteType {
@@ -706,7 +714,7 @@ func (gi *GpuCagra[T]) adjustSearchParams(sp CagraSearchParams, limit uint32) Ca
 }
 
 // Search performs a K-Nearest Neighbor search
-func (gi *GpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (SearchResult, error) {
+func (gi *GpuCagra[B, Q]) Search(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (SearchResult, error) {
 	if gi.cCagra == nil {
 		return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -761,7 +769,7 @@ func (gi *GpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, 
 }
 
 // SearchFloat performs a K-Nearest Neighbor search with float32 queries
-func (gi *GpuCagra[T]) SearchFloat(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (SearchResult, error) {
+func (gi *GpuCagra[B, Q]) SearchFloat(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (SearchResult, error) {
 	if gi.cCagra == nil {
 		return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -816,12 +824,12 @@ func (gi *GpuCagra[T]) SearchFloat(queries []float32, numQueries uint64, dimensi
 }
 
 // SearchAsync performs a K-Nearest Neighbor search asynchronously.
-func (gi *GpuCagra[T]) SearchAsync(queries []T, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
+func (gi *GpuCagra[B, Q]) SearchAsync(queries []Q, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
 	return gi.SearchAsyncWithParams(queries, numQueries, dimension, limit, DefaultCagraSearchParams())
 }
 
 // SearchAsyncWithParams performs a K-Nearest Neighbor search asynchronously with custom parameters.
-func (gi *GpuCagra[T]) SearchAsyncWithParams(queries []T, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (uint64, error) {
+func (gi *GpuCagra[B, Q]) SearchAsyncWithParams(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (uint64, error) {
 	if gi.cCagra == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -858,12 +866,12 @@ func (gi *GpuCagra[T]) SearchAsyncWithParams(queries []T, numQueries uint64, dim
 }
 
 // SearchFloat32Async performs a K-Nearest Neighbor search with float32 queries asynchronously.
-func (gi *GpuCagra[T]) SearchFloat32Async(queries []float32, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
+func (gi *GpuCagra[B, Q]) SearchFloat32Async(queries []float32, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
 	return gi.SearchFloat32AsyncWithParams(queries, numQueries, dimension, limit, DefaultCagraSearchParams())
 }
 
 // SearchFloat32AsyncWithParams performs a K-Nearest Neighbor search with float32 queries asynchronously with custom parameters.
-func (gi *GpuCagra[T]) SearchFloat32AsyncWithParams(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (uint64, error) {
+func (gi *GpuCagra[B, Q]) SearchFloat32AsyncWithParams(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (uint64, error) {
 	if gi.cCagra == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -900,7 +908,7 @@ func (gi *GpuCagra[T]) SearchFloat32AsyncWithParams(queries []float32, numQuerie
 }
 
 // SearchWait waits for an asynchronous search to complete and returns the results.
-func (gi *GpuCagra[T]) SearchWait(jobID uint64, numQueries uint64, limit uint32) ([]int64, []float32, error) {
+func (gi *GpuCagra[B, Q]) SearchWait(jobID uint64, numQueries uint64, limit uint32) ([]int64, []float32, error) {
 	if gi.cCagra == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -933,7 +941,7 @@ func (gi *GpuCagra[T]) SearchWait(jobID uint64, numQueries uint64, limit uint32)
 }
 
 // Cap returns the capacity of the index buffer
-func (gi *GpuCagra[T]) Cap() uint64 {
+func (gi *GpuCagra[B, Q]) Cap() uint64 {
 	if gi.cCagra == nil {
 		return 0
 	}
@@ -941,7 +949,7 @@ func (gi *GpuCagra[T]) Cap() uint64 {
 }
 
 // Len returns current number of vectors in index
-func (gi *GpuCagra[T]) Len() uint64 {
+func (gi *GpuCagra[B, Q]) Len() uint64 {
 	if gi.cCagra == nil {
 		return 0
 	}
@@ -951,7 +959,7 @@ func (gi *GpuCagra[T]) Len() uint64 {
 // GetFilterColMetaJSON returns the INCLUDE-column metadata of the loaded
 // index as a JSON string ready to be re-fed into SetFilterColumns. Returns
 // "" for indexes that were built without INCLUDE columns.
-func (gi *GpuCagra[T]) GetFilterColMetaJSON() string {
+func (gi *GpuCagra[B, Q]) GetFilterColMetaJSON() string {
 	if gi.cCagra == nil {
 		return ""
 	}
@@ -969,7 +977,7 @@ func (gi *GpuCagra[T]) GetFilterColMetaJSON() string {
 }
 
 // Info returns detailed information about the index as a JSON string.
-func (gi *GpuCagra[T]) Info() (string, error) {
+func (gi *GpuCagra[B, Q]) Info() (string, error) {
 	if gi.cCagra == nil {
 		return "", moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -993,7 +1001,7 @@ func (gi *GpuCagra[T]) Info() (string, error) {
 
 // Extend adds more vectors to the index (single-GPU only).
 // newIDs may be nil to auto-assign sequential IDs starting from the current index size.
-func (gi *GpuCagra[T]) Extend(additionalData []T, numVectors uint64, newIDs []int64) error {
+func (gi *GpuCagra[B, Q]) Extend(additionalData []Q, numVectors uint64, newIDs []int64) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -1026,7 +1034,7 @@ func (gi *GpuCagra[T]) Extend(additionalData []T, numVectors uint64, newIDs []in
 }
 
 // MergeGpuCagra combines multiple single-GPU GpuCagra indices into a new one.
-func MergeGpuCagra[T VectorType](indices []*GpuCagra[T], nthread uint32, devices []int) (*GpuCagra[T], error) {
+func MergeGpuCagra[B, Q VectorType](indices []*GpuCagra[B, Q], nthread uint32, devices []int) (*GpuCagra[B, Q], error) {
 	if len(indices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("no indices to merge")
 	}
@@ -1066,7 +1074,7 @@ func MergeGpuCagra[T VectorType](indices []*GpuCagra[T], nthread uint32, devices
 		return nil, moerr.NewInternalErrorNoCtx("failed to merge GpuCagra indices")
 	}
 
-	return &GpuCagra[T]{
+	return &GpuCagra[B, Q]{
 		cCagra:    cCagra,
 		dimension: indices[0].dimension,
 		nthread:   nthread,
@@ -1082,7 +1090,7 @@ type SearchResult struct {
 
 // SaveToDir saves the index files to a directory using gpu_cagra_save_dir.
 // This is used by CagraModel to save to a directory before packing to tar.
-func (gi *GpuCagra[T]) SaveToDir(dirPath string) error {
+func (gi *GpuCagra[B, Q]) SaveToDir(dirPath string) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -1101,7 +1109,7 @@ func (gi *GpuCagra[T]) SaveToDir(dirPath string) error {
 // LoadFromDir loads index components from a directory using gpu_cagra_load_dir.
 // mode overrides the distribution mode at load time.
 // The index must already be initialized and started before calling LoadFromDir.
-func (gi *GpuCagra[T]) LoadFromDir(dirPath string, mode DistributionMode) error {
+func (gi *GpuCagra[B, Q]) LoadFromDir(dirPath string, mode DistributionMode) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -1121,7 +1129,7 @@ func (gi *GpuCagra[T]) LoadFromDir(dirPath string, mode DistributionMode) error 
 // colMetaJSON is a JSON array of {"name":"...","type":N} entries, where N is
 // 0=int32, 1=int64, 2=float32, 3=float64, 4=uint64 (VARCHAR hash).
 // Must be called after Start() and before Build().
-func (gi *GpuCagra[T]) SetFilterColumns(colMetaJSON string, totalCount uint64) error {
+func (gi *GpuCagra[B, Q]) SetFilterColumns(colMetaJSON string, totalCount uint64) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -1143,7 +1151,7 @@ func (gi *GpuCagra[T]) SetFilterColumns(colMetaJSON string, totalCount uint64) e
 // matching MO's null-mask convention) of ceil(nrows/32) entries, or nil when
 // the chunk has no nulls.
 // Ownership transfers to C++ at call return — the Go slice can be freed.
-func (gi *GpuCagra[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
+func (gi *GpuCagra[B, Q]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -1175,7 +1183,7 @@ func (gi *GpuCagra[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []u
 
 // SearchWithFilter runs a filtered K-NN search. predsJSON is a JSON predicate
 // array; passing "" yields unfiltered behavior identical to Search().
-func (gi *GpuCagra[T]) SearchWithFilter(queries []T, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) (SearchResult, error) {
+func (gi *GpuCagra[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) (SearchResult, error) {
 	if gi.cCagra == nil {
 		return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -1227,7 +1235,7 @@ func (gi *GpuCagra[T]) SearchWithFilter(queries []T, numQueries uint64, dimensio
 }
 
 // SearchFloatWithFilter runs a filtered K-NN search with float32 queries.
-func (gi *GpuCagra[T]) SearchFloatWithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) (SearchResult, error) {
+func (gi *GpuCagra[B, Q]) SearchFloatWithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) (SearchResult, error) {
 	if gi.cCagra == nil {
 		return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -1283,7 +1291,7 @@ func (gi *GpuCagra[T]) SearchFloatWithFilter(queries []float32, numQueries uint6
 // SearchFloat32AsyncWithParams + the predicate-eval semantics of
 // SearchFloatWithFilter. Used by MultiGpuCagra to dispatch per-shard
 // filtered searches in parallel.
-func (gi *GpuCagra[T]) SearchFloatWithFilterAsync(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) (uint64, error) {
+func (gi *GpuCagra[B, Q]) SearchFloatWithFilterAsync(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) (uint64, error) {
 	if gi.cCagra == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}

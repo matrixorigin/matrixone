@@ -49,16 +49,25 @@ var cagraCatalogHooks = cagrart.CatalogHooks{}
 
 var cagra_runSql = sqlexec.RunSql
 
+// cagraBuilder is the (B, Q)-erased build interface the create state drives.
+// *cagraPkg.CagraBuild[B, Q] satisfies it for every wired (base, storage)
+// combo. GetIndexes is [B,Q]-typed and intentionally NOT on the interface —
+// end() routes through ToInsertSql instead.
+type cagraBuilder interface {
+	AddRow(id int64, fa []float32, hf []cuvs.Float16) error
+	SetFilterColumns(colMetaJSON string)
+	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
+	ToInsertSql(ts int64) ([]string, error)
+	Destroy() error
+}
+
 type cagraCreateState struct {
-	inited   bool
-	buildf32 *cagraPkg.CagraBuild[float32]
-	buildf16 *cagraPkg.CagraBuild[cuvs.Float16]
-	buildi8  *cagraPkg.CagraBuild[int8]
-	buildui8 *cagraPkg.CagraBuild[uint8]
-	param    vectorindex.CagraParam
-	tblcfg   vectorindex.IndexTableConfig
-	idxcfg   vectorindex.IndexConfig
-	offset   int
+	inited  bool
+	builder cagraBuilder
+	param   vectorindex.CagraParam
+	tblcfg  vectorindex.IndexTableConfig
+	idxcfg  vectorindex.IndexConfig
+	offset  int
 
 	// baseOid is the base (source) vector column element type — f32 or f16.
 	// The storage/quantization type (which builder is non-nil) may differ:
@@ -101,19 +110,11 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 	)
 
 	ts := time.Now().UnixMicro()
-	switch {
-	case u.buildf32 != nil:
-		sqls, err = u.buildf32.ToInsertSql(ts)
-	case u.buildf16 != nil:
-		sqls, err = u.buildf16.ToInsertSql(ts)
-	case u.buildi8 != nil:
-		sqls, err = u.buildi8.ToInsertSql(ts)
-	case u.buildui8 != nil:
-		sqls, err = u.buildui8.ToInsertSql(ts)
-	default:
-		// No builder selected → init didn't set one. Nothing to do for
-		// the cuvs side; the CDC tail (if any) below still emits.
+	if u.builder != nil {
+		sqls, err = u.builder.ToInsertSql(ts)
 	}
+	// No builder selected → init didn't set one. Nothing to do for the cuvs
+	// side; the CDC tail (if any) below still emits.
 	if err != nil {
 		return err
 	}
@@ -171,17 +172,8 @@ func (u *cagraCreateState) free(tf *TableFunction, proc *process.Process, pipeli
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
 	}
-	if u.buildf32 != nil {
-		u.buildf32.Destroy()
-	}
-	if u.buildf16 != nil {
-		u.buildf16.Destroy()
-	}
-	if u.buildi8 != nil {
-		u.buildi8.Destroy()
-	}
-	if u.buildui8 != nil {
-		u.buildui8.Destroy()
+	if u.builder != nil {
+		u.builder.Destroy()
 	}
 }
 
@@ -377,15 +369,25 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)
 
 		// ---- create builder ----
-		switch qt {
-		case metric.Quantization_F16:
-			u.buildf16, err = cagraPkg.NewCagraBuild[cuvs.Float16](uid, u.idxcfg, u.tblcfg, nthread, devices)
-		case metric.Quantization_INT8:
-			u.buildi8, err = cagraPkg.NewCagraBuild[int8](uid, u.idxcfg, u.tblcfg, nthread, devices)
-		case metric.Quantization_UINT8:
-			u.buildui8, err = cagraPkg.NewCagraBuild[uint8](uid, u.idxcfg, u.tblcfg, nthread, devices)
+		// One real [B, Q] builder keyed on (base column type, storage qtype).
+		// The 7 wired combos: f32 base × {f32, f16, int8, uint8}; f16 base ×
+		// {f16, int8, uint8}.
+		isF16Base := u.baseOid == types.T_array_float16
+		switch {
+		case isF16Base && qt == metric.Quantization_F16:
+			u.builder, err = cagraPkg.NewCagraBuild[cuvs.Float16, cuvs.Float16](uid, u.idxcfg, u.tblcfg, nthread, devices)
+		case isF16Base && qt == metric.Quantization_INT8:
+			u.builder, err = cagraPkg.NewCagraBuild[cuvs.Float16, int8](uid, u.idxcfg, u.tblcfg, nthread, devices)
+		case isF16Base && qt == metric.Quantization_UINT8:
+			u.builder, err = cagraPkg.NewCagraBuild[cuvs.Float16, uint8](uid, u.idxcfg, u.tblcfg, nthread, devices)
+		case qt == metric.Quantization_F16:
+			u.builder, err = cagraPkg.NewCagraBuild[float32, cuvs.Float16](uid, u.idxcfg, u.tblcfg, nthread, devices)
+		case qt == metric.Quantization_INT8:
+			u.builder, err = cagraPkg.NewCagraBuild[float32, int8](uid, u.idxcfg, u.tblcfg, nthread, devices)
+		case qt == metric.Quantization_UINT8:
+			u.builder, err = cagraPkg.NewCagraBuild[float32, uint8](uid, u.idxcfg, u.tblcfg, nthread, devices)
 		default:
-			u.buildf32, err = cagraPkg.NewCagraBuild[float32](uid, u.idxcfg, u.tblcfg, nthread, devices)
+			u.builder, err = cagraPkg.NewCagraBuild[float32, float32](uid, u.idxcfg, u.tblcfg, nthread, devices)
 		}
 		if err != nil {
 			return err
@@ -401,7 +403,7 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		if len(u.filterCols) > 0 {
 			logutil.Infof("CAGRA create: INCLUDE columns = %v (from %d arg vectors)",
 				u.filterCols, len(tf.ctr.argVecs)-3)
-			if err = initFilterColumns(u.activeBuilder(), u.filterCols); err != nil {
+			if err = initFilterColumns(u.builder, u.filterCols); err != nil {
 				return err
 			}
 		}
@@ -478,54 +480,16 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		return nil
 	}
 
-	switch {
-	case u.buildf32 != nil:
-		err = u.buildf32.AddFloat(id, fa)
-	case u.buildf16 != nil:
-		if u.baseOid == types.T_array_float16 {
-			err = u.buildf16.Add(id, hf) // vecf16 base -> native half storage
-		} else {
-			err = u.buildf16.AddFloat(id, fa) // f32 base + QUANTIZATION=f16 -> half-cast
-		}
-	case u.buildi8 != nil:
-		if u.baseOid == types.T_array_float16 {
-			err = u.buildi8.AddQuantizeHalf(id, hf) // vecf16 base -> native half->int8 quantize
-		} else {
-			err = u.buildi8.AddFloat(id, fa)
-		}
-	case u.buildui8 != nil:
-		if u.baseOid == types.T_array_float16 {
-			err = u.buildui8.AddQuantizeHalf(id, hf) // vecf16 base -> native half->uint8 quantize
-		} else {
-			err = u.buildui8.AddFloat(id, fa)
-		}
-	}
-	if err != nil {
+	// AddRow routes by (B, Q): f32 base feeds fa, f16 base feeds hf.
+	if err = u.builder.AddRow(id, fa, hf); err != nil {
 		return err
 	}
 
 	// ---- per-row: append filter column values (if any) ----
 	if len(u.filterCols) > 0 {
-		if err = appendFilterRow(u.activeBuilder(), u.filterCols, tf.ctr.argVecs, 3, nthRow); err != nil {
+		if err = appendFilterRow(u.builder, u.filterCols, tf.ctr.argVecs, 3, nthRow); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-// activeBuilder returns whichever quantization-specialised builder is live,
-// exposed through the narrow filterColumnBuilder interface. Exactly one of
-// the four fields is non-nil after a successful NewCagraBuild dispatch.
-func (u *cagraCreateState) activeBuilder() filterColumnBuilder {
-	switch {
-	case u.buildf32 != nil:
-		return u.buildf32
-	case u.buildf16 != nil:
-		return u.buildf16
-	case u.buildi8 != nil:
-		return u.buildi8
-	case u.buildui8 != nil:
-		return u.buildui8
 	}
 	return nil
 }

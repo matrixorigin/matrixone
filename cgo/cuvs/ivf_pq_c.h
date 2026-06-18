@@ -31,30 +31,34 @@ typedef void* gpu_ivf_pq_c;
 // Opaque pointer to the C++ IVF-PQ search result object
 typedef void* gpu_ivf_pq_result_c;
 
+// btype = base/query/quantizer-source element type (Quantization_F32 or F16).
+// qtype = storage element type. Wired combos: F32 base {F32,F16,INT8,UINT8};
+// F16 base {F16,INT8,UINT8}. Other combinations set errmsg and return NULL.
+
 // Constructor for building from dataset
-gpu_ivf_pq_c gpu_ivf_pq_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
+gpu_ivf_pq_c gpu_ivf_pq_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension,
                                  distance_type_t metric, ivf_pq_build_params_t build_params,
-                                 const int* devices, int device_count, uint32_t nthread, 
-                                 distribution_mode_t dist_mode, quantization_t qtype, 
+                                 const int* devices, int device_count, uint32_t nthread,
+                                 distribution_mode_t dist_mode, quantization_t btype, quantization_t qtype,
                                  const int64_t* ids, void* errmsg);
 
 // Constructor for building from MODF datafile
-gpu_ivf_pq_c gpu_ivf_pq_new_from_data_file(const char* data_filename, distance_type_t metric, 
+gpu_ivf_pq_c gpu_ivf_pq_new_from_data_file(const char* data_filename, distance_type_t metric,
                                                 ivf_pq_build_params_t build_params,
-                                                const int* devices, int device_count, uint32_t nthread, 
-                                                distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
+                                                const int* devices, int device_count, uint32_t nthread,
+                                                distribution_mode_t dist_mode, quantization_t btype, quantization_t qtype, void* errmsg);
 
 // Constructor for loading from file
 gpu_ivf_pq_c gpu_ivf_pq_load_file(const char* filename, uint32_t dimension, distance_type_t metric,
                                       ivf_pq_build_params_t build_params,
-                                      const int* devices, int device_count, uint32_t nthread, 
-                                      distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
+                                      const int* devices, int device_count, uint32_t nthread,
+                                      distribution_mode_t dist_mode, quantization_t btype, quantization_t qtype, void* errmsg);
 
 // Constructor for an empty index (pre-allocates)
-gpu_ivf_pq_c gpu_ivf_pq_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric, 
+gpu_ivf_pq_c gpu_ivf_pq_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric,
                                        ivf_pq_build_params_t build_params,
-                                       const int* devices, int device_count, uint32_t nthread, 
-                                       distribution_mode_t dist_mode, quantization_t qtype, 
+                                       const int* devices, int device_count, uint32_t nthread,
+                                       distribution_mode_t dist_mode, quantization_t btype, quantization_t qtype,
                                        const int64_t* ids, void* errmsg);
 
 // Add chunk of data (same type as index quantization)
@@ -72,18 +76,19 @@ void gpu_ivf_pq_extend_float(gpu_ivf_pq_c index_c, const float* new_data, uint64
 // Add chunk of data (from float, with on-the-fly quantization if needed)
 void gpu_ivf_pq_add_chunk_float(gpu_ivf_pq_c index_c, const float* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
 
-// Add chunk of vecf16 (half) data, quantizing natively to a 1-byte storage type
-// (int8/uint8) via the half-source quantizer. half_data is a host buffer of
-// chunk_count*dimension IEEE-fp16 values (passed as raw bytes). Requires int8/uint8 storage.
-void gpu_ivf_pq_add_chunk_quantize_half(gpu_ivf_pq_c index_c, const void* half_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
+// Add chunk of base-typed (B) data, quantizing natively to a 1-byte storage type
+// (int8/uint8) via the B-source quantizer. base_data is a host buffer of
+// chunk_count*dimension B elements (passed as raw bytes; B = btype). Requires int8/uint8 storage.
+void gpu_ivf_pq_add_chunk_quantize(gpu_ivf_pq_c index_c, const void* base_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
 
-// Quantize a vecf16 (half) query to the 1-byte storage type via the half-source
+// Quantize a base-typed (B) query to the 1-byte storage type via the B-source
 // quantizer, writing num_queries*dimension bytes into out. The caller then runs
 // the normal native search with the quantized query. Requires int8/uint8 storage.
-void gpu_ivf_pq_quantize_half(gpu_ivf_pq_c index_c, const void* half_data, uint64_t num_queries, void* out, void* errmsg);
+void gpu_ivf_pq_quantize_query(gpu_ivf_pq_c index_c, const void* base_data, uint64_t num_queries, void* out, void* errmsg);
 
-// Trains the scalar quantizer (if T is 1-byte)
-void gpu_ivf_pq_train_quantizer(gpu_ivf_pq_c index_c, const float* train_data, uint64_t n_samples, void* errmsg);
+// Trains the scalar quantizer (if storage is 1-byte). train_data is a host buffer
+// of n_samples*dimension B elements (B = btype), passed as raw bytes.
+void gpu_ivf_pq_train_quantizer(gpu_ivf_pq_c index_c, const void* train_data, uint64_t n_samples, void* errmsg);
 
 void gpu_ivf_pq_set_batch_window(gpu_ivf_pq_c index_c, int64_t window_us, void* errmsg);
 void gpu_ivf_pq_set_dynb_conservative_dispatch(gpu_ivf_pq_c index_c, bool enable, void* errmsg);

@@ -380,7 +380,7 @@ func (s *IvfpqSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuIvfPq[B, Q], error)
 		// nil index, which Search would treat as an (empty) success.
 		return nil, moerr.NewInternalErrorNoCtxf("IvfpqSearch: unsupported metric type %v", s.Idxcfg.CuvsIvfpq.Metric)
 	}
-	gpuIndices := make([]*cuvs.GpuIvfPq[Q], 0, len(s.Indexes))
+	gpuIndices := make([]*cuvs.GpuIvfPq[B, Q], 0, len(s.Indexes))
 	for _, model := range s.Indexes {
 		if model.Index != nil {
 			gpuIndices = append(gpuIndices, model.Index)
