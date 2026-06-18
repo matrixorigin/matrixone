@@ -108,6 +108,14 @@ func run(args []string) error {
 		return usage()
 	}
 	switch args[0] {
+	case "wizard":
+		return runWizard(args[1:])
+	case "plan":
+		return runPlan(args[1:])
+	case "apply":
+		return runApply(args[1:])
+	case "ops":
+		return runOps(args[1:])
 	case "hakeeper":
 		return runHAKeeper(args[1:])
 	case "local":
@@ -126,8 +134,13 @@ func usage() error {
   mo-logservice-repair hakeeper unblock --addresses host:port[,host:port] --payload JSON
   mo-logservice-repair local import-snapshot --deployment-id ID --node-host-id ID --node-host-dir DIR --raft-address ADDR --replica-id ID --snapshot-dir DIR --members JSON
   mo-logservice-repair local clean-replica --deployment-id ID --node-host-id ID --node-host-dir DIR --raft-address ADDR --gossip-address ADDR --shard-id ID --replica-id ID
+  mo-logservice-repair wizard [--mode local|k8s] [--base DIR] [--shard ID] [--apply]
+  mo-logservice-repair plan --mode local --base DIR --shard ID [--output FILE]
+  mo-logservice-repair apply --plan FILE [--yes]
+  mo-logservice-repair ops recover-dirty-log-shard --base DIR --shard ID [--apply]
 
-K8s/local plan/apply/verify commands are intentionally reserved for the next phase.`)
+The wizard/plan/apply commands are operator-oriented wrappers. Low-level
+hakeeper/local commands remain available for manual repair.`)
 }
 
 func runK8s(args []string) error {
