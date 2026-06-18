@@ -134,8 +134,9 @@ func usage() error {
   mo-logservice-repair hakeeper unblock --addresses host:port[,host:port] --payload JSON
   mo-logservice-repair local import-snapshot --deployment-id ID --node-host-id ID --node-host-dir DIR --raft-address ADDR --replica-id ID --snapshot-dir DIR --members JSON
   mo-logservice-repair local clean-replica --deployment-id ID --node-host-id ID --node-host-dir DIR --raft-address ADDR --gossip-address ADDR --shard-id ID --replica-id ID
-  mo-logservice-repair wizard [--mode local|k8s] [--base DIR] [--shard ID] [--apply]
+  mo-logservice-repair wizard [--mode local|k8s] [--base DIR|--namespace NS] [--shard ID] [--apply]
   mo-logservice-repair plan --mode local --base DIR --shard ID [--output FILE]
+  mo-logservice-repair plan --mode k8s --namespace NS --shard ID [--addresses host:port] [--deployment-id ID] [--output FILE]
   mo-logservice-repair apply --plan FILE [--yes]
   mo-logservice-repair ops recover-dirty-log-shard --base DIR --shard ID [--apply]
 

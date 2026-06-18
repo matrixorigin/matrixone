@@ -17,6 +17,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -162,6 +163,39 @@ func TestBuildPlanStoreRebuildsReportedTargetWithStaleMembership(t *testing.T) {
 	}
 }
 
+func TestBuildPlanStoreKeepsReportedTargetWithOnlyEpochLag(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "host-10-222-1-50", "08850055262063090202", "tandb")
+	if err := os.MkdirAll(filepath.Join(root, "node-1-272586"), 0750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	shard := logpb.LogShardInfo{
+		ShardID:  1,
+		Replicas: map[uint64]string{262146: "store-d02", 272586: "store-d03", 282826: "store-d01"},
+		Epoch:    602,
+		LeaderID: 262146,
+	}
+	reported := shard
+	reported.Epoch = 599
+	cfg := localLogConfig{
+		UUID:         "store-d03",
+		NodeHostDir:  dir,
+		DeploymentID: 8850055262063090202,
+	}
+	store := buildPlanStore(1, shard, cfg, "store-d02", logpb.LogStoreInfo{
+		Replicas: []logpb.LogReplicaInfo{{LogShardInfo: reported, ReplicaID: 272586}},
+	}, true)
+	if store.Role != "target" {
+		t.Fatalf("unexpected role: %s", store.Role)
+	}
+	if len(store.CleanupReplicas) != 0 {
+		t.Fatalf("unexpected cleanup replicas: %v", store.CleanupReplicas)
+	}
+	if len(store.Warnings) == 0 {
+		t.Fatalf("expected epoch warning")
+	}
+}
+
 func TestStableHAKeeperAddressesForApplyRanksCleanupStoresLast(t *testing.T) {
 	plan := &repairPlan{
 		HAKeeperAddresses: []string{"127.0.0.1:65201", "127.0.0.1:65301", "127.0.0.1:65401"},
@@ -181,5 +215,86 @@ func TestStableHAKeeperAddressesForApplyRanksCleanupStoresLast(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("unexpected addresses: got %v want %v", got, want)
 		}
+	}
+}
+
+func TestBuildK8sPlanStoreRebuildsDirtyTarget(t *testing.T) {
+	shard := logpb.LogShardInfo{
+		ShardID:  1,
+		Replicas: map[uint64]string{262146: "store-d02", 282826: "store-d01"},
+		Epoch:    602,
+		LeaderID: 262146,
+	}
+	stale := logpb.LogShardInfo{
+		ShardID:  1,
+		Replicas: map[uint64]string{262146: "store-d02", 262147: "store-d01"},
+		Epoch:    308,
+		LeaderID: 262146,
+	}
+	store := buildK8sPlanStore(1, shard, "store-d01", "store-d02", logpb.LogStoreInfo{
+		RaftAddress:   "store-d01-raft:32000",
+		GossipAddress: "store-d01-gossip:32002",
+		Replicas:      []logpb.LogReplicaInfo{{LogShardInfo: stale, ReplicaID: 282826}},
+	}, true, wizardOptions{
+		pvcDataDir:   "/repair-pvc/logservice-data",
+		deploymentID: 8850055262063090202,
+	})
+	if store.Role != "rebuild" {
+		t.Fatalf("unexpected role: %s", store.Role)
+	}
+	if store.NodeHostDir != "/repair-pvc/logservice-data/store-d01" {
+		t.Fatalf("unexpected nodehost dir: %s", store.NodeHostDir)
+	}
+	if len(store.CleanupReplicas) != 1 || store.CleanupReplicas[0] != 282826 {
+		t.Fatalf("unexpected cleanup replicas: %v", store.CleanupReplicas)
+	}
+}
+
+func TestBuildK8sActionsIncludesRepairPodAndCleanCommand(t *testing.T) {
+	plan := &repairPlan{
+		Mode:              modeK8s,
+		Namespace:         "mo-prod",
+		ShardID:           1,
+		HAKeeperAddresses: []string{"127.0.0.1:32001"},
+		TargetShard: planShard{
+			ShardID:  1,
+			Replicas: map[uint64]string{282826: "store-d01"},
+			Epoch:    602,
+		},
+		InitialBlockedStores:    []string{"store-d01"},
+		PersistentBlockedStores: []string{"store-d00"},
+		RebuildStores:           []string{"store-d01"},
+		Stores: []planStore{{
+			UUID:            "store-d01",
+			Role:            "rebuild",
+			NodeHostDir:     "/repair-pvc/logservice-data/store-d01",
+			DeploymentID:    8850055262063090202,
+			RaftAddress:     "store-d01-raft:32000",
+			ListenAddress:   "store-d01-raft:32000",
+			GossipAddress:   "store-d01-gossip:32002",
+			CleanupReplicas: []uint64{282826},
+		}},
+		K8s: &k8sPlanSettings{
+			Kubectl:              "kubectl",
+			LogSelector:          "component=logservice",
+			PVCMountPath:         "/repair-pvc",
+			PVCLogServiceDataDir: "/repair-pvc/logservice-data",
+			RepairImage:          "matrixorigin/matrixone:test",
+			RepairBinary:         "/tmp/mo-logservice-repair",
+			DeploymentID:         8850055262063090202,
+		},
+	}
+	actions := buildK8sActions(plan)
+	joined := ""
+	for _, action := range actions {
+		joined += action.Command + "\n"
+	}
+	if !strings.Contains(joined, "persistentVolumeClaim") || !strings.Contains(joined, "<pvc-name-for-d01>") {
+		t.Fatalf("repair pod pvc command missing: %s", joined)
+	}
+	if !strings.Contains(joined, "local clean-replica") ||
+		!strings.Contains(joined, "--node-host-dir") ||
+		!strings.Contains(joined, "/repair-pvc/logservice-data/store-d01") {
+		t.Fatalf("clean command missing: %s", joined)
 	}
 }

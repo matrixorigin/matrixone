@@ -41,20 +41,26 @@ const (
 )
 
 type wizardOptions struct {
-	mode          string
-	baseDir       string
-	confDir       string
-	shardID       uint64
-	shardIDSet    bool
-	addresses     string
-	output        string
-	planPath      string
-	apply         bool
-	yes           bool
-	timeout       time.Duration
-	moServicePath string
-	namespace     string
-	kubeContext   string
+	mode           string
+	baseDir        string
+	confDir        string
+	shardID        uint64
+	shardIDSet     bool
+	addresses      string
+	output         string
+	planPath       string
+	apply          bool
+	yes            bool
+	timeout        time.Duration
+	moServicePath  string
+	namespace      string
+	kubeContext    string
+	k8sLogSelector string
+	pvcMountPath   string
+	pvcDataDir     string
+	repairImage    string
+	repairBinary   string
+	deploymentID   uint64
 }
 
 type repairPlan struct {
@@ -77,12 +83,25 @@ type repairPlan struct {
 	Warnings                []string           `json:"warnings,omitempty"`
 	ApplySupported          bool               `json:"applySupported"`
 	Local                   *localPlanSettings `json:"local,omitempty"`
+	K8s                     *k8sPlanSettings   `json:"k8s,omitempty"`
 }
 
 type localPlanSettings struct {
 	MOServicePath string `json:"moServicePath,omitempty"`
 	BackupDir     string `json:"backupDir,omitempty"`
 	LogDir        string `json:"logDir,omitempty"`
+}
+
+type k8sPlanSettings struct {
+	Kubectl               string `json:"kubectl"`
+	LogSelector           string `json:"logSelector,omitempty"`
+	PVCMountPath          string `json:"pvcMountPath"`
+	PVCLogServiceDataDir  string `json:"pvcLogServiceDataDir"`
+	RepairImage           string `json:"repairImage"`
+	RepairBinary          string `json:"repairBinary"`
+	DeploymentID          uint64 `json:"deploymentID,omitempty"`
+	DeploymentIDRequired  bool   `json:"deploymentIDRequired,omitempty"`
+	HAKeeperPortForwarded bool   `json:"hakeeperPortForwarded,omitempty"`
 }
 
 type planShard struct {
@@ -187,6 +206,9 @@ func runWizard(args []string) error {
 		fmt.Printf("plan written to %s\n", opts.output)
 	}
 	if !opts.apply {
+		if !plan.ApplySupported {
+			return nil
+		}
 		if opts.yes {
 			return nil
 		}
@@ -278,6 +300,12 @@ func parseWizardFlags(name string, args []string) (wizardOptions, error) {
 	fs.StringVar(&opts.moServicePath, "mo-service", "", "mo-service binary path used when restarting local stores")
 	fs.StringVar(&opts.namespace, "namespace", "", "kubernetes namespace")
 	fs.StringVar(&opts.kubeContext, "context", "", "kubernetes context")
+	fs.StringVar(&opts.k8sLogSelector, "k8s-log-selector", "app.kubernetes.io/component=logservice", "kubernetes selector used to list LogService pods")
+	fs.StringVar(&opts.pvcMountPath, "pvc-mount-path", "/repair-pvc", "mount path used by the temporary k8s repair pod")
+	fs.StringVar(&opts.pvcDataDir, "pvc-logservice-data-dir", "", "logservice-data directory inside the temporary k8s repair pod")
+	fs.StringVar(&opts.repairImage, "repair-image", "matrixorigin/matrixone:latest", "image used by the temporary k8s repair pod")
+	fs.StringVar(&opts.repairBinary, "repair-binary", "/tmp/mo-logservice-repair", "mo-logservice-repair path inside the temporary repair pod")
+	fs.Uint64Var(&opts.deploymentID, "deployment-id", 0, "dragonboat deployment id; required for exact k8s PVC clean-replica commands")
 	if err := fs.Parse(args); err != nil {
 		return opts, err
 	}
@@ -356,47 +384,330 @@ func buildK8sRepairPlan(opts wizardOptions) (*repairPlan, error) {
 	if opts.namespace == "" {
 		return nil, fmt.Errorf("--namespace is required for k8s mode")
 	}
+	kubectl := kubectlCommand(opts.kubeContext)
+	if opts.pvcMountPath == "" {
+		opts.pvcMountPath = "/repair-pvc"
+	}
+	if opts.pvcDataDir == "" {
+		opts.pvcDataDir = filepath.Join(opts.pvcMountPath, "logservice-data")
+	}
+	if opts.repairImage == "" {
+		opts.repairImage = "matrixorigin/matrixone:latest"
+	}
+	if opts.repairBinary == "" {
+		opts.repairBinary = "/tmp/mo-logservice-repair"
+	}
 	plan := &repairPlan{
-		Version:        repairPlanVersion,
-		Mode:           modeK8s,
-		CreatedAt:      time.Now().Format(time.RFC3339),
-		Namespace:      opts.namespace,
-		KubeContext:    opts.kubeContext,
-		ShardID:        opts.shardID,
-		ApplySupported: false,
+		Version:           repairPlanVersion,
+		Mode:              modeK8s,
+		CreatedAt:         time.Now().Format(time.RFC3339),
+		Namespace:         opts.namespace,
+		KubeContext:       opts.kubeContext,
+		ShardID:           opts.shardID,
+		HAKeeperAddresses: splitAddresses(opts.addresses),
+		ApplySupported:    false,
+		K8s: &k8sPlanSettings{
+			Kubectl:              kubectl,
+			LogSelector:          opts.k8sLogSelector,
+			PVCMountPath:         opts.pvcMountPath,
+			PVCLogServiceDataDir: opts.pvcDataDir,
+			RepairImage:          opts.repairImage,
+			RepairBinary:         opts.repairBinary,
+			DeploymentID:         opts.deploymentID,
+			DeploymentIDRequired: opts.deploymentID == 0,
+		},
 		Warnings: []string{
 			"k8s mode is plan-only in this version; it does not edit PVC data directly",
 			"cleaning replicas in k8s must be done from a maintenance pod after the target LogService pod is stopped",
 		},
 	}
-	kubectl := "kubectl"
-	if opts.kubeContext != "" {
-		kubectl += " --context " + shellQuote(opts.kubeContext)
+	if len(plan.HAKeeperAddresses) == 0 {
+		plan.Warnings = append(plan.Warnings, "pass --addresses after port-forwarding HAKeeper to generate membership-aware store cleanup actions")
+		plan.Actions = buildK8sActions(plan)
+		return plan, nil
 	}
-	plan.Actions = []planAction{
-		{
-			Type:        "discover-k8s",
-			Description: "Discover LogService pods, services, configmaps, and PVCs in the namespace.",
-			Command:     fmt.Sprintf("%s -n %s get pod,svc,cm,pvc", kubectl, shellQuote(opts.namespace)),
-		},
-		{
-			Type:        "read-hakeeper-state",
-			Description: "Port-forward or exec into a LogService pod and run hakeeper state to confirm live membership.",
-		},
-		{
-			Type:        "stop-target-pods",
-			Description: "Stop only the LogService pods that contain dirty local replicas before any PVC cleanup.",
-		},
-		{
-			Type:        "repair-pod-cleanup",
-			Description: "Start a temporary repair pod mounting the same PVC and run local clean-replica inside that pod.",
-		},
-		{
-			Type:        "restart-and-unblock",
-			Description: "Restart LogService pods, then unblock cleaned stores one at a time and verify snapshot restore.",
-		},
+
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	defer cancel()
+	client, addr, err := connect(ctx, plan.HAKeeperAddresses)
+	if err != nil {
+		return nil, fmt.Errorf("connect hakeeper: %w", err)
 	}
+	defer client.Close()
+	state, err := getClusterState(ctx, client, addr)
+	if err != nil {
+		return nil, fmt.Errorf("get cluster state: %w", err)
+	}
+	shard, ok := state.LogState.Shards[opts.shardID]
+	if !ok {
+		return nil, fmt.Errorf("shard %d not found in HAKeeper state", opts.shardID)
+	}
+	plan.TargetShard = toPlanShard(shard)
+	targetByStore := replicaByStore(shard)
+	sourceStore := targetByStore[shard.LeaderID]
+	plan.SourceStore = sourceStore
+	if sourceStore == "" {
+		plan.Warnings = append(plan.Warnings, "HAKeeper has no leader for the target shard; source replica must be reviewed manually")
+	}
+
+	storeSet := targetStores(shard)
+	for uuid, info := range state.LogState.Stores {
+		if storeSet[uuid] {
+			continue
+		}
+		for _, replica := range info.Replicas {
+			if replica.ShardID == opts.shardID {
+				storeSet[uuid] = true
+				break
+			}
+		}
+	}
+	storeIDs := make([]string, 0, len(storeSet))
+	for uuid := range storeSet {
+		storeIDs = append(storeIDs, uuid)
+	}
+	sort.Strings(storeIDs)
+	for _, uuid := range storeIDs {
+		storeInfo, hasStoreInfo := state.LogState.Stores[uuid]
+		store := buildK8sPlanStore(opts.shardID, shard, uuid, sourceStore, storeInfo, hasStoreInfo, opts)
+		if store.NeedsStopAndStart {
+			plan.RebuildStores = append(plan.RebuildStores, store.UUID)
+			plan.InitialBlockedStores = append(plan.InitialBlockedStores, store.UUID)
+		}
+		for _, warning := range store.Warnings {
+			plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: %s", store.UUID, warning))
+		}
+		if store.Role == "stale" {
+			plan.PersistentBlockedStores = append(plan.PersistentBlockedStores, store.UUID)
+			plan.InitialBlockedStores = append(plan.InitialBlockedStores, store.UUID)
+		}
+		plan.Stores = append(plan.Stores, store)
+	}
+	plan.InitialBlockedStores = uniqueStrings(plan.InitialBlockedStores)
+	plan.PersistentBlockedStores = uniqueStrings(plan.PersistentBlockedStores)
+	plan.RebuildStores = uniqueStrings(plan.RebuildStores)
+	plan.Actions = buildK8sActions(plan)
 	return plan, nil
+}
+
+func buildK8sPlanStore(
+	shardID uint64,
+	shard logpb.LogShardInfo,
+	uuid string,
+	sourceStore string,
+	storeInfo logpb.LogStoreInfo,
+	hasStoreInfo bool,
+	opts wizardOptions,
+) planStore {
+	targetReplicaID := uint64(0)
+	for replicaID, store := range shard.Replicas {
+		if store == uuid {
+			targetReplicaID = replicaID
+			break
+		}
+	}
+	if targetReplicaID == 0 {
+		for replicaID, store := range shard.NonVotingReplicas {
+			if store == uuid {
+				targetReplicaID = replicaID
+				break
+			}
+		}
+	}
+	reportedReplicas := reportedShardReplicas(storeInfo, shardID)
+	replicaReported := false
+	replicaHealthy := false
+	reportWarnings := []string(nil)
+	if targetReplicaID != 0 && hasStoreInfo {
+		replicaReported, replicaHealthy, reportWarnings = storeReportsHealthyReplica(storeInfo, shard, targetReplicaID)
+	}
+	role := "unused"
+	switch {
+	case uuid == sourceStore:
+		role = "source"
+	case targetReplicaID != 0:
+		if replicaHealthy {
+			role = "target"
+		} else {
+			role = "rebuild"
+			if replicaReported && len(reportWarnings) > 0 {
+				reportWarnings = append(reportWarnings, "target replica is reported by HAKeeper heartbeat, but its local shard membership differs from the target shard; PVC data must be rebuilt")
+			}
+		}
+	case len(reportedReplicas) > 0:
+		role = "stale"
+	}
+	cleanupReplicas := []uint64(nil)
+	if role == "rebuild" {
+		cleanupReplicas = append(cleanupReplicas, reportedReplicas...)
+		if targetReplicaID != 0 {
+			cleanupReplicas = append(cleanupReplicas, targetReplicaID)
+		}
+		cleanupReplicas = uniqueUint64s(cleanupReplicas)
+	}
+	nodeHostDir := ""
+	if opts.pvcDataDir != "" {
+		nodeHostDir = filepath.Join(opts.pvcDataDir, uuid)
+	}
+	return planStore{
+		UUID:               uuid,
+		Role:               role,
+		NodeHostDir:        nodeHostDir,
+		DeploymentID:       opts.deploymentID,
+		ServiceAddress:     storeInfo.ServiceAddress,
+		RaftAddress:        storeInfo.RaftAddress,
+		ListenAddress:      storeInfo.RaftAddress,
+		GossipAddress:      storeInfo.GossipAddress,
+		TargetReplicaID:    targetReplicaID,
+		LocalReplicas:      reportedReplicas,
+		CleanupReplicas:    cleanupReplicas,
+		Warnings:           reportWarnings,
+		NeedsStopAndStart:  targetReplicaID != 0 && len(cleanupReplicas) > 0,
+		PresentInHAKeeper:  targetReplicaID != 0,
+		PresentInLocalData: len(reportedReplicas) > 0,
+	}
+}
+
+func reportedShardReplicas(storeInfo logpb.LogStoreInfo, shardID uint64) []uint64 {
+	seen := make(map[uint64]bool)
+	for _, replica := range storeInfo.Replicas {
+		if replica.ShardID == shardID {
+			seen[replica.ReplicaID] = true
+		}
+	}
+	ret := make([]uint64, 0, len(seen))
+	for replicaID := range seen {
+		ret = append(ret, replicaID)
+	}
+	sort.Slice(ret, func(i, j int) bool { return ret[i] < ret[j] })
+	return ret
+}
+
+func buildK8sActions(plan *repairPlan) []planAction {
+	k := plan.K8s
+	kubectl := "kubectl"
+	if k != nil && k.Kubectl != "" {
+		kubectl = k.Kubectl
+	}
+	namespace := shellQuote(plan.Namespace)
+	actions := make([]planAction, 0)
+	actions = append(actions, planAction{
+		Type:        "discover-k8s",
+		Description: "Discover LogService pods, services, configmaps, and PVCs in the namespace.",
+		Command:     fmt.Sprintf("%s -n %s get pod,svc,cm,pvc -o wide", kubectl, namespace),
+	})
+	if k != nil && k.LogSelector != "" {
+		actions = append(actions, planAction{
+			Type:        "discover-logservice-pods",
+			Description: "List LogService pods with labels and mounted PVC names. Confirm each store UUID maps to the expected pod/PVC before cleanup.",
+			Command:     fmt.Sprintf("%s -n %s get pod -l %s -o wide --show-labels", kubectl, namespace, shellQuote(k.LogSelector)),
+		})
+	}
+	if len(plan.HAKeeperAddresses) == 0 {
+		actions = append(actions, planAction{
+			Type:        "port-forward-hakeeper",
+			Description: "Port-forward one running LogService/HAKeeper service, then rerun plan with --addresses 127.0.0.1:<local-port>.",
+			Command:     fmt.Sprintf("%s -n %s port-forward svc/<logservice-or-hakeeper-service> 32001:<hakeeper-service-port>", kubectl, namespace),
+		})
+		return actions
+	}
+	actions = append(actions, planAction{
+		Type:        "hakeeper-state",
+		Description: "Save HAKeeper state used by this k8s repair plan.",
+		Command:     fmt.Sprintf("mo-logservice-repair hakeeper state --addresses %s > /tmp/mo-logservice-hakeeper-state-before.json", strings.Join(plan.HAKeeperAddresses, ",")),
+	})
+	if len(plan.TargetShard.Replicas) > 0 {
+		actions = append(actions, planAction{
+			Type:        "hakeeper-repair",
+			Description: "Write repair state and block stale/dirty stores before stopping pods and mounting PVCs.",
+			Command:     fmt.Sprintf("mo-logservice-repair hakeeper repair --addresses %s --payload '%s'", strings.Join(plan.HAKeeperAddresses, ","), mustJSON(repairPayloadForPlan(plan, plan.InitialBlockedStores, "k8s wizard: block stale/dirty stores before PVC cleanup"))),
+			ShardID:     plan.ShardID,
+		})
+	}
+	for _, store := range plan.Stores {
+		if len(store.CleanupReplicas) == 0 {
+			continue
+		}
+		repairPod := k8sRepairPodName(store.UUID)
+		pvcPlaceholder := k8sStorePVCPlaceholder(store.UUID)
+		actions = append(actions,
+			planAction{
+				Type:        "k8s-stop-logservice-pod",
+				Description: "Stop the LogService pod that owns this store UUID and make sure the PVC is no longer mounted by mo-service.",
+				Store:       store.UUID,
+				Command:     fmt.Sprintf("%s -n %s get pod,pvc -o wide | grep -E %s\n# Stop the owning LogService workload for store %s before mounting PVC %s in a repair pod.", kubectl, namespace, shellQuote(shortStoreID(store.UUID)+"|"+store.UUID), store.UUID, pvcPlaceholder),
+			},
+			planAction{
+				Type:        "k8s-create-repair-pod",
+				Description: "Create a temporary repair pod mounting the same PVC at the configured repair mount path.",
+				Store:       store.UUID,
+				Command:     k8sRepairPodManifestCommand(kubectl, plan.Namespace, repairPod, pvcPlaceholder, k),
+			},
+			planAction{
+				Type:        "k8s-copy-repair-binary",
+				Description: "Copy the tested mo-logservice-repair binary into the temporary repair pod.",
+				Store:       store.UUID,
+				Command:     fmt.Sprintf("%s -n %s cp /tmp/mo-logservice-repair %s:%s && %s -n %s exec %s -- chmod +x %s", kubectl, namespace, shellQuote(repairPod), shellQuote(k.RepairBinary), kubectl, namespace, shellQuote(repairPod), shellQuote(k.RepairBinary)),
+			},
+			planAction{
+				Type:        "k8s-list-pvc-replicas",
+				Description: "List shard-local residuals inside the PVC. Clean any extra node-<shard>-<replica> entries that are not already listed in this plan.",
+				Store:       store.UUID,
+				Command:     fmt.Sprintf("%s -n %s exec %s -- sh -c %s", kubectl, namespace, shellQuote(repairPod), shellQuote(fmt.Sprintf("find %s -path '*/tandb/node-%d-*' -o -path '*/snapshot-part-%d/snapshot-%d-*' | sort", shellQuote(store.NodeHostDir), plan.ShardID, plan.ShardID, plan.ShardID))),
+			},
+			planAction{
+				Type:        "k8s-backup-pvc-nodehost",
+				Description: "Back up the store nodehost directory inside the same PVC before cleanup.",
+				Store:       store.UUID,
+				Command:     fmt.Sprintf("%s -n %s exec %s -- sh -c %s", kubectl, namespace, shellQuote(repairPod), shellQuote(fmt.Sprintf("ts=$(date +%%Y%%m%%d-%%H%%M%%S); cp -a %s %s.repair-backup.$ts", shellQuote(store.NodeHostDir), shellQuote(store.NodeHostDir)))),
+			},
+		)
+		for _, replicaID := range store.CleanupReplicas {
+			actions = append(actions, planAction{
+				Type:        "k8s-clean-replica",
+				Description: "Clean one dirty local replica from the mounted PVC while the owning LogService pod is stopped.",
+				Store:       store.UUID,
+				ShardID:     plan.ShardID,
+				ReplicaID:   replicaID,
+				Command:     k8sCleanReplicaCommand(kubectl, plan.Namespace, repairPod, k, store, plan.ShardID, replicaID),
+			})
+		}
+		actions = append(actions, planAction{
+			Type:        "k8s-delete-repair-pod",
+			Description: "Delete the temporary repair pod after PVC cleanup completes.",
+			Store:       store.UUID,
+			Command:     fmt.Sprintf("%s -n %s delete pod %s --wait=true", kubectl, namespace, shellQuote(repairPod)),
+		})
+	}
+	for _, storeUUID := range plan.RebuildStores {
+		actions = append(actions, planAction{
+			Type:        "k8s-restart-logservice-pod",
+			Description: "Start or unpause the original LogService pod/workload for this store and wait until it is Ready.",
+			Store:       storeUUID,
+			Command:     fmt.Sprintf("# Restart the original LogService pod/workload for store %s, then wait for Ready:\n%s -n %s get pod -o wide | grep -E %s", storeUUID, kubectl, namespace, shellQuote(shortStoreID(storeUUID)+"|"+storeUUID)),
+		})
+		actions = append(actions, planAction{
+			Type:        "hakeeper-unblock",
+			Description: "Unblock one cleaned store and wait for L/Start/snapshot restore before continuing.",
+			Store:       storeUUID,
+			ShardID:     plan.ShardID,
+			Command:     fmt.Sprintf("mo-logservice-repair hakeeper unblock --addresses %s --payload '{\"shardID\":%d,\"stores\":[\"%s\"],\"reason\":\"k8s wizard: cleaned %s\"}'", strings.Join(plan.HAKeeperAddresses, ","), plan.ShardID, storeUUID, storeUUID),
+		})
+	}
+	if len(plan.TargetShard.Replicas) > 0 {
+		actions = append(actions, planAction{
+			Type:        "hakeeper-repair-final",
+			Description: "Refresh final repair state and keep only persistent stale stores blocked.",
+			Command:     fmt.Sprintf("mo-logservice-repair hakeeper repair --addresses %s --payload '%s'", strings.Join(plan.HAKeeperAddresses, ","), mustJSON(repairPayloadForPlan(plan, plan.PersistentBlockedStores, "k8s wizard: repair complete"))),
+			ShardID:     plan.ShardID,
+		})
+	}
+	actions = append(actions, planAction{
+		Type:        "verify",
+		Description: "Verify final HAKeeper state, SQL, and LogService logs after cleaned pods rejoin.",
+		Command:     fmt.Sprintf("mo-logservice-repair hakeeper state --addresses %s", strings.Join(plan.HAKeeperAddresses, ",")),
+	})
+	return actions
 }
 
 func buildLocalRepairPlan(opts wizardOptions) (*repairPlan, error) {
@@ -674,7 +985,7 @@ func storeReportsHealthyReplica(storeInfo logpb.LogStoreInfo, shard logpb.LogSha
 			continue
 		}
 		warnings := compareReportedShard(replica.LogShardInfo, shard)
-		return true, len(warnings) == 0, warnings
+		return true, reportedShardMembershipMatches(replica.LogShardInfo, shard), warnings
 	}
 	return false, false, nil
 }
@@ -694,6 +1005,12 @@ func compareReportedShard(reported logpb.LogShardInfo, target logpb.LogShardInfo
 		warnings = append(warnings, fmt.Sprintf("reported non-voting replicas %s differ from target %s", formatReplicaMap(reported.NonVotingReplicas), formatReplicaMap(target.NonVotingReplicas)))
 	}
 	return warnings
+}
+
+func reportedShardMembershipMatches(reported logpb.LogShardInfo, target logpb.LogShardInfo) bool {
+	return reported.ShardID == target.ShardID &&
+		sameReplicaMap(reported.Replicas, target.Replicas) &&
+		sameReplicaMap(reported.NonVotingReplicas, target.NonVotingReplicas)
 }
 
 func sameReplicaMap(a map[uint64]string, b map[uint64]string) bool {
@@ -1497,6 +1814,139 @@ func uniqueStringsKeepOrder(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func uniqueUint64s(values []uint64) []uint64 {
+	seen := make(map[uint64]bool)
+	out := make([]uint64, 0, len(values))
+	for _, value := range values {
+		if value == 0 || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func kubectlCommand(kubeContext string) string {
+	if kubeContext == "" {
+		return "kubectl"
+	}
+	return "kubectl --context " + shellQuote(kubeContext)
+}
+
+func shortStoreID(uuid string) string {
+	parts := strings.Split(uuid, "-")
+	if len(parts) > 0 && parts[len(parts)-1] != "" {
+		return parts[len(parts)-1]
+	}
+	if len(uuid) <= 8 {
+		return uuid
+	}
+	return uuid[len(uuid)-8:]
+}
+
+func k8sNameSafe(value string) string {
+	value = strings.ToLower(value)
+	replacer := strings.NewReplacer("_", "-", ".", "-", ":", "-")
+	value = replacer.Replace(value)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if ok {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+func k8sRepairPodName(storeUUID string) string {
+	name := "mo-logservice-repair-" + k8sNameSafe(shortStoreID(storeUUID))
+	if len(name) > 63 {
+		return name[:63]
+	}
+	return name
+}
+
+func k8sStorePVCPlaceholder(storeUUID string) string {
+	return "<pvc-name-for-" + shortStoreID(storeUUID) + ">"
+}
+
+func k8sRepairPodManifestCommand(kubectl string, namespace string, podName string, pvcName string, settings *k8sPlanSettings) string {
+	image := "matrixorigin/matrixone:latest"
+	mountPath := "/repair-pvc"
+	if settings != nil {
+		image = firstNonEmpty(settings.RepairImage, image)
+		mountPath = firstNonEmpty(settings.PVCMountPath, mountPath)
+	}
+	return fmt.Sprintf(`cat <<'YAML' >/tmp/%s.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: %s
+spec:
+  restartPolicy: Never
+  containers:
+  - name: repair
+    image: %s
+    command: ["sleep", "36000"]
+    volumeMounts:
+    - name: logservice-data
+      mountPath: %s
+  volumes:
+  - name: logservice-data
+    persistentVolumeClaim:
+      claimName: %s
+YAML
+%s -n %s apply -f /tmp/%s.yaml
+%s -n %s wait --for=condition=Ready pod/%s --timeout=120s`,
+		podName,
+		podName,
+		image,
+		mountPath,
+		pvcName,
+		kubectl,
+		shellQuote(namespace),
+		podName,
+		kubectl,
+		shellQuote(namespace),
+		shellQuote(podName),
+	)
+}
+
+func k8sCleanReplicaCommand(kubectl string, namespace string, repairPod string, settings *k8sPlanSettings, store planStore, shardID uint64, replicaID uint64) string {
+	binary := "/tmp/mo-logservice-repair"
+	deploymentID := "<deployment-id>"
+	if settings != nil {
+		binary = firstNonEmpty(settings.RepairBinary, binary)
+		if settings.DeploymentID != 0 {
+			deploymentID = strconv.FormatUint(settings.DeploymentID, 10)
+		}
+	}
+	raftAddress := firstNonEmpty(store.RaftAddress, "127.0.0.1:19000")
+	listenAddress := firstNonEmpty(store.ListenAddress, raftAddress)
+	gossipAddress := firstNonEmpty(store.GossipAddress, "127.0.0.1:19002")
+	command := fmt.Sprintf("%s local clean-replica --deployment-id %s --node-host-id %s --node-host-dir %s --raft-address %s --listen-address %s --gossip-address %s --shard-id %d --replica-id %d",
+		shellQuote(binary),
+		deploymentID,
+		shellQuote(store.UUID),
+		shellQuote(store.NodeHostDir),
+		shellQuote(raftAddress),
+		shellQuote(listenAddress),
+		shellQuote(gossipAddress),
+		shardID,
+		replicaID,
+	)
+	return fmt.Sprintf("%s -n %s exec %s -- sh -c %s", kubectl, shellQuote(namespace), shellQuote(repairPod), shellQuote(command))
 }
 
 func shellQuote(s string) string {
