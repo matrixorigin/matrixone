@@ -817,7 +817,20 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
 		err = suppressRemoteRunCancelError(s.Proc.Ctx, err)
-		reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, err, s.Proc.Mp())
+		if !process.SendPipelineSignalWithTimeout(
+			reg,
+			process.NewPipelineSignalToDirectly(nil, err, s.Proc.Mp()),
+			process.PipelineSignalSendTimeout) {
+			chLen, chCap := process.WaitRegisterChannelState(reg)
+			process.WarnPipelineCleanupf(
+				s.Proc,
+				"remote_notify_cleanup_send_terminal_signal",
+				"remote notify cleanup timed out sending terminal signal: timeout=%s channel_len=%d channel_cap=%d err=%v",
+				process.PipelineSignalSendTimeout,
+				chLen,
+				chCap,
+				err)
+		}
 		resultChan <- notifyMessageResult{err: err, sender: sender}
 		wg.Done()
 	}

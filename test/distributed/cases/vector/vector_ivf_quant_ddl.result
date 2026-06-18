@@ -27,17 +27,29 @@ a
 4
 create table qc clone q;
 select a from qc order by l2_distance(v,'[1,1,1,1]') limit 3;
-internal error: version not found
+a
+1
+2
+3
 select a from qc order by l2_distance(v,'[54,54,54,54]') limit 3;
-internal error: version not found
+a
+6
+5
+4
 drop snapshot if exists ivfqsp;
 create snapshot ivfqsp for account sys;
 drop database if exists ivfqddl2;
 create database ivfqddl2 clone ivfqddl {snapshot='ivfqsp'};
 select a from ivfqddl2.q order by l2_distance(v,'[1,1,1,1]') limit 3;
-internal error: version not found
+a
+1
+2
+3
 select a from ivfqddl2.q order by l2_distance(v,'[54,54,54,54]') limit 3;
-internal error: version not found
+a
+6
+5
+4
 drop snapshot ivfqsp;
 drop database ivfqddl2;
 alter table q add column note varchar(10) default 'x';

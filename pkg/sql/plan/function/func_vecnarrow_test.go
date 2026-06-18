@@ -23,7 +23,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// l2 of [1,2,3] vs [4,6,8]: sqrt(9+16+25)=sqrt(50)=7.0710678...
+// l2 of [1,2,3] vs [4,6,8]: sqrt(9+16+25)=sqrt(50)=7.0710678118654755
+// (the distance is computed in float64; the framework's InEpsilonF64 1e-9
+// tolerance absorbs cross-platform variance).
 func TestL2DistanceNarrowArray(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -34,7 +36,7 @@ func TestL2DistanceNarrowArray(t *testing.T) {
 				NewFunctionTestInput(types.T_array_int8.ToType(), [][]int8{{1, 2, 3}}, []bool{false}),
 				NewFunctionTestInput(types.T_array_int8.ToType(), [][]int8{{4, 6, 8}}, []bool{false}),
 			},
-			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{7.071067810058594}, []bool{false}),
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{7.0710678118654755}, []bool{false}),
 			L2DistanceArrayViaF32[int8])
 		s, info := tc.Run()
 		require.True(t, s, info)
@@ -47,7 +49,7 @@ func TestL2DistanceNarrowArray(t *testing.T) {
 				NewFunctionTestInput(types.T_array_uint8.ToType(), [][]uint8{{1, 2, 3}}, []bool{false}),
 				NewFunctionTestInput(types.T_array_uint8.ToType(), [][]uint8{{4, 6, 8}}, []bool{false}),
 			},
-			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{7.071067810058594}, []bool{false}),
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{7.0710678118654755}, []bool{false}),
 			L2DistanceArrayViaF32[uint8])
 		s, info := tc.Run()
 		require.True(t, s, info)
@@ -67,7 +69,7 @@ func TestL2DistanceNarrowArray(t *testing.T) {
 				NewFunctionTestInput(types.T_array_bf16.ToType(), [][]types.BF16{mk(1, 2, 3)}, []bool{false}),
 				NewFunctionTestInput(types.T_array_bf16.ToType(), [][]types.BF16{mk(4, 6, 8)}, []bool{false}),
 			},
-			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{7.071067810058594}, []bool{false}),
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{7.0710678118654755}, []bool{false}),
 			L2DistanceArrayViaF32[types.BF16])
 		s, info := tc.Run()
 		require.True(t, s, info)
@@ -87,7 +89,7 @@ func TestL2DistanceNarrowArray(t *testing.T) {
 				NewFunctionTestInput(types.T_array_float16.ToType(), [][]types.Float16{mk(1, 2, 3)}, []bool{false}),
 				NewFunctionTestInput(types.T_array_float16.ToType(), [][]types.Float16{mk(4, 6, 8)}, []bool{false}),
 			},
-			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{7.071067810058594}, []bool{false}),
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{7.0710678118654755}, []bool{false}),
 			L2DistanceArrayViaF32[types.Float16])
 		s, info := tc.Run()
 		require.True(t, s, info)

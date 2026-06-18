@@ -23,7 +23,8 @@ load data infile '$resources/load_data/narrow_vec_array.csv' into table nvec fie
 select * from nvec order by id;
 
 -- distance functions work on a loaded narrow column
-select id, l2_distance(c, '[0,0,0]') as dist from nvec order by id;
+-- round to 4 digits: l2_distance (sqrt, float64) low-order bits vary across SIMD kernels
+select id, round(l2_distance(c, '[0,0,0]'), 4) as dist from nvec order by id;
 
 -- ============================================================
 -- 2. Strict int8 parse: out-of-range value (200) is rejected.

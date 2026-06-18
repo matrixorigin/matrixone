@@ -38,15 +38,18 @@ select cast(cast("[1,2,3]" as vecuint8(3)) as vecint8(3));
 select cast(cast("[1,2,3]" as vecuint8(3)) as vecbf16(3));
 
 -- distance functions on vecuint8
-select a, l2_distance(v, "[0,1,2,3]") from u8t order by a;
+-- l2_distance / cosine_* involve sqrt/division and are computed in float64;
+-- round to 4 digits so the low-order bits don't diverge across CPU SIMD kernels.
+-- l2_distance_sq / inner_product are integer-exact for uint8 (no rounding).
+select a, round(l2_distance(v, "[0,1,2,3]"), 4) from u8t order by a;
 select a, l2_distance_sq(v, "[0,1,2,3]") from u8t order by a;
 select a, inner_product(v, "[1,1,1,1]") from u8t order by a;
-select a, cosine_distance(v, "[0,1,2,3]") from u8t order by a;
-select a, cosine_similarity(v, "[0,1,2,3]") from u8t order by a;
+select a, round(cosine_distance(v, "[0,1,2,3]"), 4) from u8t order by a;
+select a, round(cosine_similarity(v, "[0,1,2,3]"), 4) from u8t order by a;
 select normalize_l2(v) from u8t order by a;
 
 -- distance between two vecuint8 values
-select a, l2_distance(v, cast("[10,20,30,40]" as vecuint8(4))) from u8t order by a;
+select a, round(l2_distance(v, cast("[10,20,30,40]" as vecuint8(4))), 4) from u8t order by a;
 
 -- top-K (ORDER BY distance + LIMIT)
 select a from u8t order by l2_distance(v, '[0,1,2,3]') limit 3;
