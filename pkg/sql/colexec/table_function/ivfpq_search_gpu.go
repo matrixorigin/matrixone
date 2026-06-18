@@ -61,15 +61,28 @@ func newIvfpqAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTabl
 	// test-only: mirror the build-side device simulation so search loads the same
 	// SHARDED / REPLICATED topology. No-op when gpu_multi_simulation < 2.
 	devices = vectorindex.SimulateDevices(devices, tblcfg.GpuMultiSimulation)
-	switch metric.QuantizationType(idxcfg.CuvsIvfpq.Quantization) {
+	// Dispatch on (base type B, storage type Q): the main indices store Q (the
+	// quantization), the CDC/overflow brute force is the base type B (f32/f16).
+	q := metric.QuantizationType(idxcfg.CuvsIvfpq.Quantization)
+	if types.T(tblcfg.KeyPartType) == types.T_array_float16 {
+		switch q {
+		case metric.Quantization_INT8:
+			return ivfpqPkg.NewIvfpqSearch[cuvs.Float16, int8](idxcfg, tblcfg, devices)
+		case metric.Quantization_UINT8:
+			return ivfpqPkg.NewIvfpqSearch[cuvs.Float16, uint8](idxcfg, tblcfg, devices)
+		default: // F16 (direct)
+			return ivfpqPkg.NewIvfpqSearch[cuvs.Float16, cuvs.Float16](idxcfg, tblcfg, devices)
+		}
+	}
+	switch q {
 	case metric.Quantization_F16:
-		return ivfpqPkg.NewIvfpqSearch[cuvs.Float16](idxcfg, tblcfg, devices)
+		return ivfpqPkg.NewIvfpqSearch[float32, cuvs.Float16](idxcfg, tblcfg, devices)
 	case metric.Quantization_INT8:
-		return ivfpqPkg.NewIvfpqSearch[int8](idxcfg, tblcfg, devices)
+		return ivfpqPkg.NewIvfpqSearch[float32, int8](idxcfg, tblcfg, devices)
 	case metric.Quantization_UINT8:
-		return ivfpqPkg.NewIvfpqSearch[uint8](idxcfg, tblcfg, devices)
+		return ivfpqPkg.NewIvfpqSearch[float32, uint8](idxcfg, tblcfg, devices)
 	default:
-		return ivfpqPkg.NewIvfpqSearch[float32](idxcfg, tblcfg, devices)
+		return ivfpqPkg.NewIvfpqSearch[float32, float32](idxcfg, tblcfg, devices)
 	}
 }
 

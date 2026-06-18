@@ -112,96 +112,141 @@ func (mi *MultiGpuIvfFlat[T]) SearchFloat32(queries []float32, numQueries uint64
 
 // --- MultiGpuIvfPq ---
 
-type MultiGpuIvfPq[T VectorType] struct {
-	indices    []*GpuIvfPq[T]
-	bruteForce *GpuBruteForce[T]
+// MultiGpuIvfPq carries two element types: storage Q (the main cuVS ivf_pq
+// indices) and base B (the CDC/overflow brute force). B==Q for a direct index;
+// for a quantized index (e.g. vecf16 base -> int8 storage) B is the base type
+// (Float16/float32) so the overflow brute force is cuVS-supported and lossless.
+type MultiGpuIvfPq[B VectorType, Q VectorType] struct {
+	indices    []*GpuIvfPq[Q]
+	bruteForce *GpuBruteForce[B]
 	dimension  uint32
 	metric     DistanceType
 }
 
-func NewMultiGpuIvfPq[T VectorType](indices []*GpuIvfPq[T], bruteForce *GpuBruteForce[T], dimension uint32, metric DistanceType) *MultiGpuIvfPq[T] {
-	return &MultiGpuIvfPq[T]{indices: indices, bruteForce: bruteForce, dimension: dimension, metric: metric}
+func NewMultiGpuIvfPq[B VectorType, Q VectorType](indices []*GpuIvfPq[Q], bruteForce *GpuBruteForce[B], dimension uint32, metric DistanceType) *MultiGpuIvfPq[B, Q] {
+	return &MultiGpuIvfPq[B, Q]{indices: indices, bruteForce: bruteForce, dimension: dimension, metric: metric}
 }
 
-func (mi *MultiGpuIvfPq[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) ([]int64, []float32, error) {
-	genericIndices := make([]GpuIndex[T], len(mi.indices))
+func (mi *MultiGpuIvfPq[B, Q]) Search(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) ([]int64, []float32, error) {
+	genericIndices := make([]GpuIndex[Q], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
 	}
-	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, queries, nil, numQueries, dimension, limit, func(idx GpuIndex[T], q []T, nQ uint64, d uint32, l uint32) (uint64, error) {
-		return idx.(*GpuIvfPq[T]).SearchAsyncWithParams(q, nQ, d, l, sp)
-	}, nil, nil, nil)
+	// Native Q query — the direct (B==Q) path; the overflow takes the same query
+	// reinterpreted as []B (B==Q here).
+	var qB []B
+	if mi.bruteForce != nil {
+		qB, _ = any(queries).([]B)
+	}
+	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, queries, nil, qB, nil, numQueries, dimension, limit,
+		func(idx GpuIndex[Q], q []Q, nQ uint64, d uint32, l uint32) (uint64, error) {
+			return idx.(*GpuIvfPq[Q]).SearchAsyncWithParams(q, nQ, d, l, sp)
+		}, nil, nil, nil)
 }
 
-// SearchQuantizeHalf quantizes a vecf16 (half) query to the 1-byte storage type
-// T (int8/uint8) via the first index's half-source quantizer, then runs the
-// normal native Search([]T) (sharding/overflow/merge reused). Unfiltered.
-func (mi *MultiGpuIvfPq[T]) SearchQuantizeHalf(queries []Float16, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) ([]int64, []float32, error) {
-	if len(mi.indices) == 0 {
-		return nil, nil, moerr.NewInternalErrorNoCtx("MultiGpuIvfPq.SearchQuantizeHalf: no main index (small-data f16->int8/uint8 overflow not yet supported)")
-	}
-	qT, err := mi.indices[0].QuantizeHalf(queries, numQueries, dimension)
-	if err != nil {
-		return nil, nil, err
-	}
-	return mi.Search(qT, numQueries, dimension, limit, sp)
-}
-
-func (mi *MultiGpuIvfPq[T]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) ([]int64, []float32, error) {
-	genericIndices := make([]GpuIndex[T], len(mi.indices))
+// SearchQuantizeHalf searches a vecf16 base index whose storage is int8/uint8:
+// the main indices get the half query quantized to Q (via the first index's
+// half quantizer), the base-typed (Float16) overflow gets the native half query.
+// Both async via the worker pool. Works overflow-only (no main index, small data).
+func (mi *MultiGpuIvfPq[B, Q]) SearchQuantizeHalf(queries []Float16, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) ([]int64, []float32, error) {
+	genericIndices := make([]GpuIndex[Q], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
 	}
-	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, nil, queries, numQueries, dimension, limit, nil, func(idx GpuIndex[T], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
-		return idx.(*GpuIvfPq[T]).SearchFloat32AsyncWithParams(q, nQ, d, l, sp)
-	}, nil, nil)
+	var qQ []Q
+	if len(mi.indices) > 0 {
+		var err error
+		qQ, err = mi.indices[0].QuantizeHalf(queries, numQueries, dimension)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	// Overflow is base type B==Float16: search it with the native half query.
+	var qB []B
+	if mi.bruteForce != nil {
+		qB, _ = any(queries).([]B)
+	}
+	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, qQ, nil, qB, nil, numQueries, dimension, limit,
+		func(idx GpuIndex[Q], q []Q, nQ uint64, d uint32, l uint32) (uint64, error) {
+			return idx.(*GpuIvfPq[Q]).SearchAsyncWithParams(q, nQ, d, l, sp)
+		}, nil, nil, nil)
+}
+
+func (mi *MultiGpuIvfPq[B, Q]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) ([]int64, []float32, error) {
+	genericIndices := make([]GpuIndex[Q], len(mi.indices))
+	for i, idx := range mi.indices {
+		genericIndices[i] = idx
+	}
+	// f32 query: indices quantize/cast internally; overflow takes f32 (cast to B).
+	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, nil, queries, nil, queries, numQueries, dimension, limit,
+		nil, func(idx GpuIndex[Q], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
+			return idx.(*GpuIvfPq[Q]).SearchFloat32AsyncWithParams(q, nQ, d, l, sp)
+		}, nil, nil)
 }
 
 // --- MultiGpuCagra ---
 
-type MultiGpuCagra[T VectorType] struct {
-	indices    []*GpuCagra[T]
-	bruteForce *GpuBruteForce[T]
+// MultiGpuCagra carries base type B (overflow) and storage type Q (cagra
+// indices) — see MultiGpuIvfPq.
+type MultiGpuCagra[B VectorType, Q VectorType] struct {
+	indices    []*GpuCagra[Q]
+	bruteForce *GpuBruteForce[B]
 	dimension  uint32
 	metric     DistanceType
 }
 
-func NewMultiGpuCagra[T VectorType](indices []*GpuCagra[T], bruteForce *GpuBruteForce[T], dimension uint32, metric DistanceType) *MultiGpuCagra[T] {
-	return &MultiGpuCagra[T]{indices: indices, bruteForce: bruteForce, dimension: dimension, metric: metric}
+func NewMultiGpuCagra[B VectorType, Q VectorType](indices []*GpuCagra[Q], bruteForce *GpuBruteForce[B], dimension uint32, metric DistanceType) *MultiGpuCagra[B, Q] {
+	return &MultiGpuCagra[B, Q]{indices: indices, bruteForce: bruteForce, dimension: dimension, metric: metric}
 }
 
-func (mi *MultiGpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) ([]int64, []float32, error) {
-	genericIndices := make([]GpuIndex[T], len(mi.indices))
+func (mi *MultiGpuCagra[B, Q]) Search(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) ([]int64, []float32, error) {
+	genericIndices := make([]GpuIndex[Q], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
 	}
-	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, queries, nil, numQueries, dimension, limit, func(idx GpuIndex[T], q []T, nQ uint64, d uint32, l uint32) (uint64, error) {
-		return idx.(*GpuCagra[T]).SearchAsyncWithParams(q, nQ, d, l, sp)
-	}, nil, nil, nil)
+	var qB []B
+	if mi.bruteForce != nil {
+		qB, _ = any(queries).([]B)
+	}
+	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, queries, nil, qB, nil, numQueries, dimension, limit,
+		func(idx GpuIndex[Q], q []Q, nQ uint64, d uint32, l uint32) (uint64, error) {
+			return idx.(*GpuCagra[Q]).SearchAsyncWithParams(q, nQ, d, l, sp)
+		}, nil, nil, nil)
 }
 
-// SearchQuantizeHalf quantizes a vecf16 (half) query to the 1-byte storage type
-// T (int8/uint8) via the first index's half-source quantizer, then runs the
-// normal native Search([]T) (sharding/overflow/merge reused). Unfiltered.
-func (mi *MultiGpuCagra[T]) SearchQuantizeHalf(queries []Float16, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) ([]int64, []float32, error) {
-	if len(mi.indices) == 0 {
-		return nil, nil, moerr.NewInternalErrorNoCtx("MultiGpuCagra.SearchQuantizeHalf: no main index (small-data f16->int8/uint8 overflow not yet supported)")
-	}
-	qT, err := mi.indices[0].QuantizeHalf(queries, numQueries, dimension)
-	if err != nil {
-		return nil, nil, err
-	}
-	return mi.Search(qT, numQueries, dimension, limit, sp)
-}
-
-func (mi *MultiGpuCagra[T]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) ([]int64, []float32, error) {
-	genericIndices := make([]GpuIndex[T], len(mi.indices))
+// SearchQuantizeHalf — see MultiGpuIvfPq.SearchQuantizeHalf.
+func (mi *MultiGpuCagra[B, Q]) SearchQuantizeHalf(queries []Float16, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) ([]int64, []float32, error) {
+	genericIndices := make([]GpuIndex[Q], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
 	}
-	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, nil, queries, numQueries, dimension, limit, nil, func(idx GpuIndex[T], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
-		return idx.(*GpuCagra[T]).SearchFloat32AsyncWithParams(q, nQ, d, l, sp)
-	}, nil, nil)
+	var qQ []Q
+	if len(mi.indices) > 0 {
+		var err error
+		qQ, err = mi.indices[0].QuantizeHalf(queries, numQueries, dimension)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	var qB []B
+	if mi.bruteForce != nil {
+		qB, _ = any(queries).([]B)
+	}
+	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, qQ, nil, qB, nil, numQueries, dimension, limit,
+		func(idx GpuIndex[Q], q []Q, nQ uint64, d uint32, l uint32) (uint64, error) {
+			return idx.(*GpuCagra[Q]).SearchAsyncWithParams(q, nQ, d, l, sp)
+		}, nil, nil, nil)
+}
+
+func (mi *MultiGpuCagra[B, Q]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) ([]int64, []float32, error) {
+	genericIndices := make([]GpuIndex[Q], len(mi.indices))
+	for i, idx := range mi.indices {
+		genericIndices[i] = idx
+	}
+	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, nil, queries, nil, queries, numQueries, dimension, limit,
+		nil, func(idx GpuIndex[Q], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
+			return idx.(*GpuCagra[Q]).SearchFloat32AsyncWithParams(q, nQ, d, l, sp)
+		}, nil, nil)
 }
 
 // --- Helper search function ---
@@ -297,6 +342,107 @@ func multiGpuSearch[T VectorType](
 	return n, d, nil
 }
 
+// searchWaiter is the post-submission contract shared by GpuIndex[Q] and
+// *GpuBruteForce[B]: once a search job is submitted, collecting its result is
+// type-agnostic (jobID -> []int64 neighbors, []float32 distances). This lets
+// multiGpuSearchBQ merge index (storage type Q) and overflow (base type B)
+// results without the two types leaking into the wait/merge.
+type searchWaiter interface {
+	SearchWait(jobID uint64, numQueries uint64, limit uint32) ([]int64, []float32, error)
+}
+
+// multiGpuSearchBQ is multiGpuSearch with the brute-force overflow typed by the
+// BASE type B (f16/f32) independently of the index storage type Q — the [B,Q]
+// design. Indices are searched with the []Q (e.g. quantized) query, the
+// base-typed overflow with the []B (or f32) query; both are submitted async to
+// the worker pool and the post-submission collect/merge is type-agnostic
+// (searchWaiter). No extra goroutine. When B==Q this is equivalent to
+// multiGpuSearch with the overflow carrying the base type.
+func multiGpuSearchBQ[Q VectorType, B VectorType](
+	indices []GpuIndex[Q],
+	bruteForce *GpuBruteForce[B],
+	miDimension uint32,
+	queriesQ []Q,
+	queriesQF32 []float32,
+	queriesB []B,
+	queriesBF32 []float32,
+	numQueries uint64,
+	queryDimension uint32,
+	limit uint32,
+	idxFn func(GpuIndex[Q], []Q, uint64, uint32, uint32) (uint64, error),
+	idxF32Fn func(GpuIndex[Q], []float32, uint64, uint32, uint32) (uint64, error),
+	bfFn func(*GpuBruteForce[B], []B, uint64, uint32, uint32) (uint64, error),
+	bfF32Fn func(*GpuBruteForce[B], []float32, uint64, uint32, uint32) (uint64, error),
+) ([]int64, []float32, error) {
+	if queryDimension != miDimension {
+		return nil, nil, moerr.NewInternalErrorNoCtx("query dimension mismatch")
+	}
+
+	n := len(indices)
+	if bruteForce != nil {
+		n++
+	}
+	if n == 0 {
+		return nil, nil, moerr.NewInternalErrorNoCtx("no indices in MultiIndex")
+	}
+
+	type jobInfo struct {
+		w     searchWaiter
+		jobID uint64
+	}
+	jobs := make([]jobInfo, 0, n)
+
+	for _, idx := range indices {
+		var jobID uint64
+		var err error
+		if queriesQ != nil {
+			jobID, err = idxFn(idx, queriesQ, numQueries, queryDimension, limit)
+		} else {
+			jobID, err = idxF32Fn(idx, queriesQF32, numQueries, queryDimension, limit)
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		jobs = append(jobs, jobInfo{w: idx, jobID: jobID})
+	}
+
+	if bruteForce != nil {
+		var jobID uint64
+		var err error
+		if queriesB != nil {
+			if bfFn != nil {
+				jobID, err = bfFn(bruteForce, queriesB, numQueries, queryDimension, limit)
+			} else {
+				jobID, err = bruteForce.SearchAsync(queriesB, numQueries, queryDimension, limit)
+			}
+		} else {
+			if bfF32Fn != nil {
+				jobID, err = bfF32Fn(bruteForce, queriesBF32, numQueries, queryDimension, limit)
+			} else {
+				jobID, err = bruteForce.SearchFloat32Async(queriesBF32, numQueries, queryDimension, limit)
+			}
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		jobs = append(jobs, jobInfo{w: bruteForce, jobID: jobID})
+	}
+
+	allNeighbors := make([][]int64, len(jobs))
+	allDistances := make([][]float32, len(jobs))
+	for i, job := range jobs {
+		neighbors, distances, err := job.w.SearchWait(job.jobID, numQueries, limit)
+		if err != nil {
+			return nil, nil, err
+		}
+		allNeighbors[i] = neighbors
+		allDistances[i] = distances
+	}
+
+	n2, d := mergeMultiResults(allNeighbors, allDistances, numQueries, limit)
+	return n2, d, nil
+}
+
 // mergeMultiResults does a k-way merge of per-index top-k results into a single
 // top-k per query using a max-heap. Empty slots (neighbor == -1) are skipped.
 // Shared by both the async-dispatched multiGpuSearch and the synchronous
@@ -348,14 +494,14 @@ func mergeMultiResults(allNeighbors [][]int64, allDistances [][]float32, numQuer
 // C++ search_*_with_filter_async branches and plan
 // .claude/plans/effervescent-hatching-dewdrop.md.
 
-func (mi *MultiGpuCagra[T]) SearchFloat32WithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) ([]int64, []float32, error) {
-	genericIndices := make([]GpuIndex[T], len(mi.indices))
+func (mi *MultiGpuCagra[B, Q]) SearchFloat32WithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) ([]int64, []float32, error) {
+	genericIndices := make([]GpuIndex[Q], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
 	}
-	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, nil, queries, numQueries, dimension, limit, nil, func(idx GpuIndex[T], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
-		return idx.(*GpuCagra[T]).SearchFloatWithFilterAsync(q, nQ, d, l, sp, predsJSON)
-	}, nil, func(bf *GpuBruteForce[T], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
+	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, nil, queries, nil, queries, numQueries, dimension, limit, nil, func(idx GpuIndex[Q], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
+		return idx.(*GpuCagra[Q]).SearchFloatWithFilterAsync(q, nQ, d, l, sp, predsJSON)
+	}, nil, func(bf *GpuBruteForce[B], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
 		return bf.SearchFloatWithFilterAsync(q, nQ, d, l, predsJSON)
 	})
 }
@@ -372,14 +518,14 @@ func (mi *MultiGpuIvfFlat[T]) SearchFloat32WithFilter(queries []float32, numQuer
 	})
 }
 
-func (mi *MultiGpuIvfPq[T]) SearchFloat32WithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) ([]int64, []float32, error) {
-	genericIndices := make([]GpuIndex[T], len(mi.indices))
+func (mi *MultiGpuIvfPq[B, Q]) SearchFloat32WithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) ([]int64, []float32, error) {
+	genericIndices := make([]GpuIndex[Q], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
 	}
-	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, nil, queries, numQueries, dimension, limit, nil, func(idx GpuIndex[T], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
-		return idx.(*GpuIvfPq[T]).SearchFloatWithFilterAsync(q, nQ, d, l, sp, predsJSON)
-	}, nil, func(bf *GpuBruteForce[T], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
+	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, nil, queries, nil, queries, numQueries, dimension, limit, nil, func(idx GpuIndex[Q], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
+		return idx.(*GpuIvfPq[Q]).SearchFloatWithFilterAsync(q, nQ, d, l, sp, predsJSON)
+	}, nil, func(bf *GpuBruteForce[B], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
 		return bf.SearchFloatWithFilterAsync(q, nQ, d, l, predsJSON)
 	})
 }

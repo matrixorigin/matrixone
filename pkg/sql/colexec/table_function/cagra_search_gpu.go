@@ -61,15 +61,27 @@ func newCagraAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTabl
 	// test-only: mirror the build-side device simulation so search loads the same
 	// SHARDED / REPLICATED topology. No-op when gpu_multi_simulation < 2.
 	devices = vectorindex.SimulateDevices(devices, tblcfg.GpuMultiSimulation)
-	switch metric.QuantizationType(idxcfg.CuvsCagra.Quantization) {
+	// Dispatch on (base type B, storage type Q): indices store Q, overflow is B.
+	q := metric.QuantizationType(idxcfg.CuvsCagra.Quantization)
+	if types.T(tblcfg.KeyPartType) == types.T_array_float16 {
+		switch q {
+		case metric.Quantization_INT8:
+			return cagraPkg.NewCagraSearch[cuvs.Float16, int8](idxcfg, tblcfg, devices)
+		case metric.Quantization_UINT8:
+			return cagraPkg.NewCagraSearch[cuvs.Float16, uint8](idxcfg, tblcfg, devices)
+		default: // F16 (direct)
+			return cagraPkg.NewCagraSearch[cuvs.Float16, cuvs.Float16](idxcfg, tblcfg, devices)
+		}
+	}
+	switch q {
 	case metric.Quantization_F16:
-		return cagraPkg.NewCagraSearch[cuvs.Float16](idxcfg, tblcfg, devices)
+		return cagraPkg.NewCagraSearch[float32, cuvs.Float16](idxcfg, tblcfg, devices)
 	case metric.Quantization_INT8:
-		return cagraPkg.NewCagraSearch[int8](idxcfg, tblcfg, devices)
+		return cagraPkg.NewCagraSearch[float32, int8](idxcfg, tblcfg, devices)
 	case metric.Quantization_UINT8:
-		return cagraPkg.NewCagraSearch[uint8](idxcfg, tblcfg, devices)
+		return cagraPkg.NewCagraSearch[float32, uint8](idxcfg, tblcfg, devices)
 	default: // Quantization_F32 and unknown
-		return cagraPkg.NewCagraSearch[float32](idxcfg, tblcfg, devices)
+		return cagraPkg.NewCagraSearch[float32, float32](idxcfg, tblcfg, devices)
 	}
 }
 
