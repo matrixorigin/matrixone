@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path"
 	"path/filepath"
 	"runtime/pprof"
@@ -28,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -478,6 +480,16 @@ Examples:
 				if err := pprof.StartCPUProfile(f); err != nil {
 					return fmt.Errorf("start cpuprofile: %w", err)
 				}
+
+				// Ensure CPU profile is flushed on SIGINT (Ctrl+C)
+				sigCh := make(chan os.Signal, 1)
+				signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+				go func() {
+					<-sigCh
+					pprof.StopCPUProfile()
+					f.Close()
+					os.Exit(1)
+				}()
 				defer pprof.StopCPUProfile()
 			}
 
