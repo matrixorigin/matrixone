@@ -331,6 +331,37 @@ func TestValidateCombinedPlannedLocalCleanupCompletenessAllowsCrossShardCleanup(
 	}
 }
 
+func TestValidateLocalPlanFreshnessCatchesStaleLocalReplicas(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "host-10-222-1-50", "08850055262063090202", "tandb")
+	if err := os.MkdirAll(filepath.Join(root, "node-1-262147"), 0750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "node-1-282826"), 0750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	plan := &repairPlan{
+		Mode:    modeLocal,
+		ShardID: 1,
+		Stores: []planStore{{
+			UUID:          "00000000-0000-0000-0000-000000000d01",
+			NodeHostDir:   dir,
+			DeploymentID:  8850055262063090202,
+			LocalReplicas: []uint64{262146, 272587},
+		}},
+	}
+	err := validateLocalPlanFreshness([]*repairPlan{plan})
+	if err == nil {
+		t.Fatalf("expected stale plan error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"repair plan is stale", "262146", "272587", "262147", "282826"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("expected %q in error: %s", want, msg)
+		}
+	}
+}
+
 func TestBuildK8sPlanStoreRebuildsDirtyTarget(t *testing.T) {
 	shard := logpb.LogShardInfo{
 		ShardID:  1,

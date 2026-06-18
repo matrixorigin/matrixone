@@ -275,6 +275,9 @@ func runApply(args []string) error {
 		}
 		printPlanSummary(plan)
 	}
+	if err := validateLocalPlanFreshness(plans); err != nil {
+		return err
+	}
 	if !opts.yes {
 		for _, plan := range plans {
 			if err := confirmPlanDetails(plan); err != nil {
@@ -1034,6 +1037,18 @@ func sameReplicaMap(a map[uint64]string, b map[uint64]string) bool {
 	return true
 }
 
+func sameUint64s(a []uint64, b []uint64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func formatReplicaMap(m map[uint64]string) string {
 	if len(m) == 0 {
 		return "{}"
@@ -1600,6 +1615,35 @@ func validateCombinedRepairPlans(plans []*repairPlan) error {
 		}
 	}
 	return nil
+}
+
+func validateLocalPlanFreshness(plans []*repairPlan) error {
+	messages := make([]string, 0)
+	for _, plan := range plans {
+		if plan.Mode != modeLocal {
+			continue
+		}
+		for _, store := range plan.Stores {
+			if store.NodeHostDir == "" || store.DeploymentID == 0 {
+				continue
+			}
+			current := localShardReplicas(store.NodeHostDir, store.DeploymentID, plan.ShardID)
+			if sameUint64s(current, store.LocalReplicas) {
+				continue
+			}
+			messages = append(messages, fmt.Sprintf(
+				"- shard %d store %s local replicas changed: plan has %v, current disk has %v",
+				plan.ShardID,
+				store.UUID,
+				store.LocalReplicas,
+				current,
+			))
+		}
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	return fmt.Errorf("repair plan is stale; regenerate affected plan files before applying:\n%s", strings.Join(messages, "\n"))
 }
 
 func cleanupTasksForPlans(plans []*repairPlan) []cleanupTask {
