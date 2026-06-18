@@ -47,8 +47,9 @@ const (
 	logicalViewMetaCols = 3
 
 	// System table IDs
-	moTablesID  = uint64(catalog.MO_TABLES_ID)
-	moColumnsID = uint64(catalog.MO_COLUMNS_ID)
+	moDatabaseID = uint64(catalog.MO_DATABASE_ID)
+	moTablesID   = uint64(catalog.MO_TABLES_ID)
+	moColumnsID  = uint64(catalog.MO_COLUMNS_ID)
 )
 
 const (
@@ -62,9 +63,10 @@ const (
 )
 
 type catalogLayout struct {
-	name            string
-	moTablesSchema  []string
-	moColumnsSchema []string
+	name             string
+	moDatabaseSchema []string
+	moTablesSchema   []string
+	moColumnsSchema  []string
 }
 
 type catalogLayoutMatch struct {
@@ -74,12 +76,14 @@ type catalogLayoutMatch struct {
 
 var (
 	currentCatalogLayout = catalogLayout{
-		name:            "current",
-		moTablesSchema:  append([]string(nil), catalog.MoTablesSchema...),
-		moColumnsSchema: append([]string(nil), catalog.MoColumnsSchema...),
+		name:             "current",
+		moDatabaseSchema: append([]string(nil), catalog.MoDatabaseSchema...),
+		moTablesSchema:   append([]string(nil), catalog.MoTablesSchema...),
+		moColumnsSchema:  append([]string(nil), catalog.MoColumnsSchema...),
 	}
 	preCPKLayout = catalogLayout{
-		name: "pre-cpk",
+		name:             "pre-cpk",
+		moDatabaseSchema: catalogSchemaWithout(catalog.MoDatabaseSchema, catalog.SystemDBAttr_CPKey),
 		moTablesSchema: catalogSchemaWithout(
 			catalog.MoTablesSchema,
 			catalog.SystemRelAttr_ExtraInfo,
@@ -91,9 +95,10 @@ var (
 		),
 	}
 	legacy3CatalogLayout = catalogLayout{
-		name:            "3.0-dev",
-		moTablesSchema:  append([]string(nil), catalog.MoTablesSchema[:len(catalog.MoTablesSchema)-1]...),
-		moColumnsSchema: append([]string(nil), catalog.MoColumnsSchema[:len(catalog.MoColumnsSchema)-2]...),
+		name:             "3.0-dev",
+		moDatabaseSchema: append([]string(nil), catalog.MoDatabaseSchema...),
+		moTablesSchema:   append([]string(nil), catalog.MoTablesSchema[:len(catalog.MoTablesSchema)-1]...),
+		moColumnsSchema:  append([]string(nil), catalog.MoColumnsSchema[:len(catalog.MoColumnsSchema)-2]...),
 	}
 )
 
@@ -303,6 +308,8 @@ func knownCatalogLayouts() []catalogLayout {
 
 func schemaForLayout(layout catalogLayout, tableID uint64) []string {
 	switch tableID {
+	case moDatabaseID:
+		return layout.moDatabaseSchema
 	case moTablesID:
 		return layout.moTablesSchema
 	case moColumnsID:
@@ -1495,6 +1502,23 @@ func (r *CheckpointReader) ListCatalogTables(
 	return filterCatalogTablesForList(tables, opts), nil
 }
 
+func (r *CheckpointReader) ListCatalogDatabases(
+	ctx context.Context,
+	snapshotTS types.TS,
+	opts TableListOptions,
+) ([]TableCatalogEntry, error) {
+	moDatabaseView, err := r.getTableLogicalView(ctx, moDatabaseID, snapshotTS)
+	if err != nil {
+		return nil, err
+	}
+	databases := buildCatalogDatabasesFromMoDatabaseRows(moDatabaseView)
+	if schema := r.ReadTableSchema(ctx, moDatabaseID, snapshotTS, moDatabaseView); len(schema.Columns) > 0 {
+		projected := MergeLogicalViewWithSchema(moDatabaseView, schema)
+		databases = mergeCatalogDatabaseEntries(databases, buildCatalogDatabasesFromMoDatabaseRows(projected))
+	}
+	return filterCatalogTablesForList(databases, opts), nil
+}
+
 func filterCatalogTablesForList(tables []TableCatalogEntry, opts TableListOptions) []TableCatalogEntry {
 	filtered := make([]TableCatalogEntry, 0, len(tables))
 	for _, table := range tables {
@@ -1519,6 +1543,104 @@ func filterCatalogTablesForList(tables []TableCatalogEntry, opts TableListOption
 		return filtered[i].TableID < filtered[j].TableID
 	})
 	return filtered
+}
+
+func buildCatalogDatabasesFromMoDatabaseRows(view *LogicalTableView) []TableCatalogEntry {
+	seen := make(map[string]struct{})
+	merged := make([]TableCatalogEntry, 0)
+	try := func(datIDCol, datNameCol, accountIDCol int) {
+		databases := buildCatalogDatabasesFromMoDatabaseRowsAt(view, datIDCol, datNameCol, accountIDCol)
+		for _, database := range databases {
+			key := catalogDatabaseEntryKey(database)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			merged = append(merged, database)
+		}
+	}
+
+	try(
+		fallbackCatalogColIndex(view, moDatabaseID, "dat_id"),
+		fallbackCatalogColIndex(view, moDatabaseID, "datname"),
+		fallbackCatalogColIndex(view, moDatabaseID, "account_id"),
+	)
+	dataWidth := len(view.Headers) - logicalViewDataOffset(view)
+	for _, match := range catalogLayoutMatches(dataWidth, moDatabaseID) {
+		try(
+			catalogColIndexForLayout(match.layout, moDatabaseID, "dat_id", match.offset),
+			catalogColIndexForLayout(match.layout, moDatabaseID, "datname", match.offset),
+			catalogColIndexForLayout(match.layout, moDatabaseID, "account_id", match.offset),
+		)
+	}
+	return merged
+}
+
+func buildCatalogDatabasesFromMoDatabaseRowsAt(
+	view *LogicalTableView,
+	datIDCol int,
+	datNameCol int,
+	accountIDCol int,
+) []TableCatalogEntry {
+	if datIDCol < 0 || datNameCol < 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	databases := make([]TableCatalogEntry, 0)
+	for _, fullRow := range view.Rows {
+		row := fullRow[logicalViewDataOffset(view):]
+		if datIDCol >= len(row) || datNameCol >= len(row) {
+			continue
+		}
+		databaseID, err := strconv.ParseUint(row[datIDCol], 10, 64)
+		if err != nil || databaseID == 0 {
+			continue
+		}
+		entry := TableCatalogEntry{
+			AccountID:    0,
+			DatabaseID:   databaseID,
+			DatabaseName: strings.Clone(row[datNameCol]),
+		}
+		if !validCatalogName(entry.DatabaseName) {
+			continue
+		}
+		if accountIDCol >= 0 && accountIDCol < len(row) {
+			if accountID, err := strconv.ParseUint(row[accountIDCol], 10, 32); err == nil {
+				entry.AccountID = uint32(accountID)
+			}
+		}
+		key := catalogDatabaseEntryKey(entry)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		databases = append(databases, entry)
+	}
+	return databases
+}
+
+func mergeCatalogDatabaseEntries(base []TableCatalogEntry, extra []TableCatalogEntry) []TableCatalogEntry {
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	for _, database := range base {
+		seen[catalogDatabaseEntryKey(database)] = struct{}{}
+	}
+	for _, database := range extra {
+		key := catalogDatabaseEntryKey(database)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		base = append(base, database)
+	}
+	return base
+}
+
+func catalogDatabaseEntryKey(entry TableCatalogEntry) string {
+	return fmt.Sprintf("%d\x00%d\x00%s", entry.AccountID, entry.DatabaseID, strings.ToLower(entry.DatabaseName))
 }
 
 func (r *CheckpointReader) listCatalogTablesFromProjectedMoTables(

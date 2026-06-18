@@ -1025,6 +1025,35 @@ func TestBuildCatalogTablesFromMoTablesRows_GenericWithTrailingColumns(t *testin
 	assert.Equal(t, "v", tables[1].RelKind)
 }
 
+func TestBuildCatalogDatabasesFromMoDatabaseRows_IncludesDatabaseWithoutTables(t *testing.T) {
+	headers := []string{"object", "block", "row"}
+	for i := 0; i < len(currentCatalogLayout.moDatabaseSchema); i++ {
+		headers = append(headers, fmt.Sprintf("col_%d", i))
+	}
+	row := func(datID, datName, accountID, datType string) []string {
+		data := make([]string, len(currentCatalogLayout.moDatabaseSchema))
+		data[0] = datID
+		data[1] = datName
+		data[7] = accountID
+		data[8] = datType
+		return append([]string{"obj1", "0", datID}, data...)
+	}
+	view := &LogicalTableView{
+		Headers: headers,
+		Rows: [][]string{
+			row("335900", "ckp_pubsub_sub_all", "415", catalog.SystemDBTypeSubscription),
+		},
+	}
+
+	databases := buildCatalogDatabasesFromMoDatabaseRows(view)
+	require.Len(t, databases, 1)
+	assert.Equal(t, uint32(415), databases[0].AccountID)
+	assert.Equal(t, uint64(335900), databases[0].DatabaseID)
+	assert.Equal(t, "ckp_pubsub_sub_all", databases[0].DatabaseName)
+	assert.Empty(t, databases[0].TableName)
+	assert.Zero(t, databases[0].TableID)
+}
+
 func TestBuildCatalogTablesFromMoTablesRows_UsesTemporaryDisplayName(t *testing.T) {
 	headers := []string{"object", "block", "row"}
 	for i := 0; i < len(preCPKLayout.moTablesSchema); i++ {

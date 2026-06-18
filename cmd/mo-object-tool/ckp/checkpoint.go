@@ -235,11 +235,17 @@ to narrow the result.`,
 			if cmd.Flags().Changed("database-id") {
 				dbFilter = &databaseID
 			}
-			tables, err := reader.ListCatalogTables(ctx, snapshotTS, checkpointtool.TableListOptions{
+			opts := checkpointtool.TableListOptions{
 				AccountID:    accountFilter,
 				DatabaseID:   dbFilter,
 				IncludeViews: includeViews,
-			})
+			}
+			var tables []checkpointtool.TableCatalogEntry
+			if listType == "databases" || listType == "dbs" {
+				tables, err = reader.ListCatalogDatabases(ctx, snapshotTS, opts)
+			} else {
+				tables, err = reader.ListCatalogTables(ctx, snapshotTS, opts)
+			}
 			if err != nil {
 				return fmt.Errorf("list checkpoint catalog tables: %w", err)
 			}
