@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -42,9 +43,9 @@ var runSql = sqlexec.RunSql
 var runSql_streaming = sqlexec.RunStreamingSql
 
 // IvfpqModel wraps a GpuIvfPq index and handles load/save to secondary index tables.
-type IvfpqModel[T cuvs.VectorType] struct {
+type IvfpqModel[B, Q cuvs.VectorType] struct {
 	Id          string
-	Index       *cuvs.GpuIvfPq[T]
+	Index       *cuvs.GpuIvfPq[Q]
 	Path        string
 	FileSize    int64
 	MaxCapacity uint64
@@ -67,10 +68,10 @@ type IvfpqModel[T cuvs.VectorType] struct {
 
 	// CDC insert overflow — pkids that the replay left in the brute-force
 	// overflow (INSERT record with no later DELETE). Brute-force searched at
-	// query time and merged with main-index results. Always F32 regardless
-	// of T.
+	// query time and merged with main-index results. Stored in the native
+	// base type B (f32 or f16), matching the base-typed overflow brute force.
 	OverflowPkids []int64
-	OverflowVecs  []float32 // len = len(OverflowPkids) * dim
+	OverflowVecs  []B // len = len(OverflowPkids) * dim
 
 	// INCLUDE column data carried alongside each overflow row. Layout
 	// matches the EncodeEventRecord INSERT-record include section:
@@ -89,8 +90,8 @@ type IvfpqModel[T cuvs.VectorType] struct {
 	OverflowColMetaJSON string
 }
 
-func NewIvfpqModelForBuild[T cuvs.VectorType](id string, cfg vectorindex.IndexConfig, nthread uint32, devices []int) (*IvfpqModel[T], error) {
-	return &IvfpqModel[T]{
+func NewIvfpqModelForBuild[B, Q cuvs.VectorType](id string, cfg vectorindex.IndexConfig, nthread uint32, devices []int) (*IvfpqModel[B, Q], error) {
+	return &IvfpqModel[B, Q]{
 		Id:      id,
 		Idxcfg:  cfg,
 		NThread: nthread,
@@ -98,7 +99,7 @@ func NewIvfpqModelForBuild[T cuvs.VectorType](id string, cfg vectorindex.IndexCo
 	}, nil
 }
 
-func (idx *IvfpqModel[T]) ivfpqConfig() (cuvsMetric cuvs.DistanceType, bp cuvs.IvfPqBuildParams, mode cuvs.DistributionMode, err error) {
+func (idx *IvfpqModel[B, Q]) ivfpqConfig() (cuvsMetric cuvs.DistanceType, bp cuvs.IvfPqBuildParams, mode cuvs.DistributionMode, err error) {
 	cfg := idx.Idxcfg.CuvsIvfpq
 	var ok bool
 	cuvsMetric, ok = metric.MetricTypeToCuvsMetric[metric.MetricType(cfg.Metric)]
@@ -124,7 +125,7 @@ func (idx *IvfpqModel[T]) ivfpqConfig() (cuvsMetric cuvs.DistanceType, bp cuvs.I
 }
 
 // InitEmpty allocates the GPU buffer for totalCount vectors.
-func (idx *IvfpqModel[T]) InitEmpty(totalCount uint64) error {
+func (idx *IvfpqModel[B, Q]) InitEmpty(totalCount uint64) error {
 	if idx.Index != nil {
 		return moerr.NewInternalErrorNoCtx("IvfpqModel: index already initialized")
 	}
@@ -138,7 +139,7 @@ func (idx *IvfpqModel[T]) InitEmpty(totalCount uint64) error {
 	if buildMode == cuvs.Replicated {
 		buildMode = cuvs.SingleGpu
 	}
-	gi, err := cuvs.NewGpuIvfPqEmpty[T](
+	gi, err := cuvs.NewGpuIvfPqEmpty[Q](
 		totalCount,
 		uint32(idx.Idxcfg.CuvsIvfpq.Dimensions),
 		cuvsMetric,
@@ -159,7 +160,7 @@ func (idx *IvfpqModel[T]) InitEmpty(totalCount uint64) error {
 	return nil
 }
 
-func (idx *IvfpqModel[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
+func (idx *IvfpqModel[B, Q]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("IvfpqModel: index not initialized; call InitEmpty first")
 	}
@@ -173,7 +174,7 @@ func (idx *IvfpqModel[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids 
 // AddChunk appends a chunk of native storage-type (T) vectors with no
 // quantization — used when the base column type equals the storage type
 // (e.g. a vecf16 base stored as half). Mirrors AddChunkFloat but raw.
-func (idx *IvfpqModel[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) error {
+func (idx *IvfpqModel[B, Q]) AddChunk(chunk []Q, chunkCount uint64, ids []int64) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("IvfpqModel: index not initialized; call InitEmpty first")
 	}
@@ -187,7 +188,7 @@ func (idx *IvfpqModel[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) er
 // AddChunkQuantizeHalf appends a chunk of vecf16 (half) vectors, quantizing
 // natively to the 1-byte storage type T (int8/uint8). Used for a vecf16 base
 // with QUANTIZATION=int8/uint8 — no f32 detour.
-func (idx *IvfpqModel[T]) AddChunkQuantizeHalf(chunk []cuvs.Float16, chunkCount uint64, ids []int64) error {
+func (idx *IvfpqModel[B, Q]) AddChunkQuantizeHalf(chunk []cuvs.Float16, chunkCount uint64, ids []int64) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("IvfpqModel: index not initialized; call InitEmpty first")
 	}
@@ -198,7 +199,7 @@ func (idx *IvfpqModel[T]) AddChunkQuantizeHalf(chunk []cuvs.Float16, chunkCount 
 	return nil
 }
 
-func (idx *IvfpqModel[T]) Build() error {
+func (idx *IvfpqModel[B, Q]) Build() error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("IvfpqModel: index not initialized")
 	}
@@ -209,7 +210,7 @@ func (idx *IvfpqModel[T]) Build() error {
 	return nil
 }
 
-func (idx *IvfpqModel[T]) Destroy() error {
+func (idx *IvfpqModel[B, Q]) Destroy() error {
 	if idx.Index != nil {
 		if err := idx.Index.Destroy(); err != nil {
 			return err
@@ -223,7 +224,7 @@ func (idx *IvfpqModel[T]) Destroy() error {
 	return nil
 }
 
-func (idx *IvfpqModel[T]) saveToFile() error {
+func (idx *IvfpqModel[B, Q]) saveToFile() error {
 	if idx.Index == nil {
 		return nil
 	}
@@ -274,7 +275,7 @@ func (idx *IvfpqModel[T]) saveToFile() error {
 	return nil
 }
 
-func (idx *IvfpqModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
+func (idx *IvfpqModel[B, Q]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
 	if err := idx.saveToFile(); err != nil {
 		return nil, err
 	}
@@ -334,16 +335,16 @@ func joinStrings(ss []string, sep string) string {
 	return result
 }
 
-func (idx *IvfpqModel[T]) Empty() bool {
+func (idx *IvfpqModel[B, Q]) Empty() bool {
 	return idx.Len == 0
 }
 
-func (idx *IvfpqModel[T]) Full() bool {
+func (idx *IvfpqModel[B, Q]) Full() bool {
 	return idx.MaxCapacity > 0 && uint64(idx.Len) >= idx.MaxCapacity
 }
 
 // SearchF32 performs a KNN search using a float32 query vector.
-func (idx *IvfpqModel[T]) SearchF32(query []float32, limit uint32, nprobes uint32) (keys []int64, distances []float32, err error) {
+func (idx *IvfpqModel[B, Q]) SearchF32(query []float32, limit uint32, nprobes uint32) (keys []int64, distances []float32, err error) {
 	if idx.Index == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("IvfpqModel: index not loaded")
 	}
@@ -361,7 +362,7 @@ func (idx *IvfpqModel[T]) SearchF32(query []float32, limit uint32, nprobes uint3
 	return res.Neighbors, res.Distances, nil
 }
 
-func (idx *IvfpqModel[T]) Search(query []T, limit uint32, nprobes uint32) (keys []int64, distances []float32, err error) {
+func (idx *IvfpqModel[B, Q]) Search(query []Q, limit uint32, nprobes uint32) (keys []int64, distances []float32, err error) {
 	if idx.Index == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("IvfpqModel: index not loaded")
 	}
@@ -379,7 +380,7 @@ func (idx *IvfpqModel[T]) Search(query []T, limit uint32, nprobes uint32) (keys 
 	return res.Neighbors, res.Distances, nil
 }
 
-func (idx *IvfpqModel[T]) loadChunk(ctx context.Context,
+func (idx *IvfpqModel[B, Q]) loadChunk(ctx context.Context,
 	sqlproc *sqlexec.SqlProcess,
 	stream_chan chan executor.Result,
 	error_chan chan error,
@@ -423,7 +424,7 @@ func (idx *IvfpqModel[T]) loadChunk(ctx context.Context,
 // the storage table in parallel, then unpacks the tar onto the GPU, replays
 // the event log to derive (deleted, overflow), and applies the deletes via
 // Index.DeleteIds.
-func (idx *IvfpqModel[T]) LoadIndex(
+func (idx *IvfpqModel[B, Q]) LoadIndex(
 	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
@@ -557,7 +558,7 @@ func (idx *IvfpqModel[T]) LoadIndex(
 		return err
 	}
 
-	gi, err := cuvs.NewGpuIvfPqEmpty[T](
+	gi, err := cuvs.NewGpuIvfPqEmpty[Q](
 		uint64(idxcfg.IndexCapacity),
 		uint32(idxcfg.CuvsIvfpq.Dimensions),
 		cuvsMetric,
@@ -593,7 +594,7 @@ func (idx *IvfpqModel[T]) LoadIndex(
 		}
 		includeBytesPerRow = ibpr
 	}
-	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks(eventChunks, dim, includeBytesPerRow)
+	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks[B](eventChunks, dim, includeBytesPerRow)
 	if err != nil {
 		gi.Destroy()
 		return err
@@ -630,7 +631,7 @@ func (idx *IvfpqModel[T]) LoadIndex(
 
 // loadCdcEventsFromDB reads the tag=1 event-log rows for this index. See
 // pkg/vectorindex/cagra/model_gpu.go for design notes.
-func (idx *IvfpqModel[T]) loadCdcEventsFromDB(
+func (idx *IvfpqModel[B, Q]) loadCdcEventsFromDB(
 	sqlproc *sqlexec.SqlProcess,
 	tblcfg vectorindex.IndexTableConfig,
 ) ([]cuvscdc.EventChunk, error) {
@@ -661,16 +662,20 @@ func (idx *IvfpqModel[T]) loadCdcEventsFromDB(
 // replayEventChunks sorts the chunks by chunk_id, replays the records, and
 // flattens (deleted, overflow) into the parallel slices the IvfpqModel
 // struct carries (the layout buildOverflow consumes).
-func replayEventChunks(
+func replayEventChunks[B cuvs.VectorType](
 	chunks []cuvscdc.EventChunk,
 	dim int,
 	includeBytesPerRow int,
-) ([]int64, []int64, []float32, []byte, error) {
+) ([]int64, []int64, []B, []byte, error) {
 	if len(chunks) == 0 {
 		return nil, nil, nil, nil, nil
 	}
 	cuvscdc.SortChunks(chunks)
-	state, err := cuvscdc.ReplayEventLog(chunks, dim, includeBytesPerRow)
+	// The codec stores vectors as opaque bytes; the per-row byte length is
+	// dim * sizeof(B). Reinterpret each row's bytes back to the native base
+	// type B for the overflow brute force — no f32 detour.
+	vecBytesPerRow := dim * int(util.UnsafeSizeOf[B]())
+	state, err := cuvscdc.ReplayEventLog(chunks, vecBytesPerRow, includeBytesPerRow)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -682,14 +687,15 @@ func replayEventChunks(
 		return deletedPkids, nil, nil, nil, nil
 	}
 	ovPkids := make([]int64, len(state.Overflow))
-	ovVecs := make([]float32, len(state.Overflow)*dim)
+	ovVecs := make([]B, len(state.Overflow)*dim)
+	ovVecBytes := util.UnsafeSliceToBytes(ovVecs)
 	var ovInc []byte
 	if includeBytesPerRow > 0 {
 		ovInc = make([]byte, len(state.Overflow)*includeBytesPerRow)
 	}
 	for i, e := range state.Overflow {
 		ovPkids[i] = e.Pkid
-		copy(ovVecs[i*dim:(i+1)*dim], e.Vec)
+		copy(ovVecBytes[i*vecBytesPerRow:(i+1)*vecBytesPerRow], e.Vec)
 		if includeBytesPerRow > 0 {
 			copy(ovInc[i*includeBytesPerRow:(i+1)*includeBytesPerRow], e.Include)
 		}
@@ -697,7 +703,7 @@ func replayEventChunks(
 	return deletedPkids, ovPkids, ovVecs, ovInc, nil
 }
 
-func (idx *IvfpqModel[T]) Unload() error {
+func (idx *IvfpqModel[B, Q]) Unload() error {
 	if idx.Index == nil {
 		return nil
 	}
@@ -716,7 +722,7 @@ func (idx *IvfpqModel[T]) Unload() error {
 }
 
 // LoadMetadata loads IvfpqModel descriptors from the metadata table.
-func LoadMetadata[T cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*IvfpqModel[T], error) {
+func LoadMetadata[B, Q cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*IvfpqModel[B, Q], error) {
 	sql := fmt.Sprintf("SELECT * FROM %s ORDER BY timestamp ASC", sqlquote.QualifiedIdent(dbname, metatbl))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
@@ -729,7 +735,7 @@ func LoadMetadata[T cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string,
 		total += bat.RowCount()
 	}
 
-	indexes := make([]*IvfpqModel[T], 0, total)
+	indexes := make([]*IvfpqModel[B, Q], 0, total)
 	for _, bat := range res.Batches {
 		idVec := bat.Vecs[0]
 		chksumVec := bat.Vecs[1]
@@ -740,7 +746,7 @@ func LoadMetadata[T cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string,
 			chksum := chksumVec.GetStringAt(i)
 			ts := vector.GetFixedAtWithTypeCheck[int64](tsVec, i)
 			fs := vector.GetFixedAtWithTypeCheck[int64](fsVec, i)
-			idx := &IvfpqModel[T]{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
+			idx := &IvfpqModel[B, Q]{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
 			indexes = append(indexes, idx)
 		}
 	}
@@ -748,7 +754,7 @@ func LoadMetadata[T cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string,
 }
 
 // ToDeleteSql generates DELETE SQL for storage and metadata tables.
-func (idx *IvfpqModel[T]) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
+func (idx *IvfpqModel[B, Q]) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
 	sqls := make([]string, 0, 2)
 	sqls = append(sqls, fmt.Sprintf("DELETE FROM %s WHERE %s = %s",
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), catalog.Ivfpq_TblCol_Storage_Index_Id, sqlquote.String(idx.Id)))

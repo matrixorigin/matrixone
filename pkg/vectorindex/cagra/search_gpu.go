@@ -37,20 +37,6 @@ func cagraHalfToFloat32(q []cuvs.Float16) []float32 {
 	return types.Float16ToFloat32Slice(h)
 }
 
-// addOverflowVecs feeds the (f32-transport) overflow vectors to the base-typed
-// brute force B in its native element type, matching the native-B overflow
-// search path. The CDC/tail format transports vectors as f32; for a half
-// overflow (B==Float16) we convert to native half and AddChunk, for f32 we
-// AddChunkFloat directly. Keeping the stored element type == the query element
-// type avoids any cross-type quantize on the overflow tier.
-func addOverflowVecs[B cuvs.VectorType](bf *cuvs.GpuBruteForce[B], vecs []float32, count uint64, ids []int64) error {
-	if hbf, ok := any(bf).(*cuvs.GpuBruteForce[cuvs.Float16]); ok {
-		h := types.Float32ToFloat16Slice(vecs)
-		hc := *(*[]cuvs.Float16)(unsafe.Pointer(&h))
-		return hbf.AddChunk(hc, count, ids)
-	}
-	return bf.AddChunkFloat(vecs, count, ids)
-}
 
 // CagraSearch implements cache.VectorIndexSearchIf for GPU CAGRA indexes.
 // Unlike HnswSearch, there is no concurrency gate (Cond/Mutex) because CAGRA
@@ -58,7 +44,7 @@ func addOverflowVecs[B cuvs.VectorType](bf *cuvs.GpuBruteForce[B], vecs []float3
 type CagraSearch[B, Q cuvs.VectorType] struct {
 	Idxcfg        vectorindex.IndexConfig
 	Tblcfg        vectorindex.IndexTableConfig
-	Indexes       []*CagraModel[Q]
+	Indexes       []*CagraModel[B, Q]
 	MultiIndex    *cuvs.MultiGpuCagra[B, Q] // built once in Load; nil until indexes are loaded
 	Overflow      *cuvs.GpuBruteForce[B] // CDC insert overflow; nil when no overflow records exist
 	Devices       []int
@@ -186,7 +172,7 @@ func addOverflowFilterChunks[T cuvs.VectorType](
 
 // Load implements cache.VectorIndexSearchIf: loads metadata then index data from the database.
 func (s *CagraSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
-	indexes, err := LoadMetadata[Q](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+	indexes, err := LoadMetadata[B, Q](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {
 		return err
 	}
@@ -247,7 +233,7 @@ func (s *CagraSearch[B, Q]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 
-	stub := &CagraModel[Q]{Id: vectorindex.CdcTailId}
+	stub := &CagraModel[B, Q]{Id: vectorindex.CdcTailId}
 	chunks, err := stub.loadCdcEventsFromDB(sqlproc, s.Tblcfg)
 	if err != nil {
 		return err
@@ -271,7 +257,7 @@ func (s *CagraSearch[B, Q]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 	}
 
 	dim := int(s.Idxcfg.CuvsCagra.Dimensions)
-	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks(chunks, dim, includeBytesPerRow)
+	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks[B](chunks, dim, includeBytesPerRow)
 	if err != nil {
 		return err
 	}
@@ -287,7 +273,7 @@ func (s *CagraSearch[B, Q]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 
-	s.Indexes = append(s.Indexes, &CagraModel[Q]{
+	s.Indexes = append(s.Indexes, &CagraModel[B, Q]{
 		Id:                   vectorindex.CdcTailId,
 		DeletedPkids:         delPkids,
 		OverflowPkids:        ovPkids,
@@ -374,7 +360,9 @@ func (s *CagraSearch[B, Q]) buildOverflow() error {
 			continue
 		}
 		count := uint64(len(m.OverflowPkids))
-		if err = addOverflowVecs(bf, m.OverflowVecs, count, m.OverflowPkids); err != nil {
+		// Overflow vectors are stored in the native base type B (m.OverflowVecs
+		// is []B), so feed the base-typed brute force directly — no f32 detour.
+		if err = bf.AddChunk(m.OverflowVecs, count, m.OverflowPkids); err != nil {
 			bf.Destroy()
 			return err
 		}
@@ -424,7 +412,7 @@ func (s *CagraSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuCagra[B, Q], error)
 
 // loadIndexes loads each model's index data from the database.
 // On any error it destroys all partially-loaded indexes and returns the error.
-func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[Q]) ([]*CagraModel[Q], error) {
+func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[B, Q]) ([]*CagraModel[B, Q], error) {
 	for _, idx := range indexes {
 		idx.Devices = s.Devices
 		if err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {

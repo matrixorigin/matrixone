@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -129,7 +130,7 @@ func TestIvfpqSync_Update_AllInsert(t *testing.T) {
 	require.Len(t, rec.statements, 1)
 	require.Contains(t, rec.statements[0], "'cdc_tail', 0,")
 
-	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 16, 0)
 	require.NoError(t, err)
 	require.Empty(t, state.Deleted)
 	require.Len(t, state.Overflow, 2)
@@ -159,7 +160,7 @@ func TestIvfpqSync_Update_DeleteAndInsert(t *testing.T) {
 	require.Len(t, rec.statements, 1)
 	require.Contains(t, rec.statements[0], "'cdc_tail', 7,")
 
-	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 7), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 7), 16, 0)
 	require.NoError(t, err)
 	require.Equal(t, []int64{42}, state.Deleted)
 	require.Len(t, state.Overflow, 1)
@@ -191,7 +192,7 @@ func TestIvfpqSync_Update_DeleteInsertDelete(t *testing.T) {
 
 	require.NoError(t, s.Save(sqlproc))
 
-	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 16, 0)
 	require.NoError(t, err)
 	require.Equal(t, []int64{1}, state.Deleted)
 	require.Empty(t, state.Overflow)
@@ -220,7 +221,7 @@ func TestIvfpqSync_Update_DeleteIdempotent(t *testing.T) {
 	require.NoError(t, s.Update(sqlproc, cdc))
 	require.NoError(t, s.Save(sqlproc))
 
-	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 16, 0)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []int64{5, 7}, state.Deleted)
 }
@@ -248,11 +249,11 @@ func TestIvfpqSync_Update_Upsert(t *testing.T) {
 	require.Len(t, s.pendingSizes, 2)
 	require.NoError(t, s.Save(sqlproc))
 
-	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 16, 0)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []int64{100}, state.Deleted)
 	require.Len(t, state.Overflow, 1)
-	require.Equal(t, []float32{9, 9, 9, 9}, state.Overflow[0].Vec)
+	require.Equal(t, []float32{9, 9, 9, 9}, util.UnsafeSliceCast[float32](state.Overflow[0].Vec))
 }
 
 func TestIvfpqSync_Update_DimMismatch(t *testing.T) {
@@ -303,7 +304,7 @@ func TestIvfpqSync_Update_WithIncludeBytes(t *testing.T) {
 	require.NoError(t, s.Update(sqlproc, cdc))
 	require.NoError(t, s.Save(sqlproc))
 
-	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 9)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 16, 9)
 	require.NoError(t, err)
 	require.Len(t, state.Overflow, 1)
 	require.Equal(t, include, state.Overflow[0].Include)

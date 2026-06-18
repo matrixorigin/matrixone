@@ -207,24 +207,29 @@ const (
 	CdcOpUpsert CdcOp = 2
 )
 
-// CdcEventRecord is the decoded form of one tag=1 record.
+// CdcEventRecord is the decoded form of one tag=1 record. Vec holds the raw
+// little-endian vector bytes in the index's native base element type (4 bytes
+// per element for vecf32, 2 for a vecf16) — the codec is element-type-agnostic;
+// the GPU layer reinterprets these bytes to []float32 / []cuvs.Float16.
 type CdcEventRecord struct {
 	Op      CdcOp
 	Pkid    int64
-	Vec     []float32 // populated only for CdcOpInsert
-	Include []byte    // populated only for CdcOpInsert (and only when includeBytesPerRow > 0)
+	Vec     []byte // populated only for CdcOpInsert (vecBytesPerRow bytes)
+	Include []byte // populated only for CdcOpInsert (and only when includeBytesPerRow > 0)
 }
 
 // EncodeEventRecord appends one record to dst and returns the new slice.
 // vec is required iff op==CdcOpInsert; include is required iff op==CdcOpInsert
-// AND includeBytesPerRow > 0. dim must be the index's dimensionality.
+// AND includeBytesPerRow > 0. vec carries the row's vector as raw native
+// base-type bytes; vecBytesPerRow is its expected length (dim * element size,
+// e.g. 4*dim for f32, 2*dim for f16).
 func EncodeEventRecord(
 	dst []byte,
 	op CdcOp,
 	pkid int64,
-	vec []float32,
+	vec []byte,
 	include []byte,
-	dim int,
+	vecBytesPerRow int,
 	includeBytesPerRow int,
 ) ([]byte, error) {
 	switch op {
@@ -243,11 +248,11 @@ func EncodeEventRecord(
 		if op == CdcOpUpsert {
 			opName = "UPSERT"
 		}
-		if dim <= 0 {
-			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: %s requires positive dim, got %d", opName, dim)
+		if vecBytesPerRow <= 0 {
+			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: %s requires positive vecBytesPerRow, got %d", opName, vecBytesPerRow)
 		}
-		if len(vec) != dim {
-			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: %s vec length %d != dim %d", opName, len(vec), dim)
+		if len(vec) != vecBytesPerRow {
+			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: %s vec length %d != vecBytesPerRow %d", opName, len(vec), vecBytesPerRow)
 		}
 		if includeBytesPerRow > 0 && len(include) != includeBytesPerRow {
 			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: %s include length %d != includeBytesPerRow %d",
@@ -260,11 +265,10 @@ func EncodeEventRecord(
 		var pk [8]byte
 		binary.LittleEndian.PutUint64(pk[:], uint64(pkid))
 		dst = append(dst, pk[:]...)
-		var f [4]byte
-		for _, v := range vec {
-			binary.LittleEndian.PutUint32(f[:], math.Float32bits(v))
-			dst = append(dst, f[:]...)
-		}
+		// vec body: raw native base-type bytes, copied verbatim. For f32 this is
+		// byte-identical to the legacy math.Float32bits + PutUint32 form on
+		// little-endian targets, so existing f32 CDC streams are unchanged.
+		dst = append(dst, vec...)
 		if includeBytesPerRow > 0 {
 			dst = append(dst, include...)
 		}
@@ -278,12 +282,10 @@ func EncodeEventRecord(
 // and the number of bytes consumed. Returns ok=false when src cannot start a
 // valid record (e.g. unknown op byte, or fewer bytes than the record needs)
 // — the caller treats this as the end of the stream within the chunk.
-//
-// Vec and Include in the returned record alias into src; copy if you need to
-// retain them past the next call.
+// vecBytesPerRow is the INSERT-record vector byte length (dim * element size).
 func DecodeEventRecord(
 	src []byte,
-	dim int,
+	vecBytesPerRow int,
 	includeBytesPerRow int,
 ) (rec CdcEventRecord, n int, ok bool) {
 	if len(src) < 9 {
@@ -296,19 +298,18 @@ func DecodeEventRecord(
 		rec.Pkid = int64(binary.LittleEndian.Uint64(src[1:9]))
 		return rec, 9, true
 	case CdcOpInsert, CdcOpUpsert:
-		need := 9 + 4*dim + includeBytesPerRow
-		if dim <= 0 || includeBytesPerRow < 0 || len(src) < need {
+		need := 9 + vecBytesPerRow + includeBytesPerRow
+		if vecBytesPerRow <= 0 || includeBytesPerRow < 0 || len(src) < need {
 			return rec, 0, false
 		}
 		rec.Op = op
 		rec.Pkid = int64(binary.LittleEndian.Uint64(src[1:9]))
-		rec.Vec = make([]float32, dim)
-		for k := 0; k < dim; k++ {
-			rec.Vec[k] = math.Float32frombits(binary.LittleEndian.Uint32(src[9+k*4:]))
-		}
+		// vec body: raw native base-type bytes, copied verbatim.
+		rec.Vec = make([]byte, vecBytesPerRow)
+		copy(rec.Vec, src[9:9+vecBytesPerRow])
 		if includeBytesPerRow > 0 {
 			rec.Include = make([]byte, includeBytesPerRow)
-			copy(rec.Include, src[9+4*dim:need])
+			copy(rec.Include, src[9+vecBytesPerRow:need])
 		}
 		return rec, need, true
 	default:
@@ -454,10 +455,12 @@ type ReplayState struct {
 	ColMetaJSON string
 }
 
-// OverflowEntry is one row in the brute-force overflow.
+// OverflowEntry is one row in the brute-force overflow. Vec holds the raw
+// native base-type bytes (no f32 widening for vecf16); the GPU layer
+// reinterprets them to the base element type B.
 type OverflowEntry struct {
 	Pkid    int64
-	Vec     []float32
+	Vec     []byte
 	Include []byte
 }
 
@@ -482,16 +485,16 @@ func PeekColMetaJSON(chunks []EventChunk) (string, error) {
 }
 
 // ReplayEventLog walks the chunks (assumed sorted by chunk_id) and applies
-// each record in order, returning the final (deleted, overflow) state. dim
-// and includeBytesPerRow describe the INSERT record layout. Replay is O(n)
-// in event count.
+// each record in order, returning the final (deleted, overflow) state.
+// vecBytesPerRow (dim * element size) and includeBytesPerRow describe the
+// INSERT record layout. Replay is O(n) in event count.
 func ReplayEventLog(
 	chunks []EventChunk,
-	dim int,
+	vecBytesPerRow int,
 	includeBytesPerRow int,
 ) (ReplayState, error) {
-	if dim <= 0 {
-		return ReplayState{}, moerr.NewInternalErrorNoCtxf("ReplayEventLog: invalid dim %d", dim)
+	if vecBytesPerRow <= 0 {
+		return ReplayState{}, moerr.NewInternalErrorNoCtxf("ReplayEventLog: invalid vecBytesPerRow %d", vecBytesPerRow)
 	}
 	if includeBytesPerRow < 0 {
 		return ReplayState{}, moerr.NewInternalErrorNoCtxf("ReplayEventLog: negative includeBytesPerRow %d", includeBytesPerRow)
@@ -514,14 +517,14 @@ func ReplayEventLog(
 			colMetaJSON = string(header)
 		}
 		for len(data) > 0 {
-			rec, n, ok := DecodeEventRecord(data, dim, includeBytesPerRow)
+			rec, n, ok := DecodeEventRecord(data, vecBytesPerRow, includeBytesPerRow)
 			if !ok {
 				// Frame CRC already validated the payload, so any decode
 				// failure here is a record-level bug (encoder/decoder mismatch
 				// on dim or includeBytesPerRow).
 				return ReplayState{}, moerr.NewInternalErrorNoCtxf(
-					"ReplayEventLog: chunk_id=%d: undecodable record at offset %d (dim=%d includeBytesPerRow=%d)",
-					ch.ChunkId, len(ch.Data)-cdcFooterSize-len(data), dim, includeBytesPerRow)
+					"ReplayEventLog: chunk_id=%d: undecodable record at offset %d (vecBytesPerRow=%d includeBytesPerRow=%d)",
+					ch.ChunkId, len(ch.Data)-cdcFooterSize-len(data), vecBytesPerRow, includeBytesPerRow)
 			}
 			switch rec.Op {
 			case CdcOpDelete:

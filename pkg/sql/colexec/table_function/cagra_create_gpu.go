@@ -23,6 +23,7 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -126,9 +127,14 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 		// record 0. Search-side can recover the INCLUDE-column layout
 		// for tag=1 replay even when no tag=0 sub-index exists.
 		colMetaJSON := colMetaJSONFromCols(u.filterCols)
+		// vecBytesPerRow = dim * base element size (2 for vecf16, else 4).
+		elemSize := 4
+		if u.baseOid == types.T_array_float16 {
+			elemSize = 2
+		}
+		vecBytesPerRow := int(u.idxcfg.CuvsCagra.Dimensions) * elemSize
 		tailSqls, err := cuvscdc.SaveSmallTailAsCdc(
-			u.tblcfg, u.cdcTail,
-			int(u.idxcfg.CuvsCagra.Dimensions), ibpr, colMetaJSON)
+			u.tblcfg, u.cdcTail, vecBytesPerRow, ibpr, colMetaJSON)
 		if err != nil {
 			return err
 		}
@@ -429,8 +435,8 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 	id := vector.GetFixedAtNoTypeCheck[int64](tf.ctr.argVecs[1], nthRow)
 
 	// Decode the base vector to its native type (see ivfpq_create_gpu.go for the
-	// rationale). f16 base -> native []cuvs.Float16 for the direct (half) add;
-	// the CDC tail still transports f32 (exact widen) until CDC is native (step 5).
+	// rationale). f16 base -> native []cuvs.Float16 for both the direct (half)
+	// add and the CDC tail (stored as native half bytes — no f32 detour).
 	var fa []float32
 	var hf []cuvs.Float16
 	if u.baseOid == types.T_array_float16 {
@@ -439,9 +445,6 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
 		}
 		hf = f16ToCuvs(h)
-		if srcPos >= u.cdcCutoff {
-			fa = types.Float16ToFloat32Slice(h)
-		}
 	} else {
 		fa = types.BytesToArray[float32](faVec.GetBytesAt(nthRow))
 		if uint(len(fa)) != u.idxcfg.CuvsCagra.Dimensions {
@@ -452,7 +455,6 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 	// Trailing rows below the cuvs threshold route to the CDC tail
 	// (search-side brute-force replay) instead of the cuvs builder.
 	if srcPos >= u.cdcCutoff {
-		vecCopy := append([]float32(nil), fa...)
 		var incBytes []byte
 		if len(u.filterCols) > 0 {
 			incBytes, err = encodeIncludeRowFromArgVecs(u.filterCols, tf.ctr.argVecs, 3, nthRow)
@@ -460,9 +462,17 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 				return err
 			}
 		}
+		// Buffer the tail row as raw native base-type bytes so a vecf16 base is
+		// stored as half (2 bytes/elem) in the CDC record — no f32 detour.
+		var vecBytes []byte
+		if u.baseOid == types.T_array_float16 {
+			vecBytes = append([]byte(nil), util.UnsafeSliceToBytes(hf)...)
+		} else {
+			vecBytes = append([]byte(nil), util.UnsafeSliceToBytes(fa)...)
+		}
 		u.cdcTail = append(u.cdcTail, cuvscdc.PendingRecord{
 			Pkid:    id,
-			Vec:     vecCopy,
+			Vec:     vecBytes,
 			Include: incBytes,
 		})
 		return nil

@@ -24,6 +24,7 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -89,7 +90,9 @@ type ivfpqCreateState struct {
 	// records under vectorindex.CdcTailId.
 	cdcCutoff int64
 	rowsSeen  int64
-	cdcTail   []cuvscdc.PendingRecord
+	// CDC tail records, with each vector stored as raw native base-type bytes
+	// (f16 stays 2-byte — no f32 widening). vecBytesPerRow = dim * base elem size.
+	cdcTail []cuvscdc.PendingRecord
 
 	// srcEmpty short-circuits the per-row code when SELECT COUNT(*)
 	// at init time returned zero — nothing to build, nothing to CDC.
@@ -136,9 +139,14 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 		// record 0. Search-side can recover the INCLUDE-column layout
 		// for tag=1 replay even when no tag=0 sub-index exists.
 		colMetaJSON := colMetaJSONFromCols(u.filterCols)
+		// vecBytesPerRow = dim * base element size (2 for vecf16, else 4).
+		elemSize := 4
+		if u.baseOid == types.T_array_float16 {
+			elemSize = 2
+		}
+		vecBytesPerRow := int(u.idxcfg.CuvsIvfpq.Dimensions) * elemSize
 		tailSqls, err := cuvscdc.SaveSmallTailAsCdc(
-			u.tblcfg, u.cdcTail,
-			int(u.idxcfg.CuvsIvfpq.Dimensions), ibpr, colMetaJSON)
+			u.tblcfg, u.cdcTail, vecBytesPerRow, ibpr, colMetaJSON)
 		if err != nil {
 			return err
 		}
@@ -475,7 +483,6 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 	// the CDC tail (search-side brute-force replay) instead of the
 	// cuvs builder.
 	if srcPos >= u.cdcCutoff {
-		vecCopy := append([]float32(nil), fa...)
 		var incBytes []byte
 		if len(u.filterCols) > 0 {
 			incBytes, err = encodeIncludeRowFromArgVecs(u.filterCols, tf.ctr.argVecs, 3, nthRow)
@@ -483,9 +490,17 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 				return err
 			}
 		}
+		// Buffer the tail row as raw native base-type bytes so a vecf16 base is
+		// stored as half (2 bytes/elem) in the CDC record — no f32 detour.
+		var vecBytes []byte
+		if u.baseOid == types.T_array_float16 {
+			vecBytes = append([]byte(nil), util.UnsafeSliceToBytes(hf)...)
+		} else {
+			vecBytes = append([]byte(nil), util.UnsafeSliceToBytes(fa)...)
+		}
 		u.cdcTail = append(u.cdcTail, cuvscdc.PendingRecord{
 			Pkid:    id,
-			Vec:     vecCopy,
+			Vec:     vecBytes,
 			Include: incBytes,
 		})
 		return nil

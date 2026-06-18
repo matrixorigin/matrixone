@@ -34,7 +34,7 @@ import (
 
 // loadedModel builds an index, saves it to a tar, then reloads it into GPU
 // memory from the local file. Returns the model with Index != nil.
-func loadedModel(t *testing.T, id string) *CagraModel[float32] {
+func loadedModel(t *testing.T, id string) *CagraModel[float32, float32] {
 	t.Helper()
 	built := buildTestModel(t, id, nil)
 	tarPath := built.Path
@@ -53,7 +53,7 @@ func loadedModel(t *testing.T, id string) *CagraModel[float32] {
 	}
 	defer func() { runSql = origRunSql }()
 
-	loader := &CagraModel[float32]{
+	loader := &CagraModel[float32, float32]{
 		Id:       id,
 		Path:     tarPath,
 		Checksum: built.Checksum,
@@ -99,7 +99,7 @@ func TestCagraSearchTypeMismatch(t *testing.T) {
 	defer idx.Destroy()
 
 	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
-	s.Indexes = []*CagraModel[float32]{idx}
+	s.Indexes = []*CagraModel[float32, float32]{idx}
 
 	rt := vectorindex.RuntimeConfig{Limit: 4}
 
@@ -118,7 +118,7 @@ func TestCagraSearchAndSearchFloat32(t *testing.T) {
 	defer idx.Destroy()
 
 	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
-	s.Indexes = []*CagraModel[float32]{idx}
+	s.Indexes = []*CagraModel[float32, float32]{idx}
 	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
@@ -159,7 +159,7 @@ func TestCagraSearchMultipleIndexes(t *testing.T) {
 	defer idx1.Destroy()
 
 	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
-	s.Indexes = []*CagraModel[float32]{idx0, idx1}
+	s.Indexes = []*CagraModel[float32, float32]{idx0, idx1}
 	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)

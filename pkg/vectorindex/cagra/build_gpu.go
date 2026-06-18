@@ -32,12 +32,12 @@ import (
 // new sub-index is created, mirroring the HnswBuild pattern.
 //
 // CagraBuild is single-threaded; the cagra_create table function runs with IsSingle=true.
-type CagraBuild[T cuvs.VectorType] struct {
+type CagraBuild[Q cuvs.VectorType] struct {
 	uid     string
 	idxcfg  vectorindex.IndexConfig
 	tblcfg  vectorindex.IndexTableConfig
-	indexes []*CagraModel[T] // completed sub-indexes (Build already called)
-	current *CagraModel[T]   // sub-index currently being filled
+	indexes []*CagraModel[float32, Q] // completed sub-indexes (Build already called)
+	current *CagraModel[float32, Q]   // sub-index currently being filled
 	nthread uint32
 	devices []int
 	count   int64    // vectors in current sub-index
@@ -50,30 +50,30 @@ type CagraBuild[T cuvs.VectorType] struct {
 }
 
 // NewCagraBuild creates a new CagraBuild ready for AddFloat calls.
-func NewCagraBuild[T cuvs.VectorType](
+func NewCagraBuild[Q cuvs.VectorType](
 	uid string,
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
 	nthread uint32,
 	devices []int,
-) (*CagraBuild[T], error) {
-	return &CagraBuild[T]{
+) (*CagraBuild[Q], error) {
+	return &CagraBuild[Q]{
 		uid:     uid,
 		idxcfg:  idxcfg,
 		tblcfg:  tblcfg,
-		indexes: make([]*CagraModel[T], 0, 4),
+		indexes: make([]*CagraModel[float32, Q], 0, 4),
 		nthread: nthread,
 		devices: devices,
 	}, nil
 }
 
-func (b *CagraBuild[T]) createKey(n int) string {
+func (b *CagraBuild[Q]) createKey(n int) string {
 	return fmt.Sprintf("%s:%d", b.uid, n)
 }
 
 // getOrCreateCurrent returns the current sub-index, creating a new one if needed.
 // When the current sub-index is full it is finalized (Build called) and a new one is started.
-func (b *CagraBuild[T]) getOrCreateCurrent() (*CagraModel[T], error) {
+func (b *CagraBuild[Q]) getOrCreateCurrent() (*CagraModel[float32, Q], error) {
 	capacity := b.idxcfg.IndexCapacity
 
 	if b.current != nil && b.count >= capacity {
@@ -88,7 +88,7 @@ func (b *CagraBuild[T]) getOrCreateCurrent() (*CagraModel[T], error) {
 
 	if b.current == nil {
 		key := b.createKey(len(b.indexes))
-		m, err := NewCagraModelForBuild[T](key, b.idxcfg, b.nthread, b.devices)
+		m, err := NewCagraModelForBuild[float32, Q](key, b.idxcfg, b.nthread, b.devices)
 		if err != nil {
 			return nil, err
 		}
@@ -112,7 +112,7 @@ func (b *CagraBuild[T]) getOrCreateCurrent() (*CagraModel[T], error) {
 // SetFilterColumns registers pre-filter (INCLUDE column) metadata. The JSON
 // is re-applied to each new sub-index allocated during the build. Must be
 // called before the first AddFloat.
-func (b *CagraBuild[T]) SetFilterColumns(colMetaJSON string) {
+func (b *CagraBuild[Q]) SetFilterColumns(colMetaJSON string) {
 	b.filterColMetaJSON = colMetaJSON
 }
 
@@ -121,7 +121,7 @@ func (b *CagraBuild[T]) SetFilterColumns(colMetaJSON string) {
 // same cadence as AddFloat (which drives sub-index rotation).
 // nullBitmap is a packed []uint32 (LSB-first, bit i = 1 means row i IS NULL)
 // of ceil(nrows/32) entries, or nil when the chunk has no nulls.
-func (b *CagraBuild[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
+func (b *CagraBuild[Q]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
 	if b.current == nil {
 		return moerr.NewInternalErrorNoCtx("CagraBuild.AddFilterChunk: no current sub-index (call AddFloat first)")
 	}
@@ -131,7 +131,7 @@ func (b *CagraBuild[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []
 // AddFloat appends one float32 vector with the given int64 id.
 // The internal quantization (T) is handled by AddChunkFloat.
 // idBuf is reused across calls to avoid a per-call heap allocation.
-func (b *CagraBuild[T]) AddFloat(id int64, vec []float32) error {
+func (b *CagraBuild[Q]) AddFloat(id int64, vec []float32) error {
 	idx, err := b.getOrCreateCurrent()
 	if err != nil {
 		return err
@@ -146,7 +146,7 @@ func (b *CagraBuild[T]) AddFloat(id int64, vec []float32) error {
 
 // Add appends one native storage-type (T) vector — used when the base column
 // type equals the storage type (no quantization, e.g. vecf16 base -> half).
-func (b *CagraBuild[T]) Add(id int64, vec []T) error {
+func (b *CagraBuild[Q]) Add(id int64, vec []Q) error {
 	idx, err := b.getOrCreateCurrent()
 	if err != nil {
 		return err
@@ -161,7 +161,7 @@ func (b *CagraBuild[T]) Add(id int64, vec []T) error {
 
 // AddQuantizeHalf appends one vecf16 (half) vector, quantizing natively to the
 // 1-byte storage type T (int8/uint8). Used for a vecf16 base + QUANTIZATION.
-func (b *CagraBuild[T]) AddQuantizeHalf(id int64, vec []cuvs.Float16) error {
+func (b *CagraBuild[Q]) AddQuantizeHalf(id int64, vec []cuvs.Float16) error {
 	idx, err := b.getOrCreateCurrent()
 	if err != nil {
 		return err
@@ -176,7 +176,7 @@ func (b *CagraBuild[T]) AddQuantizeHalf(id int64, vec []cuvs.Float16) error {
 
 // ToInsertSql finalizes any in-progress sub-index, serializes all sub-indexes to the
 // storage table, and returns INSERT SQL statements (storage chunks + single metadata row).
-func (b *CagraBuild[T]) ToInsertSql(ts int64) ([]string, error) {
+func (b *CagraBuild[Q]) ToInsertSql(ts int64) ([]string, error) {
 	// Finalize the current sub-index if it contains vectors.
 	if b.current != nil && b.count > 0 {
 		if err := b.current.Build(); err != nil {
@@ -211,7 +211,7 @@ func (b *CagraBuild[T]) ToInsertSql(ts int64) ([]string, error) {
 }
 
 // Destroy frees all GPU memory and removes any temporary files.
-func (b *CagraBuild[T]) Destroy() error {
+func (b *CagraBuild[Q]) Destroy() error {
 	var errs error
 	if b.current != nil {
 		if err := b.current.Destroy(); err != nil {
@@ -229,6 +229,6 @@ func (b *CagraBuild[T]) Destroy() error {
 }
 
 // GetIndexes returns the completed sub-indexes (for testing).
-func (b *CagraBuild[T]) GetIndexes() []*CagraModel[T] {
+func (b *CagraBuild[Q]) GetIndexes() []*CagraModel[float32, Q] {
 	return b.indexes
 }

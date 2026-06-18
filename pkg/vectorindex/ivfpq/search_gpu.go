@@ -37,26 +37,11 @@ func halfToFloat32(q []cuvs.Float16) []float32 {
 	return types.Float16ToFloat32Slice(h)
 }
 
-// addOverflowVecs feeds the (f32-transport) overflow vectors to the base-typed
-// brute force B in its native element type, matching the native-B overflow
-// search path. The CDC/tail format transports vectors as f32; for a half
-// overflow (B==Float16) we convert to native half and AddChunk, for f32 we
-// AddChunkFloat directly. Keeping the stored element type == the query element
-// type avoids any cross-type quantize on the overflow tier.
-func addOverflowVecs[B cuvs.VectorType](bf *cuvs.GpuBruteForce[B], vecs []float32, count uint64, ids []int64) error {
-	if hbf, ok := any(bf).(*cuvs.GpuBruteForce[cuvs.Float16]); ok {
-		h := types.Float32ToFloat16Slice(vecs)
-		hc := *(*[]cuvs.Float16)(unsafe.Pointer(&h))
-		return hbf.AddChunk(hc, count, ids)
-	}
-	return bf.AddChunkFloat(vecs, count, ids)
-}
-
 // IvfpqSearch implements cache.VectorIndexSearchIf for GPU IVF-PQ indexes.
 type IvfpqSearch[B, Q cuvs.VectorType] struct {
 	Idxcfg        vectorindex.IndexConfig
 	Tblcfg        vectorindex.IndexTableConfig
-	Indexes       []*IvfpqModel[Q]
+	Indexes       []*IvfpqModel[B, Q]
 	MultiIndex    *cuvs.MultiGpuIvfPq[B, Q]
 	Overflow      *cuvs.GpuBruteForce[B] // CDC insert overflow; nil when no overflow records exist
 	Devices       []int
@@ -167,7 +152,7 @@ func (s *IvfpqSearch[B, Q]) SearchFloat32(proc *sqlexec.SqlProcess, query any, r
 
 // Load implements cache.VectorIndexSearchIf.
 func (s *IvfpqSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
-	indexes, err := LoadMetadata[Q](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+	indexes, err := LoadMetadata[B, Q](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {
 		return err
 	}
@@ -217,7 +202,7 @@ func (s *IvfpqSearch[B, Q]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 
-	stub := &IvfpqModel[Q]{Id: vectorindex.CdcTailId}
+	stub := &IvfpqModel[B, Q]{Id: vectorindex.CdcTailId}
 	chunks, err := stub.loadCdcEventsFromDB(sqlproc, s.Tblcfg)
 	if err != nil {
 		return err
@@ -241,7 +226,7 @@ func (s *IvfpqSearch[B, Q]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 	}
 
 	dim := int(s.Idxcfg.CuvsIvfpq.Dimensions)
-	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks(chunks, dim, includeBytesPerRow)
+	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks[B](chunks, dim, includeBytesPerRow)
 	if err != nil {
 		return err
 	}
@@ -257,7 +242,7 @@ func (s *IvfpqSearch[B, Q]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 
-	s.Indexes = append(s.Indexes, &IvfpqModel[Q]{
+	s.Indexes = append(s.Indexes, &IvfpqModel[B, Q]{
 		Id:                   vectorindex.CdcTailId,
 		DeletedPkids:         delPkids,
 		OverflowPkids:        ovPkids,
@@ -360,7 +345,9 @@ func (s *IvfpqSearch[B, Q]) buildOverflow() error {
 			continue
 		}
 		count := uint64(len(m.OverflowPkids))
-		if err = addOverflowVecs(bf, m.OverflowVecs, count, m.OverflowPkids); err != nil {
+		// Overflow vectors are stored in the native base type B (m.OverflowVecs
+		// is []B), so feed the base-typed brute force directly — no f32 detour.
+		if err = bf.AddChunk(m.OverflowVecs, count, m.OverflowPkids); err != nil {
 			bf.Destroy()
 			return err
 		}
@@ -409,7 +396,7 @@ func (s *IvfpqSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuIvfPq[B, Q], error)
 }
 
 // loadIndexes loads each model's index data from the database.
-func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*IvfpqModel[Q]) ([]*IvfpqModel[Q], error) {
+func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*IvfpqModel[B, Q]) ([]*IvfpqModel[B, Q], error) {
 	for _, idx := range indexes {
 		idx.Devices = s.Devices
 		if err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {

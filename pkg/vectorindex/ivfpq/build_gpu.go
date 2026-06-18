@@ -32,12 +32,12 @@ import (
 // new sub-index is created, mirroring the CagraBuild pattern.
 //
 // IvfpqBuild is single-threaded; the ivfpq_create table function runs with IsSingle=true.
-type IvfpqBuild[T cuvs.VectorType] struct {
+type IvfpqBuild[Q cuvs.VectorType] struct {
 	uid     string
 	idxcfg  vectorindex.IndexConfig
 	tblcfg  vectorindex.IndexTableConfig
-	indexes []*IvfpqModel[T]
-	current *IvfpqModel[T]
+	indexes []*IvfpqModel[float32, Q]
+	current *IvfpqModel[float32, Q]
 	nthread uint32
 	devices []int
 	count   int64
@@ -47,28 +47,28 @@ type IvfpqBuild[T cuvs.VectorType] struct {
 	filterColMetaJSON string
 }
 
-func NewIvfpqBuild[T cuvs.VectorType](
+func NewIvfpqBuild[Q cuvs.VectorType](
 	uid string,
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
 	nthread uint32,
 	devices []int,
-) (*IvfpqBuild[T], error) {
-	return &IvfpqBuild[T]{
+) (*IvfpqBuild[Q], error) {
+	return &IvfpqBuild[Q]{
 		uid:     uid,
 		idxcfg:  idxcfg,
 		tblcfg:  tblcfg,
-		indexes: make([]*IvfpqModel[T], 0, 4),
+		indexes: make([]*IvfpqModel[float32, Q], 0, 4),
 		nthread: nthread,
 		devices: devices,
 	}, nil
 }
 
-func (b *IvfpqBuild[T]) createKey(n int) string {
+func (b *IvfpqBuild[Q]) createKey(n int) string {
 	return fmt.Sprintf("%s:%d", b.uid, n)
 }
 
-func (b *IvfpqBuild[T]) getOrCreateCurrent() (*IvfpqModel[T], error) {
+func (b *IvfpqBuild[Q]) getOrCreateCurrent() (*IvfpqModel[float32, Q], error) {
 	capacity := b.idxcfg.IndexCapacity
 
 	if b.current != nil && b.count >= capacity {
@@ -82,7 +82,7 @@ func (b *IvfpqBuild[T]) getOrCreateCurrent() (*IvfpqModel[T], error) {
 
 	if b.current == nil {
 		key := b.createKey(len(b.indexes))
-		m, err := NewIvfpqModelForBuild[T](key, b.idxcfg, b.nthread, b.devices)
+		m, err := NewIvfpqModelForBuild[float32, Q](key, b.idxcfg, b.nthread, b.devices)
 		if err != nil {
 			return nil, err
 		}
@@ -104,19 +104,19 @@ func (b *IvfpqBuild[T]) getOrCreateCurrent() (*IvfpqModel[T], error) {
 }
 
 // SetFilterColumns — see cagra.CagraBuild.SetFilterColumns.
-func (b *IvfpqBuild[T]) SetFilterColumns(colMetaJSON string) {
+func (b *IvfpqBuild[Q]) SetFilterColumns(colMetaJSON string) {
 	b.filterColMetaJSON = colMetaJSON
 }
 
 // AddFilterChunk — see cagra.CagraBuild.AddFilterChunk.
-func (b *IvfpqBuild[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
+func (b *IvfpqBuild[Q]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
 	if b.current == nil {
 		return moerr.NewInternalErrorNoCtx("IvfpqBuild.AddFilterChunk: no current sub-index (call AddFloat first)")
 	}
 	return b.current.Index.AddFilterChunk(colIdx, data, nullBitmap, nrows)
 }
 
-func (b *IvfpqBuild[T]) AddFloat(id int64, vec []float32) error {
+func (b *IvfpqBuild[Q]) AddFloat(id int64, vec []float32) error {
 	idx, err := b.getOrCreateCurrent()
 	if err != nil {
 		return err
@@ -131,7 +131,7 @@ func (b *IvfpqBuild[T]) AddFloat(id int64, vec []float32) error {
 
 // Add appends one native storage-type (T) vector — used when the base column
 // type equals the storage type (no quantization, e.g. vecf16 base -> half).
-func (b *IvfpqBuild[T]) Add(id int64, vec []T) error {
+func (b *IvfpqBuild[Q]) Add(id int64, vec []Q) error {
 	idx, err := b.getOrCreateCurrent()
 	if err != nil {
 		return err
@@ -146,7 +146,7 @@ func (b *IvfpqBuild[T]) Add(id int64, vec []T) error {
 
 // AddQuantizeHalf appends one vecf16 (half) vector, quantizing natively to the
 // 1-byte storage type T (int8/uint8). Used for a vecf16 base + QUANTIZATION.
-func (b *IvfpqBuild[T]) AddQuantizeHalf(id int64, vec []cuvs.Float16) error {
+func (b *IvfpqBuild[Q]) AddQuantizeHalf(id int64, vec []cuvs.Float16) error {
 	idx, err := b.getOrCreateCurrent()
 	if err != nil {
 		return err
@@ -159,7 +159,7 @@ func (b *IvfpqBuild[T]) AddQuantizeHalf(id int64, vec []cuvs.Float16) error {
 	return nil
 }
 
-func (b *IvfpqBuild[T]) ToInsertSql(ts int64) ([]string, error) {
+func (b *IvfpqBuild[Q]) ToInsertSql(ts int64) ([]string, error) {
 	if b.current != nil && b.count > 0 {
 		if err := b.current.Build(); err != nil {
 			return nil, err
@@ -190,7 +190,7 @@ func (b *IvfpqBuild[T]) ToInsertSql(ts int64) ([]string, error) {
 	return sqls, nil
 }
 
-func (b *IvfpqBuild[T]) Destroy() error {
+func (b *IvfpqBuild[Q]) Destroy() error {
 	var errs error
 	if b.current != nil {
 		if err := b.current.Destroy(); err != nil {
@@ -207,6 +207,6 @@ func (b *IvfpqBuild[T]) Destroy() error {
 	return errs
 }
 
-func (b *IvfpqBuild[T]) GetIndexes() []*IvfpqModel[T] {
+func (b *IvfpqBuild[Q]) GetIndexes() []*IvfpqModel[float32, Q] {
 	return b.indexes
 }

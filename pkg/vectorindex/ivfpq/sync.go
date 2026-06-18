@@ -28,6 +28,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -212,7 +213,10 @@ func (s *IvfpqSync) appendRecord(op cuvscdc.CdcOp, pkid int64, vec []float32, in
 		}
 	}
 	before := len(s.pendingRecords)
-	out, err := cuvscdc.EncodeEventRecord(s.pendingRecords, op, pkid, vec, include, s.dim, s.includeBytesPerRow)
+	// Runtime CDC sync is f32-only (vecf16 ongoing ingestion is gated at the
+	// iscp writer); the codec is byte-oriented, so pass the raw f32 bytes
+	// (4*dim) directly.
+	out, err := cuvscdc.EncodeEventRecord(s.pendingRecords, op, pkid, util.UnsafeSliceToBytes(vec), include, 4*s.dim, s.includeBytesPerRow)
 	if err != nil {
 		return err
 	}

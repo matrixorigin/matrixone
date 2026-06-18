@@ -22,6 +22,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
@@ -218,7 +219,7 @@ func (w *CuvsCdcWriter) ToSql() ([]byte, error) {
 
 func (w *CuvsCdcWriter) appendDelete(key int64) error {
 	out, err := cuvscdc.EncodeEventRecord(w.pendingRecords, cuvscdc.CdcOpDelete,
-		key, nil, nil, int(w.dimension), w.includeBytesPer)
+		key, nil, nil, 4*int(w.dimension), w.includeBytesPer)
 	if err != nil {
 		return err
 	}
@@ -255,8 +256,9 @@ func (w *CuvsCdcWriter) encodeInsertOrUpsert(ctx context.Context, row []any, op 
 	if err != nil {
 		return err
 	}
+	// iscp ongoing ingestion is f32-only; pass the raw f32 bytes (4*dim).
 	out, err := cuvscdc.EncodeEventRecord(w.pendingRecords, op,
-		key, v, includeBytes, int(w.dimension), w.includeBytesPer)
+		key, util.UnsafeSliceToBytes(v), includeBytes, 4*int(w.dimension), w.includeBytesPer)
 	if err != nil {
 		return err
 	}

@@ -34,7 +34,7 @@ import (
 
 // loadedModel builds an index, saves it, then reloads it into GPU memory from
 // the local tar file. Returns the model with Index != nil.
-func loadedModel(t *testing.T, id string) *IvfpqModel[float32] {
+func loadedModel(t *testing.T, id string) *IvfpqModel[float32, float32] {
 	t.Helper()
 	built := buildTestModel(t, id, nil)
 	tarPath := built.Path
@@ -53,7 +53,7 @@ func loadedModel(t *testing.T, id string) *IvfpqModel[float32] {
 	}
 	defer func() { runSql = origRunSql }()
 
-	loader := &IvfpqModel[float32]{
+	loader := &IvfpqModel[float32, float32]{
 		Id:       id,
 		Path:     tarPath,
 		Checksum: built.Checksum,
@@ -99,7 +99,7 @@ func TestIvfpqSearchTypeMismatch(t *testing.T) {
 	defer idx.Destroy()
 
 	s := NewIvfpqSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
-	s.Indexes = []*IvfpqModel[float32]{idx}
+	s.Indexes = []*IvfpqModel[float32, float32]{idx}
 	s.MultiIndex, _ = s.buildMultiIndex()
 
 	rt := vectorindex.RuntimeConfig{Limit: 4}
@@ -119,7 +119,7 @@ func TestIvfpqSearchAndSearchFloat32(t *testing.T) {
 	defer idx.Destroy()
 
 	s := NewIvfpqSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
-	s.Indexes = []*IvfpqModel[float32]{idx}
+	s.Indexes = []*IvfpqModel[float32, float32]{idx}
 	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
@@ -157,7 +157,7 @@ func TestIvfpqSearchMultipleIndexes(t *testing.T) {
 	defer idx1.Destroy()
 
 	s := NewIvfpqSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
-	s.Indexes = []*IvfpqModel[float32]{idx0, idx1}
+	s.Indexes = []*IvfpqModel[float32, float32]{idx0, idx1}
 	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
