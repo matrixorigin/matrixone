@@ -145,6 +145,7 @@ type TableForeignKey struct {
 type TableSchema struct {
 	TableName    string
 	DatabaseName string
+	AccountID    uint32
 	Columns      []TableColumn // sorted by Position
 	CreateSQL    string        // raw CREATE TABLE from mo_tables.rel_createsql
 	Comment      string
@@ -1095,7 +1096,7 @@ func (r *CheckpointReader) ReadTableSchema(
 		schema = mergeBuiltinSchemaFallback(schema, builtinTableSchemaForLayout(layout, tableID), tableID)
 	}
 	if schema.Partition == "" {
-		if partitionClause := r.readPartitionClause(ctx, tableID, snapshotTS); partitionClause != "" {
+		if partitionClause := r.readPartitionClause(ctx, tableID, snapshotTS, schema.AccountID); partitionClause != "" {
 			schema.Partition = partitionClause
 		}
 	}
@@ -1247,7 +1248,7 @@ func (r *CheckpointReader) PrepareTableDumpData(
 			tableID,
 		)
 	}
-	partitionTableIDs, err := r.readPartitionTableIDs(ctx, snapshotTS, tableID)
+	partitionTableIDs, err := r.readPartitionTableIDs(ctx, snapshotTS, tableID, schema.AccountID)
 	if err != nil {
 		return nil, err
 	}
@@ -1288,6 +1289,7 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 	}
 
 	tableSet := make(map[uint64]struct{}, len(tableIDs))
+	accountByPrimary := make(map[uint64]uint32, len(tableIDs))
 	result := make(map[uint64]*TableDumpData, len(tableIDs))
 	partitionToPrimary := make(map[uint64]uint64)
 	partitionIDsByPrimary := make(map[uint64][]uint64)
@@ -1304,12 +1306,13 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 			)
 		}
 		tableSet[tableID] = struct{}{}
+		accountByPrimary[tableID] = schema.AccountID
 		result[tableID] = &TableDumpData{
 			TableID: tableID,
 			Schema:  cloneTableSchema(schema),
 		}
 	}
-	partitionTableMap, err := r.readPartitionTableIDsForPrimaries(ctx, snapshotTS, tableSet)
+	partitionTableMap, err := r.readPartitionTableIDsForPrimaries(ctx, snapshotTS, tableSet, accountByPrimary)
 	if err != nil {
 		return nil, err
 	}
@@ -1403,6 +1406,7 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 	clone := &TableSchema{
 		TableName:    strings.Clone(schema.TableName),
 		DatabaseName: strings.Clone(schema.DatabaseName),
+		AccountID:    schema.AccountID,
 		CreateSQL:    strings.Clone(schema.CreateSQL),
 		Comment:      strings.Clone(schema.Comment),
 		Partition:    strings.Clone(schema.Partition),
@@ -1508,15 +1512,65 @@ func (r *CheckpointReader) ListCatalogDatabases(
 	opts TableListOptions,
 ) ([]TableCatalogEntry, error) {
 	moDatabaseView, err := r.getTableLogicalView(ctx, moDatabaseID, snapshotTS)
+
+	// Primary path: read databases directly from mo_database.
+	// This covers databases that have no tables (e.g. empty subscription databases),
+	// which the mo_tables-based fallback would miss.
+	if err == nil && moDatabaseView != nil {
+		databases := buildCatalogDatabasesFromMoDatabaseRows(moDatabaseView)
+		if schema := r.ReadTableSchema(ctx, moDatabaseID, snapshotTS, moDatabaseView); len(schema.Columns) > 0 {
+			projected := MergeLogicalViewWithSchema(moDatabaseView, schema)
+			databases = mergeCatalogDatabaseEntries(databases, buildCatalogDatabasesFromMoDatabaseRows(projected))
+		}
+		// Merge databases derived from mo_tables to fill any gaps that
+		// mo_database alone may not cover (e.g. when mo_database checkpoint
+		// data is incomplete).
+		if moTablesDBs, tablesErr := r.listDatabasesFromMoTables(ctx, snapshotTS); tablesErr == nil {
+			databases = mergeCatalogDatabaseEntries(databases, moTablesDBs)
+		}
+		return filterCatalogTablesForList(databases, opts), nil
+	}
+
+	// Fallback: when mo_database is not available in the checkpoint (e.g.
+	// the table has not been flushed to a checkpoint entry yet), derive
+	// databases from mo_tables. This is the pre-mo_database behavior and
+	// works whenever mo_tables checkpoint data exists.
+	databases, tablesErr := r.listDatabasesFromMoTables(ctx, snapshotTS)
+	if tablesErr != nil {
+		return nil, err // return the original mo_database error, not the mo_tables one
+	}
+	return filterCatalogTablesForList(databases, opts), nil
+}
+
+// listDatabasesFromMoTables derives database catalog entries from mo_tables
+// rows. It returns database-level entries (account_id, database_id, database_name)
+// with empty TableName and zero TableID.
+func (r *CheckpointReader) listDatabasesFromMoTables(
+	ctx context.Context,
+	snapshotTS types.TS,
+) ([]TableCatalogEntry, error) {
+	tables, err := r.ListCatalogTables(ctx, snapshotTS, TableListOptions{})
 	if err != nil {
 		return nil, err
 	}
-	databases := buildCatalogDatabasesFromMoDatabaseRows(moDatabaseView)
-	if schema := r.ReadTableSchema(ctx, moDatabaseID, snapshotTS, moDatabaseView); len(schema.Columns) > 0 {
-		projected := MergeLogicalViewWithSchema(moDatabaseView, schema)
-		databases = mergeCatalogDatabaseEntries(databases, buildCatalogDatabasesFromMoDatabaseRows(projected))
+	seen := make(map[string]struct{})
+	var databases []TableCatalogEntry
+	for _, t := range tables {
+		key := fmt.Sprintf("%d\x00%d\x00%s", t.AccountID, t.DatabaseID, strings.ToLower(t.DatabaseName))
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if !validCatalogName(t.DatabaseName) {
+			continue
+		}
+		databases = append(databases, TableCatalogEntry{
+			AccountID:    t.AccountID,
+			DatabaseID:   t.DatabaseID,
+			DatabaseName: t.DatabaseName,
+		})
 	}
-	return filterCatalogTablesForList(databases, opts), nil
+	return databases, nil
 }
 
 func filterCatalogTablesForList(tables []TableCatalogEntry, opts TableListOptions) []TableCatalogEntry {
@@ -3080,6 +3134,7 @@ func buildSchemaFromMoTablesRow(view *LogicalTableView, fullRow []string) *Table
 		fallbackCatalogColIndex(view, moTablesID, "rel_createsql"),
 		fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Comment),
 		fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint),
+		fallbackCatalogColIndex(view, moTablesID, "account_id"),
 	)
 }
 
@@ -3091,6 +3146,7 @@ func buildSchemaFromMoTablesRowAt(
 	createSQLIdx int,
 	commentIdx int,
 	constraintIdx int,
+	accountIDIdx int,
 ) *TableSchema {
 	schema := &TableSchema{}
 	dataRow := fullRow[logicalViewDataOffset(view):]
@@ -3115,12 +3171,17 @@ func buildSchemaFromMoTablesRowAt(
 		schema.UniqueKeys = decodeUniqueKeysFromMoTablesConstraint(dataRow[constraintIdx])
 		schema.PrimaryKey = decodePrimaryKeyFromMoTablesConstraint(dataRow[constraintIdx])
 	}
+	if accountIDIdx >= 0 && accountIDIdx < len(dataRow) {
+		if accountID, err := strconv.ParseUint(dataRow[accountIDIdx], 10, 32); err == nil {
+			schema.AccountID = uint32(accountID)
+		}
+	}
 	return schema
 }
 
 func findTableSchemaFromMoTables(view *LogicalTableView, tableID uint64) *TableSchema {
 	tableIDStr := fmt.Sprintf("%d", tableID)
-	try := func(relIDCol, relNameCol, relDBCol, createSQLCol, commentCol, constraintCol int) *TableSchema {
+	try := func(relIDCol, relNameCol, relDBCol, createSQLCol, commentCol, constraintCol, accountIDCol int) *TableSchema {
 		if relIDCol < 0 {
 			return nil
 		}
@@ -3129,7 +3190,7 @@ func findTableSchemaFromMoTables(view *LogicalTableView, tableID uint64) *TableS
 			if relIDCol >= len(row) || row[relIDCol] != tableIDStr {
 				continue
 			}
-			return buildSchemaFromMoTablesRowAt(view, fullRow, relNameCol, relDBCol, createSQLCol, commentCol, constraintCol)
+			return buildSchemaFromMoTablesRowAt(view, fullRow, relNameCol, relDBCol, createSQLCol, commentCol, constraintCol, accountIDCol)
 		}
 		return nil
 	}
@@ -3141,6 +3202,7 @@ func findTableSchemaFromMoTables(view *LogicalTableView, tableID uint64) *TableS
 		fallbackCatalogColIndex(view, moTablesID, "rel_createsql"),
 		fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Comment),
 		fallbackCatalogColIndex(view, moTablesID, catalog.SystemRelAttr_Constraint),
+		fallbackCatalogColIndex(view, moTablesID, "account_id"),
 	); schema != nil {
 		return schema
 	}
@@ -3154,6 +3216,7 @@ func findTableSchemaFromMoTables(view *LogicalTableView, tableID uint64) *TableS
 			catalogColIndexForLayout(match.layout, moTablesID, "rel_createsql", match.offset),
 			catalogColIndexForLayout(match.layout, moTablesID, catalog.SystemRelAttr_Comment, match.offset),
 			catalogColIndexForLayout(match.layout, moTablesID, catalog.SystemRelAttr_Constraint, match.offset),
+			catalogColIndexForLayout(match.layout, moTablesID, "account_id", match.offset),
 		); schema != nil {
 			return schema
 		}
@@ -3795,6 +3858,15 @@ func (r *CheckpointReader) ShowCreateTable(
 	if err != nil {
 		moTablesView = nil
 	}
+	var accountID uint32
+	if moTablesView != nil {
+		for _, table := range buildCatalogTablesFromMoTablesRows(moTablesView) {
+			if table.TableID == tableID {
+				accountID = table.AccountID
+				break
+			}
+		}
+	}
 
 	// 1. Reconstruct from mo_columns.
 	moColumnsView, err := r.getTableLogicalView(ctx, moColumnsID, snapshotTS)
@@ -3803,7 +3875,7 @@ func (r *CheckpointReader) ShowCreateTable(
 	}
 
 	var partitionMetadataView *LogicalTableView
-	if view, err := r.getPartitionMetadataView(ctx, snapshotTS); err == nil {
+	if view, err := r.getPartitionMetadataView(ctx, snapshotTS, accountID); err == nil {
 		partitionMetadataView = view
 	}
 
@@ -3866,8 +3938,9 @@ func (r *CheckpointReader) ShowCreateIndexStatements(
 func (r *CheckpointReader) getPartitionMetadataView(
 	ctx context.Context,
 	snapshotTS types.TS,
+	accountID uint32,
 ) (*LogicalTableView, error) {
-	partitionMetadataTableID, ok, err := r.findCatalogTableID(ctx, snapshotTS, catalog.MOPartitionMetadata)
+	partitionMetadataTableID, ok, err := r.findCatalogTableIDForAccount(ctx, snapshotTS, catalog.MOPartitionMetadata, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -3880,8 +3953,9 @@ func (r *CheckpointReader) getPartitionMetadataView(
 func (r *CheckpointReader) getPartitionTablesView(
 	ctx context.Context,
 	snapshotTS types.TS,
+	accountID uint32,
 ) (*LogicalTableView, error) {
-	partitionTablesID, ok, err := r.findCatalogTableID(ctx, snapshotTS, catalog.MOPartitionTables)
+	partitionTablesID, ok, err := r.findCatalogTableIDForAccount(ctx, snapshotTS, catalog.MOPartitionTables, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -3895,8 +3969,9 @@ func (r *CheckpointReader) readPartitionTableIDs(
 	ctx context.Context,
 	snapshotTS types.TS,
 	primaryTableID uint64,
+	accountID uint32,
 ) ([]uint64, error) {
-	view, err := r.getPartitionTablesView(ctx, snapshotTS)
+	view, err := r.getPartitionTablesView(ctx, snapshotTS, accountID)
 	if err != nil || view == nil {
 		return nil, err
 	}
@@ -3908,27 +3983,46 @@ func (r *CheckpointReader) readPartitionTableIDsForPrimaries(
 	ctx context.Context,
 	snapshotTS types.TS,
 	primaryTableIDs map[uint64]struct{},
+	accountByPrimary map[uint64]uint32,
 ) (map[uint64][]uint64, error) {
 	if len(primaryTableIDs) == 0 {
 		return nil, nil
 	}
-	view, err := r.getPartitionTablesView(ctx, snapshotTS)
-	if err != nil || view == nil {
-		return nil, err
+	result := make(map[uint64][]uint64)
+	primaryByAccount := make(map[uint32]map[uint64]struct{})
+	for primaryID := range primaryTableIDs {
+		accountID := accountByPrimary[primaryID]
+		if primaryByAccount[accountID] == nil {
+			primaryByAccount[accountID] = make(map[uint64]struct{})
+		}
+		primaryByAccount[accountID][primaryID] = struct{}{}
 	}
-	return buildPartitionTableIDMap(view, primaryTableIDs), nil
+	for accountID, primaries := range primaryByAccount {
+		view, err := r.getPartitionTablesView(ctx, snapshotTS, accountID)
+		if err != nil {
+			return nil, err
+		}
+		if view == nil {
+			continue
+		}
+		for primaryID, partitionIDs := range buildPartitionTableIDMap(view, primaries) {
+			result[primaryID] = append(result[primaryID], partitionIDs...)
+		}
+	}
+	return result, nil
 }
 
 func (r *CheckpointReader) readPartitionClause(
 	ctx context.Context,
 	tableID uint64,
 	snapshotTS types.TS,
+	accountID uint32,
 ) string {
-	metadataView, err := r.getPartitionMetadataView(ctx, snapshotTS)
+	metadataView, err := r.getPartitionMetadataView(ctx, snapshotTS, accountID)
 	if err != nil || metadataView == nil {
 		return ""
 	}
-	tablesView, err := r.getPartitionTablesView(ctx, snapshotTS)
+	tablesView, err := r.getPartitionTablesView(ctx, snapshotTS, accountID)
 	if err != nil {
 		tablesView = nil
 	}
@@ -4030,18 +4124,37 @@ func (r *CheckpointReader) findCatalogTableID(
 	snapshotTS types.TS,
 	tableName string,
 ) (uint64, bool, error) {
+	return r.findCatalogTableIDForAccount(ctx, snapshotTS, tableName, 0)
+}
+
+func (r *CheckpointReader) findCatalogTableIDForAccount(
+	ctx context.Context,
+	snapshotTS types.TS,
+	tableName string,
+	accountID uint32,
+) (uint64, bool, error) {
 	moTablesView, err := r.getTableLogicalView(ctx, moTablesID, snapshotTS)
 	if err != nil {
 		return 0, false, fmt.Errorf("read mo_tables: %w", err)
 	}
+	var fallback uint64
 	tables := buildCatalogTablesFromMoTablesRows(moTablesView)
 	for _, table := range tables {
 		if table.TableName != tableName {
 			continue
 		}
-		if table.DatabaseName == "" || table.DatabaseName == catalog.MO_CATALOG {
+		if table.DatabaseName != "" && table.DatabaseName != catalog.MO_CATALOG {
+			continue
+		}
+		if table.AccountID == accountID {
 			return table.TableID, true, nil
 		}
+		if accountID == 0 && fallback == 0 {
+			fallback = table.TableID
+		}
+	}
+	if fallback != 0 {
+		return fallback, true, nil
 	}
 	return 0, false, nil
 }
