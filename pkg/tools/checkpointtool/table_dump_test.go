@@ -907,6 +907,19 @@ func TestRenderCreateTableDDLFromSchema_PreservesArrayType(t *testing.T) {
 	assert.NotContains(t, ddl, "`tags` JSON")
 }
 
+func TestRenderCreateTableDDLFromSchema_PreservesTypedArrayMetadata(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "t_array",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "INT", Position: 1},
+			{Name: "tags", SQLType: "JSON", EnumValues: "array(varchar(20))", Position: 2},
+		},
+	})
+
+	assert.Contains(t, ddl, "`tags` ARRAY(varchar(20))")
+	assert.NotContains(t, ddl, "`tags` JSON")
+}
+
 func TestIsPrintableCreateTableSQLAcceptsExternalTable(t *testing.T) {
 	assert.True(t, isPrintableCreateTableSQL("CREATE EXTERNAL TABLE ext_csv (id INT) INFILE {'filepath'='/tmp/ext.csv','format'='csv'}"))
 }

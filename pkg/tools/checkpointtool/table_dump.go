@@ -574,6 +574,11 @@ func renderColumnSQLType(col TableColumn) string {
 		return sqlType
 	}
 	switch {
+	case upperType == "JSON":
+		if arrayType := renderTypedArraySQLType(enumValues); arrayType != "" {
+			return arrayType
+		}
+		return sqlType
 	case upperType == "ENUM":
 		return renderEnumSetSQLType("ENUM", enumValues)
 	case upperType == "SET", upperType == "BIGINT UNSIGNED":
@@ -581,6 +586,14 @@ func renderColumnSQLType(col TableColumn) string {
 	default:
 		return sqlType
 	}
+}
+
+func renderTypedArraySQLType(enumValues string) string {
+	values := strings.TrimSpace(enumValues)
+	if len(values) < len("array(") || !strings.EqualFold(values[:len("array(")], "array(") {
+		return ""
+	}
+	return "ARRAY" + values[len("array"):]
 }
 
 func renderEnumSetSQLType(kind string, enumValues string) string {
