@@ -1115,6 +1115,45 @@ func validateNoDuplicateLocalShards(stores []planStore) error {
 	return fmt.Errorf("local cleanup is incomplete; refusing to restart stores with duplicate local shard replicas:\n%s", strings.Join(messages, "\n"))
 }
 
+func validatePlannedLocalCleanupCompleteness(plan *repairPlan, stores []planStore) error {
+	messages := make([]string, 0)
+	for _, store := range stores {
+		if len(store.CleanupReplicas) == 0 || store.NodeHostDir == "" || store.DeploymentID == 0 {
+			continue
+		}
+		byShard := localReplicasByShard(store.NodeHostDir, store.DeploymentID)
+		for _, replicaID := range store.CleanupReplicas {
+			byShard[plan.ShardID] = removeUint64(byShard[plan.ShardID], replicaID)
+		}
+		shardIDs := make([]uint64, 0, len(byShard))
+		for shardID := range byShard {
+			shardIDs = append(shardIDs, shardID)
+		}
+		sort.Slice(shardIDs, func(i, j int) bool { return shardIDs[i] < shardIDs[j] })
+		for _, shardID := range shardIDs {
+			replicas := byShard[shardID]
+			if len(replicas) <= 1 {
+				continue
+			}
+			messages = append(messages, fmt.Sprintf("- store %s would still have duplicate local replicas for shard %d after this plan: %v", store.UUID, shardID, replicas))
+		}
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	return fmt.Errorf("repair plan is incomplete; refusing to start apply before mutating HAKeeper or local data:\n%s\nGenerate and review a plan for the listed shard(s), or clean the confirmed stale replicas manually before applying this plan", strings.Join(messages, "\n"))
+}
+
+func removeUint64(values []uint64, target uint64) []uint64 {
+	out := values[:0]
+	for _, value := range values {
+		if value != target {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
 func duplicateLocalShardMessage(store planStore, shardID uint64, replicas []uint64) string {
 	commands := make([]string, 0, len(replicas))
 	for _, replicaID := range replicas {
@@ -1130,7 +1169,7 @@ func duplicateLocalShardMessage(store planStore, shardID uint64, replicas []uint
 			replicaID,
 		))
 	}
-	return fmt.Sprintf("- store %s shard %d still has local replicas %v; inspect them and clean stale replicas before restart. Candidate commands:\n  %s", store.UUID, shardID, replicas, strings.Join(commands, "\n  "))
+	return fmt.Sprintf("- store %s shard %d still has local replicas %v; inspect HAKeeper target membership and clean only confirmed stale replicas before restart. Candidate commands, do not run all of them blindly:\n  %s", store.UUID, shardID, replicas, strings.Join(commands, "\n  "))
 }
 
 func buildLocalActions(plan *repairPlan) []planAction {
@@ -1227,6 +1266,9 @@ func applyRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOptions) 
 		timeout = 10 * time.Second
 	}
 	stableHAKeeperAddresses := stableHAKeeperAddressesForApply(plan)
+	if err := validatePlannedLocalCleanupCompleteness(plan, storesByUUID(plan.Stores, plan.RebuildStores)); err != nil {
+		return err
+	}
 	fmt.Println("step 1: write repair state and block stale/dirty stores")
 	if err := confirmApplyStep(opts, "step 1", fmt.Sprintf("block stores %v in HAKeeper repair state", plan.InitialBlockedStores)); err != nil {
 		return err

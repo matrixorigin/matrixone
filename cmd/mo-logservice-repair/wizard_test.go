@@ -251,6 +251,37 @@ func TestValidateNoDuplicateLocalShardsCatchesOtherShardResidue(t *testing.T) {
 	}
 }
 
+func TestValidatePlannedLocalCleanupCompletenessCatchesBeforeApply(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeLogMetadata(filepath.Join(dir, logMetadataFilename), metadata.LogStore{
+		Shards: []metadata.LogShard{
+			{LogShardRecord: metadata.LogShardRecord{ShardID: 0}, ReplicaID: 131074},
+			{LogShardRecord: metadata.LogShardRecord{ShardID: 0}, ReplicaID: 272588},
+			{LogShardRecord: metadata.LogShardRecord{ShardID: 1}, ReplicaID: 262146},
+			{LogShardRecord: metadata.LogShardRecord{ShardID: 1}, ReplicaID: 272587},
+		},
+	}); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	plan := &repairPlan{ShardID: 1}
+	store := planStore{
+		UUID:            "00000000-0000-0000-0000-000000000d01",
+		NodeHostDir:     dir,
+		DeploymentID:    8850055262063090202,
+		CleanupReplicas: []uint64{272587},
+	}
+	err := validatePlannedLocalCleanupCompleteness(plan, []planStore{store})
+	if err == nil {
+		t.Fatalf("expected incomplete cleanup error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"before mutating HAKeeper", "shard 0", "131074", "272588"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("expected %q in error: %s", want, msg)
+		}
+	}
+}
+
 func TestBuildK8sPlanStoreRebuildsDirtyTarget(t *testing.T) {
 	shard := logpb.LogShardInfo{
 		ShardID:  1,
