@@ -250,7 +250,8 @@ func (l *remoteLockTable) getLockHolder(key []byte) (pb.WaitTxn, bool, error) {
 			return holder, ok, nil
 		}
 		if err = l.handleError(err, false); err == nil {
-			return pb.WaitTxn{}, false, nil
+			// Bind was refreshed successfully; retry with the new bind instead of surfacing a false "not found".
+			continue
 		}
 		waitRemoteRetryBackoff(backoff)
 		backoff = nextRemoteRetryBackoff(backoff)
