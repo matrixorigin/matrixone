@@ -403,7 +403,7 @@ func buildLocalRepairPlan(opts wizardOptions) (*repairPlan, error) {
 	}
 	addresses := splitAddresses(opts.addresses)
 	if len(addresses) == 0 {
-		addresses = discoverHAKeeperAddresses(configs)
+		addresses = discoverHAKeeperAddresses(configs, true)
 	}
 	if len(addresses) == 0 {
 		return nil, fmt.Errorf("cannot discover HAKeeper addresses; pass --addresses")
@@ -953,10 +953,23 @@ func targetStores(shard logpb.LogShardInfo) map[string]bool {
 	return out
 }
 
-func discoverHAKeeperAddresses(configs []localLogConfig) []string {
+func discoverHAKeeperAddresses(configs []localLogConfig, preferRunning bool) []string {
+	configByServiceAddress := make(map[string]localLogConfig)
+	for _, cfg := range configs {
+		if cfg.ServiceAddress != "" {
+			configByServiceAddress[cfg.ServiceAddress] = cfg
+		}
+	}
 	for _, cfg := range configs {
 		if len(cfg.HAKeeperAddrs) > 0 {
-			return uniqueStrings(cfg.HAKeeperAddrs)
+			addresses := uniqueStrings(cfg.HAKeeperAddrs)
+			if preferRunning {
+				filtered := filterRunningLocalAddresses(addresses, configByServiceAddress)
+				if len(filtered) > 0 {
+					return filtered
+				}
+			}
+			return addresses
 		}
 	}
 	addrs := make([]string, 0, len(configs))
@@ -965,7 +978,30 @@ func discoverHAKeeperAddresses(configs []localLogConfig) []string {
 			addrs = append(addrs, cfg.ServiceAddress)
 		}
 	}
-	return uniqueStrings(addrs)
+	addresses := uniqueStrings(addrs)
+	if preferRunning {
+		filtered := filterRunningLocalAddresses(addresses, configByServiceAddress)
+		if len(filtered) > 0 {
+			return filtered
+		}
+	}
+	return addresses
+}
+
+func filterRunningLocalAddresses(addresses []string, configs map[string]localLogConfig) []string {
+	ret := make([]string, 0, len(addresses))
+	for _, addr := range addresses {
+		cfg, ok := configs[addr]
+		if !ok {
+			ret = append(ret, addr)
+			continue
+		}
+		pids, _ := findMOServiceProcesses(cfg.ConfigPath)
+		if len(pids) > 0 {
+			ret = append(ret, addr)
+		}
+	}
+	return ret
 }
 
 func findMOServiceProcesses(configPath string) ([]int, string) {

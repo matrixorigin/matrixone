@@ -645,7 +645,9 @@ func connect(ctx context.Context, addresses []string) (morpc.RPCClient, string, 
 		return nil, "", err
 	}
 	for _, addr := range addresses {
-		ok, err := checkHAKeeper(ctx, client, addr)
+		checkCtx, cancel := context.WithTimeout(ctx, time.Second)
+		ok, err := checkHAKeeper(checkCtx, client, addr)
+		cancel()
 		if err == nil && ok {
 			return client, addr, nil
 		}

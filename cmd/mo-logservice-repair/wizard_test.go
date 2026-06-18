@@ -76,3 +76,19 @@ func TestLocalShardReplicasScansTanNodes(t *testing.T) {
 		t.Fatalf("unexpected replicas: %v", replicas)
 	}
 }
+
+func TestFilterRunningLocalAddressesDropsStoppedLocalStores(t *testing.T) {
+	addresses := []string{"127.0.0.1:65101", "127.0.0.1:65201", "logservice.example:32001"}
+	configs := map[string]localLogConfig{
+		"127.0.0.1:65101": {
+			ConfigPath: "/tmp/not-running-log0.toml",
+		},
+		"127.0.0.1:65201": {
+			ConfigPath: "/tmp/not-running-log1.toml",
+		},
+	}
+	filtered := filterRunningLocalAddresses(addresses, configs)
+	if len(filtered) != 1 || filtered[0] != "logservice.example:32001" {
+		t.Fatalf("unexpected filtered addresses: %v", filtered)
+	}
+}
