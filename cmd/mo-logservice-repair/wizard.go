@@ -109,6 +109,7 @@ type planStore struct {
 	LocalReplicas      []uint64 `json:"localReplicas,omitempty"`
 	CleanupReplicas    []uint64 `json:"cleanupReplicas,omitempty"`
 	ProcessIDs         []int    `json:"processIDs,omitempty"`
+	Warnings           []string `json:"warnings,omitempty"`
 	MOServicePath      string   `json:"moServicePath,omitempty"`
 	NeedsStopAndStart  bool     `json:"needsStopAndStart,omitempty"`
 	PresentInHAKeeper  bool     `json:"presentInHAKeeper"`
@@ -174,6 +175,11 @@ func runWizard(args []string) error {
 		return err
 	}
 	printPlanSummary(plan)
+	if !opts.yes {
+		if err := confirmPlanDetails(plan); err != nil {
+			return err
+		}
+	}
 	if opts.output != "" {
 		if err := writePlanFile(opts.output, plan); err != nil {
 			return err
@@ -242,6 +248,9 @@ func runApply(args []string) error {
 	}
 	printPlanSummary(plan)
 	if !opts.yes {
+		if err := confirmPlanDetails(plan); err != nil {
+			return err
+		}
 		confirm, err := askLine("This may stop/restart LogService and edit local replica data. Type APPLY to continue")
 		if err != nil {
 			return err
@@ -461,6 +470,9 @@ func buildLocalRepairPlan(opts wizardOptions) (*repairPlan, error) {
 			plan.RebuildStores = append(plan.RebuildStores, store.UUID)
 			plan.InitialBlockedStores = append(plan.InitialBlockedStores, store.UUID)
 		}
+		for _, warning := range store.Warnings {
+			plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: %s", store.UUID, warning))
+		}
 		if store.Role == "stale" {
 			plan.PersistentBlockedStores = append(plan.PersistentBlockedStores, store.UUID)
 			plan.InitialBlockedStores = append(plan.InitialBlockedStores, store.UUID)
@@ -597,15 +609,24 @@ func buildPlanStore(
 		}
 	}
 	localReplicas := localShardReplicas(cfg.NodeHostDir, cfg.DeploymentID, shardID)
+	replicaReported := false
+	replicaHealthy := false
+	reportWarnings := []string(nil)
+	if targetReplicaID != 0 && hasStoreInfo {
+		replicaReported, replicaHealthy, reportWarnings = storeReportsHealthyReplica(storeInfo, shard, targetReplicaID)
+	}
 	role := "unused"
 	switch {
 	case cfg.UUID == sourceStore:
 		role = "source"
 	case targetReplicaID != 0:
-		if hasStoreInfo && storeReportsReplica(storeInfo, shardID, targetReplicaID) {
+		if replicaHealthy {
 			role = "target"
 		} else {
 			role = "rebuild"
+			if replicaReported && len(reportWarnings) > 0 {
+				reportWarnings = append(reportWarnings, "target replica is reported by HAKeeper heartbeat, but its local shard view differs from the target shard; local data must be rebuilt")
+			}
 		}
 	case len(localReplicas) > 0:
 		role = "stale"
@@ -639,6 +660,7 @@ func buildPlanStore(
 		LocalReplicas:      localReplicas,
 		CleanupReplicas:    cleanupReplicas,
 		ProcessIDs:         pids,
+		Warnings:           reportWarnings,
 		MOServicePath:      binary,
 		NeedsStopAndStart:  targetReplicaID != 0 && len(cleanupReplicas) > 0,
 		PresentInHAKeeper:  targetReplicaID != 0,
@@ -646,13 +668,60 @@ func buildPlanStore(
 	}
 }
 
-func storeReportsReplica(storeInfo logpb.LogStoreInfo, shardID uint64, replicaID uint64) bool {
+func storeReportsHealthyReplica(storeInfo logpb.LogStoreInfo, shard logpb.LogShardInfo, replicaID uint64) (bool, bool, []string) {
 	for _, replica := range storeInfo.Replicas {
-		if replica.ShardID == shardID && replica.ReplicaID == replicaID {
-			return true
+		if replica.ShardID != shard.ShardID || replica.ReplicaID != replicaID {
+			continue
+		}
+		warnings := compareReportedShard(replica.LogShardInfo, shard)
+		return true, len(warnings) == 0, warnings
+	}
+	return false, false, nil
+}
+
+func compareReportedShard(reported logpb.LogShardInfo, target logpb.LogShardInfo) []string {
+	warnings := []string(nil)
+	if reported.ShardID != target.ShardID {
+		warnings = append(warnings, fmt.Sprintf("reported shard id %d differs from target shard id %d", reported.ShardID, target.ShardID))
+	}
+	if reported.Epoch != target.Epoch {
+		warnings = append(warnings, fmt.Sprintf("reported epoch %d differs from target epoch %d", reported.Epoch, target.Epoch))
+	}
+	if !sameReplicaMap(reported.Replicas, target.Replicas) {
+		warnings = append(warnings, fmt.Sprintf("reported voting replicas %s differ from target %s", formatReplicaMap(reported.Replicas), formatReplicaMap(target.Replicas)))
+	}
+	if !sameReplicaMap(reported.NonVotingReplicas, target.NonVotingReplicas) {
+		warnings = append(warnings, fmt.Sprintf("reported non-voting replicas %s differ from target %s", formatReplicaMap(reported.NonVotingReplicas), formatReplicaMap(target.NonVotingReplicas)))
+	}
+	return warnings
+}
+
+func sameReplicaMap(a map[uint64]string, b map[uint64]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for id, store := range a {
+		if b[id] != store {
+			return false
 		}
 	}
-	return false
+	return true
+}
+
+func formatReplicaMap(m map[uint64]string) string {
+	if len(m) == 0 {
+		return "{}"
+	}
+	keys := make([]uint64, 0, len(m))
+	for id := range m {
+		keys = append(keys, id)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	parts := make([]string, 0, len(keys))
+	for _, id := range keys {
+		parts = append(parts, fmt.Sprintf("%d:%s", id, m[id]))
+	}
+	return "{" + strings.Join(parts, ",") + "}"
 }
 
 func localShardReplicas(nodeHostDir string, deploymentID uint64, shardID uint64) []uint64 {
@@ -775,12 +844,19 @@ func applyRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOptions) 
 	if timeout == 0 {
 		timeout = 10 * time.Second
 	}
+	stableHAKeeperAddresses := stableHAKeeperAddressesForApply(plan)
 	fmt.Println("step 1: write repair state and block stale/dirty stores")
-	if _, err := applyHAKeeperWithNewConnection(ctx, plan.HAKeeperAddresses, timeout, repairPayloadForPlan(plan, plan.InitialBlockedStores, "wizard: block stale/dirty stores before cleanup")); err != nil {
+	if err := confirmApplyStep(opts, "step 1", fmt.Sprintf("block stores %v in HAKeeper repair state", plan.InitialBlockedStores)); err != nil {
+		return err
+	}
+	if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddresses, timeout, repairPayloadForPlan(plan, plan.InitialBlockedStores, "wizard: block stale/dirty stores before cleanup")); err != nil {
 		return err
 	}
 	rebuildStores := storesByUUID(plan.Stores, plan.RebuildStores)
 	fmt.Println("step 2: stop LogService stores that need local cleanup")
+	if err := confirmApplyStep(opts, "step 2", fmt.Sprintf("stop stores %v", storesWithCleanup(rebuildStores))); err != nil {
+		return err
+	}
 	for _, store := range rebuildStores {
 		if len(store.CleanupReplicas) == 0 {
 			continue
@@ -790,6 +866,9 @@ func applyRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOptions) 
 		}
 	}
 	fmt.Println("step 3: back up local logservice-data")
+	if err := confirmApplyStep(opts, "step 3", fmt.Sprintf("backup store data to %s", plan.Local.BackupDir)); err != nil {
+		return err
+	}
 	for _, store := range rebuildStores {
 		if len(store.CleanupReplicas) == 0 {
 			continue
@@ -799,6 +878,9 @@ func applyRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOptions) 
 		}
 	}
 	fmt.Println("step 4: clean dirty local replicas")
+	if err := confirmApplyStep(opts, "step 4", cleanupSummary(rebuildStores)); err != nil {
+		return err
+	}
 	for _, store := range rebuildStores {
 		for _, replicaID := range store.CleanupReplicas {
 			if err := cleanReplica(
@@ -817,6 +899,9 @@ func applyRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOptions) 
 		}
 	}
 	fmt.Println("step 5: restart cleaned LogService stores")
+	if err := confirmApplyStep(opts, "step 5", fmt.Sprintf("restart stores %v", storesWithCleanup(rebuildStores))); err != nil {
+		return err
+	}
 	for _, store := range rebuildStores {
 		if len(store.CleanupReplicas) == 0 {
 			continue
@@ -827,6 +912,12 @@ func applyRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOptions) 
 	}
 	fmt.Println("step 6: unblock cleaned stores one by one")
 	for _, store := range rebuildStores {
+		if len(store.CleanupReplicas) == 0 {
+			continue
+		}
+		if err := confirmApplyStep(opts, "step 6", "unblock cleaned store "+store.UUID); err != nil {
+			return err
+		}
 		req := repairPayload{
 			Op:         "unblock",
 			ShardID:    plan.ShardID,
@@ -834,18 +925,21 @@ func applyRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOptions) 
 			Stores:     []string{store.UUID},
 			Reason:     "wizard: cleaned " + store.UUID,
 		}
-		if _, err := applyHAKeeperWithNewConnection(ctx, plan.HAKeeperAddresses, timeout, req); err != nil {
+		if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddresses, timeout, req); err != nil {
 			return err
 		}
 		fmt.Printf("unblocked %s; wait 30s for L/Start/snapshot restore\n", store.UUID)
 		time.Sleep(30 * time.Second)
 	}
 	fmt.Println("step 7: write final repair state")
-	if _, err := applyHAKeeperWithNewConnection(ctx, plan.HAKeeperAddresses, timeout, repairPayloadForPlan(plan, plan.PersistentBlockedStores, "wizard: repair complete")); err != nil {
+	if err := confirmApplyStep(opts, "step 7", fmt.Sprintf("keep persistent blocked stores %v", plan.PersistentBlockedStores)); err != nil {
+		return err
+	}
+	if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddresses, timeout, repairPayloadForPlan(plan, plan.PersistentBlockedStores, "wizard: repair complete")); err != nil {
 		return err
 	}
 	fmt.Println("step 8: final HAKeeper state")
-	state, err := getHAKeeperStateWithNewConnection(ctx, plan.HAKeeperAddresses, timeout)
+	state, err := getHAKeeperStateWithNewConnection(ctx, stableHAKeeperAddresses, timeout)
 	if err != nil {
 		return err
 	}
@@ -853,6 +947,92 @@ func applyRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOptions) 
 		"logShards": state.LogState.Shards,
 		"repairs":   state.LogShardRepairs,
 	})
+}
+
+func stableHAKeeperAddressesForApply(plan *repairPlan) []string {
+	addressByStore := make(map[string]string)
+	rebuildStores := make(map[string]bool)
+	sourceStores := make(map[string]bool)
+	for _, store := range plan.Stores {
+		if store.ServiceAddress != "" {
+			addressByStore[store.UUID] = store.ServiceAddress
+		}
+		if len(store.CleanupReplicas) > 0 {
+			rebuildStores[store.UUID] = true
+		}
+		if store.UUID == plan.SourceStore || store.Role == "source" {
+			sourceStores[store.UUID] = true
+		}
+	}
+	rank := make(map[string]int)
+	for store, address := range addressByStore {
+		switch {
+		case sourceStores[store]:
+			rank[address] = 0
+		case rebuildStores[store]:
+			rank[address] = 2
+		default:
+			rank[address] = 1
+		}
+	}
+	ret := append([]string(nil), plan.HAKeeperAddresses...)
+	sort.SliceStable(ret, func(i, j int) bool {
+		ri, ok := rank[ret[i]]
+		if !ok {
+			ri = 1
+		}
+		rj, ok := rank[ret[j]]
+		if !ok {
+			rj = 1
+		}
+		if ri != rj {
+			return ri < rj
+		}
+		return ret[i] < ret[j]
+	})
+	return uniqueStringsKeepOrder(ret)
+}
+
+func confirmApplyStep(opts wizardOptions, step string, description string) error {
+	if opts.yes {
+		return nil
+	}
+	ok, err := askYesNo(fmt.Sprintf("Run %s: %s", step, description), false)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("apply cancelled at %s", step)
+	}
+	return nil
+}
+
+func storesWithCleanup(stores []planStore) []string {
+	ret := make([]string, 0, len(stores))
+	for _, store := range stores {
+		if len(store.CleanupReplicas) > 0 {
+			ret = append(ret, store.UUID)
+		}
+	}
+	return ret
+}
+
+func cleanupSummary(stores []planStore) string {
+	parts := make([]string, 0, len(stores))
+	for _, store := range stores {
+		if len(store.CleanupReplicas) == 0 {
+			continue
+		}
+		ids := make([]string, 0, len(store.CleanupReplicas))
+		for _, replicaID := range store.CleanupReplicas {
+			ids = append(ids, strconv.FormatUint(replicaID, 10))
+		}
+		parts = append(parts, fmt.Sprintf("%s replicas [%s]", store.UUID, strings.Join(ids, ",")))
+	}
+	if len(parts) == 0 {
+		return "no local replicas need cleanup"
+	}
+	return "delete local data for " + strings.Join(parts, "; ")
 }
 
 func applyHAKeeperWithNewConnection(
@@ -1097,6 +1277,55 @@ func storesByUUID(stores []planStore, uuids []string) []planStore {
 	return out
 }
 
+func confirmPlanDetails(plan *repairPlan) error {
+	if len(plan.HAKeeperAddresses) > 0 {
+		ok, err := askYesNo("Confirm HAKeeper addresses "+strings.Join(plan.HAKeeperAddresses, ","), false)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("apply cancelled: HAKeeper addresses not confirmed")
+		}
+	}
+	if plan.SourceStore != "" {
+		ok, err := askYesNo("Confirm source store "+plan.SourceStore, false)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("apply cancelled: source store not confirmed")
+		}
+	}
+	for _, store := range plan.Stores {
+		if !storeNeedsHumanConfirmation(store) {
+			continue
+		}
+		fmt.Printf("Review store %s\n", store.UUID)
+		fmt.Printf("  role=%s targetReplica=%d local=%v cleanup=%v\n", store.Role, store.TargetReplicaID, store.LocalReplicas, store.CleanupReplicas)
+		if store.ConfigPath != "" {
+			fmt.Printf("  config=%s\n", store.ConfigPath)
+		}
+		if store.NodeHostDir != "" {
+			fmt.Printf("  nodeHostDir=%s\n", store.NodeHostDir)
+		}
+		for _, warning := range store.Warnings {
+			fmt.Printf("  warning: %s\n", warning)
+		}
+		ok, err := askYesNo("Confirm this store action", false)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("apply cancelled: store %s not confirmed", store.UUID)
+		}
+	}
+	return nil
+}
+
+func storeNeedsHumanConfirmation(store planStore) bool {
+	return len(store.CleanupReplicas) > 0 || store.Role == "stale" || len(store.Warnings) > 0
+}
+
 func printPlanSummary(plan *repairPlan) {
 	fmt.Printf("Repair plan %s mode=%s shard=%d\n", plan.Version, plan.Mode, plan.ShardID)
 	if len(plan.HAKeeperAddresses) > 0 {
@@ -1112,6 +1341,9 @@ func printPlanSummary(plan *repairPlan) {
 				store.LocalReplicas,
 				store.CleanupReplicas,
 			)
+			for _, warning := range store.Warnings {
+				fmt.Printf("    warning: %s\n", warning)
+			}
 		}
 	}
 	if len(plan.InitialBlockedStores) > 0 {
@@ -1251,6 +1483,19 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	sort.Strings(out)
+	return out
+}
+
+func uniqueStringsKeepOrder(values []string) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
 	return out
 }
 

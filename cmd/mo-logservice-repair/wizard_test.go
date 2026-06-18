@@ -115,12 +115,71 @@ func TestBuildPlanStoreKeepsReportedTargetReplica(t *testing.T) {
 		DeploymentID: 8850055262063090202,
 	}
 	store := buildPlanStore(1, shard, cfg, "store-d02", logpb.LogStoreInfo{
-		Replicas: []logpb.LogReplicaInfo{{LogShardInfo: logpb.LogShardInfo{ShardID: 1}, ReplicaID: 282826}},
+		Replicas: []logpb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 282826}},
 	}, true)
 	if store.Role != "cleanup" {
 		t.Fatalf("unexpected role: %s", store.Role)
 	}
 	if len(store.CleanupReplicas) != 1 || store.CleanupReplicas[0] != 262147 {
 		t.Fatalf("unexpected cleanup replicas: %v", store.CleanupReplicas)
+	}
+}
+
+func TestBuildPlanStoreRebuildsReportedTargetWithStaleMembership(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "host-10-222-1-50", "08850055262063090202", "tandb")
+	if err := os.MkdirAll(filepath.Join(root, "node-1-262149"), 0750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	shard := logpb.LogShardInfo{
+		ShardID:  1,
+		Replicas: map[uint64]string{262147: "store-d02", 262149: "store-d03", 272586: "store-d01"},
+		Epoch:    1799,
+		LeaderID: 262147,
+	}
+	cfg := localLogConfig{
+		UUID:         "store-d03",
+		NodeHostDir:  dir,
+		DeploymentID: 8850055262063090202,
+	}
+	staleShard := logpb.LogShardInfo{
+		ShardID:  1,
+		Replicas: map[uint64]string{262145: "store-d00", 262146: "store-d01", 262147: "store-d02"},
+		Epoch:    424,
+		LeaderID: 262147,
+	}
+	store := buildPlanStore(1, shard, cfg, "store-d02", logpb.LogStoreInfo{
+		Replicas: []logpb.LogReplicaInfo{{LogShardInfo: staleShard, ReplicaID: 262149}},
+	}, true)
+	if store.Role != "rebuild" {
+		t.Fatalf("unexpected role: %s", store.Role)
+	}
+	if len(store.CleanupReplicas) != 1 || store.CleanupReplicas[0] != 262149 {
+		t.Fatalf("unexpected cleanup replicas: %v", store.CleanupReplicas)
+	}
+	if len(store.Warnings) == 0 {
+		t.Fatalf("expected stale membership warning")
+	}
+}
+
+func TestStableHAKeeperAddressesForApplyRanksCleanupStoresLast(t *testing.T) {
+	plan := &repairPlan{
+		HAKeeperAddresses: []string{"127.0.0.1:65201", "127.0.0.1:65301", "127.0.0.1:65401"},
+		SourceStore:       "d02",
+		Stores: []planStore{
+			{UUID: "d01", ServiceAddress: "127.0.0.1:65201", CleanupReplicas: []uint64{262146}},
+			{UUID: "d02", ServiceAddress: "127.0.0.1:65301", Role: "source"},
+			{UUID: "d03", ServiceAddress: "127.0.0.1:65401", Role: "target"},
+		},
+	}
+	got := stableHAKeeperAddressesForApply(plan)
+	want := []string{"127.0.0.1:65301", "127.0.0.1:65401", "127.0.0.1:65201"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected addresses: %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected addresses: got %v want %v", got, want)
+		}
 	}
 }
