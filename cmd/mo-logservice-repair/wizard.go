@@ -452,11 +452,12 @@ func buildLocalRepairPlan(opts wizardOptions) (*repairPlan, error) {
 	}
 	seenStores := make(map[string]bool)
 	for _, cfg := range configs {
-		store := buildPlanStore(opts.shardID, shard, cfg, sourceStore)
+		storeInfo, hasStoreInfo := state.LogState.Stores[cfg.UUID]
+		store := buildPlanStore(opts.shardID, shard, cfg, sourceStore, storeInfo, hasStoreInfo)
 		if opts.moServicePath != "" && store.MOServicePath == "" {
 			store.MOServicePath = opts.moServicePath
 		}
-		if store.Role == "rebuild" {
+		if store.NeedsStopAndStart {
 			plan.RebuildStores = append(plan.RebuildStores, store.UUID)
 			plan.InitialBlockedStores = append(plan.InitialBlockedStores, store.UUID)
 		}
@@ -572,7 +573,14 @@ func parseLogConfig(path string) (localLogConfig, error) {
 	}, nil
 }
 
-func buildPlanStore(shardID uint64, shard logpb.LogShardInfo, cfg localLogConfig, sourceStore string) planStore {
+func buildPlanStore(
+	shardID uint64,
+	shard logpb.LogShardInfo,
+	cfg localLogConfig,
+	sourceStore string,
+	storeInfo logpb.LogStoreInfo,
+	hasStoreInfo bool,
+) planStore {
 	targetReplicaID := uint64(0)
 	for replicaID, store := range shard.Replicas {
 		if store == cfg.UUID {
@@ -594,13 +602,26 @@ func buildPlanStore(shardID uint64, shard logpb.LogShardInfo, cfg localLogConfig
 	case cfg.UUID == sourceStore:
 		role = "source"
 	case targetReplicaID != 0:
-		role = "rebuild"
+		if hasStoreInfo && storeReportsReplica(storeInfo, shardID, targetReplicaID) {
+			role = "target"
+		} else {
+			role = "rebuild"
+		}
 	case len(localReplicas) > 0:
 		role = "stale"
 	}
 	cleanupReplicas := []uint64(nil)
 	if role == "rebuild" {
 		cleanupReplicas = append(cleanupReplicas, localReplicas...)
+	} else if role == "target" {
+		for _, replicaID := range localReplicas {
+			if replicaID != targetReplicaID {
+				cleanupReplicas = append(cleanupReplicas, replicaID)
+			}
+		}
+		if len(cleanupReplicas) > 0 {
+			role = "cleanup"
+		}
 	}
 	pids, binary := findMOServiceProcesses(cfg.ConfigPath)
 	return planStore{
@@ -619,10 +640,19 @@ func buildPlanStore(shardID uint64, shard logpb.LogShardInfo, cfg localLogConfig
 		CleanupReplicas:    cleanupReplicas,
 		ProcessIDs:         pids,
 		MOServicePath:      binary,
-		NeedsStopAndStart:  role == "rebuild" && len(cleanupReplicas) > 0,
+		NeedsStopAndStart:  targetReplicaID != 0 && len(cleanupReplicas) > 0,
 		PresentInHAKeeper:  targetReplicaID != 0,
 		PresentInLocalData: len(localReplicas) > 0,
 	}
+}
+
+func storeReportsReplica(storeInfo logpb.LogStoreInfo, shardID uint64, replicaID uint64) bool {
+	for _, replica := range storeInfo.Replicas {
+		if replica.ShardID == shardID && replica.ReplicaID == replicaID {
+			return true
+		}
+	}
+	return false
 }
 
 func localShardReplicas(nodeHostDir string, deploymentID uint64, shardID uint64) []uint64 {
@@ -661,7 +691,7 @@ func buildLocalActions(plan *repairPlan) []planAction {
 		ShardID:     plan.ShardID,
 	})
 	for _, store := range plan.Stores {
-		if store.Role != "rebuild" || len(store.CleanupReplicas) == 0 {
+		if len(store.CleanupReplicas) == 0 {
 			continue
 		}
 		actions = append(actions, planAction{
@@ -677,7 +707,7 @@ func buildLocalActions(plan *repairPlan) []planAction {
 		Command:     fmt.Sprintf("mkdir -p %s && cp -a <node-host-dir> %s/", shellQuote(plan.Local.BackupDir), shellQuote(plan.Local.BackupDir)),
 	})
 	for _, store := range plan.Stores {
-		if store.Role != "rebuild" {
+		if len(store.CleanupReplicas) == 0 {
 			continue
 		}
 		for _, replicaID := range store.CleanupReplicas {
@@ -701,7 +731,7 @@ func buildLocalActions(plan *repairPlan) []planAction {
 		}
 	}
 	for _, store := range plan.Stores {
-		if store.Role != "rebuild" || len(store.CleanupReplicas) == 0 {
+		if len(store.CleanupReplicas) == 0 {
 			continue
 		}
 		actions = append(actions, planAction{
@@ -745,16 +775,8 @@ func applyRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOptions) 
 	if timeout == 0 {
 		timeout = 10 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	client, addr, err := connect(ctx, plan.HAKeeperAddresses)
-	if err != nil {
-		return fmt.Errorf("connect hakeeper: %w", err)
-	}
-	defer client.Close()
-
 	fmt.Println("step 1: write repair state and block stale/dirty stores")
-	if _, err := applyHAKeeperPayload(ctx, client, addr, repairPayloadForPlan(plan, plan.InitialBlockedStores, "wizard: block stale/dirty stores before cleanup")); err != nil {
+	if _, err := applyHAKeeperWithNewConnection(ctx, plan.HAKeeperAddresses, timeout, repairPayloadForPlan(plan, plan.InitialBlockedStores, "wizard: block stale/dirty stores before cleanup")); err != nil {
 		return err
 	}
 	rebuildStores := storesByUUID(plan.Stores, plan.RebuildStores)
@@ -812,18 +834,18 @@ func applyRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOptions) 
 			Stores:     []string{store.UUID},
 			Reason:     "wizard: cleaned " + store.UUID,
 		}
-		if _, err := applyHAKeeperPayload(ctx, client, addr, req); err != nil {
+		if _, err := applyHAKeeperWithNewConnection(ctx, plan.HAKeeperAddresses, timeout, req); err != nil {
 			return err
 		}
 		fmt.Printf("unblocked %s; wait 30s for L/Start/snapshot restore\n", store.UUID)
 		time.Sleep(30 * time.Second)
 	}
 	fmt.Println("step 7: write final repair state")
-	if _, err := applyHAKeeperPayload(ctx, client, addr, repairPayloadForPlan(plan, plan.PersistentBlockedStores, "wizard: repair complete")); err != nil {
+	if _, err := applyHAKeeperWithNewConnection(ctx, plan.HAKeeperAddresses, timeout, repairPayloadForPlan(plan, plan.PersistentBlockedStores, "wizard: repair complete")); err != nil {
 		return err
 	}
 	fmt.Println("step 8: final HAKeeper state")
-	state, err := getClusterState(ctx, client, addr)
+	state, err := getHAKeeperStateWithNewConnection(ctx, plan.HAKeeperAddresses, timeout)
 	if err != nil {
 		return err
 	}
@@ -831,6 +853,37 @@ func applyRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOptions) 
 		"logShards": state.LogState.Shards,
 		"repairs":   state.LogShardRepairs,
 	})
+}
+
+func applyHAKeeperWithNewConnection(
+	ctx context.Context,
+	addresses []string,
+	timeout time.Duration,
+	req repairPayload,
+) (repairResult, error) {
+	opCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	client, addr, err := connect(opCtx, addresses)
+	if err != nil {
+		return repairResult{}, fmt.Errorf("connect hakeeper: %w", err)
+	}
+	defer client.Close()
+	return applyHAKeeperPayload(opCtx, client, addr, req)
+}
+
+func getHAKeeperStateWithNewConnection(
+	ctx context.Context,
+	addresses []string,
+	timeout time.Duration,
+) (logpb.CheckerState, error) {
+	opCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	client, addr, err := connect(opCtx, addresses)
+	if err != nil {
+		return logpb.CheckerState{}, fmt.Errorf("connect hakeeper: %w", err)
+	}
+	defer client.Close()
+	return getClusterState(opCtx, client, addr)
 }
 
 func stopStore(store planStore) error {

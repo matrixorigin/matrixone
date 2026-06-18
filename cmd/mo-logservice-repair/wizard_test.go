@@ -18,6 +18,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func TestParseLogConfigForWizard(t *testing.T) {
@@ -90,5 +92,35 @@ func TestFilterRunningLocalAddressesDropsStoppedLocalStores(t *testing.T) {
 	filtered := filterRunningLocalAddresses(addresses, configs)
 	if len(filtered) != 1 || filtered[0] != "logservice.example:32001" {
 		t.Fatalf("unexpected filtered addresses: %v", filtered)
+	}
+}
+
+func TestBuildPlanStoreKeepsReportedTargetReplica(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "host-10-222-1-50", "08850055262063090202", "tandb")
+	if err := os.MkdirAll(filepath.Join(root, "node-1-262147"), 0750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "node-1-282826"), 0750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	shard := logpb.LogShardInfo{
+		ShardID:  1,
+		Replicas: map[uint64]string{282826: "store-d01", 262145: "store-d02"},
+		LeaderID: 262145,
+	}
+	cfg := localLogConfig{
+		UUID:         "store-d01",
+		NodeHostDir:  dir,
+		DeploymentID: 8850055262063090202,
+	}
+	store := buildPlanStore(1, shard, cfg, "store-d02", logpb.LogStoreInfo{
+		Replicas: []logpb.LogReplicaInfo{{LogShardInfo: logpb.LogShardInfo{ShardID: 1}, ReplicaID: 282826}},
+	}, true)
+	if store.Role != "cleanup" {
+		t.Fatalf("unexpected role: %s", store.Role)
+	}
+	if len(store.CleanupReplicas) != 1 || store.CleanupReplicas[0] != 262147 {
+		t.Fatalf("unexpected cleanup replicas: %v", store.CleanupReplicas)
 	}
 }
