@@ -407,6 +407,14 @@ func multiGpuSearchBQ[Q VectorType, B VectorType](
 	}
 
 	if bruteForce != nil {
+		// Guard against a dispatch mismatch: if the overflow brute force is
+		// live but neither a base-typed (B) nor an f32 query was supplied, the
+		// async search would submit an empty job (job id 0) and SearchWait(0)
+		// would block forever. Fail loudly instead — this means the [B,Q]
+		// instantiation disagrees with the decoded query type.
+		if len(queriesB) == 0 && len(queriesBF32) == 0 {
+			return nil, nil, moerr.NewInternalErrorNoCtx("multiGpuSearchBQ: brute force is loaded but no base/f32 query was provided (B/Q dispatch mismatch)")
+		}
 		var jobID uint64
 		var err error
 		if queriesB != nil {

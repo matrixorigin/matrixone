@@ -37,6 +37,21 @@ func cagraHalfToFloat32(q []cuvs.Float16) []float32 {
 	return types.Float16ToFloat32Slice(h)
 }
 
+// addOverflowVecs feeds the (f32-transport) overflow vectors to the base-typed
+// brute force B in its native element type, matching the native-B overflow
+// search path. The CDC/tail format transports vectors as f32; for a half
+// overflow (B==Float16) we convert to native half and AddChunk, for f32 we
+// AddChunkFloat directly. Keeping the stored element type == the query element
+// type avoids any cross-type quantize on the overflow tier.
+func addOverflowVecs[B cuvs.VectorType](bf *cuvs.GpuBruteForce[B], vecs []float32, count uint64, ids []int64) error {
+	if hbf, ok := any(bf).(*cuvs.GpuBruteForce[cuvs.Float16]); ok {
+		h := types.Float32ToFloat16Slice(vecs)
+		hc := *(*[]cuvs.Float16)(unsafe.Pointer(&h))
+		return hbf.AddChunk(hc, count, ids)
+	}
+	return bf.AddChunkFloat(vecs, count, ids)
+}
+
 // CagraSearch implements cache.VectorIndexSearchIf for GPU CAGRA indexes.
 // Unlike HnswSearch, there is no concurrency gate (Cond/Mutex) because CAGRA
 // manages GPU thread concurrency internally via its worker pool.
@@ -359,7 +374,7 @@ func (s *CagraSearch[B, Q]) buildOverflow() error {
 			continue
 		}
 		count := uint64(len(m.OverflowPkids))
-		if err = bf.AddChunkFloat(m.OverflowVecs, count, m.OverflowPkids); err != nil {
+		if err = addOverflowVecs(bf, m.OverflowVecs, count, m.OverflowPkids); err != nil {
 			bf.Destroy()
 			return err
 		}
