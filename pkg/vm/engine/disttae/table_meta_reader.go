@@ -42,6 +42,13 @@ const (
 	endState
 )
 
+type cloneObjectSource int
+
+const (
+	cloneObjectFromCommittedState cloneObjectSource = iota
+	cloneObjectFromTxnWorkspace
+)
+
 type TableMetaReader struct {
 	table     *txnTable
 	fs        fileservice.FileService
@@ -66,6 +73,19 @@ func (r *TableMetaReader) Close() error {
 	r.pState = nil
 	r.state = endState
 	return nil
+}
+
+func (r *TableMetaReader) addCloneSharedFile(
+	stats *objectio.ObjectStats,
+	source cloneObjectSource,
+) {
+	txnId := r.table.db.getTxn().op.Txn().ID
+	name := stats.ObjectName().String()
+	if source == cloneObjectFromCommittedState {
+		r.table.db.getEng().cloneTxnCache.AddSharedFile(txnId, name)
+		return
+	}
+	r.table.db.getEng().cloneTxnCache.AddTxnLocalSharedFile(txnId, name)
 }
 
 func NewTableMetaReader(
@@ -227,7 +247,7 @@ func (r *TableMetaReader) collect(
 		return nil, err
 	}
 
-	appendObjectStats := func(stats *objectio.ObjectStats) error {
+	appendObjectStats := func(stats *objectio.ObjectStats, source cloneObjectSource) error {
 		if stats.GetCNCreated() || !stats.GetAppendable() {
 			objCnt++
 			blkCnt += int(stats.BlkCnt())
@@ -237,10 +257,12 @@ func (r *TableMetaReader) collect(
 				return err
 			}
 
-			txnId := r.table.db.getTxn().op.Txn().ID
-			r.table.db.getEng().cloneTxnCache.AddSharedFile(
-				txnId, stats.ObjectName().String(),
-			)
+			// Committed pState objects are owned outside this transaction and
+			// must survive any clone rollback. Txn-local objects can be shared
+			// by later ALTER/clone writes in this transaction, so intermediate
+			// workspace GC must keep them, but full transaction rollback must
+			// still delete them.
+			r.addCloneSharedFile(stats, source)
 
 		} else {
 			// we can see an appendable object, if the snapshot falls into [createTS, deleteTS).
@@ -252,7 +274,7 @@ func (r *TableMetaReader) collect(
 
 	for iter.Next() {
 		obj := iter.Entry()
-		if err = appendObjectStats(&obj.ObjectStats); err != nil {
+		if err = appendObjectStats(&obj.ObjectStats, cloneObjectFromCommittedState); err != nil {
 			return nil, err
 		}
 	}
@@ -267,7 +289,7 @@ func (r *TableMetaReader) collect(
 		uncommittedObjs, _ = r.table.collectUnCommittedDataObjs(r.txnOffset)
 	}
 	for i := range uncommittedObjs {
-		if err = appendObjectStats(&uncommittedObjs[i]); err != nil {
+		if err = appendObjectStats(&uncommittedObjs[i], cloneObjectFromTxnWorkspace); err != nil {
 			return nil, err
 		}
 	}
