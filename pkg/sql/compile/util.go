@@ -17,7 +17,6 @@ package compile
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -25,11 +24,53 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// resolveVariableOrDefault wraps proc.GetResolveVariableFunc() with a
+// nil-safe fallback to executor.DefaultResolveVariable (populated from
+// gSysVarsDefs by pkg/frontend's init). When proc has a session-bound
+// resolver (normal frontend path) that resolver is used; when
+// proc.ResolveVariableFunc is nil (background paths that came in
+// without a frontend session) the fallback returns the variable's
+// compile-time default rather than panicking on a nil function call.
+//
+// Per-call nil fallback: the session resolver's per-session sysvar
+// map (ses.sesSysVars) is a clone of the per-account snapshot from
+// mo_mysql_compatibility_mode; sysvars that were never explicitly SET
+// at the global/account level are absent from the map and Get returns
+// nil (interface{} zero value) — NOT the gSysVarsDefs Default.
+// Encountered most visibly in sub-Compiles spawned by CREATE TABLE
+// CLONE that inherit a partial session resolver. Falling back to
+// executor.DefaultResolveVariable in this case mirrors gpu_async_search's
+// per-var hardcoded defaults: idxcron metadata capture lands with
+// compile-time defaults instead of nils or a hard error.
+//
+// Last-resort: when neither the proc resolver nor the executor
+// fallback is available (tests that construct a bare Process and
+// don't blank-import pkg/frontend) returns an error rather than panic.
+func resolveVariableOrDefault(proc *process.Process, name string, isSystemVar, isGlobalVar bool) (any, error) {
+	if resolver := proc.GetResolveVariableFunc(); resolver != nil {
+		v, err := resolver(name, isSystemVar, isGlobalVar)
+		if err != nil {
+			return nil, err
+		}
+		if v != nil {
+			return v, nil
+		}
+		// proc resolver returned (nil, nil) — fall through to the
+		// executor default below to surface the gSysVarsDefs default.
+	}
+	if executor.DefaultResolveVariable != nil {
+		return executor.DefaultResolveVariable(name, isSystemVar, isGlobalVar)
+	}
+	return nil, moerr.NewInternalErrorNoCtxf(
+		"resolveVariableOrDefault: no resolver available for %q (proc resolver and executor.DefaultResolveVariable both nil)", name)
+}
 
 const (
 	INDEX_TYPE_PRIMARY  = "PRIMARY"
@@ -108,22 +149,6 @@ var (
 
 var (
 	dropTableBeforeDropDatabase = "drop table if exists `%v`.`%v`;"
-)
-
-var (
-	insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` SELECT f.* FROM `%s`.`%s` AS %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) AS f;"
-)
-
-var (
-	insertIntoHnswIndexTableFormat = "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY hnsw_create('%s', '%s', %s, %s) AS f;"
-)
-
-var (
-	insertIntoCagraIndexTableFormat = "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY cagra_create('%s', '%s', %s, %s) AS f;"
-)
-
-var (
-	insertIntoIvfpqIndexTableFormat = "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY ivfpq_create('%s', '%s', %s, %s) AS f;"
 )
 
 // genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
@@ -447,18 +472,21 @@ func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation)
 		if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
 			for _, idx := range idxdef.Indexes {
 				if idx.TableExist {
-					// Only check hnswIndexFlag
-					if catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
-						indexflag := hnswIndexFlag
-						if ok, err := s.isExperimentalEnabled(c, indexflag); err != nil {
-							return err
-						} else if !ok {
-							return moerr.NewInternalError(c.proc.Ctx, fmt.Sprintf("%s is not enabled", indexflag))
+					// Plugin-registered vector indexes contribute their
+					// experimental flag (if any) via
+					// catalog.Hooks.ExperimentalFlag(). Today only HNSW
+					// returns a non-empty flag at this seam; CAGRA and
+					// IVF-PQ have flags defined but not enforced here.
+					if p, ok := indexplugin.Get(idx.IndexAlgo); ok {
+						if flag := p.Catalog().ExperimentalFlag(); flag != "" {
+							if ok2, err := s.isExperimentalEnabled(c, flag); err != nil {
+								return err
+							} else if !ok2 {
+								return moerr.NewInternalError(c.proc.Ctx, fmt.Sprintf("%s is not enabled", flag))
+							}
 						}
 					}
 				}
-				// TODO: CAGRA AND IVFPQ
-
 			}
 
 			break
@@ -534,104 +562,6 @@ func GetConstraintDefFromTableDefs(defs []engine.TableDef) *engine.ConstraintDef
 	return cstrDef
 }
 
-func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, indexDef *plan.IndexDef, qryDatabase string) ([]string, error) {
-	src_alias := "src"
-	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
-	params := indexDef.IndexAlgoParams
-	tblname := indexDef.IndexTableName
-
-	parts := make([]string, 0, len(indexDef.Parts))
-	for _, p := range indexDef.Parts {
-		parts = append(parts, src_alias+"."+p)
-	}
-
-	concat := strings.Join(parts, ",")
-
-	sql := fmt.Sprintf(insertIntoFullTextIndexTableFormat,
-		qryDatabase, tblname,
-		qryDatabase, originalTableDef.Name,
-		src_alias,
-		params,
-		pkColName,
-		concat)
-
-	return []string{sql}, nil
-}
-
-func genDeleteHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
-	idxdef_meta, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
-	}
-
-	idxdef_index, ok := indexDefs[catalog.Hnsw_TblType_Storage]
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw_index index definition not found")
-	}
-
-	sqls := make([]string, 0, 2)
-
-	sql := fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, idxdef_meta.IndexTableName)
-	sqls = append(sqls, sql)
-	sql = fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, idxdef_index.IndexTableName)
-	sqls = append(sqls, sql)
-
-	return sqls, nil
-
-}
-
-func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
-	var cfg vectorindex.IndexTableConfig
-	src_alias := "src"
-	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
-
-	idxdef_meta, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
-	}
-	cfg.MetadataTable = idxdef_meta.IndexTableName
-
-	idxdef_index, ok := indexDefs[catalog.Hnsw_TblType_Storage]
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw_index index definition not found")
-	}
-	cfg.IndexTable = idxdef_index.IndexTableName
-	cfg.DbName = qryDatabase
-	cfg.SrcTable = originalTableDef.Name
-	cfg.PKey = pkColName
-	cfg.KeyPart = idxdef_index.Parts[0]
-	val, err := proc.GetResolveVariableFunc()("hnsw_threads_build", true, false)
-	if err != nil {
-		return nil, err
-	}
-	cfg.ThreadsBuild = val.(int64)
-
-	idxcap, err := proc.GetResolveVariableFunc()("hnsw_max_index_capacity", true, false)
-	if err != nil {
-		return nil, err
-	}
-	cfg.IndexCapacity = idxcap.(int64)
-
-	params := idxdef_index.IndexAlgoParams
-
-	cfgbytes, err := json.Marshal(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	part := src_alias + "." + idxdef_index.Parts[0]
-
-	sql := fmt.Sprintf(insertIntoHnswIndexTableFormat,
-		qryDatabase, originalTableDef.Name,
-		src_alias,
-		params,
-		string(cfgbytes),
-		pkColName,
-		part)
-
-	return []string{sql}, nil
-}
-
 // filterColumnsFromParams reads the comma-joined "included_columns" entry
 // stashed in the index algo-params JSON and returns ", src.col1, src.col2, …"
 // — a suffix suitable for appending to the positional arg list of
@@ -661,148 +591,4 @@ func filterColumnsFromParams(indexAlgoParams, srcAlias string) string {
 		sb.WriteString(name)
 	}
 	return sb.String()
-}
-
-func genDeleteCagraIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
-	idxdef_meta, ok := indexDefs[catalog.Cagra_TblType_Metadata]
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("cagra_meta index definition not found")
-	}
-
-	idxdef_index, ok := indexDefs[catalog.Cagra_TblType_Storage]
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("cagra_index index definition not found")
-	}
-
-	sqls := make([]string, 0, 2)
-
-	sql := fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, idxdef_meta.IndexTableName)
-	sqls = append(sqls, sql)
-	sql = fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, idxdef_index.IndexTableName)
-	sqls = append(sqls, sql)
-
-	return sqls, nil
-
-}
-
-func genBuildCagraIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
-	var cfg vectorindex.IndexTableConfig
-	src_alias := "src"
-	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
-
-	idxdef_meta, ok := indexDefs[catalog.Cagra_TblType_Metadata]
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("cagra_meta index definition not found")
-	}
-	cfg.MetadataTable = idxdef_meta.IndexTableName
-
-	idxdef_index, ok := indexDefs[catalog.Cagra_TblType_Storage]
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("cagra_index index definition not found")
-	}
-	cfg.IndexTable = idxdef_index.IndexTableName
-	cfg.DbName = qryDatabase
-	cfg.SrcTable = originalTableDef.Name
-	cfg.PKey = pkColName
-	cfg.KeyPart = idxdef_index.Parts[0]
-	val, err := proc.GetResolveVariableFunc()("cagra_threads_build", true, false)
-	if err != nil {
-		return nil, err
-	}
-	cfg.ThreadsBuild = val.(int64)
-
-	idxcap, err := proc.GetResolveVariableFunc()("cagra_max_index_capacity", true, false)
-	if err != nil {
-		return nil, err
-	}
-	cfg.IndexCapacity = idxcap.(int64)
-
-	params := idxdef_index.IndexAlgoParams
-
-	cfgbytes, err := json.Marshal(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	part := src_alias + "." + idxdef_index.Parts[0] + filterColumnsFromParams(params, src_alias)
-
-	sql := fmt.Sprintf(insertIntoCagraIndexTableFormat,
-		qryDatabase, originalTableDef.Name,
-		src_alias,
-		params,
-		string(cfgbytes),
-		pkColName,
-		part)
-
-	return []string{sql}, nil
-}
-
-func genDeleteIvfpqIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
-	idxdef_meta, ok := indexDefs[catalog.Ivfpq_TblType_Metadata]
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("ivfpq_meta index definition not found")
-	}
-
-	idxdef_index, ok := indexDefs[catalog.Ivfpq_TblType_Storage]
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("ivfpq_index index definition not found")
-	}
-
-	sqls := make([]string, 0, 2)
-	sqls = append(sqls, fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, idxdef_meta.IndexTableName))
-	sqls = append(sqls, fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, idxdef_index.IndexTableName))
-	return sqls, nil
-}
-
-func genBuildIvfpqIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
-	var cfg vectorindex.IndexTableConfig
-	src_alias := "src"
-	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
-
-	idxdef_meta, ok := indexDefs[catalog.Ivfpq_TblType_Metadata]
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("ivfpq_meta index definition not found")
-	}
-	cfg.MetadataTable = idxdef_meta.IndexTableName
-
-	idxdef_index, ok := indexDefs[catalog.Ivfpq_TblType_Storage]
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("ivfpq_index index definition not found")
-	}
-	cfg.IndexTable = idxdef_index.IndexTableName
-	cfg.DbName = qryDatabase
-	cfg.SrcTable = originalTableDef.Name
-	cfg.PKey = pkColName
-	cfg.KeyPart = idxdef_index.Parts[0]
-
-	val, err := proc.GetResolveVariableFunc()("ivfpq_threads_build", true, false)
-	if err != nil {
-		return nil, err
-	}
-	cfg.ThreadsBuild = val.(int64)
-
-	idxcap, err := proc.GetResolveVariableFunc()("ivfpq_max_index_capacity", true, false)
-	if err != nil {
-		return nil, err
-	}
-	cfg.IndexCapacity = idxcap.(int64)
-
-	params := idxdef_index.IndexAlgoParams
-
-	cfgbytes, err := json.Marshal(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	part := src_alias + "." + idxdef_index.Parts[0] + filterColumnsFromParams(params, src_alias)
-
-	sql := fmt.Sprintf(insertIntoIvfpqIndexTableFormat,
-		qryDatabase, originalTableDef.Name,
-		src_alias,
-		params,
-		string(cfgbytes),
-		pkColName,
-		part)
-
-	return []string{sql}, nil
 }

@@ -380,6 +380,18 @@ func (exec *txnExecutor) Exec(
 		proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 	}
 
+	// Propagate the "is this frontend?" signal onto the proc — same
+	// pattern as ResolveVariableFunc above. The Options default is
+	// IsFrontend=false (background) so every caller of the internal
+	// SQL executor that doesn't explicitly opt in is treated as
+	// background; frontend code that runs session-bound internal SQL
+	// opts in via opts.WithFrontend(true). Detection sites (e.g.
+	// IdxcronMetadata) consult proc.Base.IsFrontend rather than
+	// inferring from resolver behaviour, which is unreliable because
+	// background paths set resolvers too (idxcron's task.Metadata,
+	// ProcessInitSQL's executor.DefaultResolveVariable).
+	proc.Base.IsFrontend = exec.opts.IsFrontend()
+
 	prepared := false
 	if statementOption.HasParams() {
 		vec := statementOption.Params(exec.s.mp)
@@ -592,6 +604,7 @@ func (exec *txnExecutor) LockTable(table string) error {
 		nil,
 		exec.s.taskservice,
 	)
+	proc.Base.IsFrontend = exec.opts.IsFrontend()
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	defer func() {

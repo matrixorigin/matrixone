@@ -17,13 +17,11 @@ package catalog
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -114,6 +112,14 @@ const (
 	GraphDegree             = "graph_degree"
 	ITopkSize               = "itopk_size"
 	IncludedColumns         = "included_columns"
+
+	// Index-defining build params, settable as CREATE INDEX options (parsed by
+	// each plugin's ParamsFromTree). Written into flat algo_params only when
+	// explicitly specified, read back by the build path (table functions /
+	// sync), and rendered by IndexParamsToStringList for SHOW CREATE.
+	IndexAlgoParamKmeansTrainPercent = "kmeans_train_percent"
+	IndexAlgoParamKmeansMaxIteration = "kmeans_max_iteration"
+	IndexAlgoParamMaxIndexCapacity   = "max_index_capacity"
 )
 
 /* 1. ToString Functions */
@@ -197,6 +203,18 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", ITopkSize, val)
 	}
 
+	if val, ok := result[IndexAlgoParamKmeansTrainPercent]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamKmeansTrainPercent, val)
+	}
+
+	if val, ok := result[IndexAlgoParamKmeansMaxIteration]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamKmeansMaxIteration, val)
+	}
+
+	if val, ok := result[IndexAlgoParamMaxIndexCapacity]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxIndexCapacity, val)
+	}
+
 	if val, ok := result[IncludedColumns]; ok && len(val) > 0 {
 		raw := strings.Split(val, ",")
 		parts := make([]string, 0, len(raw))
@@ -239,60 +257,74 @@ func IndexParamsMapToJsonString(res map[string]string) (string, error) {
 
 /* 2. ToMap Functions */
 
-// IndexParamsStringToMap used by buildShowCreateTable and restoreDDL
+// IndexParamSessionVars is the reserved algo_params key whose value is a
+// nested, typed sqlexec.Metadata object ({"cfg":{...}}) carrying the build-time
+// session variables captured at CREATE INDEX (e.g. kmeans_train_percent). It is
+// NOT a flat string param: IndexParamsStringToMap skips it (so flat consumers
+// are unaffected), and it is read back via IndexParamsSessionVars.
+const IndexParamSessionVars = "session_vars"
+
+// IndexParamsStringToMap used by buildShowCreateTable and restoreDDL.
+// The reserved IndexParamSessionVars key (a nested typed object) is skipped so
+// flat-string consumers stay unchanged; read it via IndexParamsSessionVars.
 func IndexParamsStringToMap(indexParams string) (map[string]string, error) {
-	var result map[string]string
-	err := json.Unmarshal([]byte(indexParams), &result)
-	if err != nil {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(indexParams), &raw); err != nil {
 		return nil, err
+	}
+	result := make(map[string]string, len(raw))
+	for k, v := range raw {
+		if k == IndexParamSessionVars {
+			continue // nested typed object — see IndexParamsSessionVars
+		}
+		var s string
+		if err := json.Unmarshal(v, &s); err != nil {
+			return nil, err
+		}
+		result[k] = s
 	}
 	return result, nil
 }
 
-func fullTextIndexParamsToMap(def *tree.FullTextIndex) (map[string]string, error) {
-	res := make(map[string]string)
-
-	// fulltext index here
-	if def.IndexOption != nil {
-		parsername := strings.ToLower(def.IndexOption.ParserName)
-		if len(parsername) > 0 {
-			if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" && parsername != "gojieba" {
-				return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid parser %s", parsername))
-			}
-			res["parser"] = parsername
-		}
-
-		if def.IndexOption.Async {
-			res[Async] = "true"
-		}
+// IndexParamsSessionVars extracts the nested session_vars object (the
+// sqlexec.Metadata JSON, {"cfg":{...}}) from an algo_params string, or nil if
+// absent. Pass the result to sqlexec.NewMetadata to resolve typed values.
+func IndexParamsSessionVars(indexParams string) (json.RawMessage, error) {
+	if len(indexParams) == 0 {
+		return nil, nil
 	}
-	return res, nil
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(indexParams), &raw); err != nil {
+		return nil, err
+	}
+	return raw[IndexParamSessionVars], nil
 }
 
-// joinIncludeColumns flattens the parsed INCLUDE column list into a
-// comma-separated string suitable for the flat map[string]string
-// params pipeline. Names are lowercased to match Parts convention.
-func joinIncludeColumns(cols []*tree.UnresolvedName) string {
-	if len(cols) == 0 {
-		return ""
+// IndexParamsMapToJsonStringWithSessionVars marshals the flat params plus the
+// nested session_vars object. A nil/empty sessionVars behaves exactly like
+// IndexParamsMapToJsonString (no session_vars key), preserving the old format.
+func IndexParamsMapToJsonStringWithSessionVars(res map[string]string, sessionVars json.RawMessage) (string, error) {
+	if len(sessionVars) == 0 {
+		return IndexParamsMapToJsonString(res)
 	}
-	names := make([]string, 0, len(cols))
-	for _, c := range cols {
-		name := c.ColName()
-		if name == "" {
-			continue
+	obj := make(map[string]json.RawMessage, len(res)+1)
+	for k, v := range res {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return "", err
 		}
-		names = append(names, name)
+		obj[k] = b
 	}
-	return strings.Join(names, ",")
+	obj[IndexParamSessionVars] = sessionVars
+	str, err := json.Marshal(obj)
+	if err != nil {
+		return "", err
+	}
+	return string(str), nil
 }
 
 func indexParamsToMap(def interface{}) (map[string]string, error) {
 	res := make(map[string]string)
-
-	if ftidx, ok := def.(*tree.FullTextIndex); ok {
-		return fullTextIndexParamsToMap(ftidx)
-	}
 
 	if idx, ok := def.(*tree.Index); ok {
 
@@ -301,182 +333,10 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			// do nothing
 		case tree.INDEX_TYPE_MASTER:
 			// do nothing
-		case tree.INDEX_TYPE_IVFFLAT:
-			if idx.IndexOption.AlgoParamList == 0 {
-				// NOTE:
-				// 1. In the parser, we added the failure check for list=0 scenario. So if user tries to explicit
-				// set list=0, it will fail.
-				// 2. However, if user didn't use the list option (we will get it as 0 here), then we will
-				// set the default value as 1.
-				res[IndexAlgoParamLists] = strconv.FormatInt(1, 10)
-			} else if idx.IndexOption.AlgoParamList > 0 {
-				res[IndexAlgoParamLists] = strconv.FormatInt(idx.IndexOption.AlgoParamList, 10)
-			} else {
-				return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be > 0")
-			}
-
-			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
-				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
-				if _, ok := metric.OpTypeToIvfMetric[opType]; !ok {
-					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type: '%s'", opType))
-				}
-				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
-			} else {
-				res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
-			}
-
-			if idx.IndexOption.Async {
-				res[Async] = "true"
-			}
-			if idx.IndexOption.AutoUpdate {
-				res[AutoUpdate] = "true"
-			}
-			if idx.IndexOption.Day > 0 {
-				res[Day] = strconv.FormatInt(idx.IndexOption.Day, 10)
-			}
-
-			if idx.IndexOption.Hour > 0 {
-				res[Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
-			}
-		case tree.INDEX_TYPE_HNSW:
-			if idx.IndexOption.AlgoParamM < 0 {
-				return nil, moerr.NewInternalErrorNoCtx("invalid M. hnsw.M must be > 0")
-			}
-			if idx.IndexOption.HnswEfConstruction < 0 {
-				return nil, moerr.NewInternalErrorNoCtx("invalid ef_construction. hnsw.ef_construction must be > 0")
-			}
-			if idx.IndexOption.HnswEfSearch < 0 {
-				return nil, moerr.NewInternalErrorNoCtx("invalid ef_search. hnsw.ef_search must be > 0")
-			}
-
-			// hnswM or HnswEfConstruction == 0, use usearch default value
-			if idx.IndexOption.AlgoParamM > 0 {
-				res[HnswM] = strconv.FormatInt(idx.IndexOption.AlgoParamM, 10)
-			}
-			if idx.IndexOption.HnswEfConstruction > 0 {
-				res[HnswEfConstruction] = strconv.FormatInt(idx.IndexOption.HnswEfConstruction, 10)
-			}
-			if idx.IndexOption.HnswEfSearch > 0 {
-				res[HnswEfSearch] = strconv.FormatInt(idx.IndexOption.HnswEfSearch, 10)
-			}
-
-			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
-				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
-				if _, ok := metric.OpTypeToUsearchMetric[opType]; !ok {
-					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. '%s'", opType))
-				}
-				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
-			} else {
-				res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
-			}
-
-			if idx.IndexOption.Async {
-				res[Async] = "true"
-			}
-		case tree.INDEX_TYPE_CAGRA:
-			if idx.IndexOption.IntermediateGraphDegree < 0 {
-				return nil, moerr.NewInternalErrorNoCtx("invalid intermediate_graph_degree. cagra.intermediate_graph_degree must be > 0")
-			}
-			if idx.IndexOption.GraphDegree < 0 {
-				return nil, moerr.NewInternalErrorNoCtx("invalid graph_degree. cagra.graph_degree must be > 0")
-			}
-			if idx.IndexOption.ITopkSize < 0 {
-				return nil, moerr.NewInternalErrorNoCtx("invalid itopk_size. cagra.itopk_size must be > 0")
-			}
-
-			if idx.IndexOption.IntermediateGraphDegree > 0 {
-				res[IntermediateGraphDegree] = strconv.FormatInt(idx.IndexOption.IntermediateGraphDegree, 10)
-			}
-			if idx.IndexOption.GraphDegree > 0 {
-				res[GraphDegree] = strconv.FormatInt(idx.IndexOption.GraphDegree, 10)
-			}
-			if idx.IndexOption.ITopkSize > 0 {
-				res[ITopkSize] = strconv.FormatInt(idx.IndexOption.ITopkSize, 10)
-			}
-
-			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
-				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
-				if _, ok := metric.OpTypeToUsearchMetric[opType]; !ok {
-					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. '%s'", opType))
-				}
-				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
-			} else {
-				res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
-			}
-
-			if idx.IndexOption.Async {
-				res[Async] = "true"
-			}
-			if len(idx.IndexOption.Quantization) > 0 {
-				quantize := ToLower(idx.IndexOption.Quantization)
-				if !metric.ValidQuantization(quantize) {
-					return nil, moerr.NewInternalErrorNoCtx("invalid quantization. quantization is invalid. f32, f16, int8, uint8")
-				}
-				res[Quantization] = quantize
-			} else {
-				res[Quantization] = metric.Quantization_F32_Str
-			}
-
-			if len(idx.IndexOption.DistributionMode) > 0 {
-				mode := ToLower(idx.IndexOption.DistributionMode)
-				if !vectorindex.ValidDistributionMode(mode) {
-					return nil, moerr.NewInternalErrorNoCtx("invalid distribution_mode. distribution_mode is invalid. single, sharded, replicated")
-				}
-				res[DistributionMode] = mode
-			} else {
-				res[DistributionMode] = vectorindex.DistributionMode_SINGLE_GPU_Str
-			}
-
-			if joined := joinIncludeColumns(idx.IndexOption.IncludeColumns); len(joined) > 0 {
-				res[IncludedColumns] = joined
-			}
-
-		case tree.INDEX_TYPE_IVFPQ:
-			if idx.IndexOption.AlgoParamList > 0 {
-				res[IndexAlgoParamLists] = strconv.FormatInt(idx.IndexOption.AlgoParamList, 10)
-			}
-			if idx.IndexOption.AlgoParamM > 0 {
-				res[HnswM] = strconv.FormatInt(idx.IndexOption.AlgoParamM, 10)
-			}
-			if idx.IndexOption.BitsPerCode > 0 {
-				res[BitsPerCode] = strconv.FormatInt(idx.IndexOption.BitsPerCode, 10)
-			}
-
-			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
-				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
-				if _, ok := metric.OpTypeToUsearchMetric[opType]; !ok {
-					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. '%s'", opType))
-				}
-				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
-			} else {
-				res[IndexAlgoParamOpType] = metric.OpType_L2Distance
-			}
-
-			if len(idx.IndexOption.Quantization) > 0 {
-				quantize := ToLower(idx.IndexOption.Quantization)
-				if !metric.ValidQuantization(quantize) {
-					return nil, moerr.NewInternalErrorNoCtx("invalid quantization. quantization is invalid. f32, f16, int8, uint8")
-				}
-				res[Quantization] = quantize
-			} else {
-				res[Quantization] = metric.Quantization_F32_Str
-			}
-
-			if len(idx.IndexOption.DistributionMode) > 0 {
-				mode := ToLower(idx.IndexOption.DistributionMode)
-				if !vectorindex.ValidDistributionMode(mode) {
-					return nil, moerr.NewInternalErrorNoCtx("invalid distribution_mode. distribution_mode is invalid. single, sharded, replicated")
-				}
-				res[DistributionMode] = mode
-			} else {
-				res[DistributionMode] = vectorindex.DistributionMode_SINGLE_GPU_Str
-			}
-
-			if joined := joinIncludeColumns(idx.IndexOption.IncludeColumns); len(joined) > 0 {
-				res[IncludedColumns] = joined
-			}
-
 		default:
+			// Vector algorithms (IVFFLAT / HNSW / CAGRA / IVFPQ) build their
+			// algo_params via the per-plugin plan hook BuildIndexParams; they
+			// are dispatched in pkg/sql/plan and never reach this function.
 			return nil, moerr.NewInternalErrorNoCtx("invalid index alogorithm type")
 		}
 
