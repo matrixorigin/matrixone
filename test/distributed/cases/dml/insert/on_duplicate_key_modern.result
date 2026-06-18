@@ -144,6 +144,28 @@ select id, uk, val from t_odku_ft order by id;
 1  ¦  10  ¦  102  𝄀
 2  ¦  20  ¦  200
 drop table if exists t_odku_ft;
+drop table if exists t_odku_ft2;
+create table t_odku_ft2(id int primary key, body text);
+create fulltext index ftidx2 on t_odku_ft2(body);
+insert into t_odku_ft2 values (1, 'hello world'), (2, 'foo bar');
+insert into t_odku_ft2 values (1, 'ignored') on duplicate key update body = 'alpha beta';
+select id, body from t_odku_ft2 order by id;
+➤ id[4,32,0]  ¦  body[12,0,0]  𝄀
+1  ¦  alpha beta  𝄀
+2  ¦  foo bar
+select id from t_odku_ft2 where match(body) against('alpha') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from t_odku_ft2 where match(body) against('hello') order by id;
+➤ id[4,32,0]
+select id from t_odku_ft2 where match(body) against('foo') order by id;
+➤ id[4,32,0]  𝄀
+2
+insert into t_odku_ft2 values (3, 'gamma delta') on duplicate key update body = 'nope';
+select id from t_odku_ft2 where match(body) against('gamma') order by id;
+➤ id[4,32,0]  𝄀
+3
+drop table if exists t_odku_ft2;
 drop table if exists t_odku_vec;
 create table t_odku_vec(id int primary key, uk int unique, embedding vecf32(3), val int);
 insert into t_odku_vec values (1, 10, '[1,2,3]', 100), (2, 20, '[4,5,6]', 200);
@@ -165,3 +187,19 @@ select id, uk, val from t_odku_vec order by id;
 2  ¦  20  ¦  200  𝄀
 4  ¦  40  ¦  400
 drop table if exists t_odku_vec;
+drop table if exists t_odku_vec2;
+create table t_odku_vec2(id int primary key, embedding vecf32(3));
+insert into t_odku_vec2 values (1, '[1,1,1]'), (2, '[9,9,9]');
+create index idx2 using ivfflat on t_odku_vec2(embedding) lists = 2 op_type 'vector_l2_ops';
+insert into t_odku_vec2 values (1, '[0,0,0]') on duplicate key update embedding = '[100,100,100]';
+select id, embedding from t_odku_vec2 order by id;
+➤ id[4,32,0]  ¦  embedding[12,3,0]  𝄀
+1  ¦  [100, 100, 100]  𝄀
+2  ¦  [9, 9, 9]
+select id from t_odku_vec2 order by l2_distance(embedding, '[100,100,100]') asc limit 1;
+➤ id[4,32,0]  𝄀
+1
+select id from t_odku_vec2 order by l2_distance(embedding, '[1,1,1]') asc limit 1;
+➤ id[4,32,0]  𝄀
+2
+drop table if exists t_odku_vec2;

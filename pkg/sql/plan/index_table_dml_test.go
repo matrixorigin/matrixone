@@ -132,7 +132,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueLockKeyMater
 	require.True(t, forced)
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
 	)
 	require.NoError(t, err)
 }
@@ -164,7 +164,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SingleUniqueMissingCol(t *t
 	delete(colName2Idx, tableDef.Name+".dname")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = dname")
@@ -205,7 +205,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	delete(colName2Idx, tableDef.Name+".job")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = job")
@@ -244,7 +244,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	delete(colName2Idx, tableDef.Name+".job")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = job")
@@ -277,7 +277,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SecondaryIndexMissingPart(t
 	delete(colName2Idx, tableDef.Name+".loc")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = loc")

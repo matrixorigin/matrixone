@@ -223,7 +223,13 @@ type QueryBuilder struct {
 	// new-row image is materialized into irregularMaintSourceStep, and the
 	// maintenance sub-plans are appended after createQuery() (post-optimizer
 	// form), mirroring how regular insert maintenance is built.
+	//
+	// For ON DUPLICATE KEY UPDATE the conflicting rows must also drop their old
+	// index entries: irregularMaintDeleteStep holds the old-row image (keyed by
+	// the immutable PK) from which delete sub-plans are built. It is -1 (unset)
+	// for plain INSERT/LOAD where no old rows exist.
 	irregularMaintSourceStep int32
+	irregularMaintDeleteStep int32
 	irregularMaintIndexes    []*plan.IndexDef
 	irregularMaintTableDef   *plan.TableDef
 	irregularMaintObjRef     *plan.ObjectRef

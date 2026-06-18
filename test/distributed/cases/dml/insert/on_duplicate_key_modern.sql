@@ -162,6 +162,23 @@ select id, uk, val from t_odku_ft order by id;
 
 drop table if exists t_odku_ft;
 
+-- ODKU updating the fulltext-indexed column itself must drop the old tokens and
+-- index the new ones synchronously, so the row becomes searchable by the new
+-- words and not the old ones.
+drop table if exists t_odku_ft2;
+create table t_odku_ft2(id int primary key, body text);
+create fulltext index ftidx2 on t_odku_ft2(body);
+insert into t_odku_ft2 values (1, 'hello world'), (2, 'foo bar');
+insert into t_odku_ft2 values (1, 'ignored') on duplicate key update body = 'alpha beta';
+select id, body from t_odku_ft2 order by id;
+select id from t_odku_ft2 where match(body) against('alpha') order by id;
+select id from t_odku_ft2 where match(body) against('hello') order by id;
+select id from t_odku_ft2 where match(body) against('foo') order by id;
+-- no-conflict insert is also indexed
+insert into t_odku_ft2 values (3, 'gamma delta') on duplicate key update body = 'nope';
+select id from t_odku_ft2 where match(body) against('gamma') order by id;
+drop table if exists t_odku_ft2;
+
 -- ============================================================
 -- Part 7: table carrying an irregular (ivfflat vector) index
 -- Index maintenance upserts a version counter into the index metadata table via
@@ -187,3 +204,16 @@ insert into t_odku_vec values (4, 40, '[2,2,2]', 400) on duplicate key update va
 select id, uk, val from t_odku_vec order by id;
 
 drop table if exists t_odku_vec;
+
+-- ODKU updating the vector-indexed column itself must drop the old entries and
+-- index the new vector synchronously: a KNN query reflects the new position and
+-- the entries table keeps no stale rows.
+drop table if exists t_odku_vec2;
+create table t_odku_vec2(id int primary key, embedding vecf32(3));
+insert into t_odku_vec2 values (1, '[1,1,1]'), (2, '[9,9,9]');
+create index idx2 using ivfflat on t_odku_vec2(embedding) lists = 2 op_type 'vector_l2_ops';
+insert into t_odku_vec2 values (1, '[0,0,0]') on duplicate key update embedding = '[100,100,100]';
+select id, embedding from t_odku_vec2 order by id;
+select id from t_odku_vec2 order by l2_distance(embedding, '[100,100,100]') asc limit 1;
+select id from t_odku_vec2 order by l2_distance(embedding, '[1,1,1]') asc limit 1;
+drop table if exists t_odku_vec2;

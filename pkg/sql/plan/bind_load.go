@@ -41,9 +41,10 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 		return -1, err
 	}
 
-	lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, irregularIndexes, tableDef, dmlCtx.objRefs[0])
-
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil)
+	// LOAD never carries ON DUPLICATE KEY UPDATE, so the irregular-index
+	// maintenance source is the pre-dedup new-row image set up inside
+	// appendDedupAndMultiUpdateNodesForBindInsert (insert-only, no old-row delete).
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes)
 }
 
 func (builder *QueryBuilder) bindExternalScan(

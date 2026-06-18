@@ -78,12 +78,12 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		return 0, err
 	}
 
-	// Materialize the new-row image into a sink so it feeds both the modern main
-	// plan and the irregular-index maintenance sub-plans; the dedup path now reads
-	// a sink-scan of that image instead of the raw projection.
-	lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, irregularIndexes, tableDef, dmlCtx.objRefs[0])
-
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, stmt.OnDuplicateUpdate)
+	// The irregular-index maintenance source is set up inside
+	// appendDedupAndMultiUpdateNodesForBindInsert, where the resolved conflict
+	// action (plain insert vs ON DUPLICATE KEY UPDATE) is known: plain insert
+	// feeds the pre-dedup new-row image; ODKU feeds the post-merge final image
+	// plus an old-row image for dropping stale entries.
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, stmt.OnDuplicateUpdate, irregularIndexes)
 }
 
 func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
@@ -230,6 +230,69 @@ func (builder *QueryBuilder) appendImageSinkScanNode(
 	return builder.appendNode(scanNode, bindCtx)
 }
 
+// appendTaggedSinkScan builds a SINK_SCAN over sourceStep that re-exposes every
+// column of the sink under the given tag. Unlike appendImageSinkScanNode it
+// derives TableDef.Cols from the sink node's own projection (not a base table
+// definition), so it works for the ON DUPLICATE KEY UPDATE final-image sink whose
+// column layout is the dedup-update projection rather than tableDef.Cols.
+func (builder *QueryBuilder) appendTaggedSinkScan(bindCtx *BindContext, sourceStep, tag int32) int32 {
+	sinkNodeID := builder.qry.Steps[sourceStep]
+	sinkNode := builder.qry.Nodes[sinkNodeID]
+	projList := getProjectionByLastNodeWithTag(builder, sinkNodeID, tag)
+
+	cols := make([]*ColDef, len(sinkNode.ProjectList))
+	for i, e := range sinkNode.ProjectList {
+		cols[i] = &ColDef{Name: fmt.Sprintf("col_%d", i), Typ: e.Typ}
+	}
+
+	scanNode := &plan.Node{
+		NodeType:    plan.Node_SINK_SCAN,
+		SourceStep:  []int32{sourceStep},
+		ProjectList: projList,
+		BindingTags: []int32{tag},
+		TableDef:    &plan.TableDef{Name: bindCtx.cteName, Cols: cols},
+	}
+	return builder.appendNode(scanNode, bindCtx)
+}
+
+// appendOnDupIrregularMaintSource materializes the ON DUPLICATE KEY UPDATE final
+// merged image (the finalProj PROJECT, tagged finalProjTag) into a SINK so that
+// the main plan and the irregular-index maintenance can share it without
+// re-deriving (the DEDUP-join operator computes the merge at runtime, so the
+// merged values are only available downstream of it):
+//
+//   - the main plan (the idxNeedUpdate joins + MULTI_UPDATE that follow) keeps
+//     reading finalProjTag refs via a sink-scan that reuses the same tag;
+//   - both the insert maintenance (new entries) and the delete maintenance (drop
+//     the old entries of the conflicting rows) read the same materialized step.
+//     Its leading columns are the base table columns in tableDef.Cols order (minus
+//     Row_ID), the layout the leaf builders index by PK / indexed-column position.
+//     The PK is immutable under ODKU, so deleting by the final-image PK removes
+//     exactly the stale entries and is a no-op for non-conflicting rows.
+//
+// It records the maintenance context on the builder and returns the main-plan
+// sink-scan the caller must continue from.
+func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
+	bindCtx *BindContext,
+	finalProjNodeID, finalProjTag int32,
+	irregularIndexes []*plan.IndexDef,
+	tableDef *plan.TableDef,
+	objRef *plan.ObjectRef,
+) int32 {
+	sinkID := appendSinkNodeWithTag(builder, bindCtx, finalProjNodeID, finalProjTag)
+	joinStep := builder.appendStep(sinkID)
+
+	maintTableDef := *tableDef
+	maintTableDef.Indexes = irregularIndexes
+	builder.irregularMaintSourceStep = joinStep
+	builder.irregularMaintDeleteStep = joinStep
+	builder.irregularMaintIndexes = irregularIndexes
+	builder.irregularMaintTableDef = &maintTableDef
+	builder.irregularMaintObjRef = objRef
+
+	return builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag)
+}
+
 // buildIrregularIndexMaintenance appends, after createQuery, the synchronous
 // maintenance sub-plans for the irregular (IVF/fulltext) indexes recorded by
 // appendIrregularMaintSource. Each sub-plan reads the materialized new-row image
@@ -241,6 +304,15 @@ func (builder *QueryBuilder) buildIrregularIndexMaintenance(bindCtx *BindContext
 	tableDef := builder.irregularMaintTableDef
 	objRef := builder.irregularMaintObjRef
 	sourceStep := builder.irregularMaintSourceStep
+
+	// ON DUPLICATE KEY UPDATE: drop the conflicting rows' old entries first, before
+	// re-inserting the final-image entries, so a deletion keyed by the (immutable)
+	// PK does not remove the freshly inserted ones.
+	if builder.irregularMaintDeleteStep >= 0 {
+		if err := builder.buildIrregularIndexDeleteMaintenance(bindCtx); err != nil {
+			return err
+		}
+	}
 
 	multiTableIndexes := make(map[string]*MultiTableIndex)
 	for idx, indexdef := range tableDef.Indexes {
@@ -273,6 +345,167 @@ func (builder *QueryBuilder) buildIrregularIndexMaintenance(bindCtx *BindContext
 		}
 	}
 
+	return nil
+}
+
+// buildIrregularIndexDeleteMaintenance appends, after createQuery, the sub-plans
+// that drop the old irregular-index entries of the rows an ON DUPLICATE KEY UPDATE
+// merged into. It reads the shared final-image step directly (a nested sink over
+// it confuses the post-createQuery stats pass; a direct sink-scan resolves the
+// same way the insert maintenance does), keyed by the immutable PK so a delete by
+// the final-image PK removes exactly the stale entries and is a no-op for
+// non-conflicting rows. fulltext reuses the legacy delete leaf;
+// IVF uses a purpose-built entries delete (buildOdkuIvfEntriesDelete) because the
+// legacy IVF delete leaf assumes a fixed source column layout.
+func (builder *QueryBuilder) buildIrregularIndexDeleteMaintenance(bindCtx *BindContext) error {
+	tableDef := builder.irregularMaintTableDef
+	sourceStep := builder.irregularMaintDeleteStep
+
+	typMap := make(map[string]plan.Type)
+	posMap := make(map[string]int)
+	for i, col := range tableDef.Cols {
+		posMap[col.Name] = i
+		typMap[col.Name] = col.Typ
+	}
+
+	// fulltext: buildDeleteRowsFullTextIndex derives positions itself and tolerates
+	// the extra final-image columns, so the base tableDef is fine.
+	ftCtx := &dmlPlanCtx{
+		objRef:                 builder.irregularMaintObjRef,
+		tableDef:               tableDef,
+		sourceStep:             sourceStep,
+		updateColLength:        0,
+		isDeleteWithoutFilters: false,
+		lockTable:              false,
+		updateColPosMap:        map[string]int{},
+	}
+
+	ivfIndexes := make(map[string]*MultiTableIndex)
+	for idx, indexdef := range tableDef.Indexes {
+		if !indexdef.TableExist {
+			continue
+		}
+		switch {
+		case catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo):
+			if err := buildPreDeleteFullTextIndex(builder.compCtx, builder, bindCtx, ftCtx,
+				indexdef, idx, typMap, posMap); err != nil {
+				return err
+			}
+		case catalog.IsIvfIndexAlgo(indexdef.IndexAlgo):
+			if _, ok := ivfIndexes[indexdef.IndexName]; !ok {
+				ivfIndexes[indexdef.IndexName] = &MultiTableIndex{
+					IndexAlgo:       catalog.ToLower(indexdef.IndexAlgo),
+					IndexAlgoParams: indexdef.IndexAlgoParams,
+					IndexDefs:       make(map[string]*IndexDef),
+				}
+			}
+			ivfIndexes[indexdef.IndexName].IndexDefs[catalog.ToLower(indexdef.IndexAlgoTableType)] = indexdef
+		}
+	}
+
+	for _, mti := range ivfIndexes {
+		if err := builder.buildOdkuIvfEntriesDelete(bindCtx, mti); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// buildOdkuIvfEntriesDelete drops the stale IVF entries of the rows an ON DUPLICATE
+// KEY UPDATE merged into. Unlike the legacy IVF delete leaf it reads the shared
+// final-image step directly and projects only the entries columns into the join
+// output (the join key is the integer PK, never the vector), so it is robust to
+// the final-image layout and never copies the base vector column through the
+// hash join. Entries are matched by origin-PK (immutable under ODKU), so all
+// versions for a conflicting row are removed and non-conflicting rows match
+// nothing.
+func (builder *QueryBuilder) buildOdkuIvfEntriesDelete(bindCtx *BindContext, multiTableIndex *MultiTableIndex) error {
+	async, err := catalog.IsIndexAsync(multiTableIndex.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	if async {
+		return nil
+	}
+
+	objRef := builder.irregularMaintObjRef
+	tableDef := builder.irregularMaintTableDef
+	entriesObjRef, entriesTableDef, err := builder.compCtx.ResolveIndexTableByRef(
+		objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil)
+	if err != nil {
+		return err
+	}
+	if entriesTableDef == nil {
+		return moerr.NewNoSuchTable(builder.GetContext(), objRef.SchemaName,
+			multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexName)
+	}
+
+	pkPos, pkTyp := getPkPos(tableDef, false)
+
+	// entries scan projecting [row_id, cpk, origin_pk] (positions 0,1,2).
+	scanCols := make([]*ColDef, 0, 3)
+	scanProj := make([]*plan.Expr, 3)
+	var rowidTyp, cpkTyp, orgPkTyp plan.Type
+	for _, col := range entriesTableDef.Cols {
+		var slot int
+		switch col.Name {
+		case catalog.Row_ID:
+			slot, rowidTyp = 0, col.Typ
+		case catalog.CPrimaryKeyColName:
+			slot, cpkTyp = 1, col.Typ
+		case catalog.SystemSI_IVFFLAT_TblCol_Entries_pk:
+			slot, orgPkTyp = 2, col.Typ
+		default:
+			continue
+		}
+		scanProj[slot] = &plan.Expr{
+			Typ:  col.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(len(scanCols)), Name: col.Name}},
+		}
+		scanCols = append(scanCols, col)
+	}
+	scanTableDef := DeepCopyTableDef(entriesTableDef, false)
+	scanTableDef.Cols = scanCols
+	ivfScanID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		Stats:       &plan.Stats{},
+		ObjRef:      entriesObjRef,
+		TableDef:    scanTableDef,
+		ProjectList: scanProj,
+	}, bindCtx)
+
+	// direct sink-scan of the shared final image (no intermediate sink).
+	srcScan := appendSinkScanNode(builder, bindCtx, builder.irregularMaintDeleteStep)
+
+	// join entries (left) with the final image (right) on origin_pk == final PK.
+	cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+		{Typ: orgPkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}}},
+		{Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: int32(pkPos)}}},
+	})
+	if err != nil {
+		return err
+	}
+	joinID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_INNER,
+		Children: []int32{ivfScanID, srcScan},
+		OnList:   []*plan.Expr{cond},
+		// project only the entries row_id (0) and compound pk (1); never the source
+		// columns, so the base vector is not copied through the join.
+		ProjectList: []*plan.Expr{
+			{Typ: rowidTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: catalog.Row_ID}}},
+			{Typ: cpkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1, Name: catalog.CPrimaryKeyColName}}},
+		},
+	}, bindCtx)
+
+	delNodeInfo := makeDeleteNodeInfo(builder.compCtx, entriesObjRef, entriesTableDef, 0, false, 1, cpkTyp, false)
+	lastID, err := makeOneDeletePlan(builder, bindCtx, joinID, delNodeInfo, false, true, false)
+	putDeleteNodeInfo(delNodeInfo)
+	if err != nil {
+		return err
+	}
+	builder.appendStep(lastID)
 	return nil
 }
 
@@ -455,6 +688,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	colName2Idx map[string]int32,
 	skipUniqueIdx []bool,
 	astUpdateExprs tree.UpdateExprs,
+	irregularIndexes []*plan.IndexDef,
 ) (int32, error) {
 	tableDef := dmlCtx.tableDefs[0]
 	pkName := tableDef.Pkey.PkeyColName
@@ -601,6 +835,18 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update primary key on duplicate")
 		}
+	}
+
+	// Irregular-index (IVF/fulltext) maintenance source for plain INSERT/LOAD (no
+	// conflict resolution): materialize the pre-dedup new-row image and let the
+	// dedup read a sink-scan of it, so the same image feeds the post-createQuery
+	// insert maintenance. ON DUPLICATE KEY UPDATE (onDupAction == UPDATE) is
+	// handled later from the final merged image, after the dedup-update join,
+	// where old entries are also dropped.
+	if len(irregularIndexes) > 0 && onDupAction != plan.Node_UPDATE {
+		lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, irregularIndexes, tableDef, dmlCtx.objRefs[0])
+		selectNode = builder.qry.Nodes[lastNodeID]
+		selectTag = selectNode.BindingTags[0]
 	}
 
 	idxNeedUpdate := make([]bool, len(tableDef.Indexes))
@@ -1385,6 +1631,18 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			Children:    []int32{lastNodeID},
 			BindingTags: []int32{selectTag},
 		}, bindCtx)
+
+		// ON DUPLICATE KEY UPDATE into an irregular-index table: the final merged
+		// image (this PROJECT) carries both the new values and the old delete keys.
+		// Materialize it so the main plan, the insert maintenance (new entries) and
+		// the delete maintenance (drop old entries) can all read it; the dedup PK is
+		// immutable so old entries are keyed by the same PK.
+		if len(irregularIndexes) > 0 {
+			lastNodeID = builder.appendOnDupIrregularMaintSource(
+				bindCtx, lastNodeID, finalProjTag,
+				irregularIndexes, tableDef, dmlCtx.objRefs[0])
+			selectNode = builder.qry.Nodes[lastNodeID]
+		}
 	}
 
 	if onDupAction == plan.Node_UPDATE {
