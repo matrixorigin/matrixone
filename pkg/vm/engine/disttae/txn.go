@@ -1989,7 +1989,7 @@ func (txn *Transaction) getCachedTable(
 	return tbl
 }
 
-func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
+func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err error) {
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug(
 			"Transaction.Commit",
@@ -1997,7 +1997,14 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 		)
 	})
 
-	defer txn.delTransaction()
+	// Commit only prepares the CN-side write payload. If preparation fails, the
+	// txn operator will roll the transaction back, so keep the workspace alive
+	// for rollback GC and clone shared-file bookkeeping.
+	defer func() {
+		if err == nil {
+			txn.delTransaction()
+		}
+	}()
 
 	if txn.readOnly.Load() {
 		return nil, nil
@@ -2016,6 +2023,12 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	}
 	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
 		return nil, err
+	}
+	if msg, injected := objectio.CNCommitAfterWorkspaceDumpFailedInjected(); injected {
+		if msg == "" {
+			msg = "injected commit failure after workspace dump"
+		}
+		return nil, moerr.NewInternalError(ctx, msg)
 	}
 
 	txn.traceWorkspaceLocked(true)
@@ -2050,7 +2063,7 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 			return nil, err
 		}
 	}
-	reqs, err := genWriteReqs(ctx, txn)
+	reqs, err = genWriteReqs(ctx, txn)
 	if err != nil {
 		return nil, err
 	}
