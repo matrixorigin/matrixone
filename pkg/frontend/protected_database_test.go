@@ -30,6 +30,30 @@ func protectedTargetsFromStatement(stmt tree.Statement) []string {
 	return determinePrivilegeSetOfStatement(stmt).writeDatabaseTargets
 }
 
+func TestProtectedDatabaseSetFromString(t *testing.T) {
+	require.Nil(t, protectedDatabaseSetFromString(""))
+	require.Nil(t, protectedDatabaseSetFromString(" , , "))
+	require.Equal(t, map[string]struct{}{"db1": {}, "CamelDB": {}}, protectedDatabaseSetFromString(" db1, CamelDB "))
+}
+
+func TestProtectedDatabaseWriteTargetsFromDataBranchKeepsPrivileges(t *testing.T) {
+	tableStmt := &tree.DataBranchCreateTable{}
+	tableStmt.CreateTable.Table = testTableName("dst_db", "dst_tbl")
+	tablePriv := determinePrivilegeSetOfStatement(tableStmt)
+	require.Equal(t, objectTypeTable, tablePriv.objType)
+	require.NotEqual(t, privilegeKindNone, tablePriv.kind)
+	require.True(t, tablePriv.writeDatabaseAndTableDirectly)
+	require.Equal(t, []string{"dst_db"}, tablePriv.writeDatabaseTargets)
+
+	databaseStmt := tree.NewDataBranchCreateDatabase()
+	databaseStmt.DstDatabase = tree.Identifier("dst_db")
+	databasePriv := determinePrivilegeSetOfStatement(databaseStmt)
+	require.Equal(t, objectTypeDatabase, databasePriv.objType)
+	require.NotEqual(t, privilegeKindNone, databasePriv.kind)
+	require.True(t, databasePriv.writeDatabaseAndTableDirectly)
+	require.Equal(t, []string{"dst_db"}, databasePriv.writeDatabaseTargets)
+}
+
 func TestProtectedDatabaseWriteTargetsFromClone(t *testing.T) {
 	cloneTable := tree.NewCloneTable()
 	cloneTable.CreateTable.Table = testTableName("dst_db", "dst_tbl")

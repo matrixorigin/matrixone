@@ -298,16 +298,8 @@ func normalizeProtectedDatabaseName(ses *Session, dbName string) string {
 	return dbName
 }
 
-func getProtectedDatabaseSet(ses *Session) map[string]struct{} {
-	if ses == nil {
-		return nil
-	}
-	value, err := ses.GetGlobalSysVar(ProtectedDatabases)
-	if err != nil {
-		return nil
-	}
-	raw, ok := value.(string)
-	if !ok || strings.TrimSpace(raw) == "" {
+func protectedDatabaseSetFromString(raw string) map[string]struct{} {
+	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
 	protected := make(map[string]struct{})
@@ -317,7 +309,25 @@ func getProtectedDatabaseSet(ses *Session) map[string]struct{} {
 			protected[dbName] = struct{}{}
 		}
 	}
+	if len(protected) == 0 {
+		return nil
+	}
 	return protected
+}
+
+func getProtectedDatabaseSet(ses *Session) map[string]struct{} {
+	if ses == nil {
+		return nil
+	}
+	value, err := ses.GetGlobalSysVar(ProtectedDatabases)
+	if err != nil {
+		return nil
+	}
+	raw, ok := value.(string)
+	if !ok {
+		return nil
+	}
+	return protectedDatabaseSetFromString(raw)
 }
 
 func isProtectedDatabase(ses *Session, dbName string) bool {

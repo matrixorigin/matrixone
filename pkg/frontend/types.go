@@ -1101,9 +1101,9 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	}
 
 	if name == ProtectedDatabases {
-		if newValue, ok := val.(string); ok && strings.TrimSpace(newValue) == "" {
+		if newValue, ok := val.(string); ok && len(protectedDatabaseSetFromString(newValue)) == 0 {
 			oldValue, _ := ses.GetGlobalSysVar(name)
-			if oldString, ok := oldValue.(string); ok && strings.TrimSpace(oldString) != "" {
+			if oldString, ok := oldValue.(string); ok && len(protectedDatabaseSetFromString(oldString)) != 0 {
 				return moerr.NewInternalErrorNoCtx("protected_databases cannot be cleared directly")
 			}
 		}

@@ -6369,24 +6369,29 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.DataBranchDeleteTable,
 		*tree.DataBranchMerge,
 		*tree.DataBranchDiff,
-		*tree.DataBranchPick,
-		*tree.DataBranchCreateDatabase,
-		*tree.DataBranchDeleteDatabase:
-		objType = objectTypeNone
-		kind = privilegeKindNone
+		*tree.DataBranchPick:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		writeDatabaseAndTableDirectly = true
 		switch st := stmt.(type) {
 		case *tree.DataBranchCreateTable:
 			appendWriteTableNameDatabaseName(&st.CreateTable.Table)
 		case *tree.DataBranchDeleteTable:
 			appendWriteTableNameDatabaseName(&st.TableName)
-		case *tree.DataBranchCreateDatabase:
-			writeDatabaseTargets = append(writeDatabaseTargets, string(st.DstDatabase))
-		case *tree.DataBranchDeleteDatabase:
-			writeDatabaseTargets = append(writeDatabaseTargets, string(st.DatabaseName))
 		case *tree.DataBranchMerge:
 			appendWriteTableNameDatabaseName(&st.DstTable)
 		case *tree.DataBranchPick:
 			appendWriteTableNameDatabaseName(&st.DstTable)
+		}
+	case *tree.DataBranchCreateDatabase, *tree.DataBranchDeleteDatabase:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeAccountAll)
+		writeDatabaseAndTableDirectly = true
+		switch st := stmt.(type) {
+		case *tree.DataBranchCreateDatabase:
+			writeDatabaseTargets = append(writeDatabaseTargets, string(st.DstDatabase))
+		case *tree.DataBranchDeleteDatabase:
+			writeDatabaseTargets = append(writeDatabaseTargets, string(st.DatabaseName))
 		}
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))

@@ -11,6 +11,8 @@ create account protected_bvt_acc ADMIN_NAME 'admin' IDENTIFIED BY '111';
 set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB';
 set global protected_databases = '';
 internal error: protected_databases cannot be cleared directly
+set global protected_databases = ',';
+internal error: protected_databases cannot be cleared directly
 create database protected_bvt_db;
 create table protected_bvt_db.t1(a int);
 insert into protected_bvt_db.t1 values(1);

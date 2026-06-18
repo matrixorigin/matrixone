@@ -14,6 +14,7 @@ create account protected_bvt_acc ADMIN_NAME 'admin' IDENTIFIED BY '111';
 -- @session:id=1&user=protected_bvt_acc:admin&password=111
 set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB';
 set global protected_databases = '';
+set global protected_databases = ',';
 create database protected_bvt_db;
 create table protected_bvt_db.t1(a int);
 insert into protected_bvt_db.t1 values(1);
