@@ -7033,15 +7033,18 @@ func normalizeUserLevelLockName(name string) (string, error) {
 }
 
 func userLevelLockTxnID(owner string, connID uint64, name string) []byte {
-	return []byte(fmt.Sprintf("mo-user-level-lock\x00%s\x00%d\x00%s", owner, connID, name))
+	return []byte(fmt.Sprintf("mo-user-level-lock\x00%s\x00%s\x00%d", owner, name, connID))
 }
 
 func userLevelLockConnectionIDFromTxnID(txnID []byte) (uint64, bool) {
-	parts := strings.SplitN(string(txnID), "\x00", 4)
-	if len(parts) != 4 || parts[0] != "mo-user-level-lock" {
+	parts := strings.Split(string(txnID), "\x00")
+	if len(parts) < 3 || len(parts) > 4 || parts[0] != "mo-user-level-lock" {
 		return 0, false
 	}
-	connID, err := strconv.ParseUint(parts[2], 10, 64)
+	if len(parts) == 3 {
+		return 0, false
+	}
+	connID, err := strconv.ParseUint(parts[3], 10, 64)
 	if err != nil {
 		return 0, false
 	}
@@ -7307,12 +7310,12 @@ func releaseAllUserLevelLocks(proc *process.Process) int64 {
 	connID := userLevelLockConnectionID(proc)
 	var released int64
 	for _, name := range userLevelLocksForOwner(owner) {
+		released++
 		for {
 			count, held := untrackUserLevelLock(owner, name)
 			if !held {
 				break
 			}
-			released++
 			if count == 0 {
 				_ = proc.GetLockService().Unlock(context.Background(), userLevelLockTxnID(owner, connID, name), timestamp.Timestamp{})
 				break

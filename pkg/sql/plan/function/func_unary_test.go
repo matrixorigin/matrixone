@@ -7273,6 +7273,10 @@ func runUserLevelLockTest(t *testing.T, fn func([]lockservice.LockService)) {
 	resetUserLevelLocksForTest(t)
 }
 
+func userLevelLockTxnIDOld(owner, name string) []byte {
+	return []byte("mo-user-level-lock\x00" + owner + "\x00" + name)
+}
+
 func TestUserLevelLockFunctions(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		proc := newUserLevelLockTestProcess(t, services[0], "acc")
@@ -7539,6 +7543,21 @@ func TestIsUsedLockReturnsHolderConnectionID(t *testing.T) {
 	})
 }
 
+func TestIsUsedLockReturnsNullForLegacyHolderTxnID(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		state := services[0].(*userLevelLockTestService).state
+		state.Lock()
+		state.locks[string(userLevelLockRow(proc, "legacy_holder"))] = string(userLevelLockTxnIDOld(userLevelLockOwner(proc), "legacy_holder"))
+		state.Unlock()
+
+		holder, isNull, err := isUserLevelLockUsed("legacy_holder", proc)
+		require.NoError(t, err)
+		require.True(t, isNull)
+		require.Equal(t, uint64(0), holder)
+	})
+}
+
 func TestIsUsedLockReturnsNullForMalformedHolderTxnID(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		proc := newUserLevelLockTestProcess(t, services[0], "acc")
@@ -7570,7 +7589,7 @@ func TestReleaseAllUserLevelLocksReturnsReleasedCount(t *testing.T) {
 		require.Equal(t, int64(1), v)
 
 		released := releaseAllUserLevelLocks(proc1)
-		require.Equal(t, int64(3), released)
+		require.Equal(t, int64(2), released)
 		require.Equal(t, int64(0), releaseAllUserLevelLocks(proc1))
 
 		v, err = getUserLevelLock("release_all_a", 0, proc2)

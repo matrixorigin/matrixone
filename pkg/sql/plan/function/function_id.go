@@ -730,9 +730,9 @@ const (
 	GET_LOCK          = 518
 	RELEASE_LOCK      = 519
 	IS_FREE_LOCK      = 520
-	IS_USED_LOCK      = 521
-	RELEASE_ALL_LOCKS = 522
-	NAME_CONST        = 523
+	NAME_CONST        = 521
+	IS_USED_LOCK      = 522
+	RELEASE_ALL_LOCKS = 523
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
