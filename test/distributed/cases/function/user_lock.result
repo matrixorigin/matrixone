@@ -66,5 +66,38 @@ select release_all_locks();
 select release_all_locks();
 ➤ release_all_locks()[-5,64,0]  𝄀
 0
+select get_lock('user_lock_bvt_multi_a', 0);
+➤ get_lock(user_lock_bvt_multi_a, 0)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_multi_a', 0);
+➤ get_lock(user_lock_bvt_multi_a, 0)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_multi_a', 0);
+➤ get_lock(user_lock_bvt_multi_a, 0)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_multi_b', 0);
+➤ get_lock(user_lock_bvt_multi_b, 0)[-5,64,0]  𝄀
+1
+select release_all_locks();
+➤ release_all_locks()[-5,64,0]  𝄀
+2
+select is_free_lock('user_lock_bvt_multi_a');
+➤ is_free_lock(user_lock_bvt_multi_a)[-5,64,0]  𝄀
+1
+select is_free_lock('user_lock_bvt_multi_b');
+➤ is_free_lock(user_lock_bvt_multi_b)[-5,64,0]  𝄀
+1
+select get_lock('User_Lock_Bvt_Case', 0);
+➤ get_lock(User_Lock_Bvt_Case, 0)[-5,64,0]  𝄀
+1
+select is_free_lock('user_lock_bvt_case');
+➤ is_free_lock(user_lock_bvt_case)[-5,64,0]  𝄀
+0
+select release_lock('USER_LOCK_BVT_CASE');
+➤ release_lock(USER_LOCK_BVT_CASE)[-5,64,0]  𝄀
+1
+select is_free_lock('user_lock_bvt_case');
+➤ is_free_lock(user_lock_bvt_case)[-5,64,0]  𝄀
+1
 drop table user_lock_bvt_holder;
 drop database user_lock_bvt_db;

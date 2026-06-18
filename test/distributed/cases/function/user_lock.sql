@@ -45,5 +45,18 @@ select get_lock('user_lock_bvt_lock', 0);
 select release_all_locks();
 select release_all_locks();
 
+select get_lock('user_lock_bvt_multi_a', 0);
+select get_lock('user_lock_bvt_multi_a', 0);
+select get_lock('user_lock_bvt_multi_a', 0);
+select get_lock('user_lock_bvt_multi_b', 0);
+select release_all_locks();
+select is_free_lock('user_lock_bvt_multi_a');
+select is_free_lock('user_lock_bvt_multi_b');
+
+select get_lock('User_Lock_Bvt_Case', 0);
+select is_free_lock('user_lock_bvt_case');
+select release_lock('USER_LOCK_BVT_CASE');
+select is_free_lock('user_lock_bvt_case');
+
 drop table user_lock_bvt_holder;
 drop database user_lock_bvt_db;
