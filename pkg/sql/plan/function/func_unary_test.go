@@ -7175,8 +7175,9 @@ type userLevelLockTestState struct {
 }
 
 type userLevelLockTestService struct {
-	id    string
-	state *userLevelLockTestState
+	id        string
+	state     *userLevelLockTestState
+	unlockErr error
 }
 
 type userLevelLockNotSupportedService struct {
@@ -7223,6 +7224,9 @@ func (s *userLevelLockTestService) Lock(ctx context.Context, tableID uint64, row
 }
 
 func (s *userLevelLockTestService) Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...lockpb.ExtraMutation) error {
+	if s.unlockErr != nil {
+		return s.unlockErr
+	}
 	owner := string(txnID)
 	s.state.Lock()
 	defer s.state.Unlock()
@@ -7283,6 +7287,13 @@ func runUserLevelLockTest(t *testing.T, fn func([]lockservice.LockService)) {
 
 func userLevelLockTxnIDOld(owner, name string) []byte {
 	return []byte("mo-user-level-lock\x00" + owner + "\x00" + name)
+}
+
+func TestUserLevelLockConnectionIDFromProbeTxnID(t *testing.T) {
+	txnID := userLevelLockProbeTxnID("owner-1", 1001, "probe_lock", "is_free")
+	connID, ok := userLevelLockConnectionIDFromTxnID(txnID)
+	require.False(t, ok)
+	require.Equal(t, uint64(0), connID)
 }
 
 func TestUserLevelLockFunctions(t *testing.T) {
@@ -7627,6 +7638,32 @@ func TestReleaseAllUserLevelLocksReturnsReleasedCount(t *testing.T) {
 		)
 		s, info := fcTC.Run()
 		require.True(t, s, info)
+	})
+}
+
+func TestReleaseAllUserLevelLocksReturnsCountWhenUnlockFails(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		services[0].(*userLevelLockTestService).unlockErr = moerr.NewInternalErrorNoCtx("unlock failed")
+
+		v, err := getUserLevelLock("release_all_fail_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_fail_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_fail_b", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		released := releaseAllUserLevelLocks(proc1)
+		require.Equal(t, int64(2), released)
+		require.Equal(t, int64(0), releaseAllUserLevelLocks(proc1))
+
+		v, err = getUserLevelLock("release_all_fail_a", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
 	})
 }
 
