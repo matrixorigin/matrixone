@@ -1344,8 +1344,19 @@ public:
                         std::vector<B> train_data(n_train * dimension);
                         {
                             std::shared_lock<std::shared_mutex> lock(mutex_);
-                            for (size_t i = 0; i < n_train * dimension; ++i) {
-                                train_data[i] = static_cast<B>(static_cast<float>(flattened_host_dataset[i]));
+                            // Strided sample across ALL `count` rows (not the first
+                            // n_train contiguous rows) so the scalar quantizer learns
+                            // the true [min,max] range even when the data is sorted or
+                            // clustered. Sampling only the prefix lets any
+                            // higher-magnitude rows beyond row n_train saturate to the
+                            // storage type's extreme (e.g. int8 127), collapsing recall.
+                            const uint64_t stride = count / n_train; // >= 1 since n_train <= count
+                            for (uint64_t j = 0; j < n_train; ++j) {
+                                const uint64_t r = j * stride;
+                                for (uint32_t d = 0; d < dimension; ++d) {
+                                    train_data[j * dimension + d] =
+                                        static_cast<B>(static_cast<float>(flattened_host_dataset[r * dimension + d]));
+                                }
                             }
                         }
 
