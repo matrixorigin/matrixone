@@ -449,7 +449,7 @@ func TestBindReplaceWithUniqueSecondaryIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	rootID, err := builder.appendDedupAndMultiUpdateNodesForBindReplace(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
 	)
 	require.NoError(t, err)
 	require.NotZero(t, rootID)
@@ -503,7 +503,7 @@ func TestBindReplaceWithCompositeUniqueIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	rootID, err := builder.appendDedupAndMultiUpdateNodesForBindReplace(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
 	)
 	require.NoError(t, err)
 	require.NotZero(t, rootID)

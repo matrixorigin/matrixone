@@ -230,9 +230,15 @@ type QueryBuilder struct {
 	// for plain INSERT/LOAD where no old rows exist.
 	irregularMaintSourceStep int32
 	irregularMaintDeleteStep int32
-	irregularMaintIndexes    []*plan.IndexDef
-	irregularMaintTableDef   *plan.TableDef
-	irregularMaintObjRef     *plan.ObjectRef
+	// irregularMaintDeletePkPos / Typ identify, inside the materialized maintenance
+	// step, the base-table PK column the stale index entries are keyed by. For ODKU
+	// this is the (immutable) final PK; for REPLACE it is the matched old row's PK,
+	// which can differ from the new PK when the conflict is on a non-PK unique key.
+	irregularMaintDeletePkPos int32
+	irregularMaintDeletePkTyp plan.Type
+	irregularMaintIndexes     []*plan.IndexDef
+	irregularMaintTableDef    *plan.TableDef
+	irregularMaintObjRef      *plan.ObjectRef
 }
 
 type OptimizerHints struct {

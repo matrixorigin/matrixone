@@ -157,6 +157,13 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		return nil, err
 	}
 
+	// Append synchronous IVF/fulltext index maintenance (delete the conflicting
+	// rows' old entries + insert the new ones) from the materialized image; no-op
+	// without such indexes. Fixes issue #25000.
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+
 	// Generate DetectSqls for self-referencing FK constraint checks.
 	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "replace")
 	if err != nil {
