@@ -171,6 +171,8 @@ type TxnOperator interface {
 	AddLockTable(locktable lock.LockTable) error
 	// HasLockTable check if had locked table
 	HasLockTable(table uint64) bool
+	// CheckLockTableBinds checks held lock table binds without changing commit state.
+	CheckLockTableBinds(ctx context.Context) error
 	// AddWaitLock add wait lock for current txn
 	AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64
 	// RemoveWaitLock remove wait lock for current txn

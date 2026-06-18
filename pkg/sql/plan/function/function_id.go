@@ -725,11 +725,12 @@ const (
 	IS_UUID     = 515
 	UUID_TO_BIN = 516
 	BIN_TO_UUID = 517
-	DATE_TRUNC  = 518
+	NAME_CONST  = 518
+	DATE_TRUNC  = 519
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 519
+	FUNCTION_END_NUMBER = 520
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1106,6 +1107,7 @@ var functionIdRegister = map[string]int32{
 	"mo_explain_phy":                 MO_EXPLAIN_PHY,
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,
+	"name_const":                     NAME_CONST,
 	"values":                         VALUES,
 	"binary":                         BINARY,
 	"internal_char_length":           INTERNAL_CHAR_LENGTH,
