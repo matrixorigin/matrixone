@@ -1201,6 +1201,15 @@ func sameUint64s(a []uint64, b []uint64) bool {
 	return true
 }
 
+func hasUint64(values []uint64, target uint64) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func formatReplicaMap(m map[uint64]string) string {
 	if len(m) == 0 {
 		return "{}"
@@ -1452,8 +1461,54 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 	}
 
 	if len(restartStores) > 0 {
-		fmt.Println("step 2: restart listed LogService stores outside this CLI")
-		printRestartInstructions(plans, restartStores)
+		if plans[0].Mode == modeLocal {
+			fmt.Println("step 2: stop listed LogService stores outside this CLI")
+			printLocalStopInstructions(plans, restartStores)
+			if !opts.yes {
+				line, err := askLine("After all listed LogService processes are stopped, type STOPPED")
+				if err != nil {
+					return err
+				}
+				if line != "STOPPED" {
+					return fmt.Errorf("recover cancelled before local cleanup")
+				}
+			}
+			fmt.Println("step 3: clean confirmed local replicas")
+			fmt.Println(combinedCleanupSummary(tasks))
+			if !opts.yes {
+				line, err := askLine("Type CLEAN to delete the listed local replica data")
+				if err != nil {
+					return err
+				}
+				if line != "CLEAN" {
+					return fmt.Errorf("recover cancelled before local cleanup")
+				}
+			}
+			for _, task := range tasks {
+				if err := cleanReplica(
+					task.Store.DeploymentID,
+					task.Store.UUID,
+					task.Store.NodeHostDir,
+					task.Store.RaftAddress,
+					task.Store.ListenAddress,
+					task.Store.GossipAddress,
+					task.Plan.ShardID,
+					task.ReplicaID,
+					200,
+				); err != nil {
+					return fmt.Errorf("clean shard %d store %s replica %d: %w",
+						task.Plan.ShardID, task.Store.UUID, task.ReplicaID, err)
+				}
+			}
+			if err := verifyOnlineCleanupComplete(plans); err != nil {
+				return err
+			}
+			fmt.Println("step 4: start listed LogService stores outside this CLI")
+			printRestartInstructions(plans, restartStores)
+		} else {
+			fmt.Println("step 2: restart listed LogService stores outside this CLI")
+			printRestartInstructions(plans, restartStores)
+		}
 		if !opts.yes {
 			line, err := askLine("After all listed LogService pods/processes have restarted, type DONE")
 			if err != nil {
@@ -1463,8 +1518,11 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 				return fmt.Errorf("recover cancelled before unblock")
 			}
 		}
-		fmt.Println("step 3: wait for restarted stores to heartbeat")
+		fmt.Println("step 5: wait for restarted stores to heartbeat")
 		if err := waitForStoreHeartbeats(ctx, plans[0], timeout, restartStores, beforeTicks, opts.yes); err != nil {
+			return err
+		}
+		if err := verifyOnlineCleanupComplete(plans); err != nil {
 			return err
 		}
 	} else {
@@ -1517,6 +1575,40 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 		"logShards": state.LogState.Shards,
 		"repairs":   state.LogShardRepairs,
 	})
+}
+
+func verifyOnlineCleanupComplete(plans []*repairPlan) error {
+	messages := make([]string, 0)
+	for _, plan := range plans {
+		if plan.Mode != modeLocal {
+			continue
+		}
+		for _, store := range storesWithAnyCleanup(plan.Stores) {
+			if store.NodeHostDir == "" || store.DeploymentID == 0 {
+				continue
+			}
+			current := localShardReplicas(store.NodeHostDir, store.DeploymentID, plan.ShardID)
+			for _, replicaID := range store.CleanupReplicas {
+				if !hasUint64(current, replicaID) {
+					continue
+				}
+				messages = append(messages, fmt.Sprintf(
+					"- shard %d store %s replica %d still exists under %s",
+					plan.ShardID,
+					store.UUID,
+					replicaID,
+					store.NodeHostDir,
+				))
+			}
+		}
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"local cleanup did not finish; refusing to unblock cleaned stores:\n%s\nRestart the listed LogService stores again, or clean the listed replicas manually, then rerun recover/apply.",
+		strings.Join(messages, "\n"),
+	)
 }
 
 func cleanupTasksForPlansAllStores(plans []*repairPlan) []cleanupTask {
@@ -1610,7 +1702,7 @@ func waitForStoreHeartbeats(
 
 func printRestartInstructions(plans []*repairPlan, stores []planStore) {
 	mode := plans[0].Mode
-	fmt.Println("Restart these LogService stores after step 1:")
+	fmt.Println("Start or restart these LogService stores:")
 	for _, store := range stores {
 		shards := cleanupShardsForStore(plans, store.UUID)
 		fmt.Printf("- store %s shards=%v cleanup=%s\n", store.UUID, shards, cleanupReplicasForStore(plans, store.UUID))
@@ -1638,6 +1730,20 @@ func printRestartInstructions(plans []*repairPlan, stores []planStore) {
 			}
 			fmt.Printf("  restart pod: %s -n %s delete pod <logservice-pod-for-%s>\n", kubectl, shellQuote(namespace), store.UUID)
 		}
+	}
+}
+
+func printLocalStopInstructions(plans []*repairPlan, stores []planStore) {
+	fmt.Println("Stop these LogService processes before local cleanup:")
+	for _, store := range stores {
+		shards := cleanupShardsForStore(plans, store.UUID)
+		fmt.Printf("- store %s shards=%v cleanup=%s\n", store.UUID, shards, cleanupReplicasForStore(plans, store.UUID))
+		if store.ConfigPath == "" {
+			continue
+		}
+		fmt.Printf("  config: %s\n", store.ConfigPath)
+		fmt.Printf("  find process: pgrep -af -- 'mo-service -cfg %s'\n", store.ConfigPath)
+		fmt.Println("  stop process: kill -TERM <pid>")
 	}
 }
 
