@@ -272,9 +272,6 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table")
 	}
 
-	if util.TableIsClusterTable(tableDef.GetTableType()) && accountId != catalog.System_Account {
-		return moerr.NewInternalErrorf(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
-	}
 	if objRef.PubInfo != nil {
 		return moerr.NewInternalError(ctx.GetContext(), "cannot insert/update/delete from public table")
 	}
