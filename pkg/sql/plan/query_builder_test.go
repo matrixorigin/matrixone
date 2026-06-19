@@ -1316,11 +1316,11 @@ func TestQueryBuilder_appendTimeWindowNode(t *testing.T) {}
 func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
-	bindCtx.groupTag = builder.genNewBindTag()
-	bindCtx.aggregateTag = builder.genNewBindTag()
-	bindCtx.projectTag = builder.genNewBindTag()
-	bindCtx.windowTag = builder.genNewBindTag()
-	bindCtx.sampleTag = builder.genNewBindTag()
+	bindCtx.groupTag = builder.GenNewBindTag()
+	bindCtx.aggregateTag = builder.GenNewBindTag()
+	bindCtx.projectTag = builder.GenNewBindTag()
+	bindCtx.windowTag = builder.GenNewBindTag()
+	bindCtx.sampleTag = builder.GenNewBindTag()
 
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, lag(a) over (order by a) as prev_a from select_test.bind_select group by a having prev_a > 0", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
@@ -1363,11 +1363,11 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 func TestSplitWindowDependentHavingFilters_WithSubqueryChild(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
-	bindCtx.groupTag = builder.genNewBindTag()
-	bindCtx.aggregateTag = builder.genNewBindTag()
-	bindCtx.projectTag = builder.genNewBindTag()
-	bindCtx.windowTag = builder.genNewBindTag()
-	bindCtx.sampleTag = builder.genNewBindTag()
+	bindCtx.groupTag = builder.GenNewBindTag()
+	bindCtx.aggregateTag = builder.GenNewBindTag()
+	bindCtx.projectTag = builder.GenNewBindTag()
+	bindCtx.windowTag = builder.GenNewBindTag()
+	bindCtx.sampleTag = builder.GenNewBindTag()
 
 	stmts, err := parsers.Parse(
 		context.TODO(),

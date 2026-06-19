@@ -1,0 +1,41 @@
+drop database if exists ft_restore;
+create database ft_restore;
+use ft_restore;
+create table src(id int primary key, body text, FULLTEXT ftidx(body) ASYNC);
+insert into src values
+(1,'alpha keyword'),(2,'beta keyword'),
+(3,'gamma topic'),(4,'delta topic');
+select sleep(30);
+sleep(30)
+0
+select id from src where match(body) against('alpha' in boolean mode) order by id;
+id
+1
+create table dst clone src;
+select count(*) from dst;
+count(*)
+4
+show create table dst;
+Table    Create Table
+dst    CREATE TABLE `dst` (\n  `id` int NOT NULL,\n  `body` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`) ASYNC\n)
+select sleep(30);
+sleep(30)
+0
+select id from dst where match(body) against('beta' in boolean mode) order by id;
+id
+2
+select id from dst where match(body) against('topic' in boolean mode) order by id;
+id
+3
+4
+insert into dst values (5,'epsilon fresh');
+select sleep(45);
+sleep(45)
+0
+select id from dst where match(body) against('epsilon' in boolean mode) order by id;
+id
+5
+select id from dst where match(body) against('alpha' in boolean mode) order by id;
+id
+1
+drop database ft_restore;

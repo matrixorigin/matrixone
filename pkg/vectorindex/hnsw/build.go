@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -190,7 +191,7 @@ func (h *HnswBuild[T]) getIndexForAdd() (idx *HnswModel[T], save_idx *HnswModel[
 	save_idx = nil
 	nidx := int64(len(h.indexes))
 	if nidx == 0 {
-		idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
+		idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.cfg.IndexCapacity))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -205,7 +206,7 @@ func (h *HnswBuild[T]) getIndexForAdd() (idx *HnswModel[T], save_idx *HnswModel[
 			save_idx = idx
 
 			// create new index
-			idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
+			idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.cfg.IndexCapacity))
 			if err != nil {
 				return nil, nil, err
 			}
@@ -306,7 +307,7 @@ func (h *HnswBuild[T]) ToInsertSql(ts int64) ([]string, error) {
 		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, chksum, ts, fs))
 	}
 
-	metasql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s", h.tblcfg.DbName, h.tblcfg.MetadataTable, strings.Join(metas, ", "))
+	metasql := fmt.Sprintf("INSERT INTO %s VALUES %s", sqlquote.QualifiedIdent(h.tblcfg.DbName, h.tblcfg.MetadataTable), strings.Join(metas, ", "))
 
 	sqls = append(sqls, metasql)
 	return sqls, nil

@@ -98,6 +98,92 @@ func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
 	return catalog.IsSecondaryIndexTable(tableDef.Name)
 }
 
+func (builder *QueryBuilder) makeIndexPartExpr(
+	inputTag int32,
+	colPos int32,
+	colName string,
+	colType plan.Type,
+	prefixLengths map[string]int,
+) (*plan.Expr, error) {
+	expr := &plan.Expr{
+		Typ: colType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: inputTag,
+				ColPos: colPos,
+				Name:   colName,
+			},
+		},
+	}
+
+	length := prefixLengths[colName]
+	if length <= 0 {
+		return expr, nil
+	}
+
+	prefixExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "substring", []*plan.Expr{
+		expr,
+		makePlan2Int64ConstExprWithType(1),
+		makePlan2Int64ConstExprWithType(int64(length)),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if prefixType, ok := indexTableKeyTypeForPrefix(colType); ok {
+		prefixExpr, err = appendCastBeforeExpr(builder.GetContext(), prefixExpr, prefixType)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return prefixExpr, nil
+}
+
+func (builder *QueryBuilder) makeIndexPartExprFromInputExpr(
+	inputExpr *plan.Expr,
+	colName string,
+	prefixLengths map[string]int,
+) (*plan.Expr, error) {
+	expr := DeepCopyExpr(inputExpr)
+	length := prefixLengths[colName]
+	if length <= 0 {
+		return expr, nil
+	}
+
+	prefixExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "substring", []*plan.Expr{
+		expr,
+		makePlan2Int64ConstExprWithType(1),
+		makePlan2Int64ConstExprWithType(int64(length)),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if prefixType, ok := indexTableKeyTypeForPrefix(inputExpr.Typ); ok {
+		prefixExpr, err = appendCastBeforeExpr(builder.GetContext(), prefixExpr, prefixType)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return prefixExpr, nil
+}
+
+func (builder *QueryBuilder) makeInsertIndexPartExpr(
+	selectNode *plan.Node,
+	selectTag int32,
+	tableDef *plan.TableDef,
+	colName2Idx map[string]int32,
+	part string,
+	prefixLengths map[string]int,
+) (*plan.Expr, error) {
+	partName := catalog.ResolveAlias(part)
+	colPos, ok := colName2Idx[tableDef.Name+"."+partName]
+	if !ok {
+		return nil, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", partName)
+	}
+	return builder.makeIndexPartExpr(selectTag, colPos, partName, selectNode.ProjectList[colPos].Typ, prefixLengths)
+}
+
 func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrregularIndex bool) {
 	if tableDef == nil || len(tableDef.Indexes) == 0 {
 		return
@@ -1051,26 +1137,47 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
-	// Materialize lock keys for composite unique indexes in advance.
+	// Materialize lock keys for composite and prefix unique indexes in advance.
 	// This guarantees the lock target can find __mo_index_idx_col in colName2Idx.
 	for i, idxDef := range tableDef.Indexes {
-		if !idxDef.Unique || skipUniqueIdx[i] || len(idxDef.Parts) <= 1 {
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil {
+			return 0, err
+		}
+		if !idxDef.Unique || skipUniqueIdx[i] || (len(idxDef.Parts) <= 1 && len(prefixLengths) == 0) {
 			continue
 		}
 		lockColName := idxDef.IndexTableName + "." + catalog.IndexTableIndexColName
 		if _, ok := colName2Idx[lockColName]; ok {
 			continue
 		}
-		args := make([]*plan.Expr, len(idxDef.Parts))
-		for k := range idxDef.Parts {
-			partName := catalog.ResolveAlias(idxDef.Parts[k])
+
+		var lockExpr *plan.Expr
+		if len(idxDef.Parts) == 1 {
+			partName := catalog.ResolveAlias(idxDef.Parts[0])
 			partPos, ok := colName2Idx[tableDef.Name+"."+partName]
 			if !ok {
 				return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", partName)
 			}
-			args[k] = DeepCopyExpr(selectNode.ProjectList[partPos])
+			lockExpr, err = builder.makeIndexPartExprFromInputExpr(selectNode.ProjectList[partPos], partName, prefixLengths)
+			if err != nil {
+				return 0, err
+			}
+		} else {
+			args := make([]*plan.Expr, len(idxDef.Parts))
+			for k := range idxDef.Parts {
+				partName := catalog.ResolveAlias(idxDef.Parts[k])
+				partPos, ok := colName2Idx[tableDef.Name+"."+partName]
+				if !ok {
+					return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", partName)
+				}
+				args[k], err = builder.makeIndexPartExprFromInputExpr(selectNode.ProjectList[partPos], partName, prefixLengths)
+				if err != nil {
+					return 0, err
+				}
+			}
+			lockExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 		}
-		lockExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 		colName2Idx[lockColName] = int32(len(selectNode.ProjectList))
 		selectNode.ProjectList = append(selectNode.ProjectList, lockExpr)
 	}
@@ -1129,7 +1236,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 		var pkIdxInBat int32
 
-		if len(idxDef.Parts) == 1 {
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil {
+			return 0, err
+		}
+		if len(idxDef.Parts) == 1 && len(prefixLengths) == 0 {
 			var ok bool
 			pkIdxInBat, ok = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
 			if !ok {
@@ -1255,33 +1366,21 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		// __mo_index_idx_col projection for index columns
 		argsLen := len(idxDef.Parts)
 		var idxIndexColExpr *plan.Expr
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil {
+			return 0, err
+		}
 		if argsLen == 1 {
-			colFullName := tableDef.Name + "." + idxDef.Parts[0]
-			idxIndexColExpr = &plan.Expr{
-				Typ: selectNode.ProjectList[colName2Idx[colFullName]].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: selectTag,
-						ColPos: colName2Idx[colFullName],
-					},
-				},
+			idxIndexColExpr, err = builder.makeInsertIndexPartExpr(selectNode, selectTag, tableDef, colName2Idx, idxDef.Parts[0], prefixLengths)
+			if err != nil {
+				return 0, err
 			}
 		} else {
 			args := make([]*plan.Expr, argsLen)
-			var colPos int32
-			var ok bool
 			for k := range argsLen {
-				if colPos, ok = colName2Idx[tableDef.Name+"."+catalog.ResolveAlias(idxDef.Parts[k])]; !ok {
-					return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", idxDef.Parts[k])
-				}
-				args[k] = &plan.Expr{
-					Typ: selectNode.ProjectList[colPos].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: selectTag,
-							ColPos: colPos,
-						},
-					},
+				args[k], err = builder.makeInsertIndexPartExpr(selectNode, selectTag, tableDef, colName2Idx, idxDef.Parts[k], prefixLengths)
+				if err != nil {
+					return 0, err
 				}
 			}
 
@@ -1640,40 +1739,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			idxTableName := idxDef.IndexTableName
 
 			serialIdxPkExpr := func(idxDef *plan.IndexDef) (*plan.Expr, error) {
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+				if err != nil {
+					return nil, err
+				}
 				if !indexTableStoresSerializedKey(idxDef) {
-					colName := tableDef.Name + "." + indexPrimaryPartName(idxDef)
-					colPos, ok := colName2Idx[colName]
-					if !ok {
-						return nil, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", indexPrimaryPartName(idxDef))
-					}
-					return &plan.Expr{
-						Typ: selectNode.ProjectList[colPos].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: selectTag,
-								ColPos: colPos,
-							},
-						},
-					}, nil
+					return builder.makeInsertIndexPartExpr(selectNode, selectTag, tableDef, colName2Idx, indexPrimaryPartName(idxDef), prefixLengths)
 				}
 
-				var colPos int32
 				args := make([]*plan.Expr, len(idxDef.Parts))
-				var ok bool
 				for k, part := range idxDef.Parts {
-					if colPos, ok = colName2Idx[tableDef.Name+"."+catalog.ResolveAlias(part)]; !ok {
-						return nil, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", part)
-					}
-					// build from selectTag because we want to insert the row into the index table
-					args[k] = &plan.Expr{
-						// projectListAfterDedup just appends elements on the tail, so here use selectNode is ok
-						Typ: selectNode.ProjectList[colPos].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: selectTag,
-								ColPos: colPos,
-							},
-						},
+					var err error
+					args[k], err = builder.makeInsertIndexPartExpr(selectNode, selectTag, tableDef, colName2Idx, part, prefixLengths)
+					if err != nil {
+						return nil, err
 					}
 				}
 				return BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
@@ -1719,19 +1798,18 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				*/
 
 				var delIdxExpr *plan.Expr
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+				if err != nil {
+					return 0, err
+				}
 				if !indexTableStoresSerializedKey(idxDef) {
 					colPos, ok := tableDef.Name2ColIndex[indexPrimaryPartName(idxDef)]
 					if !ok {
 						return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", indexPrimaryPartName(idxDef))
 					}
-					delIdxExpr = &plan.Expr{
-						Typ: selectNode.ProjectList[colPos].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: scanTag,
-								ColPos: colPos,
-							},
-						},
+					delIdxExpr, err = builder.makeIndexPartExpr(scanTag, colPos, indexPrimaryPartName(idxDef), tableDef.Cols[colPos].Typ, prefixLengths)
+					if err != nil {
+						return 0, err
 					}
 				} else {
 					delArgs := make([]*plan.Expr, len(idxDef.Parts))
@@ -1743,15 +1821,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 							return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", part)
 						}
 
-						delArgs[k] = &plan.Expr{
-							Typ: selectNode.ProjectList[colPos].Typ,
-							Expr: &plan.Expr_Col{
-								Col: &plan.ColRef{
-									// use scanTag because we want to delete the row that is not null.
-									RelPos: scanTag,
-									ColPos: colPos,
-								},
-							},
+						delArgs[k], err = builder.makeIndexPartExpr(scanTag, colPos, catalog.ResolveAlias(part), tableDef.Cols[colPos].Typ, prefixLengths)
+						if err != nil {
+							return 0, err
 						}
 					}
 

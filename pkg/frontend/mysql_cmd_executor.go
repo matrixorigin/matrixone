@@ -3363,6 +3363,13 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}
 	proc.SetLastInsertID(ses.GetLastInsertID())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
+	// Frontend client SQL — session-bound resolver. Procs constructed
+	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit
+	// IsFrontend from opts.IsFrontend() (default false → background);
+	// this proc is built inline here so we set the flag explicitly,
+	// paired with the resolver bind above as the "I have a session"
+	// signal.
+	proc.Base.IsFrontend = true
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
 	// Deep copy the map, takes some memory.

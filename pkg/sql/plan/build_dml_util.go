@@ -81,12 +81,17 @@ func putDeleteNodeInfo(info *deleteNodeInfo) {
 }
 
 type dmlPlanCtx struct {
-	objRef                 *ObjectRef
-	tableDef               *TableDef
-	beginIdx               int
-	sourceStep             int32
-	isMulti                bool
+	objRef     *ObjectRef
+	tableDef   *TableDef
+	beginIdx   int
+	sourceStep int32
+	isMulti    bool
+	// needAggFilter drives two behaviours: an any_value aggregation for dedup
+	// and an isnotnull(row_id) filter for join-target NULL-row protection. After
+	// an upstream row_number() window handles the dedup (dedupByRowNumber) only
+	// the aggregation is skipped; the NULL-row filter must stay.
 	needAggFilter          bool
+	dedupByRowNumber       bool
 	updateColLength        int
 	rowIdPos               int
 	insertColPos           []int
@@ -2157,6 +2162,10 @@ func appendPreInsertPlan(
 	var useColumns []int32
 	idxDef := tableDef.Indexes[indexIdx]
 	colsMap := make(map[string]int)
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil {
+		return 0, err
+	}
 
 	for i, col := range tableDef.Cols {
 		colsMap[col.Name] = i
@@ -2174,10 +2183,14 @@ func appendPreInsertPlan(
 
 	pkColumn, originPkType := getPkPos(tableDef, false)
 	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, pkColumn)
+	lastNodeId, useColumns, err = appendIndexPrefixProjection(builder, bindCtx, tableDef, lastNodeId, keyParts, colsMap, useColumns, prefixLengths)
+	if err != nil {
+		return -1, err
+	}
 
 	var ukType Type
 	if len(idxDef.Parts) == 1 || isSpatialIndexDef(idxDef) {
-		ukType = tableDef.Cols[useColumns[0]].Typ
+		ukType = builder.qry.Nodes[lastNodeId].ProjectList[useColumns[0]].Typ
 	} else {
 		ukType = Type{
 			Id:    int32(types.T_varchar),
@@ -2369,34 +2382,36 @@ func appendDeleteIndexTablePlan(
 	// append join node
 	var joinConds []*Expr
 	var leftExpr *Expr
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexdef.IndexAlgoParams)
+	if err != nil {
+		return -1, err
+	}
 	partsLength := len(indexdef.Parts)
 	if partsLength == 1 {
-		orginIndexColumnName := indexdef.Parts[0]
-		typ := typMap[orginIndexColumnName]
-		leftExpr = &Expr{
-			Typ: typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 1,
-					ColPos: int32(posMap[orginIndexColumnName]),
-					Name:   orginIndexColumnName,
-				},
-			},
+		originIndexColumnName := catalog.ResolveAlias(indexdef.Parts[0])
+		leftExpr, err = builder.makeIndexPartExpr(
+			1,
+			int32(posMap[originIndexColumnName]),
+			originIndexColumnName,
+			typMap[originIndexColumnName],
+			prefixLengths,
+		)
+		if err != nil {
+			return -1, err
 		}
 	} else {
 		args := make([]*Expr, partsLength)
 		for i, column := range indexdef.Parts {
 			column = catalog.ResolveAlias(column)
-			typ := typMap[column]
-			args[i] = &plan.Expr{
-				Typ: typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 1,
-						ColPos: int32(posMap[column]),
-						Name:   column,
-					},
-				},
+			args[i], err = builder.makeIndexPartExpr(
+				1,
+				int32(posMap[column]),
+				column,
+				typMap[column],
+				prefixLengths,
+			)
+			if err != nil {
+				return -1, err
 			}
 		}
 		if isUK {
@@ -2482,6 +2497,88 @@ func appendDeleteIndexTablePlan(
 	}, bindCtx)
 	recalcStatsByRuntimeFilter(builder.qry.Nodes[leftId], builder.qry.Nodes[lastNodeId], builder)
 	return lastNodeId, nil
+}
+
+func appendIndexPrefixProjection(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeId int32,
+	keyParts []string,
+	colsMap map[string]int,
+	useColumns []int32,
+	prefixLengths map[string]int,
+) (int32, []int32, error) {
+	if len(prefixLengths) == 0 {
+		return lastNodeId, useColumns, nil
+	}
+
+	lastProject := builder.qry.Nodes[lastNodeId].ProjectList
+	projectProjection := make([]*Expr, len(lastProject), len(lastProject)+len(prefixLengths))
+	for i := range lastProject {
+		projectProjection[i] = &plan.Expr{
+			Typ: lastProject[i].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(i),
+				},
+			},
+		}
+	}
+
+	newUseColumns := make([]int32, 0, len(useColumns))
+	hasPrefixPart := false
+	for _, part := range keyParts {
+		part = catalog.ResolveAlias(part)
+		pos, ok := colsMap[part]
+		if !ok {
+			continue
+		}
+		length := prefixLengths[part]
+		if length <= 0 {
+			newUseColumns = append(newUseColumns, int32(pos))
+			continue
+		}
+
+		prefixExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "substring", []*Expr{
+			{
+				Typ: lastProject[pos].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(pos),
+						Name:   part,
+					},
+				},
+			},
+			makePlan2Int64ConstExprWithType(1),
+			makePlan2Int64ConstExprWithType(int64(length)),
+		})
+		if err != nil {
+			return -1, nil, err
+		}
+		if prefixType, ok := indexTableKeyTypeForPrefix(lastProject[pos].Typ); ok {
+			prefixExpr, err = appendCastBeforeExpr(builder.GetContext(), prefixExpr, prefixType)
+			if err != nil {
+				return -1, nil, err
+			}
+		}
+		newUseColumns = append(newUseColumns, int32(len(projectProjection)))
+		projectProjection = append(projectProjection, prefixExpr)
+		hasPrefixPart = true
+	}
+
+	if !hasPrefixPart {
+		return lastNodeId, useColumns, nil
+	}
+
+	projectNode := &Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeId},
+		ProjectList: projectProjection,
+	}
+	return builder.appendNode(projectNode, bindCtx), newUseColumns, nil
 }
 
 func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
@@ -2834,7 +2931,7 @@ func makePreUpdateDeletePlan(
 	//when update multi table. we append agg node:
 	//eg: update t1, t2 set t1.a= t1.a+1 where t2.b >10
 	//eg: update t2, (select a from t2) as tt set t2.a= t2.a+1 where t2.b >10
-	if delCtx.needAggFilter {
+	if delCtx.needAggFilter && !delCtx.dedupByRowNumber {
 		lastNode := builder.qry.Nodes[lastNodeId]
 		groupByExprs := make([]*Expr, len(delCtx.tableDef.Cols))
 		aggNodeProjection := make([]*Expr, len(lastNode.ProjectList))
@@ -2910,12 +3007,17 @@ func makePreUpdateDeletePlan(
 			SpillMem:    builder.aggSpillMem,
 		}
 		lastNodeId = builder.appendNode(aggNode, bindCtx)
+	}
 
-		// we need filter null in left join/right join
-		// eg: UPDATE stu s LEFT JOIN class c ON s.class_id = c.id SET s.class_name = 'test22', c.stu_name = 'test22';
-		// we can not let null rows in batch go to insert Node
+	// we need filter null in left join/right join
+	// eg: UPDATE stu s LEFT JOIN class c ON s.class_id = c.id SET s.class_name = 'test22', c.stu_name = 'test22';
+	// we can not let null rows in batch go to insert Node.
+	// This NULL-row safeguard is independent of the any_value dedup above: it must
+	// still run for joined-target UPDATE ... FROM even when duplicate matches were
+	// already deduped by an upstream row_number() window (dedupByRowNumber).
+	if delCtx.needAggFilter {
 		rowIdExpr := &plan.Expr{
-			Typ: aggNodeProjection[delCtx.rowIdPos].Typ,
+			Typ: delCtx.tableDef.Cols[delCtx.rowIdPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,

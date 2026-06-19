@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -42,6 +43,15 @@ func loadedModel(t *testing.T, id string) *IvfpqModel[float32] {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	// LoadIndex always fires tag=1 / tag=2 SELECTs in parallel with the
+	// model tar load. Mock those to return empty for the duration of the
+	// LoadIndex call.
+	origRunSql := runSql
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: proc.Mp()}, nil
+	}
+	defer func() { runSql = origRunSql }()
 
 	loader := &IvfpqModel[float32]{
 		Id:       id,
@@ -90,7 +100,7 @@ func TestIvfpqSearchTypeMismatch(t *testing.T) {
 
 	s := NewIvfpqSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
 	s.Indexes = []*IvfpqModel[float32]{idx}
-	s.MultiIndex = s.buildMultiIndex()
+	s.MultiIndex, _ = s.buildMultiIndex()
 
 	rt := vectorindex.RuntimeConfig{Limit: 4}
 
@@ -110,7 +120,7 @@ func TestIvfpqSearchAndSearchFloat32(t *testing.T) {
 
 	s := NewIvfpqSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
 	s.Indexes = []*IvfpqModel[float32]{idx}
-	s.MultiIndex = s.buildMultiIndex()
+	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
 	query := data[:testDim]
@@ -148,7 +158,7 @@ func TestIvfpqSearchMultipleIndexes(t *testing.T) {
 
 	s := NewIvfpqSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
 	s.Indexes = []*IvfpqModel[float32]{idx0, idx1}
-	s.MultiIndex = s.buildMultiIndex()
+	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
 	query := data[:testDim]
@@ -175,6 +185,9 @@ func TestIvfpqSearchLoad(t *testing.T) {
 
 	origRunSql := runSql
 	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "AND tag = 1") || strings.Contains(sql, "AND tag = 2") {
+			return executor.Result{Mp: proc.Mp()}, nil
+		}
 		res := executor.Result{
 			Mp: proc.Mp(),
 			Batches: []*batch.Batch{
