@@ -1064,7 +1064,13 @@ func genSqlsForCheckFKConstraints(compCtx CompilerContext, dbName, tblName strin
 		if err != nil {
 			return nil, err
 		}
-		ret = append(ret, sql)
+		// Mark child→parent existence checks so the runtime reports the violation
+		// with the same internal-error-wrapped message the legacy in-plan assert
+		// produces ("internal error: Cannot add or update a child row: ..."),
+		// keeping the modern INSERT path consistent with the rest of FK
+		// enforcement. Self-referencing checks (handled above) keep the plain
+		// 1452 message, matching their long-standing behavior.
+		ret = append(ret, childFkCheckPrefix+sql)
 	}
 	return ret, nil
 }

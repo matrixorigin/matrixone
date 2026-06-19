@@ -66,7 +66,7 @@ select * from t_odku_child order by cid;
 10  ¦  1  ¦  999  𝄀
 20  ¦  2  ¦  200
 insert into t_odku_child values (30, 99, 300) on duplicate key update v = 300;
-Cannot add or update a child row: a foreign key constraint fails
+internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from t_odku_child order by cid;
 ➤ cid[4,32,0]  ¦  pid[4,32,0]  ¦  v[4,32,0]  𝄀
 10  ¦  1  ¦  999  𝄀
@@ -78,7 +78,7 @@ select * from t_odku_child order by cid;
 20  ¦  2  ¦  200  𝄀
 40  ¦  1  ¦  400
 insert into t_odku_child values (50, 99, 500);
-Cannot add or update a child row: a foreign key constraint fails
+internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from t_odku_child order by cid;
 ➤ cid[4,32,0]  ¦  pid[4,32,0]  ¦  v[4,32,0]  𝄀
 10  ¦  1  ¦  999  𝄀

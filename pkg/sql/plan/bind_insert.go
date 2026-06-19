@@ -164,14 +164,36 @@ func getIrregularIndexes(tableDef *plan.TableDef) []*plan.IndexDef {
 // a sink-scan (a PROJECT so the dedup can safely extend its projection list with
 // composite unique-index lock keys without mutating the SINK_SCAN). When the
 // table has no irregular indexes it is a no-op and returns newRowImageID.
+// modernInsertFkCheckEnabled reports whether the modern plain-INSERT path should
+// run the row-scoped child→parent foreign-key check: FK checks are enabled and the
+// table has at least one non-self-referencing foreign key. Self-referencing FKs are
+// still enforced post-execution via genSqlsForCheckFKSelfRefer.
+func (builder *QueryBuilder) modernInsertFkCheckEnabled(tableDef *plan.TableDef) (bool, error) {
+	hasChildParent := false
+	for _, fk := range tableDef.Fkeys {
+		if fk.ForeignTbl != 0 {
+			hasChildParent = true
+			break
+		}
+	}
+	if !hasChildParent {
+		return false, nil
+	}
+	return IsForeignKeyChecksEnabled(builder.compCtx)
+}
+
 func (builder *QueryBuilder) appendIrregularMaintSource(
 	bindCtx *BindContext,
 	newRowImageID int32,
 	irregularIndexes []*plan.IndexDef,
 	tableDef *plan.TableDef,
 	objRef *plan.ObjectRef,
+	forceMaterialize bool,
 ) int32 {
-	if len(irregularIndexes) == 0 {
+	// forceMaterialize materializes the image even with no irregular indexes, so
+	// the row-scoped FK check can read the same new-row image (irregularMaintIndexes
+	// is empty, so finishIrregularIndexMaintenance stays a no-op).
+	if len(irregularIndexes) == 0 && !forceMaterialize {
 		return newRowImageID
 	}
 
@@ -316,9 +338,31 @@ func (builder *QueryBuilder) buildIrregularIndexMaintenance(bindCtx *BindContext
 		}
 	}
 
+	// During a copy-based ALTER TABLE, an irregular index whose columns are not
+	// affected by the change is shallow-cloned into the new table (see
+	// cloneUnaffectedIndexes in compile/alter.go) rather than rebuilt. The data
+	// copy runs as a normal INSERT, so skip sync maintenance for such indexes here
+	// — exactly as the regular-index path skips them via SkipIndexesCopy — to avoid
+	// inserting every row's entries twice (cloned + rebuilt).
+	var alterCopyOpt *plan.AlterCopyOpt
+	if v := builder.compCtx.GetContext().Value(defines.AlterCopyOpt{}); v != nil {
+		if opt, ok := v.(*plan.AlterCopyOpt); ok && opt.TargetTableName == tableDef.Name {
+			alterCopyOpt = opt
+		}
+	}
+
 	multiTableIndexes := make(map[string]*MultiTableIndex)
+	// A multi-column FULLTEXT(a, b) is stored as one IndexDef per column sharing a
+	// single index table; buildPreInsertFullTextIndex tokenizes all of the index's
+	// columns in one call, so it must run once per index table, not once per
+	// column, otherwise every row's entries are inserted twice.
+	seenFullTextTbls := make(map[string]bool)
 	for idx, indexdef := range tableDef.Indexes {
 		if !indexdef.TableExist {
+			continue
+		}
+		if alterCopyOpt != nil && alterCopyOpt.SkipIndexesCopy[indexdef.IndexName] {
+			// cloned by the ALTER, not rebuilt by this copy insert
 			continue
 		}
 		switch {
@@ -332,8 +376,17 @@ func (builder *QueryBuilder) buildIrregularIndexMaintenance(bindCtx *BindContext
 			}
 			multiTableIndexes[indexdef.IndexName].IndexDefs[catalog.ToLower(indexdef.IndexAlgoTableType)] = indexdef
 		case catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo):
+			if seenFullTextTbls[indexdef.IndexTableName] {
+				continue
+			}
+			seenFullTextTbls[indexdef.IndexTableName] = true
 			if err := buildPreInsertFullTextIndex(nil, builder.compCtx, builder, bindCtx, objRef,
 				tableDef, 0, sourceStep, nil, indexdef, idx, nil); err != nil {
+				return err
+			}
+		case catalog.IsMasterIndexAlgo(indexdef.IndexAlgo):
+			if err := buildPreInsertMasterIndex(nil, builder.compCtx, builder, bindCtx, objRef,
+				tableDef, sourceStep, nil, indexdef, idx); err != nil {
 				return err
 			}
 		}
@@ -363,13 +416,42 @@ func (builder *QueryBuilder) buildIrregularIndexMaintenance(bindCtx *BindContext
 func (builder *QueryBuilder) buildIrregularIndexDeleteMaintenance(bindCtx *BindContext) error {
 	tableDef := builder.irregularMaintTableDef
 
+	// The delete-PK position was recorded against the pre-prune materialized image.
+	// createQuery's column pruning may have dropped unreferenced columns (e.g. the
+	// new-row Row_ID copy) ahead of it and renumbered the survivors, so translate
+	// the recorded position into the post-prune sink layout the maintenance
+	// sink-scan actually exposes. The PK column always survives (the main
+	// MULTI_UPDATE references it), so a missing entry leaves the position unchanged.
+	// The delete-PK position was recorded against the pre-prune materialized image.
+	// createQuery's column pruning can drop unreferenced columns ahead of it and
+	// renumber the survivors. The recorded position normally still indexes the
+	// post-prune sink correctly; only when pruning shrank the sink below it (which
+	// would otherwise index out of range) do we translate it through sinkColRef to
+	// its surviving position.
+	if builder.sinkColRef != nil {
+		sinkNode := builder.qry.Nodes[builder.qry.Steps[builder.irregularMaintDeleteStep]]
+		if int(builder.irregularMaintDeletePkPos) >= len(sinkNode.ProjectList) {
+			if newPos, ok := builder.sinkColRef[[2]int32{builder.irregularMaintDeleteStep, builder.irregularMaintDeletePkPos}]; ok {
+				builder.irregularMaintDeletePkPos = int32(newPos)
+			}
+		}
+	}
+
 	ivfIndexes := make(map[string]*MultiTableIndex)
+	// As in the insert path, a multi-column fulltext index is several IndexDefs
+	// over one index table; its stale entries must be dropped once, not once per
+	// indexed column.
+	seenFullTextTbls := make(map[string]bool)
 	for _, indexdef := range tableDef.Indexes {
 		if !indexdef.TableExist {
 			continue
 		}
 		switch {
 		case catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo):
+			if seenFullTextTbls[indexdef.IndexTableName] {
+				continue
+			}
+			seenFullTextTbls[indexdef.IndexTableName] = true
 			if err := builder.buildIrregularFulltextDeleteByPk(bindCtx, indexdef); err != nil {
 				return err
 			}
@@ -581,11 +663,21 @@ func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindConte
 // path uses (reduceSinkSinkScanNodes + tempOptimizeForDML). It is a no-op when the
 // table has no irregular indexes. Shared by the modern INSERT and LOAD paths.
 func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, bindCtx *BindContext) error {
-	if len(builder.irregularMaintIndexes) == 0 {
+	if len(builder.irregularMaintIndexes) == 0 && !builder.modernFkCheck {
 		return nil
 	}
-	if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
-		return err
+	if len(builder.irregularMaintIndexes) > 0 {
+		if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
+			return err
+		}
+	}
+	if builder.modernFkCheck {
+		// Row-scoped child→parent FK parent-existence check over the materialized
+		// new-row image (irregularMaintTableDef keeps the table's Fkeys/Cols).
+		if err := appendForeignConstrantPlan(builder, bindCtx, builder.irregularMaintTableDef,
+			builder.irregularMaintObjRef, builder.irregularMaintSourceStep, false); err != nil {
+			return err
+		}
 	}
 	reduceSinkSinkScanNodes(query)
 	builder.tempOptimizeForDML()
@@ -805,9 +897,15 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	} else if len(astUpdateExprs) == 1 && astUpdateExprs[0] == nil {
 		onDupAction = plan.Node_IGNORE
 	} else if isFakePK && firstUniqueIdxPos < 0 {
-		// No primary key and no unique key: a duplicate can never occur, so
-		// ON DUPLICATE KEY UPDATE degenerates to a plain INSERT.
-		onDupAction = plan.Node_FAIL
+		// No primary key and no unique key: a duplicate can never occur, so the
+		// modern dedup+MULTI_UPDATE has no key to represent ON DUPLICATE KEY
+		// UPDATE. The statement is semantically a plain INSERT, but a prepared
+		// statement still carries the update clause's parameter markers, which
+		// the modern plan would drop (parameters are collected from the bound
+		// plan tree). Defer this degenerate corner to the legacy planner, which
+		// keeps the parameters and inserts the row. Signalled distinctly so only
+		// this case (not real PK/unique-key ODKU) is allowed to fall back.
+		return 0, moerr.NewUnsupportedDML(builder.GetContext(), noPkOnDupUpdateCause)
 	} else {
 		onDupAction = plan.Node_UPDATE
 
@@ -910,10 +1008,28 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// insert maintenance. ON DUPLICATE KEY UPDATE (onDupAction == UPDATE) is
 	// handled later from the final merged image, after the dedup-update join,
 	// where old entries are also dropped.
-	if len(irregularIndexes) > 0 && onDupAction != plan.Node_UPDATE {
-		lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, irregularIndexes, tableDef, dmlCtx.objRefs[0])
+	// Row-scoped child→parent FK parent-existence check for plain INSERT: validate
+	// only the new rows via the legacy in-plan assert, reading the materialized
+	// new-row image. A whole-table DetectSql would instead false-positive on rows
+	// inserted earlier under FOREIGN_KEY_CHECKS=0. ON DUPLICATE KEY UPDATE keeps the
+	// DetectSql path (it operates on the final merged image).
+	needFkCheck := false
+	if onDupAction != plan.Node_UPDATE {
+		var err error
+		if needFkCheck, err = builder.modernInsertFkCheckEnabled(tableDef); err != nil {
+			return 0, err
+		}
+	}
+	if onDupAction != plan.Node_UPDATE && (len(irregularIndexes) > 0 || needFkCheck) {
+		lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, irregularIndexes, tableDef, dmlCtx.objRefs[0], needFkCheck)
 		selectNode = builder.qry.Nodes[lastNodeID]
 		selectTag = selectNode.BindingTags[0]
+		// Defer the in-plan FK check to finishIrregularIndexMaintenance (after
+		// createQuery): appendForeignConstrantPlan's parent table scan has no
+		// BindingTags, which the full optimizer's pushdownFilters cannot handle; the
+		// lighter post-createQuery pass (reduceSinkSinkScanNodes + tempOptimizeForDML)
+		// the irregular maintenance already uses is what it expects.
+		builder.modernFkCheck = needFkCheck
 	}
 
 	idxNeedUpdate := make([]bool, len(tableDef.Indexes))

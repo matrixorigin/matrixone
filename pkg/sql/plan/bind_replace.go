@@ -691,7 +691,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	// Position (within finalProjList) of the matched old row's PK, used to key the
 	// irregular-index entries delete. For REPLACE the conflict may be on a non-PK
 	// unique key, so the deleted row's PK can differ from the inserted row's PK.
-	var replaceOldPkPos int32 = -1
+	var replaceOldPkPos int32
 	var replaceOldPkTyp plan.Type
 
 	{

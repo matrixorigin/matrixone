@@ -2209,6 +2209,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.qry.Steps[i] = builder.removeUnnecessaryProjections(rootID)
 	}
 
+	// Expose the SINK column remap so irregular-index maintenance sub-plans built
+	// after createQuery can translate pre-prune positions into the materialized
+	// sink's post-prune layout.
+	builder.sinkColRef = sinkColRef
+
 	err = builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
 	if err != nil {
 		return nil, err

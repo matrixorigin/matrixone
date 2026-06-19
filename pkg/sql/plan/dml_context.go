@@ -139,6 +139,28 @@ const externalTableUnsupportedDMLCause = "external table"
 // moerr.NewUnsupportedDML formats it ("unsupported DML: %s").
 const externalTableUnsupportedDMLMsg = "unsupported DML: " + externalTableUnsupportedDMLCause
 
+// noPkOnDupUpdateCause is the cause bindInsert raises for ON DUPLICATE KEY
+// UPDATE on a table with neither a primary key nor a unique key: the modern
+// dedup+MULTI_UPDATE has no key to represent the upsert, so this degenerate
+// corner (semantically a plain INSERT) is deferred to the legacy planner. The
+// INSERT entry point matches the full message to allow the fallback for this
+// case only, without re-routing real PK/unique-key ODKU off the modern path.
+const noPkOnDupUpdateCause = "on duplicate key update without primary or unique key"
+const noPkOnDupUpdateMsg = "unsupported DML: " + noPkOnDupUpdateCause
+
+// childFkCheckPrefix marks a DetectSql as a child→parent foreign-key existence
+// check (as opposed to a self-referencing one). The runtime strips it and, on
+// violation, reports the legacy-compatible internal-error-wrapped message
+// instead of the plain ErrFKNoReferencedRow2, so the modern INSERT path matches
+// the FK error every other path produces. Mirrors the "REPLACE_PARENT_CHK:"
+// convention.
+const childFkCheckPrefix = "CHILD_FK_CHK:"
+
+// childFkViolationMsg is the message the legacy in-plan FK assert raises for a
+// child→parent violation; the runtime reproduces it (wrapped as internal error)
+// for child→parent DetectSql checks.
+const childFkViolationMsg = "Cannot add or update a child row: a foreign key constraint fails"
+
 func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
 	cteMap := make(map[string]bool)
 	if with != nil {

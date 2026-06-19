@@ -74,9 +74,13 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	rootId, err := builder.bindInsert(stmt, bindCtx)
 	if err != nil {
 		// ON DUPLICATE KEY UPDATE is fully handled by the modern path; it must
-		// never fall back to the legacy ODKU operator. Only plain INSERT may
-		// still fall back (e.g. inserting into a system index table).
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML && len(stmt.OnDuplicateUpdate) == 0 {
+		// never fall back to the legacy ODKU operator. Two exceptions still fall
+		// back: plain INSERT (e.g. inserting into a system index table), and the
+		// degenerate ODKU on a table with no primary/unique key (no dedup key to
+		// represent the upsert; legacy treats it as a plain INSERT and preserves
+		// the prepared-statement parameters).
+		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML &&
+			(len(stmt.OnDuplicateUpdate) == 0 || err.Error() == noPkOnDupUpdateMsg) {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
 		}
 		return nil, err
@@ -96,8 +100,11 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 		return nil, err
 	}
 
-	// Enforce foreign key constraints for the modern insert path via DetectSqls
-	// (parent-existence check), the same runtime mechanism used elsewhere for FK.
+	// Enforce foreign key constraints for the modern insert path. Plain INSERT does
+	// the child→parent parent-existence check in-plan (row-scoped, see
+	// modernInsertFkCheckEnabled), so only self-referencing FKs need a post-execution
+	// DetectSql. ON DUPLICATE KEY UPDATE has no row-scoped in-plan check, so it keeps
+	// the whole-table DetectSqls (child→parent + self-refer) instead.
 	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, stmt.With, nil, "insert")
 	if err != nil {
 		return nil, err
@@ -108,8 +115,14 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 			return nil, err
 		}
 		if enabled {
-			sqls, err := genSqlsForCheckFKConstraints(ctx, tblInfo.objRef[0].SchemaName,
-				tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0].Cols, tblInfo.tableDefs[0].Fkeys)
+			var sqls []string
+			if len(stmt.OnDuplicateUpdate) > 0 {
+				sqls, err = genSqlsForCheckFKConstraints(ctx, tblInfo.objRef[0].SchemaName,
+					tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0].Cols, tblInfo.tableDefs[0].Fkeys)
+			} else {
+				sqls, err = genSqlsForCheckFKSelfRefer(ctx.GetContext(), tblInfo.objRef[0].SchemaName,
+					tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0].Cols, tblInfo.tableDefs[0].Fkeys)
+			}
 			if err != nil {
 				return nil, err
 			}

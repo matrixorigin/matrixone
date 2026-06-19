@@ -1276,6 +1276,35 @@ func TestInsertOnDupFKUsesModernPath(t *testing.T) {
 	assert.NotEmpty(t, query.DetectSqls, "FK-table insert should generate FK constraint DetectSqls")
 }
 
+func TestInsertChildParentFKUsesInPlanCheck(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// emp has a child→parent foreign key (deptno references dept(deptno)). A plain
+	// INSERT must enforce it with the row-scoped in-plan assert (a FILTER over the
+	// new-row image joined against the parent), NOT a whole-table DetectSql — the
+	// latter would false-positive on rows inserted earlier under
+	// FOREIGN_KEY_CHECKS=0. Since emp has no self-referencing FK, DetectSqls must be
+	// empty.
+	logicPlan, err := runOneStmt(mock, t, "INSERT INTO emp (empno, deptno) VALUES (1, 10)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+	assert.Empty(t, query.DetectSqls,
+		"plain INSERT with only a child→parent FK should enforce it in-plan, not via DetectSqls")
+
+	hasFilter := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_FILTER && len(node.FilterList) > 0 {
+			hasFilter = true
+			break
+		}
+	}
+	assert.True(t, hasFilter, "child→parent FK INSERT should contain an in-plan assert FILTER node")
+}
+
 func TestInsertOnDupSelfReferFKUsesModernPath(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
