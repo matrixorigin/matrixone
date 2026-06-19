@@ -15,6 +15,7 @@
 package wand
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"math/rand"
@@ -246,7 +247,7 @@ func TestWandSerializeRoundTrip(t *testing.T) {
 	}
 	sum := Checksum(buf)
 
-	m2, err := Deserialize("test", buf)
+	m2, err := Deserialize("test", bytes.NewReader(buf))
 	if err != nil {
 		t.Fatalf("Deserialize: %v", err)
 	}
@@ -302,7 +303,7 @@ func TestWandEdgeCases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m2, err := Deserialize("e", buf)
+	m2, err := Deserialize("e", bytes.NewReader(buf))
 	if err != nil {
 		t.Fatal(err)
 	}

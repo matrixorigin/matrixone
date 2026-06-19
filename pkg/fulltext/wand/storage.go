@@ -15,14 +15,19 @@
 package wand
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"os"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -103,8 +108,11 @@ func DeleteSqls(cfg TableConfig, id string) []string {
 
 // LoadFromStorage reads an index's metadata + chunks back from the WAND store,
 // verifies the checksum, and deserializes it into a model. Chunks are
-// reassembled by chunk_id offset (no ORDER BY needed). The full serialized
-// blob is held in RAM during load; mmap-backed minimization is Phase B.
+// downloaded with STREAMING SQL and written by chunk_id offset into a temp file
+// (so the mpool only ever holds a chunk or two, never the whole index — mirrors
+// HNSW's loadChunk). The model is then deserialized straight from that file,
+// with the large postings going off the Go heap (C allocator). The temp file is
+// removed before returning.
 func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*WandModel, error) {
 	// metadata: checksum + filesize
 	metaSQL := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s",
@@ -135,42 +143,130 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("wand index %s has empty filesize", id))
 	}
 
-	buf := make([]byte, filesize)
+	// temp file sized to filesize; chunks are written by offset (possibly out of
+	// order), so a sparse file via Truncate + WriteAt.
+	fp, err := os.CreateTemp("", "wandidx")
+	if err != nil {
+		return nil, err
+	}
+	path := fp.Name()
+	defer func() {
+		fp.Close()
+		os.Remove(path)
+	}()
+	if err = fp.Truncate(filesize); err != nil {
+		return nil, err
+	}
+
+	if err = streamChunksToFile(sqlproc, cfg, id, filesize, fp); err != nil {
+		return nil, err
+	}
+
+	// verify md5 over the assembled file
+	if got, cerr := vectorindex.CheckSum(path); cerr != nil {
+		return nil, cerr
+	} else if got != checksum {
+		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("wand index %s checksum mismatch", id))
+	}
+
+	if _, err = fp.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	return Deserialize(id, fp)
+}
+
+// streamChunksToFile streams the index's chunk rows from the store and writes
+// each at chunk_id*MaxChunkSize into fp, bounding mpool to the stream buffer.
+func streamChunksToFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, filesize int64, fp *os.File) error {
 	chunkSQL := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s",
 		catalog.FullTextIndex_TblCol_Storage_Chunk_Id, catalog.FullTextIndex_TblCol_Storage_Data,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullTextIndex_TblCol_Storage_Index_Id, sqlquote.String(id))
-	cres, err := sqlexec.RunSql(sqlproc, chunkSQL)
-	if err != nil {
-		return nil, err
-	}
+
+	streamCh := make(chan executor.Result, 2)
+	errorCh := make(chan error, 2)
+	ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
+	defer cancel(nil)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer func() {
+			close(streamCh)
+			wg.Done()
+		}()
+		if _, e := sqlexec.RunStreamingSql(ctx, sqlproc, chunkSQL, streamCh, errorCh); e != nil {
+			errorCh <- e
+		}
+	}()
+
+	var loopErr error
 	var written int64
-	for _, bat := range cres.Batches {
-		if bat == nil || bat.RowCount() == 0 {
-			continue
-		}
-		chunkIDs := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
-		for i, cid := range chunkIDs {
-			data := bat.Vecs[1].GetRawBytesAt(i)
-			offset := cid * int64(vectorindex.MaxChunkSize)
-			if offset < 0 || offset+int64(len(data)) > filesize {
-				cres.Close()
-				return nil, moerr.NewInternalError(sqlproc.GetContext(),
-					fmt.Sprintf("wand index %s chunk %d out of range", id, cid))
+	closed := false
+	for !closed {
+		select {
+		case res, ok := <-streamCh:
+			if !ok {
+				closed = true
+				break
 			}
-			copy(buf[offset:], data)
-			written += int64(len(data))
+			for _, bat := range res.Batches {
+				if bat == nil || bat.RowCount() == 0 {
+					continue
+				}
+				cids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
+				for i, cid := range cids {
+					data := bat.Vecs[1].GetRawBytesAt(i)
+					off := cid * int64(vectorindex.MaxChunkSize)
+					if off < 0 || off+int64(len(data)) > filesize {
+						loopErr = moerr.NewInternalError(sqlproc.GetContext(),
+							fmt.Sprintf("wand index %s chunk %d out of range", id, cid))
+						break
+					}
+					if _, e := fp.WriteAt(data, off); e != nil {
+						loopErr = e
+						break
+					}
+					written += int64(len(data))
+				}
+				if loopErr != nil {
+					break
+				}
+			}
+			res.Close()
+			if loopErr != nil {
+				closed = true
+			}
+		case e := <-errorCh:
+			loopErr = e
+			closed = true
+		case <-ctx.Done():
+			loopErr = context.Cause(ctx)
+			closed = true
 		}
-	}
-	cres.Close()
-	if written != filesize {
-		return nil, moerr.NewInternalError(sqlproc.GetContext(),
-			fmt.Sprintf("wand index %s incomplete: wrote %d of %d bytes", id, written, filesize))
 	}
 
-	if got := vectorindex.CheckSumFromBuffer(buf); got != checksum {
-		return nil, moerr.NewInternalError(sqlproc.GetContext(),
-			fmt.Sprintf("wand index %s checksum mismatch", id))
+	if loopErr != nil {
+		cancel(loopErr)
 	}
-	return Deserialize(id, buf)
+	// drain any remaining results so the producer can exit cleanly
+	for res := range streamCh {
+		res.Close()
+	}
+	wg.Wait()
+	if loopErr == nil {
+		select {
+		case e := <-errorCh:
+			loopErr = e
+		default:
+		}
+	}
+	if loopErr != nil {
+		return loopErr
+	}
+	if written != filesize {
+		return moerr.NewInternalError(sqlproc.GetContext(),
+			fmt.Sprintf("wand index %s incomplete: wrote %d of %d bytes", id, written, filesize))
+	}
+	return nil
 }

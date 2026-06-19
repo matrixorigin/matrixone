@@ -124,5 +124,11 @@ func (s *WandSearch) UpdateConfig(newalgo veccache.VectorIndexSearchIf) error {
 	return nil
 }
 
-// Destroy drops the in-memory model.
-func (s *WandSearch) Destroy() { s.model = nil }
+// Destroy frees the off-heap (C-allocated) postings and drops the model. The
+// cache holds the write lock around this, so no search is in flight.
+func (s *WandSearch) Destroy() {
+	if s.model != nil {
+		s.model.Free()
+		s.model = nil
+	}
+}

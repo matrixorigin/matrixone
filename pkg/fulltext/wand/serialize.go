@@ -23,7 +23,9 @@ import (
 	"math"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -63,10 +65,14 @@ func (m *WandModel) Serialize() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Deserialize parses a tar archive produced by Serialize.
-func Deserialize(id string, data []byte) (*WandModel, error) {
-	tr := tar.NewReader(bytes.NewReader(data))
-	members := map[string][]byte{}
+// Deserialize parses a tar archive produced by Serialize, streaming from r so a
+// multi-GB index is never fully materialized on the Go heap: the small docmap /
+// termdict members are buffered, but the large `wand` postings are read directly
+// into off-heap (C-allocated) buffers. r is typically the temp file the storage
+// chunks were streamed into.
+func Deserialize(id string, r io.Reader) (*WandModel, error) {
+	m := NewWandModel(id, 0)
+	tr := tar.NewReader(r)
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -75,21 +81,28 @@ func Deserialize(id string, data []byte) (*WandModel, error) {
 		if err != nil {
 			return nil, err
 		}
-		b := make([]byte, h.Size)
-		if _, err := io.ReadFull(tr, b); err != nil {
-			return nil, err
+		switch h.Name {
+		case memberDocmap:
+			b := make([]byte, h.Size)
+			if _, err := io.ReadFull(tr, b); err != nil {
+				return nil, err
+			}
+			if err := m.decodeDocmap(b); err != nil {
+				return nil, err
+			}
+		case memberTermDict:
+			b := make([]byte, h.Size)
+			if _, err := io.ReadFull(tr, b); err != nil {
+				return nil, err
+			}
+			if err := m.decodeTermDict(b); err != nil {
+				return nil, err
+			}
+		case memberWand:
+			if err := m.decodeWand(tr); err != nil { // streams postings into C buffers
+				return nil, err
+			}
 		}
-		members[h.Name] = b
-	}
-	m := NewWandModel(id, 0)
-	if err := m.decodeDocmap(members[memberDocmap]); err != nil {
-		return nil, err
-	}
-	if err := m.decodeTermDict(members[memberTermDict]); err != nil {
-		return nil, err
-	}
-	if err := m.decodeWand(members[memberWand]); err != nil {
-		return nil, err
 	}
 	m.N = int64(len(m.pks))
 	m.finalizeScoring() // derive AvgDocLen + per-term max BM25 factor
@@ -207,9 +220,12 @@ func (m *WandModel) encodeWand() []byte {
 	var b bytes.Buffer
 	_ = binary.Write(&b, binary.LittleEndian, int64(len(m.terms)))
 	ids := make([]int32, 0, len(m.terms))
+	var totalP int64
 	for id := range m.terms {
 		ids = append(ids, id)
+		totalP += int64(len(m.terms[id].docIDs))
 	}
+	_ = binary.Write(&b, binary.LittleEndian, totalP)               // total postings, for one off-heap alloc on load
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] }) // deterministic output
 	for _, id := range ids {
 		tp := m.terms[id]
@@ -221,12 +237,37 @@ func (m *WandModel) encodeWand() []byte {
 	return b.Bytes()
 }
 
-func (m *WandModel) decodeWand(data []byte) error {
-	r := bytes.NewReader(data)
-	var nterms int64
+func (m *WandModel) decodeWand(r io.Reader) error {
+	var nterms, totalP int64
 	if err := binary.Read(r, binary.LittleEndian, &nterms); err != nil {
 		return err
 	}
+	if err := binary.Read(r, binary.LittleEndian, &totalP); err != nil {
+		return err
+	}
+
+	// Allocate all postings OFF the Go heap (C allocator) in two contiguous
+	// buffers; each term's docIDs/tfs is a slice into them. This keeps a
+	// multi-GB index off the Go heap (no GC scan) and out of the query mpool;
+	// freed by Free() on cache eviction. OOM surfaces as an error here.
+	if totalP > 0 {
+		alloc := malloc.NewCAllocator()
+		ob, odec, err := alloc.Allocate(uint64(totalP)*uint64(util.UnsafeSizeOf[int64]()), malloc.NoClear)
+		if err != nil {
+			return err
+		}
+		m.deallocators = append(m.deallocators, odec)
+		m.bigOrds = util.UnsafeSliceCastToLength[int64](ob, int(totalP))
+
+		tb, tdec, err := alloc.Allocate(uint64(totalP), malloc.NoClear)
+		if err != nil {
+			return err
+		}
+		m.deallocators = append(m.deallocators, tdec)
+		m.bigTfs = util.UnsafeSliceCastToLength[uint8](tb, int(totalP))
+	}
+
+	var cur int64
 	for t := int64(0); t < nterms; t++ {
 		var id int32
 		if err := binary.Read(r, binary.LittleEndian, &id); err != nil {
@@ -236,14 +277,19 @@ func (m *WandModel) decodeWand(data []byte) error {
 		if err := binary.Read(r, binary.LittleEndian, &df); err != nil {
 			return err
 		}
-		tp := &termPostings{docIDs: make([]int64, df), tfs: make([]uint8, df)}
-		if err := binary.Read(r, binary.LittleEndian, tp.docIDs); err != nil {
+		if cur+int64(df) > totalP {
+			return moerr.NewInternalErrorNoCtx("wand: postings overflow totalP")
+		}
+		ords := m.bigOrds[cur : cur+int64(df)]
+		tfs := m.bigTfs[cur : cur+int64(df)]
+		if err := binary.Read(r, binary.LittleEndian, ords); err != nil {
 			return err
 		}
-		if _, err := io.ReadFull(r, tp.tfs); err != nil {
+		if _, err := io.ReadFull(r, tfs); err != nil {
 			return err
 		}
-		m.terms[id] = tp
+		m.terms[id] = &termPostings{docIDs: ords, tfs: tfs}
+		cur += int64(df)
 	}
 	return nil
 }

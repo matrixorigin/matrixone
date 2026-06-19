@@ -35,6 +35,7 @@ package wand
 import (
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 )
@@ -75,8 +76,30 @@ type WandModel struct {
 
 	pks      []any                   // ord -> original pk value (for output via AppendAny)
 	docLen   []int32                 // ord -> document length (token count), for BM25
-	terms    map[int32]*termPostings // word-id -> postings
+	terms    map[int32]*termPostings // word-id -> postings (slices into bigOrds/bigTfs when C-loaded)
 	overflow map[string]int32        // out-of-dict term -> overflow word-id (query resolution)
+
+	// When loaded from storage the postings live OFF the Go heap (C allocator):
+	// all term doc-ords/tfs are concatenated into these two buffers and each
+	// termPostings slices into them. Freed via deallocators on cache eviction.
+	// Build-side models leave these nil (per-term Go-heap slices) — Free is then
+	// a no-op.
+	bigOrds      []int64
+	bigTfs       []uint8
+	deallocators []malloc.Deallocator
+}
+
+// Free releases the off-heap (C-allocated) postings buffers. Safe to call on a
+// build-side model (no deallocators → no-op). After Free the model must not be
+// searched; the VectorIndexCache holds the write lock when calling Destroy.
+func (m *WandModel) Free() {
+	for _, d := range m.deallocators {
+		d.Deallocate()
+	}
+	m.deallocators = nil
+	m.bigOrds = nil
+	m.bigTfs = nil
+	m.terms = nil
 }
 
 // NewWandModel returns an empty model.
