@@ -156,11 +156,6 @@ const noPkOnDupUpdateMsg = "unsupported DML: " + noPkOnDupUpdateCause
 // convention.
 const childFkCheckPrefix = "CHILD_FK_CHK:"
 
-// childFkViolationMsg is the message the legacy in-plan FK assert raises for a
-// child→parent violation; the runtime reproduces it (wrapped as internal error)
-// for child→parent DetectSql checks.
-const childFkViolationMsg = "Cannot add or update a child row: a foreign key constraint fails"
-
 func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
 	cteMap := make(map[string]bool)
 	if with != nil {

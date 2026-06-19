@@ -417,17 +417,17 @@ func (builder *QueryBuilder) buildIrregularIndexDeleteMaintenance(bindCtx *BindC
 	tableDef := builder.irregularMaintTableDef
 
 	// The delete-PK position was recorded against the pre-prune materialized image.
-	// createQuery's column pruning may have dropped unreferenced columns (e.g. the
-	// new-row Row_ID copy) ahead of it and renumbered the survivors, so translate
-	// the recorded position into the post-prune sink layout the maintenance
-	// sink-scan actually exposes. The PK column always survives (the main
-	// MULTI_UPDATE references it), so a missing entry leaves the position unchanged.
-	// The delete-PK position was recorded against the pre-prune materialized image.
 	// createQuery's column pruning can drop unreferenced columns ahead of it and
-	// renumber the survivors. The recorded position normally still indexes the
-	// post-prune sink correctly; only when pruning shrank the sink below it (which
-	// would otherwise index out of range) do we translate it through sinkColRef to
-	// its surviving position.
+	// renumber the survivors, so the recorded position may be larger than the
+	// post-prune sink. Only when it would index out of range do we translate it
+	// through sinkColRef to its surviving position; in range we keep it as-is.
+	//
+	// This is deliberately not an unconditional remap: doing so was observed to
+	// mis-key the unique-key REPLACE delete (the recorded position already indexes
+	// the materialized sink the delete sink-scan exposes for every in-range case in
+	// the suite — base PK, ODKU, and both REPLACE conflict kinds — whereas the
+	// sinkColRef translation pointed one column off). The translation is therefore
+	// only used to keep bug_22340's out-of-range case from panicking.
 	if builder.sinkColRef != nil {
 		sinkNode := builder.qry.Nodes[builder.qry.Steps[builder.irregularMaintDeleteStep]]
 		if int(builder.irregularMaintDeletePkPos) >= len(sinkNode.ProjectList) {
