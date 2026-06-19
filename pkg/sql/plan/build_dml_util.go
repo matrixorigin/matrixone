@@ -30,6 +30,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -4426,8 +4427,9 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		return false
 	}
 
-	// skip async
-	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	// skip async — always-async (fulltext retrieval) OR the per-index `async`
+	// param. Unified decision so inline DML and CDC never disagree.
+	async, err := indexplugin.IndexIsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -4862,8 +4864,9 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx,
 	indexdef *plan.IndexDef, idx int, typMap map[string]plan.Type, posMap map[string]int) error {
 
-	// skip async
-	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	// skip async — always-async (fulltext retrieval) OR the per-index `async`
+	// param. Unified decision so inline DML and CDC never disagree.
+	async, err := indexplugin.IndexIsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -4902,8 +4905,9 @@ func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bin
 func buildPostDmlFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, indexObjRef *ObjectRef, indexTableDef *TableDef, tableDef *TableDef,
 	sourceStep int32, indexdef *plan.IndexDef, idx int, isDelete, isInsert, isDeleteWithoutFilters bool) error {
 
-	// skip async
-	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	// skip async — always-async (fulltext retrieval) OR the per-index `async`
+	// param. Unified decision so inline DML and CDC never disagree.
+	async, err := indexplugin.IndexIsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}

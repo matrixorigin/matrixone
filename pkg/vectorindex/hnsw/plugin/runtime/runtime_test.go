@@ -76,7 +76,7 @@ func TestHnswSupportedOpTypes(t *testing.T) {
 func TestHnswSyncDescriptor(t *testing.T) {
 	d := CatalogHooks{}.SyncDescriptor()
 	require.True(t, d.UsesCDC)
-	require.True(t, d.AlwaysAsync)
+	require.True(t, CatalogHooks{}.AlwaysAsync(""))
 }
 
 func TestHnswParamsFromTree_Defaults(t *testing.T) {

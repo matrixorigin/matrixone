@@ -1152,7 +1152,8 @@ func cloneUnaffectedIndexes(
 			continue
 		}
 
-		async, err := catalog.IsIndexAsync(oriIdxTblNames.IndexAlgoParams)
+		// async = always-async (parser-aware) OR the per-index `async` param.
+		async, err := indexplugin.IndexIsAsync(oriIdxTblNames.IndexAlgo, oriIdxTblNames.IndexAlgoParams)
 		if err != nil {
 			return err
 		}
@@ -1173,15 +1174,14 @@ func cloneUnaffectedIndexes(
 		var cloneBehavior catalogplugin.AlterTableCloneBehavior
 		if !oriIdxTblNames.Unique {
 			if p, ok := indexplugin.Get(oriIdxTblNames.IndexAlgo); ok {
-				d := p.Catalog().SyncDescriptor()
 				cloneBehavior = p.Catalog().AlterTableCloneBehavior()
 				// Whole-index skip is an EXPLICIT policy (SkipWholeIndex), not
 				// inferred from UsesCDC — a CDC algorithm can still need its model
 				// tables cloned (IVF-FLAT clones metadata + centroids and only
 				// CDC-rebuilds entries via the per-hidden-table policy below).
-				// HNSW is AlwaysAsync; CAGRA / IVF-PQ / fulltext gate on the
-				// per-index async param.
-				if (d.AlwaysAsync || async) && cloneBehavior.SkipWholeIndex {
+				// `async` already folds in always-async (HNSW; fulltext retrieval)
+				// and the per-index async param.
+				if async && cloneBehavior.SkipWholeIndex {
 					logutil.Infof("cloneUnaffectedIndex: skip whole async index %v\n", oriIdxTblNames)
 					continue
 				}

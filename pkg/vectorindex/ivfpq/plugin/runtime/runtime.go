@@ -158,12 +158,14 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	return catalogplugin.SyncDescriptor{
 		UsesCDC:           true,
 		SinkerType:        catalogplugin.SinkerType_IndexSync,
-		AlwaysAsync:       true,
 		IdxcronAction:     actionIvfpqReindex,
 		IdxcronAlgoToken:  "IVFPQ",
 		IdxcronListsAware: false,
 	}
 }
+
+// AlwaysAsync — IVF-PQ is unconditionally async (maintained via CDC).
+func (CatalogHooks) AlwaysAsync(string) bool { return true }
 
 // Build-param defaults mirror the frontend session-var defaults; the build
 // path (ivfpq_create) uses them when the flat algo_params key is absent (a

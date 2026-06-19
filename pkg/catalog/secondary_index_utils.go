@@ -102,6 +102,7 @@ const (
 	HnswEfConstruction      = "ef_construction"
 	HnswEfSearch            = "ef_search"
 	Async                   = "async"
+	IndexAlgoParamParser    = "parser"
 	AutoUpdate              = "auto_update"
 	Day                     = "day"
 	Hour                    = "hour"
@@ -350,6 +351,23 @@ func DefaultIvfIndexAlgoOptions() map[string]string {
 	res[IndexAlgoParamLists] = "1"                       // set lists = 1 as default
 	res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
 	return res
+}
+
+// GetIndexParser returns the fulltext `parser` value from IndexAlgoParams
+// (e.g. "ngram", "retrieval"), or "" when absent. Mirrors IsIndexAsync.
+func GetIndexParser(indexAlgoParams string) string {
+	if len(indexAlgoParams) == 0 {
+		return ""
+	}
+	val, err := sonic.Get([]byte(indexAlgoParams), IndexAlgoParamParser)
+	if err != nil {
+		return ""
+	}
+	s, err := val.StrictString()
+	if err != nil {
+		return ""
+	}
+	return s
 }
 
 func IsIndexAsync(indexAlgoParams string) (bool, error) {

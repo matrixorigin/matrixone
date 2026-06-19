@@ -32,6 +32,100 @@ type Membership interface {
 
 const ordEnd = int64(0x7fffffffffffffff)
 
+// ordAllowSet is a dense per-segment allow-set over ords [0, n) used to carry
+// precomputed liveness (owner-by-LSN ∩ not-deleted) into the WAND walk via the
+// existing Membership interface. allow[ord]==true ⇒ the ord is live.
+type ordAllowSet struct{ allow []bool }
+
+func (s *ordAllowSet) Contains(ord int64) bool {
+	return ord >= 0 && ord < int64(len(s.allow)) && s.allow[ord]
+}
+
+// andMembership is the conjunction of two Membership filters (either may be
+// nil = "allow all"); used to AND a WHERE-prefilter with per-segment liveness.
+type andMembership struct{ a, b Membership }
+
+func (m andMembership) Contains(ord int64) bool {
+	if m.a != nil && !m.a.Contains(ord) {
+		return false
+	}
+	if m.b != nil && !m.b.Contains(ord) {
+		return false
+	}
+	return true
+}
+
+func andAllow(a, b Membership) Membership {
+	switch {
+	case a == nil:
+		return b
+	case b == nil:
+		return a
+	default:
+		return andMembership{a, b}
+	}
+}
+
+// ComputeLiveness resolves, once when a segment set is assembled (load time),
+// which ord in each segment is the LIVE copy of its pk — the LSN-as-identity
+// rule that makes CDC delete-then-reinsert / UPDATE correct over immutable
+// segments:
+//
+//   - a pk's live copy is the one in the HIGHEST-LSN segment that holds it
+//     (older copies of an UPDATEd pk are superseded — dedup, no duplicate row);
+//   - that copy is dead iff a delete exists with deleteLSN > thatSegmentLSN
+//     (a delete after the latest insert; a delete before it is superseded).
+//
+// deletes maps normalizeKey(pk) -> max deleteLSN seen for that pk (nil = none).
+// The result is parallel to segs: entry i is a Membership over segment i's ords
+// (nil ⇒ every ord live, the fast path for a single/compacted segment), passed
+// to SearchSegmentsLive. O(total docs), done once per load, not per query.
+func ComputeLiveness(segs []*WandModel, deletes map[any]int64) []Membership {
+	if len(segs) == 0 {
+		return nil
+	}
+	// Fast path: a single segment with no deletes — everything is live.
+	if len(segs) == 1 && len(deletes) == 0 {
+		return []Membership{nil}
+	}
+
+	// owner[pk] = the max segment LSN holding pk (the live copy's segment).
+	owner := make(map[any]int64)
+	for _, s := range segs {
+		for _, pk := range s.pks {
+			k := normalizeKey(pk)
+			if cur, ok := owner[k]; !ok || s.LSN >= cur {
+				owner[k] = s.LSN
+			}
+		}
+	}
+
+	out := make([]Membership, len(segs))
+	for i, s := range segs {
+		allLive := true
+		allow := make([]bool, len(s.pks))
+		for ord, pk := range s.pks {
+			k := normalizeKey(pk)
+			live := owner[k] == s.LSN // this segment owns the live copy
+			if live && deletes != nil {
+				if dl, ok := deletes[k]; ok && dl > s.LSN {
+					live = false // deleted after the latest insert
+				}
+			}
+			allow[ord] = live
+			if !live {
+				allLive = false
+			}
+		}
+		if allLive {
+			out[i] = nil
+		} else {
+			out[i] = &ordAllowSet{allow: allow}
+		}
+	}
+	return out
+}
+
 type cursor struct {
 	tp        *termPostings
 	idfSq     float64
@@ -109,13 +203,25 @@ func (m *WandModel) Search(terms []string, limit int, allow Membership) []Search
 	return SearchSegments([]*WandModel{m}, terms, limit, allow)
 }
 
-// SearchSegments runs WAND disjunctive top-K across one or more index segments
-// with CORPUS-GLOBAL BM25 scoring, so the merged top-K is correctly ranked even
-// when each segment holds only a slice of the corpus. Global N, avgdl and per-
-// term df are aggregated across segments, then each segment's Block-Max walk
-// pushes into one shared bounded heap (the running k-th score prunes later
-// segments too). limit is K; allow, if non-nil, restricts to allowed doc ords.
+// SearchSegments runs the WAND top-K over the segment set with no liveness
+// filtering — valid for a single index or DISJOINT FinishSegments partitions
+// (whose pks never collide). For CDC delta segments (where a pk can recur across
+// segments) use SearchSegmentsLive with ComputeLiveness, else a re-inserted pk
+// would appear once per segment.
 func SearchSegments(segs []*WandModel, terms []string, limit int, allow Membership) []SearchResult {
+	return SearchSegmentsLive(segs, terms, limit, allow, nil)
+}
+
+// SearchSegmentsLive runs WAND disjunctive top-K across one or more index
+// segments with CORPUS-GLOBAL BM25 scoring, so the merged top-K is correctly
+// ranked even when each segment holds only a slice of the corpus. Global N,
+// avgdl and per-term df are aggregated across segments, then each segment's
+// Block-Max walk pushes into one shared bounded heap (the running k-th score
+// prunes later segments too). limit is K; allow, if non-nil, is the WHERE-clause
+// prefilter over doc ords. live, if non-nil, is parallel to segs (from
+// ComputeLiveness): live[i] is ANDed with allow for segment i so superseded /
+// deleted ords are skipped. A nil live or a nil live[i] means "all ords live".
+func SearchSegmentsLive(segs []*WandModel, terms []string, limit int, allow Membership, live []Membership) []SearchResult {
 	if limit <= 0 || len(terms) == 0 || len(segs) == 0 {
 		return nil
 	}
@@ -159,8 +265,12 @@ func SearchSegments(segs []*WandModel, terms []string, limit int, allow Membersh
 	}
 
 	h := newTopK(limit)
-	for _, s := range segs {
-		s.searchInto(h, weights, gN, gAvgDocLen, gdf, allow)
+	for i, s := range segs {
+		segAllow := allow
+		if i < len(live) {
+			segAllow = andAllow(allow, live[i])
+		}
+		s.searchInto(h, weights, gN, gAvgDocLen, gdf, segAllow)
 	}
 	return h.sorted()
 }

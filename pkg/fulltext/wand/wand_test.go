@@ -294,6 +294,225 @@ func TestWandMerge(t *testing.T) {
 	}
 }
 
+// buildSeg builds a one-flush delta segment with the given LSN (its batch-LSN
+// identity). docs maps pk -> the terms occurring in that doc (one tf each).
+func buildSeg(t *testing.T, lsn int64, docs map[int64][]string) *WandModel {
+	b := NewBuilder(fmt.Sprintf("seg%d", lsn), testPkType)
+	for pk, terms := range docs {
+		for _, term := range terms {
+			if err := b.Add(term, pk); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	m := b.Finish()
+	m.LSN = lsn
+	return m
+}
+
+// pkCounts returns pk -> number of times it appears in the results (so a value
+// > 1 flags a cross-segment duplicate).
+func pkCounts(res []SearchResult) map[int64]int {
+	out := map[int64]int{}
+	for _, r := range res {
+		out[r.DocID.(int64)]++
+	}
+	return out
+}
+
+// TestWandLiveness exercises the LSN-as-identity rule (ComputeLiveness +
+// SearchSegmentsLive) that makes CDC delete-then-reinsert / UPDATE correct over
+// immutable segments. Assertions are on the LIVE pk SET (dedup / delete /
+// reinsert), not exact scores: global N/df/avgdl intentionally still include
+// superseded+deleted docs until compaction (accepted stat drift), so scores
+// drift but membership must be exact.
+func TestWandLiveness(t *testing.T) {
+	q := []string{"x"}
+
+	// 1. UPDATE = same pk in two segments → newest-LSN wins, exactly one row.
+	t.Run("dedup_update", func(t *testing.T) {
+		segs := []*WandModel{
+			buildSeg(t, 1, map[int64][]string{5: {"x"}, 6: {"x"}}),
+			buildSeg(t, 2, map[int64][]string{5: {"x"}}), // pk 5 updated
+		}
+		live := ComputeLiveness(segs, nil)
+		got := pkCounts(SearchSegmentsLive(segs, q, 10, nil, live))
+		if got[5] != 1 || got[6] != 1 || len(got) != 2 {
+			t.Fatalf("dedup: want {5:1,6:1}, got %v", got)
+		}
+		// Without liveness the stale copy leaks → pk 5 appears twice (this is
+		// exactly why the search adapter must use ComputeLiveness).
+		dup := pkCounts(SearchSegments(segs, q, 10, nil))
+		if dup[5] != 2 {
+			t.Fatalf("expected the no-liveness path to duplicate pk 5, got %v", dup)
+		}
+	})
+
+	// 2. DELETE then reINSERT at a higher LSN → live again.
+	t.Run("delete_then_reinsert", func(t *testing.T) {
+		segs := []*WandModel{
+			buildSeg(t, 1, map[int64][]string{5: {"x"}}),
+			buildSeg(t, 3, map[int64][]string{5: {"x"}}), // reinsert at LSN 3
+		}
+		deletes := map[any]int64{normalizeKey(int64(5)): 2} // delete at LSN 2 < 3
+		got := pkCounts(SearchSegmentsLive(segs, q, 10, nil, ComputeLiveness(segs, deletes)))
+		if got[5] != 1 || len(got) != 1 {
+			t.Fatalf("delete-then-reinsert: want {5:1}, got %v", got)
+		}
+	})
+
+	// 3. DELETE after the latest insert → gone.
+	t.Run("delete_after_insert", func(t *testing.T) {
+		segs := []*WandModel{
+			buildSeg(t, 1, map[int64][]string{5: {"x"}}),
+			buildSeg(t, 3, map[int64][]string{5: {"x"}}),
+		}
+		deletes := map[any]int64{normalizeKey(int64(5)): 4} // delete at LSN 4 > 3
+		got := pkCounts(SearchSegmentsLive(segs, q, 10, nil, ComputeLiveness(segs, deletes)))
+		if len(got) != 0 {
+			t.Fatalf("delete-after-insert: want empty, got %v", got)
+		}
+	})
+
+	// 4. Pure DELETE of one pk among several.
+	t.Run("pure_delete", func(t *testing.T) {
+		segs := []*WandModel{buildSeg(t, 1, map[int64][]string{5: {"x"}, 6: {"x"}, 7: {"x"}})}
+		deletes := map[any]int64{normalizeKey(int64(6)): 2}
+		got := pkCounts(SearchSegmentsLive(segs, q, 10, nil, ComputeLiveness(segs, deletes)))
+		if got[5] != 1 || got[7] != 1 || got[6] != 0 || len(got) != 2 {
+			t.Fatalf("pure-delete: want {5,7}, got %v", got)
+		}
+	})
+
+	// 5. Mixed: insert base, update one + insert one in a delta, delete one.
+	t.Run("mixed", func(t *testing.T) {
+		segs := []*WandModel{
+			buildSeg(t, 1, map[int64][]string{1: {"x"}, 2: {"x"}, 3: {"x"}}),
+			buildSeg(t, 2, map[int64][]string{2: {"x"}, 4: {"x"}}), // 2 updated, 4 new
+		}
+		deletes := map[any]int64{normalizeKey(int64(3)): 2} // delete 3
+		got := pkCounts(SearchSegmentsLive(segs, q, 10, nil, ComputeLiveness(segs, deletes)))
+		want := map[int64]int{1: 1, 2: 1, 4: 1}
+		if len(got) != len(want) {
+			t.Fatalf("mixed: want %v, got %v", want, got)
+		}
+		for pk, n := range want {
+			if got[pk] != n {
+				t.Fatalf("mixed: pk %d want %d, got %d (full %v)", pk, n, got[pk], got)
+			}
+		}
+	})
+}
+
+// TestWandToInsertSqlsTag checks the tag column threads through: tag=0 for the
+// compacted main index, tag=1 for a CDC delta segment.
+func TestWandToInsertSqlsTag(t *testing.T) {
+	b := NewBuilder("seg-1", testPkType)
+	for _, term := range []string{"a", "b", "营养"} {
+		if err := b.Add(term, int64(1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := b.Finish()
+	cfg := TableConfig{DbName: "db", IndexTable: "ft_index", MetadataTable: "ft_meta"}
+
+	for _, tag := range []int{0, 1} {
+		sqls, err := m.ToInsertSqls(cfg, 123, tag)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// the chunk INSERT(s) must carry the requested tag, and the wrong tag
+		// must not appear.
+		want := fmt.Sprintf(", %d)", tag)
+		bad := fmt.Sprintf(", %d)", 1-tag)
+		found := false
+		for _, s := range sqls {
+			if bytes.Contains([]byte(s), []byte("ft_index")) {
+				if !bytes.Contains([]byte(s), []byte(want)) {
+					t.Fatalf("tag=%d: chunk insert missing %q: %s", tag, want, s)
+				}
+				if bytes.Contains([]byte(s), []byte(bad)) {
+					t.Fatalf("tag=%d: chunk insert has wrong tag %q: %s", tag, bad, s)
+				}
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("tag=%d: no ft_index chunk insert generated", tag)
+		}
+	}
+}
+
+// TestWandDeleteLogRoundTrip checks the tag=1 delete-log codec round-trips for
+// int64 and varchar PKs, validates CRC, and folds to the max-LSN map.
+func TestWandDeleteLogRoundTrip(t *testing.T) {
+	t.Run("int64", func(t *testing.T) {
+		recs := []DeleteRecord{{Pk: int64(5), LSN: 2}, {Pk: int64(9), LSN: 7}, {Pk: int64(5), LSN: 4}}
+		buf, err := EncodeDeleteLog(int32(types.T_int64), recs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := DecodeDeleteLog(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(recs) {
+			t.Fatalf("want %d recs, got %d", len(recs), len(got))
+		}
+		for i := range recs {
+			if got[i].Pk.(int64) != recs[i].Pk.(int64) || got[i].LSN != recs[i].LSN {
+				t.Fatalf("rec %d mismatch: want %v got %v", i, recs[i], got[i])
+			}
+		}
+		// max-LSN fold: pk 5 deleted at 2 then 4 → 4 wins.
+		m := DeleteMap(got)
+		if m[normalizeKey(int64(5))] != 4 || m[normalizeKey(int64(9))] != 7 {
+			t.Fatalf("DeleteMap fold wrong: %v", m)
+		}
+	})
+
+	t.Run("varchar", func(t *testing.T) {
+		recs := []DeleteRecord{{Pk: []byte("doc-a"), LSN: 1}, {Pk: []byte("doc-b"), LSN: 3}}
+		buf, err := EncodeDeleteLog(int32(types.T_varchar), recs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := DecodeDeleteLog(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := DeleteMap(got)
+		if m[normalizeKey([]byte("doc-a"))] != 1 || m[normalizeKey([]byte("doc-b"))] != 3 {
+			t.Fatalf("varchar DeleteMap wrong: %v", m)
+		}
+	})
+
+	t.Run("corruption_detected", func(t *testing.T) {
+		buf, err := EncodeDeleteLog(int32(types.T_int64), []DeleteRecord{{Pk: int64(1), LSN: 1}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		buf[8] ^= 0xff // flip a byte in the body
+		if _, err := DecodeDeleteLog(buf); err == nil {
+			t.Fatal("expected checksum mismatch error")
+		}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		buf, err := EncodeDeleteLog(int32(types.T_int64), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := DecodeDeleteLog(buf)
+		if err != nil || len(got) != 0 {
+			t.Fatalf("empty round-trip: got %v err %v", got, err)
+		}
+		if DeleteMap(got) != nil {
+			t.Fatal("empty DeleteMap should be nil")
+		}
+	})
+}
+
 // ordMembership filters by pk, evaluated on doc ords via the model's pk map.
 type ordMembership struct {
 	m       *WandModel

@@ -72,6 +72,20 @@ func TestFullTextSyncDescriptor(t *testing.T) {
 	require.Equal(t, "", d.IdxcronAction)   // no scheduled rebuild
 }
 
+func TestFullTextAlwaysAsync(t *testing.T) {
+	h := CatalogHooks{}
+	// Only the retrieval parser is unconditionally async (WAND binary index
+	// maintained via CDC); ngram/default/empty stay sync (param-gated).
+	require.True(t, h.AlwaysAsync(`{"parser":"retrieval"}`))
+	require.False(t, h.AlwaysAsync(`{"parser":"ngram"}`))
+	require.False(t, h.AlwaysAsync(`{"parser":"default"}`))
+	require.False(t, h.AlwaysAsync(`{}`))
+	require.False(t, h.AlwaysAsync(""))
+	// async-ness of a non-retrieval index still comes from the `async` param,
+	// not AlwaysAsync.
+	require.False(t, h.AlwaysAsync(`{"parser":"ngram","async":"true"}`))
+}
+
 func TestFullTextParamsFromTree_Rejected(t *testing.T) {
 	// Fulltext parses to *tree.FullTextIndex, not *tree.Index, so the
 	// generic ParamsFromTree hook is unreachable; it returns an error.

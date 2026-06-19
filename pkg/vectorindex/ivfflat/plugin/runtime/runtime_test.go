@@ -93,7 +93,7 @@ func TestIvfflatSupportedOpTypes(t *testing.T) {
 func TestIvfflatSyncDescriptor(t *testing.T) {
 	d := CatalogHooks{}.SyncDescriptor()
 	require.True(t, d.UsesCDC)
-	require.False(t, d.AlwaysAsync)
+	require.False(t, CatalogHooks{}.AlwaysAsync(""))
 	require.Equal(t, actionIvfflatReindex, d.IdxcronAction)
 }
 

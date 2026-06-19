@@ -138,12 +138,14 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	return catalogplugin.SyncDescriptor{
 		UsesCDC:           true,
 		SinkerType:        catalogplugin.SinkerType_IndexSync,
-		AlwaysAsync:       true,
 		IdxcronAction:     actionCagraReindex,
 		IdxcronAlgoToken:  "CAGRA",
 		IdxcronListsAware: false,
 	}
 }
+
+// AlwaysAsync — CAGRA is unconditionally async (maintained via CDC).
+func (CatalogHooks) AlwaysAsync(string) bool { return true }
 
 // DefaultMaxIndexCapacity mirrors the cagra_max_index_capacity session-var
 // default; the build path (cagra_create) uses it when the flat algo_params key

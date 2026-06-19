@@ -275,6 +275,7 @@ func (m mockCatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
 func (m mockCatalogHooks) BuildSessionVars() []string                   { return nil }
 func (m mockCatalogHooks) ShouldTruncateHiddenTable(_ string) bool      { return false }
 func (m mockCatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor { return m.d }
+func (m mockCatalogHooks) AlwaysAsync(string) bool                      { return false }
 
 // alwaysUpdatable is the trivial idxcron hook the mock uses — runReindex
 // callers in tests don't exercise the CDC-delta gate.

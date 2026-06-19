@@ -83,6 +83,21 @@ func Get(algo string) (AlgoPlugin, bool) {
 	return p, ok
 }
 
+// IndexIsAsync reports whether an index is maintained asynchronously (via CDC,
+// no inline DML). It is the single source of truth for the sync-vs-async DML/CDC
+// decision: true when the algorithm is always-async (parser-aware — see
+// catalog.Hooks.AlwaysAsync) OR the per-index `async` param is set. Plain
+// (non-plugin) indexes fall back to the `async` param alone.
+//
+// Route every sync-vs-async site through this (CDC registration, ALTER clone,
+// the fulltext pre/post-DML build paths) so the decision can never diverge.
+func IndexIsAsync(algo, indexAlgoParams string) (bool, error) {
+	if p, ok := Get(algo); ok && p.Catalog().AlwaysAsync(indexAlgoParams) {
+		return true, nil
+	}
+	return catalog.IsIndexAsync(indexAlgoParams)
+}
+
 // All returns every registered plugin. Useful for catalog enumeration.
 func All() []AlgoPlugin {
 	registryMu.RLock()

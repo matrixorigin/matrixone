@@ -159,13 +159,12 @@ func (CatalogHooks) SupportedOpTypes() map[string]string {
 //   - idxcron `ivfflat_reindex` (scheduled rebuild — re-cluster centroids
 //     and rebuild entries on the configured cadence).
 //
-// AlwaysAsync=false: CDC participation depends on the `async` param.
+// CDC participation depends on the `async` param (see AlwaysAsync below).
 // Matches the legacy inline behaviour in pkg/sql/compile/iscp_util.go.
 func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	return catalogplugin.SyncDescriptor{
 		UsesCDC:       true,
 		SinkerType:    catalogplugin.SinkerType_IndexSync,
-		AlwaysAsync:   false,
 		IdxcronAction: actionIvfflatReindex,
 		// IdxcronAlgoToken is the keyword the cron executor splices into
 		// the ALTER ... REINDEX SQL. IdxcronListsAware=true keeps the
@@ -175,6 +174,10 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 		IdxcronListsAware: true,
 	}
 }
+
+// AlwaysAsync — IVF-FLAT gates CDC on the per-index `async` param, so it is
+// never unconditionally async.
+func (CatalogHooks) AlwaysAsync(string) bool { return false }
 
 // Build-param defaults mirror the frontend session-var defaults; the build
 // path (ivf_create) uses them when the flat algo_params key is absent (a

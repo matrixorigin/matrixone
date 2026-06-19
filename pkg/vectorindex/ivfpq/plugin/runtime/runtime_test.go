@@ -83,7 +83,7 @@ func TestIvfpqSyncDescriptor(t *testing.T) {
 	// (Phase 4 / 3.9 wiring). Mirrors CAGRA.
 	d := CatalogHooks{}.SyncDescriptor()
 	require.True(t, d.UsesCDC)
-	require.True(t, d.AlwaysAsync)
+	require.True(t, CatalogHooks{}.AlwaysAsync(""))
 	require.Equal(t, catalogplugin.SinkerType_IndexSync, d.SinkerType)
 	require.Equal(t, "ivfpq_reindex", d.IdxcronAction)
 	require.Equal(t, "IVFPQ", d.IdxcronAlgoToken)

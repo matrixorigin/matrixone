@@ -83,12 +83,20 @@ type termPostings struct {
 	blockMinDl   []int32 // min doc length in each block
 }
 
-// WandModel is the loadable in-memory index.
+// WandModel is the loadable in-memory index (one segment).
 type WandModel struct {
 	Id        string
 	N         int64   // number of documents (= len(pks))
 	PkType    int32   // types.T of the source primary key, for output decode + membership
 	AvgDocLen float64 // average doc length (derived from DocLen), for BM25
+
+	// LSN is the segment's monotonic identity — the ISCP batch LSN that built it
+	// (= its storage index_id, parsed numerically). It is the recency key for
+	// CDC delta segments: when the same pk lands in multiple segments (UPDATE /
+	// reinsert), only the highest-LSN copy is live (see ComputeLiveness). 0 for a
+	// single non-segmented index or for disjoint FinishSegments partitions (whose
+	// pks never collide), where dedup is a no-op.
+	LSN int64
 
 	pks      []any                   // ord -> original pk value (for output via AppendAny)
 	docLen   []int32                 // ord -> document length (token count), for BM25

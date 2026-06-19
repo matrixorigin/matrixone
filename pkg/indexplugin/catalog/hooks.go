@@ -153,6 +153,19 @@ type Hooks interface {
 	//   checkValidIndexUpdateByIndexdef, CreateAllIndexUpdateTasks,
 	//   DropAllIndexUpdateTasks.
 	SyncDescriptor() SyncDescriptor
+
+	// AlwaysAsync reports whether an index of this algorithm is always
+	// async (maintained via CDC, never inline DML) regardless of the
+	// per-index `async` param. It may inspect indexAlgoParams so the
+	// decision can be parser-/option-selective — e.g. fulltext is always
+	// async only for the `retrieval` parser, sync for ngram/default.
+	// Algorithms that are unconditionally async (HNSW/CAGRA/IVF-PQ)
+	// ignore the argument and return true; IVF-FLAT returns false.
+	//
+	// Use indexplugin.IndexIsAsync(algo, params) for the combined
+	// "always-async OR per-index async param" decision; route every
+	// sync-vs-async DML/CDC site through it.
+	AlwaysAsync(indexAlgoParams string) bool
 }
 
 // SupportsVectorType reports whether the given column type is an accepted
@@ -229,9 +242,6 @@ const SinkerType_IndexSync int8 = 0
 //	                       fields are ignored.
 //	SinkerType=0         — meaningful only when UsesCDC=true. Use
 //	                       SinkerType_IndexSync for the common case.
-//	AlwaysAsync=false    — async-ness derives from the index's `async`
-//	                       param in IndexAlgoParams. Set to true for
-//	                       algorithms that are always async (e.g. HNSW).
 //	IdxcronAction=""     — algorithm has no scheduled-rebuild task.
 //	                       Non-empty values are passed to
 //	                       idxcron.RegisterUpdate / UnregisterUpdate as
@@ -243,7 +253,6 @@ const SinkerType_IndexSync int8 = 0
 type SyncDescriptor struct {
 	UsesCDC       bool
 	SinkerType    int8
-	AlwaysAsync   bool
 	IdxcronAction string
 
 	// IdxcronAlgoToken is the algorithm keyword the idxcron executor

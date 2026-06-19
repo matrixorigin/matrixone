@@ -84,7 +84,8 @@ func (u *fulltextWandCreateState) end(tf *TableFunction, proc *process.Process) 
 		}
 		res.Close()
 	}
-	sqls, err := model.ToInsertSqls(u.tblcfg, time.Now().UnixMicro())
+	// Synchronous CREATE/REINDEX build → the compacted main index (tag=0).
+	sqls, err := model.ToInsertSqls(u.tblcfg, time.Now().UnixMicro(), 0)
 	if err != nil {
 		return err
 	}

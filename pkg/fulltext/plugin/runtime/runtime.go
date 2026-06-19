@@ -112,3 +112,11 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 		SinkerType: catalogplugin.SinkerType_IndexSync,
 	}
 }
+
+// AlwaysAsync — fulltext is always async ONLY for the `retrieval` parser
+// (a serialized binary WAND index that can't be row-patched inline, so it
+// is maintained via CDC + idxcron). ngram/default/empty parsers keep their
+// per-index `async`-param-gated behaviour (this returns false for them).
+func (CatalogHooks) AlwaysAsync(indexAlgoParams string) bool {
+	return catalog.GetIndexParser(indexAlgoParams) == "retrieval"
+}

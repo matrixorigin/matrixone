@@ -109,11 +109,13 @@ func (CatalogHooks) SupportedOpTypes() map[string]string {
 // task.
 func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	return catalogplugin.SyncDescriptor{
-		UsesCDC:     true,
-		SinkerType:  catalogplugin.SinkerType_IndexSync,
-		AlwaysAsync: true,
+		UsesCDC:    true,
+		SinkerType: catalogplugin.SinkerType_IndexSync,
 	}
 }
+
+// AlwaysAsync — HNSW is unconditionally async (maintained via CDC).
+func (CatalogHooks) AlwaysAsync(string) bool { return true }
 
 // DefaultMaxIndexCapacity mirrors the hnsw_max_index_capacity session-var
 // default; the build path (hnsw_create) uses it when the flat algo_params key

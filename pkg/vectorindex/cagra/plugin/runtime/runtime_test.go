@@ -80,7 +80,7 @@ func TestCagraSyncDescriptor(t *testing.T) {
 	// (Phase 3.7 / 3.9 wiring).
 	d := CatalogHooks{}.SyncDescriptor()
 	require.True(t, d.UsesCDC)
-	require.True(t, d.AlwaysAsync)
+	require.True(t, CatalogHooks{}.AlwaysAsync(""))
 	require.Equal(t, catalogplugin.SinkerType_IndexSync, d.SinkerType)
 	require.Equal(t, "cagra_reindex", d.IdxcronAction)
 	require.Equal(t, "CAGRA", d.IdxcronAlgoToken)

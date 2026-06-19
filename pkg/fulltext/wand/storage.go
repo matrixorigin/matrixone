@@ -52,7 +52,12 @@ const insertBatchRows = 256
 // into <= MaxChunkSize chunks stored as (index_id, chunk_id, data, tag) rows.
 // Chunk data is embedded as unhex(...) literals so the create TVF needs no
 // temp files.
-func (m *WandModel) ToInsertSqls(cfg TableConfig, ts int64) ([]string, error) {
+//
+// tag selects the storage tier (Phase B): tag=0 = the compacted main index
+// (the sync CREATE/REINDEX build and idxcron's merged output); tag=1 = an
+// incremental CDC delta segment appended by the ISCP sinker. Both kinds coexist
+// in the same ft_index store and are distinguished only by this column.
+func (m *WandModel) ToInsertSqls(cfg TableConfig, ts int64, tag int) ([]string, error) {
 	buf, err := m.Serialize()
 	if err != nil {
 		return nil, err
@@ -81,8 +86,8 @@ func (m *WandModel) ToInsertSqls(cfg TableConfig, ts int64) ([]string, error) {
 		if end > len(buf) {
 			end = len(buf)
 		}
-		values = append(values, fmt.Sprintf("(%s, %d, unhex('%s'), 0)",
-			sqlquote.String(m.Id), chunkID, hex.EncodeToString(buf[offset:end])))
+		values = append(values, fmt.Sprintf("(%s, %d, unhex('%s'), %d)",
+			sqlquote.String(m.Id), chunkID, hex.EncodeToString(buf[offset:end]), tag))
 		chunkID++
 		if len(values) == insertBatchRows {
 			sqls = append(sqls, insertPrefix+strings.Join(values, ", "))
