@@ -71,8 +71,9 @@ namespace matrixone {
 //
 // OVERVIEW
 // --------
-// gpu_ivf_pq_t<T> implements an IVF-PQ (Inverted File with Product Quantization)
-// approximate nearest-neighbor index backed by cuVS.
+// gpu_ivf_pq_t<B, T> implements an IVF-PQ (Inverted File with Product Quantization)
+// approximate nearest-neighbor index backed by cuVS (B = base/source element
+// type, T = storage element type; T is 1-byte for scalar-quantized indexes).
 //
 // cuVS type: cuvs::neighbors::ivf_pq::index<int64_t>
 //   Note: the cuVS IVF-PQ index type is NOT templated on T — it always stores

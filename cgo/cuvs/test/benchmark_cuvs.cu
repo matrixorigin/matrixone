@@ -174,14 +174,14 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
             
             if (mode != DistributionMode_SINGLE_GPU && active_devices.size() < 2) continue;
             
-            gpu_cagra_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
+            gpu_cagra_t<float, T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
             index.start();
             index.build();
             
             cagra_search_params_t sp = cagra_search_params_default();
             sp.itopk_size = 128;
             sp.search_width = 1;
-            run_benchmark<gpu_cagra_t<T>, cagra_search_params_t, T>("Cagra", mode, index, recall_queries, recall_expected_ids, cfg, sp);
+            run_benchmark<gpu_cagra_t<float, T>, cagra_search_params_t, T>("Cagra", mode, index, recall_queries, recall_expected_ids, cfg, sp);
             index.destroy();
             cudaDeviceSynchronize();
         }
@@ -221,13 +221,13 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
 
             if (mode != DistributionMode_SINGLE_GPU && active_devices.size() < 2) continue;
 
-            gpu_ivf_pq_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
+            gpu_ivf_pq_t<float, T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
             index.start();
             index.build();
 
             ivf_pq_search_params_t sp = ivf_pq_search_params_default();
             sp.n_probes = 64;
-            run_benchmark<gpu_ivf_pq_t<T>, ivf_pq_search_params_t, T>("IvfPq", mode, index, recall_queries, recall_expected_ids, cfg, sp);
+            run_benchmark<gpu_ivf_pq_t<float, T>, ivf_pq_search_params_t, T>("IvfPq", mode, index, recall_queries, recall_expected_ids, cfg, sp);
             index.destroy();
         }
     }

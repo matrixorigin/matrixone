@@ -241,7 +241,7 @@ int main() {
 
     {
         cagra_build_params_t bp = cagra_build_params_default();
-        gpu_cagra_t<float> index(dataset.data(), cfg.n_vectors, cfg.dimension,
+        gpu_cagra_t<float, float> index(dataset.data(), cfg.n_vectors, cfg.dimension,
                                  DistanceType_L2Expanded, bp, devices,
                                  cfg.n_threads, DistributionMode_SINGLE_GPU);
         index.start();
@@ -281,7 +281,7 @@ int main() {
         ivf_pq_build_params_t bp = ivf_pq_build_params_default();
         bp.n_lists = 1024;
         bp.m       = 64;
-        gpu_ivf_pq_t<float> index(dataset.data(), cfg.n_vectors, cfg.dimension,
+        gpu_ivf_pq_t<float, float> index(dataset.data(), cfg.n_vectors, cfg.dimension,
                                   DistanceType_L2Expanded, bp, devices,
                                   cfg.n_threads, DistributionMode_SINGLE_GPU);
         index.start();

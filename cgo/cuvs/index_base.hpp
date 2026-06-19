@@ -65,9 +65,9 @@ using ::distribution_mode_t;
 // gpu_index_base_t<B, T, BuildParams, IdT> is the CRTP-style base class shared by
 // all three GPU index types:
 //
-//   gpu_ivf_flat_t<T>  (IdT = int64_t)
-//   gpu_ivf_pq_t<T>    (IdT = int64_t)
-//   gpu_cagra_t<T>     (IdT = uint32_t)
+//   gpu_ivf_flat_t<T>   (IdT = int64_t)   // base hardcoded to float
+//   gpu_ivf_pq_t<B, T>  (IdT = int64_t)   // B = base/source element type, T = storage type
+//   gpu_cagra_t<B, T>   (IdT = uint32_t)  // B = base/source element type, T = storage type
 //
 // It provides:
 //   - Pre-build vector buffering (flattened_host_dataset)
@@ -1082,28 +1082,11 @@ public:
         // acquisition by a reader is guaranteed to see is_trained() == true.
         { std::unique_lock<std::shared_mutex> _pub_lock(mutex_); }
 
-        // --- GPU work + locked store: process each buffered chunk ---
+        // --- Quantize each buffered chunk on the CPU and store. The quantizer
+        // is trained (above), so the B->T transform is a pure host affine map —
+        // no per-chunk GPU round-trip (this is what made a 1M-row f16-base /
+        // add_chunk_quantize build crawl). See transform_host(). ---
         for (auto& c : chunks) {
-            // Upload and quantize — NO LOCK
-            auto chunk_host_view = raft::make_host_matrix_view<const B, int64_t>(
-                c.data.data(), static_cast<int64_t>(c.count), static_cast<int64_t>(dimension));
-            auto chunk_device = raft::make_device_matrix<B, int64_t>(*res, c.count, dimension);
-            raft::copy(*res, chunk_device.view(), chunk_host_view);
-
-            auto chunk_device_target = raft::make_device_matrix<T, int64_t>(*res, c.count, dimension);
-            
-            {
-                std::shared_lock<std::shared_mutex> lock(mutex_);
-                quantizer_.template transform<T>(*res, chunk_device.view(), chunk_device_target.data_handle(), true);
-            }
-
-            std::vector<T> chunk_host_target(c.count * dimension);
-            raft::copy(*res,
-                raft::make_host_matrix_view<T, int64_t>(chunk_host_target.data(), static_cast<int64_t>(c.count), static_cast<int64_t>(dimension)),
-                chunk_device_target.view());
-            handle.sync();
-
-            // Store into shared state — unique_lock
             std::unique_lock<std::shared_mutex> lock(mutex_);
             uint64_t target_offset;
             if (c.offset == -1) {
@@ -1121,8 +1104,10 @@ public:
             if (flattened_host_dataset.size() < required_elements) {
                 flattened_host_dataset.resize(required_elements);
             }
-            std::copy(chunk_host_target.begin(), chunk_host_target.end(),
-                      flattened_host_dataset.begin() + target_offset * dimension);
+            quantizer_.template transform_host<T>(
+                c.data.data(),
+                flattened_host_dataset.data() + target_offset * dimension,
+                static_cast<size_t>(c.count) * dimension);
 
             if (this->dist_mode == DistributionMode_SHARDED) {
                 int num_shards = static_cast<int>(this->devices_.size());
@@ -1154,8 +1139,6 @@ public:
                     std::shared_lock<std::shared_mutex> lock(mutex_);
                     if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
                 }
-
-                auto res = handle.get_raft_resources();
 
                 // If quantization is needed (T is 1-byte)
                 if constexpr (sizeof(T) == 1) {
@@ -1206,22 +1189,14 @@ public:
                         // c was NOT pushed to pending, so fall through to process chunk_data directly.
                     }
 
-                    // Quantizer already trained: quantize this chunk immediately.
-                    auto queries_host_view = raft::make_host_matrix_view<const B, int64_t>(chunk_b.data(), chunk_count, dimension);
-                    auto queries_device = raft::make_device_matrix<B, int64_t>(*res, chunk_count, dimension);
-                    raft::copy(*res, queries_device.view(), queries_host_view);
-
-                    auto chunk_device_target = raft::make_device_matrix<T, int64_t>(*res, chunk_count, dimension);
-                    
-                    {
-                        std::shared_lock<std::shared_mutex> lock(mutex_);
-                        quantizer_.template transform<T>(*res, queries_device.view(), chunk_device_target.data_handle(), true);
-                    }
-
-                    std::vector<T> chunk_host_target(chunk_count * dimension);
-                    raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(chunk_host_target.data(), chunk_count, dimension), chunk_device_target.view());
-                    handle.sync();
-
+                    // Quantizer already trained: quantize on the CPU and write
+                    // directly into flattened_host_dataset. Scalar quantization
+                    // is a pure affine map from the trained [min,max], so no GPU
+                    // round-trip (malloc + H2D copy + kernel + D2H copy + sync)
+                    // is needed per chunk — this is the same host-only fast path
+                    // as float/half storage. transform_host() produces bytes
+                    // identical to the device transform(), so a CPU-quantized
+                    // base stays consistent with a GPU-quantized query at search.
                     std::unique_lock<std::shared_mutex> lock(mutex_);
                     uint64_t target_offset;
                     if (offset == -1) {
@@ -1239,7 +1214,10 @@ public:
                     if (flattened_host_dataset.size() < required_elements) {
                         flattened_host_dataset.resize(required_elements);
                     }
-                    std::copy(chunk_host_target.begin(), chunk_host_target.end(), flattened_host_dataset.begin() + (target_offset * dimension));
+                    quantizer_.template transform_host<T>(
+                        chunk_b.data(),
+                        flattened_host_dataset.data() + (target_offset * dimension),
+                        static_cast<size_t>(chunk_count) * dimension);
 
                     if (this->dist_mode == DistributionMode_SHARDED) {
                         int num_shards = static_cast<int>(this->devices_.size());
