@@ -347,6 +347,21 @@ type BaseProcess struct {
 	// DivByZeroErrorMode caches whether division by zero should error (true) or return NULL (false)
 	// -1: not initialized, 0: return NULL, 1: return error
 	DivByZeroErrorMode int32
+
+	// IsFrontend reports whether this proc is attached to a frontend
+	// client session (mysql client query or the in-frontend backSession
+	// that pkg/frontend/back_exec.go drives). Defaults false — every
+	// other proc (internal SQL executor invocations from idxcron,
+	// ProcessInitSQL, bootstrap, cron jobs, task service, …) is
+	// background. pkg/sql/compile/sql_executor.go's NewTopProcess sets
+	// this from opts.IsFrontend(); the two frontend proc-construction
+	// sites in pkg/frontend (mysql_cmd_executor, back_exec) set it
+	// directly. This is the canonical signal for code that needs to
+	// distinguish "have a session" from "don't" — relying on
+	// proc.resolveVariableFunc being nil is unreliable because
+	// background paths also attach resolvers (idxcron via the task's
+	// captured Metadata, ProcessInitSQL via executor.DefaultResolveVariable).
+	IsFrontend bool
 }
 
 // Process contains context used in query execution

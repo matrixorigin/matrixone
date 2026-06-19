@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	hnswruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -884,7 +885,7 @@ func TestPitrDupError(t *testing.T) {
 func TestIsExperimentalEnabled(t *testing.T) {
 	s := newScope(TableClone)
 
-	enabled, err := s.isExperimentalEnabled(nil, hnswIndexFlag)
+	enabled, err := s.isExperimentalEnabled(nil, hnswruntime.HnswIndexFlag)
 	assert.NoError(t, err)
 	assert.True(t, enabled)
 }
