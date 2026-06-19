@@ -61,9 +61,15 @@ func (u *fulltextWandSearchState) call(tf *TableFunction, proc *process.Process)
 
 	nkeys := len(u.keys)
 	n := 0
+	// The projection may request only doc_id (1 column, e.g. COUNT(*) or a bare
+	// WHERE match) or doc_id+score (2 columns) — mirror fulltext_index_scan and
+	// only emit score when the batch has it.
+	withScore := u.batch.VectorCount() > 1
 	for i := u.offset; i < nkeys && n < 8192; i++ {
 		vector.AppendAny(u.batch.Vecs[0], u.keys[i], false, proc.Mp())
-		vector.AppendFixed[float64](u.batch.Vecs[1], u.distances[i], false, proc.Mp())
+		if withScore {
+			vector.AppendFixed[float64](u.batch.Vecs[1], u.distances[i], false, proc.Mp())
+		}
 		n++
 	}
 	u.offset += n
