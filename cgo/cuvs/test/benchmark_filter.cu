@@ -261,7 +261,7 @@ int main() {
     {
         ivf_flat_build_params_t bp = ivf_flat_build_params_default();
         bp.n_lists = 1024;
-        gpu_ivf_flat_t<float> index(dataset.data(), cfg.n_vectors, cfg.dimension,
+        gpu_ivf_flat_t<float, float> index(dataset.data(), cfg.n_vectors, cfg.dimension,
                                     DistanceType_L2Expanded, bp, devices,
                                     cfg.n_threads, DistributionMode_SINGLE_GPU);
         index.start();

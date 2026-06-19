@@ -139,17 +139,17 @@ struct ivf_flat_search_result_t {
 /**
  * @brief gpu_ivf_flat_t implements an IVF-Flat index that can run on a single GPU or sharded across multiple GPUs.
  */
-template <typename T>
-class gpu_ivf_flat_t : public gpu_index_base_t<float, T, ivf_flat_build_params_t, int64_t> {
+template <typename B, typename T>
+class gpu_ivf_flat_t : public gpu_index_base_t<B, T, ivf_flat_build_params_t, int64_t> {
 public:
-    using base_type    = float;
+    using base_type    = B;
     using storage_type = T;
     using ivf_flat_index = cuvs::neighbors::ivf_flat::index<T, int64_t>;
     using mg_index = cuvs::neighbors::mg_index<ivf_flat_index, T, int64_t>;
     using search_result_t = ivf_flat_search_result_t;
     // Inherited dependent type — bring into scope so search_internal can take a
     // const host_mask_bundle_t* parameter without `typename Base::...` everywhere.
-    using host_mask_bundle_t = typename gpu_index_base_t<float, T, ivf_flat_build_params_t, int64_t>::host_mask_bundle_t;
+    using host_mask_bundle_t = typename gpu_index_base_t<B, T, ivf_flat_build_params_t, int64_t>::host_mask_bundle_t;
 
     std::unique_ptr<ivf_flat_index> index_;
     std::string data_filename_;
@@ -1023,7 +1023,15 @@ public:
             raft::copy(*res, q_dev_f, raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
 
             if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
-            this->quantizer_.template transform<T>(*res, q_dev_f, q_buf_t.data(), true);
+            if constexpr (std::is_same_v<B, float>) {
+                this->quantizer_.template transform<T>(*res, q_dev_f, q_buf_t.data(), true);
+            } else {
+                // B == half: the quantizer is half-source. Cast the fp32 query to
+                // B on-device, then quantize B -> T (mirrors ivf_pq.hpp).
+                auto q_dev_b = raft::make_device_matrix<B, int64_t>(*res, num_queries, this->dimension);
+                raft::copy(*res, q_dev_b.view(), q_dev_f);
+                this->quantizer_.template transform<T>(*res, q_dev_b.view(), q_buf_t.data(), true);
+            }
         }
         // Legacy path syncs so build_search_bitset's stack-local host bitmap can
         // drain on the same stream. Prebuilt path skips: bitset H2D queues
@@ -1453,7 +1461,14 @@ public:
             auto centers_device_target = raft::make_device_matrix<T, int64_t>(*res, n_centers, dim);
             if constexpr (sizeof(T) == 1) {
                 auto centers_float_view = raft::make_device_matrix_view<const float, int64_t>(centers_view.data_handle(), n_centers, dim);
-                this->quantizer_.template transform<T>(*res, centers_float_view, centers_device_target.data_handle(), true);
+                if constexpr (std::is_same_v<B, float>) {
+                    this->quantizer_.template transform<T>(*res, centers_float_view, centers_device_target.data_handle(), true);
+                } else {
+                    // B == half: cast the float centers to B on-device, then quantize B -> T.
+                    auto centers_b = raft::make_device_matrix<B, int64_t>(*res, n_centers, dim);
+                    raft::copy(*res, centers_b.view(), centers_float_view);
+                    this->quantizer_.template transform<T>(*res, centers_b.view(), centers_device_target.data_handle(), true);
+                }
             } else {
                 raft::copy(*res, centers_device_target.view(), centers_view);
             }
@@ -1472,7 +1487,7 @@ public:
     }
 
     std::string info() const override {
-        std::string json = gpu_index_base_t<float, T, ivf_flat_build_params_t, int64_t>::info();
+        std::string json = gpu_index_base_t<B, T, ivf_flat_build_params_t, int64_t>::info();
         json += ", \"type\": \"IVF-Flat\", \"ivf_flat\": {";
         if (index_) json += "\"mode\": \"Single-GPU\", \"size\": " + std::to_string(index_->size());
         else if (!this->replicated_indices_.empty()) json += "\"mode\": \"Local-Indices\", \"ranks\": " + std::to_string(this->replicated_indices_.size());

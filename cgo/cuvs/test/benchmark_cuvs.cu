@@ -198,13 +198,13 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
 
             if (mode != DistributionMode_SINGLE_GPU && active_devices.size() < 2) continue;
 
-            gpu_ivf_flat_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
+            gpu_ivf_flat_t<float, T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
             index.start();
             index.build();
 
             ivf_flat_search_params_t sp = ivf_flat_search_params_default();
             sp.n_probes = 64;
-            run_benchmark<gpu_ivf_flat_t<T>, ivf_flat_search_params_t, T>("IvfFlat", mode, index, recall_queries, recall_expected_ids, cfg, sp);
+            run_benchmark<gpu_ivf_flat_t<float, T>, ivf_flat_search_params_t, T>("IvfFlat", mode, index, recall_queries, recall_expected_ids, cfg, sp);
             index.destroy();
         }
     }
