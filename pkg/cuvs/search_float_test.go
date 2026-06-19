@@ -69,7 +69,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 	t.Run("IVF-Flat", func(t *testing.T) {
 		dataset := make([]Float16, n_vectors*uint64(dimension))
 		bp := IvfFlatBuildParams{NLists: 10, AddDataOnBuild: true}
-		index, err := NewGpuIvfFlat[Float16](dataset, n_vectors, dimension, L2Expanded, bp, []int{deviceID}, 1, SingleGpu, nil)
+		index, err := NewGpuIvfFlat[float32, Float16](dataset, n_vectors, dimension, L2Expanded, bp, []int{deviceID}, 1, SingleGpu, nil)
 		if err != nil {
 			t.Fatalf("Failed to create IVF-Flat: %v", err)
 		}

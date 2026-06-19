@@ -107,7 +107,7 @@ func TestSimulatedReplicatedIvfFlat(t *testing.T) {
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 4
 	bp.KmeansTrainsetFraction = 1.0
-	idx, err := NewGpuIvfFlat[float32](ds, count, dim, L2Expanded, bp, simDevices(), simRanks, Replicated, ids)
+	idx, err := NewGpuIvfFlat[float32, float32](ds, count, dim, L2Expanded, bp, simDevices(), simRanks, Replicated, ids)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestSimulatedShardedIvfFlat(t *testing.T) {
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 4
 	bp.KmeansTrainsetFraction = 1.0
-	idx, err := NewGpuIvfFlat[float32](ds, count, dim, L2Expanded, bp, simDevices(), simRanks, Sharded, ids)
+	idx, err := NewGpuIvfFlat[float32, float32](ds, count, dim, L2Expanded, bp, simDevices(), simRanks, Sharded, ids)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestSimulatedShardedDeleteIvfFlat(t *testing.T) {
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 4
 	bp.KmeansTrainsetFraction = 1.0
-	idx, err := NewGpuIvfFlat[float32](ds, count, dim, L2Expanded, bp, simDevices(), simRanks, Sharded, ids)
+	idx, err := NewGpuIvfFlat[float32, float32](ds, count, dim, L2Expanded, bp, simDevices(), simRanks, Sharded, ids)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestSimulatedReplicatedExtendIvfFlat(t *testing.T) {
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 4
 	bp.KmeansTrainsetFraction = 1.0
-	idx, err := NewGpuIvfFlat[float32](ds, base, dim, L2Expanded, bp, simDevices(), simRanks, Replicated, ids)
+	idx, err := NewGpuIvfFlat[float32, float32](ds, base, dim, L2Expanded, bp, simDevices(), simRanks, Replicated, ids)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}

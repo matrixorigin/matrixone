@@ -35,7 +35,7 @@ func TestGpuIvfFlat(t *testing.T) {
 	devices := []int{0}
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 10
-	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	index, err := NewGpuIvfFlat[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfFlat: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestGpuIvfFlatSaveLoad(t *testing.T) {
 	devices := []int{0}
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 2
-	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	index, err := NewGpuIvfFlat[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfFlat: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestGpuIvfFlatSaveLoad(t *testing.T) {
 	defer os.Remove(filename)
 	index.Destroy()
 
-	index2, err := NewGpuIvfFlatFromFile[float32](filename, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	index2, err := NewGpuIvfFlatFromFile[float32, float32](filename, dimension, L2Expanded, bp, devices, 1, SingleGpu)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfFlat from file: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestGpuIvfFlatPackUnpack(t *testing.T) {
 	devices := []int{0}
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 10
-	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	index, err := NewGpuIvfFlat[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfFlat: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestGpuIvfFlatPackUnpack(t *testing.T) {
 			}
 			defer os.Remove(filename)
 
-			index2, err := NewGpuIvfFlatEmpty[float32](0, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+			index2, err := NewGpuIvfFlatEmpty[float32, float32](0, dimension, L2Expanded, bp, devices, 1, SingleGpu)
 			if err != nil {
 				t.Fatalf("NewGpuIvfFlatEmpty failed: %v", err)
 			}
@@ -185,7 +185,7 @@ func TestGpuIvfFlatFromDataDirectory(t *testing.T) {
 	devices := []int{0}
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 10
-	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	index, err := NewGpuIvfFlat[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfFlat: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestGpuIvfFlatFromDataDirectory(t *testing.T) {
 		t.Fatalf("Unpack to dir failed: %v", err)
 	}
 
-	index2, err := NewGpuIvfFlatFromDataDirectory[float32](tmpDir, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	index2, err := NewGpuIvfFlatFromDataDirectory[float32, float32](tmpDir, dimension, L2Expanded, bp, devices, 1, SingleGpu)
 	if err != nil {
 		t.Fatalf("NewGpuIvfFlatFromDataDirectory failed: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestGpuShardedIvfFlat(t *testing.T) {
 
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 10
-	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded, nil)
+	index, err := NewGpuIvfFlat[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded, nil)
 	if err != nil {
 		t.Fatalf("Failed to create sharded IVF-Flat: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestGpuReplicatedIvfFlat(t *testing.T) {
 
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 10
-	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Replicated, nil)
+	index, err := NewGpuIvfFlat[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Replicated, nil)
 	if err != nil {
 		t.Fatalf("Failed to create replicated IVF-Flat: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestGpuIvfFlatExtend(t *testing.T) {
 	devices := []int{0}
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 10
-	index, err := NewGpuIvfFlat[float32](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	index, err := NewGpuIvfFlat[float32, float32](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfFlat: %v", err)
 	}
@@ -381,7 +381,7 @@ func TestGpuIvfFlatExtendFloat(t *testing.T) {
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 10
 	// Use Float16 so ExtendFloat exercises quantization
-	index, err := NewGpuIvfFlat[Float16](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	index, err := NewGpuIvfFlat[float32, Float16](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfFlat[Float16]: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestGpuIvfFlatDeleteId(t *testing.T) {
 
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 10
-	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	index, err := NewGpuIvfFlat[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfFlat: %v", err)
 	}
@@ -492,7 +492,7 @@ func TestGpuShardedIvfFlatDeleteId(t *testing.T) {
 
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 10
-	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded, nil)
+	index, err := NewGpuIvfFlat[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded, nil)
 	if err != nil {
 		t.Fatalf("Failed to create sharded IvfFlat: %v", err)
 	}
@@ -572,7 +572,7 @@ func BenchmarkGpuShardedIvfFlat(b *testing.B) {
 
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 1000
-	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Sharded, nil)
+	index, err := NewGpuIvfFlat[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Sharded, nil)
 	if err != nil {
 		b.Fatalf("Failed to create sharded IVF-Flat: %v", err)
 	}
@@ -632,7 +632,7 @@ func BenchmarkGpuSingleIvfFlat(b *testing.B) {
 
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 1000
-	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, SingleGpu, nil)
+	index, err := NewGpuIvfFlat[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, SingleGpu, nil)
 	if err != nil {
 		b.Fatalf("Failed to create single IVF-Flat: %v", err)
 	}
@@ -695,7 +695,7 @@ func BenchmarkGpuReplicatedIvfFlat(b *testing.B) {
 
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 1000
-	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Replicated, nil)
+	index, err := NewGpuIvfFlat[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Replicated, nil)
 	if err != nil {
 		b.Fatalf("Failed to create replicated IVF-Flat: %v", err)
 	}
@@ -757,7 +757,7 @@ func BenchmarkGpuAddChunkAndSearchIvfFlatF16(b *testing.B) {
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 1000
 	// Use Float16 as internal type
-	index, err := NewGpuIvfFlatEmpty[Float16](uint64(totalCount), dimension, L2Expanded, bp, devices, 8, SingleGpu)
+	index, err := NewGpuIvfFlatEmpty[float32, Float16](uint64(totalCount), dimension, L2Expanded, bp, devices, 8, SingleGpu)
 	if err != nil {
 		b.Fatalf("Failed to create index: %v", err)
 	}
@@ -822,7 +822,7 @@ func BenchmarkGpuAddChunkAndSearchIvfFlatInt8(b *testing.B) {
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 1000
 	// Use int8 as internal type
-	index, err := NewGpuIvfFlatEmpty[int8](uint64(totalCount), dimension, L2Expanded, bp, devices, 8, SingleGpu)
+	index, err := NewGpuIvfFlatEmpty[float32, int8](uint64(totalCount), dimension, L2Expanded, bp, devices, 8, SingleGpu)
 	if err != nil {
 		b.Fatalf("Failed to create index: %v", err)
 	}
@@ -881,7 +881,7 @@ func TestGpuIvfFlatChunked(t *testing.T) {
 	bp.NLists = 10
 
 	// Create empty index (target type int8)
-	index, err := NewGpuIvfFlatEmpty[int8](totalCount, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	index, err := NewGpuIvfFlatEmpty[float32, int8](totalCount, dimension, L2Expanded, bp, devices, 1, SingleGpu)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfFlatEmpty: %v", err)
 	}

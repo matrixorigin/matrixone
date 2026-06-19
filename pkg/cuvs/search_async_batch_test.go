@@ -151,7 +151,7 @@ func TestGpuIvfFlatSearchFloat32AsyncBatched(t *testing.T) {
 
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 16
-	index, err := NewGpuIvfFlat[float32](dataset, nVectors, dimension, L2Expanded, bp, []int{0}, 4, SingleGpu, nil)
+	index, err := NewGpuIvfFlat[float32, float32](dataset, nVectors, dimension, L2Expanded, bp, []int{0}, 4, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("NewGpuIvfFlat: %v", err)
 	}

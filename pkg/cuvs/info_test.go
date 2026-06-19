@@ -109,7 +109,7 @@ func TestIndexInfoComprehensive(t *testing.T) {
 				case "IVF-Flat":
 					bp := DefaultIvfFlatBuildParams()
 					bp.NLists = 1000
-					index, err = NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
+					index, err = NewGpuIvfFlat[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				case "IVF-PQ":
 					bp := DefaultIvfPqBuildParams()
 					bp.NLists = 1000
@@ -131,7 +131,7 @@ func TestIndexInfoComprehensive(t *testing.T) {
 				case "IVF-Flat":
 					bp := DefaultIvfFlatBuildParams()
 					bp.NLists = 1000
-					index, err = NewGpuIvfFlat[Float16](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
+					index, err = NewGpuIvfFlat[float32, Float16](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				case "IVF-PQ":
 					bp := DefaultIvfPqBuildParams()
 					bp.NLists = 1000
@@ -157,7 +157,7 @@ func TestIndexInfoComprehensive(t *testing.T) {
 				case "IVF-Flat":
 					bp := DefaultIvfFlatBuildParams()
 					bp.NLists = 1000
-					index, err = NewGpuIvfFlat[int8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
+					index, err = NewGpuIvfFlat[float32, int8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				case "IVF-PQ":
 					bp := DefaultIvfPqBuildParams()
 					bp.NLists = 1000
@@ -180,7 +180,7 @@ func TestIndexInfoComprehensive(t *testing.T) {
 				case "IVF-Flat":
 					bp := DefaultIvfFlatBuildParams()
 					bp.NLists = 1000
-					index, err = NewGpuIvfFlat[uint8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
+					index, err = NewGpuIvfFlat[float32, uint8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				case "IVF-PQ":
 					bp := DefaultIvfPqBuildParams()
 					bp.NLists = 1000

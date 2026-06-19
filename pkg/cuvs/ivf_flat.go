@@ -32,7 +32,7 @@ import (
 )
 
 // GpuIvfFlat represents the C++ gpu_ivf_flat_t object.
-type GpuIvfFlat[T VectorType] struct {
+type GpuIvfFlat[B, Q VectorType] struct {
 	cIvfFlat                 C.gpu_ivf_flat_c
 	dimension                uint32
 	nthread                  uint32
@@ -43,7 +43,7 @@ type GpuIvfFlat[T VectorType] struct {
 
 // SetBatchWindow sets the batching window in microseconds for search operations.
 // A window of 0 disables batching; any positive value enables batching with that delay.
-func (gi *GpuIvfFlat[T]) SetBatchWindow(windowUs int64) error {
+func (gi *GpuIvfFlat[B, Q]) SetBatchWindow(windowUs int64) error {
 	gi.batchWindowUs = windowUs
 	if gi.cIvfFlat != nil {
 		var errmsg *C.char
@@ -61,7 +61,7 @@ func (gi *GpuIvfFlat[T]) SetBatchWindow(windowUs int64) error {
 // flag. false (default): dispatch eagerly at the full batch size. true: wait for
 // the batch to fill or the window to elapse, then dispatch at the real size.
 // Has no effect unless the batch window is > 0.
-func (gi *GpuIvfFlat[T]) SetDynbConservativeDispatch(enable bool) error {
+func (gi *GpuIvfFlat[B, Q]) SetDynbConservativeDispatch(enable bool) error {
 	gi.dynbConservativeDispatch = enable
 	if gi.cIvfFlat != nil {
 		var errmsg *C.char
@@ -80,13 +80,14 @@ func (gi *GpuIvfFlat[T]) SetDynbConservativeDispatch(enable bool) error {
 // For Sharded mode the shard count is len(devices) (one shard per GPU);
 // to use fewer shards than the GPUs you have available, just pass a
 // shorter `devices` slice.
-func NewGpuIvfFlat[T VectorType](dataset []T, count uint64, dimension uint32, metric DistanceType,
-	bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode, ids []int64) (*GpuIvfFlat[T], error) {
+func NewGpuIvfFlat[B, Q VectorType](dataset []Q, count uint64, dimension uint32, metric DistanceType,
+	bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode, ids []int64) (*GpuIvfFlat[B, Q], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
 
-	qtype := GetQuantization[T]()
+	btype := GetQuantization[B]()
+	qtype := GetQuantization[Q]()
 	var errmsg *C.char
 	cDevices := make([]C.int, len(devices))
 	for i, d := range devices {
@@ -114,6 +115,7 @@ func NewGpuIvfFlat[T VectorType](dataset []T, count uint64, dimension uint32, me
 		C.int(len(devices)),
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
+		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		cIds,
 		unsafe.Pointer(&errmsg),
@@ -132,7 +134,7 @@ func NewGpuIvfFlat[T VectorType](dataset []T, count uint64, dimension uint32, me
 		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuIvfFlat")
 	}
 
-	return &GpuIvfFlat[T]{
+	return &GpuIvfFlat[B, Q]{
 		cIvfFlat:  cIvfFlat,
 		dimension: dimension,
 		nthread:   nthread,
@@ -141,13 +143,14 @@ func NewGpuIvfFlat[T VectorType](dataset []T, count uint64, dimension uint32, me
 }
 
 // NewGpuIvfFlatFromFile creates a new GpuIvfFlat instance by loading from a file.
-func NewGpuIvfFlatFromFile[T VectorType](filename string, dimension uint32, metric DistanceType,
-	bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfFlat[T], error) {
+func NewGpuIvfFlatFromFile[B, Q VectorType](filename string, dimension uint32, metric DistanceType,
+	bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfFlat[B, Q], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
 
-	qtype := GetQuantization[T]()
+	btype := GetQuantization[B]()
+	qtype := GetQuantization[Q]()
 	var errmsg *C.char
 	cFilename := C.CString(filename)
 	defer C.free(unsafe.Pointer(cFilename))
@@ -172,6 +175,7 @@ func NewGpuIvfFlatFromFile[T VectorType](filename string, dimension uint32, metr
 		C.int(len(devices)),
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
+		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		unsafe.Pointer(&errmsg),
 	)
@@ -187,7 +191,7 @@ func NewGpuIvfFlatFromFile[T VectorType](filename string, dimension uint32, metr
 		return nil, moerr.NewInternalErrorNoCtx("failed to load GpuIvfFlat from file")
 	}
 
-	return &GpuIvfFlat[T]{
+	return &GpuIvfFlat[B, Q]{
 		cIvfFlat:  cIvfFlat,
 		dimension: dimension,
 		nthread:   nthread,
@@ -199,8 +203,8 @@ func NewGpuIvfFlatFromFile[T VectorType](filename string, dimension uint32, metr
 // For Sharded loads we peek manifest.json to learn the saved shard count and
 // truncate `devices` to that count, so the C++ worker only spawns threads /
 // RMM pools on devices that will actually host a shard.
-func NewGpuIvfFlatFromDataDirectory[T VectorType](dir string, dimension uint32, metric DistanceType,
-	bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfFlat[T], error) {
+func NewGpuIvfFlatFromDataDirectory[B, Q VectorType](dir string, dimension uint32, metric DistanceType,
+	bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfFlat[B, Q], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
@@ -211,7 +215,8 @@ func NewGpuIvfFlatFromDataDirectory[T VectorType](dir string, dimension uint32, 
 		return nil, err
 	}
 
-	qtype := GetQuantization[T]()
+	btype := GetQuantization[B]()
+	qtype := GetQuantization[Q]()
 	cDevices := make([]C.int, len(devices))
 	for i, d := range devices {
 		cDevices[i] = C.int(d)
@@ -233,6 +238,7 @@ func NewGpuIvfFlatFromDataDirectory[T VectorType](dir string, dimension uint32, 
 		C.int(len(devices)),
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
+		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		nil,
 		unsafe.Pointer(&errmsg),
@@ -267,7 +273,7 @@ func NewGpuIvfFlatFromDataDirectory[T VectorType](dir string, dimension uint32, 
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
-	return &GpuIvfFlat[T]{
+	return &GpuIvfFlat[B, Q]{
 		cIvfFlat:  cIvfFlat,
 		dimension: dimension,
 		nthread:   nthread,
@@ -276,7 +282,7 @@ func NewGpuIvfFlatFromDataDirectory[T VectorType](dir string, dimension uint32, 
 }
 
 // Destroy frees the C++ gpu_ivf_flat_t instance
-func (gi *GpuIvfFlat[T]) Destroy() error {
+func (gi *GpuIvfFlat[B, Q]) Destroy() error {
 	if gi.cIvfFlat == nil {
 		return nil
 	}
@@ -292,7 +298,7 @@ func (gi *GpuIvfFlat[T]) Destroy() error {
 }
 
 // Start initializes the worker and resources
-func (gi *GpuIvfFlat[T]) Start() error {
+func (gi *GpuIvfFlat[B, Q]) Start() error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -320,7 +326,7 @@ func (gi *GpuIvfFlat[T]) Start() error {
 }
 
 // Build triggers the build or file loading process
-func (gi *GpuIvfFlat[T]) Build() error {
+func (gi *GpuIvfFlat[B, Q]) Build() error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -335,13 +341,14 @@ func (gi *GpuIvfFlat[T]) Build() error {
 }
 
 // NewGpuIvfFlatEmpty creates a new GpuIvfFlat instance with pre-allocated buffer but no data yet.
-func NewGpuIvfFlatEmpty[T VectorType](totalCount uint64, dimension uint32, metric DistanceType,
-	bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfFlat[T], error) {
+func NewGpuIvfFlatEmpty[B, Q VectorType](totalCount uint64, dimension uint32, metric DistanceType,
+	bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfFlat[B, Q], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
 
-	qtype := GetQuantization[T]()
+	btype := GetQuantization[B]()
+	qtype := GetQuantization[Q]()
 	var errmsg *C.char
 	cDevices := make([]C.int, len(devices))
 	for i, d := range devices {
@@ -363,6 +370,7 @@ func NewGpuIvfFlatEmpty[T VectorType](totalCount uint64, dimension uint32, metri
 		C.int(len(devices)),
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
+		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		nil,
 		unsafe.Pointer(&errmsg),
@@ -379,7 +387,7 @@ func NewGpuIvfFlatEmpty[T VectorType](totalCount uint64, dimension uint32, metri
 		return nil, moerr.NewInternalErrorNoCtx("failed to create empty GpuIvfFlat")
 	}
 
-	return &GpuIvfFlat[T]{
+	return &GpuIvfFlat[B, Q]{
 		cIvfFlat:  cIvfFlat,
 		dimension: dimension,
 		nthread:   nthread,
@@ -388,7 +396,7 @@ func NewGpuIvfFlatEmpty[T VectorType](totalCount uint64, dimension uint32, metri
 }
 
 // AddChunk adds a chunk of data to the pre-allocated buffer.
-func (gi *GpuIvfFlat[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) error {
+func (gi *GpuIvfFlat[B, Q]) AddChunk(chunk []Q, chunkCount uint64, ids []int64) error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -420,7 +428,7 @@ func (gi *GpuIvfFlat[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) err
 }
 
 // AddChunkFloat adds a chunk of float32 data, performing on-the-fly quantization if needed.
-func (gi *GpuIvfFlat[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
+func (gi *GpuIvfFlat[B, Q]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -451,8 +459,8 @@ func (gi *GpuIvfFlat[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids [
 	return nil
 }
 
-// TrainQuantizer trains the scalar quantizer (if T is 1-byte)
-func (gi *GpuIvfFlat[T]) TrainQuantizer(trainData []float32, nSamples uint64) error {
+// TrainQuantizer trains the scalar quantizer (if Q is 1-byte)
+func (gi *GpuIvfFlat[B, Q]) TrainQuantizer(trainData []float32, nSamples uint64) error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -477,8 +485,8 @@ func (gi *GpuIvfFlat[T]) TrainQuantizer(trainData []float32, nSamples uint64) er
 	return nil
 }
 
-// SetQuantizer sets the scalar quantizer parameters (if T is 1-byte)
-func (gi *GpuIvfFlat[T]) SetQuantizer(min, max float32) error {
+// SetQuantizer sets the scalar quantizer parameters (if Q is 1-byte)
+func (gi *GpuIvfFlat[B, Q]) SetQuantizer(min, max float32) error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -499,8 +507,8 @@ func (gi *GpuIvfFlat[T]) SetQuantizer(min, max float32) error {
 	return nil
 }
 
-// GetQuantizer gets the scalar quantizer parameters (if T is 1-byte)
-func (gi *GpuIvfFlat[T]) GetQuantizer() (float32, float32, error) {
+// GetQuantizer gets the scalar quantizer parameters (if Q is 1-byte)
+func (gi *GpuIvfFlat[B, Q]) GetQuantizer() (float32, float32, error) {
 	if gi.cIvfFlat == nil {
 		return 0, 0, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -523,7 +531,7 @@ func (gi *GpuIvfFlat[T]) GetQuantizer() (float32, float32, error) {
 }
 
 // Save serializes the index to a file
-func (gi *GpuIvfFlat[T]) Save(filename string) error {
+func (gi *GpuIvfFlat[B, Q]) Save(filename string) error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -541,7 +549,7 @@ func (gi *GpuIvfFlat[T]) Save(filename string) error {
 }
 
 // Pack saves the index to a .tar or .tar.gz file using save_dir.
-func (gi *GpuIvfFlat[T]) Pack(filename string) error {
+func (gi *GpuIvfFlat[B, Q]) Pack(filename string) error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -570,7 +578,7 @@ func (gi *GpuIvfFlat[T]) Pack(filename string) error {
 // mode overrides the distribution mode at load time — pass Replicated to broadcast
 // a SINGLE_GPU .tar to all GPUs without rebuilding.
 // The index must already be initialized and started before calling Unpack.
-func (gi *GpuIvfFlat[T]) Unpack(filename string, mode DistributionMode) error {
+func (gi *GpuIvfFlat[B, Q]) Unpack(filename string, mode DistributionMode) error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -599,7 +607,7 @@ func (gi *GpuIvfFlat[T]) Unpack(filename string, mode DistributionMode) error {
 }
 
 // DeleteId removes an ID from the index (soft delete).
-func (gi *GpuIvfFlat[T]) DeleteId(id int64) error {
+func (gi *GpuIvfFlat[B, Q]) DeleteId(id int64) error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -614,7 +622,7 @@ func (gi *GpuIvfFlat[T]) DeleteId(id int64) error {
 }
 
 // Search performs a K-Nearest Neighbor search
-func (gi *GpuIvfFlat[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (SearchResultIvfFlat, error) {
+func (gi *GpuIvfFlat[B, Q]) Search(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (SearchResultIvfFlat, error) {
 	if gi.cIvfFlat == nil {
 		return SearchResultIvfFlat{}, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -666,7 +674,7 @@ func (gi *GpuIvfFlat[T]) Search(queries []T, numQueries uint64, dimension uint32
 }
 
 // SearchFloat performs a K-Nearest Neighbor search with float32 queries
-func (gi *GpuIvfFlat[T]) SearchFloat(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (SearchResultIvfFlat, error) {
+func (gi *GpuIvfFlat[B, Q]) SearchFloat(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (SearchResultIvfFlat, error) {
 	if gi.cIvfFlat == nil {
 		return SearchResultIvfFlat{}, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -718,12 +726,12 @@ func (gi *GpuIvfFlat[T]) SearchFloat(queries []float32, numQueries uint64, dimen
 }
 
 // SearchAsync performs a K-Nearest Neighbor search asynchronously.
-func (gi *GpuIvfFlat[T]) SearchAsync(queries []T, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
+func (gi *GpuIvfFlat[B, Q]) SearchAsync(queries []Q, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
 	return gi.SearchAsyncWithParams(queries, numQueries, dimension, limit, DefaultIvfFlatSearchParams())
 }
 
 // SearchAsyncWithParams performs a K-Nearest Neighbor search asynchronously with custom parameters.
-func (gi *GpuIvfFlat[T]) SearchAsyncWithParams(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (uint64, error) {
+func (gi *GpuIvfFlat[B, Q]) SearchAsyncWithParams(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (uint64, error) {
 	if gi.cIvfFlat == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -757,12 +765,12 @@ func (gi *GpuIvfFlat[T]) SearchAsyncWithParams(queries []T, numQueries uint64, d
 }
 
 // SearchFloat32Async performs a K-Nearest Neighbor search with float32 queries asynchronously.
-func (gi *GpuIvfFlat[T]) SearchFloat32Async(queries []float32, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
+func (gi *GpuIvfFlat[B, Q]) SearchFloat32Async(queries []float32, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
 	return gi.SearchFloat32AsyncWithParams(queries, numQueries, dimension, limit, DefaultIvfFlatSearchParams())
 }
 
 // SearchFloat32AsyncWithParams performs a K-Nearest Neighbor search with float32 queries asynchronously with custom parameters.
-func (gi *GpuIvfFlat[T]) SearchFloat32AsyncWithParams(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (uint64, error) {
+func (gi *GpuIvfFlat[B, Q]) SearchFloat32AsyncWithParams(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (uint64, error) {
 	if gi.cIvfFlat == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -796,7 +804,7 @@ func (gi *GpuIvfFlat[T]) SearchFloat32AsyncWithParams(queries []float32, numQuer
 }
 
 // SearchWait waits for an asynchronous search to complete and returns the results.
-func (gi *GpuIvfFlat[T]) SearchWait(jobID uint64, numQueries uint64, limit uint32) ([]int64, []float32, error) {
+func (gi *GpuIvfFlat[B, Q]) SearchWait(jobID uint64, numQueries uint64, limit uint32) ([]int64, []float32, error) {
 	if gi.cIvfFlat == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -829,7 +837,7 @@ func (gi *GpuIvfFlat[T]) SearchWait(jobID uint64, numQueries uint64, limit uint3
 }
 
 // Cap returns the capacity of the index buffer
-func (gi *GpuIvfFlat[T]) Cap() uint64 {
+func (gi *GpuIvfFlat[B, Q]) Cap() uint64 {
 	if gi.cIvfFlat == nil {
 		return 0
 	}
@@ -837,7 +845,7 @@ func (gi *GpuIvfFlat[T]) Cap() uint64 {
 }
 
 // Len returns current number of vectors in index
-func (gi *GpuIvfFlat[T]) Len() uint64 {
+func (gi *GpuIvfFlat[B, Q]) Len() uint64 {
 	if gi.cIvfFlat == nil {
 		return 0
 	}
@@ -845,7 +853,7 @@ func (gi *GpuIvfFlat[T]) Len() uint64 {
 }
 
 // Info returns detailed information about the index as a JSON string.
-func (gi *GpuIvfFlat[T]) Info() (string, error) {
+func (gi *GpuIvfFlat[B, Q]) Info() (string, error) {
 	if gi.cIvfFlat == nil {
 		return "", moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -868,11 +876,11 @@ func (gi *GpuIvfFlat[T]) Info() (string, error) {
 }
 
 // GetCenters retrieves the trained centroids.
-func (gi *GpuIvfFlat[T]) GetCenters(nLists uint32) ([]T, error) {
+func (gi *GpuIvfFlat[B, Q]) GetCenters(nLists uint32) ([]Q, error) {
 	if gi.cIvfFlat == nil {
 		return nil, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
-	centers := make([]T, nLists*gi.dimension)
+	centers := make([]Q, nLists*gi.dimension)
 	var errmsg *C.char
 	C.gpu_ivf_flat_get_centers(gi.cIvfFlat, unsafe.Pointer(&centers[0]), unsafe.Pointer(&errmsg))
 	runtime.KeepAlive(centers)
@@ -886,7 +894,7 @@ func (gi *GpuIvfFlat[T]) GetCenters(nLists uint32) ([]T, error) {
 }
 
 // GetNList retrieves the number of lists (centroids) in the index.
-func (gi *GpuIvfFlat[T]) GetNList() uint32 {
+func (gi *GpuIvfFlat[B, Q]) GetNList() uint32 {
 	if gi.cIvfFlat == nil {
 		return 0
 	}
@@ -895,7 +903,7 @@ func (gi *GpuIvfFlat[T]) GetNList() uint32 {
 
 // Extend adds new vectors to an already-built index without rebuilding.
 // newIDs may be nil to auto-assign sequential IDs starting from the current index size.
-func (gi *GpuIvfFlat[T]) Extend(newData []T, nRows uint64, newIDs []int64) error {
+func (gi *GpuIvfFlat[B, Q]) Extend(newData []Q, nRows uint64, newIDs []int64) error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -929,7 +937,7 @@ func (gi *GpuIvfFlat[T]) Extend(newData []T, nRows uint64, newIDs []int64) error
 
 // ExtendFloat adds new float32 vectors to an already-built index, quantizing on-the-fly if needed.
 // newIDs may be nil to auto-assign sequential IDs starting from the current index size.
-func (gi *GpuIvfFlat[T]) ExtendFloat(newData []float32, nRows uint64, newIDs []int64) error {
+func (gi *GpuIvfFlat[B, Q]) ExtendFloat(newData []float32, nRows uint64, newIDs []int64) error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -968,7 +976,7 @@ type SearchResultIvfFlat struct {
 }
 
 // SetFilterColumns registers filter-column metadata. See GpuCagra.SetFilterColumns.
-func (gi *GpuIvfFlat[T]) SetFilterColumns(colMetaJSON string, totalCount uint64) error {
+func (gi *GpuIvfFlat[B, Q]) SetFilterColumns(colMetaJSON string, totalCount uint64) error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -985,7 +993,7 @@ func (gi *GpuIvfFlat[T]) SetFilterColumns(colMetaJSON string, totalCount uint64)
 }
 
 // AddFilterChunk appends raw filter-column bytes. See GpuCagra.AddFilterChunk.
-func (gi *GpuIvfFlat[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
+func (gi *GpuIvfFlat[B, Q]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -1016,7 +1024,7 @@ func (gi *GpuIvfFlat[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap [
 }
 
 // SearchWithFilter runs a filtered K-NN search. predsJSON="" = unfiltered.
-func (gi *GpuIvfFlat[T]) SearchWithFilter(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams, predsJSON string) (SearchResultIvfFlat, error) {
+func (gi *GpuIvfFlat[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams, predsJSON string) (SearchResultIvfFlat, error) {
 	if gi.cIvfFlat == nil {
 		return SearchResultIvfFlat{}, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -1063,7 +1071,7 @@ func (gi *GpuIvfFlat[T]) SearchWithFilter(queries []T, numQueries uint64, dimens
 }
 
 // SearchFloatWithFilter runs a filtered K-NN search with float32 queries.
-func (gi *GpuIvfFlat[T]) SearchFloatWithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams, predsJSON string) (SearchResultIvfFlat, error) {
+func (gi *GpuIvfFlat[B, Q]) SearchFloatWithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams, predsJSON string) (SearchResultIvfFlat, error) {
 	if gi.cIvfFlat == nil {
 		return SearchResultIvfFlat{}, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -1114,7 +1122,7 @@ func (gi *GpuIvfFlat[T]) SearchFloatWithFilter(queries []float32, numQueries uin
 // SearchFloat32AsyncWithParams + the predicate-eval semantics of
 // SearchFloatWithFilter. Used by MultiGpuIvfFlat to dispatch per-shard
 // filtered searches in parallel.
-func (gi *GpuIvfFlat[T]) SearchFloatWithFilterAsync(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams, predsJSON string) (uint64, error) {
+func (gi *GpuIvfFlat[B, Q]) SearchFloatWithFilterAsync(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams, predsJSON string) (uint64, error) {
 	if gi.cIvfFlat == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
