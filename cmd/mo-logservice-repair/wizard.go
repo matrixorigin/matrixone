@@ -1503,7 +1503,14 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 			if err := verifyOnlineCleanupComplete(plans); err != nil {
 				return err
 			}
-			fmt.Println("step 4: start listed LogService stores outside this CLI")
+			fmt.Println("step 4: clear startup cleanup requests and keep stores blocked")
+			for _, plan := range plans {
+				req := repairPayloadForPlanWithCleanup(plan, plan.InitialBlockedStores, "online recover: local cleanup complete; keep stores blocked before restart", false)
+				if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddressesForApply(plan), timeout, req); err != nil {
+					return fmt.Errorf("clear startup cleanup request for shard %d: %w", plan.ShardID, err)
+				}
+			}
+			fmt.Println("step 5: start listed LogService stores outside this CLI")
 			printRestartInstructions(plans, restartStores)
 		} else {
 			fmt.Println("step 2: restart listed LogService stores outside this CLI")
@@ -1518,7 +1525,7 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 				return fmt.Errorf("recover cancelled before unblock")
 			}
 		}
-		fmt.Println("step 5: wait for restarted stores to heartbeat")
+		fmt.Println("step 6: wait for restarted stores to heartbeat")
 		if err := waitForStoreHeartbeats(ctx, plans[0], timeout, restartStores, beforeTicks, opts.yes); err != nil {
 			return err
 		}

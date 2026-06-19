@@ -18,6 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -100,9 +103,33 @@ func (l *store) cleanRequestedReplicasFromRepairState(ctx context.Context, shard
 				!errors.Is(err, dragonboat.ErrShardNotFound) {
 				return err
 			}
+			if err := l.removeRepairReplicaResiduals(shardID, replicaID); err != nil {
+				return err
+			}
 			l.removeMetadata(shardID, replicaID)
 			if l.onReplicaChanged != nil {
 				l.onReplicaChanged(shardID, replicaID, DelReplica)
+			}
+		}
+	}
+	return nil
+}
+
+func (l *store) removeRepairReplicaResiduals(shardID uint64, replicaID uint64) error {
+	deploymentDir := fmt.Sprintf("%020d", l.cfg.DeploymentID)
+	matches, err := filepath.Glob(filepath.Join(l.cfg.DataDir, "*", deploymentDir))
+	if err != nil {
+		return err
+	}
+	for _, dir := range matches {
+		paths := []string{
+			filepath.Join(dir, "tandb", fmt.Sprintf("node-%d-%d", shardID, replicaID)),
+			filepath.Join(dir, fmt.Sprintf("snapshot-part-%d", shardID), fmt.Sprintf("snapshot-%d-%d", shardID, replicaID)),
+			filepath.Join(dir, "exported-snapshot", fmt.Sprintf("shard-%d", shardID), fmt.Sprintf("replica-%d", replicaID)),
+		}
+		for _, path := range paths {
+			if err := os.RemoveAll(path); err != nil {
+				return err
 			}
 		}
 	}
