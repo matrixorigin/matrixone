@@ -134,6 +134,8 @@ func usage() error {
   mo-logservice-repair hakeeper unblock --addresses host:port[,host:port] --payload JSON
   mo-logservice-repair local import-snapshot --deployment-id ID --node-host-id ID --node-host-dir DIR --raft-address ADDR --replica-id ID --snapshot-dir DIR --members JSON
   mo-logservice-repair local clean-replica --deployment-id ID --node-host-id ID --node-host-dir DIR --raft-address ADDR --gossip-address ADDR --shard-id ID --replica-id ID
+  mo-logservice-repair local recover --base DIR --shard ID [--shards ID,ID] [--yes]
+  mo-logservice-repair k8s recover --namespace NS --addresses host:port[,host:port] --shard ID [--shards ID,ID] [--yes]
   mo-logservice-repair wizard [--mode local|k8s] [--base DIR|--namespace NS] [--shard ID] [--apply]
   mo-logservice-repair plan --mode local --base DIR --shard ID [--output FILE]
   mo-logservice-repair plan --mode k8s --namespace NS --shard ID [--addresses host:port] [--deployment-id ID] [--output FILE]
@@ -149,7 +151,9 @@ func runK8s(args []string) error {
 		return usage()
 	}
 	switch args[0] {
-	case "diagnose", "online-plan", "online-apply", "recover-plan", "recover-apply", "verify":
+	case "recover", "online-apply", "recover-apply":
+		return runRecover(modeK8s, args[1:])
+	case "diagnose", "online-plan", "recover-plan", "verify":
 		return fmt.Errorf("k8s %s is not implemented yet", args[0])
 	default:
 		return usage()
@@ -161,7 +165,9 @@ func runLocal(args []string) error {
 		return usage()
 	}
 	switch args[0] {
-	case "diagnose", "online-plan", "online-apply", "recover-plan", "recover-apply", "verify":
+	case "recover", "online-apply", "recover-apply":
+		return runRecover(modeLocal, args[1:])
+	case "diagnose", "online-plan", "recover-plan", "verify":
 		return fmt.Errorf("local %s is not implemented yet", args[0])
 	case "import-snapshot":
 		return runImportSnapshot(args[1:])

@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
@@ -48,7 +49,7 @@ func decodeLogShardRepairReason(reason string) logShardRepairReason {
 }
 
 func (l *store) cleanRequestedReplicasFromRepairState(ctx context.Context, shards []metadata.LogShard) error {
-	if !hasLocalLogShard(shards) {
+	if len(shards) == 0 {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -79,13 +80,15 @@ func (l *store) cleanRequestedReplicasFromRepairState(ctx context.Context, shard
 		if len(replicas) == 0 {
 			continue
 		}
+		if !repair.BlockedStores[l.cfg.UUID] {
+			l.runtime.Logger().Warn("skip repair cleanup for unblocked store",
+				zap.Uint64("shardID", shardID),
+				zap.String("uuid", l.cfg.UUID))
+			continue
+		}
 		for _, replicaID := range replicas {
-			if shardID == hakeeper.DefaultHAKeeperShardID {
-				return moerr.NewInvalidInputNoCtxf(
-					"repair cleanup must not clean HAKeeper shard %d replica %d",
-					shardID,
-					replicaID,
-				)
+			if err := validateRequestedRepairCleanup(repair, l.cfg.UUID, shardID, replicaID); err != nil {
+				return err
 			}
 			l.runtime.Logger().Warn("clean local log replica requested by HAKeeper repair state",
 				zap.Uint64("shardID", shardID),
@@ -107,11 +110,30 @@ func (l *store) cleanRequestedReplicasFromRepairState(ctx context.Context, shard
 	return nil
 }
 
-func hasLocalLogShard(shards []metadata.LogShard) bool {
-	for _, shard := range shards {
-		if shard.ShardID != hakeeper.DefaultHAKeeperShardID {
-			return true
-		}
+func validateRequestedRepairCleanup(
+	repair logpb.LogShardRepairState,
+	uuid string,
+	shardID uint64,
+	replicaID uint64,
+) error {
+	if !repair.BlockedStores[uuid] {
+		return moerr.NewInvalidInputNoCtxf(
+			"repair cleanup requires store %s to be blocked for shard %d",
+			uuid,
+			shardID,
+		)
 	}
-	return false
+	if shardID != hakeeper.DefaultHAKeeperShardID {
+		return nil
+	}
+	if repair.Shard.Replicas[replicaID] == uuid ||
+		repair.Shard.NonVotingReplicas[replicaID] == uuid {
+		return moerr.NewInvalidInputNoCtxf(
+			"repair cleanup must not clean target HAKeeper shard %d replica %d on store %s",
+			shardID,
+			replicaID,
+			uuid,
+		)
+	}
+	return nil
 }

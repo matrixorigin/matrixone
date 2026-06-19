@@ -433,12 +433,45 @@ func TestBuildK8sActionsIncludesRepairPodAndCleanCommand(t *testing.T) {
 	for _, action := range actions {
 		joined += action.Command + "\n"
 	}
-	if !strings.Contains(joined, "persistentVolumeClaim") || !strings.Contains(joined, "<pvc-name-for-d01>") {
-		t.Fatalf("repair pod pvc command missing: %s", joined)
+	if !strings.Contains(joined, "cleanupReplicasByStore") || !strings.Contains(joined, "282826") {
+		t.Fatalf("repair payload cleanup missing: %s", joined)
 	}
-	if !strings.Contains(joined, "local clean-replica") ||
-		!strings.Contains(joined, "--node-host-dir") ||
-		!strings.Contains(joined, "/repair-pvc/logservice-data/store-d01") {
-		t.Fatalf("clean command missing: %s", joined)
+	if !strings.Contains(joined, "delete pod <logservice-pod-for-store-d01>") {
+		t.Fatalf("restart pod command missing: %s", joined)
+	}
+}
+
+func TestSelectedRepairShardIDsKeepsHAKeeperShardZero(t *testing.T) {
+	ids, err := selectedRepairShardIDs(wizardOptions{
+		shardID:    1,
+		shardIDSet: true,
+		shards:     "0,1",
+	})
+	if err != nil {
+		t.Fatalf("selected shard ids: %v", err)
+	}
+	if len(ids) != 2 || ids[0] != 0 || ids[1] != 1 {
+		t.Fatalf("unexpected shard ids: %v", ids)
+	}
+}
+
+func TestRepairPayloadForPlanWithCleanup(t *testing.T) {
+	plan := &repairPlan{
+		TargetShard: planShard{
+			ShardID:  1,
+			Replicas: map[uint64]string{10: "store-d01"},
+			Epoch:    7,
+		},
+		Stores: []planStore{{
+			UUID:            "store-d01",
+			CleanupReplicas: []uint64{11, 12},
+		}},
+	}
+	payload := repairPayloadForPlanWithCleanup(plan, []string{"store-d01"}, "repair", true)
+	if got := payload.CleanupReplicasByStore["store-d01"]; len(got) != 2 || got[0] != 11 || got[1] != 12 {
+		t.Fatalf("unexpected cleanup payload: %+v", payload.CleanupReplicasByStore)
+	}
+	if encoded := encodeReason(payload.Reason, payload.CleanupReplicasByStore); !strings.Contains(encoded, repairReasonPrefix) {
+		t.Fatalf("cleanup payload was not encoded: %s", encoded)
 	}
 }
