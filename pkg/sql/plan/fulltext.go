@@ -28,6 +28,7 @@ import (
 var (
 	fulltext_index_scan_func_name     = "fulltext_index_scan"
 	fulltext_index_tokenize_func_name = "fulltext_index_tokenize"
+	fulltext_wand_search_func_name    = "fulltext_wand_search"
 
 	ftIndexColdefs = []*plan.ColDef{
 		// row_id type should be same as index type

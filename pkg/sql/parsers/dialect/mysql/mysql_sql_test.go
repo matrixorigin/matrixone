@@ -3527,6 +3527,10 @@ var (
 			output: "select * from t1 where MATCH (body, title) AGAINST (abc% IN NATURAL LANGUAGE MODE)",
 		},
 		{
+			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc def' IN RETRIEVAL MODE)",
+			output: "select * from t1 where MATCH (body, title) AGAINST (abc def IN RETRIEVAL MODE)",
+		},
+		{
 			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc gg*' WITH QUERY EXPANSION)",
 			output: "select * from t1 where MATCH (body, title) AGAINST (abc gg* WITH QUERY EXPANSION)",
 		},

@@ -170,6 +170,10 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = fulltextIndexScanPrepare(proc, tblArg)
 	case "fulltext_index_tokenize":
 		tblArg.ctr.state, err = fulltextIndexTokenizePrepare(proc, tblArg)
+	case "fulltext_wand_create":
+		tblArg.ctr.state, err = fulltextWandCreatePrepare(proc, tblArg)
+	case "fulltext_wand_search":
+		tblArg.ctr.state, err = fulltextWandSearchPrepare(proc, tblArg)
 	case "stage_list":
 		tblArg.ctr.state, err = stageListPrepare(proc, tblArg)
 	case "moplugin_table":

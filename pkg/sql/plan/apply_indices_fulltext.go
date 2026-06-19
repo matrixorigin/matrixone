@@ -71,6 +71,19 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 	if sortNode != nil {
 		sortNode.Children[0] = idxID
 
+		// The query's top-K limit lives on this SORT node (explicit ORDER BY).
+		// Push it into the WAND search TVF so it returns only K rows via the
+		// WAND walk (fulltext_index_scan ignores this — it returns all matches
+		// and the SORT bounds them).
+		if sortNode.Limit != nil {
+			for _, id := range filter_node_ids {
+				builder.pushLimitToWandSearch(id, sortNode.Limit)
+			}
+			for _, id := range proj_node_ids {
+				builder.pushLimitToWandSearch(id, sortNode.Limit)
+			}
+		}
+
 	} else {
 
 		// create sort node with order by score DESC
@@ -248,35 +261,58 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		pattern := fn.Args[0].GetLit().GetSval()
 		mode := fn.Args[1].GetLit().GetI64Val()
 
-		fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
 		alias_name := fmt.Sprintf("mo_fulltext_alias_%d", i)
 		if projNode == nil {
 			alias_name = fmt.Sprintf("mo_fulltext_alias_%d_%d", scanNode.NodeId, i)
 		}
 		params := idxdef.IndexAlgoParams
 
-		var exprs tree.Exprs
-		exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](srctblname, srctblname, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](idxtblname, idxtblname, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[int64](mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
-
-		name := tree.NewUnresolvedName(fulltext_func)
-
-		// TableFuncion AST
-		tmpTableFunc := &tree.AliasedTableExpr{
-			Expr: &tree.TableFunction{
-				Func: &tree.FuncExpr{
-					Func:     tree.FuncName2ResolvableFunctionReference(name),
-					FuncName: fulltext_func,
-					Exprs:    exprs,
-					Type:     tree.FUNC_TYPE_TABLE,
+		// Route a retrieval-parser index to the WAND search TVF when its WAND
+		// chunk store + metadata hidden tables exist; otherwise fall back to the
+		// classic fulltext_index_scan. The WAND node emits the same
+		// (doc_id, score) shape, so the downstream INNER-JOIN-to-source + score
+		// projection is unchanged and the limit pushdown below covers it too.
+		var tmpTableFunc *tree.AliasedTableExpr
+		if storeTbl, metaTbl, ok := builder.findWandIndexTables(scanNode, idxdef); ok {
+			cfg := fmt.Sprintf(`{"db":"%s","index":"%s","metadata":"%s"}`,
+				scanNode.ObjRef.SchemaName, storeTbl, metaTbl)
+			wand_func := tree.NewCStr(fulltext_wand_search_func_name, 1)
+			var wexprs tree.Exprs
+			wexprs = append(wexprs, tree.NewNumVal[string]("", "", false, tree.P_char))
+			wexprs = append(wexprs, tree.NewNumVal[string](cfg, cfg, false, tree.P_char))
+			wexprs = append(wexprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
+			wname := tree.NewUnresolvedName(wand_func)
+			tmpTableFunc = &tree.AliasedTableExpr{
+				Expr: &tree.TableFunction{
+					Func: &tree.FuncExpr{
+						Func:     tree.FuncName2ResolvableFunctionReference(wname),
+						FuncName: wand_func,
+						Exprs:    wexprs,
+						Type:     tree.FUNC_TYPE_TABLE,
+					},
 				},
-			},
-			As: tree.AliasClause{
-				Alias: tree.Identifier(alias_name),
-			},
+				As: tree.AliasClause{Alias: tree.Identifier(alias_name)},
+			}
+		} else {
+			fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
+			var exprs tree.Exprs
+			exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
+			exprs = append(exprs, tree.NewNumVal[string](srctblname, srctblname, false, tree.P_char))
+			exprs = append(exprs, tree.NewNumVal[string](idxtblname, idxtblname, false, tree.P_char))
+			exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
+			exprs = append(exprs, tree.NewNumVal[int64](mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
+			name := tree.NewUnresolvedName(fulltext_func)
+			tmpTableFunc = &tree.AliasedTableExpr{
+				Expr: &tree.TableFunction{
+					Func: &tree.FuncExpr{
+						Func:     tree.FuncName2ResolvableFunctionReference(name),
+						FuncName: fulltext_func,
+						Exprs:    exprs,
+						Type:     tree.FUNC_TYPE_TABLE,
+					},
+				},
+				As: tree.AliasClause{Alias: tree.Identifier(alias_name)},
+			}
 		}
 
 		curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, -1, nil)
@@ -723,6 +759,45 @@ func (builder *QueryBuilder) findEqualFullTextMatchFunc(projNode *plan.Node, sca
 	return eqmap
 }
 
+// findWandIndexTables locates the WAND chunk-store + metadata hidden tables for
+// a retrieval fulltext index — siblings of the postings index def (same
+// IndexName, distinguished by IndexAlgoTableType). ok is false for a
+// non-retrieval index (no WAND siblings), so the caller falls back to the
+// classic fulltext_index_scan path.
+// pushLimitToWandSearch sets the top-K limit on a fulltext_wand_search TVF node
+// (no-op for fulltext_index_scan or non-TVF nodes), so the WAND walk returns
+// only K rows instead of its default of 1.
+func (builder *QueryBuilder) pushLimitToWandSearch(nodeID int32, limit *plan.Expr) {
+	if limit == nil {
+		return
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || node.TableDef == nil || node.TableDef.TblFunc == nil {
+		return
+	}
+	if node.TableDef.TblFunc.Name == fulltext_wand_search_func_name {
+		node.Limit = DeepCopyExpr(limit)
+	}
+}
+
+func (builder *QueryBuilder) findWandIndexTables(scanNode *plan.Node, ftIdxDef *plan.IndexDef) (storeTbl string, metaTbl string, ok bool) {
+	if scanNode == nil || scanNode.TableDef == nil || ftIdxDef == nil {
+		return "", "", false
+	}
+	for _, idx := range scanNode.TableDef.Indexes {
+		if idx == nil || idx.IndexName != ftIdxDef.IndexName {
+			continue
+		}
+		switch idx.IndexAlgoTableType {
+		case catalog.FullTextIndex_TblType_Storage:
+			storeTbl = idx.IndexTableName
+		case catalog.FullTextIndex_TblType_Metadata:
+			metaTbl = idx.IndexTableName
+		}
+	}
+	return storeTbl, metaTbl, storeTbl != "" && metaTbl != ""
+}
+
 func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode *plan.Node) *plan.IndexDef {
 	if fn == nil || scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
 		return nil
@@ -755,6 +830,13 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 	nargs := len(fn.Args) - 2
 	for _, idx := range scanNode.TableDef.Indexes {
 		if idx == nil || !idx.TableExist || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+			continue
+		}
+		// A retrieval index also carries WAND chunk-store/metadata sibling defs
+		// (same IndexName + Parts, distinguished by IndexAlgoTableType). Match
+		// only the postings def (empty table type); the WAND siblings are
+		// resolved separately by findWandIndexTables.
+		if idx.IndexAlgoTableType != "" {
 			continue
 		}
 		if len(idx.Parts) != nargs {

@@ -412,6 +412,26 @@ const (
 	FullTextIndex_TabCol_Id       = "doc_id"
 	FullTextIndex_TabCol_Position = "pos"
 
+	// FULLTEXT WAND retrieval index: chunked binary index store + metadata,
+	// HNSW-style. Used by the `retrieval` parser / IN RETRIEVAL MODE. A
+	// retrieval index has these two hidden tables in addition to the
+	// (word,doc_id,pos) postings table; all three share the IndexName and are
+	// distinguished by IndexAlgoTableType.
+	// NOTE: IndexAlgoTableType is stored in a varchar(11) catalog column, so
+	// these must be <= 11 chars (cf. "cagra_index"/"ivfpq_index").
+	FullTextIndex_TblType_Metadata = "ft_meta"
+	FullTextIndex_TblType_Storage  = "ft_index"
+
+	FullTextIndex_TblCol_Storage_Index_Id = "index_id"
+	FullTextIndex_TblCol_Storage_Chunk_Id = "chunk_id"
+	FullTextIndex_TblCol_Storage_Data     = "data"
+	FullTextIndex_TblCol_Storage_Tag      = "tag"
+
+	FullTextIndex_TblCol_Metadata_Index_Id  = "index_id"
+	FullTextIndex_TblCol_Metadata_Timestamp = "timestamp"
+	FullTextIndex_TblCol_Metadata_Checksum  = "checksum"
+	FullTextIndex_TblCol_Metadata_Filesize  = "filesize"
+
 	/************ 4. HNSW Index *************/
 
 	// HNSW Table Types

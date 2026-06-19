@@ -22,11 +22,14 @@
 package compile
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/fulltext/wand"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -48,25 +51,20 @@ type Hooks struct{}
 // the empty string (see plan/schema.go), so the map has exactly one
 // entry under the "" key.
 func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
-	if len(indexDefs) != 1 {
-		return moerr.NewInternalErrorNoCtx("invalid fulltext index table definition")
-	}
-	// Single-entry map — grab the sole value regardless of key. The
-	// dispatcher keys by catalog.ToLower(IndexAlgoTableType) which is
-	// "" for fulltext today, but we don't depend on that here.
-	var indexDef *plan.IndexDef
-	for _, def := range indexDefs {
-		indexDef = def
+	// The postings def is keyed by the empty IndexAlgoTableType. A retrieval
+	// index additionally carries WAND chunk-store + metadata defs (keyed by
+	// their table types) — all hidden tables of the same index.
+	indexDef, ok := indexDefs[""]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("fulltext postings index definition not found")
 	}
 
-	// 1. create the hidden table.
+	// 1. create all hidden tables (postings + any WAND store/metadata).
 	if info := ctx.IndexInfo(); info != nil {
-		tables := info.GetIndexTables()
-		if len(tables) != 1 {
-			return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
-		}
-		if err := ctx.BuildIndexTable(tables[0]); err != nil {
-			return err
+		for _, table := range info.GetIndexTables() {
+			if err := ctx.BuildIndexTable(table); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -104,7 +102,52 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 			return err
 		}
 	}
+
+	// 4. retrieval parser: build the WAND chunk store from the freshly
+	// populated postings (the store + metadata hidden tables created in step 1).
+	// fulltext_wand_create reads postings rows directly and serializes the index
+	// in its end() — mirrors HNSW genBuildSQL.
+	if storeDef, ok := indexDefs[catalog.FullTextIndex_TblType_Storage]; ok {
+		metaDef, ok := indexDefs[catalog.FullTextIndex_TblType_Metadata]
+		if !ok {
+			return moerr.NewInternalErrorNoCtx("fulltext wand metadata index definition not found")
+		}
+		sqls, err := genWandBuildSQL(indexDef, storeDef, metaDef, qryDatabase)
+		if err != nil {
+			return err
+		}
+		for _, sql := range sqls {
+			if err = ctx.RunSql(sql); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
+}
+
+// genWandBuildSQL builds the WAND chunk store from a retrieval index's postings
+// hidden table: SELECT over the postings table CROSS APPLY fulltext_wand_create,
+// which reads (word, doc_id) rows, sums tf, serializes the index, and INSERTs
+// the chunk + metadata rows in its end(). Mirrors HNSW genBuildSQL.
+func genWandBuildSQL(postingsDef, storeDef, metaDef *plan.IndexDef, qryDatabase string) ([]string, error) {
+	const srcAlias = "p"
+	cfg := wand.TableConfig{
+		DbName:        qryDatabase,
+		IndexTable:    storeDef.IndexTableName,
+		MetadataTable: metaDef.IndexTableName,
+	}
+	cfgbytes, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	sql := fmt.Sprintf("SELECT f.* FROM %s AS %s CROSS APPLY fulltext_wand_create(%s, %s, %s, %s) AS f",
+		sqlquote.QualifiedIdent(qryDatabase, postingsDef.IndexTableName),
+		sqlquote.Ident(srcAlias),
+		sqlquote.String(postingsDef.IndexAlgoParams),
+		sqlquote.String(string(cfgbytes)),
+		sqlquote.QualifiedIdent(srcAlias, catalog.FullTextIndex_TabCol_Word),
+		sqlquote.QualifiedIdent(srcAlias, catalog.FullTextIndex_TabCol_Id))
+	return []string{sql}, nil
 }
 
 // HandleReindex — fulltext does not support ALTER … REINDEX.

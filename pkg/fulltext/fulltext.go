@@ -660,7 +660,7 @@ func CreatePattern(pattern string, parser string) (*Pattern, error) {
 // (kw[i].pos - kw[0].pos = ps[i].Position - ps[0].Position) is consistent
 // with what fulltext_index_tokenize writes into the index.
 func ParsePhrase(pattern string, parser string) ([]*Pattern, error) {
-	if parser == "gojieba" {
+	if parser == "gojieba" || parser == "retrieval" {
 		return parsePhraseJieba(pattern)
 	}
 
@@ -917,7 +917,7 @@ func parsePatternInNLModeJieba(pattern string) ([]*Pattern, error) {
 
 // Parse search string in natural language mode
 func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
-	if parser == "gojieba" {
+	if parser == "gojieba" || parser == "retrieval" {
 		return parsePatternInNLModeJieba(pattern)
 	}
 
@@ -1045,8 +1045,10 @@ func PatternOptimizeJoin(ps []*Pattern) []*Pattern {
 // Parse search string into list of patterns
 func ParsePattern(pattern string, mode int64, parser string) ([]*Pattern, error) {
 	switch mode {
-	case int64(tree.FULLTEXT_NL), int64(tree.FULLTEXT_DEFAULT):
-		// Natural Language Mode or default mode
+	case int64(tree.FULLTEXT_NL), int64(tree.FULLTEXT_DEFAULT), int64(tree.FULLTEXT_RETRIEVAL):
+		// Natural Language / default mode, and RETRIEVAL mode (ranked BM25 top-K):
+		// all parse the query as a bag of tokens. RETRIEVAL additionally routes to
+		// the WAND search operator at plan time (parser==retrieval index).
 		ps, err := ParsePatternInNLMode(pattern, parser)
 		if err != nil {
 			return nil, err

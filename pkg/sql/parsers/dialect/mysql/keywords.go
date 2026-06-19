@@ -416,6 +416,7 @@ func init() {
 		"references":                 REFERENCES,
 		"regexp":                     REGEXP,
 		"release":                    RELEASE,
+		"retrieval":                  RETRIEVAL,
 		"remove":                     REMOVE,
 		"rename":                     RENAME,
 		"reorganize":                 REORGANIZE,

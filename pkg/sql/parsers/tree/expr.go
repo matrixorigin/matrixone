@@ -1862,6 +1862,10 @@ const (
 	FULLTEXT_NL_QUERY_EXPANSION
 	FULLTEXT_BOOLEAN
 	FULLTEXT_QUERY_EXPANSION
+	// FULLTEXT_RETRIEVAL is ranked BM25 top-K retrieval (WAND), the default and
+	// only mode for an index built WITH PARSER retrieval. Appended last so the
+	// existing mode values (serialized into plans) stay stable.
+	FULLTEXT_RETRIEVAL
 )
 
 type FullTextMatchExpr struct {
@@ -1887,6 +1891,8 @@ func (node *FullTextSearchType) ToString() string {
 		return "IN BOOLEAN MODE"
 	case FULLTEXT_QUERY_EXPANSION:
 		return "WITH QUERY EXPANSION"
+	case FULLTEXT_RETRIEVAL:
+		return "IN RETRIEVAL MODE"
 
 	default:
 		return "Unknown FullSearchType"
