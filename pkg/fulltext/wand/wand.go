@@ -66,14 +66,18 @@ func bm25Factor(tf float64, dl int32, avgDocLen float64) float64 {
 
 // termPostings is the in-memory posting list for one word-id, ordered by doc ord.
 type termPostings struct {
-	docIDs    []int64 // doc ords, ascending, len == df
-	tfs       []uint8 // parallel, capped tf
-	maxFactor float64 // max bm25Factor over postings (derived; term score upper bound basis)
+	docIDs []int64 // doc ords, ascending, len == df
+	tfs    []uint8 // parallel, capped tf
+
+	// Term-level score upper-bound inputs, idf-AND-avgdl-FREE so the bound stays
+	// valid under a global idf/avgdl (segments, incremental). The term UB is
+	// weight·idf²·bm25Factor(maxTf, minDl, avgdl), computed at query time.
+	maxTf uint8 // max tf over all postings
+	minDl int32 // min doc length over all postings
 
 	// Block-Max skip-block metadata (one entry per ceil(df/BlockSize)), derived
-	// at load. All idf-FREE — the global idf is applied at query, so these stay
-	// valid across segments and incremental adds. block max-score upper bound =
-	// weight·idf²·bm25Factor(blockMaxTf, blockMinDl, avgdl).
+	// at load. Also idf/avgdl-free. block UB = weight·idf²·bm25Factor(blockMaxTf,
+	// blockMinDl, avgdl).
 	blockLastDoc []int64 // max (last) ord in each block (ascending → last)
 	blockMaxTf   []uint8 // max tf in each block
 	blockMinDl   []int32 // min doc length in each block
@@ -141,7 +145,8 @@ func (m *WandModel) finalizeScoring() {
 		tp.blockLastDoc = make([]int64, nblk)
 		tp.blockMaxTf = make([]uint8, nblk)
 		tp.blockMinDl = make([]int32, nblk)
-		var mx float64
+		var termMaxTf uint8
+		termMinDl := int32(math.MaxInt32)
 		for b := 0; b < nblk; b++ {
 			lo := b * BlockSize
 			hi := lo + BlockSize
@@ -154,19 +159,22 @@ func (m *WandModel) finalizeScoring() {
 				if tp.tfs[i] > maxTf {
 					maxTf = tp.tfs[i]
 				}
-				dl := m.docLen[tp.docIDs[i]]
-				if dl < minDl {
+				if dl := m.docLen[tp.docIDs[i]]; dl < minDl {
 					minDl = dl
-				}
-				if f := bm25Factor(float64(tp.tfs[i]), dl, m.AvgDocLen); f > mx {
-					mx = f
 				}
 			}
 			tp.blockLastDoc[b] = tp.docIDs[hi-1] // ascending → last is max
 			tp.blockMaxTf[b] = maxTf
 			tp.blockMinDl[b] = minDl
+			if maxTf > termMaxTf {
+				termMaxTf = maxTf
+			}
+			if minDl < termMinDl {
+				termMinDl = minDl
+			}
 		}
-		tp.maxFactor = mx
+		tp.maxTf = termMaxTf
+		tp.minDl = termMinDl
 	}
 }
 
@@ -310,15 +318,74 @@ func (b *Builder) Add(word string, pk any) error {
 	return nil
 }
 
-// Finish sorts each posting list by ord, derives BM25 scoring stats (AvgDocLen +
-// per-term max factor), sets N, and returns the model.
+// Finish produces a single-segment index (no capacity limit).
 func (b *Builder) Finish() *WandModel {
-	for _, tp := range b.model.terms {
-		sortPostings(tp)
+	return b.FinishSegments(0)[0]
+}
+
+// FinishSegments finalizes the build into one or more index segments, each
+// holding at most `capacity` documents (by doc-ord range). capacity <= 0 means
+// no limit → a single segment. Each segment is self-contained (local 0-based
+// ords, its own pks/docLen/postings) and scored corpus-globally at query time by
+// SearchSegments. Mirrors HNSW's multi-mini-index rollover.
+func (b *Builder) FinishSegments(capacity int64) []*WandModel {
+	full := b.model
+	for _, tp := range full.terms {
+		sortPostings(tp) // global ascending order, so range-splits are contiguous
 	}
-	b.model.N = int64(len(b.model.pks))
-	b.model.finalizeScoring()
-	return b.model
+	n := int64(len(full.pks))
+
+	if capacity <= 0 || n <= capacity {
+		full.N = n
+		full.finalizeScoring()
+		return []*WandModel{full}
+	}
+
+	nseg := int((n + capacity - 1) / capacity)
+	segs := make([]*WandModel, nseg)
+	for s := 0; s < nseg; s++ {
+		lo := int64(s) * capacity
+		hi := lo + capacity
+		if hi > n {
+			hi = n
+		}
+		seg := NewWandModel(full.Id, full.PkType)
+		seg.pks = full.pks[lo:hi]       // build-side view; serialized independently
+		seg.docLen = full.docLen[lo:hi] // local ord i == global ord lo+i
+		seg.overflow = full.overflow    // identical dict across segments
+		seg.N = hi - lo
+		segs[s] = seg
+	}
+
+	// Partition each term's (globally-sorted) postings into segment ranges,
+	// remapping global ords to per-segment local ords.
+	for wid, tp := range full.terms {
+		i, df := 0, len(tp.docIDs)
+		for s := 0; s < nseg && i < df; s++ {
+			lo := int64(s) * capacity
+			hi := lo + capacity
+			start := i
+			for i < df && tp.docIDs[i] < hi {
+				i++
+			}
+			if i == start {
+				continue
+			}
+			stp := &termPostings{
+				docIDs: make([]int64, i-start),
+				tfs:    append([]uint8(nil), tp.tfs[start:i]...),
+			}
+			for j := start; j < i; j++ {
+				stp.docIDs[j-start] = tp.docIDs[j] - lo // local ord
+			}
+			segs[s].terms[wid] = stp
+		}
+	}
+
+	for _, seg := range segs {
+		seg.finalizeScoring()
+	}
+	return segs
 }
 
 func sortPostings(tp *termPostings) {

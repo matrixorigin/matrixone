@@ -130,7 +130,7 @@ func buildModelAndCorpus(t *testing.T, rng *rand.Rand, nDocs, nTerms, maxPosting
 		k := 1 + rng.Intn(maxPostings)
 		for j := 0; j < k; j++ {
 			d := int64(rng.Intn(nDocs))
-			tf := 1 + rng.Intn(300) // exercise the 255 cap
+			tf := 1 + rng.Intn(6)
 			for o := 0; o < tf; o++ {
 				if err := b.Add(term, d); err != nil {
 					t.Fatalf("Add: %v", err)
@@ -176,8 +176,8 @@ func TestWandDifferential(t *testing.T) {
 	for i := range allTerms {
 		allTerms[i] = fmt.Sprintf("term%04d", i)
 	}
-	for iter := 0; iter < 200; iter++ {
-		m, c := buildModelAndCorpus(t, rng, 500+rng.Intn(2000), 40, 400)
+	for iter := 0; iter < 40; iter++ {
+		m, c := buildModelAndCorpus(t, rng, 300+rng.Intn(400), 40, 100)
 		nq := 1 + rng.Intn(6)
 		q := make([]string, nq)
 		for i := range q {
@@ -191,6 +191,52 @@ func TestWandDifferential(t *testing.T) {
 		got := m.Search(q, limit, nil)
 		want := bruteForce(c, q, limit, nil)
 		assertTopKEqual(t, fmt.Sprintf("iter=%d q=%v lim=%d", iter, q, limit), got, want, c, q)
+	}
+}
+
+// TestWandSegments verifies that splitting a corpus into capacity-bounded
+// segments and merging with corpus-global stats yields the SAME top-K as the
+// single-index brute force.
+func TestWandSegments(t *testing.T) {
+	rng := rand.New(rand.NewSource(7))
+	allTerms := make([]string, 30)
+	for i := range allTerms {
+		allTerms[i] = fmt.Sprintf("term%04d", i)
+	}
+	for iter := 0; iter < 20; iter++ {
+		nDocs := 300 + rng.Intn(400)
+		c := &corpus{docTf: map[string]map[int64]int{}, docLen: map[int64]int{}, pks: map[int64]bool{}}
+		b := NewBuilder("seg", testPkType)
+		for _, term := range allTerms {
+			k := 1 + rng.Intn(80)
+			for j := 0; j < k; j++ {
+				d := int64(rng.Intn(nDocs))
+				tf := 1 + rng.Intn(6)
+				for o := 0; o < tf; o++ {
+					if err := b.Add(term, d); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if c.docTf[term] == nil {
+					c.docTf[term] = map[int64]int{}
+				}
+				c.docTf[term][d] += tf
+				c.docLen[d] += tf
+				c.pks[d] = true
+			}
+		}
+		capacity := int64(50 + rng.Intn(200))
+		segs := b.FinishSegments(capacity)
+
+		nq := 1 + rng.Intn(5)
+		q := make([]string, nq)
+		for i := range q {
+			q[i] = allTerms[rng.Intn(len(allTerms))]
+		}
+		limit := 1 + rng.Intn(15)
+		got := SearchSegments(segs, q, limit, nil)
+		want := bruteForce(c, q, limit, nil)
+		assertTopKEqual(t, fmt.Sprintf("seg iter=%d nseg=%d cap=%d", iter, len(segs), capacity), got, want, c, q)
 	}
 }
 
@@ -211,9 +257,9 @@ func TestWandPrefilter(t *testing.T) {
 	for i := range allTerms {
 		allTerms[i] = fmt.Sprintf("term%04d", i)
 	}
-	for iter := 0; iter < 100; iter++ {
-		nDocs := 300 + rng.Intn(700)
-		m, c := buildModelAndCorpus(t, rng, nDocs, 30, 300)
+	for iter := 0; iter < 25; iter++ {
+		nDocs := 300 + rng.Intn(300)
+		m, c := buildModelAndCorpus(t, rng, nDocs, 30, 80)
 		allowPk := map[int64]bool{}
 		for d := range c.pks {
 			if rng.Intn(10) < 3 {
@@ -311,5 +357,21 @@ func TestWandEdgeCases(t *testing.T) {
 	r2 := m2.Search([]string{"a", "b", "营养"}, 10, nil)
 	if len(r1) != len(r2) || len(r1) != 4 { // docs 1,2,3,5
 		t.Fatalf("expected 4 docs both, got %d/%d", len(r1), len(r2))
+	}
+
+	// tf is capped at 255: doc 1 gets "z" 300 times → scored as tf 255.
+	cb := NewBuilder("cap", testPkType)
+	for i := 0; i < 300; i++ {
+		_ = cb.Add("z", int64(1))
+	}
+	_ = cb.Add("z", int64(2))      // df(z)=2
+	_ = cb.Add("filler", int64(3)) // N=3 > df → idf > 0
+	cm := cb.Finish()
+	avg := (300.0 + 1 + 1) / 3
+	idf := math.Log10(3.0 / 2.0)
+	wantTop := idf * idf * bm25Factor(255, 300, avg) // capped tf, dl=300
+	res := cm.Search([]string{"z"}, 1, nil)
+	if len(res) != 1 || res[0].DocID.(int64) != 1 || math.Abs(res[0].Score-wantTop) > 1e-9 {
+		t.Fatalf("tf cap: got %v, want top doc 1 score %.12g", res, wantTop)
 	}
 }

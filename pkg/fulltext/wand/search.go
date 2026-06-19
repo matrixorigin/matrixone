@@ -103,44 +103,96 @@ func (c *cursor) blockEndAt(d int64) int64 {
 	return c.tp.blockLastDoc[b]
 }
 
-// Search runs WAND disjunctive top-K over the query terms (duplicates allowed →
-// per-term weight). limit is K. allow, if non-nil, restricts to allowed doc
-// ords. Returns hits (original pk + score) sorted by score desc.
+// Search runs WAND disjunctive top-K over a single index. Convenience wrapper
+// over SearchSegments.
 func (m *WandModel) Search(terms []string, limit int, allow Membership) []SearchResult {
-	if limit <= 0 || len(terms) == 0 || m.N <= 0 {
+	return SearchSegments([]*WandModel{m}, terms, limit, allow)
+}
+
+// SearchSegments runs WAND disjunctive top-K across one or more index segments
+// with CORPUS-GLOBAL BM25 scoring, so the merged top-K is correctly ranked even
+// when each segment holds only a slice of the corpus. Global N, avgdl and per-
+// term df are aggregated across segments, then each segment's Block-Max walk
+// pushes into one shared bounded heap (the running k-th score prunes later
+// segments too). limit is K; allow, if non-nil, restricts to allowed doc ords.
+func SearchSegments(segs []*WandModel, terms []string, limit int, allow Membership) []SearchResult {
+	if limit <= 0 || len(terms) == 0 || len(segs) == 0 {
 		return nil
 	}
 
-	// Resolve query terms to word-ids and collapse duplicates into weights.
+	// Corpus-global N + average doc length.
+	var gN int64
+	var totalDocLen float64
+	for _, s := range segs {
+		gN += s.N
+		totalDocLen += s.AvgDocLen * float64(s.N)
+	}
+	if gN <= 0 {
+		return nil
+	}
+	gAvgDocLen := totalDocLen / float64(gN)
+
+	// Resolve query terms → word-ids (+ duplicate weights). The overflow dict is
+	// identical across segments of one index, so any segment resolves the same.
 	weights := make(map[int32]float64, len(terms))
 	for _, t := range terms {
-		id, ok, err := m.resolveWordID(t)
+		id, ok, err := segs[0].resolveWordID(t)
 		if err != nil || !ok {
-			continue // not a dictionary word and not in this index's overflow set
+			continue
 		}
 		weights[id]++
 	}
+	if len(weights) == 0 {
+		return nil
+	}
+
+	// Corpus-global df per query word-id (sum across segments).
+	gdf := make(map[int32]int, len(weights))
+	for id := range weights {
+		df := 0
+		for _, s := range segs {
+			if tp, ok := s.terms[id]; ok {
+				df += len(tp.docIDs)
+			}
+		}
+		gdf[id] = df
+	}
+
+	h := newTopK(limit)
+	for _, s := range segs {
+		s.searchInto(h, weights, gN, gAvgDocLen, gdf, allow)
+	}
+	return h.sorted()
+}
+
+// searchInto runs the Block-Max WAND walk over one segment using the supplied
+// global stats, pushing (pk, score) into the shared heap h.
+func (m *WandModel) searchInto(h *topK, weights map[int32]float64, gN int64, gAvgDocLen float64, gdf map[int32]int, allow Membership) {
 	cursors := make([]*cursor, 0, len(weights))
 	for id, w := range weights {
 		tp, ok := m.terms[id]
 		if !ok {
-			continue // word resolved but absent from this corpus
+			continue // word absent from this segment
 		}
-		idfSq := m.idfSq(len(tp.docIDs))
+		df := gdf[id]
+		if df <= 0 {
+			df = len(tp.docIDs)
+		}
+		idf := log10(float64(gN) / float64(df))
+		idfSq := idf * idf
 		cursors = append(cursors, &cursor{
 			tp:        tp,
 			idfSq:     idfSq,
 			weight:    w,
-			maxScore:  w * idfSq * tp.maxFactor,
+			maxScore:  w * idfSq * bm25Factor(float64(tp.maxTf), tp.minDl, gAvgDocLen),
 			docLen:    m.docLen,
-			avgDocLen: m.AvgDocLen,
+			avgDocLen: gAvgDocLen,
 		})
 	}
 	if len(cursors) == 0 {
-		return nil
+		return
 	}
 
-	h := newTopK(limit)
 	for {
 		live := cursors[:0]
 		for _, c := range cursors {
@@ -174,6 +226,14 @@ func (m *WandModel) Search(terms []string, limit int, allow Membership) []Search
 		}
 		pivotDoc := cursors[pivot].curDoc()
 
+		// Extend the pivot over every cursor also sitting on pivotDoc, so the
+		// block-max sum and skip bounds account for all of pivotDoc's
+		// contributors (a cursor beyond the term-UB pivot can still be at
+		// pivotDoc and add to its score).
+		for pivot+1 < len(cursors) && cursors[pivot+1].curDoc() == pivotDoc {
+			pivot++
+		}
+
 		// Block-Max refinement: the sum of the per-block upper bounds of
 		// cursors[0..pivot] for the blocks covering pivotDoc is a valid bound for
 		// every doc in [pivotDoc, minBlockEnd]. If it can't beat theta, skip the
@@ -195,6 +255,12 @@ func (m *WandModel) Search(terms []string, limit int, allow Membership) []Search
 					next = nd
 				}
 			}
+			if next <= pivotDoc {
+				// guarantee forward progress: when cursors are aligned at
+				// pivotDoc (or the next cursor sits on it), the smallest skip
+				// that still advances is past pivotDoc.
+				next = pivotDoc + 1
+			}
 			cursors[chooseSkip(cursors, pivot, next)].skipTo(next)
 			continue
 		}
@@ -207,7 +273,7 @@ func (m *WandModel) Search(terms []string, limit int, allow Membership) []Search
 						score += c.score()
 					}
 				}
-				h.push(pivotDoc, score)
+				h.push(m.PkAt(pivotDoc), score)
 			}
 			for _, c := range cursors {
 				if c.curDoc() == pivotDoc {
@@ -219,8 +285,6 @@ func (m *WandModel) Search(terms []string, limit int, allow Membership) []Search
 			cursors[chooseSkip(cursors, pivot, pivotDoc)].skipTo(pivotDoc)
 		}
 	}
-
-	return h.sorted(m)
 }
 
 // chooseSkip picks a cursor in [0..pivot] whose curDoc < target (so it makes
@@ -246,7 +310,7 @@ func chooseSkip(cursors []*cursor, pivot int, target int64) int {
 // ---------------------------------------------------------------------------
 
 type topKEntry struct {
-	ord   int64
+	pk    any // original primary key (resolved at push time; segments share one heap)
 	score float64
 }
 
@@ -272,14 +336,14 @@ func (h *topK) min() float64 {
 	return h.entries[0].score
 }
 
-func (h *topK) push(ord int64, score float64) {
+func (h *topK) push(pk any, score float64) {
 	if len(h.entries) < h.limit {
-		h.entries = append(h.entries, topKEntry{ord, score})
+		h.entries = append(h.entries, topKEntry{pk, score})
 		h.siftUp(len(h.entries) - 1)
 		return
 	}
 	if score > h.entries[0].score {
-		h.entries[0] = topKEntry{ord, score}
+		h.entries[0] = topKEntry{pk, score}
 		h.siftDown(0)
 	}
 }
@@ -314,20 +378,12 @@ func (h *topK) siftDown(i int) {
 	}
 }
 
-// sorted drains the heap into results ordered by score desc, then ord asc, and
-// maps each ord back to its original pk for output.
-func (h *topK) sorted(m *WandModel) []SearchResult {
-	tmp := make([]topKEntry, len(h.entries))
-	copy(tmp, h.entries)
-	sort.Slice(tmp, func(i, j int) bool {
-		if tmp[i].score != tmp[j].score {
-			return tmp[i].score > tmp[j].score
-		}
-		return tmp[i].ord < tmp[j].ord
-	})
-	out := make([]SearchResult, len(tmp))
-	for i, e := range tmp {
-		out[i] = SearchResult{DocID: m.PkAt(e.ord), Score: e.score}
+// sorted drains the heap into results ordered by score desc (ties arbitrary).
+func (h *topK) sorted() []SearchResult {
+	out := make([]SearchResult, len(h.entries))
+	for i, e := range h.entries {
+		out[i] = SearchResult{DocID: e.pk, Score: e.score}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	return out
 }
