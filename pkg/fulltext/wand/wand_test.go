@@ -240,6 +240,60 @@ func TestWandSegments(t *testing.T) {
 	}
 }
 
+// TestWandMerge verifies Merge of two independently-built, disjoint-doc indexes
+// (with conflicting overflow word-ids) equals the brute force over the union.
+func TestWandMerge(t *testing.T) {
+	rng := rand.New(rand.NewSource(123))
+	terms := make([]string, 30)
+	for i := range terms {
+		terms[i] = fmt.Sprintf("term%04d", i)
+	}
+	for iter := 0; iter < 20; iter++ {
+		c := &corpus{docTf: map[string]map[int64]int{}, docLen: map[int64]int{}, pks: map[int64]bool{}}
+		// order drives overflow-id assignment; reverse it for B so the two
+		// builds assign different ids to the same words → exercises reconcile.
+		fill := func(b *Builder, order []string, pkBase, n int) {
+			for _, term := range order {
+				k := 1 + rng.Intn(40)
+				for j := 0; j < k; j++ {
+					d := int64(pkBase + rng.Intn(n))
+					tf := 1 + rng.Intn(5)
+					for o := 0; o < tf; o++ {
+						if err := b.Add(term, d); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if c.docTf[term] == nil {
+						c.docTf[term] = map[int64]int{}
+					}
+					c.docTf[term][d] += tf
+					c.docLen[d] += tf
+					c.pks[d] = true
+				}
+			}
+		}
+		nA, nB := 100+rng.Intn(200), 100+rng.Intn(200)
+		rev := make([]string, len(terms))
+		for i := range terms {
+			rev[len(terms)-1-i] = terms[i]
+		}
+		ba, bb := NewBuilder("a", testPkType), NewBuilder("b", testPkType)
+		fill(ba, terms, 0, nA)
+		fill(bb, rev, nA, nB)
+		merged := Merge("m", ba.Finish(), bb.Finish())
+
+		nq := 1 + rng.Intn(5)
+		q := make([]string, nq)
+		for i := range q {
+			q[i] = terms[rng.Intn(len(terms))]
+		}
+		limit := 1 + rng.Intn(15)
+		got := merged.Search(q, limit, nil)
+		want := bruteForce(c, q, limit, nil)
+		assertTopKEqual(t, fmt.Sprintf("merge iter=%d N=%d", iter, merged.N), got, want, c, q)
+	}
+}
+
 // ordMembership filters by pk, evaluated on doc ords via the model's pk map.
 type ordMembership struct {
 	m       *WandModel

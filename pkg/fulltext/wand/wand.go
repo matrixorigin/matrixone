@@ -178,6 +178,63 @@ func (m *WandModel) finalizeScoring() {
 	}
 }
 
+// Merge combines several index segments (disjoint document sets) into one
+// segment — the compaction primitive for incremental indexing. Segment i's docs
+// are appended after the previous segments (ords re-based), so each term's
+// concatenated postings stay globally sorted. Overflow word-ids are reconciled
+// by word into a single dictionary (dictionary word-ids < DictWordIDLimit are
+// global and unchanged). The result is finalized (block/term stats + avgdl) and
+// self-contained. Callers must pass segments with disjoint pk sets.
+func Merge(id string, segs ...*WandModel) *WandModel {
+	m := NewWandModel(id, 0)
+	if len(segs) > 0 {
+		m.PkType = segs[0].PkType
+	}
+	var nextOverflow int32 // next free per-corpus overflow offset
+	var base int64         // ord offset for the current segment
+
+	for _, s := range segs {
+		// Reconcile this segment's overflow ids into the merged dictionary.
+		var remap map[int32]int32
+		if len(s.overflow) > 0 {
+			remap = make(map[int32]int32, len(s.overflow))
+			for word, sid := range s.overflow {
+				mid, ok := m.overflow[word]
+				if !ok {
+					mid = tokenizer.DictWordIDLimit + nextOverflow
+					nextOverflow++
+					m.overflow[word] = mid
+				}
+				remap[sid] = mid
+			}
+		}
+
+		m.pks = append(m.pks, s.pks...)
+		m.docLen = append(m.docLen, s.docLen...)
+
+		for wid, tp := range s.terms {
+			mwid := wid
+			if wid >= tokenizer.DictWordIDLimit {
+				mwid = remap[wid]
+			}
+			mtp := m.terms[mwid]
+			if mtp == nil {
+				mtp = &termPostings{}
+				m.terms[mwid] = mtp
+			}
+			for i, ord := range tp.docIDs {
+				mtp.docIDs = append(mtp.docIDs, ord+base)
+				mtp.tfs = append(mtp.tfs, tp.tfs[i])
+			}
+		}
+		base += s.N
+	}
+
+	m.N = base
+	m.finalizeScoring()
+	return m
+}
+
 // NumTerms returns the number of distinct word-ids in the index.
 func (m *WandModel) NumTerms() int { return len(m.terms) }
 
