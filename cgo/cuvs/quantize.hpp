@@ -242,10 +242,18 @@ void load_matrix_chunked_ptr(const raft::resources& res, const std::string& file
     if constexpr (DoQuantize) {
         int64_t n_train = std::min(n_rows, static_cast<int64_t>(500));
         std::vector<S> train_host(n_train * n_cols);
-        std::streamsize train_wanted = static_cast<std::streamsize>(train_host.size() * sizeof(S));
-        file.read(reinterpret_cast<char*>(train_host.data()), train_wanted);
-        if (file.gcount() != train_wanted) {
-            throw std::runtime_error("Truncated training-set read from: " + filename);
+        // Strided sample across ALL n_rows (not the first n_train contiguous
+        // rows) so the scalar quantizer learns the true [min,max] range even
+        // when the file is sorted/clustered — otherwise higher-magnitude rows
+        // past the prefix saturate to the storage extreme and recall collapses.
+        const int64_t stride = n_rows / n_train; // >= 1 since n_train <= n_rows
+        const std::streamsize row_bytes = static_cast<std::streamsize>(n_cols) * sizeof(S);
+        for (int64_t j = 0; j < n_train; ++j) {
+            file.seekg(sizeof(file_header_t) + static_cast<std::streamoff>(j) * stride * row_bytes);
+            file.read(reinterpret_cast<char*>(train_host.data() + j * n_cols), row_bytes);
+            if (file.gcount() != row_bytes) {
+                throw std::runtime_error("Truncated training-set read from: " + filename);
+            }
         }
         auto train_device = raft::make_device_matrix<S, int64_t>(res, n_train, n_cols);
         raft::copy(train_device.data_handle(), train_host.data(), train_host.size(), raft::resource::get_cuda_stream(res));

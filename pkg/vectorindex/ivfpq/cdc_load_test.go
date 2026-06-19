@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -60,7 +61,11 @@ func encodeChunk(t *testing.T, dim, includeBytesPerRow int, ops []cuvscdc.CdcOp,
 			}
 			insIdx++
 		}
-		out, err := cuvscdc.EncodeEventRecord(buf, op, pkids[i], v, inc, dim, includeBytesPerRow)
+		var vb []byte
+		if v != nil {
+			vb = util.UnsafeSliceToBytes(v)
+		}
+		out, err := cuvscdc.EncodeEventRecord(buf, op, pkids[i], vb, inc, 4*dim, includeBytesPerRow)
 		require.NoError(t, err)
 		buf = out
 	}
@@ -86,7 +91,7 @@ func TestLoadCdcEventsFromDB_RoundTrip(t *testing.T) {
 	}
 	defer func() { runSql = orig }()
 
-	idx := &IvfpqModel[float32]{Id: "idx-1"}
+	idx := &IvfpqModel[float32, float32]{Id: "idx-1"}
 	got, err := idx.loadCdcEventsFromDB(sqlproc, tblcfg)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
@@ -105,7 +110,7 @@ func TestLoadCdcEventsFromDB_Empty(t *testing.T) {
 	}
 	defer func() { runSql = orig }()
 
-	idx := &IvfpqModel[float32]{Id: "idx-1"}
+	idx := &IvfpqModel[float32, float32]{Id: "idx-1"}
 	got, err := idx.loadCdcEventsFromDB(sqlproc, testTblcfg())
 	require.NoError(t, err)
 	require.Empty(t, got)
@@ -121,7 +126,7 @@ func TestReplayEventChunks_DeleteInsertDelete(t *testing.T) {
 	)
 	chunks := []cuvscdc.EventChunk{{ChunkId: 0, Data: chunkBytes}}
 
-	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks(chunks, dim, 0)
+	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks[float32](chunks, dim, 0)
 	require.NoError(t, err)
 	require.Equal(t, []int64{1}, delPkids)
 	require.Empty(t, ovPkids)
@@ -139,7 +144,7 @@ func TestReplayEventChunks_FlattenOverflow(t *testing.T) {
 	)
 	chunks := []cuvscdc.EventChunk{{ChunkId: 0, Data: chunkBytes}}
 
-	delPkids, ovPkids, ovVecs, _, err := replayEventChunks(chunks, dim, 0)
+	delPkids, ovPkids, ovVecs, _, err := replayEventChunks[float32](chunks, dim, 0)
 	require.NoError(t, err)
 	require.Empty(t, delPkids)
 	require.Equal(t, []int64{10, 20}, ovPkids)
@@ -158,7 +163,7 @@ func TestReplayEventChunks_MultiChunkOrder(t *testing.T) {
 		{ChunkId: 1, Data: chunk1},
 		{ChunkId: 0, Data: chunk0},
 	}
-	delPkids, ovPkids, _, _, err := replayEventChunks(chunks, dim, 0)
+	delPkids, ovPkids, _, _, err := replayEventChunks[float32](chunks, dim, 0)
 	require.NoError(t, err)
 	require.Equal(t, []int64{5}, delPkids)
 	require.Empty(t, ovPkids)
@@ -225,7 +230,7 @@ func TestLoadIndex_WithCdcDeltas(t *testing.T) {
 	}
 	defer func() { runSql = origRunSql }()
 
-	models, err := LoadMetadata[float32](sqlproc, tblcfg.DbName, tblcfg.MetadataTable)
+	models, err := LoadMetadata[float32, float32](sqlproc, tblcfg.DbName, tblcfg.MetadataTable)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(models))
 

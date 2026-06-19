@@ -113,6 +113,35 @@ TEST(GpuBruteForceTest, ParallelAddChunkWithOffset) {
     index.destroy();
 }
 
+// f16 overflow path, NATIVE half add: empty gpu_brute_force_t<half> ->
+// add_chunk([]half) -> build -> native half search. This is the path
+// IvfpqSearch.buildOverflow should use for a vecf16 base (feed native half, not
+// add_chunk_float's f32->half cast). Confirms the native half overflow works.
+TEST(GpuBruteForceTest, HalfEmptyAddChunkSearch) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 50;
+    std::vector<half> hdata(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j) hdata[i * dimension + j] = __float2half((float)(i + 1));
+        ids[i] = (int64_t)(i + 1);
+    }
+
+    gpu_brute_force_t<half> index(count, dimension, DistanceType_L2Expanded, 1, 0);
+    index.start();
+    index.add_chunk(hdata.data(), count, -1, ids.data());
+    index.build();
+
+    std::vector<half> qh(dimension);
+    for (uint32_t j = 0; j < dimension; ++j) qh[j] = __float2half(25.0f);
+    auto result = index.search(qh.data(), 1, dimension, 3, brute_force_search_params_default());
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)3);
+    ASSERT_EQ(result.neighbors[0], (int64_t)25);
+
+    index.destroy();
+}
+
 TEST(GpuBruteForceTest, SearchWithMultipleQueries) {
     const uint32_t dimension = 4;
     const uint64_t count = 4;
@@ -490,3 +519,10 @@ TEST(GpuBruteForceTest, MultiQueryKExceedsIndexSize) {
 
     index.destroy();
 }
+
+// NOTE: cuVS brute force does NOT support int8_t/uint8_t. cuvs::neighbors::brute_force::search
+// only provides index<float,float> and index<half,float> overloads (verified: compiling
+// gpu_brute_force_t<int8_t>/<uint8_t>.search fails with "no matching search overload"). The
+// header's "Supported T: ... int8_t, uint8_t" claim does not hold for search. For direct
+// narrow-base ivfpq/cagra, the int8/uint8 overflow tier therefore uses the pure-Go brute force
+// (pkg/vectorindex/brute_force, native int8/uint8 kernels), NOT a cuVS C++ brute force.

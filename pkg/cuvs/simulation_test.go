@@ -303,7 +303,7 @@ func TestSimulatedReplicatedIvfPq(t *testing.T) {
 	count := uint64(64)
 	ds, ids := simData(count, dim)
 
-	idx, err := NewGpuIvfPq[float32](ds, count, dim, L2Expanded, simIvfPqParams(), simDevices(), simRanks, Replicated, ids)
+	idx, err := NewGpuIvfPq[float32, float32](ds, count, dim, L2Expanded, simIvfPqParams(), simDevices(), simRanks, Replicated, ids)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestSimulatedShardedIvfPq(t *testing.T) {
 	count := uint64(128) // 4 shards of 32
 	ds, ids := simData(count, dim)
 
-	idx, err := NewGpuIvfPq[float32](ds, count, dim, L2Expanded, simIvfPqParams(), simDevices(), simRanks, Sharded, ids)
+	idx, err := NewGpuIvfPq[float32, float32](ds, count, dim, L2Expanded, simIvfPqParams(), simDevices(), simRanks, Sharded, ids)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestSimulatedReplicatedExtendIvfPq(t *testing.T) {
 	base := uint64(64)
 	ds, ids := simData(base, dim)
 
-	idx, err := NewGpuIvfPq[float32](ds, base, dim, L2Expanded, simIvfPqParams(), simDevices(), simRanks, Replicated, ids)
+	idx, err := NewGpuIvfPq[float32, float32](ds, base, dim, L2Expanded, simIvfPqParams(), simDevices(), simRanks, Replicated, ids)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -441,7 +441,7 @@ func TestSimulatedReplicatedCagra(t *testing.T) {
 	count := uint64(64)
 	ds, ids := simData(count, dim)
 
-	idx, err := NewGpuCagra[float32](ds, count, dim, L2Expanded, simCagraBuildParams(), simDevices(), simRanks, Replicated, ids)
+	idx, err := NewGpuCagra[float32, float32](ds, count, dim, L2Expanded, simCagraBuildParams(), simDevices(), simRanks, Replicated, ids)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -473,7 +473,7 @@ func TestSimulatedShardedCagra(t *testing.T) {
 	count := uint64(128) // 4 shards of 32
 	ds, ids := simData(count, dim)
 
-	idx, err := NewGpuCagra[float32](ds, count, dim, L2Expanded, simCagraBuildParams(), simDevices(), simRanks, Sharded, ids)
+	idx, err := NewGpuCagra[float32, float32](ds, count, dim, L2Expanded, simCagraBuildParams(), simDevices(), simRanks, Sharded, ids)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -517,7 +517,7 @@ func TestSimulatedCagraSaveLoadAcrossModes(t *testing.T) {
 
 	// Build REPLICATED under simulation and save the index files.
 	{
-		idx, err := NewGpuCagra[float32](ds, count, dim, L2Expanded, simCagraBuildParams(), simDevices(), simRanks, Replicated, ids)
+		idx, err := NewGpuCagra[float32, float32](ds, count, dim, L2Expanded, simCagraBuildParams(), simDevices(), simRanks, Replicated, ids)
 		if err != nil {
 			t.Fatalf("new: %v", err)
 		}
@@ -540,7 +540,7 @@ func TestSimulatedCagraSaveLoadAcrossModes(t *testing.T) {
 
 	// Reload as REPLICATED (4 ranks).
 	{
-		idx, err := NewGpuCagraFromDataDirectory[float32](dir, dim, L2Expanded, simCagraBuildParams(), simDevices(), simRanks, Replicated)
+		idx, err := NewGpuCagraFromDataDirectory[float32, float32](dir, dim, L2Expanded, simCagraBuildParams(), simDevices(), simRanks, Replicated)
 		if err != nil {
 			t.Fatalf("load replicated: %v", err)
 		}
@@ -557,7 +557,7 @@ func TestSimulatedCagraSaveLoadAcrossModes(t *testing.T) {
 
 	// Reload the same files as SINGLE.
 	{
-		idx, err := NewGpuCagraFromDataDirectory[float32](dir, dim, L2Expanded, simCagraBuildParams(), []int{0}, 1, SingleGpu)
+		idx, err := NewGpuCagraFromDataDirectory[float32, float32](dir, dim, L2Expanded, simCagraBuildParams(), []int{0}, 1, SingleGpu)
 		if err != nil {
 			t.Fatalf("load single: %v", err)
 		}

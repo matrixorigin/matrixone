@@ -32,7 +32,7 @@ import (
 )
 
 // GpuIvfPq represents the C++ gpu_ivf_pq_t object.
-type GpuIvfPq[T VectorType] struct {
+type GpuIvfPq[B, Q VectorType] struct {
 	cIvfPq                   C.gpu_ivf_pq_c
 	dimension                uint32
 	nthread                  uint32
@@ -43,7 +43,7 @@ type GpuIvfPq[T VectorType] struct {
 
 // SetBatchWindow sets the batching window in microseconds for search operations.
 // A window of 0 disables batching; any positive value enables batching with that delay.
-func (gi *GpuIvfPq[T]) SetBatchWindow(windowUs int64) error {
+func (gi *GpuIvfPq[B, Q]) SetBatchWindow(windowUs int64) error {
 	gi.batchWindowUs = windowUs
 	if gi.cIvfPq != nil {
 		var errmsg *C.char
@@ -61,7 +61,7 @@ func (gi *GpuIvfPq[T]) SetBatchWindow(windowUs int64) error {
 // flag. false (default): dispatch eagerly at the full batch size. true: wait for
 // the batch to fill or the window to elapse, then dispatch at the real size.
 // Has no effect unless the batch window is > 0.
-func (gi *GpuIvfPq[T]) SetDynbConservativeDispatch(enable bool) error {
+func (gi *GpuIvfPq[B, Q]) SetDynbConservativeDispatch(enable bool) error {
 	gi.dynbConservativeDispatch = enable
 	if gi.cIvfPq != nil {
 		var errmsg *C.char
@@ -77,13 +77,14 @@ func (gi *GpuIvfPq[T]) SetDynbConservativeDispatch(enable bool) error {
 
 // NewGpuIvfPq creates a new GpuIvfPq instance from a dataset.
 // ids may be nil to use internal sequential IDs (0..count-1).
-func NewGpuIvfPq[T VectorType](dataset []T, count uint64, dimension uint32, metric DistanceType,
-	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode, ids []int64) (*GpuIvfPq[T], error) {
+func NewGpuIvfPq[B, Q VectorType](dataset []Q, count uint64, dimension uint32, metric DistanceType,
+	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode, ids []int64) (*GpuIvfPq[B, Q], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
 
-	qtype := GetQuantization[T]()
+	btype := GetQuantization[B]()
+	qtype := GetQuantization[Q]()
 	var errmsg *C.char
 	cDevices := make([]C.int, len(devices))
 	for i, d := range devices {
@@ -113,6 +114,7 @@ func NewGpuIvfPq[T VectorType](dataset []T, count uint64, dimension uint32, metr
 		C.int(len(devices)),
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
+		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		cIds,
 		unsafe.Pointer(&errmsg),
@@ -131,7 +133,7 @@ func NewGpuIvfPq[T VectorType](dataset []T, count uint64, dimension uint32, metr
 		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuIvfPq")
 	}
 
-	return &GpuIvfPq[T]{
+	return &GpuIvfPq[B, Q]{
 		cIvfPq:    cIvfPq,
 		dimension: dimension,
 		nthread:   nthread,
@@ -140,13 +142,14 @@ func NewGpuIvfPq[T VectorType](dataset []T, count uint64, dimension uint32, metr
 }
 
 // NewGpuIvfPqFromDataFile creates a new GpuIvfPq instance from a MODF datafile.
-func NewGpuIvfPqFromDataFile[T VectorType](datafilename string, metric DistanceType,
-	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[T], error) {
+func NewGpuIvfPqFromDataFile[B, Q VectorType](datafilename string, metric DistanceType,
+	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[B, Q], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
 
-	qtype := GetQuantization[T]()
+	btype := GetQuantization[B]()
+	qtype := GetQuantization[Q]()
 	var errmsg *C.char
 	cFilename := C.CString(datafilename)
 	defer C.free(unsafe.Pointer(cFilename))
@@ -172,6 +175,7 @@ func NewGpuIvfPqFromDataFile[T VectorType](datafilename string, metric DistanceT
 		C.int(len(devices)),
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
+		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		unsafe.Pointer(&errmsg),
 	)
@@ -189,7 +193,7 @@ func NewGpuIvfPqFromDataFile[T VectorType](datafilename string, metric DistanceT
 
 	// dimension will be updated when GetDim() is called, but we can set it to 0 for now
 	// or ideally GetDim() should be used.
-	return &GpuIvfPq[T]{
+	return &GpuIvfPq[B, Q]{
 		cIvfPq:    cIvfPq,
 		dimension: 0,
 		nthread:   nthread,
@@ -198,13 +202,14 @@ func NewGpuIvfPqFromDataFile[T VectorType](datafilename string, metric DistanceT
 }
 
 // NewGpuIvfPqEmpty creates a new GpuIvfPq instance with pre-allocated buffer but no data yet.
-func NewGpuIvfPqEmpty[T VectorType](totalCount uint64, dimension uint32, metric DistanceType,
-	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[T], error) {
+func NewGpuIvfPqEmpty[B, Q VectorType](totalCount uint64, dimension uint32, metric DistanceType,
+	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[B, Q], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
 
-	qtype := GetQuantization[T]()
+	btype := GetQuantization[B]()
+	qtype := GetQuantization[Q]()
 	var errmsg *C.char
 	cDevices := make([]C.int, len(devices))
 	for i, d := range devices {
@@ -228,6 +233,7 @@ func NewGpuIvfPqEmpty[T VectorType](totalCount uint64, dimension uint32, metric 
 		C.int(len(devices)),
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
+		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		nil,
 		unsafe.Pointer(&errmsg),
@@ -244,7 +250,7 @@ func NewGpuIvfPqEmpty[T VectorType](totalCount uint64, dimension uint32, metric 
 		return nil, moerr.NewInternalErrorNoCtx("failed to create empty GpuIvfPq")
 	}
 
-	return &GpuIvfPq[T]{
+	return &GpuIvfPq[B, Q]{
 		cIvfPq:    cIvfPq,
 		dimension: dimension,
 		nthread:   nthread,
@@ -253,7 +259,7 @@ func NewGpuIvfPqEmpty[T VectorType](totalCount uint64, dimension uint32, metric 
 }
 
 // AddChunk adds a chunk of data to the pre-allocated buffer.
-func (gi *GpuIvfPq[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) error {
+func (gi *GpuIvfPq[B, Q]) AddChunk(chunk []Q, chunkCount uint64, ids []int64) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -285,7 +291,7 @@ func (gi *GpuIvfPq[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) error
 }
 
 // AddChunkFloat adds a chunk of float32 data, performing on-the-fly quantization if needed.
-func (gi *GpuIvfPq[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
+func (gi *GpuIvfPq[B, Q]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -316,8 +322,73 @@ func (gi *GpuIvfPq[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []i
 	return nil
 }
 
-// TrainQuantizer trains the scalar quantizer (if T is 1-byte)
-func (gi *GpuIvfPq[T]) TrainQuantizer(trainData []float32, nSamples uint64) error {
+// AddChunkQuantize adds a chunk of base-typed (B) data, quantizing natively to
+// the storage type Q (int8/uint8) via the B-source quantizer. base_data is the
+// raw bytes of chunkCount*dim B-typed elements. No f32 detour.
+func (gi *GpuIvfPq[B, Q]) AddChunkQuantize(chunk []B, chunkCount uint64, ids []int64) error {
+	if gi.cIvfPq == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	if len(chunk) == 0 || chunkCount == 0 {
+		return nil
+	}
+
+	var errmsg *C.char
+	var cIds *C.int64_t
+	if len(ids) > 0 {
+		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
+	}
+	C.gpu_ivf_pq_add_chunk_quantize(
+		gi.cIvfPq,
+		unsafe.Pointer(&chunk[0]),
+		C.uint64_t(chunkCount),
+		cIds,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(chunk)
+	runtime.KeepAlive(ids)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// QuantizeQuery quantizes a base-typed (B) query to the storage type Q
+// (int8/uint8) via the B-source quantizer, writing numQueries*dimension values
+// into out. The caller then runs the normal native Search([]Q).
+func (gi *GpuIvfPq[B, Q]) QuantizeQuery(queries []B, numQueries uint64, out []Q) error {
+	if gi.cIvfPq == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	if len(queries) == 0 {
+		return nil
+	}
+
+	var errmsg *C.char
+	C.gpu_ivf_pq_quantize_query(
+		gi.cIvfPq,
+		unsafe.Pointer(&queries[0]),
+		C.uint64_t(numQueries),
+		unsafe.Pointer(&out[0]),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+	runtime.KeepAlive(out)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// TrainQuantizer trains the scalar quantizer (if Q is 1-byte) from base-typed
+// (B) training data.
+func (gi *GpuIvfPq[B, Q]) TrainQuantizer(trainData []B, nSamples uint64) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -328,7 +399,7 @@ func (gi *GpuIvfPq[T]) TrainQuantizer(trainData []float32, nSamples uint64) erro
 	var errmsg *C.char
 	C.gpu_ivf_pq_train_quantizer(
 		gi.cIvfPq,
-		(*C.float)(&trainData[0]),
+		unsafe.Pointer(&trainData[0]),
 		C.uint64_t(nSamples),
 		unsafe.Pointer(&errmsg),
 	)
@@ -343,7 +414,7 @@ func (gi *GpuIvfPq[T]) TrainQuantizer(trainData []float32, nSamples uint64) erro
 }
 
 // SetQuantizer sets the scalar quantizer parameters (if T is 1-byte)
-func (gi *GpuIvfPq[T]) SetQuantizer(min, max float32) error {
+func (gi *GpuIvfPq[B, Q]) SetQuantizer(min, max float32) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -365,7 +436,7 @@ func (gi *GpuIvfPq[T]) SetQuantizer(min, max float32) error {
 }
 
 // GetQuantizer gets the scalar quantizer parameters (if T is 1-byte)
-func (gi *GpuIvfPq[T]) GetQuantizer() (float32, float32, error) {
+func (gi *GpuIvfPq[B, Q]) GetQuantizer() (float32, float32, error) {
 	if gi.cIvfPq == nil {
 		return 0, 0, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -388,13 +459,14 @@ func (gi *GpuIvfPq[T]) GetQuantizer() (float32, float32, error) {
 }
 
 // NewGpuIvfPqFromFile creates a new GpuIvfPq instance by loading from a file.
-func NewGpuIvfPqFromFile[T VectorType](filename string, dimension uint32, metric DistanceType,
-	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[T], error) {
+func NewGpuIvfPqFromFile[B, Q VectorType](filename string, dimension uint32, metric DistanceType,
+	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[B, Q], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
 
-	qtype := GetQuantization[T]()
+	btype := GetQuantization[B]()
+	qtype := GetQuantization[Q]()
 	var errmsg *C.char
 	cFilename := C.CString(filename)
 	defer C.free(unsafe.Pointer(cFilename))
@@ -421,6 +493,7 @@ func NewGpuIvfPqFromFile[T VectorType](filename string, dimension uint32, metric
 		C.int(len(devices)),
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
+		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		unsafe.Pointer(&errmsg),
 	)
@@ -436,7 +509,7 @@ func NewGpuIvfPqFromFile[T VectorType](filename string, dimension uint32, metric
 		return nil, moerr.NewInternalErrorNoCtx("failed to load GpuIvfPq from file")
 	}
 
-	return &GpuIvfPq[T]{
+	return &GpuIvfPq[B, Q]{
 		cIvfPq:    cIvfPq,
 		dimension: dimension,
 		nthread:   nthread,
@@ -448,8 +521,8 @@ func NewGpuIvfPqFromFile[T VectorType](filename string, dimension uint32, metric
 // For Sharded loads we peek manifest.json to learn the saved shard count and
 // truncate `devices` to that count, so the C++ worker only spawns threads /
 // RMM pools on devices that will actually host a shard.
-func NewGpuIvfPqFromDataDirectory[T VectorType](dir string, dimension uint32, metric DistanceType,
-	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[T], error) {
+func NewGpuIvfPqFromDataDirectory[B, Q VectorType](dir string, dimension uint32, metric DistanceType,
+	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[B, Q], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
@@ -460,7 +533,8 @@ func NewGpuIvfPqFromDataDirectory[T VectorType](dir string, dimension uint32, me
 		return nil, err
 	}
 
-	qtype := GetQuantization[T]()
+	btype := GetQuantization[B]()
+	qtype := GetQuantization[Q]()
 	cDevices := make([]C.int, len(devices))
 	for i, d := range devices {
 		cDevices[i] = C.int(d)
@@ -484,6 +558,7 @@ func NewGpuIvfPqFromDataDirectory[T VectorType](dir string, dimension uint32, me
 		C.int(len(devices)),
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
+		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		nil,
 		unsafe.Pointer(&errmsg),
@@ -518,7 +593,7 @@ func NewGpuIvfPqFromDataDirectory[T VectorType](dir string, dimension uint32, me
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
-	return &GpuIvfPq[T]{
+	return &GpuIvfPq[B, Q]{
 		cIvfPq:    cIvfPq,
 		dimension: dimension,
 		nthread:   nthread,
@@ -527,7 +602,7 @@ func NewGpuIvfPqFromDataDirectory[T VectorType](dir string, dimension uint32, me
 }
 
 // Destroy frees the C++ gpu_ivf_pq_t instance
-func (gi *GpuIvfPq[T]) Destroy() error {
+func (gi *GpuIvfPq[B, Q]) Destroy() error {
 	if gi.cIvfPq == nil {
 		return nil
 	}
@@ -543,7 +618,7 @@ func (gi *GpuIvfPq[T]) Destroy() error {
 }
 
 // Start initializes the worker and resources
-func (gi *GpuIvfPq[T]) Start() error {
+func (gi *GpuIvfPq[B, Q]) Start() error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -571,7 +646,7 @@ func (gi *GpuIvfPq[T]) Start() error {
 }
 
 // Build triggers the build or file loading process
-func (gi *GpuIvfPq[T]) Build() error {
+func (gi *GpuIvfPq[B, Q]) Build() error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -586,7 +661,7 @@ func (gi *GpuIvfPq[T]) Build() error {
 }
 
 // Save serializes the index to a file
-func (gi *GpuIvfPq[T]) Save(filename string) error {
+func (gi *GpuIvfPq[B, Q]) Save(filename string) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -604,7 +679,7 @@ func (gi *GpuIvfPq[T]) Save(filename string) error {
 }
 
 // Pack saves the index to a .tar or .tar.gz file using save_dir.
-func (gi *GpuIvfPq[T]) Pack(filename string) error {
+func (gi *GpuIvfPq[B, Q]) Pack(filename string) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -633,7 +708,7 @@ func (gi *GpuIvfPq[T]) Pack(filename string) error {
 // mode overrides the distribution mode at load time — pass Replicated to broadcast
 // a SINGLE_GPU .tar to all GPUs without rebuilding.
 // The index must already be initialized and started before calling Unpack.
-func (gi *GpuIvfPq[T]) Unpack(filename string, mode DistributionMode) error {
+func (gi *GpuIvfPq[B, Q]) Unpack(filename string, mode DistributionMode) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -662,7 +737,7 @@ func (gi *GpuIvfPq[T]) Unpack(filename string, mode DistributionMode) error {
 }
 
 // DeleteId removes an ID from the index (soft delete).
-func (gi *GpuIvfPq[T]) DeleteId(id int64) error {
+func (gi *GpuIvfPq[B, Q]) DeleteId(id int64) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -678,7 +753,7 @@ func (gi *GpuIvfPq[T]) DeleteId(id int64) error {
 
 // DeleteIds applies DeleteId in a loop. See cagra.GpuCagra.DeleteIds for
 // the rationale.
-func (gi *GpuIvfPq[T]) DeleteIds(ids []int64) error {
+func (gi *GpuIvfPq[B, Q]) DeleteIds(ids []int64) error {
 	for _, id := range ids {
 		if err := gi.DeleteId(id); err != nil {
 			return err
@@ -688,7 +763,7 @@ func (gi *GpuIvfPq[T]) DeleteIds(ids []int64) error {
 }
 
 // Search performs a K-Nearest Neighbor search
-func (gi *GpuIvfPq[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) (SearchResultIvfPq, error) {
+func (gi *GpuIvfPq[B, Q]) Search(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) (SearchResultIvfPq, error) {
 	if gi.cIvfPq == nil {
 		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -740,7 +815,7 @@ func (gi *GpuIvfPq[T]) Search(queries []T, numQueries uint64, dimension uint32, 
 }
 
 // SearchFloat performs an IVF-PQ search operation with float32 queries
-func (gi *GpuIvfPq[T]) SearchFloat(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) (SearchResultIvfPq, error) {
+func (gi *GpuIvfPq[B, Q]) SearchFloat(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) (SearchResultIvfPq, error) {
 	if gi.cIvfPq == nil {
 		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -792,12 +867,12 @@ func (gi *GpuIvfPq[T]) SearchFloat(queries []float32, numQueries uint64, dimensi
 }
 
 // SearchAsync performs a K-Nearest Neighbor search asynchronously.
-func (gi *GpuIvfPq[T]) SearchAsync(queries []T, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
+func (gi *GpuIvfPq[B, Q]) SearchAsync(queries []Q, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
 	return gi.SearchAsyncWithParams(queries, numQueries, dimension, limit, DefaultIvfPqSearchParams())
 }
 
 // SearchAsyncWithParams performs a K-Nearest Neighbor search asynchronously with custom parameters.
-func (gi *GpuIvfPq[T]) SearchAsyncWithParams(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) (uint64, error) {
+func (gi *GpuIvfPq[B, Q]) SearchAsyncWithParams(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) (uint64, error) {
 	if gi.cIvfPq == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -831,12 +906,12 @@ func (gi *GpuIvfPq[T]) SearchAsyncWithParams(queries []T, numQueries uint64, dim
 }
 
 // SearchFloat32Async performs a K-Nearest Neighbor search with float32 queries asynchronously.
-func (gi *GpuIvfPq[T]) SearchFloat32Async(queries []float32, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
+func (gi *GpuIvfPq[B, Q]) SearchFloat32Async(queries []float32, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
 	return gi.SearchFloat32AsyncWithParams(queries, numQueries, dimension, limit, DefaultIvfPqSearchParams())
 }
 
 // SearchFloat32AsyncWithParams performs a K-Nearest Neighbor search with float32 queries asynchronously with custom parameters.
-func (gi *GpuIvfPq[T]) SearchFloat32AsyncWithParams(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) (uint64, error) {
+func (gi *GpuIvfPq[B, Q]) SearchFloat32AsyncWithParams(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) (uint64, error) {
 	if gi.cIvfPq == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -870,7 +945,7 @@ func (gi *GpuIvfPq[T]) SearchFloat32AsyncWithParams(queries []float32, numQuerie
 }
 
 // SearchWait waits for an asynchronous search to complete and returns the results.
-func (gi *GpuIvfPq[T]) SearchWait(jobID uint64, numQueries uint64, limit uint32) ([]int64, []float32, error) {
+func (gi *GpuIvfPq[B, Q]) SearchWait(jobID uint64, numQueries uint64, limit uint32) ([]int64, []float32, error) {
 	if gi.cIvfPq == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -903,7 +978,7 @@ func (gi *GpuIvfPq[T]) SearchWait(jobID uint64, numQueries uint64, limit uint32)
 }
 
 // Cap returns the capacity of the index buffer
-func (gi *GpuIvfPq[T]) Cap() uint64 {
+func (gi *GpuIvfPq[B, Q]) Cap() uint64 {
 	if gi.cIvfPq == nil {
 		return 0
 	}
@@ -911,7 +986,7 @@ func (gi *GpuIvfPq[T]) Cap() uint64 {
 }
 
 // Len returns current number of vectors in index
-func (gi *GpuIvfPq[T]) Len() uint64 {
+func (gi *GpuIvfPq[B, Q]) Len() uint64 {
 	if gi.cIvfPq == nil {
 		return 0
 	}
@@ -921,7 +996,7 @@ func (gi *GpuIvfPq[T]) Len() uint64 {
 // GetFilterColMetaJSON returns the INCLUDE-column metadata of the loaded
 // index as a JSON string ready to be re-fed into SetFilterColumns. Returns
 // "" for indexes that were built without INCLUDE columns.
-func (gi *GpuIvfPq[T]) GetFilterColMetaJSON() string {
+func (gi *GpuIvfPq[B, Q]) GetFilterColMetaJSON() string {
 	if gi.cIvfPq == nil {
 		return ""
 	}
@@ -939,7 +1014,7 @@ func (gi *GpuIvfPq[T]) GetFilterColMetaJSON() string {
 }
 
 // Info returns detailed information about the index as a JSON string.
-func (gi *GpuIvfPq[T]) Info() (string, error) {
+func (gi *GpuIvfPq[B, Q]) Info() (string, error) {
 	if gi.cIvfPq == nil {
 		return "", moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -962,13 +1037,13 @@ func (gi *GpuIvfPq[T]) Info() (string, error) {
 }
 
 // GetCenters retrieves the trained centroids.
-func (gi *GpuIvfPq[T]) GetCenters() ([]T, error) {
+func (gi *GpuIvfPq[B, Q]) GetCenters() ([]Q, error) {
 	if gi.cIvfPq == nil {
 		return nil, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
 	nList := gi.GetNList()
 	dim := gi.GetRotDim()
-	centers := make([]T, nList*dim)
+	centers := make([]Q, nList*dim)
 	var errmsg *C.char
 	C.gpu_ivf_pq_get_centers(gi.cIvfPq, unsafe.Pointer(&centers[0]), C.uint64_t(len(centers)), unsafe.Pointer(&errmsg))
 	runtime.KeepAlive(centers)
@@ -982,7 +1057,7 @@ func (gi *GpuIvfPq[T]) GetCenters() ([]T, error) {
 }
 
 // GetNList retrieves the number of lists (centroids) in the index.
-func (gi *GpuIvfPq[T]) GetNList() uint32 {
+func (gi *GpuIvfPq[B, Q]) GetNList() uint32 {
 	if gi.cIvfPq == nil {
 		return 0
 	}
@@ -990,7 +1065,7 @@ func (gi *GpuIvfPq[T]) GetNList() uint32 {
 }
 
 // GetDim retrieves the dimension of the index.
-func (gi *GpuIvfPq[T]) GetDim() uint32 {
+func (gi *GpuIvfPq[B, Q]) GetDim() uint32 {
 	if gi.cIvfPq == nil {
 		return 0
 	}
@@ -998,7 +1073,7 @@ func (gi *GpuIvfPq[T]) GetDim() uint32 {
 }
 
 // GetRotDim retrieves the rotated dimension of the index.
-func (gi *GpuIvfPq[T]) GetRotDim() uint32 {
+func (gi *GpuIvfPq[B, Q]) GetRotDim() uint32 {
 	if gi.cIvfPq == nil {
 		return 0
 	}
@@ -1006,7 +1081,7 @@ func (gi *GpuIvfPq[T]) GetRotDim() uint32 {
 }
 
 // GetDimExt retrieves the extended dimension of the index (including norms and padding).
-func (gi *GpuIvfPq[T]) GetDimExt() uint32 {
+func (gi *GpuIvfPq[B, Q]) GetDimExt() uint32 {
 	if gi.cIvfPq == nil {
 		return 0
 	}
@@ -1014,18 +1089,18 @@ func (gi *GpuIvfPq[T]) GetDimExt() uint32 {
 }
 
 // GetDataset retrieves the flattened host dataset (for debugging).
-func (gi *GpuIvfPq[T]) GetDataset(totalElements uint64) []T {
+func (gi *GpuIvfPq[B, Q]) GetDataset(totalElements uint64) []Q {
 	if gi.cIvfPq == nil {
 		return nil
 	}
-	data := make([]T, totalElements)
+	data := make([]Q, totalElements)
 	C.gpu_ivf_pq_get_dataset(gi.cIvfPq, unsafe.Pointer(&data[0]))
 	return data
 }
 
 // Extend adds new vectors to an already-built index without rebuilding.
 // newIDs may be nil to auto-assign sequential IDs starting from the current index size.
-func (gi *GpuIvfPq[T]) Extend(newData []T, nRows uint64, newIDs []int64) error {
+func (gi *GpuIvfPq[B, Q]) Extend(newData []Q, nRows uint64, newIDs []int64) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -1059,7 +1134,7 @@ func (gi *GpuIvfPq[T]) Extend(newData []T, nRows uint64, newIDs []int64) error {
 
 // ExtendFloat adds new float32 vectors to an already-built index, quantizing on-the-fly if needed.
 // newIDs may be nil to auto-assign sequential IDs starting from the current index size.
-func (gi *GpuIvfPq[T]) ExtendFloat(newData []float32, nRows uint64, newIDs []int64) error {
+func (gi *GpuIvfPq[B, Q]) ExtendFloat(newData []float32, nRows uint64, newIDs []int64) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -1098,7 +1173,7 @@ type SearchResultIvfPq struct {
 }
 
 // SetFilterColumns registers filter-column metadata. See GpuCagra.SetFilterColumns.
-func (gi *GpuIvfPq[T]) SetFilterColumns(colMetaJSON string, totalCount uint64) error {
+func (gi *GpuIvfPq[B, Q]) SetFilterColumns(colMetaJSON string, totalCount uint64) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -1115,7 +1190,7 @@ func (gi *GpuIvfPq[T]) SetFilterColumns(colMetaJSON string, totalCount uint64) e
 }
 
 // AddFilterChunk appends raw filter-column bytes. See GpuCagra.AddFilterChunk.
-func (gi *GpuIvfPq[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
+func (gi *GpuIvfPq[B, Q]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -1146,7 +1221,7 @@ func (gi *GpuIvfPq[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []u
 }
 
 // SearchWithFilter runs a filtered K-NN search. predsJSON="" = unfiltered.
-func (gi *GpuIvfPq[T]) SearchWithFilter(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (SearchResultIvfPq, error) {
+func (gi *GpuIvfPq[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (SearchResultIvfPq, error) {
 	if gi.cIvfPq == nil {
 		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -1193,7 +1268,7 @@ func (gi *GpuIvfPq[T]) SearchWithFilter(queries []T, numQueries uint64, dimensio
 }
 
 // SearchFloatWithFilter runs a filtered K-NN search with float32 queries.
-func (gi *GpuIvfPq[T]) SearchFloatWithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (SearchResultIvfPq, error) {
+func (gi *GpuIvfPq[B, Q]) SearchFloatWithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (SearchResultIvfPq, error) {
 	if gi.cIvfPq == nil {
 		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -1244,7 +1319,7 @@ func (gi *GpuIvfPq[T]) SearchFloatWithFilter(queries []float32, numQueries uint6
 // SearchFloat32AsyncWithParams + the predicate-eval semantics of
 // SearchFloatWithFilter. Used by MultiGpuIvfPq to dispatch per-shard
 // filtered searches in parallel.
-func (gi *GpuIvfPq[T]) SearchFloatWithFilterAsync(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (uint64, error) {
+func (gi *GpuIvfPq[B, Q]) SearchFloatWithFilterAsync(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (uint64, error) {
 	if gi.cIvfPq == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}

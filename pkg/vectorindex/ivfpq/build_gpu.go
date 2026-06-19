@@ -31,44 +31,57 @@ import (
 // When the current sub-index reaches IndexCapacity, it is finalized (Build called) and a
 // new sub-index is created, mirroring the CagraBuild pattern.
 //
+// IvfpqBuild carries two element types: base/quantizer-source B (the decoded
+// source column type — f32 or f16) and storage Q (the cuVS sub-index storage
+// type). For a direct index B==Q; for a quantized index (e.g. vecf16 base ->
+// int8 storage) B is the base type and Q the 1-byte storage type.
+//
 // IvfpqBuild is single-threaded; the ivfpq_create table function runs with IsSingle=true.
-type IvfpqBuild[T cuvs.VectorType] struct {
+type IvfpqBuild[B, Q cuvs.VectorType] struct {
 	uid     string
 	idxcfg  vectorindex.IndexConfig
 	tblcfg  vectorindex.IndexTableConfig
-	indexes []*IvfpqModel[T]
-	current *IvfpqModel[T]
+	indexes []*IvfpqModel[B, Q]
+	current *IvfpqModel[B, Q]
 	nthread uint32
 	devices []int
 	count   int64
 	idBuf   [1]int64
 
+	// (B, Q) routing tags computed once at construction. bIsHalf: the base
+	// type is f16. qIsHalf: the storage type is f16 (so a half base goes
+	// native rather than quantized).
+	bIsHalf bool
+	qIsHalf bool
+
 	// Filter column metadata (INCLUDE columns) — see CagraBuild.filterColMetaJSON.
 	filterColMetaJSON string
 }
 
-func NewIvfpqBuild[T cuvs.VectorType](
+func NewIvfpqBuild[B, Q cuvs.VectorType](
 	uid string,
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
 	nthread uint32,
 	devices []int,
-) (*IvfpqBuild[T], error) {
-	return &IvfpqBuild[T]{
+) (*IvfpqBuild[B, Q], error) {
+	return &IvfpqBuild[B, Q]{
 		uid:     uid,
 		idxcfg:  idxcfg,
 		tblcfg:  tblcfg,
-		indexes: make([]*IvfpqModel[T], 0, 4),
+		indexes: make([]*IvfpqModel[B, Q], 0, 4),
 		nthread: nthread,
 		devices: devices,
+		bIsHalf: cuvs.GetQuantization[B]() == cuvs.F16,
+		qIsHalf: cuvs.GetQuantization[Q]() == cuvs.F16,
 	}, nil
 }
 
-func (b *IvfpqBuild[T]) createKey(n int) string {
+func (b *IvfpqBuild[B, Q]) createKey(n int) string {
 	return fmt.Sprintf("%s:%d", b.uid, n)
 }
 
-func (b *IvfpqBuild[T]) getOrCreateCurrent() (*IvfpqModel[T], error) {
+func (b *IvfpqBuild[B, Q]) getOrCreateCurrent() (*IvfpqModel[B, Q], error) {
 	capacity := b.idxcfg.IndexCapacity
 
 	if b.current != nil && b.count >= capacity {
@@ -82,7 +95,7 @@ func (b *IvfpqBuild[T]) getOrCreateCurrent() (*IvfpqModel[T], error) {
 
 	if b.current == nil {
 		key := b.createKey(len(b.indexes))
-		m, err := NewIvfpqModelForBuild[T](key, b.idxcfg, b.nthread, b.devices)
+		m, err := NewIvfpqModelForBuild[B, Q](key, b.idxcfg, b.nthread, b.devices)
 		if err != nil {
 			return nil, err
 		}
@@ -104,32 +117,52 @@ func (b *IvfpqBuild[T]) getOrCreateCurrent() (*IvfpqModel[T], error) {
 }
 
 // SetFilterColumns — see cagra.CagraBuild.SetFilterColumns.
-func (b *IvfpqBuild[T]) SetFilterColumns(colMetaJSON string) {
+func (b *IvfpqBuild[B, Q]) SetFilterColumns(colMetaJSON string) {
 	b.filterColMetaJSON = colMetaJSON
 }
 
 // AddFilterChunk — see cagra.CagraBuild.AddFilterChunk.
-func (b *IvfpqBuild[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
+func (b *IvfpqBuild[B, Q]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
 	if b.current == nil {
-		return moerr.NewInternalErrorNoCtx("IvfpqBuild.AddFilterChunk: no current sub-index (call AddFloat first)")
+		return moerr.NewInternalErrorNoCtx("IvfpqBuild.AddFilterChunk: no current sub-index (call AddRow first)")
 	}
 	return b.current.Index.AddFilterChunk(colIdx, data, nullBitmap, nrows)
 }
 
-func (b *IvfpqBuild[T]) AddFloat(id int64, vec []float32) error {
+// AddRow buffers one source row. The create passes fa (decoded f32) for an
+// f32 base, or hf (decoded half) for an f16 base; the unused one is nil.
+// Routing by (B, Q):
+//   - B is f32: feed fa through AddChunkFloat (the C add_chunk_float path
+//     handles f32 -> Q identity/cast/quantize).
+//   - B is f16, Q is f16 (direct, Q==B): native AddChunk([]Q).
+//   - B is f16, Q is int8/uint8: quantize via AddChunkQuantize([]B).
+func (b *IvfpqBuild[B, Q]) AddRow(id int64, fa []float32, hf []cuvs.Float16) error {
 	idx, err := b.getOrCreateCurrent()
 	if err != nil {
 		return err
 	}
 	b.idBuf[0] = id
-	if err = idx.AddChunkFloat(vec, 1, b.idBuf[:]); err != nil {
+
+	if !b.bIsHalf {
+		// f32 base.
+		err = idx.AddChunkFloat(fa, 1, b.idBuf[:])
+	} else if b.qIsHalf {
+		// f16 base, f16 storage (direct, Q == B == Float16).
+		vec, _ := any(hf).([]Q)
+		err = idx.AddChunk(vec, 1, b.idBuf[:])
+	} else {
+		// f16 base, int8/uint8 storage: native half-source quantize.
+		vec, _ := any(hf).([]B)
+		err = idx.AddChunkQuantize(vec, 1, b.idBuf[:])
+	}
+	if err != nil {
 		return err
 	}
 	b.count++
 	return nil
 }
 
-func (b *IvfpqBuild[T]) ToInsertSql(ts int64) ([]string, error) {
+func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 	if b.current != nil && b.count > 0 {
 		if err := b.current.Build(); err != nil {
 			return nil, err
@@ -160,7 +193,7 @@ func (b *IvfpqBuild[T]) ToInsertSql(ts int64) ([]string, error) {
 	return sqls, nil
 }
 
-func (b *IvfpqBuild[T]) Destroy() error {
+func (b *IvfpqBuild[B, Q]) Destroy() error {
 	var errs error
 	if b.current != nil {
 		if err := b.current.Destroy(); err != nil {
@@ -177,6 +210,6 @@ func (b *IvfpqBuild[T]) Destroy() error {
 	return errs
 }
 
-func (b *IvfpqBuild[T]) GetIndexes() []*IvfpqModel[T] {
+func (b *IvfpqBuild[B, Q]) GetIndexes() []*IvfpqModel[B, Q] {
 	return b.indexes
 }

@@ -50,4 +50,16 @@ create index ixok using cagra on t (v)
     op_type 'vector_l2_ops' intermediate_graph_degree=8 graph_degree=4 itopk_size=16;
 select id from t order by l2_distance(v, '[1,2,3]') asc limit 1;
 
+-- Base-column type guard: only vecf32 / vecf16 are valid base columns;
+-- vecbf16 (like int8/uint8) is rejected.
+create table tbf (id bigint primary key, v vecbf16(8));
+create index ixbf using cagra on tbf (v) op_type 'vector_l2_ops';
+create index ixbf using ivfpq on tbf (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8;
+
+-- QUANTIZATION is downcast-only: a vecf16 base (2 bytes/element) cannot be
+-- upcast to float32 storage (4 bytes/element).
+create table th (id bigint primary key, v vecf16(8));
+create index ixup using cagra on th (v) op_type 'vector_l2_ops' QUANTIZATION 'float32';
+create index ixup using ivfpq on th (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8 QUANTIZATION 'float32';
+
 drop database gpu_negative;

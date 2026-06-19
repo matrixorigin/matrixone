@@ -140,14 +140,16 @@ struct ivf_flat_search_result_t {
  * @brief gpu_ivf_flat_t implements an IVF-Flat index that can run on a single GPU or sharded across multiple GPUs.
  */
 template <typename T>
-class gpu_ivf_flat_t : public gpu_index_base_t<T, ivf_flat_build_params_t, int64_t> {
+class gpu_ivf_flat_t : public gpu_index_base_t<float, T, ivf_flat_build_params_t, int64_t> {
 public:
+    using base_type    = float;
+    using storage_type = T;
     using ivf_flat_index = cuvs::neighbors::ivf_flat::index<T, int64_t>;
     using mg_index = cuvs::neighbors::mg_index<ivf_flat_index, T, int64_t>;
     using search_result_t = ivf_flat_search_result_t;
     // Inherited dependent type — bring into scope so search_internal can take a
     // const host_mask_bundle_t* parameter without `typename Base::...` everywhere.
-    using host_mask_bundle_t = typename gpu_index_base_t<T, ivf_flat_build_params_t, int64_t>::host_mask_bundle_t;
+    using host_mask_bundle_t = typename gpu_index_base_t<float, T, ivf_flat_build_params_t, int64_t>::host_mask_bundle_t;
 
     std::unique_ptr<ivf_flat_index> index_;
     std::string data_filename_;
@@ -1470,7 +1472,7 @@ public:
     }
 
     std::string info() const override {
-        std::string json = gpu_index_base_t<T, ivf_flat_build_params_t, int64_t>::info();
+        std::string json = gpu_index_base_t<float, T, ivf_flat_build_params_t, int64_t>::info();
         json += ", \"type\": \"IVF-Flat\", \"ivf_flat\": {";
         if (index_) json += "\"mode\": \"Single-GPU\", \"size\": " + std::to_string(index_->size());
         else if (!this->replicated_indices_.empty()) json += "\"mode\": \"Local-Indices\", \"ranks\": " + std::to_string(this->replicated_indices_.size());

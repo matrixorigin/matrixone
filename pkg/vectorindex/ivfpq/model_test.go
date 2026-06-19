@@ -128,7 +128,7 @@ func makeIndexBatch(proc *process.Process, tarPath string) *batch.Batch {
 
 // buildTestModel builds an IvfpqModel, calls Build, and saves via ToSql.
 // Index is nil after ToSql (GPU memory freed). Path/Checksum/FileSize are set.
-func buildTestModel(t *testing.T, id string, ids []int64) *IvfpqModel[float32] {
+func buildTestModel(t *testing.T, id string, ids []int64) *IvfpqModel[float32, float32] {
 	t.Helper()
 
 	idxcfg := testIdxcfg()
@@ -141,7 +141,7 @@ func buildTestModel(t *testing.T, id string, ids []int64) *IvfpqModel[float32] {
 		}
 	}
 
-	m, err := NewIvfpqModelForBuild[float32](id, idxcfg, 1, []int{0})
+	m, err := NewIvfpqModelForBuild[float32, float32](id, idxcfg, 1, []int{0})
 	require.NoError(t, err)
 
 	err = m.InitEmpty(testNVectors)
@@ -185,7 +185,7 @@ func TestModelStreamError(t *testing.T) {
 	}
 	defer func() { runSql = origRunSql }()
 
-	idx := &IvfpqModel[float32]{
+	idx := &IvfpqModel[float32, float32]{
 		Id:       "test-stream-err",
 		FileSize: 1024,
 		Checksum: "fake-checksum",
@@ -212,7 +212,7 @@ func TestModelBuildAndLoad(t *testing.T) {
 	}
 
 	// ---- Build ----
-	built, err := NewIvfpqModelForBuild[float32]("test-build", idxcfg, 1, []int{0})
+	built, err := NewIvfpqModelForBuild[float32, float32]("test-build", idxcfg, 1, []int{0})
 	require.NoError(t, err)
 
 	err = built.InitEmpty(testNVectors)
@@ -248,7 +248,7 @@ func TestModelBuildAndLoad(t *testing.T) {
 	defer func() { runSql = origRunSql }()
 
 	// ---- Load from local tar ----
-	loader := &IvfpqModel[float32]{
+	loader := &IvfpqModel[float32, float32]{
 		Id:       "test-build",
 		Path:     tarPath,
 		Checksum: checksum,
@@ -335,7 +335,7 @@ func TestModelLoadFromDB(t *testing.T) {
 	}
 	defer func() { runSql = origRunSql }()
 
-	models, err := LoadMetadata[float32](sqlproc, tblcfg.DbName, tblcfg.MetadataTable)
+	models, err := LoadMetadata[float32, float32](sqlproc, tblcfg.DbName, tblcfg.MetadataTable)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(models))
 
@@ -360,7 +360,7 @@ func TestModelLoadFromDB(t *testing.T) {
 func TestModelNil(t *testing.T) {
 	var tblcfg vectorindex.IndexTableConfig
 
-	idx := &IvfpqModel[float32]{}
+	idx := &IvfpqModel[float32, float32]{}
 
 	// InitEmpty fails because Devices is empty.
 	err := idx.InitEmpty(10)
@@ -380,7 +380,7 @@ func TestModelNil(t *testing.T) {
 	require.NotNil(t, err)
 
 	// SearchF32 with nil query fails.
-	idx2 := &IvfpqModel[float32]{}
+	idx2 := &IvfpqModel[float32, float32]{}
 	_, _, err = idx2.SearchF32(nil, 1, 0)
 	require.NotNil(t, err)
 
@@ -411,7 +411,7 @@ func TestModelEmptyBuild(t *testing.T) {
 	idxcfg := testIdxcfg()
 	tblcfg := testTblcfg()
 
-	built, err := NewIvfpqModelForBuild[float32]("test-empty", idxcfg, 1, []int{0})
+	built, err := NewIvfpqModelForBuild[float32, float32]("test-empty", idxcfg, 1, []int{0})
 	require.NoError(t, err)
 
 	// Not dirty → ToSql returns empty slice.

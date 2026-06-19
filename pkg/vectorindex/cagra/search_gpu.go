@@ -17,7 +17,10 @@
 package cagra
 
 import (
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -26,22 +29,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
+// cagraHalfToFloat32 widens a []cuvs.Float16 query to []float32 (bit-exact; both
+// uint16 IEEE half). Used for the filtered vecf16-direct path (half-cast back to
+// the half index inside cuVS — exact, no quantizer).
+func cagraHalfToFloat32(q []cuvs.Float16) []float32 {
+	h := *(*[]types.Float16)(unsafe.Pointer(&q))
+	return types.Float16ToFloat32Slice(h)
+}
+
 // CagraSearch implements cache.VectorIndexSearchIf for GPU CAGRA indexes.
 // Unlike HnswSearch, there is no concurrency gate (Cond/Mutex) because CAGRA
 // manages GPU thread concurrency internally via its worker pool.
-type CagraSearch[T cuvs.VectorType] struct {
+type CagraSearch[B, Q cuvs.VectorType] struct {
 	Idxcfg        vectorindex.IndexConfig
 	Tblcfg        vectorindex.IndexTableConfig
-	Indexes       []*CagraModel[T]
-	MultiIndex    *cuvs.MultiGpuCagra[T] // built once in Load; nil until indexes are loaded
-	Overflow      *cuvs.GpuBruteForce[T] // CDC insert overflow; nil when no overflow records exist
+	Indexes       []*CagraModel[B, Q]
+	MultiIndex    *cuvs.MultiGpuCagra[B, Q] // built once in Load; nil until indexes are loaded
+	Overflow      *cuvs.GpuBruteForce[B]    // CDC insert overflow; nil when no overflow records exist
 	Devices       []int
 	ThreadsSearch int64
 }
 
-func NewCagraSearch[T cuvs.VectorType](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, devices []int) *CagraSearch[T] {
+func NewCagraSearch[B, Q cuvs.VectorType](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, devices []int) *CagraSearch[B, Q] {
 	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch)
-	return &CagraSearch[T]{
+	return &CagraSearch[B, Q]{
 		Idxcfg:        idxcfg,
 		Tblcfg:        tblcfg,
 		Devices:       devices,
@@ -50,12 +61,7 @@ func NewCagraSearch[T cuvs.VectorType](idxcfg vectorindex.IndexConfig, tblcfg ve
 }
 
 // Search implements cache.VectorIndexSearchIf.
-func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
-	query, ok := anyquery.([]float32)
-	if !ok {
-		return nil, nil, moerr.NewInternalErrorNoCtx("CagraSearch: query type mismatch")
-	}
-
+func (s *CagraSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	limit := rt.Limit
 
 	if s.MultiIndex == nil {
@@ -71,10 +77,31 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 		neighbors64 []int64
 		dists32     []float32
 	)
-	if rt.FilterJSON != "" {
-		neighbors64, dists32, err = s.MultiIndex.SearchFloat32WithFilter(query, 1, dim, uint32(limit), sp, rt.FilterJSON)
+	if query, ok := anyquery.([]float32); ok {
+		// f32 base (direct), or f32 base + QUANTIZATION (query quantized to T).
+		if rt.FilterJSON != "" {
+			neighbors64, dists32, err = s.MultiIndex.SearchFloat32WithFilter(query, 1, dim, uint32(limit), sp, rt.FilterJSON)
+		} else {
+			neighbors64, dists32, err = s.MultiIndex.SearchFloat32(query, 1, dim, uint32(limit), sp)
+		}
+	} else if qh, ok := anyquery.([]cuvs.Float16); ok {
+		// vecf16 base.
+		if qt, isT := anyquery.([]Q); isT {
+			// f16-direct (storage T==Float16): native half search.
+			if rt.FilterJSON != "" {
+				neighbors64, dists32, err = s.MultiIndex.SearchFloat32WithFilter(cagraHalfToFloat32(qh), 1, dim, uint32(limit), sp, rt.FilterJSON)
+			} else {
+				neighbors64, dists32, err = s.MultiIndex.Search(qt, 1, dim, uint32(limit), sp)
+			}
+		} else if rt.FilterJSON != "" {
+			// f16 -> int8/uint8 quantized + filter: not yet supported.
+			return nil, nil, moerr.NewInternalErrorNoCtx("CagraSearch: filtered f16->int8/uint8 search not yet supported")
+		} else {
+			// f16 -> int8/uint8 quantized: quantize the half query to T, native search.
+			neighbors64, dists32, err = s.MultiIndex.SearchQuantizeHalf(qh, 1, dim, uint32(limit), sp)
+		}
 	} else {
-		neighbors64, dists32, err = s.MultiIndex.SearchFloat32(query, 1, dim, uint32(limit), sp)
+		return nil, nil, moerr.NewInternalErrorNoCtx("CagraSearch: query type mismatch")
 	}
 	if err != nil {
 		return nil, nil, err
@@ -100,7 +127,7 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 
 // SearchFloat32 implements cache.VectorIndexSearchIf.
 // Writes results directly into caller-provided slices to avoid heap allocation.
-func (s *CagraSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+func (s *CagraSearch[B, Q]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	keys, dists, err := s.Search(proc, query, rt)
 	if err != nil {
 		return err
@@ -143,8 +170,8 @@ func addOverflowFilterChunks[T cuvs.VectorType](
 }
 
 // Load implements cache.VectorIndexSearchIf: loads metadata then index data from the database.
-func (s *CagraSearch[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
-	indexes, err := LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+func (s *CagraSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
+	indexes, err := LoadMetadata[B, Q](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {
 		return err
 	}
@@ -187,7 +214,7 @@ func (s *CagraSearch[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 // index by construction (CDC writer side is fed the same colMetaJSON). If
 // no sub-index loaded (empty index — never built, or built and dropped),
 // we have no col-meta and skip; cdc_tail data is moot without a main index.
-func (s *CagraSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
+func (s *CagraSearch[B, Q]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 	var (
 		includeBytesPerRow int
 		colMetaJSON        string
@@ -205,7 +232,7 @@ func (s *CagraSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 
-	stub := &CagraModel[T]{Id: vectorindex.CdcTailId}
+	stub := &CagraModel[B, Q]{Id: vectorindex.CdcTailId}
 	chunks, err := stub.loadCdcEventsFromDB(sqlproc, s.Tblcfg)
 	if err != nil {
 		return err
@@ -229,7 +256,7 @@ func (s *CagraSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 	}
 
 	dim := int(s.Idxcfg.CuvsCagra.Dimensions)
-	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks(chunks, dim, includeBytesPerRow)
+	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks[B](chunks, dim, includeBytesPerRow)
 	if err != nil {
 		return err
 	}
@@ -245,7 +272,7 @@ func (s *CagraSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 
-	s.Indexes = append(s.Indexes, &CagraModel[T]{
+	s.Indexes = append(s.Indexes, &CagraModel[B, Q]{
 		Id:                   vectorindex.CdcTailId,
 		DeletedPkids:         delPkids,
 		OverflowPkids:        ovPkids,
@@ -264,7 +291,7 @@ func (s *CagraSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 // When the underlying index has INCLUDE columns, the brute-force is set up
 // with the matching FilterStore so a filtered query can prefilter overflow
 // rows the same way the main cagra index does.
-func (s *CagraSearch[T]) buildOverflow() error {
+func (s *CagraSearch[B, Q]) buildOverflow() error {
 	total := uint64(0)
 	for _, m := range s.Indexes {
 		total += uint64(len(m.OverflowPkids))
@@ -285,7 +312,7 @@ func (s *CagraSearch[T]) buildOverflow() error {
 		device = s.Devices[0]
 	}
 
-	bf, err := cuvs.NewGpuBruteForceEmpty[T](
+	bf, err := cuvs.NewGpuBruteForceEmpty[B](
 		total, dim, cuvsMetric, uint32(s.ThreadsSearch), device)
 	if err != nil {
 		return err
@@ -332,7 +359,9 @@ func (s *CagraSearch[T]) buildOverflow() error {
 			continue
 		}
 		count := uint64(len(m.OverflowPkids))
-		if err = bf.AddChunkFloat(m.OverflowVecs, count, m.OverflowPkids); err != nil {
+		// Overflow vectors are stored in the native base type B (m.OverflowVecs
+		// is []B), so feed the base-typed brute force directly — no f32 detour.
+		if err = bf.AddChunk(m.OverflowVecs, count, m.OverflowPkids); err != nil {
 			bf.Destroy()
 			return err
 		}
@@ -358,14 +387,14 @@ func (s *CagraSearch[T]) buildOverflow() error {
 // which returns []int64{}, []float64{} on s.MultiIndex == nil — that's
 // the load-bearing path for "no main index + no brute-force → empty
 // result". Any future regression here will fail TestCagraSearchEmpty.
-func (s *CagraSearch[T]) buildMultiIndex() (*cuvs.MultiGpuCagra[T], error) {
+func (s *CagraSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuCagra[B, Q], error) {
 	cuvsMetric, ok := metric.MetricTypeToCuvsMetric[metric.MetricType(s.Idxcfg.CuvsCagra.Metric)]
 	if !ok {
 		// Unsupported metric is a real error — surface it rather than returning a
 		// nil index, which Search would treat as an (empty) success.
 		return nil, moerr.NewInternalErrorNoCtxf("CagraSearch: unsupported metric type %v", s.Idxcfg.CuvsCagra.Metric)
 	}
-	gpuIndices := make([]*cuvs.GpuCagra[T], 0, len(s.Indexes))
+	gpuIndices := make([]*cuvs.GpuCagra[B, Q], 0, len(s.Indexes))
 	for _, model := range s.Indexes {
 		if model.Index != nil {
 			gpuIndices = append(gpuIndices, model.Index)
@@ -382,7 +411,7 @@ func (s *CagraSearch[T]) buildMultiIndex() (*cuvs.MultiGpuCagra[T], error) {
 
 // loadIndexes loads each model's index data from the database.
 // On any error it destroys all partially-loaded indexes and returns the error.
-func (s *CagraSearch[T]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[T]) ([]*CagraModel[T], error) {
+func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[B, Q]) ([]*CagraModel[B, Q], error) {
 	for _, idx := range indexes {
 		idx.Devices = s.Devices
 		if err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
@@ -396,7 +425,7 @@ func (s *CagraSearch[T]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*Cag
 }
 
 // Destroy implements cache.VectorIndexSearchIf.
-func (s *CagraSearch[T]) Destroy() {
+func (s *CagraSearch[B, Q]) Destroy() {
 	s.MultiIndex = nil // does not own GPU resources; GpuCagra instances are owned by Indexes
 	if s.Overflow != nil {
 		s.Overflow.Destroy()
@@ -409,6 +438,6 @@ func (s *CagraSearch[T]) Destroy() {
 }
 
 // UpdateConfig implements cache.VectorIndexSearchIf.
-func (s *CagraSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
+func (s *CagraSearch[B, Q]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 	return nil
 }

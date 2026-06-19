@@ -201,14 +201,16 @@ struct cagra_search_result_t {
 /**
  * @brief gpu_cagra_t implements a CAGRA index that can run on a single GPU or sharded across multiple GPUs.
  */
-template <typename T>
-class gpu_cagra_t : public gpu_index_base_t<T, cagra_build_params_t, int64_t> {
+template <typename B, typename T>
+class gpu_cagra_t : public gpu_index_base_t<B, T, cagra_build_params_t, int64_t> {
 public:
+    using base_type    = B;
+    using storage_type = T;
     using cagra_index = cuvs::neighbors::cagra::index<T, uint32_t>;
     using search_result_t = cagra_search_result_t;
     // Inherited dependent type — bring into scope so search_internal can take a
     // const host_mask_bundle_t* parameter without `typename Base::...` everywhere.
-    using host_mask_bundle_t = typename gpu_index_base_t<T, cagra_build_params_t, int64_t>::host_mask_bundle_t;
+    using host_mask_bundle_t = typename gpu_index_base_t<B, T, cagra_build_params_t, int64_t>::host_mask_bundle_t;
 
     // Internal index storage
     std::unique_ptr<cagra_index> index_;
@@ -336,7 +338,7 @@ public:
      * @brief Merges multiple CAGRA indices into a single index.
      * Only works for SINGLE_GPU indices.
      */
-    static std::unique_ptr<gpu_cagra_t<T>> merge(const std::vector<gpu_index_base_t<T, cagra_build_params_t, int64_t>*>& base_indices, uint32_t nthread, const std::vector<int>& devs) {
+    static std::unique_ptr<gpu_cagra_t<B, T>> merge(const std::vector<gpu_index_base_t<B, T, cagra_build_params_t, int64_t>*>& base_indices, uint32_t nthread, const std::vector<int>& devs) {
         if (base_indices.empty()) throw std::invalid_argument("base_indices empty");
         
         uint32_t dim = base_indices[0]->dimension;
@@ -351,7 +353,7 @@ public:
                 
                 std::vector<cagra_index*> cagra_indices;
                 for (auto* bi : base_indices) {
-                    auto* idx = static_cast<gpu_cagra_t<T>*>(bi);
+                    auto* idx = static_cast<gpu_cagra_t<B, T>*>(bi);
                     if (!idx->is_loaded_ || !idx->index_) {
                         throw std::runtime_error("One of the indices to merge is not loaded or is a multi-GPU index.");
                     }
@@ -375,7 +377,7 @@ public:
         std::unique_ptr<cagra_index> merged_idx(merged_idx_ptr);
         transient_worker.stop();
         
-        auto new_idx = std::make_unique<gpu_cagra_t<T>>(
+        auto new_idx = std::make_unique<gpu_cagra_t<B, T>>(
             std::move(merged_idx),
             dim, m, nthread, devs
         );
@@ -428,6 +430,9 @@ public:
 
         // std::cout << "[DEBUG] CAGRA build: Starting build count=" << this->count << " dim=" << this->dimension << " metric=" << (int)this->metric << std::endl;
 
+        // 1-byte storage T: train the B-source quantizer on the buffered B
+        // sample, transform B->T, and store as T. For float/half storage this
+        // is a no-op.
         this->train_quantizer_if_needed();
         if (!this->worker) throw std::runtime_error("Worker not initialized");
 
@@ -739,6 +744,31 @@ public:
                                        const std::string& preds_json) {
         uint64_t job_id = this->search_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
         return this->search_wait(job_id);
+    }
+
+    // Quantize a B-source query to the 1-byte storage type T via the B-source
+    // quantizer, writing num_queries*dimension T values into `out`. The caller
+    // then runs the normal native search(const T*) path. No f32 detour.
+    void quantize_query(const B* queries_data, uint64_t num_queries, T* out) {
+        if constexpr (sizeof(T) != 1) {
+            throw std::runtime_error("quantize_query requires a 1-byte storage type (int8/uint8)");
+        } else {
+            uint64_t job = this->worker->submit_main(
+                [this, queries_data, num_queries, out](raft_handle_wrapper_t& handle) -> std::any {
+                    auto res = handle.get_raft_resources();
+                    auto q_b_host = raft::make_host_matrix_view<const B, int64_t>(queries_data, num_queries, this->dimension);
+                    auto q_b_dev = raft::make_device_matrix<B, int64_t>(*res, num_queries, this->dimension);
+                    raft::copy(*res, q_b_dev.view(), q_b_host);
+                    if (!this->quantizer_.is_trained()) throw std::runtime_error("quantizer not trained");
+                    auto q_t_dev = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
+                    this->quantizer_.template transform<T>(*res, q_b_dev.view(), q_t_dev.data_handle(), true);
+                    raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(out, num_queries, this->dimension), q_t_dev.view());
+                    handle.sync();
+                    return std::any();
+                });
+            auto r = this->worker->wait(job).get();
+            if (r.error) std::rethrow_exception(r.error);
+        }
     }
 
     // Async T-typed filtered search. Mirrors search_float_with_filter_async
@@ -1166,7 +1196,14 @@ public:
             raft::copy(*res, q_dev_f, raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
 
             if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
-            this->quantizer_.template transform<T>(*res, q_dev_f, q_buf_t.data(), true);
+            if constexpr (std::is_same_v<B, float>) {
+                this->quantizer_.template transform<T>(*res, q_dev_f, q_buf_t.data(), true);
+            } else {
+                // B == half: cast the f32 query to half on-device, then transform.
+                auto q_dev_b = raft::make_device_matrix<B, int64_t>(*res, num_queries, this->dimension);
+                raft::copy(*res, q_dev_b.view(), q_dev_f);
+                this->quantizer_.template transform<T>(*res, q_dev_b.view(), q_buf_t.data(), true);
+            }
         }
         // Legacy path syncs so build_search_bitset's stack-local host bitmap
         // can drain on the same stream. Prebuilt path skips: bitset H2D queues
@@ -1316,7 +1353,7 @@ public:
     }
 
     std::string info() const override {
-        std::string json = gpu_index_base_t<T, cagra_build_params_t, int64_t>::info();
+        std::string json = gpu_index_base_t<B, T, cagra_build_params_t, int64_t>::info();
         json += ", \"type\": \"CAGRA\", \"cagra\": {";
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
         if (index_) json += "\"mode\": \"Single-GPU\", \"size\": " + std::to_string(index_->size());

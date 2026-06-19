@@ -161,14 +161,16 @@ struct brute_force_search_result_t {
  * @brief gpu_brute_force_t implements a Brute Force index that can run on a single GPU.
  */
 template <typename T>
-class gpu_brute_force_t : public gpu_index_base_t<T, brute_force_build_params_t, int64_t> {
+class gpu_brute_force_t : public gpu_index_base_t<T, T, brute_force_build_params_t, int64_t> {
 public:
+    using base_type    = T;
+    using storage_type = T;
     // We force DistT=float for all our indices to avoid template bloat and satisfy cuVS
     using brute_force_index = cuvs::neighbors::brute_force::index<T, float>;
     using search_result_t = brute_force_search_result_t;
     // Inherited dependent type — bring into scope so search_internal can take a
     // const host_mask_bundle_t* parameter without `typename Base::...` everywhere.
-    using host_mask_bundle_t = typename gpu_index_base_t<T, brute_force_build_params_t, int64_t>::host_mask_bundle_t;
+    using host_mask_bundle_t = typename gpu_index_base_t<T, T, brute_force_build_params_t, int64_t>::host_mask_bundle_t;
 
     // Internal index storage
     std::unique_ptr<brute_force_index> index_;
@@ -729,7 +731,7 @@ public:
     }
 
     std::string info() const override {
-        std::string json = gpu_index_base_t<T, brute_force_build_params_t, int64_t>::info();
+        std::string json = gpu_index_base_t<T, T, brute_force_build_params_t, int64_t>::info();
         json += ", \"type\": \"Brute-Force\", \"brute_force\": {";
         if (index_) json += "\"built\": true";
         else json += "\"built\": false";

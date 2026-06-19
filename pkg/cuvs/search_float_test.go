@@ -33,7 +33,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		}
 		bp := IvfPqBuildParams{NLists: 10, M: 4, BitsPerCode: 8, AddDataOnBuild: true}
 		// Create empty index
-		index, err := NewGpuIvfPqEmpty[int8](n_vectors, dimension, L2Expanded, bp, []int{deviceID}, 1, SingleGpu)
+		index, err := NewGpuIvfPqEmpty[float32, int8](n_vectors, dimension, L2Expanded, bp, []int{deviceID}, 1, SingleGpu)
 		if err != nil {
 			t.Fatalf("Failed to create IVF-PQ: %v", err)
 		}
@@ -91,7 +91,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 	t.Run("CAGRA", func(t *testing.T) {
 		dataset := make([]float32, n_vectors*uint64(dimension))
 		bp := CagraBuildParams{IntermediateGraphDegree: 64, GraphDegree: 32, AttachDatasetOnBuild: true}
-		index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, []int{deviceID}, 1, SingleGpu, nil)
+		index, err := NewGpuCagra[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, []int{deviceID}, 1, SingleGpu, nil)
 		if err != nil {
 			t.Fatalf("Failed to create CAGRA: %v", err)
 		}

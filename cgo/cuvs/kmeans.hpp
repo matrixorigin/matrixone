@@ -74,8 +74,10 @@ struct kmeans_result_t {
  * Note: cuVS KMeans fits and predicts always use float centroids internally.
  */
 template <typename T>
-class gpu_kmeans_t : public gpu_index_base_t<T, kmeans_build_params_t, int64_t> {
+class gpu_kmeans_t : public gpu_index_base_t<float, T, kmeans_build_params_t, int64_t> {
 public:
+    using base_type    = float;
+    using storage_type = T;
     // Internal centroids storage - ALWAYS float for cuVS KMeans
     std::unique_ptr<raft::device_matrix<float, int64_t>> centroids_;
 
@@ -482,7 +484,7 @@ public:
     }
 
     std::string info() const override {
-        std::string json = gpu_index_base_t<T, kmeans_build_params_t, int64_t>::info();
+        std::string json = gpu_index_base_t<float, T, kmeans_build_params_t, int64_t>::info();
         json += ", \"type\": \"KMeans\", \"kmeans\": {";
         if (centroids_) json += "\"clusters\": " + std::to_string(centroids_->extent(0));
         else json += "\"built\": false";

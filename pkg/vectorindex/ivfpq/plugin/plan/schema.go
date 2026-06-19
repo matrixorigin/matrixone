@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	ivfpqrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 // ivfpqCatalogHooks is the shared (stateless) catalog-hooks instance used for
@@ -88,7 +89,22 @@ func (Hooks) BuildSecondaryIndexDefs(
 			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
 		}
 		if !catalogplugin.SupportsVectorType(ivfpqCatalogHooks, types.T(colMap[name].Typ.Id)) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IvfPQ only supports VECF32 column types")
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IvfPQ only supports VECF32 / VECF16 base column types")
+		}
+		// QUANTIZATION is downcast-only: the storage element must be the same width
+		// or narrower than the base column (f16 base -> int8/uint8 OK; f16 base ->
+		// float32 is an upcast and rejected). Mirrors ivfflat's guard.
+		if indexInfo.IndexOption != nil && indexInfo.IndexOption.Quantization != "" {
+			if qt, ok := quantizer.ToVectorType(indexInfo.IndexOption.Quantization); ok {
+				baseSize := types.Type{Oid: types.T(colMap[name].Typ.Id)}.GetArrayElementSize()
+				quantSize := types.Type{Oid: qt}.GetArrayElementSize()
+				if quantSize > baseSize {
+					return nil, nil, moerr.NewNotSupportedf(ctx.GetContext(),
+						"IvfPQ QUANTIZATION '%s' (%d bytes/element) cannot upcast base column %s (%d bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type",
+						indexInfo.IndexOption.Quantization, quantSize,
+						types.T(colMap[name].Typ.Id).String(), baseSize)
+				}
+			}
 		}
 		for _, existedIndex := range existedIndexes {
 			if existedIndex.IndexAlgo == catalog.MoIndexIvfpqAlgo.ToString() && existedIndex.Parts[0] == name {
