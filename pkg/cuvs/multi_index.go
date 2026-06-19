@@ -73,15 +73,15 @@ func (mi *MultiGpuIndex[T]) Destroy() error {
 
 // --- MultiGpuIvfFlat ---
 
-type MultiGpuIvfFlat[T VectorType] struct {
-	indices    []*GpuIvfFlat[T]
-	bruteForce *GpuBruteForce[T]
+type MultiGpuIvfFlat[B VectorType, Q VectorType] struct {
+	indices    []*GpuIvfFlat[B, Q]
+	bruteForce *GpuBruteForce[B]
 	dimension  uint32
 	metric     DistanceType
 }
 
-func NewMultiGpuIvfFlat[T VectorType](indices []*GpuIvfFlat[T], bruteForce *GpuBruteForce[T], dimension uint32, metric DistanceType) *MultiGpuIvfFlat[T] {
-	return &MultiGpuIvfFlat[T]{indices: indices, bruteForce: bruteForce, dimension: dimension, metric: metric}
+func NewMultiGpuIvfFlat[B VectorType, Q VectorType](indices []*GpuIvfFlat[B, Q], bruteForce *GpuBruteForce[B], dimension uint32, metric DistanceType) *MultiGpuIvfFlat[B, Q] {
+	return &MultiGpuIvfFlat[B, Q]{indices: indices, bruteForce: bruteForce, dimension: dimension, metric: metric}
 }
 
 // All MultiIndex paths funnel through multiGpuSearch — every inner index
@@ -90,24 +90,44 @@ func NewMultiGpuIvfFlat[T VectorType](indices []*GpuIvfFlat[T], bruteForce *GpuB
 // search_wait() (plan: effervescent-hatching-dewdrop.md), there is no
 // remaining reason to keep the sync fallbacks here; they bypassed dynamic
 // batching and serialized through main_thread_.
-func (mi *MultiGpuIvfFlat[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) ([]int64, []float32, error) {
-	genericIndices := make([]GpuIndex[T], len(mi.indices))
+//
+// Storage-typed (Q) query path. When an overflow brute force is loaded it is
+// base-typed (GpuBruteForce[B]), so it needs a []B query; we only have one when
+// B==Q (i.e. F32/F16 storage, where storage type == base type). For the
+// quantized combos (B=float/half, Q=int8/uint8) the []Q->[]B assertion fails,
+// qB stays nil, and multiGpuSearchBQ's guard returns a "B/Q dispatch mismatch"
+// error rather than searching — a storage-typed (already-quantized) query
+// cannot be reconstructed into the base-typed query the overflow requires.
+// Production code reaches the overflow via the f32 query path (SearchFloat32),
+// which is unaffected; callers needing the overflow with a quantized index
+// should use SearchFloat32, not this typed entry point.
+func (mi *MultiGpuIvfFlat[B, Q]) Search(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) ([]int64, []float32, error) {
+	genericIndices := make([]GpuIndex[Q], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
 	}
-	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, queries, nil, numQueries, dimension, limit, func(idx GpuIndex[T], q []T, nQ uint64, d uint32, l uint32) (uint64, error) {
-		return idx.(*GpuIvfFlat[T]).SearchAsyncWithParams(q, nQ, d, l, sp)
-	}, nil, nil, nil)
+	// Reinterpret the native Q query as []B for the base-typed overflow. Only
+	// succeeds when B==Q; nil otherwise (see the method doc above).
+	var qB []B
+	if mi.bruteForce != nil {
+		qB, _ = any(queries).([]B)
+	}
+	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, queries, nil, qB, nil, numQueries, dimension, limit,
+		func(idx GpuIndex[Q], q []Q, nQ uint64, d uint32, l uint32) (uint64, error) {
+			return idx.(*GpuIvfFlat[B, Q]).SearchAsyncWithParams(q, nQ, d, l, sp)
+		}, nil, nil, nil)
 }
 
-func (mi *MultiGpuIvfFlat[T]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) ([]int64, []float32, error) {
-	genericIndices := make([]GpuIndex[T], len(mi.indices))
+func (mi *MultiGpuIvfFlat[B, Q]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) ([]int64, []float32, error) {
+	genericIndices := make([]GpuIndex[Q], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
 	}
-	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, nil, queries, numQueries, dimension, limit, nil, func(idx GpuIndex[T], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
-		return idx.(*GpuIvfFlat[T]).SearchFloat32AsyncWithParams(q, nQ, d, l, sp)
-	}, nil, nil)
+	// f32 query: indices quantize/cast internally; overflow takes f32 (cast to B).
+	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, nil, queries, nil, queries, numQueries, dimension, limit,
+		nil, func(idx GpuIndex[Q], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
+			return idx.(*GpuIvfFlat[B, Q]).SearchFloat32AsyncWithParams(q, nQ, d, l, sp)
+		}, nil, nil)
 }
 
 // --- MultiGpuIvfPq ---
@@ -518,14 +538,14 @@ func (mi *MultiGpuCagra[B, Q]) SearchFloat32WithFilter(queries []float32, numQue
 	})
 }
 
-func (mi *MultiGpuIvfFlat[T]) SearchFloat32WithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams, predsJSON string) ([]int64, []float32, error) {
-	genericIndices := make([]GpuIndex[T], len(mi.indices))
+func (mi *MultiGpuIvfFlat[B, Q]) SearchFloat32WithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams, predsJSON string) ([]int64, []float32, error) {
+	genericIndices := make([]GpuIndex[Q], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
 	}
-	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, nil, queries, numQueries, dimension, limit, nil, func(idx GpuIndex[T], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
-		return idx.(*GpuIvfFlat[T]).SearchFloatWithFilterAsync(q, nQ, d, l, sp, predsJSON)
-	}, nil, func(bf *GpuBruteForce[T], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
+	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, nil, queries, nil, queries, numQueries, dimension, limit, nil, func(idx GpuIndex[Q], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
+		return idx.(*GpuIvfFlat[B, Q]).SearchFloatWithFilterAsync(q, nQ, d, l, sp, predsJSON)
+	}, nil, func(bf *GpuBruteForce[B], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
 		return bf.SearchFloatWithFilterAsync(q, nQ, d, l, predsJSON)
 	})
 }
