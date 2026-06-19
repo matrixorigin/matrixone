@@ -71,6 +71,38 @@ func (c *cursor) skipTo(d int64) {
 	c.pos = lo
 }
 
+// blockIndexAt returns the index of the block (>= the current block) that
+// contains doc d (the first block whose last ord >= d). len(blocks) if d is past
+// the cursor's last posting.
+func (c *cursor) blockIndexAt(d int64) int {
+	bl := c.tp.blockLastDoc
+	b := c.pos / BlockSize
+	for b < len(bl) && bl[b] < d {
+		b++
+	}
+	return b
+}
+
+// blockMax is the Block-Max score upper bound for the block containing doc d:
+// weight·idf²·bm25Factor(blockMaxTf, blockMinDl, avgdl). 0 if d is past the list.
+func (c *cursor) blockMax(d int64) float64 {
+	b := c.blockIndexAt(d)
+	if b >= len(c.tp.blockLastDoc) {
+		return 0
+	}
+	return c.weight * c.idfSq * bm25Factor(float64(c.tp.blockMaxTf[b]), c.tp.blockMinDl[b], c.avgDocLen)
+}
+
+// blockEndAt is the last ord of the block containing doc d (the upper edge of the
+// region for which blockMax(d) is a valid bound). ordEnd if past the list.
+func (c *cursor) blockEndAt(d int64) int64 {
+	b := c.blockIndexAt(d)
+	if b >= len(c.tp.blockLastDoc) {
+		return ordEnd
+	}
+	return c.tp.blockLastDoc[b]
+}
+
 // Search runs WAND disjunctive top-K over the query terms (duplicates allowed →
 // per-term weight). limit is K. allow, if non-nil, restricts to allowed doc
 // ords. Returns hits (original pk + score) sorted by score desc.
@@ -126,6 +158,8 @@ func (m *WandModel) Search(terms []string, limit int, allow Membership) []Search
 		if h.full() {
 			theta = h.min()
 		}
+
+		// Pivot by term-level max-score upper bounds (classic WAND).
 		cum := 0.0
 		pivot := -1
 		for i, c := range cursors {
@@ -136,9 +170,34 @@ func (m *WandModel) Search(terms []string, limit int, allow Membership) []Search
 			}
 		}
 		if pivot < 0 {
-			break
+			break // no remaining doc can beat the current top-K
 		}
 		pivotDoc := cursors[pivot].curDoc()
+
+		// Block-Max refinement: the sum of the per-block upper bounds of
+		// cursors[0..pivot] for the blocks covering pivotDoc is a valid bound for
+		// every doc in [pivotDoc, minBlockEnd]. If it can't beat theta, skip the
+		// whole region instead of evaluating pivotDoc.
+		blockSum := 0.0
+		for i := 0; i <= pivot; i++ {
+			blockSum += cursors[i].blockMax(pivotDoc)
+		}
+		if blockSum <= theta {
+			next := ordEnd
+			for i := 0; i <= pivot; i++ {
+				if e := cursors[i].blockEndAt(pivotDoc); e < next {
+					next = e
+				}
+			}
+			next++ // first doc beyond the limiting block
+			if pivot+1 < len(cursors) {
+				if nd := cursors[pivot+1].curDoc(); nd < next {
+					next = nd
+				}
+			}
+			cursors[chooseSkip(cursors, pivot, next)].skipTo(next)
+			continue
+		}
 
 		if cursors[0].curDoc() == pivotDoc {
 			if allow == nil || allow.Contains(pivotDoc) {
@@ -156,22 +215,30 @@ func (m *WandModel) Search(terms []string, limit int, allow Membership) []Search
 				}
 			}
 		} else {
-			best := -1
-			var bestScore float64
-			for i := 0; i < pivot; i++ {
-				if cursors[i].curDoc() < pivotDoc && (best < 0 || cursors[i].maxScore > bestScore) {
-					best = i
-					bestScore = cursors[i].maxScore
-				}
-			}
-			if best < 0 {
-				best = 0
-			}
-			cursors[best].skipTo(pivotDoc)
+			// Not aligned: move a cursor before the pivot up to pivotDoc.
+			cursors[chooseSkip(cursors, pivot, pivotDoc)].skipTo(pivotDoc)
 		}
 	}
 
 	return h.sorted(m)
+}
+
+// chooseSkip picks a cursor in [0..pivot] whose curDoc < target (so it makes
+// progress), preferring the largest term max-score (skip the heaviest list).
+// The block-skip / align callers guarantee at least one such cursor exists.
+func chooseSkip(cursors []*cursor, pivot int, target int64) int {
+	best := -1
+	var bestScore float64
+	for i := 0; i <= pivot; i++ {
+		if cursors[i].curDoc() < target && (best < 0 || cursors[i].maxScore > bestScore) {
+			best = i
+			bestScore = cursors[i].maxScore
+		}
+	}
+	if best < 0 {
+		best = 0 // defensive; should not happen
+	}
+	return best
 }
 
 // ---------------------------------------------------------------------------

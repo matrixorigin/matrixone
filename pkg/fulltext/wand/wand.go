@@ -33,6 +33,7 @@
 package wand
 
 import (
+	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -44,6 +45,9 @@ const (
 	// MaxCappedTf mirrors fulltext.cappedTfExpr (cap tf at 255 so it fits a
 	// uint8). The builder accumulates occurrence counts and caps here.
 	MaxCappedTf = 255
+
+	// BlockSize is the number of postings per Block-Max skip block.
+	BlockSize = 128
 
 	// BM25 parameters — match fulltext.BM25_K1 / BM25_B (the default score).
 	bm25K1 = 1.5
@@ -65,6 +69,14 @@ type termPostings struct {
 	docIDs    []int64 // doc ords, ascending, len == df
 	tfs       []uint8 // parallel, capped tf
 	maxFactor float64 // max bm25Factor over postings (derived; term score upper bound basis)
+
+	// Block-Max skip-block metadata (one entry per ceil(df/BlockSize)), derived
+	// at load. All idf-FREE — the global idf is applied at query, so these stay
+	// valid across segments and incremental adds. block max-score upper bound =
+	// weight·idf²·bm25Factor(blockMaxTf, blockMinDl, avgdl).
+	blockLastDoc []int64 // max (last) ord in each block (ascending → last)
+	blockMaxTf   []uint8 // max tf in each block
+	blockMinDl   []int32 // min doc length in each block
 }
 
 // WandModel is the loadable in-memory index.
@@ -112,8 +124,9 @@ func NewWandModel(id string, pkType int32) *WandModel {
 	}
 }
 
-// finalizeScoring derives AvgDocLen and each term's max BM25 factor. Called by
-// the builder's Finish and after Deserialize (both have docLen + postings).
+// finalizeScoring derives AvgDocLen, each term's max BM25 factor, and the
+// per-term Block-Max skip-block stats. Called by the builder's Finish and after
+// Deserialize (both have docLen + sorted postings).
 func (m *WandModel) finalizeScoring() {
 	var sum int64
 	for _, dl := range m.docLen {
@@ -123,12 +136,35 @@ func (m *WandModel) finalizeScoring() {
 		m.AvgDocLen = float64(sum) / float64(len(m.docLen))
 	}
 	for _, tp := range m.terms {
+		df := len(tp.docIDs)
+		nblk := (df + BlockSize - 1) / BlockSize
+		tp.blockLastDoc = make([]int64, nblk)
+		tp.blockMaxTf = make([]uint8, nblk)
+		tp.blockMinDl = make([]int32, nblk)
 		var mx float64
-		for i, ord := range tp.docIDs {
-			f := bm25Factor(float64(tp.tfs[i]), m.docLen[ord], m.AvgDocLen)
-			if f > mx {
-				mx = f
+		for b := 0; b < nblk; b++ {
+			lo := b * BlockSize
+			hi := lo + BlockSize
+			if hi > df {
+				hi = df
 			}
+			var maxTf uint8
+			minDl := int32(math.MaxInt32)
+			for i := lo; i < hi; i++ {
+				if tp.tfs[i] > maxTf {
+					maxTf = tp.tfs[i]
+				}
+				dl := m.docLen[tp.docIDs[i]]
+				if dl < minDl {
+					minDl = dl
+				}
+				if f := bm25Factor(float64(tp.tfs[i]), dl, m.AvgDocLen); f > mx {
+					mx = f
+				}
+			}
+			tp.blockLastDoc[b] = tp.docIDs[hi-1] // ascending → last is max
+			tp.blockMaxTf[b] = maxTf
+			tp.blockMinDl[b] = minDl
 		}
 		tp.maxFactor = mx
 	}
