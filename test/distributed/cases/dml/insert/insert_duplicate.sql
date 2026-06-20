@@ -252,6 +252,7 @@ ON DUPLICATE KEY UPDATE value = VALUES(value);
 SELECT * FROM indup_04_multi_uk_null ORDER BY a;
 
 -- 测试 3.9: 部分唯一键为 NULL 时，非 NULL 唯一键仍应命中对应旧行
+-- @regex("Duplicate entry '10' for key",true)
 INSERT INTO indup_04_multi_uk_null VALUES (4,NULL,10,400)
 ON DUPLICATE KEY UPDATE value = VALUES(value);
 SELECT * FROM indup_04_multi_uk_null ORDER BY a;
