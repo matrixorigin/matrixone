@@ -22,9 +22,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestGetIrregularIndexes verifies that only existing irregular (IVF / fulltext /
-// hnsw) indexes are returned for synchronous maintenance, while regular indexes
-// and irregular indexes whose hidden table has not been created are filtered out.
+// TestGetIrregularIndexes verifies that only existing IVF / fulltext indexes are
+// returned for synchronous maintenance. Regular indexes, indexes whose hidden
+// table has not been created, and MASTER / HNSW indexes (which lack modern delete
+// maintenance) are filtered out.
 func TestGetIrregularIndexes(t *testing.T) {
 	t.Run("nil/empty table", func(t *testing.T) {
 		assert.Nil(t, getIrregularIndexes(nil))
@@ -42,6 +43,8 @@ func TestGetIrregularIndexes(t *testing.T) {
 				{IndexName: "ivf", IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), TableExist: true},
 				// fulltext index, table exists -> kept
 				{IndexName: "ft", IndexAlgo: catalog.MOIndexFullTextAlgo.ToString(), TableExist: true},
+				// master index -> filtered out (legacy-only, no modern delete maintenance)
+				{IndexName: "mst", IndexAlgo: catalog.MOIndexMasterAlgo.ToString(), TableExist: true},
 				// ivf index but hidden table not yet created -> filtered out
 				{IndexName: "ivf_pending", IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), TableExist: false},
 			},
@@ -51,7 +54,7 @@ func TestGetIrregularIndexes(t *testing.T) {
 		names := make([]string, 0, len(got))
 		for _, idx := range got {
 			names = append(names, idx.IndexName)
-			assert.False(t, catalog.IsRegularIndexAlgo(idx.IndexAlgo))
+			assert.True(t, isModernMaintainedIrregularAlgo(idx.IndexAlgo))
 			assert.True(t, idx.TableExist)
 		}
 		assert.ElementsMatch(t, []string{"ivf", "ft"}, names)
@@ -65,4 +68,35 @@ func TestGetIrregularIndexes(t *testing.T) {
 		}
 		assert.Nil(t, getIrregularIndexes(tableDef))
 	})
+}
+
+// TestHasLegacyOnlyIrregularIndex verifies that tables carrying a MASTER / HNSW
+// index (no modern delete maintenance) are flagged for the legacy planner, while
+// IVF / fulltext / regular-only tables are not.
+func TestHasLegacyOnlyIrregularIndex(t *testing.T) {
+	assert.False(t, hasLegacyOnlyIrregularIndex(nil))
+
+	master := &plan.TableDef{Indexes: []*plan.IndexDef{
+		{IndexName: "ivf", IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), TableExist: true},
+		{IndexName: "mst", IndexAlgo: catalog.MOIndexMasterAlgo.ToString(), TableExist: true},
+	}}
+	assert.True(t, hasLegacyOnlyIrregularIndex(master))
+
+	hnsw := &plan.TableDef{Indexes: []*plan.IndexDef{
+		{IndexName: "hnsw", IndexAlgo: catalog.MoIndexHnswAlgo.ToString(), TableExist: true},
+	}}
+	assert.True(t, hasLegacyOnlyIrregularIndex(hnsw))
+
+	// a master index whose hidden table is not yet created does not force fallback
+	pending := &plan.TableDef{Indexes: []*plan.IndexDef{
+		{IndexName: "mst", IndexAlgo: catalog.MOIndexMasterAlgo.ToString(), TableExist: false},
+	}}
+	assert.False(t, hasLegacyOnlyIrregularIndex(pending))
+
+	modern := &plan.TableDef{Indexes: []*plan.IndexDef{
+		{IndexName: "ivf", IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), TableExist: true},
+		{IndexName: "ft", IndexAlgo: catalog.MOIndexFullTextAlgo.ToString(), TableExist: true},
+		{IndexName: "uk", IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(), TableExist: true},
+	}}
+	assert.False(t, hasLegacyOnlyIrregularIndex(modern))
 }

@@ -43,6 +43,13 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 	// strips them from the 1:1 dedup+MULTI_UPDATE plan; REPLACE maintains them with
 	// the same modern delete-old + insert-new sink-fanout as ODKU (issue #25000).
 	tableDef := dmlCtx.tableDefs[0]
+
+	// MASTER/HNSW indexes have no modern delete maintenance and REPLACE has no
+	// legacy fallback, so reject rather than leave stale entries behind.
+	if hasLegacyOnlyIrregularIndex(tableDef) {
+		return 0, moerr.NewUnsupportedDML(builder.GetContext(), legacyIrregularIndexCause)
+	}
+
 	irregularIndexes := getIrregularIndexes(tableDef)
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true)

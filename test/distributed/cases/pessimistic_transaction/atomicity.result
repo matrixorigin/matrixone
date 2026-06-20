@@ -233,7 +233,11 @@ start transaction ;
 use atomicity;
 create external table test_ex_table_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select num_col1 ,num_col2 from test_ex_table_1;
-➤ num_col1[-6,8,0]  ¦  num_col2[5,16,0]
+➤ num_col1[-6,8,0]  ¦  num_col2[5,16,0]  𝄀
+60  ¦  -1000  𝄀
+-128  ¦  -32768  𝄀
+127  ¦  32767  𝄀
+null  ¦  null
 create table test_16(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19));
 insert into test_16 select * from test_ex_table_1;
 rollback ;
@@ -245,7 +249,11 @@ begin;
 use atomicity;
 create external table test_ex_table_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select num_col1 ,num_col2 from test_ex_table_1;
-➤ num_col1[-6,8,0]  ¦  num_col2[5,16,0]
+➤ num_col1[-6,8,0]  ¦  num_col2[5,16,0]  𝄀
+60  ¦  -1000  𝄀
+-128  ¦  -32768  𝄀
+127  ¦  32767  𝄀
+null  ¦  null
 create table test_16(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19));
 insert into test_16 select * from test_ex_table_1;
 use atomicity;
@@ -253,9 +261,17 @@ select num_col1 ,num_col2 from test_ex_table_1;
 SQL parser error: table "test_ex_table_1" does not exist
 commit;
 select num_col1 ,num_col2 from test_ex_table_1;
-➤ num_col1[-6,8,0]  ¦  num_col2[5,16,0]
+➤ num_col1[-6,8,0]  ¦  num_col2[5,16,0]  𝄀
+60  ¦  -1000  𝄀
+-128  ¦  -32768  𝄀
+127  ¦  32767  𝄀
+null  ¦  null
 select num_col1 ,num_col2 from test_16;
-➤ num_col1[-6,8,0]  ¦  num_col2[5,16,0]
+➤ num_col1[-6,8,0]  ¦  num_col2[5,16,0]  𝄀
+60  ¦  -1000  𝄀
+-128  ¦  -32768  𝄀
+127  ¦  32767  𝄀
+null  ¦  null
 drop table if exists alter01;
 create table alter01 (col1 int, col2 decimal);
 show create table alter01;

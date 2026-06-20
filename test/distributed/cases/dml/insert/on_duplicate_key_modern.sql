@@ -217,3 +217,17 @@ select id, embedding from t_odku_vec2 order by id;
 select id from t_odku_vec2 order by l2_distance(embedding, '[100,100,100]') asc limit 1;
 select id from t_odku_vec2 order by l2_distance(embedding, '[1,1,1]') asc limit 1;
 drop table if exists t_odku_vec2;
+
+-- single-column unique PREFIX index: ODKU conflict resolution must use the stored
+-- prefix key, not the raw column. 'abcdyyyy' shares the 4-char prefix 'abcd' with
+-- existing 'abcdxxxx', so it conflicts on UNIQUE KEY u(body(4)) and updates the
+-- existing row instead of failing with duplicate-entry.
+drop table if exists t_odku_prefix;
+create table t_odku_prefix(id int primary key, body varchar(64), v int, unique key u(body(4)));
+insert into t_odku_prefix values (1, 'abcdxxxx', 10);
+insert into t_odku_prefix values (2, 'abcdyyyy', 20) on duplicate key update v = v + 100;
+select id, body, v from t_odku_prefix order by id;
+-- a different prefix is a genuine insert
+insert into t_odku_prefix values (3, 'wxyzzzzz', 30) on duplicate key update v = v + 100;
+select id, body, v from t_odku_prefix order by id;
+drop table if exists t_odku_prefix;

@@ -156,6 +156,15 @@ const noPkOnDupUpdateMsg = "unsupported DML: " + noPkOnDupUpdateCause
 // convention.
 const childFkCheckPrefix = "CHILD_FK_CHK:"
 
+// legacyIrregularIndexCause is the cause bindInsert/bindLoad/bindReplace raise for a
+// table carrying a non-regular index the modern path cannot maintain end-to-end
+// (MASTER/HNSW). INSERT/LOAD defer such tables to the legacy planner (which handles
+// these indexes including ODKU); the entry point matches the full message to allow
+// the fallback even for ODKU. REPLACE has no legacy fallback, so it surfaces as a
+// user-facing unsupported error.
+const legacyIrregularIndexCause = "have master/hnsw index table"
+const legacyIrregularIndexMsg = "unsupported DML: " + legacyIrregularIndexCause
+
 func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
 	cteMap := make(map[string]bool)
 	if with != nil {

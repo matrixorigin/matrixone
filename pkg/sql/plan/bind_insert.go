@@ -71,6 +71,19 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// here before the strip. Their computed 1:N maintenance (tokenize / nearest
 	// centroid) is appended after createQuery from the materialized new-row image.
 	tableDef := dmlCtx.tableDefs[0]
+
+	// MASTER/HNSW indexes have no modern delete maintenance. Plain INSERT defers to
+	// the legacy planner (which maintains them). ON DUPLICATE KEY UPDATE has no
+	// working legacy upsert here, so reject it outright rather than leave stale
+	// index entries behind once the conflicting row's columns change.
+	if hasLegacyOnlyIrregularIndex(tableDef) {
+		if len(stmt.OnDuplicateUpdate) > 0 {
+			return 0, moerr.NewUnsupportedDML(builder.GetContext(),
+				"on duplicate key update on a table with master/hnsw index")
+		}
+		return 0, moerr.NewUnsupportedDML(builder.GetContext(), legacyIrregularIndexCause)
+	}
+
 	irregularIndexes := getIrregularIndexes(tableDef)
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false)
@@ -220,21 +233,47 @@ func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrre
 	return
 }
 
-// getIrregularIndexes returns the existing irregular (IVF/fulltext/hnsw) index
-// definitions of tableDef. These are stripped from the modern dedup+MULTI_UPDATE
-// plan (see appendNodesForInsertStmt) and instead maintained by dedicated
-// post-createQuery sub-plans built from the materialized new-row image.
+// isModernMaintainedIrregularAlgo reports whether an irregular index algo has full
+// synchronous modern maintenance (both insert and delete sub-plans). Only IVF and
+// fulltext qualify; MASTER/HNSW have no delete maintenance yet, so tables carrying
+// them are deferred to the legacy planner (see hasLegacyOnlyIrregularIndex) rather
+// than left with stale entries after ON DUPLICATE KEY UPDATE / REPLACE.
+func isModernMaintainedIrregularAlgo(algo string) bool {
+	return catalog.IsIvfIndexAlgo(algo) || catalog.IsFullTextIndexAlgo(algo)
+}
+
+// getIrregularIndexes returns the existing IVF/fulltext index definitions of
+// tableDef. These are stripped from the modern dedup+MULTI_UPDATE plan (see
+// appendNodesForInsertStmt) and instead maintained by dedicated post-createQuery
+// sub-plans built from the materialized new-row image. MASTER/HNSW indexes are
+// excluded — see hasLegacyOnlyIrregularIndex.
 func getIrregularIndexes(tableDef *plan.TableDef) []*plan.IndexDef {
 	if tableDef == nil || len(tableDef.Indexes) == 0 {
 		return nil
 	}
 	var irregular []*plan.IndexDef
 	for _, idxDef := range tableDef.Indexes {
-		if idxDef.TableExist && !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+		if idxDef.TableExist && isModernMaintainedIrregularAlgo(idxDef.IndexAlgo) {
 			irregular = append(irregular, idxDef)
 		}
 	}
 	return irregular
+}
+
+// hasLegacyOnlyIrregularIndex reports whether tableDef carries an irregular index
+// the modern path cannot maintain end-to-end (MASTER/HNSW and any other non-regular
+// algo that is neither IVF nor fulltext). Such tables defer to the legacy planner.
+func hasLegacyOnlyIrregularIndex(tableDef *plan.TableDef) bool {
+	if tableDef == nil {
+		return false
+	}
+	for _, idxDef := range tableDef.Indexes {
+		if idxDef.TableExist && !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) &&
+			!isModernMaintainedIrregularAlgo(idxDef.IndexAlgo) {
+			return true
+		}
+	}
+	return false
 }
 
 // appendIrregularMaintSource materializes the modern new-row image (the projList2
@@ -470,13 +509,11 @@ func (builder *QueryBuilder) buildIrregularIndexMaintenance(bindCtx *BindContext
 				tableDef, 0, sourceStep, nil, indexdef, idx, nil); err != nil {
 				return err
 			}
-		case catalog.IsMasterIndexAlgo(indexdef.IndexAlgo):
-			if err := buildPreInsertMasterIndex(nil, builder.compCtx, builder, bindCtx, objRef,
-				tableDef, sourceStep, nil, indexdef, idx); err != nil {
-				return err
-			}
 		}
-		// hnsw maintenance is not handled here yet (tracked as D4).
+		// MASTER/HNSW are not maintained here: tables carrying them defer to the
+		// legacy planner (hasLegacyOnlyIrregularIndex), because the delete side of
+		// their maintenance is not implemented yet and ODKU/REPLACE would otherwise
+		// leave stale entries behind.
 	}
 
 	if len(multiTableIndexes) > 0 {
@@ -866,18 +903,36 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 		priColPos := idxTableDef.Name2ColIndex[catalog.IndexTablePrimaryColName]
 		priColTyp := idxTableDef.Cols[priColPos].Typ
 
-		// The incoming unique-key value: the raw column for a single-part index, or
-		// the serial composite already materialized in colName2Idx.
-		var incomingValPos int32
+		// The incoming unique-key value, matching what the hidden index table
+		// stores: for a single-part index the prefix-aware value (a substring for a
+		// prefix index like UNIQUE KEY u(col(4)), otherwise the raw column); for a
+		// composite index the serial composite already materialized in colName2Idx.
+		// Using the raw column for a prefix index would miss conflicts whose stored
+		// prefix keys collide (e.g. existing 'abcdxxxx' vs incoming 'abcdyyyy').
+		var incomingValExpr *plan.Expr
 		if len(idxDef.Parts) == 1 {
-			incomingValPos = colName2Idx[tableDef.Name+"."+catalog.ResolveAlias(idxDef.Parts[0])]
+			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+			if err != nil {
+				return 0, 0, 0, err
+			}
+			partName := catalog.ResolveAlias(idxDef.Parts[0])
+			incomingValPos := colName2Idx[tableDef.Name+"."+partName]
+			incomingValExpr, err = builder.makeIndexPartExpr(selectTag, incomingValPos, partName,
+				selectNode.ProjectList[incomingValPos].Typ, prefixLengths)
+			if err != nil {
+				return 0, 0, 0, err
+			}
 		} else {
-			incomingValPos = colName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName]
+			incomingValPos := colName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName]
+			incomingValExpr = &plan.Expr{
+				Typ:  selectNode.ProjectList[incomingValPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: incomingValPos}},
+			}
 		}
 
 		joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 			{Typ: idxColTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: idxTag, ColPos: idxColPos}}},
-			{Typ: selectNode.ProjectList[incomingValPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: incomingValPos}}},
+			incomingValExpr,
 		})
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,

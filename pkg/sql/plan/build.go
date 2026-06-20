@@ -74,13 +74,17 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	rootId, err := builder.bindInsert(stmt, bindCtx)
 	if err != nil {
 		// ON DUPLICATE KEY UPDATE is fully handled by the modern path; it must
-		// never fall back to the legacy ODKU operator. Two exceptions still fall
-		// back: plain INSERT (e.g. inserting into a system index table), and the
+		// never fall back to the legacy ODKU operator. Three exceptions still fall
+		// back: plain INSERT (e.g. inserting into a system index table); the
 		// degenerate ODKU on a table with no primary/unique key (no dedup key to
 		// represent the upsert; legacy treats it as a plain INSERT and preserves
-		// the prepared-statement parameters).
+		// the prepared-statement parameters); and tables carrying a MASTER/HNSW
+		// index, which the legacy planner maintains end-to-end (the modern path has
+		// no delete maintenance for them yet).
 		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML &&
-			(len(stmt.OnDuplicateUpdate) == 0 || err.Error() == noPkOnDupUpdateMsg) {
+			(len(stmt.OnDuplicateUpdate) == 0 ||
+				err.Error() == noPkOnDupUpdateMsg ||
+				err.Error() == legacyIrregularIndexMsg) {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
 		}
 		return nil, err

@@ -34,6 +34,13 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// strips them from the 1:1 dedup+MULTI_UPDATE plan; LOAD maintains them with
 	// the same modern sink-fanout the INSERT path uses (see bindInsert).
 	tableDef := dmlCtx.tableDefs[0]
+
+	// MASTER/HNSW indexes have no modern delete maintenance; defer such tables to
+	// the legacy load planner, which maintains them.
+	if hasLegacyOnlyIrregularIndex(tableDef) {
+		return -1, moerr.NewUnsupportedDML(builder.GetContext(), legacyIrregularIndexCause)
+	}
+
 	irregularIndexes := getIrregularIndexes(tableDef)
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, dmlCtx.objRefs[0], insertColToExpr)

@@ -203,3 +203,16 @@ select id from t_odku_vec2 order by l2_distance(embedding, '[1,1,1]') asc limit 
 ➤ id[4,32,0]  𝄀
 2
 drop table if exists t_odku_vec2;
+drop table if exists t_odku_prefix;
+create table t_odku_prefix(id int primary key, body varchar(64), v int, unique key u(body(4)));
+insert into t_odku_prefix values (1, 'abcdxxxx', 10);
+insert into t_odku_prefix values (2, 'abcdyyyy', 20) on duplicate key update v = v + 100;
+select id, body, v from t_odku_prefix order by id;
+➤ id[4,32,0]  ¦  body[12,-1,0]  ¦  v[4,32,0]  𝄀
+1  ¦  abcdxxxx  ¦  110
+insert into t_odku_prefix values (3, 'wxyzzzzz', 30) on duplicate key update v = v + 100;
+select id, body, v from t_odku_prefix order by id;
+➤ id[4,32,0]  ¦  body[12,-1,0]  ¦  v[4,32,0]  𝄀
+1  ¦  abcdxxxx  ¦  110  𝄀
+3  ¦  wxyzzzzz  ¦  30
+drop table if exists t_odku_prefix;
