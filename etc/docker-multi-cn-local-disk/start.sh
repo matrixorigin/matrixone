@@ -211,7 +211,13 @@ COMPOSE_FILES=(-f docker-compose.yml)
 # directory (the first -f file, docker-compose.yml, is here too).
 TMP_COMPOSE_FILES=()
 cleanup_tmp_compose() {
-    [ ${#TMP_COMPOSE_FILES[@]} -gt 0 ] && rm -f "${TMP_COMPOSE_FILES[@]}"
+    if [ ${#TMP_COMPOSE_FILES[@]} -gt 0 ]; then
+        rm -f "${TMP_COMPOSE_FILES[@]}"
+    fi
+    # Always succeed: as an EXIT trap under `set -e`, a non-zero status here
+    # (e.g. the length test failing when no temp files were created) would turn
+    # an otherwise successful run into exit code 1.
+    return 0
 }
 trap cleanup_tmp_compose EXIT
 
