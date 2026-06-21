@@ -111,7 +111,9 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		case *tree.DropTable, *tree.DropDatabase:
 			ses.InvalidatePrivilegeCache()
 			// must execute before run to get database id or table id
-			doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
+			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st); err != nil {
+				return
+			}
 
 		case *tree.DropIndex, *tree.DropView, *tree.DropSequence,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,

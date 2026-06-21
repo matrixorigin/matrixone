@@ -24,5 +24,5 @@ func TestInitUpgradeTracksLatest3_0Version(t *testing.T) {
 	s := &service{}
 	s.initUpgrade()
 
-	require.Equal(t, "3.0.2", s.GetFinalVersion())
+	require.Equal(t, "3.0.3", s.GetFinalVersion())
 }

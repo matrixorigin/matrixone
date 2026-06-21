@@ -1031,6 +1031,45 @@ func TestJsonQuote(t *testing.T) {
 	}
 }
 
+func initQuoteTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test quote varchar",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Let's go!", "Don\\'t!", "abc\x00def\x1a"},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"'Let\\'s go!'", "'Don\\\\\\'t!'", "'abc\\0def\\Z'"},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test quote null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"hello", ""},
+					[]bool{false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"'hello'", "NULL"},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestQuote(t *testing.T) {
+	testCases := initQuoteTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, Quote)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initJsonUnquoteTestCase() []tcTemp {
 	return []tcTemp{
 		{

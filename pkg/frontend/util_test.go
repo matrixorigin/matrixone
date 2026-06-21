@@ -61,6 +61,19 @@ func init() {
 	testutil.SetupAutoIncrService("")
 }
 
+type testColumnWithoutDecimalScale struct {
+	ColumnImpl
+	signed bool
+}
+
+func (c *testColumnWithoutDecimalScale) SetSigned(signed bool) {
+	c.signed = signed
+}
+
+func (c *testColumnWithoutDecimalScale) IsSigned() bool {
+	return c.signed
+}
+
 func Test_PathExists(t *testing.T) {
 	cases := [...]struct {
 		path   string
@@ -1307,6 +1320,183 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 			assert.Equal(t, mrs.Data[i][j], row[j])
 		}
 
+	}
+}
+
+func Test_convertRowsIntoBatchDecimal(t *testing.T) {
+	cases := []struct {
+		name      string
+		mysqlType defines.MysqlType
+		width     int32
+		scale     int32
+		value     any
+		oid       types.T
+		want      string
+	}{
+		{
+			name:      "decimal64 max precision string",
+			mysqlType: defines.MYSQL_TYPE_DECIMAL,
+			width:     18,
+			scale:     2,
+			value:     "15.00",
+			oid:       types.T_decimal64,
+			want:      "15.00",
+		},
+		{
+			name:      "newdecimal decimal128 bytes",
+			mysqlType: defines.MYSQL_TYPE_NEWDECIMAL,
+			width:     20,
+			scale:     3,
+			value:     []byte("12345678901234567.125"),
+			oid:       types.T_decimal128,
+			want:      "12345678901234567.125",
+		},
+		{
+			name:      "decimal256 string",
+			mysqlType: defines.MYSQL_TYPE_DECIMAL,
+			width:     50,
+			scale:     4,
+			value:     "1234567890123456789012345678901234567890.1234",
+			oid:       types.T_decimal256,
+			want:      "1234567890123456789012345678901234567890.1234",
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			mrs := &MysqlResultSet{}
+			col := new(MysqlColumn)
+			col.SetName("d")
+			col.SetColumnType(tt.mysqlType)
+			col.SetLength(uint32(tt.width + 2))
+			col.SetDecimal(tt.scale)
+			mrs.AddColumn(col)
+			mrs.AddRow([]any{tt.value})
+			mrs.AddRow([]any{nil})
+
+			pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+			require.NoError(t, err)
+			data, pColDefs, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+			require.NoError(t, err)
+			require.NotNil(t, data)
+			defer data.Clean(pool)
+
+			require.Len(t, pColDefs.ResultCols, 1)
+			require.Equal(t, int32(tt.oid), pColDefs.ResultCols[0].Typ.Id)
+			require.Equal(t, tt.width, pColDefs.ResultCols[0].Typ.Width)
+			require.Equal(t, tt.scale, pColDefs.ResultCols[0].Typ.Scale)
+			require.Equal(t, tt.oid, data.Vecs[0].GetType().Oid)
+			require.Equal(t, tt.width, data.Vecs[0].GetType().Width)
+			require.Equal(t, tt.scale, data.Vecs[0].GetType().Scale)
+			require.True(t, data.Vecs[0].GetNulls().Contains(1))
+
+			switch tt.oid {
+			case types.T_decimal64:
+				got := vector.GetFixedAtNoTypeCheck[types.Decimal64](data.Vecs[0], 0)
+				require.Equal(t, tt.want, got.Format(tt.scale))
+			case types.T_decimal128:
+				got := vector.GetFixedAtNoTypeCheck[types.Decimal128](data.Vecs[0], 0)
+				require.Equal(t, tt.want, got.Format(tt.scale))
+			case types.T_decimal256:
+				got := vector.GetFixedAtNoTypeCheck[types.Decimal256](data.Vecs[0], 0)
+				require.Equal(t, tt.want, got.Format(tt.scale))
+			default:
+				t.Fatalf("unexpected decimal type %s", tt.oid)
+			}
+		})
+	}
+}
+
+func Test_decimalRowValueHelpers(t *testing.T) {
+	typ64 := types.New(types.T_decimal64, 10, 2)
+	dec64, err := types.ParseDecimal64("12.34", typ64.Width, typ64.Scale)
+	require.NoError(t, err)
+	got64, err := getDecimal64FromRowValue(dec64, typ64)
+	require.NoError(t, err)
+	require.Equal(t, dec64, got64)
+	got64, err = getDecimal64FromRowValue([]byte("56.78"), typ64)
+	require.NoError(t, err)
+	require.Equal(t, "56.78", got64.Format(typ64.Scale))
+	_, err = getDecimal64FromRowValue("invalid", typ64)
+	require.Error(t, err)
+	_, err = getDecimal64FromRowValue(int64(1), typ64)
+	require.Error(t, err)
+
+	typ128 := types.New(types.T_decimal128, 20, 3)
+	dec128, err := types.ParseDecimal128("12345678901234567.125", typ128.Width, typ128.Scale)
+	require.NoError(t, err)
+	got128, err := getDecimal128FromRowValue(dec128, typ128)
+	require.NoError(t, err)
+	require.Equal(t, dec128, got128)
+	got128, err = getDecimal128FromRowValue("12345678901234567.125", typ128)
+	require.NoError(t, err)
+	require.Equal(t, "12345678901234567.125", got128.Format(typ128.Scale))
+	_, err = getDecimal128FromRowValue("invalid", typ128)
+	require.Error(t, err)
+	_, err = getDecimal128FromRowValue(int64(1), typ128)
+	require.Error(t, err)
+
+	typ256 := types.New(types.T_decimal256, 50, 4)
+	dec256, err := types.ParseDecimal256("1234567890123456789012345678901234567890.1234", typ256.Width, typ256.Scale)
+	require.NoError(t, err)
+	got256, err := getDecimal256FromRowValue(dec256, typ256)
+	require.NoError(t, err)
+	require.Equal(t, dec256, got256)
+	got256, err = getDecimal256FromRowValue([]byte("1234567890123456789012345678901234567890.1234"), typ256)
+	require.NoError(t, err)
+	require.Equal(t, "1234567890123456789012345678901234567890.1234", got256.Format(typ256.Scale))
+	_, err = getDecimal256FromRowValue("invalid", typ256)
+	require.Error(t, err)
+	_, err = getDecimal256FromRowValue(int64(1), typ256)
+	require.Error(t, err)
+}
+
+func Test_mysqlDecimalColTypeMissingPrecision(t *testing.T) {
+	col := new(MysqlColumn)
+	col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	col.SetLength(2)
+
+	_, err := mysqlDecimalColType(col)
+	require.Error(t, err)
+}
+
+func Test_mysqlDecimalColTypeRequiresScaleMetadata(t *testing.T) {
+	col := new(testColumnWithoutDecimalScale)
+	col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	col.SetLength(12)
+
+	_, err := mysqlDecimalColType(col)
+	require.Error(t, err)
+}
+
+func Test_mysqlDecimalColTypePrecisionBoundary(t *testing.T) {
+	cases := []struct {
+		name  string
+		width int32
+		scale int32
+		want  types.T
+	}{
+		{name: "decimal64 below boundary", width: 16, scale: 0, want: types.T_decimal64},
+		{name: "decimal64 precision 17", width: 17, scale: 3, want: types.T_decimal64},
+		{name: "decimal64 precision 18", width: 18, scale: 3, want: types.T_decimal64},
+		{name: "decimal128 precision 19", width: 19, scale: 3, want: types.T_decimal128},
+		{name: "decimal128 max precision", width: 38, scale: 3, want: types.T_decimal128},
+		{name: "decimal256 precision 39", width: 39, scale: 3, want: types.T_decimal256},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			col.SetColumnType(defines.MYSQL_TYPE_NEWDECIMAL)
+			col.SetLength(uint32(tt.width + 2))
+			col.SetDecimal(tt.scale)
+
+			got, err := mysqlDecimalColType(col)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got.Oid)
+			require.Equal(t, tt.width, got.Width)
+			require.Equal(t, tt.scale, got.Scale)
+		})
 	}
 }
 

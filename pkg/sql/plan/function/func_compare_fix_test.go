@@ -15,6 +15,7 @@
 package function
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -46,6 +47,7 @@ func TestShouldUseTypeMismatchPath(t *testing.T) {
 		{"decimal64 vs decimal128 - mismatch", types.T_decimal64, types.T_decimal128, true},
 		{"decimal128 vs decimal128 - same type", types.T_decimal128, types.T_decimal128, false},
 		{"decimal64 vs float64 - mismatch", types.T_decimal64, types.T_float64, true},
+		{"decimal256 vs float64 - mismatch", types.T_decimal256, types.T_float64, true},
 		{"varchar vs int64 - not numeric", types.T_varchar, types.T_int64, false},
 		{"int64 vs varchar - not numeric", types.T_int64, types.T_varchar, false},
 		{"varchar vs varchar - not numeric", types.T_varchar, types.T_varchar, false},
@@ -86,6 +88,7 @@ func TestIsNumericType(t *testing.T) {
 		{types.T_datetime, false},
 		{types.T_decimal64, true},
 		{types.T_decimal128, true},
+		{types.T_decimal256, true},
 		{types.T_bool, false},
 	}
 
@@ -200,6 +203,39 @@ func TestGetAsFloat64Slice(t *testing.T) {
 		result := getAsFloat64Slice(v)
 		require.InDeltaSlice(t, []float64{1.00, 2.50, 0.50}, result, 0.0001)
 	})
+
+	t.Run("decimal256 to float64", func(t *testing.T) {
+		typ := types.New(types.T_decimal256, 65, 2)
+		v := vector.NewVec(typ)
+		defer v.Free(mp)
+		require.NoError(t, vector.AppendFixedList(v, []types.Decimal256{
+			types.Decimal256FromInt64(100),
+			types.Decimal256FromInt64(250),
+			types.Decimal256FromInt64(50),
+		}, nil, mp))
+
+		result := getAsFloat64Slice(v)
+		require.InDeltaSlice(t, []float64{1.00, 2.50, 0.50}, result, 0.0001)
+	})
+}
+
+func TestGetAsCompareValueSliceDecimal256(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	typ := types.New(types.T_decimal256, 65, 2)
+	v := vector.NewVec(typ)
+	defer v.Free(mp)
+	require.NoError(t, vector.AppendFixedList(v, []types.Decimal256{
+		types.Decimal256FromInt64(100),
+		types.Decimal256FromInt64(250),
+	}, nil, mp))
+
+	result := getAsCompareValueSlice(v)
+	require.Len(t, result, 2)
+	require.Equal(t, numericCompareFinite, result[0].kind)
+	require.Equal(t, 0, result[0].rat.Cmp(big.NewRat(1, 1)))
+	require.Equal(t, numericCompareFinite, result[1].kind)
+	require.Equal(t, 0, result[1].rat.Cmp(big.NewRat(5, 2)))
 }
 
 // TestLessEqualFnWithTypeMismatch tests lessEqualFn with mismatched numeric types
