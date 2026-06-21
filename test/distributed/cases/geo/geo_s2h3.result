@@ -1,0 +1,89 @@
+select s2_cellid_level(s2_cellid(st_geomfromtext('POINT(116.3975 39.9087)'))) as leaf_level;
+➤ leaf_level[4,32,0]  𝄀
+30
+select s2_cellid_level(s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(116.3975 39.9087)')), 10)) as parent_level;
+➤ parent_level[4,32,0]  𝄀
+10
+select st_astext(s2_cellid_center(s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 5))) as center5;
+➤ center5[12,-1,0]  𝄀
+POINT(1.2121321753162386 1.2118610132510708)
+select s2_cellid_area(s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 5))
+> s2_cellid_area(s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 10)) as coarser_is_bigger;
+➤ coarser_is_bigger[-7,1,0]  𝄀
+1
+select json_length(s2_cellid_edgeneighbours(s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 10))) as n_edge;
+➤ n_edge[-5,64,0]  𝄀
+4
+select json_length(s2_cellid_allneighbours(s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 10))) >= 4 as has_neighbours;
+➤ has_neighbours[-7,1,0]  𝄀
+1
+select s2_cellid_areneighbours(
+s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 10),
+s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 10)) as self_neighbour;
+➤ self_neighbour[-7,1,0]  𝄀
+0
+select s2_cellid_areneighbours(
+c,
+cast(json_unquote(json_extract(s2_cellid_edgeneighbours(c), '$[0]')) as unsigned)) as is_neighbour
+from (select s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 10) as c) t;
+➤ is_neighbour[-7,1,0]  𝄀
+1
+drop table if exists s2t;
+create table s2t(id int, pt point, cell bigint unsigned);
+insert into s2t values (1, st_geomfromtext('POINT(116.3975 39.9087)'), 0);
+insert into s2t values (2, st_geomfromtext('POINT(121.4737 31.2304)'), 0);
+update s2t set cell = s2_cellid(pt);
+select id, s2_cellid_level(cell) as lvl from s2t order by id;
+➤ id[4,32,0]  ¦  lvl[4,32,0]  𝄀
+1  ¦  30  𝄀
+2  ¦  30
+select s2_cellid_level(0);
+invalid input: invalid S2 CellId: 0
+select h3_h3index_resolution(h3_h3index(st_geomfromtext('POINT(116.3975 39.9087)'))) as default_res;
+➤ default_res[4,32,0]  𝄀
+15
+select h3_h3index_resolution(h3_h3index(st_geomfromtext('POINT(116.3975 39.9087)'), 7)) as res7;
+➤ res7[4,32,0]  𝄀
+7
+select st_astext(h3_h3index_center(h3_h3index(st_geomfromtext('POINT(0 0)'), 5))) as h3_center5;
+➤ h3_center5[12,-1,0]  𝄀
+POINT(-0.01529110942779935 0.06368407237240811)
+select st_geometrytype(h3_h3index_boundary(h3_h3index(st_geomfromtext('POINT(0 0)'), 5))) as boundary_type;
+➤ boundary_type[12,-1,0]  𝄀
+MULTIPOINT
+select st_numgeometries(h3_h3index_boundary(h3_h3index(st_geomfromtext('POINT(0 0)'), 5))) as n_vertices;
+➤ n_vertices[-5,64,0]  𝄀
+6
+select h3_h3index_resolution(h3_h3index_parent(h3_h3index(st_geomfromtext('POINT(0 0)'), 7))) as parent_res;
+➤ parent_res[4,32,0]  𝄀
+6
+select h3_h3index_resolution(h3_h3index_parent(h3_h3index(st_geomfromtext('POINT(0 0)'), 7), 3)) as parent_res3;
+➤ parent_res3[4,32,0]  𝄀
+3
+select json_length(h3_h3index_neighbours(h3_h3index(st_geomfromtext('POINT(0 0)'), 7))) as n_neighbours;
+➤ n_neighbours[-5,64,0]  𝄀
+6
+select h3_h3index_areneighbours(
+h3_h3index(st_geomfromtext('POINT(0 0)'), 7),
+h3_h3index(st_geomfromtext('POINT(0 0)'), 7)) as self_neighbour;
+➤ self_neighbour[-7,1,0]  𝄀
+0
+select h3_h3index_areneighbours(
+c,
+cast(json_unquote(json_extract(h3_h3index_neighbours(c), '$[0]')) as unsigned)) as is_neighbour
+from (select h3_h3index(st_geomfromtext('POINT(0 0)'), 7) as c) t;
+➤ is_neighbour[-7,1,0]  𝄀
+1
+drop table if exists h3t;
+create table h3t(id int, pt point, h3 bigint unsigned);
+insert into h3t values (1, st_geomfromtext('POINT(116.3975 39.9087)'), 0);
+insert into h3t values (2, st_geomfromtext('POINT(121.4737 31.2304)'), 0);
+update h3t set h3 = h3_h3index(pt, 9);
+select id, h3_h3index_resolution(h3) as res from h3t order by id;
+➤ id[4,32,0]  ¦  res[4,32,0]  𝄀
+1  ¦  9  𝄀
+2  ¦  9
+select h3_h3index_resolution(0);
+invalid input: invalid H3Index: 0
+drop table if exists s2t;
+drop table if exists h3t;
