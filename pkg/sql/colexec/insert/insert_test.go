@@ -207,6 +207,15 @@ func (t *testS3MemThrottler) Available() int64 {
 	return 0
 }
 
+type testS3MemThrottlerWithDecision struct {
+	testS3MemThrottler
+	shouldRefresh bool
+}
+
+func (t *testS3MemThrottlerWithDecision) ShouldRefreshBeforeRelease() bool {
+	return t.shouldRefresh
+}
+
 type testRefreshOnlyThrottler struct {
 	refreshed int
 }
@@ -438,6 +447,105 @@ func TestInsertFlushS3WriterOnMemoryPressureRefreshesBeforeReleaseOnAppendError(
 	require.Equal(t, int64(0), insert.ctr.s3MemGranted)
 	require.Equal(t, int64(1024), throttler.released)
 	require.Equal(t, []string{"force-refresh", "release"}, throttler.ops)
+}
+
+func TestInsertS3FinalFlushRefreshesBeforeReleaseOnSuccess(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+
+	throttler := &testS3MemThrottler{}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{
+			TableDef: testInsertS3TableDef(),
+		},
+		ctr: container{
+			state:          vm.Eval,
+			s3Writer:       colexec.NewCNS3DataWriter(proc.Mp(), fs, testInsertS3TableDef(), 1, false),
+			s3MemGranted:   1024,
+			s3MemThrottler: throttler,
+		},
+	}
+	insert.initBufForS3()
+	defer insert.ctr.s3Writer.Close()
+
+	bat := &batch.Batch{
+		Attrs: []string{"a", "b"},
+		Vecs: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+			testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
+		},
+	}
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	err = insert.ctr.s3Writer.Write(proc.Ctx, bat)
+	require.NoError(t, err)
+
+	_, err = insert.insert_s3(proc, process.NewAnalyzer(0, false, false, "insert"))
+	require.NoError(t, err)
+	require.Equal(t, int64(0), insert.ctr.s3MemGranted)
+	require.Equal(t, int64(1024), throttler.released)
+	require.Equal(t, []string{"force-refresh", "release"}, throttler.ops)
+}
+
+func TestInsertS3FinalFlushRefreshesBeforeReleaseOnError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+
+	throttler := &testS3MemThrottler{}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{
+			TableDef: testInsertS3TableDef(),
+		},
+		ctr: container{
+			state:          vm.Eval,
+			s3Writer:       colexec.NewCNS3DataWriter(proc.Mp(), fs, testInsertS3TableDef(), 1, false),
+			s3MemGranted:   1024,
+			s3MemThrottler: throttler,
+			buf:            batch.NewWithSize(1),
+		},
+	}
+	defer insert.ctr.s3Writer.Close()
+
+	bat := &batch.Batch{
+		Attrs: []string{"a", "b"},
+		Vecs: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+			testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
+		},
+	}
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	err = insert.ctr.s3Writer.Write(proc.Ctx, bat)
+	require.NoError(t, err)
+
+	_, err = insert.insert_s3(proc, process.NewAnalyzer(0, false, false, "insert"))
+	require.Error(t, err)
+	require.Equal(t, int64(0), insert.ctr.s3MemGranted)
+	require.Equal(t, int64(1024), throttler.released)
+	require.Equal(t, []string{"force-refresh", "release"}, throttler.ops)
+}
+
+func TestRefreshAndReleaseS3MemGrantSkipsRefreshWhenCoverageIsAlreadyEnough(t *testing.T) {
+	throttler := &testS3MemThrottlerWithDecision{shouldRefresh: false}
+	insert := &Insert{
+		ctr: container{
+			s3MemGranted:   1024,
+			s3MemThrottler: throttler,
+		},
+	}
+
+	insert.refreshAndReleaseS3MemGrant()
+	require.Equal(t, int64(0), insert.ctr.s3MemGranted)
+	require.Equal(t, int64(1024), throttler.released)
+	require.Equal(t, []string{"release"}, throttler.ops)
 }
 
 func TestAcquireFlushSlotUsesBoundedBypassAfterTimeout(t *testing.T) {
