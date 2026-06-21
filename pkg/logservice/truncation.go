@@ -136,8 +136,21 @@ func (l *store) processTruncateLog(ctx context.Context) error {
 		}
 		replicas := activeReplicas[shard.ShardID]
 		if _, ok := replicas[shard.ReplicaID]; !ok {
-			if len(replicas) > 0 {
-				l.cleanupStaleReplica(shard.ShardID, shard.ReplicaID)
+			if len(replicas) > 0 ||
+				l.isSkippedZombie(shard.ShardID, shard.ReplicaID) {
+				// NodeHost state and local metadata are independent snapshots.
+				// Re-read NodeHost immediately before cleanup so a replica that
+				// became active after the outer snapshot is never classified as stale.
+				replicas = l.startedReplicaIDs()[shard.ShardID]
+				if _, ok := replicas[shard.ReplicaID]; ok {
+					continue
+				}
+				if len(replicas) == 0 &&
+					!l.isSkippedZombie(shard.ShardID, shard.ReplicaID) {
+					continue
+				}
+				l.cleanupStaleReplica(shard.ShardID, shard.ReplicaID,
+					l.newestActiveSnapshotIndex(shard.ShardID, replicas))
 			}
 			continue
 		}
@@ -168,7 +181,21 @@ func (l *store) startedReplicaIDs() map[uint64]map[uint64]struct{} {
 	return replicas
 }
 
-func (l *store) cleanupStaleReplica(shardID uint64, replicaID uint64) {
+func (l *store) newestActiveSnapshotIndex(
+	shardID uint64, replicas map[uint64]struct{},
+) uint64 {
+	var index uint64
+	for replicaID := range replicas {
+		if newest := l.snapshotMgr.NewestIndex(shardID, replicaID); newest > index {
+			index = newest
+		}
+	}
+	return index
+}
+
+func (l *store) cleanupStaleReplica(
+	shardID uint64, replicaID uint64, activeSnapshotIndex uint64,
+) {
 	if err := l.snapshotMgr.RemoveReplica(shardID, replicaID); err != nil {
 		l.runtime.Logger().Error("remove stale exported snapshots failed",
 			zap.Uint64("shardID", shardID),
@@ -177,9 +204,11 @@ func (l *store) cleanupStaleReplica(shardID uint64, replicaID uint64) {
 		)
 		return
 	}
+	l.shardSnapshotInfo.setSnapshotIndex(shardID, activeSnapshotIndex)
 	l.runtime.Logger().Info("remove stale log replica metadata",
 		zap.Uint64("shardID", shardID),
 		zap.Uint64("replicaID", replicaID),
+		zap.Uint64("activeSnapshotIndex", activeSnapshotIndex),
 	)
 	l.removeMetadata(shardID, replicaID)
 }

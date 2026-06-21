@@ -149,6 +149,167 @@ func TestTruncationSkipsStaleReplicaMetadata(t *testing.T) {
 	}
 }
 
+func TestTruncationCleansSkippedZombieReplicaMetadata(t *testing.T) {
+	const (
+		shardID      = uint64(1)
+		staleReplica = uint64(99)
+	)
+	logShard := metadata.LogShard{
+		LogShardRecord: metadata.LogShardRecord{ShardID: shardID},
+		ReplicaID:      staleReplica,
+	}
+
+	tests := []struct {
+		name    string
+		skipped bool
+	}{
+		{
+			name:    "skipped zombie without active replacement",
+			skipped: true,
+		},
+		{
+			name: "ordinary metadata without active replica",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := func(t *testing.T, s *Service) {
+				nid := nodeID{shardID: shardID, replicaID: staleReplica}
+				testPrepareSnapshot(t, s.store.snapshotMgr, nid, snapshotIndex(100))
+				assert.NoError(t, s.store.snapshotMgr.Init(shardID, staleReplica))
+				assert.Equal(t, 1, s.store.snapshotMgr.Count(shardID, staleReplica))
+
+				s.store.mu.Lock()
+				s.store.mu.metadata.Shards = []metadata.LogShard{logShard}
+				if tc.skipped {
+					s.store.mu.skippedZombies = map[zombieKey]struct{}{
+						{shardID: shardID, replicaID: staleReplica}: {},
+					}
+				}
+				s.store.mu.Unlock()
+
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+				defer cancel()
+				assert.NoError(t, s.store.processTruncateLog(ctx))
+
+				if tc.skipped {
+					assert.Equal(t, int64(-1), s.store.getReplicaID(shardID))
+					assert.Equal(t, 0, s.store.snapshotMgr.Count(shardID, staleReplica))
+					assert.False(t, s.store.isSkippedZombie(shardID, staleReplica))
+					return
+				}
+				assert.Equal(t, int64(staleReplica), s.store.getReplicaID(shardID))
+				assert.Equal(t, 1, s.store.snapshotMgr.Count(shardID, staleReplica))
+			}
+			runServiceTest(t, false, false, fn)
+		})
+	}
+}
+
+func TestTruncationRealignsSnapshotIndexAfterStaleReplicaCleanup(t *testing.T) {
+	const (
+		shardID       = uint64(1)
+		staleReplica  = uint64(99)
+		activeReplica = uint64(1)
+		staleIndex    = uint64(100)
+	)
+	logShard := func(replicaID uint64) metadata.LogShard {
+		return metadata.LogShard{
+			LogShardRecord: metadata.LogShardRecord{ShardID: shardID},
+			ReplicaID:      replicaID,
+		}
+	}
+
+	tests := []struct {
+		name              string
+		shards            []metadata.LogShard
+		activeBeforeStale bool
+	}{
+		{
+			name: "stale before active",
+			shards: []metadata.LogShard{
+				logShard(staleReplica),
+				logShard(activeReplica),
+			},
+		},
+		{
+			name: "stale after active",
+			shards: []metadata.LogShard{
+				logShard(activeReplica),
+				logShard(staleReplica),
+			},
+			activeBeforeStale: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := func(t *testing.T, s *Service) {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+				defer cancel()
+
+				tnID := uint64(100)
+				req := pb.Request{
+					Method: pb.CONNECT_RO,
+					LogRequest: pb.LogRequest{
+						ShardID: shardID,
+						TNID:    tnID,
+					},
+				}
+				resp := s.handleConnect(ctx, req)
+				assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+				for i := 0; i < 10; i++ {
+					data := make([]byte, 8)
+					cmd := getTestAppendCmd(tnID, data)
+					req = pb.Request{
+						Method: pb.APPEND,
+						LogRequest: pb.LogRequest{
+							ShardID: shardID,
+						},
+					}
+					resp = s.handleAppend(ctx, req, cmd)
+					assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+				}
+
+				req = pb.Request{
+					Method: pb.TRUNCATE,
+					LogRequest: pb.LogRequest{
+						ShardID: shardID,
+						Lsn:     4,
+					},
+				}
+				resp = s.handleTruncate(ctx, req)
+				assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+				nid := nodeID{shardID: shardID, replicaID: staleReplica}
+				testPrepareSnapshot(t, s.store.snapshotMgr, nid, snapshotIndex(staleIndex))
+				assert.NoError(t, s.store.snapshotMgr.Init(shardID, staleReplica))
+				assert.Equal(t, 1, s.store.snapshotMgr.Count(shardID, staleReplica))
+				s.store.shardSnapshotInfo.setSnapshotIndex(shardID, staleIndex)
+
+				s.store.mu.Lock()
+				s.store.mu.metadata.Shards = append([]metadata.LogShard(nil), tc.shards...)
+				s.store.mu.Unlock()
+
+				assert.NoError(t, s.store.processTruncateLog(ctx))
+				assert.Equal(t, 0, s.store.snapshotMgr.Count(shardID, staleReplica))
+				if tc.activeBeforeStale {
+					assert.Equal(t, 0, s.store.snapshotMgr.Count(shardID, activeReplica))
+					assert.NoError(t, s.store.processTruncateLog(ctx))
+				}
+
+				assert.Equal(t, 1, s.store.snapshotMgr.Count(shardID, activeReplica))
+				assert.Equal(t,
+					s.store.snapshotMgr.NewestIndex(shardID, activeReplica),
+					s.store.shardSnapshotInfo.getSnapshotIndex(shardID))
+			}
+			runServiceTest(t, false, true, fn)
+		})
+	}
+}
+
 func TestTruncationKeepsStaleReplicaMetadataOnSnapshotCleanupFailure(t *testing.T) {
 	const (
 		shardID      = uint64(1)

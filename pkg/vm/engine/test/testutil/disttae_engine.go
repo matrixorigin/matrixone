@@ -602,6 +602,9 @@ func (ml *mockLockService) ForceRefreshLockTableBinds(targets []uint64, matcher 
 func (ml *mockLockService) GetLockTableBind(group uint32, tableID uint64) (lock.LockTable, error) {
 	return lock.LockTable{}, nil
 }
+func (ml *mockLockService) GetLatestLockTableBind(bind lock.LockTable) (lock.LockTable, error) {
+	return lock.LockTable{}, nil
+}
 func (ml *mockLockService) IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool) {
 }
 func (ml *mockLockService) CloseRemoteLockTable(group uint32, tableID uint64, version uint64) (bool, error) {

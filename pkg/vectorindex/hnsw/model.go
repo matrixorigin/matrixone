@@ -28,6 +28,7 @@ import (
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -63,19 +64,9 @@ type HnswModel[T types.RealNumbers] struct {
 }
 
 // New HnswModel struct
-func NewHnswModelForBuild[T types.RealNumbers](id string, cfg vectorindex.IndexConfig, _ int, max_capacity uint) (*HnswModel[T], error) {
+func NewHnswModelForBuild[T types.RealNumbers](id string, cfg vectorindex.IndexConfig, nthread int, max_capacity uint) (*HnswModel[T], error) {
 	var err error
 	idx := &HnswModel[T]{}
-
-	// MatrixOne #24849 / USearch #735 (open): concurrent add() can orphan nodes --
-	// the vector is stored (contains() returns true) but is never linked into the
-	// HNSW graph, so search() can never reach it, producing flaky recall@1 (an
-	// exact match is intermittently missed). NewHnswBuild forces a single build
-	// thread for the create-index path, but the CDC / sync path still creates
-	// models with ThreadsBuild here. Pin every build model to a single thread so
-	// idx.Index.ChangeThreadsAdd(1) is applied on all write paths until the
-	// upstream race is fixed.
-	nthread := 1
 
 	idx.Id = id
 	idx.NThread = uint(nthread)
@@ -267,7 +258,7 @@ func (idx *HnswModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, erro
 
 	sqls := make([]string, 0, 5)
 
-	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", cfg.DbName, cfg.IndexTable)
+	sql := fmt.Sprintf("INSERT INTO %s VALUES ", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable))
 	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(vectorindex.MaxChunkSize))))
 	n := 0
 	for offset = 0; offset < filesz; {
@@ -308,9 +299,9 @@ func (idx *HnswModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, erro
 func (idx *HnswModel[T]) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
 	sqls := make([]string, 0, 2)
 
-	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s = '%s'", cfg.DbName, cfg.IndexTable, catalog.Hnsw_TblCol_Storage_Index_Id, idx.Id)
+	sql := fmt.Sprintf("DELETE FROM %s WHERE %s = %s", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), catalog.Hnsw_TblCol_Storage_Index_Id, sqlquote.String(idx.Id))
 	sqls = append(sqls, sql)
-	sql = fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s = '%s'", cfg.DbName, cfg.MetadataTable, catalog.Hnsw_TblCol_Metadata_Index_Id, idx.Id)
+	sql = fmt.Sprintf("DELETE FROM %s WHERE %s = %s", sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable), catalog.Hnsw_TblCol_Metadata_Index_Id, sqlquote.String(idx.Id))
 	sqls = append(sqls, sql)
 
 	return sqls, nil
@@ -474,7 +465,7 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		}
 
 		// run streaming sql
-		sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
+		sql := fmt.Sprintf("SELECT chunk_id, data from %s WHERE index_id = %s", sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id))
 
 		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
 		defer cancel(nil)
@@ -701,7 +692,7 @@ func (idx *HnswModel[T]) LoadIndex(
 		}
 
 		// run streaming sql
-		sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
+		sql := fmt.Sprintf("SELECT chunk_id, data from %s WHERE index_id = %s", sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id))
 
 		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
 		defer cancel(nil)
@@ -801,7 +792,7 @@ func (idx *HnswModel[T]) LoadIndex(
 		if err != nil {
 			return err
 		}
-		err = usearchidx.Reserve(uint(tblcfg.IndexCapacity))
+		err = usearchidx.Reserve(uint(idxcfg.IndexCapacity))
 		if err != nil {
 			return err
 		}
@@ -824,8 +815,8 @@ func (idx *HnswModel[T]) LoadIndex(
 
 	if !view {
 		// sometimes Reserve() will give bigger capacity than requested
-		if idx.MaxCapacity > uint(tblcfg.IndexCapacity) {
-			idx.MaxCapacity = uint(tblcfg.IndexCapacity)
+		if idx.MaxCapacity > uint(idxcfg.IndexCapacity) {
+			idx.MaxCapacity = uint(idxcfg.IndexCapacity)
 		}
 	}
 

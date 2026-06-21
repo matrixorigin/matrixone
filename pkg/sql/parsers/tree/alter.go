@@ -877,18 +877,72 @@ func (node *AlterOptionAlterIndex) reset() {
 
 type AlterOptionAlterReIndex struct {
 	alterOptionImpl
-	Name          Identifier
-	KeyType       IndexType
-	AlgoParamList int64
-	ForceSync     bool
+	Name    Identifier
+	KeyType IndexType
+	// Mirrors tree.IndexOption (create.go): the REINDEX rule shares
+	// index_option_list with CREATE INDEX, so all options parse. They are carried
+	// here (not dropped) so the compile phase can read the full set off the parse
+	// tree and each algorithm's Compile.ValidateReindexParams hook can merge the
+	// options it honors on a rebuild and reject the rest, instead of silently
+	// dropping them.
+	KeyBlockSize             uint64
+	ParserName               string
+	Comment                  string
+	Visible                  VisibleType
+	EngineAttribute          string
+	SecondaryEngineAttribute string
+	AlgoParamList            int64
+	AlgoParamVectorOpType    string
+	AlgoParamM               int64
+	HnswEfConstruction       int64
+	HnswEfSearch             int64
+	BitsPerCode              int64
+	Async                    bool
+	ForceSync                bool
+	AutoUpdate               bool
+	Day                      int64
+	Hour                     int64
+	IntermediateGraphDegree  int64
+	GraphDegree              int64
+	Quantization             string
+	DistributionMode         string
+	ITopkSize                int64
+	KmeansTrainPercent       int64
+	KmeansMaxIteration       int64
+	MaxIndexCapacity         int64
+	IncludeColumns           []*UnresolvedName
 }
 
 func NewAlterOptionAlterReIndex(name Identifier, option *IndexOption) *AlterOptionAlterReIndex {
 	a := reuse.Alloc[AlterOptionAlterReIndex](nil)
 	a.Name = name
 	a.KeyType = option.IType
+	a.KeyBlockSize = option.KeyBlockSize
+	a.ParserName = option.ParserName
+	a.Comment = option.Comment
+	a.Visible = option.Visible
+	a.EngineAttribute = option.EngineAttribute
+	a.SecondaryEngineAttribute = option.SecondaryEngineAttribute
 	a.AlgoParamList = option.AlgoParamList
+	a.AlgoParamVectorOpType = option.AlgoParamVectorOpType
+	a.AlgoParamM = option.AlgoParamM
+	a.HnswEfConstruction = option.HnswEfConstruction
+	a.HnswEfSearch = option.HnswEfSearch
+	a.BitsPerCode = option.BitsPerCode
+	a.Async = option.Async
 	a.ForceSync = option.ForceSync
+	a.AutoUpdate = option.AutoUpdate
+	a.Day = option.Day
+	a.Hour = option.Hour
+	a.IntermediateGraphDegree = option.IntermediateGraphDegree
+	a.GraphDegree = option.GraphDegree
+	a.Quantization = option.Quantization
+	a.DistributionMode = option.DistributionMode
+	a.ITopkSize = option.ITopkSize
+	a.KmeansTrainPercent = option.KmeansTrainPercent
+	a.KmeansMaxIteration = option.KmeansMaxIteration
+	a.MaxIndexCapacity = option.MaxIndexCapacity
+	a.IncludeColumns = option.IncludeColumns
 	return a
 }
 
@@ -901,12 +955,52 @@ func (node *AlterOptionAlterReIndex) Format(ctx *FmtCtx) {
 		ctx.WriteString(" ")
 		ctx.WriteString(node.KeyType.ToString())
 	}
-	if node.AlgoParamList != 0 {
-		ctx.WriteString(fmt.Sprintf(" lists = %d", node.AlgoParamList))
+	// The REINDEX rule shares index_option_list with CREATE INDEX, so the parse
+	// tree carries the build options the user wrote (mirroring tree.IndexOption).
+	// Emit them lowercase — ints as `key = N`, string values quoted as the
+	// grammar requires (OP_TYPE / QUANTIZATION / DISTRIBUTION_MODE take a STRING)
+	// — with force_sync last, so a REINDEX statement re-serializes to parseable
+	// SQL (e.g. for restore / SQL regeneration) and the common forms round-trip
+	// as `... lists = N force_sync`. The non-build index_option meta fields
+	// (comment / parser / key_block_size / visibility / engine attributes) are
+	// not reproduced — reindex only carries build params. Which options each
+	// algorithm honors is validated later at compile (Compile.ValidateReindexParams).
+	writeInt := func(key string, v int64) {
+		if v != 0 {
+			ctx.WriteString(fmt.Sprintf(" %s = %d", key, v))
+		}
+	}
+	writeStr := func(key, v string) {
+		if v != "" {
+			ctx.WriteString(fmt.Sprintf(" %s '%s'", key, v))
+		}
+	}
+	writeInt("lists", node.AlgoParamList)
+	writeInt("m", node.AlgoParamM)
+	writeInt("ef_construction", node.HnswEfConstruction)
+	writeInt("ef_search", node.HnswEfSearch)
+	writeStr("op_type", node.AlgoParamVectorOpType)
+	writeInt("intermediate_graph_degree", node.IntermediateGraphDegree)
+	writeInt("graph_degree", node.GraphDegree)
+	writeStr("quantization", node.Quantization)
+	writeStr("distribution_mode", node.DistributionMode)
+	writeInt("bits_per_code", node.BitsPerCode)
+	writeInt("itopk_size", node.ITopkSize)
+	writeInt("kmeans_train_percent", node.KmeansTrainPercent)
+	writeInt("kmeans_max_iteration", node.KmeansMaxIteration)
+	writeInt("max_index_capacity", node.MaxIndexCapacity)
+	if len(node.IncludeColumns) != 0 {
+		ctx.WriteString(" include (")
+		for i, c := range node.IncludeColumns {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			c.Format(ctx)
+		}
+		ctx.WriteString(")")
 	}
 	if node.ForceSync {
-		ctx.WriteString(" ")
-		ctx.WriteString("force_sync")
+		ctx.WriteString(" force_sync")
 	}
 }
 

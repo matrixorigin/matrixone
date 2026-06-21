@@ -412,6 +412,20 @@ func (mr *MockTxnOperatorMockRecorder) AddLockTable(locktable interface{}) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddLockTable", reflect.TypeOf((*MockTxnOperator)(nil).AddLockTable), locktable)
 }
 
+// CheckLockTableBinds mocks base method.
+func (m *MockTxnOperator) CheckLockTableBinds(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CheckLockTableBinds", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CheckLockTableBinds indicates an expected call of CheckLockTableBinds.
+func (mr *MockTxnOperatorMockRecorder) CheckLockTableBinds(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckLockTableBinds", reflect.TypeOf((*MockTxnOperator)(nil).CheckLockTableBinds), ctx)
+}
+
 // AddWaitLock mocks base method.
 func (m *MockTxnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
 	m.ctrl.T.Helper()
