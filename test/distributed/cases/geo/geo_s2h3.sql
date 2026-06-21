@@ -94,5 +94,70 @@ select id, h3_h3index_resolution(h3) as res from h3t order by id;
 -- Invalid H3Index errors.
 select h3_h3index_resolution(0);
 
+-- ---------------------------------------------------------------------------
+-- NULL propagation (scalar and vectorized)
+-- ---------------------------------------------------------------------------
+select s2_cellid(NULL) as a, s2_cellid_level(NULL) as b, s2_cellid_center(NULL) as c,
+       s2_cellid_area(NULL) as d, s2_cellid_parent(NULL, 5) as e,
+       s2_cellid_edgeneighbours(NULL) as f, s2_cellid_areneighbours(NULL, NULL) as g;
+select h3_h3index(NULL) as a, h3_h3index(NULL, 9) as b, h3_h3index_resolution(NULL) as c,
+       h3_h3index_center(NULL) as d, h3_h3index_boundary(NULL) as e,
+       h3_h3index_parent(NULL) as f, h3_h3index_neighbours(NULL) as g,
+       h3_h3index_areneighbours(NULL, NULL) as h;
+
+-- A NULL row among valid rows stays NULL (vectorized path).
+drop table if exists nullt;
+create table nullt(id int, c bigint unsigned);
+insert into nullt values (1, s2_cellid(st_geomfromtext('POINT(0 0)'))), (2, NULL), (3, s2_cellid(st_geomfromtext('POINT(1 1)')));
+select id, s2_cellid_level(c) as lvl from nullt order by id;
+drop table if exists nullt;
+
+-- ---------------------------------------------------------------------------
+-- GEOMETRY32 / POINT32 input overloads
+-- ---------------------------------------------------------------------------
+drop table if exists p32;
+create table p32(p point32);
+insert into p32 values (st_pointfromtext('POINT(116.3975 39.9087)'));
+-- float32 coordinates still yield a valid leaf cell / res-9 index
+-- (the raw ids differ from the float64 point due to coordinate precision).
+select s2_cellid_level(s2_cellid(p)) as s2_lvl, h3_h3index_resolution(h3_h3index(p, 9)) as h3_res from p32;
+drop table if exists p32;
+
+-- ---------------------------------------------------------------------------
+-- Boundary resolutions / levels
+-- ---------------------------------------------------------------------------
+select h3_h3index_resolution(h3_h3index(st_geomfromtext('POINT(0 0)'), 0)) as h3_res0;
+select s2_cellid_level(s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 0)) as s2_level0;
+
+-- ---------------------------------------------------------------------------
+-- Neighbour relationships: symmetry and cross-level
+-- ---------------------------------------------------------------------------
+-- Symmetry: if B is a neighbour of A then A is a neighbour of B.
+select s2_cellid_areneighbours(a, b) and s2_cellid_areneighbours(b, a) as s2_symmetric
+from (select c as a, cast(json_unquote(json_extract(s2_cellid_edgeneighbours(c), '$[0]')) as unsigned) as b
+      from (select s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 10) as c) t0) t1;
+select h3_h3index_areneighbours(a, b) and h3_h3index_areneighbours(b, a) as h3_symmetric
+from (select c as a, cast(json_unquote(json_extract(h3_h3index_neighbours(c), '$[0]')) as unsigned) as b
+      from (select h3_h3index(st_geomfromtext('POINT(0 0)'), 7) as c) t0) t1;
+-- Cross-level: a cell and its ancestor are not "neighbours".
+select s2_cellid_areneighbours(
+         s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 10),
+         s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 5)) as cross_level;
+
+-- ---------------------------------------------------------------------------
+-- Additional error paths
+-- ---------------------------------------------------------------------------
+-- longitude/latitude out of range
+select s2_cellid(st_geomfromtext('POINT(200 100)'));
+select h3_h3index(st_geomfromtext('POINT(0 95)'));
+-- empty point
+select s2_cellid(st_geomfromtext('POINT EMPTY'));
+-- S2 parent level out of [0,30], and finer than the cell
+select s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 40);
+select s2_cellid_parent(s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 5), 20);
+-- H3 resolution-0 cell has no parent; parent at a finer resolution is an error
+select h3_h3index_parent(h3_h3index(st_geomfromtext('POINT(0 0)'), 0));
+select h3_h3index_parent(h3_h3index(st_geomfromtext('POINT(0 0)'), 3), 7);
+
 drop table if exists s2t;
 drop table if exists h3t;

@@ -5,17 +5,17 @@ and `H3_XXX` are H3 geometries from [H3](https://github.com/uber/h3-go)
 `S2_CellId_Level(CellId) returns level`: Return the level (int) of the cellid
 `S2_CellId_Center(CellId) returns POINT`: Return the center of cellid
 `S2_CellId_Area(CellId) returns float64`: Return the aproximate area of cellid
-`S2_CellId_Parent(CellId, level) returns POINT`: Return the parent of the cell at level
-`S2_CellId_EdegNeighbours(CellId) returns jsonb`: Return edge neighbours at the level of this cell, in jsonb array of uint64.
-`S2_CellId_AllNeighbours(CellId) returns jsonb`: Return all neighbours at the level of this cell in jsonb array of uint64.
+`S2_CellId_Parent(CellId, level) returns CellId`: Return the parent (a CellId) of the cell at level
+`S2_CellId_EdgeNeighbours(CellId) returns JSON`: Return edge neighbours at the level of this cell, in a JSON array of uint64.
+`S2_CellId_AllNeighbours(CellId) returns JSON`: Return all neighbours at the level of this cell in a JSON array of uint64.
 `S2_CellId_AreNeighbours(CellId, CellId) returns true/false`: Return if two cellid are neighbours.
 
-`H3_H3Index(POINT) return H3Index`: Convert a point to H3Index, which is also a BIGINT UNSIGNED
+`H3_H3Index(POINT[, resolution]) returns H3Index`: Convert a point to an H3Index (also a BIGINT UNSIGNED). Resolution is optional and defaults to 15.
 `H3_H3Index_Resolution(h H3Index) returns resolution`: return the resolution (int) of the H3Index
 `H3_H3Index_Center(h H3Index) returns POINT`: return the center of the H3Index
-`H3_H3Index_Boundary(h H3Index) returns MULTIPOINT`: return the vertices of bounday of the cell of the H3Index, 
-`H3_H3Index_Parent(h H3Index) returns H3Index`: return the parent
-`H3_H3Index_Neighbours(H3Index) returns jsonb`: Return all neighbours at the level of this cell in jsonb array of uint64.
+`H3_H3Index_Boundary(h H3Index) returns MULTIPOINT`: Return the vertices of the boundary of the cell of the H3Index.
+`H3_H3Index_Parent(h H3Index[, resolution]) returns H3Index`: Return the parent (immediate, or at an optional coarser resolution).
+`H3_H3Index_Neighbours(H3Index) returns JSON`: Return all neighbours at the level of this cell in a JSON array of uint64.
 `H3_H3Index_AreNeighbours(H3Index, H3Index) returns true/false`: Return if are neighbours.
 
 ---
@@ -47,6 +47,13 @@ Libraries: S2 via `github.com/golang/geo/s2` (already a dependency); H3 via
   subtype.
 - An invalid `CellId`/`H3Index` (e.g. `0`) or a non-POINT geometry argument
   raises an `invalid input` error; NULL inputs yield NULL.
+- A `POINT` is interpreted as geographic degrees: longitude must be in
+  `[-180, 180]` and latitude in `[-90, 90]`, and both must be finite.
+  Out-of-range or non-finite coordinates raise an error — so projected/planar
+  coordinates (e.g. UTM) are rejected; convert to lon/lat first.
+- `s2_cellid_areneighbours` and `h3_h3index_areneighbours` evaluate adjacency at
+  the level/resolution of the **first** argument. Comparing cells of different
+  levels (e.g. a cell against its ancestor) returns `false`, not an error.
 
 ### Function reference (as implemented)
 
@@ -82,9 +89,10 @@ British/American spellings are both accepted (`_neighbours`/`_neighbors`,
 
 ### Decisions vs. the spec
 
-- `S2_CellId_Parent` returns a `CellId` (BIGINT UNSIGNED), not a POINT — the
-  spec text said "returns POINT" but that contradicted the description and the
-  symmetric `H3_H3Index_Parent`.
+- `S2_CellId_Parent` returns a `CellId` (BIGINT UNSIGNED), not a POINT. The
+  original spec line read "returns POINT" (a copy-paste slip — now corrected
+  above); a parent cell is itself a cell, matching the symmetric
+  `H3_H3Index_Parent`.
 - `H3_H3Index(POINT)` gained an optional resolution argument; the no-arg form
   defaults to resolution 15. H3 cannot pick a cell from a point without a
   resolution, unlike S2 where a point maps to a unique leaf cell.

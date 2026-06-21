@@ -15,6 +15,8 @@
 package function
 
 import (
+	"math"
+
 	"github.com/golang/geo/s2"
 	h3 "github.com/uber/h3-go/v4"
 
@@ -270,6 +272,12 @@ func uint64ListToJSON(ids []uint64) (bytejson.ByteJson, error) {
 }
 
 func validLatLng(lat, lng float64) error {
+	// Guard NaN/Inf explicitly: a NaN comparison is always false, so the range
+	// checks below would let it through. POINT input already rejects non-finite
+	// coordinates upstream, but this keeps the choke point safe on its own.
+	if math.IsNaN(lat) || math.IsNaN(lng) || math.IsInf(lat, 0) || math.IsInf(lng, 0) {
+		return moerr.NewInvalidInputNoCtxf("longitude/latitude is not finite: (%v, %v)", lng, lat)
+	}
 	if lat < -90 || lat > 90 || lng < -180 || lng > 180 {
 		return moerr.NewInvalidInputNoCtxf("longitude/latitude out of range: (%v, %v)", lng, lat)
 	}
@@ -527,6 +535,9 @@ func H3H3IndexParent(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		c, err := h3RequireValid(h)
 		if err != nil {
 			return 0, err
+		}
+		if c.Resolution() == 0 {
+			return 0, moerr.NewInvalidInputNoCtxf("H3Index at resolution 0 has no parent")
 		}
 		p, err := c.ImmediateParent()
 		if err != nil {
