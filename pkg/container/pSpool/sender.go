@@ -16,8 +16,11 @@ package pSpool
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"sync"
 	"sync/atomic"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
 const (
@@ -45,6 +48,8 @@ type PipelineSpool struct {
 	//
 	// the data producer should wait all consumers done before its close.
 	csDoneSignal chan struct{}
+
+	cleanupOnce sync.Once
 }
 
 // pipelineSpoolMessage is the element of PipelineSpool.
@@ -115,12 +120,65 @@ func (ps *PipelineSpool) ReceiveBatch(idx int) (data *batch.Batch, info error) {
 
 // Close the sender and receivers, and do memory clean.
 func (ps *PipelineSpool) Close() {
+	ps.CloseWithTimeout(0)
+}
+
+func (ps *PipelineSpool) CloseWithTimeout(timeout time.Duration) bool {
+	timer := (*time.Timer)(nil)
+	if timeout > 0 {
+		timer = time.NewTimer(timeout)
+		defer timer.Stop()
+	}
+
 	// wait for all receivers done its work first.
 	requireEndingReceiver := len(ps.rs)
 	for requireEndingReceiver > 0 {
 		requireEndingReceiver--
 
-		<-ps.csDoneSignal
+		if timer == nil {
+			<-ps.csDoneSignal
+			continue
+		}
+
+		select {
+		case <-ps.csDoneSignal:
+		case <-timer.C:
+			return false
+		}
+	}
+
+	ps.ForceCleanup()
+	return true
+}
+
+// ForceCleanup releases any spool-owned batch memory without waiting for
+// receivers. It is intended for query teardown after pipeline cleanup has
+// already stopped making progress.
+func (ps *PipelineSpool) ForceCleanup() {
+	if ps == nil {
+		return
+	}
+	ps.cleanupOnce.Do(ps.forceCleanup)
+}
+
+func (ps *PipelineSpool) forceCleanup() {
+	freeSlots := make([]bool, len(ps.shardPool))
+	for i := len(ps.freeShardPool); i > 0; i-- {
+		slot := <-ps.freeShardPool
+		freeSlots[slot] = true
+	}
+
+	for i := range ps.shardPool {
+		if freeSlots[i] {
+			continue
+		}
+
+		msg := &ps.shardPool[i]
+		ps.cache.CacheBatch(msg.useCache, msg.cacheID, msg.dataContent)
+		msg.dataContent = nil
+		msg.errContent = nil
+		msg.useCache = false
+		msg.cacheID = 0
 	}
 
 	ps.cache.free()

@@ -81,6 +81,16 @@ func (s *service) GetLockTableBind(
 	return l.getBind(), nil
 }
 
+func (s *service) GetLatestLockTableBind(bind pb.LockTable) (pb.LockTable, error) {
+	return getLockTableBind(
+		s.remote.client,
+		bind.Group,
+		bind.Table,
+		bind.OriginTable,
+		s.serviceID,
+		bind.Sharding)
+}
+
 func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bool) {
 	var lockTables []*localLockTable
 	s.tableGroups.iter(func(_ uint64, v lockTable) bool {
