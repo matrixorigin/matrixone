@@ -815,11 +815,12 @@ func (s *stateMachine) handleRepairLogShardUpdate(cmd []byte) sm.Result {
 	state.BlockedStores = blockedStores
 	state.Reason = repair.Reason
 	s.state.LogShardRepairs[shardID] = state
-	s.clearLogShardRepairCommands(repair.Shard, blockedStores)
+	s.clearLogShardRepairCommands(repair.Shard.ShardID, repair.Shard, blockedStores)
 	return sm.Result{}
 }
 
 func (s *stateMachine) clearLogShardRepairCommands(
+	shardID uint64,
 	shard pb.LogShardInfo,
 	blockedStores map[string]bool,
 ) {
@@ -833,13 +834,10 @@ func (s *stateMachine) clearLogShardRepairCommands(
 	for uuid := range blockedStores {
 		logStores[uuid] = struct{}{}
 	}
-	for uuid := range logStores {
-		delete(s.state.ScheduleCommands, uuid)
-	}
 	for uuid, batch := range s.state.ScheduleCommands {
 		commands := batch.Commands[:0]
 		for _, command := range batch.Commands {
-			if command.ShutdownStore != nil {
+			if shouldClearLogShardRepairCommand(uuid, command, shardID, logStores) {
 				continue
 			}
 			commands = append(commands, command)
@@ -851,6 +849,42 @@ func (s *stateMachine) clearLogShardRepairCommands(
 		batch.Commands = commands
 		s.state.ScheduleCommands[uuid] = batch
 	}
+}
+
+func shouldClearLogShardRepairCommand(
+	batchUUID string,
+	command pb.ScheduleCommand,
+	shardID uint64,
+	logStores map[string]struct{},
+) bool {
+	if command.ServiceType != pb.LogService {
+		return false
+	}
+	if command.ConfigChange != nil {
+		replica := command.ConfigChange.Replica
+		if replica.ShardID != shardID {
+			return false
+		}
+		return containsRepairLogStore(logStores, batchUUID) ||
+			containsRepairLogStore(logStores, replica.UUID) ||
+			containsRepairLogStore(logStores, command.UUID)
+	}
+	if command.BootstrapShard != nil {
+		return command.BootstrapShard.ShardID == shardID &&
+			(containsRepairLogStore(logStores, batchUUID) ||
+				containsRepairLogStore(logStores, command.UUID))
+	}
+	if command.ShutdownStore != nil {
+		return containsRepairLogStore(logStores, batchUUID) ||
+			containsRepairLogStore(logStores, command.UUID) ||
+			containsRepairLogStore(logStores, command.ShutdownStore.StoreID)
+	}
+	return false
+}
+
+func containsRepairLogStore(logStores map[string]struct{}, uuid string) bool {
+	_, ok := logStores[uuid]
+	return ok
 }
 
 func (s *stateMachine) handleUnblockLogShardStoresUpdate(cmd []byte) sm.Result {

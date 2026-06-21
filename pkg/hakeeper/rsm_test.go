@@ -231,6 +231,84 @@ func TestHandleRepairLogShardUpdatePreservesLeaderAndTerm(t *testing.T) {
 	assert.Equal(t, repaired, tsm.state.LogShardRepairs[1].Shard)
 }
 
+func TestHandleRepairLogShardUpdateOnlyClearsRelatedLogCommands(t *testing.T) {
+	tsm := NewStateMachine(0, 1).(*stateMachine)
+	tsm.state.ClusterInfo.LogShards = []metadata.LogShardRecord{
+		{ShardID: 1, NumberOfReplicas: 3},
+	}
+	tsm.state.LogState.Shards[1] = pb.LogShardInfo{
+		ShardID:  1,
+		Replicas: map[uint64]string{10: "log1", 20: "log2"},
+		Epoch:    5,
+	}
+	for _, uuid := range []string{"log1", "log2", "log3"} {
+		tsm.state.LogState.Stores[uuid] = pb.LogStoreInfo{}
+	}
+	tsm.state.ScheduleCommands = map[string]pb.CommandBatch{
+		"log3": {
+			Commands: []pb.ScheduleCommand{
+				{
+					UUID:        "log3",
+					ServiceType: pb.LogService,
+					ShutdownStore: &pb.ShutdownStore{
+						StoreID: "log3",
+					},
+				},
+			},
+		},
+		"log-other": {
+			Commands: []pb.ScheduleCommand{
+				{
+					UUID:        "log-other",
+					ServiceType: pb.LogService,
+					ShutdownStore: &pb.ShutdownStore{
+						StoreID: "log-other",
+					},
+				},
+			},
+		},
+		"log2": {
+			Commands: []pb.ScheduleCommand{
+				{
+					UUID:        "log2",
+					ServiceType: pb.LogService,
+					ConfigChange: &pb.ConfigChange{
+						Replica:    pb.Replica{UUID: "log2", ShardID: 2, ReplicaID: 99},
+						ChangeType: pb.StartReplica,
+					},
+				},
+			},
+		},
+		"tn1": {
+			Commands: []pb.ScheduleCommand{
+				{
+					UUID:        "tn1",
+					ServiceType: pb.TNService,
+					ShutdownStore: &pb.ShutdownStore{
+						StoreID: "tn1",
+					},
+				},
+			},
+		},
+	}
+
+	result, err := tsm.Update(sm.Entry{Cmd: GetRepairLogShardCmd(pb.RepairLogShard{
+		Shard: pb.LogShardInfo{
+			ShardID:           1,
+			Replicas:          map[uint64]string{10: "log1", 20: "log2", 30: "log3"},
+			NonVotingReplicas: map[uint64]string{},
+			Epoch:             5,
+		},
+		BlockedStores: []string{"log3"},
+	})})
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), result.Value)
+	assert.NotContains(t, tsm.state.ScheduleCommands, "log3")
+	assert.Contains(t, tsm.state.ScheduleCommands, "log-other")
+	assert.Contains(t, tsm.state.ScheduleCommands, "log2")
+	assert.Contains(t, tsm.state.ScheduleCommands, "tn1")
+}
+
 func TestHandleUnblockLogShardStoresUpdate(t *testing.T) {
 	tsm := NewStateMachine(0, 1).(*stateMachine)
 	tsm.state.LogShardRepairs[1] = pb.LogShardRepairState{

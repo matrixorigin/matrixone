@@ -602,6 +602,7 @@ func (c *testCluster) IsClusterHealthy() bool {
 		state.GetTNState(),
 		state.GetLogState(),
 		state.GetTick(),
+		nil,
 	)
 	return healthy
 }

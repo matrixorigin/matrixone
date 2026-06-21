@@ -205,7 +205,7 @@ func runWizard(args []string) error {
 		if err := writePlanFile(opts.output, plan); err != nil {
 			return err
 		}
-		fmt.Printf("plan written to %s\n", opts.output)
+		stdoutf("plan written to %s\n", opts.output)
 	}
 	if !opts.apply {
 		if !plan.ApplySupported {
@@ -272,7 +272,7 @@ func runApply(args []string) error {
 	}
 	for i, plan := range plans {
 		if len(plans) > 1 {
-			fmt.Printf("=== Plan %d/%d ===\n", i+1, len(plans))
+			stdoutf("=== Plan %d/%d ===\n", i+1, len(plans))
 		}
 		printPlanSummary(plan)
 	}
@@ -328,7 +328,7 @@ func runRecover(mode string, args []string) error {
 	}
 	for i, plan := range plans {
 		if len(plans) > 1 {
-			fmt.Printf("=== Online repair plan %d/%d ===\n", i+1, len(plans))
+			stdoutf("=== Online repair plan %d/%d ===\n", i+1, len(plans))
 		}
 		printPlanSummary(plan)
 	}
@@ -336,7 +336,7 @@ func runRecover(mode string, args []string) error {
 		if err := writePlanBundleFile(opts.output, plans); err != nil {
 			return err
 		}
-		fmt.Printf("plan bundle written to %s\n", opts.output)
+		stdoutf("plan bundle written to %s\n", opts.output)
 	}
 	if !opts.yes {
 		ok, err := askYesNo("Proceed with online recovery; the CLI will not backup, stop, or start LogService", false)
@@ -1464,7 +1464,7 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 	tasks := cleanupTasksForPlansAllStores(plans)
 	restartStores := storesFromCleanupTasks(tasks)
 
-	fmt.Println("step 1: write HAKeeper repair state with requested cleanup replicas")
+	stdoutln("step 1: write HAKeeper repair state with requested cleanup replicas")
 	beforeTicks, err := currentStoreTicks(ctx, plans[0], timeout, restartStores)
 	if err != nil {
 		return err
@@ -1478,7 +1478,7 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 
 	if len(restartStores) > 0 {
 		if plans[0].Mode == modeLocal {
-			fmt.Println("step 2: stop listed LogService stores outside this CLI")
+			stdoutln("step 2: stop listed LogService stores outside this CLI")
 			printLocalStopInstructions(plans, restartStores)
 			if !opts.yes {
 				line, err := askLine("After all listed LogService processes are stopped, type STOPPED")
@@ -1492,8 +1492,8 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 			if err := verifyLocalStoresStopped(restartStores); err != nil {
 				return err
 			}
-			fmt.Println("step 3: clean confirmed local replicas")
-			fmt.Println(combinedCleanupSummary(tasks))
+			stdoutln("step 3: clean confirmed local replicas")
+			stdoutln(combinedCleanupSummary(tasks))
 			if !opts.yes {
 				line, err := askLine("Type CLEAN to delete the listed local replica data")
 				if err != nil {
@@ -1522,18 +1522,18 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 			if err := verifyOnlineCleanupComplete(plans); err != nil {
 				return err
 			}
-			fmt.Println("step 4: clear startup cleanup requests and keep stores blocked")
+			stdoutln("step 4: clear startup cleanup requests and keep stores blocked")
 			for _, plan := range plans {
 				req := repairPayloadForPlanWithCleanup(plan, plan.InitialBlockedStores, "online recover: local cleanup complete; keep stores blocked before restart", false)
 				if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddressesForApply(plan), timeout, req); err != nil {
-					fmt.Printf("warning: failed to clear startup cleanup request for shard %d before restart: %v\n", plan.ShardID, err)
-					fmt.Println("warning: continue after local cleanup; restart LogService so HAKeeper becomes available, then final repair state will be refreshed")
+					stdoutf("warning: failed to clear startup cleanup request for shard %d before restart: %v\n", plan.ShardID, err)
+					stdoutln("warning: continue after local cleanup; restart LogService so HAKeeper becomes available, then final repair state will be refreshed")
 				}
 			}
-			fmt.Println("step 5: start listed LogService stores outside this CLI")
+			stdoutln("step 5: start listed LogService stores outside this CLI")
 			printRestartInstructions(plans, restartStores)
 		} else {
-			fmt.Println("step 2: restart listed LogService stores outside this CLI")
+			stdoutln("step 2: restart listed LogService stores outside this CLI")
 			printRestartInstructions(plans, restartStores)
 		}
 		if !opts.yes {
@@ -1545,7 +1545,7 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 				return fmt.Errorf("recover cancelled before unblock")
 			}
 		}
-		fmt.Println("step 6: wait for restarted stores to heartbeat")
+		stdoutln("step 6: wait for restarted stores to heartbeat")
 		if err := waitForStoreHeartbeats(ctx, plans[0], timeout, restartStores, beforeTicks, opts.yes); err != nil {
 			return err
 		}
@@ -1553,10 +1553,10 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 			return err
 		}
 	} else {
-		fmt.Println("step 2: no LogService restart is required by this plan")
+		stdoutln("step 2: no LogService restart is required by this plan")
 	}
 
-	fmt.Println("step 4: unblock cleaned stores")
+	stdoutln("step 4: unblock cleaned stores")
 	for _, plan := range plans {
 		for _, store := range storesWithAnyCleanup(plan.Stores) {
 			req := repairPayload{
@@ -1569,11 +1569,11 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 			if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddressesForApply(plan), timeout, req); err != nil {
 				return fmt.Errorf("unblock shard %d store %s: %w", plan.ShardID, store.UUID, err)
 			}
-			fmt.Printf("unblocked store %s for shard %d\n", store.UUID, plan.ShardID)
+			stdoutf("unblocked store %s for shard %d\n", store.UUID, plan.ShardID)
 		}
 	}
 
-	fmt.Println("step 5: refresh final repair state")
+	stdoutln("step 5: refresh final repair state")
 	for _, plan := range plans {
 		if len(plan.PersistentBlockedStores) == 0 {
 			req := repairPayload{
@@ -1593,7 +1593,7 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 		}
 	}
 
-	fmt.Println("step 6: final HAKeeper state")
+	stdoutln("step 6: final HAKeeper state")
 	state, err := getHAKeeperStateWithNewConnection(ctx, stableHAKeeperAddressesForApply(plans[0]), timeout)
 	if err != nil {
 		return err
@@ -1742,7 +1742,7 @@ func waitForStoreHeartbeats(
 	if assumeYes {
 		return fmt.Errorf("%s", msg)
 	}
-	fmt.Println("warning: " + msg)
+	stdoutln("warning: " + msg)
 	ok, err := askYesNo("Continue to unblock anyway", false)
 	if err != nil {
 		return err
@@ -1755,16 +1755,16 @@ func waitForStoreHeartbeats(
 
 func printRestartInstructions(plans []*repairPlan, stores []planStore) {
 	mode := plans[0].Mode
-	fmt.Println("Start or restart these LogService stores:")
+	stdoutln("Start or restart these LogService stores:")
 	for _, store := range stores {
 		shards := cleanupShardsForStore(plans, store.UUID)
-		fmt.Printf("- store %s shards=%v cleanup=%s\n", store.UUID, shards, cleanupReplicasForStore(plans, store.UUID))
+		stdoutf("- store %s shards=%v cleanup=%s\n", store.UUID, shards, cleanupReplicasForStore(plans, store.UUID))
 		switch mode {
 		case modeLocal:
 			if store.ConfigPath != "" {
-				fmt.Printf("  config: %s\n", store.ConfigPath)
-				fmt.Printf("  example: pgrep -af -- 'mo-service -cfg %s'\n", store.ConfigPath)
-				fmt.Printf("  example: kill -TERM <pid>; nohup %s -cfg %s >> %s 2>&1 &\n",
+				stdoutf("  config: %s\n", store.ConfigPath)
+				stdoutf("  example: pgrep -af -- 'mo-service -cfg %s'\n", store.ConfigPath)
+				stdoutf("  example: kill -TERM <pid>; nohup %s -cfg %s >> %s 2>&1 &\n",
 					shellQuote(firstNonEmpty(store.MOServicePath, "mo-service")),
 					shellQuote(store.ConfigPath),
 					shellQuote(localRestartLogPath(plans[0], store)),
@@ -1779,24 +1779,24 @@ func printRestartInstructions(plans []*repairPlan, stores []planStore) {
 				selector = plans[0].K8s.LogSelector
 			}
 			if selector != "" {
-				fmt.Printf("  find pod: %s -n %s get pod -l %s -o wide --show-labels\n", kubectl, shellQuote(namespace), shellQuote(selector))
+				stdoutf("  find pod: %s -n %s get pod -l %s -o wide --show-labels\n", kubectl, shellQuote(namespace), shellQuote(selector))
 			}
-			fmt.Printf("  restart pod: %s -n %s delete pod <logservice-pod-for-%s>\n", kubectl, shellQuote(namespace), store.UUID)
+			stdoutf("  restart pod: %s -n %s delete pod <logservice-pod-for-%s>\n", kubectl, shellQuote(namespace), store.UUID)
 		}
 	}
 }
 
 func printLocalStopInstructions(plans []*repairPlan, stores []planStore) {
-	fmt.Println("Stop these LogService processes before local cleanup:")
+	stdoutln("Stop these LogService processes before local cleanup:")
 	for _, store := range stores {
 		shards := cleanupShardsForStore(plans, store.UUID)
-		fmt.Printf("- store %s shards=%v cleanup=%s\n", store.UUID, shards, cleanupReplicasForStore(plans, store.UUID))
+		stdoutf("- store %s shards=%v cleanup=%s\n", store.UUID, shards, cleanupReplicasForStore(plans, store.UUID))
 		if store.ConfigPath == "" {
 			continue
 		}
-		fmt.Printf("  config: %s\n", store.ConfigPath)
-		fmt.Printf("  find process: pgrep -af -- 'mo-service -cfg %s'\n", store.ConfigPath)
-		fmt.Println("  stop process: kill -TERM <pid>")
+		stdoutf("  config: %s\n", store.ConfigPath)
+		stdoutf("  find process: pgrep -af -- 'mo-service -cfg %s'\n", store.ConfigPath)
+		stdoutln("  stop process: kill -TERM <pid>")
 	}
 }
 
@@ -1862,7 +1862,7 @@ func applyRepairPlans(ctx context.Context, plans []*repairPlan, opts wizardOptio
 		return err
 	}
 
-	fmt.Println("step 1: write repair states and block stale/dirty stores")
+	stdoutln("step 1: write repair states and block stale/dirty stores")
 	if err := confirmApplyStep(opts, "step 1", fmt.Sprintf("block stores for shards %v", planShardIDs(plans))); err != nil {
 		return err
 	}
@@ -1872,12 +1872,12 @@ func applyRepairPlans(ctx context.Context, plans []*repairPlan, opts wizardOptio
 		}
 	}
 
-	fmt.Println("step 2: stop LogService stores that need local cleanup")
+	stdoutln("step 2: stop LogService stores that need local cleanup")
 	if err := confirmApplyStep(opts, "step 2", fmt.Sprintf("stop stores %v", storesWithCleanup(rebuildStores))); err != nil {
 		return err
 	}
 	if opts.manualServiceControl {
-		fmt.Printf("manual service control enabled; stop these stores before continuing: %v\n", storesWithCleanup(rebuildStores))
+		stdoutf("manual service control enabled; stop these stores before continuing: %v\n", storesWithCleanup(rebuildStores))
 	} else {
 		for _, store := range rebuildStores {
 			if err := stopStore(store); err != nil {
@@ -1886,7 +1886,7 @@ func applyRepairPlans(ctx context.Context, plans []*repairPlan, opts wizardOptio
 		}
 	}
 
-	fmt.Println("step 3: back up local logservice-data")
+	stdoutln("step 3: back up local logservice-data")
 	backupDir := combinedBackupDir(plans)
 	if err := confirmApplyStep(opts, "step 3", fmt.Sprintf("backup store data to %s", backupDir)); err != nil {
 		return err
@@ -1897,7 +1897,7 @@ func applyRepairPlans(ctx context.Context, plans []*repairPlan, opts wizardOptio
 		}
 	}
 
-	fmt.Println("step 4: clean dirty local replicas")
+	stdoutln("step 4: clean dirty local replicas")
 	if err := confirmApplyStep(opts, "step 4", combinedCleanupSummary(tasks)); err != nil {
 		return err
 	}
@@ -1920,12 +1920,12 @@ func applyRepairPlans(ctx context.Context, plans []*repairPlan, opts wizardOptio
 		return err
 	}
 
-	fmt.Println("step 5: restart cleaned LogService stores")
+	stdoutln("step 5: restart cleaned LogService stores")
 	if err := confirmApplyStep(opts, "step 5", fmt.Sprintf("restart stores %v", storesWithCleanup(rebuildStores))); err != nil {
 		return err
 	}
 	if opts.manualServiceControl {
-		fmt.Printf("manual service control enabled; start these stores and wait until their HAKeeper service addresses are reachable: %v\n", storesWithCleanup(rebuildStores))
+		stdoutf("manual service control enabled; start these stores and wait until their HAKeeper service addresses are reachable: %v\n", storesWithCleanup(rebuildStores))
 	} else {
 		for _, store := range rebuildStores {
 			if err := startStore(plans[0], store); err != nil {
@@ -1934,7 +1934,7 @@ func applyRepairPlans(ctx context.Context, plans []*repairPlan, opts wizardOptio
 		}
 	}
 
-	fmt.Println("step 6: unblock cleaned stores one shard at a time")
+	stdoutln("step 6: unblock cleaned stores one shard at a time")
 	for _, plan := range plans {
 		for _, store := range storesByUUID(plan.Stores, plan.RebuildStores) {
 			if len(store.CleanupReplicas) == 0 {
@@ -1953,12 +1953,12 @@ func applyRepairPlans(ctx context.Context, plans []*repairPlan, opts wizardOptio
 			if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddressesForApply(plan), timeout, req); err != nil {
 				return fmt.Errorf("unblock shard %d store %s: %w", plan.ShardID, store.UUID, err)
 			}
-			fmt.Printf("unblocked %s for shard %d; wait 30s for L/Start/snapshot restore\n", store.UUID, plan.ShardID)
+			stdoutf("unblocked %s for shard %d; wait 30s for L/Start/snapshot restore\n", store.UUID, plan.ShardID)
 			time.Sleep(30 * time.Second)
 		}
 	}
 
-	fmt.Println("step 7: write final repair states")
+	stdoutln("step 7: write final repair states")
 	for _, plan := range plans {
 		if err := confirmApplyStep(opts, "step 7", fmt.Sprintf("shard %d keep persistent blocked stores %v", plan.ShardID, plan.PersistentBlockedStores)); err != nil {
 			return err
@@ -1968,7 +1968,7 @@ func applyRepairPlans(ctx context.Context, plans []*repairPlan, opts wizardOptio
 		}
 	}
 
-	fmt.Println("step 8: final HAKeeper state")
+	stdoutln("step 8: final HAKeeper state")
 	state, err := getHAKeeperStateWithNewConnection(ctx, stableHAKeeperAddressesForApply(plans[0]), timeout)
 	if err != nil {
 		return err
@@ -1994,7 +1994,7 @@ func applySingleRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOpt
 	if err := validatePlannedLocalCleanupCompleteness(plan, storesByUUID(plan.Stores, plan.RebuildStores)); err != nil {
 		return err
 	}
-	fmt.Println("step 1: write repair state and block stale/dirty stores")
+	stdoutln("step 1: write repair state and block stale/dirty stores")
 	if err := confirmApplyStep(opts, "step 1", fmt.Sprintf("block stores %v in HAKeeper repair state", plan.InitialBlockedStores)); err != nil {
 		return err
 	}
@@ -2002,12 +2002,12 @@ func applySingleRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOpt
 		return err
 	}
 	rebuildStores := storesByUUID(plan.Stores, plan.RebuildStores)
-	fmt.Println("step 2: stop LogService stores that need local cleanup")
+	stdoutln("step 2: stop LogService stores that need local cleanup")
 	if err := confirmApplyStep(opts, "step 2", fmt.Sprintf("stop stores %v", storesWithCleanup(rebuildStores))); err != nil {
 		return err
 	}
 	if opts.manualServiceControl {
-		fmt.Printf("manual service control enabled; stop these stores before continuing: %v\n", storesWithCleanup(rebuildStores))
+		stdoutf("manual service control enabled; stop these stores before continuing: %v\n", storesWithCleanup(rebuildStores))
 	} else {
 		for _, store := range rebuildStores {
 			if len(store.CleanupReplicas) == 0 {
@@ -2018,7 +2018,7 @@ func applySingleRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOpt
 			}
 		}
 	}
-	fmt.Println("step 3: back up local logservice-data")
+	stdoutln("step 3: back up local logservice-data")
 	if err := confirmApplyStep(opts, "step 3", fmt.Sprintf("backup store data to %s", plan.Local.BackupDir)); err != nil {
 		return err
 	}
@@ -2030,7 +2030,7 @@ func applySingleRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOpt
 			return err
 		}
 	}
-	fmt.Println("step 4: clean dirty local replicas")
+	stdoutln("step 4: clean dirty local replicas")
 	if err := confirmApplyStep(opts, "step 4", cleanupSummary(rebuildStores)); err != nil {
 		return err
 	}
@@ -2054,12 +2054,12 @@ func applySingleRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOpt
 	if err := validateNoDuplicateLocalShards(rebuildStores); err != nil {
 		return err
 	}
-	fmt.Println("step 5: restart cleaned LogService stores")
+	stdoutln("step 5: restart cleaned LogService stores")
 	if err := confirmApplyStep(opts, "step 5", fmt.Sprintf("restart stores %v", storesWithCleanup(rebuildStores))); err != nil {
 		return err
 	}
 	if opts.manualServiceControl {
-		fmt.Printf("manual service control enabled; start these stores and wait until their HAKeeper service addresses are reachable: %v\n", storesWithCleanup(rebuildStores))
+		stdoutf("manual service control enabled; start these stores and wait until their HAKeeper service addresses are reachable: %v\n", storesWithCleanup(rebuildStores))
 	} else {
 		for _, store := range rebuildStores {
 			if len(store.CleanupReplicas) == 0 {
@@ -2070,7 +2070,7 @@ func applySingleRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOpt
 			}
 		}
 	}
-	fmt.Println("step 6: unblock cleaned stores one by one")
+	stdoutln("step 6: unblock cleaned stores one by one")
 	for _, store := range rebuildStores {
 		if len(store.CleanupReplicas) == 0 {
 			continue
@@ -2088,17 +2088,17 @@ func applySingleRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOpt
 		if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddresses, timeout, req); err != nil {
 			return err
 		}
-		fmt.Printf("unblocked %s; wait 30s for L/Start/snapshot restore\n", store.UUID)
+		stdoutf("unblocked %s; wait 30s for L/Start/snapshot restore\n", store.UUID)
 		time.Sleep(30 * time.Second)
 	}
-	fmt.Println("step 7: write final repair state")
+	stdoutln("step 7: write final repair state")
 	if err := confirmApplyStep(opts, "step 7", fmt.Sprintf("keep persistent blocked stores %v", plan.PersistentBlockedStores)); err != nil {
 		return err
 	}
 	if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddresses, timeout, repairPayloadForPlan(plan, plan.PersistentBlockedStores, "wizard: repair complete")); err != nil {
 		return err
 	}
-	fmt.Println("step 8: final HAKeeper state")
+	stdoutln("step 8: final HAKeeper state")
 	state, err := getHAKeeperStateWithNewConnection(ctx, stableHAKeeperAddresses, timeout)
 	if err != nil {
 		return err
@@ -2451,7 +2451,7 @@ func startStore(plan *repairPlan, store planStore) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	fmt.Printf("started %s pid=%d log=%s\n", store.UUID, cmd.Process.Pid, logPath)
+	stdoutf("started %s pid=%d log=%s\n", store.UUID, cmd.Process.Pid, logPath)
 	return nil
 }
 
@@ -2664,16 +2664,16 @@ func confirmPlanDetails(plan *repairPlan) error {
 		if !storeNeedsHumanConfirmation(store) {
 			continue
 		}
-		fmt.Printf("Review store %s\n", store.UUID)
-		fmt.Printf("  role=%s targetReplica=%d local=%v cleanup=%v\n", store.Role, store.TargetReplicaID, store.LocalReplicas, store.CleanupReplicas)
+		stdoutf("Review store %s\n", store.UUID)
+		stdoutf("  role=%s targetReplica=%d local=%v cleanup=%v\n", store.Role, store.TargetReplicaID, store.LocalReplicas, store.CleanupReplicas)
 		if store.ConfigPath != "" {
-			fmt.Printf("  config=%s\n", store.ConfigPath)
+			stdoutf("  config=%s\n", store.ConfigPath)
 		}
 		if store.NodeHostDir != "" {
-			fmt.Printf("  nodeHostDir=%s\n", store.NodeHostDir)
+			stdoutf("  nodeHostDir=%s\n", store.NodeHostDir)
 		}
 		for _, warning := range store.Warnings {
-			fmt.Printf("  warning: %s\n", warning)
+			stdoutf("  warning: %s\n", warning)
 		}
 		ok, err := askYesNo("Confirm this store action", false)
 		if err != nil {
@@ -2691,14 +2691,14 @@ func storeNeedsHumanConfirmation(store planStore) bool {
 }
 
 func printPlanSummary(plan *repairPlan) {
-	fmt.Printf("Repair plan %s mode=%s shard=%d\n", plan.Version, plan.Mode, plan.ShardID)
+	stdoutf("Repair plan %s mode=%s shard=%d\n", plan.Version, plan.Mode, plan.ShardID)
 	if len(plan.HAKeeperAddresses) > 0 {
-		fmt.Printf("HAKeeper: %s\n", strings.Join(plan.HAKeeperAddresses, ","))
+		stdoutf("HAKeeper: %s\n", strings.Join(plan.HAKeeperAddresses, ","))
 	}
 	if len(plan.Stores) > 0 {
-		fmt.Println("Stores:")
+		stdoutln("Stores:")
 		for _, store := range plan.Stores {
-			fmt.Printf("  %s role=%s targetReplica=%d local=%v cleanup=%v\n",
+			stdoutf("  %s role=%s targetReplica=%d local=%v cleanup=%v\n",
 				store.UUID,
 				store.Role,
 				store.TargetReplicaID,
@@ -2706,23 +2706,23 @@ func printPlanSummary(plan *repairPlan) {
 				store.CleanupReplicas,
 			)
 			for _, warning := range store.Warnings {
-				fmt.Printf("    warning: %s\n", warning)
+				stdoutf("    warning: %s\n", warning)
 			}
 		}
 	}
 	if len(plan.InitialBlockedStores) > 0 {
-		fmt.Printf("Initial blocked stores: %v\n", plan.InitialBlockedStores)
+		stdoutf("Initial blocked stores: %v\n", plan.InitialBlockedStores)
 	}
 	if len(plan.PersistentBlockedStores) > 0 {
-		fmt.Printf("Persistent blocked stores: %v\n", plan.PersistentBlockedStores)
+		stdoutf("Persistent blocked stores: %v\n", plan.PersistentBlockedStores)
 	}
 	if len(plan.Warnings) > 0 {
-		fmt.Println("Warnings:")
+		stdoutln("Warnings:")
 		for _, warning := range plan.Warnings {
-			fmt.Printf("  - %s\n", warning)
+			stdoutf("  - %s\n", warning)
 		}
 	}
-	fmt.Printf("Actions: %d\n", len(plan.Actions))
+	stdoutf("Actions: %d\n", len(plan.Actions))
 }
 
 func writePlanFile(path string, plan *repairPlan) error {
@@ -2780,7 +2780,7 @@ func readPlanFiles(paths string) ([]*repairPlan, error) {
 }
 
 func askChoice(prompt string, choices []string, def string) (string, error) {
-	fmt.Printf("%s [%s] default=%s: ", prompt, strings.Join(choices, "/"), def)
+	stdoutf("%s [%s] default=%s: ", prompt, strings.Join(choices, "/"), def)
 	line, err := readStdinLine()
 	if err != nil {
 		return "", err
@@ -2798,7 +2798,7 @@ func askChoice(prompt string, choices []string, def string) (string, error) {
 }
 
 func askLine(prompt string) (string, error) {
-	fmt.Printf("%s: ", prompt)
+	stdoutf("%s: ", prompt)
 	line, err := readStdinLine()
 	if err != nil {
 		return "", err
@@ -2811,7 +2811,7 @@ func askLine(prompt string) (string, error) {
 }
 
 func askLineDefault(prompt string, def string) (string, error) {
-	fmt.Printf("%s [%s]: ", prompt, def)
+	stdoutf("%s [%s]: ", prompt, def)
 	line, err := readStdinLine()
 	if err != nil {
 		return "", err

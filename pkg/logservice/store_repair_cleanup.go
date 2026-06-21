@@ -34,6 +34,7 @@ import (
 )
 
 const logShardRepairReasonPrefix = "__mo_log_shard_repair__:"
+const repairStartupCleanupTimeout = 2 * time.Second
 
 type logShardRepairReason struct {
 	Reason                 string              `json:"reason,omitempty"`
@@ -55,12 +56,13 @@ func (l *store) cleanRequestedReplicasFromRepairState(ctx context.Context, shard
 	if len(shards) == 0 {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, repairStartupCleanupTimeout)
 	defer cancel()
 
-	client := NewLogHAKeeperClientWithRetry(ctx, l.cfg.UUID, l.cfg.GetHAKeeperClientConfig())
-	if client == nil {
-		l.runtime.Logger().Warn("skip repair cleanup: failed to create HAKeeper client before timeout")
+	client, err := NewLogHAKeeperClient(ctx, l.cfg.UUID, l.cfg.GetHAKeeperClientConfig())
+	if err != nil {
+		l.runtime.Logger().Warn("skip repair cleanup: failed to create HAKeeper client",
+			zap.Error(err))
 		return nil
 	}
 	defer func() {

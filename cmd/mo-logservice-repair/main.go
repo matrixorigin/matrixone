@@ -98,9 +98,21 @@ type repairResult struct {
 func main() {
 	logutil.SetupMOLogger(&logutil.LogConfig{})
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		stderrf("%v\n", err)
 		os.Exit(1)
 	}
+}
+
+func stdoutf(format string, args ...any) {
+	_, _ = fmt.Fprintf(os.Stdout, format, args...)
+}
+
+func stdoutln(args ...any) {
+	_, _ = fmt.Fprintln(os.Stdout, args...)
+}
+
+func stderrf(format string, args ...any) {
+	_, _ = fmt.Fprintf(os.Stderr, format, args...)
 }
 
 func run(args []string) error {
@@ -826,6 +838,6 @@ func printJSON(v any) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(string(data))
+	stdoutln(string(data))
 	return nil
 }
