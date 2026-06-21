@@ -1,0 +1,330 @@
+set global enable_privilege_cache = off;
+drop account if exists acc_branch_priv;
+drop account if exists `acc-branch`;
+drop database if exists br_sys_src;
+drop publication if exists pub_br_sub;
+drop database if exists br_pub_src;
+drop snapshot if exists sp_to_account;
+create account acc_branch_priv admin_name "admin" identified by "111";
+create account `acc-branch` admin_name "rootq" identified by "111";
+create database br_sys_src;
+create table br_sys_src.t(a int primary key);
+insert into br_sys_src.t values (1);
+create snapshot sp_to_account for database br_sys_src;
+data branch create database br_to_acc from br_sys_src{snapshot="sp_to_account"} to account `acc-branch`;
+set @quoted_acc_id = (select account_id from mo_catalog.mo_account where account_name = 'acc-branch');
+select count(*) from mo_catalog.mo_database where account_id = @quoted_acc_id and datname = 'br_to_acc';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_tables where account_id = @quoted_acc_id and reldatabase = 'br_to_acc' and relname = 't';
+➤ count(*)[-5,64,0]  𝄀
+1
+drop snapshot sp_to_account;
+drop database br_sys_src;
+create database br_pub_src;
+create table br_pub_src.t1(a int primary key);
+insert into br_pub_src.t1 values (1), (2);
+create publication pub_br_sub database br_pub_src account acc_branch_priv;
+drop database if exists br_src;
+drop database if exists br_diff;
+drop database if exists br_merge;
+drop database if exists br_pick;
+drop database if exists br_delete;
+drop database if exists br_db_ok;
+drop database if exists br_db_normal;
+drop database if exists br_db_branch;
+drop database if exists br_db_empty;
+drop database if exists br_db_view_only;
+drop database if exists br_db_sequence;
+drop database if exists br_db_mixed;
+drop database if exists sub_br_pub;
+drop database if exists br_sub_ok;
+create database br_src;
+create table br_src.t(a int primary key, b varchar(20));
+insert into br_src.t values (1, 'one'), (2, 'two');
+create snapshot sp_t for table br_src t;
+create snapshot sp_db for database br_src;
+create role r_tbl_select_only;
+grant select on table br_src.t to r_tbl_select_only;
+create user u_tbl_select identified by '111' default role r_tbl_select_only;
+create role r_tbl_create_only;
+grant create table on database br_src to r_tbl_create_only;
+create user u_tbl_create identified by '111' default role r_tbl_create_only;
+create role r_tbl_both;
+grant select on table br_src.t to r_tbl_both;
+grant create table on database br_src to r_tbl_both;
+create user u_tbl_both identified by '111' default role r_tbl_both;
+create role r_db_select_only;
+grant select on table br_src.t to r_db_select_only;
+create user u_db_select identified by '111' default role r_db_select_only;
+create role r_db_create_only;
+grant create database on account * to r_db_create_only;
+create user u_db_create identified by '111' default role r_db_create_only;
+create role r_db_both;
+grant create database on account * to r_db_both;
+grant select on table br_src.t to r_db_both;
+create user u_db_both identified by '111' default role r_db_both;
+create database sub_br_pub from sys publication pub_br_sub;
+show full tables from sub_br_pub;
+➤ Tables_in_sub_br_pub[12,-1,0]  ¦  Table_type[12,-1,0]  𝄀
+t1  ¦  BASE TABLE
+data branch create table br_src.t_select_only from br_src.t{snapshot="sp_t"};
+internal error: do not have privilege to execute the statement
+data branch create table br_src.t_create_only from br_src.t{snapshot="sp_t"};
+internal error: do not have privilege to execute the statement
+select count(*) from mo_catalog.mo_tables where reldatabase = 'br_src' and relname in ('t_select_only', 't_create_only');
+➤ count(*)[-5,64,0]  𝄀
+0
+data branch create table br_src.t_branch_ok from br_src.t{snapshot="sp_t"};
+select count(*) from br_src.t_branch_ok;
+➤ count(*)[-5,64,0]  𝄀
+2
+data branch create database br_db_select_only from br_src{snapshot="sp_db"};
+internal error: do not have privilege to execute the statement
+data branch create database br_db_create_only from br_src{snapshot="sp_db"};
+internal error: do not have privilege to execute the statement
+select count(*) from mo_catalog.mo_database where datname in ('br_db_select_only', 'br_db_create_only');
+➤ count(*)[-5,64,0]  𝄀
+0
+data branch create database br_db_ok from br_src{snapshot="sp_db"};
+select count(*) from br_db_ok.t;
+➤ count(*)[-5,64,0]  𝄀
+2
+data branch create database br_sub_create_only from sub_br_pub;
+internal error: do not have privilege to execute the statement
+data branch create database br_sub_ok from sub_br_pub;
+select count(*) from mo_catalog.mo_database where datname = 'br_sub_create_only';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from br_sub_ok.t1;
+➤ count(*)[-5,64,0]  𝄀
+2
+create database br_diff;
+create table br_diff.base(a int primary key, b int);
+create table br_diff.target(a int primary key, b int);
+insert into br_diff.base values (1, 1), (2, 2);
+insert into br_diff.target values (1, 10), (3, 3);
+create role r_diff_one_side;
+grant select on table br_diff.target to r_diff_one_side;
+create user u_diff_one identified by '111' default role r_diff_one_side;
+create role r_diff_both;
+grant select on table br_diff.base to r_diff_both;
+grant select on table br_diff.target to r_diff_both;
+create user u_diff_both identified by '111' default role r_diff_both;
+data branch diff br_diff.target against br_diff.base output count;
+internal error: do not have privilege to execute the statement
+data branch diff br_diff.target against br_diff.base output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+4
+data branch diff br_diff.target against br_diff.base output as br_diff.diff_out;
+not supported: DATA BRANCH DIFF OUTPUT AS
+select count(*) from mo_catalog.mo_tables where reldatabase = 'br_diff' and relname = 'diff_out';
+➤ count(*)[-5,64,0]  𝄀
+0
+create database br_merge;
+create table br_merge.src(a int primary key, b int);
+create table br_merge.dst(a int primary key, b int);
+insert into br_merge.src values (1, 10), (2, 20);
+insert into br_merge.dst values (1, 10);
+create role r_merge_no_src;
+grant select on table br_merge.dst to r_merge_no_src;
+grant insert on table br_merge.dst to r_merge_no_src;
+grant update on table br_merge.dst to r_merge_no_src;
+grant delete on table br_merge.dst to r_merge_no_src;
+create user u_merge_no_src identified by '111' default role r_merge_no_src;
+create role r_merge_no_write;
+grant select on table br_merge.src to r_merge_no_write;
+grant select on table br_merge.dst to r_merge_no_write;
+create user u_merge_no_write identified by '111' default role r_merge_no_write;
+create role r_merge_no_insert;
+grant select on table br_merge.src to r_merge_no_insert;
+grant select on table br_merge.dst to r_merge_no_insert;
+grant update on table br_merge.dst to r_merge_no_insert;
+grant delete on table br_merge.dst to r_merge_no_insert;
+create user u_merge_no_insert identified by '111' default role r_merge_no_insert;
+create role r_merge_no_update;
+grant select on table br_merge.src to r_merge_no_update;
+grant select on table br_merge.dst to r_merge_no_update;
+grant insert on table br_merge.dst to r_merge_no_update;
+grant delete on table br_merge.dst to r_merge_no_update;
+create user u_merge_no_update identified by '111' default role r_merge_no_update;
+create role r_merge_no_delete;
+grant select on table br_merge.src to r_merge_no_delete;
+grant select on table br_merge.dst to r_merge_no_delete;
+grant insert on table br_merge.dst to r_merge_no_delete;
+grant update on table br_merge.dst to r_merge_no_delete;
+create user u_merge_no_delete identified by '111' default role r_merge_no_delete;
+create role r_merge_all;
+grant select on table br_merge.src to r_merge_all;
+grant select on table br_merge.dst to r_merge_all;
+grant insert on table br_merge.dst to r_merge_all;
+grant update on table br_merge.dst to r_merge_all;
+grant delete on table br_merge.dst to r_merge_all;
+create user u_merge_all identified by '111' default role r_merge_all;
+data branch merge br_merge.src into br_merge.dst;
+internal error: do not have privilege to execute the statement
+data branch merge br_merge.src into br_merge.dst;
+internal error: do not have privilege to execute the statement
+data branch merge br_merge.src into br_merge.dst;
+internal error: do not have privilege to execute the statement
+data branch merge br_merge.src into br_merge.dst;
+internal error: do not have privilege to execute the statement
+data branch merge br_merge.src into br_merge.dst;
+internal error: do not have privilege to execute the statement
+select * from br_merge.dst order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10
+data branch merge br_merge.src into br_merge.dst;
+select * from br_merge.dst order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+create database br_pick;
+create table br_pick.src(a int primary key, b int);
+create table br_pick.dst(a int primary key, b int);
+create table br_pick.pick_keys(k int);
+insert into br_pick.src values (1, 10), (2, 20);
+insert into br_pick.dst values (1, 1);
+insert into br_pick.pick_keys values (2);
+create role r_pick_no_key;
+grant select on table br_pick.src to r_pick_no_key;
+grant select on table br_pick.dst to r_pick_no_key;
+grant insert on table br_pick.dst to r_pick_no_key;
+grant update on table br_pick.dst to r_pick_no_key;
+grant delete on table br_pick.dst to r_pick_no_key;
+create user u_pick_no_key identified by '111' default role r_pick_no_key;
+create role r_pick_no_insert;
+grant select on table br_pick.src to r_pick_no_insert;
+grant select on table br_pick.dst to r_pick_no_insert;
+grant select on table br_pick.pick_keys to r_pick_no_insert;
+grant update on table br_pick.dst to r_pick_no_insert;
+grant delete on table br_pick.dst to r_pick_no_insert;
+create user u_pick_no_insert identified by '111' default role r_pick_no_insert;
+create role r_pick_no_update;
+grant select on table br_pick.src to r_pick_no_update;
+grant select on table br_pick.dst to r_pick_no_update;
+grant select on table br_pick.pick_keys to r_pick_no_update;
+grant insert on table br_pick.dst to r_pick_no_update;
+grant delete on table br_pick.dst to r_pick_no_update;
+create user u_pick_no_update identified by '111' default role r_pick_no_update;
+create role r_pick_no_delete;
+grant select on table br_pick.src to r_pick_no_delete;
+grant select on table br_pick.dst to r_pick_no_delete;
+grant select on table br_pick.pick_keys to r_pick_no_delete;
+grant insert on table br_pick.dst to r_pick_no_delete;
+grant update on table br_pick.dst to r_pick_no_delete;
+create user u_pick_no_delete identified by '111' default role r_pick_no_delete;
+create role r_pick_all;
+grant select on table br_pick.src to r_pick_all;
+grant select on table br_pick.dst to r_pick_all;
+grant select on table br_pick.pick_keys to r_pick_all;
+grant insert on table br_pick.dst to r_pick_all;
+grant update on table br_pick.dst to r_pick_all;
+grant delete on table br_pick.dst to r_pick_all;
+create user u_pick_all identified by '111' default role r_pick_all;
+data branch pick br_pick.src into br_pick.dst keys(select k from br_pick.pick_keys);
+internal error: do not have privilege to execute the statement
+data branch pick br_pick.src into br_pick.dst keys(select k from br_pick.pick_keys);
+internal error: do not have privilege to execute the statement
+data branch pick br_pick.src into br_pick.dst keys(select k from br_pick.pick_keys);
+internal error: do not have privilege to execute the statement
+data branch pick br_pick.src into br_pick.dst keys(select k from br_pick.pick_keys);
+internal error: do not have privilege to execute the statement
+select * from br_pick.dst order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1
+data branch pick br_pick.src into br_pick.dst keys(select k from br_pick.pick_keys);
+select * from br_pick.dst order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  20
+create database br_delete;
+create table br_delete.base(a int primary key);
+insert into br_delete.base values (1);
+data branch create table br_delete.branch_t from br_delete.base;
+create table br_delete.normal_t(a int primary key);
+create database br_db_normal;
+create table br_db_normal.normal_t(a int primary key);
+create database br_db_wildcard;
+create table br_db_wildcard.zzmoatmpb_normal(a int primary key);
+create database br_db_empty;
+create database br_db_view_only;
+create view br_db_view_only.v as select 1 as a;
+create database br_db_sequence;
+create sequence br_db_sequence.s;
+create database br_db_mixed;
+create table br_db_mixed.base(a int primary key);
+insert into br_db_mixed.base values (1);
+data branch create table br_db_mixed.branch_t from br_db_mixed.base;
+create table br_db_mixed.normal_t(a int primary key);
+create database br_db_src;
+create table br_db_src.t(a int primary key);
+insert into br_db_src.t values (1);
+data branch create database br_db_branch from br_db_src;
+create role r_branch_drop;
+grant drop table on database br_delete to r_branch_drop;
+grant drop database on account * to r_branch_drop;
+create user u_branch_drop identified by '111' default role r_branch_drop;
+data branch delete table br_delete.normal_t;
+internal error: DATA BRANCH DELETE target br_delete.normal_t is not an active branch table
+data branch delete table br_delete.branch_t;
+data branch delete database br_db_normal;
+internal error: DATA BRANCH DELETE target br_db_normal.normal_t is not an active branch table
+data branch delete database br_db_wildcard;
+internal error: DATA BRANCH DELETE target br_db_wildcard.zzmoatmpb_normal is not an active branch table
+data branch delete database br_db_empty;
+internal error: DATA BRANCH DELETE target br_db_empty is not an active branch database
+data branch delete database br_db_view_only;
+internal error: DATA BRANCH DELETE target br_db_view_only is not an active branch database
+data branch delete database br_db_sequence;
+internal error: DATA BRANCH DELETE target br_db_sequence is not an active branch database
+data branch delete database br_db_mixed;
+internal error: DATA BRANCH DELETE target br_db_mixed.base is not an active branch table
+data branch delete database br_db_branch;
+select count(*) from mo_catalog.mo_tables where reldatabase = 'br_delete' and relname = 'normal_t';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_tables where reldatabase = 'br_delete' and relname = 'branch_t';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_database where datname = 'br_db_normal';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_database where datname = 'br_db_wildcard';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_tables where reldatabase = 'br_db_wildcard' and relname = 'zzmoatmpb_normal';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_database where datname = 'br_db_empty';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_database where datname = 'br_db_view_only';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_database where datname = 'br_db_sequence';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_database where datname = 'br_db_mixed';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_tables where reldatabase = 'br_db_mixed' and relname = 'branch_t';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_tables where reldatabase = 'br_db_mixed' and relname = 'normal_t';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_database where datname = 'br_db_branch';
+➤ count(*)[-5,64,0]  𝄀
+0
+set global enable_privilege_cache = on;
+data branch diff br_diff.target against br_diff.base output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+4
+drop database if exists br_sub_ok;
+drop database if exists sub_br_pub;
+drop publication if exists pub_br_sub;
+drop database if exists br_pub_src;
+drop account if exists acc_branch_priv;
+drop account if exists `acc-branch`;
+set global enable_privilege_cache = on;

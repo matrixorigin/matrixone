@@ -272,6 +272,10 @@ func ConstructCreateTableSQL(
 				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
 					rewriteIndexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
 				}
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexdef.IndexAlgoParams)
+				if err != nil {
+					return "", nil, err
+				}
 				indexStr += "("
 				rewriteIndexStr += "("
 				i := 0
@@ -284,9 +288,14 @@ func ConstructCreateTableSQL(
 						rewriteIndexStr += ","
 					}
 
-					part = colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(part))
-					rewriteIndexStr += fmt.Sprintf("`%s`", formatStr(part))
+					originPart := colNameToOriginName[part]
+					indexStr += fmt.Sprintf("`%s`", formatStr(originPart))
+					rewriteIndexStr += fmt.Sprintf("`%s`", formatStr(originPart))
+					if length, ok := prefixLengths[part]; ok {
+						prefixLength := fmt.Sprintf("(%d)", length)
+						indexStr += prefixLength
+						rewriteIndexStr += prefixLength
+					}
 					i++
 				}
 
@@ -877,6 +886,11 @@ func FormatColType(colType plan.Type) string {
 	}
 	if subtype := geometrySubtypeName(&colType); subtype != "" {
 		ts = subtype
+		// A GEOMETRY32 subtype column renders with the "32" suffix (e.g.
+		// POINT32) so SHOW CREATE round-trips the float32 family.
+		if types.T(colType.Id) == types.T_geometry32 {
+			ts += "32"
+		}
 	}
 	if srid, ok := geometrySRIDValue(&colType); ok {
 		ts = fmt.Sprintf("%s SRID %d", ts, srid)

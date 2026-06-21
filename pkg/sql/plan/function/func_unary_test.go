@@ -21,9 +21,12 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 
 	"github.com/stretchr/testify/assert"
@@ -33,7 +36,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/geo"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type tcTemp struct {
@@ -1115,9 +1123,9 @@ func TestStGeomFromTextWithSRID(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 2)", "POINT EMPTY", "LINESTRING EMPTY"}, []bool{false, false, false}),
-		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326, math.MaxUint32, 0}, []bool{false, false, false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326, int64(geo.MaxSRID), 0}, []bool{false, false, false}),
 	}
-	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"SRID=4326;POINT(1 2)", "SRID=4294967295;POINT EMPTY", "SRID=0;LINESTRING EMPTY"}, []bool{false, false, false})
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"SRID=4326;POINT(1 2)", "SRID=2147483646;POINT EMPTY", "SRID=0;LINESTRING EMPTY"}, []bool{false, false, false})
 
 	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromTextWithSRID)
 	s, info := fcTC.Run()
@@ -1185,16 +1193,79 @@ func TestStGeomFromTextWithSRIDOutOfRange(t *testing.T) {
 	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
 }
 
+func TestTypedTextConstructors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	run := func(fn fEvalFn, wkt, want string, wantErr bool) {
+		inputs := []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{wkt}, []bool{false})}
+		expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{want}, []bool{false})
+		tc := NewFunctionTestCase(proc, inputs, expect, fn)
+		ok, info := tc.Run()
+		if wantErr {
+			require.False(t, ok, "%s should be rejected", wkt)
+		} else {
+			require.True(t, ok, info)
+		}
+	}
+	// Each constructor accepts its subtype and rejects others.
+	run(StPointFromText, "POINT(1 2)", "POINT(1 2)", false)
+	run(StPointFromText, "LINESTRING(0 0,1 1)", "", true)
+	run(StLineFromText, "LINESTRING(0 0,1 1,2 3)", "LINESTRING(0 0,1 1,2 3)", false)
+	run(StLineFromText, "POINT(1 2)", "", true)
+	run(StPolyFromText, "POLYGON((0 0,1 0,1 1,0 0))", "POLYGON((0 0,1 0,1 1,0 0))", false)
+	run(StPolyFromText, "POINT(1 2)", "", true)
+	run(StMPointFromText, "MULTIPOINT(1 1,2 2)", "MULTIPOINT(1 1,2 2)", false)
+	run(StMLineFromText, "MULTILINESTRING((0 0,1 1),(2 2,3 3))", "MULTILINESTRING((0 0,1 1),(2 2,3 3))", false)
+	run(StMPolyFromText, "MULTIPOLYGON(((0 0,1 0,1 1,0 0)))", "MULTIPOLYGON(((0 0,1 0,1 1,0 0)))", false)
+	run(StGeomCollFromText, "GEOMETRYCOLLECTION(POINT(1 1))", "GEOMETRYCOLLECTION(POINT(1 1))", false)
+	run(StGeomCollFromText, "POINT(1 1)", "", true)
+}
+
+func TestTypedWKBConstructors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	run := func(fn fEvalFn, wkt, want string, wantErr bool) {
+		wkb := string(encodeGeometryPayload(wkt, 0, false))
+		inputs := []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{wkb}, []bool{false})}
+		expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{want}, []bool{false})
+		tc := NewFunctionTestCase(proc, inputs, expect, fn)
+		ok, info := tc.Run()
+		if wantErr {
+			require.False(t, ok, "%s should be rejected", wkt)
+		} else {
+			require.True(t, ok, info)
+		}
+	}
+	run(StPointFromWKB, "POINT(1 2)", "POINT(1 2)", false)
+	run(StPointFromWKB, "LINESTRING(0 0,1 1)", "", true)
+	run(StLineFromWKB, "LINESTRING(0 0,1 1,2 3)", "LINESTRING(0 0,1 1,2 3)", false)
+	run(StPolyFromWKB, "POLYGON((0 0,1 0,1 1,0 0))", "POLYGON((0 0,1 0,1 1,0 0))", false)
+	run(StMPointFromWKB, "MULTIPOINT(1 1,2 2)", "MULTIPOINT(1 1,2 2)", false)
+	run(StGeomCollFromWKB, "GEOMETRYCOLLECTION(POINT(1 1))", "GEOMETRYCOLLECTION(POINT(1 1))", false)
+	run(StGeomCollFromWKB, "POINT(1 1)", "", true)
+}
+
 func TestStSRID(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=4326;POINT(1 2)", "POINT(3 4)"}, []bool{false, false}),
-	}
-	expect := NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{4326, 0}, []bool{false, false})
 
+	// SRID lives in the column/expression type (Width = srid+1), not in the
+	// payload, so every row of a vector shares the type's SRID.
+	geomType := types.T_geometry.ToType()
+	geomType.Width = 4327 // encodes SRID 4326
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{"POINT(1 2)", "POINT(3 4)"}, []bool{false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{4326, 4326}, []bool{false, false})
 	fcTC := NewFunctionTestCase(proc, inputs, expect, StSRID)
 	s, info := fcTC.Run()
 	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
+
+	// An undefined SRID (Width 0) reports SRID 0.
+	inputs2 := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+	}
+	expect2 := NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{0}, []bool{false})
+	fcTC2 := NewFunctionTestCase(proc, inputs2, expect2, StSRID)
+	s2, info2 := fcTC2.Run()
+	require.True(t, s2, fmt.Sprintf("err info is '%s'", info2))
 }
 
 func initStGeometryTypeTestCase() []tcTemp {
@@ -1297,6 +1368,95 @@ func TestStY(t *testing.T) {
 	fcTC = NewFunctionTestCase(proc, testCases[2].inputs, testCases[2].expect, StY)
 	s, info = fcTC.Run()
 	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", testCases[2].info, info))
+}
+
+// geom32WKB builds the float32-coordinate WKB payload a GEOMETRY32 cell stores.
+func geom32WKB(t *testing.T, wkt string) string {
+	t.Helper()
+	g, err := geo.ParseWKT(wkt)
+	require.NoError(t, err)
+	return string(geo.WriteWKBFloat32(g))
+}
+
+func TestStXY32(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// GEOMETRY32 ST_X / ST_Y return float32, for both text and float32-WKB input.
+	run := func(fn fEvalFn, input string, want float32) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{input}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_float32.ToType(), false, []float32{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	run(StX32, "POINT(1.5 2.5)", 1.5)
+	run(StY32, "POINT(1.5 2.5)", 2.5)
+	run(StLongitude32, "POINT(1.5 2.5)", 1.5)
+	run(StLatitude32, "POINT(1.5 2.5)", 2.5)
+	// Real float32 WKB payload.
+	run(StX32, geom32WKB(t, "POINT(1.5 2.5)"), 1.5)
+	run(StY32, geom32WKB(t, "POINT(1.5 2.5)"), 2.5)
+
+	// The float64 forms still return float64 on a GEOMETRY input.
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1.5 2.5)"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1.5}, []bool{false}), StX)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestGeometry32ReturningUnary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// For a GEOMETRY32 input, a geometry-returning function must emit float32 WKB
+	// (shorter than float64 WKB) and round-trip to the expected WKT.
+	check := func(fn fEvalFn, in, wantWKT string) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{geom32WKB(t, in)}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{wantWKT}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+		// The output must be float32 WKB (decodable by the float32 reader).
+		raw := tc.GetResultVectorDirectly().GetBytesAt(0)
+		g, ferr := geo.ReadWKBFloat32(raw)
+		require.NoError(t, ferr, "output should be float32 WKB")
+		require.Equal(t, wantWKT, geo.WriteWKT(g))
+	}
+
+	check(StSwapXY, "POINT(1.5 2.5)", "POINT(2.5 1.5)")
+	check(StConvexHull, "MULTIPOINT(0 0, 4 0, 4 4, 0 4, 2 2)", "POLYGON((0 0,4 0,4 4,0 4,0 0))")
+	check(StEnvelope, "LINESTRING(0 0, 2 3)", "POLYGON((0 0,2 0,2 3,0 3,0 0))")
+	check(StStartPoint, "LINESTRING(1 2, 3 4, 5 6)", "POINT(1 2)")
+	check(StEndPoint, "LINESTRING(1 2, 3 4, 5 6)", "POINT(5 6)")
+	check(StExteriorRing, "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", "LINESTRING(0 0,4 0,4 4,0 4,0 0)")
+}
+
+func TestGeometry32Measures(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	runF32 := func(fn fEvalFn, in string, want float32) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{geom32WKB(t, in)}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_float32.ToType(), false, []float32{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	// ST_Length32 / ST_Area32 return float32 for a GEOMETRY32 input.
+	runF32(StLength32, "LINESTRING(0 0, 3 4)", 5.0)
+	runF32(StArea32, "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", 16.0)
 }
 
 func TestStXYRejectNonPoint(t *testing.T) {
@@ -6990,6 +7150,474 @@ func TestSleep(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func resetUserLevelLocksForTest(t *testing.T) {
+	t.Helper()
+	userLevelLocks.Lock()
+	userLevelLocks.counts = make(map[userLevelLockKey]uint64)
+	userLevelLocks.byOwner = make(map[string]map[string]struct{})
+	userLevelLocks.Unlock()
+}
+
+func newUserLevelLockTestProcess(t *testing.T, ls lockservice.LockService, account string) *process.Process {
+	proc := testutil.NewProcess(t)
+	proc.Base.LockService = ls
+	proc.GetSessionInfo().SessionId = uuid.New()
+	proc.GetSessionInfo().ConnectionID = uint64(time.Now().Nanosecond())
+	proc.GetSessionInfo().Account = account
+	return proc
+}
+
+type userLevelLockTestState struct {
+	sync.Mutex
+	locks map[string]string
+}
+
+type userLevelLockTestService struct {
+	id    string
+	state *userLevelLockTestState
+}
+
+func (s *userLevelLockTestService) GetServiceID() string {
+	return s.id
+}
+
+func (s *userLevelLockTestService) GetConfig() lockservice.Config {
+	return lockservice.Config{ServiceID: s.id}
+}
+
+func (s *userLevelLockTestService) Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options lockpb.LockOptions) (lockpb.Result, error) {
+	key := string(rows[0])
+	owner := string(txnID)
+	for {
+		s.state.Lock()
+		holder := s.state.locks[key]
+		if holder == "" || holder == owner {
+			s.state.locks[key] = owner
+			s.state.Unlock()
+			return lockpb.Result{}, nil
+		}
+		s.state.Unlock()
+
+		if options.Policy == lockpb.WaitPolicy_FastFail {
+			return lockpb.Result{}, lockservice.ErrLockConflict
+		}
+
+		timer := time.NewTimer(5 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return lockpb.Result{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (s *userLevelLockTestService) Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...lockpb.ExtraMutation) error {
+	owner := string(txnID)
+	s.state.Lock()
+	defer s.state.Unlock()
+	for key, holder := range s.state.locks {
+		if holder == owner {
+			delete(s.state.locks, key)
+		}
+	}
+	return nil
+}
+
+func (s *userLevelLockTestService) IsOrphanTxn(context.Context, []byte) (bool, error) {
+	return false, nil
+}
+
+func (s *userLevelLockTestService) Close() error {
+	return nil
+}
+
+func (s *userLevelLockTestService) GetWaitingList(ctx context.Context, txnID []byte) (bool, []lockpb.WaitTxn, error) {
+	return false, nil, nil
+}
+
+func (s *userLevelLockTestService) ForceRefreshLockTableBinds(targets []uint64, matcher func(bind lockpb.LockTable) bool) {
+}
+
+func (s *userLevelLockTestService) GetLockTableBind(group uint32, tableID uint64) (lockpb.LockTable, error) {
+	return lockpb.LockTable{}, nil
+}
+
+func (s *userLevelLockTestService) IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool) {
+}
+
+func (s *userLevelLockTestService) CloseRemoteLockTable(group uint32, tableID, version uint64) (bool, error) {
+	return false, nil
+}
+
+func runUserLevelLockTest(t *testing.T, fn func([]lockservice.LockService)) {
+	t.Helper()
+	resetUserLevelLocksForTest(t)
+	state := &userLevelLockTestState{locks: make(map[string]string)}
+	fn([]lockservice.LockService{
+		&userLevelLockTestService{id: "user-level-lock-1", state: state},
+		&userLevelLockTestService{id: "user-level-lock-2", state: state},
+	})
+	resetUserLevelLocksForTest(t)
+}
+
+func TestUserLevelLockFunctions(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+
+		cases := []struct {
+			name   string
+			inputs []FunctionTestInput
+			expect FunctionTestResult
+			fn     fEvalFn
+		}{
+			{
+				name: "get lock succeeds",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"prisma_migrate_lock"}, []bool{false}),
+					NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+				fn:     GetLock,
+			},
+			{
+				name: "held lock is not free",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"prisma_migrate_lock"}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+				fn:     IsFreeLock,
+			},
+			{
+				name: "release held lock",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"prisma_migrate_lock"}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+				fn:     ReleaseLock,
+			},
+			{
+				name: "released lock is free",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"prisma_migrate_lock"}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+				fn:     IsFreeLock,
+			},
+			{
+				name: "get lock returns null for null name",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+					NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+				fn:     GetLock,
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, tc.fn)
+				s, info := fcTC.Run()
+				require.True(t, s, info)
+			})
+		}
+	})
+}
+
+func TestUserLevelLockContention(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+
+		v, err := getUserLevelLock("busy_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("busy_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+		v, isNull, err := releaseUserLevelLock("busy_lock", proc2)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(0), v)
+		v, isNull, err = releaseUserLevelLock("busy_lock", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("busy_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestUserLevelLockWaitThenAcquire(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		v, err := getUserLevelLock("wait_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		resultC := make(chan int64, 1)
+		errC := make(chan error, 1)
+		go func() {
+			defer wg.Done()
+			v, err := getUserLevelLock("wait_lock", -1, proc2)
+			resultC <- v
+			errC <- err
+		}()
+
+		time.Sleep(100 * time.Millisecond)
+		v, isNull, err := releaseUserLevelLock("wait_lock", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+		wg.Wait()
+		require.NoError(t, <-errC)
+		require.Equal(t, int64(1), <-resultC)
+	})
+}
+
+func TestUserLevelLockTimeoutAndCancellation(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		v, err := getUserLevelLock("timeout_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, err = getUserLevelLock("timeout_lock", 0.05, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		proc2.BuildPipelineContext(ctx)
+		done := make(chan error, 1)
+		go func() {
+			_, err := getUserLevelLock("timeout_lock", -1, proc2)
+			done <- err
+		}()
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		require.ErrorIs(t, <-done, context.Canceled)
+	})
+}
+
+func TestUserLevelLockReentrantRefCount(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		v, err := getUserLevelLock("reentrant_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("reentrant_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock("reentrant_lock", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("reentrant_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+
+		v, isNull, err = releaseUserLevelLock("reentrant_lock", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("reentrant_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseUserLevelLocksCleanup(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		v, err := getUserLevelLock("cleanup_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		ReleaseUserLevelLocks(proc1)
+
+		v, err = getUserLevelLock("cleanup_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseLockNeverCreatedReturnsNull(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		v, isNull, err := releaseUserLevelLock("missing_lock", proc1)
+		require.NoError(t, err)
+		require.True(t, isNull, "RELEASE_LOCK on never-created lock should return NULL")
+		require.Equal(t, int64(0), v)
+	})
+}
+
+func TestReleaseLockAlreadyReleasedReturnsNull(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		v, err := getUserLevelLock("release_twice", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock("release_twice", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err = releaseUserLevelLock("release_twice", proc1)
+		require.NoError(t, err)
+		require.True(t, isNull, "RELEASE_LOCK on already-released lock should return NULL")
+		require.Equal(t, int64(0), v)
+	})
+}
+
+func TestReleaseLockHeldByOtherSessionReturnsZero(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+
+		v, err := getUserLevelLock("other_session", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock("other_session", proc2)
+		require.NoError(t, err)
+		require.False(t, isNull, "RELEASE_LOCK held by other session should return 0 (not NULL)")
+		require.Equal(t, int64(0), v)
+	})
+}
+
+func TestUserLevelLockNameTooLong(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		overlong := strings.Repeat("x", maxUserLevelLockNameLength+1)
+
+		_, err := getUserLevelLock(overlong, 0, proc1)
+		require.Error(t, err)
+
+		_, _, err = releaseUserLevelLock(overlong, proc1)
+		require.Error(t, err)
+
+		_, err = isUserLevelLockFree(overlong, proc1)
+		require.Error(t, err)
+	})
+}
+
+func TestUserLevelLockNameMaxLength(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		exact64 := strings.Repeat("x", maxUserLevelLockNameLength)
+
+		v, err := getUserLevelLock(exact64, 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock(exact64, proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		v, err = isUserLevelLockFree(exact64, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestUserLevelLockEmptyName(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+
+		_, err := getUserLevelLock("", 0, proc1)
+		require.Error(t, err, "GET_LOCK with empty name should return error")
+
+		_, _, err = releaseUserLevelLock("", proc1)
+		require.Error(t, err, "RELEASE_LOCK with empty name should return error")
+
+		_, err = isUserLevelLockFree("", proc1)
+		require.Error(t, err, "IS_FREE_LOCK with empty name should return error")
+	})
+}
+
+func TestUserLevelLockCaseInsensitive(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+
+		// Session A acquires lock with mixed-case name.
+		v, err := getUserLevelLock("Case_Lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		// Session B attempts to acquire the same lock with different case —
+		// MySQL treats these as the same lock, so B should fail to acquire.
+		v, err = getUserLevelLock("CASE_LOCK", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v, "case-insensitive: session B should not acquire lock held by A")
+
+		// Session B should also fail with lowercase variant.
+		v, err = getUserLevelLock("case_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v, "case-insensitive: session B should not acquire lock held by A")
+
+		// IS_FREE_LOCK should also be case-insensitive: lock is held, so it's not free.
+		v, err = isUserLevelLockFree("case_lock", proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v, "case-insensitive IS_FREE_LOCK should see lock as held")
+
+		// Session A releases the lock.
+		v, isNull, err := releaseUserLevelLock("case_LOCK", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v, "case-insensitive release should succeed for lock owner")
+
+		// Now session B can acquire the lock.
+		v, err = getUserLevelLock("case_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v, "after release, session B should acquire the lock")
+
+		// Cleanup.
+		releaseUserLevelLock("CASE_LOCK", proc2)
+	})
+}
+
+func TestUserLevelLockMultibyteBoundary(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+
+		// 64 Chinese characters — each is 3 bytes in UTF-8, so 192 bytes total.
+		// MySQL enforces the limit in characters, not bytes, so this should be valid.
+		exact64chars := strings.Repeat("中", maxUserLevelLockNameLength)
+
+		v, err := getUserLevelLock(exact64chars, 0, proc1)
+		require.NoError(t, err, "64 Chinese characters should be valid")
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock(exact64chars, proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		// 65 Chinese characters — exceeds the 64-character limit.
+		overlongChars := strings.Repeat("中", maxUserLevelLockNameLength+1)
+		_, err = getUserLevelLock(overlongChars, 0, proc1)
+		require.Error(t, err, "65 Chinese characters should be rejected")
+
+		_, _, err = releaseUserLevelLock(overlongChars, proc1)
+		require.Error(t, err)
+
+		_, err = isUserLevelLockFree(overlongChars, proc1)
+		require.Error(t, err)
+	})
 }
 
 func initBitCastTestCase() []tcTemp {

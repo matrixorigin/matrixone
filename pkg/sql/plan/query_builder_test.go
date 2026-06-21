@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 
@@ -265,6 +266,19 @@ func TestWrongCases(t *testing.T) {
 func TestDefaultBigStats(t *testing.T) {
 	stats := DefaultBigStats()
 	require.Greater(t, stats.BlockNum, int32(BlockThresholdForOneCN))
+}
+
+func TestAppendSelectListNameConstHeading(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindCtx := NewBindContext(builder, nil)
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select name_const('myname', 14), name_const(123, -456), name_const('myname', 14) as alias_name, name_const(('paren_name'), (14))", 1)
+	require.NoError(t, err)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+
+	_, err = appendSelectList(builder, bindCtx, nil, selectClause.Exprs...)
+	require.NoError(t, err)
+	require.Equal(t, []string{"myname", "123", "alias_name", "paren_name"}, bindCtx.headings)
 }
 
 func genBuilderAndCtx() (builder *QueryBuilder, bindCtx *BindContext) {
@@ -2327,6 +2341,51 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 					tc.checkFunc(t, expr, err)
 				}
 			}
+		})
+	}
+}
+
+func TestBaseBinderBindUnaryMinusMinInt64Literal(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	whereBinder := NewWhereBinder(builder, bindCtx)
+
+	testCases := []struct {
+		name       string
+		sql        string
+		checkValue func(t *testing.T, expr *plan.Expr)
+	}{
+		{
+			name: "min int64 boundary",
+			sql:  "-9223372036854775808",
+			checkValue: func(t *testing.T, expr *plan.Expr) {
+				require.Equal(t, int32(types.T_int64), expr.Typ.Id)
+				require.Equal(t, int64(math.MinInt64), expr.GetLit().GetI64Val())
+			},
+		},
+		{
+			name: "below min int64 keeps decimal",
+			sql:  "-9223372036854775809",
+			checkValue: func(t *testing.T, expr *plan.Expr) {
+				require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
+				require.NotNil(t, expr.GetLit().GetDecimal128Val())
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select "+tc.sql+" from bind_select", 1)
+			require.NoError(t, err)
+
+			selectStmt := stmts[0].(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			unaryExpr, ok := selectClause.Exprs[0].Expr.(*tree.UnaryExpr)
+			require.True(t, ok)
+
+			expr, err := whereBinder.bindUnaryExpr(unaryExpr, 0, false)
+			require.NoError(t, err)
+			require.NotNil(t, expr.GetLit())
+			tc.checkValue(t, expr)
 		})
 	}
 }

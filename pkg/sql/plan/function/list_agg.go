@@ -467,7 +467,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, VarStdDevSupportedTypes)
 		},
 
 		Overloads: []overload{
@@ -488,7 +488,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, VarStdDevSupportedTypes)
 		},
 
 		Overloads: []overload{
@@ -509,7 +509,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, VarStdDevSupportedTypes)
 		},
 
 		Overloads: []overload{
@@ -530,7 +530,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, VarStdDevSupportedTypes)
 		},
 
 		Overloads: []overload{
@@ -625,6 +625,14 @@ var SumSupportedTypes = []types.T{
 	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 	types.T_float32, types.T_float64,
 	types.T_decimal64, types.T_decimal128, types.T_decimal256,
+	types.T_bit, types.T_year, types.T_bool,
+}
+
+var VarStdDevSupportedTypes = []types.T{
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_float32, types.T_float64,
+	types.T_decimal64, types.T_decimal128, types.T_decimal256,
 	types.T_bit, types.T_year,
 }
 
@@ -648,13 +656,16 @@ var AnyValueSupportedTypes = []types.T{
 	types.T_float32, types.T_float64,
 	types.T_date, types.T_datetime,
 	types.T_timestamp, types.T_time,
-	types.T_decimal64, types.T_decimal128,
+	types.T_decimal64, types.T_decimal128, types.T_decimal256,
 	types.T_bit, types.T_year,
 	types.T_bool,
 	types.T_bit,
 	types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink,
 	types.T_uuid,
 	types.T_binary, types.T_varbinary, types.T_json,
+	types.T_array_float32, types.T_array_float64,
+	types.T_geometry, types.T_geometry32,
+	types.T_enum,
 	types.T_Rowid,
 }
 

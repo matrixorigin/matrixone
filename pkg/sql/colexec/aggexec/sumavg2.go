@@ -74,7 +74,7 @@ func SumReturnType(typs []types.Type) types.Type {
 		return types.T_float64.ToType()
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_year:
 		return types.T_int64.ToType()
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit, types.T_bool:
 		return types.T_uint64.ToType()
 	case types.T_decimal64:
 		return types.New(types.T_decimal128, 38, typs[0].Scale)
@@ -972,6 +972,8 @@ func makeSumAvgExec(
 		return newSumAvgExec[uint64, uint64](mp, uint64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_bit:
 		return newSumAvgExec[uint64, uint64](mp, uint64OfCheck, isSum, aggID, isDistinct, param)
+	case types.T_bool:
+		return newSumAvgExec[uint64, uint8](mp, uint64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_float32:
 		return newSumAvgExec[float64, float32](mp, float64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_float64:

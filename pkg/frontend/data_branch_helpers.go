@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +38,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"go.uber.org/zap"
 )
+
+var snapConditionRegex = regexp.MustCompile(`\{[^}]+}`)
 
 func containsDataBranchTempTableName(sqlLower string) bool {
 	return containsTempTableMarker(sqlLower, "__mo_diff_del_") ||
@@ -532,6 +535,29 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 	return nil
 }
 
+func extractDataBranchSQLRowValue(
+	ctx context.Context,
+	ses *Session,
+	vec *vector.Vector,
+	colIdx int,
+	row []any,
+	rowIdx int,
+) error {
+	if vec.GetNulls().Contains(uint64(rowIdx)) {
+		row[colIdx] = nil
+		return nil
+	}
+
+	switch vec.GetType().Oid {
+	case types.T_datetime, types.T_timestamp, types.T_decimal64,
+		types.T_decimal128, types.T_decimal256, types.T_time:
+		row[colIdx] = types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
+		return nil
+	default:
+		return extractRowFromVector(ctx, ses, vec, colIdx, row, rowIdx, false)
+	}
+}
+
 // writeEscapedSQLString escapes special and control characters for SQL literal output.
 func writeEscapedSQLString(buf *bytes.Buffer, b []byte) {
 	buf.WriteByte('\'')
@@ -739,6 +765,11 @@ func compareSingleValInVector(
 		return types.CompareValue(
 			vector.GetFixedAtNoTypeCheck[types.Decimal128](vec1, rowIdx1),
 			vector.GetFixedAtNoTypeCheck[types.Decimal128](vec2, rowIdx2),
+		), nil
+	case types.T_decimal256:
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Decimal256](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Decimal256](vec2, rowIdx2),
 		), nil
 	case types.T_uuid:
 		return types.CompareValue(

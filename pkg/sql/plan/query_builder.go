@@ -4306,7 +4306,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 	h := &helpFunc{}
 
 	name := tree.NewUnresolvedColName("interval")
-	arg2 := tree.NewNumVal(astTimeWindow.Interval.Unit, astTimeWindow.Interval.Unit, false, tree.P_char)
+	arg2 := tree.NewTimeUnitExpr(astTimeWindow.Interval.Unit)
 	h.interval = &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(name),
 		Exprs: tree.Exprs{astTimeWindow.Interval.Val, arg2},
@@ -4316,7 +4316,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 
 	if astTimeWindow.Sliding != nil {
 		name = tree.NewUnresolvedColName("interval")
-		arg2 = tree.NewNumVal(astTimeWindow.Sliding.Unit, astTimeWindow.Sliding.Unit, false, tree.P_char)
+		arg2 = tree.NewTimeUnitExpr(astTimeWindow.Sliding.Unit)
 		h.sliding = &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
 			Exprs: tree.Exprs{astTimeWindow.Sliding.Val, arg2},
@@ -4329,7 +4329,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 		}
 
 		name = tree.NewUnresolvedColName("interval")
-		arg2 = tree.NewNumVal("second", "second", false, tree.P_char)
+		arg2 = tree.NewTimeUnitExpr("second")
 		expr = &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
 			Exprs: tree.Exprs{div, arg2},
@@ -4455,7 +4455,11 @@ func appendSelectList(
 						break
 					}
 				}
-				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+				if heading, ok := nameConstHeading(expr); ok {
+					ctx.headings = append(ctx.headings, heading)
+				} else {
+					ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+				}
 			}
 
 			newExpr, err := ctx.qualifyColumnNames(expr, NoAlias)
@@ -4470,6 +4474,37 @@ func appendSelectList(
 		}
 	}
 	return selectList, nil
+}
+
+func nameConstHeading(expr tree.Expr) (string, bool) {
+	fn, ok := expr.(*tree.FuncExpr)
+	if !ok || fn.FuncName == nil || !strings.EqualFold(fn.FuncName.Origin(), "name_const") || len(fn.Exprs) != 2 {
+		return "", false
+	}
+
+	nameExpr := fn.Exprs[0]
+	for {
+		paren, ok := nameExpr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		nameExpr = paren.Expr
+	}
+
+	name, ok := nameExpr.(*tree.NumVal)
+	if !ok || !validNameConstNameLiteral(name) {
+		return "", false
+	}
+	return name.String(), true
+}
+
+func validNameConstNameLiteral(name *tree.NumVal) bool {
+	switch name.ValType {
+	case tree.P_null, tree.P_nulltext, tree.P_star:
+		return false
+	default:
+		return true
+	}
 }
 
 func bindProjectionList(

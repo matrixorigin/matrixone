@@ -600,27 +600,36 @@ func AcquirePolicyForCNFlushS3(
 
 func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
 	for {
-		avail := throttler.Available()
+		limit := throttler.limit.Load()
+		reserved := throttler.reserved.Load()
+		if reserved < 0 {
+			reserved = 0
+		}
+
+		// Pool check: use limit - reserved directly instead of calling
+		// Available(). The shared Available() subtracts RSS from the
+		// pool headroom (actualMaxMemory - rss - reserved), which
+		// double-counts S3 write buffers already reflected in RSS.
+		// The pool only needs to bound forward-looking reservations
+		// against the throttler limit.
+		//
+		// No separate RSS-based physical memory gate is needed here:
+		// - pinnedRate >= 0.80 at the AcquirePolicyForCNFlushS3 level
+		//   provides a hard ceiling on pool utilisation.
+		// - RSS scavenging (85 % / 92 % thresholds in tryScavengeRSS)
+		//   handles physical memory pressure with a graduated response
+		//   (cache eviction + FreeOSMemory) that is more effective than
+		//   a binary reject.
+		// The original RSS gate (added in PR #24268 for non-S3 memory
+		// pressure) has been superseded by RSS scavenging.
+		avail := limit - reserved
 		if !throttler.options.allowOutOfMemoryAcquire && avail < ask {
 			return avail, false
 		}
 
-		currReserved := throttler.reserved.Load()
-		if currReserved < 0 {
-			currReserved = 0
-		}
-
-		total := int64(throttler.actualTotalMemory.Load())
-		if total > 0 && throttler.limitRate > 0 {
-			used := throttler.rss.Load() + currReserved + ask
-			if float64(used) > float64(total)*throttler.limitRate {
-				return 0, false
-			}
-		}
-
-		newReserved := currReserved + ask
-		if throttler.reserved.CompareAndSwap(currReserved, newReserved) {
-			return avail - ask, true
+		newReserved := reserved + ask
+		if throttler.reserved.CompareAndSwap(reserved, newReserved) {
+			return limit - newReserved, true
 		}
 	}
 }
