@@ -3950,6 +3950,31 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// numeric point constructors: st_point(x, y) -> GEOMETRY,
+	// st_point32(x, y) -> GEOMETRY32 (x = X/longitude, y = Y/latitude).
+	{
+		functionId: ST_POINT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_float64, types.T_float64},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry.ToType() },
+				newOp:   func() executeLogicOfOverload { return StPoint }},
+		},
+	},
+	{
+		functionId: ST_POINT32,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_float64, types.T_float64},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry32.ToType() },
+				newOp:   func() executeLogicOfOverload { return StPoint32 }},
+		},
+	},
+
 	// typed text constructors: st_pointfromtext, st_linefromtext, ...
 	{
 		functionId: ST_POINTFROMTEXT,

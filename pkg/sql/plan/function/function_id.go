@@ -748,9 +748,15 @@ const (
 	H3_H3INDEX_NEIGHBORS     = 532
 	H3_H3INDEX_ARENEIGHBORS  = 533
 
+	// GIS numeric point constructors: ST_Point(x, y) -> GEOMETRY (POINT),
+	// ST_Point32(x, y) -> GEOMETRY32 (POINT), where x is longitude/X and y is
+	// latitude/Y.
+	ST_POINT   = 534
+	ST_POINT32 = 535
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 534
+	FUNCTION_END_NUMBER = 536
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1157,6 +1163,8 @@ var functionIdRegister = map[string]int32{
 	"st_geometryfromtext":            ST_GEOMFROMTEXT,
 	"st_geomfromwkb":                 ST_GEOMFROMWKB,
 	"st_geomfrombinary":              ST_GEOMFROMWKB,
+	"st_point":                       ST_POINT,
+	"st_point32":                     ST_POINT32,
 	"st_pointfromtext":               ST_POINTFROMTEXT,
 	"st_linefromtext":                ST_LINEFROMTEXT,
 	"st_linestringfromtext":          ST_LINEFROMTEXT,

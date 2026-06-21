@@ -587,9 +587,11 @@ var predefinedFunids = map[int]int{
 	H3_H3INDEX_PARENT:             531,
 	H3_H3INDEX_NEIGHBORS:          532,
 	H3_H3INDEX_ARENEIGHBORS:       533,
+	ST_POINT:                      534,
+	ST_POINT32:                    535,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 534,
+	FUNCTION_END_NUMBER: 536,
 }
 
 func Test_funids(t *testing.T) {

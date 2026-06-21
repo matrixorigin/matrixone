@@ -1,0 +1,40 @@
+select st_astext(st_point(1, 2)) as p;
+➤ p[12,-1,0]  𝄀
+POINT(1 2)
+select st_astext(st_point(116.3975, 39.9087)) as beijing;
+➤ beijing[12,-1,0]  𝄀
+POINT(116.3975 39.9087)
+select st_geometrytype(st_point(1, 2)) as gtype;
+➤ gtype[12,-1,0]  𝄀
+POINT
+select st_x(st_point(116.3975, 39.9087)) as x, st_y(st_point(116.3975, 39.9087)) as y;
+➤ x[8,54,0]  ¦  y[8,54,0]  𝄀
+116.3975  ¦  39.9087
+select st_astext(st_point(3, 4)) as ints;
+➤ ints[12,-1,0]  𝄀
+POINT(3 4)
+select st_astext(st_point32(1, 2)) as p32;
+➤ p32[12,-1,0]  𝄀
+POINT(1 2)
+select st_geometrytype(st_point32(1, 2)) as gtype32;
+➤ gtype32[12,-1,0]  𝄀
+POINT
+select st_astext(st_point32(116.3975, 39.9087)) as bj32;
+➤ bj32[12,-1,0]  𝄀
+POINT(116.39749908447266 39.90869903564453)
+select st_astext(st_point(NULL, 1)) as a, st_astext(st_point(1, NULL)) as b, st_astext(st_point32(NULL, NULL)) as c;
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+null  ¦  null  ¦  null
+drop table if exists sp;
+create table sp(id int, g geometry, g32 geometry32);
+insert into sp values (1, st_point(1, 2), st_point32(1, 2));
+insert into sp values (2, st_point(116.3975, 39.9087), st_point32(116.3975, 39.9087));
+invalid argument function st_point, bad value [GEOMETRY GEOMETRY]
+select id, st_astext(g) as g, st_astext(g32) as g32 from sp order by id;
+➤ id[4,32,0]  ¦  g[12,-1,0]  ¦  g32[12,-1,0]  𝄀
+1  ¦  POINT(1 2)  ¦  POINT(1 2)
+drop table if exists sp;
+select s2_cellid_level(s2_cellid(st_point(116.3975, 39.9087))) as s2_lvl,
+h3_h3index_resolution(h3_h3index(st_point(116.3975, 39.9087), 9)) as h3_res;
+➤ s2_lvl[4,32,0]  ¦  h3_res[4,32,0]  𝄀
+30  ¦  9

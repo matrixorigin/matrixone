@@ -119,3 +119,21 @@ select s2_cellid_areneighbours(
          cast(json_unquote(json_extract(s2_cellid_edgeneighbours(cell), '$[0]')) as unsigned))
 from places;
 ```
+
+### Related: numeric POINT constructor
+
+These functions all take a `POINT` geometry. Besides
+`ST_PointFromText('POINT(lng lat)')`, you can build one from numeric
+coordinates directly with `ST_Point` / `ST_Point32`:
+
+- `ST_Point(x, y) returns GEOMETRY` — a POINT with float64 coordinates.
+- `ST_Point32(x, y) returns GEOMETRY32` — the float32-coordinate variant.
+
+`x` is the X/longitude and `y` the Y/latitude (WKT `POINT(x y)` order); the
+result is a plain GEOMETRY (SRID 0). Non-finite coordinates raise an error; a
+NULL ordinate yields NULL. Example:
+
+```sql
+select s2_cellid(st_point(116.3975, 39.9087));
+select h3_h3index(st_point(116.3975, 39.9087), 9);
+```
