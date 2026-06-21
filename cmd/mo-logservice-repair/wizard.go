@@ -645,15 +645,17 @@ func buildK8sRepairPlan(opts wizardOptions) (*repairPlan, error) {
 	if !ok {
 		return nil, fmt.Errorf("shard %d not found in HAKeeper state", opts.shardID)
 	}
-	plan.TargetShard = toPlanShard(shard)
-	targetByStore := replicaByStore(shard)
-	sourceStore := targetByStore[shard.LeaderID]
+	repairShard := shard
+	repairShard.Epoch = repairEpochAfterReportedState(state, opts.shardID, shard.Epoch)
+	plan.TargetShard = toPlanShard(repairShard)
+	targetByStore := replicaByStore(repairShard)
+	sourceStore := targetByStore[repairShard.LeaderID]
 	plan.SourceStore = sourceStore
 	if sourceStore == "" {
 		plan.Warnings = append(plan.Warnings, "HAKeeper has no leader for the target shard; source replica must be reviewed manually")
 	}
 
-	storeSet := targetStores(shard)
+	storeSet := targetStores(repairShard)
 	for uuid, info := range state.LogState.Stores {
 		if storeSet[uuid] {
 			continue
@@ -672,7 +674,7 @@ func buildK8sRepairPlan(opts wizardOptions) (*repairPlan, error) {
 	sort.Strings(storeIDs)
 	for _, uuid := range storeIDs {
 		storeInfo, hasStoreInfo := state.LogState.Stores[uuid]
-		store := buildK8sPlanStore(opts.shardID, shard, uuid, sourceStore, storeInfo, hasStoreInfo, opts)
+		store := buildK8sPlanStore(opts.shardID, repairShard, uuid, sourceStore, storeInfo, hasStoreInfo, opts)
 		if store.NeedsStopAndStart {
 			plan.RebuildStores = append(plan.RebuildStores, store.UUID)
 			plan.InitialBlockedStores = append(plan.InitialBlockedStores, store.UUID)
@@ -795,6 +797,18 @@ func reportedShardReplicas(storeInfo logpb.LogStoreInfo, shardID uint64) []uint6
 	return ret
 }
 
+func repairEpochAfterReportedState(state logpb.CheckerState, shardID uint64, targetEpoch uint64) uint64 {
+	maxEpoch := targetEpoch
+	for _, store := range state.LogState.Stores {
+		for _, replica := range store.Replicas {
+			if replica.ShardID == shardID && replica.Epoch > maxEpoch {
+				maxEpoch = replica.Epoch
+			}
+		}
+	}
+	return maxEpoch + 1
+}
+
 func buildK8sActions(plan *repairPlan) []planAction {
 	k := plan.K8s
 	kubectl := "kubectl"
@@ -907,6 +921,8 @@ func buildLocalRepairPlan(opts wizardOptions) (*repairPlan, error) {
 	if !ok {
 		return nil, fmt.Errorf("shard %d not found in HAKeeper state", opts.shardID)
 	}
+	repairShard := shard
+	repairShard.Epoch = repairEpochAfterReportedState(state, opts.shardID, shard.Epoch)
 	plan := &repairPlan{
 		Version:           repairPlanVersion,
 		Mode:              modeLocal,
@@ -915,7 +931,7 @@ func buildLocalRepairPlan(opts wizardOptions) (*repairPlan, error) {
 		ConfDir:           opts.confDir,
 		ShardID:           opts.shardID,
 		HAKeeperAddresses: addresses,
-		TargetShard:       toPlanShard(shard),
+		TargetShard:       toPlanShard(repairShard),
 		ApplySupported:    true,
 		Local: &localPlanSettings{
 			MOServicePath: opts.moServicePath,
@@ -923,8 +939,8 @@ func buildLocalRepairPlan(opts wizardOptions) (*repairPlan, error) {
 			LogDir:        filepath.Join(opts.baseDir, "logs"),
 		},
 	}
-	targetByStore := replicaByStore(shard)
-	sourceStore := targetByStore[shard.LeaderID]
+	targetByStore := replicaByStore(repairShard)
+	sourceStore := targetByStore[repairShard.LeaderID]
 	plan.SourceStore = sourceStore
 	if sourceStore == "" {
 		plan.Warnings = append(plan.Warnings, "HAKeeper has no leader for the target shard; source replica must be reviewed manually")
@@ -937,7 +953,7 @@ func buildLocalRepairPlan(opts wizardOptions) (*repairPlan, error) {
 	seenStores := make(map[string]bool)
 	for _, cfg := range configs {
 		storeInfo, hasStoreInfo := state.LogState.Stores[cfg.UUID]
-		store := buildPlanStore(opts.shardID, shard, cfg, sourceStore, storeInfo, hasStoreInfo)
+		store := buildPlanStore(opts.shardID, repairShard, cfg, sourceStore, storeInfo, hasStoreInfo)
 		if opts.moServicePath != "" && store.MOServicePath == "" {
 			store.MOServicePath = opts.moServicePath
 		}
@@ -955,13 +971,13 @@ func buildLocalRepairPlan(opts wizardOptions) (*repairPlan, error) {
 		plan.Stores = append(plan.Stores, store)
 		seenStores[store.UUID] = true
 	}
-	for store := range targetStores(shard) {
+	for store := range targetStores(repairShard) {
 		if !seenStores[store] {
 			plan.Warnings = append(plan.Warnings, fmt.Sprintf("target store %s has no local log config; it cannot be stopped or cleaned by local apply", store))
 		}
 	}
 	for store, info := range state.LogState.Stores {
-		if seenStores[store] || targetStores(shard)[store] {
+		if seenStores[store] || targetStores(repairShard)[store] {
 			continue
 		}
 		for _, replica := range info.Replicas {
@@ -1473,6 +1489,9 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 					return fmt.Errorf("recover cancelled before local cleanup")
 				}
 			}
+			if err := verifyLocalStoresStopped(restartStores); err != nil {
+				return err
+			}
 			fmt.Println("step 3: clean confirmed local replicas")
 			fmt.Println(combinedCleanupSummary(tasks))
 			if !opts.yes {
@@ -1507,7 +1526,8 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 			for _, plan := range plans {
 				req := repairPayloadForPlanWithCleanup(plan, plan.InitialBlockedStores, "online recover: local cleanup complete; keep stores blocked before restart", false)
 				if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddressesForApply(plan), timeout, req); err != nil {
-					return fmt.Errorf("clear startup cleanup request for shard %d: %w", plan.ShardID, err)
+					fmt.Printf("warning: failed to clear startup cleanup request for shard %d before restart: %v\n", plan.ShardID, err)
+					fmt.Println("warning: continue after local cleanup; restart LogService so HAKeeper becomes available, then final repair state will be refreshed")
 				}
 			}
 			fmt.Println("step 5: start listed LogService stores outside this CLI")
@@ -1582,6 +1602,32 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 		"logShards": state.LogState.Shards,
 		"repairs":   state.LogShardRepairs,
 	})
+}
+
+func verifyLocalStoresStopped(stores []planStore) error {
+	messages := make([]string, 0)
+	for _, store := range stores {
+		if store.ConfigPath == "" {
+			continue
+		}
+		pids, _ := findMOServiceProcesses(store.ConfigPath)
+		if len(pids) == 0 {
+			continue
+		}
+		messages = append(messages, fmt.Sprintf(
+			"- store %s still has running mo-service processes for %s: pids=%v",
+			store.UUID,
+			store.ConfigPath,
+			pids,
+		))
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"LogService processes are still running; refusing to clean local replica data:\n%s\nStop the listed processes, then rerun recover/apply.",
+		strings.Join(messages, "\n"),
+	)
 }
 
 func verifyOnlineCleanupComplete(plans []*repairPlan) error {
