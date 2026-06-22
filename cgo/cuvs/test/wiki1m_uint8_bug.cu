@@ -131,7 +131,7 @@ double f32_recall(const std::vector<float>& base, uint64_t count, uint32_t dim,
     index.build();
     ivf_pq_search_params_t sp = ivf_pq_search_params_default();
     sp.n_probes = c.n_probes;
-    auto res = index.search_float(queries.data(), nq, dim, k, sp);
+    auto res = index.search_quantize(queries.data(), nq, dim, k, sp);
     double r = recall_at_k(res, gt, nq, k);
     index.destroy();
     return r;
@@ -167,7 +167,7 @@ double f32_recall_saveload(const std::vector<float>& base, uint64_t count, uint3
     reloaded.load_dir(dir, DistributionMode_SINGLE_GPU);
     ivf_pq_search_params_t sp = ivf_pq_search_params_default();
     sp.n_probes = c.n_probes;
-    auto res = reloaded.search_float(queries.data(), nq, dim, k, sp);
+    auto res = reloaded.search_quantize(queries.data(), nq, dim, k, sp);
     double r = recall_at_k(res, gt, nq, k);
     reloaded.destroy();
     return r;

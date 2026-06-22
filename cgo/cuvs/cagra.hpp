@@ -97,7 +97,7 @@ namespace matrixone {
 //   2. Call start() — initializes the worker thread pool and CUDA context.
 //   3. Call build() — triggers CAGRA graph construction (or file load).
 //      If is_loaded_ is already true (private constructor path), build() is a no-op.
-//   4. Call search() / search_float() to query.
+//   4. Call search() / search_quantize() to query.
 //   5. Call extend() / extend_float() to add new vectors (SINGLE_GPU or REPLICATED).
 //   6. Destructor calls destroy() which calls stop() on the worker.
 //
@@ -183,7 +183,7 @@ namespace matrixone {
 //   and for snapshotting count/dataset in build()
 // - NO lock during GPU calls themselves (build, extend, search kernels)
 // - shared_lock IS held during post-GPU CPU-side ID translation in search_internal /
-//   search_float_internal (protects host_ids and shard_sizes_ against concurrent extend)
+//   search_quantize_internal (protects host_ids and shard_sizes_ against concurrent extend)
 // - extend_mutex_ (std::mutex in base) serializes concurrent extend() callers
 // - Per-device bitset cache uses its own std::mutex (not the shared_mutex)
 //
@@ -771,7 +771,7 @@ public:
         }
     }
 
-    // Async T-typed filtered search. Mirrors search_float_with_filter_async
+    // Async T-typed filtered search. Mirrors search_quantize_with_filter_async
     // but for the T-typed query path (T may be float / half / int8 / uint8).
     // Build masks on the caller's thread, copy queries into a shared_ptr so
     // they outlive the Go caller, capture both in the worker lambda.
@@ -1063,27 +1063,28 @@ public:
         return search_res;
     }
 
-    // Sync float entry — wraps search_float_async + search_wait.
-    search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const cagra_search_params_t& sp) {
-        uint64_t job_id = this->search_float_async(queries_data, num_queries, query_dimension, limit, sp);
+    // Sync quantize entry — wraps search_quantize_async + search_wait.
+    search_result_t search_quantize(const B* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const cagra_search_params_t& sp) {
+        uint64_t job_id = this->search_quantize_async(queries_data, num_queries, query_dimension, limit, sp);
         return this->search_wait(job_id);
     }
 
-    // Sync float filtered entry — wraps search_float_with_filter_async + search_wait.
-    search_result_t search_float_with_filter(const float* queries_data, uint64_t num_queries,
+    // Sync quantize filtered entry — wraps search_quantize_with_filter_async + search_wait.
+    search_result_t search_quantize_with_filter(const B* queries_data, uint64_t num_queries,
                                              uint32_t query_dimension, uint32_t limit,
                                              const cagra_search_params_t& sp,
                                              const std::string& preds_json) {
-        uint64_t job_id = this->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
+        uint64_t job_id = this->search_quantize_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
         return this->search_wait(job_id);
     }
 
-    // Async variant of search_float_with_filter. Builds the host mask bundle on
+    // Async variant of search_quantize_with_filter. Builds the host mask bundle on
     // the calling thread (off-worker), copies queries into a shared_ptr so they
     // outlive the Go caller, captures both in the worker lambda, and returns a
     // job_id that search_wait() can collect. Used by the multi-index filter
-    // path so per-shard searches run in parallel.
-    uint64_t search_float_with_filter_async(const float* queries_data, uint64_t num_queries,
+    // path so per-shard searches run in parallel. The query is the BASE type B
+    // (float or half); search_quantize_internal converts it to storage T.
+    uint64_t search_quantize_with_filter_async(const B* queries_data, uint64_t num_queries,
                                             uint32_t query_dimension, uint32_t limit,
                                             const cagra_search_params_t& sp,
                                             const std::string& preds_json) {
@@ -1096,7 +1097,7 @@ public:
         }
         if (!this->worker) throw std::runtime_error("Worker not initialized");
 
-        auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
+        auto queries_copy = std::make_shared<std::vector<B>>(queries_data, queries_data + num_queries * query_dimension);
 
         if (this->dist_mode == DistributionMode_SHARDED) {
             // Bitmap eval runs on the caller's (Go) thread — off-worker — so
@@ -1106,7 +1107,7 @@ public:
             auto shard_masks = this->build_filter_shard_masks(preds_json);
             auto shard_search_task = [this, num_queries, query_dimension, limit, sp, queries_copy, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
                 int rank = gpu_handle.get_rank();
-                return this->search_float_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
+                return this->search_quantize_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
             };
             auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
             return this->worker->submit_composite_pending(std::move(job_ids), num_queries, limit);
@@ -1118,12 +1119,12 @@ public:
         // would force serialization through main_thread_ and lose batching.
         auto mask = this->build_filter_single_mask(preds_json);
         auto task = [this, num_queries, query_dimension, limit, sp, queries_copy, mask](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_float_internal(handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", mask.get());
+            return this->search_quantize_internal(handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", mask.get());
         };
         return this->worker->submit(task);
     }
 
-    uint64_t search_float_async(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const cagra_search_params_t& sp) {
+    uint64_t search_quantize_async(const B* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const cagra_search_params_t& sp) {
         if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
         if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
         if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
@@ -1132,13 +1133,13 @@ public:
             if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("search_async: index not loaded");
         }
 
-        auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
+        auto queries_copy = std::make_shared<std::vector<B>>(queries_data, queries_data + num_queries * query_dimension);
 
         if (this->dist_mode == DistributionMode_SHARDED) {
             // Same shape as search_async — fan out, hand back a composite id,
             // let search_wait() do the merge on the caller's thread.
             auto shard_search_task = [this, num_queries, query_dimension, limit, sp, queries_copy](raft_handle_wrapper_t& gpu_handle) -> std::any {
-                return this->search_float_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp);
+                return this->search_quantize_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp);
             };
             auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
             return this->worker->submit_composite_pending(std::move(job_ids), num_queries, limit);
@@ -1146,16 +1147,16 @@ public:
 
         // Single-GPU / replicated: the helper decides standalone vs fused; the
         // shared_ptr keeps the copied queries alive until the search runs.
-        return this->search_batchable_float(queries_copy, queries_copy->data(), num_queries, limit, sp);
+        return this->search_batchable_quantize(queries_copy, queries_copy->data(), num_queries, limit, sp);
     }
 
-    // float32-input search. Mirrors search_batchable_typed but calls
-    // search_float_internal; request-level batching (if enabled) happens inside it.
-    uint64_t search_batchable_float(std::shared_ptr<std::vector<float>> owner, const float* queries_data,
+    // Base-typed (B) quantize search. Mirrors search_batchable_typed but calls
+    // search_quantize_internal; request-level batching (if enabled) happens inside it.
+    uint64_t search_batchable_quantize(std::shared_ptr<std::vector<B>> owner, const B* queries_data,
                                     uint64_t num_queries, uint32_t limit, const cagra_search_params_t& sp) {
         if (!this->worker) throw std::runtime_error("Worker not initialized");
         auto task = [this, owner, queries_data, num_queries, limit, sp](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_float_internal(handle, queries_data, num_queries, this->dimension, limit, sp);
+            return this->search_quantize_internal(handle, queries_data, num_queries, this->dimension, limit, sp);
         };
         return this->worker->submit(task);
     }
@@ -1164,7 +1165,14 @@ public:
     // semantics here (off-worker CPU mask eval, skip queries-H2D sync_stream
     // when prebuilt is non-null, kernel queues naturally behind the H2Ds on
     // the same stream).
-    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/,
+    //
+    // Takes the query in the BASE element type B (float or half) and converts
+    // it to the storage type T on-device: B==T is a plain copy, sizeof(T)==1
+    // quantizes B -> int8/uint8 via the learned scalar quantizer, and the
+    // remaining (B=float, T=half) instantiation casts f32 -> f16. This is the
+    // "quantize" entry — see search_internal() for the already-storage-typed T
+    // path that performs no conversion.
+    search_result_t search_quantize_internal(raft_handle_wrapper_t& handle, const B* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/,
                         uint32_t limit, const cagra_search_params_t& sp, const std::string& preds_json = "", const host_mask_bundle_t* prebuilt = nullptr) {
         // No top-level lock: see search_internal() above — pointer fetched
         // via per-handle cache / narrow inner shared_lock, GPU work runs
@@ -1177,33 +1185,30 @@ public:
         auto q_dev_t = raft::make_device_matrix_view<T, int64_t>(
             q_buf_t.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
 
-        if constexpr (std::is_same_v<T, float>) {
-            raft::copy(*res, q_dev_t, raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
-        } else if constexpr (std::is_same_v<T, __half>) {
-            // Host-side fp32 → fp16 cast (F16C / AVX, IEEE round-to-nearest-even
-            // — bit-identical to mdspan_copy_kernel<__half>) into a pinned
-            // staging buffer, then a single half-sized H2D copy. Skips the
-            // q_dev_f device allocation and the mdspan_copy_kernel dispatch.
+        if constexpr (std::is_same_v<T, B>) {
+            // B == T (float->float or half->half): no conversion, copy straight
+            // into the storage-typed workspace.
+            raft::copy(*res, q_dev_t, raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
+        } else if constexpr (sizeof(T) == 1) {
+            // sizeof(T) == 1: quantize the base-typed query B -> int8/uint8.
+            // Stage the B query on its own per-thread device workspace (distinct
+            // from q_buf_t — see q_dev_buf<U>), then transform B -> T on-device.
+            if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
+            auto& q_buf_b = handle.template q_dev_buf<B>(n_q_elems);
+            auto q_dev_b = raft::make_device_matrix_view<B, int64_t>(
+                q_buf_b.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
+            raft::copy(*res, q_dev_b, raft::make_host_matrix_view<const B, int64_t>(queries_data, num_queries, this->dimension));
+            this->quantizer_.template transform<T>(*res, q_dev_b, q_buf_t.data(), true);
+        } else {
+            // B != T and sizeof(T) != 1: the only such instantiation is
+            // B=float, T=half (f32 base -> fp16 storage). Host-side fp32 -> fp16
+            // cast (F16C / AVX, IEEE round-to-nearest-even — bit-identical to
+            // mdspan_copy_kernel<__half>) into a pinned staging buffer, then a
+            // single half-sized H2D copy.
             __half* host_h = handle.ensure_host_half_buf(n_q_elems);
             matrixone::cast_float_to_half_host(queries_data, host_h, n_q_elems);
             raft::copy(*res, q_dev_t,
                 raft::make_host_matrix_view<const __half, int64_t>(host_h, num_queries, this->dimension));
-        } else {
-            // sizeof(T) == 1: int8 quantizer needs the fp32 device matrix.
-            auto& q_buf_f = handle.q_dev_buf_float(n_q_elems);
-            auto q_dev_f = raft::make_device_matrix_view<float, int64_t>(
-                q_buf_f.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
-            raft::copy(*res, q_dev_f, raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
-
-            if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
-            if constexpr (std::is_same_v<B, float>) {
-                this->quantizer_.template transform<T>(*res, q_dev_f, q_buf_t.data(), true);
-            } else {
-                // B == half: cast the f32 query to half on-device, then transform.
-                auto q_dev_b = raft::make_device_matrix<B, int64_t>(*res, num_queries, this->dimension);
-                raft::copy(*res, q_dev_b.view(), q_dev_f);
-                this->quantizer_.template transform<T>(*res, q_dev_b.view(), q_buf_t.data(), true);
-            }
         }
         // Legacy path syncs so build_search_bitset's stack-local host bitmap
         // can drain on the same stream. Prebuilt path skips: bitset H2D queues

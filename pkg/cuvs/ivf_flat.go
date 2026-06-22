@@ -687,9 +687,9 @@ func (gi *GpuIvfFlat[B, Q]) SearchFloat(queries []float32, numQueries uint64, di
 		n_probes: C.uint32_t(sp.NProbes),
 	}
 
-	res := C.gpu_ivf_flat_search_float(
+	res := C.gpu_ivf_flat_search_quantize(
 		gi.cIvfFlat,
-		(*C.float)(unsafe.Pointer(&queries[0])),
+		unsafe.Pointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
@@ -783,9 +783,9 @@ func (gi *GpuIvfFlat[B, Q]) SearchFloat32AsyncWithParams(queries []float32, numQ
 		n_probes: C.uint32_t(sp.NProbes),
 	}
 
-	jobID := C.gpu_ivf_flat_search_float_async(
+	jobID := C.gpu_ivf_flat_search_quantize_async(
 		gi.cIvfFlat,
-		(*C.float)(unsafe.Pointer(&queries[0])),
+		unsafe.Pointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
@@ -1070,8 +1070,9 @@ func (gi *GpuIvfFlat[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dim
 	return SearchResultIvfFlat{Neighbors: neighbors, Distances: distances}, nil
 }
 
-// SearchFloatWithFilter runs a filtered K-NN search with float32 queries.
-func (gi *GpuIvfFlat[B, Q]) SearchFloatWithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams, predsJSON string) (SearchResultIvfFlat, error) {
+// SearchQuantizeWithFilter runs a filtered K-NN search with base-typed (B)
+// queries; the index converts B to storage T (copy / quantize / f32->f16 cast).
+func (gi *GpuIvfFlat[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams, predsJSON string) (SearchResultIvfFlat, error) {
 	if gi.cIvfFlat == nil {
 		return SearchResultIvfFlat{}, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -1084,9 +1085,9 @@ func (gi *GpuIvfFlat[B, Q]) SearchFloatWithFilter(queries []float32, numQueries 
 	cPreds := C.CString(predsJSON)
 	defer C.free(unsafe.Pointer(cPreds))
 
-	res := C.gpu_ivf_flat_search_float_with_filter(
+	res := C.gpu_ivf_flat_search_quantize_with_filter(
 		gi.cIvfFlat,
-		(*C.float)(unsafe.Pointer(&queries[0])),
+		unsafe.Pointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
@@ -1117,12 +1118,12 @@ func (gi *GpuIvfFlat[B, Q]) SearchFloatWithFilter(queries []float32, numQueries 
 	return SearchResultIvfFlat{Neighbors: neighbors, Distances: distances}, nil
 }
 
-// SearchFloatWithFilterAsync submits a filtered float32 K-NN search and
-// returns a job_id; collect the result with SearchWait. Mirrors
+// SearchQuantizeWithFilterAsync submits a filtered K-NN search with base-typed
+// (B) queries and returns a job_id; collect the result with SearchWait. Mirrors
 // SearchFloat32AsyncWithParams + the predicate-eval semantics of
-// SearchFloatWithFilter. Used by MultiGpuIvfFlat to dispatch per-shard
-// filtered searches in parallel.
-func (gi *GpuIvfFlat[B, Q]) SearchFloatWithFilterAsync(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams, predsJSON string) (uint64, error) {
+// SearchQuantizeWithFilter. Used by MultiGpuIvfFlat to dispatch per-shard
+// filtered searches in parallel. The index converts B to storage T.
+func (gi *GpuIvfFlat[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams, predsJSON string) (uint64, error) {
 	if gi.cIvfFlat == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -1135,9 +1136,9 @@ func (gi *GpuIvfFlat[B, Q]) SearchFloatWithFilterAsync(queries []float32, numQue
 	cPreds := C.CString(predsJSON)
 	defer C.free(unsafe.Pointer(cPreds))
 
-	jobID := C.gpu_ivf_flat_search_float_with_filter_async(
+	jobID := C.gpu_ivf_flat_search_quantize_with_filter_async(
 		gi.cIvfFlat,
-		(*C.float)(unsafe.Pointer(&queries[0])),
+		unsafe.Pointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),

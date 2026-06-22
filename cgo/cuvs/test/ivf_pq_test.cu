@@ -216,7 +216,7 @@ double measure_quantize_recall(RecallData& d, uint32_t k) {
     index.build();
     ivf_pq_search_params_t sp = ivf_pq_search_params_default();
     sp.n_probes = 64;
-    auto res = index.search_float(d.queries.data(), d.nq, d.dim, k, sp);
+    auto res = index.search_quantize(d.queries.data(), d.nq, d.dim, k, sp);
     size_t hit = 0, tot = 0;
     for (uint64_t q = 0; q < d.nq; ++q) {
         std::set<int64_t> gt(d.gt[q].begin(), d.gt[q].end());

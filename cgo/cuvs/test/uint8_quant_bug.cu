@@ -107,7 +107,7 @@ double f32_quantize_recall(RecallData& d, uint32_t k) {
     index.build();
     ivf_pq_search_params_t sp = ivf_pq_search_params_default();
     sp.n_probes = 64;
-    auto res = index.search_float(d.queries.data(), d.nq, d.dim, k, sp);
+    auto res = index.search_quantize(d.queries.data(), d.nq, d.dim, k, sp);
     double r = recall_at_k(res, d, k);
     index.destroy();
     return r;

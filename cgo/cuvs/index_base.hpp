@@ -1369,16 +1369,18 @@ public:
     }
 
     // ---- Native B-source quantization (base element B -> 1-byte T) ----
-    // Buffers a chunk of SOURCE-typed (B) vectors for deferred quantizer
-    // training; the actual B->T transform happens at build time via
-    // flush_pending_float_chunks_internal (train quantizer_ on the buffered B
-    // sample, transform B->T, store as T). For B==float this is the same
-    // buffered path as add_chunk_float; for B==half the half query/data is
-    // quantized natively with no f32 detour. Build-only (1-byte storage T).
+    // Base-typed (B) add: converts the SOURCE-typed chunk to storage T, the add
+    // counterpart of search_quantize (symmetric: same B->T conversion). Routes by
+    // (B,T): B==T is a native store; sizeof(T)==1 buffers the B chunk for deferred
+    // quantizer training (the B->T transform happens at build via
+    // flush_pending_float_chunks_internal — B==float and B==half both supported,
+    // no f32 detour for half); the remaining (B=float, T=half) case casts f32->f16
+    // via add_chunk_float (std::copy into vector<half> = __half assignment).
     void add_chunk_quantize(const B* chunk_data, uint64_t chunk_count, int64_t offset = -1, const IdT* ids = nullptr) {
-        if constexpr (sizeof(T) != 1) {
-            throw std::runtime_error("add_chunk_quantize requires a 1-byte storage type (int8/uint8)");
-        } else {
+        if constexpr (std::is_same_v<B, T>) {
+            // B == T: no conversion — native storage add.
+            this->add_chunk(chunk_data, chunk_count, offset, ids);
+        } else if constexpr (sizeof(T) == 1) {
             {
                 std::shared_lock<std::shared_mutex> lock(mutex_);
                 if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
@@ -1391,6 +1393,11 @@ public:
             std::unique_lock<std::shared_mutex> lock(mutex_);
             pending_total_count_ += chunk_count;
             pending_float_chunks_.push_back(std::move(c));
+        } else if constexpr (std::is_same_v<B, float>) {
+            // B=float, T=half (sizeof(T)!=1): f32 -> T cast via add_chunk_float.
+            this->add_chunk_float(chunk_data, chunk_count, offset, ids);
+        } else {
+            throw std::runtime_error("add_chunk_quantize: unsupported (base,storage) type combination");
         }
     }
 

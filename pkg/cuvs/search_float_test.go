@@ -112,7 +112,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 	// 4. Test Brute-Force SearchFloat (with half)
 	t.Run("Brute-Force", func(t *testing.T) {
 		dataset := make([]Float16, n_vectors*uint64(dimension))
-		index, err := NewGpuBruteForce[Float16](dataset, n_vectors, dimension, L2Expanded, 1, deviceID)
+		index, err := NewGpuBruteForce[float32, Float16](dataset, n_vectors, dimension, L2Expanded, 1, deviceID)
 		if err != nil {
 			t.Fatalf("Failed to create Brute-Force: %v", err)
 		}
@@ -121,9 +121,9 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		index.Build()
 
 		queries := make([]float32, uint64(dimension))
-		neighbors, _, err := index.SearchFloat(queries, 1, dimension, 1)
+		neighbors, _, err := index.SearchQuantize(queries, 1, dimension, 1)
 		if err != nil {
-			t.Fatalf("SearchFloat failed: %v", err)
+			t.Fatalf("SearchQuantize failed: %v", err)
 		}
 		if len(neighbors) != 1 {
 			t.Errorf("Expected 1 neighbor, got %d", len(neighbors))

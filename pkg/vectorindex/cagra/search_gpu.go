@@ -17,10 +17,7 @@
 package cagra
 
 import (
-	"unsafe"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -29,14 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
-// cagraHalfToFloat32 widens a []cuvs.Float16 query to []float32 (bit-exact; both
-// uint16 IEEE half). Used for the filtered vecf16-direct path (half-cast back to
-// the half index inside cuVS — exact, no quantizer).
-func cagraHalfToFloat32(q []cuvs.Float16) []float32 {
-	h := *(*[]types.Float16)(unsafe.Pointer(&q))
-	return types.Float16ToFloat32Slice(h)
-}
-
 // CagraSearch implements cache.VectorIndexSearchIf for GPU CAGRA indexes.
 // Unlike HnswSearch, there is no concurrency gate (Cond/Mutex) because CAGRA
 // manages GPU thread concurrency internally via its worker pool.
@@ -44,8 +33,8 @@ type CagraSearch[B, Q cuvs.VectorType] struct {
 	Idxcfg        vectorindex.IndexConfig
 	Tblcfg        vectorindex.IndexTableConfig
 	Indexes       []*CagraModel[B, Q]
-	MultiIndex    *cuvs.MultiGpuCagra[B, Q] // built once in Load; nil until indexes are loaded
-	Overflow      *cuvs.GpuBruteForce[B]    // CDC insert overflow; nil when no overflow records exist
+	MultiIndex    *cuvs.MultiGpuCagra[B, Q]   // built once in Load; nil until indexes are loaded
+	Overflow      cuvs.BruteForceOverflow[B] // CDC insert overflow; nil when no overflow records exist
 	Devices       []int
 	ThreadsSearch int64
 }
@@ -77,25 +66,24 @@ func (s *CagraSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt
 		neighbors64 []int64
 		dists32     []float32
 	)
-	if query, ok := anyquery.([]float32); ok {
-		// f32 base (direct), or f32 base + QUANTIZATION (query quantized to T).
-		if rt.FilterJSON != "" {
-			neighbors64, dists32, err = s.MultiIndex.SearchFloat32WithFilter(query, 1, dim, uint32(limit), sp, rt.FilterJSON)
-		} else {
-			neighbors64, dists32, err = s.MultiIndex.SearchFloat32(query, 1, dim, uint32(limit), sp)
+	if rt.FilterJSON != "" {
+		// Filtered: any base (f32 or vecf16) routes the native base-typed (B) query
+		// through the const-B* search_quantize_with_filter path — cuVS converts B to
+		// storage T (B==T copy for direct, learned-quantizer for compressed). The
+		// query asserts to []B for both float32 (B==float) and Float16 (B==half) base.
+		qB, ok := anyquery.([]B)
+		if !ok {
+			return nil, nil, moerr.NewInternalErrorNoCtx("CagraSearch: filtered query type mismatch")
 		}
+		neighbors64, dists32, err = s.MultiIndex.SearchQuantizeWithFilter(qB, 1, dim, uint32(limit), sp, rt.FilterJSON)
+	} else if query, ok := anyquery.([]float32); ok {
+		// f32 base, unfiltered (direct, or f32 base + QUANTIZATION quantized to T).
+		neighbors64, dists32, err = s.MultiIndex.SearchFloat32(query, 1, dim, uint32(limit), sp)
 	} else if qh, ok := anyquery.([]cuvs.Float16); ok {
-		// vecf16 base.
+		// vecf16 base (B == half), unfiltered.
 		if qt, isT := anyquery.([]Q); isT {
 			// f16-direct (storage T==Float16): native half search.
-			if rt.FilterJSON != "" {
-				neighbors64, dists32, err = s.MultiIndex.SearchFloat32WithFilter(cagraHalfToFloat32(qh), 1, dim, uint32(limit), sp, rt.FilterJSON)
-			} else {
-				neighbors64, dists32, err = s.MultiIndex.Search(qt, 1, dim, uint32(limit), sp)
-			}
-		} else if rt.FilterJSON != "" {
-			// f16 -> int8/uint8 quantized + filter: not yet supported.
-			return nil, nil, moerr.NewInternalErrorNoCtx("CagraSearch: filtered f16->int8/uint8 search not yet supported")
+			neighbors64, dists32, err = s.MultiIndex.Search(qt, 1, dim, uint32(limit), sp)
 		} else {
 			// f16 -> int8/uint8 quantized: quantize the half query to T, native search.
 			neighbors64, dists32, err = s.MultiIndex.SearchQuantizeHalf(qh, 1, dim, uint32(limit), sp)
@@ -150,8 +138,8 @@ func (s *CagraSearch[B, Q]) SearchFloat32(proc *sqlexec.SqlProcess, query any, r
 // into per-column data + null bitmap and feeds them to the brute-force index
 // in column order. Mirrors how the build path populates the cuvs main
 // index's FilterStore.
-func addOverflowFilterChunks[T cuvs.VectorType](
-	bf *cuvs.GpuBruteForce[T],
+func addOverflowFilterChunks[B, OB cuvs.VectorType](
+	bf *cuvs.GpuBruteForce[B, OB],
 	colMetaJSON string,
 	includeBytes []byte,
 	nrows uint64,
@@ -312,14 +300,43 @@ func (s *CagraSearch[B, Q]) buildOverflow() error {
 		device = s.Devices[0]
 	}
 
-	bf, err := cuvs.NewGpuBruteForceEmpty[B](
-		total, dim, cuvsMetric, uint32(s.ThreadsSearch), device)
+	// cuVS brute force can only store float/half. Pick the overflow storage type
+	// OB from the index storage Q: keep Q when it is float/half, else fall back to
+	// the base type B (which is always float/half) so the overflow is supported.
+	// The type-erased BruteForceOverflow[B] interface holds either concrete type.
+	var (
+		ov  cuvs.BruteForceOverflow[B]
+		err error
+	)
+	switch cuvs.GetQuantization[Q]() {
+	case cuvs.F32, cuvs.F16:
+		ov, err = buildOverflowBF[B, Q](s.Indexes, total, dim, cuvsMetric, device, uint32(s.ThreadsSearch))
+	default: // INT8/UINT8: brute force can't store these → store base B.
+		ov, err = buildOverflowBF[B, B](s.Indexes, total, dim, cuvsMetric, device, uint32(s.ThreadsSearch))
+	}
 	if err != nil {
 		return err
 	}
+	s.Overflow = ov
+	return nil
+}
+
+// buildOverflowBF builds a concrete *cuvs.GpuBruteForce[B, OB] from every loaded
+// model's CDC insert overflow and returns it behind the type-erased
+// BruteForceOverflow[B] interface. OB is the overflow storage type chosen by the
+// caller (Q when float/half, else B). Wires the FilterStore when the index has
+// INCLUDE columns.
+func buildOverflowBF[B, OB cuvs.VectorType, Q cuvs.VectorType](
+	indexes []*CagraModel[B, Q],
+	total uint64, dim uint32, cuvsMetric cuvs.DistanceType, device int, threads uint32,
+) (cuvs.BruteForceOverflow[B], error) {
+	bf, err := cuvs.NewGpuBruteForceEmpty[B, OB](total, dim, cuvsMetric, threads, device)
+	if err != nil {
+		return nil, err
+	}
 	if err = bf.Start(); err != nil {
 		bf.Destroy()
-		return err
+		return nil, err
 	}
 
 	// INCLUDE-column wiring — pull the col-meta JSON from the first loaded
@@ -331,7 +348,7 @@ func (s *CagraSearch[B, Q]) buildOverflow() error {
 		colMetaJSON        string
 		includeBytesPerRow int
 	)
-	for _, m := range s.Indexes {
+	for _, m := range indexes {
 		if m.Index != nil {
 			colMetaJSON = m.Index.GetFilterColMetaJSON()
 			includeBytesPerRow = m.IncludeBytesPerRow
@@ -339,7 +356,7 @@ func (s *CagraSearch[B, Q]) buildOverflow() error {
 		}
 	}
 	if colMetaJSON == "" {
-		for _, m := range s.Indexes {
+		for _, m := range indexes {
 			if m.OverflowColMetaJSON != "" {
 				colMetaJSON = m.OverflowColMetaJSON
 				includeBytesPerRow = m.IncludeBytesPerRow
@@ -350,34 +367,33 @@ func (s *CagraSearch[B, Q]) buildOverflow() error {
 	if colMetaJSON != "" && includeBytesPerRow > 0 {
 		if err = bf.SetFilterColumns(colMetaJSON, total); err != nil {
 			bf.Destroy()
-			return err
+			return nil, err
 		}
 	}
 
-	for _, m := range s.Indexes {
+	for _, m := range indexes {
 		if len(m.OverflowPkids) == 0 {
 			continue
 		}
 		count := uint64(len(m.OverflowPkids))
-		// Overflow vectors are stored in the native base type B (m.OverflowVecs
-		// is []B), so feed the base-typed brute force directly — no f32 detour.
-		if err = bf.AddChunk(m.OverflowVecs, count, m.OverflowPkids); err != nil {
+		// Overflow vectors are base-typed (B); AddChunkQuantize converts B -> Q
+		// storage on the C++ side (native store when B==Q, f32->f16 cast otherwise).
+		if err = bf.AddChunkQuantize(m.OverflowVecs, count, m.OverflowPkids); err != nil {
 			bf.Destroy()
-			return err
+			return nil, err
 		}
 		if colMetaJSON != "" && includeBytesPerRow > 0 {
 			if err = addOverflowFilterChunks(bf, colMetaJSON, m.OverflowIncludeBytes, count, includeBytesPerRow); err != nil {
 				bf.Destroy()
-				return err
+				return nil, err
 			}
 		}
 	}
 	if err = bf.Build(); err != nil {
 		bf.Destroy()
-		return err
+		return nil, err
 	}
-	s.Overflow = bf
-	return nil
+	return bf, nil
 }
 
 // buildMultiIndex assembles a MultiGpuCagra from the loaded indexes.

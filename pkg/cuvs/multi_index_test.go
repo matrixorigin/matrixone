@@ -61,7 +61,7 @@ func TestMultiGpuIndex(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Brute Force
-	bf, err := NewGpuBruteForce[float32](dataset1, count1, dimension, metric, nthread, 0)
+	bf, err := NewGpuBruteForce[float32, float32](dataset1, count1, dimension, metric, nthread, 0)
 	assert.NoError(t, err)
 	err = bf.Start()
 	assert.NoError(t, err)

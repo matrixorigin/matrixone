@@ -449,7 +449,7 @@ gpu_ivf_pq_search_res_t gpu_ivf_pq_search(gpu_ivf_pq_c index_c, const void* quer
     return result;
 }
 
-gpu_ivf_pq_search_res_t gpu_ivf_pq_search_float(gpu_ivf_pq_c index_c, const float* queries_data, uint64_t num_queries,
+gpu_ivf_pq_search_res_t gpu_ivf_pq_search_quantize(gpu_ivf_pq_c index_c, const void* queries_data, uint64_t num_queries,
                                                    uint32_t query_dimension, uint32_t limit,
                                                    ivf_pq_search_params_t search_params, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
@@ -457,13 +457,14 @@ gpu_ivf_pq_search_res_t gpu_ivf_pq_search_float(gpu_ivf_pq_c index_c, const floa
     try {
         auto cpp_res = std::make_unique<ivf_pq_search_result_t>();
         ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
-            *cpp_res = idx->search_float(queries_data, num_queries, query_dimension, limit, search_params);
+            using B = typename std::remove_pointer_t<decltype(idx)>::base_type;
+            *cpp_res = idx->search_quantize(static_cast<const B*>(queries_data), num_queries, query_dimension, limit, search_params);
         });
         result.result_ptr = static_cast<gpu_ivf_pq_result_c>(cpp_res.release());
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_float", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_quantize", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_float", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_quantize", "unknown C++ exception");
     }
     return result;
 }
@@ -486,19 +487,20 @@ uint64_t gpu_ivf_pq_search_async(gpu_ivf_pq_c index_c, const void* queries_data,
     }
 }
 
-uint64_t gpu_ivf_pq_search_float_async(gpu_ivf_pq_c index_c, const float* queries_data, uint64_t num_queries,
+uint64_t gpu_ivf_pq_search_quantize_async(gpu_ivf_pq_c index_c, const void* queries_data, uint64_t num_queries,
                                           uint32_t query_dimension, uint32_t limit,
                                           ivf_pq_search_params_t search_params, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         return ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) -> uint64_t {
-            return idx->search_float_async(queries_data, num_queries, query_dimension, limit, search_params);
+            using B = typename std::remove_pointer_t<decltype(idx)>::base_type;
+            return idx->search_quantize_async(static_cast<const B*>(queries_data), num_queries, query_dimension, limit, search_params);
         });
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_float_async", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_quantize_async", e.what());
         return 0;
     } catch (...) {
-        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_float_async", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_quantize_async", "unknown C++ exception");
         return 0;
     }
 }
@@ -744,7 +746,7 @@ gpu_ivf_pq_search_res_t gpu_ivf_pq_search_with_filter(gpu_ivf_pq_c index_c, cons
     return result;
 }
 
-gpu_ivf_pq_search_res_t gpu_ivf_pq_search_float_with_filter(gpu_ivf_pq_c index_c, const float* queries_data,
+gpu_ivf_pq_search_res_t gpu_ivf_pq_search_quantize_with_filter(gpu_ivf_pq_c index_c, const void* queries_data,
                                                              uint64_t num_queries, uint32_t query_dimension,
                                                              uint32_t limit, ivf_pq_search_params_t sp,
                                                              const char* preds_json, void* errmsg) {
@@ -754,18 +756,19 @@ gpu_ivf_pq_search_res_t gpu_ivf_pq_search_float_with_filter(gpu_ivf_pq_c index_c
         auto cpp_res = std::make_unique<ivf_pq_search_result_t>();
         std::string preds = preds_json ? preds_json : "";
         ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) {
-            *cpp_res = idx->search_float_with_filter(queries_data, num_queries, query_dimension, limit, sp, preds);
+            using B = typename std::remove_pointer_t<decltype(idx)>::base_type;
+            *cpp_res = idx->search_quantize_with_filter(static_cast<const B*>(queries_data), num_queries, query_dimension, limit, sp, preds);
         });
         result.result_ptr = static_cast<gpu_ivf_pq_result_c>(cpp_res.release());
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_float_with_filter", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_quantize_with_filter", e.what());
     } catch (...) {
-        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_float_with_filter", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_quantize_with_filter", "unknown C++ exception");
     }
     return result;
 }
 
-uint64_t gpu_ivf_pq_search_float_with_filter_async(gpu_ivf_pq_c index_c, const float* queries_data,
+uint64_t gpu_ivf_pq_search_quantize_with_filter_async(gpu_ivf_pq_c index_c, const void* queries_data,
                                                     uint64_t num_queries, uint32_t query_dimension,
                                                     uint32_t limit, ivf_pq_search_params_t sp,
                                                     const char* preds_json, void* errmsg) {
@@ -773,13 +776,14 @@ uint64_t gpu_ivf_pq_search_float_with_filter_async(gpu_ivf_pq_c index_c, const f
     try {
         std::string preds = preds_json ? preds_json : "";
         return ivf_pq_dispatch(static_cast<gpu_ivf_pq_any_t*>(index_c), [&](auto* idx) -> uint64_t {
-            return idx->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds);
+            using B = typename std::remove_pointer_t<decltype(idx)>::base_type;
+            return idx->search_quantize_with_filter_async(static_cast<const B*>(queries_data), num_queries, query_dimension, limit, sp, preds);
         });
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_float_with_filter_async", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_quantize_with_filter_async", e.what());
         return 0;
     } catch (...) {
-        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_float_with_filter_async", "unknown C++ exception");
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_search_quantize_with_filter_async", "unknown C++ exception");
         return 0;
     }
 }
