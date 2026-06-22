@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
+	ivfflatruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
 )
 
 // actionIvfflatReindex mirrors idxcron.Action_Ivfflat_Reindex. Inlined
@@ -89,21 +90,24 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 // inline — that persistence stays at the SQL-layer call site, so this
 // hook only performs the map merge.
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	// quantization, when specified, must name a narrow vector type IVF-FLAT
-	// supports — same gate as CREATE INDEX (quantizer.ToVectorType). The value
-	// is already lower-cased by reindexSpecifiedParams.
-	if q, ok := alter.Params[catalog.Quantization]; ok {
-		if _, ok := quantizer.ToVectorType(q); !ok {
-			return nil, moerr.NewNotSupportedNoCtxf(
-				"ivfflat quantization %q (supported: float32, float16, bf16, int8, uint8)", q)
-		}
-	}
-	return compileplugin.MergeReindexParams(old, alter, "ivfflat",
+	// Merge first, then validate the EFFECTIVE quantization via the per-algo
+	// catalog hook (the single home shared with CREATE; the value the reindex
+	// set, or the index's stored value when the statement omitted it — e.g. the
+	// idxcron-issued rebuild).
+	merged, err := compileplugin.MergeReindexParams(old, alter, "ivfflat",
 		catalog.IndexAlgoParamLists,
 		catalog.IndexAlgoParamKmeansTrainPercent,
 		catalog.IndexAlgoParamKmeansMaxIteration,
 		catalog.Quantization,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if err := (ivfflatruntime.CatalogHooks{}).ValidQuantization(
+		merged[catalog.Quantization], merged[catalog.IndexAlgoParamOpType]); err != nil {
+		return nil, err
+	}
+	return merged, nil
 }
 
 // HandleDropIndex: IVF-FLAT generic hidden-table deletion is performed

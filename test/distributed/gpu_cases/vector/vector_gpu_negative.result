@@ -44,11 +44,11 @@ not supported: Cagra QUANTIZATION 'float32' (4 bytes/element) cannot upcast base
 create index ixup using ivfpq on th (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8 QUANTIZATION 'float32';
 not supported: IvfPQ QUANTIZATION 'float32' (4 bytes/element) cannot upcast base column VECF16 (2 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
 create index ixqi using cagra on t (v) op_type 'vector_ip_ops' QUANTIZATION 'int8';
-not supported: Cagra QUANTIZATION 'int8' is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
+not supported: cagra quantization "int8" is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
 create index ixqi using cagra on t (v) op_type 'vector_cosine_ops' QUANTIZATION 'int8';
-not supported: Cagra QUANTIZATION 'int8' is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
+not supported: cagra quantization "int8" is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
 create index ixqi using ivfpq on t (v) op_type 'vector_ip_ops' lists=2 m=8 bits_per_code=8 QUANTIZATION 'uint8';
-not supported: IvfPQ QUANTIZATION 'uint8' is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
+not supported: ivfpq quantization "uint8" is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
 create table tre (id bigint primary key, v vecf32(8));
 insert into tre values
 (1, '[1,1,1,1,1,1,1,1]'), (2, '[2,2,2,2,2,2,2,2]'), (3, '[3,3,3,3,3,3,3,3]'),
@@ -61,4 +61,6 @@ alter table tre alter reindex ixre cagra QUANTIZATION 'int8';
 not supported: cagra quantization "int8" is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
 alter table tre alter reindex ixre cagra QUANTIZATION 'bf16';
 not supported: cagra quantization "bf16" (supported: float32, float16, int8, uint8)
+alter table tre alter reindex ixre cagra QUANTIZATION 'float64';
+not supported: cagra quantization "float64" (supported: float32, float16, int8, uint8)
 drop database gpu_negative;

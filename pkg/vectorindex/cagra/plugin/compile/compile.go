@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	cagraruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 // insertIntoCagraIndexTableFormat is the SQL template used to populate the
@@ -235,38 +234,28 @@ func registerIdxcronUpdate(
 }
 
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	// quantization, when specified, must be a cuvs-supported name — same gate
-	// as CREATE INDEX (metric.ValidQuantization). Already lower-cased by
-	// reindexSpecifiedParams.
-	if q, ok := alter.Params[catalog.Quantization]; ok {
-		if !metric.ValidQuantization(q) {
-			return nil, moerr.NewNotSupportedNoCtxf(
-				"cagra quantization %q (supported: float32, float16, int8, uint8)", q)
-		}
-		// Mirror CREATE INDEX (schema.go) so REINDEX can't set a quantization
-		// CREATE would refuse: bf16 has no GPU storage, and int8/uint8 only
-		// preserve L2 (the affine quantizer breaks inner-product / cosine
-		// geometry). The storage-vs-base width/upcast guard needs the base column
-		// type, which a reindex param update doesn't carry, so it stays at CREATE.
-		if q == metric.Quantization_BF16_Str {
-			return nil, moerr.NewNotSupportedNoCtxf(
-				"cagra quantization %q (no GPU bfloat16 storage); use float16, int8, or uint8", q)
-		}
-		if q == metric.Quantization_INT8_Str || q == metric.Quantization_UINT8_Str {
-			op := catalog.ToLower(old[catalog.IndexAlgoParamOpType])
-			if op == metric.OpType_InnerProduct || op == metric.OpType_CosineDistance {
-				return nil, moerr.NewNotSupportedNoCtxf(
-					"cagra quantization %q is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry", q)
-			}
-		}
-	}
-	return compileplugin.MergeReindexParams(old, alter, "cagra",
+	// Merge first, then validate the EFFECTIVE quantization via the per-algo
+	// catalog hook (the single home shared with CREATE). The merged map is the
+	// index's actual post-reindex config: the value the reindex set, or — when
+	// the reindex omitted QUANTIZATION (e.g. the idxcron-issued rebuild) — the
+	// value already stored on the index. Validating the merge (not the raw alter
+	// delta) means the check is never skipped just because the statement omitted
+	// quantization, and quantization and op_type come from one consistent source.
+	merged, err := compileplugin.MergeReindexParams(old, alter, "cagra",
 		catalog.IndexAlgoParamMaxIndexCapacity,
 		catalog.IntermediateGraphDegree,
 		catalog.GraphDegree,
 		catalog.ITopkSize,
 		catalog.Quantization,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if err := (cagraruntime.CatalogHooks{}).ValidQuantization(
+		merged[catalog.Quantization], merged[catalog.IndexAlgoParamOpType]); err != nil {
+		return nil, err
+	}
+	return merged, nil
 }
 
 // HandleDropIndex is a no-op: generic hidden-table cleanup is sufficient.

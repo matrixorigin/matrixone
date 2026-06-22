@@ -10,8 +10,10 @@
 --   * vecf64 column                — cuvs has no float64; only VECF32 allowed
 --   * QUANTIZATION 'float64'       — cuvs quantization is f32/f16/int8/uint8 only
 --   * QUANTIZATION 'bf16'          — no GPU bfloat16 storage; must not silent-fallback to f32
---   * int8/uint8 + ip/cosine       — affine quantizer breaks dot-product/angle (L2-only)
---   * REINDEX to a CREATE-rejected quantization (int8+ip, bf16) — guarded too
+--   * int8/uint8 + ip/cosine       — affine quantizer breaks dot-product/angle (L2-only) at CREATE
+--   * REINDEX QUANTIZATION          — the (quantization, op_type) pair is gated via the per-algo
+--                                     ValidQuantization hook on the merged config: bad values
+--                                     (bf16/float64) and int8/uint8 on a non-L2 index are rejected
 --   * dimension mismatch at search — query dim must equal the column dim
 -- =====================================================================
 
@@ -81,10 +83,13 @@ create index ixqi using cagra on t (v) op_type 'vector_ip_ops' QUANTIZATION 'int
 create index ixqi using cagra on t (v) op_type 'vector_cosine_ops' QUANTIZATION 'int8';
 create index ixqi using ivfpq on t (v) op_type 'vector_ip_ops' lists=2 m=8 bits_per_code=8 QUANTIZATION 'uint8';
 
--- REINDEX must not be able to set a quantization that CREATE INDEX would refuse.
--- Build a valid f32 inner-product index (on its own table — t already has a
--- CAGRA index on v, and two CAGRA indexes may not share a column), then REINDEX
--- to int8 (rejected: int8 + IP) and to bf16 (rejected: no GPU bf16 storage).
+-- REINDEX gates the (quantization, op_type) pair through the per-algo
+-- ValidQuantization hook, evaluated on the MERGED config: the value must be a
+-- cuvs storage name (float32/float16/int8/uint8 — bf16/float64 rejected), and
+-- int8/uint8 require L2. op_type is immutable across a reindex, so the merged
+-- op_type is the index's stored inner-product — hence int8 is rejected here too.
+-- Built on its own table, since t already has a CAGRA index on v and two CAGRA
+-- indexes may not share a column.
 create table tre (id bigint primary key, v vecf32(8));
 insert into tre values
     (1, '[1,1,1,1,1,1,1,1]'), (2, '[2,2,2,2,2,2,2,2]'), (3, '[3,3,3,3,3,3,3,3]'),
@@ -95,5 +100,6 @@ create index ixre using cagra on tre (v) op_type 'vector_ip_ops'
     intermediate_graph_degree=8 graph_degree=4 itopk_size=16;
 alter table tre alter reindex ixre cagra QUANTIZATION 'int8';
 alter table tre alter reindex ixre cagra QUANTIZATION 'bf16';
+alter table tre alter reindex ixre cagra QUANTIZATION 'float64';
 
 drop database gpu_negative;
