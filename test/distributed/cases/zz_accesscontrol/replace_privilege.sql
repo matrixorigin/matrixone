@@ -38,6 +38,8 @@ select * from replace_priv_edge.t_priv order by id;
 select * from replace_priv_edge.t_unique order by id;
 -- @session
 
+set global enable_privilege_cache = on;
+
 drop user replace_priv_user;
 drop user replace_priv_delete_user;
 drop role replace_priv_role;
