@@ -1320,6 +1320,8 @@ func Test_convertRowsIntoBatchDecimal(t *testing.T) {
 	cases := []struct {
 		name      string
 		mysqlType defines.MysqlType
+		length    uint32
+		signed    bool
 		width     int32
 		scale     int32
 		value     any
@@ -1327,8 +1329,10 @@ func Test_convertRowsIntoBatchDecimal(t *testing.T) {
 		want      string
 	}{
 		{
-			name:      "decimal64 max precision string",
+			name:      "signed decimal64 max precision string",
 			mysqlType: defines.MYSQL_TYPE_DECIMAL,
+			length:    20,
+			signed:    true,
 			width:     18,
 			scale:     2,
 			value:     "15.00",
@@ -1336,8 +1340,10 @@ func Test_convertRowsIntoBatchDecimal(t *testing.T) {
 			want:      "15.00",
 		},
 		{
-			name:      "newdecimal decimal128 bytes",
+			name:      "signed newdecimal decimal128 bytes",
 			mysqlType: defines.MYSQL_TYPE_NEWDECIMAL,
+			length:    22,
+			signed:    true,
 			width:     20,
 			scale:     3,
 			value:     []byte("12345678901234567.125"),
@@ -1345,13 +1351,26 @@ func Test_convertRowsIntoBatchDecimal(t *testing.T) {
 			want:      "12345678901234567.125",
 		},
 		{
-			name:      "decimal256 string",
+			name:      "signed decimal256 string",
 			mysqlType: defines.MYSQL_TYPE_DECIMAL,
+			length:    52,
+			signed:    true,
 			width:     50,
 			scale:     4,
 			value:     "1234567890123456789012345678901234567890.1234",
 			oid:       types.T_decimal256,
 			want:      "1234567890123456789012345678901234567890.1234",
+		},
+		{
+			name:      "signed scale zero decimal128 from mysql display length",
+			mysqlType: defines.MYSQL_TYPE_NEWDECIMAL,
+			length:    20,
+			signed:    true,
+			width:     19,
+			scale:     0,
+			value:     "1234567890123456789",
+			oid:       types.T_decimal128,
+			want:      "1234567890123456789",
 		},
 	}
 
@@ -1361,7 +1380,8 @@ func Test_convertRowsIntoBatchDecimal(t *testing.T) {
 			col := new(MysqlColumn)
 			col.SetName("d")
 			col.SetColumnType(tt.mysqlType)
-			col.SetLength(uint32(tt.width + 2))
+			col.SetSigned(tt.signed)
+			col.SetLength(tt.length)
 			col.SetDecimal(tt.scale)
 			mrs.AddColumn(col)
 			mrs.AddRow([]any{tt.value})
@@ -1447,7 +1467,7 @@ func Test_decimalRowValueHelpers(t *testing.T) {
 func Test_mysqlDecimalColTypeMissingPrecision(t *testing.T) {
 	col := new(MysqlColumn)
 	col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
-	col.SetLength(2)
+	col.SetLength(0)
 
 	_, err := mysqlDecimalColType(col)
 	require.Error(t, err)
@@ -1464,24 +1484,28 @@ func Test_mysqlDecimalColTypeRequiresScaleMetadata(t *testing.T) {
 
 func Test_mysqlDecimalColTypePrecisionBoundary(t *testing.T) {
 	cases := []struct {
-		name  string
-		width int32
-		scale int32
-		want  types.T
+		name   string
+		length uint32
+		signed bool
+		width  int32
+		scale  int32
+		want   types.T
 	}{
-		{name: "decimal64 below boundary", width: 16, scale: 0, want: types.T_decimal64},
-		{name: "decimal64 precision 17", width: 17, scale: 3, want: types.T_decimal64},
-		{name: "decimal64 precision 18", width: 18, scale: 3, want: types.T_decimal64},
-		{name: "decimal128 precision 19", width: 19, scale: 3, want: types.T_decimal128},
-		{name: "decimal128 max precision", width: 38, scale: 3, want: types.T_decimal128},
-		{name: "decimal256 precision 39", width: 39, scale: 3, want: types.T_decimal256},
+		{name: "signed decimal64 below boundary", length: 17, signed: true, width: 16, scale: 0, want: types.T_decimal64},
+		{name: "signed decimal64 precision 18 scale 0", length: 19, signed: true, width: 18, scale: 0, want: types.T_decimal64},
+		{name: "signed decimal128 precision 19 scale 0", length: 20, signed: true, width: 19, scale: 0, want: types.T_decimal128},
+		{name: "unsigned decimal64 precision 18 scale 3", length: 19, signed: false, width: 18, scale: 3, want: types.T_decimal64},
+		{name: "unsigned decimal128 precision 19 scale 0", length: 19, signed: false, width: 19, scale: 0, want: types.T_decimal128},
+		{name: "signed decimal128 max precision", length: 40, signed: true, width: 38, scale: 3, want: types.T_decimal128},
+		{name: "signed decimal256 precision 39", length: 41, signed: true, width: 39, scale: 1, want: types.T_decimal256},
 	}
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			col := new(MysqlColumn)
 			col.SetColumnType(defines.MYSQL_TYPE_NEWDECIMAL)
-			col.SetLength(uint32(tt.width + 2))
+			col.SetSigned(tt.signed)
+			col.SetLength(tt.length)
 			col.SetDecimal(tt.scale)
 
 			got, err := mysqlDecimalColType(col)
@@ -1489,6 +1513,56 @@ func Test_mysqlDecimalColTypePrecisionBoundary(t *testing.T) {
 			require.Equal(t, tt.want, got.Oid)
 			require.Equal(t, tt.width, got.Width)
 			require.Equal(t, tt.scale, got.Scale)
+		})
+	}
+}
+
+func Test_mysqlDecimalColTypeInvalidScalePrecision(t *testing.T) {
+	col := new(MysqlColumn)
+	col.SetColumnType(defines.MYSQL_TYPE_NEWDECIMAL)
+	col.SetLength(3)
+	col.SetDecimal(2)
+
+	_, err := mysqlDecimalColType(col)
+	require.Error(t, err)
+}
+
+func Test_setMysqlColumnTypeMetadataDecimalLength(t *testing.T) {
+	cases := []struct {
+		name   string
+		typ    types.Type
+		signed bool
+		length uint32
+	}{
+		{
+			name:   "signed scale zero",
+			typ:    types.New(types.T_decimal128, 19, 0),
+			signed: true,
+			length: 20,
+		},
+		{
+			name:   "signed fractional",
+			typ:    types.New(types.T_decimal128, 20, 3),
+			signed: true,
+			length: 22,
+		},
+		{
+			name:   "unsigned fractional",
+			typ:    types.New(types.T_decimal128, 20, 3),
+			signed: false,
+			length: 21,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			col.SetSigned(tt.signed)
+
+			setMysqlColumnTypeMetadata(col, tt.typ)
+
+			require.Equal(t, tt.length, col.Length())
+			require.Equal(t, uint8(tt.typ.Scale), col.Decimal())
 		})
 	}
 }

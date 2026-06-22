@@ -1367,7 +1367,7 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 	}, resultColTypes, resultColNames, nil
 }
 
-const mysqlDecimalPrecisionLengthOffset uint32 = 2
+const mysqlDecimalExtraLength uint32 = 1
 
 type mysqlDecimalColumn interface {
 	Column
@@ -1380,26 +1380,57 @@ func mysqlDecimalColType(col Column) (types.Type, error) {
 		return types.Type{}, moerr.NewInternalErrorNoCtxf("missing decimal scale for mysql type %d", col.ColumnType())
 	}
 
-	precision, err := mysqlDecimalPrecisionFromColumn(col)
+	scale := int32(decimalCol.Decimal())
+	precision, err := mysqlDecimalPrecisionFromColumn(col, scale)
 	if err != nil {
 		return types.Type{}, err
 	}
 
-	return mysqlDecimalType(precision, int32(decimalCol.Decimal())), nil
+	return mysqlDecimalType(precision, scale), nil
 }
 
-func mysqlDecimalPrecisionFromColumn(col Column) (int32, error) {
+func mysqlDecimalPrecisionFromColumn(col Column, scale int32) (int32, error) {
 	length := col.Length()
-	if length <= mysqlDecimalPrecisionLengthOffset {
+	if length == 0 {
 		return 0, moerr.NewInternalErrorNoCtxf("missing decimal precision for mysql type %d", col.ColumnType())
 	}
 
-	precision := length - mysqlDecimalPrecisionLengthOffset
+	// MySQL DECIMAL display length includes the sign and decimal point when present.
+	metadataExtraLength := uint32(0)
+	if scale > 0 {
+		metadataExtraLength += mysqlDecimalExtraLength
+	}
+	if col.IsSigned() {
+		metadataExtraLength += mysqlDecimalExtraLength
+	}
+
+	if length <= metadataExtraLength {
+		return 0, moerr.NewInternalErrorNoCtxf("invalid decimal metadata length %d scale %d for mysql type %d", length, scale, col.ColumnType())
+	}
+
+	precision := length - metadataExtraLength
+	if precision < uint32(scale) {
+		return 0, moerr.NewInternalErrorNoCtxf("invalid decimal precision %d scale %d for mysql type %d", precision, scale, col.ColumnType())
+	}
 	if precision > uint32(types.T_decimal256.ToType().Width) {
 		return 0, moerr.NewInternalErrorNoCtxf("invalid decimal precision %d for mysql type %d", precision, col.ColumnType())
 	}
 
 	return int32(precision), nil
+}
+
+func mysqlDecimalDisplayLength(precision, scale int32, signed bool) uint32 {
+	length := uint32(precision)
+	if scale > 0 {
+		length += mysqlDecimalExtraLength
+	}
+	if signed && precision > 0 {
+		length += mysqlDecimalExtraLength
+	}
+	if length == 0 {
+		return 1
+	}
+	return length
 }
 
 func mysqlDecimalType(precision, scale int32) types.Type {
@@ -1422,7 +1453,12 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 }
 
 func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
-	setColLength(col, typ.Width)
+	if typ.IsDecimal() {
+		// DECIMAL display length depends on scale and signedness, not just precision.
+		col.SetLength(mysqlDecimalDisplayLength(typ.Width, typ.Scale, col.IsSigned()))
+	} else {
+		setColLength(col, typ.Width)
+	}
 	col.SetDecimal(typ.Scale)
 }
 
