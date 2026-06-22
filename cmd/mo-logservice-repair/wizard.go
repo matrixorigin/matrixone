@@ -1797,7 +1797,23 @@ func restartK8sStoresAndVerifyCleanup(ctx context.Context, plans []*repairPlan, 
 	for _, store := range stores {
 		pod, err := findK8sPodForStore(ctx, plans[0], store, "")
 		if err != nil {
-			return err
+			deployment, ok := logDeploymentForStore(store)
+			if !ok {
+				return err
+			}
+			stdoutf("restart store %s: scale deployment %s to 1 replica\n", store.UUID, deployment)
+			if _, err := runKubectl(ctx, plans[0], "scale", "deployment/"+deployment, "--replicas=1"); err != nil {
+				return fmt.Errorf("scale deployment %s for store %s: %w", deployment, store.UUID, err)
+			}
+			readyPod, err := waitForK8sStorePodReady(ctx, plans[0], store, "", timeout)
+			if err != nil {
+				return err
+			}
+			stdoutf("store %s ready in pod %s\n", store.UUID, readyPod.Metadata.Name)
+			if err := waitForK8sCleanupLogs(ctx, plans, store.UUID, readyPod.Metadata.Name, timeout); err != nil {
+				return err
+			}
+			continue
 		}
 		stdoutf("restart store %s: delete pod %s\n", store.UUID, pod.Metadata.Name)
 		if _, err := runKubectl(ctx, plans[0], "delete", "pod", pod.Metadata.Name); err != nil {
@@ -1823,7 +1839,19 @@ func printK8sRestartInstructionsWithCurrentPods(ctx context.Context, plans []*re
 	for _, store := range stores {
 		pod, err := findK8sPodForStore(ctx, plans[0], store, "")
 		if err != nil {
-			return err
+			deployment, ok := logDeploymentForStore(store)
+			if !ok {
+				return err
+			}
+			kubectl := "kubectl"
+			namespace := plans[0].Namespace
+			if plans[0].K8s != nil && plans[0].K8s.Kubectl != "" {
+				kubectl = plans[0].K8s.Kubectl
+			}
+			stdoutf("- store %s cleanup=%s\n", store.UUID, cleanupReplicasForStore(plans, store.UUID))
+			stdoutf("  %s -n %s scale deployment/%s --replicas=1\n", kubectl, shellQuote(namespace), shellQuote(deployment))
+			stdoutf("  %s -n %s rollout status deployment/%s --timeout=180s\n", kubectl, shellQuote(namespace), shellQuote(deployment))
+			continue
 		}
 		kubectl := "kubectl"
 		namespace := plans[0].Namespace
@@ -2084,6 +2112,14 @@ func appLabelForPod(pod k8sPod) string {
 		return value
 	}
 	return pod.Metadata.Name
+}
+
+func logDeploymentForStore(store planStore) (string, bool) {
+	ordinal, ok := logStoreOrdinal(store.UUID)
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf("log-%d", ordinal), true
 }
 
 func logStoreOrdinal(uuid string) (int, bool) {

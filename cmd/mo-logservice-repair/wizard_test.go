@@ -486,6 +486,13 @@ func TestTargetReplicaHeartbeatProblemsDetectsPendingTarget(t *testing.T) {
 	}
 }
 
+func TestLogDeploymentForStore(t *testing.T) {
+	deployment, ok := logDeploymentForStore(planStore{UUID: "00000000-0000-0000-0000-000000000d01"})
+	if !ok || deployment != "log-1" {
+		t.Fatalf("expected log-1 deployment, got %q ok=%v", deployment, ok)
+	}
+}
+
 func TestBuildK8sActionsIncludesRepairPodAndCleanCommand(t *testing.T) {
 	plan := &repairPlan{
 		Mode:              modeK8s,
