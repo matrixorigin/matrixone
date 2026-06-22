@@ -3856,6 +3856,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				updateSqls,
 				getSqlForRenameTable(databaseName, oldName, newName)...,
 			)
+		case *tree.AlterOptionAlgorithm:
+			// algorithm hint already consumed by ResolveAlterTableAlgorithm
+			alterTable.Actions[i] = nil
+		case *tree.AlterOptionLock:
+			// lock already validated by resolveAndValidateLock
+			alterTable.Actions[i] = nil
+
 		case *tree.AlterOptionAlterCheck, *tree.TableOptionCharset:
 			continue
 

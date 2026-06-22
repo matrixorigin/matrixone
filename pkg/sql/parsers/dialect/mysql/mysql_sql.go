@@ -16458,9 +16458,7 @@ yydefault:
 		var yyLOCAL tree.AlterTableOption
 //line mysql_sql.y:3899
 		{
-			var checkType = yyDollar[1].str
-			var enforce bool
-			yyLOCAL = tree.NewAlterOptionAlterCheck(checkType, enforce)
+			yyLOCAL = tree.NewAlterOptionAlgorithm(yyDollar[3].str)
 		}
 		yyVAL.union = yyLOCAL
 	case 507:
@@ -16500,7 +16498,7 @@ yydefault:
 		var yyLOCAL tree.AlterTableOption
 //line mysql_sql.y:3921
 		{
-			yyLOCAL = tree.NewTableOptionCharset(yyDollar[1].str)
+			yyLOCAL = tree.NewAlterOptionLock(yyDollar[3].str)
 		}
 		yyVAL.union = yyLOCAL
 	case 512:

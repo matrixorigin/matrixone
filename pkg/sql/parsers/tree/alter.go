@@ -93,6 +93,18 @@ func init() {
 		reuse.DefaultOptions[AlterOptionAlterAutoUpdate](), //.
 	) // WithEnableChecker()
 
+	reuse.CreatePool[AlterOptionAlgorithm](
+		func() *AlterOptionAlgorithm { return &AlterOptionAlgorithm{} },
+		func(a *AlterOptionAlgorithm) { a.reset() },
+		reuse.DefaultOptions[AlterOptionAlgorithm](),
+	)
+
+	reuse.CreatePool[AlterOptionLock](
+		func() *AlterOptionLock { return &AlterOptionLock{} },
+		func(a *AlterOptionLock) { a.reset() },
+		reuse.DefaultOptions[AlterOptionLock](),
+	)
+
 	reuse.CreatePool[AlterOptionAdd](
 		func() *AlterOptionAdd { return &AlterOptionAdd{} },
 		func(a *AlterOptionAdd) { a.reset() },
@@ -760,6 +772,10 @@ func (node *AlterTable) reset() {
 				opt.Free()
 			case *TableOptionEncryption:
 				opt.Free()
+			case *AlterOptionAlgorithm:
+				opt.Free()
+			case *AlterOptionLock:
+				opt.Free()
 			default:
 				if opt != nil {
 					panic(fmt.Sprintf("miss Free for %v", option))
@@ -1085,6 +1101,54 @@ func (node AlterOptionAlterCheck) TypeName() string { return "tree.AlterOptionAl
 
 func (node *AlterOptionAlterCheck) reset() {
 	*node = AlterOptionAlterCheck{}
+}
+
+type AlterOptionAlgorithm struct {
+	alterOptionImpl
+	Type string // DEFAULT, INSTANT, INPLACE, COPY
+}
+
+func NewAlterOptionAlgorithm(t string) *AlterOptionAlgorithm {
+	a := reuse.Alloc[AlterOptionAlgorithm](nil)
+	a.Type = t
+	return a
+}
+
+func (node *AlterOptionAlgorithm) Free() { reuse.Free[AlterOptionAlgorithm](node, nil) }
+
+func (node *AlterOptionAlgorithm) Format(ctx *FmtCtx) {
+	ctx.WriteString("algorithm = ")
+	ctx.WriteString(node.Type)
+}
+
+func (node AlterOptionAlgorithm) TypeName() string { return "tree.AlterOptionAlgorithm" }
+
+func (node *AlterOptionAlgorithm) reset() {
+	*node = AlterOptionAlgorithm{}
+}
+
+type AlterOptionLock struct {
+	alterOptionImpl
+	Type string // DEFAULT, NONE, SHARED, EXCLUSIVE
+}
+
+func NewAlterOptionLock(t string) *AlterOptionLock {
+	a := reuse.Alloc[AlterOptionLock](nil)
+	a.Type = t
+	return a
+}
+
+func (node *AlterOptionLock) Free() { reuse.Free[AlterOptionLock](node, nil) }
+
+func (node *AlterOptionLock) Format(ctx *FmtCtx) {
+	ctx.WriteString("lock = ")
+	ctx.WriteString(node.Type)
+}
+
+func (node AlterOptionLock) TypeName() string { return "tree.AlterOptionLock" }
+
+func (node *AlterOptionLock) reset() {
+	*node = AlterOptionLock{}
 }
 
 type AlterOptionAdd struct {

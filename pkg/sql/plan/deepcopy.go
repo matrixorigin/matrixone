@@ -703,6 +703,9 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 			Actions:           make([]*plan.AlterTable_Action, len(df.AlterTable.Actions)),
 		}
 		for i, action := range df.AlterTable.Actions {
+			if action == nil {
+				continue
+			}
 			switch act := action.Action.(type) {
 			case *plan.AlterTable_Action_Drop:
 				AlterTable.Actions[i] = &plan.AlterTable_Action{
