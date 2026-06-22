@@ -144,7 +144,7 @@ alter account test suspend comment 'new comment';
 alter account test admin_name='adminuser';
 drop account test;
 
---Executed in a non moadmin role
+--Executed in a non moadmin role with account all privilege
 drop user if exists al_user_2;
 create user 'al_user_2' identified by '123456';
 create role if not exists al_role2;
