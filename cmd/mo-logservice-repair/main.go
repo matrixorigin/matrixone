@@ -146,6 +146,7 @@ func usage() error {
   mo-logservice-repair hakeeper unblock --addresses host:port[,host:port] --payload JSON
   mo-logservice-repair local import-snapshot --deployment-id ID --node-host-id ID --node-host-dir DIR --raft-address ADDR --replica-id ID --snapshot-dir DIR --members JSON
   mo-logservice-repair local clean-replica --deployment-id ID --node-host-id ID --node-host-dir DIR --raft-address ADDR --gossip-address ADDR --shard-id ID --replica-id ID
+  mo-logservice-repair local clean-shard --deployment-id ID --node-host-id ID --node-host-dir DIR --shard-id ID --replica-ids ID,ID --files-only
   mo-logservice-repair local recover --base DIR --shard ID [--shards ID,ID] [--yes]
   mo-logservice-repair k8s recover --namespace NS --addresses host:port[,host:port] --shard ID [--shards ID,ID] [--execution-mode startup-cleanup|pvc-job] [--resume] [--yes]
   mo-logservice-repair wizard [--mode local|k8s] [--base DIR|--namespace NS] [--shard ID] [--apply]
@@ -191,6 +192,8 @@ func runLocal(args []string) error {
 		return runImportSnapshot(args[1:])
 	case "clean-replica":
 		return runCleanReplica(args[1:])
+	case "clean-shard":
+		return runCleanShard(args[1:])
 	default:
 		return usage()
 	}
@@ -457,6 +460,88 @@ func runCleanReplica(args []string) error {
 		return fmt.Errorf("clean replica: %w", err)
 	}
 	return nil
+}
+
+func runCleanShard(args []string) error {
+	fs := flag.NewFlagSet("local clean-shard", flag.ExitOnError)
+	var deploymentID uint64
+	var nodeHostID string
+	var nodeHostDir string
+	var raftAddress string
+	var listenAddress string
+	var gossipAddress string
+	var shardID uint64
+	var replicaIDs string
+	var rtt uint64
+	var filesOnly bool
+
+	fs.Uint64Var(&deploymentID, "deployment-id", 0, "dragonboat deployment id")
+	fs.StringVar(&nodeHostID, "node-host-id", "", "dragonboat nodehost id")
+	fs.StringVar(&nodeHostDir, "node-host-dir", "", "dragonboat nodehost data dir")
+	fs.StringVar(&raftAddress, "raft-address", "", "raft service address")
+	fs.StringVar(&listenAddress, "listen-address", "", "raft listen address")
+	fs.StringVar(&gossipAddress, "gossip-address", "", "gossip address")
+	fs.Uint64Var(&shardID, "shard-id", 0, "shard id to clean")
+	fs.StringVar(&replicaIDs, "replica-ids", "", "comma-separated planned replica ids to clean in addition to replicas found on disk")
+	fs.Uint64Var(&rtt, "rtt-ms", 200, "dragonboat rtt in milliseconds")
+	fs.BoolVar(&filesOnly, "files-only", false, "offline mode: edit metadata and remove replica files without creating a NodeHost")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	shardIDSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "shard-id" {
+			shardIDSet = true
+		}
+	})
+	if !shardIDSet {
+		return fmt.Errorf("missing -shard-id")
+	}
+	replicas, err := parseOptionalUint64CSV(replicaIDs)
+	if err != nil {
+		return fmt.Errorf("parse -replica-ids: %w", err)
+	}
+	replicas = append(replicas, localShardReplicas(nodeHostDir, deploymentID, shardID)...)
+	replicas = uniqueUint64s(replicas)
+	if len(replicas) == 0 {
+		return printJSON(map[string]any{
+			"nodeHostDir": nodeHostDir,
+			"shardID":     shardID,
+			"cleaned":     []uint64{},
+			"filesOnly":   filesOnly,
+		})
+	}
+	for _, replicaID := range replicas {
+		if err := cleanReplica(deploymentID, nodeHostID, nodeHostDir, raftAddress, listenAddress, gossipAddress, shardID, replicaID, rtt, filesOnly); err != nil {
+			return err
+		}
+	}
+	return printJSON(map[string]any{
+		"nodeHostDir": nodeHostDir,
+		"shardID":     shardID,
+		"cleaned":     replicas,
+		"filesOnly":   filesOnly,
+	})
+}
+
+func parseOptionalUint64CSV(value string) ([]uint64, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(value, ",")
+	ret := make([]uint64, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		id, err := strconv.ParseUint(part, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		ret = append(ret, id)
+	}
+	return ret, nil
 }
 
 func cleanReplica(

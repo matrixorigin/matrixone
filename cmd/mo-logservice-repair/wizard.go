@@ -1929,7 +1929,7 @@ func applyK8sPVCJobRecoveryPlans(ctx context.Context, plans []*repairPlan, opts 
 		stdoutln("step 1: resume with existing HAKeeper repair state")
 	}
 
-	stdoutln("step 2: scale rebuild LogService deployments to 0")
+	stdoutln("step 2: clean rebuild LogService deployments one store at a time")
 	for _, store := range restartStores {
 		deployment, err := k8sDeploymentNameForStore(plans[0], store)
 		if err != nil {
@@ -1942,28 +1942,11 @@ func applyK8sPVCJobRecoveryPlans(ctx context.Context, plans []*repairPlan, opts 
 		if err := waitForK8sStorePodsGone(ctx, plans[0], store, podReadyTimeout); err != nil {
 			return err
 		}
-	}
-
-	stdoutln("step 3: run offline PVC cleanup jobs")
-	for _, store := range restartStores {
 		storeTasks := cleanupTasksForStore(tasks, store.UUID)
 		if len(storeTasks) == 0 {
 			continue
 		}
 		if err := runK8sPVCCleanupJob(ctx, plans[0], store, storeTasks, cleanupTimeout); err != nil {
-			return err
-		}
-	}
-
-	stdoutln("step 4: clear startup cleanup requests while stores remain blocked")
-	if err := refreshRepairStatesWithoutStartupCleanup(ctx, plans, hakeeperTimeout); err != nil {
-		return err
-	}
-
-	stdoutln("step 5: scale cleaned LogService deployments back to 1")
-	for _, store := range restartStores {
-		deployment, err := k8sDeploymentNameForStore(plans[0], store)
-		if err != nil {
 			return err
 		}
 		stdoutf("scale deployment/%s to 1 for store %s\n", deployment, store.UUID)
@@ -1975,6 +1958,11 @@ func applyK8sPVCJobRecoveryPlans(ctx context.Context, plans []*repairPlan, opts 
 			return err
 		}
 		stdoutf("store %s ready in pod %s\n", store.UUID, pod.Metadata.Name)
+	}
+
+	stdoutln("step 3: clear startup cleanup requests after all cleaned stores are running")
+	if err := refreshRepairStatesWithoutStartupCleanup(ctx, plans, hakeeperTimeout); err != nil {
+		return err
 	}
 
 	return finishK8sPVCJobRecovery(ctx, plans, hakeeperTimeout, heartbeatTimeout)
@@ -2753,28 +2741,57 @@ func k8sCleanupJobScript(plan *repairPlan, store planStore, tasks []cleanupTask)
 		"set -eu",
 		fmt.Sprintf("echo %s", shellQuote("starting offline PVC cleanup for store "+store.UUID)),
 	}
+	tasksByShard := make(map[uint64][]cleanupTask)
+	shardIDs := make([]uint64, 0)
 	for _, task := range tasks {
-		nodeHostDir := task.Store.NodeHostDir
-		if nodeHostDir == "" {
-			nodeHostDir = filepath.Join(plan.K8s.PVCLogServiceDataDir, task.Store.UUID)
+		if len(tasksByShard[task.Plan.ShardID]) == 0 {
+			shardIDs = append(shardIDs, task.Plan.ShardID)
 		}
+		tasksByShard[task.Plan.ShardID] = append(tasksByShard[task.Plan.ShardID], task)
+	}
+	sort.Slice(shardIDs, func(i, j int) bool { return shardIDs[i] < shardIDs[j] })
+	nodeHostDir := store.NodeHostDir
+	if nodeHostDir == "" {
+		nodeHostDir = filepath.Join(plan.K8s.PVCLogServiceDataDir, store.UUID)
+	}
+	for _, shardID := range shardIDs {
+		shardTasks := tasksByShard[shardID]
+		replicas := make([]uint64, 0, len(shardTasks))
+		for _, task := range shardTasks {
+			replicas = append(replicas, task.ReplicaID)
+		}
+		replicas = uniqueUint64s(replicas)
 		lines = append(lines,
-			fmt.Sprintf("echo %s", shellQuote(fmt.Sprintf("clean shard %d replica %d", task.Plan.ShardID, task.ReplicaID))),
+			fmt.Sprintf("echo %s", shellQuote(fmt.Sprintf("clean shard %d planned replicas %v plus replicas found on PVC", shardID, replicas))),
 			strings.Join([]string{
 				shellQuote(plan.K8s.RepairBinary),
-				"local", "clean-replica",
+				"local", "clean-shard",
 				"--files-only",
 				"--deployment-id", strconv.FormatUint(plan.K8s.DeploymentID, 10),
-				"--node-host-id", shellQuote(task.Store.UUID),
+				"--node-host-id", shellQuote(store.UUID),
 				"--node-host-dir", shellQuote(nodeHostDir),
-				"--shard-id", strconv.FormatUint(task.Plan.ShardID, 10),
-				"--replica-id", strconv.FormatUint(task.ReplicaID, 10),
+				"--shard-id", strconv.FormatUint(shardID, 10),
+				"--replica-ids", shellQuote(joinUint64sCSV(replicas)),
 			}, " "),
 		)
-		lines = append(lines, k8sReplicaAbsentChecks(nodeHostDir, plan.K8s.DeploymentID, task.Plan.ShardID, task.ReplicaID)...)
+		for _, replicaID := range replicas {
+			lines = append(lines, k8sReplicaAbsentChecks(nodeHostDir, plan.K8s.DeploymentID, shardID, replicaID)...)
+		}
+		lines = append(lines, k8sShardAbsentCheck(nodeHostDir, plan.K8s.DeploymentID, shardID))
 	}
 	lines = append(lines, "echo offline PVC cleanup complete")
 	return strings.Join(lines, "\n")
+}
+
+func joinUint64sCSV(values []uint64) string {
+	if len(values) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.FormatUint(value, 10))
+	}
+	return strings.Join(parts, ",")
 }
 
 func k8sReplicaAbsentChecks(nodeHostDir string, deploymentID uint64, shardID uint64, replicaID uint64) []string {
@@ -2794,6 +2811,16 @@ func k8sReplicaAbsentChecks(nodeHostDir string, deploymentID uint64, shardID uin
 		))
 	}
 	return lines
+}
+
+func k8sShardAbsentCheck(nodeHostDir string, deploymentID uint64, shardID uint64) string {
+	deploymentDir := fmt.Sprintf("%020d", deploymentID)
+	pattern := filepath.Join(nodeHostDir, "*", deploymentDir, "tandb", fmt.Sprintf("node-%d-*", shardID))
+	return fmt.Sprintf("if find %s -path %s -print -quit 2>/dev/null | grep -q .; then echo %s; exit 1; fi",
+		shellQuote(nodeHostDir),
+		shellQuote(pattern),
+		shellQuote(fmt.Sprintf("cleanup verification failed: shard %d still has local replicas", shardID)),
+	)
 }
 
 func runKubectlApplyYAML(ctx context.Context, plan *repairPlan, yaml string) error {

@@ -608,13 +608,15 @@ func TestK8sCleanupJobScriptUsesFilesOnlyAndVerifiesPaths(t *testing.T) {
 	task := cleanupTask{Plan: &repairPlan{ShardID: 1}, Store: store, ReplicaID: 262150}
 	script := k8sCleanupJobScript(plan, store, []cleanupTask{task})
 	for _, want := range []string{
-		"/tmp/mo-logservice-repair' local clean-replica --files-only",
+		"/tmp/mo-logservice-repair' local clean-shard --files-only",
 		"--node-host-id '00000000-0000-0000-0000-000000000d03'",
-		"--replica-id 262150",
+		"--replica-ids '262150'",
 		"find '/repair-pvc/logservice-data/00000000-0000-0000-0000-000000000d03' -path",
 		"node-1-262150",
+		"node-1-*",
 		"snapshot-1-262150",
 		"replica-262150",
+		"shard 1 still has local replicas",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("expected %q in script:\n%s", want, script)
