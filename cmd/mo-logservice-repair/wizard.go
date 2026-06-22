@@ -56,6 +56,7 @@ type wizardOptions struct {
 	moServicePath        string
 	namespace            string
 	kubeContext          string
+	kubectlPath          string
 	k8sLogSelector       string
 	pvcMountPath         string
 	pvcDataDir           string
@@ -63,6 +64,7 @@ type wizardOptions struct {
 	repairBinary         string
 	deploymentID         uint64
 	manualServiceControl bool
+	autoRestartPods      bool
 }
 
 type repairPlan struct {
@@ -339,7 +341,13 @@ func runRecover(mode string, args []string) error {
 		stdoutf("plan bundle written to %s\n", opts.output)
 	}
 	if !opts.yes {
-		ok, err := askYesNo("Proceed with online recovery; the CLI will not backup, stop, or start LogService", false)
+		prompt := "Proceed with online recovery; the CLI will not backup LogService data"
+		if opts.mode == modeLocal || opts.manualServiceControl || !opts.autoRestartPods {
+			prompt += " and expects you to stop/start listed LogService pods/processes"
+		} else {
+			prompt += " and will restart listed LogService pods one by one"
+		}
+		ok, err := askYesNo(prompt, false)
 		if err != nil {
 			return err
 		}
@@ -419,6 +427,7 @@ func parseWizardFlags(name string, args []string) (wizardOptions, error) {
 	fs.StringVar(&opts.moServicePath, "mo-service", "", "mo-service binary path used when restarting local stores")
 	fs.StringVar(&opts.namespace, "namespace", "", "kubernetes namespace")
 	fs.StringVar(&opts.kubeContext, "context", "", "kubernetes context")
+	fs.StringVar(&opts.kubectlPath, "kubectl", "", "kubectl binary path")
 	fs.StringVar(&opts.k8sLogSelector, "k8s-log-selector", "app.kubernetes.io/component=logservice", "kubernetes selector used to list LogService pods")
 	fs.StringVar(&opts.pvcMountPath, "pvc-mount-path", "/repair-pvc", "mount path used by the temporary k8s repair pod")
 	fs.StringVar(&opts.pvcDataDir, "pvc-logservice-data-dir", "", "logservice-data directory inside the temporary k8s repair pod")
@@ -426,6 +435,7 @@ func parseWizardFlags(name string, args []string) (wizardOptions, error) {
 	fs.StringVar(&opts.repairBinary, "repair-binary", "/tmp/mo-logservice-repair", "mo-logservice-repair path inside the temporary repair pod")
 	fs.Uint64Var(&opts.deploymentID, "deployment-id", 0, "dragonboat deployment id; required for exact k8s PVC clean-replica commands")
 	fs.BoolVar(&opts.manualServiceControl, "manual-service-control", false, "do not stop or restart local mo-service processes; require the operator to do it")
+	fs.BoolVar(&opts.autoRestartPods, "auto-restart-pods", false, "k8s mode only: let this CLI delete LogService pods during recovery")
 	if err := fs.Parse(args); err != nil {
 		return opts, err
 	}
@@ -587,7 +597,7 @@ func buildK8sRepairPlan(opts wizardOptions) (*repairPlan, error) {
 	if opts.namespace == "" {
 		return nil, fmt.Errorf("--namespace is required for k8s mode")
 	}
-	kubectl := kubectlCommand(opts.kubeContext)
+	kubectl := kubectlCommand(opts.kubectlPath, opts.kubeContext)
 	if opts.pvcMountPath == "" {
 		opts.pvcMountPath = "/repair-pvc"
 	}
@@ -620,8 +630,8 @@ func buildK8sRepairPlan(opts wizardOptions) (*repairPlan, error) {
 			DeploymentIDRequired: opts.deploymentID == 0,
 		},
 		Warnings: []string{
-			"k8s recover writes HAKeeper repair state only; it does not back up PVCs or stop/start pods",
-			"restart the listed LogService pods after repair state is written; LogService cleans requested replicas on startup",
+			"k8s recover writes HAKeeper repair state only; it does not back up PVCs",
+			"k8s recover prints exact pod restart commands and waits for startup cleanup logs before unblock",
 		},
 	}
 	if len(plan.HAKeeperAddresses) == 0 {
@@ -1533,10 +1543,27 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 			stdoutln("step 5: start listed LogService stores outside this CLI")
 			printRestartInstructions(plans, restartStores)
 		} else {
-			stdoutln("step 2: restart listed LogService stores outside this CLI")
-			printRestartInstructions(plans, restartStores)
+			if opts.manualServiceControl || !opts.autoRestartPods {
+				stdoutln("step 2: restart listed LogService stores outside this CLI")
+				if plans[0].Mode == modeK8s {
+					if err := printK8sRestartInstructionsWithCurrentPods(ctx, plans, restartStores); err != nil {
+						return err
+					}
+				} else {
+					printRestartInstructions(plans, restartStores)
+				}
+			} else {
+				stdoutln("step 2: restart listed LogService pods one by one")
+				if err := restartK8sStoresAndVerifyCleanup(ctx, plans, restartStores, timeout); err != nil {
+					return err
+				}
+			}
 		}
-		if !opts.yes {
+		autoRestartedK8s := plans[0].Mode == modeK8s && opts.autoRestartPods && !opts.manualServiceControl
+		if plans[0].Mode == modeK8s && !autoRestartedK8s && opts.yes {
+			return fmt.Errorf("manual pod restart is required before unblock; rerun without --yes, or pass --auto-restart-pods to let the CLI delete pods")
+		}
+		if !autoRestartedK8s && !opts.yes {
 			line, err := askLine("After all listed LogService pods/processes have restarted, type DONE")
 			if err != nil {
 				return err
@@ -1551,6 +1578,11 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 		}
 		if err := verifyOnlineCleanupComplete(plans); err != nil {
 			return err
+		}
+		if plans[0].Mode == modeK8s && !autoRestartedK8s {
+			if err := verifyK8sCleanupLogsAfterManualRestart(ctx, plans, restartStores, timeout); err != nil {
+				return err
+			}
 		}
 	} else {
 		stdoutln("step 2: no LogService restart is required by this plan")
@@ -1662,6 +1694,301 @@ func verifyOnlineCleanupComplete(plans []*repairPlan) error {
 		"local cleanup did not finish; refusing to unblock cleaned stores:\n%s\nRestart the listed LogService stores again, or clean the listed replicas manually, then rerun recover/apply",
 		strings.Join(messages, "\n"),
 	)
+}
+
+type k8sPodList struct {
+	Items []k8sPod `json:"items"`
+}
+
+type k8sPod struct {
+	Metadata k8sPodMetadata `json:"metadata"`
+	Status   k8sPodStatus   `json:"status"`
+}
+
+type k8sPodMetadata struct {
+	Name   string            `json:"name"`
+	Labels map[string]string `json:"labels"`
+}
+
+type k8sPodStatus struct {
+	Phase      string            `json:"phase"`
+	Conditions []k8sPodCondition `json:"conditions"`
+}
+
+type k8sPodCondition struct {
+	Type   string `json:"type"`
+	Status string `json:"status"`
+}
+
+func restartK8sStoresAndVerifyCleanup(ctx context.Context, plans []*repairPlan, stores []planStore, timeout time.Duration) error {
+	if len(plans) == 0 {
+		return nil
+	}
+	for _, store := range stores {
+		pod, err := findK8sPodForStore(ctx, plans[0], store, "")
+		if err != nil {
+			return err
+		}
+		stdoutf("restart store %s: delete pod %s\n", store.UUID, pod.Metadata.Name)
+		if _, err := runKubectl(ctx, plans[0], "delete", "pod", pod.Metadata.Name); err != nil {
+			return fmt.Errorf("delete pod %s for store %s: %w", pod.Metadata.Name, store.UUID, err)
+		}
+		readyPod, err := waitForK8sStorePodReady(ctx, plans[0], store, pod.Metadata.Name, timeout)
+		if err != nil {
+			return err
+		}
+		stdoutf("store %s ready in pod %s\n", store.UUID, readyPod.Metadata.Name)
+		if err := waitForK8sCleanupLogs(ctx, plans, store.UUID, readyPod.Metadata.Name, timeout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func printK8sRestartInstructionsWithCurrentPods(ctx context.Context, plans []*repairPlan, stores []planStore) error {
+	if len(plans) == 0 {
+		return nil
+	}
+	stdoutln("Run these pod restart commands in another shell, one store at a time:")
+	for _, store := range stores {
+		pod, err := findK8sPodForStore(ctx, plans[0], store, "")
+		if err != nil {
+			return err
+		}
+		kubectl := "kubectl"
+		namespace := plans[0].Namespace
+		if plans[0].K8s != nil && plans[0].K8s.Kubectl != "" {
+			kubectl = plans[0].K8s.Kubectl
+		}
+		stdoutf("- store %s cleanup=%s\n", store.UUID, cleanupReplicasForStore(plans, store.UUID))
+		stdoutf("  %s -n %s delete pod %s\n", kubectl, shellQuote(namespace), shellQuote(pod.Metadata.Name))
+		stdoutf("  %s -n %s wait --for=condition=Ready pod -l app=%s --timeout=120s\n",
+			kubectl,
+			shellQuote(namespace),
+			shellQuote(appLabelForPod(pod)),
+		)
+	}
+	return nil
+}
+
+func verifyK8sCleanupLogsAfterManualRestart(ctx context.Context, plans []*repairPlan, stores []planStore, timeout time.Duration) error {
+	if len(plans) == 0 {
+		return nil
+	}
+	stdoutln("step 6: verify startup cleanup logs")
+	for _, store := range stores {
+		pod, err := waitForK8sStorePodReady(ctx, plans[0], store, "", timeout)
+		if err != nil {
+			return err
+		}
+		if err := waitForK8sCleanupLogs(ctx, plans, store.UUID, pod.Metadata.Name, timeout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func waitForK8sStorePodReady(ctx context.Context, plan *repairPlan, store planStore, oldPodName string, timeout time.Duration) (k8sPod, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		pod, err := findK8sPodForStore(ctx, plan, store, oldPodName)
+		if err == nil && isK8sPodReady(pod) {
+			return pod, nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+		time.Sleep(time.Second)
+	}
+	pod, err := findK8sPodForStore(ctx, plan, store, "")
+	if err == nil && isK8sPodReady(pod) {
+		return pod, nil
+	}
+	if lastErr != nil {
+		return k8sPod{}, fmt.Errorf("wait for store %s pod ready: %w", store.UUID, lastErr)
+	}
+	return k8sPod{}, fmt.Errorf("timeout waiting for store %s pod to become Ready", store.UUID)
+}
+
+func waitForK8sCleanupLogs(ctx context.Context, plans []*repairPlan, storeUUID string, podName string, timeout time.Duration) error {
+	replicas := cleanupReplicasForStoreIDs(plans, storeUUID)
+	if len(replicas) == 0 {
+		return nil
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		out, err := runKubectl(ctx, plans[0], "logs", podName, "--since=5m", "--tail=300")
+		if err == nil && k8sCleanupLogsContainReplicas(out, replicas) {
+			stdoutf("store %s cleanup confirmed in pod %s\n", storeUUID, podName)
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+	return fmt.Errorf(
+		"timeout waiting for cleanup logs in pod %s for store %s replicas %v; refusing to unblock this store",
+		podName,
+		storeUUID,
+		replicas,
+	)
+}
+
+func k8sCleanupLogsContainReplicas(logs string, replicas []uint64) bool {
+	for _, replicaID := range replicas {
+		if !strings.Contains(logs, "clean local log replica requested by HAKeeper repair state") ||
+			!strings.Contains(logs, strconv.FormatUint(replicaID, 10)) {
+			return false
+		}
+	}
+	return true
+}
+
+func cleanupReplicasForStoreIDs(plans []*repairPlan, storeUUID string) []uint64 {
+	replicas := make([]uint64, 0)
+	for _, plan := range plans {
+		for _, store := range plan.Stores {
+			if store.UUID == storeUUID {
+				replicas = append(replicas, store.CleanupReplicas...)
+			}
+		}
+	}
+	return uniqueUint64s(replicas)
+}
+
+func findK8sPodForStore(ctx context.Context, plan *repairPlan, store planStore, skipPodName string) (k8sPod, error) {
+	selectors := k8sSelectorsForStore(plan, store)
+	seen := make(map[string]bool)
+	for _, selector := range selectors {
+		if seen[selector] {
+			continue
+		}
+		seen[selector] = true
+		pods, err := listK8sPods(ctx, plan, selector)
+		if err != nil {
+			return k8sPod{}, err
+		}
+		for _, pod := range pods {
+			if pod.Metadata.Name == skipPodName {
+				continue
+			}
+			if k8sPodMatchesStore(pod, store) {
+				return pod, nil
+			}
+		}
+	}
+	return k8sPod{}, fmt.Errorf("cannot find LogService pod for store %s", store.UUID)
+}
+
+func k8sSelectorsForStore(plan *repairPlan, store planStore) []string {
+	ret := make([]string, 0, 3)
+	if ordinal, ok := logStoreOrdinal(store.UUID); ok {
+		ret = append(ret, fmt.Sprintf("app=log-%d", ordinal))
+	}
+	if plan.K8s != nil && plan.K8s.LogSelector != "" {
+		ret = append(ret, plan.K8s.LogSelector)
+	}
+	ret = append(ret, "")
+	return ret
+}
+
+func listK8sPods(ctx context.Context, plan *repairPlan, selector string) ([]k8sPod, error) {
+	args := []string{"get", "pod", "-o", "json"}
+	if selector != "" {
+		args = append(args, "-l", selector)
+	}
+	out, err := runKubectl(ctx, plan, args...)
+	if err != nil {
+		return nil, err
+	}
+	var pods k8sPodList
+	if err := json.Unmarshal([]byte(out), &pods); err != nil {
+		return nil, fmt.Errorf("parse kubectl pod JSON: %w", err)
+	}
+	return pods.Items, nil
+}
+
+func k8sPodMatchesStore(pod k8sPod, store planStore) bool {
+	candidates := []string{pod.Metadata.Name}
+	for key, value := range pod.Metadata.Labels {
+		candidates = append(candidates, key, value)
+	}
+	if ordinal, ok := logStoreOrdinal(store.UUID); ok {
+		needle := fmt.Sprintf("log-%d", ordinal)
+		for _, candidate := range candidates {
+			if strings.Contains(candidate, needle) {
+				return true
+			}
+		}
+	}
+	short := shortStoreID(store.UUID)
+	for _, candidate := range candidates {
+		if strings.Contains(candidate, store.UUID) || strings.Contains(candidate, short) {
+			return true
+		}
+	}
+	return false
+}
+
+func isK8sPodReady(pod k8sPod) bool {
+	if pod.Status.Phase != "Running" {
+		return false
+	}
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == "Ready" && condition.Status == "True" {
+			return true
+		}
+	}
+	return false
+}
+
+func appLabelForPod(pod k8sPod) string {
+	if value := pod.Metadata.Labels["app"]; value != "" {
+		return value
+	}
+	return pod.Metadata.Name
+}
+
+func logStoreOrdinal(uuid string) (int, bool) {
+	short := shortStoreID(uuid)
+	idx := strings.LastIndex(short, "d")
+	if idx < 0 || idx == len(short)-1 {
+		return 0, false
+	}
+	value, err := strconv.Atoi(short[idx+1:])
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+func runKubectl(ctx context.Context, plan *repairPlan, args ...string) (string, error) {
+	kubectl := "kubectl"
+	namespace := ""
+	if plan != nil {
+		namespace = plan.Namespace
+		if plan.K8s != nil && plan.K8s.Kubectl != "" {
+			kubectl = plan.K8s.Kubectl
+		}
+	}
+	fullArgs := make([]string, 0, len(args)+2)
+	if namespace != "" {
+		fullArgs = append(fullArgs, "-n", namespace)
+	}
+	fullArgs = append(fullArgs, args...)
+	cmd := exec.CommandContext(ctx, "sh", "-c", kubectl+" "+shellJoin(fullArgs))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("%s %s: %w\n%s", kubectl, strings.Join(fullArgs, " "), err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
+func shellJoin(args []string) string {
+	parts := make([]string, 0, len(args))
+	for _, arg := range args {
+		parts = append(parts, shellQuote(arg))
+	}
+	return strings.Join(parts, " ")
 }
 
 func cleanupTasksForPlansAllStores(plans []*repairPlan) []cleanupTask {
@@ -2908,11 +3235,12 @@ func uniqueUint64s(values []uint64) []uint64 {
 	return out
 }
 
-func kubectlCommand(kubeContext string) string {
+func kubectlCommand(kubectlPath string, kubeContext string) string {
+	kubectl := firstNonEmpty(kubectlPath, "kubectl")
 	if kubeContext == "" {
-		return "kubectl"
+		return shellQuote(kubectl)
 	}
-	return "kubectl --context " + shellQuote(kubeContext)
+	return shellQuote(kubectl) + " --context " + shellQuote(kubeContext)
 }
 
 func shortStoreID(uuid string) string {
