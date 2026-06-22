@@ -140,7 +140,7 @@ func run(args []string) error {
 }
 
 func usage() error {
-	return fmt.Errorf(`usage:
+	return usageError(`usage:
   mo-logservice-repair hakeeper state --addresses host:port[,host:port]
   mo-logservice-repair hakeeper repair --addresses host:port[,host:port] --payload JSON
   mo-logservice-repair hakeeper unblock --addresses host:port[,host:port] --payload JSON
@@ -156,6 +156,12 @@ func usage() error {
 
 The wizard/plan/apply commands are operator-oriented wrappers. Low-level
 hakeeper/local commands remain available for manual repair.`)
+}
+
+type usageError string
+
+func (e usageError) Error() string {
+	return string(e)
 }
 
 func runK8s(args []string) error {

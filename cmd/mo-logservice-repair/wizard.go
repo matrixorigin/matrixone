@@ -1625,7 +1625,7 @@ func verifyLocalStoresStopped(stores []planStore) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"LogService processes are still running; refusing to clean local replica data:\n%s\nStop the listed processes, then rerun recover/apply.",
+		"LogService processes are still running; refusing to clean local replica data:\n%s\nStop the listed processes, then rerun recover/apply",
 		strings.Join(messages, "\n"),
 	)
 }
@@ -1659,7 +1659,7 @@ func verifyOnlineCleanupComplete(plans []*repairPlan) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"local cleanup did not finish; refusing to unblock cleaned stores:\n%s\nRestart the listed LogService stores again, or clean the listed replicas manually, then rerun recover/apply.",
+		"local cleanup did not finish; refusing to unblock cleaned stores:\n%s\nRestart the listed LogService stores again, or clean the listed replicas manually, then rerun recover/apply",
 		strings.Join(messages, "\n"),
 	)
 }
@@ -2924,107 +2924,6 @@ func shortStoreID(uuid string) string {
 		return uuid
 	}
 	return uuid[len(uuid)-8:]
-}
-
-func k8sNameSafe(value string) string {
-	value = strings.ToLower(value)
-	replacer := strings.NewReplacer("_", "-", ".", "-", ":", "-")
-	value = replacer.Replace(value)
-	var b strings.Builder
-	lastDash := false
-	for _, r := range value {
-		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
-		if ok {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-	return strings.Trim(b.String(), "-")
-}
-
-func k8sRepairPodName(storeUUID string) string {
-	name := "mo-logservice-repair-" + k8sNameSafe(shortStoreID(storeUUID))
-	if len(name) > 63 {
-		return name[:63]
-	}
-	return name
-}
-
-func k8sStorePVCPlaceholder(storeUUID string) string {
-	return "<pvc-name-for-" + shortStoreID(storeUUID) + ">"
-}
-
-func k8sRepairPodManifestCommand(kubectl string, namespace string, podName string, pvcName string, settings *k8sPlanSettings) string {
-	image := "matrixorigin/matrixone:latest"
-	mountPath := "/repair-pvc"
-	if settings != nil {
-		image = firstNonEmpty(settings.RepairImage, image)
-		mountPath = firstNonEmpty(settings.PVCMountPath, mountPath)
-	}
-	return fmt.Sprintf(`cat <<'YAML' >/tmp/%s.yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: %s
-spec:
-  restartPolicy: Never
-  containers:
-  - name: repair
-    image: %s
-    command: ["sleep", "36000"]
-    volumeMounts:
-    - name: logservice-data
-      mountPath: %s
-  volumes:
-  - name: logservice-data
-    persistentVolumeClaim:
-      claimName: %s
-YAML
-%s -n %s apply -f /tmp/%s.yaml
-%s -n %s wait --for=condition=Ready pod/%s --timeout=120s`,
-		podName,
-		podName,
-		image,
-		mountPath,
-		pvcName,
-		kubectl,
-		shellQuote(namespace),
-		podName,
-		kubectl,
-		shellQuote(namespace),
-		shellQuote(podName),
-	)
-}
-
-func k8sCleanReplicaCommand(kubectl string, namespace string, repairPod string, settings *k8sPlanSettings, store planStore, shardID uint64, replicaID uint64) string {
-	binary := "/tmp/mo-logservice-repair"
-	deploymentID := "<deployment-id>"
-	if settings != nil {
-		binary = firstNonEmpty(settings.RepairBinary, binary)
-		if settings.DeploymentID != 0 {
-			deploymentID = strconv.FormatUint(settings.DeploymentID, 10)
-		}
-	}
-	raftAddress := firstNonEmpty(store.RaftAddress, "127.0.0.1:19000")
-	listenAddress := firstNonEmpty(store.ListenAddress, raftAddress)
-	gossipAddress := firstNonEmpty(store.GossipAddress, "127.0.0.1:19002")
-	command := fmt.Sprintf("%s local clean-replica --deployment-id %s --node-host-id %s --node-host-dir %s --raft-address %s --listen-address %s --gossip-address %s --shard-id %d --replica-id %d",
-		shellQuote(binary),
-		deploymentID,
-		shellQuote(store.UUID),
-		shellQuote(store.NodeHostDir),
-		shellQuote(raftAddress),
-		shellQuote(listenAddress),
-		shellQuote(gossipAddress),
-		shardID,
-		replicaID,
-	)
-	return fmt.Sprintf("%s -n %s exec %s -- sh -c %s", kubectl, shellQuote(namespace), shellQuote(repairPod), shellQuote(command))
 }
 
 func shellQuote(s string) string {
