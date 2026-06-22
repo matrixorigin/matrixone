@@ -10,6 +10,8 @@
 --   * vecf64 column                — cuvs has no float64; only VECF32 allowed
 --   * QUANTIZATION 'float64'       — cuvs quantization is f32/f16/int8/uint8 only
 --   * QUANTIZATION 'bf16'          — no GPU bfloat16 storage; must not silent-fallback to f32
+--   * int8/uint8 + ip/cosine       — affine quantizer breaks dot-product/angle (L2-only)
+--   * REINDEX to a CREATE-rejected quantization (int8+ip, bf16) — guarded too
 --   * dimension mismatch at search — query dim must equal the column dim
 -- =====================================================================
 
@@ -68,5 +70,30 @@ create index ixbf using ivfpq on tbf (v) op_type 'vector_l2_ops' lists=2 m=8 bit
 create table th (id bigint primary key, v vecf16(8));
 create index ixup using cagra on th (v) op_type 'vector_l2_ops' QUANTIZATION 'float32';
 create index ixup using ivfpq on th (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8 QUANTIZATION 'float32';
+
+-- int8/uint8 QUANTIZATION is L2-only. The scalar quantizer applies a per-element
+-- affine map q(x)=scalar*x+offset; the constant offset is a translation that
+-- cancels in an L2 difference but NOT in a dot product (biases IP by component
+-- sum) or norm (rotates cosine angles). So int8/uint8 + inner-product / cosine
+-- returns wrong rankings and is rejected. (L2 is fine; the scale is corrected
+-- on search.)
+create index ixqi using cagra on t (v) op_type 'vector_ip_ops' QUANTIZATION 'int8';
+create index ixqi using cagra on t (v) op_type 'vector_cosine_ops' QUANTIZATION 'int8';
+create index ixqi using ivfpq on t (v) op_type 'vector_ip_ops' lists=2 m=8 bits_per_code=8 QUANTIZATION 'uint8';
+
+-- REINDEX must not be able to set a quantization that CREATE INDEX would refuse.
+-- Build a valid f32 inner-product index (on its own table — t already has a
+-- CAGRA index on v, and two CAGRA indexes may not share a column), then REINDEX
+-- to int8 (rejected: int8 + IP) and to bf16 (rejected: no GPU bf16 storage).
+create table tre (id bigint primary key, v vecf32(8));
+insert into tre values
+    (1, '[1,1,1,1,1,1,1,1]'), (2, '[2,2,2,2,2,2,2,2]'), (3, '[3,3,3,3,3,3,3,3]'),
+    (4, '[4,4,4,4,4,4,4,4]'), (5, '[5,5,5,5,5,5,5,5]'), (6, '[6,6,6,6,6,6,6,6]'),
+    (7, '[7,7,7,7,7,7,7,7]'), (8, '[8,8,8,8,8,8,8,8]'), (9, '[9,9,9,9,9,9,9,9]'),
+    (10, '[10,10,10,10,10,10,10,10]');
+create index ixre using cagra on tre (v) op_type 'vector_ip_ops'
+    intermediate_graph_degree=8 graph_degree=4 itopk_size=16;
+alter table tre alter reindex ixre cagra QUANTIZATION 'int8';
+alter table tre alter reindex ixre cagra QUANTIZATION 'bf16';
 
 drop database gpu_negative;

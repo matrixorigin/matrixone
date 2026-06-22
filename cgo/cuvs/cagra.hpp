@@ -1059,7 +1059,7 @@ public:
             }
         }
 
-        transform_distance(this->metric, search_res.distances);
+        transform_distance(this->metric, search_res.distances, this->quantized_l2_dequant_factor());
         return search_res;
     }
 
@@ -1353,7 +1353,7 @@ public:
             }
         }
 
-        transform_distance(this->metric, search_res.distances);
+        transform_distance(this->metric, search_res.distances, this->quantized_l2_dequant_factor());
         return search_res;
     }
 

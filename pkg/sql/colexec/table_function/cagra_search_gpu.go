@@ -228,10 +228,20 @@ func (u *cagraSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 		u.idxcfg.CuvsCagra.Dimensions = uint(faVec.GetType().Width)
 		u.idxcfg.Type = vectorindex.CAGRA
 
+		// The query vector type must equal the index's base column type. The
+		// planner pushdown normally forces this, but the table function has no
+		// other guard: without it a mismatched query (e.g. a vecf16 query against
+		// an f32-base/f32-storage index) would drive the f32->f16 storage override
+		// below and runCagraSearchHalf off the QUERY type and deserialize the
+		// on-disk index with the wrong storage type. Mirrors the CPU ivf_search guard.
+		if int32(faVec.GetType().Oid) != u.tblcfg.KeyPartType {
+			return moerr.NewInvalidInput(proc.Ctx, "query vector type does not match the index base column type")
+		}
+
 		// A vecf16 base with no QUANTIZATION stores natively as half: derive the
-		// storage qtype from the (f16) query/base type so newCagraAlgo dispatches
+		// storage qtype from the (f16) base type so newCagraAlgo dispatches
 		// NewCagraSearch[cuvs.Float16]. (vecf16 + QUANTIZATION keeps int8/uint8.)
-		if faVec.GetType().Oid == types.T_array_float16 &&
+		if types.T(u.tblcfg.KeyPartType) == types.T_array_float16 &&
 			metric.QuantizationType(u.idxcfg.CuvsCagra.Quantization) == metric.Quantization_F32 {
 			u.idxcfg.CuvsCagra.Quantization = uint16(metric.Quantization_F16)
 		}

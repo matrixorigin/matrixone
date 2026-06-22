@@ -330,27 +330,37 @@ inline void fill_all_sentinel(NeighborT* neighbors, float* distances,
     std::fill_n(distances, count, std::numeric_limits<float>::max());
 }
 
-// InnerProduct sign flip on the search result's distances. cuvs returns
-// inner-product distances negated (so smaller is "closer") — we flip back so
-// downstream callers see the true inner product. ±FLT_MAX sentinels are
-// preserved (they mark padded / filtered-out slots from scatter_with_padding
-// or fill_all_sentinel above). No-op for any other metric.
+// Post-process a search result's distances in place:
+//   - InnerProduct: flip the sign. cuvs returns inner-product distances negated
+//     (so smaller is "closer"); we flip back so callers see the true IP.
+//   - quantized L2 (dequant_factor != 1): rescale the quantized-domain distance
+//     back to the base (f32) scale, so a 1-byte (int8/uint8) main index merges
+//     on the same scale as the base-typed CDC overflow brute force. The factor
+//     comes from quantized_l2_dequant_factor() (1/scalar^2 for squared L2). IP
+//     and L2-dequant are mutually exclusive — IP/cosine + int8/uint8 is rejected
+//     at plan time (an affine quantizer is not a pure rescale for IP/cosine).
+// ±FLT_MAX sentinels (padded / filtered-out slots from scatter_with_padding or
+// fill_all_sentinel above) are preserved. No-op for plain f32/f16 L2.
 inline void transform_distance(distance_type_t metric,
-                               float* distances, size_t count) {
-    if (metric != DistanceType_InnerProduct) return;
+                               float* distances, size_t count,
+                               double dequant_factor = 1.0) {
+    const bool flip    = (metric == DistanceType_InnerProduct);
+    const bool rescale = (dequant_factor != 1.0);
+    if (!flip && !rescale) return;
     const float kSentinel = std::numeric_limits<float>::max();
     for (size_t i = 0; i < count; ++i) {
-        if (distances[i] != kSentinel && distances[i] != -kSentinel) {
-            distances[i] *= -1.0f;
-        }
+        if (distances[i] == kSentinel || distances[i] == -kSentinel) continue;
+        if (flip) distances[i] *= -1.0f;
+        else      distances[i] = static_cast<float>(static_cast<double>(distances[i]) * dequant_factor);
     }
 }
 
 // Convenience overload for the persistent-index path where distances live in
 // a std::vector. Same semantics as the (float*, size_t) form.
 inline void transform_distance(distance_type_t metric,
-                               std::vector<float>& distances) {
-    transform_distance(metric, distances.data(), distances.size());
+                               std::vector<float>& distances,
+                               double dequant_factor = 1.0) {
+    transform_distance(metric, distances.data(), distances.size(), dequant_factor);
 }
 
 /**
@@ -496,6 +506,42 @@ public:
             return info;
         }
         return it->second;
+    }
+
+    // Factor that rescales a quantized-domain L2 distance back to the base (f32)
+    // scale, for transform_distance(). For 1-byte storage (int8/uint8) the index
+    // computes L2 over the quantized vectors, where each element is
+    // q(x)=scalar*x+offset with scalar=255/(max-min); the per-element offset is a
+    // constant translation that cancels in a difference, so
+    // ||q(a)-q(b)||^2 = scalar^2*||a-b||^2 (and scalar*||a-b|| for the sqrt
+    // metrics). Returning 1/scalar^2 (resp. 1/scalar) undoes that, so a quantized
+    // main-index distance lands on the SAME scale as the base-typed CDC overflow
+    // brute force — otherwise mergeMultiResults compares scalar^2-scaled main
+    // distances against base-scale overflow distances and the overflow rows
+    // wrongly dominate the top-k. Also makes the reported l2_distance correct.
+    //
+    // Returns 1.0 (no-op) for plain f32/f16 storage, an untrained quantizer, a
+    // degenerate range, or a non-L2 metric (IP/cosine are not a pure rescale
+    // under an affine quantizer and are rejected at plan time).
+    double quantized_l2_dequant_factor() const {
+        if constexpr (sizeof(T) == 1) {
+            if (!this->quantizer_.is_trained()) return 1.0;
+            const double range = static_cast<double>(this->quantizer_.max()) -
+                                 static_cast<double>(this->quantizer_.min());
+            if (!(range > 0.0)) return 1.0;
+            const double s = 255.0 / range; // scalar
+            switch (this->metric) {
+                case DistanceType_L2Expanded:
+                case DistanceType_L2Unexpanded:
+                    return 1.0 / (s * s); // distances are squared L2
+                case DistanceType_L2SqrtExpanded:
+                case DistanceType_L2SqrtUnexpanded:
+                    return 1.0 / s;
+                default:
+                    return 1.0; // IP / cosine: scale alone can't reconcile them
+            }
+        }
+        return 1.0;
     }
 
     // Sync a shard-local slice of the deleted bitset to device (SHARDED mode).

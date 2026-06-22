@@ -243,6 +243,22 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 			return nil, moerr.NewNotSupportedNoCtxf(
 				"cagra quantization %q (supported: float32, float16, int8, uint8)", q)
 		}
+		// Mirror CREATE INDEX (schema.go) so REINDEX can't set a quantization
+		// CREATE would refuse: bf16 has no GPU storage, and int8/uint8 only
+		// preserve L2 (the affine quantizer breaks inner-product / cosine
+		// geometry). The storage-vs-base width/upcast guard needs the base column
+		// type, which a reindex param update doesn't carry, so it stays at CREATE.
+		if q == metric.Quantization_BF16_Str {
+			return nil, moerr.NewNotSupportedNoCtxf(
+				"cagra quantization %q (no GPU bfloat16 storage); use float16, int8, or uint8", q)
+		}
+		if q == metric.Quantization_INT8_Str || q == metric.Quantization_UINT8_Str {
+			op := catalog.ToLower(old[catalog.IndexAlgoParamOpType])
+			if op == metric.OpType_InnerProduct || op == metric.OpType_CosineDistance {
+				return nil, moerr.NewNotSupportedNoCtxf(
+					"cagra quantization %q is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry", q)
+			}
+		}
 	}
 	return compileplugin.MergeReindexParams(old, alter, "cagra",
 		catalog.IndexAlgoParamMaxIndexCapacity,

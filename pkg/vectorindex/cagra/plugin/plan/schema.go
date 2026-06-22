@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	cagrart "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
@@ -86,6 +87,24 @@ func (Hooks) BuildSecondaryIndexDefs(
 						"Cagra QUANTIZATION '%s' (%d bytes/element) cannot upcast base column %s (%d bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type",
 						indexInfo.IndexOption.Quantization, quantSize,
 						types.T(colMap[name].Typ.Id).String(), baseSize)
+				}
+				// int8/uint8 quantization is L2-only. The scalar quantizer applies a
+				// per-element affine map q(x)=scalar*x+offset; the constant offset is
+				// a translation of the whole point cloud. L2 is translation-invariant
+				// so it survives (the difference cancels the offset; we correct the
+				// scalar^2 scale at search time). Inner product and cosine are NOT
+				// translation-invariant: the offset's cross-terms bias IP by each
+				// vector's component sum, and translating the vectors changes their
+				// angles, so cosine ranks change. A single rescale cannot fix either.
+				// Reject the combo rather than silently mis-ranking. (float16/bf16-width
+				// storage is an exact cast, not an affine map, so it is unaffected.)
+				if qt == types.T_array_int8 || qt == types.T_array_uint8 {
+					op := catalog.ToLower(indexInfo.IndexOption.AlgoParamVectorOpType)
+					if op == metric.OpType_InnerProduct || op == metric.OpType_CosineDistance {
+						return nil, nil, moerr.NewNotSupportedf(ctx.GetContext(),
+							"Cagra QUANTIZATION '%s' is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry",
+							indexInfo.IndexOption.Quantization)
+					}
 				}
 			}
 		}
