@@ -655,11 +655,9 @@ func buildK8sRepairPlan(opts wizardOptions) (*repairPlan, error) {
 	if !ok {
 		return nil, fmt.Errorf("shard %d not found in HAKeeper state", opts.shardID)
 	}
-	repairShard := shard
-	repairShard.Epoch = repairEpochAfterReportedState(state, opts.shardID, shard.Epoch)
+	repairShard, sourceStore, warnings := chooseK8sRepairShard(state, opts.shardID, shard)
+	plan.Warnings = append(plan.Warnings, warnings...)
 	plan.TargetShard = toPlanShard(repairShard)
-	targetByStore := replicaByStore(repairShard)
-	sourceStore := targetByStore[repairShard.LeaderID]
 	plan.SourceStore = sourceStore
 	if sourceStore == "" {
 		plan.Warnings = append(plan.Warnings, "HAKeeper has no leader for the target shard; source replica must be reviewed manually")
@@ -703,6 +701,47 @@ func buildK8sRepairPlan(opts wizardOptions) (*repairPlan, error) {
 	plan.RebuildStores = uniqueStrings(plan.RebuildStores)
 	plan.Actions = buildK8sActions(plan)
 	return plan, nil
+}
+
+func chooseK8sRepairShard(state logpb.CheckerState, shardID uint64, hakeeperShard logpb.LogShardInfo) (logpb.LogShardInfo, string, []string) {
+	repairShard := hakeeperShard
+	sourceStore := replicaByStore(hakeeperShard)[hakeeperShard.LeaderID]
+	warnings := []string(nil)
+	if sourceStore == "" {
+		repairShard.Epoch = repairEpochAfterReportedState(state, shardID, repairShard.Epoch)
+		return repairShard, sourceStore, warnings
+	}
+	storeInfo, ok := state.LogState.Stores[sourceStore]
+	if !ok {
+		warnings = append(warnings, fmt.Sprintf("source store %s has no HAKeeper heartbeat; using HAKeeper target membership", sourceStore))
+		repairShard.Epoch = repairEpochAfterReportedState(state, shardID, repairShard.Epoch)
+		return repairShard, sourceStore, warnings
+	}
+	reported, ok := reportedShardForReplica(storeInfo, shardID, hakeeperShard.LeaderID)
+	if !ok {
+		warnings = append(warnings, fmt.Sprintf("source store %s does not report leader replica %d for shard %d; using HAKeeper target membership", sourceStore, hakeeperShard.LeaderID, shardID))
+		repairShard.Epoch = repairEpochAfterReportedState(state, shardID, repairShard.Epoch)
+		return repairShard, sourceStore, warnings
+	}
+	if !reportedShardMembershipMatches(reported, hakeeperShard) {
+		warnings = append(warnings, fmt.Sprintf(
+			"HAKeeper target replicas %s differ from source store %s heartbeat replicas %s; using source heartbeat membership as repair target",
+			formatReplicaMap(hakeeperShard.Replicas),
+			sourceStore,
+			formatReplicaMap(reported.Replicas),
+		))
+		repairShard = reported
+		repairShard.ShardID = shardID
+		if repairShard.LeaderID == 0 && repairShard.Replicas[hakeeperShard.LeaderID] == sourceStore {
+			repairShard.LeaderID = hakeeperShard.LeaderID
+		}
+		if repairShard.Term == 0 {
+			repairShard.Term = hakeeperShard.Term
+		}
+		sourceStore = replicaByStore(repairShard)[repairShard.LeaderID]
+	}
+	repairShard.Epoch = repairEpochAfterReportedState(state, shardID, maxUint64(hakeeperShard.Epoch, repairShard.Epoch))
+	return repairShard, sourceStore, warnings
 }
 
 func buildK8sPlanStore(
@@ -1180,6 +1219,15 @@ func storeReportsHealthyReplica(storeInfo logpb.LogStoreInfo, shard logpb.LogSha
 	return false, false, nil
 }
 
+func reportedShardForReplica(storeInfo logpb.LogStoreInfo, shardID uint64, replicaID uint64) (logpb.LogShardInfo, bool) {
+	for _, replica := range storeInfo.Replicas {
+		if replica.ShardID == shardID && replica.ReplicaID == replicaID {
+			return replica.LogShardInfo, true
+		}
+	}
+	return logpb.LogShardInfo{}, false
+}
+
 func compareReportedShard(reported logpb.LogShardInfo, target logpb.LogShardInfo) []string {
 	warnings := []string(nil)
 	if reported.ShardID != target.ShardID {
@@ -1234,6 +1282,22 @@ func hasUint64(values []uint64, target uint64) bool {
 		}
 	}
 	return false
+}
+
+func hasString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func maxUint64(a uint64, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func formatReplicaMap(m map[uint64]string) string {
@@ -1604,6 +1668,12 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 			stdoutf("unblocked store %s for shard %d\n", store.UUID, plan.ShardID)
 		}
 	}
+	if err := waitForTargetReplicaHeartbeats(ctx, plans, timeout); err != nil {
+		if reblockErr := reblockInitialStores(ctx, plans, timeout, "online recover: target heartbeat verification failed; stores re-blocked"); reblockErr != nil {
+			return fmt.Errorf("%w; additionally failed to re-block stores: %v", err, reblockErr)
+		}
+		return err
+	}
 
 	stdoutln("step 5: refresh final repair state")
 	for _, plan := range plans {
@@ -1841,6 +1911,74 @@ func k8sCleanupLogsContainReplicas(logs string, replicas []uint64) bool {
 		}
 	}
 	return true
+}
+
+func waitForTargetReplicaHeartbeats(ctx context.Context, plans []*repairPlan, timeout time.Duration) error {
+	if len(plans) == 0 {
+		return nil
+	}
+	stdoutln("step 4: verify target replicas in HAKeeper heartbeats")
+	deadline := time.Now().Add(timeout)
+	var lastProblems []string
+	for time.Now().Before(deadline) {
+		state, err := getHAKeeperStateWithNewConnection(ctx, stableHAKeeperAddressesForApply(plans[0]), timeout)
+		if err != nil {
+			lastProblems = []string{err.Error()}
+			time.Sleep(time.Second)
+			continue
+		}
+		lastProblems = targetReplicaHeartbeatProblems(state, plans)
+		if len(lastProblems) == 0 {
+			stdoutln("target replicas confirmed in HAKeeper heartbeats")
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+	if len(lastProblems) == 0 {
+		lastProblems = []string{"target replicas did not become healthy before timeout"}
+	}
+	return fmt.Errorf(
+		"timeout waiting for target replicas in HAKeeper heartbeats; refusing to mark repair complete:\n%s",
+		strings.Join(lastProblems, "\n"),
+	)
+}
+
+func targetReplicaHeartbeatProblems(state logpb.CheckerState, plans []*repairPlan) []string {
+	problems := make([]string, 0)
+	for _, plan := range plans {
+		target := logShardInfoFromPlan(plan.TargetShard)
+		for _, store := range plan.Stores {
+			if store.TargetReplicaID == 0 || hasString(plan.PersistentBlockedStores, store.UUID) {
+				continue
+			}
+			storeInfo, ok := state.LogState.Stores[store.UUID]
+			if !ok {
+				problems = append(problems, fmt.Sprintf("- shard %d store %s has no HAKeeper heartbeat", plan.ShardID, store.UUID))
+				continue
+			}
+			reported, healthy, warnings := storeReportsHealthyReplica(storeInfo, target, store.TargetReplicaID)
+			switch {
+			case !reported:
+				problems = append(problems, fmt.Sprintf("- shard %d store %s target replica %d is not reported in HAKeeper heartbeat", plan.ShardID, store.UUID, store.TargetReplicaID))
+			case !healthy:
+				problems = append(problems, fmt.Sprintf("- shard %d store %s target replica %d heartbeat membership differs from target: %s", plan.ShardID, store.UUID, store.TargetReplicaID, strings.Join(warnings, "; ")))
+			}
+		}
+	}
+	return problems
+}
+
+func reblockInitialStores(ctx context.Context, plans []*repairPlan, timeout time.Duration, reason string) error {
+	for _, plan := range plans {
+		if len(plan.InitialBlockedStores) == 0 {
+			continue
+		}
+		req := repairPayloadForPlanWithCleanup(plan, plan.InitialBlockedStores, reason, false)
+		if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddressesForApply(plan), timeout, req); err != nil {
+			return fmt.Errorf("re-block shard %d stores %v: %w", plan.ShardID, plan.InitialBlockedStores, err)
+		}
+	}
+	return nil
 }
 
 func cleanupReplicasForStoreIDs(plans []*repairPlan, storeUUID string) []uint64 {
@@ -2825,6 +2963,17 @@ func cleanupReplicasByStoreForPlan(plan *repairPlan) map[string][]uint64 {
 
 func toPlanShard(shard logpb.LogShardInfo) planShard {
 	return planShard{
+		ShardID:           shard.ShardID,
+		Replicas:          copyReplicaMap(shard.Replicas),
+		NonVotingReplicas: copyReplicaMap(shard.NonVotingReplicas),
+		Epoch:             shard.Epoch,
+		LeaderID:          shard.LeaderID,
+		Term:              shard.Term,
+	}
+}
+
+func logShardInfoFromPlan(shard planShard) logpb.LogShardInfo {
+	return logpb.LogShardInfo{
 		ShardID:           shard.ShardID,
 		Replicas:          copyReplicaMap(shard.Replicas),
 		NonVotingReplicas: copyReplicaMap(shard.NonVotingReplicas),

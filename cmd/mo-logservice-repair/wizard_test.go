@@ -394,6 +394,98 @@ func TestBuildK8sPlanStoreRebuildsDirtyTarget(t *testing.T) {
 	}
 }
 
+func TestChooseK8sRepairShardUsesSourceHeartbeatMembership(t *testing.T) {
+	hakeeperShard := logpb.LogShardInfo{
+		ShardID:  1,
+		Replicas: map[uint64]string{262146: "store-d01", 262147: "store-d00", 282825: "store-d03"},
+		Epoch:    939,
+		LeaderID: 262147,
+		Term:     3,
+	}
+	sourceShard := logpb.LogShardInfo{
+		ShardID:  1,
+		Replicas: map[uint64]string{262147: "store-d00", 262150: "store-d03", 272586: "store-d01"},
+		Epoch:    834,
+		Term:     3,
+	}
+	state := logpb.CheckerState{
+		LogState: logpb.LogState{
+			Stores: map[string]logpb.LogStoreInfo{
+				"store-d00": {
+					Replicas: []logpb.LogReplicaInfo{{
+						ReplicaID:    262147,
+						LogShardInfo: sourceShard,
+					}},
+				},
+			},
+		},
+	}
+	got, sourceStore, warnings := chooseK8sRepairShard(state, 1, hakeeperShard)
+	if sourceStore != "store-d00" {
+		t.Fatalf("unexpected source store: %s", sourceStore)
+	}
+	if !sameReplicaMap(got.Replicas, sourceShard.Replicas) {
+		t.Fatalf("expected source replicas %s, got %s", formatReplicaMap(sourceShard.Replicas), formatReplicaMap(got.Replicas))
+	}
+	if got.LeaderID != 262147 {
+		t.Fatalf("expected leader 262147, got %d", got.LeaderID)
+	}
+	if got.Epoch != 940 {
+		t.Fatalf("expected bumped epoch 940, got %d", got.Epoch)
+	}
+	if len(warnings) == 0 || !strings.Contains(warnings[0], "using source heartbeat membership") {
+		t.Fatalf("expected source membership warning, got %v", warnings)
+	}
+}
+
+func TestTargetReplicaHeartbeatProblemsDetectsPendingTarget(t *testing.T) {
+	target := planShard{
+		ShardID:  1,
+		Replicas: map[uint64]string{262146: "store-d01", 262147: "store-d00", 282825: "store-d03"},
+		Epoch:    939,
+		LeaderID: 262147,
+		Term:     3,
+	}
+	plan := &repairPlan{
+		ShardID:     1,
+		TargetShard: target,
+		Stores: []planStore{
+			{UUID: "store-d00", TargetReplicaID: 262147},
+			{UUID: "store-d01", TargetReplicaID: 262146},
+			{UUID: "store-d03", TargetReplicaID: 282825},
+		},
+	}
+	state := logpb.CheckerState{
+		LogState: logpb.LogState{
+			Stores: map[string]logpb.LogStoreInfo{
+				"store-d00": {
+					Replicas: []logpb.LogReplicaInfo{{
+						ReplicaID:    262147,
+						LogShardInfo: logShardInfoFromPlan(target),
+					}},
+				},
+				"store-d01": {
+					Replicas: []logpb.LogReplicaInfo{{
+						ReplicaID: 272586,
+						LogShardInfo: logpb.LogShardInfo{
+							ShardID:  1,
+							Replicas: map[uint64]string{262147: "store-d00", 262150: "store-d03", 272586: "store-d01"},
+						},
+					}},
+				},
+				"store-d03": {},
+			},
+		},
+	}
+	problems := targetReplicaHeartbeatProblems(state, []*repairPlan{plan})
+	joined := strings.Join(problems, "\n")
+	for _, want := range []string{"store-d01 target replica 262146 is not reported", "store-d03 target replica 282825 is not reported"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected %q in problems: %s", want, joined)
+		}
+	}
+}
+
 func TestBuildK8sActionsIncludesRepairPodAndCleanCommand(t *testing.T) {
 	plan := &repairPlan{
 		Mode:              modeK8s,
