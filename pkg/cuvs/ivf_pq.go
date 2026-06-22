@@ -356,36 +356,6 @@ func (gi *GpuIvfPq[B, Q]) AddChunkQuantize(chunk []B, chunkCount uint64, ids []i
 	return nil
 }
 
-// QuantizeQuery quantizes a base-typed (B) query to the storage type Q
-// (int8/uint8) via the B-source quantizer, writing numQueries*dimension values
-// into out. The caller then runs the normal native Search([]Q).
-func (gi *GpuIvfPq[B, Q]) QuantizeQuery(queries []B, numQueries uint64, out []Q) error {
-	if gi.cIvfPq == nil {
-		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
-	}
-	if len(queries) == 0 {
-		return nil
-	}
-
-	var errmsg *C.char
-	C.gpu_ivf_pq_quantize_query(
-		gi.cIvfPq,
-		unsafe.Pointer(&queries[0]),
-		C.uint64_t(numQueries),
-		unsafe.Pointer(&out[0]),
-		unsafe.Pointer(&errmsg),
-	)
-	runtime.KeepAlive(queries)
-	runtime.KeepAlive(out)
-
-	if errmsg != nil {
-		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
-		return moerr.NewInternalErrorNoCtx(errStr)
-	}
-	return nil
-}
-
 // TrainQuantizer trains the scalar quantizer (if Q is 1-byte) from base-typed
 // (B) training data.
 func (gi *GpuIvfPq[B, Q]) TrainQuantizer(trainData []B, nSamples uint64) error {
@@ -905,8 +875,10 @@ func (gi *GpuIvfPq[B, Q]) SearchAsyncWithParams(queries []Q, numQueries uint64, 
 	return uint64(jobID), nil
 }
 
-// SearchFloat32AsyncWithParams performs a K-Nearest Neighbor search with float32 queries asynchronously with custom parameters.
-func (gi *GpuIvfPq[B, Q]) SearchFloat32AsyncWithParams(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) (uint64, error) {
+// SearchQuantizeAsyncWithParams submits an async KNN search with a base-typed (B)
+// query; the index converts B to its storage type Q on device (B==Q copy, or the
+// learned/cast quantizer for narrower Q). Unifies the former float32 and half query paths.
+func (gi *GpuIvfPq[B, Q]) SearchQuantizeAsyncWithParams(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) (uint64, error) {
 	if gi.cIvfPq == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -1312,7 +1284,7 @@ func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint6
 
 // SearchQuantizeWithFilterAsync submits a filtered K-NN search with base-typed
 // (B) queries and returns a job_id; collect the result with SearchWait. Mirrors
-// SearchFloat32AsyncWithParams + the predicate-eval semantics of
+// SearchQuantizeAsyncWithParams + the predicate-eval semantics of
 // SearchQuantizeWithFilter. Used by MultiGpuIvfPq to dispatch per-shard
 // filtered searches in parallel. The index converts B to storage T.
 func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (uint64, error) {

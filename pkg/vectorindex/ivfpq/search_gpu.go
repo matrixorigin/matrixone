@@ -72,30 +72,18 @@ func (s *IvfpqSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt
 		neighbors64 []int64
 		dists32     []float32
 	)
-	if rt.FilterJSON != "" {
-		// Filtered: any base (f32 or vecf16) routes the native base-typed (B) query
-		// through the const-B* search_quantize_with_filter path — cuVS converts B to
-		// storage T (B==T copy for direct, learned-quantizer for compressed). The
-		// query asserts to []B for both float32 (B==float) and Float16 (B==half) base.
-		qB, ok := anyquery.([]B)
-		if !ok {
-			return nil, nil, moerr.NewInternalErrorNoCtx("IvfpqSearch: filtered query type mismatch")
-		}
-		neighbors64, dists32, err = s.MultiIndex.SearchQuantizeWithFilter(qB, 1, dim, uint32(limit), sp, rt.FilterJSON)
-	} else if query, ok := anyquery.([]float32); ok {
-		// f32 base, unfiltered (direct, or f32 base + QUANTIZATION quantized to T).
-		neighbors64, dists32, err = s.MultiIndex.SearchFloat32(query, 1, dim, uint32(limit), sp)
-	} else if qh, ok := anyquery.([]cuvs.Float16); ok {
-		// vecf16 base (B == half), unfiltered.
-		if qt, isT := anyquery.([]Q); isT {
-			// f16-direct (storage T==Float16): native half search.
-			neighbors64, dists32, err = s.MultiIndex.Search(qt, 1, dim, uint32(limit), sp)
-		} else {
-			// f16 -> int8/uint8 quantized: quantize the half query to T, native search.
-			neighbors64, dists32, err = s.MultiIndex.SearchQuantizeHalf(qh, 1, dim, uint32(limit), sp)
-		}
-	} else {
+	// Any base (f32 or vecf16) routes its native base-typed (B) query through the
+	// const-B* search_quantize path — cuVS converts B to storage Q on device (B==Q
+	// copy for a direct index, learned/cast quantizer for a compressed one). The
+	// query asserts to []B for both float32 (B==float) and Float16 (B==half) base.
+	qB, ok := anyquery.([]B)
+	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("IvfpqSearch: query type mismatch")
+	}
+	if rt.FilterJSON != "" {
+		neighbors64, dists32, err = s.MultiIndex.SearchQuantizeWithFilter(qB, 1, dim, uint32(limit), sp, rt.FilterJSON)
+	} else {
+		neighbors64, dists32, err = s.MultiIndex.SearchQuantize(qB, 1, dim, uint32(limit), sp)
 	}
 	if err != nil {
 		return nil, nil, err

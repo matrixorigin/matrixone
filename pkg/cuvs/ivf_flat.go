@@ -764,8 +764,10 @@ func (gi *GpuIvfFlat[B, Q]) SearchAsyncWithParams(queries []Q, numQueries uint64
 	return uint64(jobID), nil
 }
 
-// SearchFloat32AsyncWithParams performs a K-Nearest Neighbor search with float32 queries asynchronously with custom parameters.
-func (gi *GpuIvfFlat[B, Q]) SearchFloat32AsyncWithParams(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (uint64, error) {
+// SearchQuantizeAsyncWithParams submits an async KNN search with a base-typed (B)
+// query; the index converts B to its storage type Q on device (B==Q copy, or the
+// learned/cast quantizer for narrower Q). Unifies the former float32 and half query paths.
+func (gi *GpuIvfFlat[B, Q]) SearchQuantizeAsyncWithParams(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (uint64, error) {
 	if gi.cIvfFlat == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -1115,7 +1117,7 @@ func (gi *GpuIvfFlat[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uin
 
 // SearchQuantizeWithFilterAsync submits a filtered K-NN search with base-typed
 // (B) queries and returns a job_id; collect the result with SearchWait. Mirrors
-// SearchFloat32AsyncWithParams + the predicate-eval semantics of
+// SearchQuantizeAsyncWithParams + the predicate-eval semantics of
 // SearchQuantizeWithFilter. Used by MultiGpuIvfFlat to dispatch per-shard
 // filtered searches in parallel. The index converts B to storage T.
 func (gi *GpuIvfFlat[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams, predsJSON string) (uint64, error) {

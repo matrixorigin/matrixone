@@ -128,7 +128,7 @@ func TestGpuCagraSearchFloat32AsyncBatched(t *testing.T) {
 	// result demuxing through submit_batched_async's per-request setter.
 	runConcurrentAsync(t, 16 /*nGoroutines*/, 8 /*nPerGoroutine*/, func(qid int) (int64, error) {
 		q := []float32{float32(qid), float32(qid)}
-		jobID, err := index.SearchFloat32AsyncWithParams(q, 1, dimension, 1, sp)
+		jobID, err := index.SearchQuantizeAsyncWithParams(q, 1, dimension, 1, sp)
 		if err != nil {
 			return -1, err
 		}
@@ -174,7 +174,7 @@ func TestGpuIvfFlatSearchFloat32AsyncBatched(t *testing.T) {
 
 	runConcurrentAsync(t, 16 /*nGoroutines*/, 8 /*nPerGoroutine*/, func(qid int) (int64, error) {
 		q := []float32{float32(qid), float32(qid)}
-		jobID, err := index.SearchFloat32AsyncWithParams(q, 1, dimension, 1, sp)
+		jobID, err := index.SearchQuantizeAsyncWithParams(q, 1, dimension, 1, sp)
 		if err != nil {
 			return -1, err
 		}
@@ -269,7 +269,7 @@ func ivfPqAsyncBatchedMatchesSync(t *testing.T, conservativeDispatch bool) {
 		wg.Add(1)
 		go func(qid int) {
 			defer wg.Done()
-			jobID, err := index.SearchFloat32AsyncWithParams(queryOf(qid), 1, dimension, limit, sp)
+			jobID, err := index.SearchQuantizeAsyncWithParams(queryOf(qid), 1, dimension, limit, sp)
 			if err != nil {
 				errCh <- err
 				return
@@ -375,7 +375,7 @@ func TestGpuCagraAsyncBatchedMatchesSync(t *testing.T) {
 		go func(qid int) {
 			defer wg.Done()
 			q := []float32{float32(qid * 10), float32(qid * 10)}
-			jobID, err := index.SearchFloat32AsyncWithParams(q, 1, dimension, 1, sp)
+			jobID, err := index.SearchQuantizeAsyncWithParams(q, 1, dimension, 1, sp)
 			if err != nil {
 				errCh <- err
 				return
