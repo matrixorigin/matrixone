@@ -1617,6 +1617,30 @@ func TestReplacePlanStructure(t *testing.T) {
 
 func TestReplacePlanChecksTableCheckConstraints(t *testing.T) {
 	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO single_idx_t VALUES (1, -1)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "REPLACE")
+}
+
+func TestInsertPlanChecksTableCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+
+	logicPlan, err := runOneStmt(mock, t, "INSERT INTO single_idx_t VALUES (1, -1)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "INSERT")
+}
+
+func addSingleIdxTPositiveCheck(t *testing.T, mock *MockOptimizer) {
+	t.Helper()
 	tableDef := mock.ctxt.tables["single_idx_t"]
 	valCol := tableDef.Name2ColIndex["val"]
 	checkExpr, err := BindFuncExprImplByPlanExpr(context.TODO(), ">", []*plan.Expr{
@@ -1640,26 +1664,23 @@ func TestReplacePlanChecksTableCheckConstraints(t *testing.T) {
 			Check: checkExpr,
 		},
 	}
+}
 
-	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO single_idx_t VALUES (1, -1)")
-	if err != nil {
-		t.Fatalf("%+v", err)
-	}
-
-	query := logicPlan.GetQuery()
+func assertPlanHasCheckConstraintAssert(t *testing.T, query *Query, stmt string) {
+	t.Helper()
 	hasCheckAssert := false
 	for _, node := range query.Nodes {
 		if node.NodeType != plan.Node_FILTER {
 			continue
 		}
 		for _, expr := range node.FilterList {
-			if exprContainsFuncName(expr, "assert") {
+			if exprContainsFuncName(expr, "check_constraint_assert") {
 				hasCheckAssert = true
 				break
 			}
 		}
 	}
-	assert.True(t, hasCheckAssert, "REPLACE plan should assert table CHECK constraints before writing")
+	assert.True(t, hasCheckAssert, "%s plan should assert table CHECK constraints before writing", stmt)
 }
 
 func TestReplaceNonUniqueSingleIndexDeleteUsesIndexRowID(t *testing.T) {

@@ -784,7 +784,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 				if err != nil {
 					logutil.Errorf("catalog-cache error: unmarshal table check constraint information: %v-%v-%v, err: %v",
 						tblItem.AccountId, tblItem.Id, tblItem.Name, err)
-					return nil, nil
 				}
 				properties = append(properties, visibleConfigs...)
 				checks = append(checks, checkDefs...)

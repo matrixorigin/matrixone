@@ -1515,7 +1515,8 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				case *engine.StreamConfigsDef:
 					visibleConfigs, checkDefs, err := engine.SplitCheckConstraintsFromConfigs(k.Configs)
 					if err != nil {
-						return nil
+						logutil.Errorf("txn-table error: unmarshal table check constraint information: %s-%s, err: %v",
+							tbl.db.databaseName, tbl.tableName, err)
 					}
 					properties = append(properties, visibleConfigs...)
 					checks = append(checks, checkDefs...)

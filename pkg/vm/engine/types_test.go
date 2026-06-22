@@ -35,7 +35,8 @@ func TestPlanDefToCstrDefPersistsCheckConstraints(t *testing.T) {
 		},
 	}
 
-	cstr := PlanDefToCstrDef(&plan.TableDef{Checks: []*plan.CheckDef{check}})
+	cstr, err := PlanDefToCstrDef(&plan.TableDef{Checks: []*plan.CheckDef{check}})
+	require.NoError(t, err)
 	require.Len(t, cstr.Cts, 1)
 
 	configs := cstr.Cts[0].(*StreamConfigsDef).Configs
@@ -45,4 +46,21 @@ func TestPlanDefToCstrDefPersistsCheckConstraints(t *testing.T) {
 	require.Len(t, checks, 1)
 	require.Equal(t, check.Name, checks[0].Name)
 	require.NotNil(t, checks[0].Check)
+}
+
+func TestSplitCheckConstraintsFromConfigsKeepsVisibleConfigsOnDecodeError(t *testing.T) {
+	visibleConfigs, checks, err := SplitCheckConstraintsFromConfigs([]*plan.Property{
+		{
+			Key:   "visible",
+			Value: "value",
+		},
+		{
+			Key:   CheckConstraintsConfigKey,
+			Value: "not-base64",
+		},
+	})
+	require.Error(t, err)
+	require.Len(t, visibleConfigs, 1)
+	require.Equal(t, "visible", visibleConfigs[0].Key)
+	require.Nil(t, checks)
 }

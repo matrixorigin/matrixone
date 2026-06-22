@@ -553,7 +553,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	}
 
 	if qry.GetCopyTableDef() != nil {
-		oldCt = engine.PlanDefToCstrDef(qry.GetCopyTableDef())
+		oldCt, err = engine.PlanDefToCstrDef(qry.GetCopyTableDef())
+		if err != nil {
+			return err
+		}
 	} else {
 		oldCt, err = GetConstraintDef(c.proc.Ctx, rel)
 		if err != nil {

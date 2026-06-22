@@ -136,7 +136,7 @@ func appendCheckConstraintPlan(builder *QueryBuilder, bindCtx *BindContext, tabl
 			checkName = "CHECK"
 		}
 		errMsg := makePlan2StringConstExprWithType(fmt.Sprintf("Check constraint '%s' is violated", checkName))
-		assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{passExpr, errMsg})
+		assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "check_constraint_assert", []*plan.Expr{passExpr, errMsg})
 		if err != nil {
 			return 0, err
 		}

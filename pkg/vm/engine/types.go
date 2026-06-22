@@ -55,7 +55,7 @@ type Node struct {
 
 const CheckConstraintsConfigKey = "__mo_check_constraints"
 
-func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
+func PlanDefToCstrDef(tableDef *plan.TableDef) (*ConstraintDef, error) {
 	planDefs := tableDef.GetDefs()
 	c := new(ConstraintDef)
 	for _, def := range planDefs {
@@ -93,19 +93,20 @@ func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
 
 	if len(tableDef.Checks) > 0 {
 		value, err := MarshalCheckConstraints(tableDef.Checks)
-		if err == nil {
-			c.Cts = append(c.Cts, &StreamConfigsDef{
-				Configs: []*plan.Property{
-					{
-						Key:   CheckConstraintsConfigKey,
-						Value: value,
-					},
-				},
-			})
+		if err != nil {
+			return nil, err
 		}
+		c.Cts = append(c.Cts, &StreamConfigsDef{
+			Configs: []*plan.Property{
+				{
+					Key:   CheckConstraintsConfigKey,
+					Value: value,
+				},
+			},
+		})
 	}
 
-	return c
+	return c, nil
 }
 
 func MarshalCheckConstraints(checks []*plan.CheckDef) (string, error) {
@@ -138,7 +139,7 @@ func SplitCheckConstraintsFromConfigs(configs []*plan.Property) ([]*plan.Propert
 		}
 		decodedChecks, err := UnmarshalCheckConstraints(config.Value)
 		if err != nil {
-			return nil, nil, err
+			return visibleConfigs, nil, err
 		}
 		checks = append(checks, decodedChecks...)
 	}
@@ -198,7 +199,10 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		})
 	}
 
-	c := PlanDefToCstrDef(tableDef)
+	c, err := PlanDefToCstrDef(tableDef)
+	if err != nil {
+		return nil, nil, err
+	}
 	if len(c.Cts) > 0 {
 		exeDefs = append(exeDefs, c)
 	}
