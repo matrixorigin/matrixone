@@ -740,13 +740,13 @@ const (
 
 	// H3 hierarchical hexagonal index (github.com/uber/h3-go) functions. An
 	// H3Index is a BIGINT UNSIGNED (uint64). See docs/design/s2h3_funcs.md.
-	H3_H3INDEX               = 527
-	H3_H3INDEX_RESOLUTION    = 528
-	H3_H3INDEX_CENTER        = 529
-	H3_H3INDEX_BOUNDARY      = 530
-	H3_H3INDEX_PARENT        = 531
-	H3_H3INDEX_NEIGHBORS     = 532
-	H3_H3INDEX_ARENEIGHBORS  = 533
+	H3_H3INDEX              = 527
+	H3_H3INDEX_RESOLUTION   = 528
+	H3_H3INDEX_CENTER       = 529
+	H3_H3INDEX_BOUNDARY     = 530
+	H3_H3INDEX_PARENT       = 531
+	H3_H3INDEX_NEIGHBORS    = 532
+	H3_H3INDEX_ARENEIGHBORS = 533
 
 	// GIS numeric point constructors: ST_Point(x, y) -> GEOMETRY (POINT),
 	// ST_Point32(x, y) -> GEOMETRY32 (POINT), where x is longitude/X and y is
