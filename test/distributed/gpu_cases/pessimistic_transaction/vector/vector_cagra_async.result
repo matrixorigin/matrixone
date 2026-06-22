@@ -1,0 +1,63 @@
+SET experimental_cagra_index = 1;
+SET cagra_threads_build = 7;
+SET cagra_max_index_capacity = 99999;
+drop database if exists cagra_cdc;
+create database cagra_cdc;
+use cagra_cdc;
+create table t (id bigint primary key, v vecf32(8));
+insert into t values
+(1, '[1,1,1,1,1,1,1,1]'),  (2, '[2,2,2,2,2,2,2,2]'),
+(3, '[3,3,3,3,3,3,3,3]'),  (4, '[4,4,4,4,4,4,4,4]'),
+(5, '[5,5,5,5,5,5,5,5]'),  (6, '[6,6,6,6,6,6,6,6]'),
+(7, '[7,7,7,7,7,7,7,7]'),  (8, '[8,8,8,8,8,8,8,8]'),
+(9, '[9,9,9,9,9,9,9,9]'),  (10, '[10,10,10,10,10,10,10,10]');
+create index ix using cagra on t (v)
+op_type 'vector_l2_ops' intermediate_graph_degree=8 graph_degree=4 ASYNC;
+show create table t;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `id` bigint NOT NULL,
+  `v` vecf32(8) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `ix` USING cagra (`v`) op_type 'vector_l2_ops'  async  quantization 'float32'  distribution_mode 'single'  intermediate_graph_degree = 8  graph_degree = 4 
+)
+insert into t values (100, '[100,100,100,100,100,100,100,100]');
+insert into t values (105, '[105,105,105,105,105,105,105,105]');
+insert into t values (300, '[300,300,300,300,300,300,300,300]');
+insert into t values (700, '[700,700,700,700,700,700,700,700]');
+delete from t where id=105;
+delete from t where id=3;
+update t set v = '[500,500,500,500,500,500,500,500]' where id=5;
+update t set v = '[305,305,305,305,305,305,305,305]' where id=300;
+insert into t values (800, '[800,800,800,800,800,800,800,800]');
+select sleep(30);
+➤ sleep(30)[-6,8,0]  𝄀
+0
+select id from t order by l2_distance(v, '[100,100,100,100,100,100,100,100]') limit 1;
+➤ id[-5,64,0]  𝄀
+100
+select id from t order by l2_distance(v, '[700,700,700,700,700,700,700,700]') limit 1;
+➤ id[-5,64,0]  𝄀
+700
+select id from t order by l2_distance(v, '[800,800,800,800,800,800,800,800]') limit 1;
+➤ id[-5,64,0]  𝄀
+800
+select id from t order by l2_distance(v, '[500,500,500,500,500,500,500,500]') limit 1;
+➤ id[-5,64,0]  𝄀
+5
+select id from t order by l2_distance(v, '[305,305,305,305,305,305,305,305]') limit 1;
+➤ id[-5,64,0]  𝄀
+300
+select id from t order by l2_distance(v, '[105,105,105,105,105,105,105,105]') limit 1;
+➤ id[-5,64,0]  𝄀
+100
+set @stbl = (select index_table_name from mo_catalog.mo_indexes
+where table_id=(select rel_id from mo_catalog.mo_tables
+where relname='t' and reldatabase='cagra_cdc')
+and name='ix' and algo_table_type='cagra_index');
+set @q = concat('select distinct tag from `', @stbl, '` order by tag');
+prepare s from @q; execute s; deallocate prepare s;
+select count(*) from t;
+➤ count(*)[-5,64,0]  𝄀
+13
+drop database cagra_cdc;

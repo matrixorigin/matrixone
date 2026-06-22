@@ -1,0 +1,29 @@
+select @@experimental_ivfpq_index, @@experimental_cagra_index;
+➤ @@experimental_ivfpq_index[12,0,0]  ¦  @@experimental_cagra_index[12,0,0]  𝄀
+0  ¦  0
+show variables like 'experimental_ivfpq_index';
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+experimental_ivfpq_index  ¦  off
+show variables like 'experimental_cagra_index';
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+experimental_cagra_index  ¦  off
+set experimental_ivfpq_index = 1;
+set experimental_cagra_index = 1;
+select @@experimental_ivfpq_index, @@experimental_cagra_index;
+➤ @@experimental_ivfpq_index[12,0,0]  ¦  @@experimental_cagra_index[12,0,0]  𝄀
+1  ¦  1
+set experimental_ivfpq_index = 0;
+set experimental_cagra_index = 0;
+select @@experimental_ivfpq_index, @@experimental_cagra_index;
+➤ @@experimental_ivfpq_index[12,0,0]  ¦  @@experimental_cagra_index[12,0,0]  𝄀
+0  ¦  0
+set global experimental_ivfpq_index = 1;
+set global experimental_cagra_index = 1;
+select @@global.experimental_ivfpq_index, @@global.experimental_cagra_index;
+➤ @@experimental_ivfpq_index[12,0,0]  ¦  @@experimental_cagra_index[12,0,0]  𝄀
+1  ¦  1
+set global experimental_ivfpq_index = 0;
+set global experimental_cagra_index = 0;
+select @@global.experimental_ivfpq_index, @@global.experimental_cagra_index;
+➤ @@experimental_ivfpq_index[12,0,0]  ¦  @@experimental_cagra_index[12,0,0]  𝄀
+0  ¦  0
