@@ -265,6 +265,7 @@ type Workspace interface {
 	Adjust(writeOffset uint64) error
 
 	Commit(ctx context.Context) ([]txn.TxnRequest, error)
+	FinalizeCommit(ctx context.Context)
 	Rollback(ctx context.Context) error
 
 	IncrSQLCount()

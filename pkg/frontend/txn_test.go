@@ -154,6 +154,9 @@ func (t *testWorkspace) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	panic("implement me")
 }
 
+func (t *testWorkspace) FinalizeCommit(ctx context.Context) {
+}
+
 func (t *testWorkspace) Rollback(ctx context.Context) error {
 	//TODO implement me
 	panic("implement me")

@@ -1997,15 +1997,6 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 		)
 	})
 
-	// Commit only prepares the CN-side write payload. If preparation fails, the
-	// txn operator will roll the transaction back, so keep the workspace alive
-	// for rollback GC and clone shared-file bookkeeping.
-	defer func() {
-		if err == nil {
-			txn.delTransaction()
-		}
-	}()
-
 	if txn.readOnly.Load() {
 		return nil, nil
 	}
@@ -2068,13 +2059,14 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 		return nil, err
 	}
 
-	// For CCPR transactions, call OnTxnCommit to clean up the cache
-	// This must happen after all commit operations succeed
+	return reqs, nil
+}
+
+func (txn *Transaction) FinalizeCommit(context.Context) {
 	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
 		txn.engine.ccprTxnCache.OnTxnCommit(txn.op.Txn().ID)
 	}
-
-	return reqs, nil
+	txn.delTransaction()
 }
 
 func (txn *Transaction) transferTombstonesByStatement(
