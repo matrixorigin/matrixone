@@ -1668,16 +1668,17 @@ func (builder *QueryBuilder) buildValueScan(
 		} else {
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			binder.builder = builder
-			// A compound value expression (e.g. a function call) must be bound
-			// without the destination column type. The DefaultBinder pushes its
-			// type down to nested literals, so binding st_point(116.3975, 39.9087)
-			// against a GEOMETRY column would type the float arguments as GEOMETRY
-			// and break the function's overload resolution. Only a bare literal
-			// value is bound against the column type; a function/operator binds by
-			// its own argument types, and the result is cast to the column type
-			// below (funcCastFor*Type / forceCastExpr2).
-			exprBinder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
-			exprBinder.builder = builder
+			// A function-call value expression must be bound without the
+			// destination column type. The DefaultBinder pushes its type down to
+			// nested literals, so binding st_point(116.3975, 39.9087) against a
+			// GEOMETRY column would type the float arguments as GEOMETRY and break
+			// the function's overload resolution. A function's arguments bind by
+			// their own types, and the result is cast to the column type below
+			// (funcCastFor*Type / forceCastExpr2). Other value expressions (a
+			// negative literal like -1.5, a cast, etc.) still bind against the
+			// column type, which a literal value legitimately adopts.
+			funcBinder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
+			funcBinder.builder = builder
 			for _, r := range stmt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)
@@ -1699,9 +1700,10 @@ func (builder *QueryBuilder) buildValueScan(
 					}
 				} else {
 					valueBinder := binder
-					if _, isNum := r[i].(*tree.NumVal); !isNum {
-						// compound expression: do not push the column type down
-						valueBinder = exprBinder
+					if _, isFunc := r[i].(*tree.FuncExpr); isFunc {
+						// function call: bind its arguments by their own types,
+						// not the destination column type
+						valueBinder = funcBinder
 					}
 					defExpr, err = valueBinder.BindExpr(r[i], 0, true)
 					if err != nil {
