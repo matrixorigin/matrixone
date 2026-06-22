@@ -250,7 +250,7 @@ func TestLoadIndex_WithCdcDeltas(t *testing.T) {
 	// prefilter should drop it from the result set.
 	data := generateTestData(testNVectors, testDim)
 	query := data[:testDim]
-	keys, _, err := idx.SearchF32(query, 1, 0)
+	keys, _, err := idx.SearchQuantize(query, 1, 0)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(keys))
 	require.NotEqual(t, ids[0], keys[0],

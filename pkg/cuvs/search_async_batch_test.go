@@ -251,7 +251,7 @@ func ivfPqAsyncBatchedMatchesSync(t *testing.T, conservativeDispatch bool) {
 	}
 	want := make([][]int64, nQueries)
 	for qid := 0; qid < nQueries; qid++ {
-		res, err := index.SearchFloat(queryOf(qid), 1, dimension, limit, sp)
+		res, err := index.SearchQuantize(queryOf(qid), 1, dimension, limit, sp)
 		if err != nil {
 			t.Fatalf("SearchFloat reference qid=%d: %v", qid, err)
 		}
@@ -353,7 +353,7 @@ func TestGpuCagraAsyncBatchedMatchesSync(t *testing.T) {
 	want := make([]int64, nQueries)
 	for qid := 0; qid < nQueries; qid++ {
 		q := []float32{float32(qid * 10), float32(qid * 10)}
-		res, err := index.SearchFloat(q, 1, dimension, 1, sp)
+		res, err := index.SearchQuantize(q, 1, dimension, 1, sp)
 		if err != nil {
 			t.Fatalf("SearchFloat reference: %v", err)
 		}

@@ -190,23 +190,6 @@ func (idx *CagraModel[B, Q]) AddChunkQuantize(chunk []B, chunkCount uint64, ids 
 	return nil
 }
 
-// AddChunkFloat appends a chunk of float32 vectors, quantizing on the fly when T is a 1-byte type.
-func (idx *CagraModel[B, Q]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
-	if idx.Index == nil {
-		return moerr.NewInternalErrorNoCtx("CagraModel: index not initialized; call InitEmpty first")
-	}
-	/*
-		if len(ids) > 0 {
-			logutil.Infof("[DEBUG] CagraModel.AddChunkFloat: chunkCount=%d, first_id=%d, last_id=%d", chunkCount, ids[0], ids[len(ids)-1])
-		}
-	*/
-	if err := idx.Index.AddChunkFloat(chunk, chunkCount, ids); err != nil {
-		return err
-	}
-	idx.Len += int64(chunkCount)
-	return nil
-}
-
 // Build constructs the CAGRA graph from the loaded vectors and starts the worker pool.
 func (idx *CagraModel[B, Q]) Build() error {
 	if idx.Index == nil {

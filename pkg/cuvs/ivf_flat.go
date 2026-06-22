@@ -427,8 +427,10 @@ func (gi *GpuIvfFlat[B, Q]) AddChunk(chunk []Q, chunkCount uint64, ids []int64) 
 	return nil
 }
 
-// AddChunkFloat adds a chunk of float32 data, performing on-the-fly quantization if needed.
-func (gi *GpuIvfFlat[B, Q]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
+// AddChunkQuantize adds a chunk of base-typed (B) data, converting B -> the
+// storage type Q on device (B==Q copy, or the learned/cast quantizer for a
+// narrower Q). Mirrors GpuCagra/GpuIvfPq.AddChunkQuantize.
+func (gi *GpuIvfFlat[B, Q]) AddChunkQuantize(chunk []B, chunkCount uint64, ids []int64) error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -441,9 +443,9 @@ func (gi *GpuIvfFlat[B, Q]) AddChunkFloat(chunk []float32, chunkCount uint64, id
 	if len(ids) > 0 {
 		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
 	}
-	C.gpu_ivf_flat_add_chunk_float(
+	C.gpu_ivf_flat_add_chunk_quantize(
 		gi.cIvfFlat,
-		(*C.float)(&chunk[0]),
+		unsafe.Pointer(&chunk[0]),
 		C.uint64_t(chunkCount),
 		cIds,
 		unsafe.Pointer(&errmsg),
@@ -674,7 +676,7 @@ func (gi *GpuIvfFlat[B, Q]) Search(queries []Q, numQueries uint64, dimension uin
 }
 
 // SearchFloat performs a K-Nearest Neighbor search with float32 queries
-func (gi *GpuIvfFlat[B, Q]) SearchFloat(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (SearchResultIvfFlat, error) {
+func (gi *GpuIvfFlat[B, Q]) SearchQuantize(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (SearchResultIvfFlat, error) {
 	if gi.cIvfFlat == nil {
 		return SearchResultIvfFlat{}, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}

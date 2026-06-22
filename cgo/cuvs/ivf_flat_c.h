@@ -78,6 +78,9 @@ void gpu_ivf_flat_extend_float(gpu_ivf_flat_c index_c, const float* new_data, ui
 // Add chunk of data (from float, with on-the-fly quantization if needed)
 void gpu_ivf_flat_add_chunk_float(gpu_ivf_flat_c index_c, const float* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
 
+// Add chunk of base-typed (B) data; the index converts B -> storage on device.
+void gpu_ivf_flat_add_chunk_quantize(gpu_ivf_flat_c index_c, const void* base_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
+
 // Trains the scalar quantizer (if T is 1-byte)
 void gpu_ivf_flat_train_quantizer(gpu_ivf_flat_c index_c, const float* train_data, uint64_t n_samples, void* errmsg);
 

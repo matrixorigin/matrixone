@@ -142,7 +142,7 @@ func buildTestModel(t *testing.T, id string, ids []int64) *CagraModel[float32, f
 	err = m.InitEmpty(testNVectors)
 	require.NoError(t, err)
 
-	err = m.AddChunkFloat(data, testNVectors, ids)
+	err = m.AddChunkQuantize(data, testNVectors, ids)
 	require.NoError(t, err)
 
 	err = m.Build()
@@ -217,7 +217,7 @@ func TestModelBuildAndLoad(t *testing.T) {
 	err = built.InitEmpty(testNVectors)
 	require.NoError(t, err)
 
-	err = built.AddChunkFloat(data, testNVectors, ids)
+	err = built.AddChunkQuantize(data, testNVectors, ids)
 	require.NoError(t, err)
 
 	err = built.Build()
@@ -386,7 +386,7 @@ func TestModelNil(t *testing.T) {
 	require.NotNil(t, err)
 
 	// AddChunkFloat fails because Index is nil.
-	err = idx.AddChunkFloat([]float32{1, 2}, 1, []int64{1})
+	err = idx.AddChunkQuantize([]float32{1, 2}, 1, []int64{1})
 	require.NotNil(t, err)
 
 	// Search fails because Index is nil.

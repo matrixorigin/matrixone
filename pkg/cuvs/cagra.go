@@ -424,38 +424,6 @@ func (gi *GpuCagra[B, Q]) AddChunk(chunk []Q, chunkCount uint64, ids []int64) er
 	return nil
 }
 
-// AddChunkFloat adds a chunk of float32 data, performing on-the-fly quantization if needed.
-func (gi *GpuCagra[B, Q]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
-	if gi.cCagra == nil {
-		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
-	}
-	if len(chunk) == 0 || chunkCount == 0 {
-		return nil
-	}
-
-	var errmsg *C.char
-	var cIds *C.int64_t
-	if len(ids) > 0 {
-		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
-	}
-	C.gpu_cagra_add_chunk_float(
-		gi.cCagra,
-		(*C.float)(&chunk[0]),
-		C.uint64_t(chunkCount),
-		cIds,
-		unsafe.Pointer(&errmsg),
-	)
-	runtime.KeepAlive(chunk)
-	runtime.KeepAlive(ids)
-
-	if errmsg != nil {
-		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
-		return moerr.NewInternalErrorNoCtx(errStr)
-	}
-	return nil
-}
-
 // AddChunkQuantize adds a chunk of base-typed (B) data, quantizing natively to
 // the storage type Q (int8/uint8) via the B-source quantizer. base_data is the
 // raw bytes of chunkCount*dim B-typed elements. No f32 detour.
@@ -739,7 +707,7 @@ func (gi *GpuCagra[B, Q]) Search(queries []Q, numQueries uint64, dimension uint3
 }
 
 // SearchFloat performs a K-Nearest Neighbor search with float32 queries
-func (gi *GpuCagra[B, Q]) SearchFloat(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (SearchResult, error) {
+func (gi *GpuCagra[B, Q]) SearchQuantize(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (SearchResult, error) {
 	if gi.cCagra == nil {
 		return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}

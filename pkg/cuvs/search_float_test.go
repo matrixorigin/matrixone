@@ -46,7 +46,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 			t.Fatalf("TrainQuantizer failed: %v", err)
 		}
 
-		err = index.AddChunkFloat(dataset, n_vectors, nil)
+		err = index.AddChunkQuantize(dataset, n_vectors, nil)
 		if err != nil {
 			t.Fatalf("AddChunkFloat failed: %v", err)
 		}
@@ -56,7 +56,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		for i := range queries {
 			queries[i] = float32(i % 10)
 		}
-		res, err := index.SearchFloat(queries, 2, dimension, 1, IvfPqSearchParams{NProbes: 1})
+		res, err := index.SearchQuantize(queries, 2, dimension, 1, IvfPqSearchParams{NProbes: 1})
 		if err != nil {
 			t.Fatalf("SearchFloat failed: %v", err)
 		}
@@ -78,7 +78,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		index.Build()
 
 		queries := make([]float32, uint64(dimension))
-		res, err := index.SearchFloat(queries, 1, dimension, 1, IvfFlatSearchParams{NProbes: 1})
+		res, err := index.SearchQuantize(queries, 1, dimension, 1, IvfFlatSearchParams{NProbes: 1})
 		if err != nil {
 			t.Fatalf("SearchFloat failed: %v", err)
 		}
@@ -100,7 +100,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		index.Build()
 
 		queries := make([]float32, uint64(dimension))
-		res, err := index.SearchFloat(queries, 1, dimension, 1, CagraSearchParams{ItopkSize: 64, SearchWidth: 1})
+		res, err := index.SearchQuantize(queries, 1, dimension, 1, CagraSearchParams{ItopkSize: 64, SearchWidth: 1})
 		if err != nil {
 			t.Fatalf("SearchFloat failed: %v", err)
 		}

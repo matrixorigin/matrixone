@@ -274,6 +274,20 @@ void gpu_ivf_flat_add_chunk_float(gpu_ivf_flat_c index_c, const float* chunk_dat
     }
 }
 
+void gpu_ivf_flat_add_chunk_quantize(gpu_ivf_flat_c index_c, const void* base_data, uint64_t chunk_count, const int64_t* ids, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        ivf_flat_dispatch(static_cast<gpu_ivf_flat_any_t*>(index_c), [&](auto* idx) {
+            using B = typename std::remove_pointer_t<decltype(idx)>::base_type;
+            idx->add_chunk_quantize(static_cast<const B*>(base_data), chunk_count, -1, ids);
+        });
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_flat_add_chunk_quantize", e.what());
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_flat_add_chunk_quantize", "unknown C++ exception");
+    }
+}
+
 void gpu_ivf_flat_train_quantizer(gpu_ivf_flat_c index_c, const float* train_data, uint64_t n_samples, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {

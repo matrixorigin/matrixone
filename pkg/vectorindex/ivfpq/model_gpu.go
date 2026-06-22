@@ -160,17 +160,6 @@ func (idx *IvfpqModel[B, Q]) InitEmpty(totalCount uint64) error {
 	return nil
 }
 
-func (idx *IvfpqModel[B, Q]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
-	if idx.Index == nil {
-		return moerr.NewInternalErrorNoCtx("IvfpqModel: index not initialized; call InitEmpty first")
-	}
-	if err := idx.Index.AddChunkFloat(chunk, chunkCount, ids); err != nil {
-		return err
-	}
-	idx.Len += int64(chunkCount)
-	return nil
-}
-
 // AddChunk appends a chunk of native storage-type (T) vectors with no
 // quantization — used when the base column type equals the storage type
 // (e.g. a vecf16 base stored as half). Mirrors AddChunkFloat but raw.
@@ -343,8 +332,9 @@ func (idx *IvfpqModel[B, Q]) Full() bool {
 	return idx.MaxCapacity > 0 && uint64(idx.Len) >= idx.MaxCapacity
 }
 
-// SearchF32 performs a KNN search using a float32 query vector.
-func (idx *IvfpqModel[B, Q]) SearchF32(query []float32, limit uint32, nprobes uint32) (keys []int64, distances []float32, err error) {
+// SearchQuantize performs a KNN search using a base-typed (B) query vector; the
+// index converts B -> its storage type Q on device (was SearchF32, f32-only).
+func (idx *IvfpqModel[B, Q]) SearchQuantize(query []B, limit uint32, nprobes uint32) (keys []int64, distances []float32, err error) {
 	if idx.Index == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("IvfpqModel: index not loaded")
 	}
@@ -355,7 +345,7 @@ func (idx *IvfpqModel[B, Q]) SearchF32(query []float32, limit uint32, nprobes ui
 	if sp.NProbes == 0 {
 		sp = cuvs.DefaultIvfPqSearchParams()
 	}
-	res, err := idx.Index.SearchFloat(query, 1, uint32(idx.Idxcfg.CuvsIvfpq.Dimensions), limit, sp)
+	res, err := idx.Index.SearchQuantize(query, 1, uint32(idx.Idxcfg.CuvsIvfpq.Dimensions), limit, sp)
 	if err != nil {
 		return nil, nil, err
 	}
