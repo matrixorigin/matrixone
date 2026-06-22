@@ -120,6 +120,12 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 		// vecf16: extract natively as []types.Float16 (2 bytes/element). The
 		// cuvs CDC writer reinterprets these bytes verbatim — no f32 widening.
 		row[i] = vector.GetArrayAt[types.Float16](vec, rowIndex)
+	case types.T_array_bf16:
+		row[i] = vector.GetArrayAt[types.BF16](vec, rowIndex)
+	case types.T_array_int8:
+		row[i] = vector.GetArrayAt[int8](vec, rowIndex)
+	case types.T_array_uint8:
+		row[i] = vector.GetArrayAt[uint8](vec, rowIndex)
 	case types.T_array_float64:
 		row[i] = vector.GetArrayAt[float64](vec, rowIndex)
 	case types.T_date:
@@ -261,6 +267,23 @@ func convertColIntoSql(
 		value := data.([]float64)
 		typstr := typ.DescString()
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typstr))
+	case types.T_array_float16:
+		// Narrow base columns (vecf16/bf16/int8/uint8). ArrayToString renders the
+		// half/bf16 bit pattern back to its decimal value and the int8/uint8 codes
+		// to integers, so CAST('[...]' as vecXXX(n)) reconstructs the same vector
+		// the ivfflat entry projection expects (matches the synchronous build,
+		// which reads the base column directly in SQL).
+		value := data.([]types.Float16)
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
+	case types.T_array_bf16:
+		value := data.([]types.BF16)
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
+	case types.T_array_int8:
+		value := data.([]int8)
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
+	case types.T_array_uint8:
+		value := data.([]uint8)
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
 	case types.T_date:
 		value := data.(types.Date)
 		sqlBuff = appendByte(sqlBuff, '\'')
