@@ -31,7 +31,7 @@ import (
 func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string) {
 
 	i := 0
-	nvec := 15
+	nvec := 19
 
 	bat := batch.NewWithSize(nvec)
 	res := make([]string, nvec)
@@ -72,6 +72,40 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 		v64 := []float64{0, 1, 2}
 		vector.AppendArray[float64](bat.Vecs[i], v64, false, proc.Mp())
 		res[i] = "CAST('[0, 1, 2]' as VECF64(3))"
+		i += 1
+	}
+
+	{
+		// []float16 (narrow base column)
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_float16, 3, 0))
+		vf16 := types.Float32ToFloat16Slice([]float32{0, 1, 2})
+		vector.AppendArray[types.Float16](bat.Vecs[i], vf16, false, proc.Mp())
+		res[i] = "CAST('[0, 1, 2]' as VECF16(3))"
+		i += 1
+	}
+
+	{
+		// []bf16 (narrow base column)
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_bf16, 3, 0))
+		vbf16 := types.Float32ToBF16Slice([]float32{0, 1, 2})
+		vector.AppendArray[types.BF16](bat.Vecs[i], vbf16, false, proc.Mp())
+		res[i] = "CAST('[0, 1, 2]' as VECBF16(3))"
+		i += 1
+	}
+
+	{
+		// []int8 (narrow base column)
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_int8, 3, 0))
+		vector.AppendArray[int8](bat.Vecs[i], []int8{0, 1, 2}, false, proc.Mp())
+		res[i] = "CAST('[0, 1, 2]' as VECINT8(3))"
+		i += 1
+	}
+
+	{
+		// []uint8 (narrow base column)
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_uint8, 3, 0))
+		vector.AppendArray[uint8](bat.Vecs[i], []uint8{0, 1, 2}, false, proc.Mp())
+		res[i] = "CAST('[0, 1, 2]' as VECUINT8(3))"
 		i += 1
 	}
 
