@@ -5341,12 +5341,14 @@ ignore_opt:
 |    IGNORE
 
 replace_stmt:
-    REPLACE into_table_name partition_clause_opt replace_data
+    REPLACE priority_opt into_table_name partition_clause_opt replace_data
     {
-    	rep := $4
-    	rep.Table = $2
-    	rep.PartitionNames = $3
-    	$$ = rep
+        // priority_opt (LOW_PRIORITY/DELAYED/HIGH_PRIORITY) is accepted for MySQL
+        // compatibility and ignored: MatrixOne has no corresponding scheduling.
+        rep := $5
+        rep.Table = $3
+        rep.PartitionNames = $4
+        $$ = rep
     }
 
 replace_data:
@@ -5355,6 +5357,19 @@ replace_data:
         vc := tree.NewValuesClause($2)
         $$ = &tree.Replace{
             Rows: tree.NewSelect(vc, nil, nil),
+        }
+    }
+|   TABLE table_name
+    {
+        // MySQL `REPLACE ... TABLE src` is equivalent to `REPLACE ... SELECT * FROM src`.
+        sc := &tree.SelectClause{
+            Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.StarExpr()}},
+            From: &tree.From{
+                Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: $2}},
+            },
+        }
+        $$ = &tree.Replace{
+            Rows: tree.NewSelect(sc, nil, nil),
         }
     }
 |   select_stmt
