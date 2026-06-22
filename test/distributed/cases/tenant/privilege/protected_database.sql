@@ -47,11 +47,26 @@ drop database `cameldb`;
 -- @session
 
 -- @session:id=1&user=protected_bvt_acc:admin&password=111
+set global lower_case_table_names = 0;
+set global protected_databases = 'ProtectedCaseDB';
+-- @session
+
+-- @session:id=3&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
+select @@lower_case_table_names;
+create database `protectedcasedb`;
+drop database `protectedcasedb`;
+create database `ProtectedCaseDB`;
+drop database `ProtectedCaseDB`;
+-- @session
+
+-- @session:id=1&user=protected_bvt_acc:admin&password=111
+set global lower_case_table_names = 1;
 drop user if exists protected_bvt_user;
 drop role if exists protected_bvt_writer;
 drop database protected_bvt_db;
 set global protected_databases = 'protected_bvt_unused';
 -- @session
 
+set global lower_case_table_names = 1;
 drop account protected_bvt_acc;
 set global enable_privilege_cache = on;
