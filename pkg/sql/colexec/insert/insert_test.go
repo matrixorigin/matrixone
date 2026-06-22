@@ -175,12 +175,14 @@ type testS3MemThrottler struct {
 	acquired     []int64
 	released     int64
 	forceRefresh int
+	ops          []string
 }
 
 func (t *testS3MemThrottler) Refresh() {}
 
 func (t *testS3MemThrottler) ForceRefresh() {
 	t.forceRefresh++
+	t.ops = append(t.ops, "force-refresh")
 }
 
 func (t *testS3MemThrottler) PrintUsage() {}
@@ -197,6 +199,7 @@ func (t *testS3MemThrottler) Acquire(size int64) (int64, bool) {
 
 func (t *testS3MemThrottler) Release(size int64) int64 {
 	t.released += size
+	t.ops = append(t.ops, "release")
 	return 0
 }
 
@@ -390,8 +393,51 @@ func TestInsertFlushS3WriterOnMemoryPressureAppendsBlockInfo(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(0), insert.ctr.s3MemGranted)
 	require.Equal(t, int64(1024), throttler.released)
+	require.Equal(t, []string{"force-refresh", "release"}, throttler.ops)
 	require.NotNil(t, insert.ctr.buf)
 	require.Greater(t, insert.ctr.buf.RowCount(), 0)
+}
+
+func TestInsertFlushS3WriterOnMemoryPressureRefreshesBeforeReleaseOnAppendError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+
+	throttler := &testS3MemThrottler{}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{
+			TableDef: testInsertS3TableDef(),
+		},
+		ctr: container{
+			s3Writer:       colexec.NewCNS3DataWriter(proc.Mp(), fs, testInsertS3TableDef(), 1, false),
+			s3MemGranted:   1024,
+			s3MemThrottler: throttler,
+			// Make the post-sync block-info append fail.
+			buf: batch.NewWithSize(1),
+		},
+	}
+	defer insert.ctr.s3Writer.Close()
+
+	bat := &batch.Batch{
+		Attrs: []string{"a", "b"},
+		Vecs: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+			testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
+		},
+	}
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	err = insert.ctr.s3Writer.Write(proc.Ctx, bat)
+	require.NoError(t, err)
+
+	err = insert.flushS3WriterOnMemoryPressure(proc, process.NewAnalyzer(0, false, false, "insert"))
+	require.Error(t, err)
+	require.Equal(t, int64(0), insert.ctr.s3MemGranted)
+	require.Equal(t, int64(1024), throttler.released)
+	require.Equal(t, []string{"force-refresh", "release"}, throttler.ops)
 }
 
 func TestAcquireFlushSlotUsesBoundedBypassAfterTimeout(t *testing.T) {
