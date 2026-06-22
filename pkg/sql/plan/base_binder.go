@@ -2331,21 +2331,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
-	// A numeric literal can never be meaningfully cast to a geometry target type.
-	// The DefaultBinder pushes the destination column type down to nested
-	// literals, so binding a function argument inside INSERT ... VALUES against a
-	// geometry column (e.g. st_point(116.3975, 39.9087)) arrives here with
-	// typ = GEOMETRY. Casting the literal to GEOMETRY breaks the function's
-	// overload resolution ("bad value [GEOMETRY GEOMETRY]"). Ignore the geometry
-	// target for numeric literals and let the function's own argument cast apply.
-	// (String literals keep their target type — a WKT string may legitimately
-	// cast to geometry.)
-	if typ.Id == int32(types.T_geometry) || typ.Id == int32(types.T_geometry32) {
-		switch astExpr.ValType {
-		case tree.P_int64, tree.P_uint64, tree.P_float64, tree.P_decimal, tree.P_hexnum, tree.P_bit, tree.P_bool:
-			typ = Type{}
-		}
-	}
 	// over_int64_err := moerr.NewInternalError(b.GetContext(), "", "Constants over int64 will support in future version.")
 	// rewrite the hexnum process logic
 	// for float64, if the number is over 1<<53-1,it will lost, so if typ is float64,

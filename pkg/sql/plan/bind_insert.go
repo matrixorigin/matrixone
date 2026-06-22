@@ -1668,6 +1668,16 @@ func (builder *QueryBuilder) buildValueScan(
 		} else {
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			binder.builder = builder
+			// A compound value expression (e.g. a function call) must be bound
+			// without the destination column type. The DefaultBinder pushes its
+			// type down to nested literals, so binding st_point(116.3975, 39.9087)
+			// against a GEOMETRY column would type the float arguments as GEOMETRY
+			// and break the function's overload resolution. Only a bare literal
+			// value is bound against the column type; a function/operator binds by
+			// its own argument types, and the result is cast to the column type
+			// below (funcCastFor*Type / forceCastExpr2).
+			exprBinder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
+			exprBinder.builder = builder
 			for _, r := range stmt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)
@@ -1688,7 +1698,12 @@ func (builder *QueryBuilder) buildValueScan(
 						return 0, err
 					}
 				} else {
-					defExpr, err = binder.BindExpr(r[i], 0, true)
+					valueBinder := binder
+					if _, isNum := r[i].(*tree.NumVal); !isNum {
+						// compound expression: do not push the column type down
+						valueBinder = exprBinder
+					}
+					defExpr, err = valueBinder.BindExpr(r[i], 0, true)
 					if err != nil {
 						return 0, err
 					}
