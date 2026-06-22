@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
@@ -136,6 +137,147 @@ func TestGetLockHolder(t *testing.T) {
 		},
 	)
 }
+
+func TestGetLockHolderReacquiresLockTableAfterBindChanged(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			table := uint64(11)
+			row := []byte{1}
+			holder := pb.WaitTxn{TxnID: []byte("txn-new-holder")}
+			oldBind := pb.LockTable{
+				Group:       0,
+				Table:       table,
+				OriginTable: table,
+				ServiceID:   "stale-service",
+				Version:     1,
+				Valid:       true,
+			}
+			newBind := pb.LockTable{
+				Group:       0,
+				Table:       table,
+				OriginTable: table,
+				ServiceID:   l2.serviceID,
+				Version:     2,
+				Valid:       true,
+			}
+
+			newTable := &getLockHolderTestTable{
+				bind:   newBind,
+				holder: holder,
+				found:  true,
+			}
+			client := &getLockHolderBindChangedClient{
+				t:        t,
+				wantBind: oldBind,
+				newBind:  newBind,
+			}
+			staleRemote := newRemoteLockTable(
+				l2.serviceID,
+				time.Second,
+				oldBind,
+				client,
+				func(bind pb.LockTable) {
+					require.Equal(t, newBind, bind)
+					l2.tableGroups.set(bind.Group, bind.Table, newTable)
+				},
+				l2.logger,
+			)
+			l2.tableGroups.set(oldBind.Group, oldBind.Table, staleRemote)
+
+			got, ok, err := l2.GetLockHolder(ctx, table, row, pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			})
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, holder, got)
+			require.Equal(t, 1, client.calls)
+			require.Equal(t, 1, newTable.calls)
+			require.Same(t, newTable, l2.tableGroups.get(newBind.Group, newBind.Table))
+		},
+	)
+}
+
+type getLockHolderBindChangedClient struct {
+	t        *testing.T
+	wantBind pb.LockTable
+	newBind  pb.LockTable
+	calls    int
+}
+
+func (c *getLockHolderBindChangedClient) Send(
+	ctx context.Context,
+	req *pb.Request) (*pb.Response, error) {
+	c.calls++
+	require.Equal(c.t, pb.Method_GetLockHolder, req.Method)
+	require.Equal(c.t, c.wantBind, req.LockTable)
+	resp := acquireResponse()
+	resp.NewBind = &c.newBind
+	return resp, nil
+}
+
+func (c *getLockHolderBindChangedClient) AsyncSend(
+	ctx context.Context,
+	req *pb.Request) (*morpc.Future, error) {
+	panic("unexpected async send")
+}
+
+func (c *getLockHolderBindChangedClient) Close() error {
+	return nil
+}
+
+type getLockHolderTestTable struct {
+	bind   pb.LockTable
+	holder pb.WaitTxn
+	found  bool
+	calls  int
+}
+
+func (l *getLockHolderTestTable) lock(
+	ctx context.Context,
+	txn *activeTxn,
+	rows [][]byte,
+	options LockOptions,
+	cb func(pb.Result, error)) {
+	panic("unexpected lock")
+}
+
+func (l *getLockHolderTestTable) unlock(
+	txn *activeTxn,
+	ls *cowSlice,
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) {
+	panic("unexpected unlock")
+}
+
+func (l *getLockHolderTestTable) getLock(
+	key []byte,
+	txn pb.WaitTxn,
+	fn func(Lock)) {
+	panic("unexpected getLock")
+}
+
+func (l *getLockHolderTestTable) getLockHolder(
+	key []byte) (pb.WaitTxn, bool, error) {
+	l.calls++
+	return l.holder, l.found, nil
+}
+
+func (l *getLockHolderTestTable) getBind() pb.LockTable {
+	return l.bind
+}
+
+func (l *getLockHolderTestTable) close(reason closeReason) {}
 
 func TestForceRefreshLockTableBinds(t *testing.T) {
 	runBindChangedTests(

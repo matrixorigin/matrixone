@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
@@ -55,11 +56,19 @@ func (s *service) GetLockHolder(
 	row []byte,
 	options pb.LockOptions) (pb.WaitTxn, bool, error) {
 	s.wait()
-	l, err := s.getLockTableWithCreate(options.Group, tableID, [][]byte{row}, options.Sharding)
-	if err != nil {
-		return pb.WaitTxn{}, false, err
+	for {
+		if err := ctx.Err(); err != nil {
+			return pb.WaitTxn{}, false, err
+		}
+		l, err := s.getLockTableWithCreate(options.Group, tableID, [][]byte{row}, options.Sharding)
+		if err != nil {
+			return pb.WaitTxn{}, false, err
+		}
+		holder, ok, err := l.getLockHolder(row)
+		if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+			return holder, ok, err
+		}
 	}
-	return l.getLockHolder(row)
 }
 
 func (s *service) ForceRefreshLockTableBinds(

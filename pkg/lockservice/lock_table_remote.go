@@ -250,8 +250,10 @@ func (l *remoteLockTable) getLockHolder(key []byte) (pb.WaitTxn, bool, error) {
 			return holder, ok, nil
 		}
 		if err = l.handleError(err, false); err == nil {
-			// Bind was refreshed successfully; retry with the new bind instead of surfacing a false "not found".
-			continue
+			// The bind-change handler replaces the lock-table object in service.tableGroups.
+			// This in-flight remote table still carries the stale bind, so let the service
+			// reacquire the current table before retrying the holder lookup.
+			return pb.WaitTxn{}, false, ErrLockTableBindChanged
 		}
 		waitRemoteRetryBackoff(backoff)
 		backoff = nextRemoteRetryBackoff(backoff)

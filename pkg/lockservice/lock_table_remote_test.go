@@ -384,7 +384,7 @@ func TestGetLockRemoteWithRetry(t *testing.T) {
 	)
 }
 
-func TestGetLockHolderRemoteRetriesAfterBindRefresh(t *testing.T) {
+func TestGetLockHolderRemoteReturnsBindChangedAfterBindRefresh(t *testing.T) {
 	oldInitial := remoteRetryInitialBackoff
 	oldMaxBackoff := remoteRetryMaxBackoff
 	remoteRetryInitialBackoff = time.Millisecond
@@ -395,7 +395,6 @@ func TestGetLockHolderRemoteRetriesAfterBindRefresh(t *testing.T) {
 	}()
 
 	n := 0
-	holder := pb.WaitTxn{TxnID: []byte("txn-holder")}
 	refreshedBind := pb.LockTable{ServiceID: "s1", Table: 1, Version: 2}
 	runRemoteLockTableTests(
 		t,
@@ -410,12 +409,7 @@ func TestGetLockHolderRemoteRetriesAfterBindRefresh(t *testing.T) {
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					n++
-					if n == 1 {
-						writeResponse(getLogger(""), cancel, resp, moerr.NewRPCTimeout(ctx), cs)
-						return
-					}
-					resp.GetLockHolder.Holder = holder
-					writeResponse(getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, moerr.NewRPCTimeout(ctx), cs)
 				},
 			)
 			s.RegisterMethodHandler(
@@ -432,11 +426,10 @@ func TestGetLockHolderRemoteRetriesAfterBindRefresh(t *testing.T) {
 			)
 		},
 		func(l *remoteLockTable, s Server) {
-			got, ok, err := l.getLockHolder([]byte("row1"))
-			require.NoError(t, err)
-			require.True(t, ok)
-			require.Equal(t, holder, got)
-			require.Equal(t, 2, n)
+			_, ok, err := l.getLockHolder([]byte("row1"))
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			require.False(t, ok)
+			require.Equal(t, 1, n)
 		},
 		func(lt pb.LockTable) {},
 	)

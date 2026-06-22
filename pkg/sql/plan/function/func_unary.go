@@ -7154,6 +7154,25 @@ func untrackUserLevelLock(owner, name string) (uint64, bool) {
 	return 0, true
 }
 
+func untrackAllUserLevelLock(owner, name string) (uint64, bool) {
+	key := userLevelLockKey{owner: owner, name: name}
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	count := userLevelLocks.counts[key]
+	if count == 0 {
+		return 0, false
+	}
+	delete(userLevelLocks.counts, key)
+	if names := userLevelLocks.byOwner[owner]; names != nil {
+		delete(names, name)
+		if len(names) == 0 {
+			delete(userLevelLocks.byOwner, owner)
+		}
+	}
+	return count, true
+}
+
 func userLevelLocksForOwner(owner string) []string {
 	userLevelLocks.Lock()
 	defer userLevelLocks.Unlock()
@@ -7330,22 +7349,18 @@ func releaseAllUserLevelLocks(proc *process.Process) (int64, error) {
 	var released int64
 	var firstErr error
 	for _, name := range userLevelLocksForOwner(owner) {
-		for {
-			count, held := untrackUserLevelLock(owner, name)
-			if !held {
-				break
+		if userLevelLockRefCount(owner, name) == 0 {
+			continue
+		}
+		if err := unlockUserLevelLockTxnIDs(context.Background(), proc.GetLockService(), owner, connID, name); err != nil {
+			logutil.Warn(fmt.Sprintf("releaseAllUserLevelLocks unlock failed: owner=%s lock=%s err=%v", owner, name, err))
+			if firstErr == nil {
+				firstErr = err
 			}
-			if count == 0 {
-				if err := unlockUserLevelLockTxnIDs(context.Background(), proc.GetLockService(), owner, connID, name); err != nil {
-					logutil.Warn(fmt.Sprintf("releaseAllUserLevelLocks unlock failed: owner=%s lock=%s err=%v", owner, name, err))
-					if firstErr == nil {
-						firstErr = err
-					}
-				} else {
-					released++
-				}
-				break
-			}
+			continue
+		}
+		if _, held := untrackAllUserLevelLock(owner, name); held {
+			released++
 		}
 	}
 	return released, firstErr

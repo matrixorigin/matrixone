@@ -7783,13 +7783,19 @@ func TestReleaseAllUserLevelLocksReturnsCountWhenUnlockFails(t *testing.T) {
 		released, err := releaseAllUserLevelLocks(proc1)
 		require.Error(t, err)
 		require.Equal(t, int64(0), released)
+
+		released, err = releaseAllUserLevelLocks(proc1)
+		require.Error(t, err)
+		require.Equal(t, int64(0), released)
+
+		services[0].(*userLevelLockTestService).unlockErr = nil
 		released, err = releaseAllUserLevelLocks(proc1)
 		require.NoError(t, err)
-		require.Equal(t, int64(0), released)
+		require.Equal(t, int64(2), released)
 
 		v, err = getUserLevelLock("release_all_fail_a", 0, proc2)
 		require.NoError(t, err)
-		require.Equal(t, int64(0), v)
+		require.Equal(t, int64(1), v)
 	})
 }
 
