@@ -214,7 +214,8 @@ message GetTxnLockResponse {
 
 // GetLockHolderRequest gets the current holder on a special row lock.
 message GetLockHolderRequest {
-  bytes Row = 1;
+  bytes    Row      = 1;
+  Sharding Sharding = 2;
 }
 
 // GetLockHolderResponse gets the current holder on a special row lock.

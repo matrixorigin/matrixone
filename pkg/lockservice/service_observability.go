@@ -64,7 +64,7 @@ func (s *service) GetLockHolder(
 		if err != nil {
 			return pb.WaitTxn{}, false, err
 		}
-		holder, ok, err := l.getLockHolder(row)
+		holder, ok, err := l.getLockHolder(ctx, row)
 		if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
 			return holder, ok, err
 		}

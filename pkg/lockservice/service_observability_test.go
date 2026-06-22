@@ -268,6 +268,7 @@ func (l *getLockHolderTestTable) getLock(
 }
 
 func (l *getLockHolderTestTable) getLockHolder(
+	ctx context.Context,
 	key []byte) (pb.WaitTxn, bool, error) {
 	l.calls++
 	return l.holder, l.found, nil

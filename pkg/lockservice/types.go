@@ -159,7 +159,7 @@ type lockTable interface {
 	// getLock get a lock
 	getLock(key []byte, txn pb.WaitTxn, fn func(Lock))
 	// getLockHolder returns the current holder if the lock is actively held.
-	getLockHolder(key []byte) (pb.WaitTxn, bool, error)
+	getLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error)
 	// getBind returns lock table binding
 	getBind() pb.LockTable
 	// close close the locktable

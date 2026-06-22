@@ -442,7 +442,7 @@ func (s *service) handleRemoteGetLockHolder(
 		return
 	}
 
-	holder, found, err := l.getLockHolder(req.GetLockHolder.Row)
+	holder, found, err := l.getLockHolder(ctx, req.GetLockHolder.Row)
 	if err == nil && found {
 		resp.GetLockHolder.Holder = holder
 	}
@@ -502,11 +502,12 @@ func (s *service) getLocalLockTable(
 		return nil, err
 	}
 	if l == nil {
+		rows, sharding := lockTableLookupInputsFromRequest(req)
 		l, err = s.getLockTableWithCreate(
 			req.LockTable.Group,
 			req.LockTable.Table,
-			req.Lock.Rows,
-			req.Lock.Options.Sharding)
+			rows,
+			sharding)
 		if err != nil || l.getBind().Changed(req.LockTable) {
 			return nil, ErrLockTableNotFound
 		}
@@ -549,6 +550,17 @@ func (s *service) getLocalLockTable(
 	}
 
 	return l, nil
+}
+
+func lockTableLookupInputsFromRequest(req *pb.Request) ([][]byte, pb.Sharding) {
+	switch req.Method {
+	case pb.Method_GetLockHolder:
+		return [][]byte{req.GetLockHolder.Row}, req.GetLockHolder.Sharding
+	case pb.Method_GetTxnLock:
+		return [][]byte{req.GetTxnLock.Row}, req.LockTable.Sharding
+	default:
+		return req.Lock.Rows, req.Lock.Options.Sharding
+	}
 }
 
 func (s *service) getTxnWaitingListOnRemote(

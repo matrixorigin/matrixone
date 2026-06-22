@@ -354,7 +354,7 @@ func (l *localLockTable) getLock(
 	}
 }
 
-func (l *localLockTable) getLockHolder(key []byte) (pb.WaitTxn, bool, error) {
+func (l *localLockTable) getLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	if l.mu.closed {

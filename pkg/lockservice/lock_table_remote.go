@@ -242,12 +242,18 @@ func (l *remoteLockTable) getLock(
 	}
 }
 
-func (l *remoteLockTable) getLockHolder(key []byte) (pb.WaitTxn, bool, error) {
+func (l *remoteLockTable) getLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error) {
 	backoff := remoteRetryInitialBackoff
 	for {
-		holder, ok, err := l.doGetLockHolder(key)
+		if err := ctx.Err(); err != nil {
+			return pb.WaitTxn{}, false, err
+		}
+		holder, ok, err := l.doGetLockHolder(ctx, key)
 		if err == nil {
 			return holder, ok, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return pb.WaitTxn{}, false, err
 		}
 		if err = l.handleError(err, false); err == nil {
 			// The bind-change handler replaces the lock-table object in service.tableGroups.
@@ -255,7 +261,9 @@ func (l *remoteLockTable) getLockHolder(key []byte) (pb.WaitTxn, bool, error) {
 			// reacquire the current table before retrying the holder lookup.
 			return pb.WaitTxn{}, false, ErrLockTableBindChanged
 		}
-		waitRemoteRetryBackoff(backoff)
+		if err := waitRemoteRetryBackoffWithContext(ctx, backoff); err != nil {
+			return pb.WaitTxn{}, false, err
+		}
 		backoff = nextRemoteRetryBackoff(backoff)
 	}
 }
@@ -263,6 +271,20 @@ func (l *remoteLockTable) getLockHolder(key []byte) (pb.WaitTxn, bool, error) {
 func waitRemoteRetryBackoff(backoff time.Duration) {
 	if backoff > 0 {
 		time.Sleep(backoff)
+	}
+}
+
+func waitRemoteRetryBackoffWithContext(ctx context.Context, backoff time.Duration) error {
+	if backoff <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
@@ -338,8 +360,8 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 	return Lock{}, false, moerr.AttachCause(ctx, err)
 }
 
-func (l *remoteLockTable) doGetLockHolder(key []byte) (pb.WaitTxn, bool, error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseDoGetLock)
+func (l *remoteLockTable) doGetLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, defaultRPCTimeout, moerr.CauseDoGetLock)
 	defer cancel()
 
 	req := acquireRequest()
@@ -348,6 +370,7 @@ func (l *remoteLockTable) doGetLockHolder(key []byte) (pb.WaitTxn, bool, error) 
 	req.Method = pb.Method_GetLockHolder
 	req.LockTable = l.bind
 	req.GetLockHolder.Row = key
+	req.GetLockHolder.Sharding = l.bind.Sharding
 
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
