@@ -1132,7 +1132,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		if node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
+			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroupV2(node, ss, nodes))))
 			return ss, nil
 		} else if c.IsSingleScope(ss) {
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileTPGroup(node, ss, nodes))))
@@ -3158,13 +3158,10 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
-		if len(c.cnList) == 1 {
-			if probeScopes[0].NodeInfo.Mcpu != int(left.Stats.Dop) || buildScopes[0].NodeInfo.Mcpu != int(right.Stats.Dop) {
-				logutil.Infof("not support shuffle v2 after merge")
-				return c.compileShuffleJoin(node, left, right, probeScopes, buildScopes)
-			}
+		if probeScopes[0].NodeInfo.Mcpu == int(left.Stats.Dop) && buildScopes[0].NodeInfo.Mcpu == int(right.Stats.Dop) {
 			return c.compileShuffleJoinV2(node, left, right, probeScopes, buildScopes)
 		}
+		logutil.Infof("not support shuffle v2 after merge")
 		return c.compileShuffleJoin(node, left, right, probeScopes, buildScopes)
 	}
 
@@ -3178,6 +3175,28 @@ func (c *Compile) compileShuffleJoinV2(node, left, right *plan.Node, leftscopes,
 	}
 	if len(leftscopes) != len(rightscopes) {
 		panic("wrong scopes for shuffle join!")
+	}
+
+	// For multi-CN, create per-CN scope lists with dispatch/merge operators.
+	// newShuffleJoinScopeList already uses V2 shuffle operators for multi-CN,
+	// so the scope creation IS V2 — only the join-operator ShuffleIdx flag differs.
+	if len(c.cnList) > 1 {
+		shuffleJoins := c.newShuffleJoinScopeList(leftscopes, rightscopes, node)
+		constructShuffleJoinOP(c, shuffleJoins, node, left, right, true)
+
+		currentFirstFlag := c.anal.isFirst
+		for i := range shuffleJoins {
+			buildScope := shuffleJoins[i].PreScopes[0]
+			mergeOp := merge.NewArgument()
+			mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+			buildScope.setRootOperator(mergeOp)
+
+			buildOp := constructShuffleHashBuild(node, shuffleJoins[i].RootOp, c.proc)
+			buildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			buildScope.setRootOperator(buildOp)
+		}
+		c.anal.isFirst = false
+		return shuffleJoins
 	}
 
 	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
@@ -3979,6 +3998,57 @@ func (c *Compile) compileShuffleGroupV2(node *plan.Node, inputSS []*Scope, nodes
 		return inputSS
 	}
 
+	// Multi-CN path: create per-CN scope lists with shuffle + dispatch for cross-CN routing.
+	if len(c.cnList) > 1 {
+		inputSS = c.mergeShuffleScopesIfNeeded(inputSS, true)
+		// merge here to avoid bugs, delete this in the future
+		for i := range inputSS {
+			if inputSS[i].NodeInfo.Mcpu > 1 {
+				inputSS[i] = c.newMergeScopeByCN([]*Scope{inputSS[i]}, inputSS[i].NodeInfo)
+			}
+		}
+
+		shuffleGroups := make([]*Scope, 0, len(c.cnList))
+		dop := int(node.Stats.Dop)
+		for _, cn := range c.cnList {
+			scopes := c.newScopeListWithNode(dop, len(inputSS), cn.Addr)
+			for _, s := range scopes {
+				for _, rr := range s.Proc.Reg.MergeReceivers {
+					rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+				}
+			}
+			shuffleGroups = append(shuffleGroups, scopes...)
+		}
+
+		j := 0
+		for i := range inputSS {
+			shuffleArg := constructShuffleArgForGroupV2(node, int32(len(shuffleGroups)))
+			shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+			inputSS[i].setRootOperator(shuffleArg)
+			if inputSS[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+				inputSS[i] = c.newMergeScopeByCN([]*Scope{inputSS[i]}, inputSS[i].NodeInfo)
+			}
+			dispatchArg := constructDispatch(j, shuffleGroups, inputSS[i], node, false)
+			dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+			inputSS[i].setRootOperator(dispatchArg)
+			j++
+			inputSS[i].IsEnd = true
+		}
+
+		currentIsFirst := c.anal.isFirst
+		for i := range shuffleGroups {
+			groupOp := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], true, len(shuffleGroups), c.proc)
+			groupOp.SetAnalyzeControl(c.anal.curNodeIdx, currentIsFirst)
+			shuffleGroups[i].setRootOperator(groupOp)
+		}
+		c.anal.isFirst = false
+
+		//append prescopes
+		c.appendPrescopes(shuffleGroups, inputSS)
+		return shuffleGroups
+	}
+
+	// Single-CN path: fast path with paired scopes.
 	//fallback to non-shuffle group
 	if len(inputSS) != 1 || inputSS[0].NodeInfo.Mcpu <= 1 || inputSS[0].NodeInfo.Mcpu != int(node.Stats.Dop) {
 		if c.IsSingleScope(inputSS) {

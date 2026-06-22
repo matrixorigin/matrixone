@@ -1586,6 +1586,9 @@ func constructShuffleOperatorForJoinV2(bucketNum int32, node *plan.Node, left bo
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
+	if left && len(node.RuntimeFilterProbeList) > 0 {
+		arg.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
+	}
 	return arg
 }
 

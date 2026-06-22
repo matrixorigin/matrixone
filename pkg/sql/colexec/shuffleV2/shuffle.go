@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -45,6 +46,9 @@ func (shuffle *ShuffleV2) Prepare(proc *process.Process) error {
 		shuffle.OpAnalyzer.Reset()
 	}
 
+	if shuffle.RuntimeFilterSpec != nil {
+		shuffle.ctr.runtimeFilterHandled = false
+	}
 	if shuffle.ctr.sels == nil {
 		shuffle.ctr.sels = make([][]int32, shuffle.BucketNum)
 	}
@@ -97,6 +101,9 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 	tmpBat := getFull()
 	if tmpBat != nil && tmpBat.RowCount() > 0 {
 		shuffle.ctr.buf = tmpBat
+		if err := shuffle.handleRuntimeFilter(proc); err != nil {
+			return vm.CancelResult, err
+		}
 		result.Batch = tmpBat
 		return result, nil
 	}
@@ -106,6 +113,9 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 		tmpBat := getLast()
 		if tmpBat != nil {
 			shuffle.ctr.buf = tmpBat
+			if err := shuffle.handleRuntimeFilter(proc); err != nil {
+				return vm.CancelResult, err
+			}
 			result.Batch = tmpBat
 			return result, nil
 		}
@@ -122,6 +132,9 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 		tmpBat := getFull()
 		if tmpBat != nil { // find a full batch
 			shuffle.ctr.buf = tmpBat
+			if err := shuffle.handleRuntimeFilter(proc); err != nil {
+				return vm.CancelResult, err
+			}
 			result.Batch = tmpBat
 			return result, nil
 		}
@@ -137,6 +150,8 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 			shuffle.ctr.shufflePool.stopWriting()
 			result.Batch = batch.EmptyBatch
 			return result, nil
+		} else if bat.Last() {
+			return result, nil
 		} else if !bat.IsEmpty() {
 			if shuffle.ctr.exprExec != nil {
 				bat, err = shuffle.evalAndShuffle(bat, proc)
@@ -150,11 +165,43 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if bat != nil {
 				// can directly send this batch
+				if err = shuffle.handleRuntimeFilter(proc); err != nil {
+					return vm.CancelResult, err
+				}
 				shuffle.ctr.shufflePool.statsDirectlySentBatch(bat)
 				return result, nil
 			}
 		}
 	}
+}
+
+// handleRuntimeFilter waits for and processes runtime filter messages.
+// It blocks until the runtime filter is received or the context is done.
+func (shuffle *ShuffleV2) handleRuntimeFilter(proc *process.Process) error {
+	if !shuffle.ctr.runtimeFilterHandled && shuffle.RuntimeFilterSpec != nil {
+		shuffle.msgReceiver = message.NewMessageReceiver(
+			[]int32{shuffle.RuntimeFilterSpec.Tag},
+			message.AddrBroadCastOnCurrentCN(),
+			proc.GetMessageBoard())
+		msgs, ctxDone, err := shuffle.msgReceiver.ReceiveMessage(true, proc.Ctx)
+		if ctxDone {
+			shuffle.ctr.runtimeFilterHandled = true
+			return nil
+		}
+		if err != nil {
+			return err
+		} else {
+			for i := range msgs {
+				msg, _ := msgs[i].(message.RuntimeFilterMessage)
+				switch msg.Typ {
+				case message.RuntimeFilter_PASS, message.RuntimeFilter_DROP:
+					shuffle.ctr.runtimeFilterHandled = true
+					continue
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // evalAndShuffle evaluates the ShuffleExpr on the batch, computes shuffle bucket assignments,
