@@ -6907,6 +6907,77 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 	return pts
 }
 
+func addReplaceDeletePrivilegeTips(arr privilegeTipsArray, p *plan2.Plan) privilegeTipsArray {
+	if p.GetQuery() == nil {
+		return arr
+	}
+
+	hasTip := make(map[[3]string]struct{}, len(arr))
+	for _, tip := range arr {
+		hasTip[[3]string{tip.typ.String(), tip.databaseName, tip.tableName}] = struct{}{}
+	}
+
+	for _, node := range p.GetQuery().GetNodes() {
+		if node.NodeType != plan.Node_MULTI_UPDATE {
+			continue
+		}
+		for _, updateCtx := range node.UpdateCtxList {
+			if updateCtx == nil || updateCtx.ObjRef == nil || updateCtx.TableDef == nil {
+				continue
+			}
+			dbName := updateCtx.ObjRef.GetSchemaName()
+			tableName := updateCtx.ObjRef.GetObjName()
+			if dbName == "" {
+				dbName = updateCtx.TableDef.DbName
+			}
+			if tableName == "" {
+				tableName = updateCtx.TableDef.Name
+			}
+			if tableName == "" || isIndexTable(tableName) || replaceTargetIsInsertOnly(updateCtx.TableDef) {
+				continue
+			}
+
+			key := [3]string{PrivilegeTypeDelete.String(), dbName, tableName}
+			if _, ok := hasTip[key]; ok {
+				continue
+			}
+			hasTip[key] = struct{}{}
+
+			isCluster := updateCtx.TableDef.TableType == catalog.SystemClusterRel
+			if !isCluster {
+				isCluster = isClusterTable(dbName, tableName)
+			}
+			arr = append(arr, privilegeTips{
+				typ:                   PrivilegeTypeDelete,
+				objType:               objectTypeTable,
+				databaseName:          dbName,
+				tableName:             tableName,
+				isClusterTable:        isCluster,
+				clusterTableOperation: clusterTableModify,
+				originViews:           node.GetOriginViews(),
+				directView:            node.GetDirectView(),
+				scanSnapshot:          node.GetScanSnapshot(),
+			})
+		}
+	}
+	return arr
+}
+
+func replaceTargetIsInsertOnly(tableDef *plan.TableDef) bool {
+	if tableDef == nil || tableDef.Pkey == nil {
+		return false
+	}
+	if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+		return false
+	}
+	for _, idx := range tableDef.Indexes {
+		if idx.Unique {
+			return false
+		}
+	}
+	return true
+}
+
 // convertPrivilegeTipsToPrivilege constructs the privilege entries from the privilege tips from the plan
 func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 	// rewirte the privilege entries based on privilege tips
@@ -8219,6 +8290,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 			return true, stats, nil
 		}
 		arr := extractPrivilegeTipsFromPlan(p)
+		if _, ok := stmt.(*tree.Replace); ok {
+			arr = addReplaceDeletePrivilegeTips(arr, p)
+		}
 		if len(arr) == 0 {
 			if ins, ok := stmt.(*tree.Insert); ok {
 				dbName, tableName, ok := getInsertTargetTableName(ins, ses)

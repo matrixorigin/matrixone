@@ -5719,6 +5719,199 @@ func Test_determineDML(t *testing.T) {
 	})
 }
 
+func TestReplacePrivilegeRequiresDeleteForConflictingTargets(t *testing.T) {
+	const (
+		dbName    = "replace_priv_edge"
+		tableName = "t_priv"
+	)
+
+	convey.Convey("replace with real primary key requires delete privilege", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.Replace{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		sql2result := makeSql2ExecResult2(0, [][]interface{}{{0, false}}, nil, nil, nil, nil, nil, nil, nil)
+		addTablePrivilegeResultsForRole(t, sql2result, 0, dbName, tableName, map[PrivilegeType]bool{
+			PrivilegeTypeSelect: true,
+			PrivilegeTypeInsert: true,
+			PrivilegeTypeDelete: false,
+		})
+		sql2result[getSqlForInheritedRoleIdOfRoleId(0)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+			ses.GetTxnHandler().GetTxnCtx(),
+			ses,
+			stmt,
+			makeReplacePrivilegePlan(dbName, tableName, false, false),
+		)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
+	convey.Convey("replace on fake pk table without unique indexes remains insert only", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.Replace{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		sql2result := makeSql2ExecResult2(0, [][]interface{}{{0, false}}, nil, nil, nil, nil, nil, nil, nil)
+		addTablePrivilegeResultsForRole(t, sql2result, 0, dbName, tableName, map[PrivilegeType]bool{
+			PrivilegeTypeSelect: true,
+			PrivilegeTypeInsert: true,
+			PrivilegeTypeDelete: false,
+		})
+		sql2result[getSqlForInheritedRoleIdOfRoleId(0)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+			ses.GetTxnHandler().GetTxnCtx(),
+			ses,
+			stmt,
+			makeReplacePrivilegePlan(dbName, tableName, true, false),
+		)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("replace on fake pk table with unique index requires delete privilege", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.Replace{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		sql2result := makeSql2ExecResult2(0, [][]interface{}{{0, false}}, nil, nil, nil, nil, nil, nil, nil)
+		addTablePrivilegeResultsForRole(t, sql2result, 0, dbName, tableName, map[PrivilegeType]bool{
+			PrivilegeTypeSelect: true,
+			PrivilegeTypeInsert: true,
+			PrivilegeTypeDelete: false,
+		})
+		sql2result[getSqlForInheritedRoleIdOfRoleId(0)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+			ses.GetTxnHandler().GetTxnCtx(),
+			ses,
+			stmt,
+			makeReplacePrivilegePlan(dbName, tableName, true, true),
+		)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+}
+
+func makeReplacePrivilegePlan(dbName, tableName string, fakePK bool, uniqueIndex bool) *plan2.Plan {
+	pkName := "id"
+	if fakePK {
+		pkName = catalog.FakePrimaryKeyColName
+	}
+	tableDef := &plan.TableDef{
+		Name:   tableName,
+		DbName: dbName,
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: pkName,
+			Names:       []string{pkName},
+		},
+		Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID},
+			{Name: pkName},
+			{Name: "v"},
+		},
+	}
+	if uniqueIndex {
+		tableDef.Indexes = []*plan.IndexDef{
+			{
+				IndexName:      "u_v",
+				Parts:          []string{"v"},
+				Unique:         true,
+				IndexTableName: "__mo_index_u_v",
+			},
+		}
+	}
+	objRef := &plan.ObjectRef{SchemaName: dbName, ObjName: tableName}
+	return &plan2.Plan{
+		Plan: &plan2.Plan_Query{
+			Query: &plan.Query{
+				StmtType: plan.Query_INSERT,
+				Nodes: []*plan.Node{
+					{
+						NodeType: plan.Node_TABLE_SCAN,
+						ObjRef:   objRef,
+						TableDef: tableDef,
+					},
+					{
+						NodeType: plan.Node_PRE_INSERT,
+						PreInsertCtx: &plan.PreInsertCtx{
+							Ref:      objRef,
+							TableDef: tableDef,
+						},
+					},
+					{
+						NodeType: plan.Node_MULTI_UPDATE,
+						UpdateCtxList: []*plan.UpdateCtx{
+							{
+								ObjRef:   objRef,
+								TableDef: tableDef,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func addTablePrivilegeResultsForRole(
+	t *testing.T,
+	sql2result map[string]ExecResult,
+	roleID int64,
+	dbName string,
+	tableName string,
+	allowed map[PrivilegeType]bool,
+) {
+	t.Helper()
+	privTypes := []PrivilegeType{
+		PrivilegeTypeSelect,
+		PrivilegeTypeInsert,
+		PrivilegeTypeDelete,
+		PrivilegeTypeTableAll,
+		PrivilegeTypeTableOwnership,
+	}
+	for _, privType := range privTypes {
+		entry := privilegeEntriesMap[privType]
+		entry.objType = objectTypeTable
+		entry.databaseName = dbName
+		entry.tableName = tableName
+		levels, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+		require.NoError(t, err)
+		for _, level := range levels {
+			sql, err := getSqlForPrivilege(context.TODO(), roleID, entry, level)
+			require.NoError(t, err)
+			rows := [][]interface{}{}
+			if allowed[privType] {
+				rows = [][]interface{}{{entry.privilegeId, true}}
+			}
+			sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+		}
+	}
+}
+
 func Test_doGrantRole(t *testing.T) {
 	convey.Convey("grant role to role succ", t, func() {
 		ctrl := gomock.NewController(t)
