@@ -12654,6 +12654,21 @@ var supportedOthersBuiltIns = []FuncNew{
 					return CastGeometryToSubtype
 				},
 			},
+			{
+				// GEOMETRY32 source (e.g. inserting st_point32(...) into a
+				// point32 subtype column). The eval re-encodes float32 WKB via the
+				// "32:" prefix the binder adds to the subtype metadata.
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_geometry32},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastGeometryToSubtype
+				},
+			},
 		},
 	},
 

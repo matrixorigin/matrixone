@@ -32,3 +32,14 @@ drop table if exists sp;
 -- Feeds the S2 / H3 index functions directly (no WKT string needed).
 select s2_cellid_level(s2_cellid(st_point(116.3975, 39.9087))) as s2_lvl,
        h3_h3index_resolution(h3_h3index(st_point(116.3975, 39.9087), 9)) as h3_res;
+
+-- Regression: INSERT ... VALUES with decimal-literal args (the DefaultBinder
+-- used to coerce the literals to the column's GEOMETRY type, breaking overload
+-- resolution). Must work for point / point32 subtype columns too.
+drop table if exists reg;
+create table reg(p point, p32 point32);
+insert into reg values (st_point(116.3975, 39.9087), st_point32(116.3975, 39.9087));
+insert into reg values (st_point(1.5, 2.5), st_point32(1.5, 2.5));
+select st_astext(p) as p, st_astext(p32) as p32 from reg order by 1;
+select s2_cellid_level(s2_cellid(p)) as lvl from reg order by 1;
+drop table if exists reg;

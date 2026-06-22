@@ -29,12 +29,25 @@ drop table if exists sp;
 create table sp(id int, g geometry, g32 geometry32);
 insert into sp values (1, st_point(1, 2), st_point32(1, 2));
 insert into sp values (2, st_point(116.3975, 39.9087), st_point32(116.3975, 39.9087));
-invalid argument function st_point, bad value [GEOMETRY GEOMETRY]
 select id, st_astext(g) as g, st_astext(g32) as g32 from sp order by id;
 ➤ id[4,32,0]  ¦  g[12,-1,0]  ¦  g32[12,-1,0]  𝄀
-1  ¦  POINT(1 2)  ¦  POINT(1 2)
+1  ¦  POINT(1 2)  ¦  POINT(1 2)  𝄀
+2  ¦  POINT(116.3975 39.9087)  ¦  POINT(116.39749908447266 39.90869903564453)
 drop table if exists sp;
 select s2_cellid_level(s2_cellid(st_point(116.3975, 39.9087))) as s2_lvl,
 h3_h3index_resolution(h3_h3index(st_point(116.3975, 39.9087), 9)) as h3_res;
 ➤ s2_lvl[4,32,0]  ¦  h3_res[4,32,0]  𝄀
 30  ¦  9
+drop table if exists reg;
+create table reg(p point, p32 point32);
+insert into reg values (st_point(116.3975, 39.9087), st_point32(116.3975, 39.9087));
+insert into reg values (st_point(1.5, 2.5), st_point32(1.5, 2.5));
+select st_astext(p) as p, st_astext(p32) as p32 from reg order by 1;
+➤ p[12,-1,0]  ¦  p32[12,-1,0]  𝄀
+POINT(1.5 2.5)  ¦  POINT(1.5 2.5)  𝄀
+POINT(116.3975 39.9087)  ¦  POINT(116.39749908447266 39.90869903564453)
+select s2_cellid_level(s2_cellid(p)) as lvl from reg order by 1;
+➤ lvl[4,32,0]  𝄀
+30  𝄀
+30
+drop table if exists reg;
