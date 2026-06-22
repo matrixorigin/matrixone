@@ -178,6 +178,19 @@ func (insert *Insert) releaseS3MemGrant() {
 	}
 }
 
+func (insert *Insert) refreshAndReleaseS3MemGrant() {
+	type refreshBeforeReleaseDecider interface {
+		ShouldRefreshBeforeRelease() bool
+	}
+
+	if insert.ctr.s3MemThrottler != nil && insert.ctr.s3MemGranted > 0 {
+		if decider, ok := insert.ctr.s3MemThrottler.(refreshBeforeReleaseDecider); !ok || decider.ShouldRefreshBeforeRelease() {
+			forcedRefresh(insert.ctr.s3MemThrottler)
+		}
+	}
+	insert.releaseS3MemGrant()
+}
+
 func (insert *Insert) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	return input, nil
 }

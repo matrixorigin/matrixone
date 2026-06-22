@@ -1,0 +1,27 @@
+SET probe_limit=10;
+drop database if exists ivf_clone_sync;
+create database ivf_clone_sync;
+use ivf_clone_sync;
+create table src(a int primary key, b vecf32(3));
+insert into src values
+(1,'[1,1,1]'),(2,'[2,2,2]'),
+(10,'[100,100,100]'),(11,'[101,101,101]'),
+(20,'[500,500,500]'),(21,'[501,501,501]');
+create index idx using ivfflat on src(b) lists=3 op_type 'vector_l2_ops';
+create table dst clone src;
+select count(*) from dst;
+count(*)
+6
+show create table dst;
+Table    Create Table
+dst    CREATE TABLE `dst` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx` USING ivfflat (`b`) lists = 3  op_type 'vector_l2_ops' \n)
+select a from dst order by l2_distance(b,'[1,1,1]') limit 1;
+a
+1
+select a from dst order by l2_distance(b,'[100,100,100]') limit 1;
+a
+10
+select a from dst order by l2_distance(b,'[500,500,500]') limit 1;
+a
+20
+drop database ivf_clone_sync;

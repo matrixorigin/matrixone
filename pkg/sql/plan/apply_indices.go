@@ -19,6 +19,8 @@ import (
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
@@ -438,7 +440,7 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap), nil
 
 	case plan.Node_JOIN:
-		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap), nil
+		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap)
 
 	case plan.Node_PROJECT:
 		//NOTE: This is the entry point for vector index rule on SORT NODE.
@@ -453,6 +455,9 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
+		return nodeID
+	}
+	if builder.scanHasMatchedFullTextFilter(node) {
 		return nodeID
 	}
 	if builder.isScanProtected(node.NodeId) {
@@ -607,32 +612,34 @@ END_FULLTEXT:
 			multiTableIndexKeys = append(multiTableIndexKeys, key)
 		}
 
+		// Plugin-mediated dispatch — every plugin-registered vector
+		// index exposes Hooks.ApplyForSort, which routes back into the
+		// builder's per-algo redirect (plugin_builder.go) and then into
+		// the real body in apply_indices_<algo>.go. The pluginless
+		// hardcoded switch was the bug surface that let CAGRA / IVF-PQ
+		// drift behind HNSW / IVF-FLAT; one loop here keeps the algo
+		// set canonical.
+		opts := planplugin.ApplyForSortOpts{ColRefCnt: colRefCnt, IdxColMap: idxColMap}
 		for _, multiTableIndexKey := range multiTableIndexKeys {
 			multiTableIndex := multiTableIndexes[multiTableIndexKey]
-			switch multiTableIndex.IndexAlgo {
-			case catalog.MoIndexIvfFlatAlgo.ToString():
-				newNodeID, err := builder.applyIndicesForSortUsingIvfflat(nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap)
-				if err != nil || newNodeID != nodeID {
-					return newNodeID, err
-				}
-
-			case catalog.MoIndexHnswAlgo.ToString():
-				newNodeID, err := builder.applyIndicesForSortUsingHnsw(nodeID, vecCtx, multiTableIndex)
-				if err != nil || newNodeID != nodeID {
-					return newNodeID, err
-				}
-
-			case catalog.MoIndexCagraAlgo.ToString():
-				newNodeID, err := builder.applyIndicesForSortUsingCagra(nodeID, vecCtx, multiTableIndex)
-				if err != nil || newNodeID != nodeID {
-					return newNodeID, err
-				}
-
-			case catalog.MoIndexIvfpqAlgo.ToString():
-				newNodeID, err := builder.applyIndicesForSortUsingIvfpq(nodeID, vecCtx, multiTableIndex)
-				if err != nil || newNodeID != nodeID {
-					return newNodeID, err
-				}
+			// Defence in depth: collectVectorIndexes already filters
+			// via IsVectorIndexAlgo, but the dispatch site re-checks so
+			// a future change that loosens collectVectorIndexes can't
+			// silently route fulltext (or any other non-vector
+			// plugin-registered algo) through the vector ANN rewrite
+			// path. indexplugin.Get alone is not sufficient — fulltext
+			// is plugin-registered too.
+			if !indexplugin.IsVectorIndexAlgo(multiTableIndex.IndexAlgo) {
+				continue
+			}
+			p, ok := indexplugin.Get(multiTableIndex.IndexAlgo)
+			if !ok {
+				continue
+			}
+			vctxExt, mtiExt := toPlanplugin(vecCtx, multiTableIndex)
+			newNodeID, _, err := p.Plan().ApplyForSort(builder, vctxExt, mtiExt, nodeID, opts)
+			if err != nil || newNodeID != nodeID {
+				return newNodeID, err
 			}
 		}
 
@@ -844,32 +851,32 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 		return nil
 	}
 
+	// Same plugin dispatch as applyIndicesForSort above — the canonical
+	// algo set lives in the plugin registry. Hooks.CanApply is the
+	// non-destructive probe (it folds prepareXxxIndexContext into a
+	// bool); a true answer claims this scan as a vector-index guard
+	// site for downstream stat / cardinality decisions.
+	//
+	// IsVectorIndexAlgo gate: indexplugin.Get matches fulltext too
+	// (it's plugin-registered), but fulltext has no ANN ORDER BY
+	// concept and must not be claimed as a vector-index guard. The
+	// explicit predicate keeps that boundary even if the upstream
+	// collectVectorIndexes filter is ever loosened.
 	for _, multi := range multiTableIndexes {
-		switch multi.IndexAlgo {
-		case catalog.MoIndexIvfFlatAlgo.ToString():
-			if ctx, err := builder.prepareIvfIndexContext(vecCtx, multi); err == nil && ctx != nil {
-				return []int32{vecCtx.scanNode.NodeId}
-			} else if err != nil {
-				return nil
-			}
-		case catalog.MoIndexHnswAlgo.ToString():
-			if ctx, err := builder.prepareHnswIndexContext(vecCtx, multi); err == nil && ctx != nil {
-				return []int32{vecCtx.scanNode.NodeId}
-			} else if err != nil {
-				return nil
-			}
-		case catalog.MoIndexCagraAlgo.ToString():
-			if ctx, err := builder.prepareCagraIndexContext(vecCtx, multi); err == nil && ctx != nil {
-				return []int32{vecCtx.scanNode.NodeId}
-			} else if err != nil {
-				return nil
-			}
-		case catalog.MoIndexIvfpqAlgo.ToString():
-			if ctx, err := builder.prepareIvfpqIndexContext(vecCtx, multi); err == nil && ctx != nil {
-				return []int32{vecCtx.scanNode.NodeId}
-			} else if err != nil {
-				return nil
-			}
+		if !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) {
+			continue
+		}
+		p, ok := indexplugin.Get(multi.IndexAlgo)
+		if !ok {
+			continue
+		}
+		vctxExt, mtiExt := toPlanplugin(vecCtx, multi)
+		applicable, err := p.Plan().CanApply(builder, vctxExt, mtiExt)
+		if err != nil {
+			return nil
+		}
+		if applicable {
+			return []int32{vecCtx.scanNode.NodeId}
 		}
 	}
 	return nil
@@ -882,8 +889,7 @@ func (builder *QueryBuilder) collectVectorIndexes(scanNode *plan.Node) map[strin
 	}
 
 	for _, indexDef := range scanNode.TableDef.Indexes {
-		if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) || catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) ||
-			catalog.IsCagraIndexAlgo(indexDef.IndexAlgo) || catalog.IsIvfpqIndexAlgo(indexDef.IndexAlgo) {
+		if indexplugin.IsVectorIndexAlgo(indexDef.IndexAlgo) {
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 					IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -1830,20 +1836,24 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 	return currentIdx, savedFilterIdx
 }
 
-func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	sid := builder.compCtx.GetProcess().GetService()
+
+	if changed, err := builder.applyFullTextFiltersForJoinChildren(nodeID, node, colRefCnt, idxColMap); err != nil || changed {
+		return nodeID, err
+	}
 
 	if node.JoinType != plan.Node_INNER && node.JoinType != plan.Node_RIGHT && node.JoinType != plan.Node_SEMI &&
 		(node.JoinType != plan.Node_ANTI || !node.IsRightJoin) {
-		return nodeID
+		return nodeID, nil
 	}
 
 	leftChild := builder.qry.Nodes[node.Children[0]]
 	if leftChild.NodeType != plan.Node_TABLE_SCAN {
-		return nodeID
+		return nodeID, nil
 	}
 	if builder.isScanProtected(leftChild.NodeId) {
-		return nodeID
+		return nodeID, nil
 	}
 
 	//----------------------------------------------------------------------
@@ -1858,11 +1868,11 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	rightChild := builder.qry.Nodes[node.Children[1]]
 
 	if rightChild.Stats.Selectivity > 0.5 {
-		return nodeID
+		return nodeID, nil
 	}
 
 	if rightChild.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)) || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
-		return nodeID
+		return nodeID, nil
 	}
 
 	leftTags := make(map[int32]bool)
@@ -1900,7 +1910,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	}
 
 	if joinOnPK {
-		return nodeID
+		return nodeID, nil
 	}
 
 	indexes := leftChild.TableDef.Indexes
@@ -2046,5 +2056,5 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		break
 	}
 
-	return nodeID
+	return nodeID, nil
 }

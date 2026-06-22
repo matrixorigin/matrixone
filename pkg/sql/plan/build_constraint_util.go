@@ -100,10 +100,8 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 	}
 
 	// A PostgreSQL-style UPDATE ... FROM may match a single target row from
-	// multiple source rows. Force the agg-based dedup path (any_value over
-	// the target's primary key) just like the classic multi-table syntax
-	// would; without this flag the fallback planner would silently produce
-	// duplicate-row writes.
+	// multiple source rows. Mark it for dedup so the planner does not
+	// produce duplicate-row writes.
 	if stmt.From != nil && len(stmt.From.Tables) > 0 {
 		tblInfo.needAggFilter = true
 	}
