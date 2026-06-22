@@ -5816,6 +5816,46 @@ func TestReplacePrivilegeRequiresDeleteForConflictingTargets(t *testing.T) {
 	})
 }
 
+func TestExtractPrivilegeTipsFromPlanSkipsInvalidMultiUpdateCtx(t *testing.T) {
+	const (
+		dbName    = "multi_update_priv"
+		tableName = "t"
+	)
+
+	tableDef := &plan.TableDef{
+		Name:   tableName,
+		DbName: dbName,
+	}
+	objRef := &plan.ObjectRef{SchemaName: dbName, ObjName: tableName}
+	p := &plan2.Plan{
+		Plan: &plan2.Plan_Query{
+			Query: &plan.Query{
+				StmtType: plan.Query_UPDATE,
+				Nodes: []*plan.Node{
+					{
+						NodeType: plan.Node_MULTI_UPDATE,
+						UpdateCtxList: []*plan.UpdateCtx{
+							nil,
+							{},
+							{ObjRef: objRef},
+							{TableDef: tableDef},
+							{ObjRef: objRef, TableDef: tableDef},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	require.NotPanics(t, func() {
+		arr := extractPrivilegeTipsFromPlan(p)
+		require.Len(t, arr, 1)
+		require.Equal(t, PrivilegeTypeUpdate, arr[0].typ)
+		require.Equal(t, dbName, arr[0].databaseName)
+		require.Equal(t, tableName, arr[0].tableName)
+	})
+}
+
 func makeReplacePrivilegePlan(dbName, tableName string, fakePK bool, uniqueIndex bool) *plan2.Plan {
 	pkName := "id"
 	if fakePK {

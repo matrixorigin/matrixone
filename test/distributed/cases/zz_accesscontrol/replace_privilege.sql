@@ -25,6 +25,8 @@ grant replace_priv_delete_role to replace_priv_delete_user;
 -- @session:id=1&user=sys:replace_priv_user:replace_priv_role&password=123456
 replace into replace_priv_edge.t_priv values(1, 20);
 replace into replace_priv_edge.t_unique values(2, 10);
+select * from replace_priv_edge.t_priv order by id;
+select * from replace_priv_edge.t_unique order by id;
 replace into replace_priv_edge.t_insert_only values(1, 100);
 select * from replace_priv_edge.t_insert_only order by id;
 -- @session

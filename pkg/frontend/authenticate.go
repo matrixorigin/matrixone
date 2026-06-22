@@ -6826,6 +6826,9 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 				}
 			} else if node.NodeType == plan.Node_MULTI_UPDATE {
 				for _, updateCtx := range node.UpdateCtxList {
+					if updateCtx == nil || updateCtx.ObjRef == nil || updateCtx.TableDef == nil {
+						continue
+					}
 					originViews := node.GetOriginViews()
 					directView := node.GetDirectView()
 					scanSnapshot := node.GetScanSnapshot()

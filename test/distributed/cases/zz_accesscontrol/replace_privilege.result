@@ -19,7 +19,15 @@ grant select, insert, delete on table replace_priv_edge.* to replace_priv_delete
 grant replace_priv_role to replace_priv_user;
 grant replace_priv_delete_role to replace_priv_delete_user;
 replace into replace_priv_edge.t_priv values(1, 20);
+internal error: do not have privilege to execute the statement
 replace into replace_priv_edge.t_unique values(2, 10);
+internal error: do not have privilege to execute the statement
+select * from replace_priv_edge.t_priv order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10
+select * from replace_priv_edge.t_unique order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10
 replace into replace_priv_edge.t_insert_only values(1, 100);
 select * from replace_priv_edge.t_insert_only order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
