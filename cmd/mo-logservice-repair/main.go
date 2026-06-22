@@ -147,7 +147,7 @@ func usage() error {
   mo-logservice-repair local import-snapshot --deployment-id ID --node-host-id ID --node-host-dir DIR --raft-address ADDR --replica-id ID --snapshot-dir DIR --members JSON
   mo-logservice-repair local clean-replica --deployment-id ID --node-host-id ID --node-host-dir DIR --raft-address ADDR --gossip-address ADDR --shard-id ID --replica-id ID
   mo-logservice-repair local recover --base DIR --shard ID [--shards ID,ID] [--yes]
-  mo-logservice-repair k8s recover --namespace NS --addresses host:port[,host:port] --shard ID [--shards ID,ID] [--yes]
+  mo-logservice-repair k8s recover --namespace NS --addresses host:port[,host:port] --shard ID [--shards ID,ID] [--execution-mode startup-cleanup|pvc-job] [--resume] [--yes]
   mo-logservice-repair wizard [--mode local|k8s] [--base DIR|--namespace NS] [--shard ID] [--apply]
   mo-logservice-repair plan --mode local --base DIR --shard ID [--output FILE]
   mo-logservice-repair plan --mode k8s --namespace NS --shard ID [--addresses host:port] [--deployment-id ID] [--output FILE]
@@ -429,6 +429,7 @@ func runCleanReplica(args []string) error {
 	var shardID uint64
 	var replicaID uint64
 	var rtt uint64
+	var filesOnly bool
 
 	fs.Uint64Var(&deploymentID, "deployment-id", 0, "dragonboat deployment id")
 	fs.StringVar(&nodeHostID, "node-host-id", "", "dragonboat nodehost id")
@@ -439,6 +440,7 @@ func runCleanReplica(args []string) error {
 	fs.Uint64Var(&shardID, "shard-id", 0, "shard id to clean")
 	fs.Uint64Var(&replicaID, "replica-id", 0, "replica id to clean")
 	fs.Uint64Var(&rtt, "rtt-ms", 200, "dragonboat rtt in milliseconds")
+	fs.BoolVar(&filesOnly, "files-only", false, "offline mode: edit metadata and remove replica files without creating a NodeHost")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -451,7 +453,7 @@ func runCleanReplica(args []string) error {
 	if !shardIDSet {
 		return fmt.Errorf("missing -shard-id")
 	}
-	if err := cleanReplica(deploymentID, nodeHostID, nodeHostDir, raftAddress, listenAddress, gossipAddress, shardID, replicaID, rtt); err != nil {
+	if err := cleanReplica(deploymentID, nodeHostID, nodeHostDir, raftAddress, listenAddress, gossipAddress, shardID, replicaID, rtt, filesOnly); err != nil {
 		return fmt.Errorf("clean replica: %w", err)
 	}
 	return nil
@@ -467,6 +469,7 @@ func cleanReplica(
 	shardID uint64,
 	replicaID uint64,
 	rtt uint64,
+	filesOnly bool,
 ) error {
 	if deploymentID == 0 {
 		return fmt.Errorf("missing -deployment-id")
@@ -477,14 +480,16 @@ func cleanReplica(
 	if nodeHostDir == "" {
 		return fmt.Errorf("missing -node-host-dir")
 	}
-	if raftAddress == "" {
-		return fmt.Errorf("missing -raft-address")
-	}
-	if listenAddress == "" {
-		listenAddress = raftAddress
-	}
-	if gossipAddress == "" {
-		return fmt.Errorf("missing -gossip-address")
+	if !filesOnly {
+		if raftAddress == "" {
+			return fmt.Errorf("missing -raft-address")
+		}
+		if listenAddress == "" {
+			listenAddress = raftAddress
+		}
+		if gossipAddress == "" {
+			return fmt.Errorf("missing -gossip-address")
+		}
 	}
 	if replicaID == 0 {
 		return fmt.Errorf("missing -replica-id")
@@ -509,35 +514,37 @@ func cleanReplica(
 			return err
 		}
 	}
-	logdb := config.GetTinyMemLogDBConfig()
-	cfg := config.NodeHostConfig{
-		DeploymentID:        deploymentID,
-		NodeHostID:          nodeHostID,
-		NodeHostDir:         nodeHostDir,
-		RTTMillisecond:      rtt,
-		AddressByNodeHostID: true,
-		RaftAddress:         raftAddress,
-		ListenAddress:       listenAddress,
-		Expert: config.ExpertConfig{
-			LogDBFactory: tan.Factory,
-			LogDB:        logdb,
-		},
-		Gossip: config.GossipConfig{
-			BindAddress:      gossipAddress,
-			AdvertiseAddress: gossipAddress,
-			Seed:             []string{gossipAddress},
-			CanUseSelfAsSeed: true,
-		},
-	}
-	nh, err := dragonboat.NewNodeHost(cfg)
-	if err != nil {
-		return err
-	}
-	removeErr := nh.RemoveData(shardID, replicaID)
-	nh.Close()
-	if removeErr != nil &&
-		removeErr != dragonboat.ErrShardNotFound {
-		return removeErr
+	if !filesOnly {
+		logdb := config.GetTinyMemLogDBConfig()
+		cfg := config.NodeHostConfig{
+			DeploymentID:        deploymentID,
+			NodeHostID:          nodeHostID,
+			NodeHostDir:         nodeHostDir,
+			RTTMillisecond:      rtt,
+			AddressByNodeHostID: true,
+			RaftAddress:         raftAddress,
+			ListenAddress:       listenAddress,
+			Expert: config.ExpertConfig{
+				LogDBFactory: tan.Factory,
+				LogDB:        logdb,
+			},
+			Gossip: config.GossipConfig{
+				BindAddress:      gossipAddress,
+				AdvertiseAddress: gossipAddress,
+				Seed:             []string{gossipAddress},
+				CanUseSelfAsSeed: true,
+			},
+		}
+		nh, err := dragonboat.NewNodeHost(cfg)
+		if err != nil {
+			return err
+		}
+		removeErr := nh.RemoveData(shardID, replicaID)
+		nh.Close()
+		if removeErr != nil &&
+			removeErr != dragonboat.ErrShardNotFound {
+			return removeErr
+		}
 	}
 	removedResiduals, err := removeReplicaResiduals(nodeHostDir, deploymentID, shardID, replicaID)
 	if err != nil {
@@ -550,6 +557,7 @@ func cleanReplica(
 		"metadataUpdated":   changed,
 		"metadataRemaining": md.Shards,
 		"removedResiduals":  removedResiduals,
+		"filesOnly":         filesOnly,
 	})
 }
 

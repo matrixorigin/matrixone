@@ -540,6 +540,88 @@ func TestBuildK8sActionsIncludesRepairPodAndCleanCommand(t *testing.T) {
 	}
 }
 
+func TestBuildK8sActionsPVCJobUsesOfflineCleanup(t *testing.T) {
+	plan := &repairPlan{
+		Mode:              modeK8s,
+		Namespace:         "mo-prod",
+		ShardID:           1,
+		HAKeeperAddresses: []string{"127.0.0.1:32001"},
+		TargetShard: planShard{
+			ShardID:  1,
+			Replicas: map[uint64]string{282826: "00000000-0000-0000-0000-000000000d01"},
+			Epoch:    602,
+		},
+		InitialBlockedStores:    []string{"00000000-0000-0000-0000-000000000d01"},
+		PersistentBlockedStores: []string{"00000000-0000-0000-0000-000000000d02"},
+		RebuildStores:           []string{"00000000-0000-0000-0000-000000000d01"},
+		Stores: []planStore{{
+			UUID:            "00000000-0000-0000-0000-000000000d01",
+			Role:            "rebuild",
+			NodeHostDir:     "/repair-pvc/logservice-data/00000000-0000-0000-0000-000000000d01",
+			DeploymentID:    8850055262063090202,
+			CleanupReplicas: []uint64{282826},
+		}},
+		K8s: &k8sPlanSettings{
+			Kubectl:                "kubectl",
+			PVCMountPath:           "/repair-pvc",
+			PVCLogServiceDataDir:   "/repair-pvc/logservice-data",
+			RepairImage:            "matrixorigin/matrixone:test",
+			RepairBinary:           "/tmp/mo-logservice-repair",
+			DeploymentID:           8850055262063090202,
+			ExecutionMode:          executionPVCJob,
+			PVCNameTemplate:        "log-%d-data",
+			DeploymentNameTemplate: "log-%d",
+		},
+	}
+	actions := buildK8sActions(plan)
+	joined := ""
+	for _, action := range actions {
+		joined += action.Command + "\n"
+	}
+	for _, want := range []string{
+		"scale deployment/'log-1' --replicas=0",
+		"pvc 'log-1-data'",
+		"local clean-replica --files-only",
+		"scale deployment/'log-1' --replicas=1",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected %q in pvc-job actions: %s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "delete pod") {
+		t.Fatalf("pvc-job actions should not delete pods: %s", joined)
+	}
+}
+
+func TestK8sCleanupJobScriptUsesFilesOnlyAndVerifiesPaths(t *testing.T) {
+	plan := &repairPlan{
+		K8s: &k8sPlanSettings{
+			PVCLogServiceDataDir: "/repair-pvc/logservice-data",
+			RepairBinary:         "/tmp/mo-logservice-repair",
+			DeploymentID:         8850055262063090202,
+		},
+	}
+	store := planStore{
+		UUID:        "00000000-0000-0000-0000-000000000d03",
+		NodeHostDir: "/repair-pvc/logservice-data/00000000-0000-0000-0000-000000000d03",
+	}
+	task := cleanupTask{Plan: &repairPlan{ShardID: 1}, Store: store, ReplicaID: 262150}
+	script := k8sCleanupJobScript(plan, store, []cleanupTask{task})
+	for _, want := range []string{
+		"/tmp/mo-logservice-repair' local clean-replica --files-only",
+		"--node-host-id '00000000-0000-0000-0000-000000000d03'",
+		"--replica-id 262150",
+		"find '/repair-pvc/logservice-data/00000000-0000-0000-0000-000000000d03' -path",
+		"node-1-262150",
+		"snapshot-1-262150",
+		"replica-262150",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("expected %q in script:\n%s", want, script)
+		}
+	}
+}
+
 func TestSelectedRepairShardIDsKeepsHAKeeperShardZero(t *testing.T) {
 	ids, err := selectedRepairShardIDs(wizardOptions{
 		shardID:    1,

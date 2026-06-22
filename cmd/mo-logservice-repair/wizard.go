@@ -35,36 +35,46 @@ import (
 )
 
 const (
-	repairPlanVersion = "v1"
-	modeLocal         = "local"
-	modeK8s           = "k8s"
+	repairPlanVersion       = "v1"
+	modeLocal               = "local"
+	modeK8s                 = "k8s"
+	executionStartupCleanup = "startup-cleanup"
+	executionPVCJob         = "pvc-job"
 )
 
 type wizardOptions struct {
-	mode                 string
-	baseDir              string
-	confDir              string
-	shardID              uint64
-	shardIDSet           bool
-	shards               string
-	addresses            string
-	output               string
-	planPath             string
-	apply                bool
-	yes                  bool
-	timeout              time.Duration
-	moServicePath        string
-	namespace            string
-	kubeContext          string
-	kubectlPath          string
-	k8sLogSelector       string
-	pvcMountPath         string
-	pvcDataDir           string
-	repairImage          string
-	repairBinary         string
-	deploymentID         uint64
-	manualServiceControl bool
-	autoRestartPods      bool
+	mode                   string
+	baseDir                string
+	confDir                string
+	shardID                uint64
+	shardIDSet             bool
+	shards                 string
+	addresses              string
+	output                 string
+	planPath               string
+	apply                  bool
+	yes                    bool
+	timeout                time.Duration
+	moServicePath          string
+	namespace              string
+	kubeContext            string
+	kubectlPath            string
+	k8sLogSelector         string
+	pvcMountPath           string
+	pvcDataDir             string
+	repairImage            string
+	repairBinary           string
+	deploymentID           uint64
+	manualServiceControl   bool
+	autoRestartPods        bool
+	executionMode          string
+	resume                 bool
+	podReadyTimeout        time.Duration
+	cleanupTimeout         time.Duration
+	heartbeatTimeout       time.Duration
+	hakeeperTimeout        time.Duration
+	pvcNameTemplate        string
+	deploymentNameTemplate string
 }
 
 type repairPlan struct {
@@ -97,15 +107,18 @@ type localPlanSettings struct {
 }
 
 type k8sPlanSettings struct {
-	Kubectl               string `json:"kubectl"`
-	LogSelector           string `json:"logSelector,omitempty"`
-	PVCMountPath          string `json:"pvcMountPath"`
-	PVCLogServiceDataDir  string `json:"pvcLogServiceDataDir"`
-	RepairImage           string `json:"repairImage"`
-	RepairBinary          string `json:"repairBinary"`
-	DeploymentID          uint64 `json:"deploymentID,omitempty"`
-	DeploymentIDRequired  bool   `json:"deploymentIDRequired,omitempty"`
-	HAKeeperPortForwarded bool   `json:"hakeeperPortForwarded,omitempty"`
+	Kubectl                string `json:"kubectl"`
+	LogSelector            string `json:"logSelector,omitempty"`
+	PVCMountPath           string `json:"pvcMountPath"`
+	PVCLogServiceDataDir   string `json:"pvcLogServiceDataDir"`
+	RepairImage            string `json:"repairImage"`
+	RepairBinary           string `json:"repairBinary"`
+	DeploymentID           uint64 `json:"deploymentID,omitempty"`
+	DeploymentIDRequired   bool   `json:"deploymentIDRequired,omitempty"`
+	HAKeeperPortForwarded  bool   `json:"hakeeperPortForwarded,omitempty"`
+	ExecutionMode          string `json:"executionMode,omitempty"`
+	PVCNameTemplate        string `json:"pvcNameTemplate,omitempty"`
+	DeploymentNameTemplate string `json:"deploymentNameTemplate,omitempty"`
 }
 
 type planShard struct {
@@ -304,6 +317,12 @@ func runRecover(mode string, args []string) error {
 		return err
 	}
 	opts.mode = mode
+	if opts.hakeeperTimeout == 0 {
+		opts.hakeeperTimeout = opts.timeout
+	}
+	if opts.executionMode == "" {
+		opts.executionMode = executionStartupCleanup
+	}
 	shardIDs, err := selectedRepairShardIDs(opts)
 	if err != nil {
 		return err
@@ -324,9 +343,26 @@ func runRecover(mode string, args []string) error {
 		return fmt.Errorf("unsupported recover mode %q", mode)
 	}
 
-	plans, err := buildOnlineRecoveryPlans(opts, shardIDs)
-	if err != nil {
-		return err
+	var plans []*repairPlan
+	resumeLoaded := false
+	if mode == modeK8s && opts.executionMode == executionPVCJob && opts.resume {
+		plans, err = readK8sResumePlans(context.Background(), opts, shardIDs)
+		if err != nil {
+			return err
+		}
+		if len(plans) > 0 {
+			resumeLoaded = true
+			stdoutf("resuming k8s pvc-job recovery from ConfigMap %s\n", k8sResumeConfigMapName(shardIDs))
+		}
+	}
+	if len(plans) == 0 {
+		opts.resume = false
+		plans, err = buildOnlineRecoveryPlans(opts, shardIDs)
+		if err != nil {
+			return err
+		}
+	} else if resumeLoaded {
+		opts.resume = true
 	}
 	for i, plan := range plans {
 		if len(plans) > 1 {
@@ -342,9 +378,12 @@ func runRecover(mode string, args []string) error {
 	}
 	if !opts.yes {
 		prompt := "Proceed with online recovery; the CLI will not backup LogService data"
-		if opts.mode == modeLocal || opts.manualServiceControl || !opts.autoRestartPods {
+		switch {
+		case opts.mode == modeK8s && opts.executionMode == executionPVCJob:
+			prompt += " and will scale listed LogService deployments, run PVC cleanup jobs, then restart them"
+		case opts.mode == modeLocal || opts.manualServiceControl || !opts.autoRestartPods:
 			prompt += " and expects you to stop/start listed LogService pods/processes"
-		} else {
+		default:
 			prompt += " and will restart listed LogService pods one by one"
 		}
 		ok, err := askYesNo(prompt, false)
@@ -354,7 +393,11 @@ func runRecover(mode string, args []string) error {
 		if !ok {
 			return fmt.Errorf("recover cancelled")
 		}
-		confirm, err := askLine("This writes HAKeeper repair state and expects you to restart listed LogService pods/processes. Type APPLY to continue")
+		confirmPrompt := "This writes HAKeeper repair state and expects you to restart listed LogService pods/processes. Type APPLY to continue"
+		if opts.mode == modeK8s && opts.executionMode == executionPVCJob {
+			confirmPrompt = "This writes HAKeeper repair state, scales LogService deployments, and edits PVC data using cleanup jobs. Type APPLY to continue"
+		}
+		confirm, err := askLine(confirmPrompt)
 		if err != nil {
 			return err
 		}
@@ -436,6 +479,14 @@ func parseWizardFlags(name string, args []string) (wizardOptions, error) {
 	fs.Uint64Var(&opts.deploymentID, "deployment-id", 0, "dragonboat deployment id; required for exact k8s PVC clean-replica commands")
 	fs.BoolVar(&opts.manualServiceControl, "manual-service-control", false, "do not stop or restart local mo-service processes; require the operator to do it")
 	fs.BoolVar(&opts.autoRestartPods, "auto-restart-pods", false, "k8s mode only: let this CLI delete LogService pods during recovery")
+	fs.StringVar(&opts.executionMode, "execution-mode", "startup-cleanup", "k8s recovery execution mode: startup-cleanup or pvc-job")
+	fs.BoolVar(&opts.resume, "resume", false, "k8s pvc-job mode only: resume from the persisted recovery plan ConfigMap when present")
+	fs.DurationVar(&opts.podReadyTimeout, "pod-ready-timeout", 30*time.Minute, "k8s pvc-job mode: timeout waiting for LogService pods to become Ready")
+	fs.DurationVar(&opts.cleanupTimeout, "cleanup-timeout", 20*time.Minute, "k8s pvc-job mode: timeout waiting for PVC cleanup jobs")
+	fs.DurationVar(&opts.heartbeatTimeout, "heartbeat-timeout", 30*time.Minute, "k8s pvc-job mode: timeout waiting for restarted stores to heartbeat")
+	fs.DurationVar(&opts.hakeeperTimeout, "hakeeper-timeout", 0, "HAKeeper RPC timeout; defaults to --timeout")
+	fs.StringVar(&opts.pvcNameTemplate, "pvc-name-template", "log-%d-data", "k8s pvc-job mode: PVC name template for a store ordinal; supports %d, {ordinal}, {store}, {short}")
+	fs.StringVar(&opts.deploymentNameTemplate, "deployment-name-template", "log-%d", "k8s pvc-job mode: deployment name template for a store ordinal; supports %d, {ordinal}, {store}, {short}")
 	if err := fs.Parse(args); err != nil {
 		return opts, err
 	}
@@ -620,19 +671,26 @@ func buildK8sRepairPlan(opts wizardOptions) (*repairPlan, error) {
 		HAKeeperAddresses: splitAddresses(opts.addresses),
 		ApplySupported:    false,
 		K8s: &k8sPlanSettings{
-			Kubectl:              kubectl,
-			LogSelector:          opts.k8sLogSelector,
-			PVCMountPath:         opts.pvcMountPath,
-			PVCLogServiceDataDir: opts.pvcDataDir,
-			RepairImage:          opts.repairImage,
-			RepairBinary:         opts.repairBinary,
-			DeploymentID:         opts.deploymentID,
-			DeploymentIDRequired: opts.deploymentID == 0,
+			Kubectl:                kubectl,
+			LogSelector:            opts.k8sLogSelector,
+			PVCMountPath:           opts.pvcMountPath,
+			PVCLogServiceDataDir:   opts.pvcDataDir,
+			RepairImage:            opts.repairImage,
+			RepairBinary:           opts.repairBinary,
+			DeploymentID:           opts.deploymentID,
+			DeploymentIDRequired:   opts.deploymentID == 0,
+			ExecutionMode:          opts.executionMode,
+			PVCNameTemplate:        opts.pvcNameTemplate,
+			DeploymentNameTemplate: opts.deploymentNameTemplate,
 		},
 		Warnings: []string{
 			"k8s recover writes HAKeeper repair state only; it does not back up PVCs",
-			"k8s recover prints exact pod restart commands and waits for startup cleanup logs before unblock",
 		},
+	}
+	if opts.executionMode == executionPVCJob {
+		plan.Warnings = append(plan.Warnings, "k8s pvc-job recover scales rebuild deployments to 0 and edits mounted PVC data using cleanup jobs")
+	} else {
+		plan.Warnings = append(plan.Warnings, "k8s recover prints exact pod restart commands and waits for startup cleanup logs before unblock")
 	}
 	if len(plan.HAKeeperAddresses) == 0 {
 		plan.Warnings = append(plan.Warnings, "pass --addresses after port-forwarding HAKeeper to generate membership-aware store cleanup actions")
@@ -892,15 +950,71 @@ func buildK8sActions(plan *repairPlan) []planAction {
 		Command:     fmt.Sprintf("mo-logservice-repair hakeeper state --addresses %s > /tmp/mo-logservice-hakeeper-state-before.json", strings.Join(plan.HAKeeperAddresses, ",")),
 	})
 	if len(plan.TargetShard.Replicas) > 0 {
+		repairDescription := "Write repair state, block stale/dirty stores, and ask LogService to clean listed replicas on next startup."
+		repairReason := "k8s online recover: block stale/dirty stores before restart"
+		if k != nil && k.ExecutionMode == executionPVCJob {
+			repairDescription = "Write repair state and block stale/dirty stores before offline PVC cleanup."
+			repairReason = "k8s pvc-job recover: block stale/dirty stores before offline PVC cleanup"
+		}
 		actions = append(actions, planAction{
 			Type:        "hakeeper-repair",
-			Description: "Write repair state, block stale/dirty stores, and ask LogService to clean listed replicas on next startup.",
-			Command:     fmt.Sprintf("mo-logservice-repair hakeeper repair --addresses %s --payload '%s'", strings.Join(plan.HAKeeperAddresses, ","), mustJSON(repairPayloadForPlanWithCleanup(plan, plan.InitialBlockedStores, "k8s online recover: block stale/dirty stores before restart", true))),
+			Description: repairDescription,
+			Command:     fmt.Sprintf("mo-logservice-repair hakeeper repair --addresses %s --payload '%s'", strings.Join(plan.HAKeeperAddresses, ","), mustJSON(repairPayloadForPlanWithCleanup(plan, plan.InitialBlockedStores, repairReason, k == nil || k.ExecutionMode != executionPVCJob))),
 			ShardID:     plan.ShardID,
 		})
 	}
 	for _, store := range plan.Stores {
 		if len(store.CleanupReplicas) == 0 {
+			continue
+		}
+		if k != nil && k.ExecutionMode == executionPVCJob {
+			deployment, err := k8sDeploymentNameForStore(plan, store)
+			if err != nil {
+				deployment = "<logservice-deployment-for-" + store.UUID + ">"
+			}
+			pvc, err := k8sPVCNameForStore(plan, store)
+			if err != nil {
+				pvc = "<logservice-pvc-for-" + store.UUID + ">"
+			}
+			actions = append(actions, planAction{
+				Type:        "k8s-scale-down-logservice",
+				Description: "Stop the LogService deployment before offline PVC cleanup.",
+				Store:       store.UUID,
+				Command:     fmt.Sprintf("%s -n %s scale deployment/%s --replicas=0", kubectl, namespace, shellQuote(deployment)),
+			})
+			for _, replicaID := range store.CleanupReplicas {
+				actions = append(actions, planAction{
+					Type:        "k8s-pvc-clean-replica",
+					Description: "Run a cleanup Job mounting the LogService PVC and remove local replica files offline.",
+					Store:       store.UUID,
+					ShardID:     plan.ShardID,
+					ReplicaID:   replicaID,
+					Command: fmt.Sprintf(
+						"create cleanup Job using image %s, pvc %s, command: %s local clean-replica --files-only --deployment-id %d --node-host-id %s --node-host-dir %s --shard-id %d --replica-id %d",
+						shellQuote(k.RepairImage),
+						shellQuote(pvc),
+						shellQuote(k.RepairBinary),
+						k.DeploymentID,
+						shellQuote(store.UUID),
+						shellQuote(store.NodeHostDir),
+						plan.ShardID,
+						replicaID,
+					),
+				})
+			}
+			actions = append(actions, planAction{
+				Type:        "k8s-scale-up-logservice",
+				Description: "Restart the cleaned LogService deployment after PVC cleanup has been verified.",
+				Store:       store.UUID,
+				Command:     fmt.Sprintf("%s -n %s scale deployment/%s --replicas=1", kubectl, namespace, shellQuote(deployment)),
+			})
+			actions = append(actions, planAction{
+				Type:        "hakeeper-unblock",
+				Description: "Unblock the cleaned store after the restarted pod is Ready.",
+				Store:       store.UUID,
+				ShardID:     plan.ShardID,
+				Command:     fmt.Sprintf("mo-logservice-repair hakeeper unblock --addresses %s --payload '{\"shardID\":%d,\"stores\":[\"%s\"],\"reason\":\"k8s pvc-job recover: cleaned %s\"}'", strings.Join(plan.HAKeeperAddresses, ","), plan.ShardID, store.UUID, store.UUID),
+			})
 			continue
 		}
 		logSelector := "app.kubernetes.io/component=logservice"
@@ -922,10 +1036,14 @@ func buildK8sActions(plan *repairPlan) []planAction {
 		})
 	}
 	if len(plan.TargetShard.Replicas) > 0 {
+		finalReason := "k8s online recover: repair complete"
+		if k != nil && k.ExecutionMode == executionPVCJob {
+			finalReason = "k8s pvc-job recover: repair complete; stale stores remain blocked"
+		}
 		actions = append(actions, planAction{
 			Type:        "hakeeper-repair-final",
 			Description: "Refresh final repair state and keep only persistent stale stores blocked.",
-			Command:     fmt.Sprintf("mo-logservice-repair hakeeper repair --addresses %s --payload '%s'", strings.Join(plan.HAKeeperAddresses, ","), mustJSON(repairPayloadForPlan(plan, plan.PersistentBlockedStores, "k8s online recover: repair complete"))),
+			Command:     fmt.Sprintf("mo-logservice-repair hakeeper repair --addresses %s --payload '%s'", strings.Join(plan.HAKeeperAddresses, ","), mustJSON(repairPayloadForPlan(plan, plan.PersistentBlockedStores, finalReason))),
 			ShardID:     plan.ShardID,
 		})
 	}
@@ -1531,6 +1649,15 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 	if len(plans) == 0 {
 		return fmt.Errorf("no repair plans to apply")
 	}
+	if plans[0].Mode == modeK8s {
+		switch opts.executionMode {
+		case "", executionStartupCleanup:
+		case executionPVCJob:
+			return applyK8sPVCJobRecoveryPlans(ctx, plans, opts)
+		default:
+			return fmt.Errorf("unsupported k8s execution mode %q", opts.executionMode)
+		}
+	}
 	timeout := opts.timeout
 	if timeout == 0 {
 		timeout = 10 * time.Second
@@ -1588,6 +1715,7 @@ func applyOnlineRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wiz
 					task.Plan.ShardID,
 					task.ReplicaID,
 					200,
+					false,
 				); err != nil {
 					return fmt.Errorf("clean shard %d store %s replica %d: %w",
 						task.Plan.ShardID, task.Store.UUID, task.ReplicaID, err)
@@ -1766,6 +1894,328 @@ func verifyOnlineCleanupComplete(plans []*repairPlan) error {
 	)
 }
 
+func applyK8sPVCJobRecoveryPlans(ctx context.Context, plans []*repairPlan, opts wizardOptions) error {
+	if len(plans) == 0 {
+		return fmt.Errorf("no k8s repair plans to apply")
+	}
+	if err := validateK8sPVCJobPlans(plans); err != nil {
+		return err
+	}
+	hakeeperTimeout := effectiveHAKeeperTimeout(opts)
+	cleanupTimeout := firstNonZeroDuration(opts.cleanupTimeout, 20*time.Minute)
+	podReadyTimeout := firstNonZeroDuration(opts.podReadyTimeout, 30*time.Minute)
+	heartbeatTimeout := firstNonZeroDuration(opts.heartbeatTimeout, 30*time.Minute)
+
+	tasks := cleanupTasksForPlansAllStores(plans)
+	restartStores := storesFromCleanupTasks(tasks)
+	if len(restartStores) == 0 {
+		stdoutln("step 2: no PVC cleanup job is required by this plan")
+		return finishK8sPVCJobRecovery(ctx, plans, hakeeperTimeout, heartbeatTimeout)
+	}
+
+	if err := writeK8sResumePlans(ctx, plans); err != nil {
+		return err
+	}
+
+	if !opts.resume {
+		stdoutln("step 1: write HAKeeper repair state and block rebuild/stale stores")
+		for _, plan := range plans {
+			req := repairPayloadForPlanWithCleanup(plan, plan.InitialBlockedStores, "k8s pvc-job recover: block stale/dirty stores before offline PVC cleanup", true)
+			if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddressesForApply(plan), hakeeperTimeout, req); err != nil {
+				return fmt.Errorf("write repair state for shard %d: %w", plan.ShardID, err)
+			}
+		}
+	} else {
+		stdoutln("step 1: resume with existing HAKeeper repair state")
+	}
+
+	stdoutln("step 2: scale rebuild LogService deployments to 0")
+	for _, store := range restartStores {
+		deployment, err := k8sDeploymentNameForStore(plans[0], store)
+		if err != nil {
+			return err
+		}
+		stdoutf("scale deployment/%s to 0 for store %s\n", deployment, store.UUID)
+		if _, err := runKubectl(ctx, plans[0], "scale", "deployment/"+deployment, "--replicas=0"); err != nil {
+			return fmt.Errorf("scale deployment/%s to 0: %w", deployment, err)
+		}
+		if err := waitForK8sStorePodsGone(ctx, plans[0], store, podReadyTimeout); err != nil {
+			return err
+		}
+	}
+
+	stdoutln("step 3: run offline PVC cleanup jobs")
+	for _, store := range restartStores {
+		storeTasks := cleanupTasksForStore(tasks, store.UUID)
+		if len(storeTasks) == 0 {
+			continue
+		}
+		if err := runK8sPVCCleanupJob(ctx, plans[0], store, storeTasks, cleanupTimeout); err != nil {
+			return err
+		}
+	}
+
+	stdoutln("step 4: clear startup cleanup requests while stores remain blocked")
+	if err := refreshRepairStatesWithoutStartupCleanup(ctx, plans, hakeeperTimeout); err != nil {
+		return err
+	}
+
+	stdoutln("step 5: scale cleaned LogService deployments back to 1")
+	for _, store := range restartStores {
+		deployment, err := k8sDeploymentNameForStore(plans[0], store)
+		if err != nil {
+			return err
+		}
+		stdoutf("scale deployment/%s to 1 for store %s\n", deployment, store.UUID)
+		if _, err := runKubectl(ctx, plans[0], "scale", "deployment/"+deployment, "--replicas=1"); err != nil {
+			return fmt.Errorf("scale deployment/%s to 1: %w", deployment, err)
+		}
+		pod, err := waitForK8sStorePodReady(ctx, plans[0], store, "", podReadyTimeout)
+		if err != nil {
+			return err
+		}
+		stdoutf("store %s ready in pod %s\n", store.UUID, pod.Metadata.Name)
+	}
+
+	return finishK8sPVCJobRecovery(ctx, plans, hakeeperTimeout, heartbeatTimeout)
+}
+
+func finishK8sPVCJobRecovery(ctx context.Context, plans []*repairPlan, hakeeperTimeout time.Duration, heartbeatTimeout time.Duration) error {
+	stdoutln("step 6: unblock cleaned stores")
+	for _, plan := range plans {
+		for _, store := range storesWithAnyCleanup(plan.Stores) {
+			req := repairPayload{
+				Op:         "unblock",
+				ShardID:    plan.ShardID,
+				ShardIDSet: true,
+				Stores:     []string{store.UUID},
+				Reason:     fmt.Sprintf("k8s pvc-job recover: PVC cleanup confirmed for store %s shard %d", store.UUID, plan.ShardID),
+			}
+			if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddressesForApply(plan), hakeeperTimeout, req); err != nil {
+				return fmt.Errorf("unblock shard %d store %s: %w", plan.ShardID, store.UUID, err)
+			}
+			stdoutf("unblocked store %s for shard %d\n", store.UUID, plan.ShardID)
+		}
+	}
+	if err := waitForTargetReplicaHeartbeatsWithTimeout(ctx, plans, hakeeperTimeout, heartbeatTimeout); err != nil {
+		if reblockErr := reblockInitialStores(ctx, plans, hakeeperTimeout, "k8s pvc-job recover: target heartbeat verification failed; stores re-blocked"); reblockErr != nil {
+			return fmt.Errorf("%w; additionally failed to re-block stores: %v", err, reblockErr)
+		}
+		return err
+	}
+
+	stdoutln("step 7: refresh final repair state")
+	for _, plan := range plans {
+		if len(plan.PersistentBlockedStores) == 0 {
+			req := repairPayload{
+				Op:         "unblock",
+				ShardID:    plan.ShardID,
+				ShardIDSet: true,
+				Reason:     fmt.Sprintf("k8s pvc-job recover: clear repair state for shard %d", plan.ShardID),
+			}
+			if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddressesForApply(plan), hakeeperTimeout, req); err != nil {
+				return fmt.Errorf("clear repair state for shard %d: %w", plan.ShardID, err)
+			}
+			continue
+		}
+		req := repairPayloadForPlanWithCleanup(plan, plan.PersistentBlockedStores, "k8s pvc-job recover: repair complete; stale stores remain blocked", false)
+		if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddressesForApply(plan), hakeeperTimeout, req); err != nil {
+			return fmt.Errorf("final repair state for shard %d: %w", plan.ShardID, err)
+		}
+	}
+
+	stdoutln("step 8: final HAKeeper state")
+	state, err := getHAKeeperStateWithNewConnection(ctx, stableHAKeeperAddressesForApply(plans[0]), hakeeperTimeout)
+	if err != nil {
+		return err
+	}
+	return printJSON(map[string]any{
+		"logShards": state.LogState.Shards,
+		"repairs":   state.LogShardRepairs,
+	})
+}
+
+func validateK8sPVCJobPlans(plans []*repairPlan) error {
+	for _, plan := range plans {
+		if plan.Mode != modeK8s {
+			return fmt.Errorf("pvc-job execution only supports k8s plans, got %q", plan.Mode)
+		}
+		if plan.K8s == nil {
+			return fmt.Errorf("k8s plan settings are missing")
+		}
+		if plan.K8s.DeploymentID == 0 {
+			return fmt.Errorf("--deployment-id is required for k8s pvc-job cleanup")
+		}
+		if plan.K8s.RepairImage == "" {
+			return fmt.Errorf("--repair-image is required for k8s pvc-job cleanup")
+		}
+		if plan.K8s.RepairBinary == "" {
+			return fmt.Errorf("--repair-binary is required for k8s pvc-job cleanup")
+		}
+	}
+	return nil
+}
+
+func refreshRepairStatesWithoutStartupCleanup(ctx context.Context, plans []*repairPlan, timeout time.Duration) error {
+	state, err := getHAKeeperStateWithNewConnection(ctx, stableHAKeeperAddressesForApply(plans[0]), timeout)
+	if err != nil {
+		return err
+	}
+	for _, plan := range plans {
+		blocked := plan.InitialBlockedStores
+		if repair, ok := state.LogShardRepairs[plan.ShardID]; ok {
+			blocked = mapKeysSorted(repair.BlockedStores)
+		}
+		req := repairPayloadForPlanWithCleanup(plan, blocked, "k8s pvc-job recover: offline PVC cleanup complete; keep stores blocked before restart", false)
+		if _, err := applyHAKeeperWithNewConnection(ctx, stableHAKeeperAddressesForApply(plan), timeout, req); err != nil {
+			return fmt.Errorf("clear startup cleanup request for shard %d: %w", plan.ShardID, err)
+		}
+	}
+	return nil
+}
+
+func cleanupTasksForStore(tasks []cleanupTask, storeUUID string) []cleanupTask {
+	ret := make([]cleanupTask, 0)
+	for _, task := range tasks {
+		if task.Store.UUID == storeUUID {
+			ret = append(ret, task)
+		}
+	}
+	return ret
+}
+
+func effectiveHAKeeperTimeout(opts wizardOptions) time.Duration {
+	if opts.hakeeperTimeout > 0 {
+		return opts.hakeeperTimeout
+	}
+	if opts.timeout > 0 {
+		return opts.timeout
+	}
+	return 10 * time.Second
+}
+
+func firstNonZeroDuration(values ...time.Duration) time.Duration {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func mapKeysSorted(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for key, value := range m {
+		if value {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func readK8sResumePlans(ctx context.Context, opts wizardOptions, shardIDs []uint64) ([]*repairPlan, error) {
+	plan := &repairPlan{
+		Namespace:   opts.namespace,
+		KubeContext: opts.kubeContext,
+		K8s: &k8sPlanSettings{
+			Kubectl: kubectlCommand(opts.kubectlPath, opts.kubeContext),
+		},
+	}
+	name := k8sResumeConfigMapName(shardIDs)
+	out, err := runKubectl(ctx, plan, "get", "configmap", name, "-o", "json")
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "notfound") || strings.Contains(msg, "not found") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var cm struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &cm); err != nil {
+		return nil, fmt.Errorf("parse resume ConfigMap %s: %w", name, err)
+	}
+	raw := cm.Data["plans.json"]
+	if strings.TrimSpace(raw) == "" {
+		return nil, fmt.Errorf("resume ConfigMap %s does not contain plans.json", name)
+	}
+	return readPlanBundleBytes([]byte(raw))
+}
+
+func writeK8sResumePlans(ctx context.Context, plans []*repairPlan) error {
+	if len(plans) == 0 {
+		return nil
+	}
+	data, err := json.MarshalIndent(plans, "", "  ")
+	if err != nil {
+		return err
+	}
+	name := k8sResumeConfigMapName(shardIDsFromPlans(plans))
+	yaml := fmt.Sprintf(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: %s
+  labels:
+    app.kubernetes.io/name: mo-logservice-repair
+    app.kubernetes.io/component: resume-plan
+data:
+  plans.json: |
+%s
+`,
+		yamlQuote(name),
+		indentBlock(string(data), 4),
+	)
+	if err := runKubectlApplyYAML(ctx, plans[0], yaml); err != nil {
+		return fmt.Errorf("write resume ConfigMap %s: %w", name, err)
+	}
+	stdoutf("resume plan saved in ConfigMap %s\n", name)
+	return nil
+}
+
+func readPlanBundleBytes(data []byte) ([]*repairPlan, error) {
+	trimmed := strings.TrimSpace(string(data))
+	if strings.HasPrefix(trimmed, "[") {
+		var plans []*repairPlan
+		if err := json.Unmarshal([]byte(trimmed), &plans); err != nil {
+			return nil, err
+		}
+		for _, plan := range plans {
+			if plan.Version != repairPlanVersion {
+				return nil, fmt.Errorf("unsupported plan version %q", plan.Version)
+			}
+		}
+		return plans, nil
+	}
+	var plan repairPlan
+	if err := json.Unmarshal([]byte(trimmed), &plan); err != nil {
+		return nil, err
+	}
+	if plan.Version != repairPlanVersion {
+		return nil, fmt.Errorf("unsupported plan version %q", plan.Version)
+	}
+	return []*repairPlan{&plan}, nil
+}
+
+func k8sResumeConfigMapName(shardIDs []uint64) string {
+	ids := append([]uint64(nil), shardIDs...)
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		parts = append(parts, fmt.Sprintf("s%d", id))
+	}
+	return sanitizeK8sName("mo-log-repair-"+strings.Join(parts, "-"), 63)
+}
+
+func shardIDsFromPlans(plans []*repairPlan) []uint64 {
+	ids := make([]uint64, 0, len(plans))
+	for _, plan := range plans {
+		ids = append(ids, plan.ShardID)
+	}
+	return uniqueUint64s(ids)
+}
+
 type k8sPodList struct {
 	Items []k8sPod `json:"items"`
 }
@@ -1776,8 +2226,9 @@ type k8sPod struct {
 }
 
 type k8sPodMetadata struct {
-	Name   string            `json:"name"`
-	Labels map[string]string `json:"labels"`
+	Name              string            `json:"name"`
+	Labels            map[string]string `json:"labels"`
+	DeletionTimestamp string            `json:"deletionTimestamp,omitempty"`
 }
 
 type k8sPodStatus struct {
@@ -1942,14 +2393,18 @@ func k8sCleanupLogsContainReplicas(logs string, replicas []uint64) bool {
 }
 
 func waitForTargetReplicaHeartbeats(ctx context.Context, plans []*repairPlan, timeout time.Duration) error {
+	return waitForTargetReplicaHeartbeatsWithTimeout(ctx, plans, timeout, timeout)
+}
+
+func waitForTargetReplicaHeartbeatsWithTimeout(ctx context.Context, plans []*repairPlan, requestTimeout time.Duration, waitTimeout time.Duration) error {
 	if len(plans) == 0 {
 		return nil
 	}
 	stdoutln("step 4: verify target replicas in HAKeeper heartbeats")
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(waitTimeout)
 	var lastProblems []string
 	for time.Now().Before(deadline) {
-		state, err := getHAKeeperStateWithNewConnection(ctx, stableHAKeeperAddressesForApply(plans[0]), timeout)
+		state, err := getHAKeeperStateWithNewConnection(ctx, stableHAKeeperAddressesForApply(plans[0]), requestTimeout)
 		if err != nil {
 			lastProblems = []string{err.Error()}
 			time.Sleep(time.Second)
@@ -2122,6 +2577,45 @@ func logDeploymentForStore(store planStore) (string, bool) {
 	return fmt.Sprintf("log-%d", ordinal), true
 }
 
+func k8sDeploymentNameForStore(plan *repairPlan, store planStore) (string, error) {
+	template := "log-%d"
+	if plan != nil && plan.K8s != nil && plan.K8s.DeploymentNameTemplate != "" {
+		template = plan.K8s.DeploymentNameTemplate
+	}
+	return renderK8sStoreTemplate(template, store)
+}
+
+func k8sPVCNameForStore(plan *repairPlan, store planStore) (string, error) {
+	template := "log-%d-data"
+	if plan != nil && plan.K8s != nil && plan.K8s.PVCNameTemplate != "" {
+		template = plan.K8s.PVCNameTemplate
+	}
+	return renderK8sStoreTemplate(template, store)
+}
+
+func renderK8sStoreTemplate(template string, store planStore) (string, error) {
+	short := shortStoreID(store.UUID)
+	ordinal, hasOrdinal := logStoreOrdinal(store.UUID)
+	if strings.Contains(template, "%d") {
+		if !hasOrdinal {
+			return "", fmt.Errorf("store %s has no log ordinal for template %q", store.UUID, template)
+		}
+		return fmt.Sprintf(template, ordinal), nil
+	}
+	ret := strings.ReplaceAll(template, "{store}", store.UUID)
+	ret = strings.ReplaceAll(ret, "{short}", short)
+	if strings.Contains(ret, "{ordinal}") {
+		if !hasOrdinal {
+			return "", fmt.Errorf("store %s has no log ordinal for template %q", store.UUID, template)
+		}
+		ret = strings.ReplaceAll(ret, "{ordinal}", strconv.Itoa(ordinal))
+	}
+	if strings.Contains(ret, "{") || strings.Contains(ret, "}") {
+		return "", fmt.Errorf("unsupported template %q", template)
+	}
+	return ret, nil
+}
+
 func logStoreOrdinal(uuid string) (int, bool) {
 	short := shortStoreID(uuid)
 	idx := strings.LastIndex(short, "d")
@@ -2133,6 +2627,237 @@ func logStoreOrdinal(uuid string) (int, bool) {
 		return 0, false
 	}
 	return value, true
+}
+
+func waitForK8sStorePodsGone(ctx context.Context, plan *repairPlan, store planStore, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		pods := make([]string, 0)
+		selectors := k8sSelectorsForStore(plan, store)
+		seen := make(map[string]bool)
+		for _, selector := range selectors {
+			if seen[selector] {
+				continue
+			}
+			seen[selector] = true
+			items, err := listK8sPods(ctx, plan, selector)
+			if err != nil {
+				return err
+			}
+			for _, pod := range items {
+				if k8sPodMatchesStore(pod, store) {
+					pods = append(pods, pod.Metadata.Name)
+				}
+			}
+		}
+		if len(pods) == 0 {
+			return nil
+		}
+		sort.Strings(pods)
+		stdoutf("waiting for store %s pods to terminate: %v\n", store.UUID, uniqueStrings(pods))
+		time.Sleep(5 * time.Second)
+	}
+	return fmt.Errorf("timeout waiting for LogService pods for store %s to terminate", store.UUID)
+}
+
+func runK8sPVCCleanupJob(ctx context.Context, plan *repairPlan, store planStore, tasks []cleanupTask, timeout time.Duration) error {
+	pvcName, err := k8sPVCNameForStore(plan, store)
+	if err != nil {
+		return err
+	}
+	jobName := k8sCleanupJobName(tasks, store)
+	stdoutf("run cleanup job %s for store %s pvc %s\n", jobName, store.UUID, pvcName)
+	if _, err := runKubectl(ctx, plan, "delete", "job", jobName, "--ignore-not-found=true", "--wait=true"); err != nil {
+		return fmt.Errorf("delete previous cleanup job %s: %w", jobName, err)
+	}
+	yaml, err := k8sCleanupJobYAML(plan, store, tasks, jobName, pvcName)
+	if err != nil {
+		return err
+	}
+	if err := runKubectlApplyYAML(ctx, plan, yaml); err != nil {
+		return err
+	}
+	if _, err := runKubectl(ctx, plan, "wait", "--for=condition=complete", "job/"+jobName, "--timeout="+k8sTimeout(timeout)); err != nil {
+		logs, _ := runKubectl(ctx, plan, "logs", "job/"+jobName, "--tail=200")
+		describe, _ := runKubectl(ctx, plan, "describe", "job", jobName)
+		return fmt.Errorf("cleanup job %s did not complete: %w\nlogs:\n%s\ndescribe:\n%s", jobName, err, strings.TrimSpace(logs), strings.TrimSpace(describe))
+	}
+	logs, _ := runKubectl(ctx, plan, "logs", "job/"+jobName, "--tail=200")
+	if strings.TrimSpace(logs) != "" {
+		stdoutf("cleanup job %s logs:\n%s\n", jobName, strings.TrimSpace(logs))
+	}
+	return nil
+}
+
+func k8sCleanupJobName(tasks []cleanupTask, store planStore) string {
+	shards := make([]uint64, 0)
+	for _, task := range tasks {
+		shards = append(shards, task.Plan.ShardID)
+	}
+	shards = uniqueUint64s(shards)
+	shardPart := "multi"
+	if len(shards) == 1 {
+		shardPart = fmt.Sprintf("s%d", shards[0])
+	}
+	name := "mo-log-repair-" + shardPart + "-" + shortStoreID(store.UUID)
+	return sanitizeK8sName(name, 63)
+}
+
+func k8sCleanupJobYAML(plan *repairPlan, store planStore, tasks []cleanupTask, jobName string, pvcName string) (string, error) {
+	if plan.K8s == nil {
+		return "", fmt.Errorf("missing k8s settings")
+	}
+	script := k8sCleanupJobScript(plan, store, tasks)
+	return fmt.Sprintf(`apiVersion: batch/v1
+kind: Job
+metadata:
+  name: %s
+  labels:
+    app.kubernetes.io/name: mo-logservice-repair
+    app.kubernetes.io/component: pvc-cleanup
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mo-logservice-repair
+        app.kubernetes.io/component: pvc-cleanup
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: repair
+        image: %s
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+%s
+        volumeMounts:
+        - name: logservice-data
+          mountPath: %s
+      volumes:
+      - name: logservice-data
+        persistentVolumeClaim:
+          claimName: %s
+`,
+		yamlQuote(jobName),
+		yamlQuote(plan.K8s.RepairImage),
+		indentBlock(script, 10),
+		yamlQuote(plan.K8s.PVCMountPath),
+		yamlQuote(pvcName),
+	), nil
+}
+
+func k8sCleanupJobScript(plan *repairPlan, store planStore, tasks []cleanupTask) string {
+	lines := []string{
+		"set -eu",
+		fmt.Sprintf("echo %s", shellQuote("starting offline PVC cleanup for store "+store.UUID)),
+	}
+	for _, task := range tasks {
+		nodeHostDir := task.Store.NodeHostDir
+		if nodeHostDir == "" {
+			nodeHostDir = filepath.Join(plan.K8s.PVCLogServiceDataDir, task.Store.UUID)
+		}
+		lines = append(lines,
+			fmt.Sprintf("echo %s", shellQuote(fmt.Sprintf("clean shard %d replica %d", task.Plan.ShardID, task.ReplicaID))),
+			strings.Join([]string{
+				shellQuote(plan.K8s.RepairBinary),
+				"local", "clean-replica",
+				"--files-only",
+				"--deployment-id", strconv.FormatUint(plan.K8s.DeploymentID, 10),
+				"--node-host-id", shellQuote(task.Store.UUID),
+				"--node-host-dir", shellQuote(nodeHostDir),
+				"--shard-id", strconv.FormatUint(task.Plan.ShardID, 10),
+				"--replica-id", strconv.FormatUint(task.ReplicaID, 10),
+			}, " "),
+		)
+		lines = append(lines, k8sReplicaAbsentChecks(nodeHostDir, plan.K8s.DeploymentID, task.Plan.ShardID, task.ReplicaID)...)
+	}
+	lines = append(lines, "echo offline PVC cleanup complete")
+	return strings.Join(lines, "\n")
+}
+
+func k8sReplicaAbsentChecks(nodeHostDir string, deploymentID uint64, shardID uint64, replicaID uint64) []string {
+	deploymentDir := fmt.Sprintf("%020d", deploymentID)
+	patterns := []string{
+		filepath.Join(nodeHostDir, "*", deploymentDir, "tandb", fmt.Sprintf("node-%d-%d", shardID, replicaID)),
+		filepath.Join(nodeHostDir, "*", deploymentDir, fmt.Sprintf("snapshot-part-%d", shardID), fmt.Sprintf("snapshot-%d-%d", shardID, replicaID)),
+		filepath.Join(nodeHostDir, "*", deploymentDir, "exported-snapshot", fmt.Sprintf("shard-%d", shardID), fmt.Sprintf("replica-%d", replicaID)),
+		filepath.Join(nodeHostDir, "*", deploymentDir, "tandb", "bootstrap", fmt.Sprintf("BOOTSTRAP-%d-%d", shardID, replicaID)),
+	}
+	lines := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		lines = append(lines, fmt.Sprintf("if find %s -path %s -print -quit 2>/dev/null | grep -q .; then echo %s; exit 1; fi",
+			shellQuote(nodeHostDir),
+			shellQuote(pattern),
+			shellQuote("cleanup verification failed: "+pattern+" still exists"),
+		))
+	}
+	return lines
+}
+
+func runKubectlApplyYAML(ctx context.Context, plan *repairPlan, yaml string) error {
+	f, err := os.CreateTemp("", "mo-logservice-repair-*.yaml")
+	if err != nil {
+		return err
+	}
+	path := f.Name()
+	defer os.Remove(path)
+	if _, err := f.WriteString(yaml); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	_, err = runKubectl(ctx, plan, "apply", "-f", path)
+	return err
+}
+
+func k8sTimeout(d time.Duration) string {
+	if d <= 0 {
+		return "0s"
+	}
+	return fmt.Sprintf("%ds", int64(d.Seconds()))
+}
+
+func yamlQuote(s string) string {
+	return strconv.Quote(s)
+}
+
+func indentBlock(s string, spaces int) string {
+	prefix := strings.Repeat(" ", spaces)
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func sanitizeK8sName(s string, maxLen int) string {
+	s = strings.ToLower(s)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range s {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if ok {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	ret := strings.Trim(b.String(), "-")
+	if len(ret) > maxLen {
+		ret = strings.Trim(ret[:maxLen], "-")
+	}
+	if ret == "" {
+		return "mo-log-repair"
+	}
+	return ret
 }
 
 func runKubectl(ctx context.Context, plan *repairPlan, args ...string) (string, error) {
@@ -2413,6 +3138,7 @@ func applyRepairPlans(ctx context.Context, plans []*repairPlan, opts wizardOptio
 			task.Plan.ShardID,
 			task.ReplicaID,
 			200,
+			false,
 		); err != nil {
 			return err
 		}
@@ -2547,6 +3273,7 @@ func applySingleRepairPlan(ctx context.Context, plan *repairPlan, opts wizardOpt
 				plan.ShardID,
 				replicaID,
 				200,
+				false,
 			); err != nil {
 				return err
 			}

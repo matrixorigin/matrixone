@@ -34,7 +34,10 @@ import (
 )
 
 const logShardRepairReasonPrefix = "__mo_log_shard_repair__:"
-const repairStartupCleanupTimeout = 2 * time.Second
+
+// Repair cleanup runs before local replicas are started. Give HAKeeper enough
+// time to answer while other LogService pods are being restarted by the runbook.
+const repairStartupCleanupTimeout = 30 * time.Second
 
 type logShardRepairReason struct {
 	Reason                 string              `json:"reason,omitempty"`
