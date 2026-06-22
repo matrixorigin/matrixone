@@ -1541,7 +1541,7 @@ func calculatePartitions(start, end, n int64) [][2]int64 {
 }
 
 func StrictSqlMode(proc *process.Process) (error, bool) {
-	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	mode, err := resolveVariableOrDefault(proc, "sql_mode", true, false)
 	if err != nil {
 		return err, false
 	}
@@ -4106,6 +4106,29 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		// One timestamp per statement: all scopes must expand WRITE_FILE_PATTERN
 		// time directives against the same instant.
 		stmtAt := externalInsertStmtTime(c.proc, c.startAt)
+		localFileStage, err := externalInsertTargetIsLocalFile(c.proc, node, stmtAt)
+		if err != nil {
+			return nil, err
+		}
+		if localFileStage {
+			// Only merge scopes on remote CNs onto the current CN.
+			// Same-CN parallel writers share the same filesystem and
+			// use unique filename directives (%U / %<n>N), so they are safe
+			// to keep unmerged.
+			var localSS, remoteSS []*Scope
+			for _, s := range ss {
+				if isSameCN(s.NodeInfo.Addr, c.addr) {
+					localSS = append(localSS, s)
+				} else {
+					remoteSS = append(remoteSS, s)
+				}
+			}
+			if len(remoteSS) > 0 {
+				mergedRemote := c.newMergeScope(remoteSS)
+				localSS = append(localSS, mergedRemote)
+			}
+			ss = localSS
+		}
 		for i := range ss {
 			insertArg, err := constructExternalInsert(c.proc, node, c.e, stmtAt)
 			if err != nil {
@@ -5577,6 +5600,16 @@ func (c *Compile) runSqlWithResultAndOptions(
 	}
 
 	exec := v.(executor.SQLExecutor)
+	// Propagate the IsFrontend signal from the outer Compile's proc
+	// to the sub-execution. Without this, sub-Compiles spawned for
+	// internal sub-SQL (e.g. ALTER TABLE COPY's CreateTmpTableSql)
+	// default to IsFrontend=false even when the outer caller is
+	// user-driven, and any downstream code that gates on
+	// ctx.IsFrontend() / proc.Base.IsFrontend silently misfires —
+	// most notably CreateAllIndexUpdateTasks, which would otherwise
+	// see metadata=nil from BuildIdxcronMetadata and write '' into
+	// mo_index_update's JSON column. Mirrors the propagation already
+	// in pkg/vectorindex/sqlexec/sqlexec.go.
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
@@ -5586,7 +5619,8 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
 		WithLowerCaseTableNames(&lower).
 		WithStatementOption(options).
-		WithResolveVariableFunc(c.proc.GetResolveVariableFunc())
+		WithResolveVariableFunc(c.proc.GetResolveVariableFunc()).
+		WithFrontend(c.proc.Base.IsFrontend)
 
 	ctx := c.proc.Ctx
 	if ctx == nil {

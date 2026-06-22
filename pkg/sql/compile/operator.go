@@ -93,6 +93,8 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -941,6 +943,33 @@ func constructExternalInsert(
 ) (vm.Operator, error) {
 	oldCtx := node.InsertCtx
 	return buildExternalInsertArg(proc.Ctx, oldCtx.Ref, oldCtx.TableDef, oldCtx.AddAffectedRows, eng, stmtAt)
+}
+
+// externalInsertTargetIsLocalFile reports whether WRITE_FILE_PATTERN resolves
+// through a stage backed by file://. Such paths are local to the CN that writes
+// them, so remote CN writers would make files invisible to the coordinator's
+// follow-up external-table scan.
+func externalInsertTargetIsLocalFile(proc *process.Process, node *plan.Node, stmtAt time.Time) (bool, error) {
+	if node == nil || node.InsertCtx == nil || node.InsertCtx.TableDef == nil {
+		return false, nil
+	}
+	param := &tree.ExternParam{}
+	if err := json.Unmarshal([]byte(node.InsertCtx.TableDef.Createsql), param); err != nil {
+		return false, err
+	}
+	pattern, ok := plan2.GetWriteFilePattern(param)
+	if !ok {
+		return false, nil
+	}
+	expanded, err := externalwrite.ExpandFilePattern(pattern, stmtAt)
+	if err != nil {
+		return false, err
+	}
+	sdef, err := stageutil.UrlToStageDef(expanded, proc)
+	if err != nil {
+		return false, err
+	}
+	return sdef.Url.Scheme == stage.FILE_PROTOCOL, nil
 }
 
 // buildExternalInsertArg builds the external-write insert operator from the

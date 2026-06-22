@@ -177,6 +177,101 @@ func TestAppendFilterRowNullMarksValidity(t *testing.T) {
 	require.Equal(t, uint64(1), mb.chunks[0].nrows)
 }
 
+// TestIncludeBytesPerRowFromCols asserts the per-row size matches the
+// sum of element sizes plus a packed null-mask trailing byte. Mirrors
+// the cuvscdc.CdcIncludeBytesPerRow layout exactly so the small-tail
+// CDC writer produces records the search-side replay can decode.
+func TestIncludeBytesPerRowFromCols(t *testing.T) {
+	require.Equal(t, 0, includeBytesPerRowFromCols(nil))
+
+	// 1 int32 (4) + 1 null-mask byte = 5.
+	cols := []cuvsfilter.ColumnMeta{{TypeOid: cuvsfilter.ColTypeInt32}}
+	require.Equal(t, 5, includeBytesPerRowFromCols(cols))
+
+	// int32 + int64 + float32 + float64 + uint64 = 4+8+4+8+8 = 32, plus
+	// ceil(5/8) = 1 mask byte → 33.
+	cols = []cuvsfilter.ColumnMeta{
+		{TypeOid: cuvsfilter.ColTypeInt32},
+		{TypeOid: cuvsfilter.ColTypeInt64},
+		{TypeOid: cuvsfilter.ColTypeFloat32},
+		{TypeOid: cuvsfilter.ColTypeFloat64},
+		{TypeOid: cuvsfilter.ColTypeUint64},
+	}
+	require.Equal(t, 33, includeBytesPerRowFromCols(cols))
+
+	// 9 columns → ceil(9/8) = 2 mask bytes.
+	cols = make([]cuvsfilter.ColumnMeta, 9)
+	for i := range cols {
+		cols[i] = cuvsfilter.ColumnMeta{TypeOid: cuvsfilter.ColTypeInt32}
+	}
+	require.Equal(t, 9*4+2, includeBytesPerRowFromCols(cols))
+}
+
+// TestEncodeIncludeRowFromArgVecs round-trips per-row include bytes
+// through the same layout cuvscdc.DecodeEventRecord consumes at
+// replay. Mirrors the all-types appendFilterRow case but writes into
+// our flat buffer instead of forwarding to the cuvs builder.
+func TestEncodeIncludeRowFromArgVecs(t *testing.T) {
+	mp := mpool.MustNewZero()
+	baseOffset := 3
+
+	cols := []cuvsfilter.ColumnMeta{
+		{Name: "a", TypeOid: cuvsfilter.ColTypeInt32},
+		{Name: "b", TypeOid: cuvsfilter.ColTypeInt64},
+		{Name: "c", TypeOid: cuvsfilter.ColTypeFloat32},
+		{Name: "d", TypeOid: cuvsfilter.ColTypeFloat64},
+		{Name: "e", TypeOid: cuvsfilter.ColTypeUint64},
+	}
+
+	argVecs := make([]*vector.Vector, baseOffset+len(cols))
+	for i := 0; i < baseOffset; i++ {
+		argVecs[i] = singleRowVec(t, mp, types.T_int64, int64(0))
+	}
+	argVecs[baseOffset+0] = singleRowVec(t, mp, types.T_int32, int32(-42))
+	argVecs[baseOffset+1] = singleRowVec(t, mp, types.T_int64, int64(0x1122334455667788))
+	argVecs[baseOffset+2] = singleRowVec(t, mp, types.T_float32, float32(3.14))
+	argVecs[baseOffset+3] = singleRowVec(t, mp, types.T_float64, float64(2.718281828))
+	argVecs[baseOffset+4] = singleRowVec(t, mp, types.T_uint64, uint64(0xDEADBEEFCAFEBABE))
+
+	got, err := encodeIncludeRowFromArgVecs(cols, argVecs, baseOffset, 0)
+	require.NoError(t, err)
+	require.Len(t, got, includeBytesPerRowFromCols(cols))
+
+	// int32 -42 LE
+	require.Equal(t, []byte{0xD6, 0xFF, 0xFF, 0xFF}, got[0:4])
+	// int64 LE
+	require.Equal(t,
+		[]byte{0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11},
+		got[4:12])
+	// uint64 LE
+	require.Equal(t,
+		[]byte{0xBE, 0xBA, 0xFE, 0xCA, 0xEF, 0xBE, 0xAD, 0xDE},
+		got[24:32])
+	// null mask: no nulls, trailing byte is 0.
+	require.Equal(t, byte(0), got[32])
+
+	// Nil cols → no allocation.
+	got, err = encodeIncludeRowFromArgVecs(nil, argVecs, baseOffset, 0)
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
+// TestEncodeIncludeRowFromArgVecs_NullMarks asserts a null cell sets
+// the corresponding bit in the trailing null-mask byte (LSB-first).
+func TestEncodeIncludeRowFromArgVecs_NullMarks(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	vNull := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(vNull, int64(0), true, mp)) // null
+
+	cols := []cuvsfilter.ColumnMeta{{Name: "a", TypeOid: cuvsfilter.ColTypeInt64}}
+	got, err := encodeIncludeRowFromArgVecs(cols,
+		[]*vector.Vector{nil, nil, nil, vNull}, 3, 0)
+	require.NoError(t, err)
+	require.Len(t, got, 8+1)              // int64 + 1 mask byte
+	require.Equal(t, byte(0x01), got[8])  // bit 0 set → col 0 is null
+}
+
 func TestValidateFilterArgCount(t *testing.T) {
 	cols := []cuvsfilter.ColumnMeta{{Name: "a", TypeOid: cuvsfilter.ColTypeInt64}}
 

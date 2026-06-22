@@ -148,7 +148,7 @@ func TestNewFulltextSqlWriterUpsert(t *testing.T) {
 	consumerInfo := newTestConsumerInfo()
 	jobID := newTestJobID()
 
-	writer, err := NewIndexSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	writer, err := NewFulltextSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
 	require.Nil(t, err)
 
 	row := []any{int64(1000), []uint8("hello world"), nil}
@@ -171,7 +171,7 @@ func TestNewFulltextSqlWriterInsert(t *testing.T) {
 	consumerInfo := newTestConsumerInfo()
 	jobID := newTestJobID()
 
-	writer, err := NewIndexSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	writer, err := NewFulltextSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
 	require.Nil(t, err)
 
 	row := []any{int64(1000), []uint8("hello world"), nil}
@@ -195,7 +195,7 @@ func TestNewFulltextSqlWriterDelete(t *testing.T) {
 	consumerInfo := newTestConsumerInfo()
 	jobID := newTestJobID()
 
-	writer, err := NewIndexSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	writer, err := NewFulltextSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
 	require.Nil(t, err)
 
 	row := []any{int64(1000), []uint8("hello world"), nil}
@@ -219,7 +219,7 @@ func TestNewFulltextSqlWriterCPkey(t *testing.T) {
 	consumerInfo := newTestConsumerInfo()
 	jobID := newTestJobID()
 
-	writer, err := NewIndexSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	writer, err := NewFulltextSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
 	require.Nil(t, err)
 
 	row := []any{[]uint8("abcdef12"), []uint8("hello world"), []uint8("one title"), nil}

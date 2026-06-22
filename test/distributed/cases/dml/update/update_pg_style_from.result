@@ -118,6 +118,47 @@ SELECT id, base, gen_col FROM gen_t ORDER BY id;
 3  ¦  30  ¦  60
 DROP TABLE gen_t;
 DROP TABLE gen_src;
+DROP TABLE IF EXISTS gen_dup_t;
+DROP TABLE IF EXISTS gen_dup_s;
+CREATE TABLE gen_dup_t (
+id INT PRIMARY KEY,
+base INT,
+gen_col INT AS (ifnull(base, 0)) STORED
+);
+INSERT INTO gen_dup_t (id, base) VALUES (1, 5);
+CREATE TABLE gen_dup_s (t_id INT, new_base INT);
+INSERT INTO gen_dup_s VALUES (1, NULL), (1, 7);
+UPDATE gen_dup_t SET base = s.new_base FROM gen_dup_s s WHERE s.t_id = gen_dup_t.id;
+SELECT COUNT(*) AS valid_generated_row FROM gen_dup_t
+WHERE (base IS NULL AND gen_col = 0) OR (base = 7 AND gen_col = 7);
+➤ valid_generated_row[-5,64,0]  𝄀
+1
+DROP TABLE gen_dup_t;
+DROP TABLE gen_dup_s;
+DROP TABLE IF EXISTS whole_row_t;
+DROP TABLE IF EXISTS whole_row_s;
+CREATE TABLE whole_row_t (
+id INT PRIMARY KEY,
+a INT,
+b VARCHAR(20)
+);
+CREATE TABLE whole_row_s (
+t_id INT,
+new_a INT,
+new_b VARCHAR(20)
+);
+INSERT INTO whole_row_t VALUES (1, 0, 'orig');
+INSERT INTO whole_row_s VALUES (1, NULL, 'from-null-a'), (1, 7, NULL);
+UPDATE whole_row_t SET a = s.new_a, b = s.new_b FROM whole_row_s s WHERE s.t_id = whole_row_t.id;
+SELECT COUNT(*) AS valid_whole_row FROM whole_row_t
+WHERE (a IS NULL AND b = 'from-null-a') OR (a = 7 AND b IS NULL);
+➤ valid_whole_row[-5,64,0]  𝄀
+1
+SELECT COUNT(*) AS synthesized_row FROM whole_row_t WHERE a = 7 AND b = 'from-null-a';
+➤ synthesized_row[-5,64,0]  𝄀
+0
+DROP TABLE whole_row_t;
+DROP TABLE whole_row_s;
 DROP TABLE IF EXISTS fk_parent;
 DROP TABLE IF EXISTS fk_child;
 DROP TABLE IF EXISTS fk_src;
@@ -189,6 +230,184 @@ SELECT id, p_id, v FROM dup_t ORDER BY id;
 DROP TABLE dup_t;
 DROP TABLE dup_p;
 DROP TABLE dup_s;
+DROP TABLE IF EXISTS fk_whole_row_t;
+DROP TABLE IF EXISTS fk_whole_row_p;
+DROP TABLE IF EXISTS fk_whole_row_s;
+CREATE TABLE fk_whole_row_p (id INT PRIMARY KEY);
+INSERT INTO fk_whole_row_p VALUES (1);
+CREATE TABLE fk_whole_row_t (
+id INT PRIMARY KEY,
+p_id INT,
+a INT,
+b VARCHAR(20),
+FOREIGN KEY (p_id) REFERENCES fk_whole_row_p(id)
+);
+CREATE TABLE fk_whole_row_s (
+t_id INT,
+new_a INT,
+new_b VARCHAR(20)
+);
+INSERT INTO fk_whole_row_t VALUES (1, 1, 0, 'orig');
+INSERT INTO fk_whole_row_s VALUES (1, NULL, 'from-null-a'), (1, 7, NULL);
+UPDATE fk_whole_row_t SET a = s.new_a, b = s.new_b FROM fk_whole_row_s s WHERE s.t_id = fk_whole_row_t.id;
+SELECT COUNT(*) AS valid_whole_row FROM fk_whole_row_t
+WHERE (a IS NULL AND b = 'from-null-a') OR (a = 7 AND b IS NULL);
+➤ valid_whole_row[-5,64,0]  𝄀
+1
+SELECT COUNT(*) AS synthesized_row FROM fk_whole_row_t WHERE a = 7 AND b = 'from-null-a';
+➤ synthesized_row[-5,64,0]  𝄀
+0
+DROP TABLE fk_whole_row_t;
+DROP TABLE fk_whole_row_p;
+DROP TABLE fk_whole_row_s;
+DROP TABLE IF EXISTS dup_no_fk_t;
+DROP TABLE IF EXISTS dup_no_fk_s;
+CREATE TABLE dup_no_fk_t (
+id INT PRIMARY KEY,
+v VARCHAR(20)
+);
+CREATE TABLE dup_no_fk_s (
+t_id INT,
+v VARCHAR(20)
+);
+INSERT INTO dup_no_fk_t VALUES (1, 'orig'), (2, 'orig');
+INSERT INTO dup_no_fk_s VALUES (1, 'first'), (1, 'second'), (2, 'only');
+UPDATE dup_no_fk_t SET v = s.v FROM dup_no_fk_s s WHERE s.t_id = dup_no_fk_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM dup_no_fk_t;
+➤ row_cnt[-5,64,0]  ¦  id_cnt[-5,64,0]  𝄀
+2  ¦  2
+SELECT id, COUNT(*) AS per_id_cnt FROM dup_no_fk_t GROUP BY id ORDER BY id;
+➤ id[4,32,0]  ¦  per_id_cnt[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+SELECT v FROM dup_no_fk_t WHERE id = 2;
+➤ v[12,-1,0]  𝄀
+only
+DROP TABLE dup_no_fk_t;
+DROP TABLE dup_no_fk_s;
+DROP TABLE IF EXISTS geo_dedup_t;
+DROP TABLE IF EXISTS geo_dedup_s;
+CREATE TABLE geo_dedup_t (
+id INT PRIMARY KEY,
+g GEOMETRY32,
+v VARCHAR(20)
+);
+CREATE TABLE geo_dedup_s (
+t_id INT,
+v VARCHAR(20)
+);
+INSERT INTO geo_dedup_t VALUES
+(1, ST_GeomFromText('POINT(1 2)'), 'orig'),
+(2, ST_GeomFromText('POINT(3 4)'), 'orig');
+INSERT INTO geo_dedup_s VALUES (1, 'first'), (1, 'second'), (2, 'only');
+UPDATE geo_dedup_t SET v = s.v FROM geo_dedup_s s WHERE s.t_id = geo_dedup_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM geo_dedup_t;
+➤ row_cnt[-5,64,0]  ¦  id_cnt[-5,64,0]  𝄀
+2  ¦  2
+SELECT id, COUNT(*) AS per_id_cnt FROM geo_dedup_t GROUP BY id ORDER BY id;
+➤ id[4,32,0]  ¦  per_id_cnt[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+SELECT v FROM geo_dedup_t WHERE id = 2;
+➤ v[12,-1,0]  𝄀
+only
+DROP TABLE geo_dedup_t;
+DROP TABLE geo_dedup_s;
+DROP TABLE IF EXISTS geo_fk_dedup_t;
+DROP TABLE IF EXISTS geo_fk_dedup_p;
+DROP TABLE IF EXISTS geo_fk_dedup_s;
+CREATE TABLE geo_fk_dedup_p (id INT PRIMARY KEY);
+INSERT INTO geo_fk_dedup_p VALUES (1), (2);
+CREATE TABLE geo_fk_dedup_t (
+id INT PRIMARY KEY,
+p_id INT,
+g GEOMETRY32,
+v VARCHAR(20),
+FOREIGN KEY (p_id) REFERENCES geo_fk_dedup_p(id)
+);
+CREATE TABLE geo_fk_dedup_s (
+t_id INT,
+v VARCHAR(20)
+);
+INSERT INTO geo_fk_dedup_t VALUES
+(1, 1, ST_GeomFromText('POINT(1 2)'), 'orig'),
+(2, 2, ST_GeomFromText('POINT(3 4)'), 'orig');
+INSERT INTO geo_fk_dedup_s VALUES (1, 'first'), (1, 'second'), (2, 'only');
+UPDATE geo_fk_dedup_t SET v = s.v FROM geo_fk_dedup_s s WHERE s.t_id = geo_fk_dedup_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM geo_fk_dedup_t;
+➤ row_cnt[-5,64,0]  ¦  id_cnt[-5,64,0]  𝄀
+2  ¦  2
+SELECT id, COUNT(*) AS per_id_cnt FROM geo_fk_dedup_t GROUP BY id ORDER BY id;
+➤ id[4,32,0]  ¦  per_id_cnt[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+SELECT v FROM geo_fk_dedup_t WHERE id = 2;
+➤ v[12,-1,0]  𝄀
+only
+DROP TABLE geo_fk_dedup_t;
+DROP TABLE geo_fk_dedup_p;
+DROP TABLE geo_fk_dedup_s;
+DROP TABLE IF EXISTS jt1;
+DROP TABLE IF EXISTS jt2;
+DROP TABLE IF EXISTS js;
+CREATE TABLE jt1 (id INT PRIMARY KEY, v VARCHAR(20));
+CREATE TABLE jt2 (id INT PRIMARY KEY, k INT, v VARCHAR(20));
+CREATE TABLE js (t_id INT, v VARCHAR(20));
+INSERT INTO jt1 VALUES (1, 'a'), (2, 'b');
+INSERT INTO jt2 VALUES (10, 1, 'x');
+INSERT INTO js VALUES (1, 'new1'), (2, 'new2');
+UPDATE jt1 LEFT JOIN jt2 ON jt2.k = jt1.id SET jt1.v = s.v, jt2.v = s.v FROM js s WHERE s.t_id = jt1.id;
+SELECT id, v FROM jt1 ORDER BY id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  new1  𝄀
+2  ¦  new2
+SELECT id, k, v FROM jt2 ORDER BY id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  v[12,-1,0]  𝄀
+10  ¦  1  ¦  new1
+SELECT COUNT(*) AS jt2_cnt FROM jt2;
+➤ jt2_cnt[-5,64,0]  𝄀
+1
+DROP TABLE jt1;
+DROP TABLE jt2;
+DROP TABLE js;
+DROP TABLE IF EXISTS left_src_t;
+DROP TABLE IF EXISTS left_src_s1;
+DROP TABLE IF EXISTS left_src_s2;
+CREATE TABLE left_src_t (id INT PRIMARY KEY, v VARCHAR(20));
+CREATE TABLE left_src_s1 (t_id INT, v VARCHAR(20));
+CREATE TABLE left_src_s2 (t_id INT, tag VARCHAR(10));
+INSERT INTO left_src_t VALUES (1, 'orig'), (2, 'orig');
+INSERT INTO left_src_s1 VALUES (1, 'first'), (1, 'second'), (2, 'only');
+INSERT INTO left_src_s2 VALUES (1, 'tag1');
+UPDATE left_src_t SET v = s1.v FROM left_src_s1 s1 LEFT JOIN left_src_s2 s2 ON s1.t_id = s2.t_id WHERE s1.t_id = left_src_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM left_src_t;
+➤ row_cnt[-5,64,0]  ¦  id_cnt[-5,64,0]  𝄀
+2  ¦  2
+SELECT id, COUNT(*) AS per_id_cnt FROM left_src_t GROUP BY id ORDER BY id;
+➤ id[4,32,0]  ¦  per_id_cnt[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+SELECT v FROM left_src_t WHERE id = 2;
+➤ v[12,-1,0]  𝄀
+only
+DROP TABLE left_src_t;
+DROP TABLE left_src_s1;
+DROP TABLE left_src_s2;
+DROP TABLE IF EXISTS no_pk_t;
+DROP TABLE IF EXISTS no_pk_s;
+CREATE TABLE no_pk_t (v VARCHAR(20));
+CREATE TABLE no_pk_s (t_id INT, v VARCHAR(20));
+INSERT INTO no_pk_t VALUES ('orig');
+INSERT INTO no_pk_s VALUES (1, 'first'), (1, 'second');
+UPDATE no_pk_t SET v = s.v FROM no_pk_s s;
+SELECT COUNT(*) AS row_cnt FROM no_pk_t;
+➤ row_cnt[-5,64,0]  𝄀
+1
+SELECT v FROM no_pk_t;
+➤ v[12,-1,0]  𝄀
+first
+DROP TABLE no_pk_t;
+DROP TABLE no_pk_s;
 DROP TABLE IF EXISTS company;
 DROP TABLE IF EXISTS vec_join_case;
 DROP TABLE IF EXISTS region;
