@@ -101,10 +101,24 @@ func newProxyHandler(
 	if test {
 		ru = newRouter(mc, re, re.connManager, false)
 	} else {
-		ru = newRouter(mc, re, sw, false,
+		routerOpts := []routeOption{
 			withConnectTimeout(cfg.ConnectTimeout.Duration),
 			withAuthTimeout(cfg.AuthTimeout.Duration),
-		)
+			withCNHealthCheckCooldown(
+				cfg.CNHealthCheckBaseCooldown.Duration,
+				cfg.CNHealthCheckMaxCooldown.Duration,
+			),
+			withCNHealthCheckFailThreshold(cfg.CNHealthCheckFailThreshold),
+			// A legitimate half-open probe may take up to connect timeout + auth
+			// timeout, so the probe slot lifetime must be at least that long.
+			withCNHealthCheckProbeWindow(
+				cfg.ConnectTimeout.Duration + cfg.AuthTimeout.Duration,
+			),
+		}
+		if cfg.CNHealthCheckDisabled {
+			routerOpts = append(routerOpts, withCNHealthCheckDisabled())
+		}
+		ru = newRouter(mc, re, sw, false, routerOpts...)
 	}
 
 	// Decorate the router if plugin is enabled

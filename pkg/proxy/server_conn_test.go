@@ -135,6 +135,7 @@ type testCNServer struct {
 	tlsConfig  *tls.Config
 
 	beforeHandle func()
+	handle       func(*testHandler)
 	service      string
 }
 
@@ -166,6 +167,12 @@ type option func(s *testCNServer)
 func withBeforeHandle(f func()) option {
 	return func(s *testCNServer) {
 		s.beforeHandle = f
+	}
+}
+
+func withHandle(f func(*testHandler)) option {
+	return func(s *testCNServer) {
+		s.handle = f
 	}
 }
 
@@ -291,6 +298,10 @@ func (s *testCNServer) Start() error {
 					s.beforeHandle()
 				}
 				go func(h *testHandler) {
+					if s.handle != nil {
+						s.handle(h)
+						return
+					}
 					testHandle(h)
 				}(h)
 			}
@@ -574,6 +585,33 @@ func TestServerConn_Connect(t *testing.T) {
 	require.NotEqual(t, 0, int(sc.ConnID()))
 	err = sc.Close()
 	require.NoError(t, err)
+}
+
+func TestServerConn_HandleHandshakeEarlyReadFailureIsNotTimeout(t *testing.T) {
+	defer leaktest.AfterTest(t)
+	temp := os.TempDir()
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
+	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
+	tp := newTestProxyHandler(t)
+	defer tp.closeFn()
+	stopFn := startTestCNServer(t, tp.ctx, addr, nil, withHandle(func(h *testHandler) {
+		// Simulate an immediate post-dial backend failure before the CN sends
+		// its initial handshake.
+		h.close()
+	}))
+	defer func() {
+		require.NoError(t, stopFn())
+	}()
+
+	sc, err := newServerConn(cn1, nil, tp.re, 0)
+	require.NoError(t, err)
+	require.NotNil(t, sc)
+	defer sc.Close()
+
+	_, err = sc.HandleHandshake(&frontend.Packet{Payload: []byte{1}}, time.Second)
+	require.Error(t, err)
+	require.False(t, isTimeoutErr(err), "early backend close must not be reclassified as timeout/busy")
 }
 
 func TestFakeCNServer(t *testing.T) {
