@@ -48,6 +48,10 @@ var (
 	defaultAuthTimeout = time.Second * 10
 	// The default value of TSL connect timeout.
 	defaultTLSConnectTimeout = time.Second * 10
+	// The default base cooldown of the CN health circuit breaker.
+	defaultCNHealthCheckBaseCooldown = time.Second * 5
+	// The default max cooldown of the CN health circuit breaker.
+	defaultCNHealthCheckMaxCooldown = time.Second * 30
 )
 
 type RebalancePolicy int
@@ -108,6 +112,26 @@ type Config struct {
 	InternalCIDRs []string `toml:"internal-cidrs"`
 	// ConnCacheEnabled indicates if the connection cache feature is enabled.
 	ConnCacheEnabled bool `toml:"conn-cache-enabled"`
+
+	// CNHealthCheckDisabled disables the CN health circuit breaker. By default
+	// the breaker is enabled: it temporarily skips CN servers that fail to
+	// accept connections (e.g. overloaded CNs whose handshake times out), so
+	// new connections are not repeatedly routed to a known-bad CN.
+	CNHealthCheckDisabled bool `toml:"cn-health-check-disabled" user_setting:"advanced"`
+	// CNHealthCheckBaseCooldown is the initial cooldown applied to a CN when
+	// its health breaker first trips. Subsequent consecutive failures back off
+	// exponentially up to CNHealthCheckMaxCooldown.
+	CNHealthCheckBaseCooldown toml.Duration `toml:"cn-health-check-base-cooldown" user_setting:"advanced"`
+	// CNHealthCheckMaxCooldown caps the exponential backoff of the CN health
+	// breaker, ensuring a failing CN is probed (and may recover) at least once
+	// per this window.
+	CNHealthCheckMaxCooldown toml.Duration `toml:"cn-health-check-max-cooldown" user_setting:"advanced"`
+	// CNHealthCheckFailThreshold is the number of consecutive connect failures
+	// required before a CN's health breaker trips. A value >1 tolerates a
+	// single transient blip; this matters most for single-CN deployments,
+	// where tripping the only CN makes new connections fast-fail during the
+	// cooldown. Default is 2. Values < 1 fall back to the default.
+	CNHealthCheckFailThreshold int `toml:"cn-health-check-fail-threshold" user_setting:"advanced"`
 
 	// HAKeeper is the configuration of HAKeeper.
 	HAKeeper struct {
@@ -226,6 +250,15 @@ func (c *Config) FillDefault() {
 	}
 	if c.HAKeeper.HeartbeatTimeout.Duration == 0 {
 		c.HAKeeper.HeartbeatTimeout.Duration = defaultHeartbeatTimeout
+	}
+	if c.CNHealthCheckBaseCooldown.Duration == 0 {
+		c.CNHealthCheckBaseCooldown.Duration = defaultCNHealthCheckBaseCooldown
+	}
+	if c.CNHealthCheckMaxCooldown.Duration == 0 {
+		c.CNHealthCheckMaxCooldown.Duration = defaultCNHealthCheckMaxCooldown
+	}
+	if c.CNHealthCheckFailThreshold < 1 {
+		c.CNHealthCheckFailThreshold = defaultCNHealthFailThreshold
 	}
 }
 
