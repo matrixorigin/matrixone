@@ -23,6 +23,10 @@ create index ixf using ivfpq on tf (v) op_type 'vector_l2_ops' lists=2 m=8 bits_
 not supported: IvfPQ only supports VECF32 / VECF16 base column types
 create index ixq using cagra on t (v) op_type 'vector_l2_ops' QUANTIZATION 'float64';
 internal error: invalid quantization. quantization is invalid. f32, f16, int8, uint8
+create index ixbq using cagra on t (v) op_type 'vector_l2_ops' QUANTIZATION 'bf16';
+not supported: Cagra does not support 'bf16' quantization (no GPU bfloat16 storage); use 'float16', 'int8', or 'uint8'
+create index ixbq using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8 QUANTIZATION 'bf16';
+not supported: IvfPQ does not support 'bf16' quantization (no GPU bfloat16 storage); use 'float16', 'int8', or 'uint8'
 create index ixv using cagra on t (v) op_type 'vector_l2_ops' INCLUDE (lbl);
 not supported: INCLUDE column 'lbl' has unsupported type VARCHAR (supported: int32, int64, float32, float64)
 create index ixok using cagra on t (v)

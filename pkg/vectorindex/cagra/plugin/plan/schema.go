@@ -71,6 +71,14 @@ func (Hooks) BuildSecondaryIndexDefs(
 		// float32 is an upcast and rejected). Mirrors ivfflat's guard.
 		if indexInfo.IndexOption != nil && indexInfo.IndexOption.Quantization != "" {
 			if qt, ok := quantizer.ToVectorType(indexInfo.IndexOption.Quantization); ok {
+				// bf16 storage does not exist on the GPU (cuVS/cgo has no bfloat16
+				// index or quantizer), so reject it explicitly rather than silently
+				// falling back to f32 storage. Supported cuvs storage = f16/int8/uint8.
+				if qt == types.T_array_bf16 {
+					return nil, nil, moerr.NewNotSupportedf(ctx.GetContext(),
+						"Cagra does not support '%s' quantization (no GPU bfloat16 storage); use 'float16', 'int8', or 'uint8'",
+						indexInfo.IndexOption.Quantization)
+				}
 				baseSize := types.Type{Oid: types.T(colMap[name].Typ.Id)}.GetArrayElementSize()
 				quantSize := types.Type{Oid: qt}.GetArrayElementSize()
 				if quantSize > baseSize {

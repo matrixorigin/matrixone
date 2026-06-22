@@ -9,6 +9,7 @@
 --   * op_type 'vector_bogus_ops'   — unknown op_type
 --   * vecf64 column                — cuvs has no float64; only VECF32 allowed
 --   * QUANTIZATION 'float64'       — cuvs quantization is f32/f16/int8/uint8 only
+--   * QUANTIZATION 'bf16'          — no GPU bfloat16 storage; must not silent-fallback to f32
 --   * dimension mismatch at search — query dim must equal the column dim
 -- =====================================================================
 
@@ -41,6 +42,12 @@ create index ixf using ivfpq on tf (v) op_type 'vector_l2_ops' lists=2 m=8 bits_
 
 -- Unsupported QUANTIZATION value.
 create index ixq using cagra on t (v) op_type 'vector_l2_ops' QUANTIZATION 'float64';
+
+-- QUANTIZATION 'bf16' has no GPU bfloat16 storage (cuvs has no bfloat16 index or
+-- quantizer). It passes the downcast width guard (bf16 is 2 bytes <= f32's 4),
+-- so it must be rejected explicitly rather than silently building f32 storage.
+create index ixbq using cagra on t (v) op_type 'vector_l2_ops' QUANTIZATION 'bf16';
+create index ixbq using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8 QUANTIZATION 'bf16';
 
 -- VARCHAR is not a supported INCLUDE column type (only int32/int64/float32/float64).
 create index ixv using cagra on t (v) op_type 'vector_l2_ops' INCLUDE (lbl);
