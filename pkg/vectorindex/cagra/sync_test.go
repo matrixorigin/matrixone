@@ -144,7 +144,7 @@ func TestCagraSync_Update_AllInsert(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 	require.Equal(t, vectorindex.CdcTailId, s.activeIndexId)
 
@@ -186,7 +186,7 @@ func TestCagraSync_Update_DeleteAndInsert(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -224,7 +224,7 @@ func TestCagraSync_Update_DeleteInsertDelete(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -261,7 +261,7 @@ func TestCagraSync_Update_DeleteIdempotent(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -293,7 +293,7 @@ func TestCagraSync_Update_Upsert(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -325,7 +325,7 @@ func TestCagraSync_Update_DimMismatch(t *testing.T) {
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -356,7 +356,7 @@ func TestCagraSync_Update_WithIncludeBytes(t *testing.T) {
 	require.Equal(t, 9, expectedIBPR)
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, colMetaJSON)
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, colMetaJSON)
 	require.NoError(t, err)
 	require.Equal(t, 9, s.includeBytesPerRow)
 
@@ -402,7 +402,7 @@ func TestCagraSync_Update_NoOpSaveSkipsSql(t *testing.T) {
 	defer func() { runSql = origRun }()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{}
@@ -429,7 +429,7 @@ func TestCagraSync_NewSync_Stateless(t *testing.T) {
 	defer func() { runSql = origRun }()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 	require.Equal(t, vectorindex.CdcTailId, s.activeIndexId)
 	require.Equal(t, 0, called)
@@ -446,7 +446,7 @@ func TestCagraSync_RunOnce(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -489,7 +489,7 @@ func TestCagraSync_MultiFlush(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	flush1 := &vectorindex.VectorIndexCdc[float32]{

@@ -113,7 +113,7 @@ func TestIvfpqSync_Update_AllInsert(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewIvfpqSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 	require.Equal(t, vectorindex.CdcTailId, s.activeIndexId)
 
@@ -146,7 +146,7 @@ func TestIvfpqSync_Update_DeleteAndInsert(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewIvfpqSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -177,7 +177,7 @@ func TestIvfpqSync_Update_DeleteInsertDelete(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewIvfpqSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -208,7 +208,7 @@ func TestIvfpqSync_Update_DeleteIdempotent(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewIvfpqSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -236,7 +236,7 @@ func TestIvfpqSync_Update_Upsert(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewIvfpqSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -262,7 +262,7 @@ func TestIvfpqSync_Update_DimMismatch(t *testing.T) {
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	s, err := NewIvfpqSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -290,7 +290,7 @@ func TestIvfpqSync_Update_WithIncludeBytes(t *testing.T) {
 	require.Equal(t, 9, expectedIBPR)
 
 	s, err := NewIvfpqSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, colMetaJSON)
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, colMetaJSON)
 	require.NoError(t, err)
 	require.Equal(t, 9, s.includeBytesPerRow)
 
@@ -331,7 +331,7 @@ func TestIvfpqSync_Update_NoOpSaveSkipsSql(t *testing.T) {
 	defer func() { runSql = origRun }()
 
 	s, err := NewIvfpqSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{}
@@ -355,7 +355,7 @@ func TestIvfpqSync_NewSync_Stateless(t *testing.T) {
 	defer func() { runSql = origRun }()
 
 	s, err := NewIvfpqSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 	require.Equal(t, vectorindex.CdcTailId, s.activeIndexId)
 	require.Equal(t, 0, called)
@@ -371,7 +371,7 @@ func TestIvfpqSync_RunOnce(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewIvfpqSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{

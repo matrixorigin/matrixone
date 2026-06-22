@@ -65,6 +65,8 @@ type CuvsCdcWriter struct {
 	pkPos           int32
 	partsPos        []int32
 	dimension       int32
+	baseType        types.T // vector column element type: vecf32 or vecf16
+	vecBytesPer     int     // dim * base element size (4*dim for f32, 2*dim for f16)
 	dbName          string
 	tblName         string
 	indexName       string
@@ -79,8 +81,8 @@ type CuvsCdcWriter struct {
 // switch on it); dbName/tblName/indexName are typically pulled from
 // the ISCP ConsumerInfo at the call site.
 //
-// Both CAGRA and IVF-PQ on cuvs are fp32-only with a bigint PK; this
-// constructor enforces both shapes.
+// Both CAGRA and IVF-PQ on cuvs take a vecf32 or vecf16 base column with
+// a bigint PK; this constructor enforces both shapes.
 func NewCuvsCdcWriter(algoName, dbName, tblName, indexName string,
 	tabledef *plan.TableDef, indexdefs []*plan.IndexDef) (*CuvsCdcWriter, error) {
 
@@ -122,11 +124,23 @@ func NewCuvsCdcWriter(algoName, dbName, tblName, indexName string,
 		w.partsPos[i] = tabledef.Name2ColIndex[part]
 	}
 	vecTyp := tabledef.Cols[w.partsPos[0]].Typ
-	if vecTyp.Id != int32(types.T_array_float32) {
+	// cuvs accepts a vecf32 or vecf16 base column. The CDC record carries the
+	// vector as raw native base-type bytes (4*dim for f32, 2*dim for f16); the
+	// search-side overflow replay reinterprets them back to the base type B.
+	var baseElemSize int
+	switch types.T(vecTyp.Id) {
+	case types.T_array_float32:
+		w.baseType = types.T_array_float32
+		baseElemSize = 4
+	case types.T_array_float16:
+		w.baseType = types.T_array_float16
+		baseElemSize = 2
+	default:
 		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
-			"%s cuvs writer: vector column must be vecf32 (cuvs is fp32-only)", algoName))
+			"%s cuvs writer: vector column must be vecf32 or vecf16", algoName))
 	}
 	w.dimension = vecTyp.Width
+	w.vecBytesPer = int(vecTyp.Width) * baseElemSize
 
 	// Resolve INCLUDE columns from indexAlgoParams. Returns zero
 	// values when no INCLUDE columns are configured.
@@ -173,6 +187,7 @@ func (w *CuvsCdcWriter) IndexName() string          { return w.indexName }
 func (w *CuvsCdcWriter) IndexDef() []*plan.IndexDef { return w.indexdef }
 func (w *CuvsCdcWriter) Dimension() int32           { return w.dimension }
 func (w *CuvsCdcWriter) ColMetaJSON() string        { return w.colMetaJSON }
+func (w *CuvsCdcWriter) BaseVectorType() types.T    { return w.baseType }
 
 // IndexSqlWriter implementation
 //
@@ -219,7 +234,7 @@ func (w *CuvsCdcWriter) ToSql() ([]byte, error) {
 
 func (w *CuvsCdcWriter) appendDelete(key int64) error {
 	out, err := cuvscdc.EncodeEventRecord(w.pendingRecords, cuvscdc.CdcOpDelete,
-		key, nil, nil, 4*int(w.dimension), w.includeBytesPer)
+		key, nil, nil, w.vecBytesPer, w.includeBytesPer)
 	if err != nil {
 		return err
 	}
@@ -239,26 +254,36 @@ func (w *CuvsCdcWriter) encodeInsertOrUpsert(ctx context.Context, row []any, op 
 		// has a vector to index).
 		return w.appendDelete(key)
 	}
-	v, ok := rawVec.([]float32)
-	if !ok {
-		// A non-nil value of the wrong type is a real schema/type error, not a
-		// NULL vector — surface it instead of silently dropping the row to a
-		// DELETE (mirrors the HNSW sinker in index_sqlwriter.go).
+	// Extract the native base-type bytes verbatim. A vecf32 column arrives as
+	// []float32 (4 bytes/element), a vecf16 column as []types.Float16 (2
+	// bytes/element); EncodeEventRecord validates the byte length against
+	// w.vecBytesPer. A typed-nil slice is an actually-absent vector → DELETE;
+	// any other type is a real schema error (mirrors the HNSW sinker).
+	var vecBytes []byte
+	switch v := rawVec.(type) {
+	case []float32:
+		if v == nil {
+			return w.appendDelete(key)
+		}
+		vecBytes = util.UnsafeSliceToBytes(v)
+	case []types.Float16:
+		if v == nil {
+			return w.appendDelete(key)
+		}
+		vecBytes = util.UnsafeSliceToBytes(v)
+	default:
 		return moerr.NewInternalError(ctx, fmt.Sprintf(
-			"%s cuvs writer: invalid vector type, expected []float32, got %T", w.algoName, rawVec))
-	}
-	if v == nil {
-		// Typed-nil slice — an actually absent vector; encode as DELETE.
-		return w.appendDelete(key)
+			"%s cuvs writer: invalid vector type, expected []float32 or []types.Float16, got %T",
+			w.algoName, rawVec))
 	}
 
 	includeBytes, err := cuvscdc.EncodeIncludeRow(w.includeBindings, row, w.includeBytesPer)
 	if err != nil {
 		return err
 	}
-	// iscp ongoing ingestion is f32-only; pass the raw f32 bytes (4*dim).
+	// Pass the raw native base-type bytes (4*dim for f32, 2*dim for f16).
 	out, err := cuvscdc.EncodeEventRecord(w.pendingRecords, op,
-		key, util.UnsafeSliceToBytes(v), includeBytes, 4*int(w.dimension), w.includeBytesPer)
+		key, vecBytes, includeBytes, w.vecBytesPer, w.includeBytesPer)
 	if err != nil {
 		return err
 	}

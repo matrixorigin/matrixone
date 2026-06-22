@@ -116,6 +116,10 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 		//|   �?   @  @@                  |
 		//+------------------------------+
 		row[i] = vector.GetArrayAt[float32](vec, rowIndex)
+	case types.T_array_float16:
+		// vecf16: extract natively as []types.Float16 (2 bytes/element). The
+		// cuvs CDC writer reinterprets these bytes verbatim — no f32 widening.
+		row[i] = vector.GetArrayAt[types.Float16](vec, rowIndex)
 	case types.T_array_float64:
 		row[i] = vector.GetArrayAt[float64](vec, rowIndex)
 	case types.T_date:
