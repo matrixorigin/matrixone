@@ -295,16 +295,31 @@ func normalizeProtectedDatabaseName(ses *Session, dbName string) string {
 	if dbName == "" && ses != nil {
 		dbName = ses.GetDatabaseName()
 	}
+	if protectedDatabaseNamesAreLowerCased(ses) {
+		dbName = strings.ToLower(dbName)
+	}
 	return dbName
 }
 
-func protectedDatabaseSetFromString(raw string) map[string]struct{} {
+func protectedDatabaseNamesAreLowerCased(ses *Session) bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		return true
+	}
+	lowerCaseTableNames, ok := value.(int64)
+	return ok && lowerCaseTableNames == 1
+}
+
+func protectedDatabaseSetFromString(ses *Session, raw string) map[string]struct{} {
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
 	protected := make(map[string]struct{})
 	for _, part := range strings.Split(raw, ",") {
-		dbName := strings.TrimSpace(part)
+		dbName := normalizeProtectedDatabaseName(ses, part)
 		if dbName != "" {
 			protected[dbName] = struct{}{}
 		}
@@ -327,7 +342,7 @@ func getProtectedDatabaseSet(ses *Session) map[string]struct{} {
 	if !ok {
 		return nil
 	}
-	return protectedDatabaseSetFromString(raw)
+	return protectedDatabaseSetFromString(ses, raw)
 }
 
 func isProtectedDatabase(ses *Session, dbName string) bool {

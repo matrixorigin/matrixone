@@ -52,7 +52,9 @@ internal error: do not have privilege to execute the statement
 drop database protected_bvt_db;
 internal error: do not have privilege to execute the statement
 create database `cameldb`;
+internal error: do not have privilege to execute the statement
 drop database `cameldb`;
+internal error: do not have privilege to execute the statement
 drop user if exists protected_bvt_user;
 drop role if exists protected_bvt_writer;
 drop database protected_bvt_db;

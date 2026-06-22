@@ -31,9 +31,10 @@ func protectedTargetsFromStatement(stmt tree.Statement) []string {
 }
 
 func TestProtectedDatabaseSetFromString(t *testing.T) {
-	require.Nil(t, protectedDatabaseSetFromString(""))
-	require.Nil(t, protectedDatabaseSetFromString(" , , "))
-	require.Equal(t, map[string]struct{}{"db1": {}, "CamelDB": {}}, protectedDatabaseSetFromString(" db1, CamelDB "))
+	require.Nil(t, protectedDatabaseSetFromString(nil, ""))
+	require.Nil(t, protectedDatabaseSetFromString(nil, " , , "))
+	require.Equal(t, map[string]struct{}{"db1": {}, "CamelDB": {}}, protectedDatabaseSetFromString(nil, " db1, CamelDB "))
+	require.Equal(t, map[string]struct{}{"db1": {}, "cameldb": {}}, protectedDatabaseSetFromString(&Session{}, " db1, CamelDB "))
 }
 
 func TestProtectedDatabaseWriteTargetsFromDataBranchKeepsPrivileges(t *testing.T) {
@@ -102,23 +103,34 @@ func TestPrivilegeTipWritesDatabase(t *testing.T) {
 	require.True(t, privilegeTipWritesDatabase(privilegeTips{typ: PrivilegeTypeDelete}))
 }
 
-func TestProtectedDatabaseNameKeepsOriginalCase(t *testing.T) {
-	protectedDatabases := map[string]struct{}{"CamelDB": {}}
+func TestProtectedDatabaseNameFollowsLowerCaseTableNames(t *testing.T) {
+	ses := &Session{}
+	protectedDatabases := protectedDatabaseSetFromString(ses, "CamelDB")
 
-	require.False(t, checkProtectedDatabaseWriteWithSet(context.Background(), nil, protectedDatabases, "CamelDB"))
-	require.True(t, checkProtectedDatabaseWriteWithSet(context.Background(), nil, protectedDatabases, "camedb"))
+	require.False(t, checkProtectedDatabaseWriteWithSet(context.Background(), ses, protectedDatabases, "CamelDB"))
+	require.False(t, checkProtectedDatabaseWriteWithSet(context.Background(), ses, protectedDatabases, "cameldb"))
+
+	caseSensitiveSes := &Session{
+		feSessionImpl: feSessionImpl{
+			sesSysVars: &SystemVariables{mp: map[string]interface{}{"lower_case_table_names": int64(0)}},
+		},
+	}
+	caseSensitiveProtectedDatabases := protectedDatabaseSetFromString(caseSensitiveSes, "CamelDB")
+	require.False(t, checkProtectedDatabaseWriteWithSet(context.Background(), caseSensitiveSes, caseSensitiveProtectedDatabases, "CamelDB"))
+	require.True(t, checkProtectedDatabaseWriteWithSet(context.Background(), caseSensitiveSes, caseSensitiveProtectedDatabases, "cameldb"))
 }
 
 func TestCheckProtectedDatabaseWriteWithSet(t *testing.T) {
 	ctx := context.Background()
-	protectedDatabases := map[string]struct{}{"protected_db": {}, "CamelDB": {}}
+	ses := &Session{}
+	protectedDatabases := protectedDatabaseSetFromString(ses, "protected_db,CamelDB")
 
 	require.True(t, checkProtectedDatabaseWriteWithSet(ctx, nil, nil, "protected_db"))
 	require.True(t, checkProtectedDatabaseWriteWithSet(ctx, nil, protectedDatabases))
 	require.True(t, checkProtectedDatabaseWriteWithSet(ctx, nil, protectedDatabases, "normal_db"))
-	require.False(t, checkProtectedDatabaseWriteWithSet(ctx, nil, protectedDatabases, "normal_db", "protected_db"))
-	require.False(t, checkProtectedDatabaseWriteWithSet(ctx, nil, protectedDatabases, " CamelDB "))
-	require.True(t, checkProtectedDatabaseWriteWithSet(ctx, nil, protectedDatabases, "cameldb"))
+	require.False(t, checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, "normal_db", "protected_db"))
+	require.False(t, checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, " CamelDB "))
+	require.False(t, checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, "cameldb"))
 }
 
 func TestCanWriteProtectedDatabase(t *testing.T) {
