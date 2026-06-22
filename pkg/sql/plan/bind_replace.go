@@ -39,16 +39,12 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 		return 0, err
 	}
 
-	// Capture irregular (IVF/fulltext) indexes before appendNodesForReplaceStmt
+	// Capture irregular (IVF/fulltext/master) indexes before appendNodesForReplaceStmt
 	// strips them from the 1:1 dedup+MULTI_UPDATE plan; REPLACE maintains them with
 	// the same modern delete-old + insert-new sink-fanout as ODKU (issue #25000).
+	// MASTER now has full synchronous modern maintenance (delete-by-pk + insert),
+	// same as IVF/fulltext. HNSW/CAGRA/IVF-PQ are cron-maintained.
 	tableDef := dmlCtx.tableDefs[0]
-
-	// MASTER/HNSW indexes have no modern delete maintenance and REPLACE has no
-	// legacy fallback, so reject rather than leave stale entries behind.
-	if hasLegacyOnlyIrregularIndex(tableDef) {
-		return 0, moerr.NewUnsupportedDML(builder.GetContext(), legacyIrregularIndexCause)
-	}
 
 	irregularIndexes := getIrregularIndexes(tableDef)
 
@@ -765,6 +761,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		deleteCols[1].ColPos = int32(len(finalProjList))
 		replaceOldPkPos = int32(len(finalProjList))
 		replaceOldPkTyp = fullProjList[oldPkPos[1]].Typ
+		if useMergedMainScan {
+			// Merged-scan mode runs only when the table has no unique secondary
+			// key, so every REPLACE conflict is a PRIMARY-key conflict and the
+			// matched old row's PK equals the new row's PK. The captured old-PK
+			// placeholder is not reliably materialized into the irregular-index
+			// delete sink here, so key that delete on the (immutable) new PK at its
+			// natural position instead. (The base-table MULTI_UPDATE delete keeps
+			// using the captured old PK via deleteCols below.)
+			replaceOldPkPos = newPkIdx
+			replaceOldPkTyp = finalProjList[newPkIdx].Typ
+		}
 		lockTargets = append(lockTargets, &plan.LockTarget{
 			TableId:            tableDef.TblId,
 			ObjRef:             objRef,
@@ -781,7 +788,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				},
 			},
 		})
-
 		updateCtxList = append(updateCtxList, &plan.UpdateCtx{
 			ObjRef:             objRef,
 			TableDef:           tableDef,

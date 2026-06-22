@@ -65,24 +65,12 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		stmt.Rows.With = stmt.With
 	}
 
-	// Tables carrying irregular (IVF/fulltext) indexes stay on the modern path:
-	// appendNodesForInsertStmt strips those indexes from the 1:1 dedup+MULTI_UPDATE
-	// plan (which only covers the base table and regular indexes), so capture them
-	// here before the strip. Their computed 1:N maintenance (tokenize / nearest
-	// centroid) is appended after createQuery from the materialized new-row image.
+	// Capture irregular (IVF/fulltext/master) indexes before appendNodesForInsertStmt
+	// strips them from the 1:1 dedup+MULTI_UPDATE plan (which only covers the base
+	// table and regular indexes). Their computed 1:N maintenance is appended after
+	// createQuery from the materialized new-row image. HNSW/CAGRA/IVF-PQ are cron-
+	// maintained and ride the modern path with no inline sub-plan.
 	tableDef := dmlCtx.tableDefs[0]
-
-	// MASTER/HNSW indexes have no modern delete maintenance. Plain INSERT defers to
-	// the legacy planner (which maintains them). ON DUPLICATE KEY UPDATE has no
-	// working legacy upsert here, so reject it outright rather than leave stale
-	// index entries behind once the conflicting row's columns change.
-	if hasLegacyOnlyIrregularIndex(tableDef) {
-		if len(stmt.OnDuplicateUpdate) > 0 {
-			return 0, moerr.NewUnsupportedDML(builder.GetContext(),
-				"on duplicate key update on a table with master/hnsw index")
-		}
-		return 0, moerr.NewUnsupportedDML(builder.GetContext(), legacyIrregularIndexCause)
-	}
 
 	irregularIndexes := getIrregularIndexes(tableDef)
 
@@ -234,19 +222,21 @@ func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrre
 }
 
 // isModernMaintainedIrregularAlgo reports whether an irregular index algo has full
-// synchronous modern maintenance (both insert and delete sub-plans). Only IVF and
-// fulltext qualify; MASTER/HNSW have no delete maintenance yet, so tables carrying
-// them are deferred to the legacy planner (see hasLegacyOnlyIrregularIndex) rather
-// than left with stale entries after ON DUPLICATE KEY UPDATE / REPLACE.
+// synchronous modern maintenance (both insert and delete sub-plans). IVF, fulltext,
+// and MASTER qualify (the master index table has an independent __mo_index_pri_col
+// origin-pk column, so delete joins on origin pk — same pattern as fulltext joins on
+// doc_id). HNSW/CAGRA/IVF-PQ are maintained asynchronously by cron (idxcron, off the
+// base-table CDC) and need no inline sub-plan.
 func isModernMaintainedIrregularAlgo(algo string) bool {
-	return catalog.IsIvfIndexAlgo(algo) || catalog.IsFullTextIndexAlgo(algo)
+	return catalog.IsIvfIndexAlgo(algo) || catalog.IsFullTextIndexAlgo(algo) ||
+		catalog.IsMasterIndexAlgo(algo)
 }
 
-// getIrregularIndexes returns the existing IVF/fulltext index definitions of
+// getIrregularIndexes returns the existing IVF/fulltext/master index definitions of
 // tableDef. These are stripped from the modern dedup+MULTI_UPDATE plan (see
 // appendNodesForInsertStmt) and instead maintained by dedicated post-createQuery
-// sub-plans built from the materialized new-row image. MASTER/HNSW indexes are
-// excluded — see hasLegacyOnlyIrregularIndex.
+// sub-plans built from the materialized new-row image. HNSW/CAGRA/IVF-PQ are excluded
+// because cron maintains them off the base-table CDC.
 func getIrregularIndexes(tableDef *plan.TableDef) []*plan.IndexDef {
 	if tableDef == nil || len(tableDef.Indexes) == 0 {
 		return nil
@@ -258,22 +248,6 @@ func getIrregularIndexes(tableDef *plan.TableDef) []*plan.IndexDef {
 		}
 	}
 	return irregular
-}
-
-// hasLegacyOnlyIrregularIndex reports whether tableDef carries an irregular index
-// the modern path cannot maintain end-to-end (MASTER/HNSW and any other non-regular
-// algo that is neither IVF nor fulltext). Such tables defer to the legacy planner.
-func hasLegacyOnlyIrregularIndex(tableDef *plan.TableDef) bool {
-	if tableDef == nil {
-		return false
-	}
-	for _, idxDef := range tableDef.Indexes {
-		if idxDef.TableExist && !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) &&
-			!isModernMaintainedIrregularAlgo(idxDef.IndexAlgo) {
-			return true
-		}
-	}
-	return false
 }
 
 // appendIrregularMaintSource materializes the modern new-row image (the projList2
@@ -509,11 +483,14 @@ func (builder *QueryBuilder) buildIrregularIndexMaintenance(bindCtx *BindContext
 				tableDef, 0, sourceStep, nil, indexdef, idx, nil); err != nil {
 				return err
 			}
+		case catalog.IsMasterIndexAlgo(indexdef.IndexAlgo):
+			if err := buildPreInsertMasterIndex(nil, builder.compCtx, builder, bindCtx, objRef,
+				tableDef, sourceStep, nil, indexdef, idx); err != nil {
+				return err
+			}
 		}
-		// MASTER/HNSW are not maintained here: tables carrying them defer to the
-		// legacy planner (hasLegacyOnlyIrregularIndex), because the delete side of
-		// their maintenance is not implemented yet and ODKU/REPLACE would otherwise
-		// leave stale entries behind.
+		// HNSW/CAGRA/IVF-PQ are absent here but on purpose — cron maintains them
+		// off the base-table CDC.
 	}
 
 	if len(multiTableIndexes) > 0 {
@@ -543,14 +520,8 @@ func (builder *QueryBuilder) buildIrregularIndexDeleteMaintenance(bindCtx *BindC
 	// createQuery's column pruning can drop unreferenced columns ahead of it and
 	// renumber the survivors, so the recorded position may be larger than the
 	// post-prune sink. Only when it would index out of range do we translate it
-	// through sinkColRef to its surviving position; in range we keep it as-is.
-	//
-	// This is deliberately not an unconditional remap: doing so was observed to
-	// mis-key the unique-key REPLACE delete (the recorded position already indexes
-	// the materialized sink the delete sink-scan exposes for every in-range case in
-	// the suite — base PK, ODKU, and both REPLACE conflict kinds — whereas the
-	// sinkColRef translation pointed one column off). The translation is therefore
-	// only used to keep bug_22340's out-of-range case from panicking.
+	// through sinkColRef to its surviving position; in range we keep it as-is
+	// (an unconditional remap mis-keys the in-range REPLACE delete by one column).
 	if builder.sinkColRef != nil {
 		sinkNode := builder.qry.Nodes[builder.qry.Steps[builder.irregularMaintDeleteStep]]
 		if int(builder.irregularMaintDeletePkPos) >= len(sinkNode.ProjectList) {
@@ -587,6 +558,10 @@ func (builder *QueryBuilder) buildIrregularIndexDeleteMaintenance(bindCtx *BindC
 				}
 			}
 			ivfIndexes[indexdef.IndexName].IndexDefs[catalog.ToLower(indexdef.IndexAlgoTableType)] = indexdef
+		case catalog.IsMasterIndexAlgo(indexdef.IndexAlgo):
+			if err := builder.buildIrregularMasterDeleteByPk(bindCtx, indexdef); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -772,6 +747,87 @@ func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindConte
 	}, bindCtx)
 
 	delNodeInfo := makeDeleteNodeInfo(builder.compCtx, indexObjRef, indexTableDef, 0, false, 1, fakePkTyp, false)
+	lastID, err := makeOneDeletePlan(builder, bindCtx, joinID, delNodeInfo, false, true, false)
+	putDeleteNodeInfo(delNodeInfo)
+	if err != nil {
+		return err
+	}
+	builder.appendStep(lastID)
+	return nil
+}
+
+// buildIrregularMasterDeleteByPk drops the stale MASTER index rows keyed by the
+// recorded base-table PK. The master index table has an independent
+// __mo_index_pri_col origin-pk column, so the delete joins directly on
+// origin-pk == old/final PK — no re-tokenization needed. Mirrors the fulltext
+// delete (join on doc_id) but uses __mo_index_idx_col as the indexed primary key
+// for the DELETE plan.
+func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext, indexdef *plan.IndexDef) error {
+	objRef := builder.irregularMaintObjRef
+	indexObjRef, indexTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	if err != nil {
+		return err
+	}
+	if indexTableDef == nil {
+		return moerr.NewNoSuchTable(builder.GetContext(), objRef.SchemaName, indexdef.IndexName)
+	}
+
+	// index scan projecting [row_id, __mo_index_pri_col, __mo_index_idx_col].
+	scanCols := make([]*ColDef, 0, 3)
+	scanProj := make([]*plan.Expr, 3)
+	var rowidTyp, priColTyp, idxColTyp plan.Type
+	for _, col := range indexTableDef.Cols {
+		var slot int
+		switch col.Name {
+		case catalog.Row_ID:
+			slot, rowidTyp = 0, col.Typ
+		case catalog.MasterIndexTablePrimaryColName:
+			slot, priColTyp = 1, col.Typ
+		case catalog.MasterIndexTableIndexColName:
+			slot, idxColTyp = 2, col.Typ
+		default:
+			continue
+		}
+		scanProj[slot] = &plan.Expr{
+			Typ:  col.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(len(scanCols)), Name: col.Name}},
+		}
+		scanCols = append(scanCols, col)
+	}
+	scanTableDef := DeepCopyTableDef(indexTableDef, false)
+	scanTableDef.Cols = scanCols
+	idxScanID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		Stats:       &plan.Stats{},
+		ObjRef:      indexObjRef,
+		TableDef:    scanTableDef,
+		ProjectList: scanProj,
+	}, bindCtx)
+
+	srcScan := appendSinkScanNode(builder, bindCtx, builder.irregularMaintDeleteStep)
+
+	// join index (left) with the image (right) on __mo_index_pri_col == old/final PK.
+	cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+		{Typ: priColTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+		builder.deletePkColExpr(1),
+	})
+	if err != nil {
+		return err
+	}
+	joinID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_INNER,
+		Children: []int32{idxScanID, srcScan},
+		OnList:   []*plan.Expr{cond},
+		ProjectList: []*plan.Expr{
+			{Typ: rowidTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: catalog.Row_ID}}},
+			{Typ: idxColTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2, Name: catalog.MasterIndexTableIndexColName}}},
+		},
+	}, bindCtx)
+
+	// Master index table has __mo_index_idx_col as PRIMARY KEY, so the delete keys
+	// on it directly (pkPos points to the index column in the join output).
+	delNodeInfo := makeDeleteNodeInfo(builder.compCtx, indexObjRef, indexTableDef, 0, false, 1, idxColTyp, false)
 	lastID, err := makeOneDeletePlan(builder, bindCtx, joinID, delNodeInfo, false, true, false)
 	putDeleteNodeInfo(delNodeInfo)
 	if err != nil {

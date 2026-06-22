@@ -57,4 +57,18 @@ select id, uk, embedding from t_vec order by id;
 select id from t_vec order by l2_distance(embedding, '[5,5,5]') asc limit 1;
 
 drop table if exists t_vec;
+
+-- Merged-scan REPLACE: a real-PK table with no unique secondary key takes the
+-- merged main-table scan path. Every conflict is a PK conflict, so the stale
+-- irregular-index entries (keyed by the immutable PK) must still be dropped.
+drop table if exists t_ft_nouk;
+create table t_ft_nouk(id int primary key, body text, fulltext(body));
+insert into t_ft_nouk values (1, 'hello world'), (2, 'foo bar');
+-- PK conflict on id=1: old body's terms must be removed, new ones indexed.
+replace into t_ft_nouk values (1, 'alpha beta');
+select id from t_ft_nouk where match(body) against('alpha') order by id;
+select id from t_ft_nouk where match(body) against('hello') order by id;
+select id from t_ft_nouk where match(body) against('foo') order by id;
+drop table if exists t_ft_nouk;
+
 drop database if exists replace_irregular;

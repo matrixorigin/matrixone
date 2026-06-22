@@ -55,4 +55,17 @@ select id from t_vec order by l2_distance(embedding, '[5,5,5]') asc limit 1;
 ➤ id[4,32,0]  𝄀
 3
 drop table if exists t_vec;
+drop table if exists t_ft_nouk;
+create table t_ft_nouk(id int primary key, body text, fulltext(body));
+insert into t_ft_nouk values (1, 'hello world'), (2, 'foo bar');
+replace into t_ft_nouk values (1, 'alpha beta');
+select id from t_ft_nouk where match(body) against('alpha') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from t_ft_nouk where match(body) against('hello') order by id;
+➤ id[4,32,0]
+select id from t_ft_nouk where match(body) against('foo') order by id;
+➤ id[4,32,0]  𝄀
+2
+drop table if exists t_ft_nouk;
 drop database if exists replace_irregular;
