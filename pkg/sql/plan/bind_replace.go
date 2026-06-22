@@ -868,6 +868,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		BindingTags: []int32{finalProjTag},
 	}, bindCtx)
 
+	lastNodeID, err := appendCheckConstraintPlan(builder, bindCtx, tableDef, lastNodeID, finalProjTag, colName2Idx)
+	if err != nil {
+		return 0, err
+	}
+
 	if len(lockTargets) > 0 {
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_LOCK_OP,

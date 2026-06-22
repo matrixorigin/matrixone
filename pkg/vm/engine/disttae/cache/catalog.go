@@ -700,6 +700,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 	var primarykey *plan.PrimaryKeyDef
 	var indexes []*plan.IndexDef
 	var refChildTbls []uint64
+	var checks []*plan.CheckDef
 	var partition *plan.Partition
 
 	tableDef := make([]engine.TableDef, 0)
@@ -779,7 +780,14 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 			case *engine.PrimaryKeyDef:
 				primarykey = k.Pkey
 			case *engine.StreamConfigsDef:
-				properties = append(properties, k.Configs...)
+				visibleConfigs, checkDefs, err := engine.SplitCheckConstraintsFromConfigs(k.Configs)
+				if err != nil {
+					logutil.Errorf("catalog-cache error: unmarshal table check constraint information: %v-%v-%v, err: %v",
+						tblItem.AccountId, tblItem.Id, tblItem.Name, err)
+					return nil, nil
+				}
+				properties = append(properties, visibleConfigs...)
+				checks = append(checks, checkDefs...)
 			}
 		}
 	}
@@ -862,6 +870,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		RefChildTbls:  refChildTbls,
 		ClusterBy:     clusterByDef,
 		Indexes:       indexes,
+		Checks:        checks,
 		Version:       tblItem.Version,
 		DbId:          tblItem.DatabaseId,
 		Partition:     partition,

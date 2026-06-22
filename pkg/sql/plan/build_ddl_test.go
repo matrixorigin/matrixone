@@ -556,6 +556,35 @@ func TestBuildRegularSecondaryIndexPersistsPrefixLengths(t *testing.T) {
 	}
 }
 
+func TestBuildCreateTableStoresCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "column",
+			sql:  "CREATE TABLE t_column_check (id INT PRIMARY KEY, v INT CHECK (v > 0));",
+		},
+		{
+			name: "table",
+			sql:  "CREATE TABLE t_table_check (id INT PRIMARY KEY, v INT, CHECK (v > 0));",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tt.sql)
+			require.NoError(t, err)
+
+			createTable := logicPlan.GetDdl().GetCreateTable()
+			require.NotNil(t, createTable)
+			require.Len(t, createTable.GetTableDef().GetChecks(), 1)
+			assert.True(t, exprContainsFuncName(createTable.GetTableDef().GetChecks()[0].GetCheck(), ">"))
+		})
+	}
+}
+
 func TestBuildVectorIndexAllowsIvfFlatOnly(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{

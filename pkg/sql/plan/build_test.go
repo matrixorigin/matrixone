@@ -1615,6 +1615,53 @@ func TestReplacePlanStructure(t *testing.T) {
 	assert.True(t, hasDedupJoin, "REPLACE plan should contain DEDUP JOIN node")
 }
 
+func TestReplacePlanChecksTableCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["single_idx_t"]
+	valCol := tableDef.Name2ColIndex["val"]
+	checkExpr, err := BindFuncExprImplByPlanExpr(context.TODO(), ">", []*plan.Expr{
+		{
+			Typ: tableDef.Cols[valCol].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					Name:   "val",
+					ColPos: valCol,
+				},
+			},
+		},
+		MakePlan2Int32ConstExprWithType(0),
+	})
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	tableDef.Checks = []*plan.CheckDef{
+		{
+			Name:  "chk_val_positive",
+			Check: checkExpr,
+		},
+	}
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO single_idx_t VALUES (1, -1)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	hasCheckAssert := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_FILTER {
+			continue
+		}
+		for _, expr := range node.FilterList {
+			if exprContainsFuncName(expr, "assert") {
+				hasCheckAssert = true
+				break
+			}
+		}
+	}
+	assert.True(t, hasCheckAssert, "REPLACE plan should assert table CHECK constraints before writing")
+}
+
 func TestReplaceNonUniqueSingleIndexDeleteUsesIndexRowID(t *testing.T) {
 	mock := NewMockOptimizer(true)
 

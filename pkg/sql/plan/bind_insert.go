@@ -1164,6 +1164,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
 	}
 
+	lastNodeID, err = appendCheckConstraintPlan(builder, bindCtx, tableDef, lastNodeID, selectTag, colName2Idx)
+	if err != nil {
+		return 0, err
+	}
+
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 

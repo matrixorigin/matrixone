@@ -17,6 +17,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"regexp"
 	"strconv"
@@ -51,6 +52,8 @@ type Node struct {
 	CNCNT int32 // number of all cns
 	CNIDX int32 // cn index , starts from 0
 }
+
+const CheckConstraintsConfigKey = "__mo_check_constraints"
 
 func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
 	planDefs := tableDef.GetDefs()
@@ -88,7 +91,58 @@ func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
 		})
 	}
 
+	if len(tableDef.Checks) > 0 {
+		value, err := MarshalCheckConstraints(tableDef.Checks)
+		if err == nil {
+			c.Cts = append(c.Cts, &StreamConfigsDef{
+				Configs: []*plan.Property{
+					{
+						Key:   CheckConstraintsConfigKey,
+						Value: value,
+					},
+				},
+			})
+		}
+	}
+
 	return c
+}
+
+func MarshalCheckConstraints(checks []*plan.CheckDef) (string, error) {
+	data, err := (&plan.TableDef{Checks: checks}).Marshal()
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(data), nil
+}
+
+func UnmarshalCheckConstraints(value string) ([]*plan.CheckDef, error) {
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, err
+	}
+	tableDef := &plan.TableDef{}
+	if err := tableDef.Unmarshal(data); err != nil {
+		return nil, err
+	}
+	return tableDef.Checks, nil
+}
+
+func SplitCheckConstraintsFromConfigs(configs []*plan.Property) ([]*plan.Property, []*plan.CheckDef, error) {
+	visibleConfigs := make([]*plan.Property, 0, len(configs))
+	var checks []*plan.CheckDef
+	for _, config := range configs {
+		if config.Key != CheckConstraintsConfigKey {
+			visibleConfigs = append(visibleConfigs, config)
+			continue
+		}
+		decodedChecks, err := UnmarshalCheckConstraints(config.Value)
+		if err != nil {
+			return nil, nil, err
+		}
+		checks = append(checks, decodedChecks...)
+	}
+	return visibleConfigs, checks, nil
 }
 
 var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaExtra, error) {

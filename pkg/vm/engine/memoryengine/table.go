@@ -269,6 +269,7 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 	var primarykey *plan2.PrimaryKeyDef
 	var indexes []*plan2.IndexDef
 	var refChildTbls []uint64
+	var checks []*plan.CheckDef
 
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -329,7 +330,12 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 				case *engine.PrimaryKeyDef:
 					primarykey = k.Pkey
 				case *engine.StreamConfigsDef:
-					properties = append(properties, k.Configs...)
+					visibleConfigs, checkDefs, err := engine.SplitCheckConstraintsFromConfigs(k.Configs)
+					if err != nil {
+						return nil
+					}
+					properties = append(properties, visibleConfigs...)
+					checks = append(checks, checkDefs...)
 				}
 			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
@@ -373,6 +379,7 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 		RefChildTbls: refChildTbls,
 		ClusterBy:    clusterByDef,
 		Indexes:      indexes,
+		Checks:       checks,
 		Version:      schemaVersion,
 		IsTemporary:  t.GetEngineType() == engine.Memory,
 		DbName:       t.databaseName,

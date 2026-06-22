@@ -1295,6 +1295,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			} else {
 				colMap[colName] = col
 				createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
+				for _, attr := range def.Attributes {
+					checkAttr, ok := attr.(*tree.AttributeCheckConstraint)
+					if !ok {
+						continue
+					}
+					if err := appendCheckDef(ctx, createTable.TableDef, checkAttr.Name, checkAttr.Expr); err != nil {
+						return err
+					}
+				}
 
 				// get default val from ast node
 				attrIdx := slices.IndexFunc(def.Attributes, func(a tree.ColumnAttribute) bool {
@@ -1426,8 +1435,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				fkDatasOfFKSelfRefer = append(fkDatasOfFKSelfRefer, fkData)
 			}
 		case *tree.CheckIndex:
-			// unsupport in plan. will support in next version.
-			// return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
+			if err := appendCheckDef(ctx, createTable.TableDef, "", def.Expr); err != nil {
+				return err
+			}
 		default:
 			return moerr.NewNYIf(ctx.GetContext(), "table def: '%v'", def)
 		}
@@ -1713,6 +1723,32 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
+	return nil
+}
+
+func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExpr tree.Expr) error {
+	colNames := make([]string, 0, len(tableDef.Cols))
+	colTypes := make([]plan.Type, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		colNames = append(colNames, col.Name)
+		colTypes = append(colTypes, col.Typ)
+	}
+
+	binder := NewGeneratedColBinder(ctx.GetContext(), colNames, colTypes)
+	checkExpr, err := binder.BindExpr(astExpr, 0, true)
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		name = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
+	}
+	tableDef.Checks = append(tableDef.Checks, &plan.CheckDef{
+		Name:  name,
+		Check: checkExpr,
+	})
 	return nil
 }
 
