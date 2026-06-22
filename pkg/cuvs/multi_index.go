@@ -62,13 +62,6 @@ func (mi *MultiGpuIndex[T]) Search(queries []T, numQueries uint64, dimension uin
 	}, nil, nil, nil)
 }
 
-// SearchFloat32 performs a K-Nearest Neighbor search with float32 queries across all internal indices asynchronously.
-func (mi *MultiGpuIndex[T]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32) ([]int64, []float32, error) {
-	return multiGpuSearch(mi.indices, mi.bruteForce, mi.dimension, nil, queries, numQueries, dimension, limit, nil, func(idx GpuIndex[T], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
-		return idx.SearchFloat32Async(q, nQ, d, l)
-	}, nil, nil)
-}
-
 // Destroy destroys all internal indices.
 func (mi *MultiGpuIndex[T]) Destroy() error {
 	var firstErr error
@@ -130,18 +123,6 @@ func (mi *MultiGpuIvfFlat[B, Q]) Search(queries []Q, numQueries uint64, dimensio
 		func(idx GpuIndex[Q], q []Q, nQ uint64, d uint32, l uint32) (uint64, error) {
 			return idx.(*GpuIvfFlat[B, Q]).SearchAsyncWithParams(q, nQ, d, l, sp)
 		}, nil, nil, nil)
-}
-
-func (mi *MultiGpuIvfFlat[B, Q]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) ([]int64, []float32, error) {
-	genericIndices := make([]GpuIndex[Q], len(mi.indices))
-	for i, idx := range mi.indices {
-		genericIndices[i] = idx
-	}
-	// f32 query: indices quantize/cast internally; overflow takes f32 (cast to B).
-	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, nil, queries, nil, queries, numQueries, dimension, limit,
-		nil, func(idx GpuIndex[Q], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
-			return idx.(*GpuIvfFlat[B, Q]).SearchFloat32AsyncWithParams(q, nQ, d, l, sp)
-		}, nil, nil)
 }
 
 // --- MultiGpuIvfPq ---

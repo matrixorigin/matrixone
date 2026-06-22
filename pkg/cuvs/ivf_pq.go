@@ -905,11 +905,6 @@ func (gi *GpuIvfPq[B, Q]) SearchAsyncWithParams(queries []Q, numQueries uint64, 
 	return uint64(jobID), nil
 }
 
-// SearchFloat32Async performs a K-Nearest Neighbor search with float32 queries asynchronously.
-func (gi *GpuIvfPq[B, Q]) SearchFloat32Async(queries []float32, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
-	return gi.SearchFloat32AsyncWithParams(queries, numQueries, dimension, limit, DefaultIvfPqSearchParams())
-}
-
 // SearchFloat32AsyncWithParams performs a K-Nearest Neighbor search with float32 queries asynchronously with custom parameters.
 func (gi *GpuIvfPq[B, Q]) SearchFloat32AsyncWithParams(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) (uint64, error) {
 	if gi.cIvfPq == nil {

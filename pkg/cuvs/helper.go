@@ -186,7 +186,6 @@ type GpuIndexBase interface {
 // GpuIndex is a generic interface for all GPU-accelerated indexes that support async search.
 type GpuIndex[T VectorType] interface {
 	SearchAsync(queries []T, numQueries uint64, dimension uint32, limit uint32) (uint64, error)
-	SearchFloat32Async(queries []float32, numQueries uint64, dimension uint32, limit uint32) (uint64, error)
 	SearchWait(jobID uint64, numQueries uint64, limit uint32) ([]int64, []float32, error)
 	Destroy() error
 	Cap() uint64
