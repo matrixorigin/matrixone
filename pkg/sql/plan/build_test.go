@@ -493,6 +493,11 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"SELECT '2024-01-01' - INTERVAL n_nationkey HOUR FROM nation",
 		"SELECT '2024-01-01' + INTERVAL n_nationkey % 365 DAY FROM nation",
 		"SELECT '2024-01-01' + INTERVAL (n_nationkey % 365) DAY FROM nation",
+		"SELECT CAST(20260515 AS INT) + INTERVAL 7 DAY",
+		"SELECT CAST(20260515 AS INT) - INTERVAL 7 DAY",
+		"SELECT INTERVAL 7 DAY + CAST(20260515 AS INT)",
+		"SELECT MAX(n_nationkey) + INTERVAL 7 DAY FROM nation",
+		"SELECT MAX(n_nationkey) - INTERVAL 7 DAY FROM nation",
 		"select 2222332222222223333333333333333333, 0x616263,-10, bit_and(2), bit_or(2), 'aaa' like '%a',str_to_date('04/31/2004', '%m/%d/%Y'),unix_timestamp(from_unixtime(2147483647))",
 		"select max(n_nationkey) over  (partition by N_REGIONKEY) from nation",
 		"select * from generate_series(1, 5) g",
@@ -526,6 +531,7 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 
 		"SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY", //test distinct with group by
 		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_REGIONKEY", //test distinct with order by
+		"SELECT CAST(20260515 AS BIGINT) + INTERVAL 7 DAY",
 		//"select 18446744073709551500",                             //over int64
 		//"select 0xffffffffffffffff",                               //over int64
 	}
