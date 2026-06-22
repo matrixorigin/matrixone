@@ -89,9 +89,9 @@ create user protected_bvt_user identified by '111' default role protected_bvt_wr
 use protected_bvt_db;
 internal error: do not have privilege to execute the statement
 show tables;
-
+internal error: do not have privilege to execute the statement
 select a from t1;
-
+No database selected
 select a from protected_bvt_db.t1;
 a
 1

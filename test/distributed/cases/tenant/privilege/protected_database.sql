@@ -82,11 +82,9 @@ create user protected_bvt_user identified by '111' default role protected_bvt_wr
 -- @session
 
 -- @session:id=2&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
--- @bvt:issue#25080
 use protected_bvt_db;
 show tables;
 select a from t1;
--- @bvt:issue
 select a from protected_bvt_db.t1;
 select a from protected_bvt_db.v1;
 -- @session
