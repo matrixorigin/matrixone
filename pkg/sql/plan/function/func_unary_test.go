@@ -7246,6 +7246,10 @@ func (s *userLevelLockTestService) GetLockTableBind(group uint32, tableID uint64
 	return lockpb.LockTable{}, nil
 }
 
+func (s *userLevelLockTestService) GetLatestLockTableBind(bind lockpb.LockTable) (lockpb.LockTable, error) {
+	return lockpb.LockTable{}, nil
+}
+
 func (s *userLevelLockTestService) IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool) {
 }
 
