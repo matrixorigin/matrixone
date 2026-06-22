@@ -5401,6 +5401,7 @@ replace_data:
 		$$ = &tree.Replace{
 			Columns: identList,
 			Rows: tree.NewSelect(vc, nil, nil),
+			IsSetFormat: true,
 		}
 	}
 

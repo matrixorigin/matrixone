@@ -1548,6 +1548,28 @@ func TestReplacePKTable(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestReplaceSetColRefAsDefault(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// REPLACE ... SET col = <expr referencing columns> must bind the RHS column
+	// references as DEFAULT(col) instead of failing with
+	// "ambiguous column reference". The exact computed values are covered by BVT.
+	sqls := []string{
+		// reference the assigned column itself: deptno = DEFAULT(deptno) + 1
+		"REPLACE INTO dept SET deptno = deptno + 1, dname = 'Eng'",
+		// reference another column: loc = DEFAULT(dname)
+		"REPLACE INTO dept SET deptno = 1, loc = dname",
+		// reference the assigned column directly: dname = DEFAULT(dname)
+		"REPLACE INTO dept SET deptno = 1, dname = dname",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// An RHS reference to a non-existent column must still error.
+	sqls = []string{
+		"REPLACE INTO dept SET deptno = 1, dname = nosuchcol",
+	}
+	runTestShouldError(mock, t, sqls)
+}
+
 func TestReplaceFakePKTable(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// REPLACE on table with only unique key (fake PK) should pass

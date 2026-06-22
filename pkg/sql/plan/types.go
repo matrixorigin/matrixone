@@ -423,6 +423,15 @@ type DefaultBinder struct {
 	cols []string
 }
 
+// ReplaceValueBinder binds the RHS value expressions of a `REPLACE ... SET`
+// statement. MySQL evaluates an RHS reference to a target-table column as
+// DEFAULT(col), so this binder resolves every column reference to that
+// column's default expression instead of an actual row value.
+type ReplaceValueBinder struct {
+	baseBinder
+	tableDef *plan.TableDef
+}
+
 type UpdateBinder struct {
 	baseBinder
 	cols []*ColDef
