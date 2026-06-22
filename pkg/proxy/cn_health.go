@@ -226,6 +226,11 @@ func (h *cnHealthChecker) cooldownFor(failures int) time.Duration {
 		if d >= h.maxCooldown {
 			return h.maxCooldown
 		}
+		// Saturate before doubling so a very large configured cooldown cannot
+		// overflow time.Duration on the multiply itself.
+		if d > h.maxCooldown/2 {
+			return h.maxCooldown
+		}
 		d *= 2
 	}
 	if d > h.maxCooldown {
@@ -439,4 +444,19 @@ func (h *cnHealthChecker) unhealthyCount() int {
 		}
 	}
 	return n
+}
+
+// canReuseCachedCN reports whether a cached backend connection to this CN may
+// be reused for a fresh client login. The policy is deliberately stricter than
+// Route(): a cached connection may be reused only when the breaker is closed
+// (or absent). If a CN is in active cooldown or waiting for a half-open probe,
+// cached reuse would bypass the intended health gate and must be rejected.
+func (h *cnHealthChecker) canReuseCachedCN(uuid string) bool {
+	if h == nil || uuid == "" {
+		return true
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	b := h.breakers[uuid]
+	return b == nil || b.openUntil.IsZero()
 }

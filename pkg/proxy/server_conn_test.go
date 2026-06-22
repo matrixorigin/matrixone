@@ -65,6 +65,7 @@ type mockServerConn struct {
 	conn       net.Conn
 	createTime time.Time
 	returnErr  error
+	cn         *CNServer
 }
 
 var _ ServerConn = (*mockServerConn)(nil)
@@ -81,6 +82,10 @@ func (s *mockServerConn) setReturnErr(e error) {
 	s.returnErr = e
 }
 
+func (s *mockServerConn) setCN(cn *CNServer) {
+	s.cn = cn
+}
+
 func (s *mockServerConn) ConnID() uint32    { return 0 }
 func (s *mockServerConn) RawConn() net.Conn { return s.conn }
 func (s *mockServerConn) HandleHandshake(_ *frontend.Packet, _ time.Duration) (*frontend.Packet, error) {
@@ -95,7 +100,7 @@ func (s *mockServerConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, 
 	}
 	return true, nil
 }
-func (s *mockServerConn) GetCNServer() *CNServer   { return nil }
+func (s *mockServerConn) GetCNServer() *CNServer   { return s.cn }
 func (s *mockServerConn) SetConnResponse(_ []byte) {}
 func (s *mockServerConn) GetConnResponse() []byte  { return nil }
 func (s *mockServerConn) CreateTime() time.Time    { return s.createTime }

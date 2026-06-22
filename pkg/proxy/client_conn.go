@@ -583,6 +583,12 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 	// migration (prevAdd != ""), we must build a fresh backend connection and
 	// migrate session state from the previous CN.
 	if c.connCache != nil && prevAdd == "" {
+		// Plugin routing decisions may depend on Username / OriginIP and other
+		// per-login context not captured by the connCache key. Never reuse a
+		// cached backend session in front of a plugin router.
+		if _, pluginMode := c.router.(*pluginRouter); pluginMode {
+			goto skipConnCache
+		}
 		sc = c.connCache.Pop(c.clientInfo.hash, c.connID, c.mysqlProto.GetSalt(), c.mysqlProto.GetAuthResponse())
 		if sc != nil {
 			// get the response from the cn server.
@@ -594,6 +600,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 			return sc, nil
 		}
 	}
+skipConnCache:
 
 	badCNServers := make(map[string]struct{})
 	// timeoutCNServers tracks CN servers that failed due to timeout.

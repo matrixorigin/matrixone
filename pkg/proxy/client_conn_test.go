@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/stretchr/testify/require"
@@ -907,6 +908,25 @@ func Test_connectToBackend_SkipCacheOnMigration(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, sConn)
 	require.Equal(t, 0, cache.popCount)
+}
+
+func Test_connectToBackend_SkipCacheWhenPluginRouterEnabled(t *testing.T) {
+	cache := &popCountConnCache{}
+	cc, cleanup := createNewClientConn(t)
+	defer cleanup()
+	cConn, ok := cc.(*clientConn)
+	require.True(t, ok)
+	cConn.connCache = cache
+	cConn.router = newPluginRouter("", &routeErrRouter{}, &mockPlugin{
+		mockRecommendCNFn: func(ctx context.Context, clientInfo clientInfo) (*plugin.Recommendation, error) {
+			return &plugin.Recommendation{Action: plugin.Bypass}, nil
+		},
+	})
+
+	sConn, err := cConn.connectToBackend("")
+	require.Error(t, err)
+	require.Nil(t, sConn)
+	require.Equal(t, 0, cache.popCount, "plugin routing must not reuse cached sessions")
 }
 
 func Test_connectToBackend_UsesRouteSelectedOnlyForFirstLogin(t *testing.T) {

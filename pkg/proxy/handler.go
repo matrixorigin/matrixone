@@ -159,8 +159,15 @@ func newProxyHandler(
 		sqlWorker:      sw,
 		queryClient:    qc,
 	}
-	if h.config.ConnCacheEnabled {
-		h.connCache = newConnCache(ctx, cfg.UUID, rt.Logger(), withQueryClient(qc))
+	if h.config.ConnCacheEnabled && h.config.Plugin == nil {
+		var cacheOpts []connCacheOption
+		cacheOpts = append(cacheOpts, withQueryClient(qc))
+		if checker, ok := ru.(cacheReuseChecker); ok {
+			cacheOpts = append(cacheOpts, withCanReuseCN(checker.CanReuseCachedCN))
+		}
+		h.connCache = newConnCache(ctx, cfg.UUID, rt.Logger(), cacheOpts...)
+	} else if h.config.ConnCacheEnabled && h.config.Plugin != nil {
+		rt.Logger().Warn("proxy conn cache disabled because plugin routing is enabled")
 	}
 	return h, nil
 }

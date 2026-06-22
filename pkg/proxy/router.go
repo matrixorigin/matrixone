@@ -81,6 +81,13 @@ type transferRouter interface {
 	RouteForTransfer(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error)
 }
 
+// cacheReuseChecker is implemented by routers that can decide whether a cached
+// backend connection is still eligible for a fresh client login. Cached reuse
+// must honor the same CN health policy as a new session route.
+type cacheReuseChecker interface {
+	CanReuseCachedCN(cn *CNServer) bool
+}
+
 // RefreshableRouter is a router that can be refreshed to get latest route strategy
 type RefreshableRouter interface {
 	Router
@@ -335,6 +342,16 @@ func (r *router) RouteForTransfer(
 	}
 	s.hash = c.hash
 	return s, nil
+}
+
+// CanReuseCachedCN implements cacheReuseChecker. Cached connections must only
+// be reused when the breaker is closed/absent; otherwise they would bypass the
+// new-session health gate.
+func (r *router) CanReuseCachedCN(cn *CNServer) bool {
+	if cn == nil {
+		return true
+	}
+	return r.health.canReuseCachedCN(cn.uuid)
 }
 
 func (r *router) connect(

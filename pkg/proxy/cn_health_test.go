@@ -323,6 +323,18 @@ func TestCNHealthChecker_CooldownBackoffThreshold2(t *testing.T) {
 	require.Equal(t, time.Second*30, h.cooldownFor(5), "capped at max")
 }
 
+func TestCNHealthChecker_CooldownBackoffAvoidsOverflow(t *testing.T) {
+	// A huge base/max pair must saturate to max without overflowing on d *= 2.
+	max := time.Duration(1<<62 + 123)
+	base := time.Duration(1 << 62)
+	h := newCNHealthChecker(
+		withCNHealthFailThreshold(1),
+		withCNHealthCooldown(base, max),
+	)
+	require.Equal(t, base, h.cooldownFor(1))
+	require.Equal(t, max, h.cooldownFor(2))
+}
+
 func TestCNHealthChecker_SuccessResetsBackoff(t *testing.T) {
 	clock := newFakeClock()
 	h := newTestBreaker(clock)

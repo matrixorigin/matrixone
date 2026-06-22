@@ -102,6 +102,13 @@ func (r *pluginRouter) RouteForTransfer(
 	}
 }
 
+func (r *pluginRouter) CanReuseCachedCN(cn *CNServer) bool {
+	if rr, ok := r.Router.(cacheReuseChecker); ok {
+		return rr.CanReuseCachedCN(cn)
+	}
+	return true
+}
+
 // Route implements Router.Route.
 func (r *pluginRouter) Route(
 	ctx context.Context, sid string, ci clientInfo, filter func(uuid string) bool,
