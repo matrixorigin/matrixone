@@ -3169,13 +3169,11 @@ func (c *Compile) compileShuffleJoinV2(node, left, right *plan.Node, leftscopes,
 	if node.Stats.Dop != left.Stats.Dop || node.Stats.Dop != right.Stats.Dop {
 		panic("wrong dop for shuffle join!")
 	}
-	if len(leftscopes) != len(rightscopes) {
-		panic("wrong scopes for shuffle join!")
-	}
 
 	// Fast path: single CN with matching parallelism — paired worker scopes,
-	// no dispatch/merge overhead. This covers the common single-CN case.
-	if len(c.cnList) == 1 && len(leftscopes) == 1 && leftscopes[0].NodeInfo.Mcpu == int(left.Stats.Dop) {
+	// no dispatch/merge overhead. This covers the common single-CN case where
+	// both sides have the same number of scopes (e.g. two table scans).
+	if len(c.cnList) == 1 && len(leftscopes) == len(rightscopes) && len(leftscopes) == 1 && leftscopes[0].NodeInfo.Mcpu == int(left.Stats.Dop) {
 		reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
 		bucketNum := len(c.cnList) * int(node.Stats.Dop)
 		for i := range leftscopes {
