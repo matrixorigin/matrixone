@@ -50,7 +50,7 @@ func (b *ReplaceValueBinder) BindColRef(astExpr *tree.UnresolvedName, _ int32, _
 }
 
 func (b *ReplaceValueBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewInvalidInputf(b.GetContext(), "cannot bind agregate functions '%s'", funcName)
+	return nil, moerr.NewInvalidInputf(b.GetContext(), "cannot bind aggregate functions '%s'", funcName)
 }
 
 func (b *ReplaceValueBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

@@ -494,6 +494,7 @@ var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 var _ Binder = (*UpdateBinder)(nil)
 var _ Binder = (*OndupUpdateBinder)(nil)
+var _ Binder = (*ReplaceValueBinder)(nil)
 
 var Sequence_cols_name = []string{"last_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle", "is_called"}
 

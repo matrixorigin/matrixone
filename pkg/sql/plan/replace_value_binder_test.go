@@ -61,10 +61,11 @@ func TestReplaceValueBinder_BindColRef(t *testing.T) {
 	require.NotNil(t, lit)
 	require.Equal(t, int64(5), lit.GetI64Val())
 
-	// Case-insensitive lookup.
+	// Case-insensitive lookup also resolves to DEFAULT(v) == 5.
 	expr, err = b.BindColRef(tree.NewUnresolvedColName("V"), 0, true)
 	require.NoError(t, err)
 	require.NotNil(t, expr.GetLit())
+	require.Equal(t, int64(5), expr.GetLit().GetI64Val())
 
 	// A reference to a nullable column with no explicit default resolves to NULL.
 	expr, err = b.BindColRef(tree.NewUnresolvedColName("id"), 0, true)
@@ -82,7 +83,10 @@ func TestReplaceValueBinder_BindExpr(t *testing.T) {
 	tableDef := newReplaceBinderTestTableDef()
 	b := NewReplaceValueBinder(ctx, nil, nil, tableDef)
 
-	// v + 1 == DEFAULT(v) + 1 == 6 (constant-foldable).
+	// v + 1 binds to "+"(DEFAULT(v), 1) == "+"(5, 1). The binder does not fold
+	// constants (that happens later in the optimizer), so assert the structure:
+	// the column reference "v" has been replaced by its DEFAULT literal 5, which
+	// makes the expression evaluate to 6.
 	astExpr := &tree.BinaryExpr{
 		Op:    tree.PLUS,
 		Left:  tree.NewUnresolvedColName("v"),
@@ -90,7 +94,12 @@ func TestReplaceValueBinder_BindExpr(t *testing.T) {
 	}
 	expr, err := b.BindExpr(astExpr, 0, true)
 	require.NoError(t, err)
-	require.NotNil(t, expr)
+	fn := expr.GetF()
+	require.NotNil(t, fn)
+	require.Equal(t, "+", fn.Func.ObjName)
+	require.Len(t, fn.Args, 2)
+	require.Equal(t, int64(5), fn.Args[0].GetLit().GetI64Val())
+	require.Equal(t, int64(1), fn.Args[1].GetLit().GetI64Val())
 }
 
 func TestReplaceValueBinder_UnsupportedBindings(t *testing.T) {
