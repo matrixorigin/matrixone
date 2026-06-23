@@ -208,6 +208,55 @@ func TestGetLockHolderReacquiresLockTableAfterBindChanged(t *testing.T) {
 	)
 }
 
+func TestGetLockHolderHoldsBindChangeLockAcrossLocalLookup(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			table := uint64(12)
+			row := []byte{1}
+			holder := pb.WaitTxn{TxnID: []byte("txn-holder")}
+			bind := pb.LockTable{
+				Group:       0,
+				Table:       table,
+				OriginTable: table,
+				ServiceID:   l.serviceID,
+				Version:     1,
+				Valid:       true,
+			}
+			lockTable := &getLockHolderTestTable{
+				bind:   bind,
+				holder: holder,
+				found:  true,
+				onGetLockHolder: func() {
+					if l.bindChangeMu.TryLock() {
+						l.bindChangeMu.Unlock()
+						require.Fail(t, "GetLockHolder must hold bindChangeMu while reading a local lock table")
+					}
+				},
+			}
+			l.tableGroups.set(bind.Group, bind.Table, lockTable)
+
+			got, ok, err := l.GetLockHolder(ctx, table, row, pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			})
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, holder, got)
+			require.Equal(t, 1, lockTable.calls)
+		},
+	)
+}
+
 type getLockHolderBindChangedClient struct {
 	t        *testing.T
 	wantBind pb.LockTable
@@ -237,10 +286,11 @@ func (c *getLockHolderBindChangedClient) Close() error {
 }
 
 type getLockHolderTestTable struct {
-	bind   pb.LockTable
-	holder pb.WaitTxn
-	found  bool
-	calls  int
+	bind            pb.LockTable
+	holder          pb.WaitTxn
+	found           bool
+	calls           int
+	onGetLockHolder func()
 }
 
 func (l *getLockHolderTestTable) lock(
@@ -271,6 +321,9 @@ func (l *getLockHolderTestTable) getLockHolder(
 	ctx context.Context,
 	key []byte) (pb.WaitTxn, bool, error) {
 	l.calls++
+	if l.onGetLockHolder != nil {
+		l.onGetLockHolder()
+	}
 	return l.holder, l.found, nil
 }
 

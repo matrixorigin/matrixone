@@ -436,13 +436,16 @@ func (s *service) handleRemoteGetLockHolder(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	s.bindChangeMu.RLock()
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil || l == nil {
+		s.bindChangeMu.RUnlock()
 		writeResponse(s.logger, cancel, resp, err, cs)
 		return
 	}
 
 	holder, found, err := l.getLockHolder(ctx, req.GetLockHolder.Row)
+	s.bindChangeMu.RUnlock()
 	if err == nil && found {
 		resp.GetLockHolder.Holder = holder
 	}
