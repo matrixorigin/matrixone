@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"fmt"
 	"hash/crc32"
 	"hash/crc64"
 	"os"
@@ -3635,6 +3636,61 @@ func TestAllocatorObserverRejectsSupersededGetBindResponse(t *testing.T) {
 				l1.tableGroups.set(0, staleTable, l1.createLockTableByBind(staleBind))
 			}
 			require.Nil(t, l1.tableGroups.get(0, staleTable))
+		},
+	)
+}
+
+func TestAllocatorObserverBoundsSupersededAllocatorIDs(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			table := uint64(21513)
+			currentBind := pb.LockTable{
+				Group:       0,
+				Table:       table,
+				OriginTable: table,
+				ServiceID:   l1.serviceID,
+				Version:     1000,
+				Valid:       true,
+				AllocatorID: "allocator-0",
+			}
+			l1.tableGroups.set(0, table, l1.createLockTableByBind(currentBind))
+
+			l1.allocatorVersionMu.Lock()
+			l1.lastAllocatorID = currentBind.AllocatorID
+			l1.lastAllocatorVersion = currentBind.Version
+			l1.allocatorVersionMu.Unlock()
+
+			var previous allocatorState
+			for i := 1; i <= maxSupersededAllocatorIDs+3; i++ {
+				previous = l1.allocatorStateSnapshot()
+				next := allocatorState{
+					id:      fmt.Sprintf("allocator-%d", i),
+					version: currentBind.Version + uint64(i),
+				}
+				_, accepted := l1.observeAllocatorStateWithHoldersFromSnapshot(
+					"allocator-restart-sequence-test",
+					next,
+					allocatorState{},
+					false,
+					l1.tableGroups)
+				require.True(t, accepted)
+				require.Equal(t, next.id, l1.lastAllocatorID)
+				require.Equal(t, next.version, l1.lastAllocatorVersion)
+				require.LessOrEqual(t, len(l1.supersededAllocatorIDs), maxSupersededAllocatorIDs)
+				require.LessOrEqual(t, len(l1.supersededAllocatorIDOrder), maxSupersededAllocatorIDs)
+			}
+
+			_, accepted := l1.observeAllocatorStateWithHoldersFromSnapshot(
+				"allocator-restart-superseded-test",
+				previous,
+				l1.allocatorStateSnapshot(),
+				true,
+				l1.tableGroups)
+			require.False(t, accepted)
+			require.Equal(t, fmt.Sprintf("allocator-%d", maxSupersededAllocatorIDs+3), l1.lastAllocatorID)
 		},
 	)
 }

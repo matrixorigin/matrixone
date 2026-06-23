@@ -105,6 +105,13 @@ func (l *remoteLockTable) lock(
 	req.Lock.ServiceID = l.serviceID
 	req.Lock.Rows = rows
 
+	if err := ctx.Err(); err != nil {
+		_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
+		cb(pb.Result{}, err)
+		return
+	}
+
 	// rpc maybe wait too long, to avoid deadlock, we need unlock txn, and lock again
 	// after rpc completed
 	txn.Unlock()

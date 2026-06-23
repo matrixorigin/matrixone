@@ -61,10 +61,11 @@ type service struct {
 	fetchWhoWaitingListC chan who
 	logger               *log.MOLogger
 
-	allocatorVersionMu     sync.Mutex
-	lastAllocatorVersion   uint64
-	lastAllocatorID        string
-	supersededAllocatorIDs map[string]struct{}
+	allocatorVersionMu         sync.Mutex
+	lastAllocatorVersion       uint64
+	lastAllocatorID            string
+	supersededAllocatorIDs     map[string]struct{}
+	supersededAllocatorIDOrder []string
 
 	remote struct {
 		client Client
@@ -82,10 +83,13 @@ type service struct {
 	}
 
 	option struct {
-		wait       func()
-		serverOpts []ServerOption
+		wait                      func()
+		beforeRemoteLockBindCheck func()
+		serverOpts                []ServerOption
 	}
 }
+
+const maxSupersededAllocatorIDs = 64
 
 // NewLockService create a lock service instance
 func NewLockService(
@@ -768,16 +772,35 @@ func (s *service) observeAllocatorStateLocked(
 func (s *service) updateAllocatorStateLocked(observed allocatorState) {
 	if observed.id != "" {
 		if s.lastAllocatorID != "" && s.lastAllocatorID != observed.id {
-			if s.supersededAllocatorIDs == nil {
-				s.supersededAllocatorIDs = make(map[string]struct{})
-			}
-			s.supersededAllocatorIDs[s.lastAllocatorID] = struct{}{}
+			s.addSupersededAllocatorIDLocked(s.lastAllocatorID)
 		}
 		s.lastAllocatorID = observed.id
 	}
 	if observed.version != 0 {
 		s.lastAllocatorVersion = observed.version
 	}
+}
+
+func (s *service) addSupersededAllocatorIDLocked(id string) {
+	if id == "" {
+		return
+	}
+	if s.supersededAllocatorIDs == nil {
+		s.supersededAllocatorIDs = make(map[string]struct{})
+	}
+	if _, ok := s.supersededAllocatorIDs[id]; ok {
+		return
+	}
+	s.supersededAllocatorIDs[id] = struct{}{}
+	s.supersededAllocatorIDOrder = append(s.supersededAllocatorIDOrder, id)
+	if len(s.supersededAllocatorIDOrder) <= maxSupersededAllocatorIDs {
+		return
+	}
+	evicted := s.supersededAllocatorIDOrder[0]
+	copy(s.supersededAllocatorIDOrder, s.supersededAllocatorIDOrder[1:])
+	s.supersededAllocatorIDOrder[len(s.supersededAllocatorIDOrder)-1] = ""
+	s.supersededAllocatorIDOrder = s.supersededAllocatorIDOrder[:len(s.supersededAllocatorIDOrder)-1]
+	delete(s.supersededAllocatorIDs, evicted)
 }
 
 func (s *service) allocatorStateSnapshot() allocatorState {
