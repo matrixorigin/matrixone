@@ -890,23 +890,14 @@ func constructProjection(node *plan.Node) *projection.Projection {
 }
 
 func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset, strictSqlMode bool) *external.External {
-	var attrs []plan.ExternAttr
-
-	for i, col := range node.TableDef.Cols {
-		if !col.Hidden {
-			attr := plan.ExternAttr{ColName: col.Name,
-				ColIndex:      int32(i),
-				ColFieldIndex: node.ExternScan.TbColToDataCol[col.Name]}
-			attrs = append(attrs, attr)
-		}
-	}
+	attrs := buildExternalAttrs(node)
 
 	return external.NewArgument().WithEs(
 		&external.ExternalParam{
 			ExParamConst: external.ExParamConst{
 				Attrs:           attrs,
 				Cols:            node.TableDef.Cols,
-				ColumnListLen:   int32(len(node.ExternScan.TbColToDataCol)),
+				ColumnListLen:   externalColumnListLen(node),
 				Extern:          param,
 				FileOffsetTotal: fileOffset,
 				CreateSql:       node.TableDef.Createsql,
@@ -926,6 +917,34 @@ func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Con
 			},
 		},
 	)
+}
+
+func buildExternalAttrs(node *plan.Node) []plan.ExternAttr {
+	if node == nil || node.TableDef == nil {
+		return nil
+	}
+	var tbColToDataCol map[string]int32
+	if node.ExternScan != nil {
+		tbColToDataCol = node.ExternScan.TbColToDataCol
+	}
+	attrs := make([]plan.ExternAttr, 0, len(node.TableDef.Cols))
+	for i, col := range node.TableDef.Cols {
+		if !col.Hidden {
+			attrs = append(attrs, plan.ExternAttr{
+				ColName:       col.Name,
+				ColIndex:      int32(i),
+				ColFieldIndex: tbColToDataCol[col.Name],
+			})
+		}
+	}
+	return attrs
+}
+
+func externalColumnListLen(node *plan.Node) int32 {
+	if node == nil || node.ExternScan == nil {
+		return 0
+	}
+	return int32(len(node.ExternScan.TbColToDataCol))
 }
 
 func constructStream(node *plan.Node, p [2]int64) *source.Source {
