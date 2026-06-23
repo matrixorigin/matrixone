@@ -643,6 +643,9 @@ func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64,
 	if rounded <= float64(math.MinInt64) {
 		return bitCountFromUint64(minInt64BitPattern), nil
 	}
+	if rounded < 0 {
+		return bitCountFromUint64(uint64(int64(rounded))), nil
+	}
 	if rounded >= ULLONG_MAX_DOUBLE {
 		return bitCountFromUint64(uint64(math.MaxUint64)), nil
 	}

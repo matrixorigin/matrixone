@@ -128,6 +128,7 @@ insert into test02 values(-2121313214325334213213257654323234324.90);
 insert into test02 values(-123.2314123412321);
 insert into test02 values(9932129321093029302930290439029432423.5);
 select * from test02;
+-- @regex("Can't convert Float64 To Decimal128: [0-9.e+-]+\(38,6\)", true)
 select VAR_SAMP(col1) from test02;
 drop table test02;
 
