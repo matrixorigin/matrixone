@@ -479,7 +479,8 @@ func sqlTaskInt64(v any) int64 {
 %token <str> RECURSIVE CONFIG DRAINER
 
 // Source
-%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL TASK RESUME SCHEDULE TIMEZONE TIMEOUT
+%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL RESUME SCHEDULE TIMEZONE TIMEOUT
+%nonassoc <str> TASK
 
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
@@ -542,7 +543,9 @@ func sqlTaskInt64(v any) int64 {
 %token <str> MO_TS
 
 // PITR
-%token <str> PITR RECOVERY_WINDOW INTERNAL
+%token <str> PITR RECOVERY_WINDOW
+%nonassoc <str> INTERNAL
+%nonassoc CDC_TASK_NAME
 
 // CDC
 %token <str> CDC
@@ -876,7 +879,7 @@ func sqlTaskInt64(v any) int64 {
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
 %type <snapshotObject> snapshot_object_opt
-%type <allCDCOption> all_cdc_opt
+%type <allCDCOption> all_cdc_opt show_cdc_opt drop_cdc_opt
 
 %type <indexHintType> index_hint_type
 %type <indexHintScope> index_hint_scope
@@ -1105,7 +1108,7 @@ create_cdc_opt:
     }
 
 show_cdc_stmt:
-    SHOW CDC all_cdc_opt
+    SHOW CDC show_cdc_opt
     {
         $$ = &tree.ShowCDC{
                     Option:      $3,
@@ -1121,9 +1124,35 @@ pause_cdc_stmt:
     }
 
 drop_cdc_stmt:
-    DROP CDC all_cdc_opt internal_opt
+    DROP CDC exists_opt drop_cdc_opt internal_opt
     {
-        $$ = tree.NewDropCDC($3, $4)
+        $$ = tree.NewDropCDC($4, $3, $5)
+    }
+
+show_cdc_opt:
+    {
+        $$ = &tree.AllOrNotCDC{
+                    All: true,
+                    TaskName: "",
+        }
+    }
+|   all_cdc_opt
+    {
+        $$ = $1
+    }
+
+drop_cdc_opt:
+    all_cdc_opt
+    {
+        $$ = $1
+    }
+|   ident
+    %prec CDC_TASK_NAME
+    {
+        $$ = &tree.AllOrNotCDC{
+            All: false,
+            TaskName: tree.Identifier($1.Compare()),
+        }
     }
 
 all_cdc_opt:
