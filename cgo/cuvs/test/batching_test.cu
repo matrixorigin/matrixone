@@ -69,7 +69,7 @@ TEST(DynamicBatchingTest, IvfFlatConcurrentSearch) {
     std::vector<int> devices = {0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 10;
-    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 8, DistributionMode_SINGLE_GPU);
+    gpu_ivf_flat_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 8, DistributionMode_SINGLE_GPU);
     
     index.set_batch_window(100);
     index.start();

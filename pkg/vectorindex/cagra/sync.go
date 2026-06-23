@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -75,6 +76,7 @@ type CagraSync struct {
 	activeIndexId string
 
 	dim                int
+	vecBytesPerRow     int // dim * base element size (4*dim for f32, 2*dim for f16)
 	includeBytesPerRow int
 	colMetaJSON        string
 
@@ -99,10 +101,18 @@ func NewCagraSync(
 	idxname string,
 	idxdefs []*plan.IndexDef,
 	dimension int32,
+	baseType types.T,
 	colMetaJSON string,
 ) (*CagraSync, error) {
 	if dimension <= 0 {
 		return nil, moerr.NewInternalErrorNoCtx("CagraSync: invalid dimension")
+	}
+	// CDC records carry the vector as raw native base-type bytes: 2*dim for a
+	// vecf16 base, 4*dim otherwise. Must match the iscp writer's encode width
+	// and the search-side replayEventChunks[B] read width.
+	elemSize := 4
+	if baseType == types.T_array_float16 {
+		elemSize = 2
 	}
 
 	var idxtblcfg vectorindex.IndexTableConfig
@@ -135,6 +145,7 @@ func NewCagraSync(
 		tblcfg:             idxtblcfg,
 		idxname:            idxname,
 		dim:                int(dimension),
+		vecBytesPerRow:     int(dimension) * elemSize,
 		includeBytesPerRow: includeBytesPerRow,
 		colMetaJSON:        colMetaJSON,
 		activeIndexId:      vectorindex.CdcTailId,
@@ -227,7 +238,7 @@ func (s *CagraSync) AppendRecords(_ *sqlexec.SqlProcess, recordBytes []byte) err
 			n = 9 // op (1) + pkid (8)
 		case cuvscdc.CdcOpInsert, cuvscdc.CdcOpUpsert:
 			// UPSERT shares INSERT's payload shape; only the op byte differs.
-			n = 9 + 4*s.dim + s.includeBytesPerRow
+			n = 9 + s.vecBytesPerRow + s.includeBytesPerRow
 		default:
 			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
 				"CagraSync.AppendRecords: unknown op %d at offset %d", op, pos))
@@ -264,9 +275,9 @@ func (s *CagraSync) appendRecord(op cuvscdc.CdcOp, pkid int64, vec []float32, in
 		}
 	}
 	before := len(s.pendingRecords)
-	// Runtime CDC sync is f32-only (vecf16 ongoing ingestion is gated at the
-	// iscp writer); the codec is byte-oriented, so pass the raw f32 bytes
-	// (4*dim) directly.
+	// This synchronous VectorIndexCdc[float32] path is f32-only (vec is
+	// []float32). vecf16 ongoing ingestion flows through the iscp writer →
+	// AppendRecords byte path instead, which honors s.vecBytesPerRow.
 	out, err := cuvscdc.EncodeEventRecord(s.pendingRecords, op, pkid, util.UnsafeSliceToBytes(vec), include, 4*s.dim, s.includeBytesPerRow)
 	if err != nil {
 		return err

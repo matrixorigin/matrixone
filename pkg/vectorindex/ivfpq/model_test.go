@@ -147,7 +147,7 @@ func buildTestModel(t *testing.T, id string, ids []int64) *IvfpqModel[float32, f
 	err = m.InitEmpty(testNVectors)
 	require.NoError(t, err)
 
-	err = m.AddChunkFloat(data, testNVectors, ids)
+	err = m.AddChunkQuantize(data, testNVectors, ids)
 	require.NoError(t, err)
 
 	err = m.Build()
@@ -218,7 +218,7 @@ func TestModelBuildAndLoad(t *testing.T) {
 	err = built.InitEmpty(testNVectors)
 	require.NoError(t, err)
 
-	err = built.AddChunkFloat(data, testNVectors, ids)
+	err = built.AddChunkQuantize(data, testNVectors, ids)
 	require.NoError(t, err)
 
 	err = built.Build()
@@ -267,7 +267,7 @@ func TestModelBuildAndLoad(t *testing.T) {
 
 	// ---- Search ----
 	query := data[:testDim]
-	keys, dists, err := loader.SearchF32(query, 1, 0)
+	keys, dists, err := loader.SearchQuantize(query, 1, 0)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(keys))
 	require.Equal(t, 1, len(dists))
@@ -350,7 +350,7 @@ func TestModelLoadFromDB(t *testing.T) {
 
 	data := generateTestData(testNVectors, testDim)
 	query := data[:testDim]
-	keys, dists, err := idx.SearchF32(query, 1, 0)
+	keys, dists, err := idx.SearchQuantize(query, 1, 0)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(keys))
 	fmt.Printf("LoadFromDB SearchF32: keys=%v dists=%v\n", keys, dists)
@@ -372,16 +372,16 @@ func TestModelNil(t *testing.T) {
 	require.NotNil(t, err)
 
 	// AddChunkFloat fails because Index is nil.
-	err = idx.AddChunkFloat([]float32{1, 2, 3, 4}, 1, []int64{1})
+	err = idx.AddChunkQuantize([]float32{1, 2, 3, 4}, 1, []int64{1})
 	require.NotNil(t, err)
 
 	// SearchF32 fails because Index is nil.
-	_, _, err = idx.SearchF32([]float32{0, 0, 0, 0}, 1, 0)
+	_, _, err = idx.SearchQuantize([]float32{0, 0, 0, 0}, 1, 0)
 	require.NotNil(t, err)
 
 	// SearchF32 with nil query fails.
 	idx2 := &IvfpqModel[float32, float32]{}
-	_, _, err = idx2.SearchF32(nil, 1, 0)
+	_, _, err = idx2.SearchQuantize(nil, 1, 0)
 	require.NotNil(t, err)
 
 	// ToSql on a never-built model returns empty.

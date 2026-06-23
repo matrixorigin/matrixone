@@ -325,7 +325,7 @@ func TestGpuCagraChunked(t *testing.T) {
 		for j := range chunk {
 			chunk[j] = val
 		}
-		err = index.AddChunkFloat(chunk, chunkSize, nil)
+		err = index.AddChunkQuantize(chunk, chunkSize, nil)
 		if err != nil {
 			t.Fatalf("AddChunkFloat failed at offset %d: %v", i, err)
 		}
@@ -720,7 +720,7 @@ func BenchmarkGpuShardedCagra(b *testing.B) {
 			})
 			b.StopTimer()
 			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				res, err := index.SearchQuantize(queries, numQueries, dimension, limit, sp)
 				if err != nil {
 					return nil, err
 				}
@@ -779,7 +779,7 @@ func BenchmarkGpuSingleCagra(b *testing.B) {
 			})
 			b.StopTimer()
 			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				res, err := index.SearchQuantize(queries, numQueries, dimension, limit, sp)
 				if err != nil {
 					return nil, err
 				}
@@ -841,7 +841,7 @@ func BenchmarkGpuReplicatedCagra(b *testing.B) {
 			})
 			b.StopTimer()
 			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				res, err := index.SearchQuantize(queries, numQueries, dimension, limit, sp)
 				if err != nil {
 					return nil, err
 				}
@@ -879,7 +879,7 @@ func BenchmarkGpuAddChunkAndSearchCagraF16(b *testing.B) {
 	// Add data in chunks using AddChunkFloat
 	for i := 0; i < totalCount; i += chunkSize {
 		chunk := dataset[i*dimension : (i+chunkSize)*dimension]
-		if err := index.AddChunkFloat(chunk, uint64(chunkSize), nil); err != nil {
+		if err := index.AddChunkQuantize(chunk, uint64(chunkSize), nil); err != nil {
 			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
 		}
 	}
@@ -899,7 +899,7 @@ func BenchmarkGpuAddChunkAndSearchCagraF16(b *testing.B) {
 			queries[i] = rand.Float32()
 		}
 		for pb.Next() {
-			_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+			_, err := index.SearchQuantize(queries, 1, dimension, 10, sp)
 			if err != nil {
 				b.Fatalf("Search failed: %v", err)
 			}
@@ -907,7 +907,7 @@ func BenchmarkGpuAddChunkAndSearchCagraF16(b *testing.B) {
 	})
 	b.StopTimer()
 	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+		res, err := index.SearchQuantize(queries, numQueries, dimension, limit, sp)
 		if err != nil {
 			return nil, err
 		}
@@ -943,7 +943,7 @@ func BenchmarkGpuAddChunkAndSearchCagraInt8(b *testing.B) {
 	// Add data in chunks using AddChunkFloat
 	for i := 0; i < totalCount; i += chunkSize {
 		chunk := dataset[i*dimension : (i+chunkSize)*dimension]
-		if err := index.AddChunkFloat(chunk, uint64(chunkSize), nil); err != nil {
+		if err := index.AddChunkQuantize(chunk, uint64(chunkSize), nil); err != nil {
 			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
 		}
 	}
@@ -963,7 +963,7 @@ func BenchmarkGpuAddChunkAndSearchCagraInt8(b *testing.B) {
 			queries[i] = rand.Float32()
 		}
 		for pb.Next() {
-			_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+			_, err := index.SearchQuantize(queries, 1, dimension, 10, sp)
 			if err != nil {
 				b.Fatalf("Search failed: %v", err)
 			}
@@ -971,7 +971,7 @@ func BenchmarkGpuAddChunkAndSearchCagraInt8(b *testing.B) {
 	})
 	b.StopTimer()
 	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+		res, err := index.SearchQuantize(queries, numQueries, dimension, limit, sp)
 		if err != nil {
 			return nil, err
 		}

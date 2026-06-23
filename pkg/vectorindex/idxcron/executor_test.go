@@ -265,6 +265,7 @@ func (m mockCatalogHooks) SupportedOpTypes() map[string]string                  
 func (m mockCatalogHooks) SupportedVectorTypes() []types.T                         { return nil }
 func (m mockCatalogHooks) SupportedPrimaryKeyTypes() []types.T                     { return nil }
 func (m mockCatalogHooks) SupportedIncludeColumnTypes() []types.T                  { return nil }
+func (m mockCatalogHooks) ValidQuantization(_, _ string) error                     { return nil }
 func (m mockCatalogHooks) ExperimentalFlag() string                                { return "" }
 func (m mockCatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
 	return catalogplugin.AlterTableCloneBehavior{}

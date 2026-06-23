@@ -96,6 +96,14 @@ func (Hooks) BuildSecondaryIndexDefs(
 		// float32 is an upcast and rejected). Mirrors ivfflat's guard.
 		if indexInfo.IndexOption != nil && indexInfo.IndexOption.Quantization != "" {
 			if qt, ok := quantizer.ToVectorType(indexInfo.IndexOption.Quantization); ok {
+				// bf16 storage does not exist on the GPU (cuVS/cgo has no bfloat16
+				// index or quantizer), so reject it explicitly rather than silently
+				// falling back to f32 storage. Supported cuvs storage = f16/int8/uint8.
+				if qt == types.T_array_bf16 {
+					return nil, nil, moerr.NewNotSupportedf(ctx.GetContext(),
+						"IvfPQ does not support '%s' quantization (no GPU bfloat16 storage); use 'float16', 'int8', or 'uint8'",
+						indexInfo.IndexOption.Quantization)
+				}
 				baseSize := types.Type{Oid: types.T(colMap[name].Typ.Id)}.GetArrayElementSize()
 				quantSize := types.Type{Oid: qt}.GetArrayElementSize()
 				if quantSize > baseSize {
@@ -103,6 +111,16 @@ func (Hooks) BuildSecondaryIndexDefs(
 						"IvfPQ QUANTIZATION '%s' (%d bytes/element) cannot upcast base column %s (%d bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type",
 						indexInfo.IndexOption.Quantization, quantSize,
 						types.T(colMap[name].Typ.Id).String(), baseSize)
+				}
+				// int8/uint8 quantization is L2-only (the affine quantizer breaks
+				// inner-product / cosine geometry). Gated by the per-algo catalog
+				// hook — the single home shared with REINDEX
+				// (compile/ValidateReindexParams) — so CREATE and REINDEX cannot
+				// drift. (bf16 and width/upcast are rejected above with base-column-
+				// aware messages before reaching here.)
+				if err := ivfpqCatalogHooks.ValidQuantization(
+					indexInfo.IndexOption.Quantization, indexInfo.IndexOption.AlgoParamVectorOpType); err != nil {
+					return nil, nil, err
 				}
 			}
 		}

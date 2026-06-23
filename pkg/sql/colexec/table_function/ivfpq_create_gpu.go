@@ -66,7 +66,11 @@ func f16ToCuvs(s []types.Float16) []cuvs.Float16 {
 // combo. GetIndexes is [B,Q]-typed and intentionally NOT on the interface —
 // end() routes through ToInsertSql instead.
 type ivfpqBuilder interface {
-	AddRow(id int64, fa []float32, hf []cuvs.Float16) error
+	// AddRow takes the raw base-type bytes of one vector (4*dim for an f32 base,
+	// 2*dim for an f16 base); the concrete builder reinterprets them to its
+	// []B/[]Q with UnsafeSliceCast (the interface can't name B). Passing []byte
+	// rather than `any` keeps the per-row build hot path allocation-free.
+	AddRow(id int64, vecBytes []byte) error
 	SetFilterColumns(colMetaJSON string)
 	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
 	ToInsertSql(ts int64) ([]string, error)
@@ -508,8 +512,14 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		return nil
 	}
 
-	// AddRow routes by (B, Q): f32 base feeds fa, f16 base feeds hf.
-	if err = u.builder.AddRow(id, fa, hf); err != nil {
+	// Pass the vector as raw base-type bytes (f32 base -> fa, f16 base -> hf),
+	// reinterpreted with UnsafeSliceToBytes (zero-copy); the concrete
+	// IvfpqBuild[B,Q] casts them back to its own []B/[]Q. No per-row alloc.
+	vecBytes := util.UnsafeSliceToBytes(fa)
+	if u.baseOid == types.T_array_float16 {
+		vecBytes = util.UnsafeSliceToBytes(hf)
+	}
+	if err = u.builder.AddRow(id, vecBytes); err != nil {
 		return err
 	}
 

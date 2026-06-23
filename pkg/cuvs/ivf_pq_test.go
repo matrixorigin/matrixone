@@ -280,7 +280,7 @@ func TestGpuIvfPqChunked(t *testing.T) {
 		for j := range chunk {
 			chunk[j] = val
 		}
-		err = index.AddChunkFloat(chunk, chunkSize, nil)
+		err = index.AddChunkQuantize(chunk, chunkSize, nil)
 		if err != nil {
 			t.Fatalf("AddChunkFloat failed at offset %d: %v", i, err)
 		}
@@ -532,14 +532,20 @@ func TestGpuIvfPqExtendFloat(t *testing.T) {
 	sp := DefaultIvfPqSearchParams()
 	sp.NProbes = 10
 
-	// Query exactly at extended cluster; expect ID in [3000, 3050)
-	qExt := make([]float32, dimension)
-	for j := range qExt {
-		qExt[j] = extVal
+	// Query exactly at extended cluster; expect ID in [3000, 3050). This is a
+	// Float16-base index, so SearchQuantize takes a []Float16 query (the old
+	// SearchFloat's implicit f32->half is gone — convert explicitly).
+	qExtF32 := make([]float32, dimension)
+	for j := range qExtF32 {
+		qExtF32[j] = extVal
 	}
-	r, err := index.SearchFloat(qExt, 1, dimension, 1, sp)
+	qExt := make([]Float16, dimension)
+	if err := GpuConvertF32ToF16(qExtF32, qExt, 0); err != nil {
+		t.Fatalf("convert query to f16: %v", err)
+	}
+	r, err := index.SearchQuantize(qExt, 1, dimension, 1, sp)
 	if err != nil {
-		t.Fatalf("SearchFloat failed: %v", err)
+		t.Fatalf("SearchQuantize failed: %v", err)
 	}
 	if r.Neighbors[0] < 3000 || r.Neighbors[0] >= 3050 {
 		t.Errorf("expected neighbor in [3000, 3050), got %d dist=%f", r.Neighbors[0], r.Distances[0])
@@ -608,7 +614,7 @@ func TestGpuIvfPqDeleteId(t *testing.T) {
 	}
 
 	// 2. Test SearchFloat (this verifies the fix in search_float_internal)
-	r, err = index.SearchFloat(q50, 1, dimension, 1, sp)
+	r, err = index.SearchQuantize(q50, 1, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("SearchFloat failed: %v", err)
 	}
@@ -662,7 +668,7 @@ func BenchmarkGpuShardedIvfPq(b *testing.B) {
 					queries[i] = rand.Float32()
 				}
 				for pb.Next() {
-					_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+					_, err := index.SearchQuantize(queries, 1, dimension, 10, sp)
 					if err != nil {
 						b.Fatalf("Search failed: %v", err)
 					}
@@ -670,7 +676,7 @@ func BenchmarkGpuShardedIvfPq(b *testing.B) {
 			})
 			b.StopTimer()
 			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				res, err := index.SearchQuantize(queries, numQueries, dimension, limit, sp)
 				if err != nil {
 					return nil, err
 				}
@@ -723,7 +729,7 @@ func BenchmarkGpuSingleIvfPq(b *testing.B) {
 					queries[i] = rand.Float32()
 				}
 				for pb.Next() {
-					_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+					_, err := index.SearchQuantize(queries, 1, dimension, 10, sp)
 					if err != nil {
 						b.Fatalf("Search failed: %v", err)
 					}
@@ -731,7 +737,7 @@ func BenchmarkGpuSingleIvfPq(b *testing.B) {
 			})
 			b.StopTimer()
 			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				res, err := index.SearchQuantize(queries, numQueries, dimension, limit, sp)
 				if err != nil {
 					return nil, err
 				}
@@ -787,7 +793,7 @@ func BenchmarkGpuReplicatedIvfPq(b *testing.B) {
 					queries[i] = rand.Float32()
 				}
 				for pb.Next() {
-					_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+					_, err := index.SearchQuantize(queries, 1, dimension, 10, sp)
 					if err != nil {
 						b.Fatalf("Search failed: %v", err)
 					}
@@ -795,7 +801,7 @@ func BenchmarkGpuReplicatedIvfPq(b *testing.B) {
 			})
 			b.StopTimer()
 			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				res, err := index.SearchQuantize(queries, numQueries, dimension, limit, sp)
 				if err != nil {
 					return nil, err
 				}
@@ -833,7 +839,7 @@ func BenchmarkGpuAddChunkAndSearchIvfPqF16(b *testing.B) {
 	// Add data in chunks using AddChunkFloat
 	for i := 0; i < totalCount; i += chunkSize {
 		chunk := dataset[i*dimension : (i+chunkSize)*dimension]
-		if err := index.AddChunkFloat(chunk, uint64(chunkSize), nil); err != nil {
+		if err := index.AddChunkQuantize(chunk, uint64(chunkSize), nil); err != nil {
 			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
 		}
 	}
@@ -854,7 +860,7 @@ func BenchmarkGpuAddChunkAndSearchIvfPqF16(b *testing.B) {
 			queries[i] = rand.Float32()
 		}
 		for pb.Next() {
-			_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+			_, err := index.SearchQuantize(queries, 1, dimension, 10, sp)
 			if err != nil {
 				b.Fatalf("Search failed: %v", err)
 			}
@@ -862,7 +868,7 @@ func BenchmarkGpuAddChunkAndSearchIvfPqF16(b *testing.B) {
 	})
 	b.StopTimer()
 	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+		res, err := index.SearchQuantize(queries, numQueries, dimension, limit, sp)
 		if err != nil {
 			return nil, err
 		}
@@ -897,7 +903,7 @@ func BenchmarkGpuAddChunkAndSearchIvfPqInt8(b *testing.B) {
 	// Add data in chunks using AddChunkFloat
 	for i := 0; i < totalCount; i += chunkSize {
 		chunk := dataset[i*dimension : (i+chunkSize)*dimension]
-		if err := index.AddChunkFloat(chunk, uint64(chunkSize), nil); err != nil {
+		if err := index.AddChunkQuantize(chunk, uint64(chunkSize), nil); err != nil {
 			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
 		}
 	}
@@ -918,7 +924,7 @@ func BenchmarkGpuAddChunkAndSearchIvfPqInt8(b *testing.B) {
 			queries[i] = rand.Float32()
 		}
 		for pb.Next() {
-			_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+			_, err := index.SearchQuantize(queries, 1, dimension, 10, sp)
 			if err != nil {
 				b.Fatalf("Search failed: %v", err)
 			}
@@ -926,7 +932,7 @@ func BenchmarkGpuAddChunkAndSearchIvfPqInt8(b *testing.B) {
 	})
 	b.StopTimer()
 	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+		res, err := index.SearchQuantize(queries, numQueries, dimension, limit, sp)
 		if err != nil {
 			return nil, err
 		}

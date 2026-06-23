@@ -39,7 +39,7 @@ TEST(GpuBruteForceTest, BasicLoadAndSearch) {
     const uint64_t count = 2;
     std::vector<float> dataset = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
     
-    gpu_brute_force_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
+    gpu_brute_force_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
     index.start();
     index.build();
 
@@ -63,7 +63,7 @@ TEST(GpuBruteForceTest, BasicLoadAndSearchWithIds) {
         ids[i] = (int64_t)(i + 3000);
     }
     
-    gpu_brute_force_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0, ids.data());
+    gpu_brute_force_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0, ids.data());
     index.start();
     index.build();
 
@@ -94,7 +94,7 @@ TEST(GpuBruteForceTest, ParallelAddChunkWithOffset) {
         ids2[i] = (int64_t)(i + count_per_chunk);
     }
 
-    gpu_brute_force_t<float> index(total_count, dimension, DistanceType_L2Expanded, 1, 0);
+    gpu_brute_force_t<float, float> index(total_count, dimension, DistanceType_L2Expanded, 1, 0);
     index.start();
 
     #include <thread>
@@ -113,7 +113,7 @@ TEST(GpuBruteForceTest, ParallelAddChunkWithOffset) {
     index.destroy();
 }
 
-// f16 overflow path, NATIVE half add: empty gpu_brute_force_t<half> ->
+// f16 overflow path, NATIVE half add: empty gpu_brute_force_t<half, half> ->
 // add_chunk([]half) -> build -> native half search. This is the path
 // IvfpqSearch.buildOverflow should use for a vecf16 base (feed native half, not
 // add_chunk_float's f32->half cast). Confirms the native half overflow works.
@@ -127,7 +127,7 @@ TEST(GpuBruteForceTest, HalfEmptyAddChunkSearch) {
         ids[i] = (int64_t)(i + 1);
     }
 
-    gpu_brute_force_t<half> index(count, dimension, DistanceType_L2Expanded, 1, 0);
+    gpu_brute_force_t<half, half> index(count, dimension, DistanceType_L2Expanded, 1, 0);
     index.start();
     index.add_chunk(hdata.data(), count, -1, ids.data());
     index.build();
@@ -152,7 +152,7 @@ TEST(GpuBruteForceTest, SearchWithMultipleQueries) {
         0.0, 0.0, 0.0, 1.0  // ID 3
     };
     
-    gpu_brute_force_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
+    gpu_brute_force_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
     index.start();
     index.build();
 
@@ -175,7 +175,7 @@ TEST(GpuBruteForceTest, SearchWithFloat16) {
     std::vector<float> f_dataset = {1.0, 1.0, 2.0, 2.0};
     std::vector<half> h_dataset = float_to_half(f_dataset);
     
-    gpu_brute_force_t<half> index(h_dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
+    gpu_brute_force_t<half, half> index(h_dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
     index.start();
     index.build();
 
@@ -198,7 +198,7 @@ TEST(GpuBruteForceTest, SearchWithInnerProduct) {
         0.0, 1.0
     };
     
-    gpu_brute_force_t<float> index(dataset.data(), count, dimension, DistanceType_InnerProduct, 1, 0);
+    gpu_brute_force_t<float, float> index(dataset.data(), count, dimension, DistanceType_InnerProduct, 1, 0);
     index.start();
     index.build();
 
@@ -225,7 +225,7 @@ TEST(GpuBruteForceTest, EmptyDataset) {
     const uint32_t dimension = 128;
     const uint64_t count = 0;
 
-    gpu_brute_force_t<float> index(nullptr, count, dimension, DistanceType_L2Expanded, 1, 0);
+    gpu_brute_force_t<float, float> index(nullptr, count, dimension, DistanceType_L2Expanded, 1, 0);
     index.start();
     index.build();
 
@@ -258,7 +258,7 @@ TEST(GpuBruteForceTest, LargeLimit) {
     const uint64_t count = 5;
     std::vector<float> dataset(count * dimension, 1.0);
 
-    gpu_brute_force_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
+    gpu_brute_force_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
     index.start();
     index.build();
 
@@ -292,7 +292,7 @@ TEST(GpuBruteForceTest, LargeLimitWithExplicitIds) {
     std::vector<float> dataset(count * dimension, 1.0);
     std::vector<int64_t> ids = {1000, 1001, 1002, 1003, 1004};
 
-    gpu_brute_force_t<float> index(dataset.data(), count, dimension,
+    gpu_brute_force_t<float, float> index(dataset.data(), count, dimension,
                                    DistanceType_L2Expanded, 1, 0, ids.data());
     index.start();
     index.build();
@@ -326,7 +326,7 @@ TEST(GpuBruteForceTest, SoftDeleteSearch) {
         7.0, 8.0, 9.0  // ID 2
     };
     
-    gpu_brute_force_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
+    gpu_brute_force_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
     index.start();
     index.build();
 
@@ -356,7 +356,7 @@ TEST(GpuBruteForceTest, SoftDeleteWithCustomIds) {
     std::vector<float> dataset = {10, 10, 20, 20, 30, 30};
     std::vector<int64_t> ids = {100, 200, 300};
     
-    gpu_brute_force_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0, ids.data());
+    gpu_brute_force_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0, ids.data());
     index.start();
     index.build();
 
@@ -386,7 +386,7 @@ TEST(CuvsWorkerTest, BruteForceSearch) {
     std::vector<float> dataset(count * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
 
-    gpu_brute_force_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
+    gpu_brute_force_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
     index.start();
     index.build();
 
@@ -411,7 +411,7 @@ TEST(CuvsWorkerTest, ConcurrentSearches) {
         }
     }
 
-    gpu_brute_force_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 4, 0);
+    gpu_brute_force_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 4, 0);
     index.start();
     index.build();
 
@@ -443,7 +443,7 @@ TEST(GpuBruteForceTest, KExceedsIndexSizeClampsAndPads) {
         }
     }
 
-    gpu_brute_force_t<float> index(dataset.data(), count, dimension,
+    gpu_brute_force_t<float, float> index(dataset.data(), count, dimension,
                                    DistanceType_L2Expanded, 1, 0);
     index.start();
     index.build();
@@ -486,7 +486,7 @@ TEST(GpuBruteForceTest, MultiQueryKExceedsIndexSize) {
         }
     }
 
-    gpu_brute_force_t<float> index(dataset.data(), count, dimension,
+    gpu_brute_force_t<float, float> index(dataset.data(), count, dimension,
                                    DistanceType_L2Expanded, 1, 0);
     index.start();
     index.build();

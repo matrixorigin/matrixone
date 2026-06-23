@@ -23,6 +23,10 @@ create index ixf using ivfpq on tf (v) op_type 'vector_l2_ops' lists=2 m=8 bits_
 not supported: IvfPQ only supports VECF32 / VECF16 base column types
 create index ixq using cagra on t (v) op_type 'vector_l2_ops' QUANTIZATION 'float64';
 internal error: invalid quantization. quantization is invalid. f32, f16, int8, uint8
+create index ixbq using cagra on t (v) op_type 'vector_l2_ops' QUANTIZATION 'bf16';
+not supported: Cagra does not support 'bf16' quantization (no GPU bfloat16 storage); use 'float16', 'int8', or 'uint8'
+create index ixbq using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8 QUANTIZATION 'bf16';
+not supported: IvfPQ does not support 'bf16' quantization (no GPU bfloat16 storage); use 'float16', 'int8', or 'uint8'
 create index ixv using cagra on t (v) op_type 'vector_l2_ops' INCLUDE (lbl);
 not supported: INCLUDE column 'lbl' has unsupported type VARCHAR (supported: int32, int64, float32, float64)
 create index ixok using cagra on t (v)
@@ -39,4 +43,24 @@ create index ixup using cagra on th (v) op_type 'vector_l2_ops' QUANTIZATION 'fl
 not supported: Cagra QUANTIZATION 'float32' (4 bytes/element) cannot upcast base column VECF16 (2 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
 create index ixup using ivfpq on th (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8 QUANTIZATION 'float32';
 not supported: IvfPQ QUANTIZATION 'float32' (4 bytes/element) cannot upcast base column VECF16 (2 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
+create index ixqi using cagra on t (v) op_type 'vector_ip_ops' QUANTIZATION 'int8';
+not supported: cagra quantization "int8" is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
+create index ixqi using cagra on t (v) op_type 'vector_cosine_ops' QUANTIZATION 'int8';
+not supported: cagra quantization "int8" is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
+create index ixqi using ivfpq on t (v) op_type 'vector_ip_ops' lists=2 m=8 bits_per_code=8 QUANTIZATION 'uint8';
+not supported: ivfpq quantization "uint8" is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
+create table tre (id bigint primary key, v vecf32(8));
+insert into tre values
+(1, '[1,1,1,1,1,1,1,1]'), (2, '[2,2,2,2,2,2,2,2]'), (3, '[3,3,3,3,3,3,3,3]'),
+(4, '[4,4,4,4,4,4,4,4]'), (5, '[5,5,5,5,5,5,5,5]'), (6, '[6,6,6,6,6,6,6,6]'),
+(7, '[7,7,7,7,7,7,7,7]'), (8, '[8,8,8,8,8,8,8,8]'), (9, '[9,9,9,9,9,9,9,9]'),
+(10, '[10,10,10,10,10,10,10,10]');
+create index ixre using cagra on tre (v) op_type 'vector_ip_ops'
+intermediate_graph_degree=8 graph_degree=4 itopk_size=16;
+alter table tre alter reindex ixre cagra QUANTIZATION 'int8';
+not supported: cagra quantization "int8" is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
+alter table tre alter reindex ixre cagra QUANTIZATION 'bf16';
+not supported: cagra quantization "bf16" (supported: float32, float16, int8, uint8)
+alter table tre alter reindex ixre cagra QUANTIZATION 'float64';
+not supported: cagra quantization "float64" (supported: float32, float16, int8, uint8)
 drop database gpu_negative;

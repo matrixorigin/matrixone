@@ -424,38 +424,6 @@ func (gi *GpuCagra[B, Q]) AddChunk(chunk []Q, chunkCount uint64, ids []int64) er
 	return nil
 }
 
-// AddChunkFloat adds a chunk of float32 data, performing on-the-fly quantization if needed.
-func (gi *GpuCagra[B, Q]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
-	if gi.cCagra == nil {
-		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
-	}
-	if len(chunk) == 0 || chunkCount == 0 {
-		return nil
-	}
-
-	var errmsg *C.char
-	var cIds *C.int64_t
-	if len(ids) > 0 {
-		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
-	}
-	C.gpu_cagra_add_chunk_float(
-		gi.cCagra,
-		(*C.float)(&chunk[0]),
-		C.uint64_t(chunkCount),
-		cIds,
-		unsafe.Pointer(&errmsg),
-	)
-	runtime.KeepAlive(chunk)
-	runtime.KeepAlive(ids)
-
-	if errmsg != nil {
-		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
-		return moerr.NewInternalErrorNoCtx(errStr)
-	}
-	return nil
-}
-
 // AddChunkQuantize adds a chunk of base-typed (B) data, quantizing natively to
 // the storage type Q (int8/uint8) via the B-source quantizer. base_data is the
 // raw bytes of chunkCount*dim B-typed elements. No f32 detour.
@@ -481,36 +449,6 @@ func (gi *GpuCagra[B, Q]) AddChunkQuantize(chunk []B, chunkCount uint64, ids []i
 	)
 	runtime.KeepAlive(chunk)
 	runtime.KeepAlive(ids)
-
-	if errmsg != nil {
-		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
-		return moerr.NewInternalErrorNoCtx(errStr)
-	}
-	return nil
-}
-
-// QuantizeQuery quantizes a base-typed (B) query to the storage type Q
-// (int8/uint8) via the B-source quantizer, writing numQueries*dimension values
-// into out. The caller then runs the normal native Search([]Q).
-func (gi *GpuCagra[B, Q]) QuantizeQuery(queries []B, numQueries uint64, out []Q) error {
-	if gi.cCagra == nil {
-		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
-	}
-	if len(queries) == 0 {
-		return nil
-	}
-
-	var errmsg *C.char
-	C.gpu_cagra_quantize_query(
-		gi.cCagra,
-		unsafe.Pointer(&queries[0]),
-		C.uint64_t(numQueries),
-		unsafe.Pointer(&out[0]),
-		unsafe.Pointer(&errmsg),
-	)
-	runtime.KeepAlive(queries)
-	runtime.KeepAlive(out)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
@@ -769,7 +707,7 @@ func (gi *GpuCagra[B, Q]) Search(queries []Q, numQueries uint64, dimension uint3
 }
 
 // SearchFloat performs a K-Nearest Neighbor search with float32 queries
-func (gi *GpuCagra[B, Q]) SearchFloat(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (SearchResult, error) {
+func (gi *GpuCagra[B, Q]) SearchQuantize(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (SearchResult, error) {
 	if gi.cCagra == nil {
 		return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -785,9 +723,9 @@ func (gi *GpuCagra[B, Q]) SearchFloat(queries []float32, numQueries uint64, dime
 		search_width: C.size_t(sp.SearchWidth),
 	}
 
-	res := C.gpu_cagra_search_float(
+	res := C.gpu_cagra_search_quantize(
 		gi.cCagra,
-		(*C.float)(unsafe.Pointer(&queries[0])),
+		unsafe.Pointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
@@ -865,13 +803,10 @@ func (gi *GpuCagra[B, Q]) SearchAsyncWithParams(queries []Q, numQueries uint64, 
 	return uint64(jobID), nil
 }
 
-// SearchFloat32Async performs a K-Nearest Neighbor search with float32 queries asynchronously.
-func (gi *GpuCagra[B, Q]) SearchFloat32Async(queries []float32, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
-	return gi.SearchFloat32AsyncWithParams(queries, numQueries, dimension, limit, DefaultCagraSearchParams())
-}
-
-// SearchFloat32AsyncWithParams performs a K-Nearest Neighbor search with float32 queries asynchronously with custom parameters.
-func (gi *GpuCagra[B, Q]) SearchFloat32AsyncWithParams(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (uint64, error) {
+// SearchQuantizeAsyncWithParams submits an async KNN search with a base-typed (B)
+// query; the index converts B to its storage type Q on device (B==Q copy, or the
+// learned/cast quantizer for narrower Q). Unifies the former float32 and half query paths.
+func (gi *GpuCagra[B, Q]) SearchQuantizeAsyncWithParams(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (uint64, error) {
 	if gi.cCagra == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -887,9 +822,9 @@ func (gi *GpuCagra[B, Q]) SearchFloat32AsyncWithParams(queries []float32, numQue
 		search_width: C.size_t(sp.SearchWidth),
 	}
 
-	jobID := C.gpu_cagra_search_float_async(
+	jobID := C.gpu_cagra_search_quantize_async(
 		gi.cCagra,
-		(*C.float)(unsafe.Pointer(&queries[0])),
+		unsafe.Pointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
@@ -1234,8 +1169,9 @@ func (gi *GpuCagra[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimen
 	return SearchResult{Neighbors: neighbors, Distances: distances}, nil
 }
 
-// SearchFloatWithFilter runs a filtered K-NN search with float32 queries.
-func (gi *GpuCagra[B, Q]) SearchFloatWithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) (SearchResult, error) {
+// SearchQuantizeWithFilter runs a filtered K-NN search with base-typed (B)
+// queries; the index converts B to storage T (copy / quantize / f32->f16 cast).
+func (gi *GpuCagra[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) (SearchResult, error) {
 	if gi.cCagra == nil {
 		return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -1253,9 +1189,9 @@ func (gi *GpuCagra[B, Q]) SearchFloatWithFilter(queries []float32, numQueries ui
 	cPreds := C.CString(predsJSON)
 	defer C.free(unsafe.Pointer(cPreds))
 
-	res := C.gpu_cagra_search_float_with_filter(
+	res := C.gpu_cagra_search_quantize_with_filter(
 		gi.cCagra,
-		(*C.float)(unsafe.Pointer(&queries[0])),
+		unsafe.Pointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
@@ -1286,12 +1222,12 @@ func (gi *GpuCagra[B, Q]) SearchFloatWithFilter(queries []float32, numQueries ui
 	return SearchResult{Neighbors: neighbors, Distances: distances}, nil
 }
 
-// SearchFloatWithFilterAsync submits a filtered float32 K-NN search and
-// returns a job_id; collect the result with SearchWait. Mirrors
-// SearchFloat32AsyncWithParams + the predicate-eval semantics of
-// SearchFloatWithFilter. Used by MultiGpuCagra to dispatch per-shard
-// filtered searches in parallel.
-func (gi *GpuCagra[B, Q]) SearchFloatWithFilterAsync(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) (uint64, error) {
+// SearchQuantizeWithFilterAsync submits a filtered K-NN search with base-typed
+// (B) queries and returns a job_id; collect the result with SearchWait. Mirrors
+// SearchQuantizeAsyncWithParams + the predicate-eval semantics of
+// SearchQuantizeWithFilter. Used by MultiGpuCagra to dispatch per-shard
+// filtered searches in parallel. The index converts B to storage T.
+func (gi *GpuCagra[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) (uint64, error) {
 	if gi.cCagra == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -1309,9 +1245,9 @@ func (gi *GpuCagra[B, Q]) SearchFloatWithFilterAsync(queries []float32, numQueri
 	cPreds := C.CString(predsJSON)
 	defer C.free(unsafe.Pointer(cPreds))
 
-	jobID := C.gpu_cagra_search_float_with_filter_async(
+	jobID := C.gpu_cagra_search_quantize_with_filter_async(
 		gi.cCagra,
-		(*C.float)(unsafe.Pointer(&queries[0])),
+		unsafe.Pointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),

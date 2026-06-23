@@ -98,7 +98,14 @@ template<typename IndexT, typename SearchParamsT, typename T>
 void run_benchmark(const std::string& index_name, distribution_mode_t mode, 
                   IndexT& index, const std::vector<float>& recall_queries, const std::vector<int64_t>& recall_expected_ids, 
                   const benchmark_config_t& cfg, const SearchParamsT& sp) {
-    
+
+    // float-input search dispatch: cagra/ivf_flat/ivf_pq and brute force all
+    // expose the base-typed search_quantize (B==float here; identity quantize
+    // when base == storage).
+    auto bench_search = [&](const float* q, uint64_t nq) {
+        return index.search_quantize(q, nq, cfg.dimension, cfg.limit, sp);
+    };
+
     for (int64_t window_us : {(int64_t)0, (int64_t)100}) {
         index.set_batch_window(window_us);
 
@@ -108,7 +115,7 @@ void run_benchmark(const std::string& index_name, distribution_mode_t mode,
         
         // Warmup
         for (int i = 0; i < 5; ++i) {
-            index.search_float(queries.data(), 1, cfg.dimension, cfg.limit, sp);
+            bench_search(queries.data(), 1);
         }
 
         std::atomic<uint64_t> total_completed{0};
@@ -119,7 +126,7 @@ void run_benchmark(const std::string& index_name, distribution_mode_t mode,
         for (uint32_t t = 0; t < cfg.n_threads; ++t) {
             threads.emplace_back([&, t, q_per_thread]() {
                 for (uint32_t i = 0; i < q_per_thread; ++i) {
-                    index.search_float(queries.data() + (t * q_per_thread + i) * cfg.dimension, 1, cfg.dimension, cfg.limit, sp);
+                    bench_search(queries.data() + (t * q_per_thread + i) * cfg.dimension, 1);
                     total_completed++;
                 }
             });
@@ -132,7 +139,7 @@ void run_benchmark(const std::string& index_name, distribution_mode_t mode,
         double qps = total_completed.load() / diff.count();
         
         // Self-recall
-        auto res = index.search_float(recall_queries.data(), cfg.n_queries, cfg.dimension, cfg.limit, sp);
+        auto res = bench_search(recall_queries.data(), cfg.n_queries);
         double recall = calculate_recall(res.neighbors, recall_expected_ids, cfg.n_queries, cfg.limit);
 
         std::cout << std::left << std::setw(45) << full_name 
@@ -174,14 +181,14 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
             
             if (mode != DistributionMode_SINGLE_GPU && active_devices.size() < 2) continue;
             
-            gpu_cagra_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
+            gpu_cagra_t<float, T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
             index.start();
             index.build();
             
             cagra_search_params_t sp = cagra_search_params_default();
             sp.itopk_size = 128;
             sp.search_width = 1;
-            run_benchmark<gpu_cagra_t<T>, cagra_search_params_t, T>("Cagra", mode, index, recall_queries, recall_expected_ids, cfg, sp);
+            run_benchmark<gpu_cagra_t<float, T>, cagra_search_params_t, T>("Cagra", mode, index, recall_queries, recall_expected_ids, cfg, sp);
             index.destroy();
             cudaDeviceSynchronize();
         }
@@ -198,13 +205,13 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
 
             if (mode != DistributionMode_SINGLE_GPU && active_devices.size() < 2) continue;
 
-            gpu_ivf_flat_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
+            gpu_ivf_flat_t<float, T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
             index.start();
             index.build();
 
             ivf_flat_search_params_t sp = ivf_flat_search_params_default();
             sp.n_probes = 64;
-            run_benchmark<gpu_ivf_flat_t<T>, ivf_flat_search_params_t, T>("IvfFlat", mode, index, recall_queries, recall_expected_ids, cfg, sp);
+            run_benchmark<gpu_ivf_flat_t<float, T>, ivf_flat_search_params_t, T>("IvfFlat", mode, index, recall_queries, recall_expected_ids, cfg, sp);
             index.destroy();
         }
     }
@@ -221,13 +228,13 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
 
             if (mode != DistributionMode_SINGLE_GPU && active_devices.size() < 2) continue;
 
-            gpu_ivf_pq_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
+            gpu_ivf_pq_t<float, T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
             index.start();
             index.build();
 
             ivf_pq_search_params_t sp = ivf_pq_search_params_default();
             sp.n_probes = 64;
-            run_benchmark<gpu_ivf_pq_t<T>, ivf_pq_search_params_t, T>("IvfPq", mode, index, recall_queries, recall_expected_ids, cfg, sp);
+            run_benchmark<gpu_ivf_pq_t<float, T>, ivf_pq_search_params_t, T>("IvfPq", mode, index, recall_queries, recall_expected_ids, cfg, sp);
             index.destroy();
         }
     }
@@ -237,12 +244,14 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
         distribution_mode_t mode = DistributionMode_SINGLE_GPU;
         std::vector<int> active_devices = {cfg.devices[0]};
         
-        gpu_brute_force_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, cfg.n_threads, active_devices[0]);
+        // Base type float (the benchmark queries with float32); storage T. This
+        // matches search_quantize(const B*=const float*) used in run_benchmark.
+        gpu_brute_force_t<float, T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, cfg.n_threads, active_devices[0]);
         index.start();
         index.build();
 
         brute_force_search_params_t sp = brute_force_search_params_default();
-        run_benchmark<gpu_brute_force_t<T>, brute_force_search_params_t, T>("BruteForce", mode, index, recall_queries, recall_expected_ids, cfg, sp);
+        run_benchmark<gpu_brute_force_t<float, T>, brute_force_search_params_t, T>("BruteForce", mode, index, recall_queries, recall_expected_ids, cfg, sp);
         index.destroy();
     }
 }

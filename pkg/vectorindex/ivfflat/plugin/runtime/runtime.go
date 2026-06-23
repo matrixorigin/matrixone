@@ -142,6 +142,22 @@ func (CatalogHooks) SupportedVectorTypes() []types.T {
 // primary key may be any type. nil = "no constraint".
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return nil }
 
+// ValidQuantization gates the quantization value for IVF-FLAT: it must name a
+// narrow vector type IVF-FLAT supports (float32/float16/bf16/int8/uint8, via
+// quantizer.ToVectorType). IVF-FLAT re-ranks on the CPU from the stored entries,
+// so unlike the cuvs backends it imposes no op_type restriction; op is unused.
+// One home for CREATE (plan/schema) and REINDEX (compile/ValidateReindexParams).
+func (CatalogHooks) ValidQuantization(quant, _ string) error {
+	if quant == "" {
+		return nil
+	}
+	if _, ok := quantizer.ToVectorType(quant); !ok {
+		return moerr.NewNotSupportedNoCtxf(
+			"ivfflat quantization %q (supported: float32, float16, bf16, int8, uint8)", quant)
+	}
+	return nil
+}
+
 // SupportedIncludeColumnTypes: this index has no INCLUDE-column support.
 func (CatalogHooks) SupportedIncludeColumnTypes() []types.T { return nil }
 

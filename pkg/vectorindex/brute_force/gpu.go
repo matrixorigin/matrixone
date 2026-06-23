@@ -224,7 +224,7 @@ func (idx *GpuAdhocBruteForceIndex[T]) Destroy() {
 }
 
 type GpuBruteForceIndex[T cuvs.VectorType] struct {
-	index     *cuvs.GpuBruteForce[T]
+	index     *cuvs.GpuBruteForce[T, T]
 	dimension uint
 	count     uint
 }
@@ -320,7 +320,7 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	}
 
 	deviceID := cuvs.GetNextGpuDeviceId()
-	km, err := cuvs.NewGpuBruteForce[T](flattened, uint64(len(dataset)), uint32(dimension), resolveCuvsDistance(m), uint32(nthread), deviceID)
+	km, err := cuvs.NewGpuBruteForce[T, T](flattened, uint64(len(dataset)), uint32(dimension), resolveCuvsDistance(m), uint32(nthread), deviceID)
 	if err != nil {
 		return nil, err
 	}

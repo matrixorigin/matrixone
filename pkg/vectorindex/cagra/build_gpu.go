@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -141,33 +142,27 @@ func (b *CagraBuild[B, Q]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap
 	return b.current.Index.AddFilterChunk(colIdx, data, nullBitmap, nrows)
 }
 
-// AddRow buffers one source row. The create passes fa (decoded f32) for an
-// f32 base, or hf (decoded half) for an f16 base; the unused one is nil.
-// Routing by (B, Q):
-//   - B is f32: feed fa through AddChunkFloat (the C add_chunk_float path
-//     handles f32 -> Q identity/cast/quantize).
-//   - B is f16, Q is f16 (direct, Q==B): native AddChunk([]Q).
-//   - B is f16, Q is int8/uint8: quantize via AddChunkQuantize([]B).
+// AddRow buffers one source row. vecBytes is the raw little-endian base-type
+// bytes of one vector (4*dim for an f32 base, 2*dim for an f16 base) — the
+// non-generic cagraBuilder interface can't name the concrete element type B, so
+// the bytes are reinterpreted here with UnsafeSliceCast (zero-copy, no per-row
+// heap alloc). Routing by (B, Q):
+//   - f16 base, f16 storage (direct, Q==B): native AddChunk([]Q).
+//   - otherwise (f32 base, or f16 base -> int8/uint8): AddChunkQuantize([]B),
+//     which converts B -> Q on device (B==Q copy, or learned/cast quantizer).
 //
 // idBuf is reused across calls to avoid a per-call heap allocation.
-func (b *CagraBuild[B, Q]) AddRow(id int64, fa []float32, hf []cuvs.Float16) error {
+func (b *CagraBuild[B, Q]) AddRow(id int64, vecBytes []byte) error {
 	idx, err := b.getOrCreateCurrent()
 	if err != nil {
 		return err
 	}
 	b.idBuf[0] = id
 
-	if !b.bIsHalf {
-		// f32 base.
-		err = idx.AddChunkFloat(fa, 1, b.idBuf[:])
-	} else if b.qIsHalf {
-		// f16 base, f16 storage (direct, Q == B == Float16).
-		vec, _ := any(hf).([]Q)
-		err = idx.AddChunk(vec, 1, b.idBuf[:])
+	if b.bIsHalf && b.qIsHalf {
+		err = idx.AddChunk(util.UnsafeSliceCast[Q](vecBytes), 1, b.idBuf[:])
 	} else {
-		// f16 base, int8/uint8 storage: native half-source quantize.
-		vec, _ := any(hf).([]B)
-		err = idx.AddChunkQuantize(vec, 1, b.idBuf[:])
+		err = idx.AddChunkQuantize(util.UnsafeSliceCast[B](vecBytes), 1, b.idBuf[:])
 	}
 	if err != nil {
 		return err

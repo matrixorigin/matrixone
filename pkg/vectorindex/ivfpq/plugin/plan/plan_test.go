@@ -213,6 +213,17 @@ func TestBuildSecondaryIndexDefs_F16UpcastRejected(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestBuildSecondaryIndexDefs_BF16QuantRejected: QUANTIZATION 'bf16' has no GPU
+// bfloat16 storage (cuVS has no bfloat16 index/quantizer), so it must be rejected
+// rather than silently falling back to f32 storage — even though it passes the
+// downcast width guard (bf16 is 2 bytes). Rejected on both f32 and f16 bases.
+func TestBuildSecondaryIndexDefs_BF16QuantRejected(t *testing.T) {
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOnQuant("vec", "bf16"), vecColMap("id", "vec"), nil, "id")
+	require.Error(t, err, "f32 base + bf16 quant must be rejected")
+	_, _, err = Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOnQuant("vec", "bf16"), f16ColMap("id", "vec"), nil, "id")
+	require.Error(t, err, "f16 base + bf16 quant must be rejected")
+}
+
 // --- schema.go: BuildFullTextIndexDefs -------------------------------------
 
 func TestBuildFullTextIndexDefs_Unsupported(t *testing.T) {

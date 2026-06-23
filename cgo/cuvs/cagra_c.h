@@ -112,17 +112,19 @@ gpu_cagra_search_res_t gpu_cagra_search(gpu_cagra_c index_c, const void* queries
                                             uint32_t query_dimension, uint32_t limit, 
                                             cagra_search_params_t search_params, void* errmsg);
 
-gpu_cagra_search_res_t gpu_cagra_search_float(gpu_cagra_c index_c, const float* queries_data, uint64_t num_queries, 
-                                                uint32_t query_dimension, uint32_t limit, 
+// Quantize search: query in the BASE element type B (float or half); the index
+// converts it to storage type T (copy / quantize / f32->f16 cast) internally.
+gpu_cagra_search_res_t gpu_cagra_search_quantize(gpu_cagra_c index_c, const void* queries_data, uint64_t num_queries,
+                                                uint32_t query_dimension, uint32_t limit,
                                                 cagra_search_params_t search_params, void* errmsg);
 
 // Asynchronous search functions
-uint64_t gpu_cagra_search_async(gpu_cagra_c index_c, const void* queries_data, uint64_t num_queries, 
-                                   uint32_t query_dimension, uint32_t limit, 
+uint64_t gpu_cagra_search_async(gpu_cagra_c index_c, const void* queries_data, uint64_t num_queries,
+                                   uint32_t query_dimension, uint32_t limit,
                                    cagra_search_params_t search_params, void* errmsg);
 
-uint64_t gpu_cagra_search_float_async(gpu_cagra_c index_c, const float* queries_data, uint64_t num_queries, 
-                                         uint32_t query_dimension, uint32_t limit, 
+uint64_t gpu_cagra_search_quantize_async(gpu_cagra_c index_c, const void* queries_data, uint64_t num_queries,
+                                         uint32_t query_dimension, uint32_t limit,
                                          cagra_search_params_t search_params, void* errmsg);
 
 gpu_cagra_search_res_t gpu_cagra_search_wait(gpu_cagra_c index_c, uint64_t job_id, void* errmsg);
@@ -174,22 +176,23 @@ void gpu_cagra_add_filter_chunk(gpu_cagra_c index_c, uint32_t col_idx,
                                  const void* data, const uint32_t* null_bitmap,
                                  uint64_t nrows, void* errmsg);
 
-// Filtered variants of gpu_cagra_search / gpu_cagra_search_float. preds_json is a JSON
+// Filtered variants of gpu_cagra_search / gpu_cagra_search_quantize. preds_json is a JSON
 // predicate array; passing NULL or "" yields unfiltered behavior.
 gpu_cagra_search_res_t gpu_cagra_search_with_filter(gpu_cagra_c index_c, const void* queries_data,
                                                      uint64_t num_queries, uint32_t query_dimension,
                                                      uint32_t limit, cagra_search_params_t search_params,
                                                      const char* preds_json, void* errmsg);
 
-gpu_cagra_search_res_t gpu_cagra_search_float_with_filter(gpu_cagra_c index_c, const float* queries_data,
+// Query in the BASE element type B (float or half); converted to storage T internally.
+gpu_cagra_search_res_t gpu_cagra_search_quantize_with_filter(gpu_cagra_c index_c, const void* queries_data,
                                                            uint64_t num_queries, uint32_t query_dimension,
                                                            uint32_t limit, cagra_search_params_t search_params,
                                                            const char* preds_json, void* errmsg);
 
-// Async variant of gpu_cagra_search_float_with_filter. Returns a job_id that
+// Async variant of gpu_cagra_search_quantize_with_filter. Returns a job_id that
 // is collected with the existing gpu_cagra_search_wait. Lets multi-index
 // callers fan out filtered searches across shards in parallel.
-uint64_t gpu_cagra_search_float_with_filter_async(gpu_cagra_c index_c, const float* queries_data,
+uint64_t gpu_cagra_search_quantize_with_filter_async(gpu_cagra_c index_c, const void* queries_data,
                                                    uint64_t num_queries, uint32_t query_dimension,
                                                    uint32_t limit, cagra_search_params_t search_params,
                                                    const char* preds_json, void* errmsg);

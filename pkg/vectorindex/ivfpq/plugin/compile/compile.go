@@ -58,7 +58,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	ivfpqruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 // insertIntoIvfpqIndexTableFormat is the SQL template used to populate the
@@ -280,16 +279,14 @@ func registerIdxcronUpdate(
 // IVF-PQ supports updating `lists` at REINDEX time — mirrors IVF-FLAT
 // since both algorithms key on the inverted-list count for their build.
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	// quantization, when specified, must be a cuvs-supported name — same gate
-	// as CREATE INDEX (metric.ValidQuantization). Already lower-cased by
-	// reindexSpecifiedParams.
-	if q, ok := alter.Params[catalog.Quantization]; ok {
-		if !metric.ValidQuantization(q) {
-			return nil, moerr.NewNotSupportedNoCtxf(
-				"ivfpq quantization %q (supported: float32, float16, int8, uint8)", q)
-		}
-	}
-	return compileplugin.MergeReindexParams(old, alter, "ivfpq",
+	// Merge first, then validate the EFFECTIVE quantization via the per-algo
+	// catalog hook (the single home shared with CREATE). The merged map is the
+	// index's actual post-reindex config: the value the reindex set, or — when
+	// the reindex omitted QUANTIZATION (e.g. the idxcron-issued rebuild) — the
+	// value already stored on the index. Validating the merge (not the raw alter
+	// delta) means the check is never skipped just because the statement omitted
+	// quantization, and quantization and op_type come from one consistent source.
+	merged, err := compileplugin.MergeReindexParams(old, alter, "ivfpq",
 		catalog.IndexAlgoParamLists,
 		catalog.IndexAlgoParamKmeansTrainPercent,
 		catalog.IndexAlgoParamKmeansMaxIteration,
@@ -298,6 +295,14 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 		catalog.BitsPerCode,
 		catalog.Quantization,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if err := (ivfpqruntime.CatalogHooks{}).ValidQuantization(
+		merged[catalog.Quantization], merged[catalog.IndexAlgoParamOpType]); err != nil {
+		return nil, err
+	}
+	return merged, nil
 }
 
 // HandleDropIndex runs algorithm-specific cleanup beyond the generic
