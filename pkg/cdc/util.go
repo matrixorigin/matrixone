@@ -31,7 +31,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-sql-driver/mysql"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -47,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/mysql"
 )
 
 // escapeSQLString escapes special characters in SQL string literals to prevent SQL injection.
