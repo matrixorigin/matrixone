@@ -292,6 +292,11 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 	}
 	defer func() {
 		if err != nil {
+			// Preserve coverage for the current S3 grant before releasing it so
+			// concurrent retries do not misclassify its still-resident RSS as
+			// unrelated pressure. This is safe even for pre-sync failures: it
+			// simply snapshots the current reservation before the cleanup release.
+			forcedRefresh(insert.ctr.s3MemThrottler)
 			insert.releaseS3MemGrant()
 		}
 	}()
@@ -322,11 +327,11 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 		insert.ctr.s3Writer.ResetBlockInfoBat()
 	}
 
-	insert.releaseS3MemGrant()
-
-	// After flushing, release throttle grant and force-refresh so subsequent
-	// acquires by this or other workers see the freed capacity immediately.
+	// Refresh while the current S3 grant is still live so the throttler can
+	// attribute stale post-flush RSS to already-accounted S3 bytes instead of
+	// misclassifying them as unrelated memory pressure on the retry path.
 	forcedRefresh(insert.ctr.s3MemThrottler)
+	insert.releaseS3MemGrant()
 	return nil
 }
 
