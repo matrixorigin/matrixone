@@ -28,6 +28,10 @@ Before building MatrixOne, ensure you have the following installed:
    - [MySQL Downloads](https://dev.mysql.com/downloads/mysql)
    - Verify: `mysql --version`
 
+6. **CMake** (required by USearch)
+   - [CMake Installation](https://cmake.org/download)
+   - Verify: `cmake --version`
+
 ---
 
 ## Building MatrixOne
@@ -340,7 +344,7 @@ When using `-profile-interval=5m`, the following happens every 5 minutes:
   ```bash
   # Production: only record significant blocking
   -block-profile-rate=100
-  
+
   # Debugging: record all blocking events
   -block-profile-rate=1
   ```
@@ -356,7 +360,7 @@ When using `-profile-interval=5m`, the following happens every 5 minutes:
   ```bash
   # Production: sample 1 in 100 contention events
   -mutex-profile-fraction=100
-  
+
   # Debugging: sample all contention events
   -mutex-profile-fraction=1
   ```
@@ -708,7 +712,7 @@ docker build -f optools/images/Dockerfile . \
   --build-arg TYPECHECK=1
 ```
 
-**Note:** 
+**Note:**
 - Default behavior (TYPECHECK=0) maintains backward compatibility
 - Typecheck is automatically enabled when race detector is used (`-race` flag)
 - For performance-critical tests, keep typecheck disabled
