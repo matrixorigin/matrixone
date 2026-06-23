@@ -2973,6 +2973,10 @@ var (
 			input: `show cdc all;`,
 		},
 		{
+			input:  `show cdc;`,
+			output: `show cdc all;`,
+		},
+		{
 			input: `show cdc task t1;`,
 		},
 		{
@@ -2980,6 +2984,21 @@ var (
 		},
 		{
 			input: `drop cdc task t1;`,
+		},
+		{
+			input: `drop cdc task internal;`,
+		},
+		{
+			input:  `drop cdc t1;`,
+			output: `drop cdc task t1;`,
+		},
+		{
+			input:  `drop cdc internal;`,
+			output: `drop cdc task internal;`,
+		},
+		{
+			input:  `drop cdc if exists t1;`,
+			output: `drop cdc if exists task t1;`,
 		},
 		{
 			input: `pause cdc all;`,
