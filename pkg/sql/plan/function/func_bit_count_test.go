@@ -78,12 +78,14 @@ func TestBitCountFloat(t *testing.T) {
 			NewFunctionTestInput(types.T_float64.ToType(), []float64{
 				1.4, 1.5, 2.5, 3.5,
 				-1.4, -1.5, -2.5, -3.5,
+				-9223372036854774784.0, -9223372036854775808.0,
 				math.Inf(1), math.Inf(-1),
 			}, nil),
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{
 			1, 1, 1, 1,
 			64, 63, 63, 62,
+			2, 1,
 			64, 1,
 		}, nil),
 		BitCountFloat[float64])
