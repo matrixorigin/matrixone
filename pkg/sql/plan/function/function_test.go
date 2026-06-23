@@ -295,10 +295,13 @@ func TestUserLevelLockBuiltinRegistration(t *testing.T) {
 		name string
 		id   int
 		args []types.T
+		ret  types.Type
 	}{
-		{name: "get_lock", id: GET_LOCK, args: []types.T{types.T_varchar, types.T_float64}},
-		{name: "release_lock", id: RELEASE_LOCK, args: []types.T{types.T_varchar}},
-		{name: "is_free_lock", id: IS_FREE_LOCK, args: []types.T{types.T_varchar}},
+		{name: "get_lock", id: GET_LOCK, args: []types.T{types.T_varchar, types.T_float64}, ret: types.T_int64.ToType()},
+		{name: "release_lock", id: RELEASE_LOCK, args: []types.T{types.T_varchar}, ret: types.T_int64.ToType()},
+		{name: "is_free_lock", id: IS_FREE_LOCK, args: []types.T{types.T_varchar}, ret: types.T_int64.ToType()},
+		{name: "is_used_lock", id: IS_USED_LOCK, args: []types.T{types.T_varchar}, ret: types.T_uint64.ToType()},
+		{name: "release_all_locks", id: RELEASE_ALL_LOCKS, args: []types.T{}, ret: types.T_int64.ToType()},
 	}
 
 	for _, tc := range cases {
@@ -319,7 +322,7 @@ func TestUserLevelLockBuiltinRegistration(t *testing.T) {
 			require.Equal(t, tc.args, overload.args)
 			require.True(t, overload.volatile)
 			require.True(t, overload.realTimeRelated)
-			require.Equal(t, types.T_int64.ToType(), overload.retType(nil))
+			require.Equal(t, tc.ret, overload.retType(nil))
 			require.NotNil(t, overload.newOp())
 		})
 	}

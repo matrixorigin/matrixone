@@ -261,6 +261,22 @@ func (mr *MockLockServiceMockRecorder) GetLockTableBind(group, tableID any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLockTableBind", reflect.TypeOf((*MockLockService)(nil).GetLockTableBind), group, tableID)
 }
 
+// GetLockHolder mocks base method.
+func (m *MockLockService) GetLockHolder(ctx context.Context, tableID uint64, row []byte, options lock.LockOptions) (lock.WaitTxn, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLockHolder", ctx, tableID, row, options)
+	ret0, _ := ret[0].(lock.WaitTxn)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetLockHolder indicates an expected call of GetLockHolder.
+func (mr *MockLockServiceMockRecorder) GetLockHolder(ctx, tableID, row, options any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLockHolder", reflect.TypeOf((*MockLockService)(nil).GetLockHolder), ctx, tableID, row, options)
+}
+
 // GetServiceID mocks base method.
 func (m *MockLockService) GetServiceID() string {
 	m.ctrl.T.Helper()
