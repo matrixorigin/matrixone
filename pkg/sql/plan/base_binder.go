@@ -918,17 +918,23 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 	case tree.LIKE:
+		if astExpr.Escape != nil {
+			return b.bindFuncExprImplByAstExpr("like", []tree.Expr{astExpr.Left, astExpr.Right, astExpr.Escape}, depth)
+		}
 		op = "like"
 
 	case tree.NOT_LIKE:
-		newExpr := tree.NewComparisonExpr(tree.LIKE, astExpr.Left, astExpr.Right)
+		newExpr := tree.NewComparisonExprWithEscape(tree.LIKE, astExpr.Left, astExpr.Right, astExpr.Escape)
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.ILIKE:
+		if astExpr.Escape != nil {
+			return b.bindFuncExprImplByAstExpr("ilike", []tree.Expr{astExpr.Left, astExpr.Right, astExpr.Escape}, depth)
+		}
 		op = "ilike"
 
 	case tree.NOT_ILIKE:
-		newExpr := tree.NewComparisonExpr(tree.ILIKE, astExpr.Left, astExpr.Right)
+		newExpr := tree.NewComparisonExprWithEscape(tree.ILIKE, astExpr.Left, astExpr.Right, astExpr.Escape)
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.IN:
@@ -1826,9 +1832,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return nil, err
 			}
 		}
-	case "like":
+	case "like", "ilike":
 		// sql 'select * from t where col like ?'  the ? Expr's type will be T_any
-		if len(args) != 2 {
+		if len(args) != 2 && len(args) != 3 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
 		if args[0].Typ.Id == int32(types.T_any) {
@@ -1836,6 +1842,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		if args[1].Typ.Id == int32(types.T_any) {
 			args[1].Typ.Id = int32(types.T_varchar)
+		}
+		if len(args) == 3 && args[2].Typ.Id == int32(types.T_any) {
+			args[2].Typ.Id = int32(types.T_varchar)
 		}
 		if args[0].Typ.Id == int32(types.T_json) {
 			targetTp := types.T_varchar.ToType()
@@ -2216,7 +2225,11 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		switch args[0].Expr.(type) {
 		case *plan.Expr_Col:
 			if argsType[0].IsVarlen() && checkNoNeedCast(argsType[1], argsType[0], args[1]) {
-				argsCastType = []types.Type{argsType[0], argsType[0]}
+				if len(argsType) == 3 {
+					argsCastType = []types.Type{argsType[0], argsType[0], argsType[2]}
+				} else {
+					argsCastType = []types.Type{argsType[0], argsType[0]}
+				}
 				fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 				if err != nil {
 					return nil, err
