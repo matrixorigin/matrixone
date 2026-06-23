@@ -1,0 +1,47 @@
+drop table if exists dp;
+create table dp(a double precision, b double precision(10,2), c double);
+show create table dp;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+dp  ¦  CREATE TABLE `dp` (
+  `a` double DEFAULT NULL,
+  `b` double(10,2) DEFAULT NULL,
+  `c` double DEFAULT NULL
+)
+insert into dp values (3.1415926535897, 1234.5678, 2.71828);
+insert into dp values (-1.5e10, 0.01, 0.00001);
+select * from dp order by a;
+➤ a[8,54,0]  ¦  b[8,10,2]  ¦  c[8,54,0]  𝄀
+-1.5E10  ¦  0.01  ¦  1.0E-5  𝄀
+3.1415926535897  ¦  1234.57  ¦  2.71828
+select a + c as s, a * 2 as dbl from dp order by 1;
+➤ s[8,54,0]  ¦  dbl[8,54,0]  𝄀
+-1.499999999999999E10  ¦  -3.0E10  𝄀
+5.8598726535897  ¦  6.2831853071794
+select sum(c) as sc from dp;
+➤ sc[8,54,0]  𝄀
+2.71829
+select cast('3.14' as double precision) as cd;
+➤ cd[8,54,0]  𝄀
+3.14
+select convert('3.14', double precision) as cv;
+➤ cv[8,54,0]  𝄀
+3.14
+select '3.14' :: double precision as cc;
+➤ cc[8,54,0]  𝄀
+3.14
+select abs(cast(-2.5 as double precision)) as ab;
+➤ ab[8,54,0]  𝄀
+2.5
+select cast(7 as double precision(10,2)) as cdp;
+➤ cdp[8,10,2]  𝄀
+7.0
+drop table if exists dp;
+drop table if exists dp2;
+create table dp2(a double precision);
+insert into dp2 values (1.25);
+insert into dp2 select cast(2.5 as double) from dp2;
+select * from dp2 order by a;
+➤ a[8,54,0]  𝄀
+1.25  𝄀
+2.5
+drop table if exists dp2;
