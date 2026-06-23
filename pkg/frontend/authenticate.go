@@ -6936,7 +6936,7 @@ func addReplaceDeletePrivilegeTips(arr privilegeTipsArray, p *plan2.Plan) privil
 			if tableName == "" {
 				tableName = updateCtx.TableDef.Name
 			}
-			if tableName == "" || isIndexTable(tableName) || replaceTargetIsInsertOnly(updateCtx.TableDef) {
+			if tableName == "" || isIndexTable(tableName) || replaceTargetIsInsertOnly(updateCtx, node, p.GetQuery()) {
 				continue
 			}
 
@@ -6966,12 +6966,19 @@ func addReplaceDeletePrivilegeTips(arr privilegeTipsArray, p *plan2.Plan) privil
 	return arr
 }
 
-func replaceTargetIsInsertOnly(tableDef *plan.TableDef) bool {
+func replaceTargetIsInsertOnly(updateCtx *plan.UpdateCtx, multiUpdateNode *plan.Node, query *plan.Query) bool {
+	if updateCtx == nil {
+		return false
+	}
+	tableDef := updateCtx.TableDef
 	if tableDef == nil || tableDef.Pkey == nil {
 		return false
 	}
 	if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		return false
+	}
+	if replaceDeleteColsAlwaysStaticNull(updateCtx, multiUpdateNode, query) {
+		return true
 	}
 	for _, idx := range tableDef.Indexes {
 		if idx.Unique {
@@ -6979,6 +6986,145 @@ func replaceTargetIsInsertOnly(tableDef *plan.TableDef) bool {
 		}
 	}
 	return true
+}
+
+func replaceDeleteColsAlwaysStaticNull(updateCtx *plan.UpdateCtx, multiUpdateNode *plan.Node, query *plan.Query) bool {
+	if updateCtx == nil || query == nil || len(updateCtx.DeleteCols) == 0 {
+		return false
+	}
+	nodesByTag := replaceNodesByTag(query)
+	for _, deleteCol := range updateCtx.DeleteCols {
+		if !replaceColRefAlwaysStaticNull(deleteCol, multiUpdateNode, query, nodesByTag) {
+			return false
+		}
+	}
+	return true
+}
+
+func replaceNodesByTag(query *plan.Query) map[int32]*plan.Node {
+	nodesByTag := make(map[int32]*plan.Node, len(query.GetNodes()))
+	for _, node := range query.GetNodes() {
+		for _, tag := range node.GetBindingTags() {
+			nodesByTag[tag] = node
+		}
+	}
+	return nodesByTag
+}
+
+func replaceColRefAlwaysStaticNull(
+	colRef plan.ColRef,
+	contextNode *plan.Node,
+	query *plan.Query,
+	nodesByTag map[int32]*plan.Node,
+) bool {
+	return replaceExprAlwaysStaticNull(&plan.Expr{
+		Expr: &plan.Expr_Col{Col: &colRef},
+	}, contextNode, query, nodesByTag, 0)
+}
+
+func replaceExprAlwaysStaticNull(
+	expr *plan.Expr,
+	contextNode *plan.Node,
+	query *plan.Query,
+	nodesByTag map[int32]*plan.Node,
+	depth int,
+) bool {
+	if expr == nil || depth > 32 {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return lit.GetIsnull()
+	}
+	if colRef := expr.GetCol(); colRef != nil {
+		node := nodesByTag[colRef.GetRelPos()]
+		if node == nil && contextNode != nil {
+			node = replaceInputNodeByOrdinal(contextNode, query, colRef.GetRelPos())
+		}
+		if node == nil {
+			return false
+		}
+		colPos := int(colRef.GetColPos())
+		switch node.GetNodeType() {
+		case plan.Node_PROJECT:
+			if colPos < 0 || colPos >= len(node.GetProjectList()) {
+				return false
+			}
+			return replaceExprAlwaysStaticNull(node.GetProjectList()[colPos], node, query, nodesByTag, depth+1)
+		case plan.Node_VALUE_SCAN:
+			rowsetData := node.GetRowsetData()
+			if rowsetData == nil || colPos < 0 || colPos >= len(rowsetData.GetCols()) {
+				return false
+			}
+			colData := rowsetData.GetCols()[colPos]
+			if colData == nil || len(colData.GetData()) == 0 {
+				return false
+			}
+			for _, rowExpr := range colData.GetData() {
+				if rowExpr == nil || !replaceExprAlwaysStaticNull(rowExpr.GetExpr(), node, query, nodesByTag, depth+1) {
+					return false
+				}
+			}
+			return true
+		case plan.Node_LOCK_OP:
+			child := replaceInputNodeByOrdinal(node, query, 0)
+			if child == nil {
+				return false
+			}
+			return replaceNodeOutputAlwaysStaticNull(child, colPos, query, nodesByTag, depth+1)
+		}
+	}
+	if fn := expr.GetF(); fn != nil {
+		args := fn.GetArgs()
+		if len(args) == 1 && replaceFunctionPreservesNull(fn) {
+			return replaceExprAlwaysStaticNull(args[0], contextNode, query, nodesByTag, depth+1)
+		}
+	}
+	return false
+}
+
+func replaceNodeOutputAlwaysStaticNull(
+	node *plan.Node,
+	colPos int,
+	query *plan.Query,
+	nodesByTag map[int32]*plan.Node,
+	depth int,
+) bool {
+	if node == nil || depth > 32 {
+		return false
+	}
+	switch node.GetNodeType() {
+	case plan.Node_PROJECT:
+		if colPos < 0 || colPos >= len(node.GetProjectList()) {
+			return false
+		}
+		return replaceExprAlwaysStaticNull(node.GetProjectList()[colPos], node, query, nodesByTag, depth+1)
+	case plan.Node_LOCK_OP:
+		child := replaceInputNodeByOrdinal(node, query, 0)
+		if child == nil {
+			return false
+		}
+		return replaceNodeOutputAlwaysStaticNull(child, colPos, query, nodesByTag, depth+1)
+	}
+	return false
+}
+
+func replaceInputNodeByOrdinal(node *plan.Node, query *plan.Query, ordinal int32) *plan.Node {
+	if node == nil || query == nil || ordinal < 0 || int(ordinal) >= len(node.GetChildren()) {
+		return nil
+	}
+	childID := node.GetChildren()[ordinal]
+	if childID < 0 || int(childID) >= len(query.GetNodes()) {
+		return nil
+	}
+	return query.GetNodes()[childID]
+}
+
+func replaceFunctionPreservesNull(fn *plan.Function) bool {
+	if fn == nil || fn.GetFunc() == nil {
+		return false
+	}
+	fnName := strings.ToLower(fn.GetFunc().GetObjName())
+	return strings.Contains(fnName, "cast")
 }
 
 // convertPrivilegeTipsToPrivilege constructs the privilege entries from the privilege tips from the plan

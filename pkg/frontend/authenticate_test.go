@@ -5814,6 +5814,36 @@ func TestReplacePrivilegeRequiresDeleteForConflictingTargets(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
+
+	convey.Convey("replace on fake pk nullable unique null remains insert only", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.Replace{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		sql2result := makeSql2ExecResult2(0, [][]interface{}{{0, false}}, nil, nil, nil, nil, nil, nil, nil)
+		addTablePrivilegeResultsForRole(t, sql2result, 0, dbName, tableName, map[PrivilegeType]bool{
+			PrivilegeTypeSelect: true,
+			PrivilegeTypeInsert: true,
+			PrivilegeTypeDelete: false,
+		})
+		sql2result[getSqlForInheritedRoleIdOfRoleId(0)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+			ses.GetTxnHandler().GetTxnCtx(),
+			ses,
+			stmt,
+			makeReplacePrivilegeNullableUniqueNullPlan(dbName, tableName),
+		)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
 }
 
 func TestExtractPrivilegeTipsFromPlanSkipsInvalidMultiUpdateCtx(t *testing.T) {
@@ -5908,6 +5938,96 @@ func makeReplacePrivilegePlan(dbName, tableName string, fakePK bool, uniqueIndex
 							{
 								ObjRef:   objRef,
 								TableDef: tableDef,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeReplacePrivilegeNullableUniqueNullPlan(dbName, tableName string) *plan2.Plan {
+	const (
+		valueTag   int32 = 10
+		projectTag int32 = 20
+	)
+	tableDef := &plan.TableDef{
+		Name:   tableName,
+		DbName: dbName,
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: catalog.FakePrimaryKeyColName,
+			Names:       []string{catalog.FakePrimaryKeyColName},
+		},
+		Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID},
+			{Name: catalog.FakePrimaryKeyColName},
+			{Name: "v"},
+		},
+		Indexes: []*plan.IndexDef{
+			{
+				IndexName:      "u_v",
+				Parts:          []string{"v"},
+				Unique:         true,
+				IndexTableName: "__mo_index_u_v",
+			},
+		},
+	}
+	objRef := &plan.ObjectRef{SchemaName: dbName, ObjName: tableName}
+	fakePKRef := plan.ColRef{RelPos: 0, ColPos: 0, Name: catalog.FakePrimaryKeyColName}
+	uniqueRef := plan.ColRef{RelPos: 0, ColPos: 1, Name: "v"}
+	oldRowIDRef := plan.ColRef{RelPos: 0, ColPos: 2, Name: catalog.Row_ID}
+	oldPKRef := plan.ColRef{RelPos: 0, ColPos: 3, Name: catalog.FakePrimaryKeyColName}
+
+	return &plan2.Plan{
+		Plan: &plan2.Plan_Query{
+			Query: &plan.Query{
+				StmtType: plan.Query_INSERT,
+				Nodes: []*plan.Node{
+					{
+						NodeType:    plan.Node_VALUE_SCAN,
+						BindingTags: []int32{valueTag},
+						RowsetData: &plan.RowsetData{
+							RowCount: 1,
+							Cols: []*plan.ColData{
+								{
+									Data: []*plan.RowsetExpr{{
+										RowPos: 0,
+										Expr: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+											Value: &plan.Literal_I32Val{I32Val: 1},
+										}}},
+									}},
+								},
+								{
+									Data: []*plan.RowsetExpr{{
+										RowPos: 0,
+										Expr: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+											Isnull: true,
+										}}},
+									}},
+								},
+							},
+						},
+					},
+					{
+						NodeType:    plan.Node_PROJECT,
+						BindingTags: []int32{projectTag},
+						ProjectList: []*plan.Expr{
+							{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: valueTag, ColPos: 0}}},
+							{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: valueTag, ColPos: 1}}},
+							{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+							{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+						},
+					},
+					{
+						NodeType: plan.Node_MULTI_UPDATE,
+						Children: []int32{1},
+						UpdateCtxList: []*plan.UpdateCtx{
+							{
+								ObjRef:     objRef,
+								TableDef:   tableDef,
+								InsertCols: []plan.ColRef{fakePKRef, uniqueRef},
+								DeleteCols: []plan.ColRef{oldRowIDRef, oldPKRef},
 							},
 						},
 					},

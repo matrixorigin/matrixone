@@ -12,6 +12,8 @@ insert into replace_priv_edge.t_priv values(1, 10);
 create table replace_priv_edge.t_unique(id int, v int unique);
 insert into replace_priv_edge.t_unique values(1, 10);
 create table replace_priv_edge.t_insert_only(id int, v int);
+create table replace_priv_edge.t_nullable_unique(id int, v int unique);
+insert into replace_priv_edge.t_nullable_unique values(1, null);
 
 create user replace_priv_user identified by '123456';
 create user replace_priv_delete_user identified by '123456';
@@ -29,6 +31,8 @@ select * from replace_priv_edge.t_priv order by id;
 select * from replace_priv_edge.t_unique order by id;
 replace into replace_priv_edge.t_insert_only values(1, 100);
 select * from replace_priv_edge.t_insert_only order by id;
+replace into replace_priv_edge.t_nullable_unique values(2, null);
+select * from replace_priv_edge.t_nullable_unique order by id;
 -- @session
 
 -- @session:id=2&user=sys:replace_priv_delete_user:replace_priv_delete_role&password=123456
