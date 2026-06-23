@@ -1615,6 +1615,28 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	return lastNodeID, colName2Idx, skipUniqueIdx, nil
 }
 
+// valuesExprIsFuncCall reports whether a VALUES item is, or transparently wraps
+// (through parentheses or a cast), a function call. Such expressions must be
+// bound without the destination column type so the function's literal arguments
+// bind by their own types — e.g. st_point(116.3975, 39.9087),
+// (st_point(116.3975, 39.9087)) or cast(st_point(...) as point) into a geometry
+// column. A bare literal (or a literal wrapped in a unary minus / cast) is not a
+// function call and still binds against the column type.
+func valuesExprIsFuncCall(e tree.Expr) bool {
+	for {
+		switch v := e.(type) {
+		case *tree.ParenExpr:
+			e = v.Expr
+		case *tree.CastExpr:
+			e = v.Expr
+		case *tree.FuncExpr:
+			return true
+		default:
+			return false
+		}
+	}
+}
+
 func (builder *QueryBuilder) buildValueScan(
 	isAllDefault bool,
 	bindCtx *BindContext,
@@ -1700,9 +1722,10 @@ func (builder *QueryBuilder) buildValueScan(
 					}
 				} else {
 					valueBinder := binder
-					if _, isFunc := r[i].(*tree.FuncExpr); isFunc {
-						// function call: bind its arguments by their own types,
-						// not the destination column type
+					if valuesExprIsFuncCall(r[i]) {
+						// function call (possibly wrapped in parens / a cast):
+						// bind its arguments by their own types, not the
+						// destination column type
 						valueBinder = funcBinder
 					}
 					defExpr, err = valueBinder.BindExpr(r[i], 0, true)

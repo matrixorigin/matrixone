@@ -133,6 +133,18 @@ s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 10),
 s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 5)) as cross_level;
 ➤ cross_level[-7,1,0]  𝄀
 0
+select h3_h3index_areneighbours(
+h3_h3index(st_geomfromtext('POINT(0 0)'), 7),
+h3_h3index_parent(h3_h3index(st_geomfromtext('POINT(0 0)'), 7), 3)) as h3_cross_res;
+➤ h3_cross_res[-7,1,0]  𝄀
+0
+select json_length(s2_cellid_allneighbors(s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 10))) as us_s2_all,
+json_length(s2_cellid_edgeneighbors(s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 10))) as us_s2_edge,
+json_length(h3_h3index_neighbors(h3_h3index(st_geomfromtext('POINT(0 0)'), 7))) as us_h3_nb,
+s2_cellid_areneighbors(s2_cellid(st_geomfromtext('POINT(0 0)')), s2_cellid(st_geomfromtext('POINT(0 0)'))) as us_s2_arenb,
+h3_h3index_areneighbors(h3_h3index(st_geomfromtext('POINT(0 0)'), 7), h3_h3index(st_geomfromtext('POINT(0 0)'), 7)) as us_h3_arenb;
+➤ us_s2_all[-5,64,0]  ¦  us_s2_edge[-5,64,0]  ¦  us_h3_nb[-5,64,0]  ¦  us_s2_arenb[-7,1,0]  ¦  us_h3_arenb[-7,1,0]  𝄀
+8  ¦  4  ¦  6  ¦  0  ¦  0
 select s2_cellid(st_geomfromtext('POINT(200 100)'));
 invalid input: longitude/latitude out of range: (200, 100)
 select h3_h3index(st_geomfromtext('POINT(0 95)'));

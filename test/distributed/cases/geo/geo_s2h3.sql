@@ -143,6 +143,18 @@ from (select c as a, cast(json_unquote(json_extract(h3_h3index_neighbours(c), '$
 select s2_cellid_areneighbours(
          s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 10),
          s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 5)) as cross_level;
+-- H3 cross-resolution: a cell and its coarser ancestor are not neighbours
+-- (different resolutions return false, not an error).
+select h3_h3index_areneighbours(
+         h3_h3index(st_geomfromtext('POINT(0 0)'), 7),
+         h3_h3index_parent(h3_h3index(st_geomfromtext('POINT(0 0)'), 7), 3)) as h3_cross_res;
+
+-- American spelling aliases resolve to the same functions.
+select json_length(s2_cellid_allneighbors(s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 10))) as us_s2_all,
+       json_length(s2_cellid_edgeneighbors(s2_cellid_parent(s2_cellid(st_geomfromtext('POINT(0 0)')), 10))) as us_s2_edge,
+       json_length(h3_h3index_neighbors(h3_h3index(st_geomfromtext('POINT(0 0)'), 7))) as us_h3_nb,
+       s2_cellid_areneighbors(s2_cellid(st_geomfromtext('POINT(0 0)')), s2_cellid(st_geomfromtext('POINT(0 0)'))) as us_s2_arenb,
+       h3_h3index_areneighbors(h3_h3index(st_geomfromtext('POINT(0 0)'), 7), h3_h3index(st_geomfromtext('POINT(0 0)'), 7)) as us_h3_arenb;
 
 -- ---------------------------------------------------------------------------
 -- Additional error paths

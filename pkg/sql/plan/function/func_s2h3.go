@@ -602,6 +602,14 @@ func H3H3IndexAreNeighbors(ivecs []*vector.Vector, result vector.FunctionResultW
 		if err != nil {
 			return false, err
 		}
+		// Adjacency is only defined between cells at the same resolution. h3-go's
+		// IsNeighbor returns a resolution-mismatch error for two valid cells at
+		// different resolutions; match the documented "evaluated at the first
+		// cell's resolution" semantics (and the S2 cross-level behavior) by
+		// reporting cross-resolution pairs as not-neighbours rather than erroring.
+		if ca.Resolution() != cb.Resolution() {
+			return false, nil
+		}
 		ok, err := ca.IsNeighbor(cb)
 		if err != nil {
 			return false, moerr.NewInvalidInputNoCtxf("H3 IsNeighbor failed: %v", err)

@@ -43,3 +43,12 @@ insert into reg values (st_point(1.5, 2.5), st_point32(1.5, 2.5));
 select st_astext(p) as p, st_astext(p32) as p32 from reg order by 1;
 select s2_cellid_level(s2_cellid(p)) as lvl from reg order by 1;
 drop table if exists reg;
+
+-- Wrapped constructors must bind the same way: parentheses and a cast around
+-- the function call still bind its arguments by their own types.
+drop table if exists wrap;
+create table wrap(p point, p32 point32);
+insert into wrap values ((st_point(116.3975, 39.9087)), (st_point32(116.3975, 39.9087)));
+insert into wrap values (cast(st_point(1.5, 2.5) as point), cast(st_point32(1.5, 2.5) as point32));
+select st_astext(p) as p, st_astext(p32) as p32 from wrap order by 1;
+drop table if exists wrap;
