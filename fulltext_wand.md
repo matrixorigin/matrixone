@@ -281,6 +281,25 @@ and its ordering semantics (LSN-as-identity), without re-tokenizing.
   multi-segment search adapter.
 - **B3**: idxcron `Merge` compaction + `max_index_capacity` rollover.
 
+### Implementation status (branch `fulltext_wand`, as of commit `eb94f4ae8`, 2026-06-19)
+
+**✅ Done + unit-tested (committed)** — every piece verifiable without a running server:
+- **Parser-aware async.** `SyncDescriptor.AlwaysAsync` bool → `Hooks.AlwaysAsync(indexAlgoParams string) bool` (`pkg/indexplugin/catalog/hooks.go`); HNSW/CAGRA/IVF-PQ=true, IVF-FLAT=false, **fulltext=`parser=="retrieval"`** via new `catalog.GetIndexParser` + `IndexAlgoParamParser`. Unified `indexplugin.IndexIsAsync(algo, params)` routed through CDC-registration (`iscp_util.go`), ALTER-clone (`alter.go`), and the three fulltext DML early-returns (`build_dml_util.go`). No `async`-param injection. Tests: `TestFullTextAlwaysAsync` + the vector runtime tests.
+- **LSN-as-identity liveness** (`pkg/fulltext/wand`). `WandModel.LSN`; `ComputeLiveness(segs, deletes) []Membership` (per-segment allow precomputed once at load: owner = max-LSN segment holding pk, dead iff `deletes[pk] > segLSN`); `SearchSegmentsLive(...)` ANDs liveness with the WHERE-prefilter; `SearchSegments` = the `nil` fast path. Fixes a latent bug: the old multi-segment path emitted a pk twice if it lived in two segments. Tests: `TestWandLiveness` (dedup_update / delete_then_reinsert / delete_after_insert / pure_delete / mixed). NB: assert the live **pk set**, not exact scores — global `N`/`df`/`avgdl` still include superseded+deleted docs until compaction (accepted drift).
+- **tag=1 delete-log codec** (`deletes.go`): `DeleteRecord{Pk, LSN}`, `EncodeDeleteLog`/`DecodeDeleteLog` (self-contained binary+crc32, **no** GPU-coupled cuVS import), `DeleteMap` (max-LSN fold → feeds `ComputeLiveness`). Tests: `TestWandDeleteLogRoundTrip` (int64/varchar/corruption/empty).
+- **`ToInsertSqls(cfg, ts, tag)`** — tag=0 compacted main / tag=1 CDC delta segment (`storage.go`; caller `fulltext_wand_create.go` passes 0). Test: `TestWandToInsertSqlsTag`.
+
+**⏳ Remaining = one interdependent unit (needs a live `mo_ctl` + CDC pipeline to validate e2e):**
+- **(a) `DataRetriever.GetLSN() uint64` accessor** — *interface gap*: `pkg/iscp/types.go:54` `DataRetriever` exposes no LSN, but `DataRetrieverImpl.lsn` exists (`data_retriever.go:96`). Needed for segment `index_id=batchLSN`. Impls to update: `DataRetrieverImpl` + `MockRetriever` (`index_consumer_test.go:63`).
+- **(b) `WandSqlWriter` + `RunWand`** in `pkg/iscp` — mirror `NewFulltextSqlWriter` (`index_sqlwriter.go:251`) + `runHnsw` (`index_consumer.go:240`). Writer accumulates insert `{pk,text}` + delete `{pk}` rows → blob; `RunWand` consumes blobs → tokenize via `tokenizer.SharedJiebaTokenizer(false)` (**same** path as search `parsePatternInNLModeJieba`, so build/query tokens match) → `Builder.Add` → on channel close `FinishSegments` → `ToInsertSqls(tag=1)` + `EncodeDeleteLog`(tag=1) + `UpdateWatermark`. (`pkg/iscp` already imports algo pkgs e.g. hnsw, so importing `pkg/fulltext/wand` is consistent — no cycle.)
+- **(c)** Branch the fulltext plugin iscp `Hooks` (`pkg/fulltext/plugin/iscp/iscp.go` `NewSqlWriter`/`Run`) on `parser==retrieval` → Wand writer/run, else the postings writer/`RunIndex`.
+- **(d)** Flip `HandleCreateIndex` (`pkg/fulltext/plugin/compile/compile.go`) from `catalog.IsIndexAsync` → `indexplugin.IndexIsAsync`, and skip `genWandBuildSQL` for retrieval (CDC builds the initial segment via replay-from-creation).
+- **(e) Multi-segment search adapter** (`wandsearch.go`): `LoadFromStorage` currently loads ONE `index_id`; load **all** tag=0 + tag=1 segments + the tag=1 delete log → `DeleteMap` → `ComputeLiveness` → `SearchSegmentsLive`.
+- **(f)** Drop the postings hidden table for `parser==retrieval` (`schema.go`).
+- **(g)** idxcron compaction (B3).
+
+⚠ **Intermediate-state warning:** the committed parser-aware async change already makes retrieval **skip inline DML** (`AlwaysAsync=true`), but until the sinker (b–d) lands there is **no CDC maintenance** — so a retrieval index won't reflect INSERT/DELETE between CREATE and reindex. This is expected mid-implementation; B2 closes it.
+
 ## Verification
 - **Unit**: (1) `tokenize → postings → fulltext_wand_create` round-trip builds a loadable WAND index. (2) **Differential**: `fulltext_wand_search` top-K vs a brute-force reference (`Σ tf·idf²` over all docs + full sort) on randomized corpora → assert identical top-K and scores (the WAND-correctness gold test). (3) Parser/mode parse tests in `pkg/sql/parsers/dialect/mysql/mysql_sql_test.go` (`IN RETRIEVAL MODE`, default-on-retrieval-parser).
 - **Build**: goyacc regen compiles (0 conflicts); `go build ./pkg/...`; `go test ./pkg/fulltext/... ./pkg/sql/parsers/dialect/mysql/ ./pkg/sql/colexec/table_function/`.
