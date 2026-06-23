@@ -216,3 +216,41 @@ select id, body, v from t_odku_prefix order by id;
 1  ¦  abcdxxxx  ¦  110  𝄀
 3  ¦  wxyzzzzz  ¦  30
 drop table if exists t_odku_prefix;
+drop table if exists t_odku_fk_child;
+drop table if exists t_odku_fk_parent;
+create table t_odku_fk_parent(pid int primary key, pname varchar(20));
+create table t_odku_fk_child(cid int primary key, pid int, val int, foreign key(pid) references t_odku_fk_parent(pid));
+insert into t_odku_fk_parent values (1, 'P1'), (2, 'P2');
+insert into t_odku_fk_child values (1, 1, 100);
+set foreign_key_checks=0;
+insert into t_odku_fk_child values (2, 99, 200);
+set foreign_key_checks=1;
+insert into t_odku_fk_child values (1, 1, 5) on duplicate key update val = val + 1;
+select cid, pid, val from t_odku_fk_child order by cid;
+➤ cid[4,32,0]  ¦  pid[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  1  ¦  101  𝄀
+2  ¦  99  ¦  200
+insert into t_odku_fk_child values (1, 1, 5) on duplicate key update pid = 999;
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into t_odku_fk_child values (3, 888, 1) on duplicate key update val = val + 1;
+internal error: Cannot add or update a child row: a foreign key constraint fails
+select cid, pid, val from t_odku_fk_child order by cid;
+➤ cid[4,32,0]  ¦  pid[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  1  ¦  101  𝄀
+2  ¦  99  ¦  200
+drop table if exists t_odku_fk_child;
+drop table if exists t_odku_fk_parent;
+drop table if exists t_ign_fk_child;
+drop table if exists t_ign_fk_parent;
+create table t_ign_fk_parent(pid int primary key, pname varchar(20));
+create table t_ign_fk_child(cid int primary key, pid int, foreign key(pid) references t_ign_fk_parent(pid));
+insert into t_ign_fk_parent values (1, 'P1'), (2, 'P2'), (3, 'P3');
+insert ignore into t_ign_fk_child values (10, 1), (11, 2), (12, 4), (13, 1), (14, NULL);
+select cid, pid from t_ign_fk_child order by cid;
+➤ cid[4,32,0]  ¦  pid[4,32,0]  𝄀
+10  ¦  1  𝄀
+11  ¦  2  𝄀
+13  ¦  1  𝄀
+14  ¦  null
+drop table if exists t_ign_fk_child;
+drop table if exists t_ign_fk_parent;

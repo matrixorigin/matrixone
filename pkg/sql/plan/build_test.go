@@ -1649,9 +1649,10 @@ func TestInsertOnDupFKUsesModernPath(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	// emp has a foreign key (deptno) references dept(deptno). ON DUPLICATE KEY
-	// UPDATE on an FK table must be planned on the modern MULTI_UPDATE path, and
-	// the parent FK constraint must be enforced via generated DetectSqls instead
-	// of falling back to the legacy Node_ON_DUPLICATE_KEY operator.
+	// UPDATE on an FK table must be planned on the modern MULTI_UPDATE path, not the
+	// legacy Node_ON_DUPLICATE_KEY operator. The child→parent FK is enforced
+	// row-scoped in-plan (see TestInsertOnDupChildParentFKUsesInPlanCheck), so emp —
+	// which has no self-referencing FK — generates no DetectSqls.
 	logicPlan, err := runOneStmt(mock, t,
 		"INSERT INTO emp (empno, deptno) VALUES (1, 10) ON DUPLICATE KEY UPDATE comm = 100")
 	if err != nil {
@@ -1668,7 +1669,7 @@ func TestInsertOnDupFKUsesModernPath(t *testing.T) {
 		}
 	}
 	assert.True(t, hasMultiUpdate, "FK-table ODKU plan should contain MULTI_UPDATE node")
-	assert.NotEmpty(t, query.DetectSqls, "FK-table insert should generate FK constraint DetectSqls")
+	assert.Empty(t, query.DetectSqls, "child→parent FK ODKU should enforce FK in-plan, not via DetectSqls")
 }
 
 func TestInsertChildParentFKUsesInPlanCheck(t *testing.T) {
@@ -1700,14 +1701,81 @@ func TestInsertChildParentFKUsesInPlanCheck(t *testing.T) {
 	assert.True(t, hasFilter, "child→parent FK INSERT should contain an in-plan assert FILTER node")
 }
 
+func TestInsertOnDupChildParentFKUsesInPlanCheck(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// ON DUPLICATE KEY UPDATE on emp (deptno references dept) must enforce the
+	// child→parent FK with a row-scoped in-plan assert over the final merged image,
+	// NOT a whole-table DetectSql — the latter scales with table size and
+	// false-positives on rows inserted earlier under FOREIGN_KEY_CHECKS=0. emp has
+	// no self-referencing FK, so DetectSqls must be empty.
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO emp (empno, deptno) VALUES (1, 10) ON DUPLICATE KEY UPDATE deptno = 20")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+	assert.Empty(t, query.DetectSqls,
+		"ODKU with only a child→parent FK should enforce it in-plan, not via DetectSqls")
+
+	hasFilter, hasMultiUpdate := false, false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_FILTER && len(node.FilterList) > 0 {
+			hasFilter = true
+		}
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+	}
+	assert.True(t, hasFilter, "child→parent FK ODKU should contain an in-plan assert FILTER node")
+	assert.True(t, hasMultiUpdate, "child→parent FK ODKU should stay on the modern MULTI_UPDATE path")
+}
+
+func TestInsertIgnoreChildParentFKDropsRows(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// INSERT IGNORE on emp (deptno references dept) must drop the rows whose parent
+	// does not exist (MySQL row-skip), not assert. On the modern path that is a
+	// LEFT JOIN against the parent plus a FILTER that keeps only matching rows,
+	// feeding the MULTI_UPDATE. emp has no self-referencing FK, so DetectSqls must
+	// be empty.
+	logicPlan, err := runOneStmt(mock, t, "INSERT IGNORE INTO emp (empno, deptno) VALUES (1, 10)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+	assert.Empty(t, query.DetectSqls,
+		"INSERT IGNORE with only a child→parent FK should enforce it in-plan, not via DetectSqls")
+
+	hasLeftJoin, hasFilter, hasMultiUpdate := false, false, false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_LEFT {
+			hasLeftJoin = true
+		}
+		if node.NodeType == plan.Node_FILTER && len(node.FilterList) > 0 {
+			hasFilter = true
+		}
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+	}
+	assert.True(t, hasLeftJoin, "INSERT IGNORE FK row-skip should LEFT JOIN the parent table")
+	assert.True(t, hasFilter, "INSERT IGNORE FK row-skip should contain the parent-existence FILTER node")
+	assert.True(t, hasMultiUpdate, "INSERT IGNORE FK should stay on the modern MULTI_UPDATE path")
+}
+
 func TestInsertOnDupSelfReferFKUsesModernPath(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	// self_ref has a self-referencing foreign key (parent_id references
 	// self_ref(id)). ON DUPLICATE KEY UPDATE must be planned on the modern
 	// MULTI_UPDATE path, and the self-referencing FK must be enforced via a
-	// generated DetectSql produced by genSqlsForCheckFKConstraints' self-refer
-	// branch, not by falling back to the legacy Node_ON_DUPLICATE_KEY operator.
+	// generated DetectSql produced by genSqlsForCheckFKSelfRefer, not by falling
+	// back to the legacy Node_ON_DUPLICATE_KEY operator.
 	logicPlan, err := runOneStmt(mock, t,
 		"INSERT INTO self_ref (id, parent_id, name) VALUES (1, NULL, 'x') ON DUPLICATE KEY UPDATE name = 'y'")
 	if err != nil {

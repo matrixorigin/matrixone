@@ -148,14 +148,6 @@ const externalTableUnsupportedDMLMsg = "unsupported DML: " + externalTableUnsupp
 const noPkOnDupUpdateCause = "on duplicate key update without primary or unique key"
 const noPkOnDupUpdateMsg = "unsupported DML: " + noPkOnDupUpdateCause
 
-// childFkCheckPrefix marks a DetectSql as a child→parent foreign-key existence
-// check (as opposed to a self-referencing one). The runtime strips it and, on
-// violation, reports the legacy-compatible internal-error-wrapped message
-// instead of the plain ErrFKNoReferencedRow2, so the modern INSERT path matches
-// the FK error every other path produces. Mirrors the "REPLACE_PARENT_CHK:"
-// convention.
-const childFkCheckPrefix = "CHILD_FK_CHK:"
-
 func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
 	cteMap := make(map[string]bool)
 	if with != nil {

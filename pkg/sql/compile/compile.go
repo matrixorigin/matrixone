@@ -603,23 +603,12 @@ func (c *Compile) runOnce() (err error) {
 	query = c.pn.GetQuery()
 	if query != nil && (query.StmtType == plan.Query_INSERT ||
 		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
-		// Filter out pre-check SQLs (already executed before the main operation)
-		// and child→parent FK checks (run separately so a violation reports the
-		// legacy-compatible internal-error-wrapped message). The remainder are
-		// self-referencing FK checks, which keep the plain 1452 message.
+		// Filter out pre-check SQLs (already executed before the main operation).
+		// The modern INSERT path enforces child→parent existence in-plan now, so the
+		// remaining DetectSqls are self-referencing FK checks (plain 1452 message).
 		var postCheckSqls []string
 		for _, sql := range query.DetectSqls {
 			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
-				continue
-			}
-			if strings.HasPrefix(sql, "CHILD_FK_CHK:") {
-				if err = runDetectSql(c, strings.TrimPrefix(sql, "CHILD_FK_CHK:")); err != nil {
-					if moerr.IsMoErrCode(err, moerr.ErrFKNoReferencedRow2) {
-						return moerr.NewInternalError(c.proc.Ctx,
-							"Cannot add or update a child row: a foreign key constraint fails")
-					}
-					return err
-				}
 				continue
 			}
 			postCheckSqls = append(postCheckSqls, sql)

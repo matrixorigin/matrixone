@@ -1037,6 +1037,139 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 	return lastNodeID, newTag, targetPkPos, nil
 }
 
+// buildInsertIgnoreFkFilter implements INSERT IGNORE child→parent foreign-key
+// semantics on the modern path. Instead of asserting (which fails the whole
+// statement, see appendForeignConstrantPlan), it LEFT JOINs each referenced parent
+// table and FILTERs out the rows whose foreign key has no matching parent, keeping
+// the rest — exactly the row-skip behaviour MySQL's INSERT IGNORE expects. A NULL
+// foreign-key value satisfies the constraint (MATCH SIMPLE) and is kept.
+//
+// It is built with binding tags (like buildOnDupTargetPkResolution) so it survives
+// the full optimizer and gates the rows that reach the MULTI_UPDATE — unlike the
+// tagless assert sub-plan, which must run post-createQuery and cannot drop rows.
+// Self-referencing foreign keys (ForeignTbl == 0) are left to the post-execution
+// DetectSql. Returns the new top node and its select binding tag; the new-row
+// column layout (and colName2Idx positions) is preserved.
+func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
+	bindCtx *BindContext,
+	tableDef *plan.TableDef,
+	lastNodeID int32,
+	selectTag int32,
+	colName2Idx map[string]int32,
+) (int32, int32, error) {
+	selectNode := builder.qry.Nodes[lastNodeID]
+
+	id2name := make(map[uint64]string, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		id2name[col.ColId] = col.Name
+	}
+
+	keepConds := make([]*plan.Expr, 0, len(tableDef.Fkeys))
+	for _, fk := range tableDef.Fkeys {
+		if fk.ForeignTbl == 0 {
+			continue // self-referencing FK handled post-execution via DetectSql
+		}
+		parentObjRef, parentTableDef, err := builder.compCtx.ResolveById(fk.ForeignTbl, bindCtx.snapshot)
+		if err != nil {
+			return 0, 0, err
+		}
+		if parentTableDef == nil {
+			return 0, 0, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
+		}
+
+		parentTag := builder.genNewBindTag()
+		builder.addNameByColRef(parentTag, parentTableDef)
+		parentScanID := builder.appendNode(&plan.Node{
+			NodeType:     plan.Node_TABLE_SCAN,
+			TableDef:     parentTableDef,
+			ObjRef:       parentObjRef,
+			BindingTags:  []int32{parentTag},
+			ScanSnapshot: bindCtx.snapshot,
+		}, bindCtx)
+
+		parentColId2Pos := make(map[uint64]int, len(parentTableDef.Cols))
+		for i, col := range parentTableDef.Cols {
+			parentColId2Pos[col.ColId] = i
+		}
+
+		joinConds := make([]*plan.Expr, 0, len(fk.Cols))
+		nullConds := make([]*plan.Expr, 0, len(fk.Cols))
+		var markerPos int
+		var markerTyp plan.Type
+		for k, childColId := range fk.Cols {
+			childPos := colName2Idx[tableDef.Name+"."+id2name[childColId]]
+			childTyp := selectNode.ProjectList[childPos].Typ
+			parentPos := parentColId2Pos[fk.ForeignCols[k]]
+			parentTyp := parentTableDef.Cols[parentPos].Typ
+
+			childExpr := &plan.Expr{Typ: childTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: int32(childPos)}}}
+			parentExpr := &plan.Expr{Typ: parentTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: parentTag, ColPos: int32(parentPos)}}}
+			cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{childExpr, parentExpr})
+			if err != nil {
+				return 0, 0, err
+			}
+			joinConds = append(joinConds, cond)
+			nullCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(childExpr)})
+			if err != nil {
+				return 0, 0, err
+			}
+			nullConds = append(nullConds, nullCond)
+			if k == 0 {
+				markerPos, markerTyp = parentPos, parentTyp
+			}
+		}
+
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{lastNodeID, parentScanID},
+			JoinType: plan.Node_LEFT,
+			OnList:   joinConds,
+		}, bindCtx)
+
+		// Keep the row when any FK column is NULL (constraint not enforced) or the
+		// parent exists (LEFT-JOIN marker non-null).
+		markerExpr := &plan.Expr{Typ: markerTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: parentTag, ColPos: int32(markerPos)}}}
+		keep, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*plan.Expr{markerExpr})
+		if err != nil {
+			return 0, 0, err
+		}
+		for _, nc := range nullConds {
+			keep, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{keep, nc})
+			if err != nil {
+				return 0, 0, err
+			}
+		}
+		keepConds = append(keepConds, keep)
+	}
+
+	if len(keepConds) == 0 {
+		return lastNodeID, selectTag, nil // only self-referencing FKs: nothing to drop here
+	}
+
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:   plan.Node_FILTER,
+		Children:   []int32{lastNodeID},
+		FilterList: keepConds,
+	}, bindCtx)
+
+	// Re-project only the original new-row columns under a fresh tag so the dedup /
+	// MULTI_UPDATE downstream (and colName2Idx) see the same layout; parent columns
+	// are dropped.
+	newTag := builder.genNewBindTag()
+	newProjList := make([]*plan.Expr, len(selectNode.ProjectList))
+	for i, expr := range selectNode.ProjectList {
+		newProjList[i] = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: int32(i)}}}
+	}
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: newProjList,
+		Children:    []int32{lastNodeID},
+		BindingTags: []int32{newTag},
+	}, bindCtx)
+
+	return lastNodeID, newTag, nil
+}
+
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	bindCtx *BindContext,
 	dmlCtx *DMLContext,
@@ -1205,16 +1338,32 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// insert maintenance. ON DUPLICATE KEY UPDATE (onDupAction == UPDATE) is
 	// handled later from the final merged image, after the dedup-update join,
 	// where old entries are also dropped.
-	// Row-scoped child→parent FK parent-existence check for plain INSERT: validate
-	// only the new rows via the legacy in-plan assert, reading the materialized
-	// new-row image. A whole-table DetectSql would instead false-positive on rows
-	// inserted earlier under FOREIGN_KEY_CHECKS=0. ON DUPLICATE KEY UPDATE keeps the
-	// DetectSql path (it operates on the final merged image).
+	// Row-scoped child→parent foreign-key handling. Both validate only the
+	// statement's own rows, so neither false-positives on rows inserted earlier
+	// under FOREIGN_KEY_CHECKS=0 nor scales with table size:
+	//   - plain INSERT asserts parent existence over the materialized new-row image
+	//     (needFkCheck below → finishIrregularIndexMaintenance);
+	//   - INSERT IGNORE drops the offending rows in the data flow instead of
+	//     asserting (buildInsertIgnoreFkFilter), so the MULTI_UPDATE inserts only
+	//     the surviving rows — MySQL's row-skip semantics.
+	// ON DUPLICATE KEY UPDATE runs its own in-plan assert over the final merged
+	// image (handled earlier, with appendOnDupIrregularMaintSource).
 	needFkCheck := false
-	if onDupAction != plan.Node_UPDATE {
+	if onDupAction == plan.Node_FAIL {
 		var err error
 		if needFkCheck, err = builder.modernInsertFkCheckEnabled(tableDef); err != nil {
 			return 0, err
+		}
+	} else if onDupAction == plan.Node_IGNORE {
+		fkEnabled, err := builder.modernInsertFkCheckEnabled(tableDef)
+		if err != nil {
+			return 0, err
+		}
+		if fkEnabled {
+			if lastNodeID, selectTag, err = builder.buildInsertIgnoreFkFilter(bindCtx, tableDef, lastNodeID, selectTag, colName2Idx); err != nil {
+				return 0, err
+			}
+			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	}
 	if onDupAction != plan.Node_UPDATE && (len(irregularIndexes) > 0 || needFkCheck) {
@@ -1998,12 +2147,21 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			BindingTags: []int32{selectTag},
 		}, bindCtx)
 
-		// ON DUPLICATE KEY UPDATE into an irregular-index table: the final merged
-		// image (this PROJECT) carries both the new values and the old delete keys.
-		// Materialize it so the main plan, the insert maintenance (new entries) and
-		// the delete maintenance (drop old entries) can all read it; the dedup PK is
-		// immutable so old entries are keyed by the same PK.
-		if len(irregularIndexes) > 0 {
+		// ON DUPLICATE KEY UPDATE: materialize the final merged image (this PROJECT)
+		// so the main plan, the irregular-index maintenance, and the row-scoped
+		// child→parent foreign-key check can all read it. The dedup PK is immutable,
+		// so old index entries (and the FK columns) are keyed by the same PK.
+		//
+		// The FK check runs over this final image (the statement's own rows), not a
+		// whole-table DetectSql, so it never false-positives on unrelated orphan rows
+		// (e.g. inserted earlier under FOREIGN_KEY_CHECKS=0) and its cost does not
+		// scale with table size. It is deferred to finishIrregularIndexMaintenance
+		// (post-createQuery) like the plain-INSERT FK check.
+		odkuNeedFkCheck, err := builder.modernInsertFkCheckEnabled(tableDef)
+		if err != nil {
+			return 0, err
+		}
+		if len(irregularIndexes) > 0 || odkuNeedFkCheck {
 			// ODKU cannot change the PK, so the stale entries are keyed by the same
 			// PK the final image carries at its natural position.
 			odkuPkPos, odkuPkTyp := getPkPos(tableDef, false)
@@ -2011,6 +2169,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				bindCtx, lastNodeID, finalProjTag, int32(odkuPkPos), odkuPkTyp,
 				irregularIndexes, tableDef, dmlCtx.objRefs[0])
 			selectNode = builder.qry.Nodes[lastNodeID]
+			builder.modernFkCheck = odkuNeedFkCheck
 		}
 	}
 

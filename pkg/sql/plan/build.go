@@ -101,11 +101,12 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 		return nil, err
 	}
 
-	// Enforce foreign key constraints for the modern insert path. Plain INSERT does
-	// the child→parent parent-existence check in-plan (row-scoped, see
-	// modernInsertFkCheckEnabled), so only self-referencing FKs need a post-execution
-	// DetectSql. ON DUPLICATE KEY UPDATE has no row-scoped in-plan check, so it keeps
-	// the whole-table DetectSqls (child→parent + self-refer) instead.
+	// Enforce foreign key constraints for the modern insert path. The child→parent
+	// parent-existence check is row-scoped and in-plan for every conflict action:
+	// plain INSERT / ON DUPLICATE KEY UPDATE assert over the materialized image (see
+	// modernInsertFkCheckEnabled / appendForeignConstrantPlan), and INSERT IGNORE
+	// drops the offending rows (see buildInsertIgnoreFkFilter). Only self-referencing
+	// FKs still need a post-execution DetectSql, generated here for all of them.
 	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, stmt.With, nil, "insert")
 	if err != nil {
 		return nil, err
@@ -116,14 +117,8 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 			return nil, err
 		}
 		if enabled {
-			var sqls []string
-			if len(stmt.OnDuplicateUpdate) > 0 {
-				sqls, err = genSqlsForCheckFKConstraints(ctx, tblInfo.objRef[0].SchemaName,
-					tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0].Cols, tblInfo.tableDefs[0].Fkeys)
-			} else {
-				sqls, err = genSqlsForCheckFKSelfRefer(ctx.GetContext(), tblInfo.objRef[0].SchemaName,
-					tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0].Cols, tblInfo.tableDefs[0].Fkeys)
-			}
+			sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(), tblInfo.objRef[0].SchemaName,
+				tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0].Cols, tblInfo.tableDefs[0].Fkeys)
 			if err != nil {
 				return nil, err
 			}

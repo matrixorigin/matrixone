@@ -1033,48 +1033,6 @@ func genSqlsForCheckFKSelfRefer(ctx context.Context,
 	return ret, nil
 }
 
-// genSqlsForCheckFKConstraints generates FK constraint checking SQLs for ALL
-// foreign keys of a table (both self-referencing and regular). The modern
-// insert path uses these as DetectSqls to enforce parent-existence, instead of
-// the legacy plan-side join check (appendForeignConstrantPlan).
-func genSqlsForCheckFKConstraints(compCtx CompilerContext, dbName, tblName string,
-	cols []*plan.ColDef, fkeys []*plan.ForeignKeyDef) ([]string, error) {
-	ret := make([]string, 0, len(fkeys))
-	for _, fkey := range fkeys {
-		if fkey.ForeignTbl == 0 {
-			// self refer: parent and child are the same table
-			sql, err := genSqlForCheckFKConstraints(compCtx.GetContext(), fkey, dbName, tblName, cols, dbName, tblName, cols)
-			if err != nil {
-				return nil, err
-			}
-			ret = append(ret, sql)
-			continue
-		}
-
-		parentObjRef, parentTableDef, err := compCtx.ResolveById(fkey.ForeignTbl, nil)
-		if err != nil {
-			return nil, err
-		}
-		if parentTableDef == nil {
-			return nil, moerr.NewInternalErrorf(compCtx.GetContext(), "parent table %d not found", fkey.ForeignTbl)
-		}
-		sql, err := genSqlForCheckFKConstraints(compCtx.GetContext(), fkey,
-			dbName, tblName, cols,
-			parentObjRef.SchemaName, parentTableDef.Name, parentTableDef.Cols)
-		if err != nil {
-			return nil, err
-		}
-		// Mark child→parent existence checks so the runtime reports the violation
-		// with the same internal-error-wrapped message the legacy in-plan assert
-		// produces ("internal error: Cannot add or update a child row: ..."),
-		// keeping the modern INSERT path consistent with the rest of FK
-		// enforcement. Self-referencing checks (handled above) keep the plain
-		// 1452 message, matching their long-standing behavior.
-		ret = append(ret, childFkCheckPrefix+sql)
-	}
-	return ret, nil
-}
-
 // genPreCheckSqlsForReplaceFKSelfRefer generates pre-check SQLs that verify
 // no other row references the PK values being replaced (parent→child safety).
 // These run BEFORE the REPLACE execution to enforce RESTRICT semantics.

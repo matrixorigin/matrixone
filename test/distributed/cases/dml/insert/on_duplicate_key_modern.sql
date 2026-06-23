@@ -231,3 +231,43 @@ select id, body, v from t_odku_prefix order by id;
 insert into t_odku_prefix values (3, 'wxyzzzzz', 30) on duplicate key update v = v + 100;
 select id, body, v from t_odku_prefix order by id;
 drop table if exists t_odku_prefix;
+
+-- ---------------------------------------------------------------------------
+-- Modern child→parent foreign-key handling is row-scoped (validates only the
+-- statement's own rows), so it neither false-positives on unrelated orphan rows
+-- nor scales with table size.
+-- ---------------------------------------------------------------------------
+drop table if exists t_odku_fk_child;
+drop table if exists t_odku_fk_parent;
+create table t_odku_fk_parent(pid int primary key, pname varchar(20));
+create table t_odku_fk_child(cid int primary key, pid int, val int, foreign key(pid) references t_odku_fk_parent(pid));
+insert into t_odku_fk_parent values (1, 'P1'), (2, 'P2');
+insert into t_odku_fk_child values (1, 1, 100);
+-- seed an unrelated orphan row under FOREIGN_KEY_CHECKS=0 (pid=99 has no parent)
+set foreign_key_checks=0;
+insert into t_odku_fk_child values (2, 99, 200);
+set foreign_key_checks=1;
+-- ODKU on the valid row (cid=1) must succeed: it validates only this statement's
+-- final row image, not the whole table, so the pre-existing orphan is ignored.
+insert into t_odku_fk_child values (1, 1, 5) on duplicate key update val = val + 1;
+select cid, pid, val from t_odku_fk_child order by cid;
+-- ODKU that updates the FK column to a non-existent parent must still fail.
+insert into t_odku_fk_child values (1, 1, 5) on duplicate key update pid = 999;
+-- a genuine insert referencing a missing parent must still fail.
+insert into t_odku_fk_child values (3, 888, 1) on duplicate key update val = val + 1;
+select cid, pid, val from t_odku_fk_child order by cid;
+drop table if exists t_odku_fk_child;
+drop table if exists t_odku_fk_parent;
+
+-- INSERT IGNORE on a child table drops the rows whose parent does not exist
+-- (MySQL row-skip semantics) instead of failing the whole statement.
+drop table if exists t_ign_fk_child;
+drop table if exists t_ign_fk_parent;
+create table t_ign_fk_parent(pid int primary key, pname varchar(20));
+create table t_ign_fk_child(cid int primary key, pid int, foreign key(pid) references t_ign_fk_parent(pid));
+insert into t_ign_fk_parent values (1, 'P1'), (2, 'P2'), (3, 'P3');
+-- pid=4 has no parent and is skipped; pid=NULL satisfies the constraint and is kept.
+insert ignore into t_ign_fk_child values (10, 1), (11, 2), (12, 4), (13, 1), (14, NULL);
+select cid, pid from t_ign_fk_child order by cid;
+drop table if exists t_ign_fk_child;
+drop table if exists t_ign_fk_parent;
