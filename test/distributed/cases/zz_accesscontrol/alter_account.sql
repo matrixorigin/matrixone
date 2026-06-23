@@ -152,6 +152,11 @@ grant all on account * to al_role2;
 grant al_role2 to al_user_2;
 create account if not exists test ADMIN_NAME '123ERTYU' IDENTIFIED BY '123ERTYU' comment 'account comment';
 -- @session:id=5&user=sys:al_user_2:al_role2&password=123456
+create account account_all_created ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+drop account account_all_created;
+create account account_all_upgrade ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+upgrade account 'account_all_upgrade';
+drop account account_all_upgrade;
 alter account test admin_name='adminuser'  IDENTIFIED BY '123456';
 alter account test comment 'ccccccc';
 alter account test suspend;

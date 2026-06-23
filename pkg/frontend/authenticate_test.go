@@ -832,6 +832,41 @@ func Test_determineCreateAccount(t *testing.T) {
 		convey.So(ok, convey.ShouldBeFalse)
 	})
 
+	convey.Convey("sys account all can drop account", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.DropAccount{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        sysAccountName,
+			User:          "mocadmin",
+			DefaultRole:   "mocadmin_role",
+			TenantID:      sysAccountID,
+			UserID:        2,
+			DefaultRoleID: 2,
+		})
+
+		sql2result := map[string]ExecResult{
+			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
+				{2, false},
+			}),
+			getSqlForCheckRoleHasAccountLevelForStarWithSysScope(2, PrivilegeTypeDropAccount, true): newMrsForCheckRoleHasPrivilege([][]interface{}{
+				{PrivilegeTypeAccountAll, false},
+			}),
+		}
+
+		bh := newBh(ctrl, sql2result)
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
 	convey.Convey("sys account all can upgrade account", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
