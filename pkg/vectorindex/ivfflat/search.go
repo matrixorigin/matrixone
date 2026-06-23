@@ -453,8 +453,9 @@ func sortAndLimitExactResults(
 	distances []float64,
 	includeCols []string,
 	includeData map[string][]any,
+	includeNulls map[string][]bool,
 	limit uint,
-) ([]any, []float64, map[string][]any) {
+) ([]any, []float64, map[string][]any, map[string][]bool) {
 	if len(keys) <= 1 {
 		if limit > 0 && len(keys) > int(limit) {
 			keys = keys[:limit]
@@ -464,8 +465,13 @@ func sortAndLimitExactResults(
 					includeData[col] = includeData[col][:limit]
 				}
 			}
+			if includeNulls != nil {
+				for _, col := range includeCols {
+					includeNulls[col] = includeNulls[col][:limit]
+				}
+			}
 		}
-		return keys, distances, includeData
+		return keys, distances, includeData, includeNulls
 	}
 
 	order := make([]int, len(keys))
@@ -489,6 +495,13 @@ func sortAndLimitExactResults(
 			sortedInclude[col] = make([]any, 0, limit)
 		}
 	}
+	var sortedNulls map[string][]bool
+	if includeNulls != nil {
+		sortedNulls = make(map[string][]bool, len(includeCols))
+		for _, col := range includeCols {
+			sortedNulls[col] = make([]bool, 0, limit)
+		}
+	}
 
 	for _, idx := range order[:limit] {
 		sortedKeys = append(sortedKeys, keys[idx])
@@ -498,9 +511,14 @@ func sortAndLimitExactResults(
 				sortedInclude[col] = append(sortedInclude[col], includeData[col][idx])
 			}
 		}
+		if sortedNulls != nil {
+			for _, col := range includeCols {
+				sortedNulls[col] = append(sortedNulls[col], includeNulls[col][idx])
+			}
+		}
 	}
 
-	return sortedKeys, sortedDistances, sortedInclude
+	return sortedKeys, sortedDistances, sortedInclude, sortedNulls
 }
 
 func exactResultLimit(sqlproc *sqlexec.SqlProcess, fallback uint) uint {
@@ -584,8 +602,10 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		if rt.IncludeResult != nil {
 			rt.IncludeResult.ColNames = append(rt.IncludeResult.ColNames[:0], includeCols...)
 			rt.IncludeResult.Data = make(map[string][]any, len(includeCols))
+			rt.IncludeResult.Nulls = make(map[string][]bool, len(includeCols))
 			for _, col := range includeCols {
 				rt.IncludeResult.Data[col] = make([]any, 0, roundLimit)
+				rt.IncludeResult.Nulls[col] = make([]bool, 0, roundLimit)
 			}
 		}
 
@@ -655,7 +675,14 @@ func (idx *IvfflatSearchIndex[T]) Search(
 
 				if rt.IncludeResult != nil {
 					for j, col := range includeCols {
-						rt.IncludeResult.Data[col] = append(rt.IncludeResult.Data[col], vector.GetAny(bat.Vecs[2+j], i, true))
+						includeVec := bat.Vecs[2+j]
+						isNull := includeVec.IsNull(uint64(i))
+						rt.IncludeResult.Nulls[col] = append(rt.IncludeResult.Nulls[col], isNull)
+						if isNull {
+							rt.IncludeResult.Data[col] = append(rt.IncludeResult.Data[col], nil)
+							continue
+						}
+						rt.IncludeResult.Data[col] = append(rt.IncludeResult.Data[col], vector.GetAny(includeVec, i, true))
 					}
 				}
 			}
@@ -663,14 +690,18 @@ func (idx *IvfflatSearchIndex[T]) Search(
 
 		if sqlproc != nil && sqlproc.ExactPkFilter != "" {
 			var sortedInclude map[string][]any
+			var sortedNulls map[string][]bool
 			exactLimit := exactResultLimit(sqlproc, roundLimit)
 			var includeData map[string][]any
+			var includeNulls map[string][]bool
 			if rt.IncludeResult != nil {
 				includeData = rt.IncludeResult.Data
+				includeNulls = rt.IncludeResult.Nulls
 			}
-			resid, distances, sortedInclude = sortAndLimitExactResults(resid, distances, includeCols, includeData, exactLimit)
+			resid, distances, sortedInclude, sortedNulls = sortAndLimitExactResults(resid, distances, includeCols, includeData, includeNulls, exactLimit)
 			if rt.IncludeResult != nil {
 				rt.IncludeResult.Data = sortedInclude
+				rt.IncludeResult.Nulls = sortedNulls
 			}
 		}
 
@@ -792,7 +823,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 
 	if sqlproc != nil && sqlproc.ExactPkFilter != "" {
 		exactLimit := exactResultLimit(sqlproc, rt.Limit)
-		resid, distances, _ = sortAndLimitExactResults(resid, distances, nil, nil, exactLimit)
+		resid, distances, _, _ = sortAndLimitExactResults(resid, distances, nil, nil, nil, exactLimit)
 	}
 
 	return resid, distances, nil
