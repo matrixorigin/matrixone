@@ -910,13 +910,19 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					alterIndex = indexdef
 					alterIndex.Visible = tableAlterIndex.Visible
 					oTableDef.Indexes[i].Visible = tableAlterIndex.Visible
-					// update the index visibility in mo_catalog.mo_indexes
+					// update the index visibility in mo_catalog.mo_indexes.
+					// Escape the index name the same as the AUTO_UPDATE / REINDEX
+					// branches: it is user-supplied and a backticked identifier may
+					// contain single quotes or backslashes (the scanner still treats
+					// backslash as an escape inside '...'), which could corrupt or
+					// break out of name = '...'.
 					var updateSql string
+					visible := 0
 					if alterIndex.Visible {
-						updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, 1, oTableDef.TblId, indexdef.IndexName)
-					} else {
-						updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, 0, oTableDef.TblId, indexdef.IndexName)
+						visible = 1
 					}
+					updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, visible, oTableDef.TblId,
+						sqlquote.EscapeString(indexdef.IndexName))
 					if err = c.runSqlWithOptions(
 						updateSql, executor.StatementOption{}.WithDisableLog(),
 					); err != nil {
