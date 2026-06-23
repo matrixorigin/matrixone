@@ -17,6 +17,8 @@ package catalog
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/bytedance/sonic"
@@ -121,6 +123,8 @@ const (
 	IndexAlgoParamKmeansTrainPercent = "kmeans_train_percent"
 	IndexAlgoParamKmeansMaxIteration = "kmeans_max_iteration"
 	IndexAlgoParamMaxIndexCapacity   = "max_index_capacity"
+
+	IndexAlgoParamPrefixLengths = "prefix_lengths"
 )
 
 /* 1. ToString Functions */
@@ -254,6 +258,90 @@ func IndexParamsMapToJsonString(res map[string]string) (string, error) {
 		return "", err
 	}
 	return string(str), nil
+}
+
+func AddIndexPrefixLengthsToParams(indexParams string, keyParts []*tree.KeyPart) (string, error) {
+	prefixLengths := IndexPrefixLengthsToString(keyParts)
+	if prefixLengths == "" {
+		return indexParams, nil
+	}
+
+	params := make(map[string]string)
+	if indexParams != "" {
+		existing, err := IndexParamsStringToMap(indexParams)
+		if err != nil {
+			return "", err
+		}
+		params = existing
+	}
+	params[IndexAlgoParamPrefixLengths] = prefixLengths
+	return IndexParamsMapToJsonString(params)
+}
+
+func IndexPrefixLengthsToString(keyParts []*tree.KeyPart) string {
+	if len(keyParts) == 0 {
+		return ""
+	}
+
+	prefixLengths := make(map[string]int, len(keyParts))
+	for _, keyPart := range keyParts {
+		if keyPart == nil || keyPart.ColName == nil || keyPart.Length <= 0 {
+			continue
+		}
+		prefixLengths[keyPart.ColName.ColName()] = keyPart.Length
+	}
+	if len(prefixLengths) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(prefixLengths))
+	for part := range prefixLengths {
+		parts = append(parts, part)
+	}
+	sort.Strings(parts)
+
+	encoded := make([]string, 0, len(parts))
+	for _, part := range parts {
+		encoded = append(encoded, fmt.Sprintf("%s:%d", part, prefixLengths[part]))
+	}
+	return strings.Join(encoded, ",")
+}
+
+func IndexPrefixLengthsFromParams(indexParams string) map[string]int {
+	prefixLengths, err := IndexPrefixLengthsFromParamsWithError(indexParams)
+	if err != nil {
+		return nil
+	}
+	return prefixLengths
+}
+
+func IndexPrefixLengthsFromParamsWithError(indexParams string) (map[string]int, error) {
+	if indexParams == "" {
+		return nil, nil
+	}
+	params, err := IndexParamsStringToMap(indexParams)
+	if err != nil {
+		return nil, err
+	}
+
+	encoded := params[IndexAlgoParamPrefixLengths]
+	if encoded == "" {
+		return nil, nil
+	}
+
+	prefixLengths := make(map[string]int)
+	for _, item := range strings.Split(encoded, ",") {
+		part, lengthText, ok := strings.Cut(item, ":")
+		if !ok || part == "" || lengthText == "" {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid index prefix length item %q", item)
+		}
+		length, err := strconv.Atoi(lengthText)
+		if err != nil || length <= 0 {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid index prefix length %q", item)
+		}
+		prefixLengths[part] = length
+	}
+	return prefixLengths, nil
 }
 
 /* 2. ToMap Functions */

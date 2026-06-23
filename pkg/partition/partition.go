@@ -166,6 +166,14 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		return genericPartition[types.Decimal64](sels, diffs, partitions, vec)
 	case types.T_decimal128:
 		return genericPartition[types.Decimal128](sels, diffs, partitions, vec)
+	case types.T_decimal256:
+		return genericPartition[types.Decimal256](sels, diffs, partitions, vec)
+	case types.T_TS:
+		return genericPartition[types.TS](sels, diffs, partitions, vec)
+	case types.T_Rowid:
+		return genericPartition[types.Rowid](sels, diffs, partitions, vec)
+	case types.T_Blockid:
+		return genericPartition[types.Blockid](sels, diffs, partitions, vec)
 	case types.T_char, types.T_varchar, types.T_json, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64,
