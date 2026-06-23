@@ -52,6 +52,7 @@ type ivfSearchState struct {
 	// includeData stays keyed by column name for round-merge lookups and test
 	// assertions; output order still comes from includeColumns, not map iteration.
 	includeData          map[string][]any
+	includeNulls         map[string][]bool
 	pushdownFilterSQL    string
 	seenPK               map[string]struct{}
 	cursor               *vectorindex.IvfSearchCursor
@@ -104,6 +105,7 @@ func (u *ivfSearchState) reset(tf *TableFunction, proc *process.Process) {
 	u.keys = nil
 	u.distances = nil
 	u.includeData = nil
+	u.includeNulls = nil
 	u.seenPK = nil
 	u.cursor = nil
 	// Note: bloomFilter is kept across resets as it's only set once during initialization
@@ -150,7 +152,13 @@ func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.Call
 		vector.AppendAny(u.batch.Vecs[0], u.keys[u.offset], false, proc.Mp())
 		vector.AppendFixed(u.batch.Vecs[1], u.distances[u.offset], false, proc.Mp())
 		for i, col := range u.includeColumns {
-			vector.AppendAny(u.batch.Vecs[2+i], u.includeData[col][u.offset], false, proc.Mp())
+			isNull := false
+			if u.includeNulls != nil {
+				if nulls, ok := u.includeNulls[col]; ok && u.offset < len(nulls) {
+					isNull = nulls[u.offset]
+				}
+			}
+			vector.AppendAny(u.batch.Vecs[2+i], u.includeData[col][u.offset], isNull, proc.Mp())
 		}
 		u.offset++
 		n++
@@ -175,6 +183,7 @@ func (u *ivfSearchState) free(tf *TableFunction, proc *process.Process, pipeline
 	u.keys = nil
 	u.distances = nil
 	u.includeData = nil
+	u.includeNulls = nil
 	u.cursor = nil
 	u.seenPK = nil
 }
@@ -351,8 +360,10 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 	u.keys = nil
 	u.distances = nil
 	u.includeData = make(map[string][]any, len(u.includeColumns))
+	u.includeNulls = make(map[string][]bool, len(u.includeColumns))
 	for _, col := range u.includeColumns {
 		u.includeData[col] = nil
+		u.includeNulls[col] = nil
 	}
 	u.seenPK = make(map[string]struct{})
 	u.searchRoundLimit = u.baseSearchRoundLimit
@@ -429,6 +440,7 @@ func (u *ivfSearchState) fetchNextRound(tf *TableFunction, proc *process.Process
 		u.distances = nil
 		for _, col := range u.includeColumns {
 			u.includeData[col] = nil
+			u.includeNulls[col] = nil
 		}
 		u.offset = 0
 		return nil
@@ -528,12 +540,22 @@ func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchStat
 				len(includeResult.Data[col]),
 			)
 		}
+		if includeResult.Nulls != nil && len(includeResult.Nulls[col]) != len(keySlice) {
+			return moerr.NewInternalErrorf(
+				proc.Ctx,
+				"ivf_search: include nulls length mismatch for column %s: keys=%d, nulls=%d",
+				col,
+				len(keySlice),
+				len(includeResult.Nulls[col]),
+			)
+		}
 	}
 
 	u.keys = u.keys[:0]
 	u.distances = u.distances[:0]
 	for _, col := range u.includeColumns {
 		u.includeData[col] = u.includeData[col][:0]
+		u.includeNulls[col] = u.includeNulls[col][:0]
 	}
 	u.offset = 0
 
@@ -547,6 +569,11 @@ func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchStat
 		u.distances = append(u.distances, distances[i])
 		for _, col := range u.includeColumns {
 			u.includeData[col] = append(u.includeData[col], includeResult.Data[col][i])
+			isNull := false
+			if includeResult.Nulls != nil {
+				isNull = includeResult.Nulls[col][i]
+			}
+			u.includeNulls[col] = append(u.includeNulls[col], isNull)
 		}
 	}
 
