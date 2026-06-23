@@ -170,23 +170,28 @@ func (s *serverConn) HandleHandshake(
 	ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseHandleHandshake)
 	defer cancel()
 
-	var r *frontend.Packet
-	var err error
-	ch := make(chan struct{})
+	type result struct {
+		resp *frontend.Packet
+		err  error
+	}
+	// Buffered so a worker that finishes after the caller has timed out can
+	// still publish its result and exit, rather than blocking forever on send.
+	resultC := make(chan result, 1)
 	go func() {
 		// Step 1, read initial handshake from CN server.
-		if err = s.readInitialHandshake(); err != nil {
+		if err := s.readInitialHandshake(); err != nil {
+			resultC <- result{err: err}
 			return
 		}
 		// Step 2, write the handshake response to CN server, which is
 		// received from client earlier.
-		r, err = s.writeHandshakeResp(handshakeResp)
-		ch <- struct{}{}
+		resp, err := s.writeHandshakeResp(handshakeResp)
+		resultC <- result{resp: resp, err: err}
 	}()
 
 	select {
-	case <-ch:
-		return r, err
+	case ret := <-resultC:
+		return ret.resp, ret.err
 	case <-ctx.Done():
 		logutil.Errorf("handshake to cn %s timeout %v, conn ID: %d goId:%d",
 			s.cnServer.addr, timeout, s.connID, goid.Get())
@@ -330,6 +335,12 @@ func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IO
 	if err != nil {
 		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, goId: %d, error: %v",
 			timeout, s.connID, s.addr, goid.Get(), err)
+		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			return nil, newTimeoutConnectErr(err)
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, newTimeoutConnectErr(err)
+		}
 		return nil, newConnectErr(err)
 	}
 	if len(s.salt) != 20 {
