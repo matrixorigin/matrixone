@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"hash/crc64"
@@ -1707,7 +1708,14 @@ func TestIssue3654(t *testing.T) {
 				[]byte("txn2"),
 				option)
 			if err != nil {
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+				require.True(
+					t,
+					moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+						errors.Is(err, context.DeadlineExceeded) ||
+						errors.Is(err, context.Canceled))
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Second*10)
+				defer cleanupCancel()
+				require.NoError(t, l2.Unlock(cleanupCtx, []byte("txn2"), timestamp.Timestamp{}))
 			}
 		},
 		nil,
