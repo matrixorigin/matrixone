@@ -202,6 +202,10 @@ func (s *service) handleRemoteLock(
 		return
 	}
 
+	if s.option.beforeRemoteLockBindCheck != nil {
+		s.option.beforeRemoteLockBindCheck()
+	}
+
 	s.bindChangeMu.RLock()
 	bind := l.getBind()
 	current := s.tableGroups.get(bind.Group, bind.Table)
