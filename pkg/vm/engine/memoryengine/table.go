@@ -335,6 +335,7 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 					if err != nil {
 						logutil.Errorf("memory-engine error: unmarshal table check constraint information: %s-%s, err: %v",
 							t.databaseName, t.tableName, err)
+						return nil
 					}
 					properties = append(properties, visibleConfigs...)
 					checks = append(checks, checkDefs...)

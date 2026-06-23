@@ -1517,6 +1517,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 					if err != nil {
 						logutil.Errorf("txn-table error: unmarshal table check constraint information: %s-%s, err: %v",
 							tbl.db.databaseName, tbl.tableName, err)
+						return nil
 					}
 					properties = append(properties, visibleConfigs...)
 					checks = append(checks, checkDefs...)

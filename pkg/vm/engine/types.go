@@ -132,6 +132,7 @@ func UnmarshalCheckConstraints(value string) ([]*plan.CheckDef, error) {
 func SplitCheckConstraintsFromConfigs(configs []*plan.Property) ([]*plan.Property, []*plan.CheckDef, error) {
 	visibleConfigs := make([]*plan.Property, 0, len(configs))
 	var checks []*plan.CheckDef
+	var firstErr error
 	for _, config := range configs {
 		if config.Key != CheckConstraintsConfigKey {
 			visibleConfigs = append(visibleConfigs, config)
@@ -139,9 +140,15 @@ func SplitCheckConstraintsFromConfigs(configs []*plan.Property) ([]*plan.Propert
 		}
 		decodedChecks, err := UnmarshalCheckConstraints(config.Value)
 		if err != nil {
-			return visibleConfigs, nil, err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 		checks = append(checks, decodedChecks...)
+	}
+	if firstErr != nil {
+		return visibleConfigs, checks, firstErr
 	}
 	return visibleConfigs, checks, nil
 }

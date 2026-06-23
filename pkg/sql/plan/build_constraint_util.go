@@ -156,10 +156,12 @@ func getProjectionByLastNodeIfAvailable(builder *QueryBuilder, lastNodeID int32)
 	if len(lastNode.ProjectList) > 0 {
 		return getProjectionByLastNode(builder, lastNodeID)
 	}
-	if len(lastNode.Children) == 0 {
-		return nil
+	for _, childID := range lastNode.Children {
+		if projection := getProjectionByLastNodeIfAvailable(builder, childID); len(projection) > 0 {
+			return projection
+		}
 	}
-	return getProjectionByLastNodeIfAvailable(builder, lastNode.Children[0])
+	return nil
 }
 
 func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, error) {
