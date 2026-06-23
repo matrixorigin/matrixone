@@ -306,4 +306,10 @@ select * from t_replace_check order by id;
 id    v
 1    10
 2    null
+update t_replace_check set v = -3 where id = 1;
+constraint violation: Check constraint '__mo_chk_1' is violated
+select * from t_replace_check order by id;
+id    v
+1    10
+2    null
 drop table t_replace_check;

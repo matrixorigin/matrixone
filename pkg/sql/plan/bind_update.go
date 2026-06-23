@@ -1023,6 +1023,24 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	}
 
 	finalProjNode.ProjectList = finalProjList
+	for i, tableDef := range dmlCtx.tableDefs {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 || len(tableDef.Checks) == 0 {
+			continue
+		}
+
+		alias := dmlCtx.aliases[i]
+		checkColName2Idx := make(map[string]int32, len(tableDef.Cols))
+		for _, col := range tableDef.Cols {
+			if colPos, ok := finalColName2Idx[alias+"."+col.Name]; ok {
+				checkColName2Idx[tableDef.Name+"."+col.Name] = colPos
+			}
+		}
+
+		lastNodeID, err = appendCheckConstraintPlan(builder, bindCtx, tableDef, lastNodeID, finalProjTag, checkColName2Idx)
+		if err != nil {
+			return 0, err
+		}
+	}
 
 	dmlNode := &plan.Node{
 		NodeType:      plan.Node_MULTI_UPDATE,

@@ -159,11 +159,11 @@ func TestCheckConstraintAssertReturnsConstraintViolation(t *testing.T) {
 	require.Equal(t, CHECK_CONSTRAINT_ASSERT, fn.functionId)
 	op := fn.Overloads[0].newOp()
 
-	run := func(flag bool) error {
+	run := func(flag bool, nullList []bool) error {
 		tc := NewFunctionTestCase(
 			proc,
 			[]FunctionTestInput{
-				NewFunctionTestInput(types.T_bool.ToType(), []bool{flag}, nil),
+				NewFunctionTestInput(types.T_bool.ToType(), []bool{flag}, nullList),
 				NewFunctionTestConstInput(
 					types.T_varchar.ToType(),
 					[]string{"Check constraint '__mo_chk_1' is violated"},
@@ -178,9 +178,14 @@ func TestCheckConstraintAssertReturnsConstraintViolation(t *testing.T) {
 		return tc.fn(tc.parameters, tc.result, tc.proc, tc.fnLength, nil)
 	}
 
-	require.NoError(t, run(true))
+	require.NoError(t, run(true, nil))
 
-	err := run(false)
+	err := run(false, nil)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation), "unexpected error: %v", err)
+	require.Contains(t, err.Error(), "Check constraint '__mo_chk_1' is violated")
+
+	err = run(false, []bool{true})
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation), "unexpected error: %v", err)
 	require.Contains(t, err.Error(), "Check constraint '__mo_chk_1' is violated")

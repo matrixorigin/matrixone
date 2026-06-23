@@ -248,4 +248,6 @@ replace into t_replace_check values (2, null);
 select * from t_replace_check order by id;
 insert into t_replace_check values (3, -3);
 select * from t_replace_check order by id;
+update t_replace_check set v = -3 where id = 1;
+select * from t_replace_check order by id;
 drop table t_replace_check;

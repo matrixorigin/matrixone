@@ -1639,6 +1639,34 @@ func TestInsertPlanChecksTableCheckConstraints(t *testing.T) {
 	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "INSERT")
 }
 
+func TestUpdatePlanChecksTableCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+
+	logicPlan, err := runOneStmt(mock, t, "UPDATE single_idx_t SET val = -1 WHERE id = 1")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "UPDATE")
+}
+
+func TestSubstituteColRefsInExprSkipsNilProjection(t *testing.T) {
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_Rowid)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 1,
+				Name:   catalog.Row_ID,
+			},
+		},
+	}
+
+	got := substituteColRefsInExpr(expr, []*plan.Expr{MakePlan2Int32ConstExprWithType(1), nil}, 0)
+	assert.Same(t, expr, got)
+}
+
 func addSingleIdxTPositiveCheck(t *testing.T, mock *MockOptimizer) {
 	t.Helper()
 	tableDef := mock.ctxt.tables["single_idx_t"]
