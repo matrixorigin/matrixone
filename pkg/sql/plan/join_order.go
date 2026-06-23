@@ -490,10 +490,13 @@ func unsetParent(child, parent int32, vertices []*joinVertex) {
 }
 
 func findSelectivityInChildren(self int32, vertices []*joinVertex) bool {
-	return findSelectivityInChildrenWithVisited(self, vertices, make(map[int32]bool, len(vertices)))
+	return findSelectivityInChildrenWithVisited(self, vertices, make([]bool, len(vertices)))
 }
 
-func findSelectivityInChildrenWithVisited(self int32, vertices []*joinVertex, visited map[int32]bool) bool {
+func findSelectivityInChildrenWithVisited(self int32, vertices []*joinVertex, visited []bool) bool {
+	if !validVertex(self, vertices) {
+		return false
+	}
 	if visited[self] {
 		return false
 	}
@@ -510,8 +513,11 @@ func findSelectivityInChildrenWithVisited(self int32, vertices []*joinVertex, vi
 }
 
 func findParent(self, target int32, vertices []*joinVertex) bool {
-	visited := make(map[int32]bool, len(vertices))
+	visited := make([]bool, len(vertices))
 	for self != -1 {
+		if !validVertex(self, vertices) {
+			return false
+		}
 		if visited[self] {
 			return false
 		}
@@ -524,6 +530,10 @@ func findParent(self, target int32, vertices []*joinVertex) bool {
 		self = parent
 	}
 	return false
+}
+
+func validVertex(id int32, vertices []*joinVertex) bool {
+	return id >= 0 && int(id) < len(vertices)
 }
 
 func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinVertex) bool {
