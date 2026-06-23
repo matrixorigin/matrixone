@@ -47,6 +47,15 @@ func TestJoinGraphWalksTerminateOnExistingCycle(t *testing.T) {
 	require.False(t, findSelectivityInChildren(1, vertices))
 }
 
+func TestJoinGraphWalksIgnoreInvalidVertexIDs(t *testing.T) {
+	vertices := makeJoinVertices(2)
+	vertices[0].parent = 3
+	vertices[0].children[3] = true
+
+	require.False(t, findParent(0, 1, vertices))
+	require.False(t, findSelectivityInChildren(0, vertices))
+}
+
 func makeJoinVertices(n int) []*joinVertex {
 	vertices := make([]*joinVertex, n)
 	for i := range vertices {
