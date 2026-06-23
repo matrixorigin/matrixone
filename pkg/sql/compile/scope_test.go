@@ -882,6 +882,73 @@ func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 	require.Equal(t, map[int32]bool{0: true, 1: true, 2: true}, seen)
 }
 
+func TestCompileExternScanParquetLoadUsesRowGroupFanoutWithEmptyFiles(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	dir := t.TempDir()
+	emptyData := writeCompileInt32ParquetWithRowGroups(t, nil, 2)
+	data := writeCompileInt32ParquetWithRowGroups(t, []int32{0, 1, 2, 3}, 2)
+	emptyFile := filepath.Join(dir, "part-0.parquet")
+	dataFile := filepath.Join(dir, "part-1.parquet")
+	require.NoError(t, os.WriteFile(emptyFile, emptyData, 0o600))
+	require.NoError(t, os.WriteFile(dataFile, data, 0o600))
+	pattern := filepath.Join(dir, "part-*.parquet")
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: pattern,
+			Format:   tree.PARQUET,
+			FileSize: int64(len(emptyData) + len(data)),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_LOAD),
+			Parallel:   true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	node := &plan.Node{
+		Stats: &plan.Stats{Cost: float64(len(emptyData) + len(data)), Rowsize: 1},
+		TableDef: &plan.TableDef{
+			Createsql: string(createSQL),
+		},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	ss, err := testCompile.compileExternScan(node)
+	require.NoError(t, err)
+	require.Len(t, ss, 2)
+
+	seen := make(map[int32]bool)
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		ext := scope.RootOp.(*external.External)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.Equal(t, []string{dataFile}, ext.Es.FileList)
+		require.NotEmpty(t, ext.Es.ParquetRowGroupShards)
+		for _, shard := range ext.Es.ParquetRowGroupShards {
+			require.Equal(t, int32(0), shard.FileIndex)
+			for rowGroupIdx := shard.RowGroupStart; rowGroupIdx < shard.RowGroupEnd; rowGroupIdx++ {
+				seen[rowGroupIdx] = true
+			}
+		}
+	}
+	require.Equal(t, map[int32]bool{0: true, 1: true}, seen)
+}
+
 func TestCompileExternScanParquetLoadUsesFileFanoutMainPath(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.addr = "cn1:6001"

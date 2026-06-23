@@ -1910,7 +1910,7 @@ func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 		logutil.Debugf("parquet load footer metadata: files=%d row_groups=%d rows=%d read_calls=%d read_bytes=%d duration=%s",
 			footerStats.Files, footerStats.RowGroups, footerStats.Rows,
 			footerStats.ReadCalls, footerStats.ReadBytes, footerStats.Duration)
-		if footerStats.RowGroups > len(fileList) {
+		if footerStats.RowGroups > parquetRowGroupFileCount(rowGroups) {
 			return c.compileExternScanParquetRowGroupFanout(node, param, fileList, fileSize, rowGroups, strictSqlMode)
 		}
 		if len(fileList) > 1 {
@@ -2463,6 +2463,14 @@ func parquetRowGroupLoad(meta parquetRowGroupMeta) int64 {
 		return meta.numRows
 	}
 	return 1
+}
+
+func parquetRowGroupFileCount(rowGroups []parquetRowGroupMeta) int {
+	files := make(map[int32]struct{})
+	for _, meta := range rowGroups {
+		files[meta.fileIndex] = struct{}{}
+	}
+	return len(files)
 }
 
 func hiveFileSizeAt(fileSize []int64, idx int) int64 {

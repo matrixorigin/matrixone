@@ -510,6 +510,27 @@ func requireLoadByteHint(t *testing.T, stats *Stats, inputSize int64) {
 	require.Less(t, estimatedBytes, float64(inputSize)+stats.Rowsize)
 }
 
+func TestFinalizeLoadParallelFlagsAfterSmallFileDowngrade(t *testing.T) {
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{FileSize: int64(LoadParallelMinSize) - 1},
+		ExParam: tree.ExParam{
+			Parallel:              true,
+			ParallelLoadRequested: true,
+		},
+	}
+	finalizeLoadParallelFlags(param, 0)
+	require.False(t, param.Parallel)
+	require.False(t, param.ParallelLoadRequested)
+
+	param = &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{FileSize: int64(LoadParallelMinSize)},
+		ExParam:      tree.ExParam{Parallel: true},
+	}
+	finalizeLoadParallelFlags(param, 0)
+	require.True(t, param.Parallel)
+	require.True(t, param.ParallelLoadRequested)
+}
+
 func TestLoadParquetMayListFiles(t *testing.T) {
 	require.True(t, loadParquetMayListFiles(&tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
