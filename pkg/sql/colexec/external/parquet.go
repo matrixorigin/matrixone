@@ -229,9 +229,12 @@ func newParquetColumnLookup(root *parquet.Column) parquetColumnLookup {
 }
 
 // find finds a column in the Parquet schema with case-insensitive matching.
-// It returns an ambiguity error if multiple columns match case-insensitively,
-// even when one of them is an exact match.
+// Exact matches win; otherwise it returns an ambiguity error if multiple
+// columns match case-insensitively.
 func (lookup parquetColumnLookup) find(ctx context.Context, name string) (*parquet.Column, error) {
+	if exactMatch := lookup.exact[name]; exactMatch != nil {
+		return exactMatch, nil
+	}
 	caseInsensitiveMatches := lookup.folded[strings.ToLower(name)]
 	// Check for ambiguity: multiple columns match case-insensitively
 	if len(caseInsensitiveMatches) > 1 {
@@ -240,10 +243,6 @@ func (lookup parquetColumnLookup) find(ctx context.Context, name string) (*parqu
 			name, caseInsensitiveMatches[0].Name(), caseInsensitiveMatches[1].Name())
 	}
 
-	// Return exact match if found, otherwise the single case-insensitive match
-	if exactMatch := lookup.exact[name]; exactMatch != nil {
-		return exactMatch, nil
-	}
 	if len(caseInsensitiveMatches) == 1 {
 		return caseInsensitiveMatches[0], nil
 	}
