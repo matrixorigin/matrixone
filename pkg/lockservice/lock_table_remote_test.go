@@ -167,6 +167,92 @@ func TestLockRemoteWithContextTimeoutTracksLockForUnlock(t *testing.T) {
 	)
 }
 
+func TestLockRemoteWithCanceledContextBeforeSendUnlocksHarmlessly(t *testing.T) {
+	bind := pb.LockTable{ServiceID: "s1", Valid: true}
+	lockCalled := make(chan struct{}, 1)
+	unlockCalled := make(chan struct{}, 1)
+	runRemoteLockTableTests(
+		t,
+		bind,
+		func(s Server) {
+			s.RegisterMethodHandler(
+				pb.Method_Lock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					lockCalled <- struct{}{}
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				},
+			)
+			s.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					resp.GetBind.LockTable = bind
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				},
+			)
+			s.RegisterMethodHandler(
+				pb.Method_Unlock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					unlockCalled <- struct{}{}
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				},
+			)
+		},
+		func(l *remoteLockTable, s Server) {
+			txnID := []byte("txn-canceled-before-send")
+			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
+			closed := false
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			txn.Lock()
+			defer func() {
+				txn.Unlock()
+				if !closed {
+					reuse.Free(txn, nil)
+				}
+			}()
+
+			l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
+				require.Error(t, err)
+			})
+			holder := txn.getHoldLocksLocked(l.bind.Group)
+			require.Contains(t, holder.tableKeys, l.bind.Table)
+			require.Contains(t, holder.tableBinds, l.bind.Table)
+
+			require.NoError(t, txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+				return l, nil
+			}, l.logger))
+			closed = true
+			select {
+			case <-unlockCalled:
+			case <-time.After(time.Second):
+				require.Fail(t, "expected harmless remote unlock for locally tracked canceled lock")
+			}
+			select {
+			case <-lockCalled:
+				require.Fail(t, "lock request should not be sent after caller context is already canceled")
+			default:
+			}
+		},
+		func(lt pb.LockTable) {},
+	)
+}
+
 func TestLockRemoteWithNeedUpgrade(t *testing.T) {
 	runRemoteLockTableTests(
 		t,
