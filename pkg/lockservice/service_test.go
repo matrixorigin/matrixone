@@ -3675,6 +3675,58 @@ func TestAllocatorObserverRejectsSupersededGetBindResponse(t *testing.T) {
 	)
 }
 
+func TestAllocatorPublishRejectsStaleBindAfterNewAllocatorObserved(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l1 := s[0]
+
+			oldAllocator := allocatorState{id: "old-allocator-publish", version: 100}
+			newAllocator := allocatorState{id: "new-allocator-publish", version: 90}
+			staleTable := uint64(21514)
+			staleBind := pb.LockTable{
+				Group:       0,
+				Table:       staleTable,
+				OriginTable: staleTable,
+				ServiceID:   l1.serviceID,
+				Version:     oldAllocator.version,
+				Valid:       true,
+				AllocatorID: oldAllocator.id,
+			}
+
+			l1.allocatorVersionMu.Lock()
+			l1.lastAllocatorID = oldAllocator.id
+			l1.lastAllocatorVersion = oldAllocator.version
+			l1.allocatorVersionMu.Unlock()
+			l1.tableGroups.set(0, staleTable, l1.createLockTableByBind(staleBind))
+			requestAllocator := l1.allocatorStateSnapshot()
+
+			_, accepted := l1.observeAllocatorStateWithHoldersFromSnapshot(
+				"allocator-publish-race-new",
+				newAllocator,
+				allocatorState{},
+				false,
+				l1.tableGroups)
+			require.True(t, accepted)
+			require.Nil(t, l1.tableGroups.get(0, staleTable))
+
+			lt, err := l1.publishLockTableBindFromAllocator(
+				"allocator-publish-race-old",
+				staleBind.Group,
+				staleBind.Table,
+				staleBind,
+				oldAllocator,
+				requestAllocator)
+			require.ErrorIs(t, err, ErrLockTableBindChanged)
+			require.Nil(t, lt)
+			require.Nil(t, l1.tableGroups.get(0, staleTable))
+			require.Equal(t, newAllocator.id, l1.lastAllocatorID)
+			require.Equal(t, newAllocator.version, l1.lastAllocatorVersion)
+		},
+	)
+}
+
 func TestAllocatorObserverBoundsSupersededAllocatorIDs(t *testing.T) {
 	runLockServiceTests(
 		t,

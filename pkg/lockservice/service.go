@@ -632,11 +632,35 @@ func (s *service) getLockTableWithCreate(
 		return nil, err
 	}
 
-	if _, accepted := s.observeAllocatorState("get-bind", allocator, requestAllocator); !accepted {
+	return s.publishLockTableBindFromAllocator(
+		"get-bind",
+		group,
+		tableID,
+		bind,
+		allocator,
+		requestAllocator)
+}
+
+func (s *service) publishLockTableBindFromAllocator(
+	source string,
+	group uint32,
+	tableID uint64,
+	bind pb.LockTable,
+	allocator allocatorState,
+	requestAllocator allocatorState,
+) (lockTable, error) {
+	s.allocatorVersionMu.Lock()
+	defer s.allocatorVersionMu.Unlock()
+
+	if _, accepted := s.observeAllocatorStateLocked(
+		source,
+		allocator,
+		requestAllocator,
+		true,
+		s.tableGroups); !accepted {
 		return nil, ErrLockTableBindChanged
 	}
-	v := s.tableGroups.set(group, tableID, s.createLockTableByBind(bind))
-	return v, nil
+	return s.tableGroups.set(group, tableID, s.createLockTableByBind(bind)), nil
 }
 
 func (s *service) handleBindChanged(newBind pb.LockTable) {
@@ -682,14 +706,6 @@ func (s *service) checkBindChangedBeforeLockSuccess(
 
 func (s *service) observeAllocatorVersion(source string, observedVersion uint64) int {
 	return s.observeAllocatorStateWithHolders(source, allocatorState{version: observedVersion}, s.tableGroups)
-}
-
-func (s *service) observeAllocatorState(
-	source string,
-	observed allocatorState,
-	requestAllocator allocatorState,
-) (int, bool) {
-	return s.observeAllocatorStateWithHoldersFromSnapshot(source, observed, requestAllocator, true, s.tableGroups)
 }
 
 func (s *service) observeAllocatorStateWithHolders(
