@@ -131,7 +131,15 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 	if err != nil {
 		return nil, err
 	}
-	if len(tblInfo.tableDefs) == 1 {
+	// FK checks/actions are all disabled when foreign_key_checks is off, the
+	// same way MySQL skips foreign-key enforcement. Gate every FK SQL below
+	// (self-referencing checks, the RESTRICT pre-check, and the non-self
+	// parent-side actions) under one guard so the behavior is consistent.
+	fkChecksEnabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if fkChecksEnabled && len(tblInfo.tableDefs) == 1 {
 		sqls, err := genSqlsForCheckFKSelfRefer(
 			ctx.GetContext(),
 			tblInfo.objRef[0].SchemaName,
@@ -165,25 +173,19 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		// delete-then-insert, so RESTRICT must reject the REPLACE and CASCADE /
 		// SET NULL must act on the children before the new row is inserted. All
 		// of these run before the main REPLACE execution (see compile.go).
-		fkChecksEnabled, err := IsForeignKeyChecksEnabled(ctx)
+		parentCheckSqls, parentActionSqls, err := genParentSideReplaceFKSqls(
+			ctx,
+			tblInfo.tableDefs[0],
+			stmt,
+		)
 		if err != nil {
 			return nil, err
 		}
-		if fkChecksEnabled {
-			parentCheckSqls, parentActionSqls, err := genParentSideReplaceFKSqls(
-				ctx,
-				tblInfo.tableDefs[0],
-				stmt,
-			)
-			if err != nil {
-				return nil, err
-			}
-			for _, sql := range parentCheckSqls {
-				query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_CHK:"+sql)
-			}
-			for _, sql := range parentActionSqls {
-				query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_ACTION:"+sql)
-			}
+		for _, sql := range parentCheckSqls {
+			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_CHK:"+sql)
+		}
+		for _, sql := range parentActionSqls {
+			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_ACTION:"+sql)
 		}
 	}
 

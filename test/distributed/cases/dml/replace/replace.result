@@ -337,3 +337,20 @@ id    pid
 10    null
 drop table fk_sc;
 drop table fk_sp;
+drop table if exists fk_mc;
+drop table if exists fk_mp;
+create table fk_mp(id int primary key, v varchar(20));
+create table fk_mc(id int primary key, pid int, foreign key(pid) references fk_mp(id) on delete cascade);
+insert into fk_mp values (1,'p1'),(2,'p2'),(3,'p3');
+insert into fk_mc values (10,1),(20,2),(30,3);
+replace into fk_mp values (1,'p1_new'),(2,'p2_new');
+select * from fk_mp order by id;
+id    v
+1    p1_new
+2    p2_new
+3    p3
+select * from fk_mc order by id;
+id    pid
+30    3
+drop table fk_mc;
+drop table fk_mp;

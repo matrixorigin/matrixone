@@ -1231,8 +1231,14 @@ func genParentSideReplaceFKSqls(
 		}
 	}
 
-	// Collect the literal PK values supplied by the REPLACE statement. Non-literal
-	// expressions make the whole REPLACE unsafe for value-based pre-checks.
+	// Collect the literal PK values supplied by the REPLACE statement. A
+	// non-literal expression (rand(), a prepared parameter, an arithmetic
+	// expression, ...) cannot be embedded into the background SQL because it
+	// would be re-evaluated and may not match the value REPLACE actually writes.
+	// Skip only that row rather than the whole statement: the remaining literal
+	// rows must still get their parent-side action, otherwise CASCADE / SET NULL
+	// would silently leave orphan child rows for the literal rows in a mixed
+	// VALUES list such as `(1,'a'),(rand(),'b')`.
 	pkPos, ok := colNameToPos[pkName]
 	if !ok {
 		return nil, nil, nil
@@ -1243,7 +1249,7 @@ func genParentSideReplaceFKSqls(
 			continue
 		}
 		if !isSimpleLiteralExpr(row[pkPos]) {
-			return nil, nil, nil
+			continue
 		}
 		pkVals = append(pkVals, tree.String(row[pkPos], dialect.MYSQL))
 	}

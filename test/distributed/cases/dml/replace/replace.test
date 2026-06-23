@@ -280,3 +280,16 @@ select * from fk_sp order by id;
 select * from fk_sc order by id;
 drop table fk_sc;
 drop table fk_sp;
+
+-- multi-row REPLACE: every conflicting parent row applies its child action (CASCADE)
+drop table if exists fk_mc;
+drop table if exists fk_mp;
+create table fk_mp(id int primary key, v varchar(20));
+create table fk_mc(id int primary key, pid int, foreign key(pid) references fk_mp(id) on delete cascade);
+insert into fk_mp values (1,'p1'),(2,'p2'),(3,'p3');
+insert into fk_mc values (10,1),(20,2),(30,3);
+replace into fk_mp values (1,'p1_new'),(2,'p2_new');
+select * from fk_mp order by id;
+select * from fk_mc order by id;
+drop table fk_mc;
+drop table fk_mp;
