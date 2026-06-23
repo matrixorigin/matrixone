@@ -61,6 +61,34 @@ func shouldEnableAlterCopyPipelineFlush(opt *plan.AlterCopyOpt) bool {
 	return opt != nil && opt.SkipPkDedup
 }
 
+func isAlterAffectedPluginIndex(indexDef *plan.IndexDef, affected []string) bool {
+	if indexDef == nil || len(affected) == 0 {
+		return false
+	}
+	if slices.Contains(affected, indexDef.IndexName) {
+		return true
+	}
+	for _, part := range indexDef.Parts {
+		if isAlterAffectedColumnName(affected, part) {
+			return true
+		}
+	}
+	for _, col := range indexDef.IncludedColumns {
+		if isAlterAffectedColumnName(affected, col) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAlterAffectedColumnName(affected []string, name string) bool {
+	if slices.Contains(affected, name) {
+		return true
+	}
+	resolved := catalog.ResolveAlias(name)
+	return resolved != name && slices.Contains(affected, resolved)
+}
+
 func alterCopyStatementOption(alterOpt *plan.AlterCopyOpt) executor.StatementOption {
 	opt := executor.StatementOption{}
 	if alterOpt != nil &&
@@ -503,17 +531,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		extra := newRel.GetExtraInfo()
 		id := newRel.GetTableID(c.proc.Ctx)
 
-		isAffectedIndex := func(indexDef *plan.IndexDef, affectedCols []string) bool {
-			affected := false
-			for _, part := range indexDef.Parts {
-				if slices.Index(affectedCols, part) != -1 {
-					affected = true
-					break
-				}
-			}
-			return affected
-		}
-
 		// cctx for the idxcron re-registration arm below — lazy-init,
 		// reused across loop iterations.
 		var idxcronCctx *pluginCompileCtx
@@ -527,7 +544,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			if !indexDef.Unique && indexplugin.IsPluginAlgo(indexDef.IndexAlgo) {
 				// vector (ivf/hnsw/cagra/ivfpq) or fulltext index
 
-				if !isAffectedIndex(indexDef, qry.AffectedCols) {
+				if !isAlterAffectedPluginIndex(indexDef, qry.AffectedCols) {
 					// column not affected means index already cloned in cloneUnaffectedIndexes()
 
 					if unaffectedIndexProcessed[indexDef.IndexName] {
@@ -1071,7 +1088,8 @@ func cloneUnaffectedIndexes(
 		// However, fulltext/hnsw/ivfflat index name is user-defined which is not related to column name so
 		// SkipIndexesCopy will always be true in these cases (UnAffectedIndex==true).
 		// Even SkipIndexesCopy is true, it does not mean it is really unaffected Index for fulltext/hnsw/ivfflat index.
-		// check the Parts to determine affected or not.  If unaffected index, try clone.  Otherwise, re-build the index
+		// check the plan-carried affected index name, Parts, and included columns to determine affected or not.
+		// If unaffected index, try clone.  Otherwise, re-build the index
 		if !skipIndexesCopy[idxTbl.IndexName] {
 			// This index is affected index, skip it
 			continue
@@ -1083,15 +1101,7 @@ func cloneUnaffectedIndexes(
 
 		affected := false
 		if !idxTbl.Unique && indexplugin.IsPluginAlgo(idxTbl.IndexAlgo) {
-			// only check parts for fulltext + vector (ivf/hnsw/cagra/ivfpq)
-
-			for _, part := range idxTbl.Parts {
-				if slices.Index(affectedCols, part) != -1 {
-					affected = true
-					break
-
-				}
-			}
+			affected = isAlterAffectedPluginIndex(idxTbl, affectedCols)
 		}
 
 		if affected {

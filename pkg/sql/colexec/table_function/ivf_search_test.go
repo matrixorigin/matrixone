@@ -337,13 +337,16 @@ func TestIvfSearchCallReturnsIncludeColumnsAndLazyFetchesMoreRounds(t *testing.T
 		if rt.IncludeResult != nil {
 			rt.IncludeResult.ColNames = []string{"rank"}
 			rt.IncludeResult.Data = map[string][]any{"rank": nil}
+			rt.IncludeResult.Nulls = map[string][]bool{"rank": nil}
 		}
 
 		if rt.SearchCursor.Round == 1 {
 			rt.IncludeResult.Data["rank"] = []any{int32(7)}
+			rt.IncludeResult.Nulls["rank"] = []bool{false}
 			return []any{int64(1)}, []float64{2.0}, nil
 		}
 		rt.IncludeResult.Data["rank"] = []any{int32(7), int32(9)}
+		rt.IncludeResult.Nulls["rank"] = []bool{false, false}
 		return []any{int64(1), int64(2)}, []float64{2.0, 3.0}, nil
 	}
 
@@ -393,6 +396,62 @@ func TestIvfSearchCallReturnsIncludeColumnsAndLazyFetchesMoreRounds(t *testing.T
 	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[0], 1))
 	require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](result.Batch.Vecs[2], 0))
 	require.Equal(t, int32(9), vector.GetFixedAtNoTypeCheck[int32](result.Batch.Vecs[2], 1))
+}
+
+func TestIvfSearchCallPreservesNullableIncludeColumn(t *testing.T) {
+	oldNewIvfAlgo := newIvfAlgo
+	oldGetVersion := getVersion
+	defer func() {
+		newIvfAlgo = oldNewIvfAlgo
+		getVersion = oldGetVersion
+	}()
+
+	mock := &MockIvfSearch[float32]{}
+	mock.searchFn = func(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+		rt.IncludeResult.ColNames = []string{"rank"}
+		rt.IncludeResult.Data = map[string][]any{"rank": {nil}}
+		rt.IncludeResult.Nulls = map[string][]bool{"rank": {true}}
+		return []any{int64(1)}, []float64{2.0}, nil
+	}
+
+	newIvfAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (cache.VectorIndexSearchIf, error) {
+		return mock, nil
+	}
+	getVersion = mockVersion
+	cache.Cache = cache.NewVectorIndexCache()
+
+	param := "{\"op_type\": \"vector_l2_ops\", \"lists\": \"3\"}"
+	attrs := []string{"pkid", "score", catalog.SystemSI_IVFFLAT_IncludeColPrefix + "rank"}
+	ut := newIvfSearchTestCase(t, mpool.MustNewZero(), attrs, param)
+	ut.arg.Rets = []*plan.ColDef{
+		{Name: "pkid", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
+		{Name: catalog.SystemSI_IVFFLAT_IncludeColPrefix + "rank", Typ: plan.Type{Id: int32(types.T_int32)}},
+	}
+
+	tblcfg := fmt.Sprintf(
+		`{"db":"db","src":"src","metadata":"__metadata","index":"__index_include_null","entries":"__entries","parttype":%d,"include_columns":["rank"],"include_column_types":[%d]}`,
+		int32(types.T_array_float32),
+		int32(types.T_int32),
+	)
+	inbat := makeBatchIvfSearch(ut.proc)
+	ut.arg.Args = makeConstInputExprsIvfSearchWithConfig(tblcfg)
+
+	err := ut.arg.Prepare(ut.proc)
+	require.NoError(t, err)
+	for i := range ut.arg.ctr.executorsForArgs {
+		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
+		require.NoError(t, err)
+	}
+
+	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
+	require.NoError(t, err)
+
+	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.True(t, result.Batch.Vecs[2].IsNull(0))
 }
 
 func TestIvfSearchStartReadsOptionalQueryScopedArgs(t *testing.T) {

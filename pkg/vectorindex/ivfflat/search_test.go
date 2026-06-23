@@ -222,9 +222,93 @@ func TestIvfSearchSQLIncludesRequestedColumnsAndPushdown(t *testing.T) {
 	require.Equal(t, []string{"rank", "flag"}, rt.IncludeResult.ColNames)
 	require.Equal(t, []any{int32(7)}, rt.IncludeResult.Data["rank"])
 	require.Equal(t, []any{true}, rt.IncludeResult.Data["flag"])
+	require.Equal(t, []bool{false}, rt.IncludeResult.Nulls["rank"])
+	require.Equal(t, []bool{false}, rt.IncludeResult.Nulls["flag"])
 	require.Equal(t, uint(0), rt.SearchCursor.NextBucketOffset)
 	require.Equal(t, uint(1), rt.SearchCursor.CurrentBucketCount)
 	require.Equal(t, uint(1), rt.SearchCursor.Round)
+}
+
+func TestIvfSearchIncludeModePreservesNullFlagsAndPushesIsNullFilter(t *testing.T) {
+	oldRunSQL := runSql
+	defer func() {
+		runSql = oldRunSQL
+	}()
+
+	var capturedSQL string
+	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		capturedSQL = sql
+
+		bat := batch.NewWithSize(3)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, sqlproc.Proc.Mp()))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(1.25), false, sqlproc.Proc.Mp()))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int32(0), true, sqlproc.Proc.Mp()))
+		bat.SetRowCount(1)
+
+		return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{bat}}, nil
+	}
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+
+	tblcfg := vectorindex.IndexTableConfig{
+		DbName:             "test_db",
+		EntriesTable:       "test_entries",
+		IncludeColumns:     []string{"rank"},
+		IncludeColumnTypes: []int32{int32(types.T_int32)},
+	}
+
+	rt := vectorindex.RuntimeConfig{
+		Limit:                   5,
+		Probe:                   1,
+		OrigFuncName:            "l2_distance",
+		RequestedIncludeColumns: []string{"rank"},
+		PushdownFilterSQL:       "`__mo_index_include_rank` IS NULL",
+		IncludeResult:           &vectorindex.IvfIncludeResult{},
+		SearchCursor:            &vectorindex.IvfSearchCursor{},
+		SearchRoundLimit:        3,
+	}
+
+	idx := &IvfflatSearchIndex[float32]{Version: 7}
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	keys, distances, err := idx.Search(sqlproc, idxcfg, tblcfg, []float32{0, 0, 0}, rt, 4)
+	require.NoError(t, err)
+
+	require.Contains(t, capturedSQL, "AND `__mo_index_include_rank` IS NULL")
+	require.Equal(t, []any{int64(42)}, keys.([]any))
+	require.Equal(t, []float64{1.25}, distances)
+	require.Equal(t, []any{nil}, rt.IncludeResult.Data["rank"])
+	require.Equal(t, []bool{true}, rt.IncludeResult.Nulls["rank"])
+}
+
+func TestSortAndLimitExactResultsKeepsIncludeNullsAligned(t *testing.T) {
+	keys := []any{int64(1), int64(2)}
+	distances := []float64{2, 1}
+	includeCols := []string{"rank"}
+	includeData := map[string][]any{"rank": {nil, int32(9)}}
+	includeNulls := map[string][]bool{"rank": {true, false}}
+
+	sortedKeys, sortedDistances, sortedInclude, sortedNulls := sortAndLimitExactResults(
+		keys,
+		distances,
+		includeCols,
+		includeData,
+		includeNulls,
+		2,
+	)
+
+	require.Equal(t, []any{int64(2), int64(1)}, sortedKeys)
+	require.Equal(t, []float64{1, 2}, sortedDistances)
+	require.Equal(t, []any{int32(9), nil}, sortedInclude["rank"])
+	require.Equal(t, []bool{false, true}, sortedNulls["rank"])
 }
 
 func TestIvfSearchSequentialCallsDoNotLeakQueryScopedRuntimeState(t *testing.T) {
@@ -312,12 +396,14 @@ func TestIvfSearchSequentialCallsDoNotLeakQueryScopedRuntimeState(t *testing.T) 
 	require.Equal(t, []float64{0.25}, distances1)
 	require.Equal(t, []string{"rank"}, rt1.IncludeResult.ColNames)
 	require.Equal(t, []any{int32(9)}, rt1.IncludeResult.Data["rank"])
+	require.Equal(t, []bool{false}, rt1.IncludeResult.Nulls["rank"])
 	require.Equal(t, uint(1), rt1.SearchCursor.Round)
 
 	require.Equal(t, []any{int64(8)}, keys2.([]any))
 	require.Equal(t, []float64{0.5}, distances2)
 	require.Empty(t, rt2.IncludeResult.ColNames)
 	require.Empty(t, rt2.IncludeResult.Data)
+	require.Empty(t, rt2.IncludeResult.Nulls)
 	require.Equal(t, uint(1), rt2.SearchCursor.Round)
 }
 
@@ -407,6 +493,7 @@ func TestIvfSearchIncludeModeConvertsRuntimePayloadBeforeRunSql(t *testing.T) {
 	require.Equal(t, []float64{0.125}, distances)
 	require.Equal(t, []string{"rank"}, rt.IncludeResult.ColNames)
 	require.Equal(t, []any{int32(9)}, rt.IncludeResult.Data["rank"])
+	require.Equal(t, []bool{false}, rt.IncludeResult.Nulls["rank"])
 	require.Contains(t, capturedSQL, "`"+catalog.SystemSI_IVFFLAT_TblCol_Entries_pk+"`")
 	require.Contains(t, capturedSQL, "IN (42)")
 	require.NotContains(t, capturedSQL, "`"+catalog.SystemSI_IVFFLAT_TblCol_Entries_id+"` IN")
