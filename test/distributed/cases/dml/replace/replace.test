@@ -237,3 +237,97 @@ insert into t_replace_multi_uk_batch (name, email, value) values ('a', 'x@a.com'
 replace into t_replace_multi_uk_batch (name, email, value) values ('a', 'y@a.com', 111), ('b', 'z@a.com', 222);
 select name, email, value from t_replace_multi_uk_batch order by name;
 drop table t_replace_multi_uk_batch;
+
+-- child-side foreign key check during REPLACE: an inserted/replaced child row
+-- must reference an existing parent row, otherwise REPLACE fails and the
+-- previous conflicting row stays intact
+drop table if exists replace_fk_c;
+drop table if exists replace_fk_p;
+create table replace_fk_p(id int primary key);
+create table replace_fk_c(id int primary key, pid int, foreign key(pid) references replace_fk_p(id));
+insert into replace_fk_p values (1);
+replace into replace_fk_c values (10,1);
+select * from replace_fk_c order by id;
+-- replacing an existing child row to reference a missing parent must fail
+replace into replace_fk_c values (10,2);
+select * from replace_fk_c order by id;
+-- inserting a new child row referencing a missing parent must fail
+replace into replace_fk_c values (11,99);
+select * from replace_fk_c order by id;
+-- NULL foreign key value is allowed and needs no parent row
+replace into replace_fk_c values (12,null);
+select * from replace_fk_c order by id;
+-- a valid replace referencing an existing parent succeeds and replaces the old row
+insert into replace_fk_p values (2);
+replace into replace_fk_c values (10,2);
+select * from replace_fk_c order by id;
+drop table replace_fk_c;
+drop table replace_fk_p;
+
+-- @separator:table
+-- @case
+-- @desc:test REPLACE with foreign key when foreign_key_checks is OFF
+SET FOREIGN_KEY_CHECKS = 0;
+drop table if exists replace_fk_off_c;
+drop table if exists replace_fk_off_p;
+create table replace_fk_off_p(id int primary key);
+create table replace_fk_off_c(id int primary key, pid int, foreign key(pid) references replace_fk_off_p(id));
+insert into replace_fk_off_p values (1);
+-- valid FK: succeed
+replace into replace_fk_off_c values (10, 1);
+select * from replace_fk_off_c order by id;
+-- invalid FK: should succeed when checks disabled
+replace into replace_fk_off_c values (20, 99);
+select * from replace_fk_off_c order by id;
+-- re-enable and verify data
+SET FOREIGN_KEY_CHECKS = 1;
+select * from replace_fk_off_c order by id;
+drop table replace_fk_off_c;
+drop table replace_fk_off_p;
+
+-- @separator:table
+-- @case
+-- @desc:test REPLACE with multiple foreign keys on child table
+drop table if exists replace_fk_multi_c;
+drop table if exists replace_fk_multi_p1;
+drop table if exists replace_fk_multi_p2;
+create table replace_fk_multi_p1(id1 int primary key);
+create table replace_fk_multi_p2(id2 int primary key);
+create table replace_fk_multi_c(id int primary key, pid1 int, pid2 int,
+    foreign key(pid1) references replace_fk_multi_p1(id1),
+    foreign key(pid2) references replace_fk_multi_p2(id2));
+insert into replace_fk_multi_p1 values (1);
+insert into replace_fk_multi_p2 values (100);
+-- both parents exist: succeed
+replace into replace_fk_multi_c values (1, 1, 100);
+select * from replace_fk_multi_c order by id;
+-- second FK violates: must fail
+replace into replace_fk_multi_c values (2, 1, 200);
+select * from replace_fk_multi_c order by id;
+-- first FK violates: must fail
+replace into replace_fk_multi_c values (2, 99, 100);
+select * from replace_fk_multi_c order by id;
+drop table replace_fk_multi_c;
+drop table replace_fk_multi_p1;
+drop table replace_fk_multi_p2;
+
+-- @separator:table
+-- @case
+-- @desc:test REPLACE with composite foreign key
+drop table if exists replace_fk_composite_c;
+drop table if exists replace_fk_composite_p;
+create table replace_fk_composite_p(a int, b int, primary key(a, b));
+create table replace_fk_composite_c(id int primary key, x int, y int,
+    foreign key(x, y) references replace_fk_composite_p(a, b));
+insert into replace_fk_composite_p values (1, 1), (2, 2);
+-- valid composite FK
+replace into replace_fk_composite_c values (1, 1, 1);
+select * from replace_fk_composite_c order by id;
+-- partial match is not valid for composite FK: must fail
+replace into replace_fk_composite_c values (2, 1, 99);
+select * from replace_fk_composite_c order by id;
+-- valid: both columns match
+replace into replace_fk_composite_c values (1, 2, 2);
+select * from replace_fk_composite_c order by id;
+drop table replace_fk_composite_c;
+drop table replace_fk_composite_p;
