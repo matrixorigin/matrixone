@@ -103,7 +103,9 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 
 			// tenant create at current cn, can work correctly
 			currentCN := s.getFinalVersionHandle().Metadata()
-			if versions.Compare(currentCN.Version, version) < 0 {
+			if currentCN.Version == version {
+				return nil
+			} else if versions.Compare(currentCN.Version, version) < 0 {
 				// tenant create at 1.4.0, current tenant version 1.5.0, it must be cannot work
 				return moerr.NewInvalidInputNoCtxf("tenant version %s is greater than current cn version %s",
 					version, currentCN.Version)

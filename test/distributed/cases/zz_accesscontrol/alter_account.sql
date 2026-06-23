@@ -150,6 +150,7 @@ create user 'al_user_2' identified by '123456';
 create role if not exists al_role2;
 grant all on account * to al_role2;
 grant al_role2 to al_user_2;
+drop account if exists account_all_upgrade;
 create account if not exists test ADMIN_NAME '123ERTYU' IDENTIFIED BY '123ERTYU' comment 'account comment';
 -- @session:id=5&user=sys:al_user_2:al_role2&password=123456
 create account account_all_created ADMIN_NAME 'admin' IDENTIFIED BY '123456';
@@ -160,9 +161,6 @@ alter account test admin_name='adminuser'  IDENTIFIED BY '123456';
 alter account test comment 'ccccccc';
 alter account test suspend;
 -- @session
--- @ignore:0
-select mo_ctl('cn','syncCommit','');
-drop account if exists account_all_upgrade;
 drop role if exists al_role2;
 drop user if exists al_user_2;
 drop account test;
