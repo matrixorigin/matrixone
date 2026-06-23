@@ -1189,7 +1189,7 @@ func Test_updateCdcTask_cancel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
+			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName, false)
 			assert.NoError(t, err, "updateCdcTask(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 		})
 	}
@@ -1272,7 +1272,7 @@ func Test_updateCdcTask_pause(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
+			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName, false)
 			assert.NoError(t, err, "updateCdcTask(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 		})
 	}
@@ -1345,7 +1345,7 @@ func Test_updateCdcTask_restart(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
+			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName, false)
 			assert.NoError(t, err, "updateCdcTask(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 			assert.NoError(t, mock.ExpectationsWereMet())
 		})
@@ -1429,7 +1429,7 @@ func Test_updateCdcTask_resume(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
+			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName, false)
 			assert.NoError(t, err, "updateCdcTask(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 		})
 	}
@@ -1527,6 +1527,31 @@ func Test_updateCdc_cancel(t *testing.T) {
 			assert.NoError(t, err, fmt.Sprintf("updateCdc(%v, %v, %v)", tt.args.ctx, tt.args.ses, tt.args.st))
 		})
 	}
+}
+
+func Test_updateCdc_cancelIfExistsIgnoresMissingTask(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	sqlSelectTask := "SELECT task_id FROM `mo_catalog`.`mo_cdc_task` WHERE 1=1 AND account_id = 0 AND task_name = 'missing_task'"
+	mock.ExpectQuery(sqlSelectTask).WillReturnRows(sqlmock.NewRows([]string{"task_id"}))
+
+	sqlDeleteTask := "DELETE FROM `mo_catalog`.`mo_cdc_task` WHERE 1=1 AND account_id = 0 AND task_name = 'missing_task'"
+	mock.ExpectExec(sqlDeleteTask).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	tx := &testSqlExecutor{db: db}
+	_, err = onPreUpdateCDCTasks(
+		context.Background(),
+		task.TaskStatus_CancelRequested,
+		map[taskservice.CDCTaskKey]struct{}{},
+		tx,
+		sysAccountID,
+		"missing_task",
+		true,
+	)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func Test_updateCdc_cancel_all(t *testing.T) {
