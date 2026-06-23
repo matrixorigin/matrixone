@@ -3201,11 +3201,12 @@ func (c *Compile) compileShuffleJoinV2(node, left, right *plan.Node, leftscopes,
 	}
 
 	// General path: delegate scope creation to newShuffleJoinScopeList which handles
-	// scope merging, per-CN dispatch, and cross-CN routing.  Then apply V2-specific
-	// join construction (shuffleV2=true).  This covers multi-CN, merged scopes,
-	// and any case where scopes aren't in the simple paired-worker layout.
+	// scope merging, per-CN dispatch, and cross-CN routing.
+	// Use per-scope ShuffleIdx (not -1) to maintain correct matching between
+	// hash builds and hash joins — each scope gets different partition data
+	// from ShuffleToRegIndex/ShuffleToMultiMatchedReg dispatch routing.
 	shuffleJoins := c.newShuffleJoinScopeList(leftscopes, rightscopes, node)
-	constructShuffleJoinOP(c, shuffleJoins, node, left, right, true)
+	constructShuffleJoinOP(c, shuffleJoins, node, left, right, false)
 
 	currentFirstFlag := c.anal.isFirst
 	for i := range shuffleJoins {
