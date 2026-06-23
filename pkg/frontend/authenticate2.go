@@ -292,9 +292,6 @@ func canWriteProtectedDatabase(ses *Session) bool {
 
 func normalizeProtectedDatabaseName(ses *Session, dbName string) string {
 	dbName = strings.TrimSpace(dbName)
-	if dbName == "" && ses != nil {
-		dbName = ses.GetDatabaseName()
-	}
 	if protectedDatabaseNamesAreLowerCased(ses) {
 		dbName = strings.ToLower(dbName)
 	}
@@ -310,7 +307,7 @@ func protectedDatabaseNamesAreLowerCased(ses *Session) bool {
 		return true
 	}
 	lowerCaseTableNames, ok := value.(int64)
-	return ok && lowerCaseTableNames == 1
+	return ok && lowerCaseTableNames != 0
 }
 
 func protectedDatabaseSetFromString(ses *Session, raw string) map[string]struct{} {

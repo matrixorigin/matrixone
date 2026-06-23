@@ -35,6 +35,13 @@ func TestProtectedDatabaseSetFromString(t *testing.T) {
 	require.Nil(t, protectedDatabaseSetFromString(nil, " , , "))
 	require.Equal(t, map[string]struct{}{"db1": {}, "CamelDB": {}}, protectedDatabaseSetFromString(nil, " db1, CamelDB "))
 	require.Equal(t, map[string]struct{}{"db1": {}, "cameldb": {}}, protectedDatabaseSetFromString(&Session{}, " db1, CamelDB "))
+
+	proto := &MysqlProtocolImpl{}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(proto)}}
+	ses.respr.SetStr(DBNAME, "current_db")
+	require.Equal(t, "", normalizeProtectedDatabaseName(ses, ""))
+	require.Nil(t, protectedDatabaseSetFromString(ses, ","))
+	require.Equal(t, map[string]struct{}{"db1": {}}, protectedDatabaseSetFromString(ses, "db1,"))
 }
 
 func TestProtectedDatabaseWriteTargetsFromDataBranchKeepsPrivileges(t *testing.T) {
@@ -118,6 +125,15 @@ func TestProtectedDatabaseNameFollowsLowerCaseTableNames(t *testing.T) {
 	caseSensitiveProtectedDatabases := protectedDatabaseSetFromString(caseSensitiveSes, "CamelDB")
 	require.False(t, checkProtectedDatabaseWriteWithSet(context.Background(), caseSensitiveSes, caseSensitiveProtectedDatabases, "CamelDB"))
 	require.True(t, checkProtectedDatabaseWriteWithSet(context.Background(), caseSensitiveSes, caseSensitiveProtectedDatabases, "cameldb"))
+
+	caseInsensitivePreserveNameSes := &Session{
+		feSessionImpl: feSessionImpl{
+			sesSysVars: &SystemVariables{mp: map[string]interface{}{"lower_case_table_names": int64(2)}},
+		},
+	}
+	caseInsensitivePreserveNameProtectedDatabases := protectedDatabaseSetFromString(caseInsensitivePreserveNameSes, "CamelDB")
+	require.False(t, checkProtectedDatabaseWriteWithSet(context.Background(), caseInsensitivePreserveNameSes, caseInsensitivePreserveNameProtectedDatabases, "CamelDB"))
+	require.False(t, checkProtectedDatabaseWriteWithSet(context.Background(), caseInsensitivePreserveNameSes, caseInsensitivePreserveNameProtectedDatabases, "cameldb"))
 }
 
 func TestCheckProtectedDatabaseWriteWithSet(t *testing.T) {
