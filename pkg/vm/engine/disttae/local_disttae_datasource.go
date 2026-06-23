@@ -136,6 +136,17 @@ type LocalDisttaeDataSource struct {
 	OrderBy  []*plan.OrderBySpec
 	Limit    uint64
 
+	// --- reader-driven IVF widening (UNVERIFIED prototype, ivfflat_widening) ---
+	// Active only when ivf_search attaches both the widening param and the live
+	// top-K heap to ctx; otherwise every field stays zero and the scan behaves
+	// exactly as before.
+	ivfTried     bool                       // one-time init guard
+	ivfActive    bool                       // widening in effect
+	ivfScanned   int                        // ranked buckets consumed
+	ivfBlockRank []int                      // best centroid rank per (sorted) block
+	ivfParam     *objectio.IvfWideningParam // ranked centroids + dist + radius
+	ivfTopOp     *objectio.IndexReaderTopOp // live top-K heap for the stop bound
+
 	filterZM        objectio.ZoneMap
 	tombstonePolicy engine.TombstoneApplyPolicy
 
@@ -477,7 +488,17 @@ func (ls *LocalDisttaeDataSource) Next(
 				return
 			}
 
-			ls.handleOrderBy()
+			// Reader-driven IVF widening: rank-order the blocks (once) and
+			// early-stop when the top-K heap can no longer be improved. Replaces
+			// the normal zonemap ordered-scan path while active.
+			if ls.ivfWideningInit(ctx) {
+				if ls.ivfWideningStop() {
+					state = engine.End
+					return
+				}
+			} else {
+				ls.handleOrderBy()
+			}
 
 			if ls.rangesCursor >= ls.rangeSlice.Len() {
 				state = engine.End
@@ -494,6 +515,168 @@ func (ls *LocalDisttaeDataSource) Next(
 			return
 		}
 	}
+}
+
+// ivfWideningInit lazily activates reader-driven IVF widening: on the first
+// call it reads the widening param + live top-K heap from ctx (attached by
+// ivf_search) and sorts the block list into centroid-rank order. Returns
+// whether widening is active. UNVERIFIED prototype (branch ivfflat_widening);
+// fully gated -- returns false (and changes nothing) for non-widening scans.
+func (ls *LocalDisttaeDataSource) ivfWideningInit(ctx context.Context) bool {
+	if ls.ivfTried {
+		return ls.ivfActive
+	}
+	ls.ivfTried = true
+	p, _ := ctx.Value(defines.IvfWidening{}).(*objectio.IvfWideningParam)
+	op, _ := ctx.Value(defines.IvfTopOp{}).(*objectio.IndexReaderTopOp)
+	if p == nil || op == nil || !op.WideningEnabled() {
+		logutil.Infof("[IVF-WIDEN] datasource init: NOT active (param=%v topop=%v) -> normal scan", p != nil, op != nil)
+		return false
+	}
+	if !ls.sortByCentroidRank(p) {
+		logutil.Infof("[IVF-WIDEN] datasource init: sortByCentroidRank FAILED -> normal scan")
+		return false
+	}
+	ls.ivfParam = p
+	ls.ivfTopOp = op
+	ls.ivfActive = true
+	logutil.Infof("[IVF-WIDEN] datasource init: ACTIVE, blocks=%d ranked=%d nprobe=%d",
+		ls.rangeSlice.Len(), len(p.RankedCentroids), p.Nprobe)
+	return true
+}
+
+// ivfWideningStop reports whether the rank-ordered, batched walk can stop before
+// yielding the block at rangesCursor: the top-K heap is full AND the next block's
+// nearest centroid is beyond the base nprobe batch. Approximate ("fill K then
+// stop"), matching the original multi-round IVF search. Advances the scanned
+// counter (used for logging) otherwise.
+func (ls *LocalDisttaeDataSource) ivfWideningStop() bool {
+	i := ls.rangesCursor
+	if i >= len(ls.ivfBlockRank) {
+		return false
+	}
+	nextBlockRank := ls.ivfBlockRank[i]
+	if ls.ivfTopOp.ShouldStopWidening(nextBlockRank) {
+		logutil.Infof("[IVF-WIDEN] EARLY-STOP at block cursor=%d scanned=%d heapLen=%d/%d nextBlockRank=%d nprobe=%d",
+			i, ls.ivfScanned, len(ls.ivfTopOp.DistHeap), ls.ivfTopOp.Limit, nextBlockRank, ls.ivfTopOp.Nprobe)
+		return true
+	}
+	logutil.Infof("[IVF-WIDEN] yield block cursor=%d rank=%d scanned=%d heapLen=%d/%d nprobe=%d",
+		i, nextBlockRank, ls.ivfScanned, len(ls.ivfTopOp.DistHeap), ls.ivfTopOp.Limit, ls.ivfTopOp.Nprobe)
+	ls.ivfScanned++
+	return false
+}
+
+// sortByCentroidRank loads each block's centroid_id zonemap and reorders the
+// block list nearest-centroid-first via IvfWideningParam.BlockBestRank. Mirrors
+// getBlockZMs/sortBlockList. Returns false if the centroid column or metadata
+// cannot be resolved (caller then falls back to the normal scan).
+//
+// EAGER, O(B) -- this inspects EVERY block (load centroid_id zonemap + compute
+// rank) and sorts them ALL up front, even though the batched early-stop then
+// scans only the nearest few. The upfront cost scales with table size, not with
+// the answer: e.g. 5000 blocks -> 5000 zonemap loads + a sort, to then scan ~5.
+// Fine for small tables; wasteful at scale.
+//
+// FUTURE OPTIMIZATION -- "lazy / skip the sort" (cost tracks widening depth, not
+// table size). The entries blocks are ALREADY sorted by centroid_id on disk, so
+// we never need to re-sort them; we can index into that order by following the
+// ranked centroids:
+//
+//	visited := {}
+//	for each ranked centroid C (nearest first), in batches of nprobe:
+//	    blkRange := binarySearchByCentroidId(C)   // O(log B) into the id-sorted list
+//	    for blk in blkRange where blk not in visited:
+//	        scan blk; feed heap; visited.add(blk)
+//	    if heapFull && coveredBatches > 0 { break }   // same batched stop
+//
+// This loads block metadata ONLY for blocks actually scanned (+ O(log B) per
+// search) instead of all B. Cost ~ O(probed * log B). Caveats deferred it for
+// now: (1) a batch's nprobe centroids are scattered in centroid_id space, so
+// each batch is several binary searches into non-contiguous ranges with a
+// visited-set to dedup blocks shared by two centroids, and access is random not
+// sequential; (2) binary search still needs per-block min/max centroid_id, so
+// use object-level zonemaps to skip whole far objects and truly bound metadata
+// I/O; (3) more control-flow surface than one sort -> only worth it at large
+// scale (thousands of blocks), and it trades the current verified-correct eager
+// version for an unverified one. Keep eager until a large-scale benchmark
+// justifies the rewrite.
+func (ls *LocalDisttaeDataSource) sortByCentroidRank(p *objectio.IvfWideningParam) bool {
+	if ls.table == nil || ls.table.tableDef == nil {
+		return false
+	}
+	def := ls.table.tableDef
+	name := strings.ToLower(p.CentroidColName)
+	seqnum := -1
+	if def.Name2ColIndex != nil {
+		if idx, ok := def.Name2ColIndex[name]; ok && int(idx) < len(def.Cols) {
+			seqnum = int(def.Cols[idx].Seqnum)
+		}
+	}
+	if seqnum < 0 {
+		for _, col := range def.Cols {
+			if strings.ToLower(col.Name) == name {
+				seqnum = int(col.Seqnum)
+				break
+			}
+		}
+	}
+	if seqnum < 0 {
+		return false
+	}
+	sliceLen := ls.rangeSlice.Len()
+	if sliceLen == 0 {
+		return false
+	}
+	rankIdx := p.NewCentroidRankIndex() // O(log L) per-block range-min (vs O(L) map scan)
+	if rankIdx == nil {
+		return false
+	}
+	type rblk struct {
+		blk  *objectio.BlockInfo
+		best int
+	}
+	helper := make([]rblk, sliceLen)
+	var objDataMeta objectio.ObjectDataMeta
+	var location objectio.Location
+	for i := 0; i < sliceLen; i++ {
+		info := ls.rangeSlice.Get(i)
+		location = info.MetaLocation()
+		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
+			objMeta, err := objectio.FastLoadObjectMeta(ls.ctx, &location, false, ls.fs)
+			if err != nil {
+				return false
+			}
+			objDataMeta = objMeta.MustDataMeta()
+		}
+		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
+		zm := blkMeta.ColumnMeta(uint16(seqnum)).ZoneMap()
+		var minC, maxC int64
+		if zm.IsInited() {
+			if v, ok := zm.GetMin().(int64); ok {
+				minC = v
+			}
+			if v, ok := zm.GetMax().(int64); ok {
+				maxC = v
+			}
+		}
+		helper[i] = rblk{blk: info, best: rankIdx.BestRank(minC, maxC)}
+	}
+	sort.SliceStable(helper, func(a, b int) bool { return helper[a].best < helper[b].best })
+	newSlice := make(objectio.BlockInfoSlice, ls.rangeSlice.Size())
+	ls.ivfBlockRank = make([]int, sliceLen)
+	var order strings.Builder
+	for i := range helper {
+		newSlice.Set(i, helper[i].blk)
+		ls.ivfBlockRank[i] = helper[i].best
+		if i < 16 {
+			fmt.Fprintf(&order, " %s:rank%d", helper[i].blk.BlockID.ShortStringEx(), helper[i].best)
+		}
+	}
+	ls.rangeSlice = newSlice
+	logutil.Infof("[IVF-WIDEN] sorted %d blocks by centroid rank (col seqnum=%d); order(blkid:rank)=%s",
+		sliceLen, seqnum, order.String())
+	return true
 }
 
 func (ls *LocalDisttaeDataSource) handleOrderBy() {

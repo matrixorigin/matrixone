@@ -289,6 +289,18 @@ type FulltextMembershipFilter struct{}
 // This key is set on context when invoking internal SQL from ivf_search.
 type IvfReaderParam struct{}
 
+// IvfWidening carries the reader-driven IVF widening params (ranked centroids,
+// per-bucket radius, nprobe) for the ivf entries scan in the internal SQL
+// executor. The value is an *objectio.IvfWideningParam. This key is set on
+// context when invoking internal SQL from ivf_search with widening enabled.
+type IvfWidening struct{}
+
+// IvfTopOp carries the live *objectio.IndexReaderTopOp (the reader's top-K
+// distance heap + widening state) from the reader down to the datasource so the
+// rank-ordered entries scan can early-stop. Set by the reader on the ctx it
+// passes to DataSource.Next() when IVF widening is active.
+type IvfTopOp struct{}
+
 // PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByTN struct{}
 
