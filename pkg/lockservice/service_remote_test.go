@@ -652,6 +652,46 @@ func TestIssue12554(t *testing.T) {
 	)
 }
 
+func TestRemoteLockRechecksBindChangedAfterGetLocalLockTable(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			table := uint64(12555)
+			option := newTestRowExclusiveOptions()
+			_, err := l1.Lock(ctx, table, newTestRows(1), newTestTxnID(1), option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, newTestTxnID(1), timestamp.Timestamp{}))
+
+			oldBind := l1.tableGroups.get(0, table).getBind()
+			newBind := oldBind
+			newBind.ServiceID = "new-lock-owner"
+			newBind.Version++
+
+			var changed atomic.Bool
+			l1.option.beforeRemoteLockBindCheck = func() {
+				if changed.CompareAndSwap(false, true) {
+					l1.handleBindChanged(newBind)
+				}
+			}
+			defer func() {
+				l1.option.beforeRemoteLockBindCheck = nil
+			}()
+
+			_, err = l2.Lock(ctx, table, newTestRows(2), newTestTxnID(2), option)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			require.True(t, changed.Load())
+			checkBind(t, newBind, l1)
+			checkBind(t, newBind, l2)
+		},
+	)
+}
+
 func TestIssue14346(t *testing.T) {
 	runLockServiceTests(
 		t,
