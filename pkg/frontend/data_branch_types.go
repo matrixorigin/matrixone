@@ -48,7 +48,14 @@ const (
 	diffSideBase
 )
 
+const (
+	dataBranchApplyModeOnline dataBranchApplyMode = iota
+	dataBranchApplyModePortableSQL
+)
+
 const dataBranchHashmapLimitRate = 0.8
+
+type dataBranchApplyMode int
 
 type branchHashmapAllocator struct {
 	upstream  malloc.Allocator
