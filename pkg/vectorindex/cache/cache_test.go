@@ -157,6 +157,22 @@ func (m *MockRuntimeSearch) Search(proc *sqlexec.SqlProcess, query any, rt vecto
 	return []int64{1}, []float64{2.0}, nil
 }
 
+func (m *MockRuntimeSearch) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+	keys, distances, err := m.Search(proc, query, rt)
+	if err != nil {
+		return err
+	}
+	if typedKeys, ok := keys.([]int64); ok {
+		for i, key := range typedKeys {
+			outKeys[i] = key
+		}
+	}
+	for i, dist := range distances {
+		outDists[i] = float32(dist)
+	}
+	return nil
+}
+
 func (m *MockRuntimeSearch) Destroy() {}
 
 func (m *MockRuntimeSearch) Load(*sqlexec.SqlProcess) error {
