@@ -298,6 +298,7 @@ type RuntimeConfig struct {
 type IvfIncludeResult struct {
 	ColNames []string
 	Data     map[string][]any
+	Nulls    map[string][]bool
 }
 
 type IvfSearchCursor struct {
