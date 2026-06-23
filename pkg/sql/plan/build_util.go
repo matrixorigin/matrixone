@@ -1154,6 +1154,169 @@ func genPreCheckSqlsForReplaceFKSelfRefer(
 	return ret, nil
 }
 
+// genParentSideReplaceFKSqls generates parent-side foreign-key action SQLs for a
+// REPLACE on a parent table. When REPLACE replaces a conflicting parent row it
+// behaves as delete-then-insert, so MySQL applies every referencing child
+// table's ON DELETE action against the removed parent row before the new row is
+// inserted. We model this with background SQLs that run BEFORE the main REPLACE:
+//
+//   - RESTRICT / NO_ACTION -> a `select count(*) = 0 ...` check that fails when a
+//     child still references one of the replaced parent values (returned as
+//     checkSqls; the caller prefixes them with REPLACE_PARENT_CHK: so compile
+//     runs them as a pre-check and maps a false result to ErrFKRowIsReferenced).
+//   - CASCADE              -> a `delete from child where fk in (vals)`.
+//   - SET NULL             -> an `update child set fk = null where fk in (vals)`.
+//
+// (returned as actionSqls; the caller prefixes them with REPLACE_PARENT_ACTION:.)
+//
+// Only non-self-referencing FKs are handled here; self-referencing FKs use
+// genPreCheckSqlsForReplaceFKSelfRefer. Several limitations are intentional and
+// mirror the self-ref path:
+//   - Only literal VALUES are supported. Prepared params, function calls,
+//     subqueries and arithmetic are skipped because the value embedded in the
+//     background SQL must equal the value actually written by REPLACE.
+//   - Only single-column FKs that reference the parent's single-column PRIMARY
+//     KEY are handled. Requiring the referenced column to be the PK guarantees
+//     the value taken from VALUES equals the deleted (conflicting) row's
+//     referenced value. FKs referencing a non-PK unique key, composite keys, and
+//     unique-key-driven conflicts are out of scope (follow-up).
+//   - REPLACE ... SELECT is not handled.
+func genParentSideReplaceFKSqls(
+	ctx CompilerContext,
+	parentTableDef *plan.TableDef,
+	stmt *tree.Replace,
+) (checkSqls []string, actionSqls []string, err error) {
+	if stmt.Rows == nil || len(parentTableDef.RefChildTbls) == 0 {
+		return nil, nil, nil
+	}
+	valuesClause, ok := stmt.Rows.Select.(*tree.ValuesClause)
+	if !ok {
+		return nil, nil, nil
+	}
+
+	// The referenced value must be the parent's single-column primary key (see
+	// the doc comment): only then does the value supplied in VALUES match the
+	// conflicting row that REPLACE deletes.
+	if parentTableDef.Pkey == nil || len(parentTableDef.Pkey.Names) != 1 {
+		return nil, nil, nil
+	}
+	pkName := parentTableDef.Pkey.Names[0]
+
+	// Build parent column name -> position in the REPLACE column list. Names in
+	// ColDef are lower-cased; the user-supplied identifiers may use any casing.
+	colNameToPos := make(map[string]int)
+	if len(stmt.Columns) > 0 {
+		for i, col := range stmt.Columns {
+			colNameToPos[strings.ToLower(string(col))] = i
+		}
+	} else {
+		// Implicit column list: same visible-column rule as getInsertColsFromStmt
+		// — skip hidden cols, which the user VALUES list never supplies.
+		pos := 0
+		for _, col := range parentTableDef.Cols {
+			if col.Hidden {
+				continue
+			}
+			colNameToPos[col.Name] = pos
+			pos++
+		}
+	}
+
+	isSimpleLiteralExpr := func(expr tree.Expr) bool {
+		switch expr.(type) {
+		case *tree.NumVal, *tree.StrVal:
+			return true
+		default:
+			return false
+		}
+	}
+
+	// Collect the literal PK values supplied by the REPLACE statement. Non-literal
+	// expressions make the whole REPLACE unsafe for value-based pre-checks.
+	pkPos, ok := colNameToPos[pkName]
+	if !ok {
+		return nil, nil, nil
+	}
+	var pkVals []string
+	for _, row := range valuesClause.Rows {
+		if pkPos >= len(row) {
+			continue
+		}
+		if !isSimpleLiteralExpr(row[pkPos]) {
+			return nil, nil, nil
+		}
+		pkVals = append(pkVals, tree.String(row[pkPos], dialect.MYSQL))
+	}
+	if len(pkVals) == 0 {
+		return nil, nil, nil
+	}
+	inList := strings.Join(pkVals, ",")
+
+	seenChild := make(map[uint64]bool)
+	for _, childTblId := range parentTableDef.RefChildTbls {
+		// childTblId == 0 marks a self-referencing FK, handled by
+		// genPreCheckSqlsForReplaceFKSelfRefer.
+		if childTblId == 0 || seenChild[childTblId] {
+			continue
+		}
+		seenChild[childTblId] = true
+
+		childObjRef, childTableDef, e := ctx.ResolveById(childTblId, nil)
+		if e != nil {
+			return nil, nil, e
+		}
+		if childTableDef == nil {
+			continue
+		}
+
+		for _, fk := range childTableDef.Fkeys {
+			if fk.ForeignTbl != parentTableDef.TblId {
+				continue
+			}
+			if len(fk.Cols) != 1 || len(fk.ForeignCols) != 1 {
+				continue
+			}
+			referCols, e := colIdsToNames(ctx.GetContext(), fk.ForeignCols, parentTableDef.Cols)
+			if e != nil {
+				return nil, nil, e
+			}
+			// Only FKs that reference the parent PK are sound here.
+			if len(referCols) != 1 || referCols[0] != pkName {
+				continue
+			}
+			childFkCols, e := colIdsToNames(ctx.GetContext(), fk.Cols, childTableDef.Cols)
+			if e != nil {
+				return nil, nil, e
+			}
+			if len(childFkCols) != 1 {
+				continue
+			}
+
+			childTableClause := fmt.Sprintf("`%s`.`%s`", childObjRef.SchemaName, childTableDef.Name)
+			switch fk.OnDelete {
+			case plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_NO_ACTION:
+				checkSqls = append(checkSqls, fmt.Sprintf(
+					"select count(*) = 0 from %s where `%s` in (%s)",
+					childTableClause, childFkCols[0], inList,
+				))
+			case plan.ForeignKeyDef_CASCADE:
+				actionSqls = append(actionSqls, fmt.Sprintf(
+					"delete from %s where `%s` in (%s)",
+					childTableClause, childFkCols[0], inList,
+				))
+			case plan.ForeignKeyDef_SET_NULL:
+				actionSqls = append(actionSqls, fmt.Sprintf(
+					"update %s set `%s` = null where `%s` in (%s)",
+					childTableClause, childFkCols[0], childFkCols[0], inList,
+				))
+			default:
+				// SET_DEFAULT and any other action are out of scope.
+			}
+		}
+	}
+	return checkSqls, actionSqls, nil
+}
+
 func cleanHint(originSql string) string {
 	re := regexp.MustCompile(`/\*[^!].*?\*/`)
 	cleanSQL := re.ReplaceAllString(originSql, "")

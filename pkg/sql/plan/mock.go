@@ -155,15 +155,16 @@ func NewEmptyCompilerContext() *MockCompilerContext {
 }
 
 type Schema struct {
-	cols      []col
-	pks       []int
-	idxs      []index
-	fks       []*ForeignKeyDef
-	clusterby *ClusterByDef
-	outcnt    float64
-	tblId     int64
-	isView    bool
-	viewCfg   ViewCfg
+	cols         []col
+	pks          []int
+	idxs         []index
+	fks          []*ForeignKeyDef
+	refChildTbls []uint64
+	clusterby    *ClusterByDef
+	outcnt       float64
+	tblId        int64
+	isView       bool
+	viewCfg      ViewCfg
 }
 
 type ViewCfg struct {
@@ -877,6 +878,111 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	/*
+		Parent-side FK action fixtures for REPLACE (issue #24951).
+
+		create table replace_fk_p(id int primary key, v varchar(20));
+		create table replace_fk_c(id int primary key, pid int,
+			foreign key(pid) references replace_fk_p(id) on delete restrict);
+
+		create table replace_fk_cp(id int primary key, v varchar(20));
+		create table replace_fk_cc(id int primary key, pid int,
+			foreign key(pid) references replace_fk_cp(id) on delete cascade);
+	*/
+	constraintTestSchema["replace_fk_p"] = &Schema{
+		tblId: 77001,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"v", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77002},
+		outcnt:       4,
+	}
+	constraintTestSchema["replace_fk_c"] = &Schema{
+		tblId: 77002,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_replace_c",
+				Cols:        []uint64{1}, // pid
+				ForeignTbl:  77001,
+				ForeignCols: []uint64{0}, // replace_fk_p.id
+				OnDelete:    plan.ForeignKeyDef_RESTRICT,
+				OnUpdate:    plan.ForeignKeyDef_RESTRICT,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema["replace_fk_cp"] = &Schema{
+		tblId: 77003,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"v", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77004},
+		outcnt:       4,
+	}
+	constraintTestSchema["replace_fk_cc"] = &Schema{
+		tblId: 77004,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_replace_cc",
+				Cols:        []uint64{1}, // pid
+				ForeignTbl:  77003,
+				ForeignCols: []uint64{0}, // replace_fk_cp.id
+				OnDelete:    plan.ForeignKeyDef_CASCADE,
+				OnUpdate:    plan.ForeignKeyDef_CASCADE,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema["replace_fk_sp"] = &Schema{
+		tblId: 77005,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"v", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77006},
+		outcnt:       4,
+	}
+	constraintTestSchema["replace_fk_sc"] = &Schema{
+		tblId: 77006,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_replace_sc",
+				Cols:        []uint64{1}, // pid
+				ForeignTbl:  77005,
+				ForeignCols: []uint64{0}, // replace_fk_sp.id
+				OnDelete:    plan.ForeignKeyDef_SET_NULL,
+				OnUpdate:    plan.ForeignKeyDef_SET_NULL,
+			},
+		},
+		outcnt: 4,
+	}
+
+	/*
 		create table products (
 			pid int not null,
 			pname varchar(50) not null,
@@ -1273,6 +1379,10 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 
 			if table.fks != nil {
 				tableDef.Fkeys = table.fks
+			}
+
+			if table.refChildTbls != nil {
+				tableDef.RefChildTbls = table.refChildTbls
 			}
 
 			if table.clusterby != nil {

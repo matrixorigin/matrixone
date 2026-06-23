@@ -159,6 +159,32 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		for _, sql := range preCheckSqls {
 			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_CHK:"+sql)
 		}
+
+		// Generate parent-side FK action SQLs for non-self-referencing child
+		// tables (issue #24951): replacing a referenced parent row behaves as
+		// delete-then-insert, so RESTRICT must reject the REPLACE and CASCADE /
+		// SET NULL must act on the children before the new row is inserted. All
+		// of these run before the main REPLACE execution (see compile.go).
+		fkChecksEnabled, err := IsForeignKeyChecksEnabled(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if fkChecksEnabled {
+			parentCheckSqls, parentActionSqls, err := genParentSideReplaceFKSqls(
+				ctx,
+				tblInfo.tableDefs[0],
+				stmt,
+			)
+			if err != nil {
+				return nil, err
+			}
+			for _, sql := range parentCheckSqls {
+				query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_CHK:"+sql)
+			}
+			for _, sql := range parentActionSqls {
+				query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_ACTION:"+sql)
+			}
+		}
 	}
 
 	return &Plan{
