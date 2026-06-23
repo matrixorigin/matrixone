@@ -1868,6 +1868,41 @@ func TestReplaceDetectSqlsMultipleRows(t *testing.T) {
 	assert.Contains(t, preCheck, "3", "pre-check IN list should contain row 3's PK")
 }
 
+func TestReplaceChildFKDetectSqls(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// `emp` has a non-self-referencing FK (emp.deptno -> dept.deptno).
+	// REPLACE on a child table must generate a child-side FK check SQL that
+	// runs AFTER execution (no REPLACE_PARENT_CHK: prefix) and rolls back the
+	// transaction when the inserted child row references a missing parent.
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO emp (empno, deptno) VALUES (1, 10)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var childCheck string
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			continue
+		}
+		if strings.Contains(sql, "dept") {
+			childCheck = sql
+			break
+		}
+	}
+	assert.NotEmpty(t, childCheck,
+		"REPLACE on a child table should generate a child-side FK check SQL")
+	assert.False(t, strings.HasPrefix(childCheck, "REPLACE_PARENT_CHK:"),
+		"child-side FK check must run post-execution, without REPLACE_PARENT_CHK: prefix")
+	assert.Contains(t, childCheck, "emp", "child-side FK check should scan the child table")
+	assert.Contains(t, childCheck, "dept", "child-side FK check should reference the parent table")
+	assert.Contains(t, childCheck, "deptno", "child-side FK check should reference the FK column")
+}
+
 func TestReplaceODKU(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// INSERT ON DUPLICATE KEY UPDATE should be rewritten to REPLACE path

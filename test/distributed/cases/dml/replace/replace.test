@@ -237,3 +237,29 @@ insert into t_replace_multi_uk_batch (name, email, value) values ('a', 'x@a.com'
 replace into t_replace_multi_uk_batch (name, email, value) values ('a', 'y@a.com', 111), ('b', 'z@a.com', 222);
 select name, email, value from t_replace_multi_uk_batch order by name;
 drop table t_replace_multi_uk_batch;
+
+-- child-side foreign key check during REPLACE: an inserted/replaced child row
+-- must reference an existing parent row, otherwise REPLACE fails and the
+-- previous conflicting row stays intact
+drop table if exists replace_fk_c;
+drop table if exists replace_fk_p;
+create table replace_fk_p(id int primary key);
+create table replace_fk_c(id int primary key, pid int, foreign key(pid) references replace_fk_p(id));
+insert into replace_fk_p values (1);
+replace into replace_fk_c values (10,1);
+select * from replace_fk_c order by id;
+-- replacing an existing child row to reference a missing parent must fail
+replace into replace_fk_c values (10,2);
+select * from replace_fk_c order by id;
+-- inserting a new child row referencing a missing parent must fail
+replace into replace_fk_c values (11,99);
+select * from replace_fk_c order by id;
+-- NULL foreign key value is allowed and needs no parent row
+replace into replace_fk_c values (12,null);
+select * from replace_fk_c order by id;
+-- a valid replace referencing an existing parent succeeds and replaces the old row
+insert into replace_fk_p values (2);
+replace into replace_fk_c values (10,2);
+select * from replace_fk_c order by id;
+drop table replace_fk_c;
+drop table replace_fk_p;

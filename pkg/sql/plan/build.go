@@ -144,6 +144,30 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		}
 		query.DetectSqls = sqls
 
+		// Generate child-side FK check SQLs for non-self-referencing foreign
+		// keys. REPLACE bypasses the generic FK rejection (IgnoreForeignKey) and
+		// uses the modern operator path, which performs no child-side FK
+		// validation on its own. These SQLs run after the REPLACE execution and
+		// roll back the transaction (error 1452) when an inserted child row
+		// references a missing parent, leaving the previous row intact.
+		fkEnabled, err := IsForeignKeyChecksEnabled(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if fkEnabled {
+			childSqls, err := genSqlsForCheckFKConstraints(
+				ctx,
+				tblInfo.objRef[0].SchemaName,
+				tblInfo.tableDefs[0].Name,
+				tblInfo.tableDefs[0].Cols,
+				tblInfo.tableDefs[0].Fkeys,
+			)
+			if err != nil {
+				return nil, err
+			}
+			query.DetectSqls = append(query.DetectSqls, childSqls...)
+		}
+
 		// Generate pre-check SQLs for parent→child safety (RESTRICT).
 		preCheckSqls, err := genPreCheckSqlsForReplaceFKSelfRefer(
 			ctx.GetContext(),
