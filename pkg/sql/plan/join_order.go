@@ -468,7 +468,10 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 }
 
 func setParent(child, parent int32, vertices []*joinVertex) {
-	if child == -1 || parent == -1 {
+	if child == -1 || parent == -1 || child == parent {
+		return
+	}
+	if findParent(parent, child, vertices) {
 		return
 	}
 	unsetParent(child, vertices[child].parent, vertices)
@@ -487,11 +490,19 @@ func unsetParent(child, parent int32, vertices []*joinVertex) {
 }
 
 func findSelectivityInChildren(self int32, vertices []*joinVertex) bool {
+	return findSelectivityInChildrenWithVisited(self, vertices, make(map[int32]bool, len(vertices)))
+}
+
+func findSelectivityInChildrenWithVisited(self int32, vertices []*joinVertex, visited map[int32]bool) bool {
+	if visited[self] {
+		return false
+	}
+	visited[self] = true
 	if vertices[self].node.Stats.Selectivity < 0.9 {
 		return true
 	}
 	for child := range vertices[self].children {
-		if findSelectivityInChildren(child, vertices) {
+		if findSelectivityInChildrenWithVisited(child, vertices, visited) {
 			return true
 		}
 	}
@@ -499,11 +510,18 @@ func findSelectivityInChildren(self int32, vertices []*joinVertex) bool {
 }
 
 func findParent(self, target int32, vertices []*joinVertex) bool {
-	parent := vertices[self].parent
-	if parent == target {
-		return true
-	} else if parent != -1 {
-		return findParent(parent, target, vertices)
+	visited := make(map[int32]bool, len(vertices))
+	for self != -1 {
+		if visited[self] {
+			return false
+		}
+		visited[self] = true
+
+		parent := vertices[self].parent
+		if parent == target {
+			return true
+		}
+		self = parent
 	}
 	return false
 }
