@@ -83,7 +83,7 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 		_, _ = connector.ctr.sp.SendBatch(context.TODO(), pSpool.SendToAllLocal, nil, err)
 		connector.Reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(connector.ctr.sp, 0)
 
-		connector.ctr.sp.Close()
+		connector.ctr.sp.Close(proc.Ctx)
 		connector.ctr.sp = nil
 	} else {
 		connector.Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, err, proc.Mp())
