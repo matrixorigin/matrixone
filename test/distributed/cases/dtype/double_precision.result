@@ -45,3 +45,52 @@ select * from dp2 order by a;
 1.25  𝄀
 2.5
 drop table if exists dp2;
+select cast(0.1 as double precision) + cast(0.2 as double precision) as f64_artifact;
+➤ f64_artifact[8,54,0]  𝄀
+0.30000000000000004
+drop table if exists dpb;
+create table dpb(v double precision);
+insert into dpb values (1.7976931348623157e308), (2.2250738585072014e-308), (0);
+select v > 0 as positive from dpb order by v desc;
+➤ positive[-7,1,0]  𝄀
+1  𝄀
+1  𝄀
+0
+drop table if exists dpb;
+create table dperr(a double precision(300));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. Display width for double out of range (max = 255) at line 1 column 42 near "));";
+create table dperr(a double precision(10,40));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. Display scale for double out of range (max = 30) at line 1 column 44 near "));";
+create table dperr(a double precision(5,10));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a')) at line 1 column 43 near "));";
+create table dpres(precision int);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 28 near "precision int);";
+select 1 as precision;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near " precision;";
+drop table if exists dpc;
+create table dpc(a double precision unsigned, b double precision zerofill,
+c double precision not null default 1.5 primary key);
+show create table dpc;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+dpc  ¦  CREATE TABLE `dpc` (
+  `a` double DEFAULT NULL,
+  `b` double DEFAULT NULL,
+  `c` double NOT NULL DEFAULT 1.5,
+  PRIMARY KEY (`c`)
+)
+insert into dpc(a, b, c) values (1.5, 2.5, 3.5);
+select * from dpc;
+➤ a[8,54,0]  ¦  b[8,54,0]  ¦  c[8,54,0]  𝄀
+1.5  ¦  2.5  ¦  3.5
+drop table if exists dpc;
+drop table if exists dpa;
+create table dpa(x int);
+alter table dpa add column y double precision;
+alter table dpa modify column x double precision(8,3);
+show create table dpa;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+dpa  ¦  CREATE TABLE `dpa` (
+  `x` double(8,3) DEFAULT NULL,
+  `y` double DEFAULT NULL
+)
+drop table if exists dpa;
