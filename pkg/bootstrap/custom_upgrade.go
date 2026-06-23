@@ -103,15 +103,12 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 
 			// tenant create at current cn, can work correctly
 			currentCN := s.getFinalVersionHandle().Metadata()
-			if currentCN.Version == version {
-				return nil
-			} else if versions.Compare(currentCN.Version, version) < 0 {
+			if versions.Compare(currentCN.Version, version) < 0 {
 				// tenant create at 1.4.0, current tenant version 1.5.0, it must be cannot work
 				return moerr.NewInvalidInputNoCtxf("tenant version %s is greater than current cn version %s",
 					version, currentCN.Version)
 			}
 
-			// arrive here means tenant version <= current cn version, need upgrade.
 			latestVersion, err := versions.GetLatestVersion(txn)
 			if err != nil {
 				return err
@@ -122,6 +119,18 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 					") must equal cluster latest version(" +
 					latestVersion.Version +
 					")")
+			}
+			if currentCN.Version == version {
+				if latestVersion.VersionOffset != currentCN.VersionOffset {
+					return nil
+				}
+				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, latestVersion.VersionOffset, txn, false, false)
+				if err != nil {
+					return err
+				}
+				if len(upgrades) == 0 {
+					return nil
+				}
 			}
 
 			for {

@@ -871,7 +871,9 @@ func Test_determineCreateAccount(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		stmt := &tree.UpgradeStatement{}
+		stmt := &tree.UpgradeStatement{
+			Target: &tree.Target{AccountName: "acc1"},
+		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
 		ses.SetTenantInfo(&TenantInfo{
@@ -902,11 +904,36 @@ func Test_determineCreateAccount(t *testing.T) {
 		convey.So(ok, convey.ShouldBeTrue)
 	})
 
+	convey.Convey("sys account all cannot upgrade all accounts", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.UpgradeStatement{
+			Target: &tree.Target{IsALLAccount: true},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        sysAccountName,
+			User:          "mocadmin",
+			DefaultRole:   "mocadmin_role",
+			TenantID:      sysAccountID,
+			UserID:        2,
+			DefaultRoleID: 2,
+		})
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
 	convey.Convey("non sys account all cannot upgrade account", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		stmt := &tree.UpgradeStatement{}
+		stmt := &tree.UpgradeStatement{
+			Target: &tree.Target{AccountName: "acc1"},
+		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
 		ses.SetTenantInfo(&TenantInfo{
