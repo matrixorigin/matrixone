@@ -566,6 +566,60 @@ var supportedAggInNewFramework = []FuncNew{
 			},
 		},
 	},
+	{
+		functionId: APPROX_PERCENTILE,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 2 {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+
+			// check Arg[0]: must be numeric (same as median)
+			t0 := inputs[0]
+			if t0.Oid == types.T_any {
+				// cast to first supported type
+				return newCheckResultWithCast(0, []types.Type{aggexec.MedianSupportedType[0].ToType(), types.T_float64.ToType()})
+			}
+
+			supported := false
+			for _, st := range aggexec.MedianSupportedType {
+				if t0.Oid == st {
+					supported = true
+					break
+				}
+			}
+			if !supported {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+
+			// check Arg[1]: must be int32/int64/float32/float64
+			t1 := inputs[1]
+			if t1.Oid == types.T_any {
+				return newCheckResultWithCast(0, []types.Type{inputs[0], types.T_float64.ToType()})
+			}
+
+			switch t1.Oid {
+			case types.T_int32, types.T_int64, types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128:
+			default:
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    aggexec.MedianReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "approx_percentile",
+					aggRegister: aggexec.RegisterApproxPercentile,
+				},
+			},
+		},
+	},
 
 	// function `BITMAP_CONSTRUCT_AGG`
 	{

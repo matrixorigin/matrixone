@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1399,14 +1400,20 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 
 			//for group_concat, the last arg is separator string
 			//for cluster_centers, the last arg is kmeans_args string
+			//for approx_percentile, the last arg is the percentile value
 			if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-				f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
+				f.F.Func.ObjName == plan2.NameClusterCenters ||
+				f.F.Func.ObjName == "approx_percentile") && len(f.F.Args) > 1 {
 				argExpr := f.F.Args[len(f.F.Args)-1]
 				vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
 				if err != nil {
 					panic(err)
 				}
-				cfg = []byte(vec.GetStringAt(0))
+				if f.F.Func.ObjName == "approx_percentile" {
+					cfg = getPercentileConfig(vec)
+				} else {
+					cfg = []byte(vec.GetStringAt(0))
+				}
 				free()
 
 				args = f.F.Args[:len(f.F.Args)-1]
@@ -1460,14 +1467,20 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 			if len(f.F.Args) > 0 {
 				//for group_concat, the last arg is separator string
 				//for cluster_centers, the last arg is kmeans_args string
+				//for approx_percentile, the last arg is the percentile value
 				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-					f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
+					f.F.Func.ObjName == plan2.NameClusterCenters ||
+					f.F.Func.ObjName == "approx_percentile") && len(f.F.Args) > 1 {
 					argExpr := f.F.Args[len(f.F.Args)-1]
 					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
 					if err != nil {
 						panic(err)
 					}
-					cfg = []byte(vec.GetStringAt(0))
+					if f.F.Func.ObjName == "approx_percentile" {
+						cfg = getPercentileConfig(vec)
+					} else {
+						cfg = []byte(vec.GetStringAt(0))
+					}
 					free()
 
 					args = f.F.Args[:len(f.F.Args)-1]
@@ -2255,4 +2268,28 @@ func constructTableClone(
 	metaCopy.Ctx.SrcAutoIncrOffsets = colOffset
 
 	return metaCopy, nil
+}
+
+// getPercentileConfig extracts the percentile value from a vector for approx_percentile.
+func getPercentileConfig(vec *vector.Vector) []byte {
+	var p float64
+	switch vec.GetType().Oid {
+	case types.T_float64:
+		p = vector.MustFixedColWithTypeCheck[float64](vec)[0]
+	case types.T_float32:
+		p = float64(vector.MustFixedColWithTypeCheck[float32](vec)[0])
+	case types.T_int64:
+		p = float64(vector.MustFixedColWithTypeCheck[int64](vec)[0])
+	case types.T_int32:
+		p = float64(vector.MustFixedColWithTypeCheck[int32](vec)[0])
+	case types.T_decimal64:
+		d := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0]
+		p = types.Decimal64ToFloat64(d, vec.GetType().Scale)
+	case types.T_decimal128:
+		d := vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0]
+		p = types.Decimal128ToFloat64(d, vec.GetType().Scale)
+	default:
+		p = vector.MustFixedColWithTypeCheck[float64](vec)[0]
+	}
+	return []byte(strconv.FormatFloat(p, 'f', -1, 64))
 }
