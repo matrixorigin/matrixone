@@ -35,6 +35,7 @@ var methodVersions = map[pb.Method]int64{
 	pb.Method_ForwardLock:            defines.MORPCVersion1,
 	pb.Method_Unlock:                 defines.MORPCVersion1,
 	pb.Method_GetTxnLock:             defines.MORPCVersion1,
+	pb.Method_GetLockHolder:          defines.MORPCVersion2,
 	pb.Method_GetWaitingList:         defines.MORPCVersion1,
 	pb.Method_KeepRemoteLock:         defines.MORPCVersion1,
 	pb.Method_GetBind:                defines.MORPCVersion1,
@@ -166,6 +167,8 @@ func (s *service) initRemoteHandler() {
 		s.handleRemoteUnlock)
 	s.remote.server.RegisterMethodHandler(pb.Method_GetTxnLock,
 		s.handleRemoteGetLock)
+	s.remote.server.RegisterMethodHandler(pb.Method_GetLockHolder,
+		s.handleRemoteGetLockHolder)
 	s.remote.server.RegisterMethodHandler(pb.Method_GetWaitingList,
 		s.handleRemoteGetWaitingList)
 	s.remote.server.RegisterMethodHandler(pb.Method_KeepRemoteLock,
@@ -427,6 +430,28 @@ func (s *service) handleRemoteGetLock(
 	writeResponse(s.logger, cancel, resp, err, cs)
 }
 
+func (s *service) handleRemoteGetLockHolder(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	s.bindChangeMu.RLock()
+	l, err := s.getLocalLockTable(req, resp)
+	if err != nil || l == nil {
+		s.bindChangeMu.RUnlock()
+		writeResponse(s.logger, cancel, resp, err, cs)
+		return
+	}
+
+	holder, found, err := l.getLockHolder(ctx, req.GetLockHolder.Row)
+	s.bindChangeMu.RUnlock()
+	if err == nil && found {
+		resp.GetLockHolder.Holder = holder
+	}
+	writeResponse(s.logger, cancel, resp, err, cs)
+}
+
 func (s *service) handleRemoteGetWaitingList(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -480,11 +505,12 @@ func (s *service) getLocalLockTable(
 		return nil, err
 	}
 	if l == nil {
+		rows, sharding := lockTableLookupInputsFromRequest(req)
 		l, err = s.getLockTableWithCreate(
 			req.LockTable.Group,
 			req.LockTable.Table,
-			req.Lock.Rows,
-			req.Lock.Options.Sharding)
+			rows,
+			sharding)
 		if err != nil || l.getBind().Changed(req.LockTable) {
 			return nil, ErrLockTableNotFound
 		}
@@ -527,6 +553,17 @@ func (s *service) getLocalLockTable(
 	}
 
 	return l, nil
+}
+
+func lockTableLookupInputsFromRequest(req *pb.Request) ([][]byte, pb.Sharding) {
+	switch req.Method {
+	case pb.Method_GetLockHolder:
+		return [][]byte{req.GetLockHolder.Row}, req.GetLockHolder.Sharding
+	case pb.Method_GetTxnLock:
+		return [][]byte{req.GetTxnLock.Row}, req.LockTable.Sharding
+	default:
+		return req.Lock.Rows, req.Lock.Options.Sharding
+	}
 }
 
 func (s *service) getTxnWaitingListOnRemote(

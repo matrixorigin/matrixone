@@ -117,6 +117,8 @@ enum Method {
   ResumeInvalidCN    = 16;
   // AbortRemoteDeadlockTxn abort remote txn for deadlock
   AbortRemoteDeadlockTxn = 17;
+  // GetLockHolder get current holder on a special lock
+  GetLockHolder      = 18;
 }
 
 enum Status {
@@ -149,6 +151,7 @@ message Request {
   RemainTxnInServiceRequest  RemainTxnInService  = 16 [(gogoproto.nullable) = false];
   CheckOrphanRequest         CheckOrphan         = 17 [(gogoproto.nullable) = false];
   ResumeInvalidCNRequest     ResumeInvalidCN     = 18 [(gogoproto.nullable) = false];
+  GetLockHolderRequest       GetLockHolder       = 19 [(gogoproto.nullable) = false];
   AbortRemoteDeadlockTxnRequest    AbortRemoteDeadlockTxn      = 20 [(gogoproto.nullable) = false];
 }
 
@@ -179,6 +182,7 @@ message Response {
     CheckOrphanResponse        CheckOrphan          = 18 [(gogoproto.nullable) = false];
     ResumeInvalidCNResponse    ResumeInvalidCN      = 19 [(gogoproto.nullable) = false];
     AbortRemoteDeadlockTxnResponse    AbortRemoteDeadlockTxn      = 20 [(gogoproto.nullable) = false];
+    GetLockHolderResponse      GetLockHolder       = 21 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request
@@ -206,6 +210,17 @@ message GetTxnLockRequest {
 message GetTxnLockResponse {
   int32            Value       = 1;
   repeated WaitTxn WaitingList = 2 [(gogoproto.nullable) = false];
+}
+
+// GetLockHolderRequest gets the current holder on a special row lock.
+message GetLockHolderRequest {
+  bytes    Row      = 1;
+  Sharding Sharding = 2;
+}
+
+// GetLockHolderResponse gets the current holder on a special row lock.
+message GetLockHolderResponse {
+  WaitTxn Holder = 1 [(gogoproto.nullable) = false];
 }
 
 // GetWaitingListRequest get a waiting txn list on a specical txn request. CN -> CN
