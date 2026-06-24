@@ -1546,11 +1546,19 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	}
 
 	if len(txn.tablesInVain) > 0 {
+		ignoreTablesInVain := func(entry Entry) bool {
+			_, ok := txn.tablesInVain[entry.tableId]
+			return ok
+		}
 		for i, e := range txn.writes {
 			if _, ok := txn.tablesInVain[e.tableId]; e.bat != nil && ok {
 				// if the entry contains objects, need to clean it from the disk.
 				// Skip GC for CCPR transactions - CCPRTxnCache handles GC to avoid deleting shared objects
 				if len(e.fileName) != 0 && !txn.isCCPRTxn {
+					txn.unprotectUnreferencedTxnLocalSharedFilesLocked(
+						collectObjectStatsFromEntry(e),
+						ignoreTablesInVain,
+					)
 					_ = txn.GCObjsByIdxRange(i, i)
 				}
 				e.bat.Clean(txn.proc.GetMPool())
@@ -1878,7 +1886,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	}
 
 	waiter.Wait()
-	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(dirtyObject)
+	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(dirtyObject, nil)
 	_ = txn.GCObjsByStats(dirtyObject...)
 
 	return nil
@@ -1886,6 +1894,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 func (txn *Transaction) unprotectUnreferencedTxnLocalSharedFilesLocked(
 	statsList []objectio.ObjectStats,
+	ignoreEntry func(Entry) bool,
 ) {
 	if !txn.isCloneTxn ||
 		txn.op == nil ||
@@ -1897,33 +1906,26 @@ func (txn *Transaction) unprotectUnreferencedTxnLocalSharedFilesLocked(
 	txnID := txn.op.Txn().ID
 	for i := range statsList {
 		name := statsList[i].ObjectName().String()
-		if txn.hasLiveObjectStatsRefLocked(name) {
+		if txn.hasLiveObjectStatsRefLocked(name, ignoreEntry) {
 			continue
 		}
 		txn.engine.cloneTxnCache.RemoveTxnLocalSharedFile(txnID, name)
 	}
 }
 
-func (txn *Transaction) hasLiveObjectStatsRefLocked(name string) bool {
+func (txn *Transaction) hasLiveObjectStatsRefLocked(
+	name string,
+	ignoreEntry func(Entry) bool,
+) bool {
 	for _, entry := range txn.writes {
+		if ignoreEntry != nil && ignoreEntry(entry) {
+			continue
+		}
 		if entry.bat == nil || entry.bat.IsEmpty() {
 			continue
 		}
 
-		statsIdx := -1
-		for i, attr := range entry.bat.Attrs {
-			if attr == catalog.ObjectMeta_ObjectStats {
-				statsIdx = i
-				break
-			}
-		}
-		if statsIdx == -1 {
-			continue
-		}
-
-		vec := entry.bat.Vecs[statsIdx]
-		for i := range vec.Length() {
-			stats := objectio.ObjectStats(vec.GetBytesAt(i))
+		for _, stats := range collectObjectStatsFromEntry(entry) {
 			if stats.ObjectName().String() == name {
 				return true
 			}
@@ -1931,6 +1933,30 @@ func (txn *Transaction) hasLiveObjectStatsRefLocked(name string) bool {
 	}
 
 	return false
+}
+
+func collectObjectStatsFromEntry(entry Entry) []objectio.ObjectStats {
+	if entry.bat == nil || entry.bat.IsEmpty() {
+		return nil
+	}
+
+	statsIdx := -1
+	for i, attr := range entry.bat.Attrs {
+		if attr == catalog.ObjectMeta_ObjectStats {
+			statsIdx = i
+			break
+		}
+	}
+	if statsIdx == -1 {
+		return nil
+	}
+
+	vec := entry.bat.Vecs[statsIdx]
+	statsList := make([]objectio.ObjectStats, 0, vec.Length())
+	for i := range vec.Length() {
+		statsList = append(statsList, objectio.ObjectStats(vec.GetBytesAt(i)))
+	}
+	return statsList
 }
 
 // TODO::remove it after workspace refactor.
