@@ -23,61 +23,61 @@ INSERT INTO t2 VALUES('1','M'), ('2','F'), ('4','F'), ('6',NULL);
 INSERT INTO t3 VALUES('pet',101), ('dog',202), ('pig',303), ('dokey',505);
 INSERT INTO t4 VALUES('2','c2'), ('4','c4'), ('6','c5'), ('7','c1');
 SELECT * FROM t1;
-id    name
-1    pet
-2    cat
-3    dog
-4    pig
+➤ id[12,-1,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  pet  𝄀
+2  ¦  cat  𝄀
+3  ¦  dog  𝄀
+4  ¦  pig
 DELETE t1 FROM t1 LEFT JOIN t2 ON t1.id = t2.id WHERE t2.id IS NULL;
 SELECT * FROM t1;
-id    name
-1    pet
-2    cat
-4    pig
+➤ id[12,-1,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  pet  𝄀
+2  ¦  cat  𝄀
+4  ¦  pig
 SELECT * FROM t2;
-id    sex
-1    M
-2    F
-4    F
-6    null
+➤ id[12,-1,0]  ¦  sex[12,-1,0]  𝄀
+1  ¦  M  𝄀
+2  ¦  F  𝄀
+4  ¦  F  𝄀
+6  ¦  null
 DELETE t2 FROM t2 LEFT JOIN t1 ON t2.id = t1.id WHERE t2.sex = 'NULL';
 SELECT * FROM t2;
-id    sex
-1    M
-2    F
-4    F
-6    null
+➤ id[12,-1,0]  ¦  sex[12,-1,0]  𝄀
+1  ¦  M  𝄀
+2  ¦  F  𝄀
+4  ¦  F  𝄀
+6  ¦  null
 DELETE t2 FROM t2 LEFT JOIN t1 ON t2.id = t1.id WHERE t2.sex = '';
 SELECT * FROM t2;
-id    sex
-1    M
-2    F
-4    F
-6    null
+➤ id[12,-1,0]  ¦  sex[12,-1,0]  𝄀
+1  ¦  M  𝄀
+2  ¦  F  𝄀
+4  ¦  F  𝄀
+6  ¦  null
 SELECT * FROM t4;
-id    class
-2    c2
-4    c4
-6    c5
-7    c1
+➤ id[12,-1,0]  ¦  class[12,-1,0]  𝄀
+2  ¦  c2  𝄀
+4  ¦  c4  𝄀
+6  ¦  c5  𝄀
+7  ¦  c1
 DELETE t4 FROM t4 INNER JOIN t1 ON t4.id = t1.id WHERE t4.id BETWEEN 1 AND 3;
 SELECT * FROM t4;
-id    class
-4    c4
-6    c5
-7    c1
+➤ id[12,-1,0]  ¦  class[12,-1,0]  𝄀
+4  ¦  c4  𝄀
+6  ¦  c5  𝄀
+7  ¦  c1
 SELECT * FROM t3;
-name    score
-pet    101
-dog    202
-pig    303
-dokey    505
+➤ name[12,-1,0]  ¦  score[4,32,0]  𝄀
+pet  ¦  101  𝄀
+dog  ¦  202  𝄀
+pig  ¦  303  𝄀
+dokey  ¦  505
 DELETE t3 FROM t3 RIGHT JOIN t1 ON t1.name = t3.name WHERE t3.score < 202;
 SELECT * FROM t3;
-name    score
-dog    202
-pig    303
-dokey    505
+➤ name[12,-1,0]  ¦  score[4,32,0]  𝄀
+dog  ¦  202  𝄀
+pig  ¦  303  𝄀
+dokey  ¦  505
 DELETE t1,t2 FROM t1 LEFT JOIN t2 ON t1.id = t2.id WHERE t1.id = 25;
 DELETE t1,t2 FROM t1,t2 WHERE t1.id = t2.id AND t1.id = 25;
 DELETE t1 FROM t1,t2 WHERE t1.id = t2.id AND t1.id = 25;
@@ -85,11 +85,11 @@ DELETE t2 FROM t1,t2 WHERE t1.id = t2.id AND t1.id = 25;
 DELETE t2 FROM t1,t2,t3 WHERE t1.id = t2.id OR t1.name = t3.name AND t1.id = 25;
 DELETE t2 FROM t1,t2,t3,t4 WHERE t1.id = t2.id AND t1.id = t4.id AND t1.id = 25;
 SELECT * FROM t2;
-id    sex
-6    null
+➤ id[12,-1,0]  ¦  sex[12,-1,0]  𝄀
+6  ¦  null
 DELETE FROM t1 USING t1 LEFT JOIN t2 ON t1.id = t2.id WHERE t2.id IS NULL;
 SELECT * FROM t1;
-id    name
+➤ id[12,-1,0]  ¦  name[12,-1,0]
 DELETE FROM t3 USING t1 LEFT JOIN t2 ON t1.id = t2.id WHERE t2.id IS NULL;
 invalid input: missing FROM-clause entry for table 't3'
 DELETE t1,t2 FROM table_name AS t1 LEFT JOIN table2_name AS t2 ON t1.id = t2.id WHERE table_name.id = 25;
@@ -116,35 +116,33 @@ INSERT INTO t1 VALUES(111,2), (222,3), (333,4);
 INSERT INTO t2 VALUES(444,111,23), (555,222,34), (666,7,45);
 INSERT INTO t3 VALUES(777,444,86), (888,666,56), (999,46,31);
 SELECT * FROM t3;
-t3_id    t2_id    t3_o
-777    444    86
-888    666    56
-999    46    31
+➤ t3_id[4,32,0]  ¦  t2_id[4,32,0]  ¦  t3_o[4,32,0]  𝄀
+777  ¦  444  ¦  86  𝄀
+888  ¦  666  ¦  56  𝄀
+999  ¦  46  ¦  31
 DELETE t3 FROM t1 INNER JOIN t2 ON t1.t1_id = t2.t1_id INNER JOIN t3 ON t2.t2_id = t3.t3_id WHERE t1.t1_id = 222;
 SELECT * FROM t3;
-t3_id    t2_id    t3_o
-777    444    86
-888    666    56
-999    46    31
+➤ t3_id[4,32,0]  ¦  t2_id[4,32,0]  ¦  t3_o[4,32,0]  𝄀
+777  ¦  444  ¦  86  𝄀
+888  ¦  666  ¦  56  𝄀
+999  ¦  46  ¦  31
 DELETE t1,t2,t3 FROM t1 INNER JOIN t2 ON t1.t1_id = t2.t1_id INNER JOIN t3 ON t2.t2_id = t3.t2_id WHERE t1.t1_id = 111;
 SELECT * FROM t1;
-t1_id    t1_o
-222    3
-333    4
+➤ t1_id[4,32,0]  ¦  t1_o[4,32,0]  𝄀
+222  ¦  3  𝄀
+333  ¦  4
 SELECT * FROM t2;
-t2_id    t1_id    t2_o
-555    222    34
-666    7    45
+➤ t2_id[4,32,0]  ¦  t1_id[4,32,0]  ¦  t2_o[4,32,0]  𝄀
+555  ¦  222  ¦  34  𝄀
+666  ¦  7  ¦  45
 SELECT * FROM t3;
-t3_id    t2_id    t3_o
-888    666    56
-999    46    31
+➤ t3_id[4,32,0]  ¦  t2_id[4,32,0]  ¦  t3_o[4,32,0]  𝄀
+888  ¦  666  ¦  56  𝄀
+999  ¦  46  ¦  31
 DELETE t1,t2,t3 FROM t1 LEFT JOIN t2 ON t1.t1_id = t2.t1_id RIGHT JOIN t3 ON t3.t2_id = t2.t2_id WHERE t2.t2_id = 555;
 DELETE t1,t2,t3 FROM t1 RIGHT JOIN t2 ON t1.t1_id = t2.t1_id RIGHT JOIN t3 ON t3.t2_id = t2.t2_id WHERE t2.t2_id = 555;
 DELETE t1,t2,t3 FROM t1 RIGHT JOIN t2 ON t1.t1_id = t2.t1_id LEFT JOIN t3 ON t3.t2_id = t2.t2_id WHERE t2.t2_id = 555;
-[unknown result because it is related to issue#5219]
 DELETE t1,t2,t3 FROM t1 LEFT JOIN t2 ON t1.t1_id = t2.t1_id LEFT JOIN t3 ON t3.t2_id = t2.t2_id WHERE t2.t2_id = 555;
-[unknown result because it is related to issue#5219]
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;
@@ -183,20 +181,30 @@ INNER JOIN t5 ON t4.a = t5.a
 WHERE t1.a = 1;
 DELETE t1,t2 FROM t1,t2 WHERE t1.a = t2.a AND t1.a = 1;
 SELECT * FROM t1;
-a    b    c
-2    2019-04-19    2021-08-04 16:18:32
-4    2028-04-19    2021-08-04 16:18:32
+➤ a[4,32,0]  ¦  b[91,64,0]  ¦  c[93,64,0]  𝄀
+2  ¦  2019-04-19  ¦  2021-08-04 16:18:32  𝄀
+4  ¦  2028-04-19  ¦  2021-08-04 16:18:32
 SELECT * FROM t2;
-a    b
-3    7984
-4    4894
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+3  ¦  7984  𝄀
+4  ¦  4894
 DELETE t1,t5 FROM t1,t5 WHERE t1.a = t5.a AND t1.a = 4;
 SELECT * FROM t1;
-a    b    c
-2    2019-04-19    2021-08-04 16:18:32
+➤ a[4,32,0]  ¦  b[91,64,0]  ¦  c[93,64,0]  𝄀
+2  ¦  2019-04-19  ¦  2021-08-04 16:18:32
 SELECT * FROM t5;
-a    b
-313.0    1561
+➤ a[8,54,0]  ¦  b[5,16,0]  𝄀
+313.0  ¦  1561
+create table tj_a (id int, n int);
+create table tj_b (id int);
+insert into tj_a values (1, 10), (2, 20);
+insert into tj_b values (1);
+delete a from tj_a a join tj_b b on a.id = b.id;
+select count(*) from tj_a;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop table tj_a;
+drop table tj_b;
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;
@@ -213,8 +221,8 @@ INSERT INTO temp VALUES(1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
 INSERT INTO t1 VALUES(1,'likk'),(2,'fire'),(3,'wikky');
 DELETE t1 FROM t1,(SELECT * FROM temp LIMIT 5) AS t WHERE t1.id = t.id AND t1.id > 2;
 SELECT * FROM t1;
-id    name
-1    likk
-2    fire
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  likk  𝄀
+2  ¦  fire
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS temp;

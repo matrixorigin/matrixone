@@ -72,7 +72,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	//FIXME: optimize truncate table?
-	if stmt.Where == nil && stmt.Limit == nil {
+	if stmt.Where == nil && stmt.Limit == nil && len(stmt.TableRefs) == 0 {
 		var cantrucate bool
 		cantrucate, err = canDeleteRewriteToTruncate(ctx, dmlCtx)
 		if err != nil {
@@ -139,9 +139,6 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	selectNode := builder.qry.Nodes[lastNodeID]
-	if selectNode.NodeType != plan.Node_PROJECT {
-		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "malformed select node")
-	}
 
 	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))
 

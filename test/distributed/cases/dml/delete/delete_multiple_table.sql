@@ -148,6 +148,16 @@ DELETE t1,t5 FROM t1,t5 WHERE t1.a = t5.a AND t1.a = 4;
 SELECT * FROM t1;
 SELECT * FROM t5;
 
+-- Test: single-target DELETE with JOIN, condition in ON clause only (no WHERE)
+create table tj_a (id int, n int);
+create table tj_b (id int);
+insert into tj_a values (1, 10), (2, 20);
+insert into tj_b values (1);
+delete a from tj_a a join tj_b b on a.id = b.id;
+select count(*) from tj_a;
+drop table tj_a;
+drop table tj_b;
+
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;
