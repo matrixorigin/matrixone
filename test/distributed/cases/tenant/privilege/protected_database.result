@@ -89,6 +89,12 @@ grant all on table protected_bvt_later.* to protected_bvt_writer;
 grant connect on account * to protected_bvt_writer;
 create user protected_bvt_user identified by '111' default role protected_bvt_writer;
 set enable_privilege_cache = off;
+select @@global.protected_databases;
+@@protected_databases
+protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB
+select database();
+database()
+
 use protected_bvt_later;
 select a from t1;
 a
@@ -207,6 +213,12 @@ internal error: do not have privilege to execute the statement
 drop database protected_bvt_db;
 internal error: do not have privilege to execute the statement
 set enable_privilege_cache = off;
+select @@global.protected_databases;
+@@protected_databases
+protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB,protected_bvt_later
+select database();
+database()
+protected_bvt_later
 create table t2(a int);
 internal error: do not have privilege to execute the statement
 drop table t1;

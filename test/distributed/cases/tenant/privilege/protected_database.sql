@@ -85,6 +85,8 @@ create user protected_bvt_user identified by '111' default role protected_bvt_wr
 
 -- @session:id=4&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
 set enable_privilege_cache = off;
+select @@global.protected_databases;
+select database();
 use protected_bvt_later;
 select a from t1;
 -- @session
@@ -157,6 +159,8 @@ drop database protected_bvt_db;
 
 -- @session:id=4&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
 set enable_privilege_cache = off;
+select @@global.protected_databases;
+select database();
 create table t2(a int);
 drop table t1;
 create table t_ctas as select * from t1;
