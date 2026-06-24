@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -193,6 +194,45 @@ func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	require.NoError(t, appendTupleValueToVector(decimalVec, types.EncodeDecimal256(&decimalVal), mp))
 	require.Equal(t, 1, decimalVec.Length())
 	require.Equal(t, decimalVal, vector.GetFixedAtNoTypeCheck[types.Decimal256](decimalVec, 0))
+
+	yearVec := vector.NewVec(types.T_year.ToType())
+	yearVal := types.MoYear(2024)
+	require.NoError(t, appendTupleValueToVector(yearVec, types.EncodeValue(yearVal, types.T_year), mp))
+	require.Equal(t, 1, yearVec.Length())
+	require.Equal(t, yearVal, vector.GetFixedAtNoTypeCheck[types.MoYear](yearVec, 0))
+}
+
+func TestAppendTupleValueToVector_BranchHashmapYear(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	src := vector.NewVec(types.T_year.ToType())
+	defer src.Free(mp)
+
+	yearVal := types.MoYear(2024)
+	require.NoError(t, vector.AppendFixed(src, yearVal, false, mp))
+
+	bh, err := databranchutils.NewBranchHashmap()
+	require.NoError(t, err)
+	defer func() { require.NoError(t, bh.Close()) }()
+
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{src}, []int{0}))
+	results, err := bh.GetByVectors([]*vector.Vector{src})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.True(t, results[0].Exists)
+	require.Len(t, results[0].Rows, 1)
+
+	tuple, _, err := bh.DecodeRow(results[0].Rows[0])
+	require.NoError(t, err)
+	require.Equal(t, yearVal, tuple[0])
+
+	dst := vector.NewVec(types.T_year.ToType())
+	defer dst.Free(mp)
+
+	require.NoError(t, appendTupleValueToVector(dst, tuple[0], mp))
+	require.Equal(t, 1, dst.Length())
+	require.Equal(t, yearVal, vector.GetFixedAtNoTypeCheck[types.MoYear](dst, 0))
 }
 
 func TestCompareSingleValInVector_AllTypes(t *testing.T) {
