@@ -8325,6 +8325,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateStringAdd
 				},
 			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_int32, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateIntAdd
+				},
+			},
 		},
 	},
 
@@ -8566,6 +8576,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeSub
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_int32, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateIntSub
 				},
 			},
 		},
@@ -10626,6 +10646,52 @@ var supportedControlBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return IsFreeLock
+				},
+			},
+		},
+	},
+
+	// function `is_used_lock`
+	{
+		functionId: IS_USED_LOCK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsUsedLock
+				},
+			},
+		},
+	},
+
+	// function `release_all_locks`
+	{
+		functionId: RELEASE_ALL_LOCKS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ReleaseAllLocks
 				},
 			},
 		},
