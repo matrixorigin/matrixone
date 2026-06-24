@@ -18,6 +18,7 @@ package types
 
 import (
 	"bytes"
+	"cmp"
 	"encoding"
 	"encoding/binary"
 	"fmt"
@@ -412,33 +413,25 @@ func CompareValue(left, right any) int {
 			return 0
 		}
 	case uint64:
-		rVal := right.(uint64)
-		switch {
-		case lVal > rVal:
-			return 1
-		case lVal < rVal:
-			return -1
-		default:
-			return 0
-		}
+		return cmp.Compare(lVal, right.(uint64))
 	case int8:
-		return int(lVal - right.(int8))
+		return cmp.Compare(lVal, right.(int8))
 	case int16:
-		return int(lVal - right.(int16))
+		return cmp.Compare(lVal, right.(int16))
 	case int32:
-		return int(lVal - right.(int32))
+		return cmp.Compare(lVal, right.(int32))
 	case int64:
-		return int(lVal - right.(int64))
+		return cmp.Compare(lVal, right.(int64))
 	case uint8:
-		return int(lVal - right.(uint8))
+		return cmp.Compare(lVal, right.(uint8))
 	case uint16:
-		return int(lVal - right.(uint16))
+		return cmp.Compare(lVal, right.(uint16))
 	case uint32:
-		return int(lVal - right.(uint32))
+		return cmp.Compare(lVal, right.(uint32))
 	case float32:
-		return int(lVal - right.(float32))
+		return cmp.Compare(lVal, right.(float32))
 	case float64:
-		return int(lVal - right.(float64))
+		return cmp.Compare(lVal, right.(float64))
 	case Decimal64:
 		return lVal.Compare(right.(Decimal64))
 	case Decimal128:
@@ -446,15 +439,15 @@ func CompareValue(left, right any) int {
 	case Decimal256:
 		return lVal.Compare(right.(Decimal256))
 	case Date:
-		return int(lVal - right.(Date))
+		return cmp.Compare(lVal, right.(Date))
 	case Time:
-		return int(lVal - right.(Time))
+		return cmp.Compare(lVal, right.(Time))
 	case Timestamp:
-		return int(lVal - right.(Timestamp))
+		return cmp.Compare(lVal, right.(Timestamp))
 	case Datetime:
-		return int(lVal - right.(Datetime))
+		return cmp.Compare(lVal, right.(Datetime))
 	case MoYear:
-		return int(lVal - right.(MoYear))
+		return cmp.Compare(lVal, right.(MoYear))
 	case Uuid:
 		return lVal.Compare(right.(Uuid))
 	case TS:
@@ -475,7 +468,7 @@ func CompareValue(left, right any) int {
 	case []float64:
 		return compareFloatSlice(lVal, right.([]float64))
 	case Enum:
-		return int(lVal - right.(Enum))
+		return cmp.Compare(lVal, right.(Enum))
 	case string:
 		return strings.Compare(lVal, right.(string))
 	default:

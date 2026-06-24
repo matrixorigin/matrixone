@@ -383,6 +383,9 @@ func TestAppendNumericStringToVec_AllTypes(t *testing.T) {
 			expected, _ := types.ParseDecimal256("1234567890123456789012345678901234.5678", 39, 4)
 			require.Equal(t, expected, vector.MustFixedColNoTypeCheck[types.Decimal256](v)[0])
 		}},
+		{"year", types.Type{}, types.T_year, "2024", func(v *vector.Vector) {
+			require.Equal(t, types.MoYear(2024), vector.GetFixedAtNoTypeCheck[types.MoYear](v, 0))
+		}},
 		{"varchar", types.Type{}, types.T_varchar, "hello", func(v *vector.Vector) {
 			require.Equal(t, []byte("hello"), v.GetBytesAt(0))
 		}},
@@ -920,6 +923,7 @@ func TestAppendStrValToVec_DateTypes(t *testing.T) {
 		{"datetime", types.New(types.T_datetime, 0, 0), "2025-01-03 12:30:45"},
 		{"timestamp", types.New(types.T_timestamp, 0, 0), "2025-01-03 12:30:45"},
 		{"time", types.New(types.T_time, 0, 0), "12:30:45"},
+		{"year", types.T_year.ToType(), "2024"},
 		{"uuid", types.T_uuid.ToType(), "12345678-1234-1234-1234-123456789012"},
 	}
 
@@ -1084,6 +1088,21 @@ func TestExtractPKValDecimal256(t *testing.T) {
 	pkType := types.New(types.T_decimal256, 39, 4)
 	pkVal, err := types.ParseDecimal256("1234567890123456789012345678901234.5678", pkType.Width, pkType.Scale)
 	require.NoError(t, err)
+
+	vec := vector.NewVec(pkType)
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec, pkVal, false, mp))
+
+	require.Equal(t, pkVal, extractPKVal(vec, 0))
+}
+
+func TestExtractPKValYear(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	pkType := types.T_year.ToType()
+	pkVal := types.MoYear(2024)
 
 	vec := vector.NewVec(pkType)
 	defer vec.Free(mp)
@@ -1443,6 +1462,7 @@ func TestFormatPickKeyVectorValueAsString_AllSupportedKinds(t *testing.T) {
 	timeType := types.New(types.T_time, 0, 0)
 	timeVal, err := types.ParseTime("12:30:45", timeType.Scale)
 	require.NoError(t, err)
+	yearVal := types.MoYear(2024)
 	uuidVal := types.Uuid([16]byte{0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0x56, 0x78, 0x90, 0x12})
 
 	tests := []struct {
@@ -1619,6 +1639,14 @@ func TestFormatPickKeyVectorValueAsString_AllSupportedKinds(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(vec, timeVal, false, mp))
 			},
 			want: timeVal.String(),
+		},
+		{
+			name: "year",
+			typ:  types.T_year.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, yearVal, false, mp))
+			},
+			want: yearVal.String(),
 		},
 		{
 			name: "uuid",
