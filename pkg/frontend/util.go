@@ -1030,6 +1030,20 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					return nil, nil, err
 				}
 			}
+		case types.T_year:
+			for rowIdx, row := range rows {
+				var val types.MoYear
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else {
+					val = row[colIndex].(types.MoYear)
+				}
+
+				err := vector.AppendFixed[types.MoYear](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
 		case types.T_int32:
 			for rowIdx, row := range rows {
 				var val int32
@@ -1300,6 +1314,12 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 				Id: int32(types.T_int16),
 			}
 			tType = types.New(types.T_int16, 0, 0)
+		case defines.MYSQL_TYPE_YEAR:
+			pType = plan.Type{
+				Id:    int32(types.T_year),
+				Width: 4,
+			}
+			tType = types.T_year.ToType()
 		case defines.MYSQL_TYPE_LONG:
 			pType = plan.Type{
 				Id: int32(types.T_int32),

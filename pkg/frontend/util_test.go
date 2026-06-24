@@ -1213,6 +1213,7 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 		defines.MYSQL_TYPE_ENUM,
 		defines.MYSQL_TYPE_TINY,
 		defines.MYSQL_TYPE_SHORT,
+		defines.MYSQL_TYPE_YEAR,
 		defines.MYSQL_TYPE_VARCHAR,
 		defines.MYSQL_TYPE_TEXT,
 	}
@@ -1237,6 +1238,8 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 				row[j] = "abc"
 			case defines.MYSQL_TYPE_SHORT:
 				row[j] = int16(math.MaxInt16)
+			case defines.MYSQL_TYPE_YEAR:
+				row[j] = types.MoYear(2024)
 			case defines.MYSQL_TYPE_LONG:
 				row[j] = int32(math.MaxInt32)
 			case defines.MYSQL_TYPE_LONGLONG:
@@ -1302,6 +1305,9 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 				continue
 			case types.T_enum:
 				assert.Equal(t, mrs.Data[i][j].(types.Enum), row[j])
+				continue
+			case types.T_year:
+				assert.Equal(t, mrs.Data[i][j].(types.MoYear), row[j])
 				continue
 			case types.T_text:
 				if j%2 == 0 {
