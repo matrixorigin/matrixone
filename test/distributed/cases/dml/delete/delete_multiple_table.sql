@@ -158,6 +158,16 @@ select count(*) from tj_a;
 drop table tj_a;
 drop table tj_b;
 
+-- Test: duplicate matches on right side — each target row deleted once
+create table tj_c (id int, n int);
+create table tj_d (id int);
+insert into tj_c values (1, 10), (2, 20);
+insert into tj_d values (1), (1), (1);
+delete c from tj_c c join tj_d d on c.id = d.id;
+select count(*) from tj_c;
+drop table tj_c;
+drop table tj_d;
+
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;
