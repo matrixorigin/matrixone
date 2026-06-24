@@ -114,6 +114,9 @@ func (w *Ws) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 func (w *Ws) FinalizeCommit(ctx context.Context) {
 }
 
+func (w *Ws) FinalizeCommitWithUnknownResult(ctx context.Context) {
+}
+
 func (w *Ws) Rollback(ctx context.Context) error {
 	return nil
 }

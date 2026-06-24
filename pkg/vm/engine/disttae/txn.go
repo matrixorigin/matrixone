@@ -2069,6 +2069,10 @@ func (txn *Transaction) FinalizeCommit(context.Context) {
 	txn.delTransaction()
 }
 
+func (txn *Transaction) FinalizeCommitWithUnknownResult(context.Context) {
+	txn.delTransaction()
+}
+
 func (txn *Transaction) transferTombstonesByStatement(
 	ctx context.Context,
 	snapshotUpdated bool,

@@ -1032,6 +1032,7 @@ func (tc *txnOperator) doWrite(
 	}
 	var payload []txn.TxnRequest
 	workspacePrepared := false
+	commitOutcomeCanBeUnknown := false
 	if commit {
 		if tc.reset.workspace != nil {
 			var reqs []txn.TxnRequest
@@ -1046,6 +1047,11 @@ func (tc *txnOperator) doWrite(
 					return
 				}
 				if err != nil {
+					if commitOutcomeCanBeUnknown &&
+						moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+						tc.reset.workspace.FinalizeCommitWithUnknownResult(ctx)
+						return
+					}
 					if e := tc.reset.workspace.Rollback(ctx); e != nil {
 						tc.logger.Error("rollback prepared workspace failed",
 							util.TxnIDField(tc.getTxnMeta(false)), zap.Error(e))
@@ -1117,6 +1123,7 @@ func (tc *txnOperator) doWrite(
 	}
 
 	var result *rpc.SendResult
+	commitOutcomeCanBeUnknown = commit
 	result, err = tc.doSend(ctx, requests, commit)
 	resp, err = tc.trimResponses(tc.handleError(ctx, result, err))
 	if err != nil && commit {

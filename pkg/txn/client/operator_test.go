@@ -42,6 +42,7 @@ type trackingWorkspace struct {
 	commitCount     int
 	rollbackCount   int
 	finalizeCount   int
+	unknownCount    int
 	haveDDL         bool
 	snapshotOffset  int
 	sqlCount        uint64
@@ -89,6 +90,10 @@ func (w *trackingWorkspace) Commit(context.Context) ([]txn.TxnRequest, error) {
 
 func (w *trackingWorkspace) FinalizeCommit(context.Context) {
 	w.finalizeCount++
+}
+
+func (w *trackingWorkspace) FinalizeCommitWithUnknownResult(context.Context) {
+	w.unknownCount++
 }
 
 func (w *trackingWorkspace) Rollback(context.Context) error {
@@ -252,6 +257,7 @@ func TestCommitFinalizesPreparedWorkspaceAfterCommitSuccess(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 1, ws.commitCount)
 		require.Equal(t, 1, ws.finalizeCount)
+		require.Zero(t, ws.unknownCount)
 		require.Zero(t, ws.rollbackCount)
 		require.Equal(t, txn.TxnStatus_Committed, tc.mu.txn.Status)
 	})
@@ -271,7 +277,28 @@ func TestCommitRollsBackPreparedWorkspaceAfterCommitSendError(t *testing.T) {
 		require.ErrorIs(t, err, assert.AnError)
 		require.Equal(t, 1, ws.commitCount)
 		require.Zero(t, ws.finalizeCount)
+		require.Zero(t, ws.unknownCount)
 		require.Equal(t, 1, ws.rollbackCount)
+		require.Equal(t, txn.TxnStatus_Aborted, tc.mu.txn.Status)
+	})
+}
+
+func TestCommitDoesNotRollbackPreparedWorkspaceAfterTxnUnknown(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		ws := &trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		}
+		tc.AddWorkspace(ws)
+		ts.setManual(func(*rpc.SendResult, error) (*rpc.SendResult, error) {
+			return nil, moerr.NewTxnUnknown(ctx, "test")
+		})
+
+		err := tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		require.Equal(t, 1, ws.commitCount)
+		require.Zero(t, ws.finalizeCount)
+		require.Equal(t, 1, ws.unknownCount)
+		require.Zero(t, ws.rollbackCount)
 		require.Equal(t, txn.TxnStatus_Aborted, tc.mu.txn.Status)
 	})
 }

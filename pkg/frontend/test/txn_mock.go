@@ -1134,6 +1134,18 @@ func (mr *MockWorkspaceMockRecorder) FinalizeCommit(ctx interface{}) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FinalizeCommit", reflect.TypeOf((*MockWorkspace)(nil).FinalizeCommit), ctx)
 }
 
+// FinalizeCommitWithUnknownResult mocks base method.
+func (m *MockWorkspace) FinalizeCommitWithUnknownResult(ctx context.Context) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "FinalizeCommitWithUnknownResult", ctx)
+}
+
+// FinalizeCommitWithUnknownResult indicates an expected call of FinalizeCommitWithUnknownResult.
+func (mr *MockWorkspaceMockRecorder) FinalizeCommitWithUnknownResult(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FinalizeCommitWithUnknownResult", reflect.TypeOf((*MockWorkspace)(nil).FinalizeCommitWithUnknownResult), ctx)
+}
+
 // EndStatement mocks base method.
 func (m *MockWorkspace) EndStatement() {
 	m.ctrl.T.Helper()
