@@ -200,6 +200,12 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 // not covered there.
 func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
 	logutil.Infof("[plugin] hnsw HandleDropIndex: defs=%d", len(defs))
+	// Evict the cached search index so its resources are freed NOW, rather than
+	// lingering until the 5-min VectorIndexCacheTTL. Mirrors the create-side
+	// cache.Cache.Remove(storageDef.IndexTableName).
+	if storageDef, ok := defs[catalog.Hnsw_TblType_Storage]; ok {
+		cache.Cache.Remove(storageDef.IndexTableName)
+	}
 	return nil
 }
 
