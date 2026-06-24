@@ -17,6 +17,7 @@ package checkpointtool
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -33,6 +34,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCSVPipelineErrorKeepsNonCanceledRootCause(t *testing.T) {
+	root := errors.New("remote read failed")
+
+	assert.ErrorIs(t, csvPipelineError(context.Canceled, root), root)
+	assert.ErrorIs(t, csvPipelineError(root, context.Canceled), root)
+	assert.ErrorIs(t, csvPipelineError(context.Canceled, context.Canceled), context.Canceled)
+	assert.NoError(t, csvPipelineError(nil, nil))
+}
 
 func encodedSQLType(t *testing.T, typ types.Type) string {
 	t.Helper()

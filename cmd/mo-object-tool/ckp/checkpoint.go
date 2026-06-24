@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -1834,20 +1835,30 @@ func dumpTablesConcurrently(
 	header bool,
 	out io.Writer,
 ) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	tableCh := make(chan tableDumpPlan)
-	errCh := make(chan error, 1)
 	var outMu sync.Mutex
 	var wg sync.WaitGroup
+	var errMu sync.Mutex
+	var dumpErr error
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errMu.Lock()
+		dumpErr = preferRealError(dumpErr, err)
+		errMu.Unlock()
+		cancel()
+	}
 
 	worker := func() {
 		defer wg.Done()
 		workerReader := reader.Fork(ctx)
 		for plan := range tableCh {
 			if err := dumpOneTable(ctx, workerReader, dumpOut, plan, snapshotTS, outputDir, rowOrder, metaComments, header, out, &outMu); err != nil {
-				select {
-				case errCh <- err:
-				default:
-				}
+				recordErr(err)
 				return
 			}
 		}
@@ -1856,23 +1867,22 @@ func dumpTablesConcurrently(
 		wg.Add(1)
 		go worker()
 	}
+sendPlans:
 	for _, plan := range plans {
 		select {
-		case err := <-errCh:
-			close(tableCh)
-			wg.Wait()
-			return err
 		case tableCh <- plan:
+		case <-ctx.Done():
+			break sendPlans
 		}
 	}
 	close(tableCh)
 	wg.Wait()
-	select {
-	case err := <-errCh:
-		return err
-	default:
-		return nil
+	errMu.Lock()
+	defer errMu.Unlock()
+	if dumpErr != nil {
+		return dumpErr
 	}
+	return ctx.Err()
 }
 
 func tableCSVPath(outputDir string, table checkpointtool.TableCatalogEntry) string {
@@ -2007,16 +2017,32 @@ func dumpOneTable(
 		checkpointtool.WithCSVRowOrder(rowOrder),
 	)
 	closeErr := outFile.Close()
-	if err != nil {
-		return fmt.Errorf("dump table %d (%s.%s): %w", table.TableID, table.DatabaseName, table.TableName, err)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close output file for table %d: %w", table.TableID, closeErr)
+	if combinedErr := dumpTableError(err, closeErr); combinedErr != nil {
+		return fmt.Errorf("dump table %d (%s.%s): %w", table.TableID, table.DatabaseName, table.TableName, combinedErr)
 	}
 	outMu.Lock()
 	fmt.Fprintf(out, "Table %d %s.%s dumped to %s\n", table.TableID, table.DatabaseName, table.TableName, filePath)
 	outMu.Unlock()
 	return nil
+}
+
+func dumpTableError(dumpErr, closeErr error) error {
+	return preferRealError(dumpErr, closeErr)
+}
+
+func preferRealError(current, next error) error {
+	switch {
+	case current == nil:
+		return next
+	case next == nil:
+		return current
+	case errors.Is(current, context.Canceled) && !errors.Is(next, context.Canceled):
+		return next
+	case errors.Is(next, context.Canceled) && !errors.Is(current, context.Canceled):
+		return current
+	default:
+		return errors.Join(current, next)
+	}
 }
 
 func safePathPart(s string) string {

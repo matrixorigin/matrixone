@@ -17,6 +17,7 @@ package ckp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreferRealErrorKeepsNonCanceledRootCause(t *testing.T) {
+	root := errors.New("s3 write failed")
+
+	assert.ErrorIs(t, preferRealError(context.Canceled, root), root)
+	assert.ErrorIs(t, preferRealError(root, context.Canceled), root)
+	assert.ErrorIs(t, preferRealError(context.Canceled, context.Canceled), context.Canceled)
+	assert.NoError(t, preferRealError(nil, nil))
+}
 
 func TestNormalizeCreateTableDDLName(t *testing.T) {
 	table := checkpointtool.TableCatalogEntry{

@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -2019,10 +2020,22 @@ func (r *CheckpointReader) streamTableCSVPipeline(
 	close(chunks)
 	writerErr := <-writerDone
 	printCSVPipelineReport("finish", counters)
-	if producerErr != nil {
+	return csvPipelineError(producerErr, writerErr)
+}
+
+func csvPipelineError(producerErr, writerErr error) error {
+	switch {
+	case producerErr == nil:
+		return writerErr
+	case writerErr == nil:
 		return producerErr
+	case errors.Is(producerErr, context.Canceled) && !errors.Is(writerErr, context.Canceled):
+		return writerErr
+	case errors.Is(writerErr, context.Canceled) && !errors.Is(producerErr, context.Canceled):
+		return producerErr
+	default:
+		return errors.Join(producerErr, writerErr)
 	}
-	return writerErr
 }
 
 func (r *CheckpointReader) produceCSVChunks(
