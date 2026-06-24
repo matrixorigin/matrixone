@@ -89,6 +89,9 @@ func MergeSortBatches(
 	case types.T_time:
 		ds := &fixedDataSlice[types.Time]{getFixedCols[types.Time](batches, sortKeyIdx)}
 		merge = newMerge(sort.GenericLess[types.Time], ds, nulls)
+	case types.T_year:
+		ds := &fixedDataSlice[types.MoYear]{getFixedCols[types.MoYear](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[types.MoYear], ds, nulls)
 	case types.T_timestamp:
 		ds := &fixedDataSlice[types.Timestamp]{getFixedCols[types.Timestamp](batches, sortKeyIdx)}
 		merge = newMerge(sort.GenericLess[types.Timestamp], ds, nulls)
