@@ -18,6 +18,7 @@ grant all on table protected_bvt_sys.* to protected_bvt_sys_writer with grant op
 grant ownership on table protected_bvt_sys.t1 to protected_bvt_sys_writer;
 create user protected_bvt_sys_user identified by '111' default role protected_bvt_sys_writer;
 -- @session:id=3&user=sys:protected_bvt_sys_user:protected_bvt_sys_writer&password=111
+set enable_privilege_cache = off;
 select a from protected_bvt_sys.t1;
 create database protected_bvt_sys_normal;
 drop database protected_bvt_sys_normal;
@@ -36,6 +37,7 @@ drop account if exists protected_bvt_acc;
 create account protected_bvt_acc ADMIN_NAME 'admin' IDENTIFIED BY '111';
 
 -- @session:id=1&user=protected_bvt_acc:admin&password=111
+set enable_privilege_cache = off;
 set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB';
 set global protected_databases = '';
 set global protected_databases = ',';
@@ -82,15 +84,18 @@ grant connect on account * to protected_bvt_writer;
 create user protected_bvt_user identified by '111' default role protected_bvt_writer;
 
 -- @session:id=4&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
+set enable_privilege_cache = off;
 use protected_bvt_later;
 select a from t1;
 -- @session
 
 -- @session:id=1&user=protected_bvt_acc:admin&password=111
+set enable_privilege_cache = off;
 set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB,protected_bvt_later';
 -- @session
 
 -- @session:id=2&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
+set enable_privilege_cache = off;
 use protected_bvt_db;
 show tables;
 select a from t1;
@@ -99,12 +104,14 @@ select a from protected_bvt_db.v1;
 -- @session
 
 -- @session:id=1&user=protected_bvt_acc:admin&password=111
+set enable_privilege_cache = off;
 create sequence protected_bvt_db.s1;
 create function protected_bvt_db.f1(a int) returns int language sql as '$1 + 1';
 create procedure protected_bvt_db.p1() 'begin select 1; end';
 -- @session
 
 -- @session:id=2&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
+set enable_privilege_cache = off;
 create database protected_bvt_normal;
 drop database protected_bvt_normal;
 create database protected_bvt_new;
@@ -149,12 +156,14 @@ drop table protected_bvt_db.t1;
 drop database protected_bvt_db;
 
 -- @session:id=4&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
+set enable_privilege_cache = off;
 create table t2(a int);
 drop table t1;
 create table t_ctas as select * from t1;
 -- @session
 
 -- @session:id=2&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
+set enable_privilege_cache = off;
 insert into protected_bvt_later.t1 values(11);
 drop database protected_bvt_later;
 create database `CamelDB`;
@@ -163,11 +172,13 @@ drop database if exists `cameldb`;
 -- @session
 
 -- @session:id=1&user=protected_bvt_acc:admin&password=111
+set enable_privilege_cache = off;
 set global lower_case_table_names = 0;
 set global protected_databases = 'ProtectedCaseDB';
 -- @session
 
 -- @session:id=3&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
+set enable_privilege_cache = off;
 select @@lower_case_table_names;
 create database `protectedcasedb`;
 drop database `protectedcasedb`;
@@ -176,6 +187,7 @@ drop database `ProtectedCaseDB`;
 -- @session
 
 -- @session:id=1&user=protected_bvt_acc:admin&password=111
+set enable_privilege_cache = off;
 set global lower_case_table_names = 1;
 drop user if exists protected_bvt_user;
 drop role if exists protected_bvt_writer;

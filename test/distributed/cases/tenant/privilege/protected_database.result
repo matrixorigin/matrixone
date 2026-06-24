@@ -18,6 +18,7 @@ grant ownership on database protected_bvt_sys to protected_bvt_sys_writer;
 grant all on table protected_bvt_sys.* to protected_bvt_sys_writer with grant option;
 grant ownership on table protected_bvt_sys.t1 to protected_bvt_sys_writer;
 create user protected_bvt_sys_user identified by '111' default role protected_bvt_sys_writer;
+set enable_privilege_cache = off;
 select a from protected_bvt_sys.t1;
 a
 1
@@ -39,6 +40,7 @@ drop database protected_bvt_sys;
 set global protected_databases = 'protected_bvt_unused';
 drop account if exists protected_bvt_acc;
 create account protected_bvt_acc ADMIN_NAME 'admin' IDENTIFIED BY '111';
+set enable_privilege_cache = off;
 set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB';
 set global protected_databases = '';
 internal error: protected_databases cannot be cleared directly
@@ -86,11 +88,14 @@ grant all on database protected_bvt_later to protected_bvt_writer;
 grant all on table protected_bvt_later.* to protected_bvt_writer;
 grant connect on account * to protected_bvt_writer;
 create user protected_bvt_user identified by '111' default role protected_bvt_writer;
+set enable_privilege_cache = off;
 use protected_bvt_later;
 select a from t1;
 a
 10
+set enable_privilege_cache = off;
 set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB,protected_bvt_later';
+set enable_privilege_cache = off;
 use protected_bvt_db;
 show tables;
 Tables_in_protected_bvt_db
@@ -114,9 +119,11 @@ a
 select a from protected_bvt_db.v1;
 a
 1
+set enable_privilege_cache = off;
 create sequence protected_bvt_db.s1;
 create function protected_bvt_db.f1(a int) returns int language sql as '$1 + 1';
 create procedure protected_bvt_db.p1() 'begin select 1; end';
+set enable_privilege_cache = off;
 create database protected_bvt_normal;
 drop database protected_bvt_normal;
 create database protected_bvt_new;
@@ -199,12 +206,14 @@ drop table protected_bvt_db.t1;
 internal error: do not have privilege to execute the statement
 drop database protected_bvt_db;
 internal error: do not have privilege to execute the statement
+set enable_privilege_cache = off;
 create table t2(a int);
 internal error: do not have privilege to execute the statement
 drop table t1;
 internal error: do not have privilege to execute the statement
 create table t_ctas as select * from t1;
 internal error: do not have privilege to execute the statement
+set enable_privilege_cache = off;
 insert into protected_bvt_later.t1 values(11);
 internal error: do not have privilege to execute the statement
 drop database protected_bvt_later;
@@ -215,8 +224,10 @@ create database `cameldb`;
 internal error: do not have privilege to execute the statement
 drop database if exists `cameldb`;
 internal error: do not have privilege to execute the statement
+set enable_privilege_cache = off;
 set global lower_case_table_names = 0;
 set global protected_databases = 'ProtectedCaseDB';
+set enable_privilege_cache = off;
 select @@lower_case_table_names;
 @@lower_case_table_names
 1
@@ -228,6 +239,7 @@ create database `ProtectedCaseDB`;
 internal error: do not have privilege to execute the statement
 drop database `ProtectedCaseDB`;
 internal error: do not have privilege to execute the statement
+set enable_privilege_cache = off;
 set global lower_case_table_names = 1;
 drop user if exists protected_bvt_user;
 drop role if exists protected_bvt_writer;
