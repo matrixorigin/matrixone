@@ -1878,9 +1878,59 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	}
 
 	waiter.Wait()
+	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(dirtyObject)
 	_ = txn.GCObjsByStats(dirtyObject...)
 
 	return nil
+}
+
+func (txn *Transaction) unprotectUnreferencedTxnLocalSharedFilesLocked(
+	statsList []objectio.ObjectStats,
+) {
+	if !txn.isCloneTxn ||
+		txn.op == nil ||
+		txn.engine == nil ||
+		txn.engine.cloneTxnCache == nil {
+		return
+	}
+
+	txnID := txn.op.Txn().ID
+	for i := range statsList {
+		name := statsList[i].ObjectName().String()
+		if txn.hasLiveObjectStatsRefLocked(name) {
+			continue
+		}
+		txn.engine.cloneTxnCache.RemoveTxnLocalSharedFile(txnID, name)
+	}
+}
+
+func (txn *Transaction) hasLiveObjectStatsRefLocked(name string) bool {
+	for _, entry := range txn.writes {
+		if entry.bat == nil || entry.bat.IsEmpty() {
+			continue
+		}
+
+		statsIdx := -1
+		for i, attr := range entry.bat.Attrs {
+			if attr == catalog.ObjectMeta_ObjectStats {
+				statsIdx = i
+				break
+			}
+		}
+		if statsIdx == -1 {
+			continue
+		}
+
+		vec := entry.bat.Vecs[statsIdx]
+		for i := range vec.Length() {
+			stats := objectio.ObjectStats(vec.GetBytesAt(i))
+			if stats.ObjectName().String() == name {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // TODO::remove it after workspace refactor.
