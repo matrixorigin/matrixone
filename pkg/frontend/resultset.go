@@ -330,6 +330,8 @@ func (mrs *MysqlResultSet) GetInt64(ctx context.Context, rindex, cindex uint64) 
 		return int64(v), nil
 	case uint:
 		return int64(v), nil
+	case types.MoYear:
+		return v.ToInt64(), nil
 	default:
 		return 0, moerr.NewInternalErrorf(ctx, "unsupported type %d ", v)
 	}
