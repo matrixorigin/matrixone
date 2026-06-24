@@ -250,6 +250,16 @@ func TestCheck(t *testing.T) {
 	require.Equal(t, true, got)
 }
 
+func TestReset(t *testing.T) {
+	backOff := NewReConnectionBackOff(time.Hour, 0)
+	backOff.Count()
+	require.False(t, backOff.Check())
+
+	backOff.Reset()
+	require.True(t, backOff.Check())
+	require.Equal(t, 0, backOff.count)
+}
+
 func TestCloseDBConnClearsGlobalPointer(t *testing.T) {
 	SyncTestWriteRowRecords(t, func(t *testing.T) {
 		CloseDBConn()
@@ -262,6 +272,44 @@ func TestCloseDBConnClearsGlobalPointer(t *testing.T) {
 		CloseDBConn()
 		require.Nil(t, db.Load())
 		require.Error(t, dbConn.Ping())
+	})
+}
+
+func TestGetOrInitDBConn_ForceReconnectSuccessResetsBackoff(t *testing.T) {
+	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		old := DBConnErrCount
+		defer func() {
+			DBConnErrCount = old
+		}()
+		DBConnErrCount = NewReConnectionBackOff(time.Hour, 0)
+		DBConnErrCount.Count()
+		require.False(t, DBConnErrCount.Check())
+
+		CloseDBConn()
+		dbConn, _, err := sqlmock.New()
+		require.NoError(t, err)
+		SetDBConn(dbConn)
+		defer CloseDBConn()
+
+		newDBConn, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+		require.NoError(t, err)
+		mock.ExpectPing()
+
+		SetSQLWriterDBUser("user", "password")
+		SetSQLWriterDBAddressFunc(func(context.Context, bool) (string, error) {
+			return "127.0.0.1:6001", nil
+		})
+
+		stubs := gostub.Stub(&openDBConn, func(string, string) (*sql.DB, error) {
+			return newDBConn, nil
+		})
+		defer stubs.Reset()
+
+		got, err := GetOrInitDBConn(true, true)
+		require.NoError(t, err)
+		require.Same(t, newDBConn, got)
+		require.True(t, DBConnErrCount.Check())
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
 
@@ -428,6 +476,47 @@ func TestGetOrInitDBConn_RefreshInProgressUsesCurrentConn(t *testing.T) {
 		require.NoError(t, refreshErr)
 		require.Same(t, newDBConn, refreshConn)
 		require.Same(t, newDBConn, db.Load())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestWriteRowRecords_ResetBackoffAfterSuccessfulWrite(t *testing.T) {
+	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		old := DBConnErrCount
+		defer func() {
+			DBConnErrCount = old
+		}()
+		DBConnErrCount = NewReConnectionBackOff(time.Hour, 0)
+		DBConnErrCount.Count()
+
+		dbConn, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer dbConn.Close()
+
+		for i := 0; i < 3; i++ {
+			mock.ExpectExec(regexp.QuoteMeta(`LOAD DATA INLINE FORMAT='csv', DATA='record1
+' INTO TABLE testDB.testTable`)).WillReturnResult(sqlmock.NewResult(1, 1))
+		}
+
+		var forceNewConnFlags []bool
+		stubs := gostub.Stub(&GetOrInitDBConn, func(forceNewConn bool, randomCN bool) (*sql.DB, error) {
+			forceNewConnFlags = append(forceNewConnFlags, forceNewConn)
+			return dbConn, nil
+		})
+		defer stubs.Reset()
+
+		tbl := &table.Table{
+			Database: "testDB",
+			Table:    "testTable",
+			Columns:  []table.Column{{Name: "str", ColType: table.TVarchar}},
+		}
+		for i := 0; i < 3; i++ {
+			n, err := WriteRowRecords([][]string{{"record1"}}, tbl, time.Second)
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+		}
+
+		require.Equal(t, []bool{true, false, false}, forceNewConnFlags)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }

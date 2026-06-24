@@ -204,6 +204,9 @@ func rebuildDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 	oldDBConn := setDBConnLocked(newDBConn)
 	dbMux.Unlock()
 	closeStaleDBConn(oldDBConn)
+	if forceNewConn {
+		DBConnErrCount.Reset()
+	}
 
 	return newDBConn, nil
 }
@@ -262,6 +265,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 		return 0, err
 	}
 
+	DBConnErrCount.Reset()
 	return len(records), nil
 }
 
@@ -482,6 +486,14 @@ func (b *ReConnectionBackOff) Count() bool {
 	b.count++
 	b.last = time.Now()
 	return b.count <= b.threshold
+}
+
+func (b *ReConnectionBackOff) Reset() {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	b.count = 0
+	b.last = time.Now()
 }
 
 // Check return same as Count, but without changed.
