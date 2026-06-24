@@ -74,6 +74,7 @@ type MultiUpdate struct {
 	Action                 UpdateAction
 	IsOnduplicateKeyUpdate bool
 	IsRemote               bool
+	NeedDedupDelete        bool // set when DELETE comes from a JOIN (duplicates possible)
 
 	Engine engine.Engine
 
