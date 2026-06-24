@@ -153,6 +153,7 @@ type TableSchema struct {
 	PrimaryKey   []string
 	ForeignKeys  []TableForeignKey
 	Partition    string
+	ClusterBy    []string
 }
 
 type TableCatalogEntry struct {
@@ -462,6 +463,10 @@ func renderCreateTableDDLFull(tableName string, cols []TableColumn, comment stri
 }
 
 func renderCreateTableDDLFullWithForeignKeys(tableName string, cols []TableColumn, comment string, partition string, primaryKey []string, uniqueKeys []TableUniqueKey, foreignKeys []TableForeignKey) string {
+	return renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName, cols, comment, partition, primaryKey, uniqueKeys, foreignKeys, nil)
+}
+
+func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols []TableColumn, comment string, partition string, primaryKey []string, uniqueKeys []TableUniqueKey, foreignKeys []TableForeignKey, clusterBy []string) string {
 	if tableName == "" || len(cols) == 0 {
 		return ""
 	}
@@ -560,7 +565,11 @@ func renderCreateTableDDLFullWithForeignKeys(tableName string, cols []TableColum
 		sb.WriteString(" ")
 		sb.WriteString(partition)
 	}
-	if clusterCols := clusterByColumns(cols); len(clusterCols) > 0 {
+	if len(clusterBy) > 0 {
+		sb.WriteString(" CLUSTER BY (")
+		appendDDLIdentList(&sb, clusterBy)
+		sb.WriteString(")")
+	} else if clusterCols := clusterByColumns(cols); len(clusterCols) > 0 {
 		sb.WriteString(" CLUSTER BY (")
 		for i, col := range clusterCols {
 			if i > 0 {
@@ -701,7 +710,7 @@ func appendColumnDDLAttributes(sb *strings.Builder, col TableColumn) {
 		if col.AutoIncrement {
 			sb.WriteString(" AUTO_INCREMENT")
 		}
-		if col.HasDefault {
+		if col.HasDefault && !col.AutoIncrement {
 			if strings.TrimSpace(col.Default) == "" {
 				sb.WriteString(" DEFAULT NULL")
 			} else {
@@ -891,6 +900,9 @@ func formatDDLDefault(defaultExpr string) string {
 	if defaultExpr == "" {
 		return "NULL"
 	}
+	if strings.EqualFold(defaultExpr, "null") {
+		return "NULL"
+	}
 	if len(defaultExpr) >= 2 && defaultExpr[0] == '\'' && defaultExpr[len(defaultExpr)-1] == '\'' {
 		return "'" + strings.ReplaceAll(defaultExpr[1:len(defaultExpr)-1], "'", "''") + "'"
 	}
@@ -926,7 +938,7 @@ func RenderCreateTableDDLFromSchema(schema *TableSchema) string {
 			return ""
 		}
 	}
-	return renderCreateTableDDLFullWithForeignKeys(schema.TableName, schema.Columns, schema.Comment, schema.Partition, schema.PrimaryKey, schema.UniqueKeys, schema.ForeignKeys)
+	return renderCreateTableDDLFullWithForeignKeysAndClusterBy(schema.TableName, schema.Columns, schema.Comment, schema.Partition, schema.PrimaryKey, schema.UniqueKeys, schema.ForeignKeys, schema.ClusterBy)
 }
 
 func inferBuiltinCatalogLayout(
@@ -1086,6 +1098,7 @@ func (r *CheckpointReader) ReadTableSchema(
 		if len(cols) > 0 {
 			schema.Columns = cols
 		}
+		schema.ClusterBy = buildClusterByFromMoColumnsRows(moColumnsView, tableID)
 		if moTablesView != nil {
 			schema.ForeignKeys = findForeignKeysFromCatalogViews(moTablesView, moColumnsView, tableID)
 		}
@@ -1415,6 +1428,12 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 		clone.PrimaryKey = make([]string, len(schema.PrimaryKey))
 		for i, col := range schema.PrimaryKey {
 			clone.PrimaryKey[i] = strings.Clone(col)
+		}
+	}
+	if len(schema.ClusterBy) > 0 {
+		clone.ClusterBy = make([]string, len(schema.ClusterBy))
+		for i, col := range schema.ClusterBy {
+			clone.ClusterBy[i] = strings.Clone(col)
 		}
 	}
 	if len(schema.Columns) > 0 {
@@ -3436,6 +3455,7 @@ func createTableDDLFromCatalogViews(tableID uint64, moTablesView, moColumnsView 
 	uniqueKeys := []TableUniqueKey(nil)
 	primaryKey := []string(nil)
 	foreignKeys := []TableForeignKey(nil)
+	clusterBy := []string(nil)
 	partition := ""
 	if moTablesView != nil {
 		tableName = findTableNameFromMoTables(moTablesView, tableID)
@@ -3446,11 +3466,14 @@ func createTableDDLFromCatalogViews(tableID uint64, moTablesView, moColumnsView 
 			foreignKeys = findForeignKeysFromCatalogViews(moTablesView, moColumnsView, tableID)
 		}
 	}
+	if moColumnsView != nil {
+		clusterBy = buildClusterByFromMoColumnsRows(moColumnsView, tableID)
+	}
 	if len(partitionMetadataView) > 0 && partitionMetadataView[0] != nil {
 		partition = buildPartitionClauseFromMetadata(partitionMetadataView[0], tableID)
 	}
 	if moColumnsView != nil {
-		if ddl := buildCreateTableFromMoColumnsWithOptions(moColumnsView, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys, foreignKeys); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsWithOptions(moColumnsView, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys, foreignKeys, clusterBy); ddl != "" {
 			return ddl
 		}
 	}
@@ -3829,6 +3852,79 @@ func buildColumnsFromMoColumnsRowsAt(
 		)
 	}
 	return cols
+}
+
+func buildClusterByFromMoColumnsRows(view *LogicalTableView, tableID uint64) []string {
+	relnameIDCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_RelID)
+	nameCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Name)
+	clusterByCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsClusterBy)
+	if relnameIDCol < 0 || nameCol < 0 || clusterByCol < 0 {
+		return nil
+	}
+	if clusterBy := buildClusterByFromMoColumnsRowsAt(view, tableID, relnameIDCol, nameCol, clusterByCol); len(clusterBy) > 0 {
+		return clusterBy
+	}
+
+	dataWidth := len(view.Headers) - logicalViewDataOffset(view)
+	for _, match := range catalogLayoutMatches(dataWidth, moColumnsID) {
+		relnameIDCol = catalogColIndexForLayout(match.layout, moColumnsID, catalog.SystemColAttr_RelID, match.offset)
+		nameCol = catalogColIndexForLayout(match.layout, moColumnsID, catalog.SystemColAttr_Name, match.offset)
+		clusterByCol = catalogColIndexForLayout(match.layout, moColumnsID, catalog.SystemColAttr_IsClusterBy, match.offset)
+		if clusterBy := buildClusterByFromMoColumnsRowsAt(view, tableID, relnameIDCol, nameCol, clusterByCol); len(clusterBy) > 0 {
+			return clusterBy
+		}
+	}
+	return nil
+}
+
+func buildClusterByFromMoColumnsRowsAt(
+	view *LogicalTableView,
+	tableID uint64,
+	relnameIDCol int,
+	nameCol int,
+	clusterByCol int,
+) []string {
+	if relnameIDCol < 0 || nameCol < 0 || clusterByCol < 0 {
+		return nil
+	}
+	tableIDStr := fmt.Sprintf("%d", tableID)
+	for _, fullRow := range view.Rows {
+		row := fullRow[logicalViewDataOffset(view):]
+		if relnameIDCol >= len(row) || nameCol >= len(row) || clusterByCol >= len(row) {
+			continue
+		}
+		if row[relnameIDCol] != tableIDStr || !isTruthyCatalogValue(row[clusterByCol]) {
+			continue
+		}
+		name := strings.TrimSpace(row[nameCol])
+		if name == "" {
+			continue
+		}
+		if names := splitCompositeClusterByColumnName(name); len(names) > 0 {
+			return names
+		}
+		return []string{name}
+	}
+	return nil
+}
+
+func splitCompositeClusterByColumnName(name string) []string {
+	if !strings.HasPrefix(name, catalog.PrefixCBColName) {
+		return nil
+	}
+	var names []string
+	for next := len(catalog.PrefixCBColName); next < len(name); {
+		if next+3 > len(name) {
+			return nil
+		}
+		strLen, err := strconv.Atoi(name[next : next+3])
+		if err != nil || strLen <= 0 || next+3+strLen > len(name) {
+			return nil
+		}
+		names = append(names, name[next+3:next+3+strLen])
+		next += strLen + 3
+	}
+	return names
 }
 
 // getDataColumnsFromView extracts only the data columns (skipping object/block/row meta columns).
@@ -4870,7 +4966,7 @@ func buildCreateTableFromMoColumns(view *LogicalTableView, tableID uint64, table
 	if len(tableNames) > 1 && tableNames[1] != "" {
 		tableComment = tableNames[1]
 	}
-	return buildCreateTableFromMoColumnsWithOptions(view, tableID, tableName, tableComment, "", nil, nil, nil)
+	return buildCreateTableFromMoColumnsWithOptions(view, tableID, tableName, tableComment, "", nil, nil, nil, nil)
 }
 
 func buildCreateTableFromMoColumnsWithOptions(
@@ -4882,7 +4978,11 @@ func buildCreateTableFromMoColumnsWithOptions(
 	primaryKey []string,
 	uniqueKeys []TableUniqueKey,
 	foreignKeys []TableForeignKey,
+	clusterBy []string,
 ) string {
+	if clusterBy == nil {
+		clusterBy = buildClusterByFromMoColumnsRows(view, tableID)
+	}
 	relnameIDCol := fallbackCatalogColIndex(view, moColumnsID, "att_relname_id")
 	nameCol := fallbackCatalogColIndex(view, moColumnsID, "attname")
 	typCol := fallbackCatalogColIndex(view, moColumnsID, "atttyp")
@@ -4890,7 +4990,7 @@ func buildCreateTableFromMoColumnsWithOptions(
 	hiddenCol := fallbackCatalogColIndex(view, moColumnsID, "att_is_hidden")
 
 	if relnameIDCol >= 0 && nameCol >= 0 && typCol >= 0 && numCol >= 0 {
-		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys, foreignKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys, foreignKeys, clusterBy, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
 			return ddl
 		}
 	}
@@ -4902,7 +5002,7 @@ func buildCreateTableFromMoColumnsWithOptions(
 		typCol = catalogColIndexForLayout(match.layout, moColumnsID, "atttyp", match.offset)
 		numCol = catalogColIndexForLayout(match.layout, moColumnsID, "attnum", match.offset)
 		hiddenCol = catalogColIndexForLayout(match.layout, moColumnsID, "att_is_hidden", match.offset)
-		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys, foreignKeys, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
+		if ddl := buildCreateTableFromMoColumnsAt(view, tableID, tableName, tableComment, partition, primaryKey, uniqueKeys, foreignKeys, clusterBy, relnameIDCol, nameCol, typCol, numCol, hiddenCol); ddl != "" {
 			return ddl
 		}
 	}
@@ -4919,6 +5019,7 @@ func buildCreateTableFromMoColumnsAt(
 	primaryKey []string,
 	uniqueKeys []TableUniqueKey,
 	foreignKeys []TableForeignKey,
+	clusterBy []string,
 	relnameIDCol int,
 	nameCol int,
 	typCol int,
@@ -4930,7 +5031,7 @@ func buildCreateTableFromMoColumnsAt(
 	if len(cols) == 0 {
 		return ""
 	}
-	return renderCreateTableDDLFullWithForeignKeys(tableName, cols, tableComment, partition, primaryKey, uniqueKeys, foreignKeys)
+	return renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName, cols, tableComment, partition, primaryKey, uniqueKeys, foreignKeys, clusterBy)
 }
 
 func isPrintableSQLType(sqlType string) bool {

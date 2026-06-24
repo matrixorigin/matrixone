@@ -618,6 +618,65 @@ func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *test
 	assert.NotContains(t, ddl, "`old`")
 }
 
+func TestCreateTableDDLFromCatalogViews_PreservesCompositeClusterByFromMoColumns(t *testing.T) {
+	moTablesView := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"rel_id", "relname", "reldatabase", "reldatabase_id",
+			"relpersistence", "relkind", "rel_comment",
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"272528", "statement_info", "system", "272500",
+				"", "r", "record each statement and stats info[mo_no_del_hint]",
+			},
+		},
+	}
+
+	moColumnsView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, catalog.MoColumnsSchema...),
+		Rows: [][]string{
+			moColumnsTestRow(t, "272528", "statement_info", "request_at", encodedSQLType(t, types.New(types.T_datetime, 0, 6)), "1", "1", "0"),
+			moColumnsTestRow(t, "272528", "statement_info", "account_id", encodedSQLType(t, types.T_uint32.ToType()), "2", "0", "1"),
+			moColumnsTestRow(t, "272528", "statement_info", "__mo_cbkey_010request_at010account_id", encodedSQLType(t, types.T_varchar.ToType()), "3", "0", "2", catalog.SystemColAttr_IsHidden, "1", catalog.SystemColAttr_IsClusterBy, "1"),
+		},
+	}
+
+	ddl := createTableDDLFromCatalogViews(272528, moTablesView, moColumnsView)
+	assert.Contains(t, ddl, "CREATE TABLE `statement_info`")
+	assert.Contains(t, ddl, "`request_at` DATETIME(6) NOT NULL")
+	assert.Contains(t, ddl, "`account_id` INT UNSIGNED")
+	assert.NotContains(t, ddl, "__mo_cbkey_010request_at010account_id")
+	assert.Contains(t, ddl, "COMMENT='record each statement and stats info[mo_no_del_hint]' CLUSTER BY (`request_at`, `account_id`)")
+}
+
+func moColumnsTestRow(t *testing.T, relID, relName, name, typ, attnum, notNull, seqnum string, extra ...string) []string {
+	t.Helper()
+	data := make([]string, len(catalog.MoColumnsSchema))
+	set := func(colName, value string) {
+		for i, header := range catalog.MoColumnsSchema {
+			if header == colName {
+				data[i] = value
+				return
+			}
+		}
+		t.Fatalf("missing mo_columns header %s", colName)
+	}
+	set(catalog.SystemColAttr_RelID, relID)
+	set(catalog.SystemColAttr_RelName, relName)
+	set(catalog.SystemColAttr_Name, name)
+	set(catalog.SystemColAttr_Type, typ)
+	set(catalog.SystemColAttr_Num, attnum)
+	set(catalog.SystemColAttr_NullAbility, notNull)
+	set(catalog.SystemColAttr_IsHidden, "0")
+	set(catalog.SystemColAttr_Seqnum, seqnum)
+	for i := 0; i+1 < len(extra); i += 2 {
+		set(extra[i], extra[i+1])
+	}
+	return append([]string{"obj1", "0", attnum}, data...)
+}
+
 func TestCreateTableDDLFromCatalogViews_IncludesForeignKeys(t *testing.T) {
 	moTablesHeaders := append([]string{"object", "block", "row"}, catalog.MoTablesSchema...)
 	tableRow := func(relID, relName, dbName, dbID, constraint string) []string {
@@ -974,6 +1033,18 @@ func TestRenderCreateTableDDLFromSchema_EnumSetValues(t *testing.T) {
 
 	assert.Contains(t, ddl, "`c_enum` ENUM('red','green','blue')")
 	assert.Contains(t, ddl, "`c_set` SET('a','b','c')")
+}
+
+func TestRenderCreateTableDDLFromSchema_AutoIncrementSkipsDefaultNull(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "t_auto",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "BIGINT UNSIGNED", Position: 1, AutoIncrement: true, HasDefault: true},
+		},
+	})
+
+	assert.Contains(t, ddl, "`id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT")
+	assert.NotContains(t, ddl, "AUTO_INCREMENT DEFAULT NULL")
 }
 
 func TestDecodeMoColumnEncodedSQLType_TemporalScale(t *testing.T) {
