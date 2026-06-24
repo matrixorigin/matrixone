@@ -83,17 +83,17 @@ grant connect on account * to protected_bvt_writer;
 
 create user protected_bvt_user identified by '111' default role protected_bvt_writer;
 
+-- @session:id=1&user=protected_bvt_acc:admin&password=111
+set enable_privilege_cache = off;
+set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB,protected_bvt_later';
+-- @session
+
 -- @session:id=4&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
 set enable_privilege_cache = off;
 select @@global.protected_databases;
 select database();
 use protected_bvt_later;
 select a from t1;
--- @session
-
--- @session:id=1&user=protected_bvt_acc:admin&password=111
-set enable_privilege_cache = off;
-set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB,protected_bvt_later';
 -- @session
 
 -- @session:id=2&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
