@@ -69,7 +69,6 @@ insert into protected_bvt_db.fk_child values(1, 1);
 create table protected_bvt_db.fk_self(id int primary key, parent_id int, constraint fk_self_parent foreign key(parent_id) references protected_bvt_db.fk_self(id));
 create table protected_bvt_later.t1(a int);
 insert into protected_bvt_later.t1 values(10);
-set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB,protected_bvt_later';
 create role protected_bvt_writer;
 grant create database,drop database on account * to protected_bvt_writer;
 grant all on database protected_bvt_db to protected_bvt_writer;
@@ -79,6 +78,14 @@ grant ownership on table protected_bvt_db.t1 to protected_bvt_writer;
 grant all on database protected_bvt_later to protected_bvt_writer;
 grant all on table protected_bvt_later.* to protected_bvt_writer;
 create user protected_bvt_user identified by '111' default role protected_bvt_writer;
+
+-- @session:id=4&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
+use protected_bvt_later;
+select a from t1;
+-- @session
+
+-- @session:id=1&user=protected_bvt_acc:admin&password=111
+set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB,protected_bvt_later';
 -- @session
 
 -- @session:id=2&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
@@ -138,6 +145,14 @@ insert into protected_bvt_db.fk_self values(2, 1);
 truncate table protected_bvt_db.t1;
 drop table protected_bvt_db.t1;
 drop database protected_bvt_db;
+
+-- @session:id=4&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
+create table t2(a int);
+drop table t1;
+create table t_ctas as select * from t1;
+-- @session
+
+-- @session:id=2&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
 insert into protected_bvt_later.t1 values(11);
 drop database protected_bvt_later;
 create database `CamelDB`;

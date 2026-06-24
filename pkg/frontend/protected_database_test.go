@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -30,15 +32,20 @@ func protectedTargetsFromStatement(stmt tree.Statement) []string {
 	return determinePrivilegeSetOfStatement(stmt).writeDatabaseTargets
 }
 
+func newProtectedDatabaseTestSessionWithCurrentDB(dbName string) *Session {
+	proto := &MysqlProtocolImpl{}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(proto)}}
+	ses.respr.SetStr(DBNAME, dbName)
+	return ses
+}
+
 func TestProtectedDatabaseSetFromString(t *testing.T) {
 	require.Nil(t, protectedDatabaseSetFromString(nil, ""))
 	require.Nil(t, protectedDatabaseSetFromString(nil, " , , "))
 	require.Equal(t, map[string]struct{}{"db1": {}, "CamelDB": {}}, protectedDatabaseSetFromString(nil, " db1, CamelDB "))
 	require.Equal(t, map[string]struct{}{"db1": {}, "cameldb": {}}, protectedDatabaseSetFromString(&Session{}, " db1, CamelDB "))
 
-	proto := &MysqlProtocolImpl{}
-	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(proto)}}
-	ses.respr.SetStr(DBNAME, "current_db")
+	ses := newProtectedDatabaseTestSessionWithCurrentDB("current_db")
 	require.Equal(t, "", normalizeProtectedDatabaseName(ses, ""))
 	require.Nil(t, protectedDatabaseSetFromString(ses, ","))
 	require.Equal(t, map[string]struct{}{"db1": {}}, protectedDatabaseSetFromString(ses, "db1,"))
@@ -147,6 +154,34 @@ func TestCheckProtectedDatabaseWriteWithSet(t *testing.T) {
 	require.False(t, checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, "normal_db", "protected_db"))
 	require.False(t, checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, " CamelDB "))
 	require.False(t, checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, "cameldb"))
+}
+
+func TestCheckProtectedDatabaseWriteWithSetUsesCurrentDatabaseForEmptyTarget(t *testing.T) {
+	ctx := context.Background()
+	ses := newProtectedDatabaseTestSessionWithCurrentDB("protected_db")
+	protectedDatabases := protectedDatabaseSetFromString(ses, "protected_db")
+
+	require.False(t, checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, ""))
+}
+
+func TestUnqualifiedProtectedDatabaseWritesUseCurrentDatabase(t *testing.T) {
+	ctx := context.Background()
+	ses := newProtectedDatabaseTestSessionWithCurrentDB("protected_db")
+	protectedDatabases := protectedDatabaseSetFromString(ses, "protected_db")
+
+	testCases := []string{
+		"create table t (a int)",
+		"drop table t",
+		"create table t as select 1",
+	}
+
+	for _, sql := range testCases {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			require.False(t, checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, protectedTargetsFromStatement(stmt)...))
+		})
+	}
 }
 
 func TestCanWriteProtectedDatabase(t *testing.T) {

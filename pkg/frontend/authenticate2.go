@@ -298,6 +298,17 @@ func normalizeProtectedDatabaseName(ses *Session, dbName string) string {
 	return dbName
 }
 
+func resolveProtectedDatabaseRuntimeTarget(ses *Session, dbName string) string {
+	dbName = strings.TrimSpace(dbName)
+	if dbName == "" && ses != nil {
+		dbName = ses.GetDatabaseName()
+	}
+	if protectedDatabaseNamesAreLowerCased(ses) {
+		dbName = strings.ToLower(dbName)
+	}
+	return dbName
+}
+
 func protectedDatabaseNamesAreLowerCased(ses *Session) bool {
 	if ses == nil {
 		return false
@@ -343,7 +354,7 @@ func getProtectedDatabaseSet(ses *Session) map[string]struct{} {
 }
 
 func isProtectedDatabase(ses *Session, dbName string) bool {
-	dbName = normalizeProtectedDatabaseName(ses, dbName)
+	dbName = resolveProtectedDatabaseRuntimeTarget(ses, dbName)
 	if dbName == "" {
 		return false
 	}
@@ -375,7 +386,7 @@ func checkProtectedDatabaseWriteWithSet(ctx context.Context, ses *Session, prote
 		return true
 	}
 	for _, dbName := range dbNames {
-		dbName = normalizeProtectedDatabaseName(ses, dbName)
+		dbName = resolveProtectedDatabaseRuntimeTarget(ses, dbName)
 		if dbName == "" {
 			continue
 		}
