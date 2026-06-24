@@ -6985,6 +6985,8 @@ type userLevelLockKey struct {
 
 var userLevelLocks = struct {
 	sync.Mutex
+	// userLevelLocks is process-local state for the current CN. It tracks only
+	// refcounts and lock names seen by sessions running in this process.
 	//owner, lockname -> count
 	counts map[userLevelLockKey]uint64
 	//owner -> lockername
@@ -7052,6 +7054,9 @@ func userLevelLockProbeTxnID(owner string, connID uint64, name, probeType string
 }
 
 func userLevelLockConnectionIDFromTxnID(txnID []byte) (uint64, bool) {
+	// The user-level lock txnID format uses NUL as a field separator. Lock names
+	// are validated to reject NUL bytes, and owners are derived from session IDs
+	// / connection IDs, so splitting here is safe for supported inputs.
 	parts := strings.Split(string(txnID), "\x00")
 	if len(parts) < 3 || len(parts) > 4 || parts[0] != "mo-user-level-lock" {
 		return 0, false
