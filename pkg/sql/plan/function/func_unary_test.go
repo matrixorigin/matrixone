@@ -7441,6 +7441,44 @@ func TestUserLevelLockReentrantRefCount(t *testing.T) {
 	})
 }
 
+func TestUserLevelLockMigrationKeepsOwnershipAndRefCount(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		oldProc := newUserLevelLockTestProcess(t, services[0], "acc")
+		newProc := newUserLevelLockTestProcess(t, services[1], "acc")
+		newProc.GetSessionInfo().ConnectionID = oldProc.GetSessionInfo().ConnectionID
+
+		v, err := getUserLevelLock("migrate_lock", 0, oldProc)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("migrate_lock", 0, oldProc)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		states := UserLevelLocksForMigration(oldProc)
+		RestoreUserLevelLocksFromMigration(newProc, states)
+		DiscardMigratedUserLevelLocks(oldProc)
+
+		v, isNull, err := releaseUserLevelLock("migrate_lock", newProc)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		contender := newUserLevelLockTestProcess(t, services[0], "acc")
+		v, err = getUserLevelLock("migrate_lock", 0, contender)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+
+		v, isNull, err = releaseUserLevelLock("migrate_lock", newProc)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		v, err = getUserLevelLock("migrate_lock", 0, contender)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
 func TestReleaseUserLevelLocksCleanup(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")

@@ -798,7 +798,11 @@ func (ses *Session) Close() {
 	}
 
 	if ses.proc != nil {
-		function.ReleaseUserLevelLocks(ses.proc)
+		if ses.userLevelLocksMigrated {
+			function.DiscardMigratedUserLevelLocks(ses.proc)
+		} else {
+			function.ReleaseUserLevelLocks(ses.proc)
+		}
 	}
 
 	ses.mu.Lock()
@@ -2047,6 +2051,12 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	defer cancelRequestFunc()
 	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
+	if ses.proc != nil {
+		ses.proc.Base.SessionInfo.ConnectionID = uint64(req.ConnID)
+		if tenant != nil {
+			ses.proc.Base.SessionInfo.Account = tenant.GetTenant()
+		}
+	}
 	nodeCtx := cancelRequestCtx
 	rm := ses.getRoutineManager()
 	if rm != nil && rm.baseService != nil {
@@ -2087,6 +2097,19 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	}
 	if maxStmtID > 0 {
 		ses.SetLastStmtID(maxStmtID)
+	}
+	if len(req.UserLevelLocks) > 0 {
+		states := make([]function.UserLevelLockState, 0, len(req.UserLevelLocks))
+		for _, l := range req.UserLevelLocks {
+			if l == nil {
+				continue
+			}
+			states = append(states, function.UserLevelLockState{
+				Name:  l.Name,
+				Count: l.Count,
+			})
+		}
+		function.RestoreUserLevelLocksFromMigration(ses.proc, states)
 	}
 	return nil
 }

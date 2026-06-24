@@ -513,11 +513,14 @@ message PrepareStmt {
 
 message MigrateConnFromRequest {
   uint32 ConnID = 1;
+  bool SkipUserLevelLockRelease = 2;
+  bool EnableUserLevelLockRelease = 3;
 }
 
 message MigrateConnFromResponse {
   string DB = 1;
   repeated PrepareStmt PrepareStmts = 2;
+  repeated UserLevelLock UserLevelLocks = 3;
 }
 
 message MigrateConnToRequest {
@@ -525,6 +528,12 @@ message MigrateConnToRequest {
   string DB = 2;
   repeated string SetVarStmts = 3;
   repeated PrepareStmt PrepareStmts = 4;
+  repeated UserLevelLock UserLevelLocks = 5;
+}
+
+message UserLevelLock {
+  string Name = 1;
+  uint64 Count = 2;
 }
 
 message MigrateConnToResponse {
