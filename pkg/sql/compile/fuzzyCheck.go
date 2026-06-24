@@ -295,10 +295,6 @@ func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error)
 				}
 			}
 		} else {
-			scales := make([]int32, len(f.compoundCols))
-			for i, c := range f.compoundCols {
-				scales[i] = c.Typ.Scale
-			}
 			for i := 0; i < toCheck.Length(); i++ {
 				if toCheck.GetNulls().Contains(uint64(i)) {
 					continue
@@ -308,7 +304,10 @@ func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error)
 				if err != nil {
 					return nil, err
 				}
-				s := t.SQLStrings(scales)
+				s, err := f.formatCompoundCollisionKey(t)
+				if err != nil {
+					return nil, err
+				}
 				for j := 0; j < len(s); j++ {
 					keys[j] = append(keys[j], s[j])
 				}
@@ -323,6 +322,42 @@ func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error)
 	}
 
 	return keys, nil
+}
+
+func (f *fuzzyCheck) formatCompoundCollisionKey(t types.Tuple) ([]string, error) {
+	if len(t) != len(f.compoundCols) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"compound key width %d does not match column count %d",
+			len(t), len(f.compoundCols),
+		)
+	}
+
+	scales := make([]int32, len(f.compoundCols))
+	for i, c := range f.compoundCols {
+		if c == nil {
+			return nil, moerr.NewInternalErrorNoCtx("compoundCols should not have nil element")
+		}
+		scales[i] = c.Typ.Scale
+	}
+
+	values := t.SQLStrings(scales)
+	for i, c := range f.compoundCols {
+		if fuzzyCheckSQLValueNeedsQuote(types.T(c.Typ.Id)) {
+			values[i] = strconv.Quote(values[i])
+		}
+	}
+	return values, nil
+}
+
+func fuzzyCheckSQLValueNeedsQuote(typ types.T) bool {
+	switch typ {
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
+		types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_text, types.T_blob, types.T_uuid, types.T_datalink:
+		return true
+	default:
+		return false
+	}
 }
 
 // backgroundSQLCheck launches a background SQL to check if there are any duplicates

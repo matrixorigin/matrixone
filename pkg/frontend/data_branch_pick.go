@@ -346,7 +346,7 @@ func extractPKAsString(
 // extractPKVal extracts the Go value from a vector at the given row index.
 func extractPKVal(vec *vector.Vector, rowIdx int) any {
 	switch vec.GetType().Oid {
-	case types.T_datetime, types.T_timestamp, types.T_decimal64,
+	case types.T_datetime, types.T_timestamp, types.T_year, types.T_decimal64,
 		types.T_decimal128, types.T_decimal256, types.T_time:
 		return types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
 	case types.T_bool:
@@ -616,6 +616,8 @@ func formatPickKeyVectorValueAsString(ses *Session, vec *vector.Vector, rowIdx i
 		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIdx).Format(vec.GetType().Scale), nil
 	case types.T_decimal256:
 		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, rowIdx).Format(vec.GetType().Scale), nil
+	case types.T_year:
+		return vector.GetFixedAtNoTypeCheck[types.MoYear](vec, rowIdx).String(), nil
 	case types.T_date:
 		return vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIdx).String(), nil
 	case types.T_datetime:
@@ -1342,6 +1344,12 @@ func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, t
 			return err
 		}
 		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_year:
+		v, err := types.ParseMoYear(s)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_uuid:
 		v, err := types.ParseUuid(s)
 		if err != nil {
@@ -1388,6 +1396,12 @@ func appendStrValToVec(vec *vector.Vector, s string, pkType types.Type, tz *time
 		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_time:
 		v, err := types.ParseTime(s, pkType.Scale)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_year:
+		v, err := types.ParseMoYear(s)
 		if err != nil {
 			return err
 		}

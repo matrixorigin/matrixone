@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -788,6 +789,53 @@ func TestFillEndToEndConditionGeneration(t *testing.T) {
 		require.Contains(t, f.condition, "a =")
 		require.Contains(t, f.condition, "b =")
 	})
+}
+
+func TestFillCompoundConditionQuotesSQLLiterals(t *testing.T) {
+	mp, err := mpool.NewMPool("test_compound_condition_quotes", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	dateVal := types.DateFromCalendar(2025, 1, 3)
+	yearVal := types.MoYear(2024)
+	decVal, err := types.ParseDecimal64("12.34", 10, 2)
+	require.NoError(t, err)
+
+	packer.EncodeStringType([]byte("O'Reilly"))
+	packer.EncodeDate(dateVal)
+	packer.EncodeMoYear(yearVal)
+	packer.EncodeDecimal64(decVal)
+
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(vec, packer.GetBuf(), false, mp))
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	defer func() {
+		vec.Free(mp)
+		bat.Clean(mp)
+	}()
+
+	f := &fuzzyCheck{
+		attr:       "__mo_cpkey_col",
+		isCompound: true,
+		compoundCols: []*plan.ColDef{
+			{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "d", Typ: plan.Type{Id: int32(types.T_date)}},
+			{Name: "y", Typ: plan.Type{Id: int32(types.T_year)}},
+			{Name: "amount", Typ: plan.Type{Id: int32(types.T_decimal64), Scale: 2}},
+		},
+	}
+
+	require.NoError(t, f.fill(context.Background(), bat))
+	require.Contains(t, f.condition, "name = "+strconv.Quote("O'Reilly"))
+	require.Contains(t, f.condition, "d = "+strconv.Quote(dateVal.String()))
+	require.Contains(t, f.condition, "y = "+strconv.Quote(yearVal.String()))
+	require.Contains(t, f.condition, "amount = "+decVal.Format(2))
 }
 
 // TestConcurrentFirstlyCheck verifies that firstlyCheck is safe to call
