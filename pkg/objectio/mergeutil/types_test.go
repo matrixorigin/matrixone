@@ -111,6 +111,39 @@ func TestMergeSortBatchesDecimal256(t *testing.T) {
 	require.Equal(t, []int32{10, 20, 40, 30, 50}, gotPayloads)
 }
 
+func TestMergeSortBatchesYear(t *testing.T) {
+	mp := mpool.MustNewZero()
+	batches := []*batch.Batch{
+		newYearMergeBatch(t, mp, []types.MoYear{0, 2001, 2024}, []int32{10, 30, 50}),
+		newYearMergeBatch(t, mp, []types.MoYear{1901, 2010}, []int32{20, 40}),
+	}
+	for _, bat := range batches {
+		defer bat.Clean(mp)
+	}
+
+	newBuffer := func() *batch.Batch {
+		return batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{types.T_year.ToType(), types.T_int32.ToType()})
+	}
+	buffer := newBuffer()
+
+	var gotKeys []types.MoYear
+	var gotPayloads []int32
+	buffer, err := MergeSortBatches(batches, 0, buffer, func(out *batch.Batch) (*batch.Batch, error) {
+		keys := vector.MustFixedColNoTypeCheck[types.MoYear](out.Vecs[0])
+		payloads := vector.MustFixedColNoTypeCheck[int32](out.Vecs[1])
+		for i := 0; i < out.RowCount(); i++ {
+			gotKeys = append(gotKeys, keys[i])
+			gotPayloads = append(gotPayloads, payloads[i])
+		}
+		out.Clean(mp)
+		return newBuffer(), nil
+	}, mp, nil)
+	require.NoError(t, err)
+	defer buffer.Clean(mp)
+	require.Equal(t, []types.MoYear{0, 1901, 2001, 2010, 2024}, gotKeys)
+	require.Equal(t, []int32{10, 20, 30, 40, 50}, gotPayloads)
+}
+
 func newDecimal256MergeBatch(
 	t *testing.T,
 	mp *mpool.MPool,
@@ -126,6 +159,24 @@ func newDecimal256MergeBatch(
 		value, err := types.ParseDecimal256(key, decimalTyp.Width, decimalTyp.Scale)
 		require.NoError(t, err)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], payloads[i], false, mp))
+	}
+	bat.SetRowCount(len(keys))
+	return bat
+}
+
+func newYearMergeBatch(
+	t *testing.T,
+	mp *mpool.MPool,
+	keys []types.MoYear,
+	payloads []int32,
+) *batch.Batch {
+	t.Helper()
+	require.Len(t, payloads, len(keys))
+
+	bat := batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{types.T_year.ToType(), types.T_int32.ToType()})
+	for i, key := range keys {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], key, false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], payloads[i], false, mp))
 	}
 	bat.SetRowCount(len(keys))
