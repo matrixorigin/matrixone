@@ -1476,6 +1476,9 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	if typ.IsDecimal() {
 		// DECIMAL display length depends on scale and signedness, not just precision.
 		col.SetLength(mysqlDecimalDisplayLength(typ.Width, typ.Scale, col.IsSigned()))
+	} else if typ.Oid == types.T_year {
+		// Keep YEAR metadata consistent with regular query result columns.
+		col.SetLength(uint32(types.MaxVarcharLen))
 	} else {
 		setColLength(col, typ.Width)
 	}

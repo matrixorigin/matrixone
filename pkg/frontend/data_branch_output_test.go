@@ -150,6 +150,31 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		require.Equal(t, uint8(2), mysqlCol.Decimal())
 	})
 
+	t.Run("default output preserves year metadata", func(t *testing.T) {
+		yearTblStuff := tblStuff
+		yearTblStuff.def.colNames = []string{"id", "y"}
+		yearTblStuff.def.colTypes = []types.Type{
+			types.T_int64.ToType(),
+			types.T_year.ToType(),
+		}
+		yearTblStuff.def.visibleIdxes = []int{0, 1}
+
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt:   nil,
+		}
+		require.NoError(t, buildOutputSchema(ctx, ses, stmt, yearTblStuff))
+
+		mrs := ses.GetMysqlResultSet()
+		col, err := mrs.GetColumn(ctx, 3)
+		require.NoError(t, err)
+		require.Equal(t, "y", col.Name())
+		require.Equal(t, defines.MYSQL_TYPE_YEAR, col.ColumnType())
+		require.Equal(t, uint32(types.MaxVarcharLen), col.Length())
+	})
+
 	t.Run("summary output", func(t *testing.T) {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := &tree.DataBranchDiff{
