@@ -116,6 +116,12 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 // (pkg/sql/compile/ddl.go DropIndex path). No additional cleanup here.
 func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
 	logutil.Infof("[plugin] ivfflat HandleDropIndex: defs=%d", len(defs))
+	// Evict the cached search index immediately rather than waiting for the
+	// 5-min VectorIndexCacheTTL. Mirrors the create-side
+	// cache.Cache.Remove(fmt.Sprintf("%s:0", centroidsDef.IndexTableName)).
+	if centroidsDef, ok := defs[catalog.SystemSI_IVFFLAT_TblType_Centroids]; ok {
+		cache.Cache.Remove(fmt.Sprintf("%s:0", centroidsDef.IndexTableName))
+	}
 	return nil
 }
 
