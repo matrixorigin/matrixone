@@ -225,6 +225,29 @@ func TestAppendFromEntryDecimal256(t *testing.T) {
 	require.True(t, dst.GetNulls().Contains(1))
 }
 
+func TestAppendFromEntryYear(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	typ := types.T_year.ToType()
+	src := vector.NewVec(typ)
+	dst := vector.NewVec(typ)
+	defer src.Free(mp)
+	defer dst.Free(mp)
+
+	val := types.MoYear(2024)
+	require.NoError(t, vector.AppendFixed(src, val, false, mp))
+	require.NoError(t, vector.AppendFixed(src, types.MoYear(0), true, mp))
+
+	appendFromEntry(src, dst, 0, mp)
+	appendFromEntry(src, dst, 1, mp)
+
+	require.Equal(t, 2, dst.Length())
+	require.Equal(t, val, vector.GetFixedAtNoTypeCheck[types.MoYear](dst, 0))
+	require.False(t, dst.GetNulls().Contains(0))
+	require.True(t, dst.GetNulls().Contains(1))
+}
+
 func TestUpdateDataBatch_PreservesTrailingColumnsWithoutRowid(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
