@@ -17,6 +17,7 @@ package db_holder
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"reflect"
 	"regexp"
 	"sync"
@@ -247,6 +248,217 @@ func TestCheck(t *testing.T) {
 	backOff.last = time.Now().Add(time.Hour)
 	got = backOff.Check()
 	require.Equal(t, true, got)
+}
+
+func TestCloseDBConnClearsGlobalPointer(t *testing.T) {
+	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		CloseDBConn()
+		dbConn, _, err := sqlmock.New()
+		require.NoError(t, err)
+
+		SetDBConn(dbConn)
+		require.Same(t, dbConn, db.Load())
+
+		CloseDBConn()
+		require.Nil(t, db.Load())
+		require.Error(t, dbConn.Ping())
+	})
+}
+
+func TestGetOrInitDBConn_RebuildFailureKeepsCurrentConn(t *testing.T) {
+	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		CloseDBConn()
+		dbConn, _, err := sqlmock.New()
+		require.NoError(t, err)
+		SetDBConn(dbConn)
+		defer CloseDBConn()
+
+		SetSQLWriterDBUser("user", "password")
+		wantErr := errors.New("address failed")
+		SetSQLWriterDBAddressFunc(func(context.Context, bool) (string, error) {
+			return "", wantErr
+		})
+
+		got, err := GetOrInitDBConn(true, true)
+		require.ErrorIs(t, err, wantErr)
+		require.Nil(t, got)
+		require.Same(t, dbConn, db.Load())
+		require.NoError(t, dbConn.Ping())
+	})
+}
+
+func TestGetOrInitDBConn_OpenFailureKeepsCurrentConn(t *testing.T) {
+	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		CloseDBConn()
+		dbConn, _, err := sqlmock.New()
+		require.NoError(t, err)
+		SetDBConn(dbConn)
+		defer CloseDBConn()
+
+		SetSQLWriterDBUser("user", "password")
+		SetSQLWriterDBAddressFunc(func(context.Context, bool) (string, error) {
+			return "127.0.0.1:6001", nil
+		})
+
+		wantErr := errors.New("open failed")
+		stubs := gostub.Stub(&openDBConn, func(string, string) (*sql.DB, error) {
+			return nil, wantErr
+		})
+		defer stubs.Reset()
+
+		got, err := GetOrInitDBConn(true, true)
+		require.ErrorIs(t, err, wantErr)
+		require.Nil(t, got)
+		require.Same(t, dbConn, db.Load())
+		require.NoError(t, dbConn.Ping())
+	})
+}
+
+func TestGetOrInitDBConn_NewConnPingFailureKeepsCurrentConn(t *testing.T) {
+	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		CloseDBConn()
+		dbConn, _, err := sqlmock.New()
+		require.NoError(t, err)
+		SetDBConn(dbConn)
+		defer CloseDBConn()
+
+		newDBConn, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+		require.NoError(t, err)
+		wantErr := errors.New("ping failed")
+		mock.ExpectPing().WillReturnError(wantErr)
+		mock.ExpectClose()
+
+		SetSQLWriterDBUser("user", "password")
+		SetSQLWriterDBAddressFunc(func(context.Context, bool) (string, error) {
+			return "127.0.0.1:6001", nil
+		})
+
+		stubs := gostub.Stub(&openDBConn, func(string, string) (*sql.DB, error) {
+			return newDBConn, nil
+		})
+		defer stubs.Reset()
+
+		got, err := GetOrInitDBConn(true, true)
+		require.ErrorIs(t, err, wantErr)
+		require.Nil(t, got)
+		require.Same(t, dbConn, db.Load())
+		require.NoError(t, dbConn.Ping())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestGetOrInitDBConn_RefreshFailureUsesCurrentConn(t *testing.T) {
+	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		CloseDBConn()
+		dbConn, _, err := sqlmock.New()
+		require.NoError(t, err)
+		SetDBConn(dbConn)
+		dbRefreshTime = time.Now().Add(-time.Second)
+		defer CloseDBConn()
+
+		SetSQLWriterDBUser("user", "password")
+		SetSQLWriterDBAddressFunc(func(context.Context, bool) (string, error) {
+			return "", errors.New("address failed")
+		})
+
+		got, err := GetOrInitDBConn(false, false)
+		require.NoError(t, err)
+		require.Same(t, dbConn, got)
+		require.Same(t, dbConn, db.Load())
+		require.NoError(t, dbConn.Ping())
+	})
+}
+
+func TestGetOrInitDBConn_RefreshInProgressUsesCurrentConn(t *testing.T) {
+	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		CloseDBConn()
+		dbConn, _, err := sqlmock.New()
+		require.NoError(t, err)
+		SetDBConn(dbConn)
+		dbRefreshTime = time.Now().Add(-time.Second)
+		defer CloseDBConn()
+
+		newDBConn, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+		require.NoError(t, err)
+		mock.ExpectPing()
+
+		SetSQLWriterDBUser("user", "password")
+		SetSQLWriterDBAddressFunc(func(context.Context, bool) (string, error) {
+			return "127.0.0.1:6001", nil
+		})
+
+		started := make(chan struct{})
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		defer releaseOnce.Do(func() { close(release) })
+
+		stubs := gostub.Stub(&openDBConn, func(string, string) (*sql.DB, error) {
+			close(started)
+			<-release
+			return newDBConn, nil
+		})
+		defer stubs.Reset()
+
+		done := make(chan struct{})
+		var refreshConn *sql.DB
+		var refreshErr error
+		go func() {
+			refreshConn, refreshErr = GetOrInitDBConn(false, false)
+			close(done)
+		}()
+
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("refresh did not start")
+		}
+
+		start := time.Now()
+		got, err := GetOrInitDBConn(false, false)
+		require.NoError(t, err)
+		require.Same(t, dbConn, got)
+		require.Less(t, time.Since(start), 100*time.Millisecond)
+
+		releaseOnce.Do(func() { close(release) })
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("refresh did not finish")
+		}
+		require.NoError(t, refreshErr)
+		require.Same(t, newDBConn, refreshConn)
+		require.Same(t, newDBConn, db.Load())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestWriteRowRecords_ReturnsPingError(t *testing.T) {
+	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		old := DBConnErrCount
+		defer func() {
+			DBConnErrCount = old
+		}()
+		DBConnErrCount = NewReConnectionBackOff(time.Hour, DBConnRetryThreshold)
+
+		dbConn, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		mock.ExpectClose()
+		require.NoError(t, dbConn.Close())
+
+		stubs := gostub.Stub(&GetOrInitDBConn, func(bool, bool) (*sql.DB, error) {
+			return dbConn, nil
+		})
+		defer stubs.Reset()
+
+		tbl := &table.Table{
+			Database: "testDB",
+			Table:    "testTable",
+			Columns:  []table.Column{{Name: "str", ColType: table.TVarchar}},
+		}
+		_, err = WriteRowRecords([][]string{{"record1"}}, tbl, time.Second)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "database is closed")
+	})
 }
 
 func Test_WriteRowRecords2(t *testing.T) {
