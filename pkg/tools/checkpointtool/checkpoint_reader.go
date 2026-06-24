@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
@@ -112,25 +113,38 @@ func (r *CheckpointReader) Fork(ctx context.Context) *CheckpointReader {
 }
 
 func (r *CheckpointReader) loadEntries() error {
+	logutil.Infof("[loadEntries] reading checkpoint dir: %s", r.dir)
 	names, err := ckputil.ListCKPMetaNames(r.ctx, r.fs)
 	if err != nil {
 		return err
 	}
 	if len(names) == 0 {
+		logutil.Infof("[loadEntries] no checkpoint meta files found in dir=%s", r.dir)
 		return nil
 	}
+	logutil.Infof("[loadEntries] found %d meta file(s) to read", len(names))
 
+	totalRead := 0
 	for _, name := range names {
 		entries, err := checkpoint.ReadEntriesFromMeta(
 			r.ctx, "", ioutil.GetCheckpointDir(), name, 0, nil, r.mp, r.fs,
 		)
 		if err != nil {
+			logutil.Infof("[loadEntries] failed to read meta file %s: %v", name, err)
 			return err
 		}
+		logutil.Infof("[loadEntries] meta file=%s entries=%d", name, len(entries))
+		for _, e := range entries {
+			logutil.Infof("[loadEntries]   entry: start=%s end=%s type=%s state=%d",
+				e.GetStart().ToString(), e.GetEnd().ToString(), e.GetType().String(), e.GetState())
+		}
 		r.entries = append(r.entries, entries...)
+		totalRead += len(entries)
 	}
+	logutil.Infof("[loadEntries] total raw entries read: %d", totalRead)
 
 	// Deduplicate by (start, end, type, location)
+	removed := 0
 	seen := make(map[string]bool)
 	unique := make([]*checkpoint.CheckpointEntry, 0, len(r.entries))
 	for _, e := range r.entries {
@@ -138,15 +152,25 @@ func (r *CheckpointReader) loadEntries() error {
 		if !seen[key] {
 			seen[key] = true
 			unique = append(unique, e)
+		} else {
+			removed++
 		}
 	}
 	r.entries = unique
+	logutil.Infof("[loadEntries] dedup: removed=%d remaining=%d", removed, len(unique))
 
 	// Sort by end timestamp (newest first)
 	sort.Slice(r.entries, func(i, j int) bool {
 		ei, ej := r.entries[i].GetEnd(), r.entries[j].GetEnd()
 		return ei.GT(&ej)
 	})
+
+	// Log final usable entries
+	for _, e := range r.entries {
+		logutil.Infof("[loadEntries] usable ckp: start=%s end=%s type=%s",
+			e.GetStart().ToString(), e.GetEnd().ToString(), e.GetType().String())
+	}
+
 	return nil
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -41,13 +42,18 @@ func ListTSRangeFiles(
 	); err != nil {
 		return
 	}
+	skipped := 0
 	for _, entry := range entries {
 		if !entry.IsDir {
 			if file := DecodeTSRangeFile(entry.Name); file.IsValid() {
 				files = append(files, file)
+			} else {
+				skipped++
 			}
 		}
 	}
+	logutil.Infof("[ListTSRangeFiles] dir=%s totalEntries=%d valid=%d skipped(invalidName)=%d",
+		dir, len(entries), len(files), skipped)
 	return
 }
 

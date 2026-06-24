@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 )
 
@@ -54,9 +55,19 @@ func ListCKPMetaNames(
 	); err != nil {
 		return
 	}
+	nonMeta := 0
 	for _, tsFile := range tsFiles {
 		if tsFile.IsMetadataFile() {
 			files = append(files, tsFile.GetName())
+		} else {
+			nonMeta++
+		}
+	}
+	logutil.Infof("[ListCKPMetaNames] totalTSRangeFiles=%d metaFiles=%d nonMeta=%d",
+		len(tsFiles), len(files), nonMeta)
+	if len(files) > 0 {
+		for _, f := range files {
+			logutil.Infof("[ListCKPMetaNames] metaFile: %s", f)
 		}
 	}
 	return
