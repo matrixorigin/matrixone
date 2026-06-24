@@ -1303,6 +1303,16 @@ func (ctc CloneTxnCache) AddTxnLocalSharedFile(txnId []byte, name string) {
 	ctc.items.Set(item)
 }
 
+func (ctc CloneTxnCache) RemoveTxnLocalSharedFile(txnId []byte, name string) {
+	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
+	if !exist {
+		return
+	}
+
+	item.txnLocalSharedFiles.Delete(name)
+	ctc.items.Set(item)
+}
+
 func (ctc CloneTxnCache) AddTxn(txnId []byte, snapshot int64) {
 	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
 	if exist {

@@ -144,6 +144,97 @@ func TestCloneTxnRollbackGCDeletesTxnLocalSharedObjects(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestCloneTxnCompactionGCDeletesUnreferencedTxnLocalSharedObject(t *testing.T) {
+	ctx := context.Background()
+	fs := newCleanFS(t)
+
+	gcPool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer gcPool.Release()
+
+	txnOp, closeFn := client.NewTestTxnOperator(ctx)
+	defer closeFn()
+
+	txn := &Transaction{
+		engine: &Engine{
+			cloneTxnCache: newCloneTxnCache(),
+			gcPool:        gcPool,
+			fs:            fs,
+		},
+		op: txnOp,
+	}
+	txnOp.AddWorkspace(txn)
+	txn.SetCloneTxn(1)
+
+	stats := mockStatsList(t, 1)
+	name := stats[0].ObjectName().String()
+	require.NoError(t, writeObjectToFS(ctx, fs, name))
+	txn.engine.cloneTxnCache.AddTxnLocalSharedFile(txn.op.Txn().ID, name)
+
+	mp := mpool.MustNewZero()
+	bat := cloneObjectStatsBatchForTest(t, mp, stats...)
+	txn.writes = append(txn.writes, Entry{
+		typ:      INSERT,
+		fileName: name,
+		bat:      bat,
+	})
+	txn.writes[0].bat.Clean(mp)
+	txn.writes[0].bat = nil
+	require.Zero(t, mp.CurrNB())
+
+	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(stats)
+	require.False(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txn.op.Txn().ID, name))
+	require.NoError(t, txn.GCObjsByStats(stats...))
+	require.Eventually(t, func() bool {
+		return !objectExistsInFS(ctx, fs, name)
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestCloneTxnCompactionGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
+	ctx := context.Background()
+	fs := newCleanFS(t)
+
+	gcPool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer gcPool.Release()
+
+	txnOp, closeFn := client.NewTestTxnOperator(ctx)
+	defer closeFn()
+
+	txn := &Transaction{
+		engine: &Engine{
+			cloneTxnCache: newCloneTxnCache(),
+			gcPool:        gcPool,
+			fs:            fs,
+		},
+		op: txnOp,
+	}
+	txnOp.AddWorkspace(txn)
+	txn.SetCloneTxn(1)
+
+	stats := mockStatsList(t, 1)
+	name := stats[0].ObjectName().String()
+	require.NoError(t, writeObjectToFS(ctx, fs, name))
+	txn.engine.cloneTxnCache.AddTxnLocalSharedFile(txn.op.Txn().ID, name)
+
+	mp := mpool.MustNewZero()
+	liveBat := cloneObjectStatsBatchForTest(t, mp, stats...)
+	defer func() {
+		liveBat.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	txn.writes = append(txn.writes, Entry{
+		typ:      INSERT,
+		fileName: name,
+		bat:      liveBat,
+	})
+
+	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(stats)
+	require.True(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txn.op.Txn().ID, name))
+	require.NoError(t, txn.GCObjsByStats(stats...))
+	require.True(t, objectExistsInFS(ctx, fs, name))
+}
+
 func cloneObjectStatsBatchForTest(
 	t *testing.T,
 	mp *mpool.MPool,
