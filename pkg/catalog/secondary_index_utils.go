@@ -98,23 +98,22 @@ func IsIvfpqIndexAlgo(algo string) bool {
 
 // ------------------------[START] IndexAlgoParams------------------------
 const (
-	IndexAlgoParamLists          = "lists"
-	IndexAlgoParamOpType         = "op_type"
-	IndexAlgoParamIncludeColumns = "include_columns"
-	HnswM                        = "m"
-	HnswEfConstruction           = "ef_construction"
-	HnswEfSearch                 = "ef_search"
-	Async                        = "async"
-	AutoUpdate                   = "auto_update"
-	Day                          = "day"
-	Hour                         = "hour"
-	DistributionMode             = "distribution_mode"
-	Quantization                 = "quantization"
-	BitsPerCode                  = "bits_per_code"
-	IntermediateGraphDegree      = "intermediate_graph_degree"
-	GraphDegree                  = "graph_degree"
-	ITopkSize                    = "itopk_size"
-	IncludedColumns              = "included_columns"
+	IndexAlgoParamLists     = "lists"
+	IndexAlgoParamOpType    = "op_type"
+	HnswM                   = "m"
+	HnswEfConstruction      = "ef_construction"
+	HnswEfSearch            = "ef_search"
+	Async                   = "async"
+	AutoUpdate              = "auto_update"
+	Day                     = "day"
+	Hour                    = "hour"
+	DistributionMode        = "distribution_mode"
+	Quantization            = "quantization"
+	BitsPerCode             = "bits_per_code"
+	IntermediateGraphDegree = "intermediate_graph_degree"
+	GraphDegree             = "graph_degree"
+	ITopkSize               = "itopk_size"
+	IncludedColumns         = "included_columns"
 
 	// Index-defining build params, settable as CREATE INDEX options (parsed by
 	// each plugin's ParamsFromTree). Written into flat algo_params only when
@@ -461,45 +460,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID, tree.INDEX_TYPE_RTREE:
 			// do nothing
 		case tree.INDEX_TYPE_MASTER:
-			// do nothing
-		case tree.INDEX_TYPE_IVFFLAT:
-			if idx.IndexOption.AlgoParamList == 0 {
-				// NOTE:
-				// 1. In the parser, we added the failure check for list=0 scenario. So if user tries to explicit
-				// set list=0, it will fail.
-				// 2. However, if user didn't use the list option (we will get it as 0 here), then we will
-				// set the default value as 1.
-				res[IndexAlgoParamLists] = strconv.FormatInt(1, 10)
-			} else if idx.IndexOption.AlgoParamList > 0 {
-				res[IndexAlgoParamLists] = strconv.FormatInt(idx.IndexOption.AlgoParamList, 10)
-			} else {
-				return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be > 0")
-			}
-
-			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
-				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
-				if _, ok := metric.OpTypeToIvfMetric[opType]; !ok {
-					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type: '%s'", opType))
-				}
-				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
-			} else {
-				res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
-			}
-
-			if idx.IndexOption.Async {
-				res[Async] = "true"
-			}
-			if idx.IndexOption.AutoUpdate {
-				res[AutoUpdate] = "true"
-			}
-			if idx.IndexOption.Day > 0 {
-				res[Day] = strconv.FormatInt(idx.IndexOption.Day, 10)
-			}
-
-			if idx.IndexOption.Hour > 0 {
-				res[Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
-			}
-
+		// do nothing
 		default:
 			// Vector algorithms (IVFFLAT / HNSW / CAGRA / IVFPQ) build their
 			// algo_params via the per-plugin plan hook BuildIndexParams; they

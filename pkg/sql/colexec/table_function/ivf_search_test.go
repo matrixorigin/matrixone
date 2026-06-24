@@ -691,7 +691,7 @@ func TestIvfSearchStartFailsWhenIncludeDataMisaligns(t *testing.T) {
 	require.Contains(t, err.Error(), "include data length mismatch")
 }
 
-func TestIvfSearchCallStopsAfterTooManyEmptyRounds(t *testing.T) {
+func TestIvfSearchCallContinuesAfterManyEmptyRounds(t *testing.T) {
 	oldNewIvfAlgo := newIvfAlgo
 	oldGetVersion := getVersion
 	defer func() {
@@ -699,17 +699,25 @@ func TestIvfSearchCallStopsAfterTooManyEmptyRounds(t *testing.T) {
 		getVersion = oldGetVersion
 	}()
 
+	var calls int
 	mock := &MockIvfSearch[float32]{}
 	mock.searchFn = func(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+		calls++
 		if rt.SearchCursor != nil {
 			if len(rt.SearchCursor.RankedCentroidIDs) == 0 {
-				rt.SearchCursor.RankedCentroidIDs = []int64{11, 22, 33}
+				rt.SearchCursor.RankedCentroidIDs = make([]int64, 40)
+				for i := range rt.SearchCursor.RankedCentroidIDs {
+					rt.SearchCursor.RankedCentroidIDs[i] = int64(i + 1)
+				}
 			}
 			if rt.SearchCursor.CurrentBucketCount == 0 {
 				rt.SearchCursor.CurrentBucketCount = 1
 			}
 			rt.SearchCursor.Round++
 			rt.SearchCursor.Exhausted = rt.SearchCursor.NextBucketOffset+rt.SearchCursor.CurrentBucketCount >= uint(len(rt.SearchCursor.RankedCentroidIDs))
+			if rt.SearchCursor.Round >= 36 {
+				return []any{int64(99)}, []float64{9.9}, nil
+			}
 		}
 		return []any{}, []float64{}, nil
 	}
@@ -745,9 +753,9 @@ func TestIvfSearchCallStopsAfterTooManyEmptyRounds(t *testing.T) {
 	state := ut.arg.ctr.state.(*ivfSearchState)
 	result, err := state.call(ut.arg, ut.proc)
 	require.NoError(t, err)
-	require.Equal(t, vm.CancelResult.Status, result.Status)
-	require.NotNil(t, state.cursor)
-	require.True(t, state.cursor.Exhausted)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.GreaterOrEqual(t, calls, 36)
 }
 
 func TestIvfSearchCallStopsOnceLimitRowsAreBuffered(t *testing.T) {

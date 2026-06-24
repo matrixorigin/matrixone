@@ -256,7 +256,7 @@ func unresolvedName(name string) *tree.UnresolvedName {
 	return tree.NewUnresolvedName(tree.NewCStr(name, 1))
 }
 
-func TestIndexParamsToJsonString_DoesNotSerializeIvfFlatIncludeColumns(t *testing.T) {
+func TestIndexParamsToJsonString_RejectsPluginIvfFlatPath(t *testing.T) {
 	idx := tree.NewIndex(
 		false,
 		[]*tree.KeyPart{tree.NewKeyPart(unresolvedName("embedding"), -1, tree.DefaultDirection, nil)},
@@ -273,14 +273,9 @@ func TestIndexParamsToJsonString_DoesNotSerializeIvfFlatIncludeColumns(t *testin
 	)
 
 	params, err := IndexParamsToJsonString(idx)
-	require.NoError(t, err)
-
-	paramMap, err := IndexParamsStringToMap(params)
-	require.NoError(t, err)
-	require.Equal(t, "10", paramMap[IndexAlgoParamLists])
-	require.Equal(t, "vector_l2_ops", paramMap[IndexAlgoParamOpType])
-	_, ok := paramMap[IndexAlgoParamIncludeColumns]
-	require.False(t, ok)
+	require.Error(t, err)
+	require.Empty(t, params)
+	require.Contains(t, err.Error(), "invalid index alogorithm type")
 }
 
 func TestIndexParamsToStringList_DoesNotRenderIncludeColumns(t *testing.T) {
