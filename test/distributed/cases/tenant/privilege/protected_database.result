@@ -76,7 +76,6 @@ insert into protected_bvt_db.fk_child values(1, 1);
 create table protected_bvt_db.fk_self(id int primary key, parent_id int, constraint fk_self_parent foreign key(parent_id) references protected_bvt_db.fk_self(id));
 create table protected_bvt_later.t1(a int);
 insert into protected_bvt_later.t1 values(10);
-set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB,protected_bvt_later';
 create role protected_bvt_writer;
 grant create database,drop database on account * to protected_bvt_writer;
 grant all on database protected_bvt_db to protected_bvt_writer;
@@ -85,13 +84,30 @@ grant all on table protected_bvt_db.* to protected_bvt_writer with grant option;
 grant ownership on table protected_bvt_db.t1 to protected_bvt_writer;
 grant all on database protected_bvt_later to protected_bvt_writer;
 grant all on table protected_bvt_later.* to protected_bvt_writer;
+grant connect on account * to protected_bvt_writer;
 create user protected_bvt_user identified by '111' default role protected_bvt_writer;
-use protected_bvt_db;
-internal error: do not have privilege to execute the statement
-show tables;
-internal error: do not have privilege to execute the statement
+use protected_bvt_later;
 select a from t1;
-No database selected
+a
+10
+set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB,protected_bvt_later';
+use protected_bvt_db;
+show tables;
+Tables_in_protected_bvt_db
+auto_pk
+fk_child
+fk_parent
+fk_self
+part_hash
+part_range
+pk_compound
+pk_single
+t1
+uk_table
+v1
+select a from t1;
+a
+1
 select a from protected_bvt_db.t1;
 a
 1
@@ -182,6 +198,12 @@ internal error: do not have privilege to execute the statement
 drop table protected_bvt_db.t1;
 internal error: do not have privilege to execute the statement
 drop database protected_bvt_db;
+internal error: do not have privilege to execute the statement
+create table t2(a int);
+internal error: do not have privilege to execute the statement
+drop table t1;
+internal error: do not have privilege to execute the statement
+create table t_ctas as select * from t1;
 internal error: do not have privilege to execute the statement
 insert into protected_bvt_later.t1 values(11);
 internal error: do not have privilege to execute the statement

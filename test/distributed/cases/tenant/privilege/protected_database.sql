@@ -77,6 +77,8 @@ grant all on table protected_bvt_db.* to protected_bvt_writer with grant option;
 grant ownership on table protected_bvt_db.t1 to protected_bvt_writer;
 grant all on database protected_bvt_later to protected_bvt_writer;
 grant all on table protected_bvt_later.* to protected_bvt_writer;
+grant connect on account * to protected_bvt_writer;
+
 create user protected_bvt_user identified by '111' default role protected_bvt_writer;
 
 -- @session:id=4&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
