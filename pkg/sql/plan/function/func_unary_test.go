@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/geo"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -7265,6 +7266,10 @@ func (s *userLevelLockTestService) ForceRefreshLockTableBinds(targets []uint64, 
 
 func (s *userLevelLockTestService) GetLockTableBind(group uint32, tableID uint64) (lockpb.LockTable, error) {
 	return lockpb.LockTable{}, nil
+}
+
+func (s *userLevelLockTestService) GetLatestLockTableBind(bind lockpb.LockTable) (lockpb.LockTable, error) {
+	return bind, nil
 }
 
 func (s *userLevelLockTestService) IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool) {
