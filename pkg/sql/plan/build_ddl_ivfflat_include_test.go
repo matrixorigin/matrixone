@@ -83,12 +83,14 @@ func TestBuildIvfFlatSecondaryIndexDef_StoresIncludeColumnsInIndexDef(t *testing
 		require.Equal(t, []string{"title", "category"}, indexDef.IncludedColumns)
 		paramMap, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
 		require.NoError(t, err)
-		_, ok := paramMap[catalog.IndexAlgoParamIncludeColumns]
+		_, ok := paramMap[catalog.IncludedColumns]
+		require.False(t, ok)
+		_, ok = paramMap["include_columns"]
 		require.False(t, ok)
 	}
 }
 
-func TestBuildHnswSecondaryIndexDef_StoresIncludeColumnsInIndexDef(t *testing.T) {
+func TestBuildHnswSecondaryIndexDef_RejectsIncludeColumns(t *testing.T) {
 	ctx := NewMockOptimizer(false).CurrentContext()
 	indexInfo := makeHnswIndexWithInclude("embedding", "title", "category")
 	colMap := map[string]*ColDef{
@@ -98,17 +100,11 @@ func TestBuildHnswSecondaryIndexDef_StoresIncludeColumnsInIndexDef(t *testing.T)
 		"category":  makeTestColDef("category", types.T_varchar),
 	}
 
-	indexDefs, _, err := hnswplan.Hooks{}.BuildSecondaryIndexDefs(ctx, indexInfo, colMap, nil, "id")
-	require.NoError(t, err)
-	require.Len(t, indexDefs, 2)
-
-	for _, indexDef := range indexDefs {
-		require.Equal(t, []string{"title", "category"}, indexDef.IncludedColumns)
-		paramMap, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
-		require.NoError(t, err)
-		_, ok := paramMap[catalog.IndexAlgoParamIncludeColumns]
-		require.False(t, ok)
-	}
+	indexDefs, tableDefs, err := hnswplan.Hooks{}.BuildSecondaryIndexDefs(ctx, indexInfo, colMap, nil, "id")
+	require.Error(t, err)
+	require.Nil(t, indexDefs)
+	require.Nil(t, tableDefs)
+	require.Contains(t, err.Error(), "does not support INCLUDE")
 }
 
 func TestBuildIvfFlatSecondaryIndexDef_ExtendsEntriesTableWithIncludeColumns(t *testing.T) {

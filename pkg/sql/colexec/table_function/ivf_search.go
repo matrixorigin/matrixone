@@ -78,10 +78,6 @@ var (
 	getVersion = ivfflat.GetVersion
 )
 
-const (
-	maxConsecutiveEmptyIvfRounds = 32
-)
-
 func newIvfAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (veccache.VectorIndexSearchIf, error) {
 	// The centroid search index is typed by the CENTROID storage type, not the
 	// entry/input type. For narrow entries the centroids are f32 (decoupled), so
@@ -126,7 +122,6 @@ func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.Call
 	u.batch.CleanOnlyData()
 
 	n := 0
-	consecutiveEmptyRounds := 0
 	batchTargetRows := int(colexec.DefaultBatchSize)
 	if u.limit > 0 && u.limit < uint64(batchTargetRows) {
 		batchTargetRows = int(u.limit)
@@ -139,6 +134,7 @@ func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.Call
 			if u.cursor != nil && u.cursor.Exhausted {
 				break
 			}
+			prevRound, prevNextOffset, prevBucketCount, prevExhausted := u.cursorProgress()
 			if err := u.fetchNextRound(tf, proc); err != nil {
 				return vm.CancelResult, err
 			}
@@ -146,18 +142,13 @@ func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.Call
 				if u.cursor != nil && u.cursor.Exhausted {
 					break
 				}
-				consecutiveEmptyRounds++
-				if consecutiveEmptyRounds >= maxConsecutiveEmptyIvfRounds {
-					if u.cursor != nil {
-						u.cursor.Exhausted = true
-					}
-					break
+				if u.cursor != nil && u.cursorSameProgress(prevRound, prevNextOffset, prevBucketCount, prevExhausted) {
+					return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "ivf_search cursor did not advance after empty round")
 				}
 				continue
 			}
 		}
 
-		consecutiveEmptyRounds = 0
 		vector.AppendAny(u.batch.Vecs[0], u.keys[u.offset], false, proc.Mp())
 		vector.AppendFixed(u.batch.Vecs[1], u.distances[u.offset], false, proc.Mp())
 		for i, col := range u.includeColumns {
@@ -181,6 +172,23 @@ func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.Call
 
 	// write the batch
 	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
+}
+
+func (u *ivfSearchState) cursorProgress() (round, nextOffset, bucketCount uint, exhausted bool) {
+	if u.cursor == nil {
+		return 0, 0, 0, false
+	}
+	return u.cursor.Round, u.cursor.NextBucketOffset, u.cursor.CurrentBucketCount, u.cursor.Exhausted
+}
+
+func (u *ivfSearchState) cursorSameProgress(round, nextOffset, bucketCount uint, exhausted bool) bool {
+	if u.cursor == nil {
+		return false
+	}
+	return u.cursor.Round == round &&
+		u.cursor.NextBucketOffset == nextOffset &&
+		u.cursor.CurrentBucketCount == bucketCount &&
+		u.cursor.Exhausted == exhausted
 }
 
 func (u *ivfSearchState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
