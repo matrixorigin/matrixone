@@ -647,3 +647,29 @@ func TestMemThrottlerReleaseClampsOverRelease(t *testing.T) {
 	require.Equal(t, int64(0), throttler.reserved.Load())
 	require.Equal(t, int64(90), left)
 }
+
+func TestMemThrottlerShouldRefreshBeforeRelease(t *testing.T) {
+	currentLive := mpool.GlobalStats().NumCurrBytes.Load()
+
+	t.Run("refreshes when current reserved is not yet covered", func(t *testing.T) {
+		throttler := &memThrottler{}
+		throttler.reserved.Store(20)
+		require.True(t, throttler.ShouldRefreshBeforeRelease())
+	})
+
+	t.Run("skips refresh when existing coverage already covers current reserved", func(t *testing.T) {
+		throttler := &memThrottler{}
+		throttler.reserved.Store(20)
+		throttler.rssReservedBase.Store(60)
+		throttler.rssMpoolLiveBase.Store(currentLive)
+		require.False(t, throttler.ShouldRefreshBeforeRelease())
+	})
+
+	t.Run("refreshes when live reuse shrinks covered bytes below current reserved", func(t *testing.T) {
+		throttler := &memThrottler{}
+		throttler.reserved.Store(40)
+		throttler.rssReservedBase.Store(20)
+		throttler.rssMpoolLiveBase.Store(currentLive)
+		require.True(t, throttler.ShouldRefreshBeforeRelease())
+	})
+}
