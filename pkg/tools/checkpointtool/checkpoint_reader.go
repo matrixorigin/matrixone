@@ -113,7 +113,32 @@ func (r *CheckpointReader) Fork(ctx context.Context) *CheckpointReader {
 }
 
 func (r *CheckpointReader) loadEntries() error {
-	logutil.Infof("[loadEntries] reading checkpoint dir: %s", r.dir)
+	ckpDir := ioutil.GetCheckpointDir()
+	logutil.Infof("[loadEntries] reading checkpoint dir: %s (display dir: %s)", ckpDir, r.dir)
+
+	// Diagnostic: list all raw files in the checkpoint directory
+	rawEntries, listErr := fileservice.SortedList(r.fs.List(r.ctx, ckpDir))
+	if listErr != nil {
+		logutil.Infof("[loadEntries] failed to list dir %s: %v", ckpDir, listErr)
+	} else {
+		logutil.Infof("[loadEntries] raw listing: total=%d dirs=%d files=%d",
+			len(rawEntries), countDirs(rawEntries), countFiles(rawEntries))
+		for _, e := range rawEntries {
+			if !e.IsDir {
+				valid := ""
+				if f := ioutil.DecodeTSRangeFile(e.Name); f.IsValid() {
+					valid = " [valid tsrange]"
+					if f.IsMetadataFile() {
+						valid += " [meta]"
+					} else {
+						valid += " [non-meta ext=" + f.GetExt() + "]"
+					}
+				}
+				logutil.Infof("[loadEntries]   file: %s%s", e.Name, valid)
+			}
+		}
+	}
+
 	names, err := ckputil.ListCKPMetaNames(r.ctx, r.fs)
 	if err != nil {
 		return err
@@ -127,7 +152,7 @@ func (r *CheckpointReader) loadEntries() error {
 	totalRead := 0
 	for _, name := range names {
 		entries, err := checkpoint.ReadEntriesFromMeta(
-			r.ctx, "", ioutil.GetCheckpointDir(), name, 0, nil, r.mp, r.fs,
+			r.ctx, "", ckpDir, name, 0, nil, r.mp, r.fs,
 		)
 		if err != nil {
 			logutil.Infof("[loadEntries] failed to read meta file %s: %v", name, err)
@@ -172,6 +197,20 @@ func (r *CheckpointReader) loadEntries() error {
 	}
 
 	return nil
+}
+
+func countDirs(entries []fileservice.DirEntry) int {
+	n := 0
+	for _, e := range entries {
+		if e.IsDir {
+			n++
+		}
+	}
+	return n
+}
+
+func countFiles(entries []fileservice.DirEntry) int {
+	return len(entries) - countDirs(entries)
 }
 
 // Info returns checkpoint summary
