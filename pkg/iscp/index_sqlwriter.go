@@ -80,6 +80,7 @@ type IvfflatSqlWriter struct {
 	entries_tbl   string
 	meta_tbl      string
 	ivfparam      vectorindex.IvfParam
+	includeCols   []string
 }
 
 // Hnsw Sql Writer.  Use the vectorindex.VectorIndeXCdc JSON format
@@ -588,17 +589,33 @@ func NewIvfflatSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef 
 	w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
 
 	nparts := len(w.indexdef[0].Parts)
-	w.partsPos = make([]int32, nparts)
-	w.partsType = make([]*types.Type, nparts)
+	includeCols := ivfflatIncludeColumnsFromIndexDefs(w.indexdef)
+	w.includeCols = append(w.includeCols[:0], includeCols...)
+	w.partsPos = make([]int32, nparts+len(includeCols))
+	w.partsType = make([]*types.Type, nparts+len(includeCols))
 
 	for i, part := range w.indexdef[0].Parts {
 		w.partsPos[i] = tabledef.Name2ColIndex[part]
 		typ = tabledef.Cols[w.partsPos[i]].Typ
 		w.partsType[i] = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
 	}
+	for i, includeCol := range includeCols {
+		pos, ok := tabledef.Name2ColIndex[includeCol]
+		if !ok {
+			resolvedCol := catalog.ResolveAlias(includeCol)
+			pos, ok = tabledef.Name2ColIndex[resolvedCol]
+		}
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf("ivfflat include column %q not found in source table", includeCol)
+		}
+		dst := nparts + i
+		w.partsPos[dst] = pos
+		typ = tabledef.Cols[pos].Typ
+		w.partsType[dst] = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
+	}
 
-	w.srcPos = make([]int32, nparts+1)
-	w.srcType = make([]*types.Type, nparts+1)
+	w.srcPos = make([]int32, len(w.partsPos)+1)
+	w.srcType = make([]*types.Type, len(w.partsType)+1)
 
 	w.srcPos[0] = w.pkPos
 	w.srcType[0] = w.pkType
@@ -612,6 +629,15 @@ func NewIvfflatSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef 
 	w.meta_tbl = meta_tbl
 
 	return w, nil
+}
+
+func ivfflatIncludeColumnsFromIndexDefs(indexdefs []*plan.IndexDef) []string {
+	for _, idx := range indexdefs {
+		if idx != nil && len(idx.IncludedColumns) > 0 {
+			return idx.IncludedColumns
+		}
+	}
+	return nil
 }
 
 // REPLACE INTO __mo_index_secondary_0197786c-285f-70cb-9337-e484a3ff92c4(__mo_index_centroid_fk_version, __mo_index_centroid_fk_id, __mo_index_pri_col, __mo_index_centroid_fk_entry)
@@ -678,11 +704,20 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 		sql += fmt.Sprintf("REPLACE INTO %s ", sqlquote.QualifiedIdent(w.info.DBName, w.entries_tbl))
 	}
 
-	sql += fmt.Sprintf("(`%s`, `%s`, `%s`, `%s`) ",
+	targetCols := []string{
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+	}
+	for _, includeCol := range w.includeCols {
+		targetCols = append(targetCols, catalog.SystemSI_IVFFLAT_IncludeColPrefix+includeCol)
+	}
+	quotedTargetCols := make([]string, 0, len(targetCols))
+	for _, col := range targetCols {
+		quotedTargetCols = append(quotedTargetCols, sqlquote.Ident(col))
+	}
+	sql += fmt.Sprintf("(%s) ", strings.Join(quotedTargetCols, ", "))
 
 	versql := fmt.Sprintf("SELECT CAST(%s as BIGINT) FROM %s WHERE `%s` = 'version'", catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 		sqlquote.QualifiedIdent(w.info.DBName, w.meta_tbl), catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)

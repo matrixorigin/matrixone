@@ -25,19 +25,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestIvfflatTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32) *plan.TableDef {
-	return &plan.TableDef{
-		Name: "test_orig_tbl",
-		Name2ColIndex: map[string]int32{
-			pkName:     0,
-			vecColName: 1,
-			"dummy":    2, // Add another col to make sure pk/vec col indices are used
-		},
-		Cols: []*plan.ColDef{
-			{Name: pkName, Typ: plan.Type{Id: int32(pkType)}},
-			{Name: vecColName, Typ: plan.Type{Id: int32(vecType), Width: vecWidth}},
-			{Name: "dummy", Typ: plan.Type{Id: int32(types.T_int32)}},
-		},
+type ivfflatIncludeColSpec struct {
+	name  string
+	typ   types.T
+	width int32
+}
+
+func newTestIvfflatTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32, includeCols ...ivfflatIncludeColSpec) *plan.TableDef {
+	name2ColIndex := map[string]int32{
+		pkName:     0,
+		vecColName: 1,
+		"dummy":    2, // Add another col to make sure pk/vec col indices are used
+	}
+	cols := []*plan.ColDef{
+		{Name: pkName, Typ: plan.Type{Id: int32(pkType)}},
+		{Name: vecColName, Typ: plan.Type{Id: int32(vecType), Width: vecWidth}},
+		{Name: "dummy", Typ: plan.Type{Id: int32(types.T_int32)}},
+	}
+	includedColumns := make([]string, 0, len(includeCols))
+	for _, includeCol := range includeCols {
+		name2ColIndex[includeCol.name] = int32(len(cols))
+		cols = append(cols, &plan.ColDef{Name: includeCol.name, Typ: plan.Type{Id: int32(includeCol.typ), Width: includeCol.width}})
+		includedColumns = append(includedColumns, includeCol.name)
+	}
+
+	tableDef := &plan.TableDef{
+		Name:          "test_orig_tbl",
+		Name2ColIndex: name2ColIndex,
+		Cols:          cols,
 		Pkey: &plan.PrimaryKeyDef{
 			Names:       []string{pkName},
 			PkeyColName: pkName,
@@ -73,6 +88,10 @@ func newTestIvfflatTableDef(pkName string, pkType types.T, vecColName string, ve
 		},
 		DbName: "mydb",
 	}
+	for _, indexDef := range tableDef.Indexes {
+		indexDef.IncludedColumns = append([]string(nil), includedColumns...)
+	}
+	return tableDef
 }
 
 func newTestFulltextTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32) *plan.TableDef {
@@ -312,6 +331,40 @@ func TestNewIvfflatSqlWriterUpsert(t *testing.T) {
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
 	fmt.Println(string(bytes))
+}
+
+func TestNewIvfflatSqlWriterUpsertWithIncludeColumns(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestIvfflatTableDef(
+		"pk",
+		types.T_int64,
+		"vec",
+		types.T_array_float64,
+		3,
+		ivfflatIncludeColSpec{name: "title", typ: types.T_varchar, width: 64},
+		ivfflatIncludeColSpec{name: "rank", typ: types.T_int32},
+	)
+	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
+
+	writer, err := NewIvfflatSqlWriter("ivfflat", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	require.NoError(t, err)
+
+	err = writer.Upsert(ctx, []any{int64(1000), []float64{1, 2, 3}, nil, []byte("news"), int32(7)})
+	require.NoError(t, err)
+	err = writer.Upsert(ctx, []any{int64(2000), []float64{5, 6, 7}, nil, nil, int32(9)})
+	require.NoError(t, err)
+
+	bytes, err := writer.ToSql()
+	require.NoError(t, err)
+	sql := string(bytes)
+	require.Contains(t, sql, "`__mo_index_include_title`, `__mo_index_include_rank`")
+	require.Contains(t, sql, "CAST(column_2 as VARCHAR")
+	require.Contains(t, sql, "CAST(column_3 as INT")
+	require.Contains(t, sql, "src0, src1, src2, src3")
+	require.Contains(t, sql, "'news'")
+	require.Contains(t, sql, "CAST(NULL as")
 }
 
 func TestNewIvfflatSqlWriterDelete(t *testing.T) {

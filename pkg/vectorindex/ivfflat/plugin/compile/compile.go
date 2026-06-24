@@ -399,7 +399,7 @@ func ivfIndexEntriesTable(
 
 	includeCols := slices.Clone(indexDef.IncludedColumns)
 	if len(includeCols) == 0 {
-		includeColumns, ok := params[catalog.IndexAlgoParamIncludeColumns]
+		includeColumns, ok := params[catalog.IncludedColumns]
 		if ok && includeColumns != "" {
 			includeCols, err = catalog.ParseIncludeColumnsValue(includeColumns)
 			if err != nil {
