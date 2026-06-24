@@ -2146,6 +2146,9 @@ func (txn *Transaction) FinalizeCommit(context.Context) {
 }
 
 func (txn *Transaction) FinalizeCommitWithUnknownResult(context.Context) {
+	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
+		txn.engine.ccprTxnCache.OnTxnUnknownResult(txn.op.Txn().ID)
+	}
 	// Keep workspace/object-stat metadata intact. If the outer commit result is
 	// later known to be aborted, Rollback still needs the metadata to GC
 	// txn-local CN objects. If it actually committed, rollback GC must not run.
