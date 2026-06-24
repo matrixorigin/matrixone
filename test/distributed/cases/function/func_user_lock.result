@@ -4,10 +4,13 @@ free_before
 SELECT GET_LOCK('prisma_migrate_lock', CAST(0 AS DOUBLE)) AS acquire_lock;
 acquire_lock
 1
-SELECT IS_FREE_LOCK('PRISMA_MIGRATE_LOCK') AS free_after_acquire;
-free_after_acquire
-0
-SELECT RELEASE_LOCK('PrIsMa_MiGrAtE_LoCk') AS release_held;
+SELECT IS_FREE_LOCK('PRISMA_MIGRATE_LOCK') AS uppercase_still_free;
+uppercase_still_free
+1
+SELECT RELEASE_LOCK('PrIsMa_MiGrAtE_LoCk') AS release_wrong_case;
+release_wrong_case
+null
+SELECT RELEASE_LOCK('prisma_migrate_lock') AS release_held;
 release_held
 1
 SELECT IS_FREE_LOCK('prisma_migrate_lock') AS free_after_release;

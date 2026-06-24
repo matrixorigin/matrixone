@@ -7011,21 +7011,19 @@ func userLevelLockOwner(proc *process.Process) string {
 // user-level lock names (GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK).
 const maxUserLevelLockNameLength = 64
 
-// normalizeUserLevelLockName validates and normalizes a MySQL user-level lock name.
-// It returns the normalized (lowercased) name, or an error if the name is empty or
-// exceeds maxUserLevelLockNameLength characters (MySQL enforces 64 characters, not bytes).
+// normalizeUserLevelLockName validates a MySQL user-level lock name.
+// Lock names are case-sensitive, so the original bytes/casing are preserved.
 func normalizeUserLevelLockName(name string) (string, error) {
 	if len(name) == 0 {
 		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not be empty")
 	}
-	normalized := strings.ToLower(name)
-	if utf8.RuneCountInString(normalized) > maxUserLevelLockNameLength {
+	if utf8.RuneCountInString(name) > maxUserLevelLockNameLength {
 		return "", moerr.NewInternalErrorNoCtxf(
 			"user-level lock name exceeds maximum length of %d characters",
 			maxUserLevelLockNameLength,
 		)
 	}
-	return normalized, nil
+	return name, nil
 }
 
 func userLevelLockTxnID(owner, name string) []byte {
