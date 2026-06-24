@@ -716,6 +716,20 @@ func cnFlushS3ProjectedPhysicalUsed(throttler *memThrottler, reserved int64) int
 	return used
 }
 
+func (m *memThrottler) ShouldRefreshBeforeRelease() bool {
+	reserved := m.reserved.Load()
+	if reserved <= 0 {
+		return false
+	}
+	currentLive := mpool.GlobalStats().NumCurrBytes.Load()
+	covered := currentCNFlushS3RSSCovered(
+		m.rssReservedBase.Load(),
+		m.rssMpoolLiveBase.Load(),
+		reserved,
+		currentLive,
+	)
+	return covered < reserved
+}
 func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
 	limit := throttler.limit.Load()
 	smallBatchCap := int64(float64(limit) * cnFlushS3PinnedSmallBatchRate)
