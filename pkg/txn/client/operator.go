@@ -1127,6 +1127,10 @@ func (tc *txnOperator) doWrite(
 					return
 				}
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+						tc.reset.workspace.FinalizeCommitWithUnknownResult(ctx)
+						return
+					}
 					if e := tc.reset.workspace.Rollback(ctx); e != nil {
 						tc.logger.Error("rollback prepared workspace failed",
 							util.TxnIDField(tc.getTxnMeta(false)), zap.Error(e))
