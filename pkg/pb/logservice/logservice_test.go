@@ -116,12 +116,6 @@ func TestTNStateUpdate(t *testing.T) {
 }
 
 func TestLogStateUpdateStores(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("The code did not panic")
-		}
-	}()
-
 	state := LogState{
 		Shards: map[uint64]LogShardInfo{},
 		Stores: map[string]LogStoreInfo{},
@@ -197,8 +191,9 @@ func TestLogStateUpdateStores(t *testing.T) {
 	}
 	tick3 := uint64(200)
 
-	// should panic()
 	state.Update(hb3, tick3)
+	assert.Equal(t, hb3.Replicas, state.Stores[hb3.UUID].Replicas)
+	assert.Equal(t, hb2.Replicas[0].LogShardInfo, state.Shards[1])
 }
 
 func TestLogString(t *testing.T) {

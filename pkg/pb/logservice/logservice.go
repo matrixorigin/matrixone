@@ -281,8 +281,11 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 		} else if incoming.Epoch == recorded.Epoch && incoming.Epoch > 0 {
 			if !reflect.DeepEqual(recorded.Replicas, incoming.Replicas) ||
 				!reflect.DeepEqual(recorded.NonVotingReplicas, incoming.NonVotingReplicas) {
-				panic(fmt.Sprintf("inconsistent replicas, recorded: %+v, incoming: %+v",
-					recorded, incoming))
+				// Stale LogService stores can heartbeat an old local membership
+				// with the same epoch during online recovery. Keep the recorded
+				// shard membership and ignore the inconsistent shard update
+				// instead of crashing HAKeeper.
+				continue
 			}
 		}
 

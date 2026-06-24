@@ -1929,7 +1929,7 @@ func applyK8sPVCJobRecoveryPlans(ctx context.Context, plans []*repairPlan, opts 
 		stdoutln("step 1: resume with existing HAKeeper repair state")
 	}
 
-	stdoutln("step 2: clean rebuild LogService deployments one store at a time")
+	stdoutln("step 2: scale rebuild LogService deployments to 0")
 	for _, store := range restartStores {
 		deployment, err := k8sDeploymentNameForStore(plans[0], store)
 		if err != nil {
@@ -1942,12 +1942,35 @@ func applyK8sPVCJobRecoveryPlans(ctx context.Context, plans []*repairPlan, opts 
 		if err := waitForK8sStorePodsGone(ctx, plans[0], store, podReadyTimeout); err != nil {
 			return err
 		}
+	}
+
+	stdoutln("step 3: run offline PVC cleanup jobs")
+	for _, store := range restartStores {
 		storeTasks := cleanupTasksForStore(tasks, store.UUID)
 		if len(storeTasks) == 0 {
 			continue
 		}
 		if err := runK8sPVCCleanupJob(ctx, plans[0], store, storeTasks, cleanupTimeout); err != nil {
 			return err
+		}
+	}
+
+	stdoutln("step 4: clear startup cleanup requests while rebuild stores remain blocked")
+	if err := refreshRepairStatesWithoutStartupCleanup(ctx, plans, hakeeperTimeout); err != nil {
+		return err
+	}
+
+	stdoutln("step 5: restart cleaned LogService deployments")
+	for _, store := range restartStores {
+		deployment, err := k8sDeploymentNameForStore(plans[0], store)
+		if err != nil {
+			return err
+		}
+		if plans[0].K8s != nil && plans[0].K8s.RepairImage != "" {
+			stdoutf("set deployment/%s image to %s for store %s\n", deployment, plans[0].K8s.RepairImage, store.UUID)
+			if _, err := runKubectl(ctx, plans[0], "set", "image", "deployment/"+deployment, "log="+plans[0].K8s.RepairImage); err != nil {
+				return fmt.Errorf("set image deployment/%s for store %s: %w", deployment, store.UUID, err)
+			}
 		}
 		stdoutf("scale deployment/%s to 1 for store %s\n", deployment, store.UUID)
 		if _, err := runKubectl(ctx, plans[0], "scale", "deployment/"+deployment, "--replicas=1"); err != nil {
@@ -1958,11 +1981,6 @@ func applyK8sPVCJobRecoveryPlans(ctx context.Context, plans []*repairPlan, opts 
 			return err
 		}
 		stdoutf("store %s ready in pod %s\n", store.UUID, pod.Metadata.Name)
-	}
-
-	stdoutln("step 3: clear startup cleanup requests after all cleaned stores are running")
-	if err := refreshRepairStatesWithoutStartupCleanup(ctx, plans, hakeeperTimeout); err != nil {
-		return err
 	}
 
 	return finishK8sPVCJobRecovery(ctx, plans, hakeeperTimeout, heartbeatTimeout)
@@ -3627,14 +3645,46 @@ func applyHAKeeperWithNewConnection(
 	timeout time.Duration,
 	req repairPayload,
 ) (repairResult, error) {
-	opCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	client, addr, err := connect(opCtx, addresses)
-	if err != nil {
-		return repairResult{}, fmt.Errorf("connect hakeeper: %w", err)
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for attempt := 1; ; attempt++ {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			if lastErr != nil {
+				return repairResult{}, lastErr
+			}
+			return repairResult{}, context.DeadlineExceeded
+		}
+		opTimeout := minDuration(remaining, 30*time.Second)
+		opCtx, cancel := context.WithTimeout(ctx, opTimeout)
+		client, addr, err := connect(opCtx, addresses)
+		if err == nil {
+			var result repairResult
+			result, err = applyHAKeeperPayload(opCtx, client, addr, req)
+			_ = client.Close()
+			cancel()
+			if err == nil {
+				return result, nil
+			}
+		} else {
+			cancel()
+			err = fmt.Errorf("connect hakeeper: %w", err)
+		}
+		lastErr = err
+		if !isRetryableHAKeeperError(err) {
+			return repairResult{}, err
+		}
+		sleep := minDuration(2*time.Second, time.Until(deadline))
+		if sleep <= 0 {
+			return repairResult{}, err
+		}
+		stdoutf("retry HAKeeper %s after transient error (attempt %d): %v\n", req.Op, attempt, err)
+		select {
+		case <-ctx.Done():
+			return repairResult{}, ctx.Err()
+		case <-time.After(sleep):
+		}
 	}
-	defer client.Close()
-	return applyHAKeeperPayload(opCtx, client, addr, req)
 }
 
 func getHAKeeperStateWithNewConnection(
@@ -3642,14 +3692,66 @@ func getHAKeeperStateWithNewConnection(
 	addresses []string,
 	timeout time.Duration,
 ) (logpb.CheckerState, error) {
-	opCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	client, addr, err := connect(opCtx, addresses)
-	if err != nil {
-		return logpb.CheckerState{}, fmt.Errorf("connect hakeeper: %w", err)
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for attempt := 1; ; attempt++ {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			if lastErr != nil {
+				return logpb.CheckerState{}, lastErr
+			}
+			return logpb.CheckerState{}, context.DeadlineExceeded
+		}
+		opTimeout := minDuration(remaining, 30*time.Second)
+		opCtx, cancel := context.WithTimeout(ctx, opTimeout)
+		client, addr, err := connect(opCtx, addresses)
+		if err == nil {
+			var state logpb.CheckerState
+			state, err = getClusterState(opCtx, client, addr)
+			_ = client.Close()
+			cancel()
+			if err == nil {
+				return state, nil
+			}
+		} else {
+			cancel()
+			err = fmt.Errorf("connect hakeeper: %w", err)
+		}
+		lastErr = err
+		if !isRetryableHAKeeperError(err) {
+			return logpb.CheckerState{}, err
+		}
+		sleep := minDuration(2*time.Second, time.Until(deadline))
+		if sleep <= 0 {
+			return logpb.CheckerState{}, err
+		}
+		stdoutf("retry HAKeeper state after transient error (attempt %d): %v\n", attempt, err)
+		select {
+		case <-ctx.Done():
+			return logpb.CheckerState{}, ctx.Err()
+		case <-time.After(sleep):
+		}
 	}
-	defer client.Close()
-	return getClusterState(opCtx, client, addr)
+}
+
+func isRetryableHAKeeperError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "20429") ||
+		strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "no leader") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "use of closed network connection") ||
+		strings.Contains(msg, "i/o timeout")
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func stopStore(store planStore) error {
