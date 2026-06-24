@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -428,7 +429,6 @@ func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dro
 func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *TableDef) error {
 	for i := 0; i < len(tbInfo.Indexes); i++ {
 		indexInfo := tbInfo.Indexes[i]
-		includeAffected := indexIncludesColumn(indexInfo, colName)
 		indexInfo.Parts = RemoveIf[string](indexInfo.Parts, func(t string) bool {
 			return catalog.ResolveAlias(t) == colName
 		})
@@ -456,14 +456,6 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 				} else if len(indexInfo.Parts) == 0 {
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 				}
-			case catalog.MoIndexIvfFlatAlgo.ToString():
-				// ivf index
-				if len(indexInfo.Parts) == 0 || includeAffected {
-					tbInfo.Indexes = RemoveIf[*IndexDef](tbInfo.Indexes, func(def *IndexDef) bool {
-						return def.IndexName == indexInfo.IndexName
-					})
-					i--
-				}
 			case catalog.MOIndexMasterAlgo.ToString():
 				if len(indexInfo.Parts) == 0 {
 					// TODO: verify this
@@ -471,9 +463,20 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 				}
 			default:
 				// Plugin-registered indexes may span multiple hidden IndexDefs;
-				// remove all entries sharing the logical index name when the
-				// key columns are gone or an INCLUDE column is dropped.
-				if _, ok := indexplugin.Get(algo); ok && (len(indexInfo.Parts) == 0 || includeAffected) {
+				// remove all entries sharing the logical index name when the key
+				// columns are gone or plugin-owned metadata depends on this column.
+				if p, ok := indexplugin.Get(algo); ok {
+					dropIndex := len(indexInfo.Parts) == 0
+					if alterHooks, ok := p.Plan().(planplugin.AlterColumnHooks); ok {
+						affected, err := alterHooks.HandleAlterDropColumn(tbInfo, indexInfo, colName)
+						if err != nil {
+							return err
+						}
+						dropIndex = dropIndex || affected
+					}
+					if !dropIndex {
+						continue
+					}
 					tbInfo.Indexes = RemoveIf[*IndexDef](tbInfo.Indexes, func(def *IndexDef) bool {
 						return def.IndexName == indexInfo.IndexName
 					})

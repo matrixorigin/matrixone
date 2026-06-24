@@ -249,6 +249,41 @@ func Test_ShowCreateTableQuotesIncludedColumns(t *testing.T) {
 	require.Contains(t, got, "INCLUDE (`status`)")
 }
 
+func Test_ShowCreateTableRendersSingleIncludeWhenAlgoParamsAlsoCarryIncludeColumns(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		algo string
+	}{
+		{name: "cagra", algo: catalog.MoIndexCagraAlgo.ToString()},
+		{name: "ivfpq", algo: catalog.MoIndexIvfpqAlgo.ToString()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src_gpu (
+				id INT NOT NULL,
+				embedding VECF32(3),
+				price INT,
+				category BIGINT,
+				PRIMARY KEY (id)
+			)`)
+			require.NoError(t, err)
+
+			tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+				IndexName:       "idx_vec_gpu",
+				Parts:           []string{"embedding"},
+				IndexAlgo:       tc.algo,
+				IndexAlgoParams: `{"op_type":"vector_l2_ops","included_columns":"price,category"}`,
+				IncludedColumns: []string{"price", "category"},
+			})
+
+			got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			require.Equal(t, 1, strings.Count(got, "INCLUDE"))
+			require.Contains(t, got, "INCLUDE (`price`, `category`)")
+		})
+	}
+}
+
 func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
 	const sql = `CREATE TABLE t_numeric_types (
 		id BIGINT NOT NULL AUTO_INCREMENT,
