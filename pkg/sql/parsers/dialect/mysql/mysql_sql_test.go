@@ -307,6 +307,47 @@ var (
 		input:  "alter table t1 alter reindex idx1 IVFFLAT force_sync",
 		output: "alter table t1 alter reindex idx1 ivfflat force_sync",
 	}, {
+		input:  "alter table t1 alter reindex idx1 IVFPQ force_sync",
+		output: "alter table t1 alter reindex idx1 ivfpq force_sync",
+	}, {
+		input:  "alter table t1 alter reindex idx1 IVFPQ lists = 4 force_sync",
+		output: "alter table t1 alter reindex idx1 ivfpq lists = 4 force_sync",
+	}, {
+		input:  "alter table t1 alter reindex idx1 CAGRA",
+		output: "alter table t1 alter reindex idx1 cagra",
+	}, {
+		input:  "alter table t1 alter reindex idx1 CAGRA force_sync",
+		output: "alter table t1 alter reindex idx1 cagra force_sync",
+	}, {
+		// The REINDEX rule shares index_option_list with CREATE INDEX, so the
+		// AST node carries the full option set and Format now reproduces it
+		// (lowercase) for a lossless round-trip — the graph-degree options are
+		// emitted, not dropped. force_sync is emitted last.
+		input:  "alter table t1 alter reindex idx1 CAGRA intermediate_graph_degree = 8 graph_degree = 4 force_sync",
+		output: "alter table t1 alter reindex idx1 cagra intermediate_graph_degree = 8 graph_degree = 4 force_sync",
+	}, {
+		input:  "alter table t1 alter reindex idx1 HNSW",
+		output: "alter table t1 alter reindex idx1 hnsw",
+	}, {
+		// HNSW's REINDEX rule now takes an index_option_list (mysql_sql.y:
+		// REINDEX ident HNSW index_option_list) so restore's RestoreInitSQL
+		// can carry FORCE_SYNC, matching cagra/ivfpq/ivfflat.
+		input:  "alter table t1 alter reindex idx1 HNSW force_sync",
+		output: "alter table t1 alter reindex idx1 hnsw force_sync",
+	}, {
+		// Lossless round-trip of the per-index build options merged on reindex.
+		input:  "alter table t1 alter reindex idx1 IVFFLAT lists = 4 kmeans_train_percent = 80 kmeans_max_iteration = 50",
+		output: "alter table t1 alter reindex idx1 ivfflat lists = 4 kmeans_train_percent = 80 kmeans_max_iteration = 50",
+	}, {
+		input:  "alter table t1 alter reindex idx1 HNSW m = 32 ef_construction = 128 ef_search = 100 max_index_capacity = 100000",
+		output: "alter table t1 alter reindex idx1 hnsw m = 32 ef_construction = 128 ef_search = 100 max_index_capacity = 100000",
+	}, {
+		// String options must round-trip quoted (the grammar takes a STRING);
+		// op_type itself is rejected at compile for reindex, but Format stays
+		// re-parseable. (Parses, formats, re-parses to the same tree.)
+		input:  "alter table t1 alter reindex idx1 IVFFLAT op_type 'vector_l2_ops'",
+		output: "alter table t1 alter reindex idx1 ivfflat op_type 'vector_l2_ops'",
+	}, {
 		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = true day = 33 hour = 12",
 		output: "alter table t1 alter index idx1 ivfflat auto_update = true day = 33 hour = 12",
 	}, {
@@ -1766,6 +1807,15 @@ var (
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' async",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ASYNC ",
 		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' kmeans_train_percent 5 kmeans_max_iteration 30",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops KMEANS_TRAIN_PERCENT 5 KMEANS_MAX_ITERATION 30 ",
+		}, {
+			input:  "create index idx using hnsw on A (a) M 16 max_index_capacity = 500000",
+			output: "create index idx using hnsw on a (a) M 16 MAX_INDEX_CAPACITY 500000 ",
+		}, {
+			input:  "create index idx using ivfpq on A (a) LISTS 8 kmeans_train_percent 7 max_index_capacity 2000",
+			output: "create index idx using ivfpq on a (a) LISTS 8 KMEANS_TRAIN_PERCENT 7 MAX_INDEX_CAPACITY 2000 ",
+		}, {
 			input: "create index idx1 on a (a)",
 		}, {
 			input:  "create index idx using master on A (a,b,c)",
@@ -2908,6 +2958,10 @@ var (
 			input: `show cdc all;`,
 		},
 		{
+			input:  `show cdc;`,
+			output: `show cdc all;`,
+		},
+		{
 			input: `show cdc task t1;`,
 		},
 		{
@@ -2915,6 +2969,21 @@ var (
 		},
 		{
 			input: `drop cdc task t1;`,
+		},
+		{
+			input: `drop cdc task internal;`,
+		},
+		{
+			input:  `drop cdc t1;`,
+			output: `drop cdc task t1;`,
+		},
+		{
+			input:  `drop cdc internal;`,
+			output: `drop cdc task internal;`,
+		},
+		{
+			input:  `drop cdc if exists t1;`,
+			output: `drop cdc if exists task t1;`,
 		},
 		{
 			input: `pause cdc all;`,

@@ -3792,6 +3792,26 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("cagra_batch_window", 0, 5000000000, false),
 		Default:           int64(0),
 	},
+	// gpu_multi_simulation is a test-only seam: when >= 2 it makes the GPU vector
+	// index present N logical GPUs (all mapped to physical device 0) so SHARDED /
+	// REPLICATED distribution modes can be exercised on a single-GPU machine.
+	// 0 (default) / 1 use the real device list. See pkg/vectorindex.SimulateDevices.
+	"gpu_multi_simulation": {
+		Name:              "gpu_multi_simulation",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("gpu_multi_simulation", 0, 8, false),
+		Default:           int64(0),
+	},
+	"experimental_ivfpq_index": {
+		Name:              "experimental_ivfpq_index",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_ivfpq_index"),
+		Default:           int8(0),
+	},
 	"ivfpq_threads_build": {
 		Name:              "ivfpq_threads_build",
 		Scope:             ScopeBoth,

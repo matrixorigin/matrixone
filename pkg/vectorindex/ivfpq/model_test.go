@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,7 +49,8 @@ const (
 
 func testIdxcfg() vectorindex.IndexConfig {
 	return vectorindex.IndexConfig{
-		Type: vectorindex.IVFPQ,
+		Type:          vectorindex.IVFPQ,
+		IndexCapacity: int64(testNVectors),
 		CuvsIvfpq: vectorindex.CuvsIvfpqIndexConfig{
 			Lists:            testNLists,
 			M:                testM,
@@ -66,7 +68,6 @@ func testTblcfg() vectorindex.IndexTableConfig {
 		SrcTable:      "src",
 		MetadataTable: "__ivfpq_meta",
 		IndexTable:    "__ivfpq_index",
-		IndexCapacity: int64(testNVectors),
 	}
 }
 
@@ -176,6 +177,14 @@ func TestModelStreamError(t *testing.T) {
 	runSql_streaming = mock_runSql_streaming_error
 	defer func() { runSql_streaming = orig }()
 
+	// LoadIndex now fires tag=1 / tag=2 goroutines via runSql; mock those
+	// to return empty so they don't hit the production executor.
+	origRunSql := runSql
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: proc.Mp()}, nil
+	}
+	defer func() { runSql = origRunSql }()
+
 	idx := &IvfpqModel[float32]{
 		Id:       "test-stream-err",
 		FileSize: 1024,
@@ -228,6 +237,15 @@ func TestModelBuildAndLoad(t *testing.T) {
 	require.NotEmpty(t, tarPath)
 	require.NotEmpty(t, checksum)
 	defer os.Remove(tarPath)
+
+	// LoadIndex always fires the tag=1 / tag=2 SELECTs (even when Path is
+	// already set and the tar download is skipped). Mock those to return
+	// empty so they don't hit the production executor.
+	origRunSql := runSql
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: proc.Mp()}, nil
+	}
+	defer func() { runSql = origRunSql }()
 
 	// ---- Load from local tar ----
 	loader := &IvfpqModel[float32]{
@@ -301,6 +319,12 @@ func TestModelLoadFromDB(t *testing.T) {
 
 	origRunSql := runSql
 	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		// LoadIndex now also fires tag=1 (deleted pkids) and tag=2 (overflow)
+		// SELECTs in parallel with the model tar streaming. Return an empty
+		// result for those — the test exercises the no-CDC-delta path.
+		if strings.Contains(sql, "AND tag = 1") || strings.Contains(sql, "AND tag = 2") {
+			return executor.Result{Mp: proc.Mp()}, nil
+		}
 		res := executor.Result{
 			Mp: proc.Mp(),
 			Batches: []*batch.Batch{
