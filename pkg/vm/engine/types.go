@@ -148,7 +148,7 @@ func SplitCheckConstraintsFromConfigs(configs []*plan.Property) ([]*plan.Propert
 		checks = append(checks, decodedChecks...)
 	}
 	if firstErr != nil {
-		return visibleConfigs, checks, firstErr
+		return visibleConfigs, nil, firstErr
 	}
 	return visibleConfigs, checks, nil
 }

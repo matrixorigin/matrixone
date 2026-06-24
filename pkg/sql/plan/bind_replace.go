@@ -943,6 +943,9 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 	genColIdxToProj2Pos := make(map[int]int, colCount)
 	generatedColIdxs := make([]int, 0)
 
+	// colName2Idx values written in this loop are final select/projection
+	// positions. CHECK filters and DML update contexts consume those positions,
+	// not table definition ordinals.
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
 			colIdxToProjPos[int32(i)] = int32(len(projList1))

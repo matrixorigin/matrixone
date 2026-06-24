@@ -1667,6 +1667,72 @@ func TestSubstituteColRefsInExprSkipsNilProjection(t *testing.T) {
 	assert.Same(t, expr, got)
 }
 
+func TestGetProjectionByLastNodeIfAvailableFollowsPrimaryChild(t *testing.T) {
+	builder := &QueryBuilder{
+		qry: &plan.Query{
+			Nodes: []*plan.Node{
+				{
+					NodeType: plan.Node_JOIN,
+					Children: []int32{1, 2},
+				},
+				{
+					NodeType: plan.Node_TABLE_SCAN,
+				},
+				{
+					NodeType: plan.Node_PROJECT,
+					ProjectList: []*plan.Expr{
+						MakePlan2Int32ConstExprWithType(1),
+					},
+				},
+			},
+		},
+	}
+
+	require.Nil(t, getProjectionByLastNodeIfAvailable(builder, 0))
+}
+
+func TestCheckConstraintRejectsSyntheticColumns(t *testing.T) {
+	tableDef := &TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "a"},
+			{Name: "b"},
+			{Name: catalog.CPrimaryKeyColName},
+			{Name: "__mo_cbkey_001a001b"},
+		},
+		Name2ColIndex: map[string]int32{
+			"a":                        0,
+			"b":                        1,
+			catalog.CPrimaryKeyColName: 2,
+			"__mo_cbkey_001a001b":      3,
+		},
+		ClusterBy: &plan.ClusterByDef{Name: "__mo_cbkey_001a001b"},
+	}
+
+	for _, tc := range []struct {
+		name   string
+		colPos int32
+		want   string
+	}{
+		{name: "composite primary key", colPos: 2, want: catalog.CPrimaryKeyColName},
+		{name: "composite cluster by", colPos: 3, want: "__mo_cbkey_001a001b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: tc.colPos,
+					},
+				},
+			}
+			got, ok := checkConstraintReferencesSyntheticCol(expr, tableDef)
+			require.True(t, ok)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func addSingleIdxTPositiveCheck(t *testing.T, mock *MockOptimizer) {
 	t.Helper()
 	tableDef := mock.ctxt.tables["single_idx_t"]

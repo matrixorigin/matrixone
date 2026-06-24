@@ -189,6 +189,27 @@ func TestCheckConstraintAssertReturnsConstraintViolation(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation), "unexpected error: %v", err)
 	require.Contains(t, err.Error(), "Check constraint '__mo_chk_1' is violated")
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
+			NewFunctionTestConstInput(
+				types.T_varchar.ToType(),
+				[]string{"Check constraint '__mo_chk_1' is violated"},
+				nil,
+			),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true}, nil),
+		fEvalFn(op),
+	)
+	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+	err = tc.fn(tc.parameters, tc.result, tc.proc, tc.fnLength, nil)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation), "unexpected error: %v", err)
+	got, isNull := vector.GenerateFunctionFixedTypeParameter[bool](tc.GetResultVectorDirectly()).GetValue(0)
+	require.False(t, isNull)
+	require.False(t, got)
 }
 
 func Test_GetFunctionByName(t *testing.T) {

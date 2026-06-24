@@ -13097,12 +13097,15 @@ var supportedOthersBuiltIns = []FuncNew{
 						}
 						errMsg := functionUtil.QuickBytesToStr(value)
 
-						res := vector.MustFunctionResult[bool](result)
 						for i := uint64(0); i < uint64(length); i++ {
 							flag, isNull := checkFlags.GetValue(i)
 							if isNull || !flag {
 								return moerr.NewConstraintViolation(proc.Ctx, errMsg)
 							}
+						}
+
+						res := vector.MustFunctionResult[bool](result)
+						for i := 0; i < length; i++ {
 							res.AppendMustValue(true)
 						}
 						return nil

@@ -83,6 +83,5 @@ func TestSplitCheckConstraintsFromConfigsKeepsVisibleConfigsOnDecodeError(t *tes
 	require.Len(t, visibleConfigs, 2)
 	require.Equal(t, "visible-before", visibleConfigs[0].Key)
 	require.Equal(t, "visible-after", visibleConfigs[1].Key)
-	require.Len(t, checks, 1)
-	require.Equal(t, check.Name, checks[0].Name)
+	require.Nil(t, checks)
 }
