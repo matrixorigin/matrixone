@@ -112,15 +112,18 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	proc.Base.Lim = process.Limitation{}
 	proc.Base.UnixTime = 1000000
 	proc.Base.SessionInfo = process.SessionInfo{
-		Account:        "",
-		User:           "",
-		Host:           "",
-		Role:           "",
-		ConnectionID:   0,
-		LastInsertID:   0,
-		Database:       "",
-		Version:        "",
-		TimeZone:       time.Local,
+		Account:      "",
+		User:         "",
+		Host:         "",
+		Role:         "",
+		ConnectionID: 0,
+		LastInsertID: 0,
+		Database:     "",
+		Version:      "",
+		// Pin to UTC: time.Time{}.In(time.Local).MarshalBinary() can fail
+		// on hosts whose historical zone data for year 1 has an offset
+		// outside the int16 minute range MarshalBinary accepts.
+		TimeZone:       time.UTC,
 		StorageEngine:  nil,
 		QueryId:        nil,
 		ResultColTypes: nil,
@@ -743,6 +746,10 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
 	proc.Base.TxnOperator = fakeTxnOperator{}
+	// time.Time{}.In(time.Local).MarshalBinary() can fail on hosts where
+	// the historical zone data for year 1 has an offset outside the
+	// int16 minute range MarshalBinary accepts. Pin to UTC for the test.
+	proc.Base.SessionInfo.TimeZone = time.UTC
 
 	// if this is a pipeline with operator list "connector / dispatch".
 	// this should return withoutOut == false.

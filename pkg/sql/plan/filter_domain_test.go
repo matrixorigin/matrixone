@@ -27,7 +27,7 @@ func setupInDomainRewriteTest(t *testing.T) (*MockCompilerContext, *QueryBuilder
 
 	ctx := NewMockCompilerContext(true)
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
-	tag := builder.genNewBindTag()
+	tag := builder.GenNewBindTag()
 	colExpr := &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_int64)},
 		Expr: &planpb.Expr_Col{
@@ -683,7 +683,7 @@ func setupStringInDomainRewriteTest(t *testing.T) (*MockCompilerContext, *QueryB
 
 	ctx := NewMockCompilerContext(true)
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
-	tag := builder.genNewBindTag()
+	tag := builder.GenNewBindTag()
 	colExpr := &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_varchar), Width: 16},
 		Expr: &planpb.Expr_Col{
@@ -972,7 +972,7 @@ func setupUint8InDomainRewriteTest(t *testing.T) (*MockCompilerContext, *QueryBu
 
 	ctx := NewMockCompilerContext(true)
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
-	tag := builder.genNewBindTag()
+	tag := builder.GenNewBindTag()
 	colExpr := &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_uint8)},
 		Expr: &planpb.Expr_Col{

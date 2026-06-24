@@ -64,6 +64,30 @@ type Router interface {
 	Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error)
 }
 
+// routeSelectedConnector is implemented by routers that distinguish
+// Route-selected new-session connects from internal/admin connects. The
+// former should feed success/failure back into the CN health breaker; the
+// latter must not mutate breaker state because they bypass the Route/probe
+// state machine.
+type routeSelectedConnector interface {
+	ConnectRouteSelected(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error)
+}
+
+// transferRouter is implemented by routers that want session transfer /
+// migration traffic to select a target CN without consuming a breaker-managed
+// recovery probe. The transfer path is control-plane traffic, not a new
+// client-session connect.
+type transferRouter interface {
+	RouteForTransfer(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error)
+}
+
+// cacheReuseChecker is implemented by routers that can decide whether a cached
+// backend connection is still eligible for a fresh client login. Cached reuse
+// must honor the same CN health policy as a new session route.
+type cacheReuseChecker interface {
+	CanReuseCachedCN(cn *CNServer) bool
+}
+
 // RefreshableRouter is a router that can be refreshed to get latest route strategy
 type RefreshableRouter interface {
 	Router
@@ -83,6 +107,15 @@ type router struct {
 	// timeout configs.
 	connectTimeout time.Duration
 	authTimeout    time.Duration
+
+	// health is the per-CN circuit breaker used to skip CN servers that are
+	// temporarily unable to accept new connections. It may be nil, which
+	// disables the feature.
+	health *cnHealthChecker
+	// healthDisabled, when true, leaves health nil after construction.
+	healthDisabled bool
+	// healthOpts are applied when the default health checker is built.
+	healthOpts []cnHealthOption
 }
 
 type routeOption func(*router)
@@ -98,6 +131,36 @@ func withConnectTimeout(t time.Duration) routeOption {
 func withAuthTimeout(t time.Duration) routeOption {
 	return func(r *router) {
 		r.authTimeout = t
+	}
+}
+
+// withCNHealthCheckDisabled disables the CN health circuit breaker.
+func withCNHealthCheckDisabled() routeOption {
+	return func(r *router) {
+		r.healthDisabled = true
+	}
+}
+
+// withCNHealthCheckCooldown sets the base and max cooldown of the CN health
+// circuit breaker.
+func withCNHealthCheckCooldown(base, max time.Duration) routeOption {
+	return func(r *router) {
+		r.healthOpts = append(r.healthOpts, withCNHealthCooldown(base, max))
+	}
+}
+
+// withCNHealthCheckFailThreshold sets how many consecutive connect failures
+// trip a CN's health breaker.
+func withCNHealthCheckFailThreshold(threshold int) routeOption {
+	return func(r *router) {
+		r.healthOpts = append(r.healthOpts, withCNHealthFailThreshold(threshold))
+	}
+}
+
+// withCNHealthCheckProbeWindow sets the half-open probe slot lifetime.
+func withCNHealthCheckProbeWindow(d time.Duration) routeOption {
+	return func(r *router) {
+		r.healthOpts = append(r.healthOpts, withCNHealthProbeWindow(d))
 	}
 }
 
@@ -120,6 +183,9 @@ func newRouter(
 	}
 	if rt.authTimeout == 0 { // for test
 		rt.authTimeout = defaultAuthTimeout / 3
+	}
+	if !rt.healthDisabled {
+		rt.health = newCNHealthChecker(rt.healthOpts...)
 	}
 	return rt
 }
@@ -198,26 +264,50 @@ func (r *router) selectForCommonTenant(
 	return cns
 }
 
-// Route implements the Router interface.
-func (r *router) Route(ctx context.Context, sid string, c clientInfo, filter func(string) bool) (*CNServer, error) {
+func (r *router) routeCandidates(sid string, c clientInfo, filter func(string) bool) []*CNServer {
 	var cns []*CNServer
 	if c.isSuperTenant() {
 		cns = r.selectForSuperTenant(sid, c, filter)
 	} else {
 		cns = r.selectForCommonTenant(sid, c, filter)
 	}
+	return cns
+}
+
+// Route implements the Router interface.
+func (r *router) Route(ctx context.Context, sid string, c clientInfo, filter func(string) bool) (*CNServer, error) {
+	cns := r.routeCandidates(sid, c, filter)
 	cnCount := len(cns)
 	v2.ProxyAvailableBackendServerNumGauge.
 		WithLabelValues(string(c.Tenant)).Set(float64(cnCount))
 
 	if cnCount == 0 {
 		return nil, noCNServerErr
-	} else if cnCount == 1 {
-		cns[0].hash = c.hash
-		return cns[0], nil
 	}
 
-	s := r.rebalancer.connManager.selectOne(c.hash, cns)
+	// Apply the CN health circuit breaker. This skips CN servers that are
+	// temporarily unable to accept connections (e.g. overloaded), so new
+	// connections do not keep paying the auth timeout on a known-bad CN.
+	candidates, allBusy := r.health.pick(cns)
+	if allBusy {
+		// Every candidate CN is temporarily unhealthy. Fast-fail with a
+		// busy error instead of hanging on a doomed connection or returning
+		// a misleading "no available CN server" error. The breaker will let
+		// a half-open probe through once a cooldown expires, so the cluster
+		// recovers automatically.
+		return nil, allCNServersBusyErr
+	}
+
+	if len(candidates) == 1 {
+		// A single candidate is either the only healthy CN or a half-open
+		// probe. In both cases return it directly: routing it through
+		// selectOne is unnecessary, and for a probe it would risk dropping
+		// the reserved probe slot (see pick's invariants).
+		candidates[0].hash = c.hash
+		return candidates[0], nil
+	}
+
+	s := r.rebalancer.connManager.selectOne(c.hash, candidates)
 	if s == nil {
 		return nil, ErrNoAvailableCNServers
 	}
@@ -226,21 +316,69 @@ func (r *router) Route(ctx context.Context, sid string, c clientInfo, filter fun
 	return s, nil
 }
 
-// Connect implements the CNConnector interface.
-func (r *router) Connect(
-	cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
+// RouteForTransfer selects a CN for session transfer / migration. It uses the
+// same label/filter selection as Route, but intentionally bypasses the
+// breaker/probe gate so transfer traffic does not consume or mutate
+// breaker-managed recovery probes.
+func (r *router) RouteForTransfer(
+	ctx context.Context, sid string, c clientInfo, filter func(string) bool,
+) (*CNServer, error) {
+	cns := r.routeCandidates(sid, c, filter)
+	cnCount := len(cns)
+	v2.ProxyAvailableBackendServerNumGauge.
+		WithLabelValues(string(c.Tenant)).Set(float64(cnCount))
+
+	if cnCount == 0 {
+		return nil, noCNServerErr
+	}
+	if cnCount == 1 {
+		cns[0].hash = c.hash
+		return cns[0], nil
+	}
+
+	s := r.rebalancer.connManager.selectOne(c.hash, cns)
+	if s == nil {
+		return nil, ErrNoAvailableCNServers
+	}
+	s.hash = c.hash
+	return s, nil
+}
+
+// CanReuseCachedCN implements cacheReuseChecker. Cached connections must only
+// be reused when the breaker is closed/absent; otherwise they would bypass the
+// new-session health gate.
+func (r *router) CanReuseCachedCN(cn *CNServer) bool {
+	if cn == nil {
+		return true
+	}
+	return r.health.canReuseCachedCN(cn.uuid)
+}
+
+func (r *router) connect(
+	cn *CNServer, handshakeResp *frontend.Packet, t *tunnel, accountHealth bool,
 ) (ServerConn, []byte, error) {
 	// Creates a server connection.
 	sc, err := newServerConn(cn, t, r.rebalancer, r.connectTimeout)
 	if err != nil {
 		// Connection failed, remove the placeholder that was added in selectOne.
 		r.rebalancer.connManager.selectOneFailed(cn.hash, cn.uuid)
+		// Only Route-selected session connects feed back into the breaker, and
+		// only timeout/overload-like failures should be classified as
+		// temporarily unhealthy. Hard dial failures (ECONNREFUSED, etc.) keep
+		// their old semantics instead of being globally reclassified as
+		// "busy".
+		if accountHealth && isTimeoutErr(err) {
+			r.health.reportFailure(cn.uuid, cn.addr)
+		}
 		return nil, nil, err
 	}
 
 	// For test, ignore handshake phase.
 	if r.test {
 		r.rebalancer.connManager.connect(cn, t)
+		if accountHealth {
+			r.health.reportSuccess(cn.uuid, cn.addr)
+		}
 		// The second value should be recognized OK packet.
 		return sc, makeOKPacket(8), nil
 	}
@@ -252,6 +390,11 @@ func (r *router) Connect(
 		_ = sc.Close()
 		// Handshake failed, remove the placeholder that was added in selectOne.
 		r.rebalancer.connManager.selectOneFailed(cn.hash, cn.uuid)
+		if accountHealth && isTimeoutErr(err) {
+			// A handshake timeout (most commonly an overloaded CN stuck on
+			// login/session creation) marks the CN temporarily unhealthy.
+			r.health.reportFailure(cn.uuid, cn.addr)
+		}
 		return nil, nil, err
 	}
 	// After handshake with backend CN server, set the connID of serverConn.
@@ -259,8 +402,31 @@ func (r *router) Connect(
 
 	// After connect succeed, track the connection.
 	r.rebalancer.connManager.connect(cn, t)
+	if accountHealth {
+		// The Route-selected CN accepted a new session: close its breaker if
+		// it was open.
+		r.health.reportSuccess(cn.uuid, cn.addr)
+	}
 
 	return sc, packetToBytes(resp), nil
+}
+
+// Connect implements the Router interface. It is used by internal/admin paths
+// (kill, upgrade, temp exec) and therefore does NOT mutate the CN health
+// breaker.
+func (r *router) Connect(
+	cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
+) (ServerConn, []byte, error) {
+	return r.connect(cn, handshakeResp, t, false)
+}
+
+// ConnectRouteSelected is used only for Route-selected new-session connects.
+// Those connects feed timeout/overload failures and successes back into the
+// CN health breaker.
+func (r *router) ConnectRouteSelected(
+	cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
+) (ServerConn, []byte, error) {
+	return r.connect(cn, handshakeResp, t, true)
 }
 
 // Refresh refreshes the router

@@ -1,0 +1,31 @@
+SET experimental_cagra_index = 1;
+SET cagra_threads_build = 7;
+SET cagra_max_index_capacity = 99999;
+drop database if exists cagra_delete;
+create database cagra_delete;
+use cagra_delete;
+create table t (id bigint primary key, v vecf32(8));
+insert into t values
+(1, '[10,10,10,10,10,10,10,10]'),     (2, '[20,20,20,20,20,20,20,20]'),
+(3, '[40,40,40,40,40,40,40,40]'),     (4, '[80,80,80,80,80,80,80,80]'),
+(5, '[160,160,160,160,160,160,160,160]'),     (6, '[320,320,320,320,320,320,320,320]'),
+(7, '[640,640,640,640,640,640,640,640]'),     (8, '[1280,1280,1280,1280,1280,1280,1280,1280]'),
+(9, '[2560,2560,2560,2560,2560,2560,2560,2560]'),     (10, '[5120,5120,5120,5120,5120,5120,5120,5120]');
+create index ix using cagra on t (v) op_type 'vector_l2_ops' intermediate_graph_degree=8 graph_degree=4 itopk_size=16;
+select id from t order by l2_distance(v, '[160,160,160,160,160,160,160,160]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+5
+delete from t where id = 5;
+select sleep(30);
+➤ sleep(30)[-6,8,0]  𝄀
+0
+select count(*) from t;
+➤ count(*)[-5,64,0]  𝄀
+9
+select id from t order by l2_distance(v, '[160,160,160,160,160,160,160,160]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+4
+select id from t order by l2_distance(v, '[1280,1280,1280,1280,1280,1280,1280,1280]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+8
+drop database cagra_delete;
