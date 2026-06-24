@@ -279,7 +279,7 @@ func TestIndexParamsToJsonString_RejectsPluginIvfFlatPath(t *testing.T) {
 }
 
 func TestIndexParamsToStringList_DoesNotRenderIncludeColumns(t *testing.T) {
-	paramList, err := IndexParamsToStringList(`{"lists":"10","op_type":"vector_l2_ops","include_columns":"[\"title\",\"category\"]"}`)
+	paramList, err := IndexParamsToStringList(`{"lists":"10","op_type":"vector_l2_ops","included_columns":"title,category"}`)
 	require.NoError(t, err)
 	require.Contains(t, paramList, "lists = 10")
 	require.Contains(t, paramList, "op_type 'vector_l2_ops'")

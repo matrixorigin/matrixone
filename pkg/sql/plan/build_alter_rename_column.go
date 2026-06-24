@@ -127,11 +127,11 @@ func updateRenameColumnInTableDef(
 		))
 	}
 
-	ivfAlgoParamSQLs, err := renameColumnInVectorIndexIncludedColumns(tableDef, oldColName, newColName)
+	pluginAlterSQLs, err := handleAlterRenameColumnWithPluginHooks(tableDef, oldColName, newColName)
 	if err != nil {
 		return nil, err
 	}
-	sqls = append(sqls, ivfAlgoParamSQLs...)
+	sqls = append(sqls, pluginAlterSQLs...)
 
 	// update primary key
 	primaryKeyDef := tableDef.Pkey
