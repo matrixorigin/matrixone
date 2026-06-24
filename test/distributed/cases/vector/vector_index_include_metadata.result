@@ -37,6 +37,7 @@ insert into t_hnsw values
 (3, "[2,0,0]", "hot", 2);
 create index idx_hnsw_include_meta using hnsw on t_hnsw(embedding)
 op_type "vector_l2_ops" include(title, category);
+not supported: HNSW index does not support INCLUDE columns
 select algo_table_type, included_columns, case when algo_params like '%include_columns%' then 1 else 0 end as include_in_params
 from mo_catalog.mo_indexes
 where name = 'idx_hnsw_include_meta'
@@ -48,9 +49,7 @@ where reldatabase = database()
 and relname = 't_hnsw'
 )
 order by algo_table_type;
-➤ algo_table_type[12,-1,0]  ¦  included_columns[12,0,0]  ¦  include_in_params[-5,64,0]  𝄀
-hnsw_index  ¦  ["title","category"]  ¦  0  𝄀
-hnsw_meta  ¦  ["title","category"]  ¦  0
+➤ algo_table_type[12,-1,0]  ¦  included_columns[12,0,0]  ¦  include_in_params[-5,64,0]
 select id, title, category
 from t_hnsw
 where category = 2
