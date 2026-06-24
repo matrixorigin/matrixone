@@ -245,12 +245,9 @@ type IndexConfig struct {
 }
 
 type RuntimeConfig struct {
-	Limit        uint
-	Probe        uint
-	OrigFuncName string
-	// Optional name-based filter payload for backends that can consume planner
-	// filter lowering without depending on scan binding coordinates.
-	FilterPayload     string
+	Limit             uint
+	Probe             uint
+	OrigFuncName      string
 	BackgroundQueries []*plan.Query
 
 	// FilterJSON is a JSON predicate array forwarded verbatim to CGo

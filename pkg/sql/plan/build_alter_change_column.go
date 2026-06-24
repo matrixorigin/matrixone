@@ -89,7 +89,7 @@ func ChangeColumn(
 	}
 
 	if oldColName != newColName {
-		sqls, err := renameColumnInVectorIndexIncludedColumns(tableDef, oldColName, newColName)
+		sqls, err := handleAlterRenameColumnWithPluginHooks(tableDef, oldColName, newColName)
 		if err != nil {
 			return false, err
 		}

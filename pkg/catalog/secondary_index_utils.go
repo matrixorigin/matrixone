@@ -113,7 +113,11 @@ const (
 	IntermediateGraphDegree = "intermediate_graph_degree"
 	GraphDegree             = "graph_degree"
 	ITopkSize               = "itopk_size"
-	IncludedColumns         = "included_columns"
+	// IncludedColumns is catalog/build metadata. SHOW CREATE renders INCLUDE
+	// from plan.IndexDef.IncludedColumns, not from flat algo_params, to avoid
+	// duplicate INCLUDE clauses when both locations are populated for
+	// compatibility.
+	IncludedColumns = "included_columns"
 
 	// Index-defining build params, settable as CREATE INDEX options (parsed by
 	// each plugin's ParamsFromTree). Written into flat algo_params only when
@@ -256,19 +260,6 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if val, ok := result[IndexAlgoParamMaxIndexCapacity]; ok {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxIndexCapacity, val)
-	}
-
-	if val, ok := result[IncludedColumns]; ok && len(val) > 0 {
-		raw := strings.Split(val, ",")
-		parts := make([]string, 0, len(raw))
-		for _, p := range raw {
-			if p = strings.TrimSpace(p); p != "" {
-				parts = append(parts, p)
-			}
-		}
-		if len(parts) > 0 {
-			res += " INCLUDE (" + strings.Join(parts, ", ") + ") "
-		}
 	}
 
 	return res, nil

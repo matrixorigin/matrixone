@@ -532,7 +532,7 @@ func TestPrepareHnswIndexContext_Success(t *testing.T) {
 	assert.NotNil(t, result.vecLitArg)
 }
 
-func TestApplyIndicesForSortUsingHnswPassesCoveredFilterPayload(t *testing.T) {
+func TestApplyIndicesForSortUsingHnswKeepsFiltersOnScan(t *testing.T) {
 	baseMockCtx := NewMockCompilerContext(true)
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
@@ -655,14 +655,7 @@ func TestApplyIndicesForSortUsingHnswPassesCoveredFilterPayload(t *testing.T) {
 	require.Equal(t, plan.Node_SORT, sortNode.NodeType)
 	tableFuncNode := findHnswTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
-	require.Len(t, tableFuncNode.TblFuncExprList, 3)
-
-	payload := tableFuncNode.TblFuncExprList[2].GetLit().GetSval()
-	require.NotEmpty(t, payload)
-	assert.Contains(t, payload, `"column":"category"`)
-	assert.NotContains(t, payload, `"column":"note"`)
-	assert.NotContains(t, payload, "RelPos")
-	assert.NotContains(t, payload, "ColPos")
+	require.Len(t, tableFuncNode.TblFuncExprList, 2)
 	require.Len(t, scanNode.FilterList, 2)
 }
 
