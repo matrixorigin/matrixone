@@ -129,17 +129,22 @@ func (node *PauseCDC) TypeName() string { return "tree.PauseCDC" }
 
 type DropCDC struct {
 	statementImpl
-	Option *AllOrNotCDC
+	IfExists bool
+	Option   *AllOrNotCDC
 }
 
-func NewDropCDC(option *AllOrNotCDC) *DropCDC {
+func NewDropCDC(option *AllOrNotCDC, ifExists bool) *DropCDC {
 	drop := reuse.Alloc[DropCDC](nil)
 	drop.Option = option
+	drop.IfExists = ifExists
 	return drop
 }
 
 func (node *DropCDC) Format(ctx *FmtCtx) {
 	ctx.WriteString("drop cdc")
+	if node.IfExists {
+		ctx.WriteString(" if exists")
+	}
 	if node.Option.All {
 		ctx.WriteString(" all")
 	} else {
