@@ -283,7 +283,7 @@ func TestCommitRollsBackPreparedWorkspaceAfterCommitSendError(t *testing.T) {
 	})
 }
 
-func TestCommitDoesNotRollbackPreparedWorkspaceAfterTxnUnknown(t *testing.T) {
+func TestCommitKeepsPreparedWorkspaceAfterTxnUnknown(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		ws := &trackingWorkspace{
 			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},

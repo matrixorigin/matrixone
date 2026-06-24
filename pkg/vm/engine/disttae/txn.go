@@ -2146,7 +2146,9 @@ func (txn *Transaction) FinalizeCommit(context.Context) {
 }
 
 func (txn *Transaction) FinalizeCommitWithUnknownResult(context.Context) {
-	txn.delTransaction()
+	// Keep workspace/object-stat metadata intact. If the outer commit result is
+	// later known to be aborted, Rollback still needs the metadata to GC
+	// txn-local CN objects. If it actually committed, rollback GC must not run.
 }
 
 func (txn *Transaction) transferTombstonesByStatement(

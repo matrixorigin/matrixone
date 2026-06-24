@@ -340,6 +340,55 @@ func TestCloneTxnTablesInVainGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
 	liveBat.Clean(proc.Mp())
 }
 
+func TestCloneTxnUnknownCommitPreservesRollbackCleanup(t *testing.T) {
+	ctx := context.Background()
+	fs := newCleanFS(t)
+
+	gcPool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer gcPool.Release()
+
+	txnOp, closeFn := client.NewTestTxnOperator(ctx)
+	defer closeFn()
+
+	proc := testutil.NewProc(t)
+	txn := &Transaction{
+		proc: proc,
+		engine: &Engine{
+			cloneTxnCache: newCloneTxnCache(),
+			gcPool:        gcPool,
+			fs:            fs,
+		},
+		op:              txnOp,
+		tablesInVain:    make(map[uint64]int),
+		deletedBlocks:   &deletedBlocks{offsets: map[types.Blockid][]int64{}},
+		batchSelectList: make(map[*batch.Batch][]int64),
+	}
+	txnOp.AddWorkspace(txn)
+	txn.SetCloneTxn(1)
+
+	stats := mockStatsList(t, 1)
+	name := stats[0].ObjectName().String()
+	require.NoError(t, writeObjectToFS(ctx, fs, name))
+	txn.engine.cloneTxnCache.AddTxnLocalSharedFile(txn.op.Txn().ID, name)
+	txn.writes = append(txn.writes, Entry{
+		typ:      INSERT,
+		tableId:  42,
+		fileName: name,
+		bat:      cloneObjectStatsBatchForTest(t, proc.Mp(), stats...),
+	})
+
+	txn.FinalizeCommitWithUnknownResult(ctx)
+	require.NotNil(t, txn.writes[0].bat)
+	require.True(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txn.op.Txn().ID, name))
+	require.NoError(t, txn.gcObjsByIdxRange(0, 0, cloneGCTxnRollback))
+	require.Eventually(t, func() bool {
+		return !objectExistsInFS(ctx, fs, name)
+	}, time.Second, 10*time.Millisecond)
+	txn.writes[0].bat.Clean(proc.Mp())
+	txn.writes[0].bat = nil
+}
+
 func cloneObjectStatsBatchForTest(
 	t *testing.T,
 	mp *mpool.MPool,

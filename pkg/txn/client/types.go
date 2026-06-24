@@ -266,10 +266,9 @@ type Workspace interface {
 
 	Commit(ctx context.Context) ([]txn.TxnRequest, error)
 	FinalizeCommit(ctx context.Context)
-	// FinalizeCommitWithUnknownResult releases local workspace state after the
-	// commit request has been sent but its final TN outcome is unknown. It must
-	// not perform rollback cleanup that could delete objects referenced by a
-	// transaction that may already have committed.
+	// FinalizeCommitWithUnknownResult is called after the commit request may
+	// have reached TN, but the final commit result is unknown. It must not run
+	// rollback cleanup, because the transaction may have committed.
 	FinalizeCommitWithUnknownResult(ctx context.Context)
 	Rollback(ctx context.Context) error
 
