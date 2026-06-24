@@ -1127,7 +1127,6 @@ func TestCloseWithErrorContextCancel(t *testing.T) {
 	}
 }
 
-
 func TestCnConnectionWaitContextCancel(t *testing.T) {
 	// Simulate the two contexts: connectionCtx stays alive (TCP connection still open),
 	// messageCtx gets cancelled (query killed).
