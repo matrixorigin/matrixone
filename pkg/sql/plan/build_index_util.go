@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -131,6 +132,105 @@ func checkIndexKeypartSupportability(context context.Context, keyParts []*tree.K
 	for _, key := range keyParts {
 		if key.Expr != nil {
 			return moerr.NewInternalError(context, "unsupported index which using expression as keypart")
+		}
+	}
+	return nil
+}
+
+func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
+	if col == nil {
+		return Type{}
+	}
+	if keyPart != nil && keyPart.Length > 0 {
+		if prefixType, ok := indexTableKeyTypeForPrefix(col.Typ); ok {
+			return prefixType
+		}
+	}
+	return Type{
+		Id:    col.Typ.Id,
+		Width: col.Typ.Width,
+		Scale: col.Typ.Scale,
+	}
+}
+
+func indexTableKeyTypeForPrefix(colType Type) (Type, bool) {
+	switch colType.Id {
+	case int32(types.T_text):
+		return Type{
+			Id:    int32(types.T_varchar),
+			Width: types.MaxVarcharLen,
+		}, true
+	case int32(types.T_blob):
+		return Type{
+			Id:    int32(types.T_varbinary),
+			Width: types.MaxVarBinaryLen,
+		}, true
+	default:
+		return Type{}, false
+	}
+}
+
+func indexColumnCheckKind(indexType tree.IndexType) string {
+	switch indexType {
+	case tree.INDEX_TYPE_IVFFLAT:
+		return "ivfflat"
+	case tree.INDEX_TYPE_HNSW:
+		return "hnsw"
+	case tree.INDEX_TYPE_RTREE:
+		return "rtree"
+	default:
+		return "secondary"
+	}
+}
+
+func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *tree.KeyPart, indexKind string) error {
+	if col == nil || keyPart == nil || keyPart.ColName == nil {
+		return moerr.NewInternalError(ctx, "index column definition is nil")
+	}
+
+	colName := keyPart.ColName.ColNameOrigin()
+
+	switch col.Typ.Id {
+	case int32(types.T_blob):
+		if keyPart.Length > 0 && indexKind != "primary" {
+			return nil
+		}
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("BLOB column '%s' cannot be in index", colName))
+	case int32(types.T_text):
+		if keyPart.Length > 0 && indexKind != "primary" {
+			return nil
+		}
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("TEXT column '%s' cannot be in index", colName))
+	case int32(types.T_datalink):
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("DATALINK column '%s' cannot be in index", colName))
+	case int32(types.T_json):
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in index", colName))
+	case int32(types.T_array_float32), int32(types.T_array_float64):
+		if indexKind == "ivfflat" || indexKind == "hnsw" {
+			return nil
+		}
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("VECTOR column '%s' cannot be in index", colName))
+	}
+
+	if isEnumPlanType(&col.Typ) && indexKind == "primary" {
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("ENUM column '%s' cannot be in primary key", colName))
+	}
+	if isSetPlanType(&col.Typ) {
+		switch indexKind {
+		case "primary":
+			return moerr.NewNotSupported(ctx, fmt.Sprintf("SET column '%s' cannot be in primary key", colName))
+		case "unique":
+			return moerr.NewNotSupported(ctx, fmt.Sprintf("SET column '%s' cannot be in unique index", colName))
+		}
+	}
+	if isGeometryPlanType(&col.Typ) && indexKind != "rtree" {
+		switch indexKind {
+		case "primary":
+			return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in primary key", colName))
+		case "unique":
+			return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in unique index", colName))
+		default:
+			return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in index", colName))
 		}
 	}
 	return nil
