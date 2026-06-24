@@ -474,7 +474,7 @@ func TestGetColDataLoadDataYear(t *testing.T) {
 }
 
 func TestIsLegalLineLoadDataYear(t *testing.T) {
-	param := &tree.ExternParam{Format: tree.CSV}
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tree.CSV}}
 	cols := []*plan.ColDef{{
 		Name: "y",
 		Typ:  plan.Type{Id: int32(types.T_year), Width: 4},
