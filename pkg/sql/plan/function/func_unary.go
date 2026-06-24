@@ -7189,6 +7189,7 @@ func userLevelLocksForOwner(owner string) []string {
 	for name := range names {
 		result = append(result, name)
 	}
+	sort.Strings(result)
 	return result
 }
 
@@ -7351,23 +7352,19 @@ func releaseAllUserLevelLocks(proc *process.Process) (int64, error) {
 	owner := userLevelLockOwner(proc)
 	connID := userLevelLockConnectionID(proc)
 	var released int64
-	var firstErr error
 	for _, name := range userLevelLocksForOwner(owner) {
 		if userLevelLockRefCount(owner, name) == 0 {
 			continue
 		}
 		if err := unlockUserLevelLockTxnIDs(context.Background(), proc.GetLockService(), owner, connID, name); err != nil {
 			logutil.Warn(fmt.Sprintf("releaseAllUserLevelLocks unlock failed: owner=%s lock=%s err=%v", owner, name, err))
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
+			return released, err
 		}
-		if _, held := untrackAllUserLevelLock(owner, name); held {
-			released++
+		if count, held := untrackAllUserLevelLock(owner, name); held {
+			released += int64(count)
 		}
 	}
-	return released, firstErr
+	return released, nil
 }
 
 func ReleaseUserLevelLocks(proc *process.Process) {

@@ -7176,9 +7176,10 @@ type userLevelLockTestState struct {
 }
 
 type userLevelLockTestService struct {
-	id        string
-	state     *userLevelLockTestState
-	unlockErr error
+	id               string
+	state            *userLevelLockTestState
+	unlockErr        error
+	unlockErrByTxnID map[string]error
 }
 
 type userLevelLockNotSupportedService struct {
@@ -7227,6 +7228,11 @@ func (s *userLevelLockTestService) Lock(ctx context.Context, tableID uint64, row
 func (s *userLevelLockTestService) Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...lockpb.ExtraMutation) error {
 	if s.unlockErr != nil {
 		return s.unlockErr
+	}
+	if s.unlockErrByTxnID != nil {
+		if err := s.unlockErrByTxnID[string(txnID)]; err != nil {
+			return err
+		}
 	}
 	owner := string(txnID)
 	s.state.Lock()
@@ -7745,7 +7751,7 @@ func TestReleaseAllUserLevelLocksReturnsReleasedCount(t *testing.T) {
 
 		released, err := releaseAllUserLevelLocks(proc1)
 		require.NoError(t, err)
-		require.Equal(t, int64(2), released)
+		require.Equal(t, int64(3), released)
 		released, err = releaseAllUserLevelLocks(proc1)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), released)
@@ -7796,9 +7802,54 @@ func TestReleaseAllUserLevelLocksReturnsCountWhenUnlockFails(t *testing.T) {
 		services[0].(*userLevelLockTestService).unlockErr = nil
 		released, err = releaseAllUserLevelLocks(proc1)
 		require.NoError(t, err)
-		require.Equal(t, int64(2), released)
+		require.Equal(t, int64(3), released)
 
 		v, err = getUserLevelLock("release_all_fail_a", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseAllUserLevelLocksStopsAtFirstUnlockFailure(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		service := services[0].(*userLevelLockTestService)
+		owner := userLevelLockOwner(proc1)
+		connID := userLevelLockConnectionID(proc1)
+
+		v, err := getUserLevelLock("release_all_partial_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_partial_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_partial_b", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		service.unlockErrByTxnID = map[string]error{
+			string(userLevelLockTxnID(owner, connID, "release_all_partial_b")): moerr.NewInternalErrorNoCtx("unlock failed"),
+		}
+
+		released, err := releaseAllUserLevelLocks(proc1)
+		require.Error(t, err)
+		require.Equal(t, int64(2), released)
+
+		v, err = getUserLevelLock("release_all_partial_a", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, err = getUserLevelLock("release_all_partial_b", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+
+		service.unlockErrByTxnID = nil
+		released, err = releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), released)
+
+		v, err = getUserLevelLock("release_all_partial_b", 0, proc2)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
 	})
@@ -7845,7 +7896,7 @@ func TestReleaseAllUserLevelLocksLegacyTxnIDCompatible(t *testing.T) {
 
 		released, err := releaseAllUserLevelLocks(proc1)
 		require.NoError(t, err)
-		require.Equal(t, int64(2), released)
+		require.Equal(t, int64(3), released)
 
 		v, err := getUserLevelLock("legacy_all_a", 0, proc2)
 		require.NoError(t, err)
