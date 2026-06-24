@@ -241,8 +241,8 @@ from phase8_nulls
 order by l2_distance(embedding, "[1,1,1]")
 limit 3 by rank with option 'mode=include';
 ➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
-1  ¦    ¦  10  𝄀
-2  ¦  beta  ¦  0  𝄀
+1  ¦  null  ¦  10  𝄀
+2  ¦  beta  ¦  null  𝄀
 3  ¦  gamma  ¦  30
 drop table phase8_nulls;
 drop table if exists phase8_many_include;
