@@ -3514,6 +3514,10 @@ var (
 			output: "select MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
 		},
 		{
+			input:  "prepare st from 'select id from ft where MATCH (t) AGAINST (? IN BOOLEAN MODE)'",
+			output: "prepare st from select id from ft where MATCH (t) AGAINST (? IN BOOLEAN MODE)",
+		},
+		{
 			input:  "alter user user1 unlock",
 			output: "alter user user1 unlock",
 		},
