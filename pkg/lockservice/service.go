@@ -1001,7 +1001,13 @@ func (h *mapBasedTxnHolder) isValidRemoteTxn(txn pb.WaitTxn) bool {
 
 	valid, err := h.validTxn(txn)
 	if err == nil {
-		return valid
+		if valid {
+			return true
+		}
+		// A remote CN active-txn miss does not prove the txn is safe to unlock.
+		// The commit response may be lost after TN has already committed it, so
+		// require the allocator to confirm the txn cannot still be committing.
+		return !h.canUnlockRemoteTxn(txn)
 	}
 	logValidTxnFailed(h.logger, txn, err)
 	if isRetryError(err) {

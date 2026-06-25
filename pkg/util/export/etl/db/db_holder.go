@@ -44,7 +44,9 @@ var (
 	db            atomic.Pointer[sql.DB]
 	dbRefreshTime time.Time
 
-	dbMux sync.Mutex
+	dbMux        sync.Mutex
+	dbRebuildMux sync.Mutex
+	openDBConn   = sql.Open
 
 	DBConnErrCount = NewReConnectionBackOff(time.Minute, DBConnRetryThreshold)
 )
@@ -55,6 +57,7 @@ const MaxConnectionNumber = 1
 const DBConnRetryThreshold = 8
 
 const DBRefreshTime = time.Hour
+const staleDBConnCloseDelay = 30 * time.Second
 
 type DBUser struct {
 	UserName string
@@ -90,72 +93,151 @@ func GetSQLWriterDBAddressFunc() func(context.Context, bool) (string, error) {
 	}
 }
 
+func setDBConnLocked(conn *sql.DB) *sql.DB {
+	old := db.Swap(conn)
+	if conn == nil {
+		dbRefreshTime = time.Time{}
+	} else {
+		dbRefreshTime = time.Now().Add(DBRefreshTime)
+	}
+	if old == conn {
+		return nil
+	}
+	return old
+}
+
 func SetDBConn(conn *sql.DB) {
-	db.Store(conn)
-	dbRefreshTime = time.Now().Add(DBRefreshTime)
+	dbRebuildMux.Lock()
+	defer dbRebuildMux.Unlock()
+
+	dbMux.Lock()
+	defer dbMux.Unlock()
+	setDBConnLocked(conn)
 }
 
 func CloseDBConn() {
-	dbConn := db.Load()
+	dbRebuildMux.Lock()
+	defer dbRebuildMux.Unlock()
+
+	dbMux.Lock()
+	dbConn := setDBConnLocked(nil)
+	dbMux.Unlock()
+	closeDBConn(dbConn)
+}
+
+func closeDBConn(dbConn *sql.DB) {
 	if dbConn != nil {
-		dbConn.Close()
+		_ = dbConn.Close()
 	}
 }
 
+func closeStaleDBConn(dbConn *sql.DB) {
+	if dbConn == nil {
+		return
+	}
+	// DB.Close prevents new operations. Delay it so goroutines that already loaded
+	// the old pointer just before a swap do not fail immediately with a closed DB.
+	time.AfterFunc(staleDBConnCloseDelay, func() {
+		closeDBConn(dbConn)
+	})
+}
+
+func getDBConnSnapshot() (*sql.DB, bool) {
+	dbMux.Lock()
+	defer dbMux.Unlock()
+
+	dbConn := db.Load()
+	return dbConn, dbConn != nil && time.Now().After(dbRefreshTime)
+}
+
+func buildDBConn(randomCN bool) (*sql.DB, error) {
+	dbUser, _ := GetSQLWriterDBUser()
+	if dbUser == nil {
+		return nil, errNotReady
+	}
+
+	// TODO: trigger with new selected-CN, converge all connections
+	addressFunc := GetSQLWriterDBAddressFunc()
+	if addressFunc == nil {
+		return nil, errNotReady
+	}
+	dbAddress, err := addressFunc(context.Background(), randomCN)
+	if err != nil {
+		return nil, err
+	}
+	dsn :=
+		fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=10s&writeTimeout=15s&timeout=15s&maxAllowedPacket=0&disable_txn_trace=1",
+			dbUser.UserName,
+			dbUser.Password,
+			dbAddress)
+	newDBConn, err := openDBConn("mysql", dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	//45s suggest by xzxiong
+	newDBConn.SetConnMaxLifetime(45 * time.Second)
+	newDBConn.SetMaxOpenConns(MaxConnectionNumber)
+	newDBConn.SetMaxIdleConns(MaxConnectionNumber)
+	if err = newDBConn.Ping(); err != nil {
+		closeDBConn(newDBConn)
+		return nil, err
+	}
+	return newDBConn, nil
+}
+
+func rebuildDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
+	current, refreshDue := getDBConnSnapshot()
+	if current != nil && !forceNewConn && !refreshDue {
+		return current, nil
+	}
+
+	newDBConn, err := buildDBConn(randomCN)
+	if err != nil {
+		if current != nil && !forceNewConn {
+			return current, nil
+		}
+		return nil, err
+	}
+
+	dbMux.Lock()
+	oldDBConn := setDBConnLocked(newDBConn)
+	dbMux.Unlock()
+	closeStaleDBConn(oldDBConn)
+	if forceNewConn {
+		DBConnErrCount.Reset()
+	}
+
+	return newDBConn, nil
+}
+
 // GetOrInitDBConn get the target cn to do the load query.
-// if @forceNewConn is true, it will force close old db conn, and re-find new cn.
+// if @forceNewConn is true, it will re-find new cn and replace the old db conn after the new one is ready.
+// The reconnect decision is rechecked after acquiring the rebuild lock, so callers queued behind a successful
+// reconnect reuse the fresh current db conn instead of serially rebuilding more pools.
 // if @forceNewConn is false, it will normally fetch the current db connection. BUT in 1 cases, it will re-find the cn:
 //  1. DBRefreshTime interval, it will try to fetch the 'new' ob-sys cn.
 var GetOrInitDBConn = func(forceNewConn bool, randomCN bool) (*sql.DB, error) {
-	dbMux.Lock()
-	defer dbMux.Unlock()
-	initFunc := func() error {
-		CloseDBConn()
-		dbUser, _ := GetSQLWriterDBUser()
-		if dbUser == nil {
-			return errNotReady
-		}
-
-		// TODO: trigger with new selected-CN, converge all connections
-		addressFunc := GetSQLWriterDBAddressFunc()
-		if addressFunc == nil {
-			return errNotReady
-		}
-		dbAddress, err := addressFunc(context.Background(), randomCN)
-		if err != nil {
-			return err
-		}
-		dsn :=
-			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=10s&writeTimeout=15s&timeout=15s&maxAllowedPacket=0&disable_txn_trace=1",
-				dbUser.UserName,
-				dbUser.Password,
-				dbAddress)
-		newDBConn, err := sql.Open("mysql", dsn)
-		if err != nil {
-			return err
-		}
-
-		//45s suggest by xzxiong
-		newDBConn.SetConnMaxLifetime(45 * time.Second)
-		newDBConn.SetMaxOpenConns(MaxConnectionNumber)
-		newDBConn.SetMaxIdleConns(MaxConnectionNumber)
-		SetDBConn(newDBConn)
-		return nil
+	current, refreshDue := getDBConnSnapshot()
+	if current != nil && !forceNewConn && !refreshDue {
+		return current, nil
 	}
+	if current != nil && !forceNewConn && refreshDue && !dbRebuildMux.TryLock() {
+		return current, nil
+	}
+	if current == nil || forceNewConn || !refreshDue {
+		dbRebuildMux.Lock()
+	}
+	defer dbRebuildMux.Unlock()
 
-	if forceNewConn || db.Load() == nil {
-		err := initFunc()
-		if err != nil {
-			return nil, err
-		}
-	} else if time.Now().After(dbRefreshTime) {
-		err := initFunc()
-		if err != nil {
-			return nil, err
+	if forceNewConn {
+		current, _ = getDBConnSnapshot()
+		if current != nil && DBConnErrCount.Check() {
+			return current, nil
 		}
 	}
 
-	return db.Load(), nil
+	return rebuildDBConn(forceNewConn, randomCN)
 }
 
 func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration) (int, error) {
@@ -176,7 +258,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 		_ = DBConnErrCount.Count()
 		return 0, err
 	}
-	if dbConn.Ping() != nil {
+	if err = dbConn.Ping(); err != nil {
 		v2.TraceMOLoggerErrorPingDBCounter.Inc()
 		_ = DBConnErrCount.Count()
 		return 0, err
@@ -192,6 +274,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 		return 0, err
 	}
 
+	DBConnErrCount.Reset()
 	return len(records), nil
 }
 
@@ -412,6 +495,14 @@ func (b *ReConnectionBackOff) Count() bool {
 	b.count++
 	b.last = time.Now()
 	return b.count <= b.threshold
+}
+
+func (b *ReConnectionBackOff) Reset() {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	b.count = 0
+	b.last = time.Now()
 }
 
 // Check return same as Count, but without changed.
