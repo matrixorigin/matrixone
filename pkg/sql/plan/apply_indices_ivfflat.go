@@ -1073,6 +1073,16 @@ func firstIvfIncludeSearchRoundLimit(limit *plan.Expr, hasPushdownFilters bool, 
 	return firstIvfSearchRoundLimit(limit, hasPushdownFilters)
 }
 
+func ensureIvfIncludeSearchRoundLimitAtLeastK(searchRoundLimit uint64, outerResultNeed *plan.Expr) uint64 {
+	if outerResultNeed == nil || outerResultNeed.GetLit() == nil {
+		return searchRoundLimit
+	}
+	if k := outerResultNeed.GetLit().GetU64Val(); searchRoundLimit < k {
+		return k
+	}
+	return searchRoundLimit
+}
+
 func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*ivfIndexContext, error) {
 	if vecCtx == nil || multiTableIndex == nil {
 		return nil, nil
@@ -1338,11 +1348,29 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		return nodeID, err
 	}
 	tblCfgStr := string(tblCfgBytes)
+
+	// The IVF reader must fetch enough candidates for the outer sort window.
+	// When filter compensation is required, OFFSET rows also have to survive
+	// the index scan so the final sort can discard them correctly.
+	outerResultNeedExpr := DeepCopyExpr(limit)
+	if outerResultNeedExpr != nil && sortNode.Offset != nil && needsOffsetCompensation {
+		outerResultNeedExpr, err = bindFuncExprAndConstFold(
+			builder.GetContext(),
+			builder.compCtx.GetProcess(),
+			"+",
+			[]*Expr{outerResultNeedExpr, DeepCopyExpr(sortNode.Offset)},
+		)
+		if err != nil {
+			return 0, err
+		}
+	}
+
 	firstRoundLimit := uint64(0)
 	bucketExpandStep := uint64(0)
 	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" {
-		firstRoundLimit = firstIvfIncludeSearchRoundLimit(limit, len(serializedPushdownFilters) > 0, len(remainingFilters) > 0)
-		if firstRoundLimit == 0 && limit != nil {
+		firstRoundLimit = firstIvfIncludeSearchRoundLimit(outerResultNeedExpr, len(serializedPushdownFilters) > 0, len(remainingFilters) > 0)
+		firstRoundLimit = ensureIvfIncludeSearchRoundLimitAtLeastK(firstRoundLimit, outerResultNeedExpr)
+		if firstRoundLimit == 0 && outerResultNeedExpr != nil {
 			firstRoundLimit = 1
 		}
 		bucketExpandStep = uint64(ivfCtx.nProbe)
@@ -1380,20 +1408,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	tableFuncNode.TableDef.Cols[0].Typ = ivfCtx.pkType
 
 	// push down the candidate limit to the table function.
-	// If the outer sort has OFFSET, the index reader must fetch limit+offset
-	// candidates so the final sort can still return the requested window.
-	limitExpr := DeepCopyExpr(limit)
-	if limitExpr != nil && sortNode.Offset != nil && needsOffsetCompensation {
-		limitExpr, err = bindFuncExprAndConstFold(
-			builder.GetContext(),
-			builder.compCtx.GetProcess(),
-			"+",
-			[]*Expr{limitExpr, DeepCopyExpr(sortNode.Offset)},
-		)
-		if err != nil {
-			return 0, err
-		}
-	}
+	limitExpr := DeepCopyExpr(outerResultNeedExpr)
 
 	includeModeHasResidualFilters := vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" && len(remainingFilters) > 0
 	if includeModeHasResidualFilters {
