@@ -202,17 +202,26 @@ using ::distribution_mode_t;
 //
 // QUANTIZER  (1-byte types only: int8_t, uint8_t)
 // ------------------------------------------------
-// scalar_quantizer_t<B> quantizer_ maps source-type B values to [min, max] range
-// and packs them into int8/uint8.  It must be trained before add_chunk_float()
-// or extend_float() is called for 1-byte types.
+// scalar_quantizer_t<B> quantizer_ maps source-type B values into the storage
+// range [min, max] and packs them into int8/uint8.
 //
-// Training: quantizer_.train(res, train_matrix) or train_quantizer(data, n).
-//   - Auto-training occurs in add_chunk_float if not yet trained (uses up to 500
-//     samples from the first chunk).
-//   - For extend_float, the quantizer MUST already be trained (throws otherwise).
+// Training (on the ORIGINAL float/half source data only):
+//   - add_chunk_float() / add_chunk_quantize() buffer their raw B chunks in
+//     pending_float_chunks_; flush_pending_float_chunks_internal() — invoked at
+//     build time via train_quantizer_if_needed() — trains the quantizer on ALL
+//     buffered rows at once, then quantizes them into storage. (No "first chunk"
+//     or 500-sample heuristic; the full buffered set is used.)
+//   - The quantizer is NEVER trained from flattened_host_dataset: for a 1-byte T
+//     that buffer holds only storage bytes, so training on it would learn the
+//     COMPRESSED range, not the original float range.
+//   - A pre-quantized index (rows added via add_chunk(T*), with no original
+//     floats and no set_quantizer()) therefore leaves the quantizer UNTRAINED.
+//     Base-typed (B) search/extend on it requires an explicit range via
+//     set_quantizer() first — quantize_query() (search) and
+//     upload_float_matrix_as_T() (extend) throw "quantizer not trained" otherwise.
 //
-// Extended vectors must lie within the trained [min, max] range; vectors outside
-// this range will be clamped and produce degraded search quality.
+// Extended/searched vectors must lie within the trained [min, max] range; values
+// outside it are clamped and produce degraded search quality.
 //
 //
 // SERIALIZATION  (save_dir / load_dir)
@@ -1346,55 +1355,23 @@ public:
                     // 1. Flush any buffered chunks first
                     flush_pending_float_chunks_internal(handle);
 
-                    // 2. Check if still not trained (might have used add_chunk<T> instead of float).
-                    // WARNING: if data was added via add_chunk(T*) rather than add_chunk_float(),
-                    // flattened_host_dataset already holds T values (e.g. int8 in [-128,127]).
-                    // Casting them to float trains the quantizer on the compressed range, not the
-                    // original float range.  extend_float() will then clamp to the wrong range.
-                    // If extend_float() is needed after add_chunk(T*), call train_quantizer()
-                    // explicitly with representative original float data before calling build().
-                    bool needs_training;
-                    uint64_t n_train = 0;
-                    {
-                        std::shared_lock<std::shared_mutex> lock(mutex_);
-                        needs_training = !quantizer_.is_trained() && !flattened_host_dataset.empty();
-                        if (needs_training) {
-                            n_train = std::min(static_cast<uint64_t>(500), count);
-                            if (n_train == 0) needs_training = false;
-                        }
-                    }
-
-                    if (needs_training) {
-                        std::vector<B> train_data(n_train * dimension);
-                        {
-                            std::shared_lock<std::shared_mutex> lock(mutex_);
-                            // Strided sample across ALL `count` rows (not the first
-                            // n_train contiguous rows) so the scalar quantizer learns
-                            // the true [min,max] range even when the data is sorted or
-                            // clustered. Sampling only the prefix lets any
-                            // higher-magnitude rows beyond row n_train saturate to the
-                            // storage type's extreme (e.g. int8 127), collapsing recall.
-                            const uint64_t stride = count / n_train; // >= 1 since n_train <= count
-                            for (uint64_t j = 0; j < n_train; ++j) {
-                                const uint64_t r = j * stride;
-                                for (uint32_t d = 0; d < dimension; ++d) {
-                                    train_data[j * dimension + d] =
-                                        static_cast<B>(static_cast<float>(flattened_host_dataset[r * dimension + d]));
-                                }
-                            }
-                        }
-
-                        auto res = handle.get_raft_resources();
-                        auto train_host_view = raft::make_host_matrix_view<const B, int64_t>(train_data.data(), n_train, dimension);
-                        auto train_device = raft::make_device_matrix<B, int64_t>(*res, n_train, dimension);
-                        raft::copy(*res, train_device.view(), train_host_view);
-                        
-                        {
-                            std::unique_lock<std::shared_mutex> lock(mutex_);
-                            quantizer_.train(*res, train_device.view());
-                        }
-                        handle.sync();
-                    }
+                    // 2. Do NOT auto-train the quantizer from flattened_host_dataset.
+                    // For a 1-byte storage type that buffer only ever holds STORAGE
+                    // bytes — raw T from add_chunk(T*) (a pre-quantized index) or the
+                    // post-flush quantized output — never original floats. Training on
+                    // it would learn the COMPRESSED range (e.g. int8 [-128,127]) instead
+                    // of the true float range, so later base-typed search/extend would
+                    // silently quantize against the wrong min/max.
+                    //
+                    // Correct training happens above in flush_pending_float_chunks_internal()
+                    // on the ORIGINAL floats buffered by add_chunk_float()/add_chunk_quantize().
+                    // A pre-quantized index (built solely via add_chunk(T*)) therefore
+                    // leaves the quantizer untrained; base-typed (B) search/extend on it
+                    // requires an explicit range via set_quantizer() first. Both base-typed
+                    // entry points already throw "quantizer not trained" while it is
+                    // untrained — search via quantize_query() and extend via
+                    // upload_float_matrix_as_T() — so the op fails loudly instead of
+                    // mis-quantizing against a wrong range.
                     return std::any();
                 }
             );
