@@ -350,3 +350,43 @@ func runBuildSingleThread[T types.RealNumbers](t *testing.T) {
 	require.True(t, (recall > 0.96))
 
 }
+
+// TestBuildMultiWorker exercises NewHnswBuild with nworker > 1, where the
+// per-build thread count is derived from GetConcurrencyForBuild / nworker
+// (the multi-database-worker branch) rather than the single-worker path.
+func TestBuildMultiWorker(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	ndim := 8
+	nitem := 100
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(uint(ndim))}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	idxcfg.IndexCapacity = MaxIndexCapacity
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
+		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
+		ThreadsSearch: 4,
+		ThreadsBuild:  4}
+
+	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
+	// nworker = 2 selects the GetConcurrencyForBuild / nworker branch
+	build, err := NewHnswBuild[float32](sqlproc, uid, 2, idxcfg, tblcfg)
+	require.Nil(t, err)
+	defer build.Destroy()
+
+	r := rand.New(rand.NewSource(99))
+	for i := 0; i < nitem; i++ {
+		vec := make([]float32, ndim)
+		for j := 0; j < ndim; j++ {
+			vec[j] = r.Float32()
+		}
+		err := build.Add(int64(i), vec)
+		require.Nil(t, err)
+	}
+
+	sqls, err := build.ToInsertSql(time.Now().UnixMicro())
+	require.Nil(t, err)
+	require.True(t, len(sqls) > 0)
+}
