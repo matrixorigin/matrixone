@@ -1737,10 +1737,10 @@ func TestInsertIgnoreChildParentFKDropsRows(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	// INSERT IGNORE on emp (deptno references dept) must drop the rows whose parent
-	// does not exist (MySQL row-skip), not assert. On the modern path that is an
-	// outer JOIN against the parent (built as LEFT, the optimizer may flip it to
-	// RIGHT) plus a FILTER that keeps only matching rows, feeding the MULTI_UPDATE.
-	// emp has no self-referencing FK, so DetectSqls must be empty.
+	// does not exist (MySQL row-skip), not assert. On the modern path that is a MARK
+	// join against the parent (the existence check) plus a FILTER that keeps only the
+	// matching rows, feeding the MULTI_UPDATE. emp has no self-referencing FK, so
+	// DetectSqls must be empty.
 	logicPlan, err := runOneStmt(mock, t, "INSERT IGNORE INTO emp (empno, deptno) VALUES (1, 10)")
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -1753,9 +1753,11 @@ func TestInsertIgnoreChildParentFKDropsRows(t *testing.T) {
 
 	hasParentJoin, hasFilter, hasMultiUpdate := false, false, false
 	for _, node := range query.Nodes {
-		// The parent-existence join is emitted as LEFT; the optimizer may rewrite it
-		// to RIGHT, so accept either outer join.
-		if node.NodeType == plan.Node_JOIN && (node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_RIGHT) {
+		// The parent-existence check is a MARK join (the optimizer may also rewrite
+		// the underlying join shape), so accept MARK / SEMI / LEFT / RIGHT.
+		if node.NodeType == plan.Node_JOIN &&
+			(node.JoinType == plan.Node_MARK || node.JoinType == plan.Node_SEMI ||
+				node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_RIGHT) {
 			hasParentJoin = true
 		}
 		if node.NodeType == plan.Node_FILTER && len(node.FilterList) > 0 {

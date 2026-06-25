@@ -1037,28 +1037,22 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 	return lastNodeID, newTag, targetPkPos, nil
 }
 
-// buildModernChildFkAssert implements the modern plain-INSERT child→parent foreign-key
-// check entirely in the data flow. Like buildInsertIgnoreFkFilter it LEFT JOINs each
-// referenced parent with binding tags — so it survives the full optimizer and, unlike
-// the post-createQuery appendForeignConstrantPlan over the materialized image, is
-// robust to the appended index-helper columns a unique-key child carries (those would
-// otherwise mis-type the FK hash join after column pruning). Instead of dropping rows
-// it asserts parent existence: the statement fails when any row's foreign key has no
-// matching parent. A NULL foreign-key value satisfies the constraint (MATCH SIMPLE).
-// Self-referencing foreign keys (ForeignTbl == 0) are left to the post-execution
-// DetectSql.
-//
-// childColPos maps a child foreign-key column name to its position in the image the
-// rows flow through under selectTag. It re-projects the original columns under a fresh
-// tag (positions preserved, so colName2Idx stays valid) and returns that tag, dropping
-// the joined parent columns.
-func (builder *QueryBuilder) buildModernChildFkAssert(
+// appendModernChildFkMarkOks appends, for every non-self-referencing foreign key, a
+// MARK join against the parent table and returns one boolean "ok" expression per FK,
+// true when the parent row exists or any FK column is NULL (MATCH SIMPLE). A MARK join
+// emits exactly one output row per input row, so — unlike a LEFT join — it never
+// multiplies child rows when the referenced parent column is non-unique (e.g. a FK to
+// the leading prefix of a composite primary key). The joins are binding-tagged, so the
+// result survives the full optimizer and is robust to the appended index-helper
+// columns a unique-key child carries. childColPos maps a child FK column name to its
+// position under selectTag.
+func (builder *QueryBuilder) appendModernChildFkMarkOks(
 	bindCtx *BindContext,
 	tableDef *plan.TableDef,
 	lastNodeID int32,
 	selectTag int32,
 	childColPos func(colName string) int32,
-) (int32, int32, error) {
+) (int32, []*plan.Expr, error) {
 	selectNode := builder.qry.Nodes[lastNodeID]
 
 	id2name := make(map[uint64]string, len(tableDef.Cols))
@@ -1066,18 +1060,17 @@ func (builder *QueryBuilder) buildModernChildFkAssert(
 		id2name[col.ColId] = col.Name
 	}
 
-	assertConds := make([]*plan.Expr, 0, len(tableDef.Fkeys))
-	errExpr := makePlan2StringConstExprWithType("Cannot add or update a child row: a foreign key constraint fails")
+	oks := make([]*plan.Expr, 0, len(tableDef.Fkeys))
 	for _, fk := range tableDef.Fkeys {
 		if fk.ForeignTbl == 0 {
 			continue // self-referencing FK handled post-execution via DetectSql
 		}
 		parentObjRef, parentTableDef, err := builder.compCtx.ResolveById(fk.ForeignTbl, bindCtx.snapshot)
 		if err != nil {
-			return 0, 0, err
+			return 0, nil, err
 		}
 		if parentTableDef == nil {
-			return 0, 0, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
+			return 0, nil, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
 		}
 
 		parentTag := builder.genNewBindTag()
@@ -1095,10 +1088,8 @@ func (builder *QueryBuilder) buildModernChildFkAssert(
 			parentColId2Pos[col.ColId] = i
 		}
 
-		joinConds := make([]*plan.Expr, 0, len(fk.Cols))
+		joinPreds := make([]*plan.Expr, 0, len(fk.Cols))
 		nullConds := make([]*plan.Expr, 0, len(fk.Cols))
-		var markerPos int
-		var markerTyp plan.Type
 		for k, childColId := range fk.Cols {
 			childPos := childColPos(id2name[childColId])
 			childTyp := selectNode.ProjectList[childPos].Typ
@@ -1109,63 +1100,88 @@ func (builder *QueryBuilder) buildModernChildFkAssert(
 			parentExpr := &plan.Expr{Typ: parentTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: parentTag, ColPos: int32(parentPos)}}}
 			cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{childExpr, parentExpr})
 			if err != nil {
-				return 0, 0, err
+				return 0, nil, err
 			}
-			joinConds = append(joinConds, cond)
+			joinPreds = append(joinPreds, cond)
 			nullCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(childExpr)})
 			if err != nil {
-				return 0, 0, err
+				return 0, nil, err
 			}
 			nullConds = append(nullConds, nullCond)
-			if k == 0 {
-				markerPos, markerTyp = parentPos, parentTyp
-			}
 		}
 
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{lastNodeID, parentScanID},
-			JoinType: plan.Node_LEFT,
-			OnList:   joinConds,
-		}, bindCtx)
-
-		// Row is valid when the parent exists (marker non-null) or any FK column is
-		// NULL (constraint not enforced under MATCH SIMPLE); otherwise assert fails.
-		markerExpr := &plan.Expr{Typ: markerTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: parentTag, ColPos: int32(markerPos)}}}
-		ok, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*plan.Expr{markerExpr})
+		markNodeID, markExpr, err := builder.insertMarkJoin(lastNodeID, parentScanID, joinPreds, nil, false, bindCtx)
 		if err != nil {
-			return 0, 0, err
+			return 0, nil, err
 		}
+		lastNodeID = markNodeID
+
+		// Row is valid when the parent exists (MARK marker is TRUE) or any FK column is
+		// NULL (constraint not enforced under MATCH SIMPLE).
+		ok := markExpr
 		for _, nc := range nullConds {
 			ok, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{ok, nc})
 			if err != nil {
-				return 0, 0, err
+				return 0, nil, err
 			}
 		}
-		assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(errExpr)})
-		if err != nil {
-			return 0, 0, err
-		}
-		assertConds = append(assertConds, assertExpr)
+		oks = append(oks, ok)
 	}
 
-	if len(assertConds) == 0 {
+	return lastNodeID, oks, nil
+}
+
+// buildModernChildFkAssert enforces the modern plain-INSERT child→parent foreign-key
+// check entirely in the data flow: for every row whose foreign key has no matching
+// parent the statement fails. It is binding-tagged (so it survives the full optimizer
+// and is robust to a unique-key child's appended index-helper columns) and uses MARK
+// joins (so a FK to a non-unique parent column never multiplies the inserted rows),
+// replacing the post-createQuery appendForeignConstrantPlan over the materialized
+// image. A NULL foreign-key value satisfies the constraint (MATCH SIMPLE); a
+// self-referencing FK (ForeignTbl == 0) is left to the post-execution DetectSql.
+//
+// childColPos maps a child FK column name to its position under selectTag. It
+// re-projects the original columns under a fresh tag (positions preserved, so
+// colName2Idx stays valid) and returns that tag.
+func (builder *QueryBuilder) buildModernChildFkAssert(
+	bindCtx *BindContext,
+	tableDef *plan.TableDef,
+	lastNodeID int32,
+	selectTag int32,
+	childColPos func(colName string) int32,
+) (int32, int32, error) {
+	projLen := len(builder.qry.Nodes[lastNodeID].ProjectList)
+	childTyps := make([]plan.Type, projLen)
+	for i, e := range builder.qry.Nodes[lastNodeID].ProjectList {
+		childTyps[i] = e.Typ
+	}
+
+	lastNodeID, oks, err := builder.appendModernChildFkMarkOks(bindCtx, tableDef, lastNodeID, selectTag, childColPos)
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(oks) == 0 {
 		return lastNodeID, selectTag, nil // only self-referencing FKs: nothing to assert here
 	}
 
+	errExpr := makePlan2StringConstExprWithType("Cannot add or update a child row: a foreign key constraint fails")
+	assertConds := make([]*plan.Expr, len(oks))
+	for i, ok := range oks {
+		assertConds[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(errExpr)})
+		if err != nil {
+			return 0, 0, err
+		}
+	}
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:   plan.Node_FILTER,
 		Children:   []int32{lastNodeID},
 		FilterList: assertConds,
 	}, bindCtx)
 
-	// Re-project the original columns under a fresh tag so the downstream dedup /
-	// MULTI_UPDATE sees a node with the expected ProjectList / BindingTags (positions
-	// preserved, so colName2Idx stays valid); the joined parent columns are dropped.
 	newTag := builder.genNewBindTag()
-	newProjList := make([]*plan.Expr, len(selectNode.ProjectList))
-	for i, expr := range selectNode.ProjectList {
-		newProjList[i] = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: int32(i)}}}
+	newProjList := make([]*plan.Expr, projLen)
+	for i := 0; i < projLen; i++ {
+		newProjList[i] = &plan.Expr{Typ: childTyps[i], Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: int32(i)}}}
 	}
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
@@ -1177,18 +1193,14 @@ func (builder *QueryBuilder) buildModernChildFkAssert(
 }
 
 // buildInsertIgnoreFkFilter implements INSERT IGNORE child→parent foreign-key
-// semantics on the modern path. Instead of asserting (which fails the whole
-// statement, see appendForeignConstrantPlan), it LEFT JOINs each referenced parent
-// table and FILTERs out the rows whose foreign key has no matching parent, keeping
-// the rest — exactly the row-skip behaviour MySQL's INSERT IGNORE expects. A NULL
-// foreign-key value satisfies the constraint (MATCH SIMPLE) and is kept.
-//
-// It is built with binding tags (like buildOnDupTargetPkResolution) so it survives
-// the full optimizer and gates the rows that reach the MULTI_UPDATE — unlike the
-// tagless assert sub-plan, which must run post-createQuery and cannot drop rows.
-// Self-referencing foreign keys (ForeignTbl == 0) are left to the post-execution
-// DetectSql. Returns the new top node and its select binding tag; the new-row
-// column layout (and colName2Idx positions) is preserved.
+// semantics on the modern path: instead of asserting it drops the rows whose foreign
+// key has no matching parent, keeping the rest — MySQL's row-skip behaviour. It shares
+// the binding-tagged MARK-join existence check with buildModernChildFkAssert (so a FK
+// to a non-unique parent column never multiplies the surviving rows), then keeps a row
+// only when every FK is satisfied. A NULL foreign-key value satisfies the constraint
+// (MATCH SIMPLE) and is kept; a self-referencing FK (ForeignTbl == 0) is left to the
+// post-execution DetectSql. The new-row column layout (and colName2Idx positions) is
+// preserved under the returned binding tag.
 func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 	bindCtx *BindContext,
 	tableDef *plan.TableDef,
@@ -1196,108 +1208,32 @@ func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 	selectTag int32,
 	colName2Idx map[string]int32,
 ) (int32, int32, error) {
-	selectNode := builder.qry.Nodes[lastNodeID]
-
-	id2name := make(map[uint64]string, len(tableDef.Cols))
-	for _, col := range tableDef.Cols {
-		id2name[col.ColId] = col.Name
+	projLen := len(builder.qry.Nodes[lastNodeID].ProjectList)
+	childTyps := make([]plan.Type, projLen)
+	for i, e := range builder.qry.Nodes[lastNodeID].ProjectList {
+		childTyps[i] = e.Typ
 	}
 
-	keepConds := make([]*plan.Expr, 0, len(tableDef.Fkeys))
-	for _, fk := range tableDef.Fkeys {
-		if fk.ForeignTbl == 0 {
-			continue // self-referencing FK handled post-execution via DetectSql
-		}
-		parentObjRef, parentTableDef, err := builder.compCtx.ResolveById(fk.ForeignTbl, bindCtx.snapshot)
-		if err != nil {
-			return 0, 0, err
-		}
-		if parentTableDef == nil {
-			return 0, 0, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
-		}
-
-		parentTag := builder.genNewBindTag()
-		builder.addNameByColRef(parentTag, parentTableDef)
-		parentScanID := builder.appendNode(&plan.Node{
-			NodeType:     plan.Node_TABLE_SCAN,
-			TableDef:     parentTableDef,
-			ObjRef:       parentObjRef,
-			BindingTags:  []int32{parentTag},
-			ScanSnapshot: bindCtx.snapshot,
-		}, bindCtx)
-
-		parentColId2Pos := make(map[uint64]int, len(parentTableDef.Cols))
-		for i, col := range parentTableDef.Cols {
-			parentColId2Pos[col.ColId] = i
-		}
-
-		joinConds := make([]*plan.Expr, 0, len(fk.Cols))
-		nullConds := make([]*plan.Expr, 0, len(fk.Cols))
-		var markerPos int
-		var markerTyp plan.Type
-		for k, childColId := range fk.Cols {
-			childPos := colName2Idx[tableDef.Name+"."+id2name[childColId]]
-			childTyp := selectNode.ProjectList[childPos].Typ
-			parentPos := parentColId2Pos[fk.ForeignCols[k]]
-			parentTyp := parentTableDef.Cols[parentPos].Typ
-
-			childExpr := &plan.Expr{Typ: childTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: int32(childPos)}}}
-			parentExpr := &plan.Expr{Typ: parentTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: parentTag, ColPos: int32(parentPos)}}}
-			cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{childExpr, parentExpr})
-			if err != nil {
-				return 0, 0, err
-			}
-			joinConds = append(joinConds, cond)
-			nullCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(childExpr)})
-			if err != nil {
-				return 0, 0, err
-			}
-			nullConds = append(nullConds, nullCond)
-			if k == 0 {
-				markerPos, markerTyp = parentPos, parentTyp
-			}
-		}
-
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{lastNodeID, parentScanID},
-			JoinType: plan.Node_LEFT,
-			OnList:   joinConds,
-		}, bindCtx)
-
-		// Keep the row when any FK column is NULL (constraint not enforced) or the
-		// parent exists (LEFT-JOIN marker non-null).
-		markerExpr := &plan.Expr{Typ: markerTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: parentTag, ColPos: int32(markerPos)}}}
-		keep, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*plan.Expr{markerExpr})
-		if err != nil {
-			return 0, 0, err
-		}
-		for _, nc := range nullConds {
-			keep, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{keep, nc})
-			if err != nil {
-				return 0, 0, err
-			}
-		}
-		keepConds = append(keepConds, keep)
+	lastNodeID, oks, err := builder.appendModernChildFkMarkOks(bindCtx, tableDef, lastNodeID, selectTag,
+		func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] })
+	if err != nil {
+		return 0, 0, err
 	}
-
-	if len(keepConds) == 0 {
+	if len(oks) == 0 {
 		return lastNodeID, selectTag, nil // only self-referencing FKs: nothing to drop here
 	}
 
+	// Keep a row only when every foreign key is satisfied (FilterList ANDs its conds).
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:   plan.Node_FILTER,
 		Children:   []int32{lastNodeID},
-		FilterList: keepConds,
+		FilterList: oks,
 	}, bindCtx)
 
-	// Re-project only the original new-row columns under a fresh tag so the dedup /
-	// MULTI_UPDATE downstream (and colName2Idx) see the same layout; parent columns
-	// are dropped.
 	newTag := builder.genNewBindTag()
-	newProjList := make([]*plan.Expr, len(selectNode.ProjectList))
-	for i, expr := range selectNode.ProjectList {
-		newProjList[i] = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: int32(i)}}}
+	newProjList := make([]*plan.Expr, projLen)
+	for i := 0; i < projLen; i++ {
+		newProjList[i] = &plan.Expr{Typ: childTyps[i], Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: int32(i)}}}
 	}
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
@@ -1305,7 +1241,6 @@ func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 		Children:    []int32{lastNodeID},
 		BindingTags: []int32{newTag},
 	}, bindCtx)
-
 	return lastNodeID, newTag, nil
 }
 
