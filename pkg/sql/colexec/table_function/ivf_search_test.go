@@ -314,6 +314,87 @@ func makeBatchIvfSearch(proc *process.Process) *batch.Batch {
 
 }
 
+func collectIvfIncludeBucketCounts(total, probe, maxBatch uint) []uint {
+	if total == 0 {
+		return nil
+	}
+	first := probe
+	if first == 0 {
+		first = 1
+	}
+	if first > total {
+		first = total
+	}
+
+	counts := []uint{first}
+	current := first
+	for remaining := total - first; remaining > 0; {
+		next := nextIvfIncludeBucketCount(current, remaining, maxBatch)
+		if next == 0 {
+			break
+		}
+		counts = append(counts, next)
+		remaining -= next
+		current = next
+	}
+	return counts
+}
+
+func makeRankedCentroidIDsForTest(n uint) []int64 {
+	ids := make([]int64, n)
+	for i := range ids {
+		ids[i] = int64(i + 1)
+	}
+	return ids
+}
+
+func TestNextIvfIncludeBucketCountUsesGeometricExpansion(t *testing.T) {
+	require.Equal(t, []uint{10, 20, 40, 80, 160, 320, 370}, collectIvfIncludeBucketCounts(1000, 10, ivfIncludeCentroidBatchCap()))
+	require.Equal(t, []uint{10, 15}, collectIvfIncludeBucketCounts(25, 10, ivfIncludeCentroidBatchCap()))
+	require.Equal(t, []uint{1, 2, 4, 1}, collectIvfIncludeBucketCounts(8, 0, ivfIncludeCentroidBatchCap()))
+
+	capped := collectIvfIncludeBucketCounts(20000, 10, ivfIncludeCentroidBatchCap())
+	require.Contains(t, capped, ivfIncludeCentroidBatchCap())
+	for _, count := range capped[1:] {
+		require.LessOrEqual(t, count, ivfIncludeCentroidBatchCap())
+	}
+
+	largerThanCap := collectIvfIncludeBucketCounts(20000, 8192, ivfIncludeCentroidBatchCap())
+	require.GreaterOrEqual(t, len(largerThanCap), 2)
+	require.Equal(t, uint(8192), largerThanCap[1])
+
+	noCap := collectIvfIncludeBucketCounts(1000, 10, 0)
+	require.Equal(t, []uint{10, 20, 40, 80, 160, 320, 370}, noCap)
+
+	var visited uint
+	for _, count := range collectIvfIncludeBucketCounts(25, 10, ivfIncludeCentroidBatchCap()) {
+		visited += count
+	}
+	require.Equal(t, uint(25), visited)
+}
+
+func TestIvfSearchAdvanceCursorUsesPreviousActualBatchSize(t *testing.T) {
+	cursor := &vectorindex.IvfSearchCursor{
+		RankedCentroidIDs:  makeRankedCentroidIDsForTest(200),
+		Round:              1,
+		NextBucketOffset:   0,
+		CurrentBucketCount: 10,
+	}
+	state := &ivfSearchState{
+		multiRoundEnabled: true,
+		cursor:            cursor,
+		bucketExpandStep:  50,
+	}
+
+	round, nextOffset, bucketCount, exhausted := state.cursorProgress()
+	state.advanceCursor()
+
+	require.False(t, state.cursorSameProgress(round, nextOffset, bucketCount, exhausted))
+	require.Equal(t, uint(10), cursor.NextBucketOffset)
+	require.Equal(t, uint(20), cursor.CurrentBucketCount)
+	require.False(t, cursor.Exhausted)
+}
+
 func TestIvfSearchCallReturnsIncludeColumnsAndLazyFetchesMoreRounds(t *testing.T) {
 	oldNewIvfAlgo := newIvfAlgo
 	oldGetVersion := getVersion
@@ -635,7 +716,7 @@ func TestIvfSearchStartResetsRoundStatePerNthRow(t *testing.T) {
 	require.Equal(t, []float32{0, 1, 2}, calls[1].query)
 	require.Equal(t, uint(2), calls[1].searchRoundLimit)
 	require.Equal(t, uint(1), calls[1].nextBucketOffset)
-	require.Equal(t, uint(1), calls[1].currentBucketCnt)
+	require.Equal(t, uint(2), calls[1].currentBucketCnt)
 
 	require.Equal(t, []float32{9, 9, 9}, calls[2].query)
 	require.Equal(t, uint(2), calls[2].searchRoundLimit)
@@ -705,7 +786,7 @@ func TestIvfSearchCallContinuesAfterManyEmptyRounds(t *testing.T) {
 		calls++
 		if rt.SearchCursor != nil {
 			if len(rt.SearchCursor.RankedCentroidIDs) == 0 {
-				rt.SearchCursor.RankedCentroidIDs = make([]int64, 40)
+				rt.SearchCursor.RankedCentroidIDs = make([]int64, 200)
 				for i := range rt.SearchCursor.RankedCentroidIDs {
 					rt.SearchCursor.RankedCentroidIDs[i] = int64(i + 1)
 				}
@@ -715,7 +796,7 @@ func TestIvfSearchCallContinuesAfterManyEmptyRounds(t *testing.T) {
 			}
 			rt.SearchCursor.Round++
 			rt.SearchCursor.Exhausted = rt.SearchCursor.NextBucketOffset+rt.SearchCursor.CurrentBucketCount >= uint(len(rt.SearchCursor.RankedCentroidIDs))
-			if rt.SearchCursor.Round >= 36 {
+			if rt.SearchCursor.Round >= 7 {
 				return []any{int64(99)}, []float64{9.9}, nil
 			}
 		}
@@ -755,7 +836,7 @@ func TestIvfSearchCallContinuesAfterManyEmptyRounds(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, vm.ExecNext, result.Status)
 	require.Equal(t, 1, result.Batch.RowCount())
-	require.GreaterOrEqual(t, calls, 36)
+	require.GreaterOrEqual(t, calls, 7)
 }
 
 func TestIvfSearchCallStopsOnceLimitRowsAreBuffered(t *testing.T) {
