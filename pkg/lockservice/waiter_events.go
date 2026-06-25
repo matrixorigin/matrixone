@@ -190,12 +190,16 @@ func (mw *waiterEvents) add(c *lockContext) {
 			c:      c,
 		}
 	}
-	// Propagate the remaining session-level lock_wait_timeout to the waiter so
-	// the check loop enforces one budget across async re-queue cycles. The sync
-	// path enforces LockWaitTimeout via context.WithTimeoutCause in doLock.
-	c.w.lockWaitTimeout = c.getLockWaitTimeout()
-	if c.w.lockWaitTimeout <= 0 && !c.lockWaitDeadline.IsZero() {
-		c.w.lockWaitTimeout = time.Nanosecond
+	// The sync path enforces LockWaitTimeout via context.WithTimeoutCause in
+	// doLock. waiterEvents owns timeout notifications only for async waits.
+	c.w.lockWaitTimeout = 0
+	if c.opts.async {
+		// Propagate the remaining session-level lock_wait_timeout to the waiter
+		// so the check loop enforces one budget across async re-queue cycles.
+		c.w.lockWaitTimeout = c.getLockWaitTimeout()
+		if c.w.lockWaitTimeout <= 0 && !c.lockWaitDeadline.IsZero() {
+			c.w.lockWaitTimeout = time.Nanosecond
+		}
 	}
 	c.w.startWait()
 	mw.addToLazyCheckDeadlockC(c.w)
