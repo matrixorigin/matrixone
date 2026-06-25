@@ -354,6 +354,26 @@ func (l *localLockTable) getLock(
 	}
 }
 
+func (l *localLockTable) getLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if l.mu.closed {
+		return pb.WaitTxn{}, false, nil
+	}
+	lock, ok := l.mu.store.Get(key)
+	if !ok {
+		return pb.WaitTxn{}, false, nil
+	}
+	var holder pb.WaitTxn
+	var found bool
+	lock.IterHolders(func(v pb.WaitTxn) bool {
+		holder = v
+		found = true
+		return false
+	})
+	return holder, found, nil
+}
+
 func (l *localLockTable) getBind() pb.LockTable {
 	return l.bind
 }

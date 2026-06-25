@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -438,7 +439,8 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 			}
 		} else if !indexInfo.Unique {
 			// handle secondary index
-			switch catalog.ToLower(indexInfo.IndexAlgo) {
+			algo := catalog.ToLower(indexInfo.IndexAlgo)
+			switch algo {
 			case catalog.MoIndexDefaultAlgo.ToString(), catalog.MoIndexBTreeAlgo.ToString(), catalog.MoIndexRTreeAlgo.ToString():
 				// regular secondary index
 				if len(indexInfo.Parts) == 1 &&
@@ -453,25 +455,24 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 				} else if len(indexInfo.Parts) == 0 {
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 				}
-			case catalog.MoIndexIvfFlatAlgo.ToString():
-				// ivf index
-				if len(indexInfo.Parts) == 0 {
-					// remove 3 index records: metadata, centroids, entries
-					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+3:]...)
-				}
 			case catalog.MOIndexMasterAlgo.ToString():
 				if len(indexInfo.Parts) == 0 {
 					// TODO: verify this
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 				}
-			case catalog.MOIndexFullTextAlgo.ToString():
-				if len(indexInfo.Parts) == 0 {
-					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
-				}
-			case catalog.MoIndexHnswAlgo.ToString():
-				if len(indexInfo.Parts) == 0 {
-					// remove 2 index records: metadata, storage
-					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+2:]...)
+			default:
+				// Plugin-registered indexes (vector + fulltext) own
+				// their hidden-table count via HiddenTableTypes(). The
+				// previous shape hardcoded 3 for IVF-FLAT, 2 for HNSW,
+				// 1 for fulltext, and silently omitted CAGRA / IVF-PQ
+				// — which left orphan hidden-table IndexDefs in tbInfo
+				// for those algos when the affected column emptied
+				// Parts. Reading the count from the plugin restores
+				// CAGRA / IVF-PQ coverage and stays correct for any
+				// future algo added under the plugin system.
+				if p, ok := indexplugin.Get(algo); ok && len(indexInfo.Parts) == 0 {
+					n := len(p.Catalog().HiddenTableTypes())
+					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+n:]...)
 				}
 			}
 		}

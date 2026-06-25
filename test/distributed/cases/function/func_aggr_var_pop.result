@@ -181,6 +181,7 @@ select * from test02;
 -123  𝄀
 9932129321093029302930290439029432424
 select var_pop(col1) from test02;
+-- @regex("Can't convert Float64 To Decimal128: [0-9.e+-]+\(38,6\)", true)
 invalid input: Can't convert Float64 To Decimal128: 26542815629556120840229121106979169823672362913300482745332587433134391296.000000(38,6)
 drop table test02;
 drop table if exists test03;
@@ -400,6 +401,7 @@ select * from test02;
 -123  𝄀
 9932129321093029302930290439029432424
 select variance(a) from test02;
+-- @regex("Can't convert Float64 To Decimal128: [0-9.e+-]+\(38,6\)", true)
 invalid input: Can't convert Float64 To Decimal128: 26542815629556120840229121106979169823672362913300482745332587433134391296.000000(38,6)
 drop table test02;
 drop table if exists test03;

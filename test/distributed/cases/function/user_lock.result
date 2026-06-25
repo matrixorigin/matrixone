@@ -1,0 +1,103 @@
+drop database if exists user_lock_bvt_db;
+create database user_lock_bvt_db;
+use user_lock_bvt_db;
+create table user_lock_bvt_holder (conn_id bigint unsigned);
+select is_free_lock('user_lock_bvt_lock');
+➤ is_free_lock(user_lock_bvt_lock)[-5,64,0]  𝄀
+1
+select is_used_lock('user_lock_bvt_lock') is null;
+➤ is_used_lock(user_lock_bvt_lock) is null[-7,1,0]  𝄀
+1
+select release_lock('user_lock_bvt_lock') is null;
+➤ release_lock(user_lock_bvt_lock) is null[-7,1,0]  𝄀
+1
+use user_lock_bvt_db;
+insert into user_lock_bvt_holder values (connection_id());
+select get_lock('user_lock_bvt_lock', 0);
+➤ get_lock(user_lock_bvt_lock, 0)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_lock', 0);
+➤ get_lock(user_lock_bvt_lock, 0)[-5,64,0]  𝄀
+1
+select is_free_lock('user_lock_bvt_lock');
+➤ is_free_lock(user_lock_bvt_lock)[-5,64,0]  𝄀
+0
+select get_lock('user_lock_bvt_lock', 0);
+➤ get_lock(user_lock_bvt_lock, 0)[-5,64,0]  𝄀
+0
+select is_used_lock('user_lock_bvt_lock') = (select conn_id from user_lock_bvt_holder);
+➤ is_used_lock(user_lock_bvt_lock) = (select conn_id from user_lock_bvt_holder)[-7,1,0]  𝄀
+1
+select release_lock('user_lock_bvt_lock');
+➤ release_lock(user_lock_bvt_lock)[-5,64,0]  𝄀
+0
+use user_lock_bvt_db;
+select is_used_lock('user_lock_bvt_lock') = (select conn_id from user_lock_bvt_holder);
+➤ is_used_lock(user_lock_bvt_lock) = (select conn_id from user_lock_bvt_holder)[-7,1,0]  𝄀
+1
+select release_all_locks();
+➤ release_all_locks()[-5,64,0]  𝄀
+0
+use user_lock_bvt_db;
+select is_free_lock('user_lock_bvt_lock');
+➤ is_free_lock(user_lock_bvt_lock)[-5,64,0]  𝄀
+0
+select release_lock('user_lock_bvt_lock');
+➤ release_lock(user_lock_bvt_lock)[-5,64,0]  𝄀
+1
+select is_free_lock('user_lock_bvt_lock');
+➤ is_free_lock(user_lock_bvt_lock)[-5,64,0]  𝄀
+0
+select release_all_locks();
+➤ release_all_locks()[-5,64,0]  𝄀
+1
+select is_free_lock('user_lock_bvt_lock');
+➤ is_free_lock(user_lock_bvt_lock)[-5,64,0]  𝄀
+1
+select is_used_lock('user_lock_bvt_lock') is null;
+➤ is_used_lock(user_lock_bvt_lock) is null[-7,1,0]  𝄀
+1
+select get_lock('user_lock_bvt_lock', 0);
+➤ get_lock(user_lock_bvt_lock, 0)[-5,64,0]  𝄀
+1
+select release_all_locks();
+➤ release_all_locks()[-5,64,0]  𝄀
+1
+select release_all_locks();
+➤ release_all_locks()[-5,64,0]  𝄀
+0
+select get_lock('user_lock_bvt_multi_a', 0);
+➤ get_lock(user_lock_bvt_multi_a, 0)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_multi_a', 0);
+➤ get_lock(user_lock_bvt_multi_a, 0)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_multi_a', 0);
+➤ get_lock(user_lock_bvt_multi_a, 0)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_multi_b', 0);
+➤ get_lock(user_lock_bvt_multi_b, 0)[-5,64,0]  𝄀
+1
+select release_all_locks();
+➤ release_all_locks()[-5,64,0]  𝄀
+4
+select is_free_lock('user_lock_bvt_multi_a');
+➤ is_free_lock(user_lock_bvt_multi_a)[-5,64,0]  𝄀
+1
+select is_free_lock('user_lock_bvt_multi_b');
+➤ is_free_lock(user_lock_bvt_multi_b)[-5,64,0]  𝄀
+1
+select get_lock('User_Lock_Bvt_Case', 0);
+➤ get_lock(User_Lock_Bvt_Case, 0)[-5,64,0]  𝄀
+1
+select is_free_lock('user_lock_bvt_case');
+➤ is_free_lock(user_lock_bvt_case)[-5,64,0]  𝄀
+0
+select release_lock('USER_LOCK_BVT_CASE');
+➤ release_lock(USER_LOCK_BVT_CASE)[-5,64,0]  𝄀
+1
+select is_free_lock('user_lock_bvt_case');
+➤ is_free_lock(user_lock_bvt_case)[-5,64,0]  𝄀
+1
+drop table user_lock_bvt_holder;
+drop database user_lock_bvt_db;

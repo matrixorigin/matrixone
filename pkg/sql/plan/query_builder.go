@@ -37,6 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {
@@ -5498,6 +5500,18 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		exprs = append(exprs, curExpr)
 	}
 	id := tbl.Id()
+
+	// Plugin-registered table functions (hnsw_create / hnsw_search /
+	// ivf_create / ivf_search / cagra_create / cagra_search /
+	// ivfpq_create / ivfpq_search) live under
+	// pkg/vectorindex/<algo>/plugin/plan/tablefunc.go. The plugin
+	// registers each builder via planplugin.RegisterTableFunc at init
+	// time; this lookup routes the parser-side dispatch through that
+	// registry before the hardcoded switch below.
+	if b, ok := planplugin.TableFunc(id); ok {
+		return b(builder, tbl, ctx, exprs, children)
+	}
+
 	switch id {
 	case "unnest":
 		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, children)
@@ -5531,14 +5545,6 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildStageList(tbl, ctx, exprs, children)
 	case "moplugin_table":
 		nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, children)
-	case "hnsw_create":
-		nodeId, err = builder.buildHnswCreate(tbl, ctx, exprs, children)
-	case "hnsw_search":
-		nodeId, err = builder.buildHnswSearch(tbl, ctx, exprs, children)
-	case "ivf_create":
-		nodeId, err = builder.buildIvfCreate(tbl, ctx, exprs, children)
-	case "ivf_search":
-		nodeId, err = builder.buildIvfSearch(tbl, ctx, exprs, children)
 	case "parse_jsonl_data":
 		nodeId, err = builder.buildParseJsonlData(tbl, ctx, exprs, children)
 	case "parse_jsonl_file":
@@ -5547,14 +5553,6 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId = builder.buildTableStats(tbl, ctx, exprs, children)
 	case "load_file_chunks":
 		nodeId = builder.buildLoadFileChunks(tbl, ctx, exprs, children)
-	case "cagra_create":
-		nodeId, err = builder.buildCagraCreate(tbl, ctx, exprs, children)
-	case "cagra_search":
-		nodeId, err = builder.buildCagraSearch(tbl, ctx, exprs, children)
-	case "ivfpq_create":
-		nodeId, err = builder.buildIvfpqCreate(tbl, ctx, exprs, children)
-	case "ivfpq_search":
-		nodeId, err = builder.buildIvfpqSearch(tbl, ctx, exprs, children)
 	default:
 		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 	}

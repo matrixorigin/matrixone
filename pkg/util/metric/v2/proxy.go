@@ -32,6 +32,18 @@ var (
 	ProxyConnectRetryCounter      = proxyConnectCounter.WithLabelValues("retry")
 	ProxyConnectSelectCounter     = proxyConnectCounter.WithLabelValues("select")
 	ProxyConnectRejectCounter     = proxyConnectCounter.WithLabelValues("reject")
+	// ProxyConnectCNHealthTripCounter counts how many times a CN server's
+	// health breaker tripped (was marked temporarily unhealthy).
+	ProxyConnectCNHealthTripCounter = proxyConnectCounter.WithLabelValues("cn-health-trip")
+	// ProxyConnectCNHealthRetripCounter counts re-trips, i.e. a half-open
+	// probe failed and the CN was put back into cooldown with a longer backoff.
+	ProxyConnectCNHealthRetripCounter = proxyConnectCounter.WithLabelValues("cn-health-retrip")
+	// ProxyConnectCNHealthProbeCounter counts half-open probe connections
+	// handed out to a recovering CN server.
+	ProxyConnectCNHealthProbeCounter = proxyConnectCounter.WithLabelValues("cn-health-probe")
+	// ProxyConnectCNAllBusyCounter counts route attempts that fast-failed
+	// because every candidate CN server was temporarily unhealthy.
+	ProxyConnectCNAllBusyCounter = proxyConnectCounter.WithLabelValues("cn-all-busy")
 
 	proxyDisconnectCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{

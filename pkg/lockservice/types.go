@@ -116,6 +116,8 @@ type LockService interface {
 
 	// GetWaitingList get special txnID's waiting list
 	GetWaitingList(ctx context.Context, txnID []byte) (bool, []pb.WaitTxn, error)
+	// GetLockHolder returns the current holder of a row lock if it exists.
+	GetLockHolder(ctx context.Context, tableID uint64, row []byte, options pb.LockOptions) (pb.WaitTxn, bool, error)
 	// ForceRefreshLockTableBinds force refresh all lock tables binds
 	ForceRefreshLockTableBinds(targets []uint64, matcher func(bind pb.LockTable) bool)
 	// GetLockTableBind returns lock table bind
@@ -158,6 +160,8 @@ type lockTable interface {
 	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation)
 	// getLock get a lock
 	getLock(key []byte, txn pb.WaitTxn, fn func(Lock))
+	// getLockHolder returns the current holder if the lock is actively held.
+	getLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error)
 	// getBind returns lock table binding
 	getBind() pb.LockTable
 	// close close the locktable

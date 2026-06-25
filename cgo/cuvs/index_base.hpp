@@ -109,7 +109,7 @@ using ::distribution_mode_t;
 //   - extend: submit_main() + wait(); GPU sequential indices required for cuVS.
 //
 // REPLICATED
-//   - N GPUs, each holds a full copy of the index in replicated_indices_[dev_id].
+//   - N GPUs, each holds a full copy of the index in replicated_indices_[rank].
 //   - build: submit_all_devices() — concurrent build on all GPUs.
 //   - search: submit() — dispatches to any GPU, uses per-thread cached index ptr.
 //   - extend: submit_all_devices() — concurrent extend on all GPUs; set_ids() is
@@ -124,7 +124,7 @@ using ::distribution_mode_t;
 //             results merged via merge_sharded_results().
 //   - extend: routes new rows to the last shard via submit_to_rank(last_rank).
 //             shard-local seq_ids = [old_last_shard_size .. old_last_shard_size+n_rows).
-//             replicated_datasets_[last_dev_id] erased (stale); other shards' entries untouched.
+//             replicated_datasets_[last_rank] erased (stale); other shards' entries untouched.
 //   - SHARDED shard sizing: rows_per_shard is rounded DOWN to a multiple of 32
 //     (i.e., (count / num_shards) & ~31). The last shard absorbs the remainder.
 //     This is required for word-aligned bitset slicing in sync_shard_bitset().
@@ -439,8 +439,15 @@ public:
     std::mutex device_bitsets_mutex_;  ///< Guards the map itself (not individual entries)
     std::map<int, std::shared_ptr<device_bitset_cache_t>> device_deleted_bitsets_;
 
-    // Per-device GPU cache for shard-local bitset slices (SHARDED mode only).
-    // Entry for device d covers global positions [shard_offset, shard_offset+shard_sz).
+    // Per-shard GPU cache for shard-local bitset slices (SHARDED mode only).
+    // Keyed by RANK (the shard index), NOT physical dev_id — consistent with
+    // replicated_indices_/replicated_datasets_, which are also rank-keyed. In
+    // SHARDED mode each rank owns one shard with its own shard_offset, so under
+    // the gpu_multi_simulation [0,0,…] device list (multiple ranks → one physical
+    // device) keying by dev_id made two shards collide on one cache entry and
+    // reuse each other's bitset slice — wrong deletes for filtered SHARDED search.
+    // On real multi-GPU rank == dev_id, so this is a no-op there.
+    // Entry covers global positions [shard_offset, shard_offset+shard_sz);
     // bit j of the shard bitset = global bit (shard_offset + j).
     // shard_offset is always a multiple of 32 (enforced by rows_per_shard rounding at build).
     std::mutex device_shard_bitsets_mutex_;
@@ -463,13 +470,15 @@ public:
         destroy();
     }
     
-    // Helper to get or create a device-specific bitset cache info
-    std::shared_ptr<device_bitset_cache_t> get_device_shard_bitset_info(int dev_id) {
+    // Helper to get or create a per-shard bitset cache info, keyed by RANK
+    // (the shard index) so shards sharing one physical device under simulation
+    // don't collide (see device_shard_bitsets_ declaration).
+    std::shared_ptr<device_bitset_cache_t> get_device_shard_bitset_info(int rank) {
         std::lock_guard<std::mutex> lock(device_shard_bitsets_mutex_);
-        auto it = device_shard_bitsets_.find(dev_id);
+        auto it = device_shard_bitsets_.find(rank);
         if (it == device_shard_bitsets_.end()) {
             auto info = std::make_shared<device_bitset_cache_t>();
-            device_shard_bitsets_[dev_id] = info;
+            device_shard_bitsets_[rank] = info;
             return info;
         }
         return it->second;
@@ -489,8 +498,8 @@ public:
     // Sync a shard-local slice of the deleted bitset to device (SHARDED mode).
     // shard_offset must be a multiple of 32 (enforced at build time).
     // Bit j of the resulting device bitset = global bit (shard_offset + j).
-    void sync_shard_bitset(int dev_id, uint64_t shard_offset, uint64_t shard_sz, raft::resources const& res) {
-        auto info = get_device_shard_bitset_info(dev_id);
+    void sync_shard_bitset(int rank, uint64_t shard_offset, uint64_t shard_sz, raft::resources const& res) {
+        auto info = get_device_shard_bitset_info(rank);
         uint64_t current_ver = bitset_version_.load();
 
         if (info->version < current_ver || !info->ptr) {
@@ -744,10 +753,15 @@ public:
         auto res   = handle.get_raft_resources();
         int dev_id = handle.get_device_id();
         if (this->dist_mode == DistributionMode_SHARDED) {
-            this->sync_shard_bitset(dev_id, start_row, shard_sz, *res);
+            // SHARDED: per-shard slice cached by RANK (shards may share a physical
+            // device under simulation). start_row is the shard's global offset.
+            int rank = handle.get_rank();
+            this->sync_shard_bitset(rank, start_row, shard_sz, *res);
             return std::static_pointer_cast<bs_t>(
-                this->get_device_shard_bitset_info(dev_id)->ptr);
+                this->get_device_shard_bitset_info(rank)->ptr);
         }
+        // REPLICATED/SINGLE: the full deleted bitset is identical across replicas
+        // on a device, so the full-bitset cache stays keyed by physical dev_id.
         this->sync_device_bitset(dev_id, *res);
         return std::static_pointer_cast<bs_t>(
             this->get_device_bitset_info(dev_id)->ptr);
