@@ -172,6 +172,14 @@ func findIvfTableFunctionNode(builder *QueryBuilder, nodeID int32) *plan.Node {
 	return nil
 }
 
+func TestEnsureIvfIncludeSearchRoundLimitAtLeastK(t *testing.T) {
+	k := makePlan2Uint64ConstExprWithType(5)
+	require.Equal(t, uint64(5), ensureIvfIncludeSearchRoundLimitAtLeastK(0, k))
+	require.Equal(t, uint64(5), ensureIvfIncludeSearchRoundLimitAtLeastK(3, k))
+	require.Equal(t, uint64(7), ensureIvfIncludeSearchRoundLimitAtLeastK(7, k))
+	require.Equal(t, uint64(0), ensureIvfIncludeSearchRoundLimitAtLeastK(0, nil))
+}
+
 func TestApplyIndicesForSortUsingIvfflat_PostModeDoesNotAutoUseIncludeOptimization(t *testing.T) {
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
@@ -438,6 +446,44 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeIndexOnlyPushdownOverfetches
 	require.Len(t, tableFuncNode.TblFuncExprList, 5)
 	assert.Contains(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval(), catalog.SystemSI_IVFFLAT_IncludeColPrefix+"category")
 	assert.Equal(t, uint64(12), tableFuncNode.TblFuncExprList[3].GetLit().GetU64Val())
+}
+
+func TestApplyIndicesForSortUsingIvfflat_IncludeModePushdownRoundLimitUsesOffsetCompensatedK(t *testing.T) {
+	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+
+	scanTag := scanNode.BindingTags[0]
+	scanNode.FilterList = []*plan.Expr{
+		{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: ">="},
+					Args: []*plan.Expr{
+						{Typ: scanNode.TableDef.Cols[3].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 3, Name: "category"}}},
+						MakePlan2Int32ConstExprWithType(20),
+					},
+				},
+			},
+		},
+	}
+
+	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "include", 0, 2, 3)
+	vecCtx.sortNode.Offset = makePlan2Uint64ConstExprWithType(3)
+
+	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
+	require.NoError(t, err)
+
+	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
+	require.Equal(t, plan.Node_SORT, sortNode.NodeType)
+
+	tableFuncNode := builder.qry.Nodes[sortNode.Children[0]]
+	require.Equal(t, plan.Node_FUNCTION_SCAN, tableFuncNode.NodeType)
+	require.Equal(t, uint64(5), tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(5), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+	require.Len(t, tableFuncNode.TblFuncExprList, 5)
+	assert.Contains(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval(), catalog.SystemSI_IVFFLAT_IncludeColPrefix+"category")
+	assert.Equal(t, uint64(25), tableFuncNode.TblFuncExprList[3].GetLit().GetU64Val())
+	assert.Equal(t, uint64(10), tableFuncNode.TblFuncExprList[4].GetLit().GetU64Val())
 }
 
 func TestSerializeFiltersToSQL_DoesNotPushMixedOR(t *testing.T) {

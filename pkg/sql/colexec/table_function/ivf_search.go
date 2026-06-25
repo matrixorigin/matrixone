@@ -424,6 +424,38 @@ func ivfSearchSeenKey(v any) string {
 	return fmt.Sprintf("%T:%v", v, v)
 }
 
+const defaultIvfIncludeCentroidBatchCap = uint(4096)
+
+func ivfIncludeCentroidBatchCap() uint {
+	return defaultIvfIncludeCentroidBatchCap
+}
+
+func nextIvfIncludeBucketCount(current, remaining, maxBatch uint) uint {
+	if remaining == 0 {
+		return 0
+	}
+	if current == 0 {
+		current = 1
+	}
+
+	nextCount := current * 2
+	if nextCount < current {
+		nextCount = remaining
+	}
+
+	effectiveMax := maxBatch
+	if effectiveMax > 0 && effectiveMax < current {
+		effectiveMax = current
+	}
+	if effectiveMax > 0 && nextCount > effectiveMax {
+		nextCount = effectiveMax
+	}
+	if nextCount > remaining {
+		nextCount = remaining
+	}
+	return nextCount
+}
+
 func (u *ivfSearchState) advanceCursor() {
 	if !u.multiRoundEnabled || u.cursor == nil || u.cursor.Round == 0 || u.cursor.Exhausted {
 		return
@@ -438,11 +470,8 @@ func (u *ivfSearchState) advanceCursor() {
 		return
 	}
 
-	nextCount := u.bucketExpandStep
 	remaining := total - nextOffset
-	if nextCount > remaining {
-		nextCount = remaining
-	}
+	nextCount := nextIvfIncludeBucketCount(u.cursor.CurrentBucketCount, remaining, ivfIncludeCentroidBatchCap())
 	u.cursor.NextBucketOffset = nextOffset
 	u.cursor.CurrentBucketCount = nextCount
 	u.cursor.Exhausted = false
