@@ -23,6 +23,17 @@ insert into include_rounds_main values
 create index idx_ivf_include_rounds using ivfflat on include_rounds_main(embedding)
 lists=2 op_type "vector_l2_ops" include(title, category);
 
+-- With nprobe below lists, include mode must widen past the first probe until
+-- it finds enough filtered rows.
+set probe_limit = 1;
+-- @separator:table
+select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=include';
+set probe_limit = 10;
+
 -- `EXPLAIN ANALYZE` should stay stable across all three modes.
 -- @separator:table
 -- @ignore:0
@@ -80,6 +91,14 @@ from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=include';
+
+-- Include mode must compensate OFFSET before the final sort window is sliced.
+-- @separator:table
+select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 1 offset 1 by rank with option 'mode=include';
 
 -- @separator:table
 select id, title, category
