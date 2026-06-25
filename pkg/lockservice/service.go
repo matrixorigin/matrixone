@@ -660,6 +660,17 @@ func (s *service) publishLockTableBindFromAllocator(
 		s.tableGroups); !accepted {
 		return nil, ErrLockTableBindChanged
 	}
+
+	s.bindChangeMu.Lock()
+	defer s.bindChangeMu.Unlock()
+
+	current := s.tableGroups.get(group, tableID)
+	if current != nil {
+		if current.getBind().Changed(bind) {
+			return nil, ErrLockTableBindChanged
+		}
+		return current, nil
+	}
 	return s.tableGroups.set(group, tableID, s.createLockTableByBind(bind)), nil
 }
 
@@ -670,6 +681,45 @@ func (s *service) handleBindChanged(newBind pb.LockTable) {
 	new := s.createLockTableByBind(newBind)
 	s.tableGroups.set(newBind.Group, newBind.Table, new)
 	s.fenceByBindChanged(newBind)
+}
+
+func (s *service) handleBindChangedFromAllocator(
+	source string,
+	oldBind pb.LockTable,
+	newBind pb.LockTable,
+	allocator allocatorState,
+	requestAllocator allocatorState,
+) error {
+	s.allocatorVersionMu.Lock()
+	defer s.allocatorVersionMu.Unlock()
+
+	if _, accepted := s.observeAllocatorStateLocked(
+		source,
+		allocator,
+		requestAllocator,
+		true,
+		s.tableGroups); !accepted {
+		return ErrLockTableBindChanged
+	}
+
+	s.bindChangeMu.Lock()
+	defer s.bindChangeMu.Unlock()
+
+	current := s.tableGroups.get(newBind.Group, newBind.Table)
+	if current != nil {
+		currentBind := current.getBind()
+		if !currentBind.Changed(newBind) {
+			return nil
+		}
+		if currentBind.Changed(oldBind) {
+			return ErrLockTableBindChanged
+		}
+	}
+
+	new := s.createLockTableByBind(newBind)
+	s.tableGroups.set(newBind.Group, newBind.Table, new)
+	s.fenceByBindChanged(newBind)
+	return nil
 }
 
 func (s *service) fenceByBindChanged(bind pb.LockTable) {
@@ -966,6 +1016,8 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 			s.handleBindChanged,
 			s.logger,
 		)
+		remote.allocatorStateProvider = s.allocatorStateSnapshot
+		remote.allocatorBindChangedHandler = s.handleBindChangedFromAllocator
 		if !s.cfg.EnableRemoteLocalProxy {
 			return remote
 		}

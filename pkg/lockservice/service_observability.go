@@ -107,14 +107,26 @@ func (s *service) GetLockTableBind(
 }
 
 func (s *service) GetLatestLockTableBind(bind pb.LockTable) (pb.LockTable, error) {
-	newBind, _, err := getLockTableBind(
+	requestAllocator := s.allocatorStateSnapshot()
+	newBind, allocator, err := getLockTableBind(
 		s.remote.client,
 		bind.Group,
 		bind.Table,
 		bind.OriginTable,
 		s.serviceID,
 		bind.Sharding)
-	return newBind, err
+	if err != nil {
+		return pb.LockTable{}, err
+	}
+	if _, accepted := s.observeAllocatorStateWithHoldersFromSnapshot(
+		"latest-bind",
+		allocator,
+		requestAllocator,
+		true,
+		s.tableGroups); !accepted {
+		return pb.LockTable{}, ErrLockTableBindChanged
+	}
+	return newBind, nil
 }
 
 func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bool) {
