@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/stretchr/testify/require"
@@ -751,6 +752,45 @@ func (router *testRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t
 	return newMockServerConn(nil), nil, nil
 }
 
+type testRouteSelectedRouter struct {
+	connectCalls              int
+	connectRouteSelectedCalls int
+	routeCalls                int
+	routeForTransferCalls     int
+}
+
+func (r *testRouteSelectedRouter) Route(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error) {
+	r.routeCalls++
+	addr := "127.0.0.1:6001"
+	if filter != nil && filter(addr) {
+		return nil, noCNServerErr
+	}
+	return &CNServer{addr: addr}, nil
+}
+
+func (r *testRouteSelectedRouter) RouteForTransfer(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error) {
+	r.routeForTransferCalls++
+	return r.Route(ctx, sid, client, filter)
+}
+
+func (r *testRouteSelectedRouter) SelectByConnID(connID uint32) (*CNServer, error) {
+	return nil, nil
+}
+
+func (r *testRouteSelectedRouter) AllServers(sid string) ([]*CNServer, error) {
+	return nil, nil
+}
+
+func (r *testRouteSelectedRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
+	r.connectCalls++
+	return nil, nil, newConnectErr(moerr.NewInternalErrorNoCtx("connect failed"))
+}
+
+func (r *testRouteSelectedRouter) ConnectRouteSelected(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
+	r.connectRouteSelectedCalls++
+	return nil, nil, newConnectErr(moerr.NewInternalErrorNoCtx("connect failed"))
+}
+
 var _ client.QueryClient = &testQueryClient{}
 
 type testQueryClient struct {
@@ -868,6 +908,53 @@ func Test_connectToBackend_SkipCacheOnMigration(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, sConn)
 	require.Equal(t, 0, cache.popCount)
+}
+
+func Test_connectToBackend_SkipCacheWhenPluginRouterEnabled(t *testing.T) {
+	cache := &popCountConnCache{}
+	cc, cleanup := createNewClientConn(t)
+	defer cleanup()
+	cConn, ok := cc.(*clientConn)
+	require.True(t, ok)
+	cConn.connCache = cache
+	cConn.router = newPluginRouter("", &routeErrRouter{}, &mockPlugin{
+		mockRecommendCNFn: func(ctx context.Context, clientInfo clientInfo) (*plugin.Recommendation, error) {
+			return &plugin.Recommendation{Action: plugin.Bypass}, nil
+		},
+	})
+
+	sConn, err := cConn.connectToBackend("")
+	require.Error(t, err)
+	require.Nil(t, sConn)
+	require.Equal(t, 0, cache.popCount, "plugin routing must not reuse cached sessions")
+}
+
+func Test_connectToBackend_UsesRouteSelectedOnlyForFirstLogin(t *testing.T) {
+	router := &testRouteSelectedRouter{}
+	cc, cleanup := createNewClientConn(t)
+	defer cleanup()
+	cConn, ok := cc.(*clientConn)
+	require.True(t, ok)
+	cConn.router = router
+
+	// First login: Route-selected new-session connect should use
+	// ConnectRouteSelected.
+	sConn, err := cConn.connectToBackend("")
+	require.Error(t, err)
+	require.Nil(t, sConn)
+	require.Greater(t, router.connectRouteSelectedCalls, 0, "first login must use ConnectRouteSelected")
+	require.Equal(t, 0, router.connectCalls)
+	require.Greater(t, router.routeCalls, 0, "first login must route through Route")
+	require.Equal(t, 0, router.routeForTransferCalls)
+
+	// Migration / transfer: must use plain Connect and NOT mutate breaker
+	// state via ConnectRouteSelected.
+	sConn, err = cConn.connectToBackend("127.0.0.1:7000")
+	require.Error(t, err)
+	require.Nil(t, sConn)
+	require.GreaterOrEqual(t, router.connectRouteSelectedCalls, 1)
+	require.Greater(t, router.connectCalls, 0, "migration must use plain Connect")
+	require.Greater(t, router.routeForTransferCalls, 0, "migration must use RouteForTransfer when available")
 }
 
 func TestHandleSetVar(t *testing.T) {

@@ -60,6 +60,9 @@ func verifyLightPrivilege(ses *Session,
 		if len(dbName) == 0 {
 			dbName = ses.GetDatabaseName()
 		}
+		if !canWriteProtectedDatabase(ses) && isProtectedDatabase(ses, dbName) {
+			return false
+		}
 		dbName = strings.ToLower(dbName)
 		if ok2 := isBannedDatabase(dbName); ok2 {
 			if isClusterTable {
@@ -317,4 +320,132 @@ func isTargetSysWhiteList(p *plan2.Plan) bool {
 // verifyAccountCanExecMoCtrl only sys account and moadmin role.
 func verifyAccountCanExecMoCtrl(account *TenantInfo) bool {
 	return account.IsSysTenant() && account.IsMoAdminRole()
+}
+
+func canWriteProtectedDatabase(ses *Session) bool {
+	if ses == nil || ses.GetTenantInfo() == nil {
+		return false
+	}
+	tenant := ses.GetTenantInfo()
+	return tenant.IsAccountAdminRole() || tenant.IsMoAdminRole()
+}
+
+func normalizeProtectedDatabaseName(ses *Session, dbName string) string {
+	dbName = strings.TrimSpace(dbName)
+	if dbName == "" && ses != nil {
+		dbName = ses.GetDatabaseName()
+	}
+	return dbName
+}
+
+func getProtectedDatabaseSet(ses *Session) map[string]struct{} {
+	if ses == nil {
+		return nil
+	}
+	value, err := ses.GetGlobalSysVar(ProtectedDatabases)
+	if err != nil {
+		return nil
+	}
+	raw, ok := value.(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	protected := make(map[string]struct{})
+	for _, part := range strings.Split(raw, ",") {
+		dbName := strings.TrimSpace(part)
+		if dbName != "" {
+			protected[dbName] = struct{}{}
+		}
+	}
+	return protected
+}
+
+func isProtectedDatabase(ses *Session, dbName string) bool {
+	dbName = normalizeProtectedDatabaseName(ses, dbName)
+	if dbName == "" {
+		return false
+	}
+	_, ok := getProtectedDatabaseSet(ses)[dbName]
+	return ok
+}
+
+func checkProtectedDatabaseWrite(ctx context.Context, ses *Session, dbNames ...string) bool {
+	if len(dbNames) == 0 {
+		return true
+	}
+	if ses == nil || !ses.GetFromRealUser() {
+		return true
+	}
+	if canWriteProtectedDatabase(ses) {
+		return true
+	}
+
+	pDbs := getProtectedDatabaseSet(ses)
+	if len(pDbs) == 0 {
+		return true
+	}
+
+	return checkProtectedDatabaseWriteWithSet(ctx, ses, pDbs, dbNames...)
+}
+
+func checkProtectedDatabaseWriteWithSet(ctx context.Context, ses *Session, protectedDatabases map[string]struct{}, dbNames ...string) bool {
+	if len(protectedDatabases) == 0 || len(dbNames) == 0 {
+		return true
+	}
+	for _, dbName := range dbNames {
+		dbName = normalizeProtectedDatabaseName(ses, dbName)
+		if dbName == "" {
+			continue
+		}
+		if _, ok := protectedDatabases[dbName]; ok {
+			return false
+		}
+	}
+	return true
+}
+
+func checkProtectedDatabaseWriteByPrivilege(ctx context.Context, ses *Session, priv *privilege) bool {
+	if ses == nil || !ses.GetFromRealUser() {
+		return true
+	}
+	if priv == nil || len(priv.writeDatabaseTargets) == 0 {
+		return true
+	}
+	if canWriteProtectedDatabase(ses) {
+		return true
+	}
+	protectedDatabases := getProtectedDatabaseSet(ses)
+	if len(protectedDatabases) == 0 {
+		return true
+	}
+	return checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, priv.writeDatabaseTargets...)
+}
+
+func privilegeTipWritesDatabase(tip privilegeTips) bool {
+	switch tip.typ {
+	case PrivilegeTypeSelect, PrivilegeTypeValues:
+		return false
+	default:
+		return true
+	}
+}
+
+func checkProtectedDatabaseWriteByPrivilegeTips(ctx context.Context, ses *Session, tips privilegeTipsArray) bool {
+	if ses == nil || !ses.GetFromRealUser() {
+		return true
+	}
+	if canWriteProtectedDatabase(ses) {
+		return true
+	}
+	protectedDatabases := getProtectedDatabaseSet(ses)
+	if len(protectedDatabases) == 0 {
+		return true
+	}
+	dbNames := make([]string, 0, len(tips))
+	for _, tip := range tips {
+		if privilegeTipWritesDatabase(tip) {
+			dbNames = append(dbNames, tip.databaseName)
+		}
+	}
+	return checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, dbNames...)
 }

@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -51,19 +52,30 @@ type AddItem[T types.RealNumbers] struct {
 func NewHnswBuild[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, uid string, nworker int32,
 	cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild[T], err error) {
 
-	// estimate the number of worker threads
-	nthread := 0
-	if nworker <= 1 {
-		// single database thread and set nthread to ThreadsBuild
-		nthread = int(vectorindex.GetConcurrency(tblcfg.ThreadsBuild))
-	} else {
-		// multiple database worker threads
-		threadsbuild := vectorindex.GetConcurrencyForBuild(tblcfg.ThreadsBuild)
-		nthread = int(float64(threadsbuild) / float64(nworker))
-	}
-	if nthread < 1 {
-		nthread = 1
-	}
+	/*
+		// estimate the number of worker threads
+		nthread := 0
+		if nworker <= 1 {
+			// single database thread and set nthread to ThreadsBuild
+			nthread = int(vectorindex.GetConcurrency(tblcfg.ThreadsBuild))
+		} else {
+			// multiple database worker threads
+			threadsbuild := vectorindex.GetConcurrencyForBuild(tblcfg.ThreadsBuild)
+			nthread = int(float64(threadsbuild) / float64(nworker))
+		}
+		if nthread < 1 {
+			nthread = 1
+		}
+	*/
+
+	// MatrixOne #24849 / USearch #735 (open): concurrent add() can orphan nodes —
+	// the vector is stored (contains() returns true) but the HNSW graph never links
+	// it, so search() can never reach it, producing flaky recall@1 (an exact match
+	// is intermittently missed). This is a real build race, not just HNSW
+	// approximation. Reproduced in pkg/vectorindex/hnsw/zz_orphan_test.go:
+	// multi-threaded build orphans ~1/30, single-threaded 0/30. Until the upstream
+	// race is fixed, force a single build thread for correctness.
+	nthread := 1
 
 	info = &HnswBuild[T]{
 		uid:     uid,
@@ -179,7 +191,7 @@ func (h *HnswBuild[T]) getIndexForAdd() (idx *HnswModel[T], save_idx *HnswModel[
 	save_idx = nil
 	nidx := int64(len(h.indexes))
 	if nidx == 0 {
-		idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
+		idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.cfg.IndexCapacity))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -194,7 +206,7 @@ func (h *HnswBuild[T]) getIndexForAdd() (idx *HnswModel[T], save_idx *HnswModel[
 			save_idx = idx
 
 			// create new index
-			idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
+			idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.cfg.IndexCapacity))
 			if err != nil {
 				return nil, nil, err
 			}
@@ -295,7 +307,7 @@ func (h *HnswBuild[T]) ToInsertSql(ts int64) ([]string, error) {
 		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, chksum, ts, fs))
 	}
 
-	metasql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s", h.tblcfg.DbName, h.tblcfg.MetadataTable, strings.Join(metas, ", "))
+	metasql := fmt.Sprintf("INSERT INTO %s VALUES %s", sqlquote.QualifiedIdent(h.tblcfg.DbName, h.tblcfg.MetadataTable), strings.Join(metas, ", "))
 
 	sqls = append(sqls, metasql)
 	return sqls, nil

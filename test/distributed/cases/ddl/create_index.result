@@ -109,17 +109,50 @@ show create table t11;
 Table    Create Table
 t11    CREATE TABLE `t11` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL,\n  UNIQUE KEY `a` (`a`) COMMENT 'a',\n  UNIQUE KEY `x` (`a`) COMMENT 'x',\n  KEY `xx` (`a`) COMMENT 'xx'\n)
 drop table t11;
-create table t12(a text);
+create table t12(a text, b int);
 create unique index x on t12(a);
 not supported: TEXT column 'a' cannot be in index
 create index x2 on t12(a);
 not supported: TEXT column 'a' cannot be in index
+create index x3 on t12(a(100));
+create unique index x4 on t12(a(100));
+show create table t12;
+Table    Create Table
+t12    CREATE TABLE `t12` (\n  `a` text DEFAULT NULL,\n  `b` int DEFAULT NULL,\n  KEY `x3` (`a`(100)),\n  UNIQUE KEY `x4` (`a`(100))\n)
+insert into t12 values ('alpha',1),('beta',2);
+select * from t12 where a = 'alpha';
+a    b
+alpha    1
+update t12 set b = 3 where a = 'alpha';
+select * from t12 where a = 'alpha';
+a    b
+alpha    3
+delete from t12 where b = 2;
+select count(*) from t12 where a = 'beta';
+count(*)
+0
 drop table t12;
-create table t13(a blob);
+create table t13(a blob, b int);
 create unique index x on t13(a);
 not supported: BLOB column 'a' cannot be in index
 create index x2 on t13(a);
 not supported: BLOB column 'a' cannot be in index
+create index x3 on t13(a(100));
+show create table t13;
+Table    Create Table
+t13    CREATE TABLE `t13` (\n  `a` blob DEFAULT NULL,\n  `b` int DEFAULT NULL,\n  KEY `x3` (`a`(100))\n)
+insert into t13 values ('alpha',1),('beta',2);
+select * from t13 where a = 'alpha';
+a    b
+alpha    1
+update t13 set b = 3 where a = 'alpha';
+select * from t13 where a = 'alpha';
+a    b
+alpha    3
+delete from t13 where b = 2;
+select count(*) from t13 where a = 'beta';
+count(*)
+0
 drop table t13;
 create table t14(a json);
 create unique index x on t14(a);

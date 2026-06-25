@@ -181,6 +181,27 @@ func Test_buildShowCreateTableSpatialIndex(t *testing.T) {
 	require.Equal(t, "CREATE TABLE `spatial_src` (\n  `id` int NOT NULL,\n  `g` point NOT NULL,\n  PRIMARY KEY (`id`),\n  SPATIAL KEY `idx_g` (`g`)\n)", got)
 }
 
+func TestShowCreateTablePreservesIndexPrefixLengths(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE prefix_show_src (
+		id INT PRIMARY KEY,
+		name VARCHAR(191),
+		t TEXT,
+		b BLOB,
+		KEY idx_t(t(100)),
+		UNIQUE KEY uq_b(b(20)),
+		KEY idx_mix(name, t(30))
+	)`)
+	require.NoError(t, err)
+
+	var snapshot *plan.Snapshot
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "KEY `idx_t` (`t`(100))")
+	require.Contains(t, got, "UNIQUE KEY `uq_b` (`b`(20))")
+	require.Contains(t, got, "KEY `idx_mix` (`name`,`t`(30))")
+}
+
 func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
 	const sql = `CREATE TABLE t_numeric_types (
 		id BIGINT NOT NULL AUTO_INCREMENT,
@@ -382,9 +403,10 @@ func TestShowCreateS3HiveExternalTableUsesS3Options(t *testing.T) {
 }
 
 func TestFormatColTypeGeometrySubtype(t *testing.T) {
+	// Subtype lives in Scale, SRID in Width (srid+1 when defined).
 	require.Equal(t, "POINT", FormatColType(plan.Type{
-		Id:         int32(types.T_geometry),
-		Enumvalues: "POINT",
+		Id:    int32(types.T_geometry),
+		Scale: int32(geometrySubtypeEnum("POINT")),
 	}))
 
 	require.Equal(t, "GEOMETRY", FormatColType(plan.Type{
@@ -392,13 +414,23 @@ func TestFormatColTypeGeometrySubtype(t *testing.T) {
 	}))
 
 	require.Equal(t, "POINT SRID 4326", FormatColType(plan.Type{
-		Id:         int32(types.T_geometry),
-		Enumvalues: "POINT;SRID=4326",
+		Id:    int32(types.T_geometry),
+		Scale: int32(geometrySubtypeEnum("POINT")),
+		Width: encodeGeometrySRIDWidth(4326, true),
 	}))
 
 	require.Equal(t, "GEOMETRY SRID 0", FormatColType(plan.Type{
-		Id:         int32(types.T_geometry),
-		Enumvalues: "SRID=0",
+		Id:    int32(types.T_geometry),
+		Width: encodeGeometrySRIDWidth(0, true),
+	}))
+
+	// GEOMETRY32 family renders with the "32" suffix.
+	require.Equal(t, "GEOMETRY32", FormatColType(plan.Type{
+		Id: int32(types.T_geometry32),
+	}))
+	require.Equal(t, "POINT32", FormatColType(plan.Type{
+		Id:    int32(types.T_geometry32),
+		Scale: int32(geometrySubtypeEnum("POINT")),
 	}))
 }
 
@@ -407,4 +439,108 @@ func TestFormatColTypeArrayMetadata(t *testing.T) {
 		Id:         int32(types.T_json),
 		Enumvalues: "array(varchar(20))",
 	}))
+}
+
+// TestShowCreateExternalWriteFilePattern ensures SHOW CREATE TABLE formatting
+// keeps WRITE_FILE_PATTERN for writable external tables, in both the INFILE
+// and the URL s3option forms; without it the recreated table silently degrades
+// to read-only.
+func TestShowCreateExternalWriteFilePattern(t *testing.T) {
+	pattern := "stage://s/part-%U.csv"
+
+	// INFILE{...} form (ScanType != S3). Writable tables must be recreatable
+	// from the emitted DDL: the read FILEPATH is preserved (not masked) and
+	// empty optional keys are omitted (the read-side validator rejects
+	// 'JSONDATA'='').
+	p := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format:   tree.CSV,
+		Filepath: "stage://s/part-*.csv",
+		Option:   []string{"format", "csv", "write_file_pattern", pattern},
+	}}
+	out := formatInfileExternalOptionsForShowCreate(p)
+	require.Contains(t, out, "'WRITE_FILE_PATTERN'='"+pattern+"'")
+	require.Contains(t, out, "'FILEPATH'='stage://s/part-*.csv'")
+	require.NotContains(t, out, "JSONDATA")
+	require.NotContains(t, out, "''")
+
+	// Read-only table: legacy output unchanged — no WRITE_FILE_PATTERN key,
+	// FILEPATH masked, empty keys present.
+	ro := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format:   tree.CSV,
+		Filepath: "/local/path.csv",
+		Option:   []string{"format", "csv"},
+	}}
+	roOut := formatInfileExternalOptionsForShowCreate(ro)
+	require.NotContains(t, roOut, "WRITE_FILE_PATTERN")
+	require.Contains(t, roOut, "'FILEPATH'=''")
+	require.NotContains(t, roOut, "/local/path.csv")
+	require.Contains(t, roOut, "'JSONDATA'=''")
+
+	// URL s3option{...} form.
+	s3 := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Format:   tree.CSV,
+			Option:   []string{"format", "csv", "write_file_pattern", pattern},
+		},
+		ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "b"}},
+	}
+	out = formatS3ExternalOptionsForShowCreate(s3)
+	require.Contains(t, out, "'write_file_pattern'='"+pattern+"'")
+}
+
+// TestShowCreateExternalCommentRoundTrip: the CSV reader skips lines whose raw
+// prefix matches the COMMENT marker, so SHOW CREATE must round-trip it for
+// read-only external tables (writable tables reject a non-empty marker, so they
+// never carry one). Omitted entirely when unset.
+func TestShowCreateExternalCommentRoundTrip(t *testing.T) {
+	// INFILE read-only table with a comment marker
+	ro := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format:   tree.CSV,
+		Filepath: "/local/path.csv",
+		Option:   []string{"format", "csv", "comment", "#"},
+	}}
+	out := formatInfileExternalOptionsForShowCreate(ro)
+	require.Contains(t, out, "'COMMENT'='#'")
+
+	// no comment option => no COMMENT key
+	noComment := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format:   tree.CSV,
+		Filepath: "/local/path.csv",
+		Option:   []string{"format", "csv"},
+	}}
+	require.NotContains(t, formatInfileExternalOptionsForShowCreate(noComment), "COMMENT")
+
+	// S3 read-only table with a comment marker
+	s3 := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Format:   tree.CSV,
+			Option:   []string{"format", "csv", "comment", "REM"},
+		},
+		ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "b"}},
+	}
+	require.Contains(t, formatS3ExternalOptionsForShowCreate(s3), "'comment'='REM'")
+}
+
+// TestFormatStrInSingleQuotes: FIELDS/LINES values emitted by SHOW CREATE must
+// be valid inside single-quoted SQL literals (a custom LINES TERMINATED BY
+// used to render as the Go struct '&{#EOL#}', and a single-quote enclosure as
+// an unescaped single quote).
+func TestFormatStrInSingleQuotes(t *testing.T) {
+	require.Equal(t, "#EOL#", formatStrInSingleQuotes("#EOL#"))
+	require.Equal(t, `a''b`, formatStrInSingleQuotes("a'b"))
+	require.Equal(t, `a\\b`, formatStrInSingleQuotes(`a\b`))
+	require.Equal(t, `\\''`, formatStrInSingleQuotes(`\'`))
+}
+
+// TestFormatLinesTerminatedBy: SHOW CREATE must keep \n and \r\n distinct so a
+// CRLF writable external table recreates as CRLF (not silently downgraded to
+// LF). Both render as doubled-backslash escape sequences; other values flow
+// through formatStrInSingleQuotes.
+func TestFormatLinesTerminatedBy(t *testing.T) {
+	require.Equal(t, `\\n`, formatLinesTerminatedBy("\n"))
+	require.Equal(t, `\\r\\n`, formatLinesTerminatedBy("\r\n"))
+	require.NotEqual(t, formatLinesTerminatedBy("\n"), formatLinesTerminatedBy("\r\n"))
+	require.Equal(t, "#EOL#", formatLinesTerminatedBy("#EOL#"))
 }

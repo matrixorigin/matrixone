@@ -61,6 +61,32 @@ func TestLockBlockedOnRemote(t *testing.T) {
 	)
 }
 
+func TestGetLocalLockTableUsesGetLockHolderLookupInputs(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			originTableID := uint64(10)
+			row := []byte("row1")
+			tableID := ShardingByRow(row)
+			bind := alloc.Get(l.serviceID, 0, tableID, originTableID, pb.Sharding_ByRow)
+			req := &pb.Request{
+				Method:    pb.Method_GetLockHolder,
+				LockTable: bind,
+			}
+			req.GetLockHolder.Row = row
+			req.GetLockHolder.Sharding = pb.Sharding_ByRow
+			resp := &pb.Response{}
+
+			lt, err := l.getLocalLockTable(req, resp)
+			require.NoError(t, err)
+			require.NotNil(t, lt)
+			require.Equal(t, bind, lt.getBind())
+		},
+	)
+}
+
 func TestRemoteLockResponseLogFieldsDoNotRetainRequest(t *testing.T) {
 	req := &pb.Request{
 		LockTable: pb.LockTable{

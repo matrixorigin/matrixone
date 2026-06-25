@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -73,7 +74,7 @@ func (b *CagraBuild[T]) createKey(n int) string {
 // getOrCreateCurrent returns the current sub-index, creating a new one if needed.
 // When the current sub-index is full it is finalized (Build called) and a new one is started.
 func (b *CagraBuild[T]) getOrCreateCurrent() (*CagraModel[T], error) {
-	capacity := b.tblcfg.IndexCapacity
+	capacity := b.idxcfg.IndexCapacity
 
 	if b.current != nil && b.count >= capacity {
 		// Current index is full: build it and retire it.
@@ -173,8 +174,8 @@ func (b *CagraBuild[T]) ToInsertSql(ts int64) ([]string, error) {
 		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, idx.Checksum, ts, idx.FileSize))
 	}
 
-	metasql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s",
-		b.tblcfg.DbName, b.tblcfg.MetadataTable, strings.Join(metas, ", "))
+	metasql := fmt.Sprintf("INSERT INTO %s VALUES %s",
+		sqlquote.QualifiedIdent(b.tblcfg.DbName, b.tblcfg.MetadataTable), strings.Join(metas, ", "))
 	sqls = append(sqls, metasql)
 	return sqls, nil
 }
