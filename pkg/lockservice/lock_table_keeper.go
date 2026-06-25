@@ -205,7 +205,8 @@ func canRefreshRemoteBindOnKeepError(err error) bool {
 }
 
 func (k *lockTableKeeper) maybeHandleRemoteBindChanged(bind pb.LockTable) {
-	newBind, _, err := getLockTableBind(
+	requestAllocator := k.service.allocatorStateSnapshot()
+	newBind, allocator, err := getLockTableBind(
 		k.client,
 		bind.Group,
 		bind.Table,
@@ -218,7 +219,16 @@ func (k *lockTableKeeper) maybeHandleRemoteBindChanged(bind pb.LockTable) {
 		return
 	}
 	if newBind.Changed(bind) {
-		k.service.handleBindChanged(newBind)
+		if err := k.service.handleBindChangedFromAllocator(
+			"keep-remote-refresh",
+			bind,
+			newBind,
+			allocator,
+			requestAllocator); err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+				logGetRemoteBindFailed(k.service.logger, bind.Table, err)
+			}
+		}
 	}
 }
 

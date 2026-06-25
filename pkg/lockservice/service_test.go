@@ -3727,6 +3727,51 @@ func TestAllocatorPublishRejectsStaleBindAfterNewAllocatorObserved(t *testing.T)
 	)
 }
 
+func TestAllocatorPublishRejectsOverwriteAfterConcurrentBindChanged(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l1 := s[0]
+
+			allocator := allocatorState{id: "allocator-publish-current", version: 100}
+			table := uint64(21515)
+			delayedBind := pb.LockTable{
+				Group:       0,
+				Table:       table,
+				OriginTable: table,
+				ServiceID:   l1.serviceID,
+				Version:     allocator.version,
+				Valid:       true,
+				AllocatorID: allocator.id,
+			}
+			freshBind := delayedBind
+			freshBind.ServiceID = "fresh-service"
+			freshBind.Version++
+
+			l1.allocatorVersionMu.Lock()
+			l1.lastAllocatorID = allocator.id
+			l1.lastAllocatorVersion = allocator.version
+			l1.allocatorVersionMu.Unlock()
+			requestAllocator := l1.allocatorStateSnapshot()
+			l1.handleBindChanged(freshBind)
+
+			lt, err := l1.publishLockTableBindFromAllocator(
+				"allocator-publish-current-race",
+				delayedBind.Group,
+				delayedBind.Table,
+				delayedBind,
+				allocator,
+				requestAllocator)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			require.Nil(t, lt)
+			require.Equal(t, freshBind, l1.tableGroups.get(0, table).getBind())
+			require.Equal(t, allocator.id, l1.lastAllocatorID)
+			require.Equal(t, allocator.version, l1.lastAllocatorVersion)
+		},
+	)
+}
+
 func TestAllocatorObserverBoundsSupersededAllocatorIDs(t *testing.T) {
 	runLockServiceTests(
 		t,

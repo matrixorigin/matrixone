@@ -41,12 +41,14 @@ var (
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
 // And the remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
-	logger             *log.MOLogger
-	removeLockTimeout  time.Duration
-	serviceID          string
-	bind               pb.LockTable
-	client             Client
-	bindChangedHandler func(pb.LockTable)
+	logger                      *log.MOLogger
+	removeLockTimeout           time.Duration
+	serviceID                   string
+	bind                        pb.LockTable
+	client                      Client
+	bindChangedHandler          func(pb.LockTable)
+	allocatorStateProvider      func() allocatorState
+	allocatorBindChangedHandler func(string, pb.LockTable, pb.LockTable, allocatorState, allocatorState) error
 }
 
 func newRemoteLockTable(
@@ -416,7 +418,11 @@ func (l *remoteLockTable) handleError(
 	// Note. Since the cn where the remote lock table is located may
 	// be permanently gone, we need to go to the allocator to check if
 	// the bind is valid.
-	new, _, err := getLockTableBind(
+	requestAllocator := allocatorState{}
+	if l.allocatorStateProvider != nil {
+		requestAllocator = l.allocatorStateProvider()
+	}
+	new, allocator, err := getLockTableBind(
 		l.client,
 		l.bind.Group,
 		l.bind.Table,
@@ -429,6 +435,14 @@ func (l *remoteLockTable) handleError(
 		return oldError
 	}
 	if new.Changed(l.bind) {
+		if l.allocatorBindChangedHandler != nil {
+			return l.allocatorBindChangedHandler(
+				"remote-bind-refresh",
+				l.bind,
+				new,
+				allocator,
+				requestAllocator)
+		}
 		l.bindChangedHandler(new)
 		return nil
 	}
