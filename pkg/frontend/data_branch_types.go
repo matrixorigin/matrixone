@@ -195,6 +195,10 @@ type tableStuff struct {
 		pkSeqnum     int   // physical column seqnum for PK (for ZoneMap lookup)
 		pkColIdxes   []int // expanded pk columns
 		pkKind       int
+
+		commonIdxes     []int // indices of common columns (target ordering)
+		tarOnlyIdxes    []int // indices of target-only columns (target ordering)
+		baseColToTarIdx []int // for base batch Vec[i+1], the target column index, or -1
 	}
 
 	worker               *ants.Pool

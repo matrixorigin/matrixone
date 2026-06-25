@@ -995,6 +995,12 @@ func appendBatchRowsAsSQLValues(
 	appender sqlValuesAppender,
 ) (err error) {
 
+	// For INSERT, skip target-only columns that don't exist in the base table.
+	insertIdxes := tblStuff.def.visibleIdxes
+	if len(tblStuff.def.tarOnlyIdxes) > 0 {
+		insertIdxes = tblStuff.def.commonIdxes
+	}
+
 	//seenCols := make(map[int]struct{}, len(tblStuff.def.visibleIdxes))
 	row := make([]any, len(tblStuff.def.colNames))
 
@@ -1070,7 +1076,7 @@ func appendBatchRowsAsSQLValues(
 				}
 			}
 		} else {
-			if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
+			if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer, insertIdxes); err != nil {
 				return
 			}
 		}
@@ -1393,8 +1399,12 @@ func newPKBatchInfo(ctx context.Context, ses *Session, tblStuff tableStuff) *pkB
 		pkNames[i] = tblStuff.def.colNames[idx]
 	}
 
-	visibleNames := make([]string, len(tblStuff.def.visibleIdxes))
-	for i, idx := range tblStuff.def.visibleIdxes {
+	idxes := tblStuff.def.visibleIdxes
+	if len(tblStuff.def.tarOnlyIdxes) > 0 {
+		idxes = tblStuff.def.commonIdxes
+	}
+	visibleNames := make([]string, len(idxes))
+	for i, idx := range idxes {
 		visibleNames[i] = tblStuff.def.colNames[idx]
 	}
 
@@ -1436,13 +1446,14 @@ func writeInsertRowValues(
 	tblStuff tableStuff,
 	row []any,
 	buf *bytes.Buffer,
+	idxes []int,
 ) error {
 	buf.WriteString("(")
-	for i, idx := range tblStuff.def.visibleIdxes {
+	for i, idx := range idxes {
 		if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf); err != nil {
 			return err
 		}
-		if i != len(tblStuff.def.visibleIdxes)-1 {
+		if i != len(idxes)-1 {
 			buf.WriteString(",")
 		}
 	}

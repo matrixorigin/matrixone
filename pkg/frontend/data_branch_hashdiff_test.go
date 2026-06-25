@@ -1178,3 +1178,159 @@ func TestValidateLeadingRowID(t *testing.T) {
 		require.NoError(t, validateLeadingRowID("base", "t", false, bat))
 	})
 }
+
+func TestProjectBaseBatchToTarget(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+
+	// Simulate target having 3 columns [id, name, extra], base has 2 [id, name]
+	tblStuff.def.colNames = []string{"a", "b", "c"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_int64.ToType(),
+	}
+	// base has [a, b] only. baseColToTarIdx says:
+	// base col 0 (a) -> target idx 0
+	// base col 1 (b) -> target idx 1
+	// c is target-only
+	tblStuff.def.baseColToTarIdx = []int{0, 1}
+	tblStuff.def.tarOnlyIdxes = []int{2}
+
+	mp := ses.proc.Mp()
+
+	// Build a base-side data batch with 1 RowID + 2 columns [a, b]
+	baseBat := batch.NewWithSize(3)
+	baseBat.SetAttributes([]string{catalog.Row_ID, "a", "b"})
+	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	baseBat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+
+	uid, err := types.BuildUuid()
+	require.NoError(t, err)
+	blkID := objectio.NewBlockid(&uid, 0, 1)
+	require.NoError(t, vector.AppendFixed(baseBat.Vecs[0], types.NewRowid(blkID, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(baseBat.Vecs[1], int64(42), false, mp))
+	require.NoError(t, vector.AppendBytes(baseBat.Vecs[2], []byte("hello"), false, mp))
+	baseBat.SetRowCount(1)
+
+	projected := projectBaseBatchToTarget(baseBat, &tblStuff, mp)
+
+	// Should have 4 vectors: RowID + [a, b, c]
+	require.Equal(t, 4, projected.VectorCount())
+	require.Equal(t, 1, projected.RowCount())
+
+	// RowID should be preserved
+	require.Equal(t, types.T_Rowid, projected.Vecs[0].GetType().Oid)
+
+	// Col a (index 1): should be int64(42)
+	require.Equal(t, types.T_int64, projected.Vecs[1].GetType().Oid)
+	require.Equal(t, int64(42), vector.MustFixedColWithTypeCheck[int64](projected.Vecs[1])[0])
+
+	// Col b (index 2): should be "hello"
+	require.Equal(t, types.T_varchar, projected.Vecs[2].GetType().Oid)
+	require.Equal(t, "hello", string(projected.Vecs[2].GetBytesAt(0)))
+
+	// Col c (index 3): should be constant NULL (target-only)
+	require.Equal(t, types.T_int64, projected.Vecs[3].GetType().Oid)
+	require.True(t, projected.Vecs[3].IsConst())
+	require.True(t, projected.Vecs[3].IsConstNull(), "target-only column should be const NULL")
+
+	projected.Clean(mp)
+	baseBat.Clean(mp)
+}
+
+func TestCompareRowInWrappedBatches_WithCommonIdxes(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+
+	// Set up: target has [id(0), name(1), extra(2)]
+	// commonIdxes = [0, 1] (only id and name are common, extra is target-only)
+	tblStuff.def.colNames = []string{"id", "name", "extra"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_int64.ToType(),
+	}
+	tblStuff.def.pkKind = normalKind
+	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.def.commonIdxes = []int{0, 1} // only compare id and name
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
+
+	mp := ses.proc.Mp()
+
+	// Batch1: [id=1, name="same", extra=999]
+	bat1 := batch.NewWithSize(3)
+	bat1.SetAttributes([]string{"id", "name", "extra"})
+	bat1.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat1.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat1.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat1.Vecs[0], int64(1), false, mp))
+	require.NoError(t, vector.AppendBytes(bat1.Vecs[1], []byte("same"), false, mp))
+	require.NoError(t, vector.AppendFixed(bat1.Vecs[2], int64(999), false, mp))
+	bat1.SetRowCount(1)
+
+	// Batch2: [id=1, name="same", extra=0] (extra differs but is target-only)
+	bat2 := batch.NewWithSize(3)
+	bat2.SetAttributes([]string{"id", "name", "extra"})
+	bat2.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat2.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat2.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat2.Vecs[0], int64(1), false, mp))
+	require.NoError(t, vector.AppendBytes(bat2.Vecs[1], []byte("same"), false, mp))
+	require.NoError(t, vector.AppendFixed(bat2.Vecs[2], int64(0), false, mp))
+	bat2.SetRowCount(1)
+
+	wrapped1 := batchWithKind{kind: diffInsert, batch: bat1}
+	wrapped2 := batchWithKind{kind: diffInsert, batch: bat2}
+
+	// Rows should be considered equal because extra (index 2) is NOT in commonIdxes
+	cmp, err := compareRowInWrappedBatches(
+		context.Background(),
+		ses,
+		tblStuff,
+		0, 0,
+		true, // skipPKCols
+		wrapped1,
+		wrapped2,
+	)
+	require.NoError(t, err)
+	require.Zero(t, cmp, "rows should be considered equal when only non-common columns differ")
+
+	// Now test with a difference in a common column (name)
+	bat3 := batch.NewWithSize(3)
+	bat3.SetAttributes([]string{"id", "name", "extra"})
+	bat3.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat3.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat3.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat3.Vecs[0], int64(1), false, mp))
+	require.NoError(t, vector.AppendBytes(bat3.Vecs[1], []byte("different"), false, mp))
+	require.NoError(t, vector.AppendFixed(bat3.Vecs[2], int64(999), false, mp))
+	bat3.SetRowCount(1)
+
+	wrapped3 := batchWithKind{kind: diffInsert, batch: bat3}
+
+	// Rows should differ because name differs and name IS in commonIdxes
+	cmp, err = compareRowInWrappedBatches(
+		context.Background(),
+		ses,
+		tblStuff,
+		0, 0,
+		false, // do NOT skip PK
+		wrapped1,
+		wrapped3,
+	)
+	require.NoError(t, err)
+	require.NotZero(t, cmp, "rows should differ when a common column differs")
+
+	bat1.Clean(mp)
+	bat2.Clean(mp)
+	bat3.Clean(mp)
+}
