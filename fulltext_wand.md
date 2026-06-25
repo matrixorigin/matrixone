@@ -281,9 +281,17 @@ and its ordering semantics (LSN-as-identity), without re-tokenizing.
   multi-segment search adapter.
 - **B3**: idxcron `Merge` compaction + `max_index_capacity` rollover.
 
-### Implementation status (branch `fulltext_wand`, as of commit `eb94f4ae8`, 2026-06-19)
+### Implementation status (branch `fulltext_wand`, HEAD `7c20d9286`, updated 2026-06-25)
 
-**✅ Done + unit-tested (committed)** — every piece verifiable without a running server:
+**Branch state:** the Phase-B foundation (commit `eb94f4ae8`) is committed, then
+**`cuvs_quantize` was merged into `fulltext_wand`** (merge commit `7c20d9286`).
+The merge's only conflict was the goyacc-**generated** `mysql_sql.go` (the
+`RETRIEVAL` grammar vs. the quantize-side grammar); resolved by regenerating from
+the cleanly-merged `mysql_sql.y` (0 goyacc conflicts, `RETRIEVAL` preserved), not
+by hand-merging the generated output. Post-merge `go test ./pkg/fulltext/wand/`
+is **green**, so the foundation below survived the merge unchanged.
+
+**✅ Done + unit-tested (committed in `eb94f4ae8`)** — every piece verifiable without a running server:
 - **Parser-aware async.** `SyncDescriptor.AlwaysAsync` bool → `Hooks.AlwaysAsync(indexAlgoParams string) bool` (`pkg/indexplugin/catalog/hooks.go`); HNSW/CAGRA/IVF-PQ=true, IVF-FLAT=false, **fulltext=`parser=="retrieval"`** via new `catalog.GetIndexParser` + `IndexAlgoParamParser`. Unified `indexplugin.IndexIsAsync(algo, params)` routed through CDC-registration (`iscp_util.go`), ALTER-clone (`alter.go`), and the three fulltext DML early-returns (`build_dml_util.go`). No `async`-param injection. Tests: `TestFullTextAlwaysAsync` + the vector runtime tests.
 - **LSN-as-identity liveness** (`pkg/fulltext/wand`). `WandModel.LSN`; `ComputeLiveness(segs, deletes) []Membership` (per-segment allow precomputed once at load: owner = max-LSN segment holding pk, dead iff `deletes[pk] > segLSN`); `SearchSegmentsLive(...)` ANDs liveness with the WHERE-prefilter; `SearchSegments` = the `nil` fast path. Fixes a latent bug: the old multi-segment path emitted a pk twice if it lived in two segments. Tests: `TestWandLiveness` (dedup_update / delete_then_reinsert / delete_after_insert / pure_delete / mixed). NB: assert the live **pk set**, not exact scores — global `N`/`df`/`avgdl` still include superseded+deleted docs until compaction (accepted drift).
 - **tag=1 delete-log codec** (`deletes.go`): `DeleteRecord{Pk, LSN}`, `EncodeDeleteLog`/`DecodeDeleteLog` (self-contained binary+crc32, **no** GPU-coupled cuVS import), `DeleteMap` (max-LSN fold → feeds `ComputeLiveness`). Tests: `TestWandDeleteLogRoundTrip` (int64/varchar/corruption/empty).
