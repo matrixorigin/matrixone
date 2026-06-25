@@ -1099,7 +1099,11 @@ func (tc *txnOperator) Debug(ctx context.Context, requests []txn.TxnRequest) (*r
 	return tc.trimResponses(tc.handleError(ctx, result, err))
 }
 
-func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, commit bool) (*rpc.SendResult, error) {
+func (tc *txnOperator) doWrite(
+	ctx context.Context,
+	requests []txn.TxnRequest,
+	commit bool,
+) (resp *rpc.SendResult, err error) {
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_Write
 	}
@@ -1108,16 +1112,40 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 		tc.logger.Fatal("can not write on ready only transaction")
 	}
 	var payload []txn.TxnRequest
+	workspacePrepared := false
 	if commit {
 		if tc.reset.workspace != nil {
-			reqs, err := tc.reset.workspace.Commit(ctx)
+			var reqs []txn.TxnRequest
+			reqs, err = tc.reset.workspace.Commit(ctx)
 			if err != nil {
 				return nil, errors.Join(err, tc.Rollback(ctx))
 			}
 			payload = reqs
+			workspacePrepared = true
+			defer func() {
+				if !workspacePrepared {
+					return
+				}
+				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+						tc.reset.workspace.FinalizeCommitWithUnknownResult(ctx)
+						return
+					}
+					if e := tc.reset.workspace.Rollback(ctx); e != nil {
+						tc.logger.Error("rollback prepared workspace failed",
+							util.TxnIDField(tc.getTxnMeta(false)), zap.Error(e))
+						err = errors.Join(err, e)
+					}
+					return
+				}
+				tc.reset.workspace.FinalizeCommit(ctx)
+			}()
 		}
 		tc.mu.Lock()
 		defer func() {
+			if err != nil && tc.reset.commitErr == nil {
+				tc.reset.commitErr = err
+			}
 			tc.closeLocked(ctx)
 			tc.mu.Unlock()
 		}()
@@ -1173,8 +1201,9 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 		return nil, tc.reset.commitErr
 	}
 
-	result, err := tc.doSend(ctx, requests, commit)
-	resp, err := tc.trimResponses(tc.handleError(ctx, result, err))
+	var result *rpc.SendResult
+	result, err = tc.doSend(ctx, requests, commit)
+	resp, err = tc.trimResponses(tc.handleError(ctx, result, err))
 	if err != nil && commit {
 		tc.reset.commitErr = err
 	}
