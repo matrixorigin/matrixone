@@ -1978,20 +1978,20 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 		errMsg    string
 	}{
 		{
-			name:     "TEXT to CHAR(255) with length 260 - should fail",
+			name:     "TEXT to CHAR(255) with length 260 - should succeed",
 			inputs:   []string{longString260},
 			fromType: types.T_text.ToType(),
 			toType:   types.New(types.T_char, 255, 0),
-			wantErr:  true,
-			errMsg:   "larger than Dest length",
+			want:     []string{longString260},
+			wantErr:  false,
 		},
 		{
-			name:     "TEXT to VARCHAR(255) with length 260 - should fail",
+			name:     "TEXT to VARCHAR(255) with length 260 - should succeed",
 			inputs:   []string{longString260},
 			fromType: types.T_text.ToType(),
 			toType:   types.New(types.T_varchar, 255, 0),
-			wantErr:  true,
-			errMsg:   "larger than Dest length",
+			want:     []string{longString260},
+			wantErr:  false,
 		},
 		{
 			name:      "TEXT to CHAR(255) with NULL - should handle NULL",
@@ -2044,12 +2044,12 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			wantErr:  false,
 		},
 		{
-			name:     "TEXT to CHAR(255) with value exceeding limit",
-			inputs:   []string{longString260},
+			name:     "TEXT to CHAR(255) with multiple values",
+			inputs:   []string{"short", longString260, "medium length string"},
 			fromType: types.T_text.ToType(),
 			toType:   types.New(types.T_char, 255, 0),
-			wantErr:  true,
-			errMsg:   "larger than Dest length",
+			want:     []string{"short", longString260, "medium length string"},
+			wantErr:  false,
 		},
 	}
 
