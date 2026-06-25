@@ -46,19 +46,30 @@ func QualifiedIdent(parts ...string) string {
 }
 
 // EscapeString escapes s for embedding inside a single-quoted SQL string
-// literal, doubling any embedded single quote (the SQL-standard escape MO
-// accepts). The caller supplies the surrounding quotes, e.g.
+// literal. It escapes BOTH backslash and single quote, because MatrixOne's MySQL
+// scanner treats backslash as an escape introducer inside single-quoted literals
+// (handleEscape in pkg/sql/parsers/dialect/mysql/scanner.go interprets \n, \t,
+// \0, \\, \', ... and a trailing backslash even swallows the closing quote). So
+// doubling single quotes alone is NOT enough: a literal backslash would corrupt
+// the value (e.g. 'C:\Program' reads back as 'C:Program') or break the literal.
+// Each backslash is doubled and each single quote is doubled. The caller supplies
+// the surrounding quotes, e.g.
 //
 //	fmt.Sprintf("... '%s' ...", sqlquote.EscapeString(jsonParams))
 //
-// This is the escape needed for JSON params / config blobs that may contain
-// single quotes inside string values.
+// This is the escape needed for JSON params / config blobs and any value that
+// may contain single quotes or backslashes inside string values.
 func EscapeString(s string) string {
-	return strings.ReplaceAll(s, "'", "''")
+	// Backslash first so it does not re-escape anything introduced below; then
+	// double single quotes. Both target disjoint bytes, but backslash-first is
+	// the conventional, future-proof order.
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "'", "''")
+	return s
 }
 
 // String wraps s in single quotes after escaping, i.e. a ready-to-interpolate
-// SQL string literal: String("a'b") == "'a”b'".
+// SQL string literal: String("a'b") == "'a”b'", String(`a\b`) == `'a\\b'`.
 func String(s string) string {
 	return "'" + EscapeString(s) + "'"
 }
