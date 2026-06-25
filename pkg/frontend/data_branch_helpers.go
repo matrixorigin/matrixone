@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -794,14 +795,34 @@ func normalizeFixedCompareValue[T types.FixedSizeT](typ types.Type, val any) (an
 	)
 }
 
-func compareSingleValueByType(typ types.T, left any, right any) (cmp int, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = moerr.NewInternalErrorNoCtxf(
-				"compareSingleValInVector : unsupported or mismatched type %d (%T <-> %T)",
-				typ, left, right,
-			)
-		}
-	}()
+func compareSingleValueByType(typ types.T, left any, right any) (int, error) {
+	if left == nil || right == nil {
+		return types.CompareValue(left, right), nil
+	}
+	if reflect.TypeOf(left) != reflect.TypeOf(right) {
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"compareSingleValInVector : unsupported or mismatched type %d (%T <-> %T)",
+			typ, left, right,
+		)
+	}
+
+	switch left.(type) {
+	case bool,
+		uint64,
+		int8, int16, int32, int64,
+		uint8, uint16, uint32,
+		float32, float64,
+		types.Decimal64, types.Decimal128,
+		types.Date, types.Time, types.Timestamp, types.Datetime, types.MoYear,
+		types.Uuid, types.TS, types.Blockid, types.Rowid,
+		[]byte, bytejson.ByteJson,
+		[]float32, []float64,
+		types.Enum, string:
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"compareSingleValInVector : unsupported or mismatched type %d (%T <-> %T)",
+			typ, left, right,
+		)
+	}
 	return types.CompareValue(left, right), nil
 }

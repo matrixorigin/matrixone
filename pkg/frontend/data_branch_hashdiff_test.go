@@ -87,6 +87,228 @@ func TestCompareRowInWrappedBatches(t *testing.T) {
 	require.NotZero(t, cmp)
 }
 
+func TestCompareTupleWithBatchRow(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	bat := buildVisibleComparisonBatch(t, ses.proc.Mp(), [][]any{{int64(1), "alice"}})
+	defer bat.Clean(ses.proc.Mp())
+
+	cmp, err := compareTupleWithBatchRow(
+		tblStuff,
+		types.Tuple{int64(2), []byte("alice"), []byte("h1")},
+		bat,
+		0,
+		true,
+	)
+	require.NoError(t, err)
+	require.Zero(t, cmp)
+
+	cmp, err = compareTupleWithBatchRow(
+		tblStuff,
+		types.Tuple{int64(2), []byte("alice"), []byte("h1")},
+		bat,
+		0,
+		false,
+	)
+	require.NoError(t, err)
+	require.NotZero(t, cmp)
+
+	cmp, err = compareTupleWithBatchRow(
+		tblStuff,
+		types.Tuple{int64(1), []byte("bob"), []byte("h1")},
+		bat,
+		0,
+		true,
+	)
+	require.NoError(t, err)
+	require.NotZero(t, cmp)
+
+	tblStuff.def.visibleIdxes = []int{2}
+	_, err = compareTupleWithBatchRow(
+		tblStuff,
+		types.Tuple{int64(1), []byte("alice"), []byte("h1")},
+		bat,
+		0,
+		false,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "out of range")
+}
+
+func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+
+	t.Run("varchar accepts string and bytes", func(t *testing.T) {
+		vec := vector.NewVec(types.T_varchar.ToType())
+		defer vec.Free(mp)
+		require.NoError(t, vector.AppendBytes(vec, []byte("alice"), false, mp))
+
+		cmp, err := compareTupleValueWithVector("alice", vec, 0)
+		require.NoError(t, err)
+		require.Zero(t, cmp)
+
+		cmp, err = compareTupleValueWithVector([]byte("alice"), vec, 0)
+		require.NoError(t, err)
+		require.Zero(t, cmp)
+
+		cmp, err = compareTupleValueWithVector("bob", vec, 0)
+		require.NoError(t, err)
+		require.NotZero(t, cmp)
+	})
+
+	t.Run("json accepts raw bytes", func(t *testing.T) {
+		vec := vector.NewVec(types.T_json.ToType())
+		defer vec.Free(mp)
+		jsonVal, err := types.ParseStringToByteJson(`{"k":1}`)
+		require.NoError(t, err)
+		raw, err := jsonVal.Marshal()
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendBytes(vec, raw, false, mp))
+
+		cmp, err := compareTupleValueWithVector(raw, vec, 0)
+		require.NoError(t, err)
+		require.Zero(t, cmp)
+	})
+
+	t.Run("array accepts raw bytes", func(t *testing.T) {
+		vec := vector.NewVec(types.T_array_float32.ToType())
+		defer vec.Free(mp)
+		val := []float32{1, 2}
+		require.NoError(t, vector.AppendArray(vec, val, false, mp))
+
+		cmp, err := compareTupleValueWithVector(types.ArrayToBytes(val), vec, 0)
+		require.NoError(t, err)
+		require.Zero(t, cmp)
+	})
+
+	t.Run("array float64 accepts raw bytes", func(t *testing.T) {
+		vec := vector.NewVec(types.T_array_float64.ToType())
+		defer vec.Free(mp)
+		val := []float64{1, 2}
+		require.NoError(t, vector.AppendArray(vec, val, false, mp))
+
+		cmp, err := compareTupleValueWithVector(types.ArrayToBytes(val), vec, 0)
+		require.NoError(t, err)
+		require.Zero(t, cmp)
+	})
+
+	t.Run("rowid accepts raw bytes", func(t *testing.T) {
+		vec := vector.NewVec(types.T_Rowid.ToType())
+		defer vec.Free(mp)
+		rowID := buildHashDiffRowID(t, 7)
+		require.NoError(t, vector.AppendFixed(vec, rowID, false, mp))
+
+		cmp, err := compareTupleValueWithVector(types.EncodeFixed(rowID), vec, 0)
+		require.NoError(t, err)
+		require.Zero(t, cmp)
+	})
+
+	t.Run("enum accepts uint16", func(t *testing.T) {
+		vec := vector.NewVec(types.T_enum.ToType())
+		defer vec.Free(mp)
+		require.NoError(t, vector.AppendFixed(vec, types.Enum(3), false, mp))
+
+		cmp, err := compareTupleValueWithVector(uint16(3), vec, 0)
+		require.NoError(t, err)
+		require.Zero(t, cmp)
+	})
+
+	t.Run("null handling", func(t *testing.T) {
+		vec := vector.NewVec(types.T_int64.ToType())
+		defer vec.Free(mp)
+		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))
+
+		cmp, err := compareTupleValueWithVector(nil, vec, 0)
+		require.NoError(t, err)
+		require.Zero(t, cmp)
+
+		cmp, err = compareTupleValueWithVector(int64(1), vec, 0)
+		require.NoError(t, err)
+		require.NotZero(t, cmp)
+	})
+}
+
+func TestDataBranchCompareValueErrors(t *testing.T) {
+	cmp, err := compareSingleValueByType(types.T_int64, nil, int64(1))
+	require.NoError(t, err)
+	require.Negative(t, cmp)
+
+	_, err = compareSingleValueByType(types.T_int64, int64(1), int32(1))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported or mismatched type")
+
+	_, err = compareSingleValueByType(types.T_int64, struct{}{}, struct{}{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported or mismatched type")
+
+	_, err = normalizeCompareValue(types.T_json.ToType(), "not-json-bytes")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unexpected compare value type")
+
+	_, err = normalizeCompareValue(types.T_Rowid.ToType(), []byte{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty raw compare value")
+
+	_, err = normalizeCompareValue(types.T_Rowid.ToType(), "not-rowid")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unexpected compare value type")
+}
+
+func TestNormalizeCompareValueSupportedForms(t *testing.T) {
+	jsonVal, err := types.ParseStringToByteJson(`{"k":1}`)
+	require.NoError(t, err)
+	got, err := normalizeCompareValue(types.T_json.ToType(), jsonVal)
+	require.NoError(t, err)
+	require.Equal(t, jsonVal, got)
+
+	got, err = normalizeCompareValue(types.T_varchar.ToType(), []byte("alice"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("alice"), got)
+
+	array32 := []float32{1, 2}
+	got, err = normalizeCompareValue(types.T_array_float32.ToType(), array32)
+	require.NoError(t, err)
+	require.Equal(t, array32, got)
+
+	array64 := []float64{1, 2}
+	got, err = normalizeCompareValue(types.T_array_float64.ToType(), array64)
+	require.NoError(t, err)
+	require.Equal(t, array64, got)
+
+	rowID := buildHashDiffRowID(t, 8)
+	got, err = normalizeCompareValue(types.T_Rowid.ToType(), rowID)
+	require.NoError(t, err)
+	require.Equal(t, rowID, got)
+
+	var blockID types.Blockid
+	got, err = normalizeCompareValue(types.T_Blockid.ToType(), types.EncodeFixed(blockID))
+	require.NoError(t, err)
+	require.Equal(t, blockID, got)
+
+	ts := types.BuildTS(1, 2)
+	got, err = normalizeCompareValue(types.T_TS.ToType(), types.EncodeFixed(ts))
+	require.NoError(t, err)
+	require.Equal(t, ts, got)
+
+	year := types.MoYear(2026)
+	got, err = normalizeCompareValue(types.T_year.ToType(), types.EncodeFixed(year))
+	require.NoError(t, err)
+	require.Equal(t, year, got)
+
+	enum := types.Enum(5)
+	got, err = normalizeCompareValue(types.T_enum.ToType(), enum)
+	require.NoError(t, err)
+	require.Equal(t, enum, got)
+
+	got, err = normalizeCompareValue(types.T_int64.ToType(), int64(9))
+	require.NoError(t, err)
+	require.Equal(t, int64(9), got)
+}
+
 func TestCheckConflictAndAppendToBat(t *testing.T) {
 	ses := newValidateSession(t)
 	ctrl := gomock.NewController(t)
