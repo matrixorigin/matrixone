@@ -21,6 +21,7 @@ import (
 	"reflect"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,6 +41,17 @@ func SyncTestWriteRowRecords(t *testing.T, f func(t *testing.T)) {
 	testWriteRowRecordsMux.Lock()
 	defer testWriteRowRecordsMux.Unlock()
 	f(t)
+}
+
+func setDBConnBackoffExceeded(t *testing.T) {
+	t.Helper()
+
+	old := DBConnErrCount
+	DBConnErrCount = NewReConnectionBackOff(time.Hour, 0)
+	DBConnErrCount.Count()
+	t.Cleanup(func() {
+		DBConnErrCount = old
+	})
 }
 
 func TestBulkInsert(t *testing.T) {
@@ -277,12 +289,7 @@ func TestCloseDBConnClearsGlobalPointer(t *testing.T) {
 
 func TestGetOrInitDBConn_ForceReconnectSuccessResetsBackoff(t *testing.T) {
 	SyncTestWriteRowRecords(t, func(t *testing.T) {
-		old := DBConnErrCount
-		defer func() {
-			DBConnErrCount = old
-		}()
-		DBConnErrCount = NewReConnectionBackOff(time.Hour, 0)
-		DBConnErrCount.Count()
+		setDBConnBackoffExceeded(t)
 		require.False(t, DBConnErrCount.Check())
 
 		CloseDBConn()
@@ -313,8 +320,91 @@ func TestGetOrInitDBConn_ForceReconnectSuccessResetsBackoff(t *testing.T) {
 	})
 }
 
+func TestGetOrInitDBConn_ConcurrentForceReconnectBuildsOnce(t *testing.T) {
+	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		setDBConnBackoffExceeded(t)
+
+		CloseDBConn()
+		dbConn, _, err := sqlmock.New()
+		require.NoError(t, err)
+		SetDBConn(dbConn)
+		defer CloseDBConn()
+
+		newDBConn, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+		require.NoError(t, err)
+		mock.ExpectPing()
+
+		SetSQLWriterDBUser("user", "password")
+		SetSQLWriterDBAddressFunc(func(context.Context, bool) (string, error) {
+			return "127.0.0.1:6001", nil
+		})
+
+		firstOpenStarted := make(chan struct{})
+		releaseOpen := make(chan struct{})
+		var releaseOnce sync.Once
+		defer releaseOnce.Do(func() { close(releaseOpen) })
+
+		var openCount atomic.Int32
+		stubs := gostub.Stub(&openDBConn, func(string, string) (*sql.DB, error) {
+			if openCount.Add(1) == 1 {
+				close(firstOpenStarted)
+				<-releaseOpen
+				return newDBConn, nil
+			}
+			return nil, errors.New("unexpected extra rebuild")
+		})
+		defer stubs.Reset()
+
+		const callers = 8
+		results := make(chan *sql.DB, callers)
+		errs := make(chan error, callers)
+		var wg sync.WaitGroup
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			conn, err := GetOrInitDBConn(true, true)
+			results <- conn
+			errs <- err
+		}()
+
+		select {
+		case <-firstOpenStarted:
+		case <-time.After(time.Second):
+			t.Fatal("first reconnect did not start")
+		}
+
+		for i := 1; i < callers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				conn, err := GetOrInitDBConn(true, true)
+				results <- conn
+				errs <- err
+			}()
+		}
+
+		releaseOnce.Do(func() { close(releaseOpen) })
+		wg.Wait()
+		close(results)
+		close(errs)
+
+		for err := range errs {
+			require.NoError(t, err)
+		}
+		for conn := range results {
+			require.Same(t, newDBConn, conn)
+		}
+		require.Equal(t, int32(1), openCount.Load())
+		require.True(t, DBConnErrCount.Check())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
 func TestGetOrInitDBConn_RebuildFailureKeepsCurrentConn(t *testing.T) {
 	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		setDBConnBackoffExceeded(t)
+
 		CloseDBConn()
 		dbConn, _, err := sqlmock.New()
 		require.NoError(t, err)
@@ -337,6 +427,8 @@ func TestGetOrInitDBConn_RebuildFailureKeepsCurrentConn(t *testing.T) {
 
 func TestGetOrInitDBConn_OpenFailureKeepsCurrentConn(t *testing.T) {
 	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		setDBConnBackoffExceeded(t)
+
 		CloseDBConn()
 		dbConn, _, err := sqlmock.New()
 		require.NoError(t, err)
@@ -364,6 +456,8 @@ func TestGetOrInitDBConn_OpenFailureKeepsCurrentConn(t *testing.T) {
 
 func TestGetOrInitDBConn_NewConnPingFailureKeepsCurrentConn(t *testing.T) {
 	SyncTestWriteRowRecords(t, func(t *testing.T) {
+		setDBConnBackoffExceeded(t)
+
 		CloseDBConn()
 		dbConn, _, err := sqlmock.New()
 		require.NoError(t, err)
