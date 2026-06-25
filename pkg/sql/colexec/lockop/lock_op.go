@@ -822,7 +822,7 @@ func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) 
 	if options.LockWaitDeadline <= 0 {
 		return options, nil
 	}
-	remaining := time.Unix(0, options.LockWaitDeadline).Sub(time.Now())
+	remaining := time.Until(time.Unix(0, options.LockWaitDeadline))
 	if remaining <= 0 {
 		return options, lockservice.ErrLockTimeout
 	}
