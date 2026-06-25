@@ -52,6 +52,31 @@ import (
 
 const dataBranchMetadataIDBatchSize = 512
 
+func isDataBranchUserVisibleColumn(col *plan.ColDef) bool {
+	if col == nil {
+		return false
+	}
+	if col.Hidden {
+		return false
+	}
+	switch col.Name {
+	case catalog.Row_ID, catalog.FakePrimaryKeyColName, catalog.CPrimaryKeyColName:
+		return false
+	default:
+		return true
+	}
+}
+
+func dataBranchFakePKColIdxes(tblDef *plan.TableDef) []int {
+	idxes := make([]int, 0, len(tblDef.Cols))
+	for i, col := range tblDef.Cols {
+		if isDataBranchUserVisibleColumn(col) {
+			idxes = append(idxes, i)
+		}
+	}
+	return idxes
+}
+
 func newBranchHashmapAllocator(limitRate float64) *branchHashmapAllocator {
 	throttler := rscthrottler.NewMemThrottler(
 		"DataBranchHashmap",
@@ -918,11 +943,6 @@ func getTableStuff(
 
 	if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		tblStuff.def.pkKind = fakeKind
-		for i, col := range baseTblDef.Cols {
-			if col.Name != catalog.FakePrimaryKeyColName && col.Name != catalog.Row_ID {
-				tblStuff.def.pkColIdxes = append(tblStuff.def.pkColIdxes, i)
-			}
-		}
 	} else if baseTblDef.Pkey.CompPkeyCol != nil {
 		// case 2: composite pk, combined all pks columns as the PK
 		tblStuff.def.pkKind = compositeKind
@@ -952,12 +972,12 @@ func getTableStuff(
 		tblStuff.def.colNames = append(tblStuff.def.colNames, col.Name)
 		tblStuff.def.colTypes = append(tblStuff.def.colTypes, t)
 
-		if col.Name == catalog.FakePrimaryKeyColName ||
-			col.Name == catalog.CPrimaryKeyColName {
-			continue
+		if isDataBranchUserVisibleColumn(col) {
+			tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, i)
 		}
-
-		tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, i)
+	}
+	if tblStuff.def.pkKind == fakeKind {
+		tblStuff.def.pkColIdxes = dataBranchFakePKColIdxes(baseTblDef)
 	}
 
 	tblStuff.retPool = &retBatchList{}
