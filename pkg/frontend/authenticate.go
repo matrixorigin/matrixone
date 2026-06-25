@@ -1494,7 +1494,7 @@ const (
 				where rp.obj_id = 0
 					and rp.obj_type = "%s"
 					and rp.role_id = %d
-					and rp.privilege_id = %d
+					and rp.privilege_id in (%s)
 					and rp.privilege_level = "%s";`
 
 	getUserRolesExpectPublicRoleFormat = `select role.role_id, role.role_name 
@@ -2036,7 +2036,42 @@ func getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx context.Context, roleId i
 }
 
 func getSqlForCheckRoleHasAccountLevelForStar(roleId int64, privId PrivilegeType) string {
-	return fmt.Sprintf(checkRoleHasAccountLevelForStarFormat, objectTypeAccount, roleId, privId, privilegeLevelStar)
+	return getSqlForCheckRoleHasAccountLevelForStarWithSysScope(roleId, privId, false)
+}
+
+func getSqlForCheckRoleHasAccountLevelForStarWithSysScope(roleId int64, privId PrivilegeType, includeSysScopeAccountAll bool) string {
+	return fmt.Sprintf(checkRoleHasAccountLevelForStarFormat, objectTypeAccount, roleId, privilegeTypeListSQL(objectTypeAccount, privId, includeSysScopeAccountAll), privilegeLevelStar)
+}
+
+func privilegeTypeWithCoveringPrivileges(objTyp objectType, privId PrivilegeType) []PrivilegeType {
+	return privilegeTypeWithCoveringPrivilegesForScope(objTyp, privId, false)
+}
+
+func privilegeTypeWithCoveringPrivilegesForScope(objTyp objectType, privId PrivilegeType, includeSysScopeAccountAll bool) []PrivilegeType {
+	if objTyp != objectTypeAccount {
+		return []PrivilegeType{privId}
+	}
+	if privId == PrivilegeTypeAccountAll || privId == PrivilegeTypeAccountOwnership {
+		return []PrivilegeType{privId}
+	}
+	switch privId.Scope() {
+	case PrivilegeScopeAccount:
+		return []PrivilegeType{privId, PrivilegeTypeAccountAll}
+	case PrivilegeScopeSys:
+		if includeSysScopeAccountAll {
+			return []PrivilegeType{privId, PrivilegeTypeAccountAll}
+		}
+	}
+	return []PrivilegeType{privId}
+}
+
+func privilegeTypeListSQL(objTyp objectType, privId PrivilegeType, includeSysScopeAccountAll bool) string {
+	privs := privilegeTypeWithCoveringPrivilegesForScope(objTyp, privId, includeSysScopeAccountAll)
+	parts := make([]string, 0, len(privs))
+	for _, p := range privs {
+		parts = append(parts, fmt.Sprintf("%d", p))
+	}
+	return strings.Join(parts, ",")
 }
 
 func getSqlForgetUserRolesExpectPublicRole(pRoleId int, userId uint32) string {
@@ -2575,9 +2610,13 @@ type privilegeCache struct {
 func (pc *privilegeCache) has(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv PrivilegeType) bool {
 	pc.total.Add(1)
 	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
-	if privSet != nil && privSet.Contains(priv) {
-		pc.hit.Add(1)
-		return true
+	if privSet != nil {
+		for _, p := range privilegeTypeWithCoveringPrivileges(objTyp, priv) {
+			if privSet.Contains(p) {
+				pc.hit.Add(1)
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -3229,7 +3268,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	var accountExist bool
 	var accountStatus string
 	account := ses.GetTenantInfo()
-	if !(account.IsSysTenant() && account.IsMoAdminRole()) {
+	if !account.IsSysTenant() {
 		return moerr.NewInternalErrorf(ctx, "tenant %s user %s role %s do not have the privilege to alter the account",
 			account.GetTenant(), account.GetUser(), account.GetDefaultRole())
 	}
@@ -4391,6 +4430,7 @@ func postProcessCdc(
 			task.TaskStatus_CancelRequested,
 			targetAccountID,
 			"",
+			false,
 			ses.GetService(),
 			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
@@ -4401,6 +4441,7 @@ func postProcessCdc(
 			task.TaskStatus_PauseRequested,
 			targetAccountID,
 			"",
+			false,
 			ses.GetService(),
 			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
@@ -4411,6 +4452,7 @@ func postProcessCdc(
 			task.TaskStatus_ResumeRequested,
 			targetAccountID,
 			"",
+			false,
 			ses.GetService(),
 			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
@@ -6047,10 +6089,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.AlterAccount:
 		typs = append(typs, PrivilegeTypeAlterAccount)
 	case *tree.UpgradeStatement:
-		typs = append(typs, PrivilegeTypeUpgradeAccount)
-		objType = objectTypeNone
-		kind = privilegeKindSpecial
-		special = specialTagAdmin
+		if st.Target != nil && st.Target.IsALLAccount {
+			objType = objectTypeNone
+			kind = privilegeKindSpecial
+			special = specialTagAdmin
+		} else {
+			typs = append(typs, PrivilegeTypeUpgradeAccount)
+		}
 		canExecInRestricted = true
 	case *tree.CreateUser:
 		if st.Role == nil {
@@ -7052,6 +7097,9 @@ func getSqlForPrivilege2(ctx context.Context, ses *Session, roleId int64, entry 
 	// handle the empty database
 	if len(entry.databaseName) == 0 {
 		entry.databaseName = ses.GetDatabaseName()
+	}
+	if entry.objType == objectTypeAccount && pl == privilegeLevelStar && ses.GetTenantInfo() != nil {
+		return getSqlForCheckRoleHasAccountLevelForStarWithSysScope(roleId, entry.privilegeId, ses.GetTenantInfo().IsSysTenant()), nil
 	}
 	return getSqlForPrivilege(ctx, roleId, entry, pl)
 }
@@ -9271,12 +9319,12 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return yes, stats, err
 		case *tree.ShowAccountUpgrade:
 			return tenant.IsMoAdminRole(), stats, nil
+		case *tree.UpgradeStatement:
+			return tenant.IsMoAdminRole(), stats, nil
 		case *tree.ShowLogserviceReplicas, *tree.ShowLogserviceStores,
 			*tree.ShowLogserviceSettings, *tree.SetLogserviceSettings:
 			yes, err := checkShowLogservicePrivilege()
 			return yes, stats, err
-		case *tree.UpgradeStatement:
-			return tenant.IsMoAdminRole(), stats, nil
 		case *tree.BackupStart:
 			yes, err := checkBackUpStartPrivilege()
 			return yes, stats, err
@@ -9368,7 +9416,7 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 	tenant := ses.GetTenantInfo()
 	finalVersion := ses.rm.baseService.GetFinalVersion()
 
-	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
+	if !tenant.IsSysTenant() {
 		return moerr.NewInternalErrorf(ctx, "tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
 	}
 	start := time.Now()

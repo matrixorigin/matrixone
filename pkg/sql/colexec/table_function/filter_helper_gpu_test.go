@@ -268,8 +268,8 @@ func TestEncodeIncludeRowFromArgVecs_NullMarks(t *testing.T) {
 	got, err := encodeIncludeRowFromArgVecs(cols,
 		[]*vector.Vector{nil, nil, nil, vNull}, 3, 0)
 	require.NoError(t, err)
-	require.Len(t, got, 8+1)              // int64 + 1 mask byte
-	require.Equal(t, byte(0x01), got[8])  // bit 0 set → col 0 is null
+	require.Len(t, got, 8+1)             // int64 + 1 mask byte
+	require.Equal(t, byte(0x01), got[8]) // bit 0 set → col 0 is null
 }
 
 func TestValidateFilterArgCount(t *testing.T) {

@@ -725,38 +725,44 @@ const (
 	IS_UUID     = 515
 	UUID_TO_BIN = 516
 	BIN_TO_UUID = 517
-	NAME_CONST  = 518
+
+	NAME_CONST        = 518
+	GET_LOCK          = 519
+	RELEASE_LOCK      = 520
+	IS_FREE_LOCK      = 521
+	IS_USED_LOCK      = 522
+	RELEASE_ALL_LOCKS = 523
 
 	// S2 geometry (github.com/golang/geo/s2) cell functions. A CellId is a
 	// BIGINT UNSIGNED (uint64). See docs/design/s2h3_funcs.md.
-	S2_CELLID               = 519
-	S2_CELLID_LEVEL         = 520
-	S2_CELLID_CENTER        = 521
-	S2_CELLID_AREA          = 522
-	S2_CELLID_PARENT        = 523
-	S2_CELLID_EDGENEIGHBORS = 524
-	S2_CELLID_ALLNEIGHBORS  = 525
-	S2_CELLID_ARENEIGHBORS  = 526
+	S2_CELLID               = 524
+	S2_CELLID_LEVEL         = 525
+	S2_CELLID_CENTER        = 526
+	S2_CELLID_AREA          = 527
+	S2_CELLID_PARENT        = 528
+	S2_CELLID_EDGENEIGHBORS = 529
+	S2_CELLID_ALLNEIGHBORS  = 530
+	S2_CELLID_ARENEIGHBORS  = 531
 
 	// H3 hierarchical hexagonal index (github.com/uber/h3-go) functions. An
 	// H3Index is a BIGINT UNSIGNED (uint64). See docs/design/s2h3_funcs.md.
-	H3_H3INDEX              = 527
-	H3_H3INDEX_RESOLUTION   = 528
-	H3_H3INDEX_CENTER       = 529
-	H3_H3INDEX_BOUNDARY     = 530
-	H3_H3INDEX_PARENT       = 531
-	H3_H3INDEX_NEIGHBORS    = 532
-	H3_H3INDEX_ARENEIGHBORS = 533
+	H3_H3INDEX              = 532
+	H3_H3INDEX_RESOLUTION   = 533
+	H3_H3INDEX_CENTER       = 534
+	H3_H3INDEX_BOUNDARY     = 535
+	H3_H3INDEX_PARENT       = 536
+	H3_H3INDEX_NEIGHBORS    = 537
+	H3_H3INDEX_ARENEIGHBORS = 538
 
 	// GIS numeric point constructors: ST_Point(x, y) -> GEOMETRY (POINT),
 	// ST_Point32(x, y) -> GEOMETRY32 (POINT), where x is longitude/X and y is
 	// latitude/Y.
-	ST_POINT   = 534
-	ST_POINT32 = 535
+	ST_POINT   = 539
+	ST_POINT32 = 540
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 536
+	FUNCTION_END_NUMBER = 541
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1102,6 +1108,11 @@ var functionIdRegister = map[string]int32{
 	"field":                          FIELD,
 	"format":                         FORMAT,
 	"sleep":                          SLEEP,
+	"get_lock":                       GET_LOCK,
+	"release_lock":                   RELEASE_LOCK,
+	"is_free_lock":                   IS_FREE_LOCK,
+	"is_used_lock":                   IS_USED_LOCK,
+	"release_all_locks":              RELEASE_ALL_LOCKS,
 	"split_part":                     SPLIT_PART,
 	"insert":                         INSERT,
 	"instr":                          INSTR,

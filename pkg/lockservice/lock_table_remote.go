@@ -242,9 +242,49 @@ func (l *remoteLockTable) getLock(
 	}
 }
 
+func (l *remoteLockTable) getLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error) {
+	backoff := remoteRetryInitialBackoff
+	for {
+		if err := ctx.Err(); err != nil {
+			return pb.WaitTxn{}, false, err
+		}
+		holder, ok, err := l.doGetLockHolder(ctx, key)
+		if err == nil {
+			return holder, ok, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return pb.WaitTxn{}, false, err
+		}
+		if err = l.handleError(err, false); err == nil {
+			// The bind-change handler replaces the lock-table object in service.tableGroups.
+			// This in-flight remote table still carries the stale bind, so let the service
+			// reacquire the current table before retrying the holder lookup.
+			return pb.WaitTxn{}, false, ErrLockTableBindChanged
+		}
+		if err := waitRemoteRetryBackoffWithContext(ctx, backoff); err != nil {
+			return pb.WaitTxn{}, false, err
+		}
+		backoff = nextRemoteRetryBackoff(backoff)
+	}
+}
+
 func waitRemoteRetryBackoff(backoff time.Duration) {
 	if backoff > 0 {
 		time.Sleep(backoff)
+	}
+}
+
+func waitRemoteRetryBackoffWithContext(ctx context.Context, backoff time.Duration) error {
+	if backoff <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
@@ -318,6 +358,32 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 		return lock, true, nil
 	}
 	return Lock{}, false, moerr.AttachCause(ctx, err)
+}
+
+func (l *remoteLockTable) doGetLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, defaultRPCTimeout, moerr.CauseDoGetLock)
+	defer cancel()
+
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.Method = pb.Method_GetLockHolder
+	req.LockTable = l.bind
+	req.GetLockHolder.Row = key
+	req.GetLockHolder.Sharding = l.bind.Sharding
+
+	resp, err := l.client.Send(ctx, req)
+	if err == nil {
+		defer releaseResponse(resp)
+		if err := l.maybeHandleBindChanged(resp); err != nil {
+			return pb.WaitTxn{}, false, err
+		}
+		if len(resp.GetLockHolder.Holder.TxnID) == 0 {
+			return pb.WaitTxn{}, false, nil
+		}
+		return resp.GetLockHolder.Holder, true, nil
+	}
+	return pb.WaitTxn{}, false, moerr.AttachCause(ctx, err)
 }
 
 func (l *remoteLockTable) getBind() pb.LockTable {
