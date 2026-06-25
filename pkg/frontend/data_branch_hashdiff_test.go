@@ -469,6 +469,12 @@ func newTestBranchTableStuff(ctrl *gomock.Controller) tableStuff {
 	return tblStuff
 }
 
+func makeTestBranchTableStuffFakePK(tblStuff *tableStuff) {
+	tblStuff.def.pkKind = fakeKind
+	tblStuff.def.pkColIdxes = []int{0, 1}
+	tblStuff.def.pkColIdx = 0
+}
+
 func buildTestBranchHashmap(
 	t *testing.T,
 	mp *mpool.MPool,
@@ -860,6 +866,235 @@ func TestHashDiff_NoLCAWithStubHandles(t *testing.T) {
 	require.Equal(t, [][]any{{int64(3), "base-only", "hb"}}, got[1].rows)
 }
 
+func TestHashDiff_HasLCANoopUpdateFiltering(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		rowName   string
+		hidden    string
+		wantRows  [][]any
+		wantEmits int
+	}{
+		{
+			name:      "update reverted to lca value is suppressed",
+			rowName:   "alice",
+			hidden:    "h1",
+			wantEmits: 0,
+		},
+		{
+			name:      "real update is still emitted",
+			rowName:   "bob",
+			hidden:    "h2",
+			wantRows:  [][]any{{int64(1), "bob", "h2"}},
+			wantEmits: 1,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ses := newValidateSession(t)
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(20, 0).ToTimestamp()).AnyTimes()
+			ses.txnHandler = &TxnHandler{
+				txnOp: txnOp,
+			}
+
+			tblStuff := newTestBranchTableStuff(ctrl)
+			worker, err := ants.NewPool(1)
+			require.NoError(t, err)
+			defer worker.Release()
+			tblStuff.worker = worker
+			tblStuff.maxTombstoneBatchCnt = 1
+			tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+
+			lcaRel := mock_frontend.NewMockRelation(ctrl)
+			lcaDef := &plan.TableDef{
+				DbName: "db1",
+				Name:   "lca_tbl",
+				Pkey: &plan.PrimaryKeyDef{
+					Names:       []string{"id"},
+					PkeyColName: "id",
+				},
+			}
+			lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+			lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
+			tblStuff.lcaRel = lcaRel
+
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			bh.EXPECT().GetExecResultSet().Return([]interface{}{
+				buildLCAProbeResultSetWithRows([]interface{}{int64(0), int64(1), "alice", "h1"}),
+			}).Times(1)
+			bh.EXPECT().ClearExecResultSet().Times(1)
+
+			oldRowID := buildHashDiffRowID(t, 0)
+			midRowID := buildHashDiffRowID(t, 1)
+			newRowID := buildHashDiffRowID(t, 2)
+			tarData := buildHashDiffDataBatchWithRowIDs(
+				t, ses.proc.Mp(), []types.Rowid{midRowID, newRowID},
+				[][]any{
+					{int64(1), "intermediate", "h0", commitTSBytes(types.BuildTS(12, 0))},
+					{int64(1), tt.rowName, tt.hidden, commitTSBytes(types.BuildTS(15, 0))},
+				},
+			)
+			tarTombstone := buildHashDiffTombstoneBatchWithRowIDs(
+				t, ses.proc.Mp(), []types.Rowid{oldRowID, midRowID},
+				[][]any{
+					{int64(1), commitTSBytes(types.BuildTS(12, 0))},
+					{int64(1), commitTSBytes(types.BuildTS(15, 0))},
+				},
+			)
+
+			dagInfo := branchMetaInfo{
+				lcaTableId:          77,
+				pathFromLCAToTar:    []uint64{77, 88},
+				pathFromLCAToTarTS:  []types.TS{{}, types.BuildTS(10, 0)},
+				pathFromLCAToBase:   []uint64{77},
+				pathFromLCAToBaseTS: []types.TS{{}},
+			}
+
+			var got []capturedBatch
+			var mu sync.Mutex
+			err = hashDiff(
+				context.Background(),
+				ses,
+				bh,
+				tblStuff,
+				dagInfo,
+				compositeOption{},
+				func(w batchWithKind) (bool, error) {
+					rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
+					mu.Lock()
+					if len(rows) != 0 {
+						got = append(got, capturedBatch{
+							kind: w.kind,
+							side: w.side,
+							rows: rows,
+						})
+					}
+					mu.Unlock()
+					tblStuff.retPool.releaseRetBatch(w.batch, false)
+					return false, nil
+				},
+				[]engine.ChangesHandle{&stubEngineChangesHandle{
+					responses: []stubEngineChangesHandleResponse{{
+						data:      tarData,
+						tombstone: tarTombstone,
+					}},
+				}},
+				nil,
+				nil,
+			)
+			require.NoError(t, err)
+			require.Len(t, got, tt.wantEmits)
+			if tt.wantEmits == 0 {
+				return
+			}
+			require.Equal(t, diffUpdate, got[0].kind)
+			require.Equal(t, diffSideTarget, got[0].side)
+			require.Equal(t, tt.wantRows, got[0].rows)
+		})
+	}
+}
+
+func TestHashDiff_HasLCAFakePKUpdateIsNotNoop(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(20, 0).ToTimestamp()).AnyTimes()
+	ses.txnHandler = &TxnHandler{
+		txnOp: txnOp,
+	}
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	makeTestBranchTableStuffFakePK(&tblStuff)
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+	tblStuff.maxTombstoneBatchCnt = 1
+	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+
+	lcaRel := mock_frontend.NewMockRelation(ctrl)
+	lcaDef := &plan.TableDef{
+		DbName: "db1",
+		Name:   "lca_tbl",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+	}
+	lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+	lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
+	tblStuff.lcaRel = lcaRel
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{
+		buildLCAProbeResultSetWithRows([]interface{}{int64(0), int64(1), "alice", "h1"}),
+	}).Times(1)
+	bh.EXPECT().ClearExecResultSet().Times(1)
+
+	oldRowID := buildHashDiffRowID(t, 0)
+	newRowID := buildHashDiffRowID(t, 1)
+	tarData := buildHashDiffDataBatchWithRowIDs(
+		t, ses.proc.Mp(), []types.Rowid{newRowID},
+		[][]any{{int64(1), "bob", "h1", commitTSBytes(types.BuildTS(15, 0))}},
+	)
+	tarTombstone := buildHashDiffTombstoneBatchWithRowIDs(
+		t, ses.proc.Mp(), []types.Rowid{oldRowID},
+		[][]any{{int64(1), commitTSBytes(types.BuildTS(12, 0))}},
+	)
+
+	dagInfo := branchMetaInfo{
+		lcaTableId:          77,
+		pathFromLCAToTar:    []uint64{77, 88},
+		pathFromLCAToTarTS:  []types.TS{{}, types.BuildTS(10, 0)},
+		pathFromLCAToBase:   []uint64{77},
+		pathFromLCAToBaseTS: []types.TS{{}},
+	}
+
+	var got []capturedBatch
+	var mu sync.Mutex
+	err = hashDiff(
+		context.Background(),
+		ses,
+		bh,
+		tblStuff,
+		dagInfo,
+		compositeOption{},
+		func(w batchWithKind) (bool, error) {
+			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
+			mu.Lock()
+			if len(rows) != 0 {
+				got = append(got, capturedBatch{
+					kind: w.kind,
+					side: w.side,
+					rows: rows,
+				})
+			}
+			mu.Unlock()
+			tblStuff.retPool.releaseRetBatch(w.batch, false)
+			return false, nil
+		},
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{
+				data:      tarData,
+				tombstone: tarTombstone,
+			}},
+		}},
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, diffUpdate, got[0].kind)
+	require.Equal(t, diffSideTarget, got[0].side)
+	require.Equal(t, [][]any{{int64(1), "bob", "h1"}}, got[0].rows)
+}
+
 func TestHashDiff_FakePKClosesMigratedHashmaps(t *testing.T) {
 	ses := newValidateSession(t)
 	ctrl := gomock.NewController(t)
@@ -923,6 +1158,13 @@ func buildVisibleComparisonBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *b
 }
 
 func buildLCAProbeResultSet() *MysqlResultSet {
+	return buildLCAProbeResultSetWithRows(
+		[]interface{}{int64(0), int64(1), "alice", "h1"},
+		[]interface{}{int64(1), nil, nil, nil},
+	)
+}
+
+func buildLCAProbeResultSetWithRows(rows ...[]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 	for _, col := range []struct {
 		name string
@@ -939,8 +1181,9 @@ func buildLCAProbeResultSet() *MysqlResultSet {
 		mrs.AddColumn(mysqlCol)
 	}
 
-	mrs.AddRow([]interface{}{int64(0), int64(1), "alice", "h1"})
-	mrs.AddRow([]interface{}{int64(1), nil, nil, nil})
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
 	return mrs
 }
 
