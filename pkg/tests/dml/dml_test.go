@@ -298,7 +298,7 @@ func runSinglePKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
 
 	applyDiffStatements(t, ctx, db, sqlContent)
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
@@ -338,8 +338,8 @@ func runMultiPKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
-	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s where (org_id,event_id)", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
+	require.Contains(t, lowerContent, "delete from "+diffSQLTable(dbName, base)+" where "+diffSQLColumns("org_id", "event_id"))
 
 	applyDiffStatements(t, ctx, db, sqlContent)
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
@@ -498,8 +498,8 @@ from generate_series(10001, 10800) as g`, branch)
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
-	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
+	require.Contains(t, lowerContent, "delete from "+diffSQLTable(dbName, base))
 
 	applyDiffStatements(t, ctx, db, sqlContent)
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
@@ -933,8 +933,8 @@ func runDiffOutputToStage(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	require.NotEmpty(t, payload, "stage diff payload is empty")
 
 	sqlContent := strings.ToLower(string(payload))
-	require.Contains(t, sqlContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
-	require.Contains(t, sqlContent, fmt.Sprintf("delete from %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, sqlContent, "insert into "+diffSQLTable(dbName, base))
+	require.Contains(t, sqlContent, "delete from "+diffSQLTable(dbName, base))
 
 	applyDiffStatements(t, ctx, db, string(payload))
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
@@ -972,8 +972,8 @@ func runUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.D
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
-	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s where id in", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
+	require.Contains(t, lowerContent, "delete from "+diffSQLTable(dbName, base)+" where "+diffSQLIdent("id")+" in")
 	require.NotContains(t, lowerContent, "update ")
 
 	applyDiffStatements(t, ctx, db, sqlContent)
@@ -1013,8 +1013,8 @@ func runCompositeUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, 
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
-	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s where (org_id,event_id) in", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
+	require.Contains(t, lowerContent, "delete from "+diffSQLTable(dbName, base)+" where "+diffSQLColumns("org_id", "event_id")+" in")
 	require.Contains(t, lowerContent, "null")
 	require.NotContains(t, lowerContent, "update ")
 
@@ -1067,8 +1067,8 @@ func runNoPKDuplicateDiffAsFile(t *testing.T, parentCtx context.Context, db *sql
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
-	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
+	require.Contains(t, lowerContent, "delete from "+diffSQLTable(dbName, base))
 	require.Contains(t, lowerContent, "limit 1")
 	require.Contains(t, lowerContent, "is null")
 	require.NotContains(t, lowerContent, "update ")
@@ -1126,8 +1126,8 @@ create table %s (
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
-	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
+	require.Contains(t, lowerContent, "delete from "+diffSQLTable(dbName, base))
 	require.Contains(t, lowerContent, "null")
 	require.Contains(t, lowerContent, "''")
 	require.NotContains(t, lowerContent, "update ")
@@ -1183,6 +1183,22 @@ func readSQLFile(t *testing.T, path string) string {
 	require.NoError(t, err)
 	require.NotEmpty(t, data, "diff sql output is empty")
 	return string(data)
+}
+
+func diffSQLIdent(name string) string {
+	return "`" + strings.ReplaceAll(strings.ToLower(name), "`", "``") + "`"
+}
+
+func diffSQLTable(dbName, tableName string) string {
+	return diffSQLIdent(dbName) + "." + diffSQLIdent(tableName)
+}
+
+func diffSQLColumns(cols ...string) string {
+	quoted := make([]string, 0, len(cols))
+	for _, col := range cols {
+		quoted = append(quoted, diffSQLIdent(col))
+	}
+	return "(" + strings.Join(quoted, ",") + ")"
 }
 
 func applyDiffStatements(t *testing.T, ctx context.Context, db *sql.DB, sqlContent string) {
