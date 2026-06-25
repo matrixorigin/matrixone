@@ -212,6 +212,8 @@ func rebuildDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 
 // GetOrInitDBConn get the target cn to do the load query.
 // if @forceNewConn is true, it will re-find new cn and replace the old db conn after the new one is ready.
+// The reconnect decision is rechecked after acquiring the rebuild lock, so callers queued behind a successful
+// reconnect reuse the fresh current db conn instead of serially rebuilding more pools.
 // if @forceNewConn is false, it will normally fetch the current db connection. BUT in 1 cases, it will re-find the cn:
 //  1. DBRefreshTime interval, it will try to fetch the 'new' ob-sys cn.
 var GetOrInitDBConn = func(forceNewConn bool, randomCN bool) (*sql.DB, error) {
@@ -226,6 +228,13 @@ var GetOrInitDBConn = func(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 		dbRebuildMux.Lock()
 	}
 	defer dbRebuildMux.Unlock()
+
+	if forceNewConn {
+		current, _ = getDBConnSnapshot()
+		if current != nil && DBConnErrCount.Check() {
+			return current, nil
+		}
+	}
 
 	return rebuildDBConn(forceNewConn, randomCN)
 }
