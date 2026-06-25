@@ -14,6 +14,18 @@ insert into t values (1, 'ONLY_FULL_GROUP_BY'), (2, 'STRICT_TRANS_TABLES'), (3, 
 set @@sql_mode = 'ONLY_FULL_GROUP_BY';
 select @@sql_mode as mode;
 select count(*) as matched from t where b = @@sql_mode;
+-- @session:id=1{
+use remote_var_expr_db;
+begin;
+select a, b from t where b = 'ONLY_FULL_GROUP_BY' for update;
+-- @wait:0:rollback
+commit;
+-- @session}
+select sleep(0.2);
+begin;
+set session lock_wait_timeout = 1;
+select a, b from t where b = @@sql_mode for update;
+rollback;
 begin;
 select a, b from t where b = @@sql_mode for update;
 commit;
