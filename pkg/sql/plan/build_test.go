@@ -1731,6 +1731,55 @@ func TestCheckConstraintRejectsSyntheticColumns(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
+
+	syntheticColExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 2,
+			},
+		},
+	}
+	litExpr := MakePlan2Int32ConstExprWithType(1)
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+	}{
+		{
+			name: "under function args",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_F{
+					F: &plan.Function{Args: []*plan.Expr{litExpr, syntheticColExpr}},
+				},
+			},
+		},
+		{
+			name: "under expression list",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_tuple)},
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{List: []*plan.Expr{litExpr, syntheticColExpr}},
+				},
+			},
+		},
+		{
+			name: "under subquery child",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_Sub{
+					Sub: &plan.SubqueryRef{Child: syntheticColExpr},
+				},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := checkConstraintReferencesSyntheticCol(tc.expr, tableDef)
+			require.True(t, ok)
+			require.Equal(t, catalog.CPrimaryKeyColName, got)
+		})
+	}
 }
 
 func addSingleIdxTPositiveCheck(t *testing.T, mock *MockOptimizer) {

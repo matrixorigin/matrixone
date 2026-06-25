@@ -198,6 +198,12 @@ func checkConstraintReferencesSyntheticCol(expr *plan.Expr, tableDef *TableDef) 
 					return colName, true
 				}
 			}
+		case *plan.Expr_Sub:
+			if e.Sub != nil {
+				if colName, ok := walk(e.Sub.Child); ok {
+					return colName, true
+				}
+			}
 		}
 		return "", false
 	}
