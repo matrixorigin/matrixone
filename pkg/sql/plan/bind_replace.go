@@ -1056,11 +1056,12 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 	pkName := tableDef.Pkey.PkeyColName
 	pkPos := tableDef.Name2ColIndex[pkName]
 	for i, idxDef := range tableDef.Indexes {
-		skipUniqueIdx[i] = true
-		for _, part := range idxDef.Parts {
-			if !columnIsNull[catalog.ResolveAlias(part)] {
-				skipUniqueIdx[i] = false
-				break
+		if idxDef.Unique {
+			for _, part := range idxDef.Parts {
+				if columnIsNull[catalog.ResolveAlias(part)] {
+					skipUniqueIdx[i] = true
+					break
+				}
 			}
 		}
 

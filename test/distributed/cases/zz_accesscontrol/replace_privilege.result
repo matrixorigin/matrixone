@@ -12,6 +12,9 @@ insert into replace_priv_edge.t_unique values(1, 10);
 create table replace_priv_edge.t_insert_only(id int, v int);
 create table replace_priv_edge.t_nullable_unique(id int, v int unique);
 insert into replace_priv_edge.t_nullable_unique values(1, null);
+create table replace_priv_edge.t_composite_unique(id int, a int, b int, unique(a, b));
+insert into replace_priv_edge.t_composite_unique values(1, 10, 20);
+insert into replace_priv_edge.t_composite_unique values(2, null, 1);
 create user replace_priv_user identified by '123456';
 create user replace_priv_delete_user identified by '123456';
 create role replace_priv_role;
@@ -39,14 +42,32 @@ select * from replace_priv_edge.t_nullable_unique order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  null  𝄀
 2  ¦  null
+replace into replace_priv_edge.t_composite_unique values(3, 10, 20);
+internal error: do not have privilege to execute the statement
+select * from replace_priv_edge.t_composite_unique order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10  ¦  20  𝄀
+2  ¦  null  ¦  1
+replace into replace_priv_edge.t_composite_unique values(3, null, 1);
+select * from replace_priv_edge.t_composite_unique order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10  ¦  20  𝄀
+2  ¦  null  ¦  1  𝄀
+3  ¦  null  ¦  1
 replace into replace_priv_edge.t_priv values(1, 30);
 replace into replace_priv_edge.t_unique values(2, 10);
+replace into replace_priv_edge.t_composite_unique values(4, 10, 20);
 select * from replace_priv_edge.t_priv order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  30
 select * from replace_priv_edge.t_unique order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 2  ¦  10
+select * from replace_priv_edge.t_composite_unique order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  null  ¦  1  𝄀
+3  ¦  null  ¦  1  𝄀
+4  ¦  10  ¦  20
 set global enable_privilege_cache = on;
 drop user replace_priv_user;
 drop user replace_priv_delete_user;

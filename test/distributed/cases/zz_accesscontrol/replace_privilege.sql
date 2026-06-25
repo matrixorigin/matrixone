@@ -14,6 +14,9 @@ insert into replace_priv_edge.t_unique values(1, 10);
 create table replace_priv_edge.t_insert_only(id int, v int);
 create table replace_priv_edge.t_nullable_unique(id int, v int unique);
 insert into replace_priv_edge.t_nullable_unique values(1, null);
+create table replace_priv_edge.t_composite_unique(id int, a int, b int, unique(a, b));
+insert into replace_priv_edge.t_composite_unique values(1, 10, 20);
+insert into replace_priv_edge.t_composite_unique values(2, null, 1);
 
 create user replace_priv_user identified by '123456';
 create user replace_priv_delete_user identified by '123456';
@@ -33,13 +36,19 @@ replace into replace_priv_edge.t_insert_only values(1, 100);
 select * from replace_priv_edge.t_insert_only order by id;
 replace into replace_priv_edge.t_nullable_unique values(2, null);
 select * from replace_priv_edge.t_nullable_unique order by id;
+replace into replace_priv_edge.t_composite_unique values(3, 10, 20);
+select * from replace_priv_edge.t_composite_unique order by id;
+replace into replace_priv_edge.t_composite_unique values(3, null, 1);
+select * from replace_priv_edge.t_composite_unique order by id;
 -- @session
 
 -- @session:id=2&user=sys:replace_priv_delete_user:replace_priv_delete_role&password=123456
 replace into replace_priv_edge.t_priv values(1, 30);
 replace into replace_priv_edge.t_unique values(2, 10);
+replace into replace_priv_edge.t_composite_unique values(4, 10, 20);
 select * from replace_priv_edge.t_priv order by id;
 select * from replace_priv_edge.t_unique order by id;
+select * from replace_priv_edge.t_composite_unique order by id;
 -- @session
 
 set global enable_privilege_cache = on;
