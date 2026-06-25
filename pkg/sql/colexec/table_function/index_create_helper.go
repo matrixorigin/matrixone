@@ -37,11 +37,18 @@ func quoteIdent(ident string) string {
 	return "`" + strings.ReplaceAll(ident, "`", "``") + "`"
 }
 
-// fetchSrcTableRowCount runs `SELECT count(*) FROM `db`.`src“ and returns the
-// row count. Used by index create paths to auto-populate IndexCapacity when
-// the user did not set it upfront.
-func fetchSrcTableRowCount(proc *process.Process, runSql runSqlFunc, db, src string) (int64, error) {
+// fetchSrcTableRowCount returns the number of indexable rows in `db`.`src`.
+// When vecCol is non-empty it counts only rows whose indexed vector is non-NULL.
+// NULL-vector rows are skipped on the build path (and routed to the CDC tail), so
+// counting them would over-state the build size and let a chunk fall below the
+// cuVS minimum graph size. Used to auto-populate IndexCapacity and to derive the
+// small-tail CDC cutoff; this non-NULL basis MUST match the build cursor, which
+// likewise advances only on non-NULL rows.
+func fetchSrcTableRowCount(proc *process.Process, runSql runSqlFunc, db, src, vecCol string) (int64, error) {
 	sql := fmt.Sprintf("SELECT count(*) FROM %s.%s", quoteIdent(db), quoteIdent(src))
+	if vecCol != "" {
+		sql += fmt.Sprintf(" WHERE %s IS NOT NULL", quoteIdent(vecCol))
+	}
 	res, err := runSql(sqlexec.NewSqlProcess(proc), sql)
 	if err != nil {
 		return 0, err

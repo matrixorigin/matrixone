@@ -19,6 +19,7 @@ package table_function
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -83,8 +84,25 @@ func newIvfpqCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param 
 	}
 }
 
+// mockIvfpqSrcRowCount is what mock_ivfpq_runSql returns for the
+// SELECT count(*) pre-count ivfpq_create now issues unconditionally.
+// Tests can override per-case before invoking start(). 1000 keeps the
+// existing single-chunk happy-path (smaller than the configured
+// index_capacity of 100? — wait, set to 1000 so the trailing partial
+// chunk math doesn't redirect rows to CDC under default tests).
+var mockIvfpqSrcRowCount int64 = 1000
+
 func mock_ivfpq_runSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 	proc := sqlproc.Proc
+	if strings.HasPrefix(sql, "SELECT count(*)") {
+		// fetchSrcTableRowCount expects exactly one row with a single
+		// int64 column carrying the count.
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+		vector.AppendFixed(bat.Vecs[0], mockIvfpqSrcRowCount, false, proc.Mp())
+		bat.SetRowCount(1)
+		return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{bat}}, nil
+	}
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{}}, nil
 }
 
@@ -263,11 +281,9 @@ func TestIvfpqCreateIndexTableConfigFail(t *testing.T) {
 	}
 
 	goodTblcfg := `{"db":"db","src":"src","metadata":"__meta","index":"__index","index_capacity":100}`
-	zeroCapTblcfg := `{"db":"db","src":"src","metadata":"__meta","index":"__index","index_capacity":0}`
 
 	cases := []failCase{
 		{desc: "empty tblcfg"},
-		{desc: "zero capacity"},
 		{desc: "wrong id type (int32 instead of int64)"},
 		{desc: "wrong vec type (int64 instead of float32 array)"},
 	}
@@ -278,19 +294,13 @@ func TestIvfpqCreateIndexTableConfigFail(t *testing.T) {
 		cases[0].args = args
 		cases[0].bat = bat
 	}
-	// case 1: zero capacity
+	// case 1: wrong id type (int32)
 	{
-		args, bat := makeArgs(zeroCapTblcfg, types.T_int64, types.T_array_float32, 4)
+		args, bat := makeArgs(goodTblcfg, types.T_int32, types.T_array_float32, 4)
 		cases[1].args = args
 		cases[1].bat = bat
 	}
-	// case 2: wrong id type (int32)
-	{
-		args, bat := makeArgs(goodTblcfg, types.T_int32, types.T_array_float32, 4)
-		cases[2].args = args
-		cases[2].bat = bat
-	}
-	// case 3: wrong vec type (T_int64 instead of array)
+	// case 2: wrong vec type (T_int64 instead of array)
 	{
 		tblcfg := goodTblcfg
 		args := []*plan.Expr{
@@ -315,8 +325,8 @@ func TestIvfpqCreateIndexTableConfigFail(t *testing.T) {
 		vector.AppendFixed(bat.Vecs[1], int64(1), false, mpool.MustNewZero())
 		vector.AppendFixed(bat.Vecs[2], int64(1), false, mpool.MustNewZero())
 		bat.SetRowCount(1)
-		cases[3].args = args
-		cases[3].bat = bat
+		cases[2].args = args
+		cases[2].bat = bat
 	}
 
 	for _, c := range cases {

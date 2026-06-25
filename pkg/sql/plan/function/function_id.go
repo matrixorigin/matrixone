@@ -721,18 +721,21 @@ const (
 	// merged from upstream/main (renumbered to avoid colliding with the GIS block above)
 	CAST_JSON_TO_ARRAY = 513
 
-	BIT_COUNT    = 514
-	IS_UUID      = 515
-	UUID_TO_BIN  = 516
-	BIN_TO_UUID  = 517
-	NAME_CONST   = 518
-	GET_LOCK     = 519
-	RELEASE_LOCK = 520
-	IS_FREE_LOCK = 521
+	BIT_COUNT   = 514
+	IS_UUID     = 515
+	UUID_TO_BIN = 516
+	BIN_TO_UUID = 517
+
+	NAME_CONST        = 518
+	GET_LOCK          = 519
+	RELEASE_LOCK      = 520
+	IS_FREE_LOCK      = 521
+	IS_USED_LOCK      = 522
+	RELEASE_ALL_LOCKS = 523
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 522
+	FUNCTION_END_NUMBER = 524
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1081,6 +1084,8 @@ var functionIdRegister = map[string]int32{
 	"get_lock":                       GET_LOCK,
 	"release_lock":                   RELEASE_LOCK,
 	"is_free_lock":                   IS_FREE_LOCK,
+	"is_used_lock":                   IS_USED_LOCK,
+	"release_all_locks":              RELEASE_ALL_LOCKS,
 	"split_part":                     SPLIT_PART,
 	"insert":                         INSERT,
 	"instr":                          INSTR,

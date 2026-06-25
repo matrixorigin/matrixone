@@ -190,6 +190,13 @@ func (w *MetadataWriter) AddFloat(key string, value float64) {
 	w.Cfg[key] = ConfigValue{T: Type_F64, V: value}
 }
 
+// metadataMarshaler emits sorted map keys so the serialized blob is
+// deterministic. The Cfg map would otherwise marshal in random Go iteration
+// order, making algo_params.session_vars (and the idxcron metadata) differ
+// build-to-build — and BVT .results comparing algo_params flaky. Values are
+// read back by key, so the ordering is purely cosmetic.
+var metadataMarshaler = sonic.Config{SortMapKeys: true}.Froze()
+
 func (w *MetadataWriter) Marshal() ([]byte, error) {
-	return sonic.Marshal(w)
+	return metadataMarshaler.Marshal(w)
 }
