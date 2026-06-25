@@ -1,0 +1,23 @@
+-- @bvt:issue#23176
+drop database if exists update_text_coalesce_cast;
+create database update_text_coalesce_cast;
+use update_text_coalesce_cast;
+
+create table t1(id int primary key, txt text, vc varchar(255));
+insert into t1 values(1, repeat('a', 260), null);
+
+prepare s1 from 'update t1 set txt = concat(coalesce(txt, ''''), ?) where id = ?';
+set @suffix = 'b';
+set @id = 1;
+execute s1 using @suffix, @id;
+select length(txt), right(txt, 1) from t1;
+
+update t1 set txt = null where id = 1;
+execute s1 using @suffix, @id;
+select txt from t1;
+
+update t1 set txt = repeat('c', 260) where id = 1;
+update t1 set vc = txt where id = 1;
+
+drop table t1;
+drop database update_text_coalesce_cast;

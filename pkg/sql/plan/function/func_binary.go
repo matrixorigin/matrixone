@@ -921,6 +921,40 @@ func coalesceDecimalResult(overloads []overload, minOid types.T, inputs []types.
 	return types.Type{}, -1, false
 }
 
+func coalesceTextStringResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
+	hasText := false
+	aligned := true
+	for _, input := range inputs {
+		switch input.Oid {
+		case types.T_text:
+			hasText = true
+		case types.T_any:
+			aligned = false
+		case types.T_char, types.T_varchar:
+			aligned = false
+		default:
+			return checkResult{}, false
+		}
+	}
+	if !hasText {
+		return checkResult{}, false
+	}
+	for i, over := range overloads {
+		if len(over.args) != 1 || over.args[0] != types.T_text {
+			continue
+		}
+		if aligned {
+			return newCheckResultWithSuccess(i), true
+		}
+		castType := make([]types.Type, len(inputs))
+		for j := range castType {
+			castType[j] = types.T_text.ToType()
+		}
+		return newCheckResultWithCast(i, castType), true
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong), true
+}
+
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 0 {
 		if retType, ok := mixedStringNumericToVarchar(inputs); ok {
@@ -934,6 +968,9 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 				}
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if result, ok := coalesceTextStringResult(overloads, inputs); ok {
+			return result
 		}
 
 		minIndex := -1

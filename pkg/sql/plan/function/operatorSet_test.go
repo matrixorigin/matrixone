@@ -704,6 +704,26 @@ func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {
 	}
 }
 
+func Test_CoalesceCheck_TextStringBranchesStayText(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_varchar}},
+		{args: []types.T{types.T_char}},
+		{args: []types.T{types.T_text}},
+	}
+	inputs := []types.Type{
+		types.T_text.ToType(),
+		types.New(types.T_varchar, 255, 0),
+		types.New(types.T_char, 1, 0),
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, 2, result.idx)
+	require.Len(t, result.finalType, len(inputs))
+	for _, typ := range result.finalType {
+		require.Equal(t, types.T_text, typ.Oid)
+	}
+}
+
 // issue #24565: COALESCE over decimal branches with different scales must align
 // scale/width across all branches, otherwise the result inherits the first
 // branch's scale while carrying another branch's raw value (magnified result).
