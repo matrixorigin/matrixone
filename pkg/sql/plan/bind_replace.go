@@ -546,7 +546,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	// detect unique key confliction
 	for i, idxDef := range tableDef.Indexes {
-		if !idxDef.Unique {
+		// A unique index whose key is statically NULL for this statement never conflicts
+		// and is not stored, so it drives no conflict probe (matches the INSERT path).
+		if !idxDef.Unique || skipUniqueIdx[i] {
 			continue
 		}
 
@@ -630,6 +632,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	// get old RowID for index tables
 	for i, idxDef := range tableDef.Indexes {
+		// Skipped unique index (statically-NULL key): not stored, so no old row to fetch.
+		if skipUniqueIdx[i] {
+			continue
+		}
 		idxTag := builder.genNewBindTag()
 		builder.addNameByColRef(idxTag, idxTableDefs[i])
 
@@ -799,6 +805,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	}
 
 	for i, idxDef := range tableDef.Indexes {
+		// A unique index whose key is statically NULL for this statement is not stored
+		// (serial(...) is NULL), matching the INSERT path which skips index maintenance
+		// for a NULL key. Nothing to insert into or delete from its index table.
+		if skipUniqueIdx[i] {
+			continue
+		}
 		insertCols := make([]plan.ColRef, 2)
 		deleteCols := make([]plan.ColRef, 2)
 
@@ -1076,11 +1088,18 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 	pkName := tableDef.Pkey.PkeyColName
 	pkPos := tableDef.Name2ColIndex[pkName]
 	for i, idxDef := range tableDef.Indexes {
-		skipUniqueIdx[i] = true
-		for _, part := range idxDef.Parts {
-			if !columnIsNull[catalog.ResolveAlias(part)] {
-				skipUniqueIdx[i] = false
-				break
+		// A unique index encodes its key with serial(...), which is NULL as soon as ANY
+		// part is NULL; such a key never conflicts (MySQL: NULL never conflicts on a
+		// unique key) and is never stored in the index table. Skip it when ANY part is
+		// statically NULL, not only when every part is. Non-unique indexes use
+		// serial_full (NULL preserved) and are never skipped here.
+		skipUniqueIdx[i] = false
+		if idxDef.Unique {
+			for _, part := range idxDef.Parts {
+				if columnIsNull[catalog.ResolveAlias(part)] {
+					skipUniqueIdx[i] = true
+					break
+				}
 			}
 		}
 

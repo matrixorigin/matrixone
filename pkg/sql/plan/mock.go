@@ -885,6 +885,51 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	/*
+		create table fake_pk_comp (
+			a int,
+			b int,
+			c varchar(64),
+			unique key uk_ab(a, b)
+		);
+		-- fake-PK table (no real PK) with a COMPOSITE unique key(a, b). Used to test
+		-- that a REPLACE whose composite unique key serializes to NULL (a statically
+		-- NULL part, e.g. column a omitted/defaulting to NULL) is planned insert-only
+		-- rather than delete-capable.
+	*/
+	constraintTestSchema["fake_pk_comp"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, true, 32, 0},
+			{"b", types.T_int32, true, 32, 0},
+			{"c", types.T_varchar, true, 64, 0},
+			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{3}, // fake PK column
+		idxs: []index{
+			{
+				indexName: "uk_ab",
+				tableName: catalog.UniqueIndexTableNamePrefix + "fake-pk-comp-uk-ab",
+				parts:     []string{"a", "b"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+				},
+				tableExist: true,
+				unique:     true,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"fake-pk-comp-uk-ab"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint64, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
 		create table self_ref (
 			id int primary key,
 			parent_id int,

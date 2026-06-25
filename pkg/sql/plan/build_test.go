@@ -1559,6 +1559,46 @@ func TestReplaceFakePKTable(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestReplaceFakePKCompositeNullableUKSkipsNullKeyIndex(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	idxTbl := catalog.UniqueIndexTableNamePrefix + "fake-pk-comp-uk-ab"
+
+	// touchesIdx reports whether the REPLACE plan reads or maintains the uk_ab index
+	// table (a TABLE_SCAN on it, or a MULTI_UPDATE UpdateCtx targeting it).
+	touchesIdx := func(sql string) bool {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		if err != nil {
+			t.Fatalf("%s: %+v", sql, err)
+		}
+		query := logicPlan.GetQuery()
+		for _, node := range query.Nodes {
+			if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.Name == idxTbl {
+				return true
+			}
+			if node.NodeType == plan.Node_MULTI_UPDATE {
+				for _, uc := range node.UpdateCtxList {
+					if uc.TableDef != nil && uc.TableDef.Name == idxTbl {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+
+	// fake_pk_comp has a composite UNIQUE(a, b) and no real PK. Omitting column a makes
+	// it default to NULL, so serial(a, b) is NULL: the unique key can never conflict and
+	// is never stored. Like a plain INSERT (which skips index maintenance for a NULL
+	// key), REPLACE must NOT read or maintain the uk_ab index table for this row.
+	assert.False(t, touchesIdx("REPLACE INTO fake_pk_comp (b, c) VALUES (1, 'x')"),
+		"REPLACE with a statically-NULL composite unique-key part must not maintain the unique index table")
+
+	// With both key parts provided (non-NULL) the unique key can conflict, so REPLACE
+	// must maintain the uk_ab index table as usual.
+	assert.True(t, touchesIdx("REPLACE INTO fake_pk_comp (a, b, c) VALUES (1, 2, 'x')"),
+		"REPLACE with a fully non-NULL composite unique key must maintain the unique index table")
+}
+
 func TestReplaceFKTable(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// REPLACE on table with foreign key should pass (modern path)
