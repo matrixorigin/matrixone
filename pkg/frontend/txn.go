@@ -62,6 +62,10 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 		ses.cleanCache()
 	}
 	ses.Error(execCtx.reqCtx, execErr.Error())
+	if isTxnCommitResultUnknown(execErr) {
+		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, execErr)
+		return execErr
+	}
 	execCtx.txnOpt.byRollback = execCtx.txnOpt.byRollback || isErrorRollbackWholeTxn(execErr)
 	txnErr := ses.GetTxnHandler().Rollback(execCtx)
 	if txnErr != nil {
@@ -70,6 +74,10 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 	}
 	logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, execErr)
 	return execErr
+}
+
+func isTxnCommitResultUnknown(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrTxnUnknown)
 }
 
 // execution succeeds during the transaction. commit the transaction
@@ -560,11 +568,13 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		commitTs := th.txnOp.Txn().CommitTS
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		commitResultUnknown := false
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
 			return th.txnOp.Commit(ctx2)
 		})
 		if err != nil {
 			err = moerr.AttachCause(ctx2, err)
+			commitResultUnknown = isTxnCommitResultUnknown(err)
 			if hasRecovered {
 				execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeRollbackWhenCommitPanic)
 				defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeRollbackWhenCommitPanic)
@@ -576,9 +586,14 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 					err = errors.Join(err, moerr.AttachCause(ctx2, err2))
 				}
 			}
-			th.invalidateTxnUnsafe()
+			if !commitResultUnknown {
+				th.invalidateTxnUnsafe()
+			}
 		}
 		execCtx.ses.updateLastCommitTS(commitTs)
+		if commitResultUnknown {
+			return err
+		}
 	}
 	th.invalidateTxnUnsafe()
 	execCtx.ses.SetTxnId(dumpUUID[:])
