@@ -1,0 +1,28 @@
+drop database if exists rand_n_func;
+create database rand_n_func;
+use rand_n_func;
+select rand(3) as r1, rand(3) as r2;
+➤ r1[8,54,0]  ¦  r2[8,54,0]  𝄀
+0.9057697559760601  ¦  0.9057697559760601
+create table t_rand(id int, a int);
+insert into t_rand values (1, 1), (2, 2), (3, 3), (4, 1);
+select id, a, rand(7) as r from t_rand order by a, id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  r[8,54,0]  𝄀
+1  ¦  1  ¦  0.9065021936842261  𝄀
+4  ¦  1  ¦  0.37600881361962185  𝄀
+2  ¦  2  ¦  0.16053751777907602  𝄀
+3  ¦  3  ¦  0.6746611787701595
+select id, a, rand(a) as r from t_rand order by a, id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  r[8,54,0]  𝄀
+1  ¦  1  ¦  0.40540353712197724  𝄀
+4  ¦  1  ¦  0.40540353712197724  𝄀
+2  ¦  2  ¦  0.6555866465490187  𝄀
+3  ¦  3  ¦  0.9057697559760601
+select rand(null) as rand_null_1, rand(0) as rand_zero_1;
+➤ rand_null_1[8,54,0]  ¦  rand_zero_1[8,54,0]  𝄀
+0.15522042769493574  ¦  0.15522042769493574
+select rand(null) as rand_null_2, rand(0) as rand_zero_2;
+➤ rand_null_2[8,54,0]  ¦  rand_zero_2[8,54,0]  𝄀
+0.15522042769493574  ¦  0.15522042769493574
+drop table t_rand;
+drop database rand_n_func;
