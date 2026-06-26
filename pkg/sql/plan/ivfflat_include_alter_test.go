@@ -86,10 +86,9 @@ func TestUpdateRenameColumnInTableDefRenamesIvfIncludeMetadata(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-	require.Len(t, sqls, 2)
+	require.Len(t, sqls, 1)
 	require.Contains(t, sqls[0], `set included_columns = '["headline","category"]'`)
 	require.Contains(t, sqls[0], "name = 'idx_ivf'")
-	require.Contains(t, sqls[1], "alter table `db1`.`entries_tbl` rename column `__mo_index_include_title` to `__mo_index_include_headline`")
 
 	for _, indexDef := range tableDef.Indexes {
 		require.Equal(t, []string{"headline", "category"}, indexDef.IncludedColumns)
@@ -97,6 +96,40 @@ func TestUpdateRenameColumnInTableDefRenamesIvfIncludeMetadata(t *testing.T) {
 	}
 	require.Equal(t, "headline", tableDef.Cols[1].Name)
 	require.Equal(t, "headline", tableDef.Cols[1].OriginName)
+}
+
+func TestResolveAlterTableAlgorithmCopiesIvfIncludeRename(t *testing.T) {
+	tableDef := &planpb.TableDef{
+		Indexes: []*planpb.IndexDef{
+			makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "category"}),
+		},
+	}
+
+	algorithm, err := ResolveAlterTableAlgorithm(
+		context.Background(),
+		[]tree.AlterTableOption{
+			&tree.AlterTableRenameColumnClause{
+				OldColumnName: tree.NewUnresolvedColName("title"),
+				NewColumnName: tree.NewUnresolvedColName("headline"),
+			},
+		},
+		tableDef,
+	)
+	require.NoError(t, err)
+	require.Equal(t, planpb.AlterTable_COPY, algorithm)
+
+	algorithm, err = ResolveAlterTableAlgorithm(
+		context.Background(),
+		[]tree.AlterTableOption{
+			&tree.AlterTableRenameColumnClause{
+				OldColumnName: tree.NewUnresolvedColName("note"),
+				NewColumnName: tree.NewUnresolvedColName("memo"),
+			},
+		},
+		tableDef,
+	)
+	require.NoError(t, err)
+	require.Equal(t, planpb.AlterTable_INPLACE, algorithm)
 }
 
 func TestCollectAffectedIndexNamesForAlterIncludesIvfIncludeColumns(t *testing.T) {
