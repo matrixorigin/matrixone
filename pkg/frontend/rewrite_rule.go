@@ -69,10 +69,13 @@ func parseRewriteHint(ctx context.Context, hint string) (map[string]string, erro
 	return payload.Rewrites, nil
 }
 
-// rewriteSQL checks the session's role rewrite rule cache and, if rules exist,
-// prepends a hint comment to the SQL string.
+// rewriteSQL checks the session's role rewrite rule cache and the
+// remap_rewrites session variable and, if rules exist, prepends a hint comment
+// to the SQL string.
 // If ruleCache is nil (not yet loaded), it lazily loads rules via loadRuleCache.
-// If the rule set is empty, the original SQL is returned unchanged.
+// Session-variable rules are merged on top of the role rules (a session rule
+// overrides a role rule for the same table key).
+// If the combined rule set is empty, the original SQL is returned unchanged.
 // This function only injects hints when enable_remap_hint is true.
 // Rule cache load failures are returned to the caller so access-control rewrites
 // do not silently fall back to the unmodified SQL.
@@ -106,16 +109,102 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 		ses.ruleCacheMu.Unlock()
 	}
 
-	if len(cache) == 0 {
+	// Merge session-variable rewrites on top of the role rules.
+	sessionRules, err := getSessionRewriteRules(ctx, ses)
+	if err != nil {
+		return sql, err
+	}
+
+	if len(cache) == 0 && len(sessionRules) == 0 {
 		return sql, nil
 	}
 
-	hint, err := formatRewriteHint(ctx, cache)
+	combined := make(map[string]string, len(cache)+len(sessionRules))
+	for k, v := range cache {
+		combined[k] = v
+	}
+	for k, v := range sessionRules {
+		combined[k] = v
+	}
+
+	hint, err := formatRewriteHint(ctx, combined)
 	if err != nil {
 		return sql, err
 	}
 
 	return hint + " " + sql, nil
+}
+
+// getSessionRewriteRules reads the remap_rewrites session variable and returns
+// its table-rewrite rules. An empty/unset variable yields no rules. The value
+// is validated at SET time (validateRemapRewrites), so a parse error here is
+// unexpected and is treated as "no session rules" rather than failing every
+// query.
+func getSessionRewriteRules(ctx context.Context, ses *Session) (map[string]string, error) {
+	v, err := ses.GetSessionSysVar("remap_rewrites")
+	if err != nil {
+		// remap_rewrites is always registered; a lookup error should not block
+		// the query, so fall back to "no session rules".
+		return nil, nil
+	}
+	raw, ok := v.(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+
+	rules, err := parseSessionRewrites(ctx, raw)
+	if err != nil {
+		ses.Error(ctx, "failed to parse remap_rewrites; ignoring session rewrites",
+			logutil.ErrorField(err))
+		return nil, nil
+	}
+	return rules, nil
+}
+
+// validateRemapRewrites validates a remap_rewrites session-variable value: it
+// must be a string holding a valid rewrites payload (parseable JSON) where every
+// table key is non-empty and every rule value is a SELECT-like statement (the
+// same constraint as role rules). It is called at SET time so an invalid value
+// is rejected immediately and never stored.
+func validateRemapRewrites(ctx context.Context, val interface{}) error {
+	raw, ok := val.(string)
+	if !ok {
+		return moerr.NewInvalidInputf(ctx, "remap_rewrites must be a string, got %T", val)
+	}
+	rules, err := parseSessionRewrites(ctx, raw)
+	if err != nil {
+		return err
+	}
+	for key, rule := range rules {
+		if strings.TrimSpace(key) == "" {
+			return moerr.NewInvalidInput(ctx, "remap_rewrites: table key must not be empty")
+		}
+		if err := validateRewriteRuleSQL(ctx, rule); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// parseSessionRewrites parses the remap_rewrites value. It accepts both the
+// wrapped form {"rewrites": {"db.t": "select ..."}} (same payload as the inline
+// hint) and the bare form {"db.t": "select ..."}.
+func parseSessionRewrites(ctx context.Context, value string) (map[string]string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+
+	var payload rewriteHintPayload
+	if err := json.Unmarshal([]byte(value), &payload); err == nil && payload.Rewrites != nil {
+		return payload.Rewrites, nil
+	}
+
+	var rules map[string]string
+	if err := json.Unmarshal([]byte(value), &rules); err != nil {
+		return nil, moerr.NewInvalidInputf(ctx, "invalid remap_rewrites value %q: %v", value, err)
+	}
+	return rules, nil
 }
 
 // loadRuleCache queries the mo_catalog.mo_role_rule table for all rewrite rules

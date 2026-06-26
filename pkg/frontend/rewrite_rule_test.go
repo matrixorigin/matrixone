@@ -603,6 +603,80 @@ func TestHandleAlterRoleAddRuleRejectsInvalidRuleSQLBeforeWriting(t *testing.T) 
 	}
 }
 
+// TestParseSessionRewrites covers the remap_rewrites value parser: the bare map
+// form, the wrapped {"rewrites": {...}} form, empty/blank input, and malformed
+// JSON.
+func TestParseSessionRewrites(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty", func(t *testing.T) {
+		rules, err := parseSessionRewrites(ctx, "")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+	})
+	t.Run("blank", func(t *testing.T) {
+		rules, err := parseSessionRewrites(ctx, "   ")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+	})
+	t.Run("bare map", func(t *testing.T) {
+		rules, err := parseSessionRewrites(ctx, `{"db1.t1": "select a, b from db2.t1"}`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db1.t1": "select a, b from db2.t1"}, rules)
+	})
+	t.Run("wrapped rewrites form", func(t *testing.T) {
+		rules, err := parseSessionRewrites(ctx, `{"rewrites": {"db1.t1": "select a from db2.t1"}}`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db1.t1": "select a from db2.t1"}, rules)
+	})
+	t.Run("two keys", func(t *testing.T) {
+		rules, err := parseSessionRewrites(ctx, `{"db.t1": "select * from t1", "db.t2": "select * from t2"}`)
+		require.NoError(t, err)
+		require.Len(t, rules, 2)
+	})
+	t.Run("malformed json", func(t *testing.T) {
+		_, err := parseSessionRewrites(ctx, `{not json}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid remap_rewrites value")
+	})
+}
+
+// TestValidateRemapRewrites covers the SET-time validation of the
+// remap_rewrites session variable.
+func TestValidateRemapRewrites(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty is valid", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, ""))
+	})
+	t.Run("valid bare map", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"db.t1": "select a from db2.t1"}`))
+	})
+	t.Run("valid wrapped form", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"rewrites": {"db.t1": "select a from db2.t1"}}`))
+	})
+	t.Run("non-string rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, int64(1))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be a string")
+	})
+	t.Run("malformed json rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{not json}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid remap_rewrites value")
+	})
+	t.Run("non-select rule rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"db.t1": "delete from t1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "only accept SELECT-like statements")
+	})
+	t.Run("empty key rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"  ": "select 1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "table key must not be empty")
+	})
+}
+
 func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

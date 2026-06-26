@@ -3584,6 +3584,20 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("enable_remap_hint"),
 		Default:           int64(0),
 	},
+	// remap_rewrites holds a JSON object of table-rewrite rules that apply to
+	// every query in the session (gated by enable_remap_hint). The value is the
+	// same payload as the /*+ {"rewrites": {...}} */ hint, e.g.
+	//   set remap_rewrites = '{"db1.t1": "select a, b from db2.t1"}';
+	// The bare map form above and the wrapped {"rewrites": {...}} form are both
+	// accepted. Setting it to '' clears the session rules.
+	"remap_rewrites": {
+		Name:              "remap_rewrites",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("remap_rewrites"),
+		Default:           "",
+	},
 	"experimental_ivf_index": {
 		Name:              "experimental_ivf_index",
 		Scope:             ScopeBoth,

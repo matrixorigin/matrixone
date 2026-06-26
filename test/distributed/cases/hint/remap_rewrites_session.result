@@ -1,0 +1,63 @@
+drop database if exists remap_sess;
+create database remap_sess;
+use remap_sess;
+create table t1 (id int, name varchar(20), age int);
+insert into t1 values (1, 'Alice', 20), (2, 'Bob', 30), (3, 'Charlie', 40);
+create table t2 (id int, city varchar(20));
+insert into t2 values (1, 'Beijing'), (2, 'Shanghai'), (3, 'Guangzhou');
+select * from t1 order by id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+1  ¦  Alice  ¦  20  𝄀
+2  ¦  Bob  ¦  30  𝄀
+3  ¦  Charlie  ¦  40
+set enable_remap_hint = 1;
+set remap_rewrites = '{"remap_sess.t1": "select * from t1 where age > 25"}';
+select * from t1 order by id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+2  ¦  Bob  ¦  30  𝄀
+3  ¦  Charlie  ¦  40
+select id, name from t1 order by id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+2  ¦  Bob  𝄀
+3  ¦  Charlie
+select count(*) as c from t1;
+➤ c[-5,64,0]  𝄀
+2
+select * from t2 order by id;
+➤ id[4,32,0]  ¦  city[12,-1,0]  𝄀
+1  ¦  Beijing  𝄀
+2  ¦  Shanghai  𝄀
+3  ¦  Guangzhou
+set remap_rewrites = '{"rewrites": {"remap_sess.t1": "select * from t1 where id = 2"}}';
+select * from t1 order by id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+2  ¦  Bob  ¦  30
+set remap_rewrites = '{"remap_sess.t1": "select * from t1 where id >= 2", "remap_sess.t2": "select * from t2 where city != \'Shanghai\'"}';
+select t1.name, t2.city from t1 join t2 on t1.id = t2.id order by t1.name;
+➤ name[12,-1,0]  ¦  city[12,-1,0]  𝄀
+Charlie  ¦  Guangzhou
+set remap_rewrites = '';
+select * from t1 order by id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+1  ¦  Alice  ¦  20  𝄀
+2  ¦  Bob  ¦  30  𝄀
+3  ¦  Charlie  ¦  40
+set remap_rewrites = '{"remap_sess.t1": "select * from t1 where age > 25"}';
+set enable_remap_hint = 0;
+select * from t1 order by id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+1  ¦  Alice  ¦  20  𝄀
+2  ¦  Bob  ¦  30  𝄀
+3  ¦  Charlie  ¦  40
+set enable_remap_hint = 1;
+set remap_rewrites = '{"remap_sess.t1": "delete from t1"}';
+invalid input: invalid rewrite rule SQL "delete from t1": only accept SELECT-like statements as rewrites
+set remap_rewrites = '{not json}';
+invalid input: invalid remap_rewrites value "{not json}": invalid character 'n' looking for beginning of object key string
+select * from t1 order by id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+2  ¦  Bob  ¦  30  𝄀
+3  ¦  Charlie  ¦  40
+set remap_rewrites = '';
+set enable_remap_hint = 0;
+drop database remap_sess;
