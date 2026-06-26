@@ -1868,6 +1868,243 @@ func TestReplaceDetectSqlsMultipleRows(t *testing.T) {
 	assert.Contains(t, preCheck, "3", "pre-check IN list should contain row 3's PK")
 }
 
+func TestReplaceParentSideFKRestrict(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// REPLACE on a parent table whose PK is referenced by a child with
+	// ON DELETE RESTRICT must generate a REPLACE_PARENT_CHK: pre-check SQL
+	// against the child table (issue #24951, 3.2 RESTRICT case).
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_p VALUES (1, 'p1_new')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var preCheck string
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			preCheck = strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")
+			break
+		}
+	}
+	assert.NotEmpty(t, preCheck,
+		"RESTRICT parent-side FK REPLACE should generate a REPLACE_PARENT_CHK: pre-check SQL")
+	assert.Contains(t, preCheck, "replace_fk_c", "pre-check SQL should target the child table")
+	assert.Contains(t, preCheck, "`pid`", "pre-check SQL should reference the child FK column")
+	assert.Contains(t, preCheck, "(1)", "pre-check SQL should embed the supplied PK value")
+
+	// No CASCADE/SET NULL action SQL should be produced for RESTRICT.
+	for _, sql := range query.DetectSqls {
+		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:"),
+			"RESTRICT parent-side FK must NOT generate an action SQL, got: %s", sql)
+	}
+}
+
+func TestReplaceParentSideFKCascade(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// REPLACE on a parent table whose PK is referenced by a child with
+	// ON DELETE CASCADE must generate a REPLACE_PARENT_ACTION: delete SQL
+	// against the child table (issue #24951, 3.2 CASCADE case).
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_cp VALUES (1, 'p1_new')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var action string
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
+			action = strings.TrimPrefix(sql, "REPLACE_PARENT_ACTION:")
+			break
+		}
+	}
+	assert.NotEmpty(t, action,
+		"CASCADE parent-side FK REPLACE should generate a REPLACE_PARENT_ACTION: SQL")
+	assert.Contains(t, action, "delete from", "CASCADE action should be a DELETE on the child")
+	assert.Contains(t, action, "replace_fk_cc", "CASCADE action should target the child table")
+	assert.Contains(t, action, "`pid`", "CASCADE action should filter on the child FK column")
+	assert.Contains(t, action, "(1)", "CASCADE action should embed the supplied PK value")
+
+	// CASCADE must NOT generate a parent-child RESTRICT pre-check.
+	for _, sql := range query.DetectSqls {
+		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_CHK:"),
+			"CASCADE parent-side FK must NOT generate a pre-check SQL, got: %s", sql)
+	}
+}
+
+func TestReplaceParentSideFKExplicitColumns(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// Explicit column list (mixed case) must still resolve the PK position and
+	// generate the parent-side pre-check.
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO replace_fk_p (ID, V) VALUES (1, 'p1_new')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var preCheck string
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			preCheck = strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")
+			break
+		}
+	}
+	assert.NotEmpty(t, preCheck,
+		"parent-side pre-check should be generated with an explicit, mixed-case column list")
+	assert.Contains(t, preCheck, "replace_fk_c", "pre-check SQL should target the child table")
+	assert.Contains(t, preCheck, "`pid`", "pre-check SQL should reference the child FK column")
+	assert.Contains(t, preCheck, "(1)", "pre-check SQL should embed the supplied PK value")
+}
+
+func TestReplaceParentSideFKNoAction(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// ON DELETE NO ACTION behaves like RESTRICT: it must generate a
+	// REPLACE_PARENT_CHK: pre-check, not a CASCADE/SET NULL action.
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_np VALUES (1, 'p1_new')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var preCheck string
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			preCheck = strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")
+			break
+		}
+	}
+	assert.NotEmpty(t, preCheck,
+		"NO ACTION parent-side FK REPLACE should generate a REPLACE_PARENT_CHK: pre-check SQL")
+	assert.Contains(t, preCheck, "replace_fk_nc", "pre-check SQL should target the child table")
+	for _, sql := range query.DetectSqls {
+		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:"),
+			"NO ACTION parent-side FK must NOT generate an action SQL, got: %s", sql)
+	}
+}
+
+func TestReplaceParentSideFKMultiRow(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// Multi-row REPLACE: every literal PK value must be embedded into the same
+	// parent-side action IN list (issue #24951 data-integrity case).
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO replace_fk_cp VALUES (1, 'a'), (2, 'b')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var action string
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
+			action = strings.TrimPrefix(sql, "REPLACE_PARENT_ACTION:")
+			break
+		}
+	}
+	assert.NotEmpty(t, action,
+		"multi-row CASCADE parent-side REPLACE should generate an action SQL")
+	assert.Contains(t, action, "1", "action IN list should contain row 1's PK")
+	assert.Contains(t, action, "2", "action IN list should contain row 2's PK")
+}
+
+func TestReplaceParentSideFKMixedLiteralRows(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// A mixed VALUES list where one row has a non-literal PK must still generate
+	// the parent-side action for the literal rows; otherwise CASCADE/SET NULL
+	// would silently leave orphan child rows for those literal rows.
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO replace_fk_cp VALUES (1, 'a'), (rand(), 'b')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var action string
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
+			action = strings.TrimPrefix(sql, "REPLACE_PARENT_ACTION:")
+			break
+		}
+	}
+	assert.NotEmpty(t, action,
+		"mixed literal/non-literal REPLACE should still act on the literal rows")
+	assert.Contains(t, action, "delete from", "literal row should still get its CASCADE delete")
+	assert.Contains(t, action, "(1)", "action should embed the literal PK value")
+}
+
+func TestReplaceParentSideFKSetNull(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// REPLACE on a parent table whose PK is referenced by a child with
+	// ON DELETE SET NULL must generate a REPLACE_PARENT_ACTION: update SQL
+	// that nulls the child FK column.
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_sp VALUES (1, 'p1_new')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var action string
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
+			action = strings.TrimPrefix(sql, "REPLACE_PARENT_ACTION:")
+			break
+		}
+	}
+	assert.NotEmpty(t, action,
+		"SET NULL parent-side FK REPLACE should generate a REPLACE_PARENT_ACTION: SQL")
+	assert.Contains(t, action, "update", "SET NULL action should be an UPDATE on the child")
+	assert.Contains(t, action, "replace_fk_sc", "SET NULL action should target the child table")
+	assert.Contains(t, action, "null", "SET NULL action should set the child FK column to null")
+	assert.Contains(t, action, "(1)", "SET NULL action should embed the supplied PK value")
+
+	// SET NULL must NOT generate a parent-child RESTRICT pre-check.
+	for _, sql := range query.DetectSqls {
+		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_CHK:"),
+			"SET NULL parent-side FK must NOT generate a pre-check SQL, got: %s", sql)
+	}
+}
+
+func TestReplaceParentSideFKNonLiteralSkip(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// Non-literal PK expressions (rand(), ...) cannot be safely embedded into
+	// the background parent-side SQL, so generation must be skipped.
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_p VALUES (rand(), 'x')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	for _, sql := range query.DetectSqls {
+		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_CHK:"),
+			"non-literal PK must NOT generate a parent-side pre-check, got: %s", sql)
+		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:"),
+			"non-literal PK must NOT generate a parent-side action, got: %s", sql)
+	}
+}
+
 func TestReplaceODKU(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// INSERT ON DUPLICATE KEY UPDATE should be rewritten to REPLACE path

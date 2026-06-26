@@ -237,3 +237,59 @@ insert into t_replace_multi_uk_batch (name, email, value) values ('a', 'x@a.com'
 replace into t_replace_multi_uk_batch (name, email, value) values ('a', 'y@a.com', 111), ('b', 'z@a.com', 222);
 select name, email, value from t_replace_multi_uk_batch order by name;
 drop table t_replace_multi_uk_batch;
+
+-- parent-side foreign key actions during REPLACE (delete-then-insert semantics)
+-- ON DELETE RESTRICT: replacing a referenced parent row must fail and leave it unchanged
+drop table if exists fk_c;
+drop table if exists fk_p;
+create table fk_p(id int primary key, v varchar(20));
+create table fk_c(id int primary key, pid int, foreign key(pid) references fk_p(id) on delete restrict);
+insert into fk_p values (1,'p1');
+insert into fk_c values (10,1);
+replace into fk_p values (1,'p1_new');
+select * from fk_p order by id;
+select * from fk_c order by id;
+-- replacing an unreferenced parent row is allowed
+replace into fk_p values (2,'p2_new');
+select * from fk_p order by id;
+drop table fk_c;
+drop table fk_p;
+
+-- ON DELETE CASCADE: replacing a referenced parent row cascades the delete to children
+drop table if exists fk_cc;
+drop table if exists fk_cp;
+create table fk_cp(id int primary key, v varchar(20));
+create table fk_cc(id int primary key, pid int, foreign key(pid) references fk_cp(id) on delete cascade);
+insert into fk_cp values (1,'p1');
+insert into fk_cc values (10,1);
+replace into fk_cp values (1,'p1_new');
+select * from fk_cp order by id;
+select * from fk_cc order by id;
+drop table fk_cc;
+drop table fk_cp;
+
+-- ON DELETE SET NULL: replacing a referenced parent row nulls the child fk columns
+drop table if exists fk_sc;
+drop table if exists fk_sp;
+create table fk_sp(id int primary key, v varchar(20));
+create table fk_sc(id int primary key, pid int, foreign key(pid) references fk_sp(id) on delete set null);
+insert into fk_sp values (1,'p1');
+insert into fk_sc values (10,1);
+replace into fk_sp values (1,'p1_new');
+select * from fk_sp order by id;
+select * from fk_sc order by id;
+drop table fk_sc;
+drop table fk_sp;
+
+-- multi-row REPLACE: every conflicting parent row applies its child action (CASCADE)
+drop table if exists fk_mc;
+drop table if exists fk_mp;
+create table fk_mp(id int primary key, v varchar(20));
+create table fk_mc(id int primary key, pid int, foreign key(pid) references fk_mp(id) on delete cascade);
+insert into fk_mp values (1,'p1'),(2,'p2'),(3,'p3');
+insert into fk_mc values (10,1),(20,2),(30,3);
+replace into fk_mp values (1,'p1_new'),(2,'p2_new');
+select * from fk_mp order by id;
+select * from fk_mc order by id;
+drop table fk_mc;
+drop table fk_mp;
