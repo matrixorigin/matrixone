@@ -1196,6 +1196,7 @@ func TestLCAProbeJoinCastType(t *testing.T) {
 		{name: "varchar", typ: types.T_varchar.ToType(), want: "VARCHAR", ok: true},
 		{name: "varbinary", typ: types.T_varbinary.ToType(), want: "VARBINARY", ok: true},
 		{name: "decimal64", typ: types.New(types.T_decimal64, 12, 2), want: types.New(types.T_decimal64, 12, 2).DescString(), ok: true},
+		{name: "decimal256", typ: types.New(types.T_decimal256, 39, 4), want: types.New(types.T_decimal256, 39, 4).DescString(), ok: true},
 		{name: "timestamp", typ: types.New(types.T_timestamp, 0, 6), want: types.New(types.T_timestamp, 0, 6).String(), ok: true},
 		{name: "unsupported", typ: types.T_bool.ToType(), want: "", ok: false},
 	}

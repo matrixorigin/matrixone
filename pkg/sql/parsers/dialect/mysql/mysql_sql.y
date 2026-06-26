@@ -13142,18 +13142,18 @@ decimal_type:
         }
         if $3.Scale != tree.NotDefineDec && $3.Scale > $3.DisplayWith {
             yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-                goto ret1
+            goto ret1
         }
         $$ = &tree.T{
             InternalType: tree.InternalType{
-        		Family: tree.FloatFamily,
+                Family: tree.FloatFamily,
                 FamilyString: $1,
-        		Width:  64,
-        		Locale: &locale,
-       			Oid: uint32(defines.MYSQL_TYPE_DOUBLE),
+                Width:  64,
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_DOUBLE),
                 DisplayWith: $3.DisplayWith,
                 Scale: $3.Scale,
-        	},
+            },
         }
     }
 |   FLOAT_TYPE float_length_opt
