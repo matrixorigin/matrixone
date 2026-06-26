@@ -316,14 +316,14 @@ select conv('ffffffffffffffff', 16, -10) as unsigned_to_negative_base;
 select conv('10xyz', 10, 16) as invalid_suffix;
 -- expected: MO returns error on prefix truncation / invalid suffix
 
--- overflow semantics (MO keeps strict parse errors)
+-- overflow semantics (saturate to uint64 max)
 select conv('18446744073709551616', 10, 16) as overflow_decimal_to_hex;
--- expected: MO returns error on decimal overflow
+-- expected: FFFFFFFFFFFFFFFF
 
 select conv('-18446744073709551616', 10, 16) as overflow_negative_decimal_to_hex;
--- expected: MO returns error on negative decimal overflow
+-- expected: FFFFFFFFFFFFFFFF
 
 select conv('10000000000000000', 16, 10) as overflow_hex_to_decimal;
--- expected: MO returns error on hex overflow
+-- expected: 18446744073709551615
 
 drop database conv_func;

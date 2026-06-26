@@ -2897,6 +2897,33 @@ func TestConvSemantics(t *testing.T) {
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"-1"}, []bool{false}),
 		},
+		{
+			name: "decimal overflow saturates to uint64 max",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"18446744073709551616"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"FFFFFFFFFFFFFFFF"}, []bool{false}),
+		},
+		{
+			name: "negative decimal overflow saturates to uint64 max",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"-18446744073709551616"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"FFFFFFFFFFFFFFFF"}, []bool{false}),
+		},
+		{
+			name: "hex overflow saturates to uint64 max",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"10000000000000000"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"18446744073709551615"}, []bool{false}),
+		},
 	}
 
 	for _, tc := range cases {
@@ -2919,9 +2946,6 @@ func TestConvInvalidInputReturnsError(t *testing.T) {
 		{name: "invalid character", value: "g", base: 16},
 		{name: "prefix truncation", value: "10xyz", base: 10},
 		{name: "invalid digit for base", value: "2", base: 2},
-		{name: "decimal overflow", value: "18446744073709551616", base: 10},
-		{name: "negative decimal overflow", value: "-18446744073709551616", base: 10},
-		{name: "hex overflow", value: "10000000000000000", base: 16},
 	}
 
 	for _, tc := range cases {

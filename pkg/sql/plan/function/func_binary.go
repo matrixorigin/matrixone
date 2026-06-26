@@ -2674,9 +2674,39 @@ func parseConvStrictString(n string, fromBase int64) (int64, uint64, bool, error
 	}
 
 	base := int(absInt64(fromBase))
+	signOffset := 0
+	if strings.HasPrefix(s, "-") || strings.HasPrefix(s, "+") {
+		signOffset = 1
+	}
+	if signOffset == len(s) {
+		return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+	}
+	for _, ch := range s[signOffset:] {
+		var digit int
+		switch {
+		case ch >= '0' && ch <= '9':
+			digit = int(ch - '0')
+		case ch >= 'A' && ch <= 'Z':
+			digit = int(ch-'A') + 10
+		case ch >= 'a' && ch <= 'z':
+			digit = int(ch-'a') + 10
+		default:
+			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+		}
+		if digit >= base {
+			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+		}
+	}
+
 	if fromBase < 0 {
 		val, err := strconv.ParseInt(s, base, 64)
 		if err != nil {
+			if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+				if strings.HasPrefix(s, "-") {
+					return math.MinInt64, 0, true, nil
+				}
+				return math.MaxInt64, 0, true, nil
+			}
 			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
 		}
 		return val, 0, true, nil
@@ -2685,6 +2715,9 @@ func parseConvStrictString(n string, fromBase int64) (int64, uint64, bool, error
 	if strings.HasPrefix(s, "-") || strings.HasPrefix(s, "+") {
 		val, err := strconv.ParseInt(s, base, 64)
 		if err != nil {
+			if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+				return 0, math.MaxUint64, false, nil
+			}
 			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
 		}
 		return val, 0, true, nil
@@ -2692,6 +2725,9 @@ func parseConvStrictString(n string, fromBase int64) (int64, uint64, bool, error
 
 	uval, err := strconv.ParseUint(s, base, 64)
 	if err != nil {
+		if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+			return 0, math.MaxUint64, false, nil
+		}
 		return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
 	}
 	return 0, uval, false, nil
