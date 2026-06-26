@@ -393,7 +393,7 @@ func init() {
 		"period":                     PERIOD,
 		"point":                      POINT,
 		"polygon":                    POLYGON,
-		"precision":                  UNUSED,
+		"precision":                  PRECISION,
 		"primary":                    PRIMARY,
 		"processlist":                PROCESSLIST,
 		"procedure":                  PROCEDURE,

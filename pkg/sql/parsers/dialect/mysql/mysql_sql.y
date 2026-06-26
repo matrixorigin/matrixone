@@ -375,7 +375,7 @@ func sqlTaskInt64(v any) int64 {
 
 // Type
 %token <str> BIT TINYINT SMALLINT MEDIUMINT INT INTEGER BIGINT INTNUM
-%token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE
+%token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE PRECISION
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
@@ -479,7 +479,8 @@ func sqlTaskInt64(v any) int64 {
 %token <str> RECURSIVE CONFIG DRAINER
 
 // Source
-%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL TASK RESUME SCHEDULE TIMEZONE TIMEOUT
+%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL RESUME SCHEDULE TIMEZONE TIMEOUT
+%nonassoc <str> TASK
 
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
@@ -542,7 +543,9 @@ func sqlTaskInt64(v any) int64 {
 %token <str> MO_TS
 
 // PITR
-%token <str> PITR RECOVERY_WINDOW INTERNAL
+%token <str> PITR RECOVERY_WINDOW
+%nonassoc <str> INTERNAL
+%nonassoc CDC_TASK_NAME
 
 // CDC
 %token <str> CDC
@@ -876,7 +879,7 @@ func sqlTaskInt64(v any) int64 {
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
 %type <snapshotObject> snapshot_object_opt
-%type <allCDCOption> all_cdc_opt
+%type <allCDCOption> all_cdc_opt show_cdc_opt drop_cdc_opt
 
 %type <indexHintType> index_hint_type
 %type <indexHintScope> index_hint_scope
@@ -1105,7 +1108,7 @@ create_cdc_opt:
     }
 
 show_cdc_stmt:
-    SHOW CDC all_cdc_opt
+    SHOW CDC show_cdc_opt
     {
         $$ = &tree.ShowCDC{
                     Option:      $3,
@@ -1121,9 +1124,35 @@ pause_cdc_stmt:
     }
 
 drop_cdc_stmt:
-    DROP CDC all_cdc_opt internal_opt
+    DROP CDC exists_opt drop_cdc_opt internal_opt
     {
-        $$ = tree.NewDropCDC($3, $4)
+        $$ = tree.NewDropCDC($4, $3, $5)
+    }
+
+show_cdc_opt:
+    {
+        $$ = &tree.AllOrNotCDC{
+                    All: true,
+                    TaskName: "",
+        }
+    }
+|   all_cdc_opt
+    {
+        $$ = $1
+    }
+
+drop_cdc_opt:
+    all_cdc_opt
+    {
+        $$ = $1
+    }
+|   ident
+    %prec CDC_TASK_NAME
+    {
+        $$ = &tree.AllOrNotCDC{
+            All: false,
+            TaskName: tree.Identifier($1.Compare()),
+        }
     }
 
 all_cdc_opt:
@@ -13096,6 +13125,34 @@ decimal_type:
        			Oid: uint32(defines.MYSQL_TYPE_DOUBLE),
                 DisplayWith: $2.DisplayWith,
                 Scale: $2.Scale,
+        	},
+        }
+    }
+|   DOUBLE PRECISION float_length_opt
+    {
+        // DOUBLE PRECISION is the SQL-standard synonym for DOUBLE (float64).
+        locale := ""
+        if $3.DisplayWith > 255 {
+            yylex.Error("Display width for double out of range (max = 255)")
+            goto ret1
+        }
+        if $3.Scale > 30 {
+            yylex.Error("Display scale for double out of range (max = 30)")
+            goto ret1
+        }
+        if $3.Scale != tree.NotDefineDec && $3.Scale > $3.DisplayWith {
+            yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+                goto ret1
+        }
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+        		Family: tree.FloatFamily,
+                FamilyString: $1,
+        		Width:  64,
+        		Locale: &locale,
+       			Oid: uint32(defines.MYSQL_TYPE_DOUBLE),
+                DisplayWith: $3.DisplayWith,
+                Scale: $3.Scale,
         	},
         }
     }
