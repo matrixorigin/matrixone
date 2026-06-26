@@ -487,6 +487,14 @@ var (
 		input:  "CREATE TABLE new_t1 LIKE test.t1",
 		output: "create table new_t1 like test.t1",
 	}, {
+		// issue #25119: the IF NOT EXISTS clause must be preserved for the
+		// CREATE TABLE ... LIKE form (it was previously dropped by the parser).
+		input:  "CREATE TABLE IF NOT EXISTS new_t1 LIKE t1",
+		output: "create table if not exists new_t1 like t1",
+	}, {
+		input:  "CREATE TEMPORARY TABLE IF NOT EXISTS new_t1 LIKE t1",
+		output: "create temporary table if not exists new_t1 like t1",
+	}, {
 		input: "show privileges",
 	}, {
 		input: "show events from db1",
