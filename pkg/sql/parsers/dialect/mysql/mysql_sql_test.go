@@ -898,14 +898,14 @@ var (
 			input:  "replace into t_table_dst table t_table_src;",
 			output: "replace into t_table_dst select * from t_table_src",
 		}, {
+			input:  "replace into t_table_dst (id, v) table t_table_src;",
+			output: "replace into t_table_dst (id, v) select * from t_table_src",
+		}, {
 			input:  "replace low_priority into t_mod values(1, 20);",
 			output: "replace into t_mod values (1, 20)",
 		}, {
 			input:  "replace delayed into t_mod values(1, 30);",
 			output: "replace into t_mod values (1, 30)",
-		}, {
-			input:  "replace high_priority into t_mod values(1, 40);",
-			output: "replace into t_mod values (1, 40)",
 		}, {
 			input:  "replace low_priority into t_table_dst table t_table_src;",
 			output: "replace into t_table_dst select * from t_table_src",
@@ -3987,6 +3987,10 @@ var (
 		},
 		{
 			input: "ALTER TABLE t1 ADD PARTITION (PARTITION p5 VALUES IN (15, 17)",
+		},
+		{
+			// MySQL REPLACE does not allow HIGH_PRIORITY (only LOW_PRIORITY | DELAYED).
+			input: "replace high_priority into t_mod values (1, 40)",
 		},
 	}
 )

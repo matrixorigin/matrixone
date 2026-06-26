@@ -660,6 +660,309 @@ func Test_determineCreateAccount(t *testing.T) {
 		convey.So(ok, convey.ShouldBeTrue)
 	})
 
+	convey.Convey("sys account all can create account", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateAccount{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        sysAccountName,
+			User:          "mocadmin",
+			DefaultRole:   "mocadmin_role",
+			TenantID:      sysAccountID,
+			UserID:        2,
+			DefaultRoleID: 2,
+		})
+
+		sql2result := map[string]ExecResult{
+			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
+				{2, false},
+			}),
+			getSqlForCheckRoleHasAccountLevelForStarWithSysScope(2, PrivilegeTypeCreateAccount, true): newMrsForCheckRoleHasPrivilege([][]interface{}{
+				{PrivilegeTypeAccountAll, false},
+			}),
+		}
+
+		bh := newBh(ctrl, sql2result)
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("sys account all can alter account", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.AlterAccount{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        sysAccountName,
+			User:          "mocadmin",
+			DefaultRole:   "mocadmin_role",
+			TenantID:      sysAccountID,
+			UserID:        2,
+			DefaultRoleID: 2,
+		})
+
+		sql2result := map[string]ExecResult{
+			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
+				{2, false},
+			}),
+			getSqlForCheckRoleHasAccountLevelForStarWithSysScope(2, PrivilegeTypeAlterAccount, true): newMrsForCheckRoleHasPrivilege([][]interface{}{
+				{PrivilegeTypeAccountAll, false},
+			}),
+		}
+
+		bh := newBh(ctrl, sql2result)
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("non sys account all cannot create account", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateAccount{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        "acc1",
+			User:          "admin",
+			DefaultRole:   accountAdminRoleName,
+			TenantID:      1001,
+			UserID:        2,
+			DefaultRoleID: accountAdminRoleID,
+		})
+
+		sql2result := map[string]ExecResult{
+			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
+				{accountAdminRoleID, false},
+			}),
+			getSqlForCheckRoleHasAccountLevelForStar(int64(accountAdminRoleID), PrivilegeTypeCreateAccount): newMrsForCheckRoleHasPrivilege([][]interface{}{}),
+			getSqlForInheritedRoleIdOfRoleId(int64(accountAdminRoleID)):                                     newMrsForInheritedRoleIdOfRoleId([][]interface{}{}),
+		}
+
+		bh := newBh(ctrl, sql2result)
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
+	convey.Convey("non sys account all cannot alter account", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.AlterAccount{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        "acc1",
+			User:          "admin",
+			DefaultRole:   accountAdminRoleName,
+			TenantID:      1001,
+			UserID:        2,
+			DefaultRoleID: accountAdminRoleID,
+		})
+
+		sql2result := map[string]ExecResult{
+			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
+				{accountAdminRoleID, false},
+			}),
+			getSqlForCheckRoleHasAccountLevelForStar(int64(accountAdminRoleID), PrivilegeTypeAlterAccount): newMrsForCheckRoleHasPrivilege([][]interface{}{}),
+			getSqlForInheritedRoleIdOfRoleId(int64(accountAdminRoleID)):                                    newMrsForInheritedRoleIdOfRoleId([][]interface{}{}),
+		}
+
+		bh := newBh(ctrl, sql2result)
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
+	convey.Convey("non sys account all cannot drop account", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.DropAccount{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        "acc1",
+			User:          "admin",
+			DefaultRole:   accountAdminRoleName,
+			TenantID:      1001,
+			UserID:        2,
+			DefaultRoleID: accountAdminRoleID,
+		})
+
+		sql2result := map[string]ExecResult{
+			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
+				{accountAdminRoleID, false},
+			}),
+			getSqlForCheckRoleHasAccountLevelForStar(int64(accountAdminRoleID), PrivilegeTypeDropAccount): newMrsForCheckRoleHasPrivilege([][]interface{}{}),
+			getSqlForInheritedRoleIdOfRoleId(int64(accountAdminRoleID)):                                   newMrsForInheritedRoleIdOfRoleId([][]interface{}{}),
+		}
+
+		bh := newBh(ctrl, sql2result)
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
+	convey.Convey("sys account all can drop account", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.DropAccount{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        sysAccountName,
+			User:          "mocadmin",
+			DefaultRole:   "mocadmin_role",
+			TenantID:      sysAccountID,
+			UserID:        2,
+			DefaultRoleID: 2,
+		})
+
+		sql2result := map[string]ExecResult{
+			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
+				{2, false},
+			}),
+			getSqlForCheckRoleHasAccountLevelForStarWithSysScope(2, PrivilegeTypeDropAccount, true): newMrsForCheckRoleHasPrivilege([][]interface{}{
+				{PrivilegeTypeAccountAll, false},
+			}),
+		}
+
+		bh := newBh(ctrl, sql2result)
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("sys account all can upgrade account", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.UpgradeStatement{
+			Target: &tree.Target{AccountName: "acc1"},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        sysAccountName,
+			User:          "mocadmin",
+			DefaultRole:   "mocadmin_role",
+			TenantID:      sysAccountID,
+			UserID:        2,
+			DefaultRoleID: 2,
+		})
+
+		sql2result := map[string]ExecResult{
+			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
+				{2, false},
+			}),
+			getSqlForCheckRoleHasAccountLevelForStarWithSysScope(2, PrivilegeTypeUpgradeAccount, true): newMrsForCheckRoleHasPrivilege([][]interface{}{
+				{PrivilegeTypeAccountAll, false},
+			}),
+		}
+
+		bh := newBh(ctrl, sql2result)
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("sys account all cannot upgrade all accounts", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.UpgradeStatement{
+			Target: &tree.Target{IsALLAccount: true},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        sysAccountName,
+			User:          "mocadmin",
+			DefaultRole:   "mocadmin_role",
+			TenantID:      sysAccountID,
+			UserID:        2,
+			DefaultRoleID: 2,
+		})
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
+	convey.Convey("non sys account all cannot upgrade account", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.UpgradeStatement{
+			Target: &tree.Target{AccountName: "acc1"},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        "acc1",
+			User:          "admin",
+			DefaultRole:   accountAdminRoleName,
+			TenantID:      1001,
+			UserID:        2,
+			DefaultRoleID: accountAdminRoleID,
+		})
+
+		sql2result := map[string]ExecResult{
+			getSqlForRoleIdOfUserId(2): newMrsForRoleIdOfUserId([][]interface{}{
+				{accountAdminRoleID, false},
+			}),
+			getSqlForCheckRoleHasAccountLevelForStar(int64(accountAdminRoleID), PrivilegeTypeUpgradeAccount): newMrsForCheckRoleHasPrivilege([][]interface{}{}),
+			getSqlForInheritedRoleIdOfRoleId(int64(accountAdminRoleID)):                                      newMrsForInheritedRoleIdOfRoleId([][]interface{}{}),
+		}
+
+		bh := newBh(ctrl, sql2result)
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
 	convey.Convey("create/drop/alter account fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -11056,6 +11359,10 @@ func makeRowsOfMoRolePrivs(sql2result map[string]ExecResult, roleIds []int, entr
 		for _, entry := range entries {
 			sql, _ := getSqlFromPrivilegeEntry(context.TODO(), int64(roleId), entry)
 			sql2result[sql] = newMrsForCheckRoleHasPrivilege(rowsOfMoRolePrivs)
+			if entry.objType == objectTypeAccount && entry.privilegeLevel == privilegeLevelStar {
+				sql = getSqlForCheckRoleHasAccountLevelForStarWithSysScope(int64(roleId), entry.privilegeId, true)
+				sql2result[sql] = newMrsForCheckRoleHasPrivilege(rowsOfMoRolePrivs)
+			}
 		}
 	}
 }
@@ -11158,6 +11465,10 @@ func makeSql2ExecResult2(userId int, rowsOfMoUserGrant [][]interface{}, roleIdsI
 		for j, entry := range entries {
 			sql, _ := getSqlFromPrivilegeEntry(context.TODO(), int64(roleId), entry)
 			sql2result[sql] = newMrsForCheckRoleHasPrivilege(rowsOfMoRolePrivs[i][j])
+			if entry.objType == objectTypeAccount && entry.privilegeLevel == privilegeLevelStar {
+				sql = getSqlForCheckRoleHasAccountLevelForStarWithSysScope(int64(roleId), entry.privilegeId, true)
+				sql2result[sql] = newMrsForCheckRoleHasPrivilege(rowsOfMoRolePrivs[i][j])
+			}
 		}
 	}
 
@@ -11788,6 +12099,31 @@ func TestGetSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(t *testing.T) {
 			)
 		}
 	})
+}
+
+func TestAccountAllCoversOnlyAccountScopePrivileges(t *testing.T) {
+	sql := getSqlForCheckRoleHasAccountLevelForStar(42, PrivilegeTypeCreateAccount)
+	require.Contains(t, sql, fmt.Sprintf("rp.privilege_id in (%d)", PrivilegeTypeCreateAccount))
+	require.NotContains(t, sql, fmt.Sprintf("%d,%d", PrivilegeTypeCreateAccount, PrivilegeTypeAccountAll))
+
+	sql = getSqlForCheckRoleHasAccountLevelForStarWithSysScope(42, PrivilegeTypeCreateAccount, true)
+	require.Contains(t, sql, fmt.Sprintf("rp.privilege_id in (%d,%d)",
+		PrivilegeTypeCreateAccount,
+		PrivilegeTypeAccountAll))
+
+	sql = getSqlForCheckRoleHasAccountLevelForStar(42, PrivilegeTypeCreateUser)
+	require.Contains(t, sql, fmt.Sprintf("rp.privilege_id in (%d,%d)",
+		PrivilegeTypeCreateUser,
+		PrivilegeTypeAccountAll))
+
+	cache := &privilegeCache{}
+	cache.add(objectTypeAccount, privilegeLevelStar, "", "", PrivilegeTypeAccountAll)
+	require.True(t, cache.has(objectTypeAccount, privilegeLevelStar, "", "", PrivilegeTypeCreateUser))
+	require.True(t, cache.has(objectTypeAccount, privilegeLevelStar, "", "", PrivilegeTypeDropUser))
+	require.True(t, cache.has(objectTypeAccount, privilegeLevelStar, "", "", PrivilegeTypeAccountAll))
+	require.False(t, cache.has(objectTypeAccount, privilegeLevelStar, "", "", PrivilegeTypeCreateAccount))
+	require.False(t, cache.has(objectTypeAccount, privilegeLevelStar, "", "", PrivilegeTypeDropAccount))
+	require.False(t, cache.has(objectTypeAccount, privilegeLevelStar, "", "", PrivilegeTypeAccountOwnership))
 }
 
 func TestGetSqlForScopedGrantOptionHelpers(t *testing.T) {

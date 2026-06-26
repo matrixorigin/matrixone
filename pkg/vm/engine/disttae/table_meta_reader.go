@@ -42,11 +42,19 @@ const (
 	endState
 )
 
+type cloneObjectSource int
+
+const (
+	cloneObjectFromCommittedState cloneObjectSource = iota
+	cloneObjectFromTxnWorkspace
+)
+
 type TableMetaReader struct {
-	table    *txnTable
-	fs       fileservice.FileService
-	snapshot types.TS
-	state    int
+	table     *txnTable
+	fs        fileservice.FileService
+	snapshot  types.TS
+	txnOffset int
+	state     int
 	//tblDef   *plan.TableDef
 	pState *logtailreplay.PartitionState
 }
@@ -67,6 +75,19 @@ func (r *TableMetaReader) Close() error {
 	return nil
 }
 
+func (r *TableMetaReader) addCloneSharedFile(
+	stats *objectio.ObjectStats,
+	source cloneObjectSource,
+) {
+	txnId := r.table.db.getTxn().op.Txn().ID
+	name := stats.ObjectName().String()
+	if source == cloneObjectFromCommittedState {
+		r.table.db.getEng().cloneTxnCache.AddSharedFile(txnId, name)
+		return
+	}
+	r.table.db.getEng().cloneTxnCache.AddTxnLocalSharedFile(txnId, name)
+}
+
 func NewTableMetaReader(
 	ctx context.Context,
 	rel engine.Relation,
@@ -76,8 +97,9 @@ func NewTableMetaReader(
 		ok  bool
 		err error
 
-		fs       fileservice.FileService
-		snapshot types.TS
+		fs        fileservice.FileService
+		snapshot  types.TS
+		txnOffset int
 		//tblDef   *plan.TableDef
 		pState *logtailreplay.PartitionState
 
@@ -91,14 +113,22 @@ func NewTableMetaReader(
 	//tblDef = table.GetTableDef(ctx)
 	fs = table.getTxn().proc.GetFileService()
 	snapshot = types.TimestampToTS(table.getTxn().op.SnapshotTS())
+	// A clone source may itself be created by an earlier ALTER in the same
+	// transaction. Keep the visible write boundary so metadata and row scans
+	// include those txn-local objects without seeing later writes.
+	txnOffset = len(table.getTxn().writes)
+	if table.db.op.IsSnapOp() {
+		txnOffset = table.getTxn().GetSnapshotWriteOffset()
+	}
 
 	if pState, err = table.getPartitionState(ctx); err != nil {
 		return nil, err
 	}
 
 	return &TableMetaReader{
-		fs:       fs,
-		snapshot: snapshot,
+		fs:        fs,
+		snapshot:  snapshot,
+		txnOffset: txnOffset,
 		//tblDef:   tblDef,
 		table:  table,
 		pState: pState,
@@ -217,29 +247,50 @@ func (r *TableMetaReader) collect(
 		return nil, err
 	}
 
-	for iter.Next() {
-		obj := iter.Entry()
-
-		// if the obj is created by CN, the data commit time equals to the obj.CreateTime
-		if obj.GetCNCreated() || !obj.GetAppendable() {
+	appendObjectStats := func(stats *objectio.ObjectStats, source cloneObjectSource) error {
+		if stats.GetCNCreated() || !stats.GetAppendable() {
 			objCnt++
-			blkCnt += int(obj.ObjectStats.BlkCnt())
-			rowCnt += int(obj.ObjectStats.Rows())
+			blkCnt += int(stats.BlkCnt())
+			rowCnt += int(stats.Rows())
 
-			if err = colexec.ExpandObjectStatsToBatch(
-				mp, isTombstone, outBatch, false, obj.ObjectStats); err != nil {
-				return nil, err
+			if err = colexec.ExpandObjectStatsToBatch(mp, isTombstone, outBatch, false, *stats); err != nil {
+				return err
 			}
 
-			txnId := r.table.db.getTxn().op.Txn().ID
-			r.table.db.getEng().cloneTxnCache.AddSharedFile(
-				txnId, obj.ObjectStats.ObjectName().String(),
-			)
+			// Committed pState objects are owned outside this transaction and
+			// must survive any clone rollback. Txn-local objects can be shared
+			// by later ALTER/clone writes in this transaction, so intermediate
+			// workspace GC must keep them, but full transaction rollback must
+			// still delete them.
+			r.addCloneSharedFile(stats, source)
 
 		} else {
 			// we can see an appendable object, if the snapshot falls into [createTS, deleteTS).
 			// so there may exist rows which commitTS > snapshot, we need to scan all rows to filter them out.
-			objRelData.AppendObj(&obj.ObjectStats)
+			objRelData.AppendObj(stats)
+		}
+		return nil
+	}
+
+	for iter.Next() {
+		obj := iter.Entry()
+		if err = appendObjectStats(&obj.ObjectStats, cloneObjectFromCommittedState); err != nil {
+			return nil, err
+		}
+	}
+
+	// pState only contains committed objects. Repeated ALTER statements in one
+	// transaction can clone from objects produced by an earlier ALTER, so include
+	// txn-local object stats up to the reader's write boundary.
+	var uncommittedObjs []objectio.ObjectStats
+	if isTombstone {
+		uncommittedObjs, _ = r.table.collectUnCommittedTombstoneObjs(r.txnOffset)
+	} else {
+		uncommittedObjs, _ = r.table.collectUnCommittedDataObjs(r.txnOffset)
+	}
+	for i := range uncommittedObjs {
+		if err = appendObjectStats(&uncommittedObjs[i], cloneObjectFromTxnWorkspace); err != nil {
+			return nil, err
 		}
 	}
 
@@ -288,23 +339,31 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 		objCnt, blkCnt, rowCnt int
 	)
 
+	s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, -1, false)
 	defer func() {
-		dataReader.Close()
+		if dataReader != nil {
+			dataReader.Close()
+		}
 		s3Writer.Close()
 	}()
 
-	s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, -1, false)
-
-	source := &LocalDisttaeDataSource{
-		table:           r.table,
-		pState:          r.pState,
-		fs:              r.fs,
-		ctx:             ctx,
-		mp:              mp,
-		snapshotTS:      r.snapshot,
-		rangeSlice:      objRelData.GetBlockInfoSlice(),
-		tombstonePolicy: engine.Policy_SkipUncommitedInMemory,
+	source, err := NewLocalDataSource(
+		ctx,
+		r.table,
+		r.txnOffset,
+		r.pState,
+		objRelData.GetBlockInfoSlice(),
+		nil,
+		false,
+		engine.Policy_SkipUncommitedInMemory,
+		engine.GeneralLocalDataSource,
+	)
+	if err != nil {
+		return zap.Skip(), err
 	}
+	// Use the normal local data source so appendable object scans share the same
+	// txn visibility rules as regular table reads.
+	source.snapshotTS = r.snapshot
 
 	dataReader = readutil.SimpleReaderWithDataSource(
 		ctx, r.fs,
@@ -348,7 +407,9 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 	s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1], -1)
 
 	defer func() {
-		iter.Close()
+		if iter != nil {
+			iter.Close()
+		}
 		s3Writer.Close()
 
 		if tombstoneReader != nil {
@@ -360,8 +421,7 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 		}
 	}()
 
-	iter = r.pState.NewRowsIter(r.snapshot, nil, true)
-	for iter.Next() {
+	appendTombstoneRow := func(rowidVec, pkVec *vector.Vector, offset int64) error {
 		if rowsBatch == nil {
 			rowsBatch = batch.New(attrs)
 			rowsBatch.Attrs = attrs
@@ -369,16 +429,45 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 				rowsBatch.Vecs[i] = vector.NewVec(colTypes[i])
 			}
 		}
+		if err = rowsBatch.Vecs[0].UnionOne(rowidVec, offset, mp); err != nil {
+			return err
+		}
+		return rowsBatch.Vecs[1].UnionOne(pkVec, offset, mp)
+	}
 
+	var appendErr error
+	// Row-level tombstones created earlier in this transaction are not in pState
+	// yet, but clone must carry them into the new tombstone object.
+	r.table.getTxn().ForEachTableWrites(
+		r.table.db.databaseId,
+		r.table.tableId,
+		r.txnOffset,
+		func(entry Entry) {
+			if appendErr != nil ||
+				entry.typ != DELETE ||
+				entry.bat == nil ||
+				entry.bat.IsEmpty() ||
+				len(entry.bat.Vecs) < 2 ||
+				entry.bat.Vecs[0].GetType().Oid != types.T_Rowid {
+				return
+			}
+			for i := 0; i < entry.bat.RowCount(); i++ {
+				if appendErr = appendTombstoneRow(entry.bat.Vecs[0], entry.bat.Vecs[1], int64(i)); appendErr != nil {
+					return
+				}
+			}
+		})
+	if appendErr != nil {
+		return zap.Skip(), appendErr
+	}
+
+	iter = r.pState.NewRowsIter(r.snapshot, nil, true)
+	for iter.Next() {
 		entry := iter.Entry()
 
 		// tombstones in the mem rows: del_row_id, commit_ts, pk, row_id.
 		// expected: del_row_id and pk.
-		if err = rowsBatch.Vecs[0].UnionOne(entry.Batch.Vecs[0], entry.Offset, mp); err != nil {
-			return zap.Skip(), err
-		}
-
-		if err = rowsBatch.Vecs[1].UnionOne(entry.Batch.Vecs[2], entry.Offset, mp); err != nil {
+		if err = appendTombstoneRow(entry.Batch.Vecs[0], entry.Batch.Vecs[2], entry.Offset); err != nil {
 			return zap.Skip(), err
 		}
 	}

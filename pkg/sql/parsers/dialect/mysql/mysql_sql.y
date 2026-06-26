@@ -32,6 +32,17 @@ func sqlTaskNodeString(node tree.NodeFormatter) string {
     return tree.StringWithOpts(node, dialect.MYSQL, tree.WithSingleQuoteString())
 }
 
+// makeSelectStarFromTable builds the `SELECT * FROM tbl` clause used to desugar
+// the MySQL `REPLACE ... TABLE tbl` source form.
+func makeSelectStarFromTable(tbl tree.TableExpr) *tree.SelectClause {
+    return &tree.SelectClause{
+        Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.StarExpr()}},
+        From: &tree.From{
+            Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: tbl}},
+        },
+    }
+}
+
 func sqlTaskBodyString(stmt tree.Statement) string {
     compound, ok := stmt.(*tree.CompoundStmt)
     if !ok || compound == nil {
@@ -375,7 +386,7 @@ func sqlTaskInt64(v any) int64 {
 
 // Type
 %token <str> BIT TINYINT SMALLINT MEDIUMINT INT INTEGER BIGINT INTNUM
-%token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE
+%token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE PRECISION
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
@@ -5369,11 +5380,17 @@ ignore_opt:
     {}
 |    IGNORE
 
+// MySQL REPLACE only allows LOW_PRIORITY or DELAYED (not HIGH_PRIORITY). Both are
+// accepted for compatibility and ignored: MatrixOne has no corresponding scheduling,
+// and DELAYED is treated as a plain REPLACE (as in MySQL 8.0).
+replace_priority_opt:
+    {}
+|    LOW_PRIORITY
+|    DELAYED
+
 replace_stmt:
-    REPLACE priority_opt into_table_name partition_clause_opt replace_data
+    REPLACE replace_priority_opt into_table_name partition_clause_opt replace_data
     {
-        // priority_opt (LOW_PRIORITY/DELAYED/HIGH_PRIORITY) is accepted for MySQL
-        // compatibility and ignored: MatrixOne has no corresponding scheduling.
         rep := $5
         rep.Table = $3
         rep.PartitionNames = $4
@@ -5391,14 +5408,17 @@ replace_data:
 |   TABLE table_name
     {
         // MySQL `REPLACE ... TABLE src` is equivalent to `REPLACE ... SELECT * FROM src`.
-        sc := &tree.SelectClause{
-            Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.StarExpr()}},
-            From: &tree.From{
-                Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: $2}},
-            },
-        }
         $$ = &tree.Replace{
-            Rows: tree.NewSelect(sc, nil, nil),
+            Rows: tree.NewSelect(makeSelectStarFromTable($2), nil, nil),
+        }
+    }
+|   '(' insert_column_list ')' TABLE table_name
+    {
+        // MySQL allows an optional target column list before TABLE:
+        // `REPLACE INTO dst (cols) TABLE src` == `REPLACE INTO dst (cols) SELECT * FROM src`.
+        $$ = &tree.Replace{
+            Columns: $2,
+            Rows: tree.NewSelect(makeSelectStarFromTable($5), nil, nil),
         }
     }
 |   select_stmt
@@ -13140,6 +13160,34 @@ decimal_type:
        			Oid: uint32(defines.MYSQL_TYPE_DOUBLE),
                 DisplayWith: $2.DisplayWith,
                 Scale: $2.Scale,
+        	},
+        }
+    }
+|   DOUBLE PRECISION float_length_opt
+    {
+        // DOUBLE PRECISION is the SQL-standard synonym for DOUBLE (float64).
+        locale := ""
+        if $3.DisplayWith > 255 {
+            yylex.Error("Display width for double out of range (max = 255)")
+            goto ret1
+        }
+        if $3.Scale > 30 {
+            yylex.Error("Display scale for double out of range (max = 30)")
+            goto ret1
+        }
+        if $3.Scale != tree.NotDefineDec && $3.Scale > $3.DisplayWith {
+            yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+                goto ret1
+        }
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+        		Family: tree.FloatFamily,
+                FamilyString: $1,
+        		Width:  64,
+        		Locale: &locale,
+       			Oid: uint32(defines.MYSQL_TYPE_DOUBLE),
+                DisplayWith: $3.DisplayWith,
+                Scale: $3.Scale,
         	},
         }
     }
