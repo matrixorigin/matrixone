@@ -7,11 +7,18 @@ use rand_n_func;
 -- same seed in the same statement
 select rand(3) as r1, rand(3) as r2;
 
+-- seed zero behaves deterministically too
+select rand(0) as r1_zero, rand(0) as r2_zero;
+
 create table t_rand(id int, a int);
 insert into t_rand values (1, 1), (2, 2), (3, 3), (4, 1);
 
 -- constant seed: one sequence per statement, advanced row by row
 select id, a, rand(7) as r from t_rand order by a, id;
+
+-- two expression instances with the same constant seed produce the same
+-- first/second/third... values for each row
+select id, rand(7) as r1, rand(7) as r2 from t_rand order by id;
 
 -- non-constant seed: reseeded per row, same seed => same value
 select id, a, rand(a) as r from t_rand order by a, id;
