@@ -129,6 +129,11 @@ func listHivePartitionDir(
 		}
 	}
 
+	if entries, ok := globalHivePartitionListCache.get(key); ok {
+		globalHivePartitionListCache.finishInflight(key, flight, entries, nil)
+		return entries, nil
+	}
+
 	entries, err := collectHivePartitionListEntries(ctx, listDir, prefix, options, result)
 	if err == nil {
 		globalHivePartitionListCache.set(key, entries, options.CacheTTL, options.CacheMaxEntries, options.CacheMaxBytes)
