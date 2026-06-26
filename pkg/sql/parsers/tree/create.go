@@ -1697,9 +1697,10 @@ func NewAttributeStorage(s string) *AttributeStorage {
 
 type AttributeCheckConstraint struct {
 	columnAttributeImpl
-	Name     string
-	Expr     Expr
-	Enforced bool
+	Name           string
+	Expr           Expr
+	Enforced       bool
+	EnforcementSet bool
 }
 
 func (node *AttributeCheckConstraint) Format(ctx *FmtCtx) {
@@ -1711,12 +1712,15 @@ func (node *AttributeCheckConstraint) Format(ctx *FmtCtx) {
 	ctx.WriteString(" check")
 	ctx.WriteString(" (")
 	node.Expr.Format(ctx)
-	ctx.WriteString(") ")
+	ctx.WriteString(")")
 
-	if node.Enforced {
-		ctx.WriteString("enforced")
-	} else {
-		ctx.WriteString("not enforced")
+	if node.EnforcementSet {
+		ctx.WriteByte(' ')
+		if node.Enforced {
+			ctx.WriteString("enforced")
+		} else {
+			ctx.WriteString("not enforced")
+		}
 	}
 }
 
@@ -1730,11 +1734,12 @@ func (node *AttributeCheckConstraint) Free() {
 	reuse.Free[AttributeCheckConstraint](node, nil)
 }
 
-func NewAttributeCheckConstraint(e Expr, f bool, n string) *AttributeCheckConstraint {
+func NewAttributeCheckConstraint(e Expr, f bool, n string, enforcementSet bool) *AttributeCheckConstraint {
 	ac := reuse.Alloc[AttributeCheckConstraint](nil)
 	ac.Name = n
 	ac.Expr = e
 	ac.Enforced = f
+	ac.EnforcementSet = enforcementSet
 	return ac
 }
 
@@ -2617,16 +2622,27 @@ func NewFullTextIndex(k []*KeyPart, n string, e bool, io *IndexOption) *FullText
 
 type CheckIndex struct {
 	tableDefImpl
-	Expr     Expr
-	Enforced bool
+	Expr             Expr
+	Enforced         bool
+	EnforcementSet   bool
+	ConstraintSymbol string
 }
 
 func (node *CheckIndex) Format(ctx *FmtCtx) {
+	if node.ConstraintSymbol != "" {
+		ctx.WriteString("constraint ")
+		ctx.WriteString(node.ConstraintSymbol)
+		ctx.WriteByte(' ')
+	}
 	ctx.WriteString("check (")
 	node.Expr.Format(ctx)
 	ctx.WriteByte(')')
-	if node.Enforced {
-		ctx.WriteString(" enforced")
+	if node.EnforcementSet {
+		if node.Enforced {
+			ctx.WriteString(" enforced")
+		} else {
+			ctx.WriteString(" not enforced")
+		}
 	}
 }
 
@@ -2640,10 +2656,11 @@ func (node *CheckIndex) Free() {
 	reuse.Free[CheckIndex](node, nil)
 }
 
-func NewCheckIndex(e Expr, en bool) *CheckIndex {
+func NewCheckIndex(e Expr, en bool, enforcementSet bool) *CheckIndex {
 	ci := reuse.Alloc[CheckIndex](nil)
 	ci.Expr = e
 	ci.Enforced = en
+	ci.EnforcementSet = enforcementSet
 	return ci
 }
 

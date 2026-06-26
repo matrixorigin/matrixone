@@ -772,7 +772,7 @@ func sqlTaskInt64(v any) int64 {
 %type <updateExprs> update_list on_duplicate_key_update_opt
 %type <completionType> completion_type
 %type <str> password_opt
-%type <boolVal> grant_option_opt enforce enforce_opt generated_column_type_opt
+%type <boolVal> grant_option_opt enforce generated_column_type_opt
 
 %type <varAssignmentExpr> var_assignment
 %type <varAssignmentExprs> var_assignment_list
@@ -10331,6 +10331,8 @@ constaint_def:
                 v.ConstraintSymbol = $1
             case *tree.UniqueIndex:
                 v.ConstraintSymbol = $1
+            case *tree.CheckIndex:
+                v.ConstraintSymbol = $1
             }
         }
         $$ = $2
@@ -10408,21 +10410,25 @@ constraint_elem:
             Empty,
         )
     }
-|   CHECK '(' expression ')' enforce_opt
+|   CHECK '(' expression ')'
+    {
+        var Expr = $3
+        $$ = tree.NewCheckIndex(
+            Expr,
+            true,
+            false,
+        )
+    }
+|   CHECK '(' expression ')' enforce
     {
         var Expr = $3
         var Enforced = $5
         $$ = tree.NewCheckIndex(
             Expr,
             Enforced,
+            true,
         )
     }
-
-enforce_opt:
-    {
-        $$ = false
-    }
-|    enforce
 
 key_or_index_opt:
     {
@@ -10622,11 +10628,11 @@ column_attribute_elem:
     }
 |   constraint_keyword_opt CHECK '(' expression ')'
     {
-        $$ = tree.NewAttributeCheckConstraint($4, false, $1)
+        $$ = tree.NewAttributeCheckConstraint($4, true, $1, false)
     }
 |   constraint_keyword_opt CHECK '(' expression ')' enforce
     {
-        $$ = tree.NewAttributeCheckConstraint($4, $6, $1)
+        $$ = tree.NewAttributeCheckConstraint($4, $6, $1, true)
     }
 |   ON UPDATE name_datetime_scale datetime_scale_opt
     {
