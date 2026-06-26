@@ -3816,6 +3816,17 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
 
 	if !toWriteS3 {
+		// A non-S3 INSERT can still drive a cross-CN shuffle join: toWriteS3 is decided by the
+		// INSERT *output* row count, while shuffle is decided by the JOIN *input* table size and
+		// CN count -- independent decisions. A large shuffle join with a highly selective filter
+		// can produce few output rows (non-S3) yet still shuffle across CNs. So group the same-CN
+		// shuffle buckets (with their nested cross-CN dispatch) into one per-CN send unit *before*
+		// attaching Insert. This (a) keeps the dispatch in the same tree as all its local buckets
+		// so it is sent to its own CN instead of being converted to local on the coordinator and
+		// hanging (issue #24919), and (b) puts Insert on the per-CN container's RootOp chain
+		// (Insert -> Merge), so affectedRows() -- which walks the RootOp chain -- still counts it.
+		// Noop when ss carries no cross-CN shuffle dispatch.
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		currentFirstFlag := c.anal.isFirst
 		// Not write S3
 		for i := range ss {
@@ -3828,14 +3839,6 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 			ss[i].setRootOperator(insertArg)
 		}
 		c.anal.isFirst = false
-		// NOTE: intentionally do NOT group shuffle buckets by CN here. Unlike the write-S3 and
-		// multi-update paths, this non-S3 path keeps a per-bucket Insert as each scope's root
-		// operator. Wrapping the buckets into a per-CN Merge container would move those Insert
-		// operators into PreScopes, where run()/affectedRows() -- which only walk the RootOp
-		// child chain, not PreScopes -- would miss them, so the rows get written but the
-		// statement reports "0 rows affected". This path only handles small (non-S3) inserts,
-		// which do not produce cross-CN shuffle in practice, so the issue #24919 hang does not
-		// arise here.
 		return ss, nil
 	}
 
@@ -4421,6 +4424,12 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 // the root operator of its scope (constructDispatch results are attached via setRootOperator
 // with IsEnd=true, so nothing is appended on top of them). A dispatch nested as a child of
 // another operator would be missed -- which does not happen for shuffle dispatches today.
+//
+// Scope of the check (intentionally narrower than checkPipelineStandaloneExecutableAtRemote,
+// which rejects out-of-tree dispatch *and* out-of-tree connector targets): this gate only
+// looks for a cross-CN dispatch, because per-CN grouping only reorganizes the same-CN shuffle
+// dispatch together with its dop buckets. A scope tree that crosses CNs solely via a connector
+// is not the shuffle-bucket pattern grouping addresses and is intentionally left untouched.
 func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 	if d, ok := s.RootOp.(*dispatch.Dispatch); ok && len(d.RemoteRegs) > 0 {
 		return true
@@ -5219,12 +5228,12 @@ func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
 	parts1 := strings.Split(addr, ":")
 	if len(parts1) != 2 {
-		logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
+		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'; treating as same-CN", addr)
 		return true
 	}
 	parts2 := strings.Split(currentCNAddr, ":")
 	if len(parts2) != 2 {
-		logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
+		logutil.Warnf("compileScope received a malformed current-cn address '%s', expected 'ip:port'; treating as same-CN", currentCNAddr)
 		return true
 	}
 	return parts1[0] == parts2[0] && parts1[1] == parts2[1]
