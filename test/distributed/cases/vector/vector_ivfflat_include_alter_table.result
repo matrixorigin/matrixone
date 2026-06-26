@@ -64,6 +64,15 @@ limit 2 by rank with option 'mode=force';
 ➤ id[4,32,0]  ¦  headline[12,-1,0]  ¦  category[4,32,0]  𝄀
 1  ¦  alpha  ¦  10  𝄀
 2  ¦  beta  ¦  20
+insert into vector_ivfflat_include_phase7_include values
+(5, "[100,100,100]", "epsilon", 50, "n5");
+select id, headline, category
+from vector_ivfflat_include_phase7_include
+where headline = "epsilon"
+order by l2_distance(embedding, "[1,2,3]")
+limit 1 by rank with option 'mode=include';
+➤ id[4,32,0]  ¦  headline[12,-1,0]  ¦  category[4,32,0]  𝄀
+5  ¦  epsilon  ¦  50
 alter table vector_ivfflat_include_phase7_include drop column category;
 show create table vector_ivfflat_include_phase7_include;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀

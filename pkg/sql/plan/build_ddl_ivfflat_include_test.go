@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 )
 
 func makeTestColDef(name string, oid types.T) *ColDef {
@@ -75,7 +76,7 @@ func TestBuildIvfFlatSecondaryIndexDef_StoresIncludeColumnsInIndexDef(t *testing
 		"category":  makeTestColDef("category", types.T_varchar),
 	}
 
-	indexDefs, _, err := buildIvfFlatSecondaryIndexDef(ctx, indexInfo, colMap, nil, "id")
+	indexDefs, _, err := ivfflatplan.Hooks{}.BuildSecondaryIndexDefs(ctx, indexInfo, colMap, nil, "id")
 	require.NoError(t, err)
 	require.Len(t, indexDefs, 3)
 
@@ -117,7 +118,7 @@ func TestBuildIvfFlatSecondaryIndexDef_ExtendsEntriesTableWithIncludeColumns(t *
 		"category":  makeTestColDef("category", types.T_int32),
 	}
 
-	_, tableDefs, err := buildIvfFlatSecondaryIndexDef(ctx, indexInfo, colMap, nil, "id")
+	_, tableDefs, err := ivfflatplan.Hooks{}.BuildSecondaryIndexDefs(ctx, indexInfo, colMap, nil, "id")
 	require.NoError(t, err)
 	require.Len(t, tableDefs, 3)
 
@@ -147,7 +148,7 @@ func TestBuildIvfFlatSecondaryIndexDef_RejectsTooManyIncludeColumns(t *testing.T
 		colMap[includeCols[i]] = makeTestColDef(includeCols[i], types.T_varchar)
 	}
 
-	_, _, err := buildIvfFlatSecondaryIndexDef(ctx, makeIvfIndexWithInclude("embedding", includeCols...), colMap, nil, "id")
+	_, _, err := ivfflatplan.Hooks{}.BuildSecondaryIndexDefs(ctx, makeIvfIndexWithInclude("embedding", includeCols...), colMap, nil, "id")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "supports at most 10 columns")
 }

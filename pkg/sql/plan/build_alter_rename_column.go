@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -121,9 +122,9 @@ func updateRenameColumnInTableDef(
 	if indexAffected {
 		sqls = append(sqls, fmt.Sprintf(
 			indexFmt,
-			newColNameOrigin,
+			sqlquote.EscapeString(newColNameOrigin),
 			tableDef.TblId,
-			oldColNameOrigin,
+			sqlquote.EscapeString(oldColNameOrigin),
 		))
 	}
 
@@ -150,9 +151,9 @@ func updateRenameColumnInTableDef(
 	if primaryKeyAffected {
 		sqls = append(sqls, fmt.Sprintf(
 			indexFmt,
-			catalog.CreateAlias(newColName),
+			sqlquote.EscapeString(catalog.CreateAlias(newColName)),
 			tableDef.TblId,
-			catalog.CreateAlias(oldColName),
+			sqlquote.EscapeString(catalog.CreateAlias(oldColName)),
 		))
 	}
 
