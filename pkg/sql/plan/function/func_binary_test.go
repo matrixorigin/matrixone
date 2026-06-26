@@ -2919,6 +2919,9 @@ func TestConvInvalidInputReturnsError(t *testing.T) {
 		{name: "invalid character", value: "g", base: 16},
 		{name: "prefix truncation", value: "10xyz", base: 10},
 		{name: "invalid digit for base", value: "2", base: 2},
+		{name: "decimal overflow", value: "18446744073709551616", base: 10},
+		{name: "negative decimal overflow", value: "-18446744073709551616", base: 10},
+		{name: "hex overflow", value: "10000000000000000", base: 16},
 	}
 
 	for _, tc := range cases {

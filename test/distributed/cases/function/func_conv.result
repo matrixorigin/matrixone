@@ -226,4 +226,10 @@ select conv('ffffffffffffffff', 16, -10) as unsigned_to_negative_base;
 -1
 select conv('10xyz', 10, 16) as invalid_suffix;
 invalid input: invalid conv input "10xyz" for base 10
+select conv('18446744073709551616', 10, 16) as overflow_decimal_to_hex;
+invalid input: invalid conv input "18446744073709551616" for base 10
+select conv('-18446744073709551616', 10, 16) as overflow_negative_decimal_to_hex;
+invalid input: invalid conv input "-18446744073709551616" for base 10
+select conv('10000000000000000', 16, 10) as overflow_hex_to_decimal;
+invalid input: invalid conv input "10000000000000000" for base 16
 drop database conv_func;
