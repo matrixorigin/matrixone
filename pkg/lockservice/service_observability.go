@@ -60,13 +60,22 @@ func (s *service) GetLockHolder(
 		if err := ctx.Err(); err != nil {
 			return pb.WaitTxn{}, false, err
 		}
-		s.bindChangeMu.RLock()
 		l, err := s.getLockTableWithCreate(options.Group, tableID, [][]byte{row}, options.Sharding)
 		if err != nil {
-			s.bindChangeMu.RUnlock()
+			if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+				continue
+			}
 			return pb.WaitTxn{}, false, err
 		}
-		holder, ok, err := l.getLockHolder(ctx, row)
+
+		bind := l.getBind()
+		s.bindChangeMu.RLock()
+		current := s.tableGroups.get(bind.Group, bind.Table)
+		if current == nil || current.getBind().Changed(bind) {
+			s.bindChangeMu.RUnlock()
+			continue
+		}
+		holder, ok, err := current.getLockHolder(ctx, row)
 		s.bindChangeMu.RUnlock()
 		if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
 			return holder, ok, err
