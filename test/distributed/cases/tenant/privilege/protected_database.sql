@@ -140,11 +140,9 @@ drop table protected_bvt_db.t1;
 drop database protected_bvt_db;
 insert into protected_bvt_later.t1 values(11);
 drop database protected_bvt_later;
--- @bvt:issue#25079
 create database `CamelDB`;
 create database `cameldb`;
 drop database if exists `cameldb`;
--- @bvt:issue
 -- @session
 
 -- @session:id=1&user=protected_bvt_acc:admin&password=111
