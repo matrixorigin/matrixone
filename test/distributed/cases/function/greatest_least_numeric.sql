@@ -46,5 +46,33 @@ select a, b, c, greatest(a, b) as gab, least(a, b) as lab from mixed_num order b
 select a, c, greatest(a, c) as gac, least(a, c) as lac from mixed_num order by a;
 select greatest(a, b, c) as g3, least(a, b, c) as l3 from mixed_num order by a;
 
+-- unsigned-only mixed widths promote to the wider unsigned type
+drop table if exists uns;
+create table uns(u1 tinyint unsigned, u2 int unsigned, u3 bigint unsigned);
+insert into uns values (1, 300, 5000000000), (200, 50, 1), (100, 70000, 9000000000);
+select greatest(u1, u2) as g_u, least(u1, u2) as l_u from uns order by u1;
+select greatest(u1, u2, u3) as g3u, least(u1, u2, u3) as l3u from uns order by u1;
+
+-- signed + unsigned that exceeds int64 promotes to decimal128 (lossless)
+select greatest(cast(-3 as bigint), cast(9000000000000000000 as bigint unsigned)) as g_su;
+select least(cast(-3 as bigint), cast(9000000000000000000 as bigint unsigned)) as l_su;
+
+-- bit + integer
+drop table if exists bt;
+create table bt(b bit(16), i int);
+insert into bt values (10, 3), (20, 25), (7, 7);
+select greatest(b, i) as g_bi, least(b, i) as l_bi from bt order by i;
+
+-- decimal128 result from mixed-scale decimals
+select greatest(cast(1.5 as decimal(10,1)), cast(2.25 as decimal(20,2))) as g_dec;
+select least(cast(1.5 as decimal(10,1)), cast(2.25 as decimal(20,2))) as l_dec;
+
+-- decimal256 result (wide decimal mixed with bigint exercises the decimal256
+-- branch of the executor)
+select greatest(cast(1234567890123456789012345678901234567890.12 as decimal(60,2)), cast(2 as bigint)) as g_d256;
+select least(cast(1234567890123456789012345678901234567890.12 as decimal(60,2)), cast(2 as bigint)) as l_d256;
+
 drop table if exists toll_transactions;
 drop table if exists mixed_num;
+drop table if exists uns;
+drop table if exists bt;
