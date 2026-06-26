@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1265,7 +1266,14 @@ func TestHashDiff_HasLCANoopUpdateFiltering(t *testing.T) {
 			tblStuff.lcaRel = lcaRel
 
 			bh := mock_frontend.NewMockBackgroundExec(ctrl)
-			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, sql string) error {
+					// The raw changes contain two same-PK tombstones, but
+					// buildHashmapForTable compacts them before LCA probing.
+					require.Equal(t, 1, strings.Count(sql, "row("))
+					return nil
+				},
+			).Times(1)
 			bh.EXPECT().GetExecResultSet().Return([]interface{}{
 				buildLCAProbeResultSetWithRows([]interface{}{int64(0), int64(1), "alice", "h1"}),
 			}).Times(1)
