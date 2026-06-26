@@ -3828,8 +3828,14 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 			ss[i].setRootOperator(insertArg)
 		}
 		c.anal.isFirst = false
-		// keep a cross-CN shuffle dispatch in the same send unit as all its local buckets (issue #24919).
-		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
+		// NOTE: intentionally do NOT group shuffle buckets by CN here. Unlike the write-S3 and
+		// multi-update paths, this non-S3 path keeps a per-bucket Insert as each scope's root
+		// operator. Wrapping the buckets into a per-CN Merge container would move those Insert
+		// operators into PreScopes, where run()/affectedRows() -- which only walk the RootOp
+		// child chain, not PreScopes -- would miss them, so the rows get written but the
+		// statement reports "0 rows affected". This path only handles small (non-S3) inserts,
+		// which do not produce cross-CN shuffle in practice, so the issue #24919 hang does not
+		// arise here.
 		return ss, nil
 	}
 
