@@ -58,6 +58,128 @@ func (s *checkLockTableBindLockService) GetLatestLockTableBind(bind lock.LockTab
 	return bind, nil
 }
 
+type trackingWorkspace struct {
+	readonly        bool
+	commitRequests  []txn.TxnRequest
+	commitErr       error
+	commitCount     int
+	rollbackCount   int
+	finalizeCount   int
+	unknownCount    int
+	haveDDL         bool
+	snapshotOffset  int
+	sqlCount        uint64
+	boundTxn        TxnOperator
+	cloneSnapshotTS int64
+	ccprTxn         bool
+	ccprTaskID      string
+	syncJobID       string
+}
+
+func (w *trackingWorkspace) Readonly() bool {
+	return w.readonly
+}
+
+func (w *trackingWorkspace) StartStatement() {
+}
+
+func (w *trackingWorkspace) EndStatement() {
+}
+
+func (w *trackingWorkspace) IncrStatementID(context.Context, bool) error {
+	return nil
+}
+
+func (w *trackingWorkspace) RollbackLastStatement(context.Context) error {
+	return nil
+}
+
+func (w *trackingWorkspace) UpdateSnapshotWriteOffset() {
+	w.snapshotOffset = len(w.commitRequests)
+}
+
+func (w *trackingWorkspace) GetSnapshotWriteOffset() int {
+	return w.snapshotOffset
+}
+
+func (w *trackingWorkspace) Adjust(uint64) error {
+	return nil
+}
+
+func (w *trackingWorkspace) Commit(context.Context) ([]txn.TxnRequest, error) {
+	w.commitCount++
+	return w.commitRequests, w.commitErr
+}
+
+func (w *trackingWorkspace) FinalizeCommit(context.Context) {
+	w.finalizeCount++
+}
+
+func (w *trackingWorkspace) FinalizeCommitWithUnknownResult(context.Context) {
+	w.unknownCount++
+}
+
+func (w *trackingWorkspace) Rollback(context.Context) error {
+	w.rollbackCount++
+	return nil
+}
+
+func (w *trackingWorkspace) IncrSQLCount() {
+	w.sqlCount++
+}
+
+func (w *trackingWorkspace) GetSQLCount() uint64 {
+	return w.sqlCount
+}
+
+func (w *trackingWorkspace) CloneSnapshotWS() Workspace {
+	return w
+}
+
+func (w *trackingWorkspace) BindTxnOp(op TxnOperator) {
+	w.boundTxn = op
+}
+
+func (w *trackingWorkspace) SetHaveDDL(flag bool) {
+	w.haveDDL = flag
+}
+
+func (w *trackingWorkspace) GetHaveDDL() bool {
+	return w.haveDDL
+}
+
+func (w *trackingWorkspace) PPString() string {
+	return "trackingWorkspace"
+}
+
+func (w *trackingWorkspace) SetCloneTxn(snapshot int64) {
+	w.cloneSnapshotTS = snapshot
+}
+
+func (w *trackingWorkspace) SetCCPRTxn() {
+	w.ccprTxn = true
+}
+
+func (w *trackingWorkspace) IsCCPRTxn() bool {
+	return w.ccprTxn
+}
+
+func (w *trackingWorkspace) SetCCPRTaskID(taskID string) {
+	w.ccprTaskID = taskID
+}
+
+func (w *trackingWorkspace) GetCCPRTaskID() string {
+	return w.ccprTaskID
+}
+
+func (w *trackingWorkspace) SetSyncProtectionJobID(jobID string) {
+	w.syncJobID = jobID
+}
+
+func (w *trackingWorkspace) GetSyncProtectionJobID() string {
+	return w.syncJobID
+}
+
 func TestRead(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 		result, err := tc.Read(ctx, []txn.TxnRequest{newTNRequest(1, 1), newTNRequest(2, 2)})
@@ -144,6 +266,61 @@ func TestCommit(t *testing.T) {
 		requests := ts.getLastRequests()
 		assert.Equal(t, 1, len(requests))
 		assert.Equal(t, txn.TxnMethod_Commit, requests[0].Method)
+	})
+}
+
+func TestCommitFinalizesPreparedWorkspaceAfterCommitSuccess(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		ws := &trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		}
+		tc.AddWorkspace(ws)
+
+		err := tc.Commit(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, ws.commitCount)
+		require.Equal(t, 1, ws.finalizeCount)
+		require.Zero(t, ws.rollbackCount)
+		require.Equal(t, txn.TxnStatus_Committed, tc.mu.txn.Status)
+	})
+}
+
+func TestCommitRollsBackPreparedWorkspaceAfterCommitSendError(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		ws := &trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		}
+		tc.AddWorkspace(ws)
+		ts.setManual(func(*rpc.SendResult, error) (*rpc.SendResult, error) {
+			return nil, assert.AnError
+		})
+
+		err := tc.Commit(ctx)
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 1, ws.commitCount)
+		require.Zero(t, ws.finalizeCount)
+		require.Equal(t, 1, ws.rollbackCount)
+		require.Equal(t, txn.TxnStatus_Aborted, tc.mu.txn.Status)
+	})
+}
+
+func TestCommitKeepsPreparedWorkspaceAfterTxnUnknown(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		ws := &trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		}
+		tc.AddWorkspace(ws)
+		ts.setManual(func(*rpc.SendResult, error) (*rpc.SendResult, error) {
+			return nil, moerr.NewTxnUnknown(ctx, "test")
+		})
+
+		err := tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		require.Equal(t, 1, ws.commitCount)
+		require.Zero(t, ws.finalizeCount)
+		require.Equal(t, 1, ws.unknownCount)
+		require.Zero(t, ws.rollbackCount)
+		require.Equal(t, txn.TxnStatus_Aborted, tc.mu.txn.Status)
 	})
 }
 
