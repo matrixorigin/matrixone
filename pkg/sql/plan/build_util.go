@@ -1033,6 +1033,45 @@ func genSqlsForCheckFKSelfRefer(ctx context.Context,
 	return ret, nil
 }
 
+// genSqlsForCheckFKConstraints generates child-side fk constraint checking sqls
+// for every non-self-referencing foreign key (ForeignTbl != 0). It complements
+// genSqlsForCheckFKSelfRefer, which only handles self-referencing fks
+// (ForeignTbl == 0). The generated sqls verify that every child row's fk
+// columns reference an existing parent row, and are run after the REPLACE
+// execution: a violation rolls back the transaction and leaves the previous
+// conflicting row intact.
+//
+// It needs a CompilerContext (to resolve the parent table by id), which is why
+// it cannot share the plain context.Context signature of
+// genSqlsForCheckFKSelfRefer.
+func genSqlsForCheckFKConstraints(ctx CompilerContext,
+	dbName, tblName string,
+	cols []*plan.ColDef, fkeys []*plan.ForeignKeyDef) ([]string, error) {
+	ret := make([]string, 0, len(fkeys))
+	for _, fkey := range fkeys {
+		if fkey.ForeignTbl == 0 {
+			// self-referencing fk, handled by genSqlsForCheckFKSelfRefer
+			continue
+		}
+		parentObjRef, parentTableDef, err := ctx.ResolveById(fkey.ForeignTbl, nil)
+		if err != nil {
+			return nil, err
+		}
+		if parentObjRef == nil || parentTableDef == nil {
+			return nil, moerr.NewInternalErrorf(ctx.GetContext(),
+				"parent table %d not found for foreign key check", fkey.ForeignTbl)
+		}
+		sql, err := genSqlForCheckFKConstraints(ctx.GetContext(), fkey,
+			dbName, tblName, cols,
+			parentObjRef.SchemaName, parentTableDef.Name, parentTableDef.Cols)
+		if err != nil {
+			return nil, err
+		}
+		ret = append(ret, sql)
+	}
+	return ret, nil
+}
+
 // genPreCheckSqlsForReplaceFKSelfRefer generates pre-check SQLs that verify
 // no other row references the PK values being replaced (parent→child safety).
 // These run BEFORE the REPLACE execution to enforce RESTRICT semantics.
