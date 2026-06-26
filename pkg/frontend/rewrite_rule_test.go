@@ -677,6 +677,58 @@ func TestValidateRemapRewrites(t *testing.T) {
 	})
 }
 
+// TestLeadingHintContent covers extraction of the inner content of a leading
+// /*+ ... */ hint.
+func TestLeadingHintContent(t *testing.T) {
+	cases := []struct {
+		name   string
+		sql    string
+		want   string
+		wantOk bool
+	}{
+		{"plus hint", `/*+ {"rewrites": {}} */ select 1`, ` {"rewrites": {}} `, true},
+		{"bang plus hint", `/*!+ {"a":1} */ select 1`, ` {"a":1} `, true},
+		{"leading spaces", "  \n/*+ {} */ select 1", " {} ", true},
+		{"no hint", "select 1", "", false},
+		{"plain comment not a hint", "/* normal */ select 1", "", false},
+		{"unterminated", "/*+ {oops select 1", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := leadingHintContent(c.sql)
+			require.Equal(t, c.wantOk, ok)
+			if c.wantOk {
+				require.Equal(t, c.want, got)
+			}
+		})
+	}
+}
+
+// TestExtractInlineRewrites covers pulling rewrite rules out of an inline hint.
+func TestExtractInlineRewrites(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("no hint", func(t *testing.T) {
+		rules, err := extractInlineRewrites(ctx, "select * from t")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+	})
+	t.Run("non-json hint ignored", func(t *testing.T) {
+		rules, err := extractInlineRewrites(ctx, "/*+ NO_INDEX(t) */ select * from t")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+	})
+	t.Run("rewrites hint", func(t *testing.T) {
+		rules, err := extractInlineRewrites(ctx, `/*+ {"rewrites": {"db.t1": "select a from db.t1"}} */ select * from db.t1`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db.t1": "select a from db.t1"}, rules)
+	})
+	t.Run("malformed json hint", func(t *testing.T) {
+		_, err := extractInlineRewrites(ctx, `/*+ {not json} */ select 1`)
+		require.Error(t, err)
+	})
+}
+
 func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

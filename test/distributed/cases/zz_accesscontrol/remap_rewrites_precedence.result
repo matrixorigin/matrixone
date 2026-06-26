@@ -1,0 +1,41 @@
+set global enable_privilege_cache = off;
+drop user if exists rmp_user;
+drop role if exists rmp_role;
+drop database if exists rmp_db;
+create database rmp_db;
+create table rmp_db.t1(a int, age int);
+insert into rmp_db.t1 values (1,1),(2,2),(100,30),(200,55);
+create role rmp_role;
+alter role rmp_role add rule "select * from rmp_db.t1 where age > 28" on table rmp_db.t1;
+create user rmp_user identified by '123456' default role rmp_role;
+grant connect on account * to rmp_role;
+grant select on table *.* to rmp_role;
+set enable_remap_hint = 1;
+select * from rmp_db.t1 order by a;
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+100  ¦  30  𝄀
+200  ¦  55
+set remap_rewrites = '{"rmp_db.t1": "select * from rmp_db.t1 where age > 50"}';
+select * from rmp_db.t1 order by a;
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+200  ¦  55
+/*+ {"rewrites": {"rmp_db.t1": "select * from rmp_db.t1 where a = 1"}} */ select * from rmp_db.t1 order by a;
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+1  ¦  1
+select * from rmp_db.t1 order by a;
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+200  ¦  55
+set remap_rewrites = '{"rmp_db.t1": "select * from rmp_db.t1 where a < 100"}';
+select * from rmp_db.t1 order by a;
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
+set remap_rewrites = '';
+select * from rmp_db.t1 order by a;
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+100  ¦  30  𝄀
+200  ¦  55
+set enable_remap_hint = 0;
+drop user if exists rmp_user;
+drop role if exists rmp_role;
+drop database if exists rmp_db;

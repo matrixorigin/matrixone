@@ -37,6 +37,17 @@ select t1.name, t2.city from t1 join t2 on t1.id = t2.id order by t1.name;
 set remap_rewrites = '';
 select * from t1 order by id;
 
+-- an inline /*+ ... */ hint overrides the session variable, but only for the
+-- single query that carries it
+set remap_rewrites = '{"remap_sess.t1": "select * from t1 where age > 25"}';
+select * from t1 order by id;
+/*+ {"rewrites": {"remap_sess.t1": "select * from t1 where id = 1"}} */ select * from t1 order by id;
+select * from t1 order by id;
+
+-- an inline hint for a different table merges with the session rewrite of t1
+/*+ {"rewrites": {"remap_sess.t2": "select * from t2 where id = 3"}} */ select t1.id, t2.city from t1 join t2 on t1.id = t2.id order by t1.id;
+set remap_rewrites = '';
+
 -- rules only apply while enable_remap_hint is on
 set remap_rewrites = '{"remap_sess.t1": "select * from t1 where age > 25"}';
 set enable_remap_hint = 0;

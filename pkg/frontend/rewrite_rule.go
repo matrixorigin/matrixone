@@ -116,14 +116,30 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 	}
 
 	if len(cache) == 0 && len(sessionRules) == 0 {
+		// No persistent or session rules. Leave any inline /*+ ... */ hint to be
+		// handled natively by the parser.
 		return sql, nil
 	}
 
-	combined := make(map[string]string, len(cache)+len(sessionRules))
+	// Precedence: role rules < session variable < inline hint. The inline hint
+	// is part of this single statement's text, so its overrides are naturally
+	// effective for this one query only. We merge the inline rules into the
+	// single hint we emit because the parser only honors the first leading
+	// hint; emitting a second hint of our own would otherwise mask the inline
+	// one.
+	inlineRules, err := extractInlineRewrites(ctx, sql)
+	if err != nil {
+		return sql, err
+	}
+
+	combined := make(map[string]string, len(cache)+len(sessionRules)+len(inlineRules))
 	for k, v := range cache {
 		combined[k] = v
 	}
 	for k, v := range sessionRules {
+		combined[k] = v
+	}
+	for k, v := range inlineRules {
 		combined[k] = v
 	}
 
@@ -133,6 +149,42 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 	}
 
 	return hint + " " + sql, nil
+}
+
+// extractInlineRewrites returns the table-rewrite rules from a leading
+// /*+ {...} */ (or /*!+ {...} */) hint on sql, if present. It only treats a
+// hint whose content is a JSON object (starting with '{') as a rewrite hint;
+// other leading hints yield no rules. The original sql is left untouched — the
+// rules are merged into the single hint rewriteSQL prepends.
+func extractInlineRewrites(ctx context.Context, sql string) (map[string]string, error) {
+	content, ok := leadingHintContent(sql)
+	if !ok {
+		return nil, nil
+	}
+	content = strings.TrimSpace(content)
+	if content == "" || content[0] != '{' {
+		return nil, nil
+	}
+	return parseSessionRewrites(ctx, content)
+}
+
+// leadingHintContent extracts the inner content of the first leading
+// /*+ ... */ or /*!+ ... */ comment in sql. It returns ("", false) when sql
+// does not start with such a hint.
+func leadingHintContent(sql string) (string, bool) {
+	s := strings.TrimLeft(sql, " \t\r\n")
+	if !strings.HasPrefix(s, "/*+") && !strings.HasPrefix(s, "/*!+") {
+		return "", false
+	}
+	start := 3
+	if strings.HasPrefix(s, "/*!+") {
+		start = 4
+	}
+	end := strings.Index(s[start:], "*/")
+	if end < 0 {
+		return "", false
+	}
+	return s[start : start+end], true
 }
 
 // getSessionRewriteRules reads the remap_rewrites session variable and returns

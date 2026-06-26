@@ -43,6 +43,22 @@ select * from t1 order by id;
 2  ¦  Bob  ¦  30  𝄀
 3  ¦  Charlie  ¦  40
 set remap_rewrites = '{"remap_sess.t1": "select * from t1 where age > 25"}';
+select * from t1 order by id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+2  ¦  Bob  ¦  30  𝄀
+3  ¦  Charlie  ¦  40
+/*+ {"rewrites": {"remap_sess.t1": "select * from t1 where id = 1"}} */ select * from t1 order by id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+1  ¦  Alice  ¦  20
+select * from t1 order by id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+2  ¦  Bob  ¦  30  𝄀
+3  ¦  Charlie  ¦  40
+/*+ {"rewrites": {"remap_sess.t2": "select * from t2 where id = 3"}} */ select t1.id, t2.city from t1 join t2 on t1.id = t2.id order by t1.id;
+➤ id[4,32,0]  ¦  city[12,-1,0]  𝄀
+3  ¦  Guangzhou
+set remap_rewrites = '';
+set remap_rewrites = '{"remap_sess.t1": "select * from t1 where age > 25"}';
 set enable_remap_hint = 0;
 select * from t1 order by id;
 ➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
